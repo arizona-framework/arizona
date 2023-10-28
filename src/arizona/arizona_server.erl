@@ -17,15 +17,15 @@
 %% limitations under the License.
 -module(arizona_server).
 
-%% API functions
+%% API
 -export([ start/0 ]).
 
 %% Macros
 -define(ADAPTER, (arizona_env:get_server(adapter))).
 
-%%----------------------------------------------------------------------
-%% API FUNCTIONS
-%%----------------------------------------------------------------------
+%%======================================================================
+%% API
+%%======================================================================
 
 start() ->
     ?ADAPTER:start(arizona_env:get_server(args)).
