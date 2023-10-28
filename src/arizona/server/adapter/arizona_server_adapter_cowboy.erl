@@ -18,7 +18,6 @@
 -module(arizona_server_adapter_cowboy).
 
 -behaviour(arizona_server_adapter).
--behaviour(cowboy_handler).
 
 %% arizona_server_adapter callbacks
 -export([ start/1
@@ -29,9 +28,6 @@
         , get_body/1
         , set_body/2
         ]).
-
-%% cowboy_handler callbacks
--export([ init/2 ]).
 
 %% Macros
 -define(LISTENER, arizona_http_listener).
@@ -76,16 +72,6 @@ get_body(Req0) ->
     {Body, Req}.
 
 %%%=====================================================================
-%%% cowboy_handler callbacks
-%%%=====================================================================
-
-init(Req, State) ->
-    Method = normalize_method(cowboy_req:method(Req)),
-    Path = normalize_path(cowboy_req:path(Req)),
-    {ok, Res} = arizona_handler:handle(Method, Path, Req),
-    {ok, Res, State}.
-
-%%%=====================================================================
 %%% Internal functions
 %%%=====================================================================
 
@@ -95,18 +81,5 @@ routes() ->
         {"/assets/[...]", cowboy_static, {priv_dir, arizona, "static/assets"}},
         {"/favicon.ico", cowboy_static, {priv_file, arizona, "static/favicon.ico"}},
         {"/robots.txt", cowboy_static, {priv_file, arizona, "static/robots.txt"}},
-        {'_', ?MODULE, []}
+        {'_', arizona_server_adapter_cowboy_handler, []}
     ].
-
-normalize_method(<<"GET">>) -> get;
-normalize_method(<<"POST">>) -> post;
-normalize_method(<<"PATCH">>) -> patch;
-normalize_method(<<"DELETE">>) -> delete;
-normalize_method(<<"PUT">>) -> put;
-normalize_method(<<"CONNECT">>) -> connect;
-normalize_method(<<"HEAD">>) -> head;
-normalize_method(<<"OPTIONS">>) -> options;
-normalize_method(<<"TRACE">>) -> trace.
-
-normalize_path(Path) ->
-    binary:split(Path, <<"/">>, [global, trim_all]).
