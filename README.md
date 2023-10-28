@@ -7,6 +7,9 @@ Arizona is a Web Framework for Erlang.
 - [Project goal](#project-goal)
 - [Motivation](#motivation)
 - [Roadmap](#roadmap)
+- [Dependencies](#dependencies)
+    - [Maintained by me](#maintained-by-me)
+    - [Third-party](#third-party)
 
 ## Project goal
 
@@ -30,3 +33,14 @@ Phoenix has an important role in the Elixir's popularity and community growth, a
     - [ ] WebWorker
     - [ ] Event bus
     - [ ] Realtime updates
+
+## Dependencies
+
+### Maintained by me
+
+- [eel](https://github.com/williamthome/eel): Template compiler.
+
+### Third-party
+
+- [cowboy](https://github.com/ninenines/cowboy): Server;
+- [sync](https://github.com/rustyio/sync.git): Hot code reload.
