@@ -1,6 +1,6 @@
 %% @author William Fank Thomé <willilamthome@hotmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc Template adapter.
+%% @doc LiveView.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -15,28 +15,18 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_template_adapter).
+-module(arizona_web_live_view).
 
 %% Types
--export_type([ bindings/0, state/0 ]).
+-export_type([ bindings/0, render_state/0 ]).
 
--type bindings() :: map().
--type state() :: term().
+-type bindings() :: arizona_template_adapter:bindings().
+-type render_state() :: arizona_template_adapter:state().
 
 %% Callbacks
 -optional_callbacks([]).
 
-% @todo: review all the results/returns.
-
--callback compile(Input) -> {ok, State} | {error, term()}
-    when Input :: binary()
-       , State :: state()
-       .
-
--callback bind(Bindings, State) -> {ok, State} | {error, term()}
+-callback render(Bindings) -> {Bindings, RenderState}
     when Bindings :: bindings()
-       , State :: state()
+       , RenderState :: render_state()
        .
-
--callback render(State) -> {ok, iolist()} | {error, term()}
-    when State :: state().

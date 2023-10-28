@@ -58,9 +58,8 @@ stop(_State) ->
 %%----------------------------------------------------------------------
 
 init(Req, State) ->
-    RenderState0 = arizona_template:compile(<<"Hello, <%= @name .%>!">>),
-    RenderState = arizona_template:bind(#{name => <<"World">>}, RenderState0),
-    HTML = arizona_template:render(RenderState),
+    Bindings = #{name => <<"World">>},
+    HTML = arizona_web_live_view_example:render(Bindings),
     Headers = #{<<"content-type">> => <<"text/plain">>},
     Res = cowboy_req:reply(200, Headers, HTML, Req),
     {ok, Res, State}.

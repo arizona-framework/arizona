@@ -1,6 +1,6 @@
 %% @author William Fank Thomé <willilamthome@hotmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc Template adapter.
+%% @doc LiveView example.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -15,28 +15,19 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_template_adapter).
+-module(arizona_web_live_view_example).
 
-%% Types
--export_type([ bindings/0, state/0 ]).
+-behaviour(arizona_web_live_view).
 
--type bindings() :: map().
--type state() :: term().
+%% arizona_web_live_view callbacks
+-export([ render/1 ]).
 
-%% Callbacks
--optional_callbacks([]).
+%% Libs
+-include("arizona_live_view.hrl").
 
-% @todo: review all the results/returns.
+%%======================================================================
+%% arizona_web_live_view callbacks
+%%======================================================================
 
--callback compile(Input) -> {ok, State} | {error, term()}
-    when Input :: binary()
-       , State :: state()
-       .
-
--callback bind(Bindings, State) -> {ok, State} | {error, term()}
-    when Bindings :: bindings()
-       , State :: state()
-       .
-
--callback render(State) -> {ok, iolist()} | {error, term()}
-    when State :: state().
+render(Bindings) ->
+    ?LV(<<"Hello, <%= @name .%>!">>).
