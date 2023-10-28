@@ -10,6 +10,7 @@ Arizona is a Web Framework for Erlang.
 - [Dependencies](#dependencies)
     - [Maintained by me](#maintained-by-me)
     - [Third-party](#third-party)
+- [License](#license)
 
 ## Project goal
 
@@ -44,3 +45,9 @@ Phoenix has an important role in the Elixir's popularity and community growth, a
 
 - [cowboy](https://github.com/ninenines/cowboy): Server;
 - [sync](https://github.com/rustyio/sync.git): Hot code reload.
+
+## License
+
+Arizona is 100% open source and community-driven. All components are available under the Apache 2 License on [GitHub](https://github.com/spawnfest/arizona).
+
+See [LICENSE.md](LICENSE.md) for more information.
