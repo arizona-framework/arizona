@@ -65,8 +65,8 @@ resolve_opts([], Req) ->
 resolve_opt({middlewares, Middlewares}, Req) ->
     resolve_middlewares(Middlewares, Req).
 
-resolve_middlewares([{Middleware, Opts} | T], Req0) ->
-    case Middleware(Opts, Req0) of
+resolve_middlewares([{Middleware, Args} | T], Req0) ->
+    case Middleware(Args, Req0) of
         {continue, Req} ->
             resolve_middlewares(T, Req);
         {halt, Req} ->
