@@ -46,7 +46,14 @@ application:set_env(Env),
 
     {profiles, [
         {dev, [
-            % nothing here yet!
+            {deps, [
+                %% Third-party
+
+                % sync is used by the '$ make daemon' command.
+                {sync, ".*", { git
+                             , "https://github.com/rustyio/sync.git"
+                             , {branch, "master"}} }
+            ]}
         ]},
         {prod, [
             {erl_opts, [
