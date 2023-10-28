@@ -1,3 +1,9 @@
 "use strict"
 
-console.log("Hello, World!")
+const arizona = arizonaFactory()
+
+const params = { }
+
+arizona.connect(params, () => {
+    console.log("Arizona is connected")
+})

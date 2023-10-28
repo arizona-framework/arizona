@@ -1,0 +1,84 @@
+"use strict"
+
+function arizonaFactory(opts = {}) {
+    // Worker
+
+    const workerURL = opts.workerURL || "assets/arizona-worker.js"
+    const worker = new Worker(workerURL)
+
+    worker.addEventListener("message", function(e) {
+        console.log("Arizona received a message from WebWorker =>", e.data)
+        const { event, payload } = e.data
+        subscribers.get(event)?.forEach(
+            function({id, callback, opts}) {
+                callback(payload)
+                opts.once && unsubscribe(id)
+            }
+        )
+    })
+
+    worker.addEventListener("error", function(e) {
+        console.error("Arizona received and error from WebWorker =>", e)
+    })
+
+    // Subscribers
+
+    const subscribers = new Map()
+    const unsubscribers = new Map()
+
+    // TODO: Subscribe to global events.
+    function subscribe(eventName, callback, opts = {}) {
+        let eventSubs = subscribers.get(eventName)
+        if (!eventSubs) eventSubs = new Map()
+        // TODO: Improve id
+        const id = Math.random()
+        eventSubs.set(id, {id, callback, opts})
+        subscribers.set(eventName, eventSubs)
+        unsubscribers.set(id, eventName)
+        console.table({action: "subscribed", eventName, id, subscribers, unsubscribers})
+        return function() {
+            unsubscribe(id)
+        }
+    }
+
+    function subscribeOnce(event, callback, opts = {}) {
+        return subscribe(event, callback, { ...opts, once: true })
+    }
+
+    function unsubscribe(id) {
+        const eventName = unsubscribers.get(id)
+        if (!eventName) return
+        const eventSubs = subscribers.get(eventName)
+        if (!eventSubs) return
+        eventSubs.delete(id)
+        eventSubs.size
+            ? subscribers.set(eventName, eventSubs)
+            : subscribers.delete(eventName)
+        unsubscribers.delete(id)
+        console.table({action: "unsubscribed", eventName, id, subscribers, unsubscribers})
+    }
+
+    //  Utils
+
+    function connect(params, callback, opts) {
+        send("connect", params, callback, opts)
+    }
+
+    function send(event, payloadOrCallback, callbackOrOpts, optsOrNull) {
+        typeof payloadOrCallback === "function"
+            ? sendMsgToWorker(event, undefined, payloadOrCallback, callbackOrOpts)
+            : sendMsgToWorker(event, payloadOrCallback, callbackOrOpts, optsOrNull)
+    }
+
+    function sendMsgToWorker(event, payload, callback, opts = {}) {
+        callback && subscribeOnce(event, callback, opts)
+        worker.postMessage({event, payload})
+    }
+
+    return {
+        connect,
+        send,
+        on: subscribe,
+        once: subscribeOnce,
+    }
+}

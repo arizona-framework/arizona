@@ -81,5 +81,6 @@ routes() ->
         {"/assets/[...]", cowboy_static, {priv_dir, arizona, "static/assets"}},
         {"/favicon.ico", cowboy_static, {priv_file, arizona, "static/favicon.ico"}},
         {"/robots.txt", cowboy_static, {priv_file, arizona, "static/robots.txt"}},
+        {"/websocket", arizona_server_adapter_cowboy_websocket, []},
         {'_', arizona_server_adapter_cowboy_handler, []}
     ].

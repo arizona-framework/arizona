@@ -23,6 +23,7 @@ render(Bindings0, InnerContent) ->
         <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\">
         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
         <title><%= @title .%></title>
+        <script src=\"assets/arizona.js\"></script>
         <script src=\"assets/main.js\"></script>
     </head>
     <body>
