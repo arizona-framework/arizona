@@ -17,7 +17,7 @@
 %% limitations under the License.
 
 %% Macros
-%% @todo: eval arizona_template:compile/1 via parse_transform.
+%% @todo eval arizona_template:compile/1 via parse_transform.
 -define(LV(Bin), arizona_template:render(
     arizona_template:bind(Bindings, arizona_template:compile(Bin))
 )).

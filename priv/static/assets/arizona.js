@@ -26,11 +26,11 @@ function arizonaFactory(opts = {}) {
     const subscribers = new Map()
     const unsubscribers = new Map()
 
-    // TODO: Subscribe to global events.
+    // @todo Subscribe to global events.
     function subscribe(eventName, callback, opts = {}) {
         let eventSubs = subscribers.get(eventName)
         if (!eventSubs) eventSubs = new Map()
-        // TODO: Improve id
+        // @todo Improve id
         const id = Math.random()
         eventSubs.set(id, {id, callback, opts})
         subscribers.set(eventName, eventSubs)
@@ -78,7 +78,7 @@ function arizonaFactory(opts = {}) {
     // Observer
 
     document.addEventListener("DOMContentLoaded", () => {
-        // TODO: More events.
+        // @todo More events.
         const eventAttributes = [
             "arz-click",
         ]

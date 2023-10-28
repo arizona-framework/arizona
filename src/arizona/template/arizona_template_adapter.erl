@@ -26,7 +26,7 @@
 %% Callbacks
 -optional_callbacks([]).
 
-% @todo: review all the results/returns.
+% @todo review all the results/returns.
 
 -callback compile(Input) -> {ok, State} | {error, term()}
     when Input :: binary()

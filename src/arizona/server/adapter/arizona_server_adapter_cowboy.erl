@@ -39,7 +39,7 @@
 start(Args) ->
     URL = maps:get(url, Args),
     Dispatch = cowboy_router:compile([{'_', routes()}]),
-    % @see: https://ninenines.eu/docs/en/ranch/2.1/manual/ranch_tcp/
+    % @see https://ninenines.eu/docs/en/ranch/2.1/manual/ranch_tcp/
     RanchOpts = [
         {ip, maps:get(ip, URL)},
         {port, maps:get(port, URL)}
@@ -75,7 +75,7 @@ get_body(Req0) ->
 %%% Internal functions
 %%%=====================================================================
 
-% @todo: static routes should not be hardcoded.
+% @todo static routes should not be hardcoded.
 routes() ->
     [
         {"/assets/[...]", cowboy_static, {priv_dir, arizona, "static/assets"}},
