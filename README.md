@@ -34,6 +34,7 @@ Phoenix has an important role in the Elixir's popularity and community growth, a
     - [ ] WebWorker
     - [ ] Event bus
     - [ ] Realtime updates
+- [ ] Example project
 
 ## Dependencies
 
