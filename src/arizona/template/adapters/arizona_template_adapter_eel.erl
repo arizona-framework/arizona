@@ -22,9 +22,9 @@
 %% arizona_template_adapter callbacks
 -export([ compile/1, bind/2, render/1 ]).
 
-%%======================================================================
-%% arizona_template_adapter callbacks
-%%======================================================================
+%%%=====================================================================
+%%% arizona_template_adapter callbacks
+%%%=====================================================================
 
 compile(Input) ->
     Tokens = eel_tokenizer:tokenize(Input),
