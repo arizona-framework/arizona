@@ -20,7 +20,7 @@
 -behaviour(arizona_server_adapter).
 
 %% arizona_server_adapter callbacks
--export([ start/1 ]).
+-export([ start/1, stop/1 ]).
 
 %% Macros
 -define(LISTENER, arizona_http_listener).
@@ -42,3 +42,6 @@ start(Args) ->
         {error, Reason} ->
             {error, Reason}
     end.
+
+stop(_State) ->
+    ok = cowboy:stop_listener(?LISTENER).

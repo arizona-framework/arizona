@@ -30,5 +30,5 @@ start(_StartType, _StartArgs) ->
     ok = arizona_server:start(),
     arizona_sup:start_link().
 
-stop(_State) ->
-    ok.
+stop(State) ->
+    ok = arizona_server:stop(State).

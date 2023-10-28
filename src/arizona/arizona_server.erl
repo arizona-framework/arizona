@@ -18,7 +18,7 @@
 -module(arizona_server).
 
 %% API
--export([ start/0 ]).
+-export([ start/0, stop/1 ]).
 
 %% Macros
 -define(ADAPTER, (arizona_env:get_server(adapter))).
@@ -28,4 +28,7 @@
 %%======================================================================
 
 start() ->
-    ?ADAPTER:start(arizona_env:get_server(args)).
+
+stop(State) ->
+    ?ADAPTER:stop(State).
+

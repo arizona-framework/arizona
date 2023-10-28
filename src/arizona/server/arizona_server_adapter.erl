@@ -25,3 +25,6 @@
 
 -callback start(Args) -> ok | {error, term()}
     when Args :: map().
+
+-callback stop(State) -> ok
+    when State :: term().
