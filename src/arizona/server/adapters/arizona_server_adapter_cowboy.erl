@@ -35,8 +35,7 @@
 
 start(Args) ->
     URL = maps:get(url, Args),
-    Routes = [{'_', ?MODULE, []}],
-    Dispatch = cowboy_router:compile([{'_', Routes}]),
+    Dispatch = cowboy_router:compile([{'_', routes()}]),
     % @see: https://ninenines.eu/docs/en/ranch/2.1/manual/ranch_tcp/
     RanchOpts = [
         {ip, maps:get(ip, URL)},
@@ -53,13 +52,25 @@ start(Args) ->
 stop(_State) ->
     ok = cowboy:stop_listener(?LISTENER).
 
-%%----------------------------------------------------------------------
+%%======================================================================
 %% cowboy_handler callbacks
-%%----------------------------------------------------------------------
+%%======================================================================
 
 init(Req, State) ->
     Bindings = #{name => <<"World">>},
     HTML = arizona_web_live_view_example:render(Bindings),
-    Headers = #{<<"content-type">> => <<"text/plain">>},
+    Headers = #{<<"content-type">> => <<"text/html">>},
     Res = cowboy_req:reply(200, Headers, HTML, Req),
     {ok, Res, State}.
+
+%%======================================================================
+%% Internal functions
+%%======================================================================
+
+routes() ->
+    [
+        {"/assets/[...]", cowboy_static, {priv_dir, arizona, "static/assets"}},
+        {"/favicon.ico", cowboy_static, {priv_file, arizona, "static/favicon.ico"}},
+        {"/robots.txt", cowboy_static, {priv_file, arizona, "static/robots.txt"}},
+        {'_', ?MODULE, []}
+    ].

@@ -29,5 +29,26 @@
 %% arizona_web_live_view callbacks
 %%======================================================================
 
-render(Bindings) ->
-    ?LV(<<"Hello, <%= @name .%>!">>).
+%%======================================================================
+%% @doc
+%% In OTP-27, we can take advantage of using the triple-quoted string
+%% ([https://www.erlang.org/eeps/eep-0064]) to write cleaner templates
+%% and not worry about quotes escaping.
+%% @end
+%%======================================================================
+render(Bindings0) ->
+    Bindings = Bindings0#{title => <<"Arizona Example">>},
+    ?LV(<<"
+    <!DOCTYPE html>
+    <html lang=\"en\">
+    <head>
+        <meta charset=\"UTF-8\">
+        <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\">
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+        <title><%= @title .%></title>
+    </head>
+    <body>
+        Hello, <%= @name .%>!
+    </body>
+    </html>
+    ">>).
