@@ -22,6 +22,10 @@ application:set_env(Env),
         {cowboy, "2.10.0"}
     ]},
 
+    {dialyzer, [
+        {plt_extra_apps, [cowboy]}
+    ]},
+
     {shell, [
         % {config, "config/sys.config"},
         {apps, [arizona]}
