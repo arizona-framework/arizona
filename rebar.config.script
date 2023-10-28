@@ -9,7 +9,12 @@ Env = [{arizona, [
                 ip => {127, 0, 0, 1},
                 port => 8080
             }
-            port => 8080
+        }
+    }},
+    {template, #{
+        adapter => arizona_template_adapter_eel,
+        args => #{
+            % engine => @todo
         }
     }}
 ]}],
@@ -24,6 +29,14 @@ application:set_env(Env),
     ]},
 
     {deps, [
+        %% Owner
+
+        {eel, { git
+              , "https://github.com/williamthome/eel"
+              , {branch, "spawnfest"}} },
+
+        %% Third-party
+
         {cowboy, "2.10.0"}
     ]},
 

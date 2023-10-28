@@ -18,9 +18,13 @@
 -module(arizona_server_adapter_cowboy).
 
 -behaviour(arizona_server_adapter).
+-behaviour(cowboy_handler).
 
 %% arizona_server_adapter callbacks
 -export([ start/1, stop/1 ]).
+
+%% cowboy_handler callbacks
+-export([ init/2 ]).
 
 %% Macros
 -define(LISTENER, arizona_http_listener).
@@ -48,3 +52,15 @@ start(Args) ->
 
 stop(_State) ->
     ok = cowboy:stop_listener(?LISTENER).
+
+%%----------------------------------------------------------------------
+%% cowboy_handler callbacks
+%%----------------------------------------------------------------------
+
+init(Req, State) ->
+    RenderState0 = arizona_template:compile(<<"Hello, <%= @name .%>!">>),
+    RenderState = arizona_template:bind(#{name => <<"World">>}, RenderState0),
+    HTML = arizona_template:render(RenderState),
+    Headers = #{<<"content-type">> => <<"text/plain">>},
+    Res = cowboy_req:reply(200, Headers, HTML, Req),
+    {ok, Res, State}.
