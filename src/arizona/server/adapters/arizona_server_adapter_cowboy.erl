@@ -30,10 +30,13 @@
 %%======================================================================
 
 start(Args) ->
+    URL = maps:get(url, Args),
     Routes = [{'_', ?MODULE, []}],
     Dispatch = cowboy_router:compile([{'_', Routes}]),
+    % @see: https://ninenines.eu/docs/en/ranch/2.1/manual/ranch_tcp/
     RanchOpts = [
-        {port, maps:get(port, Args, 8080)}
+        {ip, maps:get(ip, URL)},
+        {port, maps:get(port, URL)}
     ],
     Opts = #{env => #{dispatch => Dispatch}},
     case cowboy:start_clear(?LISTENER, RanchOpts, Opts) of

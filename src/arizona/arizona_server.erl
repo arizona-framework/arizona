@@ -28,7 +28,30 @@
 %%======================================================================
 
 start() ->
+    Args = arizona_env:get_server(args),
+    case ?ADAPTER:start(Args) of
+        ok ->
+            URL = url_to_string(maps:get(url, Args)),
+            io:format("Arizona is running at ~s~n", [URL]),
+            ok;
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 stop(State) ->
     ?ADAPTER:stop(State).
 
+%%======================================================================
+%% Internal functions
+%%======================================================================
+
+url_to_string(#{schema := Schema, ip := IP, port := Port}) ->
+    io_lib:format("~w://~s:~p", [Schema, ip_to_string(IP), Port]).
+
+ip_to_string(IP) ->
+    case inet:ntoa(IP) of
+        {error, einval} ->
+            error({invalid_ip, IP});
+        String ->
+            String
+    end.

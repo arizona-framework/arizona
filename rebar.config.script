@@ -4,6 +4,11 @@ Env = [{arizona, [
     {server, #{
         adapter => arizona_server_adapter_cowboy,
         args => #{
+            url => #{
+                schema => http,
+                ip => {127, 0, 0, 1},
+                port => 8080
+            }
             port => 8080
         }
     }}
