@@ -22,17 +22,26 @@
 
 -type bindings() :: arizona_template_adapter:bindings().
 -type render_state() :: arizona_template_adapter:state().
+-type event() :: binary().
+-type payload() :: map().
+-type params() :: arizona_server_adapter:params().
+-type socket() :: arizona_socket:t().
 
 %% Callbacks
--optional_callbacks([ mount/1 ]).
+-optional_callbacks([ mount/2, handle_event/3 ]).
 
-% @todo: Socket.
--callback mount(Args) -> {ok, Bindings}
-    when Args :: term()
-       , Bindings :: bindings()
+-callback mount(Params, Socket) -> {ok, Socket}
+    when Params :: params()
+       , Socket :: socket()
        .
 
 -callback render(Bindings) -> {Bindings, RenderState}
     when Bindings :: bindings()
        , RenderState :: render_state()
+       .
+
+-callback handle_event(Event, Payload, Socket) -> {ok, Socket}
+    when Event :: event()
+       , Payload :: payload()
+       , Socket :: socket()
        .

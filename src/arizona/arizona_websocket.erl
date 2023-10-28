@@ -23,17 +23,37 @@
 %% Macros
 -define(DEFAULT_PAYLOAD, #{}).
 
+%% State
+-record(state, { view :: module()
+               , params :: params()
+               , socket :: socket()
+               }).
+
+-type params() :: arizona_server_adapter:params().
+-type socket() :: arizona_socket:t().
+
 %%%=====================================================================
 %%% API
 %%%=====================================================================
 
-init(Args) ->
-    io:format("[WebSocket] init: ~p~n", [Args]),
-    {ok, []}.
+init(Params) ->
+    View = get_view(Params),
+    {ok, Socket} = arizona_live_view:mount(View, Params),
+    io:format("[WebSocket] init: ~p~n", [Params]),
+    State = #state{
+        view = View,
+        params = Params,
+        socket = Socket
+    },
+    {ok, State}.
 
-handle_msg(Msg, State) ->
+handle_msg(Msg, #state{view = View} = State0) ->
+    io:format("[WebSocket] msg: ~p~n", [Msg]),
     {Event, Payload} = decode_msg(Msg),
-    io:format("[WebSocket] event: ~p | payload: ~p~n", [Event, Payload]),
+    {ok, Socket} = arizona_live_view:handle_event(
+        View, Event, Payload, State0#state.socket
+    ),
+    State = State0#state{socket = Socket},
     {ok, State}.
 
 handle_info(Info, State) ->
@@ -47,6 +67,10 @@ terminate(Reason, _Req, _State) ->
 %%%=====================================================================
 %%% Internal functions
 %%%=====================================================================
+
+get_view(Params) ->
+    {<<"view">>, View} = proplists:lookup(<<"view">>, Params),
+    binary_to_existing_atom(View).
 
 decode_msg(Msg0) ->
     {ok, Msg} = arizona_json:decode(Msg0),

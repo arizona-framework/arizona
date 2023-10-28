@@ -40,8 +40,10 @@ handle(Method, Path, Req0) ->
 %%% Internal functions
 %%%=====================================================================
 
-do_handle({live, Mod, Args}, Req0) ->
-    {ok, Bindings} = arizona_live_view:mount(Mod, Args),
+do_handle({live, Mod, _Opts}, Req0) ->
+    Params = cowboy_req:parse_qs(Req0),
+    {ok, Socket} = arizona_live_view:mount(Mod, Params),
+    Bindings = arizona_socket:get_bindings(Socket),
     HTML = arizona_live_view:render(Mod, Bindings),
     Req1 = arizona_server:set_headers(#{
         <<"content-type">> => <<"text/html">>

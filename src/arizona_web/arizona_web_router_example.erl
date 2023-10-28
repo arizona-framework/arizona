@@ -27,6 +27,6 @@
 %%%=====================================================================
 
 match(get, [ ]) ->
-    {{live, arizona_web_live_view_example, []}, #{}};
+    {{live, arizona_web_live_view_example, #{}}, #{}};
 match(Method, Path) ->
     {{arizona_web_controller_error, invalid_route, [Method, Path]}, #{}}.

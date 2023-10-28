@@ -18,7 +18,7 @@
 -module(arizona_server_adapter).
 
 %% Types
--export_type([ method/0, path/0 ]).
+-export_type([ method/0, path/0, status_code/0, body/0, params/0 ]).
 
 -type request() :: term().
 -type headers() :: #{binary() => binary()}.
@@ -35,6 +35,7 @@
 -type path() :: [binary()].
 -type status_code() :: 200..500.
 -type body() :: binary().
+-type params() :: [{binary(), binary()}].
 
 %% Callbacks
 -optional_callbacks([]).

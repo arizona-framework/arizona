@@ -32,12 +32,12 @@
 %%%=====================================================================
 
 init(Req0, _Args) ->
-    InitArgs = [],
+    Params = cowboy_req:parse_qs(Req0),
     % @see https://ninenines.eu/docs/en/cowboy/2.10/manual/cowboy_websocket/
     Opts = #{},
     case cowboy_req:parse_header(<<"sec-websocket-protocol">>, Req0) of
         undefined ->
-            {cowboy_websocket, Req0, InitArgs, Opts};
+            {cowboy_websocket, Req0, Params, Opts};
         Subprotocols ->
             case lists:keymember(<<"mqtt">>, 1, Subprotocols) of
                 true ->
@@ -46,15 +46,15 @@ init(Req0, _Args) ->
                         <<"mqtt">>,
                         Req0
                     ),
-                    {cowboy_websocket, Req, InitArgs, Opts};
+                    {cowboy_websocket, Req, Params, Opts};
                 false ->
                     Req = cowboy_req:reply(400, Req0),
-                    {ok, Req, InitArgs}
+                    {ok, Req, Params}
             end
     end.
 
-websocket_init(Args) ->
-    {ok, State} = arizona_websocket:init(Args),
+websocket_init(Params) ->
+    {ok, State} = arizona_websocket:init(Params),
     {[], State}.
 
 websocket_handle({text, Msg}, State0) ->

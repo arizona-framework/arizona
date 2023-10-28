@@ -18,19 +18,26 @@
 -module(arizona_live_view).
 
 %% API
--export([ mount/2, render/2 ]).
+-export([ mount/2, render/2, handle_event/4 ]).
 
 %%%=====================================================================
 %%% API
 %%%=====================================================================
 
-mount(Mod, Args) ->
-    case erlang:function_exported(Mod, mount, 1) of
+mount(View, Params) ->
+    io:format("[LiveView] ~w: ~p~n", [View, [mount, Params]]),
+    Socket = arizona_socket:new(),
+    case erlang:function_exported(View, mount, 2) of
         true ->
-            Mod:mount(Args);
+            View:mount(Params, Socket);
         false ->
-            {ok, #{}}
+            {ok, Socket}
     end.
 
-render(Mod, Bindings) ->
-    Mod:render(Bindings).
+render(View, Bindings) ->
+    io:format("[LiveView] ~w: ~p~n", [View, [render, Bindings]]),
+    View:render(Bindings).
+
+handle_event(View, Event, Payload, Socket) ->
+    io:format("[LiveView] ~w: ~p~n", [View, [event, Event, Payload]]),
+    View:handle_event(Event, Payload, Socket).

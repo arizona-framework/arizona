@@ -20,7 +20,7 @@
 -behaviour(arizona_web_live_view).
 
 %% arizona_web_live_view callbacks
--export([ mount/1, render/1 ]).
+-export([ mount/2, render/1, handle_event/3 ]).
 
 %% Libs
 -include("arizona_live_view.hrl").
@@ -29,8 +29,9 @@
 %%% arizona_web_live_view callbacks
 %%%=====================================================================
 
-mount(_Args) ->
-    {ok, #{count => 0}}.
+mount(_Params, Socket0) ->
+    Socket = arizona_socket:bind(count, 0, Socket0),
+    {ok, Socket}.
 
 %%----------------------------------------------------------------------
 %% @doc
@@ -44,3 +45,6 @@ render(Bindings) ->
     <div>Count: <span id=\"counter\"><%= @count .%></span></div>
     <button type=\"button\" arz-click=\"+1\">+1</button>
     ">>).
+
+handle_event(_Event, _Payload, Socket) ->
+    {ok, Socket}.

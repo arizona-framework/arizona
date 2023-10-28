@@ -20,7 +20,7 @@
 -behaviour(arizona_web_template).
 
 %% API
--export([ render/2 ]).
+-export([ render/3 ]).
 
 %% Libs
 -include("arizona_live_view.hrl").
@@ -29,8 +29,9 @@
 %%% API
 %%%=====================================================================
 
-render(Bindings0, InnerContent) ->
+render(View, Bindings0, InnerContent) ->
     Bindings = Bindings0#{
+        view => View,
         title => <<"Arizona Example">>,
         inner_content => InnerContent
     },
@@ -41,6 +42,7 @@ render(Bindings0, InnerContent) ->
         <meta charset=\"UTF-8\">
         <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\">
         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+        <meta name=\"view\" charset=\"UTF-8\" content=\"<%= @view .%>\">
         <title><%= @title .%></title>
         <script src=\"assets/arizona.js\"></script>
         <script src=\"assets/main.js\"></script>

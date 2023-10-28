@@ -1,6 +1,6 @@
 %% @author William Fank Thomé <willilamthome@hotmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc Web template.
+%% @doc Socket.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -15,21 +15,32 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_web_template).
+-module(arizona_socket).
+
+%% API
+-export([ new/0, get_bindings/1, bind/3 ]).
 
 %% Types
--export_type([ bindings/0, render_state/0 ]).
+-export_type([ t/0 ]).
+
+-record(socket, {bindings :: bindings()}).
+-opaque t() :: #socket{}.
 
 -type bindings() :: arizona_template_adapter:bindings().
--type inner_content() :: binary().
--type render_state() :: arizona_template_adapter:state().
 
-%% Callbacks
--optional_callbacks([]).
+%%%=====================================================================
+%%% API
+%%%=====================================================================
 
--callback render(View, Bindings, InnerContent) -> {Bindings, RenderState}
-    when View :: module()
-       , Bindings :: bindings()
-       , InnerContent :: inner_content()
-       , RenderState :: render_state()
-       .
+new() ->
+    #socket{
+        bindings = #{}
+    }.
+
+get_bindings(#socket{bindings = Bindings}) ->
+    Bindings.
+
+bind(Key, Val, #socket{bindings = Bindings} = Socket) ->
+    Socket#socket{
+        bindings = Bindings#{Key => Val}
+    }.

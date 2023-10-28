@@ -22,4 +22,4 @@
     arizona_template:bind(Bindings, arizona_template:compile(Bin))
 )).
 
--define(LV(Template, Bin), Template:render(Bindings, ?LV(Bin))).
+-define(LV(Template, Bin), Template:render(?MODULE, Bindings, ?LV(Bin))).
