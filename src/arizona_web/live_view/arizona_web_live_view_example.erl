@@ -36,19 +36,7 @@
 %% and not worry about quotes escaping.
 %% @end
 %%----------------------------------------------------------------------
-render(Bindings0) ->
-    Bindings = Bindings0#{title => <<"Arizona Example">>},
-    ?LV(<<"
-    <!DOCTYPE html>
-    <html lang=\"en\">
-    <head>
-        <meta charset=\"UTF-8\">
-        <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\">
-        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-        <title><%= @title .%></title>
-    </head>
-    <body>
-        Hello, <%= @name .%>!
-    </body>
-    </html>
+render(Bindings) ->
+    ?LV(arizona_web_template_example, <<"
+    Hello, <%= @name .%>!
     ">>).

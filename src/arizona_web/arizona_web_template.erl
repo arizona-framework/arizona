@@ -1,6 +1,6 @@
 %% @author William Fank Thomé <willilamthome@hotmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc Live view helpers.
+%% @doc Web template.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -15,11 +15,20 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
+-module(arizona_web_template).
 
-%% Macros
-%% @todo: eval arizona_template:compile/1 via parse_transform.
--define(LV(Bin), arizona_template:render(
-    arizona_template:bind(Bindings, arizona_template:compile(Bin))
-)).
+%% Types
+-export_type([ bindings/0, render_state/0 ]).
 
--define(LV(Template, Bin), Template:render(Bindings, ?LV(Bin))).
+-type bindings() :: arizona_template_adapter:bindings().
+-type inner_content() :: binary().
+-type render_state() :: arizona_template_adapter:state().
+
+%% Callbacks
+-optional_callbacks([]).
+
+-callback render(Bindings, InnerContent) -> {Bindings, RenderState}
+    when Bindings :: bindings()
+       , InnerContent :: inner_content()
+       , RenderState :: render_state()
+       .
