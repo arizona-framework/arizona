@@ -1,6 +1,6 @@
 %% @author William Fank Thomé <willilamthome@hotmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc Web LiveView.
+%% @doc LiveView.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -15,24 +15,22 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_web_live_view).
+-module(arizona_live_view).
 
-%% Types
--export_type([ bindings/0, render_state/0 ]).
+%% API
+-export([ mount/2, render/2 ]).
 
--type bindings() :: arizona_template_adapter:bindings().
--type render_state() :: arizona_template_adapter:state().
+%%%=====================================================================
+%%% API
+%%%=====================================================================
 
-%% Callbacks
--optional_callbacks([ mount/1 ]).
+mount(Mod, Args) ->
+    case erlang:function_exported(Mod, mount, 1) of
+        true ->
+            Mod:mount(Args);
+        false ->
+            {ok, #{}}
+    end.
 
-% @todo: Socket.
--callback mount(Args) -> {ok, Bindings}
-    when Args :: term()
-       , Bindings :: bindings()
-       .
-
--callback render(Bindings) -> {Bindings, RenderState}
-    when Bindings :: bindings()
-       , RenderState :: render_state()
-       .
+render(Mod, Bindings) ->
+    Mod:render(Bindings).

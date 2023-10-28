@@ -20,7 +20,7 @@
 -behaviour(arizona_web_live_view).
 
 %% arizona_web_live_view callbacks
--export([ render/1 ]).
+-export([ mount/1, render/1 ]).
 
 %% Libs
 -include("arizona_live_view.hrl").
@@ -28,6 +28,9 @@
 %%%=====================================================================
 %%% arizona_web_live_view callbacks
 %%%=====================================================================
+
+mount(_Args) ->
+    {ok, #{name => <<"World">>}}.
 
 %%----------------------------------------------------------------------
 %% @doc

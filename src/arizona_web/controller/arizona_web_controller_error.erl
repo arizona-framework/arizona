@@ -1,6 +1,6 @@
 %% @author William Fank Thomé <willilamthome@hotmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc Web LiveView.
+%% @doc Error controller.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -15,24 +15,15 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_web_live_view).
+-module(arizona_web_controller_error).
 
-%% Types
--export_type([ bindings/0, render_state/0 ]).
+%% API
+-export([ invalid_route/2 ]).
 
--type bindings() :: arizona_template_adapter:bindings().
--type render_state() :: arizona_template_adapter:state().
+%%%=====================================================================
+%%% API
+%%%=====================================================================
 
-%% Callbacks
--optional_callbacks([ mount/1 ]).
-
-% @todo: Socket.
--callback mount(Args) -> {ok, Bindings}
-    when Args :: term()
-       , Bindings :: bindings()
-       .
-
--callback render(Bindings) -> {Bindings, RenderState}
-    when Bindings :: bindings()
-       , RenderState :: render_state()
-       .
+invalid_route([_Method, _Path], Req0) ->
+    Req = arizona_server:set_status_code(404, Req0),
+    {ok, Req}.

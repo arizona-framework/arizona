@@ -18,7 +18,23 @@
 -module(arizona_server_adapter).
 
 %% Types
--export_type([]).
+-export_type([ method/0, path/0 ]).
+
+-type request() :: term().
+-type headers() :: #{binary() => binary()}.
+-type method() :: get
+                | post
+                | patch
+                | delete
+                | put
+                | connect
+                | head
+                | options
+                | trace
+                .
+-type path() :: [binary()].
+-type status_code() :: 200..500.
+-type body() :: binary().
 
 %% Callbacks
 -optional_callbacks([]).
@@ -28,3 +44,27 @@
 
 -callback stop(State) -> ok
     when State :: term().
+
+-callback get_headers(Req) -> Headers
+    when Req :: request()
+       , Headers :: headers()
+       .
+
+-callback set_headers(Headers, Req) -> Req
+    when Headers :: headers()
+       , Req :: request()
+       .
+
+-callback set_status_code(StatusCode, Req) -> Req
+    when StatusCode :: status_code()
+       , Req :: request()
+       .
+-callback get_body(Req) -> {Body, Req}
+    when Req :: request()
+       , Body :: body()
+       .
+
+-callback set_body(Body, Req) -> Req
+    when Body :: body()
+       , Req :: request()
+       .

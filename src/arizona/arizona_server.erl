@@ -18,7 +18,14 @@
 -module(arizona_server).
 
 %% API
--export([ start/0, stop/1 ]).
+-export([ start/0
+        , stop/1
+        , get_headers/1
+        , set_headers/2
+        , set_status_code/2
+        , get_body/1
+        , set_body/2
+        ]).
 
 %% Macros
 -define(ADAPTER, (arizona_env:get_server(adapter))).
@@ -40,6 +47,21 @@ start() ->
 
 stop(State) ->
     ?ADAPTER:stop(State).
+
+get_headers(Req) ->
+    ?ADAPTER:get_headers(Req).
+
+set_headers(Headers, Req) ->
+    ?ADAPTER:set_headers(Headers, Req).
+
+set_status_code(StatusCode, Req) ->
+    ?ADAPTER:set_status_code(StatusCode, Req).
+
+get_body(Req) ->
+    ?ADAPTER:get_body(Req).
+
+set_body(Body, Req) ->
+    ?ADAPTER:set_body(Body, Req).
 
 %%%=====================================================================
 %%% Internal functions

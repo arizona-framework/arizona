@@ -11,6 +11,12 @@ Env = [{arizona, [
             }
         }
     }},
+    {router, #{
+        adapter => arizona_web_router_example,
+        args => #{
+            % nothing here yet!
+        }
+    }},
     {template, #{
         adapter => arizona_template_adapter_eel,
         args => #{

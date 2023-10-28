@@ -25,6 +25,9 @@
 %% Server
 -export([ get_server/0, get_server/1, get_server/2 ]).
 
+%% Router
+-export([ get_router/0, get_router/1, get_router/2 ]).
+
 %% Template
 -export([ get_template/0, get_template/1, get_template/2 ]).
 
@@ -53,6 +56,19 @@ get_server(Key) ->
 
 get_server(Key, Default) ->
     maps:get(Key, get_server(), Default).
+
+%%%=====================================================================
+%%% Router
+%%%=====================================================================
+
+get_router() ->
+    get(router).
+
+get_router(Key) ->
+    maps:get(Key, get_router()).
+
+get_router(Key, Default) ->
+    maps:get(Key, get_router(), Default).
 
 %%%=====================================================================
 %%% Template

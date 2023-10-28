@@ -21,7 +21,14 @@
 -behaviour(cowboy_handler).
 
 %% arizona_server_adapter callbacks
--export([ start/1, stop/1 ]).
+-export([ start/1
+        , stop/1
+        , get_headers/1
+        , set_headers/2
+        , set_status_code/2
+        , get_body/1
+        , set_body/2
+        ]).
 
 %% cowboy_handler callbacks
 -export([ init/2 ]).
@@ -52,15 +59,30 @@ start(Args) ->
 stop(_State) ->
     ok = cowboy:stop_listener(?LISTENER).
 
+get_headers(Req) ->
+    cowboy_req:headers(Req).
+
+set_headers(Headers, Req) ->
+    cowboy_req:set_resp_headers(Headers, Req).
+
+set_status_code(StatusCode, Req) ->
+    cowboy_req:reply(StatusCode, Req).
+
+set_body(Body, Req) ->
+    cowboy_req:set_resp_body(Body, Req).
+
+get_body(Req0) ->
+    {ok, Body, Req} = cowboy_req:read_body(Req0, #{length => infinity}),
+    {Body, Req}.
+
 %%%=====================================================================
 %%% cowboy_handler callbacks
 %%%=====================================================================
 
 init(Req, State) ->
-    Bindings = #{name => <<"World">>},
-    HTML = arizona_web_live_view_example:render(Bindings),
-    Headers = #{<<"content-type">> => <<"text/html">>},
-    Res = cowboy_req:reply(200, Headers, HTML, Req),
+    Method = normalize_method(cowboy_req:method(Req)),
+    Path = normalize_path(cowboy_req:path(Req)),
+    {ok, Res} = arizona_handler:handle(Method, Path, Req),
     {ok, Res, State}.
 
 %%%=====================================================================
@@ -75,3 +97,16 @@ routes() ->
         {"/robots.txt", cowboy_static, {priv_file, arizona, "static/robots.txt"}},
         {'_', ?MODULE, []}
     ].
+
+normalize_method(<<"GET">>) -> get;
+normalize_method(<<"POST">>) -> post;
+normalize_method(<<"PATCH">>) -> patch;
+normalize_method(<<"DELETE">>) -> delete;
+normalize_method(<<"PUT">>) -> put;
+normalize_method(<<"CONNECT">>) -> connect;
+normalize_method(<<"HEAD">>) -> head;
+normalize_method(<<"OPTIONS">>) -> options;
+normalize_method(<<"TRACE">>) -> trace.
+
+normalize_path(Path) ->
+    binary:split(Path, <<"/">>, [global, trim_all]).
