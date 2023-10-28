@@ -18,11 +18,14 @@
 -module(arizona_handler).
 
 %% API
--export([ handle/3 ]).
+-export([ init/1, handle/3 ]).
 
 %%%=====================================================================
 %%% API
 %%%=====================================================================
+
+init(Req) ->
+    {ok, Req}.
 
 handle(Method, Path, Req0) ->
     {Handler, Opts} = arizona_router:match(Method, Path),

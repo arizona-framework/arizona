@@ -26,7 +26,8 @@
 %%% cowboy_handler callbacks
 %%%=====================================================================
 
-init(Req, State) ->
+init(Req0, State) ->
+    {ok, Req} = arizona_handler:init(Req0),
     Method = normalize_method(cowboy_req:method(Req)),
     Path = normalize_path(cowboy_req:path(Req)),
     {ok, Res} = arizona_handler:handle(Method, Path, Req),
