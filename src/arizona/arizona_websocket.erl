@@ -20,6 +20,9 @@
 %% API
 -export([ init/1, handle_msg/2, handle_info/2, terminate/3 ]).
 
+%% Macros
+-define(DEFAULT_PAYLOAD, #{}).
+
 %%%=====================================================================
 %%% API
 %%%=====================================================================
@@ -29,7 +32,8 @@ init(Args) ->
     {ok, []}.
 
 handle_msg(Msg, State) ->
-    io:format("[WebSocket] handle: ~p~n", [Msg]),
+    {Event, Payload} = decode_msg(Msg),
+    io:format("[WebSocket] event: ~p | payload: ~p~n", [Event, Payload]),
     {ok, State}.
 
 handle_info(Info, State) ->
@@ -39,3 +43,16 @@ handle_info(Info, State) ->
 terminate(Reason, _Req, _State) ->
     io:format("[WebSocket] terminate: ~p~n", [Reason]),
     ok.
+
+%%%=====================================================================
+%%% Internal functions
+%%%=====================================================================
+
+decode_msg(Msg0) ->
+    {ok, Msg} = arizona_json:decode(Msg0),
+    do_normalize_msg(Msg).
+
+do_normalize_msg([Event, Payload]) ->
+    {Event, Payload};
+do_normalize_msg(Event) ->
+    {Event, ?DEFAULT_PAYLOAD}.

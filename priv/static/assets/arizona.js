@@ -75,6 +75,48 @@ function arizonaFactory(opts = {}) {
         worker.postMessage({event, payload})
     }
 
+    // Observer
+
+    document.addEventListener("DOMContentLoaded", () => {
+        // TODO: More events.
+        const eventAttributes = [
+            "arz-click",
+        ]
+
+        eventAttributes.forEach((attributeName) => {
+            document
+                .querySelectorAll(`[${attributeName}]`)
+                .forEach((target) => installEvent(target, attributeName))
+        })
+
+        function installEvent(target, attributeName) {
+            const [_, listenerType] = attributeName.split("arz-")
+            const event = target.getAttribute(attributeName)
+            const callback = observerNodeEventListener(event)
+            event
+                ? target.addEventListener(listenerType, callback)
+                : target.removeEventListener(listenerType, callback)
+        }
+
+        function observerNodeEventListener(event) {
+            return function(e) {
+                e.target.name
+                    ? send(event, {[e.target.name]: e.target.value})
+                    : send(event)
+            }
+        }
+
+        const observer = new MutationObserver((mutations) => {
+            for (const node of mutations) {
+                installEvent(node.target, node.attributeName)
+            }
+        })
+        observer.observe(document.body, {
+            attributeFilter: eventAttributes,
+            subtree: true,
+        })
+    })
+
     return {
         connect,
         send,

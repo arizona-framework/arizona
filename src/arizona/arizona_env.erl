@@ -31,6 +31,9 @@
 %% Template
 -export([ get_template/0, get_template/1, get_template/2 ]).
 
+%% JSON
+-export([ get_json/0, get_json/1, get_json/2 ]).
+
 %%%=====================================================================
 %%% API
 %%%=====================================================================
@@ -82,3 +85,16 @@ get_template(Key) ->
 
 get_template(Key, Default) ->
     maps:get(Key, get_template(), Default).
+
+%%%=====================================================================
+%%% JSON
+%%%=====================================================================
+
+get_json() ->
+    get(json).
+
+get_json(Key) ->
+    maps:get(Key, get_json()).
+
+get_json(Key, Default) ->
+    maps:get(Key, get_json(), Default).

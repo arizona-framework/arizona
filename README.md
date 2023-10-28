@@ -39,7 +39,8 @@ Phoenix has an important role in the Elixir's popularity and community growth, a
 
 ### Maintained by me
 
-- [eel](https://github.com/williamthome/eel): Template compiler.
+- [eel](https://github.com/williamthome/eel): Template compiler;
+- [euneus](https://github.com/williamthome/euneus): JSON parser and generator.
 
 ### Third-party
 

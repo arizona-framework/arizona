@@ -1,6 +1,6 @@
 %% @author William Fank Thomé <willilamthome@hotmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc LiveView example.
+%% @doc Euneus JSON adapter.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -15,32 +15,19 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_web_live_view_example).
+-module(arizona_json_adapter_euneus).
 
--behaviour(arizona_web_live_view).
+-behaviour(arizona_json_adapter).
 
-%% arizona_web_live_view callbacks
--export([ mount/1, render/1 ]).
-
-%% Libs
--include("arizona_live_view.hrl").
+%% arizona_json_adapter callbacks
+-export([ encode/1, decode/1 ]).
 
 %%%=====================================================================
-%%% arizona_web_live_view callbacks
+%%% arizona_json_adapter callbacks
 %%%=====================================================================
 
-mount(_Args) ->
-    {ok, #{count => 0}}.
+encode(Term) ->
+    euneus:encode(Term).
 
-%%----------------------------------------------------------------------
-%% @doc
-%% In OTP-27, we can take advantage of using the triple-quoted string
-%% ([https://www.erlang.org/eeps/eep-0064]) to write cleaner templates
-%% and not worry about quotes escaping.
-%% @end
-%%----------------------------------------------------------------------
-render(Bindings) ->
-    ?LV(arizona_web_template_example, <<"
-    <div>Count: <span id=\"counter\"><%= @count .%></span></div>
-    <button type=\"button\" arz-click=\"+1\">+1</button>
-    ">>).
+decode(JSON) ->
+    euneus:decode(JSON).
