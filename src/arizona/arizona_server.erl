@@ -1,6 +1,6 @@
 %% @author William Fank Thomé <willilamthome@hotmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc Arizona application module.
+%% @doc Server.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -15,20 +15,17 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_app).
+-module(arizona_server).
 
--behaviour(application).
+%% API functions
+-export([ start/0 ]).
 
-%% application callbacks
--export([ start/2, stop/1 ]).
+%% Macros
+-define(ADAPTER, (arizona_env:get_server(adapter))).
 
 %%----------------------------------------------------------------------
-%% APPLICATION CALLBACKS
+%% API FUNCTIONS
 %%----------------------------------------------------------------------
 
-start(_StartType, _StartArgs) ->
-    ok = arizona_server:start(),
-    arizona_sup:start_link().
-
-stop(_State) ->
-    ok.
+start() ->
+    ?ADAPTER:start(arizona_env:get_server(args)).

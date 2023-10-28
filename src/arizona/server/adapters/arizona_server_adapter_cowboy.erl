@@ -1,6 +1,6 @@
 %% @author William Fank Thomé <willilamthome@hotmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc Arizona application module.
+%% @doc Cowboy server adapter.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -15,20 +15,30 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_app).
+-module(arizona_server_adapter_cowboy).
 
--behaviour(application).
+-behaviour(arizona_server_adapter).
 
-%% application callbacks
--export([ start/2, stop/1 ]).
+%% arizona_server_adapter callbacks
+-export([ start/1 ]).
+
+%% Macros
+-define(LISTENER, arizona_http_listener).
 
 %%----------------------------------------------------------------------
-%% APPLICATION CALLBACKS
+%% ARIZONA_SERVER_ADAPTER CALLBACKS
 %%----------------------------------------------------------------------
 
-start(_StartType, _StartArgs) ->
-    ok = arizona_server:start(),
-    arizona_sup:start_link().
-
-stop(_State) ->
-    ok.
+start(Args) ->
+    Routes = [{'_', ?MODULE, []}],
+    Dispatch = cowboy_router:compile([{'_', Routes}]),
+    RanchOpts = [
+        {port, maps:get(port, Args, 8080)}
+    ],
+    Opts = #{env => #{dispatch => Dispatch}},
+    case cowboy:start_clear(?LISTENER, RanchOpts, Opts) of
+        {ok, _} ->
+            ok;
+        {error, Reason} ->
+            {error, Reason}
+    end.

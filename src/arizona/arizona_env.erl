@@ -1,6 +1,6 @@
 %% @author William Fank Thomé <willilamthome@hotmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc Arizona application module.
+%% @doc Environment helpers.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -15,20 +15,34 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_app).
+-module(arizona_env).
 
--behaviour(application).
+-compile({no_auto_import, [ get/1 ]}).
 
-%% application callbacks
--export([ start/2, stop/1 ]).
+%% API functions
+-export([ get_all/0, get/1, get/2 ]).
+-export([ get_server/0, get_server/1, get_server/2 ]).
 
 %%----------------------------------------------------------------------
-%% APPLICATION CALLBACKS
+%% API FUNCTIONS
 %%----------------------------------------------------------------------
 
-start(_StartType, _StartArgs) ->
-    ok = arizona_server:start(),
-    arizona_sup:start_link().
+get_all() ->
+    proplists:to_map(application:get_all_env(arizona)).
 
-stop(_State) ->
-    ok.
+get(Key) ->
+    maps:get(Key, get_all()).
+
+get(Key, Default) ->
+    maps:get(Key, get_all(), Default).
+
+%% server
+
+get_server() ->
+    get(server).
+
+get_server(Key) ->
+    maps:get(Key, get_server()).
+
+get_server(Key, Default) ->
+    maps:get(Key, get_server(), Default).

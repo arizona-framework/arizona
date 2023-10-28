@@ -1,10 +1,25 @@
+%% Environment
+
+Env = [{arizona, [
+    {server, #{
+        adapter => arizona_server_adapter_cowboy,
+        args => #{
+            port => 8080
+        }
+    }}
+]}],
+
+application:set_env(Env),
+
+%% Config
+
 [
     {erl_opts, [
         debug_info
     ]},
 
     {deps, [
-
+        {cowboy, "2.10.0"}
     ]},
 
     {shell, [

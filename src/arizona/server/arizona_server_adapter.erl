@@ -1,6 +1,6 @@
 %% @author William Fank Thomé <willilamthome@hotmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc Arizona application module.
+%% @doc Server adapter.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -15,20 +15,13 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_app).
+-module(arizona_server_adapter).
 
--behaviour(application).
+%% Types
+-export_type([]).
 
-%% application callbacks
--export([ start/2, stop/1 ]).
+%% Callbacks
+-optional_callbacks([]).
 
-%%----------------------------------------------------------------------
-%% APPLICATION CALLBACKS
-%%----------------------------------------------------------------------
-
-start(_StartType, _StartArgs) ->
-    ok = arizona_server:start(),
-    arizona_sup:start_link().
-
-stop(_State) ->
-    ok.
+-callback start(Args) -> ok | {error, term()}
+    when Args :: map().
