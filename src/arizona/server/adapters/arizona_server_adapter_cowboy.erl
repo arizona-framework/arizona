@@ -67,6 +67,7 @@ init(Req, State) ->
 %%% Internal functions
 %%%=====================================================================
 
+% @todo: static routes should not be hardcoded.
 routes() ->
     [
         {"/assets/[...]", cowboy_static, {priv_dir, arizona, "static/assets"}},
