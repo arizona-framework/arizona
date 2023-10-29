@@ -22,18 +22,19 @@ Phoenix has an important role in the Elixir's popularity and community growth, a
 
 ## Roadmap
 
-- [ ] Server side
-    - [ ] Server
-    - [ ] Request handler
-    - [ ] WebSocket
-    - [ ] JSON parser
-    - [ ] Template compiler
-    - [ ] Router
+- [X] Server side
+    - [X] Server
+    - [X] Request handler
+    - [X] WebSocket
+    - [X] JSON parser
+    - [X] Template compiler
+    - [X] Router
 - [ ] Client side
-    - [ ] Broker
-    - [ ] WebWorker
-    - [ ] Event bus
-    - [ ] Realtime updates
+    - [X] Broker
+    - [X] WebWorker
+    - [X] Event bus
+    - [X] Real-time updates
+    - [ ] Patch only the diff on real-time updates
 - [ ] Example project
 
 ## Dependencies
