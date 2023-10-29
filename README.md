@@ -16,6 +16,7 @@ Arizona is a Web Framework for Erlang.
     - [Maintained by me](#maintained-by-me)
     - [Third-party](#third-party)
 - [Event notes](#event-notes)
+- [Next steps](#next-steps)
 - [License](#license)
 
 ## Goal
@@ -278,6 +279,13 @@ My special thanks to all of the folks involved in this event.
 Wish luck to all participants o/
 
 See you all next time 🚀
+
+## Next steps
+
+- Compile the templates. Currently, all the time that a page is visited the template is compiled;
+- A database integration, like [Ecto](https://hexdocs.pm/ecto/Ecto.html) for Elixir. I have some ideas implemented on [this project](https://github.com/williamthome/ebank);
+- Simplify the CRUD creation using a mechanism like the [Changeset](https://hexdocs.pm/ecto/Ecto.Changeset.html) for Ecto/Elixir. I have a project also called [Changeset](https://github.com/williamthome/changeset) that can be used as an initial idea;
+- CLI (Command Line Interface) with useful commands, maybe via a rebar3 plugin.
 
 ## License
 
