@@ -1,6 +1,6 @@
 %% @author {{author_name}} <{{author_email}}>
 %% @copyright {{copyright_year}} {{author_name}}
-%% @doc Error controller.
+%% @doc Supervisor.
 
 %% Copyright {{copyright_year}} {{author_name}}
 %%
