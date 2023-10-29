@@ -15,7 +15,7 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_web_live_view_example).
+-module(arizona_example_web_live_home).
 
 -behaviour(arizona_live_view).
 
@@ -23,7 +23,7 @@
 -export([ mount/2, render/1, handle_event/3 ]).
 
 %% Libs
--include("arizona_live_view.hrl").
+-include_lib("arizona/include/arizona_live_view.hrl").
 
 %%%=====================================================================
 %%% arizona_web_live_view callbacks

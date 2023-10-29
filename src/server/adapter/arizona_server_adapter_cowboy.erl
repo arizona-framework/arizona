@@ -37,8 +37,9 @@
 %%%=====================================================================
 
 start(Args) ->
+    App = arizona_env:get_app(),
     URL = maps:get(url, Args),
-    Dispatch = cowboy_router:compile([{'_', routes()}]),
+    Dispatch = cowboy_router:compile([{'_', routes(App)}]),
     % @see https://ninenines.eu/docs/en/ranch/2.1/manual/ranch_tcp/
     RanchOpts = [
         {ip, maps:get(ip, URL)},
@@ -76,11 +77,17 @@ get_body(Req0) ->
 %%%=====================================================================
 
 % @todo static routes should not be hardcoded.
-routes() ->
+routes(App) ->
     [
-        {"/assets/[...]", cowboy_static, {priv_dir, arizona, "static/assets"}},
-        {"/favicon.ico", cowboy_static, {priv_file, arizona, "static/favicon.ico"}},
-        {"/robots.txt", cowboy_static, {priv_file, arizona, "static/robots.txt"}},
+        % Arizona
+        {"/assets/arizona/js/arizona.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona.js"}},
+        {"/assets/arizona/js/arizona-worker.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona-worker.js"}},
+        {"/assets/arizona/js/morphdom.min.js", cowboy_static, {priv_file, arizona, "static/assets/js/morphdom.min.js"}},
+        % App
+        {"/favicon.ico", cowboy_static, {priv_file, App, "static/favicon.ico"}},
+        {"/robots.txt", cowboy_static, {priv_file, App, "static/robots.txt"}},
+        {"/assets/[...]", cowboy_static, {priv_dir, App, "static/assets"}},
+        % Handlers
         {"/websocket", arizona_server_adapter_cowboy_websocket, []},
         {'_', arizona_server_adapter_cowboy_handler, []}
     ].

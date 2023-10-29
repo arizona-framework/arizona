@@ -15,7 +15,7 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_web_live_template_example).
+-module(arizona_example_web_template_root).
 
 -behaviour(arizona_live_view).
 
@@ -23,7 +23,7 @@
 -export([ mount/2, render/1 ]).
 
 %% Libs
--include("arizona_live_view.hrl").
+-include_lib("arizona/include/arizona_live_view.hrl").
 
 %%%=====================================================================
 %%% API
@@ -35,6 +35,8 @@ mount(_Params, Socket0) ->
     }, Socket0),
     {ok, Socket}.
 
+% @todo Inject arizona.js and morphdom.min.js without the need to
+%       define them into the root template.
 render(Bindings) ->
     ?LV(<<"
     <!DOCTYPE html>
@@ -44,9 +46,9 @@ render(Bindings) ->
         <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\">
         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
         <title><%= @title .%></title>
-        <script src=\"assets/arizona.js\"></script>
-        <script src=\"assets/morphdom.min.js\"></script>
-        <script src=\"assets/main.js\"></script>
+        <script src=\"assets/arizona/js/arizona.js\"></script>
+        <script src=\"assets/arizona/js/morphdom.min.js\"></script>
+        <script src=\"assets/js/main.js\"></script>
     </head>
     <body>
         <%= @inner_content .%>

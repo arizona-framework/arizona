@@ -15,7 +15,7 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_web_router_example).
+-module(arizona_example_web_router).
 
 -behaviour(arizona_router_adapter).
 
@@ -27,7 +27,7 @@
 %%%=====================================================================
 
 match(get, [ ]) ->
-    LiveOpts = #{template => arizona_web_live_template_example},
-    {{live, arizona_web_live_view_example, LiveOpts}, #{}};
+    LiveOpts = #{template => arizona_example_web_template_root},
+    {{live, arizona_example_web_live_home, LiveOpts}, #{}};
 match(Method, Path) ->
-    {{arizona_web_controller_error, invalid_route, [Method, Path]}, #{}}.
+    {{arizona_example_web_controller_error, invalid_route, [Method, Path]}, #{}}.

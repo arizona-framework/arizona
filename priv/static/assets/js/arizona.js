@@ -1,10 +1,9 @@
 "use strict"
 
-function arizonaFactory(opts = {}) {
+function arizonaFactory(_opts = {}) {
     // Worker
 
-    const workerURL = opts.workerURL || "assets/arizona-worker.js"
-    const worker = new Worker(workerURL)
+    const worker = new Worker("assets/arizona/js/arizona-worker.js")
 
     worker.addEventListener("message", function(e) {
         console.log("Arizona received a message from WebWorker =>", e.data)

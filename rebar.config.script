@@ -1,6 +1,7 @@
 %% Environment
 
 Env = [{arizona, [
+    {app, arizona},
     {server, #{
         adapter => arizona_server_adapter_cowboy,
         args => #{
