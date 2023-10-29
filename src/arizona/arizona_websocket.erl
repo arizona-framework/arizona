@@ -85,9 +85,8 @@ get_path(Params) ->
     {<<"path">>, Path} = proplists:lookup(<<"path">>, Params),
     Path.
 
-decode_msg(Msg0) ->
-    {ok, Msg} = arizona_json:decode(Msg0),
-    do_normalize_msg(Msg).
+decode_msg(Msg) ->
+    do_normalize_msg(arizona_json:decode(Msg)).
 
 do_normalize_msg([Event, Payload]) ->
     {Event, Payload};
@@ -128,7 +127,7 @@ reply(#state{socket = Socket} = State) ->
         [] ->
             {noreply, prune(State)};
         Events ->
-            {ok, JSON} = arizona_json:encode(Events),
+            JSON = arizona_json:encode(Events),
             {reply, [{text, JSON}], prune(State)}
     end.
 

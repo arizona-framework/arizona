@@ -18,7 +18,7 @@
 -module(arizona_json).
 
 %% API
--export([ encode/1, decode/1 ]).
+-export([ encode/1, decode/1, try_encode/1, try_decode/1 ]).
 
 %% Macros
 -define(ADAPTER, (arizona_env:get_json(adapter))).
@@ -28,7 +28,15 @@
 %%%=====================================================================
 
 encode(Term) ->
-    ?ADAPTER:encode(Term).
+    {ok, JSON} = try_encode(Term),
+    JSON.
 
 decode(JSON) ->
+    {ok, Term} = try_decode(JSON),
+    Term.
+
+try_encode(Term) ->
+    ?ADAPTER:encode(Term).
+
+try_decode(JSON) ->
     ?ADAPTER:decode(JSON).
