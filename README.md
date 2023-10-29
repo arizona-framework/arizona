@@ -4,7 +4,7 @@ Arizona is a Web Framework for Erlang.
 
 ## Table of contents
 
-- [Project goal](#project-goal)
+- [Goal](#goal)
 - [Motivation](#motivation)
 - [Roadmap](#roadmap)
 - [Dependencies](#dependencies)
@@ -12,7 +12,7 @@ Arizona is a Web Framework for Erlang.
     - [Third-party](#third-party)
 - [License](#license)
 
-## Project goal
+## Goal
 
 The goal of this project is to have a web framework based on the [Phoenix LiveView](https://hexdocs.pm/phoenix_live_view/Phoenix.LiveView.html), where users connect to the server and send and receive events in realtime via WebSocket.
 
