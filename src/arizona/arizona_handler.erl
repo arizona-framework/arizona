@@ -42,9 +42,11 @@ handle(Method, Path, Req0) ->
 
 do_handle({live, Mod, _Opts}, Req0) ->
     Params = cowboy_req:parse_qs(Req0),
-    {ok, Socket} = arizona_live_view:mount(Mod, Params),
+    Socket0 = arizona_socket:new(),
+    {ok, Socket} = arizona_live_view:mount(Mod, Params, Socket0),
     Bindings = arizona_socket:get_bindings(Socket),
-    HTML = arizona_live_view:render(Mod, Bindings),
+    RenderState = arizona_live_view:render_state(Mod, Bindings),
+    HTML = arizona_template:render(RenderState),
     Req1 = arizona_server:set_headers(#{
         <<"content-type">> => <<"text/html">>
     }, Req0),

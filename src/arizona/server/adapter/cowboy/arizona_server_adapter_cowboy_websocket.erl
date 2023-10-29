@@ -54,16 +54,26 @@ init(Req0, _Args) ->
     end.
 
 websocket_init(Params) ->
-    {ok, State} = arizona_websocket:init(Params),
-    {[], State}.
+    result(arizona_websocket:init(Params)).
 
 websocket_handle({text, Msg}, State0) ->
-    {ok, State} = arizona_websocket:handle_msg(Msg, State0),
-    {[], State}.
+    result(arizona_websocket:handle_msg(Msg, State0)).
 
 websocket_info(Info, State0) ->
-    {ok, State} = arizona_websocket:handle_info(Info, State0),
-    {[], State}.
+    result(arizona_websocket:handle_info(Info, State0)).
 
 terminate(Reason, Req, State) ->
     arizona_websocket:terminate(Reason, Req, State).
+
+%%%=====================================================================
+%%% Internal functions
+%%%=====================================================================
+
+result({reply, Events, State}) ->
+    {[events_command(Events)], State};
+result({noreply, State}) ->
+    {[], State}.
+
+events_command(Events) ->
+    {ok, JSON} = arizona_json:encode(Events),
+    {text, JSON}.

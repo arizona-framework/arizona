@@ -18,29 +18,67 @@
 -module(arizona_socket).
 
 %% API
--export([ new/0, get_bindings/1, bind/3 ]).
+-export([ new/0
+        , get_render_state/1
+        , set_render_state/2
+        , get_bindings/1
+        , set_bindings/2
+        , bind/3
+        , get_events/1
+        , set_events/2
+        , push_event/2
+        , push_event/3
+        ]).
 
 %% Types
--export_type([ t/0 ]).
+-export_type([ t/0, event_name/0, event_payload/0, event/0 ]).
 
--record(socket, {bindings :: bindings()}).
+-record(socket, { render_state :: render_state()
+                , bindings :: bindings()
+                , events :: [event()]
+                }).
+
 -opaque t() :: #socket{}.
 
+-type render_state() :: arizona_template_adapter:state().
 -type bindings() :: arizona_template_adapter:bindings().
+-type event_name() :: binary() | atom().
+-type event_payload() :: map().
+-type event() :: {event_name(), event_payload()} | event_name().
 
 %%%=====================================================================
 %%% API
 %%%=====================================================================
 
 new() ->
-    #socket{
-        bindings = #{}
-    }.
+    #socket{ render_state = undefined
+           , bindings = #{}
+           , events = []
+           }.
+
+get_render_state(#socket{render_state = RenderState}) ->
+    RenderState.
+
+set_render_state(RenderState, Socket) ->
+    Socket#socket{render_state = RenderState}.
 
 get_bindings(#socket{bindings = Bindings}) ->
     Bindings.
 
+set_bindings(Bindings, Socket) ->
+    Socket#socket{bindings = Bindings}.
+
 bind(Key, Val, #socket{bindings = Bindings} = Socket) ->
-    Socket#socket{
-        bindings = Bindings#{Key => Val}
-    }.
+    set_bindings(Bindings#{Key => Val}, Socket).
+
+get_events(#socket{events = Events}) ->
+    Events.
+
+set_events(Events, Socket) ->
+    Socket#socket{events = Events}.
+
+push_event(Event, #socket{events = Events} = Socket) ->
+    set_events([Event | Events], Socket).
+
+push_event(Event, Payload, #socket{events = Events} = Socket) ->
+    set_events([[Event, Payload] | Events], Socket).

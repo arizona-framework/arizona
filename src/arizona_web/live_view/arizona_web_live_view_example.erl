@@ -46,5 +46,7 @@ render(Bindings) ->
     <button type=\"button\" arz-click=\"+1\">+1</button>
     ">>).
 
-handle_event(_Event, _Payload, Socket) ->
+handle_event(<<"+1">>, _Payload, Socket0) ->
+    #{count := Count} = arizona_socket:get_bindings(Socket0),
+    Socket = arizona_socket:bind(count, Count+1, Socket0),
     {ok, Socket}.

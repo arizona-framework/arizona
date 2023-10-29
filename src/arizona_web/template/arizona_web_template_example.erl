@@ -32,10 +32,9 @@
 render(View, Bindings0, InnerContent) ->
     Bindings = Bindings0#{
         view => View,
-        title => <<"Arizona Example">>,
-        inner_content => InnerContent
+        title => <<"Arizona Example">>
     },
-    ?LV(<<"
+    ?LV(io_lib:format(<<"
     <!DOCTYPE html>
     <html lang=\"en\">
     <head>
@@ -45,10 +44,11 @@ render(View, Bindings0, InnerContent) ->
         <meta name=\"view\" charset=\"UTF-8\" content=\"<%= @view .%>\">
         <title><%= @title .%></title>
         <script src=\"assets/arizona.js\"></script>
+        <script src=\"assets/morphdom.min.js\"></script>
         <script src=\"assets/main.js\"></script>
     </head>
     <body>
-        <%= @inner_content .%>
+        ~ts
     </body>
     </html>
-    ">>).
+    ">>, [InnerContent])).

@@ -18,10 +18,12 @@
 -module(arizona_template_adapter).
 
 %% Types
--export_type([ bindings/0, state/0 ]).
+-export_type([ bindings/0, state/0, html/0, diff/0 ]).
 
 -type bindings() :: map().
 -type state() :: term().
+-type html() :: iodata().
+-type diff() :: #{binary() => iodata()}.
 
 %% Callbacks
 -optional_callbacks([]).
@@ -38,5 +40,12 @@
        , State :: state()
        .
 
--callback render(State) -> {ok, iolist()} | {error, term()}
-    when State :: state().
+-callback render(State) -> {ok, HTML} | {error, term()}
+    when State :: state()
+       , HTML :: html()
+       .
+
+-callback diff(State) -> {ok, Diff} | none
+    when State :: state()
+       , Diff :: diff()
+       .

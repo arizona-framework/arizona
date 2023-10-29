@@ -37,28 +37,39 @@
 %%%=====================================================================
 
 init(Params) ->
-    View = get_view(Params),
-    {ok, Socket} = arizona_live_view:mount(View, Params),
     io:format("[WebSocket] init: ~p~n", [Params]),
+    View = get_view(Params),
+    Socket0 = arizona_socket:new(),
+    {ok, Socket1} = arizona_live_view:mount(View, Params, Socket0),
+    Bindings = arizona_socket:get_bindings(Socket1),
+    RenderState = arizona_live_view:render_state(View, Bindings),
+    Socket = arizona_socket:set_render_state(RenderState, Socket1),
     State = #state{
         view = View,
         params = Params,
         socket = Socket
     },
-    {ok, State}.
+    {noreply, State}.
 
 handle_msg(Msg, #state{view = View} = State0) ->
     io:format("[WebSocket] msg: ~p~n", [Msg]),
     {Event, Payload} = decode_msg(Msg),
-    {ok, Socket} = arizona_live_view:handle_event(
+    {ok, Socket0} = arizona_live_view:handle_event(
         View, Event, Payload, State0#state.socket
     ),
-    State = State0#state{socket = Socket},
-    {ok, State}.
+    Socket = push_patch_event(Socket0),
+    Events = arizona_socket:get_events(Socket),
+    State = State0#state{socket = prune_socket(Socket)},
+    case Events =:= [] of
+        true ->
+            {noreply, State};
+        false ->
+            {reply, Events, State}
+    end.
 
 handle_info(Info, State) ->
     io:format("[WebSocket] info: ~p~n", [Info]),
-    {ok, State}.
+    {noreply, State}.
 
 terminate(Reason, _Req, _State) ->
     io:format("[WebSocket] terminate: ~p~n", [Reason]),
@@ -80,3 +91,31 @@ do_normalize_msg([Event, Payload]) ->
     {Event, Payload};
 do_normalize_msg(Event) ->
     {Event, ?DEFAULT_PAYLOAD}.
+
+%% Reply
+
+push_patch_event(Socket0) ->
+    Bindings = arizona_socket:get_bindings(Socket0),
+    case map_size(Bindings) =:= 0 of
+        true ->
+            Socket0;
+        false ->
+            RenderState0 = arizona_socket:get_render_state(Socket0),
+            RenderState = arizona_template:bind(Bindings, RenderState0),
+            Socket = arizona_socket:set_render_state(RenderState, Socket0),
+            case arizona_template:diff(RenderState) of
+                {ok, Diff} ->
+                    arizona_socket:push_event(<<"patch">>, Diff, Socket);
+                none ->
+                    Socket
+            end
+    end.
+
+%% Prune
+
+prune_socket(Socket) ->
+    Funs = [ fun prune_events/1 ],
+    lists:foldl(fun(Fun, Acc) -> Fun(Acc) end, Socket, Funs).
+
+prune_events(Socket) ->
+    arizona_socket:set_events([], Socket).

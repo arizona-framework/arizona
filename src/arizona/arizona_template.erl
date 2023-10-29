@@ -18,7 +18,7 @@
 -module(arizona_template).
 
 %% API
--export([ compile/1, bind/2, render/1 ]).
+-export([ compile/1, bind/2, render/1, diff/1 ]).
 
 %% Macros
 -define(ADAPTER, (arizona_env:get_template(adapter))).
@@ -35,3 +35,11 @@ bind(Bindings, State) ->
 
 render(State) ->
     ?ADAPTER:render(State).
+
+diff(State) ->
+    case ?ADAPTER:diff(State) of
+        ChangedParts when map_size(ChangedParts) > 0 ->
+            {ok, ChangedParts};
+        #{} ->
+            none
+    end.

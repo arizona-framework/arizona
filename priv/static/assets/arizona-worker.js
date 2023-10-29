@@ -4,6 +4,7 @@ const state = {
     fulfilled: false,
     params: {},
     socket: null,
+    parts: [],
     eventQueue: [],
 }
 
@@ -81,6 +82,9 @@ function handleEvent(data) {
         case "reconnect":
             console.log("Arizona WebSocket reconnected")
             break
+        case "patch":
+            sendMsgToClient("patch", applyPatch(payload))
+            break
         case "reply":
             sendMsgToClient(payload[0], payload[1])
             break
@@ -102,6 +106,13 @@ function reconnect() {
         reconnecting: "true",
     }
     connect(params)
+}
+
+function applyPatch(changes) {
+    Object.entries(changes).forEach(([i, v]) => {
+        state.parts[i] = v
+    })
+    return Object.values(state.parts).join("")
 }
 
 function sendMsgToClient(event, payload) {
