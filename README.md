@@ -37,7 +37,7 @@ Phoenix has an important role in the Elixir's popularity and community growth, a
     - [X] Patch only the diff on real-time updates
     - [X] Persist state on reconnect
 - [X] Example project
-- [ ] Create a rebar3 template
+- [X] Create a rebar3 template
 
 ## Dependencies
 
@@ -52,6 +52,8 @@ Phoenix has an important role in the Elixir's popularity and community growth, a
 - [sync](https://github.com/rustyio/sync.git): Hot code reload.
 
 ## License
+
+Copyright (c) 2023 [William Fank Thomé](https://github.com/williamthome)
 
 Arizona is 100% open source and community-driven. All components are available under the Apache 2 License on [GitHub](https://github.com/spawnfest/arizona).
 
