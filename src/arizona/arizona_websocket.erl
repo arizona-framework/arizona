@@ -39,13 +39,19 @@
 
 init(Params) ->
     io:format("[WebSocket] init: ~p~n", [Params]),
+    Path = get_path(Params),
+    {{live, View, Opts}, _RouteOpts} = arizona_router:match(get, Path),
     Socket0 = arizona_socket:new(),
-    case reconnecting(Params) of
-        true ->
-            reconnect(Params, Socket0);
-        false ->
-            do_init(Params, Socket0)
-    end.
+    Socket1 = arizona_live_view:init(View, Opts, Params, Socket0),
+    RenderState = arizona_live_view:render(View, Socket1),
+    Socket2 = arizona_socket:set_render_state(RenderState, Socket1),
+    Socket = init_socket(reconnecting(Params), Params, Socket2),
+    State = #state{ view = View
+                  , params = Params
+                  , socket = Socket
+                  , render_all = true
+                  },
+    reply(State).
 
 handle_msg(Msg, #state{view = View} = State0) ->
     io:format("[WebSocket] msg: ~p~n", [Msg]),
@@ -72,40 +78,18 @@ terminate(Reason, _Req, _State) ->
 
 %% Init
 
-do_init(Params, Socket0) ->
-    Path = get_path(Params),
-    {{live, View, Opts}, _Opts} = arizona_router:match(get, Path),
-    Socket1 = arizona_live_view:init(View, Opts, Params, Socket0),
-    RenderState = arizona_live_view:render(View, Socket1),
-    Socket2 = arizona_socket:set_render_state(RenderState, Socket1),
+init_socket(_Reconnecting = false, _Params, Socket) ->
+    RenderState = arizona_socket:get_render_state(Socket),
     Tree = arizona_template:tree(RenderState),
-    Bindings = arizona_socket:get_bindings(Socket2),
+    Bindings = arizona_socket:get_bindings(Socket),
     Types = arizona_template:types(Bindings, RenderState),
-    Socket = arizona_socket:push_event(<<"init">>, [Tree, Types], Socket2),
-    State = #state{ view = View
-                  , params = Params
-                  , socket = Socket
-                  , render_all = true
-                  },
-    reply(State).
-
-% @todo
-reconnect(Params, Socket0) ->
+    arizona_socket:push_event(<<"init">>, [Tree, Types], Socket);
+init_socket(_Reconnecting = true, Params, Socket0) ->
     Tree = get_tree(Params),
     Types = get_types(Params),
-    Path = get_path(Params),
-    {{live, View, Opts}, _Opts} = arizona_router:match(get, Path),
-    Socket1 = arizona_live_view:init(View, Opts, Params, Socket0),
-    RenderState = arizona_live_view:render(View, Socket1),
-    Socket2 = arizona_socket:set_render_state(RenderState, Socket1),
+    RenderState = arizona_socket:get_render_state(Socket0),
     Bindings = arizona_template:cast(Tree, Types, RenderState),
-    Socket = arizona_socket:set_bindings(Bindings, Socket2),
-    State = #state{ view = View
-                  , params = Params
-                  , socket = Socket
-                  , render_all = true
-                  },
-    reply(State).
+    arizona_socket:set_bindings(Bindings, Socket0).
 
 %% Params
 
