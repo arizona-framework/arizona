@@ -33,8 +33,12 @@
 
 init(Req0, _Args) ->
     Params = cowboy_req:parse_qs(Req0),
+    % @todo Get options via arguments.
     % @see https://ninenines.eu/docs/en/cowboy/2.10/manual/cowboy_websocket/
-    Opts = #{},
+    Opts = #{
+        compress => true,
+        idle_timeout => 60_000
+    },
     case cowboy_req:parse_header(<<"sec-websocket-protocol">>, Req0) of
         undefined ->
             {cowboy_websocket, Req0, Params, Opts};
