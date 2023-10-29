@@ -20,7 +20,7 @@
 -behaviour(arizona_template_adapter).
 
 %% arizona_template_adapter callbacks
--export([ compile/1, bind/2, tree/1, diff/1 ]).
+-export([ compile/1, bind/2, vars/1, tree/1, diff/1 ]).
 
 %%%=====================================================================
 %%% arizona_template_adapter callbacks
@@ -38,6 +38,9 @@ bind(Bindings, State) ->
     end,
     Changes = RenderFun(Bindings, State),
     State#{changes => Changes}.
+
+vars(#{vars := Vars}) ->
+    Vars.
 
 tree(#{parts := Parts, changes := Changes}) ->
     maps:merge(Parts, Changes).

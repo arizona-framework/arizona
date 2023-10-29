@@ -29,13 +29,13 @@ Phoenix has an important role in the Elixir's popularity and community growth, a
     - [X] JSON parser
     - [X] Template compiler
     - [X] Router
-- [ ] Client side
+- [X] Client side
     - [X] Broker
     - [X] WebWorker
     - [X] Event bus
     - [X] Real-time updates
     - [X] Patch only the diff on real-time updates
-    - [ ] Persist state on reconnect
+    - [X] Persist state on reconnect
 - [ ] Example project
 - [ ] Create a rebar3 template
 

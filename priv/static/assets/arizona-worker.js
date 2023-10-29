@@ -4,8 +4,9 @@ const state = {
     fulfilled: false,
     params: {},
     socket: null,
-    tree: [],
     eventQueue: [],
+    tree: [],
+    types: [],
 }
 
 // Client incoming messages.
@@ -80,16 +81,17 @@ function handleEvent(data) {
     const payload = data[1]
     switch(event) {
         case "init":
-            state.tree = payload
-            break
-        case "reconnect":
-            console.log("Arizona WebSocket reconnected")
+            state.tree = payload[0]
+            state.types = payload[1]
             break
         case "patch":
             sendMsgToClient("patch", applyPatch(payload))
             break
         case "reply":
             sendMsgToClient(payload[0], payload[1])
+            break
+        case "reconnect":
+            console.log("Arizona WebSocket reconnected")
             break
         default:
             sendMsgToClient(event, payload)
@@ -107,6 +109,8 @@ function reconnect() {
     const params = {
         ...state.params,
         reconnecting: "true",
+        tree: JSON.stringify(state.tree),
+        types: JSON.stringify(state.types),
     }
     connect(params)
 }

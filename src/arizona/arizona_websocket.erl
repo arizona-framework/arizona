@@ -27,7 +27,7 @@
 -record(state, { view :: module()
                , params :: params()
                , socket :: socket()
-               , first_render :: boolean()
+               , render_all :: boolean()
                }).
 
 -type params() :: arizona_server_adapter:params().
@@ -39,20 +39,13 @@
 
 init(Params) ->
     io:format("[WebSocket] init: ~p~n", [Params]),
-    Path = arizona_server:normalize_path(get_path(Params)),
-    {{live, View, Opts}, _Opts} = arizona_router:match(get, Path),
     Socket0 = arizona_socket:new(),
-    Socket1 = arizona_live_view:init(View, Opts, Params, Socket0),
-    RenderState = arizona_live_view:render(View, Socket1),
-    Socket2 = arizona_socket:set_render_state(RenderState, Socket1),
-    Tree = arizona_template:tree(RenderState),
-    Socket = arizona_socket:push_event(<<"init">>, Tree, Socket2),
-    State = #state{ view = View
-                  , params = Params
-                  , socket = Socket
-                  , first_render = true
-                  },
-    reply(State).
+    case reconnecting(Params) of
+        true ->
+            reconnect(Params, Socket0);
+        false ->
+            do_init(Params, Socket0)
+    end.
 
 handle_msg(Msg, #state{view = View} = State0) ->
     io:format("[WebSocket] msg: ~p~n", [Msg]),
@@ -77,13 +70,66 @@ terminate(Reason, _Req, _State) ->
 %%% Internal functions
 %%%=====================================================================
 
-get_view(Params) ->
-    {<<"view">>, View} = proplists:lookup(<<"view">>, Params),
-    binary_to_existing_atom(View).
+%% Init
+
+do_init(Params, Socket0) ->
+    Path = get_path(Params),
+    {{live, View, Opts}, _Opts} = arizona_router:match(get, Path),
+    Socket1 = arizona_live_view:init(View, Opts, Params, Socket0),
+    RenderState = arizona_live_view:render(View, Socket1),
+    Socket2 = arizona_socket:set_render_state(RenderState, Socket1),
+    Tree = arizona_template:tree(RenderState),
+    Bindings = arizona_socket:get_bindings(Socket2),
+    Types = arizona_template:types(Bindings, RenderState),
+    Socket = arizona_socket:push_event(<<"init">>, [Tree, Types], Socket2),
+    State = #state{ view = View
+                  , params = Params
+                  , socket = Socket
+                  , render_all = true
+                  },
+    reply(State).
+
+% @todo
+reconnect(Params, Socket0) ->
+    Tree = get_tree(Params),
+    Types = get_types(Params),
+    Path = get_path(Params),
+    {{live, View, Opts}, _Opts} = arizona_router:match(get, Path),
+    Socket1 = arizona_live_view:init(View, Opts, Params, Socket0),
+    RenderState = arizona_live_view:render(View, Socket1),
+    Socket2 = arizona_socket:set_render_state(RenderState, Socket1),
+    Bindings = arizona_template:cast(Tree, Types, RenderState),
+    Socket = arizona_socket:set_bindings(Bindings, Socket2),
+    State = #state{ view = View
+                  , params = Params
+                  , socket = Socket
+                  , render_all = true
+                  },
+    reply(State).
+
+%% Params
+
+reconnecting(Params) ->
+    proplists:lookup(<<"reconnecting">>, Params) =:=
+        {<<"reconnecting">>, <<"true">>}.
 
 get_path(Params) ->
-    {<<"path">>, Path} = proplists:lookup(<<"path">>, Params),
-    Path.
+    arizona_server:normalize_path(lookup_param(<<"path">>, Params)).
+
+get_tree(Params) ->
+    lookup_json_param(<<"tree">>, Params).
+
+get_types(Params) ->
+    lookup_json_param(<<"types">>, Params).
+
+lookup_json_param(Key, Params) ->
+    arizona_json:decode(lookup_param(Key, Params)).
+
+lookup_param(Key, Params) ->
+    {Key, Param} = proplists:lookup(Key, Params),
+    Param.
+
+%% Message
 
 decode_msg(Msg) ->
     do_normalize_msg(arizona_json:decode(Msg)).
@@ -99,8 +145,8 @@ push_patch_event(State0) ->
     {Bindings, State} = get_bindings(State0),
     {push_patch_event(Bindings, State#state.socket), State}.
 
-get_bindings(#state{first_render = true, socket = Socket} = State) ->
-    {arizona_socket:get_bindings(Socket), State#state{first_render = false}};
+get_bindings(#state{render_all = true, socket = Socket} = State) ->
+    {arizona_socket:get_bindings(Socket), State#state{render_all = false}};
 get_bindings(#state{socket = Socket} = State) ->
     {arizona_socket:get_changes(Socket), State}.
 
