@@ -124,7 +124,8 @@ reply(#state{socket = Socket} = State) ->
         [] ->
             {noreply, prune(State)};
         Events ->
-            {reply, Events, prune(State)}
+            {ok, JSON} = arizona_json:encode(Events),
+            {reply, [{text, JSON}], prune(State)}
     end.
 
 prune(#state{socket = Socket} = State) ->

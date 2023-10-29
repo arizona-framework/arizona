@@ -69,11 +69,7 @@ terminate(Reason, Req, State) ->
 %%% Internal functions
 %%%=====================================================================
 
-result({reply, Events, State}) ->
-    {[events_command(Events)], State};
+result({reply, Commands, State}) ->
+    {Commands, State};
 result({noreply, State}) ->
     {[], State}.
-
-events_command(Events) ->
-    {ok, JSON} = arizona_json:encode(Events),
-    {text, JSON}.
