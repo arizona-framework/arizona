@@ -1,3 +1,5 @@
+# rebar/erlang
+
 .rebar3
 _build
 _checkouts
@@ -18,3 +20,7 @@ logs
 *.iml
 rebar3.crashdump
 *~
+
+# sync
+
+recompile.log

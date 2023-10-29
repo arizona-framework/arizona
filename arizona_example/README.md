@@ -1,9 +1,9 @@
-arizona_example
-=====
+# arizona_example
 
-An OTP application
+An Arizona application.
 
-Build
------
+## Run
 
-    $ rebar3 compile
+```
+make serve
+```

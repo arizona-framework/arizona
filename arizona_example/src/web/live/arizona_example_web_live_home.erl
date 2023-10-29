@@ -1,6 +1,6 @@
-%% @author William Fank Thomé <willilamthome@hotmail.com>
+%% @author William Fank Thomé <willegp88@gmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc Template example.
+%% @doc Home page.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -15,43 +15,31 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_example_web_template_root).
+-module(arizona_example_web_live_home).
 
 -behaviour(arizona_live_view).
 
-%% API
--export([ mount/2, render/1 ]).
+%% arizona_web_live_view callbacks
+-export([ mount/2, render/1, handle_event/3 ]).
 
 %% Libs
 -include_lib("arizona/include/arizona_live_view.hrl").
 
 %%%=====================================================================
-%%% API
+%%% arizona_web_live_view callbacks
 %%%=====================================================================
 
 mount(_Params, Socket0) ->
-    Socket = arizona_socket:bind(#{
-        title => <<"Arizona Example">>
-    }, Socket0),
+    Socket = arizona_socket:bind(count, 0, Socket0),
     {ok, Socket}.
 
-% @todo Inject arizona.js and morphdom.min.js without the need to
-%       define them into the root template.
 render(Bindings) ->
     ?LV(<<"
-    <!DOCTYPE html>
-    <html lang=\"en\">
-    <head>
-        <meta charset=\"UTF-8\">
-        <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\">
-        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-        <title><%= @title .%></title>
-        <script src=\"assets/arizona/js/arizona.js\"></script>
-        <script src=\"assets/arizona/js/morphdom.min.js\"></script>
-        <script src=\"assets/js/main.js\"></script>
-    </head>
-    <body>
-        <%= @inner_content .%>
-    </body>
-    </html>
+    <div>Count: <span id=\"counter\"><%= @count .%></span></div>
+    <button type=\"button\" arz-click=\"+1\">+1</button>
     ">>).
+
+handle_event(<<"+1">>, _Payload, Socket0) ->
+    #{count := Count} = arizona_socket:get_bindings(Socket0),
+    Socket = arizona_socket:bind(count, Count+1, Socket0),
+    {ok, Socket}.

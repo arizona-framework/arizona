@@ -1,7 +1,5 @@
 "use strict"
 
-// Arizona
-
 const arizona = arizonaFactory()
 
 const params = { }

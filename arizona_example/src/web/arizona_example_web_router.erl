@@ -1,6 +1,6 @@
-%% @author William Fank Thomé <willilamthome@hotmail.com>
+%% @author William Fank Thomé <willegp88@gmail.com>
 %% @copyright 2023 William Fank Thomé
-%% @doc Router example.
+%% @doc Router.
 
 %% Copyright 2023 William Fank Thomé
 %%
@@ -28,6 +28,6 @@
 
 match(get, [ ]) ->
     LiveOpts = #{template => arizona_example_web_template_root},
-    {{live, arizona_example_web_live_home, LiveOpts}, #{}};
+    { { live, arizona_example_web_live_home, LiveOpts }, #{} };
 match(Method, Path) ->
-    {{arizona_example_web_controller_error, invalid_route, [Method, Path]}, #{}}.
+    { { arizona_example_web_controller_error, invalid_route, [Method, Path] }, #{} }.

@@ -1,5 +1,5 @@
 {application, arizona_example, [
-    {description, "Arizona example app"},
+    {description, "An Arizona application"},
     {vsn, "0.1.0"},
     {registered, []},
     {mod, {arizona_example_app, []}},
@@ -12,4 +12,4 @@
     {modules, []},
     {licenses, ["Apache-2.0"]},
     {links, []}
- ]}.
+]}.

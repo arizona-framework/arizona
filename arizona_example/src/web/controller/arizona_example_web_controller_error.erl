@@ -1,4 +1,4 @@
-%% @author William Fank Thomé <willilamthome@hotmail.com>
+%% @author William Fank Thomé <willegp88@gmail.com>
 %% @copyright 2023 William Fank Thomé
 %% @doc Error controller.
 

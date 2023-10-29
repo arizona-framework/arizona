@@ -1,5 +1,5 @@
-.PHONY: daemon
+.PHONY: serve
 
-# Useful to test the server during development.
-daemon:
+# Starts a daemon with hot code reload.
+serve:
 	ENV="dev" rebar3 as dev shell --eval "sync:go()."
