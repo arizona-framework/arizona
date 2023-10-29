@@ -36,7 +36,7 @@ Phoenix has an important role in the Elixir's popularity and community growth, a
     - [X] Real-time updates
     - [X] Patch only the diff on real-time updates
     - [X] Persist state on reconnect
-- [ ] Example project
+- [X] Example project
 - [ ] Create a rebar3 template
 
 ## Dependencies
