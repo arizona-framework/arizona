@@ -15,12 +15,12 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
--module(arizona_web_template_example).
+-module(arizona_web_live_template_example).
 
--behaviour(arizona_web_template).
+-behaviour(arizona_live_view).
 
 %% API
--export([ render/3 ]).
+-export([ mount/2, render/1 ]).
 
 %% Libs
 -include("arizona_live_view.hrl").
@@ -29,26 +29,27 @@
 %%% API
 %%%=====================================================================
 
-render(View, Bindings0, InnerContent) ->
-    Bindings = Bindings0#{
-        view => View,
+mount(_Params, Socket0) ->
+    Socket = arizona_socket:bind(#{
         title => <<"Arizona Example">>
-    },
-    ?LV(io_lib:format(<<"
+    }, Socket0),
+    {ok, Socket}.
+
+render(Bindings) ->
+    ?LV(<<"
     <!DOCTYPE html>
     <html lang=\"en\">
     <head>
         <meta charset=\"UTF-8\">
         <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\">
         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-        <meta name=\"view\" charset=\"UTF-8\" content=\"<%= @view .%>\">
         <title><%= @title .%></title>
         <script src=\"assets/arizona.js\"></script>
         <script src=\"assets/morphdom.min.js\"></script>
         <script src=\"assets/main.js\"></script>
     </head>
     <body>
-        ~ts
+        <%= @inner_content .%>
     </body>
     </html>
-    ">>, [InnerContent])).
+    ">>).

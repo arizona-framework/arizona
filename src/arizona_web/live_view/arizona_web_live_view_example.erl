@@ -17,7 +17,7 @@
 %% limitations under the License.
 -module(arizona_web_live_view_example).
 
--behaviour(arizona_web_live_view).
+-behaviour(arizona_live_view).
 
 %% arizona_web_live_view callbacks
 -export([ mount/2, render/1, handle_event/3 ]).
@@ -41,7 +41,7 @@ mount(_Params, Socket0) ->
 %% @end
 %%----------------------------------------------------------------------
 render(Bindings) ->
-    ?LV(arizona_web_template_example, <<"
+    ?LV(<<"
     <div>Count: <span id=\"counter\"><%= @count .%></span></div>
     <button type=\"button\" arz-click=\"+1\">+1</button>
     ">>).

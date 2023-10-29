@@ -25,6 +25,7 @@
         , set_status_code/2
         , get_body/1
         , set_body/2
+        , normalize_path/1
         ]).
 
 %% Macros
@@ -62,6 +63,9 @@ get_body(Req) ->
 
 set_body(Body, Req) ->
     ?ADAPTER:set_body(Body, Req).
+
+normalize_path(Path) ->
+    binary:split(Path, <<"/">>, [global, trim_all]).
 
 %%%=====================================================================
 %%% Internal functions

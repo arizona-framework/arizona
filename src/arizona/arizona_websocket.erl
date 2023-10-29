@@ -39,11 +39,11 @@
 
 init(Params) ->
     io:format("[WebSocket] init: ~p~n", [Params]),
-    View = get_view(Params),
+    Path = arizona_server:normalize_path(get_path(Params)),
+    {{live, View, Opts}, _Opts} = arizona_router:match(get, Path),
     Socket0 = arizona_socket:new(),
-    {ok, Socket1} = arizona_live_view:mount(View, Params, Socket0),
-    Bindings = arizona_socket:get_bindings(Socket1),
-    RenderState = arizona_live_view:render_state(View, Bindings),
+    Socket1 = arizona_live_view:init(View, Opts, Params, Socket0),
+    RenderState = arizona_live_view:render(View, Socket1),
     Socket2 = arizona_socket:set_render_state(RenderState, Socket1),
     Tree = arizona_template:tree(RenderState),
     Socket = arizona_socket:push_event(<<"init">>, Tree, Socket2),
@@ -80,6 +80,10 @@ terminate(Reason, _Req, _State) ->
 get_view(Params) ->
     {<<"view">>, View} = proplists:lookup(<<"view">>, Params),
     binary_to_existing_atom(View).
+
+get_path(Params) ->
+    {<<"path">>, Path} = proplists:lookup(<<"path">>, Params),
+    Path.
 
 decode_msg(Msg0) ->
     {ok, Msg} = arizona_json:decode(Msg0),

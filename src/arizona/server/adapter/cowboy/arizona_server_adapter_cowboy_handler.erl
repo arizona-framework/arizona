@@ -29,7 +29,7 @@
 init(Req0, State) ->
     {ok, Req} = arizona_handler:init(Req0),
     Method = normalize_method(cowboy_req:method(Req)),
-    Path = normalize_path(cowboy_req:path(Req)),
+    Path = cowboy_req:path(Req),
     {ok, Res} = arizona_handler:handle(Method, Path, Req),
     {ok, Res, State}.
 
@@ -46,6 +46,3 @@ normalize_method(<<"CONNECT">>) -> connect;
 normalize_method(<<"HEAD">>) -> head;
 normalize_method(<<"OPTIONS">>) -> options;
 normalize_method(<<"TRACE">>) -> trace.
-
-normalize_path(Path) ->
-    binary:split(Path, <<"/">>, [global, trim_all]).

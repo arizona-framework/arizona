@@ -27,7 +27,8 @@
 init(Req) ->
     {ok, Req}.
 
-handle(Method, Path, Req0) ->
+handle(Method, Path0, Req0) ->
+    Path = arizona_server:normalize_path(Path0),
     {Handler, Opts} = arizona_router:match(Method, Path),
     case resolve_opts(proplists:from_map(Opts), Req0) of
         {continue, Req} ->
@@ -40,12 +41,11 @@ handle(Method, Path, Req0) ->
 %%% Internal functions
 %%%=====================================================================
 
-do_handle({live, Mod, _Opts}, Req0) ->
+do_handle({live, View, Opts}, Req0) ->
     Params = cowboy_req:parse_qs(Req0),
     Socket0 = arizona_socket:new(),
-    {ok, Socket} = arizona_live_view:mount(Mod, Params, Socket0),
-    Bindings = arizona_socket:get_bindings(Socket),
-    RenderState = arizona_live_view:render_state(Mod, Bindings),
+    Socket = arizona_live_view:init(View, Opts, Params, Socket0),
+    RenderState = arizona_socket:get_render_state(Socket),
     HTML = arizona_template:render(RenderState),
     Req1 = arizona_server:set_headers(#{
         <<"content-type">> => <<"text/html">>
@@ -55,6 +55,8 @@ do_handle({live, Mod, _Opts}, Req0) ->
     {ok, Req};
 do_handle({Controller, Fun, Args}, Req) ->
     Controller:Fun(Args, Req).
+
+%% Request options
 
 resolve_opts([Opt | T], Req0) ->
     case resolve_opt(Opt, Req0) of

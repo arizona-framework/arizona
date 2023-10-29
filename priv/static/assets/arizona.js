@@ -66,6 +66,10 @@ function arizonaFactory(opts = {}) {
     //  Utils
 
     function connect(params, callback, opts) {
+        params = {
+            ...params,
+            path: location.pathname,
+        }
         send("connect", params, callback, opts)
     }
 
