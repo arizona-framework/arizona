@@ -34,7 +34,8 @@ Phoenix has an important role in the Elixir's popularity and community growth, a
     - [X] WebWorker
     - [X] Event bus
     - [X] Real-time updates
-    - [ ] Patch only the diff on real-time updates
+    - [X] Patch only the diff on real-time updates
+    - [ ] Persist state on reconnect
 - [ ] Example project
 
 ## Dependencies
