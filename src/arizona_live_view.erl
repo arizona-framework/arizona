@@ -68,9 +68,9 @@ mount(View, Params, Socket) ->
     end.
 
 render(View, Socket0) ->
-    io:format("[LiveView] ~w: ~p~n", [View, [render, Socket0]]),
     Socket = arizona_socket:bind(self, View, Socket0),
     Bindings = arizona_socket:get_bindings(Socket),
+    io:format("[LiveView] ~w: ~p~n", [View, [render, Bindings]]),
     View:render(Bindings).
 
 handle_event(View, Event, Payload, Socket) ->
