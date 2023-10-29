@@ -20,7 +20,7 @@
 -behaviour(arizona_template_adapter).
 
 %% arizona_template_adapter callbacks
--export([ compile/1, bind/2, render/1, diff/1 ]).
+-export([ compile/1, bind/2, tree/1, diff/1 ]).
 
 %%%=====================================================================
 %%% arizona_template_adapter callbacks
@@ -32,20 +32,15 @@ compile(Input) ->
     eel_compiler:compile(Tree).
 
 bind(Bindings, State) ->
-    RenderFun = case is_map_key(changed_parts, State) of
+    RenderFun = case is_map_key(changes, State) of
         true -> fun eel_renderer:render_changes/2;
         false -> fun eel_renderer:render/2
     end,
-    ChangedParts = RenderFun(Bindings, State),
-    State#{changed_parts => maps:merge(
-        maps:get(changed_parts, State, #{}), ChangedParts
-    )}.
+    Changes = RenderFun(Bindings, State),
+    State#{changes => Changes}.
 
-render(#{parts := Parts, changed_parts := ChangedParts}) ->
-    maps:values(maps:merge(Parts, ChangedParts)).
+tree(#{parts := Parts, changes := Changes}) ->
+    maps:merge(Parts, Changes).
 
-% @todo send only the changed parts to the client.
-% diff(State) ->
-    % maps:get(changed_parts, State, #{}).
-diff(#{parts := Parts, changed_parts := ChangedParts}) ->
-    maps:merge(Parts, ChangedParts).
+diff(State) ->
+    maps:get(changes, State, #{}).

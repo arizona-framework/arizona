@@ -18,7 +18,7 @@
 -module(arizona_template).
 
 %% API
--export([ compile/1, bind/2, render/1, diff/1 ]).
+-export([ compile/1, bind/2, render/1, tree/1, diff/1 ]).
 
 %% Macros
 -define(ADAPTER, (arizona_env:get_template(adapter))).
@@ -34,7 +34,10 @@ bind(Bindings, State) ->
     ?ADAPTER:bind(Bindings, State).
 
 render(State) ->
-    ?ADAPTER:render(State).
+    maps:values(tree(State)).
+
+tree(State) ->
+    ?ADAPTER:tree(State).
 
 diff(State) ->
     case ?ADAPTER:diff(State) of

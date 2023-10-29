@@ -27,6 +27,7 @@
 -record(state, { view :: module()
                , params :: params()
                , socket :: socket()
+               , first_render :: boolean()
                }).
 
 -type params() :: arizona_server_adapter:params().
@@ -43,13 +44,15 @@ init(Params) ->
     {ok, Socket1} = arizona_live_view:mount(View, Params, Socket0),
     Bindings = arizona_socket:get_bindings(Socket1),
     RenderState = arizona_live_view:render_state(View, Bindings),
-    Socket = arizona_socket:set_render_state(RenderState, Socket1),
-    State = #state{
-        view = View,
-        params = Params,
-        socket = Socket
-    },
-    {noreply, State}.
+    Socket2 = arizona_socket:set_render_state(RenderState, Socket1),
+    Tree = arizona_template:tree(RenderState),
+    Socket = arizona_socket:push_event(<<"init">>, Tree, Socket2),
+    State = #state{ view = View
+                  , params = Params
+                  , socket = Socket
+                  , first_render = true
+                  },
+    reply(State).
 
 handle_msg(Msg, #state{view = View} = State0) ->
     io:format("[WebSocket] msg: ~p~n", [Msg]),
@@ -57,15 +60,10 @@ handle_msg(Msg, #state{view = View} = State0) ->
     {ok, Socket0} = arizona_live_view:handle_event(
         View, Event, Payload, State0#state.socket
     ),
-    Socket = push_patch_event(Socket0),
-    Events = arizona_socket:get_events(Socket),
-    State = State0#state{socket = prune_socket(Socket)},
-    case Events =:= [] of
-        true ->
-            {noreply, State};
-        false ->
-            {reply, Events, State}
-    end.
+    State1 = State0#state{socket = Socket0},
+    {Socket, State2} = push_patch_event(State1),
+    State = State2#state{socket = Socket},
+    reply(State).
 
 handle_info(Info, State) ->
     io:format("[WebSocket] info: ~p~n", [Info]),
@@ -92,10 +90,18 @@ do_normalize_msg([Event, Payload]) ->
 do_normalize_msg(Event) ->
     {Event, ?DEFAULT_PAYLOAD}.
 
-%% Reply
+%% Patch
 
-push_patch_event(Socket0) ->
-    Bindings = arizona_socket:get_bindings(Socket0),
+push_patch_event(State0) ->
+    {Bindings, State} = get_bindings(State0),
+    {push_patch_event(Bindings, State#state.socket), State}.
+
+get_bindings(#state{first_render = true, socket = Socket} = State) ->
+    {arizona_socket:get_bindings(Socket), State#state{first_render = false}};
+get_bindings(#state{socket = Socket} = State) ->
+    {arizona_socket:get_changes(Socket), State}.
+
+push_patch_event(Bindings, Socket0) ->
     case map_size(Bindings) =:= 0 of
         true ->
             Socket0;
@@ -111,11 +117,15 @@ push_patch_event(Socket0) ->
             end
     end.
 
-%% Prune
+%% Reply
 
-prune_socket(Socket) ->
-    Funs = [ fun prune_events/1 ],
-    lists:foldl(fun(Fun, Acc) -> Fun(Acc) end, Socket, Funs).
+reply(#state{socket = Socket} = State) ->
+    case arizona_socket:get_events(Socket) of
+        [] ->
+            {noreply, prune(State)};
+        Events ->
+            {reply, Events, prune(State)}
+    end.
 
-prune_events(Socket) ->
-    arizona_socket:set_events([], Socket).
+prune(#state{socket = Socket} = State) ->
+    State#state{socket = arizona_socket:prune(Socket)}.

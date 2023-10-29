@@ -18,11 +18,11 @@
 -module(arizona_template_adapter).
 
 %% Types
--export_type([ bindings/0, state/0, html/0, diff/0 ]).
+-export_type([ bindings/0, state/0, diff/0 ]).
 
 -type bindings() :: map().
 -type state() :: term().
--type html() :: iodata().
+-type tree() :: #{term() => binary()}.
 -type diff() :: #{binary() => iodata()}.
 
 %% Callbacks
@@ -40,9 +40,9 @@
        , State :: state()
        .
 
--callback render(State) -> {ok, HTML} | {error, term()}
+-callback tree(State) -> Tree
     when State :: state()
-       , HTML :: html()
+       , Tree :: tree()
        .
 
 -callback diff(State) -> {ok, Diff} | none

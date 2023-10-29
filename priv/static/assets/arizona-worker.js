@@ -4,7 +4,7 @@ const state = {
     fulfilled: false,
     params: {},
     socket: null,
-    parts: [],
+    tree: [],
     eventQueue: [],
 }
 
@@ -79,6 +79,9 @@ function handleEvent(data) {
     const event = data[0]
     const payload = data[1]
     switch(event) {
+        case "init":
+            state.tree = payload
+            break
         case "reconnect":
             console.log("Arizona WebSocket reconnected")
             break
@@ -110,9 +113,9 @@ function reconnect() {
 
 function applyPatch(changes) {
     Object.entries(changes).forEach(([i, v]) => {
-        state.parts[i] = v
+        state.tree[i] = v
     })
-    return Object.values(state.parts).join("")
+    return Object.values(state.tree).join("")
 }
 
 function sendMsgToClient(event, payload) {

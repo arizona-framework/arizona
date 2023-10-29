@@ -23,11 +23,15 @@
         , set_render_state/2
         , get_bindings/1
         , set_bindings/2
+        , get_changes/1
+        , set_changes/2
+        , bind/2
         , bind/3
         , get_events/1
         , set_events/2
         , push_event/2
         , push_event/3
+        , prune/1
         ]).
 
 %% Types
@@ -35,6 +39,7 @@
 
 -record(socket, { render_state :: render_state()
                 , bindings :: bindings()
+                , changes :: bindings()
                 , events :: [event()]
                 }).
 
@@ -53,6 +58,7 @@
 new() ->
     #socket{ render_state = undefined
            , bindings = #{}
+           , changes = #{}
            , events = []
            }.
 
@@ -68,8 +74,20 @@ get_bindings(#socket{bindings = Bindings}) ->
 set_bindings(Bindings, Socket) ->
     Socket#socket{bindings = Bindings}.
 
-bind(Key, Val, #socket{bindings = Bindings} = Socket) ->
-    set_bindings(Bindings#{Key => Val}, Socket).
+get_changes(#socket{changes = Changes}) ->
+    Changes.
+
+set_changes(Changes, Socket) ->
+    Socket#socket{changes = Changes}.
+
+bind(Bindings, Socket) ->
+    Socket#socket{
+        bindings = maps:merge(Socket#socket.bindings, Bindings),
+        changes = maps:merge(Socket#socket.changes, Bindings)
+    }.
+
+bind(Key, Val, Socket) ->
+    bind(#{Key => Val}, Socket).
 
 get_events(#socket{events = Events}) ->
     Events.
@@ -82,3 +100,9 @@ push_event(Event, #socket{events = Events} = Socket) ->
 
 push_event(Event, Payload, #socket{events = Events} = Socket) ->
     set_events([[Event, Payload] | Events], Socket).
+
+prune(Socket) ->
+    Socket#socket{
+        changes = #{},
+        events = []
+    }.
