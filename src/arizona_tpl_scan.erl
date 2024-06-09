@@ -30,6 +30,22 @@ Template scanner.
 %% API funtions.
 %% --------------------------------------------------------------------
 
+% TODO: Implement the :case directive:
+%       """
+%       {% The directive should be a valid Erlang syntax, like: }
+%       {:case _@foo of
+%           foo ->
+%               """
+%               {% Expressions will be compiled into a tree... }
+%               <div>foo</div>
+%               """;
+%           Bar ->
+%               """
+%               {% and should be able to eval variables. }
+%               <div>{Bar}</div>
+%               """
+%       end}
+%       """.
 string(Str) when is_binary(Str) ->
     scan(Str, Str, 0, 0);
 string(Str) when is_list(Str) ->
