@@ -1,8 +1,7 @@
-%% @author William Fank Thomé <willilamthome@hotmail.com>
-%% @copyright 2023 William Fank Thomé
-%% @doc Arizona application module.
-
-%% Copyright 2023 William Fank Thomé
+%% 
+%% %CopyrightBegin%
+%%
+%% Copyright 2023-2024 William Fank Thomé
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -15,20 +14,24 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
+%%
+%% %CopyrightEnd%
+%%
 -module(arizona_app).
+-moduledoc false.
 
 -behaviour(application).
 
-%% application callbacks
--export([ start/2, stop/1 ]).
+%% Application callbacks.
+-export([start/2, stop/1]).
 
-%%%=====================================================================
-%%% application callbacks
-%%%=====================================================================
+%% --------------------------------------------------------------------
+%% Application callbacks.
+%% --------------------------------------------------------------------
 
 start(_StartType, _StartArgs) ->
-    ok = arizona_server:start(),
     arizona_sup:start_link().
 
-stop(State) ->
-    ok = arizona_server:stop(State).
+stop(_State) ->
+    ok.
+

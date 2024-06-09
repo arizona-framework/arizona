@@ -21,6 +21,3 @@ logs
 rebar3.crashdump
 *~
 
-# sync
-
-recompile.log
