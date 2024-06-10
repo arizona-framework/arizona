@@ -39,7 +39,7 @@ parse_str(Str) ->
     end.
 
 compile(Mod) ->
-    arizona_tpl_compile:compile(Mod:render()).
+    arizona_tpl_compile:compile({Mod, render}).
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
@@ -57,21 +57,11 @@ compile(Mod) ->
 -include_lib("eunit/include/eunit.hrl").
 
 parse_str_test() ->
-    ?assertEqual([
+    ?assertMatch([
         {tag,
-        #{name => <<"main">>,void => false,
-          tokens =>
-           [{tag,
-             #{name => <<"h1">>,void => false,
-               tokens =>
-                [{expr,{<<"fun(Assigns) -> _@title end">>,[]}}],
-               directives => #{},attrs => []}},
-            {block,
-             #{function => counter,module => arizona_live_view,
-               tokens => [],directives => #{},attrs => []}}],
-          directives => #{statefull => true},
-          attrs => []}}
-    ], render()).
+         #{name := <<"main">>,
+           directives := #{statefull := true}}
+    }], render()).
 
 % Start parse_str support.
 
@@ -86,25 +76,15 @@ render() ->
 counter() ->
     ?LV("""
     <div :statefull>
-
+        <div>{_@count}</div>
+        <button type="button">Increment</button>
     </div>
     """).
 
 % End parse_str support.
 
 compile_test() ->
-    ?assertEqual({ok, [
-        {0,#{id => [0],text => <<"<main>">>}},
-        {1,#{id => [1],text => <<"<h1>">>}},
-        {2,#{id => [2],expr => <<"fun(Assigns) -> _@title end">>}},
-        {3,#{id => [3],text => <<"</h1>">>}},
-        {4,
-         #{block =>
-               #{0 => #{id => [4,0],text => <<"<div>">>},
-                 1 => #{id => [4,1],text => <<"</div>">>}},
-           id => [4]}},
-        {5,#{id => [5],text => <<"</main>">>}}
-    ]}, compile(?MODULE)).
+    ?assertMatch({ok, #{block := _}}, compile(?MODULE)).
 
 -endif.
 

@@ -153,8 +153,7 @@ render_changes_test() ->
 %% Start block support.
 
 block() ->
-    {ok, Tpl} = arizona_tpl_compile:compile([
-        {block, #{module => arizona_tpl_compile, function => view}}]),
+    {ok, Tpl} = arizona_tpl_compile:compile({arizona_tpl_compile, view}),
     Tpl.
 
 %% End block support.

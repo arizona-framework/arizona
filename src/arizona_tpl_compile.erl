@@ -31,16 +31,18 @@ Template compiler.
 %% --------------------------------------------------------------------
 
 % TODO: Concat texts.
-compile(Tree) ->
-    case compile(Tree, [], 0) of
-        [{0, Tpl}] ->
-            {ok, Tpl};
-        _BadTpl ->
-            % Multiple tags is not allowed for a root, e.g.:
-            % Good: <html><head></head><body></body></html>
-            %  Bad: <head></head><body></body>
-            {error, {badtree, Tree}}
-    end.
+% NOTE: Multiple tags is not allowed for a root, e.g.:
+%       Good: <html><head></head><body></body></html>
+%        Bad: <head></head><body></body>
+compile({Mod, Fun}) when is_atom(Mod), is_atom(Fun) ->
+    [{0, Block}] = compile([{block, #{
+        module => Mod,
+        function => Fun,
+        directives => #{statefull => true}}}], [], 0),
+    {ok, Block};
+compile([{tag, Tag}]) ->
+    [{0, Block}] = compile([{tag, Tag}], [], 0),
+    {ok, Block}.
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
@@ -347,13 +349,13 @@ compile_tree_test() ->
            decr_btn_text := [[5,11,1]]},
         directives := #{},
         indexes := [0,1,2,3,4,5,6]}
-    }, compile([{block, #{module => ?MODULE, function => view}}])).
+    }, compile({?MODULE, view})).
 
 %% Start compile support.
 
 view() ->
     {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
-    <main>
+    <main :statefull>
         <h1>{_@title}</h1>
         <.arizona_tpl_compile:counter
             id="1"
