@@ -30,6 +30,18 @@
 %% --------------------------------------------------------------------
 
 start(_StartType, _StartArgs) ->
+    Dispatch = cowboy_router:compile([{'_', [
+        % Static
+        {"/favicon.ico", cowboy_static, {priv_file, arizona, "static/favicon.ico"}},
+        {"/robots.txt", cowboy_static, {priv_file, arizona, "static/robots.txt"}},
+        {"/assets/[...]", cowboy_static, {priv_dir, arizona, "static/assets"}},
+        % Routes
+        {"/", arizona_handler, []}
+    ]}]),
+    {ok, _} = cowboy:start_clear(arizona_http_listener,
+        [{port, 8080}],
+        #{env => #{dispatch => Dispatch}}
+    ),
     arizona_sup:start_link().
 
 stop(_State) ->
