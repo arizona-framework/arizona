@@ -142,7 +142,11 @@ do_parse_attr(K, V) ->
 parse_expr_str(ExprStr) ->
     parse_expr_str(ExprStr, #{}).
 
-parse_expr_str(ExprStr, Assigns) ->
+%% TODO: Use 'Bindings' to solve the _@inner_content issue, e.g.:
+%%       <div>{_@inner_content}</div>
+%%       'inner_content' must be compiled into tokens.
+%% NOTE: Maybe the expression could be {:inner_content}.
+parse_expr_str(ExprStr, Bindings) ->
     ExprTree = merl:quote(ExprStr),
     case erl_syntax:type(ExprTree) =:= comment of
         true ->
@@ -152,14 +156,14 @@ parse_expr_str(ExprStr, Assigns) ->
                 [] ->
                     FunStr = <<"fun(_Assigns) -> ", ExprStr/binary, " end">>,
                     Tree = [merl:quote(FunStr)],
-                    expr_struct(Tree, [], Assigns);
+                    expr_struct(Tree, [], Bindings);
                 Vars ->
                     FunStr = <<"fun(Assigns) -> _@subst end">>,
                     Env = [{Var, subst_var(Var)} || Var <- Vars],
                     Tree = erl_syntax:revert_forms([
                         merl:qquote(FunStr, [
                             {subst, merl:subst(ExprTree, Env)}])]),
-                    expr_struct(Tree, Vars, Assigns)
+                    expr_struct(Tree, Vars, Bindings)
             end
     end.
 
@@ -185,8 +189,8 @@ tag_struct(Props) ->
         tokens => get_all(token, Props)
      }.
 
-expr_struct(Tree, Vars, Assigns) ->
-    {value, Fun, _NewAssigns} = erl_eval:exprs(Tree, Assigns),
+expr_struct(Tree, Vars, Bindings) ->
+    {value, Fun, _NewBindings} = erl_eval:exprs(Tree, Bindings),
     {expr, {Fun, Vars}}.
 
 get(K, L, D) ->
