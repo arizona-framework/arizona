@@ -34,10 +34,11 @@ Template compiler.
 % NOTE: Multiple tags is not allowed for a root, e.g.:
 %       Good: <html><head></head><body></body></html>
 %        Bad: <head></head><body></body>
-compile({Mod, Fun}) when is_atom(Mod), is_atom(Fun) ->
+compile({Mod, Fun, Args}) when is_atom(Mod), is_atom(Fun) ->
     [{0, Block}] = compile([{block, #{
         module => Mod,
         function => Fun,
+        args => Args,
         directives => #{statefull => true}}}], [], 0),
     {ok, Block};
 compile([{tag, Tag}]) ->
@@ -129,8 +130,8 @@ block_struct(Block, P, I) ->
     }.
 
 % TODO: Remove vars prop from expr. They will live in the block props.
-block_tokens(#{module := M, function := F}, P, I) ->
-    compile(M:F(), [I | P], 0).
+block_tokens(#{module := M, function := F} = Block, P, I) ->
+    compile(M:F(maps:get(args, Block, #{})), [I | P], 0).
 
 % TODO: Use binary_to_existing_atom.
 block_attrs(#{attrs := Attrs}) ->
@@ -349,11 +350,11 @@ compile_tree_test() ->
            decr_btn_text := [[5,11,1]]},
         directives := #{},
         indexes := [0,1,2,3,4,5,6]}
-    }, compile({?MODULE, view})).
+    }, compile({?MODULE, view, #{}})).
 
 %% Start compile support.
 
-view() ->
+view(Macros) ->
     {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
     <main :statefull>
         <h1>{_@title}</h1>
@@ -370,10 +371,10 @@ view() ->
         />
     </main>
     """),
-    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens),
+    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
     Tree.
 
-counter() ->
+counter(Macros) ->
     {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
     {% NOTE: :statefull directive defines the arz-id attribue,  }
     {%       and adds this to the blocks param in the state.    }
@@ -404,14 +405,14 @@ counter() ->
         {try _@content catch _:_ -> <<>> end}
     </div>
     """),
-    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens),
+    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
     Tree.
 
-button() ->
+button(Macros) ->
     {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
     <button type="button">{_@text}</button>
     """),
-    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens),
+    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
     Tree.
 
 %% End compile support.

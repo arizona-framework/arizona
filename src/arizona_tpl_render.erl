@@ -137,14 +137,14 @@ render_block_test() ->
           <<"</button>">>],
          <<>>,<<"</div>">>],
         <<"</main>">>
-    ], render_block(block(), #{
+    ], render_block(block(#{}), #{
             title => <<"Arizona">>,
             view_count => 0,
             decr_btn_text => <<"Decrement">>})).
 
 render_changes_test() ->
     ?assertEqual([{[4,6],999},{[5,6],999}],
-        render_changes(block(),
+        render_changes(block(#{}),
             #{view_count => 999},
             #{title => <<"Arizona">>,
             view_count => 0,
@@ -152,8 +152,8 @@ render_changes_test() ->
 
 %% Start block support.
 
-block() ->
-    {ok, Tpl} = arizona_tpl_compile:compile({arizona_tpl_compile, view}),
+block(Macros) ->
+    {ok, Tpl} = arizona_tpl_compile:compile({arizona_tpl_compile, view, Macros}),
     Tpl.
 
 %% End block support.

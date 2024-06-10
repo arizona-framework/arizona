@@ -24,40 +24,43 @@ Template parser.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([parse_exprs/1]).
+-export([parse_exprs/1, parse_exprs/2]).
 
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
 parse_exprs(Tokens) ->
-    {ok, do_parse_exprs(Tokens)}.
+    parse_exprs(Tokens, #{}).
+
+parse_exprs(Tokens, Macros) ->
+    {ok, do_parse_exprs(Tokens, Macros)}.
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
-do_parse_exprs([{text, Txt} | T]) ->
-    [{text, Txt} | do_parse_exprs(T)];
-do_parse_exprs([{expr, ExprStr} | T]) ->
-    case parse_expr_str(ExprStr) of
+do_parse_exprs([{text, Txt} | T], Macros) ->
+    [{text, Txt} | do_parse_exprs(T, Macros)];
+do_parse_exprs([{expr, ExprStr} | T], Macros) ->
+    case parse_expr_str(ExprStr, Macros) of
         {comment, _} ->
-            do_parse_exprs(T);
+            do_parse_exprs(T, Macros);
         Expr ->
-            [Expr | do_parse_exprs(T)]
+            [Expr | do_parse_exprs(T, Macros)]
     end;
-do_parse_exprs([tag_open | T]) ->
-    parse_tag(T);
-do_parse_exprs([closing_tag | _] = T) ->
+do_parse_exprs([tag_open | T], Macros) ->
+    parse_tag(T, Macros);
+do_parse_exprs([closing_tag | _] = T, _Macros) ->
     T;
-do_parse_exprs([]) ->
+do_parse_exprs([], _Macros) ->
     [].
 
-parse_tag([{tag_name, <<$., Name/binary>>} | T]) ->
+parse_tag([{tag_name, <<$., Name/binary>>} | T], Macros) ->
     {M, F} = parse_block_name(Name),
-    do_parse_block(T, [{module, M}, {function, F}]);
-parse_tag([{tag_name, Name} | T]) ->
-    do_parse_tag(T, [{name, Name}]).
+    do_parse_block(T, [{module, M}, {function, F}], Macros);
+parse_tag([{tag_name, Name} | T], Macros) ->
+    do_parse_tag(T, [{name, Name}], Macros).
 
 parse_block_name(Name) ->
     case binary:split(Name, <<":">>) of
@@ -70,65 +73,65 @@ parse_block_name(Name) ->
             error(not_implemented_yet)
     end.
 
-do_parse_block([{attr_key, K}, {attr_value, V} | T], Props) ->
-    do_parse_block(T, [parse_attr(K, {text, V}) | Props]);
-do_parse_block([{attr_key, K}, {attr_expr, Expr} | T], Props) ->
-    do_parse_block(T, [parse_attr(K, {expr, Expr}) | Props]);
-do_parse_block([{attr_key, K} | T], Props) ->
-    do_parse_block(T, [parse_attr(K, {text, K}) | Props]);
-do_parse_block([tag_close | T0], Props0) ->
-    {T1, Props} = collect_tokens(T0, Props0),
+do_parse_block([{attr_key, K}, {attr_value, V} | T], Props, Macros) ->
+    do_parse_block(T, [parse_attr(K, {text, V}, Macros) | Props], Macros);
+do_parse_block([{attr_key, K}, {attr_expr, Expr} | T], Props, Macros) ->
+    do_parse_block(T, [parse_attr(K, {expr, Expr}, Macros) | Props], Macros);
+do_parse_block([{attr_key, K} | T], Props, Macros) ->
+    do_parse_block(T, [parse_attr(K, {text, K}, Macros) | Props], Macros);
+do_parse_block([tag_close | T0], Props0, Macros) ->
+    {T1, Props} = collect_tokens(T0, Props0, Macros),
     [{tag_name, <<$., Name/binary>>}, tag_close | T] = T1,
     {M, F} = parse_block_name(Name),
     case M =:= get(module, Props) andalso F =:= get(function, Props) of
         true ->
-            [{block, block_struct(Props)} | do_parse_exprs(T)];
+            [{block, block_struct(Props)} | do_parse_exprs(T, Macros)];
         false ->
             error({unexpected_block_end, {{M, F}, Props}})
     end;
-do_parse_block([void_close | T], Props) ->
-    [{block, block_struct(Props)} | do_parse_exprs(T)].
+do_parse_block([void_close | T], Props, Macros) ->
+    [{block, block_struct(Props)} | do_parse_exprs(T, Macros)].
 
-do_parse_tag([{attr_key, K}, {attr_value, V} | T], Props) ->
-    do_parse_tag(T, [parse_attr(K, {text, V}) | Props]);
-do_parse_tag([{attr_key, K}, {attr_expr, Expr} | T], Props) ->
-    do_parse_tag(T, [parse_attr(K, {expr, Expr}) | Props]);
-do_parse_tag([{attr_key, K} | T], Props) ->
-    do_parse_tag(T, [parse_attr(K, {text, K}) | Props]);
-do_parse_tag([tag_close | T0], Props0) ->
-    {T1, Props} = collect_tokens(T0, Props0),
+do_parse_tag([{attr_key, K}, {attr_value, V} | T], Props, Macros) ->
+    do_parse_tag(T, [parse_attr(K, {text, V}, Macros) | Props], Macros);
+do_parse_tag([{attr_key, K}, {attr_expr, Expr} | T], Props, Macros) ->
+    do_parse_tag(T, [parse_attr(K, {expr, Expr}, Macros) | Props], Macros);
+do_parse_tag([{attr_key, K} | T], Props, Macros) ->
+    do_parse_tag(T, [parse_attr(K, {text, K}, Macros) | Props], Macros);
+do_parse_tag([tag_close | T0], Props0, Macros) ->
+    {T1, Props} = collect_tokens(T0, Props0, Macros),
     [{tag_name, Name}, tag_close | T] = T1,
     case Name =:= get(name, Props) of
         true ->
-            [{tag, tag_struct(Props)} | do_parse_exprs(T)];
+            [{tag, tag_struct(Props)} | do_parse_exprs(T, Macros)];
         false ->
             error({unexpected_tag_end, {Name, Props}})
     end;
-do_parse_tag([void_close | T], Props) ->
-    [{tag, tag_struct([void | Props])} | do_parse_exprs(T)].
+do_parse_tag([void_close | T], Props, Macros) ->
+    [{tag, tag_struct([void | Props])} | do_parse_exprs(T, Macros)].
 
-collect_tokens([closing_tag | T], Props) ->
+collect_tokens([closing_tag | T], Props, _Macros) ->
     {T, Props};
-collect_tokens([tag_open | T], Props) ->
-    collect_tokens(parse_tag(T), Props);
-collect_tokens([{expr, ExprStr} | T], Props) when is_binary(ExprStr) ->
-    case parse_expr_str(ExprStr) of
+collect_tokens([tag_open | T], Props, Macros) ->
+    collect_tokens(parse_tag(T, Macros), Props, Macros);
+collect_tokens([{expr, ExprStr} | T], Props, Macros) when is_binary(ExprStr) ->
+    case parse_expr_str(ExprStr, Macros) of
         {comment, _} ->
-            collect_tokens(T, Props);
+            collect_tokens(T, Props, Macros);
         Expr ->
-            collect_tokens(T, [{token, Expr} | Props])
+            collect_tokens(T, [{token, Expr} | Props], Macros)
     end;
-collect_tokens([H|T], Props) ->
-    collect_tokens(T, [{token, H} | Props]).
+collect_tokens([H|T], Props, Macros) ->
+    collect_tokens(T, [{token, H} | Props], Macros).
 
-parse_attr(K, {expr, ExprStr}) ->
-    case parse_expr_str(ExprStr) of
+parse_attr(K, {expr, ExprStr}, Macros) ->
+    case parse_expr_str(ExprStr, Macros) of
         {comment, _} ->
             error(unexpected_comment);
         Expr ->
             do_parse_attr(K, Expr)
     end;
-parse_attr(K, {text, Text}) ->
+parse_attr(K, {text, Text}, _Macros) ->
     do_parse_attr(K, {text, Text}).
 
 % TODO: Directive keys to atom using binary_to_existing_atom.
@@ -139,30 +142,30 @@ do_parse_attr(<<$:, K/binary>>, V) ->
 do_parse_attr(K, V) ->
     {attr, {K, V}}.
 
-parse_expr_str(ExprStr) ->
-    parse_expr_str(ExprStr, #{}).
+parse_expr_str(ExprStr, Macros) ->
+    parse_expr_str(ExprStr, Macros, #{}).
 
-%% TODO: Use 'Bindings' to solve the _@inner_content issue, e.g.:
-%%       <div>{_@inner_content}</div>
-%%       'inner_content' must be compiled into tokens.
-%% NOTE: Maybe the expression could be {:inner_content}.
-parse_expr_str(ExprStr, Bindings) ->
+parse_expr_str(ExprStr, Macros, Bindings) ->
     ExprTree = merl:quote(ExprStr),
     case erl_syntax:type(ExprTree) =:= comment of
         true ->
             {comment, erl_syntax:comment_text(ExprTree)};
         false ->
-            case merl:template_vars(merl:template(ExprTree)) of
+            MacrosEnv = [{K, merl:term(V)} || K := V <- Macros],
+            MacrosTree = merl:tsubst(ExprTree, MacrosEnv),
+            AllVars = merl:template_vars(merl:template(MacrosTree)),
+            case AllVars -- maps:keys(Macros) of
                 [] ->
-                    FunStr = <<"fun(_Assigns) -> ", ExprStr/binary, " end">>,
+                    MacrosStr = iolist_to_binary(erl_pp:expr(
+                                    erl_syntax:revert(MacrosTree))),
+                    FunStr = <<"fun(_Assigns) -> ", MacrosStr/binary, " end">>,
                     Tree = [merl:quote(FunStr)],
                     expr_struct(Tree, [], Bindings);
                 Vars ->
                     FunStr = <<"fun(Assigns) -> _@subst end">>,
-                    Env = [{Var, subst_var(Var)} || Var <- Vars],
-                    Tree = erl_syntax:revert_forms([
-                        merl:qquote(FunStr, [
-                            {subst, merl:subst(ExprTree, Env)}])]),
+                    VarsSubst = [{Var, subst_var(Var)} || Var <- Vars],
+                    Env = [{subst, merl:subst(MacrosTree, VarsSubst)}],
+                    Tree = erl_syntax:revert_forms([merl:qquote(FunStr, Env)]),
                     expr_struct(Tree, Vars, Bindings)
             end
     end.
@@ -310,6 +313,14 @@ parse_exprs_test() ->
         tag_close,
         {text,<<"End">>}
     ])).
+
+macros_test() ->
+    {ok, Tokens, _} = arizona_tpl_scan:string(<<"foo{_@bar}baz">>),
+    ?assertMatch({ok, [
+        {text, <<"foo">>},
+        {expr, {_Fun, []}}, % <- no vars
+        {text, <<"baz">>}
+    ]}, parse_exprs(Tokens, #{bar => <<"bar">>})).
 
 -endif.
 

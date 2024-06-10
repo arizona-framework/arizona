@@ -26,7 +26,7 @@
 -export([init/2]).
 
 %% Example functions.
--export([render/0]).
+-export([render/1]).
 
 -include("live_view.hrl").
 
@@ -35,13 +35,9 @@
 %% --------------------------------------------------------------------
 
 init(Req0, State) ->
-    % TODO: Pass assigns to the compile and let them act as macros.
-    %       Put the title on it to test.
-    {ok, Tpl} = arizona_live_view:compile(?MODULE),
-    Assigns = #{
-        title => <<"Arizona">>,
-        count => 0
-    },
+    Macros = #{title => <<"Arizona">>},
+    {ok, Tpl} = arizona_live_view:compile(?MODULE, Macros),
+    Assigns = #{count => 0},
     Html = arizona_tpl_render:render_block(Tpl, Assigns),
     Headers = #{<<"content-type">> => <<"text/html">>},
     Req = cowboy_req:reply(200, Headers, Html, Req0),
@@ -51,7 +47,7 @@ init(Req0, State) ->
 %% Example functions.
 %% --------------------------------------------------------------------
 
-render() ->
+render(Macros) ->
     ?LV(~s"""
     {% TODO: Handle <!DOCTYPE html> in the parser. }
     <html lang="en">

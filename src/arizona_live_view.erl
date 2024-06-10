@@ -24,22 +24,22 @@ Live view.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([parse_str/1, compile/1]).
+-export([parse_str/2, compile/2]).
 
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
-parse_str(Str) ->
+parse_str(Str, Macros) ->
     case arizona_tpl_scan:string(Str) of
         {ok, Tokens, _EndLocation} ->
-            arizona_tpl_parse:parse_exprs(Tokens);
+            arizona_tpl_parse:parse_exprs(Tokens, Macros);
         {error, ErrorInfo, ErrorLocation} ->
             {error, {ErrorInfo, ErrorLocation}}
     end.
 
-compile(Mod) ->
-    arizona_tpl_compile:compile({Mod, render}).
+compile(Mod, Macros) ->
+    arizona_tpl_compile:compile({Mod, render, Macros}).
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
@@ -61,11 +61,11 @@ parse_str_test() ->
         {tag,
          #{name := <<"main">>,
            directives := #{statefull := true}}
-    }], render()).
+    }], render(#{})).
 
 % Start parse_str support.
 
-render() ->
+render(Macros) ->
     ?LV("""
     <main :statefull>
         <h1>{_@title}</h1>
@@ -73,7 +73,7 @@ render() ->
     </main>
     """).
 
-counter() ->
+counter(Macros) ->
     ?LV("""
     <div :statefull>
         <div>{_@count}</div>
@@ -84,7 +84,7 @@ counter() ->
 % End parse_str support.
 
 compile_test() ->
-    ?assertMatch({ok, #{block := _}}, compile(?MODULE)).
+    ?assertMatch({ok, #{block := _}}, compile(?MODULE, #{})).
 
 -endif.
 
