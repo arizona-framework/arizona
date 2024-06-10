@@ -39,8 +39,13 @@ parse_exprs(Tokens) ->
 
 do_parse_exprs([{text, Txt} | T]) ->
     [{text, Txt} | do_parse_exprs(T)];
-do_parse_exprs([{expr, Expr} | T]) ->
-    [parse_expr(Expr) | do_parse_exprs(T)];
+do_parse_exprs([{expr, ExprStr} | T]) ->
+    case parse_expr_str(ExprStr) of
+        {comment, _} ->
+            do_parse_exprs(T);
+        Expr ->
+            [Expr | do_parse_exprs(T)]
+    end;
 do_parse_exprs([tag_open | T]) ->
     parse_tag(T);
 do_parse_exprs([closing_tag | _] = T) ->
@@ -106,13 +111,23 @@ collect_tokens([closing_tag | T], Props) ->
     {T, Props};
 collect_tokens([tag_open | T], Props) ->
     collect_tokens(parse_tag(T), Props);
-collect_tokens([{expr, Expr} | T], Props) ->
-    collect_tokens(T, [{token, parse_expr(Expr)} | Props]);
+collect_tokens([{expr, ExprStr} | T], Props) ->
+    case parse_expr_str(ExprStr) of
+        {comment, _} ->
+            collect_tokens(T, Props);
+        Expr ->
+            collect_tokens(T, [{token, Expr} | Props])
+    end;
 collect_tokens([H|T], Props) ->
     collect_tokens(T, [{token, H} | Props]).
 
-parse_attr(K, {expr, Expr}) ->
-    do_parse_attr(K, parse_expr(Expr));
+parse_attr(K, {expr, ExprStr}) ->
+    case parse_expr_str(ExprStr) of
+        {comment, _} ->
+            error(unexpected_comment);
+        Expr ->
+            do_parse_attr(K, Expr)
+    end;
 parse_attr(K, {text, Text}) ->
     do_parse_attr(K, {text, Text}).
 
@@ -124,11 +139,38 @@ do_parse_attr(<<$:, K/binary>>, V) ->
 do_parse_attr(K, V) ->
     {attr, {K, V}}.
 
-% TOOO: If it's just a value, like 0, return {text, <<"0">>}
-%       instead of and expression.
-parse_expr(Expr) ->
-    % TODO: Substitute and collect vars, and compile.
-    {expr, {<<"fun(Assigns) -> ", Expr/binary, " end">>, []}}.
+parse_expr_str(ExprStr) ->
+    parse_expr_str(ExprStr, #{}).
+
+parse_expr_str(ExprStr, Assigns) ->
+    ExprTree = merl:quote(ExprStr),
+    case is_comment_expr(ExprTree) of
+        true ->
+            {comment, erl_syntax:comment_text(hd(ExprTree))};
+        false ->
+            case merl:template_vars(merl:template(ExprTree)) of
+                [] ->
+                    FunStr = <<"fun(_Assigns) -> ", ExprStr/binary, " end">>,
+                    Tree = [merl:quote(FunStr)],
+                    expr_struct(Tree, [], Assigns);
+                Vars ->
+                    FunStr = <<"fun(Assigns) -> _@subst end">>,
+                    Env = [{Var, subst_var(Var)} || Var <- Vars],
+                    Tree = erl_syntax:revert_forms([
+                        merl:qquote(FunStr, [
+                            {subst, merl:subst(ExprTree, Env)}])]),
+                    expr_struct(Tree, Vars, Assigns)
+            end
+    end.
+
+is_comment_expr([Form]) ->
+    erl_syntax:type(Form) =:= comment;
+is_comment_expr(_) ->
+    false.
+
+subst_var(Var) ->
+  VarStr = atom_to_binary(Var, utf8),
+  merl:quote(<<"maps:get(", VarStr/binary, ", Assigns)">>).
 
 block_struct(Props) ->
     #{
@@ -148,6 +190,10 @@ tag_struct(Props) ->
         tokens => get_all(token, Props)
      }.
 
+expr_struct(Tree, Vars, Assigns) ->
+    {value, Fun, _NewAssigns} = erl_eval:exprs(Tree, Assigns),
+    {expr, {Fun, Vars}}.
+
 get(K, L, D) ->
     proplists:get_value(K, L, D).
 
@@ -165,51 +211,56 @@ get(K, L) ->
 -include_lib("eunit/include/eunit.hrl").
 
 parse_exprs_test() ->
-    ?assertEqual({ok, [
+    ?assertMatch({ok, [
         {text,<<"Start">>},
         {tag,
-         #{name => <<"main">>,void => false,
-           tokens =>
-            [{block,
-              #{function => counter,module => foo,tokens => [],
-                directives => #{},
-                attrs =>
-                 [{<<"count">>,{expr,{<<"fun(Assigns) -> 0 end">>, []}}},
-                  {<<"id">>,{text,<<"counter">>}}]}},
-             {block,
-              #{function => block,module => foo,tokens => [],
-                directives =>
-                 #{'if' => {expr,{<<"fun(Assigns) -> _@true end">>, []}}},
-                attrs => []}},
-             {tag,
-              #{name => <<"div">>,void => false,
-                tokens =>
-                 [{tag,
-                   #{name => <<"span">>,void => false
-,
-                     tokens =>
-                      [{block,
-                        #{function => nested,module => foo,
-                          tokens => [{text,<<"ok">>}]
-,
-                          directives => #{},attrs => []}}],
-                     directives => #{},
-                     attrs => [{<<"id">>,{text,<<"nested">>}}]}}],
-                directives => #{},attrs => []}},
-             {tag,
-              #{name => <<"br">>,void => true,tokens => [],
-                directives => #{},attrs => []}},
+         #{name := <<"main">>,void := false,
+           tokens :=
+            [{text,<<"foo">>},
+             {expr,{ExprFun1,[bar]}},
              {text,<<"baz">>},
-             {expr,{<<"_@bar">>, []}},
-             {text,<<"foo">>}],
-           directives => #{},
-           attrs =>
-            [{<<"hidden">>,{text,<<"hidden">>}},
+             {tag,
+              #{name := <<"br">>,void := true,tokens := [],
+                directives := #{},attrs := []}},
+             {tag,
+              #{name := <<"div">>,void := false,
+                tokens :=
+                 [{tag,
+                   #{name := <<"span">>,void := false,
+                     tokens :=
+                      [{block,
+                        #{function := nested,module := foo,
+                          tokens := [{text,<<"ok">>}],
+                          directives := #{},attrs := []}}],
+                     directives := #{},
+                     attrs := [{<<"id">>,{text,<<"nested">>}}]}}],
+                directives := #{},attrs := []}},
+             {block,
+              #{function := block,module := foo,tokens := [],
+                directives :=
+                 #{'if' :=
+                    {expr,{ExprFun2,[true]}}},
+                attrs := []}},
+             {block,
+              #{function := counter,module := foo,tokens := [],
+                directives := #{},
+                attrs :=
+                 [{<<"id">>,{text,<<"counter">>}},
+                  {<<"count">>,
+                   {expr,{ExprFun3,[]}}}]}}],
+           directives := #{},
+           attrs :=
+            [{<<"id">>,{text,<<"foo">>}},
+             {<<"class">>,
+              {expr,{ExprFun4,[class]}}},
              {<<"style">>,{text,<<"display: none;">>}},
-             {<<"class">>,{expr,{<<"fun(Assigns) -> _@class end">>, []}}},
-             {<<"id">>,{text,<<"foo">>}}]}},
+             {<<"hidden">>,{text,<<"hidden">>}}]}},
         {text,<<"End">>}
-    ]}, parse_exprs([
+    ]} when is_function(ExprFun1, 1) andalso
+            is_function(ExprFun2, 1) andalso
+            is_function(ExprFun3, 1) andalso
+            is_function(ExprFun4, 1),
+    parse_exprs([
         {text,<<"Start">>},
         tag_open,
         {tag_name,<<"main">>},
