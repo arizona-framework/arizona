@@ -3,7 +3,7 @@
     {vsn, "0.1.0"},
     {registered, []},
     {mod, {arizona_app, []}},
-    {applications, [kernel, stdlib]},
+    {applications, [kernel, stdlib, cowboy]},
     {env,[]},
     {modules, []},
     {licenses, ["Apache-2.0"]},
