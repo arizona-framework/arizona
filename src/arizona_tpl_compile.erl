@@ -24,31 +24,31 @@ Template compiler.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([compile_tree/1]).
+-export([compile/1]).
 
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
-compile_tree(Tree) ->
-    compile_tree(Tree, [], 0).
+compile(Tree) ->
+    {ok, compile(Tree, [], 0)}.
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
-compile_tree([{text, Txt} | T], P, I) ->
-    [{I, text_struct(Txt, P, I)} | compile_tree(T, P, I+1)];
-compile_tree([{expr, {Expr, Vars}} | T], P, I) ->
-    [{I, expr_struct(Expr, Vars, P, I)} | compile_tree(T, P, I+1)];
-compile_tree([{tag, Tag} | T], P, I) ->
+compile([{text, Txt} | T], P, I) ->
+    [{I, text_struct(Txt, P, I)} | compile(T, P, I+1)];
+compile([{expr, {Expr, Vars}} | T], P, I) ->
+    [{I, expr_struct(Expr, Vars, P, I)} | compile(T, P, I+1)];
+compile([{tag, Tag} | T], P, I) ->
     [{I, #{
        id => lists:reverse([I | P]),
        text => tag_header_to_str(Tag)
     }} | compile_tag(maps:get(tokens, Tag), Tag, T, P, I+1)];
-compile_tree([{block, Block} | T], P, I) ->
-    [{I, block_struct(Block, P, I)} | compile_tree(T, P, I+1)];
-compile_tree([], _P, _I) ->
+compile([{block, Block} | T], P, I) ->
+    [{I, block_struct(Block, P, I)} | compile(T, P, I+1)];
+compile([], _P, _I) ->
     [].
 
 compile_tag([{text, Txt} | T], Tag, TT, P, I) ->
@@ -66,12 +66,12 @@ compile_tag([{tag, Tag} | T], TTag, TT, P, I) ->
 compile_tag([{block, Block} | T], Tag, TT, P, I) ->
     [{I, block_struct(Block, P, I)} | compile_tag(T, Tag, TT, P, I+1)];
 compile_tag([], #{void := true}, T, P, I) ->
-    compile_tree(T, P, I);
+    compile(T, P, I);
 compile_tag([], #{void := false} = Tag, T, P, I) ->
     [{I, #{
         id => lists:reverse([I | P]),
         text => tag_ending_to_str(Tag)
-    }} | compile_tree(T, P, I+1)].
+    }} | compile(T, P, I+1)].
 
 tag_header_to_str(#{attrs := Attrs} = Tag) ->
     iolist_to_binary([tag_open_to_str(Tag),
@@ -114,7 +114,7 @@ expr_struct(Expr, _Vars, P, I) ->
 block_struct(#{module := M, function := F}, P, I) ->
     #{
         id => lists:reverse([I | P]),
-        block => maps:from_list(compile_tree(M:F(), [I | P], 0))
+        block => maps:from_list(compile(M:F(), [I | P], 0))
     }.
 
 %% --------------------------------------------------------------------
@@ -126,7 +126,7 @@ block_struct(#{module := M, function := F}, P, I) ->
 -include_lib("eunit/include/eunit.hrl").
 
 compile_tree_test() ->
-    ?assertMatch([
+    ?assertMatch({ok, [
         {0, #{
            id := [0],
            block := #{
@@ -246,7 +246,7 @@ compile_tree_test() ->
                }
             }
         }}
-    ], compile_tree([
+    ]}, compile([
         {block, #{module => ?MODULE, function => view}}
     ])).
 

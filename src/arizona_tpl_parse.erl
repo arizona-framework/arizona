@@ -30,20 +30,23 @@ Template parser.
 %% API funtions.
 %% --------------------------------------------------------------------
 
-parse_exprs([{text, Txt} | T]) ->
-    [{text, Txt} | parse_exprs(T)];
-parse_exprs([{expr, Expr} | T]) ->
-    [parse_expr(Expr) | parse_exprs(T)];
-parse_exprs([tag_open | T]) ->
-    parse_tag(T);
-parse_exprs([closing_tag | _] = T) ->
-    T;
-parse_exprs([]) ->
-    [].
+parse_exprs(Tokens) ->
+    {ok, do_parse_exprs(Tokens)}.
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
 %% --------------------------------------------------------------------
+
+do_parse_exprs([{text, Txt} | T]) ->
+    [{text, Txt} | do_parse_exprs(T)];
+do_parse_exprs([{expr, Expr} | T]) ->
+    [parse_expr(Expr) | do_parse_exprs(T)];
+do_parse_exprs([tag_open | T]) ->
+    parse_tag(T);
+do_parse_exprs([closing_tag | _] = T) ->
+    T;
+do_parse_exprs([]) ->
+    [].
 
 parse_tag([{tag_name, <<$., Name/binary>>} | T]) ->
     {M, F} = parse_block_name(Name),
@@ -74,12 +77,12 @@ do_parse_block([tag_close | T0], Props0) ->
     {M, F} = parse_block_name(Name),
     case M =:= get(module, Props) andalso F =:= get(function, Props) of
         true ->
-            [{block, block_struct(Props)} | parse_exprs(T)];
+            [{block, block_struct(Props)} | do_parse_exprs(T)];
         false ->
             error({unexpected_block_end, {{M, F}, Props}})
     end;
 do_parse_block([void_close | T], Props) ->
-    [{block, block_struct(Props)} | parse_exprs(T)].
+    [{block, block_struct(Props)} | do_parse_exprs(T)].
 
 do_parse_tag([{attr_key, K}, {attr_value, V} | T], Props) ->
     do_parse_tag(T, [parse_attr(K, {text, V}) | Props]);
@@ -92,17 +95,19 @@ do_parse_tag([tag_close | T0], Props0) ->
     [{tag_name, Name}, tag_close | T] = T1,
     case Name =:= get(name, Props) of
         true ->
-            [{tag, tag_struct(Props)} | parse_exprs(T)];
+            [{tag, tag_struct(Props)} | do_parse_exprs(T)];
         false ->
             error({unexpected_tag_end, {Name, Props}})
     end;
 do_parse_tag([void_close | T], Props) ->
-    [{tag, tag_struct([void | Props])} | parse_exprs(T)].
+    [{tag, tag_struct([void | Props])} | do_parse_exprs(T)].
 
 collect_tokens([closing_tag | T], Props) ->
     {T, Props};
 collect_tokens([tag_open | T], Props) ->
     collect_tokens(parse_tag(T), Props);
+collect_tokens([{expr, Expr} | T], Props) ->
+    collect_tokens(T, [{token, parse_expr(Expr)} | Props]);
 collect_tokens([H|T], Props) ->
     collect_tokens(T, [{token, H} | Props]).
 
@@ -122,7 +127,8 @@ do_parse_attr(K, V) ->
 % TOOO: If it's just a value, like 0, return {text, <<"0">>}
 %       instead of and expression.
 parse_expr(Expr) ->
-    {expr, <<"fun(Assigns) -> ", Expr/binary, " end">>}.
+    % TODO: Substitute and collect vars, and compile.
+    {expr, {<<"fun(Assigns) -> ", Expr/binary, " end">>, []}}.
 
 block_struct(Props) ->
     #{
@@ -146,7 +152,7 @@ get(K, L, D) ->
     proplists:get_value(K, L, D).
 
 get_all(K, L) ->
-    proplists:get_all_values(K, L).
+    lists:reverse(proplists:get_all_values(K, L)).
 
 get(K, L) ->
     element(2, proplists:lookup(K, L)).
@@ -159,7 +165,7 @@ get(K, L) ->
 -include_lib("eunit/include/eunit.hrl").
 
 parse_exprs_test() ->
-    ?assertEqual([
+    ?assertEqual({ok, [
         {text,<<"Start">>},
         {tag,
          #{name => <<"main">>,void => false,
@@ -168,12 +174,12 @@ parse_exprs_test() ->
               #{function => counter,module => foo,tokens => [],
                 directives => #{},
                 attrs =>
-                 [{<<"count">>,{expr,<<"fun(Assigns) -> 0 end">>}},
+                 [{<<"count">>,{expr,{<<"fun(Assigns) -> 0 end">>, []}}},
                   {<<"id">>,{text,<<"counter">>}}]}},
              {block,
               #{function => block,module => foo,tokens => [],
                 directives =>
-                 #{'if' => {expr,<<"fun(Assigns) -> _@true end">>}},
+                 #{'if' => {expr,{<<"fun(Assigns) -> _@true end">>, []}}},
                 attrs => []}},
              {tag,
               #{name => <<"div">>,void => false,
@@ -194,16 +200,16 @@ parse_exprs_test() ->
               #{name => <<"br">>,void => true,tokens => [],
                 directives => #{},attrs => []}},
              {text,<<"baz">>},
-             {expr,<<"_@bar">>},
+             {expr,{<<"_@bar">>, []}},
              {text,<<"foo">>}],
            directives => #{},
            attrs =>
             [{<<"hidden">>,{text,<<"hidden">>}},
              {<<"style">>,{text,<<"display: none;">>}},
-             {<<"class">>,{expr,<<"fun(Assigns) -> _@class end">>}},
+             {<<"class">>,{expr,{<<"fun(Assigns) -> _@class end">>, []}}},
              {<<"id">>,{text,<<"foo">>}}]}},
         {text,<<"End">>}
-    ], parse_exprs([
+    ]}, parse_exprs([
         {text,<<"Start">>},
         tag_open,
         {tag_name,<<"main">>},

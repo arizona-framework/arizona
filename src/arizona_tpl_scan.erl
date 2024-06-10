@@ -47,7 +47,8 @@ Template scanner.
 %       end}
 %       """.
 string(Str) when is_binary(Str) ->
-    scan(Str, Str, 0, 0);
+    % TODO: Location.
+    {ok, scan(Str, Str, 0, 0), 1};
 string(Str) when is_list(Str) ->
     string(iolist_to_binary(Str)).
 
@@ -182,7 +183,7 @@ text_token(Str, Pos, Len) ->
 -include_lib("eunit/include/eunit.hrl").
 
 string_test() ->
-    ?assertEqual([
+    ?assertEqual({ok, [
         {text,<<"Start">>},
         tag_open,
         {tag_name,<<"main">>},
@@ -231,7 +232,7 @@ string_test() ->
         {tag_name,<<"main">>},
         tag_close,
         {text,<<"End">>}
-    ], string(<<"""
+    ], 1}, string(<<"""
     Start
     <main id="foo" class={_@class} style='display: none;' hidden>
         foo{_@bar}baz
