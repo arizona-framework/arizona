@@ -38,8 +38,6 @@ compile(Tree) ->
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
-compile([{text, Txt}, {tag, Tag} | T], P, I) ->
-    compile_tag(Tag, Txt, T, P, I);
 compile([{text, Txt} | T], P, I) ->
     [{I, text_struct(Txt, P, I)} | compile(T, P, I+1)];
 compile([{expr, {Expr, Vars}} | T], P, I) ->
@@ -57,29 +55,22 @@ compile_tag(#{name := Name, attrs := Attrs} = Tag, Txt, T, P, I) ->
 do_compile_tag([{K, {expr, {Expr, Vars}}} | T], Tag, TT, P, I, Acc) ->
     [{I, #{
         id => lists:reverse([I | P]),
-        text => iolist_to_binary(lists:reverse(
-                    [$", $=, K, $\s | Acc]))
+        text => iolist_to_binary(lists:reverse([$", $=, K, $\s | Acc]))
     }}, {I+1, expr_struct(Expr, Vars, P, I+1)}
     | do_compile_tag(T, Tag, TT, P, I+2, [$"])];
 do_compile_tag([{K, {text, Txt}} | T], Tag, TT, P, I, Acc) ->
     do_compile_tag(T, Tag, TT, P, I, [$", Txt, $", $=, K, $\s | Acc]);
 do_compile_tag([K | T], Tag, TT, P, I, Acc) ->
     do_compile_tag(T, Tag, TT, P, I, [K, $\s | Acc]);
-do_compile_tag([], #{void := Void} = Tag, TT, P, I, Acc0) ->
-    Acc = case Void of
-        true -> [$>, $/ | Acc0];
-        false -> [$> | Acc0]
-    end,
-    Tokens = case maps:get(tokens, Tag) of
-        [{text, Txt} | T] ->
-            [{I, tag_struct(Tag, [Txt | Acc], P, I)} | compile(T, P, I+1)];
-        [{tag, TTag} | T] ->
-            compile_tag(TTag, lists:reverse(Acc), T, P, I);
-        T ->
-            [{I, tag_struct(Tag, Acc, P, I)} | compile(T, P, I+1)]
-    end,
+% NOTE: It's possible to concat texts here.
+do_compile_tag([], Tag, TT, P, I, Acc) ->
+    Tokens = [{I, tag_struct(Tag, Acc, P, I)}
+                | compile(maps:get(tokens, Tag) , P, I+1)],
     {NI, _} = lists:last(Tokens),
-    Tokens ++ compile(TT, P, NI+1).
+    Tokens ++ compile([{text, tag_closing(Tag)} | TT], P, NI+1).
+
+tag_closing(#{name := Name}) ->
+    <<$<, $/, Name/binary, $>>>.
 
 text_struct(Txt, P, I) ->
     #{
@@ -94,7 +85,11 @@ expr_struct(Expr, _Vars, P, I) ->
         %vars => Vars
      }.
 
-tag_struct(_Tag, Acc, P, I) ->
+tag_struct(#{void := Void} = _Tag, Acc0, P, I) ->
+    Acc = case Void of
+        true -> [$>, $/ | Acc0];
+        false -> [$> | Acc0]
+    end,
     #{
         id => lists:reverse([I | P]),
         text => iolist_to_binary(lists:reverse(Acc))
@@ -129,29 +124,50 @@ compile_tree_test() ->
                                     _},
                           2 :=
                               #{id := [0,1,2],
-                                text := <<"\"><span>">>},
+                                text := <<"\">">>},
                           3 :=
                               #{id := [0,1,3],
-                                expr :=
-                                    _},
+                                text := <<"<span>">>},
                           4 :=
                               #{id := [0,1,4],
-                                text := <<"<b>">>},
-                          5 :=
-                              #{id := [0,1,5],
                                 expr :=
                                     _},
+                          5 :=
+                              #{id := [0,1,5],
+                                text := <<"<b>">>},
                           6 :=
                               #{id := [0,1,6],
-                                text := <<"<br/>">>},
+                                expr :=
+                                    _},
                           7 :=
                               #{id := [0,1,7],
-                                text :=
-                                    <<"<button type=\"button\">Increment">>},
+                                text := <<"</b>">>},
                           8 :=
                               #{id := [0,1,8],
+                                text := <<"</span>">>},
+                          9 :=
+                              #{id := [0,1,9],
+                                text := <<"<br/>">>},
+                          10 :=
+                              #{id := [0,1,10],
+                                text := <<"</br>">>},
+                          11 :=
+                              #{id := [0,1,11],
+                                text :=
+                                    <<"<button type=\"button\">">>},
+                          12 :=
+                              #{id := [0,1,12],
+                                text := <<"Increment">>},
+                          13 :=
+                              #{id := [0,1,13],
+                                text := <<"</button>">>},
+                          14 :=
+                              #{id := [0,1,14],
                                 expr :=
-                                    _}},
+                                    _},
+                          15 :=
+                              #{id := [0,1,15],
+                                text := <<"</div>">>}},
                     id := [0,1]},
               2 :=
                   #{block :=
@@ -164,30 +180,52 @@ compile_tree_test() ->
                                     _},
                           2 :=
                               #{id := [0,2,2],
-                                text := <<"\"><span>">>},
+                                text := <<"\">">>},
                           3 :=
                               #{id := [0,2,3],
-                                expr :=
-                                    _},
+                                text := <<"<span>">>},
                           4 :=
                               #{id := [0,2,4],
-                                text := <<"<b>">>},
-                          5 :=
-                              #{id := [0,2,5],
                                 expr :=
                                     _},
+                          5 :=
+                              #{id := [0,2,5],
+                                text := <<"<b>">>},
                           6 :=
                               #{id := [0,2,6],
-                                text := <<"<br/>">>},
+                                expr :=
+                                    _},
                           7 :=
                               #{id := [0,2,7],
-                                text :=
-                                    <<"<button type=\"button\">Increment">>},
+                                text := <<"</b>">>},
                           8 :=
                               #{id := [0,2,8],
+                                text := <<"</span>">>},
+                          9 :=
+                              #{id := [0,2,9],
+                                text := <<"<br/>">>},
+                          10 :=
+                              #{id := [0,2,10],
+                                text := <<"</br>">>},
+                          11 :=
+                              #{id := [0,2,11],
+                                text :=
+                                    <<"<button type=\"button\">">>},
+                          12 :=
+                              #{id := [0,2,12],
+                                text := <<"Increment">>},
+                          13 :=
+                              #{id := [0,2,13],
+                                text := <<"</button>">>},
+                          14 :=
+                              #{id := [0,2,14],
                                 expr :=
-                                    _}},
-                    id := [0,2]}},
+                                    _},
+                          15 :=
+                              #{id := [0,2,15],
+                                text := <<"</div>">>}},
+                    id := [0,2]},
+              3 := #{id := [0,3],text := <<"</main>">>}},
         id := [0]}
     }]}, compile([{block, #{module => ?MODULE, function => view}}])).
 
