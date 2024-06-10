@@ -33,6 +33,7 @@ Renderer.
 render_block(#{indexes := Indexes, block := Block}, Assigns) ->
     render_indexes(Indexes, Block, Assigns).
 
+% TODO: Return the diff with the render result.
 render_changes(#{vars := Vars, block := Block}, NewAssigns, OldAssigns) ->
     case diff(Vars, NewAssigns, OldAssigns) of
         Changes when map_size(Changes) > 0 ->
@@ -65,7 +66,7 @@ render_indexes([H|T], Block, Assigns) ->
                 ok ->
                     render_indexes(T, Block, Assigns);
                 Value ->
-                    [Value | render_indexes(T, Block, Assigns)]
+                    [safe_html(Value) | render_indexes(T, Block, Assigns)]
             end;
         #{indexes := Indexes, block := NestedBlock, attrs := Attrs} ->
             NestedAssigns = maps:map(fun(_K, Expr) ->
@@ -76,6 +77,16 @@ render_indexes([H|T], Block, Assigns) ->
     end;
 render_indexes([], _Block, _Assigns) ->
     [].
+
+% TODO: Do this really safe for HTML.
+safe_html(V) when is_binary(V) ->
+    V;
+safe_html(V) when is_atom(V) ->
+    atom_to_binary(V, utf8);
+safe_html(V) when is_integer(V) ->
+    integer_to_binary(V, 10);
+safe_html(V) when is_float(V) ->
+    io_lib:format("~p", [V]).
 
 path_render([Path | T], Block, Assigns) ->
     case do_path_render(Path, Block, Assigns) of
@@ -114,13 +125,13 @@ render_block_test() ->
     ?assertEqual([
         <<"<main>">>,<<"<h1>">>,<<"Arizona">>,<<"</h1>">>,
         [<<"<div id=\"">>,<<"1">>,<<"\">">>,<<"<span>">>,
-         <<"Count:">>,<<"<b>">>,0,<<"</b>">>,<<"</span>">>,
+         <<"Count:">>,<<"<b>">>,<<"0">>,<<"</b>">>,<<"</span>">>,
          <<"<br/>">>,<<"</br>">>,
          [<<"<button type=\"button\">">>,<<"Increment">>,
           <<"</button>">>],
          <<>>,<<"</div>">>],
         [<<"<div id=\"">>,<<"2">>,<<"\">">>,<<"<span>">>,
-         <<"Rev. Counter:">>,<<"<b>">>,0,<<"</b>">>,<<"</span>">>,
+         <<"Rev. Counter:">>,<<"<b>">>,<<"0">>,<<"</b>">>,<<"</span>">>,
          <<"<br/>">>,<<"</br>">>,
          [<<"<button type=\"button\">">>,<<"Decrement">>,
           <<"</button>">>],
