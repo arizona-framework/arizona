@@ -23,7 +23,7 @@
 -behaviour(cowboy_handler).
 
 %% cowboy_handler callbacks.
--export([ init/2 ]).
+-export([init/2]).
 
 %% Example functions.
 -export([render/0]).
@@ -35,8 +35,13 @@
 %% --------------------------------------------------------------------
 
 init(Req0, State) ->
+    % TODO: Pass assigns to the compile and let them act as macros.
+    %       Put the title on it to test.
     {ok, Tpl} = arizona_live_view:compile(?MODULE),
-    Assigns = #{title => <<"Arizona">>},
+    Assigns = #{
+        title => <<"Arizona">>,
+        count => 0
+    },
     Html = arizona_tpl_render:render_block(Tpl, Assigns),
     Headers = #{<<"content-type">> => <<"text/html">>},
     Req = cowboy_req:reply(200, Headers, Html, Req0),
@@ -58,7 +63,10 @@ render() ->
         <script src="assets/js/arizona.js"></script>
     </head>
     <body>
-        Hello, World!
+        <div>Count: {_@count}</div>
+        <button type="button" :onclick="incr">
+            Increment
+        </button>
     </body>
     </html>
     """).

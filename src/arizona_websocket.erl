@@ -1,4 +1,4 @@
-%% 
+%%
 %% %CopyrightBegin%
 %%
 %% Copyright 2023-2024 William Fank Thomé
@@ -17,34 +17,35 @@
 %%
 %% %CopyrightEnd%
 %%
--module(arizona_app).
+-module(arizona_websocket).
 -moduledoc false.
 
--behaviour(application).
+-behaviour(cowboy_websocket).
 
-%% Application callbacks.
--export([start/2, stop/1]).
+%% cowboy_websocket callbacks.
+-export([init/2, websocket_init/1, websocket_handle/2,
+         websocket_info/2, terminate/3]).
 
 %% --------------------------------------------------------------------
-%% Application callbacks.
+%% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
 
-start(_StartType, _StartArgs) ->
-    Dispatch = cowboy_router:compile([{'_', [
-        % Static
-        {"/favicon.ico", cowboy_static, {priv_file, arizona, "static/favicon.ico"}},
-        {"/robots.txt", cowboy_static, {priv_file, arizona, "static/robots.txt"}},
-        {"/assets/[...]", cowboy_static, {priv_dir, arizona, "static/assets"}},
-        % Handlers
-        {"/websocket", arizona_websocket, []},
-        {'_', arizona_handler, []}
-    ]}]),
-    {ok, _} = cowboy:start_clear(arizona_http_listener,
-        [{port, 8080}],
-        #{env => #{dispatch => Dispatch}}
-    ),
-    arizona_sup:start_link().
+init(Req, State) ->
+    {cowboy_websocket, Req, State}.
 
-stop(_State) ->
+websocket_init(State) ->
+    io:format("[WebSocket] init: ~p~n", [State]),
+    {[], State}.
+
+websocket_handle({text, Msg}, State) ->
+    io:format("[WebSocket] handle: ~p~n", [Msg]),
+    {[], State}.
+
+websocket_info(Info, State) ->
+    io:format("[WebSocket] info: ~p~n", [Info]),
+    {[], State}.
+
+terminate(Reason, Req, _State) ->
+    io:format("[WebSocket] terminate: ~p~n", [{Reason, Req}]),
     ok.
 
