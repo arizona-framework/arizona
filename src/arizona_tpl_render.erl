@@ -68,8 +68,8 @@ render_indexes([H|T], Block, Assigns) ->
                     [Value | render_indexes(T, Block, Assigns)]
             end;
         #{indexes := Indexes, block := NestedBlock, attrs := Attrs} ->
-            NestedAssigns = maps:map(fun(_K, Fun) ->
-                Fun(Assigns)
+            NestedAssigns = maps:map(fun(_K, Expr) ->
+                eval(Expr, Assigns)
             end, Attrs),
             [render_indexes(Indexes, NestedBlock, NestedAssigns) |
                 render_indexes(T, Block, Assigns)]
@@ -92,10 +92,15 @@ do_path_render([Index], Block, Assigns) ->
     Expr(Assigns);
 do_path_render([Index | T], Block, Assigns) ->
     #{block := NestedBlock, attrs := Attrs} = maps:get(Index, Block),
-    NestedAssigns = maps:map(fun(_K, Fun) ->
-        Fun(Assigns)
+    NestedAssigns = maps:map(fun(_K, Expr) ->
+        eval(Expr, Assigns)
     end, Attrs),
     do_path_render(T, NestedBlock, NestedAssigns).
+
+eval({text, Txt}, _Assigns) ->
+    Txt;
+eval({expr, {Fun, _Vars}}, Assigns) ->
+    Fun(Assigns).
 
 %% --------------------------------------------------------------------
 %% EUnit tests.
@@ -107,94 +112,39 @@ do_path_render([Index | T], Block, Assigns) ->
 
 render_block_test() ->
     ?assertEqual([
-        <<"<div>">>,
-        [<<"<span kf-id=\"[0,1,0]\">">>,99,<<"</span>">>],
-        [<<"<span kf-id=\"[0,2,0]\">">>,0,<<"</span>">>],
-        <<"</div>">>
-    ], render_block(block(), #{root_count => 99})).
+        <<"<main>">>,<<"<h1>">>,<<"Arizona">>,<<"</h1>">>,
+        [<<"<div id=\"">>,<<"1">>,<<"\">">>,<<"<span>">>,
+         <<"Count:">>,<<"<b>">>,0,<<"</b>">>,<<"</span>">>,
+         <<"<br/>">>,<<"</br>">>,
+         [<<"<button type=\"button\">">>,<<"Increment">>,
+          <<"</button>">>],
+         <<>>,<<"</div>">>],
+        [<<"<div id=\"">>,<<"2">>,<<"\">">>,<<"<span>">>,
+         <<"Rev. Counter:">>,<<"<b>">>,0,<<"</b>">>,<<"</span>">>,
+         <<"<br/>">>,<<"</br>">>,
+         [<<"<button type=\"button\">">>,<<"Decrement">>,
+          <<"</button>">>],
+         <<>>,<<"</div>">>],
+        <<"</main>">>
+    ], render_block(block(), #{
+            title => <<"Arizona">>,
+            view_count => 0,
+            decr_btn_text => <<"Decrement">>})).
 
 render_changes_test() ->
-    ?assertEqual([{[1, 1], 100}],
+    ?assertEqual([{[4,6],999},{[5,6],999}],
         render_changes(block(),
-                      #{root_count => 100},
-                      #{root_count => 99})).
+            #{view_count => 999},
+            #{title => <<"Arizona">>,
+            view_count => 0,
+            decr_btn_text => <<"Decrement">>})).
 
 %% Start block support.
 
 block() ->
-   #{
-        id => [0],
-        block => #{
-            0 => #{
-                id => [0, 0],
-                text => <<"<div>">>
-            },
-            1 => #{
-                id => [0, 1],
-                block => #{
-                    0 => #{
-                        id => [0, 1, 0],
-                        text => <<"<span kf-id=\"[0,1,0]\">">>
-                    },
-                    1 => #{
-                        id => [0, 1, 1],
-                        expr => fun(Assigns) ->
-                            maps:get(my_count, Assigns)
-                        end
-                    },
-                    2 => #{
-                        id => [0, 1, 2],
-                        text => <<"</span>">>
-                    }
-                },
-                indexes => [0, 1, 2],
-                attrs => #{
-                    my_count => fun(Assigns) ->
-                        maps:get(root_count, Assigns)
-                    end
-                },
-                vars => #{
-                    my_count => [
-                        [1]
-                    ]
-                }
-            },
-            2 => #{
-                id => [0, 2],
-                block => #{
-                    0 => #{
-                        id => [0, 2, 0],
-                        text => <<"<span kf-id=\"[0,2,0]\">">>
-                    },
-                    1 => #{
-                        id => [0, 2, 1],
-                        expr => fun(Assigns) ->
-                            maps:get(my_count, Assigns)
-                        end,
-                        vars => [my_count]
-                    },
-                    2 => #{
-                        id => [0, 2, 2],
-                        text => <<"</span>">>
-                    }
-                },
-                indexes => [0, 1, 2],
-                attrs => #{
-                    my_count => fun(_Assigns) -> 0 end
-                }
-            },
-            3 => #{
-                id => [0, 3],
-                text => <<"</div>">>
-            }
-        },
-        indexes => [0, 1, 2, 3],
-        vars => #{
-            root_count => [
-                [1, 1]
-            ]
-        }
-    }.
+    {ok, Tpl} = arizona_tpl_compile:compile([
+        {block, #{module => arizona_tpl_compile, function => view}}]),
+    Tpl.
 
 %% End block support.
 

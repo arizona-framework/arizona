@@ -32,7 +32,15 @@ Template compiler.
 
 % TODO: Concat texts.
 compile(Tree) ->
-    {ok, compile(Tree, [], 0)}.
+    case compile(Tree, [], 0) of
+        [{0, Tpl}] ->
+            {ok, Tpl};
+        _BadTpl ->
+            % Multiple tags is not allowed for a root, e.g.:
+            % Good: <html><head></head><body></body></html>
+            %  Bad: <head></head><body></body>
+            {error, {badtree, Tree}}
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
@@ -54,7 +62,7 @@ compile_tag(#{name := Name, attrs := Attrs} = Tag, Txt, T, P, I) ->
 
 do_compile_tag([{K, {expr, {Expr, Vars}}} | T], Tag, TT, P, I, Acc) ->
     [{I, #{
-        id => lists:reverse([I | P]),
+        id => id(P, I),
         text => iolist_to_binary(lists:reverse([$", $=, K, $\s | Acc]))
     }}, {I+1, expr_struct(Expr, Vars, P, I+1)}
     | do_compile_tag(T, Tag, TT, P, I+2, [$"])];
@@ -64,7 +72,7 @@ do_compile_tag([K | T], Tag, TT, P, I, Acc) ->
     do_compile_tag(T, Tag, TT, P, I, [K, $\s | Acc]);
 % NOTE: It's possible to concat texts here.
 do_compile_tag([], Tag, TT, P, I, Acc) ->
-    Tokens = [{I, tag_struct(Tag, Acc, P, I)}
+    Tokens = [{I, tag_open_struct(Tag, Acc, P, I)}
                 | compile(maps:get(tokens, Tag) , P, I+1)],
     {NI, _} = lists:last(Tokens),
     Tokens ++ compile([{text, tag_closing(Tag)} | TT], P, NI+1).
@@ -72,34 +80,131 @@ do_compile_tag([], Tag, TT, P, I, Acc) ->
 tag_closing(#{name := Name}) ->
     <<$<, $/, Name/binary, $>>>.
 
+id([], 0) ->
+    root;
+id(P, I) ->
+    [0 | Id] = lists:reverse([I | P]),
+    Id.
+
 text_struct(Txt, P, I) ->
     #{
-        id => lists:reverse([I | P]),
+        id => id(P, I),
         text => Txt
      }.
 
-expr_struct(Expr, _Vars, P, I) ->
+expr_struct(Expr, Vars, P, I) ->
     #{
-        id => lists:reverse([I | P]),
-        expr => Expr
-        %vars => Vars
+        id => id(P, I),
+        expr => Expr,
+        vars => Vars
      }.
 
-tag_struct(#{void := Void} = _Tag, Acc0, P, I) ->
-    Acc = case Void of
-        true -> [$>, $/ | Acc0];
-        false -> [$> | Acc0]
-    end,
+tag_open_struct(#{void := true} = _Tag, Acc, P, I) ->
     #{
-        id => lists:reverse([I | P]),
-        text => iolist_to_binary(lists:reverse(Acc))
+        id => id(P, I),
+        text => iolist_to_binary(lists:reverse([$>, $/ | Acc]))
+    };
+tag_open_struct(#{void := false} = _Tag, Acc, P, I) ->
+    #{
+        id => id(P, I),
+        text => iolist_to_binary(lists:reverse([$> | Acc]))
     }.
 
-block_struct(#{module := M, function := F}, P, I) ->
+block_struct(Block, P, I) ->
+    Tokens = block_tokens(Block, P, I),
+    TokensMap = maps:from_list(Tokens),
+    Attrs = block_attrs(Block),
     #{
-        id => lists:reverse([I | P]),
-        block => maps:from_list(compile(M:F(), [I | P], 0))
+        id => id(P, I),
+        block => TokensMap,
+        indexes => lists:usort(maps:keys(TokensMap)),
+        directives => maps:get(directives, Block, #{}),
+        attrs => Attrs,
+        vars => case P =:= [] of
+                    true -> root_vars(Tokens);
+                    false -> block_vars(Tokens, Attrs)
+                end
     }.
+
+% TODO: Remove vars prop from expr. They will live in the block props.
+block_tokens(#{module := M, function := F}, P, I) ->
+    compile(M:F(), [I | P], 0).
+
+% TODO: Use binary_to_existing_atom.
+block_attrs(#{attrs := Attrs}) ->
+    #{binary_to_atom(K, utf8) => V || {K, V} <- Attrs};
+block_attrs(#{}) ->
+    #{}.
+
+root_vars(Tokens) ->
+    tokens_vars(Tokens, false).
+
+block_vars(Tokens, Attrs) ->
+    tokens_vars(Tokens, {true, Attrs}).
+
+tokens_vars(Tokens, Attrs) ->
+    maps:groups_from_list(
+        fun({Var, _Id}) -> Var end,
+        fun({_Var, Id}) -> Id end,
+        tokens_vars_1(Tokens, Attrs)).
+
+tokens_vars_1([{_I, #{vars := Vars, id := Id}} | T], Attrs) when is_list(Vars) ->
+    tokens_vars_2(Vars, Id, T, Attrs);
+tokens_vars_1([{_I, #{vars := Vars}} | T], {true, Attrs}) when is_map(Vars) ->
+    tokens_vars_4(maps:to_list(Vars), T, {true, Attrs});
+tokens_vars_1([{_I, #{vars := Vars}} | T], false) when is_map(Vars) ->
+    tokens_vars_7(maps:to_list(Vars), T);
+tokens_vars_1([_|T], Attrs) ->
+    tokens_vars_1(T, Attrs);
+tokens_vars_1([], _Attrs) ->
+    [].
+
+tokens_vars_2([Var | Vars], Id, T, {true, Attrs}) ->
+    case Attrs of
+        #{Var := {expr, {_Fun, ExprVars}}} ->
+            tokens_vars_3(ExprVars, Vars, Id, T, {true, Attrs});
+        #{} ->
+            tokens_vars_2(Vars, Id, T, {true, Attrs})
+    end;
+tokens_vars_2([Var | Vars], Id, T, false) ->
+    [{Var, Id} | tokens_vars_2(Vars, Id, T, false)];
+tokens_vars_2([], _Id, T, Attrs) ->
+    tokens_vars_1(T, Attrs).
+
+tokens_vars_3([Var | ExprVars], Vars, Id, T, Attrs) when is_atom(Var) ->
+    [{Var, Id} | tokens_vars_3(ExprVars, Vars, Id, T, Attrs)];
+tokens_vars_3([], Vars, Id, T, Attrs) ->
+    tokens_vars_2(Vars, Id, T, Attrs).
+
+tokens_vars_4([{Var, Ids} | Vars], T, {true, Attrs}) when is_atom(Var), is_list(Ids) ->
+    case Attrs of
+        #{Var := {expr, {_Fun, ExprVars}}} ->
+            tokens_vars_5(ExprVars, Vars, Ids, T, {true, Attrs});
+        #{} ->
+            tokens_vars_4(Vars, T, {true, Attrs})
+    end;
+tokens_vars_4([], T, Attrs) ->
+    tokens_vars_1(T, Attrs).
+
+tokens_vars_5([Var | ExprVars], Vars, Ids, T, Attrs) when is_atom(Var) ->
+    tokens_vars_6(Ids, Var, ExprVars, Vars, Ids, T, Attrs);
+tokens_vars_5([], Vars, _Id, T, Attrs) ->
+    tokens_vars_4(Vars, T, Attrs).
+
+tokens_vars_6([Id | Ids], Var, ExprVars, Vars, VIds, T, Attrs) ->
+    [{Var, Id} | tokens_vars_6(Ids, Var, ExprVars, Vars, VIds, T, Attrs)];
+tokens_vars_6([], _Var, ExprVars, Vars, VIds, T, Attrs) ->
+    tokens_vars_5(ExprVars, Vars, VIds, T, Attrs).
+
+tokens_vars_7([{Var, Ids} | Vars], T) when is_atom(Var), is_list(Ids) ->
+    tokens_vars_8(Ids, Var, Vars, T);
+tokens_vars_7([], T) ->
+    tokens_vars_1(T, false).
+
+tokens_vars_8([Id | Ids], Var, Vars, T) ->
+    [{Var, Id} | tokens_vars_8(Ids, Var, Vars, T)];
+tokens_vars_8([], _Var, Vars, T) ->
+    tokens_vars_7(Vars, T).
 
 %% --------------------------------------------------------------------
 %% EUnit tests.
@@ -110,132 +215,157 @@ block_struct(#{module := M, function := F}, P, I) ->
 -include_lib("eunit/include/eunit.hrl").
 
 compile_tree_test() ->
-    ?assertMatch({ok,[{0,
+    ?assertMatch({ok,
         #{block :=
-            #{0 := #{id := [0,0],text := <<"<main>">>},
-              1 :=
+         #{0 := #{id := [0],text := <<"<main>">>},
+           1 := #{id := [1],text := <<"<h1>">>},
+           2 :=
+            #{id := [2],
+              expr := _,
+              vars := [title]},
+           3 := #{id := [3],text := <<"</h1>">>},
+           4 :=
+            #{block :=
+               #{0 := #{id := [4,0],text := <<"<div id=\"">>},
+                 1 :=
+                  #{id := [4,1],
+                    expr := _,
+                    vars := [id]},
+                 2 := #{id := [4,2],text := <<"\">">>},
+                 3 := #{id := [4,3],text := <<"<span>">>},
+                 4 :=
+                  #{id := [4,4],
+                    expr := _,
+                    vars := [label]},
+                 5 := #{id := [4,5],text := <<"<b>">>},
+                 6 :=
+                  #{id := [4,6],
+                    expr := _,
+                    vars := [counter_count]},
+                 7 := #{id := [4,7],text := <<"</b>">>},
+                 8 := #{id := [4,8],text := <<"</span>">>},
+                 9 := #{id := [4,9],text := <<"<br/>">>},
+                 10 := #{id := [4,10],text := <<"</br>">>},
+                 11 :=
                   #{block :=
-                        #{0 :=
-                              #{id := [0,1,0],
-                                text := <<"<div id=\"">>},
-                          1 :=
-                              #{id := [0,1,1],
-                                expr :=
-                                    _},
-                          2 :=
-                              #{id := [0,1,2],
-                                text := <<"\">">>},
-                          3 :=
-                              #{id := [0,1,3],
-                                text := <<"<span>">>},
-                          4 :=
-                              #{id := [0,1,4],
-                                expr :=
-                                    _},
-                          5 :=
-                              #{id := [0,1,5],
-                                text := <<"<b>">>},
-                          6 :=
-                              #{id := [0,1,6],
-                                expr :=
-                                    _},
-                          7 :=
-                              #{id := [0,1,7],
-                                text := <<"</b>">>},
-                          8 :=
-                              #{id := [0,1,8],
-                                text := <<"</span>">>},
-                          9 :=
-                              #{id := [0,1,9],
-                                text := <<"<br/>">>},
-                          10 :=
-                              #{id := [0,1,10],
-                                text := <<"</br>">>},
-                          11 :=
-                              #{id := [0,1,11],
-                                text :=
-                                    <<"<button type=\"button\">">>},
-                          12 :=
-                              #{id := [0,1,12],
-                                text := <<"Increment">>},
-                          13 :=
-                              #{id := [0,1,13],
-                                text := <<"</button>">>},
-                          14 :=
-                              #{id := [0,1,14],
-                                expr :=
-                                    _},
-                          15 :=
-                              #{id := [0,1,15],
-                                text := <<"</div>">>}},
-                    id := [0,1]},
-              2 :=
+                     #{0 :=
+                        #{id := [4,11,0],
+                          text := <<"<button type=\"button\">">>},
+                       1 :=
+                        #{id := [4,11,1],
+                          expr := _,
+                          vars := [text]},
+                       2 :=
+                        #{id := [4,11,2],text := <<"</button>">>}},
+                    id := [4,11],
+                    attrs :=
+                     #{text :=
+                        {expr,
+                         {_,[btn_text]}}},
+                    vars := #{btn_text := [[4,11,1]]},
+                    directives := #{},
+                    indexes := [0,1,2]},
+                 12 :=
+                  #{id := [4,12],
+                    expr := _,
+                    vars := [content]},
+                 13 := #{id := [4,13],text := <<"</div>">>}},
+              id := [4],
+              attrs :=
+               #{id := {text,<<"1">>},
+                 counter_count :=
+                  {expr,{_,[view_count]}},
+                 btn_text := {text,<<"Increment">>}},
+              vars := #{view_count := [[4,6]]},
+              directives := #{},
+              indexes := [0,1,2,3,4,5,6,7,8,9,10,11,12,13]},
+           5 :=
+            #{block :=
+               #{0 := #{id := [5,0],text := <<"<div id=\"">>},
+                 1 :=
+                  #{id := [5,1],
+                    expr := _,
+                    vars := [id]},
+                 2 := #{id := [5,2],text := <<"\">">>},
+                 3 := #{id := [5,3],text := <<"<span>">>},
+                 4 :=
+                  #{id := [5,4],
+                    expr := _,
+                    vars := [label]},
+                 5 := #{id := [5,5],text := <<"<b>">>},
+                 6 :=
+                  #{id := [5,6],
+                    expr := _,
+                    vars := [counter_count]},
+                 7 := #{id := [5,7],text := <<"</b>">>},
+                 8 := #{id := [5,8],text := <<"</span>">>},
+                 9 := #{id := [5,9],text := <<"<br/>">>},
+                 10 := #{id := [5,10],text := <<"</br>">>},
+                 11 :=
                   #{block :=
-                        #{0 :=
-                              #{id := [0,2,0],
-                                text := <<"<div id=\"">>},
-                          1 :=
-                              #{id := [0,2,1],
-                                expr :=
-                                    _},
-                          2 :=
-                              #{id := [0,2,2],
-                                text := <<"\">">>},
-                          3 :=
-                              #{id := [0,2,3],
-                                text := <<"<span>">>},
-                          4 :=
-                              #{id := [0,2,4],
-                                expr :=
-                                    _},
-                          5 :=
-                              #{id := [0,2,5],
-                                text := <<"<b>">>},
-                          6 :=
-                              #{id := [0,2,6],
-                                expr :=
-                                    _},
-                          7 :=
-                              #{id := [0,2,7],
-                                text := <<"</b>">>},
-                          8 :=
-                              #{id := [0,2,8],
-                                text := <<"</span>">>},
-                          9 :=
-                              #{id := [0,2,9],
-                                text := <<"<br/>">>},
-                          10 :=
-                              #{id := [0,2,10],
-                                text := <<"</br>">>},
-                          11 :=
-                              #{id := [0,2,11],
-                                text :=
-                                    <<"<button type=\"button\">">>},
-                          12 :=
-                              #{id := [0,2,12],
-                                text := <<"Increment">>},
-                          13 :=
-                              #{id := [0,2,13],
-                                text := <<"</button>">>},
-                          14 :=
-                              #{id := [0,2,14],
-                                expr :=
-                                    _},
-                          15 :=
-                              #{id := [0,2,15],
-                                text := <<"</div>">>}},
-                    id := [0,2]},
-              3 := #{id := [0,3],text := <<"</main>">>}},
-        id := [0]}
-    }]}, compile([{block, #{module => ?MODULE, function => view}}])).
+                     #{0 :=
+                        #{id := [5,11,0],
+                          text := <<"<button type=\"button\">">>},
+                       1 :=
+                        #{id := [5,11,1],
+                          expr := _,
+                          vars := [text]},
+                       2 :=
+                        #{id := [5,11,2],text := <<"</button>">>}},
+                    id := [5,11],
+                    attrs :=
+                     #{text :=
+                        {expr,
+                         {_,[btn_text]}}},
+                    vars := #{btn_text := [[5,11,1]]},
+                    directives := #{},
+                    indexes := [0,1,2]},
+                 12 :=
+                  #{id := [5,12],
+                    expr := _,
+                    vars := [content]},
+                 13 := #{id := [5,13],text := <<"</div>">>}},
+              id := [5],
+              attrs :=
+               #{id := {text,<<"2">>},
+                 label := {text,<<"Rev. Counter:">>},
+                 counter_count :=
+                  {expr,{_,[view_count]}},
+                 btn_text :=
+                  {expr,
+                   {_,[decr_btn_text]}}},
+              vars :=
+               #{view_count := [[5,6]],
+                 decr_btn_text := [[5,11,1]]},
+              directives := #{},
+              indexes := [0,1,2,3,4,5,6,7,8,9,10,11,12,13]},
+           6 := #{id := [6],text := <<"</main>">>}},
+        id := root,attrs := #{},
+        vars :=
+         #{title := [[2]],
+           view_count := [[4,6],[5,6]],
+           decr_btn_text := [[5,11,1]]},
+        directives := #{},
+        indexes := [0,1,2,3,4,5,6]}
+    }, compile([{block, #{module => ?MODULE, function => view}}])).
 
 %% Start compile support.
 
 view() ->
     {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
     <main>
-        <.arizona_tpl_compile:counter counter_count={_@view_count}/>
-        <.arizona_tpl_compile:counter label="Other:" counter_count={0}/>
+        <h1>{_@title}</h1>
+        <.arizona_tpl_compile:counter
+            id="1"
+            counter_count={_@view_count}
+            btn_text="Increment"
+        />
+        <.arizona_tpl_compile:counter
+            id="2"
+            label="Rev. Counter:"
+            counter_count={_@view_count}
+            btn_text={_@decr_btn_text}
+        />
     </main>
     """),
     {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens),
@@ -260,7 +390,7 @@ counter() ->
 
         <br/>
 
-        <button type="button">Increment</button>
+        <.arizona_tpl_compile:button text={_@btn_text}/>
 
         {% NOTE: The 'content' var is a private one.            }
         {%       It's filled with tokens when is not a void tag }
@@ -271,6 +401,13 @@ counter() ->
         {%        The 'merl:tsubst' should be used to fix this. }
         {try _@content catch _:_ -> <<>> end}
     </div>
+    """),
+    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens),
+    Tree.
+
+button() ->
+    {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
+    <button type="button">{_@text}</button>
     """),
     {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens),
     Tree.
