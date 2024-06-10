@@ -185,6 +185,7 @@ text_token(Str, Pos, Len) ->
 string_test() ->
     ?assertEqual({ok, [
         {text,<<"Start">>},
+        {expr,<<"% This is a comment. ">>},
         tag_open,
         {tag_name,<<"main">>},
         {attr_key,<<"id">>},
@@ -196,7 +197,7 @@ string_test() ->
         {attr_key,<<"hidden">>},
         tag_close,
         {text,<<"foo">>},
-        {expr,<<"_@bar">>},
+        {expr,<<"% Comments are allowed in expressions.\n        _@bar">>},
         {text,<<"baz">>},
         tag_open,
         {tag_name,<<"br">>},
@@ -234,8 +235,10 @@ string_test() ->
         {text,<<"End">>}
     ], 1}, string(<<"""
     Start
+    {% This is a comment. }
     <main id="foo" class={_@class} style='display: none;' hidden>
-        foo{_@bar}baz
+        foo{% Comments are allowed in expressions.
+            _@bar}baz
         <br/>
         <div>
             <span id="nested">

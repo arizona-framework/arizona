@@ -111,7 +111,7 @@ collect_tokens([closing_tag | T], Props) ->
     {T, Props};
 collect_tokens([tag_open | T], Props) ->
     collect_tokens(parse_tag(T), Props);
-collect_tokens([{expr, ExprStr} | T], Props) ->
+collect_tokens([{expr, ExprStr} | T], Props) when is_binary(ExprStr) ->
     case parse_expr_str(ExprStr) of
         {comment, _} ->
             collect_tokens(T, Props);
@@ -144,9 +144,9 @@ parse_expr_str(ExprStr) ->
 
 parse_expr_str(ExprStr, Assigns) ->
     ExprTree = merl:quote(ExprStr),
-    case is_comment_expr(ExprTree) of
+    case erl_syntax:type(ExprTree) =:= comment of
         true ->
-            {comment, erl_syntax:comment_text(hd(ExprTree))};
+            {comment, erl_syntax:comment_text(ExprTree)};
         false ->
             case merl:template_vars(merl:template(ExprTree)) of
                 [] ->
@@ -162,11 +162,6 @@ parse_expr_str(ExprStr, Assigns) ->
                     expr_struct(Tree, Vars, Assigns)
             end
     end.
-
-is_comment_expr([Form]) ->
-    erl_syntax:type(Form) =:= comment;
-is_comment_expr(_) ->
-    false.
 
 subst_var(Var) ->
   VarStr = atom_to_binary(Var, utf8),
@@ -262,6 +257,7 @@ parse_exprs_test() ->
             is_function(ExprFun4, 1),
     parse_exprs([
         {text,<<"Start">>},
+        {expr,<<"% This is a comment. ">>},
         tag_open,
         {tag_name,<<"main">>},
         {attr_key,<<"id">>},
@@ -273,7 +269,7 @@ parse_exprs_test() ->
         {attr_key,<<"hidden">>},
         tag_close,
         {text,<<"foo">>},
-        {expr,<<"_@bar">>},
+        {expr,<<"% Comments are allowed in expressions.\n        _@bar">>},
         {text,<<"baz">>},
         tag_open,
         {tag_name,<<"br">>},
