@@ -97,13 +97,30 @@ function handleEvent(data) {
 }
 
 function applyPatch([target, changes]) {
-    changes.forEach(([indexes, v]) => {
-        // TODO: Recursion
-        const i = indexes[0]
-        state.tree[i] = v
-    })
-    const html = Object.values(state.tree).join("")
+    changes.forEach(c => { applyChanges(c, state.tree) })
+    const tree = target === "root"
+        ? state.tree
+        : getTargetTree(target, state.tree)
+    const html = tree.flat(Infinity).join("")
     return {target, html}
+}
+
+function applyChanges([indexes, v], tree) {
+    if (indexes.length === 1) {
+        tree[indexes[0]] = v
+    } else {
+        const [i, ...rest] = indexes
+        applyChanges([rest, v], tree[i])
+    }
+}
+
+function getTargetTree(path, tree) {
+    if (path.length === 1) {
+        return tree[path[0]]
+    } else {
+        const [i, ...rest] = path
+        return getTargetTree(rest, tree[i])
+    }
 }
 
 function sendMsgToClient(event, payload) {

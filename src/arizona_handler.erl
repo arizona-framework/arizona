@@ -26,7 +26,7 @@
 -export([init/2]).
 
 %% Example functions.
--export([mount/0, render/1, handle_event/3]).
+-export([mount/0, render/1, counter/1, handle_event/3]).
 
 -include("live_view.hrl").
 
@@ -67,12 +67,22 @@ render(Macros0) ->
         <script src="assets/js/example.js"></script>
     </head>
     <body>
-        <div>Count: {_@count}</div>
-        <button type="button" :onclick="incr">
-            Increment
-        </button>
+        <.arizona_handler:counter
+            count={_@count}
+            btn_text="Increment"
+        />
     </body>
     </html>
+    """).
+
+counter(Macros) ->
+    ?LV(~s"""
+    {% TODO: <div :statefull>...</div> }
+    <div>Count: {_@count}</div>
+    {% TODO: :onclick={_@event} }
+    <button type="button" :onclick="incr">
+        {_@btn_text}
+    </button>
     """).
 
 handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
