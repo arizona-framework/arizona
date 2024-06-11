@@ -91,7 +91,7 @@ handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
     Changes = #{count => Count},
     View = maps:get(view, Socket),
     Tpl = arizona_live_view:persist_get(View, #{}),
-    Patch = [[K, V] || {K, V} <- arizona_tpl_render:render_changes(Tpl, Changes, Assigns)],
+    Patch = arizona_tpl_render:render_changes(Tpl, Changes, Assigns),
     Events = [[~"patch", [~"root", Patch]]],
     {Events, Socket#{
         assigns => Assigns#{count => Count}

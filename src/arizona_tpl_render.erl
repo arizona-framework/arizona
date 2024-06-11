@@ -34,15 +34,12 @@ render_block(#{indexes := Indexes, block := Block}, Assigns) ->
     render_indexes(Indexes, Block, Assigns).
 
 % TODO: Return the diff with the render result.
-render_changes(#{vars := Vars, block := Block}, NewAssigns, OldAssigns) ->
-    case diff(Vars, NewAssigns, OldAssigns) of
+render_changes(#{vars := AllVars, block := Block}, NewAssigns, OldAssigns) ->
+    case diff(AllVars, NewAssigns, OldAssigns) of
         Changes when map_size(Changes) > 0 ->
+            Vars = maps:with(maps:keys(Changes), AllVars),
             Assigns = maps:merge(OldAssigns, Changes),
-            % TODO: Change code to not do lists:flatten to
-            %       add the possibility to return lists
-            %       instead of tuples.
-            lists:flatten([path_render(FullPath, Block, Assigns)
-                || K := FullPath <- Vars, is_map_key(K, Changes)]);
+            path_render(Vars, Block, Assigns);
         #{} ->
             []
     end;
@@ -91,25 +88,31 @@ safe_html(V) when is_integer(V) ->
 safe_html(V) when is_float(V) ->
     io_lib:format("~p", [V]).
 
-path_render([Path | T], Block, Assigns) ->
-    case do_path_render(Path, Block, Assigns) of
-        ok ->
-            path_render(T, Block, Assigns);
-        Value ->
-            [{Path, safe_html(Value)} | path_render(T, Block, Assigns)]
-    end;
-path_render([], _Block, _Assigns) ->
-    [].
+path_render(Vars, Block, Assigns) ->
+    maps:fold(fun(_Var, Path, Acc) ->
+        path_render_1(Path, Block, Assigns, Acc)
+    end, [], Vars).
 
-do_path_render([Index], Block, Assigns) ->
+path_render_1([Path | T], Block, Assigns, Acc) ->
+    case path_render_2(Path, Block, Assigns) of
+        % Ignores 'ok' in favor of io:format for debugging.
+        ok ->
+            path_render_1(T, Block, Assigns, Acc);
+        Value ->
+            path_render_1(T, Block, Assigns, [[Path, safe_html(Value)] | Acc])
+    end;
+path_render_1([], _Block, _Assigns, Acc) ->
+    Acc.
+
+path_render_2([Index], Block, Assigns) ->
     #{expr := Expr} = maps:get(Index, Block),
     Expr(Assigns);
-do_path_render([Index | T], Block, Assigns) ->
+path_render_2([Index | T], Block, Assigns) ->
     #{block := NestedBlock, attrs := Attrs} = maps:get(Index, Block),
     NestedAssigns = maps:map(fun(_K, Expr) ->
         eval(Expr, Assigns)
     end, Attrs),
-    do_path_render(T, NestedBlock, NestedAssigns).
+    path_render_2(T, NestedBlock, NestedAssigns).
 
 eval({text, Txt}, _Assigns) ->
     Txt;
