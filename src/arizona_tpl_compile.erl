@@ -39,46 +39,87 @@ compile({Mod, Fun, Args}) when is_atom(Mod), is_atom(Fun) ->
         module => Mod,
         function => Fun,
         args => Args,
-        directives => #{statefull => true}}}], [], 0),
+        directives => #{statefull => true}}}], [], 0, root),
     {ok, Block};
 compile([{tag, Tag}]) ->
-    [{0, Block}] = compile([{tag, Tag}], [], 0),
+    [{0, Block}] = compile([{tag, Tag}], [], 0, root),
     {ok, Block}.
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
-compile([{text, Txt} | T], P, I) ->
-    [{I, text_struct(Txt, P, I)} | compile(T, P, I+1)];
-compile([{expr, {Expr, Vars}} | T], P, I) ->
-    [{I, expr_struct(Expr, Vars, P, I)} | compile(T, P, I+1)];
-compile([{tag, Tag} | T], P, I) ->
-    compile_tag(Tag, <<>>, T, P, I);
-compile([{block, Block} | T], P, I) ->
-    [{I, block_struct(Block, P, I)} | compile(T, P, I+1)];
-compile([], _P, _I) ->
+compile([{text, Txt} | T], P, I, Me) ->
+    [{I, text_struct(Txt, P, I)} | compile(T, P, I+1, Me)];
+compile([{expr, {Expr, Vars}} | T], P, I, Me) ->
+    [{I, expr_struct(Expr, Vars, P, I)} | compile(T, P, I+1, Me)];
+compile([{tag, Tag} | T], P, I, Me) ->
+    compile_tag(Tag, T, P, I, Me);
+compile([{block, Block} | T], P, I, Me) ->
+    [{I, block_struct(Block, P, I, Me)} | compile(T, P, I+1, Me)];
+compile([], _P, _I, _Me) ->
     [].
 
-compile_tag(#{name := Name, attrs := Attrs} = Tag, Txt, T, P, I) ->
-    do_compile_tag(Attrs, Tag, T, P, I, [Name, $<, Txt]).
+compile_tag(#{name := Name} = Tag, T, P, I, Me) ->
+    Attrs = norm_tag_attrs(Tag, P, Me),
+    do_compile_tag(Attrs, Tag#{attrs => Attrs}, T, P, I, Me, [Name, $<]).
 
-do_compile_tag([{K, {expr, {Expr, Vars}}} | T], Tag, TT, P, I, Acc) ->
+norm_tag_attrs(#{attrs := Attrs0, directives := Dirs}, Id, Target) ->
+    maps:fold(fun
+        (statefull, true, Attrs) ->
+            [{<<"arz-id">>, {text, arz_id(Id)}} | Attrs];
+        (K, V, Attrs) ->
+            case atom_to_binary(K, utf8) of
+                <<"on", _/binary>> = Action ->
+                    ActionAttr = case V of
+                        {text, Event} ->
+                            {Action, {text,
+                                <<"console.log(this, '", Event/binary, "')">>}};
+                        Expr ->
+                            {Action, Expr}
+                    end,
+                    case is_map_key(target, Dirs) of
+                        true ->
+                            [ActionAttr | Attrs];
+                        false ->
+                            [{<<"arz-target">>, {text, arz_id(Target)}},
+                                ActionAttr | Attrs]
+                    end;
+                _ ->
+                    Attrs
+            end
+    end, Attrs0, Dirs).
+
+arz_id([_]) ->
+    <<"root">>;
+arz_id(root) ->
+    <<"root">>;
+arz_id(P) ->
+    [_|Id] = lists:reverse(P),
+    iolist_to_binary(json:encode(Id)).
+
+do_compile_tag([{K, {expr, {Expr, Vars}}} | T], Tag, TT, P, I, Me, Acc) ->
     [{I, #{
         id => id(P, I),
         text => iolist_to_binary(lists:reverse([$", $=, K, $\s | Acc]))
     }}, {I+1, expr_struct(Expr, Vars, P, I+1)}
-    | do_compile_tag(T, Tag, TT, P, I+2, [$"])];
-do_compile_tag([{K, {text, Txt}} | T], Tag, TT, P, I, Acc) ->
-    do_compile_tag(T, Tag, TT, P, I, [$", Txt, $", $=, K, $\s | Acc]);
-do_compile_tag([K | T], Tag, TT, P, I, Acc) ->
-    do_compile_tag(T, Tag, TT, P, I, [K, $\s | Acc]);
+    | do_compile_tag(T, Tag, TT, P, I+2, Me, [$"])];
+do_compile_tag([{K, {text, Txt}} | T], Tag, TT, P, I, Me, Acc) ->
+    do_compile_tag(T, Tag, TT, P, I, Me, [$", Txt, $", $=, K, $\s | Acc]);
+do_compile_tag([K | T], Tag, TT, P, I, Me, Acc) ->
+    do_compile_tag(T, Tag, TT, P, I, Me, [K, $\s | Acc]);
 % NOTE: It's possible to concat texts here.
-do_compile_tag([], Tag, TT, P, I, Acc) ->
+do_compile_tag([], Tag, TT, P, I, Me, Acc) ->
+    TMe = case Tag of
+        #{directives := #{statefull := true}} ->
+            id(P, I);
+        #{} ->
+            Me
+    end,
     Tokens = [{I, tag_open_struct(Tag, Acc, P, I)}
-                | compile(maps:get(tokens, Tag) , P, I+1)],
+                | compile(maps:get(tokens, Tag) , P, I+1, TMe)],
     {NI, _} = lists:last(Tokens),
-    Tokens ++ compile([{text, tag_closing(Tag)} | TT], P, NI+1).
+    Tokens ++ compile([{text, tag_closing(Tag)} | TT], P, NI+1, Me).
 
 tag_closing(#{name := Name}) ->
     <<$<, $/, Name/binary, $>>>.
@@ -113,25 +154,34 @@ tag_open_struct(#{void := false} = _Tag, Acc, P, I) ->
         text => iolist_to_binary(lists:reverse([$> | Acc]))
     }.
 
-block_struct(Block, P, I) ->
-    Tokens = block_tokens(Block, P, I),
-    TokensMap = maps:from_list(Tokens),
+block_struct(Block, P, I, Me) ->
     Attrs = block_attrs(Block),
+    Directives = maps:get(directives, Block, #{}),
+    NonAttrs = [statefull, 'if', 'for'],
+    AllAttrs = maps:merge(Attrs, maps:without(NonAttrs, Directives)),
+    Id = id(P, I),
+    Tokens = case maps:get(statefull, Directives, false) of
+        true ->
+            block_tokens(Block, P, I, Id);
+        false ->
+            block_tokens(Block, P, I, Me)
+    end,
+    TokensMap = maps:from_list(Tokens),
     #{
-        id => id(P, I),
+        id => Id,
         block => TokensMap,
         indexes => lists:usort(maps:keys(TokensMap)),
-        directives => maps:get(directives, Block, #{}),
-        attrs => Attrs,
+        directives => Directives,
+        attrs => AllAttrs,
         vars => case P =:= [] of
                     true -> root_vars(Tokens);
-                    false -> block_vars(Tokens, Attrs)
+                    false -> block_vars(Tokens, AllAttrs)
                 end
     }.
 
 % TODO: Remove vars prop from expr. They will live in the block props.
-block_tokens(#{module := M, function := F} = Block, P, I) ->
-    compile(M:F(maps:get(args, Block, #{})), [I | P], 0).
+block_tokens(#{module := M, function := F} = Block, P, I, Me) ->
+    compile(M:F(maps:get(args, Block, #{})), [I | P], 0, Me).
 
 % TODO: Use binary_to_existing_atom.
 block_attrs(#{attrs := Attrs}) ->
@@ -220,7 +270,7 @@ tokens_vars_8([], _Var, Vars, T) ->
 compile_tree_test() ->
     ?assertMatch({ok,
         #{block :=
-         #{0 := #{id := [0],text := <<"<main>">>},
+         #{0 := #{id := [0],text := <<"<main arz-id=\"root\">">>},
            1 := #{id := [1],text := <<"<h1>">>},
            2 :=
             #{id := [2],
@@ -229,7 +279,9 @@ compile_tree_test() ->
            3 := #{id := [3],text := <<"</h1>">>},
            4 :=
             #{block :=
-               #{0 := #{id := [4,0],text := <<"<div id=\"">>},
+               #{0 :=
+                  #{id := [4,0],
+                    text := <<"<div arz-id=\"[4]\" id=\"">>},
                  1 :=
                   #{id := [4,1],
                     expr := _,
@@ -253,38 +305,55 @@ compile_tree_test() ->
                   #{block :=
                      #{0 :=
                         #{id := [4,11,0],
-                          text := <<"<button type=\"button\">">>},
+                          text :=
+                           <<"<button arz-target=\"[4]\" onclick=\"">>},
                        1 :=
                         #{id := [4,11,1],
                           expr := _,
-                          vars := [text]},
+                          vars := [event]},
                        2 :=
-                        #{id := [4,11,2],text := <<"</button>">>}},
+                        #{id := [4,11,2],
+                          text := <<"\" type=\"button\">">>},
+                       3 :=
+                        #{id := [4,11,3],
+                          expr := _,
+                          vars := [text]},
+                       4 :=
+                        #{id := [4,11,4],text := <<"</button>">>}},
                     id := [4,11],
+                    directives := #{},
                     attrs :=
                      #{text :=
                         {expr,
-                         {_,[btn_text]}}},
-                    vars := #{btn_text := [[4,11,1]]},
-                    directives := #{},
-                    indexes := [0,1,2]},
+                         {_,[btn_text]}},
+                       event :=
+                        {expr,
+                         {_,
+                          [btn_event]}}},
+                    vars :=
+                     #{btn_text := [[4,11,3]],
+                       btn_event := [[4,11,1]]},
+                    indexes := [0,1,2,3,4]},
                  12 :=
                   #{id := [4,12],
                     expr := _,
                     vars := [content]},
                  13 := #{id := [4,13],text := <<"</div>">>}},
               id := [4],
+              directives := #{},
               attrs :=
                #{id := {text,<<"1">>},
                  counter_count :=
                   {expr,{_,[view_count]}},
-                 btn_text := {text,<<"Increment">>}},
+                 btn_text := {text,<<"Increment">>},
+                 btn_event := {text,<<"incr">>}},
               vars := #{view_count := [[4,6]]},
-              directives := #{},
               indexes := [0,1,2,3,4,5,6,7,8,9,10,11,12,13]},
            5 :=
             #{block :=
-               #{0 := #{id := [5,0],text := <<"<div id=\"">>},
+               #{0 :=
+                  #{id := [5,0],
+                    text := <<"<div arz-id=\"[5]\" id=\"">>},
                  1 :=
                   #{id := [5,1],
                     expr := _,
@@ -308,27 +377,42 @@ compile_tree_test() ->
                   #{block :=
                      #{0 :=
                         #{id := [5,11,0],
-                          text := <<"<button type=\"button\">">>},
+                          text :=
+                           <<"<button arz-target=\"[5]\" onclick=\"">>},
                        1 :=
                         #{id := [5,11,1],
                           expr := _,
-                          vars := [text]},
+                          vars := [event]},
                        2 :=
-                        #{id := [5,11,2],text := <<"</button>">>}},
+                        #{id := [5,11,2],
+                          text := <<"\" type=\"button\">">>},
+                       3 :=
+                        #{id := [5,11,3],
+                          expr := _,
+                          vars := [text]},
+                       4 :=
+                        #{id := [5,11,4],text := <<"</button>">>}},
                     id := [5,11],
+                    directives := #{},
                     attrs :=
                      #{text :=
                         {expr,
-                         {_,[btn_text]}}},
-                    vars := #{btn_text := [[5,11,1]]},
-                    directives := #{},
-                    indexes := [0,1,2]},
+                         {_,[btn_text]}},
+                       event :=
+                        {expr,
+                         {_,
+                          [btn_event]}}},
+                    vars :=
+                     #{btn_text := [[5,11,3]],
+                       btn_event := [[5,11,1]]},
+                    indexes := [0,1,2,3,4]},
                  12 :=
                   #{id := [5,12],
                     expr := _,
                     vars := [content]},
                  13 := #{id := [5,13],text := <<"</div>">>}},
               id := [5],
+              directives := #{},
               attrs :=
                #{id := {text,<<"2">>},
                  label := {text,<<"Rev. Counter:">>},
@@ -336,19 +420,20 @@ compile_tree_test() ->
                   {expr,{_,[view_count]}},
                  btn_text :=
                   {expr,
-                   {_,[decr_btn_text]}}},
+                   {_,[decr_btn_text]}},
+                 btn_event := {text,<<"decr">>}},
               vars :=
                #{view_count := [[5,6]],
-                 decr_btn_text := [[5,11,1]]},
-              directives := #{},
+                 decr_btn_text := [[5,11,3]]},
               indexes := [0,1,2,3,4,5,6,7,8,9,10,11,12,13]},
            6 := #{id := [6],text := <<"</main>">>}},
-        id := root,attrs := #{},
+        id := root,
+        directives := #{statefull := true},
+        attrs := #{},
         vars :=
          #{title := [[2]],
            view_count := [[4,6],[5,6]],
-           decr_btn_text := [[5,11,1]]},
-        directives := #{},
+           decr_btn_text := [[5,11,3]]},
         indexes := [0,1,2,3,4,5,6]}
     }, compile({?MODULE, view, #{}})).
 
@@ -361,12 +446,14 @@ view(Macros) ->
         <.arizona_tpl_compile:counter
             id="1"
             counter_count={_@view_count}
+            btn_event="incr"
             btn_text="Increment"
         />
         <.arizona_tpl_compile:counter
             id="2"
             label="Rev. Counter:"
             counter_count={_@view_count}
+            btn_event="decr"
             btn_text={_@decr_btn_text}
         />
     </main>
@@ -393,7 +480,10 @@ counter(Macros) ->
 
         <br/>
 
-        <.arizona_tpl_compile:button text={_@btn_text}/>
+        <.arizona_tpl_compile:button
+            event={_@btn_event}
+            text={_@btn_text}
+        />
 
         {% NOTE: The 'content' var is a private one.            }
         {%       It's filled with tokens when is not a void tag }
@@ -410,7 +500,9 @@ counter(Macros) ->
 
 button(Macros) ->
     {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
-    <button type="button">{_@text}</button>
+    <button type="button" :onclick={_@event}>
+        {_@text}
+    </button>
     """),
     {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
     Tree.

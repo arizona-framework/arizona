@@ -122,21 +122,22 @@ eval({expr, {Fun, _Vars}}, Assigns) ->
 -include_lib("eunit/include/eunit.hrl").
 
 render_block_test() ->
-    ?assertEqual([
-        <<"<main>">>,<<"<h1>">>,<<"Arizona">>,<<"</h1>">>,
-        [<<"<div id=\"">>,<<"1">>,<<"\">">>,<<"<span>">>,
-         <<"Count:">>,<<"<b>">>,<<"0">>,<<"</b>">>,<<"</span>">>,
-         <<"<br/>">>,<<"</br>">>,
-         [<<"<button type=\"button\">">>,<<"Increment">>,
-          <<"</button>">>],
-         <<>>,<<"</div>">>],
-        [<<"<div id=\"">>,<<"2">>,<<"\">">>,<<"<span>">>,
-         <<"Rev. Counter:">>,<<"<b>">>,<<"0">>,<<"</b>">>,<<"</span>">>,
-         <<"<br/>">>,<<"</br>">>,
-         [<<"<button type=\"button\">">>,<<"Decrement">>,
-          <<"</button>">>],
-         <<>>,<<"</div>">>],
-        <<"</main>">>
+    ?assertEqual(
+       [<<"<main arz-id=\"root\">">>,<<"<h1>">>,<<"Arizona">>,
+       <<"</h1>">>,
+       [<<"<div arz-id=\"[4]\" id=\"">>,<<"1">>,<<"\">">>,
+        <<"<span>">>,<<"Count:">>,<<"<b>">>,<<"0">>,<<"</b>">>,
+        <<"</span>">>,<<"<br/>">>,<<"</br>">>,
+        [<<"<button arz-target=\"[4]\" onclick=\"">>,<<"incr">>,
+         <<"\" type=\"button\">">>,<<"Increment">>,<<"</button>">>],
+        <<>>,<<"</div>">>],
+       [<<"<div arz-id=\"[5]\" id=\"">>,<<"2">>,<<"\">">>,
+        <<"<span>">>,<<"Rev. Counter:">>,<<"<b>">>,<<"0">>,
+        <<"</b>">>,<<"</span>">>,<<"<br/>">>,<<"</br>">>,
+        [<<"<button arz-target=\"[5]\" onclick=\"">>,<<"decr">>,
+         <<"\" type=\"button\">">>,<<"Decrement">>,<<"</button>">>],
+        <<>>,<<"</div>">>],
+       <<"</main>">>
     ], render_block(block(#{}), #{
             title => <<"Arizona">>,
             view_count => 0,
