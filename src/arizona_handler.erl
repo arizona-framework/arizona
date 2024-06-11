@@ -26,7 +26,7 @@
 -export([init/2]).
 
 %% Example functions.
--export([render/1]).
+-export([mount/0, render/1, handle_event/3]).
 
 -include("live_view.hrl").
 
@@ -35,11 +35,11 @@
 %% --------------------------------------------------------------------
 
 init(Req0, State) ->
-    Macros = #{title => <<"Arizona">>},
-    {ok, Tpl} = arizona_live_view:compile(?MODULE, Macros),
-    Assigns = #{count => 0},
+    View = ?MODULE,
+    Tpl = arizona_live_view:persist_get(View, #{}),
+    {ok, Assigns} = View:mount(),
     Html = arizona_tpl_render:render_block(Tpl, Assigns),
-    Headers = #{<<"content-type">> => <<"text/html">>},
+    Headers = #{~"content-type" => ~"text/html"},
     Req = cowboy_req:reply(200, Headers, Html, Req0),
     {ok, Req, State}.
 
@@ -47,8 +47,14 @@ init(Req0, State) ->
 %% Example functions.
 %% --------------------------------------------------------------------
 
-render(Macros) ->
-    ?LV(~s"""
+mount() ->
+    {ok, #{count => 0}}.
+
+render(Macros0) ->
+    Macros = Macros0#{
+        title => maps:get(title, Macros0, ~"Arizona")
+    },
+    ?LV(~"""
     {% TODO: Handle <!DOCTYPE html> in the parser. }
     <html lang="en">
     <head>
@@ -56,7 +62,9 @@ render(Macros) ->
         <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
         <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
         <title>{_@title}</title>
+        <script src="assets/js/morphdom.min.js"></script>
         <script src="assets/js/arizona.js"></script>
+        <script src="assets/js/example.js"></script>
     </head>
     <body>
         <div>Count: {_@count}</div>
@@ -66,4 +74,16 @@ render(Macros) ->
     </body>
     </html>
     """).
+
+handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
+    io:format("[LV] incr: ~p~n", [Socket]),
+    Count = maps:get(count, Assigns) + 1,
+    Changes = #{count => Count},
+    View = maps:get(view, Socket),
+    Tpl = arizona_live_view:persist_get(View, #{}),
+    Patch = [[K, V] || {K, V} <- arizona_tpl_render:render_changes(Tpl, Changes, Assigns)],
+    Events = [[~"patch", [~"root", Patch]]],
+    {Events, Socket#{
+        assigns => Assigns#{count => Count}
+    }}.
 

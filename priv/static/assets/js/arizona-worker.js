@@ -5,18 +5,19 @@ const state = {
     params: {},
     socket: null,
     eventQueue: [],
+    tree: []
 }
 
 // Messages from client.
 self.onmessage = function(e) {
     console.log("[WebWorker] client sent:", e.data)
 
-    if (typeof e.data !== "object" || !e.data.event) {
+    if (typeof e.data !== "object" || !e.data.target || !e.data.event) {
         console.error("Invalid Arizona WebWorker message", e)
         return
     }
 
-    const {event, payload} = e.data
+    const {target, event, payload} = e.data
     switch(event) {
         case "connect":
             connect(payload)
@@ -25,7 +26,7 @@ self.onmessage = function(e) {
             disconnect()
             break
         default:
-            sendMsgToServer([event, payload])
+            sendMsgToServer([target, event, payload])
     }
 }
 
@@ -57,6 +58,10 @@ function connect(params) {
         // Messages from server.
         socket.onmessage = function (e) {
             console.log("[WebSocket] msg:", e.data)
+            const data = JSON.parse(e.data)
+            Array.isArray(data)
+                ? data.forEach(handleEvent)
+                : handleEvent(data)
         }
     })
 }
@@ -75,23 +80,49 @@ function reconnect() {
     connect(params)
 }
 
+function handleEvent(data) {
+    const event = data[0]
+    const payload = data[1]
+    switch(event) {
+        case "init":
+            state.tree = payload
+            break
+        case "patch":
+            sendMsgToClient("patch", applyPatch(payload))
+            break
+        default:
+            sendMsgToClient(event, payload)
+            break
+    }
+}
+
+function applyPatch([target, changes]) {
+    changes.forEach(([indexes, v]) => {
+        // TODO: Recursion
+        const i = indexes[0]
+        state.tree[i] = v
+    })
+    const html = Object.values(state.tree).join("")
+    return {target, html}
+}
+
 function sendMsgToClient(event, payload) {
     self.postMessage({event, payload})
 }
 
-function sendMsgToServer([event, payload]) {
+function sendMsgToServer([target, event, payload]) {
     if (!state.socket) {
-        state.eventQueue.push([event, payload])
+        state.eventQueue.push([target, event, payload])
         state.fulfilled
             ? console.warn("[WebSocket] not ready to send messages")
             : reconnect()
     } else if (isSocketOpen()) {
         state.socket.send(payload
-            ? JSON.stringify([event, payload], state)
-            : JSON.stringify(event)
+            ? JSON.stringify([target, event, payload], state)
+            : JSON.stringify([target, event])
         )
     } else {
-        state.fulfilled && state.eventQueue.push([event, payload])
+        state.fulfilled && state.eventQueue.push([target, event, payload])
         isSocketClosed() && reconnect()
 	}
 }

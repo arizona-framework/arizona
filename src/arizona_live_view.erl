@@ -24,7 +24,7 @@ Live view.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([parse_str/2, compile/2]).
+-export([parse_str/2, compile/2, persist_get/2]).
 
 %% --------------------------------------------------------------------
 %% API funtions.
@@ -41,11 +41,17 @@ parse_str(Str, Macros) ->
 compile(Mod, Macros) ->
     arizona_tpl_compile:compile({Mod, render, Macros}).
 
+persist_get(View, Macros) ->
+    persistent_term:get({arz_tpl, View}, persist(View, Macros)).
+
 %% --------------------------------------------------------------------
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
-% nothing here yet!
+persist(View, Macros) ->
+    {ok, Compiled} = arizona_live_view:compile(View, Macros),
+    persistent_term:put({arz_tpl, View}, Compiled),
+    Compiled.
 
 %% --------------------------------------------------------------------
 %% EUnit tests.

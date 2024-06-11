@@ -38,6 +38,9 @@ render_changes(#{vars := Vars, block := Block}, NewAssigns, OldAssigns) ->
     case diff(Vars, NewAssigns, OldAssigns) of
         Changes when map_size(Changes) > 0 ->
             Assigns = maps:merge(OldAssigns, Changes),
+            % TODO: Change code to not do lists:flatten to
+            %       add the possibility to return lists
+            %       instead of tuples.
             lists:flatten([path_render(FullPath, Block, Assigns)
                 || K := FullPath <- Vars, is_map_key(K, Changes)]);
         #{} ->
@@ -93,7 +96,7 @@ path_render([Path | T], Block, Assigns) ->
         ok ->
             path_render(T, Block, Assigns);
         Value ->
-            [{Path, Value} | path_render(T, Block, Assigns)]
+            [{Path, safe_html(Value)} | path_render(T, Block, Assigns)]
     end;
 path_render([], _Block, _Assigns) ->
     [].

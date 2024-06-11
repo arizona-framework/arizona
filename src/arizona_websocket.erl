@@ -35,17 +35,46 @@ init(Req, State) ->
 
 websocket_init(State) ->
     io:format("[WebSocket] init: ~p~n", [State]),
-    {[], State}.
+    View = arizona_handler,
+    Tpl = persistent_term:get({arz_tpl, View}),
+    {ok, Assigns} = View:mount(),
+    Html = arizona_tpl_render:render_block(Tpl, Assigns),
+    Events = [[~"init", Html]],
+    Socket = #{
+        view => View,
+        assigns => Assigns
+    },
+    {[{text, json:encode(Events)}], Socket}.
 
-websocket_handle({text, Msg}, State) ->
+websocket_handle({text, Msg}, Socket0) ->
     io:format("[WebSocket] handle: ~p~n", [Msg]),
-    {[], State}.
+    {_Target, Event, Payload} = decode_msg(Msg),
+    {Events, Socket} = arizona_handler:handle_event(Event, Payload, Socket0),
+    {[{text, json:encode(Events)}], Socket}.
 
-websocket_info(Info, State) ->
+websocket_info(Info, Socket) ->
     io:format("[WebSocket] info: ~p~n", [Info]),
-    {[], State}.
+    {[], Socket}.
 
 terminate(Reason, Req, _State) ->
     io:format("[WebSocket] terminate: ~p~n", [{Reason, Req}]),
     ok.
+
+%% --------------------------------------------------------------------
+%% API functions.
+%% --------------------------------------------------------------------
+
+% nothing here yet!
+
+%% --------------------------------------------------------------------
+%% Internal functions.
+%% --------------------------------------------------------------------
+
+decode_msg(Msg) ->
+    case json:decode(Msg) of
+        [Target, Event, Payload] ->
+            {Target, Event, Payload};
+        [Target, Event] ->
+            {Target, Event, #{}}
+    end.
 

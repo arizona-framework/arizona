@@ -74,7 +74,7 @@ norm_tag_attrs(#{attrs := Attrs0, directives := Dirs}, Id, Target) ->
                     ActionAttr = case V of
                         {text, Event} ->
                             {Action, {text,
-                                <<"console.log(this, '", Event/binary, "')">>}};
+                                <<"arizona.send.bind(this)('", Event/binary, "')">>}};
                         Expr ->
                             {Action, Expr}
                     end,
