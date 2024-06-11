@@ -26,6 +26,9 @@
 -export([init/2, websocket_init/1, websocket_handle/2,
          websocket_info/2, terminate/3]).
 
+%% API functions.
+-export([push_event/3, push_change/3]).
+
 %% --------------------------------------------------------------------
 %% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
@@ -35,22 +38,41 @@ init(Req, State) ->
 
 websocket_init(State) ->
     io:format("[WebSocket] init: ~p~n", [State]),
+    % TODO: Get view from router.
     View = arizona_handler,
-    Tpl = persistent_term:get({arz_tpl, View}),
+    Tpl = arizona_live_view:persist_get(View, #{}),
+    % TODO: Return socket.
     {ok, Assigns} = View:mount(),
     Html = arizona_tpl_render:render_block(Tpl, Assigns),
     Events = [[~"init", Html]],
     Socket = #{
         view => View,
-        assigns => Assigns
+        assigns => Assigns,
+        events => [],
+        changes => #{}
     },
     {[{text, json:encode(Events)}], Socket}.
 
 websocket_handle({text, Msg}, Socket0) ->
     io:format("[WebSocket] handle: ~p~n", [Msg]),
+    % TODO: Get target socket.
     {_Target, Event, Payload} = decode_msg(Msg),
-    {Events, Socket} = arizona_handler:handle_event(Event, Payload, Socket0),
-    {[{text, json:encode(Events)}], Socket}.
+    % TODO: {reply, Msg, Socket}
+    {noreply, Socket1} =
+        arizona_handler:handle_event(Event, Payload, Socket0),
+    Socket = case maps:get(changes, Socket1) of
+        Changes when map_size(Changes) > 0 ->
+            View = maps:get(view, Socket1),
+            Tpl = arizona_live_view:persist_get(View, #{}),
+            Assigns = maps:get(assigns, Socket1),
+            Patch = arizona_tpl_render:render_changes(Tpl, Changes, Assigns),
+            push_event(~"patch", [~"root", Patch],
+                Socket1#{assigns => maps:merge(Assigns, Changes)});
+        #{} ->
+            Socket1
+    end,
+    {[{text, json:encode(maps:get(events, Socket))}],
+        prune(Socket)}.
 
 websocket_info(Info, Socket) ->
     io:format("[WebSocket] info: ~p~n", [Info]),
@@ -64,7 +86,11 @@ terminate(Reason, Req, _State) ->
 %% API functions.
 %% --------------------------------------------------------------------
 
-% nothing here yet!
+push_event(Name, Payload, #{events := Events} = Socket) ->
+    Socket#{events => [[Name, Payload] | Events]}.
+
+push_change(Key, Value, #{changes := Changes} = Socket) ->
+    Socket#{changes => Changes#{Key => Value}}.
 
 %% --------------------------------------------------------------------
 %% Internal functions.
@@ -77,4 +103,10 @@ decode_msg(Msg) ->
         [Target, Event] ->
             {Target, Event, #{}}
     end.
+
+prune(Socket) ->
+    Socket#{
+        events => [],
+        changes => #{}
+    }.
 

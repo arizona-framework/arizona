@@ -86,14 +86,6 @@ counter(Macros) ->
     """).
 
 handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
-    io:format("[LV] incr: ~p~n", [Socket]),
     Count = maps:get(count, Assigns) + 1,
-    Changes = #{count => Count},
-    View = maps:get(view, Socket),
-    Tpl = arizona_live_view:persist_get(View, #{}),
-    Patch = arizona_tpl_render:render_changes(Tpl, Changes, Assigns),
-    Events = [[~"patch", [~"root", Patch]]],
-    {Events, Socket#{
-        assigns => Assigns#{count => Count}
-    }}.
+    {noreply, arizona_websocket:push_change(count, Count, Socket)}.
 
