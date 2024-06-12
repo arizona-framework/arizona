@@ -13,8 +13,7 @@ globalThis["arizona"] = (() => {
                 const {target, html} = payload
                 const elem = target === "root"
                     ? document.documentElement
-                    // TODO: get element
-                    : document.documentElement
+                    : document.querySelector(`[arz-id="${JSON.stringify(target)}"]`)
                 applyPatch(elem, html)
                 break
         }

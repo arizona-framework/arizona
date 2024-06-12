@@ -63,9 +63,8 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
         Changes when map_size(Changes) > 0 ->
             Tpl = maps:get(template, State),
             Assigns = maps:get(assigns, Socket1),
-            Patch = arizona_tpl_render:render_changes(Tpl, Changes, Assigns),
-            % TODO: Check how to patch the target and not the root.
-            push_event(~"patch", [~"root", Patch], Socket1);
+            Patch = arizona_tpl_render:render_target(Target, Tpl, Changes, Assigns),
+            push_event(~"patch", [Target, Patch], Socket1);
         #{} ->
             Socket1
     end,

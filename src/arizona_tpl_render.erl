@@ -24,11 +24,29 @@ Renderer.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([render_block/2, render_changes/3, render_diff/3, mount/2]).
+-export([render_target/4, render_block/2, render_changes/3,
+         render_diff/3, mount/2]).
 
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
+
+% TODO: Rename to target_changes.
+render_target(Target, Block, Changes, Assigns) when map_size(Changes) > 0 ->
+    render_target_1(Target, Block, Changes, Assigns);
+render_target(_Target, _Block, _Changes, _Assigns) ->
+    [].
+
+render_target_1(root, Block, Changes, Assigns) ->
+    render_changes(Block, Changes, Assigns);
+render_target_1(Id, Block, Changes, Assigns) ->
+    render_target_2(Id, Block, Changes, Assigns).
+
+render_target_2([H], #{block := Block}, Changes, Assigns) ->
+    render_changes(maps:get(H, Block), Changes, Assigns);
+render_target_2([H|T], Block, Changes, Assigns) ->
+    #{block := Nested} = maps:get(H, Block),
+    render_target_2(T, Nested, Changes, Assigns).
 
 render_block(#{id := Id, view := View} = Block, Assigns0) ->
     % TODO: Real socket.

@@ -193,7 +193,7 @@ block_struct(#{module := M, function := F} = Block, P, I, State) ->
         attrs => AllAttrs,
         vars => case P =:= [] of
                     true -> root_vars(Tokens);
-                    false -> block_vars(Tokens, AllAttrs)
+                    false -> block_vars(Id, Tokens, AllAttrs)
                 end
     }.
 
@@ -204,8 +204,13 @@ block_attrs(#{attrs := Attrs}) ->
 root_vars(Tokens) ->
     tokens_vars(Tokens, false).
 
-block_vars(Tokens, Attrs) ->
-    tokens_vars(Tokens, {true, Attrs}).
+block_vars(Id, Tokens, Attrs) ->
+    Vars = tokens_vars(Tokens, {true, Attrs}),
+    maps:map(fun(_Var, PathList) ->
+        lists:map(fun(Path) ->
+            Path -- Id
+        end, PathList)
+    end, Vars).
 
 tokens_vars(Tokens, Attrs) ->
     maps:groups_from_list(

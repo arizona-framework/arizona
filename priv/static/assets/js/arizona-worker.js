@@ -97,10 +97,10 @@ function handleEvent(data) {
 }
 
 function applyPatch([target, changes]) {
-    changes.forEach(c => { applyChanges(c, state.tree) })
     const tree = target === "root"
         ? state.tree
         : getTargetTree(target, state.tree)
+    changes.forEach(c => { applyChanges(c, tree) })
     const html = tree.flat(Infinity).join("")
     return {target, html}
 }
