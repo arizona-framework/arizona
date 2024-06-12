@@ -24,27 +24,58 @@ Renderer.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([render_block/2, render_changes/3]).
+-export([render_block/2, render_changes/3, render_diff/3, mount/2]).
 
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
-render_block(#{indexes := Indexes, block := Block}, Assigns) ->
-    render_indexes(Indexes, Block, Assigns).
+render_block(#{id := Id, view := View} = Block, Assigns0) ->
+    % TODO: Real socket.
+    Socket0 = #{
+        id => Id,
+        view => View,
+        assigns => Assigns0,
+        events => [],
+        changes => #{}
+    },
+    {ok, Socket} = View:mount(Socket0),
+    Indexes = maps:get(indexes, Block),
+    Tree = maps:get(block, Block),
+    Assigns = maps:get(assigns, Socket),
+    render_indexes(Indexes, Tree, Assigns, false).
 
-% TODO: Return the diff with the render result.
-render_changes(#{vars := AllVars, block := Block}, NewAssigns, OldAssigns) ->
-    case diff(AllVars, NewAssigns, OldAssigns) of
-        Changes when map_size(Changes) > 0 ->
-            Vars = maps:with(maps:keys(Changes), AllVars),
-            Assigns = maps:merge(OldAssigns, Changes),
-            path_render(Vars, Block, Assigns);
-        #{} ->
-            []
-    end;
-render_changes(#{}, _NewAssigns, _OldAssigns) ->
+render_changes(#{vars := AllVars, block := Block}, Changes, Assigns)
+    when map_size(Changes) > 0 ->
+    Vars = maps:with(maps:keys(Changes), AllVars),
+    path_render(Vars, Block, Assigns);
+render_changes(#{}, _Changes, _Assigns) ->
     [].
+
+render_diff(#{vars := AllVars} = Block, NewAssigns, OldAssigns) ->
+    Changes = diff(AllVars, NewAssigns, OldAssigns),
+    Assigns = maps:merge(OldAssigns, Changes),
+    render_changes(Block, Changes, Assigns).
+
+mount(#{id := Id, view := View} = Block, Assigns0) ->
+    % TODO: Real socket.
+    Socket0 = #{
+        id => Id,
+        view => View,
+        assigns => Assigns0,
+        events => [],
+        changes => #{}
+    },
+    {ok, Socket} = View:mount(Socket0),
+    Assigns = maps:get(assigns, Socket),
+    To = self(),
+    Pid = spawn(fun() ->
+        Indexes = maps:get(indexes, Block),
+        Tree = maps:get(block, Block),
+        Render = render_indexes(Indexes, Tree, Assigns, {true, To}),
+        To ! {self(), finished, Render}
+    end),
+    mount_loop(Pid, [{Id, Socket}]).
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
@@ -57,25 +88,59 @@ diff(Vars, NewAssigns, OldAssigns) ->
             orelse maps:get(K, OldAssigns) =/= V
         )}.
 
-render_indexes([H|T], Block, Assigns) ->
+mount_loop(Pid, Sockets) ->
+    receive
+        {Pid, finished, Render} ->
+            {ok, {Render, maps:from_list(Sockets)}};
+        {Pid, mount, Id, Socket} ->
+            mount_loop(Pid, [{Id, Socket} | Sockets])
+    after
+        10_000 ->
+            error(timeout)
+    end.
+
+render_indexes([H|T], Block, Assigns, Notify) ->
     case maps:get(H, Block) of
         #{text := Text} ->
-            [Text | render_indexes(T, Block, Assigns)];
+            [Text | render_indexes(T, Block, Assigns, Notify)];
         #{expr := Expr} ->
             case Expr(Assigns) of
                 ok ->
-                    render_indexes(T, Block, Assigns);
+                    render_indexes(T, Block, Assigns, Notify);
                 Value ->
-                    [safe_html(Value) | render_indexes(T, Block, Assigns)]
+                    [safe_html(Value) | render_indexes(T, Block, Assigns, Notify)]
             end;
-        #{indexes := Indexes, block := NestedBlock, attrs := Attrs} ->
-            NestedAssigns = maps:map(fun(_K, Expr) ->
+        #{indexes := Indexes, block := NBlock, attrs := Attrs} = Nested ->
+            AttrsAssigns = maps:map(fun(_K, Expr) ->
                 eval(Expr, Assigns)
             end, Attrs),
-            [render_indexes(Indexes, NestedBlock, NestedAssigns) |
-                render_indexes(T, Block, Assigns)]
+            NAssigns = case maps:get(directives, Nested) of
+                #{statefull := true} ->
+                    NId = maps:get(id, Nested),
+                    NView = maps:get(view, Nested),
+                    % TODO: Real socket.
+                    NSocket0 = #{
+                        id => NId,
+                        view => NView,
+                        assigns => AttrsAssigns,
+                        events => [],
+                        changes => #{}
+                    },
+                    {ok, NSocket} = NView:mount(NSocket0),
+                    case Notify of
+                        {true, Pid} ->
+                            Pid ! {self(), mount, NId, NSocket};
+                        false ->
+                            ok
+                    end,
+                    maps:get(assigns, NSocket);
+                #{} ->
+                    AttrsAssigns
+            end,
+            [render_indexes(Indexes, NBlock, NAssigns, Notify) |
+                render_indexes(T, Block, Assigns, Notify)]
     end;
-render_indexes([], _Block, _Assigns) ->
+render_indexes([], _Block, _Assigns, _Notify) ->
     [].
 
 % TODO: Do this really safe for HTML.
@@ -150,10 +215,16 @@ render_block_test() ->
             decr_btn_text => <<"Decrement">>})).
 
 render_changes_test() ->
-    ?assertEqual([{[4,6],999},{[5,6],999}],
+    ?assertEqual([[[5,6],<<"999">>],[[4,6],<<"999">>]],
         render_changes(block(#{}),
             #{view_count => 999},
             #{title => <<"Arizona">>,
+            view_count => 0,
+            decr_btn_text => <<"Decrement">>})).
+
+mount_test() ->
+    ?assertEqual(error, mount(block(#{}), #{
+            title => <<"Arizona">>,
             view_count => 0,
             decr_btn_text => <<"Decrement">>})).
 

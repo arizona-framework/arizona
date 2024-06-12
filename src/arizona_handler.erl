@@ -26,7 +26,7 @@
 -export([init/2]).
 
 %% Example functions.
--export([mount/0, render/1, counter/1, handle_event/3]).
+-export([mount/1, render/1, counter/1, handle_event/3]).
 
 -include("live_view.hrl").
 
@@ -34,10 +34,11 @@
 %% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
 
+% TODO: View from rout.
 init(Req0, State) ->
     View = ?MODULE,
     Tpl = arizona_live_view:persist_get(View, #{}),
-    {ok, Assigns} = View:mount(),
+    Assigns = #{},
     Html = arizona_tpl_render:render_block(Tpl, Assigns),
     Headers = #{~"content-type" => ~"text/html"},
     Req = cowboy_req:reply(200, Headers, Html, Req0),
@@ -47,8 +48,8 @@ init(Req0, State) ->
 %% Example functions.
 %% --------------------------------------------------------------------
 
-mount() ->
-    {ok, #{count => 0}}.
+mount(Socket) ->
+    {ok, arizona_websocket:assign(count, 0, Socket)}.
 
 render(Macros0) ->
     Macros = Macros0#{
@@ -69,7 +70,12 @@ render(Macros0) ->
     <body>
         <.arizona_handler:counter
             count={_@count}
-            btn_text="Increment"
+            btn_text="Increment #1"
+        />
+        {% FIXME: count={0} is not working }
+        <.arizona_handler:counter
+            count={_@count}
+            btn_text="Increment #2"
         />
     </body>
     </html>
@@ -77,15 +83,16 @@ render(Macros0) ->
 
 counter(Macros) ->
     ?LV(~s"""
-    {% TODO: <div :statefull>...</div> }
-    <div>Count: {_@count}</div>
-    {% TODO: :onclick={_@event} }
-    <button type="button" :onclick="incr">
-        {_@btn_text}
-    </button>
+    <div :statefull>
+        <div>Count: {_@count}</div>
+        {% TODO: :onclick={_@event} }
+        <button type="button" :onclick="incr">
+            {_@btn_text}
+        </button>
+    </div>
     """).
 
 handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
     Count = maps:get(count, Assigns) + 1,
-    {noreply, arizona_websocket:push_change(count, Count, Socket)}.
+    {noreply, arizona_websocket:assign(count, Count, Socket)}.
 

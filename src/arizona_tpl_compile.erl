@@ -26,6 +26,8 @@ Template compiler.
 %% API functions.
 -export([compile/1]).
 
+-record(state, {view, parent = root}).
+
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
@@ -39,30 +41,32 @@ compile({Mod, Fun, Args}) when is_atom(Mod), is_atom(Fun) ->
         module => Mod,
         function => Fun,
         args => Args,
-        directives => #{statefull => true}}}], [], 0, root),
+        directives => #{statefull => true},
+        attrs => []}}], [], 0, #state{view = Mod}),
     {ok, Block};
+% TODO: Require a module to be the view.
 compile([{tag, Tag}]) ->
-    [{0, Block}] = compile([{tag, Tag}], [], 0, root),
+    [{0, Block}] = compile([{tag, Tag}], [], 0, #state{}),
     {ok, Block}.
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
-compile([{text, Txt} | T], P, I, Me) ->
-    [{I, text_struct(Txt, P, I)} | compile(T, P, I+1, Me)];
-compile([{expr, {Expr, Vars}} | T], P, I, Me) ->
-    [{I, expr_struct(Expr, Vars, P, I)} | compile(T, P, I+1, Me)];
-compile([{tag, Tag} | T], P, I, Me) ->
-    compile_tag(Tag, T, P, I, Me);
-compile([{block, Block} | T], P, I, Me) ->
-    [{I, block_struct(Block, P, I, Me)} | compile(T, P, I+1, Me)];
-compile([], _P, _I, _Me) ->
+compile([{text, Txt} | T], P, I, State) ->
+    [{I, text_struct(Txt, P, I)} | compile(T, P, I+1, State)];
+compile([{expr, {Expr, Vars}} | T], P, I, State) ->
+    [{I, expr_struct(Expr, Vars, P, I)} | compile(T, P, I+1, State)];
+compile([{tag, Tag} | T], P, I, State) ->
+    compile_tag(Tag, T, P, I, State);
+compile([{block, Block} | T], P, I, State) ->
+    [{I, block_struct(Block, P, I, State)} | compile(T, P, I+1, State)];
+compile([], _P, _I, _State) ->
     [].
 
-compile_tag(#{name := Name} = Tag, T, P, I, Me) ->
-    Attrs = norm_tag_attrs(Tag, P, Me),
-    do_compile_tag(Attrs, Tag#{attrs => Attrs}, T, P, I, Me, [Name, $<]).
+compile_tag(#{name := Name} = Tag, T, P, I, State) ->
+    Attrs = norm_tag_attrs(Tag, P, State#state.parent),
+    do_compile_tag(Attrs, Tag#{attrs => Attrs}, T, P, I, State, [Name, $<]).
 
 norm_tag_attrs(#{attrs := Attrs0, directives := Dirs}, Id, Target) ->
     maps:fold(fun
@@ -98,28 +102,28 @@ arz_id(P) ->
     [_|Id] = lists:reverse(P),
     iolist_to_binary(json:encode(Id)).
 
-do_compile_tag([{K, {expr, {Expr, Vars}}} | T], Tag, TT, P, I, Me, Acc) ->
+do_compile_tag([{K, {expr, {Expr, Vars}}} | T], Tag, TT, P, I, State, Acc) ->
     [{I, #{
         id => id(P, I),
         text => iolist_to_binary(lists:reverse([$", $=, K, $\s | Acc]))
     }}, {I+1, expr_struct(Expr, Vars, P, I+1)}
-    | do_compile_tag(T, Tag, TT, P, I+2, Me, [$"])];
-do_compile_tag([{K, {text, Txt}} | T], Tag, TT, P, I, Me, Acc) ->
-    do_compile_tag(T, Tag, TT, P, I, Me, [$", Txt, $", $=, K, $\s | Acc]);
-do_compile_tag([K | T], Tag, TT, P, I, Me, Acc) ->
-    do_compile_tag(T, Tag, TT, P, I, Me, [K, $\s | Acc]);
+    | do_compile_tag(T, Tag, TT, P, I+2, State, [$"])];
+do_compile_tag([{K, {text, Txt}} | T], Tag, TT, P, I, State, Acc) ->
+    do_compile_tag(T, Tag, TT, P, I, State, [$", Txt, $", $=, K, $\s | Acc]);
+do_compile_tag([K | T], Tag, TT, P, I, State, Acc) ->
+    do_compile_tag(T, Tag, TT, P, I, State, [K, $\s | Acc]);
 % NOTE: It's possible to concat texts here.
-do_compile_tag([], Tag, TT, P, I, Me, Acc) ->
-    TMe = case Tag of
+do_compile_tag([], Tag, TT, P, I, State, Acc) ->
+    TState = case Tag of
         #{directives := #{statefull := true}} ->
-            id(P, I);
+            State#state{parent = id(P, I)};
         #{} ->
-            Me
+            State
     end,
     Tokens = [{I, tag_open_struct(Tag, Acc, P, I)}
-                | compile(maps:get(tokens, Tag) , P, I+1, TMe)],
+                | compile(maps:get(tokens, Tag) , P, I+1, TState)],
     {NI, _} = lists:last(Tokens),
-    Tokens ++ compile([{text, tag_closing(Tag)} | TT], P, NI+1, Me).
+    Tokens ++ compile([{text, tag_closing(Tag)} | TT], P, NI+1, State).
 
 tag_closing(#{name := Name}) ->
     <<$<, $/, Name/binary, $>>>.
@@ -154,24 +158,38 @@ tag_open_struct(#{void := false} = _Tag, Acc, P, I) ->
         text => iolist_to_binary(lists:reverse([$> | Acc]))
     }.
 
-block_struct(Block, P, I, Me) ->
+block_struct(#{module := M, function := F} = Block, P, I, State) ->
+    [{tag, Tag}] = M:F(maps:get(args, Block, #{})),
     Attrs = block_attrs(Block),
-    Directives = maps:get(directives, Block, #{}),
+    % TODO: Check this directives merge implementation.
+    Directives = maps:get(directives, Block),
+    AllDirectives = maps:merge(maps:get(directives, Tag), Directives),
     NonAttrs = [statefull, 'if', 'for'],
     AllAttrs = maps:merge(Attrs, maps:without(NonAttrs, Directives)),
     Id = id(P, I),
-    Tokens = case maps:get(statefull, Directives, false) of
+    Statefull = maps:get(statefull, Directives, false),
+    Mod = maps:get(module, Block),
+    % TODO: Remove vars prop from expr tokens.
+    %       They will live in the block props.
+    Tokens = case Statefull of
         true ->
-            block_tokens(Block, P, I, Id);
+            compile([{tag, Tag}], [I | P], 0,
+                State#state{view = Mod, parent = Id});
         false ->
-            block_tokens(Block, P, I, Me)
+            compile([{tag, Tag}], [I | P], 0, State)
     end,
     TokensMap = maps:from_list(Tokens),
     #{
         id => Id,
+        view => case Statefull of
+            true ->
+                Mod;
+            false ->
+                State#state.view
+        end,
         block => TokensMap,
         indexes => lists:usort(maps:keys(TokensMap)),
-        directives => Directives,
+        directives => AllDirectives,
         attrs => AllAttrs,
         vars => case P =:= [] of
                     true -> root_vars(Tokens);
@@ -179,15 +197,9 @@ block_struct(Block, P, I, Me) ->
                 end
     }.
 
-% TODO: Remove vars prop from expr. They will live in the block props.
-block_tokens(#{module := M, function := F} = Block, P, I, Me) ->
-    compile(M:F(maps:get(args, Block, #{})), [I | P], 0, Me).
-
 % TODO: Use binary_to_existing_atom.
 block_attrs(#{attrs := Attrs}) ->
-    #{binary_to_atom(K, utf8) => V || {K, V} <- Attrs};
-block_attrs(#{}) ->
-    #{}.
+    #{binary_to_atom(K, utf8) => V || {K, V} <- Attrs}.
 
 root_vars(Tokens) ->
     tokens_vars(Tokens, false).
@@ -438,6 +450,9 @@ compile_tree_test() ->
     }, compile({?MODULE, view, #{}})).
 
 %% Start compile support.
+
+mount(Socket) ->
+    {ok, Socket}.
 
 view(Macros) ->
     {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""

@@ -27,52 +27,51 @@
          websocket_info/2, terminate/3]).
 
 %% API functions.
--export([push_event/3, push_change/3]).
+-export([assign/3, push_event/3]).
 
 %% --------------------------------------------------------------------
 %% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
 
-init(Req, State) ->
-    {cowboy_websocket, Req, State}.
+init(Req, Args) ->
+    {cowboy_websocket, Req, Args}.
 
-websocket_init(State) ->
-    io:format("[WebSocket] init: ~p~n", [State]),
+websocket_init(Args) ->
+    io:format("[WebSocket] init: ~p~n", [Args]),
     % TODO: Get view from router.
     View = arizona_handler,
     Tpl = arizona_live_view:persist_get(View, #{}),
-    % TODO: Return socket.
-    {ok, Assigns} = View:mount(),
-    Html = arizona_tpl_render:render_block(Tpl, Assigns),
+    Assigns = #{},
+    {ok, {Html, Sockets}} = arizona_tpl_render:mount(Tpl, Assigns),
     Events = [[~"init", Html]],
-    Socket = #{
-        view => View,
-        assigns => Assigns,
-        events => [],
-        changes => #{}
+    %% TODO: Every block must have its own state/socket, so the
+    %%       assigns, events, etc must live on its own socket.
+    State = #{
+        template => Tpl,
+        sockets => #{Id => prune(Socket) || Id := Socket <- Sockets}
     },
-    {[{text, json:encode(Events)}], Socket}.
+    {[{text, json:encode(Events)}], State}.
 
-websocket_handle({text, Msg}, Socket0) ->
+websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
     io:format("[WebSocket] handle: ~p~n", [Msg]),
-    % TODO: Get target socket.
-    {_Target, Event, Payload} = decode_msg(Msg),
+    {Target, Event, Payload} = decode_msg(Msg),
+    Socket0 = maps:get(Target, Sockets),
+    View = maps:get(view, Socket0),
     % TODO: {reply, Msg, Socket}
-    {noreply, Socket1} =
-        arizona_handler:handle_event(Event, Payload, Socket0),
+    {noreply, Socket1} = View:handle_event(Event, Payload, Socket0),
     Socket = case maps:get(changes, Socket1) of
         Changes when map_size(Changes) > 0 ->
-            View = maps:get(view, Socket1),
-            Tpl = arizona_live_view:persist_get(View, #{}),
+            Tpl = maps:get(template, State),
             Assigns = maps:get(assigns, Socket1),
             Patch = arizona_tpl_render:render_changes(Tpl, Changes, Assigns),
-            push_event(~"patch", [~"root", Patch],
-                Socket1#{assigns => maps:merge(Assigns, Changes)});
+            % TODO: Check how to patch the target and not the root.
+            push_event(~"patch", [~"root", Patch], Socket1);
         #{} ->
             Socket1
     end,
+    Id = maps:get(id, Socket),
     {[{text, json:encode(maps:get(events, Socket))}],
-        prune(Socket)}.
+        State#{sockets => Sockets#{Id => prune(Socket)}}}.
 
 websocket_info(Info, Socket) ->
     io:format("[WebSocket] info: ~p~n", [Info]),
@@ -86,11 +85,14 @@ terminate(Reason, Req, _State) ->
 %% API functions.
 %% --------------------------------------------------------------------
 
+assign(Key, Value, #{assigns := Assigns, changes := Changes} = Socket) ->
+    Socket#{
+        assigns => Assigns#{Key => Value},
+        changes => Changes#{Key => Value}
+    }.
+
 push_event(Name, Payload, #{events := Events} = Socket) ->
     Socket#{events => [[Name, Payload] | Events]}.
-
-push_change(Key, Value, #{changes := Changes} = Socket) ->
-    Socket#{changes => Changes#{Key => Value}}.
 
 %% --------------------------------------------------------------------
 %% Internal functions.
@@ -99,10 +101,15 @@ push_change(Key, Value, #{changes := Changes} = Socket) ->
 decode_msg(Msg) ->
     case json:decode(Msg) of
         [Target, Event, Payload] ->
-            {Target, Event, Payload};
+            {decode_target(Target), Event, Payload};
         [Target, Event] ->
-            {Target, Event, #{}}
+            {decode_target(Target), Event, #{}}
     end.
+
+decode_target(<<"root">>) ->
+    root;
+decode_target(Target) ->
+    json:decode(Target).
 
 prune(Socket) ->
     Socket#{
