@@ -83,7 +83,7 @@ render(Macros0) ->
 
 counter(Macros) ->
     ?LV(~s"""
-    <div :statefull>
+    <div :stateful>
         <div>Count: {_@count}</div>
         {% TODO: :onclick={_@event} }
         <button type="button" :onclick="incr">

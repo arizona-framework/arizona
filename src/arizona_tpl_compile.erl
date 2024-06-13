@@ -41,7 +41,7 @@ compile({Mod, Fun, Args}) when is_atom(Mod), is_atom(Fun) ->
         module => Mod,
         function => Fun,
         args => Args,
-        directives => #{statefull => true},
+        directives => #{stateful => true},
         attrs => []}}], [], 0, #state{view = Mod}),
     {ok, Block};
 % TODO: Require a module to be the view.
@@ -70,7 +70,7 @@ compile_tag(#{name := Name} = Tag, T, P, I, State) ->
 
 norm_tag_attrs(#{attrs := Attrs0, directives := Dirs}, Id, Target) ->
     maps:fold(fun
-        (statefull, true, Attrs) ->
+        (stateful, true, Attrs) ->
             [{<<"arz-id">>, {text, arz_id(Id)}} | Attrs];
         (K, V, Attrs) ->
             case atom_to_binary(K, utf8) of
@@ -115,7 +115,7 @@ do_compile_tag([K | T], Tag, TT, P, I, State, Acc) ->
 % NOTE: It's possible to concat texts here.
 do_compile_tag([], Tag, TT, P, I, State, Acc) ->
     TState = case Tag of
-        #{directives := #{statefull := true}} ->
+        #{directives := #{stateful := true}} ->
             State#state{parent = id(P, I)};
         #{} ->
             State
@@ -164,14 +164,14 @@ block_struct(#{module := M, function := F} = Block, P, I, State) ->
     % TODO: Check this directives merge implementation.
     Directives = maps:get(directives, Block),
     AllDirectives = maps:merge(maps:get(directives, Tag), Directives),
-    NonAttrs = [statefull, 'if', 'for'],
+    NonAttrs = [stateful, 'if', 'for'],
     AllAttrs = maps:merge(Attrs, maps:without(NonAttrs, Directives)),
     Id = id(P, I),
-    Statefull = maps:get(statefull, Directives, false),
+    Stateful = maps:get(stateful, Directives, false),
     Mod = maps:get(module, Block),
     % TODO: Remove vars prop from expr tokens.
     %       They will live in the block props.
-    Tokens = case Statefull of
+    Tokens = case Stateful of
         true ->
             compile([{tag, Tag}], [I | P], 0,
                 State#state{view = Mod, parent = Id});
@@ -181,7 +181,7 @@ block_struct(#{module := M, function := F} = Block, P, I, State) ->
     TokensMap = maps:from_list(Tokens),
     #{
         id => Id,
-        view => case Statefull of
+        view => case Stateful of
             true ->
                 Mod;
             false ->
@@ -445,7 +445,7 @@ compile_tree_test() ->
               indexes := [0,1,2,3,4,5,6,7,8,9,10,11,12,13]},
            6 := #{id := [6],text := <<"</main>">>}},
         id := root,
-        directives := #{statefull := true},
+        directives := #{stateful := true},
         attrs := #{},
         vars :=
          #{title := [[2]],
@@ -461,7 +461,7 @@ mount(Socket) ->
 
 view(Macros) ->
     {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
-    <main :statefull>
+    <main :stateful>
         <h1>{_@title}</h1>
         <.arizona_tpl_compile:counter
             id="1"
@@ -483,9 +483,9 @@ view(Macros) ->
 
 counter(Macros) ->
     {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
-    {% NOTE: :statefull directive defines the arz-id attribue,  }
+    {% NOTE: :stateful directive defines the arz-id attribue,  }
     {%       and adds this to the blocks param in the state.    }
-    <div id={_@id} :statefull>
+    <div id={_@id} :stateful>
         <span>
             {% TODO: Find a better way to define default values }
             {%       in a pure Erlang implementation.           }

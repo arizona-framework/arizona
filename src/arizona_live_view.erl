@@ -66,14 +66,14 @@ parse_str_test() ->
     ?assertMatch([
         {tag,
          #{name := <<"main">>,
-           directives := #{statefull := true}}
+           directives := #{stateful := true}}
     }], render(#{})).
 
 % Start parse_str support.
 
 render(Macros) ->
     ?LV("""
-    <main :statefull>
+    <main :stateful>
         <h1>{_@title}</h1>
         <.arizona_live_view:counter/>
     </main>
@@ -81,7 +81,7 @@ render(Macros) ->
 
 counter(Macros) ->
     ?LV("""
-    <div :statefull>
+    <div :stateful>
         <div>{_@count}</div>
         <button type="button">Increment</button>
     </div>

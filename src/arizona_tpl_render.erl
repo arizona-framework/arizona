@@ -133,7 +133,7 @@ render_indexes([H|T], Block, Assigns, Notify) ->
                 eval(Expr, Assigns)
             end, Attrs),
             NAssigns = case maps:get(directives, Nested) of
-                #{statefull := true} ->
+                #{stateful := true} ->
                     NId = maps:get(id, Nested),
                     NView = maps:get(view, Nested),
                     % TODO: Real socket.
