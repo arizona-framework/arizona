@@ -85,6 +85,8 @@ increment(#{assigns := Assigns}) ->
 
 ## Roadmap
 
+- [ ] Reduce the size of the tree by combining the neighboring texts.
+This is the first optimization that should be implemented to enhance performance;
 - [ ] Declare macros in HTML attributes;
 - [ ] Declare event payloads in HTML attributes;
 - [ ] A slot system for blocks;
