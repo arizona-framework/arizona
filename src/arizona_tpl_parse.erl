@@ -139,6 +139,9 @@ do_parse_attr(<<$:, K/binary>>, {text, <<$:, K/binary>>}) ->
     {directive, {binary_to_atom(K, utf8), true}};
 do_parse_attr(<<$:, K/binary>>, V) ->
     {directive, {binary_to_atom(K, utf8), V}};
+% TODO: Comments support.
+do_parse_attr(<<$%, _K/binary>>, _V) ->
+    error(not_supported_yet);
 do_parse_attr(K, V) ->
     {attr, {K, V}}.
 
