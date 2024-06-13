@@ -99,16 +99,29 @@ do_parse_tag([{attr_key, K}, {attr_expr, Expr} | T], Props, Macros) ->
 do_parse_tag([{attr_key, K} | T], Props, Macros) ->
     do_parse_tag(T, [parse_attr(K, {text, K}, Macros) | Props], Macros);
 do_parse_tag([tag_close | T0], Props0, Macros) ->
-    {T1, Props} = collect_tokens(T0, Props0, Macros),
-    [{tag_name, Name}, tag_close | T] = T1,
-    case Name =:= get(name, Props) of
+    OpenName = get(name, Props0),
+    case is_void(OpenName) of
         true ->
-            [{tag, tag_struct(Props)} | do_parse_exprs(T, Macros)];
+            [{tag, tag_struct([void | Props0])} | do_parse_exprs(T0, Macros)];
         false ->
-            error({unexpected_tag_end, {Name, Props}})
+            {T1, Props} = collect_tokens(T0, Props0, Macros),
+            [{tag_name, CloseName}, tag_close | T] = T1,
+            case CloseName =:= OpenName of
+                true ->
+                    [{tag, tag_struct(Props)} | do_parse_exprs(T, Macros)];
+                false ->
+                    error({unexpected_tag_end, Props0, Props})
+            end
     end;
 do_parse_tag([void_close | T], Props, Macros) ->
     [{tag, tag_struct([void | Props])} | do_parse_exprs(T, Macros)].
+
+is_void(Name) ->
+    lists:member(Name, [<<"!DOCTYPE">>, <<"!doctype">>, <<"?xml">>,
+        <<"area">>, <<"base">>, <<"br">>, <<"col">>, <<"command">>,
+        <<"embed">>, <<"hr">>, <<"img">>, <<"input">>, <<"keygen">>,
+        <<"link">>, <<"meta">>, <<"param">>, <<"source">>, <<"track">>,
+        <<"wbr">>]).
 
 collect_tokens([closing_tag | T], Props, _Macros) ->
     {T, Props};

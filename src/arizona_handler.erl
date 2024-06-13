@@ -57,7 +57,7 @@ render(Macros0) ->
         title => maps:get(title, Macros0, ~"Arizona")
     },
     ?LV(~"""
-    {% TODO: Handle <!DOCTYPE html> in the parser. }
+    <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8"/>

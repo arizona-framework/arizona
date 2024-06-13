@@ -45,8 +45,8 @@ compile({Mod, Fun, Args}) when is_atom(Mod), is_atom(Fun) ->
         attrs => []}}], [], 0, #state{view = Mod}),
     {ok, Block};
 % TODO: Require a module to be the view.
-compile([{tag, Tag}]) ->
-    [{0, Block}] = compile([{tag, Tag}], [], 0, #state{}),
+compile(Tree) ->
+    [{0, Block}] = compile(Tree, [], 0, #state{}),
     {ok, Block}.
 
 %% --------------------------------------------------------------------
@@ -118,16 +118,21 @@ do_compile_tag([K | T], Tag, TT, P, I, State, Acc) ->
     do_compile_tag(T, Tag, TT, P, I, State, [K, $\s | Acc]);
 % NOTE: It's possible to concat texts here.
 do_compile_tag([], Tag, TT, P, I, State, Acc) ->
-    TState = case Tag of
-        #{directives := #{stateful := true}} ->
-            State#state{parent = id(P, I)};
-        #{} ->
-            State
-    end,
-    Tokens = [{I, tag_open_struct(Tag, Acc, P, I)}
-                | compile(maps:get(tokens, Tag) , P, I+1, TState)],
-    {NI, _} = lists:last(Tokens),
-    Tokens ++ compile([{text, tag_closing(Tag)} | TT], P, NI+1, State).
+    case maps:get(void, Tag, false) of
+        true ->
+            [{I, tag_open_struct(Tag, Acc, P, I)} | compile(TT, P, I+1, State)];
+        false ->
+            TState = case Tag of
+                #{directives := #{stateful := true}} ->
+                    State#state{parent = id(P, I)};
+                #{} ->
+                    State
+            end,
+            Tokens = [{I, tag_open_struct(Tag, Acc, P, I)}
+                        | compile(maps:get(tokens, Tag), P, I+1, TState)],
+            {NI, _} = lists:last(Tokens),
+            Tokens ++ compile([{text, tag_closing(Tag)} | TT], P, NI+1, State)
+    end.
 
 tag_closing(#{name := Name}) ->
     <<$<, $/, Name/binary, $>>>.
@@ -151,19 +156,34 @@ expr_struct(Expr, Vars, P, I) ->
         vars => Vars
      }.
 
-tag_open_struct(#{void := true} = _Tag, Acc, P, I) ->
-    #{
-        id => id(P, I),
-        text => iolist_to_binary(lists:reverse([$>, $/ | Acc]))
-    };
+tag_open_struct(#{void := true} = Tag, Acc, P, I) ->
+    case is_dtd(maps:get(name, Tag)) of
+        true ->
+            #{
+                id => id(P, I),
+                text => iolist_to_binary(lists:reverse([$> | Acc]))
+            };
+        false ->
+            #{
+                id => id(P, I),
+                text => iolist_to_binary(lists:reverse([$>, $/ | Acc]))
+            }
+    end;
 tag_open_struct(#{void := false} = _Tag, Acc, P, I) ->
     #{
         id => id(P, I),
         text => iolist_to_binary(lists:reverse([$> | Acc]))
     }.
 
+% Document Type Definition
+is_dtd(<<"!DOCTYPE">>) -> true;
+is_dtd(<<"!doctype">>) -> true;
+is_dtd(<<"?xml">>) -> true;
+is_dtd(_) -> false.
+
 block_struct(#{module := M, function := F} = Block, P, I, State) ->
-    [{tag, Tag}] = M:F(maps:get(args, Block, #{})),
+    Tree = M:F(maps:get(args, Block, #{})),
+    Tag = find_first_tag(Tree),
     Attrs = block_attrs(Block),
     % TODO: Check this directives merge implementation.
     Directives = maps:get(directives, Block),
@@ -177,10 +197,10 @@ block_struct(#{module := M, function := F} = Block, P, I, State) ->
     %       They will live in the block props.
     Tokens = case Stateful of
         true ->
-            compile([{tag, Tag}], [I | P], 0,
+            compile(Tree, [I | P], 0,
                 State#state{view = Mod, parent = Id});
         false ->
-            compile([{tag, Tag}], [I | P], 0, State)
+            compile(Tree, [I | P], 0, State)
     end,
     TokensMap = maps:from_list(Tokens),
     #{
@@ -200,6 +220,17 @@ block_struct(#{module := M, function := F} = Block, P, I, State) ->
                     false -> block_vars(Id, Tokens, AllAttrs)
                 end
     }.
+
+find_first_tag([{tag, #{name := Name} = Tag} | T]) ->
+    case is_tag(Name) of
+        true ->
+            Tag;
+        false ->
+            find_first_tag(T)
+    end.
+
+is_tag(Name) ->
+    not lists:member(Name, [<<"!DOCTYPE">>, <<"!doctype">>, <<"?xml">>]).
 
 % TODO: Use binary_to_existing_atom.
 block_attrs(#{attrs := Attrs}) ->
