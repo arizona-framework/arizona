@@ -71,10 +71,12 @@ render(Macros0) ->
         <.arizona_handler:counter
             count={_@count}
             btn_text="Increment #1"
+            event="incr"
         />
         <.arizona_handler:counter
-            count={0}
+            count={99}
             btn_text="Increment #2"
+            event="decr"
         />
     </body>
     </html>
@@ -84,8 +86,9 @@ counter(Macros) ->
     ?LV(~s"""
     <div :stateful>
         <div>Count: {_@count}</div>
-        {% TODO: :onclick={_@event} }
-        <button type="button" :onclick="incr">
+        {% NOTE: On this example, :onclick is and expression to be }
+        {%       dynamic. It could be just, e.g., :onclick="incr". }
+        <button type="button" :onclick={arizona_js:send(_@event)}>
             {_@btn_text}
         </button>
     </div>
@@ -93,5 +96,8 @@ counter(Macros) ->
 
 handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
     Count = maps:get(count, Assigns) + 1,
+    {noreply, arizona_websocket:assign(count, Count, Socket)};
+handle_event(<<"decr">>, #{}, #{assigns := Assigns} = Socket) ->
+    Count = maps:get(count, Assigns) - 1,
     {noreply, arizona_websocket:assign(count, Count, Socket)}.
 
