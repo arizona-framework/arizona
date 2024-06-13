@@ -209,7 +209,7 @@ block_vars(Id, Tokens, Attrs) ->
     maps:map(fun(_Var, PathList) ->
         lists:map(fun(Path) ->
             Path -- Id
-        end, PathList)
+        end, lists:usort(PathList))
     end, Vars).
 
 tokens_vars(Tokens, Attrs) ->
@@ -232,9 +232,9 @@ tokens_vars_1([], _Attrs) ->
 tokens_vars_2([Var | Vars], Id, T, {true, Attrs}) ->
     case Attrs of
         #{Var := {expr, {_Fun, ExprVars}}} ->
-            tokens_vars_3(ExprVars, Vars, Id, T, {true, Attrs});
+            [{Var, Id} | tokens_vars_3(ExprVars, Vars, Id, T, {true, Attrs})];
         #{} ->
-            tokens_vars_2(Vars, Id, T, {true, Attrs})
+            [{Var, Id} | tokens_vars_2(Vars, Id, T, {true, Attrs})]
     end;
 tokens_vars_2([Var | Vars], Id, T, false) ->
     [{Var, Id} | tokens_vars_2(Vars, Id, T, false)];
@@ -249,9 +249,9 @@ tokens_vars_3([], Vars, Id, T, Attrs) ->
 tokens_vars_4([{Var, Ids} | Vars], T, {true, Attrs}) when is_atom(Var), is_list(Ids) ->
     case Attrs of
         #{Var := {expr, {_Fun, ExprVars}}} ->
-            tokens_vars_5(ExprVars, Vars, Ids, T, {true, Attrs});
+            [{Var, Ids} | tokens_vars_5(ExprVars, Vars, Ids, T, {true, Attrs})];
         #{} ->
-            tokens_vars_4(Vars, T, {true, Attrs})
+            [{Var, Ids} | tokens_vars_4(Vars, T, {true, Attrs})]
     end;
 tokens_vars_4([], T, Attrs) ->
     tokens_vars_1(T, Attrs).

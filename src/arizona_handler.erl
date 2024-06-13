@@ -72,9 +72,8 @@ render(Macros0) ->
             count={_@count}
             btn_text="Increment #1"
         />
-        {% FIXME: count={0} is not working }
         <.arizona_handler:counter
-            count={_@count}
+            count={0}
             btn_text="Increment #2"
         />
     </body>
