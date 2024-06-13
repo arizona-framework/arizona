@@ -71,6 +71,11 @@ compile_tag(#{name := Name} = Tag, T, P, I, State) ->
 norm_tag_attrs(#{attrs := Attrs0, directives := Dirs}, Id, Target) ->
     maps:fold(fun
         (stateful, true, Attrs) ->
+            % TODO: Rename 'arz-id' to 'arz-sid' (statefull id),
+            %       and provide a 'arz-tid' (tag id) to each tag.
+            %       I think this can improve changes patch,
+            %       because just the most close tag could be rendered
+            %       instead of the entirely block/tree.
             [{<<"arz-id">>, {text, arz_id(Id)}} | Attrs];
         (K, V, Attrs) ->
             case atom_to_binary(K, utf8) of
