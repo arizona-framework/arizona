@@ -85,10 +85,15 @@ terminate(Reason, Req, _State) ->
 %% --------------------------------------------------------------------
 
 assign(Key, Value, #{assigns := Assigns, changes := Changes} = Socket) ->
-    Socket#{
-        assigns => Assigns#{Key => Value},
-        changes => Changes#{Key => Value}
-    }.
+    case Assigns of
+        #{Key := Value} ->
+            Socket;
+        #{} ->
+            Socket#{
+                assigns => Assigns#{Key => Value},
+                changes => Changes#{Key => Value}
+            }
+    end.
 
 push_event(Name, Payload, #{events := Events} = Socket) ->
     Socket#{events => [[Name, Payload] | Events]}.
