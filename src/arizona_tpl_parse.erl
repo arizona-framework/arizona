@@ -57,21 +57,9 @@ do_parse_exprs([], _Macros) ->
     [].
 
 parse_tag([{tag_name, <<$., Name/binary>>} | T], Macros) ->
-    {M, F} = parse_block_name(Name),
-    do_parse_block(T, [{module, M}, {function, F}], Macros);
+    do_parse_block(T, [{name, Name}], Macros);
 parse_tag([{tag_name, Name} | T], Macros) ->
     do_parse_tag(T, [{name, Name}], Macros).
-
-parse_block_name(Name) ->
-    case binary:split(Name, <<":">>) of
-        [M, F] ->
-            % TODO: Change to binary_to_existing_atom
-            {binary_to_atom(M, utf8), binary_to_atom(F, utf8)};
-        % TODO: Allow define just a function without a module, e.g.:
-        %       <.function_name/>
-        [_F] ->
-            error(not_implemented_yet)
-    end.
 
 do_parse_block([{attr_key, K}, {attr_value, V} | T], Props, Macros) ->
     do_parse_block(T, [parse_attr(K, {text, V}, Macros) | Props], Macros);
@@ -82,12 +70,11 @@ do_parse_block([{attr_key, K} | T], Props, Macros) ->
 do_parse_block([tag_close | T0], Props0, Macros) ->
     {T1, Props} = collect_tokens(T0, Props0, Macros),
     [{tag_name, <<$., Name/binary>>}, tag_close | T] = T1,
-    {M, F} = parse_block_name(Name),
-    case M =:= get(module, Props) andalso F =:= get(function, Props) of
+    case Name =:= maps:get(name, Props) of
         true ->
             [{block, block_struct(Props)} | do_parse_exprs(T, Macros)];
         false ->
-            error({unexpected_block_end, {{M, F}, Props}})
+            error({unexpected_block_end, {Props0, Props}})
     end;
 do_parse_block([void_close | T], Props, Macros) ->
     [{block, block_struct(Props)} | do_parse_exprs(T, Macros)].
@@ -110,7 +97,7 @@ do_parse_tag([tag_close | T0], Props0, Macros) ->
                 true ->
                     [{tag, tag_struct(Props)} | do_parse_exprs(T, Macros)];
                 false ->
-                    error({unexpected_tag_end, Props0, Props})
+                    error({unexpected_tag_end, {Props0, Props}})
             end
     end;
 do_parse_tag([void_close | T], Props, Macros) ->
@@ -192,8 +179,7 @@ subst_var(Var) ->
 
 block_struct(Props) ->
     #{
-        module => get(module, Props),
-        function => get(function, Props),
+        name => get(name, Props),
         directives => maps:from_list(get_all(directive, Props)),
         attrs => get_all(attr, Props),
         tokens => get_all(token, Props)
@@ -219,7 +205,12 @@ get_all(K, L) ->
     lists:reverse(proplists:get_all_values(K, L)).
 
 get(K, L) ->
-    element(2, proplists:lookup(K, L)).
+    case proplists:lookup(K, L) of
+        {K, V} ->
+            V;
+        none ->
+            error({badkey, {K, L}})
+    end.
 
 %% --------------------------------------------------------------------
 %% EUnit tests.

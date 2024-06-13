@@ -181,8 +181,9 @@ is_dtd(<<"!doctype">>) -> true;
 is_dtd(<<"?xml">>) -> true;
 is_dtd(_) -> false.
 
-block_struct(#{module := M, function := F} = Block, P, I, State) ->
-    Tree = M:F(maps:get(args, Block, #{})),
+block_struct(Block, P, I, State) ->
+    {Mod, Fun} = block_mod_fun(Block, State),
+    Tree = Mod:Fun(maps:get(args, Block, #{})),
     Tag = find_first_tag(Tree),
     Attrs = block_attrs(Block),
     % TODO: Check this directives merge implementation.
@@ -192,7 +193,6 @@ block_struct(#{module := M, function := F} = Block, P, I, State) ->
     AllAttrs = maps:merge(Attrs, maps:without(NonAttrs, Directives)),
     Id = id(P, I),
     Stateful = maps:get(stateful, Directives, false),
-    Mod = maps:get(module, Block),
     % TODO: Remove vars prop from expr tokens.
     %       They will live in the block props.
     Tokens = case Stateful of
@@ -220,6 +220,19 @@ block_struct(#{module := M, function := F} = Block, P, I, State) ->
                     false -> block_vars(Id, Tokens, AllAttrs)
                 end
     }.
+
+% TODO: Change to binary_to_existing_atom.
+block_mod_fun(#{name := Name}, State) ->
+    case binary:split(Name, <<":">>) of
+        [M, F] ->
+            {binary_to_atom(M, utf8), binary_to_atom(F, utf8)};
+        [F] ->
+            {State#state.view, binary_to_atom(F, utf8)}
+    end;
+block_mod_fun(#{module := M, function := F}, _State) ->
+    {M, F};
+block_mod_fun(#{function := F}, State) ->
+    {State#state.view, F}.
 
 find_first_tag([{tag, #{name := Name} = Tag} | T]) ->
     case is_tag(Name) of

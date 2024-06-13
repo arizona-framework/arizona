@@ -69,12 +69,12 @@ render(Macros0) ->
         <script src="assets/js/example.js"></script>
     </head>
     <body>
-        <.arizona_handler:counter
+        <.counter
             count={_@count}
             btn_text="Increment #1"
             event="incr"
         />
-        <.arizona_handler:counter
+        <.counter
             count={99}
             btn_text="Increment #2"
             event="decr"
