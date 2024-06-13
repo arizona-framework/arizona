@@ -48,8 +48,9 @@ init(Req0, State) ->
 %% Example functions.
 %% --------------------------------------------------------------------
 
-mount(Socket) ->
-    {ok, arizona_websocket:assign(count, 0, Socket)}.
+mount(#{assigns := Assigns} = Socket) ->
+    Count = maps:get(count, Assigns, 0),
+    {ok, arizona_websocket:assign(count, Count, Socket)}.
 
 render(Macros0) ->
     Macros = Macros0#{
