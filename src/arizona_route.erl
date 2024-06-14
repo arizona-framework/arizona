@@ -24,32 +24,15 @@ Router.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([live_view/2]).
+-export([match/2]).
 
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
-live_view(Mod, Macros) ->
-    {ok, _Tpl} = arizona_live_view:compile(Mod, Macros),
-    error(not_implemented_yet).
-
-%% --------------------------------------------------------------------
-%% Internal funtions.
-%% --------------------------------------------------------------------
-
-% nothing here yet!
-
-%% --------------------------------------------------------------------
-%% EUnit tests.
-%% --------------------------------------------------------------------
-
--ifdef(TEST).
--compile([export_all, nowarn_export_all]).
--include_lib("eunit/include/eunit.hrl").
-
-live_view_test() ->
-    ?assertError(not_implemented_yet, live_view(arizona_live_view, #{})).
-
--endif.
+% NOTE: This is just a hardcoded example.
+match(get, []) ->
+    {live_view, arizona_example, #{}};
+match(_, _) ->
+    nomatch.
 

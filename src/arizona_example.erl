@@ -17,61 +17,20 @@
 %%
 %% %CopyrightEnd%
 %%
--module(arizona_handler).
+-module(arizona_example).
 -moduledoc false.
 
--behaviour(cowboy_handler).
+%% arizona_live_view callbacks.
+-export([mount/1, render/1, handle_event/3]).
 
-%% cowboy_handler callbacks.
--export([init/2]).
+%% Component functions.
+-export([counter/1, button/1]).
 
-%% Example functions.
--export([mount/1, render/1, counter/1, button/1, handle_event/3]).
-
+%% Libs
 -include("live_view.hrl").
 
 %% --------------------------------------------------------------------
-%% cowboy_handler callbacks.
-%% --------------------------------------------------------------------
-
-% TODO: View from rout.
-init(Req0, State) ->
-    Method = normalize_method(cowboy_req:method(Req0)),
-    Path = normalize_path(cowboy_req:path(Req0)),
-    case arizona_route:match(Method, Path) of
-        {live_view, View, Macros} ->
-            Tpl = arizona_live_view:persist_get(View, Macros),
-            Assigns = #{},
-            Html = arizona_tpl_render:render_block(Tpl, Assigns),
-            Headers = #{<<"content-type">> => <<"text/html">>},
-            Req = cowboy_req:reply(200, Headers, Html, Req0),
-            {ok, Req, State};
-        nomatch ->
-            Req = cowboy_req:reply(404, #{
-                <<"content-type">> => <<"text/plain">>
-            }, ~"Not Found =(", Req0),
-            {ok, Req, State}
-    end.
-
-%% --------------------------------------------------------------------
-%% Internal functions.
-%% --------------------------------------------------------------------
-
-normalize_method(<<"GET">>) -> get;
-normalize_method(<<"POST">>) -> post;
-normalize_method(<<"PATCH">>) -> patch;
-normalize_method(<<"DELETE">>) -> delete;
-normalize_method(<<"PUT">>) -> put;
-normalize_method(<<"CONNECT">>) -> connect;
-normalize_method(<<"HEAD">>) -> head;
-normalize_method(<<"OPTIONS">>) -> options;
-normalize_method(<<"TRACE">>) -> trace.
-
-normalize_path(Path) ->
-    binary:split(Path, <<"/">>, [global, trim_all]).
-
-%% --------------------------------------------------------------------
-%% Example functions.
+%% arizona_live_view callbacks.
 %% --------------------------------------------------------------------
 
 mount(#{assigns := Assigns} = Socket) ->
@@ -109,6 +68,17 @@ render(Macros0) ->
     </html>
     """).
 
+handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
+    Count = maps:get(count, Assigns) + 1,
+    {noreply, arizona_socket:assign(count, Count, Socket)};
+handle_event(<<"decr">>, #{}, #{assigns := Assigns} = Socket) ->
+    Count = maps:get(count, Assigns) - 1,
+    {noreply, arizona_socket:assign(count, Count, Socket)}.
+
+%% --------------------------------------------------------------------
+%% Component functions.
+%% --------------------------------------------------------------------
+
 counter(Macros) ->
     ?LV(~s"""
     <div :stateful>
@@ -125,11 +95,4 @@ button(Macros) ->
         {_@text}
     </button>
     """).
-
-handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
-    Count = maps:get(count, Assigns) + 1,
-    {noreply, arizona_socket:assign(count, Count, Socket)};
-handle_event(<<"decr">>, #{}, #{assigns := Assigns} = Socket) ->
-    Count = maps:get(count, Assigns) - 1,
-    {noreply, arizona_socket:assign(count, Count, Socket)}.
 

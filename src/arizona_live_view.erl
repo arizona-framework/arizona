@@ -26,6 +26,28 @@ Live view.
 %% API functions.
 -export([parse_str/2, compile/2, persist_get/2]).
 
+%% TODO: Real types.
+-type socket()  :: map().
+-type macros()  :: map().
+-type tree()    :: map().
+-type event()   :: binary().
+-type payload() :: map().
+
+%% --------------------------------------------------------------------
+%% Callbacks.
+%% --------------------------------------------------------------------
+
+-callback mount(socket()) ->
+    {ok, socket()}.
+
+-callback render(macros()) ->
+    tree().
+
+-callback handle_event(event(), payload(), socket()) ->
+    {noreply, socket()}.
+
+-optional_callbacks([handle_event/3]).
+
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
