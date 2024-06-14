@@ -50,7 +50,7 @@ init(Req0, State) ->
 
 mount(#{assigns := Assigns} = Socket) ->
     Count = maps:get(count, Assigns, 0),
-    {ok, arizona_websocket:assign(count, Count, Socket)}.
+    {ok, arizona_socket:assign(count, Count, Socket)}.
 
 render(Macros0) ->
     Macros = Macros0#{
@@ -102,8 +102,8 @@ button(Macros) ->
 
 handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
     Count = maps:get(count, Assigns) + 1,
-    {noreply, arizona_websocket:assign(count, Count, Socket)};
+    {noreply, arizona_socket:assign(count, Count, Socket)};
 handle_event(<<"decr">>, #{}, #{assigns := Assigns} = Socket) ->
     Count = maps:get(count, Assigns) - 1,
-    {noreply, arizona_websocket:assign(count, Count, Socket)}.
+    {noreply, arizona_socket:assign(count, Count, Socket)}.
 

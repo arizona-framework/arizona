@@ -49,14 +49,7 @@ render_target_2([H|T], Block, Changes, Assigns) ->
     render_target_2(T, Nested, Changes, Assigns).
 
 render_block(#{id := Id, view := View} = Block, Assigns0) ->
-    % TODO: Real socket.
-    Socket0 = #{
-        id => Id,
-        view => View,
-        assigns => Assigns0,
-        events => [],
-        changes => #{}
-    },
+    Socket0 = arizona_socket:new(Id, View, Assigns0),
     {ok, Socket} = View:mount(Socket0),
     Indexes = maps:get(indexes, Block),
     Tree = maps:get(block, Block),
@@ -76,14 +69,7 @@ render_diff(#{vars := AllVars} = Block, NewAssigns, OldAssigns) ->
     render_changes(Block, Changes, Assigns).
 
 mount(#{id := Id, view := View} = Block, Assigns0) ->
-    % TODO: Real socket.
-    Socket0 = #{
-        id => Id,
-        view => View,
-        assigns => Assigns0,
-        events => [],
-        changes => #{}
-    },
+    Socket0 = arizona_socket:new(Id, View, Assigns0),
     {ok, Socket} = View:mount(Socket0),
     Assigns = maps:get(assigns, Socket),
     To = self(),
@@ -136,14 +122,7 @@ render_indexes([H|T], Block, Assigns, Notify) ->
                 #{stateful := true} ->
                     NId = maps:get(id, Nested),
                     NView = maps:get(view, Nested),
-                    % TODO: Real socket.
-                    NSocket0 = #{
-                        id => NId,
-                        view => NView,
-                        assigns => AttrsAssigns,
-                        events => [],
-                        changes => #{}
-                    },
+                    NSocket0 = arizona_socket:new(NId, NView, AttrsAssigns),
                     {ok, NSocket} = NView:mount(NSocket0),
                     case Notify of
                         {true, Pid} ->

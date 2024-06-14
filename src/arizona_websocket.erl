@@ -26,9 +26,6 @@
 -export([init/2, websocket_init/1, websocket_handle/2,
          websocket_info/2, terminate/3]).
 
-%% API functions.
--export([assign/3, push_event/3]).
-
 %% --------------------------------------------------------------------
 %% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
@@ -48,7 +45,8 @@ websocket_init(Args) ->
     %%       assigns, events, etc must live on its own socket.
     State = #{
         template => Tpl,
-        sockets => #{Id => prune(Socket) || Id := Socket <- Sockets}
+        sockets => #{Id => arizona_socket:prune(Socket)
+                     || Id := Socket <- Sockets}
     },
     {[{text, json:encode(Events)}], State}.
 
@@ -64,13 +62,13 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
             Tpl = maps:get(template, State),
             Assigns = maps:get(assigns, Socket1),
             Patch = arizona_tpl_render:render_target(Target, Tpl, Changes, Assigns),
-            push_event(~"patch", [Target, Patch], Socket1);
+            arizona_socket:push_event(~"patch", [Target, Patch], Socket1);
         #{} ->
             Socket1
     end,
     Id = maps:get(id, Socket),
     {[{text, json:encode(maps:get(events, Socket))}],
-        State#{sockets => Sockets#{Id => prune(Socket)}}}.
+        State#{sockets => Sockets#{Id => arizona_socket:prune(Socket)}}}.
 
 websocket_info(Info, Socket) ->
     io:format("[WebSocket] info: ~p~n", [Info]),
@@ -84,19 +82,7 @@ terminate(Reason, Req, _State) ->
 %% API functions.
 %% --------------------------------------------------------------------
 
-assign(Key, Value, #{assigns := Assigns, changes := Changes} = Socket) ->
-    case Assigns of
-        #{Key := Value} ->
-            Socket;
-        #{} ->
-            Socket#{
-                assigns => Assigns#{Key => Value},
-                changes => Changes#{Key => Value}
-            }
-    end.
-
-push_event(Name, Payload, #{events := Events} = Socket) ->
-    Socket#{events => [[Name, Payload] | Events]}.
+% nothing here yet!
 
 %% --------------------------------------------------------------------
 %% Internal functions.
@@ -114,10 +100,4 @@ decode_target(<<"root">>) ->
     root;
 decode_target(Target) ->
     json:decode(Target).
-
-prune(Socket) ->
-    Socket#{
-        events => [],
-        changes => #{}
-    }.
 
