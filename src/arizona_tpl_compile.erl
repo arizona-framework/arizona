@@ -121,7 +121,8 @@ do_compile_tag([K | T], Tag, TT, P, I, State, Acc) ->
     do_compile_tag(T, Tag, TT, P, I, State, [K, $\s | Acc]);
 % IMPORTANT: Text concat must be reviewed when :if and :for be implemented.
 %            Cannot concat when this kind of directive is defined.
-% TODO: There is more optimization to do by concatenating tags.
+% TODO: There are more optimizations to do by concatenating tags.
+%       Nested blocks of blocks are not concatenated.
 do_compile_tag([], Tag, TT, P, I, State, Acc) ->
     case maps:get(void, Tag, false) of
         true ->
@@ -148,6 +149,20 @@ do_compile_tag([], Tag, TT, P, I, State, Acc) ->
                     Txt = <<(tag_open(Tag, Acc))/binary, Txt0/binary,
                             (tag_closing(Tag))/binary>>,
                     compile([{text, Txt} | TT], P, I, State);
+                {true, [{tag, TTag} | NTokens]} ->
+                    TState = tag_tokens_state(Tag, P, I, State),
+                    Tokens = compile_tag(TTag, tag_open(Tag, Acc), NTokens, P, I, TState),
+                    {NI, LToken} = lists:last(Tokens),
+                    case LToken of
+                        #{text := Txt0} ->
+                            Txt = <<Txt0/binary, (tag_closing(Tag))/binary>>,
+                            TTokens = lists:droplast(Tokens) ++
+                                        [LToken#{text => Txt}],
+                            TTokens ++ compile(TT, P, NI+1, State);
+                        #{} ->
+                            Tokens ++ compile([{text, tag_closing(Tag)} | TT],
+                                        P, NI+1, State)
+                    end;
                 {true, NTokens} ->
                     TState = tag_tokens_state(Tag, P, I, State),
                     Tokens = [{I, tag_open_struct(Tag, Acc, P, I)}
@@ -155,7 +170,6 @@ do_compile_tag([], Tag, TT, P, I, State, Acc) ->
                     {NI, _} = lists:last(Tokens),
                     Tokens ++ compile([{text, tag_closing(Tag)} | TT],
                                         P, NI+1, State)
-
             end
     end.
 
