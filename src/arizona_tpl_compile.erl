@@ -121,50 +121,56 @@ do_compile_tag([K | T], Tag, TT, P, I, State, Acc) ->
     do_compile_tag(T, Tag, TT, P, I, State, [K, $\s | Acc]);
 % IMPORTANT: Text concat must be reviewed when :if and :for be implemented.
 %            Cannot concat when this kind of directive is defined.
-% TODO: The is more optimization to do by concatenating tags.
+% TODO: There is more optimization to do by concatenating tags.
 do_compile_tag([], Tag, TT, P, I, State, Acc) ->
     case maps:get(void, Tag, false) of
         true ->
-            case TT of
-                [{text, Txt0} | TTT] ->
-                    Txt = <<(tag_open(Tag, Acc))/binary, Txt0/binary>>,
-                    compile([{text, Txt} | TTT], P, I, State);
-                [{tag, TTag} | TTT] ->
-                    compile_tag(TTag, tag_open(Tag, Acc), TTT, P, I, State);
-                _ ->
-                    [{I, tag_open_struct(Tag, Acc, P, I)}
-                     | compile(TT, P, I+1, State)]
-            end;
+            compile([{text, tag_open(Tag, Acc)} | TT], P, I, State);
         false ->
-            case maps:get(tokens, Tag) of
-                [] ->
+            case {is_stateful(Tag), maps:get(tokens, Tag)} of
+                {false, NTokens} ->
+                    Tokens = [{text, tag_open(Tag, Acc)} | NTokens],
+                    compile(Tokens ++ [{text, tag_closing(Tag)} | TT],
+                            P, I, State);
+                {true, []} ->
                     case TT of
                         [{text, Txt0} | TTT] ->
                             Txt = <<(no_tokens_tag(Tag, Acc))/binary, Txt0/binary>>,
                             compile([{text, Txt} | TTT], P, I, State);
                         [{tag, TTag} | TTT] ->
-                            compile_tag(TTag, no_tokens_tag(Tag, Acc), TTT, P, I, State);
+                            compile_tag(TTag, no_tokens_tag(Tag, Acc),
+                                        TTT, P, I, State);
                         _ ->
                             [{I, no_tokens_tag_struct(Tag, Acc, P, I)}
                                 | compile(TT, P, I+1, State)]
                     end;
-                [{text, Txt0}] ->
+                {true, [{text, Txt0}]} ->
                     Txt = <<(tag_open(Tag, Acc))/binary, Txt0/binary,
                             (tag_closing(Tag))/binary>>,
                     compile([{text, Txt} | TT], P, I, State);
-                NTokens ->
+                {true, NTokens} ->
                     TState = tag_tokens_state(Tag, P, I, State),
                     Tokens = [{I, tag_open_struct(Tag, Acc, P, I)}
-                              | compile(NTokens, P, I+1, TState)],
+                                | compile(NTokens, P, I+1, TState)],
                     {NI, _} = lists:last(Tokens),
-                    Tokens ++ compile([{text, tag_closing(Tag)} | TT], P, NI+1, State)
+                    Tokens ++ compile([{text, tag_closing(Tag)} | TT],
+                                        P, NI+1, State)
+
             end
     end.
 
-tag_tokens_state(#{directives := #{stateful := true}}, P, I, State) ->
-    State#state{parent = id(P, I)};
-tag_tokens_state(#{}, _P, _I, State) ->
-    State.
+is_stateful(#{directives := #{stateful := true}}) ->
+    true;
+is_stateful(#{}) ->
+    false.
+
+tag_tokens_state(Tag, P, I, State) ->
+    case is_stateful(Tag) of
+        true ->
+            State#state{parent = id(P, I)};
+        false ->
+            State
+    end.
 
 tag_open(#{void := true} = Tag, Acc) ->
     case is_dtd(maps:get(name, Tag)) of
