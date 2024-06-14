@@ -32,7 +32,6 @@ Template compiler.
 %% API funtions.
 %% --------------------------------------------------------------------
 
-% TODO: Concat texts.
 % NOTE: Multiple tags is not allowed for a root, e.g.:
 %       Good: <html><head></head><body></body></html>
 %        Bad: <head></head><body></body>
@@ -44,7 +43,7 @@ compile({Mod, Fun, Args}) when is_atom(Mod), is_atom(Fun) ->
         directives => #{stateful => true},
         attrs => []}}], [], 0, #state{view = Mod}),
     {ok, Block};
-% TODO: Require a module to be the view.
+% TODO: Maybe require a module to be the view.
 compile(Tree) ->
     [{0, Block}] = compile(Tree, [], 0, #state{}),
     {ok, Block}.
@@ -53,20 +52,24 @@ compile(Tree) ->
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
+compile([{text, Txt}, {tag, Tag} | T], P, I, State) ->
+    compile_tag(Tag, Txt, T, P, I, State);
+compile([{text, A}, {text, B} | T], P, I, State) ->
+    compile([{text, <<A/binary, B/binary>>} | T], P, I, State);
 compile([{text, Txt} | T], P, I, State) ->
     [{I, text_struct(Txt, P, I)} | compile(T, P, I+1, State)];
 compile([{expr, {Expr, Vars}} | T], P, I, State) ->
     [{I, expr_struct(Expr, Vars, P, I)} | compile(T, P, I+1, State)];
 compile([{tag, Tag} | T], P, I, State) ->
-    compile_tag(Tag, T, P, I, State);
+    compile_tag(Tag, <<>>, T, P, I, State);
 compile([{block, Block} | T], P, I, State) ->
     [{I, block_struct(Block, P, I, State)} | compile(T, P, I+1, State)];
 compile([], _P, _I, _State) ->
     [].
 
-compile_tag(#{name := Name} = Tag, T, P, I, State) ->
+compile_tag(#{name := Name} = Tag, Txt, T, P, I, State) ->
     Attrs = norm_tag_attrs(Tag, P, State#state.parent),
-    do_compile_tag(Attrs, Tag#{attrs => Attrs}, T, P, I, State, [Name, $<]).
+    do_compile_tag(Attrs, Tag#{attrs => Attrs}, T, P, I, State, [Name, $<, Txt]).
 
 norm_tag_attrs(#{attrs := Attrs0, directives := Dirs}, Id, Target) ->
     maps:fold(fun
@@ -116,26 +119,68 @@ do_compile_tag([{K, {text, Txt}} | T], Tag, TT, P, I, State, Acc) ->
     do_compile_tag(T, Tag, TT, P, I, State, [$", Txt, $", $=, K, $\s | Acc]);
 do_compile_tag([K | T], Tag, TT, P, I, State, Acc) ->
     do_compile_tag(T, Tag, TT, P, I, State, [K, $\s | Acc]);
-% NOTE: It's possible to concat texts here.
+% IMPORTANT: Text concat must be reviewed when :if and :for be implemented.
+%            Cannot concat when this kind of directive is defined.
+% TODO: The is more optimization to do by concatenating tags.
 do_compile_tag([], Tag, TT, P, I, State, Acc) ->
     case maps:get(void, Tag, false) of
         true ->
-            [{I, tag_open_struct(Tag, Acc, P, I)} | compile(TT, P, I+1, State)];
+            case TT of
+                [{text, Txt0} | TTT] ->
+                    Txt = <<(tag_open(Tag, Acc))/binary, Txt0/binary>>,
+                    compile([{text, Txt} | TTT], P, I, State);
+                [{tag, TTag} | TTT] ->
+                    compile_tag(TTag, tag_open(Tag, Acc), TTT, P, I, State);
+                _ ->
+                    [{I, tag_open_struct(Tag, Acc, P, I)}
+                     | compile(TT, P, I+1, State)]
+            end;
         false ->
-            TState = case Tag of
-                #{directives := #{stateful := true}} ->
-                    State#state{parent = id(P, I)};
-                #{} ->
-                    State
-            end,
-            Tokens = [{I, tag_open_struct(Tag, Acc, P, I)}
-                        | compile(maps:get(tokens, Tag), P, I+1, TState)],
-            {NI, _} = lists:last(Tokens),
-            Tokens ++ compile([{text, tag_closing(Tag)} | TT], P, NI+1, State)
+            case maps:get(tokens, Tag) of
+                [] ->
+                    case TT of
+                        [{text, Txt0} | TTT] ->
+                            Txt = <<(no_tokens_tag(Tag, Acc))/binary, Txt0/binary>>,
+                            compile([{text, Txt} | TTT], P, I, State);
+                        [{tag, TTag} | TTT] ->
+                            compile_tag(TTag, no_tokens_tag(Tag, Acc), TTT, P, I, State);
+                        _ ->
+                            [{I, no_tokens_tag_struct(Tag, Acc, P, I)}
+                                | compile(TT, P, I+1, State)]
+                    end;
+                [{text, Txt0}] ->
+                    Txt = <<(tag_open(Tag, Acc))/binary, Txt0/binary,
+                            (tag_closing(Tag))/binary>>,
+                    compile([{text, Txt} | TT], P, I, State);
+                NTokens ->
+                    TState = tag_tokens_state(Tag, P, I, State),
+                    Tokens = [{I, tag_open_struct(Tag, Acc, P, I)}
+                              | compile(NTokens, P, I+1, TState)],
+                    {NI, _} = lists:last(Tokens),
+                    Tokens ++ compile([{text, tag_closing(Tag)} | TT], P, NI+1, State)
+            end
     end.
+
+tag_tokens_state(#{directives := #{stateful := true}}, P, I, State) ->
+    State#state{parent = id(P, I)};
+tag_tokens_state(#{}, _P, _I, State) ->
+    State.
+
+tag_open(#{void := true} = Tag, Acc) ->
+    case is_dtd(maps:get(name, Tag)) of
+        true ->
+            iolist_to_binary(lists:reverse([$> | Acc]));
+        false ->
+            iolist_to_binary(lists:reverse([$>, $/ | Acc]))
+    end;
+tag_open(#{void := false}, Acc) ->
+    iolist_to_binary(lists:reverse([$> | Acc])).
 
 tag_closing(#{name := Name}) ->
     <<$<, $/, Name/binary, $>>>.
+
+no_tokens_tag(Tag, Acc) ->
+    <<(tag_open(Tag, Acc))/binary, (tag_closing(Tag))/binary>>.
 
 id([], 0) ->
     root;
@@ -156,23 +201,16 @@ expr_struct(Expr, Vars, P, I) ->
         vars => Vars
      }.
 
-tag_open_struct(#{void := true} = Tag, Acc, P, I) ->
-    case is_dtd(maps:get(name, Tag)) of
-        true ->
-            #{
-                id => id(P, I),
-                text => iolist_to_binary(lists:reverse([$> | Acc]))
-            };
-        false ->
-            #{
-                id => id(P, I),
-                text => iolist_to_binary(lists:reverse([$>, $/ | Acc]))
-            }
-    end;
-tag_open_struct(#{void := false} = _Tag, Acc, P, I) ->
+no_tokens_tag_struct(Tag, Acc, P, I) ->
     #{
         id => id(P, I),
-        text => iolist_to_binary(lists:reverse([$> | Acc]))
+        text => no_tokens_tag(Tag, Acc)
+    }.
+
+tag_open_struct(Tag, Acc, P, I) ->
+    #{
+        id => id(P, I),
+        text => tag_open(Tag, Acc)
     }.
 
 % Document Type Definition
