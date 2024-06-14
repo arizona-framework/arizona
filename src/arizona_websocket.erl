@@ -30,20 +30,18 @@
 %% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
 
-init(Req, _State = []) ->
-    Params = cowboy_req:match_qs([path], Req),
-    {cowboy_websocket, Req, Params}.
+init(Req0, _State = []) ->
+    {ok, Req, Env} = arizona_server:route(Req0),
+    #{handler_opts := {Mod, Fun, Opts}} = Env,
+    {cowboy_websocket, Req, {Mod, Fun, Opts}}.
 
-websocket_init(Params) ->
-    io:format("[WebSocket] init: ~p~n", [Params]),
-    Path = arizona_req:normalize_path(maps:get(path, Params)),
-    {live_view, View, Macros} = arizona_route:match(get, Path),
-    Tpl = arizona_live_view:persist_get(View, Macros),
-    Assigns = #{},
+websocket_init({Mod, Fun, Opts}) ->
+    io:format("[WebSocket] init: ~p~n", [{Mod, Fun, Opts}]),
+    Macros = maps:get(macros, Opts, #{}),
+    Tpl = arizona_live_view:persist_get(Mod, Fun, Macros),
+    Assigns = maps:get(assigns, Opts, #{}),
     {ok, {Html, Sockets}} = arizona_tpl_render:mount(Tpl, Assigns),
     Events = [[~"init", Html]],
-    %% TODO: Every block must have its own state/socket, so the
-    %%       assigns, events, etc must live on its own socket.
     State = #{
         template => Tpl,
         sockets => #{Id => arizona_socket:prune(Socket)

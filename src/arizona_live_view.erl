@@ -24,7 +24,7 @@ Live view.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([parse_str/2, compile/2, persist_get/2]).
+-export([parse_str/2, compile/3, persist_get/3]).
 
 %% TODO: Real types.
 -type socket()  :: map().
@@ -63,19 +63,19 @@ parse_str(Str, Macros) ->
             {error, {ErrorInfo, ErrorLocation}}
     end.
 
-compile(Mod, Macros) ->
-    arizona_tpl_compile:compile({Mod, render, Macros}).
+compile(Mod, Fun, Macros) ->
+    arizona_tpl_compile:compile({Mod, Fun, Macros}).
 
-persist_get(View, Macros) ->
-    persistent_term:get({?PERSIST_KEY, View}, persist(View, Macros)).
+persist_get(Mod, Fun, Macros) ->
+    persistent_term:get({?PERSIST_KEY, {Mod, Fun}}, persist(Mod, Fun, Macros)).
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
-persist(View, Macros) ->
-    {ok, Compiled} = arizona_live_view:compile(View, Macros),
-    persistent_term:put({?PERSIST_KEY, View}, Compiled),
+persist(Mod, Fun, Macros) ->
+    {ok, Compiled} = compile(Mod, Fun, Macros),
+    persistent_term:put({?PERSIST_KEY, {Mod, Fun}}, Compiled),
     Compiled.
 
 %% --------------------------------------------------------------------

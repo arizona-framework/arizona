@@ -21,7 +21,7 @@
 -moduledoc false.
 
 %% API functions.
--export([start/0, start/1]).
+-export([start/0, start/1, route/1]).
 
 %% Macros
 -define(LISTENER, arizona_http_listener).
@@ -32,33 +32,53 @@
 %% --------------------------------------------------------------------
 
 start() ->
-    start(#{
-        schema => http,
-        ip => {127,0,0,1},
-        port => 8080
-    }).
+    start(#{}).
 
-start(Args) ->
+start(Opts) ->
+    do_start(normalize_opts(Opts)).
+
+route(Req) ->
+    #{path := Path} = cowboy_req:match_qs([path], Req),
+    cowboy_router:execute(Req#{path => Path},
+                          #{dispatch => {persistent_term, ?PERSIST_KEY}}).
+
+%% --------------------------------------------------------------------
+%% Internal functions.
+%% --------------------------------------------------------------------
+
+do_start(Opts) ->
     Dispatch = cowboy_router:compile([{'_', [
         % Static
         {"/favicon.ico", cowboy_static, {priv_file, arizona, "static/favicon.ico"}},
         {"/robots.txt", cowboy_static, {priv_file, arizona, "static/robots.txt"}},
         {"/assets/[...]", cowboy_static, {priv_dir, arizona, "static/assets"}},
         % Handlers
-        {"/websocket", arizona_websocket, []},
-        {'_', arizona_handler, []}
-    ]}]),
+        {"/websocket", arizona_websocket, []}
+    ] ++ maps:get(routes, Opts)}]),
     persistent_term:put(?PERSIST_KEY, Dispatch),
+    Url = maps:get(url, Opts),
     {ok, Pid} = cowboy:start_clear(?LISTENER,
-        [{port, maps:get(port, Args)}],
+        [{port, maps:get(port, Url)}],
         #{env => #{dispatch => {persistent_term, ?PERSIST_KEY}}}
     ),
-    io:format("Arizona is running at ~s~n", [format_url(Args)]),
+    io:format("Arizona is running at ~s~n", [format_url(Url)]),
     {ok, Pid}.
 
-%% --------------------------------------------------------------------
-%% Internal functions.
-%% --------------------------------------------------------------------
+normalize_opts(Opts) when is_map(Opts) ->
+    #{
+        url => normalize_url(maps:get(url, Opts, #{})),
+        routes => maps:get(routes, Opts, [])
+     }.
+
+normalize_url(Url) when is_map(Url) ->
+    maps:merge(default_url(), Url).
+
+default_url() ->
+    #{
+        schema => http,
+        ip => {127,0,0,1},
+        port => 8080
+    }.
 
 format_url(#{schema := Schema, ip := IP, port := Port}) ->
     io_lib:format("~w://~s:~p", [Schema, ip_to_string(IP), Port]).

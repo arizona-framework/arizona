@@ -30,7 +30,6 @@
 %% --------------------------------------------------------------------
 
 start(_StartType, _StartArgs) ->
-    {ok, _} = arizona_server:start(),
     arizona_sup:start_link().
 
 stop(_State) ->

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright 2024 William Fank Thomé
+%% Copyright 2023-2024 William Fank Thomé
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -17,22 +17,24 @@
 %%
 %% %CopyrightEnd%
 %%
--module(arizona_route).
--moduledoc """
-Router.
-""".
--moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
+-module(arizona_live_handler).
+-moduledoc false.
 
-%% API functions.
--export([match/2]).
+-behaviour(cowboy_handler).
+
+%% cowboy_handler callbacks.
+-export([init/2]).
 
 %% --------------------------------------------------------------------
-%% API funtions.
+%% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
 
-% NOTE: This is just a hardcoded example.
-match(get, []) ->
-    {live_view, arizona_example, #{}};
-match(_, _) ->
-    nomatch.
+init(Req0, {Mod, Fun, Opts} = State) ->
+    Macros = maps:get(macros, Opts, #{}),
+    Tpl = arizona_live_view:persist_get(Mod, Fun, Macros),
+    Assigns = maps:get(assigns, Opts, #{}),
+    Html = arizona_tpl_render:render_block(Tpl, Assigns),
+    Headers = #{<<"content-type">> => <<"text/html">>},
+    Req = cowboy_req:reply(200, Headers, Html, Req0),
+    {ok, Req, State}.
 
