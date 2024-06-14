@@ -25,7 +25,7 @@
 
 %% Macros
 -define(LISTENER, arizona_http_listener).
--define(PERSISTENT_KEY, arizona_dispatch).
+-define(PERSIST_KEY, arizona_dispatch).
 
 %% --------------------------------------------------------------------
 %% API functions.
@@ -48,10 +48,10 @@ start(Args) ->
         {"/websocket", arizona_websocket, []},
         {'_', arizona_handler, []}
     ]}]),
-    persistent_term:put(?PERSISTENT_KEY, Dispatch),
+    persistent_term:put(?PERSIST_KEY, Dispatch),
     {ok, Pid} = cowboy:start_clear(?LISTENER,
         [{port, maps:get(port, Args)}],
-        #{env => #{dispatch => {persistent_term, ?PERSISTENT_KEY}}}
+        #{env => #{dispatch => {persistent_term, ?PERSIST_KEY}}}
     ),
     io:format("Arizona is running at ~s~n", [format_url(Args)]),
     {ok, Pid}.
