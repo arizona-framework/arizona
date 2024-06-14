@@ -30,14 +30,15 @@
 %% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
 
-init(Req, Args) ->
-    {cowboy_websocket, Req, Args}.
+init(Req, _State = []) ->
+    Params = cowboy_req:match_qs([path], Req),
+    {cowboy_websocket, Req, Params}.
 
-websocket_init(Args) ->
-    io:format("[WebSocket] init: ~p~n", [Args]),
-    % TODO: Get view from router.
-    View = arizona_handler,
-    Tpl = arizona_live_view:persist_get(View, #{}),
+websocket_init(Params) ->
+    io:format("[WebSocket] init: ~p~n", [Params]),
+    Path = arizona_req:normalize_path(maps:get(path, Params)),
+    {live_view, View, Macros} = arizona_route:match(get, Path),
+    Tpl = arizona_live_view:persist_get(View, Macros),
     Assigns = #{},
     {ok, {Html, Sockets}} = arizona_tpl_render:mount(Tpl, Assigns),
     Events = [[~"init", Html]],

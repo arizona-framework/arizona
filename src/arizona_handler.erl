@@ -25,20 +25,12 @@
 %% cowboy_handler callbacks.
 -export([init/2]).
 
-%% Example functions.
--export([mount/1, render/1, counter/1, button/1, handle_event/3]).
-
--include("live_view.hrl").
-
 %% --------------------------------------------------------------------
 %% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
 
-% TODO: View from rout.
 init(Req0, State) ->
-    Method = normalize_method(cowboy_req:method(Req0)),
-    Path = normalize_path(cowboy_req:path(Req0)),
-    case arizona_route:match(Method, Path) of
+    case arizona_req:route(Req0) of
         {live_view, View, Macros} ->
             Tpl = arizona_live_view:persist_get(View, Macros),
             Assigns = #{},
@@ -52,84 +44,4 @@ init(Req0, State) ->
             }, ~"Not Found =(", Req0),
             {ok, Req, State}
     end.
-
-%% --------------------------------------------------------------------
-%% Internal functions.
-%% --------------------------------------------------------------------
-
-normalize_method(<<"GET">>) -> get;
-normalize_method(<<"POST">>) -> post;
-normalize_method(<<"PATCH">>) -> patch;
-normalize_method(<<"DELETE">>) -> delete;
-normalize_method(<<"PUT">>) -> put;
-normalize_method(<<"CONNECT">>) -> connect;
-normalize_method(<<"HEAD">>) -> head;
-normalize_method(<<"OPTIONS">>) -> options;
-normalize_method(<<"TRACE">>) -> trace.
-
-normalize_path(Path) ->
-    binary:split(Path, <<"/">>, [global, trim_all]).
-
-%% --------------------------------------------------------------------
-%% Example functions.
-%% --------------------------------------------------------------------
-
-mount(#{assigns := Assigns} = Socket) ->
-    Count = maps:get(count, Assigns, 0),
-    {ok, arizona_socket:assign(count, Count, Socket)}.
-
-render(Macros0) ->
-    Macros = Macros0#{
-        title => maps:get(title, Macros0, ~"Arizona")
-    },
-    ?LV(~"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta http-equiv="X-UA-Compatible" content="IE=edge">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{_@title}</title>
-        <script src="assets/js/morphdom.min.js"></script>
-        <script src="assets/js/arizona.js"></script>
-        <script src="assets/js/example.js"></script>
-    </head>
-    <body>
-        <.counter
-            count={_@count}
-            btn_text="Increment #1"
-            event="incr"
-        />
-        <.counter
-            count={99}
-            btn_text="Increment #2"
-            event="decr"
-        />
-    </body>
-    </html>
-    """).
-
-counter(Macros) ->
-    ?LV(~s"""
-    <div :stateful>
-        <div>Count: {_@count}</div>
-        <.button event={_@event} text={_@btn_text} />
-    </div>
-    """).
-
-button(Macros) ->
-    ?LV(~s"""
-    {% NOTE: On this example, :onclick is and expression to be }
-    {%       dynamic. It could be just, e.g., :onclick="incr". }
-    <button type="button" :onclick={arizona_js:send(_@event)}>
-        {_@text}
-    </button>
-    """).
-
-handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
-    Count = maps:get(count, Assigns) + 1,
-    {noreply, arizona_socket:assign(count, Count, Socket)};
-handle_event(<<"decr">>, #{}, #{assigns := Assigns} = Socket) ->
-    Count = maps:get(count, Assigns) - 1,
-    {noreply, arizona_socket:assign(count, Count, Socket)}.
 
