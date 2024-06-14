@@ -3,10 +3,7 @@
     {vsn, "0.1.0"},
     {registered, []},
     {mod, {arzex_app, []}},
-    {applications, [
-        kernel,
-        stdlib
-    ]},
+    {applications, [kernel, stdlib, arizona]},
     {env, []},
     {modules, []},
     {licenses, ["Apache-2.0"]},
