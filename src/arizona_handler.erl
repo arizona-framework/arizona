@@ -26,7 +26,7 @@
 -export([init/2]).
 
 %% Example functions.
--export([mount/1, render/1, counter/1, handle_event/3]).
+-export([mount/1, render/1, counter/1, button/1, handle_event/3]).
 
 -include("live_view.hrl").
 
@@ -87,12 +87,17 @@ counter(Macros) ->
     ?LV(~s"""
     <div :stateful>
         <div>Count: {_@count}</div>
-        {% NOTE: On this example, :onclick is and expression to be }
-        {%       dynamic. It could be just, e.g., :onclick="incr". }
-        <button type="button" :onclick={arizona_js:send(_@event)}>
-            {_@btn_text}
-        </button>
+        <.button event={_@event} text={_@btn_text} />
     </div>
+    """).
+
+button(Macros) ->
+    ?LV(~s"""
+    {% NOTE: On this example, :onclick is and expression to be }
+    {%       dynamic. It could be just, e.g., :onclick="incr". }
+    <button type="button" :onclick={arizona_js:send(_@event)}>
+        {_@text}
+    </button>
     """).
 
 handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
