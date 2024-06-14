@@ -33,6 +33,9 @@ Live view.
 -type event()   :: binary().
 -type payload() :: map().
 
+%% Macros
+-define(PERSIST_KEY, ?MODULE).
+
 %% --------------------------------------------------------------------
 %% Callbacks.
 %% --------------------------------------------------------------------
@@ -64,7 +67,7 @@ compile(Mod, Macros) ->
     arizona_tpl_compile:compile({Mod, render, Macros}).
 
 persist_get(View, Macros) ->
-    persistent_term:get({arz_tpl, View}, persist(View, Macros)).
+    persistent_term:get({?PERSIST_KEY, View}, persist(View, Macros)).
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
@@ -72,7 +75,7 @@ persist_get(View, Macros) ->
 
 persist(View, Macros) ->
     {ok, Compiled} = arizona_live_view:compile(View, Macros),
-    persistent_term:put({arz_tpl, View}, Compiled),
+    persistent_term:put({?PERSIST_KEY, View}, Compiled),
     Compiled.
 
 %% --------------------------------------------------------------------
