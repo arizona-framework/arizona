@@ -34,17 +34,24 @@
 %% --------------------------------------------------------------------
 
 init(Req0, _State = []) ->
+    Params = cowboy_req:parse_qs(Req0),
     {ok, Req, Env} = arizona_server:route(Req0),
     #{handler_opts := {Mod, Fun, Opts}} = Env,
-    {cowboy_websocket, Req, {Mod, Fun, Opts}}.
+    {cowboy_websocket, Req, {Params, {Mod, Fun, Opts}}}.
 
-websocket_init({Mod, Fun, Opts}) ->
-    io:format("[WebSocket] init: ~p~n", [{self(), {Mod, Fun, Opts}}]),
+websocket_init({Params, {Mod, Fun, Opts}}) ->
+    io:format("[WebSocket] init: ~p~n", [{self(), Params, {Mod, Fun, Opts}}]),
     Macros = maps:get(macros, Opts, #{}),
     Tpl = arizona_live_view:persist_get(Mod, Fun, Macros),
     Assigns = maps:get(assigns, Opts, #{}),
     {ok, {Html, Sockets}} = arizona_tpl_render:mount(Tpl, Assigns),
-    Events = [[~"init", Html]],
+    Reconnecting = proplists:get_value(<<"reconnecting">>, Params, <<"false">>),
+    Events = case Reconnecting of
+        <<"true">> ->
+            [];
+        <<"false">> ->
+            [{text, json:encode([[~"init", Html]])}]
+    end,
     State = #{
         template => Tpl,
         sockets => #{Id => arizona_socket:prune(Socket)
@@ -52,7 +59,7 @@ websocket_init({Mod, Fun, Opts}) ->
     },
     subscribe(broadcast),
     send(init, {init, self()}),
-    {[{text, json:encode(Events)}], State}.
+    {Events, State}.
 
 websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
     io:format("[WebSocket] handle: ~p~n", [Msg]),

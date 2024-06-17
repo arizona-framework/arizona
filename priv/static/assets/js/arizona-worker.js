@@ -1,11 +1,14 @@
 "use strict"
 
 const state = {
+    connected: false,
+    keepAlive: true,
     fulfilled: false,
     params: {},
     socket: null,
     eventQueue: [],
-    tree: []
+    tree: [],
+    reconnectTimeout: 1000,
 }
 
 // Messages from client.
@@ -37,8 +40,10 @@ function connect(params) {
 
         state.params = params
         state.socket = socket
+        state.keepAlive = true
 
         socket.onopen = function () {
+            state.connected = true
             state.fulfilled = true
 
             state.eventQueue.forEach(sendMsgToServer)
@@ -51,8 +56,12 @@ function connect(params) {
         }
 
         socket.onclose = function (e) {
+            state.connected = false
+
             console.log("[WebSocket] disconnected", e)
             sendMsgToClient("disconnect")
+
+            state.keepAlive && tryReconnect()
         }
 
         // Messages from server.
@@ -67,6 +76,7 @@ function connect(params) {
 }
 
 function disconnect() {
+    state.keepAlive = false
     state.socket.close()
 }
 
@@ -78,6 +88,13 @@ function reconnect() {
         reconnecting: "true",
     }
     connect(params)
+}
+
+function tryReconnect() {
+    if (state.connected) return
+    state.fulfilled
+        ? setTimeout(reconnect, state.reconnectTimeout)
+        : setTimeout(() => connect(state.params), state.reconnectTimeout)
 }
 
 function handleEvent(data) {
