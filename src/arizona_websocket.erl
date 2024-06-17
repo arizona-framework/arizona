@@ -26,6 +26,9 @@
 -export([init/2, websocket_init/1, websocket_handle/2,
          websocket_info/2, terminate/3]).
 
+%% API functions.
+-export([subscribe/1]).
+
 %% --------------------------------------------------------------------
 %% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
@@ -36,7 +39,7 @@ init(Req0, _State = []) ->
     {cowboy_websocket, Req, {Mod, Fun, Opts}}.
 
 websocket_init({Mod, Fun, Opts}) ->
-    io:format("[WebSocket] init: ~p~n", [{Mod, Fun, Opts}]),
+    io:format("[WebSocket] init: ~p~n", [{self(), {Mod, Fun, Opts}}]),
     Macros = maps:get(macros, Opts, #{}),
     Tpl = arizona_live_view:persist_get(Mod, Fun, Macros),
     Assigns = maps:get(assigns, Opts, #{}),
@@ -47,6 +50,8 @@ websocket_init({Mod, Fun, Opts}) ->
         sockets => #{Id => arizona_socket:prune(Socket)
                      || Id := Socket <- Sockets}
     },
+    subscribe(broadcast),
+    send(init, {init, self()}),
     {[{text, json:encode(Events)}], State}.
 
 websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
@@ -69,23 +74,31 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
     {[{text, json:encode(maps:get(events, Socket))}],
         State#{sockets => Sockets#{Id => arizona_socket:prune(Socket)}}}.
 
+websocket_info(reload, Socket) ->
+    io:format("[WebSocket] reload~n", []),
+    {[{text, json:encode([[~"reload", []]])}], Socket};
 websocket_info(Info, Socket) ->
-    io:format("[WebSocket] info: ~p~n", [Info]),
+    io:format("[WebSocket] info: ~p~n", [{Info, Socket}]),
     {[], Socket}.
 
 terminate(Reason, Req, _State) ->
     io:format("[WebSocket] terminate: ~p~n", [{Reason, Req}]),
+    send(terminate, {terminate, self()}),
     ok.
 
 %% --------------------------------------------------------------------
 %% API functions.
 %% --------------------------------------------------------------------
 
-% nothing here yet!
+subscribe(Event) ->
+    gproc:reg({p, l, {?MODULE, Event}}).
 
 %% --------------------------------------------------------------------
 %% Internal functions.
 %% --------------------------------------------------------------------
+
+send(Event, Payload) ->
+    gproc:send({p, l, {?MODULE, Event}}, Payload).
 
 decode_msg(Msg) ->
     case json:decode(Msg) of

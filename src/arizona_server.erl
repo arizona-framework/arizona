@@ -87,9 +87,13 @@ norm_transport_opts(Opts) when is_list(Opts) ->
 
 norm_proto_opts(Opts, Host, Routes) when is_map(Opts) ->
     Dispatch = cowboy_router:compile([{Host, [
-        {"/favicon.ico", cowboy_static, {priv_file, arizona, "static/favicon.ico"}},
-        {"/robots.txt", cowboy_static, {priv_file, arizona, "static/robots.txt"}},
-        {"/assets/[...]", cowboy_static, {priv_dir, arizona, "static/assets"}},
+        {"/assets/js/morphdom.min.js", cowboy_static, {priv_file, arizona, "static/assets/js/morphdom.min.js"}},
+        {"/assets/js/arizona.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona.js"}},
+        {"/assets/js/arizona-worker.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona-worker.js"}},
+
+        % TODO: Only include live reload if needed.
+        {"/assets/js/arizona-live-reload.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona-live-reload.js"}},
+
         {"/websocket", arizona_websocket, []}
     ] ++ Routes}]),
     persistent_term:put(?PERSIST_KEY, Dispatch),

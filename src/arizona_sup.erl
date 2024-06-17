@@ -1,4 +1,4 @@
-%% 
+%%
 %% %CopyrightBegin%
 %%
 %% Copyright 2023-2024 William Fank Thomé
@@ -21,10 +21,10 @@
 -moduledoc false.
 
 %% API functions.
--export([ start_link/0 ]).
+-export([start_link/1]).
 
 %% Supervisor callbacks.
--export([ init/1 ]).
+-export([init/1]).
 
 %% Macros.
 -define(SERVER, ?MODULE).
@@ -33,19 +33,25 @@
 %% API functions.
 %% --------------------------------------------------------------------
 
-start_link() ->
-    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
+start_link(Config) when is_list(Config) ->
+    supervisor:start_link({local, ?SERVER}, ?MODULE, Config).
 
 %% --------------------------------------------------------------------
 %% Supervisor callbacks.
 %% --------------------------------------------------------------------
 
-init([]) ->
-    SupFlags = #{ 
+init(Config) ->
+    SupFlags = #{
         strategy => one_for_all,
         intensity => 0,
         period => 1
     },
-    ChildSpecs = [],
+    ChildSpecs = [
+        #{
+            id => arizona_live_reload,
+            start => {arizona_live_reload, start_link,
+                      [proplists:get_value(live_reload, Config, #{})]}
+        }
+    ],
     {ok, {SupFlags, ChildSpecs}}.
 

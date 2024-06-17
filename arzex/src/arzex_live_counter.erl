@@ -29,9 +29,13 @@ render(Macros0) ->
         <meta http-equiv="X-UA-Compatible" content="IE=edge">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{_@title}</title>
+
+        {% TODO: Auto-inject Arizona scripts. }
         <script src="assets/js/morphdom.min.js"></script>
         <script src="assets/js/arizona.js"></script>
-        <script src="assets/js/example.js"></script>
+        <script src="assets/js/arizona-live-reload.js"></script>
+
+        <script src="assets/js/main.js"></script>
     </head>
     <body>
         <.counter

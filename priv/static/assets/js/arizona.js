@@ -107,6 +107,6 @@ globalThis["arizona"] = (() => {
         })
     }
 
-    return { send, connect }
+    return { subscribe, subscribeOnce, unsubscribe, send, connect }
 })()
 

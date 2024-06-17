@@ -30,7 +30,8 @@
 %% --------------------------------------------------------------------
 
 start(_StartType, _StartArgs) ->
-    arizona_sup:start_link().
+    Config = application:get_all_env(arizona),
+    arizona_sup:start_link(Config).
 
 stop(_State) ->
     ok.
