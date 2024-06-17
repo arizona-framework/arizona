@@ -1,4 +1,4 @@
-%% 
+%%
 %% %CopyrightBegin%
 %%
 %% Copyright 2023-2024 William Fank Thomé
@@ -30,8 +30,8 @@
 %% --------------------------------------------------------------------
 
 start(_StartType, _StartArgs) ->
-    Config = application:get_all_env(arizona),
-    arizona_sup:start_link(Config).
+    {ok, _} = arizona_server:start(),
+    arizona_sup:start_link().
 
 stop(_State) ->
     ok.

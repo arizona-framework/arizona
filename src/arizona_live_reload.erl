@@ -1,37 +1,68 @@
+%%
+%% %CopyrightBegin%
+%%
+%% Copyright 2023-2024 William Fank Thomé
+%%
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
+%%
+%% %CopyrightEnd%
+%%
 -module(arizona_live_reload).
+-moduledoc """
+Live-reload functionality for use during development.
+""".
+
 -behaviour(gen_server).
 
--export([start_link/1, recompile/0]).
+%% API functions
+-export([start_link/0, reload/0]).
 
+%% gen_server callbacks.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
+%% State
 -record(state, {timer, files = #{}, clients = #{}}).
 
+%% Macros
 -define(SERVER, ?MODULE).
 
-start_link(Opts) when is_map(Opts) ->
-    gen_server:start_link(?SERVER, Opts, []).
+%% --------------------------------------------------------------------
+%% API functions.
+%% --------------------------------------------------------------------
 
-recompile() ->
-    r3:do(compile).
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-init(_Opts) ->
+reload() ->
+    gen_server:cast(?SERVER, reload).
+
+%% --------------------------------------------------------------------
+%% gen_server callbacks.
+%% --------------------------------------------------------------------
+
+init([]) ->
     register_events(),
     setup_watcher(),
     {ok, #state{}}.
-
-register_events() ->
-    arizona_websocket:subscribe(init),
-    arizona_websocket:subscribe(terminate).
-
-setup_watcher() ->
-    fs:start_link(?MODULE, filename:absname("")),
-    fs:subscribe(?MODULE).
 
 handle_call(Request, From, State) ->
     io:format("[LiveReload] call: ~p from ~p~n", [Request, From]),
     {reply, State, State}.
 
+handle_cast(reload, State) ->
+    io:format("[LiveReload] reload: ~p~n", [State]),
+    reload(State#state.clients),
+    {noreply, State};
 handle_cast(Request, State) ->
     io:format("[LiveReload] cast: ~p~n", [Request]),
     {noreply, State}.
@@ -70,11 +101,26 @@ handle_info(recompile, #state{files = Files} = State) when map_size(Files) > 0 -
             Mod = list_to_existing_atom(filename:basename(File, ".erl")),
             c:c(Mod)
     end, Files),
-    maps:foreach(fun(Client, _) -> Client ! reload end, State#state.clients),
+    reload(State#state.clients),
     {noreply, State#state{timer = undefined, files = #{}}};
 handle_info(recompile, State) ->
     {noreply, State#state{timer = undefined}};
 handle_info(Request, State) ->
     io:format("[LiveReload] info: ~p~n", [Request]),
     {noreply, State}.
+
+%% --------------------------------------------------------------------
+%% Internal functions.
+%% --------------------------------------------------------------------
+
+register_events() ->
+    arizona_websocket:subscribe(init),
+    arizona_websocket:subscribe(terminate).
+
+setup_watcher() ->
+    fs:start_link(arizona_live_reload_fs, filename:absname("")),
+    fs:subscribe(arizona_live_reload_fs).
+
+reload(Clients) ->
+    maps:foreach(fun(Client, _) -> Client ! reload end, Clients).
 

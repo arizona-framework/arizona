@@ -32,9 +32,9 @@
 %% --------------------------------------------------------------------
 
 start() ->
-    start(#{}).
+    start(application:get_env(arizona, endpoint, #{})).
 
-start(Opts) ->
+start(Opts) when is_map(Opts) ->
     do_start(norm_opts(Opts)).
 
 route(Req) ->
@@ -70,14 +70,14 @@ ip_to_str(Ip) ->
             Str
     end.
 
-
-norm_opts(Opts) when is_map(Opts) ->
+norm_opts(Opts) ->
     #{
         scheme => maps:get(scheme, Opts, http),
         transport => norm_transport_opts(maps:get(transport, Opts, [])),
         proto => norm_proto_opts(maps:get(proto, Opts, #{}),
                                  maps:get(host, Opts, '_'),
-                                 maps:get(routes, Opts, []))
+                                 maps:get(routes, Opts, []),
+                                 maps:get(live_reload, Opts, false))
     }.
 
 norm_transport_opts([]) ->
@@ -85,17 +85,19 @@ norm_transport_opts([]) ->
 norm_transport_opts(Opts) when is_list(Opts) ->
     Opts.
 
-norm_proto_opts(Opts, Host, Routes) when is_map(Opts) ->
+norm_proto_opts(Opts, Host, Routes, LiveReload) when is_map(Opts) ->
     Dispatch = cowboy_router:compile([{Host, [
         {"/assets/js/morphdom.min.js", cowboy_static, {priv_file, arizona, "static/assets/js/morphdom.min.js"}},
         {"/assets/js/arizona.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona.js"}},
         {"/assets/js/arizona-worker.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona-worker.js"}},
-
-        % TODO: Only include live reload if needed.
-        {"/assets/js/arizona-live-reload.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona-live-reload.js"}},
-
         {"/websocket", arizona_websocket, []}
-    ] ++ Routes}]),
+    ] ++ case LiveReload of
+        true ->
+            [{"/assets/js/arizona-live-reload.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona-live-reload.js"}}
+             | Routes];
+         false ->
+            Routes
+    end}]),
     persistent_term:put(?PERSIST_KEY, Dispatch),
     Opts#{env => #{dispatch => {persistent_term, ?PERSIST_KEY}}}.
 
