@@ -1,4 +1,5 @@
 -module(arzex_live_counter).
+-behaviour(arizona_live_view).
 
 %% arizona_live_view callbacks.
 -export([mount/1, render/1, handle_event/3]).

@@ -11,12 +11,13 @@ Arizona is a Web Framework for Erlang.
 
 ```erlang
 -module(view).
+-behaviour(arizona_live_view).
 
 % 'mount/1', 'render/1', and 'handle_event/3' are callbacks of
 % 'arizona_live_view' behavior. 'handle_event/3' is optional.
 -export([mount/1, render/1, handle_event/3, counter/1]).
 
-% This header includes the arizona_live_view behavior and the `?LV` macro.
+% This header includes the the `?LV` macro.
 -include_lib("arizona/include/arizona_live_view.hrl").
 
 % Called once before the first render.
