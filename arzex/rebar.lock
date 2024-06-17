@@ -8,7 +8,7 @@
   2},
  {<<"fs">>,
   {git,"https://github.com/5HT/fs.git",
-       {ref,"699faf9b64df1e26bff7a77324c9733c03173102"}},
+       {ref,"936ba9dcf88186250ecc5995e25154bde44252a1"}},
   1},
  {<<"gproc">>,
   {git,"https://github.com/uwiger/gproc.git",
