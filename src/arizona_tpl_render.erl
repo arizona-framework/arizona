@@ -24,14 +24,12 @@ Renderer.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([render_target/4, render_block/2, render_changes/3,
-         render_diff/3, mount/2]).
+-export([render_target/4, render_block/2, mount/2]).
 
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
-% TODO: Rename to target_changes.
 render_target(Target, Block, Changes, Assigns) when map_size(Changes) > 0 ->
     render_target_1(Target, Block, Changes, Assigns);
 render_target(_Target, _Block, _Changes, _Assigns) ->
@@ -56,18 +54,6 @@ render_block(#{id := Id, view := View} = Block, Assigns0) ->
     Assigns = maps:get(assigns, Socket),
     render_indexes(Indexes, Tree, Assigns, false).
 
-render_changes(#{vars := AllVars, block := Block}, Changes, Assigns)
-    when map_size(Changes) > 0 ->
-    Vars = maps:with(maps:keys(Changes), AllVars),
-    path_render(Vars, Block, Assigns);
-render_changes(#{}, _Changes, _Assigns) ->
-    [].
-
-render_diff(#{vars := AllVars} = Block, NewAssigns, OldAssigns) ->
-    Changes = diff(AllVars, NewAssigns, OldAssigns),
-    Assigns = maps:merge(OldAssigns, Changes),
-    render_changes(Block, Changes, Assigns).
-
 mount(#{id := Id, view := View} = Block, Assigns0) ->
     Socket0 = arizona_socket:new(Id, View, Assigns0),
     {ok, Socket} = View:mount(Socket0),
@@ -85,12 +71,24 @@ mount(#{id := Id, view := View} = Block, Assigns0) ->
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
-diff(Vars, NewAssigns, OldAssigns) ->
-    #{K => V || K := V <- NewAssigns,
-        is_map_key(K, Vars) andalso (
-            not is_map_key(K, OldAssigns)
-            orelse maps:get(K, OldAssigns) =/= V
-        )}.
+render_changes(#{vars := AllVars, block := Block}, Changes, Assigns)
+    when map_size(Changes) > 0 ->
+    Vars = maps:with(maps:keys(Changes), AllVars),
+    path_render(Vars, Block, Assigns);
+render_changes(#{}, _Changes, _Assigns) ->
+    [].
+
+%render_diff(#{vars := AllVars} = Block, NewAssigns, OldAssigns) ->
+%    Changes = diff(AllVars, NewAssigns, OldAssigns),
+%    Assigns = maps:merge(OldAssigns, Changes),
+%    render_changes(Block, Changes, Assigns).
+%
+%diff(Vars, NewAssigns, OldAssigns) ->
+%    #{K => V || K := V <- NewAssigns,
+%        is_map_key(K, Vars) andalso (
+%            not is_map_key(K, OldAssigns)
+%            orelse maps:get(K, OldAssigns) =/= V
+%        )}.
 
 mount_loop(Pid, Sockets) ->
     receive
@@ -191,39 +189,84 @@ eval({expr, {Fun, _Vars}}, Assigns) ->
 
 render_block_test() ->
     ?assertEqual(
-       [<<"<main arz-id=\"root\">">>,<<"<h1>">>,<<"Arizona">>,
-       <<"</h1>">>,
-       [<<"<div arz-id=\"[4]\" id=\"">>,<<"1">>,<<"\">">>,
-        <<"<span>">>,<<"Count:">>,<<"<b>">>,<<"0">>,<<"</b>">>,
-        <<"</span>">>,<<"<br/>">>,<<"</br>">>,
-        [<<"<button arz-target=\"[4]\" onclick=\"">>,<<"incr">>,
-         <<"\" type=\"button\">">>,<<"Increment">>,<<"</button>">>],
-        <<>>,<<"</div>">>],
-       [<<"<div arz-id=\"[5]\" id=\"">>,<<"2">>,<<"\">">>,
-        <<"<span>">>,<<"Rev. Counter:">>,<<"<b>">>,<<"0">>,
-        <<"</b>">>,<<"</span>">>,<<"<br/>">>,<<"</br>">>,
-        [<<"<button arz-target=\"[5]\" onclick=\"">>,<<"decr">>,
-         <<"\" type=\"button\">">>,<<"Decrement">>,<<"</button>">>],
-        <<>>,<<"</div>">>],
-       <<"</main>">>
-    ], render_block(block(#{}), #{
+       [<<"<main arz-id=\"root\"><h1>">>,<<"Arizona">>,<<"</h1>">>,
+                  [<<"<div arz-id=\"[3]\" id=\"">>,<<"1">>,<<"\"><span>">>,
+                   <<"Count:">>,<<"<b>">>,<<"0">>,<<"</b></span><br/>">>,
+                   [<<"Increment">>,
+                    <<"<button arz-target=\"[3]\" onclick=\"">>,<<"incr">>,
+                    <<"\" type=\"button\">">>,<<"Increment">>,<<"</button>">>,
+                    <<"Increment">>],
+                   <<"</div>">>],
+                  [<<"<div arz-id=\"[4]\" id=\"">>,<<"2">>,<<"\"><span>">>,
+                   <<"Rev. Counter:">>,<<"<b>">>,<<"0">>,
+                   <<"</b></span><br/>">>,
+                   [<<"Decrement">>,
+                    <<"<button arz-target=\"[4]\" onclick=\"">>,<<"decr">>,
+                    <<"\" type=\"button\">">>,<<"Decrement">>,<<"</button>">>,
+                    <<"Decrement">>],
+                   <<"</div>">>],
+                  <<"</main>">>], render_block(block(#{}), #{
             title => <<"Arizona">>,
             view_count => 0,
             decr_btn_text => <<"Decrement">>})).
 
+% NOTE: Apparently, there is no changes here, but the socket set
+%       changes to the assigns automatically, then they are sync.
 render_changes_test() ->
-    ?assertEqual([[[5,6],<<"999">>],[[4,6],<<"999">>]],
+    ?assertEqual([[[4,5],<<"999">>],[[3,5],<<"999">>]],
         render_changes(block(#{}),
             #{view_count => 999},
             #{title => <<"Arizona">>,
-            view_count => 0,
+            view_count => 999,
             decr_btn_text => <<"Decrement">>})).
 
 mount_test() ->
-    ?assertEqual(error, mount(block(#{}), #{
+    {ok, {Render, Sockets}} = mount(block(#{}), #{
             title => <<"Arizona">>,
             view_count => 0,
-            decr_btn_text => <<"Decrement">>})).
+            decr_btn_text => <<"Decrement">>}),
+    [?assertEqual([<<"<main arz-id=\"root\"><h1>">>,<<"Arizona">>,
+                       <<"</h1>">>,
+                       [<<"<div arz-id=\"[3]\" id=\"">>,<<"1">>,
+                        <<"\"><span>">>,<<"Count:">>,<<"<b>">>,<<"0">>,
+                        <<"</b></span><br/>">>,
+                        [<<"Increment">>,
+                         <<"<button arz-target=\"[3]\" onclick=\"">>,
+                         <<"incr">>,<<"\" type=\"button\">">>,<<"Increment">>,
+                         <<"</button>">>,<<"Increment">>],
+                        <<"</div>">>],
+                       [<<"<div arz-id=\"[4]\" id=\"">>,<<"2">>,
+                        <<"\"><span>">>,<<"Rev. Counter:">>,<<"<b>">>,<<"0">>,
+                        <<"</b></span><br/>">>,
+                        [<<"Decrement">>,
+                         <<"<button arz-target=\"[4]\" onclick=\"">>,
+                         <<"decr">>,<<"\" type=\"button\">">>,<<"Decrement">>,
+                         <<"</button>">>,<<"Decrement">>],
+                        <<"</div>">>],
+                       <<"</main>">>], Render),
+     ?assertMatch(#{[0] :=
+                       #{id := [0],
+                         events := [],view := arizona_tpl_compile,
+                         assigns :=
+                             #{title := <<"Arizona">>,view_count := 0,
+                               decr_btn_text := <<"Decrement">>},
+                         changes := #{}},
+                   [3] :=
+                       #{id := [3],
+                         events := [],view := arizona_tpl_compile,
+                         assigns :=
+                             #{id := <<"1">>,counter_count := 0,
+                               btn_text := <<"Increment">>,
+                               btn_event := <<"incr">>},
+                         changes := #{}},
+                   [4] :=
+                       #{id := [4],
+                         events := [],view := arizona_tpl_compile,
+                         assigns :=
+                             #{id := <<"2">>,label := <<"Rev. Counter:">>,
+                               counter_count := 0,btn_text := <<"Decrement">>,
+                               btn_event := <<"decr">>},
+                         changes := #{}}}, Sockets)].
 
 %% Start block support.
 

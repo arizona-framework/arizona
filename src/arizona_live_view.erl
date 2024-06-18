@@ -115,7 +115,7 @@ counter(Macros) ->
 % End parse_str support.
 
 compile_test() ->
-    ?assertMatch({ok, #{block := _}}, compile(?MODULE, #{})).
+    ?assertMatch({ok, #{block := _}}, compile(?MODULE, render, #{})).
 
 -endif.
 

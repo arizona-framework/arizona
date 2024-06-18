@@ -101,6 +101,8 @@ norm_tag_attrs(#{attrs := Attrs0, directives := Dirs}, Id, Target) ->
             end
     end, Attrs0, Dirs).
 
+arz_id([]) ->
+    <<"root">>;
 arz_id([_]) ->
     <<"root">>;
 arz_id(root) ->
@@ -202,8 +204,10 @@ tag_closing(#{name := Name}) ->
 no_tokens_tag(Tag, Acc) ->
     <<(tag_open(Tag, Acc))/binary, (tag_closing(Tag))/binary>>.
 
-id([], 0) ->
+id([], root) ->
     root;
+id([], I) ->
+    [I];
 id(P, I) ->
     [0 | Id] = lists:reverse([I | P]),
     Id.
@@ -242,11 +246,15 @@ is_dtd(_) -> false.
 block_struct(Block, P, I, State) ->
     {Mod, Fun} = block_mod_fun(Block, State),
     Tree = Mod:Fun(maps:get(args, Block, #{})),
-    Tag = find_first_tag(Tree),
     Attrs = block_attrs(Block),
     % TODO: Check this directives merge implementation.
     Directives = maps:get(directives, Block),
-    AllDirectives = maps:merge(maps:get(directives, Tag), Directives),
+    AllDirectives = case find_first_tag(Tree) of
+        {ok, Tag} ->
+            maps:merge(maps:get(directives, Tag), Directives);
+        none ->
+            Directives
+    end,
     NonAttrs = [stateful, 'if', 'for'],
     AllAttrs = maps:merge(Attrs, maps:without(NonAttrs, Directives)),
     Id = id(P, I),
@@ -261,6 +269,7 @@ block_struct(Block, P, I, State) ->
             compile(Tree, [I | P], 0, State)
     end,
     TokensMap = maps:from_list(Tokens),
+    ExprVars = expr_vars(Tokens),
     #{
         id => Id,
         view => case Stateful of
@@ -273,10 +282,9 @@ block_struct(Block, P, I, State) ->
         indexes => lists:usort(maps:keys(TokensMap)),
         directives => AllDirectives,
         attrs => AllAttrs,
-        vars => case P =:= [] of
-                    true -> root_vars(Tokens);
-                    false -> block_vars(Id, Tokens, AllAttrs)
-                end
+        %attrs_vars => vars_group(vars(ExprVars, Id)),
+        %vars => vars_group(ExprVars)
+        vars => vars_group(vars(ExprVars, Id))
     }.
 
 % TODO: Change to binary_to_existing_atom.
@@ -295,10 +303,12 @@ block_mod_fun(#{function := F}, State) ->
 find_first_tag([{tag, #{name := Name} = Tag} | T]) ->
     case is_tag(Name) of
         true ->
-            Tag;
+            {ok, Tag};
         false ->
             find_first_tag(T)
-    end.
+    end;
+find_first_tag(_) ->
+    none.
 
 is_tag(Name) ->
     not lists:member(Name, [<<"!DOCTYPE">>, <<"!doctype">>, <<"?xml">>]).
@@ -307,80 +317,42 @@ is_tag(Name) ->
 block_attrs(#{attrs := Attrs}) ->
     #{binary_to_atom(K, utf8) => V || {K, V} <- Attrs}.
 
-root_vars(Tokens) ->
-    tokens_vars(Tokens, false).
-
-block_vars(Id, Tokens, Attrs) ->
-    Vars = tokens_vars(Tokens, {true, Attrs}),
-    maps:map(fun(_Var, PathList) ->
-        lists:map(fun(Path) ->
-            Path -- Id
-        end, lists:usort(PathList))
-    end, Vars).
-
-tokens_vars(Tokens, Attrs) ->
+vars_group(Vars) ->
     maps:groups_from_list(
         fun({Var, _Id}) -> Var end,
         fun({_Var, Id}) -> Id end,
-        tokens_vars_1(Tokens, Attrs)).
+        lists:usort(Vars)).
 
-tokens_vars_1([{_I, #{vars := Vars, id := Id}} | T], Attrs) when is_list(Vars) ->
-    tokens_vars_2(Vars, Id, T, Attrs);
-tokens_vars_1([{_I, #{vars := Vars}} | T], {true, Attrs}) when is_map(Vars) ->
-    tokens_vars_4(maps:to_list(Vars), T, {true, Attrs});
-tokens_vars_1([{_I, #{vars := Vars}} | T], false) when is_map(Vars) ->
-    tokens_vars_7(maps:to_list(Vars), T);
-tokens_vars_1([_|T], Attrs) ->
-    tokens_vars_1(T, Attrs);
-tokens_vars_1([], _Attrs) ->
+attrs_vars(Attrs, ExprVars, Id) ->
+    maps:fold(fun
+        (Attr, {expr, {_Fun, AttrVars}}, Acc0) ->
+            lists:foldl(fun(Var, Acc1) ->
+                lists:foldl(fun(VId, Acc) ->
+                    [{Var, Id ++ VId} | Acc]
+                end, Acc1, maps:get(Attr, ExprVars))
+            end, Acc0, AttrVars);
+        (_, _, Acc0) ->
+            Acc0
+    end, [], Attrs).
+
+vars(ExprVars, [0]) ->
+    ExprVars;
+vars(ExprVars, PId) ->
+    lists:map(fun({Var, Id}) -> {Var, Id -- PId} end, ExprVars).
+
+expr_vars([{_I, #{expr := _, id := Id, vars := Vars}} | T]) ->
+    expr_vars_1(Vars, Id, T);
+expr_vars([{_I, #{block := _, id := Id, vars := Vars, attrs := Attrs}} | T]) ->
+    attrs_vars(Attrs, Vars, Id) ++ expr_vars(T);
+expr_vars([_|T]) ->
+    expr_vars(T);
+expr_vars([]) ->
     [].
 
-tokens_vars_2([Var | Vars], Id, T, {true, Attrs}) ->
-    case Attrs of
-        #{Var := {expr, {_Fun, ExprVars}}} ->
-            [{Var, Id} | tokens_vars_3(ExprVars, Vars, Id, T, {true, Attrs})];
-        #{} ->
-            [{Var, Id} | tokens_vars_2(Vars, Id, T, {true, Attrs})]
-    end;
-tokens_vars_2([Var | Vars], Id, T, false) ->
-    [{Var, Id} | tokens_vars_2(Vars, Id, T, false)];
-tokens_vars_2([], _Id, T, Attrs) ->
-    tokens_vars_1(T, Attrs).
-
-tokens_vars_3([Var | ExprVars], Vars, Id, T, Attrs) when is_atom(Var) ->
-    [{Var, Id} | tokens_vars_3(ExprVars, Vars, Id, T, Attrs)];
-tokens_vars_3([], Vars, Id, T, Attrs) ->
-    tokens_vars_2(Vars, Id, T, Attrs).
-
-tokens_vars_4([{Var, Ids} | Vars], T, {true, Attrs}) when is_atom(Var), is_list(Ids) ->
-    case Attrs of
-        #{Var := {expr, {_Fun, ExprVars}}} ->
-            [{Var, Ids} | tokens_vars_5(ExprVars, Vars, Ids, T, {true, Attrs})];
-        #{} ->
-            [{Var, Ids} | tokens_vars_4(Vars, T, {true, Attrs})]
-    end;
-tokens_vars_4([], T, Attrs) ->
-    tokens_vars_1(T, Attrs).
-
-tokens_vars_5([Var | ExprVars], Vars, Ids, T, Attrs) when is_atom(Var) ->
-    tokens_vars_6(Ids, Var, ExprVars, Vars, Ids, T, Attrs);
-tokens_vars_5([], Vars, _Id, T, Attrs) ->
-    tokens_vars_4(Vars, T, Attrs).
-
-tokens_vars_6([Id | Ids], Var, ExprVars, Vars, VIds, T, Attrs) ->
-    [{Var, Id} | tokens_vars_6(Ids, Var, ExprVars, Vars, VIds, T, Attrs)];
-tokens_vars_6([], _Var, ExprVars, Vars, VIds, T, Attrs) ->
-    tokens_vars_5(ExprVars, Vars, VIds, T, Attrs).
-
-tokens_vars_7([{Var, Ids} | Vars], T) when is_atom(Var), is_list(Ids) ->
-    tokens_vars_8(Ids, Var, Vars, T);
-tokens_vars_7([], T) ->
-    tokens_vars_1(T, false).
-
-tokens_vars_8([Id | Ids], Var, Vars, T) ->
-    [{Var, Id} | tokens_vars_8(Ids, Var, Vars, T)];
-tokens_vars_8([], _Var, Vars, T) ->
-    tokens_vars_7(Vars, T).
+expr_vars_1([Var | Vars], Id, T) ->
+    [{Var, Id} | expr_vars_1(Vars, Id, T)];
+expr_vars_1([], _Id, T) ->
+    expr_vars(T).
 
 %% --------------------------------------------------------------------
 %% EUnit tests.
@@ -392,173 +364,185 @@ tokens_vars_8([], _Var, Vars, T) ->
 
 compile_tree_test() ->
     ?assertMatch({ok,
-        #{block :=
-         #{0 := #{id := [0],text := <<"<main arz-id=\"root\">">>},
-           1 := #{id := [1],text := <<"<h1>">>},
-           2 :=
-            #{id := [2],
-              expr := _,
-              vars := [title]},
-           3 := #{id := [3],text := <<"</h1>">>},
-           4 :=
-            #{block :=
-               #{0 :=
-                  #{id := [4,0],
-                    text := <<"<div arz-id=\"[4]\" id=\"">>},
-                 1 :=
-                  #{id := [4,1],
-                    expr := _,
-                    vars := [id]},
-                 2 := #{id := [4,2],text := <<"\">">>},
-                 3 := #{id := [4,3],text := <<"<span>">>},
-                 4 :=
-                  #{id := [4,4],
-                    expr := _,
-                    vars := [label]},
-                 5 := #{id := [4,5],text := <<"<b>">>},
-                 6 :=
-                  #{id := [4,6],
-                    expr := _,
-                    vars := [counter_count]},
-                 7 := #{id := [4,7],text := <<"</b>">>},
-                 8 := #{id := [4,8],text := <<"</span>">>},
-                 9 := #{id := [4,9],text := <<"<br/>">>},
-                 10 := #{id := [4,10],text := <<"</br>">>},
-                 11 :=
                   #{block :=
                      #{0 :=
-                        #{id := [4,11,0],
-                          text :=
-                           <<"<button arz-target=\"[4]\" onclick=\"">>},
+                        #{id := [0],text := <<"<main arz-id=\"root\"><h1>">>},
                        1 :=
-                        #{id := [4,11,1],
+                        #{id := [1],
                           expr := _,
-                          vars := [event]},
-                       2 :=
-                        #{id := [4,11,2],
-                          text := <<"\" type=\"button\">">>},
+                          vars := [title]},
+                       2 := #{id := [2],text := <<"</h1>">>},
                        3 :=
-                        #{id := [4,11,3],
-                          expr := _,
-                          vars := [text]},
+                        #{block :=
+                           #{0 :=
+                              #{id := [3,0],
+                                text := <<"<div arz-id=\"[3]\" id=\"">>},
+                             1 :=
+                              #{id := [3,1],
+                                expr := _,
+                                vars := [id]},
+                             2 := #{id := [3,2],text := <<"\"><span>">>},
+                             3 :=
+                              #{id := [3,3],
+                                expr := _,
+                                vars := [label]},
+                             4 := #{id := [3,4],text := <<"<b>">>},
+                             5 :=
+                              #{id := [3,5],
+                                expr := _,
+                                vars := [counter_count]},
+                             6 :=
+                              #{id := [3,6],text := <<"</b></span><br/>">>},
+                             7 :=
+                              #{block :=
+                                 #{0 :=
+                                    #{id := [3,7,0],
+                                      expr := _,
+                                      vars := [text]},
+                                   1 :=
+                                    #{id := [3,7,1],
+                                      text :=
+                                       <<"<button arz-target=\"[3]\" onclick=\"">>},
+                                   2 :=
+                                    #{id := [3,7,2],
+                                      expr := _,
+                                      vars := [event]},
+                                   3 :=
+                                    #{id := [3,7,3],
+                                      text := <<"\" type=\"button\">">>},
+                                   4 :=
+                                    #{id := [3,7,4],
+                                      expr := _,
+                                      vars := [text]},
+                                   5 :=
+                                    #{id := [3,7,5],text := <<"</button>">>},
+                                   6 :=
+                                    #{id := [3,7,6],
+                                      expr := _,
+                                      vars := [text]}},
+                                id := [3,7],
+                                attrs :=
+                                 #{text :=
+                                    {expr,
+                                     {_,[btn_text]}},
+                                   event :=
+                                    {expr,
+                                     {_,
+                                      [btn_event]}}},
+                                directives := #{},
+                                vars :=
+                                 #{text := [[0],[4],[6]],event := [[2]]},
+                                indexes := [0,1,2,3,4,5,6],
+                                view := arizona_tpl_compile},
+                             8 := #{id := [3,8],text := <<"</div>">>}},
+                          id := [3],
+                          attrs :=
+                           #{id := {text,<<"1">>},
+                             counter_count :=
+                              {expr,{_,[view_count]}},
+                             btn_text := {text,<<"Increment">>},
+                             btn_event := {text,<<"incr">>}},
+                          directives := #{stateful := true},
+                          vars :=
+                           #{id := [[1]],
+                             label := [[3]],
+                             counter_count := [[5]],
+                             btn_text := [[7,0],[7,4],[7,6]],
+                             btn_event := [[7,2]]},
+                          indexes := [0,1,2,3,4,5,6,7,8],
+                          view := arizona_tpl_compile},
                        4 :=
-                        #{id := [4,11,4],text := <<"</button>">>}},
-                    id := [4,11],
-                    directives := #{},
-                    attrs :=
-                     #{text :=
-                        {expr,
-                         {_,[btn_text]}},
-                       event :=
-                        {expr,
-                         {_,
-                          [btn_event]}}},
+                        #{block :=
+                           #{0 :=
+                              #{id := [4,0],
+                                text := <<"<div arz-id=\"[4]\" id=\"">>},
+                             1 :=
+                              #{id := [4,1],
+                                expr := _,
+                                vars := [id]},
+                             2 := #{id := [4,2],text := <<"\"><span>">>},
+                             3 :=
+                              #{id := [4,3],
+                                expr := _,
+                                vars := [label]},
+                             4 := #{id := [4,4],text := <<"<b>">>},
+                             5 :=
+                              #{id := [4,5],
+                                expr := _,
+                                vars := [counter_count]},
+                             6 :=
+                              #{id := [4,6],text := <<"</b></span><br/>">>},
+                             7 :=
+                              #{block :=
+                                 #{0 :=
+                                    #{id := [4,7,0],
+                                      expr := _,
+                                      vars := [text]},
+                                   1 :=
+                                    #{id := [4,7,1],
+                                      text :=
+                                       <<"<button arz-target=\"[4]\" onclick=\"">>},
+                                   2 :=
+                                    #{id := [4,7,2],
+                                      expr := _,
+                                      vars := [event]},
+                                   3 :=
+                                    #{id := [4,7,3],
+                                      text := <<"\" type=\"button\">">>},
+                                   4 :=
+                                    #{id := [4,7,4],
+                                      expr := _,
+                                      vars := [text]},
+                                   5 :=
+                                    #{id := [4,7,5],text := <<"</button>">>},
+                                   6 :=
+                                    #{id := [4,7,6],
+                                      expr := _,
+                                      vars := [text]}},
+                                id := [4,7],
+                                attrs :=
+                                 #{text :=
+                                    {expr,
+                                     {_,[btn_text]}},
+                                   event :=
+                                    {expr,
+                                     {_,
+                                      [btn_event]}}},
+                                directives := #{},
+                                vars :=
+                                 #{text := [[0],[4],[6]],event := [[2]]},
+                                indexes := [0,1,2,3,4,5,6],
+                                view := arizona_tpl_compile},
+                             8 := #{id := [4,8],text := <<"</div>">>}},
+                          id := [4],
+                          attrs :=
+                           #{id := {text,<<"2">>},
+                             label := {text,<<"Rev. Counter:">>},
+                             counter_count :=
+                              {expr,{_,[view_count]}},
+                             btn_text :=
+                              {expr,
+                               {_,[decr_btn_text]}},
+                             btn_event := {text,<<"decr">>}},
+                          directives := #{stateful := true},
+                          vars :=
+                           #{id := [[1]],
+                             label := [[3]],
+                             counter_count := [[5]],
+                             btn_text := [[7,0],[7,4],[7,6]],
+                             btn_event := [[7,2]]},
+                          indexes := [0,1,2,3,4,5,6,7,8],
+                          view := arizona_tpl_compile},
+                       5 := #{id := [5],text := <<"</main>">>}},
+                    id := [0],
+                    attrs := #{},
+                    directives := #{stateful := true},
                     vars :=
-                     #{btn_text := [[4,11,3]],
-                       btn_event := [[4,11,1]]},
-                    indexes := [0,1,2,3,4]},
-                 12 :=
-                  #{id := [4,12],
-                    expr := _,
-                    vars := [content]},
-                 13 := #{id := [4,13],text := <<"</div>">>}},
-              id := [4],
-              directives := #{},
-              attrs :=
-               #{id := {text,<<"1">>},
-                 counter_count :=
-                  {expr,{_,[view_count]}},
-                 btn_text := {text,<<"Increment">>},
-                 btn_event := {text,<<"incr">>}},
-              vars := #{view_count := [[4,6]]},
-              indexes := [0,1,2,3,4,5,6,7,8,9,10,11,12,13]},
-           5 :=
-            #{block :=
-               #{0 :=
-                  #{id := [5,0],
-                    text := <<"<div arz-id=\"[5]\" id=\"">>},
-                 1 :=
-                  #{id := [5,1],
-                    expr := _,
-                    vars := [id]},
-                 2 := #{id := [5,2],text := <<"\">">>},
-                 3 := #{id := [5,3],text := <<"<span>">>},
-                 4 :=
-                  #{id := [5,4],
-                    expr := _,
-                    vars := [label]},
-                 5 := #{id := [5,5],text := <<"<b>">>},
-                 6 :=
-                  #{id := [5,6],
-                    expr := _,
-                    vars := [counter_count]},
-                 7 := #{id := [5,7],text := <<"</b>">>},
-                 8 := #{id := [5,8],text := <<"</span>">>},
-                 9 := #{id := [5,9],text := <<"<br/>">>},
-                 10 := #{id := [5,10],text := <<"</br>">>},
-                 11 :=
-                  #{block :=
-                     #{0 :=
-                        #{id := [5,11,0],
-                          text :=
-                           <<"<button arz-target=\"[5]\" onclick=\"">>},
-                       1 :=
-                        #{id := [5,11,1],
-                          expr := _,
-                          vars := [event]},
-                       2 :=
-                        #{id := [5,11,2],
-                          text := <<"\" type=\"button\">">>},
-                       3 :=
-                        #{id := [5,11,3],
-                          expr := _,
-                          vars := [text]},
-                       4 :=
-                        #{id := [5,11,4],text := <<"</button>">>}},
-                    id := [5,11],
-                    directives := #{},
-                    attrs :=
-                     #{text :=
-                        {expr,
-                         {_,[btn_text]}},
-                       event :=
-                        {expr,
-                         {_,
-                          [btn_event]}}},
-                    vars :=
-                     #{btn_text := [[5,11,3]],
-                       btn_event := [[5,11,1]]},
-                    indexes := [0,1,2,3,4]},
-                 12 :=
-                  #{id := [5,12],
-                    expr := _,
-                    vars := [content]},
-                 13 := #{id := [5,13],text := <<"</div>">>}},
-              id := [5],
-              directives := #{},
-              attrs :=
-               #{id := {text,<<"2">>},
-                 label := {text,<<"Rev. Counter:">>},
-                 counter_count :=
-                  {expr,{_,[view_count]}},
-                 btn_text :=
-                  {expr,
-                   {_,[decr_btn_text]}},
-                 btn_event := {text,<<"decr">>}},
-              vars :=
-               #{view_count := [[5,6]],
-                 decr_btn_text := [[5,11,3]]},
-              indexes := [0,1,2,3,4,5,6,7,8,9,10,11,12,13]},
-           6 := #{id := [6],text := <<"</main>">>}},
-        id := root,
-        directives := #{stateful := true},
-        attrs := #{},
-        vars :=
-         #{title := [[2]],
-           view_count := [[4,6],[5,6]],
-           decr_btn_text := [[5,11,3]]},
-        indexes := [0,1,2,3,4,5,6]}
-    }, compile({?MODULE, view, #{}})).
+                     #{title := [[1]],
+                       view_count := [[3,5],[4,5]],
+                       decr_btn_text := [[4,7,0],[4,7,4],[4,7,6]]},
+                    indexes := [0,1,2,3,4,5],
+                    view := arizona_tpl_compile}}, compile({?MODULE, view, #{}})).
 
 %% Start compile support.
 
@@ -589,7 +573,7 @@ view(Macros) ->
 
 counter(Macros) ->
     {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
-    {% NOTE: :stateful directive defines the arz-id attribue,  }
+    {% NOTE: :stateful directive defines the arz-id attribue,   }
     {%       and adds this to the blocks param in the state.    }
     <div id={_@id} :stateful>
         <span>
@@ -618,7 +602,7 @@ counter(Macros) ->
         {% FIXME: This implementation wont work, because it     }
         {%        needs to be compiled in tokens.               }
         {%        The 'merl:tsubst' should be used to fix this. }
-        {try _@content catch _:_ -> <<>> end}
+        {% {try _@content catch _:_ -> <<>> end} }
     </div>
     """),
     {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
@@ -626,14 +610,30 @@ counter(Macros) ->
 
 button(Macros) ->
     {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
+    {_@text}
     <button type="button" :onclick={_@event}>
         {_@text}
     </button>
+    {_@text}
     """),
     {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
     Tree.
 
 %% End compile support.
+
+expr_vars_test() ->
+    Tpl = compile(button(#{}), [], 0, #state{}),
+    Vars = expr_vars(Tpl),
+    [?assertEqual([{text,[0]},{event,[2]},{text,[4]},{text,[6]}], Vars),
+     ?assertMatch(#{text := [[0],[4],[6]],event := [[2]]}, vars_group(Vars))].
+
+vars_test() ->
+    {ok, #{vars := Vars}} = compile({?MODULE, counter, #{}}),
+    ?assertMatch(#{id := [[1]],
+                   label := [[3]],
+                   counter_count := [[5]],
+                   btn_text := [[7,0],[7,4],[7,6]],
+                   btn_event := [[7,2]]}, Vars).
 
 -endif.
 

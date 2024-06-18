@@ -70,7 +70,7 @@ do_parse_block([{attr_key, K} | T], Props, Macros) ->
 do_parse_block([tag_close | T0], Props0, Macros) ->
     {T1, Props} = collect_tokens(T0, Props0, Macros),
     [{tag_name, <<$., Name/binary>>}, tag_close | T] = T1,
-    case Name =:= maps:get(name, Props) of
+    case Name =:= get(name, Props) of
         true ->
             [{block, block_struct(Props)} | do_parse_exprs(T, Macros)];
         false ->
@@ -220,106 +220,71 @@ get(K, L) ->
 -include_lib("eunit/include/eunit.hrl").
 
 parse_exprs_test() ->
-    ?assertMatch({ok, [
-        {text,<<"Start">>},
-        {tag,
-         #{name := <<"main">>,void := false,
-           tokens :=
-            [{text,<<"foo">>},
-             {expr,{ExprFun1,[bar]}},
-             {text,<<"baz">>},
-             {tag,
-              #{name := <<"br">>,void := true,tokens := [],
-                directives := #{},attrs := []}},
-             {tag,
-              #{name := <<"div">>,void := false,
-                tokens :=
-                 [{tag,
-                   #{name := <<"span">>,void := false,
-                     tokens :=
-                      [{block,
-                        #{function := nested,module := foo,
-                          tokens := [{text,<<"ok">>}],
-                          directives := #{},attrs := []}}],
-                     directives := #{},
-                     attrs := [{<<"id">>,{text,<<"nested">>}}]}}],
-                directives := #{},attrs := []}},
-             {block,
-              #{function := block,module := foo,tokens := [],
-                directives :=
-                 #{'if' :=
-                    {expr,{ExprFun2,[true]}}},
-                attrs := []}},
-             {block,
-              #{function := counter,module := foo,tokens := [],
-                directives := #{},
-                attrs :=
-                 [{<<"id">>,{text,<<"counter">>}},
-                  {<<"count">>,
-                   {expr,{ExprFun3,[]}}}]}}],
-           directives := #{},
-           attrs :=
-            [{<<"id">>,{text,<<"foo">>}},
-             {<<"class">>,
-              {expr,{ExprFun4,[class]}}},
-             {<<"style">>,{text,<<"display: none;">>}},
-             {<<"hidden">>,{text,<<"hidden">>}}]}},
-        {text,<<"End">>}
-    ]} when is_function(ExprFun1, 1) andalso
+    {ok, Tokens, _EndLoc} = arizona_tpl_scan:string(~"""
+    Start
+    {% This is a comment. }
+    <main id="foo" class={_@class} style='display: none;' hidden>
+        foo{% Comments are allowed in expressions.
+            _@bar}baz
+        <br/>
+        <div>
+            <span id="nested">
+                <.foo:nested>ok</.foo:nested>
+            </span>
+        </div>
+        <.foo:block :if={_@true}/>
+        <.foo:counter id="counter" count={0}></.foo:counter>
+    </main>
+    End
+    """),
+    ?assertMatch({ok,
+                  [{text,<<"Start">>},
+                   {tag,
+                    #{name := <<"main">>,void := false,
+                      tokens :=
+                       [{text,<<"foo">>},
+                        {expr,{ExprFun1,[bar]}},
+                        {text,<<"baz">>},
+                        {tag,
+                         #{name := <<"br">>,void := true,tokens := [],
+                           attrs := [],directives := #{}}},
+                        {tag,
+                         #{name := <<"div">>,void := false,
+                           tokens :=
+                            [{tag,
+                              #{name := <<"span">>,void := false,
+                                tokens :=
+                                 [{block,
+                                   #{name := <<"foo:nested">>,
+                                     tokens := [{text,<<"ok">>}],
+                                     attrs := [],directives := #{}}}],
+                                attrs := [{<<"id">>,{text,<<"nested">>}}],
+                                directives := #{}}}],
+                           attrs := [],directives := #{}}},
+                        {block,
+                         #{name := <<"foo:block">>,tokens := [],attrs := [],
+                           directives :=
+                            #{'if' :=
+                               {expr,{ExprFun2,[true]}}}}},
+                        {block,
+                         #{name := <<"foo:counter">>,tokens := [],
+                           attrs :=
+                            [{<<"id">>,{text,<<"counter">>}},
+                             {<<"count">>,
+                              {expr,{ExprFun3,[]}}}],
+                           directives := #{}}}],
+                      attrs :=
+                       [{<<"id">>,{text,<<"foo">>}},
+                        {<<"class">>,
+                         {expr,{ExprFun4,[class]}}},
+                        {<<"style">>,{text,<<"display: none;">>}},
+                        {<<"hidden">>,{text,<<"hidden">>}}],
+                      directives := #{}}},
+                   {text,<<"End">>}]} when is_function(ExprFun1, 1) andalso
             is_function(ExprFun2, 1) andalso
             is_function(ExprFun3, 1) andalso
             is_function(ExprFun4, 1),
-    parse_exprs([
-        {text,<<"Start">>},
-        {expr,<<"% This is a comment. ">>},
-        tag_open,
-        {tag_name,<<"main">>},
-        {attr_key,<<"id">>},
-        {attr_value,<<"foo">>},
-        {attr_key,<<"class">>},
-        {attr_expr,<<"_@class">>},
-        {attr_key,<<"style">>},
-        {attr_value,<<"display: none;">>},
-        {attr_key,<<"hidden">>},
-        tag_close,
-        {text,<<"foo">>},
-        {expr,<<"% Comments are allowed in expressions.\n        _@bar">>},
-        {text,<<"baz">>},
-        tag_open,
-        {tag_name,<<"br">>},
-        void_close,tag_open,
-        {tag_name,<<"div">>},
-        tag_close,tag_open,
-        {tag_name,<<"span">>},
-        {attr_key,<<"id">>},
-        {attr_value,<<"nested">>},
-        tag_close,tag_open,
-        {tag_name,<<".foo:nested">>},
-        tag_close,
-        {text,<<"ok">>},
-        closing_tag,
-        {tag_name,<<".foo:nested">>},
-        tag_close,closing_tag,
-        {tag_name,<<"span">>},
-        tag_close,closing_tag,
-        {tag_name,<<"div">>},
-        tag_close,tag_open,
-        {tag_name,<<".foo:block">>},
-        {attr_key,<<":if">>},
-        {attr_expr,<<"_@true">>},
-        void_close,tag_open,
-        {tag_name,<<".foo:counter">>},
-        {attr_key,<<"id">>},
-        {attr_value,<<"counter">>},
-        {attr_key,<<"count">>},
-        {attr_expr,<<"0">>},
-        tag_close,closing_tag,
-        {tag_name,<<".foo:counter">>},
-        tag_close,closing_tag,
-        {tag_name,<<"main">>},
-        tag_close,
-        {text,<<"End">>}
-    ])).
+    parse_exprs(Tokens)).
 
 macros_test() ->
     {ok, Tokens, _} = arizona_tpl_scan:string(<<"foo{_@bar}baz">>),
