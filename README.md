@@ -40,9 +40,6 @@ render(Macros0) ->
         {% The '_@title' is a variable and must be assigned, otherwise }
         {% the template render will fail with a bad key: title error. }
         <title>{_@title}</title>
-        <script src="assets/js/morphdom.min.js"></script>
-        <script src="assets/js/arizona.js"></script>
-        <script src="assets/js/example.js"></script>
     </head>
     <body>
         {% The <.module:function/> tag renders a block/component. }

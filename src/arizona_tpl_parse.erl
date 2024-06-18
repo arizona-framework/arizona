@@ -91,17 +91,47 @@ do_parse_tag([tag_close | T0], Props0, Macros) ->
         true ->
             [{tag, tag_struct([void | Props0])} | do_parse_exprs(T0, Macros)];
         false ->
-            {T1, Props} = collect_tokens(T0, Props0, Macros),
+            {T1, Props1} = collect_tokens(T0, Props0, Macros),
             [{tag_name, CloseName}, tag_close | T] = T1,
             case CloseName =:= OpenName of
                 true ->
+                    Props = case OpenName =:= <<"head">> of
+                        true ->
+                            % TODO: Do not reverse.
+                            lists:reverse(inject_js_scripts(lists:reverse(Props1)));
+                        false ->
+                            Props1
+                    end,
                     [{tag, tag_struct(Props)} | do_parse_exprs(T, Macros)];
                 false ->
-                    error({unexpected_tag_end, {Props0, Props}})
+                    error({unexpected_tag_end, {Props0, Props1}})
             end
     end;
 do_parse_tag([void_close | T], Props, Macros) ->
     [{tag, tag_struct([void | Props])} | do_parse_exprs(T, Macros)].
+
+% NOTE: Scripts are injected before the first script tag,
+%       or at the end of the list if no script tags.
+inject_js_scripts([{token, {tag, #{name := <<"script">>}}} | _] = Tokens) ->
+    js_scripts() ++ Tokens;
+inject_js_scripts([H|T]) ->
+    [H | inject_js_scripts(T)];
+inject_js_scripts([]) ->
+    js_scripts().
+
+js_scripts() ->
+    [{token, {tag, script_tag_struct(Src)}} || Src <- [
+        <<"assets/js/morphdom.min.js">>,
+        <<"assets/js/arizona.js">>
+    ] ++ case application:get_env(arizona, endpoint, #{}) of
+        #{live_reload := true} ->
+            [<<"assets/js/arizona-live-reload.js">>];
+        #{} ->
+            []
+    end].
+
+script_tag_struct(Src) ->
+    tag_struct([{name, <<"script">>}, {attr, {<<"src">>, {text, Src}}}]).
 
 is_void(Name) ->
     lists:member(Name, [<<"!DOCTYPE">>, <<"!doctype">>, <<"?xml">>,
@@ -305,6 +335,74 @@ macros_test() ->
         {text, <<"bar">>},
         {text, <<"baz">>}
     ]}, parse_exprs(Tokens, #{bar => <<"bar">>})).
+
+head_scripts_test() ->
+    {ok, Tokens, _} = arizona_tpl_scan:string(~"""
+    <head>
+        <title>Arizona</title>
+        <script src="foo"></script>
+    </head>
+    """),
+    [?assertMatch({ok,
+                  [{tag,
+                    #{name := <<"head">>,void := false,
+                      tokens :=
+                       [{tag,
+                         #{name := <<"title">>,void := false,
+                           tokens := [{text,<<"Arizona">>}],
+                           directives := #{},attrs := []}},
+                        {tag,
+                         #{name := <<"script">>,void := false,tokens := [],
+                          directives := #{},
+                          attrs :=
+                           [{<<"src">>,
+                             {text,<<"assets/js/morphdom.min.js">>}}]}},
+                        {tag,
+                         #{name := <<"script">>,void := false,tokens := [],
+                          directives := #{},
+                          attrs :=
+                           [{<<"src">>,{text,<<"assets/js/arizona.js">>}}]}},
+                        {tag,
+                         #{name := <<"script">>,void := false,tokens := [],
+                           directives := #{},
+                           attrs := [{<<"src">>,{text,<<"foo">>}}]}}],
+                      directives := #{},attrs := []}}]}, parse_exprs(Tokens, #{})),
+     ?assertMatch({ok,
+                  [{tag,
+                    #{name := <<"head">>,void := false,
+                      tokens :=
+                       [{tag,
+                         #{name := <<"title">>,void := false,
+                           tokens := [{text,<<"Arizona">>}],
+                           directives := #{},attrs := []}},
+                        {tag,
+                         #{name := <<"script">>,void := false,tokens := [],
+                           directives := #{},
+                           attrs :=
+                            [{<<"src">>,
+                              {text,<<"assets/js/morphdom.min.js">>}}]}},
+                        {tag,
+                         #{name := <<"script">>,void := false,tokens := [],
+                           directives := #{},
+                           attrs :=
+                            [{<<"src">>,{text,<<"assets/js/arizona.js">>}}]}},
+                        {tag,
+                         #{name := <<"script">>,void := false,tokens := [],
+                           directives := #{},
+                           attrs :=
+                            [{<<"src">>,
+                              {text,
+                               <<"assets/js/arizona-live-reload.js">>}}]}},
+                        {tag,
+                         #{name := <<"script">>,void := false,tokens := [],
+                           directives := #{},
+                           attrs := [{<<"src">>,{text,<<"foo">>}}]}}],
+                      directives := #{},attrs := []}}]},
+        begin
+            application:set_env(arizona, endpoint, #{live_reload => true}),
+            parse_exprs(Tokens, #{})
+        end
+    )].
 
 -endif.
 

@@ -66,9 +66,6 @@ render(Macros) ->
     ?LV(~s"""
     <html>
     <head>
-        {% TODO: Auto-inject Arizona scripts. }
-        <script src="assets/js/morphdom.min.js"></script>
-        <script src="assets/js/arizona.js"></script>
     </head>
     <body>
         Hello, World!
