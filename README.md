@@ -1,96 +1,171 @@
 # Arizona
 
-Arizona is a Web Framework for Erlang.
+Arizona is a web framework for Erlang.
 
 > ⚠️ Work in progress.
 
 ## In a Nutshell
 
-> **NOTE:** The below is a very brief description of Arizona. More
-> info upcoming soon.
+> **NOTE:**
+> The below is a very brief description of Arizona by just copying some code of the `./arzex` example project.
+> Please see the project folder for the complete codebase.
+> More info upcoming soon.
 
 ```erlang
--module(view).
+% config/sys.config
+[{arizona, [
+    {endpoint, #{
+        % Routes are plain Cowboy routes.
+        routes => [
+            % Static
+            {"/favicon.ico", cowboy_static, {priv_file, arzex, "static/favicon.ico"}},
+            {"/robots.txt", cowboy_static, {priv_file, arzex, "static/robots.txt"}},
+            {"/assets/[...]", cowboy_static, {priv_dir, arzex, "static/assets"}},
+
+            % This is the route rendered in the example. It will call
+            % `arzex_live_counter:render(_Macros = #{})` once to compile the
+            % route template and store it as a persistent_term and call
+            % `arzex_live_counter:mount/1` on the first render of the page
+            % and when the client connects to the server via WebSocket.
+            {"/", arizona_live_handler, {arzex_live_counter, render, #{}}}
+        ],
+        % Recompile the code and refresh the page of the connected WebSocket clients.
+        live_reload => true
+    }}
+]}].
+```
+
+```erlang
+% src/arzex_live_counter.erl
+-module(arzex_live_counter).
 -behaviour(arizona_live_view).
 
-% 'mount/1', 'render/1', and 'handle_event/3' are callbacks of
-% 'arizona_live_view' behavior. 'handle_event/3' is optional.
--export([mount/1, render/1, handle_event/3, counter/1]).
+%% arizona_live_view callbacks.
+%% mount/1 and render/1 are required, and handle_event/3 is optional.
+-export([mount/1, render/1, handle_event/3]).
 
-% This header includes the the `?LV` macro.
--include_lib("arizona/include/arizona_live_view.hrl").
+%% Component functions.
+-export([counter/1, button/1]).
 
-% Called once before the first render.
-mount(Socket) ->
-    {ok, arizona_socket:assign(count, 0, Socket)}.
+%% Libs.
+%% `live_view.hrl` contains the ?LV macro.
+-include_lib("arizona/include/live_view.hrl").
 
-% render/1 is called by the route to render the page.
+%% --------------------------------------------------------------------
+%% arizona_live_view callbacks.
+%% --------------------------------------------------------------------
+
+% mount/1 is called on the first render of the page and when the client
+% connects to the server via WebSocket.
+mount(#{assigns := Assigns} = Socket) ->
+    Count = maps:get(count, Assigns, 0),
+    {ok, arizona_socket:assign(count, Count, Socket)}.
+
+% render/1 is called by the route to compile the template.
+% Macros substitutes variables.
+% render/1 and Macros are resolved once in the compile time.
+% The goal of Arizona is to have the most compact and performant
+% template as possible. What could be compiled, would be compiled.
 render(Macros0) ->
-    % Variables defined in 'Macros' are substituted in compile time.
     Macros = Macros0#{
         title => maps:get(title, Macros0, ~"Arizona")
     },
     ?LV(~"""
+    <!DOCTYPE html>
     <html lang="en">
     <head>
-        <meta charset="UTF-8"/>
-        <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-        {% This is a normal Erlang code written between curly braces. }
-        {% The '_@title' is a variable and must be assigned, otherwise }
-        {% the template render will fail with a bad key: title error. }
+        <meta charset="UTF-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+        {% Erlang code is defined between curly braces `{}`.            }
+        {% Variables are atoms prefixed with `_@`. That's a merl syntax }
+        {% and a valid Erlang code. Arizona uses merl under the hood.   }
         <title>{_@title}</title>
+
+        <script src="assets/js/main.js"></script>
     </head>
     <body>
-        {% The <.module:function/> tag renders a block/component. }
-        <.arizona_handler:counter
+        {% <.module:function/> tags renders a component.            }
+        {% The attributes are passed as 'Assigns' to the component. }
+        <.arzex_live_counter:counter
             count={_@count}
             btn_text="Increment #1"
+            event="incr"
         />
 
-        {% Blocks/components are isolated and have their own state. }
-        <.arizona_handler:counter
-            count={_@count}
+        {% Local functions can be declared as <.function>.  }
+        {% IMPORTANT: Component functions must be exported. }
+        <.counter
+            count={99}
             btn_text="Increment #2"
-        />
+            event="decr"
+        >
+            {% No inner content is rendered by now, but }
+            {% a slot system is on the Arizona roadmap. }
+        </.counter>
     </body>
     </html>
     """).
 
+% Handle client events.
+handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
+    Count = maps:get(count, Assigns) + 1,
+    {noreply, arizona_socket:assign(count, Count, Socket)};
+handle_event(<<"decr">>, #{}, #{assigns := Assigns} = Socket) ->
+    Count = maps:get(count, Assigns) - 1,
+    {noreply, arizona_socket:assign(count, Count, Socket)}.
+
+%% --------------------------------------------------------------------
+%% Component functions.
+%% --------------------------------------------------------------------
+
 counter(Macros) ->
-    ?LV(~"""
-    {% :stateful is a directive. Declaring it isolates the block state. }
-    {% Stateful blocks receive an auto-generated arz-id attribute.      }
+    ?LV(~s"""
     <div :stateful>
         <div>Count: {_@count}</div>
-        {% :on* are directives to send events to the server.            }
-        {% Events are handled in the handle_event/3 callback.           }
-        {% The block view is called if no :target directive is defined. }
-        <button type="button" :onclick="incr">
-            {_@btn_text}
-        </button>
+        <.button event={_@event} text={_@btn_text} />
     </div>
     """).
 
-handle_event(<<"incr">>, _Payload = #{}, Socket) ->
-    {noreply, arizona_socket:assign(count, increment(Socket), Socket)}.
-
-increment(#{assigns := Assigns}) ->
-    maps:get(count, Assigns) + 1.
+button(Macros) ->
+    ?LV(~s"""
+    {% NOTE: On this example, :onclick is and expression to be }
+    {%       dynamic. It could be just, e.g., :onclick="incr". }
+    <button type="button" :onclick={arizona_js:send(_@event)}>
+        {_@text}
+    </button>
+    """).
 ```
+
+```js
+// priv/static/assets/js/main.js
+"use strict"
+
+const connectParams = { }
+
+arizona.connect(connectParams, () => {
+    console.info("[Client] I'm connected!")
+})
+```
+
+```console
+$ rebar3 shell
+Arizona is running at http://0.0.0.0:8080
+```
+
+> **NOTE:** Only the minimal data is passed to patch changes.
 
 ![showcase](/assets/showcase.gif)
 
 ## Roadmap
 
-- [ ] Reduce the size of the tree by combining the neighboring texts.
-This is the first optimization that should be implemented to enhance performance;
+- [ ] Improve tests and documentation;
 - [ ] Declare macros in HTML attributes;
 - [ ] Declare event payloads in HTML attributes;
-- [ ] A slot system for blocks;
+- [ ] A slot system for components;
 - [ ] :if, :for and :case directives;
 - [ ] JS Hooks;
-- [ ] Hot reload;
 - [ ] Communication between connected clients;
 - [ ] A bundler plugin to reduce Javascript files. Probably esbuild;
 - [ ] A Tailwind plugin;

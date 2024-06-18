@@ -15,7 +15,7 @@
 %% --------------------------------------------------------------------
 
 mount(#{assigns := Assigns} = Socket) ->
-    Count = maps:get(count, Assigns, 55),
+    Count = maps:get(count, Assigns, 0),
     {ok, arizona_socket:assign(count, Count, Socket)}.
 
 render(Macros0) ->
