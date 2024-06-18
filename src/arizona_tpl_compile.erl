@@ -157,7 +157,7 @@ do_compile_tag([], Tag, TT, P, I, State, Acc) ->
                         #{text := Txt0} ->
                             Txt = <<Txt0/binary, (tag_closing(Tag))/binary>>,
                             TTokens = lists:droplast(Tokens) ++
-                                        [LToken#{text => Txt}],
+                                        [{NI, LToken#{text => Txt}}],
                             TTokens ++ compile(TT, P, NI+1, State);
                         #{} ->
                             Tokens ++ compile([{text, tag_closing(Tag)} | TT],
