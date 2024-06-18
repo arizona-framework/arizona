@@ -110,7 +110,7 @@ render_indexes([H|T], Block, Assigns, Notify) ->
                 ok ->
                     render_indexes(T, Block, Assigns, Notify);
                 Value ->
-                    [safe_html(Value) | render_indexes(T, Block, Assigns, Notify)]
+                    [arizona_html:safe(Value) | render_indexes(T, Block, Assigns, Notify)]
             end;
         #{indexes := Indexes, block := NBlock, attrs := Attrs} = Nested ->
             AttrsAssigns = maps:map(fun(_K, Expr) ->
@@ -138,16 +138,6 @@ render_indexes([H|T], Block, Assigns, Notify) ->
 render_indexes([], _Block, _Assigns, _Notify) ->
     [].
 
-% TODO: Do this really safe for HTML.
-safe_html(V) when is_binary(V) ->
-    V;
-safe_html(V) when is_atom(V) ->
-    atom_to_binary(V, utf8);
-safe_html(V) when is_integer(V) ->
-    integer_to_binary(V, 10);
-safe_html(V) when is_float(V) ->
-    io_lib:format("~p", [V]).
-
 path_render(Vars, Block, Assigns) ->
     maps:fold(fun(_Var, Path, Acc) ->
         path_render_1(Path, Block, Assigns, Acc)
@@ -159,7 +149,7 @@ path_render_1([Path | T], Block, Assigns, Acc) ->
         ok ->
             path_render_1(T, Block, Assigns, Acc);
         Value ->
-            path_render_1(T, Block, Assigns, [[Path, safe_html(Value)] | Acc])
+            path_render_1(T, Block, Assigns, [[Path, arizona_html:safe(Value)] | Acc])
     end;
 path_render_1([], _Block, _Assigns, Acc) ->
     Acc.

@@ -43,11 +43,11 @@ parse_exprs(Tokens, Macros) ->
 do_parse_exprs([{text, Txt} | T], Macros) ->
     [{text, Txt} | do_parse_exprs(T, Macros)];
 do_parse_exprs([{expr, ExprStr} | T], Macros) ->
-    case parse_expr_str(ExprStr, Macros) of
+    case parse_expr_str(ExprStr, Macros, true) of
         {comment, _} ->
             do_parse_exprs(T, Macros);
-        Expr ->
-            [Expr | do_parse_exprs(T, Macros)]
+        Token ->
+            [Token | do_parse_exprs(T, Macros)]
     end;
 do_parse_exprs([tag_open | T], Macros) ->
     parse_tag(T, Macros);
@@ -115,17 +115,19 @@ collect_tokens([closing_tag | T], Props, _Macros) ->
 collect_tokens([tag_open | T], Props, Macros) ->
     collect_tokens(parse_tag(T, Macros), Props, Macros);
 collect_tokens([{expr, ExprStr} | T], Props, Macros) when is_binary(ExprStr) ->
-    case parse_expr_str(ExprStr, Macros) of
+    case parse_expr_str(ExprStr, Macros, true) of
         {comment, _} ->
             collect_tokens(T, Props, Macros);
-        Expr ->
-            collect_tokens(T, [{token, Expr} | Props], Macros)
+        Token ->
+            collect_tokens(T, [{token, Token} | Props], Macros)
     end;
 collect_tokens([H|T], Props, Macros) ->
     collect_tokens(T, [{token, H} | Props], Macros).
 
 parse_attr(K, {expr, ExprStr}, Macros) ->
-    case parse_expr_str(ExprStr, Macros) of
+    % NOTE: Expressions in attributes are not evaluated.
+    %       The real value must be returned and not a binary.
+    case parse_expr_str(ExprStr, Macros, false) of
         {comment, _} ->
             error(unexpected_comment);
         Expr ->
@@ -145,10 +147,10 @@ do_parse_attr(<<$%, _K/binary>>, _V) ->
 do_parse_attr(K, V) ->
     {attr, {K, V}}.
 
-parse_expr_str(ExprStr, Macros) ->
-    parse_expr_str(ExprStr, Macros, #{}).
+parse_expr_str(ExprStr, Macros, Eval) ->
+    parse_expr_str(ExprStr, Macros, #{}, Eval).
 
-parse_expr_str(ExprStr, Macros, Bindings) ->
+parse_expr_str(ExprStr, Macros, Bindings, Eval) ->
     ExprTree = merl:quote(ExprStr),
     case erl_syntax:type(ExprTree) =:= comment of
         true ->
@@ -159,11 +161,21 @@ parse_expr_str(ExprStr, Macros, Bindings) ->
             AllVars = merl:template_vars(merl:template(MacrosTree)),
             case AllVars -- maps:keys(Macros) of
                 [] ->
-                    MacrosStr = iolist_to_binary(erl_pp:expr(
-                                    erl_syntax:revert(MacrosTree))),
-                    FunStr = <<"fun(_Assigns) -> ", MacrosStr/binary, " end">>,
-                    Tree = [merl:quote(FunStr)],
-                    expr_struct(Tree, [], Bindings);
+                    case Eval andalso
+                         lists:member(erl_syntax:type(MacrosTree),
+                                      arizona_html:safe_types()) of
+                        true ->
+                            {value, V, []} =
+                                erl_eval:exprs(
+                                    [erl_syntax:revert(MacrosTree)], []),
+                            {text, arizona_html:safe(V)};
+                        false ->
+                            MacrosStr = iolist_to_binary(
+                                erl_pp:expr(erl_syntax:revert(MacrosTree))),
+                            FunStr = <<"fun(_Assigns) -> ", MacrosStr/binary, " end">>,
+                            Tree = [merl:quote(FunStr)],
+                            expr_struct(Tree, [], Bindings)
+                    end;
                 Vars ->
                     FunStr = <<"fun(Assigns) -> _@subst end">>,
                     VarsSubst = [{Var, subst_var(Var)} || Var <- Vars],
@@ -247,7 +259,7 @@ parse_exprs_test() ->
                         {text,<<"baz">>},
                         {tag,
                          #{name := <<"br">>,void := true,tokens := [],
-                           attrs := [],directives := #{}}},
+                           directives := #{},attrs := []}},
                         {tag,
                          #{name := <<"div">>,void := false,
                            tokens :=
@@ -280,17 +292,17 @@ parse_exprs_test() ->
                         {<<"style">>,{text,<<"display: none;">>}},
                         {<<"hidden">>,{text,<<"hidden">>}}],
                       directives := #{}}},
-                   {text,<<"End">>}]} when is_function(ExprFun1, 1) andalso
-            is_function(ExprFun2, 1) andalso
-            is_function(ExprFun3, 1) andalso
-            is_function(ExprFun4, 1),
-    parse_exprs(Tokens)).
+                   {text,<<"End">>}]}
+        when is_function(ExprFun1, 1) andalso
+             is_function(ExprFun2, 1) andalso
+             is_function(ExprFun3, 1) andalso
+             is_function(ExprFun4, 1), parse_exprs(Tokens)).
 
 macros_test() ->
     {ok, Tokens, _} = arizona_tpl_scan:string(<<"foo{_@bar}baz">>),
-    ?assertMatch({ok, [
+    ?assertEqual({ok, [
         {text, <<"foo">>},
-        {expr, {_Fun, []}}, % <- no vars
+        {text, <<"bar">>},
         {text, <<"baz">>}
     ]}, parse_exprs(Tokens, #{bar => <<"bar">>})).
 
