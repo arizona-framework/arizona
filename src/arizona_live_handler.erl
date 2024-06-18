@@ -17,22 +17,24 @@
 %%
 %% %CopyrightEnd%
 %%
--module(arizona_app).
+-module(arizona_live_handler).
 -moduledoc false.
 
--behaviour(application).
+-behaviour(cowboy_handler).
 
-%% Application callbacks.
--export([start/2, stop/1]).
+%% cowboy_handler callbacks.
+-export([init/2]).
 
 %% --------------------------------------------------------------------
-%% Application callbacks.
+%% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
 
-start(_StartType, _StartArgs) ->
-    {ok, _} = arizona_server:start(),
-    arizona_sup:start_link().
-
-stop(_State) ->
-    ok.
+init(Req0, {Mod, Fun, Opts} = State) ->
+    Macros = maps:get(macros, Opts, #{}),
+    Tpl = arizona_live_view:persist_get(Mod, Fun, Macros),
+    Assigns = maps:get(assigns, Opts, #{}),
+    Html = arizona_tpl_render:render_block(Tpl, Assigns),
+    Headers = #{<<"content-type">> => <<"text/html">>},
+    Req = cowboy_req:reply(200, Headers, Html, Req0),
+    {ok, Req, State}.
 

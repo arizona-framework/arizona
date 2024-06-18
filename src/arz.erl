@@ -17,47 +17,22 @@
 %%
 %% %CopyrightEnd%
 %%
--module(arizona_socket).
+-module(arz).
 -moduledoc """
-Components state.
+Alias for more convenient calls from a shell.
 """.
 
 %% API functions.
--export([new/3, assign/2, assign/3, push_event/3, prune/1]).
+-export([r/0]).
 
 %% --------------------------------------------------------------------
 %% API functions.
 %% --------------------------------------------------------------------
 
-new(Id, View, Assigns) ->
-    #{
-        id => Id,
-        view => View,
-        assigns => Assigns,
-        events => [],
-        changes => #{}
-    }.
-
-assign(Map, Socket) ->
-    maps:fold(fun assign/3, Socket, Map).
-
-assign(Key, Value, #{assigns := Assigns, changes := Changes} = Socket) ->
-    case Assigns of
-        #{Key := Value} ->
-            Socket;
-        #{} ->
-            Socket#{
-                assigns => Assigns#{Key => Value},
-                changes => Changes#{Key => Value}
-            }
-    end.
-
-push_event(Name, Payload, #{events := Events} = Socket) ->
-    Socket#{events => [[Name, Payload] | Events]}.
-
-prune(Socket) ->
-    Socket#{
-        events => [],
-        changes => #{}
-    }.
+-doc """
+Recompile.
+""".
+r() ->
+    r3:do(compile),
+    arizona_live_reload:reload().
 

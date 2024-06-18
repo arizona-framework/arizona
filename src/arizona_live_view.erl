@@ -1,8 +1,7 @@
-%% @author William Fank Thomé <willilamthome@hotmail.com>
-%% @copyright 2023 William Fank Thomé
-%% @doc LiveView.
-
-%% Copyright 2023 William Fank Thomé
+%%
+%% %CopyrightBegin%
+%%
+%% Copyright 2024 William Fank Thomé
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -15,86 +14,108 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
+%%
+%% %CopyrightEnd%
+%%
 -module(arizona_live_view).
+-moduledoc """
+Live view.
+""".
+-moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
-%% API
--export([ init/4, mount/3, render/2, handle_event/4 ]).
+%% API functions.
+-export([parse_str/2, compile/3, persist_get/3]).
 
-%% Types
--export_type([ bindings/0, render_state/0 ]).
-
--type bindings() :: arizona_template_adapter:bindings().
--type render_state() :: arizona_template_adapter:state().
--type event() :: binary().
+%% TODO: Real types.
+-type socket()  :: map().
+-type macros()  :: map().
+-type tree()    :: map().
+-type event()   :: binary().
 -type payload() :: map().
--type params() :: arizona_server_adapter:params().
--type socket() :: arizona_socket:t().
 
-%% Callbacks
--optional_callbacks([ mount/2, handle_event/3 ]).
+%% Macros
+-define(PERSIST_KEY, ?MODULE).
 
--callback mount(Params, Socket) -> {ok, Socket}
-    when Params :: params()
-       , Socket :: socket()
-       .
+%% --------------------------------------------------------------------
+%% Callbacks.
+%% --------------------------------------------------------------------
 
--callback render(Bindings) -> {Bindings, RenderState}
-    when Bindings :: bindings()
-       , RenderState :: render_state()
-       .
+-callback mount(socket()) ->
+    {ok, socket()}.
 
--callback handle_event(Event, Payload, Socket) -> {ok, Socket}
-    when Event :: event()
-       , Payload :: payload()
-       , Socket :: socket()
-       .
+-callback render(macros()) ->
+    tree().
 
-%%%=====================================================================
-%%% API
-%%%=====================================================================
+-callback handle_event(event(), payload(), socket()) ->
+    {noreply, socket()}.
 
-init(View, #{template := Template}, Params, Socket) ->
-    init_template(Template, View, Params, Socket);
-init(View, _Opts, Params, Socket) ->
-    init_view(View, Params, Socket).
+-optional_callbacks([handle_event/3]).
 
-mount(View, Params, Socket) ->
-    io:format("[LiveView] ~w: ~p~n", [View, [mount, Params]]),
-    case erlang:function_exported(View, mount, 2) of
-        true ->
-            View:mount(Params, Socket);
-        false ->
-            {ok, Socket}
+%% --------------------------------------------------------------------
+%% API funtions.
+%% --------------------------------------------------------------------
+
+parse_str(Str, Macros) ->
+    case arizona_tpl_scan:string(Str) of
+        {ok, Tokens, _EndLocation} ->
+            arizona_tpl_parse:parse_exprs(Tokens, Macros);
+        {error, ErrorInfo, ErrorLocation} ->
+            {error, {ErrorInfo, ErrorLocation}}
     end.
 
-render(View, Socket0) ->
-    Socket = arizona_socket:bind(self, View, Socket0),
-    Bindings = arizona_socket:get_bindings(Socket),
-    io:format("[LiveView] ~w: ~p~n", [View, [render, Bindings]]),
-    View:render(Bindings).
+compile(Mod, Fun, Macros) ->
+    arizona_tpl_compile:compile({Mod, Fun, Macros}).
 
-handle_event(View, Event, Payload, Socket) ->
-    io:format("[LiveView] ~w: ~p~n", [View, [event, Event, Payload]]),
-    View:handle_event(Event, Payload, Socket).
+persist_get(Mod, Fun, Macros) ->
+    persistent_term:get({?PERSIST_KEY, {Mod, Fun}}, persist(Mod, Fun, Macros)).
 
-%%%=====================================================================
-%%% Internal functions
-%%%=====================================================================
+%% --------------------------------------------------------------------
+%% Internal funtions.
+%% --------------------------------------------------------------------
 
-init_view(View, Params, Socket0) ->
-    {ok, Socket} = mount(View, Params, Socket0),
-    RenderState = render(View, Socket),
-    arizona_socket:set_render_state(RenderState, Socket).
+persist(Mod, Fun, Macros) ->
+    {ok, Compiled} = compile(Mod, Fun, Macros),
+    persistent_term:put({?PERSIST_KEY, {Mod, Fun}}, Compiled),
+    Compiled.
 
-init_template(Template, View, Params, Socket0) ->
-    Socket1 = arizona_socket:bind(parent, Template, Socket0),
-    Socket2 = init_view(View, Params, Socket1),
-    ViewRenderState = arizona_socket:get_render_state(Socket2),
-    InnerContent = arizona_template:render(ViewRenderState),
-    {ok, Socket3} = mount(Template, Params, Socket2),
-    Socket = arizona_socket:bind(#{
-        view => View,
-        inner_content => InnerContent
-    }, Socket3),
-    RenderState = render(Template, Socket),
-    arizona_socket:set_render_state(RenderState, Socket).
+%% --------------------------------------------------------------------
+%% EUnit tests.
+%% --------------------------------------------------------------------
+
+-ifdef(TEST).
+-compile([export_all, nowarn_export_all]).
+-include("live_view.hrl").
+-include_lib("eunit/include/eunit.hrl").
+
+parse_str_test() ->
+    ?assertMatch([
+        {tag,
+         #{name := <<"main">>,
+           directives := #{stateful := true}}
+    }], render(#{})).
+
+% Start parse_str support.
+
+render(Macros) ->
+    ?LV("""
+    <main :stateful>
+        <h1>{_@title}</h1>
+        <.arizona_live_view:counter/>
+    </main>
+    """).
+
+counter(Macros) ->
+    ?LV("""
+    <div :stateful>
+        <div>{_@count}</div>
+        <button type="button">Increment</button>
+    </div>
+    """).
+
+% End parse_str support.
+
+compile_test() ->
+    ?assertMatch({ok, #{block := _}}, compile(?MODULE, render, #{})).
+
+-endif.
+

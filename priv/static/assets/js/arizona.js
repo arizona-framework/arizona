@@ -1,16 +1,20 @@
 "use strict"
 
-function arizonaFactory(_opts = {}) {
-    // Worker
+globalThis["arizona"] = (() => {
+    // Worker.
 
-    const worker = new Worker("assets/arizona/js/arizona-worker.js")
+    const worker = new Worker("assets/js/arizona-worker.js")
 
     worker.addEventListener("message", function(e) {
-        console.log("Arizona received a message from WebWorker =>", e.data)
+        console.log("[WebWorker] msg:", e.data)
         const { event, payload } = e.data
         switch(event) {
             case "patch":
-                applyPatch(document.documentElement, payload)
+                const {target, html} = payload
+                const elem = target === "root"
+                    ? document.documentElement
+                    : document.querySelector(`[arz-id="${JSON.stringify(target)}"]`)
+                applyPatch(elem, html)
                 break
         }
         subscribers.get(event)?.forEach(
@@ -22,10 +26,10 @@ function arizonaFactory(_opts = {}) {
     })
 
     worker.addEventListener("error", function(e) {
-        console.error("Arizona received and error from WebWorker =>", e)
+        console.error("[WebWorker] error:", e)
     })
 
-    // Subscribers
+    // Subscribers.
 
     const subscribers = new Map()
     const unsubscribers = new Map()
@@ -34,7 +38,7 @@ function arizonaFactory(_opts = {}) {
     function subscribe(eventName, callback, opts = {}) {
         let eventSubs = subscribers.get(eventName)
         if (!eventSubs) eventSubs = new Map()
-        // @todo Improve id
+        // @todo Improve id.
         const id = Math.random()
         eventSubs.set(id, {id, callback, opts})
         subscribers.set(eventName, eventSubs)
@@ -62,7 +66,13 @@ function arizonaFactory(_opts = {}) {
         console.table({action: "unsubscribed", eventName, id, subscribers, unsubscribers})
     }
 
-    //  Utils
+    // API functions.
+
+    function send(event, payloadOrCallback, callbackOrOpts, optsOrNull) {
+        typeof payloadOrCallback === "function"
+            ? sendMsgToWorker.bind(this)(event, undefined, payloadOrCallback, callbackOrOpts)
+            : sendMsgToWorker.bind(this)(event, payloadOrCallback, callbackOrOpts, optsOrNull)
+    }
 
     function connect(params, callback, opts) {
         params = {
@@ -72,15 +82,14 @@ function arizonaFactory(_opts = {}) {
         send("connect", params, callback, opts)
     }
 
-    function send(event, payloadOrCallback, callbackOrOpts, optsOrNull) {
-        typeof payloadOrCallback === "function"
-            ? sendMsgToWorker(event, undefined, payloadOrCallback, callbackOrOpts)
-            : sendMsgToWorker(event, payloadOrCallback, callbackOrOpts, optsOrNull)
-    }
+    // Internal functions.
 
     function sendMsgToWorker(event, payload, callback, opts = {}) {
+        if (!opts.target && (this instanceof HTMLElement)) {
+            opts.target = this.getAttribute("arz-target")
+        }
         callback && subscribeOnce(event, callback, opts)
-        worker.postMessage({event, payload})
+        worker.postMessage({target: opts.target || "root", event, payload})
     }
 
     function applyPatch(elem, html) {
@@ -98,52 +107,6 @@ function arizonaFactory(_opts = {}) {
         })
     }
 
-    // Observer
+    return { subscribe, subscribeOnce, unsubscribe, send, connect }
+})()
 
-    document.addEventListener("DOMContentLoaded", () => {
-        // @todo More events.
-        const eventAttributes = [
-            "arz-click",
-        ]
-
-        eventAttributes.forEach((attributeName) => {
-            document
-                .querySelectorAll(`[${attributeName}]`)
-                .forEach((target) => installEvent(target, attributeName))
-        })
-
-        function installEvent(target, attributeName) {
-            const [_, listenerType] = attributeName.split("arz-")
-            const event = target.getAttribute(attributeName)
-            const callback = observerNodeEventListener(event)
-            event
-                ? target.addEventListener(listenerType, callback)
-                : target.removeEventListener(listenerType, callback)
-        }
-
-        function observerNodeEventListener(event) {
-            return function(e) {
-                e.target.name
-                    ? send(event, {[e.target.name]: e.target.value})
-                    : send(event)
-            }
-        }
-
-        const observer = new MutationObserver((mutations) => {
-            for (const node of mutations) {
-                installEvent(node.target, node.attributeName)
-            }
-        })
-        observer.observe(document.body, {
-            attributeFilter: eventAttributes,
-            subtree: true,
-        })
-    })
-
-    return {
-        connect,
-        send,
-        on: subscribe,
-        once: subscribeOnce,
-    }
-}

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright 2023-2024 William Fank Thomé
+%% Copyright 2024 William Fank Thomé
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -17,22 +17,30 @@
 %%
 %% %CopyrightEnd%
 %%
--module(arizona_app).
--moduledoc false.
+-module(arizona_js).
+-moduledoc """
+Javascript support.
+""".
+-moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
--behaviour(application).
-
-%% Application callbacks.
--export([start/2, stop/1]).
+%% API functions.
+-export([send/1, send/2]).
 
 %% --------------------------------------------------------------------
-%% Application callbacks.
+%% API funtions.
 %% --------------------------------------------------------------------
 
-start(_StartType, _StartArgs) ->
-    {ok, _} = arizona_server:start(),
-    arizona_sup:start_link().
+send(Event) ->
+    <<"arizona.send.bind(this)('", Event/binary, "')"/utf8>>.
 
-stop(_State) ->
-    ok.
+send(Event, Payload) ->
+    <<"arizona.send.bind(this)('", Event/binary, "', ", (safe(Payload))/binary, ")"/utf8>>.
+
+%% --------------------------------------------------------------------
+%% Internal funtions.
+%% --------------------------------------------------------------------
+
+% TODO: Real safe JS.
+safe(Term) ->
+    iolist_to_binary(json:encode(Term)).
 

@@ -1,8 +1,7 @@
-%% @author William Fank Thomé <willilamthome@hotmail.com>
-%% @copyright 2023 William Fank Thomé
-%% @doc Arizona supervisor module.
-
-%% Copyright 2023 William Fank Thomé
+%%
+%% %CopyrightBegin%
+%%
+%% Copyright 2023-2024 William Fank Thomé
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -15,34 +14,44 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
+%%
+%% %CopyrightEnd%
+%%
 -module(arizona_sup).
+-moduledoc false.
 
-%% API
--export([ start_link/0 ]).
+%% API functions.
+-export([start_link/0]).
 
-%% supervisor callbacks
--export([ init/1 ]).
+%% Supervisor callbacks.
+-export([init/1]).
 
-%% Macros
+%% Macros.
 -define(SERVER, ?MODULE).
 
-%%%=====================================================================
-%%% API
-%%%=====================================================================
+%% --------------------------------------------------------------------
+%% API functions.
+%% --------------------------------------------------------------------
 
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-%%%=====================================================================
-%%% supervisor callbacks
-%%%=====================================================================
+%% --------------------------------------------------------------------
+%% Supervisor callbacks.
+%% --------------------------------------------------------------------
 
 init([]) ->
-    SupFlags = #{ strategy => one_for_all
-                , intensity => 0
-                , period => 1
-                },
-
-    ChildSpecs = [ ],
-
+    SupFlags = #{
+        strategy => one_for_all,
+        intensity => 0,
+        period => 1
+    },
+    ChildSpecs = case application:get_env(arizona, endpoint, #{}) of
+        #{live_reload := true} ->
+            [#{id => arizona_live_reload, start =>
+              {arizona_live_reload, start_link, []}}];
+        #{} ->
+            []
+    end,
     {ok, {SupFlags, ChildSpecs}}.
+

@@ -1,8 +1,7 @@
-%% @author William Fank Thomé <willilamthome@hotmail.com>
-%% @copyright 2023 William Fank Thomé
-%% @doc WebSocket.
-
-%% Copyright 2023 William Fank Thomé
+%%
+%% %CopyrightBegin%
+%%
+%% Copyright 2023-2024 William Fank Thomé
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -15,151 +14,109 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
+%%
+%% %CopyrightEnd%
+%%
 -module(arizona_websocket).
+-moduledoc false.
 
-%% API
--export([ init/1, handle_msg/2, handle_info/2, terminate/3 ]).
+-behaviour(cowboy_websocket).
 
-%% Macros
--define(DEFAULT_PAYLOAD, #{}).
+%% cowboy_websocket callbacks.
+-export([init/2, websocket_init/1, websocket_handle/2,
+         websocket_info/2, terminate/3]).
 
-%% State
--record(state, { view :: module()
-               , params :: params()
-               , socket :: socket()
-               , render_all :: boolean()
-               }).
+%% API functions.
+-export([subscribe/1]).
 
--type params() :: arizona_server_adapter:params().
--type socket() :: arizona_socket:t().
+%% --------------------------------------------------------------------
+%% cowboy_handler callbacks.
+%% --------------------------------------------------------------------
 
-%%%=====================================================================
-%%% API
-%%%=====================================================================
+init(Req0, _State = []) ->
+    Params = cowboy_req:parse_qs(Req0),
+    {ok, Req, Env} = arizona_server:route(Req0),
+    #{handler_opts := {Mod, Fun, Opts}} = Env,
+    {cowboy_websocket, Req, {Params, {Mod, Fun, Opts}}}.
 
-init(Params) ->
-    io:format("[WebSocket] init: ~p~n", [Params]),
-    Path = get_path(Params),
-    {{live, View, Opts}, _RouteOpts} = arizona_router:match(get, Path),
-    Socket0 = arizona_socket:new(),
-    Socket1 = arizona_live_view:init(View, Opts, Params, Socket0),
-    RenderState = arizona_live_view:render(View, Socket1),
-    Socket2 = arizona_socket:set_render_state(RenderState, Socket1),
-    Socket = init_socket(reconnecting(Params), Params, Socket2),
-    State = #state{ view = View
-                  , params = Params
-                  , socket = Socket
-                  , render_all = true
-                  },
-    reply(State).
+websocket_init({Params, {Mod, Fun, Opts}}) ->
+    io:format("[WebSocket] init: ~p~n", [{self(), Params, {Mod, Fun, Opts}}]),
+    Macros = maps:get(macros, Opts, #{}),
+    Tpl = arizona_live_view:persist_get(Mod, Fun, Macros),
+    Assigns = maps:get(assigns, Opts, #{}),
+    {ok, {Html, Sockets}} = arizona_tpl_render:mount(Tpl, Assigns),
+    Reconnecting = proplists:get_value(<<"reconnecting">>, Params, <<"false">>),
+    Events = case Reconnecting of
+        <<"true">> ->
+            [];
+        <<"false">> ->
+            [{text, json:encode([[~"init", Html]])}]
+    end,
+    State = #{
+        template => Tpl,
+        sockets => #{Id => arizona_socket:prune(Socket)
+                     || Id := Socket <- Sockets}
+    },
+    subscribe(broadcast),
+    send(init, {init, self()}),
+    {Events, State}.
 
-handle_msg(Msg, #state{view = View} = State0) ->
-    io:format("[WebSocket] msg: ~p~n", [Msg]),
-    {Event, Payload} = decode_msg(Msg),
-    {ok, Socket0} = arizona_live_view:handle_event(
-        View, Event, Payload, State0#state.socket
-    ),
-    State1 = State0#state{socket = Socket0},
-    {Socket, State2} = push_patch_event(State1),
-    State = State2#state{socket = Socket},
-    reply(State).
+websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
+    io:format("[WebSocket] handle: ~p~n", [Msg]),
+    {Target, Event, Payload} = decode_msg(Msg),
+    Socket0 = maps:get(Target, Sockets),
+    View = maps:get(view, Socket0),
+    % TODO: {reply, Msg, Socket}
+    {noreply, Socket1} = View:handle_event(Event, Payload, Socket0),
+    Socket = case maps:get(changes, Socket1) of
+        Changes when map_size(Changes) > 0 ->
+            Tpl = maps:get(template, State),
+            Assigns = maps:get(assigns, Socket1),
+            Patch = arizona_tpl_render:render_target(Target, Tpl, Changes, Assigns),
+            arizona_socket:push_event(~"patch", [Target, Patch], Socket1);
+        #{} ->
+            Socket1
+    end,
+    Id = maps:get(id, Socket),
+    {[{text, json:encode(maps:get(events, Socket))}],
+        State#{sockets => Sockets#{Id => arizona_socket:prune(Socket)}}}.
 
-handle_info(Info, State) ->
-    io:format("[WebSocket] info: ~p~n", [Info]),
-    {noreply, State}.
+websocket_info(reload, Socket) ->
+    io:format("[WebSocket] reload~n", []),
+    {[{text, json:encode([[~"reload", []]])}], Socket};
+websocket_info(Info, Socket) ->
+    io:format("[WebSocket] info: ~p~n", [{Info, Socket}]),
+    {[], Socket}.
 
-terminate(Reason, _Req, _State) ->
-    io:format("[WebSocket] terminate: ~p~n", [Reason]),
+terminate(Reason, Req, _State) ->
+    io:format("[WebSocket] terminate: ~p~n", [{Reason, Req}]),
+    send(terminate, {terminate, self()}),
     ok.
 
-%%%=====================================================================
-%%% Internal functions
-%%%=====================================================================
+%% --------------------------------------------------------------------
+%% API functions.
+%% --------------------------------------------------------------------
 
-%% Init
+subscribe(Event) ->
+    gproc:reg({p, l, {?MODULE, Event}}).
 
-init_socket(_Reconnecting = false, _Params, Socket) ->
-    RenderState = arizona_socket:get_render_state(Socket),
-    Tree = arizona_template:tree(RenderState),
-    Bindings = arizona_socket:get_bindings(Socket),
-    Types = arizona_template:types(Bindings, RenderState),
-    arizona_socket:push_event(<<"init">>, [Tree, Types], Socket);
-init_socket(_Reconnecting = true, Params, Socket0) ->
-    Tree = get_tree(Params),
-    Types = get_types(Params),
-    RenderState = arizona_socket:get_render_state(Socket0),
-    Bindings = arizona_template:cast(Tree, Types, RenderState),
-    arizona_socket:set_bindings(Bindings, Socket0).
+%% --------------------------------------------------------------------
+%% Internal functions.
+%% --------------------------------------------------------------------
 
-%% Params
-
-reconnecting(Params) ->
-    proplists:lookup(<<"reconnecting">>, Params) =:=
-        {<<"reconnecting">>, <<"true">>}.
-
-get_path(Params) ->
-    arizona_server:normalize_path(lookup_param(<<"path">>, Params)).
-
-get_tree(Params) ->
-    lookup_json_param(<<"tree">>, Params).
-
-get_types(Params) ->
-    lookup_json_param(<<"types">>, Params).
-
-lookup_json_param(Key, Params) ->
-    arizona_json:decode(lookup_param(Key, Params)).
-
-lookup_param(Key, Params) ->
-    {Key, Param} = proplists:lookup(Key, Params),
-    Param.
-
-%% Message
+send(Event, Payload) ->
+    gproc:send({p, l, {?MODULE, Event}}, Payload).
 
 decode_msg(Msg) ->
-    do_normalize_msg(arizona_json:decode(Msg)).
-
-do_normalize_msg([Event, Payload]) ->
-    {Event, Payload};
-do_normalize_msg(Event) ->
-    {Event, ?DEFAULT_PAYLOAD}.
-
-%% Patch
-
-push_patch_event(State0) ->
-    {Bindings, State} = get_bindings(State0),
-    {push_patch_event(Bindings, State#state.socket), State}.
-
-get_bindings(#state{render_all = true, socket = Socket} = State) ->
-    {arizona_socket:get_bindings(Socket), State#state{render_all = false}};
-get_bindings(#state{socket = Socket} = State) ->
-    {arizona_socket:get_changes(Socket), State}.
-
-push_patch_event(Bindings, Socket0) ->
-    case map_size(Bindings) =:= 0 of
-        true ->
-            Socket0;
-        false ->
-            RenderState0 = arizona_socket:get_render_state(Socket0),
-            RenderState = arizona_template:bind(Bindings, RenderState0),
-            Socket = arizona_socket:set_render_state(RenderState, Socket0),
-            case arizona_template:diff(RenderState) of
-                {ok, Diff} ->
-                    arizona_socket:push_event(<<"patch">>, Diff, Socket);
-                none ->
-                    Socket
-            end
+    case json:decode(Msg) of
+        [Target, Event, Payload] ->
+            {decode_target(Target), Event, Payload};
+        [Target, Event] ->
+            {decode_target(Target), Event, #{}}
     end.
 
-%% Reply
+decode_target(<<"root">>) ->
+    root;
+decode_target(Target) ->
+    json:decode(Target).
 
-reply(#state{socket = Socket} = State) ->
-    case arizona_socket:get_events(Socket) of
-        [] ->
-            {noreply, prune(State)};
-        Events ->
-            JSON = arizona_json:encode(Events),
-            {reply, [{text, JSON}], prune(State)}
-    end.
-
-prune(#state{socket = Socket} = State) ->
-    State#state{socket = arizona_socket:prune(Socket)}.

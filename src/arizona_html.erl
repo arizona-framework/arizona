@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright 2023-2024 William Fank Thomé
+%% Copyright 2024 William Fank Thomé
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -17,22 +17,29 @@
 %%
 %% %CopyrightEnd%
 %%
--module(arizona_app).
--moduledoc false.
+-module(arizona_html).
+-moduledoc """
+HTML support.
+""".
+-moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
--behaviour(application).
-
-%% Application callbacks.
--export([start/2, stop/1]).
+%% API functions.
+-export([safe/1, safe_types/0]).
 
 %% --------------------------------------------------------------------
-%% Application callbacks.
+%% API funtions.
 %% --------------------------------------------------------------------
 
-start(_StartType, _StartArgs) ->
-    {ok, _} = arizona_server:start(),
-    arizona_sup:start_link().
+% TODO: Do this really safe for HTML.
+safe(V) when is_binary(V) ->
+    V;
+safe(V) when is_atom(V) ->
+    atom_to_binary(V, utf8);
+safe(V) when is_integer(V) ->
+    integer_to_binary(V, 10);
+safe(V) when is_float(V) ->
+    io_lib:format("~p", [V]).
 
-stop(_State) ->
-    ok.
+safe_types() ->
+    [binary, atom, integer, float].
 
