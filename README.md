@@ -1,5 +1,7 @@
 # Arizona
 
+![arizona_256x256](https://github.com/arizona-framework/arizona/assets/35941533/a272bbd4-62fc-4cfd-9670-d785f6057678)
+
 Arizona is a web framework for Erlang.
 
 > ⚠️ Work in progress.
