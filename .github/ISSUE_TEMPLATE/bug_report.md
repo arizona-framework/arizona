@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a bug to improve nuntius
+about: Report a bug to improve Arizona
 title: ''
 labels: 'bug'
 assignees: ''
@@ -16,7 +16,7 @@ A clear and concise description of what the bug is.
 A list of software versions where the bug is apparent, as detailed as possible:
 
 * Erlang/OTP: ...
-* nuntius: ...
+* Arizona: ...
 * other (where applicable): ...
 
 #### How to replicate
