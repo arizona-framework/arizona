@@ -2,7 +2,7 @@
 name: Bug report
 about: Report a bug to improve Arizona
 title: ''
-labels: 'bug'
+labels: bug
 assignees: ''
 
 ---
