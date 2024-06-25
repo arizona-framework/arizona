@@ -1,0 +1,43 @@
+---
+name: Lint
+
+"on":
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - "*"
+  workflow_dispatch: {}
+
+jobs:
+  lint:
+    name: Lint
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
+
+      # uses .markdownlint.yml for configuration
+      - name: markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@b4c9feab76d8025d1e83c653fa3990936df0e6c8 # v16.0.0
+        with:
+          globs: |
+            .github/**/*.md
+            *.md
+            LICENSE
+
+      - name: yamllint
+        uses: ibiqlik/action-yamllint@2576378a8e339169678f9939646ee3ee325e845c # v3.1.1
+        with:
+          file_or_dir: |
+            .github/**/*.yml
+            .*.yml
+          strict: true
+          config_file: .yamllint.yml
+
+      - name: actionlint
+        uses: reviewdog/action-actionlint@fd627997c9688c2f39e13917aed23873c031b834 # v1.48.0
+        env:
+          SHELLCHECK_OPTS: -o all

@@ -9,7 +9,8 @@ Arizona is a web framework for Erlang.
 ## In a Nutshell
 
 > **NOTE:**
-> The below is a very brief description of Arizona by just copying some code of the `./arzex` example project.
+> The below is a very brief description of Arizona by just copying some code of the `./arzex`
+example project.
 > Please see the project folder for the complete codebase.
 > More info upcoming soon.
 
@@ -196,4 +197,3 @@ Arizona is 100% open-source and community-driven. All components are
 available under the Apache 2 License on [GitHub](https://github.com/williamthome/arizona).
 
 See [LICENSE.md](LICENSE.md) for more information.
-

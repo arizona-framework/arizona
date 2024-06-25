@@ -1,0 +1,7 @@
+---
+extends: default
+rules:
+  line-length:
+    max: 100
+  comments:
+    min-spaces-from-content: 1
