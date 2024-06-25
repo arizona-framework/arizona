@@ -2,7 +2,7 @@
 name: Bug report
 about: Report a bug to improve this project
 title: ''
-labels: 'enhancement'
+labels: enhancement
 assignees: ''
 
 ---
@@ -16,7 +16,7 @@ A clear and concise description of what the bug is.
 A list of software versions where the bug is apparent, as detailed as possible:
 
 * Erlang/OTP: ...
-* `rebar3_checkshell`: ...
+* Arizona: ...
 * other (where applicable): ...
 
 #### How to replicate
