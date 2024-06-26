@@ -1,36 +1,26 @@
 ---
-name: Bug report
-about: Report a bug to improve this project
+name: Feature request
+about: Request a feature for this project
 title: ''
 labels: enhancement
 assignees: ''
 
 ---
 
-#### The bug
+#### Is your feature request related to a problem?
 
-A clear and concise description of what the bug is.
+A clear and concise description of what the problem is, e.g. "I'm always frustrated
+when ..."
 
-#### Software versions
+#### Describe the feature you'd like
 
-A list of software versions where the bug is apparent, as detailed as possible:
+A clear and concise description of what you want to happen after the new feature
+is implemented.
 
-* Erlang/OTP: ...
-* Arizona: ...
-* other (where applicable): ...
+#### Describe alternatives you've considered
 
-#### How to replicate
-
-An ordered list of steps to replicate the bug:
-
-1. run `rebar3 ci`
-2. search for `...` in the error output
-3. look at file `...`
-
-#### Expected behaviour
-
-What's expected to happen when you follow the steps listed above.
+A clear and concise description of any alternative solutions or features you've considered.
 
 #### Additional context
 
-Any other context about the bug.
+Any other context about the feature request.
