@@ -32,10 +32,8 @@
 -export([hello_world/1]).
 
 %% Libs
--include_lib("common_test/include/ct.hrl").
--include_lib("stdlib/include/assert.hrl").
--include("live_view.hrl").
--include("live_view_test.hrl").
+-include("arizona.hrl").
+-include("arizona_assert.hrl").
 
 %% --------------------------------------------------------------------
 %% arizona_live_view callbacks.
@@ -66,7 +64,7 @@ mount(Socket) ->
     {ok, Socket}.
 
 render(Macros) ->
-    ?LV(~s"""
+    ?ARIZONA_LIVEVIEW(~s"""
     <html>
     <head>
     </head>
@@ -82,8 +80,8 @@ render(Macros) ->
 
 hello_world(Config) when is_list(Config) ->
     {ok, Resp0} = httpc:request("http://localhost:8080/notfound"),
-    ?assertHttpStatus(404, Resp0),
+    ?ARIZONA_ASSERT_STATUS(404, Resp0),
     {ok, Resp1} = httpc:request("http://localhost:8080/helloworld"),
-    ?assertHttpStatus(200, Resp1),
-    ?assertHttpBody("Hello, World!", Resp1).
+    ?ARIZONA_ASSERT_STATUS(200, Resp1),
+    ?ARIZONA_ASSERT_BODY("Hello, World!", Resp1).
 

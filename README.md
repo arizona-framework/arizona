@@ -54,8 +54,8 @@ example project.
 -export([button/1]).
 
 %% Libs.
-%% `live_view.hrl` contains the ?LV macro.
--include_lib("arizona/include/live_view.hrl").
+%% `live_view.hrl` contains the ?ARIZONA_LIVEVIEW macro.
+-include("arizona.hrl").
 
 %% --------------------------------------------------------------------
 %% arizona_live_view callbacks.
@@ -76,7 +76,7 @@ render(Macros0) ->
     Macros = Macros0#{
         title => maps:get(title, Macros0, ~"Arizona")
     },
-    ?LV(~"""
+    ?ARIZONA_LIVEVIEW(~"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -127,7 +127,7 @@ handle_event(<<"decr">>, #{}, #{assigns := Assigns} = Socket) ->
 %% --------------------------------------------------------------------
 
 counter(Macros) ->
-    ?LV(~s"""
+    ?ARIZONA_LIVEVIEW(~s"""
     <div :stateful>
         <div>Count: {_@count}</div>
         <.button event={_@event} text={_@btn_text} />
@@ -135,7 +135,7 @@ counter(Macros) ->
     """).
 
 button(Macros) ->
-    ?LV(~s"""
+    ?ARIZONA_LIVEVIEW(~s"""
     {% NOTE: On this example, :onclick is and expression to be }
     {%       dynamic. It could be just, e.g., :onclick="incr". }
     <button type="button" :onclick={arizona_js:send(_@event)}>
