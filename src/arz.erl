@@ -34,6 +34,6 @@ Alias for more convenient calls from a shell.
 Recompile.
 """.
 r() ->
-    r3:do(compile),
+    apply(r3, do, [compile]),
     arizona_live_reload:reload().
 
