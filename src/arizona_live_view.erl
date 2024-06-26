@@ -60,12 +60,8 @@ Live view.
 %% --------------------------------------------------------------------
 
 parse_str(Str, Macros) ->
-    case arizona_tpl_scan:string(Str) of
-        {ok, Tokens, _EndLocation} ->
-            arizona_tpl_parse:parse_exprs(Tokens, Macros);
-        {error, ErrorInfo, ErrorLocation} ->
-            {error, {ErrorInfo, ErrorLocation}}
-    end.
+    {ok, Tokens, _EndLocation} = arizona_tpl_scan:string(Str),
+    arizona_tpl_parse:parse_exprs(Tokens, Macros).
 
 compile(Mod, Fun, Macros) ->
     arizona_tpl_compile:compile({Mod, Fun, Macros}).
