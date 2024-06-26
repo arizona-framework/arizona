@@ -111,7 +111,7 @@ do_parse_tag([void_close | T], Props, Macros) ->
 %       or at the end of the list if no script tags.
 inject_js_scripts([{token, {tag, #{name := <<"script">>}}} | _] = Tokens) ->
     js_scripts() ++ Tokens;
-inject_js_scripts([H|T]) ->
+inject_js_scripts([H | T]) ->
     [H | inject_js_scripts(T)];
 inject_js_scripts([]) ->
     js_scripts().
@@ -148,7 +148,7 @@ collect_tokens([{expr, ExprStr} | T], Props, Macros) when is_binary(ExprStr) ->
         Token ->
             collect_tokens(T, [{token, Token} | Props], Macros)
     end;
-collect_tokens([H|T], Props, Macros) ->
+collect_tokens([H | T], Props, Macros) ->
     collect_tokens(T, [{token, H} | Props], Macros).
 
 parse_attr(K, {expr, ExprStr}, Macros) ->
@@ -277,49 +277,49 @@ parse_exprs_test() ->
     End
     """),
     ?assertMatch({ok,
-                  [{text,<<"Start">>},
+                  [{text, <<"Start">>},
                    {tag,
-                    #{name := <<"main">>,void := false,
+                    #{name := <<"main">>, void := false,
                       tokens :=
-                       [{text,<<"foo">>},
-                        {expr,{ExprFun1,[bar]}},
-                        {text,<<"baz">>},
+                       [{text, <<"foo">>},
+                        {expr, {ExprFun1, [bar]}},
+                        {text, <<"baz">>},
                         {tag,
-                         #{name := <<"br">>,void := true,tokens := [],
-                           directives := #{},attrs := []}},
+                         #{name := <<"br">>, void := true, tokens := [],
+                           directives := #{}, attrs := []}},
                         {tag,
-                         #{name := <<"div">>,void := false,
+                         #{name := <<"div">>, void := false,
                            tokens :=
                             [{tag,
-                              #{name := <<"span">>,void := false,
+                              #{name := <<"span">>, void := false,
                                 tokens :=
                                  [{block,
                                    #{name := <<"foo:nested">>,
-                                     tokens := [{text,<<"ok">>}],
-                                     attrs := [],directives := #{}}}],
-                                attrs := [{<<"id">>,{text,<<"nested">>}}],
+                                     tokens := [{text, <<"ok">>}],
+                                     attrs := [], directives := #{}}}],
+                                attrs := [{<<"id">>, {text, <<"nested">>}}],
                                 directives := #{}}}],
-                           attrs := [],directives := #{}}},
+                           attrs := [], directives := #{}}},
                         {block,
-                         #{name := <<"foo:block">>,tokens := [],attrs := [],
+                         #{name := <<"foo:block">>, tokens := [], attrs := [],
                            directives :=
                             #{'if' :=
-                               {expr,{ExprFun2,[true]}}}}},
+                               {expr, {ExprFun2, [true]}}}}},
                         {block,
-                         #{name := <<"foo:counter">>,tokens := [],
+                         #{name := <<"foo:counter">>, tokens := [],
                            attrs :=
-                            [{<<"id">>,{text,<<"counter">>}},
+                            [{<<"id">>, {text, <<"counter">>}},
                              {<<"count">>,
-                              {expr,{ExprFun3,[]}}}],
+                              {expr, {ExprFun3, []}}}],
                            directives := #{}}}],
                       attrs :=
-                       [{<<"id">>,{text,<<"foo">>}},
+                       [{<<"id">>, {text, <<"foo">>}},
                         {<<"class">>,
-                         {expr,{ExprFun4,[class]}}},
-                        {<<"style">>,{text,<<"display: none;">>}},
-                        {<<"hidden">>,{text,<<"hidden">>}}],
+                         {expr, {ExprFun4, [class]}}},
+                        {<<"style">>, {text, <<"display: none;">>}},
+                        {<<"hidden">>, {text, <<"hidden">>}}],
                       directives := #{}}},
-                   {text,<<"End">>}]}
+                   {text, <<"End">>}]}
         when is_function(ExprFun1, 1) andalso
              is_function(ExprFun2, 1) andalso
              is_function(ExprFun3, 1) andalso
@@ -342,63 +342,61 @@ head_scripts_test() ->
     """),
     [?assertMatch({ok,
                   [{tag,
-                    #{name := <<"head">>,void := false,
+                    #{name := <<"head">>, void := false,
                       tokens :=
                        [{tag,
-                         #{name := <<"title">>,void := false,
-                           tokens := [{text,<<"Arizona">>}],
-                           directives := #{},attrs := []}},
+                         #{name := <<"title">>, void := false,
+                           tokens := [{text, <<"Arizona">>}],
+                           directives := #{}, attrs := []}},
                         {tag,
-                         #{name := <<"script">>,void := false,tokens := [],
+                         #{name := <<"script">>, void := false, tokens := [],
                           directives := #{},
                           attrs :=
                            [{<<"src">>,
-                             {text,<<"assets/js/morphdom.min.js">>}}]}},
+                             {text, <<"assets/js/morphdom.min.js">>}}]}},
                         {tag,
-                         #{name := <<"script">>,void := false,tokens := [],
+                         #{name := <<"script">>, void := false, tokens := [],
                           directives := #{},
                           attrs :=
-                           [{<<"src">>,{text,<<"assets/js/arizona.js">>}}]}},
+                           [{<<"src">>, {text, <<"assets/js/arizona.js">>}}]}},
                         {tag,
-                         #{name := <<"script">>,void := false,tokens := [],
+                         #{name := <<"script">>, void := false, tokens := [],
                            directives := #{},
-                           attrs := [{<<"src">>,{text,<<"foo">>}}]}}],
-                      directives := #{},attrs := []}}]}, parse_exprs(Tokens, #{})),
+                           attrs := [{<<"src">>, {text, <<"foo">>}}]}}],
+                      directives := #{}, attrs := []}}]}, parse_exprs(Tokens, #{})),
+     application:set_env(arizona, endpoint, #{live_reload => true}),
      ?assertMatch({ok,
                   [{tag,
-                    #{name := <<"head">>,void := false,
+                    #{name := <<"head">>, void := false,
                       tokens :=
                        [{tag,
-                         #{name := <<"title">>,void := false,
-                           tokens := [{text,<<"Arizona">>}],
-                           directives := #{},attrs := []}},
+                         #{name := <<"title">>, void := false,
+                           tokens := [{text, <<"Arizona">>}],
+                           directives := #{}, attrs := []}},
                         {tag,
-                         #{name := <<"script">>,void := false,tokens := [],
+                         #{name := <<"script">>, void := false, tokens := [],
                            directives := #{},
                            attrs :=
                             [{<<"src">>,
-                              {text,<<"assets/js/morphdom.min.js">>}}]}},
+                              {text, <<"assets/js/morphdom.min.js">>}}]}},
                         {tag,
-                         #{name := <<"script">>,void := false,tokens := [],
+                         #{name := <<"script">>, void := false, tokens := [],
                            directives := #{},
                            attrs :=
-                            [{<<"src">>,{text,<<"assets/js/arizona.js">>}}]}},
+                            [{<<"src">>, {text, <<"assets/js/arizona.js">>}}]}},
                         {tag,
-                         #{name := <<"script">>,void := false,tokens := [],
+                         #{name := <<"script">>, void := false, tokens := [],
                            directives := #{},
                            attrs :=
                             [{<<"src">>,
                               {text,
                                <<"assets/js/arizona-live-reload.js">>}}]}},
                         {tag,
-                         #{name := <<"script">>,void := false,tokens := [],
+                         #{name := <<"script">>, void := false, tokens := [],
                            directives := #{},
-                           attrs := [{<<"src">>,{text,<<"foo">>}}]}}],
-                      directives := #{},attrs := []}}]},
-        begin
-            application:set_env(arizona, endpoint, #{live_reload => true}),
-            parse_exprs(Tokens, #{})
-        end
+                           attrs := [{<<"src">>, {text, <<"foo">>}}]}}],
+                      directives := #{}, attrs := []}}]},
+                  parse_exprs(Tokens, #{})
     )].
 
 -endif.

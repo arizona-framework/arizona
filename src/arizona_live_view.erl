@@ -29,6 +29,8 @@ Live view.
 -export([compile/3]).
 -ignore_xref([compile/3]).
 -export([persist_get/3]).
+-export([mount/2]).
+-export([handle_event/4]).
 
 %% TODO: Real types.
 -type socket()  :: map().
@@ -68,6 +70,16 @@ compile(Mod, Fun, Macros) ->
 
 persist_get(Mod, Fun, Macros) ->
     persistent_term:get({?PERSIST_KEY, {Mod, Fun}}, persist(Mod, Fun, Macros)).
+
+%% --------------------------------------------------------------------
+%% Callback support functions.
+%% --------------------------------------------------------------------
+
+mount(Mod, Socket) ->
+    Mod:mount(Socket).
+
+handle_event(Mod, Event, Payload, Socket) ->
+    Mod:handle_event(Event, Payload, Socket).
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
