@@ -10,6 +10,10 @@ name: Update dependencies
       - "*"
   workflow_dispatch: {}
 
+concurrency:
+  group: ${{github.workflow}}-${{github.ref}}
+  cancel-in-progress: true
+
 jobs:
   update:
     name: Update rebar.lock
