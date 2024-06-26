@@ -54,4 +54,6 @@ jobs:
           rebar3 as test ci
 
       - name: Check if build left artifacts
-        run: git diff --exit-code
+        run: |
+          rebar3 do unlock --all, upgrade --all
+          git diff --exit-code
