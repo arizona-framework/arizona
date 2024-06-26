@@ -12,5 +12,5 @@
         gproc
     ]},
     {licenses, ["Apache-2.0"]},
-    {links, [{"GitHub", "https://github.com/arizona-framework/arizona"}]},
+    {links, [{"GitHub", "https://github.com/arizona-framework/arizona"}]}
  ]}.
