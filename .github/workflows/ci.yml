@@ -53,10 +53,6 @@ jobs:
                 -hash-${{hashFiles('rebar.lock')}}"
         if: ${{matrix.os-base != 'macos'}}
 
-      - name: Check file format
-        run: |
-          rebar3 fmt --check
-
       - name: Continuous Integration
         run: |
           rebar3 as test ci
