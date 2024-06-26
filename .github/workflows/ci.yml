@@ -9,7 +9,7 @@ name: CI
 
 jobs:
   linux:
-    name: OTP ${{ matrix.otp_version }}
+    name: CI
     runs-on: ${{ matrix.os }}
 
     strategy:
