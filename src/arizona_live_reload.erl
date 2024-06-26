@@ -24,6 +24,8 @@ Live-reload functionality for use during development.
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API functions
 -export([start_link/0]).
 -ignore_xref([start_link/0]).
@@ -61,24 +63,25 @@ init([]) ->
     {ok, #state{}}.
 
 handle_call(Request, From, State) ->
-    io:format("[LiveReload] call: ~p from ~p~n", [Request, From]),
+    ?LOG_INFO("[LiveReload] call: ~p from ~p~n", [Request, From]),
     {reply, State, State}.
 
 handle_cast(reload, State) ->
-    io:format("[LiveReload] reload: ~p~n", [State]),
+    ?LOG_INFO("[LiveReload] reload: ~p~n", [State]),
     reload(State#state.clients),
     {noreply, State};
 handle_cast(Request, State) ->
-    io:format("[LiveReload] cast: ~p~n", [Request]),
+    ?LOG_INFO("[LiveReload] cast: ~p~n", [Request]),
     {noreply, State}.
 
 handle_info({init, Client}, #state{clients = Clients} = State) ->
-    io:format("[LiveReload] init: ~p~n", [Client]),
+    ?LOG_INFO("[LiveReload] init: ~p~n", [Client]),
     {noreply, State#state{clients = Clients#{Client => true}}};
 handle_info({terminate, Client}, #state{clients = Clients} = State) ->
-    io:format("[LiveReload] terminate: ~p~n", [Client]),
+    ?LOG_INFO("[LiveReload] terminate: ~p~n", [Client]),
     {noreply, State#state{clients = maps:without([Client], Clients)}};
-handle_info({_Pid, {fs, file_event}, {File, Events}}, #state{timer = Timer, files = Files} = State0) ->
+handle_info({_Pid, {fs, file_event}, {File, Events}},
+            #state{timer = Timer, files = Files} = State0) ->
     % Try recompile only when the last modified file was received.
     case Timer =:= undefined of
         true ->
@@ -100,7 +103,7 @@ handle_info({_Pid, {fs, file_event}, {File, Events}}, #state{timer = Timer, file
             {noreply, State}
     end;
 handle_info(recompile, #state{files = Files} = State) when map_size(Files) > 0 ->
-    io:format("[LiveReload] recompile: ~p~n", [State]),
+    ?LOG_INFO("[LiveReload] recompile: ~p~n", [State]),
     maps:foreach(fun
         (File, {erl, modified}) ->
             Mod = list_to_existing_atom(filename:basename(File, ".erl")),
@@ -111,7 +114,7 @@ handle_info(recompile, #state{files = Files} = State) when map_size(Files) > 0 -
 handle_info(recompile, State) ->
     {noreply, State#state{timer = undefined}};
 handle_info(Request, State) ->
-    io:format("[LiveReload] info: ~p~n", [Request]),
+    ?LOG_INFO("[LiveReload] info: ~p~n", [Request]),
     {noreply, State}.
 
 %% --------------------------------------------------------------------

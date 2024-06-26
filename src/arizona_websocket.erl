@@ -22,6 +22,8 @@
 
 -behaviour(cowboy_websocket).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% cowboy_websocket callbacks.
 -export([init/2]).
 -export([websocket_init/1]).
@@ -36,14 +38,14 @@
 %% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
 
-init(Req0, _State = []) ->
+init(Req0, [] = _State) ->
     Params = cowboy_req:parse_qs(Req0),
     {ok, Req, Env} = arizona_server:route(Req0),
     #{handler_opts := {Mod, Fun, Opts}} = Env,
     {cowboy_websocket, Req, {Params, {Mod, Fun, Opts}}}.
 
 websocket_init({Params, {Mod, Fun, Opts}}) ->
-    io:format("[WebSocket] init: ~p~n", [{self(), Params, {Mod, Fun, Opts}}]),
+    ?LOG_INFO("[WebSocket] init: ~p~n", [{self(), Params, {Mod, Fun, Opts}}]),
     Macros = maps:get(macros, Opts, #{}),
     Tpl = arizona_live_view:persist_get(Mod, Fun, Macros),
     Assigns = maps:get(assigns, Opts, #{}),
@@ -65,12 +67,12 @@ websocket_init({Params, {Mod, Fun, Opts}}) ->
     {Events, State}.
 
 websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
-    io:format("[WebSocket] handle: ~p~n", [Msg]),
+    ?LOG_INFO("[WebSocket] handle: ~p~n", [Msg]),
     {Target, Event, Payload} = decode_msg(Msg),
     Socket0 = maps:get(Target, Sockets),
     View = maps:get(view, Socket0),
     % TODO: {reply, Msg, Socket}
-    {noreply, Socket1} = View:handle_event(Event, Payload, Socket0),
+    {noreply, Socket1} = arizona_live_view:handle_event(View, Event, Payload, Socket0),
     Socket = case maps:get(changes, Socket1) of
         Changes when map_size(Changes) > 0 ->
             Tpl = maps:get(template, State),
@@ -85,14 +87,14 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
         State#{sockets => Sockets#{Id => arizona_socket:prune(Socket)}}}.
 
 websocket_info(reload, Socket) ->
-    io:format("[WebSocket] reload~n", []),
+    ?LOG_INFO("[WebSocket] reload~n", []),
     {[{text, json:encode([[~"reload", []]])}], Socket};
 websocket_info(Info, Socket) ->
-    io:format("[WebSocket] info: ~p~n", [{Info, Socket}]),
+    ?LOG_INFO("[WebSocket] info: ~p~n", [{Info, Socket}]),
     {[], Socket}.
 
 terminate(Reason, Req, _State) ->
-    io:format("[WebSocket] terminate: ~p~n", [{Reason, Req}]),
+    ?LOG_INFO("[WebSocket] terminate: ~p~n", [{Reason, Req}]),
     send(terminate, {terminate, self()}),
     ok.
 

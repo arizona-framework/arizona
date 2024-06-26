@@ -20,6 +20,8 @@
 -module(arizona_server).
 -moduledoc false.
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API functions.
 -export([start/0]).
 -ignore_xref([start/0]).
@@ -63,7 +65,7 @@ print_running(Scheme) ->
     Info = ranch:info(?LISTENER),
     {ip, Ip} = proplists:lookup(ip, Info),
     {port, Port} = proplists:lookup(port, Info),
-    io:format("Arizona is running at ~w://~s:~p~n",
+    ?LOG_INFO("Arizona is running at ~w://~s:~p~n",
               [Scheme, ip_to_str(Ip), Port]).
 
 ip_to_str(Ip) ->
@@ -91,13 +93,17 @@ norm_transport_opts(Opts) when is_list(Opts) ->
 
 norm_proto_opts(Opts, Host, Routes, LiveReload) when is_map(Opts) ->
     Dispatch = cowboy_router:compile([{Host, [
-        {"/assets/js/morphdom.min.js", cowboy_static, {priv_file, arizona, "static/assets/js/morphdom.min.js"}},
-        {"/assets/js/arizona.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona.js"}},
-        {"/assets/js/arizona-worker.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona-worker.js"}},
+        {"/assets/js/morphdom.min.js", cowboy_static,
+         {priv_file, arizona, "static/assets/js/morphdom.min.js"}},
+        {"/assets/js/arizona.js", cowboy_static,
+         {priv_file, arizona, "static/assets/js/arizona.js"}},
+        {"/assets/js/arizona-worker.js", cowboy_static,
+         {priv_file, arizona, "static/assets/js/arizona-worker.js"}},
         {"/websocket", arizona_websocket, []}
     ] ++ case LiveReload of
         true ->
-            [{"/assets/js/arizona-live-reload.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona-live-reload.js"}}
+            [{"/assets/js/arizona-live-reload.js", cowboy_static,
+              {priv_file, arizona, "static/assets/js/arizona-live-reload.js"}}
              | Routes];
          false ->
             Routes
