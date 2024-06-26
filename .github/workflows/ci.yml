@@ -18,9 +18,6 @@ jobs:
   ci:
     name: CI
 
-    strategy:
-      fail-fast: false
-
     runs-on: ubuntu-24.04
 
     steps:
