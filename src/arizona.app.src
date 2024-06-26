@@ -1,12 +1,16 @@
 {application, arizona, [
     {description, "Arizona is a Web Framework for Erlang"},
-    {vsn, "0.1.0"},
-    {registered, []},
+    {vsn, semver},
     {mod, {arizona_app, []}},
-    {applications, [kernel, stdlib, gproc, cowboy]},
-    {env,[]},
-    {modules, []},
+    {applications, [
+        % OTP dependencies
+        kernel,
+        stdlib,
+        % External dependencies
+        cowboy,
+        fs,
+        gproc
+    ]},
     {licenses, ["Apache-2.0"]},
-    {links, []}
+    {links, [{"GitHub", "https://github.com/arizona-framework/arizona"}]},
  ]}.
-
