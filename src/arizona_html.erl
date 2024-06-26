@@ -24,7 +24,8 @@ HTML support.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([safe/1, safe_types/0]).
+-export([safe/1]).
+-export([safe_types/0]).
 
 %% --------------------------------------------------------------------
 %% API funtions.

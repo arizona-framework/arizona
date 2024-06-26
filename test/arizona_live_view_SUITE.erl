@@ -20,10 +20,13 @@
 -module(arizona_live_view_SUITE).
 
 %% ct callbacks.
--export([all/0, init_per_suite/1, end_per_suite/1]).
+-export([all/0]).
+-export([init_per_suite/1]).
+-export([end_per_suite/1]).
 
 %% arizona_live_view callbacks.
--export([mount/1, render/1]).
+-export([mount/1]).
+-export([render/1]).
 
 %% Test cases.
 -export([hello_world/1]).

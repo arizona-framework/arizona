@@ -24,7 +24,9 @@ Renderer.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([render_target/4, render_block/2, mount/2]).
+-export([render_target/4]).
+-export([render_block/2]).
+-export([mount/2]).
 
 %% --------------------------------------------------------------------
 %% API funtions.

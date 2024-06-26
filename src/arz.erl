@@ -24,6 +24,7 @@ Alias for more convenient calls from a shell.
 
 %% API functions.
 -export([r/0]).
+-ignore_xref([r/0]).
 
 %% --------------------------------------------------------------------
 %% API functions.

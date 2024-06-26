@@ -25,10 +25,15 @@ Live-reload functionality for use during development.
 -behaviour(gen_server).
 
 %% API functions
--export([start_link/0, reload/0]).
+-export([start_link/0]).
+-ignore_xref([start_link/0]).
+-export([reload/0]).
 
 %% gen_server callbacks.
--export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
+-export([init/1]).
+-export([handle_call/3]).
+-export([handle_cast/2]).
+-export([handle_info/2]).
 
 %% State
 -record(state, {timer, files = #{}, clients = #{}}).

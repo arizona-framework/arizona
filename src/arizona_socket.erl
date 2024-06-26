@@ -23,7 +23,13 @@ Components state.
 """.
 
 %% API functions.
--export([new/3, assign/2, assign/3, push_event/3, prune/1]).
+-export([new/3]).
+-export([assign/2]).
+-ignore_xref([assign/2]).
+-export([assign/3]).
+-ignore_xref([assign/3]).
+-export([push_event/3]).
+-export([prune/1]).
 
 %% --------------------------------------------------------------------
 %% API functions.

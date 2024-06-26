@@ -45,10 +45,13 @@ example project.
 
 %% arizona_live_view callbacks.
 %% mount/1 and render/1 are required, and handle_event/3 is optional.
--export([mount/1, render/1, handle_event/3]).
+-export([mount/1]).
+-export([render/1]).
+-export([handle_event/3]).
 
 %% Component functions.
--export([counter/1, button/1]).
+-export([counter/1]).
+-export([button/1]).
 
 %% Libs.
 %% `live_view.hrl` contains the ?LV macro.

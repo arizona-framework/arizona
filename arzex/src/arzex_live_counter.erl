@@ -2,10 +2,13 @@
 -behaviour(arizona_live_view).
 
 %% arizona_live_view callbacks.
--export([mount/1, render/1, handle_event/3]).
+-export([mount/1]).
+-export([render/1]).
+-export([handle_event/3]).
 
 %% Component functions.
--export([counter/1, button/1]).
+-export([counter/1]).
+-export([button/1]).
 
 %% Libs
 -include_lib("arizona/include/live_view.hrl").

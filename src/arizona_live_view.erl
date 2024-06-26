@@ -24,7 +24,11 @@ Live view.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([parse_str/2, compile/3, persist_get/3]).
+-export([parse_str/2]).
+-ignore_xref([parse_str/2]).
+-export([compile/3]).
+-ignore_xref([compile/3]).
+-export([persist_get/3]).
 
 %% TODO: Real types.
 -type socket()  :: map().

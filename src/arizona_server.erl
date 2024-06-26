@@ -21,7 +21,11 @@
 -moduledoc false.
 
 %% API functions.
--export([start/0, start/1, route/1]).
+-export([start/0]).
+-ignore_xref([start/0]).
+-export([start/1]).
+-ignore_xref([start/1]).
+-export([route/1]).
 
 %% Macros
 -define(LISTENER, arizona_http_listener).

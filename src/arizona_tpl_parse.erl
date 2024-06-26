@@ -24,14 +24,11 @@ Template parser.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([parse_exprs/1, parse_exprs/2]).
+-export([parse_exprs/2]).
 
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
-
-parse_exprs(Tokens) ->
-    parse_exprs(Tokens, #{}).
 
 parse_exprs(Tokens, Macros) ->
     {ok, do_parse_exprs(Tokens, Macros)}.
@@ -326,7 +323,7 @@ parse_exprs_test() ->
         when is_function(ExprFun1, 1) andalso
              is_function(ExprFun2, 1) andalso
              is_function(ExprFun3, 1) andalso
-             is_function(ExprFun4, 1), parse_exprs(Tokens)).
+             is_function(ExprFun4, 1), parse_exprs(Tokens, #{})).
 
 macros_test() ->
     {ok, Tokens, _} = arizona_tpl_scan:string(<<"foo{_@bar}baz">>),
