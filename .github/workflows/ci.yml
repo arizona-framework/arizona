@@ -55,5 +55,6 @@ jobs:
 
       - name: Check if build left artifacts
         run: |
-          rebar3 do unlock --all, upgrade --all
+          rebar3 unlock --all
+          rebar3 upgrade --all
           git diff --exit-code
