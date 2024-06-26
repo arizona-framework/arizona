@@ -24,7 +24,9 @@ Template parser.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([parse_exprs/1, parse_exprs/2]).
+-export([parse_exprs/1]).
+-ignore_xref([parse_exprs/1]).
+-export([parse_exprs/2]).
 
 %% --------------------------------------------------------------------
 %% API funtions.

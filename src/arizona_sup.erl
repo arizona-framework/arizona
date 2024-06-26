@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %%
 -module(arizona_sup).
+-behaviour(supervisor).
 -moduledoc false.
 
 %% API functions.

@@ -24,7 +24,9 @@ Javascript support.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([send/1, send/2]).
+-export([send/1]).
+-export([send/2]).
+-ignore_xref([send/2]).
 
 %% --------------------------------------------------------------------
 %% API funtions.

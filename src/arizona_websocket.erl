@@ -23,8 +23,11 @@
 -behaviour(cowboy_websocket).
 
 %% cowboy_websocket callbacks.
--export([init/2, websocket_init/1, websocket_handle/2,
-         websocket_info/2, terminate/3]).
+-export([init/2]).
+-export([websocket_init/1]).
+-export([websocket_handle/2]).
+-export([websocket_info/2]).
+-export([terminate/3]).
 
 %% API functions.
 -export([subscribe/1]).
