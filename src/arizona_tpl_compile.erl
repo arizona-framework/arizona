@@ -204,8 +204,6 @@ tag_closing(#{name := Name}) ->
 no_tokens_tag(Tag, Acc) ->
     <<(tag_open(Tag, Acc))/binary, (tag_closing(Tag))/binary>>.
 
-id([], root) ->
-    root;
 id([], I) ->
     [I];
 id(P, I) ->
