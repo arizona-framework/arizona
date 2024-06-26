@@ -25,7 +25,9 @@ jobs:
       - name: Compile
         run: rebar3 compile
       - name: Run tests
-        run: rebar3 do ct, eunit
+        run: |
+          rebar3 ct
+          rebar3 eunit
 #  FIXME: Resolve dialyzer warnings and errors.
 # - name: Run dialyzer
 # run: rebar3 dialyzer
