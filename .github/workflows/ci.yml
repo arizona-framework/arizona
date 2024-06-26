@@ -27,6 +27,7 @@ jobs:
       - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
 
       - uses: erlef/setup-beam@a6e26b22319003294c58386b6f25edbc7336819a # v1.18.0
+        id: setup-beam
         with:
           version-type: strict
           version-file: .tool-versions
@@ -40,7 +41,6 @@ jobs:
                 -otp-${{steps.setup-beam.outputs.otp-version}}\
                 -rebar3-${{steps.setup-beam.outputs.rebar3-version}}\
                 -hash-${{hashFiles('rebar.lock')}}"
-        if: ${{matrix.os-base != 'macos'}}
 
       - name: Restore rebar3's cache
         uses: actions/cache@0c45773b623bea8c8e75f6c82b208c3cf94ea4f9 # v4.0.2
@@ -51,7 +51,6 @@ jobs:
                 -otp-${{steps.setup-beam.outputs.otp-version}}\
                 -rebar3-${{steps.setup-beam.outputs.rebar3-version}}\
                 -hash-${{hashFiles('rebar.lock')}}"
-        if: ${{matrix.os-base != 'macos'}}
 
       - name: Continuous Integration
         run: |
