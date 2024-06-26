@@ -80,18 +80,6 @@ render_changes(#{vars := AllVars, block := Block}, Changes, Assigns)
 render_changes(#{}, _Changes, _Assigns) ->
     [].
 
-%render_diff(#{vars := AllVars} = Block, NewAssigns, OldAssigns) ->
-%    Changes = diff(AllVars, NewAssigns, OldAssigns),
-%    Assigns = maps:merge(OldAssigns, Changes),
-%    render_changes(Block, Changes, Assigns).
-%
-%diff(Vars, NewAssigns, OldAssigns) ->
-%    #{K => V || K := V <- NewAssigns,
-%        is_map_key(K, Vars) andalso (
-%            not is_map_key(K, OldAssigns)
-%            orelse maps:get(K, OldAssigns) =/= V
-%        )}.
-
 mount_loop(Pid, Sockets) ->
     receive
         {Pid, finished, Render} ->
