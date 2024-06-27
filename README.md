@@ -55,7 +55,7 @@ example project.
 
 %% Libs.
 %% `live_view.hrl` contains the ?ARIZONA_LIVEVIEW macro.
--include("arizona.hrl").
+-include_lib("arizona/include/arizona.hrl").
 
 %% --------------------------------------------------------------------
 %% arizona_live_view callbacks.
