@@ -32,13 +32,6 @@ Live view.
 -export([mount/2]).
 -export([handle_event/4]).
 
-%% TODO: Real types.
--type socket()  :: map().
--type macros()  :: map().
--type tree()    :: list().
--type event()   :: binary().
--type payload() :: map().
-
 %% Macros
 -define(PERSIST_KEY, ?MODULE).
 
@@ -46,14 +39,14 @@ Live view.
 %% Callbacks.
 %% --------------------------------------------------------------------
 
--callback mount(socket()) ->
-    {ok, socket()}.
+-callback mount(arizona:socket()) ->
+    {ok, arizona:socket()}.
 
--callback render(macros()) ->
-    tree().
+-callback render(arizona:macros()) ->
+    arizona:tree().
 
--callback handle_event(event(), payload(), socket()) ->
-    {noreply, socket()}.
+-callback handle_event(arizona:event_name(), arizona:payload(), arizona:socket()) ->
+    {noreply, arizona:socket()}.
 
 -optional_callbacks([handle_event/3]).
 
