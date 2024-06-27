@@ -52,3 +52,9 @@ jobs:
       - name: Continuous Integration
         run: |
           rebar3 as test ci
+
+      - name: Check if build left artifacts
+        run: |
+          rebar3 unlock --all
+          rebar3 upgrade --all
+          git diff --exit-code

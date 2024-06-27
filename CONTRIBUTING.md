@@ -40,7 +40,7 @@ If this is done, open up a
 
 We may discuss details with you regarding the implementation, and its inclusion within the project.
 
-We try to have as many of Arizona' features tested as possible. Everything that a user can do,
+We try to have as many of Arizona's features tested as possible. Everything that a user can do,
 and is repeatable in any way, should be tested, to guarantee backwards compatible.
 
 ## Submitting your changes

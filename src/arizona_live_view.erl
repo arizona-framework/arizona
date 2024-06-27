@@ -35,7 +35,7 @@ Live view.
 %% TODO: Real types.
 -type socket()  :: map().
 -type macros()  :: map().
--type tree()    :: map().
+-type tree()    :: list().
 -type event()   :: binary().
 -type payload() :: map().
 
