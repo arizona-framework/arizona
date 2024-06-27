@@ -96,7 +96,7 @@ persist(Mod, Fun, Macros) ->
 
 -ifdef(TEST).
 -compile([export_all, nowarn_export_all]).
--include("live_view.hrl").
+-include("arizona.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 parse_str_test() ->
@@ -109,7 +109,7 @@ parse_str_test() ->
 % Start parse_str support.
 
 render(Macros) ->
-    ?LV("""
+    ?ARIZONA_LIVEVIEW("""
     <main :stateful>
         <h1>{_@title}</h1>
         <.arizona_live_view:counter/>
@@ -117,7 +117,7 @@ render(Macros) ->
     """).
 
 counter(Macros) ->
-    ?LV("""
+    ?ARIZONA_LIVEVIEW("""
     <div :stateful>
         <div>{_@count}</div>
         <button type="button">Increment</button>
