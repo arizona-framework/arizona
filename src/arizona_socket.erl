@@ -24,12 +24,19 @@ Components state.
 
 %% API functions.
 -export([new/3]).
--export([assign/2]).
--ignore_xref([assign/2]).
--export([assign/3]).
--ignore_xref([assign/3]).
+-export([put_assign/2]).
+-ignore_xref([put_assign/2]).
+-export([put_assign/3]).
+-ignore_xref([put_assign/3]).
+-export([get_assign/2]).
+-ignore_xref([get_assign/2]).
+-export([get_assign/3]).
+-ignore_xref([get_assign/3]).
 -export([push_event/3]).
 -export([prune/1]).
+
+-opaque t() :: map().
+-export_type([t/0]).
 
 %% --------------------------------------------------------------------
 %% API functions.
@@ -44,10 +51,15 @@ new(Id, View, Assigns) ->
         changes => #{}
     }.
 
-assign(Map, Socket) ->
-    maps:fold(fun assign/3, Socket, Map).
+put_assign(Map, Socket) ->
+    maps:fold(fun put_assign/3, Socket, Map).
 
-assign(Key, Value, #{assigns := Assigns, changes := Changes} = Socket) ->
+-spec put_assign(Key, Value, Socket) -> Socket
+    when Key :: atom(),
+         Value :: term(),
+         Socket :: t().
+put_assign(Key, Value, Socket) ->
+    #{assigns := Assigns, changes := Changes} = Socket,
     case Assigns of
         #{Key := Value} ->
             Socket;
@@ -57,6 +69,23 @@ assign(Key, Value, #{assigns := Assigns, changes := Changes} = Socket) ->
                 changes => Changes#{Key => Value}
             }
     end.
+
+-spec get_assign(Key, Socket) -> Got
+    when Key :: atom(),
+         Socket :: t(),
+         Got :: term().
+get_assign(Key, Socket) ->
+    #{assigns := Assigns} = Socket,
+    maps:get(Key, Assigns).
+
+-spec get_assign(Key, Socket, Default) -> Got
+    when Key :: atom(),
+         Socket :: t(),
+         Default :: term(),
+         Got :: term().
+get_assign(Key, Socket, Default) ->
+    #{assigns := Assigns} = Socket,
+    maps:get(Key, Assigns, Default).
 
 push_event(Name, Payload, #{events := Events} = Socket) ->
     Socket#{events => [[Name, Payload] | Events]}.
