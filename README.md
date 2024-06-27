@@ -54,7 +54,7 @@ example project.
 -export([button/1]).
 
 %% Libs.
-%% `live_view.hrl` contains the ?ARIZONA_LIVEVIEW macro.
+%% `arizona.hrl` contains the ?ARIZONA_LIVEVIEW macro.
 -include_lib("arizona/include/arizona.hrl").
 
 %% --------------------------------------------------------------------
