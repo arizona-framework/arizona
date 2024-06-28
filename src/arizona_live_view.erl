@@ -32,12 +32,16 @@ Live view.
 -export([mount/2]).
 -export([handle_event/4]).
 
-%% TODO: Real types.
--type socket()  :: map().
--type macros()  :: map().
--type tree()    :: list().
--type event()   :: binary().
--type payload() :: map().
+-export([put_macro/3]).
+-ignore_xref([put_macro/3]).
+-export([get_macro/3]).
+-ignore_xref([get_macro/3]).
+
+-opaque macros() :: map().
+-export_type([macros/0]).
+
+-opaque tree() :: list().
+-export_type([tree/0]).
 
 %% Macros
 -define(PERSIST_KEY, ?MODULE).
@@ -46,14 +50,14 @@ Live view.
 %% Callbacks.
 %% --------------------------------------------------------------------
 
--callback mount(socket()) ->
-    {ok, socket()}.
+-callback mount(arizona_socket:t()) ->
+    {ok, arizona_socket:t()}.
 
 -callback render(macros()) ->
     tree().
 
--callback handle_event(event(), payload(), socket()) ->
-    {noreply, socket()}.
+-callback handle_event(EventName :: binary(), arizona:payload(), arizona_socket:t()) ->
+    {noreply, arizona_socket:t()}.
 
 -optional_callbacks([handle_event/3]).
 
@@ -61,9 +65,31 @@ Live view.
 %% API funtions.
 %% --------------------------------------------------------------------
 
+-spec put_macro(Key, Value, Macros) -> Macros
+  when Key :: atom(),
+       Value :: term(),
+       Macros :: macros().
+put_macro(Key, Value, Macros) ->
+  Macros#{
+    Key => maps:get(Key, Macros, Value)
+  }.
+
+-spec get_macro(Key, Macros, Default) -> Got
+  when Key :: atom(),
+       Macros :: macros(),
+       Default :: term(),
+       Got :: term().
+get_macro(Key, Macros, Default) ->
+  maps:get(Key, Macros, Default).
+
+-spec parse_str(Str, Macros) -> Parsed
+    when Str :: string() | binary(),
+         Macros :: macros(),
+         Parsed :: tree().
 parse_str(Str, Macros) ->
     {ok, Tokens, _EndLocation} = arizona_tpl_scan:string(Str),
-    arizona_tpl_parse:parse_exprs(Tokens, Macros).
+    {ok, Parsed} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
+    Parsed.
 
 compile(Mod, Fun, Macros) ->
     arizona_tpl_compile:compile({Mod, Fun, Macros}).
@@ -109,7 +135,7 @@ parse_str_test() ->
 % Start parse_str support.
 
 render(Macros) ->
-    ?ARIZONA_LIVEVIEW("""
+    ?ARIZONA_LIVEVIEW(Macros, """
     <main :stateful>
         <h1>{_@title}</h1>
         <.arizona_live_view:counter/>
@@ -117,7 +143,7 @@ render(Macros) ->
     """).
 
 counter(Macros) ->
-    ?ARIZONA_LIVEVIEW("""
+    ?ARIZONA_LIVEVIEW(Macros, """
     <div :stateful>
         <div>{_@count}</div>
         <button type="button">Increment</button>

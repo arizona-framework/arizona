@@ -51,6 +51,7 @@ jobs:
 
       - name: Continuous Integration
         run: |
+          rebar3 xref
           rebar3 as test ci
 
       - name: Check if build left artifacts

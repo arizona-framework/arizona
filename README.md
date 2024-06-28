@@ -65,7 +65,7 @@ example project.
 % connects to the server via WebSocket.
 mount(#{assigns := Assigns} = Socket) ->
     Count = maps:get(count, Assigns, 0),
-    {ok, arizona_socket:assign(count, Count, Socket)}.
+    {ok, arizona_socket:put_assign(count, Count, Socket)}.
 
 % render/1 is called by the route to compile the template.
 % Macros substitutes variables.
@@ -117,10 +117,10 @@ render(Macros0) ->
 % Handle client events.
 handle_event(<<"incr">>, #{}, #{assigns := Assigns} = Socket) ->
     Count = maps:get(count, Assigns) + 1,
-    {noreply, arizona_socket:assign(count, Count, Socket)};
+    {noreply, arizona_socket:put_assign(count, Count, Socket)};
 handle_event(<<"decr">>, #{}, #{assigns := Assigns} = Socket) ->
     Count = maps:get(count, Assigns) - 1,
-    {noreply, arizona_socket:assign(count, Count, Socket)}.
+    {noreply, arizona_socket:put_assign(count, Count, Socket)}.
 
 %% --------------------------------------------------------------------
 %% Component functions.

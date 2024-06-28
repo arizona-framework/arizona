@@ -64,7 +64,7 @@ mount(Socket) ->
     {ok, Socket}.
 
 render(Macros) ->
-    ?ARIZONA_LIVEVIEW(~s"""
+    ?ARIZONA_LIVEVIEW(Macros, ~s"""
     <html>
     <head>
     </head>
