@@ -18,7 +18,7 @@ jobs:
   update:
     name: Update rebar.lock
 
-    if: "${{ github.ref == 'refs/heads/renovate/rebar.config-deps' }}"
+    if: endsWith(github.ref, 'rebar.config-deps')
 
     runs-on: ubuntu-24.04
 
