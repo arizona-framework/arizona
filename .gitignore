@@ -1,4 +1,7 @@
 _build
 doc/
 erl_crash.dump
+node_modules/
+package-lock.json
+priv/static/assets/js/morphdom-esm.js
 rebar3.crashdump
