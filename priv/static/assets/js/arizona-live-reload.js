@@ -1,6 +1,5 @@
-"use strict"
+"use strict";
 
 arizona.subscribe("reload", () => {
-     location.reload()
-})
-
+  location.reload();
+});
