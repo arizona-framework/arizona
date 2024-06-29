@@ -1,5 +1,5 @@
 ---
-name: Update rebar.lock
+name: Update morphdom.min.js
 
 "on":
   push:
@@ -17,28 +17,27 @@ concurrency:
 
 jobs:
   update:
-    name: Update rebar.lock
+    name: Update morphdom.min.js
 
-    if: endsWith(github.ref, 'rebar.config-deps')
+    if: endsWith(github.ref, 'package.json-+-.nvmrc-deps')
 
     runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
-      - uses: erlef/setup-beam@a6e26b22319003294c58386b6f25edbc7336819a # v1.18.0
+      - uses: actions/setup-node@v4.0.2
         with:
-          version-type: strict
-          version-file: .tool-versions
+          node-version-file: .nvmrc
 
       - run: |
-          rebar3 upgrade --all
+          npm run ci
           if ! git diff --exit-code >/dev/null; then
               # there's stuff to push
               git config user.name "GitHub Actions"
               git config user.email "actions@user.noreply.github.com"
-              git add rebar.lock
-              git commit -m "[automation] update \`rebar.lock\` after Renovate"
+              git add priv/static/assets/js/morphdom.min.js
+              git commit -m "[automation] update \`morphdom.min.js\` after Renovate"
               git push
           fi
         env:
