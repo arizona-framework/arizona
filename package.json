@@ -5,7 +5,8 @@
     "morphdom-rm-export": "sed -i'.bak' -e \"s/export default morphdom;/self.morphdom=morphdom;/g\" priv/static/assets/js/morphdom-esm.js && rm -f priv/static/assets/js/morphdom-esm.js.bak",
     "morphdom-wrap": "echo \"(function() {\n$(cat priv/static/assets/js/morphdom-esm.js)\n}());\" > priv/static/assets/js/morphdom-esm.js",
     "morphdom-uglify": "uglifyjs priv/static/assets/js/morphdom-esm.js > priv/static/assets/js/morphdom.min.js",
-    "build": "npm run morphdom-cp && npm run morphdom-rm-export && npm run morphdom-wrap && npm run morphdom-uglify",
+    "morphdom-clean": "rm -f priv/static/assets/js/morphdom-esm.js",
+    "build": "npm run morphdom-cp && npm run morphdom-rm-export && npm run morphdom-wrap && npm run morphdom-uglify && npm run morphdom-clean",
     "prettier": "prettier priv/static/assets/js/arizona*.js --write && prettier eslint.config.mjs --write",
     "eslint": "eslint priv/static/assets/js/arizona*.js && eslint eslint.config.mjs",
     "ci": "npm install && npm run build && npm run prettier && npm run eslint"
