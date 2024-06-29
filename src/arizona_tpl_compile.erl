@@ -43,7 +43,6 @@ compile({Mod, Fun, Args}) when is_atom(Mod), is_atom(Fun) ->
         directives => #{stateful => true},
         attrs => []}}], [], 0, #state{view = Mod}),
     {ok, Block};
-% TODO: Maybe require a module to be the view.
 compile(Tree) ->
     [{0, Block}] = compile(Tree, [], 0, #state{}),
     {ok, Block}.
@@ -74,11 +73,6 @@ compile_tag(#{name := Name} = Tag, Txt, T, P, I, State) ->
 norm_tag_attrs(#{attrs := Attrs0, directives := Dirs}, Id, Target) ->
     maps:fold(fun
         (stateful, true, Attrs) ->
-            % TODO: Rename 'arz-id' to 'arz-sid' (statefull id),
-            %       and provide a 'arz-tid' (tag id) to each tag.
-            %       I think this can improve changes patch,
-            %       because just the most close tag could be rendered
-            %       instead of the entirely block/tree.
             [{<<"arz-id">>, {text, arz_id(Id)}} | Attrs];
         (K, V, Attrs) ->
             case atom_to_binary(K, utf8) of
@@ -123,8 +117,6 @@ do_compile_tag([K | T], Tag, TT, P, I, State, Acc) ->
     do_compile_tag(T, Tag, TT, P, I, State, [K, $\s | Acc]);
 % IMPORTANT: Text concat must be reviewed when :if and :for be implemented.
 %            Cannot concat when this kind of directive is defined.
-% TODO: There are more optimizations to do by concatenating tags.
-%       Nested blocks of blocks are not concatenated.
 do_compile_tag([], Tag, TT, P, I, State, Acc) ->
     case maps:get(void, Tag, false) of
         true ->
@@ -245,7 +237,6 @@ block_struct(Block, P, I, State) ->
     {Mod, Fun} = block_mod_fun(Block, State),
     Tree = apply(Mod, Fun, [maps:get(args, Block, #{})]),
     Attrs = block_attrs(Block),
-    % TODO: Check this directives merge implementation.
     Directives = maps:get(directives, Block),
     AllDirectives = case find_first_tag(Tree) of
         {ok, Tag} ->
@@ -257,8 +248,6 @@ block_struct(Block, P, I, State) ->
     AllAttrs = maps:merge(Attrs, maps:without(NonAttrs, Directives)),
     Id = id(P, I),
     Stateful = maps:get(stateful, Directives, false),
-    % TODO: Remove vars prop from expr tokens.
-    %       They will live in the block props.
     Tokens = case Stateful of
         true ->
             compile(Tree, [I | P], 0,
@@ -285,7 +274,6 @@ block_struct(Block, P, I, State) ->
         vars => vars_group(vars(ExprVars, Id))
     }.
 
-% TODO: Change to binary_to_existing_atom.
 block_mod_fun(#{name := Name}, State) ->
     case binary:split(Name, <<":">>) of
         [M, F] ->
@@ -311,7 +299,6 @@ find_first_tag(_) ->
 is_tag(Name) ->
     not lists:member(Name, [<<"!DOCTYPE">>, <<"!doctype">>, <<"?xml">>]).
 
-% TODO: Use binary_to_existing_atom.
 block_attrs(#{attrs := Attrs}) ->
     #{binary_to_atom(K, utf8) => V || {K, V} <- Attrs}.
 
@@ -575,10 +562,6 @@ counter(Macros) ->
     {%       and adds this to the blocks param in the state.    }
     <div id={_@id} :stateful>
         <span>
-            {% TODO: Find a better way to define default values }
-            {%       in a pure Erlang implementation.           }
-            {%       Using try/catch by now for this.           }
-            {%       Should find a way to define a maps:get/3.  }
             {try _@label catch _:_ -> <<"Count:">> end}
 
             {% NOTE: _@counter_count not wrapper by try/catch,  }
@@ -597,9 +580,6 @@ counter(Macros) ->
         {%       It's filled with tokens when is not a void tag }
         {%       and the content between `>...</`, for example  }
         {%       > <div>mycontent</div>                         }
-        {% FIXME: This implementation wont work, because it     }
-        {%        needs to be compiled in tokens.               }
-        {%        The 'merl:tsubst' should be used to fix this. }
         {% {try _@content catch _:_ -> <<>> end} }
     </div>
     """),

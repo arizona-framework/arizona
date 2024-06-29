@@ -31,7 +31,6 @@ HTML support.
 %% API funtions.
 %% --------------------------------------------------------------------
 
-% TODO: Do this really safe for HTML.
 safe(V) when is_binary(V) ->
     V;
 safe(V) when is_atom(V) ->

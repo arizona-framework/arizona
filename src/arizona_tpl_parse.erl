@@ -94,7 +94,6 @@ do_parse_tag([tag_close | T0], Props0, Macros) ->
                 true ->
                     Props = case OpenName =:= <<"head">> of
                         true ->
-                            % TODO: Do not reverse.
                             lists:reverse(inject_js_scripts(lists:reverse(Props1)));
                         false ->
                             Props1
@@ -163,12 +162,10 @@ parse_attr(K, {expr, ExprStr}, Macros) ->
 parse_attr(K, {text, Text}, _Macros) ->
     do_parse_attr(K, {text, Text}).
 
-% TODO: Directive keys to atom using binary_to_existing_atom.
 do_parse_attr(<<$:, K/binary>>, {text, <<$:, K/binary>>}) ->
     {directive, {binary_to_atom(K, utf8), true}};
 do_parse_attr(<<$:, K/binary>>, V) ->
     {directive, {binary_to_atom(K, utf8), V}};
-% TODO: Comments support.
 do_parse_attr(<<$%, _K/binary>>, _V) ->
     error(not_supported_yet);
 do_parse_attr(K, V) ->

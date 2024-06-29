@@ -30,24 +30,7 @@ Template scanner.
 %% API funtions.
 %% --------------------------------------------------------------------
 
-% TODO: Implement the :case directive:
-%       """
-%       {% The directive should be a valid Erlang syntax, like: }
-%       {:case _@foo of
-%           foo ->
-%               """
-%               {% Expressions will be compiled into a tree... }
-%               <div>foo</div>
-%               """;
-%           Bar ->
-%               """
-%               {% and should be able to eval variables. }
-%               <div>{Bar}</div>
-%               """
-%       end}
-%       """.
 string(Str) when is_binary(Str) ->
-    % TODO: Location.
     {ok, scan(Str, Str, 0, 0), 1};
 string(Str) when is_list(Str) ->
     string(iolist_to_binary(Str)).
@@ -120,8 +103,6 @@ scan_tag_name(<<$>, Rest/binary>>, Str, Pos, Len) ->
 scan_tag_name(<<C, Rest/binary>>, Str, Pos, Len)
     when C =:= $\s; C =:= $\r; C =:= $\n ->
     Name = binary_part(Str, Pos, Len),
-    % FIXME: If closing_tag we should go to 'scan'
-    %        instead of 'scan_attr_key'.
     [{tag_name, Name} | scan_attr_key(Rest, Str, Pos + Len + 1, 0)];
 scan_tag_name(<<_, Rest/binary>>, Str, Pos, Len) ->
     scan_tag_name(Rest, Str, Pos, Len + 1).

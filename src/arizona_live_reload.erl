@@ -97,7 +97,6 @@ handle_info({_Pid, {fs, file_event}, {File, Events}},
                 [modified, closed] ->
                     {noreply, State#state{files = Files#{File => {erl, modified}}}};
                 _ ->
-                    % TODO: Act on created, renamed, deleted.
                     {noreply, State}
             end;
         _ ->
