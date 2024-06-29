@@ -9,6 +9,7 @@ name: Lint
     branches:
       - "*"
   workflow_dispatch: {}
+  merge_group:
 
 concurrency:
   group: ${{github.workflow}}-${{github.ref}}

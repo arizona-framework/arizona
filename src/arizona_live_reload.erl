@@ -30,6 +30,7 @@ Live-reload functionality for use during development.
 -export([start_link/0]).
 -ignore_xref([start_link/0]).
 -export([reload/0]).
+-ignore_xref([reload/0]).
 
 %% gen_server callbacks.
 -export([init/1]).
