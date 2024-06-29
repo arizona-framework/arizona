@@ -1,0 +1,44 @@
+---
+name: Update morphdom.min.js
+
+"on":
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - "*"
+  workflow_dispatch: {}
+  merge_group:
+
+concurrency:
+  group: ${{github.workflow}}-${{github.ref}}
+  cancel-in-progress: true
+
+jobs:
+  update:
+    name: Update morphdom.min.js
+
+    if: endsWith(github.ref, 'package.json-+-.nvmrc-deps')
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - uses: actions/setup-node@v4.0.2
+        with:
+          node-version-file: .nvmrc
+
+      - run: |
+          npm run ci
+          if ! git diff --exit-code >/dev/null; then
+              # there's stuff to push
+              git config user.name "GitHub Actions"
+              git config user.email "actions@user.noreply.github.com"
+              git add priv/static/assets/js/morphdom.min.js
+              git commit -m "[automation] update \`morphdom.min.js\` after Renovate"
+              git push
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
