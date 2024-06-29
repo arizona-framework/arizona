@@ -71,7 +71,6 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
     {Target, Event, Payload} = decode_msg(Msg),
     Socket0 = maps:get(Target, Sockets),
     View = maps:get(view, Socket0),
-    % TODO: {reply, Msg, Socket}
     {noreply, Socket1} = arizona_live_view:handle_event(View, Event, Payload, Socket0),
     Socket = case maps:get(changes, Socket1) of
         Changes when map_size(Changes) > 0 ->
