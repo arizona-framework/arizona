@@ -1,3 +1,4 @@
+/*global morphdom*/
 "use strict";
 
 globalThis["arizona"] = (() => {
@@ -9,7 +10,7 @@ globalThis["arizona"] = (() => {
     console.log("[WebWorker] msg:", e.data);
     const { event, payload } = e.data;
     switch (event) {
-      case "patch":
+      case "patch": {
         const { target, html } = payload;
         const elem =
           target === "root"
@@ -17,6 +18,7 @@ globalThis["arizona"] = (() => {
             : document.querySelector(`[arz-id="${JSON.stringify(target)}"]`);
         applyPatch(elem, html);
         break;
+      }
     }
     subscribers.get(event)?.forEach(function ({ id, callback, opts }) {
       callback(payload);
