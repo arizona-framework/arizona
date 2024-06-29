@@ -9,6 +9,7 @@ name: Update dependencies
     branches:
       - "*"
   workflow_dispatch: {}
+  merge_group:
 
 concurrency:
   group: ${{github.workflow}}-${{github.ref}}
