@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/create-github-app-token@v1.10.2
+      - uses: actions/create-github-app-token@ad38cffc07bac6e3857755914c4c88bfd2db4da4 # v1.10.2
         id: app-token
         with:
           app-id: ${{vars.ARIZONA_BOT_APP_ID}}
