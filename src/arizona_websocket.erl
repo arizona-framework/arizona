@@ -34,16 +34,26 @@
 %% API functions.
 -export([subscribe/1]).
 
+-opaque state() :: {Params :: [{binary(), binary() | true}],
+                    {Mod :: module(), Fun :: atom(), Opts :: arizona:route_opts()}}.
+-export_type([state/0]).
+
 %% --------------------------------------------------------------------
 %% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
 
-init(Req0, [] = _State) ->
+-spec init(Req, State) -> {cowboy_websocket, Req, State}
+    when Req :: cowboy_req:req(),
+         State :: state().
+init(Req0, _State) ->
     Params = cowboy_req:parse_qs(Req0),
     {ok, Req, Env} = arizona_server:route(Req0),
     #{handler_opts := {Mod, Fun, Opts}} = Env,
     {cowboy_websocket, Req, {Params, {Mod, Fun, Opts}}}.
 
+-spec websocket_init(State) -> {Events, State}
+    when State :: state(),
+         Events :: cowboy_websocket:commands().
 websocket_init({Params, {Mod, Fun, Opts}}) ->
     ?LOG_INFO("[WebSocket] init: ~p~n", [{self(), Params, {Mod, Fun, Opts}}]),
     Macros = maps:get(macros, Opts, #{}),
@@ -66,6 +76,11 @@ websocket_init({Params, {Mod, Fun, Opts}}) ->
     send(init, {init, self()}),
     {Events, State}.
 
+
+-spec websocket_handle(Event, State) -> {Events, State}
+    when Event :: {text, binary()},
+         Events :: cowboy_websocket:commands(),
+         State :: state().
 websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
     ?LOG_INFO("[WebSocket] handle: ~p~n", [Msg]),
     {Target, Event, Payload} = decode_msg(Msg),
@@ -85,6 +100,10 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
     {[{text, json:encode(maps:get(events, Socket))}],
         State#{sockets => Sockets#{Id => arizona_socket:prune(Socket)}}}.
 
+-spec websocket_info(Event, State) -> {Events, State}
+    when Event :: {text, binary()},
+         Events :: cowboy_websocket:commands(),
+         State :: state().
 websocket_info(reload, Socket) ->
     ?LOG_INFO("[WebSocket] reload~n", []),
     {[{text, json:encode([[~"reload", []]])}], Socket};
@@ -92,6 +111,10 @@ websocket_info(Info, Socket) ->
     ?LOG_INFO("[WebSocket] info: ~p~n", [{Info, Socket}]),
     {[], Socket}.
 
+-spec terminate(Reason, Req, State) -> ok
+    when Reason :: term(),
+         Req :: cowboy_req:req(),
+         State :: state().
 terminate(Reason, Req, _State) ->
     ?LOG_INFO("[WebSocket] terminate: ~p~n", [{Reason, Req}]),
     send(terminate, {terminate, self()}),
@@ -101,6 +124,8 @@ terminate(Reason, Req, _State) ->
 %% API functions.
 %% --------------------------------------------------------------------
 
+-spec subscribe(Event) -> ok
+    when Event :: term().
 subscribe(Event) ->
     gproc:reg({p, l, {?MODULE, Event}}).
 

@@ -28,7 +28,6 @@ Live view.
 -ignore_xref([parse_str/2]).
 -export([compile/3]).
 -ignore_xref([compile/3]).
--export([persist_get/3]).
 -export([mount/2]).
 -export([handle_event/4]).
 
@@ -43,21 +42,21 @@ Live view.
 -opaque tree() :: list().
 -export_type([tree/0]).
 
-%% Macros
--define(PERSIST_KEY, ?MODULE).
-
 %% --------------------------------------------------------------------
 %% Callbacks.
 %% --------------------------------------------------------------------
 
--callback mount(arizona_socket:t()) ->
-    {ok, arizona_socket:t()}.
+-callback mount(Socket) -> Socket
+    when Socket :: arizona_socket:t().
 
--callback render(macros()) ->
-    tree().
+-callback render(Macros) -> Tree
+    when Macros :: macros(),
+         Tree :: tree().
 
--callback handle_event(EventName :: binary(), arizona:payload(), arizona_socket:t()) ->
-    {noreply, arizona_socket:t()}.
+-callback handle_event(EventName, Payload, Socket) -> Socket
+    when EventName :: binary(),
+         Payload :: arizona:payload(),
+         Socket :: arizona_socket:t().
 
 -optional_callbacks([handle_event/3]).
 
@@ -87,34 +86,35 @@ get_macro(Key, Macros, Default) ->
          Macros :: macros(),
          Parsed :: tree().
 parse_str(Str, Macros) ->
-    {ok, Tokens, _EndLocation} = arizona_tpl_scan:string(Str),
+    Tokens = arizona_tpl_scan:string(Str),
     {ok, Parsed} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
     Parsed.
 
+-spec compile(Mod, Fun, Macros) -> Compiled
+    when Mod :: module(),
+         Fun :: atom(),
+         Macros :: macros(),
+         Compiled :: tree().
 compile(Mod, Fun, Macros) ->
     arizona_tpl_compile:compile({Mod, Fun, Macros}).
-
-persist_get(Mod, Fun, Macros) ->
-    persistent_term:get({?PERSIST_KEY, {Mod, Fun}}, persist(Mod, Fun, Macros)).
 
 %% --------------------------------------------------------------------
 %% Callback support functions.
 %% --------------------------------------------------------------------
 
+-spec mount(Mod, Socket) -> Socket
+    when Mod :: module(),
+         Socket :: arizona_socket:t().
 mount(Mod, Socket) ->
     Mod:mount(Socket).
 
+-spec handle_event(Mod, EventName, Payload, Socket) -> Socket
+    when Mod :: module(),
+         EventName :: binary(),
+         Payload :: arizona:payload(),
+         Socket :: arizona_socket:t().
 handle_event(Mod, Event, Payload, Socket) ->
     Mod:handle_event(Event, Payload, Socket).
-
-%% --------------------------------------------------------------------
-%% Internal funtions.
-%% --------------------------------------------------------------------
-
-persist(Mod, Fun, Macros) ->
-    {ok, Compiled} = compile(Mod, Fun, Macros),
-    persistent_term:put({?PERSIST_KEY, {Mod, Fun}}, Compiled),
-    Compiled.
 
 %% --------------------------------------------------------------------
 %% EUnit tests.

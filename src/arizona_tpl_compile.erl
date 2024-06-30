@@ -35,17 +35,25 @@ Template compiler.
 % NOTE: Multiple tags is not allowed for a root, e.g.:
 %       Good: <html><head></head><body></body></html>
 %        Bad: <head></head><body></body>
-compile({Mod, Fun, Args}) when is_atom(Mod), is_atom(Fun) ->
+
+-spec compile(Compilable) -> Compiled
+    when Compilable :: {Mod, Fun, Args} | Tree,
+         Mod :: module(),
+         Fun :: atom(),
+         Args :: [term()],
+         Tree :: arizona_live_view:tree(),
+         Compiled :: arizona_tpl_render:block().
+compile({Mod, Fun, Args}) ->
     [{0, Block}] = compile([{block, #{
         module => Mod,
         function => Fun,
         args => Args,
         directives => #{stateful => true},
         attrs => []}}], [], 0, #state{view = Mod}),
-    {ok, Block};
+    Block;
 compile(Tree) ->
     [{0, Block}] = compile(Tree, [], 0, #state{}),
-    {ok, Block}.
+    Block.
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
@@ -535,7 +543,7 @@ mount(Socket) ->
     {ok, Socket}.
 
 view(Macros) ->
-    {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
+    Tokens = arizona_tpl_scan:string("""
     <main :stateful>
         <h1>{_@title}</h1>
         <.arizona_tpl_compile:counter
@@ -557,7 +565,7 @@ view(Macros) ->
     Tree.
 
 counter(Macros) ->
-    {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
+    Tokens = arizona_tpl_scan:string("""
     {% NOTE: :stateful directive defines the arz-id attribue,   }
     {%       and adds this to the blocks param in the state.    }
     <div id={_@id} :stateful>
@@ -587,7 +595,7 @@ counter(Macros) ->
     Tree.
 
 button(Macros) ->
-    {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
+    Tokens = arizona_tpl_scan:string("""
     {_@text}
     <button type="button" :onclick={_@event}>
         {_@text}

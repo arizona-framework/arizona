@@ -24,8 +24,8 @@ Components state.
 
 %% API functions.
 -export([new/3]).
--export([put_assign/2]).
--ignore_xref([put_assign/2]).
+-export([put_assigns/2]).
+-ignore_xref([put_assigns/2]).
 -export([put_assign/3]).
 -ignore_xref([put_assign/3]).
 -export([get_assign/2]).
@@ -38,10 +38,18 @@ Components state.
 -opaque t() :: map().
 -export_type([t/0]).
 
+-opaque assigns() :: map().
+-export_type([assigns/0]).
+
 %% --------------------------------------------------------------------
 %% API functions.
 %% --------------------------------------------------------------------
 
+-spec new(Id, View, Assigns) -> Socket
+    when Id :: atom(),
+         View :: module(),
+         Assigns :: assigns(),
+         Socket :: t().
 new(Id, View, Assigns) ->
     #{
         id => Id,
@@ -51,7 +59,10 @@ new(Id, View, Assigns) ->
         changes => #{}
     }.
 
-put_assign(Map, Socket) ->
+-spec put_assigns(Assigns, Socket) -> Socket
+    when Assigns :: assigns(),
+         Socket :: t().
+put_assigns(Map, Socket) ->
     maps:fold(fun put_assign/3, Socket, Map).
 
 -spec put_assign(Key, Value, Socket) -> Socket
@@ -87,9 +98,15 @@ get_assign(Key, Socket, Default) ->
     #{assigns := Assigns} = Socket,
     maps:get(Key, Assigns, Default).
 
+-spec push_event(EventName, Payload, Socket) -> Socket
+    when EventName :: binary(),
+         Payload :: arizona:payload(),
+         Socket :: t().
 push_event(Name, Payload, #{events := Events} = Socket) ->
     Socket#{events => [[Name, Payload] | Events]}.
 
+-spec prune(Socket) -> Socket
+    when Socket :: t().
 prune(Socket) ->
     Socket#{
         events => [],

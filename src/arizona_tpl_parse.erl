@@ -30,8 +30,12 @@ Template parser.
 %% API funtions.
 %% --------------------------------------------------------------------
 
+-spec parse_exprs(Tokens, Macros) -> Tree
+    when Tokens :: [arizona_tpl_scan:token()],
+         Macros :: arizona_live_view:macros(),
+         Tree :: arizona_live_view:tree().
 parse_exprs(Tokens, Macros) ->
-    {ok, do_parse_exprs(Tokens, Macros)}.
+    do_parse_exprs(Tokens, Macros).
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
@@ -119,7 +123,7 @@ js_scripts() ->
     [{token, {tag, script_tag_struct(Src)}} || Src <- [
         <<"assets/js/morphdom.min.js">>,
         <<"assets/js/arizona.js">>
-    ] ++ case application:get_env(arizona, endpoint, #{}) of
+    ] ++ case arizona_cfg:endpoint() of
         #{live_reload := true} ->
             [<<"assets/js/arizona-live-reload.js">>];
         #{} ->
@@ -256,7 +260,7 @@ get(K, L) ->
 -include_lib("eunit/include/eunit.hrl").
 
 parse_exprs_test() ->
-    {ok, Tokens, _EndLoc} = arizona_tpl_scan:string(~"""
+    Tokens = arizona_tpl_scan:string(~"""
     Start
     {% This is a comment. }
     <main id="foo" class={_@class} style='display: none;' hidden>
@@ -323,7 +327,7 @@ parse_exprs_test() ->
              is_function(ExprFun4, 1), parse_exprs(Tokens, #{})).
 
 macros_test() ->
-    {ok, Tokens, _} = arizona_tpl_scan:string(<<"foo{_@bar}baz">>),
+    Tokens = arizona_tpl_scan:string(<<"foo{_@bar}baz">>),
     ?assertEqual({ok, [
         {text, <<"foo">>},
         {text, <<"bar">>},
@@ -331,7 +335,7 @@ macros_test() ->
     ]}, parse_exprs(Tokens, #{bar => <<"bar">>})).
 
 head_scripts_test() ->
-    {ok, Tokens, _} = arizona_tpl_scan:string(~"""
+    Tokens = arizona_tpl_scan:string(~"""
     <head>
         <title>Arizona</title>
         <script src="foo"></script>

@@ -24,22 +24,25 @@ HTML support.
 -moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
 %% API functions.
--export([safe/1]).
+-export([to_safe/1]).
 -export([safe_types/0]).
 
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
-safe(V) when is_binary(V) ->
+-spec to_safe(Value) -> binary()
+    when Value :: binary() | atom() | number().
+to_safe(V) when is_binary(V) ->
     V;
-safe(V) when is_atom(V) ->
+to_safe(V) when is_atom(V) ->
     atom_to_binary(V, utf8);
-safe(V) when is_integer(V) ->
+to_safe(V) when is_integer(V) ->
     integer_to_binary(V, 10);
-safe(V) when is_float(V) ->
+to_safe(V) when is_float(V) ->
     io_lib:format("~p", [V]).
 
+-spec safe_types() -> [binary | atom | integer | float].
 safe_types() ->
     [binary, atom, integer, float].
 

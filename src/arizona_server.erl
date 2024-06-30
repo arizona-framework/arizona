@@ -33,16 +33,35 @@
 -define(LISTENER, arizona_http_listener).
 -define(PERSIST_KEY, arizona_dispatch).
 
+-type opts() :: #{
+    scheme => http | https,
+    transport => ranch_tcp:opts(),
+    proto => #{
+        proto => cowboy:opts(),
+        host => '_' | iodata(), % as per cowboy_router:route_match(),
+        routes => list(),
+        live_reload => boolean()
+    }
+}.
+-export_type([opts/0]).
+
 %% --------------------------------------------------------------------
 %% API functions.
 %% --------------------------------------------------------------------
 
+-spec start() -> pid().
 start() ->
-    start(application:get_env(arizona, endpoint, #{})).
+    start(arizona_cfg:endpoint()).
 
-start(Opts) when is_map(Opts) ->
+-spec start(Opts) -> pid()
+    when Opts :: opts().
+start(Opts) ->
     do_start(norm_opts(Opts)).
 
+-spec route(Req) -> Routed
+    when Req :: cowboy_req:req(),
+         Routed :: {ok, Req, Env} | {stop, Req},
+         Env :: cowboy_middleware:env().
 route(Req) ->
     #{path := Path} = cowboy_req:match_qs([path], Req),
     cowboy_router:execute(Req#{path => Path},
@@ -55,11 +74,11 @@ route(Req) ->
 do_start(#{scheme := http, transport := Transport, proto := Proto}) ->
     {ok, Pid} = cowboy:start_clear(?LISTENER, Transport, Proto),
     print_running(http),
-    {ok, Pid};
+    Pid;
 do_start(#{scheme := https, transport := Transport, proto := Proto}) ->
-    {ok, Pid} = cowboy:start_tls(?LISTENER, Transport, Proto),
+    Pid = cowboy:start_tls(?LISTENER, Transport, Proto),
     print_running(https),
-    {ok, Pid}.
+    Pid.
 
 print_running(Scheme) ->
     Info = ranch:info(?LISTENER),
@@ -88,10 +107,10 @@ norm_opts(Opts) ->
 
 norm_transport_opts([]) ->
     [{port, 8080}];
-norm_transport_opts(Opts) when is_list(Opts) ->
+norm_transport_opts(Opts) ->
     Opts.
 
-norm_proto_opts(Opts, Host, Routes, LiveReload) when is_map(Opts) ->
+norm_proto_opts(Opts, Host, Routes, LiveReload) ->
     Dispatch = cowboy_router:compile([{Host, [
         {"/assets/js/morphdom.min.js", cowboy_static,
          {priv_file, arizona, "static/assets/js/morphdom.min.js"}},

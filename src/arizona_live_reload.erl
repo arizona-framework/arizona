@@ -40,6 +40,8 @@ Live-reload functionality for use during development.
 
 %% State
 -record(state, {timer, files = #{}, clients = #{}}).
+-opaque state() :: #state{}.
+-export_type([state/0]).
 
 %% Macros
 -define(SERVER, ?MODULE).
@@ -48,9 +50,11 @@ Live-reload functionality for use during development.
 %% API functions.
 %% --------------------------------------------------------------------
 
+-spec start_link() -> gen_server:start_ret().
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
+-spec reload() -> ok.
 reload() ->
     gen_server:cast(?SERVER, reload).
 
@@ -58,15 +62,24 @@ reload() ->
 %% gen_server callbacks.
 %% --------------------------------------------------------------------
 
-init([]) ->
+-spec init(Args) -> {ok, State}
+    when Args :: term(),
+         State :: state().
+init(_Args) ->
     register_events(),
     setup_watcher(),
     {ok, #state{}}.
 
-handle_call(Request, From, State) ->
-    ?LOG_INFO("[LiveReload] call: ~p from ~p~n", [Request, From]),
-    {reply, State, State}.
+-spec handle_call(Request, From, State) -> no_return()
+    when Request :: term(),
+         From :: gen_server:from(),
+         State :: state().
+handle_call(_Request, _From, _State) ->
+    exit(not_implemented).
 
+-spec handle_cast(Request, State) -> {noreply, State}
+    when Request :: term(),
+         State :: state().
 handle_cast(reload, State) ->
     ?LOG_INFO("[LiveReload] reload: ~p~n", [State]),
     reload(State#state.clients),
@@ -75,6 +88,9 @@ handle_cast(Request, State) ->
     ?LOG_INFO("[LiveReload] cast: ~p~n", [Request]),
     {noreply, State}.
 
+-spec handle_info(Info, State) -> {noreply, State}
+    when Info :: term(),
+         State :: state().
 handle_info({init, Client}, #state{clients = Clients} = State) ->
     ?LOG_INFO("[LiveReload] init: ~p~n", [Client]),
     {noreply, State#state{clients = Clients#{Client => true}}};

@@ -28,10 +28,22 @@ Renderer.
 -export([render_block/2]).
 -export([mount/2]).
 
+-opaque changes() :: map().
+-export_type([changes/0]).
+
+-opaque block() :: map().
+-export_type([block/0]).
+
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
+-spec render_target(Target, Block, Changes, Assigns) -> Rendered
+    when Target :: root | json:decode_value(),
+         Block :: block(),
+         Changes :: changes(),
+         Assigns :: arizona_socket:assigns(),
+         Rendered :: iolist().
 render_target(Target, Block, Changes, Assigns) when map_size(Changes) > 0 ->
     render_target_1(Target, Block, Changes, Assigns);
 render_target(_Target, _Block, _Changes, _Assigns) ->
@@ -48,6 +60,10 @@ render_target_2([H | T], Block, Changes, Assigns) ->
     #{block := Nested} = maps:get(H, Block),
     render_target_2(T, Nested, Changes, Assigns).
 
+-spec render_block(Block, Assigns) -> Rendered
+    when Block :: block(),
+         Assigns :: arizona_socket:assigns(),
+         Rendered :: iolist().
 render_block(#{id := Id, view := View} = Block, Assigns0) ->
     Socket0 = arizona_socket:new(Id, View, Assigns0),
     {ok, Socket} = arizona_live_view:mount(View, Socket0),
@@ -56,6 +72,10 @@ render_block(#{id := Id, view := View} = Block, Assigns0) ->
     Assigns = maps:get(assigns, Socket),
     render_indexes(Indexes, Tree, Assigns, false).
 
+-spec mount(Block, Assigns) -> Rendered
+    when Block :: block(),
+         Assigns :: arizona_socket:assigns(),
+         Rendered :: iolist().
 mount(#{id := Id, view := View} = Block, Assigns0) ->
     Socket0 = arizona_socket:new(Id, View, Assigns0),
     {ok, Socket} = arizona_live_view:mount(View, Socket0),

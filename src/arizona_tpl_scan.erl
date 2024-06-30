@@ -26,12 +26,18 @@ Template scanner.
 %% API functions.
 -export([string/1]).
 
+-opaque token() :: term().
+-export_type([token/0]).
+
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
+-spec string(String) -> Tokens
+    when String :: binary() | string(),
+         Tokens :: [token()].
 string(Str) when is_binary(Str) ->
-    {ok, scan(Str, Str, 0, 0), 1};
+    scan(Str, Str, 0, 0);
 string(Str) when is_list(Str) ->
     string(iolist_to_binary(Str)).
 
