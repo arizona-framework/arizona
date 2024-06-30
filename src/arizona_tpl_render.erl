@@ -101,8 +101,8 @@ render_indexes([], _Block, _Assigns, _Notify) ->
 %       Bindings is a list.
 maybe_render({'case', {expr, {Expr, _Vars}}, ToRender}, Assigns, Notify) ->
     case Expr(Assigns) of
-        {true, VarValue} ->
-            render(ToRender, [VarValue | Assigns], Notify);
+        {true, Value} ->
+            render(ToRender, [Value | Assigns], Notify);
         false ->
             <<>>
     end;
@@ -114,13 +114,25 @@ maybe_render({'if', {expr, {Expr, _Vars}}, ToRender}, Assigns, Notify) ->
             <<>>
     end;
 maybe_render({'for', {expr, {ForExpr, _Vars}},
-    {'if', true}, Static, {Indexes, Dynamic}}, Assigns, Notify) ->
+    nocond, Static, {Indexes, Dynamic}}, Assigns, Notify) ->
     [ zip(Static, render_indexes(Indexes, Dynamic, [Item | Assigns], Notify))
     || Item <- ForExpr(Assigns)];
 maybe_render({'for', {expr, {ForExpr, _Vars}},
     {'if', {expr, {IfExpr, _IfVars}}}, Static, {Indexes, Dynamic}}, Assigns, Notify) ->
     [ zip(Static, render_indexes(Indexes, Dynamic, [Item | Assigns], Notify))
     || Item <- ForExpr(Assigns), IfExpr([Item | Assigns])];
+maybe_render({'for', {expr, {ForExpr, _Vars}},
+    {'case', {expr, {CaseExpr, _CaseVars}}}, Static, {Indexes, Dynamic}}, Assigns, Notify) ->
+    [ zip(Static, render_indexes(Indexes, Dynamic, [CaseValue, Item | Assigns], Notify))
+    || Item <- ForExpr(Assigns),
+       case CaseExpr([Item | Assigns]) of
+           {true, CaseValue} ->
+               true;
+           false ->
+               % Just to make the Erlang compiler happy :)
+               CaseValue = <<>>,
+               false
+       end];
 maybe_render(ToRender, Assigns, Notify) ->
     render(ToRender, Assigns, Notify).
 
@@ -341,10 +353,41 @@ new_render_block_test() ->
     ))
     ].
 
+new_render_block2_test() ->
+    [
+    ?assertEqual(
+       [[<<"<div>">>,<<"I'll be visible when _@bool equals true">>,
+                   <<"</div>">>],
+                  [<<"<ul>">>,
+                   [[<<"<li>">>,[<<"<b>">>,<<"FOO">>,<<"</b>">>],<<"</li>">>],
+                    [<<"<li>">>,[<<"<b>">>,<<"BAR">>,<<"</b>">>],<<"</li>">>]],
+                   <<"</ul>">>]],
+        render_block(new_block2(#{}), #{
+            bool => true,
+            list => [
+                #{name => <<"FOO">>, available => true},
+                #{name => <<"HIDDEN">>, available => false},
+                #{name => <<"BAR">>, available => true}
+            ]
+        }
+    )),
+    ?assertEqual(
+        [<<>>,<<>>],
+        render_block(new_block2(#{}), #{
+            bool => false,
+            list => []
+        }
+    ))
+    ].
+
 %% Start block support.
 
 new_block(Macros) ->
     {ok, Tpl} = arizona_tpl_compile:compile({arizona_tpl_compile, tpl, Macros}),
+    Tpl.
+
+new_block2(Macros) ->
+    {ok, Tpl} = arizona_tpl_compile:compile({arizona_tpl_compile, tpl2, Macros}),
     Tpl.
 
 %% End block support.

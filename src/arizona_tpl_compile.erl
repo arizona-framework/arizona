@@ -63,29 +63,64 @@ compile([{block, Block} | T], P, I, State) ->
 compile([], _P, _I, _State) ->
     [].
 
+% TODO: Create functions in favor of DRY.
 compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
     case Directives of
         #{'for' := {expr, {ForExpr, _ForMacros}}, 'in' := {expr, {InExpr, InMacros}}} ->
-            {InFun, InVars} = expand(InExpr, InMacros, State#state.assign_fun_args),
             Tokens = compile_tag_1(Tag, Txt, T, P, I, State),
-            % TODO: Expand ForExpr.
-            FunArgs = [ForExpr | State#state.assign_fun_args],
-            DynamicTokens = compile(
-                filter_dynamic_tokens(Tokens), [I | P], 0,
-                tag_tokens_state(Tag, P, I, State#state{assign_fun_args = FunArgs})),
-            DynamicTokensMap = maps:from_list(DynamicTokens),
-            Indexes = lists:usort(maps:keys(DynamicTokensMap)),
-            [{I, {'for', {expr, {InFun, InVars}},
-                case Directives of
-                    #{'if' := {expr, {IfExpr, IfMacros}}} ->
-                        {IfFun, IfVars} = expand(IfExpr, IfMacros, FunArgs),
-                        {'if', {expr, {IfFun, IfVars}}};
-                    #{} ->
-                        {'if', true}
-                end,
-                filter_static_tokens(Tokens),
-                {Indexes, DynamicTokensMap}
-            }} | compile(T, P, I + 1, State)];
+            case Directives of
+                #{'if' := {expr, {IfExpr, IfMacros}}} ->
+                    % TODO: Expand ForExpr.
+                    FunArgs = [ForExpr | State#state.assign_fun_args],
+                    DynamicTokens = compile(
+                        filter_dynamic_tokens(Tokens), [I | P], 0,
+                        tag_tokens_state(Tag, P, I, State#state{assign_fun_args = FunArgs})),
+                    DynamicTokensMap = maps:from_list(DynamicTokens),
+                    Indexes = lists:usort(maps:keys(DynamicTokensMap)),
+                    [{I, {'for', expand(InExpr, InMacros, State#state.assign_fun_args),
+                        {'if', expand(IfExpr, IfMacros, FunArgs)},
+                        filter_static_tokens(Tokens),
+                        {Indexes, DynamicTokensMap}
+                    }} | compile(T, P, I + 1, State)];
+                #{'case' := {expr, {CaseExpr, CaseMacros}},
+                  'of' := {expr, {OfExpr, _OfMacros}}} ->
+                    % TODO: Expand OfExpr first.
+                    VarNameExpr = case erl_scan:string(binary_to_list(OfExpr)) of
+                        {ok, [{atom, _, VarName} | _], _} ->
+                            atom_to_binary(VarName);
+                        {ok, [{var, _, VarName} | _], _} ->
+                            atom_to_binary(VarName)
+                    end,
+                    Expr = <<"case ", CaseExpr/binary, " of ",
+                        OfExpr/binary, " -> {true, ", VarNameExpr/binary, "}; "
+                        "_ -> false "
+                    "end">>,
+                    % TODO: Expand ForExpr.
+                    FunArgs = [ForExpr | State#state.assign_fun_args],
+                    DynamicTokens = compile(
+                        filter_dynamic_tokens(Tokens), [I | P], 0,
+                        tag_tokens_state(Tag, P, I, State#state{assign_fun_args = [VarNameExpr | FunArgs]})),
+                    DynamicTokensMap = maps:from_list(DynamicTokens),
+                    Indexes = lists:usort(maps:keys(DynamicTokensMap)),
+                    [{I, {'for', expand(InExpr, InMacros, State#state.assign_fun_args),
+                        {'case', expand(Expr, CaseMacros, FunArgs)},
+                        filter_static_tokens(Tokens),
+                        {Indexes, DynamicTokensMap}
+                    }} | compile(T, P, I + 1, State)];
+                #{} ->
+                    % TODO: Expand ForExpr.
+                    FunArgs = [ForExpr | State#state.assign_fun_args],
+                    DynamicTokens = compile(
+                        filter_dynamic_tokens(Tokens), [I | P], 0,
+                        tag_tokens_state(Tag, P, I, State#state{assign_fun_args = FunArgs})),
+                    DynamicTokensMap = maps:from_list(DynamicTokens),
+                    Indexes = lists:usort(maps:keys(DynamicTokensMap)),
+                    [{I, {'for', expand(InExpr, InMacros, State#state.assign_fun_args),
+                        nocond,
+                        filter_static_tokens(Tokens),
+                        {Indexes, DynamicTokensMap}
+                    }} | compile(T, P, I + 1, State)]
+            end;
         #{'case' := {expr, {CaseExpr, CaseMacros}}, 'of' := {expr, {OfExpr, _OfMacros}}} ->
             % TODO: Expand OfExpr first.
             VarNameExpr = case erl_scan:string(binary_to_list(OfExpr)) of
@@ -98,20 +133,19 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                 OfExpr/binary, " -> {true, ", VarNameExpr/binary, "}; "
                 "_ -> false "
             "end">>,
-            {Fun, Vars} = expand(Expr, CaseMacros, State#state.assign_fun_args),
             FunArgs = [VarNameExpr | State#state.assign_fun_args],
             Tokens = compile(compile_tag_1(Tag, Txt, T, P, I, State),
                             [I | P], 0, tag_tokens_state(Tag, P, I,
                                 State#state{assign_fun_args = FunArgs})),
             TokensMap = maps:from_list(Tokens),
-            [{I, {'case', {expr, {Fun, Vars}}, #{
+            [{I, {'case', expand(Expr, CaseMacros, State#state.assign_fun_args), #{
                 tag => TokensMap,
                 indexes => lists:usort(maps:keys(TokensMap))
             }}} | compile(T, P, I + 1, State)];
         #{'if' := {expr, {Expr, Macros}}} ->
-            {Fun, Vars} = expand(Expr, Macros, State#state.assign_fun_args),
-            [{I, {'if', {expr, {Fun, Vars}}, tag_struct(Tag, Txt, T, P, I, State)}}
-                | compile(T, P, I + 1, State)];
+            [{I, {'if', expand(Expr, Macros, State#state.assign_fun_args),
+                tag_struct(Tag, Txt, T, P, I, State)
+            }} | compile(T, P, I + 1, State)];
         #{} ->
             [{I, tag_struct(Tag, Txt, T, P, I, State)}
                 | compile(T, P, I + 1, State)]
@@ -156,7 +190,7 @@ eval(ExprStr, Vars, Bindings, Args) ->
     FunStr = iolist_to_binary([~"fun([", lists:join(~", ", Args), ~"]) -> ", ExprStr, ~" end"]),
     Tree = [merl:quote(FunStr)],
     {value, Fun, _NewBindings} = erl_eval:exprs(Tree, Bindings),
-    {Fun, Vars}.
+    {expr, {Fun, Vars}}.
 
 filter_static_tokens([{text, Txt} | T]) ->
     [Txt | filter_static_tokens(T)];
@@ -274,12 +308,16 @@ text_struct(Txt, P, I) ->
 
 % TODO: Marge all expr macros and user macros.
 expr_struct({Expr, ExprMacros}, _Macros, Args, P, I) ->
-    {Fun, Vars} = expand(Expr, ExprMacros, Args),
-    #{
-        id => id(P, I),
-        expr => Fun,
-        vars => Vars
-     }.
+    case expand(Expr, ExprMacros, Args) of
+        {expr, {Fun, Vars}} ->
+            #{
+                id => id(P, I),
+                expr => Fun,
+                vars => Vars
+            };
+        {text, Txt} ->
+            text_struct(Txt, P, I)
+    end.
 
 tag_struct(Tag, Txt, T, P, I, State) ->
     Tokens = compile(compile_tag_1(Tag, Txt, T, P, I, State),
@@ -676,6 +714,25 @@ vars_test() ->
                    btn_text := [[7, 0], [7, 4], [7, 6]],
                    btn_event := [[7, 2]]}, Vars).
 
+tpl2(Macros) ->
+    {ok, Tokens, _} = arizona_tpl_scan:string(~"""
+    <div :if={_@bool}>
+      I'll be visible when _@bool equals true
+    </div>
+
+    <ul :if={_@list =/= []}>
+      <li
+        :for={Item = #{name := ItemName}} :in={_@list}
+        :case={maps:get(available, Item)} :of={true}
+      >
+        <b>{ItemName}</b>
+      </li>
+    </ul>
+    """),
+    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
+    Tree.
+
+
 tpl(Macros) ->
     {ok, Tokens, _} = arizona_tpl_scan:string(~"""
     foo
@@ -716,7 +773,7 @@ tpl(Macros) ->
     Tree.
 
 new_implementation_test() ->
-    ?assertEqual(false, arizona_tpl_compile:compile({arizona_tpl_compile, tpl, #{}})).
+    ?assertEqual(false, arizona_tpl_compile:compile({arizona_tpl_compile, tpl2, #{}})).
 
 -endif.
 
