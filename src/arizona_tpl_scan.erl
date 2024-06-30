@@ -73,7 +73,12 @@ scan(<<>>, Str, Pos, Len) ->
 scan_expr(Rest0, Str, Pos) ->
     {Len, MarkerLen, Rest} = find_expr_end(Rest0, 0, 0),
     Expr = binary_part(Str, Pos, Len),
-    [{expr, Expr} | scan(Rest, Str, Pos + Len + MarkerLen, 0)].
+    case erl_syntax:type(merl:quote(Expr)) =:= comment of
+        true ->
+            [{comment, Expr} | scan(Rest, Str, Pos + Len + MarkerLen, 0)];
+        false ->
+            [{expr, Expr} | scan(Rest, Str, Pos + Len + MarkerLen, 0)]
+    end.
 
 find_expr_end(<<$}, Rest/binary>>, 0, Len) ->
     {Len, 1, Rest};
@@ -166,7 +171,7 @@ text_token(Str, Pos, Len) ->
 string_test() ->
     ?assertEqual({ok, [
         {text, <<"Start">>},
-        {expr, <<"% This is a comment. ">>},
+        {comment, <<"% This is a comment. ">>},
         tag_open,
         {tag_name, <<"main">>},
         {attr_key, <<"id">>},

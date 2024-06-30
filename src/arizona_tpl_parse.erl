@@ -40,16 +40,13 @@ parse_exprs(Tokens, Macros) ->
 do_parse_exprs([{text, Txt} | T], Macros) ->
     [{text, Txt} | do_parse_exprs(T, Macros)];
 do_parse_exprs([{expr, ExprStr} | T], Macros) ->
-    case parse_expr_str(ExprStr, Macros, true) of
-        {comment, _} ->
-            do_parse_exprs(T, Macros);
-        Token ->
-            [Token | do_parse_exprs(T, Macros)]
-    end;
+    [parse_expr_str(ExprStr, Macros, true) | do_parse_exprs(T, Macros)];
 do_parse_exprs([tag_open | T], Macros) ->
     parse_tag(T, Macros);
 do_parse_exprs([closing_tag | _] = T, _Macros) ->
     T;
+do_parse_exprs([{comment, _Comment} | T], Macros) ->
+    do_parse_exprs(T, Macros);
 do_parse_exprs([], _Macros) ->
     [].
 
@@ -141,24 +138,14 @@ collect_tokens([closing_tag | T], Props, _Macros) ->
 collect_tokens([tag_open | T], Props, Macros) ->
     collect_tokens(parse_tag(T, Macros), Props, Macros);
 collect_tokens([{expr, ExprStr} | T], Props, Macros) when is_binary(ExprStr) ->
-    case parse_expr_str(ExprStr, Macros, true) of
-        {comment, _} ->
-            collect_tokens(T, Props, Macros);
-        Token ->
-            collect_tokens(T, [{token, Token} | Props], Macros)
-    end;
+    collect_tokens(T, [{token, parse_expr_str(ExprStr, Macros, true)} | Props], Macros);
+collect_tokens([{comment, _Comment} | T], Props, Macros) ->
+    collect_tokens(T, Props, Macros);
 collect_tokens([H | T], Props, Macros) ->
     collect_tokens(T, [{token, H} | Props], Macros).
 
 parse_attr(K, {expr, ExprStr}, Macros) ->
-    % NOTE: Expressions in attributes are not evaluated.
-    %       The real value must be returned and not a binary.
-    case parse_expr_str(ExprStr, Macros, false) of
-        {comment, _} ->
-            error(unexpected_comment);
-        Expr ->
-            do_parse_attr(K, Expr)
-    end;
+    do_parse_attr(K, parse_expr_str(ExprStr, Macros, false));
 parse_attr(K, {text, Text}, _Macros) ->
     do_parse_attr(K, {text, Text}).
 
@@ -174,49 +161,50 @@ do_parse_attr(K, V) ->
 parse_expr_str(ExprStr, Macros, Eval) ->
     parse_expr_str(ExprStr, Macros, #{}, Eval).
 
-parse_expr_str(ExprStr, Macros, Bindings, Eval) ->
-    ExprTree = merl:quote(ExprStr),
-    case erl_syntax:type(ExprTree) =:= comment of
-        true ->
-            {comment, erl_syntax:comment_text(ExprTree)};
-        false ->
-            MacrosEnv = [{K, merl:term(V)} || K := V <- Macros],
-            MacrosTree = merl:tsubst(ExprTree, MacrosEnv),
-            AllVars = merl:template_vars(merl:template(MacrosTree)),
-            case AllVars -- maps:keys(Macros) of
-                [] ->
-                    case Eval andalso
-                         lists:member(erl_syntax:type(MacrosTree),
-                                      arizona_html:safe_types()) of
-                        true ->
-                            {value, V, []} =
-                                erl_eval:exprs(
-                                    [erl_syntax:revert(MacrosTree)], []),
-                            {text, arizona_html:safe(V)};
-                        false ->
-                            MacrosStr = iolist_to_binary(
-                                erl_pp:expr(erl_syntax:revert(MacrosTree))),
-                            FunStr = <<"fun(_Assigns) -> ", MacrosStr/binary, " end">>,
-                            Tree = [merl:quote(FunStr)],
-                            expr_struct(Tree, [], Bindings)
-                    end;
-                Vars ->
-                    FunStr = <<"fun(Assigns) -> _@subst end">>,
-                    VarsSubst = [{Var, subst_var(Var)} || Var <- Vars],
-                    Env = [{subst, merl:subst(MacrosTree, VarsSubst)}],
-                    Tree = erl_syntax:revert_forms([merl:qquote(FunStr, Env)]),
-                    expr_struct(Tree, Vars, Bindings)
-            end
-    end.
+parse_expr_str(ExprStr, Macros, _Bindings, Eval) ->
+    {expr, {ExprStr, {Macros, Eval}}}.
+    %ExprTree = merl:quote(ExprStr),
+    %case erl_syntax:type(ExprTree) =:= comment of
+    %    true ->
+    %        {comment, erl_syntax:comment_text(ExprTree)};
+    %    false ->
+    %        MacrosEnv = [{K, merl:term(V)} || K := V <- Macros],
+    %        MacrosTree = merl:tsubst(ExprTree, MacrosEnv),
+    %        AllVars = merl:template_vars(merl:template(MacrosTree)),
+    %        case AllVars -- maps:keys(Macros) of
+    %            [] ->
+    %                case Eval andalso
+    %                     lists:member(erl_syntax:type(MacrosTree),
+    %                                  arizona_html:safe_types()) of
+    %                    true ->
+    %                        {value, V, []} =
+    %                            erl_eval:exprs(
+    %                                [erl_syntax:revert(MacrosTree)], []),
+    %                        {text, arizona_html:safe(V)};
+    %                    false ->
+    %                        MacrosStr = iolist_to_binary(
+    %                            erl_pp:expr(erl_syntax:revert(MacrosTree))),
+    %                        expr_struct(MacrosStr, [], Bindings)
+    %                end;
+    %            Vars ->
+    %                FunStr = <<"_@subst">>,
+    %                VarsSubst = [{Var, subst_var(Var)} || Var <- Vars],
+    %                Env = [{subst, merl:subst(MacrosTree, VarsSubst)}],
+    %                Tree = erl_syntax:revert_forms([merl:qquote(FunStr, Env)]),
+    %                        TreeStr = iolist_to_binary(
+    %                            erl_pp:expr(Tree)),
+    %                expr_struct(TreeStr, Vars, Bindings)
+    %        end
+    %end.
 
-subst_var(Var) ->
-  VarStr = atom_to_binary(Var, utf8),
-  merl:quote(<<"maps:get(", VarStr/binary, ", Assigns)">>).
+%subst_var(Var) ->
+%  VarStr = atom_to_binary(Var, utf8),
+%  merl:quote(<<"maps:get(", VarStr/binary, ", Assigns)">>).
 
 block_struct(Props) ->
     #{
         name => get(name, Props),
-        directives => maps:from_list(get_all(directive, Props)),
+        directives => check_directives(maps:from_list(get_all(directive, Props))),
         attrs => get_all(attr, Props),
         tokens => get_all(token, Props)
     }.
@@ -225,14 +213,23 @@ tag_struct(Props) ->
     #{
         name => get(name, Props),
         void => get(void, Props, false),
-        directives => maps:from_list(get_all(directive, Props)),
+        directives => check_directives(maps:from_list(get_all(directive, Props))),
         attrs => get_all(attr, Props),
         tokens => get_all(token, Props)
      }.
 
-expr_struct(Tree, Vars, Bindings) ->
-    {value, Fun, _NewBindings} = erl_eval:exprs(Tree, Bindings),
-    {expr, {Fun, Vars}}.
+check_directives(Directives) ->
+    case is_map_key('case', Directives) andalso
+         is_map_key('if', Directives) of
+        true ->
+            error(multiple_conditions);
+        false ->
+            Directives
+    end.
+
+%expr_struct(Tree, Vars, _Bindings) ->
+%    %{value, Fun, _NewBindings} = erl_eval:exprs(Tree, Bindings),
+%    {expr, {Tree, Vars}}.
 
 get(K, L, D) ->
     proplists:get_value(K, L, D).
