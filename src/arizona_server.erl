@@ -20,8 +20,6 @@
 -module(arizona_server).
 -moduledoc false.
 
--include_lib("kernel/include/logger.hrl").
-
 %% API functions.
 -export([start/0]).
 -ignore_xref([start/0]).
@@ -32,6 +30,7 @@
 %% Macros
 -define(LISTENER, arizona_http_listener).
 -define(PERSIST_KEY, arizona_dispatch).
+-elvis([{elvis_style, no_macros, #{allow => ['LISTENER', 'PERSIST_KEY']}}]).
 
 -type opts() :: #{
     scheme => http | https,
@@ -73,27 +72,10 @@ route(Req) ->
 
 do_start(#{scheme := http, transport := Transport, proto := Proto}) ->
     {ok, Pid} = cowboy:start_clear(?LISTENER, Transport, Proto),
-    print_running(http),
     Pid;
 do_start(#{scheme := https, transport := Transport, proto := Proto}) ->
-    Pid = cowboy:start_tls(?LISTENER, Transport, Proto),
-    print_running(https),
+    {ok, Pid} = cowboy:start_tls(?LISTENER, Transport, Proto),
     Pid.
-
-print_running(Scheme) ->
-    Info = ranch:info(?LISTENER),
-    {ip, Ip} = proplists:lookup(ip, Info),
-    {port, Port} = proplists:lookup(port, Info),
-    ?LOG_INFO("Arizona is running at ~w://~s:~p~n",
-              [Scheme, ip_to_str(Ip), Port]).
-
-ip_to_str(Ip) ->
-    case inet:ntoa(Ip) of
-        {error, einval} ->
-            error({invalid_ip, Ip});
-        Str ->
-            Str
-    end.
 
 norm_opts(Opts) ->
     #{

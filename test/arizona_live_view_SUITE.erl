@@ -78,7 +78,7 @@ render(Macros) ->
 %% Test cases.
 %% --------------------------------------------------------------------
 
-hello_world(Config) ->
+hello_world(_Config) ->
     {ok, Resp0} = httpc:request("http://localhost:8080/notfound"),
     ?ARIZONA_ASSERT_STATUS(404, Resp0),
     {ok, Resp1} = httpc:request("http://localhost:8080/helloworld"),

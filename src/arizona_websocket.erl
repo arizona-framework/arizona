@@ -22,8 +22,6 @@
 
 -behaviour(cowboy_websocket).
 
--include_lib("kernel/include/logger.hrl").
-
 %% cowboy_websocket callbacks.
 -export([init/2]).
 -export([websocket_init/1]).
@@ -55,7 +53,6 @@ init(Req0, _State) ->
     when State :: state(),
          Events :: cowboy_websocket:commands().
 websocket_init({Params, {Mod, Fun, Opts}}) ->
-    ?LOG_INFO("[WebSocket] init: ~p~n", [{self(), Params, {Mod, Fun, Opts}}]),
     Macros = maps:get(macros, Opts, #{}),
     Tpl = arizona_live_view:persist_get(Mod, Fun, Macros),
     Assigns = maps:get(assigns, Opts, #{}),
@@ -82,7 +79,6 @@ websocket_init({Params, {Mod, Fun, Opts}}) ->
          Events :: cowboy_websocket:commands(),
          State :: state().
 websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
-    ?LOG_INFO("[WebSocket] handle: ~p~n", [Msg]),
     {Target, Event, Payload} = decode_msg(Msg),
     Socket0 = maps:get(Target, Sockets),
     View = maps:get(view, Socket0),
@@ -105,18 +101,15 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
          Events :: cowboy_websocket:commands(),
          State :: state().
 websocket_info(reload, Socket) ->
-    ?LOG_INFO("[WebSocket] reload~n", []),
     {[{text, json:encode([[~"reload", []]])}], Socket};
-websocket_info(Info, Socket) ->
-    ?LOG_INFO("[WebSocket] info: ~p~n", [{Info, Socket}]),
+websocket_info(_Info, Socket) ->
     {[], Socket}.
 
 -spec terminate(Reason, Req, State) -> ok
     when Reason :: term(),
          Req :: cowboy_req:req(),
          State :: state().
-terminate(Reason, Req, _State) ->
-    ?LOG_INFO("[WebSocket] terminate: ~p~n", [{Reason, Req}]),
+terminate(_Reason, _Req, _State) ->
     send(terminate, {terminate, self()}),
     ok.
 

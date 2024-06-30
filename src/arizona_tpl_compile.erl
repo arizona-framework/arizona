@@ -26,7 +26,13 @@ Template compiler.
 %% API functions.
 -export([compile/1]).
 
--record(state, {view, parent = root}).
+-record(state, {
+    view :: module(),
+    parent = root :: root | json:decode_value()
+}).
+
+-elvis([{elvis_style, max_module_length, disable}]).
+-elvis([{elvis_style, max_function_length, disable}]).
 
 %% --------------------------------------------------------------------
 %% API funtions.

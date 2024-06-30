@@ -27,16 +27,13 @@
 %% Supervisor callbacks.
 -export([init/1]).
 
-%% Macros.
--define(SERVER, ?MODULE).
-
 %% --------------------------------------------------------------------
 %% API functions.
 %% --------------------------------------------------------------------
 
 -spec start_link() -> supervisor:startlink_ret().
 start_link() ->
-    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
+    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 %% --------------------------------------------------------------------
 %% Supervisor callbacks.
