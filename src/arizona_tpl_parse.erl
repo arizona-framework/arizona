@@ -163,43 +163,6 @@ parse_expr_str(ExprStr, Macros, Eval) ->
 
 parse_expr_str(ExprStr, Macros, _Bindings, Eval) ->
     {expr, {ExprStr, {Macros, Eval}}}.
-    %ExprTree = merl:quote(ExprStr),
-    %case erl_syntax:type(ExprTree) =:= comment of
-    %    true ->
-    %        {comment, erl_syntax:comment_text(ExprTree)};
-    %    false ->
-    %        MacrosEnv = [{K, merl:term(V)} || K := V <- Macros],
-    %        MacrosTree = merl:tsubst(ExprTree, MacrosEnv),
-    %        AllVars = merl:template_vars(merl:template(MacrosTree)),
-    %        case AllVars -- maps:keys(Macros) of
-    %            [] ->
-    %                case Eval andalso
-    %                     lists:member(erl_syntax:type(MacrosTree),
-    %                                  arizona_html:safe_types()) of
-    %                    true ->
-    %                        {value, V, []} =
-    %                            erl_eval:exprs(
-    %                                [erl_syntax:revert(MacrosTree)], []),
-    %                        {text, arizona_html:safe(V)};
-    %                    false ->
-    %                        MacrosStr = iolist_to_binary(
-    %                            erl_pp:expr(erl_syntax:revert(MacrosTree))),
-    %                        expr_struct(MacrosStr, [], Bindings)
-    %                end;
-    %            Vars ->
-    %                FunStr = <<"_@subst">>,
-    %                VarsSubst = [{Var, subst_var(Var)} || Var <- Vars],
-    %                Env = [{subst, merl:subst(MacrosTree, VarsSubst)}],
-    %                Tree = erl_syntax:revert_forms([merl:qquote(FunStr, Env)]),
-    %                        TreeStr = iolist_to_binary(
-    %                            erl_pp:expr(Tree)),
-    %                expr_struct(TreeStr, Vars, Bindings)
-    %        end
-    %end.
-
-%subst_var(Var) ->
-%  VarStr = atom_to_binary(Var, utf8),
-%  merl:quote(<<"maps:get(", VarStr/binary, ", Assigns)">>).
 
 block_struct(Props) ->
     #{
@@ -226,10 +189,6 @@ check_directives(Directives) ->
         false ->
             Directives
     end.
-
-%expr_struct(Tree, Vars, _Bindings) ->
-%    %{value, Fun, _NewBindings} = erl_eval:exprs(Tree, Bindings),
-%    {expr, {Tree, Vars}}.
 
 get(K, L, D) ->
     proplists:get_value(K, L, D).

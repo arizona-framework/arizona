@@ -33,7 +33,7 @@ Renderer.
 %% --------------------------------------------------------------------
 
 render_target(Target, Block, Changes, Assigns) when map_size(Changes) > 0 ->
-    render_target_1(Target, Block, Changes, Assigns);
+    render_target_1(Target, Block, Changes, [Assigns]);
 render_target(_Target, _Block, _Changes, _Assigns) ->
     [].
 
@@ -54,7 +54,7 @@ render_block(#{id := Id, view := View} = Block, Assigns0) ->
     Indexes = maps:get(indexes, Block),
     Tree = maps:get(block, Block),
     Assigns = maps:get(assigns, Socket),
-    render_indexes(Indexes, Tree, Assigns, false).
+    render_indexes(Indexes, Tree, [Assigns], false).
 
 mount(#{id := Id, view := View} = Block, Assigns0) ->
     Socket0 = arizona_socket:new(Id, View, Assigns0),
@@ -92,41 +92,79 @@ mount_loop(Pid, Sockets) ->
     end.
 
 render_indexes([H | T], Block, Assigns, Notify) ->
-    case maps:get(H, Block) of
-        #{text := Text} ->
-            [Text | render_indexes(T, Block, Assigns, Notify)];
-        #{expr := Expr} ->
-            case Expr(Assigns) of
-                ok ->
-                    render_indexes(T, Block, Assigns, Notify);
-                Value ->
-                    [arizona_html:safe(Value) | render_indexes(T, Block, Assigns, Notify)]
-            end;
-        #{indexes := Indexes, block := NBlock, attrs := Attrs} = Nested ->
-            AttrsAssigns = maps:map(fun(_K, Expr) ->
-                eval(Expr, Assigns)
-            end, Attrs),
-            NAssigns = case maps:get(directives, Nested) of
-                #{stateful := true} ->
-                    NId = maps:get(id, Nested),
-                    NView = maps:get(view, Nested),
-                    NSocket0 = arizona_socket:new(NId, NView, AttrsAssigns),
-                    {ok, NSocket} = arizona_live_view:mount(NView, NSocket0),
-                    case Notify of
-                        {true, Pid} ->
-                            Pid ! {self(), mount, NId, NSocket};
-                        false ->
-                            ok
-                    end,
-                    maps:get(assigns, NSocket);
-                #{} ->
-                    AttrsAssigns
-            end,
-            [render_indexes(Indexes, NBlock, NAssigns, Notify) |
-                render_indexes(T, Block, Assigns, Notify)]
-    end;
+    [maybe_render(maps:get(H, Block), Assigns, Notify)
+        | render_indexes(T, Block, Assigns, Notify)];
 render_indexes([], _Block, _Assigns, _Notify) ->
     [].
+
+% TODO: Rename all Assigns to Bindings. Now, Assigns is inside Bindings.
+%       Bindings is a list.
+maybe_render({'case', {expr, {Expr, _Vars}}, ToRender}, Assigns, Notify) ->
+    case Expr(Assigns) of
+        {true, VarValue} ->
+            render(ToRender, [VarValue | Assigns], Notify);
+        false ->
+            <<>>
+    end;
+maybe_render({'if', {expr, {Expr, _Vars}}, ToRender}, Assigns, Notify) ->
+    case Expr(Assigns) of
+        true ->
+            render(ToRender, Assigns, Notify);
+        false ->
+            <<>>
+    end;
+maybe_render({'for', {expr, {ForExpr, _Vars}},
+    {'if', true}, Static, {Indexes, Dynamic}}, Assigns, Notify) ->
+    [ zip(Static, render_indexes(Indexes, Dynamic, [Item | Assigns], Notify))
+    || Item <- ForExpr(Assigns)];
+maybe_render({'for', {expr, {ForExpr, _Vars}},
+    {'if', {expr, {IfExpr, _IfVars}}}, Static, {Indexes, Dynamic}}, Assigns, Notify) ->
+    [ zip(Static, render_indexes(Indexes, Dynamic, [Item | Assigns], Notify))
+    || Item <- ForExpr(Assigns), IfExpr([Item | Assigns])];
+maybe_render(ToRender, Assigns, Notify) ->
+    render(ToRender, Assigns, Notify).
+
+zip([S | ST], [D | DT]) ->
+    [S, D | zip(ST, DT)];
+zip([S | ST], []) ->
+    [S | zip(ST, [])];
+zip([], [D | DT]) ->
+    [D | zip([], DT)];
+zip([], []) ->
+    [].
+
+render(#{text := Text}, _Assigns, _Notify) ->
+    Text;
+render(#{expr := Expr}, Assigns, _Notify) ->
+    case Expr(Assigns) of
+        ok ->
+            <<>>;
+        Value ->
+            arizona_html:safe(Value)
+    end;
+render(#{indexes := Indexes, block := NBlock, attrs := Attrs} = Nested, Assigns, Notify) ->
+    AttrsAssigns = maps:map(fun(_K, Expr) ->
+        eval(Expr, Assigns)
+    end, Attrs),
+    NAssigns = case maps:get(directives, Nested) of
+        #{stateful := true} ->
+            NId = maps:get(id, Nested),
+            NView = maps:get(view, Nested),
+            NSocket0 = arizona_socket:new(NId, NView, AttrsAssigns),
+            {ok, NSocket} = arizona_live_view:mount(NView, NSocket0),
+            case Notify of
+                {true, Pid} ->
+                    Pid ! {self(), mount, NId, NSocket};
+                false ->
+                    ok
+            end,
+            maps:get(assigns, NSocket);
+        #{} ->
+            AttrsAssigns
+    end,
+    render_indexes(Indexes, NBlock, NAssigns, Notify);
+render(#{tag := Tokens, indexes := Indexes}, Assigns, Notify) ->
+    render_indexes(Indexes, Tokens, Assigns, Notify).
 
 path_render(Vars, Block, Assigns) ->
     maps:fold(fun(_Var, Path, Acc) ->
@@ -166,7 +204,6 @@ eval({expr, {Fun, _Vars}}, Assigns) ->
 -ifdef(TEST).
 -compile([export_all, nowarn_export_all]).
 -include_lib("eunit/include/eunit.hrl").
-
 
 render_block_test() ->
     ?assertEqual(
@@ -240,6 +277,74 @@ mount_test() ->
 
 block(Macros) ->
     {ok, Tpl} = arizona_tpl_compile:compile({arizona_tpl_compile, view, Macros}),
+    Tpl.
+
+%% End block support.
+
+new_render_block_test() ->
+    [
+    ?assertEqual(
+        [<<"foo">>,
+                  [<<"<div>">>, <<"</div>">>],
+                  [<<"<ul>">>,
+                   [[<<"<li>">>,
+                     [<<"<b>">>, <<"- ">>, <<".">>, <<"FOO">>, <<"</b>">>],
+                     <<>>,
+                     [[<<"<p>">>, <<"1">>, <<"-">>, <<"*">>, <<>>, <<"subitem1">>,
+                       <<"</p>">>],
+                      [<<"<p>">>, <<"1">>, <<"-">>, <<"*">>, <<>>, <<"subitem2">>,
+                       <<"</p>">>]],
+                     <<"</li>">>],
+                    [<<"<li>">>,
+                     [<<"<b>">>, <<"- ">>, <<".">>, <<"BAR">>, <<"</b>">>],
+                     <<>>,
+                     [[<<"<p>">>, <<"3">>, <<"-">>, <<"*">>, <<>>, <<"subitem1">>,
+                       <<"</p>">>],
+                      [<<"<p>">>, <<"3">>, <<"-">>, <<"*">>, <<>>, <<"subitem2">>,
+                       <<"</p>">>]],
+                     <<"</li>">>]],
+                   <<"</ul>">>],
+                  [<<"<div>">>, [<<"<p>">>, <<"foo">>, <<"</p>">>], <<"</div>">>],
+                  [<<"<div>">>, <<"foo">>, <<"</div>">>],
+                  <<>>,
+                  [<<"<b>">>, <<>>,
+                   [<<"<em>">>, <<"foo">>, <<"</em>">>],
+                   <<"</b>">>]],
+        render_block(new_block(#{}), #{
+            bool => true,
+            foo => foo,
+            list => [
+                #{available => true, id => <<"1">>, name => <<"FOO">>},
+                #{available => false, id => <<"2">>, name => <<"DO NOT RENDER">>},
+                #{available => true, id => <<"3">>, name => <<"BAR">>}
+            ],
+            prefix => <<"- ">>,
+            other_list => [
+                <<"subitem1">>, <<"subitem2">>
+            ],
+            subprefix => <<"*">>
+        }
+    )),
+    ?assertEqual(
+        [<<"foo">>, <<>>,
+                  [<<"<ul>">>, [], <<"</ul>">>],
+                  <<>>, <<>>,
+                  [<<"<p>">>, <<"bar">>, <<"</p>">>],
+                  [<<"<b>">>, <<>>,
+                   [<<"<em>">>, <<"bar">>, <<"</em>">>],
+                   <<"</b>">>]],
+        render_block(new_block(#{}), #{
+            bool => false,
+            list => [],
+            foo => bar
+        }
+    ))
+    ].
+
+%% Start block support.
+
+new_block(Macros) ->
+    {ok, Tpl} = arizona_tpl_compile:compile({arizona_tpl_compile, tpl, Macros}),
     Tpl.
 
 %% End block support.

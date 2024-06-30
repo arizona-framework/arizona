@@ -32,144 +32,6 @@ Template compiler.
 %% API funtions.
 %% --------------------------------------------------------------------
 
--export([tpl/1, c/0]).
-
-tpl(Macros) ->
-    {ok, Tokens, _} = arizona_tpl_scan:string(~"""
-    foo
-    <div :if={_@bool}></div>
-    <ul>
-        {% NOTE: The :let directive could be removed by defining the  }
-        {%       :for directive as we wrote the begining of a list    }
-        {%       comprehension, like:                                 }
-        {%       > `<li :for={Item <- _@list} ...`                    }
-        {% NOTE: Should be possible to pattern match Item, e.g.:      }
-        {%       > :let={#{available := Available} = Item}            }
-        {%       > :for={#{available := Available} := Item <- _@list} }
-        <li :for={Item} :in={_@list} :if={maps:get(available, Item)}>
-            <b>{_@prefix}.{maps:get(name, Item)}</b>
-            <p :for={Subitem} :in={_@other_list}>
-                {maps:get(id, Item)}-{_@subprefix}{Subitem}
-            </p>
-        </li>
-    </ul>
-
-    <div :if={_@bool}>
-        <p>{_@foo}</p>
-    </div>
-
-    {% NOTE: A shorcut could be             }
-    {%       > <div :case={_@foo of bar}... }
-    <div :case={_@foo} :of={foo}>foo</div>
-
-    <p :case={_@foo} :of={bar}>bar</p>
-
-    <b :case={_@foo} :of={Other when is_atom(Other)}>
-        <div :case={Other =:= baz} :of={true}>baz</div>
-
-        <em :case={Other =:= baz} :of={false}>{Other}</em>
-    </b>
-    """),
-    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
-    Tree.
-
-c() ->
-    Str = ~"""
-    foo
-    <div :if={_@bool}></div>
-    <ul>
-        {% NOTE: The :let directive could be removed by defining the  }
-        {%       :for directive as we wrote the begining of a list    }
-        {%       comprehension, like:                                 }
-        {%       > `<li :for={Item <- _@list} ...`                    }
-        {% NOTE: Should be possible to pattern match Item, e.g.:      }
-        {%       > :let={#{available := Available} = Item}            }
-        {%       > :for={#{available := Available} := Item <- _@list} }
-        <li :for={Item} :in={_@list} :if={maps:get(available, Item)}>
-            <b>{_@prefix}.{maps:get(name, Item)}</b>
-            <p :for={Subitem} :in={_@other_list}>
-                {maps:get(id, Item)}-{_@subprefix}{Subitem}
-            </p>
-        </li>
-    </ul>
-
-    <div :if={_@bool}>
-        <p>{_@foo}</p>
-    </div>
-
-    {% NOTE: A shorcut could be             }
-    {%       > <div :case={_@foo of bar}... }
-    <div :case={_@foo} :of={foo}>foo</div>
-
-    <p :case={_@foo} :of={bar}>bar</p>
-
-    <b :case={_@foo} :of={Other when is_atom(Other)}>
-        <div :case={Other =:= baz} :of={true}>baz</div>
-
-        <em :case={Other =:= baz} :of={false}>{Other}</em>
-    </b>
-    """,
-    _ = [
-        {text, ~"foo"},
-        {'if', {expr, {fun([Assigns]) -> maps:get(bool, Assigns) end, [bool]}}, {text, ~"<div></div>"}},
-        {text, ~"<ul>"},
-         % [<zip static and dynamic> || Item <- maps:get(list, Assigns), maps:get(available, Item)]
-        {'for', {expr, {fun([Assigns]) -> maps:get(list, Assigns) end, [list]}},
-            {'if', {expr, {fun([_Assigns, Item]) -> maps:get(available, Item) end, []}}},
-            % Static
-            [~"<li><b>", ~".", ~"</b>", ~"</li>"],
-            % Dynamic
-            [
-                {expr, {fun([_Item, Assigns]) -> maps:get(prefix, Assigns) end, [prefix]}},
-                {expr, {fun([Item, _Assigns]) -> maps:get(name, Item) end, []}},
-                {'for', {expr, {fun([_Item, Assigns]) -> maps:get(other_list, Assigns) end, [other_list]}},
-                    % No :if directive
-                    {'if', true},
-                    [~"<p>", ~"-", ~"", ~"</p>"],
-                    [
-                        {expr, {fun([_Subitem, Item, _Assigns]) -> maps:get(id, Item) end, []}},
-                        {expr, {fun([_Subitem, _Item, Assigns]) -> maps:get(subprefix, Assigns) end, [subprefix]}},
-                        {expr, {fun([Subitem, _Item, _Assigns]) -> Subitem end, []}}
-                    ]
-                }
-            ]
-        },
-        {text, ~"</ul>"},
-
-        {'if', {expr, {fun(Assigns) -> maps:get(bool, Assigns) end, [bool]}},
-            % NOTE: tpl_parse struct
-            {tag, [
-                {text, ~"<p>"},
-                {expr, {fun(Assigns) -> maps:get(foo, Assigns) end, [foo]}},
-                {text, ~"</p>"}
-            ]}
-        },
-
-        {'case', {expr, {fun([Assigns]) -> case maps:get(foo, Assigns) of foo -> {true, foo}; _ -> false end end, [foo]}},
-            {text, ~"<div>foo</div>"}
-        },
-        {'case', {expr, {fun([Assigns]) -> case maps:get(foo, Assigns) of bar -> {true, bar}; _ -> false end end, [foo]}},
-            {text, ~"<p>bar</p>"}
-        },
-        {'case', {expr, {fun([Assigns]) -> case maps:get(foo, Assigns) of Other -> {true, Other} end end, [foo]}},
-            % if tag have :if directive, it would be {'if', Cond, {tag, ...}}
-            {tag, [
-                {text, ~"<b>"},
-                {'case', {expr, {fun([Other, _Assigns]) -> case Other =:= baz of true -> {true, true}; _ -> false end end, []}},
-                    {text, ~"<div>baz</div>"}
-                },
-                {'case', {expr, {fun([Other, _Assigns]) -> case Other =:= baz of false -> {true, true}; _ -> false end end, []}},
-                    {text, ~"<em>"},
-                    {expr, {fun([Other, _Assigns]) -> Other end, []}},
-                    {text, ~"</em>"}
-                },
-                {text, ~"</b>"}
-            ]}
-        }
-    ],
-    Str.
-
-
 % NOTE: Multiple tags is not allowed for a root, e.g.:
 %       Good: <html><head></head><body></body></html>
 %        Bad: <head></head><body></body>
@@ -189,17 +51,11 @@ compile(Tree) ->
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
-%compile([{text, Txt}, {tag,  #{directives := Directives} = Tag} | T], P, I, State)
-%    when not is_map_key('for', Directives) andalso
-%         not is_map_key('case', Directives) andalso
-%         not is_map_key('if', Directives) ->
-%    compile_tag(Tag, Txt, T, P, I, State);
-%compile([{text, A}, {text, B} | T], P, I, State) ->
-%    compile([{text, <<A/binary, B/binary>>} | T], P, I, State);
 compile([{text, Txt} | T], P, I, State) ->
     [{I, text_struct(Txt, P, I)} | compile(T, P, I + 1, State)];
 compile([{expr, Expr} | T], P, I, State) ->
-    [{I, expr_struct(Expr, State#state.macros, P, I)} | compile(T, P, I + 1, State)];
+    [{I, expr_struct(Expr, State#state.macros, State#state.assign_fun_args, P, I)}
+     | compile(T, P, I + 1, State)];
 compile([{tag, Tag} | T], P, I, State) ->
     compile_tag(Tag, <<>>, T, P, I, State);
 compile([{block, Block} | T], P, I, State) ->
@@ -211,9 +67,14 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
     case Directives of
         #{'for' := {expr, {ForExpr, _ForMacros}}, 'in' := {expr, {InExpr, InMacros}}} ->
             {InFun, InVars} = expand(InExpr, InMacros, State#state.assign_fun_args),
-            TagTokens = compile_tag_1(Tag, Txt, T, P, I, State),
+            Tokens = compile_tag_1(Tag, Txt, T, P, I, State),
             % TODO: Expand ForExpr.
             FunArgs = [ForExpr | State#state.assign_fun_args],
+            DynamicTokens = compile(
+                filter_dynamic_tokens(Tokens), [I | P], 0,
+                tag_tokens_state(Tag, P, I, State#state{assign_fun_args = FunArgs})),
+            DynamicTokensMap = maps:from_list(DynamicTokens),
+            Indexes = lists:usort(maps:keys(DynamicTokensMap)),
             [{I, {'for', {expr, {InFun, InVars}},
                 case Directives of
                     #{'if' := {expr, {IfExpr, IfMacros}}} ->
@@ -222,10 +83,9 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                     #{} ->
                         {'if', true}
                 end,
-                filter_static_tokens(TagTokens),
-                compile(filter_dynamic_tokens(TagTokens), [I | P], 0,
-                        tag_tokens_state(Tag, P, I, State#state{assign_fun_args = FunArgs}))
-            }} | compile(T, P, I+1, State)];
+                filter_static_tokens(Tokens),
+                {Indexes, DynamicTokensMap}
+            }} | compile(T, P, I + 1, State)];
         #{'case' := {expr, {CaseExpr, CaseMacros}}, 'of' := {expr, {OfExpr, _OfMacros}}} ->
             % TODO: Expand OfExpr first.
             VarNameExpr = case erl_scan:string(binary_to_list(OfExpr)) of
@@ -235,26 +95,26 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                     atom_to_binary(VarName)
             end,
             Expr = <<"case ", CaseExpr/binary, " of ",
-                OfExpr/binary, " -> ", VarNameExpr/binary, "; "
-                "_ -> <<>> "
+                OfExpr/binary, " -> {true, ", VarNameExpr/binary, "}; "
+                "_ -> false "
             "end">>,
             {Fun, Vars} = expand(Expr, CaseMacros, State#state.assign_fun_args),
             FunArgs = [VarNameExpr | State#state.assign_fun_args],
-            TagTokens = compile(compile_tag_1(Tag, Txt, T, P, I, State),
+            Tokens = compile(compile_tag_1(Tag, Txt, T, P, I, State),
                             [I | P], 0, tag_tokens_state(Tag, P, I,
                                 State#state{assign_fun_args = FunArgs})),
-            [{I, {'case', {expr, {Fun, Vars}}, {tag, TagTokens}}}
-                | compile(T, P, I + 1, State)];
+            TokensMap = maps:from_list(Tokens),
+            [{I, {'case', {expr, {Fun, Vars}}, #{
+                tag => TokensMap,
+                indexes => lists:usort(maps:keys(TokensMap))
+            }}} | compile(T, P, I + 1, State)];
         #{'if' := {expr, {Expr, Macros}}} ->
             {Fun, Vars} = expand(Expr, Macros, State#state.assign_fun_args),
-            TagTokens = compile(compile_tag_1(Tag, Txt, T, P, I, State),
-                               [I | P], 0, tag_tokens_state(Tag, P, I, State)),
-            [{I, {'if', {expr, {Fun, Vars}}, {tag, TagTokens}}}
+            [{I, {'if', {expr, {Fun, Vars}}, tag_struct(Tag, Txt, T, P, I, State)}}
                 | compile(T, P, I + 1, State)];
         #{} ->
-            TagTokens = compile(compile_tag_1(Tag, Txt, T, P, I, State),
-                               [I | P], 0, tag_tokens_state(Tag, P, I, State)),
-            [{I, {tag, TagTokens}} | compile(T, P, I+1, State)]
+            [{I, tag_struct(Tag, Txt, T, P, I, State)}
+                | compile(T, P, I + 1, State)]
     end.
 
 expand(ExprStr, {Macros, _Eval}, Args) ->
@@ -294,9 +154,6 @@ subst_var(Var) ->
 
 eval(ExprStr, Vars, Bindings, Args) ->
     FunStr = iolist_to_binary([~"fun([", lists:join(~", ", Args), ~"]) -> ", ExprStr, ~" end"]),
-
-    io:format(user, "[FUN] ~p~n", [FunStr]),
-
     Tree = [merl:quote(FunStr)],
     {value, Fun, _NewBindings} = erl_eval:exprs(Tree, Bindings),
     {Fun, Vars}.
@@ -307,7 +164,7 @@ filter_static_tokens([_, {text, Txt} | T]) ->
     [Txt | filter_static_tokens(T)];
 filter_static_tokens([_, _ | T]) ->
     [<<>> | filter_static_tokens(T)];
-filter_static_tokens([_|T]) ->
+filter_static_tokens([_ | T]) ->
     filter_static_tokens(T);
 filter_static_tokens([]) ->
     [].
@@ -322,11 +179,6 @@ filter_dynamic_tokens([]) ->
 compile_tag_1(#{name := Name} = Tag, Txt, T, P, I, State) ->
     Attrs = norm_tag_attrs(Tag, P, State#state.parent),
     do_compile_tag(Attrs, Tag#{attrs => Attrs}, T, P, I, State, [Name, $<, Txt]).
-
-%should_inline_tag(Directives) ->
-%    not lists:any(fun(Key) ->
-%        is_map_key(Key, Directives)
-%    end, ['if', 'case', 'for']).
 
 norm_tag_attrs(#{attrs := Attrs0, directives := Dirs}, Id, Target) ->
     maps:fold(fun
@@ -380,49 +232,6 @@ do_compile_tag([], Tag, _TT, _P, _I, _State, Acc) ->
         false ->
             [{text, tag_open(Tag, Acc)} | maps:get(tokens, Tag)] ++
                 [{text, tag_closing(Tag)}]
-            %case {is_stateful(Tag), maps:get(tokens, Tag)} of
-            %    {false, NTokens} ->
-            %        Tokens = [{text, tag_open(Tag, Acc)} | NTokens],
-            %        compile(Tokens ++ [{text, tag_closing(Tag)} | TT],
-            %                P, I, State);
-            %    {true, []} ->
-            %        case TT of
-            %            [{text, Txt0} | TTT] ->
-            %                Txt = <<(no_tokens_tag(Tag, Acc))/binary, Txt0/binary>>,
-            %                compile([{text, Txt} | TTT], P, I, State);
-            %            [{tag, TTag} | TTT] ->
-            %                compile_tag(TTag, no_tokens_tag(Tag, Acc),
-            %                            TTT, P, I, State);
-            %            _ ->
-            %                [{I, no_tokens_tag_struct(Tag, Acc, P, I)}
-            %                    | compile(TT, P, I + 1, State)]
-            %        end;
-            %    {true, [{text, Txt0}]} ->
-            %        Txt = <<(tag_open(Tag, Acc))/binary, Txt0/binary,
-            %                (tag_closing(Tag))/binary>>,
-            %        compile([{text, Txt} | TT], P, I, State);
-            %    {true, [{tag, TTag} | NTokens]} ->
-            %        TState = tag_tokens_state(Tag, P, I, State),
-            %        Tokens = compile_tag(TTag, tag_open(Tag, Acc), NTokens, P, I, TState),
-            %        {NI, LToken} = lists:last(Tokens),
-            %        case LToken of
-            %            #{text := Txt0} ->
-            %                Txt = <<Txt0/binary, (tag_closing(Tag))/binary>>,
-            %                TTokens = lists:droplast(Tokens) ++
-            %                            [{NI, LToken#{text => Txt}}],
-            %                TTokens ++ compile(TT, P, NI + 1, State);
-            %            #{} ->
-            %                Tokens ++ compile([{text, tag_closing(Tag)} | TT],
-            %                            P, NI + 1, State)
-            %        end;
-            %    {true, NTokens} ->
-            %        TState = tag_tokens_state(Tag, P, I, State),
-            %        Tokens = [{I, tag_open_struct(Tag, Acc, P, I)}
-            %                    | compile(NTokens, P, I + 1, TState)],
-            %        {NI, _} = lists:last(Tokens),
-            %        Tokens ++ compile([{text, tag_closing(Tag)} | TT],
-            %                            P, NI + 1, State)
-            %end
     end.
 
 is_stateful(#{directives := #{stateful := true}}) ->
@@ -451,9 +260,6 @@ tag_open(#{void := false}, Acc) ->
 tag_closing(#{name := Name}) ->
     <<$<, $/, Name/binary, $>>>.
 
-no_tokens_tag(Tag, Acc) ->
-    <<(tag_open(Tag, Acc))/binary, (tag_closing(Tag))/binary>>.
-
 id([], I) ->
     [I];
 id(P, I) ->
@@ -466,23 +272,22 @@ text_struct(Txt, P, I) ->
         text => Txt
      }.
 
-expr_struct(Expr, _Macros, P, I) ->
+% TODO: Marge all expr macros and user macros.
+expr_struct({Expr, ExprMacros}, _Macros, Args, P, I) ->
+    {Fun, Vars} = expand(Expr, ExprMacros, Args),
     #{
         id => id(P, I),
-        expr => Expr,
-        vars => []
+        expr => Fun,
+        vars => Vars
      }.
 
-no_tokens_tag_struct(Tag, Acc, P, I) ->
+tag_struct(Tag, Txt, T, P, I, State) ->
+    Tokens = compile(compile_tag_1(Tag, Txt, T, P, I, State),
+                [I | P], 0, tag_tokens_state(Tag, P, I, State)),
+    TokensMap = maps:from_list(Tokens),
     #{
-        id => id(P, I),
-        text => no_tokens_tag(Tag, Acc)
-    }.
-
-tag_open_struct(Tag, Acc, P, I) ->
-    #{
-        id => id(P, I),
-        text => tag_open(Tag, Acc)
+        tag => TokensMap,
+        indexes => lists:usort(maps:keys(TokensMap))
     }.
 
 % Document Type Definition
@@ -502,7 +307,7 @@ block_struct(Block, P, I, State) ->
         none ->
             Directives
     end,
-    NonAttrs = [stateful, 'if', 'for'],
+    NonAttrs = [stateful, 'if', 'for', 'in', 'case', 'of'],
     AllAttrs = maps:merge(Attrs, maps:without(NonAttrs, Directives)),
     Id = id(P, I),
     Stateful = maps:get(stateful, Directives, false),
@@ -870,6 +675,45 @@ vars_test() ->
                    counter_count := [[5]],
                    btn_text := [[7, 0], [7, 4], [7, 6]],
                    btn_event := [[7, 2]]}, Vars).
+
+tpl(Macros) ->
+    {ok, Tokens, _} = arizona_tpl_scan:string(~"""
+    foo
+    <div :if={_@bool}></div>
+    <ul>
+        {% NOTE: The :let directive could be removed by defining the  }
+        {%       :for directive as we wrote the begining of a list    }
+        {%       comprehension, like:                                 }
+        {%       > `<li :for={Item <- _@list} ...`                    }
+        {% NOTE: Should be possible to pattern match Item, e.g.:      }
+        {%       > :let={#{available := Available} = Item}            }
+        {%       > :for={#{available := Available} := Item <- _@list} }
+        <li :for={Item} :in={_@list} :if={maps:get(available, Item)}>
+            <b>{_@prefix}.{maps:get(name, Item)}</b>
+            <p :for={Subitem} :in={_@other_list}>
+                {maps:get(id, Item)}-{_@subprefix}{Subitem}
+            </p>
+        </li>
+    </ul>
+
+    <div :if={_@bool}>
+        <p>{_@foo}</p>
+    </div>
+
+    {% NOTE: A shorcut could be             }
+    {%       > <div :case={_@foo of bar}... }
+    <div :case={_@foo} :of={foo}>foo</div>
+
+    <p :case={_@foo} :of={bar}>bar</p>
+
+    <b :case={_@foo} :of={Other when is_atom(Other)}>
+        <div :case={Other =:= baz} :of={true}>baz</div>
+
+        <em :case={Other =:= baz} :of={false}>{Other}</em>
+    </b>
+    """),
+    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
+    Tree.
 
 new_implementation_test() ->
     ?assertEqual(false, arizona_tpl_compile:compile({arizona_tpl_compile, tpl, #{}})).
