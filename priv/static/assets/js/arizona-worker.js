@@ -153,7 +153,7 @@ function sendMsgToServer([target, event, payload]) {
     state.socket.send(
       payload
         ? JSON.stringify([target, event, payload], state)
-        : JSON.stringify([target, event])
+        : JSON.stringify([target, event]),
     );
   } else {
     state.fulfilled && state.eventQueue.push([target, event, payload]);

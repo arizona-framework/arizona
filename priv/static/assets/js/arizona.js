@@ -85,13 +85,13 @@ globalThis["arizona"] = (() => {
           event,
           undefined,
           payloadOrCallback,
-          callbackOrOpts
+          callbackOrOpts,
         )
       : sendMsgToWorker.bind(this)(
           event,
           payloadOrCallback,
           callbackOrOpts,
-          optsOrNull
+          optsOrNull,
         );
   }
 
