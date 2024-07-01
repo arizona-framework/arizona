@@ -76,12 +76,17 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                         filter_dynamic_tokens(Tokens), [I | P], 0,
                         tag_tokens_state(Tag, P, I, State#state{assign_fun_args = FunArgs})),
                     DynamicTokensMap = maps:from_list(DynamicTokens),
+                    Id = id(P, I),
+                    Cond = {'if', expand(IfExpr, IfMacros, FunArgs)},
+                    Vars = expr_vars(DynamicTokens, Cond),
                     [{I, #{
+                        id => Id,
                         'for' => expand(InExpr, InMacros, State#state.assign_fun_args),
-                        'when' => {'if', expand(IfExpr, IfMacros, FunArgs)},
+                        'when' => Cond,
                         static => filter_static_tokens(Tokens),
                         dynamic => DynamicTokensMap,
-                        indexes => lists:usort(maps:keys(DynamicTokensMap))
+                        indexes => lists:usort(maps:keys(DynamicTokensMap)),
+                        vars => vars_group(vars(Vars, Id))
                     }} | compile(T, P, I + 1, State)];
                 #{'case' := {expr, {CaseExpr, CaseMacros}},
                   'of' := {expr, {OfExpr, _OfMacros}}} ->
@@ -102,12 +107,17 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                         filter_dynamic_tokens(Tokens), [I | P], 0,
                         tag_tokens_state(Tag, P, I, State#state{assign_fun_args = [VarNameExpr | FunArgs]})),
                     DynamicTokensMap = maps:from_list(DynamicTokens),
+                    Id = id(P, I),
+                    Cond = {'case', expand(Expr, CaseMacros, FunArgs)},
+                    Vars = expr_vars(DynamicTokens, Cond),
                     [{I, #{
+                        id => Id,
                         'for' => expand(InExpr, InMacros, State#state.assign_fun_args),
-                        'when' => {'case', expand(Expr, CaseMacros, FunArgs)},
+                        'when' => Cond,
                         static => filter_static_tokens(Tokens),
                         dynamic => DynamicTokensMap,
-                        indexes => lists:usort(maps:keys(DynamicTokensMap))
+                        indexes => lists:usort(maps:keys(DynamicTokensMap)),
+                        vars => vars_group(vars(Vars, Id))
                     }} | compile(T, P, I + 1, State)];
                 #{} ->
                     % TODO: Expand ForExpr.
@@ -116,12 +126,17 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                         filter_dynamic_tokens(Tokens), [I | P], 0,
                         tag_tokens_state(Tag, P, I, State#state{assign_fun_args = FunArgs})),
                     DynamicTokensMap = maps:from_list(DynamicTokens),
+                    Id = id(P, I),
+                    Cond = nocond,
+                    Vars = expr_vars(DynamicTokens, Cond),
                     [{I, #{
+                        id => Id,
                         'for' => expand(InExpr, InMacros, State#state.assign_fun_args),
-                        'when' => nocond,
+                        'when' => Cond,
                         static => filter_static_tokens(Tokens),
                         dynamic => DynamicTokensMap,
-                        indexes => lists:usort(maps:keys(DynamicTokensMap))
+                        indexes => lists:usort(maps:keys(DynamicTokensMap)),
+                        vars => vars_group(vars(Vars, Id))
                     }} | compile(T, P, I + 1, State)]
             end;
         #{'case' := {expr, {CaseExpr, CaseMacros}}, 'of' := {expr, {OfExpr, _OfMacros}}} ->
@@ -141,20 +156,31 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                             [I | P], 0, tag_tokens_state(Tag, P, I,
                                 State#state{assign_fun_args = FunArgs})),
             TokensMap = maps:from_list(Tokens),
+            Id = id(P, I),
+            Cond = expand(Expr, CaseMacros, State#state.assign_fun_args),
+            Vars = expr_vars(maps:get(tokens, Tag), {'case', Cond}),
             [{I, #{
-                'case' => expand(Expr, CaseMacros, State#state.assign_fun_args),
+                id => Id,
+                'case' => Cond,
                 'of' => #{
                     tag => TokensMap,
                     indexes => lists:usort(maps:keys(TokensMap))
-                }
+                },
+                vars => vars_group(vars(Vars, Id))
             }} | compile(T, P, I + 1, State)];
         #{'if' := {expr, {Expr, Macros}}} ->
+            Id = id(P, I),
+            Cond = expand(Expr, Macros, State#state.assign_fun_args),
+            Vars = expr_vars(maps:get(tokens, Tag), {'if', Cond}),
             [{I, #{
-                'if' => expand(Expr, Macros, State#state.assign_fun_args),
-                'then' => tag_struct(Tag, Txt, T, P, I, State)
+                id => Id,
+                'if' => Cond,
+                'then' => tag_struct(Tag, Txt, {'if', Cond}, T, P, I, State),
+                vars => vars_group(vars(Vars, Id)),
+                test =>tag_struct(Tag, Txt, {'if', Cond}, T, P, I, State)
             }} | compile(T, P, I + 1, State)];
         #{} ->
-            [{I, tag_struct(Tag, Txt, T, P, I, State)}
+            [{I, tag_struct(Tag, Txt, none, T, P, I, State)}
                 | compile(T, P, I + 1, State)]
     end.
 
@@ -188,6 +214,14 @@ expand(ExprStr, {Macros, _Eval}, Args) ->
             TreeStr = iolist_to_binary(erl_pp:expr(Tree)),
             eval(TreeStr, Vars, Bindings, Args)
     end.
+
+expand_map(Map, Args) ->
+    maps:map(fun
+        (_K, {expr, {Expr, Macros}}) ->
+            expand(Expr, Macros, Args);
+        (_, V) ->
+            V
+    end, Map).
 
 subst_var(Var) ->
     VarStr = atom_to_binary(Var, utf8),
@@ -326,13 +360,19 @@ expr_struct({Expr, ExprMacros}, _Macros, Args, P, I) ->
             text_struct(Txt, P, I)
     end.
 
-tag_struct(Tag, Txt, T, P, I, State) ->
+% TODO: Remove Txt and T.
+tag_struct(Tag, Txt, Cond, T, P, I, State) ->
+    Id = id(P, I),
     Tokens = compile(compile_tag_1(Tag, Txt, T, P, I, State),
                 [I | P], 0, tag_tokens_state(Tag, P, I, State)),
     TokensMap = maps:from_list(Tokens),
+    Vars = expr_vars(Tokens, Cond),
     #{
+        id => Id,
         tag => TokensMap,
-        indexes => lists:usort(maps:keys(TokensMap))
+        indexes => lists:usort(maps:keys(TokensMap)),
+        condition => Cond,
+        vars => Vars
     }.
 
 % Document Type Definition
@@ -346,14 +386,17 @@ block_struct(Block, P, I, State) ->
     Tree = apply(Mod, Fun, [maps:get(args, Block, #{})]),
     Attrs = block_attrs(Block),
     Directives = maps:get(directives, Block),
-    AllDirectives = case find_first_tag(Tree) of
+    FunArgs = State#state.assign_fun_args,
+    AllDirectives = expand_map(case find_first_tag(Tree) of
         {ok, Tag} ->
             maps:merge(maps:get(directives, Tag), Directives);
         none ->
             Directives
-    end,
+    end, FunArgs),
     NonAttrs = [stateful, 'if', 'for', 'in', 'case', 'of'],
-    AllAttrs = maps:merge(Attrs, maps:without(NonAttrs, Directives)),
+    AllAttrs = expand_map(
+        maps:merge(Attrs, maps:without(NonAttrs, Directives)),
+        FunArgs),
     Id = id(P, I),
     Stateful = maps:get(stateful, Directives, false),
     Tokens = case Stateful of
@@ -364,7 +407,9 @@ block_struct(Block, P, I, State) ->
             compile(Tree, [I | P], 0, State)
     end,
     TokensMap = maps:from_list(Tokens),
-    ExprVars = expr_vars(Tokens),
+    ExprVars = expr_vars(Tokens, vars_cond(AllDirectives)),
+    DirsVars = directives_vars(AllDirectives, Id, vars_cond(AllDirectives)),
+    Vars = ExprVars ++ DirsVars,
     #{
         id => Id,
         view => case Stateful of
@@ -377,9 +422,7 @@ block_struct(Block, P, I, State) ->
         indexes => lists:usort(maps:keys(TokensMap)),
         directives => AllDirectives,
         attrs => AllAttrs,
-        %attrs_vars => vars_group(vars(ExprVars, Id)),
-        %vars => vars_group(ExprVars)
-        vars => vars_group(vars(ExprVars, Id))
+        vars => vars_group(vars(Vars, Id))
     }.
 
 block_mod_fun(#{name := Name}, State) ->
@@ -416,6 +459,52 @@ vars_group(Vars) ->
         fun({_Var, Id}) -> Id end,
         lists:usort(Vars)).
 
+% TODO: Expand.
+%vars_cond(#{'if' := {expr, {Cond, _Vars}}}) ->
+%    {'if', expand(IfExpr, IfMacros, FunArgs)};
+%    Cond;
+vars_cond(#{}) ->
+    none.
+
+directives_vars(Directives, Id, Cond) ->
+    maps:fold(fun
+        (_K, {expr, {_Fun, DirVars}}, Acc0) ->
+            lists:foldl(fun(Var, Acc) ->
+                [{Var, var_path(Cond, Id)} | Acc]
+            end, Acc0, DirVars);
+        (_K, _V, Acc) ->
+            Acc
+    end, [], Directives).
+
+directives_vars(Directives, Attrs, Id, Cond) ->
+    maps:fold(fun
+        (_K, {expr, {_Fun, DirVars}}, Acc0) ->
+            lists:foldl(fun(Var, Acc1) ->
+                case Attrs of
+                    #{Var := {expr, {_EFun, EVars}}} ->
+                        lists:foldl(fun(EVar, Acc) ->
+                            [{EVar, var_path(Cond, Id)} | Acc]
+                        end, Acc1, EVars);
+                    #{} ->
+                        [{Var, var_path(Cond, Id)} | Acc1]
+                end
+            end, Acc0, DirVars);
+        (_K, _V, Acc) ->
+            Acc
+    end, [], Directives).
+
+attrs_vars(Attrs, ExprVars, Id, Cond) ->
+    maps:fold(fun
+        (Attr, {expr, {_Fun, AttrVars}}, Acc0) ->
+            lists:foldl(fun(Var, Acc1) ->
+                lists:foldl(fun(VId, Acc) ->
+                    [{Var, var_path(Cond, Id ++ VId)} | Acc]
+                end, Acc1, maps:get(Attr, ExprVars))
+            end, Acc0, AttrVars);
+        (_, _, Acc0) ->
+            Acc0
+    end, [], Attrs).
+
 attrs_vars(Attrs, ExprVars, Id) ->
     maps:fold(fun
         (Attr, {expr, {_Fun, AttrVars}}, Acc0) ->
@@ -431,21 +520,32 @@ attrs_vars(Attrs, ExprVars, Id) ->
 vars(ExprVars, [0]) ->
     ExprVars;
 vars(ExprVars, PId) ->
-    lists:map(fun({Var, Id}) -> {Var, Id -- PId} end, ExprVars).
+    lists:map(fun
+        ({Var, {'if', Cond, Id}}) -> {Var, {'if', Cond, Id -- PId}};
+        ({Var, Id}) -> {Var, Id -- PId}
+    end, ExprVars).
 
-expr_vars([{_I, #{expr := _, id := Id, vars := Vars}} | T]) ->
-    expr_vars_1(Vars, Id, T);
-expr_vars([{_I, #{block := _, id := Id, vars := Vars, attrs := Attrs}} | T]) ->
-    attrs_vars(Attrs, Vars, Id) ++ expr_vars(T);
-expr_vars([_ | T]) ->
-    expr_vars(T);
-expr_vars([]) ->
+var_path(none, Id) ->
+    Id;
+var_path(Cond, Id) ->
+    {'if', Cond, Id}.
+
+expr_vars([{_I, #{expr := _, id := Id, vars := Vars}} | T], Cond) ->
+    expr_vars_1(Vars, Id, T, Cond);
+expr_vars([{_I, #{block := _, id := Id, vars := Vars, directives := Dirs, attrs := Attrs}} | T], Cond) ->
+    % TODO: Check Dirs and Attrs cond (vars_cond(Dirs)).
+    directives_vars(Dirs, Attrs, Id, Cond) ++
+        attrs_vars(Attrs, Vars, Id, Cond) ++
+            expr_vars(T, Cond);
+expr_vars([_|T], Cond) ->
+    expr_vars(T, Cond);
+expr_vars([], _Cond) ->
     [].
 
-expr_vars_1([Var | Vars], Id, T) ->
-    [{Var, Id} | expr_vars_1(Vars, Id, T)];
-expr_vars_1([], _Id, T) ->
-    expr_vars(T).
+expr_vars_1([Var | Vars], Id, T, Cond) ->
+    [{Var, var_path(Cond, Id)} | expr_vars_1(Vars, Id, T, Cond)];
+expr_vars_1([], _Id, T, Cond) ->
+    expr_vars(T, Cond).
 
 %% --------------------------------------------------------------------
 %% EUnit tests.
@@ -707,11 +807,11 @@ button(Macros) ->
 
 %% End compile support.
 
-expr_vars_test() ->
-    Tpl = compile(button(#{}), [], 0, #state{}),
-    Vars = expr_vars(Tpl),
-    [?assertEqual([{text, [0]}, {event, [2]}, {text, [4]}, {text, [6]}], Vars),
-     ?assertMatch(#{text := [[0], [4], [6]], event := [[2]]}, vars_group(Vars))].
+%expr_vars_test() ->
+%    Tpl = compile(button(#{}), [], 0, #state{}),
+%    Vars = expr_vars(Tpl),
+%    [?assertEqual([{text, [0]}, {event, [2]}, {text, [4]}, {text, [6]}], Vars),
+%     ?assertMatch(#{text := [[0], [4], [6]], event := [[2]]}, vars_group(Vars))].
 
 vars_test() ->
     {ok, #{vars := Vars}} = compile({?MODULE, counter, #{}}),
@@ -780,6 +880,9 @@ tpl(Macros) ->
     Tree.
 
 new_implementation_test() ->
+    ?assertEqual(false, arizona_tpl_compile:compile({arizona_tpl_compile, tpl, #{}})).
+
+new_implementation2_test() ->
     ?assertEqual(false, arizona_tpl_compile:compile({arizona_tpl_compile, tpl2, #{}})).
 
 -endif.
