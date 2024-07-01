@@ -76,11 +76,12 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                         filter_dynamic_tokens(Tokens), [I | P], 0,
                         tag_tokens_state(Tag, P, I, State#state{assign_fun_args = FunArgs})),
                     DynamicTokensMap = maps:from_list(DynamicTokens),
-                    Indexes = lists:usort(maps:keys(DynamicTokensMap)),
-                    [{I, {'for', expand(InExpr, InMacros, State#state.assign_fun_args),
-                        {'if', expand(IfExpr, IfMacros, FunArgs)},
-                        filter_static_tokens(Tokens),
-                        {Indexes, DynamicTokensMap}
+                    [{I, #{
+                        'for' => expand(InExpr, InMacros, State#state.assign_fun_args),
+                        'when' => {'if', expand(IfExpr, IfMacros, FunArgs)},
+                        static => filter_static_tokens(Tokens),
+                        dynamic => DynamicTokensMap,
+                        indexes => lists:usort(maps:keys(DynamicTokensMap))
                     }} | compile(T, P, I + 1, State)];
                 #{'case' := {expr, {CaseExpr, CaseMacros}},
                   'of' := {expr, {OfExpr, _OfMacros}}} ->
@@ -101,11 +102,12 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                         filter_dynamic_tokens(Tokens), [I | P], 0,
                         tag_tokens_state(Tag, P, I, State#state{assign_fun_args = [VarNameExpr | FunArgs]})),
                     DynamicTokensMap = maps:from_list(DynamicTokens),
-                    Indexes = lists:usort(maps:keys(DynamicTokensMap)),
-                    [{I, {'for', expand(InExpr, InMacros, State#state.assign_fun_args),
-                        {'case', expand(Expr, CaseMacros, FunArgs)},
-                        filter_static_tokens(Tokens),
-                        {Indexes, DynamicTokensMap}
+                    [{I, #{
+                        'for' => expand(InExpr, InMacros, State#state.assign_fun_args),
+                        'when' => {'case', expand(Expr, CaseMacros, FunArgs)},
+                        static => filter_static_tokens(Tokens),
+                        dynamic => DynamicTokensMap,
+                        indexes => lists:usort(maps:keys(DynamicTokensMap))
                     }} | compile(T, P, I + 1, State)];
                 #{} ->
                     % TODO: Expand ForExpr.
@@ -114,11 +116,12 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                         filter_dynamic_tokens(Tokens), [I | P], 0,
                         tag_tokens_state(Tag, P, I, State#state{assign_fun_args = FunArgs})),
                     DynamicTokensMap = maps:from_list(DynamicTokens),
-                    Indexes = lists:usort(maps:keys(DynamicTokensMap)),
-                    [{I, {'for', expand(InExpr, InMacros, State#state.assign_fun_args),
-                        nocond,
-                        filter_static_tokens(Tokens),
-                        {Indexes, DynamicTokensMap}
+                    [{I, #{
+                        'for' => expand(InExpr, InMacros, State#state.assign_fun_args),
+                        'when' => nocond,
+                        static => filter_static_tokens(Tokens),
+                        dynamic => DynamicTokensMap,
+                        indexes => lists:usort(maps:keys(DynamicTokensMap))
                     }} | compile(T, P, I + 1, State)]
             end;
         #{'case' := {expr, {CaseExpr, CaseMacros}}, 'of' := {expr, {OfExpr, _OfMacros}}} ->
@@ -138,13 +141,17 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                             [I | P], 0, tag_tokens_state(Tag, P, I,
                                 State#state{assign_fun_args = FunArgs})),
             TokensMap = maps:from_list(Tokens),
-            [{I, {'case', expand(Expr, CaseMacros, State#state.assign_fun_args), #{
-                tag => TokensMap,
-                indexes => lists:usort(maps:keys(TokensMap))
-            }}} | compile(T, P, I + 1, State)];
+            [{I, #{
+                'case' => expand(Expr, CaseMacros, State#state.assign_fun_args),
+                'of' => #{
+                    tag => TokensMap,
+                    indexes => lists:usort(maps:keys(TokensMap))
+                }
+            }} | compile(T, P, I + 1, State)];
         #{'if' := {expr, {Expr, Macros}}} ->
-            [{I, {'if', expand(Expr, Macros, State#state.assign_fun_args),
-                tag_struct(Tag, Txt, T, P, I, State)
+            [{I, #{
+                'if' => expand(Expr, Macros, State#state.assign_fun_args),
+                'then' => tag_struct(Tag, Txt, T, P, I, State)
             }} | compile(T, P, I + 1, State)];
         #{} ->
             [{I, tag_struct(Tag, Txt, T, P, I, State)}

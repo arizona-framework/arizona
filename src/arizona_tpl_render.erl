@@ -99,30 +99,51 @@ render_indexes([], _Block, _Assigns, _Notify) ->
 
 % TODO: Rename all Assigns to Bindings. Now, Assigns is inside Bindings.
 %       Bindings is a list.
-maybe_render({'case', {expr, {Expr, _Vars}}, ToRender}, Assigns, Notify) ->
+maybe_render(#{
+    'case' := {expr, {Expr, _Vars}},
+    'of' := ToRender
+}, Assigns, Notify) ->
     case Expr(Assigns) of
         {true, Value} ->
             render(ToRender, [Value | Assigns], Notify);
         false ->
             <<>>
     end;
-maybe_render({'if', {expr, {Expr, _Vars}}, ToRender}, Assigns, Notify) ->
+maybe_render(#{
+    'if' := {expr, {Expr, _Vars}},
+    'then' := ToRender
+}, Assigns, Notify) ->
     case Expr(Assigns) of
         true ->
             render(ToRender, Assigns, Notify);
         false ->
             <<>>
     end;
-maybe_render({'for', {expr, {ForExpr, _Vars}},
-    nocond, Static, {Indexes, Dynamic}}, Assigns, Notify) ->
+maybe_render(#{
+    'for' := {expr, {ForExpr, _Vars}},
+    'when' := nocond,
+    static := Static,
+    dynamic := Dynamic,
+    indexes := Indexes
+}, Assigns, Notify) ->
     [ zip(Static, render_indexes(Indexes, Dynamic, [Item | Assigns], Notify))
     || Item <- ForExpr(Assigns)];
-maybe_render({'for', {expr, {ForExpr, _Vars}},
-    {'if', {expr, {IfExpr, _IfVars}}}, Static, {Indexes, Dynamic}}, Assigns, Notify) ->
+maybe_render(#{
+    'for' := {expr, {ForExpr, _Vars}},
+    'when' := {'if', {expr, {IfExpr, _IfVars}}},
+    static := Static,
+    dynamic := Dynamic,
+    indexes := Indexes
+}, Assigns, Notify) ->
     [ zip(Static, render_indexes(Indexes, Dynamic, [Item | Assigns], Notify))
     || Item <- ForExpr(Assigns), IfExpr([Item | Assigns])];
-maybe_render({'for', {expr, {ForExpr, _Vars}},
-    {'case', {expr, {CaseExpr, _CaseVars}}}, Static, {Indexes, Dynamic}}, Assigns, Notify) ->
+maybe_render(#{
+    'for' := {expr, {ForExpr, _Vars}},
+    'when' := {'case', {expr, {CaseExpr, _CaseVars}}},
+    static := Static,
+    dynamic := Dynamic,
+    indexes := Indexes
+}, Assigns, Notify) ->
     [ zip(Static, render_indexes(Indexes, Dynamic, [CaseValue, Item | Assigns], Notify))
     || Item <- ForExpr(Assigns),
        case CaseExpr([Item | Assigns]) of
