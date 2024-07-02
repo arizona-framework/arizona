@@ -121,7 +121,7 @@ maybe_render(#{
     end;
 maybe_render(#{
     'for' := {expr, {ForExpr, _Vars}},
-    'when' := nocond,
+    condition := none,
     static := Static,
     dynamic := Dynamic,
     indexes := Indexes
@@ -130,7 +130,7 @@ maybe_render(#{
     || Item <- ForExpr(Assigns)];
 maybe_render(#{
     'for' := {expr, {ForExpr, _Vars}},
-    'when' := {'if', {expr, {IfExpr, _IfVars}}},
+    condition := {'if', {expr, {IfExpr, _IfVars}}},
     static := Static,
     dynamic := Dynamic,
     indexes := Indexes
@@ -139,7 +139,7 @@ maybe_render(#{
     || Item <- ForExpr(Assigns), IfExpr([Item | Assigns])];
 maybe_render(#{
     'for' := {expr, {ForExpr, _Vars}},
-    'when' := {'case', {expr, {CaseExpr, _CaseVars}}},
+    condition := {'case', {expr, {CaseExpr, _CaseVars}}},
     static := Static,
     dynamic := Dynamic,
     indexes := Indexes

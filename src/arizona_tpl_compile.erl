@@ -82,7 +82,7 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                     [{I, #{
                         id => Id,
                         'for' => expand(InExpr, InMacros, State#state.assign_fun_args),
-                        'when' => Cond,
+                        condition => Cond,
                         static => filter_static_tokens(Tokens),
                         dynamic => DynamicTokensMap,
                         indexes => lists:usort(maps:keys(DynamicTokensMap)),
@@ -113,7 +113,7 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                     [{I, #{
                         id => Id,
                         'for' => expand(InExpr, InMacros, State#state.assign_fun_args),
-                        'when' => Cond,
+                        condition => Cond,
                         static => filter_static_tokens(Tokens),
                         dynamic => DynamicTokensMap,
                         indexes => lists:usort(maps:keys(DynamicTokensMap)),
@@ -127,12 +127,12 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                         tag_tokens_state(Tag, P, I, State#state{assign_fun_args = FunArgs})),
                     DynamicTokensMap = maps:from_list(DynamicTokens),
                     Id = id(P, I),
-                    Cond = nocond,
+                    Cond = none,
                     Vars = expr_vars(DynamicTokens, Cond),
                     [{I, #{
                         id => Id,
                         'for' => expand(InExpr, InMacros, State#state.assign_fun_args),
-                        'when' => Cond,
+                        condition => Cond,
                         static => filter_static_tokens(Tokens),
                         dynamic => DynamicTokensMap,
                         indexes => lists:usort(maps:keys(DynamicTokensMap)),
