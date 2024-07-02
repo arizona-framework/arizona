@@ -24,15 +24,17 @@
 -export([scan/2, new_anno/1]).
 
 %% Types
--export_type([anno/0, anno_options/0]).
+-export_type([anno/0, token_anno/0, anno_options/0]).
 
 % Module and function could be undefined in favor of files scanning.
+% This anno struct helps error_info of erlang:error/3 to display
+% a more accurated message when an exception occurs.
 -opaque anno() :: #{
     module => module() | undefined,
     function => atom() | undefined,
     file => binary(),
-    line => non_neg_integer(),
-    column => non_neg_integer(),
+    line => line(),
+    column => column(),
     first_column => non_neg_integer(),
     position => non_neg_integer()
 }.
@@ -41,11 +43,17 @@
     module := module(),
     function := atom(),
     file := string() | binary(),
-    line := non_neg_integer(),
-    column := non_neg_integer(),
+    line := line(),
+    column := column(),
     first_column := non_neg_integer(),
     position := non_neg_integer()
 }.
+
+-type token_anno() :: {source(), location()}.
+-type source() :: {file, binary()} | {module(), atom()}.
+-type location() :: {line(), column()}.
+-type line() :: non_neg_integer().
+-type column() :: non_neg_integer().
 
 %% --------------------------------------------------------------------
 %% API funtions.
@@ -65,28 +73,47 @@ new_anno(Opts) when is_map(Opts) ->
 scan(<<${, Rest/binary>>, Bin, Len, Anno) ->
     maybe_prepend_text_token(Bin, Len, Anno,
         scan_expr(Rest, Bin, incr_anno_pos(Len + 1, Anno)));
+scan(<<$\r, $\n, Rest/binary>>, Bin, Len, Anno) ->
+    scan(Rest, Bin, Len + 2, new_line(Anno));
+scan(<<$\r, Rest/binary>>, Bin, Len, Anno) ->
+    scan(Rest, Bin, Len + 1, new_line(Anno));
+scan(<<$\n, Rest/binary>>, Bin, Len, Anno) ->
+    scan(Rest, Bin, Len + 1, new_line(Anno));
 scan(<<_, Rest/binary>>, Bin, Len, Anno) ->
-    scan(Rest, Bin, Len + 1, Anno);
+    scan(Rest, Bin, Len + 1, incr_anno_col(1, Anno));
 scan(<<>>, Bin, Len, Anno) ->
+    % FIXME: The location (line, column) is incorrect in the last text token.
     maybe_prepend_text_token(Bin, Len, Anno, []).
 
-maybe_prepend_text_token(Bin, Len, _Anno = #{position := Pos}, Tokens) ->
+maybe_prepend_text_token(Bin, Len, Anno = #{position := Pos}, Tokens) ->
     case string:trim(binary_part(Bin, Pos, Len)) of
         <<>> ->
             Tokens;
         Text ->
-            [{text, Text} | Tokens]
+            [{text, token_anno(Anno), Text} | Tokens]
     end.
 
-scan_expr(Rest0, Bin, Anno = #{position := Pos}) ->
-    case find_expr_end(Rest0, 0, 0) of
-        {ok, {Len, MarkerLen, Rest}} ->
+token_anno(Anno) ->
+    {token_source(Anno), token_location(Anno)}.
+
+token_source(#{module := Mod, function := Fun}) when Mod =/= undefined,
+                                                     Fun =/= undefined ->
+    {Mod, Fun};
+token_source(#{file := File}) ->
+    {file, File}.
+
+token_location(#{line := Ln, column := Col}) ->
+    {Ln, Col}.
+
+scan_expr(Rest0, Bin, ExprAnno) ->
+    case find_expr_end(Rest0, _Depth = 0, _Len = 0, ExprAnno) of
+        {ok, {Len, Anno, Rest}} ->
+            Pos = maps:get(position, ExprAnno),
             Expr = binary_part(Bin, Pos, Len),
             Category = expr_category(Expr),
-            [{Category, Expr}
-             | scan(Rest, Bin, 0, incr_anno_pos(Len + MarkerLen, Anno))];
-        {error, Reason} ->
-            erlang:error(Reason, [Rest0, Bin, Anno], [{error_info, Anno}])
+            [{Category, token_anno(ExprAnno), Expr} | scan(Rest, Bin, 0, Anno)];
+        {error, {Reason, Anno}} ->
+            erlang:error(Reason, [Rest0, Bin, ExprAnno], [{error_info, Anno}])
     end.
 
 expr_category(Expr) ->
@@ -97,32 +124,38 @@ expr_category(Expr) ->
             expr
     end.
 
-find_expr_end(<<$}, Rest/binary>>, 0, Len) ->
-    {ok, {Len, 1, Rest}};
-find_expr_end(<<$}, Rest/binary>>, Depth, Len) ->
-    find_expr_end(Rest, Depth - 1, Len + 1);
-find_expr_end(<<${, Rest/binary>>, Depth, Len) ->
-    find_expr_end(Rest, Depth + 1, Len + 1);
-find_expr_end(<<$", Rest0/binary>>, Depth, Len0) ->
-    case find_string_end(Rest0, Len0 + 1) of
-        {ok, {Len, Rest}} ->
-            find_expr_end(Rest, Depth, Len);
-        {error, Reason} ->
-            {error, Reason}
+find_expr_end(<<$}, Rest/binary>>, 0, Len, Anno) ->
+    {ok, {Len, incr_anno_pos(Len + 1, Anno), Rest}};
+find_expr_end(<<$}, Rest/binary>>, Depth, Len, Anno) ->
+    find_expr_end(Rest, Depth - 1, Len + 1, incr_anno_col(1, Anno));
+find_expr_end(<<${, Rest/binary>>, Depth, Len, Anno) ->
+    find_expr_end(Rest, Depth + 1, Len + 1, incr_anno_col(1, Anno));
+find_expr_end(<<$", Rest0/binary>>, Depth, Len0, Anno0) ->
+    case find_string_end(Rest0, Len0 + 1, incr_anno_col(1, Anno0)) of
+        {ok, {Len, Anno, Rest}} ->
+            find_expr_end(Rest, Depth, Len, Anno);
+        {error, ErrInfo} ->
+            {error, ErrInfo}
     end;
-find_expr_end(<<_, Rest/binary>>, Depth, Len) ->
-    find_expr_end(Rest, Depth, Len + 1);
-find_expr_end(<<>>, _Depth, _Len) ->
-    {error, unexpected_expr_end}.
+find_expr_end(<<$\r, $\n, Rest/binary>>, Depth, Len, Anno) ->
+    find_expr_end(Rest, Depth, Len + 2, new_line(Anno));
+find_expr_end(<<$\r, Rest/binary>>, Depth, Len, Anno) ->
+    find_expr_end(Rest, Depth, Len + 1, new_line(Anno));
+find_expr_end(<<$\n, Rest/binary>>, Depth, Len, Anno) ->
+    find_expr_end(Rest, Depth, Len + 1, new_line(Anno));
+find_expr_end(<<_, Rest/binary>>, Depth, Len, Anno) ->
+    find_expr_end(Rest, Depth, Len + 1, incr_anno_col(1, Anno));
+find_expr_end(<<>>, _Depth, Len, Anno) ->
+    {error, {unexpected_expr_end, incr_anno_pos(Len, Anno)}}.
 
-find_string_end(<<$\\, $", Rest/binary>>, Len) ->
-    find_string_end(Rest, Len + 2);
-find_string_end(<<$", Rest/binary>>, Len) ->
-    {ok, {Len + 1, Rest}};
-find_string_end(<<_, Rest/binary>>, Len) ->
-    find_string_end(Rest, Len + 1);
-find_string_end(<<>>, _) ->
-    {error, unexpected_string_end}.
+find_string_end(<<$\\, $", Rest/binary>>, Len, Anno) ->
+    find_string_end(Rest, Len + 2, incr_anno_col(2, Anno));
+find_string_end(<<$", Rest/binary>>, Len, Anno) ->
+    {ok, {Len + 1, incr_anno_col(1, Anno), Rest}};
+find_string_end(<<_, Rest/binary>>, Len, Anno) ->
+    find_string_end(Rest, Len + 1, incr_anno_col(1, Anno));
+find_string_end(<<>>, Len, Anno) ->
+    {error, {unexpected_string_end, incr_anno_pos(Len, Anno)}}.
 
 default_anno() ->
     #{
@@ -152,7 +185,13 @@ normalize_anno_value(first_column, Col) when is_integer(Col), Col >= 0 ->
 normalize_anno_value(position, Pos) when is_integer(Pos), Pos >= 0 ->
     Pos.
 
-incr_anno_pos(N, #{position := Pos} = Anno) ->
+new_line(Anno = #{line := Ln, first_column := Col}) ->
+    Anno#{line => Ln + 1, column => Col}.
+
+incr_anno_col(N, Anno = #{column := Col}) ->
+    Anno#{column => Col + N}.
+
+incr_anno_pos(N, Anno = #{position := Pos}) ->
     Anno#{position => Pos + N}.
 
 %% --------------------------------------------------------------------
@@ -161,38 +200,39 @@ incr_anno_pos(N, #{position := Pos} = Anno) ->
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-define(ANNO, new_anno(#{file => ?FILE})).
 
 scan_test() ->
-    ?assertEqual(
+    ?assertMatch(
         [
-            {text, <<"begin">>},
-            {comment, <<"% comment ">>},
-            {expr, <<"foo">>},
-            {text, <<"end">>}
+            {text, _, <<"begin">>},
+            {comment, _, <<"% comment ">>},
+            {expr, _, <<"foo">>},
+            {text, _, <<"end">>}
         ],
         scan(~"""
         begin
         {% comment }
         {foo}
         end
-        """, new_anno(#{file => ?FILE}))).
+        """, ?ANNO)).
 
 find_expr_end_test() ->
     [
-        ?assertEqual({ok, {10, 1, <<"baz">>}},
-                     find_expr_end(<<"{foo\"bar\"}}baz">>, 0, 0)),
-        ?assertEqual({ok, {8, 1, <<"baz">>}},
-                     find_expr_end(<<"foo\"bar\"}baz">>, 0, 0)),
-        ?assertEqual({error, unexpected_expr_end},
-                     find_expr_end(<<"foo\"bar\"baz">>, 0, 0))
+        ?assertMatch({ok, {10, _, <<"baz">>}},
+                     find_expr_end(<<"{foo\"bar\"}}baz">>, 0, 0, ?ANNO)),
+        ?assertMatch({ok, {8, _, <<"baz">>}},
+                     find_expr_end(<<"foo\"bar\"}baz">>, 0, 0, ?ANNO)),
+        ?assertMatch({error, {unexpected_expr_end, _}},
+                     find_expr_end(<<"foo\"bar\"baz">>, 0, 0, ?ANNO))
     ].
 
 find_string_end_test() ->
     [
-        ?assertEqual({ok, {9, <<"baz">>}},
-                     find_string_end(<<"foo\\\"bar\"baz">>, 0)),
-        ?assertEqual({error, unexpected_string_end},
-                     find_string_end(<<"foo">>, 0))
+        ?assertMatch({ok, {9, _, <<"baz">>}},
+                     find_string_end(<<"foo\\\"bar\"baz">>, 0, ?ANNO)),
+        ?assertMatch({error, {unexpected_string_end, _}},
+                     find_string_end(<<"foo">>, 0, ?ANNO))
     ].
 
 new_anno_test() ->
@@ -213,8 +253,12 @@ new_anno_test() ->
             column => 1,
             first_column => 1,
             position => 0
-        }, new_anno(#{file => ?FILE}))
+        }, ?ANNO)
     ].
+
+incr_anno_pos_test() ->
+    #{position := Pos} = incr_anno_pos(1, new_anno(#{file => ?FILE})),
+    ?assertEqual(1, Pos).
 
 -endif.
 
