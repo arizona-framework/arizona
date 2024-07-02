@@ -153,27 +153,17 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
             "end">>,
             FunArgs = [VarNameExpr | State#state.assign_fun_args],
             TagTokens = compile_tag_1(Tag, Txt, T, P, I, State),
-            Id = id(P, I),
-            Cond = expand(Expr, CaseMacros, State#state.assign_fun_args),
-            [{I, #{
-                id => Id,
-                'case' => Cond,
-                'of' => tag_struct(Tag, TagTokens, {'case', Cond}, P, I,
-                                   State#state{assign_fun_args = FunArgs})
-            }} | compile(T, P, I + 1, State)];
+            Cond = {'case', expand(Expr, CaseMacros, State#state.assign_fun_args)},
+            [{I, tag_struct(Tag, TagTokens, Cond, P, I,
+                            State#state{assign_fun_args = FunArgs})}
+            | compile(T, P, I + 1, State)];
         #{'if' := {expr, {Expr, Macros}}} ->
-            Id = id(P, I),
-            Cond = expand(Expr, Macros, State#state.assign_fun_args),
-            Vars = expr_vars(maps:get(tokens, Tag), {'if', Cond}),
-            [{I, #{
-                id => Id,
-                'if' => Cond,
-                'then' => tag_struct(Tag, Txt, {'if', Cond}, T, P, I, State),
-                vars => vars_group(vars(Vars, Id))
-            }} | compile(T, P, I + 1, State)];
+            Cond = {'if', expand(Expr, Macros, State#state.assign_fun_args)},
+            [{I, tag_struct(Tag, Txt, Cond, T, P, I, State)}
+            | compile(T, P, I + 1, State)];
         #{} ->
             [{I, tag_struct(Tag, Txt, none, T, P, I, State)}
-                | compile(T, P, I + 1, State)]
+            | compile(T, P, I + 1, State)]
     end.
 
 expand(ExprStr, {Macros, _Eval}, Args) ->
@@ -361,13 +351,23 @@ tag_struct(Tag, TagTokens, Cond, P, I, State) ->
     Id = id(P, I),
     Tokens = compile(TagTokens, [I | P], 0, tag_tokens_state(Tag, P, I, State)),
     TokensMap = maps:from_list(Tokens),
-    Vars = expr_vars(Tokens, Cond),
+    FunArgs = State#state.assign_fun_args,
+    Attrs = expand_map(block_attrs(Tag), FunArgs),
+    TokensMap = maps:from_list(Tokens),
+    ExprVars = expr_vars(Tokens, Cond),
+    Directives = expand_map(maps:without(['if', 'case', 'of', 'for', 'in'],
+                                         maps:get(directives, Tag)),
+                            FunArgs),
+    DirsVars = directives_vars(Directives, Id, Cond),
+    Vars = ExprVars ++ DirsVars,
     #{
         id => Id,
         tag => TokensMap,
         indexes => lists:usort(maps:keys(TokensMap)),
-        condition => Cond,
-        vars => Vars
+        directives => maps:with([stateful], Directives),
+        attrs => Attrs,
+        vars => vars_group(vars(Vars, Id)),
+        condition => Cond
     }.
 
 % Document Type Definition
@@ -376,7 +376,11 @@ is_dtd(<<"!doctype">>) -> true;
 is_dtd(<<"?xml">>) -> true;
 is_dtd(_) -> false.
 
+% TODO: Remove this and always pass Cond.
 block_struct(Block, P, I, State) ->
+    block_struct(Block, none, P, I, State).
+
+block_struct(Block, Cond, P, I, State) ->
     {Mod, Fun} = block_mod_fun(Block, State),
     Tree = apply(Mod, Fun, [maps:get(args, Block, #{})]),
     Attrs = block_attrs(Block),
@@ -402,8 +406,8 @@ block_struct(Block, P, I, State) ->
             compile(Tree, [I | P], 0, State)
     end,
     TokensMap = maps:from_list(Tokens),
-    ExprVars = expr_vars(Tokens, vars_cond(AllDirectives)),
-    DirsVars = directives_vars(AllDirectives, Id, vars_cond(AllDirectives)),
+    ExprVars = expr_vars(Tokens, Cond),
+    DirsVars = directives_vars(AllDirectives, Id, Cond),
     Vars = ExprVars ++ DirsVars,
     #{
         id => Id,
@@ -417,7 +421,8 @@ block_struct(Block, P, I, State) ->
         indexes => lists:usort(maps:keys(TokensMap)),
         directives => AllDirectives,
         attrs => AllAttrs,
-        vars => vars_group(vars(Vars, Id))
+        vars => vars_group(vars(Vars, Id)),
+        condition => Cond
     }.
 
 block_mod_fun(#{name := Name}, State) ->
@@ -453,13 +458,6 @@ vars_group(Vars) ->
         fun({Var, _Id}) -> Var end,
         fun({_Var, Id}) -> Id end,
         lists:usort(Vars)).
-
-% TODO: Expand.
-%vars_cond(#{'if' := {expr, {Cond, _Vars}}}) ->
-%    {'if', expand(IfExpr, IfMacros, FunArgs)};
-%    Cond;
-vars_cond(#{}) ->
-    none.
 
 directives_vars(Directives, Id, Cond) ->
     maps:fold(fun
@@ -512,6 +510,13 @@ attrs_vars(Attrs, ExprVars, Id) ->
             Acc0
     end, [], Attrs).
 
+condition_vars({_, {expr, {_Fun, Vars}}}, Id, Cond) ->
+    lists:map(fun(Var) ->
+        {Var, var_path(Cond, Id)}
+    end, Vars);
+condition_vars(none, _, _) ->
+    [].
+
 vars(ExprVars, [0]) ->
     ExprVars;
 vars(ExprVars, PId) ->
@@ -527,11 +532,17 @@ var_path(Cond, Id) ->
 
 expr_vars([{_I, #{expr := _, id := Id, vars := Vars}} | T], Cond) ->
     expr_vars_1(Vars, Id, T, Cond);
-expr_vars([{_I, #{block := _, id := Id, vars := Vars, directives := Dirs, attrs := Attrs}} | T], Cond) ->
-    % TODO: Check Dirs and Attrs cond (vars_cond(Dirs)).
-    directives_vars(Dirs, Attrs, Id, Cond) ++
-        attrs_vars(Attrs, Vars, Id, Cond) ++
-            expr_vars(T, Cond);
+expr_vars([{_I, #{block := _, id := Id, vars := Vars, directives := Dirs, attrs := Attrs} = Block} | T], Cond) ->
+    condition_vars(maps:get(condition, Block), Id, Cond) ++
+        directives_vars(Dirs, Attrs, Id, Cond) ++
+            attrs_vars(Attrs, Vars, Id, Cond) ++
+                expr_vars(T, Cond);
+expr_vars([{_I, #{tag := _, id := Id, vars := Vars, directives := Dirs, attrs := Attrs} = Tag} | T], Cond) ->
+    condition_vars(maps:get(condition, Tag), Id, Cond) ++
+        directives_vars(Dirs, Attrs, Id, Cond) ++
+            attrs_vars(Attrs, Vars, Id, Cond) ++
+                expr_vars(T, Cond);
+%expr_vars([{_I, #{'for' := _, vars := Vars,
 expr_vars([_|T], Cond) ->
     expr_vars(T, Cond);
 expr_vars([], _Cond) ->
