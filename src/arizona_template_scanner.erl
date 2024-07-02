@@ -272,6 +272,14 @@ new_anno_test() ->
         }, ?ANNO)
     ].
 
+new_line_test() ->
+    #{line := Ln, column := Col} = new_line(new_anno(#{file => ?FILE, column => 2})),
+    ?assertEqual({2, 1}, {Ln, Col}).
+
+incr_anno_col_test() ->
+    #{column := Col} = incr_anno_col(1, new_anno(#{file => ?FILE})),
+    ?assertEqual(2, Col).
+
 incr_anno_pos_test() ->
     #{position := Pos} = incr_anno_pos(1, new_anno(#{file => ?FILE})),
     ?assertEqual(1, Pos).
