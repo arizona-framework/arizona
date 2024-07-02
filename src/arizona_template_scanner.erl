@@ -114,11 +114,17 @@ scan_expr(Rest0, Bin, ExprAnno) ->
                 {ok, Category} ->
                     [{Category, token_anno(ExprAnno), Expr} | scan(Rest, Bin, 0, Anno)];
                 error ->
-                    error({badexpr, Expr}, [Rest0, Bin, ExprAnno], [{error_info, Anno}])
+                    error({badexpr, Expr}, [Rest0, Bin, ExprAnno], [{error_info, error_info(Anno)}])
             end;
         {error, {Reason, Anno}} ->
-            error(Reason, [Rest0, Bin, ExprAnno], [{error_info, Anno}])
+            error(Reason, [Rest0, Bin, ExprAnno], [{error_info, error_info(Anno)}])
     end.
+
+error_info(Anno = #{module := Mod, function := Fun}) when Mod =/= undefined,
+                                                          Fun =/= undefined ->
+    maps:with([module, function, line, column], Anno);
+error_info(Anno) ->
+    maps:with([file, line, column], Anno).
 
 expr_category(Expr) ->
     try
