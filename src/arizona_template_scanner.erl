@@ -110,18 +110,27 @@ scan_expr(Rest0, Bin, ExprAnno) ->
         {ok, {Len, Anno, Rest}} ->
             Pos = maps:get(position, ExprAnno),
             Expr = binary_part(Bin, Pos, Len),
-            Category = expr_category(Expr),
-            [{Category, token_anno(ExprAnno), Expr} | scan(Rest, Bin, 0, Anno)];
+            case expr_category(Expr) of
+                {ok, Category} ->
+                    [{Category, token_anno(ExprAnno), Expr} | scan(Rest, Bin, 0, Anno)];
+                error ->
+                    error({badexpr, Expr}, [Rest0, Bin, ExprAnno], [{error_info, Anno}])
+            end;
         {error, {Reason, Anno}} ->
-            erlang:error(Reason, [Rest0, Bin, ExprAnno], [{error_info, Anno}])
+            error(Reason, [Rest0, Bin, ExprAnno], [{error_info, Anno}])
     end.
 
 expr_category(Expr) ->
-    case erl_syntax:type(merl:quote(Expr)) =:= comment of
-        true ->
-            comment;
-        false ->
-            expr
+    try
+        case erl_syntax:type(merl:quote(Expr)) =:= comment of
+            true ->
+                {ok, comment};
+            false ->
+                {ok, expr}
+        end
+    catch
+        _:_ ->
+            error
     end.
 
 find_expr_end(<<$}, Rest/binary>>, 0, Len, Anno) ->
@@ -203,19 +212,20 @@ incr_anno_pos(N, Anno = #{position := Pos}) ->
 -define(ANNO, new_anno(#{file => ?FILE})).
 
 scan_test() ->
-    ?assertMatch(
-        [
+    [
+        ?assertMatch([
             {text, _, <<"begin">>},
             {comment, _, <<"% comment ">>},
             {expr, _, <<"foo">>},
             {text, _, <<"end">>}
-        ],
-        scan(~"""
-        begin
-        {% comment }
-        {foo}
-        end
-        """, ?ANNO)).
+        ], scan(~"""
+            begin
+            {% comment }
+            {foo}
+            end
+            """, ?ANNO)),
+        ?assertError({badexpr, <<"@">>}, scan(<<"foo{@}bar">>, ?ANNO))
+    ].
 
 find_expr_end_test() ->
     [
