@@ -21,10 +21,17 @@
 -moduledoc false.
 
 %% API functions.
--export([scan/2, new_anno/1]).
+-export([scan/2]).
+-export([new_anno/1]).
 
 %% Types
--export_type([anno/0, token_anno/0, anno_options/0]).
+-export_type([anno/0]).
+-export_type([anno_options/0]).
+-export_type([token_anno/0]).
+-export_type([source/0]).
+-export_type([location/0]).
+-export_type([line/0]).
+-export_type([column/0]).
 
 % Module and function could be undefined in favor of files scanning.
 % This anno struct helps error_info of erlang:error/3 to display
@@ -38,7 +45,6 @@
     first_column => non_neg_integer(),
     position => non_neg_integer()
 }.
-
 -type anno_options() :: #{
     module := module(),
     function := atom(),
@@ -48,7 +54,6 @@
     first_column := non_neg_integer(),
     position := non_neg_integer()
 }.
-
 -type token_anno() :: {source(), location()}.
 -type source() :: {file, binary()} | {module(), atom()}.
 -type location() :: {line(), column()}.
