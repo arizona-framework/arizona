@@ -233,6 +233,13 @@ scan_test() ->
         ?assertError({badexpr, <<"@">>}, scan(<<"foo{@}bar">>, ?ANNO))
     ].
 
+expr_category_test() ->
+    [
+        ?assertEqual({ok, expr}, expr_category("foo")),
+        ?assertEqual({ok, comment}, expr_category("%foo")),
+        ?assertEqual(error, expr_category("@"))
+    ].
+
 find_expr_end_test() ->
     [
         ?assertMatch({ok, {10, _, <<"baz">>}},
