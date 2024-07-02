@@ -52,7 +52,7 @@
 %% --------------------------------------------------------------------
 
 scan(Bin, Anno) when is_binary(Bin), is_map(Anno) ->
-    scan(Bin, _Len = 0, Anno).
+    scan(Bin, Bin, _Len = 0, Anno).
 
 new_anno(Opts) when is_map(Opts) ->
     Anno = maps:merge(default_anno(), Opts),
@@ -62,8 +62,67 @@ new_anno(Opts) when is_map(Opts) ->
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
-scan(_Bin, _Len, _Anno) ->
-    error(not_implemented_yet).
+scan(<<${, Rest/binary>>, Bin, Len, Anno) ->
+    maybe_prepend_text_token(Bin, Len, Anno,
+        scan_expr(Rest, Bin, incr_anno_pos(Len + 1, Anno)));
+scan(<<_, Rest/binary>>, Bin, Len, Anno) ->
+    scan(Rest, Bin, Len + 1, Anno);
+scan(<<>>, Bin, Len, Anno) ->
+    maybe_prepend_text_token(Bin, Len, Anno, []).
+
+maybe_prepend_text_token(Bin, Len, _Anno = #{position := Pos}, Tokens) ->
+    case string:trim(binary_part(Bin, Pos, Len)) of
+        <<>> ->
+            Tokens;
+        Text ->
+            [{text, Text} | Tokens]
+    end.
+
+scan_expr(Rest0, Bin, Anno = #{position := Pos}) ->
+    case find_expr_end(Rest0, 0, 0) of
+        {ok, {Len, MarkerLen, Rest}} ->
+            Expr = binary_part(Bin, Pos, Len),
+            Category = expr_category(Expr),
+            [{Category, Expr}
+             | scan(Rest, Bin, 0, incr_anno_pos(Len + MarkerLen, Anno))];
+        {error, Reason} ->
+            erlang:error(Reason, [Rest0, Bin, Anno], [{error_info, Anno}])
+    end.
+
+expr_category(Expr) ->
+    case erl_syntax:type(merl:quote(Expr)) =:= comment of
+        true ->
+            comment;
+        false ->
+            expr
+    end.
+
+find_expr_end(<<$}, Rest/binary>>, 0, Len) ->
+    {ok, {Len, 1, Rest}};
+find_expr_end(<<$}, Rest/binary>>, Depth, Len) ->
+    find_expr_end(Rest, Depth - 1, Len + 1);
+find_expr_end(<<${, Rest/binary>>, Depth, Len) ->
+    find_expr_end(Rest, Depth + 1, Len + 1);
+find_expr_end(<<$", Rest0/binary>>, Depth, Len0) ->
+    case find_string_end(Rest0, Len0 + 1) of
+        {ok, {Len, Rest}} ->
+            find_expr_end(Rest, Depth, Len);
+        {error, Reason} ->
+            {error, Reason}
+    end;
+find_expr_end(<<_, Rest/binary>>, Depth, Len) ->
+    find_expr_end(Rest, Depth, Len + 1);
+find_expr_end(<<>>, _Depth, _Len) ->
+    {error, unexpected_expr_end}.
+
+find_string_end(<<$\\, $", Rest/binary>>, Len) ->
+    find_string_end(Rest, Len + 2);
+find_string_end(<<$", Rest/binary>>, Len) ->
+    {ok, {Len + 1, Rest}};
+find_string_end(<<_, Rest/binary>>, Len) ->
+    find_string_end(Rest, Len + 1);
+find_string_end(<<>>, _) ->
+    {error, unexpected_string_end}.
 
 default_anno() ->
     #{
@@ -93,12 +152,48 @@ normalize_anno_value(first_column, Col) when is_integer(Col), Col >= 0 ->
 normalize_anno_value(position, Pos) when is_integer(Pos), Pos >= 0 ->
     Pos.
 
+incr_anno_pos(N, #{position := Pos} = Anno) ->
+    Anno#{position => Pos + N}.
+
 %% --------------------------------------------------------------------
 %% EUnit tests.
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+
+scan_test() ->
+    ?assertEqual(
+        [
+            {text, <<"begin">>},
+            {comment, <<"% comment ">>},
+            {expr, <<"foo">>},
+            {text, <<"end">>}
+        ],
+        scan(~"""
+        begin
+        {% comment }
+        {foo}
+        end
+        """, new_anno(#{file => ?FILE}))).
+
+find_expr_end_test() ->
+    [
+        ?assertEqual({ok, {10, 1, <<"baz">>}},
+                     find_expr_end(<<"{foo\"bar\"}}baz">>, 0, 0)),
+        ?assertEqual({ok, {8, 1, <<"baz">>}},
+                     find_expr_end(<<"foo\"bar\"}baz">>, 0, 0)),
+        ?assertEqual({error, unexpected_expr_end},
+                     find_expr_end(<<"foo\"bar\"baz">>, 0, 0))
+    ].
+
+find_string_end_test() ->
+    [
+        ?assertEqual({ok, {9, <<"baz">>}},
+                     find_string_end(<<"foo\\\"bar\"baz">>, 0)),
+        ?assertEqual({error, unexpected_string_end},
+                     find_string_end(<<"foo">>, 0))
+    ].
 
 new_anno_test() ->
     [
