@@ -152,21 +152,14 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                 "_ -> false "
             "end">>,
             FunArgs = [VarNameExpr | State#state.assign_fun_args],
-            Tokens = compile(compile_tag_1(Tag, Txt, T, P, I, State),
-                            [I | P], 0, tag_tokens_state(Tag, P, I,
-                                State#state{assign_fun_args = FunArgs})),
-            TokensMap = maps:from_list(Tokens),
+            TagTokens = compile_tag_1(Tag, Txt, T, P, I, State),
             Id = id(P, I),
             Cond = expand(Expr, CaseMacros, State#state.assign_fun_args),
-            Vars = expr_vars(maps:get(tokens, Tag), {'case', Cond}),
             [{I, #{
                 id => Id,
                 'case' => Cond,
-                'of' => #{
-                    tag => TokensMap,
-                    indexes => lists:usort(maps:keys(TokensMap))
-                },
-                vars => vars_group(vars(Vars, Id))
+                'of' => tag_struct(Tag, TagTokens, {'case', Cond}, P, I,
+                                   State#state{assign_fun_args = FunArgs})
             }} | compile(T, P, I + 1, State)];
         #{'if' := {expr, {Expr, Macros}}} ->
             Id = id(P, I),
@@ -176,8 +169,7 @@ compile_tag(#{directives := Directives} = Tag, Txt, T, P, I, State) ->
                 id => Id,
                 'if' => Cond,
                 'then' => tag_struct(Tag, Txt, {'if', Cond}, T, P, I, State),
-                vars => vars_group(vars(Vars, Id)),
-                test =>tag_struct(Tag, Txt, {'if', Cond}, T, P, I, State)
+                vars => vars_group(vars(Vars, Id))
             }} | compile(T, P, I + 1, State)];
         #{} ->
             [{I, tag_struct(Tag, Txt, none, T, P, I, State)}
@@ -362,9 +354,12 @@ expr_struct({Expr, ExprMacros}, _Macros, Args, P, I) ->
 
 % TODO: Remove Txt and T.
 tag_struct(Tag, Txt, Cond, T, P, I, State) ->
+    TagTokens = compile_tag_1(Tag, Txt, T, P, I, State),
+    tag_struct(Tag, TagTokens, Cond, P, I, State).
+
+tag_struct(Tag, TagTokens, Cond, P, I, State) ->
     Id = id(P, I),
-    Tokens = compile(compile_tag_1(Tag, Txt, T, P, I, State),
-                [I | P], 0, tag_tokens_state(Tag, P, I, State)),
+    Tokens = compile(TagTokens, [I | P], 0, tag_tokens_state(Tag, P, I, State)),
     TokensMap = maps:from_list(Tokens),
     Vars = expr_vars(Tokens, Cond),
     #{
