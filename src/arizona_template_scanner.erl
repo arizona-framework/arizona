@@ -32,22 +32,15 @@
 -export_type([line/0]).
 -export_type([column/0]).
 
-% Module and function could be undefined in favor of files scanning.
-% This anno struct helps error_info of erlang:error/3 to display
-% a more accurated message when an exception occurs.
 -opaque anno() :: #{
-    module => module() | undefined,
-    function => atom() | undefined,
-    file => binary(),
+    source => {function, {module(), atom()}} | {file, binary()} | none,
     line => line(),
     column => column(),
     first_column => non_neg_integer(),
     position => non_neg_integer()
 }.
 -type anno_options() :: #{
-    module := module(),
-    function := atom(),
-    file := string() | binary(),
+    source := {module(), atom()} | file:filename_all() | none,
     line := line(),
     column := column(),
     first_column := non_neg_integer(),
@@ -353,34 +346,36 @@ token_location(#{line := Ln, column := Col}) ->
 raise({Reason, Anno}) ->
     error(Reason, none, [{error_info, error_info(Anno)}]).
 
-error_info(#{module := Mod, function := Fun} = Anno)
-    when Mod =/= undefined,
-         Fun =/= undefined ->
-    maps:with([module, function, line, column], Anno);
-error_info(Anno) ->
-    maps:with([file, line, column], Anno).
+error_info(#{source := Source} = Anno) ->
+    maps:merge(error_source_info(Source),
+               maps:with([line, column], Anno)).
+
+error_source_info({function, {Mod, Fun}}) ->
+    #{module => Mod, funtion => Fun};
+error_source_info({file, File}) ->
+    #{file => File};
+error_source_info(none) ->
+    #{}.
 
 %% Anno.
 
 default_anno() ->
     #{
-        module => undefined,
-        function => undefined,
-        file => undefined,
+        source => none,
         line => 1,
         column => 1,
         first_column => 1,
         position => 0
     }.
 
-normalize_anno_value(module, Mod) when is_atom(Mod) ->
-    Mod;
-normalize_anno_value(function, Fun) when is_atom(Fun) ->
-    Fun;
-normalize_anno_value(file, File) when is_binary(File) ->
-    File;
-normalize_anno_value(file, File) when is_list(File) ->
-    iolist_to_binary(File);
+normalize_anno_value(source, {Mod, Fun}) when is_atom(Mod), is_atom(Fun) ->
+    {function, {Mod, Fun}};
+normalize_anno_value(source, File) when is_list(File) ->
+    {file, iolist_to_binary(File)};
+normalize_anno_value(source, File) when is_binary(File) ->
+    {file, File};
+normalize_anno_value(source, none) ->
+    none;
 normalize_anno_value(line, Ln) when is_integer(Ln), Ln >= 0 ->
     Ln;
 normalize_anno_value(column, Col) when is_integer(Col), Col >= 0 ->
@@ -405,7 +400,7 @@ incr_anno_pos(N, #{position := Pos} = Anno) ->
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--define(ANNO, new_anno(#{file => ?FILE})).
+-define(ANNO, new_anno(#{})).
 
 scan_test() ->
     [
@@ -460,18 +455,13 @@ scan_double_quoted_string_test() ->
 
 new_anno_test() ->
     [
-        ?assertError(function_clause, new_anno(#{})),
-        ?assertError(function_clause, new_anno(#{module => -1})),
-        ?assertError(function_clause, new_anno(#{function => -1})),
-        ?assertError(function_clause, new_anno(#{file => -1})),
+        ?assertError(function_clause, new_anno(#{source => -1})),
         ?assertError(function_clause, new_anno(#{line => -1})),
         ?assertError(function_clause, new_anno(#{column => -1})),
         ?assertError(function_clause, new_anno(#{first_column => -1})),
         ?assertError(function_clause, new_anno(#{position => -10})),
         ?assertEqual(#{
-            module => undefined,
-            function => undefined,
-            file => iolist_to_binary(?FILE),
+            source => none,
             line => 1,
             column => 1,
             first_column => 1,
@@ -480,15 +470,15 @@ new_anno_test() ->
     ].
 
 new_line_test() ->
-    #{line := Ln, column := Col} = new_line(new_anno(#{file => ?FILE, column => 2})),
+    #{line := Ln, column := Col} = new_line(new_anno(#{column => 2})),
     ?assertEqual({2, 1}, {Ln, Col}).
 
 incr_anno_col_test() ->
-    #{column := Col} = incr_anno_col(1, new_anno(#{file => ?FILE})),
+    #{column := Col} = incr_anno_col(1, new_anno(#{})),
     ?assertEqual(2, Col).
 
 incr_anno_pos_test() ->
-    #{position := Pos} = incr_anno_pos(1, new_anno(#{file => ?FILE})),
+    #{position := Pos} = incr_anno_pos(1, new_anno(#{})),
     ?assertEqual(1, Pos).
 
 -endif.
