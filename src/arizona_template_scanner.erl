@@ -97,7 +97,7 @@ scan(<<>>, Bin, Len, Anno) ->
     maybe_prepend_text_token(Bin, Len, Anno, []).
 
 scan_expr(Rest0, Bin, ExprAnno) ->
-    case scan_expr_end(Rest0, _Depth = 0, _Len = 0, ExprAnno) of
+    case scan_expr_end(Rest0, 0, 0, ExprAnno) of
         {ok, {Len, MarkerLen, Anno, Rest}} ->
             Pos = maps:get(position, ExprAnno),
             Expr = binary_part(Bin, Pos, Len),
@@ -106,10 +106,10 @@ scan_expr(Rest0, Bin, ExprAnno) ->
                     [{Category, token_anno(ExprAnno), Expr}
                      | scan(Rest, Bin, 0, incr_anno_pos(Len + MarkerLen, Anno))];
                 error ->
-                    error(badexpr, [Rest0, Bin, ExprAnno], [{error_info, error_info(Anno)}])
+                    raise({badexpr, Anno})
             end;
-        {error, {Reason, Anno}} ->
-            error(Reason, [Rest0, Bin, ExprAnno], [{error_info, error_info(Anno)}])
+        {error, Reason} ->
+            raise(Reason)
     end.
 
 scan_expr_end(<<$}, Rest/binary>>, 0, Len, Anno) ->
@@ -147,20 +147,21 @@ scan_tag(Rest0, Bin, TagAnno) ->
         {ok, {Len, Anno, Rest}} when Len > 0 ->
             Pos = maps:get(position, TagAnno),
             TagName = binary_part(Bin, Pos, Len),
-            [{open_tag, token_anno(TagAnno), TagName} | scan_tag_attrs(Rest, Bin, incr_anno_pos(Len, Anno))];
-        {error, {Reason, Anno}} ->
-            error(Reason, [Rest0, Bin, TagAnno], [{error_info, error_info(Anno)}])
+            [{open_tag, token_anno(TagAnno), TagName}
+             | scan_tag_attrs(Rest, Bin, incr_anno_pos(Len, Anno))];
+        {error, Reason} ->
+            raise(Reason)
     end.
 
-scan_tag_name(Rest = <<$/, $>, _/binary>>, Len, Anno) ->
+scan_tag_name(<<$/, $>, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
-scan_tag_name(Rest = <<$>, _/binary>>, Len, Anno) ->
+scan_tag_name(<<$>, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
-scan_tag_name(Rest = <<$\s, _/binary>>, Len, Anno) ->
+scan_tag_name(<<$\s, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
-scan_tag_name(Rest = <<$\r, _/binary>>, Len, Anno) ->
+scan_tag_name(<<$\r, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
-scan_tag_name(Rest = <<$\n, _/binary>>, Len, Anno) ->
+scan_tag_name(<<$\n, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
 scan_tag_name(<<_, Rest/binary>>, Len, Anno) ->
     scan_tag_name(Rest, Len + 1, incr_anno_col(1, Anno));
@@ -189,28 +190,30 @@ scan_tag_attrs(Rest0, Bin, AttrsAnno) ->
             ValAnno = incr_anno_pos(KeyLen, KeyAnno),
             case scan_tag_attr_value(Rest1, Bin, ValAnno) of
                 {ok, {Value, Anno, Rest}} ->
-                    [{attr_key, token_anno(KeyAnno), Key}, {attr_value, token_anno(ValAnno), Value}
+                    [{attr_key, token_anno(KeyAnno), Key},
+                     {attr_value, token_anno(ValAnno), Value}
                      | scan_tag_attrs(Rest, Bin, Anno)];
                 {none, {Anno, Rest}} ->
-                    [{bool_attr, token_anno(ValAnno), Key} | scan_tag_attrs(Rest, Bin, Anno)];
-                {error, {Reason, Anno}} ->
-                    error(Reason, [Rest0, Bin, AttrsAnno], [{error_info, error_info(Anno)}])
+                    [{bool_attr, token_anno(ValAnno), Key}
+                     | scan_tag_attrs(Rest, Bin, Anno)];
+                {error, Reason} ->
+                    raise(Reason)
             end;
-        {error, {Reason, Anno}} ->
-            error(Reason, [Rest0, Bin, AttrsAnno], [{error_info, error_info(Anno)}])
+        {error, Reason} ->
+            raise(Reason)
     end.
 
-scan_tag_attr_key(Rest = <<$=, _/binary>>, Len, Anno) ->
+scan_tag_attr_key(<<$=, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
-scan_tag_attr_key(Rest = <<$/, $>, _/binary>>, Len, Anno) ->
+scan_tag_attr_key(<<$/, $>, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
-scan_tag_attr_key(Rest = <<$>, _/binary>>, Len, Anno) ->
+scan_tag_attr_key(<<$>, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
-scan_tag_attr_key(Rest = <<$\s, _/binary>>, Len, Anno) ->
+scan_tag_attr_key(<<$\s, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
-scan_tag_attr_key(Rest = <<$\r, _/binary>>, Len, Anno) ->
+scan_tag_attr_key(<<$\r, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
-scan_tag_attr_key(Rest = <<$\n, _/binary>>, Len, Anno) ->
+scan_tag_attr_key(<<$\n, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
 scan_tag_attr_key(<<_, Rest/binary>>, Len, Anno) ->
     scan_tag_attr_key(Rest, Len + 1, incr_anno_col(1, Anno));
@@ -241,7 +244,7 @@ scan_tag_attr_value(<<$=, $", Rest0/binary>>, Bin, KeyAnno) ->
     end;
 scan_tag_attr_value(<<$=, ${, Rest0/binary>>, Bin, KeyAnno) ->
     ValAnno = incr_anno_col(2, incr_anno_pos(2, KeyAnno)),
-    case scan_expr_end(Rest0, _Depth = 0, _Len = 0, ValAnno) of
+    case scan_expr_end(Rest0, 0, 0, ValAnno) of
         {ok, {Len, MarkerLen, ExprAnno, Rest}} ->
             Pos = maps:get(position, ValAnno),
             Expr = binary_part(Bin, Pos, Len),
@@ -265,25 +268,27 @@ scan_tag_attr_value(Rest, _Bin, Anno) ->
 scan_closing_tag(Rest0, Bin, TagAnno) ->
     case scan_closing_tag_name(Rest0, 0, TagAnno) of
         {ok, {TagNameLen, TagNameAnno, Rest1}} when TagNameLen > 0 ->
-            case scan_closing_tag_end(Rest1, 0, incr_anno_pos(TagNameLen, TagNameAnno)) of
+            TagEndAnno = incr_anno_pos(TagNameLen, TagNameAnno),
+            case scan_closing_tag_end(Rest1, 0, TagEndAnno) of
                 {ok, {Anno, Rest}} ->
                     Pos = maps:get(position, TagAnno),
                     TagName = binary_part(Bin, Pos, TagNameLen),
-                    [{closing_tag, token_anno(TagAnno), TagName} | scan(Rest, Bin, 0, Anno)];
-                {error, {Reason, Anno}} ->
-                    error(Reason, [Rest0, Bin, TagAnno], [{error_info, error_info(Anno)}])
+                    [{closing_tag, token_anno(TagAnno), TagName}
+                     | scan(Rest, Bin, 0, Anno)];
+                {error, Reason} ->
+                    raise(Reason)
             end;
-        {error, {Reason, Anno}} ->
-            error(Reason, [Rest0, Bin, TagAnno], [{error_info, error_info(Anno)}])
+        {error, Reason} ->
+            raise(Reason)
     end.
 
-scan_closing_tag_name(Rest = <<$>, _/binary>>, Len, Anno) ->
+scan_closing_tag_name(<<$>, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
-scan_closing_tag_name(Rest = <<$\s, _/binary>>, Len, Anno) ->
+scan_closing_tag_name(<<$\s, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
-scan_closing_tag_name(Rest = <<$\r, _/binary>>, Len, Anno) ->
+scan_closing_tag_name(<<$\r, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
-scan_closing_tag_name(Rest = <<$\n, _/binary>>, Len, Anno) ->
+scan_closing_tag_name(<<$\n, _/binary>> = Rest, Len, Anno) ->
     {ok, {Len, Anno, Rest}};
 scan_closing_tag_name(<<_, Rest/binary>>, Len, Anno) ->
     scan_closing_tag_name(Rest, Len + 1, incr_anno_col(1, Anno));
@@ -333,7 +338,7 @@ scan_double_quoted_string(<<_, Rest/binary>>, Len, Anno) ->
 scan_double_quoted_string(<<>>, Len, Anno) ->
     {error, {unexpected_string_end, incr_anno_pos(Len, Anno)}}.
 
-maybe_prepend_text_token(Bin, Len, Anno = #{position := Pos}, Tokens) ->
+maybe_prepend_text_token(Bin, Len, #{position := Pos} = Anno, Tokens) ->
     case string:trim(binary_part(Bin, Pos, Len)) of
         <<>> ->
             Tokens;
@@ -354,7 +359,10 @@ token_source(#{file := File}) ->
 token_location(#{line := Ln, column := Col}) ->
     {Ln, Col}.
 
-error_info(Anno = #{module := Mod, function := Fun})
+raise({Reason, Anno}) ->
+    error(Reason, none, [{error_info, error_info(Anno)}]).
+
+error_info(#{module := Mod, function := Fun} = Anno)
     when Mod =/= undefined,
          Fun =/= undefined ->
     maps:with([module, function, line, column], Anno);
@@ -391,13 +399,13 @@ normalize_anno_value(first_column, Col) when is_integer(Col), Col >= 0 ->
 normalize_anno_value(position, Pos) when is_integer(Pos), Pos >= 0 ->
     Pos.
 
-new_line(Anno = #{line := Ln, first_column := Col}) ->
+new_line(#{line := Ln, first_column := Col} = Anno) ->
     Anno#{line => Ln + 1, column => Col}.
 
-incr_anno_col(N, Anno = #{column := Col}) ->
+incr_anno_col(N, #{column := Col} = Anno) ->
     Anno#{column => Col + N}.
 
-incr_anno_pos(N, Anno = #{position := Pos}) ->
+incr_anno_pos(N, #{position := Pos} = Anno) ->
     Anno#{position => Pos + N}.
 
 %% --------------------------------------------------------------------
