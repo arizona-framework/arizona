@@ -66,38 +66,56 @@ new_anno(Opts) when is_map(Opts) ->
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
-scan(<<${, Rest/binary>>, Bin, Len, Anno) ->
-    maybe_prepend_text_token(Bin, Len, Anno,
-        scan_expr(Rest, Bin, incr_anno_pos(Len + 1, Anno)));
-scan(<<$<, $/, Rest/binary>>, Bin, Len, Anno) ->
-    maybe_prepend_text_token(Bin, Len, Anno,
-        scan_closing_tag(Rest, Bin, incr_anno_pos(Len + 2, Anno)));
-scan(<<$<, Rest/binary>>, Bin, Len, Anno) ->
-    maybe_prepend_text_token(Bin, Len, Anno,
-        scan_tag(Rest, Bin, incr_anno_pos(Len + 1, Anno)));
-scan(<<$\r, $\n, Rest/binary>>, Bin, Len, Anno) ->
-    scan(Rest, Bin, Len + 2, new_line(Anno));
-scan(<<$\r, Rest/binary>>, Bin, Len, Anno) ->
-    scan(Rest, Bin, Len + 1, new_line(Anno));
-scan(<<$\n, Rest/binary>>, Bin, Len, Anno) ->
-    scan(Rest, Bin, Len + 1, new_line(Anno));
-scan(<<_, Rest/binary>>, Bin, Len, Anno) ->
-    scan(Rest, Bin, Len + 1, incr_anno_col(1, Anno));
-scan(<<>>, Bin, Len, Anno) ->
-    % FIXME: The location (line, column) is incorrect in the last text token.
-    maybe_prepend_text_token(Bin, Len, Anno, []).
+scan(Rest0, Bin, Len, Anno0) ->
+    case skip_trailing_spaces(Rest0, Anno0) of
+        {true, {Rest, Anno}} ->
+            scan(Rest, Bin, Len, Anno, Anno);
+        false ->
+            scan(Rest0, Bin, Len, Anno0, Anno0)
+    end.
 
-scan_expr(Rest0, Bin, ExprAnno) ->
+skip_trailing_spaces(<<$\s, Rest/binary>>, Anno) ->
+    skip_trailing_spaces(Rest, incr_anno_pos(1, Anno));
+skip_trailing_spaces(<<$\r, $\n, Rest/binary>>, Anno) ->
+    {true, {Rest, new_line(incr_anno_pos(2, Anno))}};
+skip_trailing_spaces(<<$\r, Rest/binary>>, Anno) ->
+    {true, {Rest, new_line(incr_anno_pos(1, Anno))}};
+skip_trailing_spaces(<<$\n, Rest/binary>>, Anno) ->
+    {true, {Rest, new_line(incr_anno_pos(1, Anno))}};
+skip_trailing_spaces(_Rest, _Anno) ->
+    false.
+
+scan(<<${, Rest/binary>>, Bin, Len, TxtAnno, Anno) ->
+    maybe_prepend_text_token(Bin, Len, TxtAnno,
+        scan_expr(Rest, Bin, 1, incr_anno_pos(Len + 1, Anno)));
+scan(<<$<, $/, Rest/binary>>, Bin, Len, TxtAnno, Anno) ->
+    maybe_prepend_text_token(Bin, Len, TxtAnno,
+        scan_closing_tag(Rest, Bin, 2, incr_anno_pos(Len + 2, Anno)));
+scan(<<$<, Rest/binary>>, Bin, Len, TxtAnno, Anno) ->
+    maybe_prepend_text_token(Bin, Len, TxtAnno,
+        scan_tag(Rest, Bin, 1, incr_anno_pos(Len + 1, Anno)));
+scan(<<$\r, $\n, Rest/binary>>, Bin, Len, TxtAnno, Anno) ->
+    scan(Rest, Bin, Len + 2, TxtAnno, new_line(Anno));
+scan(<<$\r, Rest/binary>>, Bin, Len, TxtAnno, Anno) ->
+    scan(Rest, Bin, Len + 1, TxtAnno, new_line(Anno));
+scan(<<$\n, Rest/binary>>, Bin, Len, TxtAnno, Anno) ->
+    scan(Rest, Bin, Len + 1, TxtAnno, new_line(Anno));
+scan(<<_, Rest/binary>>, Bin, Len, TxtAnno, Anno) ->
+    scan(Rest, Bin, Len + 1, TxtAnno, incr_anno_col(1, Anno));
+scan(<<>>, Bin, Len, TxtAnno, _Anno) ->
+    maybe_prepend_text_token(Bin, Len, TxtAnno, []).
+
+scan_expr(Rest0, Bin, StartMarkerLen, ExprAnno) ->
     case scan_expr_end(Rest0, 0, 0, ExprAnno) of
-        {ok, {Len, MarkerLen, Anno, Rest}} ->
+        {ok, {Len, EndMarkerLen, Anno0, Rest}} ->
             Pos = maps:get(position, ExprAnno),
             Expr = binary_part(Bin, Pos, Len),
             case expr_category(Expr) of
                 {ok, Category} ->
-                    [{Category, token_anno(ExprAnno), Expr}
-                     | scan(Rest, Bin, 0, incr_anno_pos(Len + MarkerLen, Anno))];
+                    Anno = incr_anno_col(StartMarkerLen, incr_anno_pos(Len + EndMarkerLen, Anno0)),
+                    [{Category, token_anno(ExprAnno), Expr} | scan(Rest, Bin, 0, Anno)];
                 error ->
-                    raise({badexpr, Anno})
+                    raise({badexpr, Anno0})
             end;
         {error, Reason} ->
             raise(Reason)
@@ -133,13 +151,13 @@ expr_category(Expr) ->
             error
     end.
 
-scan_tag(Rest0, Bin, TagAnno) ->
+scan_tag(Rest0, Bin, StartMarkerLen, TagAnno) ->
     case scan_tag_name(Rest0, 0, TagAnno) of
-        {ok, {Len, Anno, Rest}} when Len > 0 ->
+        {ok, {Len, Anno0, Rest}} when Len > 0 ->
             Pos = maps:get(position, TagAnno),
             TagName = binary_part(Bin, Pos, Len),
-            [{open_tag, token_anno(TagAnno), TagName}
-             | scan_tag_attrs(Rest, Bin, incr_anno_pos(Len, Anno))];
+            Anno = incr_anno_col(StartMarkerLen, incr_anno_pos(Len, Anno0)),
+            [{open_tag, token_anno(TagAnno), TagName} | scan_tag_attrs(Rest, Bin, Anno)];
         {error, Reason} ->
             raise(Reason)
     end.
@@ -173,19 +191,19 @@ scan_tag_attrs(<<$\r, Rest/binary>>, Bin, Anno) ->
     scan_tag_attrs(Rest, Bin, new_line(incr_anno_pos(1, Anno)));
 scan_tag_attrs(<<$\n, Rest/binary>>, Bin, Anno) ->
     scan_tag_attrs(Rest, Bin, new_line(incr_anno_pos(1, Anno)));
-scan_tag_attrs(Rest0, Bin, AttrsAnno) ->
-    case scan_tag_attr_key(Rest0, 0, AttrsAnno) of
-        {ok, {KeyLen, KeyAnno, Rest1}} when KeyLen > 0 ->
-            KeyPos = maps:get(position, AttrsAnno),
+scan_tag_attrs(Rest0, Bin, KeyAnno) ->
+    case scan_tag_attr_key(Rest0, 0, KeyAnno) of
+        {ok, {KeyLen, NextAnno, Rest1}} when KeyLen > 0 ->
+            KeyPos = maps:get(position, KeyAnno),
             Key = binary_part(Bin, KeyPos, KeyLen),
-            ValAnno = incr_anno_pos(KeyLen, KeyAnno),
+            ValAnno = incr_anno_pos(KeyLen, NextAnno),
             case scan_tag_attr_value(Rest1, Bin, ValAnno) of
-                {ok, {Value, Anno, Rest}} ->
+                {ok, {Value, MarkerLen, Anno, Rest}} ->
                     [{attr_key, token_anno(KeyAnno), Key},
-                     {attr_value, token_anno(ValAnno), Value}
+                     {attr_value, token_anno(incr_anno_col(MarkerLen, ValAnno)), Value}
                      | scan_tag_attrs(Rest, Bin, Anno)];
                 {none, {Anno, Rest}} ->
-                    [{bool_attr, token_anno(ValAnno), Key}
+                    [{bool_attr, token_anno(KeyAnno), Key}
                      | scan_tag_attrs(Rest, Bin, Anno)];
                 {error, Reason} ->
                     raise(Reason)
@@ -217,8 +235,8 @@ scan_tag_attr_value(<<$=, $', Rest0/binary>>, Bin, KeyAnno) ->
         {ok, {Len, MarkerLen, TxtAnno, Rest}} ->
             Pos = maps:get(position, ValAnno),
             Txt = binary_part(Bin, Pos, Len),
-            Anno = incr_anno_pos(Len + MarkerLen, TxtAnno),
-            {ok, {{text, Txt}, Anno, Rest}};
+            Anno = incr_anno_col(MarkerLen, incr_anno_pos(Len + MarkerLen, TxtAnno)),
+            {ok, {{text, Txt}, 1, Anno, Rest}};
         {error, {Reason, Anno}} ->
             {error, {Reason, Anno}}
     end;
@@ -228,8 +246,8 @@ scan_tag_attr_value(<<$=, $", Rest0/binary>>, Bin, KeyAnno) ->
         {ok, {Len, MarkerLen, TxtAnno, Rest}} ->
             Pos = maps:get(position, ValAnno),
             Txt = binary_part(Bin, Pos, Len),
-            Anno = incr_anno_pos(Len + MarkerLen, TxtAnno),
-            {ok, {{text, Txt}, Anno, Rest}};
+            Anno = incr_anno_col(MarkerLen, incr_anno_pos(Len + MarkerLen, TxtAnno)),
+            {ok, {{text, Txt}, 1, Anno, Rest}};
         {error, {Reason, Anno}} ->
             {error, {Reason, Anno}}
     end;
@@ -241,8 +259,8 @@ scan_tag_attr_value(<<$=, ${, Rest0/binary>>, Bin, KeyAnno) ->
             Expr = binary_part(Bin, Pos, Len),
             case expr_category(Expr) of
                 {ok, expr} ->
-                    Anno = incr_anno_pos(Len + MarkerLen, ExprAnno),
-                    {ok, {{expr, Expr}, Anno, Rest}};
+                    Anno = incr_anno_col(MarkerLen, incr_anno_pos(Len + MarkerLen, ExprAnno)),
+                    {ok, {{expr, Expr}, 1, Anno, Rest}};
                 {ok, comment} ->
                     % Comments are not allowed in attributes, e.g.:
                     % > id={% comment }
@@ -256,14 +274,15 @@ scan_tag_attr_value(<<$=, ${, Rest0/binary>>, Bin, KeyAnno) ->
 scan_tag_attr_value(Rest, _Bin, Anno) ->
     {none, {Anno, Rest}}.
 
-scan_closing_tag(Rest0, Bin, TagAnno) ->
+scan_closing_tag(Rest0, Bin, StartMarkerLen, TagAnno) ->
     case scan_closing_tag_name(Rest0, 0, TagAnno) of
         {ok, {TagNameLen, TagNameAnno, Rest1}} when TagNameLen > 0 ->
             TagEndAnno = incr_anno_pos(TagNameLen, TagNameAnno),
             case scan_closing_tag_end(Rest1, 0, TagEndAnno) of
-                {ok, {Anno, Rest}} ->
+                {ok, {Anno0, Rest}} ->
                     Pos = maps:get(position, TagAnno),
                     TagName = binary_part(Bin, Pos, TagNameLen),
+                    Anno = incr_anno_col(StartMarkerLen, Anno0),
                     [{closing_tag, token_anno(TagAnno), TagName}
                      | scan(Rest, Bin, 0, Anno)];
                 {error, Reason} ->
@@ -333,8 +352,8 @@ maybe_prepend_text_token(Bin, Len, #{position := Pos} = Anno, Tokens) ->
     case string:trim(binary_part(Bin, Pos, Len)) of
         <<>> ->
             Tokens;
-        Text ->
-            [{text, token_anno(Anno), Text} | Tokens]
+        Txt ->
+            [{text, token_anno(Anno), Txt} | Tokens]
     end.
 
 token_anno(Anno) ->
@@ -405,17 +424,85 @@ incr_anno_pos(N, #{position := Pos} = Anno) ->
 scan_test() ->
     [
         ?assertMatch([
-            {text, _, <<"begin">>},
-            {comment, _, <<"% comment ">>},
-            {expr, _, <<"foo">>},
-            {text, _, <<"end">>}
+            {open_tag, {1, 1}, <<"!DOCTYPE">>},
+            {bool_attr, {1, 11}, <<"html">>},
+            {close_tag, {1, 15}, nonvoid},
+            {open_tag, {2, 1}, <<"html">>},
+            {attr_key, {2, 7}, <<"lang">>},
+            {attr_value, {2, 12}, {text, <<"en">>}},
+            {close_tag, {2, 16}, nonvoid},
+            {open_tag, {3, 1}, <<"head">>},
+            {close_tag, {3, 6}, nonvoid},
+            {open_tag, {4, 5}, <<"meta">>},
+            {attr_key, {4, 11}, <<"charset">>},
+            {attr_value, {4, 19}, {text, <<"UTF-8">>}},
+            {close_tag, {4, 26}, nonvoid},
+            {open_tag, {5, 5}, <<"meta">>},
+            {attr_key, {5, 11}, <<"http-equiv">>},
+            {attr_value, {5, 22}, {text, <<"X-UA-Compatible">>}},
+            {attr_key, {5, 40}, <<"content">>},
+            {attr_value, {5, 48}, {text, <<"IE=edge">>}},
+            {close_tag, {5, 57}, nonvoid},
+            {open_tag, {6, 5}, <<"meta">>},
+            {attr_key, {6, 11}, <<"name">>},
+            {attr_value, {6, 16}, {text, <<"viewport">>}},
+            {attr_key, {6, 27}, <<"content">>},
+            {attr_value, {6, 35},
+                        {text, <<"width=device-width, initial-scale=1.0">>}},
+            {close_tag, {6, 74}, nonvoid},
+            {open_tag, {7, 5}, <<"title">>},
+            {close_tag, {7, 11}, nonvoid},
+            {expr, {7, 12}, <<"_@title">>},
+            {closing_tag, {7, 21}, <<"title">>},
+            {open_tag, {8, 5}, <<"script">>},
+            {attr_key, {8, 13}, <<"src">>},
+            {attr_value, {8, 17}, {text, <<"assets/js/main.js">>}},
+            {close_tag, {8, 36}, nonvoid},
+            {closing_tag, {8, 37}, <<"script">>},
+            {closing_tag, {9, 1}, <<"head">>},
+            {open_tag, {10, 1}, <<"body">>},
+            {close_tag, {10, 6}, nonvoid},
+            {open_tag, {11, 5}, <<".counter">>},
+            {attr_key, {12, 9}, <<"count">>},
+            {attr_value, {12, 15}, {expr, <<"_@count">>}},
+            {attr_key, {13, 9}, <<"btn_text">>},
+            {attr_value, {13, 18}, {text, <<"Increment">>}},
+            {attr_key, {14, 9}, <<"event">>},
+            {attr_value, {14, 15}, {text, <<"incr">>}},
+            {close_tag, {15, 5}, void},
+            {open_tag, {16, 5}, <<".counter">>},
+            {attr_key, {17, 9}, <<"count">>},
+            {attr_value, {17, 15}, {expr, <<"99">>}},
+            {attr_key, {18, 9}, <<"btn_text">>},
+            {attr_value, {18, 18}, {text, <<"Decrement">>}},
+            {attr_key, {19, 9}, <<"event">>},
+            {attr_value, {19, 15}, {text, <<"decr">>}},
+            {close_tag, {20, 5}, void},
+            {closing_tag, {21, 1}, <<"body">>},
+            {closing_tag, {22, 1}, <<"html">>}
         ], scan(~"""
-            begin
-            {% comment }
-            {foo}
-            <div>bar</div>
-            <input id="input" class='input' hidden/>
-            end
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta http-equiv="X-UA-Compatible" content="IE=edge">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>{_@title}</title>
+                <script src="assets/js/main.js"></script>
+            </head>
+            <body>
+                <.counter
+                    count={_@count}
+                    btn_text="Increment"
+                    event="incr"
+                />
+                <.counter
+                    count={99}
+                    btn_text="Decrement"
+                    event="decr"
+                />
+            </body>
+            </html>
             """, ?ANNO)),
         ?assertError(badexpr, scan(<<"foo{@}bar">>, ?ANNO))
     ].
