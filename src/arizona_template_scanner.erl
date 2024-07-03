@@ -113,7 +113,7 @@ scan_expr(Rest0, Bin, ExprAnno) ->
     end.
 
 scan_expr_end(<<$}, Rest/binary>>, 0, Len, Anno) ->
-    {ok, {Len, _MarkerLen = 1, Anno, Rest}};
+    {ok, {Len, _MarkerLen = 1, incr_anno_col(1, Anno), Rest}};
 scan_expr_end(<<$}, Rest/binary>>, Depth, Len, Anno) ->
     scan_expr_end(Rest, Depth - 1, Len + 1, incr_anno_col(1, Anno));
 scan_expr_end(<<${, Rest/binary>>, Depth, Len, Anno) ->
@@ -147,7 +147,7 @@ scan_tag(Rest0, Bin, TagAnno) ->
         {ok, {Len, Anno, Rest}} when Len > 0 ->
             Pos = maps:get(position, TagAnno),
             TagName = binary_part(Bin, Pos, Len),
-            [{open_tag, TagName} | scan_tag_attrs(Rest, Bin, incr_anno_pos(Len, Anno))];
+            [{open_tag, token_anno(TagAnno), TagName} | scan_tag_attrs(Rest, Bin, incr_anno_pos(Len, Anno))];
         {error, {Reason, Anno}} ->
             error(Reason, [Rest0, Bin, TagAnno], [{error_info, error_info(Anno)}])
     end.
@@ -168,9 +168,11 @@ scan_tag_name(<<>>, Len, Anno) ->
     {error, {unexpected_tag_end, incr_anno_pos(Len, Anno)}}.
 
 scan_tag_attrs(<<$/, $>, Rest/binary>>, Bin, Anno) ->
-    [close_void | scan(Rest, Bin, 0, incr_anno_col(2, incr_anno_pos(2, Anno)))];
+    [{close_tag, token_anno(Anno), void}
+     | scan(Rest, Bin, 0, incr_anno_col(2, incr_anno_pos(2, Anno)))];
 scan_tag_attrs(<<$>, Rest/binary>>, Bin, Anno) ->
-    [close_tag | scan(Rest, Bin, 0, incr_anno_col(1, incr_anno_pos(1, Anno)))];
+    [{close_tag, token_anno(Anno), nonvoid}
+     | scan(Rest, Bin, 0, incr_anno_col(1, incr_anno_pos(1, Anno)))];
 scan_tag_attrs(<<$\s, Rest/binary>>, Bin, Anno) ->
     scan_tag_attrs(Rest, Bin, incr_anno_col(1, incr_anno_pos(1, Anno)));
 scan_tag_attrs(<<$\r, $\n, Rest/binary>>, Bin, Anno) ->
@@ -184,12 +186,13 @@ scan_tag_attrs(Rest0, Bin, AttrsAnno) ->
         {ok, {KeyLen, KeyAnno, Rest1}} when KeyLen > 0 ->
             KeyPos = maps:get(position, AttrsAnno),
             Key = binary_part(Bin, KeyPos, KeyLen),
-            case scan_tag_attr_value(Rest1, Bin, KeyAnno) of
+            ValAnno = incr_anno_pos(KeyLen, KeyAnno),
+            case scan_tag_attr_value(Rest1, Bin, ValAnno) of
                 {ok, {Value, Anno, Rest}} ->
-                    [{attr_key, Key}, {attr_value, Value}
-                     | scan_tag_attr_value(Rest, Bin, Anno)];
-                none ->
-                    [{bool_attr, Key} | scan_tag_attrs(Rest1, Bin, KeyAnno)];
+                    [{attr_key, token_anno(KeyAnno), Key}, {attr_value, token_anno(ValAnno), Value}
+                     | scan_tag_attrs(Rest, Bin, Anno)];
+                {none, {Anno, Rest}} ->
+                    [{bool_attr, token_anno(ValAnno), Key} | scan_tag_attrs(Rest, Bin, Anno)];
                 {error, {Reason, Anno}} ->
                     error(Reason, [Rest0, Bin, AttrsAnno], [{error_info, error_info(Anno)}])
             end;
@@ -220,8 +223,7 @@ scan_tag_attr_value(<<$=, $', Rest0/binary>>, Bin, KeyAnno) ->
         {ok, {Len, MarkerLen, TxtAnno, Rest}} ->
             Pos = maps:get(position, ValAnno),
             Txt = binary_part(Bin, Pos, Len),
-            Anno = incr_anno_col(Len + MarkerLen,
-                       incr_anno_pos(Len + MarkerLen, TxtAnno)),
+            Anno = incr_anno_pos(Len + MarkerLen, TxtAnno),
             {ok, {{text, Txt}, Anno, Rest}};
         {error, {Reason, Anno}} ->
             {error, {Reason, Anno}}
@@ -232,8 +234,7 @@ scan_tag_attr_value(<<$=, $", Rest0/binary>>, Bin, KeyAnno) ->
         {ok, {Len, MarkerLen, TxtAnno, Rest}} ->
             Pos = maps:get(position, ValAnno),
             Txt = binary_part(Bin, Pos, Len),
-            Anno = incr_anno_col(Len + MarkerLen,
-                       incr_anno_pos(Len + MarkerLen, TxtAnno)),
+            Anno = incr_anno_pos(Len + MarkerLen, TxtAnno),
             {ok, {{text, Txt}, Anno, Rest}};
         {error, {Reason, Anno}} ->
             {error, {Reason, Anno}}
@@ -246,8 +247,7 @@ scan_tag_attr_value(<<$=, ${, Rest0/binary>>, Bin, KeyAnno) ->
             Expr = binary_part(Bin, Pos, Len),
             case expr_category(Expr) of
                 {ok, expr} ->
-                    Anno = incr_anno_col(Len + MarkerLen,
-                               incr_anno_pos(Len + MarkerLen, ExprAnno)),
+                    Anno = incr_anno_pos(Len + MarkerLen, ExprAnno),
                     {ok, {{expr, Expr}, Anno, Rest}};
                 {ok, comment} ->
                     % Comments are not allowed in attributes, e.g.:
@@ -259,8 +259,8 @@ scan_tag_attr_value(<<$=, ${, Rest0/binary>>, Bin, KeyAnno) ->
         {error, {Reason, Anno}} ->
             {error, {Reason, Anno}}
     end;
-scan_tag_attr_value(_Rest, _Bin, _Anno) ->
-    none.
+scan_tag_attr_value(Rest, _Bin, Anno) ->
+    {none, {Anno, Rest}}.
 
 scan_closing_tag(Rest0, Bin, TagAnno) ->
     case scan_closing_tag_name(Rest0, 0, TagAnno) of
@@ -269,7 +269,7 @@ scan_closing_tag(Rest0, Bin, TagAnno) ->
                 {ok, {Anno, Rest}} ->
                     Pos = maps:get(position, TagAnno),
                     TagName = binary_part(Bin, Pos, TagNameLen),
-                    [{closing_tag, TagName} | scan(Rest, Bin, 0, Anno)];
+                    [{closing_tag, token_anno(TagAnno), TagName} | scan(Rest, Bin, 0, Anno)];
                 {error, {Reason, Anno}} ->
                     error(Reason, [Rest0, Bin, TagAnno], [{error_info, error_info(Anno)}])
             end;
@@ -307,6 +307,12 @@ scan_single_quoted_string(<<$\\, $', Rest/binary>>, Len, Anno) ->
     scan_single_quoted_string(Rest, Len + 2, incr_anno_col(2, Anno));
 scan_single_quoted_string(<<$', Rest/binary>>, Len, Anno) ->
     {ok, {Len, _MarkerLen = 1, Anno, Rest}};
+scan_single_quoted_string(<<$\r, $\n, Rest/binary>>, Len, Anno) ->
+    scan_single_quoted_string(Rest, Len + 2, new_line(Anno));
+scan_single_quoted_string(<<$\r, Rest/binary>>, Len, Anno) ->
+    scan_single_quoted_string(Rest, Len + 1, new_line(Anno));
+scan_single_quoted_string(<<$\n, Rest/binary>>, Len, Anno) ->
+    scan_single_quoted_string(Rest, Len + 1, new_line(Anno));
 scan_single_quoted_string(<<_, Rest/binary>>, Len, Anno) ->
     scan_single_quoted_string(Rest, Len + 1, incr_anno_col(1, Anno));
 scan_single_quoted_string(<<>>, Len, Anno) ->
@@ -316,6 +322,12 @@ scan_double_quoted_string(<<$\\, $", Rest/binary>>, Len, Anno) ->
     scan_double_quoted_string(Rest, Len + 2, incr_anno_col(2, Anno));
 scan_double_quoted_string(<<$", Rest/binary>>, Len, Anno) ->
     {ok, {Len, _MarkerLen = 1, Anno, Rest}};
+scan_double_quoted_string(<<$\r, $\n, Rest/binary>>, Len, Anno) ->
+    scan_double_quoted_string(Rest, Len + 2, new_line(Anno));
+scan_double_quoted_string(<<$\r, Rest/binary>>, Len, Anno) ->
+    scan_double_quoted_string(Rest, Len + 1, new_line(Anno));
+scan_double_quoted_string(<<$\n, Rest/binary>>, Len, Anno) ->
+    scan_double_quoted_string(Rest, Len + 1, new_line(Anno));
 scan_double_quoted_string(<<_, Rest/binary>>, Len, Anno) ->
     scan_double_quoted_string(Rest, Len + 1, incr_anno_col(1, Anno));
 scan_double_quoted_string(<<>>, Len, Anno) ->
