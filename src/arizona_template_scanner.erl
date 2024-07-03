@@ -78,6 +78,12 @@ new_anno(Opts) when is_map(Opts) ->
 scan(<<${, Rest/binary>>, Bin, Len, Anno) ->
     maybe_prepend_text_token(Bin, Len, Anno,
         scan_expr(Rest, Bin, incr_anno_pos(Len + 1, Anno)));
+scan(<<$<, $/, Rest/binary>>, Bin, Len, Anno) ->
+    maybe_prepend_text_token(Bin, Len, Anno,
+        scan_closing_tag(Rest, Bin, incr_anno_pos(Len + 2, Anno)));
+scan(<<$<, Rest/binary>>, Bin, Len, Anno) ->
+    maybe_prepend_text_token(Bin, Len, Anno,
+        scan_tag(Rest, Bin, incr_anno_pos(Len + 1, Anno)));
 scan(<<$\r, $\n, Rest/binary>>, Bin, Len, Anno) ->
     scan(Rest, Bin, Len + 2, new_line(Anno));
 scan(<<$\r, Rest/binary>>, Bin, Len, Anno) ->
@@ -90,46 +96,38 @@ scan(<<>>, Bin, Len, Anno) ->
     % FIXME: The location (line, column) is incorrect in the last text token.
     maybe_prepend_text_token(Bin, Len, Anno, []).
 
-maybe_prepend_text_token(Bin, Len, Anno = #{position := Pos}, Tokens) ->
-    case string:trim(binary_part(Bin, Pos, Len)) of
-        <<>> ->
-            Tokens;
-        Text ->
-            [{text, token_anno(Anno), Text} | Tokens]
-    end.
-
-token_anno(Anno) ->
-    {token_source(Anno), token_location(Anno)}.
-
-token_source(#{module := Mod, function := Fun}) when Mod =/= undefined,
-                                                     Fun =/= undefined ->
-    {Mod, Fun};
-token_source(#{file := File}) ->
-    {file, File}.
-
-token_location(#{line := Ln, column := Col}) ->
-    {Ln, Col}.
-
 scan_expr(Rest0, Bin, ExprAnno) ->
-    case find_expr_end(Rest0, _Depth = 0, _Len = 0, ExprAnno) of
-        {ok, {Len, Anno, Rest}} ->
+    case scan_expr_end(Rest0, _Depth = 0, _Len = 0, ExprAnno) of
+        {ok, {Len, MarkerLen, Anno, Rest}} ->
             Pos = maps:get(position, ExprAnno),
             Expr = binary_part(Bin, Pos, Len),
             case expr_category(Expr) of
                 {ok, Category} ->
-                    [{Category, token_anno(ExprAnno), Expr} | scan(Rest, Bin, 0, Anno)];
+                    [{Category, token_anno(ExprAnno), Expr}
+                     | scan(Rest, Bin, 0, incr_anno_pos(Len + MarkerLen, Anno))];
                 error ->
-                    error({badexpr, Expr}, [Rest0, Bin, ExprAnno], [{error_info, error_info(Anno)}])
+                    error(badexpr, [Rest0, Bin, ExprAnno], [{error_info, error_info(Anno)}])
             end;
         {error, {Reason, Anno}} ->
             error(Reason, [Rest0, Bin, ExprAnno], [{error_info, error_info(Anno)}])
     end.
 
-error_info(Anno = #{module := Mod, function := Fun}) when Mod =/= undefined,
-                                                          Fun =/= undefined ->
-    maps:with([module, function, line, column], Anno);
-error_info(Anno) ->
-    maps:with([file, line, column], Anno).
+scan_expr_end(<<$}, Rest/binary>>, 0, Len, Anno) ->
+    {ok, {Len, _MarkerLen = 1, Anno, Rest}};
+scan_expr_end(<<$}, Rest/binary>>, Depth, Len, Anno) ->
+    scan_expr_end(Rest, Depth - 1, Len + 1, incr_anno_col(1, Anno));
+scan_expr_end(<<${, Rest/binary>>, Depth, Len, Anno) ->
+    scan_expr_end(Rest, Depth + 1, Len + 1, incr_anno_col(1, Anno));
+scan_expr_end(<<$\r, $\n, Rest/binary>>, Depth, Len, Anno) ->
+    scan_expr_end(Rest, Depth, Len + 2, new_line(Anno));
+scan_expr_end(<<$\r, Rest/binary>>, Depth, Len, Anno) ->
+    scan_expr_end(Rest, Depth, Len + 1, new_line(Anno));
+scan_expr_end(<<$\n, Rest/binary>>, Depth, Len, Anno) ->
+    scan_expr_end(Rest, Depth, Len + 1, new_line(Anno));
+scan_expr_end(<<_, Rest/binary>>, Depth, Len, Anno) ->
+    scan_expr_end(Rest, Depth, Len + 1, incr_anno_col(1, Anno));
+scan_expr_end(<<>>, _Depth, Len, Anno) ->
+    {error, {unexpected_expr_end, incr_anno_pos(Len, Anno)}}.
 
 expr_category(Expr) ->
     try
@@ -144,38 +142,214 @@ expr_category(Expr) ->
             error
     end.
 
-find_expr_end(<<$}, Rest/binary>>, 0, Len, Anno) ->
-    {ok, {Len, incr_anno_pos(Len + 1, Anno), Rest}};
-find_expr_end(<<$}, Rest/binary>>, Depth, Len, Anno) ->
-    find_expr_end(Rest, Depth - 1, Len + 1, incr_anno_col(1, Anno));
-find_expr_end(<<${, Rest/binary>>, Depth, Len, Anno) ->
-    find_expr_end(Rest, Depth + 1, Len + 1, incr_anno_col(1, Anno));
-find_expr_end(<<$", Rest0/binary>>, Depth, Len0, Anno0) ->
-    case find_string_end(Rest0, Len0 + 1, incr_anno_col(1, Anno0)) of
-        {ok, {Len, Anno, Rest}} ->
-            find_expr_end(Rest, Depth, Len, Anno);
-        {error, ErrInfo} ->
-            {error, ErrInfo}
-    end;
-find_expr_end(<<$\r, $\n, Rest/binary>>, Depth, Len, Anno) ->
-    find_expr_end(Rest, Depth, Len + 2, new_line(Anno));
-find_expr_end(<<$\r, Rest/binary>>, Depth, Len, Anno) ->
-    find_expr_end(Rest, Depth, Len + 1, new_line(Anno));
-find_expr_end(<<$\n, Rest/binary>>, Depth, Len, Anno) ->
-    find_expr_end(Rest, Depth, Len + 1, new_line(Anno));
-find_expr_end(<<_, Rest/binary>>, Depth, Len, Anno) ->
-    find_expr_end(Rest, Depth, Len + 1, incr_anno_col(1, Anno));
-find_expr_end(<<>>, _Depth, Len, Anno) ->
-    {error, {unexpected_expr_end, incr_anno_pos(Len, Anno)}}.
+scan_tag(Rest0, Bin, TagAnno) ->
+    case scan_tag_name(Rest0, 0, TagAnno) of
+        {ok, {Len, Anno, Rest}} when Len > 0 ->
+            Pos = maps:get(position, TagAnno),
+            TagName = binary_part(Bin, Pos, Len),
+            [{open_tag, TagName} | scan_tag_attrs(Rest, Bin, incr_anno_pos(Len, Anno))];
+        {error, {Reason, Anno}} ->
+            error(Reason, [Rest0, Bin, TagAnno], [{error_info, error_info(Anno)}])
+    end.
 
-find_string_end(<<$\\, $", Rest/binary>>, Len, Anno) ->
-    find_string_end(Rest, Len + 2, incr_anno_col(2, Anno));
-find_string_end(<<$", Rest/binary>>, Len, Anno) ->
-    {ok, {Len + 1, incr_anno_col(1, Anno), Rest}};
-find_string_end(<<_, Rest/binary>>, Len, Anno) ->
-    find_string_end(Rest, Len + 1, incr_anno_col(1, Anno));
-find_string_end(<<>>, Len, Anno) ->
+scan_tag_name(Rest = <<$/, $>, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_tag_name(Rest = <<$>, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_tag_name(Rest = <<$\s, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_tag_name(Rest = <<$\r, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_tag_name(Rest = <<$\n, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_tag_name(<<_, Rest/binary>>, Len, Anno) ->
+    scan_tag_name(Rest, Len + 1, incr_anno_col(1, Anno));
+scan_tag_name(<<>>, Len, Anno) ->
+    {error, {unexpected_tag_end, incr_anno_pos(Len, Anno)}}.
+
+scan_tag_attrs(<<$/, $>, Rest/binary>>, Bin, Anno) ->
+    [close_void | scan(Rest, Bin, 0, incr_anno_col(2, incr_anno_pos(2, Anno)))];
+scan_tag_attrs(<<$>, Rest/binary>>, Bin, Anno) ->
+    [close_tag | scan(Rest, Bin, 0, incr_anno_col(1, incr_anno_pos(1, Anno)))];
+scan_tag_attrs(<<$\s, Rest/binary>>, Bin, Anno) ->
+    scan_tag_attrs(Rest, Bin, incr_anno_col(1, incr_anno_pos(1, Anno)));
+scan_tag_attrs(<<$\r, $\n, Rest/binary>>, Bin, Anno) ->
+    scan_tag_attrs(Rest, Bin, new_line(incr_anno_pos(2, Anno)));
+scan_tag_attrs(<<$\r, Rest/binary>>, Bin, Anno) ->
+    scan_tag_attrs(Rest, Bin, new_line(incr_anno_pos(1, Anno)));
+scan_tag_attrs(<<$\n, Rest/binary>>, Bin, Anno) ->
+    scan_tag_attrs(Rest, Bin, new_line(incr_anno_pos(1, Anno)));
+scan_tag_attrs(Rest0, Bin, AttrsAnno) ->
+    case scan_tag_attr_key(Rest0, 0, AttrsAnno) of
+        {ok, {KeyLen, KeyAnno, Rest1}} when KeyLen > 0 ->
+            KeyPos = maps:get(position, AttrsAnno),
+            Key = binary_part(Bin, KeyPos, KeyLen),
+            case scan_tag_attr_value(Rest1, Bin, KeyAnno) of
+                {ok, {Value, Anno, Rest}} ->
+                    [{attr_key, Key}, {attr_value, Value}
+                     | scan_tag_attr_value(Rest, Bin, Anno)];
+                none ->
+                    [{bool_attr, Key} | scan_tag_attrs(Rest1, Bin, KeyAnno)];
+                {error, {Reason, Anno}} ->
+                    error(Reason, [Rest0, Bin, AttrsAnno], [{error_info, error_info(Anno)}])
+            end;
+        {error, {Reason, Anno}} ->
+            error(Reason, [Rest0, Bin, AttrsAnno], [{error_info, error_info(Anno)}])
+    end.
+
+scan_tag_attr_key(Rest = <<$=, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_tag_attr_key(Rest = <<$/, $>, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_tag_attr_key(Rest = <<$>, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_tag_attr_key(Rest = <<$\s, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_tag_attr_key(Rest = <<$\r, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_tag_attr_key(Rest = <<$\n, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_tag_attr_key(<<_, Rest/binary>>, Len, Anno) ->
+    scan_tag_attr_key(Rest, Len + 1, incr_anno_col(1, Anno));
+scan_tag_attr_key(<<>>, Len, Anno) ->
+    {error, {unexpected_tag_end, incr_anno_pos(Len, Anno)}}.
+
+scan_tag_attr_value(<<$=, $', Rest0/binary>>, Bin, KeyAnno) ->
+    ValAnno = incr_anno_col(2, incr_anno_pos(2, KeyAnno)),
+    case scan_single_quoted_string(Rest0, 0, ValAnno) of
+        {ok, {Len, MarkerLen, TxtAnno, Rest}} ->
+            Pos = maps:get(position, ValAnno),
+            Txt = binary_part(Bin, Pos, Len),
+            Anno = incr_anno_col(Len + MarkerLen,
+                       incr_anno_pos(Len + MarkerLen, TxtAnno)),
+            {ok, {{text, Txt}, Anno, Rest}};
+        {error, {Reason, Anno}} ->
+            {error, {Reason, Anno}}
+    end;
+scan_tag_attr_value(<<$=, $", Rest0/binary>>, Bin, KeyAnno) ->
+    ValAnno = incr_anno_col(2, incr_anno_pos(2, KeyAnno)),
+    case scan_double_quoted_string(Rest0, 0, ValAnno) of
+        {ok, {Len, MarkerLen, TxtAnno, Rest}} ->
+            Pos = maps:get(position, ValAnno),
+            Txt = binary_part(Bin, Pos, Len),
+            Anno = incr_anno_col(Len + MarkerLen,
+                       incr_anno_pos(Len + MarkerLen, TxtAnno)),
+            {ok, {{text, Txt}, Anno, Rest}};
+        {error, {Reason, Anno}} ->
+            {error, {Reason, Anno}}
+    end;
+scan_tag_attr_value(<<$=, ${, Rest0/binary>>, Bin, KeyAnno) ->
+    ValAnno = incr_anno_col(2, incr_anno_pos(2, KeyAnno)),
+    case scan_expr_end(Rest0, _Depth = 0, _Len = 0, ValAnno) of
+        {ok, {Len, MarkerLen, ExprAnno, Rest}} ->
+            Pos = maps:get(position, ValAnno),
+            Expr = binary_part(Bin, Pos, Len),
+            case expr_category(Expr) of
+                {ok, expr} ->
+                    Anno = incr_anno_col(Len + MarkerLen,
+                               incr_anno_pos(Len + MarkerLen, ExprAnno)),
+                    {ok, {{expr, Expr}, Anno, Rest}};
+                {ok, comment} ->
+                    % Comments are not allowed in attributes, e.g.:
+                    % > id={% comment }
+                    {error, {unexpected_comment, ExprAnno}};
+                error ->
+                    {error, {badexpr, ExprAnno}}
+            end;
+        {error, {Reason, Anno}} ->
+            {error, {Reason, Anno}}
+    end;
+scan_tag_attr_value(_Rest, _Bin, _Anno) ->
+    none.
+
+scan_closing_tag(Rest0, Bin, TagAnno) ->
+    case scan_closing_tag_name(Rest0, 0, TagAnno) of
+        {ok, {TagNameLen, TagNameAnno, Rest1}} when TagNameLen > 0 ->
+            case scan_closing_tag_end(Rest1, 0, incr_anno_pos(TagNameLen, TagNameAnno)) of
+                {ok, {Anno, Rest}} ->
+                    Pos = maps:get(position, TagAnno),
+                    TagName = binary_part(Bin, Pos, TagNameLen),
+                    [{closing_tag, TagName} | scan(Rest, Bin, 0, Anno)];
+                {error, {Reason, Anno}} ->
+                    error(Reason, [Rest0, Bin, TagAnno], [{error_info, error_info(Anno)}])
+            end;
+        {error, {Reason, Anno}} ->
+            error(Reason, [Rest0, Bin, TagAnno], [{error_info, error_info(Anno)}])
+    end.
+
+scan_closing_tag_name(Rest = <<$>, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_closing_tag_name(Rest = <<$\s, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_closing_tag_name(Rest = <<$\r, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_closing_tag_name(Rest = <<$\n, _/binary>>, Len, Anno) ->
+    {ok, {Len, Anno, Rest}};
+scan_closing_tag_name(<<_, Rest/binary>>, Len, Anno) ->
+    scan_closing_tag_name(Rest, Len + 1, incr_anno_col(1, Anno));
+scan_closing_tag_name(<<>>, Len, Anno) ->
+    {error, {unexpected_tag_end, incr_anno_pos(Len, Anno)}}.
+
+scan_closing_tag_end(<<$>, Rest/binary>>, Len, Anno) ->
+    {ok, {incr_anno_col(1, incr_anno_pos(Len + 1, Anno)), Rest}};
+scan_closing_tag_end(<<$\r, $\n, Rest/binary>>, Len, Anno) ->
+    scan_closing_tag_end(Rest, Len + 2, new_line(Anno));
+scan_closing_tag_end(<<$\r, Rest/binary>>, Len, Anno) ->
+    scan_closing_tag_end(Rest, Len + 1, new_line(Anno));
+scan_closing_tag_end(<<$\n, Rest/binary>>, Len, Anno) ->
+    scan_closing_tag_end(Rest, Len + 1, new_line(Anno));
+scan_closing_tag_end(<<_, Rest/binary>>, Len, Anno) ->
+    scan_closing_tag_end(Rest, Len + 1, incr_anno_col(1, Anno));
+scan_closing_tag_end(<<>>, Len, Anno) ->
+    {error, {unexpected_tag_end, incr_anno_pos(Len, Anno)}}.
+
+scan_single_quoted_string(<<$\\, $', Rest/binary>>, Len, Anno) ->
+    scan_single_quoted_string(Rest, Len + 2, incr_anno_col(2, Anno));
+scan_single_quoted_string(<<$', Rest/binary>>, Len, Anno) ->
+    {ok, {Len, _MarkerLen = 1, Anno, Rest}};
+scan_single_quoted_string(<<_, Rest/binary>>, Len, Anno) ->
+    scan_single_quoted_string(Rest, Len + 1, incr_anno_col(1, Anno));
+scan_single_quoted_string(<<>>, Len, Anno) ->
     {error, {unexpected_string_end, incr_anno_pos(Len, Anno)}}.
+
+scan_double_quoted_string(<<$\\, $", Rest/binary>>, Len, Anno) ->
+    scan_double_quoted_string(Rest, Len + 2, incr_anno_col(2, Anno));
+scan_double_quoted_string(<<$", Rest/binary>>, Len, Anno) ->
+    {ok, {Len, _MarkerLen = 1, Anno, Rest}};
+scan_double_quoted_string(<<_, Rest/binary>>, Len, Anno) ->
+    scan_double_quoted_string(Rest, Len + 1, incr_anno_col(1, Anno));
+scan_double_quoted_string(<<>>, Len, Anno) ->
+    {error, {unexpected_string_end, incr_anno_pos(Len, Anno)}}.
+
+maybe_prepend_text_token(Bin, Len, Anno = #{position := Pos}, Tokens) ->
+    case string:trim(binary_part(Bin, Pos, Len)) of
+        <<>> ->
+            Tokens;
+        Text ->
+            [{text, token_anno(Anno), Text} | Tokens]
+    end.
+
+token_anno(Anno) ->
+    {token_source(Anno), token_location(Anno)}.
+
+token_source(#{module := Mod, function := Fun})
+    when Mod =/= undefined,
+         Fun =/= undefined ->
+    {Mod, Fun};
+token_source(#{file := File}) ->
+    {file, File}.
+
+token_location(#{line := Ln, column := Col}) ->
+    {Ln, Col}.
+
+error_info(Anno = #{module := Mod, function := Fun})
+    when Mod =/= undefined,
+         Fun =/= undefined ->
+    maps:with([module, function, line, column], Anno);
+error_info(Anno) ->
+    maps:with([file, line, column], Anno).
+
+%% Anno.
 
 default_anno() ->
     #{
@@ -233,9 +407,11 @@ scan_test() ->
             begin
             {% comment }
             {foo}
+            <div>bar</div>
+            <input id="input" class='input' hidden/>
             end
             """, ?ANNO)),
-        ?assertError({badexpr, <<"@">>}, scan(<<"foo{@}bar">>, ?ANNO))
+        ?assertError(badexpr, scan(<<"foo{@}bar">>, ?ANNO))
     ].
 
 expr_category_test() ->
@@ -245,22 +421,30 @@ expr_category_test() ->
         ?assertEqual(error, expr_category("@"))
     ].
 
-find_expr_end_test() ->
+scan_expr_end_test() ->
     [
-        ?assertMatch({ok, {10, _, <<"baz">>}},
-                     find_expr_end(<<"{foo\"bar\"}}baz">>, 0, 0, ?ANNO)),
-        ?assertMatch({ok, {8, _, <<"baz">>}},
-                     find_expr_end(<<"foo\"bar\"}baz">>, 0, 0, ?ANNO)),
+        ?assertMatch({ok, {10, 1, _, <<"baz">>}},
+                     scan_expr_end(<<"{foo\"bar\"}}baz">>, 0, 0, ?ANNO)),
+        ?assertMatch({ok, {8, 1, _, <<"baz">>}},
+                     scan_expr_end(<<"foo\"bar\"}baz">>, 0, 0, ?ANNO)),
         ?assertMatch({error, {unexpected_expr_end, _}},
-                     find_expr_end(<<"foo\"bar\"baz">>, 0, 0, ?ANNO))
+                     scan_expr_end(<<"foo\"bar\"baz">>, 0, 0, ?ANNO))
     ].
 
-find_string_end_test() ->
+scan_single_quoted_string_test() ->
     [
-        ?assertMatch({ok, {9, _, <<"baz">>}},
-                     find_string_end(<<"foo\\\"bar\"baz">>, 0, ?ANNO)),
+        ?assertMatch({ok, {8, 1, _, <<"baz">>}},
+                     scan_single_quoted_string(<<"foo\\'bar'baz">>, 0, ?ANNO)),
         ?assertMatch({error, {unexpected_string_end, _}},
-                     find_string_end(<<"foo">>, 0, ?ANNO))
+                     scan_single_quoted_string(<<"foo">>, 0, ?ANNO))
+    ].
+
+scan_double_quoted_string_test() ->
+    [
+        ?assertMatch({ok, {8, 1, _, <<"baz">>}},
+                     scan_double_quoted_string(<<"foo\\\"bar\"baz">>, 0, ?ANNO)),
+        ?assertMatch({error, {unexpected_string_end, _}},
+                     scan_double_quoted_string(<<"foo">>, 0, ?ANNO))
     ].
 
 new_anno_test() ->
