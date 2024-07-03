@@ -28,7 +28,6 @@
 -export_type([anno/0]).
 -export_type([anno_options/0]).
 -export_type([token_anno/0]).
--export_type([source/0]).
 -export_type([location/0]).
 -export_type([line/0]).
 -export_type([column/0]).
@@ -54,8 +53,7 @@
     first_column := non_neg_integer(),
     position := non_neg_integer()
 }.
--type token_anno() :: {source(), location()}.
--type source() :: {file, binary()} | {module(), atom()}.
+-type token_anno() :: location().
 -type location() :: {line(), column()}.
 -type line() :: non_neg_integer().
 -type column() :: non_neg_integer().
@@ -347,14 +345,7 @@ maybe_prepend_text_token(Bin, Len, #{position := Pos} = Anno, Tokens) ->
     end.
 
 token_anno(Anno) ->
-    {token_source(Anno), token_location(Anno)}.
-
-token_source(#{module := Mod, function := Fun})
-    when Mod =/= undefined,
-         Fun =/= undefined ->
-    {Mod, Fun};
-token_source(#{file := File}) ->
-    {file, File}.
+    token_location(Anno).
 
 token_location(#{line := Ln, column := Col}) ->
     {Ln, Col}.
