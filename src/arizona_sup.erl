@@ -57,4 +57,3 @@ init(_Args) ->
             []
     end,
     {ok, {SupFlags, ChildSpecs}}.
-

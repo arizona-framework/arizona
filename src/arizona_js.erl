@@ -51,4 +51,3 @@ send(EventName, Payload) ->
 
 safe(Term) ->
     iolist_to_binary(json:encode(Term)).
-

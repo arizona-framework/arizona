@@ -38,9 +38,9 @@ Live-reload functionality for use during development.
 
 %% State
 -record(state, {
-    timer :: reference(),
-    files = #{} :: #{string() := {erl, modified}},
-    clients = #{} :: #{pid() := boolean()}
+    timer :: undefined | reference(),
+    files :: #{string() := {erl, modified}},
+    clients :: #{pid() := boolean()}
 }).
 -opaque state() :: #state{}.
 -export_type([state/0]).
@@ -68,7 +68,10 @@ reload() ->
 init(_Args) ->
     register_events(),
     setup_watcher(),
-    {ok, #state{}}.
+    {ok, #state{
+        files = #{},
+        clients = #{}
+    }}.
 
 -spec handle_call(Request, From, State) -> no_return()
     when Request :: term(),
@@ -94,12 +97,7 @@ handle_info({terminate, Client}, #state{clients = Clients} = State) ->
 handle_info({_Pid, {fs, file_event}, {File, Events}},
             #state{timer = Timer, files = Files} = State0) ->
     % Try recompile only when the last modified file was received.
-    case Timer =:= undefined of
-        true ->
-            ok;
-        false ->
-            erlang:cancel_timer(Timer)
-    end,
+    Timer =/= undefined andalso erlang:cancel_timer(Timer),
     State = State0#state{timer = erlang:send_after(25, self(), recompile)},
     case filename:extension(File) of
         ".erl" ->
@@ -134,9 +132,8 @@ register_events() ->
     arizona_websocket:subscribe(terminate).
 
 setup_watcher() ->
-    fs:start_link(arizona_live_reload_fs, filename:absname("")),
+    {ok, _} = fs:start_link(arizona_live_reload_fs, filename:absname("")),
     fs:subscribe(arizona_live_reload_fs).
 
 reload(Clients) ->
     maps:foreach(fun(Client, _) -> Client ! reload end, Clients).
-

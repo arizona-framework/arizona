@@ -61,7 +61,7 @@ end_per_suite(Config) ->
 %% --------------------------------------------------------------------
 
 mount(Socket) ->
-    {ok, Socket}.
+    Socket.
 
 render(Macros) ->
     ?ARIZONA_LIVEVIEW(Macros, ~s"""

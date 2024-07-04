@@ -45,4 +45,3 @@ to_safe(V) when is_float(V) ->
 -spec safe_types() -> [binary | atom | integer | float].
 safe_types() ->
     [binary, atom, integer, float].
-

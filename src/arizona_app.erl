@@ -34,11 +34,10 @@
     when StartType :: application:start_type(),
          StartArgs :: term().
 start(_StartType, _StartArgs) ->
-    {ok, _} = arizona_server:start(),
+    arizona_server:start(),
     arizona_sup:start_link().
 
 -spec stop(State) -> ok
     when State :: term().
 stop(_State) ->
     ok.
-

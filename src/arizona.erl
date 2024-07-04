@@ -1,6 +1,6 @@
 -module(arizona).
 
--opaque payload() :: map().
+-type payload() :: list().
 -export_type([payload/0]).
 
 -type route_opts() :: map().

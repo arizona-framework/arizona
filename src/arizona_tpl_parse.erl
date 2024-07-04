@@ -26,35 +26,33 @@ Template parser.
 %% API functions.
 -export([parse_exprs/2]).
 
+-type token() :: term().
+-export_type([token/0]).
+
+-type tree() :: list().
+-export_type([tree/0]).
+
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
--spec parse_exprs(Tokens, Macros) -> Tree
-    when Tokens :: [arizona_tpl_scan:token()],
-         Macros :: arizona_live_view:macros(),
-         Tree :: arizona_live_view:tree().
-parse_exprs(Tokens, Macros) ->
-    do_parse_exprs(Tokens, Macros).
-
-%% --------------------------------------------------------------------
-%% Internal funtions.
-%% --------------------------------------------------------------------
-
-do_parse_exprs([{text, Txt} | T], Macros) ->
-    [{text, Txt} | do_parse_exprs(T, Macros)];
-do_parse_exprs([{expr, ExprStr} | T], Macros) ->
+-spec parse_exprs(Tokens, Macros) -> tree()
+    when Tokens :: [token()],
+         Macros :: arizona_live_view:macros().
+parse_exprs([{text, Txt} | T], Macros) ->
+    [{text, Txt} | parse_exprs(T, Macros)];
+parse_exprs([{expr, ExprStr} | T], Macros) ->
     case parse_expr_str(ExprStr, Macros, true) of
         {comment, _} ->
-            do_parse_exprs(T, Macros);
+            parse_exprs(T, Macros);
         Token ->
-            [Token | do_parse_exprs(T, Macros)]
+            [Token | parse_exprs(T, Macros)]
     end;
-do_parse_exprs([tag_open | T], Macros) ->
+parse_exprs([tag_open | T], Macros) ->
     parse_tag(T, Macros);
-do_parse_exprs([closing_tag | _] = T, _Macros) ->
+parse_exprs([closing_tag | _] = T, _Macros) ->
     T;
-do_parse_exprs([], _Macros) ->
+parse_exprs([], _Macros) ->
     [].
 
 parse_tag([{tag_name, <<$., Name/binary>>} | T], Macros) ->
@@ -73,12 +71,12 @@ do_parse_block([tag_close | T0], Props0, Macros) ->
     [{tag_name, <<$., Name/binary>>}, tag_close | T] = T1,
     case Name =:= get(name, Props) of
         true ->
-            [{block, block_struct(Props)} | do_parse_exprs(T, Macros)];
+            [{block, block_struct(Props)} | parse_exprs(T, Macros)];
         false ->
             error({unexpected_block_end, {Props0, Props}})
     end;
 do_parse_block([void_close | T], Props, Macros) ->
-    [{block, block_struct(Props)} | do_parse_exprs(T, Macros)].
+    [{block, block_struct(Props)} | parse_exprs(T, Macros)].
 
 do_parse_tag([{attr_key, K}, {attr_value, V} | T], Props, Macros) ->
     do_parse_tag(T, [parse_attr(K, {text, V}, Macros) | Props], Macros);
@@ -90,7 +88,7 @@ do_parse_tag([tag_close | T0], Props0, Macros) ->
     OpenName = get(name, Props0),
     case is_void(OpenName) of
         true ->
-            [{tag, tag_struct([void | Props0])} | do_parse_exprs(T0, Macros)];
+            [{tag, tag_struct([void | Props0])} | parse_exprs(T0, Macros)];
         false ->
             {T1, Props1} = collect_tokens(T0, Props0, Macros),
             [{tag_name, CloseName}, tag_close | T] = T1,
@@ -102,13 +100,13 @@ do_parse_tag([tag_close | T0], Props0, Macros) ->
                         false ->
                             Props1
                     end,
-                    [{tag, tag_struct(Props)} | do_parse_exprs(T, Macros)];
+                    [{tag, tag_struct(Props)} | parse_exprs(T, Macros)];
                 false ->
                     error({unexpected_tag_end, {Props0, Props1}})
             end
     end;
 do_parse_tag([void_close | T], Props, Macros) ->
-    [{tag, tag_struct([void | Props])} | do_parse_exprs(T, Macros)].
+    [{tag, tag_struct([void | Props])} | parse_exprs(T, Macros)].
 
 % NOTE: Scripts are injected before the first script tag,
 %       or at the end of the list if no script tags.
@@ -196,7 +194,7 @@ parse_expr_str(ExprStr, Macros, Bindings, Eval) ->
                             {value, V, []} =
                                 erl_eval:exprs(
                                     [erl_syntax:revert(MacrosTree)], []),
-                            {text, arizona_html:safe(V)};
+                            {text, arizona_html:to_safe(V)};
                         false ->
                             MacrosStr = iolist_to_binary(
                                 erl_pp:expr(erl_syntax:revert(MacrosTree))),
@@ -277,8 +275,7 @@ parse_exprs_test() ->
     </main>
     End
     """),
-    ?assertMatch({ok,
-                  [{text, <<"Start">>},
+    ?assertMatch([{text, <<"Start">>},
                    {tag,
                     #{name := <<"main">>, void := false,
                       tokens :=
@@ -320,7 +317,7 @@ parse_exprs_test() ->
                         {<<"style">>, {text, <<"display: none;">>}},
                         {<<"hidden">>, {text, <<"hidden">>}}],
                       directives := #{}}},
-                   {text, <<"End">>}]}
+                   {text, <<"End">>}]
         when is_function(ExprFun1, 1) andalso
              is_function(ExprFun2, 1) andalso
              is_function(ExprFun3, 1) andalso
@@ -328,11 +325,11 @@ parse_exprs_test() ->
 
 macros_test() ->
     Tokens = arizona_tpl_scan:string(<<"foo{_@bar}baz">>),
-    ?assertEqual({ok, [
+    ?assertEqual([
         {text, <<"foo">>},
         {text, <<"bar">>},
         {text, <<"baz">>}
-    ]}, parse_exprs(Tokens, #{bar => <<"bar">>})).
+    ], parse_exprs(Tokens, #{bar => <<"bar">>})).
 
 head_scripts_test() ->
     Tokens = arizona_tpl_scan:string(~"""
@@ -341,8 +338,7 @@ head_scripts_test() ->
         <script src="foo"></script>
     </head>
     """),
-    [?assertMatch({ok,
-                  [{tag,
+    [?assertMatch([{tag,
                     #{name := <<"head">>, void := false,
                       tokens :=
                        [{tag,
@@ -364,10 +360,9 @@ head_scripts_test() ->
                          #{name := <<"script">>, void := false, tokens := [],
                            directives := #{},
                            attrs := [{<<"src">>, {text, <<"foo">>}}]}}],
-                      directives := #{}, attrs := []}}]}, parse_exprs(Tokens, #{})),
+                      directives := #{}, attrs := []}}], parse_exprs(Tokens, #{})),
      application:set_env(arizona, endpoint, #{live_reload => true}),
-     ?assertMatch({ok,
-                  [{tag,
+     ?assertMatch([{tag,
                     #{name := <<"head">>, void := false,
                       tokens :=
                        [{tag,
@@ -396,9 +391,15 @@ head_scripts_test() ->
                          #{name := <<"script">>, void := false, tokens := [],
                            directives := #{},
                            attrs := [{<<"src">>, {text, <<"foo">>}}]}}],
-                      directives := #{}, attrs := []}}]},
+                      directives := #{}, attrs := []}}],
                   parse_exprs(Tokens, #{})
     )].
 
--endif.
+parse_str_test() ->
+    ?assertMatch([
+        {tag,
+         #{name := <<"main">>,
+           directives := #{stateful := true}}
+    }], arizona_live_view:render(#{})).
 
+-endif.

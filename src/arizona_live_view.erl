@@ -26,21 +26,15 @@ Live view.
 %% API functions.
 -export([parse_str/2]).
 -ignore_xref([parse_str/2]).
--export([compile/3]).
--ignore_xref([compile/3]).
 -export([mount/2]).
 -export([handle_event/4]).
-
 -export([put_macro/3]).
 -ignore_xref([put_macro/3]).
 -export([get_macro/3]).
 -ignore_xref([get_macro/3]).
 
--opaque macros() :: map().
+-type macros() :: map().
 -export_type([macros/0]).
-
--opaque tree() :: list().
--export_type([tree/0]).
 
 %% --------------------------------------------------------------------
 %% Callbacks.
@@ -51,7 +45,7 @@ Live view.
 
 -callback render(Macros) -> Tree
     when Macros :: macros(),
-         Tree :: tree().
+         Tree :: arizona_tpl_parse:tree().
 
 -callback handle_event(EventName, Payload, Socket) -> Socket
     when EventName :: binary(),
@@ -81,22 +75,12 @@ put_macro(Key, Value, Macros) ->
 get_macro(Key, Macros, Default) ->
   maps:get(Key, Macros, Default).
 
--spec parse_str(Str, Macros) -> Parsed
+-spec parse_str(Str, Macros) -> arizona_tpl_parse:tree()
     when Str :: string() | binary(),
-         Macros :: macros(),
-         Parsed :: tree().
+         Macros :: macros().
 parse_str(Str, Macros) ->
     Tokens = arizona_tpl_scan:string(Str),
-    {ok, Parsed} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
-    Parsed.
-
--spec compile(Mod, Fun, Macros) -> Compiled
-    when Mod :: module(),
-         Fun :: atom(),
-         Macros :: macros(),
-         Compiled :: tree().
-compile(Mod, Fun, Macros) ->
-    arizona_tpl_compile:compile({Mod, Fun, Macros}).
+    arizona_tpl_parse:parse_exprs(Tokens, Macros).
 
 %% --------------------------------------------------------------------
 %% Callback support functions.
@@ -125,13 +109,6 @@ handle_event(Mod, Event, Payload, Socket) ->
 -include("arizona.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-parse_str_test() ->
-    ?assertMatch([
-        {tag,
-         #{name := <<"main">>,
-           directives := #{stateful := true}}
-    }], render(#{})).
-
 % Start parse_str support.
 
 render(Macros) ->
@@ -153,7 +130,11 @@ counter(Macros) ->
 % End parse_str support.
 
 compile_test() ->
-    ?assertMatch({ok, #{block := _}}, compile(?MODULE, render, #{})).
+    ?assert(is_block(arizona_tpl_compile:compile(?MODULE, render, #{}))).
+
+is_block(#{block := _}) ->
+    true;
+is_block(_NonBlock) ->
+    false.
 
 -endif.
-

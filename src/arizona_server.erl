@@ -59,12 +59,13 @@ start(Opts) ->
 
 -spec route(Req) -> Routed
     when Req :: cowboy_req:req(),
-         Routed :: {ok, Req, Env} | {stop, Req},
+         Routed :: {Req, Env},
          Env :: cowboy_middleware:env().
 route(Req) ->
     #{path := Path} = cowboy_req:match_qs([path], Req),
-    cowboy_router:execute(Req#{path => Path},
-                          #{dispatch => {persistent_term, ?PERSIST_KEY}}).
+    {ok, Req, Env} = cowboy_router:execute(Req#{path => Path},
+                                           #{dispatch => {persistent_term, ?PERSIST_KEY}}),
+    {Req, Env}.
 
 %% --------------------------------------------------------------------
 %% Internal functions.
@@ -111,4 +112,3 @@ norm_proto_opts(Opts, Host, Routes, LiveReload) ->
     end}]),
     persistent_term:put(?PERSIST_KEY, Dispatch),
     Opts#{env => #{dispatch => {persistent_term, ?PERSIST_KEY}}}.
-
