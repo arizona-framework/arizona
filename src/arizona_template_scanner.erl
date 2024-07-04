@@ -21,7 +21,7 @@
 -moduledoc false.
 
 %% API functions.
--export([scan/2]).
+-export([scan/2]). -ignore_xref([scan/2]).
 
 %% Types
 -export_type([options/0]).
