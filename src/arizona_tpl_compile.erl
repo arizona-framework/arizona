@@ -25,6 +25,7 @@ Template compiler.
 
 %% API functions.
 -export([compile/1]).
+-ignore_xref([compile/1]).
 -export([compile/3]).
 
 -record(state, {
