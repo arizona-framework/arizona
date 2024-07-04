@@ -29,6 +29,7 @@
 -export_type([line/0]).
 -export_type([column/0]).
 -export_type([result/0]).
+-export_type([error_reason/0]).
 
 -type state() :: #{
     line => line(),
@@ -47,7 +48,12 @@
 -opaque location() :: {line(), column()}.
 -opaque line() :: non_neg_integer().
 -opaque column() :: non_neg_integer().
--opaque result() :: {ok, [token()]} | {error, {atom(), location()}}.
+-opaque result() :: {ok, [token()]} | {error, {error_reason(), location()}}.
+-opaque error_reason() :: badexpr
+                        | unexpected_comment
+                        | unexpected_tag_end
+                        | unexpected_expr_end
+                        | unexpected_string_end.
 
 %% --------------------------------------------------------------------
 %% API funtions.
