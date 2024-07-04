@@ -21,51 +21,48 @@
 -moduledoc false.
 
 %% API functions.
--export([scan/2]). -ignore_xref([scan/2]).
+-export([scan/1]). -ignore_xref([scan/1]).
 
 %% Types
 -export_type([token/0]).
--export_type([anno/0]).
+-export_type([location/0]).
 -export_type([line/0]).
 -export_type([column/0]).
--export_type([options/0]).
+-export_type([result/0]).
 
 -type state() :: #{
-    source => {function, {module(), atom()}} | {file, binary()} | none,
     line => line(),
     column => column(),
     first_column => non_neg_integer(),
     position => non_neg_integer()
 }.
--opaque token() :: {open_tag, anno(), binary()}
-                 | {attr_key, anno(), binary()}
-                 | {attr_value, anno(), {text, binary()} | {expr, binary()}}
-                 | {bool_attr, anno(), binary()}
-                 | {close_tag, anno(), void | nonvoid}
-                 | {closing_tag, anno(), binary()}
-                 | {text, anno(), binary()}
-                 | {expr, anno(), binary()}.
--opaque anno() :: {line(), column()}.
+-opaque token() :: {open_tag, location(), binary()}
+                 | {attr_key, location(), binary()}
+                 | {attr_value, location(), {text, binary()} | {expr, binary()}}
+                 | {bool_attr, location(), binary()}
+                 | {close_tag, location(), void | nonvoid}
+                 | {closing_tag, location(), binary()}
+                 | {text, location(), binary()}
+                 | {expr, location(), binary()}.
+-opaque location() :: {line(), column()}.
 -opaque line() :: non_neg_integer().
 -opaque column() :: non_neg_integer().
--type options() :: #{
-    source := {module(), atom()} | file:filename_all() | none,
-    line := line(),
-    column := column(),
-    first_column := non_neg_integer(),
-    position := non_neg_integer()
-}.
+-opaque result() :: {ok, [token()]} | {error, {atom(), location()}}.
 
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
--spec scan(Bin, Opts) -> Tokens
+-spec scan(Bin) -> Result
     when Bin :: binary(),
-         Opts :: options(),
-         Tokens :: [token()].
-scan(Bin, Opts) when is_binary(Bin), is_map(Opts) ->
-    scan(Bin, Bin, 0, new_state(Opts)).
+         Result :: result().
+scan(Bin) when is_binary(Bin) ->
+    try
+        {ok, scan(Bin, Bin, 0, new_state())}
+    catch
+        throw:{Reason, State} ->
+            {error, {Reason, location(State)}}
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
@@ -124,12 +121,12 @@ scan_expr(Rest0, Bin, StartMarkerLen, ExprState) ->
             case expr_category(Expr) of
                 {ok, Category} ->
                     State = incr_col(StartMarkerLen, incr_pos(Len + EndMarkerLen, State0)),
-                    [{Category, anno(ExprState), Expr} | scan(Rest, Bin, 0, State)];
+                    [{Category, location(ExprState), Expr} | scan(Rest, Bin, 0, State)];
                 error ->
-                    raise({badexpr, State0})
+                    throw({badexpr, ExprState})
             end;
         {error, Reason} ->
-            raise(Reason)
+            throw(Reason)
     end.
 
 scan_expr_end(<<$}, Rest/binary>>, 0, Len, State) ->
@@ -168,9 +165,9 @@ scan_tag(Rest0, Bin, StartMarkerLen, TagState) ->
             Pos = maps:get(position, TagState),
             TagName = binary_part(Bin, Pos, Len),
             State = incr_col(StartMarkerLen, incr_pos(Len, State0)),
-            [{open_tag, anno(TagState), TagName} | scan_tag_attrs(Rest, Bin, State)];
+            [{open_tag, location(TagState), TagName} | scan_tag_attrs(Rest, Bin, State)];
         {error, Reason} ->
-            raise(Reason)
+            throw(Reason)
     end.
 
 scan_tag_name(<<$/, $>, _/binary>> = Rest, Len, State) ->
@@ -189,10 +186,10 @@ scan_tag_name(<<>>, Len, State) ->
     {error, {unexpected_tag_end, incr_pos(Len, State)}}.
 
 scan_tag_attrs(<<$/, $>, Rest/binary>>, Bin, State) ->
-    [{close_tag, anno(State), void}
+    [{close_tag, location(State), void}
      | scan(Rest, Bin, 0, incr_col(2, incr_pos(2, State)))];
 scan_tag_attrs(<<$>, Rest/binary>>, Bin, State) ->
-    [{close_tag, anno(State), nonvoid}
+    [{close_tag, location(State), nonvoid}
      | scan(Rest, Bin, 0, incr_col(1, incr_pos(1, State)))];
 scan_tag_attrs(<<$\s, Rest/binary>>, Bin, State) ->
     scan_tag_attrs(Rest, Bin, incr_col(1, incr_pos(1, State)));
@@ -210,17 +207,17 @@ scan_tag_attrs(Rest0, Bin, KeyState) ->
             ValState = incr_pos(KeyLen, NextState),
             case scan_tag_attr_value(Rest1, Bin, ValState) of
                 {ok, {Value, MarkerLen, State, Rest}} ->
-                    [{attr_key, anno(KeyState), Key},
-                     {attr_value, anno(incr_col(MarkerLen, ValState)), Value}
+                    [{attr_key, location(KeyState), Key},
+                     {attr_value, location(incr_col(MarkerLen, ValState)), Value}
                      | scan_tag_attrs(Rest, Bin, State)];
                 {none, {State, Rest}} ->
-                    [{bool_attr, anno(KeyState), Key}
+                    [{bool_attr, location(KeyState), Key}
                      | scan_tag_attrs(Rest, Bin, State)];
                 {error, Reason} ->
-                    raise(Reason)
+                    throw(Reason)
             end;
         {error, Reason} ->
-            raise(Reason)
+            throw(Reason)
     end.
 
 scan_tag_attr_key(<<$=, _/binary>> = Rest, Len, State) ->
@@ -294,13 +291,13 @@ scan_closing_tag(Rest0, Bin, StartMarkerLen, TagState) ->
                     Pos = maps:get(position, TagState),
                     TagName = binary_part(Bin, Pos, TagNameLen),
                     State = incr_col(StartMarkerLen, State0),
-                    [{closing_tag, anno(TagState), TagName}
+                    [{closing_tag, location(TagState), TagName}
                      | scan(Rest, Bin, 0, State)];
                 {error, Reason} ->
-                    raise(Reason)
+                    throw(Reason)
             end;
         {error, Reason} ->
-            raise(Reason)
+            throw(Reason)
     end.
 
 scan_closing_tag_name(<<$>, _/binary>> = Rest, Len, State) ->
@@ -364,57 +361,21 @@ maybe_prepend_text_token(Bin, Len, #{position := Pos} = State, Tokens) ->
         <<>> ->
             Tokens;
         Txt ->
-            [{text, anno(State), Txt} | Tokens]
+            [{text, location(State), Txt} | Tokens]
     end.
 
-anno(#{line := Ln, column := Col}) ->
+location(#{line := Ln, column := Col}) ->
     {Ln, Col}.
-
-raise({Reason, State}) ->
-    error(Reason, none, [{error_info, error_info(State)}]).
-
-error_info(#{source := Source} = State) ->
-    maps:merge(error_source_info(Source),
-               maps:with([line, column], State)).
-
-error_source_info({function, {Mod, Fun}}) ->
-    #{module => Mod, funtion => Fun};
-error_source_info({file, File}) ->
-    #{file => File};
-error_source_info(none) ->
-    #{}.
 
 %% State.
 
-new_state(Opts) ->
-    State = maps:merge(default_state(), Opts),
-    maps:map(fun normalize_state_value/2, State).
-
-default_state() ->
+new_state() ->
     #{
-        source => none,
         line => 1,
         column => 1,
         first_column => 1,
         position => 0
     }.
-
-normalize_state_value(source, {Mod, Fun}) when is_atom(Mod), is_atom(Fun) ->
-    {function, {Mod, Fun}};
-normalize_state_value(source, File) when is_list(File) ->
-    {file, iolist_to_binary(File)};
-normalize_state_value(source, File) when is_binary(File) ->
-    {file, File};
-normalize_state_value(source, none) ->
-    none;
-normalize_state_value(line, Ln) when is_integer(Ln), Ln >= 0 ->
-    Ln;
-normalize_state_value(column, Col) when is_integer(Col), Col >= 0 ->
-    Col;
-normalize_state_value(first_column, Col) when is_integer(Col), Col >= 0 ->
-    Col;
-normalize_state_value(position, Pos) when is_integer(Pos), Pos >= 0 ->
-    Pos.
 
 new_line(#{line := Ln, first_column := Col} = State) ->
     State#{line => Ln + 1, column => Col}.
@@ -431,11 +392,11 @@ incr_pos(N, #{position := Pos} = State) ->
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--define(STATE, new_state(#{})).
+-define(STATE, new_state()).
 
 scan_test() ->
     [
-        ?assertMatch([
+        ?assertMatch({ok, [
             {open_tag, {1, 1}, <<"!DOCTYPE">>},
             {bool_attr, {1, 11}, <<"html">>},
             {close_tag, {1, 15}, nonvoid},
@@ -496,7 +457,7 @@ scan_test() ->
             {close_tag, {21, 5}, void},
             {closing_tag, {22, 1}, <<"body">>},
             {closing_tag, {23, 1}, <<"html">>}
-        ], scan(~"""
+        ]}, scan(~"""
             <!DOCTYPE html>
             <html lang="en">
             <head>
@@ -520,8 +481,8 @@ scan_test() ->
                 />
             </body>
             </html>
-            """, ?STATE)),
-        ?assertError(badexpr, scan(<<"foo{@}bar">>, ?STATE))
+            """)),
+        ?assertEqual({error, {badexpr, {1, 4}}}, scan(<<"foo{@}bar">>))
     ].
 
 expr_category_test() ->
@@ -557,32 +518,16 @@ scan_double_quoted_string_test() ->
                      scan_double_quoted_string(<<"foo">>, 0, ?STATE))
     ].
 
-new_state_test() ->
-    [
-        ?assertError(function_clause, new_state(#{source => -1})),
-        ?assertError(function_clause, new_state(#{line => -1})),
-        ?assertError(function_clause, new_state(#{column => -1})),
-        ?assertError(function_clause, new_state(#{first_column => -1})),
-        ?assertError(function_clause, new_state(#{position => -10})),
-        ?assertEqual(#{
-            source => none,
-            line => 1,
-            column => 1,
-            first_column => 1,
-            position => 0
-        }, ?STATE)
-    ].
-
 new_line_test() ->
-    #{line := Ln, column := Col} = new_line(new_state(#{column => 2})),
+    #{line := Ln, column := Col} = new_line(?STATE),
     ?assertEqual({2, 1}, {Ln, Col}).
 
 incr_col_test() ->
-    #{column := Col} = incr_col(1, new_state(#{})),
+    #{column := Col} = incr_col(1, ?STATE),
     ?assertEqual(2, Col).
 
 incr_pos_test() ->
-    #{position := Pos} = incr_pos(1, new_state(#{})),
+    #{position := Pos} = incr_pos(1, ?STATE),
     ?assertEqual(1, Pos).
 
 -endif.
