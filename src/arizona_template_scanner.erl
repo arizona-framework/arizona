@@ -24,10 +24,11 @@
 -export([scan/2]). -ignore_xref([scan/2]).
 
 %% Types
--export_type([options/0]).
 -export_type([token/0]).
 -export_type([anno/0]).
--export_type([result/0]).
+-export_type([line/0]).
+-export_type([column/0]).
+-export_type([options/0]).
 
 -type state() :: #{
     source => {function, {module(), atom()}} | {file, binary()} | none,
@@ -36,18 +37,17 @@
     first_column => non_neg_integer(),
     position => non_neg_integer()
 }.
--type token() :: {open_tag, anno(), binary()}
-               | {attr_key, anno(), binary()}
-               | {attr_value, anno(), {text, binary()} | {expr, binary()}}
-               | {bool_attr, anno(), binary()}
-               | {close_tag, anno(), void | nonvoid}
-               | {closing_tag, anno(), binary()}
-               | {text, anno(), binary()}
-               | {expr, anno(), binary()}.
--type anno() :: location().
--type location() :: {line(), column()}.
--type line() :: non_neg_integer().
--type column() :: non_neg_integer().
+-opaque token() :: {open_tag, anno(), binary()}
+                 | {attr_key, anno(), binary()}
+                 | {attr_value, anno(), {text, binary()} | {expr, binary()}}
+                 | {bool_attr, anno(), binary()}
+                 | {close_tag, anno(), void | nonvoid}
+                 | {closing_tag, anno(), binary()}
+                 | {text, anno(), binary()}
+                 | {expr, anno(), binary()}.
+-opaque anno() :: {line(), column()}.
+-opaque line() :: non_neg_integer().
+-opaque column() :: non_neg_integer().
 -type options() :: #{
     source := {module(), atom()} | file:filename_all() | none,
     line := line(),
@@ -55,16 +55,15 @@
     first_column := non_neg_integer(),
     position := non_neg_integer()
 }.
--type result() :: [token()].
 
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
--spec scan(Bin, Opts) -> Result
+-spec scan(Bin, Opts) -> Tokens
     when Bin :: binary(),
          Opts :: options(),
-         Result :: result().
+         Tokens :: [token()].
 scan(Bin, Opts) when is_binary(Bin), is_map(Opts) ->
     scan(Bin, Bin, 0, new_state(Opts)).
 
@@ -72,12 +71,12 @@ scan(Bin, Opts) when is_binary(Bin), is_map(Opts) ->
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
--spec scan(Rest, Bin, Len, State) -> Result
+-spec scan(Rest, Bin, Len, State) -> Tokens
     when Rest :: binary(),
          Bin :: binary(),
          Len :: non_neg_integer(),
          State :: state(),
-         Result :: result().
+         Tokens :: [token()].
 scan(Rest0, Bin, Len, State0) ->
     case skip_trailing_spaces(Rest0, State0) of
         {true, {Rest, State}} ->
