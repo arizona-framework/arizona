@@ -28,7 +28,6 @@
 -export_type([location/0]).
 -export_type([line/0]).
 -export_type([column/0]).
--export_type([result/0]).
 -export_type([error_reason/0]).
 
 -type state() :: #{
@@ -47,7 +46,6 @@
 -opaque location() :: {line(), column()}.
 -opaque line() :: non_neg_integer().
 -opaque column() :: non_neg_integer().
--opaque result() :: {ok, [token()]} | {error, {error_reason(), location()}}.
 -opaque error_reason() :: badexpr
                         | unexpected_comment
                         | unexpected_tag_end
@@ -60,7 +58,7 @@
 
 -spec scan(Bin) -> Result
     when Bin :: binary(),
-         Result :: result().
+         Result :: {ok, [token()]} | {error, {error_reason(), location()}}.
 scan(Bin) when is_binary(Bin) ->
     try
         {ok, scan(Bin, Bin, 0, new_state())}
