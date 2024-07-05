@@ -76,8 +76,8 @@ new(Id, View, Assigns) ->
 -spec put_assigns(Assigns, Socket) -> Socket
     when Assigns :: assigns(),
          Socket :: t().
-put_assigns(Map, Socket) ->
-    maps:fold(fun put_assign/3, Socket, Map).
+put_assigns(Assigns, Socket) ->
+    maps:fold(fun put_assign/3, Socket, Assigns).
 
 -spec put_assign(Key, Value, Socket) -> Socket
     when Key :: atom(),
