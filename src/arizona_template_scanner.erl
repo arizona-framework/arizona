@@ -34,7 +34,6 @@
 -type state() :: #{
     line => line(),
     column => column(),
-    first_column => non_neg_integer(),
     position => non_neg_integer()
 }.
 -opaque token() :: {open_tag, location(), binary()}
@@ -387,12 +386,11 @@ new_state() ->
     #{
         line => 1,
         column => 1,
-        first_column => 1,
         position => 0
     }.
 
-new_line(#{line := Ln, first_column := Col} = State) ->
-    State#{line => Ln + 1, column => Col}.
+new_line(#{line := Ln} = State) ->
+    State#{line => Ln + 1, column => 1}.
 
 incr_col(N, #{column := Col} = State) ->
     State#{column => Col + N}.
