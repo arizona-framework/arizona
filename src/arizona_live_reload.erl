@@ -80,16 +80,18 @@ init(_Args) ->
 handle_call(_Request, _From, _State) ->
     exit(not_implemented).
 
--spec handle_cast(Request, State) -> {noreply, State}
+-spec handle_cast(Request, State1) -> {noreply, State2}
     when Request :: term(),
-         State :: state().
+         State1 :: state(),
+         State2 :: state().
 handle_cast(reload, State) ->
     reload(State#state.clients),
     {noreply, State}.
 
--spec handle_info(Info, State) -> {noreply, State}
+-spec handle_info(Info, State1) -> {noreply, State2}
     when Info :: term(),
-         State :: state().
+         State1 :: state(),
+         State2 :: state().
 handle_info({init, Client}, #state{clients = Clients} = State) ->
     {noreply, State#state{clients = Clients#{Client => true}}};
 handle_info({terminate, Client}, #state{clients = Clients} = State) ->

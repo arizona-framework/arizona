@@ -29,9 +29,10 @@
 %% cowboy_handler callbacks.
 %% --------------------------------------------------------------------
 
--spec init(Req, State) -> {ok, Req, State}
+-spec init(Req, State1) -> {ok, Req, State2}
     when Req :: cowboy_req:req(),
-         State :: {Mod, Fun, Opts},
+         State1 :: {Mod, Fun, Opts},
+         State2 :: {Mod, Fun, Opts},
          Mod :: module(),
          Fun :: atom(),
          Opts :: arizona:route_opts().

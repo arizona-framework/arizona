@@ -73,16 +73,18 @@ new(Id, View, Assigns) ->
         changes => #{}
     }.
 
--spec put_assigns(Assigns, Socket) -> Socket
+-spec put_assigns(Assigns, Socket1) -> Socket2
     when Assigns :: assigns(),
-         Socket :: t().
+         Socket1 :: t(),
+         Socket2 :: t().
 put_assigns(Assigns, Socket) ->
     maps:fold(fun put_assign/3, Socket, Assigns).
 
--spec put_assign(Key, Value, Socket) -> Socket
+-spec put_assign(Key, Value, Socket1) -> Socket2
     when Key :: atom(),
          Value :: term(),
-         Socket :: t().
+         Socket1 :: t(),
+         Socket2 :: t().
 put_assign(Key, Value, Socket) ->
     #{assigns := Assigns, changes := Changes} = Socket,
     case Assigns of
@@ -130,15 +132,17 @@ get_assign(Key, Socket, Default) ->
     #{assigns := Assigns} = Socket,
     maps:get(Key, Assigns, Default).
 
--spec push_event(EventName, Payload, Socket) -> Socket
+-spec push_event(EventName, Payload, Socket1) -> Socket2
     when EventName :: binary(),
          Payload :: arizona:payload(),
-         Socket :: t().
+         Socket1 :: t(),
+         Socket2 :: t().
 push_event(Name, Payload, #{events := Events} = Socket) ->
     Socket#{events => [[Name, Payload] | Events]}.
 
--spec prune(Socket) -> Socket
-    when Socket :: t().
+-spec prune(Socket1) -> Socket2
+    when Socket1 :: t(),
+         Socket2 :: t().
 prune(Socket) ->
     Socket#{
         events => [],

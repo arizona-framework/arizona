@@ -81,10 +81,11 @@ websocket_init({Params, {Mod, Fun, Opts}}) ->
     send(init, {init, self()}),
     {Events, State}.
 
--spec websocket_handle(Event, State) -> {Events, State}
+-spec websocket_handle(Event, State1) -> {Events, State2}
     when Event :: {text, binary()},
          Events :: cowboy_websocket:commands(),
-         State :: state().
+         State1 :: state(),
+         State2 :: state().
 websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
     {Target, Event, Payload} = decode_msg(Msg),
     Socket0 = maps:get(Target, Sockets),
@@ -103,10 +104,11 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
     {[{text, json:encode(arizona_socket:get_events(Socket))}],
         State#{sockets => Sockets#{Id => arizona_socket:prune(Socket)}}}.
 
--spec websocket_info(Event, State) -> {Events, State}
+-spec websocket_info(Event, State1) -> {Events, State2}
     when Event :: {text, binary()},
          Events :: cowboy_websocket:commands(),
-         State :: state().
+         State1 :: state(),
+         State2 :: state().
 websocket_info(reload, Socket) ->
     {[{text, json:encode([[~"reload", []]])}], Socket};
 websocket_info(_Info, Socket) ->

@@ -58,10 +58,11 @@ Live view.
 %% API funtions.
 %% --------------------------------------------------------------------
 
--spec put_macro(Key, Value, Macros) -> Macros
+-spec put_macro(Key, Value, Macros1) -> Macros2
   when Key :: atom(),
        Value :: term(),
-       Macros :: macros().
+       Macros1 :: macros(),
+       Macros2 :: macros().
 put_macro(Key, Value, Macros) ->
   Macros#{
     Key => maps:get(Key, Macros, Value)
@@ -86,17 +87,19 @@ parse_str(Str, Macros) ->
 %% Callback support functions.
 %% --------------------------------------------------------------------
 
--spec mount(Mod, Socket) -> Socket
+-spec mount(Mod, Socket1) -> Socket2
     when Mod :: module(),
-         Socket :: arizona_socket:t().
+         Socket1 :: arizona_socket:t(),
+         Socket2 :: arizona_socket:t().
 mount(Mod, Socket) ->
     Mod:mount(Socket).
 
--spec handle_event(Mod, EventName, Payload, Socket) -> Socket
+-spec handle_event(Mod, EventName, Payload, Socket1) -> Socket2
     when Mod :: module(),
          EventName :: binary(),
          Payload :: arizona:payload(),
-         Socket :: arizona_socket:t().
+         Socket1 :: arizona_socket:t(),
+         Socket2 :: arizona_socket:t().
 handle_event(Mod, Event, Payload, Socket) ->
     Mod:handle_event(Event, Payload, Socket).
 
