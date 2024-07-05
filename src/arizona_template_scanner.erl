@@ -43,14 +43,14 @@
                  | {closing_tag, location(), binary()}
                  | {text, location(), binary()}
                  | {expr, location(), binary()}.
--opaque location() :: {line(), column()}.
--opaque line() :: non_neg_integer().
--opaque column() :: non_neg_integer().
--opaque error_reason() :: badexpr
-                        | unexpected_comment
-                        | unexpected_tag_end
-                        | unexpected_expr_end
-                        | unexpected_string_end.
+-type location() :: {line(), column()}.
+-type line() :: non_neg_integer().
+-type column() :: non_neg_integer().
+-type error_reason() :: badexpr
+                      | unexpected_comment
+                      | unexpected_tag_end
+                      | unexpected_expr_end
+                      | unexpected_string_end.
 
 %% --------------------------------------------------------------------
 %% API funtions.
