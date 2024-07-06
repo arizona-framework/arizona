@@ -104,8 +104,8 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
     {[{text, json:encode(arizona_socket:get_events(Socket))}],
         State#{sockets => Sockets#{Id => arizona_socket:prune(Socket)}}}.
 
--spec websocket_info(Event, State1) -> {Events, State2}
-    when Event :: {text, binary()},
+-spec websocket_info(Info, State1) -> {Events, State2}
+    when Info :: term(),
          Events :: cowboy_websocket:commands(),
          State1 :: state(),
          State2 :: state().
