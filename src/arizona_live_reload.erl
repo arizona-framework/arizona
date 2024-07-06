@@ -46,17 +46,19 @@ Live-reload functionality for use during development.
 -export_type([state/0]).
 -elvis([{elvis_style, state_record_and_type, disable}]). % opaque not identified as "type"
 
+-define(SERVER, ?MODULE).
+
 %% --------------------------------------------------------------------
 %% API functions.
 %% --------------------------------------------------------------------
 
 -spec start_link() -> gen_server:start_ret().
 start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+    gen_server:start_link({local, ?SERVER}, ?SERVER, [], []).
 
 -spec reload() -> ok.
 reload() ->
-    gen_server:cast(?MODULE, reload).
+    gen_server:cast(?SERVER, reload).
 
 %% --------------------------------------------------------------------
 %% gen_server callbacks.
