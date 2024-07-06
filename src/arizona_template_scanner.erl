@@ -11,11 +11,11 @@
 -export_type([column/0]).
 -export_type([error_reason/0]).
 
--type state() :: #{
-    line => line(),
-    column => column(),
-    position => non_neg_integer()
-}.
+-record(state, {
+    line :: line(),
+    column :: column(),
+    position :: non_neg_integer()
+}).
 -opaque token() :: {open_tag, location(), binary()}
                  | {attr_name, location(), binary()}
                  | {attr_value, location(), {text, binary()} | {expr, binary()}}
@@ -52,12 +52,6 @@ scan(Bin) when is_binary(Bin) ->
 %% Internal funtions.
 %% --------------------------------------------------------------------
 
--spec scan(Rest, Bin, Len, State) -> Tokens
-    when Rest :: binary(),
-         Bin :: binary(),
-         Len :: non_neg_integer(),
-         State :: state(),
-         Tokens :: [token()].
 scan(Rest0, Bin, Len, State0) ->
     case skip_trailing_spaces(Rest0, State0) of
         {true, {Rest, State}} ->
@@ -100,7 +94,7 @@ scan(<<>>, Bin, Len, TxtState, _State) ->
 scan_expr(Rest0, Bin, StartMarkerLen, ExprState) ->
     case scan_expr_end(Rest0, 0, 0, ExprState) of
         {ok, {Len, EndMarkerLen, State0, Rest}} ->
-            Pos = maps:get(position, ExprState),
+            Pos = ExprState#state.position,
             Expr = binary_part(Bin, Pos, Len),
             case expr_category(Expr) of
                 {ok, Category} ->
@@ -146,7 +140,7 @@ expr_category(Expr) ->
 scan_tag(Rest0, Bin, StartMarkerLen, TagState) ->
     case scan_tag_name(Rest0, 0, TagState) of
         {ok, {Len, State0, Rest}} when Len > 0 ->
-            Pos = maps:get(position, TagState),
+            Pos = TagState#state.position,
             TagName = binary_part(Bin, Pos, Len),
             State = incr_col(StartMarkerLen, incr_pos(Len, State0)),
             [{open_tag, location(TagState), TagName}
@@ -194,7 +188,7 @@ scan_tag_attrs(<<$\n, Rest/binary>>, Bin, IsVoid, State) ->
 scan_tag_attrs(Rest0, Bin, IsVoid, NameState) ->
     case scan_tag_attr_name(Rest0, 0, NameState) of
         {ok, {NameLen, NextState, Rest1}} when NameLen > 0 ->
-            NamePos = maps:get(position, NameState),
+            NamePos = NameState#state.position,
             Name = binary_part(Bin, NamePos, NameLen),
             ValState = incr_pos(NameLen, NextState),
             case scan_tag_attr_value(Rest1, Bin, ValState) of
@@ -233,7 +227,7 @@ scan_tag_attr_value(<<$=, $', Rest0/binary>>, Bin, NameState) ->
     ValState = incr_col(2, incr_pos(2, NameState)),
     case scan_single_quoted_string(Rest0, 0, ValState) of
         {ok, {Len, MarkerLen, TxtState, Rest}} ->
-            Pos = maps:get(position, ValState),
+            Pos = ValState#state.position,
             Txt = binary_part(Bin, Pos, Len),
             State = incr_col(MarkerLen, incr_pos(Len + MarkerLen, TxtState)),
             {ok, {{text, Txt}, 1, State, Rest}};
@@ -244,7 +238,7 @@ scan_tag_attr_value(<<$=, $", Rest0/binary>>, Bin, NameState) ->
     ValState = incr_col(2, incr_pos(2, NameState)),
     case scan_double_quoted_string(Rest0, 0, ValState) of
         {ok, {Len, MarkerLen, TxtState, Rest}} ->
-            Pos = maps:get(position, ValState),
+            Pos = ValState#state.position,
             Txt = binary_part(Bin, Pos, Len),
             State = incr_col(MarkerLen, incr_pos(Len + MarkerLen, TxtState)),
             {ok, {{text, Txt}, 1, State, Rest}};
@@ -255,7 +249,7 @@ scan_tag_attr_value(<<$=, ${, Rest0/binary>>, Bin, NameState) ->
     ValState = incr_col(2, incr_pos(2, NameState)),
     case scan_expr_end(Rest0, 0, 0, ValState) of
         {ok, {Len, MarkerLen, ExprState, Rest}} ->
-            Pos = maps:get(position, ValState),
+            Pos = ValState#state.position,
             Expr = binary_part(Bin, Pos, Len),
             case expr_category(Expr) of
                 {ok, expr} ->
@@ -280,7 +274,7 @@ scan_closing_tag(Rest0, Bin, StartMarkerLen, TagState) ->
             TagEndState = incr_pos(TagNameLen, TagNameState),
             case scan_closing_tag_end(Rest1, 0, TagEndState) of
                 {ok, {State0, Rest}} ->
-                    Pos = maps:get(position, TagState),
+                    Pos = TagState#state.position,
                     TagName = binary_part(Bin, Pos, TagNameLen),
                     State = incr_col(StartMarkerLen, State0),
                     [{closing_tag, location(TagState), TagName}
@@ -348,34 +342,34 @@ scan_double_quoted_string(<<_, Rest/binary>>, Len, State) ->
 scan_double_quoted_string(<<>>, Len, State) ->
     {error, {unexpected_string_end, incr_pos(Len, State)}}.
 
-maybe_prepend_text_token(Bin, Len, #{position := Pos} = State, Tokens) ->
-    case string:trim(binary_part(Bin, Pos, Len)) of
+maybe_prepend_text_token(Bin, Len, State, Tokens) ->
+    case string:trim(binary_part(Bin, State#state.position, Len)) of
         <<>> ->
             Tokens;
         Txt ->
             [{text, location(State), Txt} | Tokens]
     end.
 
-location(#{line := Ln, column := Col}) ->
+location(#state{line = Ln, column = Col}) ->
     {Ln, Col}.
 
 %% State.
 
 new_state() ->
-    #{
-        line => 1,
-        column => 1,
-        position => 0
+    #state{
+        line = 1,
+        column = 1,
+        position = 0
     }.
 
-new_line(#{line := Ln} = State) ->
-    State#{line => Ln + 1, column => 1}.
+new_line(#state{line = Ln} = State) ->
+    State#state{line = Ln + 1, column = 1}.
 
-incr_col(N, #{column := Col} = State) ->
-    State#{column => Col + N}.
+incr_col(N, #state{column = Col} = State) ->
+    State#state{column = Col + N}.
 
-incr_pos(N, #{position := Pos} = State) ->
-    State#{position => Pos + N}.
+incr_pos(N, #state{position = Pos} = State) ->
+    State#state{position = Pos + N}.
 
 %% --------------------------------------------------------------------
 %% EUnit tests.
@@ -456,40 +450,40 @@ expr_category_test() ->
 
 scan_expr_end_test() ->
     [
-        ?assertMatch({ok, {10, 1, #{column := 12}, <<"baz">>}},
+        ?assertMatch({ok, {10, 1, #state{column = 12}, <<"baz">>}},
                      scan_expr_end(<<"{foo\"bar\"}}baz">>, 0, 0, new_state())),
-        ?assertMatch({ok, {8, 1, #{column := 10}, <<"baz">>}},
+        ?assertMatch({ok, {8, 1, #state{column = 10}, <<"baz">>}},
                      scan_expr_end(<<"foo\"bar\"}baz">>, 0, 0, new_state())),
-        ?assertMatch({error, {unexpected_expr_end, #{column := 12, position := 11}}},
+        ?assertMatch({error, {unexpected_expr_end, #state{column = 12, position = 11}}},
                      scan_expr_end(<<"foo\"bar\"baz">>, 0, 0, new_state()))
     ].
 
 scan_single_quoted_string_test() ->
     [
-        ?assertMatch({ok, {8, 1, #{column := 9}, <<"baz">>}},
+        ?assertMatch({ok, {8, 1, #state{column = 9}, <<"baz">>}},
                      scan_single_quoted_string(<<"foo\\'bar'baz">>, 0, new_state())),
-        ?assertMatch({error, {unexpected_string_end, #{column := 4, position := 3}}},
+        ?assertMatch({error, {unexpected_string_end, #state{column = 4, position = 3}}},
                      scan_single_quoted_string(<<"foo">>, 0, new_state()))
     ].
 
 scan_double_quoted_string_test() ->
     [
-        ?assertMatch({ok, {8, 1, #{column := 9}, <<"baz">>}},
+        ?assertMatch({ok, {8, 1, #state{column = 9}, <<"baz">>}},
                      scan_double_quoted_string(<<"foo\\\"bar\"baz">>, 0, new_state())),
-        ?assertMatch({error, {unexpected_string_end, #{column := 4, position := 3}}},
+        ?assertMatch({error, {unexpected_string_end, #state{column = 4, position = 3}}},
                      scan_double_quoted_string(<<"foo">>, 0, new_state()))
     ].
 
 new_line_test() ->
-    #{line := Ln, column := Col} = new_line(new_state()),
+    #state{line = Ln, column = Col} = new_line(new_state()),
     ?assertEqual({2, 1}, {Ln, Col}).
 
 incr_col_test() ->
-    #{column := Col} = incr_col(1, new_state()),
+    #state{column = Col} = incr_col(1, new_state()),
     ?assertEqual(2, Col).
 
 incr_pos_test() ->
-    #{position := Pos} = incr_pos(1, new_state()),
+    #state{position = Pos} = incr_pos(1, new_state()),
     ?assertEqual(1, Pos).
 
 -endif.
