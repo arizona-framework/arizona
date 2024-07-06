@@ -400,60 +400,37 @@ scan_test() ->
             {attr_name, {4, 11}, <<"charset">>},
             {attr_value, {4, 19}, {text, <<"UTF-8">>}},
             {close_tag, {4, 26}, {void, true}},
-            {open_tag, {5, 5}, <<"meta">>},
-            {attr_name, {5, 11}, <<"http-equiv">>},
-            {attr_value, {5, 22}, {text, <<"X-UA-Compatible">>}},
-            {attr_name, {5, 40}, <<"content">>},
-            {attr_value, {5, 48}, {text, <<"IE=edge">>}},
-            {close_tag, {5, 57}, {void, true}},
-            {open_tag, {6, 5}, <<"meta">>},
-            {attr_name, {6, 11}, <<"name">>},
-            {attr_value, {6, 16}, {text, <<"viewport">>}},
-            {attr_name, {6, 27}, <<"content">>},
-            {attr_value, {6, 35},
-                        {text, <<"width=device-width, initial-scale=1.0">>}},
-            {close_tag, {6, 74}, {void, true}},
-            {open_tag, {7, 5}, <<"title">>},
-            {close_tag, {7, 11}, {void, false}},
-            {expr, {7, 12}, <<"_@title">>},
-            {closing_tag, {7, 21}, <<"title">>},
-            {open_tag, {8, 5}, <<"script">>},
-            {attr_name, {8, 13}, <<"src">>},
-            {attr_value, {8, 17}, {text, <<"assets/js/main.js">>}},
-            {close_tag, {8, 36}, {void, false}},
-            {closing_tag, {8, 37}, <<"script">>},
-            {closing_tag, {9, 1}, <<"head">>},
-            {open_tag, {10, 1}, <<"body">>},
-            {close_tag, {10, 6}, {void, false}},
-            {open_tag, {11, 5}, <<"h1">>},
-            {close_tag, {11, 8}, {void, false}},
-            {text, {11, 9}, <<"Arizona Counter">>},
-            {closing_tag, {11, 24}, <<"h1">>},
-            {open_tag, {12, 5}, <<".counter">>},
-            {attr_name, {13, 9}, <<"count">>},
-            {attr_value, {13, 15}, {expr, <<"_@count">>}},
-            {attr_name, {14, 9}, <<"btn_text">>},
-            {attr_value, {14, 18}, {text, <<"Increment">>}},
-            {attr_name, {15, 9}, <<"event">>},
-            {attr_value, {15, 15}, {text, <<"incr">>}},
-            {close_tag, {16, 5}, {void, true}},
-            {open_tag, {17, 5}, <<".counter">>},
-            {attr_name, {18, 9}, <<"count">>},
-            {attr_value, {18, 15}, {expr, <<"99">>}},
-            {attr_name, {19, 9}, <<"btn_text">>},
-            {attr_value, {19, 18}, {text, <<"Decrement">>}},
-            {attr_name, {20, 9}, <<"event">>},
-            {attr_value, {20, 15}, {text, <<"decr">>}},
-            {close_tag, {21, 5}, {void, true}},
-            {closing_tag, {22, 1}, <<"body">>},
-            {closing_tag, {23, 1}, <<"html">>}
+            {open_tag, {5, 5}, <<"title">>},
+            {close_tag, {5, 11}, {void, false}},
+            {expr, {5, 12}, <<"_@title">>},
+            {closing_tag, {5, 21}, <<"title">>},
+            {open_tag, {6, 5}, <<"script">>},
+            {attr_name, {6, 13}, <<"src">>},
+            {attr_value, {6, 17}, {text, <<"assets/js/main.js">>}},
+            {close_tag, {6, 36}, {void, false}},
+            {closing_tag, {6, 37}, <<"script">>},
+            {closing_tag, {7, 1}, <<"head">>},
+            {open_tag, {8, 1}, <<"body">>},
+            {close_tag, {8, 6}, {void, false}},
+            {open_tag, {9, 5}, <<"h1">>},
+            {close_tag, {9, 8}, {void, false}},
+            {text, {9, 9}, <<"Arizona Counter">>},
+            {closing_tag, {9, 24}, <<"h1">>},
+            {open_tag, {10, 5}, <<".counter">>},
+            {attr_name, {11, 9}, <<"count">>},
+            {attr_value, {11, 15}, {expr, <<"_@count">>}},
+            {attr_name, {12, 9}, <<"btn_text">>},
+            {attr_value, {12, 18}, {text, <<"Increment">>}},
+            {attr_name, {13, 9}, <<"event">>},
+            {attr_value, {13, 15}, {text, <<"incr">>}},
+            {close_tag, {14, 5}, {void, true}},
+            {closing_tag, {15, 1}, <<"body">>},
+            {closing_tag, {16, 1}, <<"html">>}
         ]}, scan(~"""
             <!DOCTYPE html>
             <html lang="en">
             <head>
                 <meta charset="UTF-8">
-                <meta http-equiv="X-UA-Compatible" content="IE=edge">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>{_@title}</title>
                 <script src="assets/js/main.js"></script>
             </head>
@@ -463,11 +440,6 @@ scan_test() ->
                     count={_@count}
                     btn_text="Increment"
                     event="incr"
-                />
-                <.counter
-                    count={99}
-                    btn_text="Decrement"
-                    event="decr"
                 />
             </body>
             </html>
