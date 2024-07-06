@@ -402,11 +402,10 @@ incr_pos(N, #{position := Pos} = State) ->
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--define(STATE, new_state()).
 
 scan_test() ->
     [
-        ?assertMatch({ok, [
+        ?assertEqual({ok, [
             {open_tag, {1, 1}, <<"!DOCTYPE">>},
             {bool_attr, {1, 11}, <<"html">>},
             {close_tag, {1, 15}, {void, true}},
@@ -504,40 +503,40 @@ expr_category_test() ->
 
 scan_expr_end_test() ->
     [
-        ?assertMatch({ok, {10, 1, _, <<"baz">>}},
-                     scan_expr_end(<<"{foo\"bar\"}}baz">>, 0, 0, ?STATE)),
-        ?assertMatch({ok, {8, 1, _, <<"baz">>}},
-                     scan_expr_end(<<"foo\"bar\"}baz">>, 0, 0, ?STATE)),
-        ?assertMatch({error, {unexpected_expr_end, _}},
-                     scan_expr_end(<<"foo\"bar\"baz">>, 0, 0, ?STATE))
+        ?assertMatch({ok, {10, 1, #{column := 12}, <<"baz">>}},
+                     scan_expr_end(<<"{foo\"bar\"}}baz">>, 0, 0, new_state())),
+        ?assertMatch({ok, {8, 1, #{column := 10}, <<"baz">>}},
+                     scan_expr_end(<<"foo\"bar\"}baz">>, 0, 0, new_state())),
+        ?assertMatch({error, {unexpected_expr_end, #{column := 12, position := 11}}},
+                     scan_expr_end(<<"foo\"bar\"baz">>, 0, 0, new_state()))
     ].
 
 scan_single_quoted_string_test() ->
     [
-        ?assertMatch({ok, {8, 1, _, <<"baz">>}},
-                     scan_single_quoted_string(<<"foo\\'bar'baz">>, 0, ?STATE)),
-        ?assertMatch({error, {unexpected_string_end, _}},
-                     scan_single_quoted_string(<<"foo">>, 0, ?STATE))
+        ?assertMatch({ok, {8, 1, #{column := 9}, <<"baz">>}},
+                     scan_single_quoted_string(<<"foo\\'bar'baz">>, 0, new_state())),
+        ?assertMatch({error, {unexpected_string_end, #{column := 4, position := 3}}},
+                     scan_single_quoted_string(<<"foo">>, 0, new_state()))
     ].
 
 scan_double_quoted_string_test() ->
     [
-        ?assertMatch({ok, {8, 1, _, <<"baz">>}},
-                     scan_double_quoted_string(<<"foo\\\"bar\"baz">>, 0, ?STATE)),
-        ?assertMatch({error, {unexpected_string_end, _}},
-                     scan_double_quoted_string(<<"foo">>, 0, ?STATE))
+        ?assertMatch({ok, {8, 1, #{column := 9}, <<"baz">>}},
+                     scan_double_quoted_string(<<"foo\\\"bar\"baz">>, 0, new_state())),
+        ?assertMatch({error, {unexpected_string_end, #{column := 4, position := 3}}},
+                     scan_double_quoted_string(<<"foo">>, 0, new_state()))
     ].
 
 new_line_test() ->
-    #{line := Ln, column := Col} = new_line(?STATE),
+    #{line := Ln, column := Col} = new_line(new_state()),
     ?assertEqual({2, 1}, {Ln, Col}).
 
 incr_col_test() ->
-    #{column := Col} = incr_col(1, ?STATE),
+    #{column := Col} = incr_col(1, new_state()),
     ?assertEqual(2, Col).
 
 incr_pos_test() ->
-    #{position := Pos} = incr_pos(1, ?STATE),
+    #{position := Pos} = incr_pos(1, new_state()),
     ?assertEqual(1, Pos).
 
 -endif.
