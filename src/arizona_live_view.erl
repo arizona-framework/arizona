@@ -109,26 +109,25 @@ handle_event(Mod, Event, Payload, Socket) ->
 
 -ifdef(TEST).
 -compile([export_all, nowarn_export_all]).
--include("arizona.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 % Start parse_str support.
 
 render(Macros) ->
-    ?ARIZONA_LIVEVIEW(Macros, """
+    arizona_live_view:parse_str("""
     <main :stateful>
         <h1>{_@title}</h1>
         <.arizona_live_view:counter/>
     </main>
-    """).
+    """, Macros).
 
 counter(Macros) ->
-    ?ARIZONA_LIVEVIEW(Macros, """
+    arizona_live_view:parse_str("""
     <div :stateful>
         <div>{_@count}</div>
         <button type="button">Increment</button>
     </div>
-    """).
+    """, Macros).
 
 % End parse_str support.
 
