@@ -17,7 +17,7 @@
     position => non_neg_integer()
 }.
 -opaque token() :: {open_tag, location(), binary()}
-                 | {attr_key, location(), binary()}
+                 | {attr_name, location(), binary()}
                  | {attr_value, location(), {text, binary()} | {expr, binary()}}
                  | {bool_attr, location(), binary()}
                  | {close_tag, location(), {void, boolean()}}
@@ -191,19 +191,19 @@ scan_tag_attrs(<<$\r, Rest/binary>>, Bin, IsVoid, State) ->
     scan_tag_attrs(Rest, Bin, IsVoid, new_line(incr_pos(1, State)));
 scan_tag_attrs(<<$\n, Rest/binary>>, Bin, IsVoid, State) ->
     scan_tag_attrs(Rest, Bin, IsVoid, new_line(incr_pos(1, State)));
-scan_tag_attrs(Rest0, Bin, IsVoid, KeyState) ->
-    case scan_tag_attr_key(Rest0, 0, KeyState) of
-        {ok, {KeyLen, NextState, Rest1}} when KeyLen > 0 ->
-            KeyPos = maps:get(position, KeyState),
-            Key = binary_part(Bin, KeyPos, KeyLen),
-            ValState = incr_pos(KeyLen, NextState),
+scan_tag_attrs(Rest0, Bin, IsVoid, NameState) ->
+    case scan_tag_attr_name(Rest0, 0, NameState) of
+        {ok, {NameLen, NextState, Rest1}} when NameLen > 0 ->
+            NamePos = maps:get(position, NameState),
+            Name = binary_part(Bin, NamePos, NameLen),
+            ValState = incr_pos(NameLen, NextState),
             case scan_tag_attr_value(Rest1, Bin, ValState) of
                 {ok, {Value, MarkerLen, State, Rest}} ->
-                    [{attr_key, location(KeyState), Key},
+                    [{attr_name, location(NameState), Name},
                      {attr_value, location(incr_col(MarkerLen, ValState)), Value}
                      | scan_tag_attrs(Rest, Bin, IsVoid, State)];
                 {none, {State, Rest}} ->
-                    [{bool_attr, location(KeyState), Key}
+                    [{bool_attr, location(NameState), Name}
                      | scan_tag_attrs(Rest, Bin, IsVoid, State)];
                 {error, Reason} ->
                     throw(Reason)
@@ -212,25 +212,25 @@ scan_tag_attrs(Rest0, Bin, IsVoid, KeyState) ->
             throw(Reason)
     end.
 
-scan_tag_attr_key(<<$=, _/binary>> = Rest, Len, State) ->
+scan_tag_attr_name(<<$=, _/binary>> = Rest, Len, State) ->
     {ok, {Len, State, Rest}};
-scan_tag_attr_key(<<$/, $>, _/binary>> = Rest, Len, State) ->
+scan_tag_attr_name(<<$/, $>, _/binary>> = Rest, Len, State) ->
     {ok, {Len, State, Rest}};
-scan_tag_attr_key(<<$>, _/binary>> = Rest, Len, State) ->
+scan_tag_attr_name(<<$>, _/binary>> = Rest, Len, State) ->
     {ok, {Len, State, Rest}};
-scan_tag_attr_key(<<$\s, _/binary>> = Rest, Len, State) ->
+scan_tag_attr_name(<<$\s, _/binary>> = Rest, Len, State) ->
     {ok, {Len, State, Rest}};
-scan_tag_attr_key(<<$\r, _/binary>> = Rest, Len, State) ->
+scan_tag_attr_name(<<$\r, _/binary>> = Rest, Len, State) ->
     {ok, {Len, State, Rest}};
-scan_tag_attr_key(<<$\n, _/binary>> = Rest, Len, State) ->
+scan_tag_attr_name(<<$\n, _/binary>> = Rest, Len, State) ->
     {ok, {Len, State, Rest}};
-scan_tag_attr_key(<<_, Rest/binary>>, Len, State) ->
-    scan_tag_attr_key(Rest, Len + 1, incr_col(1, State));
-scan_tag_attr_key(<<>>, Len, State) ->
+scan_tag_attr_name(<<_, Rest/binary>>, Len, State) ->
+    scan_tag_attr_name(Rest, Len + 1, incr_col(1, State));
+scan_tag_attr_name(<<>>, Len, State) ->
     {error, {unexpected_tag_end, incr_pos(Len, State)}}.
 
-scan_tag_attr_value(<<$=, $', Rest0/binary>>, Bin, KeyState) ->
-    ValState = incr_col(2, incr_pos(2, KeyState)),
+scan_tag_attr_value(<<$=, $', Rest0/binary>>, Bin, NameState) ->
+    ValState = incr_col(2, incr_pos(2, NameState)),
     case scan_single_quoted_string(Rest0, 0, ValState) of
         {ok, {Len, MarkerLen, TxtState, Rest}} ->
             Pos = maps:get(position, ValState),
@@ -240,8 +240,8 @@ scan_tag_attr_value(<<$=, $', Rest0/binary>>, Bin, KeyState) ->
         {error, {Reason, State}} ->
             {error, {Reason, State}}
     end;
-scan_tag_attr_value(<<$=, $", Rest0/binary>>, Bin, KeyState) ->
-    ValState = incr_col(2, incr_pos(2, KeyState)),
+scan_tag_attr_value(<<$=, $", Rest0/binary>>, Bin, NameState) ->
+    ValState = incr_col(2, incr_pos(2, NameState)),
     case scan_double_quoted_string(Rest0, 0, ValState) of
         {ok, {Len, MarkerLen, TxtState, Rest}} ->
             Pos = maps:get(position, ValState),
@@ -251,8 +251,8 @@ scan_tag_attr_value(<<$=, $", Rest0/binary>>, Bin, KeyState) ->
         {error, {Reason, State}} ->
             {error, {Reason, State}}
     end;
-scan_tag_attr_value(<<$=, ${, Rest0/binary>>, Bin, KeyState) ->
-    ValState = incr_col(2, incr_pos(2, KeyState)),
+scan_tag_attr_value(<<$=, ${, Rest0/binary>>, Bin, NameState) ->
+    ValState = incr_col(2, incr_pos(2, NameState)),
     case scan_expr_end(Rest0, 0, 0, ValState) of
         {ok, {Len, MarkerLen, ExprState, Rest}} ->
             Pos = maps:get(position, ValState),
@@ -391,25 +391,25 @@ scan_test() ->
             {bool_attr, {1, 11}, <<"html">>},
             {close_tag, {1, 15}, {void, true}},
             {open_tag, {2, 1}, <<"html">>},
-            {attr_key, {2, 7}, <<"lang">>},
+            {attr_name, {2, 7}, <<"lang">>},
             {attr_value, {2, 12}, {text, <<"en">>}},
             {close_tag, {2, 16}, {void, false}},
             {open_tag, {3, 1}, <<"head">>},
             {close_tag, {3, 6}, {void, false}},
             {open_tag, {4, 5}, <<"meta">>},
-            {attr_key, {4, 11}, <<"charset">>},
+            {attr_name, {4, 11}, <<"charset">>},
             {attr_value, {4, 19}, {text, <<"UTF-8">>}},
             {close_tag, {4, 26}, {void, true}},
             {open_tag, {5, 5}, <<"meta">>},
-            {attr_key, {5, 11}, <<"http-equiv">>},
+            {attr_name, {5, 11}, <<"http-equiv">>},
             {attr_value, {5, 22}, {text, <<"X-UA-Compatible">>}},
-            {attr_key, {5, 40}, <<"content">>},
+            {attr_name, {5, 40}, <<"content">>},
             {attr_value, {5, 48}, {text, <<"IE=edge">>}},
             {close_tag, {5, 57}, {void, true}},
             {open_tag, {6, 5}, <<"meta">>},
-            {attr_key, {6, 11}, <<"name">>},
+            {attr_name, {6, 11}, <<"name">>},
             {attr_value, {6, 16}, {text, <<"viewport">>}},
-            {attr_key, {6, 27}, <<"content">>},
+            {attr_name, {6, 27}, <<"content">>},
             {attr_value, {6, 35},
                         {text, <<"width=device-width, initial-scale=1.0">>}},
             {close_tag, {6, 74}, {void, true}},
@@ -418,7 +418,7 @@ scan_test() ->
             {expr, {7, 12}, <<"_@title">>},
             {closing_tag, {7, 21}, <<"title">>},
             {open_tag, {8, 5}, <<"script">>},
-            {attr_key, {8, 13}, <<"src">>},
+            {attr_name, {8, 13}, <<"src">>},
             {attr_value, {8, 17}, {text, <<"assets/js/main.js">>}},
             {close_tag, {8, 36}, {void, false}},
             {closing_tag, {8, 37}, <<"script">>},
@@ -430,19 +430,19 @@ scan_test() ->
             {text, {11, 9}, <<"Arizona Counter">>},
             {closing_tag, {11, 24}, <<"h1">>},
             {open_tag, {12, 5}, <<".counter">>},
-            {attr_key, {13, 9}, <<"count">>},
+            {attr_name, {13, 9}, <<"count">>},
             {attr_value, {13, 15}, {expr, <<"_@count">>}},
-            {attr_key, {14, 9}, <<"btn_text">>},
+            {attr_name, {14, 9}, <<"btn_text">>},
             {attr_value, {14, 18}, {text, <<"Increment">>}},
-            {attr_key, {15, 9}, <<"event">>},
+            {attr_name, {15, 9}, <<"event">>},
             {attr_value, {15, 15}, {text, <<"incr">>}},
             {close_tag, {16, 5}, {void, true}},
             {open_tag, {17, 5}, <<".counter">>},
-            {attr_key, {18, 9}, <<"count">>},
+            {attr_name, {18, 9}, <<"count">>},
             {attr_value, {18, 15}, {expr, <<"99">>}},
-            {attr_key, {19, 9}, <<"btn_text">>},
+            {attr_name, {19, 9}, <<"btn_text">>},
             {attr_value, {19, 18}, {text, <<"Decrement">>}},
-            {attr_key, {20, 9}, <<"event">>},
+            {attr_name, {20, 9}, <<"event">>},
             {attr_value, {20, 15}, {text, <<"decr">>}},
             {close_tag, {21, 5}, {void, true}},
             {closing_tag, {22, 1}, <<"body">>},
