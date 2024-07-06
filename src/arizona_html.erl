@@ -11,11 +11,18 @@ HTML support.
 -export([safe_types/0]).
 
 %% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
+
+-type safe_type() :: binary() | atom() | number().
+-export_type([safe_type/0]).
+
+%% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
 -spec to_safe(Value) -> binary()
-    when Value :: binary() | atom() | number().
+    when Value :: safe_type().
 to_safe(V) when is_binary(V) ->
     V;
 to_safe(V) when is_atom(V) ->
