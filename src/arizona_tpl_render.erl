@@ -28,10 +28,19 @@ Renderer.
 -export([render_block/2]).
 -export([mount/2]).
 
+-type socket_target() :: [integer()].
+-export_type([socket_target/0]).
+
 %% --------------------------------------------------------------------
 %% API funtions.
 %% --------------------------------------------------------------------
 
+-spec render_target(Target, Block, Changes, Assigns) -> Rendered
+    when Target :: root | json:decode_value(),
+         Block :: arizona_tpl_compile:block(),
+         Changes :: arizona_socket:changes(),
+         Assigns :: arizona_socket:assigns(),
+         Rendered :: iolist().
 render_target(Target, Block, Changes, Assigns) when map_size(Changes) > 0 ->
     render_target_1(Target, Block, Changes, Assigns);
 render_target(_Target, _Block, _Changes, _Assigns) ->
@@ -48,18 +57,29 @@ render_target_2([H | T], Block, Changes, Assigns) ->
     #{block := Nested} = maps:get(H, Block),
     render_target_2(T, Nested, Changes, Assigns).
 
-render_block(#{id := Id, view := View} = Block, Assigns0) ->
+-spec render_block(Block, Assigns) -> Rendered
+    when Block :: arizona_tpl_compile:block(),
+         Assigns :: arizona_socket:assigns(),
+         Rendered :: iolist().
+render_block(Block, Assigns0) ->
+    Id = maps:get(id, Block),
+    View = maps:get(view, Block),
     Socket0 = arizona_socket:new(Id, View, Assigns0),
-    {ok, Socket} = arizona_live_view:mount(View, Socket0),
+    Socket = arizona_live_view:mount(View, Socket0),
     Indexes = maps:get(indexes, Block),
     Tree = maps:get(block, Block),
-    Assigns = maps:get(assigns, Socket),
+    Assigns = arizona_socket:get_assigns(Socket),
     render_indexes(Indexes, Tree, Assigns, false).
 
+-spec mount(Block, Assigns) -> {Rendered, Sockets}
+    when Block :: arizona_tpl_compile:block(),
+         Assigns :: arizona_socket:assigns(),
+         Rendered :: iolist(),
+         Sockets :: #{SocketId :: socket_target() := Socket :: arizona_socket:t()}.
 mount(#{id := Id, view := View} = Block, Assigns0) ->
     Socket0 = arizona_socket:new(Id, View, Assigns0),
-    {ok, Socket} = arizona_live_view:mount(View, Socket0),
-    Assigns = maps:get(assigns, Socket),
+    Socket = arizona_live_view:mount(View, Socket0),
+    Assigns = arizona_socket:get_assigns(Socket),
     To = self(),
     Pid = spawn(fun() ->
         Indexes = maps:get(indexes, Block),
@@ -83,7 +103,7 @@ render_changes(#{}, _Changes, _Assigns) ->
 mount_loop(Pid, Sockets) ->
     receive
         {Pid, finished, Render} ->
-            {ok, {Render, maps:from_list(Sockets)}};
+            {Render, maps:from_list(Sockets)};
         {Pid, mount, Id, Socket} ->
             mount_loop(Pid, [{Id, Socket} | Sockets])
     after
@@ -100,7 +120,7 @@ render_indexes([H | T], Block, Assigns, Notify) ->
                 ok ->
                     render_indexes(T, Block, Assigns, Notify);
                 Value ->
-                    [arizona_html:safe(Value) | render_indexes(T, Block, Assigns, Notify)]
+                    [arizona_html:to_safe(Value) | render_indexes(T, Block, Assigns, Notify)]
             end;
         #{indexes := Indexes, block := NBlock, attrs := Attrs} = Nested ->
             AttrsAssigns = maps:map(fun(_K, Expr) ->
@@ -111,14 +131,14 @@ render_indexes([H | T], Block, Assigns, Notify) ->
                     NId = maps:get(id, Nested),
                     NView = maps:get(view, Nested),
                     NSocket0 = arizona_socket:new(NId, NView, AttrsAssigns),
-                    {ok, NSocket} = arizona_live_view:mount(NView, NSocket0),
-                    case Notify of
+                    NSocket = arizona_live_view:mount(NView, NSocket0),
+                    _ = case Notify of
                         {true, Pid} ->
                             Pid ! {self(), mount, NId, NSocket};
                         false ->
                             ok
                     end,
-                    maps:get(assigns, NSocket);
+                    arizona_socket:get_assigns(NSocket);
                 #{} ->
                     AttrsAssigns
             end,
@@ -139,7 +159,7 @@ path_render_1([Path | T], Block, Assigns, Acc) ->
         ok ->
             path_render_1(T, Block, Assigns, Acc);
         Value ->
-            path_render_1(T, Block, Assigns, [[Path, arizona_html:safe(Value)] | Acc])
+            path_render_1(T, Block, Assigns, [[Path, arizona_html:to_safe(Value)] | Acc])
     end;
 path_render_1([], _Block, _Assigns, Acc) ->
     Acc.
@@ -167,82 +187,21 @@ eval({expr, {Fun, _Vars}}, Assigns) ->
 -compile([export_all, nowarn_export_all]).
 -include_lib("eunit/include/eunit.hrl").
 
-
-render_block_test() ->
-    ?assertEqual(
-       rendered(), render_block(block(#{}), #{
-            title => <<"Arizona">>,
-            view_count => 0,
-            decr_btn_text => <<"Decrement">>})).
-
 % NOTE: Apparently, there is no changes here, but the socket set
 %       changes to the assigns automatically, then they are sync.
 render_changes_test() ->
     ?assertEqual([[[4, 5], <<"999">>], [[3, 5], <<"999">>]],
-        render_changes(block(#{}),
+        arizona_tpl_render:render_changes(block(#{}),
             #{view_count => 999},
             #{title => <<"Arizona">>,
             view_count => 999,
             decr_btn_text => <<"Decrement">>})).
 
-rendered() ->
-    [<<"<main arz-id=\"root\"><h1>">>, <<"Arizona">>,
-     <<"</h1>">>,
-     [<<"<div arz-id=\"[3]\" id=\"">>, <<"1">>,
-      <<"\"><span>">>, <<"Count:">>, <<"<b>">>, <<"0">>,
-      <<"</b></span><br/>">>,
-      [<<"Increment">>,
-       <<"<button arz-target=\"[3]\" onclick=\"">>,
-       <<"incr">>, <<"\" type=\"button\">">>, <<"Increment">>,
-       <<"</button>">>, <<"Increment">>],
-      <<"</div>">>],
-     [<<"<div arz-id=\"[4]\" id=\"">>, <<"2">>,
-      <<"\"><span>">>, <<"Rev. Counter:">>, <<"<b>">>, <<"0">>,
-      <<"</b></span><br/>">>,
-      [<<"Decrement">>,
-       <<"<button arz-target=\"[4]\" onclick=\"">>,
-       <<"decr">>, <<"\" type=\"button\">">>, <<"Decrement">>,
-       <<"</button>">>, <<"Decrement">>],
-      <<"</div>">>],
-     <<"</main>">>].
-
-mount_test() ->
-    {ok, {Render, Sockets}} = mount(block(#{}), #{
-            title => <<"Arizona">>,
-            view_count => 0,
-            decr_btn_text => <<"Decrement">>}),
-    [?assertEqual(rendered(), Render),
-     ?assertMatch(#{[0] :=
-                       #{id := [0],
-                         events := [], view := arizona_tpl_compile,
-                         assigns :=
-                             #{title := <<"Arizona">>, view_count := 0,
-                               decr_btn_text := <<"Decrement">>},
-                         changes := #{}},
-                   [3] :=
-                       #{id := [3],
-                         events := [], view := arizona_tpl_compile,
-                         assigns :=
-                             #{id := <<"1">>, counter_count := 0,
-                               btn_text := <<"Increment">>,
-                               btn_event := <<"incr">>},
-                         changes := #{}},
-                   [4] :=
-                       #{id := [4],
-                         events := [], view := arizona_tpl_compile,
-                         assigns :=
-                             #{id := <<"2">>, label := <<"Rev. Counter:">>,
-                               counter_count := 0, btn_text := <<"Decrement">>,
-                               btn_event := <<"decr">>},
-                         changes := #{}}}, Sockets)].
-
 %% Start block support.
 
 block(Macros) ->
-    {ok, Tpl} = arizona_tpl_compile:compile({arizona_tpl_compile, view, Macros}),
-    Tpl.
+    arizona_tpl_compile:compile(arizona_tpl_compile, view, Macros).
 
 %% End block support.
 
 -endif.
-

@@ -25,8 +25,19 @@ Template compiler.
 
 %% API functions.
 -export([compile/1]).
+-ignore_xref([compile/1]).
+-export([compile/3]).
 
--record(state, {view, parent = root}).
+-record(state, {
+    view :: undefined | module(),
+    parent :: root | json:decode_value()
+}).
+
+-type block() :: map().
+-export_type([block/0]).
+
+-elvis([{elvis_style, max_module_length, disable}]).
+-elvis([{elvis_style, max_function_length, disable}]).
 
 %% --------------------------------------------------------------------
 %% API funtions.
@@ -35,17 +46,25 @@ Template compiler.
 % NOTE: Multiple tags is not allowed for a root, e.g.:
 %       Good: <html><head></head><body></body></html>
 %        Bad: <head></head><body></body>
-compile({Mod, Fun, Args}) when is_atom(Mod), is_atom(Fun) ->
+
+-spec compile(Tree) -> block()
+    when Tree :: arizona_tpl_parse:tree().
+compile(Tree) ->
+    [{0, Block}] = compile(Tree, [], 0, #state{parent = root}),
+    Block.
+
+-spec compile(Mod, Fun, Macros) -> block()
+    when Mod :: module(),
+         Fun :: atom(),
+         Macros :: arizona_live_view:macros().
+compile(Mod, Fun, Macros) ->
     [{0, Block}] = compile([{block, #{
         module => Mod,
         function => Fun,
-        args => Args,
+        args => Macros,
         directives => #{stateful => true},
-        attrs => []}}], [], 0, #state{view = Mod}),
-    {ok, Block};
-compile(Tree) ->
-    [{0, Block}] = compile(Tree, [], 0, #state{}),
-    {ok, Block}.
+        attrs => []}}], [], 0, #state{view = Mod, parent = root}),
+    Block.
 
 %% --------------------------------------------------------------------
 %% Internal funtions.
@@ -239,10 +258,10 @@ block_struct(Block, P, I, State) ->
     Attrs = block_attrs(Block),
     Directives = maps:get(directives, Block),
     AllDirectives = case find_first_tag(Tree) of
-        {ok, Tag} ->
-            maps:merge(maps:get(directives, Tag), Directives);
         none ->
-            Directives
+            Directives;
+        Tag ->
+            maps:merge(maps:get(directives, Tag), Directives)
     end,
     NonAttrs = [stateful, 'if', 'for'],
     AllAttrs = maps:merge(Attrs, maps:without(NonAttrs, Directives)),
@@ -289,7 +308,7 @@ block_mod_fun(#{function := F}, State) ->
 find_first_tag([{tag, #{name := Name} = Tag} | T]) ->
     case is_tag(Name) of
         true ->
-            {ok, Tag};
+            Tag;
         false ->
             find_first_tag(T)
     end;
@@ -348,8 +367,7 @@ expr_vars_1([], _Id, T) ->
 -include_lib("eunit/include/eunit.hrl").
 
 compile_tree_test() ->
-    ?assertMatch({ok,
-                  #{block :=
+    ?assertMatch(#{block :=
                      #{0 :=
                         #{id := [0], text := <<"<main arz-id=\"root\"><h1>">>},
                        1 :=
@@ -527,15 +545,15 @@ compile_tree_test() ->
                        view_count := [[3, 5], [4, 5]],
                        decr_btn_text := [[4, 7, 0], [4, 7, 4], [4, 7, 6]]},
                     indexes := [0, 1, 2, 3, 4, 5],
-                    view := arizona_tpl_compile}}, compile({?MODULE, view, #{}})).
+                    view := arizona_tpl_compile}, compile(?MODULE, view, #{})).
 
 %% Start compile support.
 
 mount(Socket) ->
-    {ok, Socket}.
+    Socket.
 
 view(Macros) ->
-    {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
+    Tokens = arizona_tpl_scan:string("""
     <main :stateful>
         <h1>{_@title}</h1>
         <.arizona_tpl_compile:counter
@@ -553,11 +571,10 @@ view(Macros) ->
         />
     </main>
     """),
-    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
-    Tree.
+    arizona_tpl_parse:parse_exprs(Tokens, Macros).
 
 counter(Macros) ->
-    {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
+    Tokens = arizona_tpl_scan:string("""
     {% NOTE: :stateful directive defines the arz-id attribue,   }
     {%       and adds this to the blocks param in the state.    }
     <div id={_@id} :stateful>
@@ -583,30 +600,28 @@ counter(Macros) ->
         {% {try _@content catch _:_ -> <<>> end} }
     </div>
     """),
-    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
-    Tree.
+    arizona_tpl_parse:parse_exprs(Tokens, Macros).
 
 button(Macros) ->
-    {ok, Tokens, _EndLoc} = arizona_tpl_scan:string("""
+    Tokens = arizona_tpl_scan:string("""
     {_@text}
     <button type="button" :onclick={_@event}>
         {_@text}
     </button>
     {_@text}
     """),
-    {ok, Tree} = arizona_tpl_parse:parse_exprs(Tokens, Macros),
-    Tree.
+    arizona_tpl_parse:parse_exprs(Tokens, Macros).
 
 %% End compile support.
 
 expr_vars_test() ->
-    Tpl = compile(button(#{}), [], 0, #state{}),
+    Tpl = compile(button(#{}), [], 0, #state{parent = root}),
     Vars = expr_vars(Tpl),
     [?assertEqual([{text, [0]}, {event, [2]}, {text, [4]}, {text, [6]}], Vars),
      ?assertMatch(#{text := [[0], [4], [6]], event := [[2]]}, vars_group(Vars))].
 
 vars_test() ->
-    {ok, #{vars := Vars}} = compile({?MODULE, counter, #{}}),
+    #{vars := Vars} = compile(?MODULE, counter, #{}),
     ?assertMatch(#{id := [[1]],
                    label := [[3]],
                    counter_count := [[5]],
@@ -614,4 +629,3 @@ vars_test() ->
                    btn_event := [[7, 2]]}, Vars).
 
 -endif.
-

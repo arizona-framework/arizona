@@ -27,27 +27,29 @@
 %% Supervisor callbacks.
 -export([init/1]).
 
-%% Macros.
--define(SERVER, ?MODULE).
-
 %% --------------------------------------------------------------------
 %% API functions.
 %% --------------------------------------------------------------------
 
+-spec start_link() -> supervisor:startlink_ret().
 start_link() ->
-    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
+    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 %% --------------------------------------------------------------------
 %% Supervisor callbacks.
 %% --------------------------------------------------------------------
 
-init([]) ->
+-spec init(Args) -> {ok, {SupFlags, [ChildSpec]}}
+    when Args :: term(),
+         SupFlags :: supervisor:sup_flags(),
+         ChildSpec :: supervisor:child_spec().
+init(_Args) ->
     SupFlags = #{
         strategy => one_for_all,
         intensity => 0,
         period => 1
     },
-    ChildSpecs = case application:get_env(arizona, endpoint, #{}) of
+    ChildSpecs = case arizona_cfg:endpoint() of
         #{live_reload := true} ->
             [#{id => arizona_live_reload, start =>
               {arizona_live_reload, start_link, []}}];
@@ -55,4 +57,3 @@ init([]) ->
             []
     end,
     {ok, {SupFlags, ChildSpecs}}.
-

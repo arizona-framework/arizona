@@ -30,8 +30,11 @@ Template scanner.
 %% API funtions.
 %% --------------------------------------------------------------------
 
+-spec string(String) -> Tokens
+    when String :: binary() | string(),
+         Tokens :: [arizona_tpl_parse:token()].
 string(Str) when is_binary(Str) ->
-    {ok, scan(Str, Str, 0, 0), 1};
+    scan(Str, Str, 0, 0);
 string(Str) when is_list(Str) ->
     string(iolist_to_binary(Str)).
 
@@ -41,33 +44,33 @@ string(Str) when is_list(Str) ->
 
 scan(<<$<, $/, Rest/binary>>, Str, Pos, Len) ->
     case text_token(Str, Pos, Len) of
-        {ok, TxtToken} ->
-            [TxtToken, closing_tag | scan_tag_name(Rest, Str, Pos + Len + 2, 0)];
         none ->
-            [closing_tag | scan_tag_name(Rest, Str, Pos + Len + 2, 0)]
+            [closing_tag | scan_tag_name(Rest, Str, Pos + Len + 2, 0)];
+        TxtToken ->
+            [TxtToken, closing_tag | scan_tag_name(Rest, Str, Pos + Len + 2, 0)]
     end;
 scan(<<$<, Rest/binary>>, Str, Pos, Len) ->
     case text_token(Str, Pos, Len) of
-        {ok, TxtToken} ->
-            [TxtToken, tag_open | scan_tag_name(Rest, Str, Pos + Len + 1, 0)];
         none ->
-            [tag_open | scan_tag_name(Rest, Str, Pos + Len + 1, 0)]
+            [tag_open | scan_tag_name(Rest, Str, Pos + Len + 1, 0)];
+        TxtToken ->
+            [TxtToken, tag_open | scan_tag_name(Rest, Str, Pos + Len + 1, 0)]
     end;
 scan(<<${, Rest/binary>>, Str, Pos, Len) ->
     case text_token(Str, Pos, Len) of
-        {ok, TxtToken} ->
-            [TxtToken | scan_expr(Rest, Str, Pos + Len + 1)];
         none ->
-            scan_expr(Rest, Str, Pos + Len + 1)
+            scan_expr(Rest, Str, Pos + Len + 1);
+        TxtToken ->
+            [TxtToken | scan_expr(Rest, Str, Pos + Len + 1)]
     end;
 scan(<<_, Rest/binary>>, Str, Pos, Len) ->
     scan(Rest, Str, Pos, Len + 1);
 scan(<<>>, Str, Pos, Len) ->
     case text_token(Str, Pos, Len) of
-        {ok, TxtToken} ->
-            [TxtToken];
         none ->
-            []
+            [];
+        TxtToken ->
+            [TxtToken]
     end.
 
 scan_expr(Rest0, Str, Pos) ->
@@ -153,7 +156,7 @@ text_token(Str, Pos, Len) ->
         <<>> ->
             none;
         Txt ->
-            {ok, {text, Txt}}
+            {text, Txt}
     end.
 
 %% --------------------------------------------------------------------
@@ -164,7 +167,7 @@ text_token(Str, Pos, Len) ->
 -include_lib("eunit/include/eunit.hrl").
 
 string_test() ->
-    ?assertEqual({ok, [
+    ?assertEqual([
         {text, <<"Start">>},
         {expr, <<"% This is a comment. ">>},
         tag_open,
@@ -214,7 +217,7 @@ string_test() ->
         {tag_name, <<"main">>},
         tag_close,
         {text, <<"End">>}
-    ], 1}, string(<<"""
+    ], string(<<"""
     Start
     {% This is a comment. }
     <main id="foo" class={_@class} style='display: none;' hidden>
@@ -233,4 +236,3 @@ string_test() ->
     """>>)).
 
 -endif.
-

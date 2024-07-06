@@ -24,8 +24,6 @@ Live-reload functionality for use during development.
 
 -behaviour(gen_server).
 
--include_lib("kernel/include/logger.hrl").
-
 %% API functions
 -export([start_link/0]).
 -ignore_xref([start_link/0]).
@@ -39,18 +37,26 @@ Live-reload functionality for use during development.
 -export([handle_info/2]).
 
 %% State
--record(state, {timer, files = #{}, clients = #{}}).
+-record(state, {
+    timer :: undefined | reference(),
+    files :: #{string() := {erl, modified}},
+    clients :: #{pid() := boolean()}
+}).
+-opaque state() :: #state{}.
+-export_type([state/0]).
+-elvis([{elvis_style, state_record_and_type, disable}]). % opaque not identified as "type"
 
-%% Macros
 -define(SERVER, ?MODULE).
 
 %% --------------------------------------------------------------------
 %% API functions.
 %% --------------------------------------------------------------------
 
+-spec start_link() -> gen_server:start_ret().
 start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+    gen_server:start_link({local, ?SERVER}, ?SERVER, [], []).
 
+-spec reload() -> ok.
 reload() ->
     gen_server:cast(?SERVER, reload).
 
@@ -58,38 +64,44 @@ reload() ->
 %% gen_server callbacks.
 %% --------------------------------------------------------------------
 
-init([]) ->
+-spec init(Args) -> {ok, State}
+    when Args :: term(),
+         State :: state().
+init(_Args) ->
     register_events(),
     setup_watcher(),
-    {ok, #state{}}.
+    {ok, #state{
+        files = #{},
+        clients = #{}
+    }}.
 
-handle_call(Request, From, State) ->
-    ?LOG_INFO("[LiveReload] call: ~p from ~p~n", [Request, From]),
-    {reply, State, State}.
+-spec handle_call(Request, From, State) -> no_return()
+    when Request :: term(),
+         From :: gen_server:from(),
+         State :: state().
+handle_call(_Request, _From, _State) ->
+    exit(not_implemented).
 
+-spec handle_cast(Request, State1) -> {noreply, State2}
+    when Request :: term(),
+         State1 :: state(),
+         State2 :: state().
 handle_cast(reload, State) ->
-    ?LOG_INFO("[LiveReload] reload: ~p~n", [State]),
     reload(State#state.clients),
-    {noreply, State};
-handle_cast(Request, State) ->
-    ?LOG_INFO("[LiveReload] cast: ~p~n", [Request]),
     {noreply, State}.
 
+-spec handle_info(Info, State1) -> {noreply, State2}
+    when Info :: term(),
+         State1 :: state(),
+         State2 :: state().
 handle_info({init, Client}, #state{clients = Clients} = State) ->
-    ?LOG_INFO("[LiveReload] init: ~p~n", [Client]),
     {noreply, State#state{clients = Clients#{Client => true}}};
 handle_info({terminate, Client}, #state{clients = Clients} = State) ->
-    ?LOG_INFO("[LiveReload] terminate: ~p~n", [Client]),
     {noreply, State#state{clients = maps:without([Client], Clients)}};
 handle_info({_Pid, {fs, file_event}, {File, Events}},
             #state{timer = Timer, files = Files} = State0) ->
     % Try recompile only when the last modified file was received.
-    case Timer =:= undefined of
-        true ->
-            ok;
-        false ->
-            erlang:cancel_timer(Timer)
-    end,
+    Timer =/= undefined andalso erlang:cancel_timer(Timer),
     State = State0#state{timer = erlang:send_after(25, self(), recompile)},
     case filename:extension(File) of
         ".erl" ->
@@ -103,7 +115,6 @@ handle_info({_Pid, {fs, file_event}, {File, Events}},
             {noreply, State}
     end;
 handle_info(recompile, #state{files = Files} = State) when map_size(Files) > 0 ->
-    ?LOG_INFO("[LiveReload] recompile: ~p~n", [State]),
     maps:foreach(fun
         (File, {erl, modified}) ->
             Mod = list_to_existing_atom(filename:basename(File, ".erl")),
@@ -113,8 +124,7 @@ handle_info(recompile, #state{files = Files} = State) when map_size(Files) > 0 -
     {noreply, State#state{timer = undefined, files = #{}}};
 handle_info(recompile, State) ->
     {noreply, State#state{timer = undefined}};
-handle_info(Request, State) ->
-    ?LOG_INFO("[LiveReload] info: ~p~n", [Request]),
+handle_info(_Request, State) ->
     {noreply, State}.
 
 %% --------------------------------------------------------------------
@@ -126,9 +136,8 @@ register_events() ->
     arizona_websocket:subscribe(terminate).
 
 setup_watcher() ->
-    fs:start_link(arizona_live_reload_fs, filename:absname("")),
+    {ok, _} = fs:start_link(arizona_live_reload_fs, filename:absname("")),
     fs:subscribe(arizona_live_reload_fs).
 
 reload(Clients) ->
     maps:foreach(fun(Client, _) -> Client ! reload end, Clients).
-

@@ -20,8 +20,6 @@
 -module(arizona_server).
 -moduledoc false.
 
--include_lib("kernel/include/logger.hrl").
-
 %% API functions.
 -export([start/0]).
 -ignore_xref([start/0]).
@@ -32,21 +30,42 @@
 %% Macros
 -define(LISTENER, arizona_http_listener).
 -define(PERSIST_KEY, arizona_dispatch).
+-elvis([{elvis_style, no_macros, #{allow => ['LISTENER', 'PERSIST_KEY']}}]).
+
+-type opts() :: #{
+    scheme => http | https,
+    transport => ranch_tcp:opts(),
+    proto => #{
+        proto => cowboy:opts(),
+        host => '_' | iodata(), % as per cowboy_router:route_match(),
+        routes => list(),
+        live_reload => boolean()
+    }
+}.
+-export_type([opts/0]).
 
 %% --------------------------------------------------------------------
 %% API functions.
 %% --------------------------------------------------------------------
 
+-spec start() -> pid().
 start() ->
-    start(application:get_env(arizona, endpoint, #{})).
+    start(arizona_cfg:endpoint()).
 
-start(Opts) when is_map(Opts) ->
+-spec start(Opts) -> pid()
+    when Opts :: opts().
+start(Opts) ->
     do_start(norm_opts(Opts)).
 
+-spec route(Req) -> Routed
+    when Req :: cowboy_req:req(),
+         Routed :: {Req, Env},
+         Env :: cowboy_middleware:env().
 route(Req) ->
     #{path := Path} = cowboy_req:match_qs([path], Req),
-    cowboy_router:execute(Req#{path => Path},
-                          #{dispatch => {persistent_term, ?PERSIST_KEY}}).
+    {ok, Req, Env} = cowboy_router:execute(Req#{path => Path},
+                                           #{dispatch => {persistent_term, ?PERSIST_KEY}}),
+    {Req, Env}.
 
 %% --------------------------------------------------------------------
 %% Internal functions.
@@ -54,27 +73,10 @@ route(Req) ->
 
 do_start(#{scheme := http, transport := Transport, proto := Proto}) ->
     {ok, Pid} = cowboy:start_clear(?LISTENER, Transport, Proto),
-    print_running(http),
-    {ok, Pid};
+    Pid;
 do_start(#{scheme := https, transport := Transport, proto := Proto}) ->
     {ok, Pid} = cowboy:start_tls(?LISTENER, Transport, Proto),
-    print_running(https),
-    {ok, Pid}.
-
-print_running(Scheme) ->
-    Info = ranch:info(?LISTENER),
-    {ip, Ip} = proplists:lookup(ip, Info),
-    {port, Port} = proplists:lookup(port, Info),
-    ?LOG_INFO("Arizona is running at ~w://~s:~p~n",
-              [Scheme, ip_to_str(Ip), Port]).
-
-ip_to_str(Ip) ->
-    case inet:ntoa(Ip) of
-        {error, einval} ->
-            error({invalid_ip, Ip});
-        Str ->
-            Str
-    end.
+    Pid.
 
 norm_opts(Opts) ->
     #{
@@ -88,10 +90,10 @@ norm_opts(Opts) ->
 
 norm_transport_opts([]) ->
     [{port, 8080}];
-norm_transport_opts(Opts) when is_list(Opts) ->
+norm_transport_opts(Opts) ->
     Opts.
 
-norm_proto_opts(Opts, Host, Routes, LiveReload) when is_map(Opts) ->
+norm_proto_opts(Opts, Host, Routes, LiveReload) ->
     Dispatch = cowboy_router:compile([{Host, [
         {"/assets/js/morphdom.min.js", cowboy_static,
          {priv_file, arizona, "static/assets/js/morphdom.min.js"}},
@@ -110,4 +112,3 @@ norm_proto_opts(Opts, Host, Routes, LiveReload) when is_map(Opts) ->
     end}]),
     persistent_term:put(?PERSIST_KEY, Dispatch),
     Opts#{env => #{dispatch => {persistent_term, ?PERSIST_KEY}}}.
-
