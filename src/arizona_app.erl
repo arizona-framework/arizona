@@ -1,14 +1,16 @@
 -module(arizona_app).
 -moduledoc false.
-
 -behaviour(application).
 
-%% Application callbacks.
+%% --------------------------------------------------------------------
+%% Behaviour (application) exports
+%% --------------------------------------------------------------------
+
 -export([start/2]).
 -export([stop/1]).
 
 %% --------------------------------------------------------------------
-%% Application callbacks.
+%% Behaviour (application) callbacks
 %% --------------------------------------------------------------------
 
 -spec start(StartType, StartArgs) -> supervisor:startlink_ret()

@@ -3,11 +3,14 @@
 Template scanner.
 """.
 
-%% API functions.
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([string/1]).
 
 %% --------------------------------------------------------------------
-%% API funtions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec string(String) -> Tokens
@@ -19,7 +22,7 @@ string(Str) when is_list(Str) ->
     string(iolist_to_binary(Str)).
 
 %% --------------------------------------------------------------------
-%% Internal funtions.
+%% Private
 %% --------------------------------------------------------------------
 
 scan(<<$<, $/, Rest/binary>>, Str, Pos, Len) ->
@@ -140,10 +143,11 @@ text_token(Str, Pos, Len) ->
     end.
 
 %% --------------------------------------------------------------------
-%% EUnit tests.
+%% EUnit
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
+-compile([export_all, nowarn_export_all]).
 -include_lib("eunit/include/eunit.hrl").
 
 string_test() ->

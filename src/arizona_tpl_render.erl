@@ -3,16 +3,23 @@
 Renderer.
 """.
 
-%% API functions.
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([render_target/4]).
 -export([render_block/2]).
 -export([mount/2]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
 
 -type socket_target() :: [integer()].
 -export_type([socket_target/0]).
 
 %% --------------------------------------------------------------------
-%% API funtions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec render_target(Target, Block, Changes, Assigns) -> Rendered
@@ -70,7 +77,7 @@ mount(#{id := Id, view := View} = Block, Assigns0) ->
     mount_loop(Pid, [{Id, Socket}]).
 
 %% --------------------------------------------------------------------
-%% Internal funtions.
+%% Private
 %% --------------------------------------------------------------------
 
 render_changes(#{vars := AllVars, block := Block}, Changes, Assigns)
@@ -160,7 +167,7 @@ eval({expr, {Fun, _Vars}}, Assigns) ->
     Fun(Assigns).
 
 %% --------------------------------------------------------------------
-%% EUnit tests.
+%% EUnit
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
@@ -177,11 +184,11 @@ render_changes_test() ->
             view_count => 999,
             decr_btn_text => <<"Decrement">>})).
 
-%% Start block support.
+%% --------------------------------------------------------------------
+%% Test support
+%% --------------------------------------------------------------------
 
 block(Macros) ->
     arizona_tpl_compile:compile(arizona_tpl_compile, view, Macros).
-
-%% End block support.
 
 -endif.

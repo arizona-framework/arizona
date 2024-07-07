@@ -2,22 +2,33 @@
 -moduledoc """
 Live-reload functionality for use during development.
 """.
-
 -behaviour(gen_server).
 
-%% API functions
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([start_link/0]).
--ignore_xref([start_link/0]).
 -export([reload/0]).
+
+%
+
+-ignore_xref([start_link/0]).
 -ignore_xref([reload/0]).
 
-%% gen_server callbacks.
+%% --------------------------------------------------------------------
+%% Behaviour (gen_server) callbacks
+%% --------------------------------------------------------------------
+
 -export([init/1]).
 -export([handle_call/3]).
 -export([handle_cast/2]).
 -export([handle_info/2]).
 
-%% State
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
+
 -record(state, {
     timer :: undefined | reference(),
     files :: #{string() := {erl, modified}},
@@ -27,10 +38,14 @@ Live-reload functionality for use during development.
 -export_type([state/0]).
 -elvis([{elvis_style, state_record_and_type, disable}]). % opaque not identified as "type"
 
+%% --------------------------------------------------------------------
+%% Macros
+%% --------------------------------------------------------------------
+
 -define(SERVER, ?MODULE).
 
 %% --------------------------------------------------------------------
-%% API functions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec start_link() -> gen_server:start_ret().
@@ -42,7 +57,7 @@ reload() ->
     gen_server:cast(?SERVER, reload).
 
 %% --------------------------------------------------------------------
-%% gen_server callbacks.
+%% Behaviour (gen_server) callbacks
 %% --------------------------------------------------------------------
 
 -spec init(Args) -> {ok, State}
@@ -109,7 +124,7 @@ handle_info(_Request, State) ->
     {noreply, State}.
 
 %% --------------------------------------------------------------------
-%% Internal functions.
+%% Private
 %% --------------------------------------------------------------------
 
 register_events() ->

@@ -1,15 +1,19 @@
 -module(arizona_template_scanner).
 -moduledoc false.
 
-%% API functions.
--export([scan/1]). -ignore_xref([scan/1]).
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
 
-%% Types
--export_type([token/0]).
--export_type([location/0]).
--export_type([line/0]).
--export_type([column/0]).
--export_type([error_reason/0]).
+-export([scan/1]).
+
+%
+
+-ignore_xref([scan/1]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
 
 -record(state, {
     line :: line(),
@@ -24,17 +28,26 @@
                  | {closing_tag, location(), binary()}
                  | {text, location(), binary()}
                  | {expr, location(), binary()}.
+-export_type([token/0]).
+
 -type location() :: {line(), column()}.
+-export_type([location/0]).
+
 -type line() :: non_neg_integer().
+-export_type([line/0]).
+
 -type column() :: non_neg_integer().
+-export_type([column/0]).
+
 -type error_reason() :: badexpr
                       | unexpected_comment
                       | unexpected_tag_end
                       | unexpected_expr_end
                       | unexpected_string_end.
+-export_type([error_reason/0]).
 
 %% --------------------------------------------------------------------
-%% API funtions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec scan(Bin) -> Result
@@ -49,7 +62,7 @@ scan(Bin) when is_binary(Bin) ->
     end.
 
 %% --------------------------------------------------------------------
-%% Internal funtions.
+%% Private
 %% --------------------------------------------------------------------
 
 scan(Rest0, Bin, Len, State0) ->
@@ -372,7 +385,7 @@ incr_pos(N, #state{position = Pos} = State) ->
     State#state{position = Pos + N}.
 
 %% --------------------------------------------------------------------
-%% EUnit tests.
+%% EUnit
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
@@ -487,4 +500,3 @@ incr_pos_test() ->
     ?assertEqual(1, Pos).
 
 -endif.
-

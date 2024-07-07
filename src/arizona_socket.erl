@@ -3,24 +3,34 @@
 Components state.
 """.
 
-%% API functions.
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([new/3]).
 -export([put_assigns/2]).
--ignore_xref([put_assigns/2]).
 -export([put_assign/3]).
--ignore_xref([put_assign/3]).
 -export([get_assigns/1]).
--ignore_xref([get_assigns/1]).
 -export([get_changes/1]).
 -export([get_view/1]).
 -export([get_id/1]).
 -export([get_events/1]).
 -export([get_assign/2]).
--ignore_xref([get_assign/2]).
 -export([get_assign/3]).
--ignore_xref([get_assign/3]).
 -export([push_event/3]).
 -export([prune/1]).
+
+%
+
+-ignore_xref([put_assigns/2]).
+-ignore_xref([put_assign/3]).
+-ignore_xref([get_assigns/1]).
+-ignore_xref([get_assign/2]).
+-ignore_xref([get_assign/3]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
 
 -opaque t() :: map().
 -export_type([t/0]).
@@ -38,7 +48,7 @@ Components state.
 -export_type([events/0]).
 
 %% --------------------------------------------------------------------
-%% API functions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec new(Id, View, Assigns) -> t()
@@ -131,7 +141,7 @@ prune(Socket) ->
     }.
 
 %% --------------------------------------------------------------------
-%% EUnit tests.
+%% EUnit
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
@@ -144,27 +154,6 @@ render_block_test() ->
             title => <<"Arizona">>,
             view_count => 0,
             decr_btn_text => <<"Decrement">>})).
-
-rendered() ->
-    [<<"<main arz-id=\"root\"><h1>">>, <<"Arizona">>,
-     <<"</h1>">>,
-     [<<"<div arz-id=\"[3]\" id=\"">>, <<"1">>,
-      <<"\"><span>">>, <<"Count:">>, <<"<b>">>, <<"0">>,
-      <<"</b></span><br/>">>,
-      [<<"Increment">>,
-       <<"<button arz-target=\"[3]\" onclick=\"">>,
-       <<"incr">>, <<"\" type=\"button\">">>, <<"Increment">>,
-       <<"</button>">>, <<"Increment">>],
-      <<"</div>">>],
-     [<<"<div arz-id=\"[4]\" id=\"">>, <<"2">>,
-      <<"\"><span>">>, <<"Rev. Counter:">>, <<"<b>">>, <<"0">>,
-      <<"</b></span><br/>">>,
-      [<<"Decrement">>,
-       <<"<button arz-target=\"[4]\" onclick=\"">>,
-       <<"decr">>, <<"\" type=\"button\">">>, <<"Decrement">>,
-       <<"</button>">>, <<"Decrement">>],
-      <<"</div>">>],
-     <<"</main>">>].
 
 mount_test() ->
     {Render, Sockets} = arizona_tpl_render:mount(block(#{}), #{
@@ -196,11 +185,32 @@ mount_test() ->
                                btn_event := <<"decr">>},
                          changes := #{}}}, Sockets)].
 
-%% Start block support.
+%% --------------------------------------------------------------------
+%% Test support
+%% --------------------------------------------------------------------
+
+rendered() ->
+    [<<"<main arz-id=\"root\"><h1>">>, <<"Arizona">>,
+     <<"</h1>">>,
+     [<<"<div arz-id=\"[3]\" id=\"">>, <<"1">>,
+      <<"\"><span>">>, <<"Count:">>, <<"<b>">>, <<"0">>,
+      <<"</b></span><br/>">>,
+      [<<"Increment">>,
+       <<"<button arz-target=\"[3]\" onclick=\"">>,
+       <<"incr">>, <<"\" type=\"button\">">>, <<"Increment">>,
+       <<"</button>">>, <<"Increment">>],
+      <<"</div>">>],
+     [<<"<div arz-id=\"[4]\" id=\"">>, <<"2">>,
+      <<"\"><span>">>, <<"Rev. Counter:">>, <<"<b>">>, <<"0">>,
+      <<"</b></span><br/>">>,
+      [<<"Decrement">>,
+       <<"<button arz-target=\"[4]\" onclick=\"">>,
+       <<"decr">>, <<"\" type=\"button\">">>, <<"Decrement">>,
+       <<"</button>">>, <<"Decrement">>],
+      <<"</div>">>],
+     <<"</main>">>].
 
 block(Macros) ->
     arizona_tpl_compile:compile(arizona_tpl_compile, view, Macros).
-
-%% End block support.
 
 -endif.

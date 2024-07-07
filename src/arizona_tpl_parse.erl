@@ -3,8 +3,15 @@
 Template parser.
 """.
 
-%% API functions.
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([parse_exprs/2]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
 
 -type token() :: term().
 -export_type([token/0]).
@@ -13,7 +20,7 @@ Template parser.
 -export_type([tree/0]).
 
 %% --------------------------------------------------------------------
-%% API funtions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec parse_exprs(Tokens, Macros) -> tree()
@@ -34,6 +41,10 @@ parse_exprs([closing_tag | _] = T, _Macros) ->
     T;
 parse_exprs([], _Macros) ->
     [].
+
+%% --------------------------------------------------------------------
+%% Private
+%% --------------------------------------------------------------------
 
 parse_tag([{tag_name, <<$., Name/binary>>} | T], Macros) ->
     do_parse_block(T, [{name, Name}], Macros);
@@ -231,10 +242,11 @@ get(K, L) ->
     end.
 
 %% --------------------------------------------------------------------
-%% EUnit tests.
+%% EUnit
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
+-compile([export_all, nowarn_export_all]).
 -include_lib("eunit/include/eunit.hrl").
 
 parse_exprs_test() ->

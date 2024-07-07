@@ -1,17 +1,26 @@
 -module(arizona_websocket).
 -moduledoc false.
-
 -behaviour(cowboy_websocket).
 
-%% cowboy_websocket callbacks.
+%% --------------------------------------------------------------------
+%% Behaviour (cowboy_websocket) exports
+%% --------------------------------------------------------------------
+
 -export([init/2]).
 -export([websocket_init/1]).
 -export([websocket_handle/2]).
 -export([websocket_info/2]).
 -export([terminate/3]).
 
-%% API functions.
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([subscribe/1]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
 
 -opaque init_state() :: {Params :: [{binary(), binary() | true}],
                          {Mod :: module(), Fun :: atom(), Opts :: arizona:route_opts()}}.
@@ -25,7 +34,7 @@
 -elvis([{elvis_style, state_record_and_type, disable}]). % opaque not identified as "type"
 
 %% --------------------------------------------------------------------
-%% cowboy_handler callbacks.
+%% Behaviour (cowboy_websocket) callbacks
 %% --------------------------------------------------------------------
 
 -spec init(Req, term()) -> {cowboy_websocket, Req, InitState}
@@ -103,7 +112,7 @@ terminate(_Reason, _Req, _State) ->
     send(terminate, {terminate, self()}).
 
 %% --------------------------------------------------------------------
-%% API functions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec subscribe(Event) -> ok
@@ -113,7 +122,7 @@ subscribe(Event) ->
     ok.
 
 %% --------------------------------------------------------------------
-%% Internal functions.
+%% Private
 %% --------------------------------------------------------------------
 
 send(Event, Payload) ->

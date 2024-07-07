@@ -1,13 +1,15 @@
 -module(arizona_live_handler).
 -moduledoc false.
-
 -behaviour(cowboy_handler).
 
-%% cowboy_handler callbacks.
+%% --------------------------------------------------------------------
+%% Behaviour (cowboy_handler) exports
+%% --------------------------------------------------------------------
+
 -export([init/2]).
 
 %% --------------------------------------------------------------------
-%% cowboy_handler callbacks.
+%% Behaviour (cowboy_handler) callbacks
 %% --------------------------------------------------------------------
 
 -spec init(Req, State1) -> {ok, Req, State2}

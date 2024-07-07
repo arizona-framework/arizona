@@ -3,10 +3,20 @@
 Template compiler.
 """.
 
-%% API functions.
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([compile/1]).
--ignore_xref([compile/1]).
 -export([compile/3]).
+
+%
+
+-ignore_xref([compile/1]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
 
 -record(state, {
     view :: undefined | module(),
@@ -16,11 +26,13 @@ Template compiler.
 -type block() :: map().
 -export_type([block/0]).
 
+%
+
 -elvis([{elvis_style, max_module_length, disable}]).
 -elvis([{elvis_style, max_function_length, disable}]).
 
 %% --------------------------------------------------------------------
-%% API funtions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 % NOTE: Multiple tags is not allowed for a root, e.g.:
@@ -47,7 +59,7 @@ compile(Mod, Fun, Macros) ->
     Block.
 
 %% --------------------------------------------------------------------
-%% Internal funtions.
+%% Private
 %% --------------------------------------------------------------------
 
 compile([{text, Txt}, {tag, Tag} | T], P, I, State) ->
@@ -339,7 +351,7 @@ expr_vars_1([], _Id, T) ->
     expr_vars(T).
 
 %% --------------------------------------------------------------------
-%% EUnit tests.
+%% EUnit
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
@@ -527,7 +539,23 @@ compile_tree_test() ->
                     indexes := [0, 1, 2, 3, 4, 5],
                     view := arizona_tpl_compile}, compile(?MODULE, view, #{})).
 
-%% Start compile support.
+expr_vars_test() ->
+    Tpl = compile(button(#{}), [], 0, #state{parent = root}),
+    Vars = expr_vars(Tpl),
+    [?assertEqual([{text, [0]}, {event, [2]}, {text, [4]}, {text, [6]}], Vars),
+     ?assertMatch(#{text := [[0], [4], [6]], event := [[2]]}, vars_group(Vars))].
+
+vars_test() ->
+    #{vars := Vars} = compile(?MODULE, counter, #{}),
+    ?assertMatch(#{id := [[1]],
+                   label := [[3]],
+                   counter_count := [[5]],
+                   btn_text := [[7, 0], [7, 4], [7, 6]],
+                   btn_event := [[7, 2]]}, Vars).
+
+%% --------------------------------------------------------------------
+%% Test support
+%% --------------------------------------------------------------------
 
 mount(Socket) ->
     Socket.
@@ -591,21 +619,5 @@ button(Macros) ->
     {_@text}
     """),
     arizona_tpl_parse:parse_exprs(Tokens, Macros).
-
-%% End compile support.
-
-expr_vars_test() ->
-    Tpl = compile(button(#{}), [], 0, #state{parent = root}),
-    Vars = expr_vars(Tpl),
-    [?assertEqual([{text, [0]}, {event, [2]}, {text, [4]}, {text, [6]}], Vars),
-     ?assertMatch(#{text := [[0], [4], [6]], event := [[2]]}, vars_group(Vars))].
-
-vars_test() ->
-    #{vars := Vars} = compile(?MODULE, counter, #{}),
-    ?assertMatch(#{id := [[1]],
-                   label := [[3]],
-                   counter_count := [[5]],
-                   btn_text := [[7, 0], [7, 4], [7, 6]],
-                   btn_event := [[7, 2]]}, Vars).
 
 -endif.

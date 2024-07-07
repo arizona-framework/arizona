@@ -1,17 +1,30 @@
 -module(arizona_server).
 -moduledoc false.
 
-%% API functions.
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([start/0]).
--ignore_xref([start/0]).
 -export([start/1]).
--ignore_xref([start/1]).
 -export([route/1]).
 
+%
+
+-ignore_xref([start/0]).
+-ignore_xref([start/1]).
+
+%% --------------------------------------------------------------------
 %% Macros
+%% --------------------------------------------------------------------
+
 -define(LISTENER, arizona_http_listener).
 -define(PERSIST_KEY, arizona_dispatch).
 -elvis([{elvis_style, no_macros, #{allow => ['LISTENER', 'PERSIST_KEY']}}]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
 
 -type opts() :: #{
     scheme => http | https,
@@ -26,7 +39,7 @@
 -export_type([opts/0]).
 
 %% --------------------------------------------------------------------
-%% API functions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec start() -> pid().
@@ -49,7 +62,7 @@ route(Req) ->
     {Req, Env}.
 
 %% --------------------------------------------------------------------
-%% Internal functions.
+%% Private
 %% --------------------------------------------------------------------
 
 do_start(#{scheme := http, transport := Transport, proto := Proto}) ->

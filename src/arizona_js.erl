@@ -3,13 +3,19 @@
 Javascript support.
 """.
 
-%% API functions.
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([send/1]).
 -export([send/2]).
+
+%
+
 -ignore_xref([send/2]).
 
 %% --------------------------------------------------------------------
-%% API funtions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec send(EventName) -> Sent
@@ -26,7 +32,7 @@ send(EventName, Payload) ->
     <<"arizona.send.bind(this)('", EventName/binary, "', ", (safe(Payload))/binary, ")"/utf8>>.
 
 %% --------------------------------------------------------------------
-%% Internal funtions.
+%% Private
 %% --------------------------------------------------------------------
 
 safe(Term) ->

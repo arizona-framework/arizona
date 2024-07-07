@@ -1,21 +1,24 @@
 -module(arizona_live_view_SUITE).
-
+-behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
 
-%% ct callbacks.
+%% --------------------------------------------------------------------
+%% Behaviour (ct_suite) exports
+%% --------------------------------------------------------------------
+
 -export([all/0]).
 -export([init_per_suite/1]).
 -export([end_per_suite/1]).
 
-%% arizona_live_view callbacks.
+%% --------------------------------------------------------------------
+%% Behaviour (arizona_live_view) exports
+%% --------------------------------------------------------------------
+
 -export([mount/1]).
 -export([render/1]).
 
-%% Test cases.
--export([hello_world/1]).
-
 %% --------------------------------------------------------------------
-%% arizona_live_view callbacks.
+%% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
 
 all() ->
@@ -36,7 +39,7 @@ end_per_suite(Config) ->
     Config.
 
 %% --------------------------------------------------------------------
-%% arizona_live_view callbacks.
+%% Behaviour (arizona_live_view) callbacks
 %% --------------------------------------------------------------------
 
 mount(Socket) ->
@@ -54,7 +57,7 @@ render(Macros) ->
     """, Macros).
 
 %% --------------------------------------------------------------------
-%% Test cases.
+%% Tests
 %% --------------------------------------------------------------------
 
 hello_world(Config) when is_list(Config) ->
@@ -63,6 +66,10 @@ hello_world(Config) when is_list(Config) ->
     Resp1 = httpc:request("http://localhost:8080/helloworld"),
     ?assert(is_status(200, Resp1)),
     ?assert(is_body("Hello, World!", Resp1)).
+
+%% --------------------------------------------------------------------
+%% Test support
+%% --------------------------------------------------------------------
 
 is_body(Pattern, {ok, {{_HttpVersion, _StatusCode, _String}, _HttpHeaders, HttpBodyResult}}) ->
   nomatch =/= string:find(HttpBodyResult, Pattern);

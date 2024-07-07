@@ -1,15 +1,21 @@
 -module(arizona_sup).
--behaviour(supervisor).
 -moduledoc false.
+-behaviour(supervisor).
 
-%% API functions.
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([start_link/0]).
 
-%% Supervisor callbacks.
+%% --------------------------------------------------------------------
+%% Behaviour (supervisor) exports
+%% --------------------------------------------------------------------
+
 -export([init/1]).
 
 %% --------------------------------------------------------------------
-%% API functions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec start_link() -> supervisor:startlink_ret().
@@ -17,7 +23,7 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 %% --------------------------------------------------------------------
-%% Supervisor callbacks.
+%% Behaviour (supervisor) callbacks
 %% --------------------------------------------------------------------
 
 -spec init(Args) -> {ok, {SupFlags, [ChildSpec]}}
