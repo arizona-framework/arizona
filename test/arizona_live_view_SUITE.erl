@@ -1,28 +1,15 @@
 -module(arizona_live_view_SUITE).
 -behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
-
-%% --------------------------------------------------------------------
-%% Behaviour (ct_suite) exports
-%% --------------------------------------------------------------------
-
--export([all/0]).
--export([init_per_suite/1]).
--export([end_per_suite/1]).
-
-%% --------------------------------------------------------------------
-%% Behaviour (arizona_live_view) exports
-%% --------------------------------------------------------------------
-
--export([mount/1]).
--export([render/1]).
+-compile([export_all, nowarn_export_all]).
 
 %% --------------------------------------------------------------------
 %% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
 
 all() ->
-    [hello_world].
+    [Fun || {Fun, 1} <- ?MODULE:module_info(exports),
+            re:run(atom_to_binary(Fun), <<"^test_">>) =/= nomatch].
 
 init_per_suite(Config) ->
     application:set_env([{arizona, [
@@ -60,7 +47,7 @@ render(Macros) ->
 %% Tests
 %% --------------------------------------------------------------------
 
-hello_world(Config) when is_list(Config) ->
+test_hello_world(Config) when is_list(Config) ->
     Resp0 = httpc:request("http://localhost:8080/notfound"),
     ?assert(is_status(404, Resp0)),
     Resp1 = httpc:request("http://localhost:8080/helloworld"),
