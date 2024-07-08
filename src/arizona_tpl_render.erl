@@ -1,38 +1,25 @@
-%%
-%% %CopyrightBegin%
-%%
-%% Copyright 2024 William Fank Thomé
-%%
-%% Licensed under the Apache License, Version 2.0 (the "License");
-%% you may not use this file except in compliance with the License.
-%% You may obtain a copy of the License at
-%%
-%%     http://www.apache.org/licenses/LICENSE-2.0
-%%
-%% Unless required by applicable law or agreed to in writing, software
-%% distributed under the License is distributed on an "AS IS" BASIS,
-%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-%% See the License for the specific language governing permissions and
-%% limitations under the License.
-%%
-%% %CopyrightEnd%
-%%
 -module(arizona_tpl_render).
 -moduledoc """
 Renderer.
 """.
--moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
-%% API functions.
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([render_target/4]).
 -export([render_block/2]).
 -export([mount/2]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
 
 -type socket_target() :: [integer()].
 -export_type([socket_target/0]).
 
 %% --------------------------------------------------------------------
-%% API funtions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec render_target(Target, Block, Changes, Assigns) -> Rendered
@@ -90,7 +77,7 @@ mount(#{id := Id, view := View} = Block, Assigns0) ->
     mount_loop(Pid, [{Id, Socket}]).
 
 %% --------------------------------------------------------------------
-%% Internal funtions.
+%% Private
 %% --------------------------------------------------------------------
 
 render_changes(#{vars := AllVars, block := Block}, Changes, Assigns)
@@ -180,7 +167,7 @@ eval({expr, {Fun, _Vars}}, Assigns) ->
     Fun(Assigns).
 
 %% --------------------------------------------------------------------
-%% EUnit tests.
+%% EUnit
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
@@ -197,11 +184,11 @@ render_changes_test() ->
             view_count => 999,
             decr_btn_text => <<"Decrement">>})).
 
-%% Start block support.
+%% --------------------------------------------------------------------
+%% Test support
+%% --------------------------------------------------------------------
 
 block(Macros) ->
     arizona_tpl_compile:compile(arizona_tpl_compile, view, Macros).
-
-%% End block support.
 
 -endif.

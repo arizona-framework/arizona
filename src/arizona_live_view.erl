@@ -1,43 +1,43 @@
-%%
-%% %CopyrightBegin%
-%%
-%% Copyright 2024 William Fank Thomé
-%%
-%% Licensed under the Apache License, Version 2.0 (the "License");
-%% you may not use this file except in compliance with the License.
-%% You may obtain a copy of the License at
-%%
-%%     http://www.apache.org/licenses/LICENSE-2.0
-%%
-%% Unless required by applicable law or agreed to in writing, software
-%% distributed under the License is distributed on an "AS IS" BASIS,
-%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-%% See the License for the specific language governing permissions and
-%% limitations under the License.
-%%
-%% %CopyrightEnd%
-%%
 -module(arizona_live_view).
 -moduledoc """
 Live view.
 """.
--moduledoc #{author => "William Fank Thomé <willilamthome@hotmail.com>"}.
 
-%% API functions.
--export([parse_str/2]).
--ignore_xref([parse_str/2]).
--export([mount/2]).
--export([handle_event/4]).
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([put_macro/3]).
--ignore_xref([put_macro/3]).
 -export([get_macro/3]).
+-export([parse_str/2]).
+
+%
+
+-ignore_xref([parse_str/2]).
+-ignore_xref([put_macro/3]).
 -ignore_xref([get_macro/3]).
+
+%% --------------------------------------------------------------------
+%% Callback support function exports
+%% --------------------------------------------------------------------
+
+-export([mount/2]).
+-export([render/2]).
+-export([handle_event/4]).
+
+%
+
+-ignore_xref([render/2]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
 
 -type macros() :: map().
 -export_type([macros/0]).
 
 %% --------------------------------------------------------------------
-%% Callbacks.
+%% Callback definitions
 %% --------------------------------------------------------------------
 
 -callback mount(Socket) -> Socket
@@ -55,7 +55,7 @@ Live view.
 -optional_callbacks([handle_event/3]).
 
 %% --------------------------------------------------------------------
-%% API funtions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec put_macro(Key, Value, Macros1) -> Macros2
@@ -84,7 +84,7 @@ parse_str(Str, Macros) ->
     arizona_tpl_parse:parse_exprs(Tokens, Macros).
 
 %% --------------------------------------------------------------------
-%% Callback support functions.
+%% Callback support function definitions
 %% --------------------------------------------------------------------
 
 -spec mount(Mod, Socket1) -> Socket2
@@ -93,6 +93,13 @@ parse_str(Str, Macros) ->
          Socket2 :: arizona_socket:t().
 mount(Mod, Socket) ->
     Mod:mount(Socket).
+
+-spec render(Mod, Macros) -> Tree
+    when Mod :: module(),
+         Macros :: macros(),
+         Tree :: arizona_tpl_parse:tree().
+render(Mod, Macros) ->
+    Mod:render(Mod, Macros).
 
 -spec handle_event(Mod, EventName, Payload, Socket1) -> Socket2
     when Mod :: module(),
@@ -104,14 +111,19 @@ handle_event(Mod, Event, Payload, Socket) ->
     Mod:handle_event(Event, Payload, Socket).
 
 %% --------------------------------------------------------------------
-%% EUnit tests.
+%% EUnit
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
 -compile([export_all, nowarn_export_all]).
 -include_lib("eunit/include/eunit.hrl").
 
-% Start parse_str support.
+compile_test() ->
+    ?assert(is_block(arizona_tpl_compile:compile(?MODULE, render, #{}))).
+
+%% --------------------------------------------------------------------
+%% Test support
+%% --------------------------------------------------------------------
 
 render(Macros) ->
     arizona_live_view:parse_str("""
@@ -128,11 +140,6 @@ counter(Macros) ->
         <button type="button">Increment</button>
     </div>
     """, Macros).
-
-% End parse_str support.
-
-compile_test() ->
-    ?assert(is_block(arizona_tpl_compile:compile(?MODULE, render, #{}))).
 
 is_block(#{block := _}) ->
     true;

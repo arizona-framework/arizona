@@ -1,36 +1,29 @@
-%%
-%% %CopyrightBegin%
-%%
-%% Copyright 2023-2024 William Fank Thomé
-%%
-%% Licensed under the Apache License, Version 2.0 (the "License");
-%% you may not use this file except in compliance with the License.
-%% You may obtain a copy of the License at
-%%
-%%     http://www.apache.org/licenses/LICENSE-2.0
-%%
-%% Unless required by applicable law or agreed to in writing, software
-%% distributed under the License is distributed on an "AS IS" BASIS,
-%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-%% See the License for the specific language governing permissions and
-%% limitations under the License.
-%%
-%% %CopyrightEnd%
-%%
 -module(arizona_server).
 -moduledoc false.
 
-%% API functions.
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([start/0]).
--ignore_xref([start/0]).
 -export([start/1]).
--ignore_xref([start/1]).
 -export([route/1]).
 
+%
+
+-ignore_xref([start/1]).
+
+%% --------------------------------------------------------------------
 %% Macros
+%% --------------------------------------------------------------------
+
 -define(LISTENER, arizona_http_listener).
 -define(PERSIST_KEY, arizona_dispatch).
 -elvis([{elvis_style, no_macros, #{allow => ['LISTENER', 'PERSIST_KEY']}}]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
 
 -type opts() :: #{
     scheme => http | https,
@@ -45,7 +38,7 @@
 -export_type([opts/0]).
 
 %% --------------------------------------------------------------------
-%% API functions.
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -spec start() -> pid().
@@ -68,7 +61,7 @@ route(Req) ->
     {Req, Env}.
 
 %% --------------------------------------------------------------------
-%% Internal functions.
+%% Private
 %% --------------------------------------------------------------------
 
 do_start(#{scheme := http, transport := Transport, proto := Proto}) ->

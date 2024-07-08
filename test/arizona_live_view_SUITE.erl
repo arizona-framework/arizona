@@ -1,44 +1,15 @@
-%%
-%% %CopyrightBegin%
-%%
-%% Copyright 2023-2024 William Fank Thomé
-%%
-%% Licensed under the Apache License, Version 2.0 (the "License");
-%% you may not use this file except in compliance with the License.
-%% You may obtain a copy of the License at
-%%
-%%     http://www.apache.org/licenses/LICENSE-2.0
-%%
-%% Unless required by applicable law or agreed to in writing, software
-%% distributed under the License is distributed on an "AS IS" BASIS,
-%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-%% See the License for the specific language governing permissions and
-%% limitations under the License.
-%%
-%% %CopyrightEnd%
-%%
 -module(arizona_live_view_SUITE).
-
+-behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
-
-%% ct callbacks.
--export([all/0]).
--export([init_per_suite/1]).
--export([end_per_suite/1]).
-
-%% arizona_live_view callbacks.
--export([mount/1]).
--export([render/1]).
-
-%% Test cases.
--export([hello_world/1]).
+-compile([export_all, nowarn_export_all]).
 
 %% --------------------------------------------------------------------
-%% arizona_live_view callbacks.
+%% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
 
 all() ->
-    [hello_world].
+    [Fun || {Fun, 1} <- ?MODULE:module_info(exports),
+            re:run(atom_to_binary(Fun), <<"^test_">>) =/= nomatch].
 
 init_per_suite(Config) ->
     application:set_env([{arizona, [
@@ -55,7 +26,7 @@ end_per_suite(Config) ->
     Config.
 
 %% --------------------------------------------------------------------
-%% arizona_live_view callbacks.
+%% Behaviour (arizona_live_view) callbacks
 %% --------------------------------------------------------------------
 
 mount(Socket) ->
@@ -73,15 +44,19 @@ render(Macros) ->
     """, Macros).
 
 %% --------------------------------------------------------------------
-%% Test cases.
+%% Tests
 %% --------------------------------------------------------------------
 
-hello_world(Config) when is_list(Config) ->
+test_hello_world(Config) when is_list(Config) ->
     Resp0 = httpc:request("http://localhost:8080/notfound"),
     ?assert(is_status(404, Resp0)),
     Resp1 = httpc:request("http://localhost:8080/helloworld"),
     ?assert(is_status(200, Resp1)),
     ?assert(is_body("Hello, World!", Resp1)).
+
+%% --------------------------------------------------------------------
+%% Test support
+%% --------------------------------------------------------------------
 
 is_body(Pattern, {ok, {{_HttpVersion, _StatusCode, _String}, _HttpHeaders, HttpBodyResult}}) ->
   nomatch =/= string:find(HttpBodyResult, Pattern);
