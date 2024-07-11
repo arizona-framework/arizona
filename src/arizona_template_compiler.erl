@@ -496,6 +496,12 @@ render_invalid_macro_value_test() ->
                  compile(?MODULE, render_invalid_macro_value, #{
                     foo => [see_arizona_html_for_valid_types]})).
 
+norm_assigns_test() ->
+    {ok, #{changeable := Changeable}} = compile(?MODULE, render_norm_assigns, #{}),
+    #{0 := {block, Block}} = Changeable,
+    #{foo := {expr, #{function := Fun}}} = maps:get(norm_assigns, Block),
+    ?assertEqual(foo, Fun(#{bar => foo})).
+
 %% --------------------------------------------------------------------
 %% Test support
 %% --------------------------------------------------------------------
@@ -569,6 +575,17 @@ render_invalid_block_name(Macros) ->
 render_invalid_macro_value(Macros) ->
     maybe_parse(~"""
     {_@foo}
+    """, Macros).
+
+render_norm_assigns(Macros) ->
+    maybe_parse(~"""
+    {% _@bar is _@foo in the block, so it must be normalized. }
+    <.render_norm_assigns_block foo={_@bar} />
+    """, Macros).
+
+render_norm_assigns_block(Macros) ->
+    maybe_parse(~"""
+    <div :stateful>{_@foo}</div>
     """, Macros).
 
 % The below is what the arizona_live_view:parse_str should return.
