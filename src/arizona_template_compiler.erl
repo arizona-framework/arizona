@@ -191,8 +191,10 @@ block_mod_fun(Name, State) ->
 
 expand_block(Mod, Fun, Attrs, State) ->
     case erlang:apply(Mod, Fun, [State#state.macros]) of
-        {ok, {[{tag, Loc, #{is_stateful := true} = Tag}], Macros}} ->
-            NormAssigns = norm_block_assigns(Attrs, Macros, State),
+        {ok, {[{tag, Loc, #{is_stateful := true} = Tag}], AttrsMacros}} ->
+            AllNormAssigns = norm_block_assigns(Attrs, AttrsMacros, State),
+            Macros = #{K => Txt || K := {text, Txt} <- AllNormAssigns},
+            NormAssigns = #{K => {expr, Expr} || K := {expr, Expr} <- AllNormAssigns},
             StatefulState = stateful_state(Mod, Fun, Macros, State),
             Tree = compile_tag(Tag, Loc, [], StatefulState),
             [{block, block(Tree, NormAssigns, State)}];
@@ -211,11 +213,13 @@ norm_block_assigns(Attrs, Macros, State) ->
             {binary_to_existing_atom(K), expand_expr(Expr, Loc, Eval, State)}
     end, Attrs)).
 
-should_eval_expr(Expr, Macros) ->
+should_eval_expr(Expr, Macros) when map_size(Macros) > 0 ->
     ExprTree = merl:quote(Expr),
     ExprVars = merl:template_vars(merl:template(ExprTree)),
-    ExprVars =/= [] andalso map_size(Macros) > 0 andalso
-        lists:all(fun(Var) -> is_map_key(Var, Macros) end, ExprVars).
+    ExprVars =/= [] andalso
+        lists:all(fun(Var) -> is_map_key(Var, Macros) end, ExprVars);
+should_eval_expr(_, _) ->
+    false.
 
 block(Tree0, NormAssigns, State) ->
     Tree = concat_texts(Tree0),
@@ -414,40 +418,33 @@ compile_test() ->
                 #{function := render, id := [0], module := arizona_template_compiler,
                   changeable :=
                    #{0 :=
-                      {expr, #{function := _, id := [0, 0], vars := [count]}},
-                     1 :=
-                      {expr, #{function := _, id := [0, 1], vars := [btn_text]}}},
+                      {expr, #{function := _, id := [0, 0], vars := [count]}}},
                   static :=
                    [<<"<div><span>Count:">>,
                     <<"</span><button type=\"button\" "
-                      "onclick=\"arizona.send.bind(this)('incr')\">">>,
-                    <<"</button></div>">>],
-                  changeable_vars := #{count := [[0, 0]], btn_text := [[0, 1]]},
+                      "onclick=\"arizona.send.bind(this)('incr')\">",
+                     "Increment</button></div>">>],
+                  changeable_vars := #{count := [[0, 0]]},
                   norm_assigns_vars := [{count, [0, 0]}],
-                  changeable_indexes := [0, 1],
+                  changeable_indexes := [0],
                   norm_assigns :=
-                   #{count := {expr, #{function := _, id := [0], vars := [count]}},
-                     btn_text := {text, <<"Increment">>}}}},
+                   #{count := {expr, #{function := _, id := [0], vars := [count]}}}}},
               1 :=
                {block,
                 #{function := render, id := [1], module := arizona_template_compiler,
                   changeable :=
                    #{0 :=
-                      {expr, #{function := _, id := [1, 0], vars := [count]}},
-                     1 :=
-                      {expr, #{function := _, id := [1, 1], vars := [btn_text]}}},
+                      {expr, #{function := _, id := [1, 0], vars := [count]}}},
                   static :=
                    [<<"<div><span>Count:">>,
                     <<"</span><button type=\"button\" "
-                      "onclick=\"arizona.send.bind(this)('incr')\">">>,
-                    <<"</button></div>">>],
-                  changeable_vars :=
-                   #{count := [[1, 0]], btn_text := [[1, 1]]},
+                      "onclick=\"arizona.send.bind(this)('incr')\">"
+                      "Increment #2</button></div>">>],
+                  changeable_vars := #{count := [[1, 0]]},
                   norm_assigns_vars := [],
-                  changeable_indexes := [0, 1],
+                  changeable_indexes := [0],
                   norm_assigns :=
-                   #{count := {expr, #{function := _, id := [1], vars := []}},
-                     btn_text := {text, <<"Increment #2">>}}}}},
+                   #{count := {expr, #{function := _, id := [1], vars := []}}}}}},
            static :=
             [<<"<!DOCTYPE html=\"html\" />"
                "<html lang=\"en\">"
@@ -477,9 +474,6 @@ unexpected_stateful_tag_test() ->
     ].
 
 undef_block_fun_test() ->
-    % Just to make binary_to_existing_atom happy :)
-    _ = unexistent_mod,
-    _ = unexistent_fun,
     [
         ?assertEqual({error, {undef_block_fun, {?MODULE, render_undef_block_fun_1, {1, 1}}}},
                      compile(?MODULE, render_undef_block_fun_1, #{})),
@@ -501,6 +495,34 @@ norm_assigns_test() ->
     #{0 := {block, Block}} = Changeable,
     #{foo := {expr, #{function := Fun}}} = maps:get(norm_assigns, Block),
     ?assertEqual(foo, Fun(#{bar => foo})).
+
+macros_test() ->
+    ?assertMatch(
+        {ok,
+         #{function := render_macros,
+           id := [0],
+           module := arizona_template_compiler,
+           static := [<<"foo">>],
+           changeable :=
+            #{0 :=
+               {block,
+                #{function := render_macros,
+                  id := [0],
+                  module := arizona_template_compiler,
+                  static := [<<"<div>foobaz">>, <<"</div>">>],
+                  changeable :=
+                   #{0 :=
+                      {expr, #{function := _, id := [0, 0], vars := [qux]}}},
+                  changeable_vars := #{qux := [[0, 0]]},
+                  changeable_indexes := [0],
+                  norm_assigns :=
+                   #{qux :=
+                      {expr, #{function := _, id := [0], vars := [qux]}}},
+                  norm_assigns_vars := [{qux, [0, 0]}]}}},
+           changeable_vars := #{qux := [[0, 0]]},
+           changeable_indexes := [0],
+           norm_assigns := #{}, norm_assigns_vars := []}}
+       , compile(?MODULE, render_macros, #{foo => foo})).
 
 %% --------------------------------------------------------------------
 %% Test support
@@ -558,6 +580,8 @@ render_unexpected_stateful_tag_2(Macros) ->
     """, Macros).
 
 render_undef_block_fun_1(Macros) ->
+    % Just to make binary_to_existing_atom happy :)
+    _ = [unexistent_mod, unexistent_fun],
     maybe_parse(~"""
     <.unexistent_mod:unexistent_fun />
     """, Macros).
@@ -586,6 +610,21 @@ render_norm_assigns(Macros) ->
 render_norm_assigns_block(Macros) ->
     maybe_parse(~"""
     <div :stateful>{_@foo}</div>
+    """, Macros).
+
+render_macros(Macros) ->
+    % Just to make binary_to_existing_atom happy :)
+    _ = baz,
+    maybe_parse(~"""
+    {_@foo}
+    <.render_macros_block bar={_@foo} baz="baz" qux={_@qux} />
+    """, Macros).
+
+render_macros_block(Macros) ->
+    maybe_parse(~"""
+    <div :stateful>
+        {_@bar}{_@baz}{_@qux}
+    </div>
     """, Macros).
 
 % The below is what the arizona_live_view:parse_str should return.
