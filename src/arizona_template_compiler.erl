@@ -464,6 +464,36 @@ compile_test() ->
         title => ~"Arizona Framework",
         inc_btn_text => ~"Increment #2"})).
 
+unexpected_stateful_tag_test() ->
+    [
+        ?assertEqual({error, {unexpected_stateful_tag,
+                              {?MODULE, render_unexpected_stateful_tag_1, {2, 1}}}},
+                     compile(?MODULE, render_unexpected_stateful_tag_1, #{})),
+        ?assertEqual({error, {unexpected_stateful_tag,
+                              {?MODULE, render_unexpected_stateful_tag_2, {2, 5}}}},
+                     compile(?MODULE, render_unexpected_stateful_tag_2, #{}))
+    ].
+
+undef_block_fun_test() ->
+    % Just to make binary_to_existing_atom happy :)
+    _ = unexistent_mod,
+    _ = unexistent_fun,
+    [
+        ?assertEqual({error, {undef_block_fun, {?MODULE, render_undef_block_fun_1, {1, 1}}}},
+                     compile(?MODULE, render_undef_block_fun_1, #{})),
+        ?assertEqual({error, {undef_block_fun, {?MODULE, render_undef_block_fun_2, {1, 1}}}},
+                     compile(?MODULE, render_undef_block_fun_2, #{}))
+    ].
+
+invalid_block_name_test() ->
+    ?assertEqual({error, {invalid_block_name, {?MODULE, render_invalid_block_name, {1, 1}}}},
+                 compile(?MODULE, render_invalid_block_name, #{})).
+
+render_invalid_macro_value_test() ->
+    ?assertEqual({error, {invalid_macro_value, {?MODULE, render_invalid_macro_value, {1, 1}}}},
+                 compile(?MODULE, render_invalid_macro_value, #{
+                    foo => [see_arizona_html_for_valid_types]})).
+
 %% --------------------------------------------------------------------
 %% Test support
 %% --------------------------------------------------------------------
@@ -506,6 +536,40 @@ button(Macros) ->
     </button>
     """, Macros).
 
+render_unexpected_stateful_tag_1(Macros) ->
+    maybe_parse(~"""
+    foo
+    <div :stateful></div>
+    """, Macros).
+
+render_unexpected_stateful_tag_2(Macros) ->
+    maybe_parse(~"""
+    <div :stateful>
+        <div :stateful></div>
+    </div>
+    """, Macros).
+
+render_undef_block_fun_1(Macros) ->
+    maybe_parse(~"""
+    <.unexistent_mod:unexistent_fun />
+    """, Macros).
+
+render_undef_block_fun_2(Macros) ->
+    maybe_parse(~"""
+    <.unexistent_fun />
+    """, Macros).
+
+render_invalid_block_name(Macros) ->
+    maybe_parse(~"""
+    <.this_is_an_unexistent_atom />
+    """, Macros).
+
+render_invalid_macro_value(Macros) ->
+    maybe_parse(~"""
+    {_@foo}
+    """, Macros).
+
+% The below is what the arizona_live_view:parse_str should return.
 maybe_parse(Template, Macros) ->
     maybe
         {ok, Tokens} ?= arizona_template_scanner:scan(Template),
