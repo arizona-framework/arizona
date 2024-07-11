@@ -18,35 +18,38 @@
 -record(state, {
     module :: module(),
     function :: atom(),
-    macros :: macros(),
+    macros :: assigns(),
     attributes :: [arizona_template_parser:attribute()],
     index :: non_neg_integer(),
     path :: [non_neg_integer()]
 }).
 
--type macros() :: #{atom() := arizona_html:safe_type()}.
--export_type([macros/0]).
+-type assigns() :: #{atom() := term()}.
+-export_type([assigns/0]).
 
 -opaque changeable() :: {expr, expr()} | {block, block()}.
 -export_type([changeable/0]).
 
 -opaque expr() :: #{
     id := [non_neg_integer()],
-    function := fun((Assigns :: map()) -> arizona_html:safe_type()),
+    function := fun((assigns()) -> arizona_html:safe_type()),
     vars := [atom()]
 }.
 -export_type([expr/0]).
 
 -opaque block() :: #{
-    id => [non_neg_integer()],
-    module => module(),
-    function => atom(),
-    static => [binary()],
-    changeable => #{non_neg_integer() := changeable()},
-    changeable_vars => #{atom() := [[non_neg_integer()]]},
-    changeable_indexes => [non_neg_integer()],
-    norm_assigns => #{atom() := {text, binary()} | {expr, expr()}},
-    norm_assigns_vars => [{atom(), [non_neg_integer()]}]
+    id := [non_neg_integer()],
+    module := module(),
+    function := atom(),
+    static := [binary()],
+    changeable := #{non_neg_integer() := changeable()},
+    changeable_vars := #{atom() := [[non_neg_integer()]]},
+    changeable_indexes := [non_neg_integer()],
+    norm_assigns := #{atom() := #{
+        function := fun((assigns()) -> term()),
+        vars := [atom()]
+    }},
+    norm_assigns_vars := [{atom(), [non_neg_integer()]}]
 }.
 -export_type([block/0]).
 
@@ -198,9 +201,9 @@ block_mod_fun(Name, State) ->
 expand_block(Mod, Fun, Attrs, State) ->
     case erlang:apply(Mod, Fun, [State#state.macros]) of
         {ok, {[{tag, Loc, #{is_stateful := true} = Tag}], AttrsMacros}} ->
-            AllNormAssigns = norm_block_assigns(Attrs, AttrsMacros, State),
-            Macros = #{K => Txt || K := {text, Txt} <- AllNormAssigns},
-            NormAssigns = #{K => {expr, Expr} || K := {expr, Expr} <- AllNormAssigns},
+            BlockAssigns = block_assigns(Attrs, AttrsMacros, State),
+            Macros = block_assigns_macros(BlockAssigns),
+            NormAssigns = norm_block_assigns(BlockAssigns),
             StatefulState = stateful_state(Mod, Fun, Macros, State),
             Tree = compile_tag(Tag, Loc, [], StatefulState),
             [{block, block(Tree, NormAssigns, State)}];
@@ -210,7 +213,7 @@ expand_block(Mod, Fun, Attrs, State) ->
             throw({Reason, Loc, State})
     end.
 
-norm_block_assigns(Attrs, Macros, State) ->
+block_assigns(Attrs, Macros, State) ->
     maps:from_list(lists:map(fun
         ({K, {text, _, Txt}}) ->
             {binary_to_existing_atom(K), {text, Txt}};
@@ -218,6 +221,12 @@ norm_block_assigns(Attrs, Macros, State) ->
             Eval = should_eval_expr(Expr, Macros),
             {binary_to_existing_atom(K), expand_expr(Expr, Loc, Eval, State)}
     end, Attrs)).
+
+block_assigns_macros(Assigns) ->
+    #{K => Txt || K := {text, Txt} <- Assigns}.
+
+norm_block_assigns(Assigns) ->
+    #{K => maps:with([function, vars], Expr) || K := {expr, Expr} <- Assigns}.
 
 should_eval_expr(Expr, Macros) when map_size(Macros) > 0 ->
     ExprTree = merl:quote(Expr),
@@ -369,11 +378,9 @@ changeable_vars_2([], _, T) ->
 norm_assigns_vars(NormAssigns, ChangeableVars) ->
     norm_assigns_vars_1(maps:to_list(NormAssigns), ChangeableVars).
 
-norm_assigns_vars_1([{ChangeableVar, {expr, #{vars := Vars}}} | T], ChangeableVars) ->
+norm_assigns_vars_1([{ChangeableVar, #{vars := Vars}} | T], ChangeableVars) ->
     Indexes = proplists:get_all_values(ChangeableVar, ChangeableVars),
     norm_assigns_vars_2(Vars, ChangeableVar, Indexes, T, ChangeableVars);
-norm_assigns_vars_1([_ | T], ChangeableVars) ->
-    norm_assigns_vars_1(T, ChangeableVars);
 norm_assigns_vars_1([], _) ->
     [].
 
@@ -433,7 +440,7 @@ compile_test() ->
                   norm_assigns_vars := [{count, [0, 0]}],
                   changeable_indexes := [0],
                   norm_assigns :=
-                   #{count := {expr, #{function := _, id := [0], vars := [count]}}}}},
+                   #{count := #{function := _, vars := [count]}}}},
               1 :=
                {block,
                 #{function := render, id := [1], module := arizona_template_compiler,
@@ -449,7 +456,7 @@ compile_test() ->
                   norm_assigns_vars := [],
                   changeable_indexes := [0],
                   norm_assigns :=
-                   #{count := {expr, #{function := _, id := [1], vars := []}}}}}},
+                   #{count := #{function := _, vars := []}}}}},
            static :=
             [<<"<!DOCTYPE html=\"html\" />"
                "<html lang=\"en\">"
@@ -498,7 +505,7 @@ render_invalid_macro_value_test() ->
 norm_assigns_test() ->
     {ok, #{changeable := Changeable}} = compile(?MODULE, render_norm_assigns, #{}),
     #{0 := {block, Block}} = Changeable,
-    #{foo := {expr, #{function := Fun}}} = maps:get(norm_assigns, Block),
+    #{foo := #{function := Fun}} = maps:get(norm_assigns, Block),
     ?assertEqual(foo, Fun(#{bar => foo})).
 
 macros_test() ->
@@ -522,7 +529,7 @@ macros_test() ->
                   changeable_indexes := [0],
                   norm_assigns :=
                    #{qux :=
-                      {expr, #{function := _, id := [0], vars := [qux]}}},
+                      #{function := _, vars := [qux]}},
                   norm_assigns_vars := [{qux, [0, 0]}]}}},
            changeable_vars := #{qux := [[0, 0]]},
            changeable_indexes := [0],
