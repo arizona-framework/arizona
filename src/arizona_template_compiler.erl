@@ -257,10 +257,38 @@ compile_tag_attrs([], #{is_void := false} = Tag, _Loc, T, State) ->
     InnerContent = maps:get(inner_content, Tag),
     [{text, <<$>>>} | compile_tag_inner_content(InnerContent, Tag, T, State)].
 
-compile_tag_inner_content(InnerContent, Tag, T, State) ->
-    Elems = compile_elems(InnerContent, State),
+compile_tag_inner_content(InnerContent, #{name := Name} = Tag, T, State) ->
+    Elems = compile_elems(maybe_push_js_scripts(Name, InnerContent), State),
     NIndex = changeable_count(Elems, 0),
     Elems ++ compile_tag_closing(Tag, T, incr_index(NIndex, State)).
+
+% We definitely should provide a bundler to inject these scripts.
+maybe_push_js_scripts(<<"head">>, InnerContent) ->
+    push_js_scripts(InnerContent);
+maybe_push_js_scripts(_, InnerContent) ->
+    InnerContent.
+
+push_js_scripts([{tag, _, #{name := ~"script"}} | _] = T) ->
+    js_scripts() ++ T;
+push_js_scripts([H | T]) ->
+    [H | push_js_scripts(T)];
+push_js_scripts([]) ->
+    js_scripts().
+
+js_scripts() ->
+    Scripts = case arizona_cfg:endpoint() of
+        #{live_reload := true} ->
+            [live_reload_script() | required_js_script()];
+        #{} ->
+            required_js_script()
+    end,
+    [arizona_template_parser:dummy_script_tag(Script) || Script <- Scripts].
+
+required_js_script() ->
+    [~"assets/js/morphdom.min.js", ~"assets/js/arizona.js"].
+
+live_reload_script() ->
+    ~"assets/js/arizona-live-reload.js".
 
 compile_tag_closing(#{name :=  Name}, T, State) ->
     [{text, <<$<, $/, Name/binary, $>>>} | compile_elems(T, State)].
@@ -423,6 +451,8 @@ compile_test() ->
                "<html lang=\"en\">"
                "<head><meta charset=\"UTF-8\" />"
                "<title>Arizona Framework</title>"
+               "<script src=\"assets/js/morphdom.min.js\"></script>"
+               "<script src=\"assets/js/arizona.js\"></script>"
                "<script src=\"assets/js/main.js\"></script>"
                "</head><body><h1>Arizona Counter</h1>">>,
              <<>>, <<"</body></html>">>],

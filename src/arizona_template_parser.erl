@@ -6,10 +6,12 @@
 %% --------------------------------------------------------------------
 
 -export([parse/1]).
+-export([dummy_script_tag/1]).
 
 %
 
 -ignore_xref([parse/1]).
+-ignore_xref([dummy_script_tag/1]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -62,6 +64,16 @@ parse(Tokens) ->
         throw:{Reason, Loc} ->
             {error, {Reason, Loc}}
     end.
+
+% Used by the arizona_template_compiler to inject scripts.
+-spec dummy_script_tag(Src) -> TagElem
+    when Src :: binary(),
+         TagElem :: {tag, arizona_template_scanner:location(), tag()}.
+dummy_script_tag(Src) when is_binary(Src) ->
+    {tag, {1, 1}, normalize_tag_props([
+        {name, ~"script"},
+        {attribute, {~"src", {text, {1, 1}, Src}}}
+    ])}.
 
 %% --------------------------------------------------------------------
 %% Private
