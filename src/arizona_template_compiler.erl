@@ -113,10 +113,13 @@ compile_elems([], _State) ->
 compile_text(Txt, T, State) ->
     [{text, Txt} | compile_elems(T, State)].
 
-compile_expr(Expr, Loc, T, State) ->
-    Elem = expand_expr(Expr, Loc, true, State),
-    NIndex = case Elem of {text, _} -> 0; {expr, _} -> 1 end,
-    [Elem | compile_elems(T, incr_index(NIndex, State))].
+compile_expr(ExprStr, Loc, T, State) ->
+    case expand_expr(ExprStr, Loc, true, State) of
+        {text, Txt} ->
+            [{text, Txt} | compile_elems(T, State)];
+        {expr, Expr} ->
+            [{expr, Expr} | compile_elems(T, incr_index(1, State))]
+    end.
 
 expand_expr(Expr, Loc, Eval, State) ->
     ExprTree = merl:quote(Expr),
@@ -168,8 +171,7 @@ compile_block(#{name := Name} = Block, Loc, T, State) ->
         {ok, {Mod, Fun}} ->
             Attrs = maps:get(attributes, Block),
             Elems = expand_block(Mod, Fun, Attrs, State),
-            NIndex = changeable_count(Elems, 0),
-            Elems ++ compile_elems(T, incr_index(NIndex, State));
+            Elems ++ compile_elems(T, incr_index(changeable_count(Elems, 0), State));
         {error, Reason} ->
             throw({Reason, Loc, State})
     end.
@@ -256,9 +258,9 @@ compile_tag_attrs([{Name, {text, _, Value}} | Attrs], Tag, Loc, T, State) ->
      | compile_tag_attrs(Attrs, Tag, Loc, T, State)];
 compile_tag_attrs([{Name, {expr, ExprLoc, Expr}} | Attrs], Tag, Loc, T, State) ->
     Elem = expand_expr(Expr, ExprLoc, true, State),
-    NIndex = case Elem of {text, _} -> 0; {expr, _} -> 1 end,
+    ChangeableCount = case Elem of {text, _} -> 0; {expr, _} -> 1 end,
     [{text, <<$\s, Name/binary, $=, $">>}, Elem, {text, <<$">>}
-     | compile_tag_attrs(Attrs, Tag, Loc, T, incr_index(NIndex, State))];
+     | compile_tag_attrs(Attrs, Tag, Loc, T, incr_index(ChangeableCount, State))];
 compile_tag_attrs([], #{is_void := true}, _Loc, T, State) ->
     [{text, <<$\s, $/, $>>>} | compile_elems(T, State)];
 compile_tag_attrs([], #{is_void := false} = Tag, _Loc, T, State) ->
@@ -267,8 +269,7 @@ compile_tag_attrs([], #{is_void := false} = Tag, _Loc, T, State) ->
 
 compile_tag_inner_content(InnerContent, #{name := Name} = Tag, T, State) ->
     Elems = compile_elems(maybe_push_js_scripts(Name, InnerContent), State),
-    NIndex = changeable_count(Elems, 0),
-    Elems ++ compile_tag_closing(Tag, T, incr_index(NIndex, State)).
+    Elems ++ compile_tag_closing(Tag, T, incr_index(changeable_count(Elems, 0), State)).
 
 % We definitely should provide a bundler to inject these scripts.
 maybe_push_js_scripts(<<"head">>, InnerContent) ->
