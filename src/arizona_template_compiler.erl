@@ -306,6 +306,8 @@ filter_static([_, {text, Txt} | T]) ->
     [Txt | filter_static(T)];
 filter_static([_, _ | T]) ->
     [<<>> | filter_static(T)];
+filter_static([_ | T]) ->
+    filter_static(T);
 filter_static([]) ->
     [].
 

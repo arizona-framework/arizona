@@ -89,6 +89,8 @@ do_parse([{open_tag, Loc, <<$., Name/binary>>} | T0]) ->
 do_parse([{open_tag, Loc, Name} | T0]) ->
     {Tag, T} = parse_tag(Name, Loc, T0),
     [{tag, Loc, Tag} | do_parse(T)];
+do_parse([{comment, _, _} | T]) ->
+    do_parse(T);
 do_parse([]) ->
     [].
 
@@ -174,6 +176,8 @@ collect_nonvoid_tag_props([{open_tag, Loc, <<$., Name/binary>>} | T0], Props) ->
 collect_nonvoid_tag_props([{open_tag, Loc, Name} | T0], Props) ->
     {Tag, T} = parse_tag(Name, Loc, T0),
     collect_nonvoid_tag_props(T, [{inner_content, {tag, Loc, Tag}} | Props]);
+collect_nonvoid_tag_props([{comment, _, _} | T], Props) ->
+    collect_nonvoid_tag_props(T, Props);
 collect_nonvoid_tag_props([], _Props) ->
     {error, unexpected_tag_end}.
 
@@ -237,18 +241,18 @@ parse_ok_test() ->
                 is_stateful => false, is_void => false,
                 inner_content =>
                  [{tag,
-                   {9, 5},
+                   {10, 5},
                    #{attributes => [], name => <<"h1">>,
                      is_stateful => false, is_void => false,
                      inner_content =>
-                      [{text, {9, 9}, <<"Arizona Counter">>}]}},
+                      [{text, {10, 9}, <<"Arizona Counter">>}]}},
                   {block,
-                   {10, 5},
+                   {11, 5},
                    #{attributes =>
-                      [{<<"count">>, {expr, {11, 15}, <<"_@count">>}},
+                      [{<<"count">>, {expr, {12, 15}, <<"_@count">>}},
                        {<<"btn_text">>,
-                        {text, {12, 18}, <<"Increment">>}},
-                       {<<"event">>, {text, {13, 15}, <<"incr">>}}],
+                        {text, {13, 18}, <<"Increment">>}},
+                       {<<"event">>, {text, {14, 15}, <<"incr">>}}],
                      name => <<"counter">>}}]}}]}}
     ]}, parse(tokens_ok())).
 
@@ -284,6 +288,7 @@ tokens_ok() ->
         <script src="assets/js/main.js"></script>
     </head>
     <body>
+        {% Comments must be ignored. }
         <h1>Arizona Counter</h1>
         <.counter
             count={_@count}
