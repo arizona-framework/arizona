@@ -148,7 +148,7 @@ expand_expr(Expr, Loc, Eval, State) ->
             Env = [{subst, merl:subst(MacrosTree, VarsSubst)}],
             [Form] = erl_syntax:revert_forms([merl:qquote(~"_@subst", Env)]),
             NormExpr = iolist_to_binary(erl_pp:expr(Form)),
-            Forms = [merl:quote(<<"fun(Assigns) -> ", NormExpr/binary, " end">>)],
+            Forms = [merl:quote(expr_fun(NormExpr, Vars))],
             {value, Fun, _} = erl_eval:exprs(Forms, []),
             {expr, expr(Fun, Vars, State)}
     end.
@@ -166,6 +166,15 @@ eval_macros_to_safe_html(MacrosTree, Loc, State) ->
 var_form(Var) ->
     VarName = atom_to_binary(Var, utf8),
     merl:quote(<<"maps:get(", VarName/binary, ", Assigns)">>).
+
+expr_fun(Expr, Vars) ->
+    Args = expr_fun_args(Vars),
+    <<"fun(", Args/binary, ") -> ", Expr/binary, " end">>.
+
+expr_fun_args([]) ->
+    ~"_Assigns";
+expr_fun_args(_Vars) ->
+    ~"Assigns".
 
 expr(Fun, Vars, State) ->
     #{
