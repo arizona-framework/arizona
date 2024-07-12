@@ -17,11 +17,14 @@
 -record(state, {
     module :: module(),
     function :: atom(),
-    macros :: assigns(),
+    macros :: macros(),
     attributes :: [arizona_template_parser:attribute()],
     index :: non_neg_integer(),
     path :: [non_neg_integer()]
 }).
+
+-type macros() :: #{atom() := term()}.
+-export_type([macros/0]).
 
 -type assigns() :: #{atom() := term()}.
 -export_type([assigns/0]).

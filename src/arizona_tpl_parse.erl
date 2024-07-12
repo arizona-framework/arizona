@@ -25,7 +25,7 @@ Template parser.
 
 -spec parse_exprs(Tokens, Macros) -> tree()
     when Tokens :: [token()],
-         Macros :: arizona_live_view:macros().
+         Macros :: arizona_template_compiler:macros().
 parse_exprs([{text, Txt} | T], Macros) ->
     [{text, Txt} | parse_exprs(T, Macros)];
 parse_exprs([{expr, ExprStr} | T], Macros) ->

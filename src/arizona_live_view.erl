@@ -30,13 +30,6 @@ Live view.
 -ignore_xref([render/2]).
 
 %% --------------------------------------------------------------------
-%% Types (and their exports)
-%% --------------------------------------------------------------------
-
--type macros() :: map().
--export_type([macros/0]).
-
-%% --------------------------------------------------------------------
 %% Callback definitions
 %% --------------------------------------------------------------------
 
@@ -44,7 +37,7 @@ Live view.
     when Socket :: arizona_socket:t().
 
 -callback render(Macros) -> Tree
-    when Macros :: macros(),
+    when Macros :: arizona_template_compiler:macros(),
          Tree :: arizona_tpl_parse:tree().
 
 -callback handle_event(EventName, Payload, Socket) -> Socket
@@ -61,8 +54,8 @@ Live view.
 -spec put_macro(Key, Value, Macros1) -> Macros2
   when Key :: atom(),
        Value :: term(),
-       Macros1 :: macros(),
-       Macros2 :: macros().
+       Macros1 :: arizona_template_compiler:macros(),
+       Macros2 :: arizona_template_compiler:macros().
 put_macro(Key, Value, Macros) ->
   Macros#{
     Key => maps:get(Key, Macros, Value)
@@ -70,7 +63,7 @@ put_macro(Key, Value, Macros) ->
 
 -spec get_macro(Key, Macros, Default) -> Got
   when Key :: atom(),
-       Macros :: macros(),
+       Macros :: arizona_template_compiler:macros(),
        Default :: term(),
        Got :: term().
 get_macro(Key, Macros, Default) ->
@@ -78,7 +71,7 @@ get_macro(Key, Macros, Default) ->
 
 -spec parse_str(Str, Macros) -> arizona_tpl_parse:tree()
     when Str :: string() | binary(),
-         Macros :: macros().
+         Macros :: arizona_template_compiler:macros().
 parse_str(Str, Macros) ->
     Tokens = arizona_tpl_scan:string(Str),
     arizona_tpl_parse:parse_exprs(Tokens, Macros).
@@ -96,7 +89,7 @@ mount(Mod, Socket) ->
 
 -spec render(Mod, Macros) -> Tree
     when Mod :: module(),
-         Macros :: macros(),
+         Macros :: arizona_template_compiler:macros(),
          Tree :: arizona_tpl_parse:tree().
 render(Mod, Macros) ->
     Mod:render(Mod, Macros).
