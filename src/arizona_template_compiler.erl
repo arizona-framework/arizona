@@ -1,5 +1,4 @@
 -module(arizona_template_compiler).
--moduledoc false.
 
 %% --------------------------------------------------------------------
 %% API function exports

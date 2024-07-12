@@ -1,5 +1,4 @@
 -module(arizona_template_scanner).
--moduledoc false.
 
 %% --------------------------------------------------------------------
 %% API function exports
