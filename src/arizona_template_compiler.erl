@@ -249,13 +249,14 @@ block(Tree0, NormAssigns, State) ->
     Tree = concat_texts(Tree0),
     Changeable = normalize_changeable(filter_changeable(Tree)),
     ChangeableVars = changeable_vars(Changeable),
+    Id = changeable_id(State),
     #{
-        id => changeable_id(State),
+        id => Id,
         module => State#state.module,
         function => State#state.function,
         static => filter_static(Tree),
         changeable => Changeable,
-        changeable_vars => group_vars(ChangeableVars),
+        changeable_vars => group_vars(norm_changeable_vars(Id, ChangeableVars)),
         changeable_indexes => changeable_indexes(Changeable),
         norm_assigns => NormAssigns,
         norm_assigns_vars => norm_assigns_vars(NormAssigns, ChangeableVars)
@@ -412,6 +413,9 @@ changeable_vars_2([Var | Vars], Id, T) ->
 changeable_vars_2([], _, T) ->
     changeable_vars_1(T).
 
+norm_changeable_vars(BlockId, Vars) ->
+    [{K, Id -- BlockId} || {K, Id} <- Vars].
+
 norm_assigns_vars(NormAssigns, ChangeableVars) ->
     norm_assigns_vars_1(maps:to_list(NormAssigns), ChangeableVars).
 
@@ -473,7 +477,7 @@ compile_test() ->
                     <<"</span><button arizona-target=\"[0]\" type=\"button\" "
                       "onclick=\"arizona.send.bind(this)('incr')\">",
                      "Increment</button></div>">>],
-                  changeable_vars := #{count := [[0, 0]]},
+                  changeable_vars := #{count := [[0]]},
                   norm_assigns_vars := [{count, [0, 0]}],
                   changeable_indexes := [0],
                   norm_assigns :=
@@ -489,7 +493,7 @@ compile_test() ->
                     <<"</span><button arizona-target=\"[1]\" type=\"button\" "
                       "onclick=\"arizona.send.bind(this)('incr')\">"
                       "Increment #2</button></div>">>],
-                  changeable_vars := #{count := [[1, 0]]},
+                  changeable_vars := #{count := [[0]]},
                   norm_assigns_vars := [],
                   changeable_indexes := [0],
                   norm_assigns :=
@@ -504,7 +508,7 @@ compile_test() ->
                "<script src=\"assets/js/main.js\"></script>"
                "</head><body><h1>Arizona Counter</h1>">>,
              <<>>, <<"</body></html>">>],
-           changeable_vars := #{count := [[0, 0]]},
+           changeable_vars := #{count := [[0]]},
            norm_assigns_vars := [],
            changeable_indexes := [0, 1],
            norm_assigns := #{}}}
@@ -563,13 +567,13 @@ macros_test() ->
                   changeable :=
                    #{0 :=
                       {expr, #{function := _, id := [0, 0], vars := [qux]}}},
-                  changeable_vars := #{qux := [[0, 0]]},
+                  changeable_vars := #{qux := [[0]]},
                   changeable_indexes := [0],
                   norm_assigns :=
                    #{qux :=
                       #{function := _, vars := [qux]}},
                   norm_assigns_vars := [{qux, [0, 0]}]}}},
-           changeable_vars := #{qux := [[0, 0]]},
+           changeable_vars := #{qux := [[0]]},
            changeable_indexes := [0],
            norm_assigns := #{}, norm_assigns_vars := []}}
        , compile(?MODULE, render_macros, #{foo => foo})).
