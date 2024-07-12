@@ -170,32 +170,27 @@ expr(Fun, Vars, State) ->
      }.
 
 compile_block(#{name := Name} = Block, Loc, T, State) ->
-    case block_mod_fun(Name, State) of
-        {ok, {Mod, Fun}} ->
+    {Mod, Fun} = block_mod_fun(Name, Loc, State),
+    case erlang:function_exported(Mod, Fun, 1) of
+        true ->
             Attrs = maps:get(attributes, Block),
             Elems = expand_block(Mod, Fun, Attrs, State),
             Elems ++ compile_elems(T, incr_index(changeable_count(Elems, 0), State));
-        {error, Reason} ->
-            throw({Reason, Loc, State})
+        false ->
+            throw({undef_block_fun, Loc, State})
     end.
 
-block_mod_fun(Name, State) ->
+block_mod_fun(Name, Loc, State) ->
     try
-        {Mod, Fun} = case binary:split(Name, <<":">>) of
+        case binary:split(Name, <<":">>) of
             [M, F] ->
                 {binary_to_existing_atom(M, utf8), binary_to_existing_atom(F, utf8)};
             [F] ->
                 {State#state.module, binary_to_existing_atom(F, utf8)}
-        end,
-        case erlang:function_exported(Mod, Fun, 1) of
-            true ->
-                {ok, {Mod, Fun}};
-            false ->
-                {error, undef_block_fun}
         end
     catch
         _:_ ->
-            {error, invalid_block_name}
+            throw({invalid_block_name, Loc, State})
     end.
 
 expand_block(Mod, Fun, Attrs, State) ->
