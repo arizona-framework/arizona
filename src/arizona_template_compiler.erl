@@ -259,8 +259,37 @@ group_vars(Vars) ->
         Vars).
 
 compile_tag(#{name := Name} = Tag, Loc, T, State) ->
-    Attrs = maps:get(attributes, Tag),
+    Attrs = get_tag_attrs(Tag, State#state.path),
     [{text, <<$<, Name/binary>>} | compile_tag_attrs(Attrs, Tag, Loc, T, State)].
+
+get_tag_attrs(Tag, BlockId) ->
+    Attrs0 = maps:get(attributes, Tag),
+    Attrs = maybe_push_target_attr(Attrs0, BlockId),
+    maybe_push_tag_id_attr(Tag, Attrs, BlockId).
+
+maybe_push_target_attr(Attrs, BlockId) ->
+    case attrs_contains_action(Attrs) andalso not attrs_contains_target(Attrs) of
+        true ->
+            EncodedBlockId = iolist_to_binary(json:encode(BlockId)),
+            push_text_attr(~"arizona-target", EncodedBlockId, Attrs);
+        false ->
+            Attrs
+    end.
+
+attrs_contains_action(Attrs) ->
+    lists:any(fun({<<"on", _/binary>>, _}) -> true; (_) -> false end, Attrs).
+
+attrs_contains_target(Attrs) ->
+    lists:any(fun({Name, _}) -> Name =:= ~"arizona-target" end, Attrs).
+
+maybe_push_tag_id_attr(#{is_stateful := true}, Attrs, BlockId) ->
+    EncodedBlockId = iolist_to_binary(json:encode(BlockId)),
+    push_text_attr(~"arizona-id", EncodedBlockId, Attrs);
+maybe_push_tag_id_attr(#{is_stateful := false}, Attrs, _) ->
+    Attrs.
+
+push_text_attr(Name, Txt, Attrs) ->
+    [arizona_template_parser:dummy_text_attribute(Name, Txt) | Attrs].
 
 compile_tag_attrs([{Name, {text, _, Value}} | Attrs], Tag, Loc, T, State) ->
     [{text, <<$\s, Name/binary, $=, $", Value/binary, $">>}
@@ -432,8 +461,8 @@ compile_test() ->
                    #{0 :=
                       {expr, #{function := _, id := [0, 0], vars := [count]}}},
                   static :=
-                   [<<"<div><span>Count:">>,
-                    <<"</span><button type=\"button\" "
+                   [<<"<div arizona-id=\"[0]\"><span>Count:">>,
+                    <<"</span><button arizona-target=\"[0]\" type=\"button\" "
                       "onclick=\"arizona.send.bind(this)('incr')\">",
                      "Increment</button></div>">>],
                   changeable_vars := #{count := [[0, 0]]},
@@ -448,8 +477,8 @@ compile_test() ->
                    #{0 :=
                       {expr, #{function := _, id := [1, 0], vars := [count]}}},
                   static :=
-                   [<<"<div><span>Count:">>,
-                    <<"</span><button type=\"button\" "
+                   [<<"<div arizona-id=\"[1]\"><span>Count:">>,
+                    <<"</span><button arizona-target=\"[1]\" type=\"button\" "
                       "onclick=\"arizona.send.bind(this)('incr')\">"
                       "Increment #2</button></div>">>],
                   changeable_vars := #{count := [[1, 0]]},
@@ -521,7 +550,8 @@ macros_test() ->
                 #{function := render_macros,
                   id := [0],
                   module := arizona_template_compiler,
-                  static := [<<"<div>foobaz">>, <<"</div>">>],
+                  static := [<<"<div arizona-id=\"[0]\">foobaz">>,
+                             <<"</div>">>],
                   changeable :=
                    #{0 :=
                       {expr, #{function := _, id := [0, 0], vars := [qux]}}},
