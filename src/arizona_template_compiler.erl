@@ -140,14 +140,7 @@ expand_expr(Expr, Loc, Eval, State) ->
     AllVars = merl:template_vars(merl:template(MacrosTree)),
     case AllVars -- maps:keys(Macros) of
         [] when Eval ->
-            try
-                Form = erl_syntax:revert(merl:tree(MacrosTree)),
-                {value, Value, _} = erl_eval:exprs([Form], []),
-                {text, arizona_html:to_safe(Value)}
-            catch
-                _:_ ->
-                    throw({invalid_macro_value, Loc, State})
-            end;
+            {text, eval_macros_to_safe_html(MacrosTree, Loc, State)};
         Vars ->
             VarsSubst = [{Var, var_form(Var)} || Var <- Vars],
             Env = [{subst, merl:subst(MacrosTree, VarsSubst)}],
@@ -156,6 +149,16 @@ expand_expr(Expr, Loc, Eval, State) ->
             Forms = [merl:quote(<<"fun(Assigns) -> ", NormExpr/binary, " end">>)],
             {value, Fun, _} = erl_eval:exprs(Forms, []),
             {expr, expr(Fun, Vars, State)}
+    end.
+
+eval_macros_to_safe_html(MacrosTree, Loc, State) ->
+    try
+        Form = erl_syntax:revert(merl:tree(MacrosTree)),
+        {value, Value, _} = erl_eval:exprs([Form], []),
+        arizona_html:to_safe(Value)
+    catch
+        _:_ ->
+            throw({invalid_macro_value, Loc, State})
     end.
 
 var_form(Var) ->
