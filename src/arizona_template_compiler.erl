@@ -309,7 +309,6 @@ compile_tag_inner_content(InnerContent, #{name := Name} = Tag, T, State) ->
     Elems = compile_elems(maybe_push_js_scripts(Name, InnerContent), State),
     Elems ++ compile_tag_closing(Tag, T, incr_index(changeable_count(Elems, 0), State)).
 
-% We definitely should provide a bundler to inject these scripts.
 maybe_push_js_scripts(<<"head">>, InnerContent) ->
     push_js_scripts(InnerContent);
 maybe_push_js_scripts(_, InnerContent) ->
