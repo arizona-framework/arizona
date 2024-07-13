@@ -26,32 +26,29 @@
 -type macros() :: #{atom() := term()}.
 -export_type([macros/0]).
 
--type assigns() :: #{atom() := term()}.
--export_type([assigns/0]).
+-type changeable_id() :: [non_neg_integer()].
+-export_type([changeable_id/0]).
 
--opaque changeable() :: {expr, expr()} | {block, block()}.
--export_type([changeable/0]).
-
--opaque expr() :: #{
-    id := [non_neg_integer()],
-    function := fun((assigns()) -> arizona_html:safe_type()),
+-type expr() :: #{
+    id := changeable_id(),
+    function := fun((arizona_template_renderer:assigns()) -> arizona_html:safe_type()),
     vars := [atom()]
 }.
 -export_type([expr/0]).
 
--opaque block() :: #{
-    id := [non_neg_integer()],
+-type block() :: #{
+    id := changeable_id(),
     module := module(),
     function := atom(),
     static := [binary()],
-    changeable := #{non_neg_integer() := changeable()},
-    changeable_vars := #{atom() := [[non_neg_integer()]]},
+    changeable := #{non_neg_integer() := {expr, expr()} | {block, block()}},
+    changeable_vars := #{atom() := [changeable_id()]},
     changeable_indexes := [non_neg_integer()],
     norm_assigns := #{atom() := #{
-        function := fun((assigns()) -> term()),
+        function := fun((arizona_template_renderer:assigns()) -> term()),
         vars := [atom()]
     }},
-    norm_assigns_vars := [{atom(), [non_neg_integer()]}]
+    norm_assigns_vars := [{atom(), changeable_id()}]
 }.
 -export_type([block/0]).
 

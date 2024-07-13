@@ -24,7 +24,7 @@
 %% --------------------------------------------------------------------
 
 -spec render(Block, Assigns) -> Rendered
-    when Block :: map(), % TODO: arizona_template_compiler::block(),
+    when Block :: arizona_template_compiler:block(),
          Assigns :: assigns(),
          Rendered :: [binary() | [binary()]].
 render(Block, Assigns) ->
@@ -35,11 +35,11 @@ render(Block, Assigns) ->
     zip(Static, Dynamic).
 
 -spec render_changes(Target, Block, ChangesVars, Assigns) -> Changes
-    when Target :: [non_neg_integer()], % TODO: arizona_template_compiler:changeable_id()
-         Block :: map(), % TODO: arizona_template_compiler::block(),
+    when Target :: arizona_template_compiler:changeable_id(),
+         Block :: arizona_template_compiler:block(),
          ChangesVars :: [atom()],
          Assigns :: assigns(),
-         Changes :: [{[non_neg_integer()], binary()}].
+         Changes :: [{arizona_template_compiler:changeable_id(), binary()}].
 render_changes(Target, Block, ChangesVars, Assigns) ->
     case do_render_changes(Target, Block, ChangesVars, Assigns) of
         Changes when is_tuple(Changes) ->
