@@ -48,7 +48,7 @@ compile(Tree) ->
 -spec compile(Mod, Fun, Macros) -> block()
     when Mod :: module(),
          Fun :: atom(),
-         Macros :: arizona_live_view:macros().
+         Macros :: arizona_template_compiler:macros().
 compile(Mod, Fun, Macros) ->
     [{0, Block}] = compile([{block, #{
         module => Mod,
