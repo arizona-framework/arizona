@@ -70,7 +70,12 @@ render_changeable_indexes([], _, _) ->
 
 render_changeable({expr, Expr}, Assigns) ->
     render_expr(Expr, Assigns);
-render_changeable({block, Block}, Assigns) ->
+render_changeable({block, Block}, Assigns0) ->
+    Id = maps:get(id, Block),
+    Mod = maps:get(module, Block),
+    Socket0 = arizona_socket:new(Id, Mod, Assigns0),
+    Socket = arizona_live_view:mount(Mod, Socket0),
+    Assigns = arizona_socket:get_assigns(Socket),
     NormAssigns = maps:get(norm_assigns, Block),
     ChangeableAssigns = changeable_assigns(Assigns, NormAssigns),
     render(Block, ChangeableAssigns).
