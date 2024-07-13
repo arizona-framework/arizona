@@ -82,10 +82,10 @@ compile(Mod, Fun, Macros) ->
             macros = Macros,
             attributes = [],
             index = 0,
-            path = []
+            path = [0]
         },
         Tree = expand_block(Mod, Fun, _Attrs = [], State),
-        {ok, block(Tree, _NormAssigns = #{}, State)}
+        {ok, block([0], Tree, _NormAssigns = #{}, State)}
     catch
         % That's not the location in the module but the location
         % in the template starting from {1, 1}.
@@ -212,7 +212,7 @@ expand_block(Mod, Fun, Attrs, State) ->
             NormAssigns = norm_block_assigns(BlockAssigns),
             StatefulState = stateful_state(Mod, Fun, Macros, State),
             Tree = compile_tag(Tag, Loc, [], StatefulState),
-            [{block, block(Tree, NormAssigns, State)}];
+            [{block, block(changeable_id(State), Tree, NormAssigns, State)}];
         {ok, {Elems, Macros}} ->
             concat_texts(compile_elems(Elems, stateless_state(Macros, Attrs, State)));
         {error, {Reason, Loc}} ->
@@ -242,11 +242,10 @@ should_eval_expr(Expr, Macros) when map_size(Macros) > 0 ->
 should_eval_expr(_, _) ->
     false.
 
-block(Tree0, NormAssigns, State) ->
+block(Id, Tree0, NormAssigns, State) ->
     Tree = concat_texts(Tree0),
     Changeable = normalize_changeable(filter_changeable(Tree)),
     ChangeableVars = changeable_vars(Changeable),
-    Id = changeable_id(State),
     #{
         id => Id,
         module => State#state.module,
@@ -266,7 +265,7 @@ group_vars(Vars) ->
         Vars).
 
 compile_tag(#{name := Name} = Tag, Loc, T, State) ->
-    Attrs = get_tag_attrs(Tag, State#state.path),
+    Attrs = get_tag_attrs(Tag, lists:reverse(State#state.path)),
     [{text, <<$<, Name/binary>>} | compile_tag_attrs(Attrs, Tag, Loc, T, State)].
 
 get_tag_attrs(Tag, BlockId) ->
@@ -465,29 +464,29 @@ compile_test() ->
            changeable :=
             #{0 :=
                {block,
-                #{function := render, id := [0], module := arizona_template_compiler,
+                #{function := render, id := [0, 0], module := arizona_template_compiler,
                   changeable :=
                    #{0 :=
-                      {expr, #{function := _, id := [0, 0], vars := [count]}}},
+                      {expr, #{function := _, id := [0, 0, 0], vars := [count]}}},
                   static :=
-                   [<<"<div arizona-id=\"[0]\"><span>Count:">>,
-                    <<"</span><button arizona-target=\"[0]\" type=\"button\" "
+                   [<<"<div arizona-id=\"[0,0]\"><span>Count:">>,
+                    <<"</span><button arizona-target=\"[0,0]\" type=\"button\" "
                       "onclick=\"arizona.send.bind(this)('incr')\">",
                      "Increment</button></div>">>],
                   changeable_vars := #{count := [[0]]},
-                  norm_assigns_vars := [{count, [0, 0]}],
+                  norm_assigns_vars := [{count, [0, 0, 0]}],
                   changeable_indexes := [0],
                   norm_assigns :=
                    #{count := #{function := _, vars := [count]}}}},
               1 :=
                {block,
-                #{function := render, id := [1], module := arizona_template_compiler,
+                #{function := render, id := [0, 1], module := arizona_template_compiler,
                   changeable :=
                    #{0 :=
-                      {expr, #{function := _, id := [1, 0], vars := [count]}}},
+                      {expr, #{function := _, id := [0, 1, 0], vars := [count]}}},
                   static :=
-                   [<<"<div arizona-id=\"[1]\"><span>Count:">>,
-                    <<"</span><button arizona-target=\"[1]\" type=\"button\" "
+                   [<<"<div arizona-id=\"[0,1]\"><span>Count:">>,
+                    <<"</span><button arizona-target=\"[0,1]\" type=\"button\" "
                       "onclick=\"arizona.send.bind(this)('incr')\">"
                       "Increment #2</button></div>">>],
                   changeable_vars := #{count := [[0]]},
@@ -505,7 +504,7 @@ compile_test() ->
                "<script src=\"assets/js/main.js\"></script>"
                "</head><body><h1>Arizona Counter</h1>">>,
              <<>>, <<"</body></html>">>],
-           changeable_vars := #{count := [[0]]},
+           changeable_vars := #{count := [[0, 0]]},
            norm_assigns_vars := [],
            changeable_indexes := [0, 1],
            norm_assigns := #{}}}
@@ -557,20 +556,20 @@ macros_test() ->
             #{0 :=
                {block,
                 #{function := render_macros,
-                  id := [0],
+                  id := [0, 0],
                   module := arizona_template_compiler,
-                  static := [<<"<div arizona-id=\"[0]\">foobaz">>,
+                  static := [<<"<div arizona-id=\"[0,0]\">foobaz">>,
                              <<"</div>">>],
                   changeable :=
                    #{0 :=
-                      {expr, #{function := _, id := [0, 0], vars := [qux]}}},
+                      {expr, #{function := _, id := [0, 0, 0], vars := [qux]}}},
                   changeable_vars := #{qux := [[0]]},
                   changeable_indexes := [0],
                   norm_assigns :=
                    #{qux :=
                       #{function := _, vars := [qux]}},
-                  norm_assigns_vars := [{qux, [0, 0]}]}}},
-           changeable_vars := #{qux := [[0]]},
+                  norm_assigns_vars := [{qux, [0, 0, 0]}]}}},
+           changeable_vars := #{qux := [[0, 0]]},
            changeable_indexes := [0],
            norm_assigns := #{}, norm_assigns_vars := []}}
        , compile(?MODULE, render_macros, #{foo => foo})).

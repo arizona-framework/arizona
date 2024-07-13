@@ -123,23 +123,23 @@ render_test() ->
           "</head>"
           "<body>"
             "<h1>Arizona Counter</h1>">>,
-            [<<"<div arizona-id=\"[0]\"><span>Count:">>, <<"0">>, <<"</span>"
-               "<button arizona-target=\"[0]\" type=\"button\" "
+            [<<"<div arizona-id=\"[0,0]\"><span>Count:">>, <<"0">>, <<"</span>"
+               "<button arizona-target=\"[0,0]\" type=\"button\" "
                "onclick=\"arizona.send.bind(this)('incr')\">Increment</button></div>">>],
              <<>>,
-            [<<"<div arizona-id=\"[1]\"><span>Count:">>, <<"88">>, <<"</span>"
-               "<button arizona-target=\"[1]\" type=\"button\" "
+            [<<"<div arizona-id=\"[0,1]\"><span>Count:">>, <<"88">>, <<"</span>"
+               "<button arizona-target=\"[0,1]\" type=\"button\" "
                "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button></div>">>],
           <<"</body></html>">>
     ], render(block(), #{count => 0})).
 
 render_changes_test() ->
     [
-        ?assertEqual([{[0, 0], <<"1">>}],
+        ?assertEqual([{[0, 0, 0], <<"1">>}],
                      render_changes([0], block(), [count], #{count => 1})),
-        ?assertEqual([{[0, 0], <<"1">>}],
+        ?assertEqual([{[0, 0, 0], <<"1">>}],
                      render_changes([0, 0], block(), [count], #{count => 1})),
-        ?assertEqual([{[1, 0], <<"1">>}],
+        ?assertEqual([{[0, 1, 0], <<"1">>}],
                      render_changes([1, 0], block(), [count], #{count => 1}))
     ].
 
