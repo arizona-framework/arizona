@@ -6,11 +6,13 @@
 
 -export([render/2]).
 -export([render_changes/4]).
+-export([server_render/2]).
 
 %
 
 -ignore_xref([render/2]).
 -ignore_xref([render_changes/4]).
+-ignore_xref([server_render/2]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -46,6 +48,15 @@ render_changes(Target, Block, ChangesVars, Assigns) ->
         Changes ->
             Changes
     end.
+
+server_render(Block, Assigns) ->
+    Self = self(),
+    Pid = spawn(fun() ->
+        Rendered = server_render_block(Block, Assigns, Self),
+        Self ! {self(), {done, Rendered}}
+    end),
+    Timeout = 5_000,
+    server_render_loop(Pid, Timeout, _Sockets = []).
 
 %% --------------------------------------------------------------------
 %% Private
@@ -102,6 +113,42 @@ render_block_changes(Block, AssignsKeys, Assigns) ->
     [Targets] = maps:values(Vars),
     [do_render_changes(Target, Block, ChangesVars, Changes) || Target <- Targets].
 
+server_render_changeable_indexes([Index | Indexes], Changeable, Assigns, Pid) ->
+    [server_render_changeable(maps:get(Index, Changeable), Assigns, Pid)
+     | server_render_changeable_indexes(Indexes, Changeable, Assigns, Pid)];
+server_render_changeable_indexes([], _, _, _) ->
+    [].
+
+server_render_changeable({expr, Expr}, Assigns, _Pid) ->
+    render_expr(Expr, Assigns);
+server_render_changeable({block, Block}, Assigns, Pid) ->
+    NormAssigns = maps:get(norm_assigns, Block),
+    ChangeableAssigns = changeable_assigns(Assigns, NormAssigns),
+    server_render_block(Block, ChangeableAssigns, Pid).
+
+server_render_block(Block, Assigns0, Pid) ->
+    Id = maps:get(id, Block),
+    Mod = maps:get(module, Block),
+    Socket0 = arizona_socket:new(Id, Mod, Assigns0),
+    Socket = arizona_live_view:mount(Mod, Socket0),
+    Assigns = arizona_socket:get_assigns(Socket),
+    ChangeableIndexes = maps:get(changeable_indexes, Block),
+    Changeable = maps:get(changeable, Block),
+    Dynamic = server_render_changeable_indexes(ChangeableIndexes, Changeable, Assigns, Pid),
+    Pid ! {self(), {socket, Id, Socket}},
+    [maps:get(static, Block), Dynamic].
+
+server_render_loop(Pid, Timeout, Sockets) ->
+    receive
+        {Pid, {socket, Id, Socket}} ->
+            server_render_loop(Pid, Timeout, [{Id, Socket} | Sockets]);
+        {Pid, {done, Rendered}} ->
+            {ok, {Rendered, maps:from_list(Sockets)}}
+    after
+        Timeout ->
+            {error, timeout}
+    end.
+
 %% --------------------------------------------------------------------
 %% EUnit
 %% --------------------------------------------------------------------
@@ -142,6 +189,56 @@ render_changes_test() ->
                      render_changes([1, 0], block(), [count], #{count => 1}))
     ].
 
+server_render_test() ->
+    ?assertMatch({ok, {
+        [% Static
+         [<<"<!DOCTYPE html=\"html\" />"
+            "<html lang=\"en\">"
+            "<head><meta charset=\"UTF-8\" />"
+              "<title>Arizona Framework</title>"
+              "<script src=\"assets/js/morphdom.min.js\">"
+              "</script><script src=\"assets/js/arizona.js\">"
+              "</script><script src=\"assets/js/main.js\"></script>"
+            "</head>"
+            "<body><h1>Arizona Counter</h1>">>,
+              % #1
+              <<>>, % Dummy binary to correctly zip elements
+              % #2
+            <<"</body></html>">>],
+         % Dynamic
+         [ % #1
+          [% Static
+           [<<"<div arizona-id=\"[0,0]\"><span>Count:">>,
+            <<"</span><button arizona-target=\"[0,0]\" type=\"button\" onclick=\"arizona.send.bind(this)('incr')\">Increment</button></div>">>],
+           % Dynamic
+           [<<"0">>]],
+          % #2
+          [% Static
+           [<<"<div arizona-id=\"[0,1]\"><span>Count:">>,
+            <<"</span><button arizona-target=\"[0,1]\" type=\"button\" onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button></div>">>],
+           % Dynamic
+           [<<"88">>]]
+        ]],
+        #{[0] :=
+              #{id := [0],
+                events := [],
+                assigns := #{count := 0},
+                changes := #{},
+                view := arizona_template_renderer},
+          [0,0] :=
+              #{id := [0,0],
+                events := [],
+                assigns := #{count := 0},
+                changes := #{},
+                view := arizona_template_renderer},
+          [0,1] :=
+              #{id := [0,1],
+                events := [],
+                assigns := #{count := 88},
+                changes := #{},
+                view := arizona_template_renderer}}
+    }}, server_render(block(), #{count => 0})).
+
 %% --------------------------------------------------------------------
 %% Test support
 %% --------------------------------------------------------------------
@@ -153,6 +250,9 @@ block() ->
     },
     {ok, Block} = arizona_template_compiler:compile(?MODULE, render, Macros),
     Block.
+
+mount(Socket) ->
+    Socket.
 
 render(Macros) ->
     maybe_parse(~"""
