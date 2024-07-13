@@ -54,9 +54,9 @@ start(Opts) ->
     when Req :: cowboy_req:req(),
          Routed :: {Req, Env},
          Env :: cowboy_middleware:env().
-route(Req) ->
-    #{path := Path} = cowboy_req:match_qs([path], Req),
-    {ok, Req, Env} = cowboy_router:execute(Req#{path => Path},
+route(Req0) ->
+    #{path := Path} = cowboy_req:match_qs([path], Req0),
+    {ok, Req, Env} = cowboy_router:execute(Req0#{path => Path},
                                            #{dispatch => {persistent_term, ?PERSIST_KEY}}),
     {Req, Env}.
 
