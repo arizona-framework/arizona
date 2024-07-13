@@ -28,11 +28,10 @@
          Assigns :: assigns(),
          Rendered :: [binary() | [binary()]].
 render(Block, Assigns) ->
-    Static = maps:get(static, Block),
     ChangeableIndexes = maps:get(changeable_indexes, Block),
     Changeable = maps:get(changeable, Block),
     Dynamic = render_changeable_indexes(ChangeableIndexes, Changeable, Assigns),
-    zip(Static, Dynamic).
+    zip(maps:get(static, Block), Dynamic).
 
 -spec render_changes(Target, Block, ChangesVars, Assigns) -> Changes
     when Target :: arizona_template_compiler:changeable_id(),
@@ -52,6 +51,12 @@ render_changes(Target, Block, ChangesVars, Assigns) ->
 %% Private
 %% --------------------------------------------------------------------
 
+render_changeable_indexes([Index | Indexes], Changeable, Assigns) ->
+    [render_changeable(maps:get(Index, Changeable), Assigns)
+     | render_changeable_indexes(Indexes, Changeable, Assigns)];
+render_changeable_indexes([], _, _) ->
+    [].
+
 render_changeable({expr, Expr}, Assigns) ->
     render_expr(Expr, Assigns);
 render_changeable({block, Block}, Assigns) ->
@@ -65,12 +70,6 @@ render_expr(Expr, Assigns) ->
 
 changeable_assigns(Assigns, NormAssigns) ->
     #{K => Fun(Assigns) || K := #{function := Fun} <- NormAssigns}.
-
-render_changeable_indexes([Index | Indexes], Changeable, Assigns) ->
-    [render_changeable(maps:get(Index, Changeable), Assigns)
-     | render_changeable_indexes(Indexes, Changeable, Assigns)];
-render_changeable_indexes([], _, _) ->
-    [].
 
 zip([S | Static], [D | Dynamic]) ->
     [S, D | zip(Static, Dynamic)];
