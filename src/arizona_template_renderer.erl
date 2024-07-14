@@ -74,9 +74,8 @@ render_changeable_indexes([], _, _) ->
 render_changeable({expr, Expr}, Assigns) ->
     render_expr(Expr, Assigns);
 render_changeable({block, Block}, Assigns0) ->
-    Id = maps:get(id, Block),
     Mod = maps:get(module, Block),
-    Socket0 = arizona_socket:new(Id, Mod, Assigns0),
+    Socket0 = arizona_socket:new(Mod, Assigns0),
     Socket = arizona_live_view:mount(Mod, Socket0),
     Assigns = arizona_socket:get_assigns(Socket),
     NormAssigns = maps:get(norm_assigns, Block),
@@ -119,15 +118,14 @@ server_render_changeable({block, Block}, Assigns, Pid) ->
     server_render_block(Block, ChangeableAssigns, Pid).
 
 server_render_block(Block, Assigns0, Pid) ->
-    Id = maps:get(id, Block),
     Mod = maps:get(module, Block),
-    Socket0 = arizona_socket:new(Id, Mod, Assigns0),
+    Socket0 = arizona_socket:new(Mod, Assigns0),
     Socket = arizona_live_view:mount(Mod, Socket0),
     Assigns = arizona_socket:get_assigns(Socket),
     ChangeableIndexes = maps:get(changeable_indexes, Block),
     Changeable = maps:get(changeable, Block),
     Dynamic = server_render_changeable_indexes(ChangeableIndexes, Changeable, Assigns, Pid),
-    Pid ! {self(), {socket, Id, Socket}},
+    Pid ! {self(), {socket, maps:get(id, Block), Socket}},
     [maps:get(static, Block), Dynamic].
 
 server_render_loop(Pid, Timeout, Sockets) ->
@@ -233,9 +231,9 @@ server_render_test() ->
            % Dynamic
            [<<"88">>]]
         ]],
-        #{[0] => arizona_socket:new([0], ?MODULE, #{count => 0}),
-          [0, 0] => arizona_socket:new([0, 0], ?MODULE, #{count => 0}),
-          [0, 1] => arizona_socket:new([0, 1], ?MODULE, #{count => 88})}
+        #{[0] => arizona_socket:new(?MODULE, #{count => 0}),
+          [0, 0] => arizona_socket:new(?MODULE, #{count => 0}),
+          [0, 1] => arizona_socket:new(?MODULE, #{count => 88})}
     }}, server_render(block(), #{count => 0})).
 
 render_changes_test() ->
