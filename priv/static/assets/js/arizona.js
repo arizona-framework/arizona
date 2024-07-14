@@ -2,6 +2,10 @@
 "use strict";
 
 globalThis["arizona"] = (() => {
+  // --------------------------------------------------------------------
+  // API function definitions
+  // --------------------------------------------------------------------
+
   function subscribe(eventName, callback, opts = {}) {
     let eventSubs = subscribers.get(eventName);
     if (!eventSubs) eventSubs = new Map();
@@ -44,8 +48,6 @@ globalThis["arizona"] = (() => {
     });
   }
 
-  // API functions.
-
   function send(event, payloadOrCallback, callbackOrOpts, optsOrNull) {
     typeof payloadOrCallback === "function"
       ? sendMsgToWorker.bind(this)(
@@ -70,7 +72,9 @@ globalThis["arizona"] = (() => {
     send("connect", params, callback, opts);
   }
 
-  // Internal functions.
+  // --------------------------------------------------------------------
+  // Private
+  // --------------------------------------------------------------------
 
   const subscribers = new Map();
   const unsubscribers = new Map();
@@ -101,6 +105,9 @@ globalThis["arizona"] = (() => {
     });
   }
 
+  // --------------------------------------------------------------------
+  // Namespace initialization
+  // --------------------------------------------------------------------
 
   worker.addEventListener("message", function (e) {
     console.log("[WebWorker] msg:", e.data);
