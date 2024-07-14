@@ -2,38 +2,6 @@
 "use strict";
 
 globalThis["arizona"] = (() => {
-  // Worker.
-
-  const worker = new Worker("assets/js/arizona-worker.js");
-
-  worker.addEventListener("message", function (e) {
-    console.log("[WebWorker] msg:", e.data);
-    const { event, payload } = e.data;
-    switch (event) {
-      case "patch": {
-        const { target, html } = payload;
-        const elem = document.querySelector(
-          `[arizona-id="${JSON.stringify(target)}"]`,
-        );
-        applyPatch(elem, html);
-        break;
-      }
-    }
-    subscribers.get(event)?.forEach(function ({ id, callback, opts }) {
-      callback(payload);
-      opts.once && unsubscribe(id);
-    });
-  });
-
-  worker.addEventListener("error", function (e) {
-    console.error("[WebWorker] error:", e);
-  });
-
-  // Subscribers.
-
-  const subscribers = new Map();
-  const unsubscribers = new Map();
-
   function subscribe(eventName, callback, opts = {}) {
     let eventSubs = subscribers.get(eventName);
     if (!eventSubs) eventSubs = new Map();
@@ -104,6 +72,10 @@ globalThis["arizona"] = (() => {
 
   // Internal functions.
 
+  const subscribers = new Map();
+  const unsubscribers = new Map();
+  const worker = new Worker("assets/js/arizona-worker.js");
+
   function sendMsgToWorker(event, payload, callback, opts = {}) {
     if (!opts.target && this instanceof HTMLElement) {
       opts.target = this.getAttribute("arizona-target");
@@ -128,6 +100,31 @@ globalThis["arizona"] = (() => {
       },
     });
   }
+
+
+  worker.addEventListener("message", function (e) {
+    console.log("[WebWorker] msg:", e.data);
+    const { event, payload } = e.data;
+    switch (event) {
+      case "patch": {
+        const { target, html } = payload;
+        const elem = document.querySelector(
+          `[arizona-id="${JSON.stringify(target)}"]`,
+        );
+        applyPatch(elem, html);
+        break;
+      }
+    }
+    subscribers.get(event)?.forEach(function ({ id, callback, opts }) {
+      callback(payload);
+      opts.once && unsubscribe(id);
+    });
+  });
+
+  worker.addEventListener("error", function (e) {
+    console.error("[WebWorker] error:", e);
+  });
+
 
   return { subscribe, subscribeOnce, unsubscribe, send, connect };
 })();
