@@ -90,9 +90,8 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
         #{} ->
             Socket1
     end,
-    Id = arizona_socket:get_id(Socket),
     {[{text, json:encode(arizona_socket:get_events(Socket))}],
-        State#{sockets => Sockets#{Id => arizona_socket:prune(Socket)}}}.
+        State#{sockets => Sockets#{Target => arizona_socket:prune(Socket)}}}.
 
 -spec websocket_info(Info, State1) -> {Events, State2}
     when Info :: term(),

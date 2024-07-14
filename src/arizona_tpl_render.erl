@@ -49,9 +49,8 @@ render_target_2([H | T], Block, Changes, Assigns) ->
          Assigns :: arizona_socket:assigns(),
          Rendered :: iolist().
 render_block(Block, Assigns0) ->
-    Id = maps:get(id, Block),
     View = maps:get(view, Block),
-    Socket0 = arizona_socket:new(Id, View, Assigns0),
+    Socket0 = arizona_socket:new(View, Assigns0),
     Socket = arizona_live_view:mount(View, Socket0),
     Indexes = maps:get(indexes, Block),
     Tree = maps:get(block, Block),
@@ -64,7 +63,7 @@ render_block(Block, Assigns0) ->
          Rendered :: iolist(),
          Sockets :: #{SocketId :: socket_target() := Socket :: arizona_socket:t()}.
 mount(#{id := Id, view := View} = Block, Assigns0) ->
-    Socket0 = arizona_socket:new(Id, View, Assigns0),
+    Socket0 = arizona_socket:new(View, Assigns0),
     Socket = arizona_live_view:mount(View, Socket0),
     Assigns = arizona_socket:get_assigns(Socket),
     To = self(),
@@ -115,13 +114,12 @@ render_indexes([H | T], Block, Assigns, Notify) ->
             end, Attrs),
             NAssigns = case maps:get(directives, Nested) of
                 #{stateful := true} ->
-                    NId = maps:get(id, Nested),
                     NView = maps:get(view, Nested),
-                    NSocket0 = arizona_socket:new(NId, NView, AttrsAssigns),
+                    NSocket0 = arizona_socket:new(NView, AttrsAssigns),
                     NSocket = arizona_live_view:mount(NView, NSocket0),
                     _ = case Notify of
                         {true, Pid} ->
-                            Pid ! {self(), mount, NId, NSocket};
+                            Pid ! {self(), mount, maps:get(id, Nested), NSocket};
                         false ->
                             ok
                     end,
