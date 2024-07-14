@@ -6,6 +6,7 @@
         % OTP dependencies
         kernel,
         stdlib,
+        syntax_tools,
         % External dependencies
         cowboy,
         fs,
