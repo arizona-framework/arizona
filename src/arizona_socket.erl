@@ -7,13 +7,12 @@ Components state.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([new/3]).
+-export([new/2]).
 -export([put_assigns/2]).
 -export([put_assign/3]).
 -export([get_assigns/1]).
 -export([get_changes/1]).
 -export([get_view/1]).
--export([get_id/1]).
 -export([get_events/1]).
 -export([get_assign/2]).
 -export([get_assign/3]).
@@ -51,13 +50,11 @@ Components state.
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec new(Id, View, Assigns) -> t()
-    when Id :: atom(),
-         View :: view(),
+-spec new(View, Assigns) -> t()
+    when View :: view(),
          Assigns :: assigns().
-new(Id, View, Assigns) ->
+new(View, Assigns) ->
     #{
-        id => Id,
         view => View,
         assigns => Assigns,
         events => [],
@@ -99,10 +96,6 @@ get_changes(#{changes := Changes}) ->
 -spec get_view(t()) -> view().
 get_view(#{view := View}) ->
     View.
-
--spec get_id(t()) -> atom().
-get_id(#{id := Id}) ->
-    Id.
 
 -spec get_events(t()) -> events().
 get_events(#{events := Events}) ->
@@ -162,23 +155,20 @@ mount_test() ->
             decr_btn_text => <<"Decrement">>}),
     [?assertEqual(rendered(), Render),
      ?assertMatch(#{[0] :=
-                       #{id := [0],
-                         events := [], view := arizona_tpl_compile,
+                       #{events := [], view := arizona_tpl_compile,
                          assigns :=
                              #{title := <<"Arizona">>, view_count := 0,
                                decr_btn_text := <<"Decrement">>},
                          changes := #{}},
                    [3] :=
-                       #{id := [3],
-                         events := [], view := arizona_tpl_compile,
+                       #{events := [], view := arizona_tpl_compile,
                          assigns :=
                              #{id := <<"1">>, counter_count := 0,
                                btn_text := <<"Increment">>,
                                btn_event := <<"incr">>},
                          changes := #{}},
                    [4] :=
-                       #{id := [4],
-                         events := [], view := arizona_tpl_compile,
+                       #{events := [], view := arizona_tpl_compile,
                          assigns :=
                              #{id := <<"2">>, label := <<"Rev. Counter:">>,
                                counter_count := 0, btn_text := <<"Decrement">>,
