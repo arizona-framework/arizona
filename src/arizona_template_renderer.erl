@@ -4,15 +4,15 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([render/2]).
--export([render_changes/4]).
+-export([client_render/2]).
 -export([server_render/2]).
+-export([render_changes/4]).
 
 %
 
--ignore_xref([render/2]).
--ignore_xref([render_changes/4]).
+-ignore_xref([client_render/2]).
 -ignore_xref([server_render/2]).
+-ignore_xref([render_changes/4]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -25,15 +25,27 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec render(Block, Assigns) -> Rendered
+-spec client_render(Block, Assigns) -> Rendered
     when Block :: arizona_template_compiler:block(),
          Assigns :: assigns(),
-         Rendered :: [binary() | [binary()]].
-render(Block, Assigns) ->
-    ChangeableIndexes = maps:get(changeable_indexes, Block),
-    Changeable = maps:get(changeable, Block),
-    Dynamic = render_changeable_indexes(ChangeableIndexes, Changeable, Assigns),
-    zip(maps:get(static, Block), Dynamic).
+         Rendered :: iolist().
+client_render(Block, Assigns) ->
+    render_block(Block, Assigns).
+
+-spec server_render(Block, Assigns) -> Result
+    when Block :: arizona_template_compiler:block(),
+         Assigns :: assigns(),
+         Result :: {ok, {Rendered, Sockets}} | {error, timeout},
+         Rendered :: iolist(),
+         Sockets :: #{arizona_template_compiler:changeable_id() := arizona_socket:t()}.
+server_render(Block, Assigns) ->
+    Self = self(),
+    Pid = spawn(fun() ->
+        Rendered = server_render_block(Block, Assigns, Self),
+        Self ! {self(), {done, Rendered}}
+    end),
+    Timeout = 5_000,
+    server_render_loop(Pid, Timeout, _Sockets = []).
 
 -spec render_changes(Target, Block, ChangesVars, Assigns) -> Changes
     when Target :: arizona_template_compiler:changeable_id(),
@@ -48,15 +60,6 @@ render_changes(Target, Block, ChangesVars, Assigns) ->
         Changes ->
             Changes
     end.
-
-server_render(Block, Assigns) ->
-    Self = self(),
-    Pid = spawn(fun() ->
-        Rendered = server_render_block(Block, Assigns, Self),
-        Self ! {self(), {done, Rendered}}
-    end),
-    Timeout = 5_000,
-    server_render_loop(Pid, Timeout, _Sockets = []).
 
 %% --------------------------------------------------------------------
 %% Private
@@ -78,11 +81,17 @@ render_changeable({block, Block}, Assigns0) ->
     Assigns = arizona_socket:get_assigns(Socket),
     NormAssigns = maps:get(norm_assigns, Block),
     ChangeableAssigns = changeable_assigns(Assigns, NormAssigns),
-    render(Block, ChangeableAssigns).
+    render_block(Block, ChangeableAssigns).
 
 render_expr(Expr, Assigns) ->
     Fun = maps:get(function, Expr),
     arizona_html:to_safe(Fun(Assigns)).
+
+render_block(Block, Assigns) ->
+    ChangeableIndexes = maps:get(changeable_indexes, Block),
+    Changeable = maps:get(changeable, Block),
+    Dynamic = render_changeable_indexes(ChangeableIndexes, Changeable, Assigns),
+    zip(maps:get(static, Block), Dynamic).
 
 changeable_assigns(Assigns, NormAssigns) ->
     #{K => Fun(Assigns) || K := #{function := Fun} <- NormAssigns}.
@@ -95,28 +104,6 @@ zip([], [D | Dynamic]) ->
     [D | zip([], Dynamic)];
 zip([], []) ->
     [].
-
-do_render_changes([Index], Block, ChangesVars, Assigns) ->
-    Changeable = maps:get(changeable, Block),
-    render_changeable_changes(maps:get(Index, Changeable), ChangesVars, Assigns);
-do_render_changes([Index | Indexes], Block, ChangesVars, Assigns) ->
-    Changeable = maps:get(changeable, Block),
-    {block, NestedBlock} = maps:get(Index, Changeable),
-    do_render_changes(Indexes, NestedBlock, ChangesVars, Assigns).
-
-render_changeable_changes({expr, #{id := Id}  = Expr}, _ChangesVars, Assigns) ->
-    {Id, render_expr(Expr, Assigns)};
-render_changeable_changes({block, Block}, ChangesVars, Assigns) ->
-    render_block_changes(Block, ChangesVars, Assigns).
-
-render_block_changes(Block, AssignsKeys, Assigns) ->
-    NormAssigns = maps:get(norm_assigns, Block),
-    Changes = changeable_assigns(Assigns, maps:with(AssignsKeys, NormAssigns)),
-    ChangesVars = maps:keys(Changes),
-    ChangeableVars = maps:get(changeable_vars, Block),
-    Vars = maps:with(ChangesVars, ChangeableVars),
-    [Targets] = maps:values(Vars),
-    [do_render_changes(Target, Block, ChangesVars, Changes) || Target <- Targets].
 
 server_render_changeable_indexes([Index | Indexes], Changeable, Assigns, Pid) ->
     [server_render_changeable(maps:get(Index, Changeable), Assigns, Pid)
@@ -154,6 +141,28 @@ server_render_loop(Pid, Timeout, Sockets) ->
             {error, timeout}
     end.
 
+do_render_changes([Index], Block, ChangesVars, Assigns) ->
+    Changeable = maps:get(changeable, Block),
+    render_changeable_changes(maps:get(Index, Changeable), ChangesVars, Assigns);
+do_render_changes([Index | Indexes], Block, ChangesVars, Assigns) ->
+    Changeable = maps:get(changeable, Block),
+    {block, NestedBlock} = maps:get(Index, Changeable),
+    do_render_changes(Indexes, NestedBlock, ChangesVars, Assigns).
+
+render_changeable_changes({expr, #{id := Id}  = Expr}, _ChangesVars, Assigns) ->
+    {Id, render_expr(Expr, Assigns)};
+render_changeable_changes({block, Block}, ChangesVars, Assigns) ->
+    render_block_changes(Block, ChangesVars, Assigns).
+
+render_block_changes(Block, AssignsKeys, Assigns) ->
+    NormAssigns = maps:get(norm_assigns, Block),
+    Changes = changeable_assigns(Assigns, maps:with(AssignsKeys, NormAssigns)),
+    ChangesVars = maps:keys(Changes),
+    ChangeableVars = maps:get(changeable_vars, Block),
+    Vars = maps:with(ChangesVars, ChangeableVars),
+    [Targets] = maps:values(Vars),
+    [do_render_changes(Target, Block, ChangesVars, Changes) || Target <- Targets].
+
 %% --------------------------------------------------------------------
 %% EUnit
 %% --------------------------------------------------------------------
@@ -162,7 +171,7 @@ server_render_loop(Pid, Timeout, Sockets) ->
 -compile([export_all, nowarn_export_all]).
 -include_lib("eunit/include/eunit.hrl").
 
-render_test() ->
+client_render_test() ->
     ?assertEqual([
         <<"<!DOCTYPE html=\"html\" />"
           "<html lang=\"en\">"
@@ -174,28 +183,22 @@ render_test() ->
           "</head>"
           "<body>"
             "<h1>Arizona Counter</h1>">>,
-            [<<"<div arizona-id=\"[0,0]\"><span>Count:">>, <<"0">>, <<"</span>"
-               "<button arizona-target=\"[0,0]\" type=\"button\" "
-               "onclick=\"arizona.send.bind(this)('incr')\">Increment</button></div>">>],
+            [<<"<div arizona-id=\"[0,0]\">"
+                 "<span>Count:">>, <<"0">>, <<"</span>"
+                 "<button arizona-target=\"[0,0]\" type=\"button\" "
+                 "onclick=\"arizona.send.bind(this)('incr')\">Increment</button>"
+               "</div>">>],
              <<>>,
-            [<<"<div arizona-id=\"[0,1]\"><span>Count:">>, <<"88">>, <<"</span>"
-               "<button arizona-target=\"[0,1]\" type=\"button\" "
-               "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button></div>">>],
+            [<<"<div arizona-id=\"[0,1]\">"
+                 "<span>Count:">>, <<"88">>, <<"</span>"
+                 "<button arizona-target=\"[0,1]\" type=\"button\" "
+                 "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button>"
+               "</div>">>],
           <<"</body></html>">>
-    ], render(block(), #{count => 0})).
-
-render_changes_test() ->
-    [
-        ?assertEqual([{[0, 0, 0], <<"1">>}],
-                     render_changes([0], block(), [count], #{count => 1})),
-        ?assertEqual([{[0, 0, 0], <<"1">>}],
-                     render_changes([0, 0], block(), [count], #{count => 1})),
-        ?assertEqual([{[0, 1, 0], <<"1">>}],
-                     render_changes([1, 0], block(), [count], #{count => 1}))
-    ].
+    ], client_render(block(), #{count => 0})).
 
 server_render_test() ->
-    ?assertMatch({ok, {
+    ?assertEqual({ok, {
         [% Static
          [<<"<!DOCTYPE html=\"html\" />"
             "<html lang=\"en\">"
@@ -213,36 +216,37 @@ server_render_test() ->
          % Dynamic
          [ % #1
           [% Static
-           [<<"<div arizona-id=\"[0,0]\"><span>Count:">>,
-            <<"</span><button arizona-target=\"[0,0]\" type=\"button\" onclick=\"arizona.send.bind(this)('incr')\">Increment</button></div>">>],
+           [<<"<div arizona-id=\"[0,0]\">"
+                "<span>Count:">>, <<"</span>"
+                "<button arizona-target=\"[0,0]\" type=\"button\" "
+                "onclick=\"arizona.send.bind(this)('incr')\">Increment</button>"
+              "</div>">>],
            % Dynamic
            [<<"0">>]],
           % #2
           [% Static
-           [<<"<div arizona-id=\"[0,1]\"><span>Count:">>,
-            <<"</span><button arizona-target=\"[0,1]\" type=\"button\" onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button></div>">>],
+           [<<"<div arizona-id=\"[0,1]\">"
+                "<span>Count:">>, <<"</span>"
+                "<button arizona-target=\"[0,1]\" type=\"button\" "
+                "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button>"
+              "</div>">>],
            % Dynamic
            [<<"88">>]]
         ]],
-        #{[0] :=
-              #{id := [0],
-                events := [],
-                assigns := #{count := 0},
-                changes := #{},
-                view := arizona_template_renderer},
-          [0,0] :=
-              #{id := [0,0],
-                events := [],
-                assigns := #{count := 0},
-                changes := #{},
-                view := arizona_template_renderer},
-          [0,1] :=
-              #{id := [0,1],
-                events := [],
-                assigns := #{count := 88},
-                changes := #{},
-                view := arizona_template_renderer}}
+        #{[0] => arizona_socket:new([0], ?MODULE, #{count => 0}),
+          [0, 0] => arizona_socket:new([0, 0], ?MODULE, #{count => 0}),
+          [0, 1] => arizona_socket:new([0, 1], ?MODULE, #{count => 88})}
     }}, server_render(block(), #{count => 0})).
+
+render_changes_test() ->
+    [
+        ?assertEqual([{[0, 0, 0], <<"1">>}],
+                     render_changes([0], block(), [count], #{count => 1})),
+        ?assertEqual([{[0, 0, 0], <<"1">>}],
+                     render_changes([0, 0], block(), [count], #{count => 1})),
+        ?assertEqual([{[0, 1, 0], <<"1">>}],
+                     render_changes([1, 0], block(), [count], #{count => 1}))
+    ].
 
 %% --------------------------------------------------------------------
 %% Test support
