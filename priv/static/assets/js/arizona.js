@@ -6,11 +6,11 @@ globalThis["arizona"] = (() => {
   // API function definitions
   // --------------------------------------------------------------------
 
-  function subscribe(eventName, callback, opts = {}) {
+  function subscribe(eventName, callback) {
     let eventSubs = subscribers.get(eventName);
     if (!eventSubs) eventSubs = new Map();
     const id = Math.random();
-    eventSubs.set(id, { id, callback, opts });
+    eventSubs.set(id, { id, callback });
     subscribers.set(eventName, eventSubs);
     unsubscribers.set(id, eventName);
     console.table({
@@ -25,8 +25,8 @@ globalThis["arizona"] = (() => {
     };
   }
 
-  function subscribeOnce(event, callback, opts = {}) {
-    return subscribe(event, callback, { ...opts, once: true });
+  function subscribeOnce(event, callback) {
+    return subscribe(event, callback);
   }
 
   function unsubscribe(id) {
@@ -86,7 +86,7 @@ globalThis["arizona"] = (() => {
     }
     const target = document.querySelector(opts.target);
     const arizonaId = target?.getAttribute("arizona-id") || "[0]";
-    callback && subscribeOnce(event, callback, opts);
+    callback && subscribeOnce(event, callback);
     worker.postMessage({ target: arizonaId, event, payload });
   }
 
@@ -122,9 +122,9 @@ globalThis["arizona"] = (() => {
         break;
       }
     }
-    subscribers.get(event)?.forEach(function ({ id, callback, opts }) {
+    subscribers.get(event)?.forEach(function ({ id, callback }) {
       callback(payload);
-      opts.once && unsubscribe(id);
+      // TBD: handle unsubscribe logic in the function itself
     });
   });
 
