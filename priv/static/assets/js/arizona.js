@@ -6,91 +6,79 @@ globalThis["arizona"] = (() => {
   // API function definitions
   // --------------------------------------------------------------------
 
-  function subscribe(eventName, callback) {
-    let eventSubs = subscribers.get(eventName);
-    if (!eventSubs) eventSubs = new Map();
-    const id = Math.random();
-    eventSubs.set(id, { id, callback });
-    subscribers.set(eventName, eventSubs);
-    unsubscribers.set(id, eventName);
-    console.table({
-      action: "subscribed",
-      eventName,
-      id,
-      subscribers,
-      unsubscribers,
-    });
-    return function () {
-      unsubscribe(id);
-    };
+  function on(eventName, listener) {
+    listeners[eventName] = listeners[eventName] = [];
+    listeners[eventName].push(listener);
+
+    tableLog("on", eventName);
   }
 
-  function subscribeOnce(eventName, callback) {
-    const onceWrapper = (...args) => {
-      callback.apply(this, args);
-      unsubscribe(eventName, onceWrapper);
+  function once(eventName, listener) {
+    const onceWrapper = (payload) => {
+      listener(payload);
+      off(eventName, onceWrapper);
     };
-    subscribe(eventName, onceWrapper);
+    on(eventName, onceWrapper);
+
+    tableLog("once", eventName);
   }
 
-  function unsubscribe(id) {
-    const eventName = unsubscribers.get(id);
-    if (!eventName) return;
-    const eventSubs = subscribers.get(eventName);
-    if (!eventSubs) return;
-    eventSubs.delete(id);
-    eventSubs.size
-      ? subscribers.set(eventName, eventSubs)
-      : subscribers.delete(eventName);
-    unsubscribers.delete(id);
-    console.table({
-      action: "unsubscribed",
-      eventName,
-      id,
-      subscribers,
-      unsubscribers,
+  function off(eventName, listener) {
+    listeners[eventName] = (listeners[eventName] || []).filter(
+      (needle) => needle !== listener,
+    );
+
+    tableLog("off", eventName);
+  }
+
+  function emit(eventName, payload) {
+    (listeners[eventName] || []).forEach((listener) => {
+      listener(payload);
     });
   }
 
-  function send(event, payloadOrCallback, callbackOrOpts, optsOrNull) {
-    typeof payloadOrCallback === "function"
+  function send(eventName, payloadOrListener, listenerOrOpts, optsOrNull) {
+    typeof payloadOrListener === "function"
       ? sendMsgToWorker.bind(this)(
-          event,
+          eventName,
           undefined,
-          payloadOrCallback,
-          callbackOrOpts,
+          payloadOrListener,
+          listenerOrOpts,
         )
       : sendMsgToWorker.bind(this)(
-          event,
-          payloadOrCallback,
-          callbackOrOpts,
+          eventName,
+          payloadOrListener,
+          listenerOrOpts,
           optsOrNull,
         );
   }
 
-  function connect(params, callback, opts) {
+  function connect(params, listener, opts) {
     params = {
       ...params,
       path: location.pathname,
     };
-    send("connect", params, callback, opts);
+    send("connect", params, listener, opts);
   }
 
   // --------------------------------------------------------------------
   // Private
   // --------------------------------------------------------------------
 
-  const subscribers = new Map();
-  const unsubscribers = new Map();
+  const listeners = {};
   const worker = new Worker("assets/js/arizona-worker.js");
 
-  function sendMsgToWorker(event, payload, callback, opts = {}) {
+  function tableLog(action, eventName) {
+    //console.table({ action, eventName, listeners });
+  }
+
+  function sendMsgToWorker(eventName, payload, listener, opts = {}) {
     if (!opts.target && this instanceof HTMLElement) {
       opts.target = this.getAttribute("arizona-target");
     }
     const target = document.querySelector(opts.target);
     const arizonaId = target?.getAttribute("arizona-id") || "[0]";
-    callback && subscribeOnce(event, callback);
+    listener && once(eventName, listener);
     worker.postMessage({ target: arizonaId, event, payload });
   }
 
@@ -115,8 +103,8 @@ globalThis["arizona"] = (() => {
 
   worker.addEventListener("message", function (e) {
     console.log("[WebWorker] msg:", e.data);
-    const { event, payload } = e.data;
-    switch (event) {
+    const { eventName, payload } = e.data;
+    switch (eventName) {
       case "patch": {
         const { target, html } = payload;
         const elem = document.querySelector(
@@ -126,14 +114,12 @@ globalThis["arizona"] = (() => {
         break;
       }
     }
-    subscribers.get(event)?.forEach(function ({ id, callback }) {
-      callback(payload);
-    });
+    emit(eventName, payload)
   });
 
   worker.addEventListener("error", function (e) {
     console.error("[WebWorker] error:", e);
   });
 
-  return { subscribe, subscribeOnce, unsubscribe, send, connect };
+  return { on, once, off, send, connect };
 })();

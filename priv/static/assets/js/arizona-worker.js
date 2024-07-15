@@ -15,13 +15,13 @@ const state = {
 self.onmessage = function (e) {
   console.log("[WebWorker] client sent:", e.data);
 
-  if (typeof e.data !== "object" || !e.data.target || !e.data.event) {
+  if (typeof e.data !== "object" || !e.data.target || !e.data.eventName) {
     console.error("Invalid Arizona WebWorker message", e);
     return;
   }
 
-  const { target, event, payload } = e.data;
-  switch (event) {
+  const { target, eventName, payload } = e.data;
+  switch (eventName) {
     case "connect":
       connect(payload);
       break;
@@ -29,7 +29,7 @@ self.onmessage = function (e) {
       disconnect();
       break;
     default:
-      sendMsgToServer([target, event, payload]);
+      sendMsgToServer([target, eventName, payload]);
   }
 };
 
@@ -96,9 +96,9 @@ function tryReconnect() {
 }
 
 function handleEvent(data) {
-  const event = data[0];
+  const eventName = data[0];
   const payload = data[1];
-  switch (event) {
+  switch (eventName) {
     case "init":
       state.tree = payload;
       break;
@@ -106,7 +106,7 @@ function handleEvent(data) {
       sendMsgToClient("patch", applyPatch(payload));
       break;
     default:
-      sendMsgToClient(event, payload);
+      sendMsgToClient(eventName, payload);
       break;
   }
 }
@@ -146,24 +146,24 @@ function zip(staticArr, dynamicArr) {
   return str;
 }
 
-function sendMsgToClient(event, payload) {
-  self.postMessage({ event, payload });
+function sendMsgToClient(eventName, payload) {
+  self.postMessage({ eventName, payload });
 }
 
-function sendMsgToServer([target, event, payload]) {
+function sendMsgToServer([target, eventName, payload]) {
   if (!state.socket) {
-    state.eventQueue.push([target, event, payload]);
+    state.eventQueue.push([target, eventName, payload]);
     state.fulfilled
       ? console.warn("[WebSocket] not ready to send messages")
       : reconnect();
   } else if (isSocketOpen()) {
     state.socket.send(
       payload
-        ? JSON.stringify([target, event, payload], state)
-        : JSON.stringify([target, event]),
+        ? JSON.stringify([target, eventName, payload], state)
+        : JSON.stringify([target, eventName]),
     );
   } else {
-    state.fulfilled && state.eventQueue.push([target, event, payload]);
+    state.fulfilled && state.eventQueue.push([target, eventName, payload]);
     isSocketClosed() && reconnect();
   }
 }

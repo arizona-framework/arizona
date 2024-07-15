@@ -1,6 +1,4 @@
 /*global arizona*/
 "use strict";
 
-arizona.subscribe("reload", () => {
-  location.reload();
-});
+arizona.on("reload", location.reload);
