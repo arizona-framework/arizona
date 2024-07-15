@@ -25,8 +25,12 @@ globalThis["arizona"] = (() => {
     };
   }
 
-  function subscribeOnce(event, callback) {
-    return subscribe(event, callback);
+  function subscribeOnce(eventName, callback) {
+    const onceWrapper = (...args) => {
+      callback.apply(this, args);
+      unsubscribe(eventName, onceWrapper);
+    };
+    subscribe(eventName, onceWrapper);
   }
 
   function unsubscribe(id) {
@@ -124,14 +128,12 @@ globalThis["arizona"] = (() => {
     }
     subscribers.get(event)?.forEach(function ({ id, callback }) {
       callback(payload);
-      // TBD: handle unsubscribe logic in the function itself
     });
   });
 
   worker.addEventListener("error", function (e) {
     console.error("[WebWorker] error:", e);
   });
-
 
   return { subscribe, subscribeOnce, unsubscribe, send, connect };
 })();
