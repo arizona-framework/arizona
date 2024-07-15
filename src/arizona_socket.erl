@@ -34,12 +34,6 @@ Components state.
 -opaque t() :: map().
 -export_type([t/0]).
 
--type assigns() :: map().
--export_type([assigns/0]).
-
--type changes() :: map().
--export_type([changes/0]).
-
 -type view() :: module().
 -export_type([view/0]).
 
@@ -52,7 +46,7 @@ Components state.
 
 -spec new(View, Assigns) -> t()
     when View :: view(),
-         Assigns :: assigns().
+         Assigns :: arizona_template_renderer:assigns().
 new(View, Assigns) ->
     #{
         view => View,
@@ -62,7 +56,7 @@ new(View, Assigns) ->
     }.
 
 -spec put_assigns(Assigns, Socket1) -> Socket2
-    when Assigns :: assigns(),
+    when Assigns :: arizona_template_renderer:assigns(),
          Socket1 :: t(),
          Socket2 :: t().
 put_assigns(Assigns, Socket) ->
@@ -85,11 +79,11 @@ put_assign(Key, Value, Socket) ->
             }
     end.
 
--spec get_assigns(t()) -> assigns().
+-spec get_assigns(t()) -> arizona_template_renderer:assigns().
 get_assigns(#{assigns := Assigns}) ->
     Assigns.
 
--spec get_changes(t()) -> changes().
+-spec get_changes(t()) -> arizona_template_renderer:assigns().
 get_changes(#{changes := Changes}) ->
     Changes.
 

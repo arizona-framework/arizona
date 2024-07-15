@@ -25,8 +25,8 @@ Renderer.
 -spec render_target(Target, Block, Changes, Assigns) -> Rendered
     when Target :: root | json:decode_value(),
          Block :: arizona_tpl_compile:block(),
-         Changes :: arizona_socket:changes(),
-         Assigns :: arizona_socket:assigns(),
+         Changes :: arizona_template_renderer:assigns(),
+         Assigns :: arizona_template_renderer:assigns(),
          Rendered :: iolist().
 render_target(Target, Block, Changes, Assigns) when map_size(Changes) > 0 ->
     render_target_1(Target, Block, Changes, Assigns);
@@ -46,7 +46,7 @@ render_target_2([H | T], Block, Changes, Assigns) ->
 
 -spec render_block(Block, Assigns) -> Rendered
     when Block :: arizona_tpl_compile:block(),
-         Assigns :: arizona_socket:assigns(),
+         Assigns :: arizona_template_renderer:assigns(),
          Rendered :: iolist().
 render_block(Block, Assigns0) ->
     View = maps:get(view, Block),
@@ -59,7 +59,7 @@ render_block(Block, Assigns0) ->
 
 -spec mount(Block, Assigns) -> {Rendered, Sockets}
     when Block :: arizona_tpl_compile:block(),
-         Assigns :: arizona_socket:assigns(),
+         Assigns :: arizona_template_renderer:assigns(),
          Rendered :: iolist(),
          Sockets :: #{SocketId :: socket_target() := Socket :: arizona_socket:t()}.
 mount(#{id := Id, view := View} = Block, Assigns0) ->
