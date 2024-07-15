@@ -47,14 +47,14 @@ server_render(Block, Assigns) ->
     Timeout = 5_000,
     server_render_loop(Pid, Timeout, _Sockets = []).
 
--spec render_changes(Target, Block, ChangesVars, Assigns) -> Changes
+-spec render_changes(Target, Block, ChangedVars, Assigns) -> Changes
     when Target :: arizona_template_compiler:changeable_id(),
          Block :: arizona_template_compiler:block(),
-         ChangesVars :: [atom()],
+         ChangedVars :: [atom()],
          Assigns :: assigns(),
          Changes :: [[arizona_template_compiler:changeable_id() | binary()]].
-render_changes(Target, Block, ChangesVars, Assigns) ->
-    case do_render_changes(Target, Block, ChangesVars, Assigns) of
+render_changes(Target, Block, ChangedVars, Assigns) ->
+    case do_render_changes(Target, Block, ChangedVars, Assigns) of
         [_, Bin] = Changes when is_binary(Bin) ->
             [Changes];
         Changes ->
@@ -139,27 +139,27 @@ server_render_loop(Pid, Timeout, Sockets) ->
             {error, timeout}
     end.
 
-do_render_changes([Index], Block, ChangesVars, Assigns) ->
+do_render_changes([Index], Block, ChangedVars, Assigns) ->
     Changeable = maps:get(changeable, Block),
-    render_changeable_changes(maps:get(Index, Changeable), ChangesVars, Assigns);
-do_render_changes([Index | Indexes], Block, ChangesVars, Assigns) ->
+    render_changeable_changes(maps:get(Index, Changeable), ChangedVars, Assigns);
+do_render_changes([Index | Indexes], Block, ChangedVars, Assigns) ->
     Changeable = maps:get(changeable, Block),
     {block, NestedBlock} = maps:get(Index, Changeable),
-    do_render_changes(Indexes, NestedBlock, ChangesVars, Assigns).
+    do_render_changes(Indexes, NestedBlock, ChangedVars, Assigns).
 
-render_changeable_changes({expr, #{id := Id}  = Expr}, _ChangesVars, Assigns) ->
+render_changeable_changes({expr, #{id := Id}  = Expr}, _ChangedVars, Assigns) ->
     [Id, render_expr(Expr, Assigns)];
-render_changeable_changes({block, Block}, ChangesVars, Assigns) ->
-    render_block_changes(Block, ChangesVars, Assigns).
+render_changeable_changes({block, Block}, ChangedVars, Assigns) ->
+    render_block_changes(Block, ChangedVars, Assigns).
 
 render_block_changes(Block, AssignsKeys, Assigns) ->
     NormAssigns = maps:get(norm_assigns, Block),
     Changes = changeable_assigns(Assigns, maps:with(AssignsKeys, NormAssigns)),
-    ChangesVars = maps:keys(Changes),
+    ChangedVars = maps:keys(Changes),
     ChangeableVars = maps:get(changeable_vars, Block),
-    Vars = maps:with(ChangesVars, ChangeableVars),
+    Vars = maps:with(ChangedVars, ChangeableVars),
     [Targets] = maps:values(Vars),
-    [do_render_changes(Target, Block, ChangesVars, Changes) || Target <- Targets].
+    [do_render_changes(Target, Block, ChangedVars, Changes) || Target <- Targets].
 
 %% --------------------------------------------------------------------
 %% EUnit
