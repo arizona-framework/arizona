@@ -21,9 +21,9 @@
          Opts :: arizona:route_opts().
 init(Req0, {Mod, Fun, Opts} = State) ->
     Macros = maps:get(macros, Opts, #{}),
-    Tpl = arizona_tpl_compile:compile(Mod, Fun, Macros),
+    {ok, Block} = arizona_template_compiler:compile(Mod, Fun, Macros),
     Assigns = maps:get(assigns, Opts, #{}),
-    Html = arizona_tpl_render:render_block(Tpl, Assigns),
+    Html = arizona_template_renderer:client_render(Block, Assigns),
     Headers = #{<<"content-type">> => <<"text/html">>},
     Req = cowboy_req:reply(200, Headers, Html, Req0),
     {ok, Req, State}.

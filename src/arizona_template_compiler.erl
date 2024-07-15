@@ -129,7 +129,7 @@ expand_expr(Expr, Loc, Eval, State) ->
         ({K, {expr, _KLoc, KExpr}}) ->
             {binary_to_existing_atom(K, utf8), merl:quote(KExpr)};
         ({K, {text, _KLoc, KTxt}}) ->
-            {binary_to_existing_atom(K, utf8),
+            {binary_to_atom(K, utf8),
               merl:quote(iolist_to_binary(["<<\"", KTxt, "\"/utf8>>"]))}
     end, State#state.attributes),
     AttrsTree = merl:tsubst(ExprTree, AttrsEnv),
@@ -222,7 +222,7 @@ expand_block(Mod, Fun, Attrs, State) ->
 block_assigns(Attrs, Macros, State) ->
     maps:from_list(lists:map(fun
         ({K, {text, _, Txt}}) ->
-            {binary_to_existing_atom(K), {text, Txt}};
+            {binary_to_atom(K), {text, Txt}};
         ({K, {expr, Loc, Expr}}) ->
             Eval = should_eval_expr(Expr, Macros),
             {binary_to_existing_atom(K), expand_expr(Expr, Loc, Eval, State)}
@@ -251,7 +251,7 @@ block(Id, Tree0, NormAssigns, State) ->
         module => State#state.module,
         function => State#state.function,
         static => filter_static(Tree),
-        changeable => Changeable,
+        changeable => norm_changeable_expr_id(Changeable),
         changeable_vars => group_vars(norm_changeable_vars(Id, ChangeableVars)),
         changeable_indexes => changeable_indexes(Changeable),
         norm_assigns => NormAssigns,
@@ -276,8 +276,7 @@ get_tag_attrs(Tag, BlockId) ->
 maybe_push_target_attr(Attrs, BlockId) ->
     case attrs_contains_action(Attrs) andalso not attrs_contains_target(Attrs) of
         true ->
-            EncodedBlockId = iolist_to_binary(json:encode(BlockId)),
-            push_text_attr(~"arizona-target", EncodedBlockId, Attrs);
+            push_text_attr(~"arizona-target", target_attr_value(BlockId), Attrs);
         false ->
             Attrs
     end.
@@ -289,10 +288,16 @@ attrs_contains_target(Attrs) ->
     lists:any(fun({Name, _}) -> Name =:= ~"arizona-target" end, Attrs).
 
 maybe_push_tag_id_attr(#{is_stateful := true}, Attrs, BlockId) ->
-    EncodedBlockId = iolist_to_binary(json:encode(BlockId)),
-    push_text_attr(~"arizona-id", EncodedBlockId, Attrs);
+    push_text_attr(~"arizona-id", id_attr_value(BlockId), Attrs);
 maybe_push_tag_id_attr(#{is_stateful := false}, Attrs, _) ->
     Attrs.
+
+id_attr_value(ChangeableId) ->
+    iolist_to_binary(json:encode(ChangeableId)).
+
+target_attr_value(ChangeableId) ->
+    EncodedId = iolist_to_binary(json:encode(ChangeableId)),
+    <<"[arizona-id='", EncodedId/binary, "']">>.
 
 push_text_attr(Name, Txt, Attrs) ->
     [arizona_template_parser:dummy_text_attribute(Name, Txt) | Attrs].
@@ -330,7 +335,7 @@ push_js_scripts([]) ->
 js_scripts() ->
     Scripts = case arizona_cfg:endpoint() of
         #{live_reload := true} ->
-            [live_reload_script() | required_js_script()];
+            required_js_script() ++ [live_reload_script()];
         #{} ->
             required_js_script()
     end,
@@ -375,6 +380,14 @@ normalize_changeable(Changeable) ->
         ({Kind, #{id := Id} = Elem}) ->
             {lists:last(Id), {Kind, Elem}}
     end, Changeable)).
+
+norm_changeable_expr_id(Changeable) ->
+    maps:map(fun
+        (K, {expr, Expr}) ->
+            {expr, Expr#{id =>  [K]}};
+        (_K, {block, Block}) ->
+            {block, Block}
+    end, Changeable).
 
 changeable_id(State) ->
     changeable_id(State#state.index, State#state.path).

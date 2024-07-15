@@ -8,7 +8,6 @@ HTML support.
 %% --------------------------------------------------------------------
 
 -export([to_safe/1]).
--export([safe_types/0]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -31,7 +30,3 @@ to_safe(V) when is_integer(V) ->
     integer_to_binary(V, 10);
 to_safe(V) when is_float(V) ->
     io_lib:format("~p", [V]).
-
--spec safe_types() -> [binary | atom | integer | float].
-safe_types() ->
-    [binary, atom, integer, float].

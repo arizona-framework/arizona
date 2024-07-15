@@ -36,9 +36,14 @@ Live view.
 -callback mount(Socket) -> Socket
     when Socket :: arizona_socket:t().
 
--callback render(Macros) -> Tree
-    when Macros :: arizona_template_compiler:macros(),
-         Tree :: arizona_tpl_parse:tree().
+-callback render(Macros1) -> Result
+    when Macros1 :: arizona_template_compiler:macros(),
+         Result :: {ok, {Parsed, Macros2}}
+                 | {error, ErrReason},
+         Parsed :: [arizona_template_parser:element()],
+         Macros2 :: arizona_template_compiler:macros(),
+         ErrReason :: arizona_template_scanner:error_reason()
+                    | arizona_template_parser:error_reason().
 
 -callback handle_event(EventName, Payload, Socket) -> Socket
     when EventName :: binary(),
@@ -57,9 +62,9 @@ Live view.
        Macros1 :: arizona_template_compiler:macros(),
        Macros2 :: arizona_template_compiler:macros().
 put_macro(Key, Value, Macros) ->
-  Macros#{
-    Key => maps:get(Key, Macros, Value)
-  }.
+    Macros#{
+        Key => maps:get(Key, Macros, Value)
+    }.
 
 -spec get_macro(Key, Macros, Default) -> Got
   when Key :: atom(),
@@ -69,12 +74,24 @@ put_macro(Key, Value, Macros) ->
 get_macro(Key, Macros, Default) ->
   maps:get(Key, Macros, Default).
 
--spec parse_str(Str, Macros) -> arizona_tpl_parse:tree()
+-spec parse_str(Str, Macros1) -> Result
     when Str :: string() | binary(),
-         Macros :: arizona_template_compiler:macros().
+         Macros1 :: arizona_template_compiler:macros(),
+         Result :: {ok, {Parsed, Macros2}}
+                 | {error, ErrReason},
+         Parsed :: [arizona_template_parser:element()],
+         Macros2 :: arizona_template_compiler:macros(),
+         ErrReason :: arizona_template_scanner:error_reason()
+                    | arizona_template_parser:error_reason().
 parse_str(Str, Macros) ->
-    Tokens = arizona_tpl_scan:string(Str),
-    arizona_tpl_parse:parse_exprs(Tokens, Macros).
+    maybe
+        {ok, Tokens} ?= arizona_template_scanner:scan(Str),
+        {ok, Elems} ?= arizona_template_parser:parse(Tokens),
+        {ok, {Elems, Macros}}
+    else
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %% --------------------------------------------------------------------
 %% Callback support function definitions
@@ -87,10 +104,15 @@ parse_str(Str, Macros) ->
 mount(Mod, Socket) ->
     Mod:mount(Socket).
 
--spec render(Mod, Macros) -> Tree
+-spec render(Mod, Macros1) -> Result
     when Mod :: module(),
-         Macros :: arizona_template_compiler:macros(),
-         Tree :: arizona_tpl_parse:tree().
+         Macros1 :: arizona_template_compiler:macros(),
+         Result :: {ok, {Parsed, Macros2}}
+                 | {error, ErrReason},
+         Parsed :: [arizona_template_parser:element()],
+         Macros2 :: arizona_template_compiler:macros(),
+         ErrReason :: arizona_template_scanner:error_reason()
+                    | arizona_template_parser:error_reason().
 render(Mod, Macros) ->
     Mod:render(Mod, Macros).
 
@@ -102,41 +124,3 @@ render(Mod, Macros) ->
          Socket2 :: arizona_socket:t().
 handle_event(Mod, Event, Payload, Socket) ->
     Mod:handle_event(Event, Payload, Socket).
-
-%% --------------------------------------------------------------------
-%% EUnit
-%% --------------------------------------------------------------------
-
--ifdef(TEST).
--compile([export_all, nowarn_export_all]).
--include_lib("eunit/include/eunit.hrl").
-
-compile_test() ->
-    ?assert(is_block(arizona_tpl_compile:compile(?MODULE, render, #{}))).
-
-%% --------------------------------------------------------------------
-%% Test support
-%% --------------------------------------------------------------------
-
-render(Macros) ->
-    arizona_live_view:parse_str("""
-    <main :stateful>
-        <h1>{_@title}</h1>
-        <.arizona_live_view:counter/>
-    </main>
-    """, Macros).
-
-counter(Macros) ->
-    arizona_live_view:parse_str("""
-    <div :stateful>
-        <div>{_@count}</div>
-        <button type="button">Increment</button>
-    </div>
-    """, Macros).
-
-is_block(#{block := _}) ->
-    true;
-is_block(_NonBlock) ->
-    false.
-
--endif.
