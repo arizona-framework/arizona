@@ -53,16 +53,8 @@ server_render(Block, Assigns) ->
          ChangesVars :: [atom()],
          Assigns :: assigns(),
          Changes :: [[arizona_template_compiler:changeable_id() | binary()]].
-% NOTE
-% The correct type for 'Changes' should be:
-% > [[arizona_template_compiler:changeable_id(), binary()]].
-% But Erlang does not allow a "fixed" list type.
-% Why this instead of a proplist, for example?
-% This struct will be sent to the client via JSON, and proplists are not encoded
-% out of the box. A list of lists is the low cost and more straightforward here.
 render_changes(Target, Block, ChangesVars, Assigns) ->
     case do_render_changes(Target, Block, ChangesVars, Assigns) of
-        % Ensures a list of lists.
         [_, Bin] = Changes when is_binary(Bin) ->
             [Changes];
         Changes ->
