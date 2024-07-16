@@ -125,22 +125,23 @@ compile_expr(ExprStr, Loc, T, State) ->
 
 expand_expr(Expr, Loc, Eval, State) ->
     ExprTree = merl:quote(Expr),
+    Macros = State#state.macros,
+    MacrosEnv = [{K, merl:term(V)} || K := V <- Macros],
     AttrsEnv = lists:map(fun
         ({K, {expr, _KLoc, KExpr}}) ->
-            {binary_to_existing_atom(K, utf8), merl:quote(KExpr)};
+            KForm = merl:tsubst(merl:quote(KExpr), MacrosEnv),
+            {binary_to_existing_atom(K, utf8), KForm};
         ({K, {text, _KLoc, KTxt}}) ->
             {binary_to_atom(K, utf8),
               merl:quote(iolist_to_binary(["<<\"", KTxt, "\"/utf8>>"]))}
     end, State#state.attributes),
     AttrsTree = merl:tsubst(ExprTree, AttrsEnv),
-    Macros = State#state.macros,
-    MacrosEnv = [{K, merl:term(V)} || K := V <- Macros],
     MacrosTree = merl:tsubst(AttrsTree, MacrosEnv),
-    AllVars = merl:template_vars(merl:template(MacrosTree)),
-    case AllVars -- maps:keys(Macros) of
-        [] when Eval ->
+    Vars = merl:template_vars(merl:template(MacrosTree)),
+    case Vars =:= [] andalso Eval of
+        true ->
             {text, eval_macros_to_safe_html(MacrosTree, Loc, State)};
-        Vars ->
+        false ->
             VarsSubst = [{Var, var_form(Var)} || Var <- Vars],
             Env = [{subst, merl:subst(MacrosTree, VarsSubst)}],
             [Form] = erl_syntax:revert_forms([merl:qquote(~"_@subst", Env)]),
@@ -500,8 +501,8 @@ compile_test() ->
                   static :=
                    [<<"<div arizona-id=\"[0,1]\"><span>Count:">>,
                     <<"</span><button arizona-target=\"[0,1]\" type=\"button\" "
-                      "onclick=\"arizona.send.bind(this)('incr')\">"
-                      "Increment #2</button></div>">>],
+                      "onclick=\"arizona.send.bind(this)('decr')\">"
+                      "Decrement</button></div>">>],
                   changeable_vars := #{count := [[0]]},
                   norm_assigns_vars := [],
                   changeable_indexes := [0],
@@ -523,7 +524,7 @@ compile_test() ->
            norm_assigns := #{}}}
     , compile(?MODULE, render, #{
         title => ~"Arizona Framework",
-        inc_btn_text => ~"Increment #2"})).
+        decr_btn_text => ~"Decrement"})).
 
 unexpected_stateful_tag_test() ->
     [
@@ -605,10 +606,12 @@ render(Macros) ->
         <.counter
             count={_@count}
             btn_text="Increment"
+            event="incr"
         />
         <.counter
             count={88}
-            btn_text={_@inc_btn_text}
+            btn_text={_@decr_btn_text}
+            event="decr"
         />
     </body>
     </html>
@@ -618,7 +621,7 @@ counter(Macros) ->
     maybe_parse(~"""
     <div :stateful>
         <span>Count: {_@count}</span>
-        <.button event="incr" text={_@btn_text} />
+        <.button event={_@event} text={_@btn_text} />
     </div>
     """, Macros).
 
