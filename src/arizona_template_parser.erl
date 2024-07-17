@@ -26,8 +26,7 @@
 
 -type block() :: #{
     name := binary(),
-    attributes := [attribute()],
-    condition := condition()
+    attributes := [attribute()]
 }.
 -export_type([block/0]).
 
@@ -125,9 +124,6 @@ parse_block(Name, Loc, T0) ->
             throw({Reason, Loc})
     end.
 
-collect_block_props([{attr_name, _, <<":if">>},
-                     {attr_value, Loc, {expr, Expr}} | T], Props) ->
-    collect_block_props(T, [{condition, {'if', Loc, Expr}} | Props]);
 collect_block_props([{attr_name, Loc, <<$:, _/binary>>} | _T], _Props) ->
     {error, {invalid_directive, Loc}};
 collect_block_props([{attr_name, _, Name},
@@ -147,8 +143,7 @@ normalize_block_props(Props) ->
     {name, Name} = proplists:lookup(name, Props),
     #{
         name => Name,
-        attributes => lists:reverse(proplists:get_all_values(attribute, Props)),
-        condition => proplists:get_value(condition, Props, none)
+        attributes => lists:reverse(proplists:get_all_values(attribute, Props))
      }.
 
 parse_tag(Name, Loc, T0) ->
@@ -291,7 +286,7 @@ parse_ok_test() ->
                        {<<"btn_text">>,
                         {text, {13, 18}, <<"Increment">>}},
                        {<<"event">>, {text, {14, 15}, <<"incr">>}}],
-                     name => <<"counter">>, condition => none}}],
+                     name => <<"counter">>}}],
                 condition => none}}],
            condition => none}}
     ]}, parse(tokens_ok())).
@@ -316,31 +311,19 @@ parse_invalid_directive_test() ->
 
 if_directive_test() ->
     {ok, Tokens} = arizona_template_scanner:scan(~"""
-    <.foo :if={_@bool} />
-    <.foo />
     <foo :if={true} />
     <foo />
     """),
     ?assertEqual({ok, [
-        {block, {1, 1}, #{
-            name => <<"foo">>,
-            attributes => [],
-            condition => {'if', {1, 11}, <<"_@bool">>}
-        }},
-        {block, {2, 1}, #{
-            name => <<"foo">>,
-            attributes => [],
-            condition => none
-        }},
-        {tag, {3, 1}, #{
+        {tag, {1, 1}, #{
             name => <<"foo">>,
             attributes => [],
             is_stateful => false,
             is_void => true,
             inner_content => [],
-            condition => {'if', {3, 10}, <<"true">>}
+            condition => {'if', {1, 10}, <<"true">>}
         }},
-        {tag, {4, 1}, #{
+        {tag, {2, 1}, #{
             name => <<"foo">>,
             attributes => [],
             is_stateful => false,
