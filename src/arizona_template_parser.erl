@@ -26,7 +26,8 @@
 
 -type block() :: #{
     name := binary(),
-    attributes := [attribute()]
+    attributes := [attribute()],
+    condition := condition()
 }.
 -export_type([block/0]).
 
@@ -35,7 +36,8 @@
     is_stateful := boolean(),
     is_void := boolean(),
     attributes := [attribute()],
-    inner_content := [element()]
+    inner_content := [element()],
+    condition := condition()
 }.
 -export_type([tag/0]).
 
@@ -53,6 +55,9 @@
 
 -type attribute() :: {attribute_key(), attribute_value()}.
 -export_type([attribute/0]).
+
+-type condition() :: none | {'if', arizona_template_scanner:location(), binary()}.
+-export_type([condition/0]).
 
 -type error_reason() :: unexpected_block_end
                       | unexpected_tag_end
@@ -120,6 +125,11 @@ parse_block(Name, Loc, T0) ->
             throw({Reason, Loc})
     end.
 
+collect_block_props([{attr_name, _, <<":if">>},
+                     {attr_value, Loc, {expr, Expr}} | T], Props) ->
+    collect_block_props(T, [{condition, {'if', Loc, Expr}} | Props]);
+collect_block_props([{attr_name, Loc, <<$:, _/binary>>} | _T], _Props) ->
+    {error, {invalid_directive, Loc}};
 collect_block_props([{attr_name, _, Name},
                      {attr_value, Loc, {text, Txt}} | T], Props) ->
     collect_block_props(T, [{attribute, {Name, {text, Loc, Txt}}} | Props]);
@@ -137,7 +147,8 @@ normalize_block_props(Props) ->
     {name, Name} = proplists:lookup(name, Props),
     #{
         name => Name,
-        attributes => lists:reverse(proplists:get_all_values(attribute, Props))
+        attributes => lists:reverse(proplists:get_all_values(attribute, Props)),
+        condition => proplists:get_value(condition, Props, none)
      }.
 
 parse_tag(Name, Loc, T0) ->
@@ -150,6 +161,9 @@ parse_tag(Name, Loc, T0) ->
             throw({Reason, Loc})
     end.
 
+collect_tag_props([{attr_name, _, <<":if">>},
+                   {attr_value, Loc, {expr, Expr}} | T], Props) ->
+    collect_tag_props(T, [{condition, {'if', Loc, Expr}} | Props]);
 collect_tag_props([{attr_name, _, <<":on", Action/binary>>},
                    {attr_value, Loc, {text, Event}} | T], Props) ->
     collect_tag_props(T, [{attribute, {<<"on", Action/binary>>,
@@ -206,7 +220,8 @@ normalize_tag_props(Props) ->
         is_stateful => proplists:get_bool(is_stateful, Props),
         is_void => proplists:get_bool(is_void, Props),
         attributes => lists:reverse(proplists:get_all_values(attribute, Props)),
-        inner_content => lists:reverse(proplists:get_all_values(inner_content, Props))
+        inner_content => lists:reverse(proplists:get_all_values(inner_content, Props)),
+        condition => proplists:get_value(condition, Props, none)
      }.
 
 %% --------------------------------------------------------------------
@@ -222,7 +237,7 @@ parse_ok_test() ->
          {1, 1},
          #{attributes => [{<<"html">>, {text, {1, 11}, <<"html">>}}],
            name => <<"!DOCTYPE">>, is_stateful => false,
-           is_void => true, inner_content => []}},
+           is_void => true, inner_content => [], condition => none}},
         {tag,
          {2, 1},
          #{attributes => [{<<"lang">>, {text, {2, 12}, <<"en">>}}],
@@ -239,20 +254,24 @@ parse_ok_test() ->
                    #{attributes =>
                       [{<<"charset">>, {text, {4, 19}, <<"UTF-8">>}}],
                      name => <<"meta">>, is_stateful => false,
-                     is_void => true, inner_content => []}},
+                     is_void => true, inner_content => [],
+                     condition => none}},
                   {tag,
                    {5, 5},
                    #{attributes => [], name => <<"title">>,
                      is_stateful => false, is_void => false,
                      inner_content =>
-                      [{expr, {5, 12}, <<"_@title">>}]}},
+                      [{expr, {5, 12}, <<"_@title">>}],
+                     condition => none}},
                   {tag,
                    {6, 5},
                    #{attributes =>
                       [{<<"src">>,
                         {text, {6, 17}, <<"assets/js/main.js">>}}],
                      name => <<"script">>, is_stateful => false,
-                     is_void => false, inner_content => []}}]}},
+                     is_void => false, inner_content => [],
+                     condition => none}}],
+                condition => none}},
              {tag,
               {8, 1},
               #{attributes => [], name => <<"body">>,
@@ -263,7 +282,8 @@ parse_ok_test() ->
                    #{attributes => [], name => <<"h1">>,
                      is_stateful => false, is_void => false,
                      inner_content =>
-                      [{text, {10, 9}, <<"Arizona Counter">>}]}},
+                      [{text, {10, 9}, <<"Arizona Counter">>}],
+                     condition => none}},
                   {block,
                    {11, 5},
                    #{attributes =>
@@ -271,7 +291,9 @@ parse_ok_test() ->
                        {<<"btn_text">>,
                         {text, {13, 18}, <<"Increment">>}},
                        {<<"event">>, {text, {14, 15}, <<"incr">>}}],
-                     name => <<"counter">>}}]}}]}}
+                     name => <<"counter">>, condition => none}}],
+                condition => none}}],
+           condition => none}}
     ]}, parse(tokens_ok())).
 
 parse_unexpected_block_end_test() ->
@@ -291,6 +313,42 @@ parse_invalid_directive_test() ->
     <foo :id="bar"></foo>
     """),
     ?assertEqual({error, {invalid_directive, {1, 6}}}, parse(Tokens)).
+
+if_directive_test() ->
+    {ok, Tokens} = arizona_template_scanner:scan(~"""
+    <.foo :if={_@bool} />
+    <.foo />
+    <foo :if={true} />
+    <foo />
+    """),
+    ?assertEqual({ok, [
+        {block, {1, 1}, #{
+            name => <<"foo">>,
+            attributes => [],
+            condition => {'if', {1, 11}, <<"_@bool">>}
+        }},
+        {block, {2, 1}, #{
+            name => <<"foo">>,
+            attributes => [],
+            condition => none
+        }},
+        {tag, {3, 1}, #{
+            name => <<"foo">>,
+            attributes => [],
+            is_stateful => false,
+            is_void => true,
+            inner_content => [],
+            condition => {'if', {3, 10}, <<"true">>}
+        }},
+        {tag, {4, 1}, #{
+            name => <<"foo">>,
+            attributes => [],
+            is_stateful => false,
+            is_void => true,
+            inner_content => [],
+            condition => none
+        }}
+    ]}, parse(Tokens)).
 
 %% --------------------------------------------------------------------
 %% Test support
