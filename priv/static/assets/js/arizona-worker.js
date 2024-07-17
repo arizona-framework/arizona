@@ -111,7 +111,7 @@ function handleEvent(data) {
   }
 }
 
-function applyPatch([[_, ...target], changes]) {
+function applyPatch([[, ...target], changes]) {
   const tree = getTargetTree(target, state.tree[1]);
   changes.forEach((c) => {
     applyChanges(c, tree);
@@ -139,11 +139,11 @@ function applyChanges([indexes, v], tree) {
 }
 
 function zip(staticArr, dynamicArr) {
-    let str = "";
-    for (let i = 0; i < Math.max(staticArr.length, dynamicArr.length); i++) {
-        str += `${staticArr[i] || ""}${dynamicArr[i] || ""}`;
-    }
-    return str;
+  let str = "";
+  for (let i = 0; i < Math.max(staticArr.length, dynamicArr.length); i++) {
+    str += `${staticArr[i] || ""}${dynamicArr[i] || ""}`;
+  }
+  return str;
 }
 
 function sendMsgToClient(event, payload) {

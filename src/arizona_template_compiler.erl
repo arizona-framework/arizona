@@ -481,10 +481,10 @@ compile_test() ->
                 #{function := render, id := [0, 0], module := arizona_template_compiler,
                   changeable :=
                    #{0 :=
-                      {expr, #{function := _, id := [0, 0, 0], vars := [count]}}},
+                      {expr, #{function := _, id := [0], vars := [count]}}},
                   static :=
                    [<<"<div arizona-id=\"[0,0]\"><span>Count:">>,
-                    <<"</span><button arizona-target=\"[0,0]\" type=\"button\" "
+                    <<"</span><button arizona-target=\"[arizona-id='[0,0]']\" type=\"button\" "
                       "onclick=\"arizona.send.bind(this)('incr')\">",
                      "Increment</button></div>">>],
                   changeable_vars := #{count := [[0]]},
@@ -497,10 +497,10 @@ compile_test() ->
                 #{function := render, id := [0, 1], module := arizona_template_compiler,
                   changeable :=
                    #{0 :=
-                      {expr, #{function := _, id := [0, 1, 0], vars := [count]}}},
+                      {expr, #{function := _, id := [0], vars := [count]}}},
                   static :=
                    [<<"<div arizona-id=\"[0,1]\"><span>Count:">>,
-                    <<"</span><button arizona-target=\"[0,1]\" type=\"button\" "
+                    <<"</span><button arizona-target=\"[arizona-id='[0,1]']\" type=\"button\" "
                       "onclick=\"arizona.send.bind(this)('decr')\">"
                       "Decrement</button></div>">>],
                   changeable_vars := #{count := [[0]]},
@@ -576,7 +576,7 @@ macros_test() ->
                              <<"</div>">>],
                   changeable :=
                    #{0 :=
-                      {expr, #{function := _, id := [0, 0, 0], vars := [qux]}}},
+                      {expr, #{function := _, id := [0], vars := [qux]}}},
                   changeable_vars := #{qux := [[0]]},
                   changeable_indexes := [0],
                   norm_assigns :=

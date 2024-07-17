@@ -182,13 +182,13 @@ client_render_test() ->
             "<h1>Arizona Counter</h1>">>,
             [<<"<div arizona-id=\"[0,0]\">"
                  "<span>Count:">>, <<"0">>, <<"</span>"
-                 "<button arizona-target=\"[0,0]\" type=\"button\" "
+                 "<button arizona-target=\"[arizona-id='[0,0]']\" type=\"button\" "
                  "onclick=\"arizona.send.bind(this)('incr')\">Increment</button>"
                "</div>">>],
              <<>>,
             [<<"<div arizona-id=\"[0,1]\">"
                  "<span>Count:">>, <<"88">>, <<"</span>"
-                 "<button arizona-target=\"[0,1]\" type=\"button\" "
+                 "<button arizona-target=\"[arizona-id='[0,1]']\" type=\"button\" "
                  "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button>"
                "</div>">>],
           <<"</body></html>">>
@@ -215,7 +215,7 @@ server_render_test() ->
           [% Static
            [<<"<div arizona-id=\"[0,0]\">"
                 "<span>Count:">>, <<"</span>"
-                "<button arizona-target=\"[0,0]\" type=\"button\" "
+                "<button arizona-target=\"[arizona-id='[0,0]']\" type=\"button\" "
                 "onclick=\"arizona.send.bind(this)('incr')\">Increment</button>"
               "</div>">>],
            % Dynamic
@@ -224,7 +224,7 @@ server_render_test() ->
           [% Static
            [<<"<div arizona-id=\"[0,1]\">"
                 "<span>Count:">>, <<"</span>"
-                "<button arizona-target=\"[0,1]\" type=\"button\" "
+                "<button arizona-target=\"[arizona-id='[0,1]']\" type=\"button\" "
                 "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button>"
               "</div>">>],
            % Dynamic
@@ -237,12 +237,8 @@ server_render_test() ->
 
 render_changes_test() ->
     [
-        ?assertEqual([[[0, 0, 0], <<"1">>]],
-                     render_changes([0], block(), [count], #{count => 1})),
-        ?assertEqual([[[0, 0, 0], <<"1">>]],
-                     render_changes([0, 0], block(), [count], #{count => 1})),
-        ?assertEqual([[[0, 1, 0], <<"1">>]],
-                     render_changes([1, 0], block(), [count], #{count => 1}))
+        ?assertEqual([[[0], <<"1">>]],
+                     render_changes(block(), [count], #{count => 1}))
     ].
 
 %% --------------------------------------------------------------------

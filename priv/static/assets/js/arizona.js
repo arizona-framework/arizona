@@ -12,7 +12,9 @@ globalThis["arizona"] = (() => {
     switch (event) {
       case "patch": {
         const { target, html } = payload;
-        const elem = document.querySelector(`[arizona-id="${JSON.stringify(target)}"]`);
+        const elem = document.querySelector(
+          `[arizona-id="${JSON.stringify(target)}"]`,
+        );
         applyPatch(elem, html);
         break;
       }
