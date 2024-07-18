@@ -138,10 +138,10 @@ expand_expr(Expr, Loc, Eval, State) ->
     AttrsTree = merl:tsubst(ExprTree, AttrsEnv),
     MacrosTree = merl:tsubst(AttrsTree, MacrosEnv),
     Vars = merl:template_vars(merl:template(MacrosTree)),
-    case Vars =:= [] andalso Eval of
-        true ->
+    case {Vars, Eval}  of
+        {[], true} ->
             {text, eval_macros_to_safe_html(MacrosTree, Loc, State)};
-        false ->
+        _Other ->
             VarsSubst = [{Var, var_form(Var)} || Var <- Vars],
             Env = [{subst, merl:subst(MacrosTree, VarsSubst)}],
             [Form] = erl_syntax:revert_forms([merl:qquote(~"_@subst", Env)]),
