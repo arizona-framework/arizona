@@ -133,7 +133,7 @@ expand_expr(Expr, Loc, Eval, State) ->
     AttrsEnv = lists:map(fun
         ({K, {expr, _KLoc, KExpr}}) ->
             KForm = merl:tsubst(merl:quote(KExpr), MacrosEnv),
-            {binary_to_existing_atom(K, utf8), KForm};
+            {binary_to_atom(K, utf8), KForm};
         ({K, {text, _KLoc, KTxt}}) ->
             {binary_to_atom(K, utf8),
               merl:quote(iolist_to_binary(["<<\"", KTxt, "\"/utf8>>"]))}
@@ -235,7 +235,7 @@ block_assigns(Attrs, Macros, State) ->
             {binary_to_atom(K), {text, Txt}};
         ({K, {expr, Loc, Expr}}) ->
             Eval = should_eval_expr(Expr, Macros),
-            {binary_to_existing_atom(K), expand_expr(Expr, Loc, Eval, State)}
+            {binary_to_atom(K), expand_expr(Expr, Loc, Eval, State)}
     end, Attrs)).
 
 block_assigns_macros(Assigns) ->
