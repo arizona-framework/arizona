@@ -380,15 +380,20 @@ concat_texts([H | T])  ->
 concat_texts([]) ->
     [].
 
-filter_static([{text, Txt} | T]) ->
-    [Txt | filter_static(T)];
-filter_static([_, {text, Txt} | T]) ->
-    [Txt | filter_static(T)];
-filter_static([_, _ | T]) ->
-    [<<>> | filter_static(T)];
-filter_static([_ | T]) ->
-    filter_static(T);
+filter_static([{text, Txt} = Prev | T]) ->
+    [Txt | do_filter_static(T, Prev)];
+filter_static([Prev | T]) ->
+    do_filter_static(T, Prev);
 filter_static([]) ->
+    [].
+
+do_filter_static([{text, Txt} = Prev | T], _) ->
+    [Txt | do_filter_static(T, Prev)];
+do_filter_static([Prev | T], {text, _}) ->
+    do_filter_static(T, Prev);
+do_filter_static([Prev | T], _) ->
+    [<<>> | do_filter_static(T, Prev)];
+do_filter_static([], _) ->
     [].
 
 filter_changeable([{text, _} | T]) ->
