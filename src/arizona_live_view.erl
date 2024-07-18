@@ -42,8 +42,8 @@ Live view.
                  | {error, ErrReason},
          Parsed :: [arizona_template_parser:element()],
          Macros2 :: arizona_template_compiler:macros(),
-         ErrReason :: arizona_template_scanner:error_reason()
-                    | arizona_template_parser:error_reason().
+         ErrReason :: {scanner, arizona_template_scanner:error_reason()}
+                    | {parser, arizona_template_parser:error_reason()}.
 
 -callback handle_event(EventName, Payload, Socket) -> Socket
     when EventName :: binary(),
@@ -81,16 +81,19 @@ get_macro(Key, Macros, Default) ->
                  | {error, ErrReason},
          Parsed :: [arizona_template_parser:element()],
          Macros2 :: arizona_template_compiler:macros(),
-         ErrReason :: arizona_template_scanner:error_reason()
-                    | arizona_template_parser:error_reason().
+         ErrReason :: {scanner, arizona_template_scanner:error_reason()}
+                    | {parser, arizona_template_parser:error_reason()}.
 parse_str(Str, Macros) ->
-    maybe
-        {ok, Tokens} ?= arizona_template_scanner:scan(Str),
-        {ok, Elems} ?= arizona_template_parser:parse(Tokens),
-        {ok, {Elems, Macros}}
-    else
+    case arizona_template_scanner:scan(Str) of
+        {ok, Tokens} ->
+            case arizona_template_parser:parse(Tokens) of
+                {ok, Elems} ->
+                    {ok, {Elems, Macros}};
+                {error, Reason} ->
+                    {error, {parser, Reason}}
+            end;
         {error, Reason} ->
-            {error, Reason}
+            {error, {scanner, Reason}}
     end.
 
 %% --------------------------------------------------------------------
@@ -111,8 +114,8 @@ mount(Mod, Socket) ->
                  | {error, ErrReason},
          Parsed :: [arizona_template_parser:element()],
          Macros2 :: arizona_template_compiler:macros(),
-         ErrReason :: arizona_template_scanner:error_reason()
-                    | arizona_template_parser:error_reason().
+         ErrReason :: {scanner, arizona_template_scanner:error_reason()}
+                    | {parser, arizona_template_parser:error_reason()}.
 render(Mod, Macros) ->
     Mod:render(Mod, Macros).
 
