@@ -78,8 +78,13 @@ render_changeable({block, Block}, Assigns0) ->
     Socket = arizona_live_view:mount(Mod, Socket0),
     Assigns = arizona_socket:get_assigns(Socket),
     NormAssigns = maps:get(norm_assigns, Block),
-    ChangeableAssigns = changeable_assigns(Assigns, NormAssigns),
-    render_block(Block, ChangeableAssigns).
+    case is_block_visible(Block, Assigns, NormAssigns) of
+        true ->
+            ChangeableAssigns = changeable_assigns(Assigns, NormAssigns),
+            render_block(Block, ChangeableAssigns);
+        false ->
+            <<>>
+    end.
 
 render_expr(Expr, Assigns) ->
     Fun = maps:get(function, Expr),
@@ -121,11 +126,16 @@ server_render_block(Block, Assigns0, Pid) ->
     Socket0 = arizona_socket:new(Mod, Assigns0),
     Socket = arizona_live_view:mount(Mod, Socket0),
     Assigns = arizona_socket:get_assigns(Socket),
-    ChangeableIndexes = maps:get(changeable_indexes, Block),
-    Changeable = maps:get(changeable, Block),
-    Dynamic = server_render_changeable_indexes(ChangeableIndexes, Changeable, Assigns, Pid),
-    Pid ! {self(), {socket, maps:get(id, Block), Socket}},
-    [maps:get(static, Block), Dynamic].
+    case is_block_visible(Block, Assigns) of
+        true ->
+            ChangeableIndexes = maps:get(changeable_indexes, Block),
+            Changeable = maps:get(changeable, Block),
+            Dynamic = server_render_changeable_indexes(ChangeableIndexes, Changeable, Assigns, Pid),
+            Pid ! {self(), {socket, maps:get(id, Block), Socket}},
+            [maps:get(static, Block), Dynamic];
+        false ->
+            []
+    end.
 
 server_render_loop(Pid, Timeout, Sockets) ->
     receive
@@ -153,12 +163,35 @@ render_changeable_changes({block, Block}, ChangedVars, Assigns) ->
     render_block_changes(Block, ChangedVars, Assigns).
 
 render_block_changes(Block, AssignsKeys, Assigns) ->
-    Changes = maps:with(AssignsKeys, Assigns),
-    ChangedVars = maps:keys(Changes),
-    ChangeableVars = maps:get(changeable_vars, Block),
-    Vars = maps:with(ChangedVars, ChangeableVars),
-    [Targets] = maps:values(Vars),
-    [do_render_changes(Target, Block, ChangedVars, Changes) || Target <- Targets].
+    case is_block_visible(Block, Assigns) of
+        true ->
+            Changes = maps:with(AssignsKeys, Assigns),
+            ChangedVars = maps:keys(Changes),
+            ChangeableVars = maps:get(changeable_vars, Block),
+            Vars = maps:with(ChangedVars, ChangeableVars),
+            case maps:values(Vars) of
+                [Targets] ->
+                    [do_render_changes(Target, Block, ChangedVars, Changes) || Target <- Targets];
+                [] ->
+                    []
+            end;
+        false ->
+            []
+    end.
+
+is_block_visible(#{is_visible := true}, _Assigns) ->
+    true;
+is_block_visible(#{is_visible := {'if', Expr}}, Assigns) ->
+    IfFun = maps:get(function, Expr),
+    IfFun(Assigns).
+
+is_block_visible(#{is_visible := true}, _Assigns, _NormAssigns) ->
+    true;
+is_block_visible(#{is_visible := {'if', Expr}}, Assigns, NormAssigns) ->
+    Vars = maps:get(vars, Expr),
+    IfAssigns = changeable_assigns(Assigns, maps:with(Vars, NormAssigns)),
+    IfFun = maps:get(function, Expr),
+    IfFun(IfAssigns).
 
 %% --------------------------------------------------------------------
 %% EUnit
@@ -241,6 +274,26 @@ render_changes_test() ->
                      render_changes(block(), [count], #{count => 1}))
     ].
 
+render_if_directive_test() ->
+    {ok, Block} = arizona_template_compiler:compile(?MODULE, render_if_directive, #{}),
+    [
+        ?assertEqual([<<>>],
+                     client_render(Block, #{is_visible => false})),
+        ?assertEqual([[<<"<div arizona-id=\"[0,0]\">">>, <<"Joe">>,
+                       <<", can you see me?</div>">>]],
+                     client_render(Block, #{is_visible => true,
+                                            visible_for => ~"Joe"}))
+    ].
+
+render_if_directive_changes_test() ->
+    {ok, Block} = arizona_template_compiler:compile(?MODULE, render_if_directive, #{}),
+    [
+        ?assertEqual([[[0], <<"Joe">>]],
+                     render_changes(Block, [name], #{visible => true, name => ~"Joe"})),
+        ?assertEqual([],
+                     render_changes(Block, [name], #{visible => false, name => ~"Nobody"}))
+    ].
+
 %% --------------------------------------------------------------------
 %% Test support
 %% --------------------------------------------------------------------
@@ -292,6 +345,21 @@ button(Macros) ->
     <button type="button" :onclick={arizona_js:send(_@event)}>
         {_@text}
     </button>
+    """, Macros).
+
+render_if_directive(Macros) ->
+    maybe_parse(~"""
+    <.render_if_directive_block
+        visible={_@is_visible}
+        name={_@visible_for}
+    />
+    """, Macros).
+
+render_if_directive_block(Macros) ->
+    maybe_parse(~"""
+    <div :if={_@visible} :stateful>
+        {_@name}, can you see me?
+    </div>
     """, Macros).
 
 maybe_parse(Template, Macros) ->

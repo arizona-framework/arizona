@@ -36,7 +36,7 @@
     is_void := boolean(),
     attributes := [attribute()],
     inner_content := [element()],
-    condition := condition()
+    is_visible := boolean() | condition()
 }.
 -export_type([tag/0]).
 
@@ -55,7 +55,7 @@
 -type attribute() :: {attribute_key(), attribute_value()}.
 -export_type([attribute/0]).
 
--type condition() :: none | {'if', arizona_template_scanner:location(), binary()}.
+-type condition() :: {'if', arizona_template_scanner:location(), binary()}.
 -export_type([condition/0]).
 
 -type error_reason() :: unexpected_block_end
@@ -158,7 +158,7 @@ parse_tag(Name, Loc, T0) ->
 
 collect_tag_props([{attr_name, _, <<":if">>},
                    {attr_value, Loc, {expr, Expr}} | T], Props) ->
-    collect_tag_props(T, [{condition, {'if', Loc, Expr}} | Props]);
+    collect_tag_props(T, [{is_visible, {'if', Loc, Expr}} | Props]);
 collect_tag_props([{attr_name, _, <<":on", Action/binary>>},
                    {attr_value, Loc, {text, Event}} | T], Props) ->
     collect_tag_props(T, [{attribute, {<<"on", Action/binary>>,
@@ -216,7 +216,7 @@ normalize_tag_props(Props) ->
         is_void => proplists:get_bool(is_void, Props),
         attributes => lists:reverse(proplists:get_all_values(attribute, Props)),
         inner_content => lists:reverse(proplists:get_all_values(inner_content, Props)),
-        condition => proplists:get_value(condition, Props, none)
+        is_visible => proplists:get_value(is_visible, Props, true)
      }.
 
 %% --------------------------------------------------------------------
@@ -232,7 +232,7 @@ parse_ok_test() ->
          {1, 1},
          #{attributes => [{<<"html">>, {text, {1, 11}, <<"html">>}}],
            name => <<"!DOCTYPE">>, is_stateful => false,
-           is_void => true, inner_content => [], condition => none}},
+           is_void => true, inner_content => [], is_visible => true}},
         {tag,
          {2, 1},
          #{attributes => [{<<"lang">>, {text, {2, 12}, <<"en">>}}],
@@ -250,14 +250,14 @@ parse_ok_test() ->
                       [{<<"charset">>, {text, {4, 19}, <<"UTF-8">>}}],
                      name => <<"meta">>, is_stateful => false,
                      is_void => true, inner_content => [],
-                     condition => none}},
+                     is_visible => true}},
                   {tag,
                    {5, 5},
                    #{attributes => [], name => <<"title">>,
                      is_stateful => false, is_void => false,
                      inner_content =>
                       [{expr, {5, 12}, <<"_@title">>}],
-                     condition => none}},
+                     is_visible => true}},
                   {tag,
                    {6, 5},
                    #{attributes =>
@@ -265,8 +265,8 @@ parse_ok_test() ->
                         {text, {6, 17}, <<"assets/js/main.js">>}}],
                      name => <<"script">>, is_stateful => false,
                      is_void => false, inner_content => [],
-                     condition => none}}],
-                condition => none}},
+                     is_visible => true}}],
+                is_visible => true}},
              {tag,
               {8, 1},
               #{attributes => [], name => <<"body">>,
@@ -278,7 +278,7 @@ parse_ok_test() ->
                      is_stateful => false, is_void => false,
                      inner_content =>
                       [{text, {10, 9}, <<"Arizona Counter">>}],
-                     condition => none}},
+                     is_visible => true}},
                   {block,
                    {11, 5},
                    #{attributes =>
@@ -287,8 +287,8 @@ parse_ok_test() ->
                         {text, {13, 18}, <<"Increment">>}},
                        {<<"event">>, {text, {14, 15}, <<"incr">>}}],
                      name => <<"counter">>}}],
-                condition => none}}],
-           condition => none}}
+                is_visible => true}}],
+           is_visible => true}}
     ]}, parse(tokens_ok())).
 
 parse_unexpected_block_end_test() ->
@@ -321,7 +321,7 @@ if_directive_test() ->
             is_stateful => false,
             is_void => true,
             inner_content => [],
-            condition => {'if', {1, 10}, <<"true">>}
+            is_visible => {'if', {1, 10}, <<"true">>}
         }},
         {tag, {2, 1}, #{
             name => <<"foo">>,
@@ -329,7 +329,7 @@ if_directive_test() ->
             is_stateful => false,
             is_void => true,
             inner_content => [],
-            condition => none
+            is_visible => true
         }}
     ]}, parse(Tokens)).
 

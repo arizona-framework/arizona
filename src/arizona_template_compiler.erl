@@ -20,7 +20,8 @@
     macros :: macros(),
     attributes :: [arizona_template_parser:attribute()],
     index :: non_neg_integer(),
-    path :: [non_neg_integer()]
+    path :: [non_neg_integer()],
+    is_visible :: true | {'if', expr()}
 }).
 
 -type macros() :: #{atom() := term()}.
@@ -40,6 +41,7 @@
     id := changeable_id(),
     module := module(),
     function := atom(),
+    is_visible := true | {'if', expr()},
     static := [binary()],
     changeable := #{non_neg_integer() := {expr, expr()} | {block, block()}},
     changeable_vars := #{atom() := [changeable_id()]},
@@ -82,7 +84,8 @@ compile(Mod, Fun, Macros) ->
             macros = Macros,
             attributes = [],
             index = 0,
-            path = [0]
+            path = [0],
+            is_visible = true
         },
         Tree = expand_block(Mod, Fun, _Attrs = [], State),
         {ok, block([0], Tree, _NormAssigns = #{}, State)}
@@ -208,12 +211,18 @@ block_mod_fun(Name, Loc, State) ->
 expand_block(Mod, Fun, Attrs, State) ->
     case erlang:apply(Mod, Fun, [State#state.macros]) of
         {ok, {[{tag, Loc, #{is_stateful := true} = Tag}], AttrsMacros}} ->
-            BlockAssigns = block_assigns(Attrs, AttrsMacros, State),
-            Macros = block_assigns_macros(BlockAssigns),
-            NormAssigns = norm_block_assigns(BlockAssigns),
-            StatefulState = stateful_state(Mod, Fun, Macros, State),
-            Tree = compile_tag(Tag, Loc, [], StatefulState),
-            [{block, block(changeable_id(State), Tree, NormAssigns, State)}];
+            case expand_is_visible(maps:get(is_visible, Tag), State) of
+                false ->
+                    [];
+                IsVisible ->
+                    StatefulState = stateful_state(Mod, Fun, Macros, IsVisible, State),
+                    Tree = compile_tag(Tag, Loc, [], StatefulState),
+                    BlockAssigns = block_assigns(Attrs, AttrsMacros, State),
+                    Macros = block_assigns_macros(BlockAssigns),
+                    NormAssigns = norm_block_assigns(BlockAssigns),
+                    BlockState = State#state{is_visible = IsVisible},
+                    [{block, block(changeable_id(State), Tree, NormAssigns, BlockState)}]
+            end;
         {ok, {Elems, Macros}} ->
             concat_texts(compile_elems(Elems, stateless_state(Macros, Attrs, State)));
         {error, {Reason, Loc}} ->
@@ -243,6 +252,18 @@ should_eval_expr(Expr, Macros) when map_size(Macros) > 0 ->
 should_eval_expr(_, _) ->
     false.
 
+expand_is_visible(true, _) ->
+    true;
+expand_is_visible({'if', Loc, ExprStr}, State) ->
+    case expand_expr(ExprStr, Loc, true, State) of
+        {text, <<"true">>} ->
+            true;
+        {text, <<"false">>} ->
+            false;
+        {expr, Expr} ->
+            {'if', Expr}
+    end.
+
 block(Id, Tree0, NormAssigns, State) ->
     Tree = concat_texts(Tree0),
     Changeable = normalize_changeable(filter_changeable(Tree)),
@@ -251,6 +272,7 @@ block(Id, Tree0, NormAssigns, State) ->
         id => Id,
         module => State#state.module,
         function => State#state.function,
+        is_visible => State#state.is_visible,
         static => filter_static(Tree),
         changeable => norm_changeable_expr_id(Changeable),
         changeable_vars => group_vars(norm_changeable_vars(Id, ChangeableVars)),
@@ -411,8 +433,15 @@ changeable_vars(Changeable) ->
 
 changeable_vars_1([{_Index, {expr, #{id := Id, vars := Vars}}} | T]) ->
     changeable_vars_2(Vars, Id, T);
-changeable_vars_1([{_Index, {block, #{norm_assigns_vars := Vars}}} | T]) ->
-    Vars ++ changeable_vars_1(T);
+changeable_vars_1([{_Index, {block, #{norm_assigns_vars := Vars} = Block}} | T]) ->
+    case maps:get(is_visible, Block) of
+        true ->
+            Vars ++ changeable_vars_1(T);
+        {'if', #{id := IfId, vars := IfVars}} ->
+            NAssigns = maps:with(IfVars, maps:get(norm_assigns, Block)),
+            NIfVars = [{NVar, IfId} || _K := #{vars := NVars} <- NAssigns, NVar <- NVars],
+            NIfVars ++ Vars ++ changeable_vars_1(T)
+    end;
 changeable_vars_1([_ | T]) ->
     changeable_vars_1(T);
 changeable_vars_1([]) ->
@@ -446,13 +475,14 @@ norm_assigns_vars_3([Index | Indexes], Var, Vars, ChangeableVar, AllIndexes, T, 
 norm_assigns_vars_3([], _, Vars, ChangeableVar, Indexes, T, ChangeableVars) ->
     norm_assigns_vars_2(Vars, ChangeableVar, Indexes, T, ChangeableVars).
 
-stateful_state(Mod, Fun, Macros, State) ->
+stateful_state(Mod, Fun, Macros, IsVisible, State) ->
     State#state{
         module = Mod,
         function = Fun,
         macros = Macros,
         index = 0,
-        path = [State#state.index | State#state.path]
+        path = [State#state.index | State#state.path],
+        is_visible = IsVisible
     }.
 
 stateless_state(Macros, Attrs, State) ->
@@ -588,6 +618,49 @@ macros_test() ->
            norm_assigns := #{}, norm_assigns_vars := []}}
        , compile(?MODULE, render_macros, #{foo => foo})).
 
+if_directive_test() ->
+    ?assertMatch(
+        {ok,
+         #{function := render_if_directive,
+           id := [0],
+           module := arizona_template_compiler, static := [],
+           is_visible := true,
+           changeable :=
+            #{0 :=
+               {block,
+                #{function := render_if_directive,
+                  id := [0, 0],
+                  module := arizona_template_compiler,
+                  static :=
+                   [<<"<div arizona-id=\"[0,0]\">">>,
+                    <<", can you see me?</div>">>],
+                  is_visible :=
+                   {'if',
+                    #{function := _,
+                      id := [0, 0],
+                      vars := [visible]}},
+                  changeable :=
+                   #{0 :=
+                      {expr,
+                       #{function := _,
+                         id := [0],
+                         vars := [name]}}},
+                  changeable_vars := #{name := [[0]]},
+                  changeable_indexes := [0],
+                  norm_assigns :=
+                   #{name :=
+                      #{function := _,
+                        vars := [visible_for]},
+                     visible :=
+                      #{function := _,
+                        vars := [is_visible]}},
+                  norm_assigns_vars := [{visible_for, [0, 0, 0]}]}}},
+           changeable_vars :=
+            #{is_visible := [[0]], visible_for := [[0, 0]]},
+           changeable_indexes := [0],
+           norm_assigns := #{}, norm_assigns_vars := []}}
+        , compile(?MODULE, render_if_directive, #{})).
+
 %% --------------------------------------------------------------------
 %% Test support
 %% --------------------------------------------------------------------
@@ -690,6 +763,21 @@ render_macros_block(Macros) ->
     maybe_parse(~"""
     <div :stateful>
         {_@bar}{_@baz}{_@qux}
+    </div>
+    """, Macros).
+
+render_if_directive(Macros) ->
+    maybe_parse(~"""
+    <.render_if_directive_block
+        visible={_@is_visible}
+        name={_@visible_for}
+    />
+    """, Macros).
+
+render_if_directive_block(Macros) ->
+    maybe_parse(~"""
+    <div :if={_@visible} :stateful>
+        {_@name}, can you see me?
     </div>
     """, Macros).
 
