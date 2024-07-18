@@ -52,7 +52,7 @@ new(View, Assigns) ->
         view => View,
         assigns => Assigns,
         events => [],
-        changes => ordsets:new()
+        changes => ordsets:from_list(maps:keys(Assigns))
     }.
 
 -spec put_assigns(Assigns, Socket1) -> Socket2
