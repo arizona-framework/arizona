@@ -29,7 +29,11 @@
     when Block :: arizona_template_compiler:block(),
          Assigns :: assigns(),
          Rendered :: iolist().
-client_render(Block, Assigns) ->
+client_render(Block, Assigns0) ->
+    Mod = maps:get(module, Block),
+    Socket0 = arizona_socket:new(Mod, Assigns0),
+    Socket = arizona_live_view:mount(Mod, Socket0),
+    Assigns = arizona_socket:get_assigns(Socket),
     render_block(Block, Assigns).
 
 -spec server_render(Block, Assigns) -> Result
@@ -212,20 +216,20 @@ client_render_test() ->
             "<script src=\"assets/js/main.js\"></script>"
           "</head>"
           "<body>"
-            "<h1>Arizona Counter</h1>">>,
-            [<<"<div arizona-id=\"[0,0]\">"
+            "<h1>Arizona Counter:">>, <<"0">>, <<"</h1>">>,
+            [<<"<div arizona-id=\"[0,1]\">"
                  "<span>Count:">>, <<"0">>, <<"</span>"
-                 "<button arizona-target=\"[arizona-id='[0,0]']\" type=\"button\" "
+                 "<button arizona-target=\"[arizona-id='[0,1]']\" type=\"button\" "
                  "onclick=\"arizona.send.bind(this)('incr')\">Increment</button>"
                "</div>">>],
              <<>>,
-            [<<"<div arizona-id=\"[0,1]\">"
+            [<<"<div arizona-id=\"[0,2]\">"
                  "<span>Count:">>, <<"88">>, <<"</span>"
-                 "<button arizona-target=\"[arizona-id='[0,1]']\" type=\"button\" "
+                 "<button arizona-target=\"[arizona-id='[0,2]']\" type=\"button\" "
                  "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button>"
                "</div>">>],
           <<"</body></html>">>
-    ], client_render(block(), #{count => 0})).
+    ], client_render(block(), #{})).
 
 server_render_test() ->
     ?assertEqual({ok, {
@@ -238,35 +242,39 @@ server_render_test() ->
               "</script><script src=\"assets/js/arizona.js\">"
               "</script><script src=\"assets/js/main.js\"></script>"
             "</head>"
-            "<body><h1>Arizona Counter</h1>">>,
+            "<body><h1>Arizona Counter:">>,
               % #1
-              <<>>, % Dummy binary to correctly zip elements
+              <<"</h1>">>,
               % #2
+              <<>>, % Dummy binary to correctly zip elements
+              % #3
             <<"</body></html>">>],
          % Dynamic
-         [ % #1
-          [% Static
-           [<<"<div arizona-id=\"[0,0]\">"
-                "<span>Count:">>, <<"</span>"
-                "<button arizona-target=\"[arizona-id='[0,0]']\" type=\"button\" "
-                "onclick=\"arizona.send.bind(this)('incr')\">Increment</button>"
-              "</div>">>],
-           % Dynamic
-           [<<"0">>]],
+         [% #1
+          <<"0">>,
           % #2
           [% Static
            [<<"<div arizona-id=\"[0,1]\">"
                 "<span>Count:">>, <<"</span>"
                 "<button arizona-target=\"[arizona-id='[0,1]']\" type=\"button\" "
+                "onclick=\"arizona.send.bind(this)('incr')\">Increment</button>"
+              "</div>">>],
+           % Dynamic
+           [<<"0">>]],
+          % #3
+          [% Static
+           [<<"<div arizona-id=\"[0,2]\">"
+                "<span>Count:">>, <<"</span>"
+                "<button arizona-target=\"[arizona-id='[0,2]']\" type=\"button\" "
                 "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button>"
               "</div>">>],
            % Dynamic
            [<<"88">>]]
         ]],
         #{[0] => arizona_socket:new(?MODULE, #{count => 0}),
-          [0, 0] => arizona_socket:new(?MODULE, #{count => 0}),
-          [0, 1] => arizona_socket:new(?MODULE, #{count => 88})}
-    }}, server_render(block(), #{count => 0})).
+          [0, 1] => arizona_socket:new(?MODULE, #{count => 0}),
+          [0, 2] => arizona_socket:new(?MODULE, #{count => 88})}
+    }}, server_render(block(), #{})).
 
 render_changes_test() ->
     [
@@ -307,7 +315,8 @@ block() ->
     Block.
 
 mount(Socket) ->
-    Socket.
+    Count = arizona_socket:get_assign(count, Socket, 0),
+    arizona_socket:put_assign(count, Count, Socket).
 
 render(Macros) ->
     maybe_parse(~"""
@@ -319,7 +328,7 @@ render(Macros) ->
         <script src="assets/js/main.js"></script>
     </head>
     <body>
-        <h1>Arizona Counter</h1>
+        <h1>Arizona Counter: {_@count}</h1>
         <.counter
             count={_@count}
             btn_text="Increment"
