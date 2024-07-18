@@ -57,7 +57,13 @@ server_render(Block, Assigns) ->
          Assigns :: assigns(),
          Changes :: [[arizona_template_compiler:changeable_id() | binary()]].
 render_changes(Block, ChangedVars, Assigns) ->
-    case do_render_changes(maps:get(id, Block), Block, ChangedVars, Assigns) of
+    Rendered = case maps:get(id, Block) of
+        [0] ->
+            render_block_changes(Block, ChangedVars, Assigns);
+        BlockId ->
+            do_render_changes(BlockId, Block, ChangedVars, Assigns)
+    end,
+    case Rendered of
         [_, Bin] = Changes when is_binary(Bin) ->
             [Changes];
         Changes ->
@@ -158,8 +164,7 @@ do_render_changes([Index], Block, ChangedVars, Assigns) ->
 do_render_changes([Index | Indexes], Block, ChangedVars, Assigns) ->
     Changeable = maps:get(changeable, Block),
     {block, NestedBlock} = maps:get(Index, Changeable),
-    render_block_changes(NestedBlock, ChangedVars, Assigns) ++
-        do_render_changes(Indexes, Block, ChangedVars, Assigns).
+    do_render_changes(Indexes, NestedBlock, ChangedVars, Assigns).
 
 render_changeable_changes({expr, #{id := Id}  = Expr}, _ChangedVars, Assigns) ->
     [Id, render_expr(Expr, Assigns)];
@@ -175,7 +180,14 @@ render_block_changes(Block, AssignsKeys, Assigns) ->
             Vars = maps:with(ChangedVars, ChangeableVars),
             case maps:values(Vars) of
                 [Targets] ->
-                    [do_render_changes(Target, Block, ChangedVars, Changes) || Target <- Targets];
+                    lists:filtermap(fun(Target) ->
+                        case do_render_changes(Target, Block, ChangedVars, Assigns) of
+                            [] ->
+                                false;
+                            Rendered ->
+                                {true, Rendered}
+                        end
+                    end, Targets);
                 [] ->
                     []
             end;

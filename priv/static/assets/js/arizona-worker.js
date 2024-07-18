@@ -112,7 +112,9 @@ function handleEvent(data) {
 }
 
 function applyPatch([[, ...target], changes]) {
-  const tree = getTargetTree(target, state.tree[1]);
+  const tree = target.length
+        ? getTargetTree(target, state.tree[1])
+        : state.tree;
   changes.forEach((c) => {
     applyChanges(c, tree);
   });
@@ -140,8 +142,13 @@ function applyChanges([indexes, v], tree) {
 
 function zip(staticArr, dynamicArr) {
   let str = "";
-  for (let i = 0; i < Math.max(staticArr.length, dynamicArr.length); i++) {
-    str += `${staticArr[i] || ""}${dynamicArr[i] || ""}`;
+  for (let i = 0; i < Math.max(staticArr?.length ?? 0, dynamicArr?.length ?? 0); i++) {
+    const dynamic = dynamicArr[i] ?? ""
+    str += `${staticArr[i] ?? ""}${
+                Array.isArray(dynamic)
+                    ? zip(dynamic[0], dynamic[1])
+                    : dynamic
+            }`;
   }
   return str;
 }
