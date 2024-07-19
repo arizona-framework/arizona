@@ -181,14 +181,7 @@ render_block_changes(Block, AssignsKeys, Assigns) ->
             Vars = maps:with(ChangedVars, ChangeableVars),
             case maps:values(Vars) of
                 [Targets] ->
-                    lists:filtermap(fun(Target) ->
-                        case do_render_changes(Target, Block, ChangedVars, Assigns) of
-                            [] ->
-                                false;
-                            Rendered ->
-                                {true, Rendered}
-                        end
-                    end, Targets);
+                    render_block_changeable(Targets, Block, ChangedVars, Assigns);
                 [] ->
                     []
             end;
@@ -208,6 +201,16 @@ render_block_changes(Block, AssignsKeys, Assigns) ->
             self() ! {remove_socket, BlockId},
             [BlockId -- [0], [[], []]]
     end.
+
+render_block_changeable(Targets, Block, ChangedVars, Assigns) ->
+    lists:filtermap(fun(Indexes) ->
+        case do_render_changes(Indexes, Block, ChangedVars, Assigns) of
+            [] ->
+                false;
+            Rendered ->
+                {true, Rendered}
+        end
+    end, Targets).
 
 is_block_visible(#{is_visible := true}, _Assigns) ->
     true;
@@ -314,7 +317,7 @@ server_render_test() ->
            % Dynamic
            [<<"88">>]]
         ]],
-        #{[0] => arizona_socket:new(?MODULE, #{count => 0}),
+        #{[0] => arizona_socket:put_assign(count, 0, arizona_socket:new(?MODULE, #{})),
           [0, 1] => arizona_socket:new(?MODULE, #{count => 0}),
           [0, 2] => arizona_socket:new(?MODULE, #{count => 88})}
     }}, server_render(block(), #{})).
@@ -340,7 +343,7 @@ render_if_directive_changes_test() ->
     {ok, Block} = arizona_template_compiler:compile(?MODULE, render_if_directive, #{}),
     [
         ?assertEqual([[[0], <<"Joe">>]],
-                     render_changes(Block, [name], #{visible => true, name => ~"Joe"})),
+                     render_changes(Block, [visible, name], #{visible => true, name => ~"Joe"})),
         ?assertEqual([],
                      render_changes(Block, [name], #{visible => false, name => ~"Nobody"}))
     ].
