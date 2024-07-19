@@ -90,7 +90,7 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
             Block = maps:get(block, State),
             Assigns = arizona_socket:get_assigns(Socket1),
             ChangedVars = ordsets:to_list(Changes),
-            Patch = arizona_template_renderer:render_changes(Block, ChangedVars, Assigns, Sockets),
+            Patch = arizona_template_renderer:render_changes(Block, ChangedVars, Assigns),
             arizona_socket:push_event(~"patch", [Target, Patch], Socket1)
     end,
     {[{text, json:encode(arizona_socket:get_events(Socket))}],
@@ -103,10 +103,10 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
          State2 :: state().
 websocket_info(reload, State) ->
     {[{text, json:encode([[~"reload", []]])}], State};
-websocket_info({assign_changes, Target, Assigns}, #{sockets := Sockets} = State) ->
-    Socket0 = maps:get(Target, Sockets),
-    Socket = arizona_socket:assign_changes(Assigns, Socket0),
-    {[], State#{sockets => Sockets#{Target => Socket}}}.
+websocket_info({put_socket, Target, Socket}, #{sockets := Sockets} = State) ->
+    {[], State#{sockets => Sockets#{Target => Socket}}};
+websocket_info({remove_socket, Target}, #{sockets := Sockets} = State) ->
+    {[], State#{sockets => maps:remove(Target, Sockets)}}.
 
 -spec terminate(Reason, Req, State) -> ok
     when Reason :: term(),

@@ -6,7 +6,7 @@
 
 -export([client_render/2]).
 -export([server_render/2]).
--export([render_changes/4]).
+-export([render_changes/3]).
 
 %
 
@@ -51,19 +51,17 @@ server_render(Block, Assigns) ->
     Timeout = 5_000,
     server_render_loop(Pid, Timeout, _Sockets = []).
 
--spec render_changes(Block, ChangedVars, Assigns, Sockets) -> Changes
+-spec render_changes(Block, ChangedVars, Assigns) -> Changes
     when Block :: arizona_template_compiler:block(),
          ChangedVars :: [atom()],
          Assigns :: assigns(),
-         Changes :: [[arizona_template_compiler:changeable_id() | binary()]],
-         Sockets :: #{SocketId :: arizona_template_compiler:changeable_id() :=
-                    Socket :: arizona_socket:t()}.
-render_changes(Block, ChangedVars, Assigns, Sockets) ->
+         Changes :: [[arizona_template_compiler:changeable_id() | binary()]].
+render_changes(Block, ChangedVars, Assigns) ->
     Rendered = case maps:get(id, Block) of
         [0] ->
-            render_block_changes(Block, ChangedVars, Assigns, Sockets);
+            render_block_changes(Block, ChangedVars, Assigns);
         BlockId ->
-            do_render_changes(BlockId, Block, ChangedVars, Assigns, Sockets)
+            do_render_changes(BlockId, Block, ChangedVars, Assigns)
     end,
     case Rendered of
         [_, Bin] = Changes when is_binary(Bin) ->
@@ -161,22 +159,22 @@ server_render_loop(Pid, Timeout, Sockets) ->
             {error, timeout}
     end.
 
-do_render_changes([Index], Block, ChangedVars, Assigns, Sockets) ->
+do_render_changes([Index], Block, ChangedVars, Assigns) ->
     Changeable = maps:get(changeable, Block),
-    render_changeable_changes(maps:get(Index, Changeable), ChangedVars, Assigns, Sockets);
-do_render_changes([Index | Indexes], Block, ChangedVars, Assigns, Sockets) ->
+    render_changeable_changes(maps:get(Index, Changeable), ChangedVars, Assigns);
+do_render_changes([Index | Indexes], Block, ChangedVars, Assigns) ->
     Changeable = maps:get(changeable, Block),
     {block, NestedBlock} = maps:get(Index, Changeable),
-    do_render_changes(Indexes, NestedBlock, ChangedVars, Assigns, Sockets).
+    do_render_changes(Indexes, NestedBlock, ChangedVars, Assigns).
 
-render_changeable_changes({expr, #{id := Id}  = Expr}, _ChangedVars, Assigns, _Sockets) ->
+render_changeable_changes({expr, #{id := Id}  = Expr}, _ChangedVars, Assigns) ->
     [Id, render_expr(Expr, Assigns)];
-render_changeable_changes({block, Block}, ChangedVars, Assigns, Sockets) ->
-    render_block_changes(Block, ChangedVars, Assigns, Sockets).
+render_changeable_changes({block, Block}, ChangedVars, Assigns) ->
+    render_block_changes(Block, ChangedVars, Assigns).
 
-render_block_changes(Block, AssignsKeys, Assigns, Sockets) ->
-    case changes_is_block_visible(Block, Assigns) of
-        true ->
+render_block_changes(Block, AssignsKeys, Assigns) ->
+    case block_changes_action(Block, Assigns) of
+        render_changeable ->
             Changes = maps:with(AssignsKeys, Assigns),
             ChangedVars = maps:keys(Changes),
             ChangeableVars = maps:get(changeable_vars, Block),
@@ -184,7 +182,7 @@ render_block_changes(Block, AssignsKeys, Assigns, Sockets) ->
             case maps:values(Vars) of
                 [Targets] ->
                     lists:filtermap(fun(Target) ->
-                        case do_render_changes(Target, Block, ChangedVars, Assigns, Sockets) of
+                        case do_render_changes(Target, Block, ChangedVars, Assigns) of
                             [] ->
                                 false;
                             Rendered ->
@@ -194,19 +192,21 @@ render_block_changes(Block, AssignsKeys, Assigns, Sockets) ->
                 [] ->
                     []
             end;
-        false ->
-            [maps:get(id, Block) -- [0], [[], []]];
         render_block ->
+            Mod = maps:get(module, Block),
+            Socket0 = arizona_socket:new(Mod, Assigns),
+            Socket = arizona_live_view:mount(Mod, Socket0),
+            ChangeableAssigns = arizona_socket:get_assigns(Socket),
             BlockId = maps:get(id, Block),
-            Socket = maps:get(BlockId, Sockets),
-            SocketAssigns = maps:get(assigns, Socket),
-            Changes = maps:with(AssignsKeys, Assigns),
-            self() ! {assign_changes, BlockId, Changes},
-            ChangeableAssigns = maps:merge(SocketAssigns, Changes),
+            self() ! {put_socket, BlockId, Socket},
             ChangeableIndexes = maps:get(changeable_indexes, Block),
             Changeable = maps:get(changeable, Block),
             Dynamic = render_changeable_indexes(ChangeableIndexes, Changeable, ChangeableAssigns),
-            [maps:get(id, Block) -- [0], [maps:get(static, Block), Dynamic]]
+            [BlockId -- [0], [maps:get(static, Block), Dynamic]];
+        hide_block ->
+            BlockId = maps:get(id, Block),
+            self() ! {remove_socket, BlockId},
+            [BlockId -- [0], [[], []]]
     end.
 
 is_block_visible(#{is_visible := true}, _Assigns) ->
@@ -215,9 +215,9 @@ is_block_visible(#{is_visible := {'if', Expr}}, Assigns) ->
     IfFun = maps:get(function, Expr),
     IfFun(Assigns).
 
-changes_is_block_visible(#{is_visible := true}, _Assigns) ->
-    true;
-changes_is_block_visible(#{is_visible := {'if', Expr}}, Assigns) ->
+block_changes_action(#{is_visible := true}, _Assigns) ->
+    render_changeable;
+block_changes_action(#{is_visible := {'if', Expr}}, Assigns) ->
     IfFun = maps:get(function, Expr),
     case IfFun(Assigns) of
         true ->
@@ -226,10 +226,10 @@ changes_is_block_visible(#{is_visible := {'if', Expr}}, Assigns) ->
                 true ->
                     render_block;
                 false ->
-                    true
+                    render_changeable
             end;
         false ->
-            false
+            hide_block
     end.
 
 is_block_visible(#{is_visible := true}, _Assigns, _NormAssigns) ->
