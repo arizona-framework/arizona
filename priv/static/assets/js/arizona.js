@@ -12,10 +12,9 @@ globalThis["arizona"] = (() => {
     switch (event) {
       case "patch": {
         const { target, html } = payload;
-        const elem =
-          target === "root"
-            ? document.documentElement
-            : document.querySelector(`[arz-id="${JSON.stringify(target)}"]`);
+        const elem = document.querySelector(
+          `[arizona-id="${JSON.stringify(target)}"]`,
+        );
         applyPatch(elem, html);
         break;
       }
@@ -107,10 +106,12 @@ globalThis["arizona"] = (() => {
 
   function sendMsgToWorker(event, payload, callback, opts = {}) {
     if (!opts.target && this instanceof HTMLElement) {
-      opts.target = this.getAttribute("arz-target");
+      opts.target = this.getAttribute("arizona-target");
     }
+    const target = document.querySelector(opts.target);
+    const arizonaId = target?.getAttribute("arizona-id") || "[0]";
     callback && subscribeOnce(event, callback, opts);
-    worker.postMessage({ target: opts.target || "root", event, payload });
+    worker.postMessage({ target: arizonaId, event, payload });
   }
 
   function applyPatch(elem, html) {

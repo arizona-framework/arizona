@@ -33,7 +33,7 @@ mount(Socket) ->
     Socket.
 
 render(Macros) ->
-    arizona_live_view:parse_str(~s"""
+    arizona_live_view:parse_str(~"""
     <html>
     <head>
     </head>

@@ -52,7 +52,7 @@ new(View, Assigns) ->
         view => View,
         assigns => Assigns,
         events => [],
-        changes => #{}
+        changes => ordsets:new()
     }.
 
 -spec put_assigns(Assigns, Socket1) -> Socket2
@@ -75,7 +75,7 @@ put_assign(Key, Value, Socket) ->
         #{} ->
             Socket#{
                 assigns => Assigns#{Key => Value},
-                changes => Changes#{Key => Value}
+                changes => ordsets:add_element(Key, Changes)
             }
     end.
 
@@ -83,7 +83,7 @@ put_assign(Key, Value, Socket) ->
 get_assigns(#{assigns := Assigns}) ->
     Assigns.
 
--spec get_changes(t()) -> arizona_template_renderer:assigns().
+-spec get_changes(t()) -> ordsets:ordset(atom()).
 get_changes(#{changes := Changes}) ->
     Changes.
 
@@ -124,77 +124,5 @@ push_event(Name, Payload, #{events := Events} = Socket) ->
 prune(Socket) ->
     Socket#{
         events => [],
-        changes => #{}
+        changes => ordsets:new()
     }.
-
-%% --------------------------------------------------------------------
-%% EUnit
-%% --------------------------------------------------------------------
-
--ifdef(TEST).
--compile([export_all, nowarn_export_all]).
--include_lib("eunit/include/eunit.hrl").
-
-render_block_test() ->
-    ?assertEqual(
-       rendered(), arizona_tpl_render:render_block(block(#{}), #{
-            title => <<"Arizona">>,
-            view_count => 0,
-            decr_btn_text => <<"Decrement">>})).
-
-mount_test() ->
-    {Render, Sockets} = arizona_tpl_render:mount(block(#{}), #{
-            title => <<"Arizona">>,
-            view_count => 0,
-            decr_btn_text => <<"Decrement">>}),
-    [?assertEqual(rendered(), Render),
-     ?assertMatch(#{[0] :=
-                       #{events := [], view := arizona_tpl_compile,
-                         assigns :=
-                             #{title := <<"Arizona">>, view_count := 0,
-                               decr_btn_text := <<"Decrement">>},
-                         changes := #{}},
-                   [3] :=
-                       #{events := [], view := arizona_tpl_compile,
-                         assigns :=
-                             #{id := <<"1">>, counter_count := 0,
-                               btn_text := <<"Increment">>,
-                               btn_event := <<"incr">>},
-                         changes := #{}},
-                   [4] :=
-                       #{events := [], view := arizona_tpl_compile,
-                         assigns :=
-                             #{id := <<"2">>, label := <<"Rev. Counter:">>,
-                               counter_count := 0, btn_text := <<"Decrement">>,
-                               btn_event := <<"decr">>},
-                         changes := #{}}}, Sockets)].
-
-%% --------------------------------------------------------------------
-%% Test support
-%% --------------------------------------------------------------------
-
-rendered() ->
-    [<<"<main arz-id=\"root\"><h1>">>, <<"Arizona">>,
-     <<"</h1>">>,
-     [<<"<div arz-id=\"[3]\" id=\"">>, <<"1">>,
-      <<"\"><span>">>, <<"Count:">>, <<"<b>">>, <<"0">>,
-      <<"</b></span><br/>">>,
-      [<<"Increment">>,
-       <<"<button arz-target=\"[3]\" onclick=\"">>,
-       <<"incr">>, <<"\" type=\"button\">">>, <<"Increment">>,
-       <<"</button>">>, <<"Increment">>],
-      <<"</div>">>],
-     [<<"<div arz-id=\"[4]\" id=\"">>, <<"2">>,
-      <<"\"><span>">>, <<"Rev. Counter:">>, <<"<b>">>, <<"0">>,
-      <<"</b></span><br/>">>,
-      [<<"Decrement">>,
-       <<"<button arz-target=\"[4]\" onclick=\"">>,
-       <<"decr">>, <<"\" type=\"button\">">>, <<"Decrement">>,
-       <<"</button>">>, <<"Decrement">>],
-      <<"</div>">>],
-     <<"</main>">>].
-
-block(Macros) ->
-    arizona_tpl_compile:compile(arizona_tpl_compile, view, Macros).
-
--endif.

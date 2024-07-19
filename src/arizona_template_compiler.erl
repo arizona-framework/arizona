@@ -125,22 +125,23 @@ compile_expr(ExprStr, Loc, T, State) ->
 
 expand_expr(Expr, Loc, Eval, State) ->
     ExprTree = merl:quote(Expr),
+    Macros = State#state.macros,
+    MacrosEnv = [{K, merl:term(V)} || K := V <- Macros],
     AttrsEnv = lists:map(fun
         ({K, {expr, _KLoc, KExpr}}) ->
-            {binary_to_existing_atom(K, utf8), merl:quote(KExpr)};
+            KForm = merl:tsubst(merl:quote(KExpr), MacrosEnv),
+            {binary_to_existing_atom(K, utf8), KForm};
         ({K, {text, _KLoc, KTxt}}) ->
-            {binary_to_existing_atom(K, utf8),
+            {binary_to_atom(K, utf8),
               merl:quote(iolist_to_binary(["<<\"", KTxt, "\"/utf8>>"]))}
     end, State#state.attributes),
     AttrsTree = merl:tsubst(ExprTree, AttrsEnv),
-    Macros = State#state.macros,
-    MacrosEnv = [{K, merl:term(V)} || K := V <- Macros],
     MacrosTree = merl:tsubst(AttrsTree, MacrosEnv),
-    AllVars = merl:template_vars(merl:template(MacrosTree)),
-    case AllVars -- maps:keys(Macros) of
-        [] when Eval ->
+    Vars = merl:template_vars(merl:template(MacrosTree)),
+    case {Vars, Eval}  of
+        {[], true} ->
             {text, eval_macros_to_safe_html(MacrosTree, Loc, State)};
-        Vars ->
+        _Other ->
             VarsSubst = [{Var, var_form(Var)} || Var <- Vars],
             Env = [{subst, merl:subst(MacrosTree, VarsSubst)}],
             [Form] = erl_syntax:revert_forms([merl:qquote(~"_@subst", Env)]),
@@ -222,7 +223,7 @@ expand_block(Mod, Fun, Attrs, State) ->
 block_assigns(Attrs, Macros, State) ->
     maps:from_list(lists:map(fun
         ({K, {text, _, Txt}}) ->
-            {binary_to_existing_atom(K), {text, Txt}};
+            {binary_to_atom(K), {text, Txt}};
         ({K, {expr, Loc, Expr}}) ->
             Eval = should_eval_expr(Expr, Macros),
             {binary_to_existing_atom(K), expand_expr(Expr, Loc, Eval, State)}
@@ -251,7 +252,7 @@ block(Id, Tree0, NormAssigns, State) ->
         module => State#state.module,
         function => State#state.function,
         static => filter_static(Tree),
-        changeable => Changeable,
+        changeable => norm_changeable_expr_id(Changeable),
         changeable_vars => group_vars(norm_changeable_vars(Id, ChangeableVars)),
         changeable_indexes => changeable_indexes(Changeable),
         norm_assigns => NormAssigns,
@@ -276,8 +277,7 @@ get_tag_attrs(Tag, BlockId) ->
 maybe_push_target_attr(Attrs, BlockId) ->
     case attrs_contains_action(Attrs) andalso not attrs_contains_target(Attrs) of
         true ->
-            EncodedBlockId = iolist_to_binary(json:encode(BlockId)),
-            push_text_attr(~"arizona-target", EncodedBlockId, Attrs);
+            push_text_attr(~"arizona-target", target_attr_value(BlockId), Attrs);
         false ->
             Attrs
     end.
@@ -289,10 +289,16 @@ attrs_contains_target(Attrs) ->
     lists:any(fun({Name, _}) -> Name =:= ~"arizona-target" end, Attrs).
 
 maybe_push_tag_id_attr(#{is_stateful := true}, Attrs, BlockId) ->
-    EncodedBlockId = iolist_to_binary(json:encode(BlockId)),
-    push_text_attr(~"arizona-id", EncodedBlockId, Attrs);
+    push_text_attr(~"arizona-id", id_attr_value(BlockId), Attrs);
 maybe_push_tag_id_attr(#{is_stateful := false}, Attrs, _) ->
     Attrs.
+
+id_attr_value(ChangeableId) ->
+    iolist_to_binary(json:encode(ChangeableId)).
+
+target_attr_value(ChangeableId) ->
+    EncodedId = iolist_to_binary(json:encode(ChangeableId)),
+    <<"[arizona-id='", EncodedId/binary, "']">>.
 
 push_text_attr(Name, Txt, Attrs) ->
     [arizona_template_parser:dummy_text_attribute(Name, Txt) | Attrs].
@@ -330,7 +336,7 @@ push_js_scripts([]) ->
 js_scripts() ->
     Scripts = case arizona_cfg:endpoint() of
         #{live_reload := true} ->
-            [live_reload_script() | required_js_script()];
+            required_js_script() ++ [live_reload_script()];
         #{} ->
             required_js_script()
     end,
@@ -375,6 +381,14 @@ normalize_changeable(Changeable) ->
         ({Kind, #{id := Id} = Elem}) ->
             {lists:last(Id), {Kind, Elem}}
     end, Changeable)).
+
+norm_changeable_expr_id(Changeable) ->
+    maps:map(fun
+        (K, {expr, Expr}) ->
+            {expr, Expr#{id =>  [K]}};
+        (_K, {block, Block}) ->
+            {block, Block}
+    end, Changeable).
 
 changeable_id(State) ->
     changeable_id(State#state.index, State#state.path).
@@ -467,10 +481,10 @@ compile_test() ->
                 #{function := render, id := [0, 0], module := arizona_template_compiler,
                   changeable :=
                    #{0 :=
-                      {expr, #{function := _, id := [0, 0, 0], vars := [count]}}},
+                      {expr, #{function := _, id := [0], vars := [count]}}},
                   static :=
                    [<<"<div arizona-id=\"[0,0]\"><span>Count:">>,
-                    <<"</span><button arizona-target=\"[0,0]\" type=\"button\" "
+                    <<"</span><button arizona-target=\"[arizona-id='[0,0]']\" type=\"button\" "
                       "onclick=\"arizona.send.bind(this)('incr')\">",
                      "Increment</button></div>">>],
                   changeable_vars := #{count := [[0]]},
@@ -483,12 +497,12 @@ compile_test() ->
                 #{function := render, id := [0, 1], module := arizona_template_compiler,
                   changeable :=
                    #{0 :=
-                      {expr, #{function := _, id := [0, 1, 0], vars := [count]}}},
+                      {expr, #{function := _, id := [0], vars := [count]}}},
                   static :=
                    [<<"<div arizona-id=\"[0,1]\"><span>Count:">>,
-                    <<"</span><button arizona-target=\"[0,1]\" type=\"button\" "
-                      "onclick=\"arizona.send.bind(this)('incr')\">"
-                      "Increment #2</button></div>">>],
+                    <<"</span><button arizona-target=\"[arizona-id='[0,1]']\" type=\"button\" "
+                      "onclick=\"arizona.send.bind(this)('decr')\">"
+                      "Decrement</button></div>">>],
                   changeable_vars := #{count := [[0]]},
                   norm_assigns_vars := [],
                   changeable_indexes := [0],
@@ -510,7 +524,7 @@ compile_test() ->
            norm_assigns := #{}}}
     , compile(?MODULE, render, #{
         title => ~"Arizona Framework",
-        inc_btn_text => ~"Increment #2"})).
+        decr_btn_text => ~"Decrement"})).
 
 unexpected_stateful_tag_test() ->
     [
@@ -562,7 +576,7 @@ macros_test() ->
                              <<"</div>">>],
                   changeable :=
                    #{0 :=
-                      {expr, #{function := _, id := [0, 0, 0], vars := [qux]}}},
+                      {expr, #{function := _, id := [0], vars := [qux]}}},
                   changeable_vars := #{qux := [[0]]},
                   changeable_indexes := [0],
                   norm_assigns :=
@@ -592,10 +606,12 @@ render(Macros) ->
         <.counter
             count={_@count}
             btn_text="Increment"
+            event="incr"
         />
         <.counter
             count={88}
-            btn_text={_@inc_btn_text}
+            btn_text={_@decr_btn_text}
+            event="decr"
         />
     </body>
     </html>
@@ -605,7 +621,7 @@ counter(Macros) ->
     maybe_parse(~"""
     <div :stateful>
         <span>Count: {_@count}</span>
-        <.button event="incr" text={_@btn_text} />
+        <.button event={_@event} text={_@btn_text} />
     </div>
     """, Macros).
 

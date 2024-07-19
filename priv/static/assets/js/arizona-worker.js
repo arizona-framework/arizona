@@ -111,23 +111,13 @@ function handleEvent(data) {
   }
 }
 
-function applyPatch([target, changes]) {
-  const tree =
-    target === "root" ? state.tree : getTargetTree(target, state.tree);
+function applyPatch([[, ...target], changes]) {
+  const tree = getTargetTree(target, state.tree[1]);
   changes.forEach((c) => {
     applyChanges(c, tree);
   });
-  const html = tree.flat(Infinity).join("");
-  return { target, html };
-}
-
-function applyChanges([indexes, v], tree) {
-  if (indexes.length === 1) {
-    tree[indexes[0]] = v;
-  } else {
-    const [i, ...rest] = indexes;
-    applyChanges([rest, v], tree[i]);
-  }
+  const html = zip(tree[0], tree[1]);
+  return { target: [0, ...target], html };
 }
 
 function getTargetTree(path, tree) {
@@ -137,6 +127,23 @@ function getTargetTree(path, tree) {
     const [i, ...rest] = path;
     return getTargetTree(rest, tree[i]);
   }
+}
+
+function applyChanges([indexes, v], tree) {
+  if (indexes.length === 1) {
+    tree[1][indexes[0]] = v;
+  } else {
+    const [i, ...rest] = indexes;
+    applyChanges([rest, v], tree[1][i]);
+  }
+}
+
+function zip(staticArr, dynamicArr) {
+  let str = "";
+  for (let i = 0; i < Math.max(staticArr.length, dynamicArr.length); i++) {
+    str += `${staticArr[i] || ""}${dynamicArr[i] || ""}`;
+  }
+  return str;
 }
 
 function sendMsgToClient(event, payload) {

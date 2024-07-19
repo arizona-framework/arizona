@@ -127,7 +127,7 @@ handle_event(<<"decr">>, #{}, #{assigns := Assigns} = Socket) ->
 %% --------------------------------------------------------------------
 
 counter(Macros) ->
-    ?ARIZONA_LIVEVIEW(~s"""
+    ?ARIZONA_LIVEVIEW(~"""
     <div :stateful>
         <div>Count: {_@count}</div>
         <.button event={_@event} text={_@btn_text} />
@@ -135,7 +135,7 @@ counter(Macros) ->
     """).
 
 button(Macros) ->
-    ?ARIZONA_LIVEVIEW(~s"""
+    ?ARIZONA_LIVEVIEW(~"""
     {% NOTE: On this example, :onclick is and expression to be }
     {%       dynamic. It could be just, e.g., :onclick="incr". }
     <button type="button" :onclick={arizona_js:send(_@event)}>

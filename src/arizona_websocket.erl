@@ -27,8 +27,9 @@
 -export_type([init_state/0]).
 
 -opaque state() :: #{
-    template => arizona_tpl_compile:block(),
-    sockets => #{SocketId :: arizona_tpl_render:socket_target() := Socket :: arizona_socket:t()}
+    block => arizona_template_compiler:block(),
+    sockets => #{SocketId :: arizona_template_compiler:changeable_id() :=
+                    Socket :: arizona_socket:t()}
 }.
 -export_type([state/0]).
 -elvis([{elvis_style, state_record_and_type, disable}]). % opaque not identified as "type"
@@ -51,10 +52,10 @@ init(Req0, _State) ->
          Events :: cowboy_websocket:commands(),
          State :: state().
 websocket_init({Params, {Mod, Fun, Opts}}) ->
-    Macros = maps:get(macros, Opts, #{}),
-    Tpl = arizona_tpl_compile:compile(Mod, Fun, Macros),
+    Macros0 = maps:get(macros, Opts, #{}),
+    {ok, Block} = arizona_template_compiler:compile(Mod, Fun, Macros0),
     Assigns = maps:get(assigns, Opts, #{}),
-    {Html, Sockets} = arizona_tpl_render:mount(Tpl, Assigns),
+    {ok, {Html, Sockets}} = arizona_template_renderer:server_render(Block, Assigns),
     Reconnecting = proplists:get_value(<<"reconnecting">>, Params, <<"false">>),
     Events = case Reconnecting of
         <<"true">> ->
@@ -63,7 +64,7 @@ websocket_init({Params, {Mod, Fun, Opts}}) ->
             [{text, json:encode([[~"init", Html]])}]
     end,
     State = #{
-        template => Tpl,
+        block => Block,
         sockets => #{Id => arizona_socket:prune(Socket)
                      || Id := Socket <- Sockets}
     },
@@ -81,14 +82,16 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
     Socket0 = maps:get(Target, Sockets),
     View = arizona_socket:get_view(Socket0),
     Socket1 = arizona_live_view:handle_event(View, Event, Payload, Socket0),
-    Socket = case arizona_socket:get_changes(Socket1) of
-        Changes when map_size(Changes) > 0 ->
-            Tpl = maps:get(template, State),
+    Changes = arizona_socket:get_changes(Socket1),
+    Socket = case ordsets:is_empty(Changes) of
+        true ->
+            Socket1;
+        false ->
+            Block = maps:get(block, State),
             Assigns = arizona_socket:get_assigns(Socket1),
-            Patch = arizona_tpl_render:render_target(Target, Tpl, Changes, Assigns),
-            arizona_socket:push_event(~"patch", [Target, Patch], Socket1);
-        #{} ->
-            Socket1
+            ChangedVars = ordsets:to_list(Changes),
+            Patch = arizona_template_renderer:render_changes(Block, ChangedVars, Assigns),
+            arizona_socket:push_event(~"patch", [Target, Patch], Socket1)
     end,
     {[{text, json:encode(arizona_socket:get_events(Socket))}],
         State#{sockets => Sockets#{Target => arizona_socket:prune(Socket)}}}.
@@ -131,12 +134,7 @@ send(Event, Payload) ->
 decode_msg(Msg) ->
     case json:decode(Msg) of
         [Target, Event, Payload] ->
-            {decode_target(Target), Event, Payload};
+            {json:decode(Target), Event, Payload};
         [Target, Event] ->
-            {decode_target(Target), Event, #{}}
+            {json:decode(Target), Event, #{}}
     end.
-
-decode_target(<<"root">>) ->
-    root;
-decode_target(Target) ->
-    json:decode(Target).

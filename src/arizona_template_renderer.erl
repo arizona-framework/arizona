@@ -6,7 +6,7 @@
 
 -export([client_render/2]).
 -export([server_render/2]).
--export([render_changes/4]).
+-export([render_changes/3]).
 
 %
 
@@ -47,14 +47,13 @@ server_render(Block, Assigns) ->
     Timeout = 5_000,
     server_render_loop(Pid, Timeout, _Sockets = []).
 
--spec render_changes(Target, Block, ChangedVars, Assigns) -> Changes
-    when Target :: arizona_template_compiler:changeable_id(),
-         Block :: arizona_template_compiler:block(),
+-spec render_changes(Block, ChangedVars, Assigns) -> Changes
+    when Block :: arizona_template_compiler:block(),
          ChangedVars :: [atom()],
          Assigns :: assigns(),
          Changes :: [[arizona_template_compiler:changeable_id() | binary()]].
-render_changes(Target, Block, ChangedVars, Assigns) ->
-    case do_render_changes(Target, Block, ChangedVars, Assigns) of
+render_changes(Block, ChangedVars, Assigns) ->
+    case do_render_changes(maps:get(id, Block), Block, ChangedVars, Assigns) of
         [_, Bin] = Changes when is_binary(Bin) ->
             [Changes];
         Changes ->
@@ -145,7 +144,8 @@ do_render_changes([Index], Block, ChangedVars, Assigns) ->
 do_render_changes([Index | Indexes], Block, ChangedVars, Assigns) ->
     Changeable = maps:get(changeable, Block),
     {block, NestedBlock} = maps:get(Index, Changeable),
-    do_render_changes(Indexes, NestedBlock, ChangedVars, Assigns).
+    render_block_changes(NestedBlock, ChangedVars, Assigns) ++
+        do_render_changes(Indexes, Block, ChangedVars, Assigns).
 
 render_changeable_changes({expr, #{id := Id}  = Expr}, _ChangedVars, Assigns) ->
     [Id, render_expr(Expr, Assigns)];
@@ -153,8 +153,7 @@ render_changeable_changes({block, Block}, ChangedVars, Assigns) ->
     render_block_changes(Block, ChangedVars, Assigns).
 
 render_block_changes(Block, AssignsKeys, Assigns) ->
-    NormAssigns = maps:get(norm_assigns, Block),
-    Changes = changeable_assigns(Assigns, maps:with(AssignsKeys, NormAssigns)),
+    Changes = maps:with(AssignsKeys, Assigns),
     ChangedVars = maps:keys(Changes),
     ChangeableVars = maps:get(changeable_vars, Block),
     Vars = maps:with(ChangedVars, ChangeableVars),
@@ -183,13 +182,13 @@ client_render_test() ->
             "<h1>Arizona Counter</h1>">>,
             [<<"<div arizona-id=\"[0,0]\">"
                  "<span>Count:">>, <<"0">>, <<"</span>"
-                 "<button arizona-target=\"[0,0]\" type=\"button\" "
+                 "<button arizona-target=\"[arizona-id='[0,0]']\" type=\"button\" "
                  "onclick=\"arizona.send.bind(this)('incr')\">Increment</button>"
                "</div>">>],
              <<>>,
             [<<"<div arizona-id=\"[0,1]\">"
                  "<span>Count:">>, <<"88">>, <<"</span>"
-                 "<button arizona-target=\"[0,1]\" type=\"button\" "
+                 "<button arizona-target=\"[arizona-id='[0,1]']\" type=\"button\" "
                  "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button>"
                "</div>">>],
           <<"</body></html>">>
@@ -216,7 +215,7 @@ server_render_test() ->
           [% Static
            [<<"<div arizona-id=\"[0,0]\">"
                 "<span>Count:">>, <<"</span>"
-                "<button arizona-target=\"[0,0]\" type=\"button\" "
+                "<button arizona-target=\"[arizona-id='[0,0]']\" type=\"button\" "
                 "onclick=\"arizona.send.bind(this)('incr')\">Increment</button>"
               "</div>">>],
            % Dynamic
@@ -225,7 +224,7 @@ server_render_test() ->
           [% Static
            [<<"<div arizona-id=\"[0,1]\">"
                 "<span>Count:">>, <<"</span>"
-                "<button arizona-target=\"[0,1]\" type=\"button\" "
+                "<button arizona-target=\"[arizona-id='[0,1]']\" type=\"button\" "
                 "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button>"
               "</div>">>],
            % Dynamic
@@ -238,12 +237,8 @@ server_render_test() ->
 
 render_changes_test() ->
     [
-        ?assertEqual([[[0, 0, 0], <<"1">>]],
-                     render_changes([0], block(), [count], #{count => 1})),
-        ?assertEqual([[[0, 0, 0], <<"1">>]],
-                     render_changes([0, 0], block(), [count], #{count => 1})),
-        ?assertEqual([[[0, 1, 0], <<"1">>]],
-                     render_changes([1, 0], block(), [count], #{count => 1}))
+        ?assertEqual([[[0], <<"1">>]],
+                     render_changes(block(), [count], #{count => 1}))
     ].
 
 %% --------------------------------------------------------------------
