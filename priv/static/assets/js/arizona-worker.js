@@ -140,7 +140,7 @@ function applyChanges([indexes, v], tree) {
   }
 }
 
-function zip(staticArr, dynamicArr) {
+function zip(staticArr = [], dynamicArr = []) {
   let str = "";
   for (let i = 0; i < Math.max(staticArr?.length ?? 0, dynamicArr?.length ?? 0); i++) {
     const dynamic = dynamicArr[i] ?? ""
