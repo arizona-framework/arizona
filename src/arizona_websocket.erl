@@ -90,7 +90,7 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
             Block = maps:get(block, State),
             Assigns = arizona_socket:get_assigns(Socket1),
             ChangedVars = ordsets:to_list(Changes),
-            Patch = arizona_template_renderer:render_changes(Block, ChangedVars, Assigns),
+            Patch = arizona_template_renderer:render_changes(Block, ChangedVars, Assigns, Sockets),
             arizona_socket:push_event(~"patch", [Target, Patch], Socket1)
     end,
     {[{text, json:encode(arizona_socket:get_events(Socket))}],
@@ -101,10 +101,12 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
          Events :: cowboy_websocket:commands(),
          State1 :: state(),
          State2 :: state().
-websocket_info(reload, Socket) ->
-    {[{text, json:encode([[~"reload", []]])}], Socket};
-websocket_info(_Info, Socket) ->
-    {[], Socket}.
+websocket_info(reload, State) ->
+    {[{text, json:encode([[~"reload", []]])}], State};
+websocket_info({assign_changes, Target, Assigns}, #{sockets := Sockets} = State) ->
+    Socket0 = maps:get(Target, Sockets),
+    Socket = arizona_socket:assign_changes(Assigns, Socket0),
+    {[], State#{sockets => Sockets#{Target => Socket}}}.
 
 -spec terminate(Reason, Req, State) -> ok
     when Reason :: term(),

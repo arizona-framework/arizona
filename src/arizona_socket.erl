@@ -10,6 +10,7 @@ Components state.
 -export([new/2]).
 -export([put_assigns/2]).
 -export([put_assign/3]).
+-export([assign_changes/2]).
 -export([get_assigns/1]).
 -export([get_changes/1]).
 -export([get_view/1]).
@@ -78,6 +79,13 @@ put_assign(Key, Value, Socket) ->
                 changes => ordsets:add_element(Key, Changes)
             }
     end.
+
+-spec assign_changes(Changes, Socket1) -> Socket2
+    when Changes :: arizona_template_renderer:assigns(),
+         Socket1 :: t(),
+         Socket2 :: t().
+assign_changes(Changes, #{assigns := Assigns} = Socket) ->
+    Socket#{assigns => maps:merge(Assigns, Changes)}.
 
 -spec get_assigns(t()) -> arizona_template_renderer:assigns().
 get_assigns(#{assigns := Assigns}) ->
