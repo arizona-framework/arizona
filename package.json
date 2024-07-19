@@ -19,6 +19,6 @@
     "uglify-js": "3.19.0"
   },
   "dependencies": {
-    "morphdom": "2.7.3"
+    "morphdom": "2.7.4"
   }
 }
