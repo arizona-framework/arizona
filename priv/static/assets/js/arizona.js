@@ -37,28 +37,12 @@ globalThis['arizona'] = (() => {
 		});
 	}
 
-	function send(eventName, payloadOrListener, listenerOrOpts, optsOrNull) {
-		typeof payloadOrListener === 'function'
-			? sendMsgToWorker.bind(this)(
-					eventName,
-					undefined,
-					payloadOrListener,
-					listenerOrOpts,
-				)
-			: sendMsgToWorker.bind(this)(
-					eventName,
-					payloadOrListener,
-					listenerOrOpts,
-					optsOrNull,
-				);
+	function send(eventName, payload, listener) {
+		sendToWorker.bind(this)(eventName, payload, listener);
 	}
 
-	function connect(params, listener, opts) {
-		params = {
-			...params,
-			path: location.pathname,
-		};
-		send('connect', params, listener, opts);
+	function connect(listener) {
+		send('connect', { path: location.pathname }, listener);
 	}
 
 	// --------------------------------------------------------------------
@@ -72,28 +56,29 @@ globalThis['arizona'] = (() => {
 		console.table({ action, eventName, listeners });
 	}
 
-  function sendMsgToWorker(eventName, payload, listener, opts = {}) {
-    if (!opts.target && this instanceof HTMLElement) {
-      opts.target = this.getAttribute("arizona-target");
-    }
-    const target = document.querySelector(opts.target);
-    const arizonaId = target?.getAttribute("arizona-id") || "[0]";
-    listener && once(eventName, listener);
-    worker.postMessage({ target: arizonaId, event, payload });
-  }
+	function logDebug(scope, data) {
+		console.debug(`${scope}: ${data}`);
+	}
+
+	function logError(scope, data) {
+		console.error(`${scope}: ${data}`);
+	}
+
+	function sendToWorker(eventName, payload, listener) {
+		let target;
+		if (this instanceof HTMLElement) {
+			target = document.querySelector(this.getAttribute('arizona-target'));
+		}
+		target = target?.getAttribute('arizona-id') || '[0]';
+
+		listener && once(eventName, listener);
+
+		worker.postMessage({ eventName, payload, target });
+	}
 
 	function applyPatch(elem, html) {
 		morphdom(elem, html, {
-			// Can I make morphdom blaze through the DOM tree even faster? Yes.
-			// @see https://github.com/patrick-steele-idem/morphdom#can-i-make-morphdom-blaze-through-the-dom-tree-even-faster-yes
-			onBeforeElUpdated: function (fromEl, toEl) {
-				// spec - https://dom.spec.whatwg.org/#concept-node-equals
-				if (fromEl.isEqualNode(toEl)) {
-					return false;
-				}
-
-				return true;
-			},
+			onBeforeElUpdated: (from, to) => !from.isEqualNode(to),
 		});
 	}
 
@@ -101,25 +86,34 @@ globalThis['arizona'] = (() => {
 	// Namespace initialization
 	// --------------------------------------------------------------------
 
-  worker.addEventListener("message", function (e) {
-    console.log("[WebWorker] msg:", e.data);
-    const { eventName, payload } = e.data;
-    switch (eventName) {
-      case "patch": {
-        const { target, html } = payload;
-        const elem = document.querySelector(
-          `[arizona-id="${JSON.stringify(target)}"]`,
-        );
-        applyPatch(elem, html);
-        break;
-      }
-    }
-    emit(eventName, payload)
-  });
+	worker.addEventListener('message', (event) => {
+		// `event` is:
+		// {
+		//   data: {
+		//     eventName: <string>,
+		//     payload: {
+		//       target: <array>,
+		//       html: <string>
+		//     },
+		//   }
+		// }
+		logDebug('[WebWorker] message', event.data);
 
-	worker.addEventListener('error', function (e) {
-		console.error('[WebWorker] error:', e);
+		const { eventName, payload } = event.data;
+		if (eventName === 'patch') {
+			const { target, html } = payload;
+			const elem = document.querySelector(
+				`[arizona-id="${JSON.stringify(target)}"]`,
+			);
+			applyPatch(elem, html);
+		}
+
+		emit(eventName, payload);
 	});
+
+	worker.addEventListener('error', (event) =>
+		logError('[WebWorker] error', event),
+	);
 
 	return { on, once, off, send, connect };
 })();
