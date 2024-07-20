@@ -38,12 +38,7 @@ Live view.
 
 -callback render(Macros1) -> Result
     when Macros1 :: arizona_template_compiler:macros(),
-         Result :: {ok, {Parsed, Macros2}}
-                 | {error, ErrReason},
-         Parsed :: [arizona_template_parser:element()],
-         Macros2 :: arizona_template_compiler:macros(),
-         ErrReason :: {scanner, arizona_template_scanner:error_reason()}
-                    | {parser, arizona_template_parser:error_reason()}.
+         Result :: render_res().
 
 -callback handle_event(EventName, Payload, Socket) -> Socket
     when EventName :: binary(),
@@ -51,6 +46,16 @@ Live view.
          Socket :: arizona_socket:t().
 
 -optional_callbacks([handle_event/3]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
+
+-type render_res() :: {ok, {Parsed :: [arizona_template_parser:element()],
+                            Macros :: arizona_template_compiler:macros()}}
+                    | {error, {scanner, arizona_template_scanner:error_reason()}
+                            | {parser, arizona_template_parser:error_reason()}}.
+-export_type([render_res/0]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
