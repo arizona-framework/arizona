@@ -10,7 +10,7 @@ globalThis['arizona'] = (() => {
 		listeners[eventName] = listeners[eventName] = [];
 		listeners[eventName].push(listener);
 
-		tableLog('on', eventName);
+		logTable('on', eventName);
 	}
 
 	function once(eventName, listener) {
@@ -20,7 +20,7 @@ globalThis['arizona'] = (() => {
 		};
 		on(eventName, onceWrapper);
 
-		tableLog('once', eventName);
+		logTable('once', eventName);
 	}
 
 	function off(eventName, listener) {
@@ -28,7 +28,7 @@ globalThis['arizona'] = (() => {
 			(needle) => needle !== listener,
 		);
 
-		tableLog('off', eventName);
+		logTable('off', eventName);
 	}
 
 	function emit(eventName, payload) {
@@ -68,7 +68,7 @@ globalThis['arizona'] = (() => {
 	const listeners = {};
 	const worker = new Worker('assets/js/arizona-worker.js');
 
-	function tableLog(action, eventName) {
+	function logTable(action, eventName) {
 		console.table({ action, eventName, listeners });
 	}
 
