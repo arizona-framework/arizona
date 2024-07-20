@@ -1,133 +1,119 @@
 /*global morphdom*/
-"use strict";
+'use strict';
 
-globalThis["arizona"] = (() => {
-  // Worker.
+globalThis['arizona'] = (() => {
+  // --------------------------------------------------------------------
+  // API function definitions
+  // --------------------------------------------------------------------
 
-  const worker = new Worker("assets/js/arizona-worker.js");
+  function on(eventName, listener) {
+    listeners[eventName] = listeners[eventName] = [];
+    listeners[eventName].push(listener);
 
-  worker.addEventListener("message", function (e) {
-    console.log("[WebWorker] msg:", e.data);
-    const { event, payload } = e.data;
-    switch (event) {
-      case "patch": {
-        const { target, html } = payload;
-        const elem = document.querySelector(
-          `[arizona-id="${JSON.stringify(target)}"]`,
-        );
-        applyPatch(elem, html);
-        break;
-      }
-    }
-    subscribers.get(event)?.forEach(function ({ id, callback, opts }) {
-      callback(payload);
-      opts.once && unsubscribe(id);
-    });
-  });
+    logTable('on', eventName);
+  }
 
-  worker.addEventListener("error", function (e) {
-    console.error("[WebWorker] error:", e);
-  });
-
-  // Subscribers.
-
-  const subscribers = new Map();
-  const unsubscribers = new Map();
-
-  function subscribe(eventName, callback, opts = {}) {
-    let eventSubs = subscribers.get(eventName);
-    if (!eventSubs) eventSubs = new Map();
-    const id = Math.random();
-    eventSubs.set(id, { id, callback, opts });
-    subscribers.set(eventName, eventSubs);
-    unsubscribers.set(id, eventName);
-    console.table({
-      action: "subscribed",
-      eventName,
-      id,
-      subscribers,
-      unsubscribers,
-    });
-    return function () {
-      unsubscribe(id);
+  function once(eventName, listener) {
+    const onceWrapper = (payload) => {
+      listener(payload);
+      off(eventName, onceWrapper);
     };
+    on(eventName, onceWrapper);
+
+    logTable('once', eventName);
   }
 
-  function subscribeOnce(event, callback, opts = {}) {
-    return subscribe(event, callback, { ...opts, once: true });
+  function off(eventName, listener) {
+    listeners[eventName] = (listeners[eventName] || []).filter(
+      (needle) => needle !== listener,
+    );
+
+    logTable('off', eventName);
   }
 
-  function unsubscribe(id) {
-    const eventName = unsubscribers.get(id);
-    if (!eventName) return;
-    const eventSubs = subscribers.get(eventName);
-    if (!eventSubs) return;
-    eventSubs.delete(id);
-    eventSubs.size
-      ? subscribers.set(eventName, eventSubs)
-      : subscribers.delete(eventName);
-    unsubscribers.delete(id);
-    console.table({
-      action: "unsubscribed",
-      eventName,
-      id,
-      subscribers,
-      unsubscribers,
+  function emit(eventName, payload) {
+    (listeners[eventName] || []).forEach((listener) => {
+      listener(payload);
     });
   }
 
-  // API functions.
-
-  function send(event, payloadOrCallback, callbackOrOpts, optsOrNull) {
-    typeof payloadOrCallback === "function"
-      ? sendMsgToWorker.bind(this)(
-          event,
-          undefined,
-          payloadOrCallback,
-          callbackOrOpts,
-        )
-      : sendMsgToWorker.bind(this)(
-          event,
-          payloadOrCallback,
-          callbackOrOpts,
-          optsOrNull,
-        );
+  function send(eventName, payload, listener) {
+    sendToWorker.bind(this)(eventName, payload, listener);
   }
 
-  function connect(params, callback, opts) {
-    params = {
-      ...params,
-      path: location.pathname,
-    };
-    send("connect", params, callback, opts);
+  function connect(listener) {
+    send('connect', { path: location.pathname }, listener);
   }
 
-  // Internal functions.
+  // --------------------------------------------------------------------
+  // Private
+  // --------------------------------------------------------------------
 
-  function sendMsgToWorker(event, payload, callback, opts = {}) {
-    if (!opts.target && this instanceof HTMLElement) {
-      opts.target = this.getAttribute("arizona-target");
+  const listeners = {};
+  const worker = new Worker('assets/js/arizona-worker.js');
+
+  function logTable(action, eventName) {
+    console.table({ action, eventName, listeners });
+  }
+
+  function logDebug(scope, data) {
+    console.debug(`${scope}: ${data}`);
+  }
+
+  function logError(scope, data) {
+    console.error(`${scope}: ${data}`);
+  }
+
+  function sendToWorker(eventName, payload, listener) {
+    let target;
+    if (this instanceof HTMLElement) {
+      target = document.querySelector(this.getAttribute('arizona-target'));
     }
-    const target = document.querySelector(opts.target);
-    const arizonaId = target?.getAttribute("arizona-id") || "[0]";
-    callback && subscribeOnce(event, callback, opts);
-    worker.postMessage({ target: arizonaId, event, payload });
+    target = target?.getAttribute('arizona-id') || '[0]';
+
+    listener && once(eventName, listener);
+
+    worker.postMessage({ eventName, payload, target });
   }
 
   function applyPatch(elem, html) {
     morphdom(elem, html, {
-      // Can I make morphdom blaze through the DOM tree even faster? Yes.
-      // @see https://github.com/patrick-steele-idem/morphdom#can-i-make-morphdom-blaze-through-the-dom-tree-even-faster-yes
-      onBeforeElUpdated: function (fromEl, toEl) {
-        // spec - https://dom.spec.whatwg.org/#concept-node-equals
-        if (fromEl.isEqualNode(toEl)) {
-          return false;
-        }
-
-        return true;
-      },
+      onBeforeElUpdated: (from, to) => !from.isEqualNode(to),
     });
   }
 
-  return { subscribe, subscribeOnce, unsubscribe, send, connect };
+  // --------------------------------------------------------------------
+  // Namespace initialization
+  // --------------------------------------------------------------------
+
+  worker.addEventListener('message', (event) => {
+    // `event` is:
+    // {
+    //   data: {
+    //     eventName: <string>,
+    //     payload: {
+    //       target: <array>,
+    //       html: <string>
+    //     },
+    //   }
+    // }
+    logDebug('[WebWorker] message', event.data);
+
+    const { eventName, payload } = event.data;
+    if (eventName === 'patch') {
+      const { target, html } = payload;
+      const elem = document.querySelector(
+        `[arizona-id="${JSON.stringify(target)}"]`,
+      );
+      applyPatch(elem, html);
+    }
+
+    emit(eventName, payload);
+  });
+
+  worker.addEventListener('error', (event) =>
+    logError('[WebWorker] error', event),
+  );
+
+  return { on, once, off, send, connect };
 })();
