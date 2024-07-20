@@ -1,114 +1,114 @@
-"use strict";
+'use strict';
 
 const state = {
-  connected: false,
-  keepAlive: true,
-  fulfilled: false,
-  params: {},
-  socket: null,
-  eventQueue: [],
-  tree: [],
-  reconnectTimeout: 1000,
+	connected: false,
+	keepAlive: true,
+	fulfilled: false,
+	params: {},
+	socket: null,
+	eventQueue: [],
+	tree: [],
+	reconnectTimeout: 1000,
 };
 
 // Messages from client.
 self.onmessage = function (e) {
-  console.log("[WebWorker] client sent:", e.data);
+	console.log('[WebWorker] client sent:', e.data);
 
-  if (typeof e.data !== "object" || !e.data.target || !e.data.eventName) {
-    console.error("Invalid Arizona WebWorker message", e);
-    return;
-  }
+	if (typeof e.data !== 'object' || !e.data.target || !e.data.eventName) {
+		console.error('Invalid Arizona WebWorker message', e);
+		return;
+	}
 
-  const { target, eventName, payload } = e.data;
-  switch (eventName) {
-    case "connect":
-      connect(payload);
-      break;
-    case "disconnect":
-      disconnect();
-      break;
-    default:
-      sendMsgToServer([target, eventName, payload]);
-  }
+	const { target, eventName, payload } = e.data;
+	switch (eventName) {
+		case 'connect':
+			connect(payload);
+			break;
+		case 'disconnect':
+			disconnect();
+			break;
+		default:
+			sendMsgToServer([target, eventName, payload]);
+	}
 };
 
 function connect(params) {
-  return new Promise((resolve) => {
-    const url = genSocketUrl(params);
-    const socket = new WebSocket(url);
+	return new Promise((resolve) => {
+		const url = genSocketUrl(params);
+		const socket = new WebSocket(url);
 
-    state.params = params;
-    state.socket = socket;
-    state.keepAlive = true;
+		state.params = params;
+		state.socket = socket;
+		state.keepAlive = true;
 
-    socket.onopen = function () {
-      state.connected = true;
-      state.fulfilled = true;
+		socket.onopen = function () {
+			state.connected = true;
+			state.fulfilled = true;
 
-      state.eventQueue.forEach(sendMsgToServer);
-      state.eventQueue.length = 0;
+			state.eventQueue.forEach(sendMsgToServer);
+			state.eventQueue.length = 0;
 
-      console.log("[WebSocket] connected", state);
-      sendMsgToClient("connect");
+			console.log('[WebSocket] connected', state);
+			sendMsgToClient('connect');
 
-      resolve();
-    };
+			resolve();
+		};
 
-    socket.onclose = function (e) {
-      state.connected = false;
+		socket.onclose = function (e) {
+			state.connected = false;
 
-      console.log("[WebSocket] disconnected", e);
-      sendMsgToClient("disconnect");
+			console.log('[WebSocket] disconnected', e);
+			sendMsgToClient('disconnect');
 
-      state.keepAlive && tryReconnect();
-    };
+			state.keepAlive && tryReconnect();
+		};
 
-    // Messages from server.
-    socket.onmessage = function (e) {
-      console.log("[WebSocket] msg:", e.data);
-      const data = JSON.parse(e.data);
-      Array.isArray(data) ? data.forEach(handleEvent) : handleEvent(data);
-    };
-  });
+		// Messages from server.
+		socket.onmessage = function (e) {
+			console.log('[WebSocket] msg:', e.data);
+			const data = JSON.parse(e.data);
+			Array.isArray(data) ? data.forEach(handleEvent) : handleEvent(data);
+		};
+	});
 }
 
 function disconnect() {
-  state.keepAlive = false;
-  state.socket.close();
+	state.keepAlive = false;
+	state.socket.close();
 }
 
 function reconnect() {
-  console.log("[WebSocket] reconnecting...");
-  sendMsgToClient("reconnecting");
-  const params = {
-    ...state.params,
-    reconnecting: "true",
-  };
-  connect(params);
+	console.log('[WebSocket] reconnecting...');
+	sendMsgToClient('reconnecting');
+	const params = {
+		...state.params,
+		reconnecting: 'true',
+	};
+	connect(params);
 }
 
 function tryReconnect() {
-  if (state.connected) return;
-  state.fulfilled
-    ? setTimeout(reconnect, state.reconnectTimeout)
-    : setTimeout(() => connect(state.params), state.reconnectTimeout);
+	if (state.connected) return;
+	state.fulfilled
+		? setTimeout(reconnect, state.reconnectTimeout)
+		: setTimeout(() => connect(state.params), state.reconnectTimeout);
 }
 
 function handleEvent(data) {
-  const eventName = data[0];
-  const payload = data[1];
-  switch (eventName) {
-    case "init":
-      state.tree = payload;
-      break;
-    case "patch":
-      sendMsgToClient("patch", applyPatch(payload));
-      break;
-    default:
-      sendMsgToClient(eventName, payload);
-      break;
-  }
+	const eventName = data[0];
+	const payload = data[1];
+	switch (eventName) {
+		case 'init':
+			state.tree = payload;
+			break;
+		case 'patch':
+			sendMsgToClient('patch', applyPatch(payload));
+			break;
+		default:
+			sendMsgToClient(eventName, payload);
+			break;
+	}
 }
 
 function applyPatch([[, ...target], changes]) {
@@ -121,12 +121,12 @@ function applyPatch([[, ...target], changes]) {
 }
 
 function getTargetTree(path, tree) {
-  if (path.length === 1) {
-    return tree[path[0]];
-  } else {
-    const [i, ...rest] = path;
-    return getTargetTree(rest, tree[i]);
-  }
+	if (path.length === 1) {
+		return tree[path[0]];
+	} else {
+		const [i, ...rest] = path;
+		return getTargetTree(rest, tree[i]);
+	}
 }
 
 function applyChanges([indexes, v], tree) {
@@ -147,41 +147,41 @@ function zip(staticArr, dynamicArr) {
 }
 
 function sendMsgToClient(eventName, payload) {
-  self.postMessage({ eventName, payload });
+	self.postMessage({ eventName, payload });
 }
 
 function sendMsgToServer([target, eventName, payload]) {
-  if (!state.socket) {
-    state.eventQueue.push([target, eventName, payload]);
-    state.fulfilled
-      ? console.warn("[WebSocket] not ready to send messages")
-      : reconnect();
-  } else if (isSocketOpen()) {
-    state.socket.send(
-      payload
-        ? JSON.stringify([target, eventName, payload], state)
-        : JSON.stringify([target, eventName]),
-    );
-  } else {
-    state.fulfilled && state.eventQueue.push([target, eventName, payload]);
-    isSocketClosed() && reconnect();
-  }
+	if (!state.socket) {
+		state.eventQueue.push([target, eventName, payload]);
+		state.fulfilled
+			? console.warn('[WebSocket] not ready to send messages')
+			: reconnect();
+	} else if (isSocketOpen()) {
+		state.socket.send(
+			payload
+				? JSON.stringify([target, eventName, payload], state)
+				: JSON.stringify([target, eventName]),
+		);
+	} else {
+		state.fulfilled && state.eventQueue.push([target, eventName, payload]);
+		isSocketClosed() && reconnect();
+	}
 }
 
 function isSocketOpen() {
-  return state.socket.readyState === WebSocket.OPEN;
+	return state.socket.readyState === WebSocket.OPEN;
 }
 
 function isSocketClosed() {
-  return state.socket.readyState === WebSocket.CLOSED;
+	return state.socket.readyState === WebSocket.CLOSED;
 }
 
 function genSocketUrl(params) {
-  const protocol = "ws";
-  const host = location.host;
-  const uri = "/websocket";
-  const qs = `?${Object.keys(params)
-    .map((key) => `${key}=${encodeURIComponent(params[key])}`)
-    .join("&")}`;
-  return `${protocol}://${host}${uri}${qs}`;
+	const protocol = 'ws';
+	const host = location.host;
+	const uri = '/websocket';
+	const qs = `?${Object.keys(params)
+		.map((key) => `${key}=${encodeURIComponent(params[key])}`)
+		.join('&')}`;
+	return `${protocol}://${host}${uri}${qs}`;
 }

@@ -1,76 +1,76 @@
 /*global morphdom*/
-"use strict";
+'use strict';
 
-globalThis["arizona"] = (() => {
-  // --------------------------------------------------------------------
-  // API function definitions
-  // --------------------------------------------------------------------
+globalThis['arizona'] = (() => {
+	// --------------------------------------------------------------------
+	// API function definitions
+	// --------------------------------------------------------------------
 
-  function on(eventName, listener) {
-    listeners[eventName] = listeners[eventName] = [];
-    listeners[eventName].push(listener);
+	function on(eventName, listener) {
+		listeners[eventName] = listeners[eventName] = [];
+		listeners[eventName].push(listener);
 
-    tableLog("on", eventName);
-  }
+		tableLog('on', eventName);
+	}
 
-  function once(eventName, listener) {
-    const onceWrapper = (payload) => {
-      listener(payload);
-      off(eventName, onceWrapper);
-    };
-    on(eventName, onceWrapper);
+	function once(eventName, listener) {
+		const onceWrapper = (payload) => {
+			listener(payload);
+			off(eventName, onceWrapper);
+		};
+		on(eventName, onceWrapper);
 
-    tableLog("once", eventName);
-  }
+		tableLog('once', eventName);
+	}
 
-  function off(eventName, listener) {
-    listeners[eventName] = (listeners[eventName] || []).filter(
-      (needle) => needle !== listener,
-    );
+	function off(eventName, listener) {
+		listeners[eventName] = (listeners[eventName] || []).filter(
+			(needle) => needle !== listener,
+		);
 
-    tableLog("off", eventName);
-  }
+		tableLog('off', eventName);
+	}
 
-  function emit(eventName, payload) {
-    (listeners[eventName] || []).forEach((listener) => {
-      listener(payload);
-    });
-  }
+	function emit(eventName, payload) {
+		(listeners[eventName] || []).forEach((listener) => {
+			listener(payload);
+		});
+	}
 
-  function send(eventName, payloadOrListener, listenerOrOpts, optsOrNull) {
-    typeof payloadOrListener === "function"
-      ? sendMsgToWorker.bind(this)(
-          eventName,
-          undefined,
-          payloadOrListener,
-          listenerOrOpts,
-        )
-      : sendMsgToWorker.bind(this)(
-          eventName,
-          payloadOrListener,
-          listenerOrOpts,
-          optsOrNull,
-        );
-  }
+	function send(eventName, payloadOrListener, listenerOrOpts, optsOrNull) {
+		typeof payloadOrListener === 'function'
+			? sendMsgToWorker.bind(this)(
+					eventName,
+					undefined,
+					payloadOrListener,
+					listenerOrOpts,
+				)
+			: sendMsgToWorker.bind(this)(
+					eventName,
+					payloadOrListener,
+					listenerOrOpts,
+					optsOrNull,
+				);
+	}
 
-  function connect(params, listener, opts) {
-    params = {
-      ...params,
-      path: location.pathname,
-    };
-    send("connect", params, listener, opts);
-  }
+	function connect(params, listener, opts) {
+		params = {
+			...params,
+			path: location.pathname,
+		};
+		send('connect', params, listener, opts);
+	}
 
-  // --------------------------------------------------------------------
-  // Private
-  // --------------------------------------------------------------------
+	// --------------------------------------------------------------------
+	// Private
+	// --------------------------------------------------------------------
 
-  const listeners = {};
-  const worker = new Worker("assets/js/arizona-worker.js");
+	const listeners = {};
+	const worker = new Worker('assets/js/arizona-worker.js');
 
-  function tableLog(action, eventName) {
-    //console.table({ action, eventName, listeners });
-  }
+	function tableLog(action, eventName) {
+		console.table({ action, eventName, listeners });
+	}
 
   function sendMsgToWorker(eventName, payload, listener, opts = {}) {
     if (!opts.target && this instanceof HTMLElement) {
@@ -82,24 +82,24 @@ globalThis["arizona"] = (() => {
     worker.postMessage({ target: arizonaId, event, payload });
   }
 
-  function applyPatch(elem, html) {
-    morphdom(elem, html, {
-      // Can I make morphdom blaze through the DOM tree even faster? Yes.
-      // @see https://github.com/patrick-steele-idem/morphdom#can-i-make-morphdom-blaze-through-the-dom-tree-even-faster-yes
-      onBeforeElUpdated: function (fromEl, toEl) {
-        // spec - https://dom.spec.whatwg.org/#concept-node-equals
-        if (fromEl.isEqualNode(toEl)) {
-          return false;
-        }
+	function applyPatch(elem, html) {
+		morphdom(elem, html, {
+			// Can I make morphdom blaze through the DOM tree even faster? Yes.
+			// @see https://github.com/patrick-steele-idem/morphdom#can-i-make-morphdom-blaze-through-the-dom-tree-even-faster-yes
+			onBeforeElUpdated: function (fromEl, toEl) {
+				// spec - https://dom.spec.whatwg.org/#concept-node-equals
+				if (fromEl.isEqualNode(toEl)) {
+					return false;
+				}
 
-        return true;
-      },
-    });
-  }
+				return true;
+			},
+		});
+	}
 
-  // --------------------------------------------------------------------
-  // Namespace initialization
-  // --------------------------------------------------------------------
+	// --------------------------------------------------------------------
+	// Namespace initialization
+	// --------------------------------------------------------------------
 
   worker.addEventListener("message", function (e) {
     console.log("[WebWorker] msg:", e.data);
@@ -117,9 +117,9 @@ globalThis["arizona"] = (() => {
     emit(eventName, payload)
   });
 
-  worker.addEventListener("error", function (e) {
-    console.error("[WebWorker] error:", e);
-  });
+	worker.addEventListener('error', function (e) {
+		console.error('[WebWorker] error:', e);
+	});
 
-  return { on, once, off, send, connect };
+	return { on, once, off, send, connect };
 })();

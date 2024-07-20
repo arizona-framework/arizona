@@ -1,4 +1,4 @@
 /*global arizona*/
-"use strict";
+'use strict';
 
-arizona.on("reload", location.reload);
+arizona.on('reload', location.reload);
