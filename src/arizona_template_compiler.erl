@@ -70,6 +70,7 @@
                  | {error, {ErrReason, {ErrMod, ErrFun, ErrLoc}}},
          Block :: block(),
          ErrReason :: unexpected_stateful_tag
+                    | unexpected_if_directive
                     | undef_block_fun
                     | invalid_block_name
                     | invalid_macro_value,
@@ -87,7 +88,7 @@ compile(Mod, Fun, Macros) ->
             path = [0],
             is_visible = true
         },
-        Tree = expand_block(Mod, Fun, _Attrs = [], State),
+        Tree = expand_block(Mod, Fun, _IsVisible = true, _Attrs = [], State),
         {ok, block([0], Tree, _NormAssigns = #{}, State)}
     catch
         % That's not the location in the module but the location
@@ -110,6 +111,8 @@ compile_elems([{block, Loc, Block} | T], State) ->
     compile_block(Block, Loc, T, State);
 compile_elems([{tag, Loc, #{is_stateful := true}} | _T], State) ->
     throw({unexpected_stateful_tag, Loc, State});
+compile_elems([{tag, Loc, #{is_visible := {'if', _}}} | _T], State) ->
+    throw({unexpected_if_directive, Loc, State});
 compile_elems([{tag, Loc, Tag} | T], State) ->
     compile_tag(Tag, Loc, T, State);
 compile_elems([], _State) ->
@@ -188,8 +191,13 @@ compile_block(#{name := Name} = Block, Loc, T, State) ->
     {Mod, Fun} = block_mod_fun(Name, Loc, State),
     case erlang:function_exported(Mod, Fun, 1) of
         true ->
-            Attrs = maps:get(attributes, Block),
-            Elems = expand_block(Mod, Fun, Attrs, State),
+            Elems = case expand_is_visible(maps:get(is_visible, Block), State) of
+                false ->
+                    [];
+                IsVisible ->
+                    Attrs = maps:get(attributes, Block),
+                    expand_block(Mod, Fun, IsVisible, Attrs, State)
+            end,
             Elems ++ compile_elems(T, incr_index(changeable_count(Elems, 0), State));
         false ->
             throw({undef_block_fun, Loc, State})
@@ -208,21 +216,16 @@ block_mod_fun(Name, Loc, State) ->
             throw({invalid_block_name, Loc, State})
     end.
 
-expand_block(Mod, Fun, Attrs, State) ->
+expand_block(Mod, Fun, IsVisible, Attrs, State) ->
     case erlang:apply(Mod, Fun, [State#state.macros]) of
         {ok, {[{tag, Loc, #{is_stateful := true} = Tag}], AttrsMacros}} ->
-            case expand_is_visible(maps:get(is_visible, Tag), State) of
-                false ->
-                    [];
-                IsVisible ->
-                    StatefulState = stateful_state(Mod, Fun, Macros, IsVisible, State),
-                    Tree = compile_tag(Tag, Loc, [], StatefulState),
-                    BlockAssigns = block_assigns(Attrs, AttrsMacros, State),
-                    Macros = block_assigns_macros(BlockAssigns),
-                    NormAssigns = norm_block_assigns(BlockAssigns),
-                    BlockState = State#state{is_visible = IsVisible},
-                    [{block, block(changeable_id(State), Tree, NormAssigns, BlockState)}]
-            end;
+            BlockAssigns = block_assigns(Attrs, AttrsMacros, State),
+            Macros = block_assigns_macros(BlockAssigns),
+            StatefulState = stateful_state(Mod, Fun, Macros, IsVisible, State),
+            Tree = compile_tag(Tag, Loc, [], StatefulState),
+            NormAssigns = norm_block_assigns(BlockAssigns),
+            BlockState = State#state{is_visible = IsVisible},
+            [{block, block(changeable_id(State), Tree, NormAssigns, BlockState)}];
         {ok, {Elems, Macros}} ->
             concat_texts(compile_elems(Elems, stateless_state(Macros, Attrs, State)));
         {error, {Reason, Loc}} ->
@@ -268,6 +271,19 @@ block(Id, Tree0, NormAssigns, State) ->
     Tree = concat_texts(Tree0),
     Changeable = normalize_changeable(filter_changeable(Tree)),
     ChangeableVars = changeable_vars(Changeable),
+    IsVisible = State#state.is_visible,
+    IsVisibleNormAssigns = case IsVisible of
+        true ->
+            #{};
+        {'if', #{vars := IfVars0, function := IfFun}} ->
+            #{IfVar => #{function => IfFun, vars => [IfVar]} || IfVar <- IfVars0}
+    end,
+    IsVisibleVars = case IsVisible of
+        true ->
+            [];
+        {'if', #{id := IfId, vars := IfVars}} ->
+            [{IfVar, IfId -- Id} || IfVar <- IfVars]
+    end,
     #{
         id => Id,
         module => State#state.module,
@@ -277,8 +293,8 @@ block(Id, Tree0, NormAssigns, State) ->
         changeable => norm_changeable_expr_id(Changeable),
         changeable_vars => group_vars(norm_changeable_vars(Id, ChangeableVars)),
         changeable_indexes => changeable_indexes(Changeable),
-        norm_assigns => NormAssigns,
-        norm_assigns_vars => norm_assigns_vars(NormAssigns, ChangeableVars)
+        norm_assigns => maps:merge(NormAssigns, IsVisibleNormAssigns),
+        norm_assigns_vars => norm_assigns_vars(NormAssigns, ChangeableVars) ++ IsVisibleVars
     }.
 
 group_vars(Vars) ->
@@ -412,7 +428,7 @@ normalize_changeable(Changeable) ->
 norm_changeable_expr_id(Changeable) ->
     maps:map(fun
         (K, {expr, Expr}) ->
-            {expr, Expr#{id =>  [K]}};
+            {expr, Expr#{id => [K]}};
         (_K, {block, Block}) ->
             {block, Block}
     end, Changeable).
@@ -434,7 +450,7 @@ changeable_count([], Count) ->
     Count.
 
 changeable_vars(Changeable) ->
-    changeable_vars_1(maps:to_list(Changeable)).
+    lists:usort(changeable_vars_1(maps:to_list(Changeable))).
 
 changeable_vars_1([{_Index, {expr, #{id := Id, vars := Vars}}} | T]) ->
     changeable_vars_2(Vars, Id, T);
@@ -442,10 +458,8 @@ changeable_vars_1([{_Index, {block, #{norm_assigns_vars := Vars} = Block}} | T])
     case maps:get(is_visible, Block) of
         true ->
             Vars ++ changeable_vars_1(T);
-        {'if', #{id := IfId, vars := IfVars}} ->
-            NAssigns = maps:with(IfVars, maps:get(norm_assigns, Block)),
-            NIfVars = [{NVar, IfId} || _K := #{vars := NVars} <- NAssigns, NVar <- NVars],
-            NIfVars ++ Vars ++ changeable_vars_1(T)
+        {'if', #{id := BlockId, vars := IfVars}} ->
+            [{IfVar, BlockId} || IfVar <- IfVars] ++ Vars ++ changeable_vars_1(T)
     end;
 changeable_vars_1([_ | T]) ->
     changeable_vars_1(T);
@@ -458,7 +472,7 @@ changeable_vars_2([], _, T) ->
     changeable_vars_1(T).
 
 norm_changeable_vars(BlockId, Vars) ->
-    [{K, Id -- BlockId} || {K, Id} <- Vars].
+    [{K, Id -- BlockId} || {K, Id} <- Vars, Id -- BlockId =/= []].
 
 norm_assigns_vars(NormAssigns, ChangeableVars) ->
     norm_assigns_vars_1(maps:to_list(NormAssigns), ChangeableVars).
@@ -643,7 +657,7 @@ if_directive_test() ->
                    {'if',
                     #{function := _,
                       id := [0, 0],
-                      vars := [visible]}},
+                      vars := [is_visible]}},
                   changeable :=
                    #{0 :=
                       {expr,
@@ -656,10 +670,10 @@ if_directive_test() ->
                    #{name :=
                       #{function := _,
                         vars := [visible_for]},
-                     visible :=
+                     is_visible :=
                       #{function := _,
                         vars := [is_visible]}},
-                  norm_assigns_vars := [{visible_for, [0, 0, 0]}]}}},
+                  norm_assigns_vars := [{visible_for, [0, 0, 0]}, {is_visible, []}]}}},
            changeable_vars :=
             #{is_visible := [[0]], visible_for := [[0, 0]]},
            changeable_indexes := [0],
@@ -774,14 +788,14 @@ render_macros_block(Macros) ->
 render_if_directive(Macros) ->
     maybe_parse(~"""
     <.render_if_directive_block
-        visible={_@is_visible}
+        :if={_@is_visible}
         name={_@visible_for}
     />
     """, Macros).
 
 render_if_directive_block(Macros) ->
     maybe_parse(~"""
-    <div :if={_@visible} :stateful>
+    <div :stateful>
         {_@name}, can you see me?
     </div>
     """, Macros).

@@ -55,15 +55,14 @@ server_render(Block, Assigns) ->
     when Block :: arizona_template_compiler:block(),
          ChangedVars :: [atom()],
          Assigns :: assigns(),
-         Changes :: [[arizona_template_compiler:changeable_id() | binary()]].
+         Changes :: [
+            [arizona_template_compiler:changeable_id() | binary()]
+            | [binary() | [[binary()]]]
+        ].
 render_changes(Block, ChangedVars, Assigns) ->
-    Rendered = case maps:get(id, Block) of
-        [0] ->
-            render_block_changes(Block, ChangedVars, Assigns);
-        BlockId ->
-            do_render_changes(BlockId, Block, ChangedVars, Assigns)
-    end,
-    case Rendered of
+    case render_block_changes(Block, ChangedVars, Assigns) of
+        {block, Rendered} ->
+            [[~"block", Rendered]];
         [_, Bin] = Changes when is_binary(Bin) ->
             [Changes];
         Changes ->
@@ -83,13 +82,13 @@ render_changeable_indexes([], _, _) ->
 render_changeable({expr, Expr}, Assigns) ->
     render_expr(Expr, Assigns);
 render_changeable({block, Block}, Assigns0) ->
-    Mod = maps:get(module, Block),
-    Socket0 = arizona_socket:new(Mod, Assigns0),
-    Socket = arizona_live_view:mount(Mod, Socket0),
-    Assigns = arizona_socket:get_assigns(Socket),
-    NormAssigns = maps:get(norm_assigns, Block),
-    case is_block_visible(Block, Assigns, NormAssigns) of
+    case is_block_visible(Block, Assigns0) of
         true ->
+            Mod = maps:get(module, Block),
+            Socket0 = arizona_socket:new(Mod, Assigns0),
+            Socket = arizona_live_view:mount(Mod, Socket0),
+            Assigns = arizona_socket:get_assigns(Socket),
+            NormAssigns = maps:get(norm_assigns, Block),
             ChangeableAssigns = changeable_assigns(Assigns, NormAssigns),
             render_block(Block, ChangeableAssigns);
         false ->
@@ -106,8 +105,11 @@ render_block(Block, Assigns) ->
     Dynamic = render_changeable_indexes(ChangeableIndexes, Changeable, Assigns),
     zip(maps:get(static, Block), Dynamic).
 
+% TODO: Unbound assigns: maps:with(UnboundVars, Assigns).
+% UnboundVars are vars that must be defined in the mount callback,
+% so they don't need normalization.
 changeable_assigns(Assigns, NormAssigns) ->
-    #{K => Fun(Assigns) || K := #{function := Fun} <- NormAssigns}.
+    maps:merge(Assigns, #{K => Fun(Assigns) || K := #{function := Fun} <- NormAssigns}).
 
 zip([S | Static], [D | Dynamic]) ->
     [S, D | zip(Static, Dynamic)];
@@ -141,16 +143,17 @@ server_render_block(Block, Assigns0, Pid) ->
             ChangeableIndexes = maps:get(changeable_indexes, Block),
             Changeable = maps:get(changeable, Block),
             Dynamic = server_render_changeable_indexes(ChangeableIndexes, Changeable, Assigns, Pid),
-            Pid ! {self(), {socket, maps:get(id, Block), Socket}},
+            Pid ! {self(), {socket, Block, Socket}},
             [maps:get(static, Block), Dynamic];
         false ->
-            Pid ! {self(), {socket, maps:get(id, Block), Socket}},
+            Pid ! {self(), {socket, Block, Socket}},
             []
     end.
 
 server_render_loop(Pid, Timeout, Sockets) ->
     receive
-        {Pid, {socket, Id, Socket}} ->
+        {Pid, {socket, #{id := Id} = Block, Socket0}} ->
+            Socket = arizona_socket:set_block(Block, Socket0),
             server_render_loop(Pid, Timeout, [{Id, Socket} | Sockets]);
         {Pid, {done, Rendered}} ->
             {ok, {Rendered, maps:from_list(Sockets)}}
@@ -165,15 +168,26 @@ do_render_changes([Index], Block, ChangedVars, Assigns) ->
 do_render_changes([Index | Indexes], Block, ChangedVars, Assigns) ->
     Changeable = maps:get(changeable, Block),
     {block, NestedBlock} = maps:get(Index, Changeable),
-    do_render_changes(Indexes, NestedBlock, ChangedVars, Assigns).
+    NormAssigns = maps:get(norm_assigns, NestedBlock),
+    ChangeableAssigns = changeable_assigns(Assigns, NormAssigns),
+    ChangeableAssignsKeys = [K || K := #{vars := Vars} <- NormAssigns,
+                                  Var <- Vars, lists:member(Var, ChangedVars)],
+    case block_changes_action(NestedBlock, ChangeableAssignsKeys, ChangeableAssigns) of
+        render_changeable ->
+            do_render_changes(Indexes, NestedBlock, ChangeableAssignsKeys, ChangeableAssigns);
+        render_block ->
+            action_render_block(NestedBlock, ChangeableAssigns);
+        hide_block ->
+            action_hide_block(NestedBlock)
+    end.
 
-render_changeable_changes({expr, #{id := Id}  = Expr}, _ChangedVars, Assigns) ->
-    [Id, render_expr(Expr, Assigns)];
+render_changeable_changes({expr, #{id := _Id}  = Expr}, _ChangedVars, Assigns) ->
+    render_expr(Expr, Assigns);
 render_changeable_changes({block, Block}, ChangedVars, Assigns) ->
     render_block_changes(Block, ChangedVars, Assigns).
 
 render_block_changes(Block, AssignsKeys, Assigns) ->
-    case block_changes_action(Block, Assigns) of
+    case block_changes_action(Block, AssignsKeys, Assigns) of
         render_changeable ->
             Changes = maps:with(AssignsKeys, Assigns),
             ChangedVars = maps:keys(Changes),
@@ -186,29 +200,20 @@ render_block_changes(Block, AssignsKeys, Assigns) ->
                     []
             end;
         render_block ->
-            Mod = maps:get(module, Block),
-            Socket0 = arizona_socket:new(Mod, Assigns),
-            Socket = arizona_live_view:mount(Mod, Socket0),
-            ChangeableAssigns = arizona_socket:get_assigns(Socket),
-            BlockId = maps:get(id, Block),
-            self() ! {put_socket, BlockId, Socket},
-            ChangeableIndexes = maps:get(changeable_indexes, Block),
-            Changeable = maps:get(changeable, Block),
-            Dynamic = render_changeable_indexes(ChangeableIndexes, Changeable, ChangeableAssigns),
-            [BlockId -- [0], [maps:get(static, Block), Dynamic]];
+            action_render_block(Block, Assigns);
         hide_block ->
-            BlockId = maps:get(id, Block),
-            self() ! {remove_socket, BlockId},
-            [BlockId -- [0], [[], []]]
+            action_hide_block(Block)
     end.
 
 render_block_changeable(Targets, Block, ChangedVars, Assigns) ->
     lists:filtermap(fun(Indexes) ->
         case do_render_changes(Indexes, Block, ChangedVars, Assigns) of
+            {block, Rendered} ->
+                {true, [Indexes, Rendered]};
             [] ->
                 false;
             Rendered ->
-                {true, Rendered}
+                {true, [Indexes, Rendered]}
         end
     end, Targets).
 
@@ -218,14 +223,14 @@ is_block_visible(#{is_visible := {'if', Expr}}, Assigns) ->
     IfFun = maps:get(function, Expr),
     IfFun(Assigns).
 
-block_changes_action(#{is_visible := true}, _Assigns) ->
+block_changes_action(#{is_visible := true}, _, _) ->
     render_changeable;
-block_changes_action(#{is_visible := {'if', Expr}}, Assigns) ->
+block_changes_action(#{is_visible := {'if', Expr}}, ChangedVars, Assigns) ->
     IfFun = maps:get(function, Expr),
     case IfFun(Assigns) of
         true ->
             Vars = maps:get(vars, Expr),
-            case lists:any(fun(Var) -> is_map_key(Var, Assigns) end, Vars) of
+            case lists:any(fun(Var) -> lists:member(Var, ChangedVars) end, Vars) of
                 true ->
                     render_block;
                 false ->
@@ -235,13 +240,21 @@ block_changes_action(#{is_visible := {'if', Expr}}, Assigns) ->
             hide_block
     end.
 
-is_block_visible(#{is_visible := true}, _Assigns, _NormAssigns) ->
-    true;
-is_block_visible(#{is_visible := {'if', Expr}}, Assigns, NormAssigns) ->
-    Vars = maps:get(vars, Expr),
-    IfAssigns = changeable_assigns(Assigns, maps:with(Vars, NormAssigns)),
-    IfFun = maps:get(function, Expr),
-    IfFun(IfAssigns).
+action_render_block(Block, Assigns) ->
+    Mod = maps:get(module, Block),
+    Socket0 = arizona_socket:new(Mod, Assigns),
+    Socket = arizona_live_view:mount(Mod, Socket0),
+    ChangeableAssigns = arizona_socket:get_assigns(Socket),
+    self() ! {put_socket, Block, Socket},
+    ChangeableIndexes = maps:get(changeable_indexes, Block),
+    Changeable = maps:get(changeable, Block),
+    Dynamic = render_changeable_indexes(ChangeableIndexes, Changeable, ChangeableAssigns),
+    {block, [maps:get(static, Block), Dynamic]}.
+
+action_hide_block(Block) ->
+    BlockId = maps:get(id, Block),
+    self() ! {remove_socket, BlockId},
+    {block, [[], []]}.
 
 %% --------------------------------------------------------------------
 %% EUnit
@@ -278,7 +291,7 @@ client_render_test() ->
     ], client_render(block(), #{})).
 
 server_render_test() ->
-    ?assertEqual({ok, {
+    ?assertMatch({ok, {
         [% Static
          [<<"<!DOCTYPE html=\"html\" />"
             "<html lang=\"en\">"
@@ -317,14 +330,14 @@ server_render_test() ->
            % Dynamic
            [<<"88">>]]
         ]],
-        #{[0] => arizona_socket:put_assign(count, 0, arizona_socket:new(?MODULE, #{})),
-          [0, 1] => arizona_socket:new(?MODULE, #{count => 0}),
-          [0, 2] => arizona_socket:new(?MODULE, #{count => 88})}
+        #{[0] := _,
+          [0, 1] := _,
+          [0, 2] := _}
     }}, server_render(block(), #{})).
 
 render_changes_test() ->
     [
-        ?assertEqual([[[0], <<"1">>]],
+        ?assertEqual([[[0], <<"1">>], [[1, 0], <<"1">>]],
                      render_changes(block(), [count], #{count => 1}))
     ].
 
@@ -342,10 +355,12 @@ render_if_directive_test() ->
 render_if_directive_changes_test() ->
     {ok, Block} = arizona_template_compiler:compile(?MODULE, render_if_directive, #{}),
     [
-        ?assertEqual([[[0], <<"Joe">>]],
-                     render_changes(Block, [visible, name], #{visible => true, name => ~"Joe"})),
-        ?assertEqual([],
-                     render_changes(Block, [name], #{visible => false, name => ~"Nobody"}))
+        ?assertEqual([[[0, 0], <<"Joe">>]],
+                     render_changes(Block, [visible_for], #{is_visible => true,
+                                                            visible_for => ~"Joe"})),
+        ?assertEqual([[[0, 0], [[], []]]],
+                     render_changes(Block, [visible_for], #{is_visible => false,
+                                                            visible_for => ~"Nobody"}))
     ].
 
 %% --------------------------------------------------------------------
@@ -405,14 +420,14 @@ button(Macros) ->
 render_if_directive(Macros) ->
     maybe_parse(~"""
     <.render_if_directive_block
-        visible={_@is_visible}
+        :if={_@is_visible}
         name={_@visible_for}
     />
     """, Macros).
 
 render_if_directive_block(Macros) ->
     maybe_parse(~"""
-    <div :if={_@visible} :stateful>
+    <div :stateful>
         {_@name}, can you see me?
     </div>
     """, Macros).

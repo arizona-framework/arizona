@@ -26,7 +26,8 @@
 
 -type block() :: #{
     name := binary(),
-    attributes := [attribute()]
+    attributes := [attribute()],
+    is_visible := boolean() | condition()
 }.
 -export_type([block/0]).
 
@@ -35,8 +36,7 @@
     is_stateful := boolean(),
     is_void := boolean(),
     attributes := [attribute()],
-    inner_content := [element()],
-    is_visible := boolean() | condition()
+    inner_content := [element()]
 }.
 -export_type([tag/0]).
 
@@ -124,6 +124,9 @@ parse_block(Name, Loc, T0) ->
             throw({Reason, Loc})
     end.
 
+collect_block_props([{attr_name, _, <<":if">>},
+                     {attr_value, Loc, {expr, Expr}} | T], Props) ->
+    collect_block_props(T, [{is_visible, {'if', Loc, Expr}} | Props]);
 collect_block_props([{attr_name, Loc, <<$:, _/binary>>} | _T], _Props) ->
     {error, {invalid_directive, Loc}};
 collect_block_props([{attr_name, _, Name},
@@ -143,7 +146,8 @@ normalize_block_props(Props) ->
     {name, Name} = proplists:lookup(name, Props),
     #{
         name => Name,
-        attributes => lists:reverse(proplists:get_all_values(attribute, Props))
+        attributes => lists:reverse(proplists:get_all_values(attribute, Props)),
+        is_visible => proplists:get_value(is_visible, Props, true)
      }.
 
 parse_tag(Name, Loc, T0) ->
@@ -156,9 +160,6 @@ parse_tag(Name, Loc, T0) ->
             throw({Reason, Loc})
     end.
 
-collect_tag_props([{attr_name, _, <<":if">>},
-                   {attr_value, Loc, {expr, Expr}} | T], Props) ->
-    collect_tag_props(T, [{is_visible, {'if', Loc, Expr}} | Props]);
 collect_tag_props([{attr_name, _, <<":on", Action/binary>>},
                    {attr_value, Loc, {text, Event}} | T], Props) ->
     collect_tag_props(T, [{attribute, {<<"on", Action/binary>>,
@@ -215,8 +216,7 @@ normalize_tag_props(Props) ->
         is_stateful => proplists:get_bool(is_stateful, Props),
         is_void => proplists:get_bool(is_void, Props),
         attributes => lists:reverse(proplists:get_all_values(attribute, Props)),
-        inner_content => lists:reverse(proplists:get_all_values(inner_content, Props)),
-        is_visible => proplists:get_value(is_visible, Props, true)
+        inner_content => lists:reverse(proplists:get_all_values(inner_content, Props))
      }.
 
 %% --------------------------------------------------------------------
@@ -232,7 +232,7 @@ parse_ok_test() ->
          {1, 1},
          #{attributes => [{<<"html">>, {text, {1, 11}, <<"html">>}}],
            name => <<"!DOCTYPE">>, is_stateful => false,
-           is_void => true, inner_content => [], is_visible => true}},
+           is_void => true, inner_content => []}},
         {tag,
          {2, 1},
          #{attributes => [{<<"lang">>, {text, {2, 12}, <<"en">>}}],
@@ -249,24 +249,20 @@ parse_ok_test() ->
                    #{attributes =>
                       [{<<"charset">>, {text, {4, 19}, <<"UTF-8">>}}],
                      name => <<"meta">>, is_stateful => false,
-                     is_void => true, inner_content => [],
-                     is_visible => true}},
+                     is_void => true, inner_content => []}},
                   {tag,
                    {5, 5},
                    #{attributes => [], name => <<"title">>,
                      is_stateful => false, is_void => false,
                      inner_content =>
-                      [{expr, {5, 12}, <<"_@title">>}],
-                     is_visible => true}},
+                      [{expr, {5, 12}, <<"_@title">>}]}},
                   {tag,
                    {6, 5},
                    #{attributes =>
                       [{<<"src">>,
                         {text, {6, 17}, <<"assets/js/main.js">>}}],
                      name => <<"script">>, is_stateful => false,
-                     is_void => false, inner_content => [],
-                     is_visible => true}}],
-                is_visible => true}},
+                     is_void => false, inner_content => []}}]}},
              {tag,
               {8, 1},
               #{attributes => [], name => <<"body">>,
@@ -277,8 +273,7 @@ parse_ok_test() ->
                    #{attributes => [], name => <<"h1">>,
                      is_stateful => false, is_void => false,
                      inner_content =>
-                      [{text, {10, 9}, <<"Arizona Counter">>}],
-                     is_visible => true}},
+                      [{text, {10, 9}, <<"Arizona Counter">>}]}},
                   {block,
                    {11, 5},
                    #{attributes =>
@@ -286,9 +281,8 @@ parse_ok_test() ->
                        {<<"btn_text">>,
                         {text, {13, 18}, <<"Increment">>}},
                        {<<"event">>, {text, {14, 15}, <<"incr">>}}],
-                     name => <<"counter">>}}],
-                is_visible => true}}],
-           is_visible => true}}
+                     name => <<"counter">>,
+                     is_visible => true}}]}}]}}
     ]}, parse(tokens_ok())).
 
 parse_unexpected_block_end_test() ->
@@ -311,27 +305,27 @@ parse_invalid_directive_test() ->
 
 if_directive_test() ->
     {ok, Tokens} = arizona_template_scanner:scan(~"""
-    <foo :if={true} />
-    <foo />
+    <.foo :if={true} />
+    <.foo />
     """),
     ?assertEqual({ok, [
-        {tag, {1, 1}, #{
+        {block, {1, 1}, #{
             name => <<"foo">>,
             attributes => [],
-            is_stateful => false,
-            is_void => true,
-            inner_content => [],
-            is_visible => {'if', {1, 10}, <<"true">>}
+            is_visible => {'if', {1, 11}, <<"true">>}
         }},
-        {tag, {2, 1}, #{
+        {block, {2, 1}, #{
             name => <<"foo">>,
             attributes => [],
-            is_stateful => false,
-            is_void => true,
-            inner_content => [],
             is_visible => true
         }}
     ]}, parse(Tokens)).
+
+invalid_if_directive_test() ->
+    {ok, Tokens} = arizona_template_scanner:scan(~"""
+    <foo :if={true} />
+    """),
+    ?assertEqual({error, {invalid_directive, {1, 6}}}, parse(Tokens)).
 
 %% --------------------------------------------------------------------
 %% Test support

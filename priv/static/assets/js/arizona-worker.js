@@ -132,7 +132,10 @@ function getTargetTree(path, tree) {
 }
 
 function applyChanges([indexes, v], tree) {
-  if (indexes.length === 1) {
+  if (indexes === "block") {
+    tree[0] = v[0];
+    tree[1] = v[1];
+  } else if (indexes.length === 1) {
     tree[1][indexes[0]] = v;
   } else {
     const [i, ...rest] = indexes;
