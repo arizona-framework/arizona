@@ -105,9 +105,6 @@ render_block(Block, Assigns) ->
     Dynamic = render_changeable_indexes(ChangeableIndexes, Changeable, Assigns),
     zip(maps:get(static, Block), Dynamic).
 
-% TODO: Unbound assigns: maps:with(UnboundVars, Assigns).
-% UnboundVars are vars that must be defined in the mount callback,
-% so they don't need normalization.
 changeable_assigns(Assigns, NormAssigns) ->
     maps:merge(Assigns, #{K => Fun(Assigns) || K := #{function := Fun} <- NormAssigns}).
 
