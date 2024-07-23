@@ -297,7 +297,24 @@ group_vars(Vars) ->
         fun({_, Path}) -> Path end,
         Vars).
 
-compile_tag(#{name := Name} = Tag, Loc, T, State) ->
+compile_tag(Tag, Loc, T0, State0) ->
+    case expand_is_visible(maps:get(is_visible, Tag), State0) of
+        false ->
+            compile_elems(T0, State0);
+        true ->
+            TagElems = compile_tag_name(Tag, Loc, T0, State0),
+            {rest, T, State} = lists:last(TagElems),
+            lists:droplast(TagElems) ++ compile_elems(T, State);
+        IsVisible ->
+            TagElems = compile_tag_name(Tag, Loc, T0, State0),
+            {rest, T, State} = lists:last(TagElems),
+            [{tag, #{
+                inner_content => lists:droplast(TagElems),
+                is_visible => IsVisible
+            }} | compile_elems(T, State)]
+    end.
+
+compile_tag_name(#{name := Name} = Tag, Loc, T, State) ->
     Attrs = get_tag_attrs(Tag, lists:reverse(State#state.path)),
     [{text, <<$<, Name/binary>>} | compile_tag_attrs(Attrs, Tag, Loc, T, State)].
 
@@ -344,7 +361,7 @@ compile_tag_attrs([{Name, {expr, ExprLoc, Expr}} | Attrs], Tag, Loc, T, State) -
     [{text, <<$\s, Name/binary, $=, $">>}, Elem, {text, <<$">>}
      | compile_tag_attrs(Attrs, Tag, Loc, T, incr_index(ChangeableCount, State))];
 compile_tag_attrs([], #{is_void := true}, _Loc, T, State) ->
-    [{text, <<$\s, $/, $>>>} | compile_elems(T, State)];
+    [{text, <<$\s, $/, $>>>}, {rest, T, State}];
 compile_tag_attrs([], #{is_void := false} = Tag, _Loc, T, State) ->
     InnerContent = maps:get(inner_content, Tag),
     [{text, <<$>>>} | compile_tag_inner_content(InnerContent, Tag, T, State)].
@@ -381,7 +398,7 @@ live_reload_script() ->
     ~"assets/js/arizona-live-reload.js".
 
 compile_tag_closing(#{name :=  Name}, T, State) ->
-    [{text, <<$<, $/, Name/binary, $>>>} | compile_elems(T, State)].
+    [{text, <<$<, $/, Name/binary, $>>>}, {rest, T, State}].
 
 concat_texts([{text, TxtA}, {text, TxtB} | T]) ->
     concat_texts([{text, <<TxtA/binary, TxtB/binary>>} | T]);
