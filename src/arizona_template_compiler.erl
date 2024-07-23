@@ -272,30 +272,24 @@ block(Id, Tree0, NormAssigns, State) ->
     Changeable = normalize_changeable(filter_changeable(Tree)),
     ChangeableVars = changeable_vars(Changeable),
     IsVisible = State#state.is_visible,
-    IsVisibleNormAssigns = case IsVisible of
-        true ->
-            #{};
-        {'if', #{vars := IfVars0, function := IfFun}} ->
-            #{IfVar => #{function => IfFun, vars => [IfVar]} || IfVar <- IfVars0}
-    end,
-    IsVisibleVars = case IsVisible of
-        true ->
-            [];
-        {'if', #{id := IfId, vars := IfVars}} ->
-            [{IfVar, IfId -- Id} || IfVar <- IfVars]
-    end,
     #{
         id => Id,
         module => State#state.module,
         function => State#state.function,
-        is_visible => State#state.is_visible,
+        is_visible => IsVisible,
         static => filter_static(Tree),
         changeable => norm_changeable_expr_id(Changeable),
         changeable_vars => group_vars(norm_changeable_vars(Id, ChangeableVars)),
         changeable_indexes => changeable_indexes(Changeable),
-        norm_assigns => maps:merge(NormAssigns, IsVisibleNormAssigns),
-        norm_assigns_vars => norm_assigns_vars(NormAssigns, ChangeableVars) ++ IsVisibleVars
+        norm_assigns => maps:merge(NormAssigns, is_visible_norm_assigns(IsVisible)),
+        norm_assigns_vars => norm_assigns_vars(NormAssigns, ChangeableVars) ++
+                                is_visible_norm_assigns_vars(IsVisible, Id)
     }.
+
+is_visible_norm_assigns(true) ->
+    #{};
+is_visible_norm_assigns({'if', #{vars := Vars, function := Fun}}) ->
+    #{Var => #{function => Fun, vars => [Var]} || Var <- Vars}.
 
 group_vars(Vars) ->
     maps:groups_from_list(
@@ -493,6 +487,11 @@ norm_assigns_vars_3([Index | Indexes], Var, Vars, ChangeableVar, AllIndexes, T, 
      | norm_assigns_vars_3(Indexes, Var, Vars, ChangeableVar, AllIndexes, T, ChangeableVars)];
 norm_assigns_vars_3([], _, Vars, ChangeableVar, Indexes, T, ChangeableVars) ->
     norm_assigns_vars_2(Vars, ChangeableVar, Indexes, T, ChangeableVars).
+
+is_visible_norm_assigns_vars(true, _) ->
+    [];
+is_visible_norm_assigns_vars({'if', #{id := Id, vars := Vars}}, BlockId) ->
+    [{Var, Id -- BlockId} || Var <- Vars].
 
 stateful_state(Mod, Fun, Macros, IsVisible, State) ->
     State#state{
