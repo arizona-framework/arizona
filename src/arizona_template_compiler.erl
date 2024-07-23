@@ -111,8 +111,6 @@ compile_elems([{block, Loc, Block} | T], State) ->
     compile_block(Block, Loc, T, State);
 compile_elems([{tag, Loc, #{is_stateful := true}} | _T], State) ->
     throw({unexpected_stateful_tag, Loc, State});
-compile_elems([{tag, Loc, #{is_visible := {'if', _}}} | _T], State) ->
-    throw({unexpected_if_directive, Loc, State});
 compile_elems([{tag, Loc, Tag} | T], State) ->
     compile_tag(Tag, Loc, T, State);
 compile_elems([], _State) ->
@@ -218,6 +216,8 @@ block_mod_fun(Name, Loc, State) ->
 
 expand_block(Mod, Fun, IsVisible, Attrs, State) ->
     case erlang:apply(Mod, Fun, [State#state.macros]) of
+        {ok, {[{tag, Loc, #{is_stateful := true, is_visible := {'if', _, _}}}], _}} ->
+            throw({unexpected_if_directive, Loc, State});
         {ok, {[{tag, Loc, #{is_stateful := true} = Tag}], AttrsMacros}} ->
             BlockAssigns = block_assigns(Attrs, AttrsMacros, State),
             Macros = block_assigns_macros(BlockAssigns),
@@ -679,6 +679,11 @@ if_directive_test() ->
            norm_assigns := #{}, norm_assigns_vars := []}}
         , compile(?MODULE, render_if_directive, #{})).
 
+unexpected_if_directive_test() ->
+    ?assertEqual({error, {unexpected_if_directive,
+                          {?MODULE, render_unexpected_if_directive, {1, 1}}}},
+                 compile(?MODULE, render_unexpected_if_directive, #{})).
+
 %% --------------------------------------------------------------------
 %% Test support
 %% --------------------------------------------------------------------
@@ -797,6 +802,16 @@ render_if_directive_block(Macros) ->
     <div :stateful>
         {_@name}, can you see me?
     </div>
+    """, Macros).
+
+render_unexpected_if_directive(Macros) ->
+    maybe_parse(~"""
+    <.render_unexpected_if_directive_block visible={_@invalid} />
+    """, Macros).
+
+render_unexpected_if_directive_block(Macros) ->
+    maybe_parse(~"""
+    <div :if={_@visible} :stateful></div>
     """, Macros).
 
 % The below is what the arizona_live_view:parse_str should return.
