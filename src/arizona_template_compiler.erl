@@ -235,10 +235,10 @@ expand_block(Mod, Fun, IsVisible, Attrs, State) ->
 block_assigns(Attrs, Macros, State) ->
     maps:from_list(lists:map(fun
         ({K, {text, _, Txt}}) ->
-            {binary_to_atom(K), {text, Txt}};
+            {binary_to_atom(K, utf8), {text, Txt}};
         ({K, {expr, Loc, Expr}}) ->
             Eval = should_eval_expr(Expr, Macros),
-            {binary_to_atom(K), expand_expr(Expr, Loc, Eval, State)}
+            {binary_to_atom(K, utf8), expand_expr(Expr, Loc, Eval, State)}
     end, Attrs)).
 
 block_assigns_macros(Assigns) ->
