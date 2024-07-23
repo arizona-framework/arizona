@@ -172,50 +172,29 @@ do_render_changes([Index | Indexes], Block, ChangedVars, Assigns) ->
     ChangeableAssigns = changeable_assigns(Assigns, NormAssigns),
     ChangeableAssignsKeys = [K || K := #{vars := Vars} <- NormAssigns,
                                   Var <- Vars, lists:member(Var, ChangedVars)],
-    case block_changes_action(NestedBlock, ChangeableAssignsKeys, ChangeableAssigns) of
+    case changes_action(NestedBlock, ChangeableAssignsKeys, ChangeableAssigns) of
         render_changeable ->
             do_render_changes(Indexes, NestedBlock, ChangeableAssignsKeys, ChangeableAssigns);
         render_block ->
-            action_render_block(NestedBlock, ChangeableAssigns);
+            do_render_block(NestedBlock, ChangeableAssigns);
         hide_block ->
-            action_hide_block(NestedBlock)
+            do_hide_block(NestedBlock)
     end.
 
-render_changeable_changes({expr, #{id := _Id}  = Expr}, _ChangedVars, Assigns) ->
+render_changeable_changes({expr, Expr}, _ChangedVars, Assigns) ->
     render_expr(Expr, Assigns);
 render_changeable_changes({block, Block}, ChangedVars, Assigns) ->
     render_block_changes(Block, ChangedVars, Assigns).
 
 render_block_changes(Block, AssignsKeys, Assigns) ->
-    case block_changes_action(Block, AssignsKeys, Assigns) of
+    case changes_action(Block, AssignsKeys, Assigns) of
         render_changeable ->
-            Changes = maps:with(AssignsKeys, Assigns),
-            ChangedVars = maps:keys(Changes),
-            ChangeableVars = maps:get(changeable_vars, Block),
-            Vars = maps:with(ChangedVars, ChangeableVars),
-            case maps:values(Vars) of
-                [Targets] ->
-                    render_block_changeable(Targets, Block, ChangedVars, Assigns);
-                [] ->
-                    []
-            end;
+            do_render_changeable(Block, AssignsKeys, Assigns);
         render_block ->
-            action_render_block(Block, Assigns);
+            do_render_block(Block, Assigns);
         hide_block ->
-            action_hide_block(Block)
+            do_hide_block(Block)
     end.
-
-render_block_changeable(Targets, Block, ChangedVars, Assigns) ->
-    lists:filtermap(fun(Indexes) ->
-        case do_render_changes(Indexes, Block, ChangedVars, Assigns) of
-            {block, Rendered} ->
-                {true, [Indexes, Rendered]};
-            [] ->
-                false;
-            Rendered ->
-                {true, [Indexes, Rendered]}
-        end
-    end, Targets).
 
 is_block_visible(#{is_visible := true}, _Assigns) ->
     true;
@@ -223,9 +202,9 @@ is_block_visible(#{is_visible := {'if', Expr}}, Assigns) ->
     IfFun = maps:get(function, Expr),
     IfFun(Assigns).
 
-block_changes_action(#{is_visible := true}, _, _) ->
+changes_action(#{is_visible := true}, _, _) ->
     render_changeable;
-block_changes_action(#{is_visible := {'if', Expr}}, ChangedVars, Assigns) ->
+changes_action(#{is_visible := {'if', Expr}}, ChangedVars, Assigns) ->
     IfFun = maps:get(function, Expr),
     case IfFun(Assigns) of
         true ->
@@ -240,7 +219,31 @@ block_changes_action(#{is_visible := {'if', Expr}}, ChangedVars, Assigns) ->
             hide_block
     end.
 
-action_render_block(Block, Assigns) ->
+do_render_changeable(Block, AssignsKeys, Assigns) ->
+    Changes = maps:with(AssignsKeys, Assigns),
+    ChangedVars = maps:keys(Changes),
+    ChangeableVars = maps:get(changeable_vars, Block),
+    Vars = maps:with(ChangedVars, ChangeableVars),
+    case maps:values(Vars) of
+        [Targets] ->
+            render_block_changeable(Targets, Block, ChangedVars, Assigns);
+        [] ->
+            []
+    end.
+
+render_block_changeable(Targets, Block, ChangedVars, Assigns) ->
+    lists:filtermap(fun(Indexes) ->
+        case do_render_changes(Indexes, Block, ChangedVars, Assigns) of
+            {block, Rendered} ->
+                {true, [Indexes, Rendered]};
+            [] ->
+                false;
+            Rendered ->
+                {true, [Indexes, Rendered]}
+        end
+    end, Targets).
+
+do_render_block(Block, Assigns) ->
     Mod = maps:get(module, Block),
     Socket0 = arizona_socket:new(Mod, Assigns),
     Socket = arizona_live_view:mount(Mod, Socket0),
@@ -251,7 +254,7 @@ action_render_block(Block, Assigns) ->
     Dynamic = render_changeable_indexes(ChangeableIndexes, Changeable, ChangeableAssigns),
     {block, [maps:get(static, Block), Dynamic]}.
 
-action_hide_block(Block) ->
+do_hide_block(Block) ->
     BlockId = maps:get(id, Block),
     self() ! {remove_socket, BlockId},
     {block, [[], []]}.
