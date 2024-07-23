@@ -111,18 +111,26 @@ function handleEvent(data) {
   }
 }
 
-function applyPatch([[, ...target], changes]) {
-  const tree = target.length
-    ? getTargetTree(target, state.tree[1])
-    : state.tree;
+function applyPatch([target, changes]) {
+  const tree = getTargetTree(target);
   changes.forEach((c) => {
     applyChanges(c, tree);
   });
   const html = zip(tree[0], tree[1]);
-  return { target: [0, ...target], html };
+  return { target, html };
 }
 
-function getTargetTree(path, tree) {
+function getTargetTree([, ...target]) {
+  return targetIsRoot(target)
+    ? state.tree
+    : getNestedTargetTree(target, state.tree[1]);
+}
+
+function targetIsRoot(target) {
+  return !target.length;
+}
+
+function getNestedTargetTree(path, tree) {
   if (path.length === 1) {
     return tree[path[0]];
   } else {

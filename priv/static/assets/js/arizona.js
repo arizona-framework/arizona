@@ -12,12 +12,9 @@ globalThis["arizona"] = (() => {
     switch (event) {
       case "patch": {
         const { target, html } = payload;
-        const elem =
-          target.length === 1
-            ? document.documentElement
-            : document.querySelector(
-                `[arizona-id="${JSON.stringify(target)}"]`,
-              );
+        const elem = targetIsRoot(target)
+          ? document.documentElement
+          : document.querySelector(`[arizona-id="${JSON.stringify(target)}"]`);
         applyPatch(elem, html);
         break;
       }
@@ -31,6 +28,10 @@ globalThis["arizona"] = (() => {
   worker.addEventListener("error", function (e) {
     console.error("[WebWorker] error:", e);
   });
+
+  function targetIsRoot(target) {
+    return target.length === 1;
+  }
 
   // Subscribers.
 
