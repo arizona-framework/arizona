@@ -116,13 +116,13 @@ function applyPatch([target, changes]) {
   changes.forEach((c) => {
     applyChanges(c, tree);
   });
-  const html = zip(tree[0], tree[1]);
+  const html = zip(tree[1][0], tree[1][1]);
   return { target, html };
 }
 
 function getTargetTree([, ...target]) {
   return targetIsRoot(target)
-    ? state.tree[1]
+    ? state.tree
     : getNestedTargetTree(target, state.tree[1][1]);
 }
 
@@ -132,15 +132,7 @@ function targetIsRoot(target) {
 
 function getNestedTargetTree(path, tree) {
   if (path.length === 1) {
-    const targetTree = tree[path[0]];
-    switch (targetTree[0]) {
-      case "expr":
-        return targetTree;
-      case "block":
-        return targetTree[1];
-      default:
-        throw new Error("Invalid tree");
-    }
+    return tree[path[0]];
   } else {
     const [i, ...rest] = path;
     return getNestedTargetTree(rest, tree[i][1][1]);
@@ -152,14 +144,25 @@ function applyChanges([indexes, v], tree) {
     tree[0] = v[0];
     tree[1] = v[1];
   } else if (indexes.length === 1) {
-    switch (v[0]) {
+    switch (tree[0]) {
       case "expr":
-        tree[1][indexes[0]] = v;
+        tree[1][indexes[0]][1] = v;
         break;
-      case "block":
-        tree[1][indexes[0]][1][0] = v[1][0];
-        tree[1][indexes[0]][1][1] = v[1][1];
+      case "block": {
+        const targetTree = tree[1][1][indexes[0]];
+        switch (targetTree[0]) {
+          case "expr":
+            targetTree[1] = v;
+            break;
+          case "block":
+            targetTree[1][0] = v[0];
+            targetTree[1][1] = v[1];
+            break;
+          default:
+            throw new Error("Invalid changes");
+        }
         break;
+      }
       default:
         throw new Error("Invalid changes");
     }

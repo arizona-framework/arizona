@@ -58,10 +58,8 @@ server_render(Block, Assigns) ->
 render_changes(Block, ChangedVars, Assigns) ->
     case render_block_changes(Block, ChangedVars, Assigns) of
         {block, Rendered} ->
-            [[~"block", Rendered]];
-        [_, [~"block", _]] = Changes ->
-            [Changes];
-        [_, [~"expr", _]] = Changes ->
+            [Rendered];
+        [_, Bin] = Changes when is_binary(Bin) ->
             [Changes];
         Changes ->
             Changes
@@ -251,11 +249,11 @@ render_block_changeable(Targets, Block, ChangedVars, Assigns) ->
     lists:filtermap(fun(Indexes) ->
         case do_render_changes(Indexes, Block, ChangedVars, Assigns) of
             {block, Rendered} ->
-                {true, [Indexes, [~"block", Rendered]]};
+                {true, [Indexes, Rendered]};
             [] ->
                 false;
             Rendered ->
-                {true, [Indexes, [~"expr", Rendered]]}
+                {true, [Indexes, Rendered]}
         end
     end, Targets).
 
@@ -383,7 +381,7 @@ server_render_test() ->
 
 render_changes_test() ->
     [
-        ?assertEqual([[[0], [<<"expr">>, <<"1">>]], [[1, 0], [<<"expr">>, <<"1">>]]],
+        ?assertEqual([[[0], <<"1">>], [[1, 0], <<"1">>]],
                      render_changes(block(), [count], #{count => 1}))
     ].
 
@@ -401,10 +399,10 @@ render_if_directive_test() ->
 render_if_directive_changes_test() ->
     {ok, Block} = arizona_template_compiler:compile(?MODULE, render_if_directive, #{}),
     [
-        ?assertEqual([[[0, 0], [<<"expr">>, <<"Joe">>]]],
+        ?assertEqual([[[0, 0], <<"Joe">>]],
                      render_changes(Block, [visible_for], #{is_visible => true,
                                                             visible_for => ~"Joe"})),
-        ?assertEqual([[[0, 0], [<<"block">>, [[], []]]]],
+        ?assertEqual([[[0, 0], [[], []]]],
                      render_changes(Block, [visible_for], #{is_visible => false,
                                                             visible_for => ~"Nobody"}))
     ].
