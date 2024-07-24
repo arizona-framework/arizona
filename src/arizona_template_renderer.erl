@@ -126,7 +126,7 @@ server_render_changeable_indexes([], _, _, _) ->
     [].
 
 server_render_changeable({expr, Expr}, Assigns, _Pid) ->
-    render_expr(Expr, Assigns);
+    [~"expr", render_expr(Expr, Assigns)];
 server_render_changeable({block, Block}, Assigns, Pid) ->
     NormAssigns = maps:get(norm_assigns, Block),
     ChangeableAssigns = changeable_assigns(Assigns, NormAssigns),
@@ -153,7 +153,7 @@ server_render_block(Block, Assigns0, Pid) ->
                 false ->
                     ok
             end,
-            [maps:get(static, Block), Dynamic];
+            [~"block", [maps:get(static, Block), Dynamic]];
         false ->
             ok = case HasSocket of
                 {true, Socket} ->
@@ -162,7 +162,7 @@ server_render_block(Block, Assigns0, Pid) ->
                 false ->
                     ok
             end,
-            []
+            [~"block", [[], []]]
     end.
 
 server_render_loop(Pid, Timeout, Sockets) ->
@@ -275,7 +275,7 @@ do_render_block(Block, Assigns) ->
         lists:map(fun(Index) ->
             case maps:get(Index, Changeable) of
                 {expr, Expr} ->
-                    render_expr(Expr, ChangeableAssigns);
+                    [~"expr", render_expr(Expr, ChangeableAssigns)];
                 {block, NestedBlock} ->
                     case is_block_visible(NestedBlock, ChangeableAssigns) of
                         true ->
@@ -283,9 +283,9 @@ do_render_block(Block, Assigns) ->
                             NestedAssigns = #{K => Fun(ChangeableAssigns)
                                               || K := #{function := Fun} <- NormAssigns},
                             {block, Rendered} = do_render_block(NestedBlock, NestedAssigns),
-                            Rendered;
+                            [~"block", Rendered];
                         false ->
-                            [[], []]
+                            [~"block", [[], []]]
                     end
             end
         end, ChangeableIndexes),
@@ -338,7 +338,7 @@ client_render_test() ->
 
 server_render_test() ->
     ?assertMatch({ok, {
-        [% Static
+        [<<"block">>, [% Static
          [<<"<!DOCTYPE html=\"html\" />"
             "<html lang=\"en\">"
             "<head><meta charset=\"UTF-8\" />"
@@ -356,26 +356,26 @@ server_render_test() ->
             <<"</body></html>">>],
          % Dynamic
          [% #1
-          <<"0">>,
+          [<<"expr">>, <<"0">>],
           % #2
-          [% Static
+          [<<"block">>, [% Static
            [<<"<div arizona-id=\"[0,1]\">"
                 "<span>Count:">>, <<"</span>"
                 "<button arizona-target=\"[arizona-id='[0,1]']\" type=\"button\" "
                 "onclick=\"arizona.send.bind(this)('incr')\">Increment</button>"
               "</div>">>],
            % Dynamic
-           [<<"0">>]],
+           [[<<"expr">>, <<"0">>]]]],
           % #3
-          [% Static
+          [<<"block">>, [% Static
            [<<"<div arizona-id=\"[0,2]\">"
                 "<span>Count:">>, <<"</span>"
                 "<button arizona-target=\"[arizona-id='[0,2]']\" type=\"button\" "
                 "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button>"
               "</div>">>],
            % Dynamic
-           [<<"88">>]]
-        ]],
+           [[<<"expr">>, <<"88">>]]]]
+        ]]],
         #{[0] := _,
           [0, 1] := _,
           [0, 2] := _}
