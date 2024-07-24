@@ -52,7 +52,7 @@ server_render(Block, Assigns) ->
          ChangedVars :: [atom()],
          Assigns :: assigns(),
          Changes :: [
-            [arizona_template_compiler:changeable_id() | binary()]
+            [arizona_template_compiler:changeable_id() | [binary() |  [[binary()]]]]
             | [binary() | [[binary()]]]
         ].
 render_changes(Block, ChangedVars, Assigns) ->
@@ -146,17 +146,19 @@ server_render_block(Block, Assigns0, Pid) ->
             ChangeableIndexes = maps:get(changeable_indexes, Block),
             Changeable = maps:get(changeable, Block),
             Dynamic = server_render_changeable_indexes(ChangeableIndexes, Changeable, Assigns, Pid),
-            case HasSocket of
+            ok = case HasSocket of
                 {true, Socket} ->
-                    Pid ! {self(), {socket, Block, Socket}};
+                    Pid ! {self(), {socket, Block, Socket}},
+                    ok;
                 false ->
                     ok
             end,
             [maps:get(static, Block), Dynamic];
         false ->
-            case HasSocket of
+            ok = case HasSocket of
                 {true, Socket} ->
-                    Pid ! {self(), {socket, Block, Socket}};
+                    Pid ! {self(), {socket, Block, Socket}},
+                    ok;
                 false ->
                     ok
             end,
@@ -290,10 +292,11 @@ do_render_block(Block, Assigns) ->
     {block, [maps:get(static, Block), Dynamic]}.
 
 do_hide_block(Block) ->
-    case maps:get(is_stateful, Block) of
+    ok = case maps:get(is_stateful, Block) of
         {true, _} ->
             BlockId = maps:get(id, Block),
-            self() ! {remove_socket, BlockId};
+            self() ! {remove_socket, BlockId},
+            ok;
         false ->
             ok
     end,
@@ -380,7 +383,7 @@ server_render_test() ->
 
 render_changes_test() ->
     [
-        ?assertEqual([[[0], <<"1">>], [[1, 0], <<"1">>]],
+        ?assertEqual([[[0], [<<"expr">>, <<"1">>]], [[1, 0], [<<"expr">>, <<"1">>]]],
                      render_changes(block(), [count], #{count => 1}))
     ].
 
@@ -398,10 +401,10 @@ render_if_directive_test() ->
 render_if_directive_changes_test() ->
     {ok, Block} = arizona_template_compiler:compile(?MODULE, render_if_directive, #{}),
     [
-        ?assertEqual([[[0, 0], <<"Joe">>]],
+        ?assertEqual([[[0, 0], [<<"expr">>, <<"Joe">>]]],
                      render_changes(Block, [visible_for], #{is_visible => true,
                                                             visible_for => ~"Joe"})),
-        ?assertEqual([[[0, 0], [[], []]]],
+        ?assertEqual([[[0, 0], [<<"block">>, [[], []]]]],
                      render_changes(Block, [visible_for], #{is_visible => false,
                                                             visible_for => ~"Nobody"}))
     ].

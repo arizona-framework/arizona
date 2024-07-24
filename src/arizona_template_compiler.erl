@@ -551,11 +551,11 @@ incr_index(N, #state{index = Index} = State) ->
 
 compile_test() ->
     ?assertMatch({ok,
-         #{function := render, id := [0], module := arizona_template_compiler,
+         #{id := [0], is_stateful := {true, {arizona_template_compiler, render}},
            changeable :=
             #{0 :=
                {block,
-                #{function := render, id := [0, 0], module := arizona_template_compiler,
+                #{id := [0, 0], is_stateful := {true, {arizona_template_compiler, render}},
                   changeable :=
                    #{0 :=
                       {expr, #{function := _, id := [0], vars := [count]}}},
@@ -571,7 +571,7 @@ compile_test() ->
                    #{count := #{function := _, vars := [count]}}}},
               1 :=
                {block,
-                #{function := render, id := [0, 1], module := arizona_template_compiler,
+                #{id := [0, 1], is_stateful := {true, {arizona_template_compiler, render}},
                   changeable :=
                    #{0 :=
                       {expr, #{function := _, id := [0], vars := [count]}}},
@@ -639,16 +639,14 @@ norm_assigns_test() ->
 macros_test() ->
     ?assertMatch(
         {ok,
-         #{function := render_macros,
-           id := [0],
-           module := arizona_template_compiler,
+         #{id := [0],
+           is_stateful := {true, {arizona_template_compiler, render_macros}},
            static := [<<"foo">>],
            changeable :=
             #{0 :=
                {block,
-                #{function := render_macros,
-                  id := [0, 0],
-                  module := arizona_template_compiler,
+                #{id := [0, 0],
+                  is_stateful := {true, {arizona_template_compiler, render_macros}},
                   static := [<<"<div arizona-id=\"[0,0]\">foobaz">>,
                              <<"</div>">>],
                   changeable :=
@@ -668,43 +666,43 @@ macros_test() ->
 if_directive_test() ->
     ?assertMatch(
         {ok,
-         #{function := render_if_directive,
-           id := [0],
-           module := arizona_template_compiler, static := [],
-           is_visible := true,
+         #{id := [0], static := [<<"begin">>, <<"end">>], is_visible := true,
+           is_stateful := {true, {arizona_template_compiler, render_if_directive}},
            changeable :=
             #{0 :=
                {block,
-                #{function := render_if_directive,
-                  id := [0, 0],
-                  module := arizona_template_compiler,
+                #{id := [0, 0],
                   static :=
                    [<<"<div arizona-id=\"[0,0]\">">>,
-                    <<", can you see me?</div>">>],
-                  is_visible :=
-                   {'if',
-                    #{function := _,
-                      id := [0, 0],
-                      vars := [is_visible]}},
-                  changeable :=
-                   #{0 :=
-                      {expr,
-                       #{function := _,
-                         id := [0],
-                         vars := [name]}}},
+                    <<", can you see me? I'm stateful.</div>">>],
+                  is_visible := {'if', #{function := _, id := [0, 0], vars := [is_visible]}},
+                  is_stateful := {true, {arizona_template_compiler, render_if_directive}},
+                  changeable := #{0 := {expr, #{function := _, id := [0], vars := [name]}}},
                   changeable_vars := #{name := [[0]]},
                   changeable_indexes := [0],
                   norm_assigns :=
-                   #{name :=
-                      #{function := _,
-                        vars := [visible_for]},
-                     is_visible :=
-                      #{function := _,
-                        vars := [is_visible]}},
-                  norm_assigns_vars := [{visible_for, [0, 0, 0]}, {is_visible, []}]}}},
+                   #{name := #{function := _, vars := [visible_for]},
+                     is_visible := #{function := _, vars := [is_visible]}},
+                  norm_assigns_vars :=
+                   [{visible_for, [0, 0, 0]}, {is_visible, []}]}},
+              1 :=
+               {block,
+                #{id := [0, 1],
+                  static :=
+                   [<<"<div>">>, <<", can you see me? I'm stateless.</div>">>],
+                  is_visible :=
+                   {'if', #{function := _, id := [0, 1], vars := [is_visible]}},
+                  is_stateful := false,
+                  changeable :=
+                   #{0 := {expr, #{function := _, id := [0], vars := [visible_for]}}},
+                  changeable_vars := #{visible_for := [[0]]},
+                  changeable_indexes := [0],
+                  norm_assigns :=
+                   #{is_visible := #{function := _, vars := [is_visible]}},
+                  norm_assigns_vars := [{is_visible, []}]}}},
            changeable_vars :=
-            #{is_visible := [[0]], visible_for := [[0, 0]]},
-           changeable_indexes := [0],
+            #{is_visible := [[0], [1]], visible_for := [[0, 0]]},
+           changeable_indexes := [0, 1],
            norm_assigns := #{}, norm_assigns_vars := []}}
         , compile(?MODULE, render_if_directive, #{})).
 
