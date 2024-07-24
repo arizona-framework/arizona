@@ -112,18 +112,18 @@ render_block(Block, Assigns0) ->
     ChangeableAssigns = changeable_assigns(Assigns, NormAssigns),
     ChangeableIndexes = maps:get(changeable_indexes, Block),
     Changeable = maps:get(changeable, Block),
-    Dynamic = render_changeable_indexes(ChangeableIndexes, Changeable, ChangeableAssigns),
-    zip(maps:get(static, Block), Dynamic).
+    ChangeableArr = render_changeable_indexes(ChangeableIndexes, Changeable, ChangeableAssigns),
+    zip(maps:get(static, Block), ChangeableArr).
 
 changeable_assigns(Assigns, NormAssigns) ->
     maps:merge(Assigns, #{K => Fun(Assigns) || K := #{function := Fun} <- NormAssigns}).
 
-zip([S | Static], [D | Dynamic]) ->
-    [S, D | zip(Static, Dynamic)];
-zip([S | Static], []) ->
-    [S | zip(Static, [])];
-zip([], [D | Dynamic]) ->
-    [D | zip([], Dynamic)];
+zip([Static | StaticArr], [Changeable | ChangeableArr]) ->
+    [Static, Changeable | zip(StaticArr, ChangeableArr)];
+zip([Static | StaticArr], []) ->
+    [Static | zip(StaticArr, [])];
+zip([], [Changeable | ChangeableArr]) ->
+    [Changeable | zip([], ChangeableArr)];
 zip([], []) ->
     [].
 
@@ -153,7 +153,8 @@ server_render_block(Block, Assigns0, Pid) ->
         true ->
             ChangeableIndexes = maps:get(changeable_indexes, Block),
             Changeable = maps:get(changeable, Block),
-            Dynamic = server_render_changeable_indexes(ChangeableIndexes, Changeable, Assigns, Pid),
+            ChangeableArr = server_render_changeable_indexes(ChangeableIndexes, Changeable,
+                                                             Assigns, Pid),
             ok = case HasSocket of
                 {true, Socket} ->
                     Pid ! {self(), {socket, Block, Socket}},
@@ -161,7 +162,7 @@ server_render_block(Block, Assigns0, Pid) ->
                 false ->
                     ok
             end,
-            [?BLOCK, [maps:get(static, Block), Dynamic]];
+            [?BLOCK, [maps:get(static, Block), ChangeableArr]];
         false ->
             ok = case HasSocket of
                 {true, Socket} ->
@@ -279,7 +280,7 @@ do_render_block(Block, Assigns) ->
     end,
     ChangeableIndexes = maps:get(changeable_indexes, Block),
     Changeable = maps:get(changeable, Block),
-    Dynamic =
+    ChangeableArr =
         lists:map(fun(Index) ->
             case maps:get(Index, Changeable) of
                 {expr, Expr} ->
@@ -297,7 +298,7 @@ do_render_block(Block, Assigns) ->
                     end
             end
         end, ChangeableIndexes),
-    {block, [maps:get(static, Block), Dynamic]}.
+    {block, [maps:get(static, Block), ChangeableArr]}.
 
 do_hide_block(Block) ->
     ok = case maps:get(is_stateful, Block) of
@@ -346,7 +347,7 @@ client_render_test() ->
 
 server_render_test() ->
     ?assertMatch({ok, {
-        [?BLOCK, [% Static
+        [?BLOCK, [% StaticArr
          [<<"<!DOCTYPE html=\"html\" />"
             "<html lang=\"en\">"
             "<head><meta charset=\"UTF-8\" />"
@@ -362,26 +363,26 @@ server_render_test() ->
               <<>>, % Dummy binary to correctly zip elements
               % #3
             <<"</body></html>">>],
-         % Dynamic
+         % ChangeableArr
          [% #1
           [?EXPR, <<"0">>],
           % #2
-          [?BLOCK, [% Static
+          [?BLOCK, [% StaticArr
            [<<"<div arizona-id=\"[0,1]\">"
                 "<span>Count:">>, <<"</span>"
                 "<button arizona-target=\"[arizona-id='[0,1]']\" type=\"button\" "
                 "onclick=\"arizona.send.bind(this)('incr')\">Increment</button>"
               "</div>">>],
-           % Dynamic
+           % ChangeableArr
            [[?EXPR, <<"0">>]]]],
           % #3
-          [?BLOCK, [% Static
+          [?BLOCK, [% StaticArr
            [<<"<div arizona-id=\"[0,2]\">"
                 "<span>Count:">>, <<"</span>"
                 "<button arizona-target=\"[arizona-id='[0,2]']\" type=\"button\" "
                 "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button>"
               "</div>">>],
-           % Dynamic
+           % ChangeableArr
            [[?EXPR, <<"88">>]]]]
         ]]],
         #{[0] := _,
