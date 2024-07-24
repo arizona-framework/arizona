@@ -26,7 +26,8 @@
 
 -type block() :: #{
     name := binary(),
-    attributes := [attribute()]
+    attributes := [attribute()],
+    is_visible := boolean() | condition()
 }.
 -export_type([block/0]).
 
@@ -53,6 +54,9 @@
 
 -type attribute() :: {attribute_key(), attribute_value()}.
 -export_type([attribute/0]).
+
+-type condition() :: {'if', arizona_template_scanner:location(), binary()}.
+-export_type([condition/0]).
 
 -type error_reason() :: unexpected_block_end
                       | unexpected_tag_end
@@ -120,6 +124,11 @@ parse_block(Name, Loc, T0) ->
             throw({Reason, Loc})
     end.
 
+collect_block_props([{attr_name, _, <<":if">>},
+                     {attr_value, Loc, {expr, Expr}} | T], Props) ->
+    collect_block_props(T, [{is_visible, {'if', Loc, Expr}} | Props]);
+collect_block_props([{attr_name, Loc, <<$:, _/binary>>} | _T], _Props) ->
+    {error, {invalid_directive, Loc}};
 collect_block_props([{attr_name, _, Name},
                      {attr_value, Loc, {text, Txt}} | T], Props) ->
     collect_block_props(T, [{attribute, {Name, {text, Loc, Txt}}} | Props]);
@@ -137,7 +146,8 @@ normalize_block_props(Props) ->
     {name, Name} = proplists:lookup(name, Props),
     #{
         name => Name,
-        attributes => lists:reverse(proplists:get_all_values(attribute, Props))
+        attributes => lists:reverse(proplists:get_all_values(attribute, Props)),
+        is_visible => proplists:get_value(is_visible, Props, true)
      }.
 
 parse_tag(Name, Loc, T0) ->
@@ -271,7 +281,8 @@ parse_ok_test() ->
                        {<<"btn_text">>,
                         {text, {13, 18}, <<"Increment">>}},
                        {<<"event">>, {text, {14, 15}, <<"incr">>}}],
-                     name => <<"counter">>}}]}}]}}
+                     name => <<"counter">>,
+                     is_visible => true}}]}}]}}
     ]}, parse(tokens_ok())).
 
 parse_unexpected_block_end_test() ->
@@ -289,6 +300,30 @@ parse_unexpected_tag_end_test() ->
 parse_invalid_directive_test() ->
     {ok, Tokens} = arizona_template_scanner:scan(~"""
     <foo :id="bar"></foo>
+    """),
+    ?assertEqual({error, {invalid_directive, {1, 6}}}, parse(Tokens)).
+
+if_directive_test() ->
+    {ok, Tokens} = arizona_template_scanner:scan(~"""
+    <.foo :if={true} />
+    <.foo />
+    """),
+    ?assertEqual({ok, [
+        {block, {1, 1}, #{
+            name => <<"foo">>,
+            attributes => [],
+            is_visible => {'if', {1, 11}, <<"true">>}
+        }},
+        {block, {2, 1}, #{
+            name => <<"foo">>,
+            attributes => [],
+            is_visible => true
+        }}
+    ]}, parse(Tokens)).
+
+invalid_if_directive_test() ->
+    {ok, Tokens} = arizona_template_scanner:scan(~"""
+    <foo :if={true} />
     """),
     ?assertEqual({error, {invalid_directive, {1, 6}}}, parse(Tokens)).
 

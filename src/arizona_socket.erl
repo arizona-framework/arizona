@@ -13,6 +13,8 @@ Components state.
 -export([get_assigns/1]).
 -export([get_changes/1]).
 -export([get_view/1]).
+-export([get_block/1]).
+-export([set_block/2]).
 -export([get_events/1]).
 -export([get_assign/2]).
 -export([get_assign/3]).
@@ -50,6 +52,7 @@ Components state.
 new(View, Assigns) ->
     #{
         view => View,
+        block => undefined,
         assigns => Assigns,
         events => [],
         changes => ordsets:new()
@@ -90,6 +93,17 @@ get_changes(#{changes := Changes}) ->
 -spec get_view(t()) -> view().
 get_view(#{view := View}) ->
     View.
+
+-spec get_block(t()) -> arizona_template_compiler:block().
+get_block(#{block := Block}) ->
+    Block.
+
+-spec set_block(Block, Socket1) -> Socket2
+    when Block :: arizona_template_compiler:block(),
+         Socket1 :: t(),
+         Socket2 :: t().
+set_block(Block, Socket) ->
+    Socket#{block => Block}.
 
 -spec get_events(t()) -> events().
 get_events(#{events := Events}) ->

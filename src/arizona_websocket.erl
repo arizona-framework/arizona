@@ -87,7 +87,7 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
         true ->
             Socket1;
         false ->
-            Block = maps:get(block, State),
+            Block = arizona_socket:get_block(Socket1),
             Assigns = arizona_socket:get_assigns(Socket1),
             ChangedVars = ordsets:to_list(Changes),
             Patch = arizona_template_renderer:render_changes(Block, ChangedVars, Assigns),
@@ -101,10 +101,12 @@ websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
          Events :: cowboy_websocket:commands(),
          State1 :: state(),
          State2 :: state().
-websocket_info(reload, Socket) ->
-    {[{text, json:encode([[~"reload", []]])}], Socket};
-websocket_info(_Info, Socket) ->
-    {[], Socket}.
+websocket_info(reload, State) ->
+    {[{text, json:encode([[~"reload", []]])}], State};
+websocket_info({put_socket, #{id := Target} = Block, Socket}, #{sockets := Sockets} = State) ->
+    {[], State#{sockets => Sockets#{Target => arizona_socket:set_block(Block, Socket)}}};
+websocket_info({remove_socket, Target}, #{sockets := Sockets} = State) ->
+    {[], State#{sockets => maps:remove(Target, Sockets)}}.
 
 -spec terminate(Reason, Req, State) -> ok
     when Reason :: term(),

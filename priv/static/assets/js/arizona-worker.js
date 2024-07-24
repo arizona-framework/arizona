@@ -111,16 +111,26 @@ function handleEvent(data) {
   }
 }
 
-function applyPatch([[, ...target], changes]) {
-  const tree = getTargetTree(target, state.tree[1]);
+function applyPatch([target, changes]) {
+  const tree = getTargetTree(target);
   changes.forEach((c) => {
     applyChanges(c, tree);
   });
   const html = zip(tree[0], tree[1]);
-  return { target: [0, ...target], html };
+  return { target, html };
 }
 
-function getTargetTree(path, tree) {
+function getTargetTree([, ...target]) {
+  return targetIsRoot(target)
+    ? state.tree
+    : getNestedTargetTree(target, state.tree[1]);
+}
+
+function targetIsRoot(target) {
+  return !target.length;
+}
+
+function getNestedTargetTree(path, tree) {
   if (path.length === 1) {
     return tree[path[0]];
   } else {
@@ -130,7 +140,10 @@ function getTargetTree(path, tree) {
 }
 
 function applyChanges([indexes, v], tree) {
-  if (indexes.length === 1) {
+  if (indexes === "block") {
+    tree[0] = v[0];
+    tree[1] = v[1];
+  } else if (indexes.length === 1) {
     tree[1][indexes[0]] = v;
   } else {
     const [i, ...rest] = indexes;
@@ -138,10 +151,13 @@ function applyChanges([indexes, v], tree) {
   }
 }
 
-function zip(staticArr, dynamicArr) {
+function zip(staticArr = [], dynamicArr = []) {
   let str = "";
   for (let i = 0; i < Math.max(staticArr.length, dynamicArr.length); i++) {
-    str += `${staticArr[i] || ""}${dynamicArr[i] || ""}`;
+    const dynamic = dynamicArr[i] ?? "";
+    str += `${staticArr[i] ?? ""}${
+      Array.isArray(dynamic) ? zip(dynamic[0], dynamic[1]) : dynamic
+    }`;
   }
   return str;
 }
