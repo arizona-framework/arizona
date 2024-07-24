@@ -132,10 +132,13 @@ function targetIsRoot(target) {
 
 function getNestedTargetTree(path, tree) {
   if (path.length === 1) {
-    return tree[path[0]];
+    // TODO: Set kind on init to check if is block.
+    return tree.length === 2
+        ? tree[1][path[0]]
+        : tree[path[0]];
   } else {
     const [i, ...rest] = path;
-    return getTargetTree(rest, tree[i]);
+    return getNestedTargetTree(rest, tree[i]);
   }
 }
 
@@ -144,7 +147,17 @@ function applyChanges([indexes, v], tree) {
     tree[0] = v[0];
     tree[1] = v[1];
   } else if (indexes.length === 1) {
-    tree[1][indexes[0]] = v;
+    switch(v[0]) {
+        case "expr":
+            tree[1][indexes[0]] = v[1];
+            break;
+        case "block":
+            tree[1][indexes[0]][0] = v[1][0];
+            tree[1][indexes[0]][1] = v[1][1];
+            break
+        default:
+            throw new Error("Invalid changes")
+    }
   } else {
     const [i, ...rest] = indexes;
     applyChanges([rest, v], tree[1][i]);

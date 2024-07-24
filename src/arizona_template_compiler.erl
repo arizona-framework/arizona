@@ -39,8 +39,7 @@
 
 -type block() :: #{
     id := changeable_id(),
-    module := module(),
-    function := atom(),
+    is_stateful := {true, {module(), atom()}} | false,
     is_visible := true | {'if', expr()},
     static := [binary()],
     changeable := #{non_neg_integer() := {expr, expr()} | {block, block()}},
@@ -89,7 +88,7 @@ compile(Mod, Fun, Macros) ->
             is_visible = true
         },
         Tree = expand_block(Mod, Fun, _IsVisible = true, _Attrs = [], State),
-        {ok, block([0], Tree, _NormAssigns = #{}, State)}
+        {ok, stateful_block([0], Tree, _NormAssigns = #{}, State)}
     catch
         % That's not the location in the module but the location
         % in the template starting from {1, 1}.
@@ -225,9 +224,12 @@ expand_block(Mod, Fun, IsVisible, Attrs, State) ->
             Tree = compile_tag(Tag, Loc, [], StatefulState),
             NormAssigns = norm_block_assigns(BlockAssigns),
             BlockState = State#state{is_visible = IsVisible},
-            [{block, block(changeable_id(State), Tree, NormAssigns, BlockState)}];
+            [{block, stateful_block(changeable_id(State), Tree, NormAssigns, BlockState)}];
         {ok, {Elems, Macros}} ->
-            concat_texts(compile_elems(Elems, stateless_state(Macros, Attrs, State)));
+            concat_texts(compile_elems(Elems, State#state{
+                macros = maps:merge(State#state.macros, Macros),
+                attributes = Attrs
+            }));
         {error, {Reason, Loc}} ->
             throw({Reason, Loc, State})
     end.
@@ -267,15 +269,21 @@ expand_is_visible({'if', Loc, ExprStr}, State) ->
             {'if', Expr}
     end.
 
-block(Id, Tree0, NormAssigns, State) ->
+stateful_block(Id, Tree, NormAssigns, State) ->
+    IsStateful = {true, {State#state.module, State#state.function}},
+    IsVisible = State#state.is_visible,
+    block(Id, Tree, NormAssigns, IsStateful, IsVisible).
+
+stateless_block(Id, Tree, NormAssigns, IsVisible) ->
+    block(Id, Tree, NormAssigns, _IsStateful = false, IsVisible).
+
+block(Id, Tree0, NormAssigns, IsStateful, IsVisible) ->
     Tree = concat_texts(Tree0),
     Changeable = normalize_changeable(filter_changeable(Tree)),
     ChangeableVars = changeable_vars(Changeable),
-    IsVisible = State#state.is_visible,
     #{
         id => Id,
-        module => State#state.module,
-        function => State#state.function,
+        is_stateful => IsStateful,
         is_visible => IsVisible,
         static => filter_static(Tree),
         changeable => norm_changeable_expr_id(Changeable),
@@ -302,20 +310,23 @@ compile_tag(Tag, Loc, T0, State0) ->
         false ->
             compile_elems(T0, State0);
         true ->
-            TagElems = compile_tag_name(Tag, Loc, T0, State0),
-            {rest, T, State} = lists:last(TagElems),
-            lists:droplast(TagElems) ++ compile_elems(T, State);
+            Attrs = get_tag_attrs(Tag, lists:reverse(State0#state.path)),
+            Compiled = do_compile_tag(Tag, Attrs, Loc, T0, State0),
+            {rest, T, State} = lists:last(Compiled),
+            lists:droplast(Compiled) ++ compile_elems(T, State);
         IsVisible ->
-            TagElems = compile_tag_name(Tag, Loc, T0, State0),
-            {rest, T, State} = lists:last(TagElems),
-            [{tag, #{
-                inner_content => lists:droplast(TagElems),
-                is_visible => IsVisible
-            }} | compile_elems(T, State)]
+            Id = changeable_id(State0),
+            Attrs = get_tag_attrs(Tag, lists:reverse(State0#state.path)),
+            BlockAssigns = block_assigns(Attrs, State0#state.macros, State0),
+            NormAssigns = norm_block_assigns(BlockAssigns),
+            Compiled = do_compile_tag(Tag, Attrs, Loc, T0, stateless_state(IsVisible, State0)),
+            {rest, T, _State} = lists:last(Compiled),
+            Tree = lists:droplast(Compiled),
+            [{block, stateless_block(Id, Tree, NormAssigns, IsVisible)}
+             | compile_elems(T, incr_index(1, State0))]
     end.
 
-compile_tag_name(#{name := Name} = Tag, Loc, T, State) ->
-    Attrs = get_tag_attrs(Tag, lists:reverse(State#state.path)),
+do_compile_tag(#{name := Name} = Tag, Attrs, Loc, T, State) ->
     [{text, <<$<, Name/binary>>} | compile_tag_attrs(Attrs, Tag, Loc, T, State)].
 
 get_tag_attrs(Tag, BlockId) ->
@@ -520,10 +531,11 @@ stateful_state(Mod, Fun, Macros, IsVisible, State) ->
         is_visible = IsVisible
     }.
 
-stateless_state(Macros, Attrs, State) ->
+stateless_state(IsVisible, State) ->
     State#state{
-        macros = maps:merge(State#state.macros, Macros),
-        attributes = Attrs
+        index = 0,
+        path = [State#state.index | State#state.path],
+        is_visible = IsVisible
     }.
 
 incr_index(N, #state{index = Index} = State) ->
@@ -808,17 +820,31 @@ render_macros_block(Macros) ->
 
 render_if_directive(Macros) ->
     maybe_parse(~"""
-    <.render_if_directive_block
+    <.render_if_directive_stateful_block
         :if={_@is_visible}
+        name={_@visible_for}
+    />
+    <.render_if_directive_stateless_block
+        :if={_@is_visible}
+        show_div={_@is_visible}
         name={_@visible_for}
     />
     """, Macros).
 
-render_if_directive_block(Macros) ->
+render_if_directive_stateful_block(Macros) ->
     maybe_parse(~"""
     <div :stateful>
-        {_@name}, can you see me?
+        {_@name}, can you see me? I'm stateful.
     </div>
+    """, Macros).
+
+render_if_directive_stateless_block(Macros) ->
+    maybe_parse(~"""
+    begin
+    <div :if={_@show_div}>
+        {_@name}, can you see me? I'm stateless.
+    </div>
+    end
     """, Macros).
 
 render_unexpected_if_directive(Macros) ->
