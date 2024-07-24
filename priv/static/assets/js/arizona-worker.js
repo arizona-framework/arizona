@@ -1,5 +1,8 @@
 "use strict";
 
+const EXPR = 0;
+const BLOCK = 1;
+
 const state = {
   connected: false,
   keepAlive: true,
@@ -140,21 +143,21 @@ function getNestedTargetTree(path, tree) {
 }
 
 function applyChanges([indexes, v], tree) {
-  if (indexes === "block") {
+  if (indexes === BLOCK) {
     tree[0] = v[0];
     tree[1] = v[1];
   } else if (indexes.length === 1) {
     switch (tree[0]) {
-      case "expr":
+      case EXPR:
         tree[1][indexes[0]][1] = v;
         break;
-      case "block": {
+      case BLOCK: {
         const targetTree = tree[1][1][indexes[0]];
         switch (targetTree[0]) {
-          case "expr":
+          case EXPR:
             targetTree[1] = v;
             break;
-          case "block":
+          case BLOCK:
             targetTree[1][0] = v[0];
             targetTree[1][1] = v[1];
             break;
@@ -184,9 +187,9 @@ function zip(staticArr = [], changeableArr = []) {
 
 function renderChangeable(changeable) {
   switch (changeable[0]) {
-    case "expr":
+    case EXPR:
       return changeable[1];
-    case "block":
+    case BLOCK:
       return zip(changeable[1][0], changeable[1][1]);
     default:
       throw new Error("Invalid changeable");

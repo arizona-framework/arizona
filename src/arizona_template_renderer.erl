@@ -15,6 +15,15 @@
 -ignore_xref([render_changes/4]).
 
 %% --------------------------------------------------------------------
+%% Macros
+%% --------------------------------------------------------------------
+
+-define(EXPR, 0).
+-define(BLOCK, 1).
+-elvis([{elvis_style, no_macros, #{allow => ['assertEqual', 'assertMatch',
+                                             'EXPR', 'BLOCK']}}]).
+
+%% --------------------------------------------------------------------
 %% Types (and their exports)
 %% --------------------------------------------------------------------
 
@@ -52,13 +61,14 @@ server_render(Block, Assigns) ->
          ChangedVars :: [atom()],
          Assigns :: assigns(),
          Changes :: [
-            [arizona_template_compiler:changeable_id() | [binary() |  [[binary()]]]]
+            [arizona_template_compiler:changeable_id() | [?EXPR | binary()]]
+            | [arizona_template_compiler:changeable_id() | [?BLOCK |  [[binary()]]]]
             | [binary() | [[binary()]]]
         ].
 render_changes(Block, ChangedVars, Assigns) ->
     case render_block_changes(Block, ChangedVars, Assigns) of
         {block, Rendered} ->
-            [Rendered];
+            [[?BLOCK, Rendered]];
         [_, Bin] = Changes when is_binary(Bin) ->
             [Changes];
         Changes ->
@@ -124,7 +134,7 @@ server_render_changeable_indexes([], _, _, _) ->
     [].
 
 server_render_changeable({expr, Expr}, Assigns, _Pid) ->
-    [~"expr", render_expr(Expr, Assigns)];
+    [?EXPR, render_expr(Expr, Assigns)];
 server_render_changeable({block, Block}, Assigns, Pid) ->
     NormAssigns = maps:get(norm_assigns, Block),
     ChangeableAssigns = changeable_assigns(Assigns, NormAssigns),
@@ -151,7 +161,7 @@ server_render_block(Block, Assigns0, Pid) ->
                 false ->
                     ok
             end,
-            [~"block", [maps:get(static, Block), Dynamic]];
+            [?BLOCK, [maps:get(static, Block), Dynamic]];
         false ->
             ok = case HasSocket of
                 {true, Socket} ->
@@ -160,7 +170,7 @@ server_render_block(Block, Assigns0, Pid) ->
                 false ->
                     ok
             end,
-            [~"block", [[], []]]
+            [?BLOCK, [[], []]]
     end.
 
 server_render_loop(Pid, Timeout, Sockets) ->
@@ -273,7 +283,7 @@ do_render_block(Block, Assigns) ->
         lists:map(fun(Index) ->
             case maps:get(Index, Changeable) of
                 {expr, Expr} ->
-                    [~"expr", render_expr(Expr, ChangeableAssigns)];
+                    [?EXPR, render_expr(Expr, ChangeableAssigns)];
                 {block, NestedBlock} ->
                     case is_block_visible(NestedBlock, ChangeableAssigns) of
                         true ->
@@ -281,9 +291,9 @@ do_render_block(Block, Assigns) ->
                             NestedAssigns = #{K => Fun(ChangeableAssigns)
                                               || K := #{function := Fun} <- NormAssigns},
                             {block, Rendered} = do_render_block(NestedBlock, NestedAssigns),
-                            [~"block", Rendered];
+                            [?BLOCK, Rendered];
                         false ->
-                            [~"block", [[], []]]
+                            [?BLOCK, [[], []]]
                     end
             end
         end, ChangeableIndexes),
@@ -336,7 +346,7 @@ client_render_test() ->
 
 server_render_test() ->
     ?assertMatch({ok, {
-        [<<"block">>, [% Static
+        [?BLOCK, [% Static
          [<<"<!DOCTYPE html=\"html\" />"
             "<html lang=\"en\">"
             "<head><meta charset=\"UTF-8\" />"
@@ -354,25 +364,25 @@ server_render_test() ->
             <<"</body></html>">>],
          % Dynamic
          [% #1
-          [<<"expr">>, <<"0">>],
+          [?EXPR, <<"0">>],
           % #2
-          [<<"block">>, [% Static
+          [?BLOCK, [% Static
            [<<"<div arizona-id=\"[0,1]\">"
                 "<span>Count:">>, <<"</span>"
                 "<button arizona-target=\"[arizona-id='[0,1]']\" type=\"button\" "
                 "onclick=\"arizona.send.bind(this)('incr')\">Increment</button>"
               "</div>">>],
            % Dynamic
-           [[<<"expr">>, <<"0">>]]]],
+           [[?EXPR, <<"0">>]]]],
           % #3
-          [<<"block">>, [% Static
+          [?BLOCK, [% Static
            [<<"<div arizona-id=\"[0,2]\">"
                 "<span>Count:">>, <<"</span>"
                 "<button arizona-target=\"[arizona-id='[0,2]']\" type=\"button\" "
                 "onclick=\"arizona.send.bind(this)('incr')\">Increment #2</button>"
               "</div>">>],
            % Dynamic
-           [[<<"expr">>, <<"88">>]]]]
+           [[?EXPR, <<"88">>]]]]
         ]]],
         #{[0] := _,
           [0, 1] := _,
