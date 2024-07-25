@@ -199,10 +199,10 @@ do_render_changes([Index | Indexes], Block, ChangedVars, Assigns) ->
     case changes_action(NestedBlock, ChangeableAssignsKeys, ChangeableAssigns) of
         render_changeable ->
             do_render_changes(Indexes, NestedBlock, ChangeableAssignsKeys, ChangeableAssigns);
-        render_block ->
-            do_render_block(NestedBlock, ChangeableAssigns);
+        rerender_block ->
+            rerender_block(NestedBlock, ChangeableAssigns);
         hide_block ->
-            do_hide_block(NestedBlock)
+            hide_block(NestedBlock)
     end.
 
 render_changeable_changes({expr, Expr}, _ChangedVars, Assigns) ->
@@ -214,10 +214,10 @@ render_block_changes(Block, AssignsKeys, Assigns) ->
     case changes_action(Block, AssignsKeys, Assigns) of
         render_changeable ->
             do_render_changeable(Block, AssignsKeys, Assigns);
-        render_block ->
-            do_render_block(Block, Assigns);
+        rerender_block ->
+            rerender_block(Block, Assigns);
         hide_block ->
-            do_hide_block(Block)
+            hide_block(Block)
     end.
 
 is_block_visible(#{is_visible := true}, _Assigns) ->
@@ -235,7 +235,7 @@ changes_action(#{is_visible := {'if', Expr}}, ChangedVars, Assigns) ->
             Vars = maps:get(vars, Expr),
             case lists:any(fun(Var) -> lists:member(Var, ChangedVars) end, Vars) of
                 true ->
-                    render_block;
+                    rerender_block;
                 false ->
                     render_changeable
             end;
@@ -268,7 +268,7 @@ render_block_changeable(Targets, Block, ChangedVars, Assigns) ->
         end
     end, Targets).
 
-do_render_block(Block, Assigns) ->
+rerender_block(Block, Assigns) ->
     ChangeableAssigns = case maps:get(is_stateful, Block) of
         {true, {Mod, _Fun}} ->
             Socket0 = arizona_socket:new(Mod, Assigns),
@@ -280,27 +280,25 @@ do_render_block(Block, Assigns) ->
     end,
     ChangeableIndexes = maps:get(changeable_indexes, Block),
     Changeable = maps:get(changeable, Block),
-    ChangeableArr =
-        lists:map(fun(Index) ->
-            case maps:get(Index, Changeable) of
-                {expr, Expr} ->
-                    [?EXPR, render_expr(Expr, ChangeableAssigns)];
-                {block, NestedBlock} ->
-                    case is_block_visible(NestedBlock, ChangeableAssigns) of
-                        true ->
-                            NormAssigns = maps:get(norm_assigns, NestedBlock),
-                            NestedAssigns = #{K => Fun(ChangeableAssigns)
-                                              || K := #{function := Fun} <- NormAssigns},
-                            {block, Rendered} = do_render_block(NestedBlock, NestedAssigns),
-                            [?BLOCK, Rendered];
-                        false ->
-                            [?BLOCK, [[], []]]
-                    end
-            end
-        end, ChangeableIndexes),
+    ChangeableArr = [rerender_changeable(maps:get(Index, Changeable), ChangeableAssigns)
+                     || Index <- ChangeableIndexes],
     {block, [maps:get(static, Block), ChangeableArr]}.
 
-do_hide_block(Block) ->
+rerender_changeable({expr, Expr}, ChangeableAssigns) ->
+    [?EXPR, render_expr(Expr, ChangeableAssigns)];
+rerender_changeable({block, NestedBlock}, ChangeableAssigns) ->
+    case is_block_visible(NestedBlock, ChangeableAssigns) of
+        true ->
+            NormAssigns = maps:get(norm_assigns, NestedBlock),
+            NestedAssigns = #{K => Fun(ChangeableAssigns)
+                              || K := #{function := Fun} <- NormAssigns},
+            {block, Rendered} = rerender_block(NestedBlock, NestedAssigns),
+            [?BLOCK, Rendered];
+        false ->
+            [?BLOCK, [[], []]]
+    end.
+
+hide_block(Block) ->
     ok = case maps:get(is_stateful, Block) of
         {true, _} ->
             BlockId = maps:get(id, Block),
