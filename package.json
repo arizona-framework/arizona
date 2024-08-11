@@ -12,11 +12,11 @@
     "ci": "npm install && npm run build && npm run prettier && npm run eslint"
   },
   "devDependencies": {
-    "@eslint/js": "9.8.0",
-    "eslint": "9.8.0",
+    "@eslint/js": "9.9.0",
+    "eslint": "9.9.0",
     "globals": "15.9.0",
     "prettier": "3.3.3",
-    "uglify-js": "3.19.1"
+    "uglify-js": "3.19.2"
   },
   "dependencies": {
     "morphdom": "2.7.4"
