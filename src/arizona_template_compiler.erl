@@ -39,8 +39,7 @@
 
 -type block() :: #{
     id := changeable_id(),
-    module := module(),
-    function := atom(),
+    is_stateful := {true, {module(), atom()}} | false,
     is_visible := true | {'if', expr()},
     static := [binary()],
     changeable := #{non_neg_integer() := {expr, expr()} | {block, block()}},
@@ -89,7 +88,7 @@ compile(Mod, Fun, Macros) ->
             is_visible = true
         },
         Tree = expand_block(Mod, Fun, _IsVisible = true, _Attrs = [], State),
-        {ok, block([0], Tree, _NormAssigns = #{}, State)}
+        {ok, stateful_block([0], Tree, _NormAssigns = #{}, State)}
     catch
         % That's not the location in the module but the location
         % in the template starting from {1, 1}.
@@ -111,8 +110,6 @@ compile_elems([{block, Loc, Block} | T], State) ->
     compile_block(Block, Loc, T, State);
 compile_elems([{tag, Loc, #{is_stateful := true}} | _T], State) ->
     throw({unexpected_stateful_tag, Loc, State});
-compile_elems([{tag, Loc, #{is_visible := {'if', _}}} | _T], State) ->
-    throw({unexpected_if_directive, Loc, State});
 compile_elems([{tag, Loc, Tag} | T], State) ->
     compile_tag(Tag, Loc, T, State);
 compile_elems([], _State) ->
@@ -218,6 +215,8 @@ block_mod_fun(Name, Loc, State) ->
 
 expand_block(Mod, Fun, IsVisible, Attrs, State) ->
     case erlang:apply(Mod, Fun, [State#state.macros]) of
+        {ok, {[{tag, Loc, #{is_stateful := true, is_visible := {'if', _, _}}}], _}} ->
+            throw({unexpected_if_directive, Loc, State});
         {ok, {[{tag, Loc, #{is_stateful := true} = Tag}], AttrsMacros}} ->
             BlockAssigns = block_assigns(Attrs, AttrsMacros, State),
             Macros = block_assigns_macros(BlockAssigns),
@@ -225,9 +224,12 @@ expand_block(Mod, Fun, IsVisible, Attrs, State) ->
             Tree = compile_tag(Tag, Loc, [], StatefulState),
             NormAssigns = norm_block_assigns(BlockAssigns),
             BlockState = State#state{is_visible = IsVisible},
-            [{block, block(changeable_id(State), Tree, NormAssigns, BlockState)}];
+            [{block, stateful_block(changeable_id(State), Tree, NormAssigns, BlockState)}];
         {ok, {Elems, Macros}} ->
-            concat_texts(compile_elems(Elems, stateless_state(Macros, Attrs, State)));
+            concat_texts(compile_elems(Elems, State#state{
+                macros = maps:merge(State#state.macros, Macros),
+                attributes = Attrs
+            }));
         {error, {Reason, Loc}} ->
             throw({Reason, Loc, State})
     end.
@@ -267,15 +269,21 @@ expand_is_visible({'if', Loc, ExprStr}, State) ->
             {'if', Expr}
     end.
 
-block(Id, Tree0, NormAssigns, State) ->
+stateful_block(Id, Tree, NormAssigns, State) ->
+    IsStateful = {true, {State#state.module, State#state.function}},
+    IsVisible = State#state.is_visible,
+    block(Id, Tree, NormAssigns, IsStateful, IsVisible).
+
+stateless_block(Id, Tree, NormAssigns, IsVisible) ->
+    block(Id, Tree, NormAssigns, _IsStateful = false, IsVisible).
+
+block(Id, Tree0, NormAssigns, IsStateful, IsVisible) ->
     Tree = concat_texts(Tree0),
     Changeable = normalize_changeable(filter_changeable(Tree)),
     ChangeableVars = changeable_vars(Changeable),
-    IsVisible = State#state.is_visible,
     #{
         id => Id,
-        module => State#state.module,
-        function => State#state.function,
+        is_stateful => IsStateful,
         is_visible => IsVisible,
         static => filter_static(Tree),
         changeable => norm_changeable_expr_id(Changeable),
@@ -297,8 +305,28 @@ group_vars(Vars) ->
         fun({_, Path}) -> Path end,
         Vars).
 
-compile_tag(#{name := Name} = Tag, Loc, T, State) ->
-    Attrs = get_tag_attrs(Tag, lists:reverse(State#state.path)),
+compile_tag(Tag, Loc, T0, State0) ->
+    case expand_is_visible(maps:get(is_visible, Tag), State0) of
+        false ->
+            compile_elems(T0, State0);
+        true ->
+            Attrs = get_tag_attrs(Tag, lists:reverse(State0#state.path)),
+            Compiled = do_compile_tag(Tag, Attrs, Loc, T0, State0),
+            {rest, T, State} = lists:last(Compiled),
+            lists:droplast(Compiled) ++ compile_elems(T, State);
+        IsVisible ->
+            Id = changeable_id(State0),
+            Attrs = get_tag_attrs(Tag, lists:reverse(State0#state.path)),
+            BlockAssigns = block_assigns(Attrs, State0#state.macros, State0),
+            NormAssigns = norm_block_assigns(BlockAssigns),
+            Compiled = do_compile_tag(Tag, Attrs, Loc, T0, stateless_state(IsVisible, State0)),
+            {rest, T, _State} = lists:last(Compiled),
+            Tree = lists:droplast(Compiled),
+            [{block, stateless_block(Id, Tree, NormAssigns, IsVisible)}
+             | compile_elems(T, incr_index(1, State0))]
+    end.
+
+do_compile_tag(#{name := Name} = Tag, Attrs, Loc, T, State) ->
     [{text, <<$<, Name/binary>>} | compile_tag_attrs(Attrs, Tag, Loc, T, State)].
 
 get_tag_attrs(Tag, BlockId) ->
@@ -344,7 +372,7 @@ compile_tag_attrs([{Name, {expr, ExprLoc, Expr}} | Attrs], Tag, Loc, T, State) -
     [{text, <<$\s, Name/binary, $=, $">>}, Elem, {text, <<$">>}
      | compile_tag_attrs(Attrs, Tag, Loc, T, incr_index(ChangeableCount, State))];
 compile_tag_attrs([], #{is_void := true}, _Loc, T, State) ->
-    [{text, <<$\s, $/, $>>>} | compile_elems(T, State)];
+    [{text, <<$\s, $/, $>>>}, {rest, T, State}];
 compile_tag_attrs([], #{is_void := false} = Tag, _Loc, T, State) ->
     InnerContent = maps:get(inner_content, Tag),
     [{text, <<$>>>} | compile_tag_inner_content(InnerContent, Tag, T, State)].
@@ -381,7 +409,7 @@ live_reload_script() ->
     ~"assets/js/arizona-live-reload.js".
 
 compile_tag_closing(#{name :=  Name}, T, State) ->
-    [{text, <<$<, $/, Name/binary, $>>>} | compile_elems(T, State)].
+    [{text, <<$<, $/, Name/binary, $>>>}, {rest, T, State}].
 
 concat_texts([{text, TxtA}, {text, TxtB} | T]) ->
     concat_texts([{text, <<TxtA/binary, TxtB/binary>>} | T]);
@@ -503,10 +531,11 @@ stateful_state(Mod, Fun, Macros, IsVisible, State) ->
         is_visible = IsVisible
     }.
 
-stateless_state(Macros, Attrs, State) ->
+stateless_state(IsVisible, State) ->
     State#state{
-        macros = maps:merge(State#state.macros, Macros),
-        attributes = Attrs
+        index = 0,
+        path = [State#state.index | State#state.path],
+        is_visible = IsVisible
     }.
 
 incr_index(N, #state{index = Index} = State) ->
@@ -522,11 +551,11 @@ incr_index(N, #state{index = Index} = State) ->
 
 compile_test() ->
     ?assertMatch({ok,
-         #{function := render, id := [0], module := arizona_template_compiler,
+         #{id := [0], is_stateful := {true, {arizona_template_compiler, render}},
            changeable :=
             #{0 :=
                {block,
-                #{function := render, id := [0, 0], module := arizona_template_compiler,
+                #{id := [0, 0], is_stateful := {true, {arizona_template_compiler, render}},
                   changeable :=
                    #{0 :=
                       {expr, #{function := _, id := [0], vars := [count]}}},
@@ -542,7 +571,7 @@ compile_test() ->
                    #{count := #{function := _, vars := [count]}}}},
               1 :=
                {block,
-                #{function := render, id := [0, 1], module := arizona_template_compiler,
+                #{id := [0, 1], is_stateful := {true, {arizona_template_compiler, render}},
                   changeable :=
                    #{0 :=
                       {expr, #{function := _, id := [0], vars := [count]}}},
@@ -610,16 +639,14 @@ norm_assigns_test() ->
 macros_test() ->
     ?assertMatch(
         {ok,
-         #{function := render_macros,
-           id := [0],
-           module := arizona_template_compiler,
+         #{id := [0],
+           is_stateful := {true, {arizona_template_compiler, render_macros}},
            static := [<<"foo">>],
            changeable :=
             #{0 :=
                {block,
-                #{function := render_macros,
-                  id := [0, 0],
-                  module := arizona_template_compiler,
+                #{id := [0, 0],
+                  is_stateful := {true, {arizona_template_compiler, render_macros}},
                   static := [<<"<div arizona-id=\"[0,0]\">foobaz">>,
                              <<"</div>">>],
                   changeable :=
@@ -639,45 +666,50 @@ macros_test() ->
 if_directive_test() ->
     ?assertMatch(
         {ok,
-         #{function := render_if_directive,
-           id := [0],
-           module := arizona_template_compiler, static := [],
-           is_visible := true,
+         #{id := [0], static := [<<"begin">>, <<"end">>], is_visible := true,
+           is_stateful := {true, {arizona_template_compiler, render_if_directive}},
            changeable :=
             #{0 :=
                {block,
-                #{function := render_if_directive,
-                  id := [0, 0],
-                  module := arizona_template_compiler,
+                #{id := [0, 0],
                   static :=
                    [<<"<div arizona-id=\"[0,0]\">">>,
-                    <<", can you see me?</div>">>],
-                  is_visible :=
-                   {'if',
-                    #{function := _,
-                      id := [0, 0],
-                      vars := [is_visible]}},
-                  changeable :=
-                   #{0 :=
-                      {expr,
-                       #{function := _,
-                         id := [0],
-                         vars := [name]}}},
+                    <<", can you see me? I'm stateful.</div>">>],
+                  is_visible := {'if', #{function := _, id := [0, 0], vars := [is_visible]}},
+                  is_stateful := {true, {arizona_template_compiler, render_if_directive}},
+                  changeable := #{0 := {expr, #{function := _, id := [0], vars := [name]}}},
                   changeable_vars := #{name := [[0]]},
                   changeable_indexes := [0],
                   norm_assigns :=
-                   #{name :=
-                      #{function := _,
-                        vars := [visible_for]},
-                     is_visible :=
-                      #{function := _,
-                        vars := [is_visible]}},
-                  norm_assigns_vars := [{visible_for, [0, 0, 0]}, {is_visible, []}]}}},
+                   #{name := #{function := _, vars := [visible_for]},
+                     is_visible := #{function := _, vars := [is_visible]}},
+                  norm_assigns_vars :=
+                   [{visible_for, [0, 0, 0]}, {is_visible, []}]}},
+              1 :=
+               {block,
+                #{id := [0, 1],
+                  static :=
+                   [<<"<div>">>, <<", can you see me? I'm stateless.</div>">>],
+                  is_visible :=
+                   {'if', #{function := _, id := [0, 1], vars := [is_visible]}},
+                  is_stateful := false,
+                  changeable :=
+                   #{0 := {expr, #{function := _, id := [0], vars := [visible_for]}}},
+                  changeable_vars := #{visible_for := [[0]]},
+                  changeable_indexes := [0],
+                  norm_assigns :=
+                   #{is_visible := #{function := _, vars := [is_visible]}},
+                  norm_assigns_vars := [{is_visible, []}]}}},
            changeable_vars :=
-            #{is_visible := [[0]], visible_for := [[0, 0]]},
-           changeable_indexes := [0],
+            #{is_visible := [[0], [1]], visible_for := [[0, 0]]},
+           changeable_indexes := [0, 1],
            norm_assigns := #{}, norm_assigns_vars := []}}
         , compile(?MODULE, render_if_directive, #{})).
+
+unexpected_if_directive_test() ->
+    ?assertEqual({error, {unexpected_if_directive,
+                          {?MODULE, render_unexpected_if_directive, {1, 1}}}},
+                 compile(?MODULE, render_unexpected_if_directive, #{})).
 
 %% --------------------------------------------------------------------
 %% Test support
@@ -786,17 +818,41 @@ render_macros_block(Macros) ->
 
 render_if_directive(Macros) ->
     maybe_parse(~"""
-    <.render_if_directive_block
+    <.render_if_directive_stateful_block
         :if={_@is_visible}
+        name={_@visible_for}
+    />
+    <.render_if_directive_stateless_block
+        :if={_@is_visible}
+        show_div={_@is_visible}
         name={_@visible_for}
     />
     """, Macros).
 
-render_if_directive_block(Macros) ->
+render_if_directive_stateful_block(Macros) ->
     maybe_parse(~"""
     <div :stateful>
-        {_@name}, can you see me?
+        {_@name}, can you see me? I'm stateful.
     </div>
+    """, Macros).
+
+render_if_directive_stateless_block(Macros) ->
+    maybe_parse(~"""
+    begin
+    <div :if={_@show_div}>
+        {_@name}, can you see me? I'm stateless.
+    </div>
+    end
+    """, Macros).
+
+render_unexpected_if_directive(Macros) ->
+    maybe_parse(~"""
+    <.render_unexpected_if_directive_block visible={_@invalid} />
+    """, Macros).
+
+render_unexpected_if_directive_block(Macros) ->
+    maybe_parse(~"""
+    <div :if={_@visible} :stateful></div>
     """, Macros).
 
 % The below is what the arizona_live_view:parse_str should return.

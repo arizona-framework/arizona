@@ -36,7 +36,8 @@
     is_stateful := boolean(),
     is_void := boolean(),
     attributes := [attribute()],
-    inner_content := [element()]
+    inner_content := [element()],
+    is_visible := boolean() | condition()
 }.
 -export_type([tag/0]).
 
@@ -160,6 +161,9 @@ parse_tag(Name, Loc, T0) ->
             throw({Reason, Loc})
     end.
 
+collect_tag_props([{attr_name, _, <<":if">>},
+                   {attr_value, Loc, {expr, Expr}} | T], Props) ->
+    collect_tag_props(T, [{is_visible, {'if', Loc, Expr}} | Props]);
 collect_tag_props([{attr_name, _, <<":on", Action/binary>>},
                    {attr_value, Loc, {text, Event}} | T], Props) ->
     collect_tag_props(T, [{attribute, {<<"on", Action/binary>>,
@@ -216,7 +220,8 @@ normalize_tag_props(Props) ->
         is_stateful => proplists:get_bool(is_stateful, Props),
         is_void => proplists:get_bool(is_void, Props),
         attributes => lists:reverse(proplists:get_all_values(attribute, Props)),
-        inner_content => lists:reverse(proplists:get_all_values(inner_content, Props))
+        inner_content => lists:reverse(proplists:get_all_values(inner_content, Props)),
+        is_visible => proplists:get_value(is_visible, Props, true)
      }.
 
 %% --------------------------------------------------------------------
@@ -232,28 +237,28 @@ parse_ok_test() ->
          {1, 1},
          #{attributes => [{<<"html">>, {text, {1, 11}, <<"html">>}}],
            name => <<"!DOCTYPE">>, is_stateful => false,
-           is_void => true, inner_content => []}},
+           is_void => true, is_visible => true, inner_content => []}},
         {tag,
          {2, 1},
          #{attributes => [{<<"lang">>, {text, {2, 12}, <<"en">>}}],
            name => <<"html">>, is_stateful => false,
-           is_void => false,
+           is_void => false, is_visible => true,
            inner_content =>
             [{tag,
               {3, 1},
               #{attributes => [], name => <<"head">>,
-                is_stateful => false, is_void => false,
+                is_stateful => false, is_void => false, is_visible => true,
                 inner_content =>
                  [{tag,
                    {4, 5},
                    #{attributes =>
                       [{<<"charset">>, {text, {4, 19}, <<"UTF-8">>}}],
                      name => <<"meta">>, is_stateful => false,
-                     is_void => true, inner_content => []}},
+                     is_void => true, is_visible => true, inner_content => []}},
                   {tag,
                    {5, 5},
                    #{attributes => [], name => <<"title">>,
-                     is_stateful => false, is_void => false,
+                     is_stateful => false, is_void => false, is_visible => true,
                      inner_content =>
                       [{expr, {5, 12}, <<"_@title">>}]}},
                   {tag,
@@ -262,16 +267,16 @@ parse_ok_test() ->
                       [{<<"src">>,
                         {text, {6, 17}, <<"assets/js/main.js">>}}],
                      name => <<"script">>, is_stateful => false,
-                     is_void => false, inner_content => []}}]}},
+                     is_void => false, is_visible => true, inner_content => []}}]}},
              {tag,
               {8, 1},
               #{attributes => [], name => <<"body">>,
-                is_stateful => false, is_void => false,
+                is_stateful => false, is_void => false, is_visible => true,
                 inner_content =>
                  [{tag,
                    {10, 5},
                    #{attributes => [], name => <<"h1">>,
-                     is_stateful => false, is_void => false,
+                     is_stateful => false, is_void => false, is_visible => true,
                      inner_content =>
                       [{text, {10, 9}, <<"Arizona Counter">>}]}},
                   {block,
@@ -307,6 +312,7 @@ if_directive_test() ->
     {ok, Tokens} = arizona_template_scanner:scan(~"""
     <.foo :if={true} />
     <.foo />
+    <foo :if={_@visible} />
     """),
     ?assertEqual({ok, [
         {block, {1, 1}, #{
@@ -318,14 +324,16 @@ if_directive_test() ->
             name => <<"foo">>,
             attributes => [],
             is_visible => true
+        }},
+        {tag, {3, 1}, #{
+            name => <<"foo">>,
+            attributes => [],
+            is_visible => {'if', {3, 10}, <<"_@visible">>},
+            is_stateful => false,
+            is_void => true,
+            inner_content => []
         }}
     ]}, parse(Tokens)).
-
-invalid_if_directive_test() ->
-    {ok, Tokens} = arizona_template_scanner:scan(~"""
-    <foo :if={true} />
-    """),
-    ?assertEqual({error, {invalid_directive, {1, 6}}}, parse(Tokens)).
 
 %% --------------------------------------------------------------------
 %% Test support

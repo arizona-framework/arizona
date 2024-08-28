@@ -1,5 +1,8 @@
 "use strict";
 
+const EXPR = 0;
+const BLOCK = 1;
+
 const state = {
   connected: false,
   keepAlive: true,
@@ -116,14 +119,14 @@ function applyPatch([target, changes]) {
   changes.forEach((c) => {
     applyChanges(c, tree);
   });
-  const html = zip(tree[0], tree[1]);
+  const html = zip(tree[1][0], tree[1][1]);
   return { target, html };
 }
 
 function getTargetTree([, ...target]) {
   return targetIsRoot(target)
     ? state.tree
-    : getNestedTargetTree(target, state.tree[1]);
+    : getNestedTargetTree(target, state.tree[1][1]);
 }
 
 function targetIsRoot(target) {
@@ -135,31 +138,62 @@ function getNestedTargetTree(path, tree) {
     return tree[path[0]];
   } else {
     const [i, ...rest] = path;
-    return getTargetTree(rest, tree[i]);
+    return getNestedTargetTree(rest, tree[i][1][1]);
   }
 }
 
 function applyChanges([indexes, v], tree) {
-  if (indexes === "block") {
+  if (indexes === BLOCK) {
     tree[0] = v[0];
     tree[1] = v[1];
   } else if (indexes.length === 1) {
-    tree[1][indexes[0]] = v;
+    switch (tree[0]) {
+      case EXPR:
+        tree[1][indexes[0]][1] = v;
+        break;
+      case BLOCK: {
+        const targetTree = tree[1][1][indexes[0]];
+        switch (targetTree[0]) {
+          case EXPR:
+            targetTree[1] = v;
+            break;
+          case BLOCK:
+            targetTree[1][0] = v[0];
+            targetTree[1][1] = v[1];
+            break;
+          default:
+            throw new Error("Invalid changes");
+        }
+        break;
+      }
+      default:
+        throw new Error("Invalid changes");
+    }
   } else {
     const [i, ...rest] = indexes;
-    applyChanges([rest, v], tree[1][i]);
+    applyChanges([rest, v], tree[i]);
   }
 }
 
-function zip(staticArr = [], dynamicArr = []) {
+function zip(staticArr = [], changeableArr = []) {
   let str = "";
-  for (let i = 0; i < Math.max(staticArr.length, dynamicArr.length); i++) {
-    const dynamic = dynamicArr[i] ?? "";
+  for (let i = 0; i < Math.max(staticArr.length, changeableArr.length); i++) {
     str += `${staticArr[i] ?? ""}${
-      Array.isArray(dynamic) ? zip(dynamic[0], dynamic[1]) : dynamic
+      Array.isArray(changeableArr[i]) ? renderChangeable(changeableArr[i]) : ""
     }`;
   }
   return str;
+}
+
+function renderChangeable(changeable) {
+  switch (changeable[0]) {
+    case EXPR:
+      return changeable[1];
+    case BLOCK:
+      return zip(changeable[1][0], changeable[1][1]);
+    default:
+      throw new Error("Invalid changeable");
+  }
 }
 
 function sendMsgToClient(event, payload) {
