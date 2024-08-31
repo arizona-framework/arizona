@@ -16,7 +16,7 @@
     "eslint": "9.9.1",
     "globals": "15.9.0",
     "prettier": "3.3.3",
-    "uglify-js": "3.19.2"
+    "uglify-js": "3.19.3"
   },
   "dependencies": {
     "morphdom": "2.7.4"
