@@ -42,6 +42,6 @@ jobs:
           config_file: .yamllint.yml
 
       - name: actionlint
-        uses: reviewdog/action-actionlint@05c9d7bef25a46caf572df3497afa7082fc111df # v1.55.0
+        uses: reviewdog/action-actionlint@15a7a477ab5ab768a41c39b2c53970bf151c73f3 # v1.56.0
         env:
           SHELLCHECK_OPTS: -o all
