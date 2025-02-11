@@ -13,14 +13,19 @@
 %% Behaviour (application) callbacks
 %% --------------------------------------------------------------------
 
--spec start(StartType, StartArgs) -> supervisor:startlink_ret()
-    when StartType :: application:start_type(),
-         StartArgs :: term().
+-spec start(StartType, StartArgs) -> StartRet when
+    StartType :: application:start_type(),
+    StartArgs :: term(),
+    StartRet :: {ok, pid()} | {error, term()}.
 start(_StartType, _StartArgs) ->
-    arizona_server:start(),
-    arizona_sup:start_link().
+    case arizona_sup:start_link() of
+        {ok, Pid} ->
+            {ok, Pid};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
--spec stop(State) -> ok
-    when State :: term().
+-spec stop(State) -> ok when
+    State :: term().
 stop(_State) ->
     ok.
