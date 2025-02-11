@@ -26,21 +26,15 @@ start_link() ->
 %% Behaviour (supervisor) callbacks
 %% --------------------------------------------------------------------
 
--spec init(Args) -> {ok, {SupFlags, [ChildSpec]}}
-    when Args :: term(),
-         SupFlags :: supervisor:sup_flags(),
-         ChildSpec :: supervisor:child_spec().
+-spec init(Args) -> {ok, {SupFlags, [ChildSpec]}} when
+    Args :: term(),
+    SupFlags :: supervisor:sup_flags(),
+    ChildSpec :: supervisor:child_spec().
 init(_Args) ->
     SupFlags = #{
         strategy => one_for_all,
         intensity => 0,
         period => 1
     },
-    ChildSpecs = case arizona_cfg:endpoint() of
-        #{live_reload := true} ->
-            [#{id => arizona_live_reload, start =>
-              {arizona_live_reload, start_link, []}}];
-        #{} ->
-            []
-    end,
+    ChildSpecs = [],
     {ok, {SupFlags, ChildSpecs}}.
