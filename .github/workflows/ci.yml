@@ -5,6 +5,7 @@ name: CI
   push:
     branches:
       - main
+      - "feat/more-erlang-less-html"
   pull_request:
     branches:
       - "*"
