@@ -150,10 +150,28 @@ render_view(ParentView0, Socket0, Mod, Assigns) ->
 
 render_dynamic([], View, Socket) ->
     {View, Socket};
+render_dynamic([Callback | T], View0, Socket0) when is_function(Callback, 2) ->
+    Value = erlang:apply(Callback, [View0, Socket0]),
+    {View, Socket} = put_rendered(Value, View0, Socket0),
+    render_dynamic(T, View, Socket);
 render_dynamic([Value | T], View0, Socket0) ->
     {View, Socket} = put_rendered(Value, View0, Socket0),
     render_dynamic(T, View, Socket).
 
+put_rendered({RenderedView, Socket}, View0, _Socket) ->
+    case arizona_view:equals(View0, RenderedView) of
+        true ->
+            {RenderedView, Socket};
+        false ->
+            case arizona_view:rendered(RenderedView) of
+                [Rendered] ->
+                    View = arizona_view:put_rendered(Rendered, View0),
+                    {View, Socket};
+                Rendered ->
+                    View = arizona_view:put_rendered(Rendered, View0),
+                    {View, Socket}
+            end
+    end;
 put_rendered(Value, View0, Socket) ->
     View = arizona_view:put_rendered(Value, View0),
     {View, Socket}.
