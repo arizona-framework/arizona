@@ -1,4 +1,4 @@
--module(arizona_tpl_scanner_SUITE).
+-module(arizona_scanner_SUITE).
 -behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).
@@ -55,7 +55,7 @@ scan(Config) when is_list(Config) ->
         {erlang, {71, 12}, ~"Foo = foo, case Foo of foo -> {foo, expr7}; _ -> expr7 end"},
         {comment, {72, 5}, ~"end"}
     ],
-    Got = arizona_tpl_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
+    Got = arizona_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
     {%   start  }
     Text1
     {{{{expr1}}}}
@@ -75,21 +75,21 @@ scan(Config) when is_list(Config) ->
 
 scan_html(Config) when is_list(Config) ->
     Expect = [{html, {1, 1}, ~"Text1"}],
-    Got = arizona_tpl_scanner:scan(#{}, ~"""
+    Got = arizona_scanner:scan(#{}, ~"""
     Text1
     """),
     ?assertEqual(Expect, Got).
 
 scan_erlang(Config) when is_list(Config) ->
     Expect = [{erlang, {1, 1}, ~"expr1"}],
-    Got = arizona_tpl_scanner:scan(#{}, ~"""
+    Got = arizona_scanner:scan(#{}, ~"""
     {expr1}
     """),
     ?assertEqual(Expect, Got).
 
 scan_comment(Config) when is_list(Config) ->
     Expect = [{comment, {1, 1}, ~"comment"}],
-    Got = arizona_tpl_scanner:scan(#{}, ~"""
+    Got = arizona_scanner:scan(#{}, ~"""
     {% comment }
     """),
     ?assertEqual(Expect, Got).
@@ -100,7 +100,7 @@ scan_start_html_end_html(Config) when is_list(Config) ->
         {erlang, {105, 10}, ~"expr1"},
         {html, {105, 17}, ~"Text3\nText4"}
     ],
-    Got = arizona_tpl_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
+    Got = arizona_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
     Text1
     Text2{expr1}Text3
     Text4
@@ -114,7 +114,7 @@ scan_start_html_end_erlang(Config) when is_list(Config) ->
         {html, {119, 17}, ~"Text3\nText4"},
         {erlang, {121, 5}, ~"expr2"}
     ],
-    Got = arizona_tpl_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
+    Got = arizona_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
     Text1
     Text2{expr1}Text3
     Text4
@@ -129,7 +129,7 @@ scan_start_erlang_end_html(Config) when is_list(Config) ->
         {erlang, {135, 10}, ~"expr2"},
         {html, {135, 17}, ~"Text3\nText4"}
     ],
-    Got = arizona_tpl_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
+    Got = arizona_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
     {expr1}
     Text1
     Text2{expr2}Text3
@@ -145,7 +145,7 @@ scan_start_erlang_end_erlang(Config) when is_list(Config) ->
         {html, {151, 17}, ~"Text3\nText4"},
         {erlang, {153, 5}, ~"expr3"}
     ],
-    Got = arizona_tpl_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
+    Got = arizona_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
     {expr1}
     Text1
     Text2{expr2}Text3
@@ -160,7 +160,7 @@ scan_new_line_cr(Config) when is_list(Config) ->
         {erlang, {2, 1}, ~"[2,\r3]"},
         {html, {4, 1}, ~"4"}
     ],
-    Got = arizona_tpl_scanner:scan(#{}, ~"1\r{[2,\r3]}\r4"),
+    Got = arizona_scanner:scan(#{}, ~"1\r{[2,\r3]}\r4"),
     ?assertEqual(Expect, Got).
 
 scan_new_line_crlf(Config) when is_list(Config) ->
@@ -169,13 +169,13 @@ scan_new_line_crlf(Config) when is_list(Config) ->
         {erlang, {2, 1}, ~"[2,\r\n3]"},
         {html, {4, 1}, ~"4"}
     ],
-    Got = arizona_tpl_scanner:scan(#{}, ~"1\r\n{[2,\r\n3]}\r\n4"),
+    Got = arizona_scanner:scan(#{}, ~"1\r\n{[2,\r\n3]}\r\n4"),
     ?assertEqual(Expect, Got).
 
 scan_error_unexpected_expr_end(Config) when is_list(Config) ->
     Error = {unexpected_expr_end, {1, 6}},
-    ?assertError(Error, arizona_tpl_scanner:scan(#{}, ~"{error")).
+    ?assertError(Error, arizona_scanner:scan(#{}, ~"{error")).
 
 scan_error_badexpr(Config) when is_list(Config) ->
     Error = {badexpr, {1, 1}, ~"[error"},
-    ?assertError(Error, arizona_tpl_scanner:scan(#{}, ~"{[error}")).
+    ?assertError(Error, arizona_scanner:scan(#{}, ~"{[error}")).

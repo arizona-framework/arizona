@@ -53,8 +53,8 @@ put_rendered(Value, View0, Socket) ->
     {View, Socket}.
 
 parse_template(Bindings, Template) ->
-    Tokens = arizona_tpl_scanner:scan(#{}, Template),
-    {StaticAst, DynamicAst} = arizona_tpl_parser:parse(Tokens),
+    Tokens = arizona_scanner:scan(#{}, Template),
+    {StaticAst, DynamicAst} = arizona_parser:parse(Tokens),
     Static = eval_static_ast(StaticAst),
     Dynamic = eval_dynamic_ast(Bindings, DynamicAst),
     {Static, Dynamic}.
