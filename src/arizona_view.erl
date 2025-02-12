@@ -4,6 +4,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([new/2]).
 -export([new/4]).
 -export([get_assign/2]).
 -export([rendered/1]).
@@ -13,7 +14,30 @@
 
 %
 
+-ignore_xref([new/2]).
 -ignore_xref([new/4]).
+
+%% --------------------------------------------------------------------
+%% Callback support function exports
+%% --------------------------------------------------------------------
+
+-export([mount/3]).
+-export([render/3]).
+
+%% --------------------------------------------------------------------
+%% Callback definitions
+%% --------------------------------------------------------------------
+
+-callback mount(Assigns, Socket) -> {ok, View} | ignore when
+    Assigns :: assigns(),
+    Socket :: arizona_socket:socket(),
+    View :: view().
+
+-callback render(View0, Socket0) -> {View1, Socket1} when
+    View0 :: view(),
+    Socket0 :: arizona_socket:socket(),
+    View1 :: view(),
+    Socket1 :: arizona_socket:socket().
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -49,6 +73,13 @@
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
+
+-spec new(Mod, Assigns) -> View when
+    Mod :: module(),
+    Assigns :: assigns(),
+    View :: view().
+new(Mod, Assigns) ->
+    new(Mod, Assigns, #{}, []).
 
 -spec new(Mod, Assigns, ChangedAssigns, Rendered) -> View when
     Mod :: module(),
@@ -88,7 +119,7 @@ set_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
     Rendered :: rendered_value(),
     View0 :: view(),
     View1 :: view().
-put_rendered(Rendered, #view{} = View) when is_binary(Rendered) ->
+put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendered) ->
     View#view{rendered = [Rendered | View#view.rendered]}.
 
 -spec merge_changed_assigns(View0) -> View1 when
@@ -96,3 +127,24 @@ put_rendered(Rendered, #view{} = View) when is_binary(Rendered) ->
     View1 :: view().
 merge_changed_assigns(View) ->
     View#view{assigns = maps:merge(View#view.assigns, View#view.changed_assigns)}.
+
+%% --------------------------------------------------------------------
+%% Callback support function definitions
+%% --------------------------------------------------------------------
+
+-spec mount(Mod, Assigns, Socket) -> {ok, View} | ignore when
+    Mod :: module(),
+    Assigns :: assigns(),
+    Socket :: arizona_socket:socket(),
+    View :: view().
+mount(Mod, Assigns, Socket) when is_atom(Mod), is_map(Assigns) ->
+    erlang:apply(Mod, mount, [Assigns, Socket]).
+
+-spec render(Mod, View0, Socket0) -> {View1, Socket1} when
+    Mod :: module(),
+    View0 :: view(),
+    Socket0 :: arizona_socket:socket(),
+    View1 :: view(),
+    Socket1 :: arizona_socket:socket().
+render(Mod, View, Socket) when is_atom(Mod) ->
+    erlang:apply(Mod, render, [View, Socket]).
