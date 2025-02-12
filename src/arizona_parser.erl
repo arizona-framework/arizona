@@ -1,4 +1,4 @@
--module(arizona_tpl_parser).
+-module(arizona_parser).
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -20,9 +20,9 @@ Parses scanned template tokens.
 ## Examples
 
 ```
-> Tokens = arizona_tpl_scanner:scan(#{}, ~"foo{bar}").
+> Tokens = arizona_scanner:scan(#{}, ~"foo{bar}").
 [{html,{1,1},<<"foo">>},{erlang,{1,4},<<"bar">>}]
-> arizona_tpl_parser:parse(Tokens).
+> arizona_parser:parse(Tokens).
 {[{bin,1,[{bin_element,1,{string,1,"foo"},default,[utf8]}]}],[{atom,1,bar}]}
 ```
 
@@ -33,7 +33,7 @@ binaries and the Dynamic is an AST list of Erlang terms.
 """.
 -spec parse(Tokens) -> {Static, Dynamic} when
     Tokens :: [Token],
-    Token :: arizona_tpl_scanner:token(),
+    Token :: arizona_scanner:token(),
     Static :: [Ast],
     Dynamic :: [Ast],
     Ast :: tuple().

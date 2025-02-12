@@ -1,4 +1,4 @@
--module(arizona_tpl_parser_SUITE).
+-module(arizona_parser_SUITE).
 -behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).
@@ -35,8 +35,8 @@ parse(Config) when is_list(Config) ->
             {cons, 1, {atom, 1, bar}, {nil, 1}}
         ]
     },
-    Tokens = arizona_tpl_scanner:scan(#{}, ~"""
+    Tokens = arizona_scanner:scan(#{}, ~"""
     foo{foo}{{bar}}{% drop this }bar{[bar]}qu"o"t\"ed
     """),
-    Got = arizona_tpl_parser:parse(Tokens),
+    Got = arizona_parser:parse(Tokens),
     ?assertEqual(Expect, Got).
