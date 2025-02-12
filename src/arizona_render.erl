@@ -5,10 +5,23 @@
 %% --------------------------------------------------------------------
 
 -export([template/3]).
+-export([view/2]).
 
 %
 
 -ignore_xref([template/3]).
+-ignore_xref([view/2]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
+
+-type callback() :: fun(
+    (View0 :: arizona_view:view(), Socket0 :: arizona_socket:socket()) -> {
+        View1 :: arizona_view:view(), Socket1 :: arizona_socket:socket()
+    }
+).
+-export_type([callback/0]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
@@ -67,6 +80,48 @@ template(View, Socket, Template) when is_binary(Template) ->
     {Static, Dynamic} = parse_template(Bindings, Template),
     template(View, Socket, {Static, Dynamic}).
 
+-doc ~"""
+Renders a view template.
+
+Call it when rendering an `t:arizona_view:view/0` inside a top level template.
+
+## Examples
+
+```
+> ParentAssigns = #{id => ~"app", count => 0}.
+> Socket = arizona_socket:new(#{}).
+> {ok, ParentView} = arizona_view:mount(arizona_example_template, ParentAssigns, Socket),
+> Callback = arizona_render:view(arizona_example_counter, #{
+      id => ~"counter",
+      count => arizona_view:get_assign(count, ParentView)
+  }).
+> erlang:apply(Callback, [ParentView, Socket]).
+{{view,arizona_example_template,
+       #{count => 0,id => <<"app">>},
+       #{},
+       [[template,
+         [<<"<div id=\"">>,<<"\">">>,<<"</div>">>],
+         [<<"counter">>,<<"0">>]]]},
+ {socket,#{<<"counter">> =>
+               {view,arizona_example_counter,
+                     #{count => 0,id => <<"counter">>},
+                     #{},[]}}}}
+```
+
+## Returns
+
+It returns a `t:callback/0` function that receives the parent view that is
+calling it and the updated socket.
+""".
+-spec view(Mod, Assigns) -> Callback when
+    Mod :: module(),
+    Assigns :: arizona_view:assigns(),
+    Callback :: callback().
+view(Mod, Assigns) when is_atom(Mod), is_map(Assigns) ->
+    fun(ParentView, Socket) ->
+        render_view(ParentView, Socket, Mod, Assigns)
+    end.
+
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
@@ -79,6 +134,19 @@ render_template(View0, Socket0, Static, Dynamic0) ->
     View = arizona_view:merge_changed_assigns(View2),
     Socket = arizona_socket:put_view(View, Socket1),
     {View, Socket}.
+
+render_view(ParentView0, Socket0, Mod, Assigns) ->
+    case arizona_view:mount(Mod, Assigns, Socket0) of
+        {ok, View0} ->
+            {View1, Socket1} = arizona_view:render(Mod, View0, Socket0),
+            Rendered = arizona_view:rendered(View1),
+            ParentView = arizona_view:put_rendered(Rendered, ParentView0),
+            View = arizona_view:set_rendered([], View1),
+            Socket = arizona_socket:put_view(View, Socket1),
+            {ParentView, Socket};
+        ignore ->
+            {ParentView0, Socket0}
+    end.
 
 render_dynamic([], View, Socket) ->
     {View, Socket};

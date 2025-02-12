@@ -13,7 +13,9 @@ all() ->
 groups() ->
     [
         {render, [parallel], [
-            render_template
+            render_template,
+            render_view,
+            ignore_view
         ]}
     ].
 
@@ -46,4 +48,38 @@ render_template(Config) when is_list(Config) ->
       {arizona_view:get_assign(bar, View)}{~"baz"}
     </div>
     """),
+    ?assertEqual(Expect, Got).
+
+render_view(Config) when is_list(Config) ->
+    Expect = {
+        arizona_view:new(?MODULE, #{}, #{}, [
+            [
+                template,
+                [<<"<div id=\"">>, <<"\">">>, <<"</div>">>],
+                [<<"counter">>, <<"0">>]
+            ]
+        ]),
+        arizona_socket:new(
+            #{
+                <<"counter">> => arizona_view:new(arizona_example_counter, #{
+                    id => <<"counter">>, count => 0
+                })
+            }
+        )
+    },
+    Callback = arizona_render:view(arizona_example_counter, #{id => ~"counter", count => 0}),
+    ParentView = arizona_view:new(?MODULE, #{}, #{}, []),
+    Socket = arizona_socket:new(#{}),
+    Got = erlang:apply(Callback, [ParentView, Socket]),
+    ?assertEqual(Expect, Got).
+
+ignore_view(Config) when is_list(Config) ->
+    Expect = {
+        arizona_view:new(?MODULE, #{}, #{}, []),
+        arizona_socket:new(#{})
+    },
+    Callback = arizona_render:view(arizona_example_ignore, #{}),
+    ParentView = arizona_view:new(?MODULE, #{}, #{}, []),
+    Socket = arizona_socket:new(#{}),
+    Got = erlang:apply(Callback, [ParentView, Socket]),
     ?assertEqual(Expect, Got).

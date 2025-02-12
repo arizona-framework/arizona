@@ -4,6 +4,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([new/2]).
 -export([new/4]).
 -export([get_assign/2]).
 -export([rendered/1]).
@@ -13,6 +14,7 @@
 
 %
 
+-ignore_xref([new/2]).
 -ignore_xref([new/4]).
 
 %% --------------------------------------------------------------------
@@ -71,6 +73,13 @@
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
+
+-spec new(Mod, Assigns) -> View when
+    Mod :: module(),
+    Assigns :: assigns(),
+    View :: view().
+new(Mod, Assigns) ->
+    new(Mod, Assigns, #{}, []).
 
 -spec new(Mod, Assigns, ChangedAssigns, Rendered) -> View when
     Mod :: module(),
