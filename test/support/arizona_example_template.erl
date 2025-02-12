@@ -9,7 +9,7 @@ mount(Assigns, _Socket) ->
     {ok, View}.
 
 render(View, Socket) ->
-    arizona_render:template(View, Socket, ~""""
+    arizona_render:view_template(View, Socket, ~""""
     <html>
         <head></head>
         <body id="{arizona_view:get_assign(id, View)}">

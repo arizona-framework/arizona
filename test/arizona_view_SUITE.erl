@@ -37,43 +37,66 @@ mount_ignore(Config) when is_list(Config) ->
 
 render(Config) when is_list(Config) ->
     Expect = {
-        arizona_view:new(arizona_example_template, #{count => 0, id => <<"app">>}, #{}, [
-            template,
-            [
-                <<"<html>\n    <head></head>\n    <body id=\"">>,
-                <<"\">">>,
-                <<"</body>\n</html>">>
-            ],
-            [
-                <<"app">>,
+        arizona_view:new(
+            arizona_example_template, #{count => 0, id => ~"app"}, #{}, [
+                template,
                 [
-                    template,
-                    [<<"<div id=\"">>, <<"\">">>, <<"</div>">>],
-                    [<<"counter">>, <<"0">>]
+                    ~"<html>\n    <head></head>\n    <body id=\"",
+                    ~"\">",
+                    ~"</body>\n</html>"
+                ],
+                [
+                    ~"app",
+                    [
+                        template,
+                        [~"<div id=\"", ~"\">", ~"", ~"</div>"],
+                        [
+                            ~"counter",
+                            ~"0",
+                            [
+                                template,
+                                [~"<button>", ~"</button>"],
+                                [~"Increment"]
+                            ]
+                        ]
+                    ]
                 ]
             ]
-        ]),
+        ),
         arizona_socket:new(#{
-            <<"app">> => arizona_view:new(
-                arizona_example_template, #{count => 0, id => <<"app">>}, #{}, [
+            ~"app" => arizona_view:new(
+                arizona_example_template, #{count => 0, id => ~"app"}, #{}, [
                     template,
                     [
-                        <<"<html>\n    <head></head>\n    <body id=\"">>,
-                        <<"\">">>,
-                        <<"</body>\n</html>">>
+                        ~"<html>\n    <head></head>\n    <body id=\"",
+                        ~"\">",
+                        ~"</body>\n</html>"
                     ],
                     [
-                        <<"app">>,
+                        ~"app",
                         [
                             template,
-                            [<<"<div id=\"">>, <<"\">">>, <<"</div>">>],
-                            [<<"counter">>, <<"0">>]
+                            [
+                                ~"<div id=\"",
+                                ~"\">",
+                                ~"",
+                                ~"</div>"
+                            ],
+                            [
+                                ~"counter",
+                                ~"0",
+                                [
+                                    template,
+                                    [~"<button>", ~"</button>"],
+                                    [~"Increment"]
+                                ]
+                            ]
                         ]
                     ]
                 ]
             ),
-            <<"counter">> => arizona_view:new(
-                arizona_example_counter, #{count => 0, id => <<"counter">>}, #{}, []
+            ~"counter" => arizona_view:new(
+                arizona_example_counter, #{count => 0, id => ~"counter"}, #{}, []
             )
         })
     },

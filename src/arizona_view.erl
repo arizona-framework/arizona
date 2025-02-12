@@ -44,7 +44,7 @@
 %% --------------------------------------------------------------------
 
 -record(view, {
-    module :: module(),
+    module :: undefined | module(),
     assigns :: assigns(),
     changed_assigns :: assigns(),
     rendered :: rendered()
@@ -75,14 +75,14 @@
 %% --------------------------------------------------------------------
 
 -spec new(Mod, Assigns) -> View when
-    Mod :: module(),
+    Mod :: undefined | module(),
     Assigns :: assigns(),
     View :: view().
 new(Mod, Assigns) ->
     new(Mod, Assigns, #{}, []).
 
 -spec new(Mod, Assigns, ChangedAssigns, Rendered) -> View when
-    Mod :: module(),
+    Mod :: undefined | module(),
     Assigns :: assigns(),
     ChangedAssigns :: assigns(),
     Rendered :: rendered(),
@@ -137,7 +137,7 @@ merge_changed_assigns(View) ->
     Assigns :: assigns(),
     Socket :: arizona_socket:socket(),
     View :: view().
-mount(Mod, Assigns, Socket) when is_atom(Mod), is_map(Assigns) ->
+mount(Mod, Assigns, Socket) when is_atom(Mod), Mod =/= undefined, is_map(Assigns) ->
     erlang:apply(Mod, mount, [Assigns, Socket]).
 
 -spec render(Mod, View0, Socket0) -> {View1, Socket1} when
@@ -146,5 +146,5 @@ mount(Mod, Assigns, Socket) when is_atom(Mod), is_map(Assigns) ->
     Socket0 :: arizona_socket:socket(),
     View1 :: view(),
     Socket1 :: arizona_socket:socket().
-render(Mod, View, Socket) when is_atom(Mod) ->
+render(Mod, View, Socket) when is_atom(Mod), Mod =/= undefined ->
     erlang:apply(Mod, render, [View, Socket]).
