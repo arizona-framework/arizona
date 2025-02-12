@@ -158,20 +158,8 @@ render_dynamic([Value | T], View0, Socket0) ->
     {View, Socket} = put_rendered(Value, View0, Socket0),
     render_dynamic(T, View, Socket).
 
-put_rendered({RenderedView, Socket}, View0, _Socket) ->
-    case arizona_view:equals(View0, RenderedView) of
-        true ->
-            {RenderedView, Socket};
-        false ->
-            case arizona_view:rendered(RenderedView) of
-                [Rendered] ->
-                    View = arizona_view:put_rendered(Rendered, View0),
-                    {View, Socket};
-                Rendered ->
-                    View = arizona_view:put_rendered(Rendered, View0),
-                    {View, Socket}
-            end
-    end;
+put_rendered({RenderedView, Socket}, _View, _Socket) ->
+    {RenderedView, Socket};
 put_rendered(Value, View0, Socket) ->
     View = arizona_view:put_rendered(Value, View0),
     {View, Socket}.

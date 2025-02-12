@@ -11,7 +11,6 @@
 -export([set_rendered/2]).
 -export([put_rendered/2]).
 -export([merge_changed_assigns/1]).
--export([equals/2]).
 
 %
 
@@ -128,21 +127,6 @@ put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendere
     View1 :: view().
 merge_changed_assigns(View) ->
     View#view{assigns = maps:merge(View#view.assigns, View#view.changed_assigns)}.
-
--spec equals(ViewA, ViewB) -> boolean() when
-    ViewA :: view(),
-    ViewB :: view().
-equals(#view{module = undefined}, _ViewB) ->
-    false;
-equals(_ViewA, #view{module = undefined}) ->
-    false;
-equals(
-    #view{module = Mod, assigns = #{id := Id}},
-    #view{module = Mod, assigns = #{id := Id}}
-) ->
-    true;
-equals(_ViewA, _ViewB) ->
-    false.
 
 %% --------------------------------------------------------------------
 %% Callback support function definitions

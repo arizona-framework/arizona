@@ -15,8 +15,7 @@ groups() ->
         {callback, [parallel], [
             mount,
             mount_ignore,
-            render,
-            equals
+            render
         ]}
     ].
 
@@ -82,29 +81,3 @@ render(Config) when is_list(Config) ->
     {ok, View} = arizona_view:mount(arizona_example_template, #{id => ~"app", count => 0}, Socket),
     Got = arizona_view:render(arizona_example_template, View, Socket),
     ?assertEqual(Expect, Got).
-
-equals(Config) when is_list(Config) ->
-    ?assertNot(
-        arizona_view:equals(
-            arizona_view:new(undefined, #{}, #{}, []),
-            arizona_view:new(bar, #{}, #{}, [])
-        )
-    ),
-        ?assertNot(
-        arizona_view:equals(
-            arizona_view:new(foo, #{}, #{}, []),
-            arizona_view:new(undefined, #{}, #{}, [])
-        )
-    ),
-        ?assert(
-        arizona_view:equals(
-            arizona_view:new(foo, #{id => ~"foo"}, #{}, []),
-            arizona_view:new(foo, #{id => ~"foo"}, #{}, [])
-        )
-    ),
-        ?assertNot(
-        arizona_view:equals(
-            arizona_view:new(foo, #{id => ~"foo"}, #{}, []),
-            arizona_view:new(foo, #{id => ~"bar"}, #{}, [])
-        )
-    ).
