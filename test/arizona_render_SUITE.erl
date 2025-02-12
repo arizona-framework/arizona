@@ -36,12 +36,11 @@ render_template(Config) when is_list(Config) ->
                         [~"<div id=\"", ~"\">", ~"", ~"</div>"],
                         [~"foo", ~"bar", ~"baz"]
                     ]}
-            },
-            html
+            }
         )
     },
     View = arizona_view:new(?MODULE, #{id => ~"foo", bar => ~"bar"}, #{}, []),
-    Socket = arizona_socket:new(#{}, html),
+    Socket = arizona_socket:new(#{}),
     Got = arizona_render:template(View, Socket, ~"""
     <div id="{arizona_view:get_assign(id, View)}">
       {arizona_view:get_assign(bar, View)}{~"baz"}

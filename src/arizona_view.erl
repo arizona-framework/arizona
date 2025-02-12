@@ -9,7 +9,6 @@
 -export([rendered/1]).
 -export([set_rendered/2]).
 -export([put_rendered/2]).
--export([equals/2]).
 -export([merge_changed_assigns/1]).
 
 %
@@ -89,22 +88,8 @@ set_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
     Rendered :: rendered_value(),
     View0 :: view(),
     View1 :: view().
-put_rendered([template, Static, Dynamic], #view{} = View) when is_list(Static); is_list(Dynamic) ->
-    View#view{rendered = [[template, Static, Dynamic] | View#view.rendered]};
 put_rendered(Rendered, #view{} = View) when is_binary(Rendered) ->
     View#view{rendered = [Rendered | View#view.rendered]}.
-
--spec equals(ViewA, ViewB) -> boolean() when
-    ViewA :: view(),
-    ViewB :: view().
-equals(#view{module = undefined}, _ViewB) ->
-    false;
-equals(_ViewA, #view{module = undefined}) ->
-    false;
-equals(#view{assigns = #{id := Id}}, #view{assigns = #{id := Id}}) ->
-    true;
-equals(_ViewA, _ViewB) ->
-    false.
 
 -spec merge_changed_assigns(View0) -> View1 when
     View0 :: view(),
