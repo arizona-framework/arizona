@@ -88,7 +88,7 @@ set_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
     Rendered :: rendered_value(),
     View0 :: view(),
     View1 :: view().
-put_rendered(Rendered, #view{} = View) when is_binary(Rendered) ->
+put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendered) ->
     View#view{rendered = [Rendered | View#view.rendered]}.
 
 -spec merge_changed_assigns(View0) -> View1 when
