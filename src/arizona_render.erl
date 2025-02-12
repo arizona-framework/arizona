@@ -61,7 +61,7 @@ Socket is `t:arizona_socket:socket/0`.
     View1 :: arizona_view:view(),
     Socket1 :: arizona_socket:socket().
 template(View, Socket, {Static, Dynamic}) ->
-    render_view_template(View, Socket, Static, Dynamic);
+    render_template(View, Socket, Static, Dynamic);
 template(View, Socket, Template) when is_binary(Template) ->
     Bindings = #{'View' => View, 'Socket' => Socket},
     {Static, Dynamic} = parse_template(Bindings, Template),
@@ -71,7 +71,7 @@ template(View, Socket, Template) when is_binary(Template) ->
 %% Private functions
 %% --------------------------------------------------------------------
 
-render_view_template(View0, Socket0, Static, Dynamic0) ->
+render_template(View0, Socket0, Static, Dynamic0) ->
     {View1, Socket1} = render_dynamic(Dynamic0, View0, Socket0),
     Dynamic = lists:reverse(arizona_view:rendered(View1)),
     Template = [template, Static, Dynamic],
