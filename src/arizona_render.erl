@@ -14,6 +14,44 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
+-doc ~""""
+Renders a top level template.
+
+## Examples
+
+```
+> ViewMod = mymodule.
+> Assigns = #{id => ~"foo", bar => ~"bar"}.
+> ChangedAssigns = #{}.
+> Rendered = [].
+> View = arizona_view:new(ViewMod, Assigns, ChangedAssigns, Rendered).
+> Views = #{}.
+> Socket = arizona_socket:new(Views).
+> arizona_render:template(View, Socket, ~"""
+  <div id="{arizona_view:get_assign(id, View)}">
+    {arizona_view:get_assign(bar, View)}
+  </div>
+  """).
+{{view,mymodule,
+       #{id => <<"foo">>,bar => <<"bar">>},
+       #{},
+       [template,
+        [<<"<div id=\"">>,<<"\">">>,<<"</div>">>],
+        [<<"foo">>,<<"bar">>]]},
+ {socket,#{<<"foo">> =>
+               {view,mymodule,
+                     #{id => <<"foo">>,bar => <<"bar">>},
+                     #{},
+                     [template,
+                      [<<"<div id=\"">>,<<"\">">>,<<"</div>">>],
+                      [<<"foo">>,<<"bar">>]]}}}}
+```
+
+## Returns
+
+It returns `{View, Socket}` where View is `t:arizona_view:view/0` and
+Socket is `t:arizona_socket:socket/0`.
+"""".
 -spec template(View0, Socket0, Template) -> {View1, Socket1} when
     View0 :: arizona_view:view(),
     Socket0 :: arizona_socket:socket(),
