@@ -6,6 +6,7 @@
 
 -export([view_template/3]).
 -export([component_template/3]).
+-export([nested_template/1]).
 -export([view/2]).
 -export([component/3]).
 
@@ -13,6 +14,7 @@
 
 -ignore_xref([view_template/3]).
 -ignore_xref([component_template/3]).
+-ignore_xref([nested_template/1]).
 -ignore_xref([view/2]).
 -ignore_xref([component/3]).
 
@@ -123,6 +125,62 @@ component_template(View, Socket, Template) ->
     {Static, Dynamic} = parse_template(Bindings, Template),
     component_template(View, Socket, {Static, Dynamic}).
 
+-doc ~"""""
+Renders a nested template.
+
+## Examples
+
+```
+> ParentAssigns = #{show_dialog => true, message => ~"Hello, World!"}.
+> ParentView = arizona_view:new(undefined, ParentAssigns, #{}, []).
+> Socket = arizona_socket:new(#{}).
+> Callback = arizona_render:nested_template(~""""
+  <div>
+      {case arizona_view:get_assign(show_dialog, View) of
+           true ->
+               arizona_render:nested_template(~"""
+               <dialog open>
+                   {arizona_view:get_assign(message, View)}
+               </dialog>
+               """);
+           false ->
+               ~""
+       end}
+  </div>
+  """").
+> erlang:apply(Callback, [ParentView, Socket]).
+{{view,undefined,
+       #{message => <<"Hello, World!">>,show_dialog => true},
+       #{},
+       [[template,
+         [<<"<div>">>,<<"</div>">>],
+         [[template,
+           [<<"<dialog open>">>,<<"</dialog>">>],
+           [<<"Hello, World!">>]]]]]},
+ {socket,#{}}}
+```
+
+## Returns
+
+It returns a `t:callback/0` function that receives the parent view that is
+calling it and the updated socket.
+""""".
+-spec nested_template(Template) -> Callback when
+    Template :: binary() | {Static, Dynamic},
+    Static :: [binary()],
+    Dynamic :: [binary()],
+    Callback :: callback().
+nested_template({Static, Dynamic}) ->
+    fun(ParentView, Socket) ->
+        render_nested_template(ParentView, Socket, Static, Dynamic)
+    end;
+nested_template(Template) ->
+    fun(ParentView, Socket) ->
+        Bindings = #{'View' => ParentView, 'Socket' => Socket},
+        {Static, Dynamic} = parse_template(Bindings, Template),
+        render_nested_template(ParentView, Socket, Static, Dynamic)
+    end.
+
 -doc ~"""
 Renders a nested view.
 
@@ -230,6 +288,15 @@ render_component_template(View0, Socket0, Static, Dynamic0) ->
     Template = [template, Static, Dynamic],
     View = arizona_view:set_rendered(Template, View1),
     {View, Socket}.
+
+render_nested_template(ParentView0, Socket0, Static, Dynamic0) ->
+    Assigns = arizona_view:assigns(ParentView0),
+    View0 = arizona_view:new(undefined, Assigns),
+    {View1, Socket} = render_dynamic(Dynamic0, View0, Socket0),
+    Dynamic = arizona_view:rendered(View1),
+    Template = [template, Static, Dynamic],
+    ParentView = arizona_view:put_rendered(Template, ParentView0),
+    {ParentView, Socket}.
 
 render_view(ParentView0, Socket0, Mod, Assigns) ->
     case arizona_view:mount(Mod, Assigns, Socket0) of
