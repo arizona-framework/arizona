@@ -8,7 +8,10 @@
 %% --------------------------------------------------------------------
 
 all() ->
-    [{group, callback}].
+    [
+        {group, callback},
+        {group, to_iolist}
+    ].
 
 groups() ->
     [
@@ -16,6 +19,9 @@ groups() ->
             mount,
             mount_ignore,
             render
+        ]},
+        {to_iolist, [
+            rendered_to_iolist
         ]}
     ].
 
@@ -103,4 +109,26 @@ render(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
     {ok, View} = arizona_view:mount(arizona_example_template, #{id => ~"app", count => 0}, Socket),
     Got = arizona_view:render(arizona_example_template, View, Socket),
+    ?assertEqual(Expect, Got).
+
+rendered_to_iolist(Config) when is_list(Config) ->
+    Expect = [
+        ~"<html>\n    <head></head>\n    <body id=\"",
+        ~"app",
+        ~"\">",
+        [
+            ~"<div id=\"",
+            ~"counter",
+            ~"\">",
+            ~"0",
+            ~"",
+            [~"<button>", ~"Increment", ~"</button>"],
+            ~"</div>"
+        ],
+        ~"</body>\n</html>"
+    ],
+    Socket = arizona_socket:new(#{}),
+    {ok, View0} = arizona_view:mount(arizona_example_template, #{id => ~"app", count => 0}, Socket),
+    {View, _Socket} = arizona_view:render(arizona_example_template, View0, Socket),
+    Got = arizona_view:rendered_to_iolist(View),
     ?assertEqual(Expect, Got).

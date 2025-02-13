@@ -11,6 +11,7 @@
 -export([set_rendered/2]).
 -export([put_rendered/2]).
 -export([merge_changed_assigns/1]).
+-export([rendered_to_iolist/1]).
 
 %
 
@@ -128,6 +129,11 @@ put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendere
 merge_changed_assigns(View) ->
     View#view{assigns = maps:merge(View#view.assigns, View#view.changed_assigns)}.
 
+-spec rendered_to_iolist(View) -> iolist() when
+    View :: view().
+rendered_to_iolist(#view{} = View) ->
+    rendered_to_iolist_1(View#view.rendered).
+
 %% --------------------------------------------------------------------
 %% Callback support function definitions
 %% --------------------------------------------------------------------
@@ -148,3 +154,21 @@ mount(Mod, Assigns, Socket) when is_atom(Mod), Mod =/= undefined, is_map(Assigns
     Socket1 :: arizona_socket:socket().
 render(Mod, View, Socket) when is_atom(Mod), Mod =/= undefined ->
     erlang:apply(Mod, render, [View, Socket]).
+
+%% --------------------------------------------------------------------
+%% Private functions
+%% --------------------------------------------------------------------
+
+rendered_to_iolist_1([template, Static, Dynamic]) ->
+    zip(Static, Dynamic);
+rendered_to_iolist_1(Rendered) ->
+    Rendered.
+
+zip([], []) ->
+    [];
+zip([S | Static], [D | Dynamic]) ->
+    [S, rendered_to_iolist_1(D) | zip(Static, Dynamic)];
+zip([S | Static], []) ->
+    [S | zip(Static, [])];
+zip([], [D | Dynamic]) ->
+    [rendered_to_iolist_1(D) | zip([], Dynamic)].
