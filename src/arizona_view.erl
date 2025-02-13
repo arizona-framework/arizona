@@ -17,6 +17,7 @@
 
 -ignore_xref([new/2]).
 -ignore_xref([new/4]).
+-ignore_xref([rendered_to_iolist/1]).
 
 %% --------------------------------------------------------------------
 %% Callback support function exports
