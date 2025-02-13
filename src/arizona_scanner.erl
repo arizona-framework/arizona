@@ -57,7 +57,7 @@ Tokenizes a template.
 ## Examples
 
 ```
-> arizona_scanner:scan(~"foo{bar}{% baz }").
+> arizona_scanner:scan(#{}, ~"foo{bar}{% baz }").
 [{html,{1,1},<<"foo">>},
  {erlang,{1,4},<<"bar">>},
  {comment,{1,9},<<"baz">>}]
