@@ -15,6 +15,7 @@ groups() ->
         {render, [parallel], [
             render_view_template,
             render_component_template,
+            render_nested_template,
             render_view,
             ignore_view,
             render_component
@@ -53,7 +54,7 @@ render_view_template(Config) when is_list(Config) ->
 
 render_component_template(Config) when is_list(Config) ->
     Expect = {
-        arizona_view:new(?MODULE, #{}, #{}, [template, [<<"Ok">>], []]),
+        arizona_view:new(?MODULE, #{}, #{}, [template, [~"Ok"], []]),
         arizona_socket:new(#{})
     },
     View = arizona_view:new(?MODULE, #{}, #{}, []),
@@ -61,6 +62,44 @@ render_component_template(Config) when is_list(Config) ->
     Got = arizona_render:component_template(View, Socket, ~"""
     Ok
     """),
+    ?assertEqual(Expect, Got).
+
+render_nested_template(Config) when is_list(Config) ->
+    Expect = {
+        arizona_view:new(undefined, #{show_dialog => true, message => ~"Hello, World!"}, #{}, [
+            [
+                template,
+                [~"<div>", ~"</div>"],
+                [
+                    [
+                        template,
+                        [~"<dialog open>", ~"</dialog>"],
+                        [~"Hello, World!"]
+                    ]
+                ]
+            ]
+        ]),
+        arizona_socket:new(#{})
+    },
+    Callback = arizona_render:nested_template(~""""
+    <div>
+        {case arizona_view:get_assign(show_dialog, View) of
+             true ->
+                 arizona_render:nested_template(~"""
+                 <dialog open>
+                     {arizona_view:get_assign(message, View)}
+                 </dialog>
+                 """);
+             false ->
+                 ~""
+         end}
+    </div>
+    """"),
+    ParentView = arizona_view:new(
+        undefined, #{show_dialog => true, message => ~"Hello, World!"}, #{}, []
+    ),
+    Socket = arizona_socket:new(#{}),
+    Got = erlang:apply(Callback, [ParentView, Socket]),
     ?assertEqual(Expect, Got).
 
 render_view(Config) when is_list(Config) ->

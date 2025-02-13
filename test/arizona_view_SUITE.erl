@@ -21,7 +21,8 @@ groups() ->
             render
         ]},
         {to_iolist, [
-            rendered_to_iolist
+            rendered_to_iolist,
+            render_nested_template_to_iolist
         ]}
     ].
 
@@ -131,4 +132,34 @@ rendered_to_iolist(Config) when is_list(Config) ->
     {ok, View0} = arizona_view:mount(arizona_example_template, #{id => ~"app", count => 0}, Socket),
     {View, _Socket} = arizona_view:render(arizona_example_template, View0, Socket),
     Got = arizona_view:rendered_to_iolist(View),
+    ?assertEqual(Expect, Got).
+
+render_nested_template_to_iolist(Config) when is_list(Config) ->
+    Expect = [
+        [
+            <<"<div>">>,
+            [<<"<dialog open>">>, <<"Hello, World!">>, <<"</dialog>">>],
+            <<"</div>">>
+        ]
+    ],
+    Callback = arizona_render:nested_template(~""""
+    <div>
+        {case arizona_view:get_assign(show_dialog, View) of
+             true ->
+                 arizona_render:nested_template(~"""
+                 <dialog open>
+                     {arizona_view:get_assign(message, View)}
+                 </dialog>
+                 """);
+             false ->
+                 ~""
+         end}
+    </div>
+    """"),
+    ParentView0 = arizona_view:new(
+        undefined, #{show_dialog => true, message => ~"Hello, World!"}, #{}, []
+    ),
+    Socket = arizona_socket:new(#{}),
+    {ParentView, _Socket} = erlang:apply(Callback, [ParentView0, Socket]),
+    Got = arizona_view:rendered_to_iolist(ParentView),
     ?assertEqual(Expect, Got).

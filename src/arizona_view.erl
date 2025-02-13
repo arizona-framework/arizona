@@ -6,6 +6,7 @@
 
 -export([new/2]).
 -export([new/4]).
+-export([assigns/1]).
 -export([get_assign/2]).
 -export([rendered/1]).
 -export([set_rendered/2]).
@@ -105,6 +106,12 @@ new(Mod, Assigns, ChangedAssigns, Rendered) ->
         rendered = Rendered
     }.
 
+-spec assigns(View) -> Assigns when
+    View :: view(),
+    Assigns :: assigns().
+assigns(#view{} = View) ->
+    View#view.assigns.
+
 -spec get_assign(Key, View) -> Value when
     Key :: atom(),
     View :: view(),
@@ -187,6 +194,8 @@ render(Mod, View, Socket) when is_atom(Mod), Mod =/= undefined ->
 
 rendered_to_iolist_1([template, Static, Dynamic]) ->
     zip(Static, Dynamic);
+rendered_to_iolist_1(List) when is_list(List) ->
+    [rendered_to_iolist_1(Rendered) || Rendered <- List];
 rendered_to_iolist_1(Rendered) ->
     Rendered.
 
