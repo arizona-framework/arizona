@@ -28,6 +28,14 @@
 -export_type([callback/0]).
 
 %% --------------------------------------------------------------------
+%% Doctests
+%% --------------------------------------------------------------------
+
+-ifdef(TEST).
+-include_lib("doctest/include/doctest.hrl").
+-endif.
+
+%% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
@@ -46,7 +54,7 @@ Call it in the `c:arizona_view:render/2` callback of an `t:arizona_view:view/0`.
 > View = arizona_view:new(ViewMod, Assigns, ChangedAssigns, Rendered).
 > Views = #{}.
 > Socket = arizona_socket:new(Views).
-> arizona_render:template(View, Socket, ~"""
+> arizona_render:view_template(View, Socket, ~"""
   <div id="{arizona_view:get_assign(id, View)}">
     {arizona_view:get_assign(bar, View)}
   </div>
@@ -138,8 +146,11 @@ The `t:arizona_view:id/0` assign is required.
        #{count => 0,id => <<"app">>},
        #{},
        [[template,
-         [<<"<div id=\"">>,<<"\">">>,<<"</div>">>],
-         [<<"counter">>,<<"0">>]]]},
+         [<<"<div id=\"">>,<<"\">">>,<<>>,<<"</div>">>],
+         [<<"counter">>,<<"0">>,
+          [template,
+           [<<"<button>">>,<<"</button>">>],
+           [<<"Increment">>]]]]]},
  {socket,#{<<"counter">> =>
                {view,arizona_example_counter,
                      #{count => 0,id => <<"counter">>},

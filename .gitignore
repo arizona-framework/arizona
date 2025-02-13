@@ -1,6 +1,7 @@
-_build
+_build/
+_checkouts/
 doc/
-erl_crash.dump
 node_modules/
 package-lock.json
+erl_crash.dump
 rebar3.crashdump
