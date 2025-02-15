@@ -4,12 +4,14 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([new/0]).
 -export([new/1]).
 -export([put_view/2]).
 -export([put_view/3]).
 
 %
 
+-ignore_xref([new/0]).
 -ignore_xref([new/1]).
 -ignore_xref([put_view/3]).
 
@@ -29,6 +31,11 @@
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
+
+-spec new() -> Socket when
+    Socket :: socket().
+new() ->
+    new(#{}).
 
 -spec new(Views) -> Socket when
     Views :: views(),

@@ -10,12 +10,11 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec render(Mod, Fun, View0, Socket0) -> {View1, Socket1} when
+-spec render(Mod, Fun, View, Socket) -> Token when
     Mod :: module(),
     Fun :: atom(),
-    View0 :: arizona_view:view(),
-    Socket0 :: arizona_socket:socket(),
-    View1 :: arizona_view:view(),
-    Socket1 :: arizona_socket:socket().
+    View :: arizona_view:view(),
+    Socket :: arizona_socket:socket(),
+    Token :: arizona_render:token().
 render(Mod, Fun, View, Socket) when is_atom(Mod), is_atom(Fun) ->
     erlang:apply(Mod, Fun, [View, Socket]).
