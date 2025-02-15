@@ -4,6 +4,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([new/1]).
 -export([new/2]).
 -export([new/4]).
 -export([assigns/1]).
@@ -36,11 +37,10 @@
     Socket :: arizona_socket:socket(),
     View :: view().
 
--callback render(View0, Socket0) -> {View1, Socket1} when
-    View0 :: view(),
-    Socket0 :: arizona_socket:socket(),
-    View1 :: view(),
-    Socket1 :: arizona_socket:socket().
+-callback render(View, Socket) -> Token when
+    View :: view(),
+    Socket :: arizona_socket:socket(),
+    Token :: arizona_render:token().
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -50,25 +50,13 @@
     module :: undefined | module(),
     assigns :: assigns(),
     changed_assigns :: assigns(),
-    rendered :: rendered()
+    rendered :: arizona_render:rendered()
 }).
 -opaque view() :: #view{}.
 -export_type([view/0]).
 
 -type assigns() :: #{atom() => dynamic()}.
 -export_type([assigns/0]).
-
--type rendered() ::
-    [rendered_value()]
-    | [template | Static :: [binary()] | Dynamic :: [binary()]].
--export_type([rendered/0]).
-
--type rendered_value() ::
-    binary()
-    | rendered()
-    % I could not figure out a correct type without the `dynamic/0`.
-    | dynamic().
--export_type([rendered_value/0]).
 
 -type id() :: binary().
 -export_type([id/0]).
@@ -85,8 +73,14 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
+-spec new(Assigns) -> View when
+    Assigns :: assigns(),
+    View :: view().
+new(Assigns) ->
+    new(undefined, Assigns, #{}, []).
+
 -spec new(Mod, Assigns) -> View when
-    Mod :: undefined | module(),
+    Mod :: module(),
     Assigns :: assigns(),
     View :: view().
 new(Mod, Assigns) ->
@@ -96,7 +90,7 @@ new(Mod, Assigns) ->
     Mod :: undefined | module(),
     Assigns :: assigns(),
     ChangedAssigns :: assigns(),
-    Rendered :: rendered(),
+    Rendered :: arizona_render:rendered(),
     View :: view().
 new(Mod, Assigns, ChangedAssigns, Rendered) ->
     #view{
@@ -121,19 +115,19 @@ get_assign(Key, #view{} = View) when is_atom(Key) ->
 
 -spec rendered(View) -> Rendered when
     View :: view(),
-    Rendered :: rendered().
+    Rendered :: arizona_render:rendered().
 rendered(#view{} = View) ->
     View#view.rendered.
 
 -spec set_rendered(Rendered, View0) -> View1 when
-    Rendered :: rendered(),
+    Rendered :: arizona_render:rendered(),
     View0 :: view(),
     View1 :: view().
 set_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
     View#view{rendered = Rendered}.
 
 -spec put_rendered(Rendered, View0) -> View1 when
-    Rendered :: rendered_value(),
+    Rendered :: arizona_render:rendered_value(),
     View0 :: view(),
     View1 :: view().
 put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendered) ->
@@ -151,9 +145,12 @@ Formats the rendered content to `t:iolist/0`.
 ## Examples
 
 ```
-> Socket = arizona_socket:new(#{}).
-> {ok, View0} = arizona_view:mount(arizona_example_template, #{id => ~"app", count => 0}, Socket).
-> {View, _Socket} = arizona_view:render(arizona_example_template, View0, Socket).
+> Mod = arizona_example_template.
+> Assigns = #{id => ~"app", count => 0}.
+> Socket = arizona_socket:new().
+> {ok, View0} = arizona_view:mount(Mod, Assigns, Socket).
+> Rendered = arizona_view:render(Mod, View0, Socket).
+> {View, _Socket} = arizona_render:render(Rendered, View0, Socket).
 > arizona_view:rendered_to_iolist(View).
 [<<"<html>\n    <head></head>\n    <body id=\"">>,<<"app">>,<<"\">">>,
  [<<"<div id=\"">>,<<"counter">>,<<"\">">>,<<"0">>,<<>>,
@@ -179,12 +176,11 @@ rendered_to_iolist(#view{} = View) ->
 mount(Mod, Assigns, Socket) when is_atom(Mod), Mod =/= undefined, is_map(Assigns) ->
     erlang:apply(Mod, mount, [Assigns, Socket]).
 
--spec render(Mod, View0, Socket0) -> {View1, Socket1} when
+-spec render(Mod, View, Socket) -> Token when
     Mod :: module(),
-    View0 :: view(),
-    Socket0 :: arizona_socket:socket(),
-    View1 :: view(),
-    Socket1 :: arizona_socket:socket().
+    View :: view(),
+    Socket :: arizona_socket:socket(),
+    Token :: arizona_render:token().
 render(Mod, View, Socket) when is_atom(Mod), Mod =/= undefined ->
     erlang:apply(Mod, render, [View, Socket]).
 
