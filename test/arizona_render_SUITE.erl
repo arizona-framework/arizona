@@ -17,7 +17,6 @@ groups() ->
             render_component_template,
             render_nested_template,
             render_view,
-            ignore_view,
             render_component
         ]}
     ].
@@ -27,130 +26,62 @@ groups() ->
 %% --------------------------------------------------------------------
 
 render_view_template(Config) when is_list(Config) ->
-    Expect = {
-        arizona_view:new(?MODULE, #{id => ~"foo", bar => ~"bar"}, #{}, [
-            template,
-            [~"<div id=\"", ~"\">", ~"", ~"</div>"],
-            [~"foo", ~"bar", ~"baz"]
-        ]),
-        arizona_socket:new(
-            #{
-                ~"foo" => arizona_view:new(?MODULE, #{id => ~"foo", bar => ~"bar"}, #{}, [
-                    template,
-                    [~"<div id=\"", ~"\">", ~"", ~"</div>"],
-                    [~"foo", ~"bar", ~"baz"]
-                ])
-            }
-        )
-    },
-    View = arizona_view:new(?MODULE, #{id => ~"foo", bar => ~"bar"}, #{}, []),
-    Socket = arizona_socket:new(#{}),
+    View = arizona_view:new(#{id => ~"foo", foo => ~"foo", bar => ~"bar"}),
+    Socket = arizona_socket:new(),
+    Expect =
+        {view_template, View, Socket, [~"<div id=\"", ~"\">", ~"", ~"</div>"], [
+            ~"foo", ~"foo", ~"bar"
+        ]},
     Got = arizona_render:view_template(View, Socket, ~"""
     <div id="{arizona_view:get_assign(id, View)}">
-      {arizona_view:get_assign(bar, View)}{~"baz"}
+      {arizona_view:get_assign(foo, View)}
+      {arizona_view:get_assign(bar, View)}
     </div>
     """),
     ?assertEqual(Expect, Got).
 
 render_component_template(Config) when is_list(Config) ->
-    Expect = {
-        arizona_view:new(?MODULE, #{}, #{}, [template, [~"Ok"], []]),
-        arizona_socket:new(#{})
-    },
-    View = arizona_view:new(?MODULE, #{}, #{}, []),
-    Socket = arizona_socket:new(#{}),
+    View = arizona_view:new(#{foo => ~"foo", bar => ~"bar"}),
+    Socket = arizona_socket:new(),
+    Expect = {component_template, View, Socket, [~"<div>", ~"", ~"</div>"], [~"foo", ~"bar"]},
     Got = arizona_render:component_template(View, Socket, ~"""
-    Ok
+    <div>
+      {arizona_view:get_assign(foo, View)}
+      {arizona_view:get_assign(bar, View)}
+    </div>
     """),
     ?assertEqual(Expect, Got).
 
 render_nested_template(Config) when is_list(Config) ->
-    Expect = {
-        arizona_view:new(undefined, #{show_dialog => true, message => ~"Hello, World!"}, #{}, [
-            [
-                template,
-                [~"<div>", ~"</div>"],
-                [
-                    [
-                        template,
-                        [~"<dialog open>", ~"</dialog>"],
-                        [~"Hello, World!"]
-                    ]
-                ]
-            ]
-        ]),
-        arizona_socket:new(#{})
-    },
-    Callback = arizona_render:nested_template(~""""
+    View = arizona_view:new(#{foo => ~"foo", bar => ~"bar"}),
+    Socket = arizona_socket:new(),
+    Expect = {nested_template, View, Socket, [~"<div>", ~"", ~"</div>"], [~"foo", ~"bar"]},
+    {callback, Callback} = arizona_render:nested_template(~"""
     <div>
-        {case arizona_view:get_assign(show_dialog, View) of
-             true ->
-                 arizona_render:nested_template(~"""
-                 <dialog open>
-                     {arizona_view:get_assign(message, View)}
-                 </dialog>
-                 """);
-             false ->
-                 ~""
-         end}
+      {arizona_view:get_assign(foo, View)}
+      {arizona_view:get_assign(bar, View)}
     </div>
-    """"),
-    ParentView = arizona_view:new(
-        undefined, #{show_dialog => true, message => ~"Hello, World!"}, #{}, []
-    ),
-    Socket = arizona_socket:new(#{}),
-    Got = erlang:apply(Callback, [ParentView, Socket]),
+    """),
+    Got = erlang:apply(Callback, [View, Socket]),
     ?assertEqual(Expect, Got).
 
 render_view(Config) when is_list(Config) ->
-    Expect = {
-        arizona_view:new(?MODULE, #{}, #{}, [
-            [
-                template,
-                [~"<div id=\"", ~"\">", ~"", ~"</div>"],
-                [
-                    ~"counter",
-                    ~"0",
-                    [
-                        template,
-                        [~"<button>", ~"</button>"],
-                        [~"Increment"]
-                    ]
-                ]
-            ]
-        ]),
-        arizona_socket:new(#{
-            ~"counter" => arizona_view:new(
-                arizona_example_counter, #{count => 0, id => ~"counter"}, #{}, []
-            )
-        })
-    },
-    Callback = arizona_render:view(arizona_example_counter, #{id => ~"counter", count => 0}),
-    ParentView = arizona_view:new(?MODULE, #{}, #{}, []),
-    Socket = arizona_socket:new(#{}),
-    Got = erlang:apply(Callback, [ParentView, Socket]),
-    ?assertEqual(Expect, Got).
-
-ignore_view(Config) when is_list(Config) ->
-    Expect = {
-        arizona_view:new(?MODULE, #{}, #{}, []),
-        arizona_socket:new(#{})
-    },
-    Callback = arizona_render:view(arizona_example_ignore, #{id => foo}),
-    ParentView = arizona_view:new(?MODULE, #{}, #{}, []),
-    Socket = arizona_socket:new(#{}),
+    Mod = foo,
+    Assigns = #{id => ~"foo"},
+    ParentView = arizona_view:new(#{}),
+    Socket = arizona_socket:new(),
+    Expect = {view, ParentView, Socket, Mod, Assigns},
+    {callback, Callback} = arizona_render:view(Mod, Assigns),
     Got = erlang:apply(Callback, [ParentView, Socket]),
     ?assertEqual(Expect, Got).
 
 render_component(Config) when is_list(Config) ->
-    Expect = {
-        arizona_view:new(arizona_render_SUITE, #{}, #{}, [
-            [template, [~"<button>", ~"</button>"], [~"Ok"]]
-        ]),
-        arizona_socket:new(#{})
-    },
-    Callback = arizona_render:component(arizona_example_components, button, #{text => ~"Ok"}),
-    ParentView = arizona_view:new(?MODULE, #{}, #{}, []),
-    Socket = arizona_socket:new(#{}),
+    Mod = foo,
+    Fun = bar,
+    Assigns = #{},
+    ParentView = arizona_view:new(#{}),
+    Socket = arizona_socket:new(),
+    Expect = {component, ParentView, Socket, Mod, Fun, Assigns},
+    {callback, Callback} = arizona_render:component(Mod, Fun, Assigns),
     Got = erlang:apply(Callback, [ParentView, Socket]),
     ?assertEqual(Expect, Got).

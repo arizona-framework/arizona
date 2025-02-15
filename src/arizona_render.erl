@@ -4,6 +4,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([render/3]).
 -export([view_template/3]).
 -export([component_template/3]).
 -export([nested_template/1]).
@@ -12,6 +13,7 @@
 
 %
 
+-ignore_xref([render/3]).
 -ignore_xref([view_template/3]).
 -ignore_xref([component_template/3]).
 -ignore_xref([nested_template/1]).
@@ -22,12 +24,36 @@
 %% Types (and their exports)
 %% --------------------------------------------------------------------
 
--type callback() :: fun(
-    (View0 :: arizona_view:view(), Socket0 :: arizona_socket:socket()) -> {
-        View1 :: arizona_view:view(), Socket1 :: arizona_socket:socket()
-    }
+-type token() ::
+    {view_template, View :: arizona_view:view(), Socket :: arizona_socket:socket(),
+        Static :: [binary()], Dynamic :: [binary()]}
+    | {component_template, View :: arizona_view:view(), Socket :: arizona_socket:socket(),
+        Static :: [binary()], Dynamic :: [binary()]}
+    | {nested_template, ParentView :: arizona_view:view(), Socket :: arizona_socket:socket(),
+        Static :: [binary()], Dynamic :: [binary()]}
+    | {view, ParentView :: arizona_view:view(), Socket :: arizona_socket:socket(), Mod :: module(),
+        Assigns :: arizona_view:assigns()}
+    | {component, ParentView :: arizona_view:view(), Socket :: arizona_socket:socket(),
+        Mod :: module(), Fun :: atom(), Assigns :: arizona_view:assigns()}
+    | {callback, callback(Token :: token())}.
+-export_type([token/0]).
+
+-type callback(Token) :: fun(
+    (View :: arizona_view:view(), Socket :: arizona_socket:socket()) -> Token
 ).
--export_type([callback/0]).
+-export_type([callback/1]).
+
+-type rendered() ::
+    [rendered_value()]
+    | [template | Static :: [binary()] | Dynamic :: [binary()]].
+-export_type([rendered/0]).
+
+-type rendered_value() ::
+    binary()
+    | rendered()
+    % I could not figure out a correct type without the `dynamic/0`.
+    | dynamic().
+-export_type([rendered_value/0]).
 
 %% --------------------------------------------------------------------
 %% Doctests
@@ -41,233 +67,102 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
--doc ~""""
-Renders a view template.
-
-Call it in the `c:arizona_view:render/2` callback of an `t:arizona_view:view/0`.
-
-## Examples
-
-```
-> ViewMod = mymodule.
-> Assigns = #{id => ~"foo", bar => ~"bar"}.
-> ChangedAssigns = #{}.
-> Rendered = [].
-> View = arizona_view:new(ViewMod, Assigns, ChangedAssigns, Rendered).
-> Views = #{}.
-> Socket = arizona_socket:new(Views).
-> arizona_render:view_template(View, Socket, ~"""
-  <div id="{arizona_view:get_assign(id, View)}">
-    {arizona_view:get_assign(bar, View)}
-  </div>
-  """).
-{{view,mymodule,
-       #{id => <<"foo">>,bar => <<"bar">>},
-       #{},
-       [template,
-        [<<"<div id=\"">>,<<"\">">>,<<"</div>">>],
-        [<<"foo">>,<<"bar">>]]},
- {socket,#{<<"foo">> =>
-               {view,mymodule,
-                     #{id => <<"foo">>,bar => <<"bar">>},
-                     #{},
-                     [template,
-                      [<<"<div id=\"">>,<<"\">">>,<<"</div>">>],
-                      [<<"foo">>,<<"bar">>]]}}}}
-```
-
-## Returns
-
-It returns `{View, Socket}` where View is `t:arizona_view:view/0` and
-Socket is `t:arizona_socket:socket/0`.
-"""".
--spec view_template(View0, Socket0, Template) -> {View1, Socket1} when
-    View0 :: arizona_view:view(),
-    Socket0 :: arizona_socket:socket(),
-    Template :: binary() | {Static, Dynamic},
-    Static :: [binary()],
-    Dynamic :: [binary()],
-    View1 :: arizona_view:view(),
-    Socket1 :: arizona_socket:socket().
-view_template(View, Socket, {Static, Dynamic}) ->
+-spec render(Payload, ParentView, ParentSocket) -> {View, Socket} when
+    Payload :: Token | Rendered,
+    Token :: token(),
+    Rendered :: rendered(),
+    ParentView :: arizona_view:view(),
+    ParentSocket :: arizona_socket:socket(),
+    View :: ParentView | arizona_view:view(),
+    Socket :: ParentSocket | arizona_socket:socket().
+render({view_template, View, Socket, Static, Dynamic}, _ParentView, _ParentSocket) ->
     render_view_template(View, Socket, Static, Dynamic);
+render({component_template, View, Socket, Static, Dynamic}, _ParentView, _ParentSocket) ->
+    render_component_template(View, Socket, Static, Dynamic);
+render({nested_template, ParentView, Socket, Static, Dynamic}, _ParentView, _ParentSocket) ->
+    render_nested_template(ParentView, Socket, Static, Dynamic);
+render({view, ParentView, Socket, Mod, Assigns}, _ParentView, _ParentSocket) ->
+    render_view(ParentView, Socket, Mod, Assigns);
+render({component, ParentView, Socket, Mod, Fun, Assigns}, _ParentView, _ParentSocket) ->
+    render_component(ParentView, Socket, Mod, Fun, Assigns);
+render({callback, Callback}, ParentView, ParentSocket) ->
+    Token = erlang:apply(Callback, [ParentView, ParentSocket]),
+    render(Token, ParentView, ParentSocket);
+render(Rendered, View0, Socket) ->
+    View = arizona_view:put_rendered(Rendered, View0),
+    {View, Socket}.
+
+-spec view_template(View, Socket, Template) -> Token when
+    View :: arizona_view:view(),
+    Socket :: arizona_socket:socket(),
+    Template :: binary() | {Static, Dynamic},
+    Token :: {view_template, View, Socket, Static, Dynamic},
+    Static :: [binary()],
+    Dynamic :: [binary()].
+view_template(View, Socket, {Static, Dynamic}) ->
+    {view_template, View, Socket, Static, Dynamic};
 view_template(View, Socket, Template) when is_binary(Template) ->
     Bindings = #{'View' => View, 'Socket' => Socket},
     {Static, Dynamic} = parse_template(Bindings, Template),
     view_template(View, Socket, {Static, Dynamic}).
 
--doc ~""""
-Renders a component template.
-
-Call it in a component callback.
-
-## Examples
-
-There is no examples for now.
-
-## Returns
-
-It returns `{View, Socket}` where View is `t:arizona_view:view/0` and
-Socket is `t:arizona_socket:socket/0`.
-"""".
--spec component_template(View0, Socket0, Template) -> {View1, Socket1} when
-    View0 :: arizona_view:view(),
-    Socket0 :: arizona_socket:socket(),
+-spec component_template(View, Socket, Template) -> Token when
+    View :: arizona_view:view(),
+    Socket :: arizona_socket:socket(),
     Template :: binary() | {Static, Dynamic},
+    Token :: {component_template, View, Socket, Static, Dynamic},
     Static :: [binary()],
-    Dynamic :: [binary()],
-    View1 :: arizona_view:view(),
-    Socket1 :: arizona_socket:socket().
+    Dynamic :: [binary()].
 component_template(View, Socket, {Static, Dynamic}) ->
-    render_component_template(View, Socket, Static, Dynamic);
+    {component_template, View, Socket, Static, Dynamic};
 component_template(View, Socket, Template) ->
     Bindings = #{'View' => View, 'Socket' => Socket},
     {Static, Dynamic} = parse_template(Bindings, Template),
     component_template(View, Socket, {Static, Dynamic}).
 
--doc ~"""""
-Renders a nested template.
-
-## Examples
-
-```
-> ParentAssigns = #{show_dialog => true, message => ~"Hello, World!"}.
-> ParentView = arizona_view:new(undefined, ParentAssigns, #{}, []).
-> Socket = arizona_socket:new(#{}).
-> Callback = arizona_render:nested_template(~""""
-  <div>
-      {case arizona_view:get_assign(show_dialog, View) of
-           true ->
-               arizona_render:nested_template(~"""
-               <dialog open>
-                   {arizona_view:get_assign(message, View)}
-               </dialog>
-               """);
-           false ->
-               ~""
-       end}
-  </div>
-  """").
-> erlang:apply(Callback, [ParentView, Socket]).
-{{view,undefined,
-       #{message => <<"Hello, World!">>,show_dialog => true},
-       #{},
-       [[template,
-         [<<"<div>">>,<<"</div>">>],
-         [[template,
-           [<<"<dialog open>">>,<<"</dialog>">>],
-           [<<"Hello, World!">>]]]]]},
- {socket,#{}}}
-```
-
-## Returns
-
-It returns a `t:callback/0` function that receives the parent view that is
-calling it and the updated socket.
-""""".
 -spec nested_template(Template) -> Callback when
     Template :: binary() | {Static, Dynamic},
     Static :: [binary()],
     Dynamic :: [binary()],
-    Callback :: callback().
+    Callback :: {callback, callback(Token)},
+    Token :: {nested_template, ParentView, Socket, Static, Dynamic},
+    ParentView :: arizona_view:view(),
+    Socket :: arizona_socket:socket().
 nested_template({Static, Dynamic}) ->
-    fun(ParentView, Socket) ->
-        render_nested_template(ParentView, Socket, Static, Dynamic)
-    end;
+    {callback, fun(ParentView, Socket) ->
+        {nested_template, ParentView, Socket, Static, Dynamic}
+    end};
 nested_template(Template) ->
-    fun(ParentView, Socket) ->
+    {callback, fun(ParentView, Socket) ->
         Bindings = #{'View' => ParentView, 'Socket' => Socket},
         {Static, Dynamic} = parse_template(Bindings, Template),
-        render_nested_template(ParentView, Socket, Static, Dynamic)
-    end.
+        {nested_template, ParentView, Socket, Static, Dynamic}
+    end}.
 
--doc ~"""
-Renders a nested view.
-
-Call it when rendering an `t:arizona_view:view/0` inside an `arizona_render:view_template/3`
-or inside an `arizona_render:component_template/3`.
-
-The `t:arizona_view:id/0` assign is required.
-
-## Examples
-
-```
-> ParentAssigns = #{id => ~"app", count => 0}.
-> Socket = arizona_socket:new(#{}).
-> {ok, ParentView} = arizona_view:mount(arizona_example_template, ParentAssigns, Socket).
-> Callback = arizona_render:view(arizona_example_counter, #{
-      id => ~"counter",
-      count => arizona_view:get_assign(count, ParentView)
-  }).
-> erlang:apply(Callback, [ParentView, Socket]).
-{{view,arizona_example_template,
-       #{count => 0,id => <<"app">>},
-       #{},
-       [[template,
-         [<<"<div id=\"">>,<<"\">">>,<<>>,<<"</div>">>],
-         [<<"counter">>,<<"0">>,
-          [template,
-           [<<"<button>">>,<<"</button>">>],
-           [<<"Increment">>]]]]]},
- {socket,#{<<"counter">> =>
-               {view,arizona_example_counter,
-                     #{count => 0,id => <<"counter">>},
-                     #{},[]}}}}
-```
-
-## Returns
-
-It returns a `t:callback/0` function that receives the parent view that is
-calling it and the updated socket.
-""".
 -spec view(Mod, Assigns) -> Callback when
     Mod :: module(),
     Assigns :: arizona_view:assigns(),
-    Callback :: callback().
+    Callback :: {callback, callback(Token)},
+    Token :: {view, ParentView, Socket, Mod, Assigns},
+    ParentView :: arizona_view:view(),
+    Socket :: arizona_socket:socket().
 view(Mod, Assigns) when is_atom(Mod), is_map(Assigns), is_map_key(id, Assigns) ->
-    fun(ParentView, Socket) ->
-        render_view(ParentView, Socket, Mod, Assigns)
-    end.
+    {callback, fun(ParentView, Socket) ->
+        {view, ParentView, Socket, Mod, Assigns}
+    end}.
 
--doc ~"""
-Renders a nested component.
-
-Call it when rendering an `t:arizona_view:view/0` inside an `arizona_render:view_template/3`
-or inside an `arizona_render:component_template/3`.
-
-## Examples
-
-```
-> ParentAssigns = #{id => ~"app"}.
-> Socket = arizona_socket:new(#{}).
-> {ok, ParentView} = arizona_view:mount(arizona_example_template, ParentAssigns, Socket).
-> Callback = arizona_render:component(arizona_example_components, button, #{
-      text => ~"Increment"
-  }).
-> erlang:apply(Callback, [ParentView, Socket]).
-{{view,arizona_example_template,
-       #{id => <<"app">>},
-       #{},
-       [[template,
-         [<<"<button>">>,<<"</button>">>],
-         [<<"Increment">>]]]},
- {socket,#{}}}
-```
-
-## Returns
-
-It returns a `t:callback/0` function that receives the parent view that is
-calling it and the updated socket.
-""".
 -spec component(Mod, Fun, Assigns) -> Callback when
     Mod :: module(),
     Fun :: atom(),
     Assigns :: arizona_view:assigns(),
-    Callback :: callback().
+    Callback :: {callback, callback(Token)},
+    Token :: {component, ParentView, Socket, Mod, Fun, Assigns},
+    ParentView :: arizona_view:view(),
+    Socket :: arizona_socket:socket().
 component(Mod, Fun, Assigns) when is_atom(Mod), is_atom(Fun), is_map(Assigns) ->
-    fun(ParentView, Socket) ->
-        render_component(ParentView, Socket, Mod, Fun, Assigns)
-    end.
+    {callback, fun(ParentView, Socket) ->
+        {component, ParentView, Socket, Mod, Fun, Assigns}
+    end}.
 
 %% --------------------------------------------------------------------
 %% Private functions
@@ -291,7 +186,7 @@ render_component_template(View0, Socket0, Static, Dynamic0) ->
 
 render_nested_template(ParentView0, Socket0, Static, Dynamic0) ->
     Assigns = arizona_view:assigns(ParentView0),
-    View0 = arizona_view:new(undefined, Assigns),
+    View0 = arizona_view:new(Assigns),
     {View1, Socket} = render_dynamic(Dynamic0, View0, Socket0),
     Dynamic = arizona_view:rendered(View1),
     Template = [template, Static, Dynamic],
@@ -301,7 +196,8 @@ render_nested_template(ParentView0, Socket0, Static, Dynamic0) ->
 render_view(ParentView0, Socket0, Mod, Assigns) ->
     case arizona_view:mount(Mod, Assigns, Socket0) of
         {ok, View0} ->
-            {View1, Socket1} = arizona_view:render(Mod, View0, Socket0),
+            Token = arizona_view:render(Mod, View0, Socket0),
+            {View1, Socket1} = render(Token, ParentView0, Socket0),
             Rendered = arizona_view:rendered(View1),
             ParentView = arizona_view:put_rendered(Rendered, ParentView0),
             View = arizona_view:set_rendered([], View1),
@@ -312,27 +208,18 @@ render_view(ParentView0, Socket0, Mod, Assigns) ->
     end.
 
 render_component(ParentView0, Socket0, Mod, Fun, Assigns) ->
-    View0 = arizona_view:new(undefined, Assigns),
-    {View, Socket1} = arizona_component:render(Mod, Fun, View0, Socket0),
+    View0 = arizona_view:new(Assigns),
+    Token = arizona_component:render(Mod, Fun, View0, Socket0),
+    {View, Socket1} = render(Token, ParentView0, Socket0),
     Rendered = arizona_view:rendered(View),
     ParentView = arizona_view:put_rendered(Rendered, ParentView0),
     {ParentView, Socket1}.
 
 render_dynamic([], View, Socket) ->
     {View, Socket};
-render_dynamic([Callback | T], View0, Socket0) when is_function(Callback, 2) ->
-    Value = erlang:apply(Callback, [View0, Socket0]),
-    {View, Socket} = put_rendered(Value, View0, Socket0),
-    render_dynamic(T, View, Socket);
-render_dynamic([Value | T], View0, Socket0) ->
-    {View, Socket} = put_rendered(Value, View0, Socket0),
+render_dynamic([Payload | T], View0, Socket0) ->
+    {View, Socket} = render(Payload, View0, Socket0),
     render_dynamic(T, View, Socket).
-
-put_rendered({RenderedView, Socket}, _View, _Socket) ->
-    {RenderedView, Socket};
-put_rendered(Value, View0, Socket) ->
-    View = arizona_view:put_rendered(Value, View0),
-    {View, Socket}.
 
 parse_template(Bindings, Template) ->
     Tokens = arizona_scanner:scan(#{}, Template),
