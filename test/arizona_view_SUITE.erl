@@ -83,8 +83,8 @@ render(Config) when is_list(Config) ->
     ParentView = arizona_view:new(#{}),
     Socket = arizona_socket:new(),
     {ok, View} = arizona_view:mount(Mod, Assigns, Socket),
-    Token = arizona_view:render(Mod, View, Socket),
-    Got = arizona_render:render(Token, ParentView, Socket),
+    Token = arizona_view:render(Mod, View),
+    Got = arizona_render:render(Token, View, ParentView, Socket),
     ?assertEqual(Expect, Got).
 
 rendered_to_iolist(Config) when is_list(Config) ->
@@ -108,8 +108,8 @@ rendered_to_iolist(Config) when is_list(Config) ->
     Mod = arizona_example_template,
     Assigns = #{id => ~"app", count => 0},
     {ok, View0} = arizona_view:mount(Mod, Assigns, Socket),
-    Token = arizona_view:render(Mod, View0, Socket),
-    {View, _Socket} = arizona_render:render(Token, ParentView, Socket),
+    Token = arizona_view:render(Mod, View0),
+    {View, _Socket} = arizona_render:render(Token, View0, ParentView, Socket),
     Got = arizona_view:rendered_to_iolist(View),
     ?assertEqual(Expect, Got).
 
@@ -122,12 +122,11 @@ render_nested_template_to_iolist(Config) when is_list(Config) ->
         ]
     ],
     ParentView0 = arizona_view:new(#{show_dialog => true, message => ~"Hello, World!"}),
-    Socket = arizona_socket:new(),
-    Token = arizona_render:nested_template(~""""
+    Token = arizona_render:nested_template(ParentView0, ~""""
     <div>
         {case arizona_view:get_assign(show_dialog, View) of
              true ->
-                 arizona_render:nested_template(~"""
+                 arizona_render:nested_template(View, ~"""
                  <dialog open>
                      {arizona_view:get_assign(message, View)}
                  </dialog>
@@ -137,6 +136,7 @@ render_nested_template_to_iolist(Config) when is_list(Config) ->
          end}
     </div>
     """"),
-    {ParentView, _Socket} = arizona_render:render(Token, ParentView0, Socket),
+    Socket = arizona_socket:new(),
+    {ParentView, _Socket} = arizona_render:render(Token, ParentView0, ParentView0, Socket),
     Got = arizona_view:rendered_to_iolist(ParentView),
     ?assertEqual(Expect, Got).

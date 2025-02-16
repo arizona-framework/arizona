@@ -1,8 +1,8 @@
 -module(arizona_example_components).
--export([button/2]).
+-export([button/1]).
 
-button(View, Socket) ->
-    arizona_render:component_template(View, Socket, ~"""
+button(View) ->
+    arizona_render:component_template(View, ~"""
     <button>
         {arizona_view:get_assign(text, View)}
     </button>

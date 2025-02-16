@@ -31,7 +31,18 @@ Parses scanned template tokens.
 > Tokens = arizona_scanner:scan(#{}, ~"foo{bar}").
 [{html,{1,1},<<"foo">>},{erlang,{1,4},<<"bar">>}]
 > arizona_parser:parse(Tokens).
-{[{bin,1,[{bin_element,1,{string,1,"foo"},default,[utf8]}]}],[{atom,1,bar}]}
+{[{bin,1,[{bin_element,1,{string,1,"foo"},default,[utf8]}]}],
+ [{'fun',1,
+      {clauses,
+          [{clause,1,
+               [{var,1,'ViewAcc'},{var,1,'Socket'}],
+               [],
+               [{call,2,
+                    {remote,2,{atom,2,arizona_render},{atom,2,render}},
+                    [{atom,2,bar},
+                     {var,2,'View'},
+                     {var,2,'ViewAcc'},
+                     {var,2,'Socket'}]}]}]}}]}
 ```
 
 ## Result
@@ -79,7 +90,13 @@ scan_and_parse_html_token_to_ast({html, _Loc, Text0}) ->
     scan_and_parse_to_ast(<<"<<", $", Text/binary, $", "/utf8>>">>).
 
 scan_and_parse_erlang_token_to_ast({erlang, _Loc, Expr}) ->
-    scan_and_parse_to_ast(Expr).
+    scan_and_parse_to_ast(
+        iolist_to_binary([
+            "fun(ViewAcc, Socket) ->\n",
+            ["    arizona_render:render(", Expr, ", View, ViewAcc, Socket)\n"],
+            "end"
+        ])
+    ).
 
 % The text must be quoted to transform it in an Erlang AST form, for example:
 %
