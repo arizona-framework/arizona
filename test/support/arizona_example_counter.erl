@@ -15,7 +15,7 @@ render(View) ->
     <div id="{arizona_view:get_assign(id, View)}">
         {integer_to_binary(arizona_view:get_assign(count, View))}
         {arizona_render:component(arizona_example_components, button, #{
-            text => ~"Increment"
+            text => arizona_view:get_assign(btn_text, View, ~"Increment")
         })}
     </div>
     """").
