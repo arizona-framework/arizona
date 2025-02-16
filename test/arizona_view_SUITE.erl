@@ -26,7 +26,8 @@ groups() ->
             render_nested_template_to_iolist
         ]},
         {diff, [
-            diff
+            diff,
+            diff_to_iolist
         ]}
     ].
 
@@ -178,4 +179,43 @@ diff(Config) when is_list(Config) ->
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:set_render_context(diff, Socket0),
     Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket),
+    ?assertEqual(Expect, Got).
+
+diff_to_iolist(Config) when is_list(Config) ->
+    Index = 0,
+    Vars = [id, count, btn_text],
+    Mod = arizona_example_template,
+    ViewId = ~"app",
+    Assigns = #{id => ViewId, count => 0, btn_text => ~"Increment"},
+    ChangedAssigns = #{count => 1, btn_text => ~"+1"},
+    Expect = [
+        ~"<html>\n    <head></head>\n    <body id=\"",
+        ~"app",
+        ~"\">",
+        [
+            ~"<div id=\"",
+            ~"counter",
+            ~"\">",
+            ~"0",
+            ~"",
+            [~"<button>", ~"Increment", ~"</button>"],
+            ~"</div>"
+        ],
+        ~"</body>\n</html>"
+    ],
+    RenderSocket = arizona_socket:new(render),
+    {ok, MountedView} = arizona_view:mount(Mod, Assigns, RenderSocket),
+    RenderToken = arizona_view:render(Mod, MountedView),
+    ParentView = arizona_view:new(#{}),
+    {RenderedView, Socket0} = arizona_render:render(
+        RenderToken, MountedView, ParentView, RenderSocket
+    ),
+    Rendered = arizona_view:rendered(RenderedView),
+    View0 = arizona_view:set_rendered([], RenderedView),
+    View = arizona_view:put_assigns(ChangedAssigns, View0),
+    Token = arizona_view:render(Mod, View),
+    TokenCallback = fun() -> Token end,
+    Socket = arizona_socket:set_render_context(diff, Socket0),
+    {DiffView, _Socket} = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket),
+    Got = arizona_view:diff_to_iolist(Rendered, DiffView),
     ?assertEqual(Expect, Got).

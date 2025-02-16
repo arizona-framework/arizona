@@ -20,6 +20,7 @@
 -export([put_diff/3]).
 -export([merge_changed_assigns/1]).
 -export([rendered_to_iolist/1]).
+-export([diff_to_iolist/2]).
 
 %
 
@@ -29,6 +30,7 @@
 -ignore_xref([put_assign/3]).
 -ignore_xref([put_assigns/2]).
 -ignore_xref([rendered_to_iolist/1]).
+-ignore_xref([diff_to_iolist/2]).
 
 %% --------------------------------------------------------------------
 %% Callback support function exports
@@ -224,6 +226,18 @@ Formats the rendered content to `t:iolist/0`.
 rendered_to_iolist(#view{} = View) ->
     rendered_to_iolist_1(View#view.rendered).
 
+-spec diff_to_iolist(Rendered0, View) -> Rendered1 when
+    Rendered0 :: arizona_render:rendered(),
+    View :: view(),
+    Rendered1 :: arizona_render:rendered().
+diff_to_iolist(Rendered, #view{} = View) when is_list(Rendered) ->
+    case View#view.rendered of
+        [] ->
+            Rendered;
+        Changed ->
+            diff_to_iolist_1(Rendered, Changed)
+    end.
+
 %% --------------------------------------------------------------------
 %% Callback support function definitions
 %% --------------------------------------------------------------------
@@ -262,3 +276,19 @@ zip([S | Static], []) ->
     [S | zip(Static, [])];
 zip([], [D | Dynamic]) ->
     [rendered_to_iolist_1(D) | zip([], Dynamic)].
+
+diff_to_iolist_1([template, Static, Dynamic], Changed) ->
+    lists:foldl(
+        fun
+            ({Index, Next}, [template, S, D]) when is_list(Next) ->
+                Template = lists:nth(Index + 1, D),
+                zip(S, dynamic_replace(Index, diff_to_iolist_1(Template, Next), Dynamic));
+            ({Index, Value}, [template, S, D]) ->
+                zip(S, dynamic_replace(Index, Value, D))
+        end,
+        [template, Static, Dynamic],
+        Changed
+    ).
+
+dynamic_replace(Index, Value, Dynamic) ->
+    lists:sublist(Dynamic, Index) ++ [Value] ++ lists:nthtail(Index + 1, Dynamic).
