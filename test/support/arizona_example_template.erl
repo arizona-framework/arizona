@@ -2,14 +2,14 @@
 -behaviour(arizona_view).
 
 -export([mount/2]).
--export([render/2]).
+-export([render/1]).
 
 mount(Assigns, _Socket) ->
     View = arizona_view:new(?MODULE, Assigns),
     {ok, View}.
 
-render(View, Socket) ->
-    arizona_render:view_template(View, Socket, ~""""
+render(View) ->
+    arizona_render:view_template(View, ~""""
     <html>
         <head></head>
         <body id="{arizona_view:get_assign(id, View)}">
