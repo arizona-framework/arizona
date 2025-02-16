@@ -8,10 +8,16 @@
 -export([new/2]).
 -export([new/4]).
 -export([assigns/1]).
+-export([put_assign/3]).
+-export([put_assigns/2]).
 -export([get_assign/2]).
+-export([get_assign/3]).
+-export([changed_assigns/1]).
+-export([set_changed_assigns/2]).
 -export([rendered/1]).
 -export([set_rendered/2]).
 -export([put_rendered/2]).
+-export([put_diff/3]).
 -export([merge_changed_assigns/1]).
 -export([rendered_to_iolist/1]).
 
@@ -19,6 +25,9 @@
 
 -ignore_xref([new/2]).
 -ignore_xref([new/4]).
+-ignore_xref([get_assign/3]).
+-ignore_xref([put_assign/3]).
+-ignore_xref([put_assigns/2]).
 -ignore_xref([rendered_to_iolist/1]).
 
 %% --------------------------------------------------------------------
@@ -91,7 +100,9 @@ new(Mod, Assigns) ->
     ChangedAssigns :: assigns(),
     Rendered :: arizona_render:rendered(),
     View :: view().
-new(Mod, Assigns, ChangedAssigns, Rendered) ->
+new(Mod, Assigns, ChangedAssigns, Rendered) when
+    is_atom(Mod), is_map(Assigns), is_map(ChangedAssigns), is_list(Rendered)
+->
     #view{
         module = Mod,
         assigns = Assigns,
@@ -105,12 +116,47 @@ new(Mod, Assigns, ChangedAssigns, Rendered) ->
 assigns(#view{} = View) ->
     View#view.assigns.
 
+-spec put_assign(Key, Value, View0) -> View1 when
+    Key :: atom(),
+    Value :: dynamic(),
+    View0 :: view(),
+    View1 :: view().
+put_assign(Key, Value, #view{} = View) when is_atom(Key) ->
+    View#view{changed_assigns = maps:put(Key, Value, View#view.changed_assigns)}.
+
+-spec put_assigns(Assigns, View0) -> View1 when
+    Assigns :: assigns(),
+    View0 :: view(),
+    View1 :: view().
+put_assigns(Assigns, #view{} = View) when is_map(Assigns) ->
+    maps:fold(fun(Key, Value, ViewAcc) -> put_assign(Key, Value, ViewAcc) end, View, Assigns).
+
 -spec get_assign(Key, View) -> Value when
     Key :: atom(),
     View :: view(),
     Value :: dynamic().
 get_assign(Key, #view{} = View) when is_atom(Key) ->
     maps:get(Key, View#view.changed_assigns, maps:get(Key, View#view.assigns)).
+
+-spec get_assign(Key, View, Default) -> Value when
+    Key :: atom(),
+    View :: view(),
+    Value :: Default | dynamic().
+get_assign(Key, #view{} = View, Default) when is_atom(Key) ->
+    maps:get(Key, View#view.changed_assigns, maps:get(Key, View#view.assigns, Default)).
+
+-spec changed_assigns(View) -> ChangedAssigns when
+    View :: view(),
+    ChangedAssigns :: assigns().
+changed_assigns(#view{} = View) ->
+    View#view.changed_assigns.
+
+-spec set_changed_assigns(ChangedAssigns, View0) -> View1 when
+    ChangedAssigns :: assigns(),
+    View0 :: view(),
+    View1 :: view().
+set_changed_assigns(ChangedAssigns, #view{} = View) when is_map(ChangedAssigns) ->
+    View#view{changed_assigns = ChangedAssigns}.
 
 -spec rendered(View) -> Rendered when
     View :: view(),
@@ -131,6 +177,21 @@ set_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
     View1 :: view().
 put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendered) ->
     View#view{rendered = [Rendered | View#view.rendered]}.
+
+-spec put_diff(Index, Rendered, View0) -> View1 when
+    Index :: arizona_diff:index(),
+    Rendered :: arizona_render:rendered_value(),
+    View0 :: view(),
+    View1 :: view().
+put_diff(Index, Rendered, #view{} = View) when
+    is_integer(Index), Index >= 0, (is_binary(Rendered) orelse is_list(Rendered))
+->
+    case Rendered of
+        [] ->
+            View;
+        _Other ->
+            View#view{rendered = [{Index, Rendered} | View#view.rendered]}
+    end.
 
 -spec merge_changed_assigns(View0) -> View1 when
     View0 :: view(),
