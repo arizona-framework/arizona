@@ -30,9 +30,39 @@ parse(Config) when is_list(Config) ->
             {bin, 1, [{bin_element, 1, {string, 1, "qu\"o\"t\\\"ed"}, default, [utf8]}]}
         ],
         _Dynamic = [
-            {atom, 1, foo},
-            {tuple, 1, [{atom, 1, bar}]},
-            {cons, 1, {atom, 1, bar}, {nil, 1}}
+            {'fun', 1,
+                {clauses, [
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}], [], [
+                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
+                            {atom, 2, foo},
+                            {var, 2, 'View'},
+                            {var, 2, 'ViewAcc'},
+                            {var, 2, 'Socket'}
+                        ]}
+                    ]}
+                ]}},
+            {'fun', 1,
+                {clauses, [
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}], [], [
+                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
+                            {tuple, 2, [{atom, 2, bar}]},
+                            {var, 2, 'View'},
+                            {var, 2, 'ViewAcc'},
+                            {var, 2, 'Socket'}
+                        ]}
+                    ]}
+                ]}},
+            {'fun', 1,
+                {clauses, [
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}], [], [
+                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
+                            {cons, 2, {atom, 2, bar}, {nil, 2}},
+                            {var, 2, 'View'},
+                            {var, 2, 'ViewAcc'},
+                            {var, 2, 'Socket'}
+                        ]}
+                    ]}
+                ]}}
         ]
     },
     Tokens = arizona_scanner:scan(#{}, ~"""

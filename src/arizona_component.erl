@@ -4,17 +4,16 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([render/4]).
+-export([render/3]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec render(Mod, Fun, View, Socket) -> Token when
+-spec render(Mod, Fun, View) -> Token when
     Mod :: module(),
     Fun :: atom(),
     View :: arizona_view:view(),
-    Socket :: arizona_socket:socket(),
     Token :: arizona_render:token().
-render(Mod, Fun, View, Socket) when is_atom(Mod), is_atom(Fun) ->
-    erlang:apply(Mod, Fun, [View, Socket]).
+render(Mod, Fun, View) when is_atom(Mod), is_atom(Fun) ->
+    erlang:apply(Mod, Fun, [View]).

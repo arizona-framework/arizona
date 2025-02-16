@@ -2,12 +2,12 @@
 -behaviour(arizona_view).
 
 -export([mount/2]).
--export([render/2]).
+-export([render/1]).
 
 mount(_Assigns, _Socket) ->
     ignore.
 
-render(View, Socket) ->
-    arizona_render:view_template(View, Socket, ~""""
+render(View) ->
+    arizona_render:view_template(View, ~""""
     ignored
     """").

@@ -26,7 +26,7 @@
 %% --------------------------------------------------------------------
 
 -export([mount/3]).
--export([render/3]).
+-export([render/2]).
 
 %% --------------------------------------------------------------------
 %% Callback definitions
@@ -37,9 +37,8 @@
     Socket :: arizona_socket:socket(),
     View :: view().
 
--callback render(View, Socket) -> Token when
+-callback render(View) -> Token when
     View :: view(),
-    Socket :: arizona_socket:socket(),
     Token :: arizona_render:token().
 
 %% --------------------------------------------------------------------
@@ -149,8 +148,8 @@ Formats the rendered content to `t:iolist/0`.
 > Assigns = #{id => ~"app", count => 0}.
 > Socket = arizona_socket:new().
 > {ok, View0} = arizona_view:mount(Mod, Assigns, Socket).
-> Rendered = arizona_view:render(Mod, View0, Socket).
-> {View, _Socket} = arizona_render:render(Rendered, View0, Socket).
+> Rendered = arizona_view:render(Mod, View0).
+> {View, _Socket} = arizona_render:render(Rendered, View0, View0, Socket).
 > arizona_view:rendered_to_iolist(View).
 [<<"<html>\n    <head></head>\n    <body id=\"">>,<<"app">>,<<"\">">>,
  [<<"<div id=\"">>,<<"counter">>,<<"\">">>,<<"0">>,<<>>,
@@ -176,13 +175,12 @@ rendered_to_iolist(#view{} = View) ->
 mount(Mod, Assigns, Socket) when is_atom(Mod), Mod =/= undefined, is_map(Assigns) ->
     erlang:apply(Mod, mount, [Assigns, Socket]).
 
--spec render(Mod, View, Socket) -> Token when
+-spec render(Mod, View) -> Token when
     Mod :: module(),
     View :: view(),
-    Socket :: arizona_socket:socket(),
     Token :: arizona_render:token().
-render(Mod, View, Socket) when is_atom(Mod), Mod =/= undefined ->
-    erlang:apply(Mod, render, [View, Socket]).
+render(Mod, View) when is_atom(Mod), Mod =/= undefined ->
+    erlang:apply(Mod, render, [View]).
 
 %% --------------------------------------------------------------------
 %% Private functions
