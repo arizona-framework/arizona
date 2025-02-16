@@ -146,7 +146,7 @@ Formats the rendered content to `t:iolist/0`.
 ```
 > Mod = arizona_example_template.
 > Assigns = #{id => ~"app", count => 0}.
-> Socket = arizona_socket:new().
+> Socket = arizona_socket:new(render).
 > {ok, View0} = arizona_view:mount(Mod, Assigns, Socket).
 > Rendered = arizona_view:render(Mod, View0).
 > {View, _Socket} = arizona_render:render(Rendered, View0, View0, Socket).

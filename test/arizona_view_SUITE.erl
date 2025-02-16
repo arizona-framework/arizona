@@ -34,13 +34,13 @@ mount(Config) when is_list(Config) ->
     Mod = arizona_example_template,
     Assigns = #{id => ~"app", count => 0},
     Expect = {ok, arizona_view:new(Mod, Assigns)},
-    Socket = arizona_socket:new(),
+    Socket = arizona_socket:new(render),
     Got = arizona_view:mount(Mod, Assigns, Socket),
     ?assertEqual(Expect, Got).
 
 mount_ignore(Config) when is_list(Config) ->
     Expect = ignore,
-    Socket = arizona_socket:new(),
+    Socket = arizona_socket:new(render),
     Got = arizona_view:mount(arizona_example_ignore, #{}, Socket),
     ?assertEqual(Expect, Got).
 
@@ -73,7 +73,7 @@ render(Config) when is_list(Config) ->
     ]),
     Expect = {
         RenderedView,
-        arizona_socket:new(#{
+        arizona_socket:new(render, #{
             ~"app" => RenderedView,
             ~"counter" => arizona_view:new(
                 arizona_example_counter, #{id => ~"counter", count => 0}, #{}, []
@@ -81,7 +81,7 @@ render(Config) when is_list(Config) ->
         })
     },
     ParentView = arizona_view:new(#{}),
-    Socket = arizona_socket:new(),
+    Socket = arizona_socket:new(render),
     {ok, View} = arizona_view:mount(Mod, Assigns, Socket),
     Token = arizona_view:render(Mod, View),
     Got = arizona_render:render(Token, View, ParentView, Socket),
@@ -104,7 +104,7 @@ rendered_to_iolist(Config) when is_list(Config) ->
         ~"</body>\n</html>"
     ],
     ParentView = arizona_view:new(#{}),
-    Socket = arizona_socket:new(),
+    Socket = arizona_socket:new(render),
     Mod = arizona_example_template,
     Assigns = #{id => ~"app", count => 0},
     {ok, View0} = arizona_view:mount(Mod, Assigns, Socket),
@@ -133,7 +133,7 @@ render_nested_template_to_iolist(Config) when is_list(Config) ->
          end)}
     </div>
     """"),
-    Socket = arizona_socket:new(),
+    Socket = arizona_socket:new(render),
     {ParentView, _Socket} = arizona_render:render(Token, ParentView0, ParentView0, Socket),
     Got = arizona_view:rendered_to_iolist(ParentView),
     ?assertEqual(Expect, Got).
