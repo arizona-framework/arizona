@@ -10,6 +10,7 @@
 -export([nested_template/2]).
 -export([view/2]).
 -export([component/3]).
+-export([if_true/2]).
 
 %
 
@@ -19,6 +20,7 @@
 -ignore_xref([nested_template/2]).
 -ignore_xref([view/2]).
 -ignore_xref([component/3]).
+-ignore_xref([if_true/2]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -133,6 +135,18 @@ view(Mod, Assigns) when is_atom(Mod), is_map(Assigns), is_map_key(id, Assigns) -
     Token :: {component, Mod, Fun, Assigns}.
 component(Mod, Fun, Assigns) when is_atom(Mod), is_atom(Fun), is_map(Assigns) ->
     {component, Mod, Fun, Assigns}.
+
+-spec if_true(Cond, Callback) -> Rendered when
+    Cond :: boolean(),
+    Callback :: fun(() -> Rendered),
+    Rendered :: rendered_value().
+if_true(Cond, Callback) when is_function(Callback, 0) ->
+    case Cond of
+        true ->
+            erlang:apply(Callback, []);
+        false ->
+            ~""
+    end.
 
 %% --------------------------------------------------------------------
 %% Private functions
