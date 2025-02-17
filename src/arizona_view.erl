@@ -77,7 +77,7 @@
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--include_lib("doctest/include/doctest.hrl").
+doctest_test() -> doctest:module(?MODULE).
 -endif.
 
 %% --------------------------------------------------------------------
