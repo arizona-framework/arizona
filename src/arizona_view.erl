@@ -76,6 +76,7 @@
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
 -include_lib("doctest/include/doctest.hrl").
 -endif.
 
@@ -235,7 +236,7 @@ diff_to_iolist(Rendered, #view{} = View) when is_list(Rendered) ->
         [] ->
             Rendered;
         Changed ->
-            diff_to_iolist_1(Rendered, Changed)
+            diff_replace(Changed, Rendered)
     end.
 
 %% --------------------------------------------------------------------
@@ -277,18 +278,19 @@ zip([S | Static], []) ->
 zip([], [D | Dynamic]) ->
     [rendered_to_iolist_1(D) | zip([], Dynamic)].
 
-diff_to_iolist_1([template, Static, Dynamic], Changed) ->
-    lists:foldl(
-        fun
-            ({Index, Next}, [template, S, D]) when is_list(Next) ->
-                Template = lists:nth(Index + 1, D),
-                zip(S, dynamic_replace(Index, diff_to_iolist_1(Template, Next), Dynamic));
-            ({Index, Value}, [template, S, D]) ->
-                zip(S, dynamic_replace(Index, Value, D))
-        end,
-        [template, Static, Dynamic],
-        Changed
-    ).
+diff_replace([{Index, [{_, _} | _] = NestedChanged0} | T], [template, Static, Dynamic0]) ->
+    NestedChanged = lists:keysort(1, NestedChanged0),
+    NestedTemplate0 = lists:nth(Index + 1, Dynamic0),
+    NestedTemplate = diff_replace(NestedChanged, NestedTemplate0),
+    Dynamic = diff_replace_value(Dynamic0, {Index, NestedTemplate}, 0),
+    diff_replace(T, [template, Static, Dynamic]);
+diff_replace([{Index, Value} | T], [template, Static, Dynamic0]) ->
+    Dynamic = diff_replace_value(Dynamic0, {Index, Value}, 0),
+    diff_replace(T, [template, Static, Dynamic]);
+diff_replace([], [template, Static, Dynamic]) ->
+    zip(Static, Dynamic).
 
-dynamic_replace(Index, Value, Dynamic) ->
-    lists:sublist(Dynamic, Index) ++ [Value] ++ lists:nthtail(Index + 1, Dynamic).
+diff_replace_value([_Value | T], {Index, NewValue}, Index) ->
+    [NewValue | T];
+diff_replace_value([H | T], Replacement, IndexAcc) ->
+    [H | diff_replace_value(T, Replacement, IndexAcc + 1)].
