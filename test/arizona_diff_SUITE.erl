@@ -51,7 +51,7 @@ diff_view_template(Config) when is_list(Config) ->
     """),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:new(diff),
-    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket),
+    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
     ?assertEqual(Expect, Got).
 
 diff_component_template(Config) when is_list(Config) ->
@@ -74,7 +74,7 @@ diff_component_template(Config) when is_list(Config) ->
     """),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:new(diff),
-    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket),
+    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
     ?assertEqual(Expect, Got).
 
 diff_nested_template(Config) when is_list(Config) ->
@@ -97,7 +97,7 @@ diff_nested_template(Config) when is_list(Config) ->
     """),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:new(diff),
-    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket),
+    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
     ?assertEqual(Expect, Got).
 
 diff_view(Config) when is_list(Config) ->
@@ -147,7 +147,7 @@ diff_view(Config) when is_list(Config) ->
     TokenCallback = fun() -> Token end,
     Socket1 = arizona_socket:set_render_context(diff, Socket0),
     Socket = arizona_socket:remove_view(CounterViewId, Socket1),
-    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket),
+    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
     ?assertEqual(Expect, Got).
 
 diff_view_new_id(Config) when is_list(Config) ->
@@ -193,7 +193,7 @@ diff_view_new_id(Config) when is_list(Config) ->
     Token = arizona_view:render(RootMod, View),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:set_render_context(diff, Socket0),
-    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket),
+    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
     ?assertEqual(Expect, Got).
 
 diff_view_ignore(Config) when is_list(Config) ->
@@ -229,7 +229,7 @@ diff_view_ignore(Config) when is_list(Config) ->
     Token = arizona_view:render(RootMod, View),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:set_render_context(diff, Socket0),
-    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket),
+    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
     ?assertEqual(Expect, Got).
 
 diff_component(Config) when is_list(Config) ->
@@ -256,5 +256,5 @@ diff_component(Config) when is_list(Config) ->
     Token = arizona_component:render(Mod, Fun, View),
     Socket = arizona_socket:set_render_context(diff, Socket0),
     TokenCallback = fun() -> Token end,
-    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket),
+    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
     ?assertEqual(Expect, Got).

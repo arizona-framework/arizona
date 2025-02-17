@@ -77,7 +77,7 @@ scan_and_parse_erlang_token_to_ast(Index, {erlang, _Loc, Expr}) ->
     Vars = expr_vars(Expr),
     scan_and_parse_to_ast(
         iolist_to_binary([
-            ["fun(ViewAcc, Socket) ->", $\n],
+            ["fun(ViewAcc, Socket, Opts) ->", $\n],
             ["    case arizona_socket:render_context(Socket) of", $\n],
             ["        render ->", $\n],
             ["            arizona_render:render(", Expr, ", View, ViewAcc, Socket);", $\n],
@@ -85,7 +85,10 @@ scan_and_parse_erlang_token_to_ast(Index, {erlang, _Loc, Expr}) ->
             ["            Index = ", integer_to_binary(Index), ",", $\n],
             ["            Vars = ", vars_to_binary(Vars), ",", $\n],
             ["            TokensCallback = fun() -> ", Expr, " end,", $\n],
-            ["            arizona_diff:diff(Index, Vars, TokensCallback, ViewAcc, Socket)", $\n],
+            [
+                "            arizona_diff:diff(Index, Vars, TokensCallback, ViewAcc, Socket, Opts)",
+                $\n
+            ],
             ["    end", $\n],
             ["end"]
         ])

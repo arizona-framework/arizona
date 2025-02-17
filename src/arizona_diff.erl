@@ -4,11 +4,11 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([diff/5]).
+-export([diff/6]).
 
 %
 
--ignore_xref([diff/5]).
+-ignore_xref([diff/6]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -23,40 +23,52 @@
 -type tokens_callback() :: fun(() -> arizona_render:token()).
 -export_type([tokens_callback/0]).
 
+-type options() :: #{force_changed => boolean()}.
+-export_type([options/0]).
+
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec diff(Index, Vars, TokensCallback, ViewAcc0, Socket0) -> {ViewAcc1, Socket1} when
+-spec diff(Index, Vars, TokensCallback, ViewAcc0, Socket0, Opts) -> {ViewAcc1, Socket1} when
     Index :: index(),
     Vars :: [var()],
     TokensCallback :: tokens_callback(),
     ViewAcc0 :: arizona_view:view(),
     Socket0 :: arizona_socket:socket(),
+    Opts :: options(),
     ViewAcc1 :: arizona_view:view(),
     Socket1 :: arizona_socket:socket().
-diff(Index, Vars, TokenCallback, ViewAcc0, Socket0) ->
-    Assigns = arizona_view:assigns(ViewAcc0),
-    ChangedAssigns = arizona_view:changed_assigns(ViewAcc0),
-    case changed(Assigns, ChangedAssigns, Vars) of
+diff(Index, Vars, TokenCallback, ViewAcc, Socket, Opts) ->
+    case maps:get(force_changed, Opts, false) of
         true ->
-            Token = erlang:apply(TokenCallback, []),
-            {ViewAcc, Socket} = diff(Token, Index, ViewAcc0, Socket0),
-            {ViewAcc, Socket};
+            diff_1(Index, TokenCallback, ViewAcc, Socket);
         false ->
-            {ViewAcc0, Socket0}
+            Assigns = arizona_view:assigns(ViewAcc),
+            ChangedAssigns = arizona_view:changed_assigns(ViewAcc),
+            case changed(Assigns, ChangedAssigns, Vars) of
+                true ->
+                    diff_1(Index, TokenCallback, ViewAcc, Socket);
+                false ->
+                    {ViewAcc, Socket}
+            end
     end.
 
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
 
+diff_1(Index, TokenCallback, ViewAcc0, Socket0) ->
+    Token = erlang:apply(TokenCallback, []),
+    {ViewAcc, Socket} = diff(Token, Index, ViewAcc0, Socket0),
+    {ViewAcc, Socket}.
+
 changed(Assigns, ChangedAssigns, Vars) ->
     lists:any(
         fun(Var) ->
             case ChangedAssigns of
-                #{Var := Value} when Value =/= map_get(Var, Assigns) ->
-                    true;
+                #{Var := Value} ->
+                    Value =/= maps:get(Var, Assigns);
                 #{} ->
                     false
             end
@@ -79,20 +91,20 @@ diff(Diff, Index, View0, Socket) when is_binary(Diff); is_list(Diff) ->
     {View, Socket}.
 
 diff_view_template(View0, Socket0, Dynamic) ->
-    {View1, Socket1} = diff_dynamic(Dynamic, View0, Socket0),
+    {View1, Socket1} = diff_dynamic(Dynamic, View0, Socket0, #{}),
     View = arizona_view:merge_changed_assigns(View1),
     Socket = arizona_socket:put_view(View, Socket1),
     {View, Socket}.
 
 diff_component_template(View0, Socket0, Dynamic) ->
-    {View, Socket} = diff_dynamic(Dynamic, View0, Socket0),
+    {View, Socket} = diff_dynamic(Dynamic, View0, Socket0, #{}),
     {View, Socket}.
 
 diff_nested_template(ParentView0, Socket0, Dynamic, Index) ->
     Assigns = arizona_view:assigns(ParentView0),
     ChangedAssigns = arizona_view:changed_assigns(ParentView0),
     View0 = arizona_view:new(undefined, Assigns, ChangedAssigns, []),
-    {View, Socket} = diff_dynamic(Dynamic, View0, Socket0),
+    {View, Socket} = diff_dynamic(Dynamic, View0, Socket0, #{}),
     Diff = arizona_view:rendered(View),
     ParentView = arizona_view:put_diff(Index, Diff, ParentView0),
     {ParentView, Socket}.
@@ -100,7 +112,8 @@ diff_nested_template(ParentView0, Socket0, Dynamic, Index) ->
 diff_view(ParentView, Socket, Mod, Assigns, Index) ->
     ViewId = maps:get(id, Assigns),
     case arizona_socket:get_view(ViewId, Socket) of
-        {ok, View} ->
+        {ok, View0} ->
+            View = arizona_view:set_changed_assigns(Assigns, View0),
             render_view(ParentView, Socket, Mod, Assigns, Index, View, ViewId);
         error ->
             mount_view(ParentView, Socket, Mod, Assigns, Index)
@@ -111,7 +124,7 @@ render_view(ParentView0, Socket0, Mod, NewAssigns, Index, View0, ViewId) ->
     OldAssigns = arizona_view:assigns(View0),
     ChangedAssigns = view_changed_assigns(OldAssigns, NewAssigns),
     View1 = arizona_view:set_changed_assigns(ChangedAssigns, View0),
-    {View2, Socket1} = diff_dynamic(Dynamic, View1, Socket0),
+    {View2, Socket1} = diff_dynamic(Dynamic, View1, Socket0, #{}),
     case ChangedAssigns of
         #{id := _NewViewId} ->
             Socket2 = arizona_socket:remove_view(ViewId, Socket1),
@@ -150,15 +163,15 @@ mount_view(ParentView0, Socket0, Mod, Assigns, Index) ->
     end.
 
 diff_component(ParentView0, Socket0, Mod, Fun, Assigns, Index) ->
-    View0 = arizona_view:new(undefined, Assigns, Assigns, []),
+    View0 = arizona_view:new(Assigns),
     {component_template, _Static, Dynamic} = arizona_component:render(Mod, Fun, View0),
-    {View, Socket} = diff_dynamic(Dynamic, View0, Socket0),
+    {View, Socket} = diff_dynamic(Dynamic, View0, Socket0, #{force_changed => true}),
     Diff = arizona_view:rendered(View),
     ParentView = arizona_view:put_diff(Index, Diff, ParentView0),
     {ParentView, Socket}.
 
-diff_dynamic([], View, Socket) ->
+diff_dynamic([], View, Socket, _Opts) ->
     {View, Socket};
-diff_dynamic([Callback | T], View0, Socket0) ->
-    {View, Socket} = erlang:apply(Callback, [View0, Socket0]),
-    diff_dynamic(T, View, Socket).
+diff_dynamic([Callback | T], View0, Socket0, Opts) ->
+    {View, Socket} = erlang:apply(Callback, [View0, Socket0, Opts]),
+    diff_dynamic(T, View, Socket, Opts).

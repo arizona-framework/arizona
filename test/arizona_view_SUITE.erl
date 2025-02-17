@@ -156,7 +156,7 @@ diff(Config) when is_list(Config) ->
     Assigns = #{id => ViewId, count => 0, btn_text => ~"Increment"},
     ChangedAssigns = #{count => 1, btn_text => ~"+1"},
     ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
-    Diff = [{1, [{1, ~"0"}]}],
+    Diff = [{1, [{2, [{0, ~"+1"}]}, {1, ~"1"}]}],
     Expect = {
         arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Diff),
         arizona_socket:new(diff, #{
@@ -178,7 +178,7 @@ diff(Config) when is_list(Config) ->
     Token = arizona_view:render(Mod, View),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:set_render_context(diff, Socket0),
-    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket),
+    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
     ?assertEqual(Expect, Got).
 
 diff_to_iolist(Config) when is_list(Config) ->
@@ -196,9 +196,9 @@ diff_to_iolist(Config) when is_list(Config) ->
             ~"<div id=\"",
             ~"counter",
             ~"\">",
-            ~"0",
+            ~"1",
             ~"",
-            [~"<button>", ~"Increment", ~"</button>"],
+            [~"<button>", ~"+1", ~"</button>"],
             ~"</div>"
         ],
         ~"</body>\n</html>"
@@ -216,6 +216,6 @@ diff_to_iolist(Config) when is_list(Config) ->
     Token = arizona_view:render(Mod, View),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:set_render_context(diff, Socket0),
-    {DiffView, _Socket} = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket),
+    {DiffView, _Socket} = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
     Got = arizona_view:diff_to_iolist(Rendered, DiffView),
     ?assertEqual(Expect, Got).

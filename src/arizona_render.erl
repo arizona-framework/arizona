@@ -224,7 +224,7 @@ render_component(ParentView0, Socket0, Mod, Fun, Assigns) ->
 render_dynamic([], ViewAcc, Socket) ->
     {ViewAcc, Socket};
 render_dynamic([Callback | T], ViewAcc0, Socket0) ->
-    {ViewAcc, Socket} = erlang:apply(Callback, [ViewAcc0, Socket0]),
+    {ViewAcc, Socket} = erlang:apply(Callback, [ViewAcc0, Socket0, _Opts = #{}]),
     render_dynamic(T, ViewAcc, Socket).
 
 parse_template(Bindings, Template) ->
