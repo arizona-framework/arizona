@@ -174,7 +174,7 @@ diff_view_new_id(Config) when is_list(Config) ->
                 Mod, #{id => ~"baz", ignore => false, name => ~"Arizona"}, #{}, []
             ),
             % FIXME: The 'ViewId' should be removed from the socket views.
-            % The question is: How to known the previous id?
+            % The question is: How to know the previous id?
             ViewId => arizona_view:new(
                 Mod, #{id => ~"bar", ignore => false, name => ~"World"}, #{}, []
             ),
@@ -210,7 +210,7 @@ diff_view_ignore(Config) when is_list(Config) ->
         arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, []),
         arizona_socket:new(diff, #{
             % FIXME: The 'ViewId' should be removed from the socket views.
-            % The question is: How to known the previous id?
+            % The question is: How to know the previous id?
             ViewId => arizona_view:new(
                 Mod, #{id => ~"bar", ignore => false, name => ~"World"}, #{}, []
             ),

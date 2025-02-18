@@ -190,12 +190,7 @@ put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendere
 put_diff(Index, Rendered, #view{} = View) when
     is_integer(Index), Index >= 0, (is_binary(Rendered) orelse is_list(Rendered))
 ->
-    case Rendered of
-        [] ->
-            View;
-        _Other ->
-            View#view{rendered = [{Index, Rendered} | View#view.rendered]}
-    end.
+    View#view{rendered = [{Index, Rendered} | View#view.rendered]}.
 
 -spec merge_changed_assigns(View0) -> View1 when
     View0 :: view(),

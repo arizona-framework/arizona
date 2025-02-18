@@ -20,8 +20,8 @@
 -type var() :: atom().
 -export_type([var/0]).
 
--type tokens_callback() :: fun(() -> arizona_render:token()).
--export_type([tokens_callback/0]).
+-type token_callback() :: fun(() -> arizona_render:token()).
+-export_type([token_callback/0]).
 
 -type options() :: #{force_changed => boolean()}.
 -export_type([options/0]).
@@ -30,10 +30,10 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec diff(Index, Vars, TokensCallback, ViewAcc0, Socket0, Opts) -> {ViewAcc1, Socket1} when
+-spec diff(Index, Vars, TokenCallback, ViewAcc0, Socket0, Opts) -> {ViewAcc1, Socket1} when
     Index :: index(),
     Vars :: [var()],
-    TokensCallback :: tokens_callback(),
+    TokenCallback :: token_callback(),
     ViewAcc0 :: arizona_view:view(),
     Socket0 :: arizona_socket:socket(),
     Opts :: options(),

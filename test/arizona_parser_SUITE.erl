@@ -51,14 +51,14 @@ parse(Config) when is_list(Config) ->
                                 {clause, 5, [{atom, 5, diff}], [], [
                                     {match, 6, {var, 6, 'Index'}, {integer, 6, 0}},
                                     {match, 7, {var, 7, 'Vars'}, {nil, 7}},
-                                    {match, 8, {var, 8, 'TokensCallback'},
+                                    {match, 8, {var, 8, 'TokenCallback'},
                                         {'fun', 8,
                                             {clauses, [{clause, 8, [], [], [{atom, 8, foo}]}]}}},
                                     {call, 9, {remote, 9, {atom, 9, arizona_diff}, {atom, 9, diff}},
                                         [
                                             {var, 9, 'Index'},
                                             {var, 9, 'Vars'},
-                                            {var, 9, 'TokensCallback'},
+                                            {var, 9, 'TokenCallback'},
                                             {var, 9, 'ViewAcc'},
                                             {var, 9, 'Socket'},
                                             {var, 9, 'Opts'}
@@ -88,7 +88,7 @@ parse(Config) when is_list(Config) ->
                                 {clause, 5, [{atom, 5, diff}], [], [
                                     {match, 6, {var, 6, 'Index'}, {integer, 6, 1}},
                                     {match, 7, {var, 7, 'Vars'}, {nil, 7}},
-                                    {match, 8, {var, 8, 'TokensCallback'},
+                                    {match, 8, {var, 8, 'TokenCallback'},
                                         {'fun', 8,
                                             {clauses, [
                                                 {clause, 8, [], [], [{tuple, 8, [{atom, 8, bar}]}]}
@@ -97,7 +97,7 @@ parse(Config) when is_list(Config) ->
                                         [
                                             {var, 9, 'Index'},
                                             {var, 9, 'Vars'},
-                                            {var, 9, 'TokensCallback'},
+                                            {var, 9, 'TokenCallback'},
                                             {var, 9, 'ViewAcc'},
                                             {var, 9, 'Socket'},
                                             {var, 9, 'Opts'}
@@ -127,7 +127,7 @@ parse(Config) when is_list(Config) ->
                                 {clause, 5, [{atom, 5, diff}], [], [
                                     {match, 6, {var, 6, 'Index'}, {integer, 6, 2}},
                                     {match, 7, {var, 7, 'Vars'}, {nil, 7}},
-                                    {match, 8, {var, 8, 'TokensCallback'},
+                                    {match, 8, {var, 8, 'TokenCallback'},
                                         {'fun', 8,
                                             {clauses, [
                                                 {clause, 8, [], [], [
@@ -138,7 +138,7 @@ parse(Config) when is_list(Config) ->
                                         [
                                             {var, 9, 'Index'},
                                             {var, 9, 'Vars'},
-                                            {var, 9, 'TokensCallback'},
+                                            {var, 9, 'TokenCallback'},
                                             {var, 9, 'ViewAcc'},
                                             {var, 9, 'Socket'},
                                             {var, 9, 'Opts'}

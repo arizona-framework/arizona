@@ -78,19 +78,16 @@ scan_and_parse_erlang_token_to_ast(Index, {erlang, _Loc, Expr}) ->
     Vars = expr_vars(Expr),
     scan_and_parse_to_ast(
         iolist_to_binary([
-            ["fun(ViewAcc, Socket, Opts) ->", $\n],
-            ["    case arizona_socket:render_context(Socket) of", $\n],
-            ["        render ->", $\n],
-            ["            arizona_render:render(", Expr, ", View, ViewAcc, Socket);", $\n],
-            ["        diff ->", $\n],
-            ["            Index = ", integer_to_binary(Index), ",", $\n],
-            ["            Vars = ", vars_to_binary(Vars), ",", $\n],
-            ["            TokensCallback = fun() -> ", Expr, " end,", $\n],
-            [
-                "            arizona_diff:diff(Index, Vars, TokensCallback, ViewAcc, Socket, Opts)",
-                $\n
-            ],
-            ["    end", $\n],
+            ["fun(ViewAcc, Socket, Opts) ->\n"],
+            ["    case arizona_socket:render_context(Socket) of\n"],
+            ["        render ->\n"],
+            ["            arizona_render:render(", Expr, ", View, ViewAcc, Socket);\n"],
+            ["        diff ->\n"],
+            ["            Index = ", integer_to_binary(Index), ",\n"],
+            ["            Vars = ", vars_to_binary(Vars), ",\n"],
+            ["            TokenCallback = fun() -> ", Expr, " end,\n"],
+            ["            arizona_diff:diff(Index, Vars, TokenCallback, ViewAcc, Socket, Opts)\n"],
+            ["    end\n"],
             ["end"]
         ])
     ).
