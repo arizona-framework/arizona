@@ -4,11 +4,20 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([parse/1]).
+-export([parse/2]).
 
 %
 
--ignore_xref([parse/1]).
+-ignore_xref([parse/2]).
+
+%% --------------------------------------------------------------------
+%% Types (and their exports)
+%% --------------------------------------------------------------------
+
+-type options() :: #{
+    render_context => arizona_socket:render_context() | from_socket
+}.
+-export_type([options/0]).
 
 %% --------------------------------------------------------------------
 %% Doctests
@@ -31,22 +40,24 @@ Parses scanned template tokens.
 It returns a `{Static, Dynamic}` tuple where Static is an AST list of
 binaries and the Dynamic is an AST list of Erlang terms.
 """.
--spec parse(Tokens) -> {Static, Dynamic} when
+-spec parse(Tokens, Opts) -> {Static, Dynamic} when
     Tokens :: [Token],
+    Opts :: options(),
     Token :: arizona_scanner:token(),
     Static :: [Ast],
     Dynamic :: [Ast],
     Ast :: tuple().
-parse(Tokens0) when is_list(Tokens0) ->
+parse(Tokens0, Opts) when is_list(Tokens0), is_map(Opts) ->
     Tokens1 = drop_comments(Tokens0),
     Tokens = add_empty_text_tokens(Tokens1),
     {HtmlTokens, ErlTokens} = tokens_partition(Tokens),
     Static = [scan_and_parse_html_token_to_ast(HtmlToken) || HtmlToken <- HtmlTokens],
     ErlTokensEnum = lists:enumerate(0, ErlTokens),
-    Dynamic = [
-        scan_and_parse_erlang_token_to_ast(Index, ErlToken)
+    RenderContext = maps:get(render_context, Opts, from_socket),
+    Dynamic = arizona_transform:transform([
+        scan_and_parse_erlang_token_to_ast(ErlToken, Index, RenderContext)
      || {Index, ErlToken} <- ErlTokensEnum
-    ],
+    ]),
     {Static, Dynamic}.
 
 %% --------------------------------------------------------------------
@@ -74,23 +85,32 @@ scan_and_parse_html_token_to_ast({html, _Loc, Text0}) ->
     Text = quote_text(Text0),
     scan_and_parse_to_ast(<<"<<", $", Text/binary, $", "/utf8>>">>).
 
-scan_and_parse_erlang_token_to_ast(Index, {erlang, _Loc, Expr}) ->
-    Vars = expr_vars(Expr),
-    scan_and_parse_to_ast(
-        iolist_to_binary([
-            ["fun(ViewAcc, Socket, Opts) ->\n"],
-            ["    case arizona_socket:render_context(Socket) of\n"],
-            ["        render ->\n"],
-            ["            arizona_render:render(", Expr, ", View, ViewAcc, Socket);\n"],
-            ["        diff ->\n"],
-            ["            Index = ", integer_to_binary(Index), ",\n"],
-            ["            Vars = ", vars_to_binary(Vars), ",\n"],
-            ["            TokenCallback = fun() -> ", Expr, " end,\n"],
-            ["            arizona_diff:diff(Index, Vars, TokenCallback, ViewAcc, Socket, Opts)\n"],
-            ["    end\n"],
-            ["end"]
-        ])
-    ).
+scan_and_parse_erlang_token_to_ast({erlang, _Loc, Expr0}, Index0, RenderContext) ->
+    Index = integer_to_binary(Index0),
+    Vars = vars_to_binary(expr_vars(Expr0)),
+    Expr = norm_expr(RenderContext, Expr0, Index, Vars),
+    scan_and_parse_to_ast(iolist_to_binary(Expr)).
+
+norm_expr(from_socket, Expr, Index, Vars) ->
+    [
+        ["fun(ViewAcc, Socket, Opts) ->\n"],
+        ["    case arizona_socket:render_context(Socket) of\n"],
+        ["        render ->\n"],
+        ["            arizona_render:render(", Expr, ", View, ViewAcc, Socket);\n"],
+        ["        diff ->\n"],
+        ["            Index = ", Index, ",\n"],
+        ["            Vars = ", Vars, ",\n"],
+        ["            TokenCallback = fun() -> ", Expr, " end,\n"],
+        ["            arizona_diff:diff(Index, Vars, TokenCallback, ViewAcc, Socket, Opts)\n"],
+        ["    end\n"],
+        ["end"]
+    ];
+norm_expr(render, Expr, _Index, _Vars) ->
+    [
+        ["fun(ViewAcc, Socket, Opts) ->\n"],
+        ["    arizona_render:render(", Expr, ", View, ViewAcc, Socket)\n"],
+        ["end"]
+    ].
 
 % The text must be quoted to transform it in an Erlang AST form, for example:
 %

@@ -23,7 +23,8 @@ groups() ->
         {render, [parallel], [
             render,
             rendered_to_iolist,
-            render_nested_template_to_iolist
+            render_nested_template_to_iolist,
+            render_list
         ]},
         {diff, [
             diff,
@@ -144,6 +145,18 @@ render_nested_template_to_iolist(Config) when is_list(Config) ->
     Socket = arizona_socket:new(render),
     {ParentView, _Socket} = arizona_render:render(Token, ParentView0, ParentView0, Socket),
     Got = arizona_view:rendered_to_iolist(ParentView),
+    ?assertEqual(Expect, Got).
+
+render_list(Config) when is_list(Config) ->
+    Mod = arizona_example_components,
+    Fun = list,
+    Assigns = #{list => [1,2,3]},
+    Expect = {},
+    ParentView = arizona_view:new(#{}),
+    Socket = arizona_socket:new(render),
+    View = arizona_view:new(Assigns),
+    Token = arizona_component:render(Mod, Fun, View),
+    Got = arizona_render:render(Token, View, ParentView, Socket),
     ?assertEqual(Expect, Got).
 
 diff(Config) when is_list(Config) ->
