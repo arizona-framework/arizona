@@ -32,35 +32,119 @@ parse(Config) when is_list(Config) ->
         _Dynamic = [
             {'fun', 1,
                 {clauses, [
-                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}], [], [
-                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
-                            {atom, 2, foo},
-                            {var, 2, 'View'},
-                            {var, 2, 'ViewAcc'},
-                            {var, 2, 'Socket'}
-                        ]}
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
+                        {'case', 2,
+                            {call, 2,
+                                {remote, 2, {atom, 2, arizona_socket}, {atom, 2, render_context}}, [
+                                    {var, 2, 'Socket'}
+                                ]},
+                            [
+                                {clause, 3, [{atom, 3, render}], [], [
+                                    {call, 4,
+                                        {remote, 4, {atom, 4, arizona_render}, {atom, 4, render}}, [
+                                            {atom, 4, foo},
+                                            {var, 4, 'View'},
+                                            {var, 4, 'ViewAcc'},
+                                            {var, 4, 'Socket'}
+                                        ]}
+                                ]},
+                                {clause, 5, [{atom, 5, diff}], [], [
+                                    {match, 6, {var, 6, 'Index'}, {integer, 6, 0}},
+                                    {match, 7, {var, 7, 'Vars'}, {nil, 7}},
+                                    {match, 8, {var, 8, 'TokenCallback'},
+                                        {'fun', 8,
+                                            {clauses, [{clause, 8, [], [], [{atom, 8, foo}]}]}}},
+                                    {call, 9, {remote, 9, {atom, 9, arizona_diff}, {atom, 9, diff}},
+                                        [
+                                            {var, 9, 'Index'},
+                                            {var, 9, 'Vars'},
+                                            {var, 9, 'TokenCallback'},
+                                            {var, 9, 'ViewAcc'},
+                                            {var, 9, 'Socket'},
+                                            {var, 9, 'Opts'}
+                                        ]}
+                                ]}
+                            ]}
                     ]}
                 ]}},
             {'fun', 1,
                 {clauses, [
-                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}], [], [
-                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
-                            {tuple, 2, [{atom, 2, bar}]},
-                            {var, 2, 'View'},
-                            {var, 2, 'ViewAcc'},
-                            {var, 2, 'Socket'}
-                        ]}
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
+                        {'case', 2,
+                            {call, 2,
+                                {remote, 2, {atom, 2, arizona_socket}, {atom, 2, render_context}}, [
+                                    {var, 2, 'Socket'}
+                                ]},
+                            [
+                                {clause, 3, [{atom, 3, render}], [], [
+                                    {call, 4,
+                                        {remote, 4, {atom, 4, arizona_render}, {atom, 4, render}}, [
+                                            {tuple, 4, [{atom, 4, bar}]},
+                                            {var, 4, 'View'},
+                                            {var, 4, 'ViewAcc'},
+                                            {var, 4, 'Socket'}
+                                        ]}
+                                ]},
+                                {clause, 5, [{atom, 5, diff}], [], [
+                                    {match, 6, {var, 6, 'Index'}, {integer, 6, 1}},
+                                    {match, 7, {var, 7, 'Vars'}, {nil, 7}},
+                                    {match, 8, {var, 8, 'TokenCallback'},
+                                        {'fun', 8,
+                                            {clauses, [
+                                                {clause, 8, [], [], [{tuple, 8, [{atom, 8, bar}]}]}
+                                            ]}}},
+                                    {call, 9, {remote, 9, {atom, 9, arizona_diff}, {atom, 9, diff}},
+                                        [
+                                            {var, 9, 'Index'},
+                                            {var, 9, 'Vars'},
+                                            {var, 9, 'TokenCallback'},
+                                            {var, 9, 'ViewAcc'},
+                                            {var, 9, 'Socket'},
+                                            {var, 9, 'Opts'}
+                                        ]}
+                                ]}
+                            ]}
                     ]}
                 ]}},
             {'fun', 1,
                 {clauses, [
-                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}], [], [
-                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
-                            {cons, 2, {atom, 2, bar}, {nil, 2}},
-                            {var, 2, 'View'},
-                            {var, 2, 'ViewAcc'},
-                            {var, 2, 'Socket'}
-                        ]}
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
+                        {'case', 2,
+                            {call, 2,
+                                {remote, 2, {atom, 2, arizona_socket}, {atom, 2, render_context}}, [
+                                    {var, 2, 'Socket'}
+                                ]},
+                            [
+                                {clause, 3, [{atom, 3, render}], [], [
+                                    {call, 4,
+                                        {remote, 4, {atom, 4, arizona_render}, {atom, 4, render}}, [
+                                            {cons, 4, {atom, 4, bar}, {nil, 4}},
+                                            {var, 4, 'View'},
+                                            {var, 4, 'ViewAcc'},
+                                            {var, 4, 'Socket'}
+                                        ]}
+                                ]},
+                                {clause, 5, [{atom, 5, diff}], [], [
+                                    {match, 6, {var, 6, 'Index'}, {integer, 6, 2}},
+                                    {match, 7, {var, 7, 'Vars'}, {nil, 7}},
+                                    {match, 8, {var, 8, 'TokenCallback'},
+                                        {'fun', 8,
+                                            {clauses, [
+                                                {clause, 8, [], [], [
+                                                    {cons, 8, {atom, 8, bar}, {nil, 8}}
+                                                ]}
+                                            ]}}},
+                                    {call, 9, {remote, 9, {atom, 9, arizona_diff}, {atom, 9, diff}},
+                                        [
+                                            {var, 9, 'Index'},
+                                            {var, 9, 'Vars'},
+                                            {var, 9, 'TokenCallback'},
+                                            {var, 9, 'ViewAcc'},
+                                            {var, 9, 'Socket'},
+                                            {var, 9, 'Opts'}
+                                        ]}
+                                ]}
+                            ]}
                     ]}
                 ]}}
         ]
