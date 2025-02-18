@@ -5,8 +5,11 @@
 %% --------------------------------------------------------------------
 
 -export([render/4]).
+-export([view_template/1]).
 -export([view_template/2]).
+-export([component_template/1]).
 -export([component_template/2]).
+-export([nested_template/1]).
 -export([nested_template/2]).
 -export([view/2]).
 -export([component/3]).
@@ -15,8 +18,11 @@
 %
 
 -ignore_xref([render/4]).
+-ignore_xref([view_template/1]).
 -ignore_xref([view_template/2]).
+-ignore_xref([component_template/1]).
 -ignore_xref([component_template/2]).
+-ignore_xref([nested_template/1]).
 -ignore_xref([nested_template/2]).
 -ignore_xref([view/2]).
 -ignore_xref([component/3]).
@@ -77,7 +83,7 @@ doctest_test() -> doctest:module(?MODULE).
 -spec render(Payload, View, ParentView, ParentSocket) -> {View, Socket} when
     Payload :: Token | Rendered,
     Token :: token(),
-    Rendered :: rendered(),
+    Rendered :: rendered_value(),
     ParentView :: arizona_view:view(),
     ParentSocket :: arizona_socket:socket(),
     View :: ParentView | arizona_view:view(),
@@ -96,6 +102,13 @@ render(Rendered, _View, View0, Socket) when is_binary(Rendered); is_list(Rendere
     View = arizona_view:put_rendered(Rendered, View0),
     {View, Socket}.
 
+-spec view_template({Static, Dynamic}) -> Token when
+    Static :: static_list(),
+    Dynamic :: dynamic_list(),
+    Token :: {view_template, Static, Dynamic}.
+view_template({Static, Dynamic}) when is_list(Static), is_list(Dynamic) ->
+    {view_template, Static, Dynamic}.
+
 -spec view_template(View, Template) -> Token when
     View :: arizona_view:view(),
     Template :: binary(),
@@ -107,6 +120,13 @@ view_template(View, Template) when is_binary(Template) ->
     {Static, Dynamic} = parse_template(Bindings, Template),
     view_template({Static, Dynamic}).
 
+-spec component_template({Static, Dynamic}) -> Token when
+    Static :: static_list(),
+    Dynamic :: dynamic_list(),
+    Token :: {component_template, Static, Dynamic}.
+component_template({Static, Dynamic}) ->
+    {component_template, Static, Dynamic}.
+
 -spec component_template(View, Template) -> Token when
     View :: arizona_view:view(),
     Template :: binary(),
@@ -117,6 +137,13 @@ component_template(View, Template) ->
     Bindings = #{'View' => View},
     {Static, Dynamic} = parse_template(Bindings, Template),
     component_template({Static, Dynamic}).
+
+-spec nested_template({Static, Dynamic}) -> Token when
+    Static :: static_list(),
+    Dynamic :: dynamic_list(),
+    Token :: {nested_template, Static, Dynamic}.
+nested_template({Static, Dynamic}) ->
+    {nested_template, Static, Dynamic}.
 
 -spec nested_template(ParentView, Template) -> Token when
     ParentView :: arizona_view:view(),
@@ -159,27 +186,6 @@ if_true(Cond, Callback) when is_function(Callback, 0) ->
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
-
--spec view_template({Static, Dynamic}) -> Token when
-    Static :: static_list(),
-    Dynamic :: dynamic_list(),
-    Token :: {view_template, Static, Dynamic}.
-view_template({Static, Dynamic}) when is_list(Static), is_list(Dynamic) ->
-    {view_template, Static, Dynamic}.
-
--spec component_template({Static, Dynamic}) -> Token when
-    Static :: static_list(),
-    Dynamic :: dynamic_list(),
-    Token :: {component_template, Static, Dynamic}.
-component_template({Static, Dynamic}) ->
-    {component_template, Static, Dynamic}.
-
--spec nested_template({Static, Dynamic}) -> Token when
-    Static :: static_list(),
-    Dynamic :: dynamic_list(),
-    Token :: {nested_template, Static, Dynamic}.
-nested_template({Static, Dynamic}) ->
-    {nested_template, Static, Dynamic}.
 
 render_view_template(View0, Socket0, Static, Dynamic0) ->
     {View1, Socket1} = render_dynamic(Dynamic0, View0, Socket0),
