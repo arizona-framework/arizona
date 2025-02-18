@@ -1,4 +1,5 @@
 -module(arizona_example_components).
+-compile({parse_transform, arizona_transform}).
 -export([button/1]).
 
 button(View) ->

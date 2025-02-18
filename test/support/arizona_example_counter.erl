@@ -1,4 +1,5 @@
 -module(arizona_example_counter).
+-compile({parse_transform, arizona_transform}).
 -behaviour(arizona_view).
 
 -export([mount/2]).
