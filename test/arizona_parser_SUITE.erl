@@ -32,7 +32,7 @@ parse(Config) when is_list(Config) ->
         _Dynamic = [
             {'fun', 1,
                 {clauses, [
-                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}], [], [
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
                         {'case', 2,
                             {call, 2,
                                 {remote, 2, {atom, 2, arizona_socket}, {atom, 2, render_context}}, [
@@ -60,7 +60,8 @@ parse(Config) when is_list(Config) ->
                                             {var, 9, 'Vars'},
                                             {var, 9, 'TokensCallback'},
                                             {var, 9, 'ViewAcc'},
-                                            {var, 9, 'Socket'}
+                                            {var, 9, 'Socket'},
+                                            {var, 9, 'Opts'}
                                         ]}
                                 ]}
                             ]}
@@ -68,7 +69,7 @@ parse(Config) when is_list(Config) ->
                 ]}},
             {'fun', 1,
                 {clauses, [
-                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}], [], [
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
                         {'case', 2,
                             {call, 2,
                                 {remote, 2, {atom, 2, arizona_socket}, {atom, 2, render_context}}, [
@@ -98,7 +99,8 @@ parse(Config) when is_list(Config) ->
                                             {var, 9, 'Vars'},
                                             {var, 9, 'TokensCallback'},
                                             {var, 9, 'ViewAcc'},
-                                            {var, 9, 'Socket'}
+                                            {var, 9, 'Socket'},
+                                            {var, 9, 'Opts'}
                                         ]}
                                 ]}
                             ]}
@@ -106,7 +108,7 @@ parse(Config) when is_list(Config) ->
                 ]}},
             {'fun', 1,
                 {clauses, [
-                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}], [], [
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
                         {'case', 2,
                             {call, 2,
                                 {remote, 2, {atom, 2, arizona_socket}, {atom, 2, render_context}}, [
@@ -138,7 +140,8 @@ parse(Config) when is_list(Config) ->
                                             {var, 9, 'Vars'},
                                             {var, 9, 'TokensCallback'},
                                             {var, 9, 'ViewAcc'},
-                                            {var, 9, 'Socket'}
+                                            {var, 9, 'Socket'},
+                                            {var, 9, 'Opts'}
                                         ]}
                                 ]}
                             ]}

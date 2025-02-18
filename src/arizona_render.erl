@@ -30,7 +30,13 @@
 -export_type([static_list/0]).
 
 -type dynamic_list() :: [
-    fun((ViewAcc :: arizona_view:view(), Socket :: arizona_socket:socket()) -> binary())
+    fun(
+        (
+            ViewAcc :: arizona_view:view(),
+            Socket :: arizona_socket:socket(),
+            DiffOpts :: arizona_diff:options()
+        ) -> binary()
+    )
 ].
 -export_type([dynamic_list/0]).
 
@@ -225,7 +231,7 @@ render_component(ParentView0, Socket0, Mod, Fun, Assigns) ->
 render_dynamic([], ViewAcc, Socket) ->
     {ViewAcc, Socket};
 render_dynamic([Callback | T], ViewAcc0, Socket0) ->
-    {ViewAcc, Socket} = erlang:apply(Callback, [ViewAcc0, Socket0, _Opts = #{}]),
+    {ViewAcc, Socket} = erlang:apply(Callback, [ViewAcc0, Socket0, _DiffOpts = #{}]),
     render_dynamic(T, ViewAcc, Socket).
 
 parse_template(Bindings, Template) ->
