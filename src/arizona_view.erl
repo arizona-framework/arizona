@@ -181,6 +181,7 @@ set_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
 put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendered) ->
     View#view{rendered = [Rendered | View#view.rendered]}.
 
+% NOTE: The diff is a proplist constructed in reverse order.
 -spec put_diff(Index, Rendered, View0) -> View1 when
     Index :: arizona_diff:index(),
     Rendered :: arizona_render:rendered_value(),
