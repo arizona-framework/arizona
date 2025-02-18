@@ -8,18 +8,29 @@
 -export([new/2]).
 -export([new/4]).
 -export([assigns/1]).
+-export([put_assign/3]).
+-export([put_assigns/2]).
 -export([get_assign/2]).
+-export([get_assign/3]).
+-export([changed_assigns/1]).
+-export([set_changed_assigns/2]).
 -export([rendered/1]).
 -export([set_rendered/2]).
 -export([put_rendered/2]).
+-export([put_diff/3]).
 -export([merge_changed_assigns/1]).
 -export([rendered_to_iolist/1]).
+-export([diff_to_iolist/2]).
 
 %
 
 -ignore_xref([new/2]).
 -ignore_xref([new/4]).
+-ignore_xref([get_assign/3]).
+-ignore_xref([put_assign/3]).
+-ignore_xref([put_assigns/2]).
 -ignore_xref([rendered_to_iolist/1]).
+-ignore_xref([diff_to_iolist/2]).
 
 %% --------------------------------------------------------------------
 %% Callback support function exports
@@ -65,7 +76,8 @@
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
--include_lib("doctest/include/doctest.hrl").
+-include_lib("eunit/include/eunit.hrl").
+doctest_test() -> doctest:module(?MODULE).
 -endif.
 
 %% --------------------------------------------------------------------
@@ -91,7 +103,9 @@ new(Mod, Assigns) ->
     ChangedAssigns :: assigns(),
     Rendered :: arizona_render:rendered(),
     View :: view().
-new(Mod, Assigns, ChangedAssigns, Rendered) ->
+new(Mod, Assigns, ChangedAssigns, Rendered) when
+    is_atom(Mod), is_map(Assigns), is_map(ChangedAssigns), is_list(Rendered)
+->
     #view{
         module = Mod,
         assigns = Assigns,
@@ -105,12 +119,47 @@ new(Mod, Assigns, ChangedAssigns, Rendered) ->
 assigns(#view{} = View) ->
     View#view.assigns.
 
+-spec put_assign(Key, Value, View0) -> View1 when
+    Key :: atom(),
+    Value :: dynamic(),
+    View0 :: view(),
+    View1 :: view().
+put_assign(Key, Value, #view{} = View) when is_atom(Key) ->
+    View#view{changed_assigns = maps:put(Key, Value, View#view.changed_assigns)}.
+
+-spec put_assigns(Assigns, View0) -> View1 when
+    Assigns :: assigns(),
+    View0 :: view(),
+    View1 :: view().
+put_assigns(Assigns, #view{} = View) when is_map(Assigns) ->
+    maps:fold(fun(Key, Value, ViewAcc) -> put_assign(Key, Value, ViewAcc) end, View, Assigns).
+
 -spec get_assign(Key, View) -> Value when
     Key :: atom(),
     View :: view(),
     Value :: dynamic().
 get_assign(Key, #view{} = View) when is_atom(Key) ->
     maps:get(Key, View#view.changed_assigns, maps:get(Key, View#view.assigns)).
+
+-spec get_assign(Key, View, Default) -> Value when
+    Key :: atom(),
+    View :: view(),
+    Value :: Default | dynamic().
+get_assign(Key, #view{} = View, Default) when is_atom(Key) ->
+    maps:get(Key, View#view.changed_assigns, maps:get(Key, View#view.assigns, Default)).
+
+-spec changed_assigns(View) -> ChangedAssigns when
+    View :: view(),
+    ChangedAssigns :: assigns().
+changed_assigns(#view{} = View) ->
+    View#view.changed_assigns.
+
+-spec set_changed_assigns(ChangedAssigns, View0) -> View1 when
+    ChangedAssigns :: assigns(),
+    View0 :: view(),
+    View1 :: view().
+set_changed_assigns(ChangedAssigns, #view{} = View) when is_map(ChangedAssigns) ->
+    View#view{changed_assigns = ChangedAssigns}.
 
 -spec rendered(View) -> Rendered when
     View :: view(),
@@ -132,6 +181,17 @@ set_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
 put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendered) ->
     View#view{rendered = [Rendered | View#view.rendered]}.
 
+% NOTE: The diff is a proplist constructed in reverse order.
+-spec put_diff(Index, Rendered, View0) -> View1 when
+    Index :: arizona_diff:index(),
+    Rendered :: arizona_render:rendered_value(),
+    View0 :: view(),
+    View1 :: view().
+put_diff(Index, Rendered, #view{} = View) when
+    is_integer(Index), Index >= 0, (is_binary(Rendered) orelse is_list(Rendered))
+->
+    View#view{rendered = [{Index, Rendered} | View#view.rendered]}.
+
 -spec merge_changed_assigns(View0) -> View1 when
     View0 :: view(),
     View1 :: view().
@@ -146,7 +206,7 @@ Formats the rendered content to `t:iolist/0`.
 ```
 > Mod = arizona_example_template.
 > Assigns = #{id => ~"app", count => 0}.
-> Socket = arizona_socket:new().
+> Socket = arizona_socket:new(render).
 > {ok, View0} = arizona_view:mount(Mod, Assigns, Socket).
 > Rendered = arizona_view:render(Mod, View0).
 > {View, _Socket} = arizona_render:render(Rendered, View0, View0, Socket).
@@ -162,6 +222,18 @@ Formats the rendered content to `t:iolist/0`.
     View :: view().
 rendered_to_iolist(#view{} = View) ->
     rendered_to_iolist_1(View#view.rendered).
+
+-spec diff_to_iolist(Rendered0, View) -> Rendered1 when
+    Rendered0 :: arizona_render:rendered(),
+    View :: view(),
+    Rendered1 :: arizona_render:rendered().
+diff_to_iolist(Rendered, #view{} = View) when is_list(Rendered) ->
+    case View#view.rendered of
+        [] ->
+            Rendered;
+        Changed ->
+            diff_replace(Changed, Rendered)
+    end.
 
 %% --------------------------------------------------------------------
 %% Callback support function definitions
@@ -201,3 +273,20 @@ zip([S | Static], []) ->
     [S | zip(Static, [])];
 zip([], [D | Dynamic]) ->
     [rendered_to_iolist_1(D) | zip([], Dynamic)].
+
+diff_replace([{Index, [{_, _} | _] = NestedChanged0} | T], [template, Static, Dynamic0]) ->
+    NestedChanged = lists:keysort(1, NestedChanged0),
+    NestedTemplate0 = lists:nth(Index + 1, Dynamic0),
+    NestedTemplate = diff_replace(NestedChanged, NestedTemplate0),
+    Dynamic = diff_replace_value(Dynamic0, {Index, NestedTemplate}, 0),
+    diff_replace(T, [template, Static, Dynamic]);
+diff_replace([{Index, Value} | T], [template, Static, Dynamic0]) ->
+    Dynamic = diff_replace_value(Dynamic0, {Index, Value}, 0),
+    diff_replace(T, [template, Static, Dynamic]);
+diff_replace([], [template, Static, Dynamic]) ->
+    zip(Static, Dynamic).
+
+diff_replace_value([_Value | T], {Index, NewValue}, Index) ->
+    [NewValue | T];
+diff_replace_value([H | T], Replacement, IndexAcc) ->
+    [H | diff_replace_value(T, Replacement, IndexAcc + 1)].

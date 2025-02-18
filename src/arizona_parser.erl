@@ -15,7 +15,8 @@
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
--include_lib("doctest/include/doctest.hrl").
+-include_lib("eunit/include/eunit.hrl").
+doctest_test() -> doctest:module(?MODULE).
 -endif.
 
 %% --------------------------------------------------------------------
@@ -24,26 +25,6 @@
 
 -doc ~"""
 Parses scanned template tokens.
-
-## Examples
-
-```
-> Tokens = arizona_scanner:scan(#{}, ~"foo{bar}").
-[{html,{1,1},<<"foo">>},{erlang,{1,4},<<"bar">>}]
-> arizona_parser:parse(Tokens).
-{[{bin,1,[{bin_element,1,{string,1,"foo"},default,[utf8]}]}],
- [{'fun',1,
-      {clauses,
-          [{clause,1,
-               [{var,1,'ViewAcc'},{var,1,'Socket'}],
-               [],
-               [{call,2,
-                    {remote,2,{atom,2,arizona_render},{atom,2,render}},
-                    [{atom,2,bar},
-                     {var,2,'View'},
-                     {var,2,'ViewAcc'},
-                     {var,2,'Socket'}]}]}]}}]}
-```
 
 ## Result
 
@@ -61,7 +42,11 @@ parse(Tokens0) when is_list(Tokens0) ->
     Tokens = add_empty_text_tokens(Tokens1),
     {HtmlTokens, ErlTokens} = tokens_partition(Tokens),
     Static = [scan_and_parse_html_token_to_ast(HtmlToken) || HtmlToken <- HtmlTokens],
-    Dynamic = [scan_and_parse_erlang_token_to_ast(ErlToken) || ErlToken <- ErlTokens],
+    ErlTokensEnum = lists:enumerate(0, ErlTokens),
+    Dynamic = [
+        scan_and_parse_erlang_token_to_ast(Index, ErlToken)
+     || {Index, ErlToken} <- ErlTokensEnum
+    ],
     {Static, Dynamic}.
 
 %% --------------------------------------------------------------------
@@ -89,12 +74,21 @@ scan_and_parse_html_token_to_ast({html, _Loc, Text0}) ->
     Text = quote_text(Text0),
     scan_and_parse_to_ast(<<"<<", $", Text/binary, $", "/utf8>>">>).
 
-scan_and_parse_erlang_token_to_ast({erlang, _Loc, Expr}) ->
+scan_and_parse_erlang_token_to_ast(Index, {erlang, _Loc, Expr}) ->
+    Vars = expr_vars(Expr),
     scan_and_parse_to_ast(
         iolist_to_binary([
-            "fun(ViewAcc, Socket) ->\n",
-            ["    arizona_render:render(", Expr, ", View, ViewAcc, Socket)\n"],
-            "end"
+            ["fun(ViewAcc, Socket, Opts) ->\n"],
+            ["    case arizona_socket:render_context(Socket) of\n"],
+            ["        render ->\n"],
+            ["            arizona_render:render(", Expr, ", View, ViewAcc, Socket);\n"],
+            ["        diff ->\n"],
+            ["            Index = ", integer_to_binary(Index), ",\n"],
+            ["            Vars = ", vars_to_binary(Vars), ",\n"],
+            ["            TokenCallback = fun() -> ", Expr, " end,\n"],
+            ["            arizona_diff:diff(Index, Vars, TokenCallback, ViewAcc, Socket, Opts)\n"],
+            ["    end\n"],
+            ["end"]
         ])
     ).
 
@@ -119,3 +113,29 @@ scan_and_parse_to_ast(Text) ->
     {ok, Tokens, _EndLoc} = erl_scan:string(Str),
     {ok, [Ast]} = erl_parse:parse_exprs(Tokens),
     Ast.
+
+expr_vars(Expr) ->
+    case
+        re:run(
+            Expr,
+            "arizona_view:get_assign\\(([a-z][a-zA-Z_@]*|'(.*?)')",
+            [global, {capture, all_but_first, binary}]
+        )
+    of
+        {match, Vars0} ->
+            Vars = lists:flatten([pick_quoted_var(List) || List <- Vars0]),
+            lists:usort(lists:map(fun binary_to_atom/1, Vars));
+        nomatch ->
+            []
+    end.
+
+pick_quoted_var([<<$', _/binary>> = Var | _T]) ->
+    Var;
+pick_quoted_var([Var]) ->
+    iolist_to_binary([$', Var, $']);
+pick_quoted_var([_Var | T]) ->
+    pick_quoted_var(T).
+
+vars_to_binary(Vars0) ->
+    Vars = lists:map(fun atom_to_binary/1, Vars0),
+    iolist_to_binary([$[, lists:join(", ", Vars), $]]).

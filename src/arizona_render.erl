@@ -30,7 +30,13 @@
 -export_type([static_list/0]).
 
 -type dynamic_list() :: [
-    fun((ViewAcc :: arizona_view:view(), Socket :: arizona_socket:socket()) -> binary())
+    fun(
+        (
+            ViewAcc :: arizona_view:view(),
+            Socket :: arizona_socket:socket(),
+            DiffOpts :: arizona_diff:options()
+        ) -> binary()
+    )
 ].
 -export_type([dynamic_list/0]).
 
@@ -50,6 +56,7 @@
 -type rendered_value() ::
     binary()
     | rendered()
+    | {arizona_diff:index(), binary() | rendered()}
     % I could not figure out a correct type without the `dynamic/0`.
     | dynamic().
 -export_type([rendered_value/0]).
@@ -59,7 +66,8 @@
 %% --------------------------------------------------------------------
 
 -ifdef(TEST).
--include_lib("doctest/include/doctest.hrl").
+-include_lib("eunit/include/eunit.hrl").
+doctest_test() -> doctest:module(?MODULE).
 -endif.
 
 %% --------------------------------------------------------------------
@@ -84,7 +92,7 @@ render({view, Mod, Assigns}, _View, ParentView, Socket) ->
     render_view(ParentView, Socket, Mod, Assigns);
 render({component, Mod, Fun, Assigns}, _View, ParentView, Socket) ->
     render_component(ParentView, Socket, Mod, Fun, Assigns);
-render(Rendered, _View, View0, Socket) ->
+render(Rendered, _View, View0, Socket) when is_binary(Rendered); is_list(Rendered) ->
     View = arizona_view:put_rendered(Rendered, View0),
     {View, Socket}.
 
@@ -174,7 +182,7 @@ nested_template({Static, Dynamic}) ->
     {nested_template, Static, Dynamic}.
 
 render_view_template(View0, Socket0, Static, Dynamic0) ->
-    {View1, Socket1} = render_dynamic(Dynamic0, View0, View0, Socket0),
+    {View1, Socket1} = render_dynamic(Dynamic0, View0, Socket0),
     Dynamic = lists:reverse(arizona_view:rendered(View1)),
     Template = [template, Static, Dynamic],
     View2 = arizona_view:set_rendered(Template, View1),
@@ -183,7 +191,7 @@ render_view_template(View0, Socket0, Static, Dynamic0) ->
     {View, Socket}.
 
 render_component_template(View0, Socket0, Static, Dynamic0) ->
-    {View1, Socket} = render_dynamic(Dynamic0, View0, View0, Socket0),
+    {View1, Socket} = render_dynamic(Dynamic0, View0, Socket0),
     Dynamic = lists:reverse(arizona_view:rendered(View1)),
     Template = [template, Static, Dynamic],
     View = arizona_view:set_rendered(Template, View1),
@@ -192,7 +200,7 @@ render_component_template(View0, Socket0, Static, Dynamic0) ->
 render_nested_template(ParentView0, Socket0, Static, Dynamic0) ->
     Assigns = arizona_view:assigns(ParentView0),
     View0 = arizona_view:new(Assigns),
-    {View1, Socket} = render_dynamic(Dynamic0, View0, View0, Socket0),
+    {View1, Socket} = render_dynamic(Dynamic0, View0, Socket0),
     Dynamic = arizona_view:rendered(View1),
     Template = [template, Static, Dynamic],
     ParentView = arizona_view:put_rendered(Template, ParentView0),
@@ -220,11 +228,11 @@ render_component(ParentView0, Socket0, Mod, Fun, Assigns) ->
     ParentView = arizona_view:put_rendered(Rendered, ParentView0),
     {ParentView, Socket1}.
 
-render_dynamic([], _View, ViewAcc, Socket) ->
+render_dynamic([], ViewAcc, Socket) ->
     {ViewAcc, Socket};
-render_dynamic([Callback | T], View, ViewAcc0, Socket0) ->
-    {ViewAcc, Socket} = erlang:apply(Callback, [ViewAcc0, Socket0]),
-    render_dynamic(T, View, ViewAcc, Socket).
+render_dynamic([Callback | T], ViewAcc0, Socket0) ->
+    {ViewAcc, Socket} = erlang:apply(Callback, [ViewAcc0, Socket0, _DiffOpts = #{}]),
+    render_dynamic(T, ViewAcc, Socket).
 
 parse_template(Bindings, Template) ->
     Tokens = arizona_scanner:scan(#{}, Template),
