@@ -18,7 +18,7 @@ list(View) ->
             <li>
                 {integer_to_binary(Item)}
                 <br/>
-                {integer_to_binary(Item)}
+                {integer_to_binary(Item + 1)}
             </li>
             """)
          end, arizona_view:get_assign(list, View))}

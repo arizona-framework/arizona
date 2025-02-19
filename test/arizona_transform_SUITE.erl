@@ -43,8 +43,10 @@ render_view_template(Config) when is_list(Config) ->
             _,
             {function, 2, render, 1, [
                 {clause, 2, [{var, 2, 'View'}], [], [
-                    {call, 3, {remote, 3, {atom, 3, arizona_render}, {atom, 3, view_template}}, [
-                        {tuple, 0, [_, _]}
+                    {tuple, 0, [
+                        {atom, 0, view_template},
+                        _,
+                        _
                     ]}
                 ]}
             ]}
@@ -66,10 +68,11 @@ render_component_template(Config) when is_list(Config) ->
             _,
             {function, 2, render, 1, [
                 {clause, 2, [{var, 2, 'View'}], [], [
-                    {call, 3, {remote, 3, {atom, 3, arizona_render}, {atom, 3, component_template}},
-                        [
-                            {tuple, 0, [_, _]}
-                        ]}
+                    {tuple, 0, [
+                        {atom, 0, component_template},
+                        _,
+                        _
+                    ]}
                 ]}
             ]}
         ],
@@ -90,8 +93,10 @@ render_nested_template(Config) when is_list(Config) ->
             _,
             {function, 2, render, 1, [
                 {clause, 2, [{var, 2, 'View'}], [], [
-                    {call, 3, {remote, 3, {atom, 3, arizona_render}, {atom, 3, nested_template}}, [
-                        {tuple, 0, [_, _]}
+                    {tuple, 0, [
+                        {atom, 0, nested_template},
+                        _,
+                        _
                     ]}
                 ]}
             ]}

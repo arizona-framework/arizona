@@ -16,6 +16,7 @@
 -export([if_true/2]).
 -export([list/1]).
 -export([list/2]).
+-export([list/3]).
 
 %
 
@@ -52,13 +53,16 @@
     {view_template, Static :: static_list(), Dynamic :: dynamic_list()}
     | {component_template, Static :: static_list(), Dynamic :: dynamic_list()}
     | {nested_template, Static :: static_list(), Dynamic :: dynamic_list()}
+    | {list_template, Static :: static_list(), Dynamic :: dynamic_list()}
     | {view, Mod :: module(), Assigns :: arizona_view:assigns()}
-    | {component, Mod :: module(), Fun :: atom(), Assigns :: arizona_view:assigns()}.
+    | {component, Mod :: module(), Fun :: atom(), Assigns :: arizona_view:assigns()}
+    | {list, Static :: static_list(), Dynamic :: dynamic_list()}.
 -export_type([token/0]).
 
 -type rendered() ::
     [rendered_value()]
-    | [template | Static :: static_list() | Dynamic :: dynamic_list()].
+    | [template | Static :: static_list() | Dynamic :: dynamic_list()]
+    | [list_template | Static :: static_list() | DynamicList :: [dynamic_list()]].
 -export_type([rendered/0]).
 
 -type rendered_value() ::
@@ -96,6 +100,8 @@ render({component_template, Static, Dynamic}, View, _ParentView, Socket) ->
     render_component_template(View, Socket, Static, Dynamic);
 render({nested_template, Static, Dynamic}, _View, ParentView, Socket) ->
     render_nested_template(ParentView, Socket, Static, Dynamic);
+render({list_template, Static, DynamicCallback, List}, _View, ParentView, Socket) ->
+    render_list_template(ParentView, Socket, Static, DynamicCallback, List);
 render({view, Mod, Assigns}, _View, ParentView, Socket) ->
     render_view(ParentView, Socket, Mod, Assigns);
 render({component, Mod, Fun, Assigns}, _View, ParentView, Socket) ->
@@ -142,6 +148,7 @@ component_template(View, Template) ->
     {Static, Dynamic} = parse_template(Bindings, Template),
     component_template({Static, Dynamic}).
 
+% TODO: Remove
 -spec nested_template({Static, Dynamic}) -> Token when
     Static :: static_list(),
     Dynamic :: dynamic_list(),
@@ -191,6 +198,10 @@ if_true(Cond, Callback) when is_function(Callback, 0) ->
             ~""
     end.
 
+% TODO: Remove
+list(Static, DynamicCallback, List) ->
+    {list, Static, DynamicCallback, List}.
+
 list({Static, DynamicList}) ->
     {list, Static, DynamicList}.
 
@@ -228,6 +239,12 @@ render_nested_template(ParentView0, Socket0, Static, Dynamic0) ->
     {View1, Socket} = render_dynamic(Dynamic0, View0, Socket0),
     Dynamic = arizona_view:rendered(View1),
     Template = [template, Static, Dynamic],
+    ParentView = arizona_view:put_rendered(Template, ParentView0),
+    {ParentView, Socket}.
+
+render_list_template(ParentView0, Socket, Static, DynamicCallback, List) ->
+    DynamicList = [erlang:apply(DynamicCallback, [Item]) || Item <- List],
+    Template = [list_template, Static, DynamicList],
     ParentView = arizona_view:put_rendered(Template, ParentView0),
     {ParentView, Socket}.
 

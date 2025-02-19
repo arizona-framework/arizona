@@ -15,7 +15,8 @@
 %% --------------------------------------------------------------------
 
 -type options() :: #{
-    render_context => arizona_socket:render_context() | from_socket
+    render_context => arizona_socket:render_context() | from_socket | none,
+    bindings => erl_eval:binding_struct()
 }.
 -export_type([options/0]).
 
@@ -54,10 +55,11 @@ parse(Tokens0, Opts) when is_list(Tokens0), is_map(Opts) ->
     Static = [scan_and_parse_html_token_to_ast(HtmlToken) || HtmlToken <- HtmlTokens],
     ErlTokensEnum = lists:enumerate(0, ErlTokens),
     RenderContext = maps:get(render_context, Opts, from_socket),
-    Dynamic = arizona_transform:transform([
-        scan_and_parse_erlang_token_to_ast(ErlToken, Index, RenderContext)
+    Bindings = maps:get(bindings, Opts, []),
+    Dynamic = [
+        scan_and_parse_erlang_token_to_ast(ErlToken, Index, RenderContext, Bindings)
      || {Index, ErlToken} <- ErlTokensEnum
-    ]),
+    ],
     {Static, Dynamic}.
 
 %% --------------------------------------------------------------------
@@ -85,10 +87,13 @@ scan_and_parse_html_token_to_ast({html, _Loc, Text0}) ->
     Text = quote_text(Text0),
     scan_and_parse_to_ast(<<"<<", $", Text/binary, $", "/utf8>>">>).
 
-scan_and_parse_erlang_token_to_ast({erlang, _Loc, Expr0}, Index0, RenderContext) ->
+scan_and_parse_erlang_token_to_ast({erlang, _Loc, Expr0}, Index0, RenderContext, Bindings) ->
     Index = integer_to_binary(Index0),
     Vars = vars_to_binary(expr_vars(Expr0)),
-    Expr = norm_expr(RenderContext, Expr0, Index, Vars),
+    Form0 = merl:quote(Expr0),
+    Form = arizona_transform:transform(Form0, Bindings),
+    Expr1 = erl_pp:expr(Form),
+    Expr = norm_expr(RenderContext, Expr1, Index, Vars),
     scan_and_parse_to_ast(iolist_to_binary(Expr)).
 
 norm_expr(from_socket, Expr, Index, Vars) ->
@@ -110,7 +115,9 @@ norm_expr(render, Expr, _Index, _Vars) ->
         ["fun(ViewAcc, Socket, Opts) ->\n"],
         ["    arizona_render:render(", Expr, ", View, ViewAcc, Socket)\n"],
         ["end"]
-    ].
+    ];
+norm_expr(none, Expr, _Index, _Vars) ->
+    Expr.
 
 % The text must be quoted to transform it in an Erlang AST form, for example:
 %
