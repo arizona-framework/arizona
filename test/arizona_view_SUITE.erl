@@ -23,7 +23,9 @@ groups() ->
         {render, [parallel], [
             render,
             rendered_to_iolist,
-            render_nested_template_to_iolist
+            render_nested_template_to_iolist,
+            render_list,
+            render_list_to_iolist
         ]},
         {diff, [
             diff,
@@ -143,6 +145,60 @@ render_nested_template_to_iolist(Config) when is_list(Config) ->
     """"),
     Socket = arizona_socket:new(render),
     {ParentView, _Socket} = arizona_render:render(Token, ParentView0, ParentView0, Socket),
+    Got = arizona_view:rendered_to_iolist(ParentView),
+    ?assertEqual(Expect, Got).
+
+render_list(Config) when is_list(Config) ->
+    Mod = arizona_example_components,
+    Fun = list,
+    Assigns = #{list => [1, 2, 3]},
+    Socket = arizona_socket:new(render),
+    Expect = {
+        arizona_view:new(
+            undefined,
+            Assigns,
+            #{},
+            [
+                template,
+                [~"<ul>", ~"</ul>"],
+                [
+                    [
+                        list_template,
+                        [~"<li>", ~"<br/>", ~"</li>"],
+                        [
+                            [~"1", ~"2"],
+                            [~"2", ~"3"],
+                            [~"3", ~"4"]
+                        ]
+                    ]
+                ]
+            ]
+        ),
+        Socket
+    },
+    ParentView = arizona_view:new(#{}),
+    View = arizona_view:new(Assigns),
+    Token = arizona_component:render(Mod, Fun, View),
+    Got = arizona_render:render(Token, View, ParentView, Socket),
+    ?assertEqual(Expect, Got).
+
+render_list_to_iolist(Config) when is_list(Config) ->
+    Expect = [
+        ~"<ul>",
+        [
+            [~"<li>", ~"1", ~"<br/>", ~"2", ~"</li>"],
+            [~"<li>", ~"2", ~"<br/>", ~"3", ~"</li>"],
+            [~"<li>", ~"3", ~"<br/>", ~"4", ~"</li>"]
+        ],
+        ~"</ul>"
+    ],
+    Mod = arizona_example_components,
+    Fun = list,
+    View = arizona_view:new(#{list => [1, 2, 3]}),
+    Token = arizona_component:render(Mod, Fun, View),
+    ParentView0 = arizona_view:new(#{}),
+    Socket = arizona_socket:new(render),
+    {ParentView, _Socket} = arizona_render:render(Token, View, ParentView0, Socket),
     Got = arizona_view:rendered_to_iolist(ParentView),
     ?assertEqual(Expect, Got).
 

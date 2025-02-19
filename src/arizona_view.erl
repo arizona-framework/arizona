@@ -260,6 +260,8 @@ render(Mod, View) when is_atom(Mod), Mod =/= undefined ->
 
 rendered_to_iolist_1([template, Static, Dynamic]) ->
     zip(Static, Dynamic);
+rendered_to_iolist_1([list_template, Static, DynamicList]) ->
+    [zip(Static, Dynamic) || Dynamic <- DynamicList];
 rendered_to_iolist_1(List) when is_list(List) ->
     [rendered_to_iolist_1(Rendered) || Rendered <- List];
 rendered_to_iolist_1(Rendered) ->
