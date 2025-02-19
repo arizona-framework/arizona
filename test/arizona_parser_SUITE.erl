@@ -8,12 +8,19 @@
 %% --------------------------------------------------------------------
 
 all() ->
-    [{group, parse}].
+    [
+        {group, parse},
+        {group, parse_transform}
+    ].
 
 groups() ->
     [
         {parse, [parallel], [
-            parse
+            parse_from_socket,
+            parse_render
+        ]},
+        {parse_transform, [parallel], [
+            parse_transform_render_list
         ]}
     ].
 
@@ -21,7 +28,7 @@ groups() ->
 %% Tests
 %% --------------------------------------------------------------------
 
-parse(Config) when is_list(Config) ->
+parse_from_socket(Config) when is_list(Config) ->
     Expect = {
         _Static = [
             {bin, 1, [{bin_element, 1, {string, 1, "foo"}, default, [utf8]}]},
@@ -152,5 +159,130 @@ parse(Config) when is_list(Config) ->
     Tokens = arizona_scanner:scan(#{}, ~"""
     foo{foo}{{bar}}{% drop this }bar{[bar]}qu"o"t\"ed
     """),
-    Got = arizona_parser:parse(Tokens),
+    Got = arizona_parser:parse(Tokens, #{render_context => from_socket}),
+    ?assertEqual(Expect, Got).
+
+parse_render(Config) when is_list(Config) ->
+    Expect = {
+        _Static = [
+            {bin, 1, [{bin_element, 1, {string, 1, "foo"}, default, [utf8]}]},
+            {bin, 1, [{bin_element, 1, {string, 1, []}, default, [utf8]}]},
+            {bin, 1, [{bin_element, 1, {string, 1, "bar"}, default, [utf8]}]},
+            {bin, 1, [{bin_element, 1, {string, 1, "qu\"o\"t\\\"ed"}, default, [utf8]}]}
+        ],
+        _Dynamic = [
+            {'fun', 1,
+                {clauses, [
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
+                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
+                            {atom, 2, foo},
+                            {var, 2, 'View'},
+                            {var, 2, 'ViewAcc'},
+                            {var, 2, 'Socket'}
+                        ]}
+                    ]}
+                ]}},
+            {'fun', 1,
+                {clauses, [
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
+                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
+                            {tuple, 2, [{atom, 2, bar}]},
+                            {var, 2, 'View'},
+                            {var, 2, 'ViewAcc'},
+                            {var, 2, 'Socket'}
+                        ]}
+                    ]}
+                ]}},
+            {'fun', 1,
+                {clauses, [
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
+                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
+                            {cons, 2, {atom, 2, bar}, {nil, 2}},
+                            {var, 2, 'View'},
+                            {var, 2, 'ViewAcc'},
+                            {var, 2, 'Socket'}
+                        ]}
+                    ]}
+                ]}}
+        ]
+    },
+    Tokens = arizona_scanner:scan(#{}, ~"""
+    foo{foo}{{bar}}{% drop this }bar{[bar]}qu"o"t\"ed
+    """),
+    Got = arizona_parser:parse(Tokens, #{render_context => render}),
+    ?assertEqual(Expect, Got).
+
+parse_transform_render_list(Config) when is_list(Config) ->
+    Expect = {
+        _Static = [
+            {bin, 1, [{bin_element, 1, {string, 1, "<ul>"}, default, [utf8]}]},
+            {bin, 1, [{bin_element, 1, {string, 1, "</ul>"}, default, [utf8]}]}
+        ],
+        _Dynamic = [
+            {'fun', 1,
+                {clauses, [
+                    {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
+                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
+                            {tuple, 2, [
+                                {atom, 2, list_template},
+                                {cons, 3,
+                                    {bin, 3, [
+                                        {bin_element, 3, {string, 3, "<li>"}, default, [utf8]}
+                                    ]},
+                                    {cons, 3,
+                                        {bin, 3, [
+                                            {bin_element, 3, {string, 3, "<br/>"}, default, [utf8]}
+                                        ]},
+                                        {cons, 3,
+                                            {bin, 3, [
+                                                {bin_element, 3, {string, 3, "</li>"}, default, [
+                                                    utf8
+                                                ]}
+                                            ]},
+                                            {nil, 3}}}},
+                                {'fun', 4,
+                                    {clauses, [
+                                        {clause, 4, [{var, 4, 'Item'}], [], [
+                                            {cons, 5,
+                                                {call, 5, {atom, 5, integer_to_binary}, [
+                                                    {var, 5, 'Item'}
+                                                ]},
+                                                {cons, 5,
+                                                    {call, 5, {atom, 5, integer_to_binary}, [
+                                                        {var, 5, 'Item'}
+                                                    ]},
+                                                    {nil, 5}}}
+                                        ]}
+                                    ]}},
+                                {call, 7,
+                                    {remote, 7, {atom, 7, arizona_view}, {atom, 7, get_assign}}, [
+                                        {atom, 7, list}, {var, 7, 'View'}
+                                    ]}
+                            ]},
+                            {var, 7, 'View'},
+                            {var, 7, 'ViewAcc'},
+                            {var, 7, 'Socket'}
+                        ]}
+                    ]}
+                ]}}
+        ]
+    },
+    Tokens = arizona_scanner:scan(#{}, ~""""
+    <ul>
+    {arizona_render:list(fun(Item) ->
+        arizona_render:nested_template(#{'View' => View, 'Item' => Item}, ~"""
+        <li>
+            {integer_to_binary(Item)}
+            <br/>
+            {integer_to_binary(Item)}
+        </li>
+        """)
+     end, arizona_view:get_assign(list, View))}
+    </ul>
+    """"),
+    View = arizona_view:new(#{list => [1, 2, 3]}),
+    Got = arizona_parser:parse(Tokens, #{
+        render_context => render,
+        bindings => #{'View' => View}
+    }),
     ?assertEqual(Expect, Got).
