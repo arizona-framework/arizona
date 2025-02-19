@@ -175,8 +175,13 @@ expr_category(Expr, State) ->
                 end
         end
     catch
-        _:_ ->
-            error({badexpr, location(State), Expr})
+        _:Exception:Stacktrace ->
+            error({badexpr, location(State), Expr}, none, [
+                {error_info, #{
+                    cause => {Exception, Stacktrace},
+                    line => State#state.line
+                }}
+            ])
     end.
 
 is_comment(Form) ->
