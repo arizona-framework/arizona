@@ -269,7 +269,7 @@ parse_transform_render_list(Config) when is_list(Config) ->
     },
     Tokens = arizona_scanner:scan(#{}, ~""""
     <ul>
-    {arizona_render:list(fun(Item) -> 
+    {arizona_render:list(fun(Item) ->
         arizona_render:nested_template(#{'View' => View, 'Item' => Item}, ~"""
         <li>
             {integer_to_binary(Item)}

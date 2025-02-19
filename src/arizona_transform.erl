@@ -25,8 +25,13 @@ parse_transform(Forms0, _Opts) ->
     debug(Forms0, Forms),
     Forms.
 
+-spec transform(Form0, Bindings) -> Form1 when
+    Form0 :: erl_syntax:syntaxTree(),
+    Bindings :: erl_eval:binding_struct(),
+    Form1 :: erl_syntax:syntaxTree().
 transform(
-    {call, _Pos1, {remote, _Pos2, {atom, _Pos3, Mod}, {atom, _Pos4, Fun}}, Body} = Form, Bindings
+    {call, _Pos1, {remote, _Pos2, {atom, _Pos3, Mod}, {atom, _Pos4, Fun}}, Body} = Form,
+    Bindings
 ) ->
     case transform_fun_body(Mod, Fun, Body, Bindings) of
         {true, NewForm} ->

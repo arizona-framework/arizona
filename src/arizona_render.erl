@@ -5,31 +5,24 @@
 %% --------------------------------------------------------------------
 
 -export([render/4]).
--export([view_template/1]).
 -export([view_template/2]).
--export([component_template/1]).
 -export([component_template/2]).
--export([nested_template/1]).
 -export([nested_template/2]).
 -export([view/2]).
 -export([component/3]).
 -export([if_true/2]).
--export([list/1]).
 -export([list/2]).
--export([list/3]).
 
 %
 
 -ignore_xref([render/4]).
--ignore_xref([view_template/1]).
 -ignore_xref([view_template/2]).
--ignore_xref([component_template/1]).
 -ignore_xref([component_template/2]).
--ignore_xref([nested_template/1]).
 -ignore_xref([nested_template/2]).
 -ignore_xref([view/2]).
 -ignore_xref([component/3]).
 -ignore_xref([if_true/2]).
+-ignore_xref([list/2]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -112,61 +105,47 @@ render(Rendered, _View, View0, Socket) when is_binary(Rendered); is_list(Rendere
     View = arizona_view:put_rendered(Rendered, View0),
     {View, Socket}.
 
--spec view_template({Static, Dynamic}) -> Token when
-    Static :: static_list(),
-    Dynamic :: dynamic_list(),
-    Token :: {view_template, Static, Dynamic}.
-view_template({Static, Dynamic}) when is_list(Static), is_list(Dynamic) ->
-    {view_template, Static, Dynamic}.
-
--spec view_template(View, Template) -> Token when
+-spec view_template(Payload, Template) -> Token when
+    Payload :: View | Bindings,
     View :: arizona_view:view(),
+    Bindings :: erl_eval:binding_struct(),
     Template :: binary(),
     Token :: {view_template, Static, Dynamic},
     Static :: static_list(),
     Dynamic :: dynamic_list().
-view_template(View, Template) when is_binary(Template) ->
-    Bindings = #{'View' => View},
+view_template(Bindings, Template) when is_map(Bindings), is_binary(Template) ->
     {Static, Dynamic} = parse_template(Bindings, Template),
-    view_template({Static, Dynamic}).
+    {view_template, Static, Dynamic};
+view_template(View, Template) ->
+    Bindings = #{'View' => View},
+    view_template(Bindings, Template).
 
--spec component_template({Static, Dynamic}) -> Token when
-    Static :: static_list(),
-    Dynamic :: dynamic_list(),
-    Token :: {component_template, Static, Dynamic}.
-component_template({Static, Dynamic}) ->
-    {component_template, Static, Dynamic}.
-
--spec component_template(View, Template) -> Token when
+-spec component_template(Payload, Template) -> Token when
+    Payload :: View | Bindings,
     View :: arizona_view:view(),
+    Bindings :: erl_eval:binding_struct(),
     Template :: binary(),
     Token :: {component_template, Static, Dynamic},
     Static :: static_list(),
     Dynamic :: dynamic_list().
+component_template(Bindings, Template) when is_map(Bindings), is_binary(Template) ->
+    {Static, Dynamic} = parse_template(Bindings, Template),
+    {component_template, Static, Dynamic};
 component_template(View, Template) ->
     Bindings = #{'View' => View},
-    {Static, Dynamic} = parse_template(Bindings, Template),
-    component_template({Static, Dynamic}).
-
-% TODO: Remove
--spec nested_template({Static, Dynamic}) -> Token when
-    Static :: static_list(),
-    Dynamic :: dynamic_list(),
-    Token :: {nested_template, Static, Dynamic}.
-nested_template({Static, Dynamic}) ->
-    {nested_template, Static, Dynamic}.
+    component_template(Bindings, Template).
 
 -spec nested_template(Payload, Template) -> Token when
-    Payload :: Bindings | ParentView,
-    Bindings :: erl_eval:binding_struct(),
+    Payload :: ParentView | Bindings,
     ParentView :: arizona_view:view(),
+    Bindings :: erl_eval:binding_struct(),
     Template :: binary(),
     Token :: {nested_template, Static, Dynamic},
     Static :: static_list(),
     Dynamic :: dynamic_list().
 nested_template(Bindings, Template) when is_map(Bindings), is_binary(Template) ->
     {Static, Dynamic} = parse_template(Bindings, Template),
-    nested_template({Static, Dynamic});
+    {nested_template, Static, Dynamic};
 nested_template(ParentView, Template) ->
     Bindings = #{'View' => ParentView},
     nested_template(Bindings, Template).
@@ -198,20 +177,19 @@ if_true(Cond, Callback) when is_function(Callback, 0) ->
             ~""
     end.
 
-% TODO: Remove
-list(Static, DynamicCallback, List) ->
-    {list, Static, DynamicCallback, List}.
-
-list({Static, DynamicList}) ->
-    {list, Static, DynamicList}.
-
+-spec list(Callback, List) -> Token when
+    Callback :: fun((Item :: dynamic()) -> token() | rendered_value()),
+    List :: list(),
+    Token :: {list, Static, DynamicList},
+    Static :: static_list(),
+    DynamicList :: [dynamic_list()].
 list(Callback, []) when is_function(Callback, 1) ->
-    list({[], []});
+    {list, [], []};
 list(Callback, List) when is_function(Callback, 1), is_list(List) ->
     NestedTemplates = [erlang:apply(Callback, [Item]) || Item <- List],
     {nested_template, Static, _Dynamic} = hd(NestedTemplates),
     DynamicList = [Dynamic || {nested_template, _Static, Dynamic} <- NestedTemplates],
-    list({Static, DynamicList}).
+    {list, Static, DynamicList}.
 
 %% --------------------------------------------------------------------
 %% Private functions
