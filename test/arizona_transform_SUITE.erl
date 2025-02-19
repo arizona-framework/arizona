@@ -43,11 +43,7 @@ render_view_template(Config) when is_list(Config) ->
             _,
             {function, 2, render, 1, [
                 {clause, 2, [{var, 2, 'View'}], [], [
-                    {tuple, 0, [
-                        {atom, 0, view_template},
-                        _,
-                        _
-                    ]}
+                    {tuple, 0, [{atom, 0, view_template}, _, _]}
                 ]}
             ]}
         ],
@@ -68,11 +64,7 @@ render_component_template(Config) when is_list(Config) ->
             _,
             {function, 2, render, 1, [
                 {clause, 2, [{var, 2, 'View'}], [], [
-                    {tuple, 0, [
-                        {atom, 0, component_template},
-                        _,
-                        _
-                    ]}
+                    {tuple, 0, [{atom, 0, component_template}, _, _]}
                 ]}
             ]}
         ],
@@ -93,11 +85,7 @@ render_nested_template(Config) when is_list(Config) ->
             _,
             {function, 2, render, 1, [
                 {clause, 2, [{var, 2, 'View'}], [], [
-                    {tuple, 0, [
-                        {atom, 0, nested_template},
-                        _,
-                        _
-                    ]}
+                    {tuple, 0, [{atom, 0, nested_template}, _, _]}
                 ]}
             ]}
         ],

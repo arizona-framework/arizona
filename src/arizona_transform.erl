@@ -22,7 +22,7 @@
 parse_transform(Forms0, _Opts) ->
     Forms = [transform_function(Form) || Form <- Forms0],
     % NOTE: Uncomment the function below for debugging.
-    debug(Forms0, Forms),
+    % debug(Forms0, Forms),
     Forms.
 
 -spec transform(Form0, Bindings) -> Form1 when
@@ -65,23 +65,23 @@ transform(Form, _Bindings) ->
 %% --------------------------------------------------------------------
 
 % NOTE: Use this function to output the transformation to "/tmp/<module_name>.erl".
-debug(Forms, NewForms) ->
-    case
-        lists:search(
-            fun(Form) ->
-                erl_syntax:type(Form) =:= attribute andalso
-                    erl_syntax:atom_value(erl_syntax:attribute_name(Form)) =:= module
-            end,
-            Forms
-        )
-    of
-        {value, ModAttr} ->
-            Mod = erl_syntax:atom_value(hd(erl_syntax:attribute_arguments(ModAttr))),
-            Str = [erl_prettypr:format(Form, [{pape, 9999999}]) || Form <- NewForms],
-            ok = file:write_file("/tmp/" ++ atom_to_list(Mod) ++ ".erl", Str);
-        false ->
-            ok
-    end.
+% debug(Forms, NewForms) ->
+%     case
+%         lists:search(
+%             fun(Form) ->
+%                 erl_syntax:type(Form) =:= attribute andalso
+%                     erl_syntax:atom_value(erl_syntax:attribute_name(Form)) =:= module
+%             end,
+%             Forms
+%         )
+%     of
+%         {value, ModAttr} ->
+%             Mod = erl_syntax:atom_value(hd(erl_syntax:attribute_arguments(ModAttr))),
+%             Str = [erl_prettypr:format(Form, [{pape, 9999999}]) || Form <- NewForms],
+%             ok = file:write_file("/tmp/" ++ atom_to_list(Mod) ++ ".erl", Str);
+%         false ->
+%             ok
+%     end.
 
 transform_function({function, Pos1, Name, Arity, [{clause, Pos2, Pattern, Guards, Body0}]}) ->
     Body = [transform(Form, []) || Form <- Body0],

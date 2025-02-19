@@ -15,7 +15,7 @@
 %% --------------------------------------------------------------------
 
 -type options() :: #{
-    render_context => arizona_socket:render_context() | from_socket | none,
+    render_context => from_socket | render | none,
     bindings => erl_eval:binding_struct()
 }.
 -export_type([options/0]).
