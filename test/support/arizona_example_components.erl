@@ -2,6 +2,7 @@
 -compile({parse_transform, arizona_transform}).
 -export([button/1]).
 -export([list/1]).
+-export([table/1]).
 
 button(View) ->
     arizona_render:component_template(View, ~"""
@@ -24,3 +25,31 @@ list(View) ->
          end, arizona_view:get_assign(list, View))}
     </ul>
     """").
+
+table(View) ->
+    arizona_render:component_template(View, ~"""""
+    <table>
+        <tr>
+            {arizona_render:list(fun(Col) ->
+                arizona_render:nested_template(#{'View' => View, 'Col' => Col}, ~"""
+                <th>
+                    {maps:get(label, Col)}
+                </th>
+                """)
+             end, arizona_view:get_assign(columns, View))}
+        </tr>
+        {arizona_render:list(fun(Row) ->
+            arizona_render:nested_template(#{'View' => View, 'Row' => Row}, ~""""
+            <tr>
+                {arizona_render:list(fun(Col) ->
+                    arizona_render:nested_template(#{'View' => View, 'Row' => Row, 'Col' => Col}, ~"""
+                    <td>
+                        {erlang:apply(maps:get(callback, Col), [Row])}
+                    </td>
+                    """)
+                 end, arizona_view:get_assign(columns, View))}
+            </tr>
+            """")
+         end, arizona_view:get_assign(rows, View))}
+    </table>
+    """"").
