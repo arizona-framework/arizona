@@ -148,13 +148,13 @@ diff_view(Config) when is_list(Config) ->
     Diff = [
         {1, [
             template,
-            [~"<div id=\"", ~"\">", ~"", ~"</div>"],
+            [~"<div id=\"", ~"\"> ", ~"", ~"</div>"],
             [
                 ~"counter",
                 ~"1",
                 [
                     template,
-                    [~"<button>", ~"</button>"],
+                    [~"<button> ", ~"</button>"],
                     [~"+1"]
                 ]
             ]
@@ -198,7 +198,7 @@ diff_view_new_id(Config) when is_list(Config) ->
     Diff = [
         {1, [
             template,
-            [~"<div id=\"", ~"\">\n    Hello,", ~"!\n</div>"],
+            [~"<div id=\"", ~"\">\n    Hello, ", ~"!\n</div>"],
             [~"baz", ~"Arizona"]
         ]}
     ],
