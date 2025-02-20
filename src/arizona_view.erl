@@ -211,9 +211,9 @@ Formats the rendered content to `t:iolist/0`.
 > Rendered = arizona_view:render(Mod, View0).
 > {View, _Socket} = arizona_render:render(Rendered, View0, View0, Socket).
 > arizona_view:rendered_to_iolist(View).
-[<<"<html>\n    <head></head>\n    <body id=\"">>,<<"app">>,<<"\">">>,
- [<<"<div id=\"">>,<<"counter">>,<<"\">">>,<<"0">>,<<>>,
-  [<<"<button>">>,<<"Increment">>,<<"</button>">>],
+[<<"<html>\n    <head></head>\n    <body id=\"">>,<<"app">>,<<"\"> ">>,
+ [<<"<div id=\"">>,<<"counter">>,<<"\"> ">>,<<"0">>,<<>>,
+  [<<"<button> ">>,<<"Increment">>,<<"</button>">>],
   <<"</div>">>],
  <<"</body>\n</html>">>]
 ```

@@ -58,20 +58,20 @@ render(Config) when is_list(Config) ->
         template,
         [
             ~"<html>\n    <head></head>\n    <body id=\"",
-            ~"\">",
+            ~"\"> ",
             ~"</body>\n</html>"
         ],
         [
             ~"app",
             [
                 template,
-                [~"<div id=\"", ~"\">", ~"", ~"</div>"],
+                [~"<div id=\"", ~"\"> ", ~"", ~"</div>"],
                 [
                     ~"counter",
                     ~"0",
                     [
                         template,
-                        [~"<button>", ~"</button>"],
+                        [~"<button> ", ~"</button>"],
                         [~"Increment"]
                     ]
                 ]
@@ -101,14 +101,14 @@ rendered_to_iolist(Config) when is_list(Config) ->
     Expect = [
         ~"<html>\n    <head></head>\n    <body id=\"",
         ~"app",
-        ~"\">",
+        ~"\"> ",
         [
             ~"<div id=\"",
             ~"counter",
-            ~"\">",
+            ~"\"> ",
             ~"0",
             ~"",
-            [~"<button>", ~"Increment", ~"</button>"],
+            [~"<button> ", ~"Increment", ~"</button>"],
             ~"</div>"
         ],
         ~"</body>\n</html>"
@@ -126,8 +126,8 @@ rendered_to_iolist(Config) when is_list(Config) ->
 render_nested_template_to_iolist(Config) when is_list(Config) ->
     Expect = [
         [
-            ~"<div>",
-            [~"<dialog open>", ~"Hello, World!", ~"</dialog>"],
+            ~"<div> ",
+            [~"<dialog open> ", ~"Hello, World!", ~"</dialog>"],
             ~"</div>"
         ]
     ],
@@ -173,7 +173,7 @@ render_table_component(Config) when is_list(Config) ->
         arizona_view:set_rendered(
             [
                 template,
-                [~"<table>\n    <tr>", ~"</tr>", ~"</table>"],
+                [~"<table>\n    <tr> ", ~"</tr> ", ~"</table>"],
                 [
                     [
                         list_template,
@@ -182,13 +182,13 @@ render_table_component(Config) when is_list(Config) ->
                     ],
                     [
                         list_template,
-                        [~"<tr>", ~"</tr>"],
+                        [~"<tr> ", ~"</tr>"],
                         [
                             [
                                 [
                                     [
                                         list_template,
-                                        [~"<td>", ~"</td>"],
+                                        [~"<td> ", ~"</td>"],
                                         [[[~"Jane"]], [[~"34"]]]
                                     ]
                                 ]
@@ -197,7 +197,7 @@ render_table_component(Config) when is_list(Config) ->
                                 [
                                     [
                                         list_template,
-                                        [~"<td>", ~"</td>"],
+                                        [~"<td> ", ~"</td>"],
                                         [[[~"Bob"]], [[~"51"]]]
                                     ]
                                 ]
@@ -236,29 +236,29 @@ render_table_component_to_iolist(Config) when is_list(Config) ->
     View0 = arizona_view:new(Assigns),
     Socket = arizona_socket:new(render),
     Expect = [
-        ~"<table>\n    <tr>",
+        ~"<table>\n    <tr> ",
         [
             [~"<th>", [~"Name"], ~"</th>"],
             [~"<th>", [~"Age"], ~"</th>"]
         ],
-        ~"</tr>",
+        ~"</tr> ",
         [
             [
-                ~"<tr>",
+                ~"<tr> ",
                 [
                     [
-                        [~"<td>", [~"Jane"], ~"</td>"],
-                        [~"<td>", [~"34"], ~"</td>"]
+                        [~"<td> ", [~"Jane"], ~"</td>"],
+                        [~"<td> ", [~"34"], ~"</td>"]
                     ]
                 ],
                 ~"</tr>"
             ],
             [
-                ~"<tr>",
+                ~"<tr> ",
                 [
                     [
-                        [~"<td>", [~"Bob"], ~"</td>"],
-                        [~"<td>", [~"51"], ~"</td>"]
+                        [~"<td> ", [~"Bob"], ~"</td>"],
+                        [~"<td> ", [~"51"], ~"</td>"]
                     ]
                 ],
                 ~"</tr>"
@@ -316,14 +316,14 @@ diff_to_iolist(Config) when is_list(Config) ->
     Expect = [
         ~"<html>\n    <head></head>\n    <body id=\"",
         ~"app",
-        ~"\">",
+        ~"\"> ",
         [
             ~"<div id=\"",
             ~"counter",
-            ~"\">",
+            ~"\"> ",
             ~"1",
             ~"",
-            [~"<button>", ~"+1", ~"</button>"],
+            [~"<button> ", ~"+1", ~"</button>"],
             ~"</div>"
         ],
         ~"</body>\n</html>"

@@ -34,7 +34,7 @@ render_view_template(Config) when is_list(Config) ->
     </div>
     """),
     ?assertMatch(
-        {view_template, [~"<div id=\"", ~"\">", ~"", ~"</div>"], [Callback, _, _]} when
+        {view_template, [~"<div id=\"", ~"\"> ", ~"", ~"</div>"], [Callback, _, _]} when
             is_function(Callback, 3),
         Got
     ).
@@ -48,7 +48,7 @@ render_component_template(Config) when is_list(Config) ->
     </div>
     """),
     ?assertMatch(
-        {component_template, [~"<div>", ~"", ~"</div>"], [Callback, _]} when
+        {component_template, [~"<div> ", ~"", ~"</div>"], [Callback, _]} when
             is_function(Callback, 3),
         Got
     ).
@@ -62,7 +62,7 @@ render_nested_template(Config) when is_list(Config) ->
     </div>
     """),
     ?assertMatch(
-        {nested_template, [~"<div>", ~"", ~"</div>"], [Callback, _]} when is_function(Callback, 3),
+        {nested_template, [~"<div> ", ~"", ~"</div>"], [Callback, _]} when is_function(Callback, 3),
         Got
     ).
 
