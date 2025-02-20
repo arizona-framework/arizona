@@ -103,8 +103,8 @@ render({component, Mod, Fun, Assigns}, _View, ParentView, Socket) ->
     render_component(ParentView, Socket, Mod, Fun, Assigns);
 render({list, Static, DynamicList}, View, ParentView, Socket) ->
     render_list(Static, DynamicList, View, ParentView, Socket);
-render(List, View, ParentView, Socket0) when is_list(List) ->
-    fold(List, View, ParentView, Socket0);
+render(List, View, ParentView, Socket) when is_list(List) ->
+    fold(List, View, ParentView, Socket);
 render(Bin, _View, View0, Socket) when is_binary(Bin) ->
     View = arizona_view:put_rendered(Bin, View0),
     {View, Socket}.

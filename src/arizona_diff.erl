@@ -82,10 +82,14 @@ diff({component_template, _Static, Dynamic}, _Index, View, Socket) ->
     diff_component_template(View, Socket, Dynamic);
 diff({nested_template, _Static, Dynamic}, Index, ParentView, Socket) ->
     diff_nested_template(ParentView, Socket, Dynamic, Index);
+diff({list_template, _Static, DynamicCallback, List}, Index, ParentView, Socket) ->
+    diff_list_template(ParentView, Socket, DynamicCallback, List, Index);
 diff({view, Mod, Assigns}, Index, ParentView, Socket) ->
     diff_view(ParentView, Socket, Mod, Assigns, Index);
 diff({component, Mod, Fun, Assigns}, Index, ParentView, Socket) ->
     diff_component(ParentView, Socket, Mod, Fun, Assigns, Index);
+diff({list, _Static, DynamicList}, Index, ParentView, Socket) ->
+    diff_list(ParentView, Socket, DynamicList, Index);
 diff(Diff, Index, View0, Socket) when is_binary(Diff); is_list(Diff) ->
     View = arizona_view:put_diff(Index, Diff, View0),
     {View, Socket}.
@@ -108,6 +112,22 @@ diff_nested_template(ParentView0, Socket0, Dynamic, Index) ->
     Diff = arizona_view:rendered(View),
     ParentView = arizona_view:put_diff(Index, Diff, ParentView0),
     {ParentView, Socket}.
+
+diff_list_template(ParentView0, Socket, Callback, List, Index) ->
+    View = arizona_view:new(arizona_view:assigns(ParentView0)),
+    Diff = diff_dynamic_list_callback(List, Callback, Index, View, Socket),
+    ParentView = arizona_view:put_diff(Index, Diff, ParentView0),
+    {ParentView, Socket}.
+
+diff_dynamic_list_callback([], _Callback, _Index, _View, _Socket) ->
+    [];
+diff_dynamic_list_callback([Item | T], Callback, Index, View, Socket) ->
+    Dynamic = erlang:apply(Callback, [Item]),
+    {DiffView, _Socket} = diff(Dynamic, Index, View, Socket),
+    [
+        arizona_view:rendered(DiffView)
+        | diff_dynamic_list_callback(T, Callback, Index, View, Socket)
+    ].
 
 diff_view(ParentView, Socket, Mod, Assigns, Index) ->
     ViewId = maps:get(id, Assigns),
@@ -169,6 +189,18 @@ diff_component(ParentView0, Socket0, Mod, Fun, Assigns, Index) ->
     Diff = arizona_view:rendered(View),
     ParentView = arizona_view:put_diff(Index, Diff, ParentView0),
     {ParentView, Socket}.
+
+diff_list(ParentView0, Socket, DynamicList0, Index) ->
+    View = arizona_view:new(arizona_view:assigns(ParentView0)),
+    Diff = diff_dynamic_list(DynamicList0, View, Socket),
+    ParentView = arizona_view:put_diff(Index, Diff, ParentView0),
+    {ParentView, Socket}.
+
+diff_dynamic_list([], _View, _Socket) ->
+    [];
+diff_dynamic_list([Dynamic | T], View, Socket) ->
+    {RenderedView, _Socket} = diff_dynamic(Dynamic, View, Socket, #{force_changed => true}),
+    [arizona_view:rendered(RenderedView) | diff_dynamic_list(T, View, Socket)].
 
 diff_dynamic([], View, Socket, _Opts) ->
     {View, Socket};
