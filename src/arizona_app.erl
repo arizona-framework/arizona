@@ -18,9 +18,10 @@
     StartArgs :: term(),
     StartRet :: {ok, pid()} | {error, term()}.
 start(_StartType, _StartArgs) ->
-    case arizona_sup:start_link() of
-        {ok, Pid} ->
-            {ok, Pid};
+    maybe
+        {ok, _ServerPid} ?= arizona_server:start(arizona_config:endpoint()),
+        {ok, _SupPid} ?= arizona_sup:start_link()
+    else
         {error, Reason} ->
             {error, Reason}
     end.
