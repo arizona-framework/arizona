@@ -24,10 +24,10 @@ groups() ->
             render,
             rendered_to_iolist,
             render_nested_template_to_iolist,
-            render_list,
-            render_list_to_iolist
+            render_table_component,
+            render_table_component_to_iolist
         ]},
-        {diff, [
+        {diff, [parallel], [
             diff,
             diff_to_iolist
         ]}
@@ -148,58 +148,127 @@ render_nested_template_to_iolist(Config) when is_list(Config) ->
     Got = arizona_view:rendered_to_iolist(ParentView),
     ?assertEqual(Expect, Got).
 
-render_list(Config) when is_list(Config) ->
+render_table_component(Config) when is_list(Config) ->
     Mod = arizona_example_components,
-    Fun = list,
-    Assigns = #{list => [1, 2, 3]},
+    Fun = table,
+    Assigns = #{
+        columns => [
+            #{
+                label => ~"Name",
+                callback => fun(User) -> maps:get(name, User) end
+            },
+            #{
+                label => ~"Age",
+                callback => fun(User) -> maps:get(age, User) end
+            }
+        ],
+        rows => [
+            #{name => ~"Jane", age => ~"34"},
+            #{name => ~"Bob", age => ~"51"}
+        ]
+    },
+    View = arizona_view:new(Assigns),
     Socket = arizona_socket:new(render),
     Expect = {
-        arizona_view:new(
-            undefined,
-            Assigns,
-            #{},
+        arizona_view:set_rendered(
             [
                 template,
-                [~"<ul>", ~"</ul>"],
+                [~"<table>\n    <tr>", ~"</tr>", ~"</table>"],
                 [
                     [
                         list_template,
-                        [~"<li>", ~"<br/>", ~"</li>"],
+                        [~"<th>", ~"</th>"],
+                        [[[~"Name"]], [[~"Age"]]]
+                    ],
+                    [
+                        list_template,
+                        [~"<tr>", ~"</tr>"],
                         [
-                            [~"1", ~"2"],
-                            [~"2", ~"3"],
-                            [~"3", ~"4"]
+                            [
+                                [
+                                    [
+                                        list_template,
+                                        [~"<td>", ~"</td>"],
+                                        [[[~"Jane"]], [[~"34"]]]
+                                    ]
+                                ]
+                            ],
+                            [
+                                [
+                                    [
+                                        list_template,
+                                        [~"<td>", ~"</td>"],
+                                        [[[~"Bob"]], [[~"51"]]]
+                                    ]
+                                ]
+                            ]
                         ]
                     ]
                 ]
-            ]
+            ],
+            View
         ),
         Socket
     },
-    ParentView = arizona_view:new(#{}),
-    View = arizona_view:new(Assigns),
     Token = arizona_component:render(Mod, Fun, View),
-    Got = arizona_render:render(Token, View, ParentView, Socket),
+    Got = arizona_render:render(Token, View, View, Socket),
     ?assertEqual(Expect, Got).
 
-render_list_to_iolist(Config) when is_list(Config) ->
-    Expect = [
-        ~"<ul>",
-        [
-            [~"<li>", ~"1", ~"<br/>", ~"2", ~"</li>"],
-            [~"<li>", ~"2", ~"<br/>", ~"3", ~"</li>"],
-            [~"<li>", ~"3", ~"<br/>", ~"4", ~"</li>"]
-        ],
-        ~"</ul>"
-    ],
+render_table_component_to_iolist(Config) when is_list(Config) ->
     Mod = arizona_example_components,
-    Fun = list,
-    View = arizona_view:new(#{list => [1, 2, 3]}),
-    Token = arizona_component:render(Mod, Fun, View),
-    ParentView0 = arizona_view:new(#{}),
+    Fun = table,
+    Assigns = #{
+        columns => [
+            #{
+                label => ~"Name",
+                callback => fun(User) -> maps:get(name, User) end
+            },
+            #{
+                label => ~"Age",
+                callback => fun(User) -> maps:get(age, User) end
+            }
+        ],
+        rows => [
+            #{name => ~"Jane", age => ~"34"},
+            #{name => ~"Bob", age => ~"51"}
+        ]
+    },
+    View0 = arizona_view:new(Assigns),
     Socket = arizona_socket:new(render),
-    {ParentView, _Socket} = arizona_render:render(Token, View, ParentView0, Socket),
-    Got = arizona_view:rendered_to_iolist(ParentView),
+    Expect = [
+        ~"<table>\n    <tr>",
+        [
+            [~"<th>", [~"Name"], ~"</th>"],
+            [~"<th>", [~"Age"], ~"</th>"]
+        ],
+        ~"</tr>",
+        [
+            [
+                ~"<tr>",
+                [
+                    [
+                        [~"<td>", [~"Jane"], ~"</td>"],
+                        [~"<td>", [~"34"], ~"</td>"]
+                    ]
+                ],
+                ~"</tr>"
+            ],
+            [
+                ~"<tr>",
+                [
+                    [
+                        [~"<td>", [~"Bob"], ~"</td>"],
+                        [~"<td>", [~"51"], ~"</td>"]
+                    ]
+                ],
+                ~"</tr>"
+            ]
+        ],
+        ~"</table>"
+    ],
+    Token = arizona_component:render(Mod, Fun, View0),
+    {View, _Socket} = arizona_render:render(Token, View0, View0, Socket),
+    Got = arizona_view:rendered_to_iolist(View),
     ?assertEqual(Expect, Got).
 
 diff(Config) when is_list(Config) ->

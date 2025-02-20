@@ -93,16 +93,18 @@ render({component_template, Static, Dynamic}, View, _ParentView, Socket) ->
     render_component_template(View, Socket, Static, Dynamic);
 render({nested_template, Static, Dynamic}, _View, ParentView, Socket) ->
     render_nested_template(ParentView, Socket, Static, Dynamic);
-render({list_template, Static, DynamicCallback, List}, _View, ParentView, Socket) ->
-    render_list_template(ParentView, Socket, Static, DynamicCallback, List);
+render({list_template, Static, DynamicCallback, List}, View, ParentView, Socket) ->
+    render_list_template(View, ParentView, Socket, Static, DynamicCallback, List);
 render({view, Mod, Assigns}, _View, ParentView, Socket) ->
     render_view(ParentView, Socket, Mod, Assigns);
 render({component, Mod, Fun, Assigns}, _View, ParentView, Socket) ->
     render_component(ParentView, Socket, Mod, Fun, Assigns);
 render({list, Static, DynamicList}, View, ParentView, Socket) ->
     render_list(Static, DynamicList, View, ParentView, Socket);
-render(Rendered, _View, View0, Socket) when is_binary(Rendered); is_list(Rendered) ->
-    View = arizona_view:put_rendered(Rendered, View0),
+render(List, View, ParentView, Socket0) when is_list(List) ->
+    fold(List, View, ParentView, Socket0);
+render(Bin, _View, View0, Socket) when is_binary(Bin) ->
+    View = arizona_view:put_rendered(Bin, View0),
     {View, Socket}.
 
 -spec view_template(Payload, Template) -> Token when
@@ -220,11 +222,22 @@ render_nested_template(ParentView0, Socket0, Static, Dynamic0) ->
     ParentView = arizona_view:put_rendered(Template, ParentView0),
     {ParentView, Socket}.
 
-render_list_template(ParentView0, Socket, Static, DynamicCallback, List) ->
-    DynamicList = [erlang:apply(DynamicCallback, [Item]) || Item <- List],
+render_list_template(View0, ParentView0, Socket, Static, Callback, List) ->
+    View = arizona_view:new(arizona_view:assigns(View0)),
+    DynamicList = render_dynamic_list_callback(List, Callback, View, View, Socket),
     Template = [list_template, Static, DynamicList],
     ParentView = arizona_view:put_rendered(Template, ParentView0),
     {ParentView, Socket}.
+
+render_dynamic_list_callback([], _Callback, _View, _ParentView, _Socket) ->
+    [];
+render_dynamic_list_callback([Item | T], Callback, View, ParentView, Socket) ->
+    Dynamic = erlang:apply(Callback, [Item]),
+    {RenderedView, _Socket} = render(Dynamic, View, ParentView, Socket),
+    [
+        arizona_view:rendered(RenderedView)
+        | render_dynamic_list_callback(T, Callback, View, ParentView, Socket)
+    ].
 
 render_view(ParentView0, Socket0, Mod, Assigns) ->
     case arizona_view:mount(Mod, Assigns, Socket0) of
@@ -248,7 +261,8 @@ render_component(ParentView0, Socket0, Mod, Fun, Assigns) ->
     ParentView = arizona_view:put_rendered(Rendered, ParentView0),
     {ParentView, Socket1}.
 
-render_list(Static, DynamicList0, View, ParentView0, Socket) ->
+render_list(Static, DynamicList0, View0, ParentView0, Socket) ->
+    View = arizona_view:new(arizona_view:assigns(View0)),
     DynamicList = render_dynamic_list(DynamicList0, View, Socket),
     Rendered = [list, Static, DynamicList],
     ParentView = arizona_view:put_rendered(Rendered, ParentView0),
@@ -260,11 +274,19 @@ render_dynamic_list([Dynamic | T], View, Socket) ->
     {RenderedView, _Socket} = render_dynamic(Dynamic, View, Socket),
     [arizona_view:rendered(RenderedView) | render_dynamic_list(T, View, Socket)].
 
-render_dynamic([], ViewAcc, Socket) ->
-    {ViewAcc, Socket};
-render_dynamic([Callback | T], ViewAcc0, Socket0) ->
-    {ViewAcc, Socket} = erlang:apply(Callback, [ViewAcc0, Socket0, _DiffOpts = #{}]),
-    render_dynamic(T, ViewAcc, Socket).
+render_dynamic([], View, Socket) ->
+    {View, Socket};
+render_dynamic([Callback | T], View0, Socket0) ->
+    {View, Socket} = erlang:apply(Callback, [View0, Socket0, _DiffOpts = #{}]),
+    render_dynamic(T, View, Socket).
+
+fold([], View, ParentView0, Socket) ->
+    Rendered = arizona_view:rendered(View),
+    ParentView = arizona_view:put_rendered(Rendered, ParentView0),
+    {ParentView, Socket};
+fold([Dynamic | T], View0, ParentView, Socket0) ->
+    {View, Socket} = render(Dynamic, View0, ParentView, Socket0),
+    fold(T, View, ParentView, Socket).
 
 parse_template(Bindings, Template) ->
     Tokens = arizona_scanner:scan(#{}, Template),
