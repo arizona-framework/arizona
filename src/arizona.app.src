@@ -6,7 +6,9 @@
         % OTP dependencies
         kernel,
         stdlib,
-        syntax_tools
+        syntax_tools,
+        % External dependencies
+        cowboy
     ]},
     {licenses, ["Apache-2.0"]},
     {links, [{"GitHub", "https://github.com/arizona-framework/arizona"}]}
