@@ -95,7 +95,14 @@ norm_transport_opts(Opts) when is_list(Opts) ->
 norm_proto_opts(Host, Routes0, Opts) when
     (Host =:= '_' orelse is_list(Host)), is_list(Routes0), is_map(Opts)
 ->
-    Routes = [{"/websocket", arizona_websocket, []} | Routes0],
+    Routes = [
+        {"/assets/js/arizona/main.js", cowboy_static,
+            {priv_file, arizona, "static/assets/js/arizona.js"}},
+        {"/assets/js/arizona/worker.js", cowboy_static,
+            {priv_file, arizona, "static/assets/js/arizona-worker.js"}},
+        {"/websocket", arizona_websocket, []}
+        | Routes0
+    ],
     Dispatch = cowboy_router:compile([{Host, Routes}]),
     persistent_term:put(?PERSIST_KEY, Dispatch),
     Env = maps:get(env, Opts, #{}),
