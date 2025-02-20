@@ -18,10 +18,10 @@
     Assigns :: arizona_view:assigns(),
     Req1 :: cowboy_req:req().
 init(Req0, {Mod, Assigns} = State) when is_atom(Mod), is_map(Assigns) ->
-    Socket = arizona_socket:new(render),
-    {ok, View0} = arizona_view:mount(Mod, Assigns, Socket),
+    Socket0 = arizona_socket:new(render),
+    {ok, View0} = arizona_view:mount(Mod, Assigns, Socket0),
     Token = arizona_view:render(Mod, View0),
-    {View, _Socket} = arizona_render:render(Token, View0, View0, Socket),
+    {View, _Socket} = arizona_render:render(Token, View0, View0, Socket0),
     Html = arizona_view:rendered_to_iolist(View),
     Headers = #{~"content-type" => ~"text/html"},
     Req = cowboy_req:reply(200, Headers, Html, Req0),
