@@ -35,7 +35,7 @@ jobs:
           node-version-file: .nvmrc
 
       - name: Restore _build
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: _build
           key: "_build-cache-for\
@@ -45,7 +45,7 @@ jobs:
                 -hash-${{hashFiles('rebar.lock')}}-${{hashFiles('rebar.config')}}"
 
       - name: Restore rebar3's cache
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: ~/.cache/rebar3
           key: "rebar3-cache-for\
