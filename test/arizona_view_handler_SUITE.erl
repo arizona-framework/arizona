@@ -17,11 +17,13 @@ init_per_suite(Config) ->
             {endpoint, #{
                 routes => [
                     {"/helloworld", arizona_view_handler,
-                        {?MODULE, #{
-                            title => ~"Arizona",
-                            id => ~"app",
-                            name => ~"World"
-                        }}}
+                        {?MODULE,
+                            #{
+                                title => ~"Arizona",
+                                id => ~"app",
+                                name => ~"World"
+                            },
+                            #{layout => arizona_example_layout}}}
                 ]
             }}
         ]}
@@ -49,19 +51,9 @@ mount(Assigns, _Socket) ->
     Token :: arizona_render:token().
 render(View) ->
     arizona_render:view_template(View, ~""""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta http-equiv="X-UA-Compatible" content="IE=edge">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{arizona_view:get_assign(title, View)}</title>
-        <script src="assets/js/main.js"></script>
-    </head>
-    <body id="{arizona_view:get_assign(id, View)}">
+    <main id="{arizona_view:get_assign(id, View)}">
        Hello, {arizona_view:get_assign(name, View)}!
-    </body>
-    </html>
+    </main>
     """").
 
 %% --------------------------------------------------------------------
