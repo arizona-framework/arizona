@@ -16,11 +16,7 @@ list(View) ->
     <ul>
         {arizona_render:list(fun(Item) ->
             arizona_render:nested_template(~"""
-            <li>
-                {integer_to_binary(Item)}
-                <br/>
-                {integer_to_binary(Item + 1)}
-            </li>
+            <li>{Item}</li>
             """)
          end, arizona_view:get_assign(list, View))}
     </ul>
@@ -32,9 +28,7 @@ table(View) ->
         <tr>
             {arizona_render:list(fun(Col) ->
                 arizona_render:nested_template(~"""
-                <th>
-                    {maps:get(label, Col)}
-                </th>
+                <th>{maps:get(label, Col)}</th>
                 """)
              end, arizona_view:get_assign(columns, View))}
         </tr>
