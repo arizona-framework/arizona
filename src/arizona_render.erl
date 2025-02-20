@@ -7,6 +7,7 @@
 -export([render/4]).
 -export([view_template/2]).
 -export([component_template/2]).
+-export([nested_template/1]).
 -export([nested_template/2]).
 -export([view/2]).
 -export([component/3]).
@@ -18,6 +19,7 @@
 -ignore_xref([render/4]).
 -ignore_xref([view_template/2]).
 -ignore_xref([component_template/2]).
+-ignore_xref([nested_template/1]).
 -ignore_xref([nested_template/2]).
 -ignore_xref([view/2]).
 -ignore_xref([component/3]).
@@ -137,6 +139,12 @@ component_template(View, Template) ->
     Bindings = #{'View' => View},
     component_template(Bindings, Template).
 
+-spec nested_template(Template) -> Error when
+    Template :: binary(),
+    Error :: no_return().
+nested_template(Template) ->
+    missing_parse_transform_error(Template).
+
 -spec nested_template(Payload, Template) -> Token when
     Payload :: ParentView | Bindings,
     ParentView :: arizona_view:view(),
@@ -196,6 +204,17 @@ list(Callback, List) when is_function(Callback, 1), is_list(List) ->
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
+
+missing_parse_transform_error(Template) when is_list(Template) ->
+    error(missing_parse_transform, [Template], [
+        {error_info, #{
+            cause =>
+                <<
+                    "the attribute '-compile({parse_transform, arizona_transform}).' "
+                    "is missing in the template module"
+                >>
+        }}
+    ]).
 
 render_view_template(View0, Socket0, Static, Dynamic0) ->
     {View1, Socket1} = render_dynamic(Dynamic0, View0, Socket0),
