@@ -16,10 +16,12 @@ groups() ->
             diff_view_template,
             diff_component_template,
             diff_nested_template,
+            diff_list_template,
             diff_view,
             diff_view_new_id,
             diff_view_ignore,
-            diff_component
+            diff_component,
+            diff_list
         ]}
     ].
 
@@ -68,8 +70,8 @@ diff_component_template(Config) when is_list(Config) ->
     View = arizona_view:new(Mod, Assigns, ChangedAssigns, []),
     Token = arizona_render:component_template(View, ~"""
     <div>
-    {arizona_view:get_assign(foo, View)}
-    {arizona_view:get_assign(bar, View)}
+        {arizona_view:get_assign(foo, View)}
+        {arizona_view:get_assign(bar, View)}
     </div>
     """),
     TokenCallback = fun() -> Token end,
@@ -91,10 +93,43 @@ diff_nested_template(Config) when is_list(Config) ->
     View = arizona_view:new(Mod, Assigns, ChangedAssigns, []),
     Token = arizona_render:nested_template(View, ~"""
     <div>
-    {arizona_view:get_assign(foo, View)}
-    {arizona_view:get_assign(bar, View)}
+        {arizona_view:get_assign(foo, View)}
+        {arizona_view:get_assign(bar, View)}
     </div>
     """),
+    TokenCallback = fun() -> Token end,
+    Socket = arizona_socket:new(diff),
+    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
+    ?assertEqual(Expect, Got).
+
+diff_list_template(Config) when is_list(Config) ->
+    Index = 0,
+    Vars = [foo, bar],
+    Mod = undefined,
+    Assigns = #{foo => ~"foo", bar => ~"bar"},
+    ChangedAssigns = #{bar => ~"baz"},
+    Diff = [
+        {0, [
+            [{1, <<"baz">>}, {0, <<"foo">>}],
+            [{1, <<"baz">>}, {0, <<"foo">>}]
+        ]}
+    ],
+    Expect = {
+        arizona_view:new(Mod, Assigns, ChangedAssigns, Diff),
+        arizona_socket:new(diff)
+    },
+    View = arizona_view:new(Mod, Assigns, ChangedAssigns, []),
+    Token = arizona_render:list(
+        fun(Item) ->
+            arizona_render:nested_template(#{'View' => View, 'Item' => Item}, ~"""
+            <div>
+                {arizona_view:get_assign(foo, View)}
+                {arizona_view:get_assign(bar, View, Item)}
+            </div>
+            """)
+        end,
+        [~"1", ~"2"]
+    ),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:new(diff),
     Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
@@ -256,5 +291,30 @@ diff_component(Config) when is_list(Config) ->
     Token = arizona_component:render(Mod, Fun, View),
     Socket = arizona_socket:set_render_context(diff, Socket0),
     TokenCallback = fun() -> Token end,
+    Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
+    ?assertEqual(Expect, Got).
+
+diff_list(Config) when is_list(Config) ->
+    Index = 0,
+    Vars = [foo, bar],
+    Mod = undefined,
+    Assigns = #{foo => ~"foo", bar => ~"bar"},
+    ChangedAssigns = #{bar => ~"baz"},
+    Diff = [{0, [{0, [~"foo", ~"baz"]}]}],
+    Expect = {
+        arizona_view:new(Mod, Assigns, ChangedAssigns, Diff),
+        arizona_socket:new(diff)
+    },
+    View = arizona_view:new(Mod, Assigns, ChangedAssigns, []),
+    Token = arizona_render:nested_template(View, ~"""
+    <div>
+        {[
+            arizona_view:get_assign(foo, View),
+            arizona_view:get_assign(bar, View)
+         ]}
+    </div>
+    """),
+    TokenCallback = fun() -> Token end,
+    Socket = arizona_socket:new(diff),
     Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
     ?assertEqual(Expect, Got).
