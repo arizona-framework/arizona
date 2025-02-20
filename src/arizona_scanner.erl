@@ -107,12 +107,49 @@ scan(<<>>, Bin, Len, TextState, _State) ->
     maybe_prepend_text_token(Bin, Len, TextState, []).
 
 maybe_prepend_text_token(Bin, Len, State, Tokens) ->
-    case string:trim(binary_part(Bin, State#state.position, Len)) of
+    case trim(binary_part(Bin, State#state.position, Len)) of
         <<>> ->
             Tokens;
         Text ->
             [{html, location(State), Text} | Tokens]
     end.
+
+% Removes extra leading and trailing whitespaces.
+% Keeps one whitespace if needed.
+% See https://developer.mozilla.org/en-US/docs/Web/API/Document_Object_Model/Whitespace
+trim(<<>>) ->
+    <<>>;
+trim(<<$\r, $\n, Rest/binary>>) ->
+    trim(<<$\s, Rest/binary>>);
+trim(<<$\r, Rest/binary>>) ->
+    trim(<<$\s, Rest/binary>>);
+trim(<<$\n, Rest/binary>>) ->
+    trim(<<$\s, Rest/binary>>);
+trim(<<$\s, $\s, Rest/binary>>) ->
+    trim(Rest);
+trim(Rest) ->
+    trim_trailing(Rest).
+
+trim_trailing(Rest) ->
+    trim_trailing_1(binary_reverse(Rest)).
+
+trim_trailing_1(<<>>) ->
+    <<>>;
+trim_trailing_1(<<$\n, $\r, Rest/binary>>) ->
+    trim_trailing_1(<<$\s, Rest/binary>>);
+trim_trailing_1(<<$\r, Rest/binary>>) ->
+    trim_trailing_1(<<$\s, Rest/binary>>);
+trim_trailing_1(<<$\n, Rest/binary>>) ->
+    trim_trailing_1(<<$\s, Rest/binary>>);
+trim_trailing_1(<<$\s, $\s, Rest/binary>>) ->
+    trim_trailing_1(Rest);
+trim_trailing_1(Rest) ->
+    binary_reverse(Rest).
+
+binary_reverse(<<>>) ->
+    <<>>;
+binary_reverse(Bin) ->
+    binary:encode_unsigned(binary:decode_unsigned(Bin, little)).
 
 scan_expr(Rest0, Bin, StartMarkerLen, State0) ->
     {Len, EndMarkerLen, State1, Rest1} = scan_expr_end(Rest0, 0, 0, State0),

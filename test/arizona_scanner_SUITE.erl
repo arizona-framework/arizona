@@ -35,7 +35,7 @@ groups() ->
 scan(Config) when is_list(Config) ->
     Expect = [
         {comment, {59, 5}, ~"start"},
-        {html, {60, 5}, ~"Text1"},
+        {html, {60, 5}, ~"Text1 "},
         {erlang, {61, 5}, ~"{{{expr1}}}"},
         {comment, {62, 5}, ~"before text"},
         {html, {62, 20}, ~"Text2\nText3"},
@@ -46,7 +46,7 @@ scan(Config) when is_list(Config) ->
         {comment, {65, 12}, ~"after expr"},
         {html, {66, 5}, ~"Text4"},
         {comment, {66, 10}, ~"between text"},
-        {html, {66, 26}, ~"Text5"},
+        {html, {66, 26}, ~"Text5 "},
         {erlang, {67, 5}, ~"expr4"},
         {comment, {67, 12}, ~"between expr"},
         {erlang, {67, 28}, ~"expr5"},
@@ -111,7 +111,7 @@ scan_start_html_end_erlang(Config) when is_list(Config) ->
     Expect = [
         {html, {118, 5}, ~"Text1\nText2"},
         {erlang, {119, 10}, ~"expr1"},
-        {html, {119, 17}, ~"Text3\nText4"},
+        {html, {119, 17}, ~"Text3\nText4 "},
         {erlang, {121, 5}, ~"expr2"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
@@ -142,7 +142,7 @@ scan_start_erlang_end_erlang(Config) when is_list(Config) ->
         {erlang, {149, 5}, ~"expr1"},
         {html, {150, 5}, ~"Text1\nText2"},
         {erlang, {151, 10}, ~"expr2"},
-        {html, {151, 17}, ~"Text3\nText4"},
+        {html, {151, 17}, ~"Text3\nText4 "},
         {erlang, {153, 5}, ~"expr3"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
@@ -156,7 +156,7 @@ scan_start_erlang_end_erlang(Config) when is_list(Config) ->
 
 scan_new_line_cr(Config) when is_list(Config) ->
     Expect = [
-        {html, {1, 1}, ~"1"},
+        {html, {1, 1}, ~"1 "},
         {erlang, {2, 1}, ~"[2,\r3]"},
         {html, {4, 1}, ~"4"}
     ],
@@ -165,7 +165,7 @@ scan_new_line_cr(Config) when is_list(Config) ->
 
 scan_new_line_crlf(Config) when is_list(Config) ->
     Expect = [
-        {html, {1, 1}, ~"1"},
+        {html, {1, 1}, ~"1 "},
         {erlang, {2, 1}, ~"[2,\r\n3]"},
         {html, {4, 1}, ~"4"}
     ],

@@ -215,7 +215,7 @@ parse_render(Config) when is_list(Config) ->
 parse_transform_render_list(Config) when is_list(Config) ->
     Expect = {
         _Static = [
-            {bin, 1, [{bin_element, 1, {string, 1, "<ul>"}, default, [utf8]}]},
+            {bin, 1, [{bin_element, 1, {string, 1, "<ul> "}, default, [utf8]}]},
             {bin, 1, [{bin_element, 1, {string, 1, "</ul>"}, default, [utf8]}]}
         ],
         _Dynamic = [
@@ -227,11 +227,11 @@ parse_transform_render_list(Config) when is_list(Config) ->
                                 {atom, 2, list_template},
                                 {cons, 3,
                                     {bin, 3, [
-                                        {bin_element, 3, {string, 3, "<li>"}, default, [utf8]}
+                                        {bin_element, 3, {string, 3, "<li> "}, default, [utf8]}
                                     ]},
                                     {cons, 3,
                                         {bin, 3, [
-                                            {bin_element, 3, {string, 3, "<br/>"}, default, [utf8]}
+                                            {bin_element, 3, {string, 3, "<br/> "}, default, [utf8]}
                                         ]},
                                         {cons, 3,
                                             {bin, 3, [
