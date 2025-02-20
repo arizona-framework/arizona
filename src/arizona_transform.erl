@@ -102,7 +102,7 @@ transform_fun_body(arizona_render, component_template, Body, Bindings) ->
     Token = token(component_template, [Static, Dynamic]),
     {true, Token};
 transform_fun_body(arizona_render, nested_template, Body, Bindings) ->
-    [_ParentView, TemplateAst] = Body,
+    TemplateAst = nested_template_ast(Body),
     ParseOpts = #{render_context => render},
     {Static, Dynamic} = template_to_static_dynamic(TemplateAst, Bindings, ParseOpts),
     Token = token(nested_template, [Static, Dynamic]),
@@ -119,11 +119,11 @@ callback_to_static_dynamic(Callback0, Bindings) ->
     {'fun', Pos1,
         {clauses, [
             {clause, Pos2, Pattern, Guards, [
-                {call, Pos3, {remote, _, {atom, _, arizona_render}, {atom, _, nested_template}}, [
-                    _Payload, TemplateAst
-                ]}
+                {call, Pos3, {remote, _, {atom, _, arizona_render}, {atom, _, nested_template}},
+                    Body}
             ]}
         ]}} = Callback0,
+    TemplateAst = nested_template_ast(Body),
     ParseOpts = #{render_context => none},
     {Static, DynamicList0} = template_to_static_dynamic(TemplateAst, Bindings, ParseOpts),
     DynamicList = erl_syntax:set_pos(DynamicList0, Pos3),
@@ -133,6 +133,11 @@ callback_to_static_dynamic(Callback0, Bindings) ->
                 {clause, Pos2, Pattern, Guards, [DynamicList]}
             ]}},
     {Static, Callback}.
+
+nested_template_ast([TemplateAst]) ->
+    TemplateAst;
+nested_template_ast([_Payload, TemplateAst]) ->
+    TemplateAst.
 
 template_to_static_dynamic(TemplateAst, Bindings, ParseOpts) ->
     ScanOpts = #{

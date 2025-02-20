@@ -15,7 +15,7 @@ list(View) ->
     arizona_render:component_template(View, ~""""
     <ul>
         {arizona_render:list(fun(Item) ->
-            arizona_render:nested_template(#{'View' => View, 'Item' => Item}, ~"""
+            arizona_render:nested_template(~"""
             <li>
                 {integer_to_binary(Item)}
                 <br/>
@@ -31,7 +31,7 @@ table(View) ->
     <table>
         <tr>
             {arizona_render:list(fun(Col) ->
-                arizona_render:nested_template(#{'View' => View, 'Col' => Col}, ~"""
+                arizona_render:nested_template(~"""
                 <th>
                     {maps:get(label, Col)}
                 </th>
@@ -39,10 +39,10 @@ table(View) ->
              end, arizona_view:get_assign(columns, View))}
         </tr>
         {arizona_render:list(fun(Row) ->
-            arizona_render:nested_template(#{'View' => View, 'Row' => Row}, ~""""
+            arizona_render:nested_template(~""""
             <tr>
                 {arizona_render:list(fun(Col) ->
-                    arizona_render:nested_template(#{'View' => View, 'Row' => Row, 'Col' => Col}, ~"""
+                    arizona_render:nested_template(~"""
                     <td>
                         {erlang:apply(maps:get(callback, Col), [Row])}
                     </td>
