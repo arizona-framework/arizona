@@ -5,6 +5,7 @@
 %% --------------------------------------------------------------------
 
 -export([start/1]).
+-export([req_route/1]).
 
 %% --------------------------------------------------------------------
 %% Macros
@@ -35,6 +36,12 @@
 }.
 -export_type([opts/0]).
 
+-type route() ::
+    {ok, cowboy_req:req(), cowboy_middleware:env()}
+    | {suspend, module(), atom(), [any()]}
+    | {stop, cowboy_req:req()}.
+-export_type([route/0]).
+
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
@@ -45,6 +52,17 @@
     Error :: term().
 start(Opts) when is_map(Opts) ->
     start_1(norm_opts(Opts)).
+
+-spec req_route(Req) -> Route when
+    Req :: cowboy_req:req(),
+    Route :: route().
+req_route(Req) ->
+    Qs = cowboy_req:match_qs([path], Req),
+    Path = maps:get(path, Qs),
+    cowboy_router:execute(
+        Req#{path => Path},
+        #{dispatch => {persistent_term, ?PERSIST_KEY}}
+    ).
 
 %% --------------------------------------------------------------------
 %% Private
@@ -74,9 +92,10 @@ norm_transport_opts(Opts) when is_list(Opts) ->
             [{port, ?DEFAULT_PORT} | Opts]
     end.
 
-norm_proto_opts(Host, Routes, Opts) when
-    (Host =:= '_' orelse is_list(Host)), is_list(Routes), is_map(Opts)
+norm_proto_opts(Host, Routes0, Opts) when
+    (Host =:= '_' orelse is_list(Host)), is_list(Routes0), is_map(Opts)
 ->
+    Routes = [{"/websocket", arizona_websocket, []} | Routes0],
     Dispatch = cowboy_router:compile([{Host, Routes}]),
     persistent_term:put(?PERSIST_KEY, Dispatch),
     Env = maps:get(env, Opts, #{}),
