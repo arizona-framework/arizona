@@ -54,30 +54,36 @@ mount_ignore(Config) when is_list(Config) ->
 render(Config) when is_list(Config) ->
     Mod = arizona_example_template,
     Assigns = #{id => ~"app", count => 0},
-    RenderedView = arizona_view:new(Mod, Assigns, #{}, [
-        template,
+    RenderedView = arizona_view:new(
+        Mod,
+        Assigns,
+        #{},
         [
-            ~"<html>\n    <head></head>\n    <body id=\"",
-            ~"\"> ",
-            ~"</body>\n</html>"
-        ],
-        [
-            ~"app",
+            template,
             [
-                template,
-                [~"<div id=\"", ~"\"> ", ~"", ~"</div>"],
+                ~"<html>\n    <head></head>\n    <body id=\"",
+                ~"\"> ",
+                ~"</body>\n</html>"
+            ],
+            [
+                ~"app",
                 [
-                    ~"counter",
-                    ~"0",
+                    template,
+                    [~"<div id=\"", ~"\"> ", ~"", ~"</div>"],
                     [
-                        template,
-                        [~"<button> ", ~"</button>"],
-                        [~"Increment"]
+                        ~"counter",
+                        ~"0",
+                        [
+                            template,
+                            [~"<button> ", ~"</button>"],
+                            [~"Increment"]
+                        ]
                     ]
                 ]
             ]
-        ]
-    ]),
+        ],
+        []
+    ),
     Expect = {
         RenderedView,
         arizona_socket:new(render, #{
@@ -86,6 +92,7 @@ render(Config) when is_list(Config) ->
                 arizona_example_counter,
                 #{id => ~"counter", count => 0, btn_text => ~"Increment"},
                 #{},
+                [],
                 []
             )
         })
@@ -283,11 +290,11 @@ diff(Config) when is_list(Config) ->
     ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
     Diff = [{1, [{2, [{0, ~"+1"}]}, {1, ~"1"}]}],
     Expect = {
-        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Diff),
+        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Diff),
+            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], Diff),
             CounterViewId => arizona_view:new(
-                CounterMod, ExpectAssigns#{id => CounterViewId}, ChangedAssigns, []
+                CounterMod, ExpectAssigns#{id => CounterViewId}, ChangedAssigns, [], []
             )
         })
     },

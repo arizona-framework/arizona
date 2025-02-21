@@ -39,12 +39,12 @@ diff_view_template(Config) when is_list(Config) ->
     ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
     Diff = [{2, ~"baz"}],
     Expect = {
-        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Diff),
+        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Diff)
+            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], Diff)
         })
     },
-    View = arizona_view:new(Mod, Assigns, ChangedAssigns, []),
+    View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], []),
     Token = arizona_render:view_template(View, ~"""
     <div id={arizona_view:get_assign(id, View)}>
     {arizona_view:get_assign(foo, View)}
@@ -64,10 +64,10 @@ diff_component_template(Config) when is_list(Config) ->
     ChangedAssigns = #{bar => ~"baz"},
     Diff = [{1, ~"baz"}],
     Expect = {
-        arizona_view:new(Mod, Assigns, ChangedAssigns, Diff),
+        arizona_view:new(Mod, Assigns, ChangedAssigns, [], Diff),
         arizona_socket:new(diff)
     },
-    View = arizona_view:new(Mod, Assigns, ChangedAssigns, []),
+    View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], []),
     Token = arizona_render:component_template(View, ~"""
     <div>
         {arizona_view:get_assign(foo, View)}
@@ -87,10 +87,10 @@ diff_nested_template(Config) when is_list(Config) ->
     ChangedAssigns = #{bar => ~"baz"},
     Diff = [{0, [{1, ~"baz"}]}],
     Expect = {
-        arizona_view:new(Mod, Assigns, ChangedAssigns, Diff),
+        arizona_view:new(Mod, Assigns, ChangedAssigns, [], Diff),
         arizona_socket:new(diff)
     },
-    View = arizona_view:new(Mod, Assigns, ChangedAssigns, []),
+    View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], []),
     Token = arizona_render:nested_template(View, ~"""
     <div>
         {arizona_view:get_assign(foo, View)}
@@ -115,10 +115,10 @@ diff_list_template(Config) when is_list(Config) ->
         ]}
     ],
     Expect = {
-        arizona_view:new(Mod, Assigns, ChangedAssigns, Diff),
+        arizona_view:new(Mod, Assigns, ChangedAssigns, [], Diff),
         arizona_socket:new(diff)
     },
-    View = arizona_view:new(Mod, Assigns, ChangedAssigns, []),
+    View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], []),
     Token = arizona_render:list(
         fun(Item) ->
             arizona_render:nested_template(#{'View' => View, 'Item' => Item}, ~"""
@@ -161,11 +161,11 @@ diff_view(Config) when is_list(Config) ->
         ]}
     ],
     Expect = {
-        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Diff),
+        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Diff),
+            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], Diff),
             CounterViewId => arizona_view:new(
-                CounterMod, ExpectAssigns#{id => CounterViewId}, #{}, []
+                CounterMod, ExpectAssigns#{id => CounterViewId}, #{}, [], []
             )
         })
     },
@@ -203,17 +203,17 @@ diff_view_new_id(Config) when is_list(Config) ->
         ]}
     ],
     Expect = {
-        arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, Diff),
+        arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, [], Diff),
         arizona_socket:new(diff, #{
             ~"baz" => arizona_view:new(
-                Mod, #{id => ~"baz", ignore => false, name => ~"Arizona"}, #{}, []
+                Mod, #{id => ~"baz", ignore => false, name => ~"Arizona"}, #{}, [], []
             ),
             % FIXME: The 'ViewId' should be removed from the socket views.
             % The question is: How to know the previous id?
             ViewId => arizona_view:new(
-                Mod, #{id => ~"bar", ignore => false, name => ~"World"}, #{}, []
+                Mod, #{id => ~"bar", ignore => false, name => ~"World"}, #{}, [], []
             ),
-            RootViewId => arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, Diff)
+            RootViewId => arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, [], Diff)
         })
     },
     RenderSocket = arizona_socket:new(render),
@@ -242,14 +242,14 @@ diff_view_ignore(Config) when is_list(Config) ->
     ChangedAssigns = #{view_id => ~"baz", name => ~"Arizona", ignore => true},
     ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
     Expect = {
-        arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, []),
+        arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, [], []),
         arizona_socket:new(diff, #{
             % FIXME: The 'ViewId' should be removed from the socket views.
             % The question is: How to know the previous id?
             ViewId => arizona_view:new(
-                Mod, #{id => ~"bar", ignore => false, name => ~"World"}, #{}, []
+                Mod, #{id => ~"bar", ignore => false, name => ~"World"}, #{}, [], []
             ),
-            RootViewId => arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, [])
+            RootViewId => arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, [], [])
         })
     },
     RenderSocket = arizona_socket:new(render),
@@ -276,11 +276,11 @@ diff_component(Config) when is_list(Config) ->
     ChangedAssigns = #{text => ~"+1"},
     Diff = [{0, ~"+1"}],
     Expect = {
-        arizona_view:new(Mod, Assigns, ChangedAssigns, Diff),
+        arizona_view:new(Mod, Assigns, ChangedAssigns, [], Diff),
         arizona_socket:new(diff)
     },
     RenderSocket = arizona_socket:new(render),
-    View0 = arizona_view:new(Mod, Assigns, ChangedAssigns, []),
+    View0 = arizona_view:new(Mod, Assigns, ChangedAssigns, [], []),
     RenderToken = arizona_component:render(Mod, Fun, View0),
     ParentView = arizona_view:new(#{}),
     {RenderedView, Socket0} = arizona_render:render(
@@ -302,10 +302,10 @@ diff_list(Config) when is_list(Config) ->
     ChangedAssigns = #{bar => ~"baz"},
     Diff = [{0, [{0, [~"foo", ~"baz"]}]}],
     Expect = {
-        arizona_view:new(Mod, Assigns, ChangedAssigns, Diff),
+        arizona_view:new(Mod, Assigns, ChangedAssigns, [], Diff),
         arizona_socket:new(diff)
     },
-    View = arizona_view:new(Mod, Assigns, ChangedAssigns, []),
+    View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], []),
     Token = arizona_render:nested_template(View, ~"""
     <div>
         {[
