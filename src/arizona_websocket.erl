@@ -22,8 +22,7 @@
 %% --------------------------------------------------------------------
 
 -opaque init_state() :: {
-    Mod :: module(),
-    Assigns :: arizona_view:assigns(),
+    HandlerState :: arizona_view_handler:state(),
     Params :: [{binary(), binary() | true}]
 }.
 -export_type([init_state/0]).
@@ -46,7 +45,7 @@ init(Req0, []) ->
     InitState :: init_state(),
     Events :: cowboy_websocket:commands(),
     Socket :: arizona_socket:socket().
-websocket_init({Mod, Assigns, Params}) ->
+websocket_init({{Mod, Assigns, _Opts}, Params}) ->
     ?LOG_INFO(#{
         text => ~"init",
         in => ?MODULE,
@@ -110,6 +109,6 @@ terminate(Reason, _Req, Socket) ->
 %% --------------------------------------------------------------------
 
 init_state(Req, Env) ->
-    {Mod, Bindings} = maps:get(handler_opts, Env),
+    HandlerState = maps:get(handler_opts, Env),
     Params = cowboy_req:parse_qs(Req),
-    {Mod, Bindings, Params}.
+    {HandlerState, Params}.
