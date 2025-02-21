@@ -28,7 +28,6 @@ generate() ->
 generate(Routes, StaticDir) when
     is_list(Routes), (is_list(StaticDir) orelse is_binary(StaticDir))
 ->
-    ok = filelib:ensure_path(StaticDir),
     lists:foreach(fun(Route) -> process_route(Route, StaticDir) end, Routes).
 
 %% --------------------------------------------------------------------
