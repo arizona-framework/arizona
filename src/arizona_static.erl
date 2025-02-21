@@ -29,24 +29,24 @@ generate(Routes, StaticDir) when
     is_list(Routes), (is_list(StaticDir) orelse is_binary(StaticDir))
 ->
     ok = filelib:ensure_path(StaticDir),
-    lists:foreach(fun(Route) -> parse_route(Route, StaticDir) end, Routes).
+    lists:foreach(fun(Route) -> process_route(Route, StaticDir) end, Routes).
 
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
 
-parse_route({Path, cowboy_static, {priv_file, App, Filename}}, StaticDir) ->
-    parse_priv_file(Path, App, Filename, StaticDir);
-parse_route({Path, cowboy_static, {priv_dir, App, Dir}}, StaticDir) ->
-    parse_priv_dir(Path, App, Dir, StaticDir);
-parse_route({Path, arizona_view_handler, {Mod, Assigns}}, StaticDir) ->
-    parse_view(Path, Mod, Assigns, StaticDir);
-parse_route(Route, StaticDir) ->
+process_route({Path, cowboy_static, {priv_file, App, Filename}}, StaticDir) ->
+    write_priv_file(Path, App, Filename, StaticDir);
+process_route({Path, cowboy_static, {priv_dir, App, Dir}}, StaticDir) ->
+    write_priv_dir_files(Path, App, Dir, StaticDir);
+process_route({Path, arizona_view_handler, {Mod, Assigns}}, StaticDir) ->
+    write_view_as_html(Path, Mod, Assigns, StaticDir);
+process_route(Route, StaticDir) ->
     error(invalid_route, [Route, StaticDir], [
         {error_info, #{cause => ~"only static route is allowed"}}
     ]).
 
-parse_priv_file(Path, App, Filename, StaticDir) ->
+write_priv_file(Path, App, Filename, StaticDir) ->
     ok = check_path_segments(Path),
     AppDir = code:lib_dir(App),
     Source = filename:join([AppDir, "priv", Filename]),
@@ -55,7 +55,7 @@ parse_priv_file(Path, App, Filename, StaticDir) ->
     ok = filelib:ensure_path(filename:dirname(Destination)),
     ok = file:write_file(Destination, Bin).
 
-parse_priv_dir(Path0, App, Dir, StaticDir) ->
+write_priv_dir_files(Path0, App, Dir, StaticDir) ->
     Path = lists:flatten(string:replace(Path0, "/[...]", "")),
     ok = check_path_segments(Path),
     AppDir = code:lib_dir(App),
@@ -72,7 +72,7 @@ parse_priv_dir(Path0, App, Dir, StaticDir) ->
         Files
     ).
 
-parse_view(Path, Mod, Assigns, StaticDir) ->
+write_view_as_html(Path, Mod, Assigns, StaticDir) ->
     ok = check_path_segments(Path),
     Socket0 = arizona_socket:new(render),
     {ok, View0} = arizona_view:mount(Mod, Assigns, Socket0),
