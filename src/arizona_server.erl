@@ -36,12 +36,6 @@
 }.
 -export_type([opts/0]).
 
--type route() ::
-    {ok, cowboy_req:req(), cowboy_middleware:env()}
-    | {suspend, module(), atom(), [any()]}
-    | {stop, cowboy_req:req()}.
--export_type([route/0]).
-
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
@@ -55,7 +49,10 @@ start(Opts) when is_map(Opts) ->
 
 -spec req_route(Req) -> Route when
     Req :: cowboy_req:req(),
-    Route :: route().
+    Route ::
+        {ok, cowboy_req:req(), cowboy_middleware:env()}
+        | {suspend, module(), atom(), [term()]}
+        | {stop, cowboy_req:req()}.
 req_route(Req) ->
     Qs = cowboy_req:match_qs([path], Req),
     Path = maps:get(path, Qs),
@@ -65,7 +62,7 @@ req_route(Req) ->
     ).
 
 %% --------------------------------------------------------------------
-%% Private
+%% Private functions
 %% --------------------------------------------------------------------
 
 start_1(#{scheme := http, transport := Transport, proto := Proto}) ->
