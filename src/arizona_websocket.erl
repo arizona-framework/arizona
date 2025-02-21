@@ -56,8 +56,9 @@ websocket_init({{Mod, Assigns, _Opts}, Params}) ->
     Socket0 = arizona_socket:new(render),
     {ok, View0} = arizona_view:mount(Mod, Assigns, Socket0),
     Token = arizona_view:render(View0),
-    {View, Socket} = arizona_render:render(Token, View0, View0, Socket0),
+    {View, Socket1} = arizona_render:render(Token, View0, View0, Socket0),
     Html = arizona_view:rendered_to_iolist(View),
+    Socket = arizona_socket:set_render_context(diff, Socket1),
     Msg = json:encode([[~"init", Html]]),
     Events = [{text, Msg}],
     {Events, Socket}.
@@ -67,14 +68,26 @@ websocket_init({{Mod, Assigns, _Opts}, Params}) ->
     Events :: cowboy_websocket:commands(),
     Socket0 :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
-websocket_handle({text, Msg}, Socket) ->
+websocket_handle({text, Msg}, Socket0) ->
     ?LOG_INFO(#{
         text => ~"message received",
         in => ?MODULE,
         messge => Msg,
-        socket => Socket
+        socket => Socket0
     }),
-    Events = [],
+    [ViewId, Event, Payload] = json:decode(Msg),
+    {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
+    View1 = arizona_view:handle_event(Event, Payload, View0),
+    ?LOG_INFO(#{
+        text => ~"view updated",
+        in => ?MODULE,
+        id => ViewId,
+        views => View1
+    }),
+    Token = arizona_view:render(View1),
+    {View, Socket} = arizona_diff:diff(Token, 0, View1, Socket0),
+    Diff = arizona_view:diff(View),
+    Events = put_diff_event(Diff, []),
     {Events, Socket}.
 
 -spec websocket_info(Msg, Socket0) -> {Events, Socket1} when
@@ -112,3 +125,17 @@ init_state(Req, Env) ->
     HandlerState = maps:get(handler_opts, Env),
     Params = cowboy_req:parse_qs(Req),
     {HandlerState, Params}.
+
+put_diff_event([], Events) ->
+    Events;
+put_diff_event(Diff, Events) ->
+    Msg = encode_diff([[~"diff", Diff]]),
+    [{text, Msg} | Events].
+
+encode_diff(Diff) ->
+    json:encode(Diff, fun
+        ([{_, _} | _] = Proplist, Encode) ->
+            json:encode(proplists:to_map(Proplist), Encode);
+        (Other, Encode) ->
+            json:encode_value(Other, Encode)
+    end).
