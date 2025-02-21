@@ -11,6 +11,7 @@ all() ->
     [
         {group, mount},
         {group, render},
+        {group, render_to_iolist},
         {group, diff}
     ].
 
@@ -22,9 +23,11 @@ groups() ->
         ]},
         {render, [parallel], [
             render,
+            render_table_component
+        ]},
+        {render_to_iolist, [parallel], [
             rendered_to_iolist,
             render_nested_template_to_iolist,
-            render_table_component,
             render_table_component_to_iolist
         ]},
         {diff, [parallel], [
@@ -54,22 +57,46 @@ mount_ignore(Config) when is_list(Config) ->
 render(Config) when is_list(Config) ->
     Mod = arizona_example_template,
     Assigns = #{id => ~"app", count => 0},
-    RenderedView = arizona_view:new(
-        Mod,
-        Assigns,
-        #{},
+    Rendered = [
+        template,
         [
-            template,
+            ~"<html>\n    <head></head>\n    <body id=\"",
+            ~"\"> ",
+            ~"</body>\n</html>"
+        ],
+        [
+            ~"app",
             [
-                ~"<html>\n    <head></head>\n    <body id=\"",
-                ~"\"> ",
-                ~"</body>\n</html>"
-            ],
-            [
-                ~"app",
+                template,
+                [~"<div id=\"", ~"\"> ", ~"", ~"</div>"],
+                [
+                    ~"counter",
+                    ~"0",
+                    [
+                        template,
+                        [~"<button> ", ~"</button>"],
+                        [~"Increment"]
+                    ]
+                ]
+            ]
+        ]
+    ],
+    Expect = {
+        arizona_view:new(Mod, Assigns, #{}, Rendered, Rendered, []),
+        arizona_socket:new(render, #{
+            ~"app" => arizona_view:new(Mod, Assigns, #{}, Rendered, []),
+            ~"counter" => arizona_view:new(
+                arizona_example_counter,
+                #{id => ~"counter", count => 0, btn_text => ~"Increment"},
+                #{},
                 [
                     template,
-                    [~"<div id=\"", ~"\"> ", ~"", ~"</div>"],
+                    [
+                        ~"<div id=\"",
+                        ~"\"> ",
+                        ~"",
+                        ~"</div>"
+                    ],
                     [
                         ~"counter",
                         ~"0",
@@ -79,20 +106,7 @@ render(Config) when is_list(Config) ->
                             [~"Increment"]
                         ]
                     ]
-                ]
-            ]
-        ],
-        []
-    ),
-    Expect = {
-        RenderedView,
-        arizona_socket:new(render, #{
-            ~"app" => RenderedView,
-            ~"counter" => arizona_view:new(
-                arizona_example_counter,
-                #{id => ~"counter", count => 0, btn_text => ~"Increment"},
-                #{},
-                [],
+                ],
                 []
             )
         })
@@ -174,49 +188,47 @@ render_table_component(Config) when is_list(Config) ->
             #{name => ~"Bob", age => ~"51"}
         ]
     },
-    View = arizona_view:new(Assigns),
-    Socket = arizona_socket:new(render),
-    Expect = {
-        arizona_view:set_tmp_rendered(
+    Rendered = [
+        template,
+        [~"<table>\n    <tr> ", ~"</tr> ", ~"</table>"],
+        [
             [
-                template,
-                [~"<table>\n    <tr> ", ~"</tr> ", ~"</table>"],
+                list_template,
+                [~"<th>", ~"</th>"],
+                [[[~"Name"]], [[~"Age"]]]
+            ],
+            [
+                list_template,
+                [~"<tr> ", ~"</tr>"],
                 [
                     [
-                        list_template,
-                        [~"<th>", ~"</th>"],
-                        [[[~"Name"]], [[~"Age"]]]
-                    ],
-                    [
-                        list_template,
-                        [~"<tr> ", ~"</tr>"],
                         [
                             [
-                                [
-                                    [
-                                        list_template,
-                                        [~"<td> ", ~"</td>"],
-                                        [[[~"Jane"]], [[~"34"]]]
-                                    ]
-                                ]
-                            ],
+                                list_template,
+                                [~"<td> ", ~"</td>"],
+                                [[[~"Jane"]], [[~"34"]]]
+                            ]
+                        ]
+                    ],
+                    [
+                        [
                             [
-                                [
-                                    [
-                                        list_template,
-                                        [~"<td> ", ~"</td>"],
-                                        [[[~"Bob"]], [[~"51"]]]
-                                    ]
-                                ]
+                                list_template,
+                                [~"<td> ", ~"</td>"],
+                                [[[~"Bob"]], [[~"51"]]]
                             ]
                         ]
                     ]
                 ]
-            ],
-            View
-        ),
+            ]
+        ]
+    ],
+    Socket = arizona_socket:new(render),
+    Expect = {
+        arizona_view:new(undefined, Assigns, #{}, Rendered, Rendered, []),
         Socket
     },
+    View = arizona_view:new(Assigns),
     Token = arizona_component:render(Mod, Fun, View),
     Got = arizona_render:render(Token, View, View, Socket),
     ?assertEqual(Expect, Got).
@@ -288,13 +300,58 @@ diff(Config) when is_list(Config) ->
     Assigns = #{id => ViewId, count => 0, btn_text => ~"Increment"},
     ChangedAssigns = #{count => 1, btn_text => ~"+1"},
     ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
+    Rendered = [
+        template,
+        [
+            ~"<html>\n    <head></head>\n    <body id=\"",
+            ~"\"> ",
+            ~"</body>\n</html>"
+        ],
+        [
+            ~"app",
+            [
+                template,
+                [~"<div id=\"", ~"\"> ", ~"", ~"</div>"],
+                [
+                    ~"counter",
+                    ~"0",
+                    [
+                        template,
+                        [~"<button> ", ~"</button>"],
+                        [~"Increment"]
+                    ]
+                ]
+            ]
+        ]
+    ],
     Diff = [{1, [{2, [{0, ~"+1"}]}, {1, ~"1"}]}],
     Expect = {
-        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], Diff),
+        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], Diff),
+            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, Diff),
             CounterViewId => arizona_view:new(
-                CounterMod, ExpectAssigns#{id => CounterViewId}, ChangedAssigns, [], []
+                CounterMod,
+                ExpectAssigns#{id => CounterViewId},
+                ChangedAssigns,
+                [
+                    template,
+                    [
+                        ~"<div id=\"",
+                        ~"\"> ",
+                        ~"",
+                        ~"</div>"
+                    ],
+                    [
+                        ~"counter",
+                        ~"0",
+                        [
+                            template,
+                            [~"<button> ", ~"</button>"],
+                            [~"Increment"]
+                        ]
+                    ]
+                ],
+                []
             )
         })
     },

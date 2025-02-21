@@ -236,8 +236,9 @@ render_view_template(View0, Socket0, Static, Dynamic0) ->
     {View1, Socket1} = render_dynamic(Dynamic0, View0, Socket0),
     Dynamic = lists:reverse(arizona_view:tmp_rendered(View1)),
     Template = [template, Static, Dynamic],
-    View2 = arizona_view:set_tmp_rendered(Template, View1),
-    View = arizona_view:merge_changed_assigns(View2),
+    View2 = arizona_view:set_rendered(Template, View1),
+    View3 = arizona_view:set_tmp_rendered(Template, View2),
+    View = arizona_view:merge_changed_assigns(View3),
     Socket = arizona_socket:put_view(View, Socket1),
     {View, Socket}.
 
@@ -245,7 +246,8 @@ render_component_template(View0, Socket0, Static, Dynamic0) ->
     {View1, Socket} = render_dynamic(Dynamic0, View0, Socket0),
     Dynamic = lists:reverse(arizona_view:tmp_rendered(View1)),
     Template = [template, Static, Dynamic],
-    View = arizona_view:set_tmp_rendered(Template, View1),
+    View2 = arizona_view:set_rendered(Template, View1),
+    View = arizona_view:set_tmp_rendered(Template, View2),
     {View, Socket}.
 
 render_nested_template(ParentView0, Socket0, Static, Dynamic0) ->
@@ -278,10 +280,9 @@ render_view(ParentView0, Socket0, Mod, Assigns) ->
     case arizona_view:mount(Mod, Assigns, Socket0) of
         {ok, View0} ->
             Token = arizona_view:render(View0),
-            {View1, Socket1} = render(Token, View0, ParentView0, Socket0),
-            Rendered = arizona_view:tmp_rendered(View1),
+            {View, Socket1} = render(Token, View0, ParentView0, Socket0),
+            Rendered = arizona_view:tmp_rendered(View),
             ParentView = arizona_view:put_tmp_rendered(Rendered, ParentView0),
-            View = arizona_view:set_tmp_rendered([], View1),
             Socket = arizona_socket:put_view(View, Socket1),
             {ParentView, Socket};
         ignore ->
@@ -293,14 +294,16 @@ render_component(ParentView0, Socket0, Mod, Fun, Assigns) ->
     Token = arizona_component:render(Mod, Fun, View0),
     {View, Socket1} = render(Token, View0, ParentView0, Socket0),
     Rendered = arizona_view:tmp_rendered(View),
-    ParentView = arizona_view:put_tmp_rendered(Rendered, ParentView0),
+    ParentView1 = arizona_view:put_rendered(Rendered, ParentView0),
+    ParentView = arizona_view:put_tmp_rendered(Rendered, ParentView1),
     {ParentView, Socket1}.
 
 render_list(Static, DynamicList0, View0, ParentView0, Socket) ->
     View = arizona_view:new(arizona_view:assigns(View0)),
     DynamicList = render_dynamic_list(DynamicList0, View, Socket),
     Rendered = [list, Static, DynamicList],
-    ParentView = arizona_view:put_tmp_rendered(Rendered, ParentView0),
+    ParentView1 = arizona_view:put_rendered(Rendered, ParentView0),
+    ParentView = arizona_view:put_tmp_rendered(Rendered, ParentView1),
     {ParentView, Socket}.
 
 render_dynamic_list([], _View, _Socket) ->

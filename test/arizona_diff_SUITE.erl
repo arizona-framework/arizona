@@ -110,8 +110,8 @@ diff_list_template(Config) when is_list(Config) ->
     ChangedAssigns = #{bar => ~"baz"},
     Diff = [
         {0, [
-            [{1, <<"baz">>}, {0, <<"foo">>}],
-            [{1, <<"baz">>}, {0, <<"foo">>}]
+            [{1, ~"baz"}, {0, ~"foo"}],
+            [{1, ~"baz"}, {0, ~"foo"}]
         ]}
     ],
     Expect = {
@@ -145,6 +145,35 @@ diff_view(Config) when is_list(Config) ->
     Assigns = #{id => ViewId, count => 0, btn_text => ~"Increment"},
     ChangedAssigns = #{count => 1, btn_text => ~"+1"},
     ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
+    Rendered = [
+        template,
+        [
+            ~"<html>\n    <head></head>\n    <body id=\"",
+            ~"\"> ",
+            ~"</body>\n</html>"
+        ],
+        [
+            ~"app",
+            [
+                template,
+                [
+                    ~"<div id=\"",
+                    ~"\"> ",
+                    ~"",
+                    ~"</div>"
+                ],
+                [
+                    ~"counter",
+                    ~"0",
+                    [
+                        template,
+                        [~"<button> ", ~"</button>"],
+                        [~"Increment"]
+                    ]
+                ]
+            ]
+        ]
+    ],
     Diff = [
         {1, [
             template,
@@ -161,11 +190,32 @@ diff_view(Config) when is_list(Config) ->
         ]}
     ],
     Expect = {
-        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], Diff),
+        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], Diff),
+            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, Diff),
             CounterViewId => arizona_view:new(
-                CounterMod, ExpectAssigns#{id => CounterViewId}, #{}, [], []
+                CounterMod,
+                ExpectAssigns#{id => CounterViewId},
+                #{},
+                [
+                    template,
+                    [
+                        ~"<div id=\"",
+                        ~"\"> ",
+                        ~"",
+                        ~"</div>"
+                    ],
+                    [
+                        ~"counter",
+                        ~"1",
+                        [
+                            template,
+                            [~"<button> ", ~"</button>"],
+                            [~"+1"]
+                        ]
+                    ]
+                ],
+                []
             )
         })
     },
@@ -195,6 +245,22 @@ diff_view_new_id(Config) when is_list(Config) ->
     Assigns = #{id => RootViewId, view_id => ViewId, name => ~"World", ignore => false},
     ChangedAssigns = #{view_id => ~"baz", name => ~"Arizona"},
     ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
+    Rendered = [
+        template,
+        [~"<div id=\"", ~"\"> ", ~"</div>"],
+        [
+            ~"foo",
+            [
+                template,
+                [
+                    ~"<div id=\"",
+                    ~"\">\n    Hello, ",
+                    ~"!\n</div>"
+                ],
+                [~"bar", ~"World"]
+            ]
+        ]
+    ],
     Diff = [
         {1, [
             template,
@@ -203,17 +269,41 @@ diff_view_new_id(Config) when is_list(Config) ->
         ]}
     ],
     Expect = {
-        arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, [], Diff),
+        arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, Rendered, Diff),
         arizona_socket:new(diff, #{
             ~"baz" => arizona_view:new(
-                Mod, #{id => ~"baz", ignore => false, name => ~"Arizona"}, #{}, [], []
+                Mod,
+                #{id => ~"baz", ignore => false, name => ~"Arizona"},
+                #{},
+                [
+                    template,
+                    [
+                        ~"<div id=\"",
+                        ~"\">\n    Hello, ",
+                        ~"!\n</div>"
+                    ],
+                    [~"baz", ~"Arizona"]
+                ],
+                []
             ),
             % FIXME: The 'ViewId' should be removed from the socket views.
             % The question is: How to know the previous id?
             ViewId => arizona_view:new(
-                Mod, #{id => ~"bar", ignore => false, name => ~"World"}, #{}, [], []
+                Mod,
+                #{id => ~"bar", ignore => false, name => ~"World"},
+                #{},
+                [
+                    template,
+                    [
+                        ~"<div id=\"",
+                        ~"\">\n    Hello, ",
+                        ~"!\n</div>"
+                    ],
+                    [~"bar", ~"World"]
+                ],
+                []
             ),
-            RootViewId => arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, [], Diff)
+            RootViewId => arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, Rendered, Diff)
         })
     },
     RenderSocket = arizona_socket:new(render),
@@ -241,15 +331,64 @@ diff_view_ignore(Config) when is_list(Config) ->
     Assigns = #{id => RootViewId, view_id => ViewId, name => ~"World", ignore => false},
     ChangedAssigns = #{view_id => ~"baz", name => ~"Arizona", ignore => true},
     ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
+    Rendered = [
+        template,
+        [~"<div id=\"", ~"\"> ", ~"</div>"],
+        [
+            ~"foo",
+            [
+                template,
+                [
+                    ~"<div id=\"",
+                    ~"\">\n    Hello, ",
+                    ~"!\n</div>"
+                ],
+                [~"bar", ~"World"]
+            ]
+        ]
+    ],
     Expect = {
-        arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, [], []),
+        arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, Rendered, []),
         arizona_socket:new(diff, #{
             % FIXME: The 'ViewId' should be removed from the socket views.
             % The question is: How to know the previous id?
             ViewId => arizona_view:new(
-                Mod, #{id => ~"bar", ignore => false, name => ~"World"}, #{}, [], []
+                Mod,
+                #{id => ~"bar", ignore => false, name => ~"World"},
+                #{},
+                [
+                    template,
+                    [
+                        ~"<div id=\"",
+                        ~"\">\n    Hello, ",
+                        ~"!\n</div>"
+                    ],
+                    [~"bar", ~"World"]
+                ],
+                []
             ),
-            RootViewId => arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, [], [])
+            RootViewId => arizona_view:new(
+                RootMod,
+                ExpectAssigns,
+                ChangedAssigns,
+                [
+                    template,
+                    [~"<div id=\"", ~"\"> ", ~"</div>"],
+                    [
+                        ~"foo",
+                        [
+                            template,
+                            [
+                                ~"<div id=\"",
+                                ~"\">\n    Hello, ",
+                                ~"!\n</div>"
+                            ],
+                            [~"bar", ~"World"]
+                        ]
+                    ]
+                ],
+                []
+            )
         })
     },
     RenderSocket = arizona_socket:new(render),
@@ -274,9 +413,10 @@ diff_component(Config) when is_list(Config) ->
     Fun = button,
     Assigns = #{text => ~"Increment"},
     ChangedAssigns = #{text => ~"+1"},
+    Rendered = [template, [~"<button> ", ~"</button>"], [~"+1"]],
     Diff = [{0, ~"+1"}],
     Expect = {
-        arizona_view:new(Mod, Assigns, ChangedAssigns, [], Diff),
+        arizona_view:new(Mod, Assigns, ChangedAssigns, Rendered, Diff),
         arizona_socket:new(diff)
     },
     RenderSocket = arizona_socket:new(render),
