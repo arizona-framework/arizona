@@ -140,7 +140,7 @@ diff_view(ParentView, Socket, Mod, Assigns, Index) ->
     end.
 
 render_view(ParentView0, Socket0, Mod, NewAssigns, Index, View0, ViewId) ->
-    {view_template, _Static, Dynamic} = arizona_view:render(Mod, View0),
+    {view_template, _Static, Dynamic} = arizona_view:render(View0),
     OldAssigns = arizona_view:assigns(View0),
     ChangedAssigns = view_changed_assigns(OldAssigns, NewAssigns),
     View1 = arizona_view:set_changed_assigns(ChangedAssigns, View0),
@@ -169,7 +169,7 @@ view_changed_assigns(OldAssigns, NewAssigns) ->
 mount_view(ParentView0, Socket0, Mod, Assigns, Index) ->
     case arizona_view:mount(Mod, Assigns, Socket0) of
         {ok, View0} ->
-            Token = arizona_view:render(Mod, View0),
+            Token = arizona_view:render(View0),
             Socket1 = arizona_socket:set_render_context(render, Socket0),
             {View1, Socket2} = arizona_render:render(Token, View0, ParentView0, Socket1),
             Rendered = arizona_view:rendered(View1),

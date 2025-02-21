@@ -93,7 +93,7 @@ render(Config) when is_list(Config) ->
     ParentView = arizona_view:new(#{}),
     Socket = arizona_socket:new(render),
     {ok, View} = arizona_view:mount(Mod, Assigns, Socket),
-    Token = arizona_view:render(Mod, View),
+    Token = arizona_view:render(View),
     Got = arizona_render:render(Token, View, ParentView, Socket),
     ?assertEqual(Expect, Got).
 
@@ -118,7 +118,7 @@ rendered_to_iolist(Config) when is_list(Config) ->
     Mod = arizona_example_template,
     Assigns = #{id => ~"app", count => 0},
     {ok, View0} = arizona_view:mount(Mod, Assigns, Socket),
-    Token = arizona_view:render(Mod, View0),
+    Token = arizona_view:render(View0),
     {View, _Socket} = arizona_render:render(Token, View0, ParentView, Socket),
     Got = arizona_view:rendered_to_iolist(View),
     ?assertEqual(Expect, Got).
@@ -293,14 +293,14 @@ diff(Config) when is_list(Config) ->
     },
     RenderSocket = arizona_socket:new(render),
     {ok, MountedView} = arizona_view:mount(Mod, Assigns, RenderSocket),
-    RenderToken = arizona_view:render(Mod, MountedView),
+    RenderToken = arizona_view:render(MountedView),
     ParentView = arizona_view:new(#{}),
     {RenderedView, Socket0} = arizona_render:render(
         RenderToken, MountedView, ParentView, RenderSocket
     ),
     View0 = arizona_view:set_rendered([], RenderedView),
     View = arizona_view:put_assigns(ChangedAssigns, View0),
-    Token = arizona_view:render(Mod, View),
+    Token = arizona_view:render(View),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:set_render_context(diff, Socket0),
     Got = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
@@ -330,7 +330,7 @@ diff_to_iolist(Config) when is_list(Config) ->
     ],
     RenderSocket = arizona_socket:new(render),
     {ok, MountedView} = arizona_view:mount(Mod, Assigns, RenderSocket),
-    RenderToken = arizona_view:render(Mod, MountedView),
+    RenderToken = arizona_view:render(MountedView),
     ParentView = arizona_view:new(#{}),
     {RenderedView, Socket0} = arizona_render:render(
         RenderToken, MountedView, ParentView, RenderSocket
@@ -338,7 +338,7 @@ diff_to_iolist(Config) when is_list(Config) ->
     Rendered = arizona_view:rendered(RenderedView),
     View0 = arizona_view:set_rendered([], RenderedView),
     View = arizona_view:put_assigns(ChangedAssigns, View0),
-    Token = arizona_view:render(Mod, View),
+    Token = arizona_view:render(View),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:set_render_context(diff, Socket0),
     {DiffView, _Socket} = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
