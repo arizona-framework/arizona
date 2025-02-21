@@ -11,6 +11,13 @@
 %% Types (and their exports)
 %% --------------------------------------------------------------------
 
+-type state() :: {
+    Mod :: module(),
+    Assigns :: arizona_view:assigns(),
+    Opts :: opts()
+}.
+-export_type([state/0]).
+
 -type opts() :: #{
     layout => module()
 }.
@@ -22,10 +29,7 @@
 
 -spec init(Req0, State) -> {ok, Req1, State} when
     Req0 :: cowboy_req:req(),
-    State :: {Mod, Assigns, Opts},
-    Mod :: module(),
-    Assigns :: arizona_view:assigns(),
-    Opts :: opts(),
+    State :: state(),
     Req1 :: cowboy_req:req().
 init(Req0, {Mod, Assigns, Opts} = State) when is_atom(Mod), is_map(Assigns), is_map(Opts) ->
     Socket = arizona_socket:new(render),
