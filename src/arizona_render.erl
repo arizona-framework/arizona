@@ -65,7 +65,6 @@
 -type rendered_value() ::
     binary()
     | rendered()
-    | {arizona_diff:index(), binary() | rendered()}
     % I could not figure out a correct type without the `dynamic/0`.
     | dynamic().
 -export_type([rendered_value/0]).

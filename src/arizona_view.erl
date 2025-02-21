@@ -6,7 +6,7 @@
 
 -export([new/1]).
 -export([new/2]).
--export([new/4]).
+-export([new/5]).
 -export([assigns/1]).
 -export([put_assign/3]).
 -export([put_assigns/2]).
@@ -17,6 +17,8 @@
 -export([rendered/1]).
 -export([set_rendered/2]).
 -export([put_rendered/2]).
+-export([diff/1]).
+-export([set_diff/2]).
 -export([put_diff/3]).
 -export([merge_changed_assigns/1]).
 -export([rendered_to_iolist/1]).
@@ -25,7 +27,7 @@
 %
 
 -ignore_xref([new/2]).
--ignore_xref([new/4]).
+-ignore_xref([new/5]).
 -ignore_xref([get_assign/3]).
 -ignore_xref([put_assign/3]).
 -ignore_xref([put_assigns/2]).
@@ -60,7 +62,8 @@
     module :: undefined | module(),
     assigns :: assigns(),
     changed_assigns :: assigns(),
-    rendered :: arizona_render:rendered()
+    rendered :: arizona_render:rendered(),
+    diff :: arizona_diff:diff()
 }).
 -opaque view() :: #view{}.
 -export_type([view/0]).
@@ -88,29 +91,31 @@ doctest_test() -> doctest:module(?MODULE).
     Assigns :: assigns(),
     View :: view().
 new(Assigns) ->
-    new(undefined, Assigns, #{}, []).
+    new(undefined, Assigns, #{}, [], []).
 
 -spec new(Mod, Assigns) -> View when
     Mod :: module(),
     Assigns :: assigns(),
     View :: view().
 new(Mod, Assigns) ->
-    new(Mod, Assigns, #{}, []).
+    new(Mod, Assigns, #{}, [], []).
 
--spec new(Mod, Assigns, ChangedAssigns, Rendered) -> View when
+-spec new(Mod, Assigns, ChangedAssigns, Rendered, Diff) -> View when
     Mod :: undefined | module(),
     Assigns :: assigns(),
     ChangedAssigns :: assigns(),
     Rendered :: arizona_render:rendered(),
+    Diff :: arizona_diff:diff(),
     View :: view().
-new(Mod, Assigns, ChangedAssigns, Rendered) when
-    is_atom(Mod), is_map(Assigns), is_map(ChangedAssigns), is_list(Rendered)
+new(Mod, Assigns, ChangedAssigns, Rendered, Diff) when
+    is_atom(Mod), is_map(Assigns), is_map(ChangedAssigns), is_list(Rendered), is_list(Diff)
 ->
     #view{
         module = Mod,
         assigns = Assigns,
         changed_assigns = ChangedAssigns,
-        rendered = Rendered
+        rendered = Rendered,
+        diff = Diff
     }.
 
 -spec assigns(View) -> Assigns when
@@ -181,16 +186,28 @@ set_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
 put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendered) ->
     View#view{rendered = [Rendered | View#view.rendered]}.
 
-% NOTE: The diff is a proplist constructed in reverse order.
--spec put_diff(Index, Rendered, View0) -> View1 when
-    Index :: arizona_diff:index(),
-    Rendered :: arizona_render:rendered_value(),
+-spec diff(View) -> Diff when
+    View :: view(),
+    Diff :: arizona_diff:diff().
+diff(#view{} = View) ->
+    View#view.diff.
+
+-spec set_diff(Diff, View0) -> View1 when
+    Diff :: arizona_diff:diff(),
     View0 :: view(),
     View1 :: view().
-put_diff(Index, Rendered, #view{} = View) when
-    is_integer(Index), Index >= 0, (is_binary(Rendered) orelse is_list(Rendered))
+set_diff(Diff, #view{} = View) when is_list(Diff) ->
+    View#view{diff = Diff}.
+
+-spec put_diff(Index, Payload, View0) -> View1 when
+    Index :: arizona_diff:index(),
+    Payload :: arizona_diff:diff() | arizona_render:rendered_value(),
+    View0 :: view(),
+    View1 :: view().
+put_diff(Index, Payload, #view{} = View) when
+    is_integer(Index), Index >= 0, (is_binary(Payload) orelse is_list(Payload))
 ->
-    View#view{rendered = [{Index, Rendered} | View#view.rendered]}.
+    View#view{diff = [{Index, Payload} | View#view.diff]}.
 
 -spec merge_changed_assigns(View0) -> View1 when
     View0 :: view(),
@@ -228,11 +245,11 @@ rendered_to_iolist(#view{} = View) ->
     View :: view(),
     Rendered1 :: arizona_render:rendered().
 diff_to_iolist(Rendered, #view{} = View) when is_list(Rendered) ->
-    case View#view.rendered of
+    case View#view.diff of
         [] ->
             Rendered;
-        Changed ->
-            diff_replace(Changed, Rendered)
+        Diff ->
+            diff_replace(Diff, Rendered)
     end.
 
 %% --------------------------------------------------------------------
