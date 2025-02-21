@@ -4,6 +4,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([diff/4]).
 -export([diff/6]).
 
 %
@@ -32,6 +33,33 @@
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
+
+-spec diff(Payload, Index, View0, Socket0) -> {View1, Socket1} when
+    Payload :: Token | RenderedValue,
+    Token :: arizona_render:token(),
+    RenderedValue :: arizona_render:rendered_value(),
+    Index :: index(),
+    View0 :: arizona_view:view(),
+    Socket0 :: arizona_socket:socket(),
+    View1 :: arizona_view:view(),
+    Socket1 :: arizona_socket:socket().
+diff({view_template, _Static, Dynamic}, _Index, View, Socket) ->
+    diff_view_template(View, Socket, Dynamic);
+diff({component_template, _Static, Dynamic}, _Index, View, Socket) ->
+    diff_component_template(View, Socket, Dynamic);
+diff({nested_template, _Static, Dynamic}, Index, ParentView, Socket) ->
+    diff_nested_template(ParentView, Socket, Dynamic, Index);
+diff({list_template, _Static, DynamicCallback, List}, Index, ParentView, Socket) ->
+    diff_list_template(ParentView, Socket, DynamicCallback, List, Index);
+diff({view, Mod, Assigns}, Index, ParentView, Socket) ->
+    diff_view(ParentView, Socket, Mod, Assigns, Index);
+diff({component, Mod, Fun, Assigns}, Index, ParentView, Socket) ->
+    diff_component(ParentView, Socket, Mod, Fun, Assigns, Index);
+diff({list, _Static, DynamicList}, Index, ParentView, Socket) ->
+    diff_list(ParentView, Socket, DynamicList, Index);
+diff(Diff, Index, View0, Socket) when is_binary(Diff); is_list(Diff) ->
+    View = arizona_view:put_diff(Index, Diff, View0),
+    {View, Socket}.
 
 -spec diff(Index, Vars, TokenCallback, ViewAcc0, Socket0, Opts) -> {ViewAcc1, Socket1} when
     Index :: index(),
@@ -78,24 +106,6 @@ changed(Assigns, ChangedAssigns, Vars) ->
         end,
         Vars
     ).
-
-diff({view_template, _Static, Dynamic}, _Index, View, Socket) ->
-    diff_view_template(View, Socket, Dynamic);
-diff({component_template, _Static, Dynamic}, _Index, View, Socket) ->
-    diff_component_template(View, Socket, Dynamic);
-diff({nested_template, _Static, Dynamic}, Index, ParentView, Socket) ->
-    diff_nested_template(ParentView, Socket, Dynamic, Index);
-diff({list_template, _Static, DynamicCallback, List}, Index, ParentView, Socket) ->
-    diff_list_template(ParentView, Socket, DynamicCallback, List, Index);
-diff({view, Mod, Assigns}, Index, ParentView, Socket) ->
-    diff_view(ParentView, Socket, Mod, Assigns, Index);
-diff({component, Mod, Fun, Assigns}, Index, ParentView, Socket) ->
-    diff_component(ParentView, Socket, Mod, Fun, Assigns, Index);
-diff({list, _Static, DynamicList}, Index, ParentView, Socket) ->
-    diff_list(ParentView, Socket, DynamicList, Index);
-diff(Diff, Index, View0, Socket) when is_binary(Diff); is_list(Diff) ->
-    View = arizona_view:put_diff(Index, Diff, View0),
-    {View, Socket}.
 
 diff_view_template(View0, Socket0, Dynamic) ->
     {View1, Socket1} = diff_dynamic(Dynamic, View0, Socket0, #{}),
