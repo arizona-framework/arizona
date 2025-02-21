@@ -34,7 +34,7 @@
 init(Req0, {Mod, Assigns, Opts} = State) when is_atom(Mod), is_map(Assigns), is_map(Opts) ->
     Socket = arizona_socket:new(render),
     {ok, View0} = arizona_view:mount(Mod, Assigns, Socket),
-    Token = arizona_view:render(Mod, View0),
+    Token = arizona_view:render(View0),
     {View1, _Socket} = arizona_render:render(Token, View0, View0, Socket),
     View = maybe_render_layout(View1, Socket, Token, Assigns, Opts),
     Html = arizona_view:rendered_to_iolist(View),
