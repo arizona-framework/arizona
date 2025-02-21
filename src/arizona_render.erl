@@ -278,7 +278,7 @@ render_dynamic_list_callback([Item | T], Callback, View, ParentView, Socket) ->
 render_view(ParentView0, Socket0, Mod, Assigns) ->
     case arizona_view:mount(Mod, Assigns, Socket0) of
         {ok, View0} ->
-            Token = arizona_view:render(Mod, View0),
+            Token = arizona_view:render(View0),
             {View1, Socket1} = render(Token, View0, ParentView0, Socket0),
             Rendered = arizona_view:rendered(View1),
             ParentView = arizona_view:put_rendered(Rendered, ParentView0),

@@ -37,7 +37,7 @@
 %% --------------------------------------------------------------------
 
 -export([mount/3]).
--export([render/2]).
+-export([render/1]).
 
 %% --------------------------------------------------------------------
 %% Callback definitions
@@ -208,7 +208,7 @@ Formats the rendered content to `t:iolist/0`.
 > Assigns = #{id => ~"app", count => 0}.
 > Socket = arizona_socket:new(render).
 > {ok, View0} = arizona_view:mount(Mod, Assigns, Socket).
-> Rendered = arizona_view:render(Mod, View0).
+> Rendered = arizona_view:render(View0).
 > {View, _Socket} = arizona_render:render(Rendered, View0, View0, Socket).
 > arizona_view:rendered_to_iolist(View).
 [<<"<html>\n    <head></head>\n    <body id=\"">>,<<"app">>,<<"\"> ">>,
@@ -247,11 +247,10 @@ diff_to_iolist(Rendered, #view{} = View) when is_list(Rendered) ->
 mount(Mod, Assigns, Socket) when is_atom(Mod), Mod =/= undefined, is_map(Assigns) ->
     erlang:apply(Mod, mount, [Assigns, Socket]).
 
--spec render(Mod, View) -> Token when
-    Mod :: module(),
+-spec render(View) -> Token when
     View :: view(),
     Token :: arizona_render:token().
-render(Mod, View) when is_atom(Mod), Mod =/= undefined ->
+render(#view{module = Mod} = View) when Mod =/= undefined ->
     erlang:apply(Mod, render, [View]).
 
 %% --------------------------------------------------------------------

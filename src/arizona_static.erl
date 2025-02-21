@@ -75,7 +75,7 @@ write_view_as_html(Path, Mod, Assigns, StaticDir) ->
     ok = check_path_segments(Path),
     Socket0 = arizona_socket:new(render),
     {ok, View0} = arizona_view:mount(Mod, Assigns, Socket0),
-    Token = arizona_view:render(Mod, View0),
+    Token = arizona_view:render(View0),
     {View, _Socket} = arizona_render:render(Token, View0, View0, Socket0),
     Html = arizona_view:rendered_to_iolist(View),
     Destination = filename:join([StaticDir, norm_path(Path), "index.html"]),
