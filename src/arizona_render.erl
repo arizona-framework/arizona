@@ -13,6 +13,7 @@
 -export([component/3]).
 -export([if_true/2]).
 -export([list/2]).
+-export([layout/4]).
 
 %
 
@@ -25,6 +26,7 @@
 -ignore_xref([component/3]).
 -ignore_xref([if_true/2]).
 -ignore_xref([list/2]).
+-ignore_xref([layout/4]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -200,6 +202,21 @@ list(Callback, List) when is_function(Callback, 1), is_list(List) ->
     {nested_template, Static, _Dynamic} = hd(NestedTemplates),
     DynamicList = [Dynamic || {nested_template, _Static, Dynamic} <- NestedTemplates],
     {list, Static, DynamicList}.
+
+-spec layout(LayoutMod, Assigns, InnerContent, Socket0) -> Layout when
+    LayoutMod :: module(),
+    Assigns :: arizona_view:assigns(),
+    InnerContent :: token(),
+    Socket0 :: arizona_socket:socket(),
+    Layout :: {LayoutView, Socket1},
+    LayoutView :: arizona_view:view(),
+    Socket1 :: arizona_socket:socket().
+layout(LayoutMod, Assigns, InnerContent, Socket) ->
+    LayoutView = arizona_view:new(Assigns#{
+        inner_content => [InnerContent]
+    }),
+    Token = arizona_component:render(LayoutMod, render, LayoutView),
+    render(Token, LayoutView, LayoutView, Socket).
 
 %% --------------------------------------------------------------------
 %% Private functions

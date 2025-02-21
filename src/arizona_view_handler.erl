@@ -28,11 +28,11 @@
     Opts :: opts(),
     Req1 :: cowboy_req:req().
 init(Req0, {Mod, Assigns, Opts} = State) when is_atom(Mod), is_map(Assigns), is_map(Opts) ->
-    Socket0 = arizona_socket:new(render),
-    {ok, View0} = arizona_view:mount(Mod, Assigns, Socket0),
-    TemplateToken = arizona_view:render(Mod, View0),
-    {View1, Token} = maybe_render_layout(View0, TemplateToken, Opts),
-    {View, _Socket} = arizona_render:render(Token, View1, View1, Socket0),
+    Socket = arizona_socket:new(render),
+    {ok, View0} = arizona_view:mount(Mod, Assigns, Socket),
+    Token = arizona_view:render(Mod, View0),
+    {View1, _Socket} = arizona_render:render(Token, View0, View0, Socket),
+    View = maybe_render_layout(View1, Socket, Token, Assigns, Opts),
     Html = arizona_view:rendered_to_iolist(View),
     Headers = #{~"content-type" => ~"text/html"},
     Req = cowboy_req:reply(200, Headers, Html, Req0),
@@ -42,15 +42,13 @@ init(Req0, {Mod, Assigns, Opts} = State) when is_atom(Mod), is_map(Assigns), is_
 %% Private functions
 %% --------------------------------------------------------------------
 
-maybe_render_layout(View, TemplateToken, Opts) ->
+maybe_render_layout(View, Socket, ViewToken, Assigns, Opts) ->
     case Opts of
-        #{layout := Mod} ->
-            Assigns = arizona_view:assigns(View),
-            LayoutView = arizona_view:new(Assigns#{
-                inner_content => TemplateToken
-            }),
-            Token = arizona_component:render(Mod, render, LayoutView),
-            {LayoutView, Token};
+        #{layout := LayoutMod} ->
+            {LayoutView, _Socket} = arizona_render:layout(
+                LayoutMod, Assigns, ViewToken, Socket
+            ),
+            LayoutView;
         #{} ->
-            {View, TemplateToken}
+            View
     end.

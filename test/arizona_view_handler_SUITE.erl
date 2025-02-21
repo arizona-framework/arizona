@@ -16,11 +16,11 @@ init_per_suite(Config) ->
         {arizona, [
             {endpoint, #{
                 routes => [
-                    {"/helloworld", arizona_view_handler,
+                    {"/hello-world", arizona_view_handler,
                         {?MODULE,
                             #{
                                 title => ~"Arizona",
-                                id => ~"app",
+                                id => ~"helloWorld",
                                 name => ~"World"
                             },
                             #{layout => arizona_example_layout}}}
@@ -52,7 +52,7 @@ mount(Assigns, _Socket) ->
 render(View) ->
     arizona_render:view_template(View, ~""""
     <main id="{arizona_view:get_assign(id, View)}">
-       Hello, {arizona_view:get_assign(name, View)}!
+        Hello, {arizona_view:get_assign(name, View)}!
     </main>
     """").
 
@@ -61,22 +61,32 @@ render(View) ->
 %% --------------------------------------------------------------------
 
 hello_world(Config) when is_list(Config) ->
-    Resp0 = httpc:request("http://localhost:8080/notfound"),
-    ?assert(is_status(404, Resp0)),
-    Resp1 = httpc:request("http://localhost:8080/helloworld"),
-    ?assert(is_status(200, Resp1)),
-    ?assert(is_body("Hello, World!", Resp1)).
+    ?assertEqual({404, ~""}, request("/404")),
+    ?assertEqual({200, ~"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Arizona</title>
+        <script src="assets/js/arizona/worker.js"></script>
+        <script src="assets/js/arizona/main.js"></script>
+    </head>
+    <body> <main id="helloWorld">
+        Hello, World!
+    </main></body>
+    </html>
+    """}, request("/hello-world")).
 
 %% --------------------------------------------------------------------
 %% Test support
 %% --------------------------------------------------------------------
 
-is_body(Pattern, {ok, {{_HttpVersion, _StatusCode, _String}, _HttpHeaders, HttpBodyResult}}) ->
-    nomatch =/= string:find(HttpBodyResult, Pattern);
-is_body(_Pattern, _Result) ->
-    false.
-
-is_status(StatusCode, {ok, {{_HttpVersion, StatusCode, _String}, _HttpHeaders, _HttpBodyResult}}) ->
-    true;
-is_status(_StatusCode, _Result) ->
-    false.
+request(Uri) ->
+    Url = io_lib:format("http://localhost:8080~s", [Uri]),
+    Headers = [],
+    HttpOptions = [],
+    Options = [{body_format, binary}, {full_result, false}],
+    {ok, Response} = httpc:request(get, {Url, Headers}, HttpOptions, Options),
+    Response.
