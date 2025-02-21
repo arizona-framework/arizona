@@ -177,7 +177,7 @@ render_table_component(Config) when is_list(Config) ->
     View = arizona_view:new(Assigns),
     Socket = arizona_socket:new(render),
     Expect = {
-        arizona_view:set_rendered(
+        arizona_view:set_tmp_rendered(
             [
                 template,
                 [~"<table>\n    <tr> ", ~"</tr> ", ~"</table>"],
@@ -305,7 +305,7 @@ diff(Config) when is_list(Config) ->
     {RenderedView, Socket0} = arizona_render:render(
         RenderToken, MountedView, ParentView, RenderSocket
     ),
-    View0 = arizona_view:set_rendered([], RenderedView),
+    View0 = arizona_view:set_tmp_rendered([], RenderedView),
     View = arizona_view:put_assigns(ChangedAssigns, View0),
     Token = arizona_view:render(View),
     TokenCallback = fun() -> Token end,
@@ -342,8 +342,8 @@ diff_to_iolist(Config) when is_list(Config) ->
     {RenderedView, Socket0} = arizona_render:render(
         RenderToken, MountedView, ParentView, RenderSocket
     ),
-    Rendered = arizona_view:rendered(RenderedView),
-    View0 = arizona_view:set_rendered([], RenderedView),
+    Rendered = arizona_view:tmp_rendered(RenderedView),
+    View0 = arizona_view:set_tmp_rendered([], RenderedView),
     View = arizona_view:put_assigns(ChangedAssigns, View0),
     Token = arizona_view:render(View),
     TokenCallback = fun() -> Token end,

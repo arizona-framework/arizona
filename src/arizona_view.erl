@@ -14,9 +14,9 @@
 -export([get_assign/3]).
 -export([changed_assigns/1]).
 -export([set_changed_assigns/2]).
--export([rendered/1]).
--export([set_rendered/2]).
--export([put_rendered/2]).
+-export([tmp_rendered/1]).
+-export([set_tmp_rendered/2]).
+-export([put_tmp_rendered/2]).
 -export([diff/1]).
 -export([set_diff/2]).
 -export([put_diff/3]).
@@ -62,7 +62,7 @@
     module :: undefined | module(),
     assigns :: assigns(),
     changed_assigns :: assigns(),
-    rendered :: arizona_render:rendered(),
+    tmp_rendered :: arizona_render:rendered(),
     diff :: arizona_diff:diff()
 }).
 -opaque view() :: #view{}.
@@ -114,7 +114,7 @@ new(Mod, Assigns, ChangedAssigns, Rendered, Diff) when
         module = Mod,
         assigns = Assigns,
         changed_assigns = ChangedAssigns,
-        rendered = Rendered,
+        tmp_rendered = Rendered,
         diff = Diff
     }.
 
@@ -166,25 +166,25 @@ changed_assigns(#view{} = View) ->
 set_changed_assigns(ChangedAssigns, #view{} = View) when is_map(ChangedAssigns) ->
     View#view{changed_assigns = ChangedAssigns}.
 
--spec rendered(View) -> Rendered when
+-spec tmp_rendered(View) -> Rendered when
     View :: view(),
     Rendered :: arizona_render:rendered().
-rendered(#view{} = View) ->
-    View#view.rendered.
+tmp_rendered(#view{} = View) ->
+    View#view.tmp_rendered.
 
--spec set_rendered(Rendered, View0) -> View1 when
+-spec set_tmp_rendered(Rendered, View0) -> View1 when
     Rendered :: arizona_render:rendered(),
     View0 :: view(),
     View1 :: view().
-set_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
-    View#view{rendered = Rendered}.
+set_tmp_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
+    View#view{tmp_rendered = Rendered}.
 
--spec put_rendered(Rendered, View0) -> View1 when
+-spec put_tmp_rendered(Rendered, View0) -> View1 when
     Rendered :: arizona_render:rendered_value(),
     View0 :: view(),
     View1 :: view().
-put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendered) ->
-    View#view{rendered = [Rendered | View#view.rendered]}.
+put_tmp_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendered) ->
+    View#view{tmp_rendered = [Rendered | View#view.tmp_rendered]}.
 
 -spec diff(View) -> Diff when
     View :: view(),
@@ -216,7 +216,7 @@ merge_changed_assigns(View) ->
     View#view{assigns = maps:merge(View#view.assigns, View#view.changed_assigns)}.
 
 -doc ~"""
-Formats the rendered content to `t:iolist/0`.
+Formats the tmp_renderedcontent to `t:iolist/0`.
 
 ## Examples
 
@@ -238,7 +238,7 @@ Formats the rendered content to `t:iolist/0`.
 -spec rendered_to_iolist(View) -> iolist() when
     View :: view().
 rendered_to_iolist(#view{} = View) ->
-    rendered_to_iolist_1(View#view.rendered).
+    rendered_to_iolist_1(View#view.tmp_rendered).
 
 -spec diff_to_iolist(Rendered0, View) -> Rendered1 when
     Rendered0 :: arizona_render:rendered(),
