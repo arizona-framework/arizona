@@ -14,6 +14,8 @@
 -export([get_assign/3]).
 -export([changed_assigns/1]).
 -export([set_changed_assigns/2]).
+-export([rendered/1]).
+-export([set_rendered/2]).
 -export([tmp_rendered/1]).
 -export([set_tmp_rendered/2]).
 -export([put_tmp_rendered/2]).
@@ -22,7 +24,7 @@
 -export([put_diff/3]).
 -export([merge_changed_assigns/1]).
 -export([rendered_to_iolist/1]).
--export([diff_to_iolist/2]).
+-export([diff_to_iolist/1]).
 
 %
 
@@ -62,6 +64,7 @@
     module :: undefined | module(),
     assigns :: assigns(),
     changed_assigns :: assigns(),
+    rendered :: arizona_render:rendered(),
     tmp_rendered :: arizona_render:rendered(),
     diff :: arizona_diff:diff()
 }).
@@ -114,7 +117,8 @@ new(Mod, Assigns, ChangedAssigns, Rendered, Diff) when
         module = Mod,
         assigns = Assigns,
         changed_assigns = ChangedAssigns,
-        tmp_rendered = Rendered,
+        rendered = Rendered,
+        tmp_rendered = [],
         diff = Diff
     }.
 
@@ -165,6 +169,19 @@ changed_assigns(#view{} = View) ->
     View1 :: view().
 set_changed_assigns(ChangedAssigns, #view{} = View) when is_map(ChangedAssigns) ->
     View#view{changed_assigns = ChangedAssigns}.
+
+-spec rendered(View) -> Rendered when
+    View :: view(),
+    Rendered :: arizona_render:rendered().
+rendered(#view{} = View) ->
+    View#view.rendered.
+
+-spec set_rendered(Rendered, View0) -> View1 when
+    Rendered :: arizona_render:rendered(),
+    View0 :: view(),
+    View1 :: view().
+set_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
+    View#view{rendered = Rendered}.
 
 -spec tmp_rendered(View) -> Rendered when
     View :: view(),
@@ -240,16 +257,15 @@ Formats the tmp_renderedcontent to `t:iolist/0`.
 rendered_to_iolist(#view{} = View) ->
     rendered_to_iolist_1(View#view.tmp_rendered).
 
--spec diff_to_iolist(Rendered0, View) -> Rendered1 when
-    Rendered0 :: arizona_render:rendered(),
+-spec diff_to_iolist(View) -> Rendered when
     View :: view(),
-    Rendered1 :: arizona_render:rendered().
-diff_to_iolist(Rendered, #view{} = View) when is_list(Rendered) ->
+    Rendered :: arizona_render:rendered().
+diff_to_iolist(#view{} = View) ->
     case View#view.diff of
         [] ->
-            Rendered;
+            View#view.rendered;
         Diff ->
-            diff_replace(Diff, Rendered)
+            diff_replace(Diff, View#view.rendered)
     end.
 
 %% --------------------------------------------------------------------

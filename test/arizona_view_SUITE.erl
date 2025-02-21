@@ -342,12 +342,11 @@ diff_to_iolist(Config) when is_list(Config) ->
     {RenderedView, Socket0} = arizona_render:render(
         RenderToken, MountedView, ParentView, RenderSocket
     ),
-    Rendered = arizona_view:tmp_rendered(RenderedView),
     View0 = arizona_view:set_tmp_rendered([], RenderedView),
     View = arizona_view:put_assigns(ChangedAssigns, View0),
     Token = arizona_view:render(View),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:set_render_context(diff, Socket0),
     {DiffView, _Socket} = arizona_diff:diff(Index, Vars, TokenCallback, View, Socket, #{}),
-    Got = arizona_view:diff_to_iolist(Rendered, DiffView),
+    Got = arizona_view:diff_to_iolist(DiffView),
     ?assertEqual(Expect, Got).
