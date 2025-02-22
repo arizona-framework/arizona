@@ -56,6 +56,14 @@ render(View) ->
     </main>
     """").
 
+-spec handle_event(Event, Payload, View0) -> View1 when
+    Event :: arizona_view:event(),
+    Payload :: arizona_view:payload(),
+    View0 :: arizona_view:view(),
+    View1 :: arizona_view:view().
+handle_event(_Event, _Payload, View) ->
+    View.
+
 %% --------------------------------------------------------------------
 %% Tests
 %% --------------------------------------------------------------------

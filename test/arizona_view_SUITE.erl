@@ -329,7 +329,7 @@ diff(Config) when is_list(Config) ->
     Expect = {
         arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, [], Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, [], Diff),
+            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, [], []),
             CounterViewId => arizona_view:new(
                 CounterMod,
                 ExpectAssigns#{id => CounterViewId},
