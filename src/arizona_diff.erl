@@ -110,7 +110,7 @@ diff_component_template(View0, Socket0, Dynamic) ->
 diff_nested_template(ParentView0, Socket0, Dynamic, Index) ->
     Assigns = arizona_view:assigns(ParentView0),
     ChangedAssigns = arizona_view:changed_assigns(ParentView0),
-    View0 = arizona_view:new(undefined, Assigns, ChangedAssigns, [], []),
+    View0 = arizona_view:new(undefined, Assigns, ChangedAssigns, [], [], []),
     {View, Socket} = diff_dynamic(Dynamic, View0, Socket0, #{}),
     Diff = arizona_view:diff(View),
     ParentView = arizona_view:put_diff(Index, Diff, ParentView0),

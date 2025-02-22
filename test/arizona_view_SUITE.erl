@@ -84,7 +84,7 @@ render(Config) when is_list(Config) ->
     Expect = {
         arizona_view:new(Mod, Assigns, #{}, Rendered, Rendered, []),
         arizona_socket:new(render, #{
-            ~"app" => arizona_view:new(Mod, Assigns, #{}, Rendered, []),
+            ~"app" => arizona_view:new(Mod, Assigns, #{}, Rendered, [], []),
             ~"counter" => arizona_view:new(
                 arizona_example_counter,
                 #{id => ~"counter", count => 0, btn_text => ~"Increment"},
@@ -107,6 +107,7 @@ render(Config) when is_list(Config) ->
                         ]
                     ]
                 ],
+                [],
                 []
             )
         })
@@ -326,9 +327,9 @@ diff(Config) when is_list(Config) ->
     ],
     Diff = [{1, [{2, [{0, ~"+1"}]}, {1, ~"1"}]}],
     Expect = {
-        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, Diff),
+        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, [], Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, Diff),
+            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, [], Diff),
             CounterViewId => arizona_view:new(
                 CounterMod,
                 ExpectAssigns#{id => CounterViewId},
@@ -351,6 +352,7 @@ diff(Config) when is_list(Config) ->
                         ]
                     ]
                 ],
+                [],
                 []
             )
         })

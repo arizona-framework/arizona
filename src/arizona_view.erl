@@ -6,7 +6,6 @@
 
 -export([new/1]).
 -export([new/2]).
--export([new/5]).
 -export([new/6]).
 -export([assigns/1]).
 -export([put_assign/3]).
@@ -30,7 +29,6 @@
 %
 
 -ignore_xref([new/2]).
--ignore_xref([new/5]).
 -ignore_xref([new/6]).
 -ignore_xref([get_assign/3]).
 -ignore_xref([put_assign/3]).
@@ -96,24 +94,14 @@ doctest_test() -> doctest:module(?MODULE).
     Assigns :: assigns(),
     View :: view().
 new(Assigns) ->
-    new(undefined, Assigns, #{}, [], []).
+    new(undefined, Assigns, #{}, [], [], []).
 
 -spec new(Mod, Assigns) -> View when
     Mod :: module(),
     Assigns :: assigns(),
     View :: view().
 new(Mod, Assigns) ->
-    new(Mod, Assigns, #{}, [], []).
-
--spec new(Mod, Assigns, ChangedAssigns, Rendered, Diff) -> View when
-    Mod :: undefined | module(),
-    Assigns :: assigns(),
-    ChangedAssigns :: assigns(),
-    Rendered :: arizona_render:rendered(),
-    Diff :: arizona_diff:diff(),
-    View :: view().
-new(Mod, Assigns, ChangedAssigns, Rendered, Diff) ->
-    new(Mod, Assigns, ChangedAssigns, Rendered, [], Diff).
+    new(Mod, Assigns, #{}, [], [], []).
 
 -spec new(Mod, Assigns, ChangedAssigns, Rendered, TmpRendered, Diff) -> View when
     Mod :: undefined | module(),
