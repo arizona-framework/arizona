@@ -41,7 +41,7 @@ diff_view_template(Config) when is_list(Config) ->
     Expect = {
         arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], [], Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], [], Diff)
+            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, [], [], [])
         })
     },
     View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], []),
@@ -192,7 +192,7 @@ diff_view(Config) when is_list(Config) ->
     Expect = {
         arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, [], Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, [], Diff),
+            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, [], []),
             CounterViewId => arizona_view:new(
                 CounterMod,
                 ExpectAssigns#{id => CounterViewId},
@@ -306,9 +306,7 @@ diff_view_new_id(Config) when is_list(Config) ->
                 [],
                 []
             ),
-            RootViewId => arizona_view:new(
-                RootMod, ExpectAssigns, ChangedAssigns, Rendered, [], Diff
-            )
+            RootViewId => arizona_view:new(RootMod, ExpectAssigns, ChangedAssigns, Rendered, [], [])
         })
     },
     RenderSocket = arizona_socket:new(render),

@@ -3,6 +3,7 @@
 
 -export([mount/2]).
 -export([render/1]).
+-export([handle_event/3]).
 
 mount(#{ignore := true}, _Socket) ->
     ignore;
@@ -16,3 +17,6 @@ render(View) ->
         Hello, {arizona_view:get_assign(name, View)}!
     </div>
     """").
+
+handle_event(_Event, _Payload, View) ->
+    View.
