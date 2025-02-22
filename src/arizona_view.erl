@@ -42,6 +42,7 @@
 
 -export([mount/3]).
 -export([render/1]).
+-export([handle_event/3]).
 
 %% --------------------------------------------------------------------
 %% Callback definitions
@@ -55,6 +56,12 @@
 -callback render(View) -> Token when
     View :: view(),
     Token :: arizona_render:token().
+
+-callback handle_event(Event, Payload, View0) -> View1 when
+    Event :: event(),
+    Payload :: payload(),
+    View0 :: arizona_view:view(),
+    View1 :: arizona_view:view().
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -76,6 +83,12 @@
 
 -type id() :: binary().
 -export_type([id/0]).
+
+-type event() :: binary().
+-export_type([event/0]).
+
+-type payload() :: term().
+-export_type([payload/0]).
 
 %% --------------------------------------------------------------------
 %% Doctests
@@ -292,6 +305,14 @@ mount(Mod, Assigns, Socket) when is_atom(Mod), Mod =/= undefined, is_map(Assigns
     Token :: arizona_render:token().
 render(#view{module = Mod} = View) when Mod =/= undefined ->
     erlang:apply(Mod, render, [View]).
+
+-spec handle_event(Event, Payload, View0) -> View1 when
+    Event :: event(),
+    Payload :: payload(),
+    View0 :: arizona_view:view(),
+    View1 :: arizona_view:view().
+handle_event(Event, Payload, #view{} = View) ->
+    erlang:apply(View#view.module, handle_event, [Event, Payload, View]).
 
 %% --------------------------------------------------------------------
 %% Private functions

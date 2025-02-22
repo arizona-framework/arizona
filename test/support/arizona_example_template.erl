@@ -4,6 +4,7 @@
 
 -export([mount/2]).
 -export([render/1]).
+-export([handle_event/3]).
 
 mount(Assigns, _Socket) ->
     View = arizona_view:new(?MODULE, Assigns),
@@ -22,3 +23,6 @@ render(View) ->
         </body>
     </html>
     """").
+
+handle_event(_Event, _Payload, View) ->
+    View.

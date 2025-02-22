@@ -3,6 +3,7 @@
 
 -export([mount/2]).
 -export([render/1]).
+-export([handle_event/3]).
 
 mount(#{ignore := true}, _Socket) ->
     ignore;
@@ -20,3 +21,6 @@ render(View) ->
         })}
     </div>
     """).
+
+handle_event(_Event, _Payload, View) ->
+    View.
