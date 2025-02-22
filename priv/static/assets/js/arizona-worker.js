@@ -1,3 +1,4 @@
+/* global patch */
 "use strict";
 
 const state = {
@@ -6,9 +7,11 @@ const state = {
   rendered: [],
 };
 
+self.importScripts("/assets/js/arizona/patch.js");
+
 // Messages from client
-self.onmessage = function(e) {
-  const { data: msg } = e
+self.onmessage = function (e) {
+  const { data: msg } = e;
 
   console.log("[WebWorker] client sent:", msg);
 
@@ -24,8 +27,8 @@ self.onmessage = function(e) {
       break;
     default:
       if (!viewId) {
-        console.error("[WebWorker] missing view ID")
-        return
+        console.error("[WebWorker] missing view ID");
+        return;
       }
 
       sendMsgToServer([viewId, event, payload]);
@@ -40,19 +43,19 @@ function connect(params) {
     state.params = params;
     state.socket = socket;
 
-    socket.onopen = function() {
+    socket.onopen = function () {
       console.log("[WebSocket] connected:", state);
       sendMsgToClient("connect");
 
       resolve();
     };
 
-    socket.onclose = function(e) {
+    socket.onclose = function (e) {
       console.log("[WebSocket] disconnected:", e);
     };
 
     // Messages from server
-    socket.onmessage = function(e) {
+    socket.onmessage = function (e) {
       console.log("[WebSocket] msg:", e.data);
       const data = JSON.parse(e.data);
       Array.isArray(data) ? data.forEach(handleEvent) : handleEvent(data);
@@ -64,15 +67,20 @@ function handleEvent(data) {
   const event = data[0];
   const payload = data[1];
   switch (event) {
-    case "init":
+    case "init": {
       state.rendered = payload;
       break;
-    case "patch":
-      sendMsgToClient("patch", [...payload, state.rendered]);
-      break
-    default:
+    }
+    case "patch": {
+      const [viewId, diff] = payload;
+      const html = patch(state.rendered, diff);
+      sendMsgToClient("patch", [viewId, html]);
+      break;
+    }
+    default: {
       sendMsgToClient(event, payload);
       break;
+    }
   }
 }
 

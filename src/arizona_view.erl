@@ -191,8 +191,8 @@ set_changed_assigns(ChangedAssigns, #view{} = View) when is_map(ChangedAssigns) 
     View#view{changed_assigns = ChangedAssigns}.
 
 -spec rendered(View) -> Rendered when
-      View :: arizona_view:view(),
-      Rendered :: arizona_render:rendered().
+    View :: arizona_view:view(),
+    Rendered :: arizona_render:rendered().
 rendered(#view{} = View) ->
     View#view.rendered.
 
@@ -257,7 +257,10 @@ put_diff(Index, Payload, #view{} = View) when
     View0 :: view(),
     View1 :: view().
 merge_changed_assigns(View) ->
-    View#view{assigns = maps:merge(View#view.assigns, View#view.changed_assigns)}.
+    View#view{
+        assigns = maps:merge(View#view.assigns, View#view.changed_assigns),
+        changed_assigns = #{}
+    }.
 
 -doc ~"""
 Formats the tmp_renderedcontent to `t:iolist/0`.

@@ -83,9 +83,11 @@ websocket_handle({text, Msg}, Socket0) ->
         views => View1
     }),
     Token = arizona_view:render(View1),
-    {View, Socket} = arizona_diff:diff(Token, 0, View1, Socket0),
-    Diff = arizona_view:diff(View),
+    {View2, Socket1} = arizona_diff:diff(Token, 0, View1, Socket0),
+    Diff = arizona_view:diff(View2),
     Events = put_diff_event(Diff, ViewId, []),
+    View = arizona_view:merge_changed_assigns(View2),
+    Socket = arizona_socket:put_view(View, Socket1),
     {Events, Socket}.
 
 -spec websocket_info(Msg, Socket0) -> {Events, Socket1} when
@@ -132,6 +134,12 @@ put_init_event(View, Events) ->
 put_diff_event([], _ViewId, Events) ->
     Events;
 put_diff_event(Diff, ViewId, Events) ->
+    ?LOG_INFO(#{
+        text => ~"view diff",
+        in => ?MODULE,
+        id => ViewId,
+        views => Diff
+    }),
     Msg = encode_diff([[~"patch", [ViewId, Diff]]]),
     [{text, Msg} | Events].
 

@@ -97,6 +97,8 @@ norm_proto_opts(Host, Routes0, Opts) when
             {priv_file, arizona, "static/assets/js/arizona-patch.js"}},
         {"/assets/js/arizona/worker.js", cowboy_static,
             {priv_file, arizona, "static/assets/js/arizona-worker.js"}},
+        {"/assets/js/arizona/morphdom.min.js", cowboy_static,
+            {priv_file, arizona, "static/assets/js/morphdom.min.js"}},
         {"/assets/js/arizona/main.js", cowboy_static,
             {priv_file, arizona, "static/assets/js/arizona.js"}},
         {"/websocket", arizona_websocket, []}

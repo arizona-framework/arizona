@@ -1,4 +1,4 @@
-/*global morphdom*/
+/* global morphdom */
 "use strict";
 
 globalThis["arizona"] = (() => {
@@ -21,12 +21,18 @@ globalThis["arizona"] = (() => {
   }
 
   function subscribe(eventName, callback, opts = {}) {
-    if (typeof eventName !== "string" ||
+    if (
+      typeof eventName !== "string" ||
       typeof callback !== "function" ||
-      (typeof opts !== "object" || Array.isArray(opts))
+      typeof opts !== "object" ||
+      Array.isArray(opts)
     ) {
-      console.error("[Arizona] invalid subscribe data:", { eventName, callback, opts })
-      return
+      console.error("[Arizona] invalid subscribe data:", {
+        eventName,
+        callback,
+        opts,
+      });
+      return;
     }
 
     let eventSubs = subscribers.get(eventName);
@@ -45,7 +51,7 @@ globalThis["arizona"] = (() => {
       unsubscribers,
     });
 
-    return function() {
+    return function () {
       unsubscribe(id);
     };
   }
@@ -77,24 +83,35 @@ globalThis["arizona"] = (() => {
 
   // Init
 
-  worker.addEventListener("message", function(e) {
+  worker.addEventListener("message", function (e) {
     console.log("[WebWorker] msg:", e.data);
 
     const { event, payload } = e.data;
     switch (event) {
       case "patch": {
-        const [viewId, diff, tree] = payload
-        const elem = document.getElementById(viewId)
-        console.log("patch", elem, diff, tree)
+        const [viewId, html] = payload;
+        const elem = document.getElementById(viewId);
+        morphdom(elem, html, {
+          // Can I make morphdom blaze through the DOM tree even faster? Yes.
+          // @see https://github.com/patrick-steele-idem/morphdom#can-i-make-morphdom-blaze-through-the-dom-tree-even-faster-yes
+          onBeforeElUpdated: function (fromEl, toEl) {
+            // spec - https://dom.spec.whatwg.org/#concept-node-equals
+            if (fromEl.isEqualNode(toEl)) {
+              return false;
+            }
+
+            return true;
+          },
+        });
       }
     }
-    subscribers.get(event)?.forEach(function({ id, callback, opts }) {
+    subscribers.get(event)?.forEach(function ({ id, callback, opts }) {
       callback(payload);
       opts.once && unsubscribe(id);
     });
   });
 
-  worker.addEventListener("error", function(e) {
+  worker.addEventListener("error", function (e) {
     console.error("[WebWorker] error:", e);
   });
 
