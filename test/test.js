@@ -6,47 +6,28 @@ describe("Patch Test", () => {
   test("should patch diff", () => {
     const rendered = [
       "template",
-      ['<div id="', '"> ', "</div>"],
+      ['<div id="', '">\n    <span>', "</span> ", "</div>"],
       [
-        "app",
+        "counter",
+        "0",
         [
           "template",
-          [
-            '<div id="counter">\n    <span>',
-            '</span>\n    <button\n        type="button"\n        onclick=',
-            ">\n        Increment\n    </button>\n</div>",
-          ],
-          ["0", '\'arizona.send("app", "incr", 1)\''],
+          ['<button\n    type="', '"\n    onclick=', "> ", "</button>"],
+          ["button", '\'arizona.send("counter", "incr", 1)\'', "Increment"],
         ],
       ],
     ];
 
-    let diff = {
-      1: {
-        0: "1",
-      },
-    };
-    expect(patch(rendered, diff)).toBe(`<div id="app"> <div id="counter">
-    <span>1</span>
-    <button
-        type="button"
-        onclick='arizona.send("app", "incr", 1)'>
-        Increment
-    </button>
-</div></div>`);
+    let diff = { 1: "1" };
+    expect(patch(rendered, diff)).toBe(`<div id="counter">
+    <span>1</span> <button
+    type="button"
+    onclick='arizona.send("counter", "incr", 1)'> Increment</button></div>`);
 
-    diff = {
-      1: {
-        0: "2",
-      },
-    };
-    expect(patch(rendered, diff)).toBe(`<div id="app"> <div id="counter">
-    <span>2</span>
-    <button
-        type="button"
-        onclick='arizona.send("app", "incr", 1)'>
-        Increment
-    </button>
-</div></div>`);
+    diff = { 1: "2" };
+    expect(patch(rendered, diff)).toBe(`<div id="counter">
+    <span>2</span> <button
+    type="button"
+    onclick='arizona.send("counter", "incr", 1)'> Increment</button></div>`);
   });
 });
