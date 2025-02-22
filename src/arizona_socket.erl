@@ -8,6 +8,7 @@
 -export([new/2]).
 -export([render_context/1]).
 -export([set_render_context/2]).
+-export([views/1]).
 -export([put_view/2]).
 -export([put_view/3]).
 -export([get_view/2]).
@@ -71,6 +72,12 @@ set_render_context(render, #socket{} = Socket) ->
     Socket#socket{render_context = render};
 set_render_context(diff, #socket{} = Socket) ->
     Socket#socket{render_context = diff}.
+
+-spec views(Socket) -> Views when
+    Socket :: socket(),
+    Views :: views().
+views(#socket{} = Socket) ->
+    Socket#socket.views.
 
 -spec put_view(View, Socket0) -> Socket1 when
     View :: arizona_view:view(),

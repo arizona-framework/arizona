@@ -4,7 +4,7 @@
 const state = {
   params: {},
   socket: null,
-  rendered: [],
+  views: [],
 };
 
 self.importScripts("/assets/js/arizona/patch.js");
@@ -68,12 +68,13 @@ function handleEvent(data) {
   const payload = data[1];
   switch (event) {
     case "init": {
-      state.rendered = payload;
+      state.views = payload;
       break;
     }
     case "patch": {
       const [viewId, diff] = payload;
-      const html = patch(state.rendered, diff);
+      const rendered = state.views[viewId];
+      const html = patch(rendered, diff);
       sendMsgToClient("patch", [viewId, html]);
       break;
     }
