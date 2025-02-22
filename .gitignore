@@ -1,8 +1,8 @@
-_build/
-_checkouts/
-doc/
-node_modules/
-static/
+/_build/
+/_checkouts/
+/doc/
+/node_modules/
+/static/
 package-lock.json
 erl_crash.dump
 rebar3.crashdump

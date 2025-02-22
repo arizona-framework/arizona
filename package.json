@@ -7,14 +7,17 @@
     "morphdom-uglify": "uglifyjs priv/static/assets/js/morphdom-esm.js > priv/static/assets/js/morphdom.min.js",
     "morphdom-clean": "rm -f priv/static/assets/js/morphdom-esm.js",
     "build": "npm run morphdom-cp && npm run morphdom-rm-export && npm run morphdom-wrap && npm run morphdom-uglify && npm run morphdom-clean",
-    "prettier": "prettier priv/static/assets/js/arizona*.js --write && prettier eslint.config.mjs --write && prettier package.json --write",
-    "eslint": "eslint priv/static/assets/js/arizona*.js && eslint eslint.config.mjs",
-    "ci": "npm install && npm run build && npm run prettier && npm run eslint"
+    "prettier": "prettier priv/static/assets/js/arizona*.js --write && prettier test/*.js --write  && prettier eslint.config.mjs --write && prettier package.json --write",
+    "eslint": "eslint priv/static/assets/js/arizona*.js && eslint test/test.js && eslint eslint.config.mjs",
+    "format-lint": "npm install && npm run prettier && npm run eslint",
+    "test": "npm install && npx jest",
+    "ci": "npm run format-lint && npm run test"
   },
   "devDependencies": {
     "@eslint/js": "9.16.0",
     "eslint": "9.16.0",
     "globals": "15.13.0",
+    "jest": "^29.7.0",
     "prettier": "3.4.2",
     "uglify-js": "3.19.3"
   },
