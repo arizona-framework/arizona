@@ -327,13 +327,13 @@ diff(Config) when is_list(Config) ->
     ],
     Diff = [{1, [{2, [{0, ~"+1"}]}, {1, ~"1"}]}],
     Expect = {
-        arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, [], Diff),
+        arizona_view:new(Mod, ExpectAssigns, #{}, Rendered, [], Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, ChangedAssigns, Rendered, [], []),
+            ViewId => arizona_view:new(Mod, ExpectAssigns, #{}, Rendered, [], []),
             CounterViewId => arizona_view:new(
                 CounterMod,
                 ExpectAssigns#{id => CounterViewId},
-                ChangedAssigns,
+                #{},
                 [
                     template,
                     [

@@ -77,9 +77,8 @@ hello_world(Config) when is_list(Config) ->
         <meta charset="UTF-8">
         <meta http-equiv="X-UA-Compatible" content="IE=edge">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Arizona</title>
-        <script src="assets/js/arizona.js"></script>
-    </head>
+        <title>Arizona</title> <script src="assets/js/arizona/morphdom.min.js"></script>
+    <script src="assets/js/arizona/main.js"></script></head>
     <body> <main id="helloWorld">
         Hello, World!
     </main></body>
