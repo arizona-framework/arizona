@@ -67,6 +67,9 @@ function handleEvent(data) {
     case "init":
       state.tree = payload;
       break;
+    case "patch":
+      sendMsgToClient("patch", [...payload, state.tree]);
+      break
     default:
       sendMsgToClient(event, payload);
       break;

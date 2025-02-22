@@ -87,7 +87,7 @@ websocket_handle({text, Msg}, Socket0) ->
     Token = arizona_view:render(View1),
     {View, Socket} = arizona_diff:diff(Token, 0, View1, Socket0),
     Diff = arizona_view:diff(View),
-    Events = put_diff_event(Diff, []),
+    Events = put_diff_event(Diff, ViewId, []),
     {Events, Socket}.
 
 -spec websocket_info(Msg, Socket0) -> {Events, Socket1} when
@@ -126,10 +126,10 @@ init_state(Req, Env) ->
     Params = cowboy_req:parse_qs(Req),
     {HandlerState, Params}.
 
-put_diff_event([], Events) ->
+put_diff_event([], _ViewId, Events) ->
     Events;
-put_diff_event(Diff, Events) ->
-    Msg = encode_diff([[~"diff", Diff]]),
+put_diff_event(Diff, ViewId, Events) ->
+    Msg = encode_diff([[~"patch", [ViewId, Diff]]]),
     [{text, Msg} | Events].
 
 encode_diff(Diff) ->

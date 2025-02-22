@@ -1,3 +1,4 @@
+/*global morphdom*/
 "use strict";
 
 globalThis["arizona"] = (() => {
@@ -80,6 +81,13 @@ globalThis["arizona"] = (() => {
     console.log("[WebWorker] msg:", e.data);
 
     const { event, payload } = e.data;
+    switch (event) {
+      case "patch": {
+        const [viewId, diff, tree] = payload
+        const elem = document.getElementById(viewId)
+        console.log("patch", elem, diff, tree)
+      }
+    }
     subscribers.get(event)?.forEach(function({ id, callback, opts }) {
       callback(payload);
       opts.once && unsubscribe(id);
