@@ -56,9 +56,9 @@ websocket_init({{Mod, Assigns, _Opts}, Params}) ->
     Socket0 = arizona_socket:new(render),
     {ok, View0} = arizona_view:mount(Mod, Assigns, Socket0),
     Token = arizona_view:render(View0),
-    {View, Socket1} = arizona_render:render(Token, View0, View0, Socket0),
+    {_View, Socket1} = arizona_render:render(Token, View0, View0, Socket0),
     Socket = arizona_socket:set_render_context(diff, Socket1),
-    Events = put_init_event(View, []),
+    Events = put_init_event(Socket, []),
     {Events, Socket}.
 
 -spec websocket_handle(Event, Socket0) -> {Events, Socket1} when
@@ -126,9 +126,9 @@ init_state(Req, Env) ->
     Params = cowboy_req:parse_qs(Req),
     {HandlerState, Params}.
 
-put_init_event(View, Events) ->
-    Rendered = arizona_view:rendered(View),
-    Msg = json:encode([[~"init", Rendered]]),
+put_init_event(Socket, Events) ->
+    Views = #{Id => arizona_view:rendered(View) || Id := View <- arizona_socket:views(Socket)},
+    Msg = json:encode([[~"init", Views]]),
     [{text, Msg} | Events].
 
 put_diff_event([], _ViewId, Events) ->
