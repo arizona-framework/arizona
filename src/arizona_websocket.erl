@@ -57,10 +57,8 @@ websocket_init({{Mod, Assigns, _Opts}, Params}) ->
     {ok, View0} = arizona_view:mount(Mod, Assigns, Socket0),
     Token = arizona_view:render(View0),
     {View, Socket1} = arizona_render:render(Token, View0, View0, Socket0),
-    Html = arizona_view:rendered_to_iolist(View),
     Socket = arizona_socket:set_render_context(diff, Socket1),
-    Msg = json:encode([[~"init", Html]]),
-    Events = [{text, Msg}],
+    Events = put_init_event(View, []),
     {Events, Socket}.
 
 -spec websocket_handle(Event, Socket0) -> {Events, Socket1} when
@@ -85,9 +83,11 @@ websocket_handle({text, Msg}, Socket0) ->
         views => View1
     }),
     Token = arizona_view:render(View1),
-    {View, Socket} = arizona_diff:diff(Token, 0, View1, Socket0),
-    Diff = arizona_view:diff(View),
-    Events = put_diff_event(Diff, []),
+    {View2, Socket1} = arizona_diff:diff(Token, 0, View1, Socket0),
+    Diff = arizona_view:diff(View2),
+    Events = put_diff_event(Diff, ViewId, []),
+    View = arizona_view:merge_changed_assigns(View2),
+    Socket = arizona_socket:put_view(View, Socket1),
     {Events, Socket}.
 
 -spec websocket_info(Msg, Socket0) -> {Events, Socket1} when
@@ -126,10 +126,21 @@ init_state(Req, Env) ->
     Params = cowboy_req:parse_qs(Req),
     {HandlerState, Params}.
 
-put_diff_event([], Events) ->
+put_init_event(View, Events) ->
+    Rendered = arizona_view:rendered(View),
+    Msg = json:encode([[~"init", Rendered]]),
+    [{text, Msg} | Events].
+
+put_diff_event([], _ViewId, Events) ->
     Events;
-put_diff_event(Diff, Events) ->
-    Msg = encode_diff([[~"diff", Diff]]),
+put_diff_event(Diff, ViewId, Events) ->
+    ?LOG_INFO(#{
+        text => ~"view diff",
+        in => ?MODULE,
+        id => ViewId,
+        views => Diff
+    }),
+    Msg = encode_diff([[~"patch", [ViewId, Diff]]]),
     [{text, Msg} | Events].
 
 encode_diff(Diff) ->
