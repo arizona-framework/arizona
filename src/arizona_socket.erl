@@ -91,7 +91,8 @@ put_view(ViewId, View0, #socket{views = Views} = Socket) when is_binary(ViewId) 
             View = arizona_view:set_tmp_rendered([], View0),
             Socket#socket{views = Views#{ViewId => View}};
         diff ->
-            Socket#socket{views = Views#{ViewId => View0}}
+            View = arizona_view:set_diff([], View0),
+            Socket#socket{views = Views#{ViewId => View}}
     end.
 
 -spec get_view(ViewId, Socket) -> {ok, View} | error when
