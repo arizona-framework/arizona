@@ -20,14 +20,28 @@ describe("Patch Test", () => {
         ],
       ],
     ];
-    const diff = {
+
+    let diff = {
       1: {
         0: "1",
-        1: '\'arizona.send("app", "incr", 1)\'',
       },
     };
     expect(patch(rendered, diff)).toBe(`<div id="app"> <div id="counter">
     <span>1</span>
+    <button
+        type="button"
+        onclick='arizona.send("app", "incr", 1)'>
+        Increment
+    </button>
+</div></div>`);
+
+    diff = {
+      1: {
+        0: "2",
+      },
+    };
+    expect(patch(rendered, diff)).toBe(`<div id="app"> <div id="counter">
+    <span>2</span>
     <button
         type="button"
         onclick='arizona.send("app", "incr", 1)'>

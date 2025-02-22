@@ -5,11 +5,11 @@ function patch(rendered, diff) {
   if (Array.isArray(rendered)) {
     if (rendered[0] === "template" && rendered.length === 3) {
       const staticList = rendered[1];
-      const dynamicList = rendered[2];
+      const dynamicList = [...rendered[2]];
       return patchTemplate(staticList, dynamicList, diff);
     } else if (rendered[0] === "list" && rendered.length === 3) {
       const staticList = rendered[1];
-      const dynamicList = rendered[2];
+      const dynamicList = [...rendered[2]];
       return patchList(staticList, dynamicList);
     } else {
       return rendered;
