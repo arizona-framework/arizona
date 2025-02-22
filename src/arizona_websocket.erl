@@ -57,10 +57,8 @@ websocket_init({{Mod, Assigns, _Opts}, Params}) ->
     {ok, View0} = arizona_view:mount(Mod, Assigns, Socket0),
     Token = arizona_view:render(View0),
     {View, Socket1} = arizona_render:render(Token, View0, View0, Socket0),
-    Html = arizona_view:rendered_to_iolist(View),
     Socket = arizona_socket:set_render_context(diff, Socket1),
-    Msg = json:encode([[~"init", Html]]),
-    Events = [{text, Msg}],
+    Events = put_init_event(View, []),
     {Events, Socket}.
 
 -spec websocket_handle(Event, Socket0) -> {Events, Socket1} when
@@ -125,6 +123,11 @@ init_state(Req, Env) ->
     HandlerState = maps:get(handler_opts, Env),
     Params = cowboy_req:parse_qs(Req),
     {HandlerState, Params}.
+
+put_init_event(View, Events) ->
+    Rendered = arizona_view:rendered(View),
+    Msg = json:encode([[~"init", Rendered]]),
+    [{text, Msg} | Events].
 
 put_diff_event([], _ViewId, Events) ->
     Events;

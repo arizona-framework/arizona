@@ -14,6 +14,7 @@
 -export([get_assign/3]).
 -export([changed_assigns/1]).
 -export([set_changed_assigns/2]).
+-export([rendered/1]).
 -export([set_rendered/2]).
 -export([put_rendered/2]).
 -export([tmp_rendered/1]).
@@ -188,6 +189,12 @@ changed_assigns(#view{} = View) ->
     View1 :: view().
 set_changed_assigns(ChangedAssigns, #view{} = View) when is_map(ChangedAssigns) ->
     View#view{changed_assigns = ChangedAssigns}.
+
+-spec rendered(View) -> Rendered when
+      View :: arizona_view:view(),
+      Rendered :: arizona_render:rendered().
+rendered(#view{} = View) ->
+    View#view.rendered.
 
 -spec set_rendered(Rendered, View0) -> View1 when
     Rendered :: arizona_render:rendered(),

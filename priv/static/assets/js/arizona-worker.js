@@ -3,7 +3,7 @@
 const state = {
   params: {},
   socket: null,
-  tree: [],
+  rendered: [],
 };
 
 // Messages from client
@@ -65,10 +65,10 @@ function handleEvent(data) {
   const payload = data[1];
   switch (event) {
     case "init":
-      state.tree = payload;
+      state.rendered = payload;
       break;
     case "patch":
-      sendMsgToClient("patch", [...payload, state.tree]);
+      sendMsgToClient("patch", [...payload, state.rendered]);
       break
     default:
       sendMsgToClient(event, payload);
