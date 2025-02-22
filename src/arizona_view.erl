@@ -248,6 +248,8 @@ set_diff(Diff, #view{} = View) when is_list(Diff) ->
     Payload :: arizona_diff:diff() | arizona_render:rendered_value(),
     View0 :: view(),
     View1 :: view().
+put_diff(Index, [], #view{} = View) when is_integer(Index), Index >= 0 ->
+    View;
 put_diff(Index, Payload, #view{} = View) when
     is_integer(Index), Index >= 0, (is_binary(Payload) orelse is_list(Payload))
 ->
