@@ -1,11 +1,15 @@
 -module(arizona_diff).
 
 %% --------------------------------------------------------------------
-%% API function exports
+%% Support function exports
 %% --------------------------------------------------------------------
 
 -export([diff/4]).
 -export([diff/6]).
+
+%
+
+-ignore_xref([diff/6]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -27,7 +31,7 @@
 -export_type([options/0]).
 
 %% --------------------------------------------------------------------
-%% API function definitions
+%% Support function definitions
 %% --------------------------------------------------------------------
 
 -spec diff(Payload, Index, View0, Socket0) -> {View1, Socket1} when

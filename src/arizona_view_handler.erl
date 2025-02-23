@@ -49,7 +49,7 @@ init(Req0, {Mod, Assigns, Opts} = State) when is_atom(Mod), is_map(Assigns), is_
 maybe_render_layout(View, Socket, ViewToken, Assigns, Opts) ->
     case Opts of
         #{layout := LayoutMod} ->
-            {LayoutView, _Socket} = arizona_renderer:layout(
+            {LayoutView, _Socket} = arizona_renderer:render_layout(
                 LayoutMod, Assigns, ViewToken, Socket
             ),
             LayoutView;

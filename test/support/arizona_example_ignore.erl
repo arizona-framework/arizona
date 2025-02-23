@@ -9,7 +9,7 @@ mount(_Assigns, _Socket) ->
     ignore.
 
 render(View) ->
-    arizona_renderer:view_template(View, ~""""
+    arizona:render_view_template(View, ~""""
     ignored
     """").
 

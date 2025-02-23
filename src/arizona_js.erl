@@ -4,18 +4,18 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([send/3]).
+-export([send_event/3]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec send(ViewId, Event, Payload) -> Js when
+-spec send_event(ViewId, EventName, Payload) -> Js when
     ViewId :: arizona_view:id(),
-    Event :: binary(),
+    EventName :: binary(),
     Payload :: dynamic(),
     Js :: binary().
-send(ViewId, Event, Payload) when is_binary(ViewId), is_binary(Event) ->
+send_event(ViewId, EventName, Payload) when is_binary(ViewId), is_binary(EventName) ->
     iolist_to_binary([
-        "'arizona.send(\"", ViewId, "\", \"", Event, "\", ", json:encode(Payload), ")'"
+        "arizona.send(\"", ViewId, "\", \"", EventName, "\", ", json:encode(Payload), ")"
     ]).

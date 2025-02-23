@@ -154,10 +154,10 @@ render_nested_template_to_iolist(Config) when is_list(Config) ->
         ]
     ],
     ParentView0 = arizona_view:new(#{show_dialog => true, message => ~"Hello, World!"}),
-    Token = arizona_renderer:nested_template(ParentView0, ~""""
+    Token = arizona_renderer:render_nested_template(ParentView0, ~""""
     <div>
-        {arizona_renderer:if_true(arizona_view:get_assign(show_dialog, View), fun() ->
-             arizona_renderer:nested_template(View, ~"""
+        {arizona_renderer:render_if_true(arizona:get_assign(show_dialog, View), fun() ->
+             arizona_renderer:render_nested_template(View, ~"""
              <dialog open>
                  {arizona_view:get_assign(message, View)}
              </dialog>

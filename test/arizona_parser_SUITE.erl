@@ -257,10 +257,9 @@ parse_transform_render_list(Config) when is_list(Config) ->
                                                     {nil, 5}}}
                                         ]}
                                     ]}},
-                                {call, 7,
-                                    {remote, 7, {atom, 7, arizona_view}, {atom, 7, get_assign}}, [
-                                        {atom, 7, list}, {var, 7, 'View'}
-                                    ]}
+                                {call, 7, {remote, 7, {atom, 7, arizona}, {atom, 7, get_assign}}, [
+                                    {atom, 7, list}, {var, 7, 'View'}
+                                ]}
                             ]},
                             {var, 7, 'View'},
                             {var, 7, 'ViewAcc'},
@@ -270,17 +269,18 @@ parse_transform_render_list(Config) when is_list(Config) ->
                 ]}}
         ]
     },
+
     Tokens = arizona_scanner:scan(#{}, ~""""
     <ul>
-    {arizona_renderer:list(fun(Item) ->
-        arizona_renderer:nested_template(#{'View' => View, 'Item' => Item}, ~"""
+    {arizona:render_list(fun(Item) ->
+        arizona:render_nested_template(#{'View' => View, 'Item' => Item}, ~"""
         <li>
             {integer_to_binary(Item)}
             <br/>
             {integer_to_binary(Item)}
         </li>
         """)
-     end, arizona_view:get_assign(list, View))}
+     end, arizona:get_assign(list, View))}
     </ul>
     """"),
     View = arizona_view:new(#{list => [1, 2, 3]}),

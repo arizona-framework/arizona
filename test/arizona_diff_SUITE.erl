@@ -45,10 +45,10 @@ diff_view_template(Config) when is_list(Config) ->
         })
     },
     View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], []),
-    Token = arizona_renderer:view_template(View, ~"""
-    <div id={arizona_view:get_assign(id, View)}>
-    {arizona_view:get_assign(foo, View)}
-    {arizona_view:get_assign(bar, View)}
+    Token = arizona_renderer:render_view_template(View, ~"""
+    <div id={arizona:get_assign(id, View)}>
+    {arizona:get_assign(foo, View)}
+    {arizona:get_assign(bar, View)}
     </div>
     """),
     TokenCallback = fun() -> Token end,
@@ -68,10 +68,10 @@ diff_component_template(Config) when is_list(Config) ->
         arizona_socket:new(diff)
     },
     View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], []),
-    Token = arizona_renderer:component_template(View, ~"""
+    Token = arizona_renderer:render_component_template(View, ~"""
     <div>
-        {arizona_view:get_assign(foo, View)}
-        {arizona_view:get_assign(bar, View)}
+        {arizona:get_assign(foo, View)}
+        {arizona:get_assign(bar, View)}
     </div>
     """),
     TokenCallback = fun() -> Token end,
@@ -91,10 +91,10 @@ diff_nested_template(Config) when is_list(Config) ->
         arizona_socket:new(diff)
     },
     View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], []),
-    Token = arizona_renderer:nested_template(View, ~"""
+    Token = arizona_renderer:render_nested_template(View, ~"""
     <div>
-        {arizona_view:get_assign(foo, View)}
-        {arizona_view:get_assign(bar, View)}
+        {arizona:get_assign(foo, View)}
+        {arizona:get_assign(bar, View)}
     </div>
     """),
     TokenCallback = fun() -> Token end,
@@ -119,12 +119,12 @@ diff_list_template(Config) when is_list(Config) ->
         arizona_socket:new(diff)
     },
     View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], []),
-    Token = arizona_renderer:list(
+    Token = arizona_renderer:render_list(
         fun(Item) ->
-            arizona_renderer:nested_template(#{'View' => View, 'Item' => Item}, ~"""
+            arizona_renderer:render_nested_template(#{'View' => View, 'Item' => Item}, ~"""
             <div>
-                {arizona_view:get_assign(foo, View)}
-                {arizona_view:get_assign(bar, View, Item)}
+                {arizona:get_assign(foo, View)}
+                {arizona:get_assign(bar, View, Item)}
             </div>
             """)
         end,
@@ -451,11 +451,11 @@ diff_list(Config) when is_list(Config) ->
         arizona_socket:new(diff)
     },
     View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], []),
-    Token = arizona_renderer:nested_template(View, ~"""
+    Token = arizona_renderer:render_nested_template(View, ~"""
     <div>
         {[
-            arizona_view:get_assign(foo, View),
-            arizona_view:get_assign(bar, View)
+            arizona:get_assign(foo, View),
+            arizona:get_assign(bar, View)
          ]}
     </div>
     """),

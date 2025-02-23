@@ -5,7 +5,16 @@
 %% --------------------------------------------------------------------
 
 -export([generate/0]).
+
+%% --------------------------------------------------------------------
+%% Support function exports
+%% --------------------------------------------------------------------
+
 -export([generate/2]).
+
+%
+
+-ignore_xref([generate/2]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
@@ -16,6 +25,10 @@ generate() ->
     Routes = maps:get(routes, arizona_config:endpoint()),
     StaticDir = arizona_config:static_dir(),
     generate(Routes, StaticDir).
+
+%% --------------------------------------------------------------------
+%% Support function definitions
+%% --------------------------------------------------------------------
 
 -spec generate(Routes, StaticDir) -> ok when
     Routes :: list(),

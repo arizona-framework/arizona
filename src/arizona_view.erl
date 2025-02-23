@@ -4,14 +4,19 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([new/1]).
 -export([new/2]).
--export([new/6]).
--export([assigns/1]).
 -export([put_assign/3]).
 -export([put_assigns/2]).
 -export([get_assign/2]).
 -export([get_assign/3]).
+
+%% --------------------------------------------------------------------
+%% Support function exports
+%% --------------------------------------------------------------------
+
+-export([new/1]).
+-export([new/6]).
+-export([assigns/1]).
 -export([changed_assigns/1]).
 -export([set_changed_assigns/2]).
 -export([rendered/1]).
@@ -26,6 +31,10 @@
 -export([merge_changed_assigns/1]).
 -export([rendered_to_iolist/1]).
 -export([diff_to_iolist/1]).
+
+%
+
+-ignore_xref([diff_to_iolist/1]).
 
 %% --------------------------------------------------------------------
 %% Callback support function exports
@@ -94,18 +103,51 @@ doctest_test() -> doctest:module(?MODULE).
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec new(Assigns) -> View when
-    Assigns :: assigns(),
-    View :: view().
-new(Assigns) ->
-    new(undefined, Assigns, #{}, [], [], []).
-
 -spec new(Mod, Assigns) -> View when
     Mod :: module(),
     Assigns :: assigns(),
     View :: view().
 new(Mod, Assigns) ->
     new(Mod, Assigns, #{}, [], [], []).
+
+-spec put_assign(Key, Value, View0) -> View1 when
+    Key :: atom(),
+    Value :: dynamic(),
+    View0 :: view(),
+    View1 :: view().
+put_assign(Key, Value, #view{} = View) when is_atom(Key) ->
+    View#view{changed_assigns = maps:put(Key, Value, View#view.changed_assigns)}.
+
+-spec put_assigns(Assigns, View0) -> View1 when
+    Assigns :: assigns(),
+    View0 :: view(),
+    View1 :: view().
+put_assigns(Assigns, #view{} = View) when is_map(Assigns) ->
+    maps:fold(fun(Key, Value, ViewAcc) -> put_assign(Key, Value, ViewAcc) end, View, Assigns).
+
+-spec get_assign(Key, View) -> Value when
+    Key :: atom(),
+    View :: view(),
+    Value :: dynamic().
+get_assign(Key, #view{} = View) when is_atom(Key) ->
+    maps:get(Key, View#view.changed_assigns, maps:get(Key, View#view.assigns)).
+
+-spec get_assign(Key, View, Default) -> Value when
+    Key :: atom(),
+    View :: view(),
+    Value :: Default | dynamic().
+get_assign(Key, #view{} = View, Default) when is_atom(Key) ->
+    maps:get(Key, View#view.changed_assigns, maps:get(Key, View#view.assigns, Default)).
+
+%% --------------------------------------------------------------------
+%% Support function exports
+%% --------------------------------------------------------------------
+
+-spec new(Assigns) -> View when
+    Assigns :: assigns(),
+    View :: view().
+new(Assigns) ->
+    new(undefined, Assigns, #{}, [], [], []).
 
 -spec new(Mod, Assigns, ChangedAssigns, Rendered, TmpRendered, Diff) -> View when
     Mod :: undefined | module(),
@@ -137,35 +179,6 @@ new(Mod, Assigns, ChangedAssigns, Rendered, TmpRendered, Diff) when
     Assigns :: assigns().
 assigns(#view{} = View) ->
     View#view.assigns.
-
--spec put_assign(Key, Value, View0) -> View1 when
-    Key :: atom(),
-    Value :: dynamic(),
-    View0 :: view(),
-    View1 :: view().
-put_assign(Key, Value, #view{} = View) when is_atom(Key) ->
-    View#view{changed_assigns = maps:put(Key, Value, View#view.changed_assigns)}.
-
--spec put_assigns(Assigns, View0) -> View1 when
-    Assigns :: assigns(),
-    View0 :: view(),
-    View1 :: view().
-put_assigns(Assigns, #view{} = View) when is_map(Assigns) ->
-    maps:fold(fun(Key, Value, ViewAcc) -> put_assign(Key, Value, ViewAcc) end, View, Assigns).
-
--spec get_assign(Key, View) -> Value when
-    Key :: atom(),
-    View :: view(),
-    Value :: dynamic().
-get_assign(Key, #view{} = View) when is_atom(Key) ->
-    maps:get(Key, View#view.changed_assigns, maps:get(Key, View#view.assigns)).
-
--spec get_assign(Key, View, Default) -> Value when
-    Key :: atom(),
-    View :: view(),
-    Value :: Default | dynamic().
-get_assign(Key, #view{} = View, Default) when is_atom(Key) ->
-    maps:get(Key, View#view.changed_assigns, maps:get(Key, View#view.assigns, Default)).
 
 -spec changed_assigns(View) -> ChangedAssigns when
     View :: view(),
