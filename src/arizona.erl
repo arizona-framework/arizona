@@ -93,9 +93,34 @@
 -export_type([event_payload/0]).
 
 %% --------------------------------------------------------------------
+%% Doctests
+%% --------------------------------------------------------------------
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+doctest_test() -> doctest:module(?MODULE).
+-endif.
+
+%% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
+-doc ~""""
+Renders a view template.
+
+View is a stateful element.
+
+## Usage
+
+```erlang
+render(View) ->
+    arizona:render_view_template(View, ~"""
+    <div id="{arizona:get_assign(id, View)}">
+        Hello, {arizona:get_assign(name, View, ~"World")}!
+    </div>
+    """).
+```
+"""".
 -spec render_view_template(View, Template) -> Rendered when
     View :: view(),
     Template :: binary() | {file, file:filename_all()},
@@ -103,6 +128,22 @@
 render_view_template(Payload, Template) ->
     arizona_renderer:render_view_template(Payload, Template).
 
+-doc ~""""
+Renders a component template.
+
+Component is a stateless element.
+
+## Usage
+
+```erlang
+button(View) ->
+    arizona:render_component_template(View, ~"""
+    <button type="{arizona:get_assign(type, View, ~"button")}">
+        {arizona:get_assign(text, View)}
+    </button>
+    """).
+```
+"""".
 -spec render_component_template(View, Template) -> Rendered when
     View :: arizona_view:view(),
     Template :: binary() | {file, file:filename_all()},
@@ -110,12 +151,71 @@ render_view_template(Payload, Template) ->
 render_component_template(Payload, Template) ->
     arizona_renderer:render_component_template(Payload, Template).
 
+-doc ~"""""
+Renders a nested template.
+
+Nested template is a stateless element.
+
+## Usage
+
+```erlang
+example(View) ->
+    arizona:render_component_template(View, ~""""
+    {case arizona:get_assign(status_code, View) of
+         200 ->
+             arizona:render_nested_template(~"""
+             <b>{arizona:get_assign(message, View)}</b>
+             """);
+         403 ->
+             arizona:render_nested_template(~"""
+             Forbidden
+             """);
+         Other ->
+             arizona:render_nested_template(~"""
+             Error: {Other}
+             """)
+     end}
+    <dialog>
+        Hello, {arizona:get_assign(name, View, ~"World")}!
+    </div>
+    """").
+```
+""""".
 -spec render_nested_template(Template) -> Rendered when
     Template :: binary(),
     Rendered :: rendered_nested_template().
 render_nested_template(Template) ->
     arizona_renderer:render_nested_template(Template).
 
+-doc ~""""
+Renders a layout template.
+
+Layout is a stateful element.
+
+It receives an assign called `inner_content` to be defined
+in any location of the template.
+
+## Usage
+
+```erlang
+render(View) ->
+    arizona:render_layout_template(View, ~"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{arizona:get_assign(title, View)}</title>
+        {arizona:render_html_scripts()}
+    </head>
+    <body>
+        {arizona:get_assign(inner_content, View)}
+    </body>
+    </html>
+    """).
+```
+"""".
 -spec render_layout_template(View, Template) -> Rendered when
     View :: view(),
     Template :: binary() | {file, file:filename_all()},
