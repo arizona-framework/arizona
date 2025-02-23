@@ -98,16 +98,7 @@ globalThis['arizona'] = (() => {
         const [viewId, html] = payload;
         const elem = document.getElementById(viewId);
         morphdom(elem, html, {
-          // Can I make morphdom blaze through the DOM tree even faster? Yes.
-          // @see https://github.com/patrick-steele-idem/morphdom#can-i-make-morphdom-blaze-through-the-dom-tree-even-faster-yes
-          onBeforeElUpdated: function(fromEl, toEl) {
-            // spec - https://dom.spec.whatwg.org/#concept-node-equals
-            if (fromEl.isEqualNode(toEl)) {
-              return false;
-            }
-
-            return true;
-          },
+          onBeforeElUpdated: (from, to) => !from.isEqualNode(to),
         });
       }
     }
