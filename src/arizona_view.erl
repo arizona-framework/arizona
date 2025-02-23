@@ -16,6 +16,7 @@
 
 -export([new/1]).
 -export([new/6]).
+-export([module/1]).
 -export([assigns/1]).
 -export([changed_assigns/1]).
 -export([set_changed_assigns/2]).
@@ -176,6 +177,12 @@ new(Mod, Assigns, ChangedAssigns, Rendered, TmpRendered, Diff) when
         tmp_rendered = TmpRendered,
         diff = Diff
     }.
+
+-spec module(View) -> Mod when
+    View :: view(),
+    Mod :: module().
+module(#view{} = View) ->
+    View#view.module.
 
 -spec assigns(View) -> Assigns when
     View :: view(),

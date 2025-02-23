@@ -202,20 +202,24 @@ render_nested_template(ParentView, Template) ->
     Bindings = #{'View' => ParentView},
     render_nested_template(Bindings, Template).
 
--spec render_layout(LayoutMod, Assigns, InnerContent, Socket0) -> Layout when
-    LayoutMod :: module(),
+-spec render_layout(Mod, Assigns, InnerContent, Socket0) -> Layout when
+    Mod :: module(),
     Assigns :: arizona_view:assigns(),
     InnerContent :: token(),
     Socket0 :: arizona_socket:socket(),
     Layout :: {LayoutView, Socket1},
     LayoutView :: arizona_view:view(),
     Socket1 :: arizona_socket:socket().
-render_layout(LayoutMod, Assigns, InnerContent, Socket) ->
-    LayoutView = arizona_view:new(Assigns#{
-        inner_content => [InnerContent]
-    }),
-    Token = arizona_component:render(LayoutMod, render, LayoutView),
-    render(Token, LayoutView, LayoutView, Socket).
+render_layout(Mod, Assigns, InnerContent, Socket) ->
+    View = arizona_layout:mount(
+        Mod,
+        Assigns#{
+            inner_content => [InnerContent]
+        },
+        Socket
+    ),
+    Token = arizona_layout:render(View),
+    render(Token, View, View, Socket).
 
 %% --------------------------------------------------------------------
 %% Private functions
