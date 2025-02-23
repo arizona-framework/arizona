@@ -15,7 +15,7 @@ globalThis['arizona'] = (() => {
   }
 
   function send(viewId, eventName, payload) {
-    sendMsgToWorker.bind(this)(viewId, eventName, payload);
+    sendToWorker.bind(this)(viewId, eventName, payload);
   }
 
   function subscribe(eventName, callback, opts = {}) {
@@ -77,7 +77,7 @@ globalThis['arizona'] = (() => {
   // Private functions
   // --------------------------------------------------------------------
 
-  function sendMsgToWorker(viewId, eventName, payload) {
+  function sendToWorker(viewId, eventName, payload) {
     worker.postMessage({ viewId, eventName, payload });
   }
 

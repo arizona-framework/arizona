@@ -31,7 +31,7 @@ self.onmessage = function(e) {
         return;
       }
 
-      sendMsgToServer([viewId, eventName, payload]);
+      sendToServer([viewId, eventName, payload]);
   }
 };
 
@@ -45,7 +45,7 @@ function connect(params) {
 
     socket.onopen = function() {
       console.log('[WebSocket] connected:', state);
-      sendMsgToClient('connect');
+      sendToClient('connect');
 
       resolve();
     };
@@ -75,21 +75,21 @@ function handleEvent(data) {
       const [viewId, diff] = payload;
       const rendered = state.views[viewId];
       const html = patch(rendered, diff);
-      sendMsgToClient('patch', [viewId, html]);
+      sendToClient('patch', [viewId, html]);
       break;
     }
     default: {
-      sendMsgToClient(eventName, payload);
+      sendToClient(eventName, payload);
       break;
     }
   }
 }
 
-function sendMsgToClient(eventName, payload) {
+function sendToClient(eventName, payload) {
   self.postMessage({ eventName, payload });
 }
 
-function sendMsgToServer([viewId, eventName, payload]) {
+function sendToServer([viewId, eventName, payload]) {
   state.socket.send(
     payload
       ? JSON.stringify([viewId, eventName, payload], state)
