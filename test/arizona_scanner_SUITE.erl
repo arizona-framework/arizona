@@ -23,6 +23,7 @@ groups() ->
             scan_start_erlang_end_erlang,
             scan_new_line_cr,
             scan_new_line_crlf,
+            scan_escape,
             scan_error_unexpected_expr_end,
             scan_error_badexpr
         ]}
@@ -170,6 +171,11 @@ scan_new_line_crlf(Config) when is_list(Config) ->
         {html, {4, 1}, ~"4"}
     ],
     Got = arizona_scanner:scan(#{}, ~"1\r\n{[2,\r\n3]}\r\n4"),
+    ?assertEqual(Expect, Got).
+
+scan_escape(Config) when is_list(Config) ->
+    Expect = [{html, {1, 1}, <<"<script>foo({foo: \"bar\"})</script>">>}],
+    Got = arizona_scanner:scan(#{}, ~[<script>foo(\\{foo: "bar"})</script>]),
     ?assertEqual(Expect, Got).
 
 scan_error_unexpected_expr_end(Config) when is_list(Config) ->

@@ -92,6 +92,19 @@ scan(Opts, Template) when is_map(Opts), is_binary(Template) ->
 scan(Rest, Bin, State) ->
     scan(Rest, Bin, 0, State, State).
 
+scan(<<$\\, ${, Rest/binary>>, Bin0, Len, TextState, State) ->
+    % Extract the part of the binary before the backslash and opening brace
+    PrefixBin = binary_part(Bin0, State#state.position, Len),
+
+    % Extract the part of the binary after the backslash and opening brace
+    SuffixBin = binary:part(Bin0, Len + 2, byte_size(Bin0) - Len - 2),
+
+    % Combine the prefix, opening brace, and suffix into a new binary
+    % (effectively removing the backslash)
+    Bin = <<PrefixBin/binary, ${, SuffixBin/binary>>,
+
+    % Continue scanning with the updated binary, length, and state
+    scan(Rest, Bin, Len + 1, TextState, incr_col(2, State));
 scan(<<${, Rest/binary>>, Bin, Len, TextState, State) ->
     ExprTokens = scan_expr(Rest, Bin, 1, incr_pos(Len + 1, State)),
     maybe_prepend_text_token(Bin, Len, TextState, ExprTokens);
