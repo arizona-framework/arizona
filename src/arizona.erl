@@ -7,6 +7,7 @@
 -export([render_view_template/2]).
 -export([render_component_template/2]).
 -export([render_nested_template/1]).
+-export([render_layout_template/2]).
 -export([render_view/2]).
 -export([render_component/3]).
 -export([render_if_true/2]).
@@ -25,6 +26,7 @@
 -ignore_xref([render_view_template/2]).
 -ignore_xref([render_component_template/2]).
 -ignore_xref([render_nested_template/1]).
+-ignore_xref([render_layout_template/2]).
 -ignore_xref([render_view/2]).
 -ignore_xref([render_component/3]).
 -ignore_xref([render_if_true/2]).
@@ -63,6 +65,9 @@
 
 -type rendered_nested_template() :: no_return().
 -export_type([rendered_nested_template/0]).
+
+-type rendered_layout_template() :: rendered_view_template().
+-export_type([rendered_layout_template/0]).
 
 -type rendered_view() :: {view, Mod :: module(), Assigns :: assigns()}.
 -export_type([rendered_view/0]).
@@ -110,6 +115,13 @@ render_component_template(Payload, Template) ->
     Rendered :: rendered_nested_template().
 render_nested_template(Template) ->
     arizona_renderer:render_nested_template(Template).
+
+-spec render_layout_template(View, Template) -> Rendered when
+    View :: view(),
+    Template :: binary() | {file, file:filename_all()},
+    Rendered :: rendered_layout_template().
+render_layout_template(Payload, Template) ->
+    arizona_renderer:render_view_template(Payload, Template).
 
 -spec render_view(Mod, Assigns) -> Rendered when
     Mod :: module(),

@@ -16,6 +16,7 @@
 
 -export([new/1]).
 -export([new/6]).
+-export([module/1]).
 -export([assigns/1]).
 -export([changed_assigns/1]).
 -export([set_changed_assigns/2]).
@@ -53,9 +54,9 @@
     Socket :: arizona_socket:socket(),
     Return :: mount_ret().
 
--callback render(View) -> Token when
+-callback render(View) -> Rendered when
     View :: view(),
-    Token :: arizona_renderer:token().
+    Rendered :: arizona:rendered_view_template().
 
 -callback handle_event(EventName, Payload, View0) -> View1 when
     EventName :: event_name(),
@@ -176,6 +177,12 @@ new(Mod, Assigns, ChangedAssigns, Rendered, TmpRendered, Diff) when
         tmp_rendered = TmpRendered,
         diff = Diff
     }.
+
+-spec module(View) -> Mod when
+    View :: view(),
+    Mod :: module().
+module(#view{} = View) ->
+    View#view.module.
 
 -spec assigns(View) -> Assigns when
     View :: view(),
@@ -310,17 +317,17 @@ diff_to_iolist(#view{} = View) ->
 %% Callback support function definitions
 %% --------------------------------------------------------------------
 
--spec mount(Mod, Assigns, Socket) -> {ok, View} | ignore when
+-spec mount(Mod, Assigns, Socket) -> Return when
     Mod :: module(),
     Assigns :: assigns(),
-    Socket :: arizona_socket:socket(),
-    View :: view().
+    Socket :: arizona:socket(),
+    Return :: mount_ret().
 mount(Mod, Assigns, Socket) when is_atom(Mod), Mod =/= undefined, is_map(Assigns) ->
     erlang:apply(Mod, mount, [Assigns, Socket]).
 
--spec render(View) -> Token when
+-spec render(View) -> Rendered when
     View :: view(),
-    Token :: arizona_renderer:token().
+    Rendered :: arizona:rendered_view_template().
 render(#view{module = Mod} = View) when Mod =/= undefined ->
     erlang:apply(Mod, render, [View]).
 
