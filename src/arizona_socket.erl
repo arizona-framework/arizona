@@ -14,13 +14,6 @@
 -export([get_view/2]).
 -export([remove_view/2]).
 
-%
-
--ignore_xref([new/1]).
--ignore_xref([new/2]).
--ignore_xref([render_context/1]).
--ignore_xref([put_view/3]).
-
 %% --------------------------------------------------------------------
 %% Types (and their exports)
 %% --------------------------------------------------------------------

@@ -27,16 +27,6 @@
 -export([rendered_to_iolist/1]).
 -export([diff_to_iolist/1]).
 
-%
-
--ignore_xref([new/2]).
--ignore_xref([new/6]).
--ignore_xref([get_assign/3]).
--ignore_xref([put_assign/3]).
--ignore_xref([put_assigns/2]).
--ignore_xref([rendered_to_iolist/1]).
--ignore_xref([diff_to_iolist/1]).
-
 %% --------------------------------------------------------------------
 %% Callback support function exports
 %% --------------------------------------------------------------------

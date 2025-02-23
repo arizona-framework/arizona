@@ -7,11 +7,6 @@
 -export([generate/0]).
 -export([generate/2]).
 
-%
-
--ignore_xref([generate/0]).
--ignore_xref([generate/2]).
-
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------

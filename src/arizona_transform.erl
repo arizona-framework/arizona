@@ -7,10 +7,6 @@
 -export([parse_transform/2]).
 -export([transform/2]).
 
-%
-
--ignore_xref([parse_transform/2]).
-
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------

@@ -15,19 +15,6 @@
 -export([list/2]).
 -export([layout/4]).
 
-%
-
--ignore_xref([render/4]).
--ignore_xref([view_template/2]).
--ignore_xref([component_template/2]).
--ignore_xref([nested_template/1]).
--ignore_xref([nested_template/2]).
--ignore_xref([view/2]).
--ignore_xref([component/3]).
--ignore_xref([if_true/2]).
--ignore_xref([list/2]).
--ignore_xref([layout/4]).
-
 %% --------------------------------------------------------------------
 %% Types (and their exports)
 %% --------------------------------------------------------------------
