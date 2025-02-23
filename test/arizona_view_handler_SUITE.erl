@@ -39,30 +39,30 @@ end_per_suite(Config) ->
 %% Behaviour (arizona_live_view) callbacks
 %% --------------------------------------------------------------------
 
--spec mount(Assigns, Socket) -> {ok, View} | ignore when
-    Assigns :: arizona_view:assigns(),
-    Socket :: arizona_socket:socket(),
-    View :: arizona_view:view().
+-spec mount(Assigns, Socket) -> Return when
+    Assigns :: arizona:assigns(),
+    Socket :: arizona:socket(),
+    Return :: arizona:mount_ret().
 mount(Assigns, _Socket) ->
     View = arizona_view:new(?MODULE, Assigns),
     {ok, View}.
 
 -spec render(View) -> Token when
-    View :: arizona_view:view(),
-    Token :: arizona_renderer:token().
+    View :: arizona:view(),
+    Token :: arizona:rendered_view_template().
 render(View) ->
-    arizona_renderer:render_view_template(View, ~""""
+    arizona:render_view_template(View, ~""""
     <main id="{arizona:get_assign(id, View)}">
         Hello, {arizona:get_assign(name, View)}!
     </main>
     """").
 
--spec handle_event(Event, Payload, View0) -> View1 when
-    Event :: arizona_view:event(),
-    Payload :: arizona_view:payload(),
-    View0 :: arizona_view:view(),
-    View1 :: arizona_view:view().
-handle_event(_Event, _Payload, View) ->
+-spec handle_event(EventName, Payload, View0) -> View1 when
+    EventName :: arizona:event_name(),
+    Payload :: arizona:event_payload(),
+    View0 :: arizona:view(),
+    View1 :: arizona:view().
+handle_event(_EventName, _Payload, View) ->
     View.
 
 %% --------------------------------------------------------------------

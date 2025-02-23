@@ -17,5 +17,11 @@
     Js :: binary().
 send_event(ViewId, EventName, Payload) when is_binary(ViewId), is_binary(EventName) ->
     iolist_to_binary([
-        "arizona.send(\"", ViewId, "\", \"", EventName, "\", ", json:encode(Payload), ")"
+        "arizona.send(&quot;",
+        ViewId,
+        "&quot;, &quot;",
+        EventName,
+        "&quot;, ",
+        json:encode(Payload),
+        ")"
     ]).

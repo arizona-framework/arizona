@@ -48,18 +48,18 @@
 %% Callback definitions
 %% --------------------------------------------------------------------
 
--callback mount(Assigns, Socket) -> {ok, View} | ignore when
+-callback mount(Assigns, Socket) -> Return when
     Assigns :: assigns(),
     Socket :: arizona_socket:socket(),
-    View :: view().
+    Return :: mount_ret().
 
 -callback render(View) -> Token when
     View :: view(),
     Token :: arizona_renderer:token().
 
--callback handle_event(Event, Payload, View0) -> View1 when
-    Event :: event(),
-    Payload :: payload(),
+-callback handle_event(EventName, Payload, View0) -> View1 when
+    EventName :: event_name(),
+    Payload :: event_payload(),
     View0 :: arizona_view:view(),
     View1 :: arizona_view:view().
 
@@ -84,11 +84,14 @@
 -type id() :: binary().
 -export_type([id/0]).
 
--type event() :: binary().
--export_type([event/0]).
+-type mount_ret() :: {ok, View :: view()} | ignore.
+-export_type([mount_ret/0]).
 
--type payload() :: term().
--export_type([payload/0]).
+-type event_name() :: binary().
+-export_type([event_name/0]).
+
+-type event_payload() :: dynamic().
+-export_type([event_payload/0]).
 
 %% --------------------------------------------------------------------
 %% Doctests
@@ -321,13 +324,13 @@ mount(Mod, Assigns, Socket) when is_atom(Mod), Mod =/= undefined, is_map(Assigns
 render(#view{module = Mod} = View) when Mod =/= undefined ->
     erlang:apply(Mod, render, [View]).
 
--spec handle_event(Event, Payload, View0) -> View1 when
-    Event :: event(),
-    Payload :: payload(),
+-spec handle_event(EventName, Payload, View0) -> View1 when
+    EventName :: event_name(),
+    Payload :: event_payload(),
     View0 :: arizona_view:view(),
     View1 :: arizona_view:view().
-handle_event(Event, Payload, #view{} = View) ->
-    erlang:apply(View#view.module, handle_event, [Event, Payload, View]).
+handle_event(EventName, Payload, #view{} = View) ->
+    erlang:apply(View#view.module, handle_event, [EventName, Payload, View]).
 
 %% --------------------------------------------------------------------
 %% Private functions

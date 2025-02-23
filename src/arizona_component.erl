@@ -13,7 +13,7 @@
 -spec render(Mod, Fun, View) -> Token when
     Mod :: module(),
     Fun :: atom(),
-    View :: arizona_view:view(),
-    Token :: arizona_renderer:token().
+    View :: arizona:view(),
+    Token :: arizona:rendered_component_template().
 render(Mod, Fun, View) when is_atom(Mod), is_atom(Fun) ->
     erlang:apply(Mod, Fun, [View]).
