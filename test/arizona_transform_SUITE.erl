@@ -31,10 +31,10 @@ groups() ->
 
 render_view_template(Config) when is_list(Config) ->
     Forms = merl:quote(~""""
-    -module(arizona_render_view_template).
+    -module(arizona_renderer_view_template).
     render(View) ->
-        arizona_render:view_template(View, ~"""
-        Hello, {arizona_view:get_assign(name, View)}!
+        arizona:render_view_template(View, ~"""
+        Hello, {arizona:get_assign(name, View)}!
         """).
     """"),
     Got = arizona_transform:parse_transform(Forms, []),
@@ -52,10 +52,10 @@ render_view_template(Config) when is_list(Config) ->
 
 render_component_template(Config) when is_list(Config) ->
     Forms = merl:quote(~""""
-    -module(arizona_render_component_template).
+    -module(arizona_renderer_component_template).
     render(View) ->
-        arizona_render:component_template(View, ~"""
-        Hello, {arizona_view:get_assign(name, View)}!
+        arizona:render_component_template(View, ~"""
+        Hello, {arizona:get_assign(name, View)}!
         """).
     """"),
     Got = arizona_transform:parse_transform(Forms, []),
@@ -73,10 +73,10 @@ render_component_template(Config) when is_list(Config) ->
 
 render_nested_template(Config) when is_list(Config) ->
     Forms = merl:quote(~""""
-    -module(arizona_render_nested_template).
+    -module(arizona_renderer_nested_template).
     render(View) ->
-        arizona_render:nested_template(View, ~"""
-        Hello, {arizona_view:get_assign(name, View)}!
+        arizona:render_nested_template(View, ~"""
+        Hello, {arizona:get_assign(name, View)}!
         """).
     """"),
     Got = arizona_transform:parse_transform(Forms, []),

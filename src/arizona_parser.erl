@@ -6,10 +6,6 @@
 
 -export([parse/2]).
 
-%
-
--ignore_xref([parse/2]).
-
 %% --------------------------------------------------------------------
 %% Types (and their exports)
 %% --------------------------------------------------------------------
@@ -101,7 +97,7 @@ norm_expr(from_socket, Expr, Index, Vars) ->
         ["fun(ViewAcc, Socket, Opts) ->\n"],
         ["    case arizona_socket:render_context(Socket) of\n"],
         ["        render ->\n"],
-        ["            arizona_render:render(", Expr, ", View, ViewAcc, Socket);\n"],
+        ["            arizona_renderer:render(", Expr, ", View, ViewAcc, Socket);\n"],
         ["        diff ->\n"],
         ["            Index = ", Index, ",\n"],
         ["            Vars = ", Vars, ",\n"],
@@ -113,7 +109,7 @@ norm_expr(from_socket, Expr, Index, Vars) ->
 norm_expr(render, Expr, _Index, _Vars) ->
     [
         ["fun(ViewAcc, Socket, Opts) ->\n"],
-        ["    arizona_render:render(", Expr, ", View, ViewAcc, Socket)\n"],
+        ["    arizona_renderer:render(", Expr, ", View, ViewAcc, Socket)\n"],
         ["end"]
     ];
 norm_expr(none, Expr, _Index, _Vars) ->
@@ -145,7 +141,7 @@ expr_vars(Expr) ->
     case
         re:run(
             Expr,
-            "arizona_view:get_assign\\(([a-z][a-zA-Z_@]*|'(.*?)')",
+            "arizona:get_assign\\(([a-z][a-zA-Z_@]*|'(.*?)')",
             [global, {capture, all_but_first, binary}]
         )
     of

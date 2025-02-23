@@ -1,7 +1,7 @@
 -module(arizona_diff).
 
 %% --------------------------------------------------------------------
-%% API function exports
+%% Support function exports
 %% --------------------------------------------------------------------
 
 -export([diff/4]).
@@ -15,7 +15,7 @@
 %% Types (and their exports)
 %% --------------------------------------------------------------------
 
--type diff() :: [{index(), arizona_render:rendered_value() | diff()}].
+-type diff() :: [{index(), arizona_renderer:rendered_value() | diff()}].
 -export_type([diff/0]).
 
 -type index() :: non_neg_integer().
@@ -24,20 +24,20 @@
 -type var() :: atom().
 -export_type([var/0]).
 
--type token_callback() :: fun(() -> arizona_render:token()).
+-type token_callback() :: fun(() -> arizona_renderer:token()).
 -export_type([token_callback/0]).
 
 -type options() :: #{force_changed => boolean()}.
 -export_type([options/0]).
 
 %% --------------------------------------------------------------------
-%% API function definitions
+%% Support function definitions
 %% --------------------------------------------------------------------
 
 -spec diff(Payload, Index, View0, Socket0) -> {View1, Socket1} when
     Payload :: Token | RenderedValue,
-    Token :: arizona_render:token(),
-    RenderedValue :: arizona_render:rendered_value(),
+    Token :: arizona_renderer:token(),
+    RenderedValue :: arizona_renderer:rendered_value(),
     Index :: index(),
     View0 :: arizona_view:view(),
     Socket0 :: arizona_socket:socket(),
@@ -184,7 +184,7 @@ mount_view(ParentView0, Socket0, Mod, Assigns, Index) ->
         {ok, View0} ->
             Token = arizona_view:render(View0),
             Socket1 = arizona_socket:set_render_context(render, Socket0),
-            {View1, Socket2} = arizona_render:render(Token, View0, ParentView0, Socket1),
+            {View1, Socket2} = arizona_renderer:render(Token, View0, ParentView0, Socket1),
             Rendered = arizona_view:tmp_rendered(View1),
             ParentView = arizona_view:put_diff(Index, Rendered, ParentView0),
             View2 = arizona_view:set_tmp_rendered([], View1),

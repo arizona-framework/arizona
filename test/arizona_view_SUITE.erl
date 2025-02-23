@@ -116,7 +116,7 @@ render(Config) when is_list(Config) ->
     Socket = arizona_socket:new(render),
     {ok, View} = arizona_view:mount(Mod, Assigns, Socket),
     Token = arizona_view:render(View),
-    Got = arizona_render:render(Token, View, ParentView, Socket),
+    Got = arizona_renderer:render(Token, View, ParentView, Socket),
     ?assertEqual(Expect, Got).
 
 rendered_to_iolist(Config) when is_list(Config) ->
@@ -141,7 +141,7 @@ rendered_to_iolist(Config) when is_list(Config) ->
     Assigns = #{id => ~"app", count => 0},
     {ok, View0} = arizona_view:mount(Mod, Assigns, Socket),
     Token = arizona_view:render(View0),
-    {View, _Socket} = arizona_render:render(Token, View0, ParentView, Socket),
+    {View, _Socket} = arizona_renderer:render(Token, View0, ParentView, Socket),
     Got = arizona_view:rendered_to_iolist(View),
     ?assertEqual(Expect, Got).
 
@@ -154,10 +154,10 @@ render_nested_template_to_iolist(Config) when is_list(Config) ->
         ]
     ],
     ParentView0 = arizona_view:new(#{show_dialog => true, message => ~"Hello, World!"}),
-    Token = arizona_render:nested_template(ParentView0, ~""""
+    Token = arizona_renderer:render_nested_template(ParentView0, ~""""
     <div>
-        {arizona_render:if_true(arizona_view:get_assign(show_dialog, View), fun() ->
-             arizona_render:nested_template(View, ~"""
+        {arizona_renderer:render_if_true(arizona:get_assign(show_dialog, View), fun() ->
+             arizona_renderer:render_nested_template(View, ~"""
              <dialog open>
                  {arizona_view:get_assign(message, View)}
              </dialog>
@@ -166,7 +166,7 @@ render_nested_template_to_iolist(Config) when is_list(Config) ->
     </div>
     """"),
     Socket = arizona_socket:new(render),
-    {ParentView, _Socket} = arizona_render:render(Token, ParentView0, ParentView0, Socket),
+    {ParentView, _Socket} = arizona_renderer:render(Token, ParentView0, ParentView0, Socket),
     Got = arizona_view:rendered_to_iolist(ParentView),
     ?assertEqual(Expect, Got).
 
@@ -231,7 +231,7 @@ render_table_component(Config) when is_list(Config) ->
     },
     View = arizona_view:new(Assigns),
     Token = arizona_component:render(Mod, Fun, View),
-    Got = arizona_render:render(Token, View, View, Socket),
+    Got = arizona_renderer:render(Token, View, View, Socket),
     ?assertEqual(Expect, Got).
 
 render_table_component_to_iolist(Config) when is_list(Config) ->
@@ -287,7 +287,7 @@ render_table_component_to_iolist(Config) when is_list(Config) ->
         ~"</table>"
     ],
     Token = arizona_component:render(Mod, Fun, View0),
-    {View, _Socket} = arizona_render:render(Token, View0, View0, Socket),
+    {View, _Socket} = arizona_renderer:render(Token, View0, View0, Socket),
     Got = arizona_view:rendered_to_iolist(View),
     ?assertEqual(Expect, Got).
 
@@ -361,7 +361,7 @@ diff(Config) when is_list(Config) ->
     {ok, MountedView} = arizona_view:mount(Mod, Assigns, RenderSocket),
     RenderToken = arizona_view:render(MountedView),
     ParentView = arizona_view:new(#{}),
-    {RenderedView, Socket0} = arizona_render:render(
+    {RenderedView, Socket0} = arizona_renderer:render(
         RenderToken, MountedView, ParentView, RenderSocket
     ),
     View0 = arizona_view:set_tmp_rendered([], RenderedView),
@@ -398,7 +398,7 @@ diff_to_iolist(Config) when is_list(Config) ->
     {ok, MountedView} = arizona_view:mount(Mod, Assigns, RenderSocket),
     RenderToken = arizona_view:render(MountedView),
     ParentView = arizona_view:new(#{}),
-    {RenderedView, Socket0} = arizona_render:render(
+    {RenderedView, Socket0} = arizona_renderer:render(
         RenderToken, MountedView, ParentView, RenderSocket
     ),
     View0 = arizona_view:set_tmp_rendered([], RenderedView),

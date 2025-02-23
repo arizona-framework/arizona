@@ -1,32 +1,28 @@
--module(arizona_render).
+-module(arizona_renderer).
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([render_view_template/2]).
+-export([render_component_template/2]).
+-export([render_nested_template/1]).
+-export([render_view/2]).
+-export([render_component/3]).
+-export([render_if_true/2]).
+-export([render_list/2]).
+
+%% --------------------------------------------------------------------
+%% Support function exports
+%% --------------------------------------------------------------------
+
 -export([render/4]).
--export([view_template/2]).
--export([component_template/2]).
--export([nested_template/1]).
--export([nested_template/2]).
--export([view/2]).
--export([component/3]).
--export([if_true/2]).
--export([list/2]).
--export([layout/4]).
+-export([render_nested_template/2]).
+-export([render_layout/4]).
 
 %
 
--ignore_xref([render/4]).
--ignore_xref([view_template/2]).
--ignore_xref([component_template/2]).
--ignore_xref([nested_template/1]).
--ignore_xref([nested_template/2]).
--ignore_xref([view/2]).
--ignore_xref([component/3]).
--ignore_xref([if_true/2]).
--ignore_xref([list/2]).
--ignore_xref([layout/4]).
+-ignore_xref([render_nested_template/2]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -82,6 +78,87 @@ doctest_test() -> doctest:module(?MODULE).
 %% API function definitions
 %% --------------------------------------------------------------------
 
+-spec render_view_template(Payload, Template) -> Token when
+    Payload :: View | Bindings,
+    View :: arizona_view:view(),
+    Bindings :: erl_eval:binding_struct(),
+    Template :: binary() | {file, file:filename_all()},
+    Token :: {view_template, Static, Dynamic},
+    Static :: static_list(),
+    Dynamic :: dynamic_list().
+render_view_template(Bindings, Template) when is_map(Bindings) ->
+    {Static, Dynamic} = parse_template(Bindings, Template),
+    {view_template, Static, Dynamic};
+render_view_template(View, Template) ->
+    Bindings = #{'View' => View},
+    render_view_template(Bindings, Template).
+
+-spec render_component_template(Payload, Template) -> Token when
+    Payload :: View | Bindings,
+    View :: arizona_view:view(),
+    Bindings :: erl_eval:binding_struct(),
+    Template :: binary() | {file, file:filename_all()},
+    Token :: {component_template, Static, Dynamic},
+    Static :: static_list(),
+    Dynamic :: dynamic_list().
+render_component_template(Bindings, Template) when is_map(Bindings) ->
+    {Static, Dynamic} = parse_template(Bindings, Template),
+    {component_template, Static, Dynamic};
+render_component_template(View, Template) ->
+    Bindings = #{'View' => View},
+    render_component_template(Bindings, Template).
+
+-spec render_nested_template(Template) -> Error when
+    Template :: binary(),
+    Error :: no_return().
+render_nested_template(Template) ->
+    missing_parse_transform_error(Template).
+
+-spec render_view(Mod, Assigns) -> Token when
+    Mod :: module(),
+    Assigns :: arizona_view:assigns(),
+    Token :: {view, Mod, Assigns}.
+render_view(Mod, Assigns) when is_atom(Mod), is_map(Assigns), is_map_key(id, Assigns) ->
+    {view, Mod, Assigns}.
+
+-spec render_component(Mod, Fun, Assigns) -> Token when
+    Mod :: module(),
+    Fun :: atom(),
+    Assigns :: arizona_view:assigns(),
+    Token :: {component, Mod, Fun, Assigns}.
+render_component(Mod, Fun, Assigns) when is_atom(Mod), is_atom(Fun), is_map(Assigns) ->
+    {component, Mod, Fun, Assigns}.
+
+-spec render_if_true(Cond, Callback) -> Rendered when
+    Cond :: boolean(),
+    Callback :: fun(() -> Rendered),
+    Rendered :: rendered_value().
+render_if_true(Cond, Callback) when is_function(Callback, 0) ->
+    case Cond of
+        true ->
+            erlang:apply(Callback, []);
+        false ->
+            ~""
+    end.
+
+-spec render_list(Callback, List) -> Token when
+    Callback :: fun((Item :: dynamic()) -> token() | rendered_value()),
+    List :: list(),
+    Token :: {list, Static, DynamicList},
+    Static :: static_list(),
+    DynamicList :: [dynamic_list()].
+render_list(Callback, []) when is_function(Callback, 1) ->
+    {list, [], []};
+render_list(Callback, List) when is_function(Callback, 1), is_list(List) ->
+    NestedTemplates = [erlang:apply(Callback, [Item]) || Item <- List],
+    {nested_template, Static, _Dynamic} = hd(NestedTemplates),
+    DynamicList = [Dynamic || {nested_template, _Static, Dynamic} <- NestedTemplates],
+    {list, Static, DynamicList}.
+
+%% --------------------------------------------------------------------
+%% Support function definitions
+%% --------------------------------------------------------------------
+
 -spec render(Payload, View, ParentView, ParentSocket) -> {View, Socket} when
     Payload :: Token | Rendered,
     Token :: token(),
@@ -110,43 +187,7 @@ render(Bin, _View, View0, Socket) when is_binary(Bin) ->
     View = arizona_view:put_tmp_rendered(Bin, View0),
     {View, Socket}.
 
--spec view_template(Payload, Template) -> Token when
-    Payload :: View | Bindings,
-    View :: arizona_view:view(),
-    Bindings :: erl_eval:binding_struct(),
-    Template :: binary() | {file, file:filename_all()},
-    Token :: {view_template, Static, Dynamic},
-    Static :: static_list(),
-    Dynamic :: dynamic_list().
-view_template(Bindings, Template) when is_map(Bindings) ->
-    {Static, Dynamic} = parse_template(Bindings, Template),
-    {view_template, Static, Dynamic};
-view_template(View, Template) ->
-    Bindings = #{'View' => View},
-    view_template(Bindings, Template).
-
--spec component_template(Payload, Template) -> Token when
-    Payload :: View | Bindings,
-    View :: arizona_view:view(),
-    Bindings :: erl_eval:binding_struct(),
-    Template :: binary() | {file, file:filename_all()},
-    Token :: {component_template, Static, Dynamic},
-    Static :: static_list(),
-    Dynamic :: dynamic_list().
-component_template(Bindings, Template) when is_map(Bindings) ->
-    {Static, Dynamic} = parse_template(Bindings, Template),
-    {component_template, Static, Dynamic};
-component_template(View, Template) ->
-    Bindings = #{'View' => View},
-    component_template(Bindings, Template).
-
--spec nested_template(Template) -> Error when
-    Template :: binary(),
-    Error :: no_return().
-nested_template(Template) ->
-    missing_parse_transform_error(Template).
-
--spec nested_template(Payload, Template) -> Token when
+-spec render_nested_template(Payload, Template) -> Token when
     Payload :: ParentView | Bindings,
     ParentView :: arizona_view:view(),
     Bindings :: erl_eval:binding_struct(),
@@ -154,55 +195,14 @@ nested_template(Template) ->
     Token :: {nested_template, Static, Dynamic},
     Static :: static_list(),
     Dynamic :: dynamic_list().
-nested_template(Bindings, Template) when is_map(Bindings) ->
+render_nested_template(Bindings, Template) when is_map(Bindings) ->
     {Static, Dynamic} = parse_template(Bindings, Template),
     {nested_template, Static, Dynamic};
-nested_template(ParentView, Template) ->
+render_nested_template(ParentView, Template) ->
     Bindings = #{'View' => ParentView},
-    nested_template(Bindings, Template).
+    render_nested_template(Bindings, Template).
 
--spec view(Mod, Assigns) -> Token when
-    Mod :: module(),
-    Assigns :: arizona_view:assigns(),
-    Token :: {view, Mod, Assigns}.
-view(Mod, Assigns) when is_atom(Mod), is_map(Assigns), is_map_key(id, Assigns) ->
-    {view, Mod, Assigns}.
-
--spec component(Mod, Fun, Assigns) -> Token when
-    Mod :: module(),
-    Fun :: atom(),
-    Assigns :: arizona_view:assigns(),
-    Token :: {component, Mod, Fun, Assigns}.
-component(Mod, Fun, Assigns) when is_atom(Mod), is_atom(Fun), is_map(Assigns) ->
-    {component, Mod, Fun, Assigns}.
-
--spec if_true(Cond, Callback) -> Rendered when
-    Cond :: boolean(),
-    Callback :: fun(() -> Rendered),
-    Rendered :: rendered_value().
-if_true(Cond, Callback) when is_function(Callback, 0) ->
-    case Cond of
-        true ->
-            erlang:apply(Callback, []);
-        false ->
-            ~""
-    end.
-
--spec list(Callback, List) -> Token when
-    Callback :: fun((Item :: dynamic()) -> token() | rendered_value()),
-    List :: list(),
-    Token :: {list, Static, DynamicList},
-    Static :: static_list(),
-    DynamicList :: [dynamic_list()].
-list(Callback, []) when is_function(Callback, 1) ->
-    {list, [], []};
-list(Callback, List) when is_function(Callback, 1), is_list(List) ->
-    NestedTemplates = [erlang:apply(Callback, [Item]) || Item <- List],
-    {nested_template, Static, _Dynamic} = hd(NestedTemplates),
-    DynamicList = [Dynamic || {nested_template, _Static, Dynamic} <- NestedTemplates],
-    {list, Static, DynamicList}.
-
--spec layout(LayoutMod, Assigns, InnerContent, Socket0) -> Layout when
+-spec render_layout(LayoutMod, Assigns, InnerContent, Socket0) -> Layout when
     LayoutMod :: module(),
     Assigns :: arizona_view:assigns(),
     InnerContent :: token(),
@@ -210,7 +210,7 @@ list(Callback, List) when is_function(Callback, 1), is_list(List) ->
     Layout :: {LayoutView, Socket1},
     LayoutView :: arizona_view:view(),
     Socket1 :: arizona_socket:socket().
-layout(LayoutMod, Assigns, InnerContent, Socket) ->
+render_layout(LayoutMod, Assigns, InnerContent, Socket) ->
     LayoutView = arizona_view:new(Assigns#{
         inner_content => [InnerContent]
     }),

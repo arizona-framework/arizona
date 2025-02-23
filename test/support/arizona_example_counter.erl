@@ -13,11 +13,11 @@ mount(Assigns, _Socket) ->
     {ok, View}.
 
 render(View) ->
-    arizona_render:view_template(View, ~""""
-    <div id="{arizona_view:get_assign(id, View)}">
-        {integer_to_binary(arizona_view:get_assign(count, View))}
-        {arizona_render:component(arizona_example_components, button, #{
-            text => arizona_view:get_assign(btn_text, View, ~"Increment")
+    arizona:render_view_template(View, ~""""
+    <div id="{arizona:get_assign(id, View)}">
+        {integer_to_binary(arizona:get_assign(count, View))}
+        {arizona:render_component(arizona_example_components, button, #{
+            text => arizona:get_assign(btn_text, View, ~"Increment")
         })}
     </div>
     """").

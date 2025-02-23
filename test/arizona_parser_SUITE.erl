@@ -48,7 +48,8 @@ parse_from_socket(Config) when is_list(Config) ->
                             [
                                 {clause, 3, [{atom, 3, render}], [], [
                                     {call, 4,
-                                        {remote, 4, {atom, 4, arizona_render}, {atom, 4, render}}, [
+                                        {remote, 4, {atom, 4, arizona_renderer}, {atom, 4, render}},
+                                        [
                                             {atom, 4, foo},
                                             {var, 4, 'View'},
                                             {var, 4, 'ViewAcc'},
@@ -85,7 +86,8 @@ parse_from_socket(Config) when is_list(Config) ->
                             [
                                 {clause, 3, [{atom, 3, render}], [], [
                                     {call, 4,
-                                        {remote, 4, {atom, 4, arizona_render}, {atom, 4, render}}, [
+                                        {remote, 4, {atom, 4, arizona_renderer}, {atom, 4, render}},
+                                        [
                                             {tuple, 4, [{atom, 4, bar}]},
                                             {var, 4, 'View'},
                                             {var, 4, 'ViewAcc'},
@@ -124,7 +126,8 @@ parse_from_socket(Config) when is_list(Config) ->
                             [
                                 {clause, 3, [{atom, 3, render}], [], [
                                     {call, 4,
-                                        {remote, 4, {atom, 4, arizona_render}, {atom, 4, render}}, [
+                                        {remote, 4, {atom, 4, arizona_renderer}, {atom, 4, render}},
+                                        [
                                             {cons, 4, {atom, 4, bar}, {nil, 4}},
                                             {var, 4, 'View'},
                                             {var, 4, 'ViewAcc'},
@@ -174,7 +177,7 @@ parse_render(Config) when is_list(Config) ->
             {'fun', 1,
                 {clauses, [
                     {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
-                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
+                        {call, 2, {remote, 2, {atom, 2, arizona_renderer}, {atom, 2, render}}, [
                             {atom, 2, foo},
                             {var, 2, 'View'},
                             {var, 2, 'ViewAcc'},
@@ -185,7 +188,7 @@ parse_render(Config) when is_list(Config) ->
             {'fun', 1,
                 {clauses, [
                     {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
-                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
+                        {call, 2, {remote, 2, {atom, 2, arizona_renderer}, {atom, 2, render}}, [
                             {tuple, 2, [{atom, 2, bar}]},
                             {var, 2, 'View'},
                             {var, 2, 'ViewAcc'},
@@ -196,7 +199,7 @@ parse_render(Config) when is_list(Config) ->
             {'fun', 1,
                 {clauses, [
                     {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
-                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
+                        {call, 2, {remote, 2, {atom, 2, arizona_renderer}, {atom, 2, render}}, [
                             {cons, 2, {atom, 2, bar}, {nil, 2}},
                             {var, 2, 'View'},
                             {var, 2, 'ViewAcc'},
@@ -222,7 +225,7 @@ parse_transform_render_list(Config) when is_list(Config) ->
             {'fun', 1,
                 {clauses, [
                     {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
-                        {call, 2, {remote, 2, {atom, 2, arizona_render}, {atom, 2, render}}, [
+                        {call, 2, {remote, 2, {atom, 2, arizona_renderer}, {atom, 2, render}}, [
                             {tuple, 2, [
                                 {atom, 2, list_template},
                                 {cons, 3,
@@ -254,10 +257,9 @@ parse_transform_render_list(Config) when is_list(Config) ->
                                                     {nil, 5}}}
                                         ]}
                                     ]}},
-                                {call, 7,
-                                    {remote, 7, {atom, 7, arizona_view}, {atom, 7, get_assign}}, [
-                                        {atom, 7, list}, {var, 7, 'View'}
-                                    ]}
+                                {call, 7, {remote, 7, {atom, 7, arizona}, {atom, 7, get_assign}}, [
+                                    {atom, 7, list}, {var, 7, 'View'}
+                                ]}
                             ]},
                             {var, 7, 'View'},
                             {var, 7, 'ViewAcc'},
@@ -267,17 +269,18 @@ parse_transform_render_list(Config) when is_list(Config) ->
                 ]}}
         ]
     },
+
     Tokens = arizona_scanner:scan(#{}, ~""""
     <ul>
-    {arizona_render:list(fun(Item) ->
-        arizona_render:nested_template(#{'View' => View, 'Item' => Item}, ~"""
+    {arizona:render_list(fun(Item) ->
+        arizona:render_nested_template(#{'View' => View, 'Item' => Item}, ~"""
         <li>
             {integer_to_binary(Item)}
             <br/>
             {integer_to_binary(Item)}
         </li>
         """)
-     end, arizona_view:get_assign(list, View))}
+     end, arizona:get_assign(list, View))}
     </ul>
     """"),
     View = arizona_view:new(#{list => [1, 2, 3]}),

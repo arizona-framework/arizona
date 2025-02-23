@@ -5,45 +5,45 @@
 -export([table/1]).
 
 button(View) ->
-    arizona_render:component_template(View, ~"""
+    arizona:render_component_template(View, ~"""
     <button>
-        {arizona_view:get_assign(text, View)}
+        {arizona:get_assign(text, View)}
     </button>
     """).
 
 list(View) ->
-    arizona_render:component_template(View, ~""""
+    arizona:render_component_template(View, ~""""
     <ul>
-        {arizona_render:list(fun(Item) ->
-            arizona_render:nested_template(~"""
+        {arizona:render_list(fun(Item) ->
+            arizona:render_nested_template(~"""
             <li>{Item}</li>
             """)
-         end, arizona_view:get_assign(list, View))}
+         end, arizona:get_assign(list, View))}
     </ul>
     """").
 
 table(View) ->
-    arizona_render:component_template(View, ~"""""
+    arizona:render_component_template(View, ~"""""
     <table>
         <tr>
-            {arizona_render:list(fun(Col) ->
-                arizona_render:nested_template(~"""
+            {arizona:render_list(fun(Col) ->
+                arizona:render_nested_template(~"""
                 <th>{maps:get(label, Col)}</th>
                 """)
-             end, arizona_view:get_assign(columns, View))}
+             end, arizona:get_assign(columns, View))}
         </tr>
-        {arizona_render:list(fun(Row) ->
-            arizona_render:nested_template(~""""
+        {arizona:render_list(fun(Row) ->
+            arizona:render_nested_template(~""""
             <tr>
-                {arizona_render:list(fun(Col) ->
-                    arizona_render:nested_template(~"""
+                {arizona:render_list(fun(Col) ->
+                    arizona:render_nested_template(~"""
                     <td>
                         {erlang:apply(maps:get(callback, Col), [Row])}
                     </td>
                     """)
-                 end, arizona_view:get_assign(columns, View))}
+                 end, arizona:get_assign(columns, View))}
             </tr>
             """")
-         end, arizona_view:get_assign(rows, View))}
+         end, arizona:get_assign(rows, View))}
     </table>
     """"").

@@ -49,11 +49,11 @@ mount(Assigns, _Socket) ->
 
 -spec render(View) -> Token when
     View :: arizona_view:view(),
-    Token :: arizona_render:token().
+    Token :: arizona_renderer:token().
 render(View) ->
-    arizona_render:view_template(View, ~""""
-    <main id="{arizona_view:get_assign(id, View)}">
-        Hello, {arizona_view:get_assign(name, View)}!
+    arizona_renderer:render_view_template(View, ~""""
+    <main id="{arizona:get_assign(id, View)}">
+        Hello, {arizona:get_assign(name, View)}!
     </main>
     """").
 
