@@ -1,4 +1,4 @@
--module(arizona_render).
+-module(arizona_renderer).
 
 %% --------------------------------------------------------------------
 %% API function exports

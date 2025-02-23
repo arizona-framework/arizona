@@ -11,11 +11,11 @@ mount(Assigns, _Socket) ->
     {ok, View}.
 
 render(View) ->
-    arizona_render:view_template(View, ~""""
+    arizona_renderer:view_template(View, ~""""
     <html>
         <head></head>
         <body id="{arizona_view:get_assign(id, View)}">
-            {arizona_render:view(arizona_example_counter, #{
+            {arizona_renderer:view(arizona_example_counter, #{
                 id => ~"counter",
                 count => arizona_view:get_assign(count, View),
                 btn_text => arizona_view:get_assign(btn_text, View, ~"Increment")

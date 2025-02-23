@@ -14,6 +14,6 @@
     Mod :: module(),
     Fun :: atom(),
     View :: arizona_view:view(),
-    Token :: arizona_render:token().
+    Token :: arizona_renderer:token().
 render(Mod, Fun, View) when is_atom(Mod), is_atom(Fun) ->
     erlang:apply(Mod, Fun, [View]).

@@ -89,25 +89,25 @@ transform_function({function, Pos1, Name, Arity, [{clause, Pos2, Pattern, Guards
 transform_function(Form) ->
     Form.
 
-transform_fun_body(arizona_render, view_template, Body, Bindings) ->
+transform_fun_body(arizona_renderer, view_template, Body, Bindings) ->
     [_View, TemplateAst] = Body,
     ParseOpts = #{},
     {Static, Dynamic} = template_to_static_dynamic(TemplateAst, Bindings, ParseOpts),
     Token = token(view_template, [Static, Dynamic]),
     {true, Token};
-transform_fun_body(arizona_render, component_template, Body, Bindings) ->
+transform_fun_body(arizona_renderer, component_template, Body, Bindings) ->
     [_View, TemplateAst] = Body,
     ParseOpts = #{},
     {Static, Dynamic} = template_to_static_dynamic(TemplateAst, Bindings, ParseOpts),
     Token = token(component_template, [Static, Dynamic]),
     {true, Token};
-transform_fun_body(arizona_render, nested_template, Body, Bindings) ->
+transform_fun_body(arizona_renderer, nested_template, Body, Bindings) ->
     TemplateAst = nested_template_ast(Body),
     ParseOpts = #{render_context => render},
     {Static, Dynamic} = template_to_static_dynamic(TemplateAst, Bindings, ParseOpts),
     Token = token(nested_template, [Static, Dynamic]),
     {true, Token};
-transform_fun_body(arizona_render, list, Body, Bindings) ->
+transform_fun_body(arizona_renderer, list, Body, Bindings) ->
     [Callback, List] = Body,
     {Static, Dynamic} = callback_to_static_dynamic(Callback, Bindings),
     Token = token(list_template, [Static, Dynamic, List]),
@@ -119,7 +119,7 @@ callback_to_static_dynamic(Callback0, Bindings) ->
     {'fun', Pos1,
         {clauses, [
             {clause, Pos2, Pattern, Guards, [
-                {call, Pos3, {remote, _, {atom, _, arizona_render}, {atom, _, nested_template}},
+                {call, Pos3, {remote, _, {atom, _, arizona_renderer}, {atom, _, nested_template}},
                     Body}
             ]}
         ]}} = Callback0,

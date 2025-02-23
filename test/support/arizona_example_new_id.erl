@@ -12,7 +12,7 @@ mount(Assigns, _Socket) ->
     {ok, View}.
 
 render(View) ->
-    arizona_render:view_template(View, ~""""
+    arizona_renderer:view_template(View, ~""""
     <div id="{arizona_view:get_assign(id, View)}">
         Hello, {arizona_view:get_assign(name, View)}!
     </div>

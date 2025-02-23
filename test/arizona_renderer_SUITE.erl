@@ -1,4 +1,4 @@
--module(arizona_render_SUITE).
+-module(arizona_renderer_SUITE).
 -behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).
@@ -27,7 +27,7 @@ groups() ->
 
 render_view_template(Config) when is_list(Config) ->
     View = arizona_view:new(#{id => ~"foo", foo => ~"foo", bar => ~"bar"}),
-    Got = arizona_render:view_template(View, ~"""
+    Got = arizona_renderer:view_template(View, ~"""
     <div id="{arizona_view:get_assign(id, View)}">
       {arizona_view:get_assign(foo, View)}
       {arizona_view:get_assign(bar, View)}
@@ -41,7 +41,7 @@ render_view_template(Config) when is_list(Config) ->
 
 render_component_template(Config) when is_list(Config) ->
     View = arizona_view:new(#{foo => ~"foo", bar => ~"bar"}),
-    Got = arizona_render:component_template(View, ~"""
+    Got = arizona_renderer:component_template(View, ~"""
     <div>
       {arizona_view:get_assign(foo, View)}
       {arizona_view:get_assign(bar, View)}
@@ -55,7 +55,7 @@ render_component_template(Config) when is_list(Config) ->
 
 render_nested_template(Config) when is_list(Config) ->
     View = arizona_view:new(#{foo => ~"foo", bar => ~"bar"}),
-    Got = arizona_render:nested_template(View, ~"""
+    Got = arizona_renderer:nested_template(View, ~"""
     <div>
       {arizona_view:get_assign(foo, View)}
       {arizona_view:get_assign(bar, View)}
@@ -70,7 +70,7 @@ render_view(Config) when is_list(Config) ->
     Mod = foo,
     Assigns = #{id => ~"foo"},
     Expect = {view, Mod, Assigns},
-    Got = arizona_render:view(Mod, Assigns),
+    Got = arizona_renderer:view(Mod, Assigns),
     ?assertEqual(Expect, Got).
 
 render_component(Config) when is_list(Config) ->
@@ -78,5 +78,5 @@ render_component(Config) when is_list(Config) ->
     Fun = bar,
     Assigns = #{},
     Expect = {component, Mod, Fun, Assigns},
-    Got = arizona_render:component(Mod, Fun, Assigns),
+    Got = arizona_renderer:component(Mod, Fun, Assigns),
     ?assertEqual(Expect, Got).

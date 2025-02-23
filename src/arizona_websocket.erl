@@ -56,7 +56,7 @@ websocket_init({{Mod, Assigns, _Opts}, Params}) ->
     Socket0 = arizona_socket:new(render),
     {ok, View0} = arizona_view:mount(Mod, Assigns, Socket0),
     Token = arizona_view:render(View0),
-    {_View, Socket1} = arizona_render:render(Token, View0, View0, Socket0),
+    {_View, Socket1} = arizona_renderer:render(Token, View0, View0, Socket0),
     Socket = arizona_socket:set_render_context(diff, Socket1),
     Events = put_init_event(Socket, []),
     {Events, Socket}.

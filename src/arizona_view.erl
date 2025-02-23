@@ -56,7 +56,7 @@
 
 -callback render(View) -> Token when
     View :: view(),
-    Token :: arizona_render:token().
+    Token :: arizona_renderer:token().
 
 -callback handle_event(Event, Payload, View0) -> View1 when
     Event :: event(),
@@ -72,8 +72,8 @@
     module :: undefined | module(),
     assigns :: assigns(),
     changed_assigns :: assigns(),
-    rendered :: arizona_render:rendered(),
-    tmp_rendered :: arizona_render:rendered(),
+    rendered :: arizona_renderer:rendered(),
+    tmp_rendered :: arizona_renderer:rendered(),
     diff :: arizona_diff:diff()
 }).
 -opaque view() :: #view{}.
@@ -121,8 +121,8 @@ new(Mod, Assigns) ->
     Mod :: undefined | module(),
     Assigns :: assigns(),
     ChangedAssigns :: assigns(),
-    Rendered :: arizona_render:rendered(),
-    TmpRendered :: arizona_render:rendered(),
+    Rendered :: arizona_renderer:rendered(),
+    TmpRendered :: arizona_renderer:rendered(),
     Diff :: arizona_diff:diff(),
     View :: view().
 new(Mod, Assigns, ChangedAssigns, Rendered, TmpRendered, Diff) when
@@ -192,19 +192,19 @@ set_changed_assigns(ChangedAssigns, #view{} = View) when is_map(ChangedAssigns) 
 
 -spec rendered(View) -> Rendered when
     View :: arizona_view:view(),
-    Rendered :: arizona_render:rendered().
+    Rendered :: arizona_renderer:rendered().
 rendered(#view{} = View) ->
     View#view.rendered.
 
 -spec set_rendered(Rendered, View0) -> View1 when
-    Rendered :: arizona_render:rendered(),
+    Rendered :: arizona_renderer:rendered(),
     View0 :: view(),
     View1 :: view().
 set_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
     View#view{rendered = Rendered}.
 
 -spec put_rendered(Rendered, View0) -> View1 when
-    Rendered :: arizona_render:rendered_value(),
+    Rendered :: arizona_renderer:rendered_value(),
     View0 :: view(),
     View1 :: view().
 put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendered) ->
@@ -212,19 +212,19 @@ put_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendere
 
 -spec tmp_rendered(View) -> Rendered when
     View :: view(),
-    Rendered :: arizona_render:rendered().
+    Rendered :: arizona_renderer:rendered().
 tmp_rendered(#view{} = View) ->
     View#view.tmp_rendered.
 
 -spec set_tmp_rendered(Rendered, View0) -> View1 when
-    Rendered :: arizona_render:rendered(),
+    Rendered :: arizona_renderer:rendered(),
     View0 :: view(),
     View1 :: view().
 set_tmp_rendered(Rendered, #view{} = View) when is_list(Rendered) ->
     View#view{tmp_rendered = Rendered}.
 
 -spec put_tmp_rendered(Rendered, View0) -> View1 when
-    Rendered :: arizona_render:rendered_value(),
+    Rendered :: arizona_renderer:rendered_value(),
     View0 :: view(),
     View1 :: view().
 put_tmp_rendered(Rendered, #view{} = View) when is_binary(Rendered); is_list(Rendered) ->
@@ -245,7 +245,7 @@ set_diff(Diff, #view{} = View) when is_list(Diff) ->
 
 -spec put_diff(Index, Payload, View0) -> View1 when
     Index :: arizona_diff:index(),
-    Payload :: arizona_diff:diff() | arizona_render:rendered_value(),
+    Payload :: arizona_diff:diff() | arizona_renderer:rendered_value(),
     View0 :: view(),
     View1 :: view().
 put_diff(Index, [], #view{} = View) when is_integer(Index), Index >= 0 ->
@@ -275,7 +275,7 @@ Formats the tmp_renderedcontent to `t:iolist/0`.
 > Socket = arizona_socket:new(render).
 > {ok, View0} = arizona_view:mount(Mod, Assigns, Socket).
 > Rendered = arizona_view:render(View0).
-> {View, _Socket} = arizona_render:render(Rendered, View0, View0, Socket).
+> {View, _Socket} = arizona_renderer:render(Rendered, View0, View0, Socket).
 > arizona_view:rendered_to_iolist(View).
 [<<"<html>\n    <head></head>\n    <body id=\"">>,<<"app">>,<<"\"> ">>,
  [<<"<div id=\"">>,<<"counter">>,<<"\"> ">>,<<"0">>,<<>>,
@@ -291,7 +291,7 @@ rendered_to_iolist(#view{} = View) ->
 
 -spec diff_to_iolist(View) -> Rendered when
     View :: view(),
-    Rendered :: arizona_render:rendered().
+    Rendered :: arizona_renderer:rendered().
 diff_to_iolist(#view{} = View) ->
     case View#view.diff of
         [] ->
@@ -314,7 +314,7 @@ mount(Mod, Assigns, Socket) when is_atom(Mod), Mod =/= undefined, is_map(Assigns
 
 -spec render(View) -> Token when
     View :: view(),
-    Token :: arizona_render:token().
+    Token :: arizona_renderer:token().
 render(#view{module = Mod} = View) when Mod =/= undefined ->
     erlang:apply(Mod, render, [View]).
 
