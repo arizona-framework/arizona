@@ -14,8 +14,8 @@ globalThis['arizona'] = (() => {
     send(undefined, 'connect', params);
   }
 
-  function send(viewId, event, payload) {
-    sendMsgToWorker.bind(this)(viewId, event, payload);
+  function send(viewId, eventName, payload) {
+    sendMsgToWorker.bind(this)(viewId, eventName, payload);
   }
 
   function subscribe(eventName, callback, opts = {}) {
@@ -77,8 +77,8 @@ globalThis['arizona'] = (() => {
   // Private functions
   // --------------------------------------------------------------------
 
-  function sendMsgToWorker(viewId, event, payload) {
-    worker.postMessage({ viewId, event, payload });
+  function sendMsgToWorker(viewId, eventName, payload) {
+    worker.postMessage({ viewId, eventName, payload });
   }
 
   // --------------------------------------------------------------------
@@ -92,8 +92,8 @@ globalThis['arizona'] = (() => {
   worker.addEventListener('message', function(e) {
     console.log('[WebWorker] msg:', e.data);
 
-    const { event, payload } = e.data;
-    switch (event) {
+    const { eventName, payload } = e.data;
+    switch (eventName) {
       case 'patch': {
         const [viewId, html] = payload;
         const elem = document.getElementById(viewId);
@@ -111,7 +111,7 @@ globalThis['arizona'] = (() => {
         });
       }
     }
-    subscribers.get(event)?.forEach(function({ id, callback, opts }) {
+    subscribers.get(eventName)?.forEach(function({ id, callback, opts }) {
       callback(payload);
       opts.once && unsubscribe(id);
     });
