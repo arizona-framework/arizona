@@ -35,26 +35,26 @@ groups() ->
 
 scan(Config) when is_list(Config) ->
     Expect = [
-        {comment, {59, 5}, ~"start"},
-        {html, {60, 5}, ~"Text1 "},
-        {erlang, {61, 5}, ~"{{{expr1}}}"},
-        {comment, {62, 5}, ~"before text"},
-        {html, {62, 20}, ~"Text2\nText3"},
-        {comment, {63, 10}, ~"after text"},
-        {comment, {64, 5}, ~"before expr"},
-        {erlang, {64, 21}, ~"expr2"},
-        {erlang, {65, 5}, ~"expr3"},
-        {comment, {65, 12}, ~"after expr"},
-        {html, {66, 5}, ~"Text4"},
-        {comment, {66, 10}, ~"between text"},
-        {html, {66, 26}, ~"Text5 "},
-        {erlang, {67, 5}, ~"expr4"},
-        {comment, {67, 12}, ~"between expr"},
-        {erlang, {67, 28}, ~"expr5"},
-        {comment, {68, 5}, ~"mutiple\nlines of\ncomment"},
-        {erlang, {71, 5}, ~"expr6"},
-        {erlang, {71, 12}, ~"Foo = foo, case Foo of foo -> {foo, expr7}; _ -> expr7 end"},
-        {comment, {72, 5}, ~"end"}
+        {comment, {60, 5}, ~"start"},
+        {html, {61, 5}, ~"Text1 "},
+        {erlang, {62, 5}, ~"{{{expr1}}}"},
+        {comment, {63, 5}, ~"before text"},
+        {html, {63, 20}, ~"Text2\nText3"},
+        {comment, {64, 10}, ~"after text"},
+        {comment, {65, 5}, ~"before expr"},
+        {erlang, {65, 21}, ~"expr2"},
+        {erlang, {66, 5}, ~"expr3"},
+        {comment, {66, 12}, ~"after expr"},
+        {html, {67, 5}, ~"Text4"},
+        {comment, {67, 10}, ~"between text"},
+        {html, {67, 26}, ~"Text5 "},
+        {erlang, {68, 5}, ~"expr4"},
+        {comment, {68, 12}, ~"between expr"},
+        {erlang, {68, 28}, ~"expr5"},
+        {comment, {69, 5}, ~"mutiple\nlines of\ncomment"},
+        {erlang, {72, 5}, ~"expr6"},
+        {erlang, {72, 12}, ~"Foo = foo, case Foo of foo -> {foo, expr7}; _ -> expr7 end"},
+        {comment, {73, 5}, ~"end"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
     {%   start  }
@@ -97,9 +97,9 @@ scan_comment(Config) when is_list(Config) ->
 
 scan_start_html_end_html(Config) when is_list(Config) ->
     Expect = [
-        {html, {104, 5}, ~"Text1\nText2"},
-        {erlang, {105, 10}, ~"expr1"},
-        {html, {105, 17}, ~"Text3\nText4"}
+        {html, {105, 5}, ~"Text1\nText2"},
+        {erlang, {106, 10}, ~"expr1"},
+        {html, {106, 17}, ~"Text3\nText4"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
     Text1
@@ -110,10 +110,10 @@ scan_start_html_end_html(Config) when is_list(Config) ->
 
 scan_start_html_end_erlang(Config) when is_list(Config) ->
     Expect = [
-        {html, {118, 5}, ~"Text1\nText2"},
-        {erlang, {119, 10}, ~"expr1"},
-        {html, {119, 17}, ~"Text3\nText4 "},
-        {erlang, {121, 5}, ~"expr2"}
+        {html, {119, 5}, ~"Text1\nText2"},
+        {erlang, {120, 10}, ~"expr1"},
+        {html, {120, 17}, ~"Text3\nText4 "},
+        {erlang, {122, 5}, ~"expr2"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
     Text1
@@ -125,10 +125,10 @@ scan_start_html_end_erlang(Config) when is_list(Config) ->
 
 scan_start_erlang_end_html(Config) when is_list(Config) ->
     Expect = [
-        {erlang, {133, 5}, ~"expr1"},
-        {html, {134, 5}, ~"Text1\nText2"},
-        {erlang, {135, 10}, ~"expr2"},
-        {html, {135, 17}, ~"Text3\nText4"}
+        {erlang, {134, 5}, ~"expr1"},
+        {html, {135, 5}, ~"Text1\nText2"},
+        {erlang, {136, 10}, ~"expr2"},
+        {html, {136, 17}, ~"Text3\nText4"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
     {expr1}
@@ -140,11 +140,11 @@ scan_start_erlang_end_html(Config) when is_list(Config) ->
 
 scan_start_erlang_end_erlang(Config) when is_list(Config) ->
     Expect = [
-        {erlang, {149, 5}, ~"expr1"},
-        {html, {150, 5}, ~"Text1\nText2"},
-        {erlang, {151, 10}, ~"expr2"},
-        {html, {151, 17}, ~"Text3\nText4 "},
-        {erlang, {153, 5}, ~"expr3"}
+        {erlang, {150, 5}, ~"expr1"},
+        {html, {151, 5}, ~"Text1\nText2"},
+        {erlang, {152, 10}, ~"expr2"},
+        {html, {152, 17}, ~"Text3\nText4 "},
+        {erlang, {154, 5}, ~"expr3"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1, indentation => 4}, ~"""
     {expr1}
