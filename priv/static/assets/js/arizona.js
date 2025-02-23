@@ -49,7 +49,7 @@ globalThis['arizona'] = (() => {
       unsubscribers,
     });
 
-    return function() {
+    return function () {
       unsubscribe(id);
     };
   }
@@ -89,7 +89,7 @@ globalThis['arizona'] = (() => {
   const subscribers = new Map();
   const unsubscribers = new Map();
 
-  worker.addEventListener('message', function(e) {
+  worker.addEventListener('message', function (e) {
     console.log('[WebWorker] msg:', e.data);
 
     const { eventName, payload } = e.data;
@@ -102,13 +102,13 @@ globalThis['arizona'] = (() => {
         });
       }
     }
-    subscribers.get(eventName)?.forEach(function({ id, callback, opts }) {
+    subscribers.get(eventName)?.forEach(function ({ id, callback, opts }) {
       callback(payload);
       opts.once && unsubscribe(id);
     });
   });
 
-  worker.addEventListener('error', function(e) {
+  worker.addEventListener('error', function (e) {
     console.error('[WebWorker] error:', e);
   });
 
