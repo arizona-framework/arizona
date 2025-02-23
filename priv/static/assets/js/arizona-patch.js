@@ -1,6 +1,10 @@
 /* global module */
 'use strict';
 
+// --------------------------------------------------------------------
+// API function definitions
+// --------------------------------------------------------------------
+
 function patch(rendered, diff) {
   if (rendered[0] === 'template' && rendered.length === 3) {
     const staticList = rendered[1];
@@ -14,6 +18,10 @@ function patch(rendered, diff) {
     return rendered;
   }
 }
+
+// --------------------------------------------------------------------
+// Private functions
+// --------------------------------------------------------------------
 
 function patchTemplate(staticList, dynamicList, diff) {
   dynamicList = patchDynamic(dynamicList, diff);
@@ -43,6 +51,10 @@ function zip(staticList, dynamicList, diff) {
   }
   return str;
 }
+
+// --------------------------------------------------------------------
+// Namespace initialization
+// --------------------------------------------------------------------
 
 try {
   module.exports.patch = patch;

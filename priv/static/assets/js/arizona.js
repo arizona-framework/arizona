@@ -2,11 +2,9 @@
 'use strict';
 
 globalThis['arizona'] = (() => {
-  const worker = new Worker('assets/js/arizona/worker.js');
-  const subscribers = new Map();
-  const unsubscribers = new Map();
-
-  // API functions
+  // --------------------------------------------------------------------
+  // API function definitions
+  // --------------------------------------------------------------------
 
   function connect(params) {
     params = {
@@ -51,7 +49,7 @@ globalThis['arizona'] = (() => {
       unsubscribers,
     });
 
-    return function () {
+    return function() {
       unsubscribe(id);
     };
   }
@@ -75,15 +73,23 @@ globalThis['arizona'] = (() => {
     });
   }
 
+  // --------------------------------------------------------------------
   // Private functions
+  // --------------------------------------------------------------------
 
   function sendMsgToWorker(viewId, event, payload) {
     worker.postMessage({ viewId, event, payload });
   }
 
-  // Init
+  // --------------------------------------------------------------------
+  // Namespace initialization
+  // --------------------------------------------------------------------
 
-  worker.addEventListener('message', function (e) {
+  const worker = new Worker('assets/js/arizona/worker.js');
+  const subscribers = new Map();
+  const unsubscribers = new Map();
+
+  worker.addEventListener('message', function(e) {
     console.log('[WebWorker] msg:', e.data);
 
     const { event, payload } = e.data;
@@ -94,7 +100,7 @@ globalThis['arizona'] = (() => {
         morphdom(elem, html, {
           // Can I make morphdom blaze through the DOM tree even faster? Yes.
           // @see https://github.com/patrick-steele-idem/morphdom#can-i-make-morphdom-blaze-through-the-dom-tree-even-faster-yes
-          onBeforeElUpdated: function (fromEl, toEl) {
+          onBeforeElUpdated: function(fromEl, toEl) {
             // spec - https://dom.spec.whatwg.org/#concept-node-equals
             if (fromEl.isEqualNode(toEl)) {
               return false;
@@ -105,13 +111,13 @@ globalThis['arizona'] = (() => {
         });
       }
     }
-    subscribers.get(event)?.forEach(function ({ id, callback, opts }) {
+    subscribers.get(event)?.forEach(function({ id, callback, opts }) {
       callback(payload);
       opts.once && unsubscribe(id);
     });
   });
 
-  worker.addEventListener('error', function (e) {
+  worker.addEventListener('error', function(e) {
     console.error('[WebWorker] error:', e);
   });
 
