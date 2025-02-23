@@ -19,6 +19,7 @@ init_per_suite(Config) ->
                     {"/hello-world", arizona_view_handler,
                         {?MODULE,
                             #{
+                                data_dir => proplists:get_value(data_dir, Config),
                                 title => ~"Arizona",
                                 id => ~"helloWorld",
                                 name => ~"World"

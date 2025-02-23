@@ -114,11 +114,11 @@ render(Bin, _View, View0, Socket) when is_binary(Bin) ->
     Payload :: View | Bindings,
     View :: arizona_view:view(),
     Bindings :: erl_eval:binding_struct(),
-    Template :: binary(),
+    Template :: binary() | {file, file:filename_all()},
     Token :: {view_template, Static, Dynamic},
     Static :: static_list(),
     Dynamic :: dynamic_list().
-view_template(Bindings, Template) when is_map(Bindings), is_binary(Template) ->
+view_template(Bindings, Template) when is_map(Bindings) ->
     {Static, Dynamic} = parse_template(Bindings, Template),
     {view_template, Static, Dynamic};
 view_template(View, Template) ->
@@ -129,11 +129,11 @@ view_template(View, Template) ->
     Payload :: View | Bindings,
     View :: arizona_view:view(),
     Bindings :: erl_eval:binding_struct(),
-    Template :: binary(),
+    Template :: binary() | {file, file:filename_all()},
     Token :: {component_template, Static, Dynamic},
     Static :: static_list(),
     Dynamic :: dynamic_list().
-component_template(Bindings, Template) when is_map(Bindings), is_binary(Template) ->
+component_template(Bindings, Template) when is_map(Bindings) ->
     {Static, Dynamic} = parse_template(Bindings, Template),
     {component_template, Static, Dynamic};
 component_template(View, Template) ->
@@ -150,11 +150,11 @@ nested_template(Template) ->
     Payload :: ParentView | Bindings,
     ParentView :: arizona_view:view(),
     Bindings :: erl_eval:binding_struct(),
-    Template :: binary(),
+    Template :: binary() | {file, file:filename_all()},
     Token :: {nested_template, Static, Dynamic},
     Static :: static_list(),
     Dynamic :: dynamic_list().
-nested_template(Bindings, Template) when is_map(Bindings), is_binary(Template) ->
+nested_template(Bindings, Template) when is_map(Bindings) ->
     {Static, Dynamic} = parse_template(Bindings, Template),
     {nested_template, Static, Dynamic};
 nested_template(ParentView, Template) ->
@@ -326,12 +326,15 @@ fold([Dynamic | T], View0, ParentView, Socket0) ->
     {View, Socket} = render(Dynamic, View0, ParentView, Socket0),
     fold(T, View, ParentView, Socket).
 
-parse_template(Bindings, Template) ->
+parse_template(Bindings, Template) when is_binary(Template) ->
     Tokens = arizona_scanner:scan(#{}, Template),
     {StaticAst, DynamicAst} = arizona_parser:parse(Tokens, #{}),
     Static = eval_static_ast(StaticAst),
     Dynamic = eval_dynamic_ast(Bindings, DynamicAst),
-    {Static, Dynamic}.
+    {Static, Dynamic};
+parse_template(Bindings, {file, Filename}) ->
+    {ok, Template} = file:read_file(Filename),
+    parse_template(Bindings, Template).
 
 eval_static_ast(Ast) ->
     [eval_expr(Expr, []) || Expr <- Ast].
