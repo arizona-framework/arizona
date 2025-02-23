@@ -1,5 +1,5 @@
 /* global patch */
-"use strict";
+'use strict';
 
 const state = {
   params: {},
@@ -7,31 +7,31 @@ const state = {
   views: [],
 };
 
-self.importScripts("/assets/js/arizona/patch.js");
+self.importScripts('/assets/js/arizona/patch.js');
 
 // Messages from client
 self.onmessage = function (e) {
   const { data: msg } = e;
 
-  console.log("[WebWorker] client sent:", msg);
+  console.log('[WebWorker] client sent:', msg);
 
-  if (typeof msg !== "object" || !msg.event) {
-    console.error("[WebWorker] invalid message format:", msg);
+  if (typeof msg !== 'object' || !msg.eventName) {
+    console.error('[WebWorker] invalid message format:', msg);
     return;
   }
 
-  const { viewId, event, payload } = msg;
-  switch (event) {
-    case "connect":
+  const { viewId, eventName, payload } = msg;
+  switch (eventName) {
+    case 'connect':
       connect(payload);
       break;
     default:
       if (!viewId) {
-        console.error("[WebWorker] missing view ID");
+        console.error('[WebWorker] missing view ID');
         return;
       }
 
-      sendMsgToServer([viewId, event, payload]);
+      sendToServer([viewId, eventName, payload]);
   }
 };
 
@@ -44,19 +44,19 @@ function connect(params) {
     state.socket = socket;
 
     socket.onopen = function () {
-      console.log("[WebSocket] connected:", state);
-      sendMsgToClient("connect");
+      console.log('[WebSocket] connected:', state);
+      sendToClient('connect');
 
       resolve();
     };
 
     socket.onclose = function (e) {
-      console.log("[WebSocket] disconnected:", e);
+      console.log('[WebSocket] disconnected:', e);
     };
 
     // Messages from server
     socket.onmessage = function (e) {
-      console.log("[WebSocket] msg:", e.data);
+      console.log('[WebSocket] msg:', e.data);
       const data = JSON.parse(e.data);
       Array.isArray(data) ? data.forEach(handleEvent) : handleEvent(data);
     };
@@ -64,45 +64,45 @@ function connect(params) {
 }
 
 function handleEvent(data) {
-  const event = data[0];
+  const eventName = data[0];
   const payload = data[1];
-  switch (event) {
-    case "init": {
+  switch (eventName) {
+    case 'init': {
       state.views = payload;
       break;
     }
-    case "patch": {
+    case 'patch': {
       const [viewId, diff] = payload;
       const rendered = state.views[viewId];
       const html = patch(rendered, diff);
-      sendMsgToClient("patch", [viewId, html]);
+      sendToClient('patch', [viewId, html]);
       break;
     }
     default: {
-      sendMsgToClient(event, payload);
+      sendToClient(eventName, payload);
       break;
     }
   }
 }
 
-function sendMsgToClient(event, payload) {
-  self.postMessage({ event, payload });
+function sendToClient(eventName, payload) {
+  self.postMessage({ eventName, payload });
 }
 
-function sendMsgToServer([viewId, event, payload]) {
+function sendToServer([viewId, eventName, payload]) {
   state.socket.send(
     payload
-      ? JSON.stringify([viewId, event, payload], state)
-      : JSON.stringify([viewId, event]),
+      ? JSON.stringify([viewId, eventName, payload], state)
+      : JSON.stringify([viewId, eventName]),
   );
 }
 
 function genSocketUrl(params) {
-  const proto = "ws";
+  const proto = 'ws';
   const host = location.host;
-  const uri = "/websocket";
+  const uri = '/websocket';
   const qs = `?${Object.keys(params)
     .map((key) => `${key}=${encodeURIComponent(params[key])}`)
-    .join("&")}`;
+    .join('&')}`;
   return `${proto}://${host}${uri}${qs}`;
 }

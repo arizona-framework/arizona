@@ -1,33 +1,31 @@
 /* global morphdom */
-"use strict";
+'use strict';
 
-globalThis["arizona"] = (() => {
-  const worker = new Worker("assets/js/arizona/worker.js");
-  const subscribers = new Map();
-  const unsubscribers = new Map();
-
-  // API functions
+globalThis['arizona'] = (() => {
+  // --------------------------------------------------------------------
+  // API function definitions
+  // --------------------------------------------------------------------
 
   function connect(params) {
     params = {
       ...params,
       path: location.pathname,
     };
-    send(undefined, "connect", params);
+    send(undefined, 'connect', params);
   }
 
-  function send(viewId, event, payload) {
-    sendMsgToWorker.bind(this)(viewId, event, payload);
+  function send(viewId, eventName, payload) {
+    sendToWorker.bind(this)(viewId, eventName, payload);
   }
 
   function subscribe(eventName, callback, opts = {}) {
     if (
-      typeof eventName !== "string" ||
-      typeof callback !== "function" ||
-      typeof opts !== "object" ||
+      typeof eventName !== 'string' ||
+      typeof callback !== 'function' ||
+      typeof opts !== 'object' ||
       Array.isArray(opts)
     ) {
-      console.error("[Arizona] invalid subscribe data:", {
+      console.error('[Arizona] invalid subscribe data:', {
         eventName,
         callback,
         opts,
@@ -44,7 +42,7 @@ globalThis["arizona"] = (() => {
     unsubscribers.set(id, eventName);
 
     console.table({
-      action: "subscribed",
+      action: 'subscribed',
       eventName,
       id,
       subscribers,
@@ -67,7 +65,7 @@ globalThis["arizona"] = (() => {
       : subscribers.delete(eventName);
     unsubscribers.delete(id);
     console.table({
-      action: "unsubscribed",
+      action: 'unsubscribed',
       eventName,
       id,
       subscribers,
@@ -75,44 +73,43 @@ globalThis["arizona"] = (() => {
     });
   }
 
+  // --------------------------------------------------------------------
   // Private functions
+  // --------------------------------------------------------------------
 
-  function sendMsgToWorker(viewId, event, payload) {
-    worker.postMessage({ viewId, event, payload });
+  function sendToWorker(viewId, eventName, payload) {
+    worker.postMessage({ viewId, eventName, payload });
   }
 
-  // Init
+  // --------------------------------------------------------------------
+  // Namespace initialization
+  // --------------------------------------------------------------------
 
-  worker.addEventListener("message", function (e) {
-    console.log("[WebWorker] msg:", e.data);
+  const worker = new Worker('assets/js/arizona/worker.js');
+  const subscribers = new Map();
+  const unsubscribers = new Map();
 
-    const { event, payload } = e.data;
-    switch (event) {
-      case "patch": {
+  worker.addEventListener('message', function (e) {
+    console.log('[WebWorker] msg:', e.data);
+
+    const { eventName, payload } = e.data;
+    switch (eventName) {
+      case 'patch': {
         const [viewId, html] = payload;
         const elem = document.getElementById(viewId);
         morphdom(elem, html, {
-          // Can I make morphdom blaze through the DOM tree even faster? Yes.
-          // @see https://github.com/patrick-steele-idem/morphdom#can-i-make-morphdom-blaze-through-the-dom-tree-even-faster-yes
-          onBeforeElUpdated: function (fromEl, toEl) {
-            // spec - https://dom.spec.whatwg.org/#concept-node-equals
-            if (fromEl.isEqualNode(toEl)) {
-              return false;
-            }
-
-            return true;
-          },
+          onBeforeElUpdated: (from, to) => !from.isEqualNode(to),
         });
       }
     }
-    subscribers.get(event)?.forEach(function ({ id, callback, opts }) {
+    subscribers.get(eventName)?.forEach(function ({ id, callback, opts }) {
       callback(payload);
       opts.once && unsubscribe(id);
     });
   });
 
-  worker.addEventListener("error", function (e) {
-    console.error("[WebWorker] error:", e);
+  worker.addEventListener('error', function (e) {
+    console.error('[WebWorker] error:', e);
   });
 
   return Object.freeze({ connect, send, subscribe, unsubscribe });
