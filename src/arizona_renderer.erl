@@ -210,14 +210,9 @@ render_nested_template(ParentView, Template) ->
     Layout :: {LayoutView, Socket1},
     LayoutView :: arizona_view:view(),
     Socket1 :: arizona_socket:socket().
-render_layout(Mod, Assigns, InnerContent, Socket) ->
-    View = arizona_layout:mount(
-        Mod,
-        Assigns#{
-            inner_content => [InnerContent]
-        },
-        Socket
-    ),
+render_layout(Mod, Assigns0, InnerContent, Socket) ->
+    Assigns = Assigns0#{inner_content => [InnerContent]},
+    View = arizona_layout:mount(Mod, Assigns, Socket),
     Token = arizona_layout:render(View),
     render(Token, View, View, Socket).
 
