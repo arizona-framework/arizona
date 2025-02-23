@@ -1,142 +1,122 @@
 -module(arizona_socket).
--moduledoc """
-Components state.
-""".
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([new/1]).
 -export([new/2]).
--export([put_assigns/2]).
--export([put_assign/3]).
--export([get_assigns/1]).
--export([get_changes/1]).
--export([get_view/1]).
--export([get_block/1]).
--export([set_block/2]).
--export([get_events/1]).
--export([get_assign/2]).
--export([get_assign/3]).
--export([push_event/3]).
--export([prune/1]).
+-export([render_context/1]).
+-export([set_render_context/2]).
+-export([views/1]).
+-export([put_view/2]).
+-export([put_view/3]).
+-export([get_view/2]).
+-export([remove_view/2]).
 
 %
 
--ignore_xref([put_assigns/2]).
--ignore_xref([put_assign/3]).
--ignore_xref([get_assigns/1]).
--ignore_xref([get_assign/2]).
--ignore_xref([get_assign/3]).
+-ignore_xref([new/1]).
+-ignore_xref([new/2]).
+-ignore_xref([render_context/1]).
+-ignore_xref([put_view/3]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
 %% --------------------------------------------------------------------
 
--opaque t() :: map().
--export_type([t/0]).
+-record(socket, {
+    render_context :: render_context(),
+    views :: views()
+}).
+-opaque socket() :: #socket{}.
+-export_type([socket/0]).
 
--type view() :: module().
--export_type([view/0]).
+-type render_context() :: render | diff.
+-export_type([render_context/0]).
 
--type events() :: list().
--export_type([events/0]).
+-type views() :: #{arizona_view:id() => arizona_view:view()}.
+-export_type([views/0]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec new(View, Assigns) -> t()
-    when View :: view(),
-         Assigns :: arizona_template_renderer:assigns().
-new(View, Assigns) ->
-    #{
-        view => View,
-        block => undefined,
-        assigns => Assigns,
-        events => [],
-        changes => ordsets:new()
+-spec new(RenderContext) -> Socket when
+    RenderContext :: render_context(),
+    Socket :: socket().
+new(RenderContext) ->
+    new(RenderContext, #{}).
+
+-spec new(RenderContext, Views) -> Socket when
+    RenderContext :: render_context(),
+    Views :: views(),
+    Socket :: socket().
+new(RenderContext, Views) ->
+    #socket{
+        render_context = RenderContext,
+        views = Views
     }.
 
--spec put_assigns(Assigns, Socket1) -> Socket2
-    when Assigns :: arizona_template_renderer:assigns(),
-         Socket1 :: t(),
-         Socket2 :: t().
-put_assigns(Assigns, Socket) ->
-    maps:fold(fun put_assign/3, Socket, Assigns).
+-spec render_context(Socket) -> RenderContext when
+    Socket :: socket(),
+    RenderContext :: render_context().
+render_context(#socket{} = Socket) ->
+    Socket#socket.render_context.
 
--spec put_assign(Key, Value, Socket1) -> Socket2
-    when Key :: atom(),
-         Value :: term(),
-         Socket1 :: t(),
-         Socket2 :: t().
-put_assign(Key, Value, Socket) ->
-    #{assigns := Assigns, changes := Changes} = Socket,
-    case Assigns of
-        #{Key := Value} ->
-            Socket;
-        #{} ->
-            Socket#{
-                assigns => Assigns#{Key => Value},
-                changes => ordsets:add_element(Key, Changes)
-            }
+-spec set_render_context(RenderContext, Socket0) -> Socket1 when
+    RenderContext :: render_context(),
+    Socket0 :: socket(),
+    Socket1 :: socket().
+set_render_context(render, #socket{} = Socket) ->
+    Socket#socket{render_context = render};
+set_render_context(diff, #socket{} = Socket) ->
+    Socket#socket{render_context = diff}.
+
+-spec views(Socket) -> Views when
+    Socket :: socket(),
+    Views :: views().
+views(#socket{} = Socket) ->
+    Socket#socket.views.
+
+-spec put_view(View, Socket0) -> Socket1 when
+    View :: arizona_view:view(),
+    Socket0 :: socket(),
+    Socket1 :: socket().
+put_view(View, Socket) ->
+    ViewId = arizona_view:get_assign(id, View),
+    put_view(ViewId, View, Socket).
+
+-spec put_view(ViewId, View, Socket0) -> Socket1 when
+    ViewId :: arizona_view:id(),
+    View :: arizona_view:view(),
+    Socket0 :: socket(),
+    Socket1 :: socket().
+put_view(ViewId, View0, #socket{views = Views} = Socket) when is_binary(ViewId) ->
+    case Socket#socket.render_context of
+        render ->
+            View = arizona_view:set_tmp_rendered([], View0),
+            Socket#socket{views = Views#{ViewId => View}};
+        diff ->
+            View = arizona_view:set_diff([], View0),
+            Socket#socket{views = Views#{ViewId => View}}
     end.
 
--spec get_assigns(t()) -> arizona_template_renderer:assigns().
-get_assigns(#{assigns := Assigns}) ->
-    Assigns.
+-spec get_view(ViewId, Socket) -> {ok, View} | error when
+    ViewId :: arizona_view:id(),
+    Socket :: socket(),
+    View :: arizona_view:view().
+get_view(ViewId, #socket{} = Socket) when is_binary(ViewId) ->
+    case Socket#socket.views of
+        #{ViewId := View} ->
+            {ok, View};
+        #{} ->
+            error
+    end.
 
--spec get_changes(t()) -> ordsets:ordset(atom()).
-get_changes(#{changes := Changes}) ->
-    Changes.
-
--spec get_view(t()) -> view().
-get_view(#{view := View}) ->
-    View.
-
--spec get_block(t()) -> arizona_template_compiler:block().
-get_block(#{block := Block}) ->
-    Block.
-
--spec set_block(Block, Socket1) -> Socket2
-    when Block :: arizona_template_compiler:block(),
-         Socket1 :: t(),
-         Socket2 :: t().
-set_block(Block, Socket) ->
-    Socket#{block => Block}.
-
--spec get_events(t()) -> events().
-get_events(#{events := Events}) ->
-    Events.
-
--spec get_assign(Key, t()) -> Got
-    when Key :: atom(),
-         Got :: term().
-get_assign(Key, Socket) ->
-    #{assigns := Assigns} = Socket,
-    maps:get(Key, Assigns).
-
--spec get_assign(Key, t(), Default) -> Got
-    when Key :: atom(),
-         Default :: term(),
-         Got :: term().
-get_assign(Key, Socket, Default) ->
-    #{assigns := Assigns} = Socket,
-    maps:get(Key, Assigns, Default).
-
--spec push_event(EventName, Payload, Socket1) -> Socket2
-    when EventName :: binary(),
-         Payload :: arizona:payload(),
-         Socket1 :: t(),
-         Socket2 :: t().
-push_event(Name, Payload, #{events := Events} = Socket) ->
-    Socket#{events => [[Name, Payload] | Events]}.
-
--spec prune(Socket1) -> Socket2
-    when Socket1 :: t(),
-         Socket2 :: t().
-prune(Socket) ->
-    Socket#{
-        events => [],
-        changes => ordsets:new()
-    }.
+-spec remove_view(ViewId, Socket0) -> Socket1 when
+    ViewId :: arizona_view:id(),
+    Socket0 :: socket(),
+    Socket1 :: socket().
+remove_view(ViewId, #socket{views = Views} = Socket) when is_map_key(ViewId, Views) ->
+    Socket#socket{views = maps:remove(ViewId, Views)}.

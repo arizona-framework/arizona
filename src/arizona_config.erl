@@ -1,22 +1,27 @@
--module(arizona_cfg).
+-module(arizona_config).
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([static_dir/0]).
 -export([endpoint/0]).
-
-%% --------------------------------------------------------------------
-%% Types (and their exports)
-%% --------------------------------------------------------------------
-
--type endpoint() :: map().
--export_type([endpoint/0]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec endpoint() -> endpoint().
+-spec static_dir() -> file:filename_all().
+static_dir() ->
+    get_env(static_dir, "static").
+
+-spec endpoint() -> arizona_server:opts().
 endpoint() ->
-  application:get_env(arizona, endpoint, #{}).
+    get_env(endpoint, #{}).
+
+%% --------------------------------------------------------------------
+%% Private functions
+%% --------------------------------------------------------------------
+
+get_env(Key, Default) ->
+    application:get_env(arizona, Key, Default).

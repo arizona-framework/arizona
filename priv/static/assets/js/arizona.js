@@ -1,50 +1,48 @@
-/*global morphdom*/
+/* global morphdom */
 "use strict";
 
 globalThis["arizona"] = (() => {
-  // Worker.
-
-  const worker = new Worker("assets/js/arizona-worker.js");
-
-  worker.addEventListener("message", function (e) {
-    console.log("[WebWorker] msg:", e.data);
-    const { event, payload } = e.data;
-    switch (event) {
-      case "patch": {
-        const { target, html } = payload;
-        const elem = targetIsRoot(target)
-          ? document.documentElement
-          : document.querySelector(`[arizona-id="${JSON.stringify(target)}"]`);
-        applyPatch(elem, html);
-        break;
-      }
-    }
-    subscribers.get(event)?.forEach(function ({ id, callback, opts }) {
-      callback(payload);
-      opts.once && unsubscribe(id);
-    });
-  });
-
-  worker.addEventListener("error", function (e) {
-    console.error("[WebWorker] error:", e);
-  });
-
-  function targetIsRoot(target) {
-    return target.length === 1;
-  }
-
-  // Subscribers.
-
+  const worker = new Worker("assets/js/arizona/worker.js");
   const subscribers = new Map();
   const unsubscribers = new Map();
 
+  // API functions
+
+  function connect(params) {
+    params = {
+      ...params,
+      path: location.pathname,
+    };
+    send(undefined, "connect", params);
+  }
+
+  function send(viewId, event, payload) {
+    sendMsgToWorker.bind(this)(viewId, event, payload);
+  }
+
   function subscribe(eventName, callback, opts = {}) {
+    if (
+      typeof eventName !== "string" ||
+      typeof callback !== "function" ||
+      typeof opts !== "object" ||
+      Array.isArray(opts)
+    ) {
+      console.error("[Arizona] invalid subscribe data:", {
+        eventName,
+        callback,
+        opts,
+      });
+      return;
+    }
+
     let eventSubs = subscribers.get(eventName);
     if (!eventSubs) eventSubs = new Map();
+
     const id = Math.random();
     eventSubs.set(id, { id, callback, opts });
     subscribers.set(eventName, eventSubs);
     unsubscribers.set(id, eventName);
+
     console.table({
       action: "subscribed",
       eventName,
@@ -52,13 +50,10 @@ globalThis["arizona"] = (() => {
       subscribers,
       unsubscribers,
     });
+
     return function () {
       unsubscribe(id);
     };
-  }
-
-  function subscribeOnce(event, callback, opts = {}) {
-    return subscribe(event, callback, { ...opts, once: true });
   }
 
   function unsubscribe(id) {
@@ -80,58 +75,45 @@ globalThis["arizona"] = (() => {
     });
   }
 
-  // API functions.
+  // Private functions
 
-  function send(event, payloadOrCallback, callbackOrOpts, optsOrNull) {
-    typeof payloadOrCallback === "function"
-      ? sendMsgToWorker.bind(this)(
-          event,
-          undefined,
-          payloadOrCallback,
-          callbackOrOpts,
-        )
-      : sendMsgToWorker.bind(this)(
-          event,
-          payloadOrCallback,
-          callbackOrOpts,
-          optsOrNull,
-        );
+  function sendMsgToWorker(viewId, event, payload) {
+    worker.postMessage({ viewId, event, payload });
   }
 
-  function connect(params, callback, opts) {
-    params = {
-      ...params,
-      path: location.pathname,
-    };
-    send("connect", params, callback, opts);
-  }
+  // Init
 
-  // Internal functions.
+  worker.addEventListener("message", function (e) {
+    console.log("[WebWorker] msg:", e.data);
 
-  function sendMsgToWorker(event, payload, callback, opts = {}) {
-    if (!opts.target && this instanceof HTMLElement) {
-      opts.target = this.getAttribute("arizona-target");
+    const { event, payload } = e.data;
+    switch (event) {
+      case "patch": {
+        const [viewId, html] = payload;
+        const elem = document.getElementById(viewId);
+        morphdom(elem, html, {
+          // Can I make morphdom blaze through the DOM tree even faster? Yes.
+          // @see https://github.com/patrick-steele-idem/morphdom#can-i-make-morphdom-blaze-through-the-dom-tree-even-faster-yes
+          onBeforeElUpdated: function (fromEl, toEl) {
+            // spec - https://dom.spec.whatwg.org/#concept-node-equals
+            if (fromEl.isEqualNode(toEl)) {
+              return false;
+            }
+
+            return true;
+          },
+        });
+      }
     }
-    const target = document.querySelector(opts.target);
-    const arizonaId = target?.getAttribute("arizona-id") || "[0]";
-    callback && subscribeOnce(event, callback, opts);
-    worker.postMessage({ target: arizonaId, event, payload });
-  }
-
-  function applyPatch(elem, html) {
-    morphdom(elem, html, {
-      // Can I make morphdom blaze through the DOM tree even faster? Yes.
-      // @see https://github.com/patrick-steele-idem/morphdom#can-i-make-morphdom-blaze-through-the-dom-tree-even-faster-yes
-      onBeforeElUpdated: function (fromEl, toEl) {
-        // spec - https://dom.spec.whatwg.org/#concept-node-equals
-        if (fromEl.isEqualNode(toEl)) {
-          return false;
-        }
-
-        return true;
-      },
+    subscribers.get(event)?.forEach(function ({ id, callback, opts }) {
+      callback(payload);
+      opts.once && unsubscribe(id);
     });
-  }
+  });
 
-  return { subscribe, subscribeOnce, unsubscribe, send, connect };
+  worker.addEventListener("error", function (e) {
+    console.error("[WebWorker] error:", e);
+  });
+
+  return Object.freeze({ connect, send, subscribe, unsubscribe });
 })();

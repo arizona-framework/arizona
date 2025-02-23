@@ -1,39 +1,25 @@
 -module(arizona_js).
--moduledoc """
-Javascript support.
-""".
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([send/1]).
--export([send/2]).
+-export([send/3]).
 
 %
 
--ignore_xref([send/2]).
+-ignore_xref([send/3]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec send(EventName) -> Sent
-    when EventName :: binary(),
-         Sent :: binary().
-send(EventName) ->
-    <<"arizona.send.bind(this)('", EventName/binary, "')"/utf8>>.
-
--spec send(EventName, Payload) -> Sent
-    when EventName :: binary(),
-         Payload :: json:encode_value(),
-         Sent :: binary().
-send(EventName, Payload) ->
-    <<"arizona.send.bind(this)('", EventName/binary, "', ", (safe(Payload))/binary, ")"/utf8>>.
-
-%% --------------------------------------------------------------------
-%% Private
-%% --------------------------------------------------------------------
-
-safe(Term) ->
-    iolist_to_binary(json:encode(Term)).
+-spec send(ViewId, Event, Payload) -> Js when
+    ViewId :: arizona_view:id(),
+    Event :: binary(),
+    Payload :: dynamic(),
+    Js :: binary().
+send(ViewId, Event, Payload) when is_binary(ViewId), is_binary(Event) ->
+    iolist_to_binary([
+        "'arizona.send(\"", ViewId, "\", \"", Event, "\", ", json:encode(Payload), ")'"
+    ]).

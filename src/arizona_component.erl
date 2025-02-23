@@ -1,22 +1,19 @@
--module(arizona_html).
+-module(arizona_component).
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([scripts/0]).
-
-%
-
--ignore_xref([scripts/0]).
+-export([render/3]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec scripts() -> binary().
-scripts() ->
-    ~"""
-    <script src="assets/js/arizona/morphdom.min.js"></script>
-    <script src="assets/js/arizona/main.js"></script>
-    """.
+-spec render(Mod, Fun, View) -> Token when
+    Mod :: module(),
+    Fun :: atom(),
+    View :: arizona_view:view(),
+    Token :: arizona_render:token().
+render(Mod, Fun, View) when is_atom(Mod), is_atom(Fun) ->
+    erlang:apply(Mod, Fun, [View]).

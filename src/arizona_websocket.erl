@@ -1,5 +1,4 @@
 -module(arizona_websocket).
--moduledoc false.
 -behaviour(cowboy_websocket).
 
 %% --------------------------------------------------------------------
@@ -13,130 +12,141 @@
 -export([terminate/3]).
 
 %% --------------------------------------------------------------------
-%% API function exports
+%% Libs
 %% --------------------------------------------------------------------
 
--export([subscribe/1]).
+-include_lib("kernel/include/logger.hrl").
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
 %% --------------------------------------------------------------------
 
--opaque init_state() :: {Params :: [{binary(), binary() | true}],
-                         {Mod :: module(), Fun :: atom(), Opts :: arizona:route_opts()}}.
--export_type([init_state/0]).
-
--opaque state() :: #{
-    block => arizona_template_compiler:block(),
-    sockets => #{SocketId :: arizona_template_compiler:changeable_id() :=
-                    Socket :: arizona_socket:t()}
+-opaque init_state() :: {
+    HandlerState :: arizona_view_handler:state(),
+    Params :: [{binary(), binary() | true}]
 }.
--export_type([state/0]).
--elvis([{elvis_style, state_record_and_type, disable}]). % opaque not identified as "type"
+-export_type([init_state/0]).
 
 %% --------------------------------------------------------------------
 %% Behaviour (cowboy_websocket) callbacks
 %% --------------------------------------------------------------------
 
--spec init(Req, term()) -> {cowboy_websocket, Req, InitState}
-    when Req :: cowboy_req:req(),
-         InitState :: init_state().
-init(Req0, _State) ->
-    Params = cowboy_req:parse_qs(Req0),
-    {Req, Env} = arizona_server:route(Req0),
-    #{handler_opts := {Mod, Fun, Opts}} = Env,
-    {cowboy_websocket, Req, {Params, {Mod, Fun, Opts}}}.
+-spec init(Req0, []) -> Result when
+    Req0 :: cowboy_req:req(),
+    Result :: {cowboy_websocket, Req1, InitState},
+    Req1 :: cowboy_req:req(),
+    InitState :: init_state().
+init(Req0, []) ->
+    {ok, Req, Env} = arizona_server:req_route(Req0),
+    InitState = init_state(Req, Env),
+    {cowboy_websocket, Req, InitState}.
 
--spec websocket_init(InitState) -> {Events, State}
-    when InitState :: init_state(),
-         Events :: cowboy_websocket:commands(),
-         State :: state().
-websocket_init({Params, {Mod, Fun, Opts}}) ->
-    Macros0 = maps:get(macros, Opts, #{}),
-    {ok, Block} = arizona_template_compiler:compile(Mod, Fun, Macros0),
-    Assigns = maps:get(assigns, Opts, #{}),
-    {ok, {Html, Sockets}} = arizona_template_renderer:server_render(Block, Assigns),
-    Reconnecting = proplists:get_value(<<"reconnecting">>, Params, <<"false">>),
-    Events = case Reconnecting of
-        <<"true">> ->
-            [];
-        <<"false">> ->
-            [{text, json:encode([[~"init", Html]])}]
-    end,
-    State = #{
-        block => Block,
-        sockets => #{Id => arizona_socket:prune(Socket)
-                     || Id := Socket <- Sockets}
-    },
-    subscribe(broadcast),
-    send(init, {init, self()}),
-    {Events, State}.
+-spec websocket_init(InitState) -> {Events, Socket} when
+    InitState :: init_state(),
+    Events :: cowboy_websocket:commands(),
+    Socket :: arizona_socket:socket().
+websocket_init({{Mod, Assigns, _Opts}, Params}) ->
+    ?LOG_INFO(#{
+        text => ~"init",
+        in => ?MODULE,
+        view_module => Mod,
+        assigns => Assigns,
+        params => Params
+    }),
+    Socket0 = arizona_socket:new(render),
+    {ok, View0} = arizona_view:mount(Mod, Assigns, Socket0),
+    Token = arizona_view:render(View0),
+    {_View, Socket1} = arizona_render:render(Token, View0, View0, Socket0),
+    Socket = arizona_socket:set_render_context(diff, Socket1),
+    Events = put_init_event(Socket, []),
+    {Events, Socket}.
 
--spec websocket_handle(Event, State1) -> {Events, State2}
-    when Event :: {text, binary()},
-         Events :: cowboy_websocket:commands(),
-         State1 :: state(),
-         State2 :: state().
-websocket_handle({text, Msg}, #{sockets := Sockets} = State) ->
-    {Target, Event, Payload} = decode_msg(Msg),
-    Socket0 = maps:get(Target, Sockets),
-    View = arizona_socket:get_view(Socket0),
-    Socket1 = arizona_live_view:handle_event(View, Event, Payload, Socket0),
-    Changes = arizona_socket:get_changes(Socket1),
-    Socket = case ordsets:is_empty(Changes) of
-        true ->
-            Socket1;
-        false ->
-            Block = arizona_socket:get_block(Socket1),
-            Assigns = arizona_socket:get_assigns(Socket1),
-            ChangedVars = ordsets:to_list(Changes),
-            Patch = arizona_template_renderer:render_changes(Block, ChangedVars, Assigns),
-            arizona_socket:push_event(~"patch", [Target, Patch], Socket1)
-    end,
-    {[{text, json:encode(arizona_socket:get_events(Socket))}],
-        State#{sockets => Sockets#{Target => arizona_socket:prune(Socket)}}}.
+-spec websocket_handle(Event, Socket0) -> {Events, Socket1} when
+    Event :: {text, binary()},
+    Events :: cowboy_websocket:commands(),
+    Socket0 :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+websocket_handle({text, Msg}, Socket0) ->
+    ?LOG_INFO(#{
+        text => ~"message received",
+        in => ?MODULE,
+        messge => Msg,
+        socket => Socket0
+    }),
+    [ViewId, Event, Payload] = json:decode(Msg),
+    {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
+    View1 = arizona_view:handle_event(Event, Payload, View0),
+    ?LOG_INFO(#{
+        text => ~"view updated",
+        in => ?MODULE,
+        id => ViewId,
+        views => View1
+    }),
+    Token = arizona_view:render(View1),
+    {View2, Socket1} = arizona_diff:diff(Token, 0, View1, Socket0),
+    Diff = arizona_view:diff(View2),
+    Events = put_diff_event(Diff, ViewId, []),
+    View = arizona_view:merge_changed_assigns(View2),
+    Socket = arizona_socket:put_view(View, Socket1),
+    {Events, Socket}.
 
--spec websocket_info(Info, State1) -> {Events, State2}
-    when Info :: term(),
-         Events :: cowboy_websocket:commands(),
-         State1 :: state(),
-         State2 :: state().
-websocket_info(reload, State) ->
-    {[{text, json:encode([[~"reload", []]])}], State};
-websocket_info({put_socket, #{id := Target} = Block, Socket}, #{sockets := Sockets} = State) ->
-    {[], State#{sockets => Sockets#{Target => arizona_socket:set_block(Block, Socket)}}};
-websocket_info({remove_socket, Target}, #{sockets := Sockets} = State) ->
-    {[], State#{sockets => maps:remove(Target, Sockets)}}.
+-spec websocket_info(Msg, Socket0) -> {Events, Socket1} when
+    Msg :: dynamic(),
+    Events :: cowboy_websocket:commands(),
+    Socket0 :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+websocket_info(Msg, Socket) ->
+    ?LOG_INFO(#{
+        text => ~"info received",
+        in => ?MODULE,
+        messge => Msg,
+        socket => Socket
+    }),
+    {[], Socket}.
 
--spec terminate(Reason, Req, State) -> ok
-    when Reason :: term(),
-         Req :: cowboy_req:req(),
-         State :: state().
-terminate(_Reason, _Req, _State) ->
-    send(terminate, {terminate, self()}).
-
-%% --------------------------------------------------------------------
-%% API function definitions
-%% --------------------------------------------------------------------
-
--spec subscribe(Event) -> ok
-    when Event :: term().
-subscribe(Event) ->
-    gproc:reg({p, l, {?MODULE, Event}}),
+-spec terminate(Reason, Req, Socket) -> ok when
+    Reason :: term(),
+    Req :: cowboy_req:req(),
+    Socket :: arizona_socket:socket().
+terminate(Reason, _Req, Socket) ->
+    ?LOG_INFO(#{
+        text => ~"terminated",
+        in => ?MODULE,
+        reason => Reason,
+        socket => Socket
+    }),
     ok.
 
 %% --------------------------------------------------------------------
-%% Private
+%% Private functions
 %% --------------------------------------------------------------------
 
-send(Event, Payload) ->
-    gproc:send({p, l, {?MODULE, Event}}, Payload),
-    ok.
+init_state(Req, Env) ->
+    HandlerState = maps:get(handler_opts, Env),
+    Params = cowboy_req:parse_qs(Req),
+    {HandlerState, Params}.
 
-decode_msg(Msg) ->
-    case json:decode(Msg) of
-        [Target, Event, Payload] ->
-            {json:decode(Target), Event, Payload};
-        [Target, Event] ->
-            {json:decode(Target), Event, #{}}
-    end.
+put_init_event(Socket, Events) ->
+    Views = #{Id => arizona_view:rendered(View) || Id := View <- arizona_socket:views(Socket)},
+    Msg = json:encode([[~"init", Views]]),
+    [{text, Msg} | Events].
+
+put_diff_event([], _ViewId, Events) ->
+    Events;
+put_diff_event(Diff, ViewId, Events) ->
+    ?LOG_INFO(#{
+        text => ~"view diff",
+        in => ?MODULE,
+        id => ViewId,
+        views => Diff
+    }),
+    Msg = encode_diff([[~"patch", [ViewId, Diff]]]),
+    [{text, Msg} | Events].
+
+encode_diff(Diff) ->
+    json:encode(Diff, fun
+        ([{_, _} | _] = Proplist, Encode) ->
+            json:encode(proplists:to_map(Proplist), Encode);
+        (Other, Encode) ->
+            json:encode_value(Other, Encode)
+    end).
