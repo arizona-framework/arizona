@@ -22,17 +22,17 @@
 %% --------------------------------------------------------------------
 
 -opaque init_state() :: {
-    ReqBindings :: req_bindings(),
-    ReqQs :: req_qs(),
+    PathParams :: path_params(),
+    QueryString :: query_string(),
     HandlerState :: arizona_view_handler:state()
 }.
 -export_type([init_state/0]).
 
--type req_bindings() :: cowboy_router:bindings().
--export_type([req_bindings/0]).
+-type path_params() :: cowboy_router:bindings().
+-export_type([path_params/0]).
 
--type req_qs() :: binary().
--export_type([req_qs/0]).
+-type query_string() :: binary().
+-export_type([query_string/0]).
 
 -type query_params() :: [{binary(), binary() | true}].
 -export_type([query_params/0]).
@@ -49,24 +49,24 @@
 init(Req0, []) ->
     {ok, Req, Env} = arizona_server:req_route(Req0),
     HandlerState = maps:get(handler_opts, Env),
-    ReqBindings = cowboy_req:bindings(Req),
-    ReqQs = cowboy_req:qs(Req),
-    {cowboy_websocket, Req, {ReqBindings, ReqQs, HandlerState}}.
+    PathParams = cowboy_req:bindings(Req),
+    QueryString = cowboy_req:qs(Req),
+    {cowboy_websocket, Req, {PathParams, QueryString, HandlerState}}.
 
 -spec websocket_init(InitState) -> {Events, Socket} when
     InitState :: init_state(),
     Events :: cowboy_websocket:commands(),
     Socket :: arizona_socket:socket().
-websocket_init({ReqBindings, ReqQs, {Mod, Bindings, _Opts}}) ->
+websocket_init({PathParams, QueryString, {Mod, Bindings, _Opts}}) ->
     ?LOG_INFO(#{
         text => ~"init",
         in => ?MODULE,
         view_module => Mod,
         bindings => Bindings,
-        req_bidings => ReqBindings,
-        req_qs => ReqQs
+        req_bidings => PathParams,
+        query_string => QueryString
     }),
-    Socket0 = arizona_socket:new(render, #{}, ReqBindings, ReqQs),
+    Socket0 = arizona_socket:new(render, #{}, PathParams, QueryString),
     {ok, View0} = arizona_view:mount(Mod, Bindings, Socket0),
     Token = arizona_view:render(View0),
     {_View, Socket1} = arizona_renderer:render(Token, View0, View0, Socket0),

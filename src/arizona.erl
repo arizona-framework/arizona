@@ -40,7 +40,7 @@ Arizona follows a component-based architecture where:
 -export([put_bindings/2]).
 -export([get_binding/2]).
 -export([get_binding/3]).
--export([req_bindings/1]).
+-export([path_params/1]).
 -export([query_params/1]).
 -export([generate_static/0]).
 
@@ -61,7 +61,7 @@ Arizona follows a component-based architecture where:
 -ignore_xref([put_bindings/2]).
 -ignore_xref([get_binding/2]).
 -ignore_xref([get_binding/3]).
--ignore_xref([req_bindings/1]).
+-ignore_xref([path_params/1]).
 -ignore_xref([query_params/1]).
 -ignore_xref([generate_static/0]).
 
@@ -117,11 +117,11 @@ Arizona follows a component-based architecture where:
 -type event_payload() :: arizona_view:event_payload().
 -export_type([event_payload/0]).
 
--type req_bindings() :: arizona_websocket:req_bindings().
--export_type([req_bindings/0]).
+-type path_params() :: arizona_websocket:path_params().
+-export_type([path_params/0]).
 
--type req_qs() :: arizona_websocket:req_qs().
--export_type([req_qs/0]).
+-type query_string() :: arizona_websocket:query_string().
+-export_type([query_string/0]).
 
 -type query_params() :: arizona_websocket:query_params().
 -export_type([query_params/0]).
@@ -427,11 +427,11 @@ get_binding(Key, View) ->
 get_binding(Key, View, Default) ->
     arizona_view:get_binding(Key, View, Default).
 
--spec req_bindings(Socket) -> ReqBindings when
+-spec path_params(Socket) -> PathParams when
     Socket :: socket(),
-    ReqBindings :: req_bindings().
-req_bindings(Socket) ->
-    arizona_socket:req_bindings(Socket).
+    PathParams :: path_params().
+path_params(Socket) ->
+    arizona_socket:path_params(Socket).
 
 -spec query_params(Socket0) -> {QueryParams, Socket1} when
     Socket0 :: socket(),
@@ -440,7 +440,8 @@ req_bindings(Socket) ->
 query_params(Socket0) ->
     case arizona_socket:query_params(Socket0) of
         undefined ->
-            QueryParams = cow_qs:parse_qs(arizona_socket:req_qs(Socket0)),
+            QueryString = arizona_socket:query_string(Socket0),
+            QueryParams = cow_qs:parse_qs(QueryString),
             Socket = arizona_socket:set_query_params(QueryParams, Socket0),
             {QueryParams, Socket};
         QueryParams ->

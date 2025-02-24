@@ -32,7 +32,9 @@
     State :: state(),
     Req1 :: cowboy_req:req().
 init(Req0, {Mod, Bindings, Opts} = State) when is_atom(Mod), is_map(Bindings), is_map(Opts) ->
-    Socket = arizona_socket:new(render),
+    PathParams = cowboy_req:bindings(Req0),
+    QueryString = cowboy_req:qs(Req0),
+    Socket = arizona_socket:new(render, #{}, PathParams, QueryString),
     View = maybe_render_layout(Opts, Mod, Bindings, Socket),
     Html = arizona_view:rendered_to_iolist(View),
     Headers = #{~"content-type" => ~"text/html"},
