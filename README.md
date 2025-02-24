@@ -228,7 +228,7 @@ render(View) ->
         <script src="assets/main.js"></script>
     </head>
     <body>
-        {% The 'inner_content' binding is auto-bindinged by Arizona in the view. }
+        {% The 'inner_content' binding is auto-binded by Arizona in the view. }
         {arizona:get_binding(inner_content, View)}
     </body>
     </html>

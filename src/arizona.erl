@@ -151,7 +151,7 @@ The rendered template as `t:rendered_view_template/0`.
 - The template can include placeholders (e.g., `{arizona:get_binding(id, View)}`) to
   dynamically insert data from the view's bindings.
 - **Important**: The `id` binding is **required** and must be set by the consumer.
-  The `id` should be unique and bindinged to a top-level HTML element (e.g., a `div`)
+  The `id` should be unique and binded to a top-level HTML element (e.g., a `div`)
   in the template. This ensures proper DOM patching and state management. For example:
 
   ```erlang
