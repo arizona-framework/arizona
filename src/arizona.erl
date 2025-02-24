@@ -41,7 +41,7 @@ Arizona follows a component-based architecture where:
 -export([get_binding/2]).
 -export([get_binding/3]).
 -export([req_bindings/1]).
--export([req_qs/1]).
+-export([query_params/1]).
 -export([generate_static/0]).
 
 %
@@ -62,7 +62,7 @@ Arizona follows a component-based architecture where:
 -ignore_xref([get_binding/2]).
 -ignore_xref([get_binding/3]).
 -ignore_xref([req_bindings/1]).
--ignore_xref([req_qs/1]).
+-ignore_xref([query_params/1]).
 -ignore_xref([generate_static/0]).
 
 %% --------------------------------------------------------------------
@@ -122,6 +122,9 @@ Arizona follows a component-based architecture where:
 
 -type req_qs() :: arizona_websocket:req_qs().
 -export_type([req_qs/0]).
+
+-type query_params() :: arizona_websocket:query_params().
+-export_type([query_params/0]).
 
 %% --------------------------------------------------------------------
 %% Doctests
@@ -430,11 +433,19 @@ get_binding(Key, View, Default) ->
 req_bindings(Socket) ->
     arizona_socket:req_bindings(Socket).
 
--spec req_qs(Socket) -> ReqQs when
-    Socket :: socket(),
-    ReqQs :: req_qs().
-req_qs(Socket) ->
-    arizona_socket:req_qs(Socket).
+-spec query_params(Socket0) -> {QueryParams, Socket1} when
+    Socket0 :: socket(),
+    QueryParams :: query_params(),
+    Socket1 :: socket().
+query_params(Socket0) ->
+    case arizona_socket:query_params(Socket0) of
+        undefined ->
+            QueryParams = cow_qs:parse_qs(arizona_socket:req_qs(Socket0)),
+            Socket = arizona_socket:set_query_params(QueryParams, Socket0),
+            {QueryParams, Socket};
+        QueryParams ->
+            {QueryParams, Socket0}
+    end.
 
 -spec generate_static() -> ok.
 generate_static() ->

@@ -14,6 +14,8 @@
 -export([remove_view/2]).
 -export([req_bindings/1]).
 -export([req_qs/1]).
+-export([query_params/1]).
+-export([set_query_params/2]).
 
 %
 
@@ -28,7 +30,8 @@
     render_context :: render_context(),
     views :: views(),
     req_bindings :: arizona:req_bindings(),
-    req_qs :: arizona:req_qs()
+    req_qs :: arizona:req_qs(),
+    query_params :: arizona:query_params() | undefined
 }).
 -opaque socket() :: #socket{}.
 -export_type([socket/0]).
@@ -60,7 +63,8 @@ new(RenderContext, Views, ReqBindings, ReqQs) ->
         render_context = RenderContext,
         views = Views,
         req_bindings = ReqBindings,
-        req_qs = ReqQs
+        req_qs = ReqQs,
+        query_params = undefined
     }.
 
 -spec render_context(Socket) -> RenderContext when
@@ -122,6 +126,19 @@ req_bindings(#socket{} = Socket) ->
     ReqQs :: arizona:req_qs().
 req_qs(#socket{} = Socket) ->
     Socket#socket.req_qs.
+
+-spec query_params(Socket) -> QueryParams when
+    Socket :: socket(),
+    QueryParams :: arizona:query_params() | undefined.
+query_params(#socket{} = Socket) ->
+    Socket#socket.query_params.
+
+-spec set_query_params(QueryParams, Socket0) -> Socket1 when
+    QueryParams :: arizona:query_params(),
+    Socket0 :: socket(),
+    Socket1 :: socket().
+set_query_params(QueryParams, #socket{} = Socket) when is_list(QueryParams) ->
+    Socket#socket{query_params = QueryParams}.
 
 %% --------------------------------------------------------------------
 %% Private functions

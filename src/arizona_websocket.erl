@@ -34,6 +34,9 @@
 -type req_qs() :: binary().
 -export_type([req_qs/0]).
 
+-type query_params() :: [{binary(), binary() | true}].
+-export_type([query_params/0]).
+
 %% --------------------------------------------------------------------
 %% Behaviour (cowboy_websocket) callbacks
 %% --------------------------------------------------------------------
