@@ -18,11 +18,11 @@ functions directly within the HTML structure. For example:
 
 ```herl
 <ul>
-  {arizona:render_list(fun(Item) ->
-      arizona:render_nested_template(~"""
+    {arizona:render_list(fun(Item) ->
+        arizona:render_nested_template(~"""
         <li>{Item}</li>
-      """)
-    end, arizona:get_assign(list, View))}
+        """)
+     end, arizona:get_assign(list, View))}
 </ul>
 ```
 
