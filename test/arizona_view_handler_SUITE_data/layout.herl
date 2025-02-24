@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{arizona:get_assign(title, View)}</title>
+    <title>{arizona:get_binding(title, View)}</title>
     {arizona:render_html_scripts()}
 </head>
 <body>
-    {arizona:get_assign(inner_content, View)}
+    {arizona:get_binding(inner_content, View)}
 </body>
 </html>

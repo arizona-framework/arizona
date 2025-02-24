@@ -51,10 +51,10 @@ diff({nested_template, _Static, Dynamic}, Index, ParentView, Socket) ->
     diff_nested_template(ParentView, Socket, Dynamic, Index);
 diff({list_template, _Static, DynamicCallback, List}, Index, ParentView, Socket) ->
     diff_list_template(ParentView, Socket, DynamicCallback, List, Index);
-diff({view, Mod, Assigns}, Index, ParentView, Socket) ->
-    diff_view(ParentView, Socket, Mod, Assigns, Index);
-diff({component, Mod, Fun, Assigns}, Index, ParentView, Socket) ->
-    diff_component(ParentView, Socket, Mod, Fun, Assigns, Index);
+diff({view, Mod, Bindings}, Index, ParentView, Socket) ->
+    diff_view(ParentView, Socket, Mod, Bindings, Index);
+diff({component, Mod, Fun, Bindings}, Index, ParentView, Socket) ->
+    diff_component(ParentView, Socket, Mod, Fun, Bindings, Index);
 diff({list, _Static, DynamicList}, Index, ParentView, Socket) ->
     diff_list(ParentView, Socket, DynamicList, Index);
 diff(Diff, Index, View0, Socket) when is_binary(Diff); is_list(Diff) ->
@@ -75,9 +75,9 @@ diff(Index, Vars, TokenCallback, ViewAcc, Socket, Opts) ->
         true ->
             diff_1(Index, TokenCallback, ViewAcc, Socket);
         false ->
-            Assigns = arizona_view:assigns(ViewAcc),
-            ChangedAssigns = arizona_view:changed_assigns(ViewAcc),
-            case changed(Assigns, ChangedAssigns, Vars) of
+            Bindings = arizona_view:bindings(ViewAcc),
+            ChangedBindings = arizona_view:changed_bindings(ViewAcc),
+            case changed(Bindings, ChangedBindings, Vars) of
                 true ->
                     diff_1(Index, TokenCallback, ViewAcc, Socket);
                 false ->
@@ -94,12 +94,12 @@ diff_1(Index, TokenCallback, ViewAcc0, Socket0) ->
     {ViewAcc, Socket} = diff(Token, Index, ViewAcc0, Socket0),
     {ViewAcc, Socket}.
 
-changed(Assigns, ChangedAssigns, Vars) ->
+changed(Bindings, ChangedBindings, Vars) ->
     lists:any(
         fun(Var) ->
-            case ChangedAssigns of
+            case ChangedBindings of
                 #{Var := Value} ->
-                    Value =/= maps:get(Var, Assigns);
+                    Value =/= maps:get(Var, Bindings);
                 #{} ->
                     false
             end
@@ -109,7 +109,7 @@ changed(Assigns, ChangedAssigns, Vars) ->
 
 diff_view_template(View0, Socket0, Dynamic) ->
     {View1, Socket1} = diff_dynamic(Dynamic, View0, Socket0, #{}),
-    View = arizona_view:merge_changed_assigns(View1),
+    View = arizona_view:merge_changed_bindings(View1),
     Socket = arizona_socket:put_view(View, Socket1),
     {View, Socket}.
 
@@ -118,16 +118,16 @@ diff_component_template(View0, Socket0, Dynamic) ->
     {View, Socket}.
 
 diff_nested_template(ParentView0, Socket0, Dynamic, Index) ->
-    Assigns = arizona_view:assigns(ParentView0),
-    ChangedAssigns = arizona_view:changed_assigns(ParentView0),
-    View0 = arizona_view:new(undefined, Assigns, ChangedAssigns, [], [], []),
+    Bindings = arizona_view:bindings(ParentView0),
+    ChangedBindings = arizona_view:changed_bindings(ParentView0),
+    View0 = arizona_view:new(undefined, Bindings, ChangedBindings, [], [], []),
     {View, Socket} = diff_dynamic(Dynamic, View0, Socket0, #{}),
     Diff = arizona_view:diff(View),
     ParentView = arizona_view:put_diff(Index, Diff, ParentView0),
     {ParentView, Socket}.
 
 diff_list_template(ParentView0, Socket, Callback, List, Index) ->
-    View = arizona_view:new(arizona_view:assigns(ParentView0)),
+    View = arizona_view:new(arizona_view:bindings(ParentView0)),
     Diff = diff_dynamic_list_callback(List, Callback, Index, View, Socket),
     ParentView = arizona_view:put_diff(Index, Diff, ParentView0),
     {ParentView, Socket}.
@@ -142,28 +142,28 @@ diff_dynamic_list_callback([Item | T], Callback, Index, View, Socket) ->
         | diff_dynamic_list_callback(T, Callback, Index, View, Socket)
     ].
 
-diff_view(ParentView, Socket, Mod, Assigns, Index) ->
-    ViewId = maps:get(id, Assigns),
+diff_view(ParentView, Socket, Mod, Bindings, Index) ->
+    ViewId = maps:get(id, Bindings),
     case arizona_socket:get_view(ViewId, Socket) of
         {ok, View0} ->
-            View = arizona_view:set_changed_assigns(Assigns, View0),
-            diff_view_1(ParentView, Socket, Mod, Assigns, Index, View, ViewId);
+            View = arizona_view:set_changed_bindings(Bindings, View0),
+            diff_view_1(ParentView, Socket, Mod, Bindings, Index, View, ViewId);
         error ->
-            mount_view(ParentView, Socket, Mod, Assigns, Index)
+            mount_view(ParentView, Socket, Mod, Bindings, Index)
     end.
 
-diff_view_1(ParentView0, Socket0, Mod, NewAssigns, Index, View0, ViewId) ->
+diff_view_1(ParentView0, Socket0, Mod, NewBindings, Index, View0, ViewId) ->
     {view_template, _Static, Dynamic} = arizona_view:render(View0),
-    OldAssigns = arizona_view:assigns(View0),
-    ChangedAssigns = view_changed_assigns(OldAssigns, NewAssigns),
-    View1 = arizona_view:set_changed_assigns(ChangedAssigns, View0),
+    OldBindings = arizona_view:bindings(View0),
+    ChangedBindings = view_changed_bindings(OldBindings, NewBindings),
+    View1 = arizona_view:set_changed_bindings(ChangedBindings, View0),
     {View2, Socket1} = diff_dynamic(Dynamic, View1, Socket0, #{}),
-    case ChangedAssigns of
+    case ChangedBindings of
         #{id := _NewViewId} ->
             Socket2 = arizona_socket:remove_view(ViewId, Socket1),
-            mount_view(ParentView0, Socket2, Mod, NewAssigns, Index);
+            mount_view(ParentView0, Socket2, Mod, NewBindings, Index);
         #{} ->
-            View3 = arizona_view:merge_changed_assigns(View2),
+            View3 = arizona_view:merge_changed_bindings(View2),
             Diff = arizona_view:diff(View3),
             ParentView = arizona_view:put_diff(Index, Diff, ParentView0),
             View = arizona_view:set_diff([], View3),
@@ -171,16 +171,16 @@ diff_view_1(ParentView0, Socket0, Mod, NewAssigns, Index, View0, ViewId) ->
             {ParentView, Socket}
     end.
 
-view_changed_assigns(OldAssigns, NewAssigns) ->
+view_changed_bindings(OldBindings, NewBindings) ->
     maps:filter(
         fun(Key, Value) ->
-            maps:get(Key, OldAssigns) =/= Value
+            maps:get(Key, OldBindings) =/= Value
         end,
-        NewAssigns
+        NewBindings
     ).
 
-mount_view(ParentView0, Socket0, Mod, Assigns, Index) ->
-    case arizona_view:mount(Mod, Assigns, Socket0) of
+mount_view(ParentView0, Socket0, Mod, Bindings, Index) ->
+    case arizona_view:mount(Mod, Bindings, Socket0) of
         {ok, View0} ->
             Token = arizona_view:render(View0),
             Socket1 = arizona_socket:set_render_context(render, Socket0),
@@ -196,8 +196,8 @@ mount_view(ParentView0, Socket0, Mod, Assigns, Index) ->
             {ParentView0, Socket0}
     end.
 
-diff_component(ParentView0, Socket0, Mod, Fun, Assigns, Index) ->
-    View0 = arizona_view:new(Assigns),
+diff_component(ParentView0, Socket0, Mod, Fun, Bindings, Index) ->
+    View0 = arizona_view:new(Bindings),
     {component_template, _Static, Dynamic} = arizona_component:render(Mod, Fun, View0),
     {View, Socket} = diff_dynamic(Dynamic, View0, Socket0, #{force_changed => true}),
     Diff = arizona_view:diff(View),
@@ -205,7 +205,7 @@ diff_component(ParentView0, Socket0, Mod, Fun, Assigns, Index) ->
     {ParentView, Socket}.
 
 diff_list(ParentView0, Socket, DynamicList0, Index) ->
-    View = arizona_view:new(arizona_view:assigns(ParentView0)),
+    View = arizona_view:new(arizona_view:bindings(ParentView0)),
     Diff = diff_dynamic_list(DynamicList0, View, Socket),
     ParentView = arizona_view:put_diff(Index, Diff, ParentView0),
     {ParentView, Socket}.

@@ -8,14 +8,14 @@ reusable components, application layouts, and dynamic template fragments.
 
 Arizona follows a component-based architecture where:
 
-- `Views`: are stateful entities that manage dynamic data through assigns
+- `Views`: are stateful entities that manage dynamic data through bindings
 - `Components`: are stateless UI elements that inherit parent view state
 - `Nested Templates`: handle conditional blocks and reusable fragments
 - `Layout`: define static application structure (rendered once on mount)
 
 ## Key Functions
 
-- `render_view_template/2`: Main view renderer with stateful assigns (DOM-patched)
+- `render_view_template/2`: Main view renderer with stateful bindings (DOM-patched)
 - `render_component_template/2`: Stateless component renderer for UI composition
 - `render_nested_template/1`: Dynamic fragment renderer for conditional content
 - `render_layout_template/2`: Structural wrapper for views (initial render only)
@@ -36,10 +36,10 @@ Arizona follows a component-based architecture where:
 -export([render_html_scripts/0]).
 -export([render_js_event/3]).
 -export([new_view/2]).
--export([put_assign/3]).
--export([put_assigns/2]).
--export([get_assign/2]).
--export([get_assign/3]).
+-export([put_binding/3]).
+-export([put_bindings/2]).
+-export([get_binding/2]).
+-export([get_binding/3]).
 -export([generate_static/0]).
 
 %
@@ -55,10 +55,10 @@ Arizona follows a component-based architecture where:
 -ignore_xref([render_html_scripts/0]).
 -ignore_xref([render_js_event/3]).
 -ignore_xref([new_view/2]).
--ignore_xref([put_assign/3]).
--ignore_xref([put_assigns/2]).
--ignore_xref([get_assign/2]).
--ignore_xref([get_assign/3]).
+-ignore_xref([put_binding/3]).
+-ignore_xref([put_bindings/2]).
+-ignore_xref([get_binding/2]).
+-ignore_xref([get_binding/3]).
 -ignore_xref([generate_static/0]).
 
 %% --------------------------------------------------------------------
@@ -68,8 +68,8 @@ Arizona follows a component-based architecture where:
 -type view() :: arizona_view:view().
 -export_type([view/0]).
 
--type assigns() :: arizona_view:assigns().
--export_type([assigns/0]).
+-type bindings() :: arizona_view:bindings().
+-export_type([bindings/0]).
 
 -type socket() :: arizona_socket:socket().
 -export_type([socket/0]).
@@ -90,10 +90,10 @@ Arizona follows a component-based architecture where:
 -type rendered_layout_template() :: rendered_view_template().
 -export_type([rendered_layout_template/0]).
 
--type rendered_view() :: {view, Mod :: module(), Assigns :: assigns()}.
+-type rendered_view() :: {view, Mod :: module(), Bindings :: bindings()}.
 -export_type([rendered_view/0]).
 
--type rendered_component() :: {component, Mod :: module(), Fun :: atom(), Assigns :: assigns()}.
+-type rendered_component() :: {component, Mod :: module(), Fun :: atom(), Bindings :: bindings()}.
 -export_type([rendered_component/0]).
 
 -type rendered_value() :: arizona_renderer:rendered_value().
@@ -135,7 +135,7 @@ to render the view's template.
 
 ## Parameters
 
-- `View`: The current view state (`t:view/0`), which contains the assigns and other
+- `View`: The current view state (`t:view/0`), which contains the bindings and other
   metadata used to populate the template.
 - `Template`: The template to render. This can be either:
 
@@ -148,17 +148,17 @@ The rendered template as `t:rendered_view_template/0`.
 
 ## Usage Notes
 
-- The template can include placeholders (e.g., `{arizona:get_assign(id, View)}`) to
-  dynamically insert data from the view's assigns.
-- **Important**: The `id` assign is **required** and must be set by the consumer.
-  The `id` should be unique and assigned to a top-level HTML element (e.g., a `div`)
+- The template can include placeholders (e.g., `{arizona:get_binding(id, View)}`) to
+  dynamically insert data from the view's bindings.
+- **Important**: The `id` binding is **required** and must be set by the consumer.
+  The `id` should be unique and binded to a top-level HTML element (e.g., a `div`)
   in the template. This ensures proper DOM patching and state management. For example:
 
   ```erlang
   render(View) ->
       arizona:render_view_template(View, ~"""
-      <div id="{arizona:get_assign(id, View)}">
-          Hello, {arizona:get_assign(name, View, ~"World")}!
+      <div id="{arizona:get_binding(id, View)}">
+          Hello, {arizona:get_binding(name, View, ~"World")}!
       </div>
       """).
   ```
@@ -179,7 +179,7 @@ elements.
 
 ## Parameters
 
-- `View`: The current view state (`t:arizona_view:view/0`), which contains the assigns
+- `View`: The current view state (`t:arizona_view:view/0`), which contains the bindings
   and other metadata used to populate the template. Components inherit their state from
   the parent view that calls them.
 - `Template`: The template to render. This can be either:
@@ -199,14 +199,14 @@ The rendered template as `t:rendered_component_template/0`.
   ```erlang
   button(View) ->
       arizona:render_component_template(View, ~"""
-      <button type="{arizona:get_assign(type, View, ~"button")}">
-          {arizona:get_assign(text, View)}
+      <button type="{arizona:get_binding(type, View, ~"button")}">
+          {arizona:get_binding(text, View)}
       </button>
       """).
   ```
 
-- The template can include placeholders (e.g., `{arizona:get_assign(type, View, ~"button")}`)
-  to dynamically insert data from the view's assigns.
+- The template can include placeholders (e.g., `{arizona:get_binding(type, View, ~"button")}`)
+  to dynamically insert data from the view's bindings.
 - Components are **stateless** and rely on the state of the parent view. They are
   designed to be reusable and lightweight.
 """".
@@ -240,7 +240,7 @@ The rendered template as `t:rendered_nested_template/0`.
       arizona:render_component_template(View, ~""""
       <div class="profile">
           <h1>User Profile</h1>
-          {case arizona:get_assign(user_role, View) of
+          {case arizona:get_binding(user_role, View) of
               admin ->
                   arizona:render_nested_template(~"""
                   <div class="admin-badge">
@@ -262,7 +262,7 @@ The rendered template as `t:rendered_nested_template/0`.
                   </div>
                   """)
           end}
-          <p>Welcome, {arizona:get_assign(username, View)}!</p>
+          <p>Welcome, {arizona:get_binding(username, View)}!</p>
       </div>
       """").
   ```
@@ -283,12 +283,12 @@ Renders a layout template, which provides a consistent structure (e.g., HTML
 wrappers, headers, footers) for views. Layouts are **stateless** and are rendered
 **only once** when the view is first mounted.
 
-They receive a special assign called `inner_content`, which represents the rendered
+They receive a special binding called `inner_content`, which represents the rendered
 content of the view being wrapped.
 
 ## Parameters
 
-- `View`: The current view state (`t:view/0`), which contains the assigns and other
+- `View`: The current view state (`t:view/0`), which contains the bindings and other
   metadata used to populate the template.
 - `Template`: The template to render. This can be either:
 
@@ -313,17 +313,17 @@ The rendered template as `t:rendered_layout_template/0`.
           <meta charset="UTF-8">
           <meta http-equiv="X-UA-Compatible" content="IE=edge">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>{arizona:get_assign(title, View)}</title>
+          <title>{arizona:get_binding(title, View)}</title>
           {arizona:render_html_scripts()}
       </head>
       <body>
-          {arizona:get_assign(inner_content, View)}
+          {arizona:get_binding(inner_content, View)}
       </body>
       </html>
       """).
   ```
 
-- The inner_content assign is automatically provided by Arizona and represents the
+- The inner_content binding is automatically provided by Arizona and represents the
   rendered content of the view being wrapped. It should be placed in the layout
   template where the view's content should appear.
 - Layouts are rendered only once and do not re-renders after their initial render.
@@ -335,20 +335,20 @@ The rendered template as `t:rendered_layout_template/0`.
 render_layout_template(Payload, Template) ->
     arizona_renderer:render_view_template(Payload, Template).
 
--spec render_view(Mod, Assigns) -> Rendered when
+-spec render_view(Mod, Bindings) -> Rendered when
     Mod :: module(),
-    Assigns :: assigns(),
+    Bindings :: bindings(),
     Rendered :: rendered_view().
-render_view(Mod, Assigns) ->
-    arizona_renderer:render_view(Mod, Assigns).
+render_view(Mod, Bindings) ->
+    arizona_renderer:render_view(Mod, Bindings).
 
--spec render_component(Mod, Fun, Assigns) -> Rendered when
+-spec render_component(Mod, Fun, Bindings) -> Rendered when
     Mod :: module(),
     Fun :: atom(),
-    Assigns :: assigns(),
+    Bindings :: bindings(),
     Rendered :: rendered_component().
-render_component(Mod, Fun, Assigns) ->
-    arizona_renderer:render_component(Mod, Fun, Assigns).
+render_component(Mod, Fun, Bindings) ->
+    arizona_renderer:render_component(Mod, Fun, Bindings).
 
 -spec render_if_true(Cond, Callback) -> Rendered when
     Cond :: boolean(),
@@ -378,41 +378,41 @@ render_html_scripts() ->
 render_js_event(ViewId, EventName, Payload) ->
     arizona_js:send_event(ViewId, EventName, Payload).
 
--spec new_view(Mod, Assigns) -> View when
+-spec new_view(Mod, Bindings) -> View when
     Mod :: module(),
-    Assigns :: assigns(),
+    Bindings :: bindings(),
     View :: view().
-new_view(Mod, Assigns) ->
-    arizona_view:new(Mod, Assigns).
+new_view(Mod, Bindings) ->
+    arizona_view:new(Mod, Bindings).
 
--spec put_assign(Key, Value, View0) -> View1 when
+-spec put_binding(Key, Value, View0) -> View1 when
     Key :: atom(),
     Value :: dynamic(),
     View0 :: view(),
     View1 :: view().
-put_assign(Key, Value, View) ->
-    arizona_view:put_assign(Key, Value, View).
+put_binding(Key, Value, View) ->
+    arizona_view:put_binding(Key, Value, View).
 
--spec put_assigns(Assigns, View0) -> View1 when
-    Assigns :: assigns(),
+-spec put_bindings(Bindings, View0) -> View1 when
+    Bindings :: bindings(),
     View0 :: view(),
     View1 :: view().
-put_assigns(Assigns, View) ->
-    arizona_view:put_assigns(Assigns, View).
+put_bindings(Bindings, View) ->
+    arizona_view:put_bindings(Bindings, View).
 
--spec get_assign(Key, View) -> Value when
+-spec get_binding(Key, View) -> Value when
     Key :: atom(),
     View :: view(),
     Value :: dynamic().
-get_assign(Key, View) ->
-    arizona_view:get_assign(Key, View).
+get_binding(Key, View) ->
+    arizona_view:get_binding(Key, View).
 
--spec get_assign(Key, View, Default) -> Value when
+-spec get_binding(Key, View, Default) -> Value when
     Key :: atom(),
     View :: view(),
     Value :: Default | dynamic().
-get_assign(Key, View, Default) ->
-    arizona_view:get_assign(Key, View, Default).
+get_binding(Key, View, Default) ->
+    arizona_view:get_binding(Key, View, Default).
 
 -spec generate_static() -> ok.
 generate_static() ->

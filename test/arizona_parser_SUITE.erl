@@ -257,7 +257,7 @@ parse_transform_render_list(Config) when is_list(Config) ->
                                                     {nil, 5}}}
                                         ]}
                                     ]}},
-                                {call, 7, {remote, 7, {atom, 7, arizona}, {atom, 7, get_assign}}, [
+                                {call, 7, {remote, 7, {atom, 7, arizona}, {atom, 7, get_binding}}, [
                                     {atom, 7, list}, {var, 7, 'View'}
                                 ]}
                             ]},
@@ -280,7 +280,7 @@ parse_transform_render_list(Config) when is_list(Config) ->
             {integer_to_binary(Item)}
         </li>
         """)
-     end, arizona:get_assign(list, View))}
+     end, arizona:get_binding(list, View))}
     </ul>
     """"),
     View = arizona_view:new(#{list => [1, 2, 3]}),

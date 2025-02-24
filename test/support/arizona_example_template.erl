@@ -6,19 +6,19 @@
 -export([render/1]).
 -export([handle_event/3]).
 
-mount(Assigns, _Socket) ->
-    View = arizona_view:new(?MODULE, Assigns),
+mount(Bindings, _Socket) ->
+    View = arizona_view:new(?MODULE, Bindings),
     {ok, View}.
 
 render(View) ->
     arizona:render_view_template(View, ~""""
     <html>
         <head></head>
-        <body id="{arizona:get_assign(id, View)}">
+        <body id="{arizona:get_binding(id, View)}">
             {arizona:render_view(arizona_example_counter, #{
                 id => ~"counter",
-                count => arizona:get_assign(count, View),
-                btn_text => arizona:get_assign(btn_text, View, ~"Increment")
+                count => arizona:get_binding(count, View),
+                btn_text => arizona:get_binding(btn_text, View, ~"Increment")
             })}
         </body>
     </html>

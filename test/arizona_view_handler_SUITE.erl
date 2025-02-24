@@ -39,12 +39,12 @@ end_per_suite(Config) ->
 %% Behaviour (arizona_live_view) callbacks
 %% --------------------------------------------------------------------
 
--spec mount(Assigns, Socket) -> Return when
-    Assigns :: arizona:assigns(),
+-spec mount(Bindings, Socket) -> Return when
+    Bindings :: arizona:bindings(),
     Socket :: arizona:socket(),
     Return :: arizona:mount_ret().
-mount(Assigns, _Socket) ->
-    View = arizona_view:new(?MODULE, Assigns),
+mount(Bindings, _Socket) ->
+    View = arizona_view:new(?MODULE, Bindings),
     {ok, View}.
 
 -spec render(View) -> Token when
@@ -52,8 +52,8 @@ mount(Assigns, _Socket) ->
     Token :: arizona:rendered_view_template().
 render(View) ->
     arizona:render_view_template(View, ~""""
-    <main id="{arizona:get_assign(id, View)}">
-        Hello, {arizona:get_assign(name, View)}!
+    <main id="{arizona:get_binding(id, View)}">
+        Hello, {arizona:get_binding(name, View)}!
     </main>
     """").
 

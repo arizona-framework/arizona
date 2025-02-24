@@ -34,21 +34,21 @@ diff_view_template(Config) when is_list(Config) ->
     Vars = [id, foo, bar],
     Mod = undefined,
     ViewId = ~"foo",
-    Assigns = #{id => ViewId, foo => ~"foo", bar => ~"bar"},
-    ChangedAssigns = #{bar => ~"baz"},
-    ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
+    Bindings = #{id => ViewId, foo => ~"foo", bar => ~"bar"},
+    ChangedBindings = #{bar => ~"baz"},
+    ExpectBindings = maps:merge(Bindings, ChangedBindings),
     Diff = [{2, ~"baz"}],
     Expect = {
-        arizona_view:new(Mod, ExpectAssigns, #{}, [], [], Diff),
+        arizona_view:new(Mod, ExpectBindings, #{}, [], [], Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, #{}, [], [], [])
+            ViewId => arizona_view:new(Mod, ExpectBindings, #{}, [], [], [])
         })
     },
-    View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], []),
+    View = arizona_view:new(Mod, Bindings, ChangedBindings, [], [], []),
     Token = arizona_renderer:render_view_template(View, ~"""
-    <div id={arizona:get_assign(id, View)}>
-    {arizona:get_assign(foo, View)}
-    {arizona:get_assign(bar, View)}
+    <div id={arizona:get_binding(id, View)}>
+    {arizona:get_binding(foo, View)}
+    {arizona:get_binding(bar, View)}
     </div>
     """),
     TokenCallback = fun() -> Token end,
@@ -60,18 +60,18 @@ diff_component_template(Config) when is_list(Config) ->
     Index = 0,
     Vars = [foo, bar],
     Mod = undefined,
-    Assigns = #{foo => ~"foo", bar => ~"bar"},
-    ChangedAssigns = #{bar => ~"baz"},
+    Bindings = #{foo => ~"foo", bar => ~"bar"},
+    ChangedBindings = #{bar => ~"baz"},
     Diff = [{1, ~"baz"}],
     Expect = {
-        arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], Diff),
+        arizona_view:new(Mod, Bindings, ChangedBindings, [], [], Diff),
         arizona_socket:new(diff)
     },
-    View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], []),
+    View = arizona_view:new(Mod, Bindings, ChangedBindings, [], [], []),
     Token = arizona_renderer:render_component_template(View, ~"""
     <div>
-        {arizona:get_assign(foo, View)}
-        {arizona:get_assign(bar, View)}
+        {arizona:get_binding(foo, View)}
+        {arizona:get_binding(bar, View)}
     </div>
     """),
     TokenCallback = fun() -> Token end,
@@ -83,18 +83,18 @@ diff_nested_template(Config) when is_list(Config) ->
     Index = 0,
     Vars = [foo, bar],
     Mod = undefined,
-    Assigns = #{foo => ~"foo", bar => ~"bar"},
-    ChangedAssigns = #{bar => ~"baz"},
+    Bindings = #{foo => ~"foo", bar => ~"bar"},
+    ChangedBindings = #{bar => ~"baz"},
     Diff = [{0, [{1, ~"baz"}]}],
     Expect = {
-        arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], Diff),
+        arizona_view:new(Mod, Bindings, ChangedBindings, [], [], Diff),
         arizona_socket:new(diff)
     },
-    View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], []),
+    View = arizona_view:new(Mod, Bindings, ChangedBindings, [], [], []),
     Token = arizona_renderer:render_nested_template(View, ~"""
     <div>
-        {arizona:get_assign(foo, View)}
-        {arizona:get_assign(bar, View)}
+        {arizona:get_binding(foo, View)}
+        {arizona:get_binding(bar, View)}
     </div>
     """),
     TokenCallback = fun() -> Token end,
@@ -106,8 +106,8 @@ diff_list_template(Config) when is_list(Config) ->
     Index = 0,
     Vars = [foo, bar],
     Mod = undefined,
-    Assigns = #{foo => ~"foo", bar => ~"bar"},
-    ChangedAssigns = #{bar => ~"baz"},
+    Bindings = #{foo => ~"foo", bar => ~"bar"},
+    ChangedBindings = #{bar => ~"baz"},
     Diff = [
         {0, [
             [{1, ~"baz"}, {0, ~"foo"}],
@@ -115,16 +115,16 @@ diff_list_template(Config) when is_list(Config) ->
         ]}
     ],
     Expect = {
-        arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], Diff),
+        arizona_view:new(Mod, Bindings, ChangedBindings, [], [], Diff),
         arizona_socket:new(diff)
     },
-    View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], []),
+    View = arizona_view:new(Mod, Bindings, ChangedBindings, [], [], []),
     Token = arizona_renderer:render_list(
         fun(Item) ->
             arizona_renderer:render_nested_template(#{'View' => View, 'Item' => Item}, ~"""
             <div>
-                {arizona:get_assign(foo, View)}
-                {arizona:get_assign(bar, View, Item)}
+                {arizona:get_binding(foo, View)}
+                {arizona:get_binding(bar, View, Item)}
             </div>
             """)
         end,
@@ -142,9 +142,9 @@ diff_view(Config) when is_list(Config) ->
     CounterMod = arizona_example_counter,
     ViewId = ~"app",
     CounterViewId = ~"counter",
-    Assigns = #{id => ViewId, count => 0, btn_text => ~"Increment"},
-    ChangedAssigns = #{count => 1, btn_text => ~"+1"},
-    ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
+    Bindings = #{id => ViewId, count => 0, btn_text => ~"Increment"},
+    ChangedBindings = #{count => 1, btn_text => ~"+1"},
+    ExpectBindings = maps:merge(Bindings, ChangedBindings),
     Rendered = [
         template,
         [
@@ -190,12 +190,12 @@ diff_view(Config) when is_list(Config) ->
         ]}
     ],
     Expect = {
-        arizona_view:new(Mod, ExpectAssigns, #{}, Rendered, [], Diff),
+        arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, #{}, Rendered, [], []),
+            ViewId => arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], []),
             CounterViewId => arizona_view:new(
                 CounterMod,
-                ExpectAssigns#{id => CounterViewId},
+                ExpectBindings#{id => CounterViewId},
                 #{},
                 [
                     template,
@@ -221,14 +221,14 @@ diff_view(Config) when is_list(Config) ->
         })
     },
     RenderSocket = arizona_socket:new(render),
-    {ok, MountedView} = arizona_view:mount(Mod, Assigns, RenderSocket),
+    {ok, MountedView} = arizona_view:mount(Mod, Bindings, RenderSocket),
     RenderToken = arizona_view:render(MountedView),
     ParentView = arizona_view:new(#{}),
     {RenderedView, Socket0} = arizona_renderer:render(
         RenderToken, MountedView, ParentView, RenderSocket
     ),
     View0 = arizona_view:set_tmp_rendered([], RenderedView),
-    View = arizona_view:put_assigns(ChangedAssigns, View0),
+    View = arizona_view:put_bindings(ChangedBindings, View0),
     Token = arizona_view:render(View),
     TokenCallback = fun() -> Token end,
     Socket1 = arizona_socket:set_render_context(diff, Socket0),
@@ -243,9 +243,9 @@ diff_view_new_id(Config) when is_list(Config) ->
     Mod = arizona_example_new_id,
     RootViewId = ~"foo",
     ViewId = ~"bar",
-    Assigns = #{id => RootViewId, view_id => ViewId, name => ~"World", ignore => false},
-    ChangedAssigns = #{view_id => ~"baz", name => ~"Arizona"},
-    ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
+    Bindings = #{id => RootViewId, view_id => ViewId, name => ~"World", ignore => false},
+    ChangedBindings = #{view_id => ~"baz", name => ~"Arizona"},
+    ExpectBindings = maps:merge(Bindings, ChangedBindings),
     Rendered = [
         template,
         [~"<div id=\"", ~"\"> ", ~"</div>"],
@@ -270,7 +270,7 @@ diff_view_new_id(Config) when is_list(Config) ->
         ]}
     ],
     Expect = {
-        arizona_view:new(RootMod, ExpectAssigns, #{}, Rendered, [], Diff),
+        arizona_view:new(RootMod, ExpectBindings, #{}, Rendered, [], Diff),
         arizona_socket:new(diff, #{
             ~"baz" => arizona_view:new(
                 Mod,
@@ -306,18 +306,18 @@ diff_view_new_id(Config) when is_list(Config) ->
                 [],
                 []
             ),
-            RootViewId => arizona_view:new(RootMod, ExpectAssigns, #{}, Rendered, [], [])
+            RootViewId => arizona_view:new(RootMod, ExpectBindings, #{}, Rendered, [], [])
         })
     },
     RenderSocket = arizona_socket:new(render),
-    {ok, MountedView} = arizona_view:mount(RootMod, Assigns, RenderSocket),
+    {ok, MountedView} = arizona_view:mount(RootMod, Bindings, RenderSocket),
     RenderToken = arizona_view:render(MountedView),
     ParentView = arizona_view:new(#{}),
     {RenderedView, Socket0} = arizona_renderer:render(
         RenderToken, MountedView, ParentView, RenderSocket
     ),
     View0 = arizona_view:set_tmp_rendered([], RenderedView),
-    View = arizona_view:put_assigns(ChangedAssigns, View0),
+    View = arizona_view:put_bindings(ChangedBindings, View0),
     Token = arizona_view:render(View),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:set_render_context(diff, Socket0),
@@ -331,9 +331,9 @@ diff_view_ignore(Config) when is_list(Config) ->
     Mod = arizona_example_new_id,
     RootViewId = ~"foo",
     ViewId = ~"bar",
-    Assigns = #{id => RootViewId, view_id => ViewId, name => ~"World", ignore => false},
-    ChangedAssigns = #{view_id => ~"baz", name => ~"Arizona", ignore => true},
-    ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
+    Bindings = #{id => RootViewId, view_id => ViewId, name => ~"World", ignore => false},
+    ChangedBindings = #{view_id => ~"baz", name => ~"Arizona", ignore => true},
+    ExpectBindings = maps:merge(Bindings, ChangedBindings),
     Rendered = [
         template,
         [~"<div id=\"", ~"\"> ", ~"</div>"],
@@ -351,7 +351,7 @@ diff_view_ignore(Config) when is_list(Config) ->
         ]
     ],
     Expect = {
-        arizona_view:new(RootMod, ExpectAssigns, #{}, Rendered, [], []),
+        arizona_view:new(RootMod, ExpectBindings, #{}, Rendered, [], []),
         arizona_socket:new(diff, #{
             % FIXME: The 'ViewId' should be removed from the socket views.
             % The question is: How to know the previous id?
@@ -373,7 +373,7 @@ diff_view_ignore(Config) when is_list(Config) ->
             ),
             RootViewId => arizona_view:new(
                 RootMod,
-                ExpectAssigns,
+                ExpectBindings,
                 #{},
                 [
                     template,
@@ -397,14 +397,14 @@ diff_view_ignore(Config) when is_list(Config) ->
         })
     },
     RenderSocket = arizona_socket:new(render),
-    {ok, MountedView} = arizona_view:mount(RootMod, Assigns, RenderSocket),
+    {ok, MountedView} = arizona_view:mount(RootMod, Bindings, RenderSocket),
     RenderToken = arizona_view:render(MountedView),
     ParentView = arizona_view:new(#{}),
     {RenderedView, Socket0} = arizona_renderer:render(
         RenderToken, MountedView, ParentView, RenderSocket
     ),
     View0 = arizona_view:set_tmp_rendered([], RenderedView),
-    View = arizona_view:put_assigns(ChangedAssigns, View0),
+    View = arizona_view:put_bindings(ChangedBindings, View0),
     Token = arizona_view:render(View),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:set_render_context(diff, Socket0),
@@ -416,23 +416,23 @@ diff_component(Config) when is_list(Config) ->
     Vars = [text],
     Mod = arizona_example_components,
     Fun = button,
-    Assigns = #{text => ~"Increment"},
-    ChangedAssigns = #{text => ~"+1"},
+    Bindings = #{text => ~"Increment"},
+    ChangedBindings = #{text => ~"+1"},
     Rendered = [template, [~"<button> ", ~"</button>"], [~"+1"]],
     Diff = [{0, ~"+1"}],
     Expect = {
-        arizona_view:new(Mod, Assigns, ChangedAssigns, Rendered, [], Diff),
+        arizona_view:new(Mod, Bindings, ChangedBindings, Rendered, [], Diff),
         arizona_socket:new(diff)
     },
     RenderSocket = arizona_socket:new(render),
-    View0 = arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], []),
+    View0 = arizona_view:new(Mod, Bindings, ChangedBindings, [], [], []),
     RenderToken = arizona_component:render(Mod, Fun, View0),
     ParentView = arizona_view:new(#{}),
     {RenderedView, Socket0} = arizona_renderer:render(
         RenderToken, View0, ParentView, RenderSocket
     ),
     View1 = arizona_view:set_tmp_rendered([], RenderedView),
-    View = arizona_view:put_assigns(ChangedAssigns, View1),
+    View = arizona_view:put_bindings(ChangedBindings, View1),
     Token = arizona_component:render(Mod, Fun, View),
     Socket = arizona_socket:set_render_context(diff, Socket0),
     TokenCallback = fun() -> Token end,
@@ -443,19 +443,19 @@ diff_list(Config) when is_list(Config) ->
     Index = 0,
     Vars = [foo, bar],
     Mod = undefined,
-    Assigns = #{foo => ~"foo", bar => ~"bar"},
-    ChangedAssigns = #{bar => ~"baz"},
+    Bindings = #{foo => ~"foo", bar => ~"bar"},
+    ChangedBindings = #{bar => ~"baz"},
     Diff = [{0, [{0, [~"foo", ~"baz"]}]}],
     Expect = {
-        arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], Diff),
+        arizona_view:new(Mod, Bindings, ChangedBindings, [], [], Diff),
         arizona_socket:new(diff)
     },
-    View = arizona_view:new(Mod, Assigns, ChangedAssigns, [], [], []),
+    View = arizona_view:new(Mod, Bindings, ChangedBindings, [], [], []),
     Token = arizona_renderer:render_nested_template(View, ~"""
     <div>
         {[
-            arizona:get_assign(foo, View),
-            arizona:get_assign(bar, View)
+            arizona:get_binding(foo, View),
+            arizona:get_binding(bar, View)
          ]}
     </div>
     """),

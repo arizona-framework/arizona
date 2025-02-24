@@ -8,7 +8,7 @@ handling client-side events.
 
 To implement a view in Arizona, a module must define the following callbacks:
 
-- `c:mount/2`: Initializes the view with assigns and a WebSocket connection.
+- `c:mount/2`: Initializes the view with bindings and a WebSocket connection.
 - `c:render/1`: Renders the view's template based on its current state.
 - `c:handle_event/3`: Handles client-side events and updates the view's state.
 
@@ -21,10 +21,10 @@ respond to user interactions in real-time.
 %% --------------------------------------------------------------------
 
 -export([new/2]).
--export([put_assign/3]).
--export([put_assigns/2]).
--export([get_assign/2]).
--export([get_assign/3]).
+-export([put_binding/3]).
+-export([put_bindings/2]).
+-export([get_binding/2]).
+-export([get_binding/3]).
 
 %% --------------------------------------------------------------------
 %% Support function exports
@@ -33,9 +33,9 @@ respond to user interactions in real-time.
 -export([new/1]).
 -export([new/6]).
 -export([module/1]).
--export([assigns/1]).
--export([changed_assigns/1]).
--export([set_changed_assigns/2]).
+-export([bindings/1]).
+-export([changed_bindings/1]).
+-export([set_changed_bindings/2]).
 -export([rendered/1]).
 -export([set_rendered/2]).
 -export([put_rendered/2]).
@@ -45,7 +45,7 @@ respond to user interactions in real-time.
 -export([diff/1]).
 -export([set_diff/2]).
 -export([put_diff/3]).
--export([merge_changed_assigns/1]).
+-export([merge_changed_bindings/1]).
 -export([rendered_to_iolist/1]).
 -export([diff_to_iolist/1]).
 
@@ -68,13 +68,13 @@ respond to user interactions in real-time.
 -doc ~"""
 Is invoked when a `t:view/0` is initialized.
 
-It sets up the initial state of the view, including its assigns.
+It sets up the initial state of the view, including its bindings.
 
 This callback **is required** for all view modules.
 
 ## Parameters
 
-- `Assigns`: A map (`t:assigns/0`) containing the initial data for the view.
+- `Bindings`: A map (`t:bindings/0`) containing the initial data for the view.
 - `Socket`: The WebSocket connection (`t:arizona_socket:socket/0).
 
 ## Returns
@@ -82,8 +82,8 @@ This callback **is required** for all view modules.
 `{ok, View}` where `View` is the initialized view state (`t:view/0`), or `ignore`
 if the view should not be mounted.
 """.
--callback mount(Assigns, Socket) -> Return when
-    Assigns :: assigns(),
+-callback mount(Bindings, Socket) -> Return when
+    Bindings :: bindings(),
     Socket :: arizona_socket:socket(),
     Return :: mount_ret().
 
@@ -98,7 +98,7 @@ This callback **is required** for all view modules.
 ## Parameters
 
 - `View`: The current view state (`t:view/0`), which includes the view module,
-  assigns, and other metadata.
+  bindings, and other metadata.
 
 ## Returns
 
@@ -138,8 +138,8 @@ The updated view state (`t:view/0`) after handling the event.
 
 -record(view, {
     module :: undefined | module(),
-    assigns :: assigns(),
-    changed_assigns :: assigns(),
+    bindings :: bindings(),
+    changed_bindings :: bindings(),
     rendered :: arizona_renderer:rendered(),
     tmp_rendered :: arizona_renderer:rendered(),
     diff :: arizona_diff:diff()
@@ -147,8 +147,8 @@ The updated view state (`t:view/0`) after handling the event.
 -opaque view() :: #view{}.
 -export_type([view/0]).
 
--type assigns() :: #{atom() => dynamic()}.
--export_type([assigns/0]).
+-type bindings() :: #{atom() => dynamic()}.
+-export_type([bindings/0]).
 
 -type id() :: binary().
 -export_type([id/0]).
@@ -175,72 +175,72 @@ doctest_test() -> doctest:module(?MODULE).
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec new(Mod, Assigns) -> View when
+-spec new(Mod, Bindings) -> View when
     Mod :: module(),
-    Assigns :: assigns(),
+    Bindings :: bindings(),
     View :: view().
-new(Mod, Assigns) ->
-    new(Mod, Assigns, #{}, [], [], []).
+new(Mod, Bindings) ->
+    new(Mod, Bindings, #{}, [], [], []).
 
--spec put_assign(Key, Value, View0) -> View1 when
+-spec put_binding(Key, Value, View0) -> View1 when
     Key :: atom(),
     Value :: dynamic(),
     View0 :: view(),
     View1 :: view().
-put_assign(Key, Value, #view{} = View) when is_atom(Key) ->
-    View#view{changed_assigns = maps:put(Key, Value, View#view.changed_assigns)}.
+put_binding(Key, Value, #view{} = View) when is_atom(Key) ->
+    View#view{changed_bindings = maps:put(Key, Value, View#view.changed_bindings)}.
 
--spec put_assigns(Assigns, View0) -> View1 when
-    Assigns :: assigns(),
+-spec put_bindings(Bindings, View0) -> View1 when
+    Bindings :: bindings(),
     View0 :: view(),
     View1 :: view().
-put_assigns(Assigns, #view{} = View) when is_map(Assigns) ->
-    maps:fold(fun(Key, Value, ViewAcc) -> put_assign(Key, Value, ViewAcc) end, View, Assigns).
+put_bindings(Bindings, #view{} = View) when is_map(Bindings) ->
+    maps:fold(fun(Key, Value, ViewAcc) -> put_binding(Key, Value, ViewAcc) end, View, Bindings).
 
--spec get_assign(Key, View) -> Value when
+-spec get_binding(Key, View) -> Value when
     Key :: atom(),
     View :: view(),
     Value :: dynamic().
-get_assign(Key, #view{} = View) when is_atom(Key) ->
-    maps:get(Key, View#view.changed_assigns, maps:get(Key, View#view.assigns)).
+get_binding(Key, #view{} = View) when is_atom(Key) ->
+    maps:get(Key, View#view.changed_bindings, maps:get(Key, View#view.bindings)).
 
--spec get_assign(Key, View, Default) -> Value when
+-spec get_binding(Key, View, Default) -> Value when
     Key :: atom(),
     View :: view(),
     Value :: Default | dynamic().
-get_assign(Key, #view{} = View, Default) when is_atom(Key) ->
-    maps:get(Key, View#view.changed_assigns, maps:get(Key, View#view.assigns, Default)).
+get_binding(Key, #view{} = View, Default) when is_atom(Key) ->
+    maps:get(Key, View#view.changed_bindings, maps:get(Key, View#view.bindings, Default)).
 
 %% --------------------------------------------------------------------
 %% Support function exports
 %% --------------------------------------------------------------------
 
--spec new(Assigns) -> View when
-    Assigns :: assigns(),
+-spec new(Bindings) -> View when
+    Bindings :: bindings(),
     View :: view().
-new(Assigns) ->
-    new(undefined, Assigns, #{}, [], [], []).
+new(Bindings) ->
+    new(undefined, Bindings, #{}, [], [], []).
 
--spec new(Mod, Assigns, ChangedAssigns, Rendered, TmpRendered, Diff) -> View when
+-spec new(Mod, Bindings, ChangedBindings, Rendered, TmpRendered, Diff) -> View when
     Mod :: undefined | module(),
-    Assigns :: assigns(),
-    ChangedAssigns :: assigns(),
+    Bindings :: bindings(),
+    ChangedBindings :: bindings(),
     Rendered :: arizona_renderer:rendered(),
     TmpRendered :: arizona_renderer:rendered(),
     Diff :: arizona_diff:diff(),
     View :: view().
-new(Mod, Assigns, ChangedAssigns, Rendered, TmpRendered, Diff) when
+new(Mod, Bindings, ChangedBindings, Rendered, TmpRendered, Diff) when
     is_atom(Mod),
-    is_map(Assigns),
-    is_map(ChangedAssigns),
+    is_map(Bindings),
+    is_map(ChangedBindings),
     is_list(Rendered),
     is_list(TmpRendered),
     is_list(Diff)
 ->
     #view{
         module = Mod,
-        assigns = Assigns,
-        changed_assigns = ChangedAssigns,
+        bindings = Bindings,
+        changed_bindings = ChangedBindings,
         rendered = Rendered,
         tmp_rendered = TmpRendered,
         diff = Diff
@@ -252,24 +252,24 @@ new(Mod, Assigns, ChangedAssigns, Rendered, TmpRendered, Diff) when
 module(#view{} = View) ->
     View#view.module.
 
--spec assigns(View) -> Assigns when
+-spec bindings(View) -> Bindings when
     View :: view(),
-    Assigns :: assigns().
-assigns(#view{} = View) ->
-    View#view.assigns.
+    Bindings :: bindings().
+bindings(#view{} = View) ->
+    View#view.bindings.
 
--spec changed_assigns(View) -> ChangedAssigns when
+-spec changed_bindings(View) -> ChangedBindings when
     View :: view(),
-    ChangedAssigns :: assigns().
-changed_assigns(#view{} = View) ->
-    View#view.changed_assigns.
+    ChangedBindings :: bindings().
+changed_bindings(#view{} = View) ->
+    View#view.changed_bindings.
 
--spec set_changed_assigns(ChangedAssigns, View0) -> View1 when
-    ChangedAssigns :: assigns(),
+-spec set_changed_bindings(ChangedBindings, View0) -> View1 when
+    ChangedBindings :: bindings(),
     View0 :: view(),
     View1 :: view().
-set_changed_assigns(ChangedAssigns, #view{} = View) when is_map(ChangedAssigns) ->
-    View#view{changed_assigns = ChangedAssigns}.
+set_changed_bindings(ChangedBindings, #view{} = View) when is_map(ChangedBindings) ->
+    View#view{changed_bindings = ChangedBindings}.
 
 -spec rendered(View) -> Rendered when
     View :: arizona_view:view(),
@@ -336,13 +336,13 @@ put_diff(Index, Payload, #view{} = View) when
 ->
     View#view{diff = [{Index, Payload} | View#view.diff]}.
 
--spec merge_changed_assigns(View0) -> View1 when
+-spec merge_changed_bindings(View0) -> View1 when
     View0 :: view(),
     View1 :: view().
-merge_changed_assigns(View) ->
+merge_changed_bindings(View) ->
     View#view{
-        assigns = maps:merge(View#view.assigns, View#view.changed_assigns),
-        changed_assigns = #{}
+        bindings = maps:merge(View#view.bindings, View#view.changed_bindings),
+        changed_bindings = #{}
     }.
 
 -doc ~"""
@@ -352,9 +352,9 @@ Formats the tmp_renderedcontent to `t:iolist/0`.
 
 ```
 > Mod = arizona_example_template.
-> Assigns = #{id => ~"app", count => 0}.
+> Bindings = #{id => ~"app", count => 0}.
 > Socket = arizona_socket:new(render).
-> {ok, View0} = arizona_view:mount(Mod, Assigns, Socket).
+> {ok, View0} = arizona_view:mount(Mod, Bindings, Socket).
 > Rendered = arizona_view:render(View0).
 > {View, _Socket} = arizona_renderer:render(Rendered, View0, View0, Socket).
 > arizona_view:rendered_to_iolist(View).
@@ -391,13 +391,13 @@ in the view module (`Mod`).
 
 It is called when a view is first rendered or when a WebSocket connection is
 established. This function sets up the initial state of the view, including
-its assigns.
+its bindings.
 
 ## Parameters
 
 - `Mod`: The module name of the view being mounted. This must be a valid atom
   and cannot be `undefined`.
-- `Assigns`: A map (`t:assigns/0`) containing the initial data for the view.
+- `Bindings`: A map (`t:bindings/0`) containing the initial data for the view.
 - `Socket`: The WebSocket connection (`t:arizona_socket:socket/0`), used for
   real-time communication between the client and server.
 
@@ -407,13 +407,13 @@ The return value is determined by the `c:mount/2` callback in the view module.
 It typically returns `{ok, View}` where `View` is the initialized view state
 (`t:view/0), or `ignore` if the view should not be mounted.
 """.
--spec mount(Mod, Assigns, Socket) -> Return when
+-spec mount(Mod, Bindings, Socket) -> Return when
     Mod :: module(),
-    Assigns :: assigns(),
+    Bindings :: bindings(),
     Socket :: arizona:socket(),
     Return :: mount_ret().
-mount(Mod, Assigns, Socket) when is_atom(Mod), Mod =/= undefined, is_map(Assigns) ->
-    erlang:apply(Mod, mount, [Assigns, Socket]).
+mount(Mod, Bindings, Socket) when is_atom(Mod), Mod =/= undefined, is_map(Bindings) ->
+    erlang:apply(Mod, mount, [Bindings, Socket]).
 
 -doc ~"""
 Renders the view's template by delegating to the `c:render/1` callback defined in
@@ -425,7 +425,7 @@ or in response to a client event.
 ## Parameters
 
 - `View`: The current view state (`t:view/0`), which includes the view module,
-  assigns, and other metadata.
+  bindings, and other metadata.
 
 ## Returns
 

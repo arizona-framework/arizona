@@ -46,8 +46,8 @@ process_route({Path, cowboy_static, {priv_file, App, Filename}}, StaticDir) ->
     write_priv_file(Path, App, Filename, StaticDir);
 process_route({Path, cowboy_static, {priv_dir, App, Dir}}, StaticDir) ->
     write_priv_dir_files(Path, App, Dir, StaticDir);
-process_route({Path, arizona_view_handler, {Mod, Assigns}}, StaticDir) ->
-    write_view_as_html(Path, Mod, Assigns, StaticDir);
+process_route({Path, arizona_view_handler, {Mod, Bindings}}, StaticDir) ->
+    write_view_as_html(Path, Mod, Bindings, StaticDir);
 process_route(Route, StaticDir) when is_tuple(Route) ->
     error(invalid_route, [Route, StaticDir], [
         {error_info, #{cause => ~"only static route is allowed"}}
@@ -79,10 +79,10 @@ write_priv_dir_files(Path0, App, Dir, StaticDir) ->
         Files
     ).
 
-write_view_as_html(Path, Mod, Assigns, StaticDir) ->
+write_view_as_html(Path, Mod, Bindings, StaticDir) ->
     ok = check_path_segments(Path),
     Socket0 = arizona_socket:new(render),
-    {ok, View0} = arizona_view:mount(Mod, Assigns, Socket0),
+    {ok, View0} = arizona_view:mount(Mod, Bindings, Socket0),
     Token = arizona_view:render(View0),
     {View, _Socket} = arizona_renderer:render(Token, View0, View0, Socket0),
     Html = arizona_view:rendered_to_iolist(View),

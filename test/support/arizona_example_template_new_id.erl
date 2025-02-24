@@ -7,17 +7,17 @@
 
 mount(#{ignore := true}, _Socket) ->
     ignore;
-mount(Assigns, _Socket) ->
-    View = arizona_view:new(?MODULE, Assigns),
+mount(Bindings, _Socket) ->
+    View = arizona_view:new(?MODULE, Bindings),
     {ok, View}.
 
 render(View) ->
     arizona:render_view_template(View, ~"""
-    <div id="{arizona:get_assign(id, View)}">
+    <div id="{arizona:get_binding(id, View)}">
         {arizona:render_view(arizona_example_new_id, #{
-            id => arizona:get_assign(view_id, View),
-            name =>  arizona:get_assign(name, View),
-            ignore => arizona:get_assign(ignore, View)
+            id => arizona:get_binding(view_id, View),
+            name =>  arizona:get_binding(name, View),
+            ignore => arizona:get_binding(ignore, View)
         })}
     </div>
     """).

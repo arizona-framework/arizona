@@ -7,7 +7,7 @@
 button(View) ->
     arizona:render_component_template(View, ~"""
     <button>
-        {arizona:get_assign(text, View)}
+        {arizona:get_binding(text, View)}
     </button>
     """).
 
@@ -18,7 +18,7 @@ list(View) ->
             arizona:render_nested_template(~"""
             <li>{Item}</li>
             """)
-         end, arizona:get_assign(list, View))}
+         end, arizona:get_binding(list, View))}
     </ul>
     """").
 
@@ -30,7 +30,7 @@ table(View) ->
                 arizona:render_nested_template(~"""
                 <th>{maps:get(label, Col)}</th>
                 """)
-             end, arizona:get_assign(columns, View))}
+             end, arizona:get_binding(columns, View))}
         </tr>
         {arizona:render_list(fun(Row) ->
             arizona:render_nested_template(~""""
@@ -41,9 +41,9 @@ table(View) ->
                         {erlang:apply(maps:get(callback, Col), [Row])}
                     </td>
                     """)
-                 end, arizona:get_assign(columns, View))}
+                 end, arizona:get_binding(columns, View))}
             </tr>
             """")
-         end, arizona:get_assign(rows, View))}
+         end, arizona:get_binding(rows, View))}
     </table>
     """"").

@@ -42,10 +42,10 @@ groups() ->
 
 mount(Config) when is_list(Config) ->
     Mod = arizona_example_template,
-    Assigns = #{id => ~"app", count => 0},
-    Expect = {ok, arizona_view:new(Mod, Assigns)},
+    Bindings = #{id => ~"app", count => 0},
+    Expect = {ok, arizona_view:new(Mod, Bindings)},
     Socket = arizona_socket:new(render),
-    Got = arizona_view:mount(Mod, Assigns, Socket),
+    Got = arizona_view:mount(Mod, Bindings, Socket),
     ?assertEqual(Expect, Got).
 
 mount_ignore(Config) when is_list(Config) ->
@@ -56,7 +56,7 @@ mount_ignore(Config) when is_list(Config) ->
 
 render(Config) when is_list(Config) ->
     Mod = arizona_example_template,
-    Assigns = #{id => ~"app", count => 0},
+    Bindings = #{id => ~"app", count => 0},
     Rendered = [
         template,
         [
@@ -82,9 +82,9 @@ render(Config) when is_list(Config) ->
         ]
     ],
     Expect = {
-        arizona_view:new(Mod, Assigns, #{}, Rendered, Rendered, []),
+        arizona_view:new(Mod, Bindings, #{}, Rendered, Rendered, []),
         arizona_socket:new(render, #{
-            ~"app" => arizona_view:new(Mod, Assigns, #{}, Rendered, [], []),
+            ~"app" => arizona_view:new(Mod, Bindings, #{}, Rendered, [], []),
             ~"counter" => arizona_view:new(
                 arizona_example_counter,
                 #{id => ~"counter", count => 0, btn_text => ~"Increment"},
@@ -114,7 +114,7 @@ render(Config) when is_list(Config) ->
     },
     ParentView = arizona_view:new(#{}),
     Socket = arizona_socket:new(render),
-    {ok, View} = arizona_view:mount(Mod, Assigns, Socket),
+    {ok, View} = arizona_view:mount(Mod, Bindings, Socket),
     Token = arizona_view:render(View),
     Got = arizona_renderer:render(Token, View, ParentView, Socket),
     ?assertEqual(Expect, Got).
@@ -138,8 +138,8 @@ rendered_to_iolist(Config) when is_list(Config) ->
     ParentView = arizona_view:new(#{}),
     Socket = arizona_socket:new(render),
     Mod = arizona_example_template,
-    Assigns = #{id => ~"app", count => 0},
-    {ok, View0} = arizona_view:mount(Mod, Assigns, Socket),
+    Bindings = #{id => ~"app", count => 0},
+    {ok, View0} = arizona_view:mount(Mod, Bindings, Socket),
     Token = arizona_view:render(View0),
     {View, _Socket} = arizona_renderer:render(Token, View0, ParentView, Socket),
     Got = arizona_view:rendered_to_iolist(View),
@@ -156,10 +156,10 @@ render_nested_template_to_iolist(Config) when is_list(Config) ->
     ParentView0 = arizona_view:new(#{show_dialog => true, message => ~"Hello, World!"}),
     Token = arizona_renderer:render_nested_template(ParentView0, ~""""
     <div>
-        {arizona_renderer:render_if_true(arizona:get_assign(show_dialog, View), fun() ->
+        {arizona_renderer:render_if_true(arizona:get_binding(show_dialog, View), fun() ->
              arizona_renderer:render_nested_template(View, ~"""
              <dialog open>
-                 {arizona_view:get_assign(message, View)}
+                 {arizona_view:get_binding(message, View)}
              </dialog>
              """)
          end)}
@@ -173,7 +173,7 @@ render_nested_template_to_iolist(Config) when is_list(Config) ->
 render_table_component(Config) when is_list(Config) ->
     Mod = arizona_example_components,
     Fun = table,
-    Assigns = #{
+    Bindings = #{
         columns => [
             #{
                 label => ~"Name",
@@ -226,10 +226,10 @@ render_table_component(Config) when is_list(Config) ->
     ],
     Socket = arizona_socket:new(render),
     Expect = {
-        arizona_view:new(undefined, Assigns, #{}, Rendered, Rendered, []),
+        arizona_view:new(undefined, Bindings, #{}, Rendered, Rendered, []),
         Socket
     },
-    View = arizona_view:new(Assigns),
+    View = arizona_view:new(Bindings),
     Token = arizona_component:render(Mod, Fun, View),
     Got = arizona_renderer:render(Token, View, View, Socket),
     ?assertEqual(Expect, Got).
@@ -237,7 +237,7 @@ render_table_component(Config) when is_list(Config) ->
 render_table_component_to_iolist(Config) when is_list(Config) ->
     Mod = arizona_example_components,
     Fun = table,
-    Assigns = #{
+    Bindings = #{
         columns => [
             #{
                 label => ~"Name",
@@ -253,7 +253,7 @@ render_table_component_to_iolist(Config) when is_list(Config) ->
             #{name => ~"Bob", age => ~"51"}
         ]
     },
-    View0 = arizona_view:new(Assigns),
+    View0 = arizona_view:new(Bindings),
     Socket = arizona_socket:new(render),
     Expect = [
         ~"<table>\n    <tr> ",
@@ -298,9 +298,9 @@ diff(Config) when is_list(Config) ->
     CounterMod = arizona_example_counter,
     ViewId = ~"app",
     CounterViewId = ~"counter",
-    Assigns = #{id => ViewId, count => 0, btn_text => ~"Increment"},
-    ChangedAssigns = #{count => 1, btn_text => ~"+1"},
-    ExpectAssigns = maps:merge(Assigns, ChangedAssigns),
+    Bindings = #{id => ViewId, count => 0, btn_text => ~"Increment"},
+    ChangedBindings = #{count => 1, btn_text => ~"+1"},
+    ExpectBindings = maps:merge(Bindings, ChangedBindings),
     Rendered = [
         template,
         [
@@ -327,12 +327,12 @@ diff(Config) when is_list(Config) ->
     ],
     Diff = [{1, [{2, [{0, ~"+1"}]}, {1, ~"1"}]}],
     Expect = {
-        arizona_view:new(Mod, ExpectAssigns, #{}, Rendered, [], Diff),
+        arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], Diff),
         arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectAssigns, #{}, Rendered, [], []),
+            ViewId => arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], []),
             CounterViewId => arizona_view:new(
                 CounterMod,
-                ExpectAssigns#{id => CounterViewId},
+                ExpectBindings#{id => CounterViewId},
                 #{},
                 [
                     template,
@@ -358,14 +358,14 @@ diff(Config) when is_list(Config) ->
         })
     },
     RenderSocket = arizona_socket:new(render),
-    {ok, MountedView} = arizona_view:mount(Mod, Assigns, RenderSocket),
+    {ok, MountedView} = arizona_view:mount(Mod, Bindings, RenderSocket),
     RenderToken = arizona_view:render(MountedView),
     ParentView = arizona_view:new(#{}),
     {RenderedView, Socket0} = arizona_renderer:render(
         RenderToken, MountedView, ParentView, RenderSocket
     ),
     View0 = arizona_view:set_tmp_rendered([], RenderedView),
-    View = arizona_view:put_assigns(ChangedAssigns, View0),
+    View = arizona_view:put_bindings(ChangedBindings, View0),
     Token = arizona_view:render(View),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:set_render_context(diff, Socket0),
@@ -377,8 +377,8 @@ diff_to_iolist(Config) when is_list(Config) ->
     Vars = [id, count, btn_text],
     Mod = arizona_example_template,
     ViewId = ~"app",
-    Assigns = #{id => ViewId, count => 0, btn_text => ~"Increment"},
-    ChangedAssigns = #{count => 1, btn_text => ~"+1"},
+    Bindings = #{id => ViewId, count => 0, btn_text => ~"Increment"},
+    ChangedBindings = #{count => 1, btn_text => ~"+1"},
     Expect = [
         ~"<html>\n    <head></head>\n    <body id=\"",
         ~"app",
@@ -395,14 +395,14 @@ diff_to_iolist(Config) when is_list(Config) ->
         ~"</body>\n</html>"
     ],
     RenderSocket = arizona_socket:new(render),
-    {ok, MountedView} = arizona_view:mount(Mod, Assigns, RenderSocket),
+    {ok, MountedView} = arizona_view:mount(Mod, Bindings, RenderSocket),
     RenderToken = arizona_view:render(MountedView),
     ParentView = arizona_view:new(#{}),
     {RenderedView, Socket0} = arizona_renderer:render(
         RenderToken, MountedView, ParentView, RenderSocket
     ),
     View0 = arizona_view:set_tmp_rendered([], RenderedView),
-    View = arizona_view:put_assigns(ChangedAssigns, View0),
+    View = arizona_view:put_bindings(ChangedBindings, View0),
     Token = arizona_view:render(View),
     TokenCallback = fun() -> Token end,
     Socket = arizona_socket:set_render_context(diff, Socket0),

@@ -45,16 +45,16 @@ init(Req0, []) ->
     InitState :: init_state(),
     Events :: cowboy_websocket:commands(),
     Socket :: arizona_socket:socket().
-websocket_init({{Mod, Assigns, _Opts}, Params}) ->
+websocket_init({{Mod, Bindings, _Opts}, Params}) ->
     ?LOG_INFO(#{
         text => ~"init",
         in => ?MODULE,
         view_module => Mod,
-        assigns => Assigns,
+        bindings => Bindings,
         params => Params
     }),
     Socket0 = arizona_socket:new(render),
-    {ok, View0} = arizona_view:mount(Mod, Assigns, Socket0),
+    {ok, View0} = arizona_view:mount(Mod, Bindings, Socket0),
     Token = arizona_view:render(View0),
     {_View, Socket1} = arizona_renderer:render(Token, View0, View0, Socket0),
     Socket = arizona_socket:set_render_context(diff, Socket1),
@@ -86,7 +86,7 @@ websocket_handle({text, Msg}, Socket0) ->
     {View2, Socket1} = arizona_diff:diff(Token, 0, View1, Socket0),
     Diff = arizona_view:diff(View2),
     Events = put_diff_event(Diff, ViewId, []),
-    View = arizona_view:merge_changed_assigns(View2),
+    View = arizona_view:merge_changed_bindings(View2),
     Socket = arizona_socket:put_view(View, Socket1),
     {Events, Socket}.
 
