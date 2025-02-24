@@ -22,10 +22,17 @@
 %% --------------------------------------------------------------------
 
 -opaque init_state() :: {
-    HandlerState :: arizona_view_handler:state(),
-    Params :: [{binary(), binary() | true}]
+    ReqBindings :: req_bindings(),
+    ReqQs :: req_qs(),
+    HandlerState :: arizona_view_handler:state()
 }.
 -export_type([init_state/0]).
+
+-type req_bindings() :: cowboy_router:bindings().
+-export_type([req_bindings/0]).
+
+-type req_qs() :: binary().
+-export_type([req_qs/0]).
 
 %% --------------------------------------------------------------------
 %% Behaviour (cowboy_websocket) callbacks
@@ -38,22 +45,25 @@
     InitState :: init_state().
 init(Req0, []) ->
     {ok, Req, Env} = arizona_server:req_route(Req0),
-    InitState = init_state(Req, Env),
-    {cowboy_websocket, Req, InitState}.
+    HandlerState = maps:get(handler_opts, Env),
+    ReqBindings = cowboy_req:bindings(Req),
+    ReqQs = cowboy_req:qs(Req),
+    {cowboy_websocket, Req, {ReqBindings, ReqQs, HandlerState}}.
 
 -spec websocket_init(InitState) -> {Events, Socket} when
     InitState :: init_state(),
     Events :: cowboy_websocket:commands(),
     Socket :: arizona_socket:socket().
-websocket_init({{Mod, Bindings, _Opts}, Params}) ->
+websocket_init({ReqBindings, ReqQs, {Mod, Bindings, _Opts}}) ->
     ?LOG_INFO(#{
         text => ~"init",
         in => ?MODULE,
         view_module => Mod,
         bindings => Bindings,
-        params => Params
+        req_bidings => ReqBindings,
+        req_qs => ReqQs
     }),
-    Socket0 = arizona_socket:new(render),
+    Socket0 = arizona_socket:new(render, #{}, ReqBindings, ReqQs),
     {ok, View0} = arizona_view:mount(Mod, Bindings, Socket0),
     Token = arizona_view:render(View0),
     {_View, Socket1} = arizona_renderer:render(Token, View0, View0, Socket0),
@@ -120,11 +130,6 @@ terminate(Reason, _Req, Socket) ->
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
-
-init_state(Req, Env) ->
-    HandlerState = maps:get(handler_opts, Env),
-    Params = cowboy_req:parse_qs(Req),
-    {HandlerState, Params}.
 
 put_init_event(Socket, Events) ->
     Views = #{Id => arizona_view:rendered(View) || Id := View <- arizona_socket:views(Socket)},

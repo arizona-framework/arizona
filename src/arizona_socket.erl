@@ -5,13 +5,15 @@
 %% --------------------------------------------------------------------
 
 -export([new/1]).
--export([new/2]).
+-export([new/4]).
 -export([render_context/1]).
 -export([set_render_context/2]).
 -export([views/1]).
 -export([put_view/2]).
 -export([get_view/2]).
 -export([remove_view/2]).
+-export([req_bindings/1]).
+-export([req_qs/1]).
 
 %
 
@@ -24,7 +26,9 @@
 
 -record(socket, {
     render_context :: render_context(),
-    views :: views()
+    views :: views(),
+    req_bindings :: arizona:req_bindings(),
+    req_qs :: arizona:req_qs()
 }).
 -opaque socket() :: #socket{}.
 -export_type([socket/0]).
@@ -43,16 +47,20 @@
     RenderContext :: render_context(),
     Socket :: socket().
 new(RenderContext) ->
-    new(RenderContext, #{}).
+    new(RenderContext, #{}, #{}, ~"").
 
--spec new(RenderContext, Views) -> Socket when
+-spec new(RenderContext, Views, ReqBindings, ReqQs) -> Socket when
     RenderContext :: render_context(),
     Views :: views(),
+    ReqBindings :: arizona:req_bindings(),
+    ReqQs :: arizona:req_qs(),
     Socket :: socket().
-new(RenderContext, Views) ->
+new(RenderContext, Views, ReqBindings, ReqQs) ->
     #socket{
         render_context = RenderContext,
-        views = Views
+        views = Views,
+        req_bindings = ReqBindings,
+        req_qs = ReqQs
     }.
 
 -spec render_context(Socket) -> RenderContext when
@@ -102,6 +110,18 @@ get_view(ViewId, #socket{} = Socket) when is_binary(ViewId) ->
     Socket1 :: socket().
 remove_view(ViewId, #socket{views = Views} = Socket) when is_map_key(ViewId, Views) ->
     Socket#socket{views = maps:remove(ViewId, Views)}.
+
+-spec req_bindings(Socket) -> ReqBindings when
+    Socket :: socket(),
+    ReqBindings :: arizona:req_bindings().
+req_bindings(#socket{} = Socket) ->
+    Socket#socket.req_bindings.
+
+-spec req_qs(Socket) -> ReqQs when
+    Socket :: socket(),
+    ReqQs :: arizona:req_qs().
+req_qs(#socket{} = Socket) ->
+    Socket#socket.req_qs.
 
 %% --------------------------------------------------------------------
 %% Private functions

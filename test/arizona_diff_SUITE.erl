@@ -40,9 +40,14 @@ diff_view_template(Config) when is_list(Config) ->
     Diff = [{2, ~"baz"}],
     Expect = {
         arizona_view:new(Mod, ExpectBindings, #{}, [], [], Diff),
-        arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectBindings, #{}, [], [], [])
-        })
+        arizona_socket:new(
+            diff,
+            #{
+                ViewId => arizona_view:new(Mod, ExpectBindings, #{}, [], [], [])
+            },
+            #{},
+            ~""
+        )
     },
     View = arizona_view:new(Mod, Bindings, ChangedBindings, [], [], []),
     Token = arizona_renderer:render_view_template(View, ~"""
@@ -191,34 +196,39 @@ diff_view(Config) when is_list(Config) ->
     ],
     Expect = {
         arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], Diff),
-        arizona_socket:new(diff, #{
-            ViewId => arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], []),
-            CounterViewId => arizona_view:new(
-                CounterMod,
-                ExpectBindings#{id => CounterViewId},
-                #{},
-                [
-                    template,
+        arizona_socket:new(
+            diff,
+            #{
+                ViewId => arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], []),
+                CounterViewId => arizona_view:new(
+                    CounterMod,
+                    ExpectBindings#{id => CounterViewId},
+                    #{},
                     [
-                        ~"<div id=\"",
-                        ~"\"> ",
-                        ~"",
-                        ~"</div>"
-                    ],
-                    [
-                        ~"counter",
-                        ~"1",
+                        template,
                         [
-                            template,
-                            [~"<button> ", ~"</button>"],
-                            [~"+1"]
+                            ~"<div id=\"",
+                            ~"\"> ",
+                            ~"",
+                            ~"</div>"
+                        ],
+                        [
+                            ~"counter",
+                            ~"1",
+                            [
+                                template,
+                                [~"<button> ", ~"</button>"],
+                                [~"+1"]
+                            ]
                         ]
-                    ]
-                ],
-                [],
-                []
-            )
-        })
+                    ],
+                    [],
+                    []
+                )
+            },
+            #{},
+            ~""
+        )
     },
     RenderSocket = arizona_socket:new(render),
     {ok, MountedView} = arizona_view:mount(Mod, Bindings, RenderSocket),
@@ -271,43 +281,48 @@ diff_view_new_id(Config) when is_list(Config) ->
     ],
     Expect = {
         arizona_view:new(RootMod, ExpectBindings, #{}, Rendered, [], Diff),
-        arizona_socket:new(diff, #{
-            ~"baz" => arizona_view:new(
-                Mod,
-                #{id => ~"baz", ignore => false, name => ~"Arizona"},
-                #{},
-                [
-                    template,
+        arizona_socket:new(
+            diff,
+            #{
+                ~"baz" => arizona_view:new(
+                    Mod,
+                    #{id => ~"baz", ignore => false, name => ~"Arizona"},
+                    #{},
                     [
-                        ~"<div id=\"",
-                        ~"\">\n    Hello, ",
-                        ~"!\n</div>"
+                        template,
+                        [
+                            ~"<div id=\"",
+                            ~"\">\n    Hello, ",
+                            ~"!\n</div>"
+                        ],
+                        [~"baz", ~"Arizona"]
                     ],
-                    [~"baz", ~"Arizona"]
-                ],
-                [],
-                []
-            ),
-            % FIXME: The 'ViewId' should be removed from the socket views.
-            % The question is: How to know the previous id?
-            ViewId => arizona_view:new(
-                Mod,
-                #{id => ~"bar", ignore => false, name => ~"World"},
-                #{},
-                [
-                    template,
+                    [],
+                    []
+                ),
+                % FIXME: The 'ViewId' should be removed from the socket views.
+                % The question is: How to know the previous id?
+                ViewId => arizona_view:new(
+                    Mod,
+                    #{id => ~"bar", ignore => false, name => ~"World"},
+                    #{},
                     [
-                        ~"<div id=\"",
-                        ~"\">\n    Hello, ",
-                        ~"!\n</div>"
+                        template,
+                        [
+                            ~"<div id=\"",
+                            ~"\">\n    Hello, ",
+                            ~"!\n</div>"
+                        ],
+                        [~"bar", ~"World"]
                     ],
-                    [~"bar", ~"World"]
-                ],
-                [],
-                []
-            ),
-            RootViewId => arizona_view:new(RootMod, ExpectBindings, #{}, Rendered, [], [])
-        })
+                    [],
+                    []
+                ),
+                RootViewId => arizona_view:new(RootMod, ExpectBindings, #{}, Rendered, [], [])
+            },
+            #{},
+            ~""
+        )
     },
     RenderSocket = arizona_socket:new(render),
     {ok, MountedView} = arizona_view:mount(RootMod, Bindings, RenderSocket),
@@ -352,49 +367,54 @@ diff_view_ignore(Config) when is_list(Config) ->
     ],
     Expect = {
         arizona_view:new(RootMod, ExpectBindings, #{}, Rendered, [], []),
-        arizona_socket:new(diff, #{
-            % FIXME: The 'ViewId' should be removed from the socket views.
-            % The question is: How to know the previous id?
-            ViewId => arizona_view:new(
-                Mod,
-                #{id => ~"bar", ignore => false, name => ~"World"},
-                #{},
-                [
-                    template,
+        arizona_socket:new(
+            diff,
+            #{
+                % FIXME: The 'ViewId' should be removed from the socket views.
+                % The question is: How to know the previous id?
+                ViewId => arizona_view:new(
+                    Mod,
+                    #{id => ~"bar", ignore => false, name => ~"World"},
+                    #{},
                     [
-                        ~"<div id=\"",
-                        ~"\">\n    Hello, ",
-                        ~"!\n</div>"
-                    ],
-                    [~"bar", ~"World"]
-                ],
-                [],
-                []
-            ),
-            RootViewId => arizona_view:new(
-                RootMod,
-                ExpectBindings,
-                #{},
-                [
-                    template,
-                    [~"<div id=\"", ~"\"> ", ~"</div>"],
-                    [
-                        ~"foo",
+                        template,
                         [
-                            template,
+                            ~"<div id=\"",
+                            ~"\">\n    Hello, ",
+                            ~"!\n</div>"
+                        ],
+                        [~"bar", ~"World"]
+                    ],
+                    [],
+                    []
+                ),
+                RootViewId => arizona_view:new(
+                    RootMod,
+                    ExpectBindings,
+                    #{},
+                    [
+                        template,
+                        [~"<div id=\"", ~"\"> ", ~"</div>"],
+                        [
+                            ~"foo",
                             [
-                                ~"<div id=\"",
-                                ~"\">\n    Hello, ",
-                                ~"!\n</div>"
-                            ],
-                            [~"bar", ~"World"]
+                                template,
+                                [
+                                    ~"<div id=\"",
+                                    ~"\">\n    Hello, ",
+                                    ~"!\n</div>"
+                                ],
+                                [~"bar", ~"World"]
+                            ]
                         ]
-                    ]
-                ],
-                [],
-                []
-            )
-        })
+                    ],
+                    [],
+                    []
+                )
+            },
+            #{},
+            ~""
+        )
     },
     RenderSocket = arizona_socket:new(render),
     {ok, MountedView} = arizona_view:mount(RootMod, Bindings, RenderSocket),

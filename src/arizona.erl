@@ -40,6 +40,8 @@ Arizona follows a component-based architecture where:
 -export([put_bindings/2]).
 -export([get_binding/2]).
 -export([get_binding/3]).
+-export([req_bindings/1]).
+-export([req_qs/1]).
 -export([generate_static/0]).
 
 %
@@ -59,6 +61,8 @@ Arizona follows a component-based architecture where:
 -ignore_xref([put_bindings/2]).
 -ignore_xref([get_binding/2]).
 -ignore_xref([get_binding/3]).
+-ignore_xref([req_bindings/1]).
+-ignore_xref([req_qs/1]).
 -ignore_xref([generate_static/0]).
 
 %% --------------------------------------------------------------------
@@ -112,6 +116,12 @@ Arizona follows a component-based architecture where:
 
 -type event_payload() :: arizona_view:event_payload().
 -export_type([event_payload/0]).
+
+-type req_bindings() :: arizona_websocket:req_bindings().
+-export_type([req_bindings/0]).
+
+-type req_qs() :: arizona_websocket:req_qs().
+-export_type([req_qs/0]).
 
 %% --------------------------------------------------------------------
 %% Doctests
@@ -413,6 +423,18 @@ get_binding(Key, View) ->
     Value :: Default | dynamic().
 get_binding(Key, View, Default) ->
     arizona_view:get_binding(Key, View, Default).
+
+-spec req_bindings(Socket) -> ReqBindings when
+    Socket :: socket(),
+    ReqBindings :: req_bindings().
+req_bindings(Socket) ->
+    arizona_socket:req_bindings(Socket).
+
+-spec req_qs(Socket) -> ReqQs when
+    Socket :: socket(),
+    ReqQs :: req_qs().
+req_qs(Socket) ->
+    arizona_socket:req_qs(Socket).
 
 -spec generate_static() -> ok.
 generate_static() ->
