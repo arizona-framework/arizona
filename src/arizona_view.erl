@@ -75,7 +75,7 @@ This callback **is required** for all view modules.
 ## Parameters
 
 - `Bindings`: A map (`t:bindings/0`) containing the initial data for the view.
-- `Socket`: The WebSocket connection (`t:arizona_socket:socket/0).
+- `Socket`: The WebSocket connection (`t:arizona_socket:socket/0`).
 
 ## Returns
 
@@ -405,7 +405,7 @@ its bindings.
 
 The return value is determined by the `c:mount/2` callback in the view module.
 It typically returns `{ok, View}` where `View` is the initialized view state
-(`t:view/0), or `ignore` if the view should not be mounted.
+(`t:view/0`), or `ignore` if the view should not be mounted.
 """.
 -spec mount(Mod, Bindings, Socket) -> Return when
     Mod :: module(),
@@ -455,7 +455,7 @@ It updates the view's state based on the event and returns the updated view.
 
 ## Returns
 
-The updated view state (`t:view/0) after handling the event.
+The updated view state (`t:view/0`) after handling the event.
 """.
 -spec handle_event(EventName, Payload, View0) -> View1 when
     EventName :: event_name(),
