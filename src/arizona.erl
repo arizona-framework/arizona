@@ -1,4 +1,25 @@
 -module(arizona).
+-moduledoc ~"""
+Provides core rendering functionality for building web applications using the
+Arizona Framework. It serves as the primary interface for creating stateful views,
+reusable components, application layouts, and dynamic template fragments.
+
+## Overview
+
+Arizona follows a component-based architecture where:
+
+- `Views`: are stateful entities that manage dynamic data through assigns
+- `Components`: are stateless UI elements that inherit parent view state
+- `Nested Templates`: handle conditional blocks and reusable fragments
+- `Layout`: define static application structure (rendered once on mount)
+
+## Key Functions
+
+- `render_view_template/2`: Main view renderer with stateful assigns (DOM-patched)
+- `render_component_template/2`: Stateless component renderer for UI composition
+- `render_nested_template/1`: Dynamic fragment renderer for conditional content
+- `render_layout_template/2`: Structural wrapper for views (initial render only)
+""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -93,9 +114,55 @@
 -export_type([event_payload/0]).
 
 %% --------------------------------------------------------------------
+%% Doctests
+%% --------------------------------------------------------------------
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+doctest_test() -> doctest:module(?MODULE).
+-endif.
+
+%% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
+-doc ~""""
+Renders a view template, interpolating dynamic data from the view's state (`View`)
+into the provided `Template`.
+
+This function is typically called within the `c:arizona_view:render/1` callback
+to render the view's template.
+
+## Parameters
+
+- `View`: The current view state (`t:view/0`), which contains the assigns and other
+  metadata used to populate the template.
+- `Template`: The template to render. This can be either:
+
+  - A binary string containing the template directly.
+  - A tuple `{file, Filename}` specifying a file from which to load the template.
+
+## Returns
+
+The rendered template as `t:rendered_view_template/0`.
+
+## Usage Notes
+
+- The template can include placeholders (e.g., `{arizona:get_assign(id, View)}`) to
+  dynamically insert data from the view's assigns.
+- **Important**: The `id` assign is **required** and must be set by the consumer.
+  The `id` should be unique and assigned to a top-level HTML element (e.g., a `div`)
+  in the template. This ensures proper DOM patching and state management. For example:
+
+  ```erlang
+  render(View) ->
+      arizona:render_view_template(View, ~"""
+      <div id="{arizona:get_assign(id, View)}">
+          Hello, {arizona:get_assign(name, View, ~"World")}!
+      </div>
+      """).
+  ```
+"""".
 -spec render_view_template(View, Template) -> Rendered when
     View :: view(),
     Template :: binary() | {file, file:filename_all()},
@@ -103,6 +170,46 @@
 render_view_template(Payload, Template) ->
     arizona_renderer:render_view_template(Payload, Template).
 
+-doc ~""""
+Renders a component template, interpolating dynamic data from the provided View state
+into the Template.
+
+This function is used within component modules to generate content for stateless UI
+elements.
+
+## Parameters
+
+- `View`: The current view state (`t:arizona_view:view/0`), which contains the assigns
+  and other metadata used to populate the template. Components inherit their state from
+  the parent view that calls them.
+- `Template`: The template to render. This can be either:
+
+  - A binary string containing the template directly.
+  - A tuple `{file, Filename}` specifying a file from which to load the template.
+
+## Returns
+
+The rendered template as `t:rendered_component_template/0`.
+
+## Usage Notes
+
+- This function is typically called within a component module to render the component's
+  template. For example:
+
+  ```erlang
+  button(View) ->
+      arizona:render_component_template(View, ~"""
+      <button type="{arizona:get_assign(type, View, ~"button")}">
+          {arizona:get_assign(text, View)}
+      </button>
+      """).
+  ```
+
+- The template can include placeholders (e.g., `{arizona:get_assign(type, View, ~"button")}`)
+  to dynamically insert data from the view's assigns.
+- Components are **stateless** and rely on the state of the parent view. They are
+  designed to be reusable and lightweight.
+"""".
 -spec render_component_template(View, Template) -> Rendered when
     View :: arizona_view:view(),
     Template :: binary() | {file, file:filename_all()},
@@ -110,12 +217,117 @@ render_view_template(Payload, Template) ->
 render_component_template(Payload, Template) ->
     arizona_renderer:render_component_template(Payload, Template).
 
+-doc ~"""""
+Renders a nested template, which is a stateless fragment of HTML or other content.
+
+## Parameters
+
+- `Template`: A binary string containing the template to render. This template can
+  include placeholders for dynamic data.
+
+## Returns
+
+The rendered template as `t:rendered_nested_template/0`.
+
+## Usage Notes
+
+- This function is used to dynamically generate smaller pieces of content within a
+  larger template, such as conditional blocks or reusable snippets/fragments.
+  For example:
+
+  ```erlang
+  render_user_profile(View) ->
+      arizona:render_component_template(View, ~""""
+      <div class="profile">
+          <h1>User Profile</h1>
+          {case arizona:get_assign(user_role, View) of
+              admin ->
+                  arizona:render_nested_template(~"""
+                  <div class="admin-badge">
+                      <span>Admin</span>
+                      <button>Edit Profile</button>
+                  </div>
+                  """);
+              member ->
+                  arizona:render_nested_template(~"""
+                  <div class="member-badge">
+                      <span>Member</span>
+                  </div>
+                  """);
+              guest ->
+                  arizona:render_nested_template(~"""
+                  <div class="guest-badge">
+                      <span>Guest</span>
+                      <button>Sign Up</button>
+                  </div>
+                  """)
+          end}
+          <p>Welcome, {arizona:get_assign(username, View)}!</p>
+      </div>
+      """").
+  ```
+
+- Nested templates are stateless and do not maintain their own state. They rely on
+  data passed through the parent template or view.
+- Use this function to keep templates modular and avoid repetition, especially for
+  conditional rendering or reusable UI elements.
+""""".
 -spec render_nested_template(Template) -> Rendered when
     Template :: binary(),
     Rendered :: rendered_nested_template().
 render_nested_template(Template) ->
     arizona_renderer:render_nested_template(Template).
 
+-doc ~""""
+Renders a layout template, which provides a consistent structure (e.g., HTML
+wrappers, headers, footers) for views. Layouts are **stateless** and are rendered
+**only once** when the view is first mounted.
+
+They receive a special assign called `inner_content`, which represents the rendered
+content of the view being wrapped.
+
+## Parameters
+
+- `View`: The current view state (`t:view/0`), which contains the assigns and other
+  metadata used to populate the template.
+- `Template`: The template to render. This can be either:
+
+  - A binary string containing the template directly.
+  - A tuple `{file, Filename}` specifying a file from which to load the template.
+
+## Returns
+
+The rendered template as `t:rendered_layout_template/0`.
+
+## Usage Notes
+
+- Layouts are used to wrap views in a consistent structure, such as a common HTML
+  template with headers, footers, and navigation. For Example:
+
+  ```erlang
+  render(View) ->
+      arizona:render_layout_template(View, ~"""
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta http-equiv="X-UA-Compatible" content="IE=edge">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>{arizona:get_assign(title, View)}</title>
+          {arizona:render_html_scripts()}
+      </head>
+      <body>
+          {arizona:get_assign(inner_content, View)}
+      </body>
+      </html>
+      """).
+  ```
+
+- The inner_content assign is automatically provided by Arizona and represents the
+  rendered content of the view being wrapped. It should be placed in the layout
+  template where the view's content should appear.
+- Layouts are rendered only once and do not re-renders after their initial render.
+"""".
 -spec render_layout_template(View, Template) -> Rendered when
     View :: view(),
     Template :: binary() | {file, file:filename_all()},

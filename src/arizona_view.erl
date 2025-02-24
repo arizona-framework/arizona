@@ -1,4 +1,20 @@
 -module(arizona_view).
+-moduledoc ~"""
+The `arizona_view` behaviour defines the interface for creating stateful
+views in the Arizona framework.
+
+Views are responsible for managing their state, rendering templates, and
+handling client-side events.
+
+To implement a view in Arizona, a module must define the following callbacks:
+
+- `c:mount/2`: Initializes the view with assigns and a WebSocket connection.
+- `c:render/1`: Renders the view's template based on its current state.
+- `c:handle_event/3`: Handles client-side events and updates the view's state.
+
+These callbacks work together to create dynamic, stateful views that can
+respond to user interactions in real-time.
+""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -49,15 +65,67 @@
 %% Callback definitions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Is invoked when a `t:view/0` is initialized.
+
+It sets up the initial state of the view, including its assigns.
+
+This callback **is required** for all view modules.
+
+## Parameters
+
+- `Assigns`: A map (`t:assigns/0`) containing the initial data for the view.
+- `Socket`: The WebSocket connection (`t:arizona_socket:socket/0).
+
+## Returns
+
+`{ok, View}` where `View` is the initialized view state (`t:view/0`), or `ignore`
+if the view should not be mounted.
+""".
 -callback mount(Assigns, Socket) -> Return when
     Assigns :: assigns(),
     Socket :: arizona_socket:socket(),
     Return :: mount_ret().
 
+-doc ~"""
+Is responsible for rendering the view's template.
+
+It is called whenever the view needs to be re-rendered, such as after a state
+update or in response to a client event.
+
+This callback **is required** for all view modules.
+
+## Parameters
+
+- `View`: The current view state (`t:view/0`), which includes the view module,
+  assigns, and other metadata.
+
+## Returns
+
+The rendered template as `t:arizona:rendered_view_template/0`.
+""".
 -callback render(View) -> Rendered when
     View :: view(),
     Rendered :: arizona:rendered_view_template().
 
+-doc ~"""
+Handles events sent from the client.
+
+It updates the view's state based on the event and returns the updated view.
+
+This callback **is required** for all view modules.
+
+## Parameters
+
+- `EventName`: The name of the event (`t:event_name/0`), typically a `t:binary/0`.
+- `Payload`: The data associated with the event (`t:event_payload/0`), which can
+  be any `t:dynamic/0` value.
+- `View`: The current view state (`t:view/0`) before handling the event.
+
+## Returns
+
+The updated view state (`t:view/0`) after handling the event.
+""".
 -callback handle_event(EventName, Payload, View0) -> View1 when
     EventName :: event_name(),
     Payload :: event_payload(),
@@ -317,6 +385,28 @@ diff_to_iolist(#view{} = View) ->
 %% Callback support function definitions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Initializes a `t:view/0` by delegating to the `c:mount/2` callback defined
+in the view module (`Mod`).
+
+It is called when a view is first rendered or when a WebSocket connection is
+established. This function sets up the initial state of the view, including
+its assigns.
+
+## Parameters
+
+- `Mod`: The module name of the view being mounted. This must be a valid atom
+  and cannot be `undefined`.
+- `Assigns`: A map (`t:assigns/0`) containing the initial data for the view.
+- `Socket`: The WebSocket connection (`t:arizona_socket:socket/0`), used for
+  real-time communication between the client and server.
+
+## Returns
+
+The return value is determined by the `c:mount/2` callback in the view module.
+It typically returns `{ok, View}` where `View` is the initialized view state
+(`t:view/0), or `ignore` if the view should not be mounted.
+""".
 -spec mount(Mod, Assigns, Socket) -> Return when
     Mod :: module(),
     Assigns :: assigns(),
@@ -325,12 +415,48 @@ diff_to_iolist(#view{} = View) ->
 mount(Mod, Assigns, Socket) when is_atom(Mod), Mod =/= undefined, is_map(Assigns) ->
     erlang:apply(Mod, mount, [Assigns, Socket]).
 
+-doc ~"""
+Renders the view's template by delegating to the `c:render/1` callback defined in
+the view module (`Mod`).
+
+It is called whenever the view needs to be re-rendered, such as after a state update
+or in response to a client event.
+
+## Parameters
+
+- `View`: The current view state (`t:view/0`), which includes the view module,
+  assigns, and other metadata.
+
+## Returns
+
+The rendered template as `t:arizona:rendered_view_template/0`. This is typically
+a tuple delegated to `arizona_renderer:render/4` or `arizona_diff:diff/6`. Such
+delegate depends on the `t:arizona_socket:render_context/0`.
+""".
 -spec render(View) -> Rendered when
     View :: view(),
     Rendered :: arizona:rendered_view_template().
 render(#view{module = Mod} = View) when Mod =/= undefined ->
     erlang:apply(Mod, render, [View]).
 
+-doc ~"""
+Handles events sent from the client (e.g., button clicks or form submissions) by
+delegating to the `c:handle_event/3` callback defined in the view module (`Mod`).
+
+It updates the view's state based on the event and returns the updated view.
+
+## Parameters
+
+- `EventName`: The name of the event (`t:event_name/0`), typically a `t:binary/0`
+  (e.g., ~"incr").
+- `Payload`: The data associated with the event (`t:event_payload/0), which can
+  be any `t:dynamic/0` value.
+- `View`: The current view state (`t:view/0) before handling the event.
+
+## Returns
+
+The updated view state (`t:view/0) after handling the event.
+""".
 -spec handle_event(EventName, Payload, View0) -> View1 when
     EventName :: event_name(),
     Payload :: event_payload(),
