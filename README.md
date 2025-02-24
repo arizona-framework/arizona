@@ -16,13 +16,13 @@ Arizona utilizes a templating approach where Erlang code is embedded within HTML
 using curly braces `{}`. This allows dynamic content generation by executing Erlang
 functions directly within the HTML structure. For example:
 
-```herl
+```erlang
 <ul>
-  {arizona:render_list(fun(Item) ->
-      arizona:render_nested_template(~"""
+    {arizona:render_list(fun(Item) ->
+        arizona:render_nested_template(~"""
         <li>{Item}</li>
-      """)
-    end, arizona:get_assign(list, View))}
+        """)
+     end, arizona:get_assign(list, View))}
 </ul>
 ```
 
