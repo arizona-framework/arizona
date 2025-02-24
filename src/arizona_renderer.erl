@@ -47,8 +47,8 @@
     | {component_template, Static :: static_list(), Dynamic :: dynamic_list()}
     | {nested_template, Static :: static_list(), Dynamic :: dynamic_list()}
     | {list_template, Static :: static_list(), Dynamic :: dynamic_list()}
-    | {view, Mod :: module(), Assigns :: arizona_view:assigns()}
-    | {component, Mod :: module(), Fun :: atom(), Assigns :: arizona_view:assigns()}
+    | {view, Mod :: module(), Bindings :: arizona_view:bindings()}
+    | {component, Mod :: module(), Fun :: atom(), Bindings :: arizona_view:bindings()}
     | {list, Static :: static_list(), Dynamic :: dynamic_list()}.
 -export_type([token/0]).
 
@@ -114,20 +114,20 @@ render_component_template(View, Template) ->
 render_nested_template(Template) ->
     missing_parse_transform_error(Template).
 
--spec render_view(Mod, Assigns) -> Token when
+-spec render_view(Mod, Bindings) -> Token when
     Mod :: module(),
-    Assigns :: arizona_view:assigns(),
-    Token :: {view, Mod, Assigns}.
-render_view(Mod, Assigns) when is_atom(Mod), is_map(Assigns), is_map_key(id, Assigns) ->
-    {view, Mod, Assigns}.
+    Bindings :: arizona_view:bindings(),
+    Token :: {view, Mod, Bindings}.
+render_view(Mod, Bindings) when is_atom(Mod), is_map(Bindings), is_map_key(id, Bindings) ->
+    {view, Mod, Bindings}.
 
--spec render_component(Mod, Fun, Assigns) -> Token when
+-spec render_component(Mod, Fun, Bindings) -> Token when
     Mod :: module(),
     Fun :: atom(),
-    Assigns :: arizona_view:assigns(),
-    Token :: {component, Mod, Fun, Assigns}.
-render_component(Mod, Fun, Assigns) when is_atom(Mod), is_atom(Fun), is_map(Assigns) ->
-    {component, Mod, Fun, Assigns}.
+    Bindings :: arizona_view:bindings(),
+    Token :: {component, Mod, Fun, Bindings}.
+render_component(Mod, Fun, Bindings) when is_atom(Mod), is_atom(Fun), is_map(Bindings) ->
+    {component, Mod, Fun, Bindings}.
 
 -spec render_if_true(Cond, Callback) -> Rendered when
     Cond :: boolean(),
@@ -175,10 +175,10 @@ render({nested_template, Static, Dynamic}, _View, ParentView, Socket) ->
     render_nested_template(ParentView, Socket, Static, Dynamic);
 render({list_template, Static, DynamicCallback, List}, View, ParentView, Socket) ->
     render_list_template(View, ParentView, Socket, Static, DynamicCallback, List);
-render({view, Mod, Assigns}, _View, ParentView, Socket) ->
-    render_view(ParentView, Socket, Mod, Assigns);
-render({component, Mod, Fun, Assigns}, _View, ParentView, Socket) ->
-    render_component(ParentView, Socket, Mod, Fun, Assigns);
+render({view, Mod, Bindings}, _View, ParentView, Socket) ->
+    render_view(ParentView, Socket, Mod, Bindings);
+render({component, Mod, Fun, Bindings}, _View, ParentView, Socket) ->
+    render_component(ParentView, Socket, Mod, Fun, Bindings);
 render({list, Static, DynamicList}, View, ParentView, Socket) ->
     render_list(Static, DynamicList, View, ParentView, Socket);
 render(List, View, ParentView, Socket) when is_list(List) ->
@@ -202,17 +202,17 @@ render_nested_template(ParentView, Template) ->
     Bindings = #{'View' => ParentView},
     render_nested_template(Bindings, Template).
 
--spec render_layout(Mod, Assigns, InnerContent, Socket0) -> Layout when
+-spec render_layout(Mod, Bindings, InnerContent, Socket0) -> Layout when
     Mod :: module(),
-    Assigns :: arizona_view:assigns(),
+    Bindings :: arizona_view:bindings(),
     InnerContent :: token(),
     Socket0 :: arizona_socket:socket(),
     Layout :: {LayoutView, Socket1},
     LayoutView :: arizona_view:view(),
     Socket1 :: arizona_socket:socket().
-render_layout(Mod, Assigns0, InnerContent, Socket) ->
-    Assigns = Assigns0#{inner_content => [InnerContent]},
-    View = arizona_layout:mount(Mod, Assigns, Socket),
+render_layout(Mod, Bindings0, InnerContent, Socket) ->
+    Bindings = Bindings0#{inner_content => [InnerContent]},
+    View = arizona_layout:mount(Mod, Bindings, Socket),
     Token = arizona_layout:render(View),
     render(Token, View, View, Socket).
 
@@ -237,7 +237,7 @@ render_view_template(View0, Socket0, Static, Dynamic0) ->
     Template = [template, Static, Dynamic],
     View2 = arizona_view:set_rendered(Template, View1),
     View3 = arizona_view:set_tmp_rendered(Template, View2),
-    View = arizona_view:merge_changed_assigns(View3),
+    View = arizona_view:merge_changed_bindings(View3),
     Socket = arizona_socket:put_view(View, Socket1),
     {View, Socket}.
 
@@ -250,8 +250,8 @@ render_component_template(View0, Socket0, Static, Dynamic0) ->
     {View, Socket}.
 
 render_nested_template(ParentView0, Socket0, Static, Dynamic0) ->
-    Assigns = arizona_view:assigns(ParentView0),
-    View0 = arizona_view:new(Assigns),
+    Bindings = arizona_view:bindings(ParentView0),
+    View0 = arizona_view:new(Bindings),
     {View1, Socket} = render_dynamic(Dynamic0, View0, Socket0),
     Dynamic = arizona_view:tmp_rendered(View1),
     Template = [template, Static, Dynamic],
@@ -259,7 +259,7 @@ render_nested_template(ParentView0, Socket0, Static, Dynamic0) ->
     {ParentView, Socket}.
 
 render_list_template(View0, ParentView0, Socket, Static, Callback, List) ->
-    View = arizona_view:new(arizona_view:assigns(View0)),
+    View = arizona_view:new(arizona_view:bindings(View0)),
     DynamicList = render_dynamic_list_callback(List, Callback, View, View, Socket),
     Template = [list_template, Static, DynamicList],
     ParentView = arizona_view:put_tmp_rendered(Template, ParentView0),
@@ -275,8 +275,8 @@ render_dynamic_list_callback([Item | T], Callback, View, ParentView, Socket) ->
         | render_dynamic_list_callback(T, Callback, View, ParentView, Socket)
     ].
 
-render_view(ParentView0, Socket0, Mod, Assigns) ->
-    case arizona_view:mount(Mod, Assigns, Socket0) of
+render_view(ParentView0, Socket0, Mod, Bindings) ->
+    case arizona_view:mount(Mod, Bindings, Socket0) of
         {ok, View0} ->
             Token = arizona_view:render(View0),
             {View, Socket1} = render(Token, View0, ParentView0, Socket0),
@@ -288,8 +288,8 @@ render_view(ParentView0, Socket0, Mod, Assigns) ->
             {ParentView0, Socket0}
     end.
 
-render_component(ParentView0, Socket0, Mod, Fun, Assigns) ->
-    View0 = arizona_view:new(Assigns),
+render_component(ParentView0, Socket0, Mod, Fun, Bindings) ->
+    View0 = arizona_view:new(Bindings),
     Token = arizona_component:render(Mod, Fun, View0),
     {View, Socket1} = render(Token, View0, ParentView0, Socket0),
     Rendered = arizona_view:tmp_rendered(View),
@@ -298,7 +298,7 @@ render_component(ParentView0, Socket0, Mod, Fun, Assigns) ->
     {ParentView, Socket1}.
 
 render_list(Static, DynamicList0, View0, ParentView0, Socket) ->
-    View = arizona_view:new(arizona_view:assigns(View0)),
+    View = arizona_view:new(arizona_view:bindings(View0)),
     DynamicList = render_dynamic_list(DynamicList0, View, Socket),
     Rendered = [list, Static, DynamicList],
     ParentView1 = arizona_view:put_rendered(Rendered, ParentView0),

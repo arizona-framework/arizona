@@ -22,7 +22,7 @@ functions directly within the HTML structure. For example:
         arizona:render_nested_template(~"""
         <li>{Item}</li>
         """)
-     end, arizona:get_assign(list, View))}
+     end, arizona:get_binding(list, View))}
 </ul>
 ```
 
@@ -96,7 +96,7 @@ Create a `config/sys.config` file:
                 {"/assets/[...]", cowboy_static, {priv_dir, arizona_example, "assets"}},
                 % Views are stateful and keep their state in memory.
                 % Use the 'arizona_view_handler' to render Arizona views.
-                % The 'arizona_example_page' will be mounted with the assigns 'title' and 'id'.
+                % The 'arizona_example_page' will be mounted with the bindings 'title' and 'id'.
                 % The layout is optional and wraps the view. It does not have a state; 
                 % it simply places the view within its structure.
                 {"/", arizona_view_handler,
@@ -129,13 +129,13 @@ Create the `src/arizona_example_page.erl` file:
 -export([render/1]).
 -export([handle_event/3]).
 
-mount(Assigns, _Socket) ->
-    View = arizona:new_view(?MODULE, Assigns),
+mount(Bindings, _Socket) ->
+    View = arizona:new_view(?MODULE, Bindings),
     {ok, View}.
 
 render(View) ->
     arizona:render_view_template(View, ~"""
-    <div id="{arizona:get_assign(id, View)}">
+    <div id="{arizona:get_binding(id, View)}">
         {arizona:render_view(arizona_example_counter, #{
             id => ~"counter",
             count => 0
@@ -158,16 +158,16 @@ Create the `src/arizona_example_counter.erl` view, which is defined in the rende
 -export([render/1]).
 -export([handle_event/3]).
 
-mount(Assigns, _Socket) ->
-    View = arizona:new_view(?MODULE, Assigns),
+mount(Bindings, _Socket) ->
+    View = arizona:new_view(?MODULE, Bindings),
     {ok, View}.
 
 render(View) ->
     arizona:render_view_template(View, ~"""
-    <div id="{arizona:get_assign(id, View)}">
-        <span>{integer_to_binary(arizona:get_assign(count, View))}</span>
+    <div id="{arizona:get_binding(id, View)}">
+        <span>{integer_to_binary(arizona:get_binding(count, View))}</span>
         {arizona:render_component(arizona_example_components, button, #{
-            handler => arizona:get_assign(id, View),
+            handler => arizona:get_binding(id, View),
             event => ~"incr",
             payload => 1,
             text => ~"Increment"
@@ -176,8 +176,8 @@ render(View) ->
     """).
 
 handle_event(~"incr", Incr, View) ->
-    Count = arizona:get_assign(count, View),
-    arizona:put_assign(count, Count + Incr, View).
+    Count = arizona:get_binding(count, View),
+    arizona:put_binding(count, Count + Incr, View).
 ```
 
 Create the button in `src/arizona_example_components.erl`, which is defined in the render
@@ -190,14 +190,14 @@ function of the view:
 button(View) ->
     arizona:render_component_template(View, ~"""
     <button
-        type="{arizona:get_assign(type, View, ~"button")}"
+        type="{arizona:get_binding(type, View, ~"button")}"
         onclick="{arizona:render_js_event(
-            arizona:get_assign(handler, View),
-            arizona:get_assign(event, View),
-            arizona:get_assign(payload, View)
+            arizona:get_binding(handler, View),
+            arizona:get_binding(event, View),
+            arizona:get_binding(payload, View)
         )}"
     >
-        {arizona:get_assign(text, View)}
+        {arizona:get_binding(text, View)}
     </button>
     """).
 ```
@@ -212,8 +212,8 @@ Create the optional layout `src/arizona_example_layout.erl`, which is defined in
 -export([mount/2]).
 -export([render/1]).
 
-mount(Assigns, _Socket) ->
-    arizona:new_view(?MODULE, Assigns).
+mount(Bindings, _Socket) ->
+    arizona:new_view(?MODULE, Bindings).
 
 render(View) ->
     arizona:render_layout_template(View, ~""""
@@ -223,13 +223,13 @@ render(View) ->
         <meta charset="UTF-8">
         <meta http-equiv="X-UA-Compatible" content="IE=edge">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{arizona:get_assign(title, View)}</title>
+        <title>{arizona:get_binding(title, View)}</title>
         {arizona:render_html_scripts()}
         <script src="assets/main.js"></script>
     </head>
     <body>
-        {% The 'inner_content' assign is auto-assigned by Arizona in the view. }
-        {arizona:get_assign(inner_content, View)}
+        {% The 'inner_content' binding is auto-bindinged by Arizona in the view. }
+        {arizona:get_binding(inner_content, View)}
     </body>
     </html>
     """").

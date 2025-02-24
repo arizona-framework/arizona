@@ -81,7 +81,7 @@ views(#socket{} = Socket) ->
     Socket0 :: socket(),
     Socket1 :: socket().
 put_view(View, Socket) ->
-    ViewId = arizona_view:get_assign(id, View),
+    ViewId = arizona_view:get_binding(id, View),
     put_view(ViewId, View, Socket).
 
 -spec get_view(ViewId, Socket) -> {ok, View} | error when

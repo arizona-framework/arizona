@@ -47,7 +47,7 @@ it stateless and reusable.
 - `Fun`: The function name (`t:atom/0`) within the component module that handles
   rendering.
 - `View`: The current view state (`t:arizona:view/0`) of the parent view. This is
-  passed to the component to access assigns or other data.
+  passed to the component to access bindings or other data.
 
 ## Returns
 

@@ -11,7 +11,7 @@ not the layout.
 
 To implement a layout in Arizona, a module must define the following callbacks:
 
-- `c:mount/2`: Initializes the layout with assigns and a WebSocket connection.
+- `c:mount/2`: Initializes the layout with bindings and a WebSocket connection.
 - `c:render/1`: Renders the layout's template **once**, wrapping the view's content.
 
 Layouts provide a way to create consistent UI structures across multiple views,
@@ -32,21 +32,21 @@ such as headers, footers, or navigation bars.
 -doc ~"""
 Initializes the layout when it is first rendered.
 
-This callback sets up the layout's assigns and prepares it to wrap the view's
+This callback sets up the layout's bindings and prepares it to wrap the view's
 content. The layout is rendered only once, and its state remains static throughout
 the lifecycle of the view.
 
 ## Parameters
 
-- `Assigns`: A map (`t:arizona:assigns/0`) containing the initial data for the layout.
+- `Bindings`: A map (`t:arizona:bindings/0`) containing the initial data for the layout.
 - `Socket`: The WebSocket connection (`t:arizona:socket/0`) associated with the layout.
 
 ## Returns
 
 The initialized view state (`t:arizona:view/0`) for the layout.
 """.
--callback mount(Assigns, Socket) -> View when
-    Assigns :: arizona:assigns(),
+-callback mount(Bindings, Socket) -> View when
+    Bindings :: arizona:bindings(),
     Socket :: arizona:socket(),
     View :: arizona:view().
 
@@ -59,7 +59,7 @@ Subsequent updates and re-renders only affect the wrapped view, not the layout.
 ## Parameters
 
 - `View`: The current view state (`t:arizona:view/0`), which includes the layout's
-  assigns and the view's content.
+  bindings and the view's content.
 
 ## Returns
 
@@ -81,20 +81,20 @@ This function is used internally by Arizona to initialize the layout.
 ## Parameters
 
 - `Mod`: The module name of the layout being mounted. This must be a valid atom.
-- `Assigns`: A map (`t:arizona:assigns/0`) containing the initial data for the layout.
+- `Bindings`: A map (`t:arizona:bindings/0`) containing the initial data for the layout.
 - `Socket`: The WebSocket connection (`t:arizona:socket/0`) associated with the layout.
 
 ## Returns
 
 The initialized view state (`t:arizona:view/0`) for the layout.
 """.
--spec mount(Mod, Assigns, Socket) -> View when
+-spec mount(Mod, Bindings, Socket) -> View when
     Mod :: module(),
-    Assigns :: arizona:assigns(),
+    Bindings :: arizona:bindings(),
     Socket :: arizona:socket(),
     View :: arizona:view().
-mount(Mod, Assigns, Socket) when is_atom(Mod), is_map(Assigns) ->
-    erlang:apply(Mod, mount, [Assigns, Socket]).
+mount(Mod, Bindings, Socket) when is_atom(Mod), is_map(Bindings) ->
+    erlang:apply(Mod, mount, [Bindings, Socket]).
 
 -doc ~"""
 Delegates to the `c:render/1` callback defined in the layout module (`Mod`).
@@ -105,7 +105,7 @@ when the view is first mounted.
 ## Parameters
 
 - `View`: The current view state (`t:arizona:view/0`), which includes the layout's
-  assigns and the view's content.
+  bindings and the view's content.
 
 ## Returns
 

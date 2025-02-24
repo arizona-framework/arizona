@@ -5,7 +5,7 @@
 -export([render/1]).
 -export([handle_event/3]).
 
-mount(_Assigns, _Socket) ->
+mount(_Bindings, _Socket) ->
     ignore.
 
 render(View) ->

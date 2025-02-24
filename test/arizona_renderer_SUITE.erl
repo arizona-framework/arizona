@@ -28,9 +28,9 @@ groups() ->
 render_view_template(Config) when is_list(Config) ->
     View = arizona_view:new(#{id => ~"foo", foo => ~"foo", bar => ~"bar"}),
     Got = arizona_renderer:render_view_template(View, ~"""
-    <div id="{arizona:get_assign(id, View)}">
-      {arizona:get_assign(foo, View)}
-      {arizona:get_assign(bar, View)}
+    <div id="{arizona:get_binding(id, View)}">
+      {arizona:get_binding(foo, View)}
+      {arizona:get_binding(bar, View)}
     </div>
     """),
     ?assertMatch(
@@ -43,8 +43,8 @@ render_component_template(Config) when is_list(Config) ->
     View = arizona_view:new(#{foo => ~"foo", bar => ~"bar"}),
     Got = arizona_renderer:render_component_template(View, ~"""
     <div>
-      {arizona:get_assign(foo, View)}
-      {arizona:get_assign(bar, View)}
+      {arizona:get_binding(foo, View)}
+      {arizona:get_binding(bar, View)}
     </div>
     """),
     ?assertMatch(
@@ -57,8 +57,8 @@ render_nested_template(Config) when is_list(Config) ->
     View = arizona_view:new(#{foo => ~"foo", bar => ~"bar"}),
     Got = arizona_renderer:render_nested_template(View, ~"""
     <div>
-      {arizona:get_assign(foo, View)}
-      {arizona:get_assign(bar, View)}
+      {arizona:get_binding(foo, View)}
+      {arizona:get_binding(bar, View)}
     </div>
     """),
     ?assertMatch(
@@ -68,15 +68,15 @@ render_nested_template(Config) when is_list(Config) ->
 
 render_view(Config) when is_list(Config) ->
     Mod = foo,
-    Assigns = #{id => ~"foo"},
-    Expect = {view, Mod, Assigns},
-    Got = arizona_renderer:render_view(Mod, Assigns),
+    Bindings = #{id => ~"foo"},
+    Expect = {view, Mod, Bindings},
+    Got = arizona_renderer:render_view(Mod, Bindings),
     ?assertEqual(Expect, Got).
 
 render_component(Config) when is_list(Config) ->
     Mod = foo,
     Fun = bar,
-    Assigns = #{},
-    Expect = {component, Mod, Fun, Assigns},
-    Got = arizona_renderer:render_component(Mod, Fun, Assigns),
+    Bindings = #{},
+    Expect = {component, Mod, Fun, Bindings},
+    Got = arizona_renderer:render_component(Mod, Fun, Bindings),
     ?assertEqual(Expect, Got).

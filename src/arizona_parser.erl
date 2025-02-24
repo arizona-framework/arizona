@@ -141,7 +141,7 @@ expr_vars(Expr) ->
     case
         re:run(
             Expr,
-            "arizona:get_assign\\(([a-z][a-zA-Z_@]*|'(.*?)')",
+            "arizona:get_binding\\(([a-z][a-zA-Z_@]*|'(.*?)')",
             [global, {capture, all_but_first, binary}]
         )
     of
