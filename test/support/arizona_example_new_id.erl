@@ -8,7 +8,7 @@
 mount(#{ignore := true}, _Socket) ->
     ignore;
 mount(Bindings, _Socket) ->
-    View = arizona_view:new(?MODULE, Bindings),
+    View = arizona:new_view(?MODULE, Bindings),
     {ok, View}.
 
 render(View) ->
