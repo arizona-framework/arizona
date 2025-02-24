@@ -254,8 +254,9 @@ Eshell V15.2.2 (press Ctrl+G to abort, type help(). for help)
 ```
 
 The server is up and running at <http://localhost:8080>, but it is not yet connected to the server.
-To connect, create `priv/assets/main.js` in the assets folder defined in the static
-route and in the HTML file previously:
+To establish the connection, create `priv/assets/main.js` in your static assets directory (matching
+the configured static route path in `config/sys.config` and matching the script added to the HTML of
+the layout file previously) and add the connection initialization code to it:
 
 ```js
 arizona.connect();

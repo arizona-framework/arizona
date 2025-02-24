@@ -7,7 +7,7 @@
 -export([handle_event/3]).
 
 mount(Bindings, _Socket) ->
-    View = arizona_view:new(?MODULE, Bindings),
+    View = arizona:new_view(?MODULE, Bindings),
     {ok, View}.
 
 render(View) ->
