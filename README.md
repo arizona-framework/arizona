@@ -245,7 +245,7 @@ arizona.connect();
 
 Open the browser again, and the button click will now increase the count value by one.
 
-[!["Counter Example"](./assets/counter_example.gif)]
+!["Counter Example"](./assets/counter_example.gif)
 
 The value is updated in `arizona_example_counter:handle_event/3` via WebSocket, and the DOM patch
 used the [morphdom library](https://github.com/patrick-steele-idem/morphdom) under the hood.
