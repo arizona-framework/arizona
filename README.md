@@ -10,6 +10,24 @@ Work in progress.
 
 Use it at your own risk, as the API may change at any time.
 
+## Template Syntax
+
+Arizona utilizes a templating approach where Erlang code is embedded within HTML
+using curly braces `{}`. This allows dynamic content generation by executing Erlang
+functions directly within the HTML structure. For example:
+
+```herl
+<ul>
+  {arizona:render_list(fun(Item) ->
+      arizona:render_nested_template(~"""
+        <li>{Item}</li>
+      """)
+    end, arizona:get_assign(list, View))}
+</ul>
+```
+
+No macros, no special syntaxes, just dynamic Erlang code embedded in static HTML.
+
 ## Basic Usage
 
 > The example below is a simplified version of the code from the [example repository](https://github.com/arizona-framework/arizona_example).
