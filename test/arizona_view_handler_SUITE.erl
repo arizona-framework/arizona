@@ -21,7 +21,6 @@ init_per_suite(Config) ->
                             #{
                                 data_dir => proplists:get_value(data_dir, Config),
                                 title => ~"Arizona",
-                                id => ~"helloWorld",
                                 name => ~"World"
                             },
                             #{layout => arizona_example_layout}}}
@@ -44,7 +43,9 @@ end_per_suite(Config) ->
     Socket :: arizona:socket(),
     Return :: arizona:mount_ret().
 mount(Bindings, _Socket) ->
-    View = arizona_view:new(?MODULE, Bindings),
+    View = arizona_view:new(?MODULE, Bindings#{
+        id => ~"helloWorld"
+    }),
     {ok, View}.
 
 -spec render(View) -> Token when
