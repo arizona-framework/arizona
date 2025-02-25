@@ -83,37 +83,34 @@ render(Config) when is_list(Config) ->
     ],
     Expect = {
         arizona_view:new(Mod, Bindings, #{}, Rendered, Rendered, []),
-        arizona_socket:new(
-            render,
-            #{
-                ~"app" => arizona_view:new(Mod, Bindings, #{}, Rendered, [], []),
-                ~"counter" => arizona_view:new(
-                    arizona_example_counter,
-                    #{id => ~"counter", count => 0, btn_text => ~"Increment"},
-                    #{},
+        arizona_socket:new(render, #{
+            ~"app" => arizona_view:new(Mod, Bindings, #{}, Rendered, [], []),
+            ~"counter" => arizona_view:new(
+                arizona_example_counter,
+                #{id => ~"counter", count => 0, btn_text => ~"Increment"},
+                #{},
+                [
+                    template,
                     [
-                        template,
-                        [
-                            ~"<div id=\"",
-                            ~"\"> ",
-                            ~"",
-                            ~"</div>"
-                        ],
-                        [
-                            ~"counter",
-                            ~"0",
-                            [
-                                template,
-                                [~"<button> ", ~"</button>"],
-                                [~"Increment"]
-                            ]
-                        ]
+                        ~"<div id=\"",
+                        ~"\"> ",
+                        ~"",
+                        ~"</div>"
                     ],
-                    [],
-                    []
-                )
-            }
-        )
+                    [
+                        ~"counter",
+                        ~"0",
+                        [
+                            template,
+                            [~"<button> ", ~"</button>"],
+                            [~"Increment"]
+                        ]
+                    ]
+                ],
+                [],
+                []
+            )
+        })
     },
     ParentView = arizona_view:new(#{}),
     Socket = arizona_socket:new(render),
@@ -331,37 +328,34 @@ diff(Config) when is_list(Config) ->
     Diff = [{1, [{2, [{0, ~"+1"}]}, {1, ~"1"}]}],
     Expect = {
         arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], Diff),
-        arizona_socket:new(
-            diff,
-            #{
-                ViewId => arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], []),
-                CounterViewId => arizona_view:new(
-                    CounterMod,
-                    ExpectBindings#{id => CounterViewId},
-                    #{},
+        arizona_socket:new(diff, #{
+            ViewId => arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], []),
+            CounterViewId => arizona_view:new(
+                CounterMod,
+                ExpectBindings#{id => CounterViewId},
+                #{},
+                [
+                    template,
                     [
-                        template,
-                        [
-                            ~"<div id=\"",
-                            ~"\"> ",
-                            ~"",
-                            ~"</div>"
-                        ],
-                        [
-                            ~"counter",
-                            ~"0",
-                            [
-                                template,
-                                [~"<button> ", ~"</button>"],
-                                [~"Increment"]
-                            ]
-                        ]
+                        ~"<div id=\"",
+                        ~"\"> ",
+                        ~"",
+                        ~"</div>"
                     ],
-                    [],
-                    []
-                )
-            }
-        )
+                    [
+                        ~"counter",
+                        ~"0",
+                        [
+                            template,
+                            [~"<button> ", ~"</button>"],
+                            [~"Increment"]
+                        ]
+                    ]
+                ],
+                [],
+                []
+            )
+        })
     },
     RenderSocket = arizona_socket:new(render),
     {ok, MountedView} = arizona_view:mount(Mod, Bindings, RenderSocket),

@@ -72,7 +72,7 @@ respond to user interactions in real-time.
 
 -callback handle_params(PathParams, QueryString) -> Return when
     PathParams :: arizona:path_params(),
-    QueryString :: binary(),
+    QueryString :: arizona:query_string(),
     Return :: handle_params_ret().
 
 -doc ~"""
@@ -507,7 +507,7 @@ initial_bindings(Mod, PathParams, QueryString, Bindings) ->
 -spec handle_params(Mod, PathParams, QueryString) -> Return when
     Mod :: module(),
     PathParams :: arizona:path_params(),
-    QueryString :: binary(),
+    QueryString :: arizona:query_string(),
     Return :: handle_params_ret().
 handle_params(Mod, PathParams, QueryParams) ->
     case erlang:function_exported(Mod, handle_params, 2) of

@@ -63,7 +63,7 @@ websocket_init({PathParams, QueryString, {Mod, Bindings, _Opts}}) ->
         in => ?MODULE,
         view_module => Mod,
         bindings => Bindings,
-        req_bidings => PathParams,
+        path_params => PathParams,
         query_string => QueryString
     }),
     Socket0 = arizona_socket:new(render),
