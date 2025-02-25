@@ -16,19 +16,19 @@
 %% --------------------------------------------------------------------
 
 -spec parse_transform(Forms0, Opts) -> Forms1 when
-    Forms0 :: [erl_syntax:syntaxTree()],
+    Forms0 :: [tuple()],
     Opts :: list(),
-    Forms1 :: [erl_syntax:syntaxTree()].
+    Forms1 :: [tuple()].
 parse_transform(Forms0, _Opts) ->
     Forms = [transform_function(Form) || Form <- Forms0],
     % NOTE: Uncomment the function below for debugging.
     % debug(Forms0, Forms),
     Forms.
 
--spec transform(Form0, Bindings) -> Form1 when
-    Form0 :: erl_syntax:syntaxTree(),
+-spec transform(FormOrForms, Bindings) -> Transformed when
+    FormOrForms :: tuple() | [tuple()],
     Bindings :: erl_eval:binding_struct(),
-    Form1 :: erl_syntax:syntaxTree().
+    Transformed :: tuple() | [tuple()].
 transform(
     {call, _Pos1, {remote, _Pos2, {atom, _Pos3, Mod}, {atom, _Pos4, Fun}}, Body} = Form,
     Bindings
@@ -92,19 +92,19 @@ transform_function(Form) ->
 transform_fun_body(arizona, render_view_template, Body, Bindings) ->
     [_View, TemplateAst] = Body,
     ParseOpts = #{},
-    {Static, Dynamic} = template_to_static_dynamic(TemplateAst, Bindings, ParseOpts),
+    {Static, Dynamic} = eval_template(TemplateAst, Bindings, ParseOpts),
     Token = token(view_template, [Static, Dynamic]),
     {true, Token};
 transform_fun_body(arizona, render_component_template, Body, Bindings) ->
     [_View, TemplateAst] = Body,
     ParseOpts = #{},
-    {Static, Dynamic} = template_to_static_dynamic(TemplateAst, Bindings, ParseOpts),
+    {Static, Dynamic} = eval_template(TemplateAst, Bindings, ParseOpts),
     Token = token(component_template, [Static, Dynamic]),
     {true, Token};
 transform_fun_body(arizona, render_nested_template, Body, Bindings) ->
     TemplateAst = nested_template_ast(Body),
     ParseOpts = #{render_context => render},
-    {Static, Dynamic} = template_to_static_dynamic(TemplateAst, Bindings, ParseOpts),
+    {Static, Dynamic} = eval_template(TemplateAst, Bindings, ParseOpts),
     Token = token(nested_template, [Static, Dynamic]),
     {true, Token};
 transform_fun_body(arizona, render_list, Body, Bindings) ->
@@ -125,7 +125,7 @@ callback_to_static_dynamic(Callback0, Bindings) ->
         ]}} = Callback0,
     TemplateAst = nested_template_ast(Body),
     ParseOpts = #{render_context => none},
-    {Static, DynamicList0} = template_to_static_dynamic(TemplateAst, Bindings, ParseOpts),
+    {Static, DynamicList0} = eval_template(TemplateAst, Bindings, ParseOpts),
     DynamicList = erl_syntax:set_pos(DynamicList0, Pos3),
     Callback =
         {'fun', Pos1,
@@ -139,7 +139,7 @@ nested_template_ast([TemplateAst]) ->
 nested_template_ast([_Payload, TemplateAst]) ->
     TemplateAst.
 
-template_to_static_dynamic(TemplateAst, Bindings, ParseOpts) ->
+eval_template(TemplateAst, Bindings, ParseOpts) ->
     ScanOpts = #{
         % Consider it a triple-quoted string that start one line below.
         % See https://www.erlang.org/eeps/eep-0064#triple-quoted-string-start
@@ -147,7 +147,7 @@ template_to_static_dynamic(TemplateAst, Bindings, ParseOpts) ->
         % TODO: Indentation option
         indentation => 4
     },
-    Template = eval_template(TemplateAst, Bindings),
+    {value, Template, _NewBindings} = erl_eval:exprs([TemplateAst], Bindings),
     Tokens = arizona_scanner:scan(ScanOpts, Template),
     {StaticAst, DynamicAst} = arizona_parser:parse(Tokens, ParseOpts),
     Static = erl_syntax:list(StaticAst),
@@ -163,10 +163,6 @@ line(Form) ->
         Anno ->
             erl_anno:line(Anno)
     end.
-
-eval_template(TemplateAst, Bindings) ->
-    {value, Template, _NewBindings} = erl_eval:exprs([TemplateAst], Bindings),
-    Template.
 
 token(Name, Params) when is_atom(Name), is_list(Params) ->
     erl_syntax:revert(erl_syntax:tuple([erl_syntax:atom(Name) | Params])).
