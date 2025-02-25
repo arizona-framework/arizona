@@ -40,14 +40,9 @@ diff_view_template(Config) when is_list(Config) ->
     Diff = [{2, ~"baz"}],
     Expect = {
         arizona_view:new(Mod, ExpectBindings, #{}, [], [], Diff),
-        arizona_socket:new(
-            diff,
-            #{
-                ViewId => arizona_view:new(Mod, ExpectBindings, #{}, [], [], [])
-            },
-            #{},
-            ~""
-        )
+        arizona_socket:new(diff, #{
+            ViewId => arizona_view:new(Mod, ExpectBindings, #{}, [], [], [])
+        })
     },
     View = arizona_view:new(Mod, Bindings, ChangedBindings, [], [], []),
     Token = arizona_renderer:render_view_template(View, ~"""
@@ -225,9 +220,7 @@ diff_view(Config) when is_list(Config) ->
                     [],
                     []
                 )
-            },
-            #{},
-            ~""
+            }
         )
     },
     RenderSocket = arizona_socket:new(render),
@@ -319,9 +312,7 @@ diff_view_new_id(Config) when is_list(Config) ->
                     []
                 ),
                 RootViewId => arizona_view:new(RootMod, ExpectBindings, #{}, Rendered, [], [])
-            },
-            #{},
-            ~""
+            }
         )
     },
     RenderSocket = arizona_socket:new(render),
@@ -411,9 +402,7 @@ diff_view_ignore(Config) when is_list(Config) ->
                     [],
                     []
                 )
-            },
-            #{},
-            ~""
+            }
         )
     },
     RenderSocket = arizona_socket:new(render),

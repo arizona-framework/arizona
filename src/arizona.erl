@@ -42,9 +42,9 @@ Arizona follows a component-based architecture where:
 -export([get_binding/3]).
 -export([get_path_param/2]).
 -export([get_path_param/3]).
+-export([parse_query_string/1]).
 -export([get_query_param/2]).
 -export([get_query_param/3]).
--export([parse_query_params/1]).
 -export([generate_static/0]).
 
 %
@@ -68,7 +68,7 @@ Arizona follows a component-based architecture where:
 -ignore_xref([get_path_param/3]).
 -ignore_xref([get_query_param/2]).
 -ignore_xref([get_query_param/3]).
--ignore_xref([parse_query_params/1]).
+-ignore_xref([parse_query_string/1]).
 -ignore_xref([generate_static/0]).
 
 %% --------------------------------------------------------------------
@@ -433,62 +433,40 @@ get_binding(Key, View) ->
 get_binding(Key, View, Default) ->
     arizona_view:get_binding(Key, View, Default).
 
--spec get_path_param(Key, Socket) -> Value when
+-spec get_path_param(Key, PathParams) -> Value when
     Key :: atom(),
-    Socket :: arizona_socket:socket(),
+    PathParams :: path_params(),
     Value :: dynamic().
-get_path_param(Key, Socket) when is_atom(Key) ->
-    PathParams = arizona_socket:path_params(Socket),
+get_path_param(Key, PathParams) when is_atom(Key), is_map(PathParams) ->
     maps:get(Key, PathParams).
 
--spec get_path_param(Key, Socket, Default) -> Value when
+-spec get_path_param(Key, PathParams, Default) -> Value when
     Key :: atom(),
-    Socket :: arizona_socket:socket(),
+    PathParams :: path_params(),
     Value :: dynamic() | Default.
-get_path_param(Key, Socket, Default) when is_atom(Key) ->
-    PathParams = arizona_socket:path_params(Socket),
+get_path_param(Key, PathParams, Default) when is_atom(Key), is_map(PathParams) ->
     maps:get(Key, PathParams, Default).
 
--spec get_query_param(Key, Socket) -> Value when
-    Key :: binary(),
-    Socket :: socket(),
-    Value :: dynamic().
-get_query_param(Key, Socket) when is_binary(Key) ->
-    case arizona_socket:query_params(Socket) of
-        undefined ->
-            error(unparsed_query_params, [Key, Socket], [
-                {error_info, #{
-                    cause => ~"call `arizona:parse_query_params/1` first"
-                }}
-            ]);
-        QueryParams ->
-            {Key, Value} = proplists:lookup(Key, QueryParams),
-            Value
-    end.
+-spec parse_query_string(QueryString) -> QueryParams when
+    QueryString :: query_string(),
+    QueryParams :: query_params().
+parse_query_string(QueryString) when is_binary(QueryString) ->
+    cow_qs:parse_qs(QueryString).
 
--spec get_query_param(Key, Socket, Default) -> Value when
+-spec get_query_param(Key, QueryParams) -> Value when
     Key :: binary(),
-    Socket :: socket(),
-    Value :: dynamic() | Default.
-get_query_param(Key, Socket, Default) when is_binary(Key) ->
-    case arizona_socket:query_params(Socket) of
-        undefined ->
-            error(unparsed_query_params, [Key, Socket, Default], [
-                {error_info, #{
-                    cause => ~"call `arizona:parse_query_params/1` first"
-                }}
-            ]);
-        QueryParams ->
-            proplists:get_value(Key, QueryParams, Default)
-    end.
+    QueryParams :: query_params(),
+    Value :: binary().
+get_query_param(Key, QueryParams) when is_binary(Key), is_list(QueryParams) ->
+    {Key, Value} = proplists:lookup(Key, QueryParams),
+    Value.
 
--spec parse_query_params(Socket0) -> Socket1 when
-    Socket0 :: socket(),
-    Socket1 :: socket().
-parse_query_params(Socket) ->
-    QueryString = arizona_socket:query_string(Socket),
-    QueryParams = cow_qs:parse_qs(QueryString),
-    arizona_socket:set_query_params(QueryParams, Socket).
+-spec get_query_param(Key, QueryParams, Default) -> Value when
+    Key :: binary(),
+    QueryParams :: query_params(),
+    Value :: binary() | Default.
+get_query_param(Key, QueryParams, Default) when is_binary(Key), is_list(QueryParams) ->
+    proplists:get_value(Key, QueryParams, Default).
 
 -spec generate_static() -> ok.
 generate_static() ->

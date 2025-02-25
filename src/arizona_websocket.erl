@@ -66,7 +66,7 @@ websocket_init({PathParams, QueryString, {Mod, Bindings, _Opts}}) ->
         req_bidings => PathParams,
         query_string => QueryString
     }),
-    Socket0 = arizona_socket:new(render, #{}, PathParams, QueryString),
+    Socket0 = arizona_socket:new(render),
     {ok, View0} = arizona_view:mount(Mod, Bindings, Socket0),
     Token = arizona_view:render(View0),
     {_View, Socket1} = arizona_renderer:render(Token, View0, View0, Socket0),

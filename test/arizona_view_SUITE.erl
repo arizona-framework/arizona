@@ -112,9 +112,7 @@ render(Config) when is_list(Config) ->
                     [],
                     []
                 )
-            },
-            #{},
-            ~""
+            }
         )
     },
     ParentView = arizona_view:new(#{}),
@@ -362,9 +360,7 @@ diff(Config) when is_list(Config) ->
                     [],
                     []
                 )
-            },
-            #{},
-            ~""
+            }
         )
     },
     RenderSocket = arizona_socket:new(render),

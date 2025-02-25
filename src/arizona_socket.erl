@@ -5,17 +5,13 @@
 %% --------------------------------------------------------------------
 
 -export([new/1]).
--export([new/4]).
+-export([new/2]).
 -export([render_context/1]).
 -export([set_render_context/2]).
 -export([views/1]).
 -export([put_view/2]).
 -export([get_view/2]).
 -export([remove_view/2]).
--export([path_params/1]).
--export([query_string/1]).
--export([query_params/1]).
--export([set_query_params/2]).
 
 %
 
@@ -28,10 +24,7 @@
 
 -record(socket, {
     render_context :: render_context(),
-    views :: views(),
-    path_params :: arizona:path_params(),
-    query_string :: arizona:query_string(),
-    query_params :: arizona:query_params() | undefined
+    views :: views()
 }).
 -opaque socket() :: #socket{}.
 -export_type([socket/0]).
@@ -50,21 +43,16 @@
     RenderContext :: render_context(),
     Socket :: socket().
 new(RenderContext) ->
-    new(RenderContext, #{}, #{}, ~"").
+    new(RenderContext, #{}).
 
--spec new(RenderContext, Views, PathParams, QueryString) -> Socket when
+-spec new(RenderContext, Views) -> Socket when
     RenderContext :: render_context(),
     Views :: views(),
-    PathParams :: arizona:path_params(),
-    QueryString :: arizona:query_string(),
     Socket :: socket().
-new(RenderContext, Views, PathParams, QueryString) ->
+new(RenderContext, Views) ->
     #socket{
         render_context = RenderContext,
-        views = Views,
-        path_params = PathParams,
-        query_string = QueryString,
-        query_params = undefined
+        views = Views
     }.
 
 -spec render_context(Socket) -> RenderContext when
@@ -114,31 +102,6 @@ get_view(ViewId, #socket{} = Socket) when is_binary(ViewId) ->
     Socket1 :: socket().
 remove_view(ViewId, #socket{views = Views} = Socket) when is_map_key(ViewId, Views) ->
     Socket#socket{views = maps:remove(ViewId, Views)}.
-
--spec path_params(Socket) -> PathParams when
-    Socket :: socket(),
-    PathParams :: arizona:path_params().
-path_params(#socket{} = Socket) ->
-    Socket#socket.path_params.
-
--spec query_string(Socket) -> QueryString when
-    Socket :: socket(),
-    QueryString :: arizona:query_string().
-query_string(#socket{} = Socket) ->
-    Socket#socket.query_string.
-
--spec query_params(Socket) -> QueryParams when
-    Socket :: socket(),
-    QueryParams :: arizona:query_params() | undefined.
-query_params(#socket{} = Socket) ->
-    Socket#socket.query_params.
-
--spec set_query_params(QueryParams, Socket0) -> Socket1 when
-    QueryParams :: arizona:query_params(),
-    Socket0 :: socket(),
-    Socket1 :: socket().
-set_query_params(QueryParams, #socket{} = Socket) when is_list(QueryParams) ->
-    Socket#socket{query_params = QueryParams}.
 
 %% --------------------------------------------------------------------
 %% Private functions

@@ -57,6 +57,7 @@ respond to user interactions in real-time.
 %% Callback support function exports
 %% --------------------------------------------------------------------
 
+-export([init/5]).
 -export([mount/3]).
 -export([render/1]).
 -export([handle_event/3]).
@@ -64,6 +65,15 @@ respond to user interactions in real-time.
 %% --------------------------------------------------------------------
 %% Callback definitions
 %% --------------------------------------------------------------------
+
+-optional_callbacks([handle_params/2]).
+
+%
+
+-callback handle_params(PathParams, QueryString) -> Bindings when
+    PathParams :: arizona:path_params(),
+    QueryString :: binary(),
+    Bindings :: bindings().
 
 -doc ~"""
 Is invoked when a `t:view/0` is initialized.
@@ -385,6 +395,27 @@ diff_to_iolist(#view{} = View) ->
 %% Callback support function definitions
 %% --------------------------------------------------------------------
 
+-spec init(Mod, PathParams, QueryString, Bindings, Socket0) -> Return when
+    Mod :: module(),
+    PathParams :: arizona:path_params(),
+    QueryString :: arizona:query_string(),
+    Bindings :: bindings(),
+    Socket0 :: arizona:socket(),
+    Return :: {ok, View, Socket1} | ignore,
+    View :: view(),
+    Socket1 :: arizona:socket().
+init(Mod, PathParams, QueryString, Bindings0, Socket0) ->
+    Params = handle_params(Mod, PathParams, QueryString),
+    Bindings = maps:merge(Bindings0, Params),
+    case mount(Mod, Bindings, Socket0) of
+        {ok, View0} ->
+            Token = render(View0),
+            {View, Socket} = arizona_renderer:render(Token, View0, View0, Socket0),
+            {ok, View, Socket};
+        ignore ->
+            ignore
+    end.
+
 -doc ~"""
 Initializes a `t:view/0` by delegating to the `c:mount/2` callback defined
 in the view module (`Mod`).
@@ -468,6 +499,19 @@ handle_event(EventName, Payload, #view{} = View) ->
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
+
+-spec handle_params(Mod, PathParams, QueryString) -> Bindings when
+    Mod :: module(),
+    PathParams :: arizona:path_params(),
+    QueryString :: binary(),
+    Bindings :: bindings().
+handle_params(Mod, PathParams, QueryParams) ->
+    case erlang:function_exported(Mod, handle_params, 2) of
+        true ->
+            erlang:apply(Mod, handle_params, [PathParams, QueryParams]);
+        false ->
+            #{}
+    end.
 
 rendered_to_iolist_1([template, Static, Dynamic]) ->
     zip(Static, Dynamic);

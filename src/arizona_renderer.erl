@@ -18,7 +18,7 @@
 
 -export([render/4]).
 -export([render_nested_template/2]).
--export([render_layout/4]).
+-export([render_layout/6]).
 
 %
 
@@ -204,19 +204,25 @@ render_nested_template(ParentView, Template) ->
     Bindings = #{'View' => ParentView},
     render_nested_template(Bindings, Template).
 
--spec render_layout(LayoutMod, ViewMod, Bindings, Socket0) -> Layout when
+-spec render_layout(LayoutMod, ViewMod, PathParams, QueryString, Bindings, Socket0) -> Layout when
     LayoutMod :: module(),
     ViewMod :: module(),
+    PathParams :: arizona:path_params(),
+    QueryString :: arizona:query_string(),
     Bindings :: arizona_view:bindings(),
     Socket0 :: arizona_socket:socket(),
     Layout :: {LayoutView, Socket1},
     LayoutView :: arizona_view:view(),
     Socket1 :: arizona_socket:socket().
-render_layout(LayoutMod, ViewMod, Bindings0, Socket) when
-    is_atom(LayoutMod), is_atom(ViewMod), is_map(Bindings0)
+render_layout(LayoutMod, ViewMod, PathParams, QueryString, Bindings0, Socket) when
+    is_atom(LayoutMod),
+    is_atom(ViewMod),
+    is_map(PathParams),
+    is_binary(QueryString),
+    is_map(Bindings0)
 ->
     % The 'inner_content' must be a list for correct rendering.
-    InnerContent = [render_inner_content(ViewMod)],
+    InnerContent = [render_inner_content(ViewMod, PathParams, QueryString)],
     Bindings = Bindings0#{inner_content => InnerContent},
     LayoutView = arizona_layout:mount(LayoutMod, Bindings, Socket),
     Token = arizona_layout:render(LayoutView),
@@ -311,13 +317,12 @@ render_list(Static, DynamicList0, View0, ParentView0, Socket) ->
     ParentView = arizona_view:put_tmp_rendered(Rendered, ParentView1),
     {ParentView, Socket}.
 
-render_inner_content(ViewMod) ->
-    Callback = fun(ParentView, Socket) ->
+render_inner_content(Mod, PathParams, QueryString) ->
+    Callback = fun(ParentView, Socket0) ->
         Bindings0 = arizona_view:bindings(ParentView),
         Bindings = maps:remove(inner_content, Bindings0),
-        {ok, View} = arizona_view:mount(ViewMod, Bindings, Socket),
-        Token = arizona_view:render(View),
-        render(Token, View, ParentView, Socket)
+        {ok, View, Socket} = arizona_view:init(Mod, PathParams, QueryString, Bindings, Socket0),
+        {View, Socket}
     end,
     {inner_content, Callback}.
 
