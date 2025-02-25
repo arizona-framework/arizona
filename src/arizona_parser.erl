@@ -41,9 +41,8 @@ binaries and the Dynamic is an AST list of Erlang terms.
     Tokens :: [Token],
     Opts :: options(),
     Token :: arizona_scanner:token(),
-    Static :: [Ast],
-    Dynamic :: [Ast],
-    Ast :: tuple().
+    Static :: [tuple()],
+    Dynamic :: [tuple() | [tuple()]].
 parse(Tokens0, Opts) when is_list(Tokens0), is_map(Opts) ->
     Tokens1 = drop_comments(Tokens0),
     Tokens = add_empty_text_tokens(Tokens1),

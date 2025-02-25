@@ -16,20 +16,19 @@
 %% --------------------------------------------------------------------
 
 -spec parse_transform(Forms0, Opts) -> Forms1 when
-    Forms0 :: [erl_syntax:syntaxTree()],
+    Forms0 :: [tuple()],
     Opts :: list(),
-    Forms1 :: [erl_syntax:syntaxTree()].
+    Forms1 :: [tuple()].
 parse_transform(Forms0, _Opts) ->
     Forms = [transform_function(Form) || Form <- Forms0],
     % NOTE: Uncomment the function below for debugging.
     % debug(Forms0, Forms),
     Forms.
 
--spec transform(Form, Bindings) -> Transformed when
-    Form :: erl_syntax:syntaxTree(),
+-spec transform(FormOrForms, Bindings) -> Transformed when
+    FormOrForms :: tuple() | [tuple()],
     Bindings :: erl_eval:binding_struct(),
-    Transformed :: Ast | [Ast],
-    Ast :: erl_syntax:syntaxTree().
+    Transformed :: tuple() | [tuple()].
 transform(
     {call, _Pos1, {remote, _Pos2, {atom, _Pos3, Mod}, {atom, _Pos4, Fun}}, Body} = Form,
     Bindings
