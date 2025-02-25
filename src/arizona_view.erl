@@ -30,6 +30,7 @@ respond to user interactions in real-time.
 %% Support function exports
 %% --------------------------------------------------------------------
 
+-export([init_root/5]).
 -export([new/1]).
 -export([new/6]).
 -export([module/1]).
@@ -57,7 +58,6 @@ respond to user interactions in real-time.
 %% Callback support function exports
 %% --------------------------------------------------------------------
 
--export([init/5]).
 -export([mount/3]).
 -export([render/1]).
 -export([handle_event/3]).
@@ -70,10 +70,10 @@ respond to user interactions in real-time.
 
 %
 
--callback handle_params(PathParams, QueryString) -> Bindings when
+-callback handle_params(PathParams, QueryString) -> Return when
     PathParams :: arizona:path_params(),
     QueryString :: binary(),
-    Bindings :: bindings().
+    Return :: handle_params_ret().
 
 -doc ~"""
 Is invoked when a `t:view/0` is initialized.
@@ -163,6 +163,9 @@ The updated view state (`t:view/0`) after handling the event.
 -type id() :: binary().
 -export_type([id/0]).
 
+-type handle_params_ret() :: {true, Bindings :: bindings()} | false.
+-export_type([handle_params_ret/0]).
+
 -type mount_ret() :: {ok, View :: view()} | ignore.
 -export_type([mount_ret/0]).
 
@@ -224,6 +227,20 @@ get_binding(Key, #view{} = View, Default) when is_atom(Key) ->
 %% --------------------------------------------------------------------
 %% Support function exports
 %% --------------------------------------------------------------------
+
+-spec init_root(Mod, PathParams, QueryString, Bindings, Socket0) -> {View, Socket1} when
+    Mod :: module(),
+    PathParams :: arizona:path_params(),
+    QueryString :: arizona:query_string(),
+    Bindings :: bindings(),
+    Socket0 :: arizona:socket(),
+    View :: view(),
+    Socket1 :: arizona:socket().
+init_root(Mod, PathParams, QueryString, Bindings0, Socket0) ->
+    Bindings = initial_bindings(Mod, PathParams, QueryString, Bindings0),
+    {ok, View0} = mount(Mod, Bindings, Socket0),
+    Token = render(View0),
+    arizona_renderer:render(Token, View0, View0, Socket0).
 
 -spec new(Bindings) -> View when
     Bindings :: bindings(),
@@ -395,27 +412,6 @@ diff_to_iolist(#view{} = View) ->
 %% Callback support function definitions
 %% --------------------------------------------------------------------
 
--spec init(Mod, PathParams, QueryString, Bindings, Socket0) -> Return when
-    Mod :: module(),
-    PathParams :: arizona:path_params(),
-    QueryString :: arizona:query_string(),
-    Bindings :: bindings(),
-    Socket0 :: arizona:socket(),
-    Return :: {ok, View, Socket1} | ignore,
-    View :: view(),
-    Socket1 :: arizona:socket().
-init(Mod, PathParams, QueryString, Bindings0, Socket0) ->
-    Params = handle_params(Mod, PathParams, QueryString),
-    Bindings = maps:merge(Bindings0, Params),
-    case mount(Mod, Bindings, Socket0) of
-        {ok, View0} ->
-            Token = render(View0),
-            {View, Socket} = arizona_renderer:render(Token, View0, View0, Socket0),
-            {ok, View, Socket};
-        ignore ->
-            ignore
-    end.
-
 -doc ~"""
 Initializes a `t:view/0` by delegating to the `c:mount/2` callback defined
 in the view module (`Mod`).
@@ -500,17 +496,25 @@ handle_event(EventName, Payload, #view{} = View) ->
 %% Private functions
 %% --------------------------------------------------------------------
 
--spec handle_params(Mod, PathParams, QueryString) -> Bindings when
+initial_bindings(Mod, PathParams, QueryString, Bindings) ->
+    case handle_params(Mod, PathParams, QueryString) of
+        {true, Params} ->
+            maps:merge(Bindings, Params);
+        false ->
+            Bindings
+    end.
+
+-spec handle_params(Mod, PathParams, QueryString) -> Return when
     Mod :: module(),
     PathParams :: arizona:path_params(),
     QueryString :: binary(),
-    Bindings :: bindings().
+    Return :: handle_params_ret().
 handle_params(Mod, PathParams, QueryParams) ->
     case erlang:function_exported(Mod, handle_params, 2) of
         true ->
             erlang:apply(Mod, handle_params, [PathParams, QueryParams]);
         false ->
-            #{}
+            false
     end.
 
 rendered_to_iolist_1([template, Static, Dynamic]) ->

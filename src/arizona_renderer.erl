@@ -318,11 +318,10 @@ render_list(Static, DynamicList0, View0, ParentView0, Socket) ->
     {ParentView, Socket}.
 
 render_inner_content(Mod, PathParams, QueryString) ->
-    Callback = fun(ParentView, Socket0) ->
+    Callback = fun(ParentView, Socket) ->
         Bindings0 = arizona_view:bindings(ParentView),
         Bindings = maps:remove(inner_content, Bindings0),
-        {ok, View, Socket} = arizona_view:init(Mod, PathParams, QueryString, Bindings, Socket0),
-        {View, Socket}
+        arizona_view:init_root(Mod, PathParams, QueryString, Bindings, Socket)
     end,
     {inner_content, Callback}.
 

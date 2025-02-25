@@ -114,6 +114,9 @@ Arizona follows a component-based architecture where:
         DynamicList :: [arizona_renderer:dynamic_list()]}.
 -export_type([rendered_list/0]).
 
+-type handle_params_ret() :: arizona_view:handle_params_ret().
+-export_type([handle_params_ret/0]).
+
 -type mount_ret() :: arizona_view:mount_ret().
 -export_type([mount_ret/0]).
 

@@ -53,7 +53,7 @@ maybe_render_layout(Opts, ViewMod, PathParams, QueryString, Bindings, Socket) ->
             ),
             LayoutView;
         #{} ->
-            {ok, View, _Socket} = arizona_view:init(
+            {View, _Socket} = arizona_view:init_root(
                 ViewMod, PathParams, QueryString, Bindings, Socket
             ),
             View
