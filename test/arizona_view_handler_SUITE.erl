@@ -16,12 +16,12 @@ init_per_suite(Config) ->
         {arizona, [
             {endpoint, #{
                 routes => [
-                    {"/hello-world", arizona_view_handler,
+                    {"/hello-world/:id", arizona_view_handler,
                         {?MODULE,
                             #{
                                 data_dir => proplists:get_value(data_dir, Config),
                                 title => ~"Arizona",
-                                name => ~"World"
+                                name => ~"Joe"
                             },
                             #{layout => arizona_example_layout}}}
                 ]
@@ -42,9 +42,13 @@ end_per_suite(Config) ->
     Bindings :: arizona:bindings(),
     Socket :: arizona:socket(),
     Return :: arizona:mount_ret().
-mount(Bindings, _Socket) ->
+mount(Bindings, Socket0) ->
+    Socket = arizona:parse_query_params(Socket0),
+    Id = arizona:get_path_param(id, Socket),
+    Name = arizona:get_query_param(~"name", Socket),
     View = arizona_view:new(?MODULE, Bindings#{
-        id => ~"helloWorld"
+        id => Id,
+        name => Name
     }),
     {ok, View}.
 
@@ -85,7 +89,7 @@ hello_world(Config) when is_list(Config) ->
         Hello, World!
     </main></body>
     </html>
-    """}, request("/hello-world")).
+    """}, request("/hello-world/helloWorld?name=World")).
 
 %% --------------------------------------------------------------------
 %% Test support
