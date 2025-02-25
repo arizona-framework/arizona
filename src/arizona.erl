@@ -87,7 +87,7 @@ Arizona follows a component-based architecture where:
 -type rendered_nested_template() :: no_return().
 -export_type([rendered_nested_template/0]).
 
--type rendered_layout_template() :: rendered_view_template().
+-type rendered_layout_template() :: rendered_component_template().
 -export_type([rendered_layout_template/0]).
 
 -type rendered_view() :: {view, Mod :: module(), Bindings :: bindings()}.
@@ -333,7 +333,7 @@ The rendered template as `t:rendered_layout_template/0`.
     Template :: binary() | {file, file:filename_all()},
     Rendered :: rendered_layout_template().
 render_layout_template(Payload, Template) ->
-    arizona_renderer:render_view_template(Payload, Template).
+    arizona_renderer:render_component_template(Payload, Template).
 
 -spec render_view(Mod, Bindings) -> Rendered when
     Mod :: module(),

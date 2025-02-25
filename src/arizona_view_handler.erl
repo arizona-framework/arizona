@@ -33,10 +33,7 @@
     Req1 :: cowboy_req:req().
 init(Req0, {Mod, Bindings, Opts} = State) when is_atom(Mod), is_map(Bindings), is_map(Opts) ->
     Socket = arizona_socket:new(render),
-    {ok, View0} = arizona_view:mount(Mod, Bindings, Socket),
-    Token = arizona_view:render(View0),
-    {View1, _Socket} = arizona_renderer:render(Token, View0, View0, Socket),
-    View = maybe_render_layout(View1, Socket, Token, Bindings, Opts),
+    View = maybe_render_layout(Opts, Mod, Bindings, Socket),
     Html = arizona_view:rendered_to_iolist(View),
     Headers = #{~"content-type" => ~"text/html"},
     Req = cowboy_req:reply(200, Headers, Html, Req0),
@@ -46,13 +43,16 @@ init(Req0, {Mod, Bindings, Opts} = State) when is_atom(Mod), is_map(Bindings), i
 %% Private functions
 %% --------------------------------------------------------------------
 
-maybe_render_layout(View, Socket, ViewToken, Bindings, Opts) ->
+maybe_render_layout(Opts, ViewMod, Bindings, Socket) ->
     case Opts of
         #{layout := LayoutMod} ->
             {LayoutView, _Socket} = arizona_renderer:render_layout(
-                LayoutMod, Bindings, ViewToken, Socket
+                LayoutMod, ViewMod, Bindings, Socket
             ),
             LayoutView;
         #{} ->
+            {ok, View0} = arizona_view:mount(ViewMod, Bindings, Socket),
+            Token = arizona_view:render(View0),
+            {View, _Socket} = arizona_renderer:render(Token, View0, View0, Socket),
             View
     end.

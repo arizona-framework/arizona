@@ -183,6 +183,8 @@ render({list, Static, DynamicList}, View, ParentView, Socket) ->
     render_list(Static, DynamicList, View, ParentView, Socket);
 render(List, View, ParentView, Socket) when is_list(List) ->
     fold(List, View, ParentView, Socket);
+render({inner_content, Callback}, _View, ParentView, Socket) when is_function(Callback, 2) ->
+    erlang:apply(Callback, [ParentView, Socket]);
 render(Bin, _View, View0, Socket) when is_binary(Bin) ->
     View = arizona_view:put_tmp_rendered(Bin, View0),
     {View, Socket}.
@@ -202,19 +204,23 @@ render_nested_template(ParentView, Template) ->
     Bindings = #{'View' => ParentView},
     render_nested_template(Bindings, Template).
 
--spec render_layout(Mod, Bindings, InnerContent, Socket0) -> Layout when
-    Mod :: module(),
+-spec render_layout(LayoutMod, ViewMod, Bindings, Socket0) -> Layout when
+    LayoutMod :: module(),
+    ViewMod :: module(),
     Bindings :: arizona_view:bindings(),
-    InnerContent :: token(),
     Socket0 :: arizona_socket:socket(),
     Layout :: {LayoutView, Socket1},
     LayoutView :: arizona_view:view(),
     Socket1 :: arizona_socket:socket().
-render_layout(Mod, Bindings0, InnerContent, Socket) ->
-    Bindings = Bindings0#{inner_content => [InnerContent]},
-    View = arizona_layout:mount(Mod, Bindings, Socket),
-    Token = arizona_layout:render(View),
-    render(Token, View, View, Socket).
+render_layout(LayoutMod, ViewMod, Bindings0, Socket) when
+    is_atom(LayoutMod), is_atom(ViewMod), is_map(Bindings0)
+->
+    % The 'inner_content' must be a list for correct rendering.
+    InnerContent = [render_inner_content(ViewMod)],
+    Bindings = Bindings0#{inner_content => InnerContent},
+    LayoutView = arizona_layout:mount(LayoutMod, Bindings, Socket),
+    Token = arizona_layout:render(LayoutView),
+    render(Token, LayoutView, LayoutView, Socket).
 
 %% --------------------------------------------------------------------
 %% Private functions
@@ -304,6 +310,16 @@ render_list(Static, DynamicList0, View0, ParentView0, Socket) ->
     ParentView1 = arizona_view:put_rendered(Rendered, ParentView0),
     ParentView = arizona_view:put_tmp_rendered(Rendered, ParentView1),
     {ParentView, Socket}.
+
+render_inner_content(ViewMod) ->
+    Callback = fun(ParentView, Socket) ->
+        Bindings0 = arizona_view:bindings(ParentView),
+        Bindings = maps:remove(inner_content, Bindings0),
+        {ok, View} = arizona_view:mount(ViewMod, Bindings, Socket),
+        Token = arizona_view:render(View),
+        render(Token, View, ParentView, Socket)
+    end,
+    {inner_content, Callback}.
 
 render_dynamic_list([], _View, _Socket) ->
     [];
