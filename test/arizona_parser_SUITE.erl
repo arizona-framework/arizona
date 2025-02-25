@@ -17,7 +17,8 @@ groups() ->
     [
         {parse, [parallel], [
             parse_from_socket,
-            parse_render
+            parse_render,
+            parse_multiple_forms
         ]},
         {parse_transform, [parallel], [
             parse_transform_render_list
@@ -213,6 +214,59 @@ parse_render(Config) when is_list(Config) ->
     foo{foo}{{bar}}{% drop this }bar{[bar]}qu"o"t\"ed
     """),
     Got = arizona_parser:parse(Tokens, #{render_context => render}),
+    ?assertEqual(Expect, Got).
+
+parse_multiple_forms(Config) when is_list(Config) ->
+    Expect = {[], [
+        {'fun', 1,
+            {clauses, [
+                {clause, 1, [{var, 1, 'ViewAcc'}, {var, 1, 'Socket'}, {var, 1, 'Opts'}], [], [
+                    {'case', 2,
+                        {call, 2, {remote, 2, {atom, 2, arizona_socket}, {atom, 2, render_context}},
+                            [{var, 2, 'Socket'}]},
+                        [
+                            {clause, 3, [{atom, 3, render}], [], [
+                                {call, 4,
+                                    {remote, 4, {atom, 4, arizona_renderer}, {atom, 4, render}}, [
+                                        {match, 4, {var, 4, 'X'}, {integer, 4, 1}},
+                                        {match, 4, {var, 4, 'Y'}, {integer, 4, 2}},
+                                        {op, 4, '+', {var, 4, 'X'}, {var, 4, 'Y'}},
+                                        {var, 4, 'View'},
+                                        {var, 4, 'ViewAcc'},
+                                        {var, 4, 'Socket'}
+                                    ]}
+                            ]},
+                            {clause, 5, [{atom, 5, diff}], [], [
+                                {match, 6, {var, 6, 'Index'}, {integer, 6, 0}},
+                                {match, 7, {var, 7, 'Vars'}, {nil, 7}},
+                                {match, 8, {var, 8, 'TokenCallback'},
+                                    {'fun', 8,
+                                        {clauses, [
+                                            {clause, 8, [], [], [
+                                                {match, 8, {var, 8, 'X'}, {integer, 8, 1}},
+                                                {match, 8, {var, 8, 'Y'}, {integer, 8, 2}},
+                                                {op, 8, '+', {var, 8, 'X'}, {var, 8, 'Y'}}
+                                            ]}
+                                        ]}}},
+                                {call, 9, {remote, 9, {atom, 9, arizona_diff}, {atom, 9, diff}}, [
+                                    {var, 9, 'Index'},
+                                    {var, 9, 'Vars'},
+                                    {var, 9, 'TokenCallback'},
+                                    {var, 9, 'ViewAcc'},
+                                    {var, 9, 'Socket'},
+                                    {var, 9, 'Opts'}
+                                ]}
+                            ]}
+                        ]}
+                ]}
+            ]}}
+    ]},
+    Tokens = arizona_scanner:scan(#{}, ~"""
+    {X = 1,
+     Y = 2,
+     X + Y}
+    """),
+    Got = arizona_parser:parse(Tokens, #{}),
     ?assertEqual(Expect, Got).
 
 parse_transform_render_list(Config) when is_list(Config) ->

@@ -86,11 +86,14 @@ scan_and_parse_html_token_to_ast({html, _Loc, Text0}) ->
 scan_and_parse_erlang_token_to_ast({erlang, _Loc, Expr0}, Index0, RenderContext, Bindings) ->
     Index = integer_to_binary(Index0),
     Vars = vars_to_binary(expr_vars(Expr0)),
-    Form0 = merl:quote(Expr0),
-    Form = arizona_transform:transform(Form0, Bindings),
-    Expr1 = erl_pp:expr(Form),
-    Expr = norm_expr(RenderContext, Expr1, Index, Vars),
+    Form = arizona_transform:transform(merl:quote(Expr0), Bindings),
+    Expr = norm_expr(RenderContext, form_to_iolist(Form), Index, Vars),
     scan_and_parse_to_ast(iolist_to_binary(Expr)).
+
+form_to_iolist(Forms) when is_list(Forms) ->
+    erl_pp:exprs(Forms);
+form_to_iolist(Form) when is_tuple(Form) ->
+    erl_pp:expr(Form).
 
 norm_expr(from_socket, Expr, Index, Vars) ->
     [
