@@ -46,7 +46,7 @@ handle_params(PathParams, QueryString) ->
     QueryParams = arizona:parse_query_string(QueryString),
     {true, #{
         id => arizona:get_path_param(id, PathParams),
-        name => arizona:get_query_param(~"name", QueryParams)
+        name => arizona:get_query_param(name, QueryParams)
     }}.
 
 -spec mount(Bindings, Socket) -> Return when

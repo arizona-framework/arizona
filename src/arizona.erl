@@ -457,18 +457,20 @@ parse_query_string(QueryString) when is_binary(QueryString) ->
     cow_qs:parse_qs(QueryString).
 
 -spec get_query_param(Key, QueryParams) -> Value when
-    Key :: binary(),
+    Key :: atom(),
     QueryParams :: query_params(),
     Value :: binary().
-get_query_param(Key, QueryParams) when is_binary(Key), is_list(QueryParams) ->
+get_query_param(Key0, QueryParams) when is_atom(Key0), is_list(QueryParams) ->
+    Key = atom_to_binary(Key0, utf8),
     {Key, Value} = proplists:lookup(Key, QueryParams),
     Value.
 
 -spec get_query_param(Key, QueryParams, Default) -> Value when
-    Key :: binary(),
+    Key :: atom(),
     QueryParams :: query_params(),
     Value :: binary() | Default.
-get_query_param(Key, QueryParams, Default) when is_binary(Key), is_list(QueryParams) ->
+get_query_param(Key0, QueryParams, Default) when is_atom(Key0), is_list(QueryParams) ->
+    Key = atom_to_binary(Key0, utf8),
     proplists:get_value(Key, QueryParams, Default).
 
 -spec generate_static() -> ok.
