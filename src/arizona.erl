@@ -66,9 +66,9 @@ Arizona follows a component-based architecture where:
 -ignore_xref([get_binding/3]).
 -ignore_xref([get_path_param/2]).
 -ignore_xref([get_path_param/3]).
+-ignore_xref([parse_query_string/1]).
 -ignore_xref([get_query_param/2]).
 -ignore_xref([get_query_param/3]).
--ignore_xref([parse_query_string/1]).
 -ignore_xref([generate_static/0]).
 
 %% --------------------------------------------------------------------
