@@ -16,12 +16,12 @@ init_per_suite(Config) ->
         {arizona, [
             {endpoint, #{
                 routes => [
-                    {"/hello-world", arizona_view_handler,
+                    {"/hello-world/:id", arizona_view_handler,
                         {?MODULE,
                             #{
                                 data_dir => proplists:get_value(data_dir, Config),
                                 title => ~"Arizona",
-                                name => ~"World"
+                                name => ~"Joe"
                             },
                             #{layout => arizona_example_layout}}}
                 ]
@@ -38,14 +38,23 @@ end_per_suite(Config) ->
 %% Behaviour (arizona_live_view) callbacks
 %% --------------------------------------------------------------------
 
+-spec handle_params(PathParams, QueryString) -> Return when
+    PathParams :: arizona:path_params(),
+    QueryString :: arizona:query_string(),
+    Return :: arizona:handle_params_ret().
+handle_params(PathParams, QueryString) ->
+    QueryParams = arizona:parse_query_string(QueryString),
+    {true, #{
+        id => arizona:get_path_param(id, PathParams),
+        name => arizona:get_query_param(name, QueryParams)
+    }}.
+
 -spec mount(Bindings, Socket) -> Return when
     Bindings :: arizona:bindings(),
     Socket :: arizona:socket(),
     Return :: arizona:mount_ret().
 mount(Bindings, _Socket) ->
-    View = arizona_view:new(?MODULE, Bindings#{
-        id => ~"helloWorld"
-    }),
+    View = arizona_view:new(?MODULE, Bindings),
     {ok, View}.
 
 -spec render(View) -> Token when
@@ -85,7 +94,7 @@ hello_world(Config) when is_list(Config) ->
         Hello, World!
     </main></body>
     </html>
-    """}, request("/hello-world")).
+    """}, request("/hello-world/helloWorld?name=World")).
 
 %% --------------------------------------------------------------------
 %% Test support

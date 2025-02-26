@@ -40,6 +40,11 @@ Arizona follows a component-based architecture where:
 -export([put_bindings/2]).
 -export([get_binding/2]).
 -export([get_binding/3]).
+-export([get_path_param/2]).
+-export([get_path_param/3]).
+-export([parse_query_string/1]).
+-export([get_query_param/2]).
+-export([get_query_param/3]).
 -export([generate_static/0]).
 
 %
@@ -59,6 +64,11 @@ Arizona follows a component-based architecture where:
 -ignore_xref([put_bindings/2]).
 -ignore_xref([get_binding/2]).
 -ignore_xref([get_binding/3]).
+-ignore_xref([get_path_param/2]).
+-ignore_xref([get_path_param/3]).
+-ignore_xref([parse_query_string/1]).
+-ignore_xref([get_query_param/2]).
+-ignore_xref([get_query_param/3]).
 -ignore_xref([generate_static/0]).
 
 %% --------------------------------------------------------------------
@@ -104,6 +114,9 @@ Arizona follows a component-based architecture where:
         DynamicList :: [arizona_renderer:dynamic_list()]}.
 -export_type([rendered_list/0]).
 
+-type handle_params_ret() :: arizona_view:handle_params_ret().
+-export_type([handle_params_ret/0]).
+
 -type mount_ret() :: arizona_view:mount_ret().
 -export_type([mount_ret/0]).
 
@@ -112,6 +125,15 @@ Arizona follows a component-based architecture where:
 
 -type event_payload() :: arizona_view:event_payload().
 -export_type([event_payload/0]).
+
+-type path_params() :: arizona_websocket:path_params().
+-export_type([path_params/0]).
+
+-type query_string() :: arizona_websocket:query_string().
+-export_type([query_string/0]).
+
+-type query_params() :: arizona_websocket:query_params().
+-export_type([query_params/0]).
 
 %% --------------------------------------------------------------------
 %% Doctests
@@ -413,6 +435,43 @@ get_binding(Key, View) ->
     Value :: Default | dynamic().
 get_binding(Key, View, Default) ->
     arizona_view:get_binding(Key, View, Default).
+
+-spec get_path_param(Key, PathParams) -> Value when
+    Key :: atom(),
+    PathParams :: path_params(),
+    Value :: dynamic().
+get_path_param(Key, PathParams) when is_atom(Key), is_map(PathParams) ->
+    maps:get(Key, PathParams).
+
+-spec get_path_param(Key, PathParams, Default) -> Value when
+    Key :: atom(),
+    PathParams :: path_params(),
+    Value :: dynamic() | Default.
+get_path_param(Key, PathParams, Default) when is_atom(Key), is_map(PathParams) ->
+    maps:get(Key, PathParams, Default).
+
+-spec parse_query_string(QueryString) -> QueryParams when
+    QueryString :: query_string(),
+    QueryParams :: query_params().
+parse_query_string(QueryString) when is_binary(QueryString) ->
+    cow_qs:parse_qs(QueryString).
+
+-spec get_query_param(Key, QueryParams) -> Value when
+    Key :: atom(),
+    QueryParams :: query_params(),
+    Value :: binary().
+get_query_param(Key0, QueryParams) when is_atom(Key0), is_list(QueryParams) ->
+    Key = atom_to_binary(Key0, utf8),
+    {Key, Value} = proplists:lookup(Key, QueryParams),
+    Value.
+
+-spec get_query_param(Key, QueryParams, Default) -> Value when
+    Key :: atom(),
+    QueryParams :: query_params(),
+    Value :: binary() | Default.
+get_query_param(Key0, QueryParams, Default) when is_atom(Key0), is_list(QueryParams) ->
+    Key = atom_to_binary(Key0, utf8),
+    proplists:get_value(Key, QueryParams, Default).
 
 -spec generate_static() -> ok.
 generate_static() ->
