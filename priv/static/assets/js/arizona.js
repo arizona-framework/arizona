@@ -6,12 +6,13 @@ globalThis['arizona'] = (() => {
   // API function definitions
   // --------------------------------------------------------------------
 
-  function connect(params) {
-    params = {
+  function connect(params = {}) {
+    const queryParams = {
+      ...searchParams(),
       ...params,
       path: location.pathname,
     };
-    send(undefined, 'connect', params);
+    send(undefined, 'connect', queryParams);
   }
 
   function send(viewId, eventName, payload) {
@@ -76,6 +77,10 @@ globalThis['arizona'] = (() => {
   // --------------------------------------------------------------------
   // Private functions
   // --------------------------------------------------------------------
+
+  function searchParams() {
+    return Object.fromEntries([...new URLSearchParams(window.location.search)]);
+  }
 
   function sendToWorker(viewId, eventName, payload) {
     worker.postMessage({ viewId, eventName, payload });

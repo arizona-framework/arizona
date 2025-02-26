@@ -2,7 +2,7 @@
 'use strict';
 
 const state = {
-  params: {},
+  queryParams: {},
   socket: null,
   views: [],
 };
@@ -35,12 +35,12 @@ self.onmessage = function (e) {
   }
 };
 
-function connect(params) {
+function connect(queryParams) {
   return new Promise((resolve) => {
-    const url = genSocketUrl(params);
+    const url = genSocketUrl(queryParams);
     const socket = new WebSocket(url);
 
-    state.params = params;
+    state.queryParams = queryParams;
     state.socket = socket;
 
     socket.onopen = function () {
@@ -97,12 +97,12 @@ function sendToServer([viewId, eventName, payload]) {
   );
 }
 
-function genSocketUrl(params) {
+function genSocketUrl(queryParams) {
   const proto = 'ws';
   const host = location.host;
   const uri = '/websocket';
-  const qs = `?${Object.keys(params)
-    .map((key) => `${key}=${encodeURIComponent(params[key])}`)
+  const queryString = `?${Object.keys(queryParams)
+    .map((key) => `${key}=${encodeURIComponent(queryParams[key])}`)
     .join('&')}`;
-  return `${proto}://${host}${uri}${qs}`;
+  return `${proto}://${host}${uri}${queryString}`;
 }
