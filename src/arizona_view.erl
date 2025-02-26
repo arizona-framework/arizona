@@ -70,6 +70,32 @@ respond to user interactions in real-time.
 
 %
 
+-doc ~"""
+Handles path parameters and query strings in the root view.
+
+The root view serves as the entry point for page rendering or the `inner_content`
+of a layout.
+
+When the callback returns `{true, Bindings}`, the `Bindings` are merged into
+the view's bindings. If it returns `false`, the result is ignored.
+
+This callback **is optional** for all view modules.
+
+## Parameters
+
+- `PathParams`: Path parameters parsed from the route URL. For example, in the route
+  `"/:user_id/profile"`, `user_id` is a path parameter. To retrieve it, use
+  `arizona:get_path_parameter(id, PathParams)`.
+- `QueryString`: The query string from the route URL. For example, in the route
+  `"/:user_id/profile?menu=notifications"`, `?menu=notifications` is the query string.
+  To extract a value, first parse the query string using `arizona:parse_query_string/1`,
+  then call `arizona:get_query_param(menu, QueryParams)`.
+
+## Returns
+
+`{true, Bindings}` where `Bindings` is of type `t:bindings/0`. These bindings will
+be merged into the view's bindings, or `false` if no merge is required.
+""".
 -callback handle_params(PathParams, QueryString) -> Return when
     PathParams :: arizona:path_params(),
     QueryString :: arizona:query_string(),
@@ -228,6 +254,31 @@ get_binding(Key, #view{} = View, Default) when is_atom(Key) ->
 %% Support function exports
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Initializes the root view by setting up bindings, mounting the view, and rendering it.
+
+This function is the entry point for rendering a view. It performs the following steps:
+
+1. Computes the initial bindings by calling `handle_params/3` (if implemented) and
+   merging the results.
+2. Mounts the view using the provided module and bindings.
+3. Renders the view and updates the socket with the rendered content.
+
+## Parameters
+
+- `Mod`: The module implementing the view.
+- `PathParams`: Path parameters parsed from the route URL. For example, in the route
+  `"/:user_id/profile"`, `user_id` is a path parameter.
+- `QueryString`: The query string from the route URL. For example, in the route
+  `"/:user_id/profile?menu=notifications"`, `?menu=notifications` is the query string.
+- `Bindings`: Initial bindings passed to the view.
+- `Socket`: The current socket state.
+
+## Returns
+
+`{View, Socket}` where `View` is the rendered view, and `Socket` is the updated
+socket state after rendering.
+""".
 -spec init_root(Mod, PathParams, QueryString, Bindings, Socket0) -> {View, Socket1} when
     Mod :: module(),
     PathParams :: arizona:path_params(),
@@ -504,6 +555,32 @@ initial_bindings(Mod, PathParams, QueryString, Bindings) ->
             Bindings
     end.
 
+-doc ~"""
+Handles path parameters and query strings for a given module.
+
+This function checks if the provided module implements the `handle_params/2` callback.
+If the callback is implemented, it is called with the provided `PathParams` and `QueryString`.
+The result is used to compute the initial bindings for the view.
+
+## Parameters
+
+- `Mod`: The module implementing the `handle_params/2` callback.
+- `PathParams`: Path parameters parsed from the route URL. For example, in the route
+  `"/:user_id/profile"`, `user_id` is a path parameter.
+- `QueryString`: The query string from the route URL. For example, in the route
+  `"/:user_id/profile?menu=notifications"`, `?menu=notifications` is the query string.
+
+## Returns
+
+`{true, Bindings}` where `Bindings` is of type `t:bindings/0`. These bindings will
+be merged into the view's initial bindings, or `false` if the module does not implement
+the `handle_params/2` callback or if no merge is required.
+
+## Notes
+
+This function ensures the module is loaded using `code:ensure_loaded/1` before checking
+for the `handle_params/2` callback.
+""".
 -spec handle_params(Mod, PathParams, QueryString) -> Return when
     Mod :: module(),
     PathParams :: arizona:path_params(),
