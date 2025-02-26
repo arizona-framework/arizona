@@ -76,9 +76,6 @@ Handles path parameters and query strings in the root view.
 The root view serves as the entry point for page rendering or the `inner_content`
 of a layout.
 
-When the callback returns `{true, Bindings}`, the `Bindings` are merged into
-the view's bindings. If it returns `false`, the result is ignored.
-
 This callback **is optional** for all view modules.
 
 ## Parameters
