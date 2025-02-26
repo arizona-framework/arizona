@@ -510,6 +510,8 @@ initial_bindings(Mod, PathParams, QueryString, Bindings) ->
     QueryString :: arizona:query_string(),
     Return :: handle_params_ret().
 handle_params(Mod, PathParams, QueryParams) ->
+    % Sometimes `erlang:function_exported/3` returns false without `code:ensure_loaded/1`.
+    {module, Mod} = code:ensure_loaded(Mod),
     case erlang:function_exported(Mod, handle_params, 2) of
         true ->
             erlang:apply(Mod, handle_params, [PathParams, QueryParams]);
