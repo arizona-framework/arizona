@@ -1,19 +1,19 @@
 {"1.2.0",
 [{<<"cowboy">>,{pkg,<<"cowboy">>,<<"2.13.0">>},0},
- {<<"cowlib">>,{pkg,<<"cowlib">>,<<"2.13.0">>},1},
+ {<<"cowlib">>,{pkg,<<"cowlib">>,<<"2.14.0">>},1},
  {<<"eqwalizer_support">>,
   {git_subdir,"https://github.com/whatsapp/eqwalizer.git",
               {ref,"7e859907c176c94b415a243f114d1456a32eec2b"},
               "eqwalizer_support"},
   0},
- {<<"ranch">>,{pkg,<<"ranch">>,<<"2.1.0">>},1}]}.
+ {<<"ranch">>,{pkg,<<"ranch">>,<<"2.2.0">>},1}]}.
 [
 {pkg_hash,[
  {<<"cowboy">>, <<"09D770DD5F6A22CC60C071F432CD7CB87776164527F205C5A6B0F24FF6B38990">>},
- {<<"cowlib">>, <<"DB8F7505D8332D98EF50A3EF34B34C1AFDDEC7506E4EE4DD4A3A266285D282CA">>},
- {<<"ranch">>, <<"2261F9ED9574DCFCC444106B9F6DA155E6E540B2F82BA3D42B339B93673B72A3">>}]},
+ {<<"cowlib">>, <<"623791C56C1CC9DF54A71A9C55147A401549917F00A2E48A6AE12B812C586CED">>},
+ {<<"ranch">>, <<"25528F82BC8D7C6152C57666CA99EC716510FE0925CB188172F41CE93117B1B0">>}]},
 {pkg_hash_ext,[
  {<<"cowboy">>, <<"E724D3A70995025D654C1992C7B11DBFEA95205C047D86FF9BF1CDA92DDC5614">>},
- {<<"cowlib">>, <<"E1E1284DC3FC030A64B1AD0D8382AE7E99DA46C3246B815318A4B848873800A4">>},
- {<<"ranch">>, <<"244EE3FA2A6175270D8E1FC59024FD9DBC76294A321057DE8F803B1479E76916">>}]}
+ {<<"cowlib">>, <<"0AF652D1550C8411C3B58EED7A035A7FB088C0B86AFF6BC504B0BC3B7F791AA2">>},
+ {<<"ranch">>, <<"FA0B99A1780C80218A4197A59EA8D3BDAE32FBFF7E88527D7D8A4787EFF4F8E7">>}]}
 ].
