@@ -73,20 +73,24 @@ websocket_init({PathParams, QueryString, {Mod, Bindings, _Opts}}) ->
     {Events, Socket}.
 
 -spec websocket_handle(Event, Socket0) -> {Events, Socket1} when
-    Event :: {text, binary()},
+    Event :: {text, Msg},
+    Msg :: binary(),
     Events :: cowboy_websocket:commands(),
     Socket0 :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
-websocket_handle({text, Msg}, Socket0) ->
+websocket_handle({text, Msg}, Socket) ->
     ?LOG_INFO(#{
         text => ~"message received",
         in => ?MODULE,
         messge => Msg,
-        socket => Socket0
+        socket => Socket
     }),
-    [ViewId, Event, Payload] = json:decode(Msg),
+    [Subject, Attachment] = json:decode(Msg),
+    handle_message(Subject, Attachment, Socket).
+
+handle_message(~"event", [ViewId, EventName, Payload], Socket0) ->
     {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
-    View1 = arizona_view:handle_event(Event, Payload, View0),
+    View1 = arizona_view:handle_event(EventName, Payload, View0),
     ?LOG_INFO(#{
         text => ~"view updated",
         in => ?MODULE,

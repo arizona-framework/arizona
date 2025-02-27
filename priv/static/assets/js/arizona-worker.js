@@ -10,28 +10,23 @@ const state = {
 self.importScripts('/assets/js/arizona/patch.js');
 
 // Messages from client
-self.onmessage = function (e) {
+self.onmessage = function(e) {
   const { data: msg } = e;
 
   console.log('[WebWorker] client sent:', msg);
 
-  if (typeof msg !== 'object' || !msg.eventName) {
+  if (typeof msg !== 'object' || !msg.subject) {
     console.error('[WebWorker] invalid message format:', msg);
     return;
   }
 
-  const { viewId, eventName, payload } = msg;
-  switch (eventName) {
+  const { subject, attachment } = msg;
+  switch (subject) {
     case 'connect':
-      connect(payload);
+      connect(attachment);
       break;
     default:
-      if (!viewId) {
-        console.error('[WebWorker] missing view ID');
-        return;
-      }
-
-      sendToServer([viewId, eventName, payload]);
+      sendMsgToServer([subject, attachment]);
   }
 };
 
@@ -43,19 +38,19 @@ function connect(queryParams) {
     state.queryParams = queryParams;
     state.socket = socket;
 
-    socket.onopen = function () {
+    socket.onopen = function() {
       console.log('[WebSocket] connected:', state);
-      sendToClient('connect');
+      sendMsgToClient('connect');
 
       resolve();
     };
 
-    socket.onclose = function (e) {
+    socket.onclose = function(e) {
       console.log('[WebSocket] disconnected:', e);
     };
 
     // Messages from server
-    socket.onmessage = function (e) {
+    socket.onmessage = function(e) {
       console.log('[WebSocket] msg:', e.data);
       const data = JSON.parse(e.data);
       Array.isArray(data) ? data.forEach(handleEvent) : handleEvent(data);
@@ -75,26 +70,22 @@ function handleEvent(data) {
       const [viewId, diff] = payload;
       const rendered = state.views[viewId];
       const html = patch(rendered, diff);
-      sendToClient('patch', [viewId, html]);
+      sendMsgToClient('patch', [viewId, html]);
       break;
     }
     default: {
-      sendToClient(eventName, payload);
+      sendMsgToClient(eventName, payload);
       break;
     }
   }
 }
 
-function sendToClient(eventName, payload) {
+function sendMsgToClient(eventName, payload) {
   self.postMessage({ eventName, payload });
 }
 
-function sendToServer([viewId, eventName, payload]) {
-  state.socket.send(
-    payload
-      ? JSON.stringify([viewId, eventName, payload], state)
-      : JSON.stringify([viewId, eventName]),
-  );
+function sendMsgToServer(payload) {
+  state.socket.send(JSON.stringify(payload))
 }
 
 function genSocketUrl(queryParams) {
