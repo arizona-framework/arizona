@@ -10,7 +10,7 @@ const state = {
 self.importScripts('/assets/js/arizona/patch.js');
 
 // Messages from client
-self.onmessage = function(e) {
+self.onmessage = function (e) {
   const { data: msg } = e;
 
   console.log('[WebWorker] client sent:', msg);
@@ -38,19 +38,19 @@ function connect(queryParams) {
     state.queryParams = queryParams;
     state.socket = socket;
 
-    socket.onopen = function() {
+    socket.onopen = function () {
       console.log('[WebSocket] connected:', state);
       sendMsgToClient('connect');
 
       resolve();
     };
 
-    socket.onclose = function(e) {
+    socket.onclose = function (e) {
       console.log('[WebSocket] disconnected:', e);
     };
 
     // Messages from server
-    socket.onmessage = function(e) {
+    socket.onmessage = function (e) {
       console.log('[WebSocket] msg:', e.data);
       const data = JSON.parse(e.data);
       Array.isArray(data) ? data.forEach(handleEvent) : handleEvent(data);
@@ -85,7 +85,7 @@ function sendMsgToClient(eventName, payload) {
 }
 
 function sendMsgToServer(payload) {
-  state.socket.send(JSON.stringify(payload))
+  state.socket.send(JSON.stringify(payload));
 }
 
 function genSocketUrl(queryParams) {

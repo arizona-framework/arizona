@@ -7,33 +7,35 @@ globalThis['arizona'] = (() => {
   // --------------------------------------------------------------------
 
   function connect(params = {}, callback, opts) {
-    if (typeof callback === "function") {
-      _subscribe("connect", callback, opts)
+    if (typeof callback === 'function') {
+      _subscribe('connect', callback, opts);
     }
 
-    const searchParams = Object.fromEntries([...new URLSearchParams(window.location.search)]);
+    const searchParams = Object.fromEntries([
+      ...new URLSearchParams(window.location.search),
+    ]);
     const queryParams = {
       ...searchParams,
       ...params,
       path: location.pathname,
     };
-    _sendMsgToWorker("connect", queryParams)
+    _sendMsgToWorker('connect', queryParams);
   }
 
   function on(eventName, callback, opts) {
-    _subscribe(eventName, callback, opts)
+    _subscribe(eventName, callback, opts);
   }
 
   function event(eventName) {
     function emmit(viewId, payload) {
-      _sendMsgToWorker("event", [viewId, eventName, payload])
+      _sendMsgToWorker('event', [viewId, eventName, payload]);
     }
 
     function subscribe(callback, opts) {
-      _subscribe(eventName, callback, opts)
+      _subscribe(eventName, callback, opts);
     }
 
-    return Object.freeze({ emmit, subscribe })
+    return Object.freeze({ emmit, subscribe });
   }
 
   // --------------------------------------------------------------------
@@ -71,7 +73,7 @@ globalThis['arizona'] = (() => {
       unsubscribers,
     });
 
-    return function() {
+    return function () {
       _unsubscribe(id);
     };
   }
@@ -107,7 +109,7 @@ globalThis['arizona'] = (() => {
   const subscribers = new Map();
   const unsubscribers = new Map();
 
-  worker.addEventListener('message', function(e) {
+  worker.addEventListener('message', function (e) {
     console.log('[WebWorker] msg:', e.data);
 
     const { eventName, payload } = e.data;
@@ -120,13 +122,13 @@ globalThis['arizona'] = (() => {
         });
       }
     }
-    subscribers.get(eventName)?.forEach(function({ id, callback, opts }) {
+    subscribers.get(eventName)?.forEach(function ({ id, callback, opts }) {
       callback(payload);
       opts.once && _unsubscribe(id);
     });
   });
 
-  worker.addEventListener('error', function(e) {
+  worker.addEventListener('error', function (e) {
     console.error('[WebWorker] error:', e);
   });
 
