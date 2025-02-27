@@ -89,25 +89,6 @@ websocket_handle({text, Msg}, Socket) ->
     [Subject, Attachment] = json:decode(Msg),
     handle_message(Subject, Attachment, Socket).
 
-handle_message(~"event", [ViewId, EventName, Payload], Socket0) ->
-    {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
-    Result = arizona_view:handle_event(EventName, Payload, View0),
-    {Events0, View1} = norm_handle_event_result(Result),
-    ?LOG_INFO(#{
-        text => ~"view updated",
-        in => ?MODULE,
-        id => ViewId,
-        views => View1
-    }),
-    Token = arizona_view:render(View1),
-    {View2, Socket1} = arizona_diff:diff(Token, 0, View1, Socket0),
-    Diff = arizona_view:diff(View2),
-    Events = put_diff_event(Diff, ViewId, Events0),
-    View = arizona_view:merge_changed_bindings(View2),
-    Socket = arizona_socket:put_view(View, Socket1),
-    Cmds = commands(Events),
-    {Cmds, Socket}.
-
 -spec websocket_info(Msg, Socket0) -> {Events, Socket1} when
     Msg :: dynamic(),
     Events :: cowboy_websocket:commands(),
@@ -138,6 +119,25 @@ terminate(Reason, _Req, Socket) ->
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
+
+handle_message(~"event", [ViewId, EventName, Payload], Socket0) ->
+    {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
+    Result = arizona_view:handle_event(EventName, Payload, View0),
+    {Events0, View1} = norm_handle_event_result(Result),
+    ?LOG_INFO(#{
+        text => ~"view updated",
+        in => ?MODULE,
+        id => ViewId,
+        views => View1
+    }),
+    Token = arizona_view:render(View1),
+    {View2, Socket1} = arizona_diff:diff(Token, 0, View1, Socket0),
+    Diff = arizona_view:diff(View2),
+    Events = put_diff_event(Diff, ViewId, Events0),
+    View = arizona_view:merge_changed_bindings(View2),
+    Socket = arizona_socket:put_view(View, Socket1),
+    Cmds = commands(Events),
+    {Cmds, Socket}.
 
 put_init_event(Socket, Events) ->
     Views = #{Id => arizona_view:rendered(View) || Id := View <- arizona_socket:views(Socket)},
