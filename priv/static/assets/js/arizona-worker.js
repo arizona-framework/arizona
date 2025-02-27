@@ -20,13 +20,12 @@ self.onmessage = function (e) {
     return;
   }
 
-  const { subject, attachment } = msg;
-  switch (subject) {
+  switch (msg.subject) {
     case 'connect':
-      connect(attachment);
+      connect(msg.attachment);
       break;
     default:
-      sendMsgToServer([subject, attachment]);
+      sendMsgToServer(msg);
   }
 };
 
@@ -84,8 +83,8 @@ function sendMsgToClient(eventName, payload) {
   self.postMessage({ eventName, payload });
 }
 
-function sendMsgToServer(payload) {
-  state.socket.send(JSON.stringify(payload));
+function sendMsgToServer(msg) {
+  state.socket.send(JSON.stringify(msg));
 }
 
 function genSocketUrl(queryParams) {

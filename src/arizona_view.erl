@@ -193,8 +193,8 @@ The updated view state (`t:view/0`) after handling the event.
 -export_type([mount_ret/0]).
 
 -type handle_event_ret() ::
-    {noreply, View :: view()}
-    | {reply, Events :: events(), View :: view()}.
+    {reply, Events :: events(), View :: view()}
+    | {noreply, View :: view()}.
 -export_type([handle_event_ret/0]).
 
 -type events() :: [{Name :: event_name(), Payload :: event_payload()}].
