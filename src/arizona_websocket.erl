@@ -70,36 +70,24 @@ websocket_init({PathParams, QueryString, {Mod, Bindings, _Opts}}) ->
     {_View, Socket1} = arizona_view:init_root(Mod, PathParams, QueryString, Bindings, Socket0),
     Socket = arizona_socket:set_render_context(diff, Socket1),
     Events = put_init_event(Socket, []),
-    {Events, Socket}.
+    Cmds = commands(Events),
+    {Cmds, Socket}.
 
 -spec websocket_handle(Event, Socket0) -> {Events, Socket1} when
-    Event :: {text, binary()},
-    Events :: cowboy_websocket:commands(),
+    Event :: {text, Msg},
+    Msg :: binary(),
     Socket0 :: arizona_socket:socket(),
+    Events :: cowboy_websocket:commands(),
     Socket1 :: arizona_socket:socket().
-websocket_handle({text, Msg}, Socket0) ->
+websocket_handle({text, Msg}, Socket) ->
     ?LOG_INFO(#{
         text => ~"message received",
         in => ?MODULE,
         messge => Msg,
-        socket => Socket0
+        socket => Socket
     }),
-    [ViewId, Event, Payload] = json:decode(Msg),
-    {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
-    View1 = arizona_view:handle_event(Event, Payload, View0),
-    ?LOG_INFO(#{
-        text => ~"view updated",
-        in => ?MODULE,
-        id => ViewId,
-        views => View1
-    }),
-    Token = arizona_view:render(View1),
-    {View2, Socket1} = arizona_diff:diff(Token, 0, View1, Socket0),
-    Diff = arizona_view:diff(View2),
-    Events = put_diff_event(Diff, ViewId, []),
-    View = arizona_view:merge_changed_bindings(View2),
-    Socket = arizona_socket:put_view(View, Socket1),
-    {Events, Socket}.
+    [Subject, Attachment] = json:decode(Msg),
+    handle_message(Subject, Attachment, Socket).
 
 -spec websocket_info(Msg, Socket0) -> {Events, Socket1} when
     Msg :: dynamic(),
@@ -132,10 +120,28 @@ terminate(Reason, _Req, Socket) ->
 %% Private functions
 %% --------------------------------------------------------------------
 
+handle_message(~"event", [ViewId, EventName, Payload], Socket0) ->
+    {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
+    Result = arizona_view:handle_event(EventName, Payload, View0),
+    {Events0, View1} = norm_handle_event_result(Result),
+    ?LOG_INFO(#{
+        text => ~"view updated",
+        in => ?MODULE,
+        id => ViewId,
+        views => View1
+    }),
+    Token = arizona_view:render(View1),
+    {View2, Socket1} = arizona_diff:diff(Token, 0, View1, Socket0),
+    Diff = arizona_view:diff(View2),
+    Events = put_diff_event(Diff, ViewId, Events0),
+    View = arizona_view:merge_changed_bindings(View2),
+    Socket = arizona_socket:put_view(View, Socket1),
+    Cmds = commands(Events),
+    {Cmds, Socket}.
+
 put_init_event(Socket, Events) ->
     Views = #{Id => arizona_view:rendered(View) || Id := View <- arizona_socket:views(Socket)},
-    Msg = json:encode([[~"init", Views]]),
-    [{text, Msg} | Events].
+    [{~"init", Views} | Events].
 
 put_diff_event([], _ViewId, Events) ->
     Events;
@@ -146,13 +152,29 @@ put_diff_event(Diff, ViewId, Events) ->
         id => ViewId,
         views => Diff
     }),
-    Msg = encode_diff([[~"patch", [ViewId, Diff]]]),
-    [{text, Msg} | Events].
+    [{~"patch", [ViewId, {diff, Diff}]} | Events].
 
-encode_diff(Diff) ->
-    json:encode(Diff, fun
+norm_handle_event_result({noreply, View}) ->
+    {[], View};
+norm_handle_event_result({reply, Events, View}) ->
+    {Events, View}.
+
+commands([]) ->
+    [];
+commands(Events) ->
+    [{text, encode(lists:reverse(Events))}].
+
+encode(Term) ->
+    json:encode(Term, fun
+        ({diff, Diff}, Encode) ->
+            json:encode(proplists:to_map(Diff), Encode);
         ([{_, _} | _] = Proplist, Encode) ->
-            json:encode(proplists:to_map(Proplist), Encode);
+            json:encode(proplist_to_list(Proplist), Encode);
         (Other, Encode) ->
             json:encode_value(Other, Encode)
     end).
+
+proplist_to_list([]) ->
+    [];
+proplist_to_list([{K, V} | T]) ->
+    [[K, V] | proplist_to_list(T)].

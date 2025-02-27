@@ -120,6 +120,9 @@ Arizona follows a component-based architecture where:
 -type mount_ret() :: arizona_view:mount_ret().
 -export_type([mount_ret/0]).
 
+-type handle_event_ret() :: arizona_view:handle_event_ret().
+-export_type([handle_event_ret/0]).
+
 -type event_name() :: arizona_view:event_name().
 -export_type([event_name/0]).
 

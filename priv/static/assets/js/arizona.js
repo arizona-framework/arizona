@@ -6,20 +6,43 @@ globalThis['arizona'] = (() => {
   // API function definitions
   // --------------------------------------------------------------------
 
-  function connect(params = {}) {
+  function connect(params = {}, callback, opts) {
+    if (typeof callback === 'function') {
+      _subscribe('connect', callback, opts);
+    }
+
+    const searchParams = Object.fromEntries([
+      ...new URLSearchParams(window.location.search),
+    ]);
     const queryParams = {
-      ...searchParams(),
+      ...searchParams,
       ...params,
       path: location.pathname,
     };
-    send(undefined, 'connect', queryParams);
+    _sendMsgToWorker('connect', queryParams);
   }
 
-  function send(viewId, eventName, payload) {
-    sendToWorker.bind(this)(viewId, eventName, payload);
+  function on(eventName, callback, opts) {
+    _subscribe(eventName, callback, opts);
   }
 
-  function subscribe(eventName, callback, opts = {}) {
+  function event(eventName) {
+    function emmit(viewId, payload) {
+      _sendMsgToWorker('event', [viewId, eventName, payload]);
+    }
+
+    function subscribe(callback, opts) {
+      _subscribe(eventName, callback, opts);
+    }
+
+    return Object.freeze({ emmit, subscribe });
+  }
+
+  // --------------------------------------------------------------------
+  // Private functions
+  // --------------------------------------------------------------------
+
+  function _subscribe(eventName, callback, opts = {}) {
     if (
       typeof eventName !== 'string' ||
       typeof callback !== 'function' ||
@@ -51,11 +74,11 @@ globalThis['arizona'] = (() => {
     });
 
     return function () {
-      unsubscribe(id);
+      _unsubscribe(id);
     };
   }
 
-  function unsubscribe(id) {
+  function _unsubscribe(id) {
     const eventName = unsubscribers.get(id);
     if (!eventName) return;
     const eventSubs = subscribers.get(eventName);
@@ -74,16 +97,8 @@ globalThis['arizona'] = (() => {
     });
   }
 
-  // --------------------------------------------------------------------
-  // Private functions
-  // --------------------------------------------------------------------
-
-  function searchParams() {
-    return Object.fromEntries([...new URLSearchParams(window.location.search)]);
-  }
-
-  function sendToWorker(viewId, eventName, payload) {
-    worker.postMessage({ viewId, eventName, payload });
+  function _sendMsgToWorker(subject, attachment) {
+    worker.postMessage({ subject, attachment });
   }
 
   // --------------------------------------------------------------------
@@ -109,7 +124,7 @@ globalThis['arizona'] = (() => {
     }
     subscribers.get(eventName)?.forEach(function ({ id, callback, opts }) {
       callback(payload);
-      opts.once && unsubscribe(id);
+      opts.once && _unsubscribe(id);
     });
   });
 
@@ -117,5 +132,5 @@ globalThis['arizona'] = (() => {
     console.error('[WebWorker] error:', e);
   });
 
-  return Object.freeze({ connect, send, subscribe, unsubscribe });
+  return Object.freeze({ connect, on, event });
 })();

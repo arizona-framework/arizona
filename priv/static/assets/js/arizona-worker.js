@@ -15,23 +15,17 @@ self.onmessage = function (e) {
 
   console.log('[WebWorker] client sent:', msg);
 
-  if (typeof msg !== 'object' || !msg.eventName) {
+  if (typeof msg !== 'object' || !msg.subject) {
     console.error('[WebWorker] invalid message format:', msg);
     return;
   }
 
-  const { viewId, eventName, payload } = msg;
-  switch (eventName) {
+  switch (msg.subject) {
     case 'connect':
-      connect(payload);
+      connect(msg.attachment);
       break;
     default:
-      if (!viewId) {
-        console.error('[WebWorker] missing view ID');
-        return;
-      }
-
-      sendToServer([viewId, eventName, payload]);
+      sendMsgToServer(msg);
   }
 };
 
@@ -45,7 +39,7 @@ function connect(queryParams) {
 
     socket.onopen = function () {
       console.log('[WebSocket] connected:', state);
-      sendToClient('connect');
+      sendMsgToClient('connect');
 
       resolve();
     };
@@ -75,26 +69,22 @@ function handleEvent(data) {
       const [viewId, diff] = payload;
       const rendered = state.views[viewId];
       const html = patch(rendered, diff);
-      sendToClient('patch', [viewId, html]);
+      sendMsgToClient('patch', [viewId, html]);
       break;
     }
     default: {
-      sendToClient(eventName, payload);
+      sendMsgToClient(eventName, payload);
       break;
     }
   }
 }
 
-function sendToClient(eventName, payload) {
+function sendMsgToClient(eventName, payload) {
   self.postMessage({ eventName, payload });
 }
 
-function sendToServer([viewId, eventName, payload]) {
-  state.socket.send(
-    payload
-      ? JSON.stringify([viewId, eventName, payload], state)
-      : JSON.stringify([viewId, eventName]),
-  );
+function sendMsgToServer(msg) {
+  state.socket.send(JSON.stringify(msg));
 }
 
 function genSocketUrl(queryParams) {
