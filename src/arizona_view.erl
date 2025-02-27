@@ -159,11 +159,11 @@ This callback **is required** for all view modules.
 
 The updated view state (`t:view/0`) after handling the event.
 """.
--callback handle_event(EventName, Payload, View0) -> View1 when
+-callback handle_event(EventName, Payload, View0) -> Return when
     EventName :: event_name(),
     Payload :: event_payload(),
-    View0 :: arizona_view:view(),
-    View1 :: arizona_view:view().
+    View0 :: view(),
+    Return :: handle_event_ret().
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -191,6 +191,14 @@ The updated view state (`t:view/0`) after handling the event.
 
 -type mount_ret() :: {ok, View :: view()} | ignore.
 -export_type([mount_ret/0]).
+
+-type handle_event_ret() ::
+    {noreply, View :: view()}
+    | {reply, Events :: events(), View :: view()}.
+-export_type([handle_event_ret/0]).
+
+-type events() :: [{Name :: event_name(), Payload :: event_payload()}].
+-export_type([events/0]).
 
 -type event_name() :: binary().
 -export_type([event_name/0]).
@@ -347,7 +355,7 @@ set_changed_bindings(ChangedBindings, #view{} = View) when is_map(ChangedBinding
     View#view{changed_bindings = ChangedBindings}.
 
 -spec rendered(View) -> Rendered when
-    View :: arizona_view:view(),
+    View :: view(),
     Rendered :: arizona_renderer:rendered().
 rendered(#view{} = View) ->
     View#view.rendered.
@@ -532,11 +540,11 @@ It updates the view's state based on the event and returns the updated view.
 
 The updated view state (`t:view/0`) after handling the event.
 """.
--spec handle_event(EventName, Payload, View0) -> View1 when
+-spec handle_event(EventName, Payload, View) -> Return when
     EventName :: event_name(),
     Payload :: event_payload(),
-    View0 :: arizona_view:view(),
-    View1 :: arizona_view:view().
+    View :: view(),
+    Return :: handle_event_ret().
 handle_event(EventName, Payload, #view{} = View) ->
     erlang:apply(View#view.module, handle_event, [EventName, Payload, View]).
 
