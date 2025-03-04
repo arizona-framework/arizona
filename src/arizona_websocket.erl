@@ -120,10 +120,10 @@ terminate(Reason, _Req, Socket) ->
 %% Private functions
 %% --------------------------------------------------------------------
 
-handle_message(~"event", [ViewId, EventName, Payload], Socket0) ->
+handle_message(~"event", [Ref, ViewId, EventName, Payload], Socket0) ->
     {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
     Result = arizona_view:handle_event(EventName, Payload, View0),
-    {Events0, View1} = norm_handle_event_result(Result),
+    {Events0, View1} = norm_handle_event_result(Result, Ref, ViewId, EventName),
     ?LOG_INFO(#{
         text => ~"view updated",
         in => ?MODULE,
@@ -133,7 +133,7 @@ handle_message(~"event", [ViewId, EventName, Payload], Socket0) ->
     Token = arizona_view:render(View1),
     {View2, Socket1} = arizona_diff:diff(Token, 0, View1, Socket0),
     Diff = arizona_view:diff(View2),
-    Events = put_diff_event(Diff, ViewId, Events0),
+    Events = put_diff_event(Diff, Ref, ViewId, Events0),
     View = arizona_view:merge_changed_bindings(View2),
     Socket = arizona_socket:put_view(View, Socket1),
     Cmds = commands(Events),
@@ -141,23 +141,30 @@ handle_message(~"event", [ViewId, EventName, Payload], Socket0) ->
 
 put_init_event(Socket, Events) ->
     Views = #{Id => arizona_view:rendered(View) || Id := View <- arizona_socket:views(Socket)},
-    [{~"init", Views} | Events].
+    Event = event_tuple(~"init", undefined, undefined, Views),
+    [Event | Events].
 
-put_diff_event([], _ViewId, Events) ->
+put_diff_event([], _Ref, _ViewId, Events) ->
     Events;
-put_diff_event(Diff, ViewId, Events) ->
+put_diff_event(Diff, Ref, ViewId, Events) ->
     ?LOG_INFO(#{
         text => ~"view diff",
         in => ?MODULE,
+        diff => Diff,
+        ref => Ref,
         id => ViewId,
         views => Diff
     }),
-    [{~"patch", [ViewId, {diff, Diff}]} | Events].
+    [event_tuple(~"patch", Ref, ViewId, {diff, Diff}) | Events].
 
-norm_handle_event_result({noreply, View}) ->
+norm_handle_event_result({noreply, View}, _Ref, _ViewId, _EventName) ->
     {[], View};
-norm_handle_event_result({reply, Events, View}) ->
-    {Events, View}.
+norm_handle_event_result({reply, Payload, View}, Ref, ViewId, EventName) ->
+    Event = event_tuple(EventName, Ref, ViewId, Payload),
+    {[Event], View}.
+
+event_tuple(EventName, Ref, ViewId, Payload) ->
+    {EventName, [Ref, ViewId, Payload]}.
 
 commands([]) ->
     [];

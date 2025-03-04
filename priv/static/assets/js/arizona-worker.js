@@ -10,7 +10,7 @@ const state = {
 self.importScripts('/assets/js/arizona/patch.js');
 
 // Messages from client
-self.onmessage = function (e) {
+self.onmessage = function(e) {
   const { data: msg } = e;
 
   console.log('[WebWorker] client sent:', msg);
@@ -21,15 +21,17 @@ self.onmessage = function (e) {
   }
 
   switch (msg.subject) {
-    case 'connect':
-      connect(msg.attachment);
+    case 'connect': {
+      const { ref, queryParams } = msg.attachment
+      connect(ref, queryParams);
       break;
+    }
     default:
       sendMsgToServer(msg);
   }
 };
 
-function connect(queryParams) {
+function connect(id, queryParams) {
   return new Promise((resolve) => {
     const url = genSocketUrl(queryParams);
     const socket = new WebSocket(url);
@@ -37,19 +39,20 @@ function connect(queryParams) {
     state.queryParams = queryParams;
     state.socket = socket;
 
-    socket.onopen = function () {
+    socket.onopen = function() {
       console.log('[WebSocket] connected:', state);
-      sendMsgToClient('connect');
+      sendMsgToClient(id, 'connected', true);
 
       resolve();
     };
 
-    socket.onclose = function (e) {
+    socket.onclose = function(e) {
       console.log('[WebSocket] disconnected:', e);
+      sendMsgToClient(id, 'connected', false);
     };
 
     // Messages from server
-    socket.onmessage = function (e) {
+    socket.onmessage = function(e) {
       console.log('[WebSocket] msg:', e.data);
       const data = JSON.parse(e.data);
       Array.isArray(data) ? data.forEach(handleEvent) : handleEvent(data);
@@ -59,32 +62,31 @@ function connect(queryParams) {
 
 function handleEvent(data) {
   const eventName = data[0];
-  const payload = data[1];
+  const [ref, viewId, payload] = data[1];
   switch (eventName) {
     case 'init': {
       state.views = payload;
       break;
     }
     case 'patch': {
-      const [viewId, diff] = payload;
       const rendered = state.views[viewId];
-      const html = patch(rendered, diff);
-      sendMsgToClient('patch', [viewId, html]);
+      const html = patch(rendered, payload);
+      sendMsgToClient(ref, viewId, 'patch', html);
       break;
     }
     default: {
-      sendMsgToClient(eventName, payload);
+      sendMsgToClient(ref, viewId, eventName, payload);
       break;
     }
   }
 }
 
-function sendMsgToClient(eventName, payload) {
-  self.postMessage({ eventName, payload });
+function sendMsgToClient(ref, viewId, eventName, payload) {
+  self.postMessage({ ref, viewId, eventName, payload });
 }
 
-function sendMsgToServer(msg) {
-  state.socket.send(JSON.stringify(msg));
+function sendMsgToServer({ subject, attachment }) {
+  state.socket.send(JSON.stringify([subject, attachment]));
 }
 
 function genSocketUrl(queryParams) {
