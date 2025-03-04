@@ -5,6 +5,7 @@ const state = {
   queryParams: {},
   socket: null,
   views: [],
+  eventQueue: [],
 };
 
 self.importScripts('/assets/js/arizona/patch.js');
@@ -13,7 +14,7 @@ self.importScripts('/assets/js/arizona/patch.js');
 self.onmessage = function(e) {
   const { data: msg } = e;
 
-  console.log('[WebWorker] client sent:', msg);
+  console.info('[WebWorker] client sent:', msg);
 
   if (typeof msg !== 'object' || !msg.subject) {
     console.error('[WebWorker] invalid message format:', msg);
@@ -31,7 +32,7 @@ self.onmessage = function(e) {
   }
 };
 
-function connect(id, queryParams) {
+function connect(ref, queryParams) {
   return new Promise((resolve) => {
     const url = genSocketUrl(queryParams);
     const socket = new WebSocket(url);
@@ -40,20 +41,25 @@ function connect(id, queryParams) {
     state.socket = socket;
 
     socket.onopen = function() {
-      console.log('[WebSocket] connected:', state);
-      sendMsgToClient(id, 'connected', true);
+      console.info('[WebSocket] connected:', state);
+
+      const queuedEvents = [...state.eventQueue]
+      state.eventQueue.length = 0;
+      queuedEvents.forEach(sendMsgToServer);
+
+      sendMsgToClient(ref, undefined, 'connected', true);
 
       resolve();
     };
 
     socket.onclose = function(e) {
-      console.log('[WebSocket] disconnected:', e);
-      sendMsgToClient(id, 'connected', false);
+      console.info('[WebSocket] disconnected:', e);
+      sendMsgToClient(ref, undefined, 'connected', false);
     };
 
     // Messages from server
     socket.onmessage = function(e) {
-      console.log('[WebSocket] msg:', e.data);
+      console.info('[WebSocket] msg:', e.data);
       const data = JSON.parse(e.data);
       Array.isArray(data) ? data.forEach(handleEvent) : handleEvent(data);
     };
@@ -86,7 +92,16 @@ function sendMsgToClient(ref, viewId, eventName, payload) {
 }
 
 function sendMsgToServer({ subject, attachment }) {
-  state.socket.send(JSON.stringify([subject, attachment]));
+  if (!state.socket) {
+    state.eventQueue.push({ subject, attachment });
+    console.warn("[WebSocket] not ready to send messages")
+  } else if (isSocketOpen()) {
+    state.socket.send(JSON.stringify([subject, attachment]));
+  }
+}
+
+function isSocketOpen() {
+  return state.socket.readyState === WebSocket.OPEN;
 }
 
 function genSocketUrl(queryParams) {
