@@ -49,12 +49,11 @@ globalThis['arizona'] = (() => {
         if (joined) reject("alreadyJoined")
 
         const ref = generateRef()
-        const eventName = 'channel:join'
-        _subscribe(ref, eventName, ([status, payload]) => {
+        _subscribe(ref, 'join', ([status, payload]) => {
           joined = status === "ok"
           joined ? resolve(payload) : reject(payload)
         }, { once: true })
-        _sendMsgToWorker('join', [ref, viewId, eventName, topic, params])
+        _sendMsgToWorker('join', [ref, viewId, topic, params])
         resolve(_leave)
       })
     }
@@ -142,7 +141,7 @@ globalThis['arizona'] = (() => {
   const unsubscribers = new Map();
 
   worker.addEventListener('message', function(e) {
-    console.log('[WebWorker] msg:', e.data);
+    console.info('[WebWorker] msg:', e.data);
 
     const { ref, viewId, eventName, payload } = e.data;
     switch (eventName) {
@@ -160,7 +159,7 @@ globalThis['arizona'] = (() => {
     }
 
     const eventSubs = subscribers.get(eventName)
-    if (!Array.isArray(eventSubs)) return
+    if (!(eventSubs instanceof Map)) return
 
     if (typeof ref === "string" && ref.length) {
       const subs = eventSubs.get(ref)
