@@ -5,7 +5,7 @@
 %% --------------------------------------------------------------------
 
 -export([new/1]).
--export([new/2]).
+-export([new/3]).
 -export([render_context/1]).
 -export([set_render_context/2]).
 -export([views/1]).
@@ -15,7 +15,7 @@
 
 %
 
--ignore_xref([new/2]).
+-ignore_xref([new/3]).
 -ignore_xref([render_context/1]).
 
 %% --------------------------------------------------------------------
@@ -24,7 +24,8 @@
 
 -record(socket, {
     render_context :: render_context(),
-    views :: views()
+    views :: views(),
+    session_id :: session_id()
 }).
 -opaque socket() :: #socket{}.
 -export_type([socket/0]).
@@ -35,6 +36,9 @@
 -type views() :: #{arizona_view:id() => arizona_view:view()}.
 -export_type([views/0]).
 
+-type session_id() :: binary() | undefined.
+-export_type([session_id/0]).
+
 %% --------------------------------------------------------------------
 %% Support function definitions
 %% --------------------------------------------------------------------
@@ -43,16 +47,22 @@
     RenderContext :: render_context(),
     Socket :: socket().
 new(RenderContext) ->
-    new(RenderContext, #{}).
+    new(RenderContext, #{}, undefined).
 
--spec new(RenderContext, Views) -> Socket when
+-spec new(RenderContext, Views, SessionId) -> Socket when
     RenderContext :: render_context(),
     Views :: views(),
+    SessionId :: session_id(),
     Socket :: socket().
-new(RenderContext, Views) ->
+new(RenderContext, Views, SessionId) when
+    (RenderContext =:= render orelse RenderContext =:= diff),
+    is_map(Views),
+    (is_binary(SessionId) orelse SessionId =:= undefined)
+->
     #socket{
         render_context = RenderContext,
-        views = Views
+        views = Views,
+        session_id = SessionId
     }.
 
 -spec render_context(Socket) -> RenderContext when

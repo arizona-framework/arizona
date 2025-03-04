@@ -79,6 +79,9 @@ Arizona follows a component-based architecture where:
 -type bindings() :: arizona_view:bindings().
 -export_type([bindings/0]).
 
+-type session_id() :: arizona_socket:session_id().
+-export_type([session_id/0]).
+
 -type socket() :: arizona_socket:socket().
 -export_type([socket/0]).
 

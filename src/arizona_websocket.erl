@@ -63,7 +63,8 @@ websocket_init({PathParams, QueryParams, {Mod, Bindings, _Opts}}) ->
         path_params => PathParams,
         query_params => QueryParams
     }),
-    Socket0 = arizona_socket:new(render),
+    SessionId = arizona:get_query_param(session_id, QueryParams),
+    Socket0 = arizona_socket:new(render, #{}, SessionId),
     {_View, Socket1} = arizona_view:init_root(Mod, PathParams, QueryParams, Bindings, Socket0),
     Socket = arizona_socket:set_render_context(diff, Socket1),
     Events = put_init_event(Socket, []),
