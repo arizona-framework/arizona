@@ -42,7 +42,6 @@ Arizona follows a component-based architecture where:
 -export([get_binding/3]).
 -export([get_path_param/2]).
 -export([get_path_param/3]).
--export([parse_query_string/1]).
 -export([get_query_param/2]).
 -export([get_query_param/3]).
 -export([generate_static/0]).
@@ -66,7 +65,6 @@ Arizona follows a component-based architecture where:
 -ignore_xref([get_binding/3]).
 -ignore_xref([get_path_param/2]).
 -ignore_xref([get_path_param/3]).
--ignore_xref([parse_query_string/1]).
 -ignore_xref([get_query_param/2]).
 -ignore_xref([get_query_param/3]).
 -ignore_xref([generate_static/0]).
@@ -134,9 +132,6 @@ Arizona follows a component-based architecture where:
 
 -type path_params() :: arizona_websocket:path_params().
 -export_type([path_params/0]).
-
--type query_string() :: arizona_websocket:query_string().
--export_type([query_string/0]).
 
 -type query_params() :: arizona_websocket:query_params().
 -export_type([query_params/0]).
@@ -455,12 +450,6 @@ get_path_param(Key, PathParams) when is_atom(Key), is_map(PathParams) ->
     Value :: dynamic() | Default.
 get_path_param(Key, PathParams, Default) when is_atom(Key), is_map(PathParams) ->
     maps:get(Key, PathParams, Default).
-
--spec parse_query_string(QueryString) -> QueryParams when
-    QueryString :: query_string(),
-    QueryParams :: query_params().
-parse_query_string(QueryString) when is_binary(QueryString) ->
-    cow_qs:parse_qs(QueryString).
 
 -spec get_query_param(Key, QueryParams) -> Value when
     Key :: atom(),

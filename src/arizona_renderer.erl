@@ -204,25 +204,25 @@ render_nested_template(ParentView, Template) ->
     Bindings = #{'View' => ParentView},
     render_nested_template(Bindings, Template).
 
--spec render_layout(LayoutMod, ViewMod, PathParams, QueryString, Bindings, Socket0) -> Layout when
+-spec render_layout(LayoutMod, ViewMod, PathParams, QueryParams, Bindings, Socket0) -> Layout when
     LayoutMod :: module(),
     ViewMod :: module(),
     PathParams :: arizona:path_params(),
-    QueryString :: arizona:query_string(),
+    QueryParams :: arizona:query_params(),
     Bindings :: arizona_view:bindings(),
     Socket0 :: arizona_socket:socket(),
     Layout :: {LayoutView, Socket1},
     LayoutView :: arizona_view:view(),
     Socket1 :: arizona_socket:socket().
-render_layout(LayoutMod, ViewMod, PathParams, QueryString, Bindings0, Socket) when
+render_layout(LayoutMod, ViewMod, PathParams, QueryParams, Bindings0, Socket) when
     is_atom(LayoutMod),
     is_atom(ViewMod),
     is_map(PathParams),
-    is_binary(QueryString),
+    is_list(QueryParams),
     is_map(Bindings0)
 ->
     % The 'inner_content' must be a list for correct rendering.
-    InnerContent = [render_inner_content(ViewMod, PathParams, QueryString)],
+    InnerContent = [render_inner_content(ViewMod, PathParams, QueryParams)],
     Bindings = Bindings0#{inner_content => InnerContent},
     LayoutView = arizona_layout:mount(LayoutMod, Bindings, Socket),
     Token = arizona_layout:render(LayoutView),
@@ -317,11 +317,11 @@ render_list(Static, DynamicList0, View0, ParentView0, Socket) ->
     ParentView = arizona_view:put_tmp_rendered(Rendered, ParentView1),
     {ParentView, Socket}.
 
-render_inner_content(Mod, PathParams, QueryString) ->
+render_inner_content(Mod, PathParams, QueryParams) ->
     Callback = fun(ParentView, Socket) ->
         Bindings0 = arizona_view:bindings(ParentView),
         Bindings = maps:remove(inner_content, Bindings0),
-        arizona_view:init_root(Mod, PathParams, QueryString, Bindings, Socket)
+        arizona_view:init_root(Mod, PathParams, QueryParams, Bindings, Socket)
     end,
     {inner_content, Callback}.
 

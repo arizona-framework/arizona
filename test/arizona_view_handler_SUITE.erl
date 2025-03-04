@@ -38,12 +38,11 @@ end_per_suite(Config) ->
 %% Behaviour (arizona_live_view) callbacks
 %% --------------------------------------------------------------------
 
--spec handle_params(PathParams, QueryString) -> Return when
+-spec handle_params(PathParams, QueryParams) -> Return when
     PathParams :: arizona:path_params(),
-    QueryString :: arizona:query_string(),
+    QueryParams :: arizona:query_params(),
     Return :: arizona:handle_params_ret().
-handle_params(PathParams, QueryString) ->
-    QueryParams = arizona:parse_query_string(QueryString),
+handle_params(PathParams, QueryParams) ->
     {true, #{
         id => arizona:get_path_param(id, PathParams),
         name => arizona:get_query_param(name, QueryParams)

@@ -23,16 +23,13 @@
 
 -opaque init_state() :: {
     PathParams :: path_params(),
-    QueryString :: query_string(),
+    QueryParams :: query_params(),
     HandlerState :: arizona_view_handler:state()
 }.
 -export_type([init_state/0]).
 
 -type path_params() :: cowboy_router:bindings().
 -export_type([path_params/0]).
-
--type query_string() :: binary().
--export_type([query_string/0]).
 
 -type query_params() :: [{binary(), binary() | true}].
 -export_type([query_params/0]).
@@ -50,24 +47,24 @@ init(Req0, []) ->
     {ok, Req, Env} = arizona_server:req_route(Req0),
     HandlerState = maps:get(handler_opts, Env),
     PathParams = cowboy_req:bindings(Req),
-    QueryString = cowboy_req:qs(Req),
-    {cowboy_websocket, Req, {PathParams, QueryString, HandlerState}}.
+    QueryParams = cowboy_req:parse_qs(Req),
+    {cowboy_websocket, Req, {PathParams, QueryParams, HandlerState}}.
 
 -spec websocket_init(InitState) -> {Events, Socket} when
     InitState :: init_state(),
     Events :: cowboy_websocket:commands(),
     Socket :: arizona_socket:socket().
-websocket_init({PathParams, QueryString, {Mod, Bindings, _Opts}}) ->
+websocket_init({PathParams, QueryParams, {Mod, Bindings, _Opts}}) ->
     ?LOG_INFO(#{
         text => ~"init",
         in => ?MODULE,
         view_module => Mod,
         bindings => Bindings,
         path_params => PathParams,
-        query_string => QueryString
+        query_params => QueryParams
     }),
     Socket0 = arizona_socket:new(render),
-    {_View, Socket1} = arizona_view:init_root(Mod, PathParams, QueryString, Bindings, Socket0),
+    {_View, Socket1} = arizona_view:init_root(Mod, PathParams, QueryParams, Bindings, Socket0),
     Socket = arizona_socket:set_render_context(diff, Socket1),
     Events = put_init_event(Socket, []),
     Cmds = commands(Events),
