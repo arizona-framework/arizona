@@ -24,13 +24,16 @@
 -opaque init_state() :: {
     SessionId :: arizona:session_id(),
     PathParams :: path_params(),
-    QueryParams :: query_params(),
+    QueryString :: query_string(),
     HandlerState :: arizona_view_handler:state()
 }.
 -export_type([init_state/0]).
 
 -type path_params() :: cowboy_router:bindings().
 -export_type([path_params/0]).
+
+-type query_string() :: binary().
+-export_type([query_string/0]).
 
 -type query_params() :: [{binary(), binary() | true}].
 -export_type([query_params/0]).
