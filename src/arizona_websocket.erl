@@ -22,6 +22,7 @@
 %% --------------------------------------------------------------------
 
 -opaque init_state() :: {
+    SessionId :: arizona:session_id(),
     PathParams :: path_params(),
     QueryParams :: query_params(),
     HandlerState :: arizona_view_handler:state()
@@ -44,28 +45,29 @@
     Req1 :: cowboy_req:req(),
     InitState :: init_state().
 init(Req0, []) ->
+    Bindings = cowboy_req:bindings(Req0),
+    SessionId = maps:get(session_id, Bindings),
     {ok, Req, Env} = arizona_server:req_route(Req0),
     HandlerState = maps:get(handler_opts, Env),
     PathParams = cowboy_req:bindings(Req),
-    QueryParams = cowboy_req:parse_qs(Req),
-    {cowboy_websocket, Req, {PathParams, QueryParams, HandlerState}}.
+    QueryString = cowboy_req:qs(Req),
+    {cowboy_websocket, Req, {SessionId, PathParams, QueryString, HandlerState}}.
 
 -spec websocket_init(InitState) -> {Events, Socket} when
     InitState :: init_state(),
     Events :: cowboy_websocket:commands(),
     Socket :: arizona_socket:socket().
-websocket_init({PathParams, QueryParams, {Mod, Bindings, _Opts}}) ->
+websocket_init({SessionId, PathParams, QueryString, {Mod, Bindings, _Opts}}) ->
     ?LOG_INFO(#{
         text => ~"init",
         in => ?MODULE,
         view_module => Mod,
         bindings => Bindings,
         path_params => PathParams,
-        query_params => QueryParams
+        query_string => QueryString
     }),
-    SessionId = arizona:get_query_param(session_id, QueryParams),
     Socket0 = arizona_socket:new(render, #{}, SessionId),
-    {_View, Socket1} = arizona_view:init_root(Mod, PathParams, QueryParams, Bindings, Socket0),
+    {_View, Socket1} = arizona_view:init_root(Mod, PathParams, QueryString, Bindings, Socket0),
     Socket = arizona_socket:set_render_context(diff, Socket1),
     Events = put_init_event(Socket, []),
     Cmds = commands(Events),

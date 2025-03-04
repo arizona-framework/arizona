@@ -17,7 +17,6 @@ globalThis['arizona'] = (() => {
     const queryParams = {
       ...searchParams,
       ...params,
-      session_id: sessionId,
       path: location.pathname,
     };
     _sendMsgToWorker('connect', { ref, queryParams });
