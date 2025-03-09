@@ -496,12 +496,10 @@ subscribe(EventName) ->
     Subscriber = self(),
     arizona_pubsub:subscribe(EventName, Subscriber).
 
--spec broadcast(ViewId, EventName, Payload) -> Result when
+-spec broadcast(ViewId, EventName, Payload) -> ok when
     ViewId :: arizona_view:id(),
     EventName :: event_name(),
-    Payload :: event_payload(),
-    Result :: ok | {error, {not_a_member, Sender, EventName}},
-    Sender :: pid().
+    Payload :: event_payload().
 broadcast(ViewId, EventName, Payload) ->
     Sender = self(),
     arizona_pubsub:publish(ViewId, EventName, Payload, Sender).

@@ -52,7 +52,7 @@ new(RenderContext) ->
     RenderContext :: render_context(),
     TransportPid :: pid(),
     Socket :: socket().
-new(RenderContext, TransportPid) ->
+new(RenderContext, TransportPid) when is_pid(TransportPid) ->
     new(RenderContext, TransportPid, #{}).
 
 -spec new(RenderContext, TransportPid, Views) -> Socket when
