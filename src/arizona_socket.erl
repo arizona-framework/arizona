@@ -6,8 +6,10 @@
 
 -export([new/1]).
 -export([new/2]).
+-export([new/3]).
 -export([render_context/1]).
 -export([set_render_context/2]).
+-export([connected/1]).
 -export([views/1]).
 -export([put_view/2]).
 -export([get_view/2]).
@@ -15,7 +17,7 @@
 
 %
 
--ignore_xref([new/2]).
+-ignore_xref([new/3]).
 -ignore_xref([render_context/1]).
 
 %% --------------------------------------------------------------------
@@ -24,6 +26,7 @@
 
 -record(socket, {
     render_context :: render_context(),
+    transport_pid :: pid() | undefined,
     views :: views()
 }).
 -opaque socket() :: #socket{}.
@@ -43,15 +46,24 @@
     RenderContext :: render_context(),
     Socket :: socket().
 new(RenderContext) ->
-    new(RenderContext, #{}).
+    new(RenderContext, undefined, #{}).
 
--spec new(RenderContext, Views) -> Socket when
+-spec new(RenderContext, TransportPid) -> Socket when
     RenderContext :: render_context(),
+    TransportPid :: pid(),
+    Socket :: socket().
+new(RenderContext, TransportPid) ->
+    new(RenderContext, TransportPid, #{}).
+
+-spec new(RenderContext, TransportPid, Views) -> Socket when
+    RenderContext :: render_context(),
+    TransportPid :: pid() | undefined,
     Views :: views(),
     Socket :: socket().
-new(RenderContext, Views) ->
+new(RenderContext, TransportPid, Views) ->
     #socket{
         render_context = RenderContext,
+        transport_pid = TransportPid,
         views = Views
     }.
 
@@ -69,6 +81,12 @@ set_render_context(render, #socket{} = Socket) ->
     Socket#socket{render_context = render};
 set_render_context(diff, #socket{} = Socket) ->
     Socket#socket{render_context = diff}.
+
+-spec connected(Socket) -> boolean() when
+    Socket :: socket().
+connected(#socket{} = Socket) ->
+    TransportPid = Socket#socket.transport_pid,
+    is_pid(TransportPid) andalso is_process_alive(TransportPid).
 
 -spec views(Socket) -> Views when
     Socket :: socket(),

@@ -45,6 +45,7 @@ Arizona follows a component-based architecture where:
 -export([parse_query_string/1]).
 -export([get_query_param/2]).
 -export([get_query_param/3]).
+-export([connected/1]).
 -export([subscribe/1]).
 -export([broadcast/3]).
 -export([generate_static/0]).
@@ -71,6 +72,7 @@ Arizona follows a component-based architecture where:
 -ignore_xref([parse_query_string/1]).
 -ignore_xref([get_query_param/2]).
 -ignore_xref([get_query_param/3]).
+-ignore_xref([connected/1]).
 -ignore_xref([subscribe/1]).
 -ignore_xref([broadcast/3]).
 -ignore_xref([generate_static/0]).
@@ -482,6 +484,11 @@ get_query_param(Key0, QueryParams) when is_atom(Key0), is_list(QueryParams) ->
 get_query_param(Key0, QueryParams, Default) when is_atom(Key0), is_list(QueryParams) ->
     Key = atom_to_binary(Key0, utf8),
     proplists:get_value(Key, QueryParams, Default).
+
+-spec connected(Socket) -> boolean() when
+    Socket :: socket().
+connected(Socket) ->
+    arizona_socket:connected(Socket).
 
 -spec subscribe(EventName) -> ok when
     EventName :: arizona:event_name().

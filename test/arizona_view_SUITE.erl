@@ -83,7 +83,7 @@ render(Config) when is_list(Config) ->
     ],
     Expect = {
         arizona_view:new(Mod, Bindings, #{}, Rendered, Rendered, []),
-        arizona_socket:new(render, #{
+        arizona_socket:new(render, undefined, #{
             ~"app" => arizona_view:new(Mod, Bindings, #{}, Rendered, [], []),
             ~"counter" => arizona_view:new(
                 arizona_example_counter,
@@ -328,7 +328,7 @@ diff(Config) when is_list(Config) ->
     Diff = [{1, [{2, [{0, ~"+1"}]}, {1, ~"1"}]}],
     Expect = {
         arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], Diff),
-        arizona_socket:new(diff, #{
+        arizona_socket:new(diff, undefined, #{
             ViewId => arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], []),
             CounterViewId => arizona_view:new(
                 CounterMod,

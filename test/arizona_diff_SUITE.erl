@@ -40,7 +40,7 @@ diff_view_template(Config) when is_list(Config) ->
     Diff = [{2, ~"baz"}],
     Expect = {
         arizona_view:new(Mod, ExpectBindings, #{}, [], [], Diff),
-        arizona_socket:new(diff, #{
+        arizona_socket:new(diff, undefined, #{
             ViewId => arizona_view:new(Mod, ExpectBindings, #{}, [], [], [])
         })
     },
@@ -191,7 +191,7 @@ diff_view(Config) when is_list(Config) ->
     ],
     Expect = {
         arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], Diff),
-        arizona_socket:new(diff, #{
+        arizona_socket:new(diff, undefined, #{
             ViewId => arizona_view:new(Mod, ExpectBindings, #{}, Rendered, [], []),
             CounterViewId => arizona_view:new(
                 CounterMod,
@@ -271,7 +271,7 @@ diff_view_new_id(Config) when is_list(Config) ->
     ],
     Expect = {
         arizona_view:new(RootMod, ExpectBindings, #{}, Rendered, [], Diff),
-        arizona_socket:new(diff, #{
+        arizona_socket:new(diff, undefined, #{
             ~"baz" => arizona_view:new(
                 Mod,
                 #{id => ~"baz", ignore => false, name => ~"Arizona"},
@@ -352,7 +352,7 @@ diff_view_ignore(Config) when is_list(Config) ->
     ],
     Expect = {
         arizona_view:new(RootMod, ExpectBindings, #{}, Rendered, [], []),
-        arizona_socket:new(diff, #{
+        arizona_socket:new(diff, undefined, #{
             % FIXME: The 'ViewId' should be removed from the socket views.
             % The question is: How to know the previous id?
             ViewId => arizona_view:new(
