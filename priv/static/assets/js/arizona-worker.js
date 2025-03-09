@@ -12,7 +12,7 @@ const state = {
 self.importScripts('/assets/js/arizona/patch.js');
 
 // Messages from client
-self.onmessage = function(e) {
+self.onmessage = function (e) {
   const { data: msg } = e;
 
   console.info('[WebWorker] client sent:', msg);
@@ -24,7 +24,7 @@ self.onmessage = function(e) {
 
   switch (msg.subject) {
     case 'connect': {
-      const { ref, queryParams } = msg.attachment
+      const { ref, queryParams } = msg.attachment;
       connect(ref, queryParams);
       break;
     }
@@ -41,10 +41,10 @@ function connect(ref, queryParams) {
     state.queryParams = queryParams;
     state.socket = socket;
 
-    socket.onopen = function() {
+    socket.onopen = function () {
       console.info('[WebSocket] connected:', state);
 
-      const queuedEvents = [...state.eventQueue]
+      const queuedEvents = [...state.eventQueue];
       state.eventQueue.length = 0;
       queuedEvents.forEach(sendMsgToServer);
 
@@ -53,13 +53,13 @@ function connect(ref, queryParams) {
       resolve();
     };
 
-    socket.onclose = function(e) {
+    socket.onclose = function (e) {
       console.info('[WebSocket] disconnected:', e);
       sendMsgToClient(ref, undefined, 'connected', false);
     };
 
     // Messages from server
-    socket.onmessage = function(e) {
+    socket.onmessage = function (e) {
       console.info('[WebSocket] msg:', e.data);
       const data = JSON.parse(e.data);
       Array.isArray(data) ? data.forEach(handleEvent) : handleEvent(data);
@@ -93,11 +93,11 @@ function sendMsgToClient(ref, viewId, eventName, payload) {
 }
 
 function sendMsgToServer({ subject, attachment }) {
-  if (!state.socket) {
-    state.eventQueue.push({ subject, attachment });
-    console.warn("[WebSocket] not ready to send messages")
-  } else if (isSocketOpen()) {
+  if (isSocketOpen()) {
     state.socket.send(JSON.stringify([subject, attachment]));
+  } else {
+    state.eventQueue.push({ subject, attachment });
+    console.warn('[WebSocket] not ready to send messages');
   }
 }
 
