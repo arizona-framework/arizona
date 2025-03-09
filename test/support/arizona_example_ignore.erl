@@ -3,7 +3,7 @@
 
 -export([mount/2]).
 -export([render/1]).
--export([handle_event/3]).
+-export([handle_event/4]).
 
 mount(_Bindings, _Socket) ->
     ignore.
@@ -13,5 +13,5 @@ render(View) ->
     ignored
     """").
 
-handle_event(_Event, _Payload, View) ->
-    View.
+handle_event(_Event, _Payload, _From, View) ->
+    {noreply, View}.

@@ -5,6 +5,7 @@ const state = {
   queryParams: {},
   socket: null,
   views: [],
+  eventQueue: [],
 };
 
 self.importScripts('/assets/js/arizona/patch.js');
@@ -13,7 +14,7 @@ self.importScripts('/assets/js/arizona/patch.js');
 self.onmessage = function (e) {
   const { data: msg } = e;
 
-  console.log('[WebWorker] client sent:', msg);
+  console.info('[WebWorker] client sent:', msg);
 
   if (typeof msg !== 'object' || !msg.subject) {
     console.error('[WebWorker] invalid message format:', msg);
@@ -21,15 +22,17 @@ self.onmessage = function (e) {
   }
 
   switch (msg.subject) {
-    case 'connect':
-      connect(msg.attachment);
+    case 'connect': {
+      const { ref, queryParams } = msg.attachment;
+      connect(ref, queryParams);
       break;
+    }
     default:
       sendMsgToServer(msg);
   }
 };
 
-function connect(queryParams) {
+function connect(ref, queryParams) {
   return new Promise((resolve) => {
     const url = genSocketUrl(queryParams);
     const socket = new WebSocket(url);
@@ -38,19 +41,25 @@ function connect(queryParams) {
     state.socket = socket;
 
     socket.onopen = function () {
-      console.log('[WebSocket] connected:', state);
-      sendMsgToClient('connect');
+      console.info('[WebSocket] connected:', state);
+
+      const queuedEvents = [...state.eventQueue];
+      state.eventQueue.length = 0;
+      queuedEvents.forEach(sendMsgToServer);
+
+      sendMsgToClient(ref, undefined, 'connected', true);
 
       resolve();
     };
 
     socket.onclose = function (e) {
-      console.log('[WebSocket] disconnected:', e);
+      console.info('[WebSocket] disconnected:', e);
+      sendMsgToClient(ref, undefined, 'connected', false);
     };
 
     // Messages from server
     socket.onmessage = function (e) {
-      console.log('[WebSocket] msg:', e.data);
+      console.info('[WebSocket] msg:', e.data);
       const data = JSON.parse(e.data);
       Array.isArray(data) ? data.forEach(handleEvent) : handleEvent(data);
     };
@@ -59,32 +68,40 @@ function connect(queryParams) {
 
 function handleEvent(data) {
   const eventName = data[0];
-  const payload = data[1];
+  const [ref, viewId, payload] = data[1];
   switch (eventName) {
     case 'init': {
       state.views = payload;
       break;
     }
     case 'patch': {
-      const [viewId, diff] = payload;
       const rendered = state.views[viewId];
-      const html = patch(rendered, diff);
-      sendMsgToClient('patch', [viewId, html]);
+      const html = patch(rendered, payload);
+      sendMsgToClient(ref, viewId, 'patch', html);
       break;
     }
     default: {
-      sendMsgToClient(eventName, payload);
+      sendMsgToClient(ref, viewId, eventName, payload);
       break;
     }
   }
 }
 
-function sendMsgToClient(eventName, payload) {
-  self.postMessage({ eventName, payload });
+function sendMsgToClient(ref, viewId, eventName, payload) {
+  self.postMessage({ ref, viewId, eventName, payload });
 }
 
-function sendMsgToServer(msg) {
-  state.socket.send(JSON.stringify(msg));
+function sendMsgToServer({ subject, attachment }) {
+  if (isSocketOpen()) {
+    state.socket.send(JSON.stringify([subject, attachment]));
+  } else {
+    state.eventQueue.push({ subject, attachment });
+    console.warn('[WebSocket] not ready to send messages');
+  }
+}
+
+function isSocketOpen() {
+  return state.socket.readyState === WebSocket.OPEN;
 }
 
 function genSocketUrl(queryParams) {

@@ -30,6 +30,8 @@ No macros, no special syntaxes, just dynamic Erlang code embedded in static HTML
 
 ## Basic Usage
 
+> [!NOTE]
+>
 > The example below is a simplified version of the code from the [example repository](https://github.com/arizona-framework/arizona_example).
 > Please refer to it for the complete code.
 
@@ -127,7 +129,7 @@ Create the `src/arizona_example_page.erl` file:
 
 -export([mount/2]).
 -export([render/1]).
--export([handle_event/3]).
+-export([handle_event/4]).
 
 mount(Bindings, _Socket) ->
     View = arizona:new_view(?MODULE, Bindings),
@@ -143,8 +145,8 @@ render(View) ->
     </div>
     """).
 
-handle_event(_Event, _Payload, View) ->
-    View.
+handle_event(_Event, _Payload, _From, View) ->
+    {noreply, View}.
 ```
 
 Create the `src/arizona_example_counter.erl` view, which is defined in the render function of the page:
@@ -156,7 +158,7 @@ Create the `src/arizona_example_counter.erl` view, which is defined in the rende
 
 -export([mount/2]).
 -export([render/1]).
--export([handle_event/3]).
+-export([handle_event/4]).
 
 mount(Bindings, _Socket) ->
     View = arizona:new_view(?MODULE, Bindings),
@@ -175,7 +177,7 @@ render(View) ->
     </div>
     """).
 
-handle_event(~"incr", Incr, View) ->
+handle_event(~"incr", Incr, _From, View) ->
     Count = arizona:get_binding(count, View),
     arizona:put_binding(count, Count + Incr, View).
 ```
@@ -266,7 +268,7 @@ Open the browser again, and the button click will now increase the count value b
 
 !["Counter Example"](./assets/counter_example.gif)
 
-The value is updated in `arizona_example_counter:handle_event/3` via WebSocket, and the DOM patch
+The value is updated in `arizona_example_counter:handle_event/4` via WebSocket, and the DOM patch
 used the [morphdom library](https://github.com/patrick-steele-idem/morphdom) under the hood.
 Note that only the changed part is sent as a small payload from the server to the client.
 

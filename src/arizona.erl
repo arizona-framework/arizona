@@ -45,6 +45,9 @@ Arizona follows a component-based architecture where:
 -export([parse_query_string/1]).
 -export([get_query_param/2]).
 -export([get_query_param/3]).
+-export([connected/1]).
+-export([subscribe/1]).
+-export([broadcast/3]).
 -export([generate_static/0]).
 
 %
@@ -69,6 +72,9 @@ Arizona follows a component-based architecture where:
 -ignore_xref([parse_query_string/1]).
 -ignore_xref([get_query_param/2]).
 -ignore_xref([get_query_param/3]).
+-ignore_xref([connected/1]).
+-ignore_xref([subscribe/1]).
+-ignore_xref([broadcast/3]).
 -ignore_xref([generate_static/0]).
 
 %% --------------------------------------------------------------------
@@ -122,6 +128,9 @@ Arizona follows a component-based architecture where:
 
 -type handle_event_ret() :: arizona_view:handle_event_ret().
 -export_type([handle_event_ret/0]).
+
+-type handle_join_ret() :: arizona_view:handle_join_ret().
+-export_type([handle_join_ret/0]).
 
 -type event_name() :: arizona_view:event_name().
 -export_type([event_name/0]).
@@ -475,6 +484,25 @@ get_query_param(Key0, QueryParams) when is_atom(Key0), is_list(QueryParams) ->
 get_query_param(Key0, QueryParams, Default) when is_atom(Key0), is_list(QueryParams) ->
     Key = atom_to_binary(Key0, utf8),
     proplists:get_value(Key, QueryParams, Default).
+
+-spec connected(Socket) -> boolean() when
+    Socket :: socket().
+connected(Socket) ->
+    arizona_socket:connected(Socket).
+
+-spec subscribe(EventName) -> ok when
+    EventName :: arizona:event_name().
+subscribe(EventName) ->
+    Subscriber = self(),
+    arizona_pubsub:subscribe(EventName, Subscriber).
+
+-spec broadcast(ViewId, EventName, Payload) -> ok when
+    ViewId :: arizona_view:id(),
+    EventName :: event_name(),
+    Payload :: event_payload().
+broadcast(ViewId, EventName, Payload) ->
+    Sender = self(),
+    arizona_pubsub:publish(ViewId, EventName, Payload, Sender).
 
 -spec generate_static() -> ok.
 generate_static() ->

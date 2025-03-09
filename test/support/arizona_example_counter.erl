@@ -4,7 +4,7 @@
 
 -export([mount/2]).
 -export([render/1]).
--export([handle_event/3]).
+-export([handle_event/4]).
 
 mount(Bindings, _Socket) ->
     View = arizona:new_view(?MODULE, Bindings#{
@@ -22,5 +22,5 @@ render(View) ->
     </div>
     """").
 
-handle_event(_Event, _Payload, View) ->
-    View.
+handle_event(_Event, _Payload, _From, View) ->
+    {noreply, View}.

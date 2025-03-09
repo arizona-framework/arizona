@@ -7,10 +7,10 @@ globalThis['arizona'] = (() => {
   // --------------------------------------------------------------------
 
   function connect(params = {}, callback, opts) {
+    const ref = generateRef();
     if (typeof callback === 'function') {
-      _subscribe('connect', callback, opts);
+      _subscribe(ref, 'connected', callback, opts);
     }
-
     const searchParams = Object.fromEntries([
       ...new URLSearchParams(window.location.search),
     ]);
@@ -19,32 +19,65 @@ globalThis['arizona'] = (() => {
       ...params,
       path: location.pathname,
     };
-    _sendMsgToWorker('connect', queryParams);
+    _sendMsgToWorker('connect', { ref, queryParams });
   }
 
-  function on(eventName, callback, opts) {
-    _subscribe(eventName, callback, opts);
+  function send(eventName, viewId, payload, callback, opts) {
+    let ref;
+    if (typeof callback === 'function') {
+      ref = generateRef();
+      _subscribe(ref, eventName, callback, opts);
+    }
+    _sendMsgToWorker('event', [ref, viewId, eventName, payload]);
   }
 
-  function event(eventName) {
-    function emmit(viewId, payload) {
-      _sendMsgToWorker('event', [viewId, eventName, payload]);
+  function event(eventName, viewId) {
+    let joined = false;
+    const _members = [];
+
+    function join(payload) {
+      return new Promise((resolve, reject) => {
+        if (joined) reject('alreadyJoined');
+
+        const ref = generateRef();
+        _subscribe(
+          ref,
+          'join',
+          ([status, payload]) => {
+            joined = status === 'ok';
+            joined ? resolve(payload) : reject(payload);
+          },
+          { once: true },
+        );
+        _sendMsgToWorker('join', [ref, viewId, eventName, payload]);
+      });
     }
 
-    function subscribe(callback, opts) {
-      _subscribe(eventName, callback, opts);
+    function handle(callback, opts) {
+      const ref = generateRef();
+      const unsubscribe = _subscribe(ref, eventName, callback, opts);
+      _members.push(unsubscribe);
+      return this;
     }
 
-    return Object.freeze({ emmit, subscribe });
+    function leave() {
+      _members.forEach((unsubscribe) => unsubscribe());
+      _members.length = 0;
+    }
+
+    return Object.freeze({ join, handle, leave });
   }
 
   // --------------------------------------------------------------------
   // Private functions
   // --------------------------------------------------------------------
 
-  function _subscribe(eventName, callback, opts = {}) {
+  function generateRef() {
+    return Math.random().toString(36).substring(2, 9);
+  }
+
+  function _subscribe(ref, eventName, callback, opts = {}) {
     if (
-      typeof eventName !== 'string' ||
       typeof callback !== 'function' ||
       typeof opts !== 'object' ||
       Array.isArray(opts)
@@ -60,38 +93,37 @@ globalThis['arizona'] = (() => {
     let eventSubs = subscribers.get(eventName);
     if (!eventSubs) eventSubs = new Map();
 
-    const id = Math.random();
-    eventSubs.set(id, { id, callback, opts });
+    eventSubs.set(ref, { ref, callback, opts });
     subscribers.set(eventName, eventSubs);
-    unsubscribers.set(id, eventName);
+    unsubscribers.set(ref, eventName);
 
     console.table({
       action: 'subscribed',
       eventName,
-      id,
+      ref,
       subscribers,
       unsubscribers,
     });
 
     return function () {
-      _unsubscribe(id);
+      _unsubscribe(ref);
     };
   }
 
-  function _unsubscribe(id) {
-    const eventName = unsubscribers.get(id);
+  function _unsubscribe(ref) {
+    const eventName = unsubscribers.get(ref);
     if (!eventName) return;
-    const eventSubs = subscribers.get(eventName);
-    if (!eventSubs) return;
-    eventSubs.delete(id);
-    eventSubs.size
-      ? subscribers.set(eventName, eventSubs)
+    const members = subscribers.get(eventName);
+    if (!members) return;
+    members.delete(ref);
+    members.size
+      ? subscribers.set(eventName, members)
       : subscribers.delete(eventName);
-    unsubscribers.delete(id);
+    unsubscribers.delete(ref);
     console.table({
       action: 'unsubscribed',
       eventName,
-      id,
+      ref,
       subscribers,
       unsubscribers,
     });
@@ -110,27 +142,41 @@ globalThis['arizona'] = (() => {
   const unsubscribers = new Map();
 
   worker.addEventListener('message', function (e) {
-    console.log('[WebWorker] msg:', e.data);
+    console.info('[WebWorker] msg:', e.data);
 
-    const { eventName, payload } = e.data;
+    const { ref, viewId, eventName, payload } = e.data;
     switch (eventName) {
       case 'patch': {
-        const [viewId, html] = payload;
         const elem = document.getElementById(viewId);
-        morphdom(elem, html, {
+        morphdom(elem, payload, {
           onBeforeElUpdated: (from, to) => !from.isEqualNode(to),
         });
+        break;
+      }
+      case 'leave': {
+        _unsubscribe(payload);
+        return;
       }
     }
-    subscribers.get(eventName)?.forEach(function ({ id, callback, opts }) {
-      callback(payload);
-      opts.once && _unsubscribe(id);
-    });
+
+    const members = subscribers.get(eventName);
+    if (!(members instanceof Map)) return;
+
+    if (typeof ref === 'string' && ref.length) {
+      const member = members.get(ref);
+      if (!member?.callback) return;
+      member.callback(payload);
+    } else {
+      members.forEach(function ({ ref, callback, opts }) {
+        callback(payload);
+        opts.once && _unsubscribe(ref);
+      });
+    }
   });
 
   worker.addEventListener('error', function (e) {
     console.error('[WebWorker] error:', e);
   });
 
-  return Object.freeze({ connect, on, event });
+  return Object.freeze({ connect, send, event });
 })();

@@ -67,12 +67,13 @@ render(View) ->
     </main>
     """").
 
--spec handle_event(EventName, Payload, View) -> Return when
+-spec handle_event(EventName, Payload, From, View) -> Return when
     EventName :: arizona:event_name(),
     Payload :: arizona:event_payload(),
+    From :: pid(),
     View :: arizona:view(),
     Return :: arizona:handle_event_ret().
-handle_event(_EventName, _Payload, View) ->
+handle_event(_EventName, _Payload, _From, View) ->
     {noreply, View}.
 
 %% --------------------------------------------------------------------
