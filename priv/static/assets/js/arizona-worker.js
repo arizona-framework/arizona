@@ -2,7 +2,6 @@
 'use strict';
 
 const state = {
-  sessionId: Math.random().toString(36).substring(2, 9),
   queryParams: {},
   socket: null,
   views: [],
@@ -35,7 +34,7 @@ self.onmessage = function (e) {
 
 function connect(ref, queryParams) {
   return new Promise((resolve) => {
-    const url = genSocketUrl(state.sessionId, queryParams);
+    const url = genSocketUrl(queryParams);
     const socket = new WebSocket(url);
 
     state.queryParams = queryParams;
@@ -105,10 +104,10 @@ function isSocketOpen() {
   return state.socket.readyState === WebSocket.OPEN;
 }
 
-function genSocketUrl(sessionId, queryParams) {
+function genSocketUrl(queryParams) {
   const proto = 'ws';
   const host = location.host;
-  const uri = `/websocket/${sessionId}`;
+  const uri = '/websocket';
   const queryString = `?${Object.keys(queryParams)
     .map((key) => `${key}=${encodeURIComponent(queryParams[key])}`)
     .join('&')}`;

@@ -101,7 +101,7 @@ norm_proto_opts(Host, Routes0, Opts) when
             {priv_file, arizona, "static/assets/js/morphdom.min.js"}},
         {"/assets/js/arizona/main.js", cowboy_static,
             {priv_file, arizona, "static/assets/js/arizona.js"}},
-        {"/websocket/:session_id", arizona_websocket, []}
+        {"/websocket", arizona_websocket, []}
         | Routes0
     ],
     Dispatch = cowboy_router:compile([{Host, Routes}]),
