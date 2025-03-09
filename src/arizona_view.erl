@@ -10,7 +10,7 @@ To implement a view in Arizona, a module must define the following callbacks:
 
 - `c:mount/2`: Initializes the view with bindings and a WebSocket connection.
 - `c:render/1`: Renders the view's template based on its current state.
-- `c:handle_event/3`: Handles client-side events and updates the view's state.
+- `c:handle_event/4`: Handles client-side events and updates the view's state.
 
 These callbacks work together to create dynamic, stateful views that can
 respond to user interactions in real-time.
@@ -61,7 +61,7 @@ respond to user interactions in real-time.
 -export([mount/3]).
 -export([render/1]).
 -export([handle_join/4]).
--export([handle_event/3]).
+-export([handle_event/4]).
 
 %% --------------------------------------------------------------------
 %% Callback definitions
@@ -143,9 +143,9 @@ The rendered template as `t:arizona:rendered_view_template/0`.
     View :: view(),
     Rendered :: arizona:rendered_view_template().
 
--callback handle_join(Topic, Params, View) -> Return when
-    Topic :: event_name(),
-    Params :: event_payload(),
+-callback handle_join(EventName, Payload, View) -> Return when
+    EventName :: event_name(),
+    Payload :: event_payload(),
     View :: view(),
     Return :: handle_join_ret().
 
@@ -161,15 +161,17 @@ This callback **is required** for all view modules.
 - `EventName`: The name of the event (`t:event_name/0`), typically a `t:binary/0`.
 - `Payload`: The data associated with the event (`t:event_payload/0`), which can
   be any `t:dynamic/0` value.
+- `From`: The `t:pid/0` who sent the message. It can be the view itself.
 - `View`: The current view state (`t:view/0`) before handling the event.
 
 ## Returns
 
 The updated view state (`t:view/0`) after handling the event.
 """.
--callback handle_event(EventName, Payload, View0) -> Return when
+-callback handle_event(EventName, Payload, From, View0) -> Return when
     EventName :: event_name(),
     Payload :: event_payload(),
+    From :: pid(),
     View0 :: view(),
     Return :: handle_event_ret().
 
@@ -535,18 +537,18 @@ delegate depends on the `t:arizona_socket:render_context/0`.
 render(#view{module = Mod} = View) when Mod =/= undefined ->
     erlang:apply(Mod, render, [View]).
 
--spec handle_join(Mod, Topic, Params, View) -> Return when
+-spec handle_join(Mod, EventName, Params, View) -> Return when
     Mod :: module(),
-    Topic :: event_name(),
+    EventName :: event_name(),
     Params :: event_payload(),
     View :: view(),
     Return :: handle_join_ret().
-handle_join(Mod, Topic, Params, #view{} = View) when is_atom(Mod), is_binary(Topic) ->
-    erlang:apply(Mod, handle_join, [Topic, Params, View]).
+handle_join(Mod, EventName, Params, #view{} = View) when is_atom(Mod), is_binary(EventName) ->
+    erlang:apply(Mod, handle_join, [EventName, Params, View]).
 
 -doc ~"""
 Handles events sent from the client (e.g., button clicks or form submissions) by
-delegating to the `c:handle_event/3` callback defined in the view module (`Mod`).
+delegating to the `c:handle_event/4` callback defined in the view module (`Mod`).
 
 It updates the view's state based on the event and returns the updated view.
 
@@ -556,19 +558,21 @@ It updates the view's state based on the event and returns the updated view.
   (e.g., ~"incr").
 - `Payload`: The data associated with the event (`t:event_payload/0), which can
   be any `t:dynamic/0` value.
+- `From`: The `t:pid/0` who sent the message. It can be the view itself.
 - `View`: The current view state (`t:view/0) before handling the event.
 
 ## Returns
 
 The updated view state (`t:view/0`) after handling the event.
 """.
--spec handle_event(EventName, Payload, View) -> Return when
+-spec handle_event(EventName, Payload, From, View) -> Return when
     EventName :: event_name(),
     Payload :: event_payload(),
+    From :: pid(),
     View :: view(),
     Return :: handle_event_ret().
-handle_event(EventName, Payload, #view{} = View) ->
-    erlang:apply(View#view.module, handle_event, [EventName, Payload, View]).
+handle_event(EventName, Payload, From, #view{} = View) when is_binary(EventName), is_pid(From) ->
+    erlang:apply(View#view.module, handle_event, [EventName, Payload, From, View]).
 
 %% --------------------------------------------------------------------
 %% Private functions

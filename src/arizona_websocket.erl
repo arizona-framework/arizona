@@ -97,6 +97,22 @@ websocket_handle({text, Msg}, Socket) ->
     Events :: cowboy_websocket:commands(),
     Socket0 :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
+websocket_info({broadcast, From, ViewId, EventName, Payload}, Socket0) ->
+    ?LOG_INFO(#{
+        text => ~"broadcast message received",
+        in => ?MODULE,
+        from => From,
+        view_id => ViewId,
+        event_name => EventName,
+        payload => Payload,
+        socket => Socket0
+    }),
+    {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
+    Ref = undefined,
+    {Events0, View1} = handle_event(Ref, ViewId, EventName, Payload, From, View0),
+    {Events, Socket} = handle_diff(Ref, ViewId, Events0, View1, Socket0),
+    Cmds = commands(Events),
+    {Cmds, Socket};
 websocket_info(Msg, Socket) ->
     ?LOG_INFO(#{
         text => ~"info received",
@@ -125,32 +141,33 @@ terminate(Reason, _Req, Socket) ->
 
 handle_message(~"event", [Ref, ViewId, EventName, Payload], Socket0) ->
     {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
-    Result = arizona_view:handle_event(EventName, Payload, View0),
-    {Events0, View1} = norm_handle_event_result(Result, Ref, ViewId, EventName),
+    {Events0, View1} = handle_event(Ref, ViewId, EventName, Payload, self(), View0),
+    {Events, Socket} = handle_diff(Ref, ViewId, Events0, View1, Socket0),
+    Cmds = commands(Events),
+    {Cmds, Socket};
+handle_message(~"join", [Ref, ViewId, EventName, Payload], Socket0) ->
+    {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
+    {Events0, View} = handle_join(Ref, ViewId, EventName, Payload, View0),
+    {Events, Socket} = handle_diff(Ref, ViewId, Events0, View, Socket0),
+    Cmds = commands(Events),
+    {Cmds, Socket}.
+
+handle_event(Ref, ViewId, EventName, Payload, From, View) ->
+    Result = arizona_view:handle_event(EventName, Payload, From, View),
     ?LOG_INFO(#{
         text => ~"handle_event result",
         in => ?MODULE,
         result => Result,
         view_id => ViewId,
-        view => View1
+        view => View
     }),
-    {Events, Socket} = handle_diff(Ref, ViewId, Events0, View1, Socket0),
-    Cmds = commands(Events),
-    {Cmds, Socket};
-handle_message(~"join", [Ref, ViewId, Topic, Params], Socket0) ->
-    {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
-    Result = arizona_view:handle_join(Topic, Params, View0),
-    ?LOG_INFO(#{
-        text => ~"handle_join result",
-        in => ?MODULE,
-        result => Result,
-        view_id => ViewId,
-        views => View0
-    }),
-    {Events0, View1} = norm_handle_join_result(Result, Ref, ViewId, ~"join"),
-    {Events, Socket} = handle_diff(Ref, ViewId, Events0, View1, Socket0),
-    Cmds = commands(Events),
-    {Cmds, Socket}.
+    norm_handle_event_result(Result, Ref, ViewId, EventName).
+
+norm_handle_event_result({noreply, View}, _Ref, _ViewId, _EventName) ->
+    {[], View};
+norm_handle_event_result({reply, Payload, View}, Ref, ViewId, EventName) ->
+    Event = event_tuple(EventName, Ref, ViewId, Payload),
+    {[Event], View}.
 
 handle_diff(Ref, ViewId, Events0, View0, Socket0) ->
     Token = arizona_view:render(View0),
@@ -179,17 +196,37 @@ put_diff_event(Diff, Ref, ViewId, Events) ->
     }),
     [event_tuple(~"patch", Ref, ViewId, {diff, Diff}) | Events].
 
-norm_handle_event_result({noreply, View}, _Ref, _ViewId, _EventName) ->
-    {[], View};
-norm_handle_event_result({reply, Payload, View}, Ref, ViewId, EventName) ->
-    Event = event_tuple(EventName, Ref, ViewId, Payload),
-    {[Event], View}.
+handle_join(Ref, ViewId, EventName, Payload, View) ->
+    Mod = arizona_view:module(View),
+    Result = arizona_view:handle_join(Mod, EventName, Payload, View),
+    ?LOG_INFO(#{
+        text => ~"handle_join result",
+        in => ?MODULE,
+        ref => Ref,
+        view_id => ViewId,
+        event_name => EventName,
+        payload => Payload,
+        result => Result,
+        view => View
+    }),
+    norm_handle_join_result(Result, Ref, ViewId, EventName).
 
 norm_handle_join_result({ok, Payload, View}, Ref, ViewId, EventName) ->
-    Event = event_tuple(EventName, Ref, ViewId, [~"ok", Payload]),
+    ok = arizona_pubsub:subscribe(EventName, self()),
+    ?LOG_INFO(#{
+        text => ~"joined",
+        in => ?MODULE,
+        ref => Ref,
+        view_id => ViewId,
+        event_name => EventName,
+        payload => Payload,
+        view => View,
+        sender => self()
+    }),
+    Event = event_tuple(~"join", Ref, ViewId, [~"ok", Payload]),
     {[Event], View};
-norm_handle_join_result({error, Reason, View}, Ref, ViewId, EventName) ->
-    Event = event_tuple(EventName, Ref, ViewId, [~"error", Reason]),
+norm_handle_join_result({error, Reason, View}, Ref, ViewId, _EventName) ->
+    Event = event_tuple(~"join", Ref, ViewId, [~"error", Reason]),
     {[Event], View}.
 
 event_tuple(EventName, Ref, ViewId, Payload) ->
