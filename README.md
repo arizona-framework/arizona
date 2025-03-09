@@ -30,6 +30,8 @@ No macros, no special syntaxes, just dynamic Erlang code embedded in static HTML
 
 ## Basic Usage
 
+> [!NOTE]
+>
 > The example below is a simplified version of the code from the [example repository](https://github.com/arizona-framework/arizona_example).
 > Please refer to it for the complete code.
 
