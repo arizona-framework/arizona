@@ -55,6 +55,7 @@ jobs:
           node-version-file: .nvmrc
 
       - run: |
+          npm run build
           npm run ci
           if ! git diff --exit-code >/dev/null; then
               # there's stuff to push

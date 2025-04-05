@@ -63,4 +63,5 @@ jobs:
         run: |
           rebar3 unlock --all
           rebar3 upgrade --all
+          npm run build
           git diff --exit-code
