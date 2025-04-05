@@ -9,7 +9,7 @@
     "lint:check": "eslint eslint.config.mjs",
     "format:lint": "npm run format && npm run lint",
     "test": "npm install && NODE_OPTIONS='$NODE_OPTIONS --experimental-vm-modules' npx jest",
-    "ci": "npm install && npm run format:check && npm run lint:check"
+    "ci": "npm install && npm run format:check && npm run lint:check && npm test"
   },
   "devDependencies": {
     "@babel/preset-env": "7.26.9",
