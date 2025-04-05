@@ -12,12 +12,11 @@ name: Erlang
       - "**/.config"
       - "rebar.lock"
       - ".tool-versions"
-    paths-ignore:
-      - "**/*.js"
-      - "**/*.mjs"
-      - "**/*.md"
-      - "**/*.yml"
-      - "**/*.json"
+      - "!**/*.js"
+      - "!**/*.mjs"
+      - "!**/*.md"
+      - "!**/*.yml"
+      - "!**/*.json"
   pull_request:
     branches:
       - "*"
@@ -28,12 +27,11 @@ name: Erlang
       - "**/.config"
       - "rebar.lock"
       - ".tool-versions"
-    paths-ignore:
-      - "**/*.js"
-      - "**/*.mjs"
-      - "**/*.md"
-      - "**/*.yml"
-      - "**/*.json"
+      - "!**/*.js"
+      - "!**/*.mjs"
+      - "!**/*.md"
+      - "!**/*.yml"
+      - "!**/*.json"
   workflow_dispatch: {}
   merge_group:
 
