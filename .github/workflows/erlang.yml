@@ -5,6 +5,13 @@ name: Erlang
   push:
     branches:
       - main
+    paths:
+      - "src/**"
+      - "include/**"
+      - "test/**"
+      - "**/.config"
+      - "rebar.lock"
+      - ".tool-versions"
     paths-ignore:
       - "**/*.js"
       - "**/*.mjs"
@@ -14,6 +21,13 @@ name: Erlang
   pull_request:
     branches:
       - "*"
+    paths:
+      - "src/**"
+      - "include/**"
+      - "test/**"
+      - "**/.config"
+      - "rebar.lock"
+      - ".tool-versions"
     paths-ignore:
       - "**/*.js"
       - "**/*.mjs"
