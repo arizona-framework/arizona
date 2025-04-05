@@ -3,11 +3,13 @@
   "type": "module",
   "scripts": {
     "build": "node ./esbuild.config.mjs",
-    "prettier": "prettier priv/static/assets/js/arizona*.js --write && prettier test/*.js --write  && prettier eslint.config.mjs --write && prettier package.json --write && prettier .prettierrc --write",
-    "eslint": "eslint priv/static/assets/js/arizona*.js && eslint test/test.js && eslint eslint.config.mjs",
-    "format-lint": "npm install && npm run prettier && npm run eslint",
+    "format": "prettier --write \"./*.{js,mjs}\" \"./assets/js/*.mjs\" \"**/*.json\" \"**/*.yml\" --config prettier.config.mjs --ignore-path .prettierignore",
+    "format:check": "prettier --check \"./*.{js,mjs}\" \"./assets/js/*.mjs\" \"**/*.json\" \"**/*.yml\" --config prettier.config.mjs --ignore-path .prettierignore",
+    "lint": "eslint eslint.config.mjs --fix",
+    "lint:check": "eslint eslint.config.mjs",
+    "format:lint": "npm run format && npm run lint",
     "test": "npm install && NODE_OPTIONS='$NODE_OPTIONS --experimental-vm-modules' npx jest",
-    "ci": "npm run format-lint && npm run test"
+    "ci": "npm install && npm run format:check && npm run lint:check"
   },
   "devDependencies": {
     "@babel/preset-env": "7.26.9",
