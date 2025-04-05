@@ -16,8 +16,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
-    name: CI
+  check:
+    name: Check
 
     runs-on: ubuntu-24.04
 
@@ -33,9 +33,47 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Continuous Integration
+      - name: Check code
         run: |
-          npm run ci
+          npm run format:check
+          npm run lint:check
+
+  test:
+    name: Test
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
+        with:
+          node-version-file: .nvmrc
+          cache: "npm"
+          cache-dependency-path: "package-lock.json"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+  artifacts:
+    name: Verify artifacts
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
+        with:
+          node-version-file: .nvmrc
+          cache: "npm"
+          cache-dependency-path: "package-lock.json"
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Check if build left artifacts
         run: |
