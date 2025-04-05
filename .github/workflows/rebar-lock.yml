@@ -54,7 +54,7 @@ jobs:
         with:
           version-type: strict
           version-file: .tool-versions
-      
+
       - name: Restore _build
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
