@@ -1,5 +1,4 @@
-/* global morphdom */
-'use strict';
+import morphdom from 'morphdom';
 
 globalThis['arizona'] = (() => {
   // --------------------------------------------------------------------
@@ -105,7 +104,7 @@ globalThis['arizona'] = (() => {
       unsubscribers,
     });
 
-    return function () {
+    return function() {
       _unsubscribe(ref);
     };
   }
@@ -141,7 +140,7 @@ globalThis['arizona'] = (() => {
   const subscribers = new Map();
   const unsubscribers = new Map();
 
-  worker.addEventListener('message', function (e) {
+  worker.addEventListener('message', function(e) {
     console.info('[WebWorker] msg:', e.data);
 
     const { ref, viewId, eventName, payload } = e.data;
@@ -167,14 +166,14 @@ globalThis['arizona'] = (() => {
       if (!member?.callback) return;
       member.callback(payload);
     } else {
-      members.forEach(function ({ ref, callback, opts }) {
+      members.forEach(function({ ref, callback, opts }) {
         callback(payload);
         opts.once && _unsubscribe(ref);
       });
     }
   });
 
-  worker.addEventListener('error', function (e) {
+  worker.addEventListener('error', function(e) {
     console.error('[WebWorker] error:', e);
   });
 

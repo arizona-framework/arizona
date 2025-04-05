@@ -93,14 +93,10 @@ norm_proto_opts(Host, Routes0, Opts) when
     (Host =:= '_' orelse is_list(Host)), is_list(Routes0), is_map(Opts)
 ->
     Routes = [
-        {"/assets/js/arizona/patch.js", cowboy_static,
-            {priv_file, arizona, "static/assets/js/arizona-patch.js"}},
         {"/assets/js/arizona/worker.js", cowboy_static,
-            {priv_file, arizona, "static/assets/js/arizona-worker.js"}},
-        {"/assets/js/arizona/morphdom.min.js", cowboy_static,
-            {priv_file, arizona, "static/assets/js/morphdom.min.js"}},
+            {priv_file, arizona, "static/assets/js/arizona-worker.min.js"}},
         {"/assets/js/arizona/main.js", cowboy_static,
-            {priv_file, arizona, "static/assets/js/arizona.js"}},
+            {priv_file, arizona, "static/assets/js/arizona.min.js"}},
         {"/websocket", arizona_websocket, []}
         | Routes0
     ],

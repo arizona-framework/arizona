@@ -33,7 +33,6 @@ Arizona follows a component-based architecture where:
 -export([render_component/3]).
 -export([render_if_true/2]).
 -export([render_list/2]).
--export([render_html_scripts/0]).
 -export([render_js_event/3]).
 -export([new_view/2]).
 -export([put_binding/3]).
@@ -60,7 +59,6 @@ Arizona follows a component-based architecture where:
 -ignore_xref([render_component/3]).
 -ignore_xref([render_if_true/2]).
 -ignore_xref([render_list/2]).
--ignore_xref([render_html_scripts/0]).
 -ignore_xref([render_js_event/3]).
 -ignore_xref([new_view/2]).
 -ignore_xref([put_binding/3]).
@@ -348,7 +346,7 @@ The rendered template as `t:rendered_layout_template/0`.
           <meta http-equiv="X-UA-Compatible" content="IE=edge">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>{arizona:get_binding(title, View)}</title>
-          {arizona:render_html_scripts()}
+          <script src="assets/arizona/main.js"></script>
       </head>
       <body>
           {arizona:get_binding(inner_content, View)}
@@ -399,10 +397,6 @@ render_if_true(Cond, Callback) ->
     Rendered :: rendered_list().
 render_list(Callback, List) ->
     arizona_renderer:render_list(Callback, List).
-
--spec render_html_scripts() -> binary().
-render_html_scripts() ->
-    arizona_html:scripts().
 
 -spec render_js_event(ViewId, EventName, Payload) -> Js when
     ViewId :: arizona_view:id(),
