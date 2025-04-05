@@ -48,7 +48,7 @@ jobs:
             .*.yml
           strict: true
           config_file: .yamllint.yml
-  
+
   action-lint:
     name: Action Lint
 
