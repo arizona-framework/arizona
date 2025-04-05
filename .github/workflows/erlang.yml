@@ -37,13 +37,21 @@ jobs:
       - name: Set build cache key
         id: set-build-key
         run: |
-          echo "key=_build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-rebar3-hash-${{ hashFiles('rebar.lock') }}" \
+          echo "key=\
+          _build-\
+          ${{ runner.os }}-\
+          otp-${{ steps.setup-beam.outputs.otp-version }}-\
+          rebar3-hash-${{ hashFiles('rebar.lock') }}" \
           >> $GITHUB_OUTPUT
 
       - name: Set rebar cache key
         id: set-rebar-key
         run: |
-          echo "key=rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-rebar3-${{ steps.setup-beam.outputs.rebar3-version }}" \
+          echo "key=\
+          rebar3-\
+          ${{ runner.os }}-\
+          otp-${{ steps.setup-beam.outputs.otp-version }}-\
+          rebar3-${{ steps.setup-beam.outputs.rebar3-version }}" \
           >> $GITHUB_OUTPUT
 
       - name: Cache _build
@@ -85,6 +93,7 @@ jobs:
           version-file: .tool-versions
 
       - name: Restore _build cache
+        id: retore-build-cache
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: _build
@@ -94,6 +103,7 @@ jobs:
             _build-${{ runner.os }}-
 
       - name: Restore rebar3 cache
+        id: restore-rebar3-cache
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: ~/.cache/rebar3
@@ -123,6 +133,7 @@ jobs:
           version-file: .tool-versions
 
       - name: Restore _build cache
+        id: retore-build-cache
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: _build
@@ -132,6 +143,7 @@ jobs:
             _build-${{ runner.os }}-
 
       - name: Restore rebar3 cache
+        id: restore-rebar3-cache
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: ~/.cache/rebar3
@@ -159,6 +171,7 @@ jobs:
           version-file: .tool-versions
 
       - name: Restore _build cache
+        id: retore-build-cache
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: _build
@@ -168,6 +181,7 @@ jobs:
             _build-${{ runner.os }}-
 
       - name: Restore rebar3 cache
+        id: restore-rebar3-cache
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: ~/.cache/rebar3
@@ -175,6 +189,7 @@ jobs:
           restore-keys: |
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
+
 
       - name: Check if build left artifacts
         run: |
