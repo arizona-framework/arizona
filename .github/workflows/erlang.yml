@@ -93,7 +93,7 @@ jobs:
           version-file: .tool-versions
 
       - name: Restore _build cache
-        id: retore-build-cache
+        id: restore-build-cache
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: _build
@@ -133,7 +133,7 @@ jobs:
           version-file: .tool-versions
 
       - name: Restore _build cache
-        id: retore-build-cache
+        id: restore-build-cache
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: _build
@@ -171,7 +171,7 @@ jobs:
           version-file: .tool-versions
 
       - name: Restore _build cache
-        id: retore-build-cache
+        id: restore-build-cache
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: _build
