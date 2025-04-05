@@ -20,7 +20,7 @@ jobs:
     outputs:
       head_ref: ${{steps.branch.outputs.head_ref}}
 
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
       - id: branch
@@ -36,7 +36,7 @@ jobs:
 
     if: endsWith(needs.branch.outputs.head_ref, 'rebar.config-deps')
 
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/create-github-app-token@0d564482f06ca65fa9e77e2510873638c82206f2 # v1.11.5
