@@ -346,7 +346,7 @@ The rendered template as `t:rendered_layout_template/0`.
           <meta http-equiv="X-UA-Compatible" content="IE=edge">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>{arizona:get_binding(title, View)}</title>
-          <script src="assets/arizona/main.js"></script>
+          <script src="assets/js/arizona/main.js"></script>
       </head>
       <body>
           {arizona:get_binding(inner_content, View)}
