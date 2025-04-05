@@ -51,6 +51,7 @@ jobs:
           ref: ${{needs.branch.outputs.head_ref}}
 
       - uses: erlef/setup-beam@5304e04ea2b355f03681464e683d92e3b2f18451 # v1.18.2
+        id: setup-beam
         with:
           version-type: strict
           version-file: .tool-versions
