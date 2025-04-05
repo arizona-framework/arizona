@@ -1,6 +1,4 @@
-/* global require, describe, test, expect */
-
-const { patch } = require('../priv/static/assets/js/arizona-patch.js');
+import { patch } from './arizona-patch.mjs';
 
 describe('Patch Test', () => {
   test('should patch diff', () => {
