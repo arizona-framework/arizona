@@ -15,7 +15,7 @@ Promise.all([
     bundle: true,
     minify: true,
     sourcemap: true,
-  })
+  }),
 ]).catch((error) => {
   console.error(error);
   process.exit(1);

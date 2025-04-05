@@ -10,9 +10,7 @@ globalThis['arizona'] = (() => {
     if (typeof callback === 'function') {
       _subscribe(ref, 'connected', callback, opts);
     }
-    const searchParams = Object.fromEntries([
-      ...new URLSearchParams(window.location.search),
-    ]);
+    const searchParams = Object.fromEntries([...new URLSearchParams(window.location.search)]);
     const queryParams = {
       ...searchParams,
       ...params,
@@ -46,7 +44,7 @@ globalThis['arizona'] = (() => {
             joined = status === 'ok';
             joined ? resolve(payload) : reject(payload);
           },
-          { once: true },
+          { once: true }
         );
         _sendMsgToWorker('join', [ref, viewId, eventName, payload]);
       });
@@ -76,11 +74,7 @@ globalThis['arizona'] = (() => {
   }
 
   function _subscribe(ref, eventName, callback, opts = {}) {
-    if (
-      typeof callback !== 'function' ||
-      typeof opts !== 'object' ||
-      Array.isArray(opts)
-    ) {
+    if (typeof callback !== 'function' || typeof opts !== 'object' || Array.isArray(opts)) {
       console.error('[Arizona] invalid subscribe data:', {
         eventName,
         callback,
@@ -104,7 +98,7 @@ globalThis['arizona'] = (() => {
       unsubscribers,
     });
 
-    return function() {
+    return function () {
       _unsubscribe(ref);
     };
   }
@@ -115,9 +109,7 @@ globalThis['arizona'] = (() => {
     const members = subscribers.get(eventName);
     if (!members) return;
     members.delete(ref);
-    members.size
-      ? subscribers.set(eventName, members)
-      : subscribers.delete(eventName);
+    members.size ? subscribers.set(eventName, members) : subscribers.delete(eventName);
     unsubscribers.delete(ref);
     console.table({
       action: 'unsubscribed',
@@ -140,7 +132,7 @@ globalThis['arizona'] = (() => {
   const subscribers = new Map();
   const unsubscribers = new Map();
 
-  worker.addEventListener('message', function(e) {
+  worker.addEventListener('message', function (e) {
     console.info('[WebWorker] msg:', e.data);
 
     const { ref, viewId, eventName, payload } = e.data;
@@ -166,14 +158,14 @@ globalThis['arizona'] = (() => {
       if (!member?.callback) return;
       member.callback(payload);
     } else {
-      members.forEach(function({ ref, callback, opts }) {
+      members.forEach(function ({ ref, callback, opts }) {
         callback(payload);
         opts.once && _unsubscribe(ref);
       });
     }
   });
 
-  worker.addEventListener('error', function(e) {
+  worker.addEventListener('error', function (e) {
     console.error('[WebWorker] error:', e);
   });
 
