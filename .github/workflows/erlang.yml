@@ -42,7 +42,7 @@ jobs:
           ${{ runner.os }}-\
           otp-${{ steps.setup-beam.outputs.otp-version }}-\
           rebar3-hash-${{ hashFiles('rebar.lock') }}" \
-          >> $GITHUB_OUTPUT
+          >> "$GITHUB_OUTPUT"
 
       - name: Set rebar cache key
         id: set-rebar-key
@@ -52,7 +52,7 @@ jobs:
           ${{ runner.os }}-\
           otp-${{ steps.setup-beam.outputs.otp-version }}-\
           rebar3-${{ steps.setup-beam.outputs.rebar3-version }}" \
-          >> $GITHUB_OUTPUT
+          >> "$GITHUB_OUTPUT"
 
       - name: Cache _build
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
