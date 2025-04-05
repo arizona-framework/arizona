@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   ci:
-    name: CI
+    name: Node.js CI
 
     runs-on: ubuntu-latest
 

@@ -1,5 +1,5 @@
 ---
-name: Lint
+name: YAML
 
 "on":
   push:
@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   lint:
-    name: Lint
+    name: YAML Lint
 
     runs-on: ubuntu-latest
 

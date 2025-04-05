@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   lint:
-    name: Lint
+    name: Markdown lint
 
     runs-on: ubuntu-latest
 

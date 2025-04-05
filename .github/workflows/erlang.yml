@@ -41,7 +41,7 @@ concurrency:
 
 jobs:
   cache:
-    name: Cache
+    name: Erlang cache
 
     runs-on: ubuntu-latest
 
@@ -101,7 +101,7 @@ jobs:
           rebar3 as test compile
 
   check:
-    name: Check
+    name: Erlang check
 
     needs: cache
 
@@ -141,7 +141,7 @@ jobs:
           rebar3 as test check
 
   test:
-    name: Test
+    name: Erlang test
 
     needs: cache
 
@@ -181,7 +181,7 @@ jobs:
           rebar3 as test test
 
   artifacts:
-    name: Verify artifacts
+    name: Verify Erlang artifacts
 
     needs: cache
 
