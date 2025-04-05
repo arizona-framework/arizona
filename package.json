@@ -24,5 +24,8 @@
   },
   "dependencies": {
     "morphdom": "2.7.4"
+  },
+  "overrides": {
+    "glob": "^10.0.0"
   }
 }
