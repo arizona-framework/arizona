@@ -1,0 +1,40 @@
+---
+name: Node.js
+
+"on":
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - "*"
+  workflow_dispatch: {}
+  merge_group:
+
+concurrency:
+  group: ${{github.workflow}}-${{github.ref}}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: CI
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
+        with:
+          node-version-file: .nvmrc
+          cache: "npm"
+          cache-dependency-path: "package-lock.json"
+
+      - name: Continuous Integration
+        run: |
+          npm run ci
+
+      - name: Check if build left artifacts
+        run: |
+          npm run build
+          git diff --exit-code
