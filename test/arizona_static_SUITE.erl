@@ -34,13 +34,15 @@ groups() ->
 %% --------------------------------------------------------------------
 
 write_priv_file(Config) when is_list(Config) ->
-    Route = {"/arizona.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona.min.js"}},
+    Route =
+        {"/arizona.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona.min.js"}},
     ?assertEqual(ok, generate(Route)),
     ?assert(exists("arizona.js")).
 
 write_deep_priv_file(Config) when is_list(Config) ->
     Route =
-        {"/a/b/c/arizona.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona.min.js"}},
+        {"/a/b/c/arizona.js", cowboy_static,
+            {priv_file, arizona, "static/assets/js/arizona.min.js"}},
     ?assertEqual(ok, generate(Route)),
     ?assert(exists("a/b/c/arizona.js")).
 
