@@ -226,8 +226,8 @@ render(View) ->
         <meta http-equiv="X-UA-Compatible" content="IE=edge">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{arizona:get_binding(title, View)}</title>
-        {arizona:render_html_scripts()}
-        <script src="assets/main.js"></script>
+        <script src="assets/js/arizona/main.js"></script>
+        <script src="assets/js/main.js"></script>
     </head>
     <body>
         {% The 'inner_content' binding is auto-binded by Arizona in the view. }

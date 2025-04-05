@@ -1,5 +1,4 @@
-/* global patch */
-'use strict';
+import { patch } from './arizona-patch.mjs';
 
 const state = {
   queryParams: {},
@@ -7,8 +6,6 @@ const state = {
   views: [],
   eventQueue: [],
 };
-
-self.importScripts('/assets/js/arizona/patch.js');
 
 // Messages from client
 self.onmessage = function (e) {

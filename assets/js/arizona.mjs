@@ -1,5 +1,4 @@
-/* global morphdom */
-'use strict';
+import morphdom from 'morphdom';
 
 globalThis['arizona'] = (() => {
   // --------------------------------------------------------------------
@@ -11,9 +10,7 @@ globalThis['arizona'] = (() => {
     if (typeof callback === 'function') {
       _subscribe(ref, 'connected', callback, opts);
     }
-    const searchParams = Object.fromEntries([
-      ...new URLSearchParams(window.location.search),
-    ]);
+    const searchParams = Object.fromEntries([...new URLSearchParams(window.location.search)]);
     const queryParams = {
       ...searchParams,
       ...params,
@@ -47,7 +44,7 @@ globalThis['arizona'] = (() => {
             joined = status === 'ok';
             joined ? resolve(payload) : reject(payload);
           },
-          { once: true },
+          { once: true }
         );
         _sendMsgToWorker('join', [ref, viewId, eventName, payload]);
       });
@@ -77,11 +74,7 @@ globalThis['arizona'] = (() => {
   }
 
   function _subscribe(ref, eventName, callback, opts = {}) {
-    if (
-      typeof callback !== 'function' ||
-      typeof opts !== 'object' ||
-      Array.isArray(opts)
-    ) {
+    if (typeof callback !== 'function' || typeof opts !== 'object' || Array.isArray(opts)) {
       console.error('[Arizona] invalid subscribe data:', {
         eventName,
         callback,
@@ -116,9 +109,7 @@ globalThis['arizona'] = (() => {
     const members = subscribers.get(eventName);
     if (!members) return;
     members.delete(ref);
-    members.size
-      ? subscribers.set(eventName, members)
-      : subscribers.delete(eventName);
+    members.size ? subscribers.set(eventName, members) : subscribers.delete(eventName);
     unsubscribers.delete(ref);
     console.table({
       action: 'unsubscribed',

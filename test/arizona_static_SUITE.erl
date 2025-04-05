@@ -34,27 +34,29 @@ groups() ->
 %% --------------------------------------------------------------------
 
 write_priv_file(Config) when is_list(Config) ->
-    Route = {"/arizona.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona.js"}},
+    Route =
+        {"/arizona.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona.min.js"}},
     ?assertEqual(ok, generate(Route)),
     ?assert(exists("arizona.js")).
 
 write_deep_priv_file(Config) when is_list(Config) ->
     Route =
-        {"/a/b/c/arizona.js", cowboy_static, {priv_file, arizona, "static/assets/js/arizona.js"}},
+        {"/a/b/c/arizona.js", cowboy_static,
+            {priv_file, arizona, "static/assets/js/arizona.min.js"}},
     ?assertEqual(ok, generate(Route)),
     ?assert(exists("a/b/c/arizona.js")).
 
 write_priv_dir(Config) when is_list(Config) ->
     Route = {"/[...]", cowboy_static, {priv_dir, arizona, "static/assets/js"}},
     ?assertEqual(ok, generate(Route)),
-    ?assert(exists("arizona.js")),
-    ?assert(exists("arizona-worker.js")).
+    ?assert(exists("arizona.min.js")),
+    ?assert(exists("arizona-worker.min.js")).
 
 write_deep_priv_dir(Config) when is_list(Config) ->
     Route = {"/a/b/c/[...]", cowboy_static, {priv_dir, arizona, "static/assets/js"}},
     ?assertEqual(ok, generate(Route)),
-    ?assert(exists("a/b/c/arizona.js")),
-    ?assert(exists("a/b/c/arizona-worker.js")).
+    ?assert(exists("a/b/c/arizona.min.js")),
+    ?assert(exists("a/b/c/arizona-worker.min.js")).
 
 write_view_as_html(Config) when is_list(Config) ->
     Route = {"/", arizona_view_handler, {arizona_example_counter, #{count => 0}}},

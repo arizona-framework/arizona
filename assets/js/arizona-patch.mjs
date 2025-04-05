@@ -1,11 +1,8 @@
-/* global module */
-'use strict';
-
 // --------------------------------------------------------------------
 // API function definitions
 // --------------------------------------------------------------------
 
-function patch(rendered, diff) {
+export function patch(rendered, diff) {
   if (rendered[0] === 'template' && rendered.length === 3) {
     const staticList = rendered[1];
     const dynamicList = [...rendered[2]];
@@ -50,14 +47,4 @@ function zip(staticList, dynamicList, diff) {
     str += `${staticList[i] ?? ''}${patch(dynamicList[i] ?? '', diff ? diff[i] : null)}`;
   }
   return str;
-}
-
-// --------------------------------------------------------------------
-// Namespace initialization
-// --------------------------------------------------------------------
-
-try {
-  module.exports.patch = patch;
-} catch {
-  /* required for testing */
 }
