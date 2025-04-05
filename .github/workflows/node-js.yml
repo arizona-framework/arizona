@@ -30,6 +30,9 @@ jobs:
           cache: "npm"
           cache-dependency-path: "package-lock.json"
 
+      - name: Install dependencies
+        run: npm ci
+
       - name: Continuous Integration
         run: |
           npm run ci
