@@ -6,12 +6,12 @@ name: Lint
     branches:
       - main
     paths:
-      - '**/*.yml'
+      - "**/*.yml"
   pull_request:
     branches:
       - "*"
     paths:
-      - '**/*.yml'
+      - "**/*.yml"
   workflow_dispatch: {}
   merge_group:
 

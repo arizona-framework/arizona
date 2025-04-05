@@ -6,12 +6,12 @@ name: Markdown
     branches:
       - main
     paths:
-      - '**/*.md'
+      - "**/*.md"
   pull_request:
     branches:
       - "*"
     paths:
-      - '**/*.md'
+      - "**/*.md"
   workflow_dispatch: {}
   merge_group:
 

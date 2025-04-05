@@ -6,20 +6,20 @@ name: Node.js
     branches:
       - main
     paths:
-      - '**/*.js'
-      - '**/*.mjs'
-      - '.prettierignore'
-      - 'babel-config.json'
-      - 'package-lock.json'
+      - "**/*.js"
+      - "**/*.mjs"
+      - ".prettierignore"
+      - "babel-config.json"
+      - "package-lock.json"
   pull_request:
     branches:
       - "*"
     paths:
-      - '**/*.js'
-      - '**/*.mjs'
-      - '.prettierignore'
-      - 'babel-config.json'
-      - 'package-lock.json'
+      - "**/*.js"
+      - "**/*.mjs"
+      - ".prettierignore"
+      - "babel-config.json"
+      - "package-lock.json"
   workflow_dispatch: {}
   merge_group:
 
