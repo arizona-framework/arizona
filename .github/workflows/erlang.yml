@@ -190,7 +190,6 @@ jobs:
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
 
-
       - name: Check if build left artifacts
         run: |
           rebar3 unlock --all
