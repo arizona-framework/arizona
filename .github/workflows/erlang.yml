@@ -37,18 +37,14 @@ jobs:
       - name: Set build cache key
         id: set-build-key
         run: |
-          echo "key=_build-${{ runner.os }}\
-            -otp-${{ steps.setup-beam.outputs.otp-version }}\
-            -rebar3-hash-${{ hashFiles('rebar.lock') }}" \
-            >> $GITHUB_OUTPUT
+          echo "key=_build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-rebar3-hash-${{ hashFiles('rebar.lock') }}" \
+          >> $GITHUB_OUTPUT
 
       - name: Set rebar cache key
         id: set-rebar-key
         run: |
-          echo "key=rebar3-${{ runner.os }}\
-            -otp-${{ steps.setup-beam.outputs.otp-version }}\
-            -rebar3-${{ steps.setup-beam.outputs.rebar3-version }}" \
-            >> $GITHUB_OUTPUT
+          echo "key=rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-rebar3-${{ steps.setup-beam.outputs.rebar3-version }}" \
+          >> $GITHUB_OUTPUT
 
       - name: Cache _build
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
@@ -92,7 +88,7 @@ jobs:
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: _build
-          key: ${{ needs.setup.outputs.build-cache-key }}
+          key: ${{ needs.cache.outputs.build-cache-key }}
           restore-keys: |
             _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             _build-${{ runner.os }}-
@@ -101,7 +97,7 @@ jobs:
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: ~/.cache/rebar3
-          key: ${{ needs.setup.outputs.rebar-cache-key }}
+          key: ${{ needs.cache.outputs.rebar-cache-key }}
           restore-keys: |
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
@@ -130,7 +126,7 @@ jobs:
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: _build
-          key: ${{ needs.setup.outputs.build-cache-key }}
+          key: ${{ needs.cache.outputs.build-cache-key }}
           restore-keys: |
             _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             _build-${{ runner.os }}-
@@ -139,7 +135,7 @@ jobs:
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: ~/.cache/rebar3
-          key: ${{ needs.setup.outputs.rebar-cache-key }}
+          key: ${{ needs.cache.outputs.rebar-cache-key }}
           restore-keys: |
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
@@ -166,7 +162,7 @@ jobs:
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: _build
-          key: ${{ needs.setup.outputs.build-cache-key }}
+          key: ${{ needs.cache.outputs.build-cache-key }}
           restore-keys: |
             _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             _build-${{ runner.os }}-
@@ -175,7 +171,7 @@ jobs:
         uses: actions/cache@0c907a75c2c80ebcb7f088228285e798b750cf8f # v4.2.1
         with:
           path: ~/.cache/rebar3
-          key: ${{ needs.setup.outputs.rebar-cache-key }}
+          key: ${{ needs.cache.outputs.rebar-cache-key }}
           restore-keys: |
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
