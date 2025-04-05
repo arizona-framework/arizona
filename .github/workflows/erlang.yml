@@ -5,9 +5,21 @@ name: Erlang
   push:
     branches:
       - main
+    paths-ignore:
+      - '**/*.js'
+      - '**/*.mjs'
+      - '**/*.md'
+      - '**/*.yml'
+      - '**/*.json'
   pull_request:
     branches:
       - "*"
+    paths-ignore:
+      - '**/*.js'
+      - '**/*.mjs'
+      - '**/*.md'
+      - '**/*.yml'
+      - '**/*.json'
   workflow_dispatch: {}
   merge_group:
 
