@@ -3,7 +3,7 @@
  {<<"cowlib">>,{pkg,<<"cowlib">>,<<"2.14.0">>},1},
  {<<"eqwalizer_support">>,
   {git_subdir,"https://github.com/whatsapp/eqwalizer.git",
-              {ref,"ebb8ad42e13f66f339e275f4e87e1c4a3e737324"},
+              {ref,"36bb1a2809a831372a68556795806bc34c15e3d6"},
               "eqwalizer_support"},
   0},
  {<<"ranch">>,{pkg,<<"ranch">>,<<"2.2.0">>},1}]}.
