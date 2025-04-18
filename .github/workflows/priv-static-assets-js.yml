@@ -57,7 +57,7 @@ jobs:
           cache-dependency-path: "package-lock.json"
 
       - run: |
-          npm run ci
+          npm ci
           if ! git diff --exit-code >/dev/null; then
               # there's stuff to push
               git config user.name "arizona[bot]"
