@@ -36,10 +36,5 @@ init(_Args) ->
         intensity => 0,
         period => 1
     },
-    ChildSpecs = [
-        #{
-            id => arizona_pubsub,
-            start => {arizona_pubsub, start_link, []}
-        }
-    ],
+    ChildSpecs = [],
     {ok, {SupFlags, ChildSpecs}}.

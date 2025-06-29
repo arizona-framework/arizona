@@ -18,13 +18,7 @@
     StartArgs :: term(),
     StartRet :: {ok, pid()} | {error, term()}.
 start(_StartType, _StartArgs) ->
-    maybe
-        {ok, _ServerPid} ?= arizona_server:start(arizona_config:endpoint()),
-        {ok, _SupPid} ?= arizona_sup:start_link()
-    else
-        {error, Reason} ->
-            {error, Reason}
-    end.
+    arizona_sup:start_link().
 
 -spec stop(State) -> ok when
     State :: term().
