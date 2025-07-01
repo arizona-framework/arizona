@@ -32,7 +32,8 @@
     id :: id(),
     module :: module(),
     bindings :: map(),
-    changed_bindings :: map(),  % Track which bindings changed
+    % Track which bindings changed
+    changed_bindings :: map(),
     %last_html :: iolist(),
     %last_elements :: map(),  % Track last rendered elements #{index => content}
     %template_data :: map(),  % Store parsed template structure
@@ -127,8 +128,8 @@ put_binding(Key, Value, #stateful{} = Stateful) when is_atom(Key) ->
         Bindings ->
             ChangedBindings = Stateful#stateful.changed_bindings,
             Stateful#stateful{
-              bindings = Bindings#{Key => Value},
-              changed_bindings = ChangedBindings#{Key => Value}
+                bindings = Bindings#{Key => Value},
+                changed_bindings = ChangedBindings#{Key => Value}
             }
     end.
 

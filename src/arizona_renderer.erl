@@ -38,13 +38,19 @@ render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
 render_list(ListData, Items, _KeyFun, Socket) when is_map(ListData), is_list(Items) ->
     #{static := StaticParts, dynamic := DynamicSpec} = ListData,
     #{elems_order := ElemsOrder, elems := ElemsFuns} = DynamicSpec,
-    
+
     %% Just accumulate socket through each item render
-    FinalSocket = lists:foldl(fun(Item, AccSocket) ->
-        {_ItemHtml, UpdatedSocket} = render_list_item(StaticParts, ElemsOrder, ElemsFuns, Item, AccSocket),
-        UpdatedSocket
-    end, Socket, Items),
-    
+    FinalSocket = lists:foldl(
+        fun(Item, AccSocket) ->
+            {_ItemHtml, UpdatedSocket} = render_list_item(
+                StaticParts, ElemsOrder, ElemsFuns, Item, AccSocket
+            ),
+            UpdatedSocket
+        end,
+        Socket,
+        Items
+    ),
+
     %% Get accumulated HTML from final socket
     Html = arizona_socket:get_html(FinalSocket),
     {Html, FinalSocket}.
@@ -86,15 +92,17 @@ render_element({dynamic, _Line, Content}, Socket) when is_binary(Content) ->
 %% Render a single list item using template structure
 render_list_item(StaticParts, ElemsOrder, ElemsFuns, Item, Socket) ->
     %% Evaluate dynamic elements for this item
-    {DynamicValues, UpdatedSocket} = evaluate_dynamic_elements_for_item(ElemsOrder, ElemsFuns, Item, Socket),
-    
+    {DynamicValues, UpdatedSocket} = evaluate_dynamic_elements_for_item(
+        ElemsOrder, ElemsFuns, Item, Socket
+    ),
+
     %% Zip static and dynamic parts together
     ItemHtml = zip_static_dynamic(StaticParts, DynamicValues),
-    
+
     %% Accumulate HTML in socket
     CurrentHtml = arizona_socket:get_html(UpdatedSocket),
     FinalSocket = arizona_socket:set_html_acc([CurrentHtml, ItemHtml], UpdatedSocket),
-    
+
     {ItemHtml, FinalSocket}.
 
 %% Evaluate dynamic elements for a list item
@@ -103,19 +111,22 @@ evaluate_dynamic_elements_for_item([], _ElemsFuns, _Item, Socket) ->
 evaluate_dynamic_elements_for_item([ElemIndex | Rest], ElemsFuns, Item, Socket) ->
     %% Evaluate current element function - let it crash if index doesn't exist
     {Line, Fun} = maps:get(ElemIndex, ElemsFuns),
-    {Value, UpdatedSocket} = try
-        Result = arizona_list:call_element_function(Fun, Item, Socket),
-        {Result, Socket}
-    catch
-        throw:{binding_not_found, Key} ->
-            error({binding_not_found, Key}, none, binding_error_info(Line, Key, Socket));
-        _:Error ->
-            error({list_item_render_error, Error, Item, Line})
-    end,
-    
+    {Value, UpdatedSocket} =
+        try
+            Result = arizona_list:call_element_function(Fun, Item, Socket),
+            {Result, Socket}
+        catch
+            throw:{binding_not_found, Key} ->
+                error({binding_not_found, Key}, none, binding_error_info(Line, Key, Socket));
+            _:Error ->
+                error({list_item_render_error, Error, Item, Line})
+        end,
+
     %% Recursively evaluate rest
-    {RestValues, FinalSocket} = evaluate_dynamic_elements_for_item(Rest, ElemsFuns, Item, UpdatedSocket),
-    
+    {RestValues, FinalSocket} = evaluate_dynamic_elements_for_item(
+        Rest, ElemsFuns, Item, UpdatedSocket
+    ),
+
     {[Value | RestValues], FinalSocket}.
 
 %% Zip static and dynamic parts for list item
@@ -135,19 +146,27 @@ zip_static_dynamic([], [D | Dynamic], Acc) ->
 binding_error_info(Line, Key, Socket) ->
     CurrentState = arizona_socket:get_current_stateful_state(Socket),
     TemplateModule = arizona_stateful:get_module(CurrentState),
-    [{error_info, #{cause => #{binding => Key, line => Line, template_module => TemplateModule},
-                    module => arizona_renderer}}].
+    [
+        {error_info, #{
+            cause => #{binding => Key, line => Line, template_module => TemplateModule},
+            module => arizona_renderer
+        }}
+    ].
 
 %% OTP error_info callback for enhanced error formatting
 -spec format_error(Reason, StackTrace) -> ErrorMap when
     Reason :: term(),
     StackTrace :: [term()],
     ErrorMap :: #{atom() => term()}.
-format_error(Reason, [{_M,_F,_As,Info}|_]) ->
+format_error(Reason, [{_M, _F, _As, Info} | _]) ->
     ErrorInfo = proplists:get_value(error_info, Info, #{}),
     CauseMap = maps:get(cause, ErrorInfo, #{}),
-    CauseMap#{general => "Template rendering error",
-              reason => io_lib:format("arizona_renderer: ~p", [Reason])};
+    CauseMap#{
+        general => "Template rendering error",
+        reason => io_lib:format("arizona_renderer: ~p", [Reason])
+    };
 format_error(Reason, _StackTrace) ->
-    #{general => "Template rendering error",
-      reason => io_lib:format("arizona_renderer: ~p", [Reason])}.
+    #{
+        general => "Template rendering error",
+        reason => io_lib:format("arizona_renderer: ~p", [Reason])
+    }.

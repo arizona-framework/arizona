@@ -27,7 +27,9 @@ indexes for efficient template updates in stateful rendering mode.
 %% --------------------------------------------------------------------
 
 -doc ~"Token representation with category, line number, and content.".
--type token() :: {Category :: static | dynamic | comment, Line :: pos_integer(), Content :: binary()}.
+-type token() :: {
+    Category :: static | dynamic | comment, Line :: pos_integer(), Content :: binary()
+}.
 -export_type([token/0]).
 
 -doc ~"Result type for stateless parsing - list of tokens with comments filtered out.".
@@ -39,7 +41,12 @@ Result type for stateful parsing with element ordering, element mapping, and var
 """.
 -type stateful_result() :: #{
     elems_order := [Index :: non_neg_integer()],
-    elems := #{Index :: non_neg_integer() => {Category :: static | dynamic, Line :: pos_integer(), Content :: binary()}},
+    elems := #{
+        Index ::
+            non_neg_integer() => {
+                Category :: static | dynamic, Line :: pos_integer(), Content :: binary()
+            }
+    },
     vars_indexes := #{VarName :: binary() => [Index :: non_neg_integer()]}
 }.
 -export_type([stateful_result/0]).
@@ -51,7 +58,13 @@ Result type for list parsing with static/dynamic template structure.
     static := [StaticContent :: binary()],
     dynamic := #{
         elems_order := [Index :: non_neg_integer()],
-        elems := #{Index :: non_neg_integer() => {Line :: pos_integer(), ElementFun :: fun((Item :: term(), Socket :: arizona_socket:socket()) -> term())}},
+        elems := #{
+            Index ::
+                non_neg_integer() => {
+                    Line :: pos_integer(),
+                    ElementFun :: fun((Item :: term(), Socket :: arizona_socket:socket()) -> term())
+                }
+        },
         vars_indexes := #{VarName :: atom() => [Index :: non_neg_integer()]}
     }
 }.
@@ -187,22 +200,28 @@ pick_quoted_var([Var]) ->
 process_tokens_for_list(Tokens) ->
     %% For runtime fallback: create simple structure
     %% Parse transform will optimize this
-    {StaticParts, DynamicElements, VarsIndexes} = separate_static_dynamic_for_list(Tokens, [], #{}, #{}, 0),
+    {StaticParts, DynamicElements, VarsIndexes} = separate_static_dynamic_for_list(
+        Tokens, [], #{}, #{}, 0
+    ),
     {StaticParts, DynamicElements, VarsIndexes}.
 
 %% Separate static and dynamic parts for list rendering
 separate_static_dynamic_for_list([], StaticAcc, DynamicAcc, VarsAcc, _Index) ->
     {lists:reverse(StaticAcc), DynamicAcc, VarsAcc};
-separate_static_dynamic_for_list([{static, _Line, Text} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index) ->
+separate_static_dynamic_for_list(
+    [{static, _Line, Text} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index
+) ->
     separate_static_dynamic_for_list(Rest, [Text | StaticAcc], DynamicAcc, VarsAcc, Index);
-separate_static_dynamic_for_list([{dynamic, Line, ExprText} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index) ->
+separate_static_dynamic_for_list(
+    [{dynamic, Line, ExprText} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index
+) ->
     %% For list context, create a simple function that returns the expression text
     %% Parse transform will optimize this to proper item field access
     Fun = fun(_Item, _Socket) -> ExprText end,
-    
+
     %% Extract variables (only arizona_socket:get_binding calls)
     VarNames = extract_variable_names(ExprText),
-    
+
     %% Update accumulators with line information
     NewDynamicAcc = DynamicAcc#{Index => {Line, Fun}},
     NewVarsAcc = lists:foldl(
@@ -213,9 +232,13 @@ separate_static_dynamic_for_list([{dynamic, Line, ExprText} | Rest], StaticAcc, 
         VarsAcc,
         VarNames
     ),
-    
+
     %% Add empty static part to maintain structure
-    separate_static_dynamic_for_list(Rest, [<<>> | StaticAcc], NewDynamicAcc, NewVarsAcc, Index + 1);
-separate_static_dynamic_for_list([{comment, _Line, _Text} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index) ->
+    separate_static_dynamic_for_list(
+        Rest, [<<>> | StaticAcc], NewDynamicAcc, NewVarsAcc, Index + 1
+    );
+separate_static_dynamic_for_list(
+    [{comment, _Line, _Text} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index
+) ->
     %% Skip comments
     separate_static_dynamic_for_list(Rest, StaticAcc, DynamicAcc, VarsAcc, Index).

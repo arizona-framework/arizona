@@ -124,8 +124,6 @@ test_stateful_transform(_Config) ->
 
     ct:comment("Stateful template transformation handled without crashing").
 
-
-
 %% Test that non-arizona function calls are passed through unchanged
 test_non_arizona_call_passthrough(_Config) ->
     % Create a simple AST with non-arizona function call
@@ -204,7 +202,7 @@ test_non_binary_template_error(_Config) ->
     -export([test_render/1]).
     test_render(Socket) -> arizona_html:render_stateless(Template, Socket).
     """),
-    
+
     % The parse transform should raise badarg for non-binary templates
     try
         arizona_parse_transform:parse_transform(Forms, []),
@@ -227,7 +225,6 @@ test_format_error(_Config) ->
     ?assert(string:str(Msg2, "Unknown Arizona parse transform error") > 0),
 
     ct:comment("format_error/1 handles both known and unknown errors correctly").
-
 
 %% Test stateful template transformation with variables
 test_stateful_transform_with_variables(_Config) ->
@@ -296,4 +293,3 @@ test_stateful_parse_error(_Config) ->
         error:{test_stateful_error_module, _, template_parse_failed} ->
             ct:comment("Stateful template parse error correctly raised with module info")
     end.
-

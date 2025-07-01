@@ -33,7 +33,8 @@
     current_stateful_parent_id :: arizona_stateful:id() | undefined,
     current_stateful_id :: arizona_stateful:id(),
     stateful_states :: #{arizona_stateful:id() => arizona_stateful:stateful()},
-    temp_bindings :: map()  % For stateless component bindings, always a map
+    % For stateless component bindings, always a map
+    temp_bindings :: map()
 }).
 -opaque socket() :: #socket{}.
 -export_type([socket/0]).
@@ -127,7 +128,8 @@ put_stateful_state(Id, State, Socket) when Id =:= root; is_binary(Id) ->
 get_binding(Key, #socket{} = Socket) when is_atom(Key) ->
     %% First try temporary bindings (for stateless components)
     case Socket#socket.temp_bindings of
-        #{Key := Value} -> Value;
+        #{Key := Value} ->
+            Value;
         #{} ->
             %% Fall back to stateful bindings
             CurrentState = get_current_stateful_state(Socket),
