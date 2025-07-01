@@ -73,7 +73,7 @@ The resulting map contains:
 - `vars_indexes`: Map of variable names to their element indices
 
 Variable extraction is performed for dynamic tokens containing
-`arizona_template:get_binding/2` calls.
+`arizona_socket:get_binding/2` calls.
 """.
 -spec parse_stateful_tokens([token()]) -> stateful_result().
 parse_stateful_tokens(Tokens) ->
@@ -123,12 +123,12 @@ process_tokens_stateful([Token | Rest], Index, Elements, VarsIndexes) ->
 extract_variable_names(ExprText) ->
     expr_vars(ExprText).
 
-%% Parse expression to find arizona_template:get_binding calls
+%% Parse expression to find arizona_socket:get_binding calls
 expr_vars(Expr) ->
     case
         re:run(
             Expr,
-            ~"arizona_template:get_binding\\(([a-z][a-zA-Z_@]*|'(.*?)'),\\s*\\w+(?:,\\s*[^)]*)?\\)",
+            ~"arizona_socket:get_binding\\(([a-z][a-zA-Z_@]*|'(.*?)'),\\s*\\w+(?:,\\s*[^)]*)?\\)",
             [global, {capture, all_but_first, binary}]
         )
     of

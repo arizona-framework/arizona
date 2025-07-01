@@ -6,9 +6,9 @@ This module provides compile-time transformation of Arizona template syntax
 into optimized structured formats for high-performance rendering.
 
 Transformations:
-- `render_stateless(~"template", Socket)` → `render_stateless_iolist([...], Socket)`
-- `render_stateful(~"template", Socket)` → `render_stateful(#{...}, Socket)`
-- `render_list(~"template", Items, KeyFun)` → `arizona_list:render_list(...)`
+- `arizona_html:render_stateless(~"template", Socket)` → `arizona_html:render_stateless([...], Socket)`
+- `arizona_html:render_stateful(~"template", Socket)` → `arizona_html:render_stateful(#{...}, Socket)`
+- Template expressions use `arizona_socket:get_binding/2` for variable access
 
 Limitations:
 - Only works with literal binary templates (compile-time determinable)
@@ -53,7 +53,7 @@ the abstract syntax tree and transforms Arizona template function calls
 into optimized versions.
 
 The transformation is applied recursively to all forms in the module,
-looking for calls to arizona_template functions with literal binary
+looking for calls to arizona_html functions with literal binary
 templates that can be optimized at compile time.
 """.
 -spec parse_transform([erl_parse:abstract_form()], compile_options()) ->
@@ -74,6 +74,8 @@ parse_transform(AbstractSyntaxTrees, _CompilerOptions) ->
 -spec format_error(term()) -> string().
 format_error(template_parse_failed) ->
     "Failed to parse Arizona template - invalid template syntax";
+format_error(badarg) ->
+    "Arizona parse transform requires literal binary templates, variables are not supported";
 format_error(Other) ->
     io_lib:format("Unknown Arizona parse transform error: ~p", [Other]).
 
@@ -97,13 +99,13 @@ transform_ast_node(AstNode, ModuleName) ->
 
 %% Template Call Recognition and Transformation
 
-%% Transform arizona_template function calls with binary templates
+%% Transform arizona_html function calls with binary templates
 -spec transform_template_calls(erl_parse:abstract_expr(), atom()) -> erl_parse:abstract_expr().
 
 %% Transform stateless rendering calls
 transform_template_calls(
     {call, CallAnnotations,
-        {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_template},
+        {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_html},
             {atom, _FunctionAnnotations, render_stateless}} = RemoteCall,
         [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg]},
     ModuleName
@@ -111,10 +113,20 @@ transform_template_calls(
     transform_stateless_template_call(
         CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName
     );
+transform_template_calls(
+    {call, CallAnnotations,
+        {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_html},
+            {atom, _FunctionAnnotations, render_stateless}},
+        [_NonBinaryTemplate, _SocketArg]},
+    ModuleName
+) ->
+    Line = erl_anno:line(CallAnnotations),
+    % Non-binary template - raise badarg
+    raise_template_error(badarg, ModuleName, Line);
 %% Transform stateful rendering calls
 transform_template_calls(
     {call, CallAnnotations,
-        {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_template},
+        {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_html},
             {atom, _FunctionAnnotations, render_stateful}} = RemoteCall,
         [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg]},
     ModuleName
@@ -122,52 +134,24 @@ transform_template_calls(
     transform_stateful_template_call(
         CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName
     );
-%% Transform list rendering calls - 3-arity version
+%% Handle arizona_html calls with non-binary templates (should error)
 transform_template_calls(
     {call, CallAnnotations,
-        {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_template},
-            {atom, _FunctionAnnotations, render_list}} = RemoteCall,
-        [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, ItemsArg, KeyFunArg]},
+        {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_html},
+            {atom, _FunctionAnnotations, render_stateful}},
+        [_NonBinaryTemplate, _SocketArg]},
     ModuleName
 ) ->
-    transform_list_template_call(
-        CallAnnotations,
-        RemoteCall,
-        BinaryTemplate,
-        ItemsArg,
-        KeyFunArg,
-        undefined,
-        ModuleName
-    );
-%% Transform list rendering calls - 4-arity version
-transform_template_calls(
-    {call, CallAnnotations,
-        {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_template},
-            {atom, _FunctionAnnotations, render_list}} = RemoteCall,
-        [
-            {bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate,
-            ItemsArg,
-            KeyFunArg,
-            SocketArg
-        ]},
-    ModuleName
-) ->
-    transform_list_template_call(
-        CallAnnotations,
-        RemoteCall,
-        BinaryTemplate,
-        ItemsArg,
-        KeyFunArg,
-        SocketArg,
-        ModuleName
-    );
+    Line = erl_anno:line(CallAnnotations),
+    % Non-binary template - raise badarg
+    raise_template_error(badarg, ModuleName, Line);
 %% Not a function call we're interested in
 transform_template_calls(AstNode, _ModuleName) ->
     AstNode.
 
 %% Stateless Template Transformation
 
-%% Transform render_stateless call with binary template to render_stateless_iolist
+%% Transform render_stateless call with binary template to use parsed structure
 -spec transform_stateless_template_call(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
@@ -184,8 +168,8 @@ transform_stateless_template_call(
         {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
         IoListStructure = parse_template_for_stateless(TemplateString, LineNumber),
 
-        % Generate the new function call
-        create_stateless_iolist_call(CallAnnotations, RemoteCall, IoListStructure, SocketArg)
+        % Generate the new function call with parsed structure
+        create_stateless_parsed_call(CallAnnotations, RemoteCall, IoListStructure, SocketArg)
     catch
         _Error:_Reason ->
             raise_template_error(template_parse_failed, ModuleName, Line)
@@ -260,15 +244,9 @@ build_template_data_structure(ElementOrder, ElementsMap, VariableIndexes) ->
 
     iolist_to_binary([
         "#{",
-        "elems_order => [",
-        OrderString,
-        "], ",
-        "elems => #{",
-        ElementsString,
-        "}, ",
-        "vars_indexes => #{",
-        VariablesString,
-        "}",
+        ["elems_order => [", OrderString, "], "],
+        ["elems => #{", ElementsString, "}, "],
+        ["vars_indexes => #{", VariablesString, "}"],
         "}"
     ]).
 
@@ -312,14 +290,14 @@ format_variable_entry(VariableName, IndexList) ->
 
 %% Function Call Generation
 
-%% Create render_stateless_iolist function call
--spec create_stateless_iolist_call(
+%% Create render_stateless function call with parsed structure
+-spec create_stateless_parsed_call(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
     [term()],
     erl_parse:abstract_expr()
 ) -> erl_parse:abstract_expr().
-create_stateless_iolist_call(
+create_stateless_parsed_call(
     CallAnnotations,
     {remote, RemoteAnnotations, ModuleAtom, FunctionAtom},
     IoListStructure,
@@ -327,9 +305,9 @@ create_stateless_iolist_call(
 ) ->
     IoListBinary = iolist_to_binary(["[", lists:join(", ", IoListStructure), "]"]),
     IoListForm = merl:quote(IoListBinary),
-    NewFunctionAtom = {atom, element(2, FunctionAtom), render_stateless_iolist},
-    NewRemoteCall = {remote, RemoteAnnotations, ModuleAtom, NewFunctionAtom},
-    {call, CallAnnotations, NewRemoteCall, [IoListForm, SocketArg]}.
+    {call, CallAnnotations, {remote, RemoteAnnotations, ModuleAtom, FunctionAtom}, [
+        IoListForm, SocketArg
+    ]}.
 
 %% Create render_stateful function call with structured data
 -spec create_stateful_structured_call(
@@ -342,110 +320,7 @@ create_stateful_structured_call(CallAnnotations, RemoteCall, TemplateDataBinary,
     TemplateDataForm = merl:quote(TemplateDataBinary),
     {call, CallAnnotations, RemoteCall, [TemplateDataForm, SocketArg]}.
 
-%% List Template Transformation
-
-%% Transform render_list call with binary template to arizona_list:render_list
-%% with optimized template
--spec transform_list_template_call(
-    erl_anno:anno(),
-    erl_parse:abstract_expr(),
-    erl_parse:abstract_expr(),
-    erl_parse:abstract_expr(),
-    erl_parse:abstract_expr(),
-    erl_parse:abstract_expr() | undefined,
-    atom()
-) -> erl_parse:abstract_expr().
-transform_list_template_call(
-    CallAnnotations, _RemoteCall, BinaryTemplate, ItemsArg, KeyFunArg, SocketArg, ModuleName
-) ->
-    Line = erl_anno:line(CallAnnotations),
-    try
-        % Extract and parse the template at compile time
-        {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        ListTemplateStructure = parse_template_for_list(TemplateString, LineNumber),
-
-        % Generate call to arizona_list:render_list with optimized template
-        create_optimized_list_call(
-            CallAnnotations, ListTemplateStructure, ItemsArg, KeyFunArg, SocketArg
-        )
-    catch
-        _Error:_Reason ->
-            raise_template_error(template_parse_failed, ModuleName, Line)
-    end.
-
-%% Parse template string into optimized list template structure
--spec parse_template_for_list(binary(), pos_integer()) -> binary().
-parse_template_for_list(TemplateString, LineNumber) ->
-    TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
-    ParsedElements = arizona_parser:parse_stateless_tokens(TokenList),
-    convert_to_list_template_format(ParsedElements).
-
-%% Convert parsed elements to template element list for arizona_list:create_list_template
--spec convert_to_list_template_format([term()]) -> binary().
-convert_to_list_template_format(ParsedElements) ->
-    % Convert to simple {static, Content} and {dynamic, ExpressionText} format
-    % The actual function creation will happen at runtime
-    Elements = lists:map(fun convert_element_for_list_template/1, ParsedElements),
-    iolist_to_binary(io_lib:format("~p", [Elements])).
-
-%% Convert individual element for list template
--spec convert_element_for_list_template(term()) -> term().
-convert_element_for_list_template({static, _Line, Content}) ->
-    {static, Content};
-convert_element_for_list_template({dynamic, _Line, ExpressionText}) ->
-    % Store the expression text - arizona_list will convert it to a function
-    {dynamic, ExpressionText}.
-
-%% Create optimized arizona_list:render_list call using arizona_list:create_list_template
--spec create_optimized_list_call(
-    erl_anno:anno(),
-    binary(),
-    erl_parse:abstract_expr(),
-    erl_parse:abstract_expr(),
-    erl_parse:abstract_expr() | undefined
-) -> erl_parse:abstract_expr().
-create_optimized_list_call(CallAnnotations, ListTemplateElements, ItemsArg, KeyFunArg, SocketArg) ->
-    % Parse the template elements back into AST form
-    ElementsForm = merl:quote(ListTemplateElements),
-
-    % Create call to arizona_list:create_list_template
-    CreateTemplateCall =
-        {call, CallAnnotations,
-            {remote, CallAnnotations, {atom, CallAnnotations, arizona_list},
-                {atom, CallAnnotations, create_list_template}},
-            % Empty vars_indexes for now
-            [ElementsForm, {map, CallAnnotations, []}]},
-
-    % Create the remote call to arizona_list:render_list
-    RemoteCall =
-        {remote, CallAnnotations, {atom, CallAnnotations, arizona_list},
-            {atom, CallAnnotations, render_list}},
-
-    % Generate call with or without socket argument
-    create_list_call_with_optional_socket(
-        CallAnnotations, RemoteCall, CreateTemplateCall, ItemsArg, KeyFunArg, SocketArg
-    ).
-
 %% Utility Functions
-
-%% Create list call with optional socket argument (DRY helper)
--spec create_list_call_with_optional_socket(
-    erl_anno:anno(),
-    erl_parse:abstract_expr(),
-    erl_parse:abstract_expr(),
-    erl_parse:abstract_expr(),
-    erl_parse:abstract_expr(),
-    erl_parse:abstract_expr() | undefined
-) -> erl_parse:abstract_expr().
-create_list_call_with_optional_socket(
-    CallAnnotations, RemoteCall, FirstArg, ItemsArg, KeyFunArg, SocketArg
-) ->
-    case SocketArg of
-        undefined ->
-            {call, CallAnnotations, RemoteCall, [FirstArg, ItemsArg, KeyFunArg]};
-        _SocketValue ->
-            {call, CallAnnotations, RemoteCall, [FirstArg, ItemsArg, KeyFunArg, SocketArg]}
-    end.
 
 %% Extract template content and line number from binary AST node
 -spec extract_template_content(erl_parse:abstract_expr()) -> {binary(), pos_integer()}.

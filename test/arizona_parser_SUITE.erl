@@ -127,8 +127,8 @@ parse_stateful_with_dynamic(Config) when is_list(Config) ->
 parse_stateful_vars_indexes(Config) when is_list(Config) ->
     Template = ~"""
     <div>
-        {arizona_template:get_binding(name, Socket)} -
-        {arizona_template:get_binding(count, Socket)}
+        {arizona_socket:get_binding(name, Socket)} -
+        {arizona_socket:get_binding(count, Socket)}
     </div>
     """,
     Tokens = arizona_scanner:scan(#{}, Template),
@@ -148,7 +148,7 @@ parse_stateful_vars_indexes(Config) when is_list(Config) ->
 parse_stateful_tokens_directly(Config) when is_list(Config) ->
     Tokens = [
         {static, 1, ~"<h1>"},
-        {dynamic, 1, ~"arizona_template:get_binding(title, Socket)"},
+        {dynamic, 1, ~"arizona_socket:get_binding(title, Socket)"},
         {static, 1, ~"</h1>"}
     ],
     TemplateData = arizona_parser:parse_stateful_tokens(Tokens),
@@ -158,7 +158,7 @@ parse_stateful_tokens_directly(Config) when is_list(Config) ->
             elems_order := [0, 1, 2],
             elems := #{
                 0 := {static, 1, ~"<h1>"},
-                1 := {dynamic, 1, ~"arizona_template:get_binding(title, Socket)"},
+                1 := {dynamic, 1, ~"arizona_socket:get_binding(title, Socket)"},
                 2 := {static, 1, ~"</h1>"}
             },
             vars_indexes := #{~"title" := [1]}
@@ -170,7 +170,7 @@ parse_stateful_tokens_directly(Config) when is_list(Config) ->
 parse_stateful_quoted_variables(Config) when is_list(Config) ->
     Tokens = [
         {static, 1, ~"<span>"},
-        {dynamic, 1, ~"arizona_template:get_binding('user-name', Socket)"},
+        {dynamic, 1, ~"arizona_socket:get_binding('user-name', Socket)"},
         {static, 1, ~"</span>"}
     ],
     TemplateData = arizona_parser:parse_stateful_tokens(Tokens),
@@ -193,8 +193,8 @@ parse_stateful_multiple_variables(Config) when is_list(Config) ->
     Tokens = [
         {static, 1, ~"<div>"},
         {dynamic, 1, ~"""
-        arizona_template:get_binding(first, Socket) ++
-        arizona_template:get_binding(last, Socket)"
+        arizona_socket:get_binding(first, Socket) ++
+        arizona_socket:get_binding(last, Socket)"
         """},
         {static, 1, ~"</div>"}
     ],
@@ -216,7 +216,7 @@ parse_stateful_multiple_variables(Config) when is_list(Config) ->
         TemplateData
     ).
 
-%% Test stateful parsing with no variables (no arizona_template:get_binding calls)
+%% Test stateful parsing with no variables (no arizona_socket:get_binding calls)
 parse_stateful_no_variables(Config) when is_list(Config) ->
     Tokens = [
         {static, 1, ~"<p>"},
@@ -243,7 +243,7 @@ parse_stateful_with_comments(Config) when is_list(Config) ->
     Tokens = [
         {static, 1, ~"<div>"},
         {comment, 1, ~" This is a comment "},
-        {dynamic, 1, ~"arizona_template:get_binding(name, Socket)"},
+        {dynamic, 1, ~"arizona_socket:get_binding(name, Socket)"},
         {static, 1, ~"</div>"}
     ],
     TemplateData = arizona_parser:parse_stateful_tokens(Tokens),
@@ -254,7 +254,7 @@ parse_stateful_with_comments(Config) when is_list(Config) ->
             elems_order := [0, 1, 2],
             elems := #{
                 0 := {static, 1, ~"<div>"},
-                1 := {dynamic, 1, ~"arizona_template:get_binding(name, Socket)"},
+                1 := {dynamic, 1, ~"arizona_socket:get_binding(name, Socket)"},
                 2 := {static, 1, ~"</div>"}
             },
             vars_indexes := #{~"name" := [1]}
@@ -264,7 +264,7 @@ parse_stateful_with_comments(Config) when is_list(Config) ->
 
 %% Test complex regex matching that triggers multi-element list handling
 parse_stateful_complex_regex_match(Config) when is_list(Config) ->
-    %% The regex pattern ~"arizona_template:get_binding\\(([a-z][a-zA-Z_@]*|'(.*?)')"
+    %% The regex pattern ~"arizona_socket:get_binding\\(([a-z][a-zA-Z_@]*|'(.*?)')"
     %% has two capture groups. To trigger line 151 in pick_quoted_var, we need
     %% to create a scenario where the regex captures multiple groups that result
     %% in a list with more than one element being passed to pick_quoted_var.
@@ -275,8 +275,8 @@ parse_stateful_complex_regex_match(Config) when is_list(Config) ->
     Tokens = [
         {static, 1, ~"<span>"},
         {dynamic, 1, ~"""
-        arizona_template:get_binding('first-var', Socket) ++
-        arizona_template:get_binding(second, Socket)
+        arizona_socket:get_binding('first-var', Socket) ++
+        arizona_socket:get_binding(second, Socket)
         """},
         {static, 1, ~"</span>"}
     ],
