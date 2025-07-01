@@ -18,6 +18,7 @@
 -export([call_mount_callback/2]).
 -export([call_unmount_callback/2]).
 -export([call_render_callback/2]).
+-export([call_dynamic_function/2]).
 
 -export([new/3]).
 -export([get_module/1]).
@@ -68,6 +69,13 @@ call_unmount_callback(Mod, Socket) when is_atom(Mod) ->
     TemplateData :: arizona_parser:stateful_result().
 call_render_callback(Mod, Socket) when is_atom(Mod) ->
     apply(Mod, render, [Socket]).
+
+-spec call_dynamic_function(Fun, Socket) -> Result when
+    Fun :: fun((arizona_socket:socket()) -> term()),
+    Socket :: arizona_socket:socket(),
+    Result :: term().
+call_dynamic_function(Fun, Socket) ->
+    apply(Fun, [Socket]).
 
 -spec new(Id, Mod, Bindings) -> Stateful when
     Id :: id(),

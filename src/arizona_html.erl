@@ -2,6 +2,7 @@
 
 -export([render_stateful/2]).
 -export([render_stateless/2]).
+-export([render_list/4]).
 
 %% Types
 -type html() :: iodata().
@@ -30,3 +31,22 @@ render_stateless(Html, Socket) when is_binary(Html); is_list(Html) ->
     Tokens = arizona_scanner:scan(#{}, Html),
     StructuredList = arizona_parser:parse_stateless_tokens(Tokens),
     render_stateless(StructuredList, Socket).
+
+-spec render_list(Template, [Item], KeyFun, Socket) -> Socket1 when
+    Template :: fun((Item) -> html()) | arizona_parser:list_result(),
+    Item :: term(),
+    KeyFun :: fun((Item) -> term()),
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+render_list(ListData, Items, KeyFun, Socket) when is_map(ListData), is_list(Items), is_function(KeyFun, 1) ->
+    {_Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, KeyFun, Socket),
+    UpdatedSocket;
+render_list(ItemFun, Items, KeyFun, Socket) when is_function(ItemFun, 1), is_list(Items), is_function(KeyFun, 1) ->
+    %% Process each item using render_stateless, threading socket through
+    lists:foldl(fun(Item, AccSocket) ->
+        %% Call item function to get template HTML
+        ItemHtml = arizona_list:call_item_function(ItemFun, Item),
+        
+        %% Render using existing render_stateless function (which handles HTML accumulation)
+        render_stateless(ItemHtml, AccSocket)
+    end, Socket, Items).
