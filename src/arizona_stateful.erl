@@ -21,7 +21,7 @@
 -export([call_dynamic_function/2]).
 
 -export([new/3]).
--export([get_module/1]).
+-export([get_module/1, get_id/1]).
 -export([get_binding/2]).
 -export([put_binding/3]).
 -export([put_bindings/2]).
@@ -105,6 +105,12 @@ generate_fingerprint(Mod, Bindings) ->
     Mod :: module().
 get_module(#stateful{} = Stateful) ->
     Stateful#stateful.module.
+
+-spec get_id(Stateful) -> Id when
+    Stateful :: stateful(),
+    Id :: id().
+get_id(#stateful{} = Stateful) ->
+    Stateful#stateful.id.
 
 -spec get_binding(Key, Stateful) -> Value when
     Key :: atom(),

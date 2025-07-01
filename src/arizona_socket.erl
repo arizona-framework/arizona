@@ -1,6 +1,6 @@
 -module(arizona_socket).
 
--export([new/1]).
+-export([new/1, is_socket/1]).
 -export([get_mode/1]).
 -export([get_current_stateful_id/1]).
 -export([get_current_stateful_state/1]).
@@ -13,7 +13,7 @@
 -export([put_stateful_state/3]).
 
 %% Binding functions
--export([get_binding/2]).
+-export([get_binding/2, put_binding/3, put_bindings/2]).
 -export([with_temp_bindings/2, get_temp_binding/2]).
 
 %% Types
@@ -52,6 +52,11 @@ new(Opts) when is_map(Opts) ->
         stateful_states = #{},
         temp_bindings = #{}
     }.
+
+-spec is_socket(Term) -> boolean() when
+    Term :: term().
+is_socket(#socket{}) -> true;
+is_socket(_) -> false.
 
 -spec get_mode(Socket) -> Mode when
     Socket :: socket(),
@@ -153,3 +158,24 @@ get_temp_binding(Key, #socket{} = Socket) when is_atom(Key) ->
         #{Key := Value} -> Value;
         #{} -> throw({binding_not_found, Key})
     end.
+
+-spec put_binding(Key, Value, Socket) -> Socket1 when
+    Key :: atom(),
+    Value :: term(),
+    Socket :: socket(),
+    Socket1 :: socket().
+put_binding(Key, Value, #socket{} = Socket) when is_atom(Key) ->
+    CurrentState = get_current_stateful_state(Socket),
+    CurrentId = arizona_stateful:get_id(CurrentState),
+    UpdatedState = arizona_stateful:put_binding(Key, Value, CurrentState),
+    put_stateful_state(CurrentId, UpdatedState, Socket).
+
+-spec put_bindings(Bindings, Socket) -> Socket1 when
+    Bindings :: bindings(),
+    Socket :: socket(),
+    Socket1 :: socket().
+put_bindings(Bindings, #socket{} = Socket) when is_map(Bindings) ->
+    CurrentState = get_current_stateful_state(Socket),
+    CurrentId = arizona_stateful:get_id(CurrentState),
+    UpdatedState = arizona_stateful:put_bindings(Bindings, CurrentState),
+    put_stateful_state(CurrentId, UpdatedState, Socket).
