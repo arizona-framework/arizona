@@ -112,16 +112,17 @@ Error messages include the problematic expression text to help with debugging:
 ** exception error: {unexpected_expr_end,1,~"unclosed"}
 ```
 """.
--spec scan(Opts, Template) -> [Token] when
+-spec scan(Opts, Html) -> [Token] when
     Opts :: scan_opts(),
-    Template :: binary(),
+    Html :: arizona_html:html(),
     Token :: token().
-scan(Opts, Template) when is_map(Opts), is_binary(Template) ->
+scan(Opts, Html) when is_map(Opts), (is_binary(Html) orelse is_list(Html)) ->
+    BinaryTemplate = iolist_to_binary(Html),
     State = #state{
         line = maps:get(line, Opts, 1),
         position = 0
     },
-    scan(Template, Template, State).
+    scan(BinaryTemplate, BinaryTemplate, State).
 
 %% --------------------------------------------------------------------
 %% Private functions

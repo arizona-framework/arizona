@@ -1,5 +1,20 @@
 -module(arizona_stateful).
 
+%% Behavior callbacks
+-callback mount(Socket) -> Socket1 when
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+
+-callback render(Socket) -> TemplateData when
+    Socket :: arizona_socket:socket(),
+    TemplateData :: arizona_parser:stateful_result().
+
+-callback unmount(Socket) -> Socket1 when
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+
+-optional_callbacks([unmount/1]).
+
 -export([call_mount_callback/2]).
 -export([call_unmount_callback/2]).
 -export([call_render_callback/2]).
@@ -28,9 +43,17 @@
 -type id() :: root | binary().
 -export_type([id/0]).
 
+-spec call_mount_callback(Mod, Socket) -> Socket1 when
+    Mod :: module(),
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
 call_mount_callback(Mod, Socket) when is_atom(Mod) ->
     apply(Mod, mount, [Socket]).
 
+-spec call_unmount_callback(Mod, Socket) -> Socket1 when
+    Mod :: module(),
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
 call_unmount_callback(Mod, Socket) when is_atom(Mod) ->
     case erlang:function_exported(Mod, unmount, 1) of
         true ->
@@ -39,9 +62,18 @@ call_unmount_callback(Mod, Socket) when is_atom(Mod) ->
             Socket
     end.
 
+-spec call_render_callback(Mod, Socket) -> TemplateData when
+    Mod :: module(),
+    Socket :: arizona_socket:socket(),
+    TemplateData :: arizona_parser:stateful_result().
 call_render_callback(Mod, Socket) when is_atom(Mod) ->
     apply(Mod, render, [Socket]).
 
+-spec new(Id, Mod, Bindings) -> Stateful when
+    Id :: id(),
+    Mod :: module(),
+    Bindings :: arizona_socket:bindings(),
+    Stateful :: stateful().
 new(Id, Mod, Bindings) when (Id =:= root orelse is_binary(Id)), is_atom(Mod), is_map(Bindings) ->
     #stateful{
         id = Id,
@@ -59,35 +91,54 @@ generate_fingerprint(#stateful{} = State) ->
 generate_fingerprint(Mod, Bindings) ->
     arizona_fingerprint:generate({Mod, Bindings}).
 
-get_module(#stateful{} = State) ->
-    State#stateful.module.
+-spec get_module(Stateful) -> Mod when
+    Stateful :: stateful(),
+    Mod :: module().
+get_module(#stateful{} = Stateful) ->
+    Stateful#stateful.module.
 
-get_binding(Key, #stateful{} = State) when is_atom(Key) ->
-    case State#stateful.bindings of
+-spec get_binding(Key, Stateful) -> Value when
+    Key :: atom(),
+    Stateful :: stateful(),
+    Value :: term().
+get_binding(Key, #stateful{} = Stateful) when is_atom(Key) ->
+    case Stateful#stateful.bindings of
         #{Key := Value} -> Value;
         #{} -> throw({binding_not_found, Key})
     end.
 
-put_binding(Key, Value, #stateful{} = State) when is_atom(Key) ->
-    case State#stateful.bindings of
+-spec put_binding(Key, Value, Stateful) -> Stateful1 when
+    Key :: atom(),
+    Value :: term(),
+    Stateful :: stateful(),
+    Stateful1 :: stateful().
+put_binding(Key, Value, #stateful{} = Stateful) when is_atom(Key) ->
+    case Stateful#stateful.bindings of
         #{Key := Value} ->
-            State;
+            Stateful;
         Bindings ->
-            ChangedBindings = State#stateful.changed_bindings,
-            State#stateful{
+            ChangedBindings = Stateful#stateful.changed_bindings,
+            Stateful#stateful{
               bindings = Bindings#{Key => Value},
               changed_bindings = ChangedBindings#{Key => Value}
             }
     end.
 
-put_bindings(Bindings, #stateful{} = State) when is_map(Bindings) ->
-    maps:fold(fun put_binding/3, State, Bindings).
+-spec put_bindings(Bindings, Stateful) -> Stateful1 when
+    Bindings :: arizona_socket:bindings(),
+    Stateful :: stateful(),
+    Stateful1 :: stateful().
+put_bindings(Bindings, #stateful{} = Stateful) when is_map(Bindings) ->
+    maps:fold(fun put_binding/3, Stateful, Bindings).
 
-should_remount(#stateful{} = State) ->
-    case State#stateful.fingerprint of
+-spec should_remount(Stateful) -> ShouldRemount when
+    Stateful :: stateful(),
+    ShouldRemount :: boolean().
+should_remount(#stateful{} = Stateful) ->
+    case Stateful#stateful.fingerprint of
         undefined ->
             true;
         OldFingerprint ->
-            NewFingerprint = generate_fingerprint(State),
+            NewFingerprint = generate_fingerprint(Stateful),
             not arizona_fingerprint:match(OldFingerprint, NewFingerprint)
     end.

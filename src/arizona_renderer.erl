@@ -5,12 +5,22 @@
 -export([format_error/2]).
 
 %% Render structured template data (from parse transform or parser)
+-spec render_stateful(TemplateData, Socket) -> {Html, Socket1} when
+    TemplateData :: arizona_parser:stateful_result(),
+    Socket :: arizona_socket:socket(),
+    Html :: arizona_html:html(),
+    Socket1 :: arizona_socket:socket().
 render_stateful(#{elems_order := Order, elems := Elements}, Socket) ->
     {Html, UpdatedSocket} = render_elements(Order, Elements, Socket, []),
     UpdatedSocket1 = arizona_socket:set_html_acc(Html, UpdatedSocket),
     {Html, UpdatedSocket1}.
 
 %% Render stateless structured list
+-spec render_stateless(StructuredList, Socket) -> {Html, Socket1} when
+    StructuredList :: arizona_parser:stateless_result(),
+    Socket :: arizona_socket:socket(),
+    Html :: arizona_html:html(),
+    Socket1 :: arizona_socket:socket().
 render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
     {Html, UpdatedSocket} = render_iolist(StructuredList, Socket, []),
     UpdatedSocket1 = arizona_socket:set_html_acc(Html, UpdatedSocket),
@@ -56,6 +66,10 @@ binding_error_info(Line, Key, Socket) ->
                     module => arizona_renderer}}].
 
 %% OTP error_info callback for enhanced error formatting
+-spec format_error(Reason, StackTrace) -> ErrorMap when
+    Reason :: term(),
+    StackTrace :: [term()],
+    ErrorMap :: #{atom() => term()}.
 format_error(Reason, [{_M,_F,_As,Info}|_]) ->
     ErrorInfo = proplists:get_value(error_info, Info, #{}),
     CauseMap = maps:get(cause, ErrorInfo, #{}),
