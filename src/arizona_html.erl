@@ -3,6 +3,7 @@
 -export([render_stateful/2]).
 -export([render_stateless/2]).
 -export([render_list/4]).
+-export([to_html/1]).
 
 %% Types
 -type html() :: iodata().
@@ -46,15 +47,31 @@ render_list(ListData, Items, KeyFun, Socket) when
 render_list(ItemFun, Items, KeyFun, Socket) when
     is_function(ItemFun, 1), is_list(Items), is_function(KeyFun, 1)
 ->
-    %% Process each item using render_stateless, threading socket through
-    lists:foldl(
-        fun(Item, AccSocket) ->
+    %% Accumulate HTML from all items
+    {AllHtml, FinalSocket} = lists:foldl(
+        fun(Item, {HtmlAcc, AccSocket}) ->
             %% Call item function to get template HTML
-            ItemHtml = arizona_list:call_item_function(ItemFun, Item),
-
-            %% Render using existing render_stateless function (which handles HTML accumulation)
-            render_stateless(ItemHtml, AccSocket)
+            ItemHtml = to_html(arizona_list:call_item_function(ItemFun, Item)),
+            {[HtmlAcc, ItemHtml], AccSocket}
         end,
-        Socket,
+        {[], Socket},
         Items
-    ).
+    ),
+
+    %% Set final accumulated HTML
+    arizona_socket:set_html_acc(AllHtml, FinalSocket).
+
+%% Convert any value to HTML-safe iodata
+-spec to_html(term()) -> html().
+to_html(Value) when is_binary(Value) -> Value;
+to_html(Value) when is_list(Value) ->
+    try iolist_to_binary(Value) of
+        Binary -> Binary
+    catch
+        _:_ -> iolist_to_binary([to_html(Term) || Term <- Value])
+    end;
+to_html(Value) when is_atom(Value) -> atom_to_binary(Value, utf8);
+to_html(Value) when is_integer(Value) -> integer_to_binary(Value);
+to_html(Value) when is_float(Value) -> list_to_binary(io_lib:format("~p", [Value]));
+to_html(Value) ->
+    list_to_binary(io_lib:format("~tp", [Value])).
