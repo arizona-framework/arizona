@@ -16,6 +16,10 @@
 -export([get_binding/2]).
 -export([with_temp_bindings/2, get_temp_binding/2]).
 
+%% Types
+-type bindings() :: #{atom() => term()}.
+-export_type([bindings/0]).
+
 -record(socket, {
     mode :: render | diff,
     html_acc :: iolist(),
