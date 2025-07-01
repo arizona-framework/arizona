@@ -8,12 +8,13 @@
 -export([get_stateful_state/2, find_stateful_state/2]).
 
 -export([set_current_stateful_id/2]).
--export([set_html_acc/2]).
+-export([set_html_acc/2, get_html/1]).
 
 -export([put_stateful_state/3]).
 
 %% Binding functions
 -export([get_binding/2]).
+-export([with_temp_bindings/2, get_temp_binding/2]).
 
 -record(socket, {
     mode :: render | diff,
@@ -21,7 +22,8 @@
     changes_acc :: [{binary(), iodata()}],
     current_stateful_parent_id :: arizona_stateful:id() | undefined,
     current_stateful_id :: arizona_stateful:id(),
-    stateful_states :: #{arizona_stateful:id() => arizona_stateful:stateful()}
+    stateful_states :: #{arizona_stateful:id() => arizona_stateful:stateful()},
+    temp_bindings :: map()  % For stateless component bindings, always a map
 }).
 -opaque socket() :: #socket{}.
 -export_type([socket/0]).
@@ -33,7 +35,8 @@ new(Opts) when is_map(Opts) ->
         changes_acc = [],
         current_stateful_parent_id = maps:get(current_stateful_parent_id, Opts, undefined),
         current_stateful_id = maps:get(current_stateful_id, Opts, root),
-        stateful_states = #{}
+        stateful_states = #{},
+        temp_bindings = #{}
     }.
 
 get_mode(#socket{} = Socket) ->
@@ -61,10 +64,29 @@ set_current_stateful_id(Id, #socket{} = Socket) when Id =:= root; is_binary(Id) 
 set_html_acc(Html, #socket{} = Socket) when is_list(Html) ->
     Socket#socket{html_acc = Html}.
 
+get_html(#socket{} = Socket) ->
+    Socket#socket.html_acc.
+
 put_stateful_state(Id, State, Socket) when Id =:= root; is_binary(Id) ->
     States = Socket#socket.stateful_states,
     Socket#socket{stateful_states = States#{Id => State}}.
 
 get_binding(Key, #socket{} = Socket) when is_atom(Key) ->
-    CurrentState = get_current_stateful_state(Socket),
-    arizona_stateful:get_binding(Key, CurrentState).
+    %% First try temporary bindings (for stateless components)
+    case Socket#socket.temp_bindings of
+        #{Key := Value} -> Value;
+        #{} ->
+            %% Fall back to stateful bindings
+            CurrentState = get_current_stateful_state(Socket),
+            arizona_stateful:get_binding(Key, CurrentState)
+    end.
+
+%% Temporary binding functions for stateless components
+with_temp_bindings(Bindings, #socket{} = Socket) when is_map(Bindings) ->
+    Socket#socket{temp_bindings = Bindings}.
+
+get_temp_binding(Key, #socket{} = Socket) when is_atom(Key) ->
+    case Socket#socket.temp_bindings of
+        #{Key := Value} -> Value;
+        #{} -> error({binding_not_found, Key})
+    end.

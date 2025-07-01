@@ -16,29 +16,26 @@ call_stateful(Mod, Bindings, Socket) ->
             end;
         error ->
             State = arizona_stateful:new(Id, Mod, Bindings),
-            render_stateful_component(Mod, State, Socket)
+            Socket1 = arizona_socket:put_stateful_state(Id, State, Socket),
+            render_stateful_component(Mod, State, Socket1)
     end.
 
 call_stateless(Mod, Fun, Bindings, Socket) ->
-    %% Update socket with component bindings
-    CurrentState = arizona_socket:get_current_stateful_state(Socket),
-    UpdatedState = arizona_stateful:put_bindings(Bindings, CurrentState),
-    UpdatedSocket = arizona_socket:put_stateful_state(
-        arizona_socket:get_current_stateful_id(Socket), 
-        UpdatedState, 
-        Socket
-    ),
-    render_stateless_component(Mod, Fun, UpdatedSocket).
+    %% Create temporary socket with bindings for stateless component
+    TempSocket = arizona_socket:with_temp_bindings(Bindings, Socket),
+    render_stateless_component(Mod, Fun, TempSocket).
 
 %% Helper functions for component rendering
 render_stateful_component(Mod, State, Socket) ->
     %% Call the component's render callback to get template data
     TemplateData = arizona_stateful:call_render_callback(Mod, Socket),
     %% Use arizona_renderer to render the template data
-    arizona_renderer:render_stateful(TemplateData, Socket).
+    {_Html, UpdatedSocket} = arizona_renderer:render_stateful(TemplateData, Socket),
+    UpdatedSocket.
 
 render_stateless_component(Mod, Fun, Socket) ->
     %% Call the stateless component function to get result
     Result = arizona_stateless:call_render_callback(Mod, Fun, Socket),
     %% Use arizona_renderer to render the result
-    arizona_renderer:render_stateless(Result, Socket).
+    {_Html, UpdatedSocket} = arizona_renderer:render_stateless(Result, Socket),
+    UpdatedSocket.

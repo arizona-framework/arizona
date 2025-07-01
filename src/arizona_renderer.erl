@@ -5,16 +5,20 @@
 
 %% Render structured template data (from parse transform or parser)
 render_stateful(#{elems_order := Order, elems := Elements}, Socket) ->
-    render_elements(Order, Elements, Socket, []).
+    {Html, UpdatedSocket} = render_elements(Order, Elements, Socket, []),
+    UpdatedSocket1 = arizona_socket:set_html_acc(Html, UpdatedSocket),
+    {Html, UpdatedSocket1}.
 
 %% Render stateless structured list
 render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
-    render_iolist(StructuredList, Socket, []).
+    {Html, UpdatedSocket} = render_iolist(StructuredList, Socket, []),
+    UpdatedSocket1 = arizona_socket:set_html_acc(Html, UpdatedSocket),
+    {Html, UpdatedSocket1}.
 
 %% Render elements in order for stateful templates
 render_elements([], _Elements, Socket, Acc) ->
     Html = lists:reverse(Acc),
-    arizona_socket:set_html_acc(Html, Socket);
+    {Html, Socket};
 render_elements([Index | Rest], Elements, Socket, Acc) ->
     #{Index := Element} = Elements,
     {RenderedElement, UpdatedSocket} = render_element(Element, Socket),
@@ -23,7 +27,7 @@ render_elements([Index | Rest], Elements, Socket, Acc) ->
 %% Render stateless iolist
 render_iolist([], Socket, Acc) ->
     Html = lists:reverse(Acc),
-    arizona_socket:set_html_acc(Html, Socket);
+    {Html, Socket};
 render_iolist([Element | Rest], Socket, Acc) ->
     {RenderedElement, UpdatedSocket} = render_element(Element, Socket),
     render_iolist(Rest, UpdatedSocket, [RenderedElement | Acc]).

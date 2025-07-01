@@ -63,7 +63,10 @@ get_module(#stateful{} = State) ->
     State#stateful.module.
 
 get_binding(Key, #stateful{} = State) when is_atom(Key) ->
-    maps:get(Key, State#stateful.bindings).
+    case State#stateful.bindings of
+        #{Key := Value} -> Value;
+        #{} -> error({binding_not_found, Key})
+    end.
 
 put_binding(Key, Value, #stateful{} = State) when is_atom(Key) ->
     case State#stateful.bindings of
