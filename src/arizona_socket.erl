@@ -88,5 +88,5 @@ with_temp_bindings(Bindings, #socket{} = Socket) when is_map(Bindings) ->
 get_temp_binding(Key, #socket{} = Socket) when is_atom(Key) ->
     case Socket#socket.temp_bindings of
         #{Key := Value} -> Value;
-        #{} -> error({binding_not_found, Key})
+        #{} -> throw({binding_not_found, Key})
     end.
