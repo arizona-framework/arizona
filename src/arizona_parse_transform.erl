@@ -29,8 +29,7 @@ them with optimized versions that avoid runtime template parsing overhead.
     parse_transform/2,
     format_error/1,
     transform_stateful_to_ast/1,
-    transform_stateless_to_ast/1,
-    get_socket_var_name/0
+    transform_stateless_to_ast/1
 ]).
 
 %% --------------------------------------------------------------------
@@ -67,11 +66,17 @@ templates that can be optimized at compile time.
 -spec parse_transform([erl_parse:abstract_form()], compile_options()) ->
     [erl_parse:abstract_form()].
 parse_transform(AbstractSyntaxTrees, _CompilerOptions) ->
+    parse_transform_with_depth(AbstractSyntaxTrees, _CompilerOptions, 0).
+
+%% Parse transform with depth tracking for recursive optimization
+-spec parse_transform_with_depth([erl_parse:abstract_form()], compile_options(), non_neg_integer()) ->
+    [erl_parse:abstract_form()].
+parse_transform_with_depth(AbstractSyntaxTrees, _CompilerOptions, Depth) ->
     ModuleName = extract_module_name(AbstractSyntaxTrees),
     erl_syntax:revert_forms([
         erl_syntax_lib:map(
             fun(Node) ->
-                transform_ast_node(erl_syntax:revert(Node), ModuleName)
+                transform_ast_node(erl_syntax:revert(Node), ModuleName, Depth)
             end,
             FormTree
         )
@@ -143,15 +148,17 @@ extract_module_name([_Form | Rest]) ->
 extract_module_name([]) ->
     unknown_module.
 
-%% Transform an individual AST node, looking for template calls
--spec transform_ast_node(erl_parse:abstract_expr(), atom()) -> erl_parse:abstract_expr().
-transform_ast_node(AstNode, ModuleName) ->
-    transform_template_calls(AstNode, ModuleName).
+%% Transform an individual AST node with depth tracking
+-spec transform_ast_node(erl_parse:abstract_expr(), atom(), non_neg_integer()) ->
+    erl_parse:abstract_expr().
+transform_ast_node(AstNode, ModuleName, Depth) ->
+    transform_template_calls(AstNode, ModuleName, Depth).
 
 %% Template Call Recognition and Transformation
 
-%% Transform arizona_html function calls with binary templates
--spec transform_template_calls(erl_parse:abstract_expr(), atom()) -> erl_parse:abstract_expr().
+%% Transform arizona_html function calls with binary templates and depth tracking
+-spec transform_template_calls(erl_parse:abstract_expr(), atom(), non_neg_integer()) ->
+    erl_parse:abstract_expr().
 
 %% Transform stateless rendering calls
 transform_template_calls(
@@ -159,17 +166,19 @@ transform_template_calls(
         {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_html},
             {atom, _FunctionAnnotations, render_stateless}} = RemoteCall,
         [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg]},
-    ModuleName
+    ModuleName,
+    Depth
 ) ->
     transform_stateless_template_call(
-        CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName
+        CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, Depth
     );
 transform_template_calls(
     {call, CallAnnotations,
         {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_html},
             {atom, _FunctionAnnotations, render_stateless}},
         [_NonBinaryTemplate, _SocketArg]},
-    ModuleName
+    ModuleName,
+    _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
     % Non-binary template - raise badarg
@@ -180,10 +189,11 @@ transform_template_calls(
         {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_html},
             {atom, _FunctionAnnotations, render_stateful}} = RemoteCall,
         [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg]},
-    ModuleName
+    ModuleName,
+    Depth
 ) ->
     transform_stateful_template_call(
-        CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName
+        CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, Depth
     );
 %% Handle arizona_html calls with non-binary templates (should error)
 transform_template_calls(
@@ -191,33 +201,35 @@ transform_template_calls(
         {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_html},
             {atom, _FunctionAnnotations, render_stateful}},
         [_NonBinaryTemplate, _SocketArg]},
-    ModuleName
+    ModuleName,
+    _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
     % Non-binary template - raise badarg
     raise_template_error(badarg, ModuleName, Line);
 %% Not a function call we're interested in
-transform_template_calls(AstNode, _ModuleName) ->
+transform_template_calls(AstNode, _ModuleName, _Depth) ->
     AstNode.
 
 %% Stateless Template Transformation
 
-%% Transform render_stateless call with binary template to use parsed structure
+%% Transform render_stateless call with depth tracking
 -spec transform_stateless_template_call(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
-    atom()
+    atom(),
+    non_neg_integer()
 ) -> erl_parse:abstract_expr().
 transform_stateless_template_call(
-    CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName
+    CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
     try
         % Extract and parse the template at compile time
         {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        IoListStructure = parse_template_for_stateless(TemplateString, LineNumber),
+        IoListStructure = parse_template_for_stateless(TemplateString, LineNumber, Depth),
 
         % Generate the new function call with parsed structure
         create_stateless_parsed_call(CallAnnotations, RemoteCall, IoListStructure, SocketArg)
@@ -226,45 +238,52 @@ transform_stateless_template_call(
             raise_template_error(template_parse_failed, ModuleName, Line)
     end.
 
-%% Parse template string into iolist structure for stateless rendering
--spec parse_template_for_stateless(binary(), pos_integer()) -> [term()].
-parse_template_for_stateless(TemplateString, LineNumber) ->
+%% Parse template string into iolist structure with depth tracking
+-spec parse_template_for_stateless(binary(), pos_integer(), non_neg_integer()) -> [term()].
+parse_template_for_stateless(TemplateString, LineNumber, Depth) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
     ParsedElements = arizona_parser:parse_stateless_tokens(TokenList),
-    convert_to_iolist_format(ParsedElements).
+    convert_to_iolist_format(ParsedElements, Depth).
 
-%% Convert parsed elements to iolist format with proper function wrapping
--spec convert_to_iolist_format([term()]) -> [term()].
-convert_to_iolist_format(ParsedElements) ->
-    lists:reverse(lists:foldl(fun convert_element_to_iolist/2, [], ParsedElements)).
+%% Convert parsed elements to iolist format with depth tracking
+-spec convert_to_iolist_format([term()], non_neg_integer()) -> [term()].
+convert_to_iolist_format(ParsedElements, Depth) ->
+    lists:reverse(
+        lists:foldl(
+            fun(Element, Acc) -> convert_element_to_iolist(Element, Acc, Depth) end,
+            [],
+            ParsedElements
+        )
+    ).
 
-%% Convert individual element to iolist format
--spec convert_element_to_iolist(term(), [term()]) -> [term()].
-convert_element_to_iolist({static, Line, StaticText}, Accumulator) ->
+%% Convert individual element to iolist format with depth tracking
+-spec convert_element_to_iolist(term(), [term()], non_neg_integer()) -> [term()].
+convert_element_to_iolist({static, Line, StaticText}, Accumulator, _Depth) ->
     StaticElement = format_static_element(Line, StaticText),
     [StaticElement | Accumulator];
-convert_element_to_iolist({dynamic, Line, ExpressionText}, Accumulator) ->
-    DynamicElement = format_dynamic_element(Line, ExpressionText),
+convert_element_to_iolist({dynamic, Line, ExpressionText}, Accumulator, Depth) ->
+    DynamicElement = format_dynamic_element(Line, ExpressionText, Depth),
     [DynamicElement | Accumulator].
 
 %% Stateful Template Transformation
 
-%% Transform render_stateful call with binary template to structured format
+%% Transform render_stateful call with depth tracking
 -spec transform_stateful_template_call(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
-    atom()
+    atom(),
+    non_neg_integer()
 ) -> erl_parse:abstract_expr().
 transform_stateful_template_call(
-    CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName
+    CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
     try
         % Extract and parse the template at compile time
         {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        TemplateDataMap = parse_template_for_stateful(TemplateString, LineNumber),
+        TemplateDataMap = parse_template_for_stateful(TemplateString, LineNumber, Depth),
 
         % Generate the new function call
         create_stateful_structured_call(CallAnnotations, RemoteCall, TemplateDataMap, SocketArg)
@@ -273,9 +292,9 @@ transform_stateful_template_call(
             raise_template_error(template_parse_failed, ModuleName, Line)
     end.
 
-%% Parse template string into structured format for stateful rendering
--spec parse_template_for_stateful(binary(), pos_integer()) -> binary().
-parse_template_for_stateful(TemplateString, LineNumber) ->
+%% Parse template string into structured format with depth tracking
+-spec parse_template_for_stateful(binary(), pos_integer(), non_neg_integer()) -> binary().
+parse_template_for_stateful(TemplateString, LineNumber, Depth) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
     #{
         elems_order := ElementOrder,
@@ -283,13 +302,13 @@ parse_template_for_stateful(TemplateString, LineNumber) ->
         vars_indexes := VariableIndexes
     } = arizona_parser:parse_stateful_tokens(TokenList),
 
-    build_template_data_structure(ElementOrder, ElementsMap, VariableIndexes).
+    build_template_data_structure(ElementOrder, ElementsMap, VariableIndexes, Depth).
 
-%% Build the template data structure as a binary string for merl:quote
--spec build_template_data_structure([integer()], map(), map()) -> binary().
-build_template_data_structure(ElementOrder, ElementsMap, VariableIndexes) ->
+%% Build the template data structure with depth tracking
+-spec build_template_data_structure([integer()], map(), map(), non_neg_integer()) -> binary().
+build_template_data_structure(ElementOrder, ElementsMap, VariableIndexes, Depth) ->
     OrderString = format_element_order(ElementOrder),
-    ElementsString = format_elements_map(ElementsMap),
+    ElementsString = format_elements_map(ElementsMap, Depth),
     VariablesString = format_variables_indexes(VariableIndexes),
 
     iolist_to_binary([
@@ -307,27 +326,31 @@ build_template_data_structure(ElementOrder, ElementsMap, VariableIndexes) ->
 format_element_order(ElementOrder) ->
     lists:join(", ", lists:map(fun integer_to_binary/1, ElementOrder)).
 
-%% Format elements map as key-value pairs
--spec format_elements_map(map()) -> string().
-format_elements_map(ElementsMap) ->
-    ElementPairs = maps:fold(fun format_element_entry/3, [], ElementsMap),
+%% Format elements map as key-value pairs with depth tracking
+-spec format_elements_map(map(), non_neg_integer()) -> string().
+format_elements_map(ElementsMap, Depth) ->
+    ElementPairs = maps:fold(
+        fun(K, V, Acc) -> format_element_entry(K, V, Acc, Depth) end,
+        [],
+        ElementsMap
+    ),
     lists:join(", ", lists:reverse(ElementPairs)).
 
-%% Format a single element entry
--spec format_element_entry(integer(), term(), [string()]) -> [string()].
-format_element_entry(ElementIndex, {static, Line, StaticText}, Accumulator) ->
+%% Format a single element entry with depth tracking for recursion
+-spec format_element_entry(integer(), term(), [string()], non_neg_integer()) -> [string()].
+format_element_entry(ElementIndex, {static, Line, StaticText}, Accumulator, _Depth) ->
     StaticElemText = format_static_element(Line, StaticText),
     FormattedEntry = iolist_to_binary(io_lib:format("~p => ~s", [ElementIndex, StaticElemText])),
     [FormattedEntry | Accumulator];
-format_element_entry(ElementIndex, {dynamic, Line, ExpressionText}, Accumulator) ->
-    OptimizedExpressionText = optimize_dynamic_expression(ExpressionText, []),
-    DynamicElemText = format_dynamic_element(Line, OptimizedExpressionText),
+format_element_entry(ElementIndex, {dynamic, Line, ExpressionText}, Accumulator, Depth) ->
+    OptimizedExpressionText = optimize_dynamic_expression(ExpressionText, [], Depth),
+    DynamicElemText = format_dynamic_element(Line, OptimizedExpressionText, Depth),
     FormattedEntry = iolist_to_binary(io_lib:format("~p => ~s", [ElementIndex, DynamicElemText])),
     [FormattedEntry | Accumulator].
 
-%% Optimize dynamic expressions by recursively applying parse transform
--spec optimize_dynamic_expression(binary(), compile_options()) -> binary().
-optimize_dynamic_expression(ExpressionText, CompilerOptions) ->
+%% Optimize dynamic expressions with depth tracking to avoid socket variable shadowing
+-spec optimize_dynamic_expression(binary(), compile_options(), non_neg_integer()) -> binary().
+optimize_dynamic_expression(ExpressionText, CompilerOptions, Depth) ->
     %% Parse expression into AST
     ExprAST =
         case merl:quote(ExpressionText) of
@@ -337,8 +360,8 @@ optimize_dynamic_expression(ExpressionText, CompilerOptions) ->
                 [AST]
         end,
 
-    %% Apply parse transform recursively to optimize nested arizona_html calls
-    TransformedExprAST = parse_transform(ExprAST, CompilerOptions),
+    %% Apply parse transform recursively with incremented depth to avoid variable shadowing
+    TransformedExprAST = parse_transform_with_depth(ExprAST, CompilerOptions, Depth + 1),
 
     %% Convert back to text representation
     OptimizedText = erl_pp:exprs(erl_syntax:revert_forms(TransformedExprAST)),
@@ -436,7 +459,8 @@ create_element_ast({static, Line, Content}) ->
 create_element_ast({dynamic, Line, ExprBinary}) ->
     %% Convert expression to optimized function AST
     %% ExprBinary is the original expression like "arizona_socket:get_binding(name, Socket)"
-    FunctionBinary = create_socket_threaded_function(ExprBinary),
+    %% Use depth 0 for runtime AST creation (not parse transform)
+    FunctionBinary = create_socket_threaded_function(ExprBinary, 0),
 
     erl_syntax:tuple([
         erl_syntax:atom(dynamic),
@@ -455,15 +479,15 @@ create_vars_indexes_map_ast(VarsIndexes) ->
     ],
     erl_syntax:map_expr(MapFields).
 
-%% Get the safe socket variable name used for shadowing avoidance
--spec get_socket_var_name() -> binary().
-get_socket_var_name() ->
-    <<"_@Socket">>.
+%% Get socket variable name with depth to avoid nesting shadowing
+-spec get_socket_var_name(non_neg_integer()) -> binary().
+get_socket_var_name(Depth) when Depth >= 0 ->
+    iolist_to_binary([<<"_@Socket">>, integer_to_binary(Depth)]).
 
-%% Create a function that receives Socket parameter, handling variable shadowing
--spec create_socket_threaded_function(binary()) -> binary().
-create_socket_threaded_function(ExpressionText) ->
-    SocketVarName = get_socket_var_name(),
+%% Create a function with depth-specific socket variable to avoid nesting shadowing
+-spec create_socket_threaded_function(binary(), non_neg_integer()) -> binary().
+create_socket_threaded_function(ExpressionText, Depth) ->
+    SocketVarName = get_socket_var_name(Depth),
     %% Replace any existing Socket variable with safe socket name to avoid shadowing
     SafeExpression = re:replace(ExpressionText, <<"\\bSocket\\b">>, SocketVarName, [
         global, {return, binary}
@@ -475,8 +499,8 @@ create_socket_threaded_function(ExpressionText) ->
 format_static_element(Line, Content) ->
     iolist_to_binary(io_lib:format("{static, ~p, ~p}", [Line, Content])).
 
-%% Format dynamic element as binary string with function
--spec format_dynamic_element(pos_integer(), binary()) -> binary().
-format_dynamic_element(Line, ExpressionText) ->
-    FunctionText = create_socket_threaded_function(ExpressionText),
+%% Format dynamic element with depth-specific socket variable
+-spec format_dynamic_element(pos_integer(), binary(), non_neg_integer()) -> binary().
+format_dynamic_element(Line, ExpressionText, Depth) ->
+    FunctionText = create_socket_threaded_function(ExpressionText, Depth),
     iolist_to_binary(io_lib:format("{dynamic, ~p, ~s}", [Line, FunctionText])).

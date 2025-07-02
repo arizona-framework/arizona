@@ -516,18 +516,26 @@ test_dynamic_expression_ast_creation(Config) when is_list(Config) ->
 
 %% Test nested arizona_html optimization
 test_nested_arizona_optimization(Config) when is_list(Config) ->
-    % Create a stateful template with nested arizona_html:render_stateless calls
-    Forms = merl:quote(~""""
+    % Create a stateful template with deeply nested arizona_html calls to test socket variable shadowing fix
+    Forms = merl:quote(~""""""
     -module(test_nested_module).
     -export([test_render/1]).
     test_render(Socket) ->
-        arizona_html:render_stateful(~"""
-        <ul>
-        {_JustForm = multiple_forms, arizona_html:render_stateless(~"<li>Item 1</li>", Socket)}
-        {arizona_html:render_stateless(~"<li>Item 2</li>", Socket)}
-        </ul>
-        """, Socket).
-    """"),
+        arizona_html:render_stateful(~"""""
+        <div>
+            Level 0: {
+                _JustForm = multiple_forms,
+                arizona_html:render_stateless(~""""
+                <span>Level 1:
+                {arizona_html:render_stateless(~"""
+                <p>Level 2: Deep nesting test</p>
+                """, Socket)}
+                </span>
+                """", Socket)
+            }
+        </div>
+        """"", Socket).
+    """"""),
 
     % Apply parse transform
     TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
@@ -541,15 +549,19 @@ test_nested_arizona_optimization(Config) when is_list(Config) ->
     % Check that the outer template was transformed (should contain a map structure)
     ?assert(string:str(TransformedSource, "#{elems_order") > 0),
 
-    % Check that the nested render_stateless calls were optimized
-    % (should contain list structures instead of raw binary templates)
+    % Check that socket variables at different nesting levels use different names to avoid shadowing
+    % Level 0 should use _@Socket0, Level 1 should use _@Socket1
+    % Level 2 is a static template with no dynamic content, so no function wrapper needed
+    ?assert(string:str(TransformedSource, "_@Socket0") > 0),
+    ?assert(string:str(TransformedSource, "_@Socket1") > 0),
+
+    % Verify that we have different socket variable names (no shadowing)
     ?assert(
-        string:str(TransformedSource, "[<<\"<li>Item 1</li>\">>]") > 0 orelse
-            string:str(TransformedSource, "[{static,") > 0
+        string:str(TransformedSource, "_@Socket0") =/= string:str(TransformedSource, "_@Socket1")
     ),
 
     % Verify the transformation actually occurred by checking we don't have the original template
-    ?assertEqual(0, string:str(TransformedSource, "~\"<li>Item 1</li>\"")),
+    ?assertEqual(0, string:str(TransformedSource, "~\"<p>Level 2")),
 
     % Verify the structure is valid and compiles
     ?assertMatch(
