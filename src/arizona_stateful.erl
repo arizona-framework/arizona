@@ -25,6 +25,7 @@
 -export([get_binding/2]).
 -export([put_binding/3]).
 -export([put_bindings/2]).
+-export([get_changed_bindings/1]).
 
 -export([should_remount/1]).
 
@@ -145,6 +146,12 @@ put_binding(Key, Value, #stateful{} = Stateful) when is_atom(Key) ->
     Stateful1 :: stateful().
 put_bindings(Bindings, #stateful{} = Stateful) when is_map(Bindings) ->
     maps:fold(fun put_binding/3, Stateful, Bindings).
+
+-spec get_changed_bindings(Stateful) -> ChangedBindings when
+    Stateful :: stateful(),
+    ChangedBindings :: map().
+get_changed_bindings(#stateful{} = Stateful) ->
+    Stateful#stateful.changed_bindings.
 
 -spec should_remount(Stateful) -> ShouldRemount when
     Stateful :: stateful(),

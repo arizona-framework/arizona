@@ -9,6 +9,7 @@
 
 -export([set_current_stateful_id/2]).
 -export([set_html_acc/2, get_html/1]).
+-export([append_changes/2, get_changes/1, clear_changes/1]).
 
 -export([put_stateful_state/3]).
 
@@ -29,7 +30,8 @@
 -record(socket, {
     mode :: mode(),
     html_acc :: iolist(),
-    changes_acc :: [{binary(), iodata()}],
+    % Will be arizona_differ:diff_changes()
+    changes_acc :: term(),
     current_stateful_parent_id :: arizona_stateful:id() | undefined,
     current_stateful_id :: arizona_stateful:id(),
     stateful_states :: #{arizona_stateful:id() => arizona_stateful:stateful()},
@@ -179,3 +181,90 @@ put_bindings(Bindings, #socket{} = Socket) when is_map(Bindings) ->
     CurrentId = arizona_stateful:get_id(CurrentState),
     UpdatedState = arizona_stateful:put_bindings(Bindings, CurrentState),
     put_stateful_state(CurrentId, UpdatedState, Socket).
+
+%% Changes accumulator functions (for diff mode)
+
+-spec append_changes(Changes, Socket) -> Socket1 when
+    % arizona_differ:diff_changes()
+    Changes :: term(),
+    Socket :: socket(),
+    Socket1 :: socket().
+append_changes(Changes, #socket{} = Socket) ->
+    CurrentChanges = Socket#socket.changes_acc,
+    % Merge changes at the correct hierarchical path
+    MergedChanges = merge_changes(Changes, CurrentChanges),
+    Socket#socket{changes_acc = MergedChanges}.
+
+-spec get_changes(Socket) -> Changes when
+    Socket :: socket(),
+    % arizona_differ:diff_changes()
+    Changes :: term().
+get_changes(#socket{} = Socket) ->
+    % Reverse to get changes in chronological order
+    lists:reverse(Socket#socket.changes_acc).
+
+-spec clear_changes(Socket) -> Socket1 when
+    Socket :: socket(),
+    Socket1 :: socket().
+clear_changes(#socket{} = Socket) ->
+    Socket#socket{changes_acc = []}.
+
+%% Merge new changes with existing changes, maintaining hierarchical structure
+%% Format: [{StatefulId, [{ElementIndex, Changes}]}]
+-spec merge_changes(term(), term()) -> term().
+merge_changes([], ExistingChanges) ->
+    ExistingChanges;
+merge_changes(NewChanges, []) ->
+    NewChanges;
+merge_changes([{ComponentId, NewElementChanges} | RestNew], ExistingChanges) ->
+    % Find if this component already has changes
+    case lists:keyfind(ComponentId, 1, ExistingChanges) of
+        false ->
+            % Component not found, add it
+            UpdatedExisting = [{ComponentId, NewElementChanges} | ExistingChanges],
+            merge_changes(RestNew, UpdatedExisting);
+        {ComponentId, ExistingElementChanges} ->
+            % Component found, merge element changes
+            MergedElementChanges = merge_element_changes(NewElementChanges, ExistingElementChanges),
+            UpdatedExisting = lists:keyreplace(
+                ComponentId,
+                1,
+                ExistingChanges,
+                {ComponentId, MergedElementChanges}
+            ),
+            merge_changes(RestNew, UpdatedExisting)
+    end;
+merge_changes(NewChanges, ExistingChanges) when not is_list(NewChanges) ->
+    % Handle case where NewChanges is not a list (shouldn't happen but be defensive)
+    [NewChanges | ExistingChanges].
+
+%% Merge element changes within the same component
+-spec merge_element_changes(list(), list()) -> list().
+merge_element_changes([], ExistingElements) ->
+    ExistingElements;
+merge_element_changes([{ElementIndex, NewChange} | RestNew], ExistingElements) ->
+    case lists:keyfind(ElementIndex, 1, ExistingElements) of
+        false ->
+            % Element not found, add it
+            UpdatedExisting = [{ElementIndex, NewChange} | ExistingElements],
+            merge_element_changes(RestNew, UpdatedExisting);
+        {ElementIndex, ExistingChange} ->
+            % Element found, merge the changes (for nested structures)
+            MergedChange = merge_nested_changes(NewChange, ExistingChange),
+            UpdatedExisting = lists:keyreplace(
+                ElementIndex,
+                1,
+                ExistingElements,
+                {ElementIndex, MergedChange}
+            ),
+            merge_element_changes(RestNew, UpdatedExisting)
+    end.
+
+%% Merge nested changes (recursive for deep nesting)
+-spec merge_nested_changes(term(), term()) -> term().
+merge_nested_changes(NewChange, ExistingChange) when is_list(NewChange), is_list(ExistingChange) ->
+    % Both are lists (nested component changes), merge recursively
+    merge_changes(NewChange, ExistingChange);
+merge_nested_changes(NewChange, _ExistingChange) ->
+    % New change takes precedence (overwrite)
+    NewChange.
