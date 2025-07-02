@@ -150,10 +150,6 @@ put_bindings(Bindings, #stateful{} = Stateful) when is_map(Bindings) ->
     Stateful :: stateful(),
     ShouldRemount :: boolean().
 should_remount(#stateful{} = Stateful) ->
-    case Stateful#stateful.fingerprint of
-        undefined ->
-            true;
-        OldFingerprint ->
-            NewFingerprint = generate_fingerprint(Stateful),
-            not arizona_fingerprint:match(OldFingerprint, NewFingerprint)
-    end.
+    OldFingerprint = Stateful#stateful.fingerprint,
+    NewFingerprint = generate_fingerprint(Stateful),
+    not arizona_fingerprint:match(OldFingerprint, NewFingerprint).

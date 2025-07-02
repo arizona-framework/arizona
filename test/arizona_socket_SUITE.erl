@@ -317,10 +317,10 @@ test_get_binding_not_found(_Config) ->
 test_is_socket_validation(_Config) ->
     %% Create a valid socket
     Socket = arizona_socket:new(#{}),
-    
+
     %% Test positive case (should be true for valid socket)
     ?assert(arizona_socket:is_socket(Socket)),
-    
+
     %% Test negative cases (should be false for non-sockets)
     ?assertNot(arizona_socket:is_socket(undefined)),
     ?assertNot(arizona_socket:is_socket(~"not_a_socket")).

@@ -32,7 +32,7 @@ including callback invocation, state management, and binding operations.
     test_put_binding_unchanged/1,
     test_put_binding_changed/1,
     test_put_bindings_multiple/1,
-    test_should_remount_undefined/1,
+    test_should_remount_changed_bindings/1,
     test_should_remount_matching/1,
     test_should_remount_different/1
 ]).
@@ -76,7 +76,7 @@ groups() ->
             test_put_bindings_multiple
         ]},
         {remount_tests, [parallel], [
-            test_should_remount_undefined,
+            test_should_remount_changed_bindings,
             test_should_remount_matching,
             test_should_remount_different
         ]}
@@ -249,13 +249,13 @@ test_put_bindings_multiple(_Config) ->
 %% Remount Tests
 %% --------------------------------------------------------------------
 
-test_should_remount_undefined(_Config) ->
+test_should_remount_changed_bindings(_Config) ->
     %% Create stateful and modify it to trigger fingerprint mismatch
     Stateful1 = arizona_stateful:new(root, test_mod, #{key => value}),
     %% Change binding to create different fingerprint
     Stateful2 = arizona_stateful:put_binding(key, different_value, Stateful1),
 
-    %% Should remount when fingerprints differ
+    %% Should remount when fingerprints differ due to changed bindings
     ?assertEqual(true, arizona_stateful:should_remount(Stateful2)).
 
 test_should_remount_matching(_Config) ->
