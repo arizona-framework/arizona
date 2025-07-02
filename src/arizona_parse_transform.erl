@@ -40,7 +40,7 @@ them with optimized versions that avoid runtime template parsing overhead.
 -export_type([template_content/0]).
 
 -doc ~"Compiler options passed to the parse transform.".
--type compile_options() :: [compile:option()].
+-type compile_options() :: [term()].
 -export_type([compile_options/0]).
 
 %% --------------------------------------------------------------------
@@ -286,7 +286,7 @@ format_variables_indexes(VariableIndexes) ->
     lists:join(", ", lists:reverse(VariablePairs)).
 
 %% Format a single variable index entry
--spec format_variable_entry(term(), [integer()]) -> string().
+-spec format_variable_entry(term(), [integer()]) -> binary().
 format_variable_entry(VariableName, IndexList) ->
     iolist_to_binary(io_lib:format("~p => ~p", [VariableName, IndexList])).
 

@@ -347,7 +347,8 @@ parse_list_tokens_with_dynamic(Config) when is_list(Config) ->
 
     %% Check that the function returns the expression text
     #{dynamic := #{elems := #{0 := {_Line, Fun}}}} = ListData,
-    ?assertEqual(~"item.name", Fun(test_item, test_socket)).
+    TestSocket = arizona_socket:new(#{}),
+    ?assertEqual(~"item.name", Fun(test_item, TestSocket)).
 
 parse_list_tokens_with_variables(Config) when is_list(Config) ->
     Tokens = [

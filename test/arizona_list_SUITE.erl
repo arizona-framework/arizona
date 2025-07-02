@@ -115,7 +115,7 @@ test_call_item_function_iolist_result(Config) when is_list(Config) ->
 
 test_call_element_function_basic(Config) when is_list(Config) ->
     Item = #{field => <<"value">>},
-    Socket = mock_socket,
+    Socket = arizona_socket:new(#{}),
 
     %% Function using item data
     Fun = fun(I, _S) -> maps:get(field, I) end,
@@ -125,7 +125,7 @@ test_call_element_function_basic(Config) when is_list(Config) ->
 
 test_call_element_function_with_socket(Config) when is_list(Config) ->
     Item = #{id => 42},
-    Socket = mock_socket,
+    Socket = arizona_socket:new(#{}),
 
     %% Function using both item and socket
     Fun = fun(I, S) ->
@@ -134,7 +134,7 @@ test_call_element_function_with_socket(Config) when is_list(Config) ->
     end,
 
     Result = arizona_list:call_element_function(Fun, Item, Socket),
-    ?assertEqual({item_processed, 42, mock_socket}, Result).
+    ?assertEqual({item_processed, 42, Socket}, Result).
 
 %% --------------------------------------------------------------------
 %% Error Handling Tests
@@ -161,7 +161,7 @@ test_call_item_function_error_propagation(Config) when is_list(Config) ->
 
 test_call_element_function_error_propagation(Config) when is_list(Config) ->
     Item = #{id => 1},
-    Socket = mock_socket,
+    Socket = arizona_socket:new(#{}),
 
     %% Function that throws binding error
     BindingFun = fun(_I, _S) -> throw({binding_not_found, test_key}) end,
@@ -180,7 +180,7 @@ test_call_element_function_error_propagation(Config) when is_list(Config) ->
 
 test_function_arity_validation(Config) when is_list(Config) ->
     Item = #{test => value},
-    Socket = mock_socket,
+    Socket = arizona_socket:new(#{}),
 
     %% Test correct arities work
     ItemFun1 = fun(I) -> I end,
@@ -188,7 +188,7 @@ test_function_arity_validation(Config) when is_list(Config) ->
 
     ?assertMatch(#{test := value}, arizona_list:call_item_function(ItemFun1, Item)),
     ?assertMatch(
-        {#{test := value}, mock_socket},
+        {#{test := value}, _Socket},
         arizona_list:call_element_function(ElementFun2, Item, Socket)
     ),
 
