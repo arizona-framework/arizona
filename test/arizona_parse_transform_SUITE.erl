@@ -59,7 +59,7 @@ groups() ->
 
 init_per_suite(Config) ->
     % Ensure arizona modules are available
-    application:ensure_all_started(arizona),
+    {ok, _Apps} = application:ensure_all_started(arizona),
     Config.
 
 end_per_suite(Config) when is_list(Config) ->
@@ -206,7 +206,7 @@ test_non_binary_template_error(Config) when is_list(Config) ->
 
     % The parse transform should raise badarg for non-binary templates
     try
-        arizona_parse_transform:parse_transform(Forms, []),
+        _TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
         ct:fail("Expected parse transform to raise badarg error")
     catch
         error:badarg ->
@@ -266,7 +266,7 @@ test_stateless_parse_error(Config) when is_list(Config) ->
 
     % The parse transform should handle scanner errors gracefully
     try
-        arizona_parse_transform:parse_transform(Forms, []),
+        _TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
         ct:comment("Stateless parsing error handled gracefully")
     catch
         error:template_parse_failed ->
@@ -286,7 +286,7 @@ test_stateful_parse_error(Config) when is_list(Config) ->
 
     % The parse transform should handle errors gracefully
     try
-        arizona_parse_transform:parse_transform(Forms, []),
+        _TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
         ct:comment("Stateful parsing error handled gracefully")
     catch
         error:template_parse_failed ->

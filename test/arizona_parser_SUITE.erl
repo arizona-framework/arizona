@@ -146,8 +146,8 @@ parse_stateful_vars_indexes(Config) when is_list(Config) ->
     ?assertMatch(
         #{
             vars_indexes := #{
-                ~"name" := [1],
-                ~"count" := [3]
+                name := [1],
+                count := [3]
             }
         },
         TemplateData
@@ -169,7 +169,7 @@ parse_stateful_tokens_directly(Config) when is_list(Config) ->
                 1 := {dynamic, 1, ~"arizona_socket:get_binding(title, Socket)"},
                 2 := {static, 1, ~"</h1>"}
             },
-            vars_indexes := #{~"title" := [1]}
+            vars_indexes := #{title := [1]}
         },
         TemplateData
     ).
@@ -191,7 +191,7 @@ parse_stateful_quoted_variables(Config) when is_list(Config) ->
                 1 := {dynamic, 1, _},
                 2 := {static, 1, _}
             },
-            vars_indexes := #{~"user-name" := [1]}
+            vars_indexes := #{'user-name' := [1]}
         },
         TemplateData
     ).
@@ -217,8 +217,8 @@ parse_stateful_multiple_variables(Config) when is_list(Config) ->
                 2 := {static, 1, _}
             },
             vars_indexes := #{
-                ~"first" := [1],
-                ~"last" := [1]
+                first := [1],
+                last := [1]
             }
         },
         TemplateData
@@ -265,7 +265,7 @@ parse_stateful_with_comments(Config) when is_list(Config) ->
                 1 := {dynamic, 1, ~"arizona_socket:get_binding(name, Socket)"},
                 2 := {static, 1, ~"</div>"}
             },
-            vars_indexes := #{~"name" := [1]}
+            vars_indexes := #{name := [1]}
         },
         TemplateData
     ).
@@ -300,8 +300,8 @@ parse_stateful_complex_regex_match(Config) when is_list(Config) ->
                 2 := {static, 1, ~"</span>"}
             },
             vars_indexes := #{
-                ~"first-var" := [1],
-                ~"second" := [1]
+                'first-var' := [1],
+                second := [1]
             }
         },
         TemplateData
@@ -364,7 +364,7 @@ parse_list_tokens_with_variables(Config) when is_list(Config) ->
             dynamic := #{
                 elems_order := [0],
                 elems := #{0 := {1, _Fun}},
-                vars_indexes := #{~"prefix" := [0]}
+                vars_indexes := #{prefix := [0]}
             }
         },
         ListData
@@ -426,7 +426,7 @@ parse_list_tokens_mixed_complex(Config) when is_list(Config) ->
                     0 := {2, _Fun1},
                     1 := {2, _Fun2}
                 },
-                vars_indexes := #{~"class_prefix" := [0]}
+                vars_indexes := #{class_prefix := [0]}
             }
         },
         ListData

@@ -5,9 +5,22 @@
 -export([render_list/4]).
 -export([format_error/2]).
 
+%% Types
+-type element() ::
+    {static, pos_integer(), binary()}
+    | {dynamic, pos_integer(), binary() | fun((arizona_socket:socket()) -> term())}.
+
+-type template_data() :: #{
+    elems_order := [non_neg_integer()],
+    elems := #{non_neg_integer() => element()},
+    vars_indexes => #{binary() => [non_neg_integer()]}
+}.
+
+-export_type([element/0, template_data/0]).
+
 %% Render structured template data (from parse transform or parser)
 -spec render_stateful(TemplateData, Socket) -> {Html, Socket1} when
-    TemplateData :: arizona_parser:stateful_result(),
+    TemplateData :: template_data() | arizona_parser:stateful_result(),
     Socket :: arizona_socket:socket(),
     Html :: arizona_html:html(),
     Socket1 :: arizona_socket:socket().

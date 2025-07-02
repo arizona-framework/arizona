@@ -9,6 +9,10 @@ including callback invocation, state management, and binding operations.
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
+%% Suppress dialyzer warnings for validation tests that intentionally
+%% pass invalid arguments to test error handling
+-dialyzer({nowarn_function, [test_stateful_creation_validation/1]}).
+
 %% --------------------------------------------------------------------
 %% Test suite exports
 %% --------------------------------------------------------------------

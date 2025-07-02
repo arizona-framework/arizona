@@ -181,20 +181,25 @@ expr_vars(Expr) ->
         )
     of
         {match, Vars0} ->
-            Vars = lists:flatten([pick_quoted_var(List) || List <- Vars0]),
+            Vars = lists:flatten([extract_var_atom(List) || List <- Vars0]),
             lists:usort(Vars);
         nomatch ->
             []
     end.
 
-%% Handle quoted and unquoted variable names
-pick_quoted_var([<<$', _/binary>> = Var | _T]) ->
+%% Extract variable name as binary, handling quoted and unquoted forms
+extract_var_binary([<<$', _/binary>> = Var | _T]) ->
     %% Remove quotes from quoted variable
     Size = byte_size(Var) - 2,
     <<$', UnquotedVar:Size/binary, $'>> = Var,
     UnquotedVar;
-pick_quoted_var([Var]) ->
+extract_var_binary([Var]) ->
     Var.
+
+%% Extract variable name as atom for vars_indexes
+extract_var_atom(VarList) ->
+    VarBinary = extract_var_binary(VarList),
+    binary_to_atom(VarBinary, utf8).
 
 %% Process tokens for list template structure (similar to stateful but different output)
 process_tokens_for_list(Tokens) ->

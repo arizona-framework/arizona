@@ -54,7 +54,8 @@ groups() ->
 test_render_stateful_basic(Config) when is_list(Config) ->
     TemplateData = #{
         elems_order => [0],
-        elems => #{0 => {static, 1, ~"<div>Hello</div>"}}
+        elems => #{0 => {static, 1, ~"<div>Hello</div>"}},
+        vars_indexes => #{}
     },
     Socket = create_mock_socket(),
 
@@ -70,7 +71,8 @@ test_render_stateful_with_dynamic(Config) when is_list(Config) ->
             0 => {static, 1, ~"<div>Hello "},
             1 => {dynamic, 1, fun(_Socket) -> ~"World" end},
             2 => {static, 1, ~"</div>"}
-        }
+        },
+        vars_indexes => #{}
     },
     Socket = create_mock_socket(),
 
@@ -83,7 +85,8 @@ test_render_stateful_with_dynamic(Config) when is_list(Config) ->
 test_render_stateful_empty_elements(Config) when is_list(Config) ->
     TemplateData = #{
         elems_order => [],
-        elems => #{}
+        elems => #{},
+        vars_indexes => #{}
     },
     Socket = create_mock_socket(),
 
@@ -95,7 +98,8 @@ test_render_stateful_empty_elements(Config) when is_list(Config) ->
 test_render_stateful_single_element(Config) when is_list(Config) ->
     TemplateData = #{
         elems_order => [0],
-        elems => #{0 => {static, 1, ~"Single"}}
+        elems => #{0 => {static, 1, ~"Single"}},
+        vars_indexes => #{}
     },
     Socket = create_mock_socket(),
 
@@ -112,7 +116,8 @@ test_render_stateful_multiple_elements(Config) when is_list(Config) ->
             1 => {static, 1, ~"Text"},
             2 => {static, 1, ~" content"},
             3 => {static, 1, ~"</p>"}
-        }
+        },
+        vars_indexes => #{}
     },
     Socket = create_mock_socket(),
 
@@ -267,10 +272,10 @@ test_render_list_with_variables(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 
 test_render_element_binding_error(Config) when is_list(Config) ->
-    Fun = fun(_Socket) -> throw({binding_not_found, test_key}) end,
     TemplateData = #{
         elems_order => [0],
-        elems => #{0 => {dynamic, 42, Fun}}
+        elems => #{0 => {dynamic, 42, fun(_Socket) -> throw({binding_not_found, test_key}) end}},
+        vars_indexes => #{}
     },
     Socket = create_mock_socket(),
 
@@ -280,10 +285,10 @@ test_render_element_binding_error(Config) when is_list(Config) ->
     ).
 
 test_render_element_template_error(Config) when is_list(Config) ->
-    Fun = fun(_Socket) -> error(test_error) end,
     TemplateData = #{
         elems_order => [0],
-        elems => #{0 => {dynamic, 42, Fun}}
+        elems => #{0 => {dynamic, 42, fun(_Socket) -> error(test_error) end}},
+        vars_indexes => #{}
     },
     Socket = create_mock_socket(),
 

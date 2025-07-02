@@ -9,6 +9,10 @@ including state management, HTML accumulation, and binding handling.
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
+%% Suppress dialyzer warnings for validation tests that intentionally
+%% pass invalid arguments to test error handling
+-dialyzer({nowarn_function, [test_set_current_stateful_id_validation/1]}).
+
 %% --------------------------------------------------------------------
 %% Test suite exports
 %% --------------------------------------------------------------------
@@ -97,7 +101,7 @@ test_socket_creation(Config) when is_list(Config) ->
     Opts = #{mode => render, current_stateful_id => root},
     Socket = arizona_socket:new(Opts),
 
-    ?assert(is_tuple(Socket)),
+    ?assert(arizona_socket:is_socket(Socket)),
     ?assertEqual(render, arizona_socket:get_mode(Socket)),
     ?assertEqual(root, arizona_socket:get_current_stateful_id(Socket)).
 

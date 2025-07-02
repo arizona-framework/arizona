@@ -9,6 +9,9 @@ including item function calls and element function calls.
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
+%% Suppress dialyzer warnings for validation tests that test function arities
+-dialyzer({nowarn_function, [test_function_arity_validation/1]}).
+
 %% --------------------------------------------------------------------
 %% Test suite exports
 %% --------------------------------------------------------------------
