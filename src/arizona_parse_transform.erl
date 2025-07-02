@@ -6,8 +6,10 @@ This module provides compile-time transformation of Arizona template syntax
 into optimized structured formats for high-performance rendering.
 
 Transformations:
-- `arizona_html:render_stateless(~"template", Socket)` → `arizona_html:render_stateless([...], Socket)`
-- `arizona_html:render_stateful(~"template", Socket)` → `arizona_html:render_stateful(#{...}, Socket)`
+- `arizona_html:render_stateless(~"template", Socket)` →
+  `arizona_html:render_stateless([...], Socket)`
+- `arizona_html:render_stateful(~"template", Socket)` →
+  `arizona_html:render_stateful(#{...}, Socket)`
 - Template expressions use `arizona_socket:get_binding/2` for variable access
 
 Limitations:

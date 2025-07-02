@@ -75,7 +75,7 @@ test_stateless_transform(_Config) ->
     Forms = merl:quote(~""""
     -module(test_stateless_module).
     -export([test_render/1]).
-    test_render(Socket) -> 
+    test_render(Socket) ->
         arizona_html:render_stateless(~"""
         Hello {arizona_socket:get_binding(name, Socket)}!
         """, Socket).
@@ -110,7 +110,8 @@ test_stateful_transform(_Config) ->
     Forms = merl:quote(~"""
     -module(test_stateful_module).
     -export([test_render/1]).
-    test_render(Socket) -> arizona_html:render_stateful(~"Hello {arizona_socket:get_binding(name, Socket)}!", Socket).
+    test_render(Socket) ->
+        arizona_html:render_stateful(~"Hello {arizona_socket:get_binding(name, Socket)}!", Socket).
     """),
 
     % Apply parse transform

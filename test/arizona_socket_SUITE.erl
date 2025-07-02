@@ -308,7 +308,9 @@ test_get_binding_not_found(_Config) ->
     Socket = arizona_socket:new(#{current_stateful_id => root}),
 
     %% Create stateful state without the binding we're looking for
-    StatefulState = create_mock_stateful_state_with_binding(root, test_mod, #{other => <<"value">>}),
+    StatefulState = create_mock_stateful_state_with_binding(
+        root, test_mod, #{other => <<"value">>}
+    ),
     Socket2 = arizona_socket:put_stateful_state(root, StatefulState, Socket),
 
     %% Should throw when binding not found anywhere
