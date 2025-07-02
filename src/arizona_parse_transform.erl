@@ -412,15 +412,10 @@ create_element_ast({dynamic, Line, ExprBinary}) ->
     %% ExprBinary is the original expression like "arizona_socket:get_binding(name, Socket)"
     FunctionBinary = create_socket_threaded_function(ExprBinary),
 
-    %% Parse the function binary to create proper function AST
-    {ok, Tokens, _} = erl_scan:string(binary_to_list(FunctionBinary)),
-    {ok, FunAST} = erl_parse:parse_exprs(Tokens),
-    [FunExpr] = FunAST,
-
     erl_syntax:tuple([
         erl_syntax:atom(dynamic),
         erl_syntax:integer(Line),
-        erl_syntax:revert(FunExpr)
+        merl:quote(FunctionBinary)
     ]).
 
 %% Create AST for vars_indexes map
@@ -441,7 +436,7 @@ create_socket_threaded_function(ExpressionText) ->
     SafeExpression = re:replace(ExpressionText, <<"\\bSocket\\b">>, <<"_@Socket">>, [
         global, {return, binary}
     ]),
-    iolist_to_binary([<<"fun(_@Socket) -> ">>, SafeExpression, <<" end">>]).
+    <<"fun(_@Socket) -> ", SafeExpression/binary, " end">>.
 
 %% Format static element as binary string
 -spec format_static_element(pos_integer(), binary()) -> binary().
