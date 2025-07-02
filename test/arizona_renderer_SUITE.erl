@@ -51,7 +51,7 @@ groups() ->
 %% Render stateful tests
 %% --------------------------------------------------------------------
 
-test_render_stateful_basic(_Config) ->
+test_render_stateful_basic(Config) when is_list(Config) ->
     TemplateData = #{
         elems_order => [0],
         elems => #{0 => {static, 1, ~"<div>Hello</div>"}}
@@ -63,7 +63,7 @@ test_render_stateful_basic(_Config) ->
     ?assertEqual([~"<div>Hello</div>"], Html),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
 
-test_render_stateful_with_dynamic(_Config) ->
+test_render_stateful_with_dynamic(Config) when is_list(Config) ->
     TemplateData = #{
         elems_order => [0, 1, 2],
         elems => #{
@@ -80,7 +80,7 @@ test_render_stateful_with_dynamic(_Config) ->
     ?assertEqual(Expected, Html),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
 
-test_render_stateful_empty_elements(_Config) ->
+test_render_stateful_empty_elements(Config) when is_list(Config) ->
     TemplateData = #{
         elems_order => [],
         elems => #{}
@@ -92,7 +92,7 @@ test_render_stateful_empty_elements(_Config) ->
     ?assertEqual([], Html),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
 
-test_render_stateful_single_element(_Config) ->
+test_render_stateful_single_element(Config) when is_list(Config) ->
     TemplateData = #{
         elems_order => [0],
         elems => #{0 => {static, 1, ~"Single"}}
@@ -104,7 +104,7 @@ test_render_stateful_single_element(_Config) ->
     ?assertEqual([~"Single"], Html),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
 
-test_render_stateful_multiple_elements(_Config) ->
+test_render_stateful_multiple_elements(Config) when is_list(Config) ->
     TemplateData = #{
         elems_order => [0, 1, 2, 3],
         elems => #{
@@ -126,7 +126,7 @@ test_render_stateful_multiple_elements(_Config) ->
 %% Render stateless tests
 %% --------------------------------------------------------------------
 
-test_render_stateless_basic(_Config) ->
+test_render_stateless_basic(Config) when is_list(Config) ->
     StructuredList = [
         {static, 1, ~"<div>"},
         {dynamic, 1, ~"content"},
@@ -140,7 +140,7 @@ test_render_stateless_basic(_Config) ->
     ?assertEqual(Expected, Html),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
 
-test_render_stateless_empty_list(_Config) ->
+test_render_stateless_empty_list(Config) when is_list(Config) ->
     StructuredList = [],
     Socket = create_mock_socket(),
 
@@ -149,7 +149,7 @@ test_render_stateless_empty_list(_Config) ->
     ?assertEqual([], Html),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
 
-test_render_stateless_mixed_content(_Config) ->
+test_render_stateless_mixed_content(Config) when is_list(Config) ->
     StructuredList = [
         {static, 1, ~"<h1>Title</h1>"},
         {dynamic, 2, ~"variable_content"},
@@ -167,7 +167,7 @@ test_render_stateless_mixed_content(_Config) ->
 %% Render list tests
 %% --------------------------------------------------------------------
 
-test_render_list_basic(_Config) ->
+test_render_list_basic(Config) when is_list(Config) ->
     ListData = #{
         static => [~"<li>", ~"", ~"</li>"],
         dynamic => #{
@@ -186,7 +186,7 @@ test_render_list_basic(_Config) ->
     ?assertEqual(Expected, iolist_to_binary(Html)),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
 
-test_render_list_empty_items(_Config) ->
+test_render_list_empty_items(Config) when is_list(Config) ->
     ListData = #{
         static => [~"<li>", ~"", ~"</li>"],
         dynamic => #{
@@ -205,7 +205,7 @@ test_render_list_empty_items(_Config) ->
     ?assertEqual(Expected, iolist_to_binary(Html)),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
 
-test_render_list_single_item(_Config) ->
+test_render_list_single_item(Config) when is_list(Config) ->
     ListData = #{
         static => [~"<div>", ~"", ~"</div>"],
         dynamic => #{
@@ -224,7 +224,7 @@ test_render_list_single_item(_Config) ->
     ?assertEqual(Expected, iolist_to_binary(Html)),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
 
-test_render_list_multiple_items(_Config) ->
+test_render_list_multiple_items(Config) when is_list(Config) ->
     ListData = #{
         static => [~"<span>", ~"", ~"</span>"],
         dynamic => #{
@@ -243,7 +243,7 @@ test_render_list_multiple_items(_Config) ->
     ?assertEqual(Expected, iolist_to_binary(Html)),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
 
-test_render_list_with_variables(_Config) ->
+test_render_list_with_variables(Config) when is_list(Config) ->
     ListData = #{
         static => [~"<p>", ~"", ~"</p>"],
         dynamic => #{
@@ -266,7 +266,7 @@ test_render_list_with_variables(_Config) ->
 %% Error handling tests
 %% --------------------------------------------------------------------
 
-test_render_element_binding_error(_Config) ->
+test_render_element_binding_error(Config) when is_list(Config) ->
     Fun = fun(_Socket) -> throw({binding_not_found, test_key}) end,
     TemplateData = #{
         elems_order => [0],
@@ -279,7 +279,7 @@ test_render_element_binding_error(_Config) ->
         arizona_renderer:render_stateful(TemplateData, Socket)
     ).
 
-test_render_element_template_error(_Config) ->
+test_render_element_template_error(Config) when is_list(Config) ->
     Fun = fun(_Socket) -> error(test_error) end,
     TemplateData = #{
         elems_order => [0],
@@ -292,7 +292,7 @@ test_render_element_template_error(_Config) ->
         arizona_renderer:render_stateful(TemplateData, Socket)
     ).
 
-test_render_list_item_error(_Config) ->
+test_render_list_item_error(Config) when is_list(Config) ->
     ListData = #{
         static => [~"<div>", ~"", ~"</div>"],
         dynamic => #{
@@ -310,7 +310,7 @@ test_render_list_item_error(_Config) ->
         arizona_renderer:render_list(ListData, Items, KeyFun, Socket)
     ).
 
-test_format_error_with_info(_Config) ->
+test_format_error_with_info(Config) when is_list(Config) ->
     Reason = {binding_not_found, test_key},
     StackTrace = [
         {arizona_renderer, render_element, [element, socket], [
@@ -334,7 +334,7 @@ test_format_error_with_info(_Config) ->
         ErrorMap
     ).
 
-test_format_error_without_info(_Config) ->
+test_format_error_without_info(Config) when is_list(Config) ->
     Reason = some_error,
     StackTrace = [],
 
@@ -348,7 +348,7 @@ test_format_error_without_info(_Config) ->
         ErrorMap
     ).
 
-test_render_list_item_general_error(_Config) ->
+test_render_list_item_general_error(Config) when is_list(Config) ->
     ListData = #{
         static => [~"<div>", ~"", ~"</div>"],
         dynamic => #{
@@ -366,7 +366,7 @@ test_render_list_item_general_error(_Config) ->
         arizona_renderer:render_list(ListData, Items, KeyFun, Socket)
     ).
 
-test_zip_dynamic_longer_than_static(_Config) ->
+test_zip_dynamic_longer_than_static(Config) when is_list(Config) ->
     % Testing zip_static_dynamic internal function indirectly through render_list
     ListData = #{
         % Only one static part

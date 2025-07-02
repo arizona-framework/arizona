@@ -32,7 +32,7 @@ groups() ->
 %% call_stateful tests
 %% --------------------------------------------------------------------
 
-test_call_stateful_new_component(_Config) ->
+test_call_stateful_new_component(Config) when is_list(Config) ->
     %% Test creating a new stateful component when none exists
     Socket = create_mock_socket(),
     Bindings = #{initial_value => ~"test"},
@@ -47,7 +47,7 @@ test_call_stateful_new_component(_Config) ->
     Id = arizona_socket:get_current_stateful_id(UpdatedSocket),
     ?assertMatch({ok, _State}, arizona_socket:find_stateful_state(Id, UpdatedSocket)).
 
-test_call_stateful_existing_no_remount(_Config) ->
+test_call_stateful_existing_no_remount(Config) when is_list(Config) ->
     %% Test existing component that doesn't need remounting
     Socket = create_mock_socket(),
     Module = test_stateful_module_with_mount,
@@ -70,7 +70,7 @@ test_call_stateful_existing_no_remount(_Config) ->
     %% Should still have the stateful state
     ?assertMatch({ok, _State}, arizona_socket:find_stateful_state(Id, UpdatedSocket)).
 
-test_call_stateful_existing_with_remount(_Config) ->
+test_call_stateful_existing_with_remount(Config) when is_list(Config) ->
     %% Test existing component that needs remounting
     Socket = create_mock_socket(),
     Module = test_stateful_module_with_unmount,
@@ -96,7 +96,7 @@ test_call_stateful_existing_with_remount(_Config) ->
     HtmlBinary = iolist_to_binary(Html),
     ?assert(binary:match(HtmlBinary, ~"Component with Unmount") =/= nomatch).
 
-test_call_stateful_component_not_found(_Config) ->
+test_call_stateful_component_not_found(Config) when is_list(Config) ->
     %% Test when no existing component state is found (error case)
     Socket = create_mock_socket_without_id(),
     Bindings = #{value => ~"test"},
@@ -112,7 +112,7 @@ test_call_stateful_component_not_found(_Config) ->
 %% call_stateless tests
 %% --------------------------------------------------------------------
 
-test_call_stateless_basic(_Config) ->
+test_call_stateless_basic(Config) when is_list(Config) ->
     %% Test basic stateless component call
     Socket = create_mock_socket(),
     Module = test_stateless_module,
@@ -129,7 +129,7 @@ test_call_stateless_basic(_Config) ->
     HtmlBinary = iolist_to_binary(Html),
     ?assert(binary:match(HtmlBinary, ~"Basic Stateless") =/= nomatch).
 
-test_call_stateless_with_bindings(_Config) ->
+test_call_stateless_with_bindings(Config) when is_list(Config) ->
     %% Test stateless component with bindings
     Socket = create_mock_socket(),
     Module = test_stateless_module,
@@ -147,7 +147,7 @@ test_call_stateless_with_bindings(_Config) ->
     ?assert(binary:match(HtmlBinary, ~"Test Title") =/= nomatch),
     ?assert(binary:match(HtmlBinary, ~"Test Content") =/= nomatch).
 
-test_call_stateless_render_function(_Config) ->
+test_call_stateless_render_function(Config) when is_list(Config) ->
     %% Test that stateless component properly calls the render function
     Socket = create_mock_socket(),
     Module = test_stateless_module,

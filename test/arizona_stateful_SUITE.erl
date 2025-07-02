@@ -86,7 +86,7 @@ groups() ->
 %% Callback Tests
 %% --------------------------------------------------------------------
 
-test_call_mount_callback(_Config) ->
+test_call_mount_callback(Config) when is_list(Config) ->
     Module = test_stateful_module_with_mount,
     Socket = create_mock_socket(),
 
@@ -94,7 +94,7 @@ test_call_mount_callback(_Config) ->
     UpdatedSocket = arizona_stateful:call_mount_callback(Module, Socket),
     ?assertNotEqual(Socket, UpdatedSocket).
 
-test_call_unmount_callback_with_export(_Config) ->
+test_call_unmount_callback_with_export(Config) when is_list(Config) ->
     Module = test_stateful_module_with_unmount,
     Socket = create_mock_socket(),
 
@@ -103,7 +103,7 @@ test_call_unmount_callback_with_export(_Config) ->
     %% Check that unmount was called by verifying socket is modified
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
 
-test_call_unmount_callback_without_export(_Config) ->
+test_call_unmount_callback_without_export(Config) when is_list(Config) ->
     % This module doesn't export unmount/1
     Module = test_stateful_module_with_mount,
     Socket = create_mock_socket(),
@@ -112,7 +112,7 @@ test_call_unmount_callback_without_export(_Config) ->
     Result = arizona_stateful:call_unmount_callback(Module, Socket),
     ?assertEqual(Socket, Result).
 
-test_call_render_callback(_Config) ->
+test_call_render_callback(Config) when is_list(Config) ->
     Module = test_stateful_module_with_mount,
     %% Need to mount first to initialize status binding
     Socket = create_mock_socket(),
@@ -122,7 +122,7 @@ test_call_render_callback(_Config) ->
     Result = arizona_stateful:call_render_callback(Module, MountedSocket),
     ?assert(arizona_socket:is_socket(Result)).
 
-test_call_dynamic_function(_Config) ->
+test_call_dynamic_function(Config) when is_list(Config) ->
     Socket = create_mock_socket(),
     Fun = fun(S) -> {dynamic_result, S} end,
 
@@ -134,7 +134,7 @@ test_call_dynamic_function(_Config) ->
 %% Stateful Creation Tests
 %% --------------------------------------------------------------------
 
-test_stateful_creation_root(_Config) ->
+test_stateful_creation_root(Config) when is_list(Config) ->
     Id = root,
     Module = test_module,
     Bindings = #{name => <<"Test">>, count => 5},
@@ -145,7 +145,7 @@ test_stateful_creation_root(_Config) ->
     ?assertEqual(<<"Test">>, arizona_stateful:get_binding(name, Stateful)),
     ?assertEqual(5, arizona_stateful:get_binding(count, Stateful)).
 
-test_stateful_creation_binary_id(_Config) ->
+test_stateful_creation_binary_id(Config) when is_list(Config) ->
     Id = <<"component_123">>,
     Module = test_module,
     Bindings = #{active => true},
@@ -155,7 +155,7 @@ test_stateful_creation_binary_id(_Config) ->
     ?assertEqual(Module, arizona_stateful:get_module(Stateful)),
     ?assertEqual(true, arizona_stateful:get_binding(active, Stateful)).
 
-test_stateful_creation_validation(_Config) ->
+test_stateful_creation_validation(Config) when is_list(Config) ->
     ValidBindings = #{test => value},
 
     %% Test invalid ID types should fail
@@ -174,7 +174,7 @@ test_stateful_creation_validation(_Config) ->
 %% State Access Tests
 %% --------------------------------------------------------------------
 
-test_get_module(_Config) ->
+test_get_module(Config) when is_list(Config) ->
     Module = my_test_module,
     Stateful = arizona_stateful:new(root, Module, #{}),
 
@@ -185,7 +185,7 @@ test_get_module(_Config) ->
 %% Binding Tests
 %% --------------------------------------------------------------------
 
-test_get_binding_existing(_Config) ->
+test_get_binding_existing(Config) when is_list(Config) ->
     Bindings = #{user => <<"Alice">>, role => admin, count => 42},
     Stateful = arizona_stateful:new(root, test_mod, Bindings),
 
@@ -194,7 +194,7 @@ test_get_binding_existing(_Config) ->
     ?assertEqual(admin, arizona_stateful:get_binding(role, Stateful)),
     ?assertEqual(42, arizona_stateful:get_binding(count, Stateful)).
 
-test_get_binding_not_found(_Config) ->
+test_get_binding_not_found(Config) when is_list(Config) ->
     Bindings = #{existing => value},
     Stateful = arizona_stateful:new(root, test_mod, Bindings),
 
@@ -203,14 +203,14 @@ test_get_binding_not_found(_Config) ->
         {binding_not_found, missing_key}, arizona_stateful:get_binding(missing_key, Stateful)
     ).
 
-test_put_binding_new(_Config) ->
+test_put_binding_new(Config) when is_list(Config) ->
     Stateful = arizona_stateful:new(root, test_mod, #{}),
 
     %% Add new binding
     UpdatedStateful = arizona_stateful:put_binding(new_key, new_value, Stateful),
     ?assertEqual(new_value, arizona_stateful:get_binding(new_key, UpdatedStateful)).
 
-test_put_binding_unchanged(_Config) ->
+test_put_binding_unchanged(Config) when is_list(Config) ->
     Bindings = #{key => existing_value},
     Stateful = arizona_stateful:new(root, test_mod, Bindings),
 
@@ -218,7 +218,7 @@ test_put_binding_unchanged(_Config) ->
     UpdatedStateful = arizona_stateful:put_binding(key, existing_value, Stateful),
     ?assertEqual(existing_value, arizona_stateful:get_binding(key, UpdatedStateful)).
 
-test_put_binding_changed(_Config) ->
+test_put_binding_changed(Config) when is_list(Config) ->
     Bindings = #{key => old_value},
     Stateful = arizona_stateful:new(root, test_mod, Bindings),
 
@@ -226,7 +226,7 @@ test_put_binding_changed(_Config) ->
     UpdatedStateful = arizona_stateful:put_binding(key, new_value, Stateful),
     ?assertEqual(new_value, arizona_stateful:get_binding(key, UpdatedStateful)).
 
-test_put_bindings_multiple(_Config) ->
+test_put_bindings_multiple(Config) when is_list(Config) ->
     InitialBindings = #{existing => value},
     Stateful = arizona_stateful:new(root, test_mod, InitialBindings),
 
@@ -249,7 +249,7 @@ test_put_bindings_multiple(_Config) ->
 %% Remount Tests
 %% --------------------------------------------------------------------
 
-test_should_remount_changed_bindings(_Config) ->
+test_should_remount_changed_bindings(Config) when is_list(Config) ->
     %% Create stateful and modify it to trigger fingerprint mismatch
     Stateful1 = arizona_stateful:new(root, test_mod, #{key => value}),
     %% Change binding to create different fingerprint
@@ -258,7 +258,7 @@ test_should_remount_changed_bindings(_Config) ->
     %% Should remount when fingerprints differ due to changed bindings
     ?assertEqual(true, arizona_stateful:should_remount(Stateful2)).
 
-test_should_remount_matching(_Config) ->
+test_should_remount_matching(Config) when is_list(Config) ->
     %% Create stateful with initial bindings
     Bindings = #{name => <<"Test">>, count => 1},
     Stateful1 = arizona_stateful:new(root, test_mod, Bindings),
@@ -274,7 +274,7 @@ test_should_remount_matching(_Config) ->
             arizona_stateful:should_remount(Stateful2)
     ).
 
-test_should_remount_different(_Config) ->
+test_should_remount_different(Config) when is_list(Config) ->
     %% Create stateful with initial bindings
     Stateful1 = arizona_stateful:new(root, test_mod, #{count => 1}),
 

@@ -62,7 +62,7 @@ init_per_suite(Config) ->
     application:ensure_all_started(arizona),
     Config.
 
-end_per_suite(_Config) ->
+end_per_suite(Config) when is_list(Config) ->
     ok.
 
 %% --------------------------------------------------------------------
@@ -70,7 +70,7 @@ end_per_suite(_Config) ->
 %% --------------------------------------------------------------------
 
 %% Test stateless template transformation
-test_stateless_transform(_Config) ->
+test_stateless_transform(Config) when is_list(Config) ->
     % Create a simple AST with a stateless render call using merl:quote
     Forms = merl:quote(~""""
     -module(test_stateless_module).
@@ -104,7 +104,7 @@ test_stateless_transform(_Config) ->
     ct:comment("Stateless template successfully transformed to iolist format").
 
 %% Test stateful template transformation
-test_stateful_transform(_Config) ->
+test_stateful_transform(Config) when is_list(Config) ->
     % For stateful, we'll just test that the transform doesn't crash
     % since the actual transformation is complex
     Forms = merl:quote(~"""
@@ -126,7 +126,7 @@ test_stateful_transform(_Config) ->
     ct:comment("Stateful template transformation handled without crashing").
 
 %% Test that non-arizona function calls are passed through unchanged
-test_non_arizona_call_passthrough(_Config) ->
+test_non_arizona_call_passthrough(Config) when is_list(Config) ->
     % Create a simple AST with non-arizona function call
     Forms = merl:quote(~"""
     -module(test_other_module).
@@ -157,7 +157,7 @@ test_non_arizona_call_passthrough(_Config) ->
     ct:comment("Non-arizona function calls correctly passed through unchanged").
 
 %% Test nested function calls are handled properly
-test_nested_function_calls(_Config) ->
+test_nested_function_calls(Config) when is_list(Config) ->
     % Create a simple AST with nested calls
     Forms = merl:quote(~""""
     -module(test_nested_module).
@@ -182,7 +182,7 @@ test_nested_function_calls(_Config) ->
     ct:comment("Nested function calls handled without crashing").
 
 %% Test invalid template error handling
-test_invalid_template_error(_Config) ->
+test_invalid_template_error(Config) when is_list(Config) ->
     % Test that format_error handles template_parse_failed
     ErrorMsg = arizona_parse_transform:format_error(template_parse_failed),
     ExpectedMsg = "Failed to parse Arizona template - invalid template syntax",
@@ -196,7 +196,7 @@ test_invalid_template_error(_Config) ->
     ct:comment("Error formatting works correctly").
 
 %% Test non-binary template error
-test_non_binary_template_error(_Config) ->
+test_non_binary_template_error(Config) when is_list(Config) ->
     % Create a form with a variable template (should raise badarg)
     Forms = merl:quote(~"""
     -module(test_badarg_module).
@@ -216,7 +216,7 @@ test_non_binary_template_error(_Config) ->
     end.
 
 %% Test format_error function
-test_format_error(_Config) ->
+test_format_error(Config) when is_list(Config) ->
     % Test known error
     Msg1 = arizona_parse_transform:format_error(template_parse_failed),
     ?assertEqual("Failed to parse Arizona template - invalid template syntax", Msg1),
@@ -228,7 +228,7 @@ test_format_error(_Config) ->
     ct:comment("format_error/1 handles both known and unknown errors correctly").
 
 %% Test stateful template transformation with variables
-test_stateful_transform_with_variables(_Config) ->
+test_stateful_transform_with_variables(Config) when is_list(Config) ->
     % Create a stateful render call with variables using merl:quote
     Forms = merl:quote(~""""
     -module(test_stateful_vars_module).
@@ -256,7 +256,7 @@ test_stateful_transform_with_variables(_Config) ->
     ct:comment("Stateful template with variables transformed correctly").
 
 %% Test stateless parsing error
-test_stateless_parse_error(_Config) ->
+test_stateless_parse_error(Config) when is_list(Config) ->
     % Mock arizona_scanner to return invalid tokens that will cause parsing to fail
     Forms = merl:quote(~"""
     -module(test_stateless_error_module).
@@ -276,7 +276,7 @@ test_stateless_parse_error(_Config) ->
     end.
 
 %% Test stateful parsing error
-test_stateful_parse_error(_Config) ->
+test_stateful_parse_error(Config) when is_list(Config) ->
     % Create a stateful template that will cause parsing to fail
     Forms = merl:quote(~"""
     -module(test_stateful_error_module).

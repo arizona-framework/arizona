@@ -92,7 +92,7 @@ groups() ->
 %% Socket Creation Tests
 %% --------------------------------------------------------------------
 
-test_socket_creation(_Config) ->
+test_socket_creation(Config) when is_list(Config) ->
     %% Test basic socket creation
     Opts = #{mode => render, current_stateful_id => root},
     Socket = arizona_socket:new(Opts),
@@ -101,7 +101,7 @@ test_socket_creation(_Config) ->
     ?assertEqual(render, arizona_socket:get_mode(Socket)),
     ?assertEqual(root, arizona_socket:get_current_stateful_id(Socket)).
 
-test_socket_creation_with_options(_Config) ->
+test_socket_creation_with_options(Config) when is_list(Config) ->
     %% Test socket creation with all options
     Opts = #{
         mode => diff,
@@ -113,7 +113,7 @@ test_socket_creation_with_options(_Config) ->
     ?assertEqual(diff, arizona_socket:get_mode(Socket)),
     ?assertEqual(<<"child_1">>, arizona_socket:get_current_stateful_id(Socket)).
 
-test_socket_creation_defaults(_Config) ->
+test_socket_creation_defaults(Config) when is_list(Config) ->
     %% Test socket creation with minimal options (defaults)
     Opts = #{},
     Socket = arizona_socket:new(Opts),
@@ -125,21 +125,21 @@ test_socket_creation_defaults(_Config) ->
 %% Socket Property Tests
 %% --------------------------------------------------------------------
 
-test_get_mode(_Config) ->
+test_get_mode(Config) when is_list(Config) ->
     RenderSocket = arizona_socket:new(#{mode => render}),
     DiffSocket = arizona_socket:new(#{mode => diff}),
 
     ?assertEqual(render, arizona_socket:get_mode(RenderSocket)),
     ?assertEqual(diff, arizona_socket:get_mode(DiffSocket)).
 
-test_get_current_stateful_id(_Config) ->
+test_get_current_stateful_id(Config) when is_list(Config) ->
     Socket1 = arizona_socket:new(#{current_stateful_id => root}),
     Socket2 = arizona_socket:new(#{current_stateful_id => <<"test_id">>}),
 
     ?assertEqual(root, arizona_socket:get_current_stateful_id(Socket1)),
     ?assertEqual(<<"test_id">>, arizona_socket:get_current_stateful_id(Socket2)).
 
-test_set_current_stateful_id(_Config) ->
+test_set_current_stateful_id(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{current_stateful_id => root}),
 
     %% Test setting root
@@ -150,7 +150,7 @@ test_set_current_stateful_id(_Config) ->
     Socket3 = arizona_socket:set_current_stateful_id(<<"new_id">>, Socket),
     ?assertEqual(<<"new_id">>, arizona_socket:get_current_stateful_id(Socket3)).
 
-test_set_current_stateful_id_validation(_Config) ->
+test_set_current_stateful_id_validation(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
 
     %% Test invalid id types should fail
@@ -161,7 +161,7 @@ test_set_current_stateful_id_validation(_Config) ->
 %% HTML Management Tests
 %% --------------------------------------------------------------------
 
-test_html_accumulation(_Config) ->
+test_html_accumulation(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
 
     %% Test setting HTML
@@ -174,7 +174,7 @@ test_html_accumulation(_Config) ->
     Socket3 = arizona_socket:set_html_acc(Html2, Socket2),
     ?assertEqual(Html2, arizona_socket:get_html(Socket3)).
 
-test_get_html_empty(_Config) ->
+test_get_html_empty(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
 
     %% New socket should have empty HTML
@@ -185,7 +185,7 @@ test_get_html_empty(_Config) ->
 %% Stateful State Tests
 %% --------------------------------------------------------------------
 
-test_stateful_state_management(_Config) ->
+test_stateful_state_management(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
 
     %% Create mock stateful state
@@ -198,7 +198,7 @@ test_stateful_state_management(_Config) ->
     RetrievedState = arizona_socket:get_stateful_state(<<"comp_1">>, Socket2),
     ?assertEqual(MockState, RetrievedState).
 
-test_get_stateful_states(_Config) ->
+test_get_stateful_states(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
 
     %% Initially empty
@@ -214,7 +214,7 @@ test_get_stateful_states(_Config) ->
     States = arizona_socket:get_stateful_states(Socket3),
     ?assertEqual(#{root => State1, <<"comp_1">> => State2}, States).
 
-test_find_stateful_state(_Config) ->
+test_find_stateful_state(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
     MockState = create_mock_stateful_state(<<"test">>, test_mod, #{}),
     Socket2 = arizona_socket:put_stateful_state(<<"test">>, MockState, Socket),
@@ -225,7 +225,7 @@ test_find_stateful_state(_Config) ->
     %% Test not found
     ?assertEqual(error, arizona_socket:find_stateful_state(<<"missing">>, Socket2)).
 
-test_get_current_stateful_state(_Config) ->
+test_get_current_stateful_state(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{current_stateful_id => <<"current">>}),
     MockState = create_mock_stateful_state(<<"current">>, test_mod, #{key => value}),
     Socket2 = arizona_socket:put_stateful_state(<<"current">>, MockState, Socket),
@@ -237,7 +237,7 @@ test_get_current_stateful_state(_Config) ->
 %% Binding Tests
 %% --------------------------------------------------------------------
 
-test_temp_bindings(_Config) ->
+test_temp_bindings(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
 
     %% Test with_temp_bindings
@@ -248,7 +248,7 @@ test_temp_bindings(_Config) ->
     ?assertEqual(<<"John">>, arizona_socket:get_temp_binding(name, Socket2)),
     ?assertEqual(30, arizona_socket:get_temp_binding(age, Socket2)).
 
-test_with_temp_bindings(_Config) ->
+test_with_temp_bindings(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
     Bindings = #{key1 => value1, key2 => value2},
 
@@ -258,14 +258,14 @@ test_with_temp_bindings(_Config) ->
     ?assertEqual(value1, arizona_socket:get_temp_binding(key1, Socket2)),
     ?assertEqual(value2, arizona_socket:get_temp_binding(key2, Socket2)).
 
-test_get_temp_binding(_Config) ->
+test_get_temp_binding(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
     Bindings = #{test_key => test_value},
     Socket2 = arizona_socket:with_temp_bindings(Bindings, Socket),
 
     ?assertEqual(test_value, arizona_socket:get_temp_binding(test_key, Socket2)).
 
-test_get_temp_binding_not_found(_Config) ->
+test_get_temp_binding_not_found(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
 
     %% Should throw when binding not found
@@ -274,7 +274,7 @@ test_get_temp_binding_not_found(_Config) ->
         arizona_socket:get_temp_binding(missing_key, Socket)
     ).
 
-test_get_binding_temp_priority(_Config) ->
+test_get_binding_temp_priority(Config) when is_list(Config) ->
     %% Test that temp bindings have priority over stateful bindings
     Socket = arizona_socket:new(#{current_stateful_id => root}),
 
@@ -291,7 +291,7 @@ test_get_binding_temp_priority(_Config) ->
     %% Should get temp binding (priority)
     ?assertEqual(<<"Temp">>, arizona_socket:get_binding(name, Socket3)).
 
-test_get_binding_stateful_fallback(_Config) ->
+test_get_binding_stateful_fallback(Config) when is_list(Config) ->
     %% Test fallback to stateful bindings when no temp binding
     Socket = arizona_socket:new(#{current_stateful_id => root}),
 
@@ -304,7 +304,7 @@ test_get_binding_stateful_fallback(_Config) ->
     %% No temp bindings, should get stateful binding
     ?assertEqual(<<"Stateful">>, arizona_socket:get_binding(name, Socket2)).
 
-test_get_binding_not_found(_Config) ->
+test_get_binding_not_found(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{current_stateful_id => root}),
 
     %% Create stateful state without the binding we're looking for
@@ -316,7 +316,7 @@ test_get_binding_not_found(_Config) ->
     %% Should throw when binding not found anywhere
     ?assertThrow({binding_not_found, missing}, arizona_socket:get_binding(missing, Socket2)).
 
-test_is_socket_validation(_Config) ->
+test_is_socket_validation(Config) when is_list(Config) ->
     %% Create a valid socket
     Socket = arizona_socket:new(#{}),
 

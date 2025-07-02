@@ -49,7 +49,7 @@ groups() ->
 %% Render stateful tests
 %% --------------------------------------------------------------------
 
-test_render_stateful_with_template_data(_Config) ->
+test_render_stateful_with_template_data(Config) when is_list(Config) ->
     TemplateData = #{
         elems_order => [0, 1],
         elems => #{
@@ -67,7 +67,7 @@ test_render_stateful_with_template_data(_Config) ->
     Expected = ~"<h1>Hello</h1>",
     ?assertEqual(Expected, iolist_to_binary(Html)).
 
-test_render_stateful_with_binary_html(_Config) ->
+test_render_stateful_with_binary_html(Config) when is_list(Config) ->
     Html = ~"<div>Static content</div>",
     Socket = create_mock_socket(),
 
@@ -78,7 +78,7 @@ test_render_stateful_with_binary_html(_Config) ->
     Expected = ~"<div>Static content</div>",
     ?assertEqual(Expected, iolist_to_binary(ResultHtml)).
 
-test_render_stateful_with_list_html(_Config) ->
+test_render_stateful_with_list_html(Config) when is_list(Config) ->
     Html = [~"<p>", ~"List content", ~"</p>"],
     Socket = create_mock_socket(),
 
@@ -89,7 +89,7 @@ test_render_stateful_with_list_html(_Config) ->
     Expected = ~"<p>List content</p>",
     ?assertEqual(Expected, iolist_to_binary(ResultHtml)).
 
-test_render_stateful_complex_template(_Config) ->
+test_render_stateful_complex_template(Config) when is_list(Config) ->
     % Use pre-parsed template data instead of raw HTML with expressions
     TemplateData = #{
         elems_order => [0, 1, 2],
@@ -113,7 +113,7 @@ test_render_stateful_complex_template(_Config) ->
 %% Render stateless tests
 %% --------------------------------------------------------------------
 
-test_render_stateless_with_structured_list(_Config) ->
+test_render_stateless_with_structured_list(Config) when is_list(Config) ->
     StructuredList = [
         {static, 1, ~"<span>"},
         {dynamic, 1, ~"content"},
@@ -128,7 +128,7 @@ test_render_stateless_with_structured_list(_Config) ->
     Expected = ~"<span>content</span>",
     ?assertEqual(Expected, iolist_to_binary(Html)).
 
-test_render_stateless_with_binary_html(_Config) ->
+test_render_stateless_with_binary_html(Config) when is_list(Config) ->
     Html = ~"<nav>Navigation</nav>",
     Socket = create_mock_socket(),
 
@@ -139,7 +139,7 @@ test_render_stateless_with_binary_html(_Config) ->
     Expected = ~"<nav>Navigation</nav>",
     ?assertEqual(Expected, iolist_to_binary(ResultHtml)).
 
-test_render_stateless_with_list_html(_Config) ->
+test_render_stateless_with_list_html(Config) when is_list(Config) ->
     Html = ~"<header>Header content</header>",
     Socket = create_mock_socket(),
 
@@ -150,7 +150,7 @@ test_render_stateless_with_list_html(_Config) ->
     Expected = ~"<header>Header content</header>",
     ?assertEqual(Expected, iolist_to_binary(ResultHtml)).
 
-test_render_stateless_complex_template(_Config) ->
+test_render_stateless_complex_template(Config) when is_list(Config) ->
     % Use pre-structured list instead of raw HTML with expressions
     StructuredList = [
         {static, 1, ~"<section>"},
@@ -170,7 +170,7 @@ test_render_stateless_complex_template(_Config) ->
 %% Render list tests
 %% --------------------------------------------------------------------
 
-test_render_list_with_list_data(_Config) ->
+test_render_list_with_list_data(Config) when is_list(Config) ->
     ListData = #{
         static => [~"<li>", ~"", ~"</li>"],
         dynamic => #{
@@ -190,7 +190,7 @@ test_render_list_with_list_data(_Config) ->
     Expected = ~"<li>Item1</li><li>Item2</li>",
     ?assertEqual(Expected, iolist_to_binary(Html)).
 
-test_render_list_with_item_function(_Config) ->
+test_render_list_with_item_function(Config) when is_list(Config) ->
     ItemFun = fun(Item) -> [~"<div>", Item, ~"</div>"] end,
     Items = [~"First", ~"Second"],
     KeyFun = fun(X) -> X end,
@@ -203,7 +203,7 @@ test_render_list_with_item_function(_Config) ->
     Expected = ~"<div>First</div><div>Second</div>",
     ?assertEqual(Expected, iolist_to_binary(Html)).
 
-test_render_list_empty_items(_Config) ->
+test_render_list_empty_items(Config) when is_list(Config) ->
     ItemFun = fun(Item) -> [~"<p>", Item, ~"</p>"] end,
     Items = [],
     KeyFun = fun(X) -> X end,
@@ -216,7 +216,7 @@ test_render_list_empty_items(_Config) ->
     Expected = ~"",
     ?assertEqual(Expected, iolist_to_binary(Html)).
 
-test_render_list_multiple_items(_Config) ->
+test_render_list_multiple_items(Config) when is_list(Config) ->
     ItemFun = fun(Item) -> [~"<option>", Item, ~"</option>"] end,
     Items = [~"A", ~"B", ~"C"],
     KeyFun = fun(X) -> X end,
@@ -233,28 +233,28 @@ test_render_list_multiple_items(_Config) ->
 %% to_html tests
 %% --------------------------------------------------------------------
 
-test_to_html_binary(_Config) ->
+test_to_html_binary(Config) when is_list(Config) ->
     Result = arizona_html:to_html(~"Hello World"),
     ?assertEqual(~"Hello World", Result).
 
-test_to_html_list(_Config) ->
+test_to_html_list(Config) when is_list(Config) ->
     Result = arizona_html:to_html([~"<div>", ~"content", ~"</div>"]),
     ?assertEqual(~"<div>content</div>", Result).
 
-test_to_html_atom(_Config) ->
+test_to_html_atom(Config) when is_list(Config) ->
     Result = arizona_html:to_html(hello),
     ?assertEqual(~"hello", Result).
 
-test_to_html_integer(_Config) ->
+test_to_html_integer(Config) when is_list(Config) ->
     Result = arizona_html:to_html(42),
     ?assertEqual(~"42", Result).
 
-test_to_html_float(_Config) ->
+test_to_html_float(Config) when is_list(Config) ->
     Result = arizona_html:to_html(3.14),
     Expected = ~"3.14",
     ?assertEqual(Expected, Result).
 
-test_to_html_complex_term(_Config) ->
+test_to_html_complex_term(Config) when is_list(Config) ->
     Result = arizona_html:to_html({error, not_found}),
     Expected = ~"{error,not_found}",
     ?assertEqual(Expected, Result).

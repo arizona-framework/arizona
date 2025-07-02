@@ -60,7 +60,7 @@ groups() ->
 %% Item Function Tests
 %% --------------------------------------------------------------------
 
-test_call_item_function_basic(_Config) ->
+test_call_item_function_basic(Config) when is_list(Config) ->
     Item = #{id => 123, name => <<"test">>},
 
     %% Simple field access
@@ -69,7 +69,7 @@ test_call_item_function_basic(_Config) ->
 
     ?assertEqual(<<"test">>, Result).
 
-test_call_item_function_binary_result(_Config) ->
+test_call_item_function_binary_result(Config) when is_list(Config) ->
     Item = #{title => <<"Hello">>, count => 5},
 
     %% Function returning binary
@@ -82,7 +82,7 @@ test_call_item_function_binary_result(_Config) ->
     Result = arizona_list:call_item_function(Fun, Item),
     ?assertEqual(<<"Hello (5)">>, Result).
 
-test_call_item_function_iolist_result(_Config) ->
+test_call_item_function_iolist_result(Config) when is_list(Config) ->
     Item = #{product => <<"Widget">>, price => 25},
 
     %% Function returning iolist
@@ -113,7 +113,7 @@ test_call_item_function_iolist_result(_Config) ->
 %% Element Function Tests
 %% --------------------------------------------------------------------
 
-test_call_element_function_basic(_Config) ->
+test_call_element_function_basic(Config) when is_list(Config) ->
     Item = #{field => <<"value">>},
     Socket = mock_socket,
 
@@ -123,7 +123,7 @@ test_call_element_function_basic(_Config) ->
 
     ?assertEqual(<<"value">>, Result).
 
-test_call_element_function_with_socket(_Config) ->
+test_call_element_function_with_socket(Config) when is_list(Config) ->
     Item = #{id => 42},
     Socket = mock_socket,
 
@@ -140,7 +140,7 @@ test_call_element_function_with_socket(_Config) ->
 %% Error Handling Tests
 %% --------------------------------------------------------------------
 
-test_call_item_function_error_propagation(_Config) ->
+test_call_item_function_error_propagation(Config) when is_list(Config) ->
     Item = #{id => 1},
 
     %% Function that throws
@@ -159,7 +159,7 @@ test_call_item_function_error_propagation(_Config) ->
     BadKeyFun = fun(I) -> maps:get(nonexistent, I) end,
     ?assertError({badkey, nonexistent}, arizona_list:call_item_function(BadKeyFun, Item)).
 
-test_call_element_function_error_propagation(_Config) ->
+test_call_element_function_error_propagation(Config) when is_list(Config) ->
     Item = #{id => 1},
     Socket = mock_socket,
 
@@ -178,7 +178,7 @@ test_call_element_function_error_propagation(_Config) ->
     ExitFun = fun(_I, _S) -> exit(normal) end,
     ?assertExit(normal, arizona_list:call_element_function(ExitFun, Item, Socket)).
 
-test_function_arity_validation(_Config) ->
+test_function_arity_validation(Config) when is_list(Config) ->
     Item = #{test => value},
     Socket = mock_socket,
 
