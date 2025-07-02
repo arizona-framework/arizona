@@ -78,7 +78,8 @@ render_element({static, _Line, Content}, Socket) when is_binary(Content) ->
 render_element({dynamic, Line, Fun}, Socket) when is_function(Fun, 1) ->
     try
         Result = arizona_stateful:call_dynamic_function(Fun, Socket),
-        {Result, Socket}
+        HtmlResult = arizona_html:to_html(Result),
+        {HtmlResult, Socket}
     catch
         throw:{binding_not_found, Key} ->
             error({binding_not_found, Key}, none, binding_error_info(Line, Key, Socket));

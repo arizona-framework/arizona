@@ -5,9 +5,9 @@
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 
--callback render(Socket) -> TemplateData when
+-callback render(Socket) -> Socket1 when
     Socket :: arizona_socket:socket(),
-    TemplateData :: arizona_parser:stateful_result().
+    Socket1 :: arizona_socket:socket().
 
 -callback unmount(Socket) -> Socket1 when
     Socket :: arizona_socket:socket(),
@@ -64,10 +64,10 @@ call_unmount_callback(Mod, Socket) when is_atom(Mod) ->
             Socket
     end.
 
--spec call_render_callback(Mod, Socket) -> TemplateData when
+-spec call_render_callback(Mod, Socket) -> Socket1 when
     Mod :: module(),
     Socket :: arizona_socket:socket(),
-    TemplateData :: arizona_parser:stateful_result().
+    Socket1 :: arizona_socket:socket().
 call_render_callback(Mod, Socket) when is_atom(Mod) ->
     apply(Mod, render, [Socket]).
 
