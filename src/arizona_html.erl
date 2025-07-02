@@ -25,9 +25,10 @@ render_stateful(Html, Socket) when is_binary(Html); is_list(Html) ->
     OptimizedAST = arizona_parse_transform:transform_stateful_to_ast(ParsedResult),
 
     %% Evaluate AST to get optimized template data with Socket binding
+    SocketVarName = binary_to_atom(arizona_parse_transform:get_socket_var_name()),
     {value, OptimizedTemplateData, _NewBindings} = erl_eval:expr(
         erl_syntax:revert(OptimizedAST),
-        #{'Socket' => Socket}
+        #{SocketVarName => Socket}
     ),
 
     %% Render using optimized data (same as compile-time path)
@@ -49,9 +50,10 @@ render_stateless(Html, Socket) when is_binary(Html); is_list(Html) ->
     OptimizedAST = arizona_parse_transform:transform_stateless_to_ast(ParsedResult),
 
     %% Evaluate AST to get optimized template data with Socket binding
+    SocketVarName = binary_to_atom(arizona_parse_transform:get_socket_var_name()),
     {value, OptimizedStructuredList, _NewBindings} = erl_eval:expr(
         erl_syntax:revert(OptimizedAST),
-        #{'Socket' => Socket}
+        #{SocketVarName => Socket}
     ),
 
     %% Render using optimized data (same as compile-time path)

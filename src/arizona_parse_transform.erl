@@ -26,7 +26,11 @@ them with optimized versions that avoid runtime template parsing overhead.
 %% --------------------------------------------------------------------
 
 -export([
-    parse_transform/2, format_error/1, transform_stateful_to_ast/1, transform_stateless_to_ast/1
+    parse_transform/2,
+    format_error/1,
+    transform_stateful_to_ast/1,
+    transform_stateless_to_ast/1,
+    get_socket_var_name/0
 ]).
 
 %% --------------------------------------------------------------------
@@ -429,14 +433,20 @@ create_vars_indexes_map_ast(VarsIndexes) ->
     ],
     erl_syntax:map_expr(MapFields).
 
+%% Get the safe socket variable name used for shadowing avoidance
+-spec get_socket_var_name() -> binary().
+get_socket_var_name() ->
+    <<"_@Socket">>.
+
 %% Create a function that receives Socket parameter, handling variable shadowing
 -spec create_socket_threaded_function(binary()) -> binary().
 create_socket_threaded_function(ExpressionText) ->
-    %% Replace any existing Socket variable with _@Socket to avoid shadowing
-    SafeExpression = re:replace(ExpressionText, <<"\\bSocket\\b">>, <<"_@Socket">>, [
+    SocketVarName = get_socket_var_name(),
+    %% Replace any existing Socket variable with safe socket name to avoid shadowing
+    SafeExpression = re:replace(ExpressionText, <<"\\bSocket\\b">>, SocketVarName, [
         global, {return, binary}
     ]),
-    <<"fun(_@Socket) -> ", SafeExpression/binary, " end">>.
+    <<"fun(", SocketVarName/binary, ") -> ", SafeExpression/binary, " end">>.
 
 %% Format static element as binary string
 -spec format_static_element(pos_integer(), binary()) -> binary().
