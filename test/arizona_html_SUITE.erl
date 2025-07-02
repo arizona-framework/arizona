@@ -119,7 +119,7 @@ test_render_stateful_complex_template(Config) when is_list(Config) ->
 test_render_stateless_with_structured_list(Config) when is_list(Config) ->
     StructuredList = [
         {static, 1, ~"<span>"},
-        {dynamic, 1, ~"content"},
+        {dynamic, 1, fun(_Socket) -> ~"content" end},
         {static, 1, ~"</span>"}
     ],
     Socket = create_mock_socket(),
@@ -157,7 +157,7 @@ test_render_stateless_complex_template(Config) when is_list(Config) ->
     % Use pre-structured list instead of raw HTML with expressions
     StructuredList = [
         {static, 1, ~"<section>"},
-        {dynamic, 1, ~"My Title"},
+        {dynamic, 1, fun(_Socket) -> ~"My Title" end},
         {static, 1, ~"</section>"}
     ],
     Socket = create_mock_socket(),

@@ -134,7 +134,7 @@ test_render_stateful_multiple_elements(Config) when is_list(Config) ->
 test_render_stateless_basic(Config) when is_list(Config) ->
     StructuredList = [
         {static, 1, ~"<div>"},
-        {dynamic, 1, ~"content"},
+        {dynamic, 1, fun(_Socket) -> ~"content" end},
         {static, 1, ~"</div>"}
     ],
     Socket = create_mock_socket(),
@@ -157,7 +157,7 @@ test_render_stateless_empty_list(Config) when is_list(Config) ->
 test_render_stateless_mixed_content(Config) when is_list(Config) ->
     StructuredList = [
         {static, 1, ~"<h1>Title</h1>"},
-        {dynamic, 2, ~"variable_content"},
+        {dynamic, 2, fun(_Socket) -> ~"variable_content" end},
         {static, 3, ~"<p>End</p>"}
     ],
     Socket = create_mock_socket(),

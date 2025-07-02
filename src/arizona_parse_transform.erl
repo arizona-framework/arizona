@@ -85,7 +85,9 @@ format_error(Other) ->
 
 %% Transform stateful template result to optimized AST
 -spec transform_stateful_to_ast(arizona_parser:stateful_result()) -> erl_syntax:syntaxTree().
-transform_stateful_to_ast(#{elems_order := Order, elems := Elements, vars_indexes := VarsIndexes}) ->
+transform_stateful_to_ast(#{
+    elems_order := Order, elems := Elements, vars_indexes := VarsIndexes
+}) ->
     %% Create AST for optimized template data map
     OrderAST = erl_syntax:list([erl_syntax:integer(I) || I <- Order]),
     ElementsAST = create_elements_map_ast(Elements),
@@ -114,7 +116,9 @@ transform_stateless_to_ast(StatelessList) when is_list(StatelessList) ->
     ListItems = [
         case Item of
             Bin when is_binary(Bin) ->
-                erl_syntax:binary([erl_syntax:binary_field(erl_syntax:string(binary_to_list(Bin)))]);
+                erl_syntax:binary([
+                    erl_syntax:binary_field(erl_syntax:string(binary_to_list(Bin)))
+                ]);
             _ ->
                 erl_syntax:abstract(Item)
         end
