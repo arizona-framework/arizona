@@ -5,20 +5,48 @@
 -export([render_list/4]).
 -export([format_error/2]).
 
--doc ~"Template data from parse transform with optimized functions.".
+-doc ~"Template data from parse transform with optimized functions for stateful rendering.".
 -type stateful_template_data() :: #{
     elems_order := [Index :: non_neg_integer()],
     elems := #{
         Index ::
-            non_neg_integer() => {
-                Category :: static, Line :: pos_integer(), Content :: binary()
-            } | {
-                Category :: dynamic, Line :: pos_integer(), Content :: fun((arizona_socket:socket()) -> term())
-            }
+            non_neg_integer() =>
+                {
+                    Category :: static, Line :: pos_integer(), Content :: binary()
+                }
+                | {
+                    Category :: dynamic,
+                    Line :: pos_integer(),
+                    Content :: fun((arizona_socket:socket()) -> term())
+                }
     },
     vars_indexes := #{VarName :: atom() => [Index :: non_neg_integer()]}
 }.
 -export_type([stateful_template_data/0]).
+
+-doc ~"Template data from parse transform with optimized functions for stateless rendering.".
+-type stateless_template_data() :: [
+    {static, pos_integer(), binary()}
+    | {dynamic, pos_integer(), fun((arizona_socket:socket()) -> term())}
+].
+-export_type([stateless_template_data/0]).
+
+-doc ~"Template data from parse transform with optimized functions for list rendering.".
+-type list_template_data() :: #{
+    static := [binary()],
+    dynamic := #{
+        elems_order := [Index :: non_neg_integer()],
+        elems := #{
+            Index ::
+                non_neg_integer() => {
+                    Line :: pos_integer(),
+                    ElementFun :: fun((Item :: term(), Socket :: arizona_socket:socket()) -> term())
+                }
+        },
+        vars_indexes := #{VarName :: atom() => [Index :: non_neg_integer()]}
+    }
+}.
+-export_type([list_template_data/0]).
 
 %% Render structured template data (from parse transform)
 -spec render_stateful(TemplateData, Socket) -> {Html, Socket1} when
@@ -33,7 +61,7 @@ render_stateful(#{elems_order := Order, elems := Elements}, Socket) ->
 
 %% Render stateless structured list
 -spec render_stateless(StructuredList, Socket) -> {Html, Socket1} when
-    StructuredList :: arizona_parser:stateless_result(),
+    StructuredList :: stateless_template_data(),
     Socket :: arizona_socket:socket(),
     Html :: arizona_html:html(),
     Socket1 :: arizona_socket:socket().
@@ -44,7 +72,7 @@ render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
 
 %% Render list using parsed list template structure
 -spec render_list(ListData, Items, KeyFun, Socket) -> {Html, Socket1} when
-    ListData :: arizona_parser:list_result(),
+    ListData :: list_template_data(),
     Items :: [term()],
     KeyFun :: fun((term()) -> term()),
     Socket :: arizona_socket:socket(),

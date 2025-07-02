@@ -47,7 +47,7 @@ Result type for stateful parsing with element ordering, element mapping, and var
                 Category :: static | dynamic, Line :: pos_integer(), Content :: binary()
             }
     },
-    vars_indexes := #{VarName :: atom() => [Index :: non_neg_integer()]}
+    vars_indexes := #{VarName :: binary() => [Index :: non_neg_integer()]}
 }.
 -export_type([stateful_result/0]).
 
@@ -65,7 +65,7 @@ Result type for list parsing with static/dynamic template structure.
                     ElementFun :: fun((Item :: term(), Socket :: arizona_socket:socket()) -> term())
                 }
         },
-        vars_indexes := #{VarName :: atom() => [Index :: non_neg_integer()]}
+        vars_indexes := #{VarName :: binary() => [Index :: non_neg_integer()]}
     }
 }.
 -export_type([list_result/0]).
@@ -181,7 +181,7 @@ expr_vars(Expr) ->
         )
     of
         {match, Vars0} ->
-            Vars = lists:flatten([extract_var_atom(List) || List <- Vars0]),
+            Vars = lists:flatten([extract_var_binary(List) || List <- Vars0]),
             lists:usort(Vars);
         nomatch ->
             []
@@ -195,12 +195,6 @@ extract_var_binary([<<$', _/binary>> = Var | _T]) ->
     UnquotedVar;
 extract_var_binary([Var]) ->
     Var.
-
-%% Extract variable name as atom for vars_indexes
-extract_var_atom(VarList) ->
-    VarBinary = extract_var_binary(VarList),
-    binary_to_atom(VarBinary, utf8).
-
 
 %% Process tokens for list template structure (similar to stateful but different output)
 process_tokens_for_list(Tokens) ->

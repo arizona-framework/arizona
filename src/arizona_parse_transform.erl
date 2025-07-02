@@ -25,7 +25,9 @@ them with optimized versions that avoid runtime template parsing overhead.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([parse_transform/2, format_error/1, transform_stateful_to_ast/1, transform_stateless_to_ast/1]).
+-export([
+    parse_transform/2, format_error/1, transform_stateful_to_ast/1, transform_stateless_to_ast/1
+]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -88,7 +90,7 @@ transform_stateful_to_ast(#{elems_order := Order, elems := Elements, vars_indexe
     OrderAST = erl_syntax:list([erl_syntax:integer(I) || I <- Order]),
     ElementsAST = create_elements_map_ast(Elements),
     VarsIndexesAST = create_vars_indexes_map_ast(VarsIndexes),
-    
+
     %% Build the template data map AST
     erl_syntax:map_expr([
         erl_syntax:map_field_assoc(
@@ -116,7 +118,7 @@ transform_stateless_to_ast(StatelessList) when is_list(StatelessList) ->
             _ ->
                 erl_syntax:abstract(Item)
         end
-        || Item <- StatelessList
+     || Item <- StatelessList
     ],
     erl_syntax:list(ListItems).
 
@@ -366,7 +368,6 @@ extract_template_content({bin, BinaryAnnotations, _BinaryFields} = BinaryForm) -
     LineNumber = erl_anno:line(BinaryAnnotations),
     {TemplateString, LineNumber}.
 
-
 %% Helper function to raise template errors with proper error_info
 -spec raise_template_error(atom(), atom(), pos_integer()) -> no_return().
 raise_template_error(Reason, ModuleName, Line) ->
@@ -391,7 +392,7 @@ create_elements_map_ast(Elements) ->
             erl_syntax:integer(Index),
             create_element_ast(Element)
         )
-        || Index := Element <- Elements
+     || Index := Element <- Elements
     ],
     erl_syntax:map_expr(MapFields).
 
@@ -406,12 +407,12 @@ create_element_ast({dynamic, Line, ExprBinary}) ->
     %% Convert expression to optimized function AST
     %% ExprBinary is the original expression like "arizona_socket:get_binding(name, Socket)"
     FunctionBinary = create_socket_threaded_function(ExprBinary),
-    
+
     %% Parse the function binary to create proper function AST
     {ok, Tokens, _} = erl_scan:string(binary_to_list(FunctionBinary)),
     {ok, FunAST} = erl_parse:parse_exprs(Tokens),
     [FunExpr] = FunAST,
-    
+
     erl_syntax:tuple([
         erl_syntax:atom(dynamic),
         erl_syntax:integer(Line),
@@ -422,10 +423,10 @@ create_element_ast({dynamic, Line, ExprBinary}) ->
 create_vars_indexes_map_ast(VarsIndexes) ->
     MapFields = [
         erl_syntax:map_field_assoc(
-            erl_syntax:atom(VarName),
+            erl_syntax:atom(binary_to_list(VarName)),
             erl_syntax:list([erl_syntax:integer(Idx) || Idx <- IndexList])
         )
-        || VarName := IndexList <- VarsIndexes
+     || VarName := IndexList <- VarsIndexes
     ],
     erl_syntax:map_expr(MapFields).
 
@@ -448,4 +449,3 @@ format_static_element(Line, Content) ->
 format_dynamic_element(Line, ExpressionText) ->
     FunctionText = create_socket_threaded_function(ExpressionText),
     iolist_to_binary(io_lib:format("{dynamic, ~p, ~s}", [Line, FunctionText])).
-
