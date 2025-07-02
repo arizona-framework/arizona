@@ -47,7 +47,7 @@ Result type for stateful parsing with element ordering, element mapping, and var
                 Category :: static | dynamic, Line :: pos_integer(), Content :: binary()
             }
     },
-    vars_indexes := #{VarName :: binary() => [Index :: non_neg_integer()]}
+    vars_indexes := #{VarName :: atom() => [Index :: non_neg_integer()]}
 }.
 -export_type([stateful_result/0]).
 
@@ -148,7 +148,7 @@ process_tokens_stateful([Token | Rest], Index, Elements, VarsIndexes) ->
             %% Parse expression to find variable names
             VarNames = extract_variable_names(ExprText),
 
-            %% Create function for expression
+            %% Keep original expression text - parse transform will optimize
             NewElements = Elements#{Index => {dynamic, Line, ExprText}},
 
             %% Update variable indexes
@@ -200,6 +200,7 @@ extract_var_binary([Var]) ->
 extract_var_atom(VarList) ->
     VarBinary = extract_var_binary(VarList),
     binary_to_atom(VarBinary, utf8).
+
 
 %% Process tokens for list template structure (similar to stateful but different output)
 process_tokens_for_list(Tokens) ->

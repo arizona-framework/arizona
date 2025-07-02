@@ -435,8 +435,9 @@ parse_list_tokens_mixed_complex(Config) when is_list(Config) ->
     %% Verify the dynamic functions work correctly
     #{dynamic := #{elems := Elems}} = ListData,
     #{0 := {_Line1, Fun1}, 1 := {_Line2, Fun2}} = Elems,
+    TestSocket = arizona_socket:new(#{}),
     ?assertEqual(
         ~"arizona_socket:get_binding(class_prefix, Socket) ++ item.name",
-        Fun1(test_item, test_socket)
+        Fun1(test_item, TestSocket)
     ),
-    ?assertEqual(~"item.id", Fun2(test_item, test_socket)).
+    ?assertEqual(~"item.id", Fun2(test_item, TestSocket)).

@@ -25,7 +25,7 @@ them with optimized versions that avoid runtime template parsing overhead.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([parse_transform/2, format_error/1]).
+-export([parse_transform/2, format_error/1, transform_stateful_to_ast/1, transform_stateless_to_ast/1]).
 
 %% --------------------------------------------------------------------
 %% Types (and their exports)
@@ -80,6 +80,45 @@ format_error(badarg) ->
     "Arizona parse transform requires literal binary templates, variables are not supported";
 format_error(Other) ->
     io_lib:format("Unknown Arizona parse transform error: ~p", [Other]).
+
+%% Transform stateful template result to optimized AST
+-spec transform_stateful_to_ast(arizona_parser:stateful_result()) -> erl_syntax:syntaxTree().
+transform_stateful_to_ast(#{elems_order := Order, elems := Elements, vars_indexes := VarsIndexes}) ->
+    %% Create AST for optimized template data map
+    OrderAST = erl_syntax:list([erl_syntax:integer(I) || I <- Order]),
+    ElementsAST = create_elements_map_ast(Elements),
+    VarsIndexesAST = create_vars_indexes_map_ast(VarsIndexes),
+    
+    %% Build the template data map AST
+    erl_syntax:map_expr([
+        erl_syntax:map_field_assoc(
+            erl_syntax:atom(elems_order),
+            OrderAST
+        ),
+        erl_syntax:map_field_assoc(
+            erl_syntax:atom(elems),
+            ElementsAST
+        ),
+        erl_syntax:map_field_assoc(
+            erl_syntax:atom(vars_indexes),
+            VarsIndexesAST
+        )
+    ]).
+
+%% Transform stateless template result to optimized AST
+-spec transform_stateless_to_ast(arizona_parser:stateless_result()) -> erl_syntax:syntaxTree().
+transform_stateless_to_ast(StatelessList) when is_list(StatelessList) ->
+    %% Convert stateless list to AST representation
+    ListItems = [
+        case Item of
+            Bin when is_binary(Bin) ->
+                erl_syntax:binary([erl_syntax:binary_field(erl_syntax:string(binary_to_list(Bin)))]);
+            _ ->
+                erl_syntax:abstract(Item)
+        end
+        || Item <- StatelessList
+    ],
+    erl_syntax:list(ListItems).
 
 %% --------------------------------------------------------------------
 %% Internal Functions
@@ -192,11 +231,10 @@ convert_to_iolist_format(ParsedElements) ->
 %% Convert individual element to iolist format
 -spec convert_element_to_iolist(term(), [term()]) -> [term()].
 convert_element_to_iolist({static, Line, StaticText}, Accumulator) ->
-    StaticElement = iolist_to_binary(io_lib:format("{static, ~p, ~p}", [Line, StaticText])),
+    StaticElement = format_static_element(Line, StaticText),
     [StaticElement | Accumulator];
 convert_element_to_iolist({dynamic, Line, ExpressionText}, Accumulator) ->
-    FunctionText = create_socket_threaded_function(ExpressionText),
-    DynamicElement = iolist_to_binary(io_lib:format("{dynamic, ~p, ~s}", [Line, FunctionText])),
+    DynamicElement = format_dynamic_element(Line, ExpressionText),
     [DynamicElement | Accumulator].
 
 %% Stateful Template Transformation
@@ -268,15 +306,12 @@ format_elements_map(ElementsMap) ->
 %% Format a single element entry
 -spec format_element_entry(integer(), term(), [string()]) -> [string()].
 format_element_entry(ElementIndex, {static, Line, StaticText}, Accumulator) ->
-    FormattedEntry = iolist_to_binary(
-        io_lib:format("~p => {static, ~p, ~p}", [ElementIndex, Line, StaticText])
-    ),
+    StaticElemText = format_static_element(Line, StaticText),
+    FormattedEntry = iolist_to_binary(io_lib:format("~p => ~s", [ElementIndex, StaticElemText])),
     [FormattedEntry | Accumulator];
 format_element_entry(ElementIndex, {dynamic, Line, ExpressionText}, Accumulator) ->
-    FunctionText = create_socket_threaded_function(ExpressionText),
-    FormattedEntry = iolist_to_binary(
-        io_lib:format("~p => {dynamic, ~p, ~s}", [ElementIndex, Line, FunctionText])
-    ),
+    DynamicElemText = format_dynamic_element(Line, ExpressionText),
+    FormattedEntry = iolist_to_binary(io_lib:format("~p => ~s", [ElementIndex, DynamicElemText])),
     [FormattedEntry | Accumulator].
 
 %% Format variable indexes map as key-value pairs
@@ -331,14 +366,6 @@ extract_template_content({bin, BinaryAnnotations, _BinaryFields} = BinaryForm) -
     LineNumber = erl_anno:line(BinaryAnnotations),
     {TemplateString, LineNumber}.
 
-%% Create a function that receives Socket parameter, handling variable shadowing
--spec create_socket_threaded_function(binary()) -> binary().
-create_socket_threaded_function(ExpressionText) ->
-    % Replace any existing Socket variable with _@Socket to avoid shadowing
-    SafeExpression = re:replace(ExpressionText, "\\bSocket\\b", "_@Socket", [
-        global, {return, binary}
-    ]),
-    iolist_to_binary(io_lib:format("fun(_@Socket) -> ~s end", [SafeExpression])).
 
 %% Helper function to raise template errors with proper error_info
 -spec raise_template_error(atom(), atom(), pos_integer()) -> no_return().
@@ -354,3 +381,71 @@ error_info(ModuleName, Line) ->
             module => ?MODULE
         }}
     ].
+
+%% Helper functions for AST generation
+
+%% Create AST for elements map
+create_elements_map_ast(Elements) ->
+    MapFields = [
+        erl_syntax:map_field_assoc(
+            erl_syntax:integer(Index),
+            create_element_ast(Element)
+        )
+        || Index := Element <- Elements
+    ],
+    erl_syntax:map_expr(MapFields).
+
+%% Create AST for a single element (static or dynamic)
+create_element_ast({static, Line, Content}) ->
+    erl_syntax:tuple([
+        erl_syntax:atom(static),
+        erl_syntax:integer(Line),
+        erl_syntax:binary([erl_syntax:binary_field(erl_syntax:string(binary_to_list(Content)))])
+    ]);
+create_element_ast({dynamic, Line, ExprBinary}) ->
+    %% Convert expression to optimized function AST
+    %% ExprBinary is the original expression like "arizona_socket:get_binding(name, Socket)"
+    FunctionBinary = create_socket_threaded_function(ExprBinary),
+    
+    %% Parse the function binary to create proper function AST
+    {ok, Tokens, _} = erl_scan:string(binary_to_list(FunctionBinary)),
+    {ok, FunAST} = erl_parse:parse_exprs(Tokens),
+    [FunExpr] = FunAST,
+    
+    erl_syntax:tuple([
+        erl_syntax:atom(dynamic),
+        erl_syntax:integer(Line),
+        erl_syntax:revert(FunExpr)
+    ]).
+
+%% Create AST for vars_indexes map
+create_vars_indexes_map_ast(VarsIndexes) ->
+    MapFields = [
+        erl_syntax:map_field_assoc(
+            erl_syntax:atom(VarName),
+            erl_syntax:list([erl_syntax:integer(Idx) || Idx <- IndexList])
+        )
+        || VarName := IndexList <- VarsIndexes
+    ],
+    erl_syntax:map_expr(MapFields).
+
+%% Create a function that receives Socket parameter, handling variable shadowing
+-spec create_socket_threaded_function(binary()) -> binary().
+create_socket_threaded_function(ExpressionText) ->
+    %% Replace any existing Socket variable with _@Socket to avoid shadowing
+    SafeExpression = re:replace(ExpressionText, <<"\\bSocket\\b">>, <<"_@Socket">>, [
+        global, {return, binary}
+    ]),
+    iolist_to_binary([<<"fun(_@Socket) -> ">>, SafeExpression, <<" end">>]).
+
+%% Format static element as binary string
+-spec format_static_element(pos_integer(), binary()) -> binary().
+format_static_element(Line, Content) ->
+    iolist_to_binary(io_lib:format("{static, ~p, ~p}", [Line, Content])).
+
+%% Format dynamic element as binary string with function
+-spec format_dynamic_element(pos_integer(), binary()) -> binary().
+format_dynamic_element(Line, ExpressionText) ->
+    FunctionText = create_socket_threaded_function(ExpressionText),
+    iolist_to_binary(io_lib:format("{dynamic, ~p, ~s}", [Line, FunctionText])).
+

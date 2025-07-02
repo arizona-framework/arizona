@@ -5,22 +5,24 @@
 -export([render_list/4]).
 -export([format_error/2]).
 
-%% Types
--type element() ::
-    {static, pos_integer(), binary()}
-    | {dynamic, pos_integer(), binary() | fun((arizona_socket:socket()) -> term())}.
-
--type template_data() :: #{
-    elems_order := [non_neg_integer()],
-    elems := #{non_neg_integer() => element()},
-    vars_indexes => #{binary() => [non_neg_integer()]}
+-doc ~"Template data from parse transform with optimized functions.".
+-type stateful_template_data() :: #{
+    elems_order := [Index :: non_neg_integer()],
+    elems := #{
+        Index ::
+            non_neg_integer() => {
+                Category :: static, Line :: pos_integer(), Content :: binary()
+            } | {
+                Category :: dynamic, Line :: pos_integer(), Content :: fun((arizona_socket:socket()) -> term())
+            }
+    },
+    vars_indexes := #{VarName :: atom() => [Index :: non_neg_integer()]}
 }.
+-export_type([stateful_template_data/0]).
 
--export_type([element/0, template_data/0]).
-
-%% Render structured template data (from parse transform or parser)
+%% Render structured template data (from parse transform)
 -spec render_stateful(TemplateData, Socket) -> {Html, Socket1} when
-    TemplateData :: template_data() | arizona_parser:stateful_result(),
+    TemplateData :: stateful_template_data(),
     Socket :: arizona_socket:socket(),
     Html :: arizona_html:html(),
     Socket1 :: arizona_socket:socket().

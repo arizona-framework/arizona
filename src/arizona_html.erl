@@ -10,16 +10,28 @@
 -export_type([html/0]).
 
 -spec render_stateful(Template, Socket) -> Socket1 when
-    Template :: arizona_parser:stateful_result() | html(),
+    Template :: arizona_renderer:stateful_template_data() | html(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 render_stateful(TemplateData, Socket) when is_map(TemplateData) ->
     {_Html, UpdatedSocket} = arizona_renderer:render_stateful(TemplateData, Socket),
     UpdatedSocket;
 render_stateful(Html, Socket) when is_binary(Html); is_list(Html) ->
+    %% Parse template at runtime
     Tokens = arizona_scanner:scan(#{}, Html),
-    TemplateData = arizona_parser:parse_stateful_tokens(Tokens),
-    render_stateful(TemplateData, Socket).
+    ParsedResult = arizona_parser:parse_stateful_tokens(Tokens),
+    
+    %% Transform to optimized format using same logic as parse transform
+    OptimizedAST = arizona_parse_transform:transform_stateful_to_ast(ParsedResult),
+    
+    %% Evaluate AST to get optimized template data with Socket binding
+    {value, OptimizedTemplateData, _NewBindings} = erl_eval:expr(
+        erl_syntax:revert(OptimizedAST), 
+        #{'Socket' => Socket}
+    ),
+    
+    %% Render using optimized data (same as compile-time path)
+    render_stateful(OptimizedTemplateData, Socket).
 
 -spec render_stateless(Template, Socket) -> Socket1 when
     Template :: arizona_parser:stateless_result() | html(),
@@ -29,9 +41,21 @@ render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
     {_Html, UpdatedSocket} = arizona_renderer:render_stateless(StructuredList, Socket),
     UpdatedSocket;
 render_stateless(Html, Socket) when is_binary(Html); is_list(Html) ->
+    %% Parse template at runtime
     Tokens = arizona_scanner:scan(#{}, Html),
-    StructuredList = arizona_parser:parse_stateless_tokens(Tokens),
-    render_stateless(StructuredList, Socket).
+    ParsedResult = arizona_parser:parse_stateless_tokens(Tokens),
+    
+    %% Transform to optimized format using same logic as parse transform
+    OptimizedAST = arizona_parse_transform:transform_stateless_to_ast(ParsedResult),
+    
+    %% Evaluate AST to get optimized template data with Socket binding
+    {value, OptimizedStructuredList, _NewBindings} = erl_eval:expr(
+        erl_syntax:revert(OptimizedAST), 
+        #{'Socket' => Socket}
+    ),
+    
+    %% Render using optimized data (same as compile-time path)
+    render_stateless(OptimizedStructuredList, Socket).
 
 -spec render_list(Template, [Item], KeyFun, Socket) -> Socket1 when
     Template :: fun((Item) -> html()) | arizona_parser:list_result(),
