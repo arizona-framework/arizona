@@ -53,11 +53,14 @@ test_call_stateful_existing_no_remount(_Config) ->
     Module = test_stateful_module_with_mount,
     Id = arizona_socket:get_current_stateful_id(Socket),
 
-    %% Create existing state that doesn't need remount
-    State = arizona_stateful:new(Id, Module, #{}),
+    %% Create existing state with same bindings that we'll pass
+    %% This should NOT trigger remount since bindings are the same
+    ExistingBindings = #{status => ~"mounted"},
+    State = arizona_stateful:new(Id, Module, ExistingBindings),
     Socket1 = arizona_socket:put_stateful_state(Id, State, Socket),
 
-    Bindings = #{new_value => ~"updated"},
+    %% Pass the same bindings - should not remount, use differ instead
+    Bindings = #{status => ~"mounted"},
 
     UpdatedSocket = arizona_component:call_stateful(Module, Bindings, Socket1),
 
