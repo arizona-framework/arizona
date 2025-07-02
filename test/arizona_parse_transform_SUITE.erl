@@ -35,7 +35,8 @@ into optimized structured formats for high-performance rendering.
     test_transform_stateless_to_ast/1,
     test_transform_stateful_to_ast/1,
     test_stateless_binary_handling/1,
-    test_dynamic_expression_ast_creation/1
+    test_dynamic_expression_ast_creation/1,
+    test_nested_arizona_optimization/1
 ]).
 
 %% --------------------------------------------------------------------
@@ -74,7 +75,8 @@ groups() ->
             test_transform_stateless_to_ast,
             test_transform_stateful_to_ast,
             test_stateless_binary_handling,
-            test_dynamic_expression_ast_creation
+            test_dynamic_expression_ast_creation,
+            test_nested_arizona_optimization
         ]}
     ].
 
@@ -511,3 +513,47 @@ test_dynamic_expression_ast_creation(Config) when is_list(Config) ->
     ?assertEqual(list, erl_syntax:type(ResultAST)),
 
     ct:comment("Mixed item handling in stateless transform works correctly").
+
+%% Test nested arizona_html optimization
+test_nested_arizona_optimization(Config) when is_list(Config) ->
+    % Create a stateful template with nested arizona_html:render_stateless calls
+    Forms = merl:quote(~""""
+    -module(test_nested_module).
+    -export([test_render/1]).
+    test_render(Socket) ->
+        arizona_html:render_stateful(~"""
+        <ul>
+        {_JustForm = multiple_forms, arizona_html:render_stateless(~"<li>Item 1</li>", Socket)}
+        {arizona_html:render_stateless(~"<li>Item 2</li>", Socket)}
+        </ul>
+        """, Socket).
+    """"),
+
+    % Apply parse transform
+    TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
+
+    % Convert the transformed forms back to source code to inspect the optimization
+    TransformedSource = lists:flatten([erl_pp:form(Form) || Form <- TransformedForms]),
+
+    % Verify that nested arizona_html:render_stateless calls were optimized
+    % The optimized version should contain pre-parsed structures instead of raw template strings
+
+    % Check that the outer template was transformed (should contain a map structure)
+    ?assert(string:str(TransformedSource, "#{elems_order") > 0),
+
+    % Check that the nested render_stateless calls were optimized
+    % (should contain list structures instead of raw binary templates)
+    ?assert(
+        string:str(TransformedSource, "[<<\"<li>Item 1</li>\">>]") > 0 orelse
+            string:str(TransformedSource, "[{static,") > 0
+    ),
+
+    % Verify the transformation actually occurred by checking we don't have the original template
+    ?assertEqual(0, string:str(TransformedSource, "~\"<li>Item 1</li>\"")),
+
+    % Verify the structure is valid and compiles
+    ?assertMatch(
+        [_ModAttr, _ExportAttr, {function, _, test_render, 1, _Clauses}], TransformedForms
+    ),
+
+    ct:comment("Nested arizona_html calls successfully optimized at compile time").

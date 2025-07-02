@@ -320,9 +320,31 @@ format_element_entry(ElementIndex, {static, Line, StaticText}, Accumulator) ->
     FormattedEntry = iolist_to_binary(io_lib:format("~p => ~s", [ElementIndex, StaticElemText])),
     [FormattedEntry | Accumulator];
 format_element_entry(ElementIndex, {dynamic, Line, ExpressionText}, Accumulator) ->
-    DynamicElemText = format_dynamic_element(Line, ExpressionText),
+    OptimizedExpressionText = optimize_dynamic_expression(ExpressionText, []),
+    DynamicElemText = format_dynamic_element(Line, OptimizedExpressionText),
     FormattedEntry = iolist_to_binary(io_lib:format("~p => ~s", [ElementIndex, DynamicElemText])),
     [FormattedEntry | Accumulator].
+
+%% Optimize dynamic expressions by recursively applying parse transform
+-spec optimize_dynamic_expression(binary(), compile_options()) -> binary().
+optimize_dynamic_expression(ExpressionText, CompilerOptions) ->
+    %% Parse expression into AST
+    ExprAST =
+        case merl:quote(ExpressionText) of
+            AST when is_list(AST) ->
+                AST;
+            AST when is_tuple(AST) ->
+                [AST]
+        end,
+
+    %% Apply parse transform recursively to optimize nested arizona_html calls
+    TransformedExprAST = parse_transform(ExprAST, CompilerOptions),
+
+    %% Convert back to text representation
+    OptimizedText = erl_pp:exprs(erl_syntax:revert_forms(TransformedExprAST)),
+
+    %% Return as binary, removing trailing newlines
+    iolist_to_binary(string:trim(OptimizedText)).
 
 %% Format variable indexes map as key-value pairs
 -spec format_variables_indexes(map()) -> string().
