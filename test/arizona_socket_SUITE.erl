@@ -36,7 +36,8 @@ including state management, HTML accumulation, and binding handling.
     test_get_temp_binding_not_found/1,
     test_get_binding_temp_priority/1,
     test_get_binding_stateful_fallback/1,
-    test_get_binding_not_found/1
+    test_get_binding_not_found/1,
+    test_is_socket_validation/1
 ]).
 
 %% --------------------------------------------------------------------
@@ -63,7 +64,8 @@ groups() ->
             test_get_mode,
             test_get_current_stateful_id,
             test_set_current_stateful_id,
-            test_set_current_stateful_id_validation
+            test_set_current_stateful_id_validation,
+            test_is_socket_validation
         ]},
         {html_management_tests, [parallel], [
             test_html_accumulation,
@@ -311,6 +313,17 @@ test_get_binding_not_found(_Config) ->
 
     %% Should throw when binding not found anywhere
     ?assertThrow({binding_not_found, missing}, arizona_socket:get_binding(missing, Socket2)).
+
+test_is_socket_validation(_Config) ->
+    %% Create a valid socket
+    Socket = arizona_socket:new(#{}),
+    
+    %% Test positive case (should be true for valid socket)
+    ?assert(arizona_socket:is_socket(Socket)),
+    
+    %% Test negative cases (should be false for non-sockets)
+    ?assertNot(arizona_socket:is_socket(undefined)),
+    ?assertNot(arizona_socket:is_socket(~"not_a_socket")).
 
 %% --------------------------------------------------------------------
 %% Helper Functions
