@@ -141,16 +141,16 @@ test_call_dynamic_function(Config) when is_list(Config) ->
 test_stateful_creation_root(Config) when is_list(Config) ->
     Id = root,
     Module = test_module,
-    Bindings = #{name => <<"Test">>, count => 5},
+    Bindings = #{name => ~"Test", count => 5},
 
     %% Test creating stateful with root ID
     Stateful = arizona_stateful:new(Id, Module, Bindings),
     ?assertEqual(Module, arizona_stateful:get_module(Stateful)),
-    ?assertEqual(<<"Test">>, arizona_stateful:get_binding(name, Stateful)),
+    ?assertEqual(~"Test", arizona_stateful:get_binding(name, Stateful)),
     ?assertEqual(5, arizona_stateful:get_binding(count, Stateful)).
 
 test_stateful_creation_binary_id(Config) when is_list(Config) ->
-    Id = <<"component_123">>,
+    Id = ~"component_123",
     Module = test_module,
     Bindings = #{active => true},
 
@@ -190,11 +190,11 @@ test_get_module(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 
 test_get_binding_existing(Config) when is_list(Config) ->
-    Bindings = #{user => <<"Alice">>, role => admin, count => 42},
+    Bindings = #{user => ~"Alice", role => admin, count => 42},
     Stateful = arizona_stateful:new(root, test_mod, Bindings),
 
     %% Should get existing bindings
-    ?assertEqual(<<"Alice">>, arizona_stateful:get_binding(user, Stateful)),
+    ?assertEqual(~"Alice", arizona_stateful:get_binding(user, Stateful)),
     ?assertEqual(admin, arizona_stateful:get_binding(role, Stateful)),
     ?assertEqual(42, arizona_stateful:get_binding(count, Stateful)).
 
@@ -236,7 +236,7 @@ test_put_bindings_multiple(Config) when is_list(Config) ->
 
     %% Add multiple bindings
     NewBindings = #{
-        name => <<"John">>,
+        name => ~"John",
         age => 30,
         active => true,
         existing => updated_value
@@ -244,7 +244,7 @@ test_put_bindings_multiple(Config) when is_list(Config) ->
     UpdatedStateful = arizona_stateful:put_bindings(NewBindings, Stateful),
 
     %% Verify all bindings
-    ?assertEqual(<<"John">>, arizona_stateful:get_binding(name, UpdatedStateful)),
+    ?assertEqual(~"John", arizona_stateful:get_binding(name, UpdatedStateful)),
     ?assertEqual(30, arizona_stateful:get_binding(age, UpdatedStateful)),
     ?assertEqual(true, arizona_stateful:get_binding(active, UpdatedStateful)),
     ?assertEqual(updated_value, arizona_stateful:get_binding(existing, UpdatedStateful)).
@@ -264,7 +264,7 @@ test_should_remount_changed_bindings(Config) when is_list(Config) ->
 
 test_should_remount_matching(Config) when is_list(Config) ->
     %% Create stateful with initial bindings
-    Bindings = #{name => <<"Test">>, count => 1},
+    Bindings = #{name => ~"Test", count => 1},
     Stateful1 = arizona_stateful:new(root, test_mod, Bindings),
 
     %% Create another with same bindings (should have matching fingerprints)

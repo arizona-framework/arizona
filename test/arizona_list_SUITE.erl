@@ -64,16 +64,16 @@ groups() ->
 %% --------------------------------------------------------------------
 
 test_call_item_function_basic(Config) when is_list(Config) ->
-    Item = #{id => 123, name => <<"test">>},
+    Item = #{id => 123, name => ~"test"},
 
     %% Simple field access
     Fun = fun(I) -> maps:get(name, I) end,
     Result = arizona_list:call_item_function(Fun, Item),
 
-    ?assertEqual(<<"test">>, Result).
+    ?assertEqual(~"test", Result).
 
 test_call_item_function_binary_result(Config) when is_list(Config) ->
-    Item = #{title => <<"Hello">>, count => 5},
+    Item = #{title => ~"Hello", count => 5},
 
     %% Function returning binary
     Fun = fun(I) ->
@@ -83,31 +83,31 @@ test_call_item_function_binary_result(Config) when is_list(Config) ->
     end,
 
     Result = arizona_list:call_item_function(Fun, Item),
-    ?assertEqual(<<"Hello (5)">>, Result).
+    ?assertEqual(~"Hello (5)", Result).
 
 test_call_item_function_iolist_result(Config) when is_list(Config) ->
-    Item = #{product => <<"Widget">>, price => 25},
+    Item = #{product => ~"Widget", price => 25},
 
     %% Function returning iolist
     Fun = fun(I) ->
         [
-            <<"<span>">>,
+            ~"<span>",
             maps:get(product, I),
-            <<"</span>">>,
-            <<"<span>$">>,
+            ~"</span>",
+            ~"<span>$",
             integer_to_binary(maps:get(price, I)),
-            <<"</span>">>
+            ~"</span>"
         ]
     end,
 
     Result = arizona_list:call_item_function(Fun, Item),
     Expected = [
-        <<"<span>">>,
-        <<"Widget">>,
-        <<"</span>">>,
-        <<"<span>$">>,
-        <<"25">>,
-        <<"</span>">>
+        ~"<span>",
+        ~"Widget",
+        ~"</span>",
+        ~"<span>$",
+        ~"25",
+        ~"</span>"
     ],
 
     ?assertEqual(Expected, Result).
@@ -117,14 +117,14 @@ test_call_item_function_iolist_result(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 
 test_call_element_function_basic(Config) when is_list(Config) ->
-    Item = #{field => <<"value">>},
+    Item = #{field => ~"value"},
     Socket = arizona_socket:new(#{}),
 
     %% Function using item data
     Fun = fun(I, _S) -> maps:get(field, I) end,
     Result = arizona_list:call_element_function(Fun, Item, Socket),
 
-    ?assertEqual(<<"value">>, Result).
+    ?assertEqual(~"value", Result).
 
 test_call_element_function_with_socket(Config) when is_list(Config) ->
     Item = #{id => 42},
