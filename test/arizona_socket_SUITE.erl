@@ -528,10 +528,10 @@ test_get_stateful_state_not_found(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
 
     % Should throw when state not found
-    ?assertError({badkey, missing_id}, arizona_socket:get_stateful_state(missing_id, Socket)).
+    ?assertError({badkey, ~"missing_id"}, arizona_socket:get_stateful_state(~"missing_id", Socket)).
 
 test_get_current_stateful_state_not_found(Config) when is_list(Config) ->
-    Socket = arizona_socket:new(#{current_stateful_id => missing_id}),
+    Socket = arizona_socket:new(#{current_stateful_id => ~"missing_id"}),
 
     % Should throw when current state not found
-    ?assertError({badkey, missing_id}, arizona_socket:get_current_stateful_state(Socket)).
+    ?assertError({badkey, ~"missing_id"}, arizona_socket:get_current_stateful_state(Socket)).
