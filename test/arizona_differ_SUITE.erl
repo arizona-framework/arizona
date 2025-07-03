@@ -179,12 +179,8 @@ diff_stateful_with_changes(Config) when is_list(Config) ->
 
     % Verify changes were accumulated
     Changes = arizona_socket:get_changes(ResultSocket),
-    ?assertMatch([{root, [_ | _]}], Changes),
-
-    % Extract the component change
-    [{ComponentId, ElementChanges}] = Changes,
-    ?assertEqual(root, ComponentId),
-    ?assert(length(ElementChanges) > 0).
+    ExpectedChanges = [{root, [{1, ~"42"}]}],
+    ?assertEqual(ExpectedChanges, Changes).
 
 diff_stateful_changes_no_affected_elements(Config) when is_list(Config) ->
     % Create stateful component with initial state
@@ -346,7 +342,8 @@ diff_stateless_component_changes(Config) when is_list(Config) ->
 
     % Verify changes were generated for the stateless component
     Changes = arizona_socket:get_changes(ResultSocket),
-    ?assertMatch([{root, [{1, _}]}], Changes).
+    ExpectedChanges = [{root, [{1, [~"<span>", ~"Jane", ~"</span>"]}]}],
+    ?assertEqual(ExpectedChanges, Changes).
 
 diff_stateless_no_optimization(Config) when is_list(Config) ->
     % Test that stateless components don't benefit from vars_indexes optimization
@@ -395,7 +392,10 @@ diff_stateless_no_optimization(Config) when is_list(Config) ->
 
     % Verify changes were generated (full re-render of element 0)
     Changes = arizona_socket:get_changes(ResultSocket),
-    ?assertMatch([{root, [{0, _}]}], Changes).
+    ExpectedChanges = [
+        {root, [{0, [~"<h1>", ~"New Title", ~"</h1><p>", ~"New content", ~"</p>"]}]}
+    ],
+    ?assertEqual(ExpectedChanges, Changes).
 
 %% --------------------------------------------------------------------
 %% Diff list tests
@@ -450,7 +450,15 @@ diff_list_basic_change(Config) when is_list(Config) ->
 
     % Verify changes were generated for the list
     Changes = arizona_socket:get_changes(ResultSocket),
-    ?assertMatch([{root, [{0, _}]}], Changes).
+    ExpectedChanges = [
+        {root, [
+            {0, [
+                [[[], [~"<li>", ~"Alice", ~"</li>"]], [~"<li>", ~"Bob", ~"</li>"]],
+                [~"<li>", ~"Charlie", ~"</li>"]
+            ]}
+        ]}
+    ],
+    ?assertEqual(ExpectedChanges, Changes).
 
 diff_list_item_addition(Config) when is_list(Config) ->
     % Test list diffing when items are added using proper list_template_data
@@ -508,7 +516,15 @@ diff_list_item_addition(Config) when is_list(Config) ->
 
     % Verify changes were generated for the list element
     Changes = arizona_socket:get_changes(ResultSocket),
-    ?assertMatch([{root, [{1, _}]}], Changes).
+    ExpectedChanges = [
+        {root, [
+            {1, [
+                [[[], [~"<li>", ~"Alice", ~"</li>"]], [~"<li>", ~"Bob", ~"</li>"]],
+                [~"<li>", ~"Charlie", ~"</li>"]
+            ]}
+        ]}
+    ],
+    ?assertEqual(ExpectedChanges, Changes).
 
 diff_list_item_removal(Config) when is_list(Config) ->
     % Test list diffing when items are removed using proper list_template_data
@@ -573,4 +589,13 @@ diff_list_item_removal(Config) when is_list(Config) ->
 
     % Verify changes were generated for the affected elements
     Changes = arizona_socket:get_changes(ResultSocket),
-    ?assertMatch([{root, ElementChanges}] when length(ElementChanges) >= 1, Changes).
+    ExpectedChanges = [
+        {root, [
+            {3, [
+                [[], [~"<div class=\"item\" data-id=\"", ~"1", ~"\">", ~"Alice", ~"</div>"]],
+                [~"<div class=\"item\" data-id=\"", ~"3", ~"\">", ~"Charlie", ~"</div>"]
+            ]},
+            {2, ~"2"}
+        ]}
+    ],
+    ?assertEqual(ExpectedChanges, Changes).
