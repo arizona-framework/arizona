@@ -3,6 +3,7 @@
 -export([render_stateful/2]).
 -export([render_stateless/2]).
 -export([render_list/4]).
+-export([render_element/2]).
 -export([format_error/2]).
 
 -doc ~"Template data from parse transform with optimized functions for stateful rendering.".
@@ -83,6 +84,9 @@ render_list(ListData, Items, _KeyFun, Socket) when is_map(ListData), is_list(Ite
     #{elems_order := ElemsOrder, elems := ElemsFuns} = DynamicSpec,
 
     %% Just accumulate socket through each item render
+    %% Note: List diffing works automatically through existing vars_indexes system
+    %% When arizona_socket:get_binding(list, Socket) changes, the parent
+    %% stateful component detects this and rerenders this dynamic element
     {Html, FinalSocket} = lists:foldl(
         fun(Item, {HtmlAcc, AccSocket}) ->
             {ItemHtml, UpdatedSocket} = render_list_item(

@@ -9,7 +9,7 @@ This module implements efficient diffing for Arizona templates:
 Generates JSON diffs in format: [{StatefulId, [{ElementIndex, Changes}]}]
 """.
 
--export([diff_stateful/2]).
+-export([diff_stateful/3]).
 -export([get_affected_elements/2, to_json/1]).
 
 %% Diff format types
@@ -24,26 +24,50 @@ Generates JSON diffs in format: [{StatefulId, [{ElementIndex, Changes}]}]
 -export_type([diff_changes/0, element_index/0, element_change/0, element_change_entry/0]).
 
 %% Optimized stateful component diffing using changed_bindings + vars_indexes
--spec diff_stateful(Stateful, Socket) -> Socket1 when
+-spec diff_stateful(TemplateData, Stateful, Socket) -> Socket1 when
+    TemplateData :: arizona_renderer:stateful_template_data(),
     Stateful :: arizona_stateful:stateful(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
-diff_stateful(Stateful, Socket) ->
-    case arizona_socket:get_mode(Socket) of
-        render ->
-            % In render mode, just return socket (no diffing)
+diff_stateful(TemplateData, Stateful, Socket) ->
+    % Get changed bindings (already filtered by put_binding/3)
+    ChangedBindings = arizona_stateful:get_changed_bindings(Stateful),
+    case maps:size(ChangedBindings) of
+        0 ->
+            % No changes, return socket unchanged
             Socket;
-        diff ->
-            diff_stateful_impl(Stateful, Socket)
+        _ ->
+            StatefulId = arizona_stateful:get_id(Stateful),
+
+            % Find affected elements using the optimization
+            AffectedElements = get_affected_elements(
+                ChangedBindings,
+                maps:get(vars_indexes, TemplateData, #{})
+            ),
+
+            case sets:size(AffectedElements) of
+                0 ->
+                    % No affected elements
+                    Socket;
+                _ ->
+                    % Create element changes for affected elements
+                    ElementChanges = create_element_changes(
+                        AffectedElements, TemplateData, Stateful, Socket
+                    ),
+                    ComponentChange = {StatefulId, ElementChanges},
+
+                    % Append changes with proper path tracking
+                    arizona_socket:append_changes([ComponentChange], Socket)
+            end
     end.
 
 %% Get affected element indexes from changed bindings and vars_indexes
 -spec get_affected_elements(ChangedBindings, VarsIndexes) -> AffectedIndexes when
     ChangedBindings :: map(),
-    VarsIndexes :: #{binary() => [element_index()]},
+    VarsIndexes :: #{atom() => [element_index()]},
     AffectedIndexes :: sets:set(element_index()).
 get_affected_elements(ChangedBindings, VarsIndexes) ->
-    ChangedVarNames = [atom_to_binary(K) || K <- maps:keys(ChangedBindings)],
+    ChangedVarNames = maps:keys(ChangedBindings),
     AffectedIndexLists = [
         maps:get(VarName, VarsIndexes, [])
      || VarName <- ChangedVarNames
@@ -60,60 +84,35 @@ to_json(DiffChanges) ->
 
 %% Internal implementation functions
 
--spec diff_stateful_impl(arizona_stateful:stateful(), arizona_socket:socket()) ->
-    arizona_socket:socket().
-diff_stateful_impl(Stateful, Socket) ->
-    % Get changed bindings (already filtered by put_binding/3)
-    ChangedBindings = arizona_stateful:get_changed_bindings(Stateful),
-    case maps:size(ChangedBindings) of
-        0 ->
-            % No changes, return socket unchanged
-            Socket;
-        _ ->
-            StatefulId = arizona_stateful:get_id(Stateful),
-
-            % Get template data for this stateful component
-            % TODO: Need to get the actual template data structure from the component
-            % For now, create a minimal structure to test the path logic
-            TemplateData = #{
-                vars_indexes => #{
-                    % Example: if 'counter' binding changed, it affects element 2
-                    ~"counter" => [2],
-                    ~"name" => [1, 3]
-                }
-            },
-
-            % Find affected elements using the optimization
-            AffectedElements = get_affected_elements(
-                ChangedBindings,
-                maps:get(vars_indexes, TemplateData, #{})
-            ),
-
-            case sets:size(AffectedElements) of
-                0 ->
-                    % No affected elements
-                    Socket;
-                _ ->
-                    % Create element changes for affected elements
-                    ElementChanges = create_element_changes(AffectedElements, ChangedBindings),
-                    ComponentChange = {StatefulId, ElementChanges},
-
-                    % Append changes with proper path tracking
-                    arizona_socket:append_changes([ComponentChange], Socket)
-            end
-    end.
-
 %% Create element changes for affected elements
--spec create_element_changes(sets:set(element_index()), map()) -> [element_change_entry()].
-create_element_changes(AffectedElements, ChangedBindings) ->
+-spec create_element_changes(
+    sets:set(element_index()),
+    arizona_renderer:stateful_template_data(),
+    arizona_stateful:stateful(),
+    arizona_socket:socket()
+) -> [element_change_entry()].
+create_element_changes(AffectedElements, TemplateData, Stateful, Socket) ->
     ElementsList = sets:to_list(AffectedElements),
-    [create_element_change(ElementIndex, ChangedBindings) || ElementIndex <- ElementsList].
+    [
+        create_element_change(ElementIndex, TemplateData, Stateful, Socket)
+     || ElementIndex <- ElementsList
+    ].
 
-%% Create a single element change entry
--spec create_element_change(element_index(), map()) -> element_change_entry().
-create_element_change(ElementIndex, ChangedBindings) ->
-    % For now, create a simple change entry
-    % TODO: This should evaluate the actual element content with new bindings
-    % For testing, just use the first changed binding value
-    [FirstValue | _] = maps:values(ChangedBindings),
-    {ElementIndex, FirstValue}.
+%% Create a single element change entry by evaluating the element with current socket
+-spec create_element_change(
+    element_index(),
+    arizona_renderer:stateful_template_data(),
+    arizona_stateful:stateful(),
+    arizona_socket:socket()
+) -> element_change_entry().
+create_element_change(ElementIndex, TemplateData, _Stateful, Socket) ->
+    #{elems := Elements} = TemplateData,
+    case Elements of
+        #{ElementIndex := Element} ->
+            % Render the element to get its new value
+            {RenderedValue, _UpdatedSocket} = arizona_renderer:render_element(Element, Socket),
+            {ElementIndex, RenderedValue};
+        #{} ->
+            % Element not found
+            {ElementIndex, ~""}
+    end.

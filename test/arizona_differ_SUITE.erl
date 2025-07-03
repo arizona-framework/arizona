@@ -110,11 +110,24 @@ diff_stateful_no_changes(Config) when is_list(Config) ->
         name => ~"John", age => 30
     }),
 
+    % Create template data for testing
+    TemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(name, Socket) end},
+            2 => {static, 3, ~"</div>"}
+        },
+        vars_indexes => #{
+            name => [1]
+        }
+    },
+
     % Create socket in diff mode
     Socket = arizona_socket:new(#{mode => diff}),
 
     % Run diff - should return unchanged socket since no changed_bindings
-    ResultSocket = arizona_differ:diff_stateful(StatefulState, Socket),
+    ResultSocket = arizona_differ:diff_stateful(TemplateData, StatefulState, Socket),
 
     % Verify no changes were accumulated
     Changes = arizona_socket:get_changes(ResultSocket),
@@ -122,26 +135,40 @@ diff_stateful_no_changes(Config) when is_list(Config) ->
 
 diff_stateful_with_changes(Config) when is_list(Config) ->
     % Create stateful component with some initial state
-    InitialState = arizona_stateful:new(~"test_component", test_module, #{
+    InitialState = arizona_stateful:new(root, test_module, #{
         name => ~"John", counter => 0
     }),
 
     % Simulate binding changes (this would normally happen through put_binding)
     ChangedState = arizona_stateful:put_binding(counter, 42, InitialState),
 
-    % Create socket in diff mode
+    % Create template data for testing
+    TemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<div>Count: "},
+            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(counter, Socket) end},
+            2 => {static, 3, ~"</div>"}
+        },
+        vars_indexes => #{
+            counter => [1]
+        }
+    },
+
+    % Create socket in diff mode with the stateful state
     Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
 
     % Run diff
-    ResultSocket = arizona_differ:diff_stateful(ChangedState, Socket),
+    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
 
     % Verify changes were accumulated
     Changes = arizona_socket:get_changes(ResultSocket),
-    ?assertMatch([{~"test_component", [_ | _]}], Changes),
+    ?assertMatch([{root, [_ | _]}], Changes),
 
     % Extract the component change
     [{ComponentId, ElementChanges}] = Changes,
-    ?assertEqual(~"test_component", ComponentId),
+    ?assertEqual(root, ComponentId),
     ?assert(length(ElementChanges) > 0).
 
 diff_stateful_changes_no_affected_elements(Config) when is_list(Config) ->
@@ -154,29 +181,60 @@ diff_stateful_changes_no_affected_elements(Config) when is_list(Config) ->
     % The template only has vars_indexes for "counter" and "name" but we change "unused_var"
     ChangedState = arizona_stateful:put_binding(unused_var, ~"some_value", InitialState),
 
+    % Create template data with only "counter" and "name" in vars_indexes
+    TemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(counter, Socket) end},
+            2 => {static, 3, ~"</div>"}
+        },
+        vars_indexes => #{
+            counter => [1],
+            % Not used in this template but listed
+            name => []
+        }
+    },
+
     % Create socket in diff mode
     Socket = arizona_socket:new(#{mode => diff}),
 
     % Run diff - should return unchanged socket since no elements are affected
     % This tests the case where changed_bindings exists but AffectedElements is empty
-    ResultSocket = arizona_differ:diff_stateful(ChangedState, Socket),
+    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, Socket),
 
     % Verify no changes were accumulated (line 92 coverage)
     Changes = arizona_socket:get_changes(ResultSocket),
     ?assertEqual([], Changes).
 
 diff_mode_vs_render_mode(Config) when is_list(Config) ->
-    StatefulState = arizona_stateful:new(~"test_component", test_module, #{counter => 0}),
+    StatefulState = arizona_stateful:new(root, test_module, #{counter => 0}),
     ChangedState = arizona_stateful:put_binding(counter, 42, StatefulState),
 
-    % Test render mode - should not generate diffs
+    % Create template data for testing
+    TemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<div>Count: "},
+            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(counter, Socket) end},
+            2 => {static, 3, ~"</div>"}
+        },
+        vars_indexes => #{
+            counter => [1]
+        }
+    },
+
+    % Test render mode - differ should still generate diffs (mode check moved to arizona_html)
     RenderSocket = arizona_socket:new(#{mode => render}),
-    RenderResult = arizona_differ:diff_stateful(ChangedState, RenderSocket),
-    ?assertEqual([], arizona_socket:get_changes(RenderResult)),
+    RenderSocketWithState = arizona_socket:put_stateful_state(ChangedState, RenderSocket),
+    RenderResult = arizona_differ:diff_stateful(TemplateData, ChangedState, RenderSocketWithState),
+    % Note: differ no longer checks mode - it always diffs when called
+    ?assert(length(arizona_socket:get_changes(RenderResult)) > 0),
 
     % Test diff mode - should generate diffs
     DiffSocket = arizona_socket:new(#{mode => diff}),
-    DiffResult = arizona_differ:diff_stateful(ChangedState, DiffSocket),
+    DiffSocketWithState = arizona_socket:put_stateful_state(ChangedState, DiffSocket),
+    DiffResult = arizona_differ:diff_stateful(TemplateData, ChangedState, DiffSocketWithState),
     DiffChanges = arizona_socket:get_changes(DiffResult),
     ?assert(length(DiffChanges) > 0).
 
@@ -187,8 +245,8 @@ diff_mode_vs_render_mode(Config) when is_list(Config) ->
 get_affected_elements_basic(Config) when is_list(Config) ->
     ChangedBindings = #{counter => 42},
     VarsIndexes = #{
-        ~"counter" => [2, 5],
-        ~"name" => [1, 3]
+        counter => [2, 5],
+        name => [1, 3]
     },
 
     AffectedElements = arizona_differ:get_affected_elements(ChangedBindings, VarsIndexes),
@@ -200,10 +258,10 @@ get_affected_elements_basic(Config) when is_list(Config) ->
 get_affected_elements_multiple_vars(Config) when is_list(Config) ->
     ChangedBindings = #{counter => 42, name => ~"Jane"},
     VarsIndexes = #{
-        ~"counter" => [2, 5],
-        ~"name" => [1, 3, 7],
+        counter => [2, 5],
+        name => [1, 3, 7],
         % Should not be affected
-        ~"other" => [4, 6]
+        other => [4, 6]
     },
 
     AffectedElements = arizona_differ:get_affected_elements(ChangedBindings, VarsIndexes),

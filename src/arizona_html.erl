@@ -14,8 +14,15 @@
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 render_stateful(TemplateData, Socket) when is_map(TemplateData) ->
-    {_Html, UpdatedSocket} = arizona_renderer:render_stateful(TemplateData, Socket),
-    UpdatedSocket;
+    case arizona_socket:get_mode(Socket) of
+        render ->
+            {_Html, UpdatedSocket} = arizona_renderer:render_stateful(TemplateData, Socket),
+            UpdatedSocket;
+        diff ->
+            % Get current stateful state for diffing
+            CurrentState = arizona_socket:get_current_stateful_state(Socket),
+            arizona_differ:diff_stateful(TemplateData, CurrentState, Socket)
+    end;
 render_stateful(Html, Socket) ->
     render_stateful_html(Html, #{}, Socket).
 

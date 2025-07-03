@@ -23,9 +23,9 @@ call_stateful(Mod, Bindings, Socket) ->
                     %% rendering and returns updated socket
                     arizona_stateful:call_render_callback(Mod, Socket2);
                 false ->
-                    %% Update socket with new state and use differ
+                    %% Update socket with new state and call render callback (which handles diffing)
                     Socket1 = arizona_socket:put_stateful_state(UpdatedState, Socket),
-                    arizona_differ:diff_stateful(UpdatedState, Socket1)
+                    arizona_stateful:call_render_callback(Mod, Socket1)
             end;
         error ->
             State = arizona_stateful:new(Id, Mod, Bindings),
