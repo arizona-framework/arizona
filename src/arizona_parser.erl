@@ -57,6 +57,7 @@ Result type for stateful parsing with element ordering, element mapping, and var
 
 -doc ~"""
 Result type for list parsing with static/dynamic template structure.
+Runtime fallback format - parse transform will optimize to arizona_renderer:list_template_data().
 """.
 -type list_result() :: #{
     static := [StaticContent :: binary()],
@@ -65,8 +66,9 @@ Result type for list parsing with static/dynamic template structure.
         elems := #{
             Index ::
                 non_neg_integer() => {
+                    Category :: dynamic,
                     Line :: pos_integer(),
-                    ElementFun :: fun((Item :: term(), Socket :: arizona_socket:socket()) -> term())
+                    ExprText :: binary()
                 }
         },
         vars_indexes := #{VarName :: binary() => [Index :: non_neg_integer()]}
