@@ -185,7 +185,44 @@ transform_template_calls(AstNode, _ModuleName, _CompilerOptions, _Depth) ->
     non_neg_integer()
 ) -> erl_parse:abstract_expr().
 transform_arizona_html_call(
-    render_stateless,
+    render_stateless, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+) ->
+    transform_render_stateless_call(
+        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+    );
+transform_arizona_html_call(
+    render_stateful, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+) ->
+    transform_render_stateful_call(
+        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+    );
+transform_arizona_html_call(
+    render_list, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+) ->
+    transform_render_list_call(
+        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+    );
+transform_arizona_html_call(
+    render_slot, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+) ->
+    transform_render_slot_call(
+        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+    );
+transform_arizona_html_call(
+    _FunctionName, CallAnnotations, RemoteCall, Args, _ModuleName, _CompilerOptions, _Depth
+) ->
+    {call, CallAnnotations, RemoteCall, Args}.
+
+%% Transform render_stateless function calls
+-spec transform_render_stateless_call(
+    erl_anno:anno(),
+    erl_parse:abstract_expr(),
+    [erl_parse:abstract_expr()],
+    atom(),
+    compile_options(),
+    non_neg_integer()
+) -> erl_parse:abstract_expr().
+transform_render_stateless_call(
     CallAnnotations,
     RemoteCall,
     [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg],
@@ -196,13 +233,22 @@ transform_arizona_html_call(
     transform_stateless_template_call(
         CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, CompilerOptions, Depth
     );
-transform_arizona_html_call(
-    render_stateless, CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
+transform_render_stateless_call(
+    CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
-    raise_template_error(badarg, ModuleName, Line);
-transform_arizona_html_call(
-    render_stateful,
+    raise_template_error(badarg, ModuleName, Line).
+
+%% Transform render_stateful function calls
+-spec transform_render_stateful_call(
+    erl_anno:anno(),
+    erl_parse:abstract_expr(),
+    [erl_parse:abstract_expr()],
+    atom(),
+    compile_options(),
+    non_neg_integer()
+) -> erl_parse:abstract_expr().
+transform_render_stateful_call(
     CallAnnotations,
     RemoteCall,
     [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg],
@@ -213,13 +259,22 @@ transform_arizona_html_call(
     transform_stateful_template_call(
         CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, CompilerOptions, Depth
     );
-transform_arizona_html_call(
-    render_stateful, CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
+transform_render_stateful_call(
+    CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
-    raise_template_error(badarg, ModuleName, Line);
-transform_arizona_html_call(
-    render_list,
+    raise_template_error(badarg, ModuleName, Line).
+
+%% Transform render_list function calls
+-spec transform_render_list_call(
+    erl_anno:anno(),
+    erl_parse:abstract_expr(),
+    [erl_parse:abstract_expr()],
+    atom(),
+    compile_options(),
+    non_neg_integer()
+) -> erl_parse:abstract_expr().
+transform_render_list_call(
     CallAnnotations,
     RemoteCall,
     [ItemFun, Items, SocketArg],
@@ -237,15 +292,84 @@ transform_arizona_html_call(
         CompilerOptions,
         Depth
     );
-transform_arizona_html_call(
-    render_list, CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
+transform_render_list_call(
+    CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
-    raise_template_error(badarg, ModuleName, Line);
-transform_arizona_html_call(
-    _FunctionName, CallAnnotations, RemoteCall, Args, _ModuleName, _CompilerOptions, _Depth
+    raise_template_error(badarg, ModuleName, Line).
+
+%% Transform render_slot function calls
+-spec transform_render_slot_call(
+    erl_anno:anno(),
+    erl_parse:abstract_expr(),
+    [erl_parse:abstract_expr()],
+    atom(),
+    compile_options(),
+    non_neg_integer()
+) -> erl_parse:abstract_expr().
+transform_render_slot_call(
+    CallAnnotations,
+    RemoteCall,
+    [SlotNameArg, SocketArg, {bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate],
+    ModuleName,
+    CompilerOptions,
+    Depth
 ) ->
+    transform_slot_template_call(
+        CallAnnotations,
+        RemoteCall,
+        SlotNameArg,
+        SocketArg,
+        BinaryTemplate,
+        ModuleName,
+        CompilerOptions,
+        Depth
+    );
+transform_render_slot_call(
+    CallAnnotations, RemoteCall, Args, _ModuleName, _CompilerOptions, _Depth
+) ->
+    % render_slot calls without binary template (2 args or non-binary 3rd arg) - pass through
     {call, CallAnnotations, RemoteCall, Args}.
+
+%% Slot Template Transformation
+
+%% Transform render_slot call with binary template default
+-spec transform_slot_template_call(
+    erl_anno:anno(),
+    erl_parse:abstract_expr(),
+    erl_parse:abstract_expr(),
+    erl_parse:abstract_expr(),
+    erl_parse:abstract_expr(),
+    atom(),
+    compile_options(),
+    non_neg_integer()
+) -> erl_parse:abstract_expr().
+transform_slot_template_call(
+    CallAnnotations,
+    RemoteCall,
+    SlotNameArg,
+    SocketArg,
+    BinaryTemplate,
+    ModuleName,
+    CompilerOptions,
+    Depth
+) ->
+    Line = erl_anno:line(CallAnnotations),
+    try
+        % Extract and parse the template at compile time (same as stateless)
+        {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
+        IoListStructure = parse_template_for_stateless(
+            TemplateString, LineNumber, CompilerOptions, Depth
+        ),
+
+        % Generate the new function call with parsed structure as default
+        create_slot_stateless_call(
+            CallAnnotations, RemoteCall, SlotNameArg, SocketArg, IoListStructure
+        )
+    catch
+        _Error:_Reason ->
+            raise_template_error(template_parse_failed, ModuleName, Line)
+    end.
 
 %% Stateless Template Transformation
 
@@ -588,6 +712,37 @@ create_stateless_parsed_call(
     IoListForm = merl:quote(IoListBinary),
     {call, CallAnnotations, {remote, RemoteAnnotations, ModuleAtom, FunctionAtom}, [
         IoListForm, SocketArg
+    ]}.
+
+%% Create optimized render_slot call with {stateless, ParsedTemplate} default
+-spec create_slot_stateless_call(
+    erl_anno:anno(),
+    erl_parse:abstract_expr(),
+    erl_parse:abstract_expr(),
+    erl_parse:abstract_expr(),
+    [term()]
+) -> erl_parse:abstract_expr().
+create_slot_stateless_call(
+    CallAnnotations,
+    {remote, RemoteAnnotations, ModuleAtom, FunctionAtom},
+    SlotNameArg,
+    SocketArg,
+    IoListStructure
+) ->
+    % Create IoList AST from the parsed structure
+    IoListBinary = iolist_to_binary(["[", lists:join(", ", IoListStructure), "]"]),
+    IoListForm = merl:quote(IoListBinary),
+
+    % Create {stateless, ParsedTemplate} tuple
+    StatelessTuple =
+        {tuple, CallAnnotations, [
+            {atom, CallAnnotations, stateless},
+            IoListForm
+        ]},
+
+    % Create render_slot(SlotName, Socket, {stateless, ParsedTemplate}) call
+    {call, CallAnnotations, {remote, RemoteAnnotations, ModuleAtom, FunctionAtom}, [
+        SlotNameArg, SocketArg, StatelessTuple
     ]}.
 
 %% Create render_stateful function call with structured data

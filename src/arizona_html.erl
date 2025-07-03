@@ -227,9 +227,12 @@ render_slot_content_smart(Content, Socket) ->
     SlotContent :: term(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
-render_slot_content({static, Html}, Socket) ->
+render_slot_content(Html, Socket) when is_binary(Html) ->
     CurrentHtml = arizona_socket:get_html(Socket),
     arizona_socket:set_html_acc([CurrentHtml, Html], Socket);
+render_slot_content({stateless, ParsedTemplate}, Socket) when is_list(ParsedTemplate) ->
+    % Handle parse-transform optimized stateless template
+    arizona_html:render_stateless(ParsedTemplate, Socket);
 render_slot_content({stateless, Mod, Fun, Bindings}, Socket) ->
     SocketWithTempBindings = arizona_socket:with_temp_bindings(Bindings, Socket),
     arizona_stateless:call_render_callback(Mod, Fun, SocketWithTempBindings);

@@ -36,7 +36,8 @@ into optimized structured formats for high-performance rendering.
     test_transform_stateful_to_ast/1,
     test_stateless_binary_handling/1,
     test_dynamic_expression_ast_creation/1,
-    test_nested_arizona_optimization/1
+    test_nested_arizona_optimization/1,
+    test_slot_template_transform/1
 ]).
 
 %% --------------------------------------------------------------------
@@ -57,7 +58,8 @@ groups() ->
             test_stateful_transform,
             test_stateful_transform_with_variables,
             test_non_arizona_call_passthrough,
-            test_nested_function_calls
+            test_nested_function_calls,
+            test_slot_template_transform
         ]},
         {error_handling_tests, [parallel], [
             test_invalid_template_error,
@@ -569,3 +571,36 @@ test_nested_arizona_optimization(Config) when is_list(Config) ->
     ),
 
     ct:comment("Nested arizona_html calls successfully optimized at compile time").
+
+test_slot_template_transform(Config) when is_list(Config) ->
+    % Test that render_slot calls with binary template defaults get optimized
+    TestCode = ~""""
+    -module(test_slot_optimization).
+    -compile({parse_transform, arizona_parse_transform}).
+
+    test_render(Socket) ->
+        arizona_html:render_slot(footer, Socket, ~"""
+        <div>Default footer with {arizona_socket:get_binding(name, Socket)}</div>
+        """).
+    """",
+
+    % Parse the test code
+    AbstractForms = merl:quote(TestCode),
+
+    % Apply the parse transform
+    TransformedForms = arizona_parse_transform:parse_transform(AbstractForms, []),
+
+    % Convert back to source to verify transformation
+    TransformedSource = lists:flatten([erl_pp:form(Form) || Form <- TransformedForms]),
+
+    % Verify the template was optimized (original binary template should be gone)
+    ?assertEqual(0, string:str(TransformedSource, "~\"<div>Default footer")),
+
+    % Verify we have {stateless, ParsedTemplate} structure
+    ?assert(string:str(TransformedSource, "{stateless,") > 0),
+
+    % Verify the render_slot call structure is preserved
+    ?assert(string:str(TransformedSource, "render_slot") > 0),
+    ?assert(string:str(TransformedSource, "footer") > 0),
+
+    ct:comment("render_slot template default successfully optimized at compile time").

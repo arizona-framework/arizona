@@ -576,7 +576,7 @@ test_extract_parameter_name_edge_cases(Config) when is_list(Config) ->
 
 test_render_slot_static_content(Config) when is_list(Config) ->
     % Create socket with static slot content
-    Socket = create_socket_with_binding(header, {static, ~"<h1>Test Header</h1>"}),
+    Socket = create_socket_with_binding(header, ~"<h1>Test Header</h1>"),
 
     % Render the slot
     UpdatedSocket = arizona_html:render_slot(header, Socket),
@@ -591,7 +591,7 @@ test_render_slot_with_default(Config) when is_list(Config) ->
     Socket = create_mock_socket(),
 
     % Render slot with default
-    DefaultContent = {static, ~"<p>Default Content</p>"},
+    DefaultContent = ~"<p>Default Content</p>",
     UpdatedSocket = arizona_html:render_slot(missing_slot, Socket, DefaultContent),
 
     % Verify default content was rendered
@@ -607,11 +607,11 @@ test_render_slot_missing_required(Config) when is_list(Config) ->
     ?assertThrow({binding_not_found, missing_slot}, arizona_html:render_slot(missing_slot, Socket)).
 
 test_render_slot_list_content(Config) when is_list(Config) ->
-    % Create socket with list slot content
+    % Create socket with list slot content - use simple binaries
     ListContent = [
-        {static, ~"<li>Item 1</li>"},
-        {static, ~"<li>Item 2</li>"},
-        {static, ~"<li>Item 3</li>"}
+        ~"<li>Item 1</li>",
+        ~"<li>Item 2</li>",
+        ~"<li>Item 3</li>"
     ],
     Socket = create_socket_with_binding(nav_items, ListContent),
 
@@ -638,9 +638,11 @@ test_render_slot_stateless_component(Config) when is_list(Config) ->
     % Verify component was rendered
     ?assert(arizona_socket:is_socket(UpdatedSocket)),
     Html = arizona_socket:get_html(UpdatedSocket),
-    % The test_stateless_module:render_with_bindings/1 should return expected content with whitespace
-    ExpectedHtml =
-        ~"<div class=\"stateless-with-bindings\">\n    <h2>Test Title</h2>\n    <p>Test Content</p>\n</div>",
+    % The test_stateless_module:render_with_bindings/1 should return expected content
+    ExpectedHtml = iolist_to_binary([
+        ~"<div class=\"stateless-with-bindings\">\n    <h2>Test Title</h2>\n    ",
+        ~"<p>Test Content</p>\n</div>"
+    ]),
     ?assertEqual(ExpectedHtml, iolist_to_binary(Html)).
 
 %% Helper function to create socket with specific binding
