@@ -231,10 +231,7 @@ merge_changes([{ComponentId, NewElementChanges} | RestNew], ExistingChanges) ->
                 {ComponentId, MergedElementChanges}
             ),
             merge_changes(RestNew, UpdatedExisting)
-    end;
-merge_changes(NewChanges, ExistingChanges) when not is_list(NewChanges) ->
-    % Handle case where NewChanges is not a list (shouldn't happen but be defensive)
-    [NewChanges | ExistingChanges].
+    end.
 
 %% Merge element changes within the same component
 -spec merge_element_changes(NewElementChanges, ExistingElementChanges) ->
