@@ -51,13 +51,13 @@ diff_stateful(TemplateData, Stateful, Socket) ->
                     Socket;
                 _ ->
                     % Create element changes for affected elements
-                    ElementChanges = create_element_changes(
-                        AffectedElements, TemplateData, Stateful, Socket
+                    {ElementChanges, UpdatedSocket} = create_element_changes(
+                        AffectedElements, TemplateData, Socket
                     ),
                     ComponentChange = {StatefulId, ElementChanges},
 
                     % Append changes with proper path tracking
-                    arizona_socket:append_changes([ComponentChange], Socket)
+                    arizona_socket:append_changes([ComponentChange], UpdatedSocket)
             end
     end.
 
@@ -88,31 +88,19 @@ to_json(DiffChanges) ->
 -spec create_element_changes(
     sets:set(element_index()),
     arizona_renderer:stateful_template_data(),
-    arizona_stateful:stateful(),
     arizona_socket:socket()
-) -> [element_change_entry()].
-create_element_changes(AffectedElements, TemplateData, Stateful, Socket) ->
+) -> {[element_change_entry()], arizona_socket:socket()}.
+create_element_changes(AffectedElements, TemplateData, Socket) ->
     ElementsList = sets:to_list(AffectedElements),
-    [
-        create_element_change(ElementIndex, TemplateData, Stateful, Socket)
-     || ElementIndex <- ElementsList
-    ].
-
-%% Create a single element change entry by evaluating the element with current socket
--spec create_element_change(
-    element_index(),
-    arizona_renderer:stateful_template_data(),
-    arizona_stateful:stateful(),
-    arizona_socket:socket()
-) -> element_change_entry().
-create_element_change(ElementIndex, TemplateData, _Stateful, Socket) ->
-    #{elems := Elements} = TemplateData,
-    case Elements of
-        #{ElementIndex := Element} ->
-            % Render the element to get its new value
-            {RenderedValue, _UpdatedSocket} = arizona_renderer:render_element(Element, Socket),
-            {ElementIndex, RenderedValue};
-        #{} ->
-            % Element not found
-            {ElementIndex, ~""}
-    end.
+    Elements = maps:get(elems, TemplateData),
+    {ElementChanges, FinalSocket} = lists:foldl(
+        fun(ElementIndex, {ChangesAcc, AccSocket}) ->
+            Element = maps:get(ElementIndex, Elements),
+            {RenderedValue, UpdatedSocket} = arizona_renderer:render_element(Element, AccSocket),
+            ElementChange = {ElementIndex, RenderedValue},
+            {[ElementChange | ChangesAcc], UpdatedSocket}
+        end,
+        {[], Socket},
+        ElementsList
+    ),
+    {lists:reverse(ElementChanges), FinalSocket}.
