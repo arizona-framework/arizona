@@ -8,7 +8,13 @@
 %% --------------------------------------------------------------------
 
 all() ->
-    [{group, socket_changes}, {group, diff_stateful}, {group, diff_optimization}].
+    [
+        {group, socket_changes},
+        {group, diff_stateful},
+        {group, diff_stateless},
+        {group, diff_list},
+        {group, diff_optimization}
+    ].
 
 groups() ->
     [
@@ -23,6 +29,15 @@ groups() ->
             diff_stateful_with_changes,
             diff_stateful_changes_no_affected_elements,
             diff_mode_vs_render_mode
+        ]},
+        {diff_stateless, [parallel], [
+            diff_stateless_component_changes,
+            diff_stateless_no_optimization
+        ]},
+        {diff_list, [parallel], [
+            diff_list_basic_change,
+            diff_list_item_addition,
+            diff_list_item_removal
         ]},
         {diff_optimization, [parallel], [
             get_affected_elements_basic,
@@ -279,3 +294,283 @@ to_json_conversion(Config) when is_list(Config) ->
 
     % Should be the same format (already JSON-compatible)
     ?assertEqual(DiffChanges, JsonData).
+
+%% --------------------------------------------------------------------
+%% Diff stateless tests
+%% --------------------------------------------------------------------
+
+diff_stateless_component_changes(Config) when is_list(Config) ->
+    % Test that stateless components trigger full re-render (no optimization)
+    % when variables change, since they don't have vars_indexes optimization
+    InitialState = arizona_stateful:new(root, test_module, #{
+        name => ~"John",
+        message => ~"Hello"
+    }),
+
+    % Change a binding that would affect stateless components
+    ChangedState = arizona_stateful:put_binding(name, ~"Jane", InitialState),
+
+    % Create template data that includes a stateless component call
+    TemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 =>
+                {dynamic, 2, fun(Socket) ->
+                    % This simulates a stateless component call that would need full re-render
+                    arizona_html:render_stateless(
+                        [
+                            {static, 1, ~"<span>"},
+                            {dynamic, 2, fun(S) -> arizona_socket:get_binding(name, S) end},
+                            {static, 3, ~"</span>"}
+                        ],
+                        Socket
+                    )
+                end},
+            2 => {static, 3, ~"</div>"}
+        },
+        vars_indexes => #{
+            % name affects element 1
+            name => [1],
+            % message not used in this template
+            message => []
+        }
+    },
+
+    % Create socket and run diff
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Run diff
+    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
+
+    % Verify changes were generated for the stateless component
+    Changes = arizona_socket:get_changes(ResultSocket),
+    ?assertMatch([{root, [{1, _}]}], Changes).
+
+diff_stateless_no_optimization(Config) when is_list(Config) ->
+    % Test that stateless components don't benefit from vars_indexes optimization
+    % They always re-render when their containing stateful component changes
+    InitialState = arizona_stateful:new(root, test_module, #{
+        title => ~"Page Title",
+        content => ~"Page content"
+    }),
+
+    % Change both variables
+    ChangedState1 = arizona_stateful:put_binding(title, ~"New Title", InitialState),
+    ChangedState = arizona_stateful:put_binding(content, ~"New content", ChangedState1),
+
+    % Template with stateless component that uses both variables
+    TemplateData = #{
+        elems_order => [0],
+        elems => #{
+            0 =>
+                {dynamic, 1, fun(Socket) ->
+                    % Stateless component that renders both variables
+                    arizona_html:render_stateless(
+                        [
+                            {static, 1, ~"<h1>"},
+                            {dynamic, 2, fun(S) -> arizona_socket:get_binding(title, S) end},
+                            {static, 3, ~"</h1><p>"},
+                            {dynamic, 4, fun(S) -> arizona_socket:get_binding(content, S) end},
+                            {static, 5, ~"</p>"}
+                        ],
+                        Socket
+                    )
+                end}
+        },
+        vars_indexes => #{
+            title => [0],
+            % Both variables affect the same element
+            content => [0]
+        }
+    },
+
+    % Create socket and run diff
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Run diff
+    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
+
+    % Verify changes were generated (full re-render of element 0)
+    Changes = arizona_socket:get_changes(ResultSocket),
+    ?assertMatch([{root, [{0, _}]}], Changes).
+
+%% --------------------------------------------------------------------
+%% Diff list tests
+%% --------------------------------------------------------------------
+
+diff_list_basic_change(Config) when is_list(Config) ->
+    % Test basic list diffing using proper list_template_data
+    InitialList = [~"Alice", ~"Bob"],
+    InitialState = arizona_stateful:new(root, test_module, #{list => InitialList}),
+
+    % Change the list
+    NewList = [~"Alice", ~"Bob", ~"Charlie"],
+    ChangedState = arizona_stateful:put_binding(list, NewList, InitialState),
+
+    % Create list template data
+    ListTemplateData = #{
+        static => [~"<li>", ~"</li>"],
+        dynamic => #{
+            elems_order => [0],
+            elems => #{
+                0 => {dynamic, 1, fun(Item, _Socket) -> Item end}
+            },
+            vars_indexes => #{
+                list => [0]
+            }
+        }
+    },
+
+    % Create stateful template data that uses arizona_renderer:render_list
+    TemplateData = #{
+        elems_order => [0],
+        elems => #{
+            0 =>
+                {dynamic, 1, fun(Socket) ->
+                    CurrentList = arizona_socket:get_binding(list, Socket),
+                    arizona_html:render_list(
+                        ListTemplateData, CurrentList, fun(Item) -> Item end, Socket
+                    )
+                end}
+        },
+        vars_indexes => #{
+            list => [0]
+        }
+    },
+
+    % Create socket and run diff
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Run diff
+    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
+
+    % Verify changes were generated for the list
+    Changes = arizona_socket:get_changes(ResultSocket),
+    ?assertMatch([{root, [{0, _}]}], Changes).
+
+diff_list_item_addition(Config) when is_list(Config) ->
+    % Test list diffing when items are added using proper list_template_data
+    InitialItems = [#{id => 1, name => ~"Alice"}, #{id => 2, name => ~"Bob"}],
+    InitialState = arizona_stateful:new(root, test_module, #{items => InitialItems}),
+
+    % Add a new item
+    NewItems = [
+        #{id => 1, name => ~"Alice"},
+        #{id => 2, name => ~"Bob"},
+        #{id => 3, name => ~"Charlie"}
+    ],
+    ChangedState = arizona_stateful:put_binding(items, NewItems, InitialState),
+
+    % Create list template data for item rendering
+    ListTemplateData = #{
+        static => [~"<li>", ~"</li>"],
+        dynamic => #{
+            elems_order => [0],
+            elems => #{
+                0 => {dynamic, 1, fun(Item, _Socket) -> maps:get(name, Item) end}
+            },
+            vars_indexes => #{
+                name => [0]
+            }
+        }
+    },
+
+    % Template that renders list items using arizona_renderer:render_list
+    TemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<ul>"},
+            1 =>
+                {dynamic, 2, fun(Socket) ->
+                    Items = arizona_socket:get_binding(items, Socket),
+                    arizona_html:render_list(
+                        ListTemplateData, Items, fun(Item) -> maps:get(id, Item) end, Socket
+                    )
+                end},
+            2 => {static, 3, ~"</ul>"}
+        },
+        vars_indexes => #{
+            % items variable affects element 1
+            items => [1]
+        }
+    },
+
+    % Create socket and run diff
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Run diff
+    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
+
+    % Verify changes were generated for the list element
+    Changes = arizona_socket:get_changes(ResultSocket),
+    ?assertMatch([{root, [{1, _}]}], Changes).
+
+diff_list_item_removal(Config) when is_list(Config) ->
+    % Test list diffing when items are removed using proper list_template_data
+    InitialItems = [
+        #{id => 1, name => ~"Alice"},
+        #{id => 2, name => ~"Bob"},
+        #{id => 3, name => ~"Charlie"}
+    ],
+    InitialState = arizona_stateful:new(root, test_module, #{items => InitialItems}),
+
+    % Remove an item
+    NewItems = [#{id => 1, name => ~"Alice"}, #{id => 3, name => ~"Charlie"}],
+    ChangedState = arizona_stateful:put_binding(items, NewItems, InitialState),
+
+    % Create complex list template data with dynamic attributes
+    ListTemplateData = #{
+        static => [~"<div class=\"item\" data-id=\"", ~"\">", ~"</div>"],
+        dynamic => #{
+            elems_order => [0, 1],
+            elems => #{
+                0 => {dynamic, 1, fun(Item, _Socket) -> integer_to_binary(maps:get(id, Item)) end},
+                1 => {dynamic, 1, fun(Item, _Socket) -> maps:get(name, Item) end}
+            },
+            vars_indexes => #{
+                id => [0],
+                name => [1]
+            }
+        }
+    },
+
+    % Template that renders list with dynamic content using arizona_renderer:render_list
+    TemplateData = #{
+        elems_order => [0, 1, 2, 3],
+        elems => #{
+            0 => {static, 1, ~"<div class=\"list\">"},
+            1 => {static, 2, ~"<span>Total: "},
+            2 =>
+                {dynamic, 3, fun(Socket) ->
+                    Items = arizona_socket:get_binding(items, Socket),
+                    integer_to_binary(length(Items))
+                end},
+            3 =>
+                {dynamic, 4, fun(Socket) ->
+                    Items = arizona_socket:get_binding(items, Socket),
+                    arizona_html:render_list(
+                        ListTemplateData, Items, fun(Item) -> maps:get(id, Item) end, Socket
+                    )
+                end}
+        },
+        vars_indexes => #{
+            % items variable affects elements 2 and 3
+            items => [2, 3]
+        }
+    },
+
+    % Create socket and run diff
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Run diff
+    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
+
+    % Verify changes were generated for the affected elements
+    Changes = arizona_socket:get_changes(ResultSocket),
+    ?assertMatch([{root, ElementChanges}] when length(ElementChanges) >= 1, Changes).

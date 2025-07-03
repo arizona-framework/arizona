@@ -40,6 +40,7 @@
         elems := #{
             Index ::
                 non_neg_integer() => {
+                    Category :: dynamic,
                     Line :: pos_integer(),
                     ElementFun :: fun((Item :: term(), Socket :: arizona_socket:socket()) -> term())
                 }
