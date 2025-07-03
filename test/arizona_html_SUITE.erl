@@ -12,7 +12,10 @@ all() ->
         {group, render_stateful_tests},
         {group, render_stateless_tests},
         {group, render_list_tests},
-        {group, to_html_tests}
+        {group, to_html_tests},
+        {group, diff_mode_tests},
+        {group, error_handling_tests},
+        {group, edge_case_tests}
     ].
 
 groups() ->
@@ -46,6 +49,20 @@ groups() ->
             test_to_html_float,
             test_to_html_complex_term,
             test_to_html_socket
+        ]},
+        {diff_mode_tests, [parallel], [
+            test_render_stateful_diff_mode,
+            test_render_stateful_mode_switching
+        ]},
+        {error_handling_tests, [parallel], [
+            test_render_stateful_invalid_template,
+            test_render_stateless_invalid_template,
+            test_render_list_error_function
+        ]},
+        {edge_case_tests, [parallel], [
+            test_to_html_float_infinity,
+            test_to_html_deeply_nested_list,
+            test_extract_parameter_name_edge_cases
         ]}
     ].
 
@@ -409,3 +426,138 @@ create_mock_socket() ->
     },
     Socket = arizona_socket:new(Opts),
     arizona_socket:put_stateful_state(Stateful, Socket).
+
+%% --------------------------------------------------------------------
+%% Diff mode tests
+%% --------------------------------------------------------------------
+
+test_render_stateful_diff_mode(Config) when is_list(Config) ->
+    % Test render_stateful with socket in diff mode
+    TemplateData = #{
+        elems_order => [0],
+        elems => #{0 => {static, 1, ~"<div>content</div>"}},
+        vars_indexes => #{}
+    },
+
+    % Create socket in diff mode with stateful state
+    Stateful = arizona_stateful:new(root, test_module, #{counter => 42}),
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(Stateful, Socket),
+
+    % This should call arizona_differ:diff_stateful/3
+    ResultSocket = arizona_html:render_stateful(TemplateData, SocketWithState),
+
+    % Verify socket is returned (differ returns socket)
+    ?assert(arizona_socket:is_socket(ResultSocket)).
+
+test_render_stateful_mode_switching(Config) when is_list(Config) ->
+    % Test that different modes produce different behavior
+    TemplateData = #{
+        elems_order => [0],
+        elems => #{0 => {static, 1, ~"<div>test</div>"}},
+        vars_indexes => #{}
+    },
+
+    % Test render mode
+    RenderSocket = arizona_socket:new(#{mode => render}),
+    RenderResult = arizona_html:render_stateful(TemplateData, RenderSocket),
+    ?assert(arizona_socket:is_socket(RenderResult)),
+
+    % Test diff mode
+    Stateful = arizona_stateful:new(root, test_module, #{}),
+    DiffSocket = arizona_socket:new(#{mode => diff}),
+    DiffSocketWithState = arizona_socket:put_stateful_state(Stateful, DiffSocket),
+    DiffResult = arizona_html:render_stateful(TemplateData, DiffSocketWithState),
+    ?assert(arizona_socket:is_socket(DiffResult)).
+
+%% --------------------------------------------------------------------
+%% Error handling tests
+%% --------------------------------------------------------------------
+
+test_render_stateful_invalid_template(Config) when is_list(Config) ->
+    % Test with malformed template syntax
+    InvalidHtml = ~"<div>{unclosed_expression",
+    Socket = create_mock_socket(),
+
+    % This should cause a scanner or parser error
+    ?assertError(_, arizona_html:render_stateful(InvalidHtml, Socket)).
+
+test_render_stateless_invalid_template(Config) when is_list(Config) ->
+    % Test with malformed template for stateless rendering
+    InvalidHtml = ~"<div>{another_unclosed",
+    Socket = create_mock_socket(),
+
+    % This should cause a scanner or parser error
+    ?assertError(_, arizona_html:render_stateless(InvalidHtml, Socket)).
+
+test_render_list_error_function(Config) when is_list(Config) ->
+    % Test render_list with function that throws error
+    ErrorFun = fun(_Item) -> error(test_error) end,
+    Items = [1, 2, 3],
+    Socket = create_mock_socket(),
+
+    % Should propagate the error
+    ?assertError(test_error, arizona_html:render_list(ErrorFun, Items, Socket)).
+
+%% --------------------------------------------------------------------
+%% Edge case tests
+%% --------------------------------------------------------------------
+
+test_to_html_float_infinity(Config) when is_list(Config) ->
+    Socket = create_mock_socket(),
+
+    % Test very large float (near infinity)
+    {ResultLarge, _} = arizona_html:to_html(1.0e308, Socket),
+    ?assert(is_binary(ResultLarge)),
+    ?assert(byte_size(ResultLarge) > 0),
+
+    % Test very small float
+    {ResultSmall, _} = arizona_html:to_html(1.0e-308, Socket),
+    ?assert(is_binary(ResultSmall)),
+    ?assert(byte_size(ResultSmall) > 0),
+
+    % Test negative large float
+    {ResultNegLarge, _} = arizona_html:to_html(-1.0e308, Socket),
+    ?assert(is_binary(ResultNegLarge)),
+    ?assert(byte_size(ResultNegLarge) > 0).
+
+test_to_html_deeply_nested_list(Config) when is_list(Config) ->
+    Socket = create_mock_socket(),
+
+    % Create deeply nested list (50 levels deep to avoid stack overflow)
+    DeepList = lists:foldl(
+        fun(_, Acc) -> [Acc] end,
+        ~"content",
+        lists:seq(1, 50)
+    ),
+
+    {Result, _} = arizona_html:to_html(DeepList, Socket),
+    ?assert(iolist_size(Result) > 0),
+
+    % Verify content is preserved
+    FlatResult = iolist_to_binary(Result),
+    ?assert(binary:match(FlatResult, ~"content") =/= nomatch).
+
+test_extract_parameter_name_edge_cases(Config) when is_list(Config) ->
+    % Test parameter extraction indirectly through render_list behavior
+    Socket = create_mock_socket(),
+
+    % Test with function that uses parameter name
+    FunWithParam = fun(Item) ->
+        io_lib:format("item:~p", [Item])
+    end,
+    Items = [1, 2],
+
+    % This exercises the parameter extraction code path
+    ResultSocket = arizona_html:render_list(FunWithParam, Items, Socket),
+    ?assert(arizona_socket:is_socket(ResultSocket)),
+
+    % Test with complex function
+    ComplexFun = fun(Element) ->
+        case Element of
+            N when is_integer(N) -> integer_to_binary(N);
+            _ -> ~"other"
+        end
+    end,
+    ComplexResult = arizona_html:render_list(ComplexFun, [42, atom], Socket),
+    ?assert(arizona_socket:is_socket(ComplexResult)).
