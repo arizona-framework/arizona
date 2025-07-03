@@ -4,6 +4,7 @@
 -export([render_stateless/2]).
 -export([render_list/3]).
 -export([to_html/2]).
+-export([render_slot/2, render_slot/3]).
 
 %% Types
 -type html() :: iodata().
@@ -180,3 +181,58 @@ extract_list_item_parameter_name(ListItemFunction) when is_function(ListItemFunc
             {var, _VarLine, ParameterName} = FirstParameter,
             ParameterName
     end.
+
+%% --------------------------------------------------------------------
+%% Slot rendering functions
+%% --------------------------------------------------------------------
+
+%% Render a required slot from bindings
+-spec render_slot(SlotName, Socket) -> Socket1 when
+    SlotName :: atom(),
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+render_slot(SlotName, Socket) ->
+    SlotContent = arizona_socket:get_binding(SlotName, Socket),
+    render_slot_content_smart(SlotContent, Socket).
+
+%% Render an optional slot from bindings with fallback
+-spec render_slot(SlotName, Socket, Default) -> Socket1 when
+    SlotName :: atom(),
+    Socket :: arizona_socket:socket(),
+    Default :: term(),
+    Socket1 :: arizona_socket:socket().
+render_slot(SlotName, Socket, Default) ->
+    SlotContent = arizona_socket:get_binding(SlotName, Socket, Default),
+    render_slot_content_smart(SlotContent, Socket).
+
+%% Smart slot content renderer - handles both single and list slots
+-spec render_slot_content_smart(Content, Socket) -> Socket1 when
+    Content :: term(),
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+render_slot_content_smart(Content, Socket) when is_list(Content) ->
+    % List of slots - render each item, threading socket through
+    lists:foldl(
+        fun(Item, SocketAcc) ->
+            render_slot_content(Item, SocketAcc)
+        end,
+        Socket,
+        Content
+    );
+render_slot_content_smart(Content, Socket) ->
+    render_slot_content(Content, Socket).
+
+%% Render individual slot content based on type
+-spec render_slot_content(SlotContent, Socket) -> Socket1 when
+    SlotContent :: term(),
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+render_slot_content({static, Html}, Socket) ->
+    CurrentHtml = arizona_socket:get_html(Socket),
+    arizona_socket:set_html_acc([CurrentHtml, Html], Socket);
+render_slot_content({stateless, Mod, Fun, Bindings}, Socket) ->
+    SocketWithTempBindings = arizona_socket:with_temp_bindings(Bindings, Socket),
+    arizona_stateless:call_render_callback(Mod, Fun, SocketWithTempBindings);
+render_slot_content({stateful, Module, Bindings}, Socket) ->
+    SocketWithBindings = arizona_socket:put_bindings(Bindings, Socket),
+    arizona_stateful:call_render_callback(Module, SocketWithBindings).

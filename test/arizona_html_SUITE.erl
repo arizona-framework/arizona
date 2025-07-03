@@ -15,7 +15,8 @@ all() ->
         {group, to_html_tests},
         {group, diff_mode_tests},
         {group, error_handling_tests},
-        {group, edge_case_tests}
+        {group, edge_case_tests},
+        {group, slot_tests}
     ].
 
 groups() ->
@@ -63,6 +64,13 @@ groups() ->
             test_to_html_float_infinity,
             test_to_html_deeply_nested_list,
             test_extract_parameter_name_edge_cases
+        ]},
+        {slot_tests, [parallel], [
+            test_render_slot_static_content,
+            test_render_slot_with_default,
+            test_render_slot_missing_required,
+            test_render_slot_list_content,
+            test_render_slot_stateless_component
         ]}
     ].
 
@@ -561,3 +569,85 @@ test_extract_parameter_name_edge_cases(Config) when is_list(Config) ->
     end,
     ComplexResult = arizona_html:render_list(ComplexFun, [42, atom], Socket),
     ?assert(arizona_socket:is_socket(ComplexResult)).
+
+%% --------------------------------------------------------------------
+%% Slot tests
+%% --------------------------------------------------------------------
+
+test_render_slot_static_content(Config) when is_list(Config) ->
+    % Create socket with static slot content
+    Socket = create_socket_with_binding(header, {static, ~"<h1>Test Header</h1>"}),
+
+    % Render the slot
+    UpdatedSocket = arizona_html:render_slot(header, Socket),
+
+    % Verify slot content was rendered
+    ?assert(arizona_socket:is_socket(UpdatedSocket)),
+    Html = arizona_socket:get_html(UpdatedSocket),
+    ?assertEqual(~"<h1>Test Header</h1>", iolist_to_binary(Html)).
+
+test_render_slot_with_default(Config) when is_list(Config) ->
+    % Create socket without the slot binding
+    Socket = create_mock_socket(),
+
+    % Render slot with default
+    DefaultContent = {static, ~"<p>Default Content</p>"},
+    UpdatedSocket = arizona_html:render_slot(missing_slot, Socket, DefaultContent),
+
+    % Verify default content was rendered
+    ?assert(arizona_socket:is_socket(UpdatedSocket)),
+    Html = arizona_socket:get_html(UpdatedSocket),
+    ?assertEqual(~"<p>Default Content</p>", iolist_to_binary(Html)).
+
+test_render_slot_missing_required(Config) when is_list(Config) ->
+    % Create socket without the slot binding
+    Socket = create_mock_socket(),
+
+    % Rendering required slot should crash with binding_not_found
+    ?assertThrow({binding_not_found, missing_slot}, arizona_html:render_slot(missing_slot, Socket)).
+
+test_render_slot_list_content(Config) when is_list(Config) ->
+    % Create socket with list slot content
+    ListContent = [
+        {static, ~"<li>Item 1</li>"},
+        {static, ~"<li>Item 2</li>"},
+        {static, ~"<li>Item 3</li>"}
+    ],
+    Socket = create_socket_with_binding(nav_items, ListContent),
+
+    % Render the list slot
+    UpdatedSocket = arizona_html:render_slot(nav_items, Socket),
+
+    % Verify all items were rendered
+    ?assert(arizona_socket:is_socket(UpdatedSocket)),
+    Html = arizona_socket:get_html(UpdatedSocket),
+    ExpectedHtml = ~"<li>Item 1</li><li>Item 2</li><li>Item 3</li>",
+    ?assertEqual(ExpectedHtml, iolist_to_binary(Html)).
+
+test_render_slot_stateless_component(Config) when is_list(Config) ->
+    % Create socket with stateless component slot using existing test module
+    ComponentSlot =
+        {stateless, test_stateless_module, render_with_bindings, #{
+            title => ~"Test Title", content => ~"Test Content"
+        }},
+    Socket = create_socket_with_binding(component_slot, ComponentSlot),
+
+    % Render the component slot
+    UpdatedSocket = arizona_html:render_slot(component_slot, Socket),
+
+    % Verify component was rendered
+    ?assert(arizona_socket:is_socket(UpdatedSocket)),
+    Html = arizona_socket:get_html(UpdatedSocket),
+    % The test_stateless_module:render_with_bindings/1 should return expected content with whitespace
+    ExpectedHtml =
+        ~"<div class=\"stateless-with-bindings\">\n    <h2>Test Title</h2>\n    <p>Test Content</p>\n</div>",
+    ?assertEqual(ExpectedHtml, iolist_to_binary(Html)).
+
+%% Helper function to create socket with specific binding
+create_socket_with_binding(Key, Value) ->
+    % Match the ID used in create_mock_socket
+    Id = ~"test_id",
+    StatefulState = arizona_stateful:new(Id, test_module, #{Key => Value}),
+    Opts = #{current_stateful_id => Id},
+    Socket = arizona_socket:new(Opts),
+    arizona_socket:put_stateful_state(StatefulState, Socket).

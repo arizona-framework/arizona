@@ -23,6 +23,7 @@
 -export([new/3]).
 -export([get_module/1, get_id/1]).
 -export([get_binding/2]).
+-export([get_binding/3]).
 -export([put_binding/3]).
 -export([put_bindings/2]).
 -export([get_changed_bindings/1]).
@@ -121,6 +122,17 @@ get_binding(Key, #stateful{} = Stateful) when is_atom(Key) ->
     case Stateful#stateful.bindings of
         #{Key := Value} -> Value;
         #{} -> throw({binding_not_found, Key})
+    end.
+
+-spec get_binding(Key, Stateful, Default) -> Value when
+    Key :: atom(),
+    Stateful :: stateful(),
+    Default :: term(),
+    Value :: term() | Default.
+get_binding(Key, #stateful{} = Stateful, Default) when is_atom(Key) ->
+    case Stateful#stateful.bindings of
+        #{Key := Value} -> Value;
+        #{} -> Default
     end.
 
 -spec put_binding(Key, Value, Stateful) -> Stateful1 when

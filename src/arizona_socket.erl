@@ -14,7 +14,7 @@
 -export([put_stateful_state/2]).
 
 %% Binding functions
--export([get_binding/2, put_binding/3, put_bindings/2]).
+-export([get_binding/2, get_binding/3, put_binding/3, put_bindings/2]).
 -export([with_temp_bindings/2, get_temp_binding/2]).
 
 %% Types
@@ -140,6 +140,22 @@ get_binding(Key, #socket{} = Socket) when is_atom(Key) ->
             %% Fall back to stateful bindings
             CurrentState = get_current_stateful_state(Socket),
             arizona_stateful:get_binding(Key, CurrentState)
+    end.
+
+-spec get_binding(Key, Socket, Default) -> Value when
+    Key :: atom(),
+    Socket :: socket(),
+    Default :: term(),
+    Value :: term() | Default.
+get_binding(Key, #socket{} = Socket, Default) when is_atom(Key) ->
+    %% First try temporary bindings (for stateless components)
+    case Socket#socket.temp_bindings of
+        #{Key := Value} ->
+            Value;
+        #{} ->
+            %% Fall back to stateful bindings
+            CurrentState = get_current_stateful_state(Socket),
+            arizona_stateful:get_binding(Key, CurrentState, Default)
     end.
 
 %% Temporary binding functions for stateless components
