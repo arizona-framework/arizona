@@ -83,20 +83,19 @@ render_list(ListData, Items, _KeyFun, Socket) when is_map(ListData), is_list(Ite
     #{elems_order := ElemsOrder, elems := ElemsFuns} = DynamicSpec,
 
     %% Just accumulate socket through each item render
-    FinalSocket = lists:foldl(
-        fun(Item, AccSocket) ->
-            {_ItemHtml, UpdatedSocket} = render_list_item(
+    {Html, FinalSocket} = lists:foldl(
+        fun(Item, {HtmlAcc, AccSocket}) ->
+            {ItemHtml, UpdatedSocket} = render_list_item(
                 StaticParts, ElemsOrder, ElemsFuns, Item, AccSocket
             ),
-            UpdatedSocket
+            {[HtmlAcc, ItemHtml], UpdatedSocket}
         end,
-        Socket,
+        {[], Socket},
         Items
     ),
 
-    %% Get accumulated HTML from final socket
-    Html = arizona_socket:get_html(FinalSocket),
-    {Html, FinalSocket}.
+    FinalSocket1 = arizona_socket:set_html_acc(Html, FinalSocket),
+    {Html, FinalSocket1}.
 
 %% Render elements in order for stateful templates
 render_elements([], _Elements, Socket, Acc) ->
@@ -121,17 +120,13 @@ render_element({static, _Line, Content}, Socket) when is_binary(Content) ->
 render_element({dynamic, Line, Fun}, Socket) when is_function(Fun, 1) ->
     try
         Result = arizona_stateful:call_dynamic_function(Fun, Socket),
-        HtmlResult = arizona_html:to_html(Result),
-        {HtmlResult, Socket}
+        arizona_html:to_html(Result, Socket)
     catch
         throw:{binding_not_found, Key} ->
             error({binding_not_found, Key}, none, binding_error_info(Line, Key, Socket));
         _:Error ->
             error({template_render_error, Error, Line})
-    end;
-render_element({dynamic, _Line, Content}, Socket) when is_binary(Content) ->
-    %% For simple dynamic content (like from parse transform)
-    {Content, Socket}.
+    end.
 
 %% Render a single list item using template structure
 render_list_item(StaticParts, ElemsOrder, ElemsFuns, Item, Socket) ->
@@ -143,11 +138,7 @@ render_list_item(StaticParts, ElemsOrder, ElemsFuns, Item, Socket) ->
     %% Zip static and dynamic parts together
     ItemHtml = zip_static_dynamic(StaticParts, DynamicValues),
 
-    %% Accumulate HTML in socket
-    CurrentHtml = arizona_socket:get_html(UpdatedSocket),
-    FinalSocket = arizona_socket:set_html_acc([CurrentHtml, ItemHtml], UpdatedSocket),
-
-    {ItemHtml, FinalSocket}.
+    {ItemHtml, UpdatedSocket}.
 
 %% Evaluate dynamic elements for a list item
 evaluate_dynamic_elements_for_item([], _ElemsFuns, _Item, Socket) ->
@@ -158,7 +149,7 @@ evaluate_dynamic_elements_for_item([ElemIndex | Rest], ElemsFuns, Item, Socket) 
     {Value, UpdatedSocket} =
         try
             Result = arizona_list:call_element_function(Fun, Item, Socket),
-            {Result, Socket}
+            arizona_html:to_html(Result, Socket)
         catch
             throw:{binding_not_found, Key} ->
                 error({binding_not_found, Key}, none, binding_error_info(Line, Key, Socket));

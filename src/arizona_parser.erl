@@ -33,7 +33,11 @@ indexes for efficient template updates in stateful rendering mode.
 -export_type([token/0]).
 
 -doc ~"Result type for stateless parsing - list of tokens with comments filtered out.".
--type stateless_result() :: [Token :: token()].
+-type stateless_result() :: [
+    Token :: {
+        Category :: static | dynamic, Line :: pos_integer(), Content :: binary()
+    }
+].
 -export_type([stateless_result/0]).
 
 -doc ~"""

@@ -440,8 +440,7 @@ test_stateless_binary_elements(Config) when is_list(Config) ->
 test_transform_stateless_to_ast(Config) when is_list(Config) ->
     % Create a simple stateless result list as expected by the function
     StatelessList = [
-        ~"<h1>Title</h1>",
-        ~"<footer>Footer</footer>"
+        {static, 1, ~"<h1>Title</h1><footer>Footer</footer>"}
     ],
 
     % Call transform_stateless_to_ast directly
@@ -481,9 +480,9 @@ test_transform_stateful_to_ast(Config) when is_list(Config) ->
 test_stateless_binary_handling(Config) when is_list(Config) ->
     % Create a stateless list with only binary literals
     PureBinaryList = [
-        ~"<html>",
-        ~"<body>Static content</body>",
-        ~"</html>"
+        {static, 1, ~"<html>"},
+        {static, 1, ~"<body>Static content</body>"},
+        {static, 1, ~"</html>"}
     ],
 
     % Call transform_stateless_to_ast
@@ -499,10 +498,10 @@ test_stateless_binary_handling(Config) when is_list(Config) ->
 test_dynamic_expression_ast_creation(Config) when is_list(Config) ->
     % Test transform_stateless_to_ast with non-binary items to trigger line 123
     MixedList = [
-        ~"<h1>Title</h1>",
+        {static, 1, ~"<h1>Title</h1>"},
         % This will trigger the erl_syntax:abstract(Item) path
-        {some_tuple, data},
-        ~"<footer>Footer</footer>"
+        {dynamic, 1, ~"Item"},
+        {static, 1, ~"<footer>Footer</footer>"}
     ],
 
     % Call transform_stateless_to_ast to trigger the generic item handling

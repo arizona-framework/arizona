@@ -122,17 +122,7 @@ transform_stateful_to_ast(#{
 -spec transform_stateless_to_ast(arizona_parser:stateless_result()) -> erl_syntax:syntaxTree().
 transform_stateless_to_ast(StatelessList) when is_list(StatelessList) ->
     %% Convert stateless list to AST representation
-    ListItems = [
-        case Item of
-            Bin when is_binary(Bin) ->
-                erl_syntax:binary([
-                    erl_syntax:binary_field(erl_syntax:string(binary_to_list(Bin)))
-                ]);
-            _ ->
-                erl_syntax:abstract(Item)
-        end
-     || Item <- StatelessList
-    ],
+    ListItems = [create_element_ast(Element) || Element <- StatelessList],
     erl_syntax:list(ListItems).
 
 %% --------------------------------------------------------------------
@@ -368,8 +358,7 @@ format_element_entry(
 format_element_entry(
     ElementIndex, {dynamic, Line, ExpressionText}, Accumulator, CompilerOptions, Depth
 ) ->
-    OptimizedExpressionText = optimize_dynamic_expression(ExpressionText, CompilerOptions, Depth),
-    DynamicElemText = format_dynamic_element(Line, OptimizedExpressionText, CompilerOptions, Depth),
+    DynamicElemText = format_dynamic_element(Line, ExpressionText, CompilerOptions, Depth),
     FormattedEntry = iolist_to_binary(io_lib:format("~p => ~s", [ElementIndex, DynamicElemText])),
     [FormattedEntry | Accumulator].
 
@@ -481,11 +470,12 @@ create_element_ast({static, Line, Content}) ->
         erl_syntax:integer(Line),
         erl_syntax:binary([erl_syntax:binary_field(erl_syntax:string(binary_to_list(Content)))])
     ]);
-create_element_ast({dynamic, Line, ExprBinary}) ->
+create_element_ast({dynamic, Line, ExpressionText}) ->
     %% Convert expression to optimized function AST
     %% ExprBinary is the original expression like "arizona_socket:get_binding(name, Socket)"
     %% Use depth 0 for runtime AST creation (not parse transform)
-    FunctionBinary = create_socket_threaded_function(ExprBinary, 0),
+    OptimizedExpressionText = optimize_dynamic_expression(ExpressionText, [], 0),
+    FunctionBinary = create_socket_threaded_function(OptimizedExpressionText, 0),
 
     erl_syntax:tuple([
         erl_syntax:atom(dynamic),
@@ -507,14 +497,14 @@ create_vars_indexes_map_ast(VarsIndexes) ->
 %% Get socket variable name with depth to avoid nesting shadowing
 -spec get_socket_var_name(non_neg_integer()) -> binary().
 get_socket_var_name(Depth) when Depth >= 0 ->
-    iolist_to_binary([<<"_@Socket">>, integer_to_binary(Depth)]).
+    iolist_to_binary([~"_@Socket", integer_to_binary(Depth)]).
 
 %% Create a function with depth-specific socket variable to avoid nesting shadowing
 -spec create_socket_threaded_function(binary(), non_neg_integer()) -> binary().
 create_socket_threaded_function(ExpressionText, Depth) ->
     SocketVarName = get_socket_var_name(Depth),
     %% Replace any existing Socket variable with safe socket name to avoid shadowing
-    SafeExpression = re:replace(ExpressionText, <<"\\bSocket\\b">>, SocketVarName, [
+    SafeExpression = re:replace(ExpressionText, ~"\\bSocket\\b", SocketVarName, [
         global, {return, binary}
     ]),
     <<"fun(", SocketVarName/binary, ") -> ", SafeExpression/binary, " end">>.
@@ -527,6 +517,7 @@ format_static_element(Line, Content) ->
 %% Format dynamic element with depth-specific socket variable
 -spec format_dynamic_element(pos_integer(), binary(), compile_options(), non_neg_integer()) ->
     binary().
-format_dynamic_element(Line, ExpressionText, _CompilerOptions, Depth) ->
-    FunctionText = create_socket_threaded_function(ExpressionText, Depth),
+format_dynamic_element(Line, ExpressionText, CompilerOptions, Depth) ->
+    OptimizedExpressionText = optimize_dynamic_expression(ExpressionText, CompilerOptions, Depth),
+    FunctionText = create_socket_threaded_function(OptimizedExpressionText, Depth),
     iolist_to_binary(io_lib:format("{dynamic, ~p, ~s}", [Line, FunctionText])).

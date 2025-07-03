@@ -3,7 +3,7 @@
 -export([render_stateful/2]).
 -export([render_stateless/2]).
 -export([render_list/4]).
--export([to_html/1]).
+-export([to_html/2]).
 
 %% Types
 -type html() :: iodata().
@@ -75,7 +75,7 @@ render_list(ItemFun, Items, KeyFun, Socket) when
     {AllHtml, FinalSocket} = lists:foldl(
         fun(Item, {HtmlAcc, AccSocket}) ->
             %% Call item function to get template HTML
-            ItemHtml = to_html(arizona_list:call_item_function(ItemFun, Item)),
+            ItemHtml = arizona_list:call_item_function(ItemFun, Item),
             {[HtmlAcc, ItemHtml], AccSocket}
         end,
         {[], Socket},
@@ -86,16 +86,31 @@ render_list(ItemFun, Items, KeyFun, Socket) when
     arizona_socket:set_html_acc(AllHtml, FinalSocket).
 
 %% Convert any value to HTML-safe iodata
--spec to_html(term()) -> html().
-to_html(Value) when is_binary(Value) -> Value;
-to_html(Value) when is_list(Value) ->
-    try iolist_to_binary(Value) of
-        Binary -> Binary
-    catch
-        _:_ -> iolist_to_binary([to_html(Term) || Term <- Value])
-    end;
-to_html(Value) when is_atom(Value) -> atom_to_binary(Value, utf8);
-to_html(Value) when is_integer(Value) -> integer_to_binary(Value);
-to_html(Value) when is_float(Value) -> list_to_binary(io_lib:format("~p", [Value]));
-to_html(Value) ->
-    list_to_binary(io_lib:format("~tp", [Value])).
+-spec to_html(term(), arizona_socket:socket()) -> {html(), arizona_socket:socket()}.
+to_html(Value, Socket) when is_binary(Value) ->
+    {Value, Socket};
+to_html(Value, Socket) when is_list(Value) ->
+    lists:foldl(
+        fun(Item, {HtmlAcc, AccSocket}) ->
+            {HtmlAcc1, AccSocket1} = to_html(Item, AccSocket),
+            {[HtmlAcc, HtmlAcc1], AccSocket1}
+        end,
+        {[], Socket},
+        Value
+    );
+to_html(Value, Socket) when is_atom(Value) ->
+    {atom_to_binary(Value, utf8), Socket};
+to_html(Value, Socket) when is_integer(Value) ->
+    {integer_to_binary(Value), Socket};
+to_html(Value, Socket) when is_float(Value) ->
+    {list_to_binary(io_lib:format("~p", [Value])), Socket};
+to_html(Value, Socket) ->
+    case arizona_socket:is_socket(Value) of
+        true ->
+            % Function returned a socket (from arizona_html calls)
+            Html = arizona_socket:get_html(Value),
+            {Html, Value};
+        false ->
+            Html = list_to_binary(io_lib:format("~tp", [Value])),
+            {Html, Socket}
+    end.
