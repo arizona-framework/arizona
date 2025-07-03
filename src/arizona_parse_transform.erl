@@ -69,8 +69,12 @@ parse_transform(AbstractSyntaxTrees, CompilerOptions) ->
     parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, 0).
 
 %% Parse transform with depth tracking for recursive optimization
--spec parse_transform_with_depth([erl_parse:abstract_form()], compile_options(), non_neg_integer()) ->
-    [erl_parse:abstract_form()].
+-spec parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
+    AbstractSyntaxTrees1 when
+    AbstractSyntaxTrees :: [erl_parse:abstract_form()],
+    CompilerOptions :: compile_options(),
+    Depth :: non_neg_integer(),
+    AbstractSyntaxTrees1 :: [erl_parse:abstract_form()].
 parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
     ModuleName = extract_module_name(AbstractSyntaxTrees),
     erl_syntax:revert_forms([

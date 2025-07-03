@@ -87,7 +87,9 @@ their line numbers intact.
 
 Returns a list of tokens that can be directly processed by template renderers.
 """.
--spec parse_stateless_tokens([token()]) -> stateless_result().
+-spec parse_stateless_tokens(Tokens) -> Result when
+    Tokens :: [token()],
+    Result :: stateless_result().
 parse_stateless_tokens(Tokens) ->
     [Token || {Category, _Line, _Text} = Token <- Tokens, Category =/= comment].
 
@@ -106,7 +108,9 @@ The resulting map contains:
 Variable extraction is performed for dynamic tokens containing
 `arizona_socket:get_binding/2` calls.
 """.
--spec parse_stateful_tokens([token()]) -> stateful_result().
+-spec parse_stateful_tokens(Tokens) -> Result when
+    Tokens :: [token()],
+    Result :: stateful_result().
 parse_stateful_tokens(Tokens) ->
     {Elements, VarsIndexes} = process_tokens_stateful(Tokens, 0, #{}, #{}),
     #{
@@ -122,7 +126,9 @@ For now, this is a simple placeholder that will be enhanced by parse transform.
 The structure separates static HTML parts from dynamic expressions for efficient
 list rendering with minimal re-computation.
 """.
--spec parse_list_tokens([token()]) -> list_result().
+-spec parse_list_tokens(Tokens) -> Result when
+    Tokens :: [token()],
+    Result :: list_result().
 parse_list_tokens(Tokens) ->
     %% For runtime: simple fallback structure
     %% Parse transform will provide optimized version

@@ -291,7 +291,7 @@ test_render_list_with_nested_html_calls(Config) when is_list(Config) ->
                         arizona_html:render_stateless(
                             [
                                 {static, 1, ~"<span>"},
-                                {dynamic, 1, fun(_@Socket) -> Item end},
+                                {dynamic, 1, fun(_Socket) -> Item end},
                                 {static, 1, ~"</span>"}
                             ],
                             Socket

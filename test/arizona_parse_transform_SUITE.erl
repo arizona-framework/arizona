@@ -515,7 +515,8 @@ test_dynamic_expression_ast_creation(Config) when is_list(Config) ->
 
 %% Test nested arizona_html optimization
 test_nested_arizona_optimization(Config) when is_list(Config) ->
-    % Create a stateful template with deeply nested arizona_html calls to test socket variable shadowing fix
+    % Create a stateful template with deeply nested arizona_html calls
+    % to test socket variable shadowing fix
     Forms = merl:quote(~""""""
     -module(test_nested_module).
     -export([test_render/1]).

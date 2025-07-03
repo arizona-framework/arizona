@@ -108,7 +108,11 @@ render_list(ItemFun, Items, KeyFun, Socket) when
     arizona_socket:set_html_acc(AccumulatedHtml, FinalSocket).
 
 %% Convert any value to HTML-safe iodata
--spec to_html(term(), arizona_socket:socket()) -> {html(), arizona_socket:socket()}.
+-spec to_html(Value, Socket) -> {Html, Socket1} when
+    Value :: term(),
+    Socket :: arizona_socket:socket(),
+    Html :: html(),
+    Socket1 :: arizona_socket:socket().
 to_html(Value, Socket) when is_binary(Value) ->
     {Value, Socket};
 to_html(Value, Socket) when is_list(Value) ->
@@ -144,7 +148,9 @@ to_html(Value, Socket) ->
 %%          fun(Item) -> template end -> returns 'Item'
 %%
 %% Note: Requires debug_info to be enabled during compilation for AST extraction
--spec extract_list_item_parameter_name(fun((term()) -> term())) -> atom().
+-spec extract_list_item_parameter_name(ListItemFunction) -> ParameterName when
+    ListItemFunction :: fun((term()) -> term()),
+    ParameterName :: atom().
 extract_list_item_parameter_name(ListItemFunction) when is_function(ListItemFunction, 1) ->
     case erlang:fun_info(ListItemFunction, env) of
         {env, []} ->

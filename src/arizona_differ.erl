@@ -21,7 +21,7 @@ Generates JSON diffs in format: [{StatefulId, [{ElementIndex, Changes}]}]
 -type element_change_entry() :: {element_index(), element_change()}.
 -type diff_changes() :: [component_change()].
 
--export_type([diff_changes/0, element_index/0, element_change/0]).
+-export_type([diff_changes/0, element_index/0, element_change/0, element_change_entry/0]).
 
 %% Optimized stateful component diffing using changed_bindings + vars_indexes
 -spec diff_stateful(Stateful, Socket) -> Socket1 when
