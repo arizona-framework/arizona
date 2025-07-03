@@ -24,12 +24,12 @@ call_stateful(Mod, Bindings, Socket) ->
                     arizona_stateful:call_render_callback(Mod, Socket2);
                 false ->
                     %% Update socket with new state and use differ
-                    Socket1 = arizona_socket:put_stateful_state(Id, UpdatedState, Socket),
+                    Socket1 = arizona_socket:put_stateful_state(UpdatedState, Socket),
                     arizona_differ:diff_stateful(UpdatedState, Socket1)
             end;
         error ->
             State = arizona_stateful:new(Id, Mod, Bindings),
-            Socket1 = arizona_socket:put_stateful_state(Id, State, Socket),
+            Socket1 = arizona_socket:put_stateful_state(State, Socket),
             %% Call mount callback for new components
             Socket2 = arizona_stateful:call_mount_callback(Mod, Socket1),
             %% Call the component's render callback which handles

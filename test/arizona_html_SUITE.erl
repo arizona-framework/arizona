@@ -35,7 +35,8 @@ groups() ->
             test_render_list_with_item_function,
             test_render_list_empty_items,
             test_render_list_multiple_items,
-            test_render_list_with_nested_html_calls
+            test_render_list_with_nested_html_calls,
+            test_render_list_with_variable_extraction
         ]},
         {to_html_tests, [parallel], [
             test_to_html_binary,
@@ -322,6 +323,38 @@ test_render_list_with_nested_html_calls(Config) when is_list(Config) ->
 
     ?assertEqual(ExpectedHtml, Html).
 
+test_render_list_with_variable_extraction(Config) when is_list(Config) ->
+    % Test variable extraction and binding like the user's example
+    % This verifies that extract_list_item_var_name works and variables are bound correctly
+
+    % Create socket with stateful state containing prefix binding
+    Stateful = arizona_stateful:new(root, undefined, #{prefix => ~"foo"}),
+    Socket = arizona_socket:put_stateful_state(Stateful, arizona_socket:new(#{})),
+
+    % Template with nested render_list call using variable I
+    Template = ~""""
+    <ul>
+    {arizona_html:render_list(fun(I) -> ~"""
+    <li>{arizona_socket:get_binding(prefix, Socket)}_{I}</li>
+    """ end, [1,2,3], fun(I) -> I end, Socket)}
+    </ul>
+    """",
+
+    % Render the template
+    ResultSocket = arizona_html:render_stateless(Template, Socket),
+
+    % Verify socket is returned and extract HTML
+    ?assert(arizona_socket:is_socket(ResultSocket)),
+    Html = arizona_socket:get_html(ResultSocket),
+
+    % Convert to binary to verify actual string output
+    FlatHtml = iolist_to_binary(Html),
+
+    % Expected output: <ul> followed by list items with prefix_value pattern
+    ExpectedHtml = ~"<ul> <li>foo_1</li><li>foo_2</li><li>foo_3</li></ul>",
+
+    ?assertEqual(ExpectedHtml, FlatHtml).
+
 %% --------------------------------------------------------------------
 %% to_html tests
 %% --------------------------------------------------------------------
@@ -380,14 +413,4 @@ create_mock_socket() ->
         current_stateful_id => Id
     },
     Socket = arizona_socket:new(Opts),
-    arizona_socket:put_stateful_state(Id, Stateful, Socket).
-
-create_mock_socket_with_bindings(Bindings) ->
-    Id = ~"test_id",
-    Module = test_stateful_module_with_mount,
-    Stateful = arizona_stateful:new(Id, Module, Bindings),
-    Opts = #{
-        current_stateful_id => Id
-    },
-    Socket = arizona_socket:new(Opts),
-    arizona_socket:put_stateful_state(Id, Stateful, Socket).
+    arizona_socket:put_stateful_state(Stateful, Socket).

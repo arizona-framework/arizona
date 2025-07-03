@@ -11,7 +11,7 @@
 -export([set_html_acc/2, get_html/1]).
 -export([append_changes/2, get_changes/1, clear_changes/1]).
 
--export([put_stateful_state/3]).
+-export([put_stateful_state/2]).
 
 %% Binding functions
 -export([get_binding/2, put_binding/3, put_bindings/2]).
@@ -119,12 +119,12 @@ set_html_acc(Html, #socket{} = Socket) when is_list(Html) ->
 get_html(#socket{} = Socket) ->
     Socket#socket.html_acc.
 
--spec put_stateful_state(Id, Stateful, Socket) -> Socket1 when
-    Id :: arizona_stateful:id(),
+-spec put_stateful_state(Stateful, Socket) -> Socket1 when
     Stateful :: arizona_stateful:stateful(),
     Socket :: socket(),
     Socket1 :: socket().
-put_stateful_state(Id, State, Socket) when Id =:= root; is_binary(Id) ->
+put_stateful_state(State, Socket) ->
+    Id = arizona_stateful:get_id(State),
     States = Socket#socket.stateful_states,
     Socket#socket{stateful_states = States#{Id => State}}.
 
@@ -168,9 +168,8 @@ get_temp_binding(Key, #socket{} = Socket) when is_atom(Key) ->
     Socket1 :: socket().
 put_binding(Key, Value, #socket{} = Socket) when is_atom(Key) ->
     CurrentState = get_current_stateful_state(Socket),
-    CurrentId = arizona_stateful:get_id(CurrentState),
     UpdatedState = arizona_stateful:put_binding(Key, Value, CurrentState),
-    put_stateful_state(CurrentId, UpdatedState, Socket).
+    put_stateful_state(UpdatedState, Socket).
 
 -spec put_bindings(Bindings, Socket) -> Socket1 when
     Bindings :: bindings(),
@@ -178,9 +177,8 @@ put_binding(Key, Value, #socket{} = Socket) when is_atom(Key) ->
     Socket1 :: socket().
 put_bindings(Bindings, #socket{} = Socket) when is_map(Bindings) ->
     CurrentState = get_current_stateful_state(Socket),
-    CurrentId = arizona_stateful:get_id(CurrentState),
     UpdatedState = arizona_stateful:put_bindings(Bindings, CurrentState),
-    put_stateful_state(CurrentId, UpdatedState, Socket).
+    put_stateful_state(UpdatedState, Socket).
 
 %% Changes accumulator functions (for diff mode)
 

@@ -409,4 +409,4 @@ create_mock_socket() ->
         current_stateful_id => Id
     },
     Socket = arizona_socket:new(Opts),
-    arizona_socket:put_stateful_state(Id, Stateful, Socket).
+    arizona_socket:put_stateful_state(Stateful, Socket).

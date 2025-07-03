@@ -298,7 +298,7 @@ create_mock_socket() ->
     Socket = arizona_socket:new(#{mode => render, current_stateful_id => root}),
     %% Add a stateful state for the root component
     StatefulState = arizona_stateful:new(root, test_module, #{test => initial_value}),
-    arizona_socket:put_stateful_state(root, StatefulState, Socket).
+    arizona_socket:put_stateful_state(StatefulState, Socket).
 
 %% --------------------------------------------------------------------
 %% Mock Callback Modules

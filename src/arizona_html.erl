@@ -40,7 +40,17 @@ render_stateful(Html, Socket) when is_binary(Html); is_list(Html) ->
 render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
     {_Html, UpdatedSocket} = arizona_renderer:render_stateless(StructuredList, Socket),
     UpdatedSocket;
-render_stateless(Html, Socket) when is_binary(Html); is_list(Html) ->
+render_stateless(Html, Socket) ->
+    render_stateless_html(Html, #{}, Socket).
+
+-spec render_stateless_html(Html, Bindings, Socket) -> Socket1 when
+    Html :: html(),
+    Bindings :: arizona_socket:bindings(),
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+render_stateless_html(Html, Bindings, Socket) when
+    (is_binary(Html) orelse is_list(Html)), is_map(Bindings)
+->
     %% Parse template at runtime
     Tokens = arizona_scanner:scan(#{}, Html),
     ParsedResult = arizona_parser:parse_stateless_tokens(Tokens),
@@ -51,7 +61,7 @@ render_stateless(Html, Socket) when is_binary(Html); is_list(Html) ->
     %% Evaluate AST to get optimized template data with Socket binding
     {value, OptimizedStructuredList, _NewBindings} = erl_eval:expr(
         erl_syntax:revert(OptimizedAST),
-        #{}
+        Bindings
     ),
 
     %% Render using optimized data (same as compile-time path)
@@ -71,19 +81,31 @@ render_list(ListData, Items, KeyFun, Socket) when
 render_list(ItemFun, Items, KeyFun, Socket) when
     is_function(ItemFun, 1), is_list(Items), is_function(KeyFun, 1)
 ->
-    %% Accumulate HTML from all items
-    {AllHtml, FinalSocket} = lists:foldl(
-        fun(Item, {HtmlAcc, AccSocket}) ->
-            %% Call item function to get template HTML
-            ItemHtml = arizona_list:call_item_function(ItemFun, Item),
-            {[HtmlAcc, ItemHtml], AccSocket}
+    ListItemParameterName = extract_list_item_parameter_name(ItemFun),
+    %% Render each list item and accumulate the resulting HTML
+    {AccumulatedHtml, FinalSocket} = lists:foldl(
+        fun(CurrentItem, {HtmlAccumulator, CurrentSocket}) ->
+            %% Generate template HTML by calling the item function
+            ItemTemplateHtml = arizona_list:call_item_function(ItemFun, CurrentItem),
+
+            %% Render the item template with the current item bound to the extracted parameter name
+            %% This allows templates like ~"""<li>{I}</li>""" to access the current item as 'I'
+            ItemSocket = render_stateless_html(
+                ItemTemplateHtml,
+                #{ListItemParameterName => CurrentItem},
+                CurrentSocket
+            ),
+
+            %% Extract rendered HTML and accumulate it
+            RenderedItemHtml = arizona_socket:get_html(ItemSocket),
+            {[HtmlAccumulator, RenderedItemHtml], ItemSocket}
         end,
         {[], Socket},
         Items
     ),
 
-    %% Set final accumulated HTML
-    arizona_socket:set_html_acc(AllHtml, FinalSocket).
+    %% Return socket with all rendered list items
+    arizona_socket:set_html_acc(AccumulatedHtml, FinalSocket).
 
 %% Convert any value to HTML-safe iodata
 -spec to_html(term(), arizona_socket:socket()) -> {html(), arizona_socket:socket()}.
@@ -113,4 +135,26 @@ to_html(Value, Socket) ->
         false ->
             Html = list_to_binary(io_lib:format("~tp", [Value])),
             {Html, Socket}
+    end.
+
+%% Extract the parameter variable name from a list item function's AST
+%% This is used to properly bind list items in template rendering with correct variable names
+%%
+%% Example: fun(I) -> template end -> returns 'I'
+%%          fun(Item) -> template end -> returns 'Item'
+%%
+%% Note: Requires debug_info to be enabled during compilation for AST extraction
+-spec extract_list_item_parameter_name(fun((term()) -> term())) -> atom().
+extract_list_item_parameter_name(ListItemFunction) when is_function(ListItemFunction, 1) ->
+    case erlang:fun_info(ListItemFunction, env) of
+        {env, []} ->
+            %% No debug_info available - use conventional parameter name
+            %% This fallback ensures compatibility when modules are compiled without debug_info
+            'Item';
+        {env, [FunctionEnvironment | _]} ->
+            %% Extract parameter name from function's AST clause
+            {_, _, _, _, _, [FirstClause | _]} = FunctionEnvironment,
+            {clause, _Line, [FirstParameter | _], _Guards, _Body} = FirstClause,
+            {var, _VarLine, ParameterName} = FirstParameter,
+            ParameterName
     end.

@@ -196,7 +196,7 @@ test_stateful_state_management(Config) when is_list(Config) ->
     MockState = create_mock_stateful_state(~"comp_1", test_module, #{name => ~"Test"}),
 
     %% Put stateful state
-    Socket2 = arizona_socket:put_stateful_state(~"comp_1", MockState, Socket),
+    Socket2 = arizona_socket:put_stateful_state(MockState, Socket),
 
     %% Get stateful state
     RetrievedState = arizona_socket:get_stateful_state(~"comp_1", Socket2),
@@ -212,8 +212,8 @@ test_get_stateful_states(Config) when is_list(Config) ->
     State1 = create_mock_stateful_state(root, mod1, #{a => 1}),
     State2 = create_mock_stateful_state(~"comp_1", mod2, #{b => 2}),
 
-    Socket2 = arizona_socket:put_stateful_state(root, State1, Socket),
-    Socket3 = arizona_socket:put_stateful_state(~"comp_1", State2, Socket2),
+    Socket2 = arizona_socket:put_stateful_state(State1, Socket),
+    Socket3 = arizona_socket:put_stateful_state(State2, Socket2),
 
     States = arizona_socket:get_stateful_states(Socket3),
     ?assertEqual(#{root => State1, ~"comp_1" => State2}, States).
@@ -221,7 +221,7 @@ test_get_stateful_states(Config) when is_list(Config) ->
 test_find_stateful_state(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{}),
     MockState = create_mock_stateful_state(~"test", test_mod, #{}),
-    Socket2 = arizona_socket:put_stateful_state(~"test", MockState, Socket),
+    Socket2 = arizona_socket:put_stateful_state(MockState, Socket),
 
     %% Test found
     ?assertEqual({ok, MockState}, arizona_socket:find_stateful_state(~"test", Socket2)),
@@ -232,7 +232,7 @@ test_find_stateful_state(Config) when is_list(Config) ->
 test_get_current_stateful_state(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{current_stateful_id => ~"current"}),
     MockState = create_mock_stateful_state(~"current", test_mod, #{key => value}),
-    Socket2 = arizona_socket:put_stateful_state(~"current", MockState, Socket),
+    Socket2 = arizona_socket:put_stateful_state(MockState, Socket),
 
     CurrentState = arizona_socket:get_current_stateful_state(Socket2),
     ?assertEqual(MockState, CurrentState).
@@ -286,7 +286,7 @@ test_get_binding_temp_priority(Config) when is_list(Config) ->
     StatefulState = create_mock_stateful_state_with_binding(root, test_mod, #{
         name => ~"Stateful"
     }),
-    Socket2 = arizona_socket:put_stateful_state(root, StatefulState, Socket),
+    Socket2 = arizona_socket:put_stateful_state(StatefulState, Socket),
 
     %% Add temp binding that overrides
     TempBindings = #{name => ~"Temp"},
@@ -303,7 +303,7 @@ test_get_binding_stateful_fallback(Config) when is_list(Config) ->
     StatefulState = create_mock_stateful_state_with_binding(root, test_mod, #{
         name => ~"Stateful"
     }),
-    Socket2 = arizona_socket:put_stateful_state(root, StatefulState, Socket),
+    Socket2 = arizona_socket:put_stateful_state(StatefulState, Socket),
 
     %% No temp bindings, should get stateful binding
     ?assertEqual(~"Stateful", arizona_socket:get_binding(name, Socket2)).
@@ -315,7 +315,7 @@ test_get_binding_not_found(Config) when is_list(Config) ->
     StatefulState = create_mock_stateful_state_with_binding(
         root, test_mod, #{other => ~"value"}
     ),
-    Socket2 = arizona_socket:put_stateful_state(root, StatefulState, Socket),
+    Socket2 = arizona_socket:put_stateful_state(StatefulState, Socket),
 
     %% Should throw when binding not found anywhere
     ?assertThrow({binding_not_found, missing}, arizona_socket:get_binding(missing, Socket2)).
