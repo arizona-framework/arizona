@@ -374,13 +374,13 @@ build_template_data_structure(ElementOrder, ElementsMap, VariableIndexes, Compil
     ),
     VariablesString = format_variables_indexes(VariableIndexes),
 
-    iolist_to_binary([
-        "#{",
-        ["elems_order => [", OrderString, "], "],
-        ["elems => #{", ElementsString, "}, "],
-        ["vars_indexes => #{", VariablesString, "}"],
-        "}"
-    ]).
+    iolist_to_binary(io_lib:format(~"""
+    #{
+        elems_order => [~s],
+        elems => #{~s},
+        vars_indexes => #{~s}
+    }
+    """, [OrderString, ElementsString, VariablesString])).
 
 %% Template Data Formatting Helpers
 
@@ -714,7 +714,9 @@ create_socket_threaded_function(ExpressionText, ExpressionTextNormCallback, Dept
 -spec standard_expression_norm_callback() -> expression_norm_callback().
 standard_expression_norm_callback() ->
     fun(SocketVarName, SafeExpression) ->
-        <<"fun(", SocketVarName/binary, ") -> ", SafeExpression/binary, " end">>
+        iolist_to_binary(io_lib:format(~"""
+        fun(~s) -> ~s end
+        """, [SocketVarName, SafeExpression]))
     end.
 
 %% List expression normalization callback for list templates with ItemFun
@@ -726,8 +728,9 @@ list_expression_norm_callback(ItemFun) ->
         [FirstParameter] = erl_syntax:clause_patterns(Clause),
         ItemVarName = atom_to_binary(erl_syntax:variable_name(FirstParameter), utf8),
 
-        <<"fun(", ItemVarName/binary, ", ", SocketVarName/binary, ") -> ", SafeExpression/binary,
-            " end">>
+        iolist_to_binary(io_lib:format(~"""
+        fun(~s, ~s) -> ~s end
+        """, [ItemVarName, SocketVarName, SafeExpression]))
     end.
 
 %% Format static element as binary string
