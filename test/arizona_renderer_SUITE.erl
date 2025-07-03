@@ -182,10 +182,9 @@ test_render_list_basic(Config) when is_list(Config) ->
         }
     },
     Items = [~"Item1", ~"Item2"],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, KeyFun, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, Socket),
 
     Expected = ~"<li>Item1</li><li>Item2</li>",
     ?assertEqual(Expected, iolist_to_binary(Html)),
@@ -201,10 +200,9 @@ test_render_list_empty_items(Config) when is_list(Config) ->
         }
     },
     Items = [],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, KeyFun, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, Socket),
 
     Expected = ~"",
     ?assertEqual(Expected, iolist_to_binary(Html)),
@@ -220,10 +218,9 @@ test_render_list_single_item(Config) when is_list(Config) ->
         }
     },
     Items = [~"SingleItem"],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, KeyFun, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, Socket),
 
     Expected = ~"<div>SingleItem</div>",
     ?assertEqual(Expected, iolist_to_binary(Html)),
@@ -239,10 +236,9 @@ test_render_list_multiple_items(Config) when is_list(Config) ->
         }
     },
     Items = [~"A", ~"B", ~"C"],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, KeyFun, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, Socket),
 
     Expected = ~"<span>A</span><span>B</span><span>C</span>",
     ?assertEqual(Expected, iolist_to_binary(Html)),
@@ -258,10 +254,9 @@ test_render_list_with_variables(Config) when is_list(Config) ->
         }
     },
     Items = [~"VarItem"],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, KeyFun, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, Socket),
 
     Expected = ~"<p>VarItem</p>",
     ?assertEqual(Expected, iolist_to_binary(Html)),
@@ -309,12 +304,11 @@ test_render_list_item_error(Config) when is_list(Config) ->
         }
     },
     Items = [~"TestItem"],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
     ?assertError(
         {binding_not_found, test_key},
-        arizona_renderer:render_list(ListData, Items, KeyFun, Socket)
+        arizona_renderer:render_list(ListData, Items, Socket)
     ).
 
 test_format_error_with_info(Config) when is_list(Config) ->
@@ -365,12 +359,11 @@ test_render_list_item_general_error(Config) when is_list(Config) ->
         }
     },
     Items = [~"TestItem"],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
     ?assertError(
         {list_item_render_error, general_error, ~"TestItem", 42},
-        arizona_renderer:render_list(ListData, Items, KeyFun, Socket)
+        arizona_renderer:render_list(ListData, Items, Socket)
     ).
 
 test_zip_dynamic_longer_than_static(Config) when is_list(Config) ->
@@ -389,10 +382,9 @@ test_zip_dynamic_longer_than_static(Config) when is_list(Config) ->
         }
     },
     Items = [~"List Item"],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, KeyFun, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, Socket),
 
     Expected = ~"<li>List Item</li> - extra",
     ?assertEqual(Expected, iolist_to_binary(Html)),

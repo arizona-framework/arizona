@@ -228,10 +228,9 @@ test_render_list_with_list_data(Config) when is_list(Config) ->
         }
     },
     Items = [~"Item1", ~"Item2"],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
-    UpdatedSocket = arizona_html:render_list(ListData, Items, KeyFun, Socket),
+    UpdatedSocket = arizona_html:render_list(ListData, Items, Socket),
 
     ?assert(arizona_socket:is_socket(UpdatedSocket)),
     Html = arizona_socket:get_html(UpdatedSocket),
@@ -241,10 +240,9 @@ test_render_list_with_list_data(Config) when is_list(Config) ->
 test_render_list_with_item_function(Config) when is_list(Config) ->
     ItemFun = fun(Item) -> [~"<div>", Item, ~"</div>"] end,
     Items = [~"First", ~"Second"],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
-    UpdatedSocket = arizona_html:render_list(ItemFun, Items, KeyFun, Socket),
+    UpdatedSocket = arizona_html:render_list(ItemFun, Items, Socket),
 
     ?assert(arizona_socket:is_socket(UpdatedSocket)),
     Html = arizona_socket:get_html(UpdatedSocket),
@@ -254,10 +252,9 @@ test_render_list_with_item_function(Config) when is_list(Config) ->
 test_render_list_empty_items(Config) when is_list(Config) ->
     ItemFun = fun(Item) -> [~"<p>", Item, ~"</p>"] end,
     Items = [],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
-    UpdatedSocket = arizona_html:render_list(ItemFun, Items, KeyFun, Socket),
+    UpdatedSocket = arizona_html:render_list(ItemFun, Items, Socket),
 
     ?assert(arizona_socket:is_socket(UpdatedSocket)),
     Html = arizona_socket:get_html(UpdatedSocket),
@@ -267,10 +264,9 @@ test_render_list_empty_items(Config) when is_list(Config) ->
 test_render_list_multiple_items(Config) when is_list(Config) ->
     ItemFun = fun(Item) -> [~"<option>", Item, ~"</option>"] end,
     Items = [~"A", ~"B", ~"C"],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
-    UpdatedSocket = arizona_html:render_list(ItemFun, Items, KeyFun, Socket),
+    UpdatedSocket = arizona_html:render_list(ItemFun, Items, Socket),
 
     ?assert(arizona_socket:is_socket(UpdatedSocket)),
     Html = arizona_socket:get_html(UpdatedSocket),
@@ -302,10 +298,9 @@ test_render_list_with_nested_html_calls(Config) when is_list(Config) ->
         }
     },
     Items = [~"Item1", ~"Item2"],
-    KeyFun = fun(X) -> X end,
     Socket = create_mock_socket(),
 
-    UpdatedSocket = arizona_html:render_list(ListData, Items, KeyFun, Socket),
+    UpdatedSocket = arizona_html:render_list(ListData, Items, Socket),
 
     % Verify socket is returned and contains expected HTML structure
     ?assert(arizona_socket:is_socket(UpdatedSocket)),
@@ -336,7 +331,7 @@ test_render_list_with_variable_extraction(Config) when is_list(Config) ->
     <ul>
     {arizona_html:render_list(fun(I) -> ~"""
     <li>{arizona_socket:get_binding(prefix, Socket)}_{I}</li>
-    """ end, [1,2,3], fun(I) -> I end, Socket)}
+    """ end, [1,2,3], Socket)}
     </ul>
     """",
 

@@ -222,7 +222,7 @@ transform_arizona_html_call(
     render_list,
     CallAnnotations,
     RemoteCall,
-    [ItemFun, Items, KeyFun, SocketArg],
+    [ItemFun, Items, SocketArg],
     ModuleName,
     CompilerOptions,
     Depth
@@ -232,7 +232,6 @@ transform_arizona_html_call(
         RemoteCall,
         ItemFun,
         Items,
-        KeyFun,
         SocketArg,
         ModuleName,
         CompilerOptions,
@@ -475,7 +474,6 @@ format_variable_entry(VariableName, IndexList) ->
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
-    erl_parse:abstract_expr(),
     atom(),
     compile_options(),
     non_neg_integer()
@@ -485,7 +483,6 @@ transform_list_template_call(
     RemoteCall,
     ItemFun,
     Items,
-    KeyFun,
     SocketArg,
     ModuleName,
     CompilerOptions,
@@ -498,7 +495,7 @@ transform_list_template_call(
 
         % Generate the new function call using arizona_renderer:render_list
         create_list_structured_call(
-            CallAnnotations, RemoteCall, ListTemplateData, Items, KeyFun, SocketArg
+            CallAnnotations, RemoteCall, ListTemplateData, Items, SocketArg
         )
     catch
         _Error:_Reason ->
@@ -610,14 +607,13 @@ create_stateful_structured_call(CallAnnotations, RemoteCall, TemplateDataBinary,
     erl_parse:abstract_expr(),
     binary(),
     erl_parse:abstract_expr(),
-    erl_parse:abstract_expr(),
     erl_parse:abstract_expr()
 ) -> erl_parse:abstract_expr().
 create_list_structured_call(
-    CallAnnotations, RemoteCall, ListTemplateDataBinary, Items, KeyFun, SocketArg
+    CallAnnotations, RemoteCall, ListTemplateDataBinary, Items, SocketArg
 ) ->
     ListTemplateDataForm = merl:quote(ListTemplateDataBinary),
-    {call, CallAnnotations, RemoteCall, [ListTemplateDataForm, Items, KeyFun, SocketArg]}.
+    {call, CallAnnotations, RemoteCall, [ListTemplateDataForm, Items, SocketArg]}.
 
 %% Utility Functions
 

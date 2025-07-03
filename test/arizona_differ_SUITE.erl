@@ -432,7 +432,7 @@ diff_list_basic_change(Config) when is_list(Config) ->
                 {dynamic, 1, fun(Socket) ->
                     CurrentList = arizona_socket:get_binding(list, Socket),
                     arizona_html:render_list(
-                        ListTemplateData, CurrentList, fun(Item) -> Item end, Socket
+                        ListTemplateData, CurrentList, Socket
                     )
                 end}
         },
@@ -496,7 +496,7 @@ diff_list_item_addition(Config) when is_list(Config) ->
                 {dynamic, 2, fun(Socket) ->
                     Items = arizona_socket:get_binding(items, Socket),
                     arizona_html:render_list(
-                        ListTemplateData, Items, fun(Item) -> maps:get(id, Item) end, Socket
+                        ListTemplateData, Items, Socket
                     )
                 end},
             2 => {static, 3, ~"</ul>"}
@@ -570,7 +570,7 @@ diff_list_item_removal(Config) when is_list(Config) ->
                 {dynamic, 4, fun(Socket) ->
                     Items = arizona_socket:get_binding(items, Socket),
                     arizona_html:render_list(
-                        ListTemplateData, Items, fun(Item) -> maps:get(id, Item) end, Socket
+                        ListTemplateData, Items, Socket
                     )
                 end}
         },

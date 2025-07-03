@@ -2,7 +2,7 @@
 
 -export([render_stateful/2]).
 -export([render_stateless/2]).
--export([render_list/4]).
+-export([render_list/3]).
 -export([to_html/2]).
 
 %% Types
@@ -84,19 +84,18 @@ render_stateless_html(Html, Bindings, Socket) when
     %% Render using optimized data (same as compile-time path)
     render_stateless(OptimizedStructuredList, Socket).
 
--spec render_list(Template, [Item], KeyFun, Socket) -> Socket1 when
+-spec render_list(Template, [Item], Socket) -> Socket1 when
     Template :: fun((Item) -> html()) | arizona_renderer:list_template_data(),
     Item :: term(),
-    KeyFun :: fun((Item) -> term()),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
-render_list(ListData, Items, KeyFun, Socket) when
-    is_map(ListData), is_list(Items), is_function(KeyFun, 1)
+render_list(ListData, Items, Socket) when
+    is_map(ListData), is_list(Items)
 ->
-    {_Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, KeyFun, Socket),
+    {_Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, Socket),
     UpdatedSocket;
-render_list(ItemFun, Items, KeyFun, Socket) when
-    is_function(ItemFun, 1), is_list(Items), is_function(KeyFun, 1)
+render_list(ItemFun, Items, Socket) when
+    is_function(ItemFun, 1), is_list(Items)
 ->
     ListItemParameterName = extract_list_item_parameter_name(ItemFun),
     %% Render each list item and accumulate the resulting HTML

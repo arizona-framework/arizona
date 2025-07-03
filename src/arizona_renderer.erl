@@ -2,7 +2,7 @@
 
 -export([render_stateful/2]).
 -export([render_stateless/2]).
--export([render_list/4]).
+-export([render_list/3]).
 -export([render_element/2]).
 -export([format_error/2]).
 
@@ -73,14 +73,13 @@ render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
     {Html, UpdatedSocket1}.
 
 %% Render list using parsed list template structure
--spec render_list(ListData, Items, KeyFun, Socket) -> {Html, Socket1} when
+-spec render_list(ListData, Items, Socket) -> {Html, Socket1} when
     ListData :: list_template_data(),
     Items :: [term()],
-    KeyFun :: fun((term()) -> term()),
     Socket :: arizona_socket:socket(),
     Html :: arizona_html:html(),
     Socket1 :: arizona_socket:socket().
-render_list(ListData, Items, _KeyFun, Socket) when is_map(ListData), is_list(Items) ->
+render_list(ListData, Items, Socket) when is_map(ListData), is_list(Items) ->
     #{static := StaticParts, dynamic := DynamicSpec} = ListData,
     #{elems_order := ElemsOrder, elems := ElemsFuns} = DynamicSpec,
 
@@ -120,6 +119,13 @@ render_iolist([Element | Rest], Socket, Acc) ->
     render_iolist(Rest, UpdatedSocket, [RenderedElement | Acc]).
 
 %% Render individual elements
+-spec render_element(Element, Socket) -> {Html, Socket1} when
+    Element ::
+        {static, pos_integer(), binary()}
+        | {dynamic, pos_integer(), fun((arizona_socket:socket()) -> term())},
+    Socket :: arizona_socket:socket(),
+    Html :: arizona_html:html(),
+    Socket1 :: arizona_socket:socket().
 render_element({static, _Line, Content}, Socket) when is_binary(Content) ->
     {Content, Socket};
 render_element({dynamic, Line, Fun}, Socket) when is_function(Fun, 1) ->
