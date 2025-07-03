@@ -211,29 +211,25 @@ process_tokens_for_list(Tokens) ->
     %% For runtime fallback: create simple structure
     %% Parse transform will optimize this
     {StaticParts, DynamicElements, VarsIndexes} = separate_static_dynamic_for_list(
-        Tokens, [], #{}, #{}, 0
+        Tokens, [], #{}, #{}, 0, undefined
     ),
     {StaticParts, DynamicElements, VarsIndexes}.
 
 %% Separate static and dynamic parts for list rendering
-separate_static_dynamic_for_list([], StaticAcc, DynamicAcc, VarsAcc, _Index) ->
+separate_static_dynamic_for_list([], StaticAcc, DynamicAcc, VarsAcc, _Index, _PrevType) ->
     {lists:reverse(StaticAcc), DynamicAcc, VarsAcc};
 separate_static_dynamic_for_list(
-    [{static, _Line, Text} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index
+    [{static, _Line, Text} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index, _PrevType
 ) ->
-    separate_static_dynamic_for_list(Rest, [Text | StaticAcc], DynamicAcc, VarsAcc, Index);
+    separate_static_dynamic_for_list(Rest, [Text | StaticAcc], DynamicAcc, VarsAcc, Index, static);
 separate_static_dynamic_for_list(
-    [{dynamic, Line, ExprText} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index
+    [{dynamic, Line, ExprText} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index, PrevType
 ) ->
-    %% For list context, create a simple function that returns the expression text
-    %% Parse transform will optimize this to proper item field access
-    Fun = fun(_Item, _Socket) -> ExprText end,
-
     %% Extract variables (only arizona_socket:get_binding calls)
     VarNames = extract_variable_names(ExprText),
 
-    %% Update accumulators with line information
-    NewDynamicAcc = DynamicAcc#{Index => {Line, Fun}},
+    %% Update accumulators with line information - store in compatible format
+    NewDynamicAcc = DynamicAcc#{Index => {dynamic, Line, ExprText}},
     NewVarsAcc = lists:foldl(
         fun(VarName, Acc) ->
             CurrentIndexes = maps:get(VarName, Acc, []),
@@ -243,12 +239,24 @@ separate_static_dynamic_for_list(
         VarNames
     ),
 
-    %% Add empty static part to maintain structure
+    %% Add empty static part when:
+    %% 1. First token is dynamic (PrevType == undefined)
+    %% 2. Previous token was also dynamic (PrevType == dynamic)
+    NewStaticAcc =
+        case PrevType of
+            % First token is dynamic
+            undefined -> [~"" | StaticAcc];
+            % Consecutive dynamics
+            dynamic -> [~"" | StaticAcc];
+            % After static, no empty needed
+            static -> StaticAcc
+        end,
+
     separate_static_dynamic_for_list(
-        Rest, [<<>> | StaticAcc], NewDynamicAcc, NewVarsAcc, Index + 1
+        Rest, NewStaticAcc, NewDynamicAcc, NewVarsAcc, Index + 1, dynamic
     );
 separate_static_dynamic_for_list(
-    [{comment, _Line, _Text} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index
+    [{comment, _Line, _Text} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index, PrevType
 ) ->
-    %% Skip comments
-    separate_static_dynamic_for_list(Rest, StaticAcc, DynamicAcc, VarsAcc, Index).
+    %% Skip comments - preserve previous type
+    separate_static_dynamic_for_list(Rest, StaticAcc, DynamicAcc, VarsAcc, Index, PrevType).

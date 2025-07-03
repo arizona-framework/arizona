@@ -177,7 +177,7 @@ test_render_list_basic(Config) when is_list(Config) ->
         static => [~"<li>", ~"", ~"</li>"],
         dynamic => #{
             elems_order => [0],
-            elems => #{0 => {1, fun(Item, _Socket) -> Item end}},
+            elems => #{0 => {dynamic, 1, fun(Item, _Socket) -> Item end}},
             vars_indexes => #{}
         }
     },
@@ -196,7 +196,7 @@ test_render_list_empty_items(Config) when is_list(Config) ->
         static => [~"<li>", ~"", ~"</li>"],
         dynamic => #{
             elems_order => [0],
-            elems => #{0 => {1, fun(Item, _Socket) -> Item end}},
+            elems => #{0 => {dynamic, 1, fun(Item, _Socket) -> Item end}},
             vars_indexes => #{}
         }
     },
@@ -215,7 +215,7 @@ test_render_list_single_item(Config) when is_list(Config) ->
         static => [~"<div>", ~"", ~"</div>"],
         dynamic => #{
             elems_order => [0],
-            elems => #{0 => {1, fun(Item, _Socket) -> Item end}},
+            elems => #{0 => {dynamic, 1, fun(Item, _Socket) -> Item end}},
             vars_indexes => #{}
         }
     },
@@ -234,7 +234,7 @@ test_render_list_multiple_items(Config) when is_list(Config) ->
         static => [~"<span>", ~"", ~"</span>"],
         dynamic => #{
             elems_order => [0],
-            elems => #{0 => {1, fun(Item, _Socket) -> Item end}},
+            elems => #{0 => {dynamic, 1, fun(Item, _Socket) -> Item end}},
             vars_indexes => #{}
         }
     },
@@ -253,7 +253,7 @@ test_render_list_with_variables(Config) when is_list(Config) ->
         static => [~"<p>", ~"", ~"</p>"],
         dynamic => #{
             elems_order => [0],
-            elems => #{0 => {1, fun(Item, _Socket) -> Item end}},
+            elems => #{0 => {dynamic, 1, fun(Item, _Socket) -> Item end}},
             vars_indexes => #{~"test_var" => [0]}
         }
     },
@@ -302,7 +302,9 @@ test_render_list_item_error(Config) when is_list(Config) ->
         static => [~"<div>", ~"", ~"</div>"],
         dynamic => #{
             elems_order => [0],
-            elems => #{0 => {42, fun(_Item, _Socket) -> throw({binding_not_found, test_key}) end}},
+            elems => #{
+                0 => {dynamic, 42, fun(_Item, _Socket) -> throw({binding_not_found, test_key}) end}
+            },
             vars_indexes => #{}
         }
     },
@@ -358,7 +360,7 @@ test_render_list_item_general_error(Config) when is_list(Config) ->
         static => [~"<div>", ~"", ~"</div>"],
         dynamic => #{
             elems_order => [0],
-            elems => #{0 => {42, fun(_Item, _Socket) -> error(general_error) end}},
+            elems => #{0 => {dynamic, 42, fun(_Item, _Socket) -> error(general_error) end}},
             vars_indexes => #{}
         }
     },
@@ -380,8 +382,8 @@ test_zip_dynamic_longer_than_static(Config) when is_list(Config) ->
             % Two dynamic parts - more than static parts
             elems_order => [0, 1],
             elems => #{
-                0 => {1, fun(Item, _Socket) -> Item end},
-                1 => {1, fun(_Item, _Socket) -> ~" - extra" end}
+                0 => {dynamic, 1, fun(Item, _Socket) -> Item end},
+                1 => {dynamic, 1, fun(_Item, _Socket) -> ~" - extra" end}
             },
             vars_indexes => #{}
         }

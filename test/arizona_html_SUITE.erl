@@ -223,7 +223,7 @@ test_render_list_with_list_data(Config) when is_list(Config) ->
         static => [~"<li>", ~"", ~"</li>"],
         dynamic => #{
             elems_order => [0],
-            elems => #{0 => {1, fun(Item, _Socket) -> Item end}},
+            elems => #{0 => {dynamic, 1, fun(Item, _Socket) -> Item end}},
             vars_indexes => #{}
         }
     },
@@ -286,7 +286,7 @@ test_render_list_with_nested_html_calls(Config) when is_list(Config) ->
             elems_order => [0],
             elems => #{
                 0 =>
-                    {1, fun(Item, Socket) ->
+                    {dynamic, 1, fun(Item, Socket) ->
                         % Element function that calls arizona_html and returns a socket
                         arizona_html:render_stateless(
                             [

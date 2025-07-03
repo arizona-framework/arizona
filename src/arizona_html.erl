@@ -16,7 +16,17 @@
 render_stateful(TemplateData, Socket) when is_map(TemplateData) ->
     {_Html, UpdatedSocket} = arizona_renderer:render_stateful(TemplateData, Socket),
     UpdatedSocket;
-render_stateful(Html, Socket) when is_binary(Html); is_list(Html) ->
+render_stateful(Html, Socket) ->
+    render_stateful_html(Html, #{}, Socket).
+
+-spec render_stateful_html(Html, Bindings, Socket) -> Socket1 when
+    Html :: html(),
+    Bindings :: arizona_socket:bindings(),
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+render_stateful_html(Html, Bindings, Socket) when
+    (is_binary(Html) orelse is_list(Html)), is_map(Bindings)
+->
     %% Parse template at runtime
     Tokens = arizona_scanner:scan(#{}, Html),
     ParsedResult = arizona_parser:parse_stateful_tokens(Tokens),
@@ -27,7 +37,7 @@ render_stateful(Html, Socket) when is_binary(Html); is_list(Html) ->
     %% Evaluate AST to get optimized template data with Socket binding
     {value, OptimizedTemplateData, _NewBindings} = erl_eval:expr(
         erl_syntax:revert(OptimizedAST),
-        #{}
+        Bindings
     ),
 
     %% Render using optimized data (same as compile-time path)

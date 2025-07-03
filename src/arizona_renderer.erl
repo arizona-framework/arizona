@@ -145,7 +145,7 @@ evaluate_dynamic_elements_for_item([], _ElemsFuns, _Item, Socket) ->
     {[], Socket};
 evaluate_dynamic_elements_for_item([ElemIndex | Rest], ElemsFuns, Item, Socket) ->
     %% Evaluate current element function - let it crash if index doesn't exist
-    {Line, Fun} = maps:get(ElemIndex, ElemsFuns),
+    {dynamic, Line, Fun} = maps:get(ElemIndex, ElemsFuns),
     {Value, UpdatedSocket} =
         try
             Result = arizona_list:call_element_function(Fun, Item, Socket),
@@ -165,17 +165,14 @@ evaluate_dynamic_elements_for_item([ElemIndex | Rest], ElemsFuns, Item, Socket) 
     {[Value | RestValues], FinalSocket}.
 
 %% Zip static and dynamic parts for list item
-zip_static_dynamic(Static, Dynamic) ->
-    zip_static_dynamic(Static, Dynamic, []).
-
-zip_static_dynamic([], [], Acc) ->
-    lists:reverse(Acc);
-zip_static_dynamic([S | Static], [D | Dynamic], Acc) ->
-    zip_static_dynamic(Static, Dynamic, [D, S | Acc]);
-zip_static_dynamic([S | Static], [], Acc) ->
-    zip_static_dynamic(Static, [], [S | Acc]);
-zip_static_dynamic([], [D | Dynamic], Acc) ->
-    zip_static_dynamic([], Dynamic, [D | Acc]).
+zip_static_dynamic([], []) ->
+    [];
+zip_static_dynamic([S | Static], [D | Dynamic]) ->
+    [S, D | zip_static_dynamic(Static, Dynamic)];
+zip_static_dynamic([S | Static], []) ->
+    [S | zip_static_dynamic(Static, [])];
+zip_static_dynamic([], [D | Dynamic]) ->
+    [D | zip_static_dynamic([], Dynamic)].
 
 %% Error info for binding errors following OTP pattern
 binding_error_info(Line, Key, Socket) ->
