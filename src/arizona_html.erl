@@ -3,6 +3,7 @@
 -export([render_stateful/2]).
 -export([render_stateless/2]).
 -export([render_list/3]).
+-export([render_live/2]).
 -export([to_html/2]).
 -export([render_slot/2, render_slot/3]).
 
@@ -180,6 +181,49 @@ extract_list_item_parameter_name(ListItemFunction) when is_function(ListItemFunc
             {clause, _Line, [FirstParameter | _], _Guards, _Body} = FirstClause,
             {var, _VarLine, ParameterName} = FirstParameter,
             ParameterName
+    end.
+
+%% --------------------------------------------------------------------
+%% Live rendering functions for arizona_live processes
+%% --------------------------------------------------------------------
+
+%% Render live content with optional layout injection
+-spec render_live(Template, Socket) -> Socket1 when
+    Template :: arizona_renderer:stateful_template_data() | html(),
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+render_live(Template, Socket) ->
+    % First render the live content
+    SocketWithLiveContent = render_stateful(Template, Socket),
+
+    % Check if layout is configured
+    case arizona_socket:get_layout(Socket) of
+        undefined ->
+            % No layout, return live content directly
+            SocketWithLiveContent;
+        {LayoutModule, LayoutRenderFun, SlotName} ->
+            % Layout configured, inject live content into layout
+            case arizona_socket:get_mode(Socket) of
+                render ->
+                    % Get the rendered live content
+                    LiveContent = arizona_socket:get_html(SocketWithLiveContent),
+
+                    % Put the live content as the specified slot binding
+                    SocketWithSlot = arizona_socket:put_bindings(
+                        #{
+                            SlotName => LiveContent
+                        },
+                        SocketWithLiveContent
+                    ),
+
+                    % Render the layout with the live content injected
+                    arizona_stateless:call_render_callback(
+                        LayoutModule, LayoutRenderFun, SocketWithSlot
+                    );
+                diff ->
+                    % When diffing, we only return the live content changes
+                    SocketWithLiveContent
+            end
     end.
 
 %% --------------------------------------------------------------------

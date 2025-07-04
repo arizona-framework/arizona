@@ -17,15 +17,19 @@
 -export([get_binding/2, get_binding/3, put_binding/3, put_bindings/2]).
 -export([with_temp_bindings/2, get_temp_binding/2]).
 
+%% Layout functions
+-export([set_layout/2, get_layout/1]).
+
 %% Types
 -type bindings() :: #{atom() => term()}.
 -type mode() :: render | diff.
+-type layout() :: {LayoutModule :: atom(), LayoutRenderFun :: atom(), SlotName :: atom()}.
 -type socket_opts() :: #{
     mode => mode(),
     current_stateful_parent_id => arizona_stateful:id() | undefined,
     current_stateful_id => arizona_stateful:id()
 }.
--export_type([bindings/0, mode/0, socket_opts/0]).
+-export_type([bindings/0, mode/0, layout/0, socket_opts/0]).
 
 -record(socket, {
     mode :: mode(),
@@ -35,7 +39,8 @@
     current_stateful_id :: arizona_stateful:id(),
     stateful_states :: #{arizona_stateful:id() => arizona_stateful:stateful()},
     % For stateless component bindings, always a map
-    temp_bindings :: map()
+    temp_bindings :: map(),
+    layout :: layout() | undefined
 }).
 -opaque socket() :: #socket{}.
 -export_type([socket/0]).
@@ -51,7 +56,8 @@ new(Opts) when is_map(Opts) ->
         current_stateful_parent_id = maps:get(current_stateful_parent_id, Opts, undefined),
         current_stateful_id = maps:get(current_stateful_id, Opts, root),
         stateful_states = #{},
-        temp_bindings = #{}
+        temp_bindings = #{},
+        layout = undefined
     }.
 
 -spec is_socket(Term) -> boolean() when
@@ -287,3 +293,20 @@ merge_nested_changes(NewChange, ExistingChange) when is_list(NewChange), is_list
 merge_nested_changes(NewChange, _ExistingChange) ->
     % New change takes precedence (overwrite)
     NewChange.
+
+%% Layout functions
+
+-spec set_layout(Layout, Socket) -> Socket1 when
+    Layout :: layout(),
+    Socket :: socket(),
+    Socket1 :: socket().
+set_layout({LayoutModule, LayoutRenderFun, SlotName} = Layout, #socket{} = Socket) when
+    is_atom(LayoutModule), is_atom(LayoutRenderFun), is_atom(SlotName)
+->
+    Socket#socket{layout = Layout}.
+
+-spec get_layout(Socket) -> Layout when
+    Socket :: socket(),
+    Layout :: layout() | undefined.
+get_layout(#socket{} = Socket) ->
+    Socket#socket.layout.
