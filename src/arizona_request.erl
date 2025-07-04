@@ -57,7 +57,7 @@ from_cowboy(CowboyReq) ->
         raw = {cowboy_req, CowboyReq}
     }.
 
-%% Get URL path bindings (e.g., #{user_id => <<"123">>})
+%% Get URL path bindings (e.g., #{user_id => ~"123"})
 -spec get_bindings(request()) -> {#{atom() => binary()}, request()}.
 get_bindings(#request{bindings = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
     Bindings = cowboy_req:bindings(CowboyReq),
@@ -66,7 +66,7 @@ get_bindings(#request{bindings = undefined, raw = {cowboy_req, CowboyReq}} = Req
 get_bindings(#request{bindings = Bindings} = Req) ->
     {Bindings, Req}.
 
-%% Get query parameters (e.g., [{<<"tab">>, <<"account">>}])
+%% Get query parameters (e.g., [{~"tab", ~"account"}])
 -spec get_params(request()) -> {[{binary(), binary()}], request()}.
 get_params(#request{params = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
     Params = cowboy_req:parse_qs(CowboyReq),
@@ -75,7 +75,7 @@ get_params(#request{params = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
 get_params(#request{params = Params} = Req) ->
     {Params, Req}.
 
-%% Get cookies (e.g., [{<<"session_id">>, <<"abc123">>}])
+%% Get cookies (e.g., [{~"session_id", ~"abc123"}])
 -spec get_cookies(request()) -> {[{binary(), binary()}], request()}.
 get_cookies(#request{cookies = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
     Cookies = cowboy_req:parse_cookies(CowboyReq),
@@ -112,7 +112,7 @@ get_body(#request{body = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
 get_body(#request{body = Body} = Req) when Body =/= undefined ->
     {Body, Req};
 get_body(#request{} = Req) ->
-    {<<>>, Req}.
+    {~"", Req}.
 
 %% Get the raw server-specific request object
 -spec get_raw_request(request()) -> {cowboy_req, cowboy_req:req()} | undefined.

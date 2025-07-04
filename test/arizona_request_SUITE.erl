@@ -32,7 +32,8 @@ all() ->
         {group, from_cowboy_creation},
         {group, lazy_loading_with_cowboy},
         {group, body_handling},
-        {group, headers_handling}
+        {group, headers_handling},
+        {group, cowboy_req_parsing}
     ].
 
 groups() ->
@@ -68,6 +69,11 @@ groups() ->
         {headers_handling, [], [
             test_headers_already_loaded,
             test_headers_lazy_loading
+        ]},
+        {cowboy_req_parsing, [], [
+            test_cookies_cowboy_parsing,
+            test_headers_cowboy_parsing,
+            test_body_cowboy_parsing
         ]}
     ].
 
@@ -345,7 +351,7 @@ test_body_lazy_loading(Config) when is_list(Config) ->
     {Body, UpdatedReq} = arizona_request:get_body(Req),
 
     % Should return empty binary when no body and no raw request
-    ?assertEqual(<<>>, Body),
+    ?assertEqual(~"", Body),
 
     % Request should be unchanged
     ?assertEqual(Req, UpdatedReq).
@@ -378,7 +384,7 @@ test_body_undefined_case(Config) when is_list(Config) ->
     {Body, UpdatedReq} = arizona_request:get_body(Req),
 
     % Should return empty binary
-    ?assertEqual(<<>>, Body),
+    ?assertEqual(~"", Body),
 
     % Request should be unchanged
     ?assertEqual(Req, UpdatedReq).
@@ -424,3 +430,108 @@ test_headers_lazy_loading(Config) when is_list(Config) ->
     {Headers2, UpdatedReq2} = arizona_request:get_headers(UpdatedReq),
     ?assertEqual(Headers, Headers2),
     ?assertEqual(UpdatedReq, UpdatedReq2).
+
+%% --------------------------------------------------------------------
+%% Cowboy Request Parsing Tests (hitting the missing coverage lines)
+%% --------------------------------------------------------------------
+
+test_cookies_cowboy_parsing(Config) when is_list(Config) ->
+    % Test lazy loading of cookies from cowboy_req
+    % This should hit lines 81-83 in arizona_request.erl
+
+    % Create a real cowboy_req map with cookie header
+    CowboyReq = #{
+        method => ~"GET",
+        headers => #{~"cookie" => ~"session_id=abc123; theme=dark"}
+    },
+
+    % Create arizona_request with undefined cookies and real cowboy_req
+    Req = arizona_request:new(#{
+        method => ~"GET",
+        path => ~"/",
+        % Explicitly set to undefined for lazy loading
+        cookies => undefined,
+        raw => {cowboy_req, CowboyReq}
+    }),
+
+    % First call should trigger cowboy_req:parse_cookies/1 (line 81)
+    {Cookies, UpdatedReq} = arizona_request:get_cookies(Req),
+
+    % Should return parsed cookies (cowboy returns in binary format)
+    Expected = [{~"session_id", ~"abc123"}, {~"theme", ~"dark"}],
+    ?assertEqual(Expected, Cookies),
+
+    % Second call should use cached value (line 84-85)
+    {Cookies2, _UpdatedReq2} = arizona_request:get_cookies(UpdatedReq),
+    ?assertEqual(Expected, Cookies2).
+
+test_headers_cowboy_parsing(Config) when is_list(Config) ->
+    % Test lazy loading of headers from cowboy_req
+    % This should hit lines 100-102 in arizona_request.erl
+
+    % Create a real cowboy_req map with headers
+    CowboyReq = #{
+        method => ~"POST",
+        headers => #{
+            ~"content-type" => ~"application/json",
+            ~"user-agent" => ~"test-agent"
+        }
+    },
+
+    % Create arizona_request with undefined headers and real cowboy_req
+    Req = arizona_request:new(#{
+        method => ~"POST",
+        path => ~"/api",
+        % Explicitly set to undefined for lazy loading
+        headers => undefined,
+        raw => {cowboy_req, CowboyReq}
+    }),
+
+    % First call should trigger cowboy_req:headers/1 (line 100)
+    {Headers, UpdatedReq} = arizona_request:get_headers(Req),
+
+    % Should return the cowboy_req headers
+    Expected = #{
+        ~"content-type" => ~"application/json",
+        ~"user-agent" => ~"test-agent"
+    },
+    ?assertEqual(Expected, Headers),
+
+    % Second call should use cached value (line 103-104)
+    {Headers2, _UpdatedReq2} = arizona_request:get_headers(UpdatedReq),
+    ?assertEqual(Expected, Headers2).
+
+test_body_cowboy_parsing(Config) when is_list(Config) ->
+    % Test lazy loading of body from cowboy_req
+    % This should hit lines 109-111 in arizona_request.erl
+
+    % Create a cowboy_req map that read_body can handle (no body case)
+    CowboyReq = #{
+        method => ~"POST",
+        % This makes cowboy_req:read_body/1 return {ok, ~"", Req}
+        has_body => false
+    },
+
+    % Create arizona_request with undefined body and real cowboy_req
+    Req = arizona_request:new(#{
+        method => ~"POST",
+        path => ~"/api/upload",
+        % Explicitly set to undefined for lazy loading
+        body => undefined,
+        raw => {cowboy_req, CowboyReq}
+    }),
+
+    % First call should trigger cowboy_req:read_body/1 (line 109)
+    {Body, UpdatedReq} = arizona_request:get_body(Req),
+
+    % Should return empty body since has_body = false
+    ?assertEqual(~"", Body),
+
+    % Verify the updated request has the body cached
+    % The raw should be updated with the result from read_body
+    {cowboy_req, UpdatedCowboyReq} = arizona_request:get_raw_request(UpdatedReq),
+    ?assertEqual(#{method => ~"POST", has_body => false}, UpdatedCowboyReq),
+
+    % Second call should use cached body value (line 112-113)
+    {Body2, _UpdatedReq2} = arizona_request:get_body(UpdatedReq),
+    ?assertEqual(~"", Body2).
