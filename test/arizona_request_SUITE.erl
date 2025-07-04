@@ -3,6 +3,15 @@
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).
 
+%% Suppress Dialyzer warnings for mock data test functions
+%% These test the data structure wrapping behavior, not actual cowboy integration
+-dialyzer(
+    {nowarn_function, [
+        test_raw_request_tag/1,
+        test_lazy_loading_pattern/1
+    ]}
+).
+
 %% --------------------------------------------------------------------
 %% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
@@ -75,9 +84,7 @@ test_new_request_with_options(Config) when is_list(Config) ->
 
 test_raw_request_tag(Config) when is_list(Config) ->
     % Test that raw request is properly tagged
-
-    % Use a map instead of atom
-    MockData = #{mock => true},
+    MockData = mock_cowboy_req(),
     Req = arizona_request:new(#{raw => {cowboy_req, MockData}}),
 
     ?assertEqual({cowboy_req, MockData}, arizona_request:get_raw_request(Req)).
@@ -108,13 +115,13 @@ test_lazy_loading_pattern(Config) when is_list(Config) ->
         method => ~"GET",
         path => ~"/test",
         % Leave bindings, params, etc as undefined to test lazy loading
-        raw => {cowboy_req, #{mock => true}}
+        raw => {cowboy_req, mock_cowboy_req()}
     }),
 
     % Test that requests with undefined fields need raw data for lazy loading
     % Since we don't have real cowboy_req functions, we test the structure
     RawData = arizona_request:get_raw_request(Req),
-    ?assertEqual({cowboy_req, #{mock => true}}, RawData).
+    ?assertEqual({cowboy_req, mock_cowboy_req()}, RawData).
 
 test_caching_pattern(Config) when is_list(Config) ->
     % Test caching behavior with pre-loaded data
@@ -147,3 +154,26 @@ test_caching_pattern(Config) when is_list(Config) ->
     ?assertEqual([{~"session", ~"abc"}], Cookies1),
     % Should be same since pre-loaded
     ?assertEqual(Req, Req4).
+
+%% --------------------------------------------------------------------
+%% Helper Functions
+%% --------------------------------------------------------------------
+
+%% Helper function to create a mock cowboy_req that matches the expected structure
+mock_cowboy_req() ->
+    #{
+        method => ~"GET",
+        version => 'HTTP/1.1',
+        scheme => ~"http",
+        host => ~"localhost",
+        port => 8080,
+        path => ~"/",
+        qs => ~"",
+        headers => #{},
+        peer => {{127, 0, 0, 1}, 12345},
+        sock => {{127, 0, 0, 1}, 8080},
+        cert => undefined,
+        ref => test_ref,
+        pid => self(),
+        streamid => 1
+    }.
