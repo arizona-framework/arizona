@@ -1,6 +1,7 @@
 -module(arizona_server).
 
 -export([start/1, stop/0]).
+-export([compile_routes/1, route_to_cowboy/1]).
 
 -type route() ::
     {live, Path :: binary(), LiveModule :: atom(), Opts :: map()}

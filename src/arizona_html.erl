@@ -6,6 +6,7 @@
 -export([render_live/2]).
 -export([to_html/2]).
 -export([render_slot/2, render_slot/3]).
+-export([extract_list_item_parameter_name/1]).
 
 %% Types
 -type html() :: iodata().
