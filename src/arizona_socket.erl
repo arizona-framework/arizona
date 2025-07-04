@@ -88,7 +88,7 @@ get_current_stateful_state(#socket{} = Socket) ->
     Id :: arizona_stateful:id(),
     Socket :: socket(),
     StatefulState :: arizona_stateful:state().
-get_stateful_state(Id, #socket{} = Socket) ->
+get_stateful_state(Id, #socket{} = Socket) when Id =:= root; is_binary(Id) ->
     maps:get(Id, Socket#socket.stateful_states).
 
 -spec get_stateful_states(Socket) -> States when
@@ -101,7 +101,7 @@ get_stateful_states(#socket{} = Socket) ->
     Id :: arizona_stateful:id(),
     Socket :: socket(),
     StatefulState :: arizona_stateful:state().
-find_stateful_state(Id, #socket{} = Socket) ->
+find_stateful_state(Id, #socket{} = Socket) when Id =:= root; is_binary(Id) ->
     maps:find(Id, Socket#socket.stateful_states).
 
 -spec set_current_stateful_id(Id, Socket) -> Socket1 when
@@ -128,7 +128,7 @@ get_html(#socket{} = Socket) ->
     StatefulState :: arizona_stateful:state(),
     Socket :: socket(),
     Socket1 :: socket().
-put_stateful_state(State, Socket) ->
+put_stateful_state(State, #socket{} = Socket) ->
     Id = arizona_stateful:get_id(State),
     States = Socket#socket.stateful_states,
     Socket#socket{stateful_states = States#{Id => State}}.
@@ -207,7 +207,7 @@ put_bindings(Bindings, #socket{} = Socket) when is_map(Bindings) ->
     Changes :: arizona_differ:diff_changes(),
     Socket :: socket(),
     Socket1 :: socket().
-append_changes(Changes, #socket{} = Socket) ->
+append_changes(Changes, #socket{} = Socket) when is_list(Changes) ->
     CurrentChanges = Socket#socket.changes_acc,
     % Merge changes at the correct hierarchical path
     MergedChanges = merge_changes(Changes, CurrentChanges),

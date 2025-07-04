@@ -75,7 +75,9 @@ test_new_request_with_options(Config) when is_list(Config) ->
 
 test_raw_request_tag(Config) when is_list(Config) ->
     % Test that raw request is properly tagged
-    MockData = some_mock_data,
+
+    % Use a map instead of atom
+    MockData = #{mock => true},
     Req = arizona_request:new(#{raw => {cowboy_req, MockData}}),
 
     ?assertEqual({cowboy_req, MockData}, arizona_request:get_raw_request(Req)).
@@ -106,13 +108,13 @@ test_lazy_loading_pattern(Config) when is_list(Config) ->
         method => ~"GET",
         path => ~"/test",
         % Leave bindings, params, etc as undefined to test lazy loading
-        raw => {cowboy_req, mock_data}
+        raw => {cowboy_req, #{mock => true}}
     }),
 
     % Test that requests with undefined fields need raw data for lazy loading
     % Since we don't have real cowboy_req functions, we test the structure
     RawData = arizona_request:get_raw_request(Req),
-    ?assertEqual({cowboy_req, mock_data}, RawData).
+    ?assertEqual({cowboy_req, #{mock => true}}, RawData).
 
 test_caching_pattern(Config) when is_list(Config) ->
     % Test caching behavior with pre-loaded data

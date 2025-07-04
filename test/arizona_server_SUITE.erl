@@ -22,9 +22,9 @@ groups() ->
 
 init_per_suite(Config) ->
     % Ensure applications are started
-    application:ensure_all_started(cowboy),
+    {ok, _} = application:ensure_all_started(cowboy),
     % For httpc
-    application:ensure_all_started(inets),
+    {ok, _} = application:ensure_all_started(inets),
     Config.
 
 end_per_suite(_Config) ->
@@ -47,7 +47,7 @@ test_basic_server_start_stop(Config) when is_list(Config) ->
     ServerConfig = #{
         port => 8080,
         routes => [
-            {live, "/", test_live_component, #{}}
+            {live, ~"/", test_live_component, #{}}
         ]
     },
 
@@ -64,7 +64,7 @@ test_simple_live_route(Config) when is_list(Config) ->
     ServerConfig = #{
         port => 8081,
         routes => [
-            {live, "/test", test_live_component, #{}}
+            {live, ~"/test", test_live_component, #{}}
         ]
     },
 

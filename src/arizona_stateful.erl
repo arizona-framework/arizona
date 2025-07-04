@@ -74,7 +74,7 @@ call_render_callback(Mod, Socket) when is_atom(Mod) ->
     Fun :: fun((arizona_socket:socket()) -> term()),
     Socket :: arizona_socket:socket(),
     Result :: term().
-call_dynamic_function(Fun, Socket) ->
+call_dynamic_function(Fun, Socket) when is_function(Fun, 1) ->
     apply(Fun, [Socket]).
 
 -spec new(Id, Mod, Bindings) -> State when

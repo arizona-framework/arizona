@@ -26,7 +26,7 @@
 
 %% Create a new arizona request
 -spec new(map()) -> request().
-new(#{} = Opts) ->
+new(Opts) when is_map(Opts) ->
     #request{
         method = maps:get(method, Opts, ~"GET"),
         path = maps:get(path, Opts, ~"/"),

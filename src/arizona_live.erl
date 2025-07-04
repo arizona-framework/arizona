@@ -39,7 +39,8 @@
 }).
 
 %% Types
--type state() :: #state{}.
+-opaque state() :: #state{}.
+-export_type([state/0]).
 
 %% API Functions
 
@@ -136,7 +137,11 @@ handle_call({mount, Req}, _From, #state{module = Module, socket = Socket} = Stat
 handle_call(render, _From, #state{module = Module, socket = Socket} = State) ->
     UpdatedSocket = call_render_callback(Module, Socket),
     {reply, UpdatedSocket, State#state{socket = UpdatedSocket}};
-handle_call({handle_event, Event, Params}, _From, #state{module = Module, socket = Socket} = State) ->
+handle_call(
+    {handle_event, Event, Params},
+    _From,
+    #state{module = Module, socket = Socket} = State
+) ->
     case call_handle_event_callback(Module, Event, Params, Socket) of
         {noreply, UpdatedSocket} ->
             {reply, {noreply, UpdatedSocket}, State#state{socket = UpdatedSocket}};

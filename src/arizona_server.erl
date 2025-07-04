@@ -4,13 +4,13 @@
 
 -type route() ::
     {live, Path :: binary(), LiveModule :: atom(), Opts :: map()}
-    | {static, Path :: binary(), {dir, Directory :: string()}}
-    | {static, Path :: binary(), {file, FileName :: string()}}
-    | {static, Path :: binary(), {priv_dir, App :: atom(), Directory :: string()}}
-    | {static, Path :: binary(), {priv_file, App :: atom(), FileName :: string()}}.
+    | {static, Path :: binary(), {dir, Directory :: binary()}}
+    | {static, Path :: binary(), {file, FileName :: binary()}}
+    | {static, Path :: binary(), {priv_dir, App :: atom(), Directory :: binary()}}
+    | {static, Path :: binary(), {priv_file, App :: atom(), FileName :: binary()}}.
 
 -type server_config() :: #{
-    port := integer(),
+    port := pos_integer(),
     routes := [route()]
 }.
 -export_type([server_config/0]).
@@ -35,7 +35,7 @@ stop() ->
     cowboy:stop_listener(arizona_http_listener).
 
 %% @doc Compile Arizona routes into Cowboy dispatch format
--spec compile_routes([route()]) -> cowboy_router:dispatch_rules().
+-spec compile_routes([route()]) -> term().
 compile_routes(Routes) ->
     % Convert Arizona routes to Cowboy routes
     CowboyRoutes = [route_to_cowboy(Route) || Route <- Routes],
@@ -47,38 +47,29 @@ compile_routes(Routes) ->
     ]).
 
 %% @doc Convert a single Arizona route to Cowboy route format
--spec route_to_cowboy(route()) -> cowboy_router:route_rule().
-route_to_cowboy({live, Path, LiveModule, Opts}) ->
+-spec route_to_cowboy(route()) -> {'_' | iodata(), module(), term()}.
+route_to_cowboy({live, Path, LiveModule, Opts}) when is_binary(Path), is_atom(LiveModule) ->
     % LiveView routes use arizona_handler
-    CowboyPath = path_to_cowboy(Path),
-    {CowboyPath, arizona_handler, #{
+    {Path, arizona_handler, #{
         type => live,
         handler => LiveModule,
         opts => Opts
     }};
-route_to_cowboy({static, Path, {dir, Directory}}) ->
+route_to_cowboy({static, Path, {dir, Directory}}) when is_binary(Path), is_binary(Directory) ->
     % Static file serving from filesystem directory
-    to_cowboy_static_route(dir_path_to_cowboy(Path), {dir, Directory});
-route_to_cowboy({static, Path, {file, FileName}}) ->
+    DirPath = filename:join(Path, "[...]"),
+    {DirPath, cowboy_static, {dir, Directory}};
+route_to_cowboy({static, Path, {file, FileName}}) when is_binary(Path), is_binary(FileName) ->
     % Static file serving for single file from priv directory
-    to_cowboy_static_route(Path, {file, FileName});
-route_to_cowboy({static, Path, {priv_dir, App, Directory}}) ->
+    {Path, cowboy_static, {file, FileName}};
+route_to_cowboy({static, Path, {priv_dir, App, Directory}}) when
+    is_binary(Path), is_atom(App), is_binary(Directory)
+->
     % Static file serving from priv directory
-    to_cowboy_static_route(dir_path_to_cowboy(Path), {priv_dir, App, Directory});
-route_to_cowboy({static, Path, {priv_file, App, FileName}}) ->
+    DirPath = filename:join(Path, "[...]"),
+    {DirPath, cowboy_static, {priv_dir, App, Directory}};
+route_to_cowboy({static, Path, {priv_file, App, FileName}}) when
+    is_binary(Path), is_atom(App), is_binary(FileName)
+->
     % Static file serving for single file from priv directory
-    to_cowboy_static_route(Path, {priv_file, App, FileName}).
-
-to_cowboy_static_route(Path, Static) ->
-    CowboyPath = path_to_cowboy(Path),
-    {CowboyPath, cowboy_static, Static}.
-
-dir_path_to_cowboy(Path) ->
-    % Match any sub-path
-    filename:join(Path, "[...]").
-
-%% @doc Convert Arizona path format to Cowboy path format
--spec path_to_cowboy(string()) -> binary().
-path_to_cowboy(Path) ->
-    % For now, simple conversion - we'll add parameter support later
-    list_to_binary(Path).
+    {Path, cowboy_static, {priv_file, App, FileName}}.
