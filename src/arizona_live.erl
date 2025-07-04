@@ -3,19 +3,18 @@
 
 %% API
 -export([start_link/2]).
--export([mount/3, render/1, handle_event/3]).
+-export([mount/2, render/1, handle_event/3]).
 
 %% Callback wrapper functions
--export([call_mount_callback/4, call_render_callback/2]).
+-export([call_mount_callback/3, call_render_callback/2]).
 -export([call_handle_event_callback/4, call_handle_info_callback/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% Behavior definition
--callback mount(Params, Session, Socket) -> {Socket, Opts} when
-    Params :: map(),
-    Session :: map(),
+-callback mount(Req, Socket) -> {Socket, Opts} when
+    Req :: arizona_request:request(),
     Socket :: arizona_socket:socket(),
     Opts :: map().
 
@@ -53,14 +52,13 @@
 start_link(Module, Socket) ->
     gen_server:start_link(?MODULE, {Module, Socket}, []).
 
--spec mount(Pid, Params, Session) -> {Socket, Opts} when
+-spec mount(Pid, Req) -> {Socket, Opts} when
     Pid :: pid(),
-    Params :: map(),
-    Session :: map(),
+    Req :: arizona_request:request(),
     Socket :: arizona_socket:socket(),
     Opts :: map().
-mount(Pid, Params, Session) ->
-    gen_server:call(Pid, {mount, Params, Session}).
+mount(Pid, Req) ->
+    gen_server:call(Pid, {mount, Req}).
 
 -spec render(Pid) -> Socket when
     Pid :: pid(),
@@ -79,14 +77,13 @@ handle_event(Pid, Event, Params) ->
 
 %% Callback wrapper functions
 
--spec call_mount_callback(Module, Params, Session, Socket) -> {Socket, Opts} when
+-spec call_mount_callback(Module, Req, Socket) -> {Socket, Opts} when
     Module :: atom(),
-    Params :: map(),
-    Session :: map(),
+    Req :: arizona_request:request(),
     Socket :: arizona_socket:socket(),
     Opts :: map().
-call_mount_callback(Module, Params, Session, Socket) ->
-    apply(Module, mount, [Params, Session, Socket]).
+call_mount_callback(Module, Req, Socket) ->
+    apply(Module, mount, [Req, Socket]).
 
 -spec call_render_callback(Module, Socket) -> Socket when
     Module :: atom(),
@@ -131,13 +128,13 @@ call_handle_info_callback(Module, Info, Socket) ->
 init({Module, Socket}) ->
     {ok, #state{module = Module, socket = Socket}}.
 
--spec handle_call(Request, From, State) -> {reply, Reply, State} when
-    Request :: {mount, map(), map()} | render | {handle_event, binary(), map()},
+-spec handle_call(Message, From, State) -> {reply, Reply, State} when
+    Message :: {mount, arizona_request:request()} | render | {handle_event, binary(), map()},
     From :: {pid(), term()},
     State :: state(),
     Reply :: term().
-handle_call({mount, Params, Session}, _From, #state{module = Module, socket = Socket} = State) ->
-    {UpdatedSocket, Opts} = call_mount_callback(Module, Params, Session, Socket),
+handle_call({mount, Req}, _From, #state{module = Module, socket = Socket} = State) ->
+    {UpdatedSocket, Opts} = call_mount_callback(Module, Req, Socket),
     {reply, {UpdatedSocket, Opts}, State#state{socket = UpdatedSocket}};
 handle_call(render, _From, #state{module = Module, socket = Socket} = State) ->
     UpdatedSocket = call_render_callback(Module, Socket),
