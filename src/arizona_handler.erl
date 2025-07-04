@@ -20,13 +20,15 @@ handle_live_request(LiveModule, Req, State) ->
 
         % Create Arizona socket and call mount via arizona_live callback wrapper
         Socket = arizona_socket:new(#{}),
-        Socket1 = arizona_live:call_mount_callback(LiveModule, ArizonaReq, Socket),
+        StatefulState = arizona_stateful:new(root, LiveModule, #{}),
+        Socket1 = arizona_socket:put_stateful_state(StatefulState, Socket),
+        Socket2 = arizona_live:call_mount_callback(LiveModule, ArizonaReq, Socket1),
 
         % Render the LiveView via arizona_live callback wrapper
-        Socket2 = arizona_live:call_render_callback(LiveModule, Socket1),
+        Socket3 = arizona_live:call_render_callback(LiveModule, Socket2),
 
         % Get final HTML
-        Html = arizona_socket:get_html(Socket2),
+        Html = arizona_socket:get_html(Socket3),
         Req1 = cowboy_req:reply(200, #{~"content-type" => ~"text/html"}, Html, Req),
         {ok, Req1, State}
     catch
