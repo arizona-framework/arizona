@@ -5,7 +5,7 @@
 -export([mount_live/2, render_live/1]).
 -export([send_event/3, send_info/2]).
 -export([get_html/1, get_socket/1]).
--export([assert_html_contains/2, assert_binding/3]).
+-export([assert_html_contains/2, assert_binding/3, assert_binding_contains/3]).
 
 %% Types
 -type live_test_pid() :: pid().
@@ -110,4 +110,18 @@ assert_binding(Socket, Key, ExpectedValue) ->
             ok;
         false ->
             error({assertion_failed, {binding_mismatch, Key, ExpectedValue, ActualValue}})
+    end.
+
+%% Assert that a socket binding (which should be a list) contains a specific value
+-spec assert_binding_contains(Socket, Key, ExpectedValue) -> ok when
+    Socket :: arizona_socket:socket(),
+    Key :: atom(),
+    ExpectedValue :: term().
+assert_binding_contains(Socket, Key, ExpectedValue) ->
+    ActualList = arizona_socket:get_binding(Key, Socket),
+    case lists:member(ExpectedValue, ActualList) of
+        true ->
+            ok;
+        false ->
+            error({assertion_failed, {binding_does_not_contain, Key, ExpectedValue, ActualList}})
     end.

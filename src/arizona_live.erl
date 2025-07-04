@@ -10,7 +10,7 @@
 -export([call_handle_event_callback/4, call_handle_info_callback/3]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 %% Behavior definition
 -callback mount(Req, Socket) -> Socket when
@@ -161,16 +161,3 @@ handle_cast(_Request, State) ->
 handle_info(Info, #state{module = Module, socket = Socket} = State) ->
     {noreply, UpdatedSocket} = call_handle_info_callback(Module, Info, Socket),
     {noreply, State#state{socket = UpdatedSocket}}.
-
--spec terminate(Reason, State) -> ok when
-    Reason :: term(),
-    State :: state().
-terminate(_Reason, _State) ->
-    ok.
-
--spec code_change(OldVsn, State, Extra) -> {ok, State} when
-    OldVsn :: term(),
-    State :: state(),
-    Extra :: term().
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
