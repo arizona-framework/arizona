@@ -6,7 +6,6 @@ This suite tests the compile-time transformation of Arizona template syntax
 into optimized structured formats for high-performance rendering.
 """.
 
--include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
 %% --------------------------------------------------------------------

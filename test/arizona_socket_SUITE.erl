@@ -6,7 +6,6 @@ This suite tests the core socket data structure for Arizona templates,
 including state management, HTML accumulation, and binding handling.
 """.
 
--include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
 %% Suppress dialyzer warnings for validation tests that intentionally

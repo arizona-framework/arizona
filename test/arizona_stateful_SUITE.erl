@@ -6,7 +6,6 @@ This suite tests the stateful component behavior definition and utility function
 including callback invocation, state management, and binding operations.
 """.
 
--include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
 %% Suppress dialyzer warnings for validation tests that intentionally

@@ -6,7 +6,6 @@ This suite tests the function call utilities for list rendering,
 including item function calls and element function calls.
 """.
 
--include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
 %% Suppress dialyzer warnings for validation tests that test function arities
