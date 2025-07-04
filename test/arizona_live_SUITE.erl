@@ -58,14 +58,13 @@ test_mount_callback(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
 
     % Test mount with different request options
-    {Socket, Opts} = arizona_live_test_helpers:mount_live(Pid, #{
+    Socket = arizona_live_test_helpers:mount_live(Pid, #{
         bindings => #{test => <<"value">>},
         params => [{<<"session">>, <<"data">>}]
     }),
 
-    % Verify socket and opts are returned
-    ?assert(arizona_socket:is_socket(Socket)),
-    ?assert(is_map(Opts)).
+    % Verify socket is returned
+    ?assert(arizona_socket:is_socket(Socket)).
 
 %% --------------------------------------------------------------------
 %% Live Component Rendering Tests

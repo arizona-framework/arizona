@@ -20,7 +20,7 @@ handle_live_request(LiveModule, Req, State) ->
 
         % Create Arizona socket and call mount via arizona_live callback wrapper
         Socket = arizona_socket:new(#{}),
-        {Socket1, _LiveOpts} = arizona_live:call_mount_callback(LiveModule, ArizonaReq, Socket),
+        Socket1 = arizona_live:call_mount_callback(LiveModule, ArizonaReq, Socket),
 
         % Render the LiveView via arizona_live callback wrapper
         Socket2 = arizona_live:call_render_callback(LiveModule, Socket1),

@@ -86,10 +86,10 @@ test_simple_live_route(Config) when is_list(Config) ->
 create_test_live_component() ->
     Code = merl:quote(~""""
     -module(test_live_component).
-    -behaviour(arizona_stateful).
-    -export([mount/1, render/1]).
+    -behaviour(arizona_live).
+    -export([mount/2, render/1]).
 
-    mount(Socket) ->
+    mount(_Req, Socket) ->
         Socket.
 
     render(Socket) ->

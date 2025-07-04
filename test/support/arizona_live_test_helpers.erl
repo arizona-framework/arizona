@@ -27,15 +27,14 @@ start_live(Module, ReqOpts) when is_atom(Module), is_map(ReqOpts) ->
 
     % Create arizona_request from options
     Req = arizona_request:new(ReqOpts),
-    {_Socket, _Opts} = arizona_live:mount(Pid, Req),
+    _Socket = arizona_live:mount(Pid, Req),
     {ok, Pid}.
 
 %% Mount the live component (useful for re-mounting with different request)
--spec mount_live(Pid, ReqOpts) -> {Socket, Opts} when
+-spec mount_live(Pid, ReqOpts) -> Socket when
     Pid :: live_test_pid(),
     ReqOpts :: map(),
-    Socket :: arizona_socket:socket(),
-    Opts :: map().
+    Socket :: arizona_socket:socket().
 mount_live(Pid, ReqOpts) when is_map(ReqOpts) ->
     Req = arizona_request:new(ReqOpts),
     arizona_live:mount(Pid, Req).

@@ -17,7 +17,7 @@ mount(_Req, Socket) ->
     }),
     SocketWithState = arizona_socket:put_stateful_state(RootState, SocketWithLayout),
 
-    {SocketWithState, #{}}.
+    SocketWithState.
 
 render(Socket) ->
     arizona_html:render_live(~"""
