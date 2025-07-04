@@ -37,7 +37,7 @@
     changes_acc :: arizona_differ:diff_changes(),
     current_stateful_parent_id :: arizona_stateful:id() | undefined,
     current_stateful_id :: arizona_stateful:id(),
-    stateful_states :: #{arizona_stateful:id() => arizona_stateful:stateful()},
+    stateful_states :: #{arizona_stateful:id() => arizona_stateful:state()},
     % For stateless component bindings, always a map
     temp_bindings :: map(),
     layout :: layout() | undefined
@@ -77,30 +77,30 @@ get_mode(#socket{} = Socket) ->
 get_current_stateful_id(#socket{} = Socket) ->
     Socket#socket.current_stateful_id.
 
--spec get_current_stateful_state(Socket) -> Stateful when
+-spec get_current_stateful_state(Socket) -> StatefulState when
     Socket :: socket(),
-    Stateful :: arizona_stateful:stateful().
+    StatefulState :: arizona_stateful:state().
 get_current_stateful_state(#socket{} = Socket) ->
     Id = get_current_stateful_id(Socket),
     get_stateful_state(Id, Socket).
 
--spec get_stateful_state(Id, Socket) -> Stateful when
+-spec get_stateful_state(Id, Socket) -> StatefulState when
     Id :: arizona_stateful:id(),
     Socket :: socket(),
-    Stateful :: arizona_stateful:stateful().
+    StatefulState :: arizona_stateful:state().
 get_stateful_state(Id, #socket{} = Socket) ->
     maps:get(Id, Socket#socket.stateful_states).
 
 -spec get_stateful_states(Socket) -> States when
     Socket :: socket(),
-    States :: #{arizona_stateful:id() => arizona_stateful:stateful()}.
+    States :: #{arizona_stateful:id() => arizona_stateful:state()}.
 get_stateful_states(#socket{} = Socket) ->
     Socket#socket.stateful_states.
 
--spec find_stateful_state(Id, Socket) -> {ok, Stateful} | error when
+-spec find_stateful_state(Id, Socket) -> {ok, StatefulState} | error when
     Id :: arizona_stateful:id(),
     Socket :: socket(),
-    Stateful :: arizona_stateful:stateful().
+    StatefulState :: arizona_stateful:state().
 find_stateful_state(Id, #socket{} = Socket) ->
     maps:find(Id, Socket#socket.stateful_states).
 
@@ -124,8 +124,8 @@ set_html_acc(Html, #socket{} = Socket) when is_list(Html) ->
 get_html(#socket{} = Socket) ->
     Socket#socket.html_acc.
 
--spec put_stateful_state(Stateful, Socket) -> Socket1 when
-    Stateful :: arizona_stateful:stateful(),
+-spec put_stateful_state(StatefulState, Socket) -> Socket1 when
+    StatefulState :: arizona_stateful:state(),
     Socket :: socket(),
     Socket1 :: socket().
 put_stateful_state(State, Socket) ->

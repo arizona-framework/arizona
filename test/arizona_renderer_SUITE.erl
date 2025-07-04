@@ -398,9 +398,9 @@ create_mock_socket() ->
     Id = ~"test_id",
     Module = test_stateful_module_with_mount,
     Bindings = #{},
-    Stateful = arizona_stateful:new(Id, Module, Bindings),
+    StatefulState = arizona_stateful:new(Id, Module, Bindings),
     Opts = #{
         current_stateful_id => Id
     },
     Socket = arizona_socket:new(Opts),
-    arizona_socket:put_stateful_state(Stateful, Socket).
+    arizona_socket:put_stateful_state(StatefulState, Socket).

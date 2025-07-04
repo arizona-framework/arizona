@@ -348,8 +348,8 @@ test_render_list_with_variable_extraction(Config) when is_list(Config) ->
     % This verifies that extract_list_item_var_name works and variables are bound correctly
 
     % Create socket with stateful state containing prefix binding
-    Stateful = arizona_stateful:new(root, undefined, #{prefix => ~"foo"}),
-    Socket = arizona_socket:put_stateful_state(Stateful, arizona_socket:new(#{})),
+    StatefulState = arizona_stateful:new(root, undefined, #{prefix => ~"foo"}),
+    Socket = arizona_socket:put_stateful_state(StatefulState, arizona_socket:new(#{})),
 
     % Template with nested render_list call using variable I
     Template = ~""""
@@ -428,12 +428,12 @@ create_mock_socket() ->
     Id = ~"test_id",
     Module = test_stateful_module_with_mount,
     Bindings = #{},
-    Stateful = arizona_stateful:new(Id, Module, Bindings),
+    StatefulState = arizona_stateful:new(Id, Module, Bindings),
     Opts = #{
         current_stateful_id => Id
     },
     Socket = arizona_socket:new(Opts),
-    arizona_socket:put_stateful_state(Stateful, Socket).
+    arizona_socket:put_stateful_state(StatefulState, Socket).
 
 %% --------------------------------------------------------------------
 %% Diff mode tests
@@ -448,9 +448,9 @@ test_render_stateful_diff_mode(Config) when is_list(Config) ->
     },
 
     % Create socket in diff mode with stateful state
-    Stateful = arizona_stateful:new(root, test_module, #{counter => 42}),
+    StatefulState = arizona_stateful:new(root, test_module, #{counter => 42}),
     Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(Stateful, Socket),
+    SocketWithState = arizona_socket:put_stateful_state(StatefulState, Socket),
 
     % This should call arizona_differ:diff_stateful/3
     ResultSocket = arizona_html:render_stateful(TemplateData, SocketWithState),
@@ -472,9 +472,9 @@ test_render_stateful_mode_switching(Config) when is_list(Config) ->
     ?assert(arizona_socket:is_socket(RenderResult)),
 
     % Test diff mode
-    Stateful = arizona_stateful:new(root, test_module, #{}),
+    StatefulState = arizona_stateful:new(root, test_module, #{}),
     DiffSocket = arizona_socket:new(#{mode => diff}),
-    DiffSocketWithState = arizona_socket:put_stateful_state(Stateful, DiffSocket),
+    DiffSocketWithState = arizona_socket:put_stateful_state(StatefulState, DiffSocket),
     DiffResult = arizona_html:render_stateful(TemplateData, DiffSocketWithState),
     ?assert(arizona_socket:is_socket(DiffResult)).
 

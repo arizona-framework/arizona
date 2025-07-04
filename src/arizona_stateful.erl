@@ -30,19 +30,16 @@
 
 -export([should_remount/1]).
 
--record(stateful, {
+-record(state, {
     id :: id(),
     module :: module(),
     bindings :: map(),
     % Track which bindings changed
     changed_bindings :: map(),
-    %last_html :: iolist(),
-    %last_elements :: map(),  % Track last rendered elements #{index => content}
-    %template_data :: map(),  % Store parsed template structure
     fingerprint :: arizona_fingerprint:fingerprint()
 }).
--opaque stateful() :: #stateful{}.
--export_type([stateful/0]).
+-opaque state() :: #state{}.
+-export_type([state/0]).
 
 -type id() :: root | binary().
 -export_type([id/0]).
@@ -80,13 +77,13 @@ call_render_callback(Mod, Socket) when is_atom(Mod) ->
 call_dynamic_function(Fun, Socket) ->
     apply(Fun, [Socket]).
 
--spec new(Id, Mod, Bindings) -> Stateful when
+-spec new(Id, Mod, Bindings) -> State when
     Id :: id(),
     Mod :: module(),
     Bindings :: arizona_socket:bindings(),
-    Stateful :: stateful().
+    State :: state().
 new(Id, Mod, Bindings) when (Id =:= root orelse is_binary(Id)), is_atom(Mod), is_map(Bindings) ->
-    #stateful{
+    #state{
         id = Id,
         module = Mod,
         bindings = Bindings,
@@ -94,81 +91,81 @@ new(Id, Mod, Bindings) when (Id =:= root orelse is_binary(Id)), is_atom(Mod), is
         fingerprint = generate_fingerprint(Mod, Bindings)
     }.
 
-generate_fingerprint(#stateful{} = State) ->
-    Mod = State#stateful.module,
-    Bindings = State#stateful.bindings,
+generate_fingerprint(#state{} = State) ->
+    Mod = State#state.module,
+    Bindings = State#state.bindings,
     generate_fingerprint(Mod, Bindings).
 
 generate_fingerprint(Mod, Bindings) ->
     arizona_fingerprint:generate({Mod, Bindings}).
 
--spec get_module(Stateful) -> Mod when
-    Stateful :: stateful(),
+-spec get_module(State) -> Mod when
+    State :: state(),
     Mod :: module().
-get_module(#stateful{} = Stateful) ->
-    Stateful#stateful.module.
+get_module(#state{} = State) ->
+    State#state.module.
 
--spec get_id(Stateful) -> Id when
-    Stateful :: stateful(),
+-spec get_id(State) -> Id when
+    State :: state(),
     Id :: id().
-get_id(#stateful{} = Stateful) ->
-    Stateful#stateful.id.
+get_id(#state{} = State) ->
+    State#state.id.
 
--spec get_binding(Key, Stateful) -> Value when
+-spec get_binding(Key, State) -> Value when
     Key :: atom(),
-    Stateful :: stateful(),
+    State :: state(),
     Value :: term().
-get_binding(Key, #stateful{} = Stateful) when is_atom(Key) ->
-    case Stateful#stateful.bindings of
+get_binding(Key, #state{} = State) when is_atom(Key) ->
+    case State#state.bindings of
         #{Key := Value} -> Value;
         #{} -> throw({binding_not_found, Key})
     end.
 
--spec get_binding(Key, Stateful, Default) -> Value when
+-spec get_binding(Key, State, Default) -> Value when
     Key :: atom(),
-    Stateful :: stateful(),
+    State :: state(),
     Default :: term(),
     Value :: term() | Default.
-get_binding(Key, #stateful{} = Stateful, Default) when is_atom(Key) ->
-    case Stateful#stateful.bindings of
+get_binding(Key, #state{} = State, Default) when is_atom(Key) ->
+    case State#state.bindings of
         #{Key := Value} -> Value;
         #{} -> Default
     end.
 
--spec put_binding(Key, Value, Stateful) -> Stateful1 when
+-spec put_binding(Key, Value, State) -> State1 when
     Key :: atom(),
     Value :: term(),
-    Stateful :: stateful(),
-    Stateful1 :: stateful().
-put_binding(Key, Value, #stateful{} = Stateful) when is_atom(Key) ->
-    case Stateful#stateful.bindings of
+    State :: state(),
+    State1 :: state().
+put_binding(Key, Value, #state{} = State) when is_atom(Key) ->
+    case State#state.bindings of
         #{Key := Value} ->
-            Stateful;
+            State;
         Bindings ->
-            ChangedBindings = Stateful#stateful.changed_bindings,
-            Stateful#stateful{
+            ChangedBindings = State#state.changed_bindings,
+            State#state{
                 bindings = Bindings#{Key => Value},
                 changed_bindings = ChangedBindings#{Key => Value}
             }
     end.
 
--spec put_bindings(Bindings, Stateful) -> Stateful1 when
+-spec put_bindings(Bindings, State) -> State1 when
     Bindings :: arizona_socket:bindings(),
-    Stateful :: stateful(),
-    Stateful1 :: stateful().
-put_bindings(Bindings, #stateful{} = Stateful) when is_map(Bindings) ->
-    maps:fold(fun put_binding/3, Stateful, Bindings).
+    State :: state(),
+    State1 :: state().
+put_bindings(Bindings, #state{} = State) when is_map(Bindings) ->
+    maps:fold(fun put_binding/3, State, Bindings).
 
--spec get_changed_bindings(Stateful) -> ChangedBindings when
-    Stateful :: stateful(),
+-spec get_changed_bindings(State) -> ChangedBindings when
+    State :: state(),
     ChangedBindings :: map().
-get_changed_bindings(#stateful{} = Stateful) ->
-    Stateful#stateful.changed_bindings.
+get_changed_bindings(#state{} = State) ->
+    State#state.changed_bindings.
 
--spec should_remount(Stateful) -> ShouldRemount when
-    Stateful :: stateful(),
+-spec should_remount(State) -> ShouldRemount when
+    State :: state(),
     ShouldRemount :: boolean().
-should_remount(#stateful{} = Stateful) ->
-    OldFingerprint = Stateful#stateful.fingerprint,
-    NewFingerprint = generate_fingerprint(Stateful),
+should_remount(#state{} = State) ->
+    OldFingerprint = State#state.fingerprint,
+    NewFingerprint = generate_fingerprint(State),
     not arizona_fingerprint:match(OldFingerprint, NewFingerprint).

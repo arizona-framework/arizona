@@ -24,20 +24,20 @@ Generates JSON diffs in format: [{StatefulId, [{ElementIndex, Changes}]}]
 -export_type([diff_changes/0, element_index/0, element_change/0, element_change_entry/0]).
 
 %% Optimized stateful component diffing using changed_bindings + vars_indexes
--spec diff_stateful(TemplateData, Stateful, Socket) -> Socket1 when
+-spec diff_stateful(TemplateData, StatefulState, Socket) -> Socket1 when
     TemplateData :: arizona_renderer:stateful_template_data(),
-    Stateful :: arizona_stateful:stateful(),
+    StatefulState :: arizona_stateful:state(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
-diff_stateful(TemplateData, Stateful, Socket) ->
+diff_stateful(TemplateData, StatefulState, Socket) ->
     % Get changed bindings (already filtered by put_binding/3)
-    ChangedBindings = arizona_stateful:get_changed_bindings(Stateful),
+    ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
     case maps:size(ChangedBindings) of
         0 ->
             % No changes, return socket unchanged
             Socket;
         _ ->
-            StatefulId = arizona_stateful:get_id(Stateful),
+            StatefulId = arizona_stateful:get_id(StatefulState),
 
             % Find affected elements using the optimization
             AffectedElements = get_affected_elements(
