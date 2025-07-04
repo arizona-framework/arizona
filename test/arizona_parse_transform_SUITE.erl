@@ -230,15 +230,8 @@ test_non_binary_template_error(Config) when is_list(Config) ->
     """),
 
     % The parse transform should raise badarg for non-binary templates
-    try
-        _TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
-        ct:fail("Expected parse transform to raise badarg error")
-    catch
-        error:badarg ->
-            ct:comment("Non-binary template correctly raised badarg error");
-        error:{test_badarg_module, _, badarg} ->
-            ct:comment("Non-binary template correctly raised badarg error with module info")
-    end.
+    ?assertError(badarg, arizona_parse_transform:parse_transform(Forms, [])),
+    ct:comment("Non-binary template correctly raised badarg error").
 
 %% Test format_error function
 test_format_error(Config) when is_list(Config) ->
@@ -290,15 +283,8 @@ test_stateless_parse_error(Config) when is_list(Config) ->
     """),
 
     % The parse transform should handle scanner errors gracefully
-    try
-        _TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
-        ct:comment("Stateless parsing error handled gracefully")
-    catch
-        error:template_parse_failed ->
-            ct:comment("Stateless template parse error correctly raised");
-        error:{test_stateless_error_module, _, template_parse_failed} ->
-            ct:comment("Stateless template parse error correctly raised with module info")
-    end.
+    ?assertError(template_parse_failed, arizona_parse_transform:parse_transform(Forms, [])),
+    ct:comment("Stateless template parse error correctly raised").
 
 %% Test stateful parsing error
 test_stateful_parse_error(Config) when is_list(Config) ->
@@ -310,15 +296,8 @@ test_stateful_parse_error(Config) when is_list(Config) ->
     """),
 
     % The parse transform should handle errors gracefully
-    try
-        _TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
-        ct:comment("Stateful parsing error handled gracefully")
-    catch
-        error:template_parse_failed ->
-            ct:comment("Stateful template parse error correctly raised");
-        error:{test_stateful_error_module, _, template_parse_failed} ->
-            ct:comment("Stateful template parse error correctly raised with module info")
-    end.
+    ?assertError(template_parse_failed, arizona_parse_transform:parse_transform(Forms, [])),
+    ct:comment("Stateful template parse error correctly raised").
 
 %% Test format_error function specifically for badarg
 test_format_error_badarg(Config) when is_list(Config) ->
@@ -365,17 +344,8 @@ test_stateful_non_binary_template_error(Config) when is_list(Config) ->
     """),
 
     % The parse transform should raise badarg for non-binary templates
-    try
-        _TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
-        ct:fail("Expected parse transform to raise badarg error for stateful template")
-    catch
-        error:badarg ->
-            ct:comment("Non-binary stateful template correctly raised badarg error");
-        error:{test_stateful_badarg_module, _, badarg} ->
-            ct:comment(
-                "Non-binary stateful template correctly raised badarg error with module info"
-            )
-    end.
+    ?assertError(badarg, arizona_parse_transform:parse_transform(Forms, [])),
+    ct:comment("Non-binary stateful template correctly raised badarg error").
 
 %% Test complex stateful template with multiple variables
 test_complex_stateful_template_with_multiple_variables(Config) when is_list(Config) ->
