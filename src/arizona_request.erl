@@ -7,7 +7,7 @@
 -export([get_body/1, get_raw_request/1]).
 
 %% Types
--record(arizona_request, {
+-record(request, {
     method :: binary(),
     path :: binary(),
     bindings :: #{atom() => binary()} | undefined,
@@ -19,7 +19,7 @@
     raw :: {cowboy_req, cowboy_req:req()} | undefined
 }).
 
--type request() :: #arizona_request{}.
+-opaque request() :: #request{}.
 -export_type([request/0]).
 
 %% API Functions
@@ -27,7 +27,7 @@
 %% Create a new arizona request
 -spec new(map()) -> request().
 new(#{} = Opts) ->
-    #arizona_request{
+    #request{
         method = maps:get(method, Opts, ~"GET"),
         path = maps:get(path, Opts, ~"/"),
         bindings = maps:get(bindings, Opts, #{}),
@@ -41,7 +41,7 @@ new(#{} = Opts) ->
 %% Create arizona request from cowboy request
 -spec from_cowboy(cowboy_req:req()) -> request().
 from_cowboy(CowboyReq) ->
-    #arizona_request{
+    #request{
         method = cowboy_req:method(CowboyReq),
         path = cowboy_req:path(CowboyReq),
         % Lazy load
@@ -59,62 +59,62 @@ from_cowboy(CowboyReq) ->
 
 %% Get URL path bindings (e.g., #{user_id => <<"123">>})
 -spec get_bindings(request()) -> {#{atom() => binary()}, request()}.
-get_bindings(#arizona_request{bindings = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
+get_bindings(#request{bindings = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
     Bindings = cowboy_req:bindings(CowboyReq),
-    Req1 = Req#arizona_request{bindings = Bindings},
+    Req1 = Req#request{bindings = Bindings},
     {Bindings, Req1};
-get_bindings(#arizona_request{bindings = Bindings} = Req) ->
+get_bindings(#request{bindings = Bindings} = Req) ->
     {Bindings, Req}.
 
 %% Get query parameters (e.g., [{<<"tab">>, <<"account">>}])
 -spec get_params(request()) -> {[{binary(), binary()}], request()}.
-get_params(#arizona_request{params = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
+get_params(#request{params = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
     Params = cowboy_req:parse_qs(CowboyReq),
-    Req1 = Req#arizona_request{params = Params},
+    Req1 = Req#request{params = Params},
     {Params, Req1};
-get_params(#arizona_request{params = Params} = Req) ->
+get_params(#request{params = Params} = Req) ->
     {Params, Req}.
 
 %% Get cookies (e.g., [{<<"session_id">>, <<"abc123">>}])
 -spec get_cookies(request()) -> {[{binary(), binary()}], request()}.
-get_cookies(#arizona_request{cookies = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
+get_cookies(#request{cookies = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
     Cookies = cowboy_req:parse_cookies(CowboyReq),
-    Req1 = Req#arizona_request{cookies = Cookies},
+    Req1 = Req#request{cookies = Cookies},
     {Cookies, Req1};
-get_cookies(#arizona_request{cookies = Cookies} = Req) ->
+get_cookies(#request{cookies = Cookies} = Req) ->
     {Cookies, Req}.
 
 %% Get HTTP method
 -spec get_method(request()) -> binary().
-get_method(#arizona_request{method = Method}) ->
+get_method(#request{method = Method}) ->
     Method.
 
 %% Get request path
 -spec get_path(request()) -> binary().
-get_path(#arizona_request{path = Path}) ->
+get_path(#request{path = Path}) ->
     Path.
 
 %% Get request headers
 -spec get_headers(request()) -> {#{binary() => binary()}, request()}.
-get_headers(#arizona_request{headers = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
+get_headers(#request{headers = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
     Headers = cowboy_req:headers(CowboyReq),
-    Req1 = Req#arizona_request{headers = Headers},
+    Req1 = Req#request{headers = Headers},
     {Headers, Req1};
-get_headers(#arizona_request{headers = Headers} = Req) ->
+get_headers(#request{headers = Headers} = Req) ->
     {Headers, Req}.
 
 %% Get request body (lazy loaded for cowboy)
 -spec get_body(request()) -> {binary(), request()}.
-get_body(#arizona_request{body = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
+get_body(#request{body = undefined, raw = {cowboy_req, CowboyReq}} = Req) ->
     {ok, Body, CowboyReq1} = cowboy_req:read_body(CowboyReq),
-    Req1 = Req#arizona_request{body = Body, raw = {cowboy_req, CowboyReq1}},
+    Req1 = Req#request{body = Body, raw = {cowboy_req, CowboyReq1}},
     {Body, Req1};
-get_body(#arizona_request{body = Body} = Req) when Body =/= undefined ->
+get_body(#request{body = Body} = Req) when Body =/= undefined ->
     {Body, Req};
-get_body(#arizona_request{} = Req) ->
+get_body(#request{} = Req) ->
     {<<>>, Req}.
 
 %% Get the raw server-specific request object
 -spec get_raw_request(request()) -> {cowboy_req, cowboy_req:req()} | undefined.
-get_raw_request(#arizona_request{raw = Raw}) ->
+get_raw_request(#request{raw = Raw}) ->
     Raw.
