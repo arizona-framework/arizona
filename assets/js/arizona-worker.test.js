@@ -10,12 +10,9 @@ vi.stubGlobal('self', {
 });
 
 // Create spy for MockWebSocket
-const WebSocketSpy = vi.fn().mockImplementation((url) => new MockWebSocket(url));
-// Copy static properties
-WebSocketSpy.CONNECTING = MockWebSocket.CONNECTING;
-WebSocketSpy.OPEN = MockWebSocket.OPEN;
-WebSocketSpy.CLOSING = MockWebSocket.CLOSING;
-WebSocketSpy.CLOSED = MockWebSocket.CLOSED;
+const WebSocketSpy = vi.fn().mockImplementation((url) => {
+  return new MockWebSocket(url);
+});
 
 vi.stubGlobal('WebSocket', WebSocketSpy);
 
@@ -63,7 +60,9 @@ describe('ArizonaWebSocketWorker', () => {
       worker.onmessage(connectMessage);
 
       // Wait for connection to be established
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => {
+        return setTimeout(resolve, 10);
+      });
 
       // Clear previous postMessage calls
       mockPostMessage.mockClear();
@@ -120,7 +119,9 @@ describe('ArizonaWebSocketWorker', () => {
       worker.onmessage(connectMessage);
 
       // Wait for connection
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => {
+        return setTimeout(resolve, 10);
+      });
 
       expect(mockPostMessage).toHaveBeenCalledWith({
         type: 'status',
@@ -138,7 +139,9 @@ describe('ArizonaWebSocketWorker', () => {
       worker.onmessage(connectMessage);
 
       // Wait for connection
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => {
+        return setTimeout(resolve, 10);
+      });
 
       // Clear previous calls
       mockPostMessage.mockClear();
@@ -166,7 +169,9 @@ describe('ArizonaWebSocketWorker', () => {
       worker.onmessage(connectMessage);
 
       // Wait for connection
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => {
+        return setTimeout(resolve, 10);
+      });
 
       // Clear previous calls
       mockPostMessage.mockClear();
@@ -227,7 +232,9 @@ describe('ArizonaWebSocketWorker', () => {
       expect(WebSocketSpy).toHaveBeenCalledWith('ws://localhost:3000/live');
 
       // Wait for connection to establish
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => {
+        return setTimeout(resolve, 10);
+      });
 
       // Verify WebSocket was called once
       expect(WebSocketSpy).toHaveBeenCalledTimes(1);
