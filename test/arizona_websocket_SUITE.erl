@@ -59,22 +59,14 @@ resolve_live_route_metadata(_Config) ->
     TestRoutes = [
         {live, ~"/users", user_live, #{}},
         {live, ~"/posts", post_live, #{}},
-        {live_websocket, ~"/live/ws"}
+        {live_websocket, ~"/live"}
     ],
 
     Dispatch = arizona_server:compile_routes(TestRoutes),
     ok = persistent_term:put(arizona_dispatch, Dispatch),
 
     % Create WebSocket request
-    WebSocketReq = #{
-        method => ~"GET",
-        path => ~"/live/ws",
-        qs => ~"path=%2Fusers",
-        host => ~"localhost",
-        port => 8080,
-        scheme => ~"http",
-        version => 'HTTP/1.1'
-    },
+    WebSocketReq = mock_websocket_request(),
 
     % Extract path from query parameter
     PathParams = cowboy_req:parse_qs(WebSocketReq),
@@ -94,7 +86,7 @@ test_init_function(_Config) ->
     % Set up test routes
     TestRoutes = [
         {live, ~"/users", user_live, #{}},
-        {live_websocket, ~"/live/ws"}
+        {live_websocket, ~"/live"}
     ],
 
     Dispatch = arizona_server:compile_routes(TestRoutes),
@@ -119,22 +111,14 @@ websocket_init_with_correct_path(_Config) ->
     % Set up test routes
     TestRoutes = [
         {live, ~"/users", user_live, #{}},
-        {live_websocket, ~"/live/ws"}
+        {live_websocket, ~"/live"}
     ],
 
     Dispatch = arizona_server:compile_routes(TestRoutes),
     ok = persistent_term:put(arizona_dispatch, Dispatch),
 
     % Create WebSocket request with path parameter
-    WebSocketReq = #{
-        method => ~"GET",
-        path => ~"/live/ws",
-        qs => ~"path=%2Fusers",
-        host => ~"localhost",
-        port => 8080,
-        scheme => ~"http",
-        version => 'HTTP/1.1'
-    },
+    WebSocketReq = mock_websocket_request(),
 
     % Simulate what arizona_websocket:init should do (fixed version)
     PathParams = cowboy_req:parse_qs(WebSocketReq),
@@ -294,7 +278,7 @@ test_init_with_empty_query_string(_Config) ->
     % Test init with empty query string (should default to "/")
     TestRoutes = [
         {live, ~"/", root_live, #{}},
-        {live_websocket, ~"/live/ws"}
+        {live_websocket, ~"/live"}
     ],
 
     Dispatch = arizona_server:compile_routes(TestRoutes),
@@ -313,7 +297,7 @@ test_init_with_missing_path_param(_Config) ->
     % Test init with query string but missing path parameter
     TestRoutes = [
         {live, ~"/", root_live, #{}},
-        {live_websocket, ~"/live/ws"}
+        {live_websocket, ~"/live"}
     ],
 
     Dispatch = arizona_server:compile_routes(TestRoutes),
@@ -392,7 +376,7 @@ mock_websocket_request(Opts) ->
     QueryString = maps:get(qs, Opts, Path),
     #{
         method => ~"GET",
-        path => ~"/live/ws",
+        path => ~"/live",
         qs => QueryString,
         host => ~"localhost",
         port => 8080,
