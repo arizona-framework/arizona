@@ -6,7 +6,7 @@ class MockWorker {
     this.onmessage = null;
     this.onerror = null;
     this.terminated = false;
-    
+
     // Store posted messages for testing
     this.postedMessages = [];
   }
@@ -15,9 +15,9 @@ class MockWorker {
     if (this.terminated) {
       throw new Error('Worker has been terminated');
     }
-    
+
     this.postedMessages.push(data);
-    
+
     // Simulate worker processing
     setTimeout(() => {
       this.simulateWorkerResponse(data);
@@ -43,25 +43,25 @@ class MockWorker {
 
   simulateWorkerResponse(originalMessage) {
     const { type, data } = originalMessage;
-    
+
     switch (type) {
       case 'connect':
         this.simulateMessage({
           type: 'status',
-          data: { status: 'connected' }
+          data: { status: 'connected' },
         });
         break;
       case 'send':
         // Echo back the sent message
         this.simulateMessage({
           type: 'message',
-          data: data
+          data: data,
         });
         break;
       case 'disconnect':
         this.simulateMessage({
           type: 'status',
-          data: { status: 'disconnected' }
+          data: { status: 'disconnected' },
         });
         break;
     }

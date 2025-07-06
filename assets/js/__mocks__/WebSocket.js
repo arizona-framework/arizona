@@ -7,7 +7,7 @@ class MockWebSocket {
     this.onclose = null;
     this.onmessage = null;
     this.onerror = null;
-    
+
     // Simulate async connection
     setTimeout(() => {
       this.readyState = MockWebSocket.OPEN;

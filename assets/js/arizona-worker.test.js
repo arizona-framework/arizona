@@ -6,7 +6,7 @@ import MockWebSocket from './__mocks__/WebSocket.js';
 const mockPostMessage = vi.fn();
 vi.stubGlobal('self', {
   postMessage: mockPostMessage,
-  onmessage: null
+  onmessage: null,
 });
 
 // Create spy for MockWebSocket
@@ -26,13 +26,13 @@ describe('ArizonaWebSocketWorker', () => {
     // Clear previous mocks
     mockPostMessage.mockClear();
     WebSocketSpy.mockClear();
-    
+
     // Reset modules to get fresh imports
     vi.resetModules();
-    
+
     // Import and create worker instance
-    await import('./arizona-worker.mjs');
-    
+    await import('./arizona-worker.js');
+
     // Get the worker instance (created by the module)
     worker = global.self;
   });
@@ -42,8 +42,8 @@ describe('ArizonaWebSocketWorker', () => {
       const connectMessage = {
         data: {
           type: 'connect',
-          data: { url: 'ws://localhost:3000/live?path=%2Fusers' }
-        }
+          data: { url: 'ws://localhost:3000/live?path=%2Fusers' },
+        },
       };
 
       worker.onmessage(connectMessage);
@@ -57,13 +57,13 @@ describe('ArizonaWebSocketWorker', () => {
       const connectMessage = {
         data: {
           type: 'connect',
-          data: { url: 'ws://localhost:3000/live' }
-        }
+          data: { url: 'ws://localhost:3000/live' },
+        },
       };
       worker.onmessage(connectMessage);
 
       // Wait for connection to be established
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       // Clear previous postMessage calls
       mockPostMessage.mockClear();
@@ -75,9 +75,9 @@ describe('ArizonaWebSocketWorker', () => {
           data: {
             type: 'event',
             event: 'click',
-            params: { target: 'button1' }
-          }
-        }
+            params: { target: 'button1' },
+          },
+        },
       };
       worker.onmessage(sendMessage);
 
@@ -90,8 +90,8 @@ describe('ArizonaWebSocketWorker', () => {
       const connectMessage = {
         data: {
           type: 'connect',
-          data: { url: 'ws://localhost:3000/live' }
-        }
+          data: { url: 'ws://localhost:3000/live' },
+        },
       };
       worker.onmessage(connectMessage);
 
@@ -100,7 +100,7 @@ describe('ArizonaWebSocketWorker', () => {
 
       // Then disconnect
       const disconnectMessage = {
-        data: { type: 'disconnect' }
+        data: { type: 'disconnect' },
       };
       worker.onmessage(disconnectMessage);
 
@@ -114,17 +114,17 @@ describe('ArizonaWebSocketWorker', () => {
       const connectMessage = {
         data: {
           type: 'connect',
-          data: { url: 'ws://localhost:3000/live' }
-        }
+          data: { url: 'ws://localhost:3000/live' },
+        },
       };
       worker.onmessage(connectMessage);
 
       // Wait for connection
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(mockPostMessage).toHaveBeenCalledWith({
         type: 'status',
-        data: { status: 'connected' }
+        data: { status: 'connected' },
       });
     });
 
@@ -132,27 +132,27 @@ describe('ArizonaWebSocketWorker', () => {
       const connectMessage = {
         data: {
           type: 'connect',
-          data: { url: 'ws://localhost:3000/live' }
-        }
+          data: { url: 'ws://localhost:3000/live' },
+        },
       };
       worker.onmessage(connectMessage);
 
       // Wait for connection
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       // Clear previous calls
       mockPostMessage.mockClear();
 
       // Simulate WebSocket close by triggering disconnect
       const disconnectMessage = {
-        data: { type: 'disconnect' }
+        data: { type: 'disconnect' },
       };
       worker.onmessage(disconnectMessage);
 
-      // Should post disconnected status 
+      // Should post disconnected status
       expect(mockPostMessage).toHaveBeenCalledWith({
         type: 'status',
-        data: { status: 'disconnected' }
+        data: { status: 'disconnected' },
       });
     });
 
@@ -160,13 +160,13 @@ describe('ArizonaWebSocketWorker', () => {
       const connectMessage = {
         data: {
           type: 'connect',
-          data: { url: 'ws://localhost:3000/live' }
-        }
+          data: { url: 'ws://localhost:3000/live' },
+        },
       };
       worker.onmessage(connectMessage);
 
       // Wait for connection
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       // Clear previous calls
       mockPostMessage.mockClear();
@@ -185,9 +185,9 @@ describe('ArizonaWebSocketWorker', () => {
           data: {
             type: 'event',
             event: 'click',
-            params: {}
-          }
-        }
+            params: {},
+          },
+        },
       };
 
       // Send message without connecting first
@@ -205,9 +205,9 @@ describe('ArizonaWebSocketWorker', () => {
           data: {
             type: 'event',
             event: 'click',
-            params: {}
-          }
-        }
+            params: {},
+          },
+        },
       };
       worker.onmessage(sendMessage);
 
@@ -218,8 +218,8 @@ describe('ArizonaWebSocketWorker', () => {
       const connectMessage = {
         data: {
           type: 'connect',
-          data: { url: 'ws://localhost:3000/live' }
-        }
+          data: { url: 'ws://localhost:3000/live' },
+        },
       };
       worker.onmessage(connectMessage);
 
@@ -227,7 +227,7 @@ describe('ArizonaWebSocketWorker', () => {
       expect(WebSocketSpy).toHaveBeenCalledWith('ws://localhost:3000/live');
 
       // Wait for connection to establish
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       // Verify WebSocket was called once
       expect(WebSocketSpy).toHaveBeenCalledTimes(1);

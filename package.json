@@ -2,11 +2,11 @@
   "name": "Arizona JS",
   "type": "module",
   "scripts": {
-    "build": "node ./esbuild.config.mjs",
-    "format": "prettier --write \"./*.{js,mjs}\" \"./assets/js/*.mjs\" \"**/*.json\" \"**/*.yml\" --config prettier.config.mjs --ignore-path .prettierignore",
-    "format:check": "prettier --check \"./*.{js,mjs}\" \"./assets/js/*.mjs\" \"**/*.json\" \"**/*.yml\" --config prettier.config.mjs --ignore-path .prettierignore",
-    "lint": "eslint eslint.config.mjs --fix",
-    "lint:check": "eslint eslint.config.mjs",
+    "build": "node ./esbuild.config.js",
+    "format": "prettier --write \"./*.js\" \"./assets/**/*.js\" \"**/*.json\" \"**/*.yml\" --config prettier.config.js --ignore-path .prettierignore",
+    "format:check": "prettier --check \"./*.js\" \"./assets/**/*.js\" \"**/*.json\" \"**/*.yml\" --config prettier.config.js --ignore-path .prettierignore",
+    "lint": "eslint eslint.config.js --fix",
+    "lint:check": "eslint eslint.config.js",
     "format:lint": "npm run format && npm run lint",
     "test": "vitest",
     "ci": "npm run format:check && npm run lint:check && npm test"

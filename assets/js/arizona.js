@@ -8,7 +8,7 @@ export class ArizonaClient {
   connect(wsPath = '/live') {
     if (this.connected) return;
 
-    this.worker = new Worker('assets/js/arizona-worker.mjs', { type: 'module' });
+    this.worker = new Worker('assets/js/arizona-worker.js', { type: 'module' });
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;

@@ -3,14 +3,14 @@ import * as esbuild from 'esbuild';
 
 Promise.all([
   esbuild.build({
-    entryPoints: ['./assets/js/arizona.mjs'],
+    entryPoints: ['./assets/js/arizona.js'],
     outfile: './priv/static/assets/js/arizona.min.js',
     bundle: true,
     minify: true,
     sourcemap: true,
   }),
   esbuild.build({
-    entryPoints: ['./assets/js/arizona-worker.mjs'],
+    entryPoints: ['./assets/js/arizona-worker.js'],
     outfile: './priv/static/assets/js/arizona-worker.min.js',
     bundle: true,
     minify: true,

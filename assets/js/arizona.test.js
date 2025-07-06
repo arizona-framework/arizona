@@ -1,6 +1,6 @@
 // ArizonaClient tests
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
-import { ArizonaClient } from './arizona.mjs';
+import { ArizonaClient } from './arizona.js';
 import MockWorker from './__mocks__/Worker.js';
 import MockWebSocket from './__mocks__/WebSocket.js';
 
@@ -11,8 +11,8 @@ vi.stubGlobal('window', {
   location: {
     protocol: 'http:',
     host: 'localhost:3000',
-    pathname: '/users'
-  }
+    pathname: '/users',
+  },
 });
 
 describe('ArizonaClient', () => {
@@ -44,13 +44,13 @@ describe('ArizonaClient', () => {
       client.connect();
 
       expect(client.worker).toBeInstanceOf(Worker);
-      expect(client.worker.scriptURL).toBe('assets/js/arizona-worker.mjs');
+      expect(client.worker.scriptURL).toBe('assets/js/arizona-worker.js');
       expect(client.worker.options).toEqual({ type: 'module' });
 
       const postedMessage = client.worker.getLastPostedMessage();
       expect(postedMessage).toEqual({
         type: 'connect',
-        data: { url: 'ws://localhost:3000/live?path=%2Fusers' }
+        data: { url: 'ws://localhost:3000/live?path=%2Fusers' },
       });
     });
 
@@ -103,15 +103,17 @@ describe('ArizonaClient', () => {
       client.sendEvent('click', { target: 'button1' });
 
       const messages = client.worker.getAllPostedMessages();
-      const eventMessage = messages.find(msg => { return msg.type === 'send' });
+      const eventMessage = messages.find((msg) => {
+        return msg.type === 'send';
+      });
 
       expect(eventMessage).toEqual({
         type: 'send',
         data: {
           type: 'event',
           event: 'click',
-          params: { target: 'button1' }
-        }
+          params: { target: 'button1' },
+        },
       });
     });
 
@@ -119,7 +121,9 @@ describe('ArizonaClient', () => {
       client.sendEvent('submit');
 
       const messages = client.worker.getAllPostedMessages();
-      const eventMessage = messages.find(msg => { return msg.type === 'send' });
+      const eventMessage = messages.find((msg) => {
+        return msg.type === 'send';
+      });
 
       expect(eventMessage.data.params).toEqual({});
     });
@@ -149,7 +153,9 @@ describe('ArizonaClient', () => {
     });
 
     test('handles disconnect when no worker exists', () => {
-      expect(() => { return client.disconnect() }).not.toThrow();
+      expect(() => {
+        return client.disconnect();
+      }).not.toThrow();
       expect(client.connected).toBe(false);
     });
   });
