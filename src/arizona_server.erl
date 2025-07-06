@@ -3,10 +3,10 @@
 -export([start/1, stop/0]).
 -export([compile_routes/1, route_to_cowboy/1]).
 -export([get_route_metadata/1, get_route_handler/1]).
--export([new_route_metadata/3, get_route_type/1]).
+-export([new_route_metadata/2, get_route_type/1]).
 
 -type route() ::
-    {live, Path :: binary(), LiveModule :: atom(), Opts :: map()}
+    {live, Path :: binary(), LiveModule :: module()}
     | {live_websocket, Path :: binary()}
     | {static, Path :: binary(), {dir, Directory :: binary()}}
     | {static, Path :: binary(), {file, FileName :: binary()}}
@@ -15,8 +15,7 @@
 
 -record(route_metadata, {
     type :: live | live_websocket | static,
-    handler :: atom() | undefined,
-    opts :: map() | undefined
+    handler :: module()
 }).
 
 -opaque route_metadata() :: #route_metadata{}.
@@ -56,22 +55,20 @@ get_route_metadata(Req) ->
     HandlerOpts = maps:get(handler_opts, Env),
     #route_metadata{
         type = maps:get(type, HandlerOpts),
-        handler = maps:get(handler, HandlerOpts, undefined),
-        opts = maps:get(opts, HandlerOpts, undefined)
+        handler = maps:get(handler, HandlerOpts)
     }.
 
 %% @doc Get handler from route metadata
--spec get_route_handler(route_metadata()) -> atom().
+-spec get_route_handler(route_metadata()) -> module().
 get_route_handler(#route_metadata{handler = Handler}) ->
     Handler.
 
 %% @doc Create new route metadata for testing
--spec new_route_metadata(atom(), atom() | undefined, map() | undefined) -> route_metadata().
-new_route_metadata(Type, Handler, Opts) ->
+-spec new_route_metadata(atom(), module()) -> route_metadata().
+new_route_metadata(Type, Handler) ->
     #route_metadata{
         type = Type,
-        handler = Handler,
-        opts = Opts
+        handler = Handler
     }.
 
 %% @doc Get route type from route metadata
@@ -93,12 +90,11 @@ compile_routes(Routes) ->
 
 %% @doc Convert a single Arizona route to Cowboy route format
 -spec route_to_cowboy(route()) -> {'_' | iodata(), module(), term()}.
-route_to_cowboy({live, Path, LiveModule, Opts}) when is_binary(Path), is_atom(LiveModule) ->
+route_to_cowboy({live, Path, LiveModule}) when is_binary(Path), is_atom(LiveModule) ->
     % LiveView routes use arizona_handler
     {Path, arizona_handler, #{
         type => live,
-        handler => LiveModule,
-        opts => Opts
+        handler => LiveModule
     }};
 route_to_cowboy({live_websocket, Path}) when is_binary(Path) ->
     % WebSocket endpoint for all LiveView connections
