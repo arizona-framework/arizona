@@ -28,16 +28,15 @@ groups() ->
         {message_handling, [parallel], [
             handle_ping_message,
             handle_unknown_message,
-            test_websocket_handle_with_event,
             test_websocket_handle_error,
             test_websocket_info,
-            test_websocket_handle_ping_direct,
-            test_websocket_handle_malformed_json,
             test_websocket_handle_missing_type,
             test_websocket_handle_with_real_event,
             test_websocket_init_with_real_live_process,
             test_init_with_empty_query_string,
-            test_init_with_missing_path_param
+            test_init_with_missing_path_param,
+            test_handle_noreply_response_with_socket_changes,
+            test_mock_live_module_for_reply_responses
         ]}
     ].
 
@@ -169,10 +168,11 @@ test_websocket_init_function(_Config) ->
 %% --------------------------------------------------------------------
 
 handle_ping_message(_Config) ->
-    % Test ping message handling
+    % Test ping message handling through websocket_handle
     State = arizona_websocket:new_state(self()),
 
-    {Commands, NewState} = arizona_websocket:handle_ping_message(State),
+    PingMessage = iolist_to_binary(json:encode(#{type => ~"ping"})),
+    {Commands, NewState} = arizona_websocket:websocket_handle({text, PingMessage}, State),
 
     % Should return pong command
     ExpectedPongPayload = json:encode(#{type => ~"pong"}),
@@ -180,10 +180,11 @@ handle_ping_message(_Config) ->
     ?assertEqual(arizona_websocket:get_live_pid(State), arizona_websocket:get_live_pid(NewState)).
 
 handle_unknown_message(_Config) ->
-    % Test unknown message handling
+    % Test unknown message handling through websocket_handle
     State = arizona_websocket:new_state(self()),
 
-    {Commands, NewState} = arizona_websocket:handle_unknown_message(State),
+    UnknownMessage = iolist_to_binary(json:encode(#{type => ~"unknown"})),
+    {Commands, NewState} = arizona_websocket:websocket_handle({text, UnknownMessage}, State),
 
     % Should return error command
     ExpectedPayload = json:encode(#{
@@ -192,29 +193,6 @@ handle_unknown_message(_Config) ->
     }),
     ?assertEqual([{text, ExpectedPayload}], Commands),
     ?assertEqual(arizona_websocket:get_live_pid(State), arizona_websocket:get_live_pid(NewState)).
-
-test_websocket_handle_with_event(_Config) ->
-    % Test websocket_handle with an event message
-    State = arizona_websocket:new_state(self()),
-
-    EventMessage = iolist_to_binary(
-        json:encode(#{
-            type => ~"event",
-            event => ~"click",
-            params => #{~"target" => ~"button1"}
-        })
-    ),
-
-    % This will test the message parsing but will fail when calling arizona_live:handle_event
-    % since self() is not a real arizona_live process, it will return an error
-    {Commands, _NewState} = arizona_websocket:websocket_handle({text, EventMessage}, State),
-
-    % Should return an error due to arizona_live:handle_event failing
-    ExpectedErrorPayload = json:encode(#{
-        type => ~"error",
-        message => ~"Internal server error"
-    }),
-    ?assertEqual([{text, ExpectedErrorPayload}], Commands).
 
 test_websocket_handle_error(_Config) ->
     % Test websocket_handle with invalid JSON
@@ -241,35 +219,6 @@ test_websocket_info(_Config) ->
 
     ?assertEqual([], Commands),
     ?assertEqual(arizona_websocket:get_live_pid(State), arizona_websocket:get_live_pid(NewState)).
-
-test_websocket_handle_ping_direct(_Config) ->
-    % Test websocket_handle with ping message through the main entry point
-    State = arizona_websocket:new_state(self()),
-
-    PingMessage = iolist_to_binary(json:encode(#{type => ~"ping"})),
-
-    % Should return pong response
-    {Commands, _NewState} = arizona_websocket:websocket_handle({text, PingMessage}, State),
-
-    ExpectedPongPayload = json:encode(#{type => ~"pong"}),
-    ?assertEqual([{text, ExpectedPongPayload}], Commands).
-
-test_websocket_handle_malformed_json(_Config) ->
-    % Test websocket_handle with malformed JSON
-    State = arizona_websocket:new_state(self()),
-
-    MalformedJson = ~"{invalid json",
-
-    % Should return error response for malformed JSON
-    {Commands, _NewState} = arizona_websocket:websocket_handle({text, MalformedJson}, State),
-
-    ?assertEqual(1, length(Commands)),
-    [{text, ErrorPayload}] = Commands,
-
-    % Verify it contains error information
-    ErrorBinary = iolist_to_binary(ErrorPayload),
-    ?assert(binary:match(ErrorBinary, ~"error") =/= nomatch),
-    ?assert(binary:match(ErrorBinary, ~"Internal server error") =/= nomatch).
 
 test_websocket_handle_missing_type(_Config) ->
     % Test websocket_handle with message missing type field
@@ -379,6 +328,58 @@ test_init_with_missing_path_param(_Config) ->
     ?assertEqual(root_live, LiveModule),
     ?assertEqual(~"/", arizona_request:get_path(ArizonaReq)).
 
+test_handle_noreply_response_with_socket_changes(_Config) ->
+    % Test noreply path with actual socket changes
+    {ok, LivePid} = arizona_live:start_link(test_live_component_with_info, arizona_socket:new(#{})),
+    State = arizona_websocket:new_state(LivePid),
+
+    % Mount the live process
+    Req = arizona_request:new(#{method => ~"GET", path => ~"/test"}),
+    _MountedSocket = arizona_live:mount(LivePid, Req),
+
+    % The increment event should modify the counter
+    EventMessage = iolist_to_binary(
+        json:encode(#{
+            type => ~"event",
+            event => ~"increment",
+            params => #{}
+        })
+    ),
+
+    % Handle the event - should trigger noreply response
+    {Commands, _NewState} = arizona_websocket:websocket_handle({text, EventMessage}, State),
+
+    % Verify we get some response
+    ?assertEqual([], Commands).
+
+test_mock_live_module_for_reply_responses(_Config) ->
+    % Test reply response path
+    {ok, LivePid} = arizona_live:start_link(test_live_component_with_info, arizona_socket:new(#{})),
+    State = arizona_websocket:new_state(LivePid),
+
+    % Mount the live process
+    Req = arizona_request:new(#{method => ~"GET", path => ~"/test"}),
+    _Socket = arizona_live:mount(LivePid, Req),
+
+    % Send reply_test event that should trigger reply response
+    EventMessage = iolist_to_binary(
+        json:encode(#{
+            type => ~"event",
+            event => ~"reply_test",
+            params => #{}
+        })
+    ),
+
+    % Handle the event - should trigger reply response path
+    {Commands, _NewState} = arizona_websocket:websocket_handle({text, EventMessage}, State),
+
+    % Should return reply payload
+    ?assertEqual(1, length(Commands)),
+    [{text, ReplyPayload}] = Commands,
+    ReplyBinary = iolist_to_binary(ReplyPayload),
+    ?assert(binary:match(ReplyBinary, ~"reply") =/= nomatch),
+    ?assert(binary:match(ReplyBinary, ~"test_reply") =/= nomatch).
+
 %% --------------------------------------------------------------------
 %% Test helpers
 %% --------------------------------------------------------------------
@@ -398,11 +399,6 @@ mock_websocket_request(Opts) ->
         scheme => ~"http",
         version => 'HTTP/1.1'
     }.
-
-%% Helper to create WebSocket request for specific live path
-mock_websocket_request_for_path(LivePath) ->
-    EncodedPath = uri_string:quote(binary_to_list(LivePath)),
-    mock_websocket_request(#{path => list_to_binary("path=" ++ EncodedPath)}).
 
 %% Helper to create WebSocket request with no path parameter
 mock_websocket_request_empty() ->

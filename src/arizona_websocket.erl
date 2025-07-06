@@ -6,7 +6,6 @@
 
 %% Testing helpers
 -export([new_state/1, get_live_pid/1]).
--export([handle_ping_message/1, handle_unknown_message/1]).
 
 %% Types
 -record(state, {
