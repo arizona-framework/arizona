@@ -9,10 +9,13 @@
     "lint:check": "eslint eslint.config.js",
     "format:lint": "npm run format && npm run lint",
     "test": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "ci": "npm run format:check && npm run lint:check && npm test"
   },
   "devDependencies": {
     "@eslint/js": "9.24.0",
+    "@playwright/test": "^1.53.2",
     "esbuild": "0.25.2",
     "eslint": "9.24.0",
     "globals": "16.0.0",
