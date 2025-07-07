@@ -4,6 +4,7 @@
 -export([render_stateless/2]).
 -export([render_list/3]).
 -export([render_element/2]).
+-export([evaluate_dynamic_elements_for_item/4]).
 -export([format_error/2]).
 
 -doc ~"Template data from parse transform with optimized functions for stateful rendering.".

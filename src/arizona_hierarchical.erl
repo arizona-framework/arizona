@@ -412,12 +412,21 @@ list_items_to_dynamic_data(DynamicTemplate, [Item | Rest], Socket, Acc) ->
     ItemStructure :: #{element_index() => element_content()},
     Socket1 :: arizona_socket:socket().
 process_list_item(#{elems_order := Order, elems := Elements}, Item, Socket) ->
-    % Create temporary bindings for the list item
-    % For now, we'll assume the item binding name is 'Item' (could be enhanced)
-    SocketWithItem = arizona_socket:with_temp_bindings(#{'Item' => Item}, Socket),
+    % Use arizona_renderer logic - no duplication!
+    {DynamicValues, UpdatedSocket} = arizona_renderer:evaluate_dynamic_elements_for_item(
+        Order, Elements, Item, Socket
+    ),
 
-    % Process elements similar to stateful structure generation
-    elements_structure(Order, Elements, SocketWithItem, #{}).
+    % Convert the dynamic values to indexed structure
+    ItemStructure = lists:foldl(
+        fun({Index, Value}, Acc) ->
+            Acc#{Index => Value}
+        end,
+        #{},
+        lists:zip(Order, DynamicValues)
+    ),
+
+    {ItemStructure, UpdatedSocket}.
 
 %% ============================================================================
 %% JSON Conversion

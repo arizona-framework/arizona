@@ -27,7 +27,10 @@ render_stateful(TemplateData, Socket) when is_map(TemplateData) ->
             arizona_differ:diff_stateful(TemplateData, CurrentState, Socket);
         hierarchical ->
             % Generate hierarchical structure
-            arizona_hierarchical:stateful_structure(TemplateData, Socket)
+            {_ComponentStructure, UpdatedSocket} = arizona_hierarchical:stateful_structure(
+                TemplateData, Socket
+            ),
+            UpdatedSocket
     end;
 render_stateful(Html, Socket) ->
     render_stateful_html(Html, #{}, Socket).
@@ -108,7 +111,10 @@ render_list(ListData, Items, Socket) when
 ->
     case arizona_socket:get_mode(Socket) of
         hierarchical ->
-            arizona_hierarchical:list_structure(ListData, Items, Socket);
+            {_ListElement, UpdatedSocket} = arizona_hierarchical:list_structure(
+                ListData, Items, Socket
+            ),
+            UpdatedSocket;
         _ ->
             {_Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, Socket),
             UpdatedSocket
