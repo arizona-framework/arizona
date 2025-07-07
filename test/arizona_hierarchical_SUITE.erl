@@ -14,7 +14,9 @@ all() ->
         {group, nested_components},
         {group, list_components},
         {group, patch_application},
-        {group, round_trip_properties}
+        {group, round_trip_properties},
+        {group, structure_generation},
+        {group, integration_tests}
     ].
 
 groups() ->
@@ -58,6 +60,13 @@ groups() ->
             detect_stateless_template,
             detect_stateful_socket,
             detect_list_content
+        ]},
+        {integration_tests, [parallel], [
+            arizona_html_integration,
+            list_item_processing,
+            nested_dynamic_content,
+            error_handling_coverage,
+            mode_switching_coverage
         ]}
     ].
 
@@ -676,7 +685,9 @@ generate_simple_structure(Config) when is_list(Config) ->
     },
 
     Socket = arizona_socket:new(#{mode => hierarchical}),
-    UpdatedSocket = arizona_hierarchical:stateful_structure(TemplateData, Socket),
+    {_ComponentStructure, UpdatedSocket} = arizona_hierarchical:stateful_structure(
+        TemplateData, Socket
+    ),
 
     HierarchicalStructure = arizona_socket:get_hierarchical_acc(UpdatedSocket),
     Expected = #{
@@ -708,18 +719,20 @@ generate_hierarchical_socket(Config) when is_list(Config) ->
     ?assertEqual(TestStructure, Result).
 
 detect_stateless_template(Config) when is_list(Config) ->
-    % Test that stateless template data is properly detected and converted
+    % Test that stateless template data is properly converted to structure
     StatelessTemplate = [
         {static, 1, ~"<h1>"},
         {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(title, Socket) end},
         {static, 3, ~"</h1>"}
     ],
 
+    % Create socket with proper stateful state
     Socket = arizona_socket:new(#{mode => hierarchical}),
-    SocketWithBinding = arizona_socket:put_binding(title, ~"Test Title", Socket),
+    MockState = arizona_stateful:new(root, test_module, #{title => ~"Test Title"}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
 
-    {Content, _UpdatedSocket} = arizona_hierarchical:to_hierarchical_content(
-        StatelessTemplate, SocketWithBinding
+    {Content, _UpdatedSocket} = arizona_hierarchical:stateless_structure(
+        StatelessTemplate, SocketWithState
     ),
 
     Expected = #{
@@ -734,23 +747,180 @@ detect_stateless_template(Config) when is_list(Config) ->
     ?assertEqual(Expected, Content).
 
 detect_stateful_socket(Config) when is_list(Config) ->
-    % Test that stateful component (socket) is properly detected
-    Socket = arizona_socket:new(#{mode => hierarchical, current_stateful_id => ~"test-component"}),
+    % Test that arizona_html:to_html properly extracts HTML from sockets
+    NestedSocket = arizona_socket:new(#{
+        mode => hierarchical,
+        current_stateful_id => ~"test-component"
+    }),
+    NestedSocketWithHtml = arizona_socket:set_html_acc([~"<span>Nested</span>"], NestedSocket),
 
-    {Content, _UpdatedSocket} = arizona_hierarchical:to_hierarchical_content(Socket, Socket),
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    {Content, _UpdatedSocket} = arizona_html:to_html(NestedSocketWithHtml, Socket),
 
-    Expected = #{type => stateful, id => ~"test-component"},
+    % arizona_html:to_html extracts HTML from socket, not stateful reference
+    Expected = [~"<span>Nested</span>"],
 
     ?assertEqual(Expected, Content).
 
 detect_list_content(Config) when is_list(Config) ->
-    % Test that regular lists are converted to binary content
+    % Test that regular lists are converted to nested iodata by arizona_html:to_html
     ListContent = [~"<li>", ~"Item 1", ~"</li>", ~"<li>", ~"Item 2", ~"</li>"],
 
     Socket = arizona_socket:new(#{mode => hierarchical}),
 
-    {Content, _UpdatedSocket} = arizona_hierarchical:to_hierarchical_content(ListContent, Socket),
+    {Content, _UpdatedSocket} = arizona_html:to_html(ListContent, Socket),
 
-    Expected = ~"<li>Item 1</li><li>Item 2</li>",
+    % arizona_html:to_html creates nested iodata structure for lists
+    Expected = [[[[[[[], ~"<li>"], ~"Item 1"], ~"</li>"], ~"<li>"], ~"Item 2"], ~"</li>"],
 
     ?assertEqual(Expected, Content).
+
+%% --------------------------------------------------------------------
+%% Integration Tests
+%% --------------------------------------------------------------------
+
+arizona_html_integration(Config) when is_list(Config) ->
+    % Test integration with arizona_html:render_stateful/2
+    TemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(content, Socket) end},
+            2 => {static, 3, ~"</div>"}
+        },
+        vars_indexes => #{content => [1]}
+    },
+
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    MockState = arizona_stateful:new(root, test_module, #{content => ~"Test Content"}),
+    SocketWithBinding = arizona_socket:put_stateful_state(MockState, Socket),
+
+    % This should trigger arizona_hierarchical:stateful_structure/2
+    UpdatedSocket = arizona_html:render_stateful(TemplateData, SocketWithBinding),
+
+    % Verify hierarchical structure was created
+    HierarchicalStructure = arizona_socket:get_hierarchical_acc(UpdatedSocket),
+    Expected = #{
+        root => #{
+            0 => ~"<div>",
+            1 => ~"Test Content",
+            2 => ~"</div>"
+        }
+    },
+
+    ?assertEqual(Expected, HierarchicalStructure).
+
+list_item_processing(Config) when is_list(Config) ->
+    % Test arizona_renderer:evaluate_dynamic_elements_for_item/4 integration
+    ListData = #{
+        static => [~"<li>", ~"</li>"],
+        dynamic => #{
+            elems_order => [0],
+            elems => #{
+                0 => {dynamic, 1, fun(Item, _Socket) -> Item end}
+            },
+            vars_indexes => #{}
+        }
+    },
+    Items = [~"Item 1", ~"Item 2"],
+
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+
+    {ListElement, UpdatedSocket} = arizona_hierarchical:list_structure(ListData, Items, Socket),
+
+    Expected = #{
+        type => list,
+        static => [~"<li>", ~"</li>"],
+        dynamic => [
+            #{0 => ~"Item 1"},
+            #{0 => ~"Item 2"}
+        ]
+    },
+
+    ?assertEqual(Expected, ListElement),
+    ?assertEqual(Socket, UpdatedSocket).
+
+nested_dynamic_content(Config) when is_list(Config) ->
+    % Test nested stateful components within hierarchical structure
+    TemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 =>
+                {dynamic, 2, fun(_Socket) ->
+                    % Return another socket (simulating nested stateful component)
+                    NestedSocket = arizona_socket:new(#{
+                        mode => hierarchical,
+                        current_stateful_id => ~"nested-component"
+                    }),
+                    arizona_socket:set_html_acc([~"<span>Nested</span>"], NestedSocket)
+                end},
+            2 => {static, 3, ~"</div>"}
+        },
+        vars_indexes => #{}
+    },
+
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    {ComponentStructure, _UpdatedSocket} = arizona_hierarchical:stateful_structure(
+        TemplateData, Socket
+    ),
+
+    % arizona_html:to_html extracts HTML from nested socket, not stateful reference
+    Expected = #{
+        0 => ~"<div>",
+        1 => [~"<span>Nested</span>"],
+        2 => ~"</div>"
+    },
+
+    ?assertEqual(Expected, ComponentStructure).
+
+error_handling_coverage(Config) when is_list(Config) ->
+    % Test error handling in list item processing
+    ListData = #{
+        static => [~"<li>", ~"</li>"],
+        dynamic => #{
+            elems_order => [0],
+            elems => #{
+                0 =>
+                    {dynamic, 5, fun(_Item, Socket) ->
+                        arizona_socket:get_binding(nonexistent, Socket)
+                    end}
+            },
+            vars_indexes => #{}
+        }
+    },
+
+    % Create socket with empty stateful state
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    MockState = arizona_stateful:new(root, test_module, #{}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
+
+    % Should handle binding errors gracefully
+    ?assertError(
+        {binding_not_found, nonexistent},
+        arizona_hierarchical:list_structure(ListData, [~"test"], SocketWithState)
+    ).
+
+mode_switching_coverage(Config) when is_list(Config) ->
+    % Test that mode switching works correctly
+    TemplateData = #{
+        elems_order => [0, 1],
+        elems => #{
+            0 => {static, 1, ~"<p>"},
+            1 => {static, 2, ~"</p>"}
+        },
+        vars_indexes => #{}
+    },
+
+    % Test render mode
+    RenderSocket = arizona_socket:new(#{mode => render}),
+    RenderResult = arizona_html:render_stateful(TemplateData, RenderSocket),
+    RenderHtml = arizona_socket:get_html(RenderResult),
+    ?assertEqual([~"<p>", ~"</p>"], RenderHtml),
+
+    % Test hierarchical mode
+    HierarchicalSocket = arizona_socket:new(#{mode => hierarchical}),
+    HierarchicalResult = arizona_html:render_stateful(TemplateData, HierarchicalSocket),
+    HierarchicalStructure = arizona_socket:get_hierarchical_acc(HierarchicalResult),
+    Expected = #{root => #{0 => ~"<p>", 1 => ~"</p>"}},
+    ?assertEqual(Expected, HierarchicalStructure).
