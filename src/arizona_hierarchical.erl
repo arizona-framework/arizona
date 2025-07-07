@@ -412,20 +412,10 @@ list_items_to_dynamic_data(DynamicTemplate, [Item | Rest], Socket, Acc) ->
     ItemStructure :: #{element_index() => element_content()},
     Socket1 :: arizona_socket:socket().
 process_list_item(#{elems_order := Order, elems := Elements}, Item, Socket) ->
-    % Use arizona_renderer logic - no duplication!
-    {DynamicValues, UpdatedSocket} = arizona_renderer:evaluate_dynamic_elements_for_item(
-        Order, Elements, Item, Socket
+    % Build structure directly without intermediate list
+    {ItemStructure, UpdatedSocket} = build_item_structure_direct(
+        Order, Elements, Item, Socket, #{}
     ),
-
-    % Convert the dynamic values to indexed structure
-    ItemStructure = lists:foldl(
-        fun({Index, Value}, Acc) ->
-            Acc#{Index => Value}
-        end,
-        #{},
-        lists:zip(Order, DynamicValues)
-    ),
-
     {ItemStructure, UpdatedSocket}.
 
 %% ============================================================================
@@ -443,3 +433,18 @@ to_json(Structure) when is_map(Structure) ->
 from_json(JsonData) when is_map(JsonData) ->
     % Already in correct format
     JsonData.
+
+%% @doc Build item structure directly from order and elements, evaluating as we go
+-spec build_item_structure_direct(
+    [non_neg_integer()], map(), term(), arizona_socket:socket(), map()
+) ->
+    {map(), arizona_socket:socket()}.
+build_item_structure_direct([], _Elements, _Item, Socket, Acc) ->
+    {Acc, Socket};
+build_item_structure_direct([Index | RestIndexes], Elements, Item, Socket, Acc) ->
+    % Evaluate this element using the extracted function
+    {Value, UpdatedSocket} = arizona_renderer:evaluate_single_dynamic_element(
+        Index, Elements, Item, Socket
+    ),
+    % Add to accumulator and continue
+    build_item_structure_direct(RestIndexes, Elements, Item, UpdatedSocket, Acc#{Index => Value}).

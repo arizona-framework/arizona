@@ -4,7 +4,7 @@
 -export([render_stateless/2]).
 -export([render_list/3]).
 -export([render_element/2]).
--export([evaluate_dynamic_elements_for_item/4]).
+-export([evaluate_single_dynamic_element/4]).
 -export([format_error/2]).
 
 -doc ~"Template data from parse transform with optimized functions for stateful rendering.".
@@ -152,22 +152,28 @@ render_list_item(StaticParts, ElemsOrder, ElemsFuns, Item, Socket) ->
 
     {ItemHtml, UpdatedSocket}.
 
+%% Evaluate a single dynamic element for a list item
+-spec evaluate_single_dynamic_element(non_neg_integer(), map(), term(), arizona_socket:socket()) ->
+    {term(), arizona_socket:socket()}.
+evaluate_single_dynamic_element(ElemIndex, ElemsFuns, Item, Socket) ->
+    %% Evaluate element function - let it crash if index doesn't exist
+    {dynamic, Line, Fun} = maps:get(ElemIndex, ElemsFuns),
+    try
+        Result = arizona_list:call_element_function(Fun, Item, Socket),
+        arizona_html:to_html(Result, Socket)
+    catch
+        throw:{binding_not_found, Key} ->
+            error({binding_not_found, Key}, none, binding_error_info(Line, Key, Socket));
+        _:Error ->
+            error({list_item_render_error, Error, Item, Line})
+    end.
+
 %% Evaluate dynamic elements for a list item
 evaluate_dynamic_elements_for_item([], _ElemsFuns, _Item, Socket) ->
     {[], Socket};
 evaluate_dynamic_elements_for_item([ElemIndex | Rest], ElemsFuns, Item, Socket) ->
-    %% Evaluate current element function - let it crash if index doesn't exist
-    {dynamic, Line, Fun} = maps:get(ElemIndex, ElemsFuns),
-    {Value, UpdatedSocket} =
-        try
-            Result = arizona_list:call_element_function(Fun, Item, Socket),
-            arizona_html:to_html(Result, Socket)
-        catch
-            throw:{binding_not_found, Key} ->
-                error({binding_not_found, Key}, none, binding_error_info(Line, Key, Socket));
-            _:Error ->
-                error({list_item_render_error, Error, Item, Line})
-        end,
+    %% Evaluate current element using extracted function
+    {Value, UpdatedSocket} = evaluate_single_dynamic_element(ElemIndex, ElemsFuns, Item, Socket),
 
     %% Recursively evaluate rest
     {RestValues, FinalSocket} = evaluate_dynamic_elements_for_item(
