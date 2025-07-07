@@ -528,9 +528,10 @@ test_body_cowboy_parsing(Config) when is_list(Config) ->
     ?assertEqual(~"", Body),
 
     % Verify the updated request has the body cached
-    % The raw should be updated with the result from read_body
+    % Use cowboy functions to test the behavior instead of pattern matching
     {cowboy_req, UpdatedCowboyReq} = arizona_request:get_raw_request(UpdatedReq),
-    ?assertEqual(#{method => ~"POST", has_body => false}, UpdatedCowboyReq),
+    ?assertEqual(~"POST", cowboy_req:method(UpdatedCowboyReq)),
+    ?assertEqual(false, cowboy_req:has_body(UpdatedCowboyReq)),
 
     % Second call should use cached body value (line 112-113)
     {Body2, _UpdatedReq2} = arizona_request:get_body(UpdatedReq),

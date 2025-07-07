@@ -175,7 +175,7 @@ diff_stateful_reference(Config) when is_list(Config) ->
             1 => #{type => stateful, id => ~"counter-1"},
             2 => ~"</div>"
         },
-        ~"counter-1" => #{0 => 0}
+        ~"counter-1" => #{0 => ~"0"}
     },
     NewStructure = #{
         root => #{
@@ -184,7 +184,7 @@ diff_stateful_reference(Config) when is_list(Config) ->
             2 => ~"</div>"
         },
         % Count changed
-        ~"counter-1" => #{0 => 1}
+        ~"counter-1" => #{0 => ~"1"}
     },
 
     Diff = arizona_hierarchical:diff_structures(OldStructure, NewStructure),
@@ -196,7 +196,7 @@ diff_stateful_reference(Config) when is_list(Config) ->
                 #{
                     type => set_element,
                     element_index => 0,
-                    data => 1
+                    data => ~"1"
                 }
             ]
         }
@@ -614,13 +614,13 @@ round_trip_property_complex(Config) when is_list(Config) ->
                 type => stateless,
                 structure => #{
                     0 => ~"<span>Count: ",
-                    1 => 5,
+                    1 => ~"5",
                     2 => ~"</span>"
                 }
             },
             4 => ~"</div>"
         },
-        ~"counter-1" => #{0 => ~"Count: ", 1 => 5}
+        ~"counter-1" => #{0 => ~"Count: ", 1 => ~"5"}
     },
     NewStructure = #{
         root => #{
@@ -633,14 +633,14 @@ round_trip_property_complex(Config) when is_list(Config) ->
                 structure => #{
                     0 => ~"<span>Count: ",
                     % Changed
-                    1 => 6,
+                    1 => ~"6",
                     2 => ~"</span>"
                 }
             },
             4 => ~"</div>"
         },
         % Changed
-        ~"counter-1" => #{0 => ~"Count: ", 1 => 6}
+        ~"counter-1" => #{0 => ~"Count: ", 1 => ~"6"}
     },
 
     Diff = arizona_hierarchical:diff_structures(OldStructure, NewStructure),
@@ -866,13 +866,12 @@ nested_dynamic_content(Config) when is_list(Config) ->
     ),
 
     % arizona_html:to_html extracts HTML from nested socket, not stateful reference
-    Expected = #{
-        0 => ~"<div>",
-        1 => [~"<span>Nested</span>"],
-        2 => ~"</div>"
-    },
-
-    ?assertEqual(Expected, ComponentStructure).
+    % Check each field individually to avoid complex type inference issues
+    ?assertEqual(~"<div>", maps:get(0, ComponentStructure)),
+    % Element 1 should contain the nested HTML content
+    Element1 = maps:get(1, ComponentStructure),
+    ?assertEqual([~"<span>Nested</span>"], Element1),
+    ?assertEqual(~"</div>", maps:get(2, ComponentStructure)).
 
 error_handling_coverage(Config) when is_list(Config) ->
     % Test error handling in list item processing

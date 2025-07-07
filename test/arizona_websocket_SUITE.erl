@@ -3,6 +3,19 @@
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).
 
+%% Suppress Dialyzer warnings for cowboy opaque type violations in mock functions
+%% These tests use mock cowboy_req structures that don't match the opaque type
+-dialyzer(
+    {nowarn_function, [
+        extract_path_from_query_param/1,
+        resolve_live_route_metadata/1,
+        test_init_function/1,
+        websocket_init_with_correct_path/1,
+        test_init_with_empty_query_string/1,
+        test_init_with_missing_path_param/1
+    ]}
+).
+
 %% --------------------------------------------------------------------
 %% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------

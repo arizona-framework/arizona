@@ -40,7 +40,7 @@ Key features:
 
 -type element_content() ::
     % Static HTML
-    binary()
+    arizona_html:html()
     | #{type := stateful, id := arizona_stateful:id()}
     | #{type := stateless, structure := #{element_index() => element_content()}}
     | #{type := list, static := [binary()], dynamic := [#{element_index() => element_content()}]}.

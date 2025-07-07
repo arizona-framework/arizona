@@ -125,7 +125,7 @@ handle_noreply_response(UpdatedSocket, State) ->
                 type => ~"diff",
                 changes => Changes
             }),
-            arizona_socket:clear_changes(UpdatedSocket),
+            _ClearedSocket = arizona_socket:clear_changes(UpdatedSocket),
             {[{text, DiffPayload}], State}
     end.
 
@@ -150,7 +150,7 @@ handle_reply_response(Reply, UpdatedSocket, State) ->
                 type => ~"diff",
                 changes => Changes
             }),
-            arizona_socket:clear_changes(UpdatedSocket),
+            _ClearedSocket = arizona_socket:clear_changes(UpdatedSocket),
             {[{text, ReplyPayload}, {text, DiffPayload}], State}
     end.
 
