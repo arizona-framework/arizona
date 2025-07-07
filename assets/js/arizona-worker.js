@@ -1,9 +1,13 @@
-// Arizona WebWorker for WebSocket connection
+// Import ArizonaHierarchical for client-side structure management
+import ArizonaHierarchical from './arizona-hierarchical.js';
+
+// Arizona WebWorker for WebSocket connection with hierarchical rendering
 class ArizonaWebSocketWorker {
   constructor() {
     this.socket = null;
     this.connected = false;
     this.messageQueue = [];
+    this.hierarchical = new ArizonaHierarchical();
 
     self.onmessage = (event) => {
       const { type, data } = event.data;
@@ -35,7 +39,7 @@ class ArizonaWebSocketWorker {
 
     this.socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
-      this.postMessage({ type: 'message', data: message });
+      this.handleWebSocketMessage(message);
     };
 
     this.socket.onclose = () => {
@@ -76,6 +80,90 @@ class ArizonaWebSocketWorker {
       this.socket = null;
     }
     this.connected = false;
+    this.hierarchical.clear();
+  }
+
+  handleWebSocketMessage(message) {
+    try {
+      switch (message.type) {
+        case 'initial_render':
+          this.handleInitialRender(message);
+          break;
+        case 'diff':
+          this.handleDiff(message);
+          break;
+        default:
+          // Pass through other message types unchanged
+          this.postMessage({ type: 'message', data: message });
+          break;
+      }
+    } catch (error) {
+      console.error('[Arizona Worker] Error handling message:', error);
+      this.postMessage({
+        type: 'error',
+        data: { error: `Message handling failed: ${error.message}` },
+      });
+    }
+  }
+
+  handleInitialRender(message) {
+    // Validate structure format
+    if (!ArizonaHierarchical.validateStructure(message.structure)) {
+      throw new Error('Invalid hierarchical structure format');
+    }
+
+    // Initialize hierarchical structure
+    this.hierarchical.initialize(message.structure);
+
+    // Create initial render patch
+    const patch = this.hierarchical.createInitialPatch();
+
+    // Send to main thread for DOM application
+    this.postMessage({
+      type: 'html_patch',
+      data: {
+        patch: patch,
+        isInitial: true,
+      },
+    });
+
+    console.log('[Arizona Worker] Initial render processed');
+  }
+
+  handleDiff(message) {
+    // Validate diff format
+    if (!ArizonaHierarchical.validateDiff(message.changes)) {
+      throw new Error('Invalid diff changes format');
+    }
+
+    if (!this.hierarchical.isInitialized()) {
+      throw new Error('Hierarchical structure not initialized');
+    }
+
+    // Apply diff to hierarchical structure
+    this.hierarchical.applyDiff(message.changes);
+
+    // Create HTML patch
+    const patch = this.hierarchical.createPatch();
+
+    // Send to main thread for DOM application
+    this.postMessage({
+      type: 'html_patch',
+      data: {
+        patch: patch,
+        isInitial: false,
+      },
+    });
+
+    console.log('[Arizona Worker] Diff applied and patch sent');
+  }
+
+  getHierarchicalState() {
+    return {
+      initialized: this.hierarchical.isInitialized(),
+      componentIds: this.hierarchical.getComponentIds(),
+      structure: this.hierarchical.getStructure(),
+    };
   }
 
   postMessage(data) {
