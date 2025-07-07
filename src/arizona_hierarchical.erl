@@ -19,6 +19,11 @@ Key features:
     add_stateful/3,
     set_element/4,
 
+    % Hierarchical rendering
+    stateful_structure/2,
+    stateless_structure/2,
+    list_structure/3,
+
     % Diff operations
     diff_structures/2,
     apply_diff/2,
@@ -283,6 +288,136 @@ apply_element_diff(
 ) ->
     #{type := list, static := Static} = maps:get(ElementIndex, Component),
     Component#{ElementIndex => #{type => list, static => Static, dynamic => NewDynamic}}.
+
+%% ============================================================================
+%% Hierarchical Structure Generation
+%% ============================================================================
+
+%% @doc Generate hierarchical structure for stateful component
+-spec stateful_structure(TemplateData, Socket) -> {ComponentStructure, Socket1} when
+    TemplateData :: arizona_renderer:stateful_template_data(),
+    Socket :: arizona_socket:socket(),
+    ComponentStructure :: stateful_render(),
+    Socket1 :: arizona_socket:socket().
+stateful_structure(#{elems_order := Order, elems := Elements}, Socket) ->
+    StatefulId = arizona_socket:get_current_stateful_id(Socket),
+    CurrentHierarchical = arizona_socket:get_hierarchical_acc(Socket),
+
+    % Generate elements structure
+    {ComponentRender, UpdatedSocket} = elements_structure(Order, Elements, Socket, #{}),
+
+    % Update hierarchical accumulator
+    NewHierarchical = CurrentHierarchical#{StatefulId => ComponentRender},
+    UpdatedSocket1 = arizona_socket:set_hierarchical_acc(NewHierarchical, UpdatedSocket),
+
+    {ComponentRender, UpdatedSocket1}.
+
+%% @doc Generate hierarchical structure for stateless component
+-spec stateless_structure(TemplateData, Socket) -> {StatelessElement, Socket1} when
+    TemplateData :: arizona_renderer:stateless_template_data(),
+    Socket :: arizona_socket:socket(),
+    StatelessElement :: element_content(),
+    Socket1 :: arizona_socket:socket().
+stateless_structure(StructuredList, Socket) ->
+    {StatelessStructure, UpdatedSocket} = stateless_list_to_structure(StructuredList, Socket),
+    StatelessElement = #{type => stateless, structure => StatelessStructure},
+    {StatelessElement, UpdatedSocket}.
+
+%% @doc Generate hierarchical structure for list component
+-spec list_structure(ListData, Items, Socket) -> {ListElement, Socket1} when
+    ListData :: arizona_renderer:list_template_data(),
+    Items :: [term()],
+    Socket :: arizona_socket:socket(),
+    ListElement :: element_content(),
+    Socket1 :: arizona_socket:socket().
+list_structure(#{static := Static, dynamic := DynamicTemplate}, Items, Socket) ->
+    % Generate dynamic data for each item
+    {DynamicData, UpdatedSocket} = list_items_to_dynamic_data(DynamicTemplate, Items, Socket, []),
+
+    % Create list structure
+    ListElement = #{
+        type => list,
+        static => Static,
+        dynamic => DynamicData
+    },
+
+    {ListElement, UpdatedSocket}.
+
+%% @doc Generate structure for elements
+-spec elements_structure(Order, Elements, Socket, ComponentRender) ->
+    {ComponentRender1, Socket1}
+when
+    Order :: [non_neg_integer()],
+    Elements :: #{non_neg_integer() => term()},
+    Socket :: arizona_socket:socket(),
+    ComponentRender :: stateful_render(),
+    ComponentRender1 :: stateful_render(),
+    Socket1 :: arizona_socket:socket().
+elements_structure([], _Elements, Socket, ComponentRender) ->
+    {ComponentRender, Socket};
+elements_structure([Index | Rest], Elements, Socket, ComponentRender) ->
+    Element = maps:get(Index, Elements),
+    {Content, UpdatedSocket} = arizona_renderer:render_element(Element, Socket),
+    NewComponentRender = ComponentRender#{Index => Content},
+    elements_structure(Rest, Elements, UpdatedSocket, NewComponentRender).
+
+%% ============================================================================
+%% Helper Functions for Content Detection
+%% ============================================================================
+
+%% @doc Convert stateless template list to hierarchical structure
+-spec stateless_list_to_structure(List, Socket) -> {Structure, Socket1} when
+    List :: list(),
+    Socket :: arizona_socket:socket(),
+    Structure :: #{element_index() => element_content()},
+    Socket1 :: arizona_socket:socket().
+stateless_list_to_structure(List, Socket) ->
+    stateless_list_to_structure(List, Socket, 0, #{}).
+
+%% @doc Helper for stateless list conversion
+-spec stateless_list_to_structure(List, Socket, Index, Acc) -> {Structure, Socket1} when
+    List :: list(),
+    Socket :: arizona_socket:socket(),
+    Index :: non_neg_integer(),
+    Acc :: #{element_index() => element_content()},
+    Structure :: #{element_index() => element_content()},
+    Socket1 :: arizona_socket:socket().
+stateless_list_to_structure([], Socket, _Index, Acc) ->
+    {Acc, Socket};
+stateless_list_to_structure([Element | Rest], Socket, Index, Acc) ->
+    {Content, UpdatedSocket} = arizona_renderer:render_element(Element, Socket),
+    NewAcc = Acc#{Index => Content},
+    stateless_list_to_structure(Rest, UpdatedSocket, Index + 1, NewAcc).
+
+%% @doc Convert list items to dynamic data for hierarchical structure
+-spec list_items_to_dynamic_data(DynamicTemplate, Items, Socket, Acc) -> {DynamicData, Socket1} when
+    DynamicTemplate :: #{elems_order := [non_neg_integer()], elems := map(), vars_indexes := map()},
+    Items :: [term()],
+    Socket :: arizona_socket:socket(),
+    Acc :: [#{element_index() => element_content()}],
+    DynamicData :: [#{element_index() => element_content()}],
+    Socket1 :: arizona_socket:socket().
+list_items_to_dynamic_data(_DynamicTemplate, [], Socket, Acc) ->
+    {lists:reverse(Acc), Socket};
+list_items_to_dynamic_data(DynamicTemplate, [Item | Rest], Socket, Acc) ->
+    % Process this item with the dynamic template
+    {ItemStructure, UpdatedSocket} = process_list_item(DynamicTemplate, Item, Socket),
+    list_items_to_dynamic_data(DynamicTemplate, Rest, UpdatedSocket, [ItemStructure | Acc]).
+
+%% @doc Process a single list item with the dynamic template
+-spec process_list_item(DynamicTemplate, Item, Socket) -> {ItemStructure, Socket1} when
+    DynamicTemplate :: #{elems_order := [non_neg_integer()], elems := map(), vars_indexes := map()},
+    Item :: term(),
+    Socket :: arizona_socket:socket(),
+    ItemStructure :: #{element_index() => element_content()},
+    Socket1 :: arizona_socket:socket().
+process_list_item(#{elems_order := Order, elems := Elements}, Item, Socket) ->
+    % Create temporary bindings for the list item
+    % For now, we'll assume the item binding name is 'Item' (could be enhanced)
+    SocketWithItem = arizona_socket:with_temp_bindings(#{'Item' => Item}, Socket),
+
+    % Process elements similar to stateful structure generation
+    elements_structure(Order, Elements, SocketWithItem, #{}).
 
 %% ============================================================================
 %% JSON Conversion

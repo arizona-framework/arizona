@@ -51,6 +51,13 @@ groups() ->
             round_trip_property_simple,
             round_trip_property_complex,
             json_conversion_identity
+        ]},
+        {structure_generation, [parallel], [
+            generate_simple_structure,
+            generate_hierarchical_socket,
+            detect_stateless_template,
+            detect_stateful_socket,
+            detect_list_content
         ]}
     ].
 
@@ -651,3 +658,99 @@ json_conversion_identity(Config) when is_list(Config) ->
 
     ?assertEqual(Structure, JsonData),
     ?assertEqual(Structure, BackToErlang).
+
+%% --------------------------------------------------------------------
+%% Structure Generation Tests
+%% --------------------------------------------------------------------
+
+generate_simple_structure(Config) when is_list(Config) ->
+    % Test basic hierarchical structure generation
+    TemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 => {static, 2, ~"Hello World"},
+            2 => {static, 3, ~"</div>"}
+        },
+        vars_indexes => #{}
+    },
+
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    UpdatedSocket = arizona_hierarchical:stateful_structure(TemplateData, Socket),
+
+    HierarchicalStructure = arizona_socket:get_hierarchical_acc(UpdatedSocket),
+    Expected = #{
+        root => #{
+            0 => ~"<div>",
+            1 => ~"Hello World",
+            2 => ~"</div>"
+        }
+    },
+
+    ?assertEqual(Expected, HierarchicalStructure).
+
+generate_hierarchical_socket(Config) when is_list(Config) ->
+    % Test that socket accumulates hierarchical structure correctly
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+
+    % Verify initial state
+    InitialStructure = arizona_socket:get_hierarchical_acc(Socket),
+    ?assertEqual(#{}, InitialStructure),
+
+    % Add a component manually
+    TestStructure = #{
+        root => #{0 => ~"<div>", 1 => ~"test", 2 => ~"</div>"}
+    },
+    UpdatedSocket = arizona_socket:set_hierarchical_acc(TestStructure, Socket),
+
+    % Verify it was set correctly
+    Result = arizona_socket:get_hierarchical_acc(UpdatedSocket),
+    ?assertEqual(TestStructure, Result).
+
+detect_stateless_template(Config) when is_list(Config) ->
+    % Test that stateless template data is properly detected and converted
+    StatelessTemplate = [
+        {static, 1, ~"<h1>"},
+        {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(title, Socket) end},
+        {static, 3, ~"</h1>"}
+    ],
+
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    SocketWithBinding = arizona_socket:put_binding(title, ~"Test Title", Socket),
+
+    {Content, _UpdatedSocket} = arizona_hierarchical:to_hierarchical_content(
+        StatelessTemplate, SocketWithBinding
+    ),
+
+    Expected = #{
+        type => stateless,
+        structure => #{
+            0 => ~"<h1>",
+            1 => ~"Test Title",
+            2 => ~"</h1>"
+        }
+    },
+
+    ?assertEqual(Expected, Content).
+
+detect_stateful_socket(Config) when is_list(Config) ->
+    % Test that stateful component (socket) is properly detected
+    Socket = arizona_socket:new(#{mode => hierarchical, current_stateful_id => ~"test-component"}),
+
+    {Content, _UpdatedSocket} = arizona_hierarchical:to_hierarchical_content(Socket, Socket),
+
+    Expected = #{type => stateful, id => ~"test-component"},
+
+    ?assertEqual(Expected, Content).
+
+detect_list_content(Config) when is_list(Config) ->
+    % Test that regular lists are converted to binary content
+    ListContent = [~"<li>", ~"Item 1", ~"</li>", ~"<li>", ~"Item 2", ~"</li>"],
+
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+
+    {Content, _UpdatedSocket} = arizona_hierarchical:to_hierarchical_content(ListContent, Socket),
+
+    Expected = ~"<li>Item 1</li><li>Item 2</li>",
+
+    ?assertEqual(Expected, Content).

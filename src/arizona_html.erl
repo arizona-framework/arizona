@@ -24,7 +24,10 @@ render_stateful(TemplateData, Socket) when is_map(TemplateData) ->
         diff ->
             % Get current stateful state for diffing
             CurrentState = arizona_socket:get_current_stateful_state(Socket),
-            arizona_differ:diff_stateful(TemplateData, CurrentState, Socket)
+            arizona_differ:diff_stateful(TemplateData, CurrentState, Socket);
+        hierarchical ->
+            % Generate hierarchical structure
+            arizona_hierarchical:stateful_structure(TemplateData, Socket)
     end;
 render_stateful(Html, Socket) ->
     render_stateful_html(Html, #{}, Socket).
@@ -58,8 +61,16 @@ render_stateful_html(Html, Bindings, Socket) when
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
-    {_Html, UpdatedSocket} = arizona_renderer:render_stateless(StructuredList, Socket),
-    UpdatedSocket;
+    case arizona_socket:get_mode(Socket) of
+        hierarchical ->
+            {_StatelessElement, UpdatedSocket} = arizona_hierarchical:stateless_structure(
+                StructuredList, Socket
+            ),
+            UpdatedSocket;
+        _ ->
+            {_Html, UpdatedSocket} = arizona_renderer:render_stateless(StructuredList, Socket),
+            UpdatedSocket
+    end;
 render_stateless(Html, Socket) ->
     render_stateless_html(Html, #{}, Socket).
 
@@ -95,8 +106,13 @@ render_stateless_html(Html, Bindings, Socket) when
 render_list(ListData, Items, Socket) when
     is_map(ListData), is_list(Items)
 ->
-    {_Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, Socket),
-    UpdatedSocket;
+    case arizona_socket:get_mode(Socket) of
+        hierarchical ->
+            arizona_hierarchical:list_structure(ListData, Items, Socket);
+        _ ->
+            {_Html, UpdatedSocket} = arizona_renderer:render_list(ListData, Items, Socket),
+            UpdatedSocket
+    end;
 render_list(ItemFun, Items, Socket) when
     is_function(ItemFun, 1), is_list(Items)
 ->

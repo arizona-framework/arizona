@@ -10,6 +10,7 @@
 -export([set_current_stateful_id/2]).
 -export([set_html_acc/2, get_html/1]).
 -export([append_changes/2, get_changes/1, clear_changes/1]).
+-export([set_hierarchical_acc/2, get_hierarchical_acc/1]).
 
 -export([put_stateful_state/2]).
 
@@ -22,7 +23,7 @@
 
 %% Types
 -type bindings() :: #{atom() => term()}.
--type mode() :: render | diff.
+-type mode() :: render | diff | hierarchical.
 -type layout() :: {LayoutModule :: atom(), LayoutRenderFun :: atom(), SlotName :: atom()}.
 -type socket_opts() :: #{
     mode => mode(),
@@ -35,6 +36,7 @@
     mode :: mode(),
     html_acc :: iolist(),
     changes_acc :: arizona_differ:diff_changes(),
+    hierarchical_acc :: arizona_hierarchical:hierarchical_structure(),
     current_stateful_parent_id :: arizona_stateful:id() | undefined,
     current_stateful_id :: arizona_stateful:id(),
     stateful_states :: #{arizona_stateful:id() => arizona_stateful:state()},
@@ -53,6 +55,7 @@ new(Opts) when is_map(Opts) ->
         mode = maps:get(mode, Opts, render),
         html_acc = [],
         changes_acc = [],
+        hierarchical_acc = #{},
         current_stateful_parent_id = maps:get(current_stateful_parent_id, Opts, undefined),
         current_stateful_id = maps:get(current_stateful_id, Opts, root),
         stateful_states = #{},
@@ -123,6 +126,21 @@ set_html_acc(Html, #socket{} = Socket) when is_list(Html) ->
     Html :: arizona_html:html().
 get_html(#socket{} = Socket) ->
     Socket#socket.html_acc.
+
+-spec set_hierarchical_acc(HierarchicalStructure, Socket) -> Socket1 when
+    HierarchicalStructure :: arizona_hierarchical:hierarchical_structure(),
+    Socket :: socket(),
+    Socket1 :: socket().
+set_hierarchical_acc(HierarchicalStructure, #socket{} = Socket) when
+    is_map(HierarchicalStructure)
+->
+    Socket#socket{hierarchical_acc = HierarchicalStructure}.
+
+-spec get_hierarchical_acc(Socket) -> HierarchicalStructure when
+    Socket :: socket(),
+    HierarchicalStructure :: arizona_hierarchical:hierarchical_structure().
+get_hierarchical_acc(#socket{} = Socket) ->
+    Socket#socket.hierarchical_acc.
 
 -spec put_stateful_state(StatefulState, Socket) -> Socket1 when
     StatefulState :: arizona_stateful:state(),
