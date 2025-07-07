@@ -245,6 +245,9 @@ render_live(Template, Socket) ->
                     );
                 diff ->
                     % When diffing, we only return the live content changes
+                    SocketWithLiveContent;
+                hierarchical ->
+                    % When in hierarchical mode, accumulate structure without layout processing
                     SocketWithLiveContent
             end
     end.

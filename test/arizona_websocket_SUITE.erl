@@ -280,7 +280,7 @@ test_websocket_init_with_real_live_process(_Config) ->
     % Verify the payload contains the expected content
     PayloadBinary = iolist_to_binary(InitialPayload),
     ?assert(binary:match(PayloadBinary, ~"initial_render") =/= nomatch),
-    ?assert(binary:match(PayloadBinary, ~"html") =/= nomatch),
+    ?assert(binary:match(PayloadBinary, ~"structure") =/= nomatch),
 
     % Should have a valid live process
     LivePid = arizona_websocket:get_live_pid(State),

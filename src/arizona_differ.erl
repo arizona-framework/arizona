@@ -77,10 +77,19 @@ get_affected_elements(ChangedBindings, VarsIndexes) ->
 %% Convert diff changes to JSON-serializable format
 -spec to_json(DiffChanges) -> JsonData when
     DiffChanges :: diff_changes(),
-    JsonData :: term().
+    JsonData :: iodata().
 to_json(DiffChanges) ->
-    % Already in the correct format: [{StatefulId, [{ElementIndex, Changes}]}]
-    DiffChanges.
+    % Convert tuples to arrays for JavaScript compatibility
+    json:encode(DiffChanges, fun diff_encoder/2).
+
+%% Custom JSON encoder that converts tuples to arrays for JavaScript compatibility
+-spec diff_encoder(dynamic(), json:encoder()) -> iodata().
+diff_encoder(Tuple, Encode) when is_tuple(Tuple) ->
+    % Convert tuple to array
+    json:encode_list(tuple_to_list(Tuple), Encode);
+diff_encoder(Other, Encode) ->
+    % For all other types, use the default JSON encoder
+    json:encode_value(Other, Encode).
 
 %% Internal implementation functions
 

@@ -41,8 +41,8 @@ init(Req, _State) ->
     Req :: arizona_request:request(),
     Result :: call_result().
 websocket_init({LiveModule, Req}) ->
-    % Create initial Arizona socket
-    Socket = arizona_socket:new(#{}),
+    % Create initial Arizona socket in hierarchical mode
+    Socket = arizona_socket:new(#{mode => hierarchical}),
 
     % Start the LiveView process
     {ok, LivePid} = arizona_live:start_link(LiveModule, Socket),
@@ -50,14 +50,14 @@ websocket_init({LiveModule, Req}) ->
     % Mount the LiveView
     _MountedSocket = arizona_live:mount(LivePid, Req),
 
-    % Initial render
+    % Initial render in hierarchical mode
     RenderedSocket = arizona_live:render(LivePid),
-    Html = arizona_socket:get_html(RenderedSocket),
+    HierarchicalStructure = arizona_socket:get_hierarchical_acc(RenderedSocket),
 
-    % Send initial HTML to client
+    % Send initial hierarchical structure to client
     InitialPayload = json:encode(#{
         type => ~"initial_render",
-        html => Html
+        structure => HierarchicalStructure
     }),
 
     State = #state{live_pid = LivePid},

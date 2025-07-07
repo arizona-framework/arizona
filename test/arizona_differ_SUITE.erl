@@ -282,14 +282,21 @@ get_affected_elements_multiple_vars(Config) when is_list(Config) ->
     ?assertEqual(ExpectedElements, AffectedElements).
 
 to_json_conversion(Config) when is_list(Config) ->
-    % Create sample diff changes
-    DiffChanges = [{root, [{1, ~"value1"}, {2, [{~"counter", [{3, 42}]}]}]}],
+    % Create sample diff changes with nested tuples
+    DiffChanges = [{root, [{1, ~"value1"}, {2, ~"value2"}]}, {~"other_component", [{3, 42}]}],
 
-    % Convert to JSON format
-    JsonData = arizona_differ:to_json(DiffChanges),
+    % Convert to JSON format using custom encoder
+    JsonIoData = arizona_differ:to_json(DiffChanges),
 
-    % Should be the same format (already JSON-compatible)
-    ?assertEqual(DiffChanges, JsonData).
+    % Convert iodata to binary
+    JsonBinary = iolist_to_binary(JsonIoData),
+
+    % Expected JSON: tuples should be converted to arrays
+    % [{root, [{1, "value1"}, {2, "value2"}]}, {"other_component", [{3, 42}]}]
+    % becomes: [["root", [[1, "value1"], [2, "value2"]]], ["other_component", [[3, 42]]]]
+    ExpectedJson = ~<[["root",[[1,"value1"],[2,"value2"]]],["other_component",[[3,42]]]]>,
+
+    ?assertEqual(ExpectedJson, JsonBinary).
 
 %% --------------------------------------------------------------------
 %% Diff stateless tests
