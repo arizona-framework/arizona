@@ -57,8 +57,8 @@ extract_path_from_query_param(_Config) ->
 resolve_live_route_metadata(_Config) ->
     % Set up test routes
     TestRoutes = [
-        {live, ~"/users", user_live, #{}},
-        {live, ~"/posts", post_live, #{}},
+        {live, ~"/users", user_live},
+        {live, ~"/posts", post_live},
         {live_websocket, ~"/live"}
     ],
 
@@ -85,7 +85,7 @@ resolve_live_route_metadata(_Config) ->
 test_init_function(_Config) ->
     % Set up test routes
     TestRoutes = [
-        {live, ~"/users", user_live, #{}},
+        {live, ~"/users", user_live},
         {live_websocket, ~"/live"}
     ],
 
@@ -110,7 +110,7 @@ test_init_function(_Config) ->
 websocket_init_with_correct_path(_Config) ->
     % Set up test routes
     TestRoutes = [
-        {live, ~"/users", user_live, #{}},
+        {live, ~"/users", user_live},
         {live_websocket, ~"/live"}
     ],
 
@@ -277,7 +277,7 @@ test_websocket_init_with_real_live_process(_Config) ->
 test_init_with_empty_query_string(_Config) ->
     % Test init with empty query string (should default to "/")
     TestRoutes = [
-        {live, ~"/", root_live, #{}},
+        {live, ~"/", root_live},
         {live_websocket, ~"/live"}
     ],
 
@@ -296,7 +296,7 @@ test_init_with_empty_query_string(_Config) ->
 test_init_with_missing_path_param(_Config) ->
     % Test init with query string but missing path parameter
     TestRoutes = [
-        {live, ~"/", root_live, #{}},
+        {live, ~"/", root_live},
         {live_websocket, ~"/live"}
     ],
 

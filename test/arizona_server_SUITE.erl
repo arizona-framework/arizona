@@ -65,7 +65,7 @@ test_basic_server_start_stop(Config) when is_list(Config) ->
     ServerConfig = #{
         port => 8080,
         routes => [
-            {live, ~"/", test_live_component, #{}}
+            {live, ~"/", test_live_component}
         ]
     },
 
@@ -82,7 +82,7 @@ test_simple_live_route(Config) when is_list(Config) ->
     ServerConfig = #{
         port => 8081,
         routes => [
-            {live, ~"/test", test_live_component, #{}}
+            {live, ~"/test", test_live_component}
         ]
     },
 
@@ -107,7 +107,7 @@ test_simple_live_route(Config) when is_list(Config) ->
 test_compile_routes_basic(Config) when is_list(Config) ->
     % Test basic route compilation
     Routes = [
-        {live, ~"/", test_live_component, #{}},
+        {live, ~"/", test_live_component},
         {static, ~"/static", {dir, ~"/var/www"}}
     ],
 
@@ -130,7 +130,7 @@ test_compile_routes_empty(Config) when is_list(Config) ->
 test_compile_routes_mixed(Config) when is_list(Config) ->
     % Test compilation with all route types
     Routes = [
-        {live, ~"/live", test_live_component, #{}},
+        {live, ~"/live", test_live_component},
         {static, ~"/files", {dir, ~"/var/files"}},
         {static, ~"/favicon.ico", {file, ~"/var/www/favicon.ico"}},
         {static, ~"/assets", {priv_dir, myapp, ~"static"}},
@@ -145,15 +145,14 @@ test_compile_routes_mixed(Config) when is_list(Config) ->
 
 test_route_to_cowboy_live(Config) when is_list(Config) ->
     % Test live route conversion
-    Route = {live, ~"/test", test_module, #{option => value}},
+    Route = {live, ~"/test", test_module},
 
     CowboyRoute = arizona_server:route_to_cowboy(Route),
 
     % Should return properly formatted Cowboy route
     Expected = {~"/test", arizona_handler, #{
         type => live,
-        handler => test_module,
-        opts => #{option => value}
+        handler => test_module
     }},
     ?assertEqual(Expected, CowboyRoute),
     ct:comment("Live route to Cowboy conversion works").

@@ -77,7 +77,7 @@ test_simple_component_rendering(Config) when is_list(Config) ->
     % Start server with simple component
     {ok, _Pid} = arizona_server:start(#{
         port => 8083,
-        routes => [{live, ~"/simple", simple_live_component, #{}}]
+        routes => [{live, ~"/simple", simple_live_component}]
     }),
 
     % Test HTTP request
@@ -93,7 +93,7 @@ test_component_with_layout(Config) when is_list(Config) ->
     % Start server with layout component (test_live_component already has layout)
     {ok, _Pid} = arizona_server:start(#{
         port => 8083,
-        routes => [{live, ~"/layout", test_live_component, #{}}]
+        routes => [{live, ~"/layout", test_live_component}]
     }),
 
     % Test HTTP request
@@ -116,7 +116,7 @@ test_get_request_processing(Config) when is_list(Config) ->
     % Start server with request info component
     {ok, _Pid} = arizona_server:start(#{
         port => 8083,
-        routes => [{live, ~"/request-info", request_info_live_component, #{}}]
+        routes => [{live, ~"/request-info", request_info_live_component}]
     }),
 
     % Test GET request
@@ -134,7 +134,7 @@ test_post_request_processing(Config) when is_list(Config) ->
     % Start server with request info component
     {ok, _Pid} = arizona_server:start(#{
         port => 8083,
-        routes => [{live, ~"/request-info", request_info_live_component, #{}}]
+        routes => [{live, ~"/request-info", request_info_live_component}]
     }),
 
     % Test POST request with body
@@ -154,7 +154,7 @@ test_request_with_query_params(Config) when is_list(Config) ->
     % Start server with request info component
     {ok, _Pid} = arizona_server:start(#{
         port => 8083,
-        routes => [{live, ~"/request-info", request_info_live_component, #{}}]
+        routes => [{live, ~"/request-info", request_info_live_component}]
     }),
 
     % Test request with query parameters
@@ -169,7 +169,7 @@ test_request_with_path_bindings(Config) when is_list(Config) ->
     % Start server with parameterized route
     {ok, _Pid} = arizona_server:start(#{
         port => 8083,
-        routes => [{live, ~"/users/:id", request_info_live_component, #{}}]
+        routes => [{live, ~"/users/:id", request_info_live_component}]
     }),
 
     % Test request with path parameters
@@ -188,7 +188,7 @@ test_nonexistent_module_error(Config) when is_list(Config) ->
     % Start server with nonexistent module
     {ok, _Pid} = arizona_server:start(#{
         port => 8083,
-        routes => [{live, ~"/nonexistent", nonexistent_module, #{}}]
+        routes => [{live, ~"/nonexistent", nonexistent_module}]
     }),
 
     % Test request should return 500
@@ -207,7 +207,7 @@ test_mount_callback_error(Config) when is_list(Config) ->
     % Start server with error component
     {ok, _Pid} = arizona_server:start(#{
         port => 8083,
-        routes => [{live, ~"/mount-error", mount_error_component, #{}}]
+        routes => [{live, ~"/mount-error", mount_error_component}]
     }),
 
     % Test request should return 500
