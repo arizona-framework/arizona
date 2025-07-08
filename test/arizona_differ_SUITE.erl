@@ -598,11 +598,11 @@ diff_list_item_removal(Config) when is_list(Config) ->
     Changes = arizona_socket:get_changes(ResultSocket),
     ExpectedChanges = [
         {root, [
+            {2, ~"2"},
             {3, [
                 [[], [~"<div class=\"item\" data-id=\"", ~"1", ~"\">", ~"Alice", ~"</div>"]],
                 [~"<div class=\"item\" data-id=\"", ~"3", ~"\">", ~"Charlie", ~"</div>"]
-            ]},
-            {2, ~"2"}
+            ]}
         ]}
     ],
     ?assertEqual(ExpectedChanges, Changes).
