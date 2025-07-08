@@ -74,6 +74,9 @@ export class ArizonaHierarchical {
       } else if (element && element.type === 'list') {
         // Render list elements
         elements.push(this.generateListHTML(element));
+      } else if (Array.isArray(element)) {
+        // Handle nested arrays (iodata from server) - flatten recursively
+        elements.push(this.flattenIoData(element));
       } else {
         // Fallback for other types (numbers, etc.)
         elements.push(String(element));
@@ -81,6 +84,40 @@ export class ArizonaHierarchical {
     }
 
     return elements.join('');
+  }
+
+  /**
+   * Flatten nested arrays (iodata from Erlang server) into a single string
+   * This handles the complex nested array structures that come from render_list
+   * and other server-side rendering operations that produce iodata.
+   *
+   * @param {Array|string|number} element - Element to flatten
+   * @returns {string} Flattened string without commas between array elements
+   */
+  flattenIoData(element) {
+    if (typeof element === 'string') {
+      return element;
+    } else if (typeof element === 'number') {
+      return String(element);
+    } else if (Array.isArray(element)) {
+      // Recursively flatten nested arrays
+      return element.map((item) => this.flattenIoData(item)).join('');
+    } else if (element && typeof element === 'object') {
+      // Handle special object types
+      if (element.type === 'stateful') {
+        return this.generateHTML(element.id);
+      } else if (element.type === 'stateless') {
+        return this.generateHTMLFromStructure(element.structure);
+      } else if (element.type === 'list') {
+        return this.generateListHTML(element);
+      } else {
+        // For other objects, try to convert to string
+        return String(element);
+      }
+    } else {
+      // Fallback for null, undefined, etc.
+      return String(element || '');
+    }
   }
 
   /**
@@ -98,6 +135,9 @@ export class ArizonaHierarchical {
       const element = structure[index];
       if (typeof element === 'string') {
         elements.push(element);
+      } else if (Array.isArray(element)) {
+        // Handle nested arrays in stateless structures too
+        elements.push(this.flattenIoData(element));
       } else {
         elements.push(String(element));
       }

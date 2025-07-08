@@ -216,6 +216,106 @@ describe('ArizonaHierarchical', () => {
     });
   });
 
+  describe('iodata flattening (comma issue reproduction)', () => {
+    it('should handle complex nested arrays from server without adding commas', () => {
+      // This reproduces the comma issue seen in todo app
+      // Server sends complex nested HTML structures like this from render_list
+      const complexNestedData = [
+        [
+          [
+            [],
+            [
+              '<div class="todo-item ">',
+              '',
+              '" data-testid="todo-">',
+              '1',
+              '">',
+              'Learn Erlang',
+              '</div>',
+            ],
+          ],
+          [
+            '<div class="todo-item ">',
+            'completed',
+            '" data-testid="todo-">',
+            '2',
+            '">',
+            'Build web app',
+            '</div>',
+          ],
+        ],
+      ];
+
+      client.initialize({
+        root: {
+          0: '<div class="todo-list">',
+          1: 'placeholder',
+          2: '</div>',
+        },
+      });
+
+      // Apply diff with complex nested structure (like from todo app)
+      const changes = [['root', [[1, complexNestedData]]]];
+      client.applyDiff(changes);
+
+      const html = client.generateHTML();
+
+      // Should NOT contain commas like: ",Learn Erlang," or ",Build web app,"
+      expect(html).not.toContain(',Learn Erlang,');
+      expect(html).not.toContain(',Build web app,');
+
+      // Should properly flatten to valid HTML
+      expect(html).toContain('Learn Erlang');
+      expect(html).toContain('Build web app');
+      expect(html).toContain('<div class="todo-list">');
+
+      console.log('Generated HTML with nested arrays:', html);
+    });
+
+    it('should flatten deeply nested arrays recursively', () => {
+      const deeplyNested = [
+        [[['<span>', 'Deep', '</span>']], ['<p>', ['Nested', ' Arrays'], '</p>']],
+      ];
+
+      client.initialize({
+        root: {
+          0: '<div>',
+          1: deeplyNested,
+          2: '</div>',
+        },
+      });
+
+      const html = client.generateHTML();
+
+      // Should flatten properly without commas between array elements
+      expect(html).toBe('<div><span>Deep</span><p>Nested Arrays</p></div>');
+      expect(html).not.toContain(',');
+    });
+
+    it('should handle mixed content types in nested arrays', () => {
+      const mixedContent = [
+        'Start',
+        ['<b>', 'Bold', '</b>'],
+        123,
+        [' and ', ['<i>', 'Italic', '</i>']],
+        ' End',
+      ];
+
+      client.initialize({
+        root: {
+          0: '<div>',
+          1: mixedContent,
+          2: '</div>',
+        },
+      });
+
+      const html = client.generateHTML();
+
+      expect(html).toBe('<div>Start<b>Bold</b>123 and <i>Italic</i> End</div>');
+      expect(html).not.toContain(',');
+    });
+  });
+
   describe('integration scenarios', () => {
     it('should handle complete workflow: initialize -> diff -> generate HTML', () => {
       // Initial structure from server
