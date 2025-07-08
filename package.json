@@ -9,7 +9,7 @@
     "lint:check": "eslint eslint.config.js",
     "format:lint": "npm run format && npm run lint",
     "test": "npm run test:unit && npm run test:e2e",
-    "test:unit": "vitest",
+    "test:unit": "vitest run",
     "test:e2e:check": "node scripts/check-server.js",
     "test:e2e": "npm run test:e2e:check && playwright test --reporter=line",
     "test:e2e:report": "npm run test:e2e:check && playwright test",
