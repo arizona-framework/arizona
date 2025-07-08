@@ -49,6 +49,7 @@ including state management, HTML accumulation, and binding handling.
     test_merge_changes_different_components/1,
     test_merge_nested_changes/1,
     test_merge_changes_edge_cases/1,
+    test_merge_changes_html_data_vs_component_changes/1,
     % Binding management tests
     test_put_binding/1,
     test_put_bindings/1,
@@ -113,7 +114,8 @@ groups() ->
             test_merge_changes_same_component,
             test_merge_changes_different_components,
             test_merge_nested_changes,
-            test_merge_changes_edge_cases
+            test_merge_changes_edge_cases,
+            test_merge_changes_html_data_vs_component_changes
         ]},
         {binding_management_tests, [parallel], [
             test_put_binding,
@@ -486,6 +488,75 @@ test_merge_changes_edge_cases(Config) when is_list(Config) ->
 
     AllChanges = arizona_socket:get_changes(Socket4),
     ?assertMatch([{~"comp1", [{0, ~"second"}]}], AllChanges).
+
+test_merge_changes_html_data_vs_component_changes(Config) when is_list(Config) ->
+    Socket = arizona_socket:new(#{mode => diff}),
+
+    % Test the bug fix: nested HTML data structures should not be treated as component changes
+    % This simulates the todo app scenario where render_list produces complex nested HTML
+
+    % Create complex nested HTML structure like what todo list rendering produces
+    ComplexHtmlData = [
+        [
+            [
+                [],
+                [
+                    ~"<div class=\"todo-item \">",
+                    ~"",
+                    ~"\" data-testid=\"todo-\">",
+                    ~"1",
+                    ~"\">",
+                    ~"Learn Erlang",
+                    ~"</div>"
+                ]
+            ],
+            [
+                ~"<div class=\"todo-item \">",
+                ~"completed",
+                ~"\" data-testid=\"todo-\">",
+                ~"2",
+                ~"\">",
+                ~"Build web app",
+                ~"</div>"
+            ]
+        ]
+    ],
+
+    % This should not crash when merging changes with complex HTML data
+    Changes1 = [{root, [{3, ComplexHtmlData}]}],
+    Socket2 = arizona_socket:append_changes(Changes1, Socket),
+
+    % Add another change to the same element with different HTML data
+    NewHtmlData = [
+        [
+            ~"<div class=\"todo-item\">", ~"Updated todo", ~"</div>"
+        ]
+    ],
+    Changes2 = [{root, [{3, NewHtmlData}]}],
+    Socket3 = arizona_socket:append_changes(Changes2, Socket2),
+
+    % Should succeed without function_clause error
+    AllChanges = arizona_socket:get_changes(Socket3),
+    ?assertEqual(1, length(AllChanges)),
+
+    % Verify the last change overwrote the previous one (new change precedence)
+    [{root, ElementChanges}] = AllChanges,
+    ?assertEqual(1, length(ElementChanges)),
+    [{3, FinalHtmlData}] = ElementChanges,
+    ?assertEqual(NewHtmlData, FinalHtmlData),
+
+    % Test with mix of component changes and HTML data
+    ComponentChanges = [{nested_comp, [{0, ~"simple value"}]}],
+    MixedChanges = [{different_root, [{1, ~"simple binary"}, {2, ComponentChanges}]}],
+    Socket4 = arizona_socket:append_changes(MixedChanges, Socket3),
+
+    % Should handle mixed data types without crashing
+    FinalChanges = arizona_socket:get_changes(Socket4),
+    % root and different_root components
+    ?assertEqual(2, length(FinalChanges)),
+
+    % Verify the structure is correct
+    ?assertMatch([{root, _}, {different_root, _}], FinalChanges).
 
 %% --------------------------------------------------------------------
 %% Binding Management Tests
