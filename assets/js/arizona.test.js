@@ -44,18 +44,18 @@ describe('ArizonaClient', () => {
       client.connect();
 
       expect(client.worker).toBeInstanceOf(Worker);
-      expect(client.worker.scriptURL).toBe('assets/js/arizona-worker.js');
+      expect(client.worker.scriptURL).toBe('/assets/js/arizona-worker.min.js');
       expect(client.worker.options).toEqual({ type: 'module' });
 
       const postedMessage = client.worker.getLastPostedMessage();
       expect(postedMessage).toEqual({
         type: 'connect',
-        data: { url: 'ws://localhost:3000/live?path=%2Fusers' },
+        data: { url: 'ws://localhost:3000/live/websocket?path=%2Fusers' },
       });
     });
 
     test('uses custom WebSocket path', () => {
-      client.connect('/custom/ws');
+      client.connect({ wsPath: '/custom/ws' });
 
       const postedMessage = client.worker.getLastPostedMessage();
       expect(postedMessage.data.url).toBe('ws://localhost:3000/custom/ws?path=%2Fusers');
@@ -66,7 +66,7 @@ describe('ArizonaClient', () => {
       client.connect();
 
       const postedMessage = client.worker.getLastPostedMessage();
-      expect(postedMessage.data.url).toBe('wss://localhost:3000/live?path=%2Fusers');
+      expect(postedMessage.data.url).toBe('wss://localhost:3000/live/websocket?path=%2Fusers');
 
       // Reset for other tests
       window.location.protocol = 'http:';

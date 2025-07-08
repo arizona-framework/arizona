@@ -8,7 +8,6 @@ export default class ArizonaClient {
     this.worker = null;
     this.connected = false;
     this.hierarchical = new ArizonaHierarchical();
-    this.targetSelector = '[data-arizona-root]';
   }
 
   connect(opts = {}) {
@@ -124,23 +123,19 @@ export default class ArizonaClient {
   }
 
   applyHtmlPatch(patch) {
-    const target = document.querySelector(patch.selector || this.targetSelector);
+    const target = document.getElementById(patch.statefulId);
 
     if (!target) {
-      console.warn(`[Arizona] Target element not found: ${patch.selector || this.targetSelector}`);
+      console.warn(`[Arizona] Target element not found: ${patch.statefulId}`);
       return;
     }
 
     try {
       // Use Morphdom to efficiently patch the DOM
       morphdom(target, patch.html, {
-        // childrenOnly: true,
         onBeforeElUpdated(fromEl, toEl) {
           // Skip update if nodes are identical
-          if (fromEl.isEqualNode(toEl)) {
-            return false;
-          }
-          return true;
+          return !fromEl.isEqualNode(toEl);
         },
       });
 
@@ -149,10 +144,7 @@ export default class ArizonaClient {
       // Trigger custom event for other code to listen to
       target.dispatchEvent(
         new CustomEvent('arizona:patched', {
-          detail: {
-            patch,
-            timestamp: patch.timestamp,
-          },
+          detail: { patch },
         })
       );
     } catch (error) {
@@ -176,9 +168,5 @@ export default class ArizonaClient {
 
   isConnected() {
     return this.connected;
-  }
-
-  setTargetSelector(selector) {
-    this.targetSelector = selector;
   }
 }

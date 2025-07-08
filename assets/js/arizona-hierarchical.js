@@ -199,30 +199,28 @@ export class ArizonaHierarchical {
   /**
    * Create a patch object that can be sent to arizona.js for DOM updating
    * This is used by the worker to send structured data to the main thread
-   * @param {string} targetSelector - CSS selector for the target element
-   * @param {string} componentId - Component ID to render (defaults to 'root')
-   * @returns {Object} Patch object with selector and HTML
+   * @param {string} statefulId - Stateful ID to render (defaults to 'root')
+   * @returns {Object} Patch object with statefulId and HTML
    */
-  createPatch(targetSelector = '[data-arizona-root]', componentId = 'root') {
+  createPatch(statefulId = 'root') {
     return {
       type: 'html_patch',
-      selector: targetSelector,
-      html: this.generateHTML(componentId),
+      statefulId: statefulId,
+      html: this.generateHTML(statefulId),
       timestamp: Date.now(),
     };
   }
 
   /**
    * Create an initial render patch (used on first load)
-   * @param {string} targetSelector - CSS selector for the target element
-   * @param {string} componentId - Component ID to render (defaults to 'root')
+   * @param {string} statefulId - Stateful ID to render (defaults to 'root')
    * @returns {Object} Initial render patch object
    */
-  createInitialPatch(targetSelector = '[data-arizona-root]', componentId = 'root') {
+  createInitialPatch(statefulId = 'root') {
     return {
       type: 'initial_render',
-      selector: targetSelector,
-      html: this.generateHTML(componentId),
+      statefulId: statefulId,
+      html: this.generateHTML(statefulId),
       structure: this.getStructure(),
       timestamp: Date.now(),
     };

@@ -216,27 +216,21 @@ extract_list_item_parameter_name(ListItemFunction) when is_function(ListItemFunc
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 render_live(Template, Socket) ->
-    % First render the live content
-    SocketWithLiveContent = render_stateful(Template, Socket),
-
     % Check if layout is configured
     case arizona_socket:get_layout(Socket) of
         undefined ->
             % No layout, return live content directly
-            SocketWithLiveContent;
+            render_stateful(Template, Socket);
         {LayoutModule, LayoutRenderFun, SlotName} ->
             % Layout configured, inject live content into layout
             case arizona_socket:get_mode(Socket) of
                 render ->
-                    % Get the rendered live content
-                    LiveContent = arizona_socket:get_html(SocketWithLiveContent),
-
                     % Put the live content as the specified slot binding
                     SocketWithSlot = arizona_socket:put_bindings(
                         #{
-                            SlotName => LiveContent
+                            SlotName => {stateful, Template}
                         },
-                        SocketWithLiveContent
+                        Socket
                     ),
 
                     % Render the layout with the live content injected
@@ -245,10 +239,10 @@ render_live(Template, Socket) ->
                     );
                 diff ->
                     % When diffing, we only return the live content changes
-                    SocketWithLiveContent;
+                    render_stateful(Template, Socket);
                 hierarchical ->
                     % When in hierarchical mode, accumulate structure without layout processing
-                    SocketWithLiveContent
+                    render_stateful(Template, Socket)
             end
     end.
 
@@ -300,12 +294,13 @@ render_slot_content_smart(Content, Socket) ->
 render_slot_content(Html, Socket) when is_binary(Html) ->
     CurrentHtml = arizona_socket:get_html(Socket),
     arizona_socket:set_html_acc([CurrentHtml, Html], Socket);
-render_slot_content({stateless, ParsedTemplate}, Socket) when is_list(ParsedTemplate) ->
-    % Handle parse-transform optimized stateless template
-    arizona_html:render_stateless(ParsedTemplate, Socket);
+render_slot_content({stateless, Template}, Socket) ->
+    render_stateless(Template, Socket);
 render_slot_content({stateless, Mod, Fun, Bindings}, Socket) ->
     SocketWithTempBindings = arizona_socket:with_temp_bindings(Bindings, Socket),
     arizona_stateless:call_render_callback(Mod, Fun, SocketWithTempBindings);
+render_slot_content({stateful, Template}, Socket) ->
+    render_stateful(Template, Socket);
 render_slot_content({stateful, Module, Bindings}, Socket) ->
     SocketWithBindings = arizona_socket:put_bindings(Bindings, Socket),
     arizona_stateful:call_render_callback(Module, SocketWithBindings).
