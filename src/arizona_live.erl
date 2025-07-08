@@ -4,6 +4,7 @@
 %% API
 -export([start_link/2]).
 -export([mount/2, render/1, handle_event/3]).
+-export([set_mode/2]).
 
 %% Callback wrapper functions
 -export([call_mount_callback/3, call_render_callback/2]).
@@ -64,6 +65,12 @@ mount(Pid, Req) ->
     Socket :: arizona_socket:socket().
 render(Pid) ->
     gen_server:call(Pid, render).
+
+-spec set_mode(Pid, Mode) -> ok when
+    Pid :: pid(),
+    Mode :: arizona_socket:mode().
+set_mode(Pid, Mode) ->
+    gen_server:cast(Pid, {set_mode, Mode}).
 
 -spec handle_event(Pid, Event, Params) -> {noreply, Socket} | {reply, Reply, Socket} when
     Pid :: pid(),
@@ -152,6 +159,9 @@ handle_call(
 -spec handle_cast(Request, State) -> {noreply, State} when
     Request :: term(),
     State :: state().
+handle_cast({set_mode, Mode}, #state{socket = Socket} = State) ->
+    Socket1 = arizona_socket:set_mode(Mode, Socket),
+    {noreply, State#state{socket = Socket1}};
 handle_cast(_Request, State) ->
     {noreply, State}.
 

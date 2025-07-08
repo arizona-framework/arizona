@@ -43,9 +43,11 @@ init(Req, _State) ->
 websocket_init({LiveModule, Req}) ->
     % Create initial Arizona socket in hierarchical mode
     Socket = arizona_socket:new(#{mode => hierarchical}),
+    StatefulState = arizona_stateful:new(root, LiveModule, #{}),
+    Socket1 = arizona_socket:put_stateful_state(StatefulState, Socket),
 
     % Start the LiveView process
-    {ok, LivePid} = arizona_live:start_link(LiveModule, Socket),
+    {ok, LivePid} = arizona_live:start_link(LiveModule, Socket1),
 
     % Mount the LiveView
     _MountedSocket = arizona_live:mount(LivePid, Req),
@@ -59,6 +61,8 @@ websocket_init({LiveModule, Req}) ->
         type => ~"initial_render",
         structure => HierarchicalStructure
     }),
+
+    ok = arizona_live:set_mode(LivePid, diff),
 
     State = #state{live_pid = LivePid},
 
@@ -115,17 +119,18 @@ handle_event_message(Message, #state{live_pid = LivePid} = State) ->
     Socket :: arizona_socket:socket(),
     State :: state(),
     Result :: call_result().
-handle_noreply_response(UpdatedSocket, State) ->
-    Changes = arizona_socket:get_changes(UpdatedSocket),
-    case Changes of
+handle_noreply_response(_UpdatedSocket, #state{live_pid = LivePid} = State) ->
+    DiffSocket = arizona_live:render(LivePid),
+    case arizona_socket:get_changes(DiffSocket) of
         [] ->
             {[], State};
-        _ ->
-            DiffPayload = json:encode(#{
+        DiffChanges ->
+            DiffPayload = arizona_differ:to_json(#{
                 type => ~"diff",
-                changes => Changes
+                changes => DiffChanges
             }),
-            _ClearedSocket = arizona_socket:clear_changes(UpdatedSocket),
+            % TODO: Clear live_pid socket changes
+            _ClearedSocket = arizona_socket:clear_changes(DiffSocket),
             {[{text, DiffPayload}], State}
     end.
 
@@ -135,22 +140,23 @@ handle_noreply_response(UpdatedSocket, State) ->
     Socket :: arizona_socket:socket(),
     State :: state(),
     Result :: call_result().
-handle_reply_response(Reply, UpdatedSocket, State) ->
+handle_reply_response(Reply, _UpdatedSocket, #state{live_pid = LivePid} = State) ->
     ReplyPayload = json:encode(#{
         type => ~"reply",
         data => Reply
     }),
 
-    Changes = arizona_socket:get_changes(UpdatedSocket),
-    case Changes of
+    DiffSocket = arizona_live:render(LivePid),
+    case arizona_socket:get_changes(DiffSocket) of
         [] ->
             {[{text, ReplyPayload}], State};
-        _ ->
-            DiffPayload = json:encode(#{
+        DiffChanges ->
+            DiffPayload = arizona_differ:to_json(#{
                 type => ~"diff",
-                changes => Changes
+                changes => DiffChanges
             }),
-            _ClearedSocket = arizona_socket:clear_changes(UpdatedSocket),
+            % TODO: Clear live_pid socket changes
+            _ClearedSocket = arizona_socket:clear_changes(DiffSocket),
             {[{text, ReplyPayload}, {text, DiffPayload}], State}
     end.
 

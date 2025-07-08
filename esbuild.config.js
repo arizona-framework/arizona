@@ -8,6 +8,7 @@ Promise.all([
     bundle: true,
     minify: true,
     sourcemap: true,
+    format: 'esm',
   }),
   esbuild.build({
     entryPoints: ['./assets/js/arizona-worker.js'],
@@ -15,6 +16,7 @@ Promise.all([
     bundle: true,
     minify: true,
     sourcemap: true,
+    format: 'esm',
   }),
 ]).catch((error) => {
   console.error(error);

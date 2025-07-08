@@ -1,6 +1,6 @@
 // ArizonaClient tests
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
-import { ArizonaClient } from './arizona.js';
+import ArizonaClient from './arizona.js';
 import MockWorker from './__mocks__/Worker.js';
 import MockWebSocket from './__mocks__/WebSocket.js';
 

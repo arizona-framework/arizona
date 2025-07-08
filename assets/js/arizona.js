@@ -3,7 +3,7 @@ import morphdom from 'morphdom';
 import ArizonaHierarchical from './arizona-hierarchical.js';
 
 // Arizona Client API
-export class ArizonaClient {
+export default class ArizonaClient {
   constructor() {
     this.worker = null;
     this.connected = false;
@@ -11,10 +11,13 @@ export class ArizonaClient {
     this.targetSelector = '[data-arizona-root]';
   }
 
-  connect(wsPath = '/live') {
+  connect(opts = {}) {
     if (this.connected) return;
 
-    this.worker = new Worker('assets/js/arizona-worker.js', { type: 'module' });
+    const wsPath = opts.wsPath || '/live/websocket';
+    const workerPath = opts.workerPath || '/assets/js/arizona-worker.min.js';
+
+    this.worker = new Worker(workerPath, { type: 'module' });
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
@@ -131,8 +134,8 @@ export class ArizonaClient {
     try {
       // Use Morphdom to efficiently patch the DOM
       morphdom(target, patch.html, {
-        childrenOnly: true,
-        onBeforeElUpdated: function (fromEl, toEl) {
+        // childrenOnly: true,
+        onBeforeElUpdated(fromEl, toEl) {
           // Skip update if nodes are identical
           if (fromEl.isEqualNode(toEl)) {
             return false;
@@ -147,7 +150,7 @@ export class ArizonaClient {
       target.dispatchEvent(
         new CustomEvent('arizona:patched', {
           detail: {
-            patch: patch,
+            patch,
             timestamp: patch.timestamp,
           },
         })

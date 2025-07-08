@@ -1,7 +1,7 @@
 -module(arizona_socket).
 
 -export([new/1, is_socket/1]).
--export([get_mode/1]).
+-export([get_mode/1, set_mode/2]).
 -export([get_current_stateful_id/1]).
 -export([get_current_stateful_state/1]).
 -export([get_stateful_states/1]).
@@ -73,6 +73,13 @@ is_socket(_) -> false.
     Mode :: mode().
 get_mode(#socket{} = Socket) ->
     Socket#socket.mode.
+
+-spec set_mode(Mode, Socket) -> Socket1 when
+    Mode :: mode(),
+    Socket :: socket(),
+    Socket1 :: socket().
+set_mode(Mode, #socket{} = Socket) when Mode =:= render; Mode =:= diff; Mode =:= hierarchical ->
+    Socket#socket{mode = Mode}.
 
 -spec get_current_stateful_id(Socket) -> Id when
     Socket :: socket(),

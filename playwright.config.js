@@ -9,7 +9,7 @@ export default defineConfig({
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
-  forbidOnly: !!process.env.CI,
+  forbidOnly: Boolean(process.env.CI),
   /* Retry on CI only */
   retries: process.env.CI ? 2 : 0,
   /* Opt out of parallel tests on CI. */
@@ -24,6 +24,9 @@ export default defineConfig({
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: 'on-first-retry',
   },
+
+  /* Global timeout for each test */
+  timeout: 10000,
 
   /* Configure projects for major browsers */
   projects: [
@@ -64,22 +67,13 @@ export default defineConfig({
   ],
 
   /* Run your local dev server before starting the tests */
-  webServer: {
-    command: `rebar3 as test shell --eval "
-      Routes = [
-          {live, ~\\"/test/counter\\", test_counter_live},
-          {live_websocket, ~\\"/live/websocket\\"},
-          {static, ~\\"/assets/[...]\\", {priv_dir, arizona, ~\\"static/assets\\"}}
-      ],
-      {ok, _} = arizona_server:start(#{port => 8080, routes => Routes}),
-      STDOUT = erlang:open_port({fd, 0, 1}, [out]),
-      erlang:port_command(STDOUT, \\\"Arizona test server started on port 8080\\\\n\\\"),
-      timer:sleep(infinity).
-    "`,
-    url: 'http://localhost:8080/test/counter',
-    reuseExistingServer: !process.env.CI,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    timeout: 60000,
-  },
+  // webServer: {
+  //   command: `rebar3 as test shell --eval "arizona_test_server:start()."`,
+  //   url: 'http://localhost:8080/test/counter',
+  //   reuseExistingServer: !process.env.CI,
+  //   stdout: 'pipe',
+  //   stderr: 'pipe',
+  //   timeout: 15000,
+  //   kill: { SIGTERM: 5000 },
+  // },
 });

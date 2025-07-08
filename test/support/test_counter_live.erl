@@ -6,30 +6,17 @@
 
 % Simple counter component for E2E testing
 mount(_Params, Socket) ->
-    arizona_socket:put_binding(count, 0, Socket).
+    Socket1 = arizona_socket:put_binding(count, 0, Socket),
+    arizona_socket:set_layout({test_counter_layout, render, main_content}, Socket1).
 
 render(Socket) ->
     arizona_html:render_live(~"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Arizona Test Counter</title>
-        <script src="/assets/js/arizona.min.js"></script>
-    </head>
-    <body>
-        <div id="arizona-root" data-arizona-root>
-            <div class="counter-container">
-                <h1>Counter: <span data-testid="count">{arizona_socket:get_binding(count, Socket)}</span></h1>
-                <button data-testid="increment" onclick="arizona.sendEvent('increment')">+</button>
-                <button data-testid="decrement" onclick="arizona.sendEvent('decrement')">-</button>
-                <button data-testid="reset" onclick="arizona.sendEvent('reset')">Reset</button>
-            </div>
-        </div>
-        <script>
-            arizona.init();
-        </script>
-    </body>
-    </html>
+    <div id="root">
+        <h1>Counter: <span data-testid="count">{arizona_socket:get_binding(count, Socket)}</span></h1>
+        <button data-testid="increment" onclick="arizona.sendEvent('increment')">+</button>
+        <button data-testid="decrement" onclick="arizona.sendEvent('decrement')">-</button>
+        <button data-testid="reset" onclick="arizona.sendEvent('reset')">Reset</button>
+    </div>
     """, Socket).
 
 handle_event(~"increment", _Payload, Socket) ->
