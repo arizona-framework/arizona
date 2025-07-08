@@ -136,7 +136,7 @@ scan(Rest, Bin, State) ->
 scan(Input, Bin, Len, TextState, State) ->
     case scan_next(Input, Bin, Len, State) of
         {escape, Rest, NewBin, NewLen} ->
-            scan(Rest, NewBin, NewLen, TextState, State);
+            scan(Rest, NewBin, NewLen, reset_pos(TextState), reset_pos(State));
         {expression, Rest, ExprState} ->
             ExprTokens = scan_expr(Rest, Bin, ExprState),
             maybe_prepend_text_token(Bin, Len, TextState, ExprTokens);
@@ -149,7 +149,8 @@ scan(Input, Bin, Len, TextState, State) ->
 scan_next(<<$\\, ${, Rest/binary>>, Bin0, Len, State) ->
     % Handle escaped brace
     PrefixBin = binary_part(Bin0, State#state.position, Len),
-    SuffixBin = binary:part(Bin0, Len + 2, byte_size(Bin0) - Len - 2),
+    SuffixPos = State#state.position + Len + 2,
+    SuffixBin = binary:part(Bin0, SuffixPos, byte_size(Bin0) - SuffixPos),
     NewBin = <<PrefixBin/binary, ${, SuffixBin/binary>>,
     {escape, Rest, NewBin, Len + 1};
 scan_next(<<${, Rest/binary>>, _Bin, Len, State) ->
@@ -351,3 +352,6 @@ new_line(#state{line = Ln} = State) ->
 %% Update byte position in the original binary
 incr_pos(N, #state{position = Pos} = State) ->
     State#state{position = Pos + N}.
+
+reset_pos(State) ->
+    State#state{position = 0}.

@@ -30,7 +30,8 @@ groups() ->
             scan_whitespace_normalization_edge_cases,
             scan_trailing_whitespace_edge_cases,
             scan_empty_binary_reverse,
-            scan_remaining_trim_branches
+            scan_remaining_trim_branches,
+            scan_html_attribute_quote_preservation
         ]}
     ].
 
@@ -40,26 +41,26 @@ groups() ->
 
 scan(Config) when is_list(Config) ->
     Expect = [
-        {comment, 65, ~"start"},
-        {static, 66, ~"Text1 "},
-        {dynamic, 67, ~"{{{expr1}}}"},
-        {comment, 68, ~"before text"},
-        {static, 68, ~"Text2\nText3"},
-        {comment, 69, ~"after text"},
-        {comment, 70, ~"before expr"},
-        {dynamic, 70, ~"expr2"},
-        {dynamic, 71, ~"expr3"},
-        {comment, 71, ~"after expr"},
-        {static, 72, ~"Text4"},
-        {comment, 72, ~"between text"},
-        {static, 72, ~"Text5 "},
-        {dynamic, 73, ~"expr4"},
-        {comment, 73, ~"between expr"},
-        {dynamic, 73, ~"expr5"},
-        {comment, 74, ~"mutiple\nlines of\ncomment"},
-        {dynamic, 77, ~"expr6"},
-        {dynamic, 77, ~"Foo = foo, case Foo of foo -> {foo, expr7}; _ -> expr7 end"},
-        {comment, 78, ~"end"}
+        {comment, 66, ~"start"},
+        {static, 67, ~"Text1 "},
+        {dynamic, 68, ~"{{{expr1}}}"},
+        {comment, 69, ~"before text"},
+        {static, 69, ~"Text2\nText3"},
+        {comment, 70, ~"after text"},
+        {comment, 71, ~"before expr"},
+        {dynamic, 71, ~"expr2"},
+        {dynamic, 72, ~"expr3"},
+        {comment, 72, ~"after expr"},
+        {static, 73, ~"Text4"},
+        {comment, 73, ~"between text"},
+        {static, 73, ~"Text5 "},
+        {dynamic, 74, ~"expr4"},
+        {comment, 74, ~"between expr"},
+        {dynamic, 74, ~"expr5"},
+        {comment, 75, ~"mutiple\nlines of\ncomment"},
+        {dynamic, 78, ~"expr6"},
+        {dynamic, 78, ~"Foo = foo, case Foo of foo -> {foo, expr7}; _ -> expr7 end"},
+        {comment, 79, ~"end"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
     {%   start  }
@@ -102,9 +103,9 @@ scan_comment(Config) when is_list(Config) ->
 
 scan_start_static_end_static(Config) when is_list(Config) ->
     Expect = [
-        {static, 110, ~"Text1\nText2"},
-        {dynamic, 111, ~"expr1"},
-        {static, 111, ~"Text3\nText4"}
+        {static, 111, ~"Text1\nText2"},
+        {dynamic, 112, ~"expr1"},
+        {static, 112, ~"Text3\nText4"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
     Text1
@@ -115,10 +116,10 @@ scan_start_static_end_static(Config) when is_list(Config) ->
 
 scan_start_static_end_dynamic(Config) when is_list(Config) ->
     Expect = [
-        {static, 124, ~"Text1\nText2"},
-        {dynamic, 125, ~"expr1"},
-        {static, 125, ~"Text3\nText4 "},
-        {dynamic, 127, ~"expr2"}
+        {static, 125, ~"Text1\nText2"},
+        {dynamic, 126, ~"expr1"},
+        {static, 126, ~"Text3\nText4 "},
+        {dynamic, 128, ~"expr2"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
     Text1
@@ -130,10 +131,10 @@ scan_start_static_end_dynamic(Config) when is_list(Config) ->
 
 scan_start_dynamic_end_static(Config) when is_list(Config) ->
     Expect = [
-        {dynamic, 139, ~"expr1"},
-        {static, 140, ~"Text1\nText2"},
-        {dynamic, 141, ~"expr2"},
-        {static, 141, ~"Text3\nText4"}
+        {dynamic, 140, ~"expr1"},
+        {static, 141, ~"Text1\nText2"},
+        {dynamic, 142, ~"expr2"},
+        {static, 142, ~"Text3\nText4"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
     {expr1}
@@ -145,11 +146,11 @@ scan_start_dynamic_end_static(Config) when is_list(Config) ->
 
 scan_start_dynamic_end_dynamic(Config) when is_list(Config) ->
     Expect = [
-        {dynamic, 155, ~"expr1"},
-        {static, 156, ~"Text1\nText2"},
-        {dynamic, 157, ~"expr2"},
-        {static, 157, ~"Text3\nText4 "},
-        {dynamic, 159, ~"expr3"}
+        {dynamic, 156, ~"expr1"},
+        {static, 157, ~"Text1\nText2"},
+        {dynamic, 158, ~"expr2"},
+        {static, 158, ~"Text3\nText4 "},
+        {dynamic, 160, ~"expr3"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
     {expr1}
@@ -345,3 +346,44 @@ scan_remaining_trim_branches(Config) when is_list(Config) ->
     Template11 = ~"\n\r\n   \r",
     Got11 = arizona_scanner:scan(#{}, Template11),
     ?assertMatch([], Got11).
+
+scan_html_attribute_quote_preservation(Config) when is_list(Config) ->
+    % Test case for the HTML attribute quote preservation bug
+    % When scanning value="{expr}" onkeyup="...", the closing quote after {expr} should be preserved
+    Template = ~"""
+    <input
+        class="new-todo"
+        placeholder="What needs to be done?"
+        data-testid="new-todo-input"
+        value="{arizona_socket:get_binding(new_todo_text, Socket)}"
+        onkeyup="if(event.key === 'Enter') arizona.sendEvent('add_todo');
+                 else arizona.sendEvent('update_new_todo', \{value: event.target.value})"
+    />
+    """,
+    % Expected: The static part after the dynamic expression should start with a quote
+    % to close the value attribute properly
+    Expected = [
+        {static, 1, ~"""
+        <input
+            class="new-todo"
+            placeholder="What needs to be done?"
+            data-testid="new-todo-input"
+            value="
+        """},
+        {dynamic, 5, ~"arizona_socket:get_binding(new_todo_text, Socket)"},
+        {static, 5, ~"""
+        "
+            onkeyup="if(event.key === 'Enter') arizona.sendEvent('add_todo');
+                     else arizona.sendEvent('update_new_todo', {value: event.target.value})"
+        />
+        """}
+    ],
+    Got = arizona_scanner:scan(#{}, Template),
+    ?assertEqual(Expected, Got),
+
+    Template1 = ~"""
+    \{\{\{\{foo}}}}bar
+    """,
+    Expected1 = [{static, 1, ~"{{{{foo}}}}bar"}],
+    Got1 = arizona_scanner:scan(#{}, Template1),
+    ?assertEqual(Expected1, Got1).
