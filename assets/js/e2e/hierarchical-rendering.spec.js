@@ -1,6 +1,37 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Arizona Hierarchical Rendering', () => {
+  // Helper function to wait for condition with retry attempts
+  const waitForCondition = async (checkFn, maxAttempts = 30, delayMs = 100) => {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (await checkFn()) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    throw new Error(`Condition not met after ${maxAttempts} attempts`);
+  };
+
+  // Helper function to collect WebSocket messages of specific type
+  const collectWebSocketMessages = (page, messageType) => {
+    const messages = [];
+
+    page.on('websocket', (ws) => {
+      ws.on('framereceived', (event) => {
+        try {
+          const data = JSON.parse(event.payload);
+          if (data.type === messageType) {
+            messages.push(data);
+          }
+        } catch (e) {
+          // Non-JSON messages are OK
+        }
+      });
+    });
+
+    return messages;
+  };
+
   test('should load counter page and display initial state', async ({ page }) => {
     await page.goto('/test/counter');
 
@@ -9,53 +40,40 @@ test.describe('Arizona Hierarchical Rendering', () => {
     await expect(page.getByTestId('increment')).toBeVisible();
     await expect(page.getByTestId('decrement')).toBeVisible();
     await expect(page.getByTestId('reset')).toBeVisible();
+
+    // Verify only one counter container exists (no duplication)
+    const counterContainers = page.locator('#root');
+    await expect(counterContainers).toHaveCount(1);
   });
 
   test('should establish WebSocket connection and receive initial hierarchical structure', async ({
     page,
   }) => {
-    // Listen for WebSocket messages
-    const messages = [];
-    page.on('websocket', (ws) => {
-      ws.on('framereceived', (event) => {
-        try {
-          const data = JSON.parse(event.payload);
-          messages.push(data);
-        } catch (e) {
-          // Non-JSON messages are OK
-        }
-      });
-    });
+    const initialMessages = collectWebSocketMessages(page, 'initial_render');
 
     await page.goto('/test/counter');
 
-    // Wait for WebSocket connection and initial message
-    await page.waitForTimeout(1000);
+    // Wait for initial render message to arrive
+    await waitForCondition(() => initialMessages.length > 0);
 
-    // Check that we received an initial_render message with structure
-    const initialMessage = messages.find((msg) => msg.type === 'initial_render');
+    const initialMessage = initialMessages[0];
     expect(initialMessage).toBeTruthy();
     expect(initialMessage.structure).toBeDefined();
+    expect(initialMessage.structure.root).toBeDefined();
+    expect(typeof initialMessage.structure.root).toBe('object');
+
+    // Verify the structure contains expected elements
+    const rootStructure = initialMessage.structure.root;
+    const hasCountElement = Object.values(rootStructure).some(
+      (element) => typeof element === 'string' && element.includes('data-testid="count"')
+    );
+    expect(hasCountElement).toBe(true);
   });
 
   test('should update counter via WebSocket and verify hierarchical diff updates', async ({
     page,
   }) => {
-    let diffMessages = [];
-
-    // Capture WebSocket diff messages
-    page.on('websocket', (ws) => {
-      ws.on('framereceived', (event) => {
-        try {
-          const data = JSON.parse(event.payload);
-          if (data.type === 'diff') {
-            diffMessages.push(data);
-          }
-        } catch (e) {
-          // Ignore non-JSON
-        }
-      });
-    });
+    const diffMessages = collectWebSocketMessages(page, 'diff');
 
     await page.goto('/test/counter');
 
@@ -68,23 +86,25 @@ test.describe('Arizona Hierarchical Rendering', () => {
     // Verify UI updated
     await expect(page.getByTestId('count')).toHaveText('1');
 
-    // Wait for WebSocket diff message
-    await page.waitForTimeout(500);
-
-    // Verify we received a diff update
-    expect(diffMessages.length).toBeGreaterThan(0);
+    // Wait for WebSocket diff message using helper
+    await waitForCondition(() => diffMessages.length > 0);
 
     const diffMessage = diffMessages[0];
     expect(diffMessage.type).toBe('diff');
     expect(diffMessage.changes).toBeDefined();
+    expect(Array.isArray(diffMessage.changes)).toBe(true);
 
     // Verify the diff contains hierarchical structure changes
     // Should be in format: [["component_id", [[element_index, new_value]]]]
-    expect(Array.isArray(diffMessage.changes)).toBe(true);
+    expect(diffMessage.changes.length).toBeGreaterThan(0);
+
+    const [componentId, elementChanges] = diffMessage.changes[0];
+    expect(typeof componentId).toBe('string');
+    expect(Array.isArray(elementChanges)).toBe(true);
   });
 
   test('should handle multiple rapid updates with hierarchical diffs', async ({ page }) => {
-    let allDiffMessages = [];
+    const allDiffMessages = [];
 
     page.on('websocket', (ws) => {
       ws.on('framereceived', (event) => {
@@ -94,7 +114,7 @@ test.describe('Arizona Hierarchical Rendering', () => {
             allDiffMessages.push(data);
           }
         } catch (e) {
-          // Ignore
+          // Ignore non-JSON
         }
       });
     });
@@ -102,19 +122,19 @@ test.describe('Arizona Hierarchical Rendering', () => {
     await page.goto('/test/counter');
     await expect(page.getByTestId('count')).toHaveText('0');
 
-    // Perform multiple rapid increments
+    // Perform multiple rapid increments with smaller delays
     for (let i = 0; i < 5; i++) {
       await page.getByTestId('increment').click();
-      await page.waitForTimeout(100);
+      await page.waitForTimeout(50); // Reduced timeout for faster execution
     }
 
     // Verify final state
     await expect(page.getByTestId('count')).toHaveText('5');
 
-    // Wait for all WebSocket messages
-    await page.waitForTimeout(1000);
+    // Wait a bit for all WebSocket messages to arrive
+    await page.waitForTimeout(500);
 
-    // Verify we received multiple diff messages
+    // Verify we received diff messages
     expect(allDiffMessages.length).toBeGreaterThan(0);
 
     // Each diff should contain properly formatted hierarchical changes
@@ -143,20 +163,7 @@ test.describe('Arizona Hierarchical Rendering', () => {
   });
 
   test('should reset counter and verify hierarchical diff structure', async ({ page }) => {
-    let resetDiffMessage = null;
-
-    page.on('websocket', (ws) => {
-      ws.on('framereceived', (event) => {
-        try {
-          const data = JSON.parse(event.payload);
-          if (data.type === 'diff') {
-            resetDiffMessage = data;
-          }
-        } catch (e) {
-          // Ignore
-        }
-      });
-    });
+    const resetDiffMessages = collectWebSocketMessages(page, 'diff');
 
     await page.goto('/test/counter');
 
@@ -165,8 +172,8 @@ test.describe('Arizona Hierarchical Rendering', () => {
     await page.getByTestId('increment').click();
     await expect(page.getByTestId('count')).toHaveText('2');
 
-    // Clear previous messages
-    resetDiffMessage = null;
+    // Clear previous diff messages by counting current ones
+    const initialDiffCount = resetDiffMessages.length;
 
     // Reset counter
     await page.getByTestId('reset').click();
@@ -174,10 +181,11 @@ test.describe('Arizona Hierarchical Rendering', () => {
     // Verify UI reset
     await expect(page.getByTestId('count')).toHaveText('0');
 
-    // Wait for WebSocket message
-    await page.waitForTimeout(500);
+    // Wait for new diff message after reset
+    await waitForCondition(() => resetDiffMessages.length > initialDiffCount);
 
-    // Verify reset generated a proper hierarchical diff
+    const resetDiffMessage = resetDiffMessages[resetDiffMessages.length - 1]; // Get latest message
+
     expect(resetDiffMessage).toBeTruthy();
     expect(resetDiffMessage.type).toBe('diff');
     expect(Array.isArray(resetDiffMessage.changes)).toBe(true);
@@ -192,5 +200,21 @@ test.describe('Arizona Hierarchical Rendering', () => {
     // Should contain element change with "0" value
     const hasZeroValue = elementChanges.some(([index, value]) => value === '0');
     expect(hasZeroValue).toBe(true);
+  });
+
+  test('should handle decrement operations correctly', async ({ page }) => {
+    await page.goto('/test/counter');
+
+    // First increment to 1
+    await page.getByTestId('increment').click();
+    await expect(page.getByTestId('count')).toHaveText('1');
+
+    // Then decrement back to 0
+    await page.getByTestId('decrement').click();
+    await expect(page.getByTestId('count')).toHaveText('0');
+
+    // Verify we can go negative
+    await page.getByTestId('decrement').click();
+    await expect(page.getByTestId('count')).toHaveText('-1');
   });
 });
