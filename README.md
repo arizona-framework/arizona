@@ -12,7 +12,9 @@ Use it at your own risk, as the API may change at any time.
 
 ## Overview
 
-Arizona provides a complete LiveView framework with hierarchical rendering, real-time WebSocket updates, and stateful/stateless component architecture. It features compile-time template optimization and surgical DOM updates for optimal performance.
+Arizona provides a complete LiveView framework with hierarchical rendering, real-time WebSocket
+updates, and stateful/stateless component architecture. It features compile-time template
+optimization and surgical DOM updates for optimal performance.
 
 ### Key Features
 
@@ -38,7 +40,8 @@ render(Socket) ->
     """, Socket).
 ```
 
-**Important Limitation**: Code must be written directly in template expressions. Variables cannot be assigned before templates:
+**Important Limitation**: Code must be written directly in template expressions. Variables cannot be
+assigned before templates:
 
 ```erlang
 %% ❌ Not supported:
@@ -176,7 +179,8 @@ Create the main HTML file `priv/assets/index.html`:
 </html>
 ```
 
-Visit `http://localhost:8080/counter` to see your LiveView in action! The counter will update in real-time as you click the buttons.
+Visit `http://localhost:8080/counter` to see your LiveView in action! The counter will update in
+real-time as you click the buttons.
 
 ## Architecture
 
@@ -194,7 +198,8 @@ Visit `http://localhost:8080/counter` to see your LiveView in action! The counte
 
 ### Real-time Updates
 
-Arizona sends minimal JSON diffs over WebSocket containing only changed elements, ensuring optimal performance for real-time applications.
+Arizona sends minimal JSON diffs over WebSocket containing only changed elements, ensuring optimal
+performance for real-time applications.
 
 ## API Documentation
 
