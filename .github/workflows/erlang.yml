@@ -252,6 +252,9 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium firefox
 
+      - name: Compile Arizona for test
+        run: rebar3 as test compile
+
       - name: Start test server in background
         run: |
           # Start server in background without timeout wrapper
