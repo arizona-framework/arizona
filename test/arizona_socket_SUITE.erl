@@ -3,6 +3,9 @@
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).
 
+%% Dialyzer suppressions for intentional type violations in negative tests
+-dialyzer({nowarn_function, test_set_current_stateful_id_validation/1}).
+
 %% --------------------------------------------------------------------
 %% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
