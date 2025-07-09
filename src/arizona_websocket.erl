@@ -16,6 +16,7 @@
 -export_type([state/0]).
 
 -type call_result() :: {Commands :: cowboy_websocket:commands(), State :: state()}.
+-export_type([call_result/0]).
 
 %% Cowboy WebSocket callbacks
 

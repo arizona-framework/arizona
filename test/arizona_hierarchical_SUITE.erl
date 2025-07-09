@@ -951,7 +951,9 @@ hierarchical_list_in_stateful_template(Config) when is_list(Config) ->
         elems => #{
             0 => {static, 1, ~"<main>"},
             1 =>
-                {dynamic, 2, fun(Socket1) -> arizona_html:render_list(ListData, Items, Socket1) end},
+                {dynamic, 2, fun(Socket1) ->
+                    arizona_html:render_list(ListData, Items, Socket1)
+                end},
             2 => {static, 3, ~"</main>"}
         },
         vars_indexes => #{}

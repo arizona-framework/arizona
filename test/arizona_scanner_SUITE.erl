@@ -386,7 +386,7 @@ scan_attribute_spacing_after_dynamic(Config) when is_list(Config) ->
     % This reproduces the "checkedonclick" bug where space is lost between attributes
     Template = ~"""
     <input
-        type="checkbox" 
+        type="checkbox"
         class="toggle"
         data-testid="toggle-{maps:get(id, Todo)}"
         {case maps:get(completed, Todo) of true -> ~"checked"; false -> ~"" end}
@@ -396,7 +396,7 @@ scan_attribute_spacing_after_dynamic(Config) when is_list(Config) ->
 
     Expected = [
         {static, 1,
-            ~"<input\n    type=\"checkbox\" \n    class=\"toggle\"\n    data-testid=\"toggle-"},
+            ~"<input\n    type=\"checkbox\"\n    class=\"toggle\"\n    data-testid=\"toggle-"},
         {dynamic, 4, ~"maps:get(id, Todo)"},
         {static, 4, ~"\"\n    "},
         {dynamic, 5, ~"case maps:get(completed, Todo) of true -> ~\"checked\"; false -> ~\"\" end"},

@@ -340,7 +340,8 @@ merge_element_changes([{ElementIndex, NewChange} | RestNew], ExistingElements) -
     MergedChange :: arizona_differ:element_change().
 merge_nested_changes(NewChange, ExistingChange) when is_list(NewChange), is_list(ExistingChange) ->
     % Check if these are actually component changes vs HTML data
-    % Component changes are lists of {ComponentId, ElementChanges} tuples where ComponentId is an atom
+    % Component changes are lists of {ComponentId, ElementChanges} tuples where
+    % ComponentId is an atom
     % HTML data typically contains binaries, nested lists of binaries, empty lists, etc.
     case
         looks_like_component_changes(NewChange) andalso looks_like_component_changes(ExistingChange)
@@ -357,8 +358,10 @@ merge_nested_changes(NewChange, _ExistingChange) ->
     NewChange.
 
 %% Simple heuristic to distinguish component changes from HTML data
-%% Component changes: [{ComponentId, ElementChanges}] where ComponentId is atom() | binary()
-%% HTML data: typically contains binaries directly, empty lists, nested structures without tuple format
+%% Component changes: [{ComponentId, ElementChanges}] where ComponentId is
+%% atom() | binary()
+%% HTML data: typically contains binaries directly, empty lists, nested structures
+%% without tuple format
 -spec looks_like_component_changes(List) -> boolean() when
     List :: list().
 looks_like_component_changes([]) ->

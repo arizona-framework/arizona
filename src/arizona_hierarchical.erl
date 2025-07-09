@@ -119,25 +119,37 @@ diff_structures(OldStructure, NewStructure) when is_map(OldStructure), is_map(Ne
     CommonComponents = NewComponents -- AddedComponents,
 
     % Generate diff operations
-    AddOps = [
+    AddOps = generate_add_ops(AddedComponents, NewStructure),
+    RemoveOps = generate_remove_ops(RemovedComponents),
+    UpdateOps = generate_update_ops(CommonComponents, OldStructure, NewStructure),
+
+    AddOps ++ RemoveOps ++ UpdateOps.
+
+%% @doc Generate add operations for new components
+generate_add_ops(AddedComponents, NewStructure) ->
+    [
         #{
             type => add_stateful,
             stateful_id => StatefulId,
             data => maps:get(StatefulId, NewStructure)
         }
      || StatefulId <- AddedComponents
-    ],
+    ].
 
-    RemoveOps = [
+%% @doc Generate remove operations for removed components
+generate_remove_ops(RemovedComponents) ->
+    [
         #{
             type => remove_stateful,
             stateful_id => StatefulId,
             data => undefined
         }
      || StatefulId <- RemovedComponents
-    ],
+    ].
 
-    UpdateOps = lists:filtermap(
+%% @doc Generate update operations for potentially changed components
+generate_update_ops(CommonComponents, OldStructure, NewStructure) ->
+    lists:filtermap(
         fun(StatefulId) ->
             OldComponent = maps:get(StatefulId, OldStructure),
             NewComponent = maps:get(StatefulId, NewStructure),
@@ -154,9 +166,7 @@ diff_structures(OldStructure, NewStructure) when is_map(OldStructure), is_map(Ne
             end
         end,
         CommonComponents
-    ),
-
-    AddOps ++ RemoveOps ++ UpdateOps.
+    ).
 
 %% @doc Diff two stateful components
 -spec diff_components(stateful_render(), stateful_render()) -> [element_diff()].
@@ -170,34 +180,44 @@ diff_components(OldComponent, NewComponent) when is_map(OldComponent), is_map(Ne
     CommonElements = NewElements -- AddedElements,
 
     % Generate element diffs
-    AddDiffs = [
+    AddDiffs = generate_element_add_diffs(AddedElements, NewComponent),
+    RemoveDiffs = generate_element_remove_diffs(RemovedElements),
+    UpdateDiffs = generate_element_update_diffs(CommonElements, OldComponent, NewComponent),
+
+    AddDiffs ++ RemoveDiffs ++ UpdateDiffs.
+
+%% @doc Generate add diffs for new elements
+generate_element_add_diffs(AddedElements, NewComponent) ->
+    [
         #{
             type => set_element,
             element_index => ElementIndex,
             data => maps:get(ElementIndex, NewComponent)
         }
      || ElementIndex <- AddedElements
-    ],
+    ].
 
-    RemoveDiffs = [
+%% @doc Generate remove diffs for removed elements
+generate_element_remove_diffs(RemovedElements) ->
+    [
         #{
             type => remove_element,
             element_index => ElementIndex,
             data => undefined
         }
      || ElementIndex <- RemovedElements
-    ],
+    ].
 
-    UpdateDiffs = lists:filtermap(
+%% @doc Generate update diffs for potentially changed elements
+generate_element_update_diffs(CommonElements, OldComponent, NewComponent) ->
+    lists:filtermap(
         fun(ElementIndex) ->
             OldContent = maps:get(ElementIndex, OldComponent),
             NewContent = maps:get(ElementIndex, NewComponent),
             diff_element_content(ElementIndex, OldContent, NewContent)
         end,
         CommonElements
-    ),
-
-    AddDiffs ++ RemoveDiffs ++ UpdateDiffs.
+    ).
 
 %% @doc Diff element content (handles nested structures)
 -spec diff_element_content(element_index(), element_content(), element_content()) ->
@@ -207,38 +227,47 @@ diff_element_content(ElementIndex, OldContent, NewContent) ->
         {Same, Same} ->
             % No change
             false;
-        {#{type := stateless, structure := OldStruct}, #{type := stateless, structure := NewStruct}} ->
-            % Diff stateless structure
-            case diff_components(OldStruct, NewStruct) of
-                [] ->
-                    false;
-                ElementDiffs ->
-                    {true, #{
-                        type => update_stateless,
-                        element_index => ElementIndex,
-                        data => ElementDiffs
-                    }}
-            end;
+        {
+            #{type := stateless, structure := OldStruct},
+            #{type := stateless, structure := NewStruct}
+        } ->
+            diff_stateless_content(ElementIndex, OldStruct, NewStruct);
         {#{type := list, static := Static, dynamic := OldDynamic}, #{
             type := list, static := Static, dynamic := NewDynamic
         }} ->
-            % List with same static template but different dynamic data
-            case OldDynamic =:= NewDynamic of
-                true ->
-                    false;
-                false ->
-                    {true, #{
-                        type => update_list_dynamic,
-                        element_index => ElementIndex,
-                        data => NewDynamic
-                    }}
-            end;
+            diff_list_content(ElementIndex, OldDynamic, NewDynamic);
         _ ->
             % Different content, replace entirely
             {true, #{
                 type => set_element,
                 element_index => ElementIndex,
                 data => NewContent
+            }}
+    end.
+
+%% @doc Diff stateless content
+diff_stateless_content(ElementIndex, OldStruct, NewStruct) ->
+    case diff_components(OldStruct, NewStruct) of
+        [] ->
+            false;
+        ElementDiffs ->
+            {true, #{
+                type => update_stateless,
+                element_index => ElementIndex,
+                data => ElementDiffs
+            }}
+    end.
+
+%% @doc Diff list content with same static template
+diff_list_content(ElementIndex, OldDynamic, NewDynamic) ->
+    case OldDynamic =:= NewDynamic of
+        true ->
+            false;
+        false ->
+            {true, #{
+                type => update_list_dynamic,
+                element_index => ElementIndex,
+                data => NewDynamic
             }}
     end.
 
@@ -380,7 +409,8 @@ render_element({dynamic, Line, Fun}, Socket) when is_function(Fun, 1) ->
         Result = arizona_stateful:call_dynamic_function(Fun, Socket),
         case arizona_socket:is_socket(Result) of
             true ->
-                % Function returned a socket (from arizona_html calls like render_list/render_stateless)
+                % Function returned a socket (from arizona_html calls like
+                % render_list/render_stateless)
                 % Check if there's a pending hierarchical element
                 case arizona_socket:get_hierarchical_pending_element(Result) of
                     undefined ->

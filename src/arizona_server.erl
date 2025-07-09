@@ -5,6 +5,8 @@
 -export([get_route_metadata/1, get_route_handler/1]).
 -export([new_route_metadata/2, get_route_type/1]).
 
+-export_type([route/0]).
+
 -type route() ::
     {live, Path :: binary(), LiveModule :: module()}
     | {live_websocket, Path :: binary()}
