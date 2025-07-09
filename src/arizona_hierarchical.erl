@@ -26,11 +26,7 @@ Key features:
 
     % Diff operations
     diff_structures/2,
-    apply_diff/2,
-
-    % JSON conversion
-    to_json/1,
-    from_json/1
+    apply_diff/2
 ]).
 
 %% Types - JSON compatible
@@ -500,22 +496,6 @@ process_list_item(#{elems_order := Order, elems := Elements}, Item, Socket) ->
         Order, Elements, Item, Socket, #{}
     ),
     {ItemStructure, UpdatedSocket}.
-
-%% ============================================================================
-%% JSON Conversion
-%% ============================================================================
-
-%% @doc Convert hierarchical structure to JSON-compatible format
--spec to_json(hierarchical_structure()) -> map().
-to_json(Structure) when is_map(Structure) ->
-    % Already JSON-compatible
-    Structure.
-
-%% @doc Convert JSON format back to hierarchical structure
--spec from_json(map()) -> hierarchical_structure().
-from_json(JsonData) when is_map(JsonData) ->
-    % Already in correct format
-    JsonData.
 
 %% @doc Build item structure directly from order and elements, evaluating as we go
 -spec build_item_structure_direct(

@@ -10,7 +10,7 @@ Generates JSON diffs in format: [{StatefulId, [{ElementIndex, Changes}]}]
 """.
 
 -export([diff_stateful/3]).
--export([get_affected_elements/2, to_json/1]).
+-export([get_affected_elements/2]).
 
 %% Diff format types
 -type element_index() :: non_neg_integer().
@@ -73,23 +73,6 @@ get_affected_elements(ChangedBindings, VarsIndexes) ->
      || VarName <- ChangedVarNames
     ],
     sets:from_list(lists:flatten(AffectedIndexLists)).
-
-%% Convert diff changes to JSON-serializable format
--spec to_json(DiffChanges) -> JsonData when
-    DiffChanges :: diff_changes(),
-    JsonData :: iodata().
-to_json(DiffChanges) ->
-    % Convert tuples to arrays for JavaScript compatibility
-    json:encode(DiffChanges, fun diff_encoder/2).
-
-%% Custom JSON encoder that converts tuples to arrays for JavaScript compatibility
--spec diff_encoder(dynamic(), json:encoder()) -> iodata().
-diff_encoder(Tuple, Encode) when is_tuple(Tuple) ->
-    % Convert tuple to array
-    json:encode_list(tuple_to_list(Tuple), Encode);
-diff_encoder(Other, Encode) ->
-    % For all other types, use the default JSON encoder
-    json:encode_value(Other, Encode).
 
 %% Internal implementation functions
 

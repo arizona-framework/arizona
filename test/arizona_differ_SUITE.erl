@@ -41,8 +41,7 @@ groups() ->
         ]},
         {diff_optimization, [parallel], [
             get_affected_elements_basic,
-            get_affected_elements_multiple_vars,
-            to_json_conversion
+            get_affected_elements_multiple_vars
         ]}
     ].
 
@@ -280,23 +279,6 @@ get_affected_elements_multiple_vars(Config) when is_list(Config) ->
     % Should include elements [1, 2, 3, 5, 7] but not [4, 6]
     ExpectedElements = sets:from_list([1, 2, 3, 5, 7]),
     ?assertEqual(ExpectedElements, AffectedElements).
-
-to_json_conversion(Config) when is_list(Config) ->
-    % Create sample diff changes with nested tuples
-    DiffChanges = [{root, [{1, ~"value1"}, {2, ~"value2"}]}, {~"other_component", [{3, 42}]}],
-
-    % Convert to JSON format using custom encoder
-    JsonIoData = arizona_differ:to_json(DiffChanges),
-
-    % Convert iodata to binary
-    JsonBinary = iolist_to_binary(JsonIoData),
-
-    % Expected JSON: tuples should be converted to arrays
-    % [{root, [{1, "value1"}, {2, "value2"}]}, {"other_component", [{3, 42}]}]
-    % becomes: [["root", [[1, "value1"], [2, "value2"]]], ["other_component", [[3, 42]]]]
-    ExpectedJson = ~<[["root",[[1,"value1"],[2,"value2"]]],["other_component",[[3,42]]]]>,
-
-    ?assertEqual(ExpectedJson, JsonBinary).
 
 %% --------------------------------------------------------------------
 %% Diff stateless tests

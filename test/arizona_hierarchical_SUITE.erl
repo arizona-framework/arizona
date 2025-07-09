@@ -51,8 +51,7 @@ groups() ->
         ]},
         {round_trip_properties, [parallel], [
             round_trip_property_simple,
-            round_trip_property_complex,
-            json_conversion_identity
+            round_trip_property_complex
         ]},
         {structure_generation, [parallel], [
             generate_simple_structure,
@@ -649,26 +648,6 @@ round_trip_property_complex(Config) when is_list(Config) ->
     ResultStructure = arizona_hierarchical:apply_diff(Diff, OldStructure),
 
     ?assertEqual(NewStructure, ResultStructure).
-
-json_conversion_identity(Config) when is_list(Config) ->
-    Structure = #{
-        root => #{
-            0 => ~"<div>",
-            1 => #{type => stateful, id => ~"counter-1"},
-            2 => #{
-                type => list,
-                static => [~"<li>", ~"</li>"],
-                dynamic => [#{0 => ~"Item 1"}]
-            }
-        }
-    },
-
-    % to_json and from_json should be identity for our structure
-    JsonData = arizona_hierarchical:to_json(Structure),
-    BackToErlang = arizona_hierarchical:from_json(JsonData),
-
-    ?assertEqual(Structure, JsonData),
-    ?assertEqual(Structure, BackToErlang).
 
 %% --------------------------------------------------------------------
 %% Structure Generation Tests

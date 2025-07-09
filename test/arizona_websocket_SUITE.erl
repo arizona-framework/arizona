@@ -49,7 +49,8 @@ groups() ->
             test_init_with_empty_query_string,
             test_init_with_missing_path_param,
             test_handle_noreply_response_with_socket_changes,
-            test_mock_live_module_for_reply_responses
+            test_mock_live_module_for_reply_responses,
+            test_json_encoding_tuple_to_array_conversion
         ]}
     ].
 
@@ -382,6 +383,26 @@ test_mock_live_module_for_reply_responses(_Config) ->
     ReplyBinary = iolist_to_binary(ReplyPayload),
     ?assert(binary:match(ReplyBinary, ~"reply") =/= nomatch),
     ?assert(binary:match(ReplyBinary, ~"test_reply") =/= nomatch).
+
+test_json_encoding_tuple_to_array_conversion(_Config) ->
+    % Test JSON encoding with tuple-to-array conversion using nested diff structure
+    % This simulates the DiffChanges structure that would be returned by arizona_socket:get_changes/1
+    TestDiffChanges = [{root, [{1, ~"test_value"}, {2, {nested, ~"data"}}]}],
+
+    % Create the payload structure that handle_noreply_response would create
+    DiffPayload = #{
+        type => ~"diff",
+        changes => TestDiffChanges
+    },
+
+    % Use the exported json_encode function to test tuple-to-array conversion
+    EncodedJson = arizona_websocket:json_encode(DiffPayload),
+
+    % Verify exact JSON encoding - nested tuples should be converted to arrays
+    PayloadBinary = iolist_to_binary(EncodedJson),
+    ExpectedJson =
+        ~"{\"type\":\"diff\",\"changes\":[[\"root\",[[1,\"test_value\"],[2,[\"nested\",\"data\"]]]]]}",
+    ?assertEqual(ExpectedJson, PayloadBinary).
 
 %% --------------------------------------------------------------------
 %% Test helpers

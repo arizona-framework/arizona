@@ -5,7 +5,7 @@
 -export([init/2, websocket_init/1, websocket_handle/2, websocket_info/2]).
 
 %% Testing helpers
--export([new_state/1, get_live_pid/1]).
+-export([new_state/1, get_live_pid/1, json_encode/1]).
 
 %% Types
 -record(state, {
@@ -58,7 +58,7 @@ websocket_init({LiveModule, Req}) ->
     HierarchicalStructure = arizona_socket:get_hierarchical_acc(RenderedSocket),
 
     % Send initial hierarchical structure to client
-    InitialPayload = json:encode(#{
+    InitialPayload = json_encode(#{
         type => ~"initial_render",
         structure => HierarchicalStructure
     }),
@@ -125,7 +125,7 @@ handle_noreply_response(#state{live_pid = LivePid} = State) ->
         [] ->
             {[], State};
         DiffChanges ->
-            DiffPayload = arizona_differ:to_json(#{
+            DiffPayload = json_encode(#{
                 type => ~"diff",
                 changes => DiffChanges
             }),
@@ -140,7 +140,7 @@ handle_noreply_response(#state{live_pid = LivePid} = State) ->
     State :: state(),
     Result :: call_result().
 handle_reply_response(Reply, #state{live_pid = LivePid} = State) ->
-    ReplyPayload = json:encode(#{
+    ReplyPayload = json_encode(#{
         type => ~"reply",
         data => Reply
     }),
@@ -150,7 +150,7 @@ handle_reply_response(Reply, #state{live_pid = LivePid} = State) ->
         [] ->
             {[{text, ReplyPayload}], State};
         DiffChanges ->
-            DiffPayload = arizona_differ:to_json(#{
+            DiffPayload = json_encode(#{
                 type => ~"diff",
                 changes => DiffChanges
             }),
@@ -164,7 +164,7 @@ handle_reply_response(Reply, #state{live_pid = LivePid} = State) ->
     State :: state(),
     Result :: call_result().
 handle_ping_message(State) ->
-    PongPayload = json:encode(#{type => ~"pong"}),
+    PongPayload = json_encode(#{type => ~"pong"}),
     {[{text, PongPayload}], State}.
 
 %% @doc Handle unknown message type
@@ -172,7 +172,7 @@ handle_ping_message(State) ->
     State :: state(),
     Result :: call_result().
 handle_unknown_message(State) ->
-    ErrorPayload = json:encode(#{
+    ErrorPayload = json_encode(#{
         type => ~"error",
         message => ~"Unknown message type"
     }),
@@ -189,7 +189,7 @@ handle_websocket_error(Error, Reason, Stacktrace, State) ->
     logger:error("WebSocket message handling error: ~p:~p~nStacktrace: ~p", [
         Error, Reason, Stacktrace
     ]),
-    ErrorPayload = json:encode(#{
+    ErrorPayload = json_encode(#{
         type => ~"error",
         message => ~"Internal server error"
     }),
@@ -206,6 +206,23 @@ new_state(LivePid) ->
 -spec get_live_pid(state()) -> pid().
 get_live_pid(#state{live_pid = LivePid}) ->
     LivePid.
+
+%% Convert diff changes to JSON-serializable format
+-spec json_encode(Term) -> JsonData when
+    Term :: dynamic(),
+    JsonData :: iodata().
+json_encode(Term) ->
+    % Convert tuples to arrays for JavaScript compatibility
+    json:encode(Term, fun json_encoder/2).
+
+%% Custom JSON encoder that converts tuples to arrays for JavaScript compatibility
+-spec json_encoder(dynamic(), json:encoder()) -> iodata().
+json_encoder(Tuple, Encode) when is_tuple(Tuple) ->
+    % Convert tuple to array
+    json:encode_list(tuple_to_list(Tuple), Encode);
+json_encoder(Other, Encode) ->
+    % For all other types, use the default JSON encoder
+    json:encode_value(Other, Encode).
 
 %% @doc Handle Erlang messages (from LiveView process or other sources)
 -spec websocket_info(Info, State) -> Result when
