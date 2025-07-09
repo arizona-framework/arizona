@@ -2,7 +2,7 @@
 
 ![arizona_256x256](https://github.com/arizona-framework/arizona/assets/35941533/88b76a0c-0dfc-4f99-8608-b0ebd9c9fbd9)
 
-Arizona is a web framework for Erlang.
+Arizona is a modern LiveView web framework for Erlang with real-time capabilities and optimized performance.
 
 ## ⚠️ Warning
 
@@ -10,52 +10,64 @@ Work in progress.
 
 Use it at your own risk, as the API may change at any time.
 
+## Overview
+
+Arizona provides a complete LiveView framework with hierarchical rendering, real-time WebSocket updates, and stateful/stateless component architecture. It features compile-time template optimization and surgical DOM updates for optimal performance.
+
+### Key Features
+
+- **📡 Real-time LiveView**: WebSocket-based live updates with minimal payload
+- **🏗️ Hierarchical Rendering**: Efficient differential rendering with surgical DOM updates
+- **⚡ Performance Optimized**: Compile-time template processing with parse transforms
+- **🧩 Component Architecture**: Stateful and stateless components with lifecycle management
+- **🎯 Type Safe**: Comprehensive Dialyzer support with proper type contracts
+- **🔧 OTP Integration**: Full OTP compliance with gen_server and supervisor patterns
+
 ## Template Syntax
 
-Arizona utilizes a templating approach where Erlang code is embedded within HTML
-using curly braces `{}`. This allows dynamic content generation by executing Erlang
-functions directly within the HTML structure. For example:
+Arizona uses the `~"""` sigil for template compilation with embedded Erlang expressions:
 
 ```erlang
-<ul>
-    {arizona:render_list(fun(Item) ->
-        arizona:render_nested_template(~"""
-        <li>{Item}</li>
-        """)
-     end, arizona:get_binding(list, View))}
-</ul>
+render(Socket) ->
+    arizona_html:render_stateful(~"""
+    <div class="counter">
+        <h1>Count: {arizona_socket:get_binding(count, Socket)}</h1>
+        <button onclick="increment">+</button>
+        <button onclick="decrement">-</button>
+    </div>
+    """, Socket).
 ```
 
-No macros, no special syntaxes, just dynamic Erlang code embedded in static HTML.
+**Important Limitation**: Code must be written directly in template expressions. Variables cannot be assigned before templates:
+
+```erlang
+%% ❌ Not supported:
+render(Socket) ->
+    Count = arizona_socket:get_binding(count, Socket),
+    arizona_html:render_stateful(~"""
+    <div>{Count}</div>
+    """, Socket).
+
+%% ✅ Correct pattern:
+render(Socket) ->
+    arizona_html:render_stateful(~"""
+    <div>{arizona_socket:get_binding(count, Socket)}</div>
+    """, Socket).
+```
 
 ## Basic Usage
 
-> [!NOTE]
->
-> The example below is a simplified version of the code from the [example repository](https://github.com/arizona-framework/arizona_example).
-> Please refer to it for the complete code.
-
-Create a new rebar3 app:
+### 1. Create a new rebar3 application
 
 ```bash
+# Create a new rebar3 application
 $ rebar3 new app arizona_example
-===> Writing arizona_example/src/arizona_example_app.erl
-===> Writing arizona_example/src/arizona_example_sup.erl
-===> Writing arizona_example/src/arizona_example.app.src
-===> Writing arizona_example/rebar.config
-===> Writing arizona_example/.gitignore
-===> Writing arizona_example/LICENSE.md
-===> Writing arizona_example/README.md
+
+# Navigate to the project directory
+$ cd arizona_example
 ```
 
-Navigate to the project folder and compile it:
-
-```bash
-$ cd arizona_example && rebar3 compile
-===> Verifying dependencies...
-===> Analyzing applications...
-===> Compiling arizona_example
-```
+### 2. Add Arizona dependency
 
 Add Arizona as a dependency in `rebar.config`:
 
@@ -65,212 +77,170 @@ Add Arizona as a dependency in `rebar.config`:
 ]}.
 ```
 
-Include Arizona in the `src/arizona_example.app.src` file:
+Update the application dependencies in `src/arizona_example.app.src`:
 
 ```erlang
 {application, arizona_example, [
-    % ...
+    {description, "Arizona Example Application"},
     {applications, [
         kernel,
         stdlib,
         arizona
-    ]},
-    % ...
-]}.
-```
-
-Update the dependencies:
-
-```bash
-$ rebar3 get-deps
-===> Verifying dependencies...
-```
-
-Create a `config/sys.config` file:
-
-```erlang
-[
-    {arizona, [
-        {endpoint, #{
-            % Routes are plain Cowboy routes for now.
-            routes => [
-                % Static files
-                {"/assets/[...]", cowboy_static, {priv_dir, arizona_example, "assets"}},
-                % Views are stateful and keep their state in memory.
-                % Use the 'arizona_view_handler' to render Arizona views.
-                % The 'arizona_example_page' will be mounted with the bindings 'title' and 'id'.
-                % The layout is optional and wraps the view. It does not have a state; 
-                % it simply places the view within its structure.
-                {"/", arizona_view_handler,
-                    {arizona_example_page, #{title => ~"Arizona Example", id => ~"app"}, #{
-                        layout => arizona_example_layout
-                    }}}
-            ]
-        }}
     ]}
-].
-```
-
-Set the config file in `rebar.config`:
-
-```erlang
-{shell, [
-    {config, "config/sys.config"},
-    {apps, [arizona_example]}
 ]}.
 ```
 
-Create the `src/arizona_example_page.erl` file:
+### 3. Create a LiveView module
 
-```erlang
--module(arizona_example_page).
--compile({parse_transform, arizona_transform}).
--behaviour(arizona_view).
-
--export([mount/2]).
--export([render/1]).
--export([handle_event/4]).
-
-mount(Bindings, _Socket) ->
-    View = arizona:new_view(?MODULE, Bindings),
-    {ok, View}.
-
-render(View) ->
-    arizona:render_view_template(View, ~"""
-    <div id="{arizona:get_binding(id, View)}">
-        {arizona:render_view(arizona_example_counter, #{
-            id => ~"counter",
-            count => 0
-        })}
-    </div>
-    """).
-
-handle_event(_Event, _Payload, _From, View) ->
-    {noreply, View}.
-```
-
-Create the `src/arizona_example_counter.erl` view, which is defined in the render function of the page:
+Create `src/arizona_example_counter.erl`:
 
 ```erlang
 -module(arizona_example_counter).
--compile({parse_transform, arizona_transform}).
--behaviour(arizona_view).
+-behaviour(arizona_live).
 
--export([mount/2]).
--export([render/1]).
--export([handle_event/4]).
+-export([mount/2, render/1, handle_event/3]).
 
-mount(Bindings, _Socket) ->
-    View = arizona:new_view(?MODULE, Bindings),
-    {ok, View}.
+mount(_Req, Socket) ->
+    Socket1 = arizona_socket:put_binding(count, 0, Socket),
+    {ok, Socket1}.
 
-render(View) ->
-    arizona:render_view_template(View, ~"""
-    <div id="{arizona:get_binding(id, View)}">
-        <span>{integer_to_binary(arizona:get_binding(count, View))}</span>
-        {arizona:render_component(arizona_example_components, button, #{
-            handler => arizona:get_binding(id, View),
-            event => ~"incr",
-            payload => 1,
-            text => ~"Increment"
-         })}
+render(Socket) ->
+    arizona_html:render_stateful(~"""
+    <div class="counter">
+        <h1>Count: {arizona_socket:get_binding(count, Socket)}</h1>
+        <button onclick="increment">Increment</button>
+        <button onclick="decrement">Decrement</button>
     </div>
-    """).
+    """, Socket).
 
-handle_event(~"incr", Incr, _From, View) ->
-    Count = arizona:get_binding(count, View),
-    arizona:put_binding(count, Count + Incr, View).
+handle_event(~"increment", _Params, Socket) ->
+    Count = arizona_socket:get_binding(count, Socket),
+    Socket1 = arizona_socket:put_binding(count, Count + 1, Socket),
+    {noreply, Socket1};
+handle_event(~"decrement", _Params, Socket) ->
+    Count = arizona_socket:get_binding(count, Socket),
+    Socket1 = arizona_socket:put_binding(count, Count - 1, Socket),
+    {noreply, Socket1}.
 ```
 
-Create the button in `src/arizona_example_components.erl`, which is defined in the render
-function of the view:
-
-```erlang
--module(arizona_example_components).
--export([button/1]).
-
-button(View) ->
-    arizona:render_component_template(View, ~"""
-    <button
-        type="{arizona:get_binding(type, View, ~"button")}"
-        onclick="{arizona:render_js_event(
-            arizona:get_binding(handler, View),
-            arizona:get_binding(event, View),
-            arizona:get_binding(payload, View)
-        )}"
-    >
-        {arizona:get_binding(text, View)}
-    </button>
-    """).
-```
-
-Create the optional layout `src/arizona_example_layout.erl`, which is defined in the config file:
-
-```erlang
--module(arizona_example_layout).
--compile({parse_transform, arizona_transform}).
--behaviour(arizona_layout).
-
--export([mount/2]).
--export([render/1]).
-
-mount(Bindings, _Socket) ->
-    arizona:new_view(?MODULE, Bindings).
-
-render(View) ->
-    arizona:render_layout_template(View, ~""""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta http-equiv="X-UA-Compatible" content="IE=edge">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{arizona:get_binding(title, View)}</title>
-        <script src="assets/js/arizona/main.js"></script>
-        <script src="assets/js/main.js"></script>
-    </head>
-    <body>
-        {% The 'inner_content' binding is auto-binded by Arizona in the view. }
-        {arizona:get_binding(inner_content, View)}
-    </body>
-    </html>
-    """").
-```
-
-Start the app:
+### 4. Start the server
 
 ```bash
+# Start the Erlang shell with your application
 $ rebar3 shell
-===> Verifying dependencies...
-===> Analyzing applications...
-===> Compiling arizona_example
-Erlang/OTP 27 [erts-15.2.2] [source] [64-bit] [smp:24:24] [ds:24:24:10] [async-threads:1] [jit:ns]
-
-Eshell V15.2.2 (press Ctrl+G to abort, type help(). for help)
-===> Booted syntax_tools
-===> Booted cowlib
-===> Booted ranch
-===> Booted cowboy
-===> Booted arizona
-===> Booted arizona_example
 ```
 
-The server is up and running at <http://localhost:8080>, but it is not yet connected to the server.
-To establish the connection, create `priv/assets/main.js` in your static assets directory (matching
-the configured static route path in `config/sys.config` and matching the script added to the HTML of
-the layout file previously) and add the connection initialization code to it:
+Then in the Erlang shell:
 
-```js
-arizona.connect();
+```erlang
+% Define routes for your application
+1> Routes = [
+    {live, ~"/counter", arizona_example_counter},
+    {live_websocket, ~"/live/websocket"},
+    {static, ~"/assets", {priv_dir, arizona_example, ~"assets"}}
+].
+
+% Start the Arizona server
+2> {ok, _} = arizona_server:start(#{port => 8080, routes => Routes}).
 ```
 
-Open the browser again, and the button click will now increase the count value by one.
+### 5. Add client-side JavaScript
 
-!["Counter Example"](./assets/counter_example.gif)
+Create the client-side JavaScript file `priv/assets/js/app.js`:
 
-The value is updated in `arizona_example_counter:handle_event/4` via WebSocket, and the DOM patch
-used the [morphdom library](https://github.com/patrick-steele-idem/morphdom) under the hood.
-Note that only the changed part is sent as a small payload from the server to the client.
+```javascript
+// Import the Arizona client library
+import ArizonaClient from '/assets/js/arizona.min.js';
+
+// Create and connect the client for real-time updates
+const client = new ArizonaClient();
+client.connect();
+```
+
+### 6. Create HTML page
+
+Create the main HTML file `priv/assets/index.html`:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Arizona Example</title>
+    <script type="module" src="/assets/js/app.js"></script>
+</head>
+<body>
+    <div id="arizona-app">
+        <!-- LiveView will mount here -->
+    </div>
+</body>
+</html>
+```
+
+Visit `http://localhost:8080/counter` to see your LiveView in action! The counter will update in real-time as you click the buttons.
+
+## Architecture
+
+### Component Types
+
+- **Stateful Components**: Maintain state across renders with lifecycle callbacks
+- **Stateless Components**: Lightweight function-based components
+- **List Components**: Optimized rendering for collections
+
+### Rendering Modes
+
+- **render**: Standard HTML output
+- **diff**: Differential updates for efficiency
+- **hierarchical**: Structured JSON for WebSocket transmission
+
+### Real-time Updates
+
+Arizona sends minimal JSON diffs over WebSocket containing only changed elements, ensuring optimal performance for real-time applications.
+
+## API Documentation
+
+### Core Modules
+
+- `arizona_live`: LiveView behavior and process management
+- `arizona_socket`: State management and binding system
+- `arizona_html`: Template rendering and component invocation
+- `arizona_server`: HTTP server and routing configuration
+- `arizona_hierarchical`: Differential rendering engine
+
+### Request Handling
+
+- `arizona_request`: HTTP request abstraction
+- `arizona_handler`: Request lifecycle management
+- `arizona_websocket`: WebSocket connection handling
+
+For detailed API documentation, see the module documentation in the source code.
+
+## Testing
+
+Arizona includes comprehensive test coverage:
+
+```bash
+# Run integration tests with Common Test
+$ rebar3 ct
+
+# Run JavaScript unit tests
+$ npm test
+```
+
+## Development
+
+Arizona uses modern Erlang/OTP patterns and requires OTP 27+:
+
+- Comprehensive type contracts with Dialyzer
+- Elvis linting for code quality
+- Xref analysis for unused exports
+- Full test coverage with 319+ tests
+
+## Performance
+
+- **Compile-time optimization**: Templates processed at build time
+- **Minimal WebSocket payloads**: Only changed elements transmitted
+- **Efficient diffing**: Hierarchical change detection
+- **Lazy loading**: Request data loaded on demand
 
 ## Sponsors
 
