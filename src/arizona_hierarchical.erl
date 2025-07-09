@@ -321,7 +321,10 @@ stateful_structure(#{elems_order := Order, elems := Elements}, Socket) ->
 stateless_structure(StructuredList, Socket) ->
     {StatelessStructure, UpdatedSocket} = stateless_list_to_structure(StructuredList, Socket),
     StatelessElement = #{type => stateless, structure => StatelessStructure},
-    {StatelessElement, UpdatedSocket}.
+    UpdatedSocket1 = arizona_socket:set_hierarchical_pending_element(
+        StatelessElement, UpdatedSocket
+    ),
+    {StatelessElement, UpdatedSocket1}.
 
 %% @doc Generate hierarchical structure for list component
 -spec list_structure(ListData, Items, Socket) -> {ListElement, Socket1} when
@@ -341,7 +344,8 @@ list_structure(#{static := Static, dynamic := DynamicTemplate}, Items, Socket) -
         dynamic => DynamicData
     },
 
-    {ListElement, UpdatedSocket}.
+    UpdatedSocket1 = arizona_socket:set_hierarchical_pending_element(ListElement, UpdatedSocket),
+    {ListElement, UpdatedSocket1}.
 
 %% @doc Generate structure for elements
 -spec elements_structure(Order, Elements, Socket, ComponentRender) ->
@@ -357,9 +361,58 @@ elements_structure([], _Elements, Socket, ComponentRender) ->
     {ComponentRender, Socket};
 elements_structure([Index | Rest], Elements, Socket, ComponentRender) ->
     Element = maps:get(Index, Elements),
-    {Content, UpdatedSocket} = arizona_renderer:render_element(Element, Socket),
+    {Content, UpdatedSocket} = render_element(Element, Socket),
     NewComponentRender = ComponentRender#{Index => Content},
     elements_structure(Rest, Elements, UpdatedSocket, NewComponentRender).
+
+%% @doc Render individual elements in hierarchical mode
+-spec render_element(Element, Socket) -> {Content, Socket1} when
+    Element ::
+        {static, pos_integer(), binary()}
+        | {dynamic, pos_integer(), fun((arizona_socket:socket()) -> term())},
+    Socket :: arizona_socket:socket(),
+    Content :: element_content(),
+    Socket1 :: arizona_socket:socket().
+render_element({static, _Line, Content}, Socket) when is_binary(Content) ->
+    {Content, Socket};
+render_element({dynamic, Line, Fun}, Socket) when is_function(Fun, 1) ->
+    try
+        Result = arizona_stateful:call_dynamic_function(Fun, Socket),
+        case arizona_socket:is_socket(Result) of
+            true ->
+                % Function returned a socket (from arizona_html calls like render_list/render_stateless)
+                % Check if there's a pending hierarchical element
+                case arizona_socket:get_hierarchical_pending_element(Result) of
+                    undefined ->
+                        % No pending element, fall back to HTML content
+                        HierarchicalContent = arizona_socket:get_html(Result),
+                        {HierarchicalContent, Result};
+                    PendingElement ->
+                        % Use the pending hierarchical element and clear it
+                        ClearedSocket = arizona_socket:clear_hierarchical_pending_element(Result),
+                        {PendingElement, ClearedSocket}
+                end;
+            false ->
+                % Not a socket, return the value as-is for hierarchical storage
+                {Result, Socket}
+        end
+    catch
+        throw:{binding_not_found, Key} ->
+            error({binding_not_found, Key}, none, binding_error_info(Line, Key, Socket));
+        _:Error ->
+            error({template_render_error, Error, Line})
+    end.
+
+%% Helper function for error reporting
+binding_error_info(Line, Key, Socket) ->
+    CurrentState = arizona_socket:get_current_stateful_state(Socket),
+    TemplateModule = arizona_stateful:get_module(CurrentState),
+    [
+        {error_info, #{
+            cause => #{binding => Key, line => Line, template_module => TemplateModule},
+            module => arizona_hierarchical
+        }}
+    ].
 
 %% ============================================================================
 %% Helper Functions for Content Detection
@@ -385,7 +438,7 @@ stateless_list_to_structure(List, Socket) ->
 stateless_list_to_structure([], Socket, _Index, Acc) ->
     {Acc, Socket};
 stateless_list_to_structure([Element | Rest], Socket, Index, Acc) ->
-    {Content, UpdatedSocket} = arizona_renderer:render_element(Element, Socket),
+    {Content, UpdatedSocket} = render_element(Element, Socket),
     NewAcc = Acc#{Index => Content},
     stateless_list_to_structure(Rest, UpdatedSocket, Index + 1, NewAcc).
 

@@ -66,7 +66,9 @@ groups() ->
             list_item_processing,
             nested_dynamic_content,
             error_handling_coverage,
-            mode_switching_coverage
+            mode_switching_coverage,
+            hierarchical_list_in_stateful_template,
+            hierarchical_stateless_in_stateful_template
         ]}
     ].
 
@@ -838,7 +840,8 @@ list_item_processing(Config) when is_list(Config) ->
     },
 
     ?assertEqual(Expected, ListElement),
-    ?assertEqual(Socket, UpdatedSocket).
+    % UpdatedSocket should have the list element stored as pending element
+    ?assertEqual(Expected, arizona_socket:get_hierarchical_pending_element(UpdatedSocket)).
 
 nested_dynamic_content(Config) when is_list(Config) ->
     % Test nested stateful components within hierarchical structure
@@ -923,3 +926,108 @@ mode_switching_coverage(Config) when is_list(Config) ->
     HierarchicalStructure = arizona_socket:get_hierarchical_acc(HierarchicalResult),
     Expected = #{root => #{0 => ~"<p>", 1 => ~"</p>"}},
     ?assertEqual(Expected, HierarchicalStructure).
+
+hierarchical_list_in_stateful_template(Config) when is_list(Config) ->
+    % Test that render_list called from within a stateful template properly stores
+    % hierarchical structures in the parent component via pending element buffer
+    ListData = #{
+        static => [~"<li>", ~"</li>"],
+        dynamic => #{
+            elems_order => [0],
+            elems => #{
+                0 => {dynamic, 1, fun(Item, _Socket) -> Item end}
+            },
+            vars_indexes => #{}
+        }
+    },
+    Items = [~"Todo 1", ~"Todo 2"],
+
+    % Create socket in hierarchical mode like WebSocket initialization
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+
+    % Now we test stateful template that contains render_list call (like the todo app)
+    TemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<main>"},
+            1 =>
+                {dynamic, 2, fun(Socket1) -> arizona_html:render_list(ListData, Items, Socket1) end},
+            2 => {static, 3, ~"</main>"}
+        },
+        vars_indexes => #{}
+    },
+
+    % Use stateful structure generation (like the todo app)
+    {_ComponentStructure, UpdatedSocket} = arizona_hierarchical:stateful_structure(
+        TemplateData, Socket
+    ),
+
+    % Check what's stored in hierarchical_acc (this is what gets sent to client)
+    HierarchicalAcc = arizona_socket:get_hierarchical_acc(UpdatedSocket),
+
+    % This should contain the list structure as element 1 of the root component
+    ExpectedStructure = #{
+        root => #{
+            0 => ~"<main>",
+            1 => #{
+                type => list,
+                static => [~"<li>", ~"</li>"],
+                dynamic => [
+                    #{0 => ~"Todo 1"},
+                    #{0 => ~"Todo 2"}
+                ]
+            },
+            2 => ~"</main>"
+        }
+    },
+
+    ?assertEqual(ExpectedStructure, HierarchicalAcc).
+
+hierarchical_stateless_in_stateful_template(Config) when is_list(Config) ->
+    % Test that render_stateless called from within a stateful template properly stores
+    % hierarchical structures in the parent component via pending element buffer
+    StatelessTemplate = [
+        {static, 1, ~"<span class=\"status\">"},
+        {dynamic, 2, fun(Socket1) -> arizona_socket:get_binding(status_text, Socket1) end},
+        {static, 3, ~"</span>"}
+    ],
+
+    % Create socket in hierarchical mode with bindings
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    MockState = arizona_stateful:new(root, test_module, #{status_text => ~"Active"}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
+    
+    % Now we test stateful template that contains render_stateless call
+    TemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 => {dynamic, 2, fun(Socket1) -> arizona_html:render_stateless(StatelessTemplate, Socket1) end},
+            2 => {static, 3, ~"</div>"}
+        },
+        vars_indexes => #{}
+    },
+    
+    % Use stateful structure generation
+    {_ComponentStructure, UpdatedSocket} = arizona_hierarchical:stateful_structure(TemplateData, SocketWithState),
+    
+    % Check what's stored in hierarchical_acc
+    HierarchicalAcc = arizona_socket:get_hierarchical_acc(UpdatedSocket),
+    
+    % This should contain the stateless structure as element 1 of the root component
+    ExpectedStructure = #{
+        root => #{
+            0 => ~"<div>",
+            1 => #{
+                type => stateless,
+                structure => #{
+                    0 => ~"<span class=\"status\">",
+                    1 => ~"Active",
+                    2 => ~"</span>"
+                }
+            },
+            2 => ~"</div>"
+        }
+    },
+    
+    ?assertEqual(ExpectedStructure, HierarchicalAcc).

@@ -11,6 +11,11 @@
 -export([set_html_acc/2, get_html/1]).
 -export([append_changes/2, get_changes/1, clear_changes/1]).
 -export([set_hierarchical_acc/2, get_hierarchical_acc/1]).
+-export([
+    set_hierarchical_pending_element/2,
+    get_hierarchical_pending_element/1,
+    clear_hierarchical_pending_element/1
+]).
 
 -export([put_stateful_state/2]).
 
@@ -37,6 +42,7 @@
     html_acc :: iolist(),
     changes_acc :: arizona_differ:diff_changes(),
     hierarchical_acc :: arizona_hierarchical:hierarchical_structure(),
+    hierarchical_pending_element :: arizona_hierarchical:element_content() | undefined,
     current_stateful_parent_id :: arizona_stateful:id() | undefined,
     current_stateful_id :: arizona_stateful:id(),
     stateful_states :: #{arizona_stateful:id() => arizona_stateful:state()},
@@ -56,6 +62,7 @@ new(Opts) when is_map(Opts) ->
         html_acc = [],
         changes_acc = [],
         hierarchical_acc = #{},
+        hierarchical_pending_element = undefined,
         current_stateful_parent_id = maps:get(current_stateful_parent_id, Opts, undefined),
         current_stateful_id = maps:get(current_stateful_id, Opts, root),
         stateful_states = #{},
@@ -148,6 +155,25 @@ set_hierarchical_acc(HierarchicalStructure, #socket{} = Socket) when
     HierarchicalStructure :: arizona_hierarchical:hierarchical_structure().
 get_hierarchical_acc(#socket{} = Socket) ->
     Socket#socket.hierarchical_acc.
+
+-spec set_hierarchical_pending_element(Element, Socket) -> Socket1 when
+    Element :: arizona_hierarchical:element_content(),
+    Socket :: socket(),
+    Socket1 :: socket().
+set_hierarchical_pending_element(Element, #socket{} = Socket) ->
+    Socket#socket{hierarchical_pending_element = Element}.
+
+-spec get_hierarchical_pending_element(Socket) -> Element when
+    Socket :: socket(),
+    Element :: arizona_hierarchical:element_content() | undefined.
+get_hierarchical_pending_element(#socket{} = Socket) ->
+    Socket#socket.hierarchical_pending_element.
+
+-spec clear_hierarchical_pending_element(Socket) -> Socket1 when
+    Socket :: socket(),
+    Socket1 :: socket().
+clear_hierarchical_pending_element(#socket{} = Socket) ->
+    Socket#socket{hierarchical_pending_element = undefined}.
 
 -spec put_stateful_state(StatefulState, Socket) -> Socket1 when
     StatefulState :: arizona_stateful:state(),
