@@ -1,21 +1,41 @@
 -module(arizona_scanner).
--moduledoc """
-Template scanner for Arizona Web Framework.
+-moduledoc ~"""
+Provides template scanning functionality for Arizona template processing.
 
-This module tokenizes Arizona template files into a stream of tokens
-that can be consumed by the parser. It recognizes three token types:
-- Static content (HTML/text rendered as-is)
-- Dynamic expressions (Erlang code within `{...}` evaluated at runtime)
-- Comments (within `{% ... }` stripped from output)
+## Overview
 
-The scanner tracks line numbers for error reporting and handles proper
-whitespace normalization for HTML content. Error messages include the
-problematic expression text to aid in debugging.
+The scanner module tokenizes Arizona template files into a stream of tokens
+that can be consumed by the parser. It provides the foundation for Arizona's
+template processing pipeline by converting raw template text into structured
+token sequences.
 
-Token format: `{Category, Line, Text}` where:
-- Category: `static | dynamic | comment`
-- Line: Line number (1-based)
-- Text: Token content as binary
+## Features
+
+- **Token Recognition**: Identifies static content, dynamic expressions, and comments
+- **Line Tracking**: Maintains line numbers for error reporting and debugging
+- **Whitespace Normalization**: Handles proper HTML whitespace according to browser rules
+- **Expression Parsing**: Validates Erlang expressions within template syntax
+- **Error Handling**: Provides detailed error messages with context information
+- **Escape Sequences**: Supports escaped braces for literal brace output
+
+## Key Functions
+
+- `scan/2`: Tokenize template content into structured token list
+
+## Token Types
+
+- **static**: HTML/text content rendered as-is with normalized whitespace
+- **dynamic**: Erlang expressions within `{...}` evaluated at runtime
+- **comment**: Template comments within `{% ... %}` stripped from output
+
+## Template Syntax
+
+- `{expr}`: Erlang expression to be evaluated
+- `{% comment %}`: Template comment (ignored in output)
+- `\{`: Escaped brace (produces literal `{` in output)
+
+Token format: `{Category, Line, Text}` where Category is `static | dynamic | comment`,
+Line is a 1-based line number, and Text is the token content as binary.
 """.
 
 %% --------------------------------------------------------------------
@@ -25,41 +45,42 @@ Token format: `{Category, Line, Text}` where:
 -export([scan/2]).
 
 %% --------------------------------------------------------------------
-%% Types (and their exports)
+%% Types exports
 %% --------------------------------------------------------------------
 
--doc """
-Scanner options for controlling tokenization.
+-export_type([scan_opts/0]).
+-export_type([token/0]).
 
-- `line` - Starting line number (default: 1)
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
 
-The scanner only tracks line numbers for simplicity and performance.
-Column tracking was removed to avoid complexity with indentation handling.
+-doc ~"""
+Scanner options for controlling tokenization behavior.
+
+Specifies the starting line number for token tracking. The scanner only
+tracks line numbers for simplicity and performance, avoiding complexity
+with indentation and column tracking.
 """.
 -type scan_opts() :: #{
     line => pos_integer()
 }.
--export_type([scan_opts/0]).
 
--doc """
-Token representation with category, location, and content.
+-doc ~"""
+Token representation with category, location, and content information.
 
-Categories:
-- `static` - Static content, with normalized whitespace
-- `dynamic` - Dynamic expression to be evaluated at runtime
-- `comment` - Template comment, stripped from final output
+Categories define the token type:
+- `static`: Static content with normalized whitespace
+- `dynamic`: Dynamic expression to be evaluated at runtime
+- `comment`: Template comment stripped from final output
 """.
 -type token() :: {
     Category :: static | dynamic | comment,
     Line :: pos_integer(),
     Text :: binary()
 }.
--export_type([token/0]).
 
-%% --------------------------------------------------------------------
-%% Private types
-%% --------------------------------------------------------------------
-
+%% Internal state record for scanner operations
 -record(state, {
     line :: pos_integer(),
     position :: non_neg_integer()
@@ -69,29 +90,28 @@ Categories:
 %% API function definitions
 %% --------------------------------------------------------------------
 
--doc """
-Tokenizes a template into a list of tokens.
+-doc ~"""
+Tokenize template content into a structured list of tokens.
+
+Processes Arizona template content and converts it into tokens that can be
+consumed by the parser. Handles static content, dynamic expressions, and
+comments with proper line number tracking and error reporting.
 
 ## Syntax
 
-- `{expr}` - Erlang expression to be evaluated
-- `{% comment }` - Template comment (ignored in output)
-- `\\{` - Escaped brace (produces literal `{` in output)
+- `{expr}`: Erlang expression to be evaluated
+- `{% comment %}`: Template comment (ignored in output)
+- `\\{`: Escaped brace (produces literal `{` in output)
 
 ## Examples
 
 ```erlang
-> arizona_scanner:scan(#{}, ~"Hello {name}!").
-[{static,1,~"Hello "},
- {dynamic,1,~"name"},
- {static,1,~"!"}]
-
-> arizona_scanner:scan(#{}, ~"Price: \\{100}").
+1> arizona_scanner:scan(#{}, ~"Hello {name}!").
+[{static,1,~"Hello "}, {dynamic,1,~"name"}, {static,1,~"!"}]
+2> arizona_scanner:scan(#{}, ~"Price: \\{100}").
 [{static,1,~"Price: {100}"}]
-
-> arizona_scanner:scan(#{}, ~"{% TODO: fix this %} Done").
-[{comment,1,~"TODO: fix this"},
- {static,1,~"Done"}]
+3> arizona_scanner:scan(#{}, ~"{% TODO: fix this %} Done").
+[{comment,1,~"TODO: fix this"}, {static,1,~"Done"}]
 ```
 
 ## Whitespace Handling
@@ -103,12 +123,12 @@ The scanner normalizes HTML whitespace according to browser rules:
 
 ## Error Handling
 
-- `{unexpected_expr_end, Line, PartialExpr}` - Unclosed expression with partial content
-- `{badexpr, Line, Content}` - Malformed Erlang expression
+- `{unexpected_expr_end, Line, PartialExpr}`: Unclosed expression with partial content
+- `{badexpr, Line, Content}`: Malformed Erlang expression
 
-Error messages include the problematic expression text to help with debugging:
+Error messages include the problematic expression text for debugging:
 ```erlang
-> arizona_scanner:scan(#{}, ~"{unclosed").
+1> arizona_scanner:scan(#{}, ~"{unclosed").
 ** exception error: {unexpected_expr_end,1,~"unclosed"}
 ```
 """.
