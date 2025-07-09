@@ -546,8 +546,8 @@ test_merge_changes_html_data_vs_component_changes(Config) when is_list(Config) -
     ?assertEqual(NewHtmlData, FinalHtmlData),
 
     % Test with mix of component changes and HTML data
-    ComponentChanges = [{nested_comp, [{0, ~"simple value"}]}],
-    MixedChanges = [{different_root, [{1, ~"simple binary"}, {2, ComponentChanges}]}],
+    ComponentChanges = [{~"nested_comp", [{0, ~"simple value"}]}],
+    MixedChanges = [{~"different_root", [{1, ~"simple binary"}, {2, ComponentChanges}]}],
     Socket4 = arizona_socket:append_changes(MixedChanges, Socket3),
 
     % Should handle mixed data types without crashing
@@ -556,7 +556,7 @@ test_merge_changes_html_data_vs_component_changes(Config) when is_list(Config) -
     ?assertEqual(2, length(FinalChanges)),
 
     % Verify the structure is correct
-    ?assertMatch([{root, _}, {different_root, _}], FinalChanges).
+    ?assertMatch([{root, _}, {~"different_root", _}], FinalChanges).
 
 %% --------------------------------------------------------------------
 %% Binding Management Tests

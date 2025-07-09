@@ -386,7 +386,7 @@ test_mock_live_module_for_reply_responses(_Config) ->
 
 test_json_encoding_tuple_to_array_conversion(_Config) ->
     % Test JSON encoding with tuple-to-array conversion using nested diff structure
-    % This simulates the DiffChanges structure that would be returned by arizona_socket:get_changes/1
+    % This simulates the DiffChanges structure returned by arizona_socket:get_changes/1
     TestDiffChanges = [{root, [{1, ~"test_value"}, {2, {nested, ~"data"}}]}],
 
     % Create the payload structure that handle_noreply_response would create
@@ -400,8 +400,10 @@ test_json_encoding_tuple_to_array_conversion(_Config) ->
 
     % Verify exact JSON encoding - nested tuples should be converted to arrays
     PayloadBinary = iolist_to_binary(EncodedJson),
-    ExpectedJson =
-        ~"{\"type\":\"diff\",\"changes\":[[\"root\",[[1,\"test_value\"],[2,[\"nested\",\"data\"]]]]]}",
+    ExpectedJson = iolist_to_binary([
+        ~"{\"type\":\"diff\",\"changes\":[[\"root\",[[1,\"test_value\"],",
+        ~"[2,[\"nested\",\"data\"]]]]]}"
+    ]),
     ?assertEqual(ExpectedJson, PayloadBinary).
 
 %% --------------------------------------------------------------------
