@@ -31,7 +31,8 @@ groups() ->
             scan_trailing_whitespace_edge_cases,
             scan_empty_binary_reverse,
             scan_remaining_trim_branches,
-            scan_html_attribute_quote_preservation
+            scan_html_attribute_quote_preservation,
+            scan_attribute_spacing_after_dynamic
         ]}
     ].
 
@@ -41,26 +42,26 @@ groups() ->
 
 scan(Config) when is_list(Config) ->
     Expect = [
-        {comment, 66, ~"start"},
-        {static, 67, ~"Text1 "},
-        {dynamic, 68, ~"{{{expr1}}}"},
-        {comment, 69, ~"before text"},
-        {static, 69, ~"Text2\nText3"},
-        {comment, 70, ~"after text"},
-        {comment, 71, ~"before expr"},
-        {dynamic, 71, ~"expr2"},
-        {dynamic, 72, ~"expr3"},
-        {comment, 72, ~"after expr"},
-        {static, 73, ~"Text4"},
-        {comment, 73, ~"between text"},
-        {static, 73, ~"Text5 "},
-        {dynamic, 74, ~"expr4"},
-        {comment, 74, ~"between expr"},
-        {dynamic, 74, ~"expr5"},
-        {comment, 75, ~"mutiple\nlines of\ncomment"},
-        {dynamic, 78, ~"expr6"},
-        {dynamic, 78, ~"Foo = foo, case Foo of foo -> {foo, expr7}; _ -> expr7 end"},
-        {comment, 79, ~"end"}
+        {comment, 67, ~"start"},
+        {static, 68, ~"\nText1\n"},
+        {dynamic, 69, ~"{{{expr1}}}"},
+        {comment, 70, ~"before text"},
+        {static, 70, ~"\nText2\nText3"},
+        {comment, 71, ~"after text"},
+        {comment, 72, ~"before expr"},
+        {dynamic, 72, ~"expr2"},
+        {dynamic, 73, ~"expr3"},
+        {comment, 73, ~"after expr"},
+        {static, 74, ~"\n\n\nText4"},
+        {comment, 74, ~"between text"},
+        {static, 74, ~"Text5\n"},
+        {dynamic, 75, ~"expr4"},
+        {comment, 75, ~"between expr"},
+        {dynamic, 75, ~"expr5"},
+        {comment, 76, ~"mutiple\nlines of\ncomment"},
+        {dynamic, 79, ~"expr6"},
+        {dynamic, 79, ~"Foo = foo, case Foo of foo -> {foo, expr7}; _ -> expr7 end"},
+        {comment, 80, ~"end"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
     {%   start  }
@@ -103,9 +104,9 @@ scan_comment(Config) when is_list(Config) ->
 
 scan_start_static_end_static(Config) when is_list(Config) ->
     Expect = [
-        {static, 111, ~"Text1\nText2"},
-        {dynamic, 112, ~"expr1"},
-        {static, 112, ~"Text3\nText4"}
+        {static, 112, ~"Text1\nText2"},
+        {dynamic, 113, ~"expr1"},
+        {static, 113, ~"Text3\nText4"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
     Text1
@@ -116,10 +117,10 @@ scan_start_static_end_static(Config) when is_list(Config) ->
 
 scan_start_static_end_dynamic(Config) when is_list(Config) ->
     Expect = [
-        {static, 125, ~"Text1\nText2"},
-        {dynamic, 126, ~"expr1"},
-        {static, 126, ~"Text3\nText4 "},
-        {dynamic, 128, ~"expr2"}
+        {static, 126, ~"Text1\nText2"},
+        {dynamic, 127, ~"expr1"},
+        {static, 127, ~"Text3\nText4\n"},
+        {dynamic, 129, ~"expr2"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
     Text1
@@ -131,10 +132,10 @@ scan_start_static_end_dynamic(Config) when is_list(Config) ->
 
 scan_start_dynamic_end_static(Config) when is_list(Config) ->
     Expect = [
-        {dynamic, 140, ~"expr1"},
-        {static, 141, ~"Text1\nText2"},
-        {dynamic, 142, ~"expr2"},
-        {static, 142, ~"Text3\nText4"}
+        {dynamic, 141, ~"expr1"},
+        {static, 142, ~"\nText1\nText2"},
+        {dynamic, 143, ~"expr2"},
+        {static, 143, ~"Text3\nText4"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
     {expr1}
@@ -146,11 +147,11 @@ scan_start_dynamic_end_static(Config) when is_list(Config) ->
 
 scan_start_dynamic_end_dynamic(Config) when is_list(Config) ->
     Expect = [
-        {dynamic, 156, ~"expr1"},
-        {static, 157, ~"Text1\nText2"},
-        {dynamic, 158, ~"expr2"},
-        {static, 158, ~"Text3\nText4 "},
-        {dynamic, 160, ~"expr3"}
+        {dynamic, 157, ~"expr1"},
+        {static, 158, ~"\nText1\nText2"},
+        {dynamic, 159, ~"expr2"},
+        {static, 159, ~"Text3\nText4\n"},
+        {dynamic, 161, ~"expr3"}
     ],
     Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
     {expr1}
@@ -163,18 +164,18 @@ scan_start_dynamic_end_dynamic(Config) when is_list(Config) ->
 
 scan_new_line_cr(Config) when is_list(Config) ->
     Expect = [
-        {static, 1, ~"1 "},
+        {static, 1, ~"1\r"},
         {dynamic, 2, ~"[2,\r3]"},
-        {static, 4, ~"4"}
+        {static, 4, ~"\r4"}
     ],
     Got = arizona_scanner:scan(#{}, ~"1\r{[2,\r3]}\r4"),
     ?assertEqual(Expect, Got).
 
 scan_new_line_crlf(Config) when is_list(Config) ->
     Expect = [
-        {static, 1, ~"1 "},
+        {static, 1, ~"1\r\n"},
         {dynamic, 2, ~"[2,\r\n3]"},
-        {static, 4, ~"4"}
+        {static, 4, ~"\r\n4"}
     ],
     Got = arizona_scanner:scan(#{}, ~"1\r\n{[2,\r\n3]}\r\n4"),
     ?assertEqual(Expect, Got).
@@ -260,92 +261,84 @@ scan_trailing_whitespace_edge_cases(Config) when is_list(Config) ->
     Got2 = arizona_scanner:scan(#{}, Template2),
     ?assertEqual([], Got2).
 
-%% Test empty binary reverse case
+%% Test whitespace-only content preservation (formerly empty binary reverse case)
 scan_empty_binary_reverse(Config) when is_list(Config) ->
-    % Target line 216: binary_reverse(<<>>) -> <<>>
-    % This is triggered when trim_trailing processes an empty binary
+    % Now we preserve all content exactly, including whitespace-only content
 
-    % Test with whitespace-only content that gets fully trimmed (returns empty)
+    % Test with whitespace-only content is preserved (not trimmed to empty)
     Template1 = ~"  ",
     Got1 = arizona_scanner:scan(#{}, Template1),
-    % Whitespace-only templates get fully trimmed to empty
-    ?assertEqual([], Got1),
+    % Whitespace-only templates are preserved exactly
+    ?assertEqual([{static, 1, ~"  "}], Got1),
 
-    % Test empty template
+    % Test empty template remains empty
     Template2 = ~"",
     Got2 = arizona_scanner:scan(#{}, Template2),
     ?assertEqual([], Got2),
 
-    % Test case that actually triggers trim_trailing processing with content
+    % Test content with trailing spaces is preserved exactly
     Template3 = ~"Content  ",
     Got3 = arizona_scanner:scan(#{}, Template3),
-    % This should trigger trim_trailing and possibly binary_reverse(<<>>) in some path
-    ?assertMatch([{static, 1, _}], Got3).
+    % Trailing spaces are preserved
+    ?assertEqual([{static, 1, ~"Content  "}], Got3).
 
-%% Test remaining uncovered trim branches
+%% Test whitespace preservation (formerly trim branches)
 scan_remaining_trim_branches(Config) when is_list(Config) ->
-    % Based on testing, these patterns trigger the specific code paths:
+    % Now that we preserve user input exactly, these tests verify preservation behavior:
 
-    % Test leading \r\n to trigger line 188: trim(<<$\r, $\n, Rest/binary>>)
+    % Test leading \r\n is preserved
     Template1 = ~"\r\nText",
     Got1 = arizona_scanner:scan(#{}, Template1),
-    ?assertEqual([{static, 1, ~" Text"}], Got1),
+    ?assertEqual([{static, 1, ~"\r\nText"}], Got1),
 
-    % Test leading \r to trigger line 190: trim(<<$\r, Rest/binary>>)
+    % Test leading \r is preserved
     Template2 = ~"\rText",
     Got2 = arizona_scanner:scan(#{}, Template2),
-    ?assertEqual([{static, 1, ~" Text"}], Got2),
+    ?assertEqual([{static, 1, ~"\rText"}], Got2),
 
-    % Test leading \n to trigger line 192: trim(<<$\n, Rest/binary>>)
+    % Test leading \n is preserved
     Template3 = ~"\nText",
     Got3 = arizona_scanner:scan(#{}, Template3),
-    ?assertEqual([{static, 1, ~" Text"}], Got3),
+    ?assertEqual([{static, 1, ~"\nText"}], Got3),
 
-    % Trigger trim_trailing_1(<<>>) (line 202) and binary_reverse(<<>>) (line 216)
-    % Two spaces collapse to empty after normalization
+    % Two spaces are preserved (not collapsed to empty)
     Template4 = ~"  ",
     Got4 = arizona_scanner:scan(#{}, Template4),
-    ?assertEqual([], Got4),
+    ?assertEqual([{static, 1, ~"  "}], Got4),
 
-    % Multiple newlines also collapse to empty
+    % Multiple newlines are preserved
     Template5 = ~"\r\n\r\n",
     Got5 = arizona_scanner:scan(#{}, Template5),
-    ?assertEqual([], Got5),
+    ?assertEqual([{static, 1, ~"\r\n\r\n"}], Got5),
 
-    % Leading/trailing whitespace with content in middle gets properly trimmed
+    % Leading/trailing whitespace with content is preserved exactly
     Template6 = ~"  Text  ",
     Got6 = arizona_scanner:scan(#{}, Template6),
-    ?assertEqual([{static, 1, ~"Text"}], Got6),
+    ?assertEqual([{static, 1, ~"  Text  "}], Got6),
 
-    % Single newline/carriage return becomes single space (HTML DOM behavior)
+    % Single newline/carriage return is preserved (not converted to space)
     Template7 = ~"\r",
     Got7 = arizona_scanner:scan(#{}, Template7),
-    ?assertEqual([{static, 1, ~" "}], Got7),
+    ?assertEqual([{static, 1, ~"\r"}], Got7),
 
     Template8 = ~"\n",
     Got8 = arizona_scanner:scan(#{}, Template8),
-    ?assertEqual([{static, 1, ~" "}], Got8),
+    ?assertEqual([{static, 1, ~"\n"}], Got8),
 
-    % Single \r\n becomes single space
+    % Single \r\n is preserved
     Template9 = ~"\r\n",
     Got9 = arizona_scanner:scan(#{}, Template9),
-    ?assertEqual([{static, 1, ~" "}], Got9),
+    ?assertEqual([{static, 1, ~"\r\n"}], Got9),
 
-    % Test edge case that would trigger binary_reverse(<<>>) (line 216)
-    % This requires special input that gets fully consumed during leading trim
-    % Try a combination that might trigger this edge case
-
-    % Four spaces - should collapse to single space then fully trim to empty
+    % Four spaces are preserved exactly
     Template10 = ~"    ",
     Got10 = arizona_scanner:scan(#{}, Template10),
-    ?assertEqual([], Got10),
+    ?assertEqual([{static, 1, ~"    "}], Got10),
 
-    % Try another pattern that might trigger empty binary_reverse
-
-    % Mixed whitespace that might collapse completely
+    % Mixed whitespace is preserved exactly
     Template11 = ~"\n\r\n   \r",
     Got11 = arizona_scanner:scan(#{}, Template11),
-    ?assertMatch([], Got11).
+    ?assertEqual([{static, 1, ~"\n\r\n   \r"}], Got11).
 
 scan_html_attribute_quote_preservation(Config) when is_list(Config) ->
     % Test case for the HTML attribute quote preservation bug
@@ -387,3 +380,30 @@ scan_html_attribute_quote_preservation(Config) when is_list(Config) ->
     Expected1 = [{static, 1, ~"{{{{foo}}}}bar"}],
     Got1 = arizona_scanner:scan(#{}, Template1),
     ?assertEqual(Expected1, Got1).
+
+scan_attribute_spacing_after_dynamic(Config) when is_list(Config) ->
+    % Test that whitespace/newlines between dynamic elements and following attributes are preserved
+    % This reproduces the "checkedonclick" bug where space is lost between attributes
+    Template = ~"""
+    <input
+        type="checkbox" 
+        class="toggle"
+        data-testid="toggle-{maps:get(id, Todo)}"
+        {case maps:get(completed, Todo) of true -> ~"checked"; false -> ~"" end}
+        onclick="arizona.sendEvent('toggle_todo', \{id: '{maps:get(id, Todo)}'})"
+    />
+    """,
+
+    Expected = [
+        {static, 1,
+            ~"<input\n    type=\"checkbox\" \n    class=\"toggle\"\n    data-testid=\"toggle-"},
+        {dynamic, 4, ~"maps:get(id, Todo)"},
+        {static, 4, ~"\"\n    "},
+        {dynamic, 5, ~"case maps:get(completed, Todo) of true -> ~\"checked\"; false -> ~\"\" end"},
+        {static, 6, ~"\n    onclick=\"arizona.sendEvent('toggle_todo', {id: '"},
+        {dynamic, 6, ~"maps:get(id, Todo)"},
+        {static, 6, ~"'})\"\n/>"}
+    ],
+
+    Got = arizona_scanner:scan(#{}, Template),
+    ?assertEqual(Expected, Got).

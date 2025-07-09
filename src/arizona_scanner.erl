@@ -167,58 +167,12 @@ scan_next(<<>>, _Bin, _Len, _State) ->
     end_of_input.
 
 maybe_prepend_text_token(Bin, Len, State, Tokens) ->
-    case trim(binary_part(Bin, State#state.position, Len)) of
+    case binary_part(Bin, State#state.position, Len) of
         <<>> ->
             Tokens;
         Text ->
             [{static, State#state.line, Text} | Tokens]
     end.
-
-%% Normalize HTML whitespace according to browser rendering rules
-%%
-%% Implements standard HTML whitespace collapsing:
-%% - Sequences of whitespace collapse to a single space
-%% - Leading whitespace is removed
-%% - Trailing whitespace is removed
-%% - Newlines are converted to spaces
-%%
-%% This ensures the scanner output matches browser rendering behavior.
-%% See: https://developer.mozilla.org/en-US/docs/Web/API/Document_Object_Model/Whitespace
-trim(<<>>) ->
-    <<>>;
-trim(<<$\r, $\n, Rest/binary>>) ->
-    trim(<<$\s, Rest/binary>>);
-trim(<<$\r, Rest/binary>>) ->
-    trim(<<$\s, Rest/binary>>);
-trim(<<$\n, Rest/binary>>) ->
-    trim(<<$\s, Rest/binary>>);
-trim(<<$\s, $\s, Rest/binary>>) ->
-    trim(Rest);
-trim(Rest) ->
-    trim_trailing(Rest).
-
-trim_trailing(Rest) ->
-    trim_trailing_1(binary_reverse(Rest)).
-
-trim_trailing_1(<<>>) ->
-    <<>>;
-trim_trailing_1(<<$\n, $\r, Rest/binary>>) ->
-    trim_trailing_1(<<$\s, Rest/binary>>);
-trim_trailing_1(<<$\r, Rest/binary>>) ->
-    trim_trailing_1(<<$\s, Rest/binary>>);
-trim_trailing_1(<<$\n, Rest/binary>>) ->
-    trim_trailing_1(<<$\s, Rest/binary>>);
-trim_trailing_1(<<$\s, $\s, Rest/binary>>) ->
-    trim_trailing_1(Rest);
-trim_trailing_1(Rest) ->
-    binary_reverse(Rest).
-
-%% Efficiently reverse a binary (used for trailing whitespace removal)
-%% Note: This function is guaranteed to receive non-empty binaries due to
-%% trim/1 handling empty cases before calling trim_trailing/1
-binary_reverse(Bin) ->
-    Size = byte_size(Bin),
-    <<<<(binary:at(Bin, Size - I - 1))>> || I <- lists:seq(0, Size - 1)>>.
 
 %% Scan an Erlang expression, handling nested braces
 scan_expr(Rest0, Bin, State0) ->
@@ -240,16 +194,21 @@ process_found_expression({Len, EndMarkerLen, State1, Rest1}, Bin, State0) ->
     Token = {Category, State0#state.line, Expr},
 
     case maybe_skip_new_line(Rest1) of
-        {true, NLMarkerLen, Rest} ->
-            continue_after_newline(Token, Rest, Bin, Len, EndMarkerLen, NLMarkerLen, State1);
+        {true, NLMarker, Rest} ->
+            continue_after_newline(Token, Rest, Bin, Len, EndMarkerLen, NLMarker, State1);
         false ->
             continue_without_newline(Token, Rest1, Bin, Len, EndMarkerLen, State1)
     end.
 
 %% Continue scanning after skipping a newline
-continue_after_newline(Token, Rest, Bin, Len, EndMarkerLen, NLMarkerLen, State1) ->
+continue_after_newline(Token, Rest, Bin, Len, EndMarkerLen, NLMarker, State1) ->
+    NLMarkerLen = byte_size(NLMarker),
     State = new_line(incr_pos(Len + EndMarkerLen + NLMarkerLen, State1)),
-    [Token | scan(Rest, Bin, State)].
+    % Continue scanning normally, then prepend newline to first static token
+    NextTokens = scan(Rest, Bin, State),
+    % Prepend the newline to the first static token found
+    PrependedTokens = prepend_newline_to_first_static(NLMarker, NextTokens),
+    [Token | PrependedTokens].
 
 %% Continue scanning without skipping a newline
 continue_without_newline(Token, Rest1, Bin, Len, EndMarkerLen, State1) ->
@@ -284,11 +243,11 @@ scan_expr_end(<<>>, _Depth, Len, State) ->
     {error, unexpected_expr_end, incr_pos(Len, State)}.
 
 maybe_skip_new_line(<<$\r, $\n, Rest/binary>>) ->
-    {true, 2, Rest};
+    {true, <<$\r, $\n>>, Rest};
 maybe_skip_new_line(<<$\r, Rest/binary>>) ->
-    {true, 1, Rest};
+    {true, <<$\r>>, Rest};
 maybe_skip_new_line(<<$\n, Rest/binary>>) ->
-    {true, 1, Rest};
+    {true, <<$\n>>, Rest};
 maybe_skip_new_line(_Rest) ->
     false.
 
@@ -355,3 +314,11 @@ incr_pos(N, #state{position = Pos} = State) ->
 
 reset_pos(State) ->
     State#state{position = 0}.
+
+%% Prepend newline to the first static token in the list
+prepend_newline_to_first_static(NLMarker, [{static, Line, Text} | Rest]) ->
+    [{static, Line, <<NLMarker/binary, Text/binary>>} | Rest];
+prepend_newline_to_first_static(NLMarker, [Token | Rest]) ->
+    [Token | prepend_newline_to_first_static(NLMarker, Rest)];
+prepend_newline_to_first_static(_NLMarker, []) ->
+    [].

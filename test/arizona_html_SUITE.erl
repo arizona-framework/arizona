@@ -180,11 +180,11 @@ test_render_stateful_nested_calls(Config) when is_list(Config) ->
     ExpectedHtml = [
         ~"<div>\n    Level 0: ",
         [
-            ~"<span>Level 1: ",
+            ~"<span>Level 1:\n",
             [~"<p>Level 2: Deep nesting test</p>"],
-            ~"</span>"
+            ~"\n</span>"
         ],
-        ~"</div>"
+        ~"\n</div>"
     ],
 
     ?assertEqual(ExpectedHtml, ResultHtml).
@@ -378,7 +378,7 @@ test_render_list_with_variable_extraction(Config) when is_list(Config) ->
     FlatHtml = iolist_to_binary(Html),
 
     % Expected output: <ul> followed by list items with prefix_value pattern
-    ExpectedHtml = ~"<ul> <li>foo_1</li><li>foo_2</li><li>foo_3</li></ul>",
+    ExpectedHtml = ~"<ul>\n<li>foo_1</li><li>foo_2</li><li>foo_3</li>\n</ul>",
 
     ?assertEqual(ExpectedHtml, FlatHtml).
 
