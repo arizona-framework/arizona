@@ -31,6 +31,13 @@ them with optimized versions that avoid runtime template parsing overhead.
 -export([transform_stateless_to_ast/1]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([parse_transform/2]).
+-ignore_xref([format_error/1]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 

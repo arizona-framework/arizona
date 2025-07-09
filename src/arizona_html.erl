@@ -58,6 +58,18 @@ compatibility with compile-time optimized templates from the parse transform.
 -export([extract_list_item_parameter_name/1]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([render_stateful/2]).
+-ignore_xref([render_stateless/2]).
+-ignore_xref([render_list/3]).
+-ignore_xref([render_live/2]).
+-ignore_xref([render_slot/2]).
+-ignore_xref([render_slot/3]).
+-ignore_xref([extract_list_item_parameter_name/1]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 

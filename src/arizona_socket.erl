@@ -61,6 +61,17 @@ states, and temporary bindings throughout the rendering process.
 -export([get_layout/1]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([get_stateful_state/2]).
+-ignore_xref([get_stateful_states/1]).
+-ignore_xref([get_temp_binding/2]).
+-ignore_xref([put_binding/3]).
+-ignore_xref([set_current_stateful_id/2]).
+-ignore_xref([set_layout/2]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 

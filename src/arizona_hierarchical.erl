@@ -40,6 +40,16 @@ allowing for surgical DOM updates that minimize client-side re-rendering.
 -export([apply_diff/2]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([create_structure/0]).
+-ignore_xref([add_stateful/3]).
+-ignore_xref([set_element/4]).
+-ignore_xref([diff_structures/2]).
+-ignore_xref([apply_diff/2]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 

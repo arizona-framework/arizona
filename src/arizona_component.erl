@@ -56,6 +56,13 @@ This ensures proper resource management and optimal rendering performance.
 -export([call_stateless/4]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([call_stateful/3]).
+-ignore_xref([call_stateless/4]).
+
+%% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 

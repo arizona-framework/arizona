@@ -55,6 +55,14 @@ and state synchronization for interactive web applications.
 -export([json_encode/1]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([new_state/1]).
+-ignore_xref([get_live_pid/1]).
+-ignore_xref([json_encode/1]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 

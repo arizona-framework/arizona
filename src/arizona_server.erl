@@ -46,6 +46,17 @@ for starting and configuring the underlying Cowboy HTTP server.
 -export([get_route_type/1]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([start/1]).
+-ignore_xref([stop/0]).
+-ignore_xref([compile_routes/1]).
+-ignore_xref([route_to_cowboy/1]).
+-ignore_xref([new_route_metadata/2]).
+-ignore_xref([get_route_type/1]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 

@@ -58,6 +58,20 @@ and header parsing, ensuring optimal performance for common use cases.
 -export([get_raw_request/1]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([new/1]).
+-ignore_xref([get_bindings/1]).
+-ignore_xref([get_params/1]).
+-ignore_xref([get_cookies/1]).
+-ignore_xref([get_method/1]).
+-ignore_xref([get_path/1]).
+-ignore_xref([get_headers/1]).
+-ignore_xref([get_body/1]).
+-ignore_xref([get_raw_request/1]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 

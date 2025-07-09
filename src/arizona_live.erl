@@ -64,6 +64,13 @@ callbacks, ensuring robust error handling throughout the LiveView lifecycle.
 -export([call_handle_info_callback/3]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([call_handle_event_callback/4]).
+-ignore_xref([call_handle_info_callback/3]).
+
+%% --------------------------------------------------------------------
 %% Gen_server callback exports
 %% --------------------------------------------------------------------
 
