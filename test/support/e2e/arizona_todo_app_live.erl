@@ -1,4 +1,4 @@
--module(test_todo_app_live).
+-module(arizona_todo_app_live).
 -encoding(utf8).
 -behaviour(arizona_live).
 -compile({parse_transform, arizona_parse_transform}).
@@ -27,7 +27,7 @@ mount(_Params, Socket) ->
         },
         Socket
     ),
-    arizona_socket:set_layout({test_todo_app_layout, render, main_content}, Socket1).
+    arizona_socket:set_layout({arizona_todo_app_layout, render, main_content}, Socket1).
 
 handle_event(~"add_todo", _Params, Socket) ->
     NewTodoText = arizona_socket:get_binding(new_todo_text, Socket),
@@ -115,16 +115,16 @@ render(Socket) ->
                     >&times;</button>
                 </div>
                 """ end,
-                test_todo_app_live:filter_todos(arizona_socket:get_binding(todos, Socket), arizona_socket:get_binding(filter, Socket)),
+                arizona_todo_app_live:filter_todos(arizona_socket:get_binding(todos, Socket), arizona_socket:get_binding(filter, Socket)),
                 Socket
             )}
         </main>
         
         <footer class="footer" data-testid="footer">
-            {arizona_component:call_stateless(test_todo_app_live, render_stats, #{}, Socket)}
-            {arizona_component:call_stateless(test_todo_app_live, render_filters, #{}, Socket)}
+            {arizona_component:call_stateless(arizona_todo_app_live, render_stats, #{}, Socket)}
+            {arizona_component:call_stateless(arizona_todo_app_live, render_filters, #{}, Socket)}
             {case length(arizona_socket:get_binding(todos, Socket)) > length(lists:filter(fun(#{completed := Completed}) -> not Completed end, arizona_socket:get_binding(todos, Socket))) of
-                true -> arizona_component:call_stateless(test_todo_app_live, render_clear_button, #{}, Socket);
+                true -> arizona_component:call_stateless(arizona_todo_app_live, render_clear_button, #{}, Socket);
                 false -> ~""
             end}
         </footer>

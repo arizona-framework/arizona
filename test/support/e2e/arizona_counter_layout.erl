@@ -1,4 +1,4 @@
--module(test_counter_layout).
+-module(arizona_counter_layout).
 -compile({parse_transform, arizona_parse_transform}).
 
 %% Layout callbacks

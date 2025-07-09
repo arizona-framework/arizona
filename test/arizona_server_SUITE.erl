@@ -64,7 +64,7 @@ http_get(Url) ->
 %% Helper to create test LiveView component
 create_test_live_component() ->
     Code = merl:quote(~""""
-    -module(test_live_component).
+    -module(arizona_live_component).
     -behaviour(arizona_live).
     -export([mount/2, render/1]).
 
@@ -157,7 +157,7 @@ test_server_lifecycle(Config) when is_list(Config) ->
     ServerConfig = #{
         port => 8080,
         routes => [
-            {live, ~"/", test_live_component}
+            {live, ~"/", arizona_live_component}
         ]
     },
 
@@ -181,7 +181,7 @@ test_live_route_integration(Config) when is_list(Config) ->
     ServerConfig = #{
         port => 8081,
         routes => [
-            {live, ~"/test", test_live_component}
+            {live, ~"/test", arizona_live_component}
         ]
     },
 

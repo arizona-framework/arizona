@@ -97,7 +97,7 @@ end_per_suite(Config) when is_list(Config) ->
 test_stateless_transform(Config) when is_list(Config) ->
     % Create a simple AST with a stateless render call using merl:quote
     Forms = merl:quote(~""""
-    -module(test_stateless_module).
+    -module(arizona_stateless_module).
     -export([test_render/1]).
     test_render(Socket) ->
         arizona_html:render_stateless(~"""

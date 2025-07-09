@@ -1,4 +1,4 @@
--module(test_layout).
+-module(arizona_test_layout).
 
 %% Layout callbacks
 -export([render/1]).

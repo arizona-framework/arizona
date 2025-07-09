@@ -396,7 +396,7 @@ test_zip_dynamic_longer_than_static(Config) when is_list(Config) ->
 
 create_mock_socket() ->
     Id = ~"test_id",
-    Module = test_stateful_module_with_mount,
+    Module = arizona_stateful_module_with_mount,
     Bindings = #{},
     StatefulState = arizona_stateful:new(Id, Module, Bindings),
     Opts = #{

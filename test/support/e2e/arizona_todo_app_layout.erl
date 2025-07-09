@@ -1,4 +1,4 @@
--module(test_todo_app_layout).
+-module(arizona_todo_app_layout).
 -compile({parse_transform, arizona_parse_transform}).
 -export([render/1]).
 

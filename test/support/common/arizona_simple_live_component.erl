@@ -1,4 +1,4 @@
--module(simple_live_component).
+-module(arizona_simple_live_component).
 -behaviour(arizona_live).
 -export([mount/2, render/1]).
 

@@ -1,4 +1,4 @@
--module(test_live_component_with_info).
+-module(arizona_live_component_with_info).
 -behaviour(arizona_live).
 
 %% arizona_live callbacks
@@ -8,10 +8,12 @@
 
 mount(_Req, Socket) ->
     % Set up layout
-    SocketWithLayout = arizona_socket:set_layout({test_layout, render, main_content}, Socket),
+    SocketWithLayout = arizona_socket:set_layout(
+        {arizona_test_layout, render, main_content}, Socket
+    ),
 
     % For arizona_live, we need to create a root stateful state first
-    RootState = arizona_stateful:new(root, test_live_component_with_info, #{
+    RootState = arizona_stateful:new(root, arizona_live_component_with_info, #{
         name => ~"World",
         count => 0,
         messages => []

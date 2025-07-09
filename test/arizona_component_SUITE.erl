@@ -36,7 +36,7 @@ test_call_stateful_new_component(Config) when is_list(Config) ->
     %% Test creating a new stateful component when none exists
     Socket = create_mock_socket(),
     Bindings = #{initial_value => ~"test"},
-    Module = test_stateful_module_with_mount,
+    Module = arizona_stateful_module_with_mount,
 
     UpdatedSocket = arizona_component:call_stateful(Module, Bindings, Socket),
 
@@ -50,7 +50,7 @@ test_call_stateful_new_component(Config) when is_list(Config) ->
 test_call_stateful_existing_no_remount(Config) when is_list(Config) ->
     %% Test existing component that doesn't need remounting
     Socket = create_mock_socket(),
-    Module = test_stateful_module_with_mount,
+    Module = arizona_stateful_module_with_mount,
     Id = arizona_socket:get_current_stateful_id(Socket),
 
     %% Create existing state with same bindings that we'll pass
@@ -73,7 +73,7 @@ test_call_stateful_existing_no_remount(Config) when is_list(Config) ->
 test_call_stateful_existing_with_remount(Config) when is_list(Config) ->
     %% Test existing component that needs remounting
     Socket = create_mock_socket(),
-    Module = test_stateful_module_with_unmount,
+    Module = arizona_stateful_module_with_unmount,
     Id = arizona_socket:get_current_stateful_id(Socket),
 
     %% Create existing state with initial bindings first
@@ -100,7 +100,7 @@ test_call_stateful_component_not_found(Config) when is_list(Config) ->
     %% Test when no existing component state is found (error case)
     Socket = create_mock_socket_without_id(),
     Bindings = #{value => ~"test"},
-    Module = test_stateful_module_with_mount,
+    Module = arizona_stateful_module_with_mount,
 
     %% arizona_component will handle the mount lifecycle automatically
     UpdatedSocket = arizona_component:call_stateful(Module, Bindings, Socket),
@@ -115,7 +115,7 @@ test_call_stateful_component_not_found(Config) when is_list(Config) ->
 test_call_stateless_basic(Config) when is_list(Config) ->
     %% Test basic stateless component call
     Socket = create_mock_socket(),
-    Module = test_stateless_module,
+    Module = arizona_stateless_module,
     Fun = basic_render,
     Bindings = #{},
 
@@ -132,7 +132,7 @@ test_call_stateless_basic(Config) when is_list(Config) ->
 test_call_stateless_with_bindings(Config) when is_list(Config) ->
     %% Test stateless component with bindings
     Socket = create_mock_socket(),
-    Module = test_stateless_module,
+    Module = arizona_stateless_module,
     Fun = render_with_bindings,
     Bindings = #{title => ~"Test Title", content => ~"Test Content"},
 
@@ -150,7 +150,7 @@ test_call_stateless_with_bindings(Config) when is_list(Config) ->
 test_call_stateless_render_function(Config) when is_list(Config) ->
     %% Test that stateless component properly calls the render function
     Socket = create_mock_socket(),
-    Module = test_stateless_module,
+    Module = arizona_stateless_module,
     Fun = render_simple,
     Bindings = #{message => ~"Hello World"},
 

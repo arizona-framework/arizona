@@ -90,7 +90,7 @@ groups() ->
 %% --------------------------------------------------------------------
 
 test_call_mount_callback(Config) when is_list(Config) ->
-    Module = test_stateful_module_with_mount,
+    Module = arizona_stateful_module_with_mount,
     Socket = create_mock_socket(),
 
     %% Should call mount/1 and return updated socket
@@ -98,7 +98,7 @@ test_call_mount_callback(Config) when is_list(Config) ->
     ?assertNotEqual(Socket, UpdatedSocket).
 
 test_call_unmount_callback_with_export(Config) when is_list(Config) ->
-    Module = test_stateful_module_with_unmount,
+    Module = arizona_stateful_module_with_unmount,
     Socket = create_mock_socket(),
 
     %% Should call unmount/1 when exported
@@ -108,7 +108,7 @@ test_call_unmount_callback_with_export(Config) when is_list(Config) ->
 
 test_call_unmount_callback_without_export(Config) when is_list(Config) ->
     % This module doesn't export unmount/1
-    Module = test_stateful_module_with_mount,
+    Module = arizona_stateful_module_with_mount,
     Socket = create_mock_socket(),
 
     %% Should return socket unchanged when unmount/1 not exported
@@ -116,7 +116,7 @@ test_call_unmount_callback_without_export(Config) when is_list(Config) ->
     ?assertEqual(Socket, Result).
 
 test_call_render_callback(Config) when is_list(Config) ->
-    Module = test_stateful_module_with_mount,
+    Module = arizona_stateful_module_with_mount,
     %% Need to mount first to initialize status binding
     Socket = create_mock_socket(),
     MountedSocket = arizona_stateful:call_mount_callback(Module, Socket),

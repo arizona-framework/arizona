@@ -147,13 +147,13 @@ websocket_init_with_correct_path(_Config) ->
 
 test_websocket_init_function(_Config) ->
     % Test the actual websocket_init function with a real LiveView module
-    LiveModule = test_live_component_with_info,
+    LiveModule = arizona_live_component_with_info,
     ArizonaReq = arizona_request:new(#{
         method => ~"GET",
         path => ~"/test"
     }),
 
-    % This should work since test_live_component_with_info is a real LiveView module
+    % This should work since arizona_live_component_with_info is a real LiveView module
     {Commands, State} = arizona_websocket:websocket_init({LiveModule, ArizonaReq}),
 
     % Should return initial render command
@@ -240,7 +240,9 @@ test_websocket_handle_missing_type(_Config) ->
 
 test_websocket_handle_with_real_event(_Config) ->
     % Test websocket_handle with a real LiveView process that can handle events
-    {ok, LivePid} = arizona_live:start_link(test_live_component_with_info, arizona_socket:new(#{})),
+    {ok, LivePid} = arizona_live:start_link(
+        arizona_live_component_with_info, arizona_socket:new(#{})
+    ),
     State = arizona_websocket:new_state(LivePid),
 
     % Mount the live process first
@@ -264,7 +266,7 @@ test_websocket_handle_with_real_event(_Config) ->
 
 test_websocket_init_with_real_live_process(_Config) ->
     % Test websocket_init with a real LiveView process
-    LiveModule = test_live_component_with_info,
+    LiveModule = arizona_live_component_with_info,
     ArizonaReq = arizona_request:new(#{
         method => ~"GET",
         path => ~"/test"
@@ -327,7 +329,9 @@ test_init_with_missing_path_param(_Config) ->
 
 test_handle_noreply_response_with_socket_changes(_Config) ->
     % Test noreply path with actual socket changes
-    {ok, LivePid} = arizona_live:start_link(test_live_component_with_info, arizona_socket:new(#{})),
+    {ok, LivePid} = arizona_live:start_link(
+        arizona_live_component_with_info, arizona_socket:new(#{})
+    ),
     State = arizona_websocket:new_state(LivePid),
 
     % Mount the live process
@@ -351,7 +355,9 @@ test_handle_noreply_response_with_socket_changes(_Config) ->
 
 test_mock_live_module_for_reply_responses(_Config) ->
     % Test reply response path
-    {ok, LivePid} = arizona_live:start_link(test_live_component_with_info, arizona_socket:new(#{})),
+    {ok, LivePid} = arizona_live:start_link(
+        arizona_live_component_with_info, arizona_socket:new(#{})
+    ),
     State = arizona_websocket:new_state(LivePid),
 
     % Mount the live process

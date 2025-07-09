@@ -433,7 +433,7 @@ test_to_html_socket(Config) when is_list(Config) ->
 
 create_mock_socket() ->
     Id = ~"test_id",
-    Module = test_stateful_module_with_mount,
+    Module = arizona_stateful_module_with_mount,
     Bindings = #{},
     StatefulState = arizona_stateful:new(Id, Module, Bindings),
     Opts = #{
@@ -634,7 +634,7 @@ test_render_slot_list_content(Config) when is_list(Config) ->
 test_render_slot_stateless_component(Config) when is_list(Config) ->
     % Create socket with stateless component slot using existing test module
     ComponentSlot =
-        {stateless, test_stateless_module, render_with_bindings, #{
+        {stateless, arizona_stateless_module, render_with_bindings, #{
             title => ~"Test Title", content => ~"Test Content"
         }},
     Socket = create_socket_with_binding(component_slot, ComponentSlot),
@@ -645,7 +645,7 @@ test_render_slot_stateless_component(Config) when is_list(Config) ->
     % Verify component was rendered
     ?assert(arizona_socket:is_socket(UpdatedSocket)),
     Html = arizona_socket:get_html(UpdatedSocket),
-    % The test_stateless_module:render_with_bindings/1 should return expected content
+    % The arizona_stateless_module:render_with_bindings/1 should return expected content
     ExpectedHtml = iolist_to_binary([
         ~"<div class=\"stateless-with-bindings\">\n    <h2>Test Title</h2>\n    ",
         ~"<p>Test Content</p>\n</div>"
@@ -665,7 +665,7 @@ test_render_live_diff_mode_with_layout(Config) when is_list(Config) ->
     },
 
     % Create socket in diff mode with layout configured
-    LayoutModule = test_layout_module,
+    LayoutModule = arizona_test_layout,
     LayoutRenderFun = render,
     SlotName = content,
 

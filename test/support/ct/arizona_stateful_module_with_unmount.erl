@@ -1,4 +1,4 @@
--module(test_stateful_module_with_unmount).
+-module(arizona_stateful_module_with_unmount).
 -behaviour(arizona_stateful).
 -compile({parse_transform, arizona_parse_transform}).
 -export([mount/1, render/1, unmount/1]).

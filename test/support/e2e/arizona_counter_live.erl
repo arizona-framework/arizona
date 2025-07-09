@@ -1,4 +1,4 @@
--module(test_counter_live).
+-module(arizona_counter_live).
 -behaviour(arizona_live).
 -compile({parse_transform, arizona_parse_transform}).
 
@@ -7,7 +7,7 @@
 % Simple counter component for E2E testing
 mount(_Params, Socket) ->
     Socket1 = arizona_socket:put_binding(count, 0, Socket),
-    arizona_socket:set_layout({test_counter_layout, render, main_content}, Socket1).
+    arizona_socket:set_layout({arizona_counter_layout, render, main_content}, Socket1).
 
 render(Socket) ->
     arizona_html:render_live(~"""

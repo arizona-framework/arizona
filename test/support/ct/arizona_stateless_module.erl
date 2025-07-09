@@ -1,4 +1,4 @@
--module(test_stateless_module).
+-module(arizona_stateless_module).
 -compile({parse_transform, arizona_parse_transform}).
 -compile([export_all, nowarn_export_all]).
 

@@ -66,14 +66,14 @@ end_per_suite(Config) ->
 %% --------------------------------------------------------------------
 
 test_start_live_component(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
 
     % Verify process was started
     ?assert(is_pid(Pid)),
     ?assert(is_process_alive(Pid)).
 
 test_mount_callback(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
 
     % Test mount with different request options
     Socket = arizona_live_test_helpers:mount_live(Pid, #{
@@ -101,7 +101,7 @@ test_render_without_layout(Config) when is_list(Config) ->
     arizona_live_test_helpers:assert_html_contains(RenderedSocket, ~"Test content").
 
 test_render_with_layout(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
 
     % Render with layout
     Socket = arizona_live_test_helpers:render_live(Pid),
@@ -113,7 +113,7 @@ test_render_with_layout(Config) when is_list(Config) ->
     arizona_live_test_helpers:assert_html_contains(Socket, ~"Hello, World!").
 
 test_socket_bindings(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
 
     % Test initial bindings
     Socket = arizona_live_test_helpers:render_live(Pid),
@@ -125,7 +125,7 @@ test_socket_bindings(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 
 test_handle_event_increment(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
 
     % Test increment event
     {noreply, Socket1} = arizona_live_test_helpers:send_event(Pid, ~"increment", #{}),
@@ -136,7 +136,7 @@ test_handle_event_increment(Config) when is_list(Config) ->
     arizona_live_test_helpers:assert_binding(Socket2, count, 2).
 
 test_handle_event_decrement(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
 
     % Increment first to have something to decrement
     {noreply, _Socket1} = arizona_live_test_helpers:send_event(Pid, ~"increment", #{}),
@@ -147,7 +147,7 @@ test_handle_event_decrement(Config) when is_list(Config) ->
     arizona_live_test_helpers:assert_binding(Socket3, count, 1).
 
 test_handle_event_reset(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
 
     % Increment first
     {noreply, _Socket1} = arizona_live_test_helpers:send_event(Pid, ~"increment", #{}),
@@ -162,7 +162,7 @@ test_handle_event_reset(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 
 test_layout_injection(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
 
     % Render and check layout injection
     Socket = arizona_live_test_helpers:render_live(Pid),
@@ -173,7 +173,7 @@ test_layout_injection(Config) when is_list(Config) ->
     arizona_live_test_helpers:assert_html_contains(Socket, ~"</main>").
 
 test_layout_slot_rendering(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
 
     % Render and check slot content
     Socket = arizona_live_test_helpers:render_live(Pid),
@@ -187,7 +187,7 @@ test_layout_slot_rendering(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 
 test_handle_event_reply_branch(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component_with_info),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component_with_info),
 
     % Test handle_event that returns {reply, Reply, Socket}
     {reply, Reply, Socket} = arizona_live_test_helpers:send_event(Pid, ~"reply_test", #{}),
@@ -201,7 +201,7 @@ test_handle_event_reply_branch(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 
 test_handle_info_callback(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component_with_info),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component_with_info),
 
     % Send info message to the gen_server process
     Pid ! {add_message, ~"Test message"},
@@ -214,7 +214,7 @@ test_handle_info_callback(Config) when is_list(Config) ->
     arizona_live_test_helpers:assert_binding_contains(Socket, messages, ~"Test message").
 
 test_handle_cast_callback(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
 
     % Send a cast message (should be ignored but not crash)
     gen_server:cast(Pid, test_cast_message),
@@ -231,7 +231,7 @@ test_call_handle_info_callback_with_function(Config) when is_list(Config) ->
 
     % Test with module that exports handle_info/2
     Result = arizona_live:call_handle_info_callback(
-        test_live_component_with_info, test_info, Socket
+        arizona_live_component_with_info, test_info, Socket
     ),
 
     % Should return {noreply, Socket}
@@ -242,7 +242,7 @@ test_call_handle_info_callback_without_function(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => render}),
 
     % Test with module that does NOT export handle_info/2
-    Result = arizona_live:call_handle_info_callback(test_live_component, test_info, Socket),
+    Result = arizona_live:call_handle_info_callback(arizona_live_component, test_info, Socket),
 
     % Should return {noreply, Socket} as default
     ?assertMatch({noreply, Socket}, Result),
@@ -253,7 +253,7 @@ test_call_handle_event_callback_with_function(Config) when is_list(Config) ->
 
     % Test with module that exports handle_event/3
     Result = arizona_live:call_handle_event_callback(
-        test_live_component, ~"test_event", #{}, Socket
+        arizona_live_component, ~"test_event", #{}, Socket
     ),
 
     % Should return {noreply, Socket}
@@ -274,7 +274,7 @@ test_call_handle_event_callback_without_function(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 
 test_unknown_handle_call(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
 
     % This should test the handle_call pattern matching, but since all patterns
     % are covered in arizona_live.erl, we test the mount/render/handle_event functions
@@ -293,7 +293,7 @@ test_unknown_handle_call(Config) when is_list(Config) ->
     ?assert(arizona_socket:is_socket(Socket3)).
 
 test_handle_event_unknown_event(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(test_live_component),
+    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
 
     % Test unknown event (should be handled by catch-all clause)
     {noreply, Socket} = arizona_live_test_helpers:send_event(Pid, ~"unknown_event", #{}),
