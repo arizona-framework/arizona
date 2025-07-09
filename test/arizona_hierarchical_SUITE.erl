@@ -996,24 +996,29 @@ hierarchical_stateless_in_stateful_template(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => hierarchical}),
     MockState = arizona_stateful:new(root, test_module, #{status_text => ~"Active"}),
     SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
-    
+
     % Now we test stateful template that contains render_stateless call
     TemplateData = #{
         elems_order => [0, 1, 2],
         elems => #{
             0 => {static, 1, ~"<div>"},
-            1 => {dynamic, 2, fun(Socket1) -> arizona_html:render_stateless(StatelessTemplate, Socket1) end},
+            1 =>
+                {dynamic, 2, fun(Socket1) ->
+                    arizona_html:render_stateless(StatelessTemplate, Socket1)
+                end},
             2 => {static, 3, ~"</div>"}
         },
         vars_indexes => #{}
     },
-    
+
     % Use stateful structure generation
-    {_ComponentStructure, UpdatedSocket} = arizona_hierarchical:stateful_structure(TemplateData, SocketWithState),
-    
+    {_ComponentStructure, UpdatedSocket} = arizona_hierarchical:stateful_structure(
+        TemplateData, SocketWithState
+    ),
+
     % Check what's stored in hierarchical_acc
     HierarchicalAcc = arizona_socket:get_hierarchical_acc(UpdatedSocket),
-    
+
     % This should contain the stateless structure as element 1 of the root component
     ExpectedStructure = #{
         root => #{
@@ -1029,5 +1034,5 @@ hierarchical_stateless_in_stateful_template(Config) when is_list(Config) ->
             2 => ~"</div>"
         }
     },
-    
+
     ?assertEqual(ExpectedStructure, HierarchicalAcc).
