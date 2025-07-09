@@ -1,96 +1,184 @@
 -module(arizona_hierarchical).
 -moduledoc ~"""
-Arizona Hierarchical Renderer - JSON-compatible structures for WebSocket clients.
-
-This module implements hierarchical rendering for Arizona templates to enable
+Provides hierarchical rendering functionality for Arizona templates to enable
 efficient real-time updates via WebSocket connections with surgical DOM updates.
 
-Key features:
-- JSON-compatible structure format for WebSocket transmission
-- Stateful components: Separate hierarchical entries by ID
-- Stateless components: Nested diffable structures
-- List components: Static template + dynamic data separation
-- Granular diffing: Element-level changes within any component type
+## Overview
+
+The hierarchical renderer provides a structured approach to template rendering
+that maintains JSON-compatible data structures for efficient WebSocket transmission.
+It supports three main component types:
+
+- **Stateful components**: Separate hierarchical entries by ID for independent updates
+- **Stateless components**: Nested diffable structures for lightweight components
+- **List components**: Static template + dynamic data separation for efficient list rendering
+
+The module enables granular diffing at the element level within any component type,
+allowing for surgical DOM updates that minimize client-side re-rendering.
+
+## Key Functions
+
+- `create_structure/0`: Initialize empty hierarchical structure
+- `stateful_structure/2`: Generate structure for stateful components
+- `stateless_structure/2`: Generate structure for stateless components
+- `list_structure/3`: Generate structure for list components with static/dynamic parts
+- `diff_structures/2`: Generate diff operations between two structures
+- `apply_diff/2`: Apply diff operations to transform structures
 """.
 
--export([
-    % Structure creation
-    create_structure/0,
-    add_stateful/3,
-    set_element/4,
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
 
-    % Hierarchical rendering
-    stateful_structure/2,
-    stateless_structure/2,
-    list_structure/3,
+-export([create_structure/0]).
+-export([add_stateful/3]).
+-export([set_element/4]).
+-export([stateful_structure/2]).
+-export([stateless_structure/2]).
+-export([list_structure/3]).
+-export([diff_structures/2]).
+-export([apply_diff/2]).
 
-    % Diff operations
-    diff_structures/2,
-    apply_diff/2
-]).
+%% --------------------------------------------------------------------
+%% Types exports
+%% --------------------------------------------------------------------
 
-%% Types - JSON compatible
+-export_type([element_index/0]).
+-export_type([element_content/0]).
+-export_type([stateful_render/0]).
+-export_type([hierarchical_structure/0]).
+-export_type([diff_operation/0]).
+-export_type([element_diff/0]).
+-export_type([hierarchical_diff/0]).
 
-% JSON encode/decode handles integer keys
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
+
+-doc ~"""
+Index for elements within a component structure.
+""".
 -type element_index() :: non_neg_integer().
 
+-doc ~"""
+Content that can be stored in a hierarchical element.
+
+Can be static HTML, a reference to a stateful component, a nested stateless structure,
+or a list component with static template and dynamic data.
+""".
 -type element_content() ::
-    % Static HTML
     arizona_html:html()
     | #{type := stateful, id := arizona_stateful:id()}
     | #{type := stateless, structure := #{element_index() => element_content()}}
     | #{type := list, static := [binary()], dynamic := [#{element_index() => element_content()}]}.
 
+-doc ~"""
+Structure representing a rendered stateful component mapping element indices to content.
+""".
 -type stateful_render() :: #{element_index() => element_content()}.
+
+-doc ~"""
+Complete hierarchical structure mapping component IDs to their rendered content.
+""".
 -type hierarchical_structure() :: #{arizona_stateful:id() => stateful_render()}.
 
-%% Diff types - JSON compatible
+-doc ~"""
+Operation describing a change to a hierarchical structure.
+
+Can be adding, removing, or updating a stateful component.
+""".
 -type diff_operation() :: #{
     type := add_stateful | remove_stateful | update_stateful,
     stateful_id := arizona_stateful:id(),
     data := term()
 }.
 
+-doc ~"""
+Operation describing a change to an element within a component.
+
+Can be setting, removing, or updating an element at a specific index.
+""".
 -type element_diff() :: #{
     type := set_element | remove_element | update_stateless | update_list_dynamic,
     element_index := element_index(),
     data := term()
 }.
 
+-doc ~"""
+List of diff operations to transform one hierarchical structure to another.
+""".
 -type hierarchical_diff() :: [diff_operation()].
 
--export_type([
-    element_index/0,
-    element_content/0,
-    stateful_render/0,
-    hierarchical_structure/0,
-    diff_operation/0,
-    element_diff/0,
-    hierarchical_diff/0
-]).
+%% --------------------------------------------------------------------
+%% API function definitions
+%% --------------------------------------------------------------------
 
-%% ============================================================================
-%% Structure Creation API
-%% ============================================================================
+-doc ~"""
+Create empty hierarchical structure for building component hierarchies.
 
-%% @doc Create empty hierarchical structure
--spec create_structure() -> hierarchical_structure().
+Returns a new empty hierarchical structure that can be used to build up
+component hierarchies incrementally.
+
+## Examples
+
+```erlang
+1> arizona_hierarchical:create_structure().
+#{}
+```
+""".
+-spec create_structure() -> HierarchicalStructure when
+    HierarchicalStructure :: hierarchical_structure().
 create_structure() ->
     #{}.
 
-%% @doc Add stateful component to hierarchical structure
--spec add_stateful(arizona_stateful:id(), stateful_render(), hierarchical_structure()) ->
-    hierarchical_structure().
+-doc ~"""
+Add stateful component with the given ID and render data to the hierarchical structure.
+
+Adds a stateful component to the hierarchical structure, allowing it to be
+independently updated and diffed.
+
+## Examples
+
+```erlang
+1> Structure = arizona_hierarchical:create_structure().
+#{}
+2> Render = #{0 => <<"Hello">>, 1 => <<"World">>}.
+#{0 => <<"Hello">>,1 => <<"World">>}
+3> arizona_hierarchical:add_stateful(root, Render, Structure).
+#{root => #{0 => <<"Hello">>,1 => <<"World">>}}
+```
+""".
+-spec add_stateful(StatefulId, StatefulRender, Structure) -> UpdatedStructure when
+    StatefulId :: arizona_stateful:id(),
+    StatefulRender :: stateful_render(),
+    Structure :: hierarchical_structure(),
+    UpdatedStructure :: hierarchical_structure().
 add_stateful(StatefulId, StatefulRender, Structure) when
     is_map(StatefulRender), is_map(Structure)
 ->
     Structure#{StatefulId => StatefulRender}.
 
-%% @doc Set element in stateful component
--spec set_element(
-    arizona_stateful:id(), element_index(), element_content(), hierarchical_structure()
-) ->
-    hierarchical_structure().
+-doc ~"""
+Set or update an element at the specified index within a stateful component.
+
+Updates a specific element within a stateful component's render structure,
+creating the component if it doesn't exist.
+
+## Examples
+
+```erlang
+1> Structure = arizona_hierarchical:create_structure().
+#{}
+2> arizona_hierarchical:set_element(root, 0, <<"Content">>, Structure).
+#{root => #{0 => <<"Content">>}}
+```
+""".
+-spec set_element(StatefulId, ElementIndex, Content, Structure) -> UpdatedStructure when
+    StatefulId :: arizona_stateful:id(),
+    ElementIndex :: element_index(),
+    Content :: element_content(),
+    Structure :: hierarchical_structure(),
+    UpdatedStructure :: hierarchical_structure().
 set_element(StatefulId, ElementIndex, Content, Structure) when
     is_integer(ElementIndex), is_map(Structure)
 ->
@@ -98,13 +186,101 @@ set_element(StatefulId, ElementIndex, Content, Structure) when
     UpdatedRender = StatefulRender#{ElementIndex => Content},
     Structure#{StatefulId => UpdatedRender}.
 
-%% ============================================================================
-%% Diff Operations
-%% ============================================================================
+-doc ~"""
+Generate hierarchical structure for stateful component with efficient diffing support.
 
-%% @doc Generate diff between two hierarchical structures
--spec diff_structures(hierarchical_structure(), hierarchical_structure()) ->
-    hierarchical_diff().
+Processes a stateful template and generates a hierarchical structure that can be
+efficiently diffed and transmitted via WebSocket for real-time updates.
+""".
+-spec stateful_structure(TemplateData, Socket) -> {ComponentStructure, Socket1} when
+    TemplateData :: arizona_renderer:stateful_template_data(),
+    Socket :: arizona_socket:socket(),
+    ComponentStructure :: stateful_render(),
+    Socket1 :: arizona_socket:socket().
+stateful_structure(#{elems_order := Order, elems := Elements}, Socket) ->
+    StatefulId = arizona_socket:get_current_stateful_id(Socket),
+    CurrentHierarchical = arizona_socket:get_hierarchical_acc(Socket),
+
+    % Generate elements structure
+    {ComponentRender, UpdatedSocket} = elements_structure(Order, Elements, Socket, #{}),
+
+    % Update hierarchical accumulator
+    NewHierarchical = CurrentHierarchical#{StatefulId => ComponentRender},
+    UpdatedSocket1 = arizona_socket:set_hierarchical_acc(NewHierarchical, UpdatedSocket),
+
+    {ComponentRender, UpdatedSocket1}.
+
+-doc ~"""
+Generate hierarchical structure for stateless component that can be embedded within
+stateful components.
+
+Processes a stateless template and generates a nested structure that can be
+embedded within stateful components for efficient rendering and updates.
+""".
+-spec stateless_structure(TemplateData, Socket) -> {StatelessElement, Socket1} when
+    TemplateData :: arizona_renderer:stateless_template_data(),
+    Socket :: arizona_socket:socket(),
+    StatelessElement :: element_content(),
+    Socket1 :: arizona_socket:socket().
+stateless_structure(StructuredList, Socket) ->
+    {StatelessStructure, UpdatedSocket} = stateless_list_to_structure(StructuredList, Socket),
+    StatelessElement = #{type => stateless, structure => StatelessStructure},
+    UpdatedSocket1 = arizona_socket:set_hierarchical_pending_element(
+        StatelessElement, UpdatedSocket
+    ),
+    {StatelessElement, UpdatedSocket1}.
+
+-doc ~"""
+Generate hierarchical structure for list component with static template and dynamic data for
+efficient rendering.
+
+Processes a list template with static and dynamic parts, generating an optimized
+structure that separates static template content from dynamic data for efficient
+list rendering and updates.
+""".
+-spec list_structure(ListData, Items, Socket) -> {ListElement, Socket1} when
+    ListData :: arizona_renderer:list_template_data(),
+    Items :: [term()],
+    Socket :: arizona_socket:socket(),
+    ListElement :: element_content(),
+    Socket1 :: arizona_socket:socket().
+list_structure(#{static := Static, dynamic := DynamicTemplate}, Items, Socket) ->
+    % Generate dynamic data for each item
+    {DynamicData, UpdatedSocket} = list_items_to_dynamic_data(DynamicTemplate, Items, Socket, []),
+
+    % Create list structure
+    ListElement = #{
+        type => list,
+        static => Static,
+        dynamic => DynamicData
+    },
+
+    UpdatedSocket1 = arizona_socket:set_hierarchical_pending_element(ListElement, UpdatedSocket),
+    {ListElement, UpdatedSocket1}.
+
+-doc ~"""
+Generate diff operations between two hierarchical structures for efficient updates.
+
+Compares two hierarchical structures and generates a list of diff operations
+that describe the changes needed to transform the old structure into the new
+structure, enabling efficient WebSocket updates.
+
+## Examples
+
+```erlang
+1> Old = #{root => #{0 => <<"Old">>}}.
+#{root => #{0 => <<"Old">>}}
+2> New = #{root => #{0 => <<"New">>}}.
+#{root => #{0 => <<"New">>}}
+3> arizona_hierarchical:diff_structures(Old, New).
+[#{type => update_stateful, stateful_id => root,
+   data => [#{type => set_element, element_index => 0, data => <<"New">>}]}]
+```
+""".
+-spec diff_structures(OldStructure, NewStructure) -> HierarchicalDiff when
+    OldStructure :: hierarchical_structure(),
+    NewStructure :: hierarchical_structure(),
+    HierarchicalDiff :: hierarchical_diff().
 diff_structures(OldStructure, NewStructure) when is_map(OldStructure), is_map(NewStructure) ->
     OldComponents = maps:keys(OldStructure),
     NewComponents = maps:keys(NewStructure),
@@ -121,7 +297,41 @@ diff_structures(OldStructure, NewStructure) when is_map(OldStructure), is_map(Ne
 
     AddOps ++ RemoveOps ++ UpdateOps.
 
-%% @doc Generate add operations for new components
+-doc ~"""
+Apply diff operations to hierarchical structure to transform it according to specified changes.
+
+Applies a list of diff operations to a hierarchical structure, transforming it
+according to the specified changes. This is the inverse operation of diff_structures/2.
+
+## Examples
+
+```erlang
+1> Structure = #{root => #{0 => <<"Old">>}}.
+#{root => #{0 => <<"Old">>}}
+2> Diff = [#{type => update_stateful, stateful_id => root,
+2>          data => [#{type => set_element, element_index => 0, data => <<"New">>}]}].
+[#{type => update_stateful, stateful_id => root,
+   data => [#{type => set_element, element_index => 0, data => <<"New">>}]}]
+3> arizona_hierarchical:apply_diff(Diff, Structure).
+#{root => #{0 => <<"New">>}}
+```
+""".
+-spec apply_diff(Diff, Structure) -> UpdatedStructure when
+    Diff :: hierarchical_diff(),
+    Structure :: hierarchical_structure(),
+    UpdatedStructure :: hierarchical_structure().
+apply_diff(Diff, Structure) when is_list(Diff), is_map(Structure) ->
+    lists:foldl(fun apply_diff_operation/2, Structure, Diff).
+
+%% --------------------------------------------------------------------
+%% Private functions
+%% --------------------------------------------------------------------
+
+%% Generate add operations for new components
+-spec generate_add_ops(AddedComponents, NewStructure) -> DiffOperations when
+    AddedComponents :: [arizona_stateful:id()],
+    NewStructure :: hierarchical_structure(),
+    DiffOperations :: [diff_operation()].
 generate_add_ops(AddedComponents, NewStructure) ->
     [
         #{
@@ -132,7 +342,10 @@ generate_add_ops(AddedComponents, NewStructure) ->
      || StatefulId <- AddedComponents
     ].
 
-%% @doc Generate remove operations for removed components
+%% Generate remove operations for removed components
+-spec generate_remove_ops(RemovedComponents) -> DiffOperations when
+    RemovedComponents :: [arizona_stateful:id()],
+    DiffOperations :: [diff_operation()].
 generate_remove_ops(RemovedComponents) ->
     [
         #{
@@ -143,7 +356,12 @@ generate_remove_ops(RemovedComponents) ->
      || StatefulId <- RemovedComponents
     ].
 
-%% @doc Generate update operations for potentially changed components
+%% Generate update operations for potentially changed components
+-spec generate_update_ops(CommonComponents, OldStructure, NewStructure) -> DiffOperations when
+    CommonComponents :: [arizona_stateful:id()],
+    OldStructure :: hierarchical_structure(),
+    NewStructure :: hierarchical_structure(),
+    DiffOperations :: [diff_operation()].
 generate_update_ops(CommonComponents, OldStructure, NewStructure) ->
     lists:filtermap(
         fun(StatefulId) ->
@@ -164,8 +382,11 @@ generate_update_ops(CommonComponents, OldStructure, NewStructure) ->
         CommonComponents
     ).
 
-%% @doc Diff two stateful components
--spec diff_components(stateful_render(), stateful_render()) -> [element_diff()].
+%% Compare two stateful components and generate element diffs
+-spec diff_components(OldComponent, NewComponent) -> ElementDiffs when
+    OldComponent :: stateful_render(),
+    NewComponent :: stateful_render(),
+    ElementDiffs :: [element_diff()].
 diff_components(OldComponent, NewComponent) when is_map(OldComponent), is_map(NewComponent) ->
     OldElements = maps:keys(OldComponent),
     NewElements = maps:keys(NewComponent),
@@ -182,7 +403,11 @@ diff_components(OldComponent, NewComponent) when is_map(OldComponent), is_map(Ne
 
     AddDiffs ++ RemoveDiffs ++ UpdateDiffs.
 
-%% @doc Generate add diffs for new elements
+%% Generate add diffs for new elements
+-spec generate_element_add_diffs(AddedElements, NewComponent) -> ElementDiffs when
+    AddedElements :: [element_index()],
+    NewComponent :: stateful_render(),
+    ElementDiffs :: [element_diff()].
 generate_element_add_diffs(AddedElements, NewComponent) ->
     [
         #{
@@ -193,7 +418,10 @@ generate_element_add_diffs(AddedElements, NewComponent) ->
      || ElementIndex <- AddedElements
     ].
 
-%% @doc Generate remove diffs for removed elements
+%% Generate remove diffs for removed elements
+-spec generate_element_remove_diffs(RemovedElements) -> ElementDiffs when
+    RemovedElements :: [element_index()],
+    ElementDiffs :: [element_diff()].
 generate_element_remove_diffs(RemovedElements) ->
     [
         #{
@@ -204,7 +432,12 @@ generate_element_remove_diffs(RemovedElements) ->
      || ElementIndex <- RemovedElements
     ].
 
-%% @doc Generate update diffs for potentially changed elements
+%% Generate update diffs for potentially changed elements
+-spec generate_element_update_diffs(CommonElements, OldComponent, NewComponent) -> ElementDiffs when
+    CommonElements :: [element_index()],
+    OldComponent :: stateful_render(),
+    NewComponent :: stateful_render(),
+    ElementDiffs :: [element_diff()].
 generate_element_update_diffs(CommonElements, OldComponent, NewComponent) ->
     lists:filtermap(
         fun(ElementIndex) ->
@@ -215,9 +448,13 @@ generate_element_update_diffs(CommonElements, OldComponent, NewComponent) ->
         CommonElements
     ).
 
-%% @doc Diff element content (handles nested structures)
--spec diff_element_content(element_index(), element_content(), element_content()) ->
-    false | {true, element_diff()}.
+%% Compare element content and generate appropriate diff operations
+%% Handles nested structures like stateless components and lists
+-spec diff_element_content(ElementIndex, OldContent, NewContent) -> Result when
+    ElementIndex :: element_index(),
+    OldContent :: element_content(),
+    NewContent :: element_content(),
+    Result :: false | {true, element_diff()}.
 diff_element_content(ElementIndex, OldContent, NewContent) ->
     case {OldContent, NewContent} of
         {Same, Same} ->
@@ -241,7 +478,12 @@ diff_element_content(ElementIndex, OldContent, NewContent) ->
             }}
     end.
 
-%% @doc Diff stateless content
+%% Compare stateless content structures
+-spec diff_stateless_content(ElementIndex, OldStruct, NewStruct) -> Result when
+    ElementIndex :: element_index(),
+    OldStruct :: #{element_index() => element_content()},
+    NewStruct :: #{element_index() => element_content()},
+    Result :: false | {true, element_diff()}.
 diff_stateless_content(ElementIndex, OldStruct, NewStruct) ->
     case diff_components(OldStruct, NewStruct) of
         [] ->
@@ -254,7 +496,12 @@ diff_stateless_content(ElementIndex, OldStruct, NewStruct) ->
             }}
     end.
 
-%% @doc Diff list content with same static template
+%% Compare list content with same static template
+-spec diff_list_content(ElementIndex, OldDynamic, NewDynamic) -> Result when
+    ElementIndex :: element_index(),
+    OldDynamic :: [#{element_index() => element_content()}],
+    NewDynamic :: [#{element_index() => element_content()}],
+    Result :: false | {true, element_diff()}.
 diff_list_content(ElementIndex, OldDynamic, NewDynamic) ->
     case OldDynamic =:= NewDynamic of
         true ->
@@ -267,15 +514,11 @@ diff_list_content(ElementIndex, OldDynamic, NewDynamic) ->
             }}
     end.
 
-%% @doc Apply diff to hierarchical structure
--spec apply_diff(hierarchical_diff(), hierarchical_structure()) ->
-    hierarchical_structure().
-apply_diff(Diff, Structure) when is_list(Diff), is_map(Structure) ->
-    lists:foldl(fun apply_diff_operation/2, Structure, Diff).
-
-%% @doc Apply single diff operation
--spec apply_diff_operation(diff_operation(), hierarchical_structure()) ->
-    hierarchical_structure().
+%% Apply single diff operation to hierarchical structure
+-spec apply_diff_operation(DiffOperation, Structure) -> UpdatedStructure when
+    DiffOperation :: diff_operation(),
+    Structure :: hierarchical_structure(),
+    UpdatedStructure :: hierarchical_structure().
 apply_diff_operation(
     #{type := add_stateful, stateful_id := StatefulId, data := StatefulRender}, Structure
 ) ->
@@ -289,13 +532,19 @@ apply_diff_operation(
     NewComponent = apply_element_diffs(ElementDiffs, OldComponent),
     Structure#{StatefulId => NewComponent}.
 
-%% @doc Apply element diffs to stateful component
--spec apply_element_diffs([element_diff()], stateful_render()) -> stateful_render().
+%% Apply element diffs to stateful component
+-spec apply_element_diffs(ElementDiffs, Component) -> UpdatedComponent when
+    ElementDiffs :: [element_diff()],
+    Component :: stateful_render(),
+    UpdatedComponent :: stateful_render().
 apply_element_diffs(ElementDiffs, Component) when is_list(ElementDiffs), is_map(Component) ->
     lists:foldl(fun apply_element_diff/2, Component, ElementDiffs).
 
-%% @doc Apply single element diff
--spec apply_element_diff(element_diff(), stateful_render()) -> stateful_render().
+%% Apply single element diff to component
+-spec apply_element_diff(ElementDiff, Component) -> UpdatedComponent when
+    ElementDiff :: element_diff(),
+    Component :: stateful_render(),
+    UpdatedComponent :: stateful_render().
 apply_element_diff(
     #{type := set_element, element_index := ElementIndex, data := Content}, Component
 ) ->
@@ -314,65 +563,7 @@ apply_element_diff(
     #{type := list, static := Static} = maps:get(ElementIndex, Component),
     Component#{ElementIndex => #{type => list, static => Static, dynamic => NewDynamic}}.
 
-%% ============================================================================
-%% Hierarchical Structure Generation
-%% ============================================================================
-
-%% @doc Generate hierarchical structure for stateful component
--spec stateful_structure(TemplateData, Socket) -> {ComponentStructure, Socket1} when
-    TemplateData :: arizona_renderer:stateful_template_data(),
-    Socket :: arizona_socket:socket(),
-    ComponentStructure :: stateful_render(),
-    Socket1 :: arizona_socket:socket().
-stateful_structure(#{elems_order := Order, elems := Elements}, Socket) ->
-    StatefulId = arizona_socket:get_current_stateful_id(Socket),
-    CurrentHierarchical = arizona_socket:get_hierarchical_acc(Socket),
-
-    % Generate elements structure
-    {ComponentRender, UpdatedSocket} = elements_structure(Order, Elements, Socket, #{}),
-
-    % Update hierarchical accumulator
-    NewHierarchical = CurrentHierarchical#{StatefulId => ComponentRender},
-    UpdatedSocket1 = arizona_socket:set_hierarchical_acc(NewHierarchical, UpdatedSocket),
-
-    {ComponentRender, UpdatedSocket1}.
-
-%% @doc Generate hierarchical structure for stateless component
--spec stateless_structure(TemplateData, Socket) -> {StatelessElement, Socket1} when
-    TemplateData :: arizona_renderer:stateless_template_data(),
-    Socket :: arizona_socket:socket(),
-    StatelessElement :: element_content(),
-    Socket1 :: arizona_socket:socket().
-stateless_structure(StructuredList, Socket) ->
-    {StatelessStructure, UpdatedSocket} = stateless_list_to_structure(StructuredList, Socket),
-    StatelessElement = #{type => stateless, structure => StatelessStructure},
-    UpdatedSocket1 = arizona_socket:set_hierarchical_pending_element(
-        StatelessElement, UpdatedSocket
-    ),
-    {StatelessElement, UpdatedSocket1}.
-
-%% @doc Generate hierarchical structure for list component
--spec list_structure(ListData, Items, Socket) -> {ListElement, Socket1} when
-    ListData :: arizona_renderer:list_template_data(),
-    Items :: [term()],
-    Socket :: arizona_socket:socket(),
-    ListElement :: element_content(),
-    Socket1 :: arizona_socket:socket().
-list_structure(#{static := Static, dynamic := DynamicTemplate}, Items, Socket) ->
-    % Generate dynamic data for each item
-    {DynamicData, UpdatedSocket} = list_items_to_dynamic_data(DynamicTemplate, Items, Socket, []),
-
-    % Create list structure
-    ListElement = #{
-        type => list,
-        static => Static,
-        dynamic => DynamicData
-    },
-
-    UpdatedSocket1 = arizona_socket:set_hierarchical_pending_element(ListElement, UpdatedSocket),
-    {ListElement, UpdatedSocket1}.
-
-%% @doc Generate structure for elements
+%% Generate structure for elements in order
 -spec elements_structure(Order, Elements, Socket, ComponentRender) ->
     {ComponentRender1, Socket1}
 when
@@ -390,7 +581,7 @@ elements_structure([Index | Rest], Elements, Socket, ComponentRender) ->
     NewComponentRender = ComponentRender#{Index => Content},
     elements_structure(Rest, Elements, UpdatedSocket, NewComponentRender).
 
-%% @doc Render individual elements in hierarchical mode
+%% Render individual elements in hierarchical mode
 -spec render_element(Element, Socket) -> {Content, Socket1} when
     Element ::
         {static, pos_integer(), binary()}
@@ -430,6 +621,11 @@ render_element({dynamic, Line, Fun}, Socket) when is_function(Fun, 1) ->
     end.
 
 %% Helper function for error reporting
+-spec binding_error_info(Line, Key, Socket) -> ErrorInfo when
+    Line :: pos_integer(),
+    Key :: term(),
+    Socket :: arizona_socket:socket(),
+    ErrorInfo :: [term()].
 binding_error_info(Line, Key, Socket) ->
     CurrentState = arizona_socket:get_current_stateful_state(Socket),
     TemplateModule = arizona_stateful:get_module(CurrentState),
@@ -440,11 +636,7 @@ binding_error_info(Line, Key, Socket) ->
         }}
     ].
 
-%% ============================================================================
-%% Helper Functions for Content Detection
-%% ============================================================================
-
-%% @doc Convert stateless template list to hierarchical structure
+%% Convert stateless template list to hierarchical structure
 -spec stateless_list_to_structure(List, Socket) -> {Structure, Socket1} when
     List :: list(),
     Socket :: arizona_socket:socket(),
@@ -453,7 +645,7 @@ binding_error_info(Line, Key, Socket) ->
 stateless_list_to_structure(List, Socket) ->
     stateless_list_to_structure(List, Socket, 0, #{}).
 
-%% @doc Helper for stateless list conversion
+%% Helper for stateless list conversion with index tracking
 -spec stateless_list_to_structure(List, Socket, Index, Acc) -> {Structure, Socket1} when
     List :: list(),
     Socket :: arizona_socket:socket(),
@@ -468,7 +660,7 @@ stateless_list_to_structure([Element | Rest], Socket, Index, Acc) ->
     NewAcc = Acc#{Index => Content},
     stateless_list_to_structure(Rest, UpdatedSocket, Index + 1, NewAcc).
 
-%% @doc Convert list items to dynamic data for hierarchical structure
+%% Convert list items to dynamic data for hierarchical structure
 -spec list_items_to_dynamic_data(DynamicTemplate, Items, Socket, Acc) -> {DynamicData, Socket1} when
     DynamicTemplate :: #{elems_order := [non_neg_integer()], elems := map(), vars_indexes := map()},
     Items :: [term()],
@@ -483,7 +675,7 @@ list_items_to_dynamic_data(DynamicTemplate, [Item | Rest], Socket, Acc) ->
     {ItemStructure, UpdatedSocket} = process_list_item(DynamicTemplate, Item, Socket),
     list_items_to_dynamic_data(DynamicTemplate, Rest, UpdatedSocket, [ItemStructure | Acc]).
 
-%% @doc Process a single list item with the dynamic template
+%% Process a single list item with the dynamic template
 -spec process_list_item(DynamicTemplate, Item, Socket) -> {ItemStructure, Socket1} when
     DynamicTemplate :: #{elems_order := [non_neg_integer()], elems := map(), vars_indexes := map()},
     Item :: term(),
@@ -497,11 +689,17 @@ process_list_item(#{elems_order := Order, elems := Elements}, Item, Socket) ->
     ),
     {ItemStructure, UpdatedSocket}.
 
-%% @doc Build item structure directly from order and elements, evaluating as we go
--spec build_item_structure_direct(
-    [non_neg_integer()], map(), term(), arizona_socket:socket(), map()
-) ->
-    {map(), arizona_socket:socket()}.
+%% Build item structure directly from order and elements, evaluating as we go
+-spec build_item_structure_direct(Order, Elements, Item, Socket, Acc) ->
+    {ItemStructure, Socket1}
+when
+    Order :: [non_neg_integer()],
+    Elements :: map(),
+    Item :: term(),
+    Socket :: arizona_socket:socket(),
+    Acc :: map(),
+    ItemStructure :: map(),
+    Socket1 :: arizona_socket:socket().
 build_item_structure_direct([], _Elements, _Item, Socket, Acc) ->
     {Acc, Socket};
 build_item_structure_direct([Index | RestIndexes], Elements, Item, Socket, Acc) ->
