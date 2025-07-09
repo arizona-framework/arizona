@@ -257,15 +257,15 @@ jobs:
           # Start server in background without timeout wrapper
           ./start_test_server.sh &
           SERVER_PID=$!
-          echo "Started server with PID: $SERVER_PID"
-          echo $SERVER_PID > server.pid
+          echo "Started server with PID: ${SERVER_PID}"
+          echo "${SERVER_PID}" > server.pid
 
           # Wait for server to be ready with explicit timeout
           echo "Waiting for server to be ready..."
           TIMEOUT=120
           ELAPSED=0
           until curl -s http://localhost:8080/test/counter > /dev/null; do
-            if [ $ELAPSED -ge $TIMEOUT ]; then
+            if [[ "${ELAPSED}" -ge "${TIMEOUT}" ]]; then
               echo "Server failed to start within ${TIMEOUT} seconds"
               exit 1
             fi
@@ -281,10 +281,10 @@ jobs:
       - name: Stop test server
         if: always()
         run: |
-          if [ -f server.pid ]; then
+          if [[ -f server.pid ]]; then
             SERVER_PID=$(cat server.pid)
-            echo "Stopping server with PID: $SERVER_PID"
-            kill $SERVER_PID 2>/dev/null || true
+            echo "Stopping server with PID: ${SERVER_PID}"
+            kill "${SERVER_PID}" 2>/dev/null || true
             rm server.pid
           fi
           # Also kill any remaining rebar3 processes
