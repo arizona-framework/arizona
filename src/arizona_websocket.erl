@@ -109,18 +109,17 @@ handle_event_message(Message, #state{live_pid = LivePid} = State) ->
     Params = maps:get(~"params", Message, #{}),
 
     case arizona_live:handle_event(LivePid, Event, Params) of
-        {noreply, UpdatedSocket} ->
-            handle_noreply_response(UpdatedSocket, State);
-        {reply, Reply, UpdatedSocket} ->
-            handle_reply_response(Reply, UpdatedSocket, State)
+        {noreply, _UpdatedSocket} ->
+            handle_noreply_response(State);
+        {reply, Reply, _UpdatedSocket} ->
+            handle_reply_response(Reply, State)
     end.
 
 %% @doc Handle noreply response from LiveView
--spec handle_noreply_response(Socket, State) -> Result when
-    Socket :: arizona_socket:socket(),
+-spec handle_noreply_response(State) -> Result when
     State :: state(),
     Result :: call_result().
-handle_noreply_response(_UpdatedSocket, #state{live_pid = LivePid} = State) ->
+handle_noreply_response(#state{live_pid = LivePid} = State) ->
     DiffSocket = arizona_live:render(LivePid),
     case arizona_socket:get_changes(DiffSocket) of
         [] ->
@@ -136,12 +135,11 @@ handle_noreply_response(_UpdatedSocket, #state{live_pid = LivePid} = State) ->
     end.
 
 %% @doc Handle reply response from LiveView
--spec handle_reply_response(Reply, Socket, State) -> Result when
+-spec handle_reply_response(Reply, State) -> Result when
     Reply :: term(),
-    Socket :: arizona_socket:socket(),
     State :: state(),
     Result :: call_result().
-handle_reply_response(Reply, _UpdatedSocket, #state{live_pid = LivePid} = State) ->
+handle_reply_response(Reply, #state{live_pid = LivePid} = State) ->
     ReplyPayload = json:encode(#{
         type => ~"reply",
         data => Reply
