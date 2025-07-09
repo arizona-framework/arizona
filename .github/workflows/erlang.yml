@@ -254,22 +254,26 @@ jobs:
 
       - name: Start test server in background
         run: |
-          timeout 60 bash -c '
-            ./start_test_server.sh &
-            SERVER_PID=$!
-            echo "Started server with PID: $SERVER_PID"
-            
-            # Wait for server to be ready
-            echo "Waiting for server to be ready..."
-            until curl -s http://localhost:8080/test/counter > /dev/null; do 
-              echo "Server not ready, waiting..."
-              sleep 2
-            done
-            echo "Server is ready!"
-            
-            # Store PID for cleanup
-            echo $SERVER_PID > server.pid
-          '
+          # Start server in background without timeout wrapper
+          ./start_test_server.sh &
+          SERVER_PID=$!
+          echo "Started server with PID: $SERVER_PID"
+          echo $SERVER_PID > server.pid
+
+          # Wait for server to be ready with explicit timeout
+          echo "Waiting for server to be ready..."
+          TIMEOUT=120
+          ELAPSED=0
+          until curl -s http://localhost:8080/test/counter > /dev/null; do
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "Server failed to start within ${TIMEOUT} seconds"
+              exit 1
+            fi
+            echo "Server not ready, waiting... (${ELAPSED}s/${TIMEOUT}s)"
+            sleep 3
+            ELAPSED=$((ELAPSED + 3))
+          done
+          echo "Server is ready!"
 
       - name: Run E2E tests
         run: npm run test:e2e

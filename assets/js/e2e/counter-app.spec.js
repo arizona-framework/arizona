@@ -1,8 +1,5 @@
 import { test, expect } from '@playwright/test';
-import {
-  waitForCondition,
-  collectWebSocketMessages,
-} from './test-utils.js';
+import { waitForCondition, collectWebSocketMessages } from './test-utils.js';
 
 test.describe('Arizona Counter App', () => {
   test('should load counter page and display initial state', async ({ page }) => {
@@ -27,7 +24,9 @@ test.describe('Arizona Counter App', () => {
     await page.goto('/test/counter');
 
     // Wait for initial render message to arrive
-    await waitForCondition(() => { return initialMessages.length > 0 });
+    await waitForCondition(() => {
+      return initialMessages.length > 0;
+    });
 
     const initialMessage = initialMessages[0];
     expect(initialMessage).toBeTruthy();
@@ -37,9 +36,9 @@ test.describe('Arizona Counter App', () => {
 
     // Verify the structure contains expected elements
     const rootStructure = initialMessage.structure.root;
-    const hasCountElement = Object.values(rootStructure).some(
-      (element) => { return typeof element === 'string' && element.includes('data-testid="count"') }
-    );
+    const hasCountElement = Object.values(rootStructure).some((element) => {
+      return typeof element === 'string' && element.includes('data-testid="count"');
+    });
     expect(hasCountElement).toBe(true);
   });
 
@@ -60,7 +59,9 @@ test.describe('Arizona Counter App', () => {
     await expect(page.getByTestId('count')).toHaveText('1');
 
     // Wait for WebSocket diff message using helper
-    await waitForCondition(() => { return diffMessages.length > 0 });
+    await waitForCondition(() => {
+      return diffMessages.length > 0;
+    });
 
     const diffMessage = diffMessages[0];
     expect(diffMessage.type).toBe('diff');
@@ -155,7 +156,9 @@ test.describe('Arizona Counter App', () => {
     await expect(page.getByTestId('count')).toHaveText('0');
 
     // Wait for new diff message after reset
-    await waitForCondition(() => { return resetDiffMessages.length > initialDiffCount });
+    await waitForCondition(() => {
+      return resetDiffMessages.length > initialDiffCount;
+    });
 
     const resetDiffMessage = resetDiffMessages[resetDiffMessages.length - 1]; // Get latest message
 
@@ -171,7 +174,9 @@ test.describe('Arizona Counter App', () => {
     expect(typeof componentId).toBe('string');
 
     // Should contain element change with "0" value
-    const hasZeroValue = elementChanges.some(([index, value]) => { return value === '0' });
+    const hasZeroValue = elementChanges.some(([index, value]) => {
+      return value === '0';
+    });
     expect(hasZeroValue).toBe(true);
   });
 

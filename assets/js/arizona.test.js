@@ -82,14 +82,13 @@ describe('ArizonaClient', () => {
       expect(client.worker).toBe(firstWorker);
     });
 
-    test('sets connected state when worker reports connected status', (done) => {
+    test('sets connected state when worker reports connected status', async () => {
       client.connect();
 
-      // Simulate worker connection success
-      setTimeout(() => {
-        expect(client.connected).toBe(true);
-        done();
-      }, 10);
+      // Give the mock worker time to process and respond
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(client.connected).toBe(true);
     });
   });
 

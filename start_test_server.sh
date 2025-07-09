@@ -1,6 +1,6 @@
 #!/bin/bash
 
-rebar3 as test shell --eval '
+exec rebar3 as test shell --eval '
 Routes = [
     {live, ~"/test/counter", arizona_counter_live},
     {live, ~"/test/todo", arizona_todo_app_live},
@@ -8,5 +8,6 @@ Routes = [
     {static, ~"/assets", {priv_dir, arizona, ~"static/assets"}}
 ],
 {ok, _} = arizona_server:start(#{port => 8080, routes => Routes}),
-io:format("Arizona test server started on port 8080~n").
+io:format("Arizona test server started on port 8080~n"),
+timer:sleep(infinity).
 '
