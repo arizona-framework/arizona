@@ -1,36 +1,13 @@
 -module(arizona_list_SUITE).
--moduledoc ~"""
-Test suite for Arizona List module.
-
-This suite tests the function call utilities for list rendering,
-including item function calls and element function calls.
-""".
-
+-behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
+-compile([export_all, nowarn_export_all]).
 
 %% Suppress dialyzer warnings for validation tests that test function arities
 -dialyzer({nowarn_function, [test_function_arity_validation/1]}).
 
 %% --------------------------------------------------------------------
-%% Test suite exports
-%% --------------------------------------------------------------------
-
--export([all/0, groups/0]).
-
-%% Test cases
--export([
-    test_call_item_function_basic/1,
-    test_call_item_function_binary_result/1,
-    test_call_item_function_iolist_result/1,
-    test_call_item_function_error_propagation/1,
-    test_call_element_function_basic/1,
-    test_call_element_function_with_socket/1,
-    test_call_element_function_error_propagation/1,
-    test_function_arity_validation/1
-]).
-
-%% --------------------------------------------------------------------
-%% Test suite configuration
+%% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
 
 all() ->

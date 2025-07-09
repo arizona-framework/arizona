@@ -1,46 +1,10 @@
 -module(arizona_parse_transform_SUITE).
--moduledoc ~"""
-Test suite for Arizona Parse Transform module.
-
-This suite tests the compile-time transformation of Arizona template syntax
-into optimized structured formats for high-performance rendering.
-""".
-
+-behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
+-compile([export_all, nowarn_export_all]).
 
 %% --------------------------------------------------------------------
-%% Test suite exports
-%% --------------------------------------------------------------------
-
--export([all/0, groups/0, init_per_suite/1, end_per_suite/1]).
-
-%% Test cases
--export([
-    test_stateless_transform/1,
-    test_stateful_transform/1,
-    test_stateful_transform_with_variables/1,
-    test_non_arizona_call_passthrough/1,
-    test_invalid_template_error/1,
-    test_non_binary_template_error/1,
-    test_format_error/1,
-    test_nested_function_calls/1,
-    test_stateless_parse_error/1,
-    test_stateful_parse_error/1,
-    test_format_error_badarg/1,
-    test_module_name_extraction_edge_cases/1,
-    test_stateful_non_binary_template_error/1,
-    test_complex_stateful_template_with_multiple_variables/1,
-    test_stateless_binary_elements/1,
-    test_transform_stateless_to_ast/1,
-    test_transform_stateful_to_ast/1,
-    test_stateless_binary_handling/1,
-    test_dynamic_expression_ast_creation/1,
-    test_nested_arizona_optimization/1,
-    test_slot_template_transform/1
-]).
-
-%% --------------------------------------------------------------------
-%% Test suite configuration
+%% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
 
 all() ->

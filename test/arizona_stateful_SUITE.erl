@@ -1,47 +1,10 @@
 -module(arizona_stateful_SUITE).
--moduledoc """
-Test suite for Arizona Stateful module.
-
-This suite tests the stateful component behavior definition and utility functions,
-including callback invocation, state management, and binding operations.
-""".
-
+-behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
-
-%% Suppress dialyzer warnings for validation tests that intentionally
-%% pass invalid arguments to test error handling
--dialyzer({nowarn_function, [test_stateful_creation_validation/1]}).
+-compile([export_all, nowarn_export_all]).
 
 %% --------------------------------------------------------------------
-%% Test suite exports
-%% --------------------------------------------------------------------
-
--export([all/0, groups/0]).
-
-%% Test cases
--export([
-    test_call_mount_callback/1,
-    test_call_unmount_callback_with_export/1,
-    test_call_unmount_callback_without_export/1,
-    test_call_render_callback/1,
-    test_call_dynamic_function/1,
-    test_stateful_creation_root/1,
-    test_stateful_creation_binary_id/1,
-    test_stateful_creation_validation/1,
-    test_get_module/1,
-    test_get_binding_existing/1,
-    test_get_binding_not_found/1,
-    test_put_binding_new/1,
-    test_put_binding_unchanged/1,
-    test_put_binding_changed/1,
-    test_put_bindings_multiple/1,
-    test_should_remount_changed_bindings/1,
-    test_should_remount_matching/1,
-    test_should_remount_different/1
-]).
-
-%% --------------------------------------------------------------------
-%% Test suite configuration
+%% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
 
 all() ->

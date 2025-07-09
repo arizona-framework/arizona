@@ -1,65 +1,10 @@
 -module(arizona_socket_SUITE).
--moduledoc ~"""
-Test suite for Arizona Socket module.
-
-This suite tests the core socket data structure for Arizona templates,
-including state management, HTML accumulation, and binding handling.
-""".
-
+-behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
-
-%% Suppress dialyzer warnings for validation tests that intentionally
-%% pass invalid arguments to test error handling
--dialyzer({nowarn_function, [test_set_current_stateful_id_validation/1]}).
+-compile([export_all, nowarn_export_all]).
 
 %% --------------------------------------------------------------------
-%% Test suite exports
-%% --------------------------------------------------------------------
-
--export([all/0, groups/0]).
-
-%% Test cases
--export([
-    test_socket_creation/1,
-    test_socket_creation_with_options/1,
-    test_socket_creation_defaults/1,
-    test_get_mode/1,
-    test_get_current_stateful_id/1,
-    test_set_current_stateful_id/1,
-    test_set_current_stateful_id_validation/1,
-    test_html_accumulation/1,
-    test_get_html_empty/1,
-    test_stateful_state_management/1,
-    test_get_stateful_states/1,
-    test_find_stateful_state/1,
-    test_get_current_stateful_state/1,
-    test_temp_bindings/1,
-    test_with_temp_bindings/1,
-    test_get_temp_binding/1,
-    test_get_temp_binding_not_found/1,
-    test_get_binding_temp_priority/1,
-    test_get_binding_stateful_fallback/1,
-    test_get_binding_not_found/1,
-    test_is_socket_validation/1,
-    % Changes accumulator tests
-    test_append_changes/1,
-    test_get_changes/1,
-    test_clear_changes/1,
-    test_merge_changes_same_component/1,
-    test_merge_changes_different_components/1,
-    test_merge_nested_changes/1,
-    test_merge_changes_edge_cases/1,
-    test_merge_changes_html_data_vs_component_changes/1,
-    % Binding management tests
-    test_put_binding/1,
-    test_put_bindings/1,
-    % Error handling tests
-    test_get_stateful_state_not_found/1,
-    test_get_current_stateful_state_not_found/1
-]).
-
-%% --------------------------------------------------------------------
-%% Test suite configuration
+%% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
 
 all() ->
