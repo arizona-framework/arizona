@@ -1,38 +1,18 @@
 import { test, expect } from '@playwright/test';
+import {
+  waitForCondition,
+  collectWebSocketMessages,
+  waitForClass,
+  waitForVisibility,
+  waitForText,
+  waitForInputValue,
+  selectors,
+  createAssertions,
+} from './test-utils.js';
 
-test.describe('Arizona Todo App - Advanced E2E Tests', () => {
-  // Helper function to wait for condition with retry attempts
-  const waitForCondition = async (checkFn, maxAttempts = 30, delayMs = 100) => {
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      if (await checkFn()) {
-        return true;
-      }
-      await new Promise((resolve) => {
-        return setTimeout(resolve, delayMs);
-      });
-    }
-    throw new Error(`Condition not met after ${maxAttempts} attempts`);
-  };
-
-  // Helper function to collect WebSocket messages of specific type
-  const collectWebSocketMessages = (page, messageType) => {
-    const messages = [];
-
-    page.on('websocket', (ws) => {
-      ws.on('framereceived', (event) => {
-        try {
-          const data = JSON.parse(event.payload);
-          if (data.type === messageType) {
-            messages.push(data);
-          }
-        } catch (e) {
-          // Non-JSON messages are OK
-        }
-      });
-    });
-
-    return messages;
-  };
+test.describe('Arizona Todo App', () => {
+  // Create assertions with expect function
+  const assertions = createAssertions(expect);
 
   test('should load todo app and display initial todos', async ({ page }) => {
     await page.goto('/test/todo');

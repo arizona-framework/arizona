@@ -1,37 +1,10 @@
 import { test, expect } from '@playwright/test';
+import {
+  waitForCondition,
+  collectWebSocketMessages,
+} from './test-utils.js';
 
-test.describe('Arizona Hierarchical Rendering', () => {
-  // Helper function to wait for condition with retry attempts
-  const waitForCondition = async (checkFn, maxAttempts = 30, delayMs = 100) => {
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      if (await checkFn()) {
-        return true;
-      }
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-    throw new Error(`Condition not met after ${maxAttempts} attempts`);
-  };
-
-  // Helper function to collect WebSocket messages of specific type
-  const collectWebSocketMessages = (page, messageType) => {
-    const messages = [];
-
-    page.on('websocket', (ws) => {
-      ws.on('framereceived', (event) => {
-        try {
-          const data = JSON.parse(event.payload);
-          if (data.type === messageType) {
-            messages.push(data);
-          }
-        } catch (e) {
-          // Non-JSON messages are OK
-        }
-      });
-    });
-
-    return messages;
-  };
-
+test.describe('Arizona Counter App', () => {
   test('should load counter page and display initial state', async ({ page }) => {
     await page.goto('/test/counter');
 
@@ -54,7 +27,7 @@ test.describe('Arizona Hierarchical Rendering', () => {
     await page.goto('/test/counter');
 
     // Wait for initial render message to arrive
-    await waitForCondition(() => initialMessages.length > 0);
+    await waitForCondition(() => { return initialMessages.length > 0 });
 
     const initialMessage = initialMessages[0];
     expect(initialMessage).toBeTruthy();
@@ -65,7 +38,7 @@ test.describe('Arizona Hierarchical Rendering', () => {
     // Verify the structure contains expected elements
     const rootStructure = initialMessage.structure.root;
     const hasCountElement = Object.values(rootStructure).some(
-      (element) => typeof element === 'string' && element.includes('data-testid="count"')
+      (element) => { return typeof element === 'string' && element.includes('data-testid="count"') }
     );
     expect(hasCountElement).toBe(true);
   });
@@ -87,7 +60,7 @@ test.describe('Arizona Hierarchical Rendering', () => {
     await expect(page.getByTestId('count')).toHaveText('1');
 
     // Wait for WebSocket diff message using helper
-    await waitForCondition(() => diffMessages.length > 0);
+    await waitForCondition(() => { return diffMessages.length > 0 });
 
     const diffMessage = diffMessages[0];
     expect(diffMessage.type).toBe('diff');
@@ -182,7 +155,7 @@ test.describe('Arizona Hierarchical Rendering', () => {
     await expect(page.getByTestId('count')).toHaveText('0');
 
     // Wait for new diff message after reset
-    await waitForCondition(() => resetDiffMessages.length > initialDiffCount);
+    await waitForCondition(() => { return resetDiffMessages.length > initialDiffCount });
 
     const resetDiffMessage = resetDiffMessages[resetDiffMessages.length - 1]; // Get latest message
 
@@ -198,7 +171,7 @@ test.describe('Arizona Hierarchical Rendering', () => {
     expect(typeof componentId).toBe('string');
 
     // Should contain element change with "0" value
-    const hasZeroValue = elementChanges.some(([index, value]) => value === '0');
+    const hasZeroValue = elementChanges.some(([index, value]) => { return value === '0' });
     expect(hasZeroValue).toBe(true);
   });
 
