@@ -25,34 +25,52 @@ them with optimized versions that avoid runtime template parsing overhead.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([
-    parse_transform/2,
-    format_error/1,
-    transform_stateful_to_ast/1,
-    transform_stateless_to_ast/1
-]).
+-export([parse_transform/2]).
+-export([format_error/1]).
+-export([transform_stateful_to_ast/1]).
+-export([transform_stateless_to_ast/1]).
 
 %% --------------------------------------------------------------------
-%% Types (and their exports)
+%% Types exports
 %% --------------------------------------------------------------------
 
--doc ~"Abstract syntax tree node for parse transform processing.".
--type ast_node() :: erl_parse:abstract_form() | erl_parse:abstract_expr().
 -export_type([ast_node/0]).
-
--doc ~"Template content with extracted string and line number information.".
--type template_content() :: {binary(), pos_integer()}.
 -export_type([template_content/0]).
-
--doc ~"Compiler options passed to the parse transform.".
--type compile_options() :: [term()].
--type expression_norm_callback() :: fun(
-    (SocketVarName :: binary(), Expression :: binary()) -> NormExpression :: binary()
-).
 -export_type([compile_options/0]).
 
 %% --------------------------------------------------------------------
-%% API Functions
+%% Types definitions
+%% --------------------------------------------------------------------
+
+-doc ~"""
+Abstract syntax tree node for parse transform processing.
+
+Represents an AST node that can be either an abstract form (top-level
+construct) or an abstract expression (sub-expression).
+""".
+-type ast_node() :: erl_parse:abstract_form() | erl_parse:abstract_expr().
+
+-doc ~"""
+Template content with extracted string and line number information.
+
+Tuple containing the binary template string and the line number where
+it was found, used for error reporting during parse transform processing.
+""".
+-type template_content() :: {binary(), pos_integer()}.
+
+-doc ~"""
+Compiler options passed to the parse transform.
+
+List of compiler options that can affect parse transform behavior.
+""".
+-type compile_options() :: [term()].
+
+-type expression_norm_callback() :: fun(
+    (SocketVarName :: binary(), Expression :: binary()) -> NormExpression :: binary()
+).
+
+%% --------------------------------------------------------------------
+%% API function definitions
 %% --------------------------------------------------------------------
 
 -doc ~"""
@@ -66,8 +84,10 @@ The transformation is applied recursively to all forms in the module,
 looking for calls to arizona_html functions with literal binary
 templates that can be optimized at compile time.
 """.
--spec parse_transform([erl_parse:abstract_form()], compile_options()) ->
-    [erl_parse:abstract_form()].
+-spec parse_transform(AbstractSyntaxTrees, CompilerOptions) -> AbstractSyntaxTrees1 when
+    AbstractSyntaxTrees :: [erl_parse:abstract_form()],
+    CompilerOptions :: compile_options(),
+    AbstractSyntaxTrees1 :: [erl_parse:abstract_form()].
 parse_transform(AbstractSyntaxTrees, CompilerOptions) ->
     parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, 0).
 
@@ -91,8 +111,15 @@ parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
      || FormTree <- AbstractSyntaxTrees
     ]).
 
-%% Format error messages for compilation diagnostics
--spec format_error(term()) -> string().
+-doc ~"""
+Format error messages for compilation diagnostics.
+
+Converts parse transform error terms into human-readable string messages
+for compiler error reporting.
+""".
+-spec format_error(Error) -> ErrorMessage when
+    Error :: term(),
+    ErrorMessage :: string().
 format_error(template_parse_failed) ->
     "Failed to parse Arizona template - invalid template syntax";
 format_error(badarg) ->
@@ -100,8 +127,15 @@ format_error(badarg) ->
 format_error(Other) ->
     io_lib:format("Unknown Arizona parse transform error: ~p", [Other]).
 
-%% Transform stateful template result to optimized AST
--spec transform_stateful_to_ast(arizona_parser:stateful_result()) -> erl_syntax:syntaxTree().
+-doc ~"""
+Transform stateful template result to optimized AST.
+
+Converts a parsed stateful template result into an optimized AST representation
+that can be used for efficient runtime rendering.
+""".
+-spec transform_stateful_to_ast(StatefulResult) -> SyntaxTree when
+    StatefulResult :: arizona_parser:stateful_result(),
+    SyntaxTree :: erl_syntax:syntaxTree().
 transform_stateful_to_ast(#{
     elems_order := Order, elems := Elements, vars_indexes := VarsIndexes
 }) ->
@@ -126,15 +160,22 @@ transform_stateful_to_ast(#{
         )
     ]).
 
-%% Transform stateless template result to optimized AST
--spec transform_stateless_to_ast(arizona_parser:stateless_result()) -> erl_syntax:syntaxTree().
+-doc ~"""
+Transform stateless template result to optimized AST.
+
+Converts a parsed stateless template result into an optimized AST representation
+that can be used for efficient runtime rendering.
+""".
+-spec transform_stateless_to_ast(StatelessResult) -> SyntaxTree when
+    StatelessResult :: arizona_parser:stateless_result(),
+    SyntaxTree :: erl_syntax:syntaxTree().
 transform_stateless_to_ast(StatelessList) when is_list(StatelessList) ->
     %% Convert stateless list to AST representation
     ListItems = [create_element_ast(Element) || Element <- StatelessList],
     erl_syntax:list(ListItems).
 
 %% --------------------------------------------------------------------
-%% Internal Functions
+%% Private functions
 %% --------------------------------------------------------------------
 
 %% Extract module name from the abstract syntax tree forms
