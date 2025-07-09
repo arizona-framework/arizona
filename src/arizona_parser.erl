@@ -23,22 +23,33 @@ indexes for efficient template updates in stateful rendering mode.
 -export([parse_list_tokens/1]).
 
 %% --------------------------------------------------------------------
-%% Types (and their exports)
+%% Types exports
 %% --------------------------------------------------------------------
 
--doc ~"Token representation with category, line number, and content.".
+-export_type([token/0]).
+-export_type([stateless_result/0]).
+-export_type([stateful_result/0]).
+-export_type([list_result/0]).
+
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
+
+-doc ~"""
+Token representation with category, line number, and content.
+""".
 -type token() :: {
     Category :: static | dynamic | comment, Line :: pos_integer(), Content :: binary()
 }.
--export_type([token/0]).
 
--doc ~"Result type for stateless parsing - list of tokens with comments filtered out.".
+-doc ~"""
+Result type for stateless parsing - list of tokens with comments filtered out.
+""".
 -type stateless_result() :: [
     Token :: {
         Category :: static | dynamic, Line :: pos_integer(), Content :: binary()
     }
 ].
--export_type([stateless_result/0]).
 
 -doc ~"""
 Result type for stateful parsing with element ordering, element mapping, and variable indexes.
@@ -53,10 +64,10 @@ Result type for stateful parsing with element ordering, element mapping, and var
     },
     vars_indexes := #{VarName :: binary() => [Index :: non_neg_integer()]}
 }.
--export_type([stateful_result/0]).
 
 -doc ~"""
 Result type for list parsing with static/dynamic template structure.
+
 Runtime fallback format - parse transform will optimize to arizona_renderer:list_template_data().
 """.
 -type list_result() :: #{
@@ -74,7 +85,6 @@ Runtime fallback format - parse transform will optimize to arizona_renderer:list
         vars_indexes := #{VarName :: binary() => [Index :: non_neg_integer()]}
     }
 }.
--export_type([list_result/0]).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -145,7 +155,7 @@ parse_list_tokens(Tokens) ->
     }.
 
 %% --------------------------------------------------------------------
-%% Internal Functions
+%% Private functions
 %% --------------------------------------------------------------------
 
 %% Process tokens for stateful structure
