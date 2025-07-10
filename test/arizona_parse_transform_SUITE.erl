@@ -10,6 +10,7 @@
 all() ->
     [
         {group, transformation_tests},
+        {group, enhanced_transformation_tests},
         {group, error_handling_tests},
         {group, coverage_tests}
     ].
@@ -23,6 +24,17 @@ groups() ->
             test_non_arizona_call_passthrough,
             test_nested_function_calls,
             test_slot_template_transform
+        ]},
+        {enhanced_transformation_tests, [parallel], [
+            test_arizona_attribute_extraction,
+            test_function_binding_analysis,
+            test_variable_to_binding_mapping,
+            test_enhanced_vars_indexes_generation,
+            test_template_with_variable_context,
+            test_multiple_function_analysis,
+            test_nested_binding_calls,
+            test_multiple_binding_dependencies_vars_indexes,
+            test_conditional_binding_dependencies
         ]},
         {error_handling_tests, [parallel], [
             test_invalid_template_error,
@@ -537,3 +549,261 @@ test_slot_template_transform(Config) when is_list(Config) ->
     ?assert(string:str(TransformedSource, "footer") > 0),
 
     ct:comment("render_slot template default successfully optimized at compile time").
+
+%% --------------------------------------------------------------------
+%% Enhanced Transformation Test Cases
+%% --------------------------------------------------------------------
+
+%% Test arizona_parse_transform attribute extraction
+test_arizona_attribute_extraction(Config) when is_list(Config) ->
+    % Create AST with arizona_parse_transform attribute
+    Forms = merl:quote(~""""
+    -module(test_enhanced_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([render/1, render_card/2]).
+    -export([render/1, render_card/2]).
+
+    render(Socket) -> ok.
+    render_card(Socket, Data) -> ok.
+    """"),
+
+    % Test attribute extraction
+    ArizonaFunctions = arizona_parse_transform:extract_arizona_functions(Forms),
+
+    % Verify functions are extracted correctly
+    ?assertEqual([{render, 1}, {render_card, 2}], lists:sort(ArizonaFunctions)),
+
+    ct:comment("arizona_parse_transform attribute extraction successful").
+
+%% Test function binding analysis
+test_function_binding_analysis(Config) when is_list(Config) ->
+    % Create function AST with variable bindings
+    Function = merl:quote(~""""
+    render(Socket) ->
+        Count = arizona_socket:get_binding(count, Socket),
+        UserName = arizona_socket:get_binding(user_name, Socket, "Anonymous"),
+        {Count, UserName}.
+    """"),
+
+    % Test binding analysis
+    VarBindings = arizona_parse_transform:analyze_function_for_bindings(Function),
+
+    % Verify variable to binding mapping
+    Expected = #{
+        ~"Count" => [~"count"],
+        ~"UserName" => [~"user_name"]
+    },
+    ?assertEqual(Expected, VarBindings),
+
+    ct:comment("function binding analysis successful").
+
+%% Test variable to binding mapping
+test_variable_to_binding_mapping(Config) when is_list(Config) ->
+    % Test template structure without vars_indexes
+    TemplateStructure = #{
+        elems => #{
+            0 => {static, 1, ~"<div>Hello "},
+            1 => {dynamic, 1, ~"UserName"},
+            2 => {static, 1, ~"! Count: "},
+            3 => {dynamic, 1, ~"Count"},
+            4 => {static, 1, ~"</div>"}
+        }
+    },
+
+    % Variable context mapping
+    VarBindings = #{
+        ~"UserName" => ~"user_name",
+        ~"Count" => ~"count"
+    },
+
+    % Generate vars_indexes
+    VarsIndexes = arizona_parse_transform:generate_vars_indexes(TemplateStructure, VarBindings),
+
+    % Verify correct mapping
+    Expected = #{
+        ~"user_name" => [1],
+        ~"count" => [3]
+    },
+    ?assertEqual(Expected, VarsIndexes),
+
+    ct:comment("variable to binding mapping successful").
+
+%% Test enhanced vars_indexes generation
+test_enhanced_vars_indexes_generation(Config) when is_list(Config) ->
+    % Test with complex template
+    TemplateStructure = #{
+        elems => #{
+            0 => {static, 1, ~"<h1>"},
+            1 => {dynamic, 1, ~"Title"},
+            2 => {static, 1, ~"</h1><p>Count: "},
+            3 => {dynamic, 1, ~"Count"},
+            4 => {static, 1, ~", Status: "},
+            5 => {dynamic, 1, ~"Status"},
+            6 => {static, 1, ~"</p>"}
+        }
+    },
+
+    VarBindings = #{
+        ~"Title" => ~"page_title",
+        ~"Count" => ~"counter",
+        ~"Status" => ~"user_status"
+    },
+
+    VarsIndexes = arizona_parse_transform:generate_vars_indexes(TemplateStructure, VarBindings),
+
+    Expected = #{
+        ~"page_title" => [1],
+        ~"counter" => [3],
+        ~"user_status" => [5]
+    },
+    ?assertEqual(Expected, VarsIndexes),
+
+    ct:comment("enhanced vars_indexes generation successful").
+
+%% Test template with variable context
+test_template_with_variable_context(Config) when is_list(Config) ->
+    % Test the parse_template_for_stateful_with_context function
+    TemplateString = ~"<div>Hello {UserName}! Count: {Count}</div>",
+    VarBindings = #{
+        ~"UserName" => ~"user_name",
+        ~"Count" => ~"count"
+    },
+
+    % This tests the internal function - in practice this would be used by the parse transform
+    Result = arizona_parse_transform:parse_template_for_stateful_with_context(
+        TemplateString, 1, [], 0, VarBindings
+    ),
+
+    % Verify result is a binary (compiled template data)
+    ?assert(is_binary(Result)),
+
+    % Verify it contains the vars_indexes with correct bindings
+    ResultStr = binary_to_list(Result),
+    ?assert(string:str(ResultStr, "user_name") > 0),
+    ?assert(string:str(ResultStr, "count") > 0),
+
+    ct:comment("template with variable context successful").
+
+%% Test multiple function analysis
+test_multiple_function_analysis(Config) when is_list(Config) ->
+    % Create AST with multiple functions
+    Forms = merl:quote(~""""
+    -module(test_multiple_module).
+    -arizona_parse_transform([render/1, render_card/2]).
+
+    render(Socket) ->
+        Title = arizona_socket:get_binding(title, Socket),
+        Title.
+
+    render_card(Socket, Data) ->
+        Name = arizona_socket:get_binding(name, Socket),
+        Age = arizona_socket:get_binding(age, Socket),
+        {Name, Age, Data}.
+
+    other_function(X) ->
+        X + 1.
+    """"),
+
+    % Extract functions and build bindings map
+    ArizonaFunctions = arizona_parse_transform:extract_arizona_functions(Forms),
+    FunctionBindings = arizona_parse_transform:build_function_bindings_map(Forms, ArizonaFunctions),
+
+    % Verify correct function binding extraction
+    Expected = #{
+        {render, 1} => #{~"Title" => [~"title"]},
+        {render_card, 2} => #{
+            ~"Name" => [~"name"],
+            ~"Age" => [~"age"]
+        }
+    },
+    ?assertEqual(Expected, FunctionBindings),
+
+    ct:comment("multiple function analysis successful").
+
+%% Test nested binding calls (complex case)
+test_nested_binding_calls(Config) when is_list(Config) ->
+    % Create function AST with nested arizona_socket:get_binding calls
+    Function = merl:quote(~""""
+    render(Socket) ->
+        UserName = arizona_socket:get_binding(user_name, Socket, arizona_socket:get_binding(email, Socket)),
+        Count = arizona_socket:get_binding(count, Socket),
+        {UserName, Count}.
+    """"),
+
+    % Test binding analysis - should capture ALL binding dependencies
+    VarBindings = arizona_parse_transform:analyze_function_for_bindings(Function),
+
+    % Enhanced implementation captures nested dependencies
+    ExpectedEnhanced = #{
+        % UserName depends on both bindings (sorted)
+        ~"UserName" => [~"email", ~"user_name"],
+        % Count depends on single binding (still list format)
+        ~"Count" => [~"count"]
+    },
+    ?assertEqual(ExpectedEnhanced, VarBindings),
+
+    ct:comment("nested binding calls test - enhanced dependency tracking").
+
+%% Test vars_indexes generation with multiple binding dependencies
+test_multiple_binding_dependencies_vars_indexes(Config) when is_list(Config) ->
+    % Template structure that uses variables with multiple dependencies
+    TemplateStructure = #{
+        elems => #{
+            0 => {static, 1, ~"<div>Hello "},
+            % Uses UserName (depends on user_name + email)
+            1 => {dynamic, 1, ~"UserName"},
+            2 => {static, 1, ~", Count: "},
+            % Uses Count (depends on count only)
+            3 => {dynamic, 1, ~"Count"},
+            4 => {static, 1, ~"</div>"}
+        }
+    },
+
+    % Variable context with multiple dependencies
+    VarBindings = #{
+        % Multiple dependencies
+        ~"UserName" => [~"user_name", ~"email"],
+        % Single dependency
+        ~"Count" => [~"count"]
+    },
+
+    VarsIndexes = arizona_parse_transform:generate_vars_indexes(TemplateStructure, VarBindings),
+
+    % Expected: both user_name and email changes should trigger UserName re-render
+    Expected = #{
+        % user_name binding affects element 1 (UserName)
+        ~"user_name" => [1],
+        % email binding also affects element 1 (UserName)
+        ~"email" => [1],
+        % count binding affects element 3 (Count)
+        ~"count" => [3]
+    },
+    ?assertEqual(Expected, VarsIndexes),
+
+    ct:comment("multiple binding dependencies in vars_indexes generation successful").
+
+%% Test conditional binding dependencies (case expressions)
+test_conditional_binding_dependencies(Config) when is_list(Config) ->
+    % Create function AST with conditional arizona_socket:get_binding calls
+    Function = merl:quote(~""""
+    render(Socket) ->
+        Foo = case arizona_socket:get_binding(foo, Socket) of
+            foo -> arizona_socket:get_binding(bar, Socket);
+            bar -> arizona_socket:get_binding(baz, Socket)
+        end,
+        Count = arizona_socket:get_binding(count, Socket),
+        {Foo, Count}.
+    """"),
+
+    % Test binding analysis - should capture ALL binding dependencies
+    VarBindings = arizona_parse_transform:analyze_function_for_bindings(Function),
+
+    % Foo depends on foo (condition) + bar/baz (possible results)
+    Expected = #{
+        % All three bindings (sorted)
+        ~"Foo" => [~"bar", ~"baz", ~"foo"],
+        ~"Count" => [~"count"]
+    },
+    ?assertEqual(Expected, VarBindings),
+
+    ct:comment("conditional binding dependencies test successful").

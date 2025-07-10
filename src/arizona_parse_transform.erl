@@ -31,6 +31,16 @@ them with optimized versions that avoid runtime template parsing overhead.
 -export([transform_stateless_to_ast/1]).
 
 %% --------------------------------------------------------------------
+%% Testing helper exports
+%% --------------------------------------------------------------------
+
+-export([extract_arizona_functions/1]).
+-export([analyze_function_for_bindings/1]).
+-export([generate_vars_indexes/2]).
+-export([parse_template_for_stateful_with_context/5]).
+-export([build_function_bindings_map/2]).
+
+%% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
@@ -64,6 +74,14 @@ Tuple containing the binary template string and the line number where
 it was found, used for error reporting during parse transform processing.
 """.
 -type template_content() :: {binary(), pos_integer()}.
+
+-doc ~"""
+Function specification for arizona_parse_transform attribute.
+
+Tuple containing function name and arity for functions that should
+be analyzed for variable bindings.
+""".
+-type function_spec() :: {FunctionName :: atom(), Arity :: non_neg_integer()}.
 
 -doc ~"""
 Compiler options passed to the parse transform.
@@ -108,10 +126,22 @@ when
     AbstractSyntaxTrees1 :: [erl_parse:abstract_form()].
 parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
     ModuleName = extract_module_name(AbstractSyntaxTrees),
+    ArizonaFunctions = extract_arizona_functions(AbstractSyntaxTrees),
+
+    %% Build function-to-bindings mapping for arizona functions
+    FunctionBindings = build_function_bindings_map(AbstractSyntaxTrees, ArizonaFunctions),
+
     erl_syntax:revert_forms([
         erl_syntax_lib:map(
             fun(Node) ->
-                transform_ast_node(erl_syntax:revert(Node), ModuleName, CompilerOptions, Depth)
+                transform_ast_node_with_context(
+                    erl_syntax:revert(Node),
+                    ModuleName,
+                    CompilerOptions,
+                    Depth,
+                    ArizonaFunctions,
+                    FunctionBindings
+                )
             end,
             FormTree
         )
@@ -194,33 +224,337 @@ extract_module_name([_Form | Rest]) ->
 extract_module_name([]) ->
     unknown_module.
 
-%% Transform an individual AST node with depth tracking
--spec transform_ast_node(erl_parse:abstract_expr(), atom(), compile_options(), non_neg_integer()) ->
-    erl_parse:abstract_expr().
-transform_ast_node(AstNode, ModuleName, CompilerOptions, Depth) ->
-    transform_template_calls(AstNode, ModuleName, CompilerOptions, Depth).
+%% Extract arizona_parse_transform attribute from the abstract syntax tree forms
+-spec extract_arizona_functions([erl_parse:abstract_form()]) -> [function_spec()].
+extract_arizona_functions(AbstractSyntaxTrees) ->
+    lists:foldl(
+        fun
+            ({attribute, _Anno, arizona_parse_transform, FunctionList}, Acc) when
+                is_list(FunctionList)
+            ->
+                FunctionList ++ Acc;
+            (_, Acc) ->
+                Acc
+        end,
+        [],
+        AbstractSyntaxTrees
+    ).
 
-%% Template Call Recognition and Transformation
+%% Build mapping of function specs to their variable-to-binding mappings
+-spec build_function_bindings_map([erl_parse:abstract_form()], [function_spec()]) ->
+    #{function_spec() => #{binary() => binary()}}.
+build_function_bindings_map(AbstractSyntaxTrees, ArizonaFunctions) ->
+    lists:foldl(
+        fun(Form, Acc) ->
+            case Form of
+                {function, _Line, FuncName, Arity, _Clauses} = Function ->
+                    FuncSpec = {FuncName, Arity},
+                    case lists:member(FuncSpec, ArizonaFunctions) of
+                        true ->
+                            Bindings = analyze_function_for_bindings(Function),
+                            Acc#{FuncSpec => Bindings};
+                        false ->
+                            Acc
+                    end;
+                _ ->
+                    Acc
+            end
+        end,
+        #{},
+        AbstractSyntaxTrees
+    ).
 
-%% Transform arizona_html function calls with binary templates and depth tracking
--spec transform_template_calls(
-    erl_parse:abstract_expr(), atom(), compile_options(), non_neg_integer()
+%% Analyze function AST to extract arizona_socket:get_binding calls
+-spec analyze_function_for_bindings(erl_parse:abstract_form()) -> #{binary() => binary()}.
+analyze_function_for_bindings({function, _Line, _Name, _Arity, _Clauses} = Function) ->
+    %% Use erl_syntax_lib:map to traverse ALL AST nodes systematically
+    CollectedBindings = collect_bindings_from_function(Function),
+    CollectedBindings;
+analyze_function_for_bindings(_) ->
+    #{}.
+
+%% Collect all arizona_socket:get_binding calls from function using erl_syntax traversal
+-spec collect_bindings_from_function(erl_parse:abstract_form()) -> #{binary() => binary()}.
+collect_bindings_from_function(Function) ->
+    %% Use a process dictionary to collect bindings during traversal
+    put(arizona_bindings_collector, #{}),
+
+    %% Traverse the entire function AST
+    erl_syntax_lib:map(
+        fun(Node) ->
+            analyze_ast_node_for_bindings(erl_syntax:revert(Node)),
+            %% Return unchanged node
+            Node
+        end,
+        Function
+    ),
+
+    %% Retrieve collected bindings
+    Result = get(arizona_bindings_collector),
+    erase(arizona_bindings_collector),
+    Result.
+
+%% Analyze individual AST node for arizona_socket:get_binding patterns
+-spec analyze_ast_node_for_bindings(erl_parse:abstract_expr()) -> ok.
+analyze_ast_node_for_bindings(AstNode) ->
+    case AstNode of
+        %% Match: Var = arizona_socket:get_binding(binding_name, Socket, ...)
+        {match, _Line, {var, _, VarName}, GetBindingCall} ->
+            %% Collect all bindings this variable depends on
+            Dependencies = collect_binding_dependencies(GetBindingCall),
+            case Dependencies of
+                [] ->
+                    ok;
+                _ ->
+                    CurrentBindings = get(arizona_bindings_collector),
+                    VarBinary = atom_to_binary(VarName),
+                    put(arizona_bindings_collector, CurrentBindings#{VarBinary => Dependencies})
+            end;
+        %% Note: erl_syntax_lib:map already handles nested traversal,
+        %% so we don't need to manually traverse here
+        _ ->
+            ok
+    end.
+
+%% Collect all binding dependencies from a potentially nested arizona_socket:get_binding call
+-spec collect_binding_dependencies(erl_parse:abstract_expr()) -> [binary()].
+collect_binding_dependencies(AST) ->
+    %% Use process dictionary to collect all bindings in this expression
+    put(arizona_dependency_collector, []),
+    collect_bindings_recursively(AST),
+    Result = get(arizona_dependency_collector),
+    erase(arizona_dependency_collector),
+    % Remove duplicates and sort
+    lists:usort(Result).
+
+%% Recursively collect all arizona_socket:get_binding calls
+-spec collect_bindings_recursively(term()) -> ok.
+collect_bindings_recursively(AST) ->
+    case AST of
+        %% Found arizona_socket:get_binding call
+        {call, _, {remote, _, {atom, _, arizona_socket}, {atom, _, get_binding}}, Args} ->
+            case extract_binding_name_from_args(Args) of
+                {ok, BindingName} ->
+                    CurrentDeps = get(arizona_dependency_collector),
+                    BindingBinary = atom_to_binary(BindingName),
+                    put(arizona_dependency_collector, [BindingBinary | CurrentDeps]);
+                error ->
+                    ok
+            end,
+            %% Continue traversing arguments for nested calls
+            lists:foreach(fun collect_bindings_recursively/1, Args);
+        %% Traverse tuple elements
+        Tuple when is_tuple(Tuple) ->
+            lists:foreach(fun collect_bindings_recursively/1, tuple_to_list(Tuple));
+        %% Traverse list elements
+        List when is_list(List) ->
+            lists:foreach(fun collect_bindings_recursively/1, List);
+        %% Base case: atomic values
+        _ ->
+            ok
+    end.
+
+%% Extract binding name from arizona_socket:get_binding arguments
+-spec extract_binding_name_from_args([erl_parse:abstract_expr()]) -> {ok, atom()} | error.
+extract_binding_name_from_args([{atom, _, BindingName}, _SocketArg]) ->
+    {ok, BindingName};
+extract_binding_name_from_args([{atom, _, BindingName}, _SocketArg, _DefaultArg]) ->
+    {ok, BindingName};
+extract_binding_name_from_args(_) ->
+    error.
+
+%% Generate vars_indexes map from template structure and variable context
+-spec generate_vars_indexes(arizona_parser:stateful_result(), #{binary() => binary() | [binary()]}) ->
+    #{binary() => [non_neg_integer()]}.
+generate_vars_indexes(#{elems := Elements}, VarToBinding) ->
+    maps:fold(
+        fun(Index, Element, Acc) ->
+            case Element of
+                {dynamic, _Line, ExprText} ->
+                    %% Parse expression to find variable references
+                    VarNames = extract_variables_from_expression(ExprText),
+                    %% Map variables to bindings and update indexes
+                    lists:foldl(
+                        fun(VarName, InnerAcc) ->
+                            case maps:get(VarName, VarToBinding, undefined) of
+                                undefined ->
+                                    % Variable not mapped to any binding
+                                    InnerAcc;
+                                BindingName when is_binary(BindingName) ->
+                                    %% Single binding dependency
+                                    CurrentIndexes = maps:get(BindingName, InnerAcc, []),
+                                    InnerAcc#{BindingName => [Index | CurrentIndexes]};
+                                BindingNames when is_list(BindingNames) ->
+                                    %% Multiple binding dependencies - variable depends on multiple bindings
+                                    lists:foldl(
+                                        fun(BindingName, Acc2) ->
+                                            CurrentIndexes = maps:get(BindingName, Acc2, []),
+                                            Acc2#{BindingName => [Index | CurrentIndexes]}
+                                        end,
+                                        InnerAcc,
+                                        BindingNames
+                                    )
+                            end
+                        end,
+                        Acc,
+                        VarNames
+                    );
+                _ ->
+                    % Static elements don't affect vars_indexes
+                    Acc
+            end
+        end,
+        #{},
+        Elements
+    ).
+
+%% Extract variable names from an expression string (keep as binaries)
+-spec extract_variables_from_expression(binary()) -> [binary()].
+extract_variables_from_expression(ExprText) ->
+    %% Find variable references like {VarName} patterns in template expressions
+    %% The ExprText is the raw content like "Count" (without the braces)
+    %% Just return the variable name if it looks like a variable
+    case re:run(ExprText, ~"^([A-Z][a-zA-Z0-9_]*)$", [{capture, all_but_first, binary}]) of
+        {match, [Match]} ->
+            [Match];
+        nomatch ->
+            []
+    end.
+
+%% Transform a function with variable binding context
+-spec transform_function_with_bindings(
+    erl_parse:abstract_form(), atom(), compile_options(), non_neg_integer(), #{binary() => binary()}
+) -> erl_parse:abstract_form().
+transform_function_with_bindings(Function, _ModuleName, _CompilerOptions, _Depth, _VarBindings) ->
+    %% For now, just return the function as-is
+    %% TODO: Implement function-level transformation with variable context
+    Function.
+
+%% Transform an individual AST node with enhanced context
+-spec transform_ast_node_with_context(
+    erl_parse:abstract_expr(),
+    atom(),
+    compile_options(),
+    non_neg_integer(),
+    [function_spec()],
+    #{function_spec() => #{binary() => binary()}}
+) -> erl_parse:abstract_expr().
+transform_ast_node_with_context(
+    AstNode,
+    ModuleName,
+    CompilerOptions,
+    Depth,
+    ArizonaFunctions,
+    FunctionBindings
 ) ->
-    erl_parse:abstract_expr().
-transform_template_calls(
+    transform_template_calls_with_context(
+        AstNode, ModuleName, CompilerOptions, Depth, ArizonaFunctions, FunctionBindings
+    ).
+
+%% Transform arizona_html function calls with enhanced context
+-spec transform_template_calls_with_context(
+    erl_parse:abstract_expr(),
+    atom(),
+    compile_options(),
+    non_neg_integer(),
+    [function_spec()],
+    #{function_spec() => #{binary() => binary()}}
+) -> erl_parse:abstract_expr().
+transform_template_calls_with_context(
+    {function, _Line, FuncName, Arity, _Clauses} = Function,
+    ModuleName,
+    CompilerOptions,
+    Depth,
+    ArizonaFunctions,
+    FunctionBindings
+) ->
+    %% Transform function if it's an Arizona function
+    FuncSpec = {FuncName, Arity},
+    case lists:member(FuncSpec, ArizonaFunctions) of
+        true ->
+            VarBindings = maps:get(FuncSpec, FunctionBindings, #{}),
+            transform_function_with_bindings(
+                Function, ModuleName, CompilerOptions, Depth, VarBindings
+            );
+        false ->
+            %% Regular transformation for non-Arizona functions
+            Function
+    end;
+transform_template_calls_with_context(
     {call, CallAnnotations,
         {remote, _RemoteAnnotations, {atom, _ModuleAnnotations, arizona_html},
             {atom, _FunctionAnnotations, FunctionName}} = RemoteCall,
         Args},
     ModuleName,
     CompilerOptions,
-    Depth
+    Depth,
+    ArizonaFunctions,
+    FunctionBindings
 ) ->
+    transform_arizona_html_call_with_context(
+        FunctionName,
+        CallAnnotations,
+        RemoteCall,
+        Args,
+        ModuleName,
+        CompilerOptions,
+        Depth,
+        ArizonaFunctions,
+        FunctionBindings
+    );
+transform_template_calls_with_context(
+    AstNode,
+    _ModuleName,
+    _CompilerOptions,
+    _Depth,
+    _ArizonaFunctions,
+    _FunctionBindings
+) ->
+    AstNode.
+
+%% Transform specific arizona_html function calls with context
+-spec transform_arizona_html_call_with_context(
+    atom(),
+    erl_anno:anno(),
+    erl_parse:abstract_expr(),
+    [erl_parse:abstract_expr()],
+    atom(),
+    compile_options(),
+    non_neg_integer(),
+    [function_spec()],
+    #{function_spec() => #{binary() => binary()}}
+) -> erl_parse:abstract_expr().
+transform_arizona_html_call_with_context(
+    render_stateful,
+    CallAnnotations,
+    RemoteCall,
+    Args,
+    ModuleName,
+    CompilerOptions,
+    Depth,
+    _ArizonaFunctions,
+    _FunctionBindings
+) ->
+    %% For now, we need to determine which function's bindings to use
+    %% This is a limitation of the current approach - we'll fall back to regular transformation
+    transform_render_stateful_call(
+        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+    );
+transform_arizona_html_call_with_context(
+    FunctionName,
+    CallAnnotations,
+    RemoteCall,
+    Args,
+    ModuleName,
+    CompilerOptions,
+    Depth,
+    _ArizonaFunctions,
+    _FunctionBindings
+) ->
+    %% Fall back to regular transformation for other functions
     transform_arizona_html_call(
         FunctionName, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
-    );
-transform_template_calls(AstNode, _ModuleName, _CompilerOptions, _Depth) ->
-    AstNode.
+    ).
 
 %% Transform specific arizona_html function calls
 -spec transform_arizona_html_call(
@@ -523,12 +857,25 @@ transform_stateful_template_call(
 -spec parse_template_for_stateful(binary(), pos_integer(), compile_options(), non_neg_integer()) ->
     binary().
 parse_template_for_stateful(TemplateString, LineNumber, CompilerOptions, Depth) ->
+    parse_template_for_stateful_with_context(
+        TemplateString, LineNumber, CompilerOptions, Depth, #{}
+    ).
+
+%% Parse template string into structured format with variable context
+-spec parse_template_for_stateful_with_context(
+    binary(), pos_integer(), compile_options(), non_neg_integer(), #{binary() => binary()}
+) -> binary().
+parse_template_for_stateful_with_context(
+    TemplateString, LineNumber, CompilerOptions, Depth, VarBindings
+) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
     #{
         elems_order := ElementOrder,
-        elems := ElementsMap,
-        vars_indexes := VariableIndexes
+        elems := ElementsMap
     } = arizona_parser:parse_stateful_tokens(TokenList),
+
+    %% Generate vars_indexes using our new function
+    VariableIndexes = generate_vars_indexes(#{elems => ElementsMap}, VarBindings),
 
     build_template_data_structure(
         ElementOrder, ElementsMap, VariableIndexes, CompilerOptions, Depth
@@ -690,10 +1037,13 @@ parse_template_for_list(ItemFun, CompilerOptions, Depth) ->
         static := StaticParts,
         dynamic := #{
             elems_order := ElemsOrder,
-            elems := DynamicElements,
-            vars_indexes := VariableIndexes
+            elems := DynamicElements
         }
     } = arizona_parser:parse_list_tokens(TokenList),
+
+    %% Generate vars_indexes using empty variable context for now
+    %% TODO: Support function-level variable context for list templates
+    VariableIndexes = generate_vars_indexes(#{elems => DynamicElements}, #{}),
 
     % Build list template data structure
     build_list_template_data_structure(
