@@ -52,7 +52,9 @@ Result type for stateless parsing - list of tokens with comments filtered out.
 ].
 
 -doc ~"""
-Result type for stateful parsing with element ordering, element mapping, and variable indexes.
+Result type for stateful parsing with element ordering and element mapping.
+
+The parse transform will handle variable analysis and add vars_indexes separately.
 """.
 -type stateful_result() :: #{
     elems_order := [Index :: non_neg_integer()],
@@ -61,14 +63,14 @@ Result type for stateful parsing with element ordering, element mapping, and var
             non_neg_integer() => {
                 Category :: static | dynamic, Line :: pos_integer(), Content :: binary()
             }
-    },
-    vars_indexes := #{VarName :: binary() => [Index :: non_neg_integer()]}
+    }
 }.
 
 -doc ~"""
 Result type for list parsing with static/dynamic template structure.
 
 Runtime fallback format - parse transform will optimize to arizona_renderer:list_template_data().
+The parse transform will handle variable analysis and add vars_indexes separately.
 """.
 -type list_result() :: #{
     static := [StaticContent :: binary()],
@@ -81,8 +83,7 @@ Runtime fallback format - parse transform will optimize to arizona_renderer:list
                     Line :: pos_integer(),
                     ExprText :: binary()
                 }
-        },
-        vars_indexes := #{VarName :: binary() => [Index :: non_neg_integer()]}
+        }
     }
 }.
 
@@ -109,26 +110,22 @@ parse_stateless_tokens(Tokens) ->
 Parse tokens into stateful template structure.
 
 Converts a list of tokens into a structured format for stateful rendering.
-This includes element ordering, element mapping, and variable indexing for
-efficient template updates.
+This includes element ordering and element mapping.
 
 The resulting map contains:
 - `elems_order`: Sequential list of element indices
 - `elems`: Map of element index to token data
-- `vars_indexes`: Map of variable names to their element indices
 
-Variable extraction is performed for dynamic tokens containing
-`arizona_socket:get_binding/2` calls.
+Variable analysis and vars_indexes generation is handled by the parse transform.
 """.
 -spec parse_stateful_tokens(Tokens) -> Result when
     Tokens :: [token()],
     Result :: stateful_result().
 parse_stateful_tokens(Tokens) ->
-    {Elements, VarsIndexes} = process_tokens_stateful(Tokens, 0, #{}, #{}),
+    Elements = process_tokens_stateful(Tokens, 0, #{}),
     #{
         elems_order => lists:seq(0, maps:size(Elements) - 1),
-        elems => Elements,
-        vars_indexes => VarsIndexes
+        elems => Elements
     }.
 
 -doc ~"""
@@ -144,13 +141,12 @@ list rendering with minimal re-computation.
 parse_list_tokens(Tokens) ->
     %% For runtime: simple fallback structure
     %% Parse transform will provide optimized version
-    {StaticParts, DynamicElements, VarsIndexes} = process_tokens_for_list(Tokens),
+    {StaticParts, DynamicElements} = process_tokens_for_list(Tokens),
     #{
         static => StaticParts,
         dynamic => #{
             elems_order => lists:seq(0, maps:size(DynamicElements) - 1),
-            elems => DynamicElements,
-            vars_indexes => VarsIndexes
+            elems => DynamicElements
         }
     }.
 
@@ -159,97 +155,42 @@ parse_list_tokens(Tokens) ->
 %% --------------------------------------------------------------------
 
 %% Process tokens for stateful structure
-process_tokens_stateful([], _Index, Elements, VarsIndexes) ->
-    {Elements, VarsIndexes};
-process_tokens_stateful([Token | Rest], Index, Elements, VarsIndexes) ->
+process_tokens_stateful([], _Index, Elements) ->
+    Elements;
+process_tokens_stateful([Token | Rest], Index, Elements) ->
     case Token of
         {static, Line, Text} ->
             NewElements = Elements#{Index => {static, Line, Text}},
-            process_tokens_stateful(Rest, Index + 1, NewElements, VarsIndexes);
+            process_tokens_stateful(Rest, Index + 1, NewElements);
         {dynamic, Line, ExprText} ->
-            %% Parse expression to find variable names
-            VarNames = extract_variable_names(ExprText),
-
-            %% Keep original expression text - parse transform will optimize
+            %% Keep original expression text - parse transform will handle variable analysis
             NewElements = Elements#{Index => {dynamic, Line, ExprText}},
-
-            %% Update variable indexes
-            NewVarsIndexes = lists:foldl(
-                fun(VarName, Acc) ->
-                    CurrentIndexes = maps:get(VarName, Acc, []),
-                    Acc#{VarName => [Index | CurrentIndexes]}
-                end,
-                VarsIndexes,
-                VarNames
-            ),
-
-            process_tokens_stateful(Rest, Index + 1, NewElements, NewVarsIndexes);
+            process_tokens_stateful(Rest, Index + 1, NewElements);
         {comment, _Line, _Text} ->
             %% Skip comments (don't increment index)
-            process_tokens_stateful(Rest, Index, Elements, VarsIndexes)
+            process_tokens_stateful(Rest, Index, Elements)
     end.
 
-%% Extract variable names from expression text using regex
-extract_variable_names(ExprText) ->
-    expr_vars(ExprText).
-
-%% Parse expression to find arizona_socket:get_binding calls
-expr_vars(Expr) ->
-    case
-        re:run(
-            Expr,
-            ~"arizona_socket:get_binding\\(([a-z][a-zA-Z_@]*|'(.*?)'),\\s*\\w+(?:,\\s*[^)]*)?\\)",
-            [global, {capture, all_but_first, binary}]
-        )
-    of
-        {match, Vars0} ->
-            Vars = lists:flatten([extract_var_binary(List) || List <- Vars0]),
-            lists:usort(Vars);
-        nomatch ->
-            []
-    end.
-
-%% Extract variable name as binary, handling quoted and unquoted forms
-extract_var_binary([<<$', _/binary>> = Var | _T]) ->
-    %% Remove quotes from quoted variable
-    Size = byte_size(Var) - 2,
-    <<$', UnquotedVar:Size/binary, $'>> = Var,
-    UnquotedVar;
-extract_var_binary([Var]) ->
-    Var.
+%% Variable extraction functions removed - parse transform handles variable analysis
 
 %% Process tokens for list template structure (similar to stateful but different output)
 process_tokens_for_list(Tokens) ->
     %% For runtime fallback: create simple structure
     %% Parse transform will optimize this
-    {StaticParts, DynamicElements, VarsIndexes} = separate_static_dynamic_for_list(
-        Tokens, [], #{}, #{}, 0, undefined
-    ),
-    {StaticParts, DynamicElements, VarsIndexes}.
+    separate_static_dynamic_for_list(Tokens, [], #{}, 0, undefined).
 
 %% Separate static and dynamic parts for list rendering
-separate_static_dynamic_for_list([], StaticAcc, DynamicAcc, VarsAcc, _Index, _PrevType) ->
-    {lists:reverse(StaticAcc), DynamicAcc, VarsAcc};
+separate_static_dynamic_for_list([], StaticAcc, DynamicAcc, _Index, _PrevType) ->
+    {lists:reverse(StaticAcc), DynamicAcc};
 separate_static_dynamic_for_list(
-    [{static, _Line, Text} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index, _PrevType
+    [{static, _Line, Text} | Rest], StaticAcc, DynamicAcc, Index, _PrevType
 ) ->
-    separate_static_dynamic_for_list(Rest, [Text | StaticAcc], DynamicAcc, VarsAcc, Index, static);
+    separate_static_dynamic_for_list(Rest, [Text | StaticAcc], DynamicAcc, Index, static);
 separate_static_dynamic_for_list(
-    [{dynamic, Line, ExprText} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index, PrevType
+    [{dynamic, Line, ExprText} | Rest], StaticAcc, DynamicAcc, Index, PrevType
 ) ->
-    %% Extract variables (only arizona_socket:get_binding calls)
-    VarNames = extract_variable_names(ExprText),
-
-    %% Update accumulators with line information - store in compatible format
+    %% Store dynamic element - parse transform will handle variable analysis
     NewDynamicAcc = DynamicAcc#{Index => {dynamic, Line, ExprText}},
-    NewVarsAcc = lists:foldl(
-        fun(VarName, Acc) ->
-            CurrentIndexes = maps:get(VarName, Acc, []),
-            Acc#{VarName => [Index | CurrentIndexes]}
-        end,
-        VarsAcc,
-        VarNames
-    ),
 
     %% Add empty static part when:
     %% 1. First token is dynamic (PrevType == undefined)
@@ -265,10 +206,10 @@ separate_static_dynamic_for_list(
         end,
 
     separate_static_dynamic_for_list(
-        Rest, NewStaticAcc, NewDynamicAcc, NewVarsAcc, Index + 1, dynamic
+        Rest, NewStaticAcc, NewDynamicAcc, Index + 1, dynamic
     );
 separate_static_dynamic_for_list(
-    [{comment, _Line, _Text} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index, PrevType
+    [{comment, _Line, _Text} | Rest], StaticAcc, DynamicAcc, Index, PrevType
 ) ->
     %% Skip comments - preserve previous type
-    separate_static_dynamic_for_list(Rest, StaticAcc, DynamicAcc, VarsAcc, Index, PrevType).
+    separate_static_dynamic_for_list(Rest, StaticAcc, DynamicAcc, Index, PrevType).
