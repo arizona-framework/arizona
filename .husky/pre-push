@@ -27,4 +27,23 @@ git diff --exit-code
 echo -e "${YELLOW}→ Running npm run ci...${NC}"
 npm run ci
 
+# 4. Run npm-installable linting (required)
+echo -e "${YELLOW}→ Running markdown linting...${NC}"
+npm run lint:md
+
+# 5. Run system linting (optional - warn but don't fail)
+echo -e "${YELLOW}→ Running YAML linting...${NC}"
+if command -v yamllint >/dev/null 2>&1; then
+    yamllint .github/**/*.yml .*.yml || echo -e "${YELLOW}⚠ YAML linting issues found (non-blocking)${NC}"
+else
+    echo -e "${YELLOW}⚠ yamllint not found, skipping YAML checks${NC}"
+fi
+
+echo -e "${YELLOW}→ Running GitHub Actions linting...${NC}"
+if command -v actionlint >/dev/null 2>&1; then
+    actionlint || echo -e "${YELLOW}⚠ GitHub Actions linting issues found (non-blocking)${NC}"
+else
+    echo -e "${YELLOW}⚠ actionlint not found, skipping Actions checks${NC}"
+fi
+
 echo -e "${GREEN}✓ All pre-push checks passed! Ready to push.${NC}"
