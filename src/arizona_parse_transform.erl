@@ -273,27 +273,18 @@ analyze_function_for_bindings(_) ->
 %% Collect all arizona_socket:get_binding calls from function using erl_syntax traversal
 -spec collect_bindings_from_function(erl_parse:abstract_form()) -> #{binary() => binary()}.
 collect_bindings_from_function(Function) ->
-    %% Use a process dictionary to collect bindings during traversal
-    put(arizona_bindings_collector, #{}),
-
-    %% Traverse the entire function AST
-    erl_syntax_lib:map(
-        fun(Node) ->
-            analyze_ast_node_for_bindings(erl_syntax:revert(Node)),
-            %% Return unchanged node
-            Node
+    erl_syntax_lib:fold(
+        fun(Node, Acc) ->
+            analyze_node_for_bindings(erl_syntax:revert(Node), Acc)
         end,
+        #{},
         Function
-    ),
-
-    %% Retrieve collected bindings
-    Result = get(arizona_bindings_collector),
-    erase(arizona_bindings_collector),
-    Result.
+    ).
 
 %% Analyze individual AST node for arizona_socket:get_binding patterns
--spec analyze_ast_node_for_bindings(erl_parse:abstract_expr()) -> ok.
-analyze_ast_node_for_bindings(AstNode) ->
+-spec analyze_node_for_bindings(erl_parse:abstract_expr(), #{binary() => binary() | [binary()]}) ->
+    #{binary() => binary() | [binary()]}.
+analyze_node_for_bindings(AstNode, Acc) ->
     case AstNode of
         %% Match: Var = arizona_socket:get_binding(binding_name, Socket, ...)
         {match, _Line, {var, _, VarName}, GetBindingCall} ->
@@ -301,54 +292,47 @@ analyze_ast_node_for_bindings(AstNode) ->
             Dependencies = collect_binding_dependencies(GetBindingCall),
             case Dependencies of
                 [] ->
-                    ok;
+                    Acc;
                 _ ->
-                    CurrentBindings = get(arizona_bindings_collector),
                     VarBinary = atom_to_binary(VarName),
-                    put(arizona_bindings_collector, CurrentBindings#{VarBinary => Dependencies})
+                    Acc#{VarBinary => Dependencies}
             end;
-        %% Note: erl_syntax_lib:map already handles nested traversal,
-        %% so we don't need to manually traverse here
         _ ->
-            ok
+            Acc
     end.
 
 %% Collect all binding dependencies from a potentially nested arizona_socket:get_binding call
 -spec collect_binding_dependencies(erl_parse:abstract_expr()) -> [binary()].
 collect_binding_dependencies(AST) ->
-    %% Use process dictionary to collect all bindings in this expression
-    put(arizona_dependency_collector, []),
-    collect_bindings_recursively(AST),
-    Result = get(arizona_dependency_collector),
-    erase(arizona_dependency_collector),
+    Dependencies = collect_bindings_recursively(AST, []),
     % Remove duplicates and sort
-    lists:usort(Result).
+    lists:usort(Dependencies).
 
 %% Recursively collect all arizona_socket:get_binding calls
--spec collect_bindings_recursively(term()) -> ok.
-collect_bindings_recursively(AST) ->
+-spec collect_bindings_recursively(term(), [binary()]) -> [binary()].
+collect_bindings_recursively(AST, Acc) ->
     case AST of
         %% Found arizona_socket:get_binding call
         {call, _, {remote, _, {atom, _, arizona_socket}, {atom, _, get_binding}}, Args} ->
-            case extract_binding_name_from_args(Args) of
-                {ok, BindingName} ->
-                    CurrentDeps = get(arizona_dependency_collector),
-                    BindingBinary = atom_to_binary(BindingName),
-                    put(arizona_dependency_collector, [BindingBinary | CurrentDeps]);
-                error ->
-                    ok
-            end,
+            NewAcc =
+                case extract_binding_name_from_args(Args) of
+                    {ok, BindingName} ->
+                        BindingBinary = atom_to_binary(BindingName),
+                        [BindingBinary | Acc];
+                    error ->
+                        Acc
+                end,
             %% Continue traversing arguments for nested calls
-            lists:foreach(fun collect_bindings_recursively/1, Args);
+            lists:foldl(fun collect_bindings_recursively/2, NewAcc, Args);
         %% Traverse tuple elements
         Tuple when is_tuple(Tuple) ->
-            lists:foreach(fun collect_bindings_recursively/1, tuple_to_list(Tuple));
+            lists:foldl(fun collect_bindings_recursively/2, Acc, tuple_to_list(Tuple));
         %% Traverse list elements
         List when is_list(List) ->
-            lists:foreach(fun collect_bindings_recursively/1, List);
+            lists:foldl(fun collect_bindings_recursively/2, Acc, List);
         %% Base case: atomic values
         _ ->
-            ok
+            Acc
     end.
 
 %% Extract binding name from arizona_socket:get_binding arguments
@@ -362,7 +346,8 @@ extract_binding_name_from_args(_) ->
 
 %% Generate vars_indexes map from template structure and variable context
 -spec generate_vars_indexes(
-    arizona_parser:stateful_result(), #{binary() => binary() | [binary()]}
+    #{elems := #{non_neg_integer() => {static | dynamic, pos_integer(), binary()}}},
+    #{binary() => binary() | [binary()]}
 ) -> #{binary() => [non_neg_integer()]}.
 generate_vars_indexes(#{elems := Elements}, VarToBinding) ->
     maps:fold(
