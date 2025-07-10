@@ -54,6 +54,7 @@ them with optimized versions that avoid runtime template parsing overhead.
 -export_type([ast_node/0]).
 -export_type([template_content/0]).
 -export_type([compile_options/0]).
+-export_type([function_spec/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -365,41 +366,16 @@ extract_binding_name_from_args(_) ->
     error.
 
 %% Generate vars_indexes map from template structure and variable context
--spec generate_vars_indexes(arizona_parser:stateful_result(), #{binary() => binary() | [binary()]}) ->
-    #{binary() => [non_neg_integer()]}.
+-spec generate_vars_indexes(
+    arizona_parser:stateful_result(), #{binary() => binary() | [binary()]}
+) -> #{binary() => [non_neg_integer()]}.
 generate_vars_indexes(#{elems := Elements}, VarToBinding) ->
     maps:fold(
         fun(Index, Element, Acc) ->
             case Element of
                 {dynamic, _Line, ExprText} ->
-                    %% Parse expression to find variable references
                     VarNames = extract_variables_from_expression(ExprText),
-                    %% Map variables to bindings and update indexes
-                    lists:foldl(
-                        fun(VarName, InnerAcc) ->
-                            case maps:get(VarName, VarToBinding, undefined) of
-                                undefined ->
-                                    % Variable not mapped to any binding
-                                    InnerAcc;
-                                BindingName when is_binary(BindingName) ->
-                                    %% Single binding dependency
-                                    CurrentIndexes = maps:get(BindingName, InnerAcc, []),
-                                    InnerAcc#{BindingName => [Index | CurrentIndexes]};
-                                BindingNames when is_list(BindingNames) ->
-                                    %% Multiple binding dependencies - variable depends on multiple bindings
-                                    lists:foldl(
-                                        fun(BindingName, Acc2) ->
-                                            CurrentIndexes = maps:get(BindingName, Acc2, []),
-                                            Acc2#{BindingName => [Index | CurrentIndexes]}
-                                        end,
-                                        InnerAcc,
-                                        BindingNames
-                                    )
-                            end
-                        end,
-                        Acc,
-                        VarNames
-                    );
+                    process_element_variables(VarNames, Index, VarToBinding, Acc);
                 _ ->
                     % Static elements don't affect vars_indexes
                     Acc
@@ -408,6 +384,37 @@ generate_vars_indexes(#{elems := Elements}, VarToBinding) ->
         #{},
         Elements
     ).
+
+%% Process variables found in a dynamic element
+process_element_variables(VarNames, Index, VarToBinding, Acc) ->
+    lists:foldl(
+        fun(VarName, InnerAcc) ->
+            case maps:get(VarName, VarToBinding, undefined) of
+                undefined ->
+                    % Variable not mapped to any binding
+                    InnerAcc;
+                BindingName when is_binary(BindingName) ->
+                    %% Single binding dependency
+                    add_binding_index(BindingName, Index, InnerAcc);
+                BindingNames when is_list(BindingNames) ->
+                    %% Multiple binding dependencies
+                    lists:foldl(
+                        fun(BindingName, Acc2) ->
+                            add_binding_index(BindingName, Index, Acc2)
+                        end,
+                        InnerAcc,
+                        BindingNames
+                    )
+            end
+        end,
+        Acc,
+        VarNames
+    ).
+
+%% Add index to binding's list of affected elements
+add_binding_index(BindingName, Index, Acc) ->
+    CurrentIndexes = maps:get(BindingName, Acc, []),
+    Acc#{BindingName => [Index | CurrentIndexes]}.
 
 %% Extract variable names from an expression string (keep as binaries)
 -spec extract_variables_from_expression(binary()) -> [binary()].

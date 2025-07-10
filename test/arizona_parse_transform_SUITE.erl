@@ -725,7 +725,9 @@ test_nested_binding_calls(Config) when is_list(Config) ->
     % Create function AST with nested arizona_socket:get_binding calls
     Function = merl:quote(~""""
     render(Socket) ->
-        UserName = arizona_socket:get_binding(user_name, Socket, arizona_socket:get_binding(email, Socket)),
+        UserName = arizona_socket:get_binding(
+            user_name, Socket, arizona_socket:get_binding(email, Socket)
+        ),
         Count = arizona_socket:get_binding(count, Socket),
         {UserName, Count}.
     """"),
