@@ -13,7 +13,8 @@
     "test:e2e": "playwright test --reporter=line",
     "test:e2e:report": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "ci": "npm run format:check && npm run lint:check && npm test"
+    "ci": "npm run format:check && npm run lint:check && npm test",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@eslint/js": "9.24.0",
@@ -21,6 +22,7 @@
     "esbuild": "0.25.2",
     "eslint": "9.24.0",
     "globals": "16.0.0",
+    "husky": "^9.1.7",
     "prettier": "3.5.3",
     "uglify-js": "3.19.3",
     "vitest": "^3.2.4"

@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# Pre-commit hook for Arizona project
+# Performs lightweight checks to maintain code quality
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo -e "${GREEN}Running pre-commit checks...${NC}"
+
+# 1. Check commit message format (72 characters)
+echo -e "${YELLOW}→ Checking commit message format...${NC}"
+if [ -f ".git/COMMIT_EDITMSG" ]; then
+    COMMIT_MSG=$(head -n 1 .git/COMMIT_EDITMSG)
+    if [ ${#COMMIT_MSG} -gt 72 ]; then
+        echo -e "${RED}✗ Commit message first line too long (${#COMMIT_MSG} chars, max 72)${NC}"
+        echo -e "${RED}  Message: ${COMMIT_MSG}${NC}"
+        exit 1
+    fi
+fi
+
+# 2. Check for merge conflict markers
+echo -e "${YELLOW}→ Checking for merge conflict markers...${NC}"
+if git diff --cached --name-only | xargs grep -l "^<<<<<<< \|^======= \|^>>>>>>> " 2>/dev/null; then
+    echo -e "${RED}✗ Merge conflict markers found in staged files${NC}"
+    exit 1
+fi
+
+# 3. Check Erlang formatting
+echo -e "${YELLOW}→ Checking Erlang code formatting...${NC}"
+if command -v rebar3 >/dev/null 2>&1; then
+    if ! rebar3 fmt --check >/dev/null 2>&1; then
+        echo -e "${RED}✗ Erlang code formatting issues found${NC}"
+        echo -e "${RED}  Run: rebar3 fmt${NC}"
+        exit 1
+    fi
+else
+    echo -e "${YELLOW}⚠ rebar3 not found, skipping Erlang format check${NC}"
+fi
+
+# 4. Check JavaScript formatting
+echo -e "${YELLOW}→ Checking JavaScript code formatting...${NC}"
+if command -v npm >/dev/null 2>&1; then
+    if ! npm run format:check >/dev/null 2>&1; then
+        echo -e "${RED}✗ JavaScript formatting issues found${NC}"
+        echo -e "${RED}  Run: npm run format${NC}"
+        exit 1
+    fi
+else
+    echo -e "${YELLOW}⚠ npm not found, skipping JavaScript format check${NC}"
+fi
+
+echo -e "${GREEN}✓ All pre-commit checks passed!${NC}"

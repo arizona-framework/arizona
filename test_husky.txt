@@ -1,1 +1,0 @@
-# Testing Husky pre-commit hook
