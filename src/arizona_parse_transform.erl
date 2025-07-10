@@ -133,18 +133,13 @@ parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
     FunctionBindings = build_function_bindings_map(AbstractSyntaxTrees, ArizonaFunctions),
 
     erl_syntax:revert_forms([
-        erl_syntax_lib:map(
-            fun(Node) ->
-                transform_ast_node_with_context(
-                    erl_syntax:revert(Node),
-                    ModuleName,
-                    CompilerOptions,
-                    Depth,
-                    ArizonaFunctions,
-                    FunctionBindings
-                )
-            end,
-            FormTree
+        transform_form_with_context(
+            FormTree,
+            ModuleName,
+            CompilerOptions,
+            Depth,
+            ArizonaFunctions,
+            FunctionBindings
         )
      || FormTree <- AbstractSyntaxTrees
     ]).
@@ -430,13 +425,75 @@ extract_variables_from_expression(ExprText) ->
     end.
 
 %% Transform a function with variable binding context
--spec transform_function_with_bindings(
-    erl_parse:abstract_form(), atom(), compile_options(), non_neg_integer(), #{binary() => binary()}
-) -> erl_parse:abstract_form().
-transform_function_with_bindings(Function, _ModuleName, _CompilerOptions, _Depth, _VarBindings) ->
+-spec transform_function_with_bindings(erl_parse:abstract_form()) -> erl_parse:abstract_form().
+transform_function_with_bindings(Function) ->
     %% For now, just return the function as-is
     %% TODO: Implement function-level transformation with variable context
     Function.
+
+%% Transform a form (top-level AST element) with context tracking
+-spec transform_form_with_context(
+    erl_parse:abstract_form(),
+    atom(),
+    compile_options(),
+    non_neg_integer(),
+    [function_spec()],
+    #{function_spec() => #{binary() => binary()}}
+) -> erl_parse:abstract_form().
+transform_form_with_context(
+    {function, _Line, FuncName, Arity, _Clauses} = Function,
+    ModuleName,
+    CompilerOptions,
+    Depth,
+    ArizonaFunctions,
+    FunctionBindings
+) ->
+    %% Check if this is an Arizona function
+    FuncSpec = {FuncName, Arity},
+    CurrentFunctionBindings =
+        case lists:member(FuncSpec, ArizonaFunctions) of
+            true -> maps:get(FuncSpec, FunctionBindings, #{});
+            false -> #{}
+        end,
+
+    %% Transform with current function context
+    erl_syntax_lib:map(
+        fun(Node) ->
+            transform_ast_node_with_context(
+                erl_syntax:revert(Node),
+                ModuleName,
+                CompilerOptions,
+                Depth,
+                ArizonaFunctions,
+                FunctionBindings,
+                CurrentFunctionBindings
+            )
+        end,
+        Function
+    );
+transform_form_with_context(
+    Form,
+    ModuleName,
+    CompilerOptions,
+    Depth,
+    ArizonaFunctions,
+    FunctionBindings
+) ->
+    %% For non-function forms, use empty current function context
+    erl_syntax_lib:map(
+        fun(Node) ->
+            transform_ast_node_with_context(
+                erl_syntax:revert(Node),
+                ModuleName,
+                CompilerOptions,
+                Depth,
+                ArizonaFunctions,
+                FunctionBindings,
+                #{}
+            )
+        end,
+        Form
+    ).
 
 %% Transform an individual AST node with enhanced context
 -spec transform_ast_node_with_context(
@@ -445,7 +502,8 @@ transform_function_with_bindings(Function, _ModuleName, _CompilerOptions, _Depth
     compile_options(),
     non_neg_integer(),
     [function_spec()],
-    #{function_spec() => #{binary() => binary()}}
+    #{function_spec() => #{binary() => binary()}},
+    #{binary() => binary()}
 ) -> erl_parse:abstract_expr().
 transform_ast_node_with_context(
     AstNode,
@@ -453,10 +511,17 @@ transform_ast_node_with_context(
     CompilerOptions,
     Depth,
     ArizonaFunctions,
-    FunctionBindings
+    FunctionBindings,
+    CurrentFunctionBindings
 ) ->
     transform_template_calls_with_context(
-        AstNode, ModuleName, CompilerOptions, Depth, ArizonaFunctions, FunctionBindings
+        AstNode,
+        ModuleName,
+        CompilerOptions,
+        Depth,
+        ArizonaFunctions,
+        FunctionBindings,
+        CurrentFunctionBindings
     ).
 
 %% Transform arizona_html function calls with enhanced context
@@ -466,24 +531,24 @@ transform_ast_node_with_context(
     compile_options(),
     non_neg_integer(),
     [function_spec()],
-    #{function_spec() => #{binary() => binary()}}
+    #{function_spec() => #{binary() => binary()}},
+    #{binary() => binary()}
 ) -> erl_parse:abstract_expr().
 transform_template_calls_with_context(
     {function, _Line, FuncName, Arity, _Clauses} = Function,
-    ModuleName,
-    CompilerOptions,
-    Depth,
+    _ModuleName,
+    _CompilerOptions,
+    _Depth,
     ArizonaFunctions,
-    FunctionBindings
+    FunctionBindings,
+    _CurrentFunctionBindings
 ) ->
     %% Transform function if it's an Arizona function
     FuncSpec = {FuncName, Arity},
     case lists:member(FuncSpec, ArizonaFunctions) of
         true ->
-            VarBindings = maps:get(FuncSpec, FunctionBindings, #{}),
-            transform_function_with_bindings(
-                Function, ModuleName, CompilerOptions, Depth, VarBindings
-            );
+            _VarBindings = maps:get(FuncSpec, FunctionBindings, #{}),
+            transform_function_with_bindings(Function);
         false ->
             %% Regular transformation for non-Arizona functions
             Function
@@ -497,7 +562,8 @@ transform_template_calls_with_context(
     CompilerOptions,
     Depth,
     ArizonaFunctions,
-    FunctionBindings
+    FunctionBindings,
+    CurrentFunctionBindings
 ) ->
     transform_arizona_html_call_with_context(
         FunctionName,
@@ -508,7 +574,8 @@ transform_template_calls_with_context(
         CompilerOptions,
         Depth,
         ArizonaFunctions,
-        FunctionBindings
+        FunctionBindings,
+        CurrentFunctionBindings
     );
 transform_template_calls_with_context(
     AstNode,
@@ -516,7 +583,8 @@ transform_template_calls_with_context(
     _CompilerOptions,
     _Depth,
     _ArizonaFunctions,
-    _FunctionBindings
+    _FunctionBindings,
+    _CurrentFunctionBindings
 ) ->
     AstNode.
 
@@ -530,7 +598,8 @@ transform_template_calls_with_context(
     compile_options(),
     non_neg_integer(),
     [function_spec()],
-    #{function_spec() => #{binary() => binary()}}
+    #{function_spec() => #{binary() => binary()}},
+    #{binary() => binary()}
 ) -> erl_parse:abstract_expr().
 transform_arizona_html_call_with_context(
     render_stateful,
@@ -541,13 +610,28 @@ transform_arizona_html_call_with_context(
     CompilerOptions,
     Depth,
     _ArizonaFunctions,
-    _FunctionBindings
+    _FunctionBindings,
+    CurrentFunctionBindings
 ) ->
-    %% For now, we need to determine which function's bindings to use
-    %% This is a limitation of the current approach - we'll fall back to regular transformation
-    transform_render_stateful_call(
-        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
-    );
+    %% Use current function bindings for enhanced template processing
+    case CurrentFunctionBindings of
+        EmptyMap when map_size(EmptyMap) =:= 0 ->
+            %% No current function context, use regular transformation
+            transform_render_stateful_call(
+                CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+            );
+        _ ->
+            %% We have function bindings, use enhanced transformation
+            transform_render_stateful_call_with_context(
+                CallAnnotations,
+                RemoteCall,
+                Args,
+                ModuleName,
+                CompilerOptions,
+                Depth,
+                CurrentFunctionBindings
+            )
+    end;
 transform_arizona_html_call_with_context(
     FunctionName,
     CallAnnotations,
@@ -557,7 +641,8 @@ transform_arizona_html_call_with_context(
     CompilerOptions,
     Depth,
     _ArizonaFunctions,
-    _FunctionBindings
+    _FunctionBindings,
+    _CurrentFunctionBindings
 ) ->
     %% Fall back to regular transformation for other functions
     transform_arizona_html_call(
@@ -625,6 +710,47 @@ transform_render_stateless_call(
     );
 transform_render_stateless_call(
     CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
+) ->
+    Line = erl_anno:line(CallAnnotations),
+    raise_template_error(badarg, ModuleName, Line).
+
+%% Transform render_stateful function calls with current function context
+-spec transform_render_stateful_call_with_context(
+    erl_anno:anno(),
+    erl_parse:abstract_expr(),
+    [erl_parse:abstract_expr()],
+    atom(),
+    compile_options(),
+    non_neg_integer(),
+    #{binary() => binary()}
+) -> erl_parse:abstract_expr().
+transform_render_stateful_call_with_context(
+    CallAnnotations,
+    RemoteCall,
+    [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg],
+    ModuleName,
+    CompilerOptions,
+    Depth,
+    CurrentFunctionBindings
+) ->
+    transform_stateful_template_call_with_context(
+        CallAnnotations,
+        RemoteCall,
+        BinaryTemplate,
+        SocketArg,
+        ModuleName,
+        CompilerOptions,
+        Depth,
+        CurrentFunctionBindings
+    );
+transform_render_stateful_call_with_context(
+    CallAnnotations,
+    _RemoteCall,
+    _Args,
+    ModuleName,
+    _CompilerOptions,
+    _Depth,
+    _CurrentFunctionBindings
 ) ->
     Line = erl_anno:line(CallAnnotations),
     raise_template_error(badarg, ModuleName, Line).
@@ -832,6 +958,42 @@ convert_element_to_iolist(
     [DynamicElement | Accumulator].
 
 %% Stateful Template Transformation
+
+%% Transform render_stateful call with current function context and depth tracking
+-spec transform_stateful_template_call_with_context(
+    erl_anno:anno(),
+    erl_parse:abstract_expr(),
+    erl_parse:abstract_expr(),
+    erl_parse:abstract_expr(),
+    atom(),
+    compile_options(),
+    non_neg_integer(),
+    #{binary() => binary()}
+) -> erl_parse:abstract_expr().
+transform_stateful_template_call_with_context(
+    CallAnnotations,
+    RemoteCall,
+    BinaryTemplate,
+    SocketArg,
+    ModuleName,
+    CompilerOptions,
+    Depth,
+    CurrentFunctionBindings
+) ->
+    Line = erl_anno:line(CallAnnotations),
+    try
+        % Extract and parse the template at compile time with function context
+        {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
+        TemplateDataMap = parse_template_for_stateful_with_context(
+            TemplateString, LineNumber, CompilerOptions, Depth, CurrentFunctionBindings
+        ),
+
+        % Generate the new function call
+        create_stateful_structured_call(CallAnnotations, RemoteCall, TemplateDataMap, SocketArg)
+    catch
+        _Error:_Reason ->
+            raise_template_error(template_parse_failed, ModuleName, Line)
+    end.
 
 %% Transform render_stateful call with depth tracking
 -spec transform_stateful_template_call(

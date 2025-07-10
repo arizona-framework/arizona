@@ -34,7 +34,8 @@ groups() ->
             test_multiple_function_analysis,
             test_nested_binding_calls,
             test_multiple_binding_dependencies_vars_indexes,
-            test_conditional_binding_dependencies
+            test_conditional_binding_dependencies,
+            test_enhanced_parse_transform_end_to_end
         ]},
         {error_handling_tests, [parallel], [
             test_invalid_template_error,
@@ -809,3 +810,41 @@ test_conditional_binding_dependencies(Config) when is_list(Config) ->
     ?assertEqual(Expected, VarBindings),
 
     ct:comment("conditional binding dependencies test successful").
+
+test_enhanced_parse_transform_end_to_end(Config) when is_list(Config) ->
+    % Test the complete enhanced parse transform functionality end-to-end
+    % This verifies that the actual compilation generates proper vars_indexes
+
+    % Define a test module source code with enhanced parse transform
+    Forms = merl:quote(~""""
+    -module(test_enhanced_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([render/1]).
+    -export([render/1]).
+
+    render(Socket) ->
+        Count = arizona_socket:get_binding(count, Socket),
+        UserName = arizona_socket:get_binding(user_name, Socket),
+        arizona_html:render_stateful(~"""
+        <div>
+            <h1>Hello {UserName}!</h1>
+            <p>Count: {Count}</p>
+        </div>
+        """, Socket).
+    """"),
+    TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
+
+    % Find the render function in the transformed AST
+    RenderFunction = lists:keyfind(render, 3, TransformedForms),
+    ?assertNotEqual(false, RenderFunction),
+
+    % Convert to string to analyze the generated code
+    TransformedCode = iolist_to_binary(erl_pp:form(RenderFunction)),
+
+    % Verify that vars_indexes contains the expected mappings
+    % The transformed code should contain the specific bindings with correct element indices
+    ?assert(binary:match(TransformedCode, ~"vars_indexes") =/= nomatch),
+    ?assert(binary:match(TransformedCode, ~"<<\"user_name\">> => [1]") =/= nomatch),
+    ?assert(binary:match(TransformedCode, ~"<<\"count\">> => [3]") =/= nomatch),
+
+    ct:comment("enhanced parse transform end-to-end test successful").
