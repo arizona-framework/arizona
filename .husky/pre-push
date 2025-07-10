@@ -1,0 +1,49 @@
+#!/bin/bash
+
+# Pre-push hook for Arizona project
+# Performs comprehensive quality checks before pushing
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo -e "${GREEN}Running pre-push checks...${NC}"
+
+# 1. Run Erlang checks and tests
+echo -e "${YELLOW}→ Running rebar3 ci...${NC}"
+rebar3 ci
+
+# 2. Verify build succeeds and check for changes
+echo -e "${YELLOW}→ Running npm run build...${NC}"
+npm run build
+
+echo -e "${YELLOW}→ Checking for uncommitted changes after build...${NC}"
+git diff --exit-code
+
+# 3. Run JavaScript checks and tests
+echo -e "${YELLOW}→ Running npm run ci...${NC}"
+npm run ci
+
+# 4. Run npm-installable linting (required)
+echo -e "${YELLOW}→ Running markdown linting...${NC}"
+npm run lint:md
+
+# 5. Run system linting (optional - warn but don't fail)
+echo -e "${YELLOW}→ Running YAML linting...${NC}"
+if command -v yamllint >/dev/null 2>&1; then
+    yamllint .github/**/*.yml .*.yml || echo -e "${YELLOW}⚠ YAML linting issues found (non-blocking)${NC}"
+else
+    echo -e "${YELLOW}⚠ yamllint not found, skipping YAML checks${NC}"
+fi
+
+echo -e "${YELLOW}→ Running GitHub Actions linting...${NC}"
+if command -v actionlint >/dev/null 2>&1; then
+    actionlint || echo -e "${YELLOW}⚠ GitHub Actions linting issues found (non-blocking)${NC}"
+else
+    echo -e "${YELLOW}⚠ actionlint not found, skipping Actions checks${NC}"
+fi
+
+echo -e "${GREEN}✓ All pre-push checks passed! Ready to push.${NC}"

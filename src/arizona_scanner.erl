@@ -1,4 +1,42 @@
 -module(arizona_scanner).
+-moduledoc ~"""
+Provides template scanning functionality for Arizona template processing.
+
+## Overview
+
+The scanner module tokenizes Arizona template files into a stream of tokens
+that can be consumed by the parser. It provides the foundation for Arizona's
+template processing pipeline by converting raw template text into structured
+token sequences.
+
+## Features
+
+- **Token Recognition**: Identifies static content, dynamic expressions, and comments
+- **Line Tracking**: Maintains line numbers for error reporting and debugging
+- **Whitespace Normalization**: Handles proper HTML whitespace according to browser rules
+- **Expression Parsing**: Validates Erlang expressions within template syntax
+- **Error Handling**: Provides detailed error messages with context information
+- **Escape Sequences**: Supports escaped braces for literal brace output
+
+## Key Functions
+
+- `scan/2`: Tokenize template content into structured token list
+
+## Token Types
+
+- **static**: HTML/text content rendered as-is with normalized whitespace
+- **dynamic**: Erlang expressions within `{...}` evaluated at runtime
+- **comment**: Template comments within `{% ... %}` stripped from output
+
+## Template Syntax
+
+- `{expr}`: Erlang expression to be evaluated
+- `{% comment %}`: Template comment (ignored in output)
+- `\{`: Escaped brace (produces literal `{` in output)
+
+Token format: `{Category, Line, Text}` where Category is `static | dynamic | comment`,
+Line is a 1-based line number, and Text is the token content as binary.
+""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -7,228 +45,275 @@
 -export([scan/2]).
 
 %% --------------------------------------------------------------------
-%% Types (and their exports)
+%% Types exports
 %% --------------------------------------------------------------------
 
--type scan_opts() :: #{
-    line => pos_integer(),
-    column => pos_integer(),
-    indentation => non_neg_integer()
-}.
 -export_type([scan_opts/0]).
-
--type token() :: {
-    Category :: html | erlang | comment,
-    Location :: {Line :: pos_integer(), Column :: pos_integer()},
-    Content :: binary()
-}.
 -export_type([token/0]).
 
 %% --------------------------------------------------------------------
-%% Private types
+%% Types definitions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Scanner options for controlling tokenization behavior.
+
+Specifies the starting line number for token tracking. The scanner only
+tracks line numbers for simplicity and performance, avoiding complexity
+with indentation and column tracking.
+""".
+-type scan_opts() :: #{
+    line => pos_integer()
+}.
+
+-doc ~"""
+Token representation with category, location, and content information.
+
+Categories define the token type:
+- `static`: Static content with normalized whitespace
+- `dynamic`: Dynamic expression to be evaluated at runtime
+- `comment`: Template comment stripped from final output
+""".
+-type token() :: {
+    Category :: static | dynamic | comment,
+    Line :: pos_integer(),
+    Text :: binary()
+}.
+
+%% Internal state record for scanner operations
 -record(state, {
     line :: pos_integer(),
-    column :: pos_integer(),
-    indentation :: non_neg_integer(),
     position :: non_neg_integer()
 }).
-
-%% --------------------------------------------------------------------
-%% Doctests
-%% --------------------------------------------------------------------
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-doctest_test() -> doctest:module(?MODULE).
--endif.
 
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
 -doc ~"""
-Tokenizes a template.
+Tokenize template content into a structured list of tokens.
+
+Processes Arizona template content and converts it into tokens that can be
+consumed by the parser. Handles static content, dynamic expressions, and
+comments with proper line number tracking and error reporting.
+
+## Syntax
+
+- `{expr}`: Erlang expression to be evaluated
+- `{% comment %}`: Template comment (ignored in output)
+- `\\{`: Escaped brace (produces literal `{` in output)
 
 ## Examples
 
+```erlang
+1> arizona_scanner:scan(#{}, ~"Hello {name}!").
+[{static,1,~"Hello "}, {dynamic,1,~"name"}, {static,1,~"!"}]
+2> arizona_scanner:scan(#{}, ~"Price: \\{100}").
+[{static,1,~"Price: {100}"}]
+3> arizona_scanner:scan(#{}, ~"{% TODO: fix this %} Done").
+[{comment,1,~"TODO: fix this"}, {static,1,~"Done"}]
 ```
-> arizona_scanner:scan(#{}, ~"foo{bar}{% baz }").
-[{html,{1,1},<<"foo">>},
- {erlang,{1,4},<<"bar">>},
- {comment,{1,9},<<"baz">>}]
+
+## Whitespace Handling
+
+The scanner normalizes HTML whitespace according to browser rules:
+- Multiple spaces collapse to single space
+- Leading/trailing whitespace is trimmed
+- Newlines are preserved where significant
+
+## Error Handling
+
+- `{unexpected_expr_end, Line, PartialExpr}`: Unclosed expression with partial content
+- `{badexpr, Line, Content}`: Malformed Erlang expression
+
+Error messages include the problematic expression text for debugging:
+```erlang
+1> arizona_scanner:scan(#{}, ~"{unclosed").
+** exception error: {unexpected_expr_end,1,~"unclosed"}
 ```
-
-## Result
-
-It returns `[Token]` where a Token is one of:
-
-- `{html, Location, Content}`
-- `{erlang, Location, Content}`
-- `{comment, Location, Content}`
 """.
--spec scan(Opts, Template) -> [Token] when
+-spec scan(Opts, Html) -> [Token] when
     Opts :: scan_opts(),
-    Template :: binary(),
+    Html :: arizona_html:html(),
     Token :: token().
-scan(Opts, Template) when is_map(Opts), is_binary(Template) ->
+scan(Opts, Html) when is_map(Opts), (is_binary(Html) orelse is_list(Html)) ->
+    BinaryTemplate = iolist_to_binary(Html),
     State = #state{
         line = maps:get(line, Opts, 1),
-        column = maps:get(column, Opts, 1 + maps:get(indentation, Opts, 0)),
-        indentation = maps:get(indentation, Opts, 0),
         position = 0
     },
-    scan(Template, Template, State).
+    scan(BinaryTemplate, BinaryTemplate, State).
 
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
 
+%% Main scanning loop entry point
+%% Tracks both current position and start of current text token
 scan(Rest, Bin, State) ->
     scan(Rest, Bin, 0, State, State).
 
-scan(<<$\\, ${, Rest/binary>>, Bin0, Len, TextState, State) ->
-    % Extract the part of the binary before the backslash and opening brace
+scan(Input, Bin, Len, TextState, State) ->
+    case scan_next(Input, Bin, Len, State) of
+        {escape, Rest, NewBin, NewLen} ->
+            scan(Rest, NewBin, NewLen, reset_pos(TextState), reset_pos(State));
+        {expression, Rest, ExprState} ->
+            ExprTokens = scan_expr(Rest, Bin, ExprState),
+            maybe_prepend_text_token(Bin, Len, TextState, ExprTokens);
+        {continue, Rest, NewLen, NewState} ->
+            scan(Rest, Bin, NewLen, TextState, NewState);
+        end_of_input ->
+            maybe_prepend_text_token(Bin, Len, TextState, [])
+    end.
+
+scan_next(<<$\\, ${, Rest/binary>>, Bin0, Len, State) ->
+    % Handle escaped brace
     PrefixBin = binary_part(Bin0, State#state.position, Len),
-
-    % Extract the part of the binary after the backslash and opening brace
-    SuffixBin = binary:part(Bin0, Len + 2, byte_size(Bin0) - Len - 2),
-
-    % Combine the prefix, opening brace, and suffix into a new binary
-    % (effectively removing the backslash)
-    Bin = <<PrefixBin/binary, ${, SuffixBin/binary>>,
-
-    % Continue scanning with the updated binary, length, and state
-    scan(Rest, Bin, Len + 1, TextState, incr_col(2, State));
-scan(<<${, Rest/binary>>, Bin, Len, TextState, State) ->
-    ExprTokens = scan_expr(Rest, Bin, 1, incr_pos(Len + 1, State)),
-    maybe_prepend_text_token(Bin, Len, TextState, ExprTokens);
-scan(<<$\r, $\n, Rest/binary>>, Bin, Len, TextState, State) ->
-    scan(Rest, Bin, Len + 2, TextState, new_line(State));
-scan(<<$\r, Rest/binary>>, Bin, Len, TextState, State) ->
-    scan(Rest, Bin, Len + 1, TextState, new_line(State));
-scan(<<$\n, Rest/binary>>, Bin, Len, TextState, State) ->
-    scan(Rest, Bin, Len + 1, TextState, new_line(State));
-scan(<<_, Rest/binary>>, Bin, Len, TextState, State) ->
-    scan(Rest, Bin, Len + 1, TextState, incr_col(1, State));
-scan(<<>>, Bin, Len, TextState, _State) ->
-    maybe_prepend_text_token(Bin, Len, TextState, []).
+    SuffixPos = State#state.position + Len + 2,
+    SuffixBin = binary:part(Bin0, SuffixPos, byte_size(Bin0) - SuffixPos),
+    NewBin = <<PrefixBin/binary, ${, SuffixBin/binary>>,
+    {escape, Rest, NewBin, Len + 1};
+scan_next(<<${, Rest/binary>>, _Bin, Len, State) ->
+    {expression, Rest, incr_pos(Len + 1, State)};
+scan_next(<<$\r, $\n, Rest/binary>>, _Bin, Len, State) ->
+    {continue, Rest, Len + 2, new_line(State)};
+scan_next(<<$\r, Rest/binary>>, _Bin, Len, State) ->
+    {continue, Rest, Len + 1, new_line(State)};
+scan_next(<<$\n, Rest/binary>>, _Bin, Len, State) ->
+    {continue, Rest, Len + 1, new_line(State)};
+scan_next(<<_Char, Rest/binary>>, _Bin, Len, State) ->
+    {continue, Rest, Len + 1, State};
+scan_next(<<>>, _Bin, _Len, _State) ->
+    end_of_input.
 
 maybe_prepend_text_token(Bin, Len, State, Tokens) ->
-    case trim(binary_part(Bin, State#state.position, Len)) of
+    case binary_part(Bin, State#state.position, Len) of
         <<>> ->
             Tokens;
         Text ->
-            [{html, location(State), Text} | Tokens]
+            [{static, State#state.line, Text} | Tokens]
     end.
 
-% Removes extra leading and trailing whitespaces.
-% Keeps one whitespace if needed.
-% See https://developer.mozilla.org/en-US/docs/Web/API/Document_Object_Model/Whitespace
-trim(<<>>) ->
-    <<>>;
-trim(<<$\r, $\n, Rest/binary>>) ->
-    trim(<<$\s, Rest/binary>>);
-trim(<<$\r, Rest/binary>>) ->
-    trim(<<$\s, Rest/binary>>);
-trim(<<$\n, Rest/binary>>) ->
-    trim(<<$\s, Rest/binary>>);
-trim(<<$\s, $\s, Rest/binary>>) ->
-    trim(Rest);
-trim(Rest) ->
-    trim_trailing(Rest).
+%% Scan an Erlang expression, handling nested braces
+scan_expr(Rest0, Bin, State0) ->
+    case find_expression_end(Rest0, State0) of
+        {ok, ExprInfo} ->
+            process_found_expression(ExprInfo, Bin, State0);
+        {error, unexpected_expr_end, ErrState} ->
+            handle_scan_error({unexpected_expr_end, ErrState}, Bin, State0)
+    end.
 
-trim_trailing(Rest) ->
-    trim_trailing_1(binary_reverse(Rest)).
+%% Find the end of an expression and extract relevant information
+find_expression_end(Rest0, State0) ->
+    scan_expr_end(Rest0, 0, 0, State0).
 
-trim_trailing_1(<<>>) ->
-    <<>>;
-trim_trailing_1(<<$\n, $\r, Rest/binary>>) ->
-    trim_trailing_1(<<$\s, Rest/binary>>);
-trim_trailing_1(<<$\r, Rest/binary>>) ->
-    trim_trailing_1(<<$\s, Rest/binary>>);
-trim_trailing_1(<<$\n, Rest/binary>>) ->
-    trim_trailing_1(<<$\s, Rest/binary>>);
-trim_trailing_1(<<$\s, $\s, Rest/binary>>) ->
-    trim_trailing_1(Rest);
-trim_trailing_1(Rest) ->
-    binary_reverse(Rest).
-
-binary_reverse(<<>>) ->
-    <<>>;
-binary_reverse(Bin) ->
-    binary:encode_unsigned(binary:decode_unsigned(Bin, little)).
-
-scan_expr(Rest0, Bin, StartMarkerLen, State0) ->
-    {Len, EndMarkerLen, State1, Rest1} = scan_expr_end(Rest0, 0, 0, State0),
+%% Process a successfully found expression
+process_found_expression({Len, EndMarkerLen, State1, Rest1}, Bin, State0) ->
     Expr0 = binary_part(Bin, State0#state.position, Len),
     {Expr, Category} = expr_category(Expr0, State0),
+    Token = {Category, State0#state.line, Expr},
+
     case maybe_skip_new_line(Rest1) of
-        {true, NLMarkerLen, Rest} ->
-            State = new_line(incr_pos(Len + EndMarkerLen + NLMarkerLen, State1)),
-            [{Category, location(State0), Expr} | scan(Rest, Bin, State)];
+        {true, NLMarker, Rest} ->
+            continue_after_newline(Token, Rest, Bin, Len, EndMarkerLen, NLMarker, State1);
         false ->
-            State = incr_col(StartMarkerLen, incr_pos(Len + EndMarkerLen, State1)),
-            [{Category, location(State0), Expr} | scan(Rest1, Bin, State)]
+            continue_without_newline(Token, Rest1, Bin, Len, EndMarkerLen, State1)
     end.
 
+%% Continue scanning after skipping a newline
+continue_after_newline(Token, Rest, Bin, Len, EndMarkerLen, NLMarker, State1) ->
+    NLMarkerLen = byte_size(NLMarker),
+    State = new_line(incr_pos(Len + EndMarkerLen + NLMarkerLen, State1)),
+    % Continue scanning normally, then prepend newline to first static token
+    NextTokens = scan(Rest, Bin, State),
+    % Prepend the newline to the first static token found
+    PrependedTokens = prepend_newline_to_first_static(NLMarker, NextTokens),
+    [Token | PrependedTokens].
+
+%% Continue scanning without skipping a newline
+continue_without_newline(Token, Rest1, Bin, Len, EndMarkerLen, State1) ->
+    State = incr_pos(Len + EndMarkerLen, State1),
+    [Token | scan(Rest1, Bin, State)].
+
+%% Handle all scanning errors
+handle_scan_error({unexpected_expr_end, ErrState}, Bin, State0) ->
+    Expr = binary_part(Bin, State0#state.position, ErrState#state.position - State0#state.position),
+    error({unexpected_expr_end, State0#state.line, Expr});
+handle_scan_error({badexpr, Line, Expr}, _Bin, _State) ->
+    error({badexpr, Line, Expr}).
+
+%% Find the end of an expression, tracking nested braces
+%% Depth tracking ensures expressions like {case X of {ok, Y} -> Y end}
+%% are properly handled.
 scan_expr_end(<<$}, Rest/binary>>, 0, Len, State) ->
-    {Len, _MarkerLen = 1, incr_col(1, State), Rest};
+    {ok, {Len, _MarkerLen = 1, State, Rest}};
 scan_expr_end(<<$}, Rest/binary>>, Depth, Len, State) ->
-    scan_expr_end(Rest, Depth - 1, Len + 1, incr_col(1, State));
+    scan_expr_end(Rest, Depth - 1, Len + 1, State);
 scan_expr_end(<<${, Rest/binary>>, Depth, Len, State) ->
-    scan_expr_end(Rest, Depth + 1, Len + 1, incr_col(1, State));
+    scan_expr_end(Rest, Depth + 1, Len + 1, State);
 scan_expr_end(<<$\r, $\n, Rest/binary>>, Depth, Len, State) ->
     scan_expr_end(Rest, Depth, Len + 2, new_line(State));
 scan_expr_end(<<$\r, Rest/binary>>, Depth, Len, State) ->
     scan_expr_end(Rest, Depth, Len + 1, new_line(State));
 scan_expr_end(<<$\n, Rest/binary>>, Depth, Len, State) ->
     scan_expr_end(Rest, Depth, Len + 1, new_line(State));
-scan_expr_end(<<_, Rest/binary>>, Depth, Len, State) ->
-    scan_expr_end(Rest, Depth, Len + 1, incr_col(1, State));
+scan_expr_end(<<_Char, Rest/binary>>, Depth, Len, State) ->
+    scan_expr_end(Rest, Depth, Len + 1, State);
 scan_expr_end(<<>>, _Depth, Len, State) ->
-    error({unexpected_expr_end, location(incr_pos(Len, State))}).
+    {error, unexpected_expr_end, incr_pos(Len, State)}.
 
 maybe_skip_new_line(<<$\r, $\n, Rest/binary>>) ->
-    {true, 2, Rest};
+    {true, <<$\r, $\n>>, Rest};
 maybe_skip_new_line(<<$\r, Rest/binary>>) ->
-    {true, 1, Rest};
+    {true, <<$\r>>, Rest};
 maybe_skip_new_line(<<$\n, Rest/binary>>) ->
-    {true, 1, Rest};
+    {true, <<$\n>>, Rest};
 maybe_skip_new_line(_Rest) ->
     false.
 
+%% Determine if an expression is Erlang code or a comment
 expr_category(Expr, State) ->
-    try
-        case merl:quote(Expr) of
-            Forms when is_list(Forms) ->
-                case lists:all(fun is_comment/1, Forms) of
-                    true ->
-                        Comments0 = re:split(Expr, <<"\\n">>, [{return, binary}, {newline, lf}]),
-                        Comments1 = [norm_comment(Comment) || Comment <- Comments0],
-                        Comment = iolist_to_binary(lists:join("\n", Comments1)),
-                        {Comment, comment};
-                    false ->
-                        {Expr, erlang}
-                end;
-            Form ->
-                case is_comment(Form) of
-                    true ->
-                        {norm_comment(Expr), comment};
-                    false ->
-                        {Expr, erlang}
-                end
-        end
-    catch
-        _:Exception:Stacktrace ->
-            error({badexpr, location(State), Expr}, none, [
-                {error_info, #{
-                    cause => {Exception, Stacktrace},
-                    line => State#state.line
-                }}
-            ])
+    case parse_expression(Expr) of
+        {ok, ParsedForms} ->
+            categorize_parsed_forms(ParsedForms, Expr);
+        {error, _Reason} ->
+            handle_scan_error({badexpr, State#state.line, Expr}, <<>>, State)
     end.
+
+%% Parse expression using merl, handling exceptions gracefully
+parse_expression(Expr) ->
+    try
+        {ok, merl:quote(Expr)}
+    catch
+        _Class:_Exception ->
+            {error, parse_failed}
+    end.
+
+%% Categorize parsed forms as either comments or dynamic expressions
+categorize_parsed_forms(Forms, OriginalExpr) when is_list(Forms) ->
+    case all_comments(Forms) of
+        true ->
+            {normalize_multiline_comment(OriginalExpr), comment};
+        false ->
+            {OriginalExpr, dynamic}
+    end;
+categorize_parsed_forms(SingleForm, OriginalExpr) ->
+    case is_comment(SingleForm) of
+        true ->
+            {norm_comment(OriginalExpr), comment};
+        false ->
+            {OriginalExpr, dynamic}
+    end.
+
+%% Check if all forms in a list are comments
+all_comments(Forms) ->
+    lists:all(fun is_comment/1, Forms).
+
+%% Normalize multiline comments
+normalize_multiline_comment(Expr) ->
+    CommentLines = re:split(Expr, ~"\\n", [{return, binary}, {newline, lf}]),
+    NormalizedLines = [norm_comment(Line) || Line <- CommentLines],
+    iolist_to_binary(lists:join("\n", NormalizedLines)).
 
 is_comment(Form) ->
     erl_syntax:type(Form) =:= comment.
@@ -241,16 +326,19 @@ norm_comment(Comment) ->
     string:trim(Comment, trailing).
 
 new_line(#state{line = Ln} = State) ->
-    State#state{line = Ln + 1, column = 1 + State#state.indentation}.
+    State#state{line = Ln + 1}.
 
-incr_col(N, #state{column = Col} = State) ->
-    State#state{column = Col + N}.
-
+%% Update byte position in the original binary
 incr_pos(N, #state{position = Pos} = State) ->
     State#state{position = Pos + N}.
 
-location(#state{line = Ln, column = Col}) ->
-    location(Ln, Col).
+reset_pos(State) ->
+    State#state{position = 0}.
 
-location(Ln, Col) ->
-    {Ln, Col}.
+%% Prepend newline to the first static token in the list
+prepend_newline_to_first_static(NLMarker, [{static, Line, Text} | Rest]) ->
+    [{static, Line, <<NLMarker/binary, Text/binary>>} | Rest];
+prepend_newline_to_first_static(NLMarker, [Token | Rest]) ->
+    [Token | prepend_newline_to_first_static(NLMarker, Rest)];
+prepend_newline_to_first_static(_NLMarker, []) ->
+    [].

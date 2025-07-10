@@ -1,366 +1,381 @@
 -module(arizona_renderer).
+-moduledoc ~"""
+Provides template rendering functionality for Arizona LiveView components.
+
+## Overview
+
+The renderer module handles the rendering of parsed template data into HTML output.
+It supports different rendering modes optimized for stateful components, stateless
+components, and list rendering with efficient diff-based updates.
+
+## Features
+
+- **Stateful Rendering**: Optimized rendering for stateful components with element indexing
+- **Stateless Rendering**: Lightweight rendering for stateless components
+- **List Rendering**: Efficient list rendering with static/dynamic separation
+- **Error Handling**: Comprehensive error reporting with line number information
+- **Socket Management**: Proper socket state management throughout rendering
+- **Binding Resolution**: Dynamic binding evaluation with error context
+
+## Key Functions
+
+- `render_stateful/2`: Render stateful component templates with indexed elements
+- `render_stateless/2`: Render stateless component templates as linear lists
+- `render_list/3`: Render list templates with static/dynamic optimization
+- `render_element/2`: Render individual template elements
+- `evaluate_single_dynamic_element/4`: Evaluate dynamic elements for list items
+- `format_error/2`: Format rendering errors with context information
+
+## Template Data Types
+
+The module works with parsed template data from the Arizona parse transform,
+which provides optimized data structures for different rendering scenarios.
+""".
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([render_view_template/2]).
--export([render_component_template/2]).
--export([render_nested_template/1]).
--export([render_view/2]).
--export([render_component/3]).
--export([render_if_true/2]).
--export([render_list/2]).
+-export([render_stateful/2]).
+-export([render_stateless/2]).
+-export([render_list/3]).
+-export([render_element/2]).
+-export([evaluate_single_dynamic_element/4]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
-%% Support function exports
+%% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--export([render/4]).
--export([render_nested_template/2]).
--export([render_layout/6]).
-
-%
-
--ignore_xref([render_nested_template/2]).
+-ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
-%% Types (and their exports)
+%% Types exports
 %% --------------------------------------------------------------------
 
--type static_list() :: [binary()].
--export_type([static_list/0]).
+-export_type([stateful_template_data/0]).
+-export_type([stateless_template_data/0]).
+-export_type([list_template_data/0]).
 
--type dynamic_list() :: [
-    fun(
-        (
-            ViewAcc :: arizona_view:view(),
-            Socket :: arizona_socket:socket(),
-            DiffOpts :: arizona_diff:options()
-        ) -> binary()
-    )
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
+
+-doc ~"""
+Template data from parse transform optimized for stateful component rendering.
+
+Contains indexed elements with order information and variable mappings for
+efficient rendering and diff operations.
+""".
+-type stateful_template_data() :: #{
+    elems_order := [Index :: non_neg_integer()],
+    elems := #{
+        Index ::
+            non_neg_integer() =>
+                {
+                    Category :: static, Line :: pos_integer(), Content :: binary()
+                }
+                | {
+                    Category :: dynamic,
+                    Line :: pos_integer(),
+                    Content :: fun((arizona_socket:socket()) -> term())
+                }
+    },
+    vars_indexes := #{VarName :: atom() => [Index :: non_neg_integer()]}
+}.
+
+-doc ~"""
+Template data from parse transform optimized for stateless component rendering.
+
+Simple list structure with static and dynamic elements for lightweight rendering.
+""".
+-type stateless_template_data() :: [
+    {static, pos_integer(), binary()}
+    | {dynamic, pos_integer(), fun((arizona_socket:socket()) -> term())}
 ].
--export_type([dynamic_list/0]).
 
--type token() ::
-    {view_template, Static :: static_list(), Dynamic :: dynamic_list()}
-    | {component_template, Static :: static_list(), Dynamic :: dynamic_list()}
-    | {nested_template, Static :: static_list(), Dynamic :: dynamic_list()}
-    | {list_template, Static :: static_list(), Dynamic :: dynamic_list()}
-    | {view, Mod :: module(), Bindings :: arizona_view:bindings()}
-    | {component, Mod :: module(), Fun :: atom(), Bindings :: arizona_view:bindings()}
-    | {list, Static :: static_list(), Dynamic :: dynamic_list()}.
--export_type([token/0]).
+-doc ~"""
+Template data from parse transform optimized for list rendering with static/dynamic separation.
 
--type rendered() ::
-    [rendered_value()]
-    | [template | Static :: static_list() | Dynamic :: dynamic_list()]
-    | [list_template | Static :: static_list() | DynamicList :: [dynamic_list()]].
--export_type([rendered/0]).
-
--type rendered_value() ::
-    binary()
-    | rendered()
-    % I could not figure out a correct type without the `dynamic/0`.
-    | dynamic().
--export_type([rendered_value/0]).
-
-%% --------------------------------------------------------------------
-%% Doctests
-%% --------------------------------------------------------------------
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-doctest_test() -> doctest:module(?MODULE).
--endif.
+Separates static template parts from dynamic data evaluation for efficient
+list rendering and updates.
+""".
+-type list_template_data() :: #{
+    static := [binary()],
+    dynamic := #{
+        elems_order := [Index :: non_neg_integer()],
+        elems := #{
+            Index ::
+                non_neg_integer() => {
+                    Category :: dynamic,
+                    Line :: pos_integer(),
+                    ElementFun :: fun((Item :: term(), Socket :: arizona_socket:socket()) -> term())
+                }
+        },
+        vars_indexes := #{VarName :: atom() => [Index :: non_neg_integer()]}
+    }
+}.
 
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec render_view_template(Payload, Template) -> Token when
-    Payload :: View | Bindings,
-    View :: arizona_view:view(),
-    Bindings :: erl_eval:binding_struct(),
-    Template :: binary() | {file, file:filename_all()},
-    Token :: {view_template, Static, Dynamic},
-    Static :: static_list(),
-    Dynamic :: dynamic_list().
-render_view_template(Bindings, Template) when is_map(Bindings) ->
-    {Static, Dynamic} = parse_template(Bindings, Template),
-    {view_template, Static, Dynamic};
-render_view_template(View, Template) ->
-    Bindings = #{'View' => View},
-    render_view_template(Bindings, Template).
+-doc ~"""
+Render stateful component template data into HTML.
 
--spec render_component_template(Payload, Template) -> Token when
-    Payload :: View | Bindings,
-    View :: arizona_view:view(),
-    Bindings :: erl_eval:binding_struct(),
-    Template :: binary() | {file, file:filename_all()},
-    Token :: {component_template, Static, Dynamic},
-    Static :: static_list(),
-    Dynamic :: dynamic_list().
-render_component_template(Bindings, Template) when is_map(Bindings) ->
-    {Static, Dynamic} = parse_template(Bindings, Template),
-    {component_template, Static, Dynamic};
-render_component_template(View, Template) ->
-    Bindings = #{'View' => View},
-    render_component_template(Bindings, Template).
+Processes stateful template data with indexed elements for efficient rendering
+and diff operations. Updates the socket with the rendered HTML.
 
--spec render_nested_template(Template) -> Error when
-    Template :: binary(),
-    Error :: no_return().
-render_nested_template(Template) ->
-    missing_parse_transform_error(Template).
+## Examples
 
--spec render_view(Mod, Bindings) -> Token when
-    Mod :: module(),
-    Bindings :: arizona_view:bindings(),
-    Token :: {view, Mod, Bindings}.
-render_view(Mod, Bindings) when is_atom(Mod), is_map(Bindings), is_map_key(id, Bindings) ->
-    {view, Mod, Bindings}.
+```erlang
+1> TemplateData = #{elems_order => [0, 1], elems => #{0 => {static, 1, ~"Hello"}}}.
+#{...}
+2> arizona_renderer:render_stateful(TemplateData, Socket).
+{[~"Hello"], UpdatedSocket}
+```
+""".
+-spec render_stateful(TemplateData, Socket) -> {Html, Socket1} when
+    TemplateData :: stateful_template_data(),
+    Socket :: arizona_socket:socket(),
+    Html :: arizona_html:html(),
+    Socket1 :: arizona_socket:socket().
+render_stateful(#{elems_order := Order, elems := Elements}, Socket) ->
+    {Html, UpdatedSocket} = render_elements(Order, Elements, Socket, []),
+    UpdatedSocket1 = arizona_socket:set_html_acc(Html, UpdatedSocket),
+    {Html, UpdatedSocket1}.
 
--spec render_component(Mod, Fun, Bindings) -> Token when
-    Mod :: module(),
-    Fun :: atom(),
-    Bindings :: arizona_view:bindings(),
-    Token :: {component, Mod, Fun, Bindings}.
-render_component(Mod, Fun, Bindings) when is_atom(Mod), is_atom(Fun), is_map(Bindings) ->
-    {component, Mod, Fun, Bindings}.
+-doc ~"""
+Render stateless component template data into HTML.
 
--spec render_if_true(Cond, Callback) -> Rendered when
-    Cond :: boolean(),
-    Callback :: fun(() -> Rendered),
-    Rendered :: rendered_value().
-render_if_true(Cond, Callback) when is_function(Callback, 0) ->
-    case Cond of
-        true ->
-            erlang:apply(Callback, []);
-        false ->
-            ~""
+Processes stateless template data as a linear list of elements for lightweight
+rendering without indexed access. Updates the socket with the rendered HTML.
+
+## Examples
+
+```erlang
+1> TemplateData = [{static, 1, ~"Hello"}, {static, 2, ~"World"}].
+[...]
+2> arizona_renderer:render_stateless(TemplateData, Socket).
+{[~"Hello", ~"World"], UpdatedSocket}
+```
+""".
+-spec render_stateless(StructuredList, Socket) -> {Html, Socket1} when
+    StructuredList :: stateless_template_data(),
+    Socket :: arizona_socket:socket(),
+    Html :: arizona_html:html(),
+    Socket1 :: arizona_socket:socket().
+render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
+    {Html, UpdatedSocket} = render_iolist(StructuredList, Socket, []),
+    UpdatedSocket1 = arizona_socket:set_html_acc(Html, UpdatedSocket),
+    {Html, UpdatedSocket1}.
+
+-doc ~"""
+Render list template with static/dynamic optimization for efficient list rendering.
+
+Processes list template data with separated static and dynamic parts, rendering
+each item against the template structure for optimal performance.
+
+## Examples
+
+```erlang
+1> ListData = #{static => [~"<li>"], dynamic => #{...}}.
+#{...}
+2> Items = [item1, item2, item3].
+[...]
+3> arizona_renderer:render_list(ListData, Items, Socket).
+{[~"<li>item1</li>", ~"<li>item2</li>", ~"<li>item3</li>"], UpdatedSocket}
+```
+""".
+-spec render_list(ListData, Items, Socket) -> {Html, Socket1} when
+    ListData :: list_template_data(),
+    Items :: [term()],
+    Socket :: arizona_socket:socket(),
+    Html :: arizona_html:html(),
+    Socket1 :: arizona_socket:socket().
+render_list(ListData, Items, Socket) when is_map(ListData), is_list(Items) ->
+    #{static := StaticParts, dynamic := DynamicSpec} = ListData,
+    #{elems_order := ElemsOrder, elems := ElemsFuns} = DynamicSpec,
+
+    %% Just accumulate socket through each item render
+    %% Note: List diffing works automatically through existing vars_indexes system
+    %% When arizona_socket:get_binding(list, Socket) changes, the parent
+    %% stateful component detects this and rerenders this dynamic element
+    {Html, FinalSocket} = lists:foldl(
+        fun(Item, {HtmlAcc, AccSocket}) ->
+            {ItemHtml, UpdatedSocket} = render_list_item(
+                StaticParts, ElemsOrder, ElemsFuns, Item, AccSocket
+            ),
+            {[HtmlAcc, ItemHtml], UpdatedSocket}
+        end,
+        {[], Socket},
+        Items
+    ),
+
+    FinalSocket1 = arizona_socket:set_html_acc(Html, FinalSocket),
+    {Html, FinalSocket1}.
+
+-doc ~"""
+Render a single template element (static or dynamic).
+
+Processes individual template elements, handling both static content and
+dynamic function evaluation with comprehensive error handling.
+
+## Examples
+
+```erlang
+1> arizona_renderer:render_element({static, 1, ~"Hello"}, Socket).
+{~"Hello", Socket}
+2> arizona_renderer:render_element({dynamic, 1, Fun}, Socket).
+{~"Dynamic content", UpdatedSocket}
+```
+""".
+-spec render_element(Element, Socket) -> {Content, Socket1} when
+    Element :: {static, pos_integer(), binary()} | {dynamic, pos_integer(), function()},
+    Socket :: arizona_socket:socket(),
+    Content :: term(),
+    Socket1 :: arizona_socket:socket().
+render_element({static, _Line, Content}, Socket) when is_binary(Content) ->
+    {Content, Socket};
+render_element({dynamic, Line, Fun}, Socket) when is_function(Fun, 1) ->
+    try
+        Result = arizona_stateful:call_dynamic_function(Fun, Socket),
+        arizona_html:to_html(Result, Socket)
+    catch
+        throw:{binding_not_found, Key} ->
+            error({binding_not_found, Key}, none, binding_error_info(Line, Key, Socket));
+        _:Error ->
+            error({template_render_error, Error, Line})
     end.
 
--spec render_list(Callback, List) -> Token when
-    Callback :: fun((Item :: dynamic()) -> token() | rendered_value()),
-    List :: list(),
-    Token :: {list, Static, DynamicList},
-    Static :: static_list(),
-    DynamicList :: [dynamic_list()].
-render_list(Callback, []) when is_function(Callback, 1) ->
-    {list, [], []};
-render_list(Callback, List) when is_function(Callback, 1), is_list(List) ->
-    NestedTemplates = [erlang:apply(Callback, [Item]) || Item <- List],
-    {nested_template, Static, _Dynamic} = hd(NestedTemplates),
-    DynamicList = [Dynamic || {nested_template, _Static, Dynamic} <- NestedTemplates],
-    {list, Static, DynamicList}.
+-doc ~"""
+Evaluate a single dynamic element for list item rendering.
 
-%% --------------------------------------------------------------------
-%% Support function definitions
-%% --------------------------------------------------------------------
+Extracted function for evaluating dynamic elements within list templates,
+with proper error handling and context information.
 
--spec render(Payload, View, ParentView, ParentSocket) -> {View, Socket} when
-    Payload :: Token | Rendered,
-    Token :: token(),
-    Rendered :: rendered_value(),
-    ParentView :: arizona_view:view(),
-    ParentSocket :: arizona_socket:socket(),
-    View :: ParentView | arizona_view:view(),
-    Socket :: ParentSocket | arizona_socket:socket().
-render({view_template, Static, Dynamic}, View, _ParentView, Socket) ->
-    render_view_template(View, Socket, Static, Dynamic);
-render({component_template, Static, Dynamic}, View, _ParentView, Socket) ->
-    render_component_template(View, Socket, Static, Dynamic);
-render({nested_template, Static, Dynamic}, _View, ParentView, Socket) ->
-    render_nested_template(ParentView, Socket, Static, Dynamic);
-render({list_template, Static, DynamicCallback, List}, View, ParentView, Socket) ->
-    render_list_template(View, ParentView, Socket, Static, DynamicCallback, List);
-render({view, Mod, Bindings}, _View, ParentView, Socket) ->
-    render_view(ParentView, Socket, Mod, Bindings);
-render({component, Mod, Fun, Bindings}, _View, ParentView, Socket) ->
-    render_component(ParentView, Socket, Mod, Fun, Bindings);
-render({list, Static, DynamicList}, View, ParentView, Socket) ->
-    render_list(Static, DynamicList, View, ParentView, Socket);
-render(List, View, ParentView, Socket) when is_list(List) ->
-    fold(List, View, ParentView, Socket);
-render({inner_content, Callback}, _View, ParentView, Socket) when is_function(Callback, 2) ->
-    erlang:apply(Callback, [ParentView, Socket]);
-render(Bin, _View, View0, Socket) when is_binary(Bin) ->
-    View = arizona_view:put_tmp_rendered(Bin, View0),
-    {View, Socket}.
+## Examples
 
--spec render_nested_template(Payload, Template) -> Token when
-    Payload :: ParentView | Bindings,
-    ParentView :: arizona_view:view(),
-    Bindings :: erl_eval:binding_struct(),
-    Template :: binary() | {file, file:filename_all()},
-    Token :: {nested_template, Static, Dynamic},
-    Static :: static_list(),
-    Dynamic :: dynamic_list().
-render_nested_template(Bindings, Template) when is_map(Bindings) ->
-    {Static, Dynamic} = parse_template(Bindings, Template),
-    {nested_template, Static, Dynamic};
-render_nested_template(ParentView, Template) ->
-    Bindings = #{'View' => ParentView},
-    render_nested_template(Bindings, Template).
-
--spec render_layout(LayoutMod, ViewMod, PathParams, QueryString, Bindings, Socket0) -> Layout when
-    LayoutMod :: module(),
-    ViewMod :: module(),
-    PathParams :: arizona:path_params(),
-    QueryString :: arizona:query_string(),
-    Bindings :: arizona_view:bindings(),
-    Socket0 :: arizona_socket:socket(),
-    Layout :: {LayoutView, Socket1},
-    LayoutView :: arizona_view:view(),
+```erlang
+1> arizona_renderer:evaluate_single_dynamic_element(0, ElemsFuns, Item, Socket).
+{~"Rendered item content", UpdatedSocket}
+```
+""".
+-spec evaluate_single_dynamic_element(ElemIndex, ElemsFuns, Item, Socket) -> {Content, Socket1} when
+    ElemIndex :: non_neg_integer(),
+    ElemsFuns :: map(),
+    Item :: term(),
+    Socket :: arizona_socket:socket(),
+    Content :: term(),
     Socket1 :: arizona_socket:socket().
-render_layout(LayoutMod, ViewMod, PathParams, QueryString, Bindings0, Socket) when
-    is_atom(LayoutMod),
-    is_atom(ViewMod),
-    is_map(PathParams),
-    is_binary(QueryString),
-    is_map(Bindings0)
-->
-    % The 'inner_content' must be a list for correct rendering.
-    InnerContent = [render_inner_content(ViewMod, PathParams, QueryString)],
-    Bindings = Bindings0#{inner_content => InnerContent},
-    LayoutView = arizona_layout:mount(LayoutMod, Bindings, Socket),
-    Token = arizona_layout:render(LayoutView),
-    render(Token, LayoutView, LayoutView, Socket).
+evaluate_single_dynamic_element(ElemIndex, ElemsFuns, Item, Socket) ->
+    %% Evaluate element function - let it crash if index doesn't exist
+    {dynamic, Line, Fun} = maps:get(ElemIndex, ElemsFuns),
+    try
+        Result = arizona_list:call_element_function(Fun, Item, Socket),
+        arizona_html:to_html(Result, Socket)
+    catch
+        throw:{binding_not_found, Key} ->
+            error({binding_not_found, Key}, none, binding_error_info(Line, Key, Socket));
+        _:Error ->
+            error({list_item_render_error, Error, Item, Line})
+    end.
+
+-doc ~"""
+Format rendering errors with context information for better debugging.
+
+OTP error_info callback for enhanced error formatting. Provides detailed error
+messages including line numbers, template modules, and binding information
+when available.
+
+## Examples
+
+```erlang
+1> arizona_renderer:format_error(Reason, StackTrace).
+#{general => "Template rendering error", reason => "arizona_renderer: ..."}
+```
+""".
+-spec format_error(Reason, StackTrace) -> ErrorMap when
+    Reason :: term(),
+    StackTrace :: [term()],
+    ErrorMap :: #{atom() => term()}.
+format_error(Reason, [{_M, _F, _As, Info} | _]) ->
+    ErrorInfo = proplists:get_value(error_info, Info, #{}),
+    CauseMap = maps:get(cause, ErrorInfo, #{}),
+    CauseMap#{
+        general => "Template rendering error",
+        reason => io_lib:format("arizona_renderer: ~p", [Reason])
+    };
+format_error(Reason, _StackTrace) ->
+    #{
+        general => "Template rendering error",
+        reason => io_lib:format("arizona_renderer: ~p", [Reason])
+    }.
 
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
 
-missing_parse_transform_error(Template) when is_list(Template) ->
-    error(missing_parse_transform, [Template], [
-        {error_info, #{
-            cause =>
-                <<
-                    "the attribute '-compile({parse_transform, arizona_transform}).' "
-                    "is missing in the template module"
-                >>
-        }}
-    ]).
+%% Render elements in order for stateful templates
+render_elements([], _Elements, Socket, Acc) ->
+    Html = lists:reverse(Acc),
+    {Html, Socket};
+render_elements([Index | Rest], Elements, Socket, Acc) ->
+    #{Index := Element} = Elements,
+    {RenderedElement, UpdatedSocket} = render_element(Element, Socket),
+    render_elements(Rest, Elements, UpdatedSocket, [RenderedElement | Acc]).
 
-render_view_template(View0, Socket0, Static, Dynamic0) ->
-    {View1, Socket1} = render_dynamic(Dynamic0, View0, Socket0),
-    Dynamic = lists:reverse(arizona_view:tmp_rendered(View1)),
-    Template = [template, Static, Dynamic],
-    View2 = arizona_view:set_rendered(Template, View1),
-    View3 = arizona_view:set_tmp_rendered(Template, View2),
-    View = arizona_view:merge_changed_bindings(View3),
-    Socket = arizona_socket:put_view(View, Socket1),
-    {View, Socket}.
+%% Render stateless iolist
+render_iolist([], Socket, Acc) ->
+    Html = lists:reverse(Acc),
+    {Html, Socket};
+render_iolist([Element | Rest], Socket, Acc) ->
+    {RenderedElement, UpdatedSocket} = render_element(Element, Socket),
+    render_iolist(Rest, UpdatedSocket, [RenderedElement | Acc]).
 
-render_component_template(View0, Socket0, Static, Dynamic0) ->
-    {View1, Socket} = render_dynamic(Dynamic0, View0, Socket0),
-    Dynamic = lists:reverse(arizona_view:tmp_rendered(View1)),
-    Template = [template, Static, Dynamic],
-    View2 = arizona_view:set_rendered(Template, View1),
-    View = arizona_view:set_tmp_rendered(Template, View2),
-    {View, Socket}.
+%% Render a single list item using template structure
+render_list_item(StaticParts, ElemsOrder, ElemsFuns, Item, Socket) ->
+    %% Evaluate dynamic elements for this item
+    {DynamicValues, UpdatedSocket} = evaluate_dynamic_elements_for_item(
+        ElemsOrder, ElemsFuns, Item, Socket
+    ),
 
-render_nested_template(ParentView0, Socket0, Static, Dynamic0) ->
-    Bindings = arizona_view:bindings(ParentView0),
-    View0 = arizona_view:new(Bindings),
-    {View1, Socket} = render_dynamic(Dynamic0, View0, Socket0),
-    Dynamic = arizona_view:tmp_rendered(View1),
-    Template = [template, Static, Dynamic],
-    ParentView = arizona_view:put_tmp_rendered(Template, ParentView0),
-    {ParentView, Socket}.
+    %% Zip static and dynamic parts together
+    ItemHtml = zip_static_dynamic(StaticParts, DynamicValues),
 
-render_list_template(View0, ParentView0, Socket, Static, Callback, List) ->
-    View = arizona_view:new(arizona_view:bindings(View0)),
-    DynamicList = render_dynamic_list_callback(List, Callback, View, View, Socket),
-    Template = [list_template, Static, DynamicList],
-    ParentView = arizona_view:put_tmp_rendered(Template, ParentView0),
-    {ParentView, Socket}.
+    {ItemHtml, UpdatedSocket}.
 
-render_dynamic_list_callback([], _Callback, _View, _ParentView, _Socket) ->
+%% Evaluate dynamic elements for a list item
+evaluate_dynamic_elements_for_item([], _ElemsFuns, _Item, Socket) ->
+    {[], Socket};
+evaluate_dynamic_elements_for_item([ElemIndex | Rest], ElemsFuns, Item, Socket) ->
+    %% Evaluate current element using extracted function
+    {Value, UpdatedSocket} = evaluate_single_dynamic_element(ElemIndex, ElemsFuns, Item, Socket),
+
+    %% Recursively evaluate rest
+    {RestValues, FinalSocket} = evaluate_dynamic_elements_for_item(
+        Rest, ElemsFuns, Item, UpdatedSocket
+    ),
+
+    {[Value | RestValues], FinalSocket}.
+
+%% Zip static and dynamic parts for list item
+zip_static_dynamic([], []) ->
     [];
-render_dynamic_list_callback([Item | T], Callback, View, ParentView, Socket) ->
-    Dynamic = erlang:apply(Callback, [Item]),
-    {RenderedView, _Socket} = render(Dynamic, View, ParentView, Socket),
+zip_static_dynamic([S | Static], [D | Dynamic]) ->
+    [S, D | zip_static_dynamic(Static, Dynamic)];
+zip_static_dynamic([S | Static], []) ->
+    [S | zip_static_dynamic(Static, [])];
+zip_static_dynamic([], [D | Dynamic]) ->
+    [D | zip_static_dynamic([], Dynamic)].
+
+%% Error info for binding errors following OTP pattern
+binding_error_info(Line, Key, Socket) ->
+    CurrentState = arizona_socket:get_current_stateful_state(Socket),
+    TemplateModule = arizona_stateful:get_module(CurrentState),
     [
-        arizona_view:tmp_rendered(RenderedView)
-        | render_dynamic_list_callback(T, Callback, View, ParentView, Socket)
+        {error_info, #{
+            cause => #{binding => Key, line => Line, template_module => TemplateModule},
+            module => arizona_renderer
+        }}
     ].
-
-render_view(ParentView0, Socket0, Mod, Bindings) ->
-    case arizona_view:mount(Mod, Bindings, Socket0) of
-        {ok, View0} ->
-            Token = arizona_view:render(View0),
-            {View, Socket1} = render(Token, View0, ParentView0, Socket0),
-            Rendered = arizona_view:tmp_rendered(View),
-            ParentView = arizona_view:put_tmp_rendered(Rendered, ParentView0),
-            Socket = arizona_socket:put_view(View, Socket1),
-            {ParentView, Socket};
-        ignore ->
-            {ParentView0, Socket0}
-    end.
-
-render_component(ParentView0, Socket0, Mod, Fun, Bindings) ->
-    View0 = arizona_view:new(Bindings),
-    Token = arizona_component:render(Mod, Fun, View0),
-    {View, Socket1} = render(Token, View0, ParentView0, Socket0),
-    Rendered = arizona_view:tmp_rendered(View),
-    ParentView1 = arizona_view:put_rendered(Rendered, ParentView0),
-    ParentView = arizona_view:put_tmp_rendered(Rendered, ParentView1),
-    {ParentView, Socket1}.
-
-render_list(Static, DynamicList0, View0, ParentView0, Socket) ->
-    View = arizona_view:new(arizona_view:bindings(View0)),
-    DynamicList = render_dynamic_list(DynamicList0, View, Socket),
-    Rendered = [list, Static, DynamicList],
-    ParentView1 = arizona_view:put_rendered(Rendered, ParentView0),
-    ParentView = arizona_view:put_tmp_rendered(Rendered, ParentView1),
-    {ParentView, Socket}.
-
-render_inner_content(Mod, PathParams, QueryString) ->
-    Callback = fun(ParentView, Socket) ->
-        Bindings0 = arizona_view:bindings(ParentView),
-        Bindings = maps:remove(inner_content, Bindings0),
-        arizona_view:init_root(Mod, PathParams, QueryString, Bindings, Socket)
-    end,
-    {inner_content, Callback}.
-
-render_dynamic_list([], _View, _Socket) ->
-    [];
-render_dynamic_list([Dynamic | T], View, Socket) ->
-    {RenderedView, _Socket} = render_dynamic(Dynamic, View, Socket),
-    [arizona_view:tmp_rendered(RenderedView) | render_dynamic_list(T, View, Socket)].
-
-render_dynamic([], View, Socket) ->
-    {View, Socket};
-render_dynamic([Callback | T], View0, Socket0) ->
-    {View, Socket} = erlang:apply(Callback, [View0, Socket0, _DiffOpts = #{}]),
-    render_dynamic(T, View, Socket).
-
-fold([], View, ParentView0, Socket) ->
-    Rendered = arizona_view:tmp_rendered(View),
-    ParentView = arizona_view:put_tmp_rendered(Rendered, ParentView0),
-    {ParentView, Socket};
-fold([Dynamic | T], View0, ParentView, Socket0) ->
-    {View, Socket} = render(Dynamic, View0, ParentView, Socket0),
-    fold(T, View, ParentView, Socket).
-
-parse_template(Bindings, Template) when is_binary(Template) ->
-    Tokens = arizona_scanner:scan(#{}, Template),
-    {StaticAst, DynamicAst} = arizona_parser:parse(Tokens, #{}),
-    Static = eval_static_ast(StaticAst),
-    Dynamic = eval_dynamic_ast(Bindings, DynamicAst),
-    {Static, Dynamic};
-parse_template(Bindings, {file, Filename}) ->
-    {ok, Template} = file:read_file(Filename),
-    parse_template(Bindings, Template).
-
-eval_static_ast(Ast) ->
-    [eval_expr(Expr, []) || Expr <- Ast].
-
-eval_dynamic_ast(Bindings, Ast) ->
-    [eval_expr(Expr, Bindings) || Expr <- Ast].
-
-eval_expr(Expr, Bindings) ->
-    {value, Value, _NewBindings} = erl_eval:expr(Expr, Bindings),
-    Value.

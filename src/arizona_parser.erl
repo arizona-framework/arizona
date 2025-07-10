@@ -1,166 +1,274 @@
 -module(arizona_parser).
+-moduledoc ~"""
+Template parser for Arizona Web Framework.
+
+This module converts tokenized Arizona templates into structured data
+for both stateless and stateful rendering. It processes tokens generated
+by arizona_scanner and creates the appropriate data structures for template
+rendering engines.
+
+For stateless rendering: Returns a list of tokens with line numbers preserved.
+For stateful rendering: Returns a map with element tracking and variable indexing.
+
+The parser handles variable extraction from dynamic expressions and maintains
+indexes for efficient template updates in stateful rendering mode.
+""".
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([parse/2]).
+-export([parse_stateless_tokens/1]).
+-export([parse_stateful_tokens/1]).
+-export([parse_list_tokens/1]).
 
 %% --------------------------------------------------------------------
-%% Types (and their exports)
+%% Types exports
 %% --------------------------------------------------------------------
 
--type options() :: #{
-    render_context => from_socket | render | none,
-    bindings => erl_eval:binding_struct()
-}.
--export_type([options/0]).
+-export_type([token/0]).
+-export_type([stateless_result/0]).
+-export_type([stateful_result/0]).
+-export_type([list_result/0]).
 
 %% --------------------------------------------------------------------
-%% Doctests
-%% --------------------------------------------------------------------
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-doctest_test() -> doctest:module(?MODULE).
--endif.
-
-%% --------------------------------------------------------------------
-%% API function definitions
+%% Types definitions
 %% --------------------------------------------------------------------
 
 -doc ~"""
-Parses scanned template tokens.
-
-## Result
-
-It returns a `{Static, Dynamic}` tuple where Static is an AST list of
-binaries and the Dynamic is an AST list of Erlang terms.
+Token representation with category, line number, and content.
 """.
--spec parse(Tokens, Opts) -> {Static, Dynamic} when
-    Tokens :: [Token],
-    Opts :: options(),
-    Token :: arizona_scanner:token(),
-    Static :: [tuple()],
-    Dynamic :: [tuple() | [tuple()]].
-parse(Tokens0, Opts) when is_list(Tokens0), is_map(Opts) ->
-    Tokens1 = drop_comments(Tokens0),
-    Tokens = add_empty_text_tokens(Tokens1),
-    {HtmlTokens, ErlTokens} = tokens_partition(Tokens),
-    Static = [scan_and_parse_html_token_to_ast(HtmlToken) || HtmlToken <- HtmlTokens],
-    ErlTokensEnum = lists:enumerate(0, ErlTokens),
-    RenderContext = maps:get(render_context, Opts, from_socket),
-    Bindings = maps:get(bindings, Opts, []),
-    Dynamic = [
-        scan_and_parse_erlang_token_to_ast(ErlToken, Index, RenderContext, Bindings)
-     || {Index, ErlToken} <- ErlTokensEnum
-    ],
-    {Static, Dynamic}.
+-type token() :: {
+    Category :: static | dynamic | comment, Line :: pos_integer(), Content :: binary()
+}.
+
+-doc ~"""
+Result type for stateless parsing - list of tokens with comments filtered out.
+""".
+-type stateless_result() :: [
+    Token :: {
+        Category :: static | dynamic, Line :: pos_integer(), Content :: binary()
+    }
+].
+
+-doc ~"""
+Result type for stateful parsing with element ordering, element mapping, and variable indexes.
+""".
+-type stateful_result() :: #{
+    elems_order := [Index :: non_neg_integer()],
+    elems := #{
+        Index ::
+            non_neg_integer() => {
+                Category :: static | dynamic, Line :: pos_integer(), Content :: binary()
+            }
+    },
+    vars_indexes := #{VarName :: binary() => [Index :: non_neg_integer()]}
+}.
+
+-doc ~"""
+Result type for list parsing with static/dynamic template structure.
+
+Runtime fallback format - parse transform will optimize to arizona_renderer:list_template_data().
+""".
+-type list_result() :: #{
+    static := [StaticContent :: binary()],
+    dynamic := #{
+        elems_order := [Index :: non_neg_integer()],
+        elems := #{
+            Index ::
+                non_neg_integer() => {
+                    Category :: dynamic,
+                    Line :: pos_integer(),
+                    ExprText :: binary()
+                }
+        },
+        vars_indexes := #{VarName :: binary() => [Index :: non_neg_integer()]}
+    }
+}.
+
+%% --------------------------------------------------------------------
+%% API Functions
+%% --------------------------------------------------------------------
+
+-doc ~"""
+Parse tokens into stateless iolist structure.
+
+Converts a list of tokens into a structure suitable for stateless rendering.
+Filters out comment tokens while preserving static and dynamic tokens with
+their line numbers intact.
+
+Returns a list of tokens that can be directly processed by template renderers.
+""".
+-spec parse_stateless_tokens(Tokens) -> Result when
+    Tokens :: [token()],
+    Result :: stateless_result().
+parse_stateless_tokens(Tokens) ->
+    [Token || {Category, _Line, _Text} = Token <- Tokens, Category =/= comment].
+
+-doc ~"""
+Parse tokens into stateful template structure.
+
+Converts a list of tokens into a structured format for stateful rendering.
+This includes element ordering, element mapping, and variable indexing for
+efficient template updates.
+
+The resulting map contains:
+- `elems_order`: Sequential list of element indices
+- `elems`: Map of element index to token data
+- `vars_indexes`: Map of variable names to their element indices
+
+Variable extraction is performed for dynamic tokens containing
+`arizona_socket:get_binding/2` calls.
+""".
+-spec parse_stateful_tokens(Tokens) -> Result when
+    Tokens :: [token()],
+    Result :: stateful_result().
+parse_stateful_tokens(Tokens) ->
+    {Elements, VarsIndexes} = process_tokens_stateful(Tokens, 0, #{}, #{}),
+    #{
+        elems_order => lists:seq(0, maps:size(Elements) - 1),
+        elems => Elements,
+        vars_indexes => VarsIndexes
+    }.
+
+-doc ~"""
+Parse tokens into list template structure.
+
+For now, this is a simple placeholder that will be enhanced by parse transform.
+The structure separates static HTML parts from dynamic expressions for efficient
+list rendering with minimal re-computation.
+""".
+-spec parse_list_tokens(Tokens) -> Result when
+    Tokens :: [token()],
+    Result :: list_result().
+parse_list_tokens(Tokens) ->
+    %% For runtime: simple fallback structure
+    %% Parse transform will provide optimized version
+    {StaticParts, DynamicElements, VarsIndexes} = process_tokens_for_list(Tokens),
+    #{
+        static => StaticParts,
+        dynamic => #{
+            elems_order => lists:seq(0, maps:size(DynamicElements) - 1),
+            elems => DynamicElements,
+            vars_indexes => VarsIndexes
+        }
+    }.
 
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
 
-% Comments are not rendered, so they're dropped.
-drop_comments(Tokens) ->
-    [Token || {Category, _Location, _Content} = Token <- Tokens, Category =/= comment].
+%% Process tokens for stateful structure
+process_tokens_stateful([], _Index, Elements, VarsIndexes) ->
+    {Elements, VarsIndexes};
+process_tokens_stateful([Token | Rest], Index, Elements, VarsIndexes) ->
+    case Token of
+        {static, Line, Text} ->
+            NewElements = Elements#{Index => {static, Line, Text}},
+            process_tokens_stateful(Rest, Index + 1, NewElements, VarsIndexes);
+        {dynamic, Line, ExprText} ->
+            %% Parse expression to find variable names
+            VarNames = extract_variable_names(ExprText),
 
-% Dummy empty texts are required for the correct zip between Static and Dynamic
-% when consecutive Erlang expressions are found.
-add_empty_text_tokens([]) ->
-    [];
-add_empty_text_tokens([{erlang, _, _} = ExprA, {erlang, _, _} = ExprB | T]) ->
-    [ExprA, {html, {0, 0}, ~""} | add_empty_text_tokens([ExprB | T])];
-add_empty_text_tokens([H | T]) ->
-    [H | add_empty_text_tokens(T)].
+            %% Keep original expression text - parse transform will optimize
+            NewElements = Elements#{Index => {dynamic, Line, ExprText}},
 
-% Html tokens are static, so the partition result is {Static, Dynamic}.
-tokens_partition(Tokens) ->
-    lists:partition(fun(Token) -> element(1, Token) =:= html end, Tokens).
+            %% Update variable indexes
+            NewVarsIndexes = lists:foldl(
+                fun(VarName, Acc) ->
+                    CurrentIndexes = maps:get(VarName, Acc, []),
+                    Acc#{VarName => [Index | CurrentIndexes]}
+                end,
+                VarsIndexes,
+                VarNames
+            ),
 
-scan_and_parse_html_token_to_ast({html, _Loc, Text0}) ->
-    Text = quote_text(Text0),
-    scan_and_parse_to_ast(<<"<<", $", Text/binary, $", "/utf8>>">>).
+            process_tokens_stateful(Rest, Index + 1, NewElements, NewVarsIndexes);
+        {comment, _Line, _Text} ->
+            %% Skip comments (don't increment index)
+            process_tokens_stateful(Rest, Index, Elements, VarsIndexes)
+    end.
 
-scan_and_parse_erlang_token_to_ast({erlang, _Loc, Expr0}, Index0, RenderContext, Bindings) ->
-    Index = integer_to_binary(Index0),
-    Vars = vars_to_binary(expr_vars(Expr0)),
-    Form = arizona_transform:transform(merl:quote(Expr0), Bindings),
-    Expr = norm_expr(RenderContext, form_to_iolist(Form), Index, Vars),
-    scan_and_parse_to_ast(iolist_to_binary(Expr)).
+%% Extract variable names from expression text using regex
+extract_variable_names(ExprText) ->
+    expr_vars(ExprText).
 
-form_to_iolist(Forms) when is_list(Forms) ->
-    erl_pp:exprs(Forms);
-form_to_iolist(Form) when is_tuple(Form) ->
-    erl_pp:expr(Form).
-
-norm_expr(from_socket, Expr, Index, Vars) ->
-    [
-        ["fun(ViewAcc, Socket, Opts) ->\n"],
-        ["    case arizona_socket:render_context(Socket) of\n"],
-        ["        render ->\n"],
-        ["            arizona_renderer:render(", Expr, ", View, ViewAcc, Socket);\n"],
-        ["        diff ->\n"],
-        ["            Index = ", Index, ",\n"],
-        ["            Vars = ", Vars, ",\n"],
-        ["            TokenCallback = fun() -> ", Expr, " end,\n"],
-        ["            arizona_diff:diff(Index, Vars, TokenCallback, ViewAcc, Socket, Opts)\n"],
-        ["    end\n"],
-        ["end"]
-    ];
-norm_expr(render, Expr, _Index, _Vars) ->
-    [
-        ["fun(ViewAcc, Socket, Opts) ->\n"],
-        ["    arizona_renderer:render(", Expr, ", View, ViewAcc, Socket)\n"],
-        ["end"]
-    ];
-norm_expr(none, Expr, _Index, _Vars) ->
-    Expr.
-
-% The text must be quoted to transform it in an Erlang AST form, for example:
-%
-% ~"""
-% f"o\"o
-% """.
-%
-% To produce a binary it must be <<"f\"o\\\"o">>.
-quote_text(<<>>) ->
-    <<>>;
-quote_text(<<$\\, $", Rest/binary>>) ->
-    <<$\\, $\\, $\\, $", (quote_text(Rest))/binary>>;
-quote_text(<<$", Rest/binary>>) ->
-    <<$\\, $", (quote_text(Rest))/binary>>;
-quote_text(<<C, Rest/binary>>) ->
-    <<C, (quote_text(Rest))/binary>>.
-
-scan_and_parse_to_ast(Text) ->
-    Str = binary_to_list(<<Text/binary, $.>>),
-    {ok, Tokens, _EndLoc} = erl_scan:string(Str),
-    {ok, [Ast]} = erl_parse:parse_exprs(Tokens),
-    Ast.
-
+%% Parse expression to find arizona_socket:get_binding calls
 expr_vars(Expr) ->
     case
         re:run(
             Expr,
-            "arizona:get_binding\\(([a-z][a-zA-Z_@]*|'(.*?)')",
+            ~"arizona_socket:get_binding\\(([a-z][a-zA-Z_@]*|'(.*?)'),\\s*\\w+(?:,\\s*[^)]*)?\\)",
             [global, {capture, all_but_first, binary}]
         )
     of
         {match, Vars0} ->
-            Vars = lists:flatten([pick_quoted_var(List) || List <- Vars0]),
-            lists:usort(lists:map(fun binary_to_atom/1, Vars));
+            Vars = lists:flatten([extract_var_binary(List) || List <- Vars0]),
+            lists:usort(Vars);
         nomatch ->
             []
     end.
 
-pick_quoted_var([<<$', _/binary>> = Var | _T]) ->
-    Var;
-pick_quoted_var([Var]) ->
-    iolist_to_binary([$', Var, $']);
-pick_quoted_var([_Var | T]) ->
-    pick_quoted_var(T).
+%% Extract variable name as binary, handling quoted and unquoted forms
+extract_var_binary([<<$', _/binary>> = Var | _T]) ->
+    %% Remove quotes from quoted variable
+    Size = byte_size(Var) - 2,
+    <<$', UnquotedVar:Size/binary, $'>> = Var,
+    UnquotedVar;
+extract_var_binary([Var]) ->
+    Var.
 
-vars_to_binary(Vars0) ->
-    Vars = lists:map(fun atom_to_binary/1, Vars0),
-    iolist_to_binary([$[, lists:join(", ", Vars), $]]).
+%% Process tokens for list template structure (similar to stateful but different output)
+process_tokens_for_list(Tokens) ->
+    %% For runtime fallback: create simple structure
+    %% Parse transform will optimize this
+    {StaticParts, DynamicElements, VarsIndexes} = separate_static_dynamic_for_list(
+        Tokens, [], #{}, #{}, 0, undefined
+    ),
+    {StaticParts, DynamicElements, VarsIndexes}.
+
+%% Separate static and dynamic parts for list rendering
+separate_static_dynamic_for_list([], StaticAcc, DynamicAcc, VarsAcc, _Index, _PrevType) ->
+    {lists:reverse(StaticAcc), DynamicAcc, VarsAcc};
+separate_static_dynamic_for_list(
+    [{static, _Line, Text} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index, _PrevType
+) ->
+    separate_static_dynamic_for_list(Rest, [Text | StaticAcc], DynamicAcc, VarsAcc, Index, static);
+separate_static_dynamic_for_list(
+    [{dynamic, Line, ExprText} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index, PrevType
+) ->
+    %% Extract variables (only arizona_socket:get_binding calls)
+    VarNames = extract_variable_names(ExprText),
+
+    %% Update accumulators with line information - store in compatible format
+    NewDynamicAcc = DynamicAcc#{Index => {dynamic, Line, ExprText}},
+    NewVarsAcc = lists:foldl(
+        fun(VarName, Acc) ->
+            CurrentIndexes = maps:get(VarName, Acc, []),
+            Acc#{VarName => [Index | CurrentIndexes]}
+        end,
+        VarsAcc,
+        VarNames
+    ),
+
+    %% Add empty static part when:
+    %% 1. First token is dynamic (PrevType == undefined)
+    %% 2. Previous token was also dynamic (PrevType == dynamic)
+    NewStaticAcc =
+        case PrevType of
+            % First token is dynamic
+            undefined -> [~"" | StaticAcc];
+            % Consecutive dynamics
+            dynamic -> [~"" | StaticAcc];
+            % After static, no empty needed
+            static -> StaticAcc
+        end,
+
+    separate_static_dynamic_for_list(
+        Rest, NewStaticAcc, NewDynamicAcc, NewVarsAcc, Index + 1, dynamic
+    );
+separate_static_dynamic_for_list(
+    [{comment, _Line, _Text} | Rest], StaticAcc, DynamicAcc, VarsAcc, Index, PrevType
+) ->
+    %% Skip comments - preserve previous type
+    separate_static_dynamic_for_list(Rest, StaticAcc, DynamicAcc, VarsAcc, Index, PrevType).

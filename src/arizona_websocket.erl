@@ -1,250 +1,419 @@
 -module(arizona_websocket).
+-moduledoc ~"""
+Provides WebSocket handler functionality for Arizona LiveView connections.
+
+## Overview
+
+The WebSocket handler manages real-time communication between Arizona LiveView
+processes and client browsers. It handles connection establishment, message routing,
+and state synchronization for interactive web applications.
+
+## Features
+
+- **Connection Management**: Establishes WebSocket connections and initializes LiveView processes
+- **Message Routing**: Routes client events to appropriate LiveView handlers
+- **Diff Updates**: Sends efficient hierarchical diffs for DOM updates
+- **Error Handling**: Comprehensive error handling with client notifications
+- **Real-time Communication**: Supports bidirectional communication with clients
+- **JSON Encoding**: Custom JSON encoding with tuple-to-array conversion for JavaScript
+
+## Key Functions
+
+- `init/2`: Initialize WebSocket connection and resolve LiveView module
+- `websocket_init/1`: Start LiveView process and send initial render
+- `websocket_handle/2`: Handle incoming client messages and events
+- `websocket_info/2`: Handle Erlang messages from LiveView processes
+- `json_encode/1`: Encode terms to JSON with JavaScript compatibility
+
+## Message Types
+
+- **event**: DOM events from client (clicks, form submissions, etc.)
+- **ping**: Client heartbeat messages
+- **initial_render**: Initial hierarchical structure sent to client
+- **diff**: Hierarchical diff updates for efficient DOM patching
+- **reply**: Direct responses to client events
+- **error**: Error notifications to client
+""".
+
 -behaviour(cowboy_websocket).
 
 %% --------------------------------------------------------------------
-%% Behaviour (cowboy_websocket) exports
+%% API function exports
 %% --------------------------------------------------------------------
 
 -export([init/2]).
 -export([websocket_init/1]).
 -export([websocket_handle/2]).
 -export([websocket_info/2]).
--export([terminate/3]).
 
 %% --------------------------------------------------------------------
-%% Libs
+%% Testing helper exports
 %% --------------------------------------------------------------------
 
--include_lib("kernel/include/logger.hrl").
+-export([new_state/1]).
+-export([get_live_pid/1]).
+-export([json_encode/1]).
 
 %% --------------------------------------------------------------------
-%% Types (and their exports)
+%% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--opaque init_state() :: {
-    PathParams :: path_params(),
-    QueryString :: query_string(),
-    HandlerState :: arizona_view_handler:state()
-}.
--export_type([init_state/0]).
-
--type path_params() :: cowboy_router:bindings().
--export_type([path_params/0]).
-
--type query_string() :: binary().
--export_type([query_string/0]).
-
--type query_params() :: [{binary(), binary() | true}].
--export_type([query_params/0]).
+-ignore_xref([new_state/1]).
+-ignore_xref([get_live_pid/1]).
+-ignore_xref([json_encode/1]).
 
 %% --------------------------------------------------------------------
-%% Behaviour (cowboy_websocket) callbacks
+%% Types exports
 %% --------------------------------------------------------------------
 
--spec init(Req0, []) -> Result when
-    Req0 :: cowboy_req:req(),
-    Result :: {cowboy_websocket, Req1, InitState},
-    Req1 :: cowboy_req:req(),
-    InitState :: init_state().
-init(Req0, []) ->
-    {ok, Req, Env} = arizona_server:req_route(Req0),
-    HandlerState = maps:get(handler_opts, Env),
-    PathParams = cowboy_req:bindings(Req),
-    QueryString = cowboy_req:qs(Req),
-    {cowboy_websocket, Req, {PathParams, QueryString, HandlerState}}.
+-export_type([state/0]).
+-export_type([call_result/0]).
 
--spec websocket_init(InitState) -> {Events, Socket} when
-    InitState :: init_state(),
-    Events :: cowboy_websocket:commands(),
-    Socket :: arizona_socket:socket().
-websocket_init({PathParams, QueryString, {Mod, Bindings, _Opts}}) ->
-    ?LOG_INFO(#{
-        text => ~"init",
-        in => ?MODULE,
-        view_module => Mod,
-        bindings => Bindings,
-        path_params => PathParams,
-        query_string => QueryString
-    }),
-    Socket0 = arizona_socket:new(render, self()),
-    {_View, Socket1} = arizona_view:init_root(Mod, PathParams, QueryString, Bindings, Socket0),
-    Socket = arizona_socket:set_render_context(diff, Socket1),
-    Events = put_init_event(Socket, []),
-    Cmds = commands(Events),
-    {Cmds, Socket}.
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
 
--spec websocket_handle(Event, Socket0) -> {Events, Socket1} when
-    Event :: {text, Msg},
-    Msg :: binary(),
-    Socket0 :: arizona_socket:socket(),
-    Events :: cowboy_websocket:commands(),
-    Socket1 :: arizona_socket:socket().
-websocket_handle({text, Msg}, Socket) ->
-    ?LOG_INFO(#{
-        text => ~"message received",
-        in => ?MODULE,
-        messge => Msg,
-        socket => Socket
-    }),
-    [Subject, Attachment] = json:decode(Msg),
-    handle_message(Subject, Attachment, Socket).
+-record(state, {
+    live_pid :: pid()
+}).
 
--spec websocket_info(Msg, Socket0) -> {Events, Socket1} when
-    Msg :: dynamic(),
-    Events :: cowboy_websocket:commands(),
-    Socket0 :: arizona_socket:socket(),
-    Socket1 :: arizona_socket:socket().
-websocket_info({broadcast, From, ViewId, EventName, Payload}, Socket0) ->
-    ?LOG_INFO(#{
-        text => ~"broadcast message received",
-        in => ?MODULE,
-        from => From,
-        view_id => ViewId,
-        event_name => EventName,
-        payload => Payload,
-        socket => Socket0
-    }),
-    {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
-    Ref = undefined,
-    {Events0, View1} = handle_event(Ref, ViewId, EventName, Payload, From, View0),
-    {Events, Socket} = handle_diff(Ref, ViewId, Events0, View1, Socket0),
-    Cmds = commands(Events),
-    {Cmds, Socket};
-websocket_info(Msg, Socket) ->
-    ?LOG_INFO(#{
-        text => ~"info received",
-        in => ?MODULE,
-        messge => Msg,
-        socket => Socket
-    }),
-    {[], Socket}.
+-doc ~"""
+Opaque WebSocket state containing LiveView process information.
 
--spec terminate(Reason, Req, Socket) -> ok when
-    Reason :: term(),
+Maintains the connection between the WebSocket handler and the associated
+LiveView process for message routing and state management.
+""".
+-opaque state() :: #state{}.
+
+-doc ~"""
+Result type for WebSocket callback functions.
+
+Contains commands to send to the client and updated handler state.
+""".
+-type call_result() :: {Commands :: cowboy_websocket:commands(), State :: state()}.
+
+%% --------------------------------------------------------------------
+%% API function definitions
+%% --------------------------------------------------------------------
+
+-doc ~"""
+Initialize WebSocket connection and resolve LiveView module from path parameter.
+
+Extracts the LiveView path from the query parameter (?path=/users), resolves
+the appropriate LiveView module using the routing system, and prepares for
+WebSocket upgrade.
+
+## Examples
+
+```erlang
+1> Req = #{path => "/live", qs => "path=%2Fusers", ...}.
+#{...}
+2> arizona_websocket:init(Req, #{}).
+{cowboy_websocket, Req, {user_live, ArizonaReq}}
+```
+""".
+-spec init(Req, State) -> {cowboy_websocket, Req, {LiveModule, ArizonaReq}} when
     Req :: cowboy_req:req(),
-    Socket :: arizona_socket:socket().
-terminate(Reason, _Req, Socket) ->
-    ?LOG_INFO(#{
-        text => ~"terminated",
-        in => ?MODULE,
-        reason => Reason,
-        socket => Socket
+    State :: map(),
+    LiveModule :: module(),
+    ArizonaReq :: arizona_request:request().
+init(Req, _State) ->
+    % Extract path from query parameter ?path=/users
+    PathParams = cowboy_req:parse_qs(Req),
+    LivePath = proplists:get_value(~"path", PathParams, ~"/"),
+
+    % Create fake request with the LiveView path to resolve correct handler
+    FakeReq = Req#{path => LivePath},
+    RouteMetadata = arizona_server:get_route_metadata(FakeReq),
+    LiveModule = arizona_server:get_route_handler(RouteMetadata),
+
+    % Create Arizona request with the original LiveView path
+    ArizonaReq = arizona_request:from_cowboy(FakeReq),
+    {cowboy_websocket, Req, {LiveModule, ArizonaReq}}.
+
+-doc ~"""
+WebSocket connection established - start LiveView process and send initial render.
+
+Creates a new Arizona socket in hierarchical mode, starts the LiveView process,
+performs initial mount and render, then sends the hierarchical structure to
+the client for initial page rendering.
+
+## Examples
+
+```erlang
+1> arizona_websocket:websocket_init({user_live, ArizonaReq}).
+{[{text, InitialPayload}], State}
+```
+""".
+-spec websocket_init(InitData) -> Result when
+    InitData :: {LiveModule, Req},
+    LiveModule :: module(),
+    Req :: arizona_request:request(),
+    Result :: call_result().
+websocket_init({LiveModule, Req}) ->
+    % Create initial Arizona socket in hierarchical mode
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    StatefulState = arizona_stateful:new(root, LiveModule, #{}),
+    Socket1 = arizona_socket:put_stateful_state(StatefulState, Socket),
+
+    % Start the LiveView process
+    {ok, LivePid} = arizona_live:start_link(LiveModule, Socket1),
+
+    % Mount the LiveView
+    _MountedSocket = arizona_live:mount(LivePid, Req),
+
+    % Initial render in hierarchical mode
+    RenderedSocket = arizona_live:render(LivePid),
+    HierarchicalStructure = arizona_socket:get_hierarchical_acc(RenderedSocket),
+
+    % Send initial hierarchical structure to client
+    InitialPayload = json_encode(#{
+        type => ~"initial_render",
+        structure => HierarchicalStructure
     }),
-    ok.
+
+    ok = arizona_live:set_mode(LivePid, diff),
+
+    State = #state{live_pid = LivePid},
+
+    {[{text, InitialPayload}], State}.
+
+-doc ~"""
+Handle incoming WebSocket messages from client.
+
+Parses JSON messages from the client and routes them to appropriate handlers
+based on message type. Supports event messages, ping messages, and provides
+comprehensive error handling for invalid messages.
+
+## Examples
+
+```erlang
+1> Message = {text, <<"{\"type\":\"event\",\"event\":\"click\"}">>}.
+{text, ...}
+2> arizona_websocket:websocket_handle(Message, State).
+{[{text, DiffPayload}], State}
+```
+""".
+-spec websocket_handle(Message, State) -> Result when
+    Message :: {text, binary()},
+    State :: state(),
+    Result :: call_result().
+websocket_handle({text, JsonBinary}, State) ->
+    try
+        Message = json:decode(JsonBinary),
+        MessageType = maps:get(~"type", Message, undefined),
+        handle_message_type(MessageType, Message, State)
+    catch
+        Error:Reason:Stacktrace ->
+            handle_websocket_error(Error, Reason, Stacktrace, State)
+    end.
+
+-doc ~"""
+Handle Erlang messages from LiveView processes or other sources.
+
+Processes internal Erlang messages that may be sent from LiveView processes
+or other parts of the system. Currently returns empty commands but provides
+a foundation for real-time push notifications and live data feeds.
+
+## Examples
+
+```erlang
+1> arizona_websocket:websocket_info(some_message, State).
+{[], State}
+```
+""".
+-spec websocket_info(Info, State) -> Result when
+    Info :: term(),
+    State :: state(),
+    Result :: call_result().
+websocket_info(_Info, State) ->
+    % TODO: Handle real-time updates (push notifications, live data feeds, etc.)
+    {[], State}.
+
+%% --------------------------------------------------------------------
+%% Testing helper functions
+%% --------------------------------------------------------------------
+
+-doc ~"""
+Create a new WebSocket state for testing purposes.
+
+Utility function for test suites to create WebSocket handler state
+with a specified LiveView process PID.
+
+## Examples
+
+```erlang
+1> arizona_websocket:new_state(LivePid).
+#state{live_pid = LivePid}
+```
+""".
+-spec new_state(LivePid) -> State when
+    LivePid :: pid(),
+    State :: state().
+new_state(LivePid) ->
+    #state{live_pid = LivePid}.
+
+-doc ~"""
+Get LiveView process PID from WebSocket state for testing.
+
+Utility function for test suites to extract the LiveView process PID
+from the WebSocket handler state.
+
+## Examples
+
+```erlang
+1> arizona_websocket:get_live_pid(State).
+<0.123.0>
+```
+""".
+-spec get_live_pid(State) -> LivePid when
+    State :: state(),
+    LivePid :: pid().
+get_live_pid(#state{live_pid = LivePid}) ->
+    LivePid.
+
+-doc ~"""
+Encode terms to JSON with custom tuple-to-array conversion for JavaScript compatibility.
+
+Converts Erlang terms to JSON format with special handling for tuples,
+which are converted to arrays for better JavaScript interoperability.
+Used for encoding WebSocket messages sent to clients.
+
+## Examples
+
+```erlang
+1> arizona_websocket:json_encode(#{type => diff, changes => [{root, [{0, "new"}]}]}).
+<<"{\"type\":\"diff\",\"changes\":[[\"root\",[[0,\"new\"]]]]}">>
+```
+""".
+-spec json_encode(Term) -> JsonData when
+    Term :: term(),
+    JsonData :: iodata().
+json_encode(Term) ->
+    % Convert tuples to arrays for JavaScript compatibility
+    json:encode(Term, fun json_encoder/2).
 
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
 
-handle_message(~"event", [Ref, ViewId, EventName, Payload], Socket0) ->
-    {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
-    {Events0, View1} = handle_event(Ref, ViewId, EventName, Payload, self(), View0),
-    {Events, Socket} = handle_diff(Ref, ViewId, Events0, View1, Socket0),
-    Cmds = commands(Events),
-    {Cmds, Socket};
-handle_message(~"join", [Ref, ViewId, EventName, Payload], Socket0) ->
-    {ok, View0} = arizona_socket:get_view(ViewId, Socket0),
-    {Events0, View} = handle_join(Ref, ViewId, EventName, Payload, View0),
-    {Events, Socket} = handle_diff(Ref, ViewId, Events0, View, Socket0),
-    Cmds = commands(Events),
-    {Cmds, Socket}.
+%% Handle different message types
+-spec handle_message_type(MessageType, Message, State) -> Result when
+    MessageType :: binary() | undefined,
+    Message :: map(),
+    State :: state(),
+    Result :: call_result().
+handle_message_type(~"event", Message, State) ->
+    handle_event_message(Message, State);
+handle_message_type(~"ping", _Message, State) ->
+    handle_ping_message(State);
+handle_message_type(_UnknownType, _Message, State) ->
+    handle_unknown_message(State).
 
-handle_event(Ref, ViewId, EventName, Payload, From, View) ->
-    Result = arizona_view:handle_event(EventName, Payload, From, View),
-    ?LOG_INFO(#{
-        text => ~"handle_event result",
-        in => ?MODULE,
-        result => Result,
-        view_id => ViewId,
-        view => View
+%% Handle DOM event message
+-spec handle_event_message(Message, State) -> Result when
+    Message :: map(),
+    State :: state(),
+    Result :: call_result().
+handle_event_message(Message, #state{live_pid = LivePid} = State) ->
+    Event = maps:get(~"event", Message),
+    Params = maps:get(~"params", Message, #{}),
+
+    case arizona_live:handle_event(LivePid, Event, Params) of
+        {noreply, _UpdatedSocket} ->
+            handle_noreply_response(State);
+        {reply, Reply, _UpdatedSocket} ->
+            handle_reply_response(Reply, State)
+    end.
+
+%% Handle noreply response from LiveView
+-spec handle_noreply_response(State) -> Result when
+    State :: state(),
+    Result :: call_result().
+handle_noreply_response(#state{live_pid = LivePid} = State) ->
+    DiffSocket = arizona_live:render(LivePid),
+    case arizona_socket:get_changes(DiffSocket) of
+        [] ->
+            {[], State};
+        DiffChanges ->
+            DiffPayload = json_encode(#{
+                type => ~"diff",
+                changes => DiffChanges
+            }),
+            % TODO: Clear live_pid socket changes
+            _ClearedSocket = arizona_socket:clear_changes(DiffSocket),
+            {[{text, DiffPayload}], State}
+    end.
+
+%% Handle reply response from LiveView
+-spec handle_reply_response(Reply, State) -> Result when
+    Reply :: term(),
+    State :: state(),
+    Result :: call_result().
+handle_reply_response(Reply, #state{live_pid = LivePid} = State) ->
+    ReplyPayload = json_encode(#{
+        type => ~"reply",
+        data => Reply
     }),
-    norm_handle_event_result(Result, Ref, ViewId, EventName).
 
-norm_handle_event_result({noreply, View}, _Ref, _ViewId, _EventName) ->
-    {[], View};
-norm_handle_event_result({reply, Payload, View}, Ref, ViewId, EventName) ->
-    Event = event_tuple(EventName, Ref, ViewId, Payload),
-    {[Event], View}.
+    DiffSocket = arizona_live:render(LivePid),
+    case arizona_socket:get_changes(DiffSocket) of
+        [] ->
+            {[{text, ReplyPayload}], State};
+        DiffChanges ->
+            DiffPayload = json_encode(#{
+                type => ~"diff",
+                changes => DiffChanges
+            }),
+            % TODO: Clear live_pid socket changes
+            _ClearedSocket = arizona_socket:clear_changes(DiffSocket),
+            {[{text, ReplyPayload}, {text, DiffPayload}], State}
+    end.
 
-handle_diff(Ref, ViewId, Events0, View0, Socket0) ->
-    Token = arizona_view:render(View0),
-    {View2, Socket1} = arizona_diff:diff(Token, 0, View0, Socket0),
-    Diff = arizona_view:diff(View2),
-    Events = put_diff_event(Diff, Ref, ViewId, Events0),
-    View = arizona_view:merge_changed_bindings(View2),
-    Socket = arizona_socket:put_view(View, Socket1),
-    {Events, Socket}.
+%% Handle ping message
+-spec handle_ping_message(State) -> Result when
+    State :: state(),
+    Result :: call_result().
+handle_ping_message(State) ->
+    PongPayload = json_encode(#{type => ~"pong"}),
+    {[{text, PongPayload}], State}.
 
-put_init_event(Socket, Events) ->
-    Views = #{Id => arizona_view:rendered(View) || Id := View <- arizona_socket:views(Socket)},
-    Event = event_tuple(~"init", undefined, undefined, Views),
-    [Event | Events].
-
-put_diff_event([], _Ref, _ViewId, Events) ->
-    Events;
-put_diff_event(Diff, Ref, ViewId, Events) ->
-    ?LOG_INFO(#{
-        text => ~"view diff",
-        in => ?MODULE,
-        diff => Diff,
-        ref => Ref,
-        id => ViewId,
-        views => Diff
+%% Handle unknown message type
+-spec handle_unknown_message(State) -> Result when
+    State :: state(),
+    Result :: call_result().
+handle_unknown_message(State) ->
+    ErrorPayload = json_encode(#{
+        type => ~"error",
+        message => ~"Unknown message type"
     }),
-    [event_tuple(~"patch", Ref, ViewId, {diff, Diff}) | Events].
+    {[{text, ErrorPayload}], State}.
 
-handle_join(Ref, ViewId, EventName, Payload, View) ->
-    Mod = arizona_view:module(View),
-    Result = arizona_view:handle_join(Mod, EventName, Payload, View),
-    ?LOG_INFO(#{
-        text => ~"handle_join result",
-        in => ?MODULE,
-        ref => Ref,
-        view_id => ViewId,
-        event_name => EventName,
-        payload => Payload,
-        result => Result,
-        view => View
+%% Handle WebSocket errors
+-spec handle_websocket_error(Error, Reason, Stacktrace, State) -> Result when
+    Error :: term(),
+    Reason :: term(),
+    Stacktrace :: list(),
+    State :: state(),
+    Result :: call_result().
+handle_websocket_error(Error, Reason, Stacktrace, State) ->
+    logger:error("WebSocket message handling error: ~p:~p~nStacktrace: ~p", [
+        Error, Reason, Stacktrace
+    ]),
+    ErrorPayload = json_encode(#{
+        type => ~"error",
+        message => ~"Internal server error"
     }),
-    norm_handle_join_result(Result, Ref, ViewId, EventName).
+    {[{text, ErrorPayload}], State}.
 
-norm_handle_join_result({ok, Payload, View}, Ref, ViewId, EventName) ->
-    ok = arizona_pubsub:subscribe(EventName, self()),
-    ?LOG_INFO(#{
-        text => ~"joined",
-        in => ?MODULE,
-        ref => Ref,
-        view_id => ViewId,
-        event_name => EventName,
-        payload => Payload,
-        view => View,
-        sender => self()
-    }),
-    Event = event_tuple(~"join", Ref, ViewId, [~"ok", Payload]),
-    {[Event], View};
-norm_handle_join_result({error, Reason, View}, Ref, ViewId, _EventName) ->
-    Event = event_tuple(~"join", Ref, ViewId, [~"error", Reason]),
-    {[Event], View}.
-
-event_tuple(EventName, Ref, ViewId, Payload) ->
-    {EventName, [Ref, ViewId, Payload]}.
-
-commands([]) ->
-    [];
-commands(Events) ->
-    [{text, encode(lists:reverse(Events))}].
-
-encode(Term) ->
-    json:encode(Term, fun
-        ({diff, Diff}, Encode) ->
-            json:encode(proplists:to_map(Diff), Encode);
-        ([{_, _} | _] = Proplist, Encode) ->
-            json:encode(proplist_to_list(Proplist), Encode);
-        (Other, Encode) ->
-            json:encode_value(Other, Encode)
-    end).
-
-proplist_to_list([]) ->
-    [];
-proplist_to_list([{K, V} | T]) ->
-    [[K, V] | proplist_to_list(T)].
+%% Custom JSON encoder that converts tuples to arrays for JavaScript compatibility
+-spec json_encoder(Term, Encoder) -> JsonData when
+    Term :: term(),
+    Encoder :: json:encoder(),
+    JsonData :: iodata().
+json_encoder(Tuple, Encode) when is_tuple(Tuple) ->
+    % Convert tuple to array
+    json:encode_list(tuple_to_list(Tuple), Encode);
+json_encoder(Other, Encode) ->
+    % For all other types, use the default JSON encoder
+    json:encode_value(Other, Encode).

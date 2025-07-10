@@ -5,3 +5,8 @@
 /static/
 erl_crash.dump
 rebar3.crashdump
+
+# Playwright
+/test-results/
+/playwright-report/
+/playwright/.cache/
