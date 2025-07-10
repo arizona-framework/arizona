@@ -15,6 +15,7 @@
     "format:lint": "npm run format && npm run lint",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "vitest run",
+    "test:unit:coverage": "vitest run --coverage",
     "test:e2e": "playwright test --reporter=line",
     "test:e2e:report": "playwright test",
     "test:e2e:ui": "playwright test --ui",
@@ -24,6 +25,7 @@
   "devDependencies": {
     "@eslint/js": "9.24.0",
     "@playwright/test": "^1.53.2",
+    "@vitest/coverage-v8": "^3.2.4",
     "esbuild": "0.25.2",
     "eslint": "9.24.0",
     "globals": "16.0.0",

@@ -61,7 +61,7 @@ rebar3 ct       # Common Test suites
 # Run specific test suite
 rebar3 ct --suite test/arizona_live_SUITE
 
-# Run with coverage
+# Run with coverage (prints table + generates HTML report)
 rebar3 as test do ct, cover -v
 ```
 
@@ -76,6 +76,9 @@ npm run test:e2e
 
 # Run all tests
 npm test
+
+# Run with coverage
+npm run test:unit:coverage
 
 # Check code formatting
 npm run format:check

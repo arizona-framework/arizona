@@ -7,8 +7,14 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reportsDirectory: '_build/test/cover/js',
-      include: ['assets/**/*.mjs'],
-      exclude: ['assets/**/*.test.js', 'assets/**/__mocks__/**'],
+      include: ['assets/**/*.js'],
+      exclude: ['assets/**/*.test.js', 'assets/**/__mocks__/**', 'assets/**/e2e/**'],
+      thresholds: {
+        statements: 60,
+        branches: 80,
+        functions: 45,
+        lines: 60,
+      },
     },
   },
 });
