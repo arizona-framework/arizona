@@ -36,7 +36,7 @@ jobs:
       - name: Check code
         run: |
           npm run format:check
-          npm run lint:check
+          npm run lint:js:check
 
   test:
     name: Unit Test
