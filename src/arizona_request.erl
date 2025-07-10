@@ -116,10 +116,10 @@ optional and will use sensible defaults if not provided.
 ## Examples
 
 ```erlang
-1> arizona_request:new(#{method => <<"POST">>, path => <<"/users">>}).
-#request{method = <<"POST">>, path = <<"/users">>, ...}
+1> arizona_request:new(#{method => ~"POST", path => ~"/users"}).
+#request{method = ~"POST", path = ~"/users", ...}
 2> arizona_request:new(#{}).
-#request{method = <<"GET">>, path = <<"/">>, ...}
+#request{method = ~"GET", path = ~"/", ...}
 ```
 """.
 -spec new(Opts) -> Request when
@@ -148,7 +148,7 @@ performance.
 
 ```erlang
 1> arizona_request:from_cowboy(CowboyReq).
-#request{method = <<"GET">>, path = <<"/users">>, ...}
+#request{method = ~"GET", path = ~"/users", ...}
 ```
 """.
 -spec from_cowboy(CowboyReq) -> Request when
@@ -181,7 +181,7 @@ a route like `/users/:user_id`. Uses lazy loading for Cowboy requests.
 
 ```erlang
 1> {Bindings, Req2} = arizona_request:get_bindings(Req).
-{#{user_id => <<"123">>}, #request{...}}
+{#{user_id => ~"123"}, #request{...}}
 ```
 """.
 -spec get_bindings(Request) -> {Bindings, Request1} when
@@ -205,7 +205,7 @@ Uses lazy loading for Cowboy requests to optimize performance.
 
 ```erlang
 1> {Params, Req2} = arizona_request:get_params(Req).
-{[{<<"tab">>, <<"account">>}, {<<"page">>, <<"1">>}], #request{...}}
+{[{~"tab", ~"account"}, {~"page", ~"1"}], #request{...}}
 ```
 """.
 -spec get_params(Request) -> {Params, Request1} when
@@ -229,7 +229,7 @@ loading for Cowboy requests to optimize performance.
 
 ```erlang
 1> {Cookies, Req2} = arizona_request:get_cookies(Req).
-{[{<<"session_id">>, <<"abc123">>}], #request{...}}
+{[{~"session_id", ~"abc123"}], #request{...}}
 ```
 """.
 -spec get_cookies(Request) -> {Cookies, Request1} when
@@ -253,7 +253,7 @@ This field is eagerly loaded for all request types.
 
 ```erlang
 1> arizona_request:get_method(Req).
-<<"POST">>
+~"POST"
 ```
 """.
 -spec get_method(Request) -> Method when
@@ -272,7 +272,7 @@ This field is eagerly loaded for all request types.
 
 ```erlang
 1> arizona_request:get_path(Req).
-<<"/users/123">>
+~"/users/123"
 ```
 """.
 -spec get_path(Request) -> Path when
@@ -291,7 +291,7 @@ loading for Cowboy requests to optimize performance.
 
 ```erlang
 1> {Headers, Req2} = arizona_request:get_headers(Req).
-{#{<<"content-type">> => <<"application/json">>}, #request{...}}
+{#{~"content-type" => ~"application/json"}, #request{...}}
 ```
 """.
 -spec get_headers(Request) -> {Headers, Request1} when
@@ -317,7 +317,7 @@ Cowboy requests and handles the case where no body is present.
 1> {Body, Req2} = arizona_request:get_body(Req).
 {<<"{\"name\":\"John\"}">>, #request{...}}
 2> {Body, Req3} = arizona_request:get_body(EmptyReq).
-{<<"">>, #request{...}}
+{~"", #request{...}}
 ```
 """.
 -spec get_body(Request) -> {Body, Request1} when

@@ -216,7 +216,7 @@ safe function invocation for dynamic template elements.
 1> Fun = fun(Socket) -> arizona_socket:get_binding(name, Socket) end.
 #Fun<...>
 2> arizona_stateful:call_dynamic_function(Fun, Socket).
-<<"John">>
+~"John"
 ```
 """.
 -spec call_dynamic_function(Fun, Socket) -> Result when
@@ -235,10 +235,10 @@ bindings. Generates a fingerprint for change detection and remount decisions.
 ## Examples
 
 ```erlang
-1> arizona_stateful:new(root, my_component, #{name => <<"John">>}).
-#state{id = root, module = my_component, bindings = #{name => <<"John">>}, ...}
-2> arizona_stateful:new(<<"child_1">>, child_component, #{}).
-#state{id = <<"child_1">>, module = child_component, bindings = #{}, ...}
+1> arizona_stateful:new(root, my_component, #{name => ~"John"}).
+#state{id = root, module = my_component, bindings = #{name => ~"John"}, ...}
+2> arizona_stateful:new(~"child_1", child_component, #{}).
+#state{id = ~"child_1", module = child_component, bindings = #{}, ...}
 ```
 """.
 -spec new(Id, Mod, Bindings) -> State when
@@ -306,10 +306,10 @@ is not found. Use get_binding/3 for safe access with defaults.
 ## Examples
 
 ```erlang
-1> State = arizona_stateful:new(root, my_component, #{name => <<"John">>}).
+1> State = arizona_stateful:new(root, my_component, #{name => ~"John"}).
 #state{...}
 2> arizona_stateful:get_binding(name, State).
-<<"John">>
+~"John"
 3> arizona_stateful:get_binding(missing, State).
 ** exception throw: {binding_not_found,missing}
 ```
@@ -333,12 +333,12 @@ if the binding is not found.
 ## Examples
 
 ```erlang
-1> State = arizona_stateful:new(root, my_component, #{name => <<"John">>}).
+1> State = arizona_stateful:new(root, my_component, #{name => ~"John"}).
 #state{...}
-2> arizona_stateful:get_binding(name, State, <<"Unknown">>).
-<<"John">>
-3> arizona_stateful:get_binding(missing, State, <<"Unknown">>).
-<<"Unknown">>
+2> arizona_stateful:get_binding(name, State, ~"Unknown").
+~"John"
+3> arizona_stateful:get_binding(missing, State, ~"Unknown").
+~"Unknown"
 ```
 """.
 -spec get_binding(Key, State, Default) -> Value when
@@ -363,8 +363,8 @@ efficient re-rendering. Returns the same state if the value hasn't changed.
 ```erlang
 1> State = arizona_stateful:new(root, my_component, #{}).
 #state{...}
-2> State2 = arizona_stateful:put_binding(name, <<"John">>, State).
-#state{bindings = #{name => <<"John">>}, changed_bindings = #{name => <<"John">>}, ...}
+2> State2 = arizona_stateful:put_binding(name, ~"John", State).
+#state{bindings = #{name => ~"John"}, changed_bindings = #{name => ~"John"}, ...}
 ```
 """.
 -spec put_binding(Key, Value, State) -> State1 when
@@ -395,10 +395,10 @@ for efficient re-rendering. Uses put_binding/3 internally for each binding.
 ```erlang
 1> State = arizona_stateful:new(root, my_component, #{}).
 #state{...}
-2> Bindings = #{name => <<"John">>, age => 30}.
-#{name => <<"John">>, age => 30}
+2> Bindings = #{name => ~"John", age => 30}.
+#{name => ~"John", age => 30}
 3> arizona_stateful:put_bindings(Bindings, State).
-#state{bindings = #{name => <<"John">>, age => 30}, ...}
+#state{bindings = #{name => ~"John", age => 30}, ...}
 ```
 """.
 -spec put_bindings(Bindings, State) -> State1 when
@@ -417,7 +417,7 @@ used for efficient diff generation and change detection.
 ## Examples
 
 ```erlang
-1> State = arizona_stateful:new(root, my_component, #{name => <<"John">>}).
+1> State = arizona_stateful:new(root, my_component, #{name => ~"John"}).
 #state{...}
 2> State2 = arizona_stateful:put_binding(age, 30, State).
 #state{...}
@@ -440,7 +440,7 @@ determine if the component needs to be remounted due to significant changes.
 ## Examples
 
 ```erlang
-1> State = arizona_stateful:new(root, my_component, #{name => <<"John">>}).
+1> State = arizona_stateful:new(root, my_component, #{name => ~"John"}).
 #state{...}
 2> arizona_stateful:should_remount(State).
 false

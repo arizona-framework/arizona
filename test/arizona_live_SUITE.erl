@@ -77,8 +77,8 @@ test_mount_callback(Config) when is_list(Config) ->
 
     % Test mount with different request options
     Socket = arizona_live_test_helpers:mount_live(Pid, #{
-        bindings => #{test => <<"value">>},
-        params => [{<<"session">>, <<"data">>}]
+        bindings => #{test => ~"value"},
+        params => [{~"session", ~"data"}]
     }),
 
     % Verify socket is returned

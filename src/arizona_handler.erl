@@ -61,7 +61,7 @@ the LiveView request processing logic.
 
 ```erlang
 % Called automatically by Cowboy - not typically invoked directly
-1> Req = #{method => <<"GET">>, path => "/users", ...}.
+1> Req = #{method => ~"GET", path => "/users", ...}.
 #{...}
 2> State = #{handler => user_live}.
 #{...}

@@ -52,8 +52,8 @@ system when processing list templates.
 ```erlang
 1> ItemFun = fun(Item) -> <<"<li>", Item/binary, "</li>">> end.
 #Fun<...>
-2> arizona_list:call_item_function(ItemFun, <<"test">>).
-<<"<li>test</li>">>
+2> arizona_list:call_item_function(ItemFun, ~"test").
+~"<li>test</li>"
 ```
 """.
 -spec call_item_function(ItemFun, Item) -> Html when
@@ -78,8 +78,8 @@ and the socket context.
 #Fun<...>
 2> Socket = arizona_socket:new(#{}).
 #socket{...}
-3> arizona_list:call_element_function(Fun, <<"test">>, Socket).
-#socket{bindings = #{current_item => <<"test">>}, ...}
+3> arizona_list:call_element_function(Fun, ~"test", Socket).
+#socket{bindings = #{current_item => ~"test"}, ...}
 ```
 """.
 -spec call_element_function(Fun, Item, Socket) -> Result when

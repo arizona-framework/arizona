@@ -152,10 +152,10 @@ independently updated and diffed.
 ```erlang
 1> Structure = arizona_hierarchical:create_structure().
 #{}
-2> Render = #{0 => <<"Hello">>, 1 => <<"World">>}.
-#{0 => <<"Hello">>,1 => <<"World">>}
+2> Render = #{0 => ~"Hello", 1 => ~"World"}.
+#{0 => ~"Hello",1 => ~"World"}
 3> arizona_hierarchical:add_stateful(root, Render, Structure).
-#{root => #{0 => <<"Hello">>,1 => <<"World">>}}
+#{root => #{0 => ~"Hello",1 => ~"World"}}
 ```
 """.
 -spec add_stateful(StatefulId, StatefulRender, Structure) -> UpdatedStructure when
@@ -179,8 +179,8 @@ creating the component if it doesn't exist.
 ```erlang
 1> Structure = arizona_hierarchical:create_structure().
 #{}
-2> arizona_hierarchical:set_element(root, 0, <<"Content">>, Structure).
-#{root => #{0 => <<"Content">>}}
+2> arizona_hierarchical:set_element(root, 0, ~"Content", Structure).
+#{root => #{0 => ~"Content"}}
 ```
 """.
 -spec set_element(StatefulId, ElementIndex, Content, Structure) -> UpdatedStructure when
@@ -278,13 +278,13 @@ structure, enabling efficient WebSocket updates.
 ## Examples
 
 ```erlang
-1> Old = #{root => #{0 => <<"Old">>}}.
-#{root => #{0 => <<"Old">>}}
-2> New = #{root => #{0 => <<"New">>}}.
-#{root => #{0 => <<"New">>}}
+1> Old = #{root => #{0 => ~"Old"}}.
+#{root => #{0 => ~"Old"}}
+2> New = #{root => #{0 => ~"New"}}.
+#{root => #{0 => ~"New"}}
 3> arizona_hierarchical:diff_structures(Old, New).
 [#{type => update_stateful, stateful_id => root,
-   data => [#{type => set_element, element_index => 0, data => <<"New">>}]}]
+   data => [#{type => set_element, element_index => 0, data => ~"New"}]}]
 ```
 """.
 -spec diff_structures(OldStructure, NewStructure) -> HierarchicalDiff when
@@ -316,14 +316,14 @@ according to the specified changes. This is the inverse operation of diff_struct
 ## Examples
 
 ```erlang
-1> Structure = #{root => #{0 => <<"Old">>}}.
-#{root => #{0 => <<"Old">>}}
+1> Structure = #{root => #{0 => ~"Old"}}.
+#{root => #{0 => ~"Old"}}
 2> Diff = [#{type => update_stateful, stateful_id => root,
-2>          data => [#{type => set_element, element_index => 0, data => <<"New">>}]}].
+2>          data => [#{type => set_element, element_index => 0, data => ~"New"}]}].
 [#{type => update_stateful, stateful_id => root,
-   data => [#{type => set_element, element_index => 0, data => <<"New">>}]}]
+   data => [#{type => set_element, element_index => 0, data => ~"New"}]}]
 3> arizona_hierarchical:apply_diff(Diff, Structure).
-#{root => #{0 => <<"New">>}}
+#{root => #{0 => ~"New"}}
 ```
 """.
 -spec apply_diff(Diff, Structure) -> UpdatedStructure when

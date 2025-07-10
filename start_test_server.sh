@@ -10,10 +10,10 @@ exec erl \
     -noshell -eval "
 {ok, _} = application:ensure_all_started(arizona),
 Routes = [
-    {live, <<\"/test/counter\">>, arizona_counter_live},
-    {live, <<\"/test/todo\">>, arizona_todo_app_live},
-    {live_websocket, <<\"/live/websocket\">>},
-    {static, <<\"/assets\">>, {priv_dir, arizona, <<\"static/assets\">>}}
+    {live, ~\"/test/counter\", arizona_counter_live},
+    {live, ~\"/test/todo\", arizona_todo_app_live},
+    {live_websocket, ~\"/live/websocket\"},
+    {static, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}}
 ],
 case arizona_server:start(#{port => 8080, routes => Routes}) of
     {ok, _} -> 

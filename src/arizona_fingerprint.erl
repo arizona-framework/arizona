@@ -88,10 +88,10 @@ component change detection and remount decisions.
 ## Examples
 
 ```erlang
-1> arizona_fingerprint:generate({my_component, #{name => <<"John">>}}).
-<<"123456789">>
+1> arizona_fingerprint:generate({my_component, #{name => ~"John"}}).
+~"123456789"
 2> arizona_fingerprint:generate([item1, item2, item3]).
-<<"987654321">>
+~"987654321"
 ```
 
 ## Performance
@@ -125,14 +125,14 @@ false otherwise.
 ## Examples
 
 ```erlang
-1> Fp1 = arizona_fingerprint:generate({my_component, #{name => <<"John">>}}).
-<<"123456789">>
-2> Fp2 = arizona_fingerprint:generate({my_component, #{name => <<"John">>}}).
-<<"123456789">>
+1> Fp1 = arizona_fingerprint:generate({my_component, #{name => ~"John"}}).
+~"123456789"
+2> Fp2 = arizona_fingerprint:generate({my_component, #{name => ~"John"}}).
+~"123456789"
 3> arizona_fingerprint:match(Fp1, Fp2).
 true
-4> Fp3 = arizona_fingerprint:generate({my_component, #{name => <<"Jane">>}}).
-<<"987654321">>
+4> Fp3 = arizona_fingerprint:generate({my_component, #{name => ~"Jane"}}).
+~"987654321"
 5> arizona_fingerprint:match(Fp1, Fp3).
 false
 ```

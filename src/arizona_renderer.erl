@@ -129,10 +129,10 @@ and diff operations. Updates the socket with the rendered HTML.
 ## Examples
 
 ```erlang
-1> TemplateData = #{elems_order => [0, 1], elems => #{0 => {static, 1, <<"Hello">>}}}.
+1> TemplateData = #{elems_order => [0, 1], elems => #{0 => {static, 1, ~"Hello"}}}.
 #{...}
 2> arizona_renderer:render_stateful(TemplateData, Socket).
-{[<<"Hello">>], UpdatedSocket}
+{[~"Hello"], UpdatedSocket}
 ```
 """.
 -spec render_stateful(TemplateData, Socket) -> {Html, Socket1} when
@@ -154,10 +154,10 @@ rendering without indexed access. Updates the socket with the rendered HTML.
 ## Examples
 
 ```erlang
-1> TemplateData = [{static, 1, <<"Hello">>}, {static, 2, <<"World">>}].
+1> TemplateData = [{static, 1, ~"Hello"}, {static, 2, ~"World"}].
 [...]
 2> arizona_renderer:render_stateless(TemplateData, Socket).
-{[<<"Hello">>, <<"World">>], UpdatedSocket}
+{[~"Hello", ~"World"], UpdatedSocket}
 ```
 """.
 -spec render_stateless(StructuredList, Socket) -> {Html, Socket1} when
@@ -179,12 +179,12 @@ each item against the template structure for optimal performance.
 ## Examples
 
 ```erlang
-1> ListData = #{static => [<<"<li>">>], dynamic => #{...}}.
+1> ListData = #{static => [~"<li>"], dynamic => #{...}}.
 #{...}
 2> Items = [item1, item2, item3].
 [...]
 3> arizona_renderer:render_list(ListData, Items, Socket).
-{[<<"<li>item1</li>">>, <<"<li>item2</li>">>, <<"<li>item3</li>">>], UpdatedSocket}
+{[~"<li>item1</li>", ~"<li>item2</li>", ~"<li>item3</li>"], UpdatedSocket}
 ```
 """.
 -spec render_list(ListData, Items, Socket) -> {Html, Socket1} when
@@ -224,10 +224,10 @@ dynamic function evaluation with comprehensive error handling.
 ## Examples
 
 ```erlang
-1> arizona_renderer:render_element({static, 1, <<"Hello">>}, Socket).
-{<<"Hello">>, Socket}
+1> arizona_renderer:render_element({static, 1, ~"Hello"}, Socket).
+{~"Hello", Socket}
 2> arizona_renderer:render_element({dynamic, 1, Fun}, Socket).
-{<<"Dynamic content">>, UpdatedSocket}
+{~"Dynamic content", UpdatedSocket}
 ```
 """.
 -spec render_element(Element, Socket) -> {Content, Socket1} when
@@ -258,7 +258,7 @@ with proper error handling and context information.
 
 ```erlang
 1> arizona_renderer:evaluate_single_dynamic_element(0, ElemsFuns, Item, Socket).
-{<<"Rendered item content">>, UpdatedSocket}
+{~"Rendered item content", UpdatedSocket}
 ```
 """.
 -spec evaluate_single_dynamic_element(ElemIndex, ElemsFuns, Item, Socket) -> {Content, Socket1} when

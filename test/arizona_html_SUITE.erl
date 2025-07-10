@@ -660,7 +660,7 @@ test_render_live_diff_mode_with_layout(Config) when is_list(Config) ->
     % Test render_live with layout configured and socket in diff mode
     Template = #{
         elems_order => [0],
-        elems => #{0 => {static, 1, <<"<div>Live Content</div>">>}},
+        elems => #{0 => {static, 1, ~"<div>Live Content</div>"}},
         vars_indexes => #{}
     },
 
@@ -696,9 +696,9 @@ test_render_live_diff_mode_with_layout(Config) when is_list(Config) ->
 test_render_slot_with_parsed_template(Config) when is_list(Config) ->
     % Test slot content with parse-transform optimized stateless template
     ParsedTemplate = [
-        {static, 1, <<"<span>">>},
-        {static, 1, <<"Parsed Content">>},
-        {static, 1, <<"</span>">>}
+        {static, 1, ~"<span>"},
+        {static, 1, ~"Parsed Content"},
+        {static, 1, ~"</span>"}
     ],
 
     % Create socket with slot content as parsed template
@@ -709,7 +709,7 @@ test_render_slot_with_parsed_template(Config) when is_list(Config) ->
     UpdatedSocket = arizona_html:render_slot(parsed_slot, Socket),
     ?assert(arizona_socket:is_socket(UpdatedSocket)),
     Html = arizona_socket:get_html(UpdatedSocket),
-    Expected = <<"<span>Parsed Content</span>">>,
+    Expected = ~"<span>Parsed Content</span>",
     ?assertEqual(Expected, iolist_to_binary(Html)).
 
 test_render_slot_with_stateful_component(Config) when is_list(Config) ->
@@ -717,8 +717,8 @@ test_render_slot_with_stateful_component(Config) when is_list(Config) ->
     % Use a mock stateful component that mimics the expected structure
     StatefulComponent =
         {stateful, mock_stateful_module, #{
-            title => <<"Stateful Title">>,
-            content => <<"Stateful Content">>
+            title => ~"Stateful Title",
+            content => ~"Stateful Content"
         }},
 
     % Create socket with stateful component slot

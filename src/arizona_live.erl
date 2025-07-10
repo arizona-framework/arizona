@@ -215,7 +215,7 @@ after rendering.
 
 ```erlang
 1> arizona_live:render(Pid).
-#socket{html_acc = [<<"<div>Hello World</div>">>], ...}
+#socket{html_acc = [~"<div>Hello World</div>"], ...}
 ```
 """.
 -spec render(Pid) -> Socket when
@@ -234,10 +234,10 @@ or reply response with the updated socket.
 ## Examples
 
 ```erlang
-1> arizona_live:handle_event(Pid, <<"click">>, #{<<"target">> => <<"button">>}).
+1> arizona_live:handle_event(Pid, ~"click", #{~"target" => ~"button"}).
 {noreply, #socket{...}}
-2> arizona_live:handle_event(Pid, <<"submit">>, #{<<"form">> => #{<<"name">> => <<"John">>}}).
-{reply, <<"success">>, #socket{...}}
+2> arizona_live:handle_event(Pid, ~"submit", #{~"form" => #{~"name" => ~"John"}}).
+{reply, ~"success", #socket{...}}
 ```
 """.
 -spec handle_event(Pid, Event, Params) -> {noreply, Socket} | {reply, Reply, Socket} when
@@ -319,7 +319,7 @@ by the LiveView process.
 ## Examples
 
 ```erlang
-1> arizona_live:call_handle_event_callback(my_live_view, <<"click">>, #{}, Socket).
+1> arizona_live:call_handle_event_callback(my_live_view, ~"click", #{}, Socket).
 {noreply, #socket{...}}
 ```
 """.

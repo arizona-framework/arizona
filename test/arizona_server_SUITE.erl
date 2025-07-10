@@ -200,7 +200,7 @@ test_static_file_integration(Config) when is_list(Config) ->
     % Test static file serving with real files
     TempDir = proplists:get_value(priv_dir, Config),
     TestFile = filename:join(TempDir, "test.txt"),
-    TestContent = <<"Hello Arizona Server!">>,
+    TestContent = ~"Hello Arizona Server!",
     ok = file:write_file(TestFile, TestContent),
 
     ServerConfig = #{
@@ -229,11 +229,11 @@ test_static_directory_integration(Config) when is_list(Config) ->
 
     % Create multiple files
     IndexFile = filename:join(StaticDir, "index.html"),
-    IndexContent = <<"<html><body>Welcome to Arizona!</body></html>">>,
+    IndexContent = ~"<html><body>Welcome to Arizona!</body></html>",
     ok = file:write_file(IndexFile, IndexContent),
 
     CssFile = filename:join(StaticDir, "style.css"),
-    CssContent = <<"body { color: blue; }">>,
+    CssContent = ~"body { color: blue; }",
     ok = file:write_file(CssFile, CssContent),
 
     ServerConfig = #{

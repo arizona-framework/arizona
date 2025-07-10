@@ -80,9 +80,9 @@ render_function(Socket) -> Socket1 when
 
 ```erlang
 1> arizona_stateless:call_render_callback(button_component, render, Socket).
-#socket{html_acc = [<<"<button>Click me</button>">>], ...}
+#socket{html_acc = [~"<button>Click me</button>"], ...}
 2> arizona_stateless:call_render_callback(card_component, render_title, Socket).
-#socket{html_acc = [<<"<h2>Title</h2>">>], ...}
+#socket{html_acc = [~"<h2>Title</h2>"], ...}
 ```
 
 ## Error Handling

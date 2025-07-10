@@ -84,8 +84,8 @@ component state and performs remounting when necessary.
 ## Examples
 
 ```erlang
-1> Bindings = #{name => <<"John">>, age => 30}.
-#{name => <<"John">>, age => 30}
+1> Bindings = #{name => ~"John", age => 30}.
+#{name => ~"John", age => 30}
 2> arizona_component:call_stateful(user_component, Bindings, Socket).
 #socket{stateful_states = #{root => #state{...}}, ...}
 ```
@@ -145,10 +145,10 @@ simple presentational components.
 ## Examples
 
 ```erlang
-1> Bindings = #{title => <<"Welcome">>, content => <<"Hello World">>}.
-#{title => <<"Welcome">>, content => <<"Hello World">>}
+1> Bindings = #{title => ~"Welcome", content => ~"Hello World"}.
+#{title => ~"Welcome", content => ~"Hello World"}
 2> arizona_component:call_stateless(card_component, render, Bindings, Socket).
-#socket{html_acc = [<<"<div class='card'>...">>], ...}
+#socket{html_acc = [~"<div class='card'>..."], ...}
 ```
 
 ## Performance

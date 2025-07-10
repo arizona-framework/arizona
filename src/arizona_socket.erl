@@ -378,8 +378,8 @@ Updates the socket with HTML content that has been accumulated during rendering.
 ```erlang
 1> Socket = arizona_socket:new(#{}).
 #socket{...}
-2> Socket2 = arizona_socket:set_html_acc([<<"Hello">>, <<"World">>], Socket).
-#socket{html_acc = [<<"Hello">>, <<"World">>], ...}
+2> Socket2 = arizona_socket:set_html_acc([~"Hello", ~"World"], Socket).
+#socket{html_acc = [~"Hello", ~"World"], ...}
 ```
 """.
 -spec set_html_acc(Html, Socket) -> Socket1 when
@@ -419,10 +419,10 @@ Updates the socket with a hierarchical structure for hierarchical rendering mode
 ```erlang
 1> Socket = arizona_socket:new(#{}).
 #socket{...}
-2> Structure = #{root => #{0 => <<"content">>}}.
-#{root => #{0 => <<"content">>}}
+2> Structure = #{root => #{0 => ~"content"}}.
+#{root => #{0 => ~"content"}}
 3> Socket2 = arizona_socket:set_hierarchical_acc(Structure, Socket).
-#socket{hierarchical_acc = #{root => #{0 => <<"content">>}}, ...}
+#socket{hierarchical_acc = #{root => #{0 => ~"content"}}, ...}
 ```
 """.
 -spec set_hierarchical_acc(HierarchicalStructure, Socket) -> Socket1 when
@@ -464,8 +464,8 @@ Stores an element that is pending inclusion in the hierarchical structure.
 ```erlang
 1> Socket = arizona_socket:new(#{}).
 #socket{...}
-2> Element = #{type => stateless, structure => #{0 => <<"content">>}}.
-#{type => stateless, structure => #{0 => <<"content">>}}
+2> Element = #{type => stateless, structure => #{0 => ~"content"}}.
+#{type => stateless, structure => #{0 => ~"content"}}
 3> Socket2 = arizona_socket:set_hierarchical_pending_element(Element, Socket).
 #socket{hierarchical_pending_element = #{type => stateless, ...}, ...}
 ```
@@ -554,10 +554,10 @@ and falling back to stateful component bindings.
 ```erlang
 1> Socket = arizona_socket:new(#{}).
 #socket{...}
-2> Socket2 = arizona_socket:put_binding(name, <<"John">>, Socket).
+2> Socket2 = arizona_socket:put_binding(name, ~"John", Socket).
 #socket{...}
 3> arizona_socket:get_binding(name, Socket2).
-<<"John">>
+~"John"
 ```
 """.
 -spec get_binding(Key, Socket) -> Value when
@@ -585,8 +585,8 @@ Retrieves a binding value, returning the default if the binding is not found.
 ```erlang
 1> Socket = arizona_socket:new(#{}).
 #socket{...}
-2> arizona_socket:get_binding(nonexistent, Socket, <<"default">>).
-<<"default">>
+2> arizona_socket:get_binding(nonexistent, Socket, ~"default").
+~"default"
 ```
 """.
 -spec get_binding(Key, Socket, Default) -> Value when
@@ -616,10 +616,10 @@ Used for stateless component rendering.
 ```erlang
 1> Socket = arizona_socket:new(#{}).
 #socket{...}
-2> Bindings = #{item => <<"value">>}.
-#{item => <<"value">>}
+2> Bindings = #{item => ~"value"}.
+#{item => ~"value"}
 3> Socket2 = arizona_socket:with_temp_bindings(Bindings, Socket).
-#socket{temp_bindings = #{item => <<"value">>}, ...}
+#socket{temp_bindings = #{item => ~"value"}, ...}
 ```
 """.
 -spec with_temp_bindings(Bindings, Socket) -> Socket1 when
@@ -638,10 +638,10 @@ Used for stateless component rendering.
 ## Examples
 
 ```erlang
-1> Socket = arizona_socket:with_temp_bindings(#{item => <<"value">>}, Socket).
+1> Socket = arizona_socket:with_temp_bindings(#{item => ~"value"}, Socket).
 #socket{...}
 2> arizona_socket:get_temp_binding(item, Socket).
-<<"value">>
+~"value"
 3> arizona_socket:get_temp_binding(missing, Socket).
 ** exception throw: {binding_not_found,missing}
 ```
@@ -666,10 +666,10 @@ Stores a binding value in the current stateful component's state.
 ```erlang
 1> Socket = arizona_socket:new(#{}).
 #socket{...}
-2> Socket2 = arizona_socket:put_binding(name, <<"John">>, Socket).
+2> Socket2 = arizona_socket:put_binding(name, ~"John", Socket).
 #socket{...}
 3> arizona_socket:get_binding(name, Socket2).
-<<"John">>
+~"John"
 ```
 """.
 -spec put_binding(Key, Value, Socket) -> Socket1 when
@@ -692,8 +692,8 @@ Stores multiple binding values in the current stateful component's state.
 ```erlang
 1> Socket = arizona_socket:new(#{}).
 #socket{...}
-2> Bindings = #{name => <<"John">>, age => 30}.
-#{name => <<"John">>, age => 30}
+2> Bindings = #{name => ~"John", age => 30}.
+#{name => ~"John", age => 30}
 3> Socket2 = arizona_socket:put_bindings(Bindings, Socket).
 #socket{...}
 ```
@@ -719,10 +719,10 @@ Merges new changes with existing changes in the socket for diff mode operations.
 ```erlang
 1> Socket = arizona_socket:new(#{}).
 #socket{...}
-2> Changes = [{root, [{0, <<"new_content">>}]}].
-[{root, [{0, <<"new_content">>}]}]
+2> Changes = [{root, [{0, ~"new_content"}]}].
+[{root, [{0, ~"new_content"}]}]
 3> Socket2 = arizona_socket:append_changes(Changes, Socket).
-#socket{changes_acc = [{root, [{0, <<"new_content">>}]}], ...}
+#socket{changes_acc = [{root, [{0, ~"new_content"}]}], ...}
 ```
 """.
 -spec append_changes(Changes, Socket) -> Socket1 when
@@ -765,7 +765,7 @@ Resets the changes accumulator to an empty state.
 ## Examples
 
 ```erlang
-1> Socket = arizona_socket:append_changes([{root, [{0, <<"change">>}]}], Socket).
+1> Socket = arizona_socket:append_changes([{root, [{0, ~"change"}]}], Socket).
 #socket{changes_acc = [...], ...}
 2> Socket2 = arizona_socket:clear_changes(Socket).
 #socket{changes_acc = [], ...}

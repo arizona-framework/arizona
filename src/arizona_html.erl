@@ -102,12 +102,12 @@ data generation.
 ## Examples
 
 ```erlang
-1> TemplateData = #{elems_order => [0, 1], elems => #{0 => {static, 1, <<"Hello">>}}}.
+1> TemplateData = #{elems_order => [0, 1], elems => #{0 => {static, 1, ~"Hello"}}}.
 #{...}
 2> Socket = arizona_socket:new(#{mode => render}).
 #socket{...}
 3> arizona_html:render_stateful(TemplateData, Socket).
-#socket{html_acc = [<<"Hello">>], ...}
+#socket{html_acc = [~"Hello"], ...}
 ```
 """.
 -spec render_stateful(Template, Socket) -> Socket1 when
@@ -143,12 +143,12 @@ standard rendering for HTML output.
 ## Examples
 
 ```erlang
-1> TemplateList = [{static, 1, <<"Hello">>}, {static, 2, <<"World">>}].
+1> TemplateList = [{static, 1, ~"Hello"}, {static, 2, ~"World"}].
 [...]
 2> Socket = arizona_socket:new(#{mode => render}).
 #socket{...}
 3> arizona_html:render_stateless(TemplateList, Socket).
-#socket{html_acc = [<<"Hello">>, <<"World">>], ...}
+#socket{html_acc = [~"Hello", ~"World"], ...}
 ```
 """.
 -spec render_stateless(Template, Socket) -> Socket1 when
@@ -179,16 +179,16 @@ parameter name extraction.
 ## Examples
 
 ```erlang
-1> ListData = #{static => [<<"<li>">>], dynamic => #{...}}.
+1> ListData = #{static => [~"<li>"], dynamic => #{...}}.
 #{...}
 2> Items = [item1, item2, item3].
 [...]
 3> arizona_html:render_list(ListData, Items, Socket).
-#socket{html_acc = [<<"<li>item1</li>">>, <<"<li>item2</li>">>, ...], ...}
+#socket{html_acc = [~"<li>item1</li>", ~"<li>item2</li>", ...], ...}
 4> ItemFun = fun(I) -> <<"<p>", I/binary, "</p>">> end.
 #Fun<...>
-5> arizona_html:render_list(ItemFun, [<<"test">>], Socket).
-#socket{html_acc = [<<"<p>test</p>">>], ...}
+5> arizona_html:render_list(ItemFun, [~"test"], Socket).
+#socket{html_acc = [~"<p>test</p>"], ...}
 ```
 """.
 -spec render_list(Template, [Item], Socket) -> Socket1 when
@@ -248,12 +248,12 @@ specified slot, otherwise renders the content directly.
 ## Examples
 
 ```erlang
-1> Template = #{elems_order => [0], elems => #{0 => {static, 1, <<"Content">>}}}.
+1> Template = #{elems_order => [0], elems => #{0 => {static, 1, ~"Content"}}}.
 #{...}
 2> Socket = arizona_socket:new(#{mode => render}).
 #socket{...}
 3> arizona_html:render_live(Template, Socket).
-#socket{html_acc = [<<"Content">>], ...}
+#socket{html_acc = [~"Content"], ...}
 ```
 """.
 -spec render_live(Template, Socket) -> Socket1 when
@@ -301,12 +301,12 @@ for socket returns from nested template calls.
 ## Examples
 
 ```erlang
-1> arizona_html:to_html(<<"Hello">>, Socket).
-{<<"Hello">>, Socket}
+1> arizona_html:to_html(~"Hello", Socket).
+{~"Hello", Socket}
 2> arizona_html:to_html(42, Socket).
-{<<"42">>, Socket}
-3> arizona_html:to_html([<<"Hello">>, <<" ">>, <<"World">>], Socket).
-{[<<"Hello">>, <<" ">>, <<"World">>], Socket}
+{~"42", Socket}
+3> arizona_html:to_html([~"Hello", ~" ", ~"World"], Socket).
+{[~"Hello", ~" ", ~"World"], Socket}
 ```
 """.
 -spec to_html(Value, Socket) -> {Html, Socket1} when
@@ -351,10 +351,10 @@ if the slot is not found. Use render_slot/3 for optional slots with fallbacks.
 ## Examples
 
 ```erlang
-1> Socket = arizona_socket:put_binding(content, <<"Hello World">>, Socket).
+1> Socket = arizona_socket:put_binding(content, ~"Hello World", Socket).
 #socket{...}
 2> arizona_html:render_slot(content, Socket).
-#socket{html_acc = [<<"Hello World">>], ...}
+#socket{html_acc = [~"Hello World"], ...}
 ```
 """.
 -spec render_slot(SlotName, Socket) -> Socket1 when
@@ -376,8 +376,8 @@ value if the slot is not found. Provides safe slot rendering for optional conten
 ```erlang
 1> Socket = arizona_socket:new(#{}).
 #socket{...}
-2> arizona_html:render_slot(missing_slot, Socket, <<"Default content">>).
-#socket{html_acc = [<<"Default content">>], ...}
+2> arizona_html:render_slot(missing_slot, Socket, ~"Default content").
+#socket{html_acc = [~"Default content"], ...}
 ```
 """.
 -spec render_slot(SlotName, Socket, Default) -> Socket1 when

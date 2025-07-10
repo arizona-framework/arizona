@@ -128,10 +128,10 @@ Uses the vars_indexes optimization to avoid checking unchanged elements.
 ```erlang
 1> TemplateData = #{elems => #{0 => {dynamic, 1, fun...}}, vars_indexes => #{name => [0]}}.
 #{...}
-2> StatefulState = arizona_stateful:put_binding(name, <<"John">>, State).
-#state{changed_bindings = #{name => <<"John">>}, ...}
+2> StatefulState = arizona_stateful:put_binding(name, ~"John", State).
+#state{changed_bindings = #{name => ~"John"}, ...}
 3> arizona_differ:diff_stateful(TemplateData, StatefulState, Socket).
-#socket{changes = [{root, [{0, <<"John">>}]}], ...}
+#socket{changes = [{root, [{0, ~"John"}]}], ...}
 ```
 
 ## Performance
@@ -186,8 +186,8 @@ re-rendered based on the changed variable bindings.
 ## Examples
 
 ```erlang
-1> ChangedBindings = #{name => <<"John">>, age => 30}.
-#{name => <<"John">>, age => 30}
+1> ChangedBindings = #{name => ~"John", age => 30}.
+#{name => ~"John", age => 30}
 2> VarsIndexes = #{name => [0, 2], age => [1], city => [3]}.
 #{name => [0, 2], age => [1], city => [3]}
 3> arizona_differ:get_affected_elements(ChangedBindings, VarsIndexes).
