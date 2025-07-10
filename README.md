@@ -241,7 +241,8 @@ I also accept coffees :coffee:
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing guidelines, and contribution workflow.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup,
+testing guidelines, and contribution workflow.
 
 ## License
 

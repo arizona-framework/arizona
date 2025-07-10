@@ -97,7 +97,8 @@ npm run lint:check
 
 ## Pre-commit Hooks
 
-Arizona includes pre-commit hooks that automatically run when you commit. These hooks help maintain code quality and prevent common issues.
+Arizona includes pre-commit hooks that automatically run when you commit. These hooks help
+maintain code quality and prevent common issues.
 
 ### What Gets Checked
 
