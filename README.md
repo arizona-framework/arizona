@@ -219,26 +219,9 @@ performance for real-time applications.
 
 For detailed API documentation, see the module documentation in the source code.
 
-## Testing
+## Requirements
 
-Arizona includes comprehensive test coverage:
-
-```bash
-# Run integration tests with Common Test
-$ rebar3 ct
-
-# Run JavaScript unit tests
-$ npm test
-```
-
-## Development
-
-Arizona uses modern Erlang/OTP patterns and requires OTP 27+:
-
-- Comprehensive type contracts with Dialyzer
-- Elvis linting for code quality
-- Xref analysis for unused exports
-- Full test coverage with 319+ tests
+- Erlang/OTP 27+
 
 ## Performance
 
@@ -258,9 +241,7 @@ I also accept coffees :coffee:
 
 ## Contributing
 
-### Issues
-
-Feel free to [submit an issue on Github](https://github.com/williamthome/arizona/issues/new).
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing guidelines, and contribution workflow.
 
 ## License
 

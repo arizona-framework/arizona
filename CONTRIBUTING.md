@@ -1,5 +1,8 @@
 # Contributing to Arizona
 
+1. [Development Setup](#development-setup)
+1. [Testing](#testing)
+1. [Pre-commit Hooks](#pre-commit-hooks)
 1. [License](#license)
 1. [Reporting a bug](#reporting-a-bug)
 1. [Requesting or implementing a feature](#requesting-or-implementing-a-feature)
@@ -8,6 +11,116 @@
    1. [Committing your changes](#committing-your-changes)
    1. [Pull requests and branching](#pull-requests-and-branching)
    1. [Credits](#credits)
+
+## Development Setup
+
+Arizona uses modern Erlang/OTP patterns. See [.tool-versions](../.tool-versions) for exact version requirements.
+
+### Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/arizona-framework/arizona.git
+cd arizona
+
+# Install JavaScript dependencies (includes Husky pre-commit hooks)
+npm install
+
+# Compile Erlang code
+rebar3 compile
+
+# Run all checks and tests to verify setup
+rebar3 ci
+npm test
+```
+
+### Code Quality Tools
+
+Arizona maintains high code quality with:
+
+- **Comprehensive type contracts** with Dialyzer
+- **Elvis linting** for code quality
+- **Xref analysis** for unused exports
+- **Full test coverage** with 319+ tests
+- **Pre-commit hooks** with Husky for automatic quality checks
+
+## Testing
+
+Arizona includes comprehensive test coverage across multiple layers:
+
+### Erlang Tests
+
+```bash
+# Run all checks and tests (recommended)
+rebar3 ci
+
+# Run individual checks
+rebar3 check    # lint, hank, xref, dialyzer
+rebar3 ct       # Common Test suites
+
+# Run specific test suite
+rebar3 ct --suite test/arizona_live_SUITE
+
+# Run with coverage
+rebar3 as test do ct, cover -v
+```
+
+### JavaScript Tests
+
+```bash
+# Run unit tests
+npm run test:unit
+
+# Run E2E tests (requires compiled Erlang code)
+npm run test:e2e
+
+# Run all tests
+npm test
+
+# Check code formatting
+npm run format:check
+npm run lint:check
+```
+
+### Manual Testing
+
+```bash
+# Start test server for manual testing
+./scripts/start_test_server.sh
+
+# Visit http://localhost:8080/test/counter
+# Visit http://localhost:8080/test/todo
+```
+
+## Pre-commit Hooks
+
+Arizona includes pre-commit hooks that automatically run when you commit. These hooks help maintain code quality and prevent common issues.
+
+### What Gets Checked
+
+- **Commit message format** (72 character limit)
+- **Merge conflict markers** detection
+- **Erlang code formatting** (`rebar3 fmt --check`)
+- **JavaScript code formatting** (`npm run format:check`)
+
+### Automatic Installation
+
+The hooks are automatically installed when you run `npm install` thanks to Husky. No manual setup required!
+
+### Fixing Issues
+
+If a hook fails, fix the issue and try committing again:
+
+```bash
+# Fix Erlang formatting
+rebar3 fmt
+
+# Fix JavaScript formatting
+npm run format
+
+# Then commit again
+git commit -m "Your commit message"
+```
 
 ## License
 
