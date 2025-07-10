@@ -258,7 +258,7 @@ jobs:
       - name: Start test server in background
         run: |
           # Start server in background without timeout wrapper
-          ./start_test_server.sh &
+          ./scripts/start_test_server.sh &
           SERVER_PID=$!
           echo "Started server with PID: ${SERVER_PID}"
           echo "${SERVER_PID}" > server.pid
