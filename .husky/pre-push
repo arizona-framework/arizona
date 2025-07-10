@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# Pre-push hook for Arizona project
+# Performs comprehensive quality checks before pushing
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo -e "${GREEN}Running pre-push checks...${NC}"
+
+# 1. Run Erlang checks and tests
+echo -e "${YELLOW}→ Running rebar3 ci...${NC}"
+rebar3 ci
+
+# 2. Verify build succeeds and check for changes
+echo -e "${YELLOW}→ Running npm run build...${NC}"
+npm run build
+
+echo -e "${YELLOW}→ Checking for uncommitted changes after build...${NC}"
+git diff --exit-code
+
+# 3. Run JavaScript checks and tests
+echo -e "${YELLOW}→ Running npm run ci...${NC}"
+npm run ci
+
+echo -e "${GREEN}✓ All pre-push checks passed! Ready to push.${NC}"
