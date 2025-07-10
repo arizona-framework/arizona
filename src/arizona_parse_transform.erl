@@ -173,9 +173,10 @@ that can be used for efficient runtime rendering.
 -spec transform_stateful_to_ast(StatefulResult) -> SyntaxTree when
     StatefulResult :: arizona_parser:stateful_result(),
     SyntaxTree :: erl_syntax:syntaxTree().
-transform_stateful_to_ast(#{
-    elems_order := Order, elems := Elements, vars_indexes := VarsIndexes
-}) ->
+transform_stateful_to_ast(#{elems_order := Order, elems := Elements} = StatefulResult) ->
+    %% Get vars_indexes or generate empty one for runtime fallback
+    VarsIndexes = maps:get(vars_indexes, StatefulResult, #{}),
+
     %% Create AST for optimized template data map
     OrderAST = erl_syntax:list([erl_syntax:integer(I) || I <- Order]),
     ElementsAST = create_elements_map_ast(Elements),
