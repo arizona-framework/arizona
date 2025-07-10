@@ -68,13 +68,12 @@ export default defineConfig({
   ],
 
   /* Run your local dev server before starting the tests */
-  // webServer: {
-  //   command: `rebar3 as test shell --eval "arizona_test_server:start()."`,
-  //   url: 'http://localhost:8080/test/counter',
-  //   reuseExistingServer: !process.env.CI,
-  //   stdout: 'pipe',
-  //   stderr: 'pipe',
-  //   timeout: 15000,
-  //   kill: { SIGTERM: 5000 },
-  // },
+  webServer: {
+    command: './scripts/start_test_server.sh',
+    url: 'http://localhost:8080/test/counter', // TODO: Create dedicated /healthcheck endpoint
+    reuseExistingServer: !process.env.CI,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    timeout: 30000,
+  },
 });

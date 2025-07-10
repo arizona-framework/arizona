@@ -10,10 +10,9 @@
     "format:lint": "npm run format && npm run lint",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "vitest run",
-    "test:e2e:check": "node scripts/check-server.js",
-    "test:e2e": "npm run test:e2e:check && playwright test --reporter=line",
-    "test:e2e:report": "npm run test:e2e:check && playwright test",
-    "test:e2e:ui": "npm run test:e2e:check && playwright test --ui",
+    "test:e2e": "playwright test --reporter=line",
+    "test:e2e:report": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "ci": "npm run format:check && npm run lint:check && npm test"
   },
   "devDependencies": {
