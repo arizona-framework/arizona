@@ -402,16 +402,13 @@ test_transform_stateless_to_ast(Config) when is_list(Config) ->
 
 %% Test transform_stateful_to_ast function directly
 test_transform_stateful_to_ast(Config) when is_list(Config) ->
-    % Create a stateful result with only static elements to test vars_indexes path
+    % Create a stateful result matching new parser format (without vars_indexes)
     StatefulResult = #{
         elems_order => [1, 2, 3],
         elems => #{
             1 => {static, 1, ~"Hello, "},
             2 => {dynamic, 1, ~"arizona_socket:get_binding(name, Socket)"},
             3 => {static, 1, ~"!"}
-        },
-        vars_indexes => #{
-            ~"name" => [2]
         }
     },
 
@@ -422,7 +419,7 @@ test_transform_stateful_to_ast(Config) when is_list(Config) ->
     ?assert(erl_syntax:is_tree(ResultAST)),
     ?assertEqual(map_expr, erl_syntax:type(ResultAST)),
 
-    ct:comment("transform_stateful_to_ast handles variable indexes correctly").
+    ct:comment("transform_stateful_to_ast handles new parser format correctly").
 
 %% Test stateless with pure binary literals
 test_stateless_binary_handling(Config) when is_list(Config) ->
