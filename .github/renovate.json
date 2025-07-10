@@ -24,15 +24,15 @@
       "groupName": "Docker deps"
     },
     {
-      "matchPackagePrefixes": ["minimum_otp_vsn"],
-      "enabled": false
+      "enabled": false,
+      "matchPackageNames": ["minimum_otp_vsn{/,}**"]
     }
   ],
   "customManagers": [
     {
       "description": "Match versions (per datasource and depName) in .github/**/*.yml",
       "customType": "regex",
-      "fileMatch": [".github/.*/.*\\.yml"],
+      "managerFilePatterns": ["/.github/.*/.*\\.yml/"],
       "matchStrings": [
         "# renovate datasource: (?<datasource>[^,]+), depName: (?<depName>[^\\n]+)\\n.+?(?<currentValue>v?\\d+(\\.\\d+(\\.\\d+)?)?(-[^\\n]+)?)\\n"
       ]
@@ -40,7 +40,7 @@
     {
       "description": "Match versions in rebar.config",
       "customType": "regex",
-      "fileMatch": ["rebar.config"],
+      "managerFilePatterns": ["/rebar.config/"],
       "datasourceTemplate": "hex",
       "matchStrings": [
         "{(?<depName>[^,]+), \"(?<currentValue>\\d+\\.\\d+(\\.\\d+)?)\""
@@ -50,7 +50,7 @@
     {
       "description": "Match versions (per datasource and depName) in Dockerfile",
       "customType": "regex",
-      "fileMatch": ["Dockerfile"],
+      "managerFilePatterns": ["/Dockerfile/"],
       "matchStrings": [
         "# renovate datasource: (?<datasource>[^,]+), depName: (?<depName>[^\\n]+)\\nENV .+?_VERSION=\"(?<currentValue>[^\"]+)\""
       ],
