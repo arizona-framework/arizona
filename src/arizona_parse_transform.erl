@@ -561,8 +561,8 @@ transform_template_calls_with_context(
     ModuleName,
     CompilerOptions,
     Depth,
-    ArizonaFunctions,
-    FunctionBindings,
+    _ArizonaFunctions,
+    _FunctionBindings,
     CurrentFunctionBindings
 ) ->
     transform_arizona_html_call_with_context(
@@ -573,8 +573,6 @@ transform_template_calls_with_context(
         ModuleName,
         CompilerOptions,
         Depth,
-        ArizonaFunctions,
-        FunctionBindings,
         CurrentFunctionBindings
     );
 transform_template_calls_with_context(
@@ -597,8 +595,6 @@ transform_template_calls_with_context(
     atom(),
     compile_options(),
     non_neg_integer(),
-    [function_spec()],
-    #{function_spec() => #{binary() => binary()}},
     #{binary() => binary()}
 ) -> erl_parse:abstract_expr().
 transform_arizona_html_call_with_context(
@@ -609,8 +605,6 @@ transform_arizona_html_call_with_context(
     ModuleName,
     CompilerOptions,
     Depth,
-    _ArizonaFunctions,
-    _FunctionBindings,
     CurrentFunctionBindings
 ) ->
     %% Use current function bindings for enhanced template processing
@@ -640,8 +634,6 @@ transform_arizona_html_call_with_context(
     ModuleName,
     CompilerOptions,
     Depth,
-    _ArizonaFunctions,
-    _FunctionBindings,
     _CurrentFunctionBindings
 ) ->
     %% Fall back to regular transformation for other functions
