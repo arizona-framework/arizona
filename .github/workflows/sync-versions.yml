@@ -26,8 +26,8 @@ jobs:
       - name: Sync version files
         run: |
           NODE_VERSION=$(grep nodejs .tool-versions | cut -d' ' -f2)
-          echo "Found Node.js version: $NODE_VERSION"
-          echo "$NODE_VERSION" > .nvmrc
+          echo "Found Node.js version: ${NODE_VERSION}"
+          echo "${NODE_VERSION}" > .nvmrc
 
       - name: Commit changes if needed
         run: |
