@@ -3,8 +3,8 @@
   "type": "module",
   "scripts": {
     "build": "node ./esbuild.config.js",
-    "format": "prettier --write \"./*.js\" \"./assets/**/*.js\" \"**/*.json\" \"**/*.yml\" --config prettier.config.js --ignore-path .prettierignore",
-    "format:check": "prettier --check \"./*.js\" \"./assets/**/*.js\" \"**/*.json\" \"**/*.yml\" --config prettier.config.js --ignore-path .prettierignore",
+    "format": "prettier --write \"./*.js\" \"./assets/**/*.js\" \"**/*.json\" \"**/*.yml\" --config prettier.config.js --ignore-path .gitignore --ignore-path .prettierignore",
+    "format:check": "prettier --check \"./*.js\" \"./assets/**/*.js\" \"**/*.json\" \"**/*.yml\" --config prettier.config.js --ignore-path .gitignore --ignore-path .prettierignore",
     "lint:js": "eslint eslint.config.js --fix",
     "lint:js:check": "eslint eslint.config.js",
     "lint:md": "markdownlint-cli2 \".github/**/*.md\" \"*.md\"",
