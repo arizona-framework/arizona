@@ -896,7 +896,6 @@ test_enhanced_parse_transform_todo_app_scenario(Config) when is_list(Config) ->
 
     % Convert to string to analyze the generated code
     TransformedCode = iolist_to_binary(erl_pp:form(RenderFunction)),
-    ct:pal("Enhanced TODO scenario transformed code: ~s", [TransformedCode]),
 
     % Verify basic vars_indexes structure exists
     ?assert(binary:match(TransformedCode, ~"vars_indexes") =/= nomatch),
@@ -906,7 +905,8 @@ test_enhanced_parse_transform_todo_app_scenario(Config) when is_list(Config) ->
 
     % NewTodoText -> element 1
     ?assert(binary:match(TransformedCode, ~"new_todo_text => [1]") =/= nomatch),
-    % With enhanced analysis, filter affects both element 7 (Filter var) and element 3 (FilteredTodos)
+    % With enhanced analysis, filter affects both element 7 (Filter var)
+    % and element 3 (FilteredTodos)
     FilterMatches = binary:matches(TransformedCode, ~"filter"),
     ?assert(length(FilterMatches) > 0),
 
@@ -922,17 +922,17 @@ test_enhanced_parse_transform_todo_app_scenario(Config) when is_list(Config) ->
 
     case VarsIndexesMatch of
         {match, [VarsIndexesStr]} ->
-            ct:pal("Generated vars_indexes: ~s", [VarsIndexesStr]),
-
             % Enhanced behavior: todos mappings should now exist
             ?assert(binary:match(VarsIndexesStr, ~"todos") =/= nomatch),
 
             % Verify todos mapping includes elements that depend on todos
-            % With enhanced analysis, this should include elements for FilteredTodos and UncompletedLength
+            % With enhanced analysis, this should include elements for
+            % FilteredTodos and UncompletedLength
             case binary:match(VarsIndexesStr, ~"todos") of
                 {_, _} ->
                     % todos mapping exists - this is good!
-                    % The exact elements may vary but should include element 3 (FilteredTodos) and 5 (UncompletedLength)
+                    % The exact elements may vary but should include element 3
+                    % (FilteredTodos) and 5 (UncompletedLength)
 
                     % FilteredTodos element
                     ?assert(binary:match(VarsIndexesStr, ~"3") =/= nomatch),
@@ -946,7 +946,8 @@ test_enhanced_parse_transform_todo_app_scenario(Config) when is_list(Config) ->
     end,
 
     ct:comment(
-        "SUCCESS: Enhanced parse transform correctly generates todos mappings with transitive dependencies!"
+        "SUCCESS: Enhanced parse transform correctly generates todos mappings " ++
+            "with transitive dependencies!"
     ).
 
 %% --------------------------------------------------------------------
@@ -964,14 +965,15 @@ test_current_function_bindings_issue(Config) when is_list(Config) ->
     TodoFunction = merl:quote(~""""
     render(Socket) ->
         NewTodoText = arizona_socket:get_binding(new_todo_text, Socket),
-        FilteredTodos = some_module:filter_function(arizona_socket:get_binding(todos, Socket), arizona_socket:get_binding(filter, Socket)),
+        FilteredTodos = some_module:filter_function(
+            arizona_socket:get_binding(todos, Socket),
+            arizona_socket:get_binding(filter, Socket)
+        ),
         arizona_html:render_live(~"<div>{NewTodoText}{FilteredTodos}</div>", Socket).
     """"),
 
     % Test analyze_function_for_bindings directly
-    ct:pal("Testing analyze_function_for_bindings with TODO app function..."),
     VarBindings = arizona_parse_transform:analyze_function_for_bindings(TodoFunction),
-    ct:pal("analyze_function_for_bindings result: ~p", [VarBindings]),
 
     % EXPECTED: Should capture that FilteredTodos depends on [todos, filter]
     % ACTUAL: Currently only captures direct assignments like NewTodoText -> [new_todo_text]
@@ -981,24 +983,8 @@ test_current_function_bindings_issue(Config) when is_list(Config) ->
         ~"FilteredTodos" => [~"todos", ~"filter"]
     },
 
-    % This assertion should FAIL showing the current issue
-    case maps:get(~"FilteredTodos", VarBindings, undefined) of
-        undefined ->
-            ct:pal("BUG CONFIRMED: FilteredTodos variable not captured in binding analysis"),
-            ct:pal("Current VarBindings: ~p", [VarBindings]),
-            ct:pal("Expected: FilteredTodos should map to [todos, filter]");
-        FilteredTodosDeps ->
-            ct:pal("FilteredTodos dependencies found: ~p", [FilteredTodosDeps]),
-            % Check if dependencies are correct
-            case lists:sort(FilteredTodosDeps) of
-                [~"filter", ~"todos"] ->
-                    ct:pal("SUCCESS: FilteredTodos correctly maps to [filter, todos]");
-                Other ->
-                    ct:pal("PARTIAL: FilteredTodos found but with incorrect dependencies: ~p", [
-                        Other
-                    ])
-            end
-    end,
+    % Test that FilteredTodos dependencies are captured correctly
+    ?assertMatch(#{~"FilteredTodos" := [~"filter", ~"todos"]}, VarBindings),
 
     ct:comment("PHASE 2: Test build_function_bindings_map function"),
 
@@ -1009,7 +995,10 @@ test_current_function_bindings_issue(Config) when is_list(Config) ->
 
     render(Socket) ->
         NewTodoText = arizona_socket:get_binding(new_todo_text, Socket),
-        FilteredTodos = some_module:filter_function(arizona_socket:get_binding(todos, Socket), arizona_socket:get_binding(filter, Socket)),
+        FilteredTodos = some_module:filter_function(
+            arizona_socket:get_binding(todos, Socket),
+            arizona_socket:get_binding(filter, Socket)
+        ),
         arizona_html:render_live(~"<div>{NewTodoText}{FilteredTodos}</div>", Socket).
     """"),
 
@@ -1018,11 +1007,8 @@ test_current_function_bindings_issue(Config) when is_list(Config) ->
         FullForms, ArizonaFunctions
     ),
 
-    ct:pal("build_function_bindings_map result: ~p", [FunctionBindings]),
-
     % Get the render/1 function bindings
     RenderBindings = maps:get({render, 1}, FunctionBindings, #{}),
-    ct:pal("Render function bindings: ~p", [RenderBindings]),
 
     ct:comment("PHASE 3: Test vars_indexes generation"),
 
@@ -1039,46 +1025,18 @@ test_current_function_bindings_issue(Config) when is_list(Config) ->
         }
     },
 
-    ct:pal("Testing vars_indexes generation..."),
-    VarsIndexes = arizona_parse_transform:generate_vars_indexes(TemplateStructure, RenderBindings),
-    ct:pal("Generated vars_indexes: ~p", [VarsIndexes]),
-
-    % Expected result after fix:
-    ExpectedVarsIndexes = #{
-        % NewTodoText maps to element 1
-        ~"new_todo_text" => [1],
-        % FilteredTodos maps to element 2 (depends on todos)
-        ~"todos" => [2],
-        % FilteredTodos maps to element 2 (depends on filter)
-        ~"filter" => [2]
-    },
-
-    % This shows what's missing
-    ct:pal("Expected vars_indexes: ~p", [ExpectedVarsIndexes]),
-    ct:pal("Actual vars_indexes: ~p", [VarsIndexes]),
-
-    % Identify the gap
-    case maps:get(~"todos", VarsIndexes, undefined) of
-        undefined ->
-            ct:pal("ISSUE CONFIRMED: todos binding missing from vars_indexes"),
-            ct:pal("ROOT CAUSE: FilteredTodos variable not linked to its binding dependencies");
-        TodosIndexes ->
-            ct:pal("todos mapping found: ~p", [TodosIndexes])
-    end,
+    _VarsIndexes = arizona_parse_transform:generate_vars_indexes(TemplateStructure, RenderBindings),
 
     ct:comment("PHASE 4: Root cause analysis"),
 
     % The issue is in analyze_node_for_bindings - it only captures direct assignments:
     % NewTodoText = arizona_socket:get_binding(new_todo_text, Socket)  ✓ CAPTURED
-    % FilteredTodos = some_module:filter(...arizona_socket:get_binding(todos, Socket)...) ✗ NOT CAPTURED
+    % FilteredTodos = some_module:filter(...arizona_socket:get_binding(todos, Socket)...)
+    % ✗ NOT CAPTURED
 
-    ct:pal("ROOT CAUSE IDENTIFIED:"),
-    ct:pal(
-        "- analyze_node_for_bindings only captures direct arizona_socket:get_binding assignments"
+    ct:comment(
+        "analyze_node_for_bindings only captures direct arizona_socket:get_binding assignments"
     ),
-    ct:pal("- Complex expressions with nested get_binding calls are not analyzed"),
-    ct:pal("- Variables like FilteredTodos that depend on bindings indirectly are lost"),
-    ct:pal("- This breaks vars_indexes generation for change detection"),
 
     ct:comment("Current function bindings issue isolated - see test output for details").
 
@@ -1092,14 +1050,13 @@ test_enhanced_binding_analysis_needed(Config) when is_list(Config) ->
     ComplexFunction1 = merl:quote(~""""
     render(Socket) ->
         FilteredTodos = some_module:filter_function(
-            arizona_socket:get_binding(todos, Socket), 
+            arizona_socket:get_binding(todos, Socket),
             arizona_socket:get_binding(filter, Socket)
         ),
         FilteredTodos.
     """"),
 
-    Bindings1 = arizona_parse_transform:analyze_function_for_bindings(ComplexFunction1),
-    ct:pal("Pattern 1 - Function call with nested bindings: ~p", [Bindings1]),
+    _Bindings1 = arizona_parse_transform:analyze_function_for_bindings(ComplexFunction1),
 
     % Pattern 2: Arithmetic with get_binding
     ComplexFunction2 = merl:quote(~""""
@@ -1108,8 +1065,7 @@ test_enhanced_binding_analysis_needed(Config) when is_list(Config) ->
         TodosLength.
     """"),
 
-    Bindings2 = arizona_parse_transform:analyze_function_for_bindings(ComplexFunction2),
-    ct:pal("Pattern 2 - Function call with get_binding arg: ~p", [Bindings2]),
+    _Bindings2 = arizona_parse_transform:analyze_function_for_bindings(ComplexFunction2),
 
     % Pattern 3: Case expression with get_binding
     ComplexFunction3 = merl:quote(~""""
@@ -1121,8 +1077,7 @@ test_enhanced_binding_analysis_needed(Config) when is_list(Config) ->
         Result.
     """"),
 
-    Bindings3 = arizona_parse_transform:analyze_function_for_bindings(ComplexFunction3),
-    ct:pal("Pattern 3 - Case with conditional bindings: ~p", [Bindings3]),
+    _Bindings3 = arizona_parse_transform:analyze_function_for_bindings(ComplexFunction3),
 
     % These should all capture the binding dependencies but currently don't
     % Enhanced analysis would need to traverse the entire RHS of assignments
@@ -1144,7 +1099,7 @@ test_proposed_current_function_bindings_fix(Config) when is_list(Config) ->
     render(Socket) ->
         NewTodoText = arizona_socket:get_binding(new_todo_text, Socket),
         FilteredTodos = some_module:filter_function(
-            arizona_socket:get_binding(todos, Socket), 
+            arizona_socket:get_binding(todos, Socket),
             arizona_socket:get_binding(filter, Socket)
         ),
         arizona_html:render_live(~"<div>{NewTodoText}{FilteredTodos}</div>", Socket).
@@ -1152,7 +1107,6 @@ test_proposed_current_function_bindings_fix(Config) when is_list(Config) ->
 
     % After fix, this should capture both direct and indirect dependencies
     VarBindings = arizona_parse_transform:analyze_function_for_bindings(TestFunction),
-    ct:pal("Fixed analyze_function_for_bindings result: ~p", [VarBindings]),
 
     % Verify the fix captures all dependencies
     ExpectedAfterFix = #{
@@ -1163,9 +1117,7 @@ test_proposed_current_function_bindings_fix(Config) when is_list(Config) ->
 
     case VarBindings of
         ExpectedAfterFix ->
-            ct:pal("SUCCESS: Fix correctly captures all binding dependencies"),
             ct:comment("CurrentFunctionBindings fix verified");
-        Other ->
-            ct:pal("FIX INCOMPLETE: Got ~p, expected ~p", [Other, ExpectedAfterFix]),
+        _Other ->
             ct:comment("CurrentFunctionBindings fix needs more work")
     end.

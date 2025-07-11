@@ -198,7 +198,7 @@ parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
     %% Build function-to-bindings mapping for arizona functions
     FunctionBindings = build_function_bindings_map(AbstractSyntaxTrees, ArizonaFunctions),
 
-    TransformedForms = erl_syntax:revert_forms([
+    erl_syntax:revert_forms([
         transform_form_with_context(
             FormTree,
             ModuleName,
@@ -208,22 +208,7 @@ parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
             FunctionBindings
         )
      || FormTree <- AbstractSyntaxTrees
-    ]),
-
-    %% Debug: Write transformed forms to /tmp/<module>.erl for any module with enhanced transform
-    case ArizonaFunctions of
-        [] ->
-            % No Arizona functions, skip
-            ok;
-        _ ->
-            OutputFile = "/tmp/" ++ atom_to_list(ModuleName) ++ ".erl",
-            FormattedCode = lists:map(fun erl_pp:form/1, TransformedForms),
-            Content = lists:flatten(FormattedCode),
-            file:write_file(OutputFile, Content),
-            io:format("DEBUG: Wrote transformed forms to ~s~n", [OutputFile])
-    end,
-
-    TransformedForms.
+    ]).
 
 -doc ~"""
 Format error messages for compilation diagnostics.
@@ -351,7 +336,7 @@ build_function_bindings_map(AbstractSyntaxTrees, ArizonaFunctions) ->
 %% Analyze function AST to extract arizona_socket:get_binding calls
 -spec analyze_function_for_bindings(Function) -> VarBindings when
     Function :: erl_parse:abstract_form(),
-    VarBindings :: #{binary() => binary()}.
+    VarBindings :: #{binary() => [binary()]}.
 analyze_function_for_bindings({function, _Line, _Name, _Arity, _Clauses} = Function) ->
     %% Use erl_syntax_lib:map to traverse ALL AST nodes systematically
     CollectedBindings = collect_bindings_from_function(Function),
@@ -482,11 +467,21 @@ collect_variables_recursively(AST, Acc) ->
 
 %% Resolve transitive dependencies by replacing variable references with their binding dependencies
 -spec resolve_transitive_dependencies(Bindings) -> ResolvedBindings when
-    Bindings :: #{binary() => [binary()]},
+    Bindings :: #{binary() => binary() | [binary()]},
     ResolvedBindings :: #{binary() => [binary()]}.
 resolve_transitive_dependencies(Bindings) ->
+    %% Normalize values to lists first
+    NormalizedBindings = maps:map(
+        fun(_Key, Value) ->
+            case Value of
+                Bin when is_binary(Bin) -> [Bin];
+                List when is_list(List) -> List
+            end
+        end,
+        Bindings
+    ),
     %% Iteratively resolve until no more changes occur
-    resolve_until_stable(Bindings, Bindings).
+    resolve_until_stable(NormalizedBindings, NormalizedBindings).
 
 %% Keep resolving dependencies until no changes occur
 -spec resolve_until_stable(Current, Previous) -> Resolved when
@@ -591,7 +586,8 @@ process_element_variables(VarNames, Index, VarToBinding, Acc) ->
             case maps:get(VarName, VarToBinding, undefined) of
                 undefined ->
                     %% For basic parse transform, variable name IS the binding name
-                    %% For enhanced parse transform with empty VarToBinding, also treat as direct binding
+                    %% For enhanced parse transform with empty VarToBinding,
+                    %% also treat as direct binding
                     case map_size(VarToBinding) of
                         0 ->
                             %% Basic parse transform: variable name = binding name
@@ -629,7 +625,8 @@ add_binding_index(BindingName, Index, Acc) ->
     Variables :: [binary()].
 extract_variables_from_expression(ExprText) ->
     %% Find variable references in template expressions
-    %% This handles both simple variables like {VarName} and binding calls like {arizona_socket:get_binding(binding_name, Socket)}
+    %% This handles both simple variables like {VarName} and binding calls
+    %% like {arizona_socket:get_binding(binding_name, Socket)}
 
     %% First, try to match simple variable patterns like "Count"
     SimpleVars =
@@ -852,8 +849,8 @@ transform_arizona_html_call_with_context(
     RemoteCall,
     Args,
     ModuleName,
-    CompilerOptions,
-    Depth,
+    _CompilerOptions,
+    _Depth,
     CurrentFunctionBindings
 ) ->
     %% Use current function bindings for enhanced template processing
@@ -861,7 +858,7 @@ transform_arizona_html_call_with_context(
         EmptyMap when map_size(EmptyMap) =:= 0 ->
             %% No current function context, use regular transformation
             transform_render_stateful_call(
-                CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+                CallAnnotations, RemoteCall, Args, ModuleName
             );
         _ ->
             %% We have function bindings, use enhanced transformation
@@ -879,8 +876,8 @@ transform_arizona_html_call_with_context(
     RemoteCall,
     Args,
     ModuleName,
-    CompilerOptions,
-    Depth,
+    _CompilerOptions,
+    _Depth,
     CurrentFunctionBindings
 ) ->
     %% Treat render_live the same as render_stateful for enhanced processing
@@ -888,7 +885,7 @@ transform_arizona_html_call_with_context(
         EmptyMap when map_size(EmptyMap) =:= 0 ->
             %% No current function context, use regular transformation
             transform_render_stateful_call(
-                CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+                CallAnnotations, RemoteCall, Args, ModuleName
             );
         _ ->
             %% We have function bindings, use enhanced transformation
@@ -932,10 +929,10 @@ transform_arizona_html_call(
         CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
     );
 transform_arizona_html_call(
-    render_stateful, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+    render_stateful, CallAnnotations, RemoteCall, Args, ModuleName, _CompilerOptions, _Depth
 ) ->
     transform_render_stateful_call(
-        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+        CallAnnotations, RemoteCall, Args, ModuleName
     );
 transform_arizona_html_call(
     render_list, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
@@ -950,10 +947,10 @@ transform_arizona_html_call(
         CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
     );
 transform_arizona_html_call(
-    render_live, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+    render_live, CallAnnotations, RemoteCall, Args, ModuleName, _CompilerOptions, _Depth
 ) ->
     transform_render_stateful_call(
-        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+        CallAnnotations, RemoteCall, Args, ModuleName
     );
 transform_arizona_html_call(
     _FunctionName, CallAnnotations, RemoteCall, Args, _ModuleName, _CompilerOptions, _Depth
@@ -1024,23 +1021,19 @@ transform_render_stateful_call_with_context(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
     [erl_parse:abstract_expr()],
-    atom(),
-    compile_options(),
-    non_neg_integer()
+    atom()
 ) -> erl_parse:abstract_expr().
 transform_render_stateful_call(
     CallAnnotations,
     RemoteCall,
     [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg],
-    ModuleName,
-    CompilerOptions,
-    Depth
+    ModuleName
 ) ->
     transform_stateful_template_call(
-        CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, CompilerOptions, Depth
+        CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName
     );
 transform_render_stateful_call(
-    CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
+    CallAnnotations, _RemoteCall, _Args, ModuleName
 ) ->
     Line = erl_anno:line(CallAnnotations),
     raise_template_error(badarg, ModuleName, Line).
@@ -1262,12 +1255,10 @@ transform_stateful_template_call_with_context(
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
-    atom(),
-    compile_options(),
-    non_neg_integer()
+    atom()
 ) -> erl_parse:abstract_expr().
 transform_stateful_template_call(
-    CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, _CompilerOptions, _Depth
+    CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName
 ) ->
     Line = erl_anno:line(CallAnnotations),
     try
