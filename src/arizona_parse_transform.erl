@@ -198,7 +198,7 @@ parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
     %% Build function-to-bindings mapping for arizona functions
     FunctionBindings = build_function_bindings_map(AbstractSyntaxTrees, ArizonaFunctions),
 
-    erl_syntax:revert_forms([
+    TransformedForms = erl_syntax:revert_forms([
         transform_form_with_context(
             FormTree,
             ModuleName,
@@ -208,7 +208,22 @@ parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
             FunctionBindings
         )
      || FormTree <- AbstractSyntaxTrees
-    ]).
+    ]),
+
+    %% Debug: Write transformed forms to /tmp/<module>.erl for any module with enhanced transform
+    case ArizonaFunctions of
+        [] ->
+            % No Arizona functions, skip
+            ok;
+        _ ->
+            OutputFile = "/tmp/" ++ atom_to_list(ModuleName) ++ ".erl",
+            FormattedCode = lists:map(fun erl_pp:form/1, TransformedForms),
+            Content = lists:flatten(FormattedCode),
+            file:write_file(OutputFile, Content),
+            io:format("DEBUG: Wrote transformed forms to ~s~n", [OutputFile])
+    end,
+
+    TransformedForms.
 
 -doc ~"""
 Format error messages for compilation diagnostics.
@@ -340,7 +355,8 @@ build_function_bindings_map(AbstractSyntaxTrees, ArizonaFunctions) ->
 analyze_function_for_bindings({function, _Line, _Name, _Arity, _Clauses} = Function) ->
     %% Use erl_syntax_lib:map to traverse ALL AST nodes systematically
     CollectedBindings = collect_bindings_from_function(Function),
-    CollectedBindings;
+    %% Resolve transitive dependencies
+    resolve_transitive_dependencies(CollectedBindings);
 analyze_function_for_bindings(_) ->
     #{}.
 
@@ -364,16 +380,18 @@ collect_bindings_from_function(Function) ->
     NewAcc :: #{binary() => binary() | [binary()]}.
 analyze_node_for_bindings(AstNode, Acc) ->
     case AstNode of
-        %% Match: Var = arizona_socket:get_binding(binding_name, Socket, ...)
-        {match, _Line, {var, _, VarName}, GetBindingCall} ->
-            %% Collect all bindings this variable depends on
-            Dependencies = collect_binding_dependencies(GetBindingCall),
-            case Dependencies of
+        %% Match: Var = RHS (any assignment)
+        {match, _Line, {var, _, VarName}, RHS} ->
+            %% Collect all bindings this variable depends on (direct + transitive)
+            BindingDependencies = collect_binding_dependencies(RHS),
+            VariableDependencies = collect_variable_dependencies(RHS),
+            AllDependencies = lists:usort(BindingDependencies ++ VariableDependencies),
+            case AllDependencies of
                 [] ->
                     Acc;
                 _ ->
                     VarBinary = atom_to_binary(VarName),
-                    Acc#{VarBinary => Dependencies}
+                    Acc#{VarBinary => AllDependencies}
             end;
         _ ->
             Acc
@@ -387,6 +405,28 @@ collect_binding_dependencies(AST) ->
     Dependencies = collect_bindings_recursively(AST, []),
     % Remove duplicates and sort
     lists:usort(Dependencies).
+
+%% Collect all variable dependencies from an expression (for transitive dependencies)
+-spec collect_variable_dependencies(AST) -> Variables when
+    AST :: erl_parse:abstract_expr(),
+    Variables :: [binary()].
+collect_variable_dependencies(AST) ->
+    Variables = collect_variables_recursively(AST, []),
+    % Filter out special variables like Socket, and remove duplicates
+    FilteredVars = lists:filter(fun is_valid_dependency_variable/1, Variables),
+    lists:usort(FilteredVars).
+
+%% Check if a variable should be considered as a dependency
+-spec is_valid_dependency_variable(VarName) -> boolean() when
+    VarName :: binary().
+is_valid_dependency_variable(VarName) ->
+    % Exclude Socket parameter and other special variables
+    not lists:member(VarName, [~"Socket", ~"_", ~"_Socket"]) andalso
+        % Include variables that start with uppercase (standard Erlang variables)
+        case binary:first(VarName) of
+            C when C >= $A, C =< $Z -> true;
+            _ -> false
+        end.
 
 %% Recursively collect all arizona_socket:get_binding calls
 -spec collect_bindings_recursively(AST, Acc) -> Dependencies when
@@ -418,6 +458,98 @@ collect_bindings_recursively(AST, Acc) ->
             Acc
     end.
 
+%% Recursively collect all variable references
+-spec collect_variables_recursively(AST, Acc) -> Variables when
+    AST :: term(),
+    Acc :: [binary()],
+    Variables :: [binary()].
+collect_variables_recursively(AST, Acc) ->
+    case AST of
+        %% Found variable reference
+        {var, _, VarName} ->
+            VarBinary = atom_to_binary(VarName),
+            [VarBinary | Acc];
+        %% Traverse tuple elements
+        Tuple when is_tuple(Tuple) ->
+            lists:foldl(fun collect_variables_recursively/2, Acc, tuple_to_list(Tuple));
+        %% Traverse list elements
+        List when is_list(List) ->
+            lists:foldl(fun collect_variables_recursively/2, Acc, List);
+        %% Base case: atomic values
+        _ ->
+            Acc
+    end.
+
+%% Resolve transitive dependencies by replacing variable references with their binding dependencies
+-spec resolve_transitive_dependencies(Bindings) -> ResolvedBindings when
+    Bindings :: #{binary() => [binary()]},
+    ResolvedBindings :: #{binary() => [binary()]}.
+resolve_transitive_dependencies(Bindings) ->
+    %% Iteratively resolve until no more changes occur
+    resolve_until_stable(Bindings, Bindings).
+
+%% Keep resolving dependencies until no changes occur
+-spec resolve_until_stable(Current, Previous) -> Resolved when
+    Current :: #{binary() => [binary()]},
+    Previous :: #{binary() => [binary()]},
+    Resolved :: #{binary() => [binary()]}.
+resolve_until_stable(Current, Previous) ->
+    Resolved = resolve_dependencies_once(Current),
+    case maps_equal(Resolved, Previous) of
+        true ->
+            %% No changes, we're done
+            Current;
+        false ->
+            %% Continue resolving
+            resolve_until_stable(Resolved, Current)
+    end.
+
+%% Compare two maps for equality (maps:equal/2 replacement for older Erlang)
+-spec maps_equal(Map1, Map2) -> boolean() when
+    Map1 :: map(),
+    Map2 :: map().
+maps_equal(Map1, Map2) ->
+    maps:size(Map1) =:= maps:size(Map2) andalso
+        maps:fold(
+            fun
+                (Key, Value, true) ->
+                    case maps:get(Key, Map2, undefined) of
+                        Value -> true;
+                        _ -> false
+                    end;
+                (_, _, false) ->
+                    false
+            end,
+            true,
+            Map1
+        ).
+
+%% Perform one pass of dependency resolution
+-spec resolve_dependencies_once(Bindings) -> ResolvedBindings when
+    Bindings :: #{binary() => [binary()]},
+    ResolvedBindings :: #{binary() => [binary()]}.
+resolve_dependencies_once(Bindings) ->
+    maps:map(
+        fun(_Var, Dependencies) ->
+            lists:usort(
+                lists:flatmap(
+                    fun(Dep) ->
+                        case maps:get(Dep, Bindings, undefined) of
+                            undefined ->
+                                %% Not a variable, assume it's a binding
+                                [Dep];
+                            VarDeps ->
+                                %% It's a variable, expand its dependencies
+                                VarDeps
+                        end
+                    end,
+                    Dependencies
+                )
+            )
+        end,
+        Bindings
+    ).
+
 %% Extract binding name from arizona_socket:get_binding arguments
 -spec extract_binding_name_from_args(Args) -> Result when
     Args :: [erl_parse:abstract_expr()],
@@ -435,12 +567,14 @@ extract_binding_name_from_args(_) ->
     #{binary() => binary() | [binary()]}
 ) -> #{binary() => [non_neg_integer()]}.
 generate_vars_indexes(#{elems := Elements}, VarToBinding) ->
+    % Resolve transitive dependencies before processing template elements
+    ResolvedVarToBinding = resolve_transitive_dependencies(VarToBinding),
     maps:fold(
         fun(Index, Element, Acc) ->
             case Element of
                 {dynamic, _Line, ExprText} ->
                     VarNames = extract_variables_from_expression(ExprText),
-                    process_element_variables(VarNames, Index, VarToBinding, Acc);
+                    process_element_variables(VarNames, Index, ResolvedVarToBinding, Acc);
                 _ ->
                     % Static elements don't affect vars_indexes
                     Acc
@@ -456,8 +590,16 @@ process_element_variables(VarNames, Index, VarToBinding, Acc) ->
         fun(VarName, InnerAcc) ->
             case maps:get(VarName, VarToBinding, undefined) of
                 undefined ->
-                    % Variable not mapped to any binding
-                    InnerAcc;
+                    %% For basic parse transform, variable name IS the binding name
+                    %% For enhanced parse transform with empty VarToBinding, also treat as direct binding
+                    case map_size(VarToBinding) of
+                        0 ->
+                            %% Basic parse transform: variable name = binding name
+                            add_binding_index(VarName, Index, InnerAcc);
+                        _ ->
+                            %% Enhanced parse transform: variable not mapped to any binding
+                            InnerAcc
+                    end;
                 BindingName when is_binary(BindingName) ->
                     %% Single binding dependency
                     add_binding_index(BindingName, Index, InnerAcc);
@@ -486,15 +628,48 @@ add_binding_index(BindingName, Index, Acc) ->
     ExprText :: binary(),
     Variables :: [binary()].
 extract_variables_from_expression(ExprText) ->
-    %% Find variable references like {VarName} patterns in template expressions
-    %% The ExprText is the raw content like "Count" (without the braces)
-    %% Just return the variable name if it looks like a variable
-    case re:run(ExprText, ~"^([A-Z][a-zA-Z0-9_]*)$", [{capture, all_but_first, binary}]) of
-        {match, [Match]} ->
-            [Match];
+    %% Find variable references in template expressions
+    %% This handles both simple variables like {VarName} and binding calls like {arizona_socket:get_binding(binding_name, Socket)}
+
+    %% First, try to match simple variable patterns like "Count"
+    SimpleVars =
+        case re:run(ExprText, ~"^([A-Z][a-zA-Z0-9_]*)$", [{capture, all_but_first, binary}]) of
+            {match, [Match]} ->
+                [Match];
+            nomatch ->
+                []
+        end,
+
+    %% Also look for arizona_socket:get_binding calls
+    BindingVars = expr_vars(ExprText),
+
+    %% Return all found variables
+    lists:usort(SimpleVars ++ BindingVars).
+
+%% Parse expression to find arizona_socket:get_binding calls
+expr_vars(Expr) ->
+    case
+        re:run(
+            Expr,
+            ~"arizona_socket:get_binding\\(([a-z][a-zA-Z_@]*|'(.*?)'),\\s*\\w+(?:,\\s*[^)]*)?\\)",
+            [global, {capture, all_but_first, binary}]
+        )
+    of
+        {match, Vars0} ->
+            Vars = lists:flatten([extract_var_binary(List) || List <- Vars0]),
+            lists:usort(Vars);
         nomatch ->
             []
     end.
+
+%% Extract variable name as binary, handling quoted and unquoted forms
+extract_var_binary([<<$', _/binary>> = Var | _T]) ->
+    %% Remove quotes from quoted variable
+    Size = byte_size(Var) - 2,
+    <<$', UnquotedVar:Size/binary, $'>> = Var,
+    UnquotedVar;
+extract_var_binary([Var]) ->
+    Var.
 
 %% Transform a function with variable binding context
 -spec transform_function_with_bindings(Function) -> TransformedFunction when
@@ -1092,30 +1267,23 @@ transform_stateful_template_call_with_context(
     non_neg_integer()
 ) -> erl_parse:abstract_expr().
 transform_stateful_template_call(
-    CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, CompilerOptions, Depth
+    CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, _CompilerOptions, _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
     try
         % Extract and parse the template at compile time
         {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        TemplateDataMap = parse_template_for_stateful(
-            TemplateString, LineNumber, CompilerOptions, Depth
+        StatefulResult = parse_template_for_stateful_result_with_context(
+            TemplateString, LineNumber, #{}
         ),
 
-        % Generate the new function call
-        create_stateful_structured_call(CallAnnotations, RemoteCall, TemplateDataMap, SocketArg)
+        % Generate AST directly instead of string-based approach
+        TemplateDataAST = transform_stateful_to_ast(StatefulResult),
+        create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg)
     catch
         _Error:_Reason ->
             raise_template_error(template_parse_failed, ModuleName, Line)
     end.
-
-%% Parse template string into structured format with depth tracking
--spec parse_template_for_stateful(binary(), pos_integer(), compile_options(), non_neg_integer()) ->
-    binary().
-parse_template_for_stateful(TemplateString, LineNumber, CompilerOptions, Depth) ->
-    parse_template_for_stateful_with_context(
-        TemplateString, LineNumber, CompilerOptions, Depth, #{}
-    ).
 
 %% Parse template string into structured format with variable context
 -spec parse_template_for_stateful_with_context(
@@ -1419,17 +1587,6 @@ create_slot_stateless_call(
         SlotNameArg, SocketArg, StatelessTuple
     ]}.
 
-%% Create render_stateful function call with structured data
--spec create_stateful_structured_call(
-    erl_anno:anno(),
-    erl_parse:abstract_expr(),
-    binary(),
-    erl_parse:abstract_expr()
-) -> erl_parse:abstract_expr().
-create_stateful_structured_call(CallAnnotations, RemoteCall, TemplateDataBinary, SocketArg) ->
-    TemplateDataForm = merl:quote(TemplateDataBinary),
-    {call, CallAnnotations, RemoteCall, [TemplateDataForm, SocketArg]}.
-
 %% Create render_stateful function call with AST data
 -spec create_stateful_ast_call(
     erl_anno:anno(),
@@ -1525,7 +1682,11 @@ create_element_ast({dynamic, Line, ExpressionText}) ->
 create_vars_indexes_map_ast(VarsIndexes) ->
     MapFields = [
         erl_syntax:map_field_assoc(
-            erl_syntax:atom(binary_to_list(VarName)),
+            %% Create atom AST from variable name - handle both binary and atom
+            case VarName of
+                Bin when is_binary(Bin) -> erl_syntax:atom(binary_to_list(Bin));
+                Atom when is_atom(Atom) -> erl_syntax:atom(Atom)
+            end,
             erl_syntax:list([erl_syntax:integer(Idx) || Idx <- IndexList])
         )
      || VarName := IndexList <- VarsIndexes
