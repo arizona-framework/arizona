@@ -612,6 +612,35 @@ transform_arizona_html_call_with_context(
             )
     end;
 transform_arizona_html_call_with_context(
+    render_live,
+    CallAnnotations,
+    RemoteCall,
+    Args,
+    ModuleName,
+    CompilerOptions,
+    Depth,
+    CurrentFunctionBindings
+) ->
+    %% Treat render_live the same as render_stateful for enhanced processing
+    case CurrentFunctionBindings of
+        EmptyMap when map_size(EmptyMap) =:= 0 ->
+            %% No current function context, use regular transformation
+            transform_render_stateful_call(
+                CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+            );
+        _ ->
+            %% We have function bindings, use enhanced transformation
+            transform_render_stateful_call_with_context(
+                CallAnnotations,
+                RemoteCall,
+                Args,
+                ModuleName,
+                CompilerOptions,
+                Depth,
+                CurrentFunctionBindings
+            )
+    end;
+transform_arizona_html_call_with_context(
     FunctionName,
     CallAnnotations,
     RemoteCall,
@@ -658,6 +687,12 @@ transform_arizona_html_call(
     render_slot, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
 ) ->
     transform_render_slot_call(
+        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+    );
+transform_arizona_html_call(
+    render_live, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+) ->
+    transform_render_stateful_call(
         CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
     );
 transform_arizona_html_call(
