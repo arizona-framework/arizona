@@ -627,10 +627,6 @@ test_complex_hierarchical_change_detection(Config) when is_list(Config) ->
 
     ChangedState = arizona_stateful:put_binding(todos, UpdatedTodos, InitialState),
 
-    % Debug: Verify the changed bindings are set correctly
-    ChangedBindings = arizona_stateful:get_changed_bindings(ChangedState),
-    ct:pal("DEBUG: ChangedBindings = ~p", [ChangedBindings]),
-
     % Create template structure that SHOULD generate vars_indexes but might not be
     % This simulates the parse transform output for TODO app
     TemplateData = #{
@@ -744,24 +740,15 @@ test_complex_hierarchical_change_detection(Config) when is_list(Config) ->
         }
     },
 
-    % Debug: Check if vars_indexes is correct
-    VarsIndexes = maps:get(vars_indexes, TemplateData, #{}),
-    ct:pal("DEBUG: VarsIndexes = ~p", [VarsIndexes]),
-
     % Create socket in diff mode (matches WebSocket debug output)
     Socket = arizona_socket:new(#{mode => diff}),
     SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Debug: Check affected elements calculation
-    AffectedElements = arizona_differ:get_affected_elements(ChangedBindings, VarsIndexes),
-    ct:pal("DEBUG: AffectedElements = ~p", [sets:to_list(AffectedElements)]),
 
     % Run diff - this reproduces the WebSocket "Calling render for diff" step
     ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
 
     % Debug: This should match the WebSocket "Render completed, changes=[]" output
     Changes = arizona_socket:get_changes(ResultSocket),
-    ct:pal("DEBUG: Diff result changes = ~p", [Changes]),
 
     % THE BUG: This should fail because we expect changes but get []
     % This reproduces the exact WebSocket issue
@@ -810,7 +797,6 @@ test_reproduce_websocket_bug_empty_vars_indexes(Config) when is_list(Config) ->
 
     ChangedState = arizona_stateful:put_binding(todos, UpdatedTodos, InitialState),
     ChangedBindings = arizona_stateful:get_changed_bindings(ChangedState),
-    ct:pal("BUG TEST: ChangedBindings = ~p", [ChangedBindings]),
 
     % Same template structure but with EMPTY vars_indexes (the actual bug!)
     TemplateData = #{
@@ -868,13 +854,9 @@ test_reproduce_websocket_bug_empty_vars_indexes(Config) when is_list(Config) ->
 
     % Debug the empty vars_indexes
     VarsIndexes = maps:get(vars_indexes, TemplateData, #{}),
-    ct:pal("BUG TEST: Empty VarsIndexes = ~p", [VarsIndexes]),
 
     % This should return empty set because vars_indexes is empty
     AffectedElements = arizona_differ:get_affected_elements(ChangedBindings, VarsIndexes),
-    ct:pal("BUG TEST: AffectedElements with empty vars_indexes = ~p", [
-        sets:to_list(AffectedElements)
-    ]),
 
     % Create socket and run diff
     Socket = arizona_socket:new(#{mode => diff}),
@@ -883,7 +865,6 @@ test_reproduce_websocket_bug_empty_vars_indexes(Config) when is_list(Config) ->
     % This reproduces the WebSocket bug: changes=[] despite todos binding change
     ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
     Changes = arizona_socket:get_changes(ResultSocket),
-    ct:pal("BUG TEST: Result changes (should be empty due to bug) = ~p", [Changes]),
 
     % This assertion should FAIL, demonstrating the bug
     % When vars_indexes is empty, no elements are detected as affected
@@ -893,9 +874,7 @@ test_reproduce_websocket_bug_empty_vars_indexes(Config) when is_list(Config) ->
     ?assertEqual([], Changes),
 
     % Additional verification: with empty vars_indexes, affected elements is empty
-    ?assertEqual([], sets:to_list(AffectedElements)),
-
-    ct:pal("BUG REPRODUCED: todos binding changed but diff returned [] due to empty vars_indexes").
+    ?assertEqual([], sets:to_list(AffectedElements)).
 
 test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config) ->
     % Test that reproduces the enhanced parse transform issue from the erlang shell example
@@ -915,11 +894,11 @@ test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config)
     ),
 
     ChangedBindings = arizona_stateful:get_changed_bindings(UpdatedState),
-    ct:pal("Enhanced test: ChangedBindings = ~p", [ChangedBindings]),
 
     % Create template structure that simulates what enhanced parse transform should generate
     % Based on the shell output, we know it generates: #{filter => [7], new_todo_text => [1]}
-    % But it should ALSO have todos mappings for elements that use FilteredTodos, UncompletedLength, HasCompleted
+    % But it should ALSO have todos mappings for elements that use
+    % FilteredTodos, UncompletedLength, HasCompleted
     TemplateData = #{
         elems_order => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         elems => #{
@@ -941,7 +920,8 @@ test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config)
         },
         % THE BUG: Current enhanced parse transform generates incomplete vars_indexes
         % From shell output: #{filter => [7], new_todo_text => [1]}
-        % MISSING: todos should map to elements [3, 5, 9] (FilteredTodos, UncompletedLength, HasCompleted)
+        % MISSING: todos should map to elements [3, 5, 9]
+        % (FilteredTodos, UncompletedLength, HasCompleted)
         vars_indexes => #{
             % Correct: filter affects element 7
             filter => [7],
@@ -951,23 +931,12 @@ test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config)
         }
     },
 
-    % Debug the current (incorrect) vars_indexes
-    VarsIndexes = maps:get(vars_indexes, TemplateData, #{}),
-    ct:pal("Enhanced test: Current VarsIndexes = ~p", [VarsIndexes]),
-
-    % Current behavior: only new_todo_text and filter are detected as affected
-    AffectedElements = arizona_differ:get_affected_elements(ChangedBindings, VarsIndexes),
-    ct:pal("Enhanced test: AffectedElements with incomplete vars_indexes = ~p", [
-        sets:to_list(AffectedElements)
-    ]),
-
     % Run diff with incomplete vars_indexes
     Socket = arizona_socket:new(#{mode => diff}),
     SocketWithState = arizona_socket:put_stateful_state(UpdatedState, Socket),
 
     ResultSocket = arizona_differ:diff_stateful(TemplateData, UpdatedState, SocketWithState),
     Changes = arizona_socket:get_changes(ResultSocket),
-    ct:pal("Enhanced test: Changes with incomplete vars_indexes = ~p", [Changes]),
 
     % CURRENTLY FAILING: only element 1 (new_todo_text) changes, todos changes are missed
     % This demonstrates the bug - we should get more changes but don't
@@ -989,7 +958,6 @@ test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config)
     CorrectAffectedElements = arizona_differ:get_affected_elements(
         ChangedBindings, CorrectVarsIndexes
     ),
-    ct:pal("Enhanced test: Correct AffectedElements = ~p", [sets:to_list(CorrectAffectedElements)]),
 
     % With correct vars_indexes, should affect elements [1, 3, 5, 9]
     ?assertEqual([1, 3, 5, 9], lists:sort(sets:to_list(CorrectAffectedElements))),
@@ -999,7 +967,6 @@ test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config)
         CorrectTemplateData, UpdatedState, SocketWithState
     ),
     CorrectChanges = arizona_socket:get_changes(CorrectResultSocket),
-    ct:pal("Enhanced test: Changes with correct vars_indexes = ~p", [CorrectChanges]),
 
     % Should generate changes for all affected elements, not just new_todo_text
     ?assertMatch([{root, ElementChanges}] when length(ElementChanges) > 1, CorrectChanges),
@@ -1040,6 +1007,4 @@ test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config)
     % but the real enhanced parse transform will work correctly
 
     % For now, verify the current test setup still shows the issue in the simulated scenario
-    ?assertMatch([{root, [{1, ~"foo"}]}], CurrentChanges),
-
-    ct:pal("ENHANCED PARSE TRANSFORM FIXED: Real scenarios now generate correct todos mappings").
+    ?assertMatch([{root, [{1, ~"foo"}]}], CurrentChanges).
