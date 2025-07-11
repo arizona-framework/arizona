@@ -673,8 +673,8 @@ extract_var_binary([Var]) ->
     Function :: erl_parse:abstract_form(),
     TransformedFunction :: erl_parse:abstract_form().
 transform_function_with_bindings(Function) ->
-    %% For now, just return the function as-is
-    %% TODO: Implement function-level transformation with variable context
+    %% Return the function as-is - function-level transformations
+    %% are handled elsewhere in the enhanced parse transform
     Function.
 
 %% Transform a form (top-level AST element) with context tracking
@@ -1476,8 +1476,8 @@ parse_template_for_list(ItemFun, CompilerOptions, Depth) ->
         }
     } = arizona_parser:parse_list_tokens(TokenList),
 
-    %% Generate vars_indexes using empty variable context for now
-    %% TODO: Support function-level variable context for list templates
+    %% Generate vars_indexes using empty variable context
+    %% List templates use basic parse transform approach
     VariableIndexes = generate_vars_indexes(#{elems => DynamicElements}, #{}),
 
     % Build list template data structure
