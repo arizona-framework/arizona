@@ -727,7 +727,7 @@ test_complex_hierarchical_change_detection(Config) when is_list(Config) ->
                 end},
             9 => {static, 10, ~"</footer></div>"}
         },
-        % THE BUG: This might be MISSING or EMPTY from parse transform!
+        % This might be missing or empty from parse transform
         vars_indexes => #{
             % These mappings should exist but might not be generated correctly
 
@@ -750,7 +750,7 @@ test_complex_hierarchical_change_detection(Config) when is_list(Config) ->
     % Debug: This should match the WebSocket "Render completed, changes=[]" output
     Changes = arizona_socket:get_changes(ResultSocket),
 
-    % THE BUG: This should fail because we expect changes but get []
+    % This should fail because we expect changes but get []
     % This reproduces the exact WebSocket issue
     ?assertNotEqual([], Changes),
 
@@ -847,7 +847,7 @@ test_reproduce_websocket_bug_empty_vars_indexes(Config) when is_list(Config) ->
                 end},
             7 => {static, 8, ~"</footer></div>"}
         },
-        % THE ACTUAL BUG: vars_indexes is EMPTY!
+        % vars_indexes is empty in this test case
         % This is what the parse transform is generating for TODO app
         vars_indexes => #{}
     },
@@ -866,11 +866,11 @@ test_reproduce_websocket_bug_empty_vars_indexes(Config) when is_list(Config) ->
     ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
     Changes = arizona_socket:get_changes(ResultSocket),
 
-    % This assertion should FAIL, demonstrating the bug
+    % This assertion demonstrates the issue with empty vars_indexes
     % When vars_indexes is empty, no elements are detected as affected
     % even though the todos binding changed and should affect elements 4 and 6
 
-    % This demonstrates the bug - we get empty changes
+    % With empty vars_indexes, we get no changes despite state updates
     ?assertEqual([], Changes),
 
     % Additional verification: with empty vars_indexes, affected elements is empty
@@ -918,7 +918,7 @@ test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config)
             % HasCompleted (depends on todos)
             9 => {dynamic, 10, fun(_Socket) -> ~"<button>Clear completed</button>" end}
         },
-        % THE BUG: Current enhanced parse transform generates incomplete vars_indexes
+        % Current enhanced parse transform generates incomplete vars_indexes
         % From shell output: #{filter => [7], new_todo_text => [1]}
         % MISSING: todos should map to elements [3, 5, 9]
         % (FilteredTodos, UncompletedLength, HasCompleted)
@@ -939,7 +939,7 @@ test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config)
     Changes = arizona_socket:get_changes(ResultSocket),
 
     % CURRENTLY FAILING: only element 1 (new_todo_text) changes, todos changes are missed
-    % This demonstrates the bug - we should get more changes but don't
+    % With incomplete vars_indexes, we get limited changes
     CurrentChanges = Changes,
     % Current broken behavior
     ?assertMatch([{root, [{1, ~"foo"}]}], CurrentChanges),
