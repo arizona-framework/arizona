@@ -839,9 +839,9 @@ test_enhanced_parse_transform_end_to_end(Config) when is_list(Config) ->
     TransformedCode = iolist_to_binary(erl_pp:form(RenderFunction)),
 
     % Verify that vars_indexes contains the expected mappings
-    % The transformed code should contain the specific bindings with correct element indices
+    % The transformed code should contain the specific bindings with correct element indices (atoms)
     ?assert(binary:match(TransformedCode, ~"vars_indexes") =/= nomatch),
-    ?assert(binary:match(TransformedCode, ~"<<\"user_name\">> => [1]") =/= nomatch),
-    ?assert(binary:match(TransformedCode, ~"<<\"count\">> => [3]") =/= nomatch),
+    ?assert(binary:match(TransformedCode, ~"user_name => [1]") =/= nomatch),
+    ?assert(binary:match(TransformedCode, ~"count => [3]") =/= nomatch),
 
     ct:comment("enhanced parse transform end-to-end test successful").

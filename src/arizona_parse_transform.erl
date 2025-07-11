@@ -988,20 +988,21 @@ transform_stateful_template_call_with_context(
     BinaryTemplate,
     SocketArg,
     ModuleName,
-    CompilerOptions,
-    Depth,
+    _CompilerOptions,
+    _Depth,
     CurrentFunctionBindings
 ) ->
     Line = erl_anno:line(CallAnnotations),
     try
         % Extract and parse the template at compile time with function context
         {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        TemplateDataMap = parse_template_for_stateful_with_context(
-            TemplateString, LineNumber, CompilerOptions, Depth, CurrentFunctionBindings
+        StatefulResult = parse_template_for_stateful_result_with_context(
+            TemplateString, LineNumber, CurrentFunctionBindings
         ),
 
-        % Generate the new function call
-        create_stateful_structured_call(CallAnnotations, RemoteCall, TemplateDataMap, SocketArg)
+        % Generate AST directly instead of string-based approach
+        TemplateDataAST = transform_stateful_to_ast(StatefulResult),
+        create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg)
     catch
         _Error:_Reason ->
             raise_template_error(template_parse_failed, ModuleName, Line)
@@ -1062,6 +1063,26 @@ parse_template_for_stateful_with_context(
     build_template_data_structure(
         ElementOrder, ElementsMap, VariableIndexes, CompilerOptions, Depth
     ).
+
+%% Parse template string into stateful result with variable context for AST generation
+-spec parse_template_for_stateful_result_with_context(
+    binary(), pos_integer(), #{binary() => binary()}
+) ->
+    #{
+        elems_order := [non_neg_integer()],
+        elems := #{non_neg_integer() => {static | dynamic, pos_integer(), binary()}},
+        vars_indexes := #{binary() => [non_neg_integer()]}
+    }.
+parse_template_for_stateful_result_with_context(TemplateString, LineNumber, VarBindings) ->
+    TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
+    StatefulResult = arizona_parser:parse_stateful_tokens(TokenList),
+
+    %% Generate vars_indexes using enhanced function
+    #{elems := ElementsMap} = StatefulResult,
+    VariableIndexes = generate_vars_indexes(#{elems => ElementsMap}, VarBindings),
+
+    %% Add vars_indexes to the stateful result for AST generation
+    StatefulResult#{vars_indexes => VariableIndexes}.
 
 %% Build the template data structure with depth tracking
 -spec build_template_data_structure(
@@ -1335,6 +1356,16 @@ create_slot_stateless_call(
 create_stateful_structured_call(CallAnnotations, RemoteCall, TemplateDataBinary, SocketArg) ->
     TemplateDataForm = merl:quote(TemplateDataBinary),
     {call, CallAnnotations, RemoteCall, [TemplateDataForm, SocketArg]}.
+
+%% Create render_stateful function call with AST data
+-spec create_stateful_ast_call(
+    erl_anno:anno(),
+    erl_parse:abstract_expr(),
+    erl_syntax:syntaxTree(),
+    erl_parse:abstract_expr()
+) -> erl_parse:abstract_expr().
+create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg) ->
+    {call, CallAnnotations, RemoteCall, [erl_syntax:revert(TemplateDataAST), SocketArg]}.
 
 %% Create render_list function call with structured data
 -spec create_list_structured_call(
