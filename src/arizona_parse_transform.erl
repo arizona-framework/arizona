@@ -606,8 +606,6 @@ transform_arizona_html_call_with_context(
                 RemoteCall,
                 Args,
                 ModuleName,
-                CompilerOptions,
-                Depth,
                 CurrentFunctionBindings
             )
     end;
@@ -635,8 +633,6 @@ transform_arizona_html_call_with_context(
                 RemoteCall,
                 Args,
                 ModuleName,
-                CompilerOptions,
-                Depth,
                 CurrentFunctionBindings
             )
     end;
@@ -732,8 +728,6 @@ transform_render_stateless_call(
     erl_parse:abstract_expr(),
     [erl_parse:abstract_expr()],
     atom(),
-    compile_options(),
-    non_neg_integer(),
     #{binary() => binary()}
 ) -> erl_parse:abstract_expr().
 transform_render_stateful_call_with_context(
@@ -741,8 +735,6 @@ transform_render_stateful_call_with_context(
     RemoteCall,
     [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg],
     ModuleName,
-    CompilerOptions,
-    Depth,
     CurrentFunctionBindings
 ) ->
     transform_stateful_template_call_with_context(
@@ -751,8 +743,6 @@ transform_render_stateful_call_with_context(
         BinaryTemplate,
         SocketArg,
         ModuleName,
-        CompilerOptions,
-        Depth,
         CurrentFunctionBindings
     );
 transform_render_stateful_call_with_context(
@@ -760,8 +750,6 @@ transform_render_stateful_call_with_context(
     _RemoteCall,
     _Args,
     ModuleName,
-    _CompilerOptions,
-    _Depth,
     _CurrentFunctionBindings
 ) ->
     Line = erl_anno:line(CallAnnotations),
@@ -978,8 +966,6 @@ convert_element_to_iolist(
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
     atom(),
-    compile_options(),
-    non_neg_integer(),
     #{binary() => binary()}
 ) -> erl_parse:abstract_expr().
 transform_stateful_template_call_with_context(
@@ -988,8 +974,6 @@ transform_stateful_template_call_with_context(
     BinaryTemplate,
     SocketArg,
     ModuleName,
-    _CompilerOptions,
-    _Depth,
     CurrentFunctionBindings
 ) ->
     Line = erl_anno:line(CallAnnotations),
