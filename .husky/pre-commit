@@ -12,25 +12,14 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}Running pre-commit checks...${NC}"
 
-# 1. Check commit message format (72 characters)
-echo -e "${YELLOW}→ Checking commit message format...${NC}"
-if [ -f ".git/COMMIT_EDITMSG" ]; then
-    COMMIT_MSG=$(head -n 1 .git/COMMIT_EDITMSG)
-    if [ ${#COMMIT_MSG} -gt 72 ]; then
-        echo -e "${RED}✗ Commit message first line too long (${#COMMIT_MSG} chars, max 72)${NC}"
-        echo -e "${RED}  Message: ${COMMIT_MSG}${NC}"
-        exit 1
-    fi
-fi
-
-# 2. Check for merge conflict markers
+# 1. Check for merge conflict markers
 echo -e "${YELLOW}→ Checking for merge conflict markers...${NC}"
 if git diff --cached --name-only | xargs grep -l "^<<<<<<< \|^======= \|^>>>>>>> " 2>/dev/null; then
     echo -e "${RED}✗ Merge conflict markers found in staged files${NC}"
     exit 1
 fi
 
-# 3. Check Erlang formatting
+# 2. Check Erlang formatting
 echo -e "${YELLOW}→ Checking Erlang code formatting...${NC}"
 if command -v rebar3 >/dev/null 2>&1; then
     if ! rebar3 fmt --check >/dev/null 2>&1; then
@@ -42,7 +31,7 @@ else
     echo -e "${YELLOW}⚠ rebar3 not found, skipping Erlang format check${NC}"
 fi
 
-# 4. Check JavaScript formatting
+# 3. Check JavaScript formatting
 echo -e "${YELLOW}→ Checking JavaScript code formatting...${NC}"
 if command -v npm >/dev/null 2>&1; then
     if ! npm run format:check >/dev/null 2>&1; then

@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Commit message hook for Arizona project
+# Validates commit message format
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# The commit message file is passed as the first argument
+COMMIT_MSG_FILE="$1"
+
+if [ -f "$COMMIT_MSG_FILE" ]; then
+    COMMIT_MSG=$(head -n 1 "$COMMIT_MSG_FILE")
+    
+    # Check commit message length (72 characters)
+    if [ ${#COMMIT_MSG} -gt 72 ]; then
+        echo -e "${RED}✗ Commit message first line too long (${#COMMIT_MSG} chars, max 72)${NC}"
+        echo -e "${RED}  Message: ${COMMIT_MSG}${NC}"
+        echo -e "${YELLOW}  Please shorten your commit message to 72 characters or less.${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✓ Commit message format valid${NC}"
+fi
