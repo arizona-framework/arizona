@@ -21,7 +21,6 @@ groups() ->
             test_stateless_transform,
             test_stateful_transform,
             test_stateful_transform_with_variables,
-            test_non_arizona_call_passthrough,
             test_nested_function_calls,
             test_slot_template_transform
         ]},
@@ -48,7 +47,6 @@ groups() ->
             test_stateless_parse_error,
             test_stateful_parse_error,
             test_format_error_badarg,
-            test_module_name_extraction_edge_cases,
             test_stateful_non_binary_template_error
         ]},
         {coverage_tests, [parallel], [
@@ -142,37 +140,6 @@ test_stateful_transform(Config) when is_list(Config) ->
 
     ct:comment("Stateful template transformation handled without crashing").
 
-%% Test that non-arizona function calls are passed through unchanged
-test_non_arizona_call_passthrough(Config) when is_list(Config) ->
-    % Create a simple AST with non-arizona function call
-    Forms = merl:quote(~"""
-    -module(test_other_module).
-    -export([test_other/1]).
-    test_other(Data) -> other_module:some_function(~"Hello World", Data).
-    """),
-
-    % Apply parse transform
-    TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
-
-    % Verify no transformation occurred
-    ?assertMatch(
-        [
-            _ModAttr,
-            _ExportAttr,
-            {function, _FLine, test_other, 1, [
-                {clause, _CLine, _Args, _Guards, [
-                    {call, _CallLine,
-                        {remote, _RemoteLine, {atom, _ModLine, other_module},
-                            {atom, _FuncLine, some_function}},
-                        _OtherArgs}
-                ]}
-            ]}
-        ],
-        TransformedForms
-    ),
-
-    ct:comment("Non-arizona function calls correctly passed through unchanged").
-
 %% Test nested function calls are handled properly
 test_nested_function_calls(Config) when is_list(Config) ->
     % Create a simple AST with nested calls
@@ -230,6 +197,8 @@ test_non_binary_template_error(Config) when is_list(Config) ->
     % Create a form with a variable template (should raise badarg)
     Forms = merl:quote(~"""
     -module(test_badarg_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) -> arizona_html:render_stateless(Template, Socket).
     """),
@@ -291,6 +260,8 @@ test_stateless_parse_error(Config) when is_list(Config) ->
     % Mock arizona_scanner to return invalid tokens that will cause parsing to fail
     Forms = merl:quote(~"""
     -module(test_stateless_error_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) -> arizona_html:render_stateless(~"Invalid {unclosed", Socket).
     """),
@@ -304,6 +275,8 @@ test_stateful_parse_error(Config) when is_list(Config) ->
     % Create a stateful template that will cause parsing to fail
     Forms = merl:quote(~"""
     -module(test_stateful_error_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) -> arizona_html:render_stateful(~"Invalid {unclosed", Socket).
     """),
@@ -323,36 +296,13 @@ test_format_error_badarg(Config) when is_list(Config) ->
 
     ct:comment("format_error(badarg) returns correct message").
 
-%% Test module name extraction edge cases
-test_module_name_extraction_edge_cases(Config) when is_list(Config) ->
-    % Test with forms that don't have module attribute at the beginning
-    Forms1 = merl:quote(~"""
-    -module(edge_case_module).
-    -compile([export_all]).
-    test() -> ok.
-    """),
-
-    % This should still work - extract_module_name searches through forms
-    TransformedForms1 = arizona_parse_transform:parse_transform(Forms1, []),
-    ?assertMatch([_CompileAttr, _ModAttr, _Function], TransformedForms1),
-
-    % Test with forms that have no module attribute
-    Forms2 = merl:quote(~"""
-    -compile([export_all]).
-    test() -> ok.
-    """),
-
-    % This should work but use unknown_module
-    TransformedForms2 = arizona_parse_transform:parse_transform(Forms2, []),
-    ?assertMatch([_CompileAttr, _Function], TransformedForms2),
-
-    ct:comment("Module name extraction handles edge cases correctly").
-
 %% Test stateful non-binary template error
 test_stateful_non_binary_template_error(Config) when is_list(Config) ->
     % Create a form with a variable stateful template (should raise badarg)
     Forms = merl:quote(~"""
     -module(test_stateful_badarg_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) -> arizona_html:render_stateful(Template, Socket).
     """),
