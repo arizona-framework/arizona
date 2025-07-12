@@ -3,53 +3,14 @@
 Arizona Template Parse Transform.
 
 This module provides compile-time transformation of Arizona template syntax
-into optimized structured formats for high-performance rendering with enhanced
-variable assignment support.
+into optimized structured formats for high-performance rendering with
+dependency tracking and surgical DOM updates.
 
-## Basic Transformations
-
-- `arizona_html:render_stateless(~"template", Socket)` →
-  `arizona_html:render_stateless([...], Socket)`
-- `arizona_html:render_stateful(~"template", Socket)` →
-  `arizona_html:render_stateful(#{...}, Socket)`
-- `arizona_html:render_live(~"template", Socket)` →
-  `arizona_html:render_live(#{...}, Socket)`
-- Template expressions use `arizona_socket:get_binding/2` for variable access
-
-## Enhanced Parse Transform
-
-Use the `-arizona_parse_transform([function/arity])` attribute to enable
-variable assignments before templates:
-
-```erlang
--module(my_live).
--compile({parse_transform, arizona_parse_transform}).
--arizona_parse_transform([render/1]).
-
-render(Socket) ->
-    UserName = arizona_socket:get_binding(user_name, Socket),
-    Count = arizona_socket:get_binding(count, Socket),
-    arizona_html:render_live(~"<div>Hello {UserName}! Count: {Count}</div>", Socket).
-```
-
-The enhanced mode automatically generates `vars_indexes` for efficient change detection:
-```erlang
-vars_indexes => #{user_name => [1], count => [3]}
-```
-
-## Features
-
-- **Variable Assignment Support**: Extract variables before templates
-- **Dependency Tracking**: Handles nested and conditional binding calls
-- **Change Detection**: Generates proper `vars_indexes` with atom keys
-- **Multi-Function Support**: Different variable contexts per function
-- **Type Safety**: AST-based transformation without `binary_to_atom/1`
-
-## Limitations
-
-- Only works with literal binary templates (compile-time determinable)
-- Runtime-constructed templates are not supported
-- Enhanced mode requires `-arizona_parse_transform([function/arity])` attribute
+Features:
+- Dependency tracking of arizona_socket:get_binding/2 calls in templates
+- Automatic vars_indexes generation for surgical DOM updates
+- Selective processing with -arizona_parse_transform([function/arity])
+- Type-safe AST transformations
 
 The parse transform analyzes function calls at compile time and replaces
 them with optimized versions that avoid runtime template parsing overhead.
@@ -73,6 +34,7 @@ them with optimized versions that avoid runtime template parsing overhead.
 -export([generate_vars_indexes/2]).
 -export([parse_template_for_stateful_with_context/5]).
 -export([build_function_bindings_map/2]).
+-export([extract_functions_single_pass/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -202,16 +164,18 @@ parse_transform(AbstractSyntaxTrees, CompilerOptions) ->
     ArizonaFunctions :: [function_spec()],
     ModuleName :: atom().
 validate_arizona_functions(AbstractSyntaxTrees, ArizonaFunctions, ModuleName) ->
-    %% Extract exported functions from module
-    ExportedFunctions = extract_exported_functions(AbstractSyntaxTrees),
-    %% Extract defined functions from module
-    DefinedFunctions = extract_defined_functions(AbstractSyntaxTrees),
+    %% Single-pass extraction of exported and defined functions for better performance
+    {ExportedFunctions, DefinedFunctions} = extract_functions_single_pass(AbstractSyntaxTrees),
 
-    %% Check each declared Arizona function
+    %% Convert to sets for O(1) lookup performance
+    ExportedSet = sets:from_list(ExportedFunctions),
+    DefinedSet = sets:from_list(DefinedFunctions),
+
+    %% Check each declared Arizona function using efficient set lookups
     lists:foreach(
         fun(FunctionSpec) ->
             validate_single_arizona_function(
-                FunctionSpec, DefinedFunctions, ExportedFunctions, ModuleName
+                FunctionSpec, DefinedSet, ExportedSet, ModuleName
             )
         end,
         ArizonaFunctions
@@ -219,26 +183,26 @@ validate_arizona_functions(AbstractSyntaxTrees, ArizonaFunctions, ModuleName) ->
 
 %% Validate a single Arizona function is defined and exported
 -spec validate_single_arizona_function(
-    FunctionSpec, DefinedFunctions, ExportedFunctions, ModuleName
+    FunctionSpec, DefinedSet, ExportedSet, ModuleName
 ) -> ok when
     FunctionSpec :: function_spec(),
-    DefinedFunctions :: [{atom(), arity()}],
-    ExportedFunctions :: [{atom(), arity()}],
+    DefinedSet :: sets:set(function_spec()),
+    ExportedSet :: sets:set(function_spec()),
     ModuleName :: atom().
 validate_single_arizona_function(
-    {FuncName, Arity}, DefinedFunctions, ExportedFunctions, ModuleName
+    {FuncName, Arity}, DefinedSet, ExportedSet, ModuleName
 ) ->
-    ok = validate_function_defined({FuncName, Arity}, DefinedFunctions, ModuleName),
-    ok = validate_function_exported({FuncName, Arity}, ExportedFunctions, ModuleName),
+    ok = validate_function_defined({FuncName, Arity}, DefinedSet, ModuleName),
+    ok = validate_function_exported({FuncName, Arity}, ExportedSet, ModuleName),
     ok.
 
 %% Validate that a function is defined in the module
--spec validate_function_defined(FunctionSpec, DefinedFunctions, ModuleName) -> ok when
+-spec validate_function_defined(FunctionSpec, DefinedSet, ModuleName) -> ok when
     FunctionSpec :: function_spec(),
-    DefinedFunctions :: [{atom(), arity()}],
+    DefinedSet :: sets:set(function_spec()),
     ModuleName :: atom().
-validate_function_defined({FuncName, Arity} = FunctionSpec, DefinedFunctions, ModuleName) ->
-    case lists:member(FunctionSpec, DefinedFunctions) of
+validate_function_defined({FuncName, Arity} = FunctionSpec, DefinedSet, ModuleName) ->
+    case sets:is_element(FunctionSpec, DefinedSet) of
         true ->
             ok;
         false ->
@@ -250,12 +214,12 @@ validate_function_defined({FuncName, Arity} = FunctionSpec, DefinedFunctions, Mo
     end.
 
 %% Validate that a function is exported from the module
--spec validate_function_exported(FunctionSpec, ExportedFunctions, ModuleName) -> ok when
+-spec validate_function_exported(FunctionSpec, ExportedSet, ModuleName) -> ok when
     FunctionSpec :: function_spec(),
-    ExportedFunctions :: [{atom(), arity()}],
+    ExportedSet :: sets:set(function_spec()),
     ModuleName :: atom().
-validate_function_exported({FuncName, Arity} = FunctionSpec, ExportedFunctions, ModuleName) ->
-    case lists:member(FunctionSpec, ExportedFunctions) of
+validate_function_exported({FuncName, Arity} = FunctionSpec, ExportedSet, ModuleName) ->
+    case sets:is_element(FunctionSpec, ExportedSet) of
         true ->
             ok;
         false ->
@@ -360,6 +324,20 @@ format_detailed_error(arizona_function_not_exported, {ModuleName, FuncName, Arit
         "exported from module ~w. Either export the function with -export([~w/~w]) "
         "or remove it from the -arizona_parse_transform([function/arity]) list.",
         [FuncName, Arity, ModuleName, FuncName, Arity]
+    );
+format_detailed_error(template_extraction_failed, {Error, Reason, _Stacktrace}) ->
+    io_lib:format(
+        "Failed to extract template content during parse transform: ~w:~w. "
+        "This usually indicates a malformed binary template that cannot be "
+        "evaluated at compile time.",
+        [Error, Reason]
+    );
+format_detailed_error(template_extraction_failed, Reason) ->
+    io_lib:format(
+        "Failed to extract template content during parse transform: ~w. "
+        "This usually indicates a malformed binary template that cannot be "
+        "evaluated at compile time.",
+        [Reason]
     ).
 
 -doc ~"""
@@ -443,35 +421,26 @@ extract_arizona_functions(AbstractSyntaxTrees) ->
         AbstractSyntaxTrees
     ).
 
-%% Extract exported functions from module
--spec extract_exported_functions(AbstractSyntaxTrees) -> ExportedFunctions when
+%% Single-pass extraction of both exported and defined functions for performance
+-spec extract_functions_single_pass(AbstractSyntaxTrees) ->
+    {ExportedFunctions, DefinedFunctions}
+when
     AbstractSyntaxTrees :: [erl_parse:abstract_form()],
-    ExportedFunctions :: [{atom(), arity()}].
-extract_exported_functions(AbstractSyntaxTrees) ->
-    lists:foldl(
-        fun
-            ({attribute, _Anno, export, FunctionList}, Acc) when is_list(FunctionList) ->
-                FunctionList ++ Acc;
-            (_, Acc) ->
-                Acc
-        end,
-        [],
-        AbstractSyntaxTrees
-    ).
-
-%% Extract defined functions from module
--spec extract_defined_functions(AbstractSyntaxTrees) -> DefinedFunctions when
-    AbstractSyntaxTrees :: [erl_parse:abstract_form()],
+    ExportedFunctions :: [{atom(), arity()}],
     DefinedFunctions :: [{atom(), arity()}].
-extract_defined_functions(AbstractSyntaxTrees) ->
+extract_functions_single_pass(AbstractSyntaxTrees) ->
     lists:foldl(
         fun
-            ({function, _Anno, FuncName, Arity, _Clauses}, Acc) ->
-                [{FuncName, Arity} | Acc];
+            ({attribute, _Anno, export, FunctionList}, {Exported, Defined}) when
+                is_list(FunctionList)
+            ->
+                {FunctionList ++ Exported, Defined};
+            ({function, _Anno, FuncName, Arity, _Clauses}, {Exported, Defined}) ->
+                {Exported, [{FuncName, Arity} | Defined]};
             (_, Acc) ->
                 Acc
         end,
-        [],
+        {[], []},
         AbstractSyntaxTrees
     ).
 
@@ -593,10 +562,16 @@ is_valid_dependency_variable(VarName) ->
     % Exclude Socket parameter and other special variables
     not lists:member(VarName, [~"Socket", ~"_", ~"_Socket"]) andalso
         % Include variables that start with uppercase (standard Erlang variables)
-        case binary:first(VarName) of
-            C when C >= $A, C =< $Z -> true;
-            _ -> false
-        end.
+        safe_is_uppercase_variable(VarName).
+
+%% Safe check for uppercase variable names with bounds checking
+safe_is_uppercase_variable(VarName) when is_binary(VarName), byte_size(VarName) > 0 ->
+    case binary:first(VarName) of
+        C when C >= $A, C =< $Z -> true;
+        _ -> false
+    end;
+safe_is_uppercase_variable(_) ->
+    false.
 
 %% Recursively collect all arizona_socket:get_binding calls
 -spec collect_bindings_recursively(AST, Acc) -> Dependencies when
@@ -1854,9 +1829,21 @@ create_list_structured_call(
     BinaryForm :: erl_parse:abstract_expr(),
     TemplateContent :: {binary(), pos_integer()}.
 extract_template_content({bin, BinaryAnnotations, _BinaryFields} = BinaryForm) ->
-    {value, TemplateString, #{}} = erl_eval:expr(BinaryForm, #{}),
     LineNumber = erl_anno:line(BinaryAnnotations),
-    {TemplateString, LineNumber}.
+    case safe_eval_binary_expr(BinaryForm) of
+        {ok, TemplateString} -> {TemplateString, LineNumber};
+        {error, Reason} -> error({template_extraction_failed, Reason}, none, error_info(Reason))
+    end.
+
+%% Safe evaluation of binary expressions with proper error handling
+safe_eval_binary_expr(BinaryForm) ->
+    try
+        {value, TemplateString, #{}} = erl_eval:expr(BinaryForm, #{}),
+        {ok, TemplateString}
+    catch
+        Error:Reason:Stacktrace ->
+            {error, {Error, Reason, Stacktrace}}
+    end.
 
 %% Create error_info for proper compiler diagnostics with enhanced details
 -spec error_info(Cause) -> ErrorInfo when
