@@ -79,6 +79,8 @@ test_stateless_transform(Config) when is_list(Config) ->
     % Create a simple AST with a stateless render call using merl:quote
     Forms = merl:quote(~""""
     -module(arizona_stateless_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
         arizona_html:render_stateless(~"""
@@ -93,6 +95,8 @@ test_stateless_transform(Config) when is_list(Config) ->
     ?assertMatch(
         [
             _ModAttr,
+            _CompileAttr,
+            _ArizonaAttr,
             _ExportAttr,
             {function, _FLine, test_render, 1, [
                 {clause, _CLine, _Args, _Guards, [
@@ -114,6 +118,8 @@ test_stateful_transform(Config) when is_list(Config) ->
     % since the actual transformation is complex
     Forms = merl:quote(~"""
     -module(test_stateful_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
         arizona_html:render_stateful(~"Hello {arizona_socket:get_binding(name, Socket)}!", Socket).
@@ -122,9 +128,15 @@ test_stateful_transform(Config) when is_list(Config) ->
     % Apply parse transform
     TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
 
-    % Just verify it produces valid forms without crashing
+    % Verify transformation produces valid forms without crashing
     ?assertMatch(
-        [_ModAttr, _ExportAttr, {function, _, test_render, 1, _Clauses}],
+        [
+            _ModAttr,
+            _CompileAttr,
+            _ArizonaAttr,
+            _ExportAttr,
+            {function, _, test_render, 1, _Clauses}
+        ],
         TransformedForms
     ),
 
@@ -166,6 +178,8 @@ test_nested_function_calls(Config) when is_list(Config) ->
     % Create a simple AST with nested calls
     Forms = merl:quote(~""""
     -module(test_nested_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_nested/1]).
     -export([test_nested/1]).
     test_nested(Socket) ->
         io_lib:format("Result: ~s", [
@@ -178,9 +192,15 @@ test_nested_function_calls(Config) when is_list(Config) ->
     % Apply parse transform
     TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
 
-    % Just verify it doesn't crash and produces valid forms
+    % Verify nested function calls are handled correctly
     ?assertMatch(
-        [_ModAttr, _ExportAttr, {function, _, test_nested, 1, _Clauses}],
+        [
+            _ModAttr,
+            _CompileAttr,
+            _ArizonaAttr,
+            _ExportAttr,
+            {function, _, test_nested, 1, _Clauses}
+        ],
         TransformedForms
     ),
 
@@ -239,6 +259,8 @@ test_stateful_transform_with_variables(Config) when is_list(Config) ->
     % Create a stateful render call with variables using merl:quote
     Forms = merl:quote(~""""
     -module(test_stateful_vars_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
         arizona_html:render_stateful(~"""
@@ -254,6 +276,8 @@ test_stateful_transform_with_variables(Config) when is_list(Config) ->
     ?assertMatch(
         [
             _ModAttr,
+            _CompileAttr,
+            _ArizonaAttr,
             _ExportAttr,
             {function, _, test_render, 1, _Clauses}
         ],
@@ -342,6 +366,8 @@ test_complex_stateful_template_with_multiple_variables(Config) when is_list(Conf
     % Create a complex stateful template with multiple variables
     Forms = merl:quote(~""""
     -module(test_complex_stateful_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
         arizona_html:render_stateful(~"""
@@ -361,6 +387,8 @@ test_complex_stateful_template_with_multiple_variables(Config) when is_list(Conf
     ?assertMatch(
         [
             _ModAttr,
+            _CompileAttr,
+            _ArizonaAttr,
             _ExportAttr,
             {function, _, test_render, 1, _Clauses}
         ],
@@ -374,6 +402,8 @@ test_stateless_binary_elements(Config) when is_list(Config) ->
     % Create a stateless template that will exercise binary element handling
     Forms = merl:quote(~""""
     -module(test_stateless_binary_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
         arizona_html:render_stateless(~"""
@@ -390,6 +420,8 @@ test_stateless_binary_elements(Config) when is_list(Config) ->
     ?assertMatch(
         [
             _ModAttr,
+            _CompileAttr,
+            _ArizonaAttr,
             _ExportAttr,
             {function, _, test_render, 1, _Clauses}
         ],
@@ -478,6 +510,8 @@ test_nested_arizona_optimization(Config) when is_list(Config) ->
     % to test socket variable shadowing fix
     Forms = merl:quote(~""""""
     -module(test_nested_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
         arizona_html:render_stateful(~"""""
@@ -524,7 +558,14 @@ test_nested_arizona_optimization(Config) when is_list(Config) ->
 
     % Verify the structure is valid and compiles
     ?assertMatch(
-        [_ModAttr, _ExportAttr, {function, _, test_render, 1, _Clauses}], TransformedForms
+        [
+            _ModAttr,
+            _CompileAttr,
+            _ArizonaAttr,
+            _ExportAttr,
+            {function, _, test_render, 1, _Clauses}
+        ],
+        TransformedForms
     ),
 
     ct:comment("Nested arizona_html calls successfully optimized at compile time").
@@ -534,6 +575,7 @@ test_slot_template_transform(Config) when is_list(Config) ->
     TestCode = ~""""
     -module(test_slot_optimization).
     -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
 
     test_render(Socket) ->
         arizona_html:render_slot(footer, Socket, ~"""
