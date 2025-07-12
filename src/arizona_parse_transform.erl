@@ -227,9 +227,9 @@ Format error messages for compilation diagnostics with enhanced details.
 This function is called by the Erlang compiler's error formatting system
 to provide detailed error messages for parse transform failures.
 """.
--spec format_error(Reason, StackTrace) -> ErrorMap when
+-spec format_error(Reason, Stacktrace) -> ErrorMap when
     Reason :: term(),
-    StackTrace :: erlang:stacktrace(),
+    Stacktrace :: erlang:stacktrace(),
     ErrorMap :: #{pos_integer() => unicode:chardata()}.
 format_error(Reason, [{_M, _F, _As, Info} | _]) ->
     ErrorInfoMap = proplists:get_value(error_info, Info, #{}),
@@ -262,9 +262,10 @@ format_detailed_error(badarg, {ModuleName, Line}) ->
     );
 format_detailed_error(no_arizona_parse_transform_attribute, ModuleName) ->
     io_lib:format(
-        "Module ~w uses Arizona parse transform but has no -arizona_parse_transform([function/arity]) attribute. "
-        "Add -arizona_parse_transform([function/arity]) to declare which functions use Arizona templates. "
-        "Example: -arizona_parse_transform([render/1]).",
+        "Module ~w uses Arizona parse transform but has no "
+        "-arizona_parse_transform([function/arity]) attribute. "
+        "Add -arizona_parse_transform([function/arity]) to declare which functions "
+        "use Arizona templates. Example: -arizona_parse_transform([render/1]).",
         [ModuleName]
     ).
 
