@@ -20,19 +20,19 @@ optimization and surgical DOM updates for optimal performance.
 
 - **📡 Real-time LiveView**: WebSocket-based live updates with minimal payload
 - **🏗️ Hierarchical Rendering**: Efficient differential rendering with surgical DOM updates
-- **⚡ Performance Optimized**: Compile-time template processing with enhanced parse transforms
+- **⚡ Performance Optimized**: Compile-time template processing with selective parse transform optimization
 - **🧩 Component Architecture**: Stateful and stateless components with lifecycle management
 - **🎯 Type Safe**: Comprehensive Dialyzer support with proper type contracts
 - **🔧 OTP Integration**: Full OTP compliance with gen_server and supervisor patterns
-- **🚀 Enhanced Templates**: Variable assignment support with automatic change detection
+- **🚀 Compile-time Optimized Templates**: Variable assignment support with automatic change detection
 
 ## Template Syntax
 
 Arizona supports two template patterns for different use cases:
 
-### Standard Templates (Original API)
+### Standard Templates
 
-Arizona uses the `~"""` sigil for template compilation with embedded Erlang expressions:
+Arizona templates are binary or string content with embedded Erlang expressions:
 
 ```erlang
 render(Socket) ->
@@ -45,10 +45,13 @@ render(Socket) ->
     """, Socket).
 ```
 
-### Enhanced Templates (Variable Assignment Support)
+**Note**: You can use `~"..."`, `<<"...">>`, or regular strings - they're all
+equivalent binary content.
 
-Use the enhanced parse transform to enable variable assignments before templates for a more
-"Erlanger" API:
+### Compile-time Optimized Templates
+
+Use the compile-time parse transform to enable variable assignments before
+templates with automatic performance optimizations:
 
 ```erlang
 -module(my_live).
@@ -67,13 +70,16 @@ render(Socket) ->
     """, Socket).
 ```
 
-**Enhanced Features:**
+**Compile-time Optimizations:**
 
-- **Variable Assignment Support**: Extract variables before templates
+- **Selective Processing**: Only functions explicitly declared with
+  `-arizona_parse_transform([function/arity])` are optimized
+- **Variable Assignment Support**: Extract variables before templates at compile time
 - **Automatic Change Detection**: Generates optimized `vars_indexes` for surgical DOM updates
 - **Multi-Function Support**: Different variable contexts per function
 - **Dependency Tracking**: Handles nested and conditional binding calls
-- **Full Backward Compatibility**: Existing code continues to work unchanged
+- **Explicit Opt-in**: Modules must declare which functions need optimization,
+  preventing unnecessary processing
 
 ## Basic Usage
 
@@ -112,7 +118,7 @@ Update the application dependencies in `src/arizona_example.app.src`:
 
 ### 3. Create a LiveView module
 
-Create `src/arizona_example_counter.erl` using the enhanced parse transform:
+Create `src/arizona_example_counter.erl` using the compile-time optimized templates:
 
 ```erlang
 -module(arizona_example_counter).
@@ -148,11 +154,10 @@ handle_event(~"decrement", _Params, Socket) ->
 
 **What's happening here:**
 
-- The `-arizona_parse_transform([render/1])` attribute enables enhanced template processing
-- Variables like `Count` can now be extracted before the template
+- The `-arizona_parse_transform([render/1])` attribute enables compile-time template optimization
+- Variables like `Count` are extracted before the template and optimized at compile time
 - The parse transform automatically generates optimized `vars_indexes` for efficient updates
-- When the `count` binding changes, only the specific template element containing `{Count}`
-  re-renders
+- When the `count` binding changes, only the specific template element containing `{Count}` re-renders
 
 ### 4. Start the server
 
@@ -218,23 +223,30 @@ real-time as you click the buttons.
 - **Stateless Components**: Lightweight function-based components
 - **List Components**: Optimized rendering for collections
 
-### Parse Transform Enhancement
+### Compile-time Parse Transform
 
-Arizona's enhanced parse transform provides advanced compile-time optimizations:
+Arizona's parse transform provides advanced compile-time optimizations with
+selective processing:
 
-- **Variable Dependency Tracking**: Analyzes `arizona_socket:get_binding/2,3` calls to map
-  variables to template elements
+- **Selective Processing**: Only modules with
+  `-arizona_parse_transform([function/arity])` attributes are processed
+- **Variable Dependency Tracking**: Analyzes `arizona_socket:get_binding/2,3`
+  calls to map variables to template elements
 - **Automatic vars_indexes Generation**: Creates precise change detection maps for surgical DOM updates
-- **Multi-Function Support**: Each function marked with `-arizona_parse_transform([function/arity])`
-  gets its own variable context
+- **Multi-Function Support**: Each function marked with
+  `-arizona_parse_transform([function/arity])` gets its own variable context
 - **Complex Dependency Handling**: Supports nested calls, conditionals, and multiple binding dependencies
+- **Performance Optimization**: Prevents unnecessary processing of modules that don't use Arizona templates
 
 ```erlang
-% Enhanced mode automatically generates:
+% Compile-time optimization automatically generates:
 vars_indexes => #{
     user_name => [1],    % UserName variable affects element 1
     count => [3]         % Count variable affects element 3
 }
+
+% IMPORTANT: Modules MUST declare which functions need optimization:
+-arizona_parse_transform([render/1, other_template_function/2]).
 ```
 
 ### Rendering Modes
@@ -245,9 +257,10 @@ vars_indexes => #{
 
 ### Real-time Updates
 
-Arizona sends minimal JSON diffs over WebSocket containing only changed elements, ensuring optimal
-performance for real-time applications. With enhanced templates, updates are even more precise,
-targeting only the specific DOM elements that depend on changed bindings.
+Arizona sends minimal JSON diffs over WebSocket containing only changed elements,
+ensuring optimal performance for real-time applications. With compile-time optimized
+templates, updates are even more precise, targeting only the specific DOM elements
+that depend on changed bindings.
 
 ## API Documentation
 
