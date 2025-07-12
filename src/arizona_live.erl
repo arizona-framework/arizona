@@ -202,7 +202,7 @@ Returns the updated socket after mounting.
     Req :: arizona_request:request(),
     Socket :: arizona_socket:socket().
 mount(Pid, Req) ->
-    gen_server:call(Pid, {mount, Req}).
+    gen_server:call(Pid, {mount, Req}, infinity).
 
 -doc ~"""
 Render the LiveView to generate output.
@@ -222,7 +222,7 @@ after rendering.
     Pid :: pid(),
     Socket :: arizona_socket:socket().
 render(Pid) ->
-    gen_server:call(Pid, render).
+    gen_server:call(Pid, render, infinity).
 
 -doc ~"""
 Handle a client event in the LiveView.
@@ -247,7 +247,7 @@ or reply response with the updated socket.
     Socket :: arizona_socket:socket(),
     Reply :: term().
 handle_event(Pid, Event, Params) ->
-    gen_server:call(Pid, {handle_event, Event, Params}).
+    gen_server:call(Pid, {handle_event, Event, Params}, infinity).
 
 -doc ~"""
 Set the rendering mode for the LiveView.
