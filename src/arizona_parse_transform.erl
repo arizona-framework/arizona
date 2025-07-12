@@ -60,7 +60,7 @@ them with optimized versions that avoid runtime template parsing overhead.
 %% --------------------------------------------------------------------
 
 -export([parse_transform/2]).
--export([format_error/1]).
+-export([format_error/2]).
 -export([transform_stateful_to_ast/1]).
 -export([transform_stateless_to_ast/1]).
 
@@ -79,7 +79,7 @@ them with optimized versions that avoid runtime template parsing overhead.
 %% --------------------------------------------------------------------
 
 -ignore_xref([parse_transform/2]).
--ignore_xref([format_error/1]).
+-ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -181,7 +181,18 @@ templates that can be optimized at compile time.
     CompilerOptions :: compile_options(),
     AbstractSyntaxTrees1 :: [erl_parse:abstract_form()].
 parse_transform(AbstractSyntaxTrees, CompilerOptions) ->
-    parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, 0).
+    ModuleName = extract_module_name(AbstractSyntaxTrees),
+    ArizonaFunctions = extract_arizona_functions(AbstractSyntaxTrees),
+
+    %% Selective processing: only process modules with explicit arizona_parse_transform attributes
+    case ArizonaFunctions of
+        [] ->
+            %% No Arizona functions declared - cause compilation error with proper module info
+            error(no_arizona_parse_transform_attribute, none, error_info(ModuleName));
+        _ ->
+            %% Process declared Arizona functions normally using existing logic
+            parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, 0)
+    end.
 
 %% Parse transform with depth tracking for recursive optimization
 -spec parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
@@ -211,20 +222,51 @@ parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
     ]).
 
 -doc ~"""
-Format error messages for compilation diagnostics.
+Format error messages for compilation diagnostics with enhanced details.
 
-Converts parse transform error terms into human-readable string messages
-for compiler error reporting.
+This function is called by the Erlang compiler's error formatting system
+to provide detailed error messages for parse transform failures.
 """.
--spec format_error(Error) -> ErrorMessage when
-    Error :: term(),
-    ErrorMessage :: string().
-format_error(template_parse_failed) ->
-    "Failed to parse Arizona template - invalid template syntax";
-format_error(badarg) ->
-    "Arizona parse transform requires literal binary templates, variables are not supported";
-format_error(Other) ->
-    io_lib:format("Unknown Arizona parse transform error: ~p", [Other]).
+-spec format_error(Reason, StackTrace) -> ErrorMap when
+    Reason :: term(),
+    StackTrace :: erlang:stacktrace(),
+    ErrorMap :: #{pos_integer() => unicode:chardata()}.
+format_error(Reason, [{_M, _F, _As, Info} | _]) ->
+    ErrorInfoMap = proplists:get_value(error_info, Info, #{}),
+    Cause = maps:get(cause, ErrorInfoMap, Reason),
+    ErrorMsg = format_detailed_error(Reason, Cause),
+    #{1 => ErrorMsg}.
+
+%% Format detailed error messages based on cause information
+-spec format_detailed_error(Reason, Cause) -> unicode:chardata() when
+    Reason :: term(),
+    Cause :: term().
+format_detailed_error(template_parse_failed, {ModuleName, Line}) ->
+    io_lib:format(
+        "Failed to parse Arizona template in module ~w at line ~w. "
+        "Check template syntax for proper expressions and balanced braces.",
+        [ModuleName, Line]
+    );
+format_detailed_error(template_parse_failed, {ModuleName, Line, Error, Reason, Stacktrace}) ->
+    io_lib:format(
+        "Failed to parse Arizona template in module ~w at line ~w. "
+        "Original error: ~w:~p. Stacktrace: ~p. "
+        "Check template syntax for proper expressions and balanced braces.",
+        [ModuleName, Line, Error, Reason, Stacktrace]
+    );
+format_detailed_error(badarg, {ModuleName, Line}) ->
+    io_lib:format(
+        "Invalid arguments to Arizona template function in module ~w at line ~w. "
+        "Expected literal binary template.",
+        [ModuleName, Line]
+    );
+format_detailed_error(no_arizona_parse_transform_attribute, ModuleName) ->
+    io_lib:format(
+        "Module ~w uses Arizona parse transform but has no -arizona_parse_transform([function/arity]) attribute. "
+        "Add -arizona_parse_transform([function/arity]) to declare which functions use Arizona templates. "
+        "Example: -arizona_parse_transform([render/1]).",
+        [ModuleName]
+    ).
 
 -doc ~"""
 Transform stateful template result to optimized AST.
@@ -306,6 +348,9 @@ extract_arizona_functions(AbstractSyntaxTrees) ->
         [],
         AbstractSyntaxTrees
     ).
+
+%% TODO: Add warning injection functions in a future PR
+%% has_arizona_html_calls/1, inject_arizona_warning/2, split_forms_at_first_function/1,2
 
 %% Build mapping of function specs to their variable-to-binding mappings
 -spec build_function_bindings_map(AbstractSyntaxTrees, ArizonaFunctions) -> FunctionBindings when
@@ -673,8 +718,8 @@ extract_var_binary([Var]) ->
     Function :: erl_parse:abstract_form(),
     TransformedFunction :: erl_parse:abstract_form().
 transform_function_with_bindings(Function) ->
-    %% Return the function as-is - function-level transformations
-    %% are handled elsewhere in the enhanced parse transform
+    %% For now, just return the function as-is
+    %% TODO: Implement function-level transformation with variable context
     Function.
 
 %% Transform a form (top-level AST element) with context tracking
@@ -981,7 +1026,7 @@ transform_render_stateless_call(
     CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
-    raise_template_error(badarg, ModuleName, Line).
+    error(badarg, none, error_info({ModuleName, Line})).
 
 %% Transform render_stateful function calls with current function context
 -spec transform_render_stateful_call_with_context(
@@ -1014,7 +1059,7 @@ transform_render_stateful_call_with_context(
     _CurrentFunctionBindings
 ) ->
     Line = erl_anno:line(CallAnnotations),
-    raise_template_error(badarg, ModuleName, Line).
+    error(badarg, none, error_info({ModuleName, Line})).
 
 %% Transform render_stateful function calls
 -spec transform_render_stateful_call(
@@ -1036,7 +1081,7 @@ transform_render_stateful_call(
     CallAnnotations, _RemoteCall, _Args, ModuleName
 ) ->
     Line = erl_anno:line(CallAnnotations),
-    raise_template_error(badarg, ModuleName, Line).
+    error(badarg, none, error_info({ModuleName, Line})).
 
 %% Transform render_list function calls
 -spec transform_render_list_call(
@@ -1069,7 +1114,7 @@ transform_render_list_call(
     CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
-    raise_template_error(badarg, ModuleName, Line).
+    error(badarg, none, error_info({ModuleName, Line})).
 
 %% Transform render_slot function calls
 -spec transform_render_slot_call(
@@ -1140,8 +1185,12 @@ transform_slot_template_call(
             CallAnnotations, RemoteCall, SlotNameArg, SocketArg, IoListStructure
         )
     catch
-        _Error:_Reason ->
-            raise_template_error(template_parse_failed, ModuleName, Line)
+        Error:Reason:Stacktrace ->
+            error(
+                template_parse_failed,
+                none,
+                error_info({ModuleName, Line, Error, Reason, Stacktrace})
+            )
     end.
 
 %% Stateless Template Transformation
@@ -1170,8 +1219,12 @@ transform_stateless_template_call(
         % Generate the new function call with parsed structure
         create_stateless_parsed_call(CallAnnotations, RemoteCall, IoListStructure, SocketArg)
     catch
-        _Error:_Reason ->
-            raise_template_error(template_parse_failed, ModuleName, Line)
+        Error:Reason:Stacktrace ->
+            error(
+                template_parse_failed,
+                none,
+                error_info({ModuleName, Line, Error, Reason, Stacktrace})
+            )
     end.
 
 %% Parse template string into iolist structure with depth tracking
@@ -1245,8 +1298,12 @@ transform_stateful_template_call_with_context(
         TemplateDataAST = transform_stateful_to_ast(StatefulResult),
         create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg)
     catch
-        _Error:_Reason ->
-            raise_template_error(template_parse_failed, ModuleName, Line)
+        Error:Reason:Stacktrace ->
+            error(
+                template_parse_failed,
+                none,
+                error_info({ModuleName, Line, Error, Reason, Stacktrace})
+            )
     end.
 
 %% Transform render_stateful call with depth tracking
@@ -1272,8 +1329,12 @@ transform_stateful_template_call(
         TemplateDataAST = transform_stateful_to_ast(StatefulResult),
         create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg)
     catch
-        _Error:_Reason ->
-            raise_template_error(template_parse_failed, ModuleName, Line)
+        Error:Reason:Stacktrace ->
+            error(
+                template_parse_failed,
+                none,
+                error_info({ModuleName, Line, Error, Reason, Stacktrace})
+            )
     end.
 
 %% Parse template string into structured format with variable context
@@ -1452,8 +1513,12 @@ transform_list_template_call(
             CallAnnotations, RemoteCall, ListTemplateData, Items, SocketArg
         )
     catch
-        _Error:_Reason ->
-            raise_template_error(template_parse_failed, ModuleName, Line)
+        Error:Reason:Stacktrace ->
+            error(
+                template_parse_failed,
+                none,
+                error_info({ModuleName, Line, Error, Reason, Stacktrace})
+            )
     end.
 
 %% Parse template content for list rendering with depth tracking
@@ -1476,8 +1541,8 @@ parse_template_for_list(ItemFun, CompilerOptions, Depth) ->
         }
     } = arizona_parser:parse_list_tokens(TokenList),
 
-    %% Generate vars_indexes using empty variable context
-    %% List templates use basic parse transform approach
+    %% Generate vars_indexes using empty variable context for now
+    %% TODO: Support function-level variable context for list templates
     VariableIndexes = generate_vars_indexes(#{elems => DynamicElements}, #{}),
 
     % Build list template data structure
@@ -1613,23 +1678,14 @@ extract_template_content({bin, BinaryAnnotations, _BinaryFields} = BinaryForm) -
     LineNumber = erl_anno:line(BinaryAnnotations),
     {TemplateString, LineNumber}.
 
-%% Helper function to raise template errors with proper error_info
--spec raise_template_error(Reason, ModuleName, Line) -> no_return() when
-    Reason :: atom(),
-    ModuleName :: atom(),
-    Line :: pos_integer().
-raise_template_error(Reason, ModuleName, Line) ->
-    error(Reason, none, error_info(ModuleName, Line)).
-
-%% Create error_info for proper compiler diagnostics
--spec error_info(ModuleName, Line) -> ErrorInfo when
-    ModuleName :: atom(),
-    Line :: pos_integer(),
+%% Create error_info for proper compiler diagnostics with enhanced details
+-spec error_info(Cause) -> ErrorInfo when
+    Cause :: term(),
     ErrorInfo :: [{error_info, map()}].
-error_info(ModuleName, Line) ->
+error_info(Cause) ->
     [
         {error_info, #{
-            cause => #{module => ModuleName, line => Line},
+            cause => Cause,
             module => ?MODULE
         }}
     ].
