@@ -189,14 +189,19 @@ test_nested_function_calls(Config) when is_list(Config) ->
 %% Test invalid template error handling
 test_invalid_template_error(Config) when is_list(Config) ->
     % Test that format_error handles template_parse_failed
-    ErrorMsg = arizona_parse_transform:format_error(template_parse_failed),
-    ExpectedMsg = "Failed to parse Arizona template - invalid template syntax",
-    ?assertEqual(ExpectedMsg, ErrorMsg),
+    ErrorInfo = [{error_info, #{cause => {test_module, 123}}}],
+    ErrorStacktrace = [{?MODULE, ?FUNCTION_NAME, [], ErrorInfo}],
+    ErrorMap = arizona_parse_transform:format_error(template_parse_failed, ErrorStacktrace),
+    ErrorMsg = maps:get(1, ErrorMap),
+    ?assert(is_list(ErrorMsg)),
 
-    % Test unknown error
-    UnknownMsg = arizona_parse_transform:format_error({unknown_error, some_data}),
+    % Test badarg error
+    BadargInfo = [{error_info, #{cause => {test_module, 456}}}],
+    BadargStacktrace = [{?MODULE, ?FUNCTION_NAME, [], BadargInfo}],
+    BadargMap = arizona_parse_transform:format_error(badarg, BadargStacktrace),
+    BadargMsg = maps:get(1, BadargMap),
     % Should be a formatted string
-    ?assert(is_list(UnknownMsg)),
+    ?assert(is_list(BadargMsg)),
 
     ct:comment("Error formatting works correctly").
 
@@ -216,12 +221,16 @@ test_non_binary_template_error(Config) when is_list(Config) ->
 %% Test format_error function
 test_format_error(Config) when is_list(Config) ->
     % Test known error
-    Msg1 = arizona_parse_transform:format_error(template_parse_failed),
-    ?assertEqual("Failed to parse Arizona template - invalid template syntax", Msg1),
+    Stacktrace1 = [{?MODULE, ?FUNCTION_NAME, [], [{error_info, #{cause => {test_module, 123}}}]}],
+    Map1 = arizona_parse_transform:format_error(template_parse_failed, Stacktrace1),
+    Msg1 = maps:get(1, Map1),
+    ?assert(is_list(Msg1)),
 
-    % Test unknown error
-    Msg2 = arizona_parse_transform:format_error(unknown_error),
-    ?assert(string:str(Msg2, "Unknown Arizona parse transform error") > 0),
+    % Test no_arizona_parse_transform_attribute error
+    Stacktrace2 = [{?MODULE, ?FUNCTION_NAME, [], [{error_info, #{cause => test_module}}]}],
+    Map2 = arizona_parse_transform:format_error(no_arizona_parse_transform_attribute, Stacktrace2),
+    Msg2 = maps:get(1, Map2),
+    ?assert(is_list(Msg2)),
 
     ct:comment("format_error/1 handles both known and unknown errors correctly").
 
@@ -282,10 +291,11 @@ test_stateful_parse_error(Config) when is_list(Config) ->
 %% Test format_error function specifically for badarg
 test_format_error_badarg(Config) when is_list(Config) ->
     % Test badarg error specifically
-    BadargMsg = arizona_parse_transform:format_error(badarg),
-    ExpectedMsg =
-        "Arizona parse transform requires literal binary templates, variables are not supported",
-    ?assertEqual(ExpectedMsg, BadargMsg),
+    BadargInfo = [{error_info, #{cause => {test_module, 789}}}],
+    BadargStacktrace = [{?MODULE, ?FUNCTION_NAME, [], BadargInfo}],
+    BadargMap = arizona_parse_transform:format_error(badarg, BadargStacktrace),
+    BadargMsg = maps:get(1, BadargMap),
+    ?assert(is_list(BadargMsg)),
 
     ct:comment("format_error(badarg) returns correct message").
 

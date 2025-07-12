@@ -228,7 +228,7 @@ This function is called by the Erlang compiler's error formatting system
 to provide detailed error messages for parse transform failures.
 """.
 -spec format_error(Reason, Stacktrace) -> ErrorMap when
-    Reason :: term(),
+    Reason :: template_parse_failed | badarg | no_arizona_parse_transform_attribute,
     Stacktrace :: erlang:stacktrace(),
     ErrorMap :: #{pos_integer() => unicode:chardata()}.
 format_error(Reason, [{_M, _F, _As, Info} | _]) ->
