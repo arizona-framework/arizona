@@ -49,7 +49,10 @@ groups() ->
             test_format_error_badarg,
             test_stateful_non_binary_template_error,
             test_no_arizona_parse_transform_attribute_error,
-            test_render_live_non_binary_template_error
+            test_render_live_non_binary_template_error,
+            test_arizona_function_not_defined_error,
+            test_arizona_function_not_exported_error,
+            test_format_error_function_validation
         ]},
         {coverage_tests, [parallel], [
             test_complex_stateful_template_with_multiple_variables,
@@ -535,6 +538,7 @@ test_slot_template_transform(Config) when is_list(Config) ->
     -module(test_slot_optimization).
     -compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
+    -export([test_render/1]).
 
     test_render(Socket) ->
         arizona_html:render_slot(footer, Socket, ~"""
@@ -1234,3 +1238,64 @@ test_comprehensive_edge_cases(Config) when is_list(Config) ->
     ?assertEqual(#{}, EmptyResult),
 
     ct:comment("Comprehensive edge cases tested for better coverage").
+
+%% Test error when declared function is not defined in module
+test_arizona_function_not_defined_error(Config) when is_list(Config) ->
+    % Create a module that declares a function that doesn't exist
+    Forms = merl:quote(~"""
+    -module(test_undefined_function_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([nonexistent_function/1]).
+    -export([actual_function/1]).
+    actual_function(Socket) -> arizona_html:render_live(~"<div>Test</div>", Socket).
+    """),
+
+    % Should raise arizona_function_not_defined error
+    ?assertError(arizona_function_not_defined, arizona_parse_transform:parse_transform(Forms, [])),
+    ct:comment("Undefined function in arizona_parse_transform attribute correctly raises error").
+
+%% Test error when declared function is not exported from module
+test_arizona_function_not_exported_error(Config) when is_list(Config) ->
+    % Create a module that declares a function that exists but isn't exported
+    Forms = merl:quote(~"""
+    -module(test_unexported_function_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([private_function/1]).
+    -export([public_function/1]).
+    public_function(Socket) -> arizona_html:render_live(~"<div>Public</div>", Socket).
+    private_function(Socket) -> arizona_html:render_live(~"<div>Private</div>", Socket).
+    """),
+
+    % Should raise arizona_function_not_exported error
+    ?assertError(arizona_function_not_exported, arizona_parse_transform:parse_transform(Forms, [])),
+    ct:comment("Unexported function in arizona_parse_transform attribute correctly raises error").
+
+%% Test format_error for function validation errors
+test_format_error_function_validation(Config) when is_list(Config) ->
+    % Test arizona_function_not_defined error formatting
+    Stacktrace1 = [
+        {arizona_parse_transform, parse_transform, 2, [
+            {error_info, #{cause => {test_module, test_func, 1, "Function not defined in module"}}}
+        ]}
+    ],
+    ErrorMap1 = arizona_parse_transform:format_error(arizona_function_not_defined, Stacktrace1),
+    ErrorMsg1 = maps:get(1, ErrorMap1),
+    ?assert(is_list(ErrorMsg1)),
+    ?assert(string:find(ErrorMsg1, "test_func/1") =/= nomatch),
+    ?assert(string:find(ErrorMsg1, "not defined") =/= nomatch),
+
+    % Test arizona_function_not_exported error formatting
+    Stacktrace2 = [
+        {arizona_parse_transform, parse_transform, 2, [
+            {error_info, #{
+                cause => {test_module, private_func, 2, "Function not exported from module"}
+            }}
+        ]}
+    ],
+    ErrorMap2 = arizona_parse_transform:format_error(arizona_function_not_exported, Stacktrace2),
+    ErrorMsg2 = maps:get(1, ErrorMap2),
+    ?assert(is_list(ErrorMsg2)),
+    ?assert(string:find(ErrorMsg2, "private_func/2") =/= nomatch),
+    ?assert(string:find(ErrorMsg2, "not exported") =/= nomatch),
+
+    ct:comment("Function validation error formatting works correctly").

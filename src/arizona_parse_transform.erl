@@ -190,9 +190,53 @@ parse_transform(AbstractSyntaxTrees, CompilerOptions) ->
             %% No Arizona functions declared - cause compilation error with proper module info
             error(no_arizona_parse_transform_attribute, none, error_info(ModuleName));
         _ ->
+            %% Validate that declared functions exist and are exported
+            validate_arizona_functions(AbstractSyntaxTrees, ArizonaFunctions, ModuleName),
             %% Process declared Arizona functions normally using existing logic
             parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, 0)
     end.
+
+%% Validate that declared Arizona functions exist and are exported
+-spec validate_arizona_functions(AbstractSyntaxTrees, ArizonaFunctions, ModuleName) -> ok when
+    AbstractSyntaxTrees :: [erl_parse:abstract_form()],
+    ArizonaFunctions :: [function_spec()],
+    ModuleName :: atom().
+validate_arizona_functions(AbstractSyntaxTrees, ArizonaFunctions, ModuleName) ->
+    %% Extract exported functions from module
+    ExportedFunctions = extract_exported_functions(AbstractSyntaxTrees),
+    %% Extract defined functions from module
+    DefinedFunctions = extract_defined_functions(AbstractSyntaxTrees),
+
+    %% Check each declared Arizona function
+    lists:foreach(
+        fun({FuncName, Arity}) ->
+            %% Check if function is defined
+            case lists:member({FuncName, Arity}, DefinedFunctions) of
+                false ->
+                    error(
+                        arizona_function_not_defined,
+                        none,
+                        error_info({ModuleName, FuncName, Arity, "Function not defined in module"})
+                    );
+                true ->
+                    %% Check if function is exported
+                    case lists:member({FuncName, Arity}, ExportedFunctions) of
+                        false ->
+                            error(
+                                arizona_function_not_exported,
+                                none,
+                                error_info(
+                                    {ModuleName, FuncName, Arity,
+                                        "Function not exported from module"}
+                                )
+                            );
+                        true ->
+                            ok
+                    end
+            end
+        end,
+        ArizonaFunctions
+    ).
 
 %% Parse transform with depth tracking for recursive optimization
 -spec parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
@@ -228,7 +272,12 @@ This function is called by the Erlang compiler's error formatting system
 to provide detailed error messages for parse transform failures.
 """.
 -spec format_error(Reason, Stacktrace) -> ErrorMap when
-    Reason :: template_parse_failed | badarg | no_arizona_parse_transform_attribute,
+    Reason ::
+        template_parse_failed
+        | badarg
+        | no_arizona_parse_transform_attribute
+        | arizona_function_not_defined
+        | arizona_function_not_exported,
     Stacktrace :: erlang:stacktrace(),
     ErrorMap :: #{pos_integer() => unicode:chardata()}.
 format_error(Reason, [{_M, _F, _As, Info} | _]) ->
@@ -267,6 +316,20 @@ format_detailed_error(no_arizona_parse_transform_attribute, ModuleName) ->
         "Add -arizona_parse_transform([function/arity]) to declare which functions "
         "use Arizona templates. Example: -arizona_parse_transform([render/1]).",
         [ModuleName]
+    );
+format_detailed_error(arizona_function_not_defined, {ModuleName, FuncName, Arity, _Message}) ->
+    io_lib:format(
+        "Function ~w/~w declared in -arizona_parse_transform attribute is not "
+        "defined in module ~w. Either define the function or remove it from the "
+        "-arizona_parse_transform([function/arity]) list.",
+        [FuncName, Arity, ModuleName]
+    );
+format_detailed_error(arizona_function_not_exported, {ModuleName, FuncName, Arity, _Message}) ->
+    io_lib:format(
+        "Function ~w/~w declared in -arizona_parse_transform attribute is not "
+        "exported from module ~w. Either export the function with -export([~w/~w]) "
+        "or remove it from the -arizona_parse_transform([function/arity]) list.",
+        [FuncName, Arity, ModuleName, FuncName, Arity]
     ).
 
 -doc ~"""
@@ -343,6 +406,38 @@ extract_arizona_functions(AbstractSyntaxTrees) ->
                 is_list(FunctionList)
             ->
                 FunctionList ++ Acc;
+            (_, Acc) ->
+                Acc
+        end,
+        [],
+        AbstractSyntaxTrees
+    ).
+
+%% Extract exported functions from module
+-spec extract_exported_functions(AbstractSyntaxTrees) -> ExportedFunctions when
+    AbstractSyntaxTrees :: [erl_parse:abstract_form()],
+    ExportedFunctions :: [{atom(), arity()}].
+extract_exported_functions(AbstractSyntaxTrees) ->
+    lists:foldl(
+        fun
+            ({attribute, _Anno, export, FunctionList}, Acc) when is_list(FunctionList) ->
+                FunctionList ++ Acc;
+            (_, Acc) ->
+                Acc
+        end,
+        [],
+        AbstractSyntaxTrees
+    ).
+
+%% Extract defined functions from module
+-spec extract_defined_functions(AbstractSyntaxTrees) -> DefinedFunctions when
+    AbstractSyntaxTrees :: [erl_parse:abstract_form()],
+    DefinedFunctions :: [{atom(), arity()}].
+extract_defined_functions(AbstractSyntaxTrees) ->
+    lists:foldl(
+        fun
+            ({function, _Anno, FuncName, Arity, _Clauses}, Acc) ->
+                [{FuncName, Arity} | Acc];
             (_, Acc) ->
                 Acc
         end,
