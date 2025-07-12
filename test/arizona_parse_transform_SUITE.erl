@@ -47,7 +47,9 @@ groups() ->
             test_stateless_parse_error,
             test_stateful_parse_error,
             test_format_error_badarg,
-            test_stateful_non_binary_template_error
+            test_stateful_non_binary_template_error,
+            test_no_arizona_parse_transform_attribute_error,
+            test_render_live_non_binary_template_error
         ]},
         {coverage_tests, [parallel], [
             test_complex_stateful_template_with_multiple_variables,
@@ -56,7 +58,14 @@ groups() ->
             test_transform_stateful_to_ast,
             test_stateless_binary_handling,
             test_dynamic_expression_ast_creation,
-            test_nested_arizona_optimization
+            test_nested_arizona_optimization,
+            test_edge_case_coverage,
+            test_invalid_function_for_bindings,
+            test_variable_name_validation,
+            test_template_parse_failed_error_formatting,
+            test_render_live_edge_cases,
+            test_generate_vars_indexes_edge_cases,
+            test_comprehensive_edge_cases
         ]}
     ].
 
@@ -1052,3 +1061,176 @@ test_proposed_current_function_bindings_fix(Config) when is_list(Config) ->
         _Other ->
             ct:comment("CurrentFunctionBindings needs more work")
     end.
+
+%% Test error when module has parse transform but no arizona_parse_transform attribute
+test_no_arizona_parse_transform_attribute_error(Config) when is_list(Config) ->
+    % Create a module with parse transform but no arizona_parse_transform attribute
+    Forms = merl:quote(~"""
+    -module(test_no_attribute_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -export([test_function/0]).
+    test_function() -> ok.
+    """),
+
+    % Should raise no_arizona_parse_transform_attribute error
+    ?assertError(
+        no_arizona_parse_transform_attribute, arizona_parse_transform:parse_transform(Forms, [])
+    ),
+    ct:comment("Missing arizona_parse_transform attribute correctly raises error").
+
+%% Test render_live with non-binary template error
+test_render_live_non_binary_template_error(Config) when is_list(Config) ->
+    % Create a form with a variable render_live template (should raise badarg)
+    Forms = merl:quote(~"""
+    -module(test_live_badarg_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
+    -export([test_render/1]).
+    test_render(Socket) -> arizona_html:render_live(Template, Socket).
+    """),
+
+    % The parse transform should raise badarg for non-binary templates
+    ?assertError(badarg, arizona_parse_transform:parse_transform(Forms, [])),
+    ct:comment("Non-binary live template correctly raised badarg error").
+
+%% Test edge cases for better coverage
+test_edge_case_coverage(Config) when is_list(Config) ->
+    % Test variable assignment with no dependencies
+    Forms = merl:quote(~"""
+    -module(test_edge_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
+    -export([test_render/1]).
+    test_render(Socket) ->
+        SimpleVar = "hello",
+        arizona_html:render_live(~"<div>{SimpleVar}</div>", Socket).
+    """),
+
+    % Should transform without error
+    TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
+    ?assert(is_list(TransformedForms)),
+    ct:comment("Edge case with no dependencies handled correctly").
+
+%% Test function for bindings analysis with no bindings
+test_invalid_function_for_bindings(Config) when is_list(Config) ->
+    % Test with function AST that has no arizona_socket:get_binding calls
+    Forms = merl:quote(~"""
+    -module(test_no_bindings_module).
+    -export([test_func/1]).
+    test_func(Socket) -> ok.
+    """),
+    [_ModAttr, _ExportAttr, FunctionForm] = Forms,
+    Result = arizona_parse_transform:analyze_function_for_bindings(FunctionForm),
+    ?assertEqual(#{}, Result),
+    ct:comment("Function with no bindings returns empty map").
+
+%% Test variable name validation
+test_variable_name_validation(Config) when is_list(Config) ->
+    % Test with lowercase variable name (should return false)
+    Forms = merl:quote(~"""
+    -module(test_lowercase_var_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
+    -export([test_render/1]).
+    test_render(Socket) ->
+        lowercase_var = arizona_socket:get_binding(test, Socket),
+        arizona_html:render_live(~"<div>{lowercase_var}</div>", Socket).
+    """),
+
+    % Should transform without crashing (lowercase vars get filtered out)
+    TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
+    ?assert(is_list(TransformedForms)),
+    ct:comment("Lowercase variable names handled correctly").
+
+%% Test template parse failed error formatting
+test_template_parse_failed_error_formatting(Config) when is_list(Config) ->
+    % Test format_error with template_parse_failed and detailed stacktrace
+    Stacktrace = [
+        {arizona_parse_transform, parse_transform, 2, [
+            {error_info, #{cause => {test_module, 123, some_error, reason, []}}}
+        ]}
+    ],
+    ErrorMap = arizona_parse_transform:format_error(template_parse_failed, Stacktrace),
+    ErrorMsg = maps:get(1, ErrorMap),
+    ?assert(is_list(ErrorMsg)),
+    ?assert(string:find(ErrorMsg, "Failed to parse Arizona template") =/= nomatch),
+    ct:comment("Template parse failed error formatting works").
+
+%% Test render_live edge cases
+test_render_live_edge_cases(Config) when is_list(Config) ->
+    % Test render_live with valid binary template
+    Forms = merl:quote(~"""
+    -module(test_live_edge_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
+    -export([test_render/1]).
+    test_render(Socket) ->
+        arizona_html:render_live(~"<div>Test</div>", Socket).
+    """),
+
+    % Should transform successfully
+    TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
+    ?assert(is_list(TransformedForms)),
+    ct:comment("Render live edge cases handled correctly").
+
+%% Test generate_vars_indexes with edge cases
+test_generate_vars_indexes_edge_cases(Config) when is_list(Config) ->
+    % Test with empty template and bindings
+    EmptyTemplate = #{elems => #{}},
+    EmptyBindings = #{},
+    Result1 = arizona_parse_transform:generate_vars_indexes(EmptyTemplate, EmptyBindings),
+    ?assertEqual(#{}, Result1),
+
+    % Test with complex nested template structure
+    ComplexTemplate = #{
+        elems => #{
+            1 => {static, 1, ~"Hello "},
+            2 => {dynamic, 2, ~"UserName"},
+            3 => {static, 3, ~" count: "},
+            4 => {dynamic, 4, ~"Count"}
+        }
+    },
+    ComplexBindings = #{~"UserName" => [~"user_name"], ~"Count" => [~"count"]},
+    Result2 = arizona_parse_transform:generate_vars_indexes(ComplexTemplate, ComplexBindings),
+    ?assertMatch(#{~"user_name" := [2], ~"count" := [4]}, Result2),
+
+    ct:comment("generate_vars_indexes edge cases handled correctly").
+
+%% Test comprehensive edge cases to improve coverage
+test_comprehensive_edge_cases(Config) when is_list(Config) ->
+    % Test function with invalid get_binding call patterns
+    Forms1 = merl:quote(~"""
+    -module(test_invalid_binding_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
+    -export([test_render/1]).
+    test_render(Socket) ->
+        Value = arizona_socket:get_binding(invalid_call_pattern),
+        arizona_html:render_live(~"<div>Test</div>", Socket).
+    """),
+
+    % Should transform without crashing (invalid patterns ignored)
+    TransformedForms1 = arizona_parse_transform:parse_transform(Forms1, []),
+    ?assert(is_list(TransformedForms1)),
+
+    % Test with variables that have no dependencies (empty list case)
+    Forms2 = merl:quote(~"""
+    -module(test_no_deps_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([test_render/1]).
+    -export([test_render/1]).
+    test_render(Socket) ->
+        Static = "hello",
+        arizona_html:render_live(~"<div>{Static}</div>", Socket).
+    """),
+
+    TransformedForms2 = arizona_parse_transform:parse_transform(Forms2, []),
+    ?assert(is_list(TransformedForms2)),
+
+    % Test with build_function_bindings_map edge cases
+    EmptyForms = [],
+    EmptyFunctions = [],
+    EmptyResult = arizona_parse_transform:build_function_bindings_map(EmptyForms, EmptyFunctions),
+    ?assertEqual(#{}, EmptyResult),
+
+    ct:comment("Comprehensive edge cases tested for better coverage").
