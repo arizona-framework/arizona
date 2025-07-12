@@ -1,7 +1,6 @@
 -module(arizona_counter_layout).
 -compile({parse_transform, arizona_parse_transform}).
-
-%% Layout callbacks
+-arizona_parse_transform([render/1]).
 -export([render/1]).
 
 %% Layout for the counter test component

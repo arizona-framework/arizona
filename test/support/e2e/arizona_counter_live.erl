@@ -1,6 +1,7 @@
 -module(arizona_counter_live).
 -behaviour(arizona_live).
 -compile({parse_transform, arizona_parse_transform}).
+-arizona_parse_transform([render/1]).
 
 -export([mount/2, render/1, handle_event/3]).
 
@@ -10,9 +11,10 @@ mount(_Params, Socket) ->
     arizona_socket:set_layout({arizona_counter_layout, render, main_content}, Socket1).
 
 render(Socket) ->
+    Count = arizona_socket:get_binding(count, Socket),
     arizona_html:render_live(~"""
     <div id="root">
-        <h1>Counter: <span data-testid="count">{arizona_socket:get_binding(count, Socket)}</span></h1>
+        <h1>Counter: <span data-testid="count">{Count}</span></h1>
         <button data-testid="increment" onclick="arizona.sendEvent('increment')">+</button>
         <button data-testid="decrement" onclick="arizona.sendEvent('decrement')">-</button>
         <button data-testid="reset" onclick="arizona.sendEvent('reset')">Reset</button>
