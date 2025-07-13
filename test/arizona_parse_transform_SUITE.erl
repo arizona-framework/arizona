@@ -1275,7 +1275,7 @@ test_format_error_function_validation(Config) when is_list(Config) ->
     % Test arizona_function_not_defined error formatting
     Stacktrace1 = [
         {arizona_parse_transform, parse_transform, 2, [
-            {error_info, #{cause => {test_module, test_func, 1, "Function not defined in module"}}}
+            {error_info, #{cause => {test_module, test_func, 1}}}
         ]}
     ],
     ErrorMap1 = arizona_parse_transform:format_error(arizona_function_not_defined, Stacktrace1),
@@ -1288,7 +1288,7 @@ test_format_error_function_validation(Config) when is_list(Config) ->
     Stacktrace2 = [
         {arizona_parse_transform, parse_transform, 2, [
             {error_info, #{
-                cause => {test_module, private_func, 2, "Function not exported from module"}
+                cause => {test_module, private_func, 2}
             }}
         ]}
     ],

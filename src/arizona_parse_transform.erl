@@ -245,7 +245,7 @@ validate_function_defined({FuncName, Arity} = FunctionSpec, DefinedFunctions, Mo
             error(
                 arizona_function_not_defined,
                 none,
-                error_info({ModuleName, FuncName, Arity, "Function not defined in module"})
+                error_info({ModuleName, FuncName, Arity})
             )
     end.
 
@@ -262,7 +262,7 @@ validate_function_exported({FuncName, Arity} = FunctionSpec, ExportedFunctions, 
             error(
                 arizona_function_not_exported,
                 none,
-                error_info({ModuleName, FuncName, Arity, "Function not exported from module"})
+                error_info({ModuleName, FuncName, Arity})
             )
     end.
 
@@ -347,14 +347,14 @@ format_detailed_error(arizona_no_parse_transform_attribute, ModuleName) ->
         "use Arizona templates. Example: -arizona_parse_transform([render/1]).",
         [ModuleName]
     );
-format_detailed_error(arizona_function_not_defined, {ModuleName, FuncName, Arity, _Message}) ->
+format_detailed_error(arizona_function_not_defined, {ModuleName, FuncName, Arity}) ->
     io_lib:format(
         "Function ~w/~w declared in -arizona_parse_transform attribute is not "
         "defined in module ~w. Either define the function or remove it from the "
         "-arizona_parse_transform([function/arity]) list.",
         [FuncName, Arity, ModuleName]
     );
-format_detailed_error(arizona_function_not_exported, {ModuleName, FuncName, Arity, _Message}) ->
+format_detailed_error(arizona_function_not_exported, {ModuleName, FuncName, Arity}) ->
     io_lib:format(
         "Function ~w/~w declared in -arizona_parse_transform attribute is not "
         "exported from module ~w. Either export the function with -export([~w/~w]) "
