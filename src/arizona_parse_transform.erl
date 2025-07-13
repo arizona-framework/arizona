@@ -209,34 +209,62 @@ validate_arizona_functions(AbstractSyntaxTrees, ArizonaFunctions, ModuleName) ->
 
     %% Check each declared Arizona function
     lists:foreach(
-        fun({FuncName, Arity}) ->
-            %% Check if function is defined
-            case lists:member({FuncName, Arity}, DefinedFunctions) of
-                false ->
-                    error(
-                        arizona_function_not_defined,
-                        none,
-                        error_info({ModuleName, FuncName, Arity, "Function not defined in module"})
-                    );
-                true ->
-                    %% Check if function is exported
-                    case lists:member({FuncName, Arity}, ExportedFunctions) of
-                        false ->
-                            error(
-                                arizona_function_not_exported,
-                                none,
-                                error_info(
-                                    {ModuleName, FuncName, Arity,
-                                        "Function not exported from module"}
-                                )
-                            );
-                        true ->
-                            ok
-                    end
-            end
+        fun(FunctionSpec) ->
+            validate_single_arizona_function(
+                FunctionSpec, DefinedFunctions, ExportedFunctions, ModuleName
+            )
         end,
         ArizonaFunctions
     ).
+
+%% Validate a single Arizona function is defined and exported
+-spec validate_single_arizona_function(
+    FunctionSpec, DefinedFunctions, ExportedFunctions, ModuleName
+) -> ok when
+    FunctionSpec :: function_spec(),
+    DefinedFunctions :: [{atom(), arity()}],
+    ExportedFunctions :: [{atom(), arity()}],
+    ModuleName :: atom().
+validate_single_arizona_function(
+    {FuncName, Arity}, DefinedFunctions, ExportedFunctions, ModuleName
+) ->
+    ok = validate_function_defined({FuncName, Arity}, DefinedFunctions, ModuleName),
+    ok = validate_function_exported({FuncName, Arity}, ExportedFunctions, ModuleName),
+    ok.
+
+%% Validate that a function is defined in the module
+-spec validate_function_defined(FunctionSpec, DefinedFunctions, ModuleName) -> ok when
+    FunctionSpec :: function_spec(),
+    DefinedFunctions :: [{atom(), arity()}],
+    ModuleName :: atom().
+validate_function_defined({FuncName, Arity} = FunctionSpec, DefinedFunctions, ModuleName) ->
+    case lists:member(FunctionSpec, DefinedFunctions) of
+        true ->
+            ok;
+        false ->
+            error(
+                arizona_function_not_defined,
+                none,
+                error_info({ModuleName, FuncName, Arity, "Function not defined in module"})
+            )
+    end.
+
+%% Validate that a function is exported from the module
+-spec validate_function_exported(FunctionSpec, ExportedFunctions, ModuleName) -> ok when
+    FunctionSpec :: function_spec(),
+    ExportedFunctions :: [{atom(), arity()}],
+    ModuleName :: atom().
+validate_function_exported({FuncName, Arity} = FunctionSpec, ExportedFunctions, ModuleName) ->
+    case lists:member(FunctionSpec, ExportedFunctions) of
+        true ->
+            ok;
+        false ->
+            error(
+                arizona_function_not_exported,
+                none,
+                error_info({ModuleName, FuncName, Arity, "Function not exported from module"})
+            )
+    end.
 
 %% Parse transform with depth tracking for recursive optimization
 -spec parse_transform_with_depth(AbstractSyntaxTrees, CompilerOptions, Depth) ->
