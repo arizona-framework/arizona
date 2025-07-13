@@ -536,22 +536,36 @@ collect_bindings_from_function(Function) ->
     NewAcc :: #{binary() => binary() | [binary()]}.
 analyze_node_for_bindings(AstNode, Acc) ->
     case AstNode of
-        %% Match: Var = RHS (any assignment)
         {match, _Line, {var, _, VarName}, RHS} ->
-            %% Collect all bindings this variable depends on (direct + transitive)
-            BindingDependencies = collect_binding_dependencies(RHS),
-            VariableDependencies = collect_variable_dependencies(RHS),
-            AllDependencies = lists:usort(BindingDependencies ++ VariableDependencies),
-            case AllDependencies of
-                [] ->
-                    Acc;
-                _ ->
-                    VarBinary = atom_to_binary(VarName),
-                    Acc#{VarBinary => AllDependencies}
-            end;
+            analyze_variable_assignment(VarName, RHS, Acc);
         _ ->
             Acc
     end.
+
+%% Analyze a variable assignment for dependencies
+-spec analyze_variable_assignment(VarName, RHS, Acc) -> NewAcc when
+    VarName :: atom(),
+    RHS :: erl_parse:abstract_expr(),
+    Acc :: #{binary() => binary() | [binary()]},
+    NewAcc :: #{binary() => binary() | [binary()]}.
+analyze_variable_assignment(VarName, RHS, Acc) ->
+    AllDependencies = collect_all_dependencies(RHS),
+    case AllDependencies of
+        [] ->
+            Acc;
+        Dependencies ->
+            VarBinary = atom_to_binary(VarName),
+            Acc#{VarBinary => Dependencies}
+    end.
+
+%% Collect all dependencies (bindings + variables) from RHS expression
+-spec collect_all_dependencies(RHS) -> Dependencies when
+    RHS :: erl_parse:abstract_expr(),
+    Dependencies :: [binary()].
+collect_all_dependencies(RHS) ->
+    BindingDependencies = collect_binding_dependencies(RHS),
+    VariableDependencies = collect_variable_dependencies(RHS),
+    lists:usort(BindingDependencies ++ VariableDependencies).
 
 %% Collect all binding dependencies from a potentially nested arizona_socket:get_binding call
 -spec collect_binding_dependencies(AST) -> Dependencies when
