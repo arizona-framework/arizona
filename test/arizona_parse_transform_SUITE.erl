@@ -190,14 +190,14 @@ test_invalid_template_error(Config) when is_list(Config) ->
     % Test that format_error handles template_parse_failed
     ErrorInfo = [{error_info, #{cause => {test_module, 123}}}],
     ErrorStacktrace = [{?MODULE, ?FUNCTION_NAME, [], ErrorInfo}],
-    ErrorMap = arizona_parse_transform:format_error(template_parse_failed, ErrorStacktrace),
+    ErrorMap = arizona_parse_transform:format_error(arizona_template_parse_failed, ErrorStacktrace),
     ErrorMsg = maps:get(1, ErrorMap),
     ?assert(is_list(ErrorMsg)),
 
     % Test badarg error
     BadargInfo = [{error_info, #{cause => {test_module, 456}}}],
     BadargStacktrace = [{?MODULE, ?FUNCTION_NAME, [], BadargInfo}],
-    BadargMap = arizona_parse_transform:format_error(badarg, BadargStacktrace),
+    BadargMap = arizona_parse_transform:format_error(arizona_badarg, BadargStacktrace),
     BadargMsg = maps:get(1, BadargMap),
     % Should be a formatted string
     ?assert(is_list(BadargMsg)),
@@ -216,20 +216,20 @@ test_non_binary_template_error(Config) when is_list(Config) ->
     """),
 
     % The parse transform should raise badarg for non-binary templates
-    ?assertError(badarg, arizona_parse_transform:parse_transform(Forms, [])),
+    ?assertError(arizona_badarg, arizona_parse_transform:parse_transform(Forms, [])),
     ct:comment("Non-binary template correctly raised badarg error").
 
 %% Test format_error function
 test_format_error(Config) when is_list(Config) ->
     % Test known error
     Stacktrace1 = [{?MODULE, ?FUNCTION_NAME, [], [{error_info, #{cause => {test_module, 123}}}]}],
-    Map1 = arizona_parse_transform:format_error(template_parse_failed, Stacktrace1),
+    Map1 = arizona_parse_transform:format_error(arizona_template_parse_failed, Stacktrace1),
     Msg1 = maps:get(1, Map1),
     ?assert(is_list(Msg1)),
 
     % Test no_arizona_parse_transform_attribute error
     Stacktrace2 = [{?MODULE, ?FUNCTION_NAME, [], [{error_info, #{cause => test_module}}]}],
-    Map2 = arizona_parse_transform:format_error(no_arizona_parse_transform_attribute, Stacktrace2),
+    Map2 = arizona_parse_transform:format_error(arizona_no_parse_transform_attribute, Stacktrace2),
     Msg2 = maps:get(1, Map2),
     ?assert(is_list(Msg2)),
 
@@ -279,7 +279,7 @@ test_stateless_parse_error(Config) when is_list(Config) ->
     """),
 
     % The parse transform should handle scanner errors gracefully
-    ?assertError(template_parse_failed, arizona_parse_transform:parse_transform(Forms, [])),
+    ?assertError(arizona_template_parse_failed, arizona_parse_transform:parse_transform(Forms, [])),
     ct:comment("Stateless template parse error correctly raised").
 
 %% Test stateful parsing error
@@ -294,7 +294,7 @@ test_stateful_parse_error(Config) when is_list(Config) ->
     """),
 
     % The parse transform should handle errors gracefully
-    ?assertError(template_parse_failed, arizona_parse_transform:parse_transform(Forms, [])),
+    ?assertError(arizona_template_parse_failed, arizona_parse_transform:parse_transform(Forms, [])),
     ct:comment("Stateful template parse error correctly raised").
 
 %% Test format_error function specifically for badarg
@@ -302,7 +302,7 @@ test_format_error_badarg(Config) when is_list(Config) ->
     % Test badarg error specifically
     BadargInfo = [{error_info, #{cause => {test_module, 789}}}],
     BadargStacktrace = [{?MODULE, ?FUNCTION_NAME, [], BadargInfo}],
-    BadargMap = arizona_parse_transform:format_error(badarg, BadargStacktrace),
+    BadargMap = arizona_parse_transform:format_error(arizona_badarg, BadargStacktrace),
     BadargMsg = maps:get(1, BadargMap),
     ?assert(is_list(BadargMsg)),
 
@@ -320,7 +320,7 @@ test_stateful_non_binary_template_error(Config) when is_list(Config) ->
     """),
 
     % The parse transform should raise badarg for non-binary templates
-    ?assertError(badarg, arizona_parse_transform:parse_transform(Forms, [])),
+    ?assertError(arizona_badarg, arizona_parse_transform:parse_transform(Forms, [])),
     ct:comment("Non-binary stateful template correctly raised badarg error").
 
 %% Test complex stateful template with multiple variables
@@ -1078,7 +1078,7 @@ test_no_arizona_parse_transform_attribute_error(Config) when is_list(Config) ->
 
     % Should raise no_arizona_parse_transform_attribute error
     ?assertError(
-        no_arizona_parse_transform_attribute, arizona_parse_transform:parse_transform(Forms, [])
+        arizona_no_parse_transform_attribute, arizona_parse_transform:parse_transform(Forms, [])
     ),
     ct:comment("Missing arizona_parse_transform attribute correctly raises error").
 
@@ -1094,7 +1094,7 @@ test_render_live_non_binary_template_error(Config) when is_list(Config) ->
     """),
 
     % The parse transform should raise badarg for non-binary templates
-    ?assertError(badarg, arizona_parse_transform:parse_transform(Forms, [])),
+    ?assertError(arizona_badarg, arizona_parse_transform:parse_transform(Forms, [])),
     ct:comment("Non-binary live template correctly raised badarg error").
 
 %% Test edge cases for better coverage
@@ -1154,7 +1154,7 @@ test_template_parse_failed_error_formatting(Config) when is_list(Config) ->
             {error_info, #{cause => {test_module, 123, some_error, reason, []}}}
         ]}
     ],
-    ErrorMap = arizona_parse_transform:format_error(template_parse_failed, Stacktrace),
+    ErrorMap = arizona_parse_transform:format_error(arizona_template_parse_failed, Stacktrace),
     ErrorMsg = maps:get(1, ErrorMap),
     ?assert(is_list(ErrorMsg)),
     ?assert(string:find(ErrorMsg, "Failed to parse Arizona template") =/= nomatch),

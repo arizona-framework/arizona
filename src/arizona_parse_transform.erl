@@ -188,7 +188,7 @@ parse_transform(AbstractSyntaxTrees, CompilerOptions) ->
     case ArizonaFunctions of
         [] ->
             %% No Arizona functions declared - cause compilation error with proper module info
-            error(no_arizona_parse_transform_attribute, none, error_info(ModuleName));
+            error(arizona_no_parse_transform_attribute, none, error_info(ModuleName));
         _ ->
             %% Validate that declared functions exist and are exported
             validate_arizona_functions(AbstractSyntaxTrees, ArizonaFunctions, ModuleName),
@@ -273,9 +273,9 @@ to provide detailed error messages for parse transform failures.
 """.
 -spec format_error(Reason, Stacktrace) -> ErrorMap when
     Reason ::
-        template_parse_failed
-        | badarg
-        | no_arizona_parse_transform_attribute
+        arizona_template_parse_failed
+        | arizona_badarg
+        | arizona_no_parse_transform_attribute
         | arizona_function_not_defined
         | arizona_function_not_exported,
     Stacktrace :: erlang:stacktrace(),
@@ -290,26 +290,28 @@ format_error(Reason, [{_M, _F, _As, Info} | _]) ->
 -spec format_detailed_error(Reason, Cause) -> unicode:chardata() when
     Reason :: term(),
     Cause :: term().
-format_detailed_error(template_parse_failed, {ModuleName, Line}) ->
+format_detailed_error(arizona_template_parse_failed, {ModuleName, Line}) ->
     io_lib:format(
         "Failed to parse Arizona template in module ~w at line ~w. "
         "Check template syntax for proper expressions and balanced braces.",
         [ModuleName, Line]
     );
-format_detailed_error(template_parse_failed, {ModuleName, Line, Error, Reason, Stacktrace}) ->
+format_detailed_error(
+    arizona_template_parse_failed, {ModuleName, Line, Error, Reason, Stacktrace}
+) ->
     io_lib:format(
         "Failed to parse Arizona template in module ~w at line ~w. "
         "Original error: ~w:~p. Stacktrace: ~p. "
         "Check template syntax for proper expressions and balanced braces.",
         [ModuleName, Line, Error, Reason, Stacktrace]
     );
-format_detailed_error(badarg, {ModuleName, Line}) ->
+format_detailed_error(arizona_badarg, {ModuleName, Line}) ->
     io_lib:format(
         "Invalid arguments to Arizona template function in module ~w at line ~w. "
         "Expected literal binary template.",
         [ModuleName, Line]
     );
-format_detailed_error(no_arizona_parse_transform_attribute, ModuleName) ->
+format_detailed_error(arizona_no_parse_transform_attribute, ModuleName) ->
     io_lib:format(
         "Module ~w uses Arizona parse transform but has no "
         "-arizona_parse_transform([function/arity]) attribute. "
@@ -1122,7 +1124,7 @@ transform_render_stateless_call(
     CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
-    error(badarg, none, error_info({ModuleName, Line})).
+    error(arizona_badarg, none, error_info({ModuleName, Line})).
 
 %% Transform render_stateful function calls with current function context
 -spec transform_render_stateful_call_with_context(
@@ -1155,7 +1157,7 @@ transform_render_stateful_call_with_context(
     _CurrentFunctionBindings
 ) ->
     Line = erl_anno:line(CallAnnotations),
-    error(badarg, none, error_info({ModuleName, Line})).
+    error(arizona_badarg, none, error_info({ModuleName, Line})).
 
 %% Transform render_stateful function calls
 -spec transform_render_stateful_call(
@@ -1177,7 +1179,7 @@ transform_render_stateful_call(
     CallAnnotations, _RemoteCall, _Args, ModuleName
 ) ->
     Line = erl_anno:line(CallAnnotations),
-    error(badarg, none, error_info({ModuleName, Line})).
+    error(arizona_badarg, none, error_info({ModuleName, Line})).
 
 %% Transform render_list function calls
 -spec transform_render_list_call(
@@ -1210,7 +1212,7 @@ transform_render_list_call(
     CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
-    error(badarg, none, error_info({ModuleName, Line})).
+    error(arizona_badarg, none, error_info({ModuleName, Line})).
 
 %% Transform render_slot function calls
 -spec transform_render_slot_call(
@@ -1283,7 +1285,7 @@ transform_slot_template_call(
     catch
         Error:Reason:Stacktrace ->
             error(
-                template_parse_failed,
+                arizona_template_parse_failed,
                 none,
                 error_info({ModuleName, Line, Error, Reason, Stacktrace})
             )
@@ -1317,7 +1319,7 @@ transform_stateless_template_call(
     catch
         Error:Reason:Stacktrace ->
             error(
-                template_parse_failed,
+                arizona_template_parse_failed,
                 none,
                 error_info({ModuleName, Line, Error, Reason, Stacktrace})
             )
@@ -1396,7 +1398,7 @@ transform_stateful_template_call_with_context(
     catch
         Error:Reason:Stacktrace ->
             error(
-                template_parse_failed,
+                arizona_template_parse_failed,
                 none,
                 error_info({ModuleName, Line, Error, Reason, Stacktrace})
             )
@@ -1427,7 +1429,7 @@ transform_stateful_template_call(
     catch
         Error:Reason:Stacktrace ->
             error(
-                template_parse_failed,
+                arizona_template_parse_failed,
                 none,
                 error_info({ModuleName, Line, Error, Reason, Stacktrace})
             )
@@ -1611,7 +1613,7 @@ transform_list_template_call(
     catch
         Error:Reason:Stacktrace ->
             error(
-                template_parse_failed,
+                arizona_template_parse_failed,
                 none,
                 error_info({ModuleName, Line, Error, Reason, Stacktrace})
             )
