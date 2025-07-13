@@ -42,6 +42,12 @@ them with optimized versions that avoid runtime template parsing overhead.
 
 -ignore_xref([parse_transform/2]).
 -ignore_xref([format_error/2]).
+-ignore_xref([extract_arizona_functions/1]).
+-ignore_xref([analyze_function_for_bindings/1]).
+-ignore_xref([generate_vars_indexes/2]).
+-ignore_xref([parse_template_for_stateful_with_context/5]).
+-ignore_xref([build_function_bindings_map/2]).
+-ignore_xref([extract_functions_single_pass/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
