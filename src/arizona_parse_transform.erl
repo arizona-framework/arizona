@@ -796,13 +796,11 @@ process_element_variables(VarNames, Index, VarToBinding, Acc) ->
 -spec process_single_variable(VarName, Index, VarToBinding, Acc) -> UpdatedAcc when
     VarName :: binary(),
     Index :: non_neg_integer(),
-    VarToBinding :: #{binary() => binary() | [binary()]},
+    VarToBinding :: #{binary() => [binary()]},
     Acc :: #{binary() => [non_neg_integer()]},
     UpdatedAcc :: #{binary() => [non_neg_integer()]}.
 process_single_variable(VarName, Index, VarToBinding, Acc) ->
     case VarToBinding of
-        #{VarName := BindingName} when is_binary(BindingName) ->
-            add_binding_index(BindingName, Index, Acc);
         #{VarName := BindingNames} when is_list(BindingNames) ->
             add_multiple_binding_indexes(BindingNames, Index, Acc);
         _ ->
@@ -813,7 +811,7 @@ process_single_variable(VarName, Index, VarToBinding, Acc) ->
 -spec handle_unmapped_variable(VarName, Index, VarToBinding, Acc) -> UpdatedAcc when
     VarName :: binary(),
     Index :: non_neg_integer(),
-    VarToBinding :: #{binary() => binary() | [binary()]},
+    VarToBinding :: #{binary() => [binary()]},
     Acc :: #{binary() => [non_neg_integer()]},
     UpdatedAcc :: #{binary() => [non_neg_integer()]}.
 handle_unmapped_variable(VarName, Index, VarToBinding, Acc) ->
