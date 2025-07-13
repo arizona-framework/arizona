@@ -714,24 +714,39 @@ maps_equal_check_all_keys(Map1, Map2) ->
 resolve_dependencies_once(Bindings) ->
     maps:map(
         fun(_Var, Dependencies) ->
-            lists:usort(
-                lists:flatmap(
-                    fun(Dep) ->
-                        case maps:get(Dep, Bindings, undefined) of
-                            undefined ->
-                                %% Not a variable, assume it's a binding
-                                [Dep];
-                            VarDeps ->
-                                %% It's a variable, expand its dependencies
-                                VarDeps
-                        end
-                    end,
-                    Dependencies
-                )
-            )
+            resolve_variable_dependencies(Dependencies, Bindings)
         end,
         Bindings
     ).
+
+%% Resolve all dependencies for a single variable
+-spec resolve_variable_dependencies(Dependencies, Bindings) -> ResolvedDependencies when
+    Dependencies :: [binary()],
+    Bindings :: #{binary() => [binary()]},
+    ResolvedDependencies :: [binary()].
+resolve_variable_dependencies(Dependencies, Bindings) ->
+    ExpandedDependencies = lists:flatmap(
+        fun(Dependency) ->
+            expand_single_dependency(Dependency, Bindings)
+        end,
+        Dependencies
+    ),
+    lists:usort(ExpandedDependencies).
+
+%% Expand a single dependency (either binding or variable reference)
+-spec expand_single_dependency(Dependency, Bindings) -> ExpandedDeps when
+    Dependency :: binary(),
+    Bindings :: #{binary() => [binary()]},
+    ExpandedDeps :: [binary()].
+expand_single_dependency(Dependency, Bindings) ->
+    case Bindings of
+        #{Dependency := VarDeps} ->
+            %% It's a variable, expand its dependencies
+            VarDeps;
+        _ ->
+            %% Not a variable, assume it's a binding
+            [Dependency]
+    end.
 
 %% Extract binding name from arizona_socket:get_binding arguments
 -spec extract_binding_name_from_args(Args) -> Result when
