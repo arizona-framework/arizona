@@ -690,19 +690,22 @@ resolve_until_stable(Current, Previous) ->
     Map2 :: map().
 maps_equal(Map1, Map2) ->
     maps:size(Map1) =:= maps:size(Map2) andalso
-        maps:fold(
-            fun
-                (Key, Value, true) ->
-                    case maps:get(Key, Map2, undefined) of
-                        Value -> true;
-                        _ -> false
-                    end;
-                (_, _, false) ->
-                    false
-            end,
-            true,
-            Map1
-        ).
+        maps_equal_check_all_keys(Map1, Map2).
+
+%% Check if all key-value pairs in Map1 exist and match in Map2 with short-circuit
+-spec maps_equal_check_all_keys(Map1, Map2) -> boolean() when
+    Map1 :: map(),
+    Map2 :: map().
+maps_equal_check_all_keys(Map1, Map2) ->
+    lists:all(
+        fun({Key, Value}) ->
+            case Map2 of
+                #{Key := Value} -> true;
+                _ -> false
+            end
+        end,
+        maps:to_list(Map1)
+    ).
 
 %% Perform one pass of dependency resolution
 -spec resolve_dependencies_once(Bindings) -> ResolvedBindings when
