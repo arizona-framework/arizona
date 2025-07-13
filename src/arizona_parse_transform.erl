@@ -786,35 +786,59 @@ generate_vars_indexes(#{elems := Elements}, VarToBinding) ->
 process_element_variables(VarNames, Index, VarToBinding, Acc) ->
     lists:foldl(
         fun(VarName, InnerAcc) ->
-            case maps:get(VarName, VarToBinding, undefined) of
-                undefined ->
-                    %% For basic parse transform, variable name IS the binding name
-                    %% For enhanced parse transform with empty VarToBinding,
-                    %% also treat as direct binding
-                    case map_size(VarToBinding) of
-                        0 ->
-                            %% Basic parse transform: variable name = binding name
-                            add_binding_index(VarName, Index, InnerAcc);
-                        _ ->
-                            %% Enhanced parse transform: variable not mapped to any binding
-                            InnerAcc
-                    end;
-                BindingName when is_binary(BindingName) ->
-                    %% Single binding dependency
-                    add_binding_index(BindingName, Index, InnerAcc);
-                BindingNames when is_list(BindingNames) ->
-                    %% Multiple binding dependencies
-                    lists:foldl(
-                        fun(BindingName, Acc2) ->
-                            add_binding_index(BindingName, Index, Acc2)
-                        end,
-                        InnerAcc,
-                        BindingNames
-                    )
-            end
+            process_single_variable(VarName, Index, VarToBinding, InnerAcc)
         end,
         Acc,
         VarNames
+    ).
+
+%% Process a single variable and update the accumulator with its bindings
+-spec process_single_variable(VarName, Index, VarToBinding, Acc) -> UpdatedAcc when
+    VarName :: binary(),
+    Index :: non_neg_integer(),
+    VarToBinding :: #{binary() => binary() | [binary()]},
+    Acc :: #{binary() => [non_neg_integer()]},
+    UpdatedAcc :: #{binary() => [non_neg_integer()]}.
+process_single_variable(VarName, Index, VarToBinding, Acc) ->
+    case VarToBinding of
+        #{VarName := BindingName} when is_binary(BindingName) ->
+            add_binding_index(BindingName, Index, Acc);
+        #{VarName := BindingNames} when is_list(BindingNames) ->
+            add_multiple_binding_indexes(BindingNames, Index, Acc);
+        _ ->
+            handle_unmapped_variable(VarName, Index, VarToBinding, Acc)
+    end.
+
+%% Handle variables that are not mapped in VarToBinding
+-spec handle_unmapped_variable(VarName, Index, VarToBinding, Acc) -> UpdatedAcc when
+    VarName :: binary(),
+    Index :: non_neg_integer(),
+    VarToBinding :: #{binary() => binary() | [binary()]},
+    Acc :: #{binary() => [non_neg_integer()]},
+    UpdatedAcc :: #{binary() => [non_neg_integer()]}.
+handle_unmapped_variable(VarName, Index, VarToBinding, Acc) ->
+    case map_size(VarToBinding) of
+        0 ->
+            %% Basic parse transform: variable name = binding name
+            add_binding_index(VarName, Index, Acc);
+        _ ->
+            %% Enhanced parse transform: variable not mapped to any binding
+            Acc
+    end.
+
+%% Add multiple binding indexes for a variable with multiple dependencies
+-spec add_multiple_binding_indexes(BindingNames, Index, Acc) -> UpdatedAcc when
+    BindingNames :: [binary()],
+    Index :: non_neg_integer(),
+    Acc :: #{binary() => [non_neg_integer()]},
+    UpdatedAcc :: #{binary() => [non_neg_integer()]}.
+add_multiple_binding_indexes(BindingNames, Index, Acc) ->
+    lists:foldl(
+        fun(BindingName, InnerAcc) ->
+            add_binding_index(BindingName, Index, InnerAcc)
+        end,
+        Acc,
+        BindingNames
     ).
 
 %% Add index to binding's list of affected elements
