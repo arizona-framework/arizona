@@ -1376,32 +1376,32 @@ test_single_pass_function_extraction_performance(Config) when is_list(Config) ->
 
 %% Test template extraction failed error formatting
 test_template_extraction_failed_error_formatting(Config) when is_list(Config) ->
-    % Test format_error with template_extraction_failed and detailed error info
+    % Test format_error with arizona_template_parse_failed and detailed error info
     Stacktrace1 = [
         {arizona_parse_transform, extract_template_content, 1, [
             {error_info, #{
-                cause => {error, badarg, ["stacktrace details"]}
+                cause => {example_module, 42, error, badarg, ["stacktrace details"]}
             }}
         ]}
     ],
-    ErrorMap1 = arizona_parse_transform:format_error(template_extraction_failed, Stacktrace1),
+    ErrorMap1 = arizona_parse_transform:format_error(arizona_template_parse_failed, Stacktrace1),
     ErrorMsg1 = maps:get(1, ErrorMap1),
     ?assert(is_list(ErrorMsg1)),
-    ?assert(string:find(ErrorMsg1, "Failed to extract template content") =/= nomatch),
+    ?assert(string:find(ErrorMsg1, "Failed to parse Arizona template") =/= nomatch),
     ?assert(string:find(ErrorMsg1, "error:badarg") =/= nomatch),
 
-    % Test format_error with template_extraction_failed and simple reason
+    % Test format_error with arizona_template_parse_failed and simple reason
     Stacktrace2 = [
         {arizona_parse_transform, extract_template_content, 1, [
             {error_info, #{
-                cause => invalid_binary_template
+                cause => {example_module, 42}
             }}
         ]}
     ],
-    ErrorMap2 = arizona_parse_transform:format_error(template_extraction_failed, Stacktrace2),
+    ErrorMap2 = arizona_parse_transform:format_error(arizona_template_parse_failed, Stacktrace2),
     ErrorMsg2 = maps:get(1, ErrorMap2),
     ?assert(is_list(ErrorMsg2)),
-    ?assert(string:find(ErrorMsg2, "Failed to extract template content") =/= nomatch),
-    ?assert(string:find(ErrorMsg2, "invalid_binary_template") =/= nomatch),
+    ?assert(string:find(ErrorMsg2, "Failed to parse Arizona template") =/= nomatch),
+    ?assert(string:find(ErrorMsg2, "example_module") =/= nomatch),
 
     ct:comment("Template extraction failed error formatting works correctly").
