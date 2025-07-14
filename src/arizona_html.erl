@@ -160,21 +160,8 @@ standard rendering for HTML output.
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 render_stateless(TemplateData, Socket) when is_map(TemplateData) ->
-    case arizona_socket:get_mode(Socket) of
-        render ->
-            {_Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
-            UpdatedSocket;
-        diff ->
-            % In diff mode, use stateless diffing for hierarchical updates
-            CurrentState = arizona_socket:get_current_stateful_state(Socket),
-            arizona_differ:diff_stateless(TemplateData, CurrentState, Socket);
-        hierarchical ->
-            % Generate stateless hierarchical structure
-            {_ComponentStructure, UpdatedSocket} = arizona_hierarchical:stateless_structure(
-                TemplateData, Socket
-            ),
-            UpdatedSocket
-    end;
+    %% Since stateless now uses same format as stateful, use the same rendering
+    render_stateful(TemplateData, Socket);
 render_stateless(Html, Socket) ->
     render_stateless_html(Html, #{}, Socket).
 

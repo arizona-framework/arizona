@@ -375,6 +375,19 @@ transform_template_to_ast(#{elems_order := Order, elems := Elements} = TemplateD
         )
     ]).
 
+-doc ~"""
+Transform stateless template result to optimized AST.
+
+Converts a parsed stateless template result into an optimized AST representation
+that can be used for efficient runtime rendering.
+""".
+-spec transform_stateless_to_ast(StatelessResult) -> SyntaxTree when
+    StatelessResult :: arizona_parser:stateless_result(),
+    SyntaxTree :: erl_syntax:syntaxTree().
+transform_stateless_to_ast(StatefulData) when is_map(StatefulData) ->
+    %% Since stateless now returns same format as stateful, use the same transformation
+    transform_stateful_to_ast(StatefulData).
+
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
@@ -1030,7 +1043,38 @@ transform_template_calls(
     non_neg_integer(),
     #{binary() => binary()}
 ) -> erl_parse:abstract_expr().
-transform_arizona_html_call(
+transform_arizona_html_call_with_context(
+    FunctionName,
+    CallAnnotations,
+    RemoteCall,
+    Args,
+    ModuleName,
+    _CompilerOptions,
+    _Depth,
+    CurrentFunctionBindings
+) when
+    FunctionName =:= render_live;
+    FunctionName =:= render_stateful;
+    FunctionName =:= render_stateless
+->
+    %% Use current function bindings for enhanced template processing
+    case CurrentFunctionBindings of
+        EmptyMap when map_size(EmptyMap) =:= 0 ->
+            %% No current function context, use regular transformation
+            transform_render_stateful_call(
+                CallAnnotations, RemoteCall, Args, ModuleName
+            );
+        _ ->
+            %% We have function bindings, use enhanced transformation
+            transform_render_stateful_call_with_context(
+                CallAnnotations,
+                RemoteCall,
+                Args,
+                ModuleName,
+                CurrentFunctionBindings
+            )
+    end;
+transform_arizona_html_call_with_context(
     FunctionName,
     CallAnnotations,
     RemoteCall,
@@ -1057,6 +1101,34 @@ transform_arizona_html_call(
     Depth,
     _CurrentFunctionBindings
 ) ->
+    %% Fall back to regular transformation for other functions
+    transform_arizona_html_call(
+        FunctionName, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+    ).
+
+%% Transform specific arizona_html function calls
+-spec transform_arizona_html_call(
+    atom(),
+    erl_anno:anno(),
+    erl_parse:abstract_expr(),
+    [erl_parse:abstract_expr()],
+    atom(),
+    compile_options(),
+    non_neg_integer()
+) -> erl_parse:abstract_expr().
+transform_arizona_html_call(
+    FunctionName, CallAnnotations, RemoteCall, Args, ModuleName, _CompilerOptions, _Depth
+) when
+    FunctionName =:= render_live;
+    FunctionName =:= render_stateful;
+    FunctionName =:= render_stateless
+->
+    transform_render_stateful_call(
+        CallAnnotations, RemoteCall, Args, ModuleName
+    );
+transform_arizona_html_call(
+    render_list, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+) ->
     transform_render_list_call(
         CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
     );
@@ -1071,40 +1143,29 @@ transform_arizona_html_call(
     _CurrentFunctionBindings
 ) ->
     transform_render_slot_call(
-        CallAnnotations, RemoteCall, Args, ModuleName
+        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
     );
 transform_arizona_html_call(
-    _FunctionName,
-    CallAnnotations,
-    RemoteCall,
-    Args,
-    _ModuleName,
-    _CompilerOptions,
-    _Depth,
-    _CurrentFunctionBindings
+    _FunctionName, CallAnnotations, RemoteCall, Args, _ModuleName, _CompilerOptions, _Depth
 ) ->
     {call, CallAnnotations, RemoteCall, Args}.
 
-%% Transform render template function calls (unified with context support)
--spec transform_render_template_call(
+%% Transform render_stateful function calls with current function context
+-spec transform_render_stateful_call_with_context(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
     [erl_parse:abstract_expr()],
     atom(),
-    #{binary() => binary()},
-    non_neg_integer()
+    #{binary() => binary()}
 ) -> erl_parse:abstract_expr().
-transform_render_template_call(
+transform_render_stateful_call_with_context(
     CallAnnotations,
     RemoteCall,
     [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg],
     ModuleName,
-    CurrentFunctionBindings,
-    Depth
+    CurrentFunctionBindings
 ) ->
-    %% Use current function bindings for enhanced template processing
-    %% Always use context-aware transformation (empty map when no context)
-    transform_template_call(
+    transform_stateful_template_call_with_context(
         CallAnnotations,
         RemoteCall,
         BinaryTemplate,
@@ -1221,32 +1282,58 @@ transform_slot_template_call(
 
 %% Template Transformation
 
-%% Parse template string into AST structure for slot optimization
--spec parse_template_for_ast_only(binary(), pos_integer()) ->
-    erl_syntax:syntaxTree().
-parse_template_for_ast_only(TemplateString, LineNumber) ->
-    ParsedElementsMap = parse_template_base(TemplateString, LineNumber),
-    transform_template_to_ast(ParsedElementsMap, 0).
-
-%% Base template parsing shared by all template parsing functions
--spec parse_template_base(binary(), pos_integer()) -> arizona_parser:parsed_template().
-parse_template_base(TemplateString, LineNumber) ->
+%% Parse template string into iolist structure with depth tracking
+-spec parse_template_for_stateless(binary(), pos_integer(), compile_options(), non_neg_integer()) ->
+    [term()].
+parse_template_for_stateless(TemplateString, LineNumber, CompilerOptions, Depth) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
-    arizona_parser:parse_tokens(TokenList).
+    ParsedElements = arizona_parser:parse_stateless_tokens(TokenList),
+    convert_to_iolist_format(ParsedElements, CompilerOptions, Depth).
 
-%% Template Transformation
+%% Convert parsed elements to iolist format with depth tracking
+-spec convert_to_iolist_format([term()], compile_options(), non_neg_integer()) -> [term()].
+convert_to_iolist_format(ParsedElements, CompilerOptions, Depth) ->
+    lists:reverse(
+        lists:foldl(
+            fun(Element, Acc) ->
+                convert_element_to_iolist(
+                    Element, standard_expression_norm_callback(), Acc, CompilerOptions, Depth
+                )
+            end,
+            [],
+            ParsedElements
+        )
+    ).
 
-%% Transform render template call with current function context and depth tracking
--spec transform_template_call(
+%% Convert individual element to iolist format with depth tracking
+-spec convert_element_to_iolist(
+    term(), expression_norm_callback(), [term()], compile_options(), non_neg_integer()
+) -> [term()].
+convert_element_to_iolist(
+    {static, Line, StaticText}, _ExpressionTextNormCallback, Accumulator, _CompilerOptions, _Depth
+) ->
+    StaticElement = format_static_element(Line, StaticText),
+    [StaticElement | Accumulator];
+convert_element_to_iolist(
+    {dynamic, Line, ExpressionText}, ExpressionTextNormCallback, Accumulator, CompilerOptions, Depth
+) ->
+    DynamicElement = format_dynamic_element(
+        Line, ExpressionText, ExpressionTextNormCallback, CompilerOptions, Depth
+    ),
+    [DynamicElement | Accumulator].
+
+%% Stateful Template Transformation
+
+%% Transform render_stateful call with current function context and depth tracking
+-spec transform_stateful_template_call_with_context(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
     atom(),
-    #{binary() => binary()},
-    non_neg_integer()
+    #{binary() => binary()}
 ) -> erl_parse:abstract_expr().
-transform_template_call(
+transform_stateful_template_call_with_context(
     CallAnnotations,
     RemoteCall,
     BinaryTemplate,

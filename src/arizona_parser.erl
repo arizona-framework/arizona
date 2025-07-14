@@ -72,7 +72,12 @@ Token representation with category, line number, and content.
 }.
 
 -doc ~"""
-Result type for template parsing with element ordering and element mapping.
+Result type for stateless parsing - now returns same format as stateful for unification.
+""".
+-type stateless_result() :: stateful_result().
+
+-doc ~"""
+Result type for stateful parsing with element ordering and element mapping.
 
 Both stateful and stateless templates use this unified format.
 The parse transform will handle variable analysis and add vars_indexes separately.
@@ -113,9 +118,23 @@ The parse transform will handle variable analysis and add vars_indexes separatel
 %% --------------------------------------------------------------------
 
 -doc ~"""
-Parse tokens into template structure.
+Parse tokens into stateless structure (now same format as stateful).
 
-Converts a list of tokens into a structured format for template rendering.
+Converts a list of tokens into a structured format for stateless rendering.
+Uses the same format as stateful parsing for unified handling.
+
+Returns the same structured format as stateful parsing.
+""".
+-spec parse_stateless_tokens(Tokens) -> Result when
+    Tokens :: [token()],
+    Result :: stateless_result().
+parse_stateless_tokens(Tokens) ->
+    parse_stateful_tokens(Tokens).
+
+-doc ~"""
+Parse tokens into stateful template structure.
+
+Converts a list of tokens into a structured format for stateful rendering.
 This includes element ordering and element mapping.
 
 The resulting map contains:
