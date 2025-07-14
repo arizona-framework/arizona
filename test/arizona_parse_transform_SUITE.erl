@@ -191,13 +191,6 @@ test_nested_function_calls(Config) when is_list(Config) ->
 
 %% Test invalid template error handling
 test_invalid_template_error(Config) when is_list(Config) ->
-    % Test that format_error handles template_parse_failed
-    ErrorInfo = [{error_info, #{cause => {test_module, 123}}}],
-    ErrorStacktrace = [{?MODULE, ?FUNCTION_NAME, [], ErrorInfo}],
-    ErrorMap = arizona_parse_transform:format_error(arizona_template_parse_failed, ErrorStacktrace),
-    ErrorMsg = maps:get(1, ErrorMap),
-    ?assert(is_list(ErrorMsg)),
-
     % Test badarg error
     BadargInfo = [{error_info, #{cause => {test_module, 456}}}],
     BadargStacktrace = [{?MODULE, ?FUNCTION_NAME, [], BadargInfo}],
@@ -225,12 +218,6 @@ test_non_binary_template_error(Config) when is_list(Config) ->
 
 %% Test format_error function
 test_format_error(Config) when is_list(Config) ->
-    % Test known error
-    Stacktrace1 = [{?MODULE, ?FUNCTION_NAME, [], [{error_info, #{cause => {test_module, 123}}}]}],
-    Map1 = arizona_parse_transform:format_error(arizona_template_parse_failed, Stacktrace1),
-    Msg1 = maps:get(1, Map1),
-    ?assert(is_list(Msg1)),
-
     % Test no_arizona_parse_transform_attribute error
     Stacktrace2 = [{?MODULE, ?FUNCTION_NAME, [], [{error_info, #{cause => test_module}}]}],
     Map2 = arizona_parse_transform:format_error(arizona_no_parse_transform_attribute, Stacktrace2),
@@ -1394,7 +1381,7 @@ test_template_extraction_failed_error_formatting(Config) when is_list(Config) ->
     Stacktrace2 = [
         {arizona_parse_transform, extract_template_content, 1, [
             {error_info, #{
-                cause => {example_module, 42}
+                cause => {example_module, 42, error, invalid_template, []}
             }}
         ]}
     ],

@@ -288,12 +288,6 @@ format_error(Reason, [{_M, _F, _As, Info} | _]) ->
 -spec format_detailed_error(Reason, Cause) -> unicode:chardata() when
     Reason :: term(),
     Cause :: term().
-format_detailed_error(arizona_template_parse_failed, {ModuleName, Line}) ->
-    io_lib:format(
-        "Failed to parse Arizona template in module ~w at line ~w. "
-        "Check template syntax for proper expressions and balanced braces.",
-        [ModuleName, Line]
-    );
 format_detailed_error(
     arizona_template_parse_failed, {ModuleName, Line, Error, Reason, Stacktrace}
 ) ->
@@ -330,20 +324,6 @@ format_detailed_error(arizona_function_not_exported, {ModuleName, FuncName, Arit
         "exported from module ~w. Either export the function with -export([~w/~w]) "
         "or remove it from the -arizona_parse_transform([function/arity]) list.",
         [FuncName, Arity, ModuleName, FuncName, Arity]
-    );
-format_detailed_error(template_extraction_failed, {Error, Reason, _Stacktrace}) ->
-    io_lib:format(
-        "Failed to extract template content during parse transform: ~w:~w. "
-        "This usually indicates a malformed binary template that cannot be "
-        "evaluated at compile time.",
-        [Error, Reason]
-    );
-format_detailed_error(template_extraction_failed, Reason) ->
-    io_lib:format(
-        "Failed to extract template content during parse transform: ~w. "
-        "This usually indicates a malformed binary template that cannot be "
-        "evaluated at compile time.",
-        [Reason]
     ).
 
 -doc ~"""
