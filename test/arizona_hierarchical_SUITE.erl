@@ -58,7 +58,11 @@ groups() ->
             generate_hierarchical_socket,
             detect_stateless_template,
             detect_stateful_socket,
-            detect_list_content
+            detect_list_content,
+            detect_stateless_unified_format,
+            stateless_unified_with_vars_indexes,
+            stateless_unified_cascade_dependency,
+            stateless_unified_empty_template
         ]},
         {integration_tests, [parallel], [
             arizona_html_integration,
@@ -701,11 +705,15 @@ generate_hierarchical_socket(Config) when is_list(Config) ->
 
 detect_stateless_template(Config) when is_list(Config) ->
     % Test that stateless template data is properly converted to structure
-    StatelessTemplate = [
-        {static, 1, ~"<h1>"},
-        {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(title, Socket) end},
-        {static, 3, ~"</h1>"}
-    ],
+    StatelessTemplate = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<h1>"},
+            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(title, Socket) end},
+            2 => {static, 3, ~"</h1>"}
+        },
+        vars_indexes => #{title => [1]}
+    },
 
     % Create socket with proper stateful state
     Socket = arizona_socket:new(#{mode => hierarchical}),
@@ -753,6 +761,144 @@ detect_list_content(Config) when is_list(Config) ->
 
     % arizona_html:to_html creates nested iodata structure for lists
     Expected = [[[[[[[], ~"<li>"], ~"Item 1"], ~"</li>"], ~"<li>"], ~"Item 2"], ~"</li>"],
+
+    ?assertEqual(Expected, Content).
+
+%% Tests for unified stateless format
+detect_stateless_unified_format(Config) when is_list(Config) ->
+    % Test that stateless template with unified format (same as stateful) is properly converted to structure
+    StatelessTemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<section>"},
+            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(title, Socket) end},
+            2 => {static, 3, ~"</section>"}
+        },
+        vars_indexes => #{title => [1]}
+    },
+
+    % Create socket with proper stateful state
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    MockState = arizona_stateful:new(root, test_module, #{title => ~"Unified Title"}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
+
+    {Content, _UpdatedSocket} = arizona_hierarchical:stateless_structure(
+        StatelessTemplateData, SocketWithState
+    ),
+
+    Expected = #{
+        type => stateless,
+        structure => #{
+            0 => ~"<section>",
+            1 => ~"Unified Title",
+            2 => ~"</section>"
+        }
+    },
+
+    ?assertEqual(Expected, Content).
+
+stateless_unified_with_vars_indexes(Config) when is_list(Config) ->
+    % Test that vars_indexes are properly handled in hierarchical mode
+    StatelessTemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<div>User: "},
+            1 =>
+                {dynamic, 2, fun(Socket) ->
+                    UserData = arizona_socket:get_binding(user, Socket, #{}),
+                    maps:get(name, UserData, ~"unknown")
+                end},
+            2 => {static, 3, ~"</div>"}
+        },
+        vars_indexes => #{user => [1]}
+    },
+
+    % Create socket with user binding
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    UserData = #{name => ~"Alice", role => ~"admin"},
+    MockState = arizona_stateful:new(root, test_module, #{user => UserData}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
+
+    {Content, _UpdatedSocket} = arizona_hierarchical:stateless_structure(
+        StatelessTemplateData, SocketWithState
+    ),
+
+    Expected = #{
+        type => stateless,
+        structure => #{
+            0 => ~"<div>User: ",
+            1 => ~"Alice",
+            2 => ~"</div>"
+        }
+    },
+
+    ?assertEqual(Expected, Content).
+
+stateless_unified_cascade_dependency(Config) when is_list(Config) ->
+    % Test cascade dependency pattern: stateless component depending on parent binding
+    % This simulates: {arizona_component:call_stateless(module, fun, #{foo => arizona_socket:get_binding(user, Socket)}, Socket)}
+    StatelessTemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<span class=\"greeting\">"},
+            1 =>
+                {dynamic, 2, fun(Socket) ->
+                    % Simulate the dependency extraction pattern
+                    UserData = arizona_socket:get_binding(user, Socket, #{}),
+                    Username = maps:get(username, UserData, ~"Guest"),
+                    [~"Hello, ", Username, ~"!"]
+                end},
+            2 => {static, 3, ~"</span>"}
+        },
+        % This ensures proper cascade dependency tracking
+        vars_indexes => #{user => [1]}
+    },
+
+    % Set up socket with user data
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    UserData = #{username => ~"Bob", status => ~"online"},
+    MockState = arizona_stateful:new(root, test_module, #{user => UserData}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
+
+    {Content, _UpdatedSocket} = arizona_hierarchical:stateless_structure(
+        StatelessTemplateData, SocketWithState
+    ),
+
+    % The hierarchical structure should flatten the nested list content
+    Expected = #{
+        type => stateless,
+        structure => #{
+            0 => ~"<span class=\"greeting\">",
+            1 => [~"Hello, ", ~"Bob", ~"!"],
+            2 => ~"</span>"
+        }
+    },
+
+    ?assertEqual(Expected, Content),
+
+    % Verify the vars_indexes for cascade dependency
+    ?assertEqual(#{user => [1]}, maps:get(vars_indexes, StatelessTemplateData)).
+
+stateless_unified_empty_template(Config) when is_list(Config) ->
+    % Test empty stateless template with unified format
+    StatelessTemplateData = #{
+        elems_order => [],
+        elems => #{},
+        vars_indexes => #{}
+    },
+
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    MockState = arizona_stateful:new(root, test_module, #{}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
+
+    {Content, _UpdatedSocket} = arizona_hierarchical:stateless_structure(
+        StatelessTemplateData, SocketWithState
+    ),
+
+    Expected = #{
+        type => stateless,
+        structure => #{}
+    },
 
     ?assertEqual(Expected, Content).
 

@@ -87,12 +87,9 @@ efficient rendering and diff operations.
 -doc ~"""
 Template data from parse transform optimized for stateless component rendering.
 
-Simple list structure with static and dynamic elements for lightweight rendering.
+Now uses same format as stateful for unified handling.
 """.
--type stateless_template_data() :: [
-    {static, pos_integer(), binary()}
-    | {dynamic, pos_integer(), fun((arizona_socket:socket()) -> term())}
-].
+-type stateless_template_data() :: stateful_template_data().
 
 -doc ~"""
 Template data from parse transform optimized for list rendering with static/dynamic separation.
@@ -160,15 +157,14 @@ rendering without indexed access. Updates the socket with the rendered HTML.
 {[~"Hello", ~"World"], UpdatedSocket}
 ```
 """.
--spec render_stateless(StructuredList, Socket) -> {Html, Socket1} when
-    StructuredList :: stateless_template_data(),
+-spec render_stateless(TemplateData, Socket) -> {Html, Socket1} when
+    TemplateData :: stateless_template_data(),
     Socket :: arizona_socket:socket(),
     Html :: arizona_html:html(),
     Socket1 :: arizona_socket:socket().
-render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
-    {Html, UpdatedSocket} = render_iolist(StructuredList, Socket, []),
-    UpdatedSocket1 = arizona_socket:set_html_acc(Html, UpdatedSocket),
-    {Html, UpdatedSocket1}.
+render_stateless(TemplateData, Socket) when is_map(TemplateData) ->
+    %% Since stateless now uses same format as stateful, use the same rendering
+    render_stateful(TemplateData, Socket).
 
 -doc ~"""
 Render list template with static/dynamic optimization for efficient list rendering.
@@ -324,14 +320,6 @@ render_elements([Index | Rest], Elements, Socket, Acc) ->
     #{Index := Element} = Elements,
     {RenderedElement, UpdatedSocket} = render_element(Element, Socket),
     render_elements(Rest, Elements, UpdatedSocket, [RenderedElement | Acc]).
-
-%% Render stateless iolist
-render_iolist([], Socket, Acc) ->
-    Html = lists:reverse(Acc),
-    {Html, Socket};
-render_iolist([Element | Rest], Socket, Acc) ->
-    {RenderedElement, UpdatedSocket} = render_element(Element, Socket),
-    render_iolist(Rest, UpdatedSocket, [RenderedElement | Acc]).
 
 %% Render a single list item using template structure
 render_list_item(StaticParts, ElemsOrder, ElemsFuns, Item, Socket) ->

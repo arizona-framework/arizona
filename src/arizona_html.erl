@@ -155,17 +155,9 @@ standard rendering for HTML output.
     Template :: arizona_renderer:stateless_template_data() | html(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
-render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
-    case arizona_socket:get_mode(Socket) of
-        hierarchical ->
-            {_StatelessElement, UpdatedSocket} = arizona_hierarchical:stateless_structure(
-                StructuredList, Socket
-            ),
-            UpdatedSocket;
-        _ ->
-            {_Html, UpdatedSocket} = arizona_renderer:render_stateless(StructuredList, Socket),
-            UpdatedSocket
-    end;
+render_stateless(TemplateData, Socket) when is_map(TemplateData) ->
+    %% Since stateless now uses same format as stateful, use the same rendering
+    render_stateful(TemplateData, Socket);
 render_stateless(Html, Socket) ->
     render_stateless_html(Html, #{}, Socket).
 

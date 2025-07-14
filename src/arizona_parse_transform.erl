@@ -369,10 +369,9 @@ that can be used for efficient runtime rendering.
 -spec transform_stateless_to_ast(StatelessResult) -> SyntaxTree when
     StatelessResult :: arizona_parser:stateless_result(),
     SyntaxTree :: erl_syntax:syntaxTree().
-transform_stateless_to_ast(StatelessList) when is_list(StatelessList) ->
-    %% Convert stateless list to AST representation
-    ListItems = [create_element_ast(Element) || Element <- StatelessList],
-    erl_syntax:list(ListItems).
+transform_stateless_to_ast(StatefulData) when is_map(StatefulData) ->
+    %% Since stateless now returns same format as stateful, use the same transformation
+    transform_stateful_to_ast(StatefulData).
 
 %% --------------------------------------------------------------------
 %% Private functions
@@ -1030,7 +1029,7 @@ transform_template_calls_with_context(
     #{binary() => binary()}
 ) -> erl_parse:abstract_expr().
 transform_arizona_html_call_with_context(
-    render_stateful,
+    FunctionName,
     CallAnnotations,
     RemoteCall,
     Args,
@@ -1038,35 +1037,12 @@ transform_arizona_html_call_with_context(
     _CompilerOptions,
     _Depth,
     CurrentFunctionBindings
-) ->
+) when
+    FunctionName =:= render_live;
+    FunctionName =:= render_stateful;
+    FunctionName =:= render_stateless
+->
     %% Use current function bindings for enhanced template processing
-    case CurrentFunctionBindings of
-        EmptyMap when map_size(EmptyMap) =:= 0 ->
-            %% No current function context, use regular transformation
-            transform_render_stateful_call(
-                CallAnnotations, RemoteCall, Args, ModuleName
-            );
-        _ ->
-            %% We have function bindings, use enhanced transformation
-            transform_render_stateful_call_with_context(
-                CallAnnotations,
-                RemoteCall,
-                Args,
-                ModuleName,
-                CurrentFunctionBindings
-            )
-    end;
-transform_arizona_html_call_with_context(
-    render_live,
-    CallAnnotations,
-    RemoteCall,
-    Args,
-    ModuleName,
-    _CompilerOptions,
-    _Depth,
-    CurrentFunctionBindings
-) ->
-    %% Treat render_live the same as render_stateful for enhanced processing
     case CurrentFunctionBindings of
         EmptyMap when map_size(EmptyMap) =:= 0 ->
             %% No current function context, use regular transformation
@@ -1109,14 +1085,12 @@ transform_arizona_html_call_with_context(
     non_neg_integer()
 ) -> erl_parse:abstract_expr().
 transform_arizona_html_call(
-    render_stateless, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
-) ->
-    transform_render_stateless_call(
-        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
-    );
-transform_arizona_html_call(
-    render_stateful, CallAnnotations, RemoteCall, Args, ModuleName, _CompilerOptions, _Depth
-) ->
+    FunctionName, CallAnnotations, RemoteCall, Args, ModuleName, _CompilerOptions, _Depth
+) when
+    FunctionName =:= render_live;
+    FunctionName =:= render_stateful;
+    FunctionName =:= render_stateless
+->
     transform_render_stateful_call(
         CallAnnotations, RemoteCall, Args, ModuleName
     );
@@ -1133,41 +1107,9 @@ transform_arizona_html_call(
         CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
     );
 transform_arizona_html_call(
-    render_live, CallAnnotations, RemoteCall, Args, ModuleName, _CompilerOptions, _Depth
-) ->
-    transform_render_stateful_call(
-        CallAnnotations, RemoteCall, Args, ModuleName
-    );
-transform_arizona_html_call(
     _FunctionName, CallAnnotations, RemoteCall, Args, _ModuleName, _CompilerOptions, _Depth
 ) ->
     {call, CallAnnotations, RemoteCall, Args}.
-
-%% Transform render_stateless function calls
--spec transform_render_stateless_call(
-    erl_anno:anno(),
-    erl_parse:abstract_expr(),
-    [erl_parse:abstract_expr()],
-    atom(),
-    compile_options(),
-    non_neg_integer()
-) -> erl_parse:abstract_expr().
-transform_render_stateless_call(
-    CallAnnotations,
-    RemoteCall,
-    [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg],
-    ModuleName,
-    CompilerOptions,
-    Depth
-) ->
-    transform_stateless_template_call(
-        CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, CompilerOptions, Depth
-    );
-transform_render_stateless_call(
-    CallAnnotations, _RemoteCall, _Args, ModuleName, _CompilerOptions, _Depth
-) ->
-    Line = erl_anno:line(CallAnnotations),
-    error(arizona_badarg, none, error_info({ModuleName, Line})).
 
 %% Transform render_stateful function calls with current function context
 -spec transform_render_stateful_call_with_context(
@@ -1335,38 +1277,6 @@ transform_slot_template_call(
     end.
 
 %% Stateless Template Transformation
-
-%% Transform render_stateless call with depth tracking
--spec transform_stateless_template_call(
-    erl_anno:anno(),
-    erl_parse:abstract_expr(),
-    erl_parse:abstract_expr(),
-    erl_parse:abstract_expr(),
-    atom(),
-    compile_options(),
-    non_neg_integer()
-) -> erl_parse:abstract_expr().
-transform_stateless_template_call(
-    CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, CompilerOptions, Depth
-) ->
-    Line = erl_anno:line(CallAnnotations),
-    try
-        % Extract and parse the template at compile time
-        {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        IoListStructure = parse_template_for_stateless(
-            TemplateString, LineNumber, CompilerOptions, Depth
-        ),
-
-        % Generate the new function call with parsed structure
-        create_stateless_parsed_call(CallAnnotations, RemoteCall, IoListStructure, SocketArg)
-    catch
-        Error:Reason:Stacktrace ->
-            error(
-                arizona_template_parse_failed,
-                none,
-                error_info({ModuleName, Line, Error, Reason, Stacktrace})
-            )
-    end.
 
 %% Parse template string into iolist structure with depth tracking
 -spec parse_template_for_stateless(binary(), pos_integer(), compile_options(), non_neg_integer()) ->
@@ -1733,25 +1643,6 @@ format_static_parts(StaticParts) ->
     lists:join(", ", FormattedParts).
 
 %% Function Call Generation
-
-%% Create render_stateless function call with parsed structure
--spec create_stateless_parsed_call(
-    erl_anno:anno(),
-    erl_parse:abstract_expr(),
-    [term()],
-    erl_parse:abstract_expr()
-) -> erl_parse:abstract_expr().
-create_stateless_parsed_call(
-    CallAnnotations,
-    {remote, RemoteAnnotations, ModuleAtom, FunctionAtom},
-    IoListStructure,
-    SocketArg
-) ->
-    IoListBinary = iolist_to_binary(["[", lists:join(", ", IoListStructure), "]"]),
-    IoListForm = merl:quote(IoListBinary),
-    {call, CallAnnotations, {remote, RemoteAnnotations, ModuleAtom, FunctionAtom}, [
-        IoListForm, SocketArg
-    ]}.
 
 %% Create optimized render_slot call with {stateless, ParsedTemplate} default
 -spec create_slot_stateless_call(

@@ -74,13 +74,9 @@ Token representation with category, line number, and content.
 }.
 
 -doc ~"""
-Result type for stateless parsing - list of tokens with comments filtered out.
+Result type for stateless parsing - now returns same format as stateful for unification.
 """.
--type stateless_result() :: [
-    Token :: {
-        Category :: static | dynamic, Line :: pos_integer(), Content :: binary()
-    }
-].
+-type stateless_result() :: stateful_result().
 
 -doc ~"""
 Result type for stateful parsing with element ordering and element mapping.
@@ -123,19 +119,18 @@ The parse transform will handle variable analysis and add vars_indexes separatel
 %% --------------------------------------------------------------------
 
 -doc ~"""
-Parse tokens into stateless iolist structure.
+Parse tokens into stateless structure (now same format as stateful).
 
-Converts a list of tokens into a structure suitable for stateless rendering.
-Filters out comment tokens while preserving static and dynamic tokens with
-their line numbers intact.
+Converts a list of tokens into a structured format for stateless rendering.
+Uses the same format as stateful parsing for unified handling.
 
-Returns a list of tokens that can be directly processed by template renderers.
+Returns the same structured format as stateful parsing.
 """.
 -spec parse_stateless_tokens(Tokens) -> Result when
     Tokens :: [token()],
     Result :: stateless_result().
 parse_stateless_tokens(Tokens) ->
-    [Token || {Category, _Line, _Text} = Token <- Tokens, Category =/= comment].
+    parse_stateful_tokens(Tokens).
 
 -doc ~"""
 Parse tokens into stateful template structure.
