@@ -871,8 +871,8 @@ merge_element_changes([{ElementIndex, NewChange} | RestNew], ExistingElements) -
             UpdatedExisting = [{ElementIndex, NewChange} | ExistingElements],
             merge_element_changes(RestNew, UpdatedExisting);
         {ElementIndex, ExistingChange} ->
-            % Element found, merge the changes (for nested structures)
-            MergedChange = merge_nested_changes(NewChange, ExistingChange),
+            % Element found, merge the changes using arizona_differ
+            MergedChange = arizona_differ:merge_element_changes(NewChange, ExistingChange),
             UpdatedExisting = lists:keyreplace(
                 ElementIndex,
                 1,
@@ -881,65 +881,3 @@ merge_element_changes([{ElementIndex, NewChange} | RestNew], ExistingElements) -
             ),
             merge_element_changes(RestNew, UpdatedExisting)
     end.
-
-%% Merge nested changes (recursive for deep nesting)
--spec merge_nested_changes(NewChange, ExistingChange) -> MergedChange when
-    NewChange :: arizona_differ:element_change(),
-    ExistingChange :: arizona_differ:element_change(),
-    MergedChange :: arizona_differ:element_change().
-merge_nested_changes(NewChange, ExistingChange) when is_list(NewChange), is_list(ExistingChange) ->
-    % Check if these are actually component changes vs HTML data
-    % Component changes are lists of {ComponentId, ElementChanges} tuples where
-    % ComponentId is an atom
-    % HTML data typically contains binaries, nested lists of binaries, empty lists, etc.
-    case
-        looks_like_component_changes(NewChange) andalso looks_like_component_changes(ExistingChange)
-    of
-        true ->
-            % Both are lists of component changes, merge recursively
-            merge_changes(NewChange, ExistingChange);
-        false ->
-            % These are HTML data lists, new change takes precedence
-            NewChange
-    end;
-merge_nested_changes(NewChange, _ExistingChange) ->
-    % New change takes precedence (overwrite)
-    NewChange.
-
-%% Strict heuristic to distinguish component changes from HTML data
-%% Component changes: [{ComponentId, ElementChanges}] where ComponentId is
-%% atom() | binary() and ElementChanges is [{ElementIndex, Change}] where ElementIndex is integer
-%% HTML data: typically contains binaries directly, empty lists, nested structures
-%% without the specific tuple format
--spec looks_like_component_changes(List) -> boolean() when
-    List :: list().
-looks_like_component_changes([]) ->
-    % Empty list could be component changes
-    true;
-looks_like_component_changes([{ComponentId, ElementChanges} | Rest]) when
-    (is_atom(ComponentId) orelse is_binary(ComponentId)) andalso is_list(ElementChanges)
-->
-    % Check if ElementChanges has the proper format: [{ElementIndex, Change}]
-    case looks_like_element_changes(ElementChanges) of
-        true -> looks_like_component_changes(Rest);
-        false -> false
-    end;
-looks_like_component_changes(_) ->
-    % Any other format is not component changes
-    false.
-
-%% Check if a list looks like element changes: [{ElementIndex, Change}]
-%% where ElementIndex is a non-negative integer
--spec looks_like_element_changes(List) -> boolean() when
-    List :: list().
-looks_like_element_changes([]) ->
-    % Empty list is valid element changes
-    true;
-looks_like_element_changes([{ElementIndex, _Change} | Rest]) when
-    is_integer(ElementIndex), ElementIndex >= 0
-->
-    % Valid element change entry, check the rest
-    looks_like_element_changes(Rest);
-looks_like_element_changes(_) ->
-    % Any other format is not element changes
-    false.

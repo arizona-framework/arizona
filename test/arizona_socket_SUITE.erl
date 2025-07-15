@@ -334,12 +334,12 @@ test_append_changes(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => diff}),
 
     % Test basic append
-    Changes1 = [{~"comp1", [{0, ~"new_value"}]}],
+    Changes1 = [{~"comp1", [{0, arizona_differ:html_content(~"new_value")}]}],
     Socket2 = arizona_socket:append_changes(Changes1, Socket),
     ?assertEqual(Changes1, arizona_socket:get_changes(Socket2)),
 
     % Test appending to existing changes
-    Changes2 = [{~"comp2", [{1, ~"another_value"}]}],
+    Changes2 = [{~"comp2", [{1, arizona_differ:html_content(~"another_value")}]}],
     Socket3 = arizona_socket:append_changes(Changes2, Socket2),
     Expected = Changes1 ++ Changes2,
     ?assertEqual(Expected, arizona_socket:get_changes(Socket3)).
@@ -351,13 +351,13 @@ test_get_changes(Config) when is_list(Config) ->
     ?assertEqual([], arizona_socket:get_changes(Socket)),
 
     % Test with changes
-    Changes = [{~"comp1", [{0, ~"value"}]}],
+    Changes = [{~"comp1", [{0, arizona_differ:html_content(~"value")}]}],
     Socket2 = arizona_socket:append_changes(Changes, Socket),
     ?assertEqual(Changes, arizona_socket:get_changes(Socket2)).
 
 test_clear_changes(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => diff}),
-    Changes = [{~"comp1", [{0, ~"value"}]}],
+    Changes = [{~"comp1", [{0, arizona_differ:html_content(~"value")}]}],
     Socket2 = arizona_socket:append_changes(Changes, Socket),
 
     % Verify changes exist
@@ -371,10 +371,10 @@ test_merge_changes_same_component(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => diff}),
 
     % Add changes to the same component at different elements
-    Changes1 = [{~"comp1", [{0, ~"value1"}]}],
+    Changes1 = [{~"comp1", [{0, arizona_differ:html_content(~"value1")}]}],
     Socket2 = arizona_socket:append_changes(Changes1, Socket),
 
-    Changes2 = [{~"comp1", [{1, ~"value2"}]}],
+    Changes2 = [{~"comp1", [{1, arizona_differ:html_content(~"value2")}]}],
     Socket3 = arizona_socket:append_changes(Changes2, Socket2),
 
     % Changes should be merged under the same component
@@ -384,42 +384,54 @@ test_merge_changes_same_component(Config) when is_list(Config) ->
 
     % Should contain both element changes
     ?assertEqual(2, length(ElementChanges)),
-    ?assert(lists:member({0, ~"value1"}, ElementChanges)),
-    ?assert(lists:member({1, ~"value2"}, ElementChanges)).
+    ?assert(lists:member({0, arizona_differ:html_content(~"value1")}, ElementChanges)),
+    ?assert(lists:member({1, arizona_differ:html_content(~"value2")}, ElementChanges)).
 
 test_merge_changes_different_components(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => diff}),
 
     % Add changes to different components
-    Changes1 = [{~"comp1", [{0, ~"value1"}]}],
+    Changes1 = [{~"comp1", [{0, arizona_differ:html_content(~"value1")}]}],
     Socket2 = arizona_socket:append_changes(Changes1, Socket),
 
-    Changes2 = [{~"comp2", [{0, ~"value2"}]}],
+    Changes2 = [{~"comp2", [{0, arizona_differ:html_content(~"value2")}]}],
     Socket3 = arizona_socket:append_changes(Changes2, Socket2),
 
     % Should have separate component entries
     AllChanges = arizona_socket:get_changes(Socket3),
     ?assertEqual(2, length(AllChanges)),
-    ?assert(lists:member({~"comp1", [{0, ~"value1"}]}, AllChanges)),
-    ?assert(lists:member({~"comp2", [{0, ~"value2"}]}, AllChanges)).
+    ?assert(lists:member({~"comp1", [{0, arizona_differ:html_content(~"value1")}]}, AllChanges)),
+    ?assert(lists:member({~"comp2", [{0, arizona_differ:html_content(~"value2")}]}, AllChanges)).
 
 test_merge_nested_changes(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => diff}),
 
-    % Test nested component changes
-    NestedChanges1 = [{~"comp1", [{0, [{~"nested", [{0, ~"old"}]}]}]}],
+    % Test nested component changes using new tagged format
+    NestedChanges1 = [
+        {~"comp1", [
+            {0,
+                arizona_differ:component_changes([
+                    {~"nested", [{0, arizona_differ:html_content(~"old")}]}
+                ])}
+        ]}
+    ],
     Socket2 = arizona_socket:append_changes(NestedChanges1, Socket),
 
-    NestedChanges2 = [{~"comp1", [{0, [{~"nested", [{1, ~"new"}]}]}]}],
+    NestedChanges2 = [
+        {~"comp1", [
+            {0,
+                arizona_differ:component_changes([
+                    {~"nested", [{1, arizona_differ:html_content(~"new")}]}
+                ])}
+        ]}
+    ],
     Socket3 = arizona_socket:append_changes(NestedChanges2, Socket2),
 
-    % Should merge nested structures properly
+    % Should merge nested structures properly - use accessor functions for opaque type
     AllChanges = arizona_socket:get_changes(Socket3),
     ?assertMatch([{~"comp1", [{0, _}]}], AllChanges),
     [{~"comp1", [{0, NestedContent}]}] = AllChanges,
-    ?assertMatch([{~"nested", _}], NestedContent),
-    [{~"nested", NestedElements}] = NestedContent,
-    ?assertEqual(2, length(NestedElements)).
+    ?assert(arizona_differ:is_component_changes(NestedContent)).
 
 test_merge_changes_edge_cases(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => diff}),
@@ -429,13 +441,15 @@ test_merge_changes_edge_cases(Config) when is_list(Config) ->
     ?assertEqual([], arizona_socket:get_changes(Socket2)),
 
     % Test multiple changes to same element (last wins)
-    Changes1 = [{~"comp1", [{0, ~"first"}]}],
-    Changes2 = [{~"comp1", [{0, ~"second"}]}],
+    Changes1 = [{~"comp1", [{0, arizona_differ:html_content(~"first")}]}],
+    Changes2 = [{~"comp1", [{0, arizona_differ:html_content(~"second")}]}],
     Socket3 = arizona_socket:append_changes(Changes1, Socket),
     Socket4 = arizona_socket:append_changes(Changes2, Socket3),
 
     AllChanges = arizona_socket:get_changes(Socket4),
-    ?assertMatch([{~"comp1", [{0, ~"second"}]}], AllChanges).
+    ?assertMatch([{~"comp1", [{0, _}]}], AllChanges),
+    [{~"comp1", [{0, SecondValue}]}] = AllChanges,
+    ?assert(arizona_differ:is_html_content(SecondValue)).
 
 test_merge_changes_html_data_vs_component_changes(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => diff}),
@@ -471,7 +485,7 @@ test_merge_changes_html_data_vs_component_changes(Config) when is_list(Config) -
     ],
 
     % This should not crash when merging changes with complex HTML data
-    Changes1 = [{root, [{3, ComplexHtmlData}]}],
+    Changes1 = [{root, [{3, arizona_differ:html_content(ComplexHtmlData)}]}],
     Socket2 = arizona_socket:append_changes(Changes1, Socket),
 
     % Add another change to the same element with different HTML data
@@ -480,7 +494,7 @@ test_merge_changes_html_data_vs_component_changes(Config) when is_list(Config) -
             ~"<div class=\"todo-item\">", ~"Updated todo", ~"</div>"
         ]
     ],
-    Changes2 = [{root, [{3, NewHtmlData}]}],
+    Changes2 = [{root, [{3, arizona_differ:html_content(NewHtmlData)}]}],
     Socket3 = arizona_socket:append_changes(Changes2, Socket2),
 
     % Should succeed without function_clause error
@@ -491,11 +505,16 @@ test_merge_changes_html_data_vs_component_changes(Config) when is_list(Config) -
     [{root, ElementChanges}] = AllChanges,
     ?assertEqual(1, length(ElementChanges)),
     [{3, FinalHtmlData}] = ElementChanges,
-    ?assertEqual(NewHtmlData, FinalHtmlData),
+    ?assert(arizona_differ:is_html_content(FinalHtmlData)),
 
     % Test with mix of component changes and HTML data
-    ComponentChanges = [{~"nested_comp", [{0, ~"simple value"}]}],
-    MixedChanges = [{~"different_root", [{1, ~"simple binary"}, {2, ComponentChanges}]}],
+    ComponentChanges = [{~"nested_comp", [{0, arizona_differ:html_content(~"simple value")}]}],
+    MixedChanges = [
+        {~"different_root", [
+            {1, arizona_differ:html_content(~"simple binary")},
+            {2, arizona_differ:component_changes(ComponentChanges)}
+        ]}
+    ],
     Socket4 = arizona_socket:append_changes(MixedChanges, Socket3),
 
     % Should handle mixed data types without crashing

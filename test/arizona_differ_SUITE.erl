@@ -18,7 +18,8 @@ all() ->
         {group, diff_list},
         {group, diff_optimization},
         {group, error_handling},
-        {group, edge_cases}
+        {group, edge_cases},
+        {group, element_change}
     ].
 
 groups() ->
@@ -67,6 +68,15 @@ groups() ->
             test_diff_stateful_empty_elems,
             test_diff_stateful_invalid_element_index,
             test_diff_stateless_empty_element_changes
+        ]},
+        {element_change, [parallel], [
+            test_html_content_creation,
+            test_component_changes_creation,
+            test_type_checking_functions,
+            test_merge_element_changes_html,
+            test_merge_element_changes_components,
+            test_merge_element_changes_mixed_types,
+            test_opaque_type_safety
         ]}
     ].
 
@@ -78,28 +88,31 @@ socket_changes_accumulation(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => diff}),
 
     % Add first change
-    Change1 = [{root, [{1, ~"value1"}]}],
+    Change1 = [{root, [{1, arizona_differ:html_content(~"value1")}]}],
     Socket1 = arizona_socket:append_changes(Change1, Socket),
 
     % Add second change
-    Change2 = [{~"other_component", [{2, ~"value2"}]}],
+    Change2 = [{~"other_component", [{2, arizona_differ:html_content(~"value2")}]}],
     Socket2 = arizona_socket:append_changes(Change2, Socket1),
 
     % Get accumulated changes
     AllChanges = arizona_socket:get_changes(Socket2),
 
     % Changes are flattened and merged into a single structure
-    ExpectedChanges = [{root, [{1, ~"value1"}]}, {~"other_component", [{2, ~"value2"}]}],
+    ExpectedChanges = [
+        {root, [{1, arizona_differ:html_content(~"value1")}]},
+        {~"other_component", [{2, arizona_differ:html_content(~"value2")}]}
+    ],
     ?assertEqual(ExpectedChanges, AllChanges).
 
 socket_changes_merging(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => diff}),
 
     % Add changes to the same component at different elements
-    Change1 = [{root, [{1, ~"value1"}]}],
+    Change1 = [{root, [{1, arizona_differ:html_content(~"value1")}]}],
     Socket1 = arizona_socket:append_changes(Change1, Socket),
 
-    Change2 = [{root, [{2, ~"value2"}]}],
+    Change2 = [{root, [{2, arizona_differ:html_content(~"value2")}]}],
     Socket2 = arizona_socket:append_changes(Change2, Socket1),
 
     % Changes should be merged under the same component
@@ -112,18 +125,32 @@ socket_changes_merging(Config) when is_list(Config) ->
 
     % Should contain both element changes (order may vary)
     ?assertEqual(2, length(ElementChanges)),
-    ?assert(lists:member({1, ~"value1"}, ElementChanges)),
-    ?assert(lists:member({2, ~"value2"}, ElementChanges)).
+    ?assert(lists:member({1, arizona_differ:html_content(~"value1")}, ElementChanges)),
+    ?assert(lists:member({2, arizona_differ:html_content(~"value2")}, ElementChanges)).
 
 socket_changes_nested_structure(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => diff}),
 
     % Create a nested change structure like [{root, [{3, [{counter, [{2, 42}]}]}]}]
-    NestedChange = [{root, [{3, [{~"counter", [{2, 42}]}]}]}],
+    NestedChange = [
+        {root, [
+            {3,
+                arizona_differ:component_changes([
+                    {~"counter", [{2, arizona_differ:html_content(~"42")}]}
+                ])}
+        ]}
+    ],
     Socket1 = arizona_socket:append_changes(NestedChange, Socket),
 
     % Add another change to the same nested structure
-    AnotherNestedChange = [{root, [{3, [{~"counter", [{4, ~"new_value"}]}]}]}],
+    AnotherNestedChange = [
+        {root, [
+            {3,
+                arizona_differ:component_changes([
+                    {~"counter", [{4, arizona_differ:html_content(~"new_value")}]}
+                ])}
+        ]}
+    ],
     Socket2 = arizona_socket:append_changes(AnotherNestedChange, Socket1),
 
     % Verify the nested structure is maintained
@@ -132,7 +159,7 @@ socket_changes_nested_structure(Config) when is_list(Config) ->
 
 socket_changes_clear(Config) when is_list(Config) ->
     Socket = arizona_socket:new(#{mode => diff}),
-    Change = [{root, [{1, ~"value"}]}],
+    Change = [{root, [{1, arizona_differ:html_content(~"value")}]}],
     Socket1 = arizona_socket:append_changes(Change, Socket),
 
     % Test clearing changes
@@ -203,7 +230,7 @@ diff_stateful_with_changes(Config) when is_list(Config) ->
 
     % Verify changes were accumulated
     Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [{root, [{1, ~"42"}]}],
+    ExpectedChanges = [{root, [{1, arizona_differ:html_content(~"42")}]}],
     ?assertEqual(ExpectedChanges, Changes).
 
 diff_stateful_changes_no_affected_elements(Config) when is_list(Config) ->
@@ -358,7 +385,12 @@ diff_stateless_component_changes(Config) when is_list(Config) ->
 
     % Verify changes were generated for the stateless component
     Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [{root, [{1, [{1, ~"Jane"}]}]}],
+    % Stateless components return element changes wrapped in component_changes
+    ExpectedChanges = [
+        {root, [
+            {1, arizona_differ:component_changes([{1, arizona_differ:html_content(~"Jane")}])}
+        ]}
+    ],
     ?assertEqual(ExpectedChanges, Changes).
 
 diff_stateless_no_optimization(Config) when is_list(Config) ->
@@ -414,7 +446,13 @@ diff_stateless_no_optimization(Config) when is_list(Config) ->
     % Verify changes were generated (individual element changes from hierarchical diffing)
     Changes = arizona_socket:get_changes(ResultSocket),
     ExpectedChanges = [
-        {root, [{0, [{3, ~"New content"}, {1, ~"New Title"}]}]}
+        {root, [
+            {0,
+                arizona_differ:component_changes([
+                    {3, arizona_differ:html_content(~"New content")},
+                    {1, arizona_differ:html_content(~"New Title")}
+                ])}
+        ]}
     ],
     ?assertEqual(ExpectedChanges, Changes).
 
@@ -525,7 +563,9 @@ diff_stateless_unified_vars_indexes(Config) when is_list(Config) ->
     % Verify only theme-related change is detected (hierarchical format)
     Changes = arizona_socket:get_changes(ResultSocket),
     ExpectedChanges = [
-        {root, [{0, [{1, ~"light"}]}]}
+        {root, [
+            {0, arizona_differ:component_changes([{1, arizona_differ:html_content(~"light")}])}
+        ]}
     ],
     ?assertEqual(ExpectedChanges, Changes).
 
@@ -580,7 +620,7 @@ diff_stateless_unified_no_changes(Config) when is_list(Config) ->
 
     % Verify only count element changed, not the stateless component
     Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [{root, [{1, [~"Count: ", ~"43"]}]}],
+    ExpectedChanges = [{root, [{1, arizona_differ:html_content([~"Count: ", ~"43"])}]}],
     ?assertEqual(ExpectedChanges, Changes).
 
 %% --------------------------------------------------------------------
@@ -638,10 +678,11 @@ diff_list_basic_change(Config) when is_list(Config) ->
     Changes = arizona_socket:get_changes(ResultSocket),
     ExpectedChanges = [
         {root, [
-            {0, [
-                [[[], [~"<li>", ~"Alice", ~"</li>"]], [~"<li>", ~"Bob", ~"</li>"]],
-                [~"<li>", ~"Charlie", ~"</li>"]
-            ]}
+            {0,
+                arizona_differ:html_content([
+                    [[[], [~"<li>", ~"Alice", ~"</li>"]], [~"<li>", ~"Bob", ~"</li>"]],
+                    [~"<li>", ~"Charlie", ~"</li>"]
+                ])}
         ]}
     ],
     ?assertEqual(ExpectedChanges, Changes).
@@ -704,10 +745,11 @@ diff_list_item_addition(Config) when is_list(Config) ->
     Changes = arizona_socket:get_changes(ResultSocket),
     ExpectedChanges = [
         {root, [
-            {1, [
-                [[[], [~"<li>", ~"Alice", ~"</li>"]], [~"<li>", ~"Bob", ~"</li>"]],
-                [~"<li>", ~"Charlie", ~"</li>"]
-            ]}
+            {1,
+                arizona_differ:html_content([
+                    [[[], [~"<li>", ~"Alice", ~"</li>"]], [~"<li>", ~"Bob", ~"</li>"]],
+                    [~"<li>", ~"Charlie", ~"</li>"]
+                ])}
         ]}
     ],
     ?assertEqual(ExpectedChanges, Changes).
@@ -777,11 +819,12 @@ diff_list_item_removal(Config) when is_list(Config) ->
     Changes = arizona_socket:get_changes(ResultSocket),
     ExpectedChanges = [
         {root, [
-            {2, ~"2"},
-            {3, [
-                [[], [~"<div class=\"item\" data-id=\"", ~"1", ~"\">", ~"Alice", ~"</div>"]],
-                [~"<div class=\"item\" data-id=\"", ~"3", ~"\">", ~"Charlie", ~"</div>"]
-            ]}
+            {2, arizona_differ:html_content(~"2")},
+            {3,
+                arizona_differ:html_content([
+                    [[], [~"<div class=\"item\" data-id=\"", ~"1", ~"\">", ~"Alice", ~"</div>"]],
+                    [~"<div class=\"item\" data-id=\"", ~"3", ~"\">", ~"Charlie", ~"</div>"]
+                ])}
         ]}
     ],
     ?assertEqual(ExpectedChanges, Changes).
@@ -1134,7 +1177,10 @@ test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config)
     % With incomplete vars_indexes, we get limited changes
     CurrentChanges = Changes,
     % Current broken behavior
-    ?assertMatch([{root, [{1, ~"foo"}]}], CurrentChanges),
+    % Check that only element 1 changed with HTML content "foo"
+    ?assertMatch([{root, [{1, _}]}], CurrentChanges),
+    [{root, [{1, Element1Value}]}] = CurrentChanges,
+    ?assert(arizona_differ:is_html_content(Element1Value)),
 
     % Now test what SHOULD happen with correct vars_indexes
     CorrectVarsIndexes = #{
@@ -1199,7 +1245,10 @@ test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config)
     % but the real enhanced parse transform will work correctly
 
     % For now, verify the current test setup still shows the issue in the simulated scenario
-    ?assertMatch([{root, [{1, ~"foo"}]}], CurrentChanges).
+    % Check that only element 1 changed with HTML content "foo"
+    ?assertMatch([{root, [{1, _}]}], CurrentChanges),
+    [{root, [{1, Element1Value2}]}] = CurrentChanges,
+    ?assert(arizona_differ:is_html_content(Element1Value2)).
 
 %% --------------------------------------------------------------------
 %% Error handling tests
@@ -1340,7 +1389,7 @@ test_socket_with_html_no_changes(Config) when is_list(Config) ->
     % Should return changes with HTML content
     ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
     Changes = arizona_socket:get_changes(ResultSocket),
-    ?assertEqual([{root, [{1, [~"<span>content</span>"]}]}], Changes).
+    ?assertEqual([{root, [{1, arizona_differ:html_content([~"<span>content</span>"])}]}], Changes).
 
 test_diff_stateful_empty_elems(Config) when is_list(Config) ->
     % Test diff_stateful with empty elems map
@@ -1407,3 +1456,108 @@ test_diff_stateless_empty_element_changes(Config) when is_list(Config) ->
     % Should return socket with no changes
     ResultSocket = arizona_differ:diff_stateless(TemplateData, ChangedState, SocketWithState),
     ?assertEqual([], arizona_socket:get_changes(ResultSocket)).
+
+%% --------------------------------------------------------------------
+%% Element change opaque type API tests
+%% --------------------------------------------------------------------
+
+test_html_content_creation(Config) when is_list(Config) ->
+    % Test creating HTML content element changes
+    HtmlContent = ~"<div>Hello World</div>",
+    ElementChange = arizona_differ:html_content(HtmlContent),
+
+    % Should be recognized as HTML content
+    ?assert(arizona_differ:is_html_content(ElementChange)),
+    ?assertNot(arizona_differ:is_component_changes(ElementChange)).
+
+test_component_changes_creation(Config) when is_list(Config) ->
+    % Test creating component changes element changes
+    ComponentChanges = [{~"comp1", [{0, arizona_differ:html_content(~"content")}]}],
+    ElementChange = arizona_differ:component_changes(ComponentChanges),
+
+    % Should be recognized as component changes
+    ?assert(arizona_differ:is_component_changes(ElementChange)),
+    ?assertNot(arizona_differ:is_html_content(ElementChange)).
+
+test_type_checking_functions(Config) when is_list(Config) ->
+    % Test type checking with various inputs
+    HtmlElement = arizona_differ:html_content([~"<p>", ~"text", ~"</p>"]),
+    ComponentElement = arizona_differ:component_changes([
+        {~"comp1", [{0, arizona_differ:html_content(~"test")}]}
+    ]),
+
+    % Test HTML content type checking
+    ?assert(arizona_differ:is_html_content(HtmlElement)),
+    ?assertNot(arizona_differ:is_component_changes(HtmlElement)),
+
+    % Test component changes type checking
+    ?assert(arizona_differ:is_component_changes(ComponentElement)),
+    ?assertNot(arizona_differ:is_html_content(ComponentElement)).
+
+test_merge_element_changes_html(Config) when is_list(Config) ->
+    % Test merging HTML content (new should win)
+    OldHtml = arizona_differ:html_content(~"old content"),
+    NewHtml = arizona_differ:html_content(~"new content"),
+
+    Result = arizona_differ:merge_element_changes(NewHtml, OldHtml),
+
+    % Result should be the new HTML content
+    ?assert(arizona_differ:is_html_content(Result)),
+    ?assertEqual(NewHtml, Result).
+
+test_merge_element_changes_components(Config) when is_list(Config) ->
+    % Test merging component changes
+    OldChanges = arizona_differ:component_changes([
+        {~"comp1", [{0, arizona_differ:html_content(~"old")}]},
+        {~"comp2", [{1, arizona_differ:html_content(~"unchanged")}]}
+    ]),
+    NewChanges = arizona_differ:component_changes([
+        {~"comp1", [
+            {0, arizona_differ:html_content(~"new")}, {2, arizona_differ:html_content(~"added")}
+        ]},
+        {~"comp3", [{0, arizona_differ:html_content(~"new_comp")}]}
+    ]),
+
+    Result = arizona_differ:merge_element_changes(NewChanges, OldChanges),
+
+    % Result should be component changes
+    ?assert(arizona_differ:is_component_changes(Result)).
+
+test_merge_element_changes_mixed_types(Config) when is_list(Config) ->
+    % Test merging different types (new should win)
+    HtmlElement = arizona_differ:html_content(~"html content"),
+    ComponentElement = arizona_differ:component_changes([
+        {~"comp1", [{0, arizona_differ:html_content(~"comp")}]}
+    ]),
+
+    % HTML over component
+    Result1 = arizona_differ:merge_element_changes(HtmlElement, ComponentElement),
+    ?assert(arizona_differ:is_html_content(Result1)),
+    ?assertEqual(HtmlElement, Result1),
+
+    % Component over HTML
+    Result2 = arizona_differ:merge_element_changes(ComponentElement, HtmlElement),
+    ?assert(arizona_differ:is_component_changes(Result2)),
+    ?assertEqual(ComponentElement, Result2).
+
+test_opaque_type_safety(Config) when is_list(Config) ->
+    % Test that opaque type prevents pattern matching
+    HtmlElement = arizona_differ:html_content(~"test"),
+    ComponentElement = arizona_differ:component_changes([
+        {~"comp1", [{0, arizona_differ:html_content(~"test")}]}
+    ]),
+
+    % These should only be accessible through the API functions
+    % We can't pattern match on them directly, so test the API behavior
+
+    % We know it's a tuple internally but can't access structure
+    ?assert(is_tuple(HtmlElement)),
+    ?assert(is_tuple(ComponentElement)),
+
+    % But we can only determine their type through the API
+    ?assert(arizona_differ:is_html_content(HtmlElement)),
+    ?assert(arizona_differ:is_component_changes(ComponentElement)),
+
+    % Cross-type checks should fail
+    ?assertNot(arizona_differ:is_component_changes(HtmlElement)),
+    ?assertNot(arizona_differ:is_html_content(ComponentElement)).

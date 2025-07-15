@@ -392,7 +392,12 @@ test_mock_live_module_for_reply_responses(_Config) ->
 test_json_encoding_tuple_to_array_conversion(_Config) ->
     % Test JSON encoding with tuple-to-array conversion using nested diff structure
     % This simulates the DiffChanges structure returned by arizona_socket:get_changes/1
-    TestDiffChanges = [{root, [{1, ~"test_value"}, {2, {nested, ~"data"}}]}],
+    TestDiffChanges = [
+        {root, [
+            {1, arizona_differ:html_content(~"test_value")},
+            {2, arizona_differ:html_content([~"nested", ~"data"])}
+        ]}
+    ],
 
     % Create the payload structure that handle_noreply_response would create
     DiffPayload = #{
