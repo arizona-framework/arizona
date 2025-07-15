@@ -341,7 +341,7 @@ diff_stateless_component_changes(Config) when is_list(Config) ->
 
     % Verify changes were generated for the stateless component
     Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [{root, [{1, [~"<span>", ~"Jane", ~"</span>"]}]}],
+    ExpectedChanges = [{root, [{1, [{1, ~"Jane"}]}]}],
     ?assertEqual(ExpectedChanges, Changes).
 
 diff_stateless_no_optimization(Config) when is_list(Config) ->
