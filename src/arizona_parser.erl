@@ -58,8 +58,7 @@ template rendering and updates across different Arizona rendering modes.
 %% --------------------------------------------------------------------
 
 -export_type([token/0]).
--export_type([stateless_result/0]).
--export_type([stateful_result/0]).
+-export_type([parsed_template/0]).
 -export_type([list_result/0]).
 
 %% --------------------------------------------------------------------
@@ -74,16 +73,12 @@ Token representation with category, line number, and content.
 }.
 
 -doc ~"""
-Result type for stateless parsing - now returns same format as stateful for unification.
-""".
--type stateless_result() :: stateful_result().
+Result type for template parsing with element ordering and element mapping.
 
--doc ~"""
-Result type for stateful parsing with element ordering and element mapping.
-
+Both stateful and stateless templates use this unified format.
 The parse transform will handle variable analysis and add vars_indexes separately.
 """.
--type stateful_result() :: #{
+-type parsed_template() :: #{
     elems_order := [Index :: non_neg_integer()],
     elems := #{
         Index ::
@@ -126,9 +121,9 @@ Uses the same format as stateful parsing for unified handling.
 
 Returns the same structured format as stateful parsing.
 """.
--spec parse_stateless_tokens(Tokens) -> Result when
+-spec parse_stateless_tokens(Tokens) -> ParsedTemplate when
     Tokens :: [token()],
-    Result :: stateless_result().
+    ParsedTemplate :: parsed_template().
 parse_stateless_tokens(Tokens) ->
     parse_stateful_tokens(Tokens).
 
@@ -144,9 +139,9 @@ The resulting map contains:
 
 Variable analysis and vars_indexes generation is handled by the parse transform.
 """.
--spec parse_stateful_tokens(Tokens) -> Result when
+-spec parse_stateful_tokens(Tokens) -> ParsedTemplate when
     Tokens :: [token()],
-    Result :: stateful_result().
+    ParsedTemplate :: parsed_template().
 parse_stateful_tokens(Tokens) ->
     Elements = process_tokens_stateful(Tokens, 0, #{}),
     #{
