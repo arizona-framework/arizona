@@ -42,6 +42,8 @@ correctness and performance for real-time LiveView updates.
 
 -export([diff_stateful/3]).
 -export([diff_stateless/3]).
+-export([is_element_change/1]).
+-export([get_element_change/1]).
 -export([merge_element_changes/2]).
 
 %% --------------------------------------------------------------------
@@ -53,8 +55,6 @@ correctness and performance for real-time LiveView updates.
 -export([component_changes/1]).
 -export([is_html_content/1]).
 -export([is_component_changes/1]).
--export([is_element_change/1]).
--export([get_element_change/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
