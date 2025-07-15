@@ -129,7 +129,7 @@ Works for both stateful and stateless templates with unified format.
     Tokens :: [token()],
     ParsedTemplate :: parsed_template().
 parse_tokens(Tokens) ->
-    Elements = process_tokens_stateful(Tokens, 0, #{}),
+    Elements = process_tokens(Tokens, 0, #{}),
     #{
         elems_order => lists:seq(0, maps:size(Elements) - 1),
         elems => Elements
