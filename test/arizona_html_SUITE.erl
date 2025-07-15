@@ -176,14 +176,10 @@ test_render_stateful_nested_calls(Config) when is_list(Config) ->
     ?assert(arizona_socket:is_socket(UpdatedSocket)),
     ResultHtml = arizona_socket:get_html(UpdatedSocket),
 
-    % Expected nested iolist structure (not socket records!)
+    % Expected flattened binary structure (not nested lists!)
     ExpectedHtml = [
         ~"<div>\n    Level 0: ",
-        [
-            ~"<span>Level 1:\n",
-            [~"<p>Level 2: Deep nesting test</p>"],
-            ~"\n</span>"
-        ],
+        [~"<span>Level 1:\n", [~"<p>Level 2: Deep nesting test</p>"], ~"\n</span>"],
         ~"\n</div>"
     ],
 

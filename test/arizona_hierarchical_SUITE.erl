@@ -71,7 +71,8 @@ groups() ->
             error_handling_coverage,
             mode_switching_coverage,
             hierarchical_list_in_stateful_template,
-            hierarchical_stateless_in_stateful_template
+            hierarchical_stateless_in_stateful_template,
+            test_duplicate_list_changes_in_multiple_indices
         ]}
     ].
 
@@ -759,7 +760,7 @@ detect_list_content(Config) when is_list(Config) ->
 
     {Content, _UpdatedSocket} = arizona_html:to_html(ListContent, Socket),
 
-    % arizona_html:to_html creates nested iodata structure for lists
+    % arizona_html:to_html creates nested iodata for lists
     Expected = [[[[[~"<li>", ~"Item 1"], ~"</li>"], ~"<li>"], ~"Item 2"], ~"</li>"],
 
     ?assertEqual(Expected, Content).
@@ -1169,3 +1170,102 @@ hierarchical_stateless_in_stateful_template(Config) when is_list(Config) ->
     },
 
     ?assertEqual(ExpectedStructure, HierarchicalAcc).
+
+% IMPORTANT: This test confirms that the hierarchical diff correctly separates:
+% - List changes go to index 3 (main section)
+% - Stateless changes go to index 9 (footer)
+% The bug occurs during WebSocket conversion where the same list changes
+% get incorrectly duplicated to both indices due to the looks_like_component_changes
+% heuristic in arizona_socket.erl
+test_duplicate_list_changes_in_multiple_indices(Config) when is_list(Config) ->
+    % Test scenario similar to TODO app where the same list changes might be applied
+    % to multiple element indices, causing duplication in the diff
+
+    % Create initial structure similar to TODO app with list in main section (index 3)
+    % and stateless components in footer (index 9)
+    InitialStructure = #{
+        root => #{
+            0 => ~"<div><main>",
+            3 => #{
+                type => list,
+                dynamic => [
+                    #{0 => ~"", 1 => ~"1", 6 => ~"Learn Erlang"},
+                    #{0 => ~"completed", 1 => ~"2", 6 => ~"Build web app"}
+                ],
+                static => [~"<div class=\"todo-item ", ~"\" data-testid=\"todo-", ~"\">", ~"</div>"]
+            },
+            4 => ~"</main><footer>",
+            9 => #{
+                type => stateless,
+                structure => #{
+                    0 => ~"<span>Count: ",
+                    1 => 2,
+                    2 => ~"</span>"
+                }
+            },
+            10 => ~"</footer></div>"
+        }
+    },
+
+    % Create updated structure where first item is toggled (should only affect index 3)
+    UpdatedStructure = #{
+        root => #{
+            0 => ~"<div><main>",
+            3 => #{
+                type => list,
+                dynamic => [
+                    #{0 => ~"completed", 1 => ~"1", 6 => ~"Learn Erlang"},
+                    #{0 => ~"completed", 1 => ~"2", 6 => ~"Build web app"}
+                ],
+                static => [~"<div class=\"todo-item ", ~"\" data-testid=\"todo-", ~"\">", ~"</div>"]
+            },
+            4 => ~"</main><footer>",
+            9 => #{
+                type => stateless,
+                structure => #{
+                    0 => ~"<span>Count: ",
+                    1 => 1,
+                    2 => ~"</span>"
+                }
+            },
+            10 => ~"</footer></div>"
+        }
+    },
+
+    % Generate diff between initial and updated structures
+    Changes = arizona_hierarchical:diff_structures(InitialStructure, UpdatedStructure),
+
+    % This test simulates the TODO app bug where the same list changes appear
+    % at both the main section (index 3) and footer (index 9).
+    % The hierarchical diff should correctly separate these changes.
+
+    % Verify the hierarchical diff structure is correct
+    ?assertMatch(
+        [#{type := update_stateful, stateful_id := root, data := ElementDiffs}] when
+            is_list(ElementDiffs),
+        Changes
+    ),
+
+    [#{data := ElementDiffs}] = Changes,
+
+    % Find changes by element index - using lists:search since these are maps
+    Index3Change = lists:search(fun(#{element_index := Index}) -> Index =:= 3 end, ElementDiffs),
+    Index9Change = lists:search(fun(#{element_index := Index}) -> Index =:= 9 end, ElementDiffs),
+
+    % Extract the actual change records
+    {value, Index3ChangeRecord} = Index3Change,
+    {value, Index9ChangeRecord} = Index9Change,
+
+    % Verify that both changes exist
+    ?assertMatch(#{type := update_list_dynamic, element_index := 3}, Index3ChangeRecord),
+    ?assertMatch(#{type := update_stateless, element_index := 9}, Index9ChangeRecord),
+
+    % Extract the change data
+    #{data := Index3Data} = Index3ChangeRecord,
+    #{data := Index9Data} = Index9ChangeRecord,
+
+    % Verify that index 3 has the actual list changes (todo items)
+    ?assertMatch([#{0 := <<"completed">>, 1 := <<"1">>, 6 := <<"Learn Erlang">>}, _], Index3Data),
+
+    % Verify that index 9 has only the stateless component changes (count update)
+    ?assertMatch([#{type := set_element, element_index := 1, data := 1}], Index9Data).
