@@ -37,6 +37,9 @@ and state synchronization for interactive web applications.
 
 -behaviour(cowboy_websocket).
 
+%% Suppress dialyzer warnings for JSON encoder opaque type handling
+-dialyzer({nowarn_function, json_encoder/2}).
+
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -411,9 +414,16 @@ handle_websocket_error(Error, Reason, Stacktrace, State) ->
     Term :: term(),
     Encoder :: json:encoder(),
     JsonData :: iodata().
-json_encoder(Tuple, Encode) when is_tuple(Tuple) ->
-    % Convert tuple to array
-    json:encode_list(tuple_to_list(Tuple), Encode);
-json_encoder(Other, Encode) ->
+json_encoder(Tuple, Encoder) when is_tuple(Tuple) ->
+    case arizona_differ:is_element_change(Tuple) of
+        true ->
+            % Tuple is confirmed to be an element_change(), so safe to extract
+            ElementChange = arizona_differ:get_element_change(Tuple),
+            json:encode_value(ElementChange, Encoder);
+        false ->
+            % Convert tuple to array
+            json:encode_list(tuple_to_list(Tuple), Encoder)
+    end;
+json_encoder(Other, Encoder) ->
     % For all other types, use the default JSON encoder
-    json:encode_value(Other, Encode).
+    json:encode_value(Other, Encoder).
