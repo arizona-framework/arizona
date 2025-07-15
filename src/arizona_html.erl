@@ -456,7 +456,7 @@ render_stateful_html(Html, Bindings, Socket) when
     ParsedResult = arizona_parser:parse_stateful_tokens(Tokens),
 
     %% Transform to optimized format using same logic as parse transform
-    OptimizedAST = arizona_parse_transform:transform_stateful_to_ast(ParsedResult, 0),
+    OptimizedAST = arizona_parse_transform:transform_template_to_ast(ParsedResult, 0),
 
     %% Evaluate AST to get optimized template data with Socket binding
     {value, OptimizedTemplateData, _NewBindings} = erl_eval:expr(
@@ -481,7 +481,7 @@ render_stateless_html(Html, Bindings, Socket) when
     ParsedResult = arizona_parser:parse_stateless_tokens(Tokens),
 
     %% Transform to optimized format using same logic as parse transform
-    OptimizedAST = arizona_parse_transform:transform_stateless_to_ast(ParsedResult, 0),
+    OptimizedAST = arizona_parse_transform:transform_template_to_ast(ParsedResult, 0),
 
     %% Evaluate AST to get optimized template data with Socket binding
     {value, OptimizedStructuredList, _NewBindings} = erl_eval:expr(
