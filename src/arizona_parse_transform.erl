@@ -1133,17 +1133,10 @@ transform_arizona_html_call(
         CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
     );
 transform_arizona_html_call(
-    render_slot,
-    CallAnnotations,
-    RemoteCall,
-    Args,
-    ModuleName,
-    _CompilerOptions,
-    _Depth,
-    _CurrentFunctionBindings
+    render_slot, CallAnnotations, RemoteCall, Args, ModuleName, _CompilerOptions, _Depth
 ) ->
     transform_render_slot_call(
-        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+        CallAnnotations, RemoteCall, Args, ModuleName
     );
 transform_arizona_html_call(
     _FunctionName, CallAnnotations, RemoteCall, Args, _ModuleName, _CompilerOptions, _Depth
@@ -1263,7 +1256,7 @@ transform_slot_template_call(
     try
         % Extract and parse the template at compile time (same as stateless)
         {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        TemplateAST = parse_template_for_ast_only(
+        TemplateAST = parse_template_for_stateless(
             TemplateString, LineNumber
         ),
 
@@ -1282,45 +1275,13 @@ transform_slot_template_call(
 
 %% Template Transformation
 
-%% Parse template string into iolist structure with depth tracking
--spec parse_template_for_stateless(binary(), pos_integer(), compile_options(), non_neg_integer()) ->
-    [term()].
-parse_template_for_stateless(TemplateString, LineNumber, CompilerOptions, Depth) ->
+%% Parse template string into AST structure for slot optimization
+-spec parse_template_for_stateless(binary(), pos_integer()) ->
+    erl_syntax:syntaxTree().
+parse_template_for_stateless(TemplateString, LineNumber) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
-    ParsedElements = arizona_parser:parse_stateless_tokens(TokenList),
-    convert_to_iolist_format(ParsedElements, CompilerOptions, Depth).
-
-%% Convert parsed elements to iolist format with depth tracking
--spec convert_to_iolist_format([term()], compile_options(), non_neg_integer()) -> [term()].
-convert_to_iolist_format(ParsedElements, CompilerOptions, Depth) ->
-    lists:reverse(
-        lists:foldl(
-            fun(Element, Acc) ->
-                convert_element_to_iolist(
-                    Element, standard_expression_norm_callback(), Acc, CompilerOptions, Depth
-                )
-            end,
-            [],
-            ParsedElements
-        )
-    ).
-
-%% Convert individual element to iolist format with depth tracking
--spec convert_element_to_iolist(
-    term(), expression_norm_callback(), [term()], compile_options(), non_neg_integer()
-) -> [term()].
-convert_element_to_iolist(
-    {static, Line, StaticText}, _ExpressionTextNormCallback, Accumulator, _CompilerOptions, _Depth
-) ->
-    StaticElement = format_static_element(Line, StaticText),
-    [StaticElement | Accumulator];
-convert_element_to_iolist(
-    {dynamic, Line, ExpressionText}, ExpressionTextNormCallback, Accumulator, CompilerOptions, Depth
-) ->
-    DynamicElement = format_dynamic_element(
-        Line, ExpressionText, ExpressionTextNormCallback, CompilerOptions, Depth
-    ),
-    [DynamicElement | Accumulator].
+    ParsedElementsMap = arizona_parser:parse_stateless_tokens(TokenList),
+    transform_stateless_to_ast(ParsedElementsMap).
 
 %% Stateful Template Transformation
 

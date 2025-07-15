@@ -382,11 +382,30 @@ test_stateless_binary_elements(Config) when is_list(Config) ->
 
     ct:comment("Stateless template with binary elements transformed correctly").
 
-%% Test transform_template_to_ast function directly
-test_transform_template_to_ast(Config) when is_list(Config) ->
-    % Test with parsed_template (no vars_indexes)
-    ParsedTemplate = #{
-        elems_order => [0, 1],
+%% Test transform_stateless_to_ast function directly
+test_transform_stateless_to_ast(Config) when is_list(Config) ->
+    % Create a stateless result in basic stateful_result format
+    StatelessTemplate = #{
+        elems_order => [0],
+        elems => #{
+            0 => {static, 1, ~"<h1>Title</h1><footer>Footer</footer>"}
+        }
+    },
+
+    % Call transform_stateless_to_ast directly
+    ResultAST = arizona_parse_transform:transform_stateless_to_ast(StatelessTemplate),
+
+    % Verify it returns a proper AST list structure
+    ?assert(erl_syntax:is_tree(ResultAST)),
+    ?assertEqual(list, erl_syntax:type(ResultAST)),
+
+    ct:comment("transform_stateless_to_ast handles binary content correctly").
+
+%% Test transform_stateful_to_ast function directly
+test_transform_stateful_to_ast(Config) when is_list(Config) ->
+    % Create a stateful result matching new parser format (without vars_indexes)
+    StatefulResult = #{
+        elems_order => [1, 2, 3],
         elems => #{
             0 => {static, 1, ~"Hello, "},
             1 => {dynamic, 1, ~"arizona_socket:get_binding(name, Socket)"}
@@ -418,8 +437,8 @@ test_stateless_binary_handling(Config) when is_list(Config) ->
         }
     },
 
-    % Call transform_template_to_ast
-    ResultAST = arizona_parse_transform:transform_template_to_ast(PureBinaryTemplate, 0),
+    % Call transform_stateless_to_ast
+    ResultAST = arizona_parse_transform:transform_stateless_to_ast(PureBinaryTemplate),
 
     % Verify it creates proper map AST nodes for unified format
     ?assert(erl_syntax:is_tree(ResultAST)),
@@ -429,7 +448,7 @@ test_stateless_binary_handling(Config) when is_list(Config) ->
 
 %% Test dynamic expression AST creation
 test_dynamic_expression_ast_creation(Config) when is_list(Config) ->
-    % Test transform_template_to_ast with basic format containing dynamic elements
+    % Test transform_stateless_to_ast with basic format containing dynamic elements
     MixedTemplate = #{
         elems_order => [0, 1, 2],
         elems => #{
@@ -439,8 +458,8 @@ test_dynamic_expression_ast_creation(Config) when is_list(Config) ->
         }
     },
 
-    % Call transform_template_to_ast to trigger the generic item handling
-    ResultAST = arizona_parse_transform:transform_template_to_ast(MixedTemplate, 0),
+    % Call transform_stateless_to_ast to trigger the generic item handling
+    ResultAST = arizona_parse_transform:transform_stateless_to_ast(MixedTemplate),
 
     % Verify it returns a proper map AST structure for unified format
     ?assert(erl_syntax:is_tree(ResultAST)),

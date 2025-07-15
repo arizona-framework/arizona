@@ -54,7 +54,7 @@ groups() ->
 parse_stateless_static_only(Config) when is_list(Config) ->
     Template = ~"<div>Hello World</div>",
     Tokens = arizona_scanner:scan(#{}, Template),
-    StructuredResult = arizona_parser:parse_tokens(Tokens),
+    StructuredResult = arizona_parser:parse_stateless_tokens(Tokens),
 
     %% Should return basic stateful_result format without vars_indexes
     Expected = #{
@@ -68,7 +68,7 @@ parse_stateless_static_only(Config) when is_list(Config) ->
 parse_stateless_with_dynamic(Config) when is_list(Config) ->
     Template = ~"<div>Hello {name}!</div>",
     Tokens = arizona_scanner:scan(#{}, Template),
-    StructuredResult = arizona_parser:parse_tokens(Tokens),
+    StructuredResult = arizona_parser:parse_stateless_tokens(Tokens),
 
     %% Should return basic stateful_result format without vars_indexes
     Expected = #{
@@ -84,7 +84,7 @@ parse_stateless_with_dynamic(Config) when is_list(Config) ->
 parse_stateless_with_comments(Config) when is_list(Config) ->
     Template = ~"<div>{% This is a comment }Hello</div>",
     Tokens = arizona_scanner:scan(#{}, Template),
-    StructuredResult = arizona_parser:parse_tokens(Tokens),
+    StructuredResult = arizona_parser:parse_stateless_tokens(Tokens),
 
     %% Comments should be filtered out completely
     Expected = #{
@@ -102,7 +102,7 @@ parse_tokens_directly(Config) when is_list(Config) ->
         {dynamic, 1, ~"name"},
         {static, 1, ~"</p>"}
     ],
-    StructuredResult = arizona_parser:parse_tokens(Tokens),
+    StructuredResult = arizona_parser:parse_stateless_tokens(Tokens),
 
     %% Should handle tokens directly and return basic stateful_result format
     Expected = #{
