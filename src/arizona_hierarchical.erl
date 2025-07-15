@@ -203,7 +203,7 @@ Processes a stateful template and generates a hierarchical structure that can be
 efficiently diffed and transmitted via WebSocket for real-time updates.
 """.
 -spec stateful_structure(TemplateData, Socket) -> {ComponentStructure, Socket1} when
-    TemplateData :: arizona_renderer:stateful_template_data(),
+    TemplateData :: arizona_renderer:template_data(),
     Socket :: arizona_socket:socket(),
     ComponentStructure :: stateful_render(),
     Socket1 :: arizona_socket:socket().
@@ -228,7 +228,7 @@ Processes a stateless template and generates a nested structure that can be
 embedded within stateful components for efficient rendering and updates.
 """.
 -spec stateless_structure(TemplateData, Socket) -> {StatelessElement, Socket1} when
-    TemplateData :: arizona_renderer:stateless_template_data(),
+    TemplateData :: arizona_renderer:template_data(),
     Socket :: arizona_socket:socket(),
     StatelessElement :: element_content(),
     Socket1 :: arizona_socket:socket().

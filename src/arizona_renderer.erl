@@ -10,8 +10,8 @@ components, and list rendering with efficient diff-based updates.
 
 ## Features
 
-- **Stateful Rendering**: Optimized rendering for stateful components with element indexing
-- **Stateless Rendering**: Lightweight rendering for stateless components
+- **Unified Template Rendering**: Optimized rendering for both stateful and
+  stateless components with element indexing
 - **List Rendering**: Efficient list rendering with static/dynamic separation
 - **Error Handling**: Comprehensive error reporting with line number information
 - **Socket Management**: Proper socket state management throughout rendering
@@ -19,8 +19,8 @@ components, and list rendering with efficient diff-based updates.
 
 ## Key Functions
 
-- `render_stateful/2`: Render stateful component templates with indexed elements
-- `render_stateless/2`: Render stateless component templates as linear lists
+- `render_template/2`: Render template data with indexed elements for both
+  stateful and stateless templates
 - `render_list/3`: Render list templates with static/dynamic optimization
 - `evaluate_single_dynamic_element/4`: Evaluate dynamic elements for list items
 - `format_error/2`: Format rendering errors with context information
@@ -35,8 +35,7 @@ which provides optimized data structures for different rendering scenarios.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([render_stateful/2]).
--export([render_stateless/2]).
+-export([render_template/2]).
 -export([render_list/3]).
 -export([evaluate_single_dynamic_element/4]).
 -export([format_error/2]).
@@ -51,8 +50,7 @@ which provides optimized data structures for different rendering scenarios.
 %% Types exports
 %% --------------------------------------------------------------------
 
--export_type([stateful_template_data/0]).
--export_type([stateless_template_data/0]).
+-export_type([template_data/0]).
 -export_type([list_template_data/0]).
 
 %% --------------------------------------------------------------------
@@ -60,12 +58,12 @@ which provides optimized data structures for different rendering scenarios.
 %% --------------------------------------------------------------------
 
 -doc ~"""
-Template data from parse transform optimized for stateful component rendering.
+Template data for unified template rendering.
 
 Contains indexed elements with order information and variable mappings for
-efficient rendering and diff operations.
+efficient rendering and diff operations. Used for both stateful and stateless templates.
 """.
--type stateful_template_data() :: #{
+-type template_data() :: #{
     elems_order := [Index :: non_neg_integer()],
     elems := #{
         Index ::
@@ -81,13 +79,6 @@ efficient rendering and diff operations.
     },
     vars_indexes := #{VarName :: atom() => [Index :: non_neg_integer()]}
 }.
-
--doc ~"""
-Template data from parse transform optimized for stateless component rendering.
-
-Now uses same format as stateful for unified handling.
-""".
--type stateless_template_data() :: stateful_template_data().
 
 -doc ~"""
 Template data from parse transform optimized for list rendering with static/dynamic separation.
@@ -116,53 +107,30 @@ list rendering and updates.
 %% --------------------------------------------------------------------
 
 -doc ~"""
-Render stateful component template data into HTML.
+Render template data into HTML.
 
-Processes stateful template data with indexed elements for efficient rendering
-and diff operations. Updates the socket with the rendered HTML.
+Processes template data with indexed elements for efficient rendering
+and diff operations. Works for both stateful and stateless templates.
+Updates the socket with the rendered HTML.
 
 ## Examples
 
 ```erlang
 1> TemplateData = #{elems_order => [0, 1], elems => #{0 => {static, 1, ~"Hello"}}}.
 #{...}
-2> arizona_renderer:render_stateful(TemplateData, Socket).
+2> arizona_renderer:render_template(TemplateData, Socket).
 {[~"Hello"], UpdatedSocket}
 ```
 """.
--spec render_stateful(TemplateData, Socket) -> {Html, Socket1} when
-    TemplateData :: stateful_template_data(),
+-spec render_template(TemplateData, Socket) -> {Html, Socket1} when
+    TemplateData :: template_data(),
     Socket :: arizona_socket:socket(),
     Html :: arizona_html:html(),
     Socket1 :: arizona_socket:socket().
-render_stateful(#{elems_order := Order, elems := Elements}, Socket) ->
+render_template(#{elems_order := Order, elems := Elements}, Socket) ->
     {Html, UpdatedSocket} = render_elements(Order, Elements, Socket, []),
     UpdatedSocket1 = arizona_socket:set_html_acc(Html, UpdatedSocket),
     {Html, UpdatedSocket1}.
-
--doc ~"""
-Render stateless component template data into HTML.
-
-Processes stateless template data as a linear list of elements for lightweight
-rendering without indexed access. Updates the socket with the rendered HTML.
-
-## Examples
-
-```erlang
-1> TemplateData = [{static, 1, ~"Hello"}, {static, 2, ~"World"}].
-[...]
-2> arizona_renderer:render_stateless(TemplateData, Socket).
-{[~"Hello", ~"World"], UpdatedSocket}
-```
-""".
--spec render_stateless(TemplateData, Socket) -> {Html, Socket1} when
-    TemplateData :: stateless_template_data(),
-    Socket :: arizona_socket:socket(),
-    Html :: arizona_html:html(),
-    Socket1 :: arizona_socket:socket().
-render_stateless(TemplateData, Socket) when is_map(TemplateData) ->
-    %% Since stateless now uses same format as stateful, use the same rendering
-    render_stateful(TemplateData, Socket).
 
 -doc ~"""
 Render list template with static/dynamic optimization for efficient list rendering.

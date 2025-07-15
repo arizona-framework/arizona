@@ -64,7 +64,7 @@ test_render_stateful_basic(Config) when is_list(Config) ->
     },
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateful(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     ?assertEqual([~"<div>Hello</div>"], Html),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
@@ -81,7 +81,7 @@ test_render_stateful_with_dynamic(Config) when is_list(Config) ->
     },
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateful(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     Expected = [~"<div>Hello ", ~"World", ~"</div>"],
     ?assertEqual(Expected, Html),
@@ -95,7 +95,7 @@ test_render_stateful_empty_elements(Config) when is_list(Config) ->
     },
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateful(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     ?assertEqual([], Html),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
@@ -108,7 +108,7 @@ test_render_stateful_single_element(Config) when is_list(Config) ->
     },
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateful(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     ?assertEqual([~"Single"], Html),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
@@ -126,7 +126,7 @@ test_render_stateful_multiple_elements(Config) when is_list(Config) ->
     },
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateful(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     Expected = [~"<p>", ~"Text", ~" content", ~"</p>"],
     ?assertEqual(Expected, Html),
@@ -148,7 +148,7 @@ test_render_stateless_basic(Config) when is_list(Config) ->
     },
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateless(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     Expected = [~"<div>", ~"content", ~"</div>"],
     ?assertEqual(Expected, Html),
@@ -162,7 +162,7 @@ test_render_stateless_empty_list(Config) when is_list(Config) ->
     },
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateless(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     ?assertEqual([], Html),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
@@ -179,7 +179,7 @@ test_render_stateless_mixed_content(Config) when is_list(Config) ->
     },
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateless(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     Expected = [~"<h1>Title</h1>", ~"variable_content", ~"<p>End</p>"],
     ?assertEqual(Expected, Html),
@@ -199,7 +199,7 @@ test_render_stateless_unified_format(Config) when is_list(Config) ->
     },
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateless(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     % Should render in order according to elems_order
     ExpectedParts = [~"<div>", ~"unified_content", ~"</div>"],
@@ -222,7 +222,7 @@ test_render_stateless_unified_with_vars_indexes(Config) when is_list(Config) ->
     },
     Socket = arizona_socket:put_binding(username, ~"test_user", create_mock_socket()),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateless(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     Expected = [~"<span>User: ", ~"test_user"],
     ?assertEqual(Expected, Html),
@@ -237,7 +237,7 @@ test_render_stateless_unified_empty(Config) when is_list(Config) ->
     },
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateless(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     ?assertEqual([], Html),
     ?assert(arizona_socket:is_socket(UpdatedSocket)).
@@ -253,7 +253,7 @@ test_render_stateless_unified_single_element(Config) when is_list(Config) ->
     },
     Socket = create_mock_socket(),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateless(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     Expected = [~"<p>Single element</p>"],
     ?assertEqual(Expected, Html),
@@ -283,7 +283,7 @@ test_render_stateless_unified_cascade_simulation(Config) when is_list(Config) ->
     UserData = #{username => ~"Alice", role => ~"admin"},
     Socket = arizona_socket:put_binding(user, UserData, create_mock_socket()),
 
-    {Html, UpdatedSocket} = arizona_renderer:render_stateless(TemplateData, Socket),
+    {Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
 
     % The nested list structure from HTML accumulation may vary, so check the flattened content
     FlatHtml = iolist_to_binary(Html),
@@ -402,7 +402,7 @@ test_render_element_binding_error(Config) when is_list(Config) ->
 
     ?assertError(
         {binding_not_found, test_key},
-        arizona_renderer:render_stateful(TemplateData, Socket)
+        arizona_renderer:render_template(TemplateData, Socket)
     ).
 
 test_render_element_template_error(Config) when is_list(Config) ->
@@ -415,7 +415,7 @@ test_render_element_template_error(Config) when is_list(Config) ->
 
     ?assertError(
         {template_render_error, test_error, 42},
-        arizona_renderer:render_stateful(TemplateData, Socket)
+        arizona_renderer:render_template(TemplateData, Socket)
     ).
 
 test_render_list_item_error(Config) when is_list(Config) ->

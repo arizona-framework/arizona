@@ -111,13 +111,13 @@ data generation.
 ```
 """.
 -spec render_stateful(Template, Socket) -> Socket1 when
-    Template :: arizona_renderer:stateful_template_data() | html(),
+    Template :: arizona_renderer:template_data() | html(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 render_stateful(TemplateData, Socket) when is_map(TemplateData) ->
     case arizona_socket:get_mode(Socket) of
         render ->
-            {_Html, UpdatedSocket} = arizona_renderer:render_stateful(TemplateData, Socket),
+            {_Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
             UpdatedSocket;
         diff ->
             % Get current stateful state for diffing
@@ -156,13 +156,13 @@ standard rendering for HTML output.
 ```
 """.
 -spec render_stateless(Template, Socket) -> Socket1 when
-    Template :: arizona_renderer:stateless_template_data() | html(),
+    Template :: arizona_renderer:template_data() | html(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 render_stateless(TemplateData, Socket) when is_map(TemplateData) ->
     case arizona_socket:get_mode(Socket) of
         render ->
-            {_Html, UpdatedSocket} = arizona_renderer:render_stateless(TemplateData, Socket),
+            {_Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
             UpdatedSocket;
         diff ->
             % In diff mode, use stateless diffing for hierarchical updates
@@ -266,7 +266,7 @@ specified slot, otherwise renders the content directly.
 ```
 """.
 -spec render_live(Template, Socket) -> Socket1 when
-    Template :: arizona_renderer:stateful_template_data() | html(),
+    Template :: arizona_renderer:template_data() | html(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 render_live(Template, Socket) ->
