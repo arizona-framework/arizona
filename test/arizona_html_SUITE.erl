@@ -404,7 +404,7 @@ test_to_html_binary(Config) when is_list(Config) ->
 
 test_to_html_list(Config) when is_list(Config) ->
     {Result, _Socket} = arizona_html:to_html([~"<div>", content, ~"</div>"], create_mock_socket()),
-    ?assertEqual([[[[], ~"<div>"], ~"content"], ~"</div>"], Result).
+    ?assertEqual([[~"<div>", ~"content"], ~"</div>"], Result).
 
 test_to_html_atom(Config) when is_list(Config) ->
     {Result, _Socket} = arizona_html:to_html(hello, create_mock_socket()),
@@ -706,12 +706,16 @@ test_render_live_diff_mode_with_layout(Config) when is_list(Config) ->
     ?assert(arizona_socket:is_socket(ResultSocket)).
 
 test_render_slot_with_parsed_template(Config) when is_list(Config) ->
-    % Test slot content with parse-transform optimized stateless template
-    ParsedTemplate = [
-        {static, 1, ~"<span>"},
-        {static, 1, ~"Parsed Content"},
-        {static, 1, ~"</span>"}
-    ],
+    % Test slot content with parse-transform optimized stateless template in unified format
+    ParsedTemplate = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<span>"},
+            1 => {static, 1, ~"Parsed Content"},
+            2 => {static, 1, ~"</span>"}
+        },
+        vars_indexes => #{}
+    },
 
     % Create socket with slot content as parsed template
     SlotContent = {stateless, ParsedTemplate},

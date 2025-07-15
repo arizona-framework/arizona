@@ -22,8 +22,8 @@ them with optimized versions that avoid runtime template parsing overhead.
 
 -export([parse_transform/2]).
 -export([format_error/2]).
--export([transform_stateful_to_ast/1]).
--export([transform_stateless_to_ast/1]).
+-export([transform_stateful_to_ast/2]).
+-export([transform_stateless_to_ast/2]).
 
 %% --------------------------------------------------------------------
 %% Testing helper exports
@@ -332,16 +332,17 @@ Transform stateful template result to optimized AST.
 Converts a parsed stateful template result into an optimized AST representation
 that can be used for efficient runtime rendering.
 """.
--spec transform_stateful_to_ast(StatefulResult) -> SyntaxTree when
+-spec transform_stateful_to_ast(StatefulResult, Depth) -> SyntaxTree when
     StatefulResult :: arizona_parser:stateful_result() | enhanced_stateful_result(),
+    Depth :: non_neg_integer(),
     SyntaxTree :: erl_syntax:syntaxTree().
-transform_stateful_to_ast(#{elems_order := Order, elems := Elements} = StatefulResult) ->
+transform_stateful_to_ast(#{elems_order := Order, elems := Elements} = StatefulResult, Depth) ->
     %% Get vars_indexes or generate empty one for runtime fallback
     VarsIndexes = maps:get(vars_indexes, StatefulResult, #{}),
 
     %% Create AST for optimized template data map
     OrderAST = erl_syntax:list([erl_syntax:integer(I) || I <- Order]),
-    ElementsAST = create_elements_map_ast(Elements),
+    ElementsAST = create_elements_map_ast(Elements, Depth),
     VarsIndexesAST = create_vars_indexes_map_ast(VarsIndexes),
 
     %% Build the template data map AST
@@ -366,12 +367,13 @@ Transform stateless template result to optimized AST.
 Converts a parsed stateless template result into an optimized AST representation
 that can be used for efficient runtime rendering.
 """.
--spec transform_stateless_to_ast(StatelessResult) -> SyntaxTree when
+-spec transform_stateless_to_ast(StatelessResult, Depth) -> SyntaxTree when
     StatelessResult :: arizona_parser:stateless_result(),
+    Depth :: non_neg_integer(),
     SyntaxTree :: erl_syntax:syntaxTree().
-transform_stateless_to_ast(StatefulData) when is_map(StatefulData) ->
+transform_stateless_to_ast(StatefulData, Depth) when is_map(StatefulData) ->
     %% Since stateless now returns same format as stateful, use the same transformation
-    transform_stateful_to_ast(StatefulData).
+    transform_stateful_to_ast(StatefulData, Depth).
 
 %% --------------------------------------------------------------------
 %% Private functions
@@ -1035,7 +1037,7 @@ transform_arizona_html_call_with_context(
     Args,
     ModuleName,
     _CompilerOptions,
-    _Depth,
+    Depth,
     CurrentFunctionBindings
 ) when
     FunctionName =:= render_live;
@@ -1047,7 +1049,7 @@ transform_arizona_html_call_with_context(
         EmptyMap when map_size(EmptyMap) =:= 0 ->
             %% No current function context, use regular transformation
             transform_render_stateful_call(
-                CallAnnotations, RemoteCall, Args, ModuleName
+                CallAnnotations, RemoteCall, Args, ModuleName, Depth
             );
         _ ->
             %% We have function bindings, use enhanced transformation
@@ -1056,7 +1058,8 @@ transform_arizona_html_call_with_context(
                 RemoteCall,
                 Args,
                 ModuleName,
-                CurrentFunctionBindings
+                CurrentFunctionBindings,
+                Depth
             )
     end;
 transform_arizona_html_call_with_context(
@@ -1085,14 +1088,14 @@ transform_arizona_html_call_with_context(
     non_neg_integer()
 ) -> erl_parse:abstract_expr().
 transform_arizona_html_call(
-    FunctionName, CallAnnotations, RemoteCall, Args, ModuleName, _CompilerOptions, _Depth
+    FunctionName, CallAnnotations, RemoteCall, Args, ModuleName, _CompilerOptions, Depth
 ) when
     FunctionName =:= render_live;
     FunctionName =:= render_stateful;
     FunctionName =:= render_stateless
 ->
     transform_render_stateful_call(
-        CallAnnotations, RemoteCall, Args, ModuleName
+        CallAnnotations, RemoteCall, Args, ModuleName, Depth
     );
 transform_arizona_html_call(
     render_list, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
@@ -1117,14 +1120,16 @@ transform_arizona_html_call(
     erl_parse:abstract_expr(),
     [erl_parse:abstract_expr()],
     atom(),
-    #{binary() => binary()}
+    #{binary() => binary()},
+    non_neg_integer()
 ) -> erl_parse:abstract_expr().
 transform_render_stateful_call_with_context(
     CallAnnotations,
     RemoteCall,
     [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg],
     ModuleName,
-    CurrentFunctionBindings
+    CurrentFunctionBindings,
+    Depth
 ) ->
     transform_stateful_template_call_with_context(
         CallAnnotations,
@@ -1132,14 +1137,16 @@ transform_render_stateful_call_with_context(
         BinaryTemplate,
         SocketArg,
         ModuleName,
-        CurrentFunctionBindings
+        CurrentFunctionBindings,
+        Depth
     );
 transform_render_stateful_call_with_context(
     CallAnnotations,
     _RemoteCall,
     _Args,
     ModuleName,
-    _CurrentFunctionBindings
+    _CurrentFunctionBindings,
+    _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
     error(arizona_badarg, none, error_info({ModuleName, Line})).
@@ -1149,19 +1156,21 @@ transform_render_stateful_call_with_context(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
     [erl_parse:abstract_expr()],
-    atom()
+    atom(),
+    non_neg_integer()
 ) -> erl_parse:abstract_expr().
 transform_render_stateful_call(
     CallAnnotations,
     RemoteCall,
     [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg],
-    ModuleName
+    ModuleName,
+    Depth
 ) ->
     transform_stateful_template_call(
-        CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName
+        CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, Depth
     );
 transform_render_stateful_call(
-    CallAnnotations, _RemoteCall, _Args, ModuleName
+    CallAnnotations, _RemoteCall, _Args, ModuleName, _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
     error(arizona_badarg, none, error_info({ModuleName, Line})).
@@ -1274,7 +1283,7 @@ transform_slot_template_call(
 parse_template_for_stateless(TemplateString, LineNumber) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
     ParsedElementsMap = arizona_parser:parse_stateless_tokens(TokenList),
-    transform_stateless_to_ast(ParsedElementsMap).
+    transform_stateless_to_ast(ParsedElementsMap, 0).
 
 %% Stateful Template Transformation
 
@@ -1285,7 +1294,8 @@ parse_template_for_stateless(TemplateString, LineNumber) ->
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
     atom(),
-    #{binary() => binary()}
+    #{binary() => binary()},
+    non_neg_integer()
 ) -> erl_parse:abstract_expr().
 transform_stateful_template_call_with_context(
     CallAnnotations,
@@ -1293,7 +1303,8 @@ transform_stateful_template_call_with_context(
     BinaryTemplate,
     SocketArg,
     ModuleName,
-    CurrentFunctionBindings
+    CurrentFunctionBindings,
+    Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
     try
@@ -1304,7 +1315,7 @@ transform_stateful_template_call_with_context(
         ),
 
         % Generate AST directly instead of string-based approach
-        TemplateDataAST = transform_stateful_to_ast(StatefulResult),
+        TemplateDataAST = transform_stateful_to_ast(StatefulResult, Depth),
         create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg)
     catch
         Error:Reason:Stacktrace ->
@@ -1321,10 +1332,11 @@ transform_stateful_template_call_with_context(
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
-    atom()
+    atom(),
+    non_neg_integer()
 ) -> erl_parse:abstract_expr().
 transform_stateful_template_call(
-    CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName
+    CallAnnotations, RemoteCall, BinaryTemplate, SocketArg, ModuleName, Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
     try
@@ -1335,7 +1347,7 @@ transform_stateful_template_call(
         ),
 
         % Generate AST directly instead of string-based approach
-        TemplateDataAST = transform_stateful_to_ast(StatefulResult),
+        TemplateDataAST = transform_stateful_to_ast(StatefulResult, Depth),
         create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg)
     catch
         Error:Reason:Stacktrace ->
@@ -1693,30 +1705,30 @@ error_info(Cause) ->
 %% Helper functions for AST generation
 
 %% Create AST for elements map
-create_elements_map_ast(Elements) ->
+create_elements_map_ast(Elements, Depth) ->
     MapFields = [
         erl_syntax:map_field_assoc(
             erl_syntax:integer(Index),
-            create_element_ast(Element)
+            create_element_ast(Element, Depth)
         )
      || Index := Element <- Elements
     ],
     erl_syntax:map_expr(MapFields).
 
 %% Create AST for a single element (static or dynamic)
-create_element_ast({static, Line, Content}) ->
+create_element_ast({static, Line, Content}, _Depth) ->
     erl_syntax:tuple([
         erl_syntax:atom(static),
         erl_syntax:integer(Line),
         erl_syntax:binary([erl_syntax:binary_field(erl_syntax:string(binary_to_list(Content)))])
     ]);
-create_element_ast({dynamic, Line, ExpressionText}) ->
+create_element_ast({dynamic, Line, ExpressionText}, Depth) ->
     %% Convert expression to optimized function AST
     %% ExprBinary is the original expression like "arizona_socket:get_binding(name, Socket)"
-    %% Use depth 0 for runtime AST creation (not parse transform)
-    OptimizedExpressionText = optimize_dynamic_expression(ExpressionText, [], 0),
+    %% Use proper depth for nested template handling
+    OptimizedExpressionText = optimize_dynamic_expression(ExpressionText, [], Depth),
     FunctionBinary = create_socket_threaded_function(
-        OptimizedExpressionText, standard_expression_norm_callback(), 0
+        OptimizedExpressionText, standard_expression_norm_callback(), Depth
     ),
 
     erl_syntax:tuple([

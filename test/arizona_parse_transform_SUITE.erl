@@ -394,11 +394,11 @@ test_transform_stateless_to_ast(Config) when is_list(Config) ->
     },
 
     % Call transform_stateless_to_ast directly
-    ResultAST = arizona_parse_transform:transform_stateless_to_ast(StatelessTemplate),
+    ResultAST = arizona_parse_transform:transform_stateless_to_ast(StatelessTemplate, 0),
 
-    % Verify it returns a proper AST list structure
+    % Verify it returns a proper AST map structure for unified format
     ?assert(erl_syntax:is_tree(ResultAST)),
-    ?assertEqual(list, erl_syntax:type(ResultAST)),
+    ?assertEqual(map_expr, erl_syntax:type(ResultAST)),
 
     ct:comment("transform_stateless_to_ast handles binary content correctly").
 
@@ -415,7 +415,7 @@ test_transform_stateful_to_ast(Config) when is_list(Config) ->
     },
 
     % Call transform_stateful_to_ast directly
-    ResultAST = arizona_parse_transform:transform_stateful_to_ast(StatefulResult),
+    ResultAST = arizona_parse_transform:transform_stateful_to_ast(StatefulResult, 0),
 
     % Verify it returns a proper AST map structure
     ?assert(erl_syntax:is_tree(ResultAST)),
@@ -436,11 +436,11 @@ test_stateless_binary_handling(Config) when is_list(Config) ->
     },
 
     % Call transform_stateless_to_ast
-    ResultAST = arizona_parse_transform:transform_stateless_to_ast(PureBinaryTemplate),
+    ResultAST = arizona_parse_transform:transform_stateless_to_ast(PureBinaryTemplate, 0),
 
-    % Verify it creates proper binary field AST nodes
+    % Verify it creates proper map AST nodes for unified format
     ?assert(erl_syntax:is_tree(ResultAST)),
-    ?assertEqual(list, erl_syntax:type(ResultAST)),
+    ?assertEqual(map_expr, erl_syntax:type(ResultAST)),
 
     ct:comment("Binary literal handling in stateless transform works correctly").
 
@@ -457,11 +457,11 @@ test_dynamic_expression_ast_creation(Config) when is_list(Config) ->
     },
 
     % Call transform_stateless_to_ast to trigger the generic item handling
-    ResultAST = arizona_parse_transform:transform_stateless_to_ast(MixedTemplate),
+    ResultAST = arizona_parse_transform:transform_stateless_to_ast(MixedTemplate, 0),
 
-    % Verify it returns a proper AST structure
+    % Verify it returns a proper map AST structure for unified format
     ?assert(erl_syntax:is_tree(ResultAST)),
-    ?assertEqual(list, erl_syntax:type(ResultAST)),
+    ?assertEqual(map_expr, erl_syntax:type(ResultAST)),
 
     ct:comment("Mixed item handling in stateless transform works correctly").
 
@@ -505,7 +505,6 @@ test_nested_arizona_optimization(Config) when is_list(Config) ->
 
     % Check that socket variables at different nesting levels use different names to avoid shadowing
     % Level 0 should use _@Socket0, Level 1 should use _@Socket1
-    % Level 2 is a static template with no dynamic content, so no function wrapper needed
     ?assert(string:str(TransformedSource, "_@Socket0") > 0),
     ?assert(string:str(TransformedSource, "_@Socket1") > 0),
 

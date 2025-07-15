@@ -760,7 +760,7 @@ detect_list_content(Config) when is_list(Config) ->
     {Content, _UpdatedSocket} = arizona_html:to_html(ListContent, Socket),
 
     % arizona_html:to_html creates nested iodata structure for lists
-    Expected = [[[[[[[], ~"<li>"], ~"Item 1"], ~"</li>"], ~"<li>"], ~"Item 2"], ~"</li>"],
+    Expected = [[[[[~"<li>", ~"Item 1"], ~"</li>"], ~"<li>"], ~"Item 2"], ~"</li>"],
 
     ?assertEqual(Expected, Content).
 
