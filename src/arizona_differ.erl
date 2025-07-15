@@ -42,26 +42,53 @@ correctness and performance for real-time LiveView updates.
 
 -export([diff_stateful/3]).
 -export([diff_stateless/3]).
+-export([merge_element_changes/2]).
+
+%% --------------------------------------------------------------------
+%% Testing helper exports
+%% --------------------------------------------------------------------
+
 -export([get_affected_elements/2]).
+-export([html_content/1]).
+-export([component_changes/1]).
+-export([is_html_content/1]).
+-export([is_component_changes/1]).
+-export([is_element_change/1]).
+-export([get_element_change/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
 -ignore_xref([get_affected_elements/2]).
+-ignore_xref([html_content/1]).
+-ignore_xref([component_changes/1]).
+-ignore_xref([is_html_content/1]).
+-ignore_xref([is_component_changes/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 
+-export_type([element_change/0]).
 -export_type([diff_changes/0]).
 -export_type([element_index/0]).
--export_type([element_change/0]).
+-export_type([component_change/0]).
 -export_type([element_change_entry/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
+
+-doc ~"""
+Element change type for individual template element updates.
+
+Opaque type that encapsulates either HTML content or component changes,
+providing controlled access through helper functions and future-proof evolution.
+""".
+-opaque element_change() ::
+    {html_content, arizona_html:html()}
+    | {component_changes, [component_change()]}.
 
 -doc ~"""
 Element index type for referencing template elements.
@@ -72,32 +99,13 @@ a template's element map.
 -type element_index() :: non_neg_integer().
 
 -doc ~"""
-Element value type for rendered template elements.
-
-Can be any term depending on the element type and rendering context.
-""".
--type element_value() :: term().
-
--doc ~"""
-Nested changes type for hierarchical component updates.
-
-List of component changes for nested stateful components.
-""".
--type nested_changes() :: [component_change()].
-
--doc ~"""
-Element change type for individual template element updates.
-
-Either a rendered element value or nested changes for hierarchical components.
-""".
--type element_change() :: element_value() | nested_changes().
-
--doc ~"""
 Component change type for stateful component updates.
 
 Tuple containing the component ID and its associated element changes.
 """.
--type component_change() :: {arizona_stateful:id(), [element_change_entry()]}.
+-type component_change() :: {
+    arizona_stateful:id() | element_index(), [element_change_entry()] | element_change()
+}.
 
 -doc ~"""
 Element change entry type for individual element updates.
@@ -243,6 +251,40 @@ get_affected_elements(ChangedBindings, VarsIndexes) ->
 %% Private functions
 %% --------------------------------------------------------------------
 
+%% Helper function for merging component changes lists
+merge_component_changes_list(NewChanges, ExistingChanges) ->
+    lists:foldl(
+        fun({ComponentId, NewElementChanges}, Acc) ->
+            case lists:keyfind(ComponentId, 1, Acc) of
+                false ->
+                    [{ComponentId, NewElementChanges} | Acc];
+                {ComponentId, ExistingElementChanges} ->
+                    MergedElementChanges = merge_element_changes_list(
+                        NewElementChanges, ExistingElementChanges
+                    ),
+                    lists:keyreplace(ComponentId, 1, Acc, {ComponentId, MergedElementChanges})
+            end
+        end,
+        ExistingChanges,
+        NewChanges
+    ).
+
+%% Helper function for merging element changes within a component
+merge_element_changes_list(NewElements, ExistingElements) ->
+    lists:foldl(
+        fun({ElementIndex, NewChange}, Acc) ->
+            case lists:keyfind(ElementIndex, 1, Acc) of
+                false ->
+                    [{ElementIndex, NewChange} | Acc];
+                {ElementIndex, ExistingChange} ->
+                    MergedChange = merge_element_changes(NewChange, ExistingChange),
+                    lists:keyreplace(ElementIndex, 1, Acc, {ElementIndex, MergedChange})
+            end
+        end,
+        ExistingElements,
+        NewElements
+    ).
+
 %% Check if there are any changes in the bindings
 -spec has_changes(ChangedBindings) -> boolean() when
     ChangedBindings :: map().
@@ -358,8 +400,8 @@ process_elements([ElementIndex | Rest], Elements, Socket) ->
 process_single_element(ElementIndex, Element, Socket) ->
     case Element of
         {static, _Line, Content} ->
-            % Static element - use content directly
-            {{ElementIndex, Content}, Socket};
+            % Static element - tag as HTML content
+            {{ElementIndex, html_content(Content)}, Socket};
         {dynamic, Line, Fun} ->
             % Dynamic element - call function and handle result
             try
@@ -385,9 +427,9 @@ handle_dynamic_result(ElementIndex, Result, Socket) ->
             NestedChanges = arizona_socket:get_changes(Result),
             handle_socket_result(ElementIndex, NestedChanges, Result);
         false ->
-            % Regular value - convert to HTML for consistency
+            % Regular value - convert to HTML and tag it
             {Html, ResultSocket} = arizona_html:to_html(Result, Socket),
-            {{ElementIndex, Html}, ResultSocket}
+            {{ElementIndex, html_content(Html)}, ResultSocket}
     end.
 
 %% Handle socket results with nested changes
@@ -401,13 +443,13 @@ handle_socket_result(ElementIndex, NestedChanges, ResultSocket) ->
                     % No changes and no content, skip this element
                     {skip, ResultSocket};
                 _ ->
-                    % Has HTML content, use it
-                    {{ElementIndex, Html}, ResultSocket}
+                    % Has HTML content, tag it
+                    {{ElementIndex, html_content(Html)}, ResultSocket}
             end;
         _ ->
-            % Has nested changes - extract them and clear socket
+            % Has nested changes - tag them as component changes
             CleanSocket = arizona_socket:clear_changes(ResultSocket),
-            {{ElementIndex, NestedChanges}, CleanSocket}
+            {{ElementIndex, component_changes(NestedChanges)}, CleanSocket}
     end.
 
 %% Error info for binding errors following OTP pattern
@@ -420,3 +462,75 @@ binding_error_info(Line, Key, Socket) ->
             module => arizona_differ
         }}
     ].
+
+%% --------------------------------------------------------------------
+%% Element change helper functions (opaque type access)
+%% --------------------------------------------------------------------
+
+-doc ~"""
+Create an element change containing HTML content.
+""".
+-spec html_content(Html) -> ElementChange when
+    Html :: arizona_html:html(),
+    ElementChange :: element_change().
+html_content(Html) ->
+    {html_content, Html}.
+
+-doc ~"""
+Create an element change containing component changes.
+""".
+-spec component_changes(Changes) -> ElementChange when
+    Changes :: [component_change()],
+    ElementChange :: element_change().
+component_changes(Changes) ->
+    {component_changes, Changes}.
+
+-doc ~"""
+Check if an element change contains HTML content.
+""".
+-spec is_html_content(ElementChange) -> boolean() when
+    ElementChange :: element_change().
+is_html_content({html_content, _}) -> true;
+is_html_content(_) -> false.
+
+-doc ~"""
+Check if an element change contains component changes.
+""".
+-spec is_component_changes(ElementChange) -> boolean() when
+    ElementChange :: element_change().
+is_component_changes({component_changes, _}) -> true;
+is_component_changes(_) -> false.
+
+-doc ~"""
+Check if a term is an element change opaque type.
+""".
+-spec is_element_change(Term) -> boolean() when
+    Term :: term().
+is_element_change({html_content, _}) -> true;
+is_element_change({component_changes, _}) -> true;
+is_element_change(_) -> false.
+
+-doc ~"""
+Extract the actual content from an element change opaque type for JSON encoding.
+""".
+-spec get_element_change(ElementChange) -> Content when
+    ElementChange :: element_change(),
+    Content :: term().
+get_element_change({html_content, Html}) -> Html;
+get_element_change({component_changes, Changes}) -> Changes.
+
+-doc ~"""
+Merge two element changes using the optimal pattern matching approach.
+Replaces the complex heuristic-based merge_nested_changes function.
+""".
+-spec merge_element_changes(New, Existing) -> Merged when
+    New :: element_change(),
+    Existing :: element_change(),
+    Merged :: element_change().
+merge_element_changes({component_changes, NewChanges}, {component_changes, ExistingChanges}) ->
+    % Merge component changes using existing logic
+    MergedChanges = merge_component_changes_list(NewChanges, ExistingChanges),
+    {component_changes, MergedChanges};
+merge_element_changes(New, _Existing) ->
+    % For HTML content or mixed types: new takes precedence
+    New.
