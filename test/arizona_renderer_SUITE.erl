@@ -261,7 +261,8 @@ test_render_stateless_unified_single_element(Config) when is_list(Config) ->
 
 test_render_stateless_unified_cascade_simulation(Config) when is_list(Config) ->
     % Simulate a cascade scenario where stateless component depends on parent binding
-    % This represents: {arizona_component:call_stateless(module, fun, #{foo => arizona_socket:get_binding(user, Socket)}, Socket)}
+    % This represents: {arizona_component:call_stateless(module, fun,
+    %                  #{foo => arizona_socket:get_binding(user, Socket)}, Socket)}
     TemplateData = #{
         elems_order => [0, 1, 2],
         elems => #{

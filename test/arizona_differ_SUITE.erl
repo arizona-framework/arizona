@@ -404,7 +404,8 @@ diff_stateless_no_optimization(Config) when is_list(Config) ->
 %% New tests for unified stateless format
 diff_stateless_unified_cascade_dependency(Config) when is_list(Config) ->
     % Test the cascade dependency pattern: stateless component depending on parent binding
-    % This tests: {arizona_component:call_stateless(module, fun, #{foo => arizona_socket:get_binding(user, Socket)}, Socket)}
+    % This tests: {arizona_component:call_stateless(module, fun,
+    %              #{foo => arizona_socket:get_binding(user, Socket)}, Socket)}
     InitialState = arizona_stateful:new(root, test_module, #{
         user => #{name => ~"Alice", status => ~"online"}
     }),

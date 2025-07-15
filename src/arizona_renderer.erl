@@ -22,7 +22,6 @@ components, and list rendering with efficient diff-based updates.
 - `render_stateful/2`: Render stateful component templates with indexed elements
 - `render_stateless/2`: Render stateless component templates as linear lists
 - `render_list/3`: Render list templates with static/dynamic optimization
-- `render_element/2`: Render individual template elements
 - `evaluate_single_dynamic_element/4`: Evaluate dynamic elements for list items
 - `format_error/2`: Format rendering errors with context information
 
@@ -39,7 +38,6 @@ which provides optimized data structures for different rendering scenarios.
 -export([render_stateful/2]).
 -export([render_stateless/2]).
 -export([render_list/3]).
--export([render_element/2]).
 -export([evaluate_single_dynamic_element/4]).
 -export([format_error/2]).
 
