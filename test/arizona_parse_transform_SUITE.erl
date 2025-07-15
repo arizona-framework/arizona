@@ -393,11 +393,11 @@ test_transform_stateless_to_ast(Config) when is_list(Config) ->
     },
 
     % Call transform_stateless_to_ast directly
-    ResultAST = arizona_parse_transform:transform_stateless_to_ast(StatelessTemplate),
+    ResultAST = arizona_parse_transform:transform_stateless_to_ast(StatelessTemplate, 0),
 
-    % Verify it returns a proper AST list structure
+    % Verify it returns a proper AST map structure for unified format
     ?assert(erl_syntax:is_tree(ResultAST)),
-    ?assertEqual(list, erl_syntax:type(ResultAST)),
+    ?assertEqual(map_expr, erl_syntax:type(ResultAST)),
 
     ct:comment("transform_stateless_to_ast handles binary content correctly").
 
@@ -412,10 +412,8 @@ test_transform_stateful_to_ast(Config) when is_list(Config) ->
         }
     },
 
-    % Call transform_template_to_ast with parsed_template
-    ResultAST1 = arizona_parse_transform:transform_template_to_ast(ParsedTemplate, 0),
-    ?assert(erl_syntax:is_tree(ResultAST1)),
-    ?assertEqual(map_expr, erl_syntax:type(ResultAST1)),
+    % Call transform_stateful_to_ast directly
+    ResultAST = arizona_parse_transform:transform_stateful_to_ast(StatefulResult, 0),
 
     % Test with transformed_template (with vars_indexes)
     TransformedTemplate = ParsedTemplate#{vars_indexes => #{name => [1]}},
@@ -438,7 +436,7 @@ test_stateless_binary_handling(Config) when is_list(Config) ->
     },
 
     % Call transform_stateless_to_ast
-    ResultAST = arizona_parse_transform:transform_stateless_to_ast(PureBinaryTemplate),
+    ResultAST = arizona_parse_transform:transform_stateless_to_ast(PureBinaryTemplate, 0),
 
     % Verify it creates proper map AST nodes for unified format
     ?assert(erl_syntax:is_tree(ResultAST)),
@@ -459,7 +457,7 @@ test_dynamic_expression_ast_creation(Config) when is_list(Config) ->
     },
 
     % Call transform_stateless_to_ast to trigger the generic item handling
-    ResultAST = arizona_parse_transform:transform_stateless_to_ast(MixedTemplate),
+    ResultAST = arizona_parse_transform:transform_stateless_to_ast(MixedTemplate, 0),
 
     % Verify it returns a proper map AST structure for unified format
     ?assert(erl_syntax:is_tree(ResultAST)),
