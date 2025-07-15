@@ -31,7 +31,7 @@ them with optimized versions that avoid runtime template parsing overhead.
 -export([extract_arizona_functions/1]).
 -export([analyze_function_for_bindings/1]).
 -export([generate_vars_indexes/2]).
--export([parse_template/5]).
+-export([parse_template_for_stateful/5]).
 -export([build_function_bindings_map/2]).
 -export([extract_functions_single_pass/1]).
 
@@ -44,7 +44,7 @@ them with optimized versions that avoid runtime template parsing overhead.
 -ignore_xref([extract_arizona_functions/1]).
 -ignore_xref([analyze_function_for_bindings/1]).
 -ignore_xref([generate_vars_indexes/2]).
--ignore_xref([parse_template/5]).
+-ignore_xref([parse_template_for_stateful/5]).
 -ignore_xref([build_function_bindings_map/2]).
 -ignore_xref([extract_functions_single_pass/1]).
 
@@ -1030,7 +1030,7 @@ transform_template_calls(
     non_neg_integer(),
     #{binary() => binary()}
 ) -> erl_parse:abstract_expr().
-transform_arizona_html_call_with_context(
+transform_arizona_html_call(
     FunctionName,
     CallAnnotations,
     RemoteCall,
@@ -1044,18 +1044,11 @@ transform_arizona_html_call_with_context(
     FunctionName =:= render_stateful;
     FunctionName =:= render_stateless
 ->
-    %% Use current function bindings for enhanced template processing
-    %% Always use context-aware transformation (empty map when no context)
     transform_render_stateful_call(
-        CallAnnotations,
-        RemoteCall,
-        Args,
-        ModuleName,
-        CurrentFunctionBindings,
-        Depth
+        CallAnnotations, RemoteCall, Args, ModuleName, CurrentFunctionBindings, Depth
     );
-transform_arizona_html_call_with_context(
-    FunctionName,
+transform_arizona_html_call(
+    render_list,
     CallAnnotations,
     RemoteCall,
     Args,
@@ -1081,45 +1074,31 @@ transform_arizona_html_call(
     Depth,
     _CurrentFunctionBindings
 ) ->
-    %% Fall back to regular transformation for other functions
-    transform_arizona_html_call(
-        FunctionName, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
-    ).
-
-%% Transform specific arizona_html function calls
--spec transform_arizona_html_call(
-    atom(),
-    erl_anno:anno(),
-    erl_parse:abstract_expr(),
-    [erl_parse:abstract_expr()],
-    atom(),
-    compile_options(),
-    non_neg_integer()
-) -> erl_parse:abstract_expr().
-transform_arizona_html_call(
-    FunctionName, CallAnnotations, RemoteCall, Args, ModuleName, _CompilerOptions, Depth
-) when
-    FunctionName =:= render_live;
-    FunctionName =:= render_stateful;
-    FunctionName =:= render_stateless
-->
-    transform_render_stateful_call(
-        CallAnnotations, RemoteCall, Args, ModuleName, #{}, Depth
-    );
-transform_arizona_html_call(
-    render_list, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
-) ->
     transform_render_list_call(
         CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
     );
 transform_arizona_html_call(
-    render_slot, CallAnnotations, RemoteCall, Args, ModuleName, _CompilerOptions, _Depth
+    render_slot,
+    CallAnnotations,
+    RemoteCall,
+    Args,
+    ModuleName,
+    _CompilerOptions,
+    _Depth,
+    _CurrentFunctionBindings
 ) ->
     transform_render_slot_call(
         CallAnnotations, RemoteCall, Args, ModuleName
     );
 transform_arizona_html_call(
-    _FunctionName, CallAnnotations, RemoteCall, Args, _ModuleName, _CompilerOptions, _Depth
+    _FunctionName,
+    CallAnnotations,
+    RemoteCall,
+    Args,
+    _ModuleName,
+    _CompilerOptions,
+    _Depth,
+    _CurrentFunctionBindings
 ) ->
     {call, CallAnnotations, RemoteCall, Args}.
 
@@ -1142,7 +1121,7 @@ transform_render_stateful_call(
 ) ->
     %% Use current function bindings for enhanced template processing
     %% Always use context-aware transformation (empty map when no context)
-    transform_stateful_template_call_with_context(
+    transform_stateful_template_call(
         CallAnnotations,
         RemoteCall,
         BinaryTemplate,
@@ -1270,7 +1249,7 @@ parse_template_for_stateless(TemplateString, LineNumber) ->
 %% Stateful Template Transformation
 
 %% Transform render_stateful call with current function context and depth tracking
--spec transform_stateful_template_call_with_context(
+-spec transform_stateful_template_call(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
@@ -1279,7 +1258,7 @@ parse_template_for_stateless(TemplateString, LineNumber) ->
     #{binary() => binary()},
     non_neg_integer()
 ) -> erl_parse:abstract_expr().
-transform_stateful_template_call_with_context(
+transform_stateful_template_call(
     CallAnnotations,
     RemoteCall,
     BinaryTemplate,
@@ -1292,7 +1271,7 @@ transform_stateful_template_call_with_context(
     try
         % Extract and parse the template at compile time with function context
         {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        TransformedTemplate = parse_template_for_stateful_result_with_context(
+        TransformedTemplate = parse_template_for_stateful_result(
             TemplateString, LineNumber, CurrentFunctionBindings
         ),
 
@@ -1309,10 +1288,10 @@ transform_stateful_template_call_with_context(
     end.
 
 %% Parse template string into structured format with variable context
--spec parse_template(
+-spec parse_template_for_stateful(
     binary(), pos_integer(), compile_options(), non_neg_integer(), #{binary() => binary()}
 ) -> binary().
-parse_template(
+parse_template_for_stateful(
     TemplateString, LineNumber, CompilerOptions, Depth, VarBindings
 ) ->
     #{
@@ -1327,8 +1306,8 @@ parse_template(
         ElementOrder, ElementsMap, VariableIndexes, CompilerOptions, Depth
     ).
 
-%% Parse template string into structured result with variable context for AST generation
--spec parse_template_for_ast(
+%% Parse template string into stateful result with variable context for AST generation
+-spec parse_template_for_stateful_result(
     binary(), pos_integer(), #{binary() => binary()}
 ) ->
     #{
@@ -1336,7 +1315,7 @@ parse_template(
         elems := #{non_neg_integer() => {static | dynamic, pos_integer(), binary()}},
         vars_indexes := #{binary() => [non_neg_integer()]}
     }.
-parse_template_for_stateful_result_with_context(TemplateString, LineNumber, VarBindings) ->
+parse_template_for_stateful_result(TemplateString, LineNumber, VarBindings) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
     ParsedTemplate = arizona_parser:parse_stateful_tokens(TokenList),
 
