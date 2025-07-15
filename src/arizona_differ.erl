@@ -292,12 +292,13 @@ process_elements([ElementIndex | Rest], Elements, Socket) ->
 
     % Process this element
     case process_single_element(ElementIndex, Element, CleanSocket) of
-        {skip, UpdatedSocket} ->
-            % Skip this element, continue with next
-            process_elements(Rest, Elements, UpdatedSocket);
-        {ElementChange, UpdatedSocket} ->
-            % Include this element change
-            {RestChages, FinalSocket} = process_elements(Rest, Elements, UpdatedSocket),
+        {skip, _UpdatedSocket} ->
+            % Skip this element, continue with next using original socket
+            process_elements(Rest, Elements, Socket);
+        {ElementChange, _UpdatedSocket} ->
+            % Include this element change, but use original socket for next elements
+            % to prevent sharing of changes between elements
+            {RestChages, FinalSocket} = process_elements(Rest, Elements, Socket),
             {[ElementChange | RestChages], FinalSocket}
     end.
 
@@ -333,8 +334,8 @@ handle_dynamic_result(ElementIndex, Result, Socket) ->
             handle_socket_result(ElementIndex, NestedChanges, Result);
         false ->
             % Regular value - convert to HTML for consistency
-            {Html, _} = arizona_html:to_html(Result, Socket),
-            {{ElementIndex, Html}, Socket}
+            {Html, ResultSocket} = arizona_html:to_html(Result, Socket),
+            {{ElementIndex, Html}, ResultSocket}
     end.
 
 %% Handle socket results with nested changes
