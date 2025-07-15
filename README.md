@@ -50,8 +50,8 @@ equivalent binary content.
 
 ### Compile-time Optimized Templates
 
-Use the compile-time parse transform to enable variable assignments before
-templates with automatic performance optimizations:
+Use the compile-time parse transform to enable dependency tracking and automatic
+performance optimizations for Arizona templates:
 
 ```erlang
 -module(my_live).
@@ -59,6 +59,8 @@ templates with automatic performance optimizations:
 -arizona_parse_transform([render/1]).
 
 render(Socket) ->
+    % The parse transform analyzes arizona_socket:get_binding calls within templates
+    % and generates optimized vars_indexes for surgical DOM updates
     Count = arizona_socket:get_binding(count, Socket),
     UserName = arizona_socket:get_binding(user_name, Socket),
     arizona_html:render_stateful(~"""
@@ -74,7 +76,7 @@ render(Socket) ->
 
 - **Selective Processing**: Only functions explicitly declared with
   `-arizona_parse_transform([function/arity])` are optimized
-- **Variable Assignment Support**: Extract variables before templates at compile time
+- **Dependency Tracking**: Analyzes `arizona_socket:get_binding/2` calls in templates at compile time
 - **Automatic Change Detection**: Generates optimized `vars_indexes` for surgical DOM updates
 - **Multi-Function Support**: Different variable contexts per function
 - **Dependency Tracking**: Handles nested and conditional binding calls
@@ -133,10 +135,9 @@ mount(_Req, Socket) ->
     {ok, Socket1}.
 
 render(Socket) ->
-    Count = arizona_socket:get_binding(count, Socket),
     arizona_html:render_stateful(~"""
     <div class="counter">
-        <h1>Count: {Count}</h1>
+        <h1>Count: {arizona_socket:get_binding(count, Socket)}</h1>
         <button onclick="increment">Increment</button>
         <button onclick="decrement">Decrement</button>
     </div>
@@ -155,9 +156,9 @@ handle_event(~"decrement", _Params, Socket) ->
 **What's happening here:**
 
 - The `-arizona_parse_transform([render/1])` attribute enables compile-time template optimization
-- Variables like `Count` are extracted before the template and optimized at compile time
-- The parse transform automatically generates optimized `vars_indexes` for efficient updates
-- When the `count` binding changes, only the specific template element containing `{Count}` re-renders
+- The parse transform analyzes `arizona_socket:get_binding(count, Socket)` calls within templates
+- Automatically generates optimized `vars_indexes` mapping binding keys to template elements
+- When the `count` binding changes, only the specific template element containing that binding re-renders
 
 ### 4. Start the server
 

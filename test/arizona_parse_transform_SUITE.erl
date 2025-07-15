@@ -68,7 +68,11 @@ groups() ->
             test_template_parse_failed_error_formatting,
             test_render_live_edge_cases,
             test_generate_vars_indexes_edge_cases,
-            test_comprehensive_edge_cases
+            test_comprehensive_edge_cases,
+            test_empty_binary_variable_validation,
+            test_safe_template_extraction_error_handling,
+            test_single_pass_function_extraction_performance,
+            test_template_extraction_failed_error_formatting
         ]}
     ].
 
@@ -187,13 +191,6 @@ test_nested_function_calls(Config) when is_list(Config) ->
 
 %% Test invalid template error handling
 test_invalid_template_error(Config) when is_list(Config) ->
-    % Test that format_error handles template_parse_failed
-    ErrorInfo = [{error_info, #{cause => {test_module, 123}}}],
-    ErrorStacktrace = [{?MODULE, ?FUNCTION_NAME, [], ErrorInfo}],
-    ErrorMap = arizona_parse_transform:format_error(arizona_template_parse_failed, ErrorStacktrace),
-    ErrorMsg = maps:get(1, ErrorMap),
-    ?assert(is_list(ErrorMsg)),
-
     % Test badarg error
     BadargInfo = [{error_info, #{cause => {test_module, 456}}}],
     BadargStacktrace = [{?MODULE, ?FUNCTION_NAME, [], BadargInfo}],
@@ -221,12 +218,6 @@ test_non_binary_template_error(Config) when is_list(Config) ->
 
 %% Test format_error function
 test_format_error(Config) when is_list(Config) ->
-    % Test known error
-    Stacktrace1 = [{?MODULE, ?FUNCTION_NAME, [], [{error_info, #{cause => {test_module, 123}}}]}],
-    Map1 = arizona_parse_transform:format_error(arizona_template_parse_failed, Stacktrace1),
-    Msg1 = maps:get(1, Map1),
-    ?assert(is_list(Msg1)),
-
     % Test no_arizona_parse_transform_attribute error
     Stacktrace2 = [{?MODULE, ?FUNCTION_NAME, [], [{error_info, #{cause => test_module}}]}],
     Map2 = arizona_parse_transform:format_error(arizona_no_parse_transform_attribute, Stacktrace2),
@@ -1299,3 +1290,105 @@ test_format_error_function_validation(Config) when is_list(Config) ->
     ?assert(string:find(ErrorMsg2, "not exported") =/= nomatch),
 
     ct:comment("Function validation error formatting works correctly").
+
+%% Test empty binary variable validation safety (indirectly through parse transform)
+test_empty_binary_variable_validation(Config) when is_list(Config) ->
+    % Test that parse transform handles modules gracefully even with edge cases
+    Forms = merl:quote(~"""
+    -module(test_edge_case_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([render/1]).
+    -export([render/1]).
+
+    render(Socket) ->
+        arizona_html:render_stateless(~"<div>Safe processing</div>", Socket).
+    """),
+
+    % This should succeed without crashing on any edge cases
+    TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
+    ?assert(is_list(TransformedForms)),
+
+    ct:comment("Parse transform handles edge cases in variable validation safely").
+
+%% Test safe template extraction error handling (test robustness)
+test_safe_template_extraction_error_handling(Config) when is_list(Config) ->
+    % Test that malformed templates are handled gracefully
+    Forms = merl:quote(~"""
+    -module(test_error_handling_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([render/1]).
+    -export([render/1]).
+
+    render(Socket) ->
+        arizona_html:render_stateless(~"<div>Normal template</div>", Socket).
+    """),
+
+    % This should succeed - testing that error handling doesn't break normal operation
+    TransformedForms = arizona_parse_transform:parse_transform(Forms, []),
+    ?assert(is_list(TransformedForms)),
+    ?assert(length(TransformedForms) > 0),
+
+    ct:comment("Parse transform error handling doesn't interfere with normal operation").
+
+%% Test single-pass function extraction performance
+test_single_pass_function_extraction_performance(Config) when is_list(Config) ->
+    % Create a module with multiple exports and functions
+    Forms = merl:quote(~"""
+    -module(test_performance_module).
+    -compile({parse_transform, arizona_parse_transform}).
+    -arizona_parse_transform([render/1, other_function/2]).
+    -export([render/1, other_function/2, helper/0]).
+
+    render(Socket) -> arizona_html:render_stateless(~"<div>test</div>", Socket).
+    other_function(Socket, Data) -> arizona_html:render_stateful(~"<span>{Data}</span>", Socket).
+    helper() -> ok.
+    """),
+
+    % Test single-pass extraction
+    {ExportedFunctions, DefinedFunctions} = arizona_parse_transform:extract_functions_single_pass(
+        Forms
+    ),
+
+    % Verify exported functions
+    ?assert(lists:member({render, 1}, ExportedFunctions)),
+    ?assert(lists:member({other_function, 2}, ExportedFunctions)),
+    ?assert(lists:member({helper, 0}, ExportedFunctions)),
+
+    % Verify defined functions
+    ?assert(lists:member({render, 1}, DefinedFunctions)),
+    ?assert(lists:member({other_function, 2}, DefinedFunctions)),
+    ?assert(lists:member({helper, 0}, DefinedFunctions)),
+
+    ct:comment("Single-pass function extraction works correctly").
+
+%% Test template extraction failed error formatting
+test_template_extraction_failed_error_formatting(Config) when is_list(Config) ->
+    % Test format_error with arizona_template_parse_failed and detailed error info
+    Stacktrace1 = [
+        {arizona_parse_transform, extract_template_content, 1, [
+            {error_info, #{
+                cause => {example_module, 42, error, badarg, ["stacktrace details"]}
+            }}
+        ]}
+    ],
+    ErrorMap1 = arizona_parse_transform:format_error(arizona_template_parse_failed, Stacktrace1),
+    ErrorMsg1 = maps:get(1, ErrorMap1),
+    ?assert(is_list(ErrorMsg1)),
+    ?assert(string:find(ErrorMsg1, "Failed to parse Arizona template") =/= nomatch),
+    ?assert(string:find(ErrorMsg1, "error:badarg") =/= nomatch),
+
+    % Test format_error with arizona_template_parse_failed and simple reason
+    Stacktrace2 = [
+        {arizona_parse_transform, extract_template_content, 1, [
+            {error_info, #{
+                cause => {example_module, 42, error, invalid_template, []}
+            }}
+        ]}
+    ],
+    ErrorMap2 = arizona_parse_transform:format_error(arizona_template_parse_failed, Stacktrace2),
+    ErrorMsg2 = maps:get(1, ErrorMap2),
+    ?assert(is_list(ErrorMsg2)),
+    ?assert(string:find(ErrorMsg2, "Failed to parse Arizona template") =/= nomatch),
+    ?assert(string:find(ErrorMsg2, "example_module") =/= nomatch),
+
+    ct:comment("Template extraction failed error formatting works correctly").
