@@ -347,11 +347,12 @@ different usage scenarios:
 The function handles missing `vars_indexes` gracefully via `maps:get/3` with
 default empty map fallback.
 """.
--spec transform_stateful_to_ast(StatefulResult, Depth) -> SyntaxTree when
-    StatefulResult :: arizona_parser:stateful_result() | enhanced_stateful_result(),
+-spec transform_stateful_to_ast(TemplateData, Depth) -> SyntaxTree when
+    % TODO: Check why we accept transformed_template here in addition to parsed_template
+    TemplateData :: arizona_parser:parsed_template() | transformed_template(),
     Depth :: non_neg_integer(),
     SyntaxTree :: erl_syntax:syntaxTree().
-transform_stateful_to_ast(#{elems_order := Order, elems := Elements} = StatefulResult, Depth) ->
+transform_stateful_to_ast(#{elems_order := Order, elems := Elements} = TemplateData, Depth) ->
     %% Get vars_indexes or generate empty one for runtime fallback
     VarsIndexes = maps:get(vars_indexes, TemplateData, #{}),
 
@@ -382,13 +383,13 @@ Transform stateless template result to optimized AST.
 Converts a parsed stateless template result into an optimized AST representation
 that can be used for efficient runtime rendering.
 """.
--spec transform_stateless_to_ast(StatelessResult, Depth) -> SyntaxTree when
-    StatelessResult :: arizona_parser:stateless_result(),
+-spec transform_stateless_to_ast(ParsedTemplate, Depth) -> SyntaxTree when
+    ParsedTemplate :: arizona_parser:parsed_template(),
     Depth :: non_neg_integer(),
     SyntaxTree :: erl_syntax:syntaxTree().
-transform_stateless_to_ast(StatefulData, Depth) when is_map(StatefulData) ->
+transform_stateless_to_ast(ParsedTemplate, Depth) when is_map(ParsedTemplate) ->
     %% Since stateless now returns same format as stateful, use the same transformation
-    transform_stateful_to_ast(StatefulData, Depth).
+    transform_stateful_to_ast(ParsedTemplate, Depth).
 
 %% --------------------------------------------------------------------
 %% Private functions
@@ -1342,12 +1343,12 @@ transform_stateful_template_call_with_context(
     try
         % Extract and parse the template at compile time with function context
         {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        TransformedTemplate = parse_template_for_ast(
+        TransformedTemplate = parse_template_for_stateful_result_with_context(
             TemplateString, LineNumber, CurrentFunctionBindings
         ),
 
         % Generate AST directly instead of string-based approach
-        TemplateDataAST = transform_stateful_to_ast(StatefulResult, Depth),
+        TemplateDataAST = transform_stateful_to_ast(TransformedTemplate, Depth),
         create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg)
     catch
         Error:Reason:Stacktrace ->
@@ -1374,12 +1375,12 @@ transform_stateful_template_call(
     try
         % Extract and parse the template at compile time
         {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        StatefulResult = parse_template_for_stateful_result_with_context(
+        TransformedTemplate = parse_template_for_stateful_result_with_context(
             TemplateString, LineNumber, #{}
         ),
 
         % Generate AST directly instead of string-based approach
-        TemplateDataAST = transform_stateful_to_ast(StatefulResult, Depth),
+        TemplateDataAST = transform_stateful_to_ast(TransformedTemplate, Depth),
         create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg)
     catch
         Error:Reason:Stacktrace ->
@@ -1418,8 +1419,9 @@ parse_template(
         elems := #{non_neg_integer() => {static | dynamic, pos_integer(), binary()}},
         vars_indexes := #{binary() => [non_neg_integer()]}
     }.
-parse_template_for_ast(TemplateString, LineNumber, VarBindings) ->
-    ParsedTemplate = parse_template_base(TemplateString, LineNumber),
+parse_template_for_stateful_result_with_context(TemplateString, LineNumber, VarBindings) ->
+    TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
+    ParsedTemplate = arizona_parser:parse_stateful_tokens(TokenList),
 
     %% Generate vars_indexes using enhanced function
     #{elems := ElementsMap} = ParsedTemplate,
