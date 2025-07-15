@@ -129,7 +129,7 @@ Works for both stateful and stateless templates with unified format.
     Tokens :: [token()],
     ParsedTemplate :: parsed_template().
 parse_tokens(Tokens) ->
-    Elements = process_tokens_stateful(Tokens, 0, #{}),
+    Elements = process_tokens(Tokens, 0, #{}),
     #{
         elems_order => lists:seq(0, maps:size(Elements) - 1),
         elems => Elements
@@ -161,21 +161,21 @@ parse_list_tokens(Tokens) ->
 %% Private functions
 %% --------------------------------------------------------------------
 
-%% Process tokens for stateful structure
-process_tokens_stateful([], _Index, Elements) ->
+%% Process tokens for template structure
+process_tokens([], _Index, Elements) ->
     Elements;
-process_tokens_stateful([Token | Rest], Index, Elements) ->
+process_tokens([Token | Rest], Index, Elements) ->
     case Token of
         {static, Line, Text} ->
             NewElements = Elements#{Index => {static, Line, Text}},
-            process_tokens_stateful(Rest, Index + 1, NewElements);
+            process_tokens(Rest, Index + 1, NewElements);
         {dynamic, Line, ExprText} ->
             %% Keep original expression text - parse transform will handle variable analysis
             NewElements = Elements#{Index => {dynamic, Line, ExprText}},
-            process_tokens_stateful(Rest, Index + 1, NewElements);
+            process_tokens(Rest, Index + 1, NewElements);
         {comment, _Line, _Text} ->
             %% Skip comments (don't increment index)
-            process_tokens_stateful(Rest, Index, Elements)
+            process_tokens(Rest, Index, Elements)
     end.
 
 %% Variable extraction functions removed - parse transform handles variable analysis

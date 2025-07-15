@@ -1202,7 +1202,7 @@ transform_slot_template_call(
     try
         % Extract and parse the template at compile time (same as stateless)
         {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        TemplateAST = parse_template_for_stateless(
+        TemplateAST = parse_template_for_ast_only(
             TemplateString, LineNumber
         ),
 
@@ -1219,15 +1219,20 @@ transform_slot_template_call(
             )
     end.
 
-%% Stateless Template Transformation
+%% Template Transformation
 
 %% Parse template string into AST structure for slot optimization
--spec parse_template_for_stateless(binary(), pos_integer()) ->
+-spec parse_template_for_ast_only(binary(), pos_integer()) ->
     erl_syntax:syntaxTree().
-parse_template_for_stateless(TemplateString, LineNumber) ->
-    TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
-    ParsedElementsMap = arizona_parser:parse_tokens(TokenList),
+parse_template_for_ast_only(TemplateString, LineNumber) ->
+    ParsedElementsMap = parse_template_base(TemplateString, LineNumber),
     transform_template_to_ast(ParsedElementsMap, 0).
+
+%% Base template parsing shared by all template parsing functions
+-spec parse_template_base(binary(), pos_integer()) -> arizona_parser:parsed_template().
+parse_template_base(TemplateString, LineNumber) ->
+    TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
+    arizona_parser:parse_tokens(TokenList).
 
 %% Template Transformation
 
@@ -1277,11 +1282,10 @@ transform_template_call(
 parse_template(
     TemplateString, LineNumber, CompilerOptions, Depth, VarBindings
 ) ->
-    TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
     #{
         elems_order := ElementOrder,
         elems := ElementsMap
-    } = arizona_parser:parse_tokens(TokenList),
+    } = parse_template_base(TemplateString, LineNumber),
 
     %% Generate vars_indexes using our new function
     VariableIndexes = generate_vars_indexes(#{elems => ElementsMap}, VarBindings),
@@ -1300,8 +1304,7 @@ parse_template(
         vars_indexes := #{binary() => [non_neg_integer()]}
     }.
 parse_template_for_ast(TemplateString, LineNumber, VarBindings) ->
-    TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
-    ParsedTemplate = arizona_parser:parse_tokens(TokenList),
+    ParsedTemplate = parse_template_base(TemplateString, LineNumber),
 
     %% Generate vars_indexes using enhanced function
     #{elems := ElementsMap} = ParsedTemplate,
