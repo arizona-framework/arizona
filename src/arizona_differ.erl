@@ -159,20 +159,8 @@ diff_stateful(TemplateData, StatefulState, Socket) ->
             case has_affected_elements(AffectedElements) of
                 false ->
                     Socket;
-                _ ->
-                    % Create element changes for affected elements
-                    {ElementChanges, UpdatedSocket} = create_element_changes(
-                        AffectedElements, TemplateData, Socket
-                    ),
-                    case ElementChanges of
-                        [] ->
-                            % No element changes after processing, skip component change
-                            UpdatedSocket;
-                        _ ->
-                            % Has element changes, include component change
-                            ComponentChange = {StatefulId, ElementChanges},
-                            arizona_socket:append_changes([ComponentChange], UpdatedSocket)
-                    end
+                true ->
+                    process_stateful_changes(StatefulId, AffectedElements, TemplateData, Socket)
             end
     end.
 
@@ -199,29 +187,20 @@ This enables nested component diffing where only changed elements are reported.
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 diff_stateless(TemplateData, StatefulState, Socket) ->
-    % Get changed bindings (already filtered by put_binding/3)
     ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
-    case maps:size(ChangedBindings) of
-        0 ->
-            % No changes, return socket unchanged
+    case has_changes(ChangedBindings) of
+        false ->
             Socket;
-        _ ->
-            % For stateless components, check if any changed binding affects this component
-            VarsIndexes = maps:get(vars_indexes, TemplateData),
-            AffectedElements = get_affected_elements(ChangedBindings, VarsIndexes),
+        true ->
+            AffectedElements = get_affected_elements_from_stateless_template(
+                TemplateData, ChangedBindings
+            ),
 
-            case sets:size(AffectedElements) of
-                0 ->
-                    % No elements affected, return socket unchanged
+            case has_affected_elements(AffectedElements) of
+                false ->
                     Socket;
-                _ ->
-                    % Create element changes for hierarchical diffing
-                    {ElementChanges, UpdatedSocket} = create_element_changes(
-                        AffectedElements, TemplateData, Socket
-                    ),
-
-                    % Store element changes directly - parent will extract them as nested changes
-                    arizona_socket:append_changes(ElementChanges, UpdatedSocket)
+                true ->
+                    process_stateless_changes(AffectedElements, TemplateData, Socket)
             end
     end.
 
@@ -274,7 +253,7 @@ has_changes(ChangedBindings) ->
 -spec get_affected_elements_from_stateful_template(TemplateData, ChangedBindings) ->
     AffectedElements
 when
-    TemplateData :: arizona_renderer:template_data(),
+    TemplateData :: arizona_renderer:stateful_template_data(),
     ChangedBindings :: map(),
     AffectedElements :: sets:set(element_index()).
 get_affected_elements_from_stateful_template(TemplateData, ChangedBindings) ->
@@ -286,7 +265,7 @@ get_affected_elements_from_stateful_template(TemplateData, ChangedBindings) ->
 -spec get_affected_elements_from_stateless_template(TemplateData, ChangedBindings) ->
     AffectedElements
 when
-    TemplateData :: arizona_renderer:template_data(),
+    TemplateData :: arizona_renderer:stateful_template_data(),
     ChangedBindings :: map(),
     AffectedElements :: sets:set(element_index()).
 get_affected_elements_from_stateless_template(TemplateData, ChangedBindings) ->
@@ -309,7 +288,7 @@ has_affected_elements(AffectedElements) ->
 ) -> Socket1 when
     StatefulId :: arizona_stateful:id(),
     AffectedElements :: sets:set(element_index()),
-    TemplateData :: arizona_renderer:template_data(),
+    TemplateData :: arizona_renderer:stateful_template_data(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 process_stateful_changes(StatefulId, AffectedElements, TemplateData, Socket) ->
@@ -333,7 +312,7 @@ process_stateful_changes(StatefulId, AffectedElements, TemplateData, Socket) ->
     Socket
 ) -> Socket1 when
     AffectedElements :: sets:set(element_index()),
-    TemplateData :: arizona_renderer:template_data(),
+    TemplateData :: arizona_renderer:stateful_template_data(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 process_stateless_changes(AffectedElements, TemplateData, Socket) ->
