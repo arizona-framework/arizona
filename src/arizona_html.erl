@@ -162,7 +162,7 @@ standard rendering for HTML output.
 render_stateless(TemplateData, Socket) when is_map(TemplateData) ->
     case arizona_socket:get_mode(Socket) of
         render ->
-            {_Html, UpdatedSocket} = arizona_renderer:render_stateless(TemplateData, Socket),
+            {_Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
             UpdatedSocket;
         diff ->
             % In diff mode, use stateless diffing for hierarchical updates
