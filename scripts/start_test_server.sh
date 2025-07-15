@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Compile using the test profile
+rebar3 as test compile
+
 # Use erl directly for CI environment instead of rebar3 shell
 exec erl \
     -pa "_build/test/lib/arizona/ebin" \
