@@ -170,10 +170,15 @@ diff_stateful(TemplateData, StatefulState, Socket) ->
                     {ElementChanges, UpdatedSocket} = create_element_changes(
                         AffectedElements, TemplateData, Socket
                     ),
-                    ComponentChange = {StatefulId, ElementChanges},
-
-                    % Append changes with proper path tracking
-                    arizona_socket:append_changes([ComponentChange], UpdatedSocket)
+                    case ElementChanges of
+                        [] ->
+                            % No element changes after processing, skip component change
+                            UpdatedSocket;
+                        _ ->
+                            % Has element changes, include component change
+                            ComponentChange = {StatefulId, ElementChanges},
+                            arizona_socket:append_changes([ComponentChange], UpdatedSocket)
+                    end
             end
     end.
 
@@ -221,9 +226,8 @@ diff_stateless(TemplateData, StatefulState, Socket) ->
                         AffectedElements, TemplateData, Socket
                     ),
 
-                    % Store element changes in special format for parent to detect
-                    FakeComponentChange = {stateless_element_changes, ElementChanges},
-                    arizona_socket:append_changes([FakeComponentChange], UpdatedSocket)
+                    % Store element changes directly - parent will extract them as nested changes
+                    arizona_socket:append_changes(ElementChanges, UpdatedSocket)
             end
     end.
 
@@ -275,63 +279,83 @@ get_affected_elements(ChangedBindings, VarsIndexes) ->
 create_element_changes(AffectedElements, TemplateData, Socket) ->
     ElementsList = sets:to_list(AffectedElements),
     Elements = maps:get(elems, TemplateData),
-    {ElementChanges, FinalSocket} = lists:foldl(
-        fun(ElementIndex, {ChangesAcc, AccSocket}) ->
-            Element = maps:get(ElementIndex, Elements),
+    process_elements(ElementsList, Elements, Socket).
 
-            % Clear any previous changes before processing element
-            CleanSocket = arizona_socket:clear_changes(AccSocket),
+%% Process elements recursively with ability to skip elements
+process_elements([], _Elements, Socket) ->
+    {[], Socket};
+process_elements([ElementIndex | Rest], Elements, Socket) ->
+    Element = maps:get(ElementIndex, Elements),
 
-            % Handle element based on type for hierarchical diffing
-            ElementChange =
-                case Element of
-                    {static, _Line, Content} ->
-                        % Static element - use content directly
-                        {ElementIndex, Content};
-                    {dynamic, Line, Fun} ->
-                        % Dynamic element - call function and check for nested changes
-                        try
-                            Result = arizona_stateful:call_dynamic_function(Fun, CleanSocket),
+    % Clear any previous changes before processing element
+    CleanSocket = arizona_socket:clear_changes(Socket),
 
-                            % Check if result is a socket (from stateless component in diff mode)
-                            case arizona_socket:is_socket(Result) of
-                                true ->
-                                    % Socket returned - extract nested changes
-                                    NestedChanges = arizona_socket:get_changes(Result),
-                                    case NestedChanges of
-                                        [] ->
-                                            % No changes, get HTML content
-                                            Html = arizona_socket:get_html(Result),
-                                            {ElementIndex, Html};
-                                        [{stateless_element_changes, ElementChanges}] ->
-                                            % Stateless component changes - extract element changes
-                                            {ElementIndex, ElementChanges};
-                                        _ ->
-                                            % Other nested changes, use them as-is
-                                            {ElementIndex, NestedChanges}
-                                    end;
-                                false ->
-                                    % Regular value - convert to HTML
-                                    {Html, _} = arizona_html:to_html(Result, CleanSocket),
-                                    {ElementIndex, Html}
-                            end
-                        catch
-                            throw:{binding_not_found, Key} ->
-                                error(
-                                    {binding_not_found, Key},
-                                    none,
-                                    binding_error_info(Line, Key, CleanSocket)
-                                );
-                            _:Error ->
-                                error({template_render_error, Error, Line})
-                        end
-                end,
-            {[ElementChange | ChangesAcc], AccSocket}
-        end,
-        {[], Socket},
-        ElementsList
-    ),
-    {lists:reverse(ElementChanges), FinalSocket}.
+    % Process this element
+    case process_single_element(ElementIndex, Element, CleanSocket) of
+        {skip, UpdatedSocket} ->
+            % Skip this element, continue with next
+            process_elements(Rest, Elements, UpdatedSocket);
+        {ElementChange, UpdatedSocket} ->
+            % Include this element change
+            {RestChages, FinalSocket} = process_elements(Rest, Elements, UpdatedSocket),
+            {[ElementChange | RestChages], FinalSocket}
+    end.
+
+%% Process a single element and return either {skip, Socket} or {{Index, Change}, Socket}
+process_single_element(ElementIndex, Element, Socket) ->
+    case Element of
+        {static, _Line, Content} ->
+            % Static element - use content directly
+            {{ElementIndex, Content}, Socket};
+        {dynamic, Line, Fun} ->
+            % Dynamic element - call function and handle result
+            try
+                Result = arizona_stateful:call_dynamic_function(Fun, Socket),
+                handle_dynamic_result(ElementIndex, Result, Socket)
+            catch
+                throw:{binding_not_found, Key} ->
+                    error(
+                        {binding_not_found, Key},
+                        none,
+                        binding_error_info(Line, Key, Socket)
+                    );
+                _:Error ->
+                    error({template_render_error, Error, Line})
+            end
+    end.
+
+%% Handle the result from a dynamic function call
+handle_dynamic_result(ElementIndex, Result, Socket) ->
+    case arizona_socket:is_socket(Result) of
+        true ->
+            % Socket returned - extract nested changes or HTML
+            NestedChanges = arizona_socket:get_changes(Result),
+            handle_socket_result(ElementIndex, NestedChanges, Result, Socket);
+        false ->
+            % Regular value - convert to HTML for consistency
+            {Html, _} = arizona_html:to_html(Result, Socket),
+            {{ElementIndex, Html}, Socket}
+    end.
+
+%% Handle socket results with nested changes
+handle_socket_result(ElementIndex, NestedChanges, ResultSocket, _Socket) ->
+    case NestedChanges of
+        [] ->
+            % No changes, check HTML content
+            Html = arizona_socket:get_html(ResultSocket),
+            case Html of
+                [] ->
+                    % No changes and no content, skip this element
+                    {skip, ResultSocket};
+                _ ->
+                    % Has HTML content, use it
+                    {{ElementIndex, Html}, ResultSocket}
+            end;
+        _ ->
+            % Has nested changes - extract them and clear socket
+            CleanSocket = arizona_socket:clear_changes(ResultSocket),
+            {{ElementIndex, NestedChanges}, CleanSocket}
+    end.
 
 %% Error info for binding errors following OTP pattern
 binding_error_info(Line, Key, Socket) ->

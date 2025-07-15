@@ -325,7 +325,10 @@ to_html(Value, Socket) when is_list(Value) ->
     lists:foldl(
         fun(Item, {HtmlAcc, AccSocket}) ->
             {HtmlAcc1, AccSocket1} = to_html(Item, AccSocket),
-            {[HtmlAcc, HtmlAcc1], AccSocket1}
+            case HtmlAcc of
+                [] -> {HtmlAcc1, AccSocket1};
+                _ -> {[HtmlAcc, HtmlAcc1], AccSocket1}
+            end
         end,
         {[], Socket},
         Value
