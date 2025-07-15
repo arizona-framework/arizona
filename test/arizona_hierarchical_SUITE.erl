@@ -1115,11 +1115,15 @@ hierarchical_list_in_stateful_template(Config) when is_list(Config) ->
 hierarchical_stateless_in_stateful_template(Config) when is_list(Config) ->
     % Test that render_stateless called from within a stateful template properly stores
     % hierarchical structures in the parent component via pending element buffer
-    StatelessTemplate = [
-        {static, 1, ~"<span class=\"status\">"},
-        {dynamic, 2, fun(Socket1) -> arizona_socket:get_binding(status_text, Socket1) end},
-        {static, 3, ~"</span>"}
-    ],
+    StatelessTemplate = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<span class=\"status\">"},
+            1 => {dynamic, 2, fun(Socket1) -> arizona_socket:get_binding(status_text, Socket1) end},
+            2 => {static, 3, ~"</span>"}
+        },
+        vars_indexes => #{status_text => [1]}
+    },
 
     % Create socket in hierarchical mode with bindings
     Socket = arizona_socket:new(#{mode => hierarchical}),

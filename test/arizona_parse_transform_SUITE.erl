@@ -385,13 +385,16 @@ test_stateless_binary_elements(Config) when is_list(Config) ->
 
 %% Test transform_stateless_to_ast function directly
 test_transform_stateless_to_ast(Config) when is_list(Config) ->
-    % Create a simple stateless result list as expected by the function
-    StatelessList = [
-        {static, 1, ~"<h1>Title</h1><footer>Footer</footer>"}
-    ],
+    % Create a stateless result in basic stateful_result format
+    StatelessTemplate = #{
+        elems_order => [0],
+        elems => #{
+            0 => {static, 1, ~"<h1>Title</h1><footer>Footer</footer>"}
+        }
+    },
 
     % Call transform_stateless_to_ast directly
-    ResultAST = arizona_parse_transform:transform_stateless_to_ast(StatelessList),
+    ResultAST = arizona_parse_transform:transform_stateless_to_ast(StatelessTemplate),
 
     % Verify it returns a proper AST list structure
     ?assert(erl_syntax:is_tree(ResultAST)),
@@ -422,15 +425,18 @@ test_transform_stateful_to_ast(Config) when is_list(Config) ->
 
 %% Test stateless with pure binary literals
 test_stateless_binary_handling(Config) when is_list(Config) ->
-    % Create a stateless list with only binary literals
-    PureBinaryList = [
-        {static, 1, ~"<html>"},
-        {static, 1, ~"<body>Static content</body>"},
-        {static, 1, ~"</html>"}
-    ],
+    % Create a stateless template with only binary literals in basic format
+    PureBinaryTemplate = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<html>"},
+            1 => {static, 1, ~"<body>Static content</body>"},
+            2 => {static, 1, ~"</html>"}
+        }
+    },
 
     % Call transform_stateless_to_ast
-    ResultAST = arizona_parse_transform:transform_stateless_to_ast(PureBinaryList),
+    ResultAST = arizona_parse_transform:transform_stateless_to_ast(PureBinaryTemplate),
 
     % Verify it creates proper binary field AST nodes
     ?assert(erl_syntax:is_tree(ResultAST)),
@@ -440,16 +446,18 @@ test_stateless_binary_handling(Config) when is_list(Config) ->
 
 %% Test dynamic expression AST creation
 test_dynamic_expression_ast_creation(Config) when is_list(Config) ->
-    % Test transform_stateless_to_ast with non-binary items to trigger line 123
-    MixedList = [
-        {static, 1, ~"<h1>Title</h1>"},
-        % This will trigger the erl_syntax:abstract(Item) path
-        {dynamic, 1, ~"Item"},
-        {static, 1, ~"<footer>Footer</footer>"}
-    ],
+    % Test transform_stateless_to_ast with basic format containing dynamic elements
+    MixedTemplate = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<h1>Title</h1>"},
+            1 => {dynamic, 1, ~"Item"},
+            2 => {static, 1, ~"<footer>Footer</footer>"}
+        }
+    },
 
     % Call transform_stateless_to_ast to trigger the generic item handling
-    ResultAST = arizona_parse_transform:transform_stateless_to_ast(MixedList),
+    ResultAST = arizona_parse_transform:transform_stateless_to_ast(MixedTemplate),
 
     % Verify it returns a proper AST structure
     ?assert(erl_syntax:is_tree(ResultAST)),

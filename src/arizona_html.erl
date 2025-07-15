@@ -143,11 +143,15 @@ standard rendering for HTML output.
 ## Examples
 
 ```erlang
-1> TemplateList = [{static, 1, ~"Hello"}, {static, 2, ~"World"}].
-[...]
+1> TemplateData = #{
+    elems_order => [0, 1],
+    elems => #{0 => {static, 1, ~"Hello"}, 1 => {static, 2, ~"World"}},
+    vars_indexes => #{}
+}.
+#{...}
 2> Socket = arizona_socket:new(#{mode => render}).
 #socket{...}
-3> arizona_html:render_stateless(TemplateList, Socket).
+3> arizona_html:render_stateless(TemplateData, Socket).
 #socket{html_acc = [~"Hello", ~"World"], ...}
 ```
 """.

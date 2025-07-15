@@ -54,36 +54,47 @@ groups() ->
 parse_stateless_static_only(Config) when is_list(Config) ->
     Template = ~"<div>Hello World</div>",
     Tokens = arizona_scanner:scan(#{}, Template),
-    StructuredList = arizona_parser:parse_stateless_tokens(Tokens),
+    StructuredResult = arizona_parser:parse_stateless_tokens(Tokens),
 
-    %% Should return structured list with static tuple
-    Expected = [{static, 1, ~"<div>Hello World</div>"}],
-    ?assertEqual(Expected, StructuredList).
+    %% Should return basic stateful_result format without vars_indexes
+    Expected = #{
+        elems_order => [0],
+        elems => #{
+            0 => {static, 1, ~"<div>Hello World</div>"}
+        }
+    },
+    ?assertEqual(Expected, StructuredResult).
 
 parse_stateless_with_dynamic(Config) when is_list(Config) ->
     Template = ~"<div>Hello {name}!</div>",
     Tokens = arizona_scanner:scan(#{}, Template),
-    StructuredList = arizona_parser:parse_stateless_tokens(Tokens),
+    StructuredResult = arizona_parser:parse_stateless_tokens(Tokens),
 
-    %% Should return structured list with static and dynamic tuples
-    Expected = [
-        {static, 1, ~"<div>Hello "},
-        {dynamic, 1, ~"name"},
-        {static, 1, ~"!</div>"}
-    ],
-    ?assertEqual(Expected, StructuredList).
+    %% Should return basic stateful_result format without vars_indexes
+    Expected = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<div>Hello "},
+            1 => {dynamic, 1, ~"name"},
+            2 => {static, 1, ~"!</div>"}
+        }
+    },
+    ?assertEqual(Expected, StructuredResult).
 
 parse_stateless_with_comments(Config) when is_list(Config) ->
     Template = ~"<div>{% This is a comment }Hello</div>",
     Tokens = arizona_scanner:scan(#{}, Template),
-    StructuredList = arizona_parser:parse_stateless_tokens(Tokens),
+    StructuredResult = arizona_parser:parse_stateless_tokens(Tokens),
 
     %% Comments should be filtered out completely
-    Expected = [
-        {static, 1, ~"<div>"},
-        {static, 1, ~"Hello</div>"}
-    ],
-    ?assertEqual(Expected, StructuredList).
+    Expected = #{
+        elems_order => [0, 1],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 => {static, 1, ~"Hello</div>"}
+        }
+    },
+    ?assertEqual(Expected, StructuredResult).
 
 parse_stateless_tokens_directly(Config) when is_list(Config) ->
     Tokens = [
@@ -91,15 +102,18 @@ parse_stateless_tokens_directly(Config) when is_list(Config) ->
         {dynamic, 1, ~"name"},
         {static, 1, ~"</p>"}
     ],
-    StructuredList = arizona_parser:parse_stateless_tokens(Tokens),
+    StructuredResult = arizona_parser:parse_stateless_tokens(Tokens),
 
-    %% Should handle tokens directly
-    Expected = [
-        {static, 1, ~"<p>"},
-        {dynamic, 1, ~"name"},
-        {static, 1, ~"</p>"}
-    ],
-    ?assertEqual(Expected, StructuredList).
+    %% Should handle tokens directly and return basic stateful_result format
+    Expected = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<p>"},
+            1 => {dynamic, 1, ~"name"},
+            2 => {static, 1, ~"</p>"}
+        }
+    },
+    ?assertEqual(Expected, StructuredResult).
 
 %% --------------------------------------------------------------------
 %% Stateful parsing tests

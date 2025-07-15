@@ -1101,10 +1101,10 @@ transform_arizona_html_call(
         CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
     );
 transform_arizona_html_call(
-    render_slot, CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+    render_slot, CallAnnotations, RemoteCall, Args, ModuleName, _CompilerOptions, _Depth
 ) ->
     transform_render_slot_call(
-        CallAnnotations, RemoteCall, Args, ModuleName, CompilerOptions, Depth
+        CallAnnotations, RemoteCall, Args, ModuleName
     );
 transform_arizona_html_call(
     _FunctionName, CallAnnotations, RemoteCall, Args, _ModuleName, _CompilerOptions, _Depth
@@ -1204,17 +1204,13 @@ transform_render_list_call(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
     [erl_parse:abstract_expr()],
-    atom(),
-    compile_options(),
-    non_neg_integer()
+    atom()
 ) -> erl_parse:abstract_expr().
 transform_render_slot_call(
     CallAnnotations,
     RemoteCall,
     [SlotNameArg, SocketArg, {bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate],
-    ModuleName,
-    CompilerOptions,
-    Depth
+    ModuleName
 ) ->
     transform_slot_template_call(
         CallAnnotations,
@@ -1222,12 +1218,10 @@ transform_render_slot_call(
         SlotNameArg,
         SocketArg,
         BinaryTemplate,
-        ModuleName,
-        CompilerOptions,
-        Depth
+        ModuleName
     );
 transform_render_slot_call(
-    CallAnnotations, RemoteCall, Args, _ModuleName, _CompilerOptions, _Depth
+    CallAnnotations, RemoteCall, Args, _ModuleName
 ) ->
     % render_slot calls without binary template (2 args or non-binary 3rd arg) - pass through
     {call, CallAnnotations, RemoteCall, Args}.
@@ -1241,9 +1235,7 @@ transform_render_slot_call(
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
-    atom(),
-    compile_options(),
-    non_neg_integer()
+    atom()
 ) -> erl_parse:abstract_expr().
 transform_slot_template_call(
     CallAnnotations,
@@ -1251,21 +1243,19 @@ transform_slot_template_call(
     SlotNameArg,
     SocketArg,
     BinaryTemplate,
-    ModuleName,
-    CompilerOptions,
-    Depth
+    ModuleName
 ) ->
     Line = erl_anno:line(CallAnnotations),
     try
         % Extract and parse the template at compile time (same as stateless)
         {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        IoListStructure = parse_template_for_stateless(
-            TemplateString, LineNumber, CompilerOptions, Depth
+        TemplateAST = parse_template_for_stateless(
+            TemplateString, LineNumber
         ),
 
-        % Generate the new function call with parsed structure as default
+        % Generate the new function call with parsed AST as default
         create_slot_stateless_call(
-            CallAnnotations, RemoteCall, SlotNameArg, SocketArg, IoListStructure
+            CallAnnotations, RemoteCall, SlotNameArg, SocketArg, TemplateAST
         )
     catch
         Error:Reason:Stacktrace ->
@@ -1278,45 +1268,13 @@ transform_slot_template_call(
 
 %% Stateless Template Transformation
 
-%% Parse template string into iolist structure with depth tracking
--spec parse_template_for_stateless(binary(), pos_integer(), compile_options(), non_neg_integer()) ->
-    [term()].
-parse_template_for_stateless(TemplateString, LineNumber, CompilerOptions, Depth) ->
+%% Parse template string into AST structure for slot optimization
+-spec parse_template_for_stateless(binary(), pos_integer()) ->
+    erl_syntax:syntaxTree().
+parse_template_for_stateless(TemplateString, LineNumber) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
-    ParsedElements = arizona_parser:parse_stateless_tokens(TokenList),
-    convert_to_iolist_format(ParsedElements, CompilerOptions, Depth).
-
-%% Convert parsed elements to iolist format with depth tracking
--spec convert_to_iolist_format([term()], compile_options(), non_neg_integer()) -> [term()].
-convert_to_iolist_format(ParsedElements, CompilerOptions, Depth) ->
-    lists:reverse(
-        lists:foldl(
-            fun(Element, Acc) ->
-                convert_element_to_iolist(
-                    Element, standard_expression_norm_callback(), Acc, CompilerOptions, Depth
-                )
-            end,
-            [],
-            ParsedElements
-        )
-    ).
-
-%% Convert individual element to iolist format with depth tracking
--spec convert_element_to_iolist(
-    term(), expression_norm_callback(), [term()], compile_options(), non_neg_integer()
-) -> [term()].
-convert_element_to_iolist(
-    {static, Line, StaticText}, _ExpressionTextNormCallback, Accumulator, _CompilerOptions, _Depth
-) ->
-    StaticElement = format_static_element(Line, StaticText),
-    [StaticElement | Accumulator];
-convert_element_to_iolist(
-    {dynamic, Line, ExpressionText}, ExpressionTextNormCallback, Accumulator, CompilerOptions, Depth
-) ->
-    DynamicElement = format_dynamic_element(
-        Line, ExpressionText, ExpressionTextNormCallback, CompilerOptions, Depth
-    ),
-    [DynamicElement | Accumulator].
+    ParsedElementsMap = arizona_parser:parse_stateless_tokens(TokenList),
+    transform_stateless_to_ast(ParsedElementsMap).
 
 %% Stateful Template Transformation
 
@@ -1650,24 +1608,22 @@ format_static_parts(StaticParts) ->
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
-    [term()]
+    erl_syntax:syntaxTree()
 ) -> erl_parse:abstract_expr().
 create_slot_stateless_call(
     CallAnnotations,
     {remote, RemoteAnnotations, ModuleAtom, FunctionAtom},
     SlotNameArg,
     SocketArg,
-    IoListStructure
+    TemplateAST
 ) ->
-    % Create IoList AST from the parsed structure
-    IoListBinary = iolist_to_binary(["[", lists:join(", ", IoListStructure), "]"]),
-    IoListForm = merl:quote(IoListBinary),
+    % Use the already-generated AST directly
 
-    % Create {stateless, ParsedTemplate} tuple
+    % Create {stateless, ParsedTemplate} tuple using the generated AST
     StatelessTuple =
         {tuple, CallAnnotations, [
             {atom, CallAnnotations, stateless},
-            IoListForm
+            erl_syntax:revert(TemplateAST)
         ]},
 
     % Create render_slot(SlotName, Socket, {stateless, ParsedTemplate}) call

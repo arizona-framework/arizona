@@ -194,14 +194,18 @@ test_render_stateful_nested_calls(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 
 test_render_stateless_with_structured_list(Config) when is_list(Config) ->
-    StructuredList = [
-        {static, 1, ~"<span>"},
-        {dynamic, 1, fun(_Socket) -> ~"content" end},
-        {static, 1, ~"</span>"}
-    ],
+    StructuredTemplate = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<span>"},
+            1 => {dynamic, 1, fun(_Socket) -> ~"content" end},
+            2 => {static, 1, ~"</span>"}
+        },
+        vars_indexes => #{}
+    },
     Socket = create_mock_socket(),
 
-    UpdatedSocket = arizona_html:render_stateless(StructuredList, Socket),
+    UpdatedSocket = arizona_html:render_stateless(StructuredTemplate, Socket),
 
     ?assert(arizona_socket:is_socket(UpdatedSocket)),
     Html = arizona_socket:get_html(UpdatedSocket),
@@ -231,15 +235,19 @@ test_render_stateless_with_list_html(Config) when is_list(Config) ->
     ?assertEqual(Expected, iolist_to_binary(ResultHtml)).
 
 test_render_stateless_complex_template(Config) when is_list(Config) ->
-    % Use pre-structured list instead of raw HTML with expressions
-    StructuredList = [
-        {static, 1, ~"<section>"},
-        {dynamic, 1, fun(_Socket) -> ~"My Title" end},
-        {static, 1, ~"</section>"}
-    ],
+    % Use unified map format instead of old list format
+    StructuredTemplate = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<section>"},
+            1 => {dynamic, 1, fun(_Socket) -> ~"My Title" end},
+            2 => {static, 1, ~"</section>"}
+        },
+        vars_indexes => #{}
+    },
     Socket = create_mock_socket(),
 
-    UpdatedSocket = arizona_html:render_stateless(StructuredList, Socket),
+    UpdatedSocket = arizona_html:render_stateless(StructuredTemplate, Socket),
 
     ?assert(arizona_socket:is_socket(UpdatedSocket)),
     ResultHtml = arizona_socket:get_html(UpdatedSocket),
@@ -317,11 +325,15 @@ test_render_list_with_nested_html_calls(Config) when is_list(Config) ->
                     {dynamic, 1, fun(Item, Socket) ->
                         % Element function that calls arizona_html and returns a socket
                         arizona_html:render_stateless(
-                            [
-                                {static, 1, ~"<span>"},
-                                {dynamic, 1, fun(_Socket) -> Item end},
-                                {static, 1, ~"</span>"}
-                            ],
+                            #{
+                                elems_order => [0, 1, 2],
+                                elems => #{
+                                    0 => {static, 1, ~"<span>"},
+                                    1 => {dynamic, 1, fun(_Socket) -> Item end},
+                                    2 => {static, 1, ~"</span>"}
+                                },
+                                vars_indexes => #{}
+                            },
                             Socket
                         )
                     end}
