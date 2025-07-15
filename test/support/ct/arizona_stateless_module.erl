@@ -1,6 +1,11 @@
 -module(arizona_stateless_module).
 -compile({parse_transform, arizona_parse_transform}).
--compile([export_all, nowarn_export_all]).
+-arizona_parse_transform([basic_render/1]).
+-arizona_parse_transform([render_with_bindings/1]).
+-arizona_parse_transform([render_simple/1]).
+-export([basic_render/1]).
+-export([render_with_bindings/1]).
+-export([render_simple/1]).
 
 %% Basic stateless component render functions for testing
 

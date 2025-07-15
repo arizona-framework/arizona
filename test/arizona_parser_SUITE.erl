@@ -114,8 +114,7 @@ parse_stateful_static_only(Config) when is_list(Config) ->
     ?assertMatch(
         #{
             elems_order := [0],
-            elems := #{0 := {static, 1, ~"<div>Hello World</div>"}},
-            vars_indexes := #{}
+            elems := #{0 := {static, 1, ~"<div>Hello World</div>"}}
         },
         TemplateData
     ).
@@ -125,7 +124,7 @@ parse_stateful_with_dynamic(Config) when is_list(Config) ->
     Tokens = arizona_scanner:scan(#{}, Template),
     TemplateData = arizona_parser:parse_stateful_tokens(Tokens),
 
-    %% Should return structured template with elements and variable tracking
+    %% Should return structured template with elements
     ?assertMatch(
         #{
             elems_order := [0, 1, 2],
@@ -133,9 +132,7 @@ parse_stateful_with_dynamic(Config) when is_list(Config) ->
                 0 := {static, 1, ~"<div>Count: "},
                 1 := {dynamic, 1, ~"count"},
                 2 := {static, 1, ~"</div>"}
-            },
-            %% Variables tracking should be empty for simple variable references
-            vars_indexes := #{}
+            }
         },
         TemplateData
     ).
@@ -150,12 +147,16 @@ parse_stateful_vars_indexes(Config) when is_list(Config) ->
     Tokens = arizona_scanner:scan(#{}, Template),
     TemplateData = arizona_parser:parse_stateful_tokens(Tokens),
 
-    %% Should track which elements are affected by each variable
+    %% Should return structured template data with correct elements
     ?assertMatch(
         #{
-            vars_indexes := #{
-                ~"name" := [1],
-                ~"count" := [3]
+            elems_order := [0, 1, 2, 3, 4],
+            elems := #{
+                0 := {static, 1, _},
+                1 := {dynamic, 2, _},
+                2 := {static, 2, _},
+                3 := {dynamic, 3, _},
+                4 := {static, 4, _}
             }
         },
         TemplateData
@@ -176,8 +177,7 @@ parse_stateful_tokens_directly(Config) when is_list(Config) ->
                 0 := {static, 1, ~"<h1>"},
                 1 := {dynamic, 1, ~"arizona_socket:get_binding(title, Socket)"},
                 2 := {static, 1, ~"</h1>"}
-            },
-            vars_indexes := #{~"title" := [1]}
+            }
         },
         TemplateData
     ).
@@ -198,8 +198,7 @@ parse_stateful_quoted_variables(Config) when is_list(Config) ->
                 0 := {static, 1, _},
                 1 := {dynamic, 1, _},
                 2 := {static, 1, _}
-            },
-            vars_indexes := #{~"user-name" := [1]}
+            }
         },
         TemplateData
     ).
@@ -223,10 +222,6 @@ parse_stateful_multiple_variables(Config) when is_list(Config) ->
                 0 := {static, 1, _},
                 1 := {dynamic, 1, _},
                 2 := {static, 1, _}
-            },
-            vars_indexes := #{
-                ~"first" := [1],
-                ~"last" := [1]
             }
         },
         TemplateData
@@ -248,8 +243,7 @@ parse_stateful_no_variables(Config) when is_list(Config) ->
                 0 := {static, 1, _},
                 1 := {dynamic, 1, _},
                 2 := {static, 1, _}
-            },
-            vars_indexes := #{}
+            }
         },
         TemplateData
     ).
@@ -272,8 +266,7 @@ parse_stateful_with_comments(Config) when is_list(Config) ->
                 0 := {static, 1, ~"<div>"},
                 1 := {dynamic, 1, ~"arizona_socket:get_binding(name, Socket)"},
                 2 := {static, 1, ~"</div>"}
-            },
-            vars_indexes := #{~"name" := [1]}
+            }
         },
         TemplateData
     ).
@@ -298,7 +291,7 @@ parse_stateful_complex_regex_match(Config) when is_list(Config) ->
     ],
     TemplateData = arizona_parser:parse_stateful_tokens(Tokens),
 
-    %% Should extract both variables correctly
+    %% Should extract elements correctly
     ?assertMatch(
         #{
             elems_order := [0, 1, 2],
@@ -306,10 +299,6 @@ parse_stateful_complex_regex_match(Config) when is_list(Config) ->
                 0 := {static, 1, ~"<span>"},
                 1 := {dynamic, 1, _},
                 2 := {static, 1, ~"</span>"}
-            },
-            vars_indexes := #{
-                ~"first-var" := [1],
-                ~"second" := [1]
             }
         },
         TemplateData
@@ -327,8 +316,7 @@ parse_list_tokens_static_only(Config) when is_list(Config) ->
         static => [~"<li>Static item</li>"],
         dynamic => #{
             elems_order => [],
-            elems => #{},
-            vars_indexes => #{}
+            elems => #{}
         }
     },
     ?assertEqual(Expected, ListData).
@@ -346,8 +334,7 @@ parse_list_tokens_with_dynamic(Config) when is_list(Config) ->
             static := [~"<li>", ~"</li>"],
             dynamic := #{
                 elems_order := [0],
-                elems := #{0 := {dynamic, 1, ~"foo"}},
-                vars_indexes := #{}
+                elems := #{0 := {dynamic, 1, ~"foo"}}
             }
         },
         ListData
@@ -367,8 +354,7 @@ parse_list_tokens_with_variables(Config) when is_list(Config) ->
             static := [~"<li>", ~"</li>"],
             dynamic := #{
                 elems_order := [0],
-                elems := #{0 := {dynamic, 1, FunText}},
-                vars_indexes := #{~"prefix" := [0]}
+                elems := #{0 := {dynamic, 1, FunText}}
             }
         },
         ListData
@@ -389,8 +375,7 @@ parse_list_tokens_with_comments(Config) when is_list(Config) ->
             static := [~"<li>", ~"</li>"],
             dynamic := #{
                 elems_order := [0],
-                elems := #{0 := {dynamic, 1, ~"foo"}},
-                vars_indexes := #{}
+                elems := #{0 := {dynamic, 1, ~"foo"}}
             }
         },
         ListData
@@ -404,8 +389,7 @@ parse_list_tokens_empty(Config) when is_list(Config) ->
         static => [],
         dynamic => #{
             elems_order => [],
-            elems => #{},
-            vars_indexes => #{}
+            elems => #{}
         }
     },
     ?assertEqual(Expected, ListData).
@@ -431,8 +415,7 @@ parse_list_tokens_mixed_complex(Config) when is_list(Config) ->
                 elems := #{
                     0 := {dynamic, 2, FunText1},
                     1 := {dynamic, 2, FunText2}
-                },
-                vars_indexes := #{~"class_prefix" := [0]}
+                }
             }
         },
         ListData
@@ -564,7 +547,7 @@ parse_list_real_world_template(Config) when is_list(Config) ->
     ],
 
     Result = arizona_parser:parse_list_tokens(Tokens),
-    #{static := Static, dynamic := #{elems := DynamicElems, vars_indexes := VarsIndexes}} = Result,
+    #{static := Static, dynamic := #{elems := DynamicElems}} = Result,
 
     ExpectedStatic = [~"<li>", ~"_", ~"</li>"],
     ?assertEqual(ExpectedStatic, Static),
@@ -576,7 +559,4 @@ parse_list_real_world_template(Config) when is_list(Config) ->
             1 := {dynamic, 1, ~"I"}
         },
         DynamicElems
-    ),
-
-    % Verify variable extraction for the binding call
-    ?assertMatch(#{~"prefix" := [0]}, VarsIndexes).
+    ).

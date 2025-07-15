@@ -20,14 +20,19 @@ optimization and surgical DOM updates for optimal performance.
 
 - **📡 Real-time LiveView**: WebSocket-based live updates with minimal payload
 - **🏗️ Hierarchical Rendering**: Efficient differential rendering with surgical DOM updates
-- **⚡ Performance Optimized**: Compile-time template processing with parse transforms
+- **⚡ Performance Optimized**: Compile-time template processing with selective parse transform optimization
 - **🧩 Component Architecture**: Stateful and stateless components with lifecycle management
 - **🎯 Type Safe**: Comprehensive Dialyzer support with proper type contracts
 - **🔧 OTP Integration**: Full OTP compliance with gen_server and supervisor patterns
+- **🚀 Compile-time Optimized Templates**: Variable assignment support with automatic change detection
 
 ## Template Syntax
 
-Arizona uses the `~"""` sigil for template compilation with embedded Erlang expressions:
+Arizona supports two template patterns for different use cases:
+
+### Standard Templates
+
+Arizona templates are binary or string content with embedded Erlang expressions:
 
 ```erlang
 render(Socket) ->
@@ -40,23 +45,41 @@ render(Socket) ->
     """, Socket).
 ```
 
-**Important Limitation**: Code must be written directly in template expressions. Variables cannot be
-assigned before templates:
+**Note**: You can use `~"..."`, `<<"...">>`, or regular strings - they're all
+equivalent binary content.
+
+### Compile-time Optimized Templates
+
+Use the compile-time parse transform to enable variable assignments before
+templates with automatic performance optimizations:
 
 ```erlang
-%% ❌ Not supported:
+-module(my_live).
+-compile({parse_transform, arizona_parse_transform}).
+-arizona_parse_transform([render/1]).
+
 render(Socket) ->
     Count = arizona_socket:get_binding(count, Socket),
+    UserName = arizona_socket:get_binding(user_name, Socket),
     arizona_html:render_stateful(~"""
-    <div>{Count}</div>
-    """, Socket).
-
-%% ✅ Correct pattern:
-render(Socket) ->
-    arizona_html:render_stateful(~"""
-    <div>{arizona_socket:get_binding(count, Socket)}</div>
+    <div class="counter">
+        <h1>Hello {UserName}! Count: {Count}</h1>
+        <button onclick="increment">+</button>
+        <button onclick="decrement">-</button>
+    </div>
     """, Socket).
 ```
+
+**Compile-time Optimizations:**
+
+- **Selective Processing**: Only functions explicitly declared with
+  `-arizona_parse_transform([function/arity])` are optimized
+- **Variable Assignment Support**: Extract variables before templates at compile time
+- **Automatic Change Detection**: Generates optimized `vars_indexes` for surgical DOM updates
+- **Multi-Function Support**: Different variable contexts per function
+- **Dependency Tracking**: Handles nested and conditional binding calls
+- **Explicit Opt-in**: Modules must declare which functions need optimization,
+  preventing unnecessary processing
 
 ## Basic Usage
 
@@ -95,11 +118,13 @@ Update the application dependencies in `src/arizona_example.app.src`:
 
 ### 3. Create a LiveView module
 
-Create `src/arizona_example_counter.erl`:
+Create `src/arizona_example_counter.erl` using the compile-time optimized templates:
 
 ```erlang
 -module(arizona_example_counter).
 -behaviour(arizona_live).
+-compile({parse_transform, arizona_parse_transform}).
+-arizona_parse_transform([render/1]).
 
 -export([mount/2, render/1, handle_event/3]).
 
@@ -108,9 +133,10 @@ mount(_Req, Socket) ->
     {ok, Socket1}.
 
 render(Socket) ->
+    Count = arizona_socket:get_binding(count, Socket),
     arizona_html:render_stateful(~"""
     <div class="counter">
-        <h1>Count: {arizona_socket:get_binding(count, Socket)}</h1>
+        <h1>Count: {Count}</h1>
         <button onclick="increment">Increment</button>
         <button onclick="decrement">Decrement</button>
     </div>
@@ -125,6 +151,13 @@ handle_event(~"decrement", _Params, Socket) ->
     Socket1 = arizona_socket:put_binding(count, Count - 1, Socket),
     {noreply, Socket1}.
 ```
+
+**What's happening here:**
+
+- The `-arizona_parse_transform([render/1])` attribute enables compile-time template optimization
+- Variables like `Count` are extracted before the template and optimized at compile time
+- The parse transform automatically generates optimized `vars_indexes` for efficient updates
+- When the `count` binding changes, only the specific template element containing `{Count}` re-renders
 
 ### 4. Start the server
 
@@ -190,6 +223,32 @@ real-time as you click the buttons.
 - **Stateless Components**: Lightweight function-based components
 - **List Components**: Optimized rendering for collections
 
+### Compile-time Parse Transform
+
+Arizona's parse transform provides advanced compile-time optimizations with
+selective processing:
+
+- **Selective Processing**: Only modules with
+  `-arizona_parse_transform([function/arity])` attributes are processed
+- **Variable Dependency Tracking**: Analyzes `arizona_socket:get_binding/2,3`
+  calls to map variables to template elements
+- **Automatic vars_indexes Generation**: Creates precise change detection maps for surgical DOM updates
+- **Multi-Function Support**: Each function marked with
+  `-arizona_parse_transform([function/arity])` gets its own variable context
+- **Complex Dependency Handling**: Supports nested calls, conditionals, and multiple binding dependencies
+- **Performance Optimization**: Prevents unnecessary processing of modules that don't use Arizona templates
+
+```erlang
+% Compile-time optimization automatically generates:
+vars_indexes => #{
+    user_name => [1],    % UserName variable affects element 1
+    count => [3]         % Count variable affects element 3
+}
+
+% IMPORTANT: Modules MUST declare which functions need optimization:
+-arizona_parse_transform([render/1, other_template_function/2]).
+```
+
 ### Rendering Modes
 
 - **render**: Standard HTML output
@@ -198,8 +257,10 @@ real-time as you click the buttons.
 
 ### Real-time Updates
 
-Arizona sends minimal JSON diffs over WebSocket containing only changed elements, ensuring optimal
-performance for real-time applications.
+Arizona sends minimal JSON diffs over WebSocket containing only changed elements,
+ensuring optimal performance for real-time applications. With compile-time optimized
+templates, updates are even more precise, targeting only the specific DOM elements
+that depend on changed bindings.
 
 ## API Documentation
 
