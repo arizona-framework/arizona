@@ -22,8 +22,7 @@ them with optimized versions that avoid runtime template parsing overhead.
 
 -export([parse_transform/2]).
 -export([format_error/2]).
--export([transform_stateful_to_ast/2]).
--export([transform_stateless_to_ast/2]).
+-export([transform_template_to_ast/2]).
 
 %% --------------------------------------------------------------------
 %% Testing helper exports
@@ -347,12 +346,11 @@ different usage scenarios:
 The function handles missing `vars_indexes` gracefully via `maps:get/3` with
 default empty map fallback.
 """.
--spec transform_stateful_to_ast(TemplateData, Depth) -> SyntaxTree when
-    % TODO: Check why we accept transformed_template here in addition to parsed_template
+-spec transform_template_to_ast(TemplateData, Depth) -> SyntaxTree when
     TemplateData :: arizona_parser:parsed_template() | transformed_template(),
     Depth :: non_neg_integer(),
     SyntaxTree :: erl_syntax:syntaxTree().
-transform_stateful_to_ast(#{elems_order := Order, elems := Elements} = TemplateData, Depth) ->
+transform_template_to_ast(#{elems_order := Order, elems := Elements} = TemplateData, Depth) ->
     %% Get vars_indexes or generate empty one for runtime fallback
     VarsIndexes = maps:get(vars_indexes, TemplateData, #{}),
 
@@ -376,20 +374,6 @@ transform_stateful_to_ast(#{elems_order := Order, elems := Elements} = TemplateD
             VarsIndexesAST
         )
     ]).
-
--doc ~"""
-Transform stateless template result to optimized AST.
-
-Converts a parsed stateless template result into an optimized AST representation
-that can be used for efficient runtime rendering.
-""".
--spec transform_stateless_to_ast(ParsedTemplate, Depth) -> SyntaxTree when
-    ParsedTemplate :: arizona_parser:parsed_template(),
-    Depth :: non_neg_integer(),
-    SyntaxTree :: erl_syntax:syntaxTree().
-transform_stateless_to_ast(ParsedTemplate, Depth) when is_map(ParsedTemplate) ->
-    %% Since stateless now returns same format as stateful, use the same transformation
-    transform_stateful_to_ast(ParsedTemplate, Depth).
 
 %% --------------------------------------------------------------------
 %% Private functions
@@ -1316,7 +1300,7 @@ transform_slot_template_call(
 parse_template_for_stateless(TemplateString, LineNumber) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
     ParsedElementsMap = arizona_parser:parse_stateless_tokens(TokenList),
-    transform_stateless_to_ast(ParsedElementsMap, 0).
+    transform_template_to_ast(ParsedElementsMap, 0).
 
 %% Stateful Template Transformation
 
@@ -1348,7 +1332,7 @@ transform_stateful_template_call_with_context(
         ),
 
         % Generate AST directly instead of string-based approach
-        TemplateDataAST = transform_stateful_to_ast(TransformedTemplate, Depth),
+        TemplateDataAST = transform_template_to_ast(TransformedTemplate, Depth),
         create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg)
     catch
         Error:Reason:Stacktrace ->
@@ -1380,7 +1364,7 @@ transform_stateful_template_call(
         ),
 
         % Generate AST directly instead of string-based approach
-        TemplateDataAST = transform_stateful_to_ast(TransformedTemplate, Depth),
+        TemplateDataAST = transform_template_to_ast(TransformedTemplate, Depth),
         create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg)
     catch
         Error:Reason:Stacktrace ->
