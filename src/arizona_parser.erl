@@ -113,23 +113,9 @@ The parse transform will handle variable analysis and add vars_indexes separatel
 %% --------------------------------------------------------------------
 
 -doc ~"""
-Parse tokens into stateless structure (now same format as stateful).
+Parse tokens into template structure.
 
-Converts a list of tokens into a structured format for stateless rendering.
-Uses the same format as stateful parsing for unified handling.
-
-Returns the same structured format as stateful parsing.
-""".
--spec parse_stateless_tokens(Tokens) -> ParsedTemplate when
-    Tokens :: [token()],
-    ParsedTemplate :: parsed_template().
-parse_stateless_tokens(Tokens) ->
-    parse_stateful_tokens(Tokens).
-
--doc ~"""
-Parse tokens into stateful template structure.
-
-Converts a list of tokens into a structured format for stateful rendering.
+Converts a list of tokens into a structured format for template rendering.
 This includes element ordering and element mapping.
 
 The resulting map contains:
@@ -139,10 +125,10 @@ The resulting map contains:
 Variable analysis and vars_indexes generation is handled by the parse transform.
 Works for both stateful and stateless templates with unified format.
 """.
--spec parse_stateful_tokens(Tokens) -> ParsedTemplate when
+-spec parse_tokens(Tokens) -> ParsedTemplate when
     Tokens :: [token()],
     ParsedTemplate :: parsed_template().
-parse_stateful_tokens(Tokens) ->
+parse_tokens(Tokens) ->
     Elements = process_tokens_stateful(Tokens, 0, #{}),
     #{
         elems_order => lists:seq(0, maps:size(Elements) - 1),
