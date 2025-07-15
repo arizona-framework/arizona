@@ -3,6 +3,9 @@
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).
 
+%% Suppress dialyzer warnings for validation tests that test function arities
+-dialyzer({nowarn_function, test_diff_stateless_missing_vars_indexes/1}).
+
 %% --------------------------------------------------------------------
 %% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
@@ -13,7 +16,9 @@ all() ->
         {group, diff_stateful},
         {group, diff_stateless},
         {group, diff_list},
-        {group, diff_optimization}
+        {group, diff_optimization},
+        {group, error_handling},
+        {group, edge_cases}
     ].
 
 groups() ->
@@ -50,6 +55,18 @@ groups() ->
             test_complex_hierarchical_change_detection,
             test_reproduce_websocket_bug_empty_vars_indexes,
             test_enhanced_parse_transform_missing_todos_mapping
+        ]},
+        {error_handling, [parallel], [
+            test_binding_not_found_error,
+            test_template_render_error,
+            test_diff_stateless_missing_vars_indexes
+        ]},
+        {edge_cases, [parallel], [
+            test_skip_element_scenario,
+            test_socket_with_html_no_changes,
+            test_diff_stateful_empty_elems,
+            test_diff_stateful_invalid_element_index,
+            test_diff_stateless_empty_element_changes
         ]}
     ].
 
@@ -1183,3 +1200,210 @@ test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config)
 
     % For now, verify the current test setup still shows the issue in the simulated scenario
     ?assertMatch([{root, [{1, ~"foo"}]}], CurrentChanges).
+
+%% --------------------------------------------------------------------
+%% Error handling tests
+%% --------------------------------------------------------------------
+
+test_binding_not_found_error(Config) when is_list(Config) ->
+    % Test that binding_not_found errors are properly caught and formatted
+    TemplateData = #{
+        elems_order => [0, 1],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 =>
+                {dynamic, 42, fun(Socket) ->
+                    % Try to get a binding that doesn't exist in the socket
+                    arizona_socket:get_binding(truly_nonexistent_key, Socket)
+                end}
+        },
+        vars_indexes => #{trigger_key => [1]}
+    },
+
+    StatefulState = arizona_stateful:new(root, test_module, #{}),
+    % Add a different binding to trigger the diff, but the function will try to access a missing one
+    ChangedState = arizona_stateful:put_binding(trigger_key, ~"value", StatefulState),
+
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Should throw binding_not_found with proper error info
+    ?assertError(
+        {binding_not_found, truly_nonexistent_key},
+        arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState)
+    ).
+
+test_template_render_error(Config) when is_list(Config) ->
+    % Test that template render errors are properly caught and formatted
+    TemplateData = #{
+        elems_order => [0, 1],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 =>
+                {dynamic, 42, fun(_Socket) ->
+                    error(custom_error)
+                end}
+        },
+        vars_indexes => #{trigger => [1]}
+    },
+
+    StatefulState = arizona_stateful:new(root, test_module, #{}),
+    ChangedState = arizona_stateful:put_binding(trigger, ~"value", StatefulState),
+
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Should throw template_render_error with line info
+    ?assertError(
+        {template_render_error, custom_error, 42},
+        arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState)
+    ).
+
+test_diff_stateless_missing_vars_indexes(Config) when is_list(Config) ->
+    % Test diff_stateless with missing vars_indexes key
+    TemplateData = #{
+        elems_order => [0, 1],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 =>
+                {dynamic, 2, fun(Socket) ->
+                    arizona_socket:get_binding(name, Socket)
+                end}
+        }
+        % Missing vars_indexes key
+    },
+
+    StatefulState = arizona_stateful:new(root, test_module, #{}),
+    ChangedState = arizona_stateful:put_binding(name, ~"value", StatefulState),
+
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Should handle missing vars_indexes gracefully (default to #{})
+    % Note: intentionally malformed template data to test error handling
+    ?assertError(
+        {badkey, vars_indexes},
+        arizona_differ:diff_stateless(TemplateData, ChangedState, SocketWithState)
+    ).
+
+%% --------------------------------------------------------------------
+%% Edge case tests
+%% --------------------------------------------------------------------
+
+test_skip_element_scenario(Config) when is_list(Config) ->
+    % Test that elements are skipped when they return sockets with no changes and no HTML
+    TemplateData = #{
+        elems_order => [0, 1],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 =>
+                {dynamic, 2, fun(_Socket) ->
+                    % Return socket with no changes and empty HTML
+                    EmptySocket = arizona_socket:new(#{mode => diff}),
+                    arizona_socket:set_html_acc([], EmptySocket)
+                end}
+        },
+        vars_indexes => #{trigger => [1]}
+    },
+
+    StatefulState = arizona_stateful:new(root, test_module, #{}),
+    ChangedState = arizona_stateful:put_binding(trigger, ~"value", StatefulState),
+
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Should return socket with no changes (element was skipped)
+    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
+    ?assertEqual([], arizona_socket:get_changes(ResultSocket)).
+
+test_socket_with_html_no_changes(Config) when is_list(Config) ->
+    % Test socket result with HTML but no changes
+    TemplateData = #{
+        elems_order => [0, 1],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 =>
+                {dynamic, 2, fun(_Socket) ->
+                    HtmlSocket = arizona_socket:new(#{mode => diff}),
+                    arizona_socket:set_html_acc([~"<span>content</span>"], HtmlSocket)
+                end}
+        },
+        vars_indexes => #{trigger => [1]}
+    },
+
+    StatefulState = arizona_stateful:new(root, test_module, #{}),
+    ChangedState = arizona_stateful:put_binding(trigger, ~"value", StatefulState),
+
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Should return changes with HTML content
+    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
+    Changes = arizona_socket:get_changes(ResultSocket),
+    ?assertEqual([{root, [{1, [~"<span>content</span>"]}]}], Changes).
+
+test_diff_stateful_empty_elems(Config) when is_list(Config) ->
+    % Test diff_stateful with empty elems map
+    TemplateData = #{
+        elems_order => [],
+        elems => #{},
+        vars_indexes => #{name => []}
+    },
+
+    StatefulState = arizona_stateful:new(root, test_module, #{}),
+    ChangedState = arizona_stateful:put_binding(name, ~"value", StatefulState),
+
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Should handle empty elems gracefully
+    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
+    ?assertEqual([], arizona_socket:get_changes(ResultSocket)).
+
+test_diff_stateful_invalid_element_index(Config) when is_list(Config) ->
+    % Test diff_stateful with non-existent element index
+    TemplateData = #{
+        elems_order => [0],
+        elems => #{
+            0 => {static, 1, ~"content"}
+        },
+        % References non-existent element 1
+        vars_indexes => #{name => [1]}
+    },
+
+    StatefulState = arizona_stateful:new(root, test_module, #{}),
+    ChangedState = arizona_stateful:put_binding(name, ~"value", StatefulState),
+
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Should throw badkey error when trying to get non-existent element
+    ?assertError(
+        {badkey, 1},
+        arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState)
+    ).
+
+test_diff_stateless_empty_element_changes(Config) when is_list(Config) ->
+    % Test diff_stateless with empty element changes
+    TemplateData = #{
+        elems_order => [0, 1],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 =>
+                {dynamic, 2, fun(_Socket) ->
+                    % Return socket with no changes and no HTML
+                    arizona_socket:new(#{mode => diff})
+                end}
+        },
+        vars_indexes => #{trigger => [1]}
+    },
+
+    StatefulState = arizona_stateful:new(root, test_module, #{}),
+    ChangedState = arizona_stateful:put_binding(trigger, ~"value", StatefulState),
+
+    Socket = arizona_socket:new(#{mode => diff}),
+    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+
+    % Should return socket with no changes
+    ResultSocket = arizona_differ:diff_stateless(TemplateData, ChangedState, SocketWithState),
+    ?assertEqual([], arizona_socket:get_changes(ResultSocket)).

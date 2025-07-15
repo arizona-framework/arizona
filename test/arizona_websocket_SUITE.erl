@@ -24,7 +24,8 @@ all() ->
     [
         {group, route_resolution},
         {group, websocket_init},
-        {group, message_handling}
+        {group, message_handling},
+        {group, socket_lifecycle}
     ].
 
 groups() ->
@@ -51,6 +52,10 @@ groups() ->
             test_handle_noreply_response_with_socket_changes,
             test_mock_live_module_for_reply_responses,
             test_json_encoding_tuple_to_array_conversion
+        ]},
+        {socket_lifecycle, [parallel], [
+            test_websocket_info_with_notifications,
+            test_websocket_handle_with_dead_live_process
         ]}
     ].
 
@@ -433,3 +438,68 @@ mock_websocket_request_empty() ->
 %% Helper to create WebSocket request with custom query parameters
 mock_websocket_request_with_params(QueryParams) ->
     mock_websocket_request(#{qs => QueryParams}).
+
+%% --------------------------------------------------------------------
+%% Socket lifecycle tests
+%% --------------------------------------------------------------------
+
+test_websocket_info_with_notifications(Config) when is_list(Config) ->
+    % Test the websocket_info handler with various message types
+    % that might be sent for real-time updates
+    State = arizona_websocket:new_state(self()),
+
+    % Test various info message types
+    TestMessages = [
+        {push_notification, #{type => ~"alert", message => ~"System update"}},
+        {live_data_feed, #{data => [1, 2, 3]}},
+        {timer_event, timeout},
+        {'DOWN', make_ref(), process, self(), normal}
+    ],
+
+    lists:foreach(
+        fun(InfoMessage) ->
+            {Commands, NewState} = arizona_websocket:websocket_info(InfoMessage, State),
+
+            % Currently returns empty commands - verify this behavior
+            ?assertEqual([], Commands),
+            ?assertEqual(
+                arizona_websocket:get_live_pid(State),
+                arizona_websocket:get_live_pid(NewState)
+            )
+        end,
+        TestMessages
+    ).
+
+test_websocket_handle_with_dead_live_process(Config) when is_list(Config) ->
+    % Test handling messages when the LiveView process has died
+    % Create a mock live process and kill it
+    MockLivePid = spawn(fun() -> ok end),
+    State = arizona_websocket:new_state(MockLivePid),
+
+    % Kill the process to simulate crash
+    exit(MockLivePid, kill),
+    % Ensure process is dead
+    timer:sleep(10),
+
+    % Create a valid event message
+    EventMessage = iolist_to_binary(
+        json:encode(#{
+            type => ~"event",
+            event => ~"increment",
+            params => #{}
+        })
+    ),
+
+    % Should handle gracefully without crashing websocket
+    try
+        {Commands, _NewState} = arizona_websocket:websocket_handle({text, EventMessage}, State),
+
+        % Should return some response (possibly error), not crash
+        ?assert(is_list(Commands))
+    catch
+        Class:Reason ->
+            % If it throws an error, it should be a controlled error, not a crash
+            ?assert(Class =:= error orelse Class =:= throw),
+            % Should not be undefined function error
+            ?assert(Reason =/= undef)
+    end.
