@@ -146,39 +146,21 @@ making diffing extremely efficient even for large templates.
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 diff_stateful(TemplateData, StatefulState, Socket) ->
-    % Get changed bindings (already filtered by put_binding/3)
     ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
-    case maps:size(ChangedBindings) of
-        0 ->
-            % No changes, return socket unchanged
+    case has_changes(ChangedBindings) of
+        false ->
             Socket;
-        _ ->
+        true ->
             StatefulId = arizona_stateful:get_id(StatefulState),
-
-            % Find affected elements using the optimization
-            AffectedElements = get_affected_elements(
-                ChangedBindings,
-                maps:get(vars_indexes, TemplateData, #{})
+            AffectedElements = get_affected_elements_from_stateful_template(
+                TemplateData, ChangedBindings
             ),
 
-            case sets:size(AffectedElements) of
-                0 ->
-                    % No affected elements
+            case has_affected_elements(AffectedElements) of
+                false ->
                     Socket;
-                _ ->
-                    % Create element changes for affected elements
-                    {ElementChanges, UpdatedSocket} = create_element_changes(
-                        AffectedElements, TemplateData, Socket
-                    ),
-                    case ElementChanges of
-                        [] ->
-                            % No element changes after processing, skip component change
-                            UpdatedSocket;
-                        _ ->
-                            % Has element changes, include component change
-                            ComponentChange = {StatefulId, ElementChanges},
-                            arizona_socket:append_changes([ComponentChange], UpdatedSocket)
-                    end
+                true ->
+                    process_stateful_changes(StatefulId, AffectedElements, TemplateData, Socket)
             end
     end.
 
@@ -205,29 +187,20 @@ This enables nested component diffing where only changed elements are reported.
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 diff_stateless(TemplateData, StatefulState, Socket) ->
-    % Get changed bindings (already filtered by put_binding/3)
     ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
-    case maps:size(ChangedBindings) of
-        0 ->
-            % No changes, return socket unchanged
+    case has_changes(ChangedBindings) of
+        false ->
             Socket;
-        _ ->
-            % For stateless components, check if any changed binding affects this component
-            VarsIndexes = maps:get(vars_indexes, TemplateData),
-            AffectedElements = get_affected_elements(ChangedBindings, VarsIndexes),
+        true ->
+            AffectedElements = get_affected_elements_from_stateless_template(
+                TemplateData, ChangedBindings
+            ),
 
-            case sets:size(AffectedElements) of
-                0 ->
-                    % No elements affected, return socket unchanged
+            case has_affected_elements(AffectedElements) of
+                false ->
                     Socket;
-                _ ->
-                    % Create element changes for hierarchical diffing
-                    {ElementChanges, UpdatedSocket} = create_element_changes(
-                        AffectedElements, TemplateData, Socket
-                    ),
-
-                    % Store element changes directly - parent will extract them as nested changes
-                    arizona_socket:append_changes(ElementChanges, UpdatedSocket)
+                true ->
+                    process_stateless_changes(AffectedElements, TemplateData, Socket)
             end
     end.
 
@@ -269,6 +242,85 @@ get_affected_elements(ChangedBindings, VarsIndexes) ->
 %% --------------------------------------------------------------------
 %% Private functions
 %% --------------------------------------------------------------------
+
+%% Check if there are any changes in the bindings
+-spec has_changes(ChangedBindings) -> boolean() when
+    ChangedBindings :: map().
+has_changes(ChangedBindings) ->
+    maps:size(ChangedBindings) > 0.
+
+%% Get affected elements from template data and changed bindings for stateful components
+-spec get_affected_elements_from_stateful_template(TemplateData, ChangedBindings) ->
+    AffectedElements
+when
+    TemplateData :: arizona_renderer:stateful_template_data(),
+    ChangedBindings :: map(),
+    AffectedElements :: sets:set(element_index()).
+get_affected_elements_from_stateful_template(TemplateData, ChangedBindings) ->
+    VarsIndexes = maps:get(vars_indexes, TemplateData, #{}),
+    get_affected_elements(ChangedBindings, VarsIndexes).
+
+%% Get affected elements from template data and changed bindings for stateless components
+%% Does not provide default for vars_indexes to maintain original error behavior
+-spec get_affected_elements_from_stateless_template(TemplateData, ChangedBindings) ->
+    AffectedElements
+when
+    TemplateData :: arizona_renderer:stateful_template_data(),
+    ChangedBindings :: map(),
+    AffectedElements :: sets:set(element_index()).
+get_affected_elements_from_stateless_template(TemplateData, ChangedBindings) ->
+    % No default - will error if missing
+    VarsIndexes = maps:get(vars_indexes, TemplateData),
+    get_affected_elements(ChangedBindings, VarsIndexes).
+
+%% Check if there are any affected elements
+-spec has_affected_elements(AffectedElements) -> boolean() when
+    AffectedElements :: sets:set(element_index()).
+has_affected_elements(AffectedElements) ->
+    sets:size(AffectedElements) > 0.
+
+%% Process changes for stateful components
+-spec process_stateful_changes(
+    StatefulId,
+    AffectedElements,
+    TemplateData,
+    Socket
+) -> Socket1 when
+    StatefulId :: arizona_stateful:id(),
+    AffectedElements :: sets:set(element_index()),
+    TemplateData :: arizona_renderer:stateful_template_data(),
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+process_stateful_changes(StatefulId, AffectedElements, TemplateData, Socket) ->
+    {ElementChanges, UpdatedSocket} = create_element_changes(
+        AffectedElements, TemplateData, Socket
+    ),
+    case ElementChanges of
+        [] ->
+            % No element changes after processing, skip component change
+            UpdatedSocket;
+        _ ->
+            % Has element changes, include component change
+            ComponentChange = {StatefulId, ElementChanges},
+            arizona_socket:append_changes([ComponentChange], UpdatedSocket)
+    end.
+
+%% Process changes for stateless components
+-spec process_stateless_changes(
+    AffectedElements,
+    TemplateData,
+    Socket
+) -> Socket1 when
+    AffectedElements :: sets:set(element_index()),
+    TemplateData :: arizona_renderer:stateful_template_data(),
+    Socket :: arizona_socket:socket(),
+    Socket1 :: arizona_socket:socket().
+process_stateless_changes(AffectedElements, TemplateData, Socket) ->
+    {ElementChanges, UpdatedSocket} = create_element_changes(
+        AffectedElements, TemplateData, Socket
+    ),
+    % Store element changes directly - parent will extract them as nested changes
+    arizona_socket:append_changes(ElementChanges, UpdatedSocket).
 
 %% Create element changes for affected elements
 -spec create_element_changes(
