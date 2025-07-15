@@ -453,7 +453,7 @@ render_stateful_html(Html, Bindings, Socket) when
 ->
     %% Parse template at runtime
     Tokens = arizona_scanner:scan(#{}, Html),
-    ParsedResult = arizona_parser:parse_stateful_tokens(Tokens),
+    ParsedResult = arizona_parser:parse_tokens(Tokens),
 
     %% Transform to optimized format using same logic as parse transform
     OptimizedAST = arizona_parse_transform:transform_template_to_ast(ParsedResult, 0),
@@ -478,7 +478,7 @@ render_stateless_html(Html, Bindings, Socket) when
 ->
     %% Parse template at runtime
     Tokens = arizona_scanner:scan(#{}, Html),
-    ParsedResult = arizona_parser:parse_stateless_tokens(Tokens),
+    ParsedResult = arizona_parser:parse_tokens(Tokens),
 
     %% Transform to optimized format using same logic as parse transform
     OptimizedAST = arizona_parse_transform:transform_template_to_ast(ParsedResult, 0),

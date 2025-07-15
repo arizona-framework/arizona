@@ -1226,7 +1226,7 @@ transform_slot_template_call(
     erl_syntax:syntaxTree().
 parse_template_for_stateless(TemplateString, LineNumber) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
-    ParsedElementsMap = arizona_parser:parse_stateless_tokens(TokenList),
+    ParsedElementsMap = arizona_parser:parse_tokens(TokenList),
     transform_template_to_ast(ParsedElementsMap, 0).
 
 %% Template Transformation
@@ -1281,7 +1281,7 @@ parse_template(
     #{
         elems_order := ElementOrder,
         elems := ElementsMap
-    } = arizona_parser:parse_stateful_tokens(TokenList),
+    } = arizona_parser:parse_tokens(TokenList),
 
     %% Generate vars_indexes using our new function
     VariableIndexes = generate_vars_indexes(#{elems => ElementsMap}, VarBindings),
@@ -1301,7 +1301,7 @@ parse_template(
     }.
 parse_template_for_ast(TemplateString, LineNumber, VarBindings) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
-    ParsedTemplate = arizona_parser:parse_stateful_tokens(TokenList),
+    ParsedTemplate = arizona_parser:parse_tokens(TokenList),
 
     %% Generate vars_indexes using enhanced function
     #{elems := ElementsMap} = ParsedTemplate,
