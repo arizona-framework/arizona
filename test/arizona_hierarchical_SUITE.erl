@@ -916,7 +916,8 @@ stateless_unified_empty_template(Config) when is_list(Config) ->
 
 %% Tests for unified stateless format
 detect_stateless_unified_format(Config) when is_list(Config) ->
-    % Test that stateless template with unified format (same as stateful) is properly converted to structure
+    % Test that stateless template with unified format (same as stateful)
+    % is properly converted to structure
     StatelessTemplateData = #{
         elems_order => [0, 1, 2],
         elems => #{
@@ -986,7 +987,8 @@ stateless_unified_with_vars_indexes(Config) when is_list(Config) ->
 
 stateless_unified_cascade_dependency(Config) when is_list(Config) ->
     % Test cascade dependency pattern: stateless component depending on parent binding
-    % This simulates: {arizona_component:call_stateless(module, fun, #{foo => arizona_socket:get_binding(user, Socket)}, Socket)}
+    % This simulates: {arizona_component:call_stateless(module, fun,
+    %                 #{foo => arizona_socket:get_binding(user, Socket)}, Socket)}
     StatelessTemplateData = #{
         elems_order => [0, 1, 2],
         elems => #{

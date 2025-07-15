@@ -403,7 +403,7 @@ handle_dynamic_result(ElementIndex, Result, Socket) ->
         true ->
             % Socket returned - extract nested changes or HTML
             NestedChanges = arizona_socket:get_changes(Result),
-            handle_socket_result(ElementIndex, NestedChanges, Result, Socket);
+            handle_socket_result(ElementIndex, NestedChanges, Result);
         false ->
             % Regular value - convert to HTML for consistency
             {Html, _} = arizona_html:to_html(Result, Socket),
@@ -411,7 +411,7 @@ handle_dynamic_result(ElementIndex, Result, Socket) ->
     end.
 
 %% Handle socket results with nested changes
-handle_socket_result(ElementIndex, NestedChanges, ResultSocket, _Socket) ->
+handle_socket_result(ElementIndex, NestedChanges, ResultSocket) ->
     case NestedChanges of
         [] ->
             % No changes, check HTML content
