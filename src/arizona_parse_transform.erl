@@ -31,7 +31,7 @@ them with optimized versions that avoid runtime template parsing overhead.
 -export([extract_arizona_functions/1]).
 -export([analyze_function_for_bindings/1]).
 -export([generate_vars_indexes/2]).
--export([parse_template_for_stateful/5]).
+-export([parse_template/5]).
 -export([build_function_bindings_map/2]).
 -export([extract_functions_single_pass/1]).
 
@@ -44,7 +44,7 @@ them with optimized versions that avoid runtime template parsing overhead.
 -ignore_xref([extract_arizona_functions/1]).
 -ignore_xref([analyze_function_for_bindings/1]).
 -ignore_xref([generate_vars_indexes/2]).
--ignore_xref([parse_template_for_stateful/5]).
+-ignore_xref([parse_template/5]).
 -ignore_xref([build_function_bindings_map/2]).
 -ignore_xref([extract_functions_single_pass/1]).
 
@@ -1044,7 +1044,7 @@ transform_arizona_html_call(
     FunctionName =:= render_stateful;
     FunctionName =:= render_stateless
 ->
-    transform_render_stateful_call(
+    transform_render_template_call(
         CallAnnotations, RemoteCall, Args, ModuleName, CurrentFunctionBindings, Depth
     );
 transform_arizona_html_call(
@@ -1085,8 +1085,8 @@ transform_arizona_html_call(
 ) ->
     {call, CallAnnotations, RemoteCall, Args}.
 
-%% Transform render_stateful function calls (unified with context support)
--spec transform_render_stateful_call(
+%% Transform render template function calls (unified with context support)
+-spec transform_render_template_call(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
     [erl_parse:abstract_expr()],
@@ -1094,7 +1094,7 @@ transform_arizona_html_call(
     #{binary() => binary()},
     non_neg_integer()
 ) -> erl_parse:abstract_expr().
-transform_render_stateful_call(
+transform_render_template_call(
     CallAnnotations,
     RemoteCall,
     [{bin, _BinaryAnnotations, _BinaryFields} = BinaryTemplate, SocketArg],
@@ -1104,7 +1104,7 @@ transform_render_stateful_call(
 ) ->
     %% Use current function bindings for enhanced template processing
     %% Always use context-aware transformation (empty map when no context)
-    transform_stateful_template_call(
+    transform_template_call(
         CallAnnotations,
         RemoteCall,
         BinaryTemplate,
@@ -1113,7 +1113,7 @@ transform_render_stateful_call(
         CurrentFunctionBindings,
         Depth
     );
-transform_render_stateful_call(
+transform_render_template_call(
     CallAnnotations, _RemoteCall, _Args, ModuleName, _CurrentFunctionBindings, _Depth
 ) ->
     Line = erl_anno:line(CallAnnotations),
@@ -1229,10 +1229,10 @@ parse_template_for_stateless(TemplateString, LineNumber) ->
     ParsedElementsMap = arizona_parser:parse_stateless_tokens(TokenList),
     transform_template_to_ast(ParsedElementsMap, 0).
 
-%% Stateful Template Transformation
+%% Template Transformation
 
-%% Transform render_stateful call with current function context and depth tracking
--spec transform_stateful_template_call(
+%% Transform render template call with current function context and depth tracking
+-spec transform_template_call(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
     erl_parse:abstract_expr(),
@@ -1241,7 +1241,7 @@ parse_template_for_stateless(TemplateString, LineNumber) ->
     #{binary() => binary()},
     non_neg_integer()
 ) -> erl_parse:abstract_expr().
-transform_stateful_template_call(
+transform_template_call(
     CallAnnotations,
     RemoteCall,
     BinaryTemplate,
@@ -1254,13 +1254,13 @@ transform_stateful_template_call(
     try
         % Extract and parse the template at compile time with function context
         {TemplateString, LineNumber} = extract_template_content(BinaryTemplate),
-        TransformedTemplate = parse_template_for_stateful_result(
+        TransformedTemplate = parse_template_for_ast(
             TemplateString, LineNumber, CurrentFunctionBindings
         ),
 
         % Generate AST directly instead of string-based approach
         TemplateDataAST = transform_template_to_ast(TransformedTemplate, Depth),
-        create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg)
+        create_template_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg)
     catch
         Error:Reason:Stacktrace ->
             error(
@@ -1271,10 +1271,10 @@ transform_stateful_template_call(
     end.
 
 %% Parse template string into structured format with variable context
--spec parse_template_for_stateful(
+-spec parse_template(
     binary(), pos_integer(), compile_options(), non_neg_integer(), #{binary() => binary()}
 ) -> binary().
-parse_template_for_stateful(
+parse_template(
     TemplateString, LineNumber, CompilerOptions, Depth, VarBindings
 ) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
@@ -1290,8 +1290,8 @@ parse_template_for_stateful(
         ElementOrder, ElementsMap, VariableIndexes, CompilerOptions, Depth
     ).
 
-%% Parse template string into stateful result with variable context for AST generation
--spec parse_template_for_stateful_result(
+%% Parse template string into structured result with variable context for AST generation
+-spec parse_template_for_ast(
     binary(), pos_integer(), #{binary() => binary()}
 ) ->
     #{
@@ -1299,7 +1299,7 @@ parse_template_for_stateful(
         elems := #{non_neg_integer() => {static | dynamic, pos_integer(), binary()}},
         vars_indexes := #{binary() => [non_neg_integer()]}
     }.
-parse_template_for_stateful_result(TemplateString, LineNumber, VarBindings) ->
+parse_template_for_ast(TemplateString, LineNumber, VarBindings) ->
     TokenList = arizona_scanner:scan(#{line => LineNumber}, TemplateString),
     ParsedTemplate = arizona_parser:parse_stateful_tokens(TokenList),
 
@@ -1556,14 +1556,14 @@ create_slot_stateless_call(
         SlotNameArg, SocketArg, StatelessTuple
     ]}.
 
-%% Create render_stateful function call with AST data
--spec create_stateful_ast_call(
+%% Create render template function call with AST data
+-spec create_template_ast_call(
     erl_anno:anno(),
     erl_parse:abstract_expr(),
     erl_syntax:syntaxTree(),
     erl_parse:abstract_expr()
 ) -> erl_parse:abstract_expr().
-create_stateful_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg) ->
+create_template_ast_call(CallAnnotations, RemoteCall, TemplateDataAST, SocketArg) ->
     {call, CallAnnotations, RemoteCall, [erl_syntax:revert(TemplateDataAST), SocketArg]}.
 
 %% Create render_list function call with structured data

@@ -660,7 +660,7 @@ test_enhanced_vars_indexes_generation(Config) when is_list(Config) ->
 
 %% Test template with variable context
 test_template_with_variable_context(Config) when is_list(Config) ->
-    % Test the parse_template_for_stateful_with_context function
+    % Test the parse_template function
     TemplateString = ~"<div>Hello {UserName}! Count: {Count}</div>",
     VarBindings = #{
         ~"UserName" => ~"user_name",
@@ -668,7 +668,7 @@ test_template_with_variable_context(Config) when is_list(Config) ->
     },
 
     % This tests the internal function - in practice this would be used by the parse transform
-    Result = arizona_parse_transform:parse_template_for_stateful(
+    Result = arizona_parse_transform:parse_template(
         TemplateString, 1, [], 0, VarBindings
     ),
 
