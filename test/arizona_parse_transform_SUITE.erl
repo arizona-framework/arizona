@@ -668,7 +668,7 @@ test_template_with_variable_context(Config) when is_list(Config) ->
     },
 
     % This tests the internal function - in practice this would be used by the parse transform
-    Result = arizona_parse_transform:parse_template_for_stateful_with_context(
+    Result = arizona_parse_transform:parse_template_for_stateful(
         TemplateString, 1, [], 0, VarBindings
     ),
 
