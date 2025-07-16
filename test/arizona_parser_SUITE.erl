@@ -8,569 +8,348 @@
 %% --------------------------------------------------------------------
 
 all() ->
-    [{group, stateless}, {group, stateful}, {group, list_parsing}].
+    [
+        {group, basic_parsing},
+        {group, static_content},
+        {group, dynamic_content},
+        {group, mixed_content},
+        {group, edge_cases},
+        {group, comment_handling},
+        {group, access_functions}
+    ].
 
 groups() ->
     [
-        {stateless, [parallel], [
-            parse_stateless_static_only,
-            parse_stateless_with_dynamic,
-            parse_stateless_with_comments,
-            parse_tokens_directly
+        {basic_parsing, [parallel], [
+            parse_empty_tokens,
+            parse_single_static,
+            parse_single_dynamic
         ]},
-        {stateful, [parallel], [
-            parse_stateful_static_only,
-            parse_stateful_with_dynamic,
-            parse_stateful_vars_indexes,
-            parse_tokens_stateful_format,
-            parse_stateful_quoted_variables,
-            parse_stateful_multiple_variables,
-            parse_stateful_no_variables,
-            parse_stateful_with_comments,
-            parse_stateful_complex_regex_match
+        {static_content, [parallel], [
+            parse_multiple_static,
+            parse_static_with_html
         ]},
-        {list_parsing, [parallel], [
-            parse_list_tokens_static_only,
-            parse_list_tokens_with_dynamic,
-            parse_list_tokens_with_variables,
-            parse_list_tokens_with_comments,
-            parse_list_tokens_empty,
-            parse_list_tokens_mixed_complex,
-            parse_list_consecutive_dynamics_at_start,
-            parse_list_consecutive_dynamics_in_middle,
-            parse_list_consecutive_dynamics_at_end,
-            parse_list_starts_with_dynamic,
-            parse_list_ends_with_dynamic,
-            parse_list_only_dynamics,
-            parse_list_alternating_pattern,
-            parse_list_real_world_template
+        {dynamic_content, [parallel], [
+            parse_multiple_dynamic,
+            parse_dynamic_with_complex_expr
+        ]},
+        {mixed_content, [parallel], [
+            parse_alternating_static_dynamic,
+            parse_static_dynamic_static,
+            parse_dynamic_static_dynamic,
+            parse_complex_template
+        ]},
+        {edge_cases, [parallel], [
+            parse_starts_with_dynamic,
+            parse_ends_with_dynamic,
+            parse_consecutive_dynamics,
+            parse_consecutive_statics,
+            parse_only_dynamics,
+            parse_only_statics
+        ]},
+        {comment_handling, [parallel], [
+            parse_comments_between_content,
+            parse_comments_skipped,
+            parse_only_comments
+        ]},
+        {access_functions, [parallel], [
+            test_static_access,
+            test_dynamic_access,
+            test_access_empty_template
         ]}
     ].
 
 %% --------------------------------------------------------------------
-%% Stateless parsing tests
+%% Basic parsing tests
 %% --------------------------------------------------------------------
 
-parse_stateless_static_only(Config) when is_list(Config) ->
-    Template = ~"<div>Hello World</div>",
-    Tokens = arizona_scanner:scan(#{}, Template),
-    StructuredResult = arizona_parser:parse_tokens(Tokens),
+parse_empty_tokens(Config) when is_list(Config) ->
+    Result = arizona_parser:parse_tokens([]),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([], Static),
+    ?assertEqual([], Dynamic).
 
-    %% Should return basic stateful_result format without vars_indexes
-    Expected = #{
-        elems_order => [0],
-        elems => #{
-            0 => {static, 1, ~"<div>Hello World</div>"}
-        }
-    },
-    ?assertEqual(Expected, StructuredResult).
+parse_single_static(Config) when is_list(Config) ->
+    Tokens = [{static, 1, ~"Hello World"}],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"Hello World"], Static),
+    ?assertEqual([], Dynamic).
 
-parse_stateless_with_dynamic(Config) when is_list(Config) ->
-    Template = ~"<div>Hello {name}!</div>",
-    Tokens = arizona_scanner:scan(#{}, Template),
-    StructuredResult = arizona_parser:parse_tokens(Tokens),
+parse_single_dynamic(Config) when is_list(Config) ->
+    Tokens = [{dynamic, 1, ~"name"}],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~""], Static),
+    ?assertEqual([{1, ~"name"}], Dynamic).
 
-    %% Should return basic stateful_result format without vars_indexes
-    Expected = #{
-        elems_order => [0, 1, 2],
-        elems => #{
-            0 => {static, 1, ~"<div>Hello "},
-            1 => {dynamic, 1, ~"name"},
-            2 => {static, 1, ~"!</div>"}
-        }
-    },
-    ?assertEqual(Expected, StructuredResult).
+%% --------------------------------------------------------------------
+%% Static content tests
+%% --------------------------------------------------------------------
 
-parse_stateless_with_comments(Config) when is_list(Config) ->
-    Template = ~"<div>{% This is a comment }Hello</div>",
-    Tokens = arizona_scanner:scan(#{}, Template),
-    StructuredResult = arizona_parser:parse_tokens(Tokens),
-
-    %% Comments should be filtered out completely
-    Expected = #{
-        elems_order => [0, 1],
-        elems => #{
-            0 => {static, 1, ~"<div>"},
-            1 => {static, 1, ~"Hello</div>"}
-        }
-    },
-    ?assertEqual(Expected, StructuredResult).
-
-parse_tokens_directly(Config) when is_list(Config) ->
+parse_multiple_static(Config) when is_list(Config) ->
     Tokens = [
-        {static, 1, ~"<p>"},
+        {static, 1, ~"Hello"},
+        {static, 1, ~" "},
+        {static, 1, ~"World"}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"Hello", ~" ", ~"World"], Static),
+    ?assertEqual([], Dynamic).
+
+parse_static_with_html(Config) when is_list(Config) ->
+    Tokens = [
+        {static, 1, ~"<div class=\"container\">"},
+        {static, 1, ~"<p>Hello</p>"},
+        {static, 1, ~"</div>"}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"<div class=\"container\">", ~"<p>Hello</p>", ~"</div>"], Static),
+    ?assertEqual([], Dynamic).
+
+%% --------------------------------------------------------------------
+%% Dynamic content tests
+%% --------------------------------------------------------------------
+
+parse_multiple_dynamic(Config) when is_list(Config) ->
+    Tokens = [
         {dynamic, 1, ~"name"},
-        {static, 1, ~"</p>"}
+        {dynamic, 2, ~"age"}
     ],
-    StructuredResult = arizona_parser:parse_tokens(Tokens),
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"", ~""], Static),
+    ?assertEqual([{1, ~"name"}, {2, ~"age"}], Dynamic).
 
-    %% Should handle tokens directly and return basic stateful_result format
-    Expected = #{
-        elems_order => [0, 1, 2],
-        elems => #{
-            0 => {static, 1, ~"<p>"},
-            1 => {dynamic, 1, ~"name"},
-            2 => {static, 1, ~"</p>"}
-        }
-    },
-    ?assertEqual(Expected, StructuredResult).
+parse_dynamic_with_complex_expr(Config) when is_list(Config) ->
+    ExprText = ~"arizona_socket:get_binding(user_name, Socket)",
+    Tokens = [{dynamic, 1, ExprText}],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~""], Static),
+    ?assertEqual([{1, ExprText}], Dynamic).
 
 %% --------------------------------------------------------------------
-%% Stateful parsing tests
+%% Mixed content tests
 %% --------------------------------------------------------------------
 
-parse_stateful_static_only(Config) when is_list(Config) ->
-    Template = ~"<div>Hello World</div>",
-    Tokens = arizona_scanner:scan(#{}, Template),
-    TemplateData = arizona_parser:parse_tokens(Tokens),
-
-    %% Should return structured template data
-    ?assertMatch(
-        #{
-            elems_order := [0],
-            elems := #{0 := {static, 1, ~"<div>Hello World</div>"}}
-        },
-        TemplateData
-    ).
-
-parse_stateful_with_dynamic(Config) when is_list(Config) ->
-    Template = ~"<div>Count: {count}</div>",
-    Tokens = arizona_scanner:scan(#{}, Template),
-    TemplateData = arizona_parser:parse_tokens(Tokens),
-
-    %% Should return structured template with elements
-    ?assertMatch(
-        #{
-            elems_order := [0, 1, 2],
-            elems := #{
-                0 := {static, 1, ~"<div>Count: "},
-                1 := {dynamic, 1, ~"count"},
-                2 := {static, 1, ~"</div>"}
-            }
-        },
-        TemplateData
-    ).
-
-parse_stateful_vars_indexes(Config) when is_list(Config) ->
-    Template = ~"""
-    <div>
-        {arizona_socket:get_binding(name, Socket)} -
-        {arizona_socket:get_binding(count, Socket)}
-    </div>
-    """,
-    Tokens = arizona_scanner:scan(#{}, Template),
-    TemplateData = arizona_parser:parse_tokens(Tokens),
-
-    %% Should return structured template data with correct elements
-    ?assertMatch(
-        #{
-            elems_order := [0, 1, 2, 3, 4],
-            elems := #{
-                0 := {static, 1, _},
-                1 := {dynamic, 2, _},
-                2 := {static, 2, _},
-                3 := {dynamic, 3, _},
-                4 := {static, 4, _}
-            }
-        },
-        TemplateData
-    ).
-
-parse_tokens_stateful_format(Config) when is_list(Config) ->
+parse_alternating_static_dynamic(Config) when is_list(Config) ->
     Tokens = [
-        {static, 1, ~"<h1>"},
-        {dynamic, 1, ~"arizona_socket:get_binding(title, Socket)"},
-        {static, 1, ~"</h1>"}
+        {static, 1, ~"Hello "},
+        {dynamic, 1, ~"name"},
+        {static, 1, ~", you are "},
+        {dynamic, 1, ~"age"},
+        {static, 1, ~" years old."}
     ],
-    TemplateData = arizona_parser:parse_tokens(Tokens),
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"Hello ", ~", you are ", ~" years old."], Static),
+    ?assertEqual([{1, ~"name"}, {1, ~"age"}], Dynamic).
 
-    ?assertMatch(
-        #{
-            elems_order := [0, 1, 2],
-            elems := #{
-                0 := {static, 1, ~"<h1>"},
-                1 := {dynamic, 1, ~"arizona_socket:get_binding(title, Socket)"},
-                2 := {static, 1, ~"</h1>"}
-            }
-        },
-        TemplateData
-    ).
-
-%% Test stateful parsing with quoted variables
-parse_stateful_quoted_variables(Config) when is_list(Config) ->
-    Tokens = [
-        {static, 1, ~"<span>"},
-        {dynamic, 1, ~"arizona_socket:get_binding('user-name', Socket)"},
-        {static, 1, ~"</span>"}
-    ],
-    TemplateData = arizona_parser:parse_tokens(Tokens),
-
-    ?assertMatch(
-        #{
-            elems_order := [0, 1, 2],
-            elems := #{
-                0 := {static, 1, _},
-                1 := {dynamic, 1, _},
-                2 := {static, 1, _}
-            }
-        },
-        TemplateData
-    ).
-
-%% Test stateful parsing with multiple variables in one expression
-parse_stateful_multiple_variables(Config) when is_list(Config) ->
+parse_static_dynamic_static(Config) when is_list(Config) ->
     Tokens = [
         {static, 1, ~"<div>"},
-        {dynamic, 1, ~"""
-        arizona_socket:get_binding(first, Socket) ++
-        arizona_socket:get_binding(last, Socket)"
-        """},
+        {dynamic, 1, ~"content"},
         {static, 1, ~"</div>"}
     ],
-    TemplateData = arizona_parser:parse_tokens(Tokens),
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"<div>", ~"</div>"], Static),
+    ?assertEqual([{1, ~"content"}], Dynamic).
 
-    ?assertMatch(
-        #{
-            elems_order := [0, 1, 2],
-            elems := #{
-                0 := {static, 1, _},
-                1 := {dynamic, 1, _},
-                2 := {static, 1, _}
-            }
-        },
-        TemplateData
-    ).
-
-%% Test stateful parsing with no variables (no arizona_socket:get_binding calls)
-parse_stateful_no_variables(Config) when is_list(Config) ->
+parse_dynamic_static_dynamic(Config) when is_list(Config) ->
     Tokens = [
-        {static, 1, ~"<p>"},
-        {dynamic, 1, ~"some_other_function()"},
-        {static, 1, ~"</p>"}
+        {dynamic, 1, ~"first"},
+        {static, 1, ~" - "},
+        {dynamic, 1, ~"second"}
     ],
-    TemplateData = arizona_parser:parse_tokens(Tokens),
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"", ~" - "], Static),
+    ?assertEqual([{1, ~"first"}, {1, ~"second"}], Dynamic).
 
-    ?assertMatch(
-        #{
-            elems_order := [0, 1, 2],
-            elems := #{
-                0 := {static, 1, _},
-                1 := {dynamic, 1, _},
-                2 := {static, 1, _}
-            }
-        },
-        TemplateData
-    ).
-
-%% Test stateful parsing with comment tokens
-parse_stateful_with_comments(Config) when is_list(Config) ->
+parse_complex_template(Config) when is_list(Config) ->
     Tokens = [
-        {static, 1, ~"<div>"},
-        {comment, 1, ~" This is a comment "},
-        {dynamic, 1, ~"arizona_socket:get_binding(name, Socket)"},
-        {static, 1, ~"</div>"}
-    ],
-    TemplateData = arizona_parser:parse_tokens(Tokens),
-
-    %% Comments should be skipped without incrementing element index
-    ?assertMatch(
-        #{
-            elems_order := [0, 1, 2],
-            elems := #{
-                0 := {static, 1, ~"<div>"},
-                1 := {dynamic, 1, ~"arizona_socket:get_binding(name, Socket)"},
-                2 := {static, 1, ~"</div>"}
-            }
-        },
-        TemplateData
-    ).
-
-%% Test complex regex matching that triggers multi-element list handling
-parse_stateful_complex_regex_match(Config) when is_list(Config) ->
-    %% The regex pattern ~"arizona_socket:get_binding\\(([a-z][a-zA-Z_@]*|'(.*?)')"
-    %% has two capture groups. To trigger line 151 in pick_quoted_var, we need
-    %% to create a scenario where the regex captures multiple groups that result
-    %% in a list with more than one element being passed to pick_quoted_var.
-
-    %% This is a challenging edge case to trigger because the current regex pattern
-    %% and capture logic doesn't naturally create multi-element lists.
-    %% For now, let's create comprehensive tests that exercise the existing functionality
-    Tokens = [
-        {static, 1, ~"<span>"},
-        {dynamic, 1, ~"""
-        arizona_socket:get_binding('first-var', Socket) ++
-        arizona_socket:get_binding(second, Socket)
-        """},
-        {static, 1, ~"</span>"}
-    ],
-    TemplateData = arizona_parser:parse_tokens(Tokens),
-
-    %% Should extract elements correctly
-    ?assertMatch(
-        #{
-            elems_order := [0, 1, 2],
-            elems := #{
-                0 := {static, 1, ~"<span>"},
-                1 := {dynamic, 1, _},
-                2 := {static, 1, ~"</span>"}
-            }
-        },
-        TemplateData
-    ).
-
-%% --------------------------------------------------------------------
-%% List parsing tests
-%% --------------------------------------------------------------------
-
-parse_list_tokens_static_only(Config) when is_list(Config) ->
-    Tokens = [{static, 1, ~"<li>Static item</li>"}],
-    ListData = arizona_parser:parse_list_tokens(Tokens),
-
-    Expected = #{
-        static => [~"<li>Static item</li>"],
-        dynamic => #{
-            elems_order => [],
-            elems => #{}
-        }
-    },
-    ?assertEqual(Expected, ListData).
-
-parse_list_tokens_with_dynamic(Config) when is_list(Config) ->
-    Tokens = [
-        {static, 1, ~"<li>"},
-        {dynamic, 1, ~"foo"},
-        {static, 1, ~"</li>"}
-    ],
-    ListData = arizona_parser:parse_list_tokens(Tokens),
-
-    ?assertMatch(
-        #{
-            static := [~"<li>", ~"</li>"],
-            dynamic := #{
-                elems_order := [0],
-                elems := #{0 := {dynamic, 1, ~"foo"}}
-            }
-        },
-        ListData
-    ).
-
-parse_list_tokens_with_variables(Config) when is_list(Config) ->
-    FunText = ~"arizona_socket:get_binding(prefix, Socket) ++ item.name",
-    Tokens = [
-        {static, 1, ~"<li>"},
-        {dynamic, 1, FunText},
-        {static, 1, ~"</li>"}
-    ],
-    ListData = arizona_parser:parse_list_tokens(Tokens),
-
-    ?assertMatch(
-        #{
-            static := [~"<li>", ~"</li>"],
-            dynamic := #{
-                elems_order := [0],
-                elems := #{0 := {dynamic, 1, FunText}}
-            }
-        },
-        ListData
-    ).
-
-parse_list_tokens_with_comments(Config) when is_list(Config) ->
-    Tokens = [
-        {static, 1, ~"<li>"},
-        {comment, 1, ~" This is a comment "},
-        {dynamic, 1, ~"foo"},
-        {static, 1, ~"</li>"}
-    ],
-    ListData = arizona_parser:parse_list_tokens(Tokens),
-
-    %% Comments should be filtered out
-    ?assertMatch(
-        #{
-            static := [~"<li>", ~"</li>"],
-            dynamic := #{
-                elems_order := [0],
-                elems := #{0 := {dynamic, 1, ~"foo"}}
-            }
-        },
-        ListData
-    ).
-
-parse_list_tokens_empty(Config) when is_list(Config) ->
-    Tokens = [],
-    ListData = arizona_parser:parse_list_tokens(Tokens),
-
-    Expected = #{
-        static => [],
-        dynamic => #{
-            elems_order => [],
-            elems => #{}
-        }
-    },
-    ?assertEqual(Expected, ListData).
-
-parse_list_tokens_mixed_complex(Config) when is_list(Config) ->
-    FunText1 = ~"arizona_socket:get_binding(class_prefix, Socket) ++ item.name",
-    FunText2 = ~"foo",
-    Tokens = [
-        {static, 1, ~"<div class=\"item\">"},
-        {dynamic, 2, FunText1},
-        {static, 2, ~" - "},
-        {dynamic, 2, FunText2},
-        {comment, 3, ~" End of item "},
-        {static, 3, ~"</div>"}
-    ],
-    ListData = arizona_parser:parse_list_tokens(Tokens),
-
-    ?assertMatch(
-        #{
-            static := [~"<div class=\"item\">", ~" - ", ~"</div>"],
-            dynamic := #{
-                elems_order := [0, 1],
-                elems := #{
-                    0 := {dynamic, 2, FunText1},
-                    1 := {dynamic, 2, FunText2}
-                }
-            }
-        },
-        ListData
-    ).
-
-%% --------------------------------------------------------------------
-%% Static/Dynamic separation edge case tests
-%% These tests verify the correct behavior of separate_static_dynamic_for_list
-%% for all the edge cases we identified and fixed
-%% --------------------------------------------------------------------
-
-parse_list_consecutive_dynamics_at_start(Config) when is_list(Config) ->
-    % Test: "{foo}{bar}baz" -> static: ["", "", "baz"], dynamic: ["foo", "bar"]
-    Tokens = [
-        {dynamic, 1, ~"foo"},
-        {dynamic, 1, ~"bar"},
-        {static, 1, ~"baz"}
-    ],
-
-    Result = arizona_parser:parse_list_tokens(Tokens),
-    #{static := Static} = Result,
-
-    Expected = [~"", ~"", ~"baz"],
-    ?assertEqual(Expected, Static).
-
-parse_list_consecutive_dynamics_in_middle(Config) when is_list(Config) ->
-    % Test: "prefix{foo}{bar}suffix" -> static: ["prefix", "", "suffix"], dynamic: ["foo", "bar"]
-    Tokens = [
-        {static, 1, ~"prefix"},
-        {dynamic, 1, ~"foo"},
-        {dynamic, 1, ~"bar"},
-        {static, 1, ~"suffix"}
-    ],
-
-    Result = arizona_parser:parse_list_tokens(Tokens),
-    #{static := Static} = Result,
-
-    Expected = [~"prefix", ~"", ~"suffix"],
-    ?assertEqual(Expected, Static).
-
-parse_list_consecutive_dynamics_at_end(Config) when is_list(Config) ->
-    % Test: "prefix{foo}{bar}" -> static: ["prefix", ""], dynamic: ["foo", "bar"]
-    Tokens = [
-        {static, 1, ~"prefix"},
-        {dynamic, 1, ~"foo"},
-        {dynamic, 1, ~"bar"}
-    ],
-
-    Result = arizona_parser:parse_list_tokens(Tokens),
-    #{static := Static} = Result,
-
-    Expected = [~"prefix", ~""],
-    ?assertEqual(Expected, Static).
-
-parse_list_starts_with_dynamic(Config) when is_list(Config) ->
-    % Test: "{foo}bar" -> static: ["", "bar"], dynamic: ["foo"]
-    Tokens = [
-        {dynamic, 1, ~"foo"},
-        {static, 1, ~"bar"}
-    ],
-
-    Result = arizona_parser:parse_list_tokens(Tokens),
-    #{static := Static} = Result,
-
-    Expected = [~"", ~"bar"],
-    ?assertEqual(Expected, Static).
-
-parse_list_ends_with_dynamic(Config) when is_list(Config) ->
-    % Test: "foo{bar}" -> static: ["foo"], dynamic: ["bar"]
-    Tokens = [
-        {static, 1, ~"foo"},
-        {dynamic, 1, ~"bar"}
-    ],
-
-    Result = arizona_parser:parse_list_tokens(Tokens),
-    #{static := Static} = Result,
-
-    Expected = [~"foo"],
-    ?assertEqual(Expected, Static).
-
-parse_list_only_dynamics(Config) when is_list(Config) ->
-    % Test: "{foo}{bar}" -> static: ["", ""], dynamic: ["foo", "bar"]
-    Tokens = [
-        {dynamic, 1, ~"foo"},
-        {dynamic, 1, ~"bar"}
-    ],
-
-    Result = arizona_parser:parse_list_tokens(Tokens),
-    #{static := Static, dynamic := #{elems := DynamicElems}} = Result,
-
-    Expected = [~"", ~""],
-    ?assertEqual(Expected, Static),
-
-    % Verify dynamic elements are correctly indexed
-    ?assertMatch(
-        #{
-            0 := {dynamic, 1, ~"foo"},
-            1 := {dynamic, 1, ~"bar"}
-        },
-        DynamicElems
-    ).
-
-parse_list_alternating_pattern(Config) when is_list(Config) ->
-    % Test: "a{b}c{d}e" -> static: ["a", "c", "e"], dynamic: ["b", "d"]
-    Tokens = [
-        {static, 1, ~"a"},
-        {dynamic, 1, ~"b"},
-        {static, 1, ~"c"},
-        {dynamic, 1, ~"d"},
-        {static, 1, ~"e"}
-    ],
-
-    Result = arizona_parser:parse_list_tokens(Tokens),
-    #{static := Static} = Result,
-
-    Expected = [~"a", ~"c", ~"e"],
-    ?assertEqual(Expected, Static).
-
-parse_list_real_world_template(Config) when is_list(Config) ->
-    % Test the actual failing case that was fixed:
-    % "<li>{arizona_socket:get_binding(prefix, Socket)}_{I}</li>"
-    % Expected: static: ["<li>", "_", "</li>"], dynamic: [prefix_binding, "I"]
-    Tokens = [
-        {static, 1, ~"<li>"},
+        {static, 1, ~"<li class=\"item\">"},
         {dynamic, 1, ~"arizona_socket:get_binding(prefix, Socket)"},
         {static, 1, ~"_"},
         {dynamic, 1, ~"I"},
-        {static, 1, ~"</li>"}
+        {static, 1, ~": "},
+        {dynamic, 2, ~"item.name"},
+        {static, 2, ~"</li>"}
     ],
-
-    Result = arizona_parser:parse_list_tokens(Tokens),
-    #{static := Static, dynamic := #{elems := DynamicElems}} = Result,
-
-    ExpectedStatic = [~"<li>", ~"_", ~"</li>"],
-    ?assertEqual(ExpectedStatic, Static),
-
-    % Verify dynamic elements are correctly indexed
-    ?assertMatch(
-        #{
-            0 := {dynamic, 1, ~"arizona_socket:get_binding(prefix, Socket)"},
-            1 := {dynamic, 1, ~"I"}
-        },
-        DynamicElems
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"<li class=\"item\">", ~"_", ~": ", ~"</li>"], Static),
+    ?assertEqual(
+        [
+            {1, ~"arizona_socket:get_binding(prefix, Socket)"},
+            {1, ~"I"},
+            {2, ~"item.name"}
+        ],
+        Dynamic
     ).
+
+%% --------------------------------------------------------------------
+%% Edge case tests
+%% --------------------------------------------------------------------
+
+parse_starts_with_dynamic(Config) when is_list(Config) ->
+    Tokens = [
+        {dynamic, 1, ~"greeting"},
+        {static, 1, ~" World!"}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"", ~" World!"], Static),
+    ?assertEqual([{1, ~"greeting"}], Dynamic).
+
+parse_ends_with_dynamic(Config) when is_list(Config) ->
+    Tokens = [
+        {static, 1, ~"Hello "},
+        {dynamic, 1, ~"name"}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"Hello "], Static),
+    ?assertEqual([{1, ~"name"}], Dynamic).
+
+parse_consecutive_dynamics(Config) when is_list(Config) ->
+    Tokens = [
+        {static, 1, ~"Start: "},
+        {dynamic, 1, ~"first"},
+        {dynamic, 1, ~"second"},
+        {dynamic, 1, ~"third"},
+        {static, 1, ~" :End"}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"Start: ", ~"", ~"", ~" :End"], Static),
+    ?assertEqual([{1, ~"first"}, {1, ~"second"}, {1, ~"third"}], Dynamic).
+
+parse_consecutive_statics(Config) when is_list(Config) ->
+    Tokens = [
+        {dynamic, 1, ~"value"},
+        {static, 1, ~"part1"},
+        {static, 1, ~"part2"},
+        {static, 1, ~"part3"},
+        {dynamic, 1, ~"end"}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"", ~"part1", ~"part2", ~"part3"], Static),
+    ?assertEqual([{1, ~"value"}, {1, ~"end"}], Dynamic).
+
+parse_only_dynamics(Config) when is_list(Config) ->
+    Tokens = [
+        {dynamic, 1, ~"first"},
+        {dynamic, 2, ~"second"},
+        {dynamic, 3, ~"third"}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"", ~"", ~""], Static),
+    ?assertEqual([{1, ~"first"}, {2, ~"second"}, {3, ~"third"}], Dynamic).
+
+parse_only_statics(Config) when is_list(Config) ->
+    Tokens = [
+        {static, 1, ~"<div>"},
+        {static, 1, ~"Static content"},
+        {static, 1, ~"</div>"}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"<div>", ~"Static content", ~"</div>"], Static),
+    ?assertEqual([], Dynamic).
+
+%% --------------------------------------------------------------------
+%% Comment handling tests
+%% --------------------------------------------------------------------
+
+parse_comments_between_content(Config) when is_list(Config) ->
+    Tokens = [
+        {static, 1, ~"<div>"},
+        {comment, 1, ~" Header comment "},
+        {dynamic, 1, ~"content"},
+        {comment, 1, ~" Footer comment "},
+        {static, 1, ~"</div>"}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"<div>", ~"</div>"], Static),
+    ?assertEqual([{1, ~"content"}], Dynamic).
+
+parse_comments_skipped(Config) when is_list(Config) ->
+    Tokens = [
+        {comment, 1, ~" Start comment "},
+        {static, 1, ~"Hello "},
+        {dynamic, 1, ~"name"},
+        {comment, 1, ~" End comment "}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([~"Hello "], Static),
+    ?assertEqual([{1, ~"name"}], Dynamic).
+
+parse_only_comments(Config) when is_list(Config) ->
+    Tokens = [
+        {comment, 1, ~" Comment 1 "},
+        {comment, 2, ~" Comment 2 "},
+        {comment, 3, ~" Comment 3 "}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([], Static),
+    ?assertEqual([], Dynamic).
+
+%% --------------------------------------------------------------------
+%% Access function tests
+%% --------------------------------------------------------------------
+
+test_static_access(Config) when is_list(Config) ->
+    Tokens = [
+        {static, 1, ~"Hello "},
+        {dynamic, 1, ~"name"},
+        {static, 1, ~"!"}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Static = arizona_parser:static(Result),
+    ?assertEqual([~"Hello ", ~"!"], Static).
+
+test_dynamic_access(Config) when is_list(Config) ->
+    Tokens = [
+        {static, 1, ~"Count: "},
+        {dynamic, 2, ~"arizona_socket:get_binding(count, Socket)"}
+    ],
+    Result = arizona_parser:parse_tokens(Tokens),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([{2, ~"arizona_socket:get_binding(count, Socket)"}], Dynamic).
+
+test_access_empty_template(Config) when is_list(Config) ->
+    Result = arizona_parser:parse_tokens([]),
+    Static = arizona_parser:static(Result),
+    Dynamic = arizona_parser:dynamic(Result),
+    ?assertEqual([], Static),
+    ?assertEqual([], Dynamic).
