@@ -123,7 +123,37 @@ get_binding(Key, Bindings) ->
     StatefulTemplate :: '$arizona_stateful_template',
     Template :: template().
 render_stateful(Mod, Bindings) ->
-    {'$arizona_render_stateful_template', Mod, Bindings}.
+    fun(Socket) -> call_stateful(Mod, Bindings, Socket) end.
+
+-spec call_stateful(Mod, Bindings, Socket) -> {Template, Socket1} when
+    Mod :: module(),
+    Bindings :: arizona_socket:bindings(),
+    Socket :: arizona_socket:socket(),
+    Template :: arizona_template:template(),
+    Socket1 :: arizona_socket:socket().
+call_stateful(Mod, Bindings, Socket) ->
+    Id = maps:get(id, Bindings),
+    case arizona_socket:find_stateful_state(Id, Socket) of
+        {ok, State} ->
+            %% Apply new bindings to existing state before checking remount
+            UpdatedState = arizona_stateful:put_bindings(Bindings, State),
+            %% Update socket with new state and call render callback (which handles diffing)
+            Socket1 = arizona_socket:put_stateful_state(UpdatedState, Socket),
+            UpdatedBindings = arizona_stateful:get_bindings(UpdatedState),
+            Template = arizona_stateful:call_render_callback(Mod, UpdatedBindings),
+            {Template, Socket1};
+        error ->
+            State = arizona_stateful:new(Id, Mod, Bindings),
+            Socket1 = arizona_socket:put_stateful_state(State, Socket),
+            %% Call mount callback for new components
+            Socket2 = arizona_stateful:call_mount_callback(Mod, Socket1),
+            %% Call the component's render callback which handles
+            %% rendering and returns updated socket
+            MountedState = arizona_socket:get_stateful_state(Id, Socket2),
+            MountedBindings = arizona_stateful:get_bindings(MountedState),
+            Template = arizona_stateful:call_render_callback(Mod, MountedBindings),
+            {Template, Socket2}
+    end.
 
 -spec render_stateless(Module, Function, Bindings) -> {StatelessTemplate, Template, Bindings} when
     Module :: atom(),
@@ -132,4 +162,9 @@ render_stateful(Mod, Bindings) ->
     StatelessTemplate :: '$arizona_stateless_template',
     Template :: template().
 render_stateless(Mod, Fun, Bindings) ->
-    {'$arizona_render_stateless_template', Mod, Fun, Bindings}.
+    fun(Socket) -> call_stateless(Mod, Fun, Bindings, Socket) end.
+
+call_stateless(Mod, Fun, Bindings, Socket) ->
+    Template = arizona_stateless:call_render_callback(Mod, Fun, Bindings),
+    TempSocket = arizona_socket:with_temp_bindings(Bindings, Socket),
+    {Template, TempSocket}.
