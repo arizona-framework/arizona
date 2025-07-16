@@ -14,8 +14,7 @@ all() ->
         {group, dynamic_content},
         {group, mixed_content},
         {group, edge_cases},
-        {group, comment_handling},
-        {group, access_functions}
+        {group, comment_handling}
     ].
 
 groups() ->
@@ -51,40 +50,66 @@ groups() ->
             parse_comments_between_content,
             parse_comments_skipped,
             parse_only_comments
-        ]},
-        {access_functions, [parallel], [
-            test_static_access,
-            test_dynamic_access,
-            test_access_empty_template
         ]}
     ].
+
+%% --------------------------------------------------------------------
+%% Helper Functions
+%% --------------------------------------------------------------------
+
+%% Helper to evaluate AST and get template record
+eval_template_ast(AST) ->
+    {value, Template, _} = erl_eval:expr(erl_syntax:revert(AST), #{}),
+    Template.
+
+%% Helper to extract and test static content
+assert_static(Template, Expected) ->
+    ?assertEqual(Expected, arizona_template:static(Template)).
+
+%% Helper to test dynamic sequence
+assert_dynamic_sequence(Template, Expected) ->
+    ?assertEqual(Expected, arizona_template:dynamic_sequence(Template)).
+
+%% Helper to test dynamic annotations
+assert_dynamic_anno(Template, Expected) ->
+    ?assertEqual(Expected, tuple_to_list(arizona_template:dynamic_anno(Template))).
+
+%% Helper to test dynamic callback count
+assert_dynamic_count(Template, Expected) ->
+    ?assertEqual(Expected, tuple_size(arizona_template:dynamic(Template))).
 
 %% --------------------------------------------------------------------
 %% Basic parsing tests
 %% --------------------------------------------------------------------
 
 parse_empty_tokens(Config) when is_list(Config) ->
-    Result = arizona_parser:parse_tokens([]),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([], Static),
-    ?assertEqual([], Dynamic).
+    AST = arizona_parser:parse_tokens([]),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, []),
+    assert_dynamic_sequence(Template, []),
+    assert_dynamic_anno(Template, []),
+    assert_dynamic_count(Template, 0).
 
 parse_single_static(Config) when is_list(Config) ->
     Tokens = [{static, 1, ~"Hello World"}],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"Hello World"], Static),
-    ?assertEqual([], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"Hello World"]),
+    assert_dynamic_sequence(Template, []),
+    assert_dynamic_anno(Template, []),
+    assert_dynamic_count(Template, 0).
 
 parse_single_dynamic(Config) when is_list(Config) ->
     Tokens = [{dynamic, 1, ~"name"}],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~""], Static),
-    ?assertEqual([{1, ~"name"}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~""]),
+    assert_dynamic_sequence(Template, [1]),
+    assert_dynamic_anno(Template, [1]),
+    assert_dynamic_count(Template, 1).
 
 %% --------------------------------------------------------------------
 %% Static content tests
@@ -96,11 +121,13 @@ parse_multiple_static(Config) when is_list(Config) ->
         {static, 1, ~" "},
         {static, 1, ~"World"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"Hello", ~" ", ~"World"], Static),
-    ?assertEqual([], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"Hello", ~" ", ~"World"]),
+    assert_dynamic_sequence(Template, []),
+    assert_dynamic_anno(Template, []),
+    assert_dynamic_count(Template, 0).
 
 parse_static_with_html(Config) when is_list(Config) ->
     Tokens = [
@@ -108,11 +135,17 @@ parse_static_with_html(Config) when is_list(Config) ->
         {static, 1, ~"<p>Hello</p>"},
         {static, 1, ~"</div>"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"<div class=\"container\">", ~"<p>Hello</p>", ~"</div>"], Static),
-    ?assertEqual([], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [
+        ~"<div class=\"container\">",
+        ~"<p>Hello</p>",
+        ~"</div>"
+    ]),
+    assert_dynamic_sequence(Template, []),
+    assert_dynamic_anno(Template, []),
+    assert_dynamic_count(Template, 0).
 
 %% --------------------------------------------------------------------
 %% Dynamic content tests
@@ -123,20 +156,24 @@ parse_multiple_dynamic(Config) when is_list(Config) ->
         {dynamic, 1, ~"name"},
         {dynamic, 2, ~"age"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"", ~""], Static),
-    ?assertEqual([{1, ~"name"}, {2, ~"age"}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"", ~""]),
+    assert_dynamic_sequence(Template, [1, 2]),
+    assert_dynamic_anno(Template, [1, 2]),
+    assert_dynamic_count(Template, 2).
 
 parse_dynamic_with_complex_expr(Config) when is_list(Config) ->
     ExprText = ~"arizona_socket:get_binding(user_name, Socket)",
     Tokens = [{dynamic, 1, ExprText}],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~""], Static),
-    ?assertEqual([{1, ExprText}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~""]),
+    assert_dynamic_sequence(Template, [1]),
+    assert_dynamic_anno(Template, [1]),
+    assert_dynamic_count(Template, 1).
 
 %% --------------------------------------------------------------------
 %% Mixed content tests
@@ -150,11 +187,13 @@ parse_alternating_static_dynamic(Config) when is_list(Config) ->
         {dynamic, 1, ~"age"},
         {static, 1, ~" years old."}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"Hello ", ~", you are ", ~" years old."], Static),
-    ?assertEqual([{1, ~"name"}, {1, ~"age"}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"Hello ", ~", you are ", ~" years old."]),
+    assert_dynamic_sequence(Template, [1, 2]),
+    assert_dynamic_anno(Template, [1, 1]),
+    assert_dynamic_count(Template, 2).
 
 parse_static_dynamic_static(Config) when is_list(Config) ->
     Tokens = [
@@ -162,11 +201,13 @@ parse_static_dynamic_static(Config) when is_list(Config) ->
         {dynamic, 1, ~"content"},
         {static, 1, ~"</div>"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"<div>", ~"</div>"], Static),
-    ?assertEqual([{1, ~"content"}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"<div>", ~"</div>"]),
+    assert_dynamic_sequence(Template, [1]),
+    assert_dynamic_anno(Template, [1]),
+    assert_dynamic_count(Template, 1).
 
 parse_dynamic_static_dynamic(Config) when is_list(Config) ->
     Tokens = [
@@ -174,11 +215,13 @@ parse_dynamic_static_dynamic(Config) when is_list(Config) ->
         {static, 1, ~" - "},
         {dynamic, 1, ~"second"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"", ~" - "], Static),
-    ?assertEqual([{1, ~"first"}, {1, ~"second"}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"", ~" - "]),
+    assert_dynamic_sequence(Template, [1, 2]),
+    assert_dynamic_anno(Template, [1, 1]),
+    assert_dynamic_count(Template, 2).
 
 parse_complex_template(Config) when is_list(Config) ->
     Tokens = [
@@ -190,18 +233,13 @@ parse_complex_template(Config) when is_list(Config) ->
         {dynamic, 2, ~"item.name"},
         {static, 2, ~"</li>"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"<li class=\"item\">", ~"_", ~": ", ~"</li>"], Static),
-    ?assertEqual(
-        [
-            {1, ~"arizona_socket:get_binding(prefix, Socket)"},
-            {1, ~"I"},
-            {2, ~"item.name"}
-        ],
-        Dynamic
-    ).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"<li class=\"item\">", ~"_", ~": ", ~"</li>"]),
+    assert_dynamic_sequence(Template, [1, 2, 3]),
+    assert_dynamic_anno(Template, [1, 1, 2]),
+    assert_dynamic_count(Template, 3).
 
 %% --------------------------------------------------------------------
 %% Edge case tests
@@ -212,22 +250,26 @@ parse_starts_with_dynamic(Config) when is_list(Config) ->
         {dynamic, 1, ~"greeting"},
         {static, 1, ~" World!"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"", ~" World!"], Static),
-    ?assertEqual([{1, ~"greeting"}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"", ~" World!"]),
+    assert_dynamic_sequence(Template, [1]),
+    assert_dynamic_anno(Template, [1]),
+    assert_dynamic_count(Template, 1).
 
 parse_ends_with_dynamic(Config) when is_list(Config) ->
     Tokens = [
         {static, 1, ~"Hello "},
         {dynamic, 1, ~"name"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"Hello "], Static),
-    ?assertEqual([{1, ~"name"}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"Hello "]),
+    assert_dynamic_sequence(Template, [1]),
+    assert_dynamic_anno(Template, [1]),
+    assert_dynamic_count(Template, 1).
 
 parse_consecutive_dynamics(Config) when is_list(Config) ->
     Tokens = [
@@ -237,11 +279,13 @@ parse_consecutive_dynamics(Config) when is_list(Config) ->
         {dynamic, 1, ~"third"},
         {static, 1, ~" :End"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"Start: ", ~"", ~"", ~" :End"], Static),
-    ?assertEqual([{1, ~"first"}, {1, ~"second"}, {1, ~"third"}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"Start: ", ~"", ~"", ~" :End"]),
+    assert_dynamic_sequence(Template, [1, 2, 3]),
+    assert_dynamic_anno(Template, [1, 1, 1]),
+    assert_dynamic_count(Template, 3).
 
 parse_consecutive_statics(Config) when is_list(Config) ->
     Tokens = [
@@ -251,11 +295,13 @@ parse_consecutive_statics(Config) when is_list(Config) ->
         {static, 1, ~"part3"},
         {dynamic, 1, ~"end"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"", ~"part1", ~"part2", ~"part3"], Static),
-    ?assertEqual([{1, ~"value"}, {1, ~"end"}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"", ~"part1", ~"part2", ~"part3"]),
+    assert_dynamic_sequence(Template, [1, 2]),
+    assert_dynamic_anno(Template, [1, 1]),
+    assert_dynamic_count(Template, 2).
 
 parse_only_dynamics(Config) when is_list(Config) ->
     Tokens = [
@@ -263,11 +309,13 @@ parse_only_dynamics(Config) when is_list(Config) ->
         {dynamic, 2, ~"second"},
         {dynamic, 3, ~"third"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"", ~"", ~""], Static),
-    ?assertEqual([{1, ~"first"}, {2, ~"second"}, {3, ~"third"}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"", ~"", ~""]),
+    assert_dynamic_sequence(Template, [1, 2, 3]),
+    assert_dynamic_anno(Template, [1, 2, 3]),
+    assert_dynamic_count(Template, 3).
 
 parse_only_statics(Config) when is_list(Config) ->
     Tokens = [
@@ -275,11 +323,13 @@ parse_only_statics(Config) when is_list(Config) ->
         {static, 1, ~"Static content"},
         {static, 1, ~"</div>"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"<div>", ~"Static content", ~"</div>"], Static),
-    ?assertEqual([], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"<div>", ~"Static content", ~"</div>"]),
+    assert_dynamic_sequence(Template, []),
+    assert_dynamic_anno(Template, []),
+    assert_dynamic_count(Template, 0).
 
 %% --------------------------------------------------------------------
 %% Comment handling tests
@@ -293,11 +343,13 @@ parse_comments_between_content(Config) when is_list(Config) ->
         {comment, 1, ~" Footer comment "},
         {static, 1, ~"</div>"}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"<div>", ~"</div>"], Static),
-    ?assertEqual([{1, ~"content"}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"<div>", ~"</div>"]),
+    assert_dynamic_sequence(Template, [1]),
+    assert_dynamic_anno(Template, [1]),
+    assert_dynamic_count(Template, 1).
 
 parse_comments_skipped(Config) when is_list(Config) ->
     Tokens = [
@@ -306,11 +358,13 @@ parse_comments_skipped(Config) when is_list(Config) ->
         {dynamic, 1, ~"name"},
         {comment, 1, ~" End comment "}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([~"Hello "], Static),
-    ?assertEqual([{1, ~"name"}], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
+
+    assert_static(Template, [~"Hello "]),
+    assert_dynamic_sequence(Template, [1]),
+    assert_dynamic_anno(Template, [1]),
+    assert_dynamic_count(Template, 1).
 
 parse_only_comments(Config) when is_list(Config) ->
     Tokens = [
@@ -318,38 +372,10 @@ parse_only_comments(Config) when is_list(Config) ->
         {comment, 2, ~" Comment 2 "},
         {comment, 3, ~" Comment 3 "}
     ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([], Static),
-    ?assertEqual([], Dynamic).
+    AST = arizona_parser:parse_tokens(Tokens),
+    Template = eval_template_ast(AST),
 
-%% --------------------------------------------------------------------
-%% Access function tests
-%% --------------------------------------------------------------------
-
-test_static_access(Config) when is_list(Config) ->
-    Tokens = [
-        {static, 1, ~"Hello "},
-        {dynamic, 1, ~"name"},
-        {static, 1, ~"!"}
-    ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Static = arizona_parser:static(Result),
-    ?assertEqual([~"Hello ", ~"!"], Static).
-
-test_dynamic_access(Config) when is_list(Config) ->
-    Tokens = [
-        {static, 1, ~"Count: "},
-        {dynamic, 2, ~"arizona_socket:get_binding(count, Socket)"}
-    ],
-    Result = arizona_parser:parse_tokens(Tokens),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([{2, ~"arizona_socket:get_binding(count, Socket)"}], Dynamic).
-
-test_access_empty_template(Config) when is_list(Config) ->
-    Result = arizona_parser:parse_tokens([]),
-    Static = arizona_parser:static(Result),
-    Dynamic = arizona_parser:dynamic(Result),
-    ?assertEqual([], Static),
-    ?assertEqual([], Dynamic).
+    assert_static(Template, []),
+    assert_dynamic_sequence(Template, []),
+    assert_dynamic_anno(Template, []),
+    assert_dynamic_count(Template, 0).

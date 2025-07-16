@@ -2,38 +2,39 @@
 -moduledoc ~"""
 Template parser for Arizona Web Framework.
 
-Converts tokenized Arizona templates into structured records optimized for rendering.
-Processes tokens from `arizona_scanner` and separates static content from dynamic expressions.
+Converts tokenized Arizona templates into AST that creates optimized template structures.
+Processes tokens from `arizona_scanner` and generates compile-time AST for efficient rendering.
 
-## Output Structure
+## AST Generation
+
+Returns AST that creates `arizona_template:template()` tuples:
 
 ```erlang
-#parsed_template{
-    static = [<<"<div>">>, <<" - ">>, <<"</div>">>],
-    dynamic = [{1, <<"name">>}, {1, <<"age">>}]
-}
+{template, Static, Dynamic, DynamicSequence, DynamicAnno}
 ```
 
-For template `<div>{name} - {age}</div>`:
-- **static**: Binary segments in template order
-- **dynamic**: Expression tuples with line numbers
+Where:
+- **Static**: List of UTF-8 binaries in template order
+- **Dynamic**: Tuple of callback functions `fun(_@Bindings) -> binary() end`
+- **DynamicSequence**: `[1,2,3,...,N]` for efficient tuple traversal
+- **DynamicAnno**: Tuple of line numbers for debugging
 
 ## Features
 
-- **High Performance**: Records and tuples for memory efficiency
-- **Separated Content**: Static and dynamic parts split for fast rendering
+- **Compile-time AST**: Generates optimized syntax trees for performance
+- **Tuple Structure**: High-performance data layout with precomputed sequences  
+- **Callback Functions**: Dynamic expressions as first-class functions
 - **Line Tracking**: Preserves source locations for debugging
-- **Comment Filtering**: Removes comment tokens
-- **Opaque Type**: Encapsulated API design
+- **Comment Filtering**: Removes comment tokens during parsing
 
-## Examples
+## Processing Pipeline
 
-- Static: `Hello World` → `#parsed_template{static = [<<"Hello World">>], dynamic = []}`
-- Dynamic: `{name}` → `#parsed_template{static = [<<"">>], dynamic = [{1, <<"name">>}]}`
-- Mixed: `Hi {name}!` → `#parsed_template{static = [<<"Hi ">>, <<"!">>],
-  dynamic = [{1, <<"name">>}]}`
+1. **Input**: Token stream from `arizona_scanner`
+2. **Separation**: Static content and dynamic expressions
+3. **AST Creation**: Compile-time syntax trees for template structures
+4. **Output**: AST that evaluates to `arizona_template:template()` instances
 
-The parser provides the foundation for Arizona's template rendering system.
+Access template data through `arizona_template` module functions.
 """.
 
 %% --------------------------------------------------------------------
@@ -41,8 +42,6 @@ The parser provides the foundation for Arizona's template rendering system.
 %% --------------------------------------------------------------------
 
 -export([parse_tokens/1]).
--export([static/1]).
--export([dynamic/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -54,64 +53,122 @@ The parser provides the foundation for Arizona's template rendering system.
 %% Types definitions
 %% --------------------------------------------------------------------
 
--record(parsed_template, {
-    static :: [StaticContent :: binary()],
-    dynamic :: [{Line :: pos_integer(), ExprText :: binary()}]
-}).
-
 -doc ~"""
-Template parsing result with separated static and dynamic content.
+Template parsing result as AST that creates arizona_template:template() record.
 
+Returns compile-time AST that will create #template{} instances at runtime.
 Static parts are binary segments in template order.
-Dynamic parts are expression tuples with line information.
-Parse transform handles variable analysis separately.
+Dynamic parts become callback functions in tuple format.
 """.
--opaque parsed_template() :: #parsed_template{}.
+-type parsed_template() :: erl_syntax:syntaxTree().
 
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
 -doc ~"""
-Parse tokens into template structure.
+Parse tokens into template AST.
 
-Converts tokens into a record with separated static and dynamic parts.
+Converts tokens into AST that creates arizona_template:template() record.
+Static parts are binary segments, dynamic parts become callback functions.
 
-Returns:
-- `static`: Binary segments in template order
-- `dynamic`: Expression tuples with line numbers
-
-Parse transform handles variable analysis.
+Returns AST that creates #template{} record at runtime.
 """.
 -spec parse_tokens(Tokens) -> ParsedTemplate when
     Tokens :: [arizona_scanner:token()],
     ParsedTemplate :: parsed_template().
 parse_tokens(Tokens) ->
     {StaticParts, DynamicElements} = separate_static_dynamic(Tokens),
-    #parsed_template{
-        static = StaticParts,
-        dynamic = DynamicElements
-    }.
+    create_template_ast(StaticParts, DynamicElements).
 
--doc ~"""
-Get static content from parsed template.
+%% Create AST that builds arizona_template:template() record
+-spec create_template_ast(StaticParts, DynamicElements) -> erl_syntax:syntaxTree() when
+    StaticParts :: [binary()],
+    DynamicElements :: [{pos_integer(), binary()}].
+create_template_ast(StaticParts, DynamicElements) ->
+    % Create static list AST
+    StaticListAST = create_static_list_ast(StaticParts),
 
-Returns the list of static binary segments in template order.
-""".
--spec static(ParsedTemplate) -> [binary()] when
-    ParsedTemplate :: parsed_template().
-static(#parsed_template{static = Static}) ->
-    Static.
+    % Convert dynamic elements to callback functions and create tuple AST
+    {DynamicTupleAST, DynamicAnnoAST, DynamicSequenceAST} = create_dynamic_ast(DynamicElements),
 
--doc ~"""
-Get dynamic content from parsed template.
+    % Create tuple AST: {template, Static, Dynamic, DynamicSequence, DynamicAnno}
+    erl_syntax:tuple([
+        erl_syntax:atom(template),
+        StaticListAST,
+        DynamicTupleAST,
+        DynamicSequenceAST,
+        DynamicAnnoAST
+    ]).
 
-Returns the list of dynamic expression tuples with line numbers.
-""".
--spec dynamic(ParsedTemplate) -> [{pos_integer(), binary()}] when
-    ParsedTemplate :: parsed_template().
-dynamic(#parsed_template{dynamic = Dynamic}) ->
-    Dynamic.
+%% Create AST for static list
+-spec create_static_list_ast(StaticParts) -> erl_syntax:syntaxTree() when
+    StaticParts :: [binary()].
+create_static_list_ast(StaticParts) ->
+    StaticElements = [
+        erl_syntax:binary([
+            erl_syntax:binary_field(
+                erl_syntax:string(binary_to_list(Part)),
+                none,
+                [erl_syntax:atom(utf8)]
+            )
+        ])
+     || Part <- StaticParts
+    ],
+    erl_syntax:list(StaticElements).
+
+%% Create AST for dynamic elements (tuple, annotations, sequence)
+-spec create_dynamic_ast(DynamicElements) ->
+    {erl_syntax:syntaxTree(), erl_syntax:syntaxTree(), erl_syntax:syntaxTree()}
+when
+    DynamicElements :: [{pos_integer(), binary()}].
+create_dynamic_ast([]) ->
+    % Empty case: empty tuple, empty tuple, empty sequence
+    EmptyTuple = erl_syntax:tuple([]),
+    EmptySequence = erl_syntax:list([]),
+    {EmptyTuple, EmptyTuple, EmptySequence};
+create_dynamic_ast(DynamicElements) ->
+    % Create callback functions and extract line numbers
+    {CallbackFuns, LineNumbers} = lists:unzip([
+        create_dynamic_callback_ast(Line, ExprText)
+     || {Line, ExprText} <- DynamicElements
+    ]),
+
+    % Create tuples and sequence
+    DynamicTuple = erl_syntax:tuple(CallbackFuns),
+    DynamicAnno = erl_syntax:tuple([erl_syntax:integer(Line) || Line <- LineNumbers]),
+    DynamicSequence = erl_syntax:list([
+        erl_syntax:integer(N)
+     || N <- lists:seq(1, length(DynamicElements))
+    ]),
+
+    {DynamicTuple, DynamicAnno, DynamicSequence}.
+
+%% Create callback function AST for dynamic element
+-spec create_dynamic_callback_ast(Line, ExprText) ->
+    {erl_syntax:syntaxTree(), pos_integer()}
+when
+    Line :: pos_integer(),
+    ExprText :: binary().
+create_dynamic_callback_ast(Line, ExprText) ->
+    % Create fun(_@Bindings) -> ExprText end
+    % For now, simple approach - return the expression as binary
+    % TODO: Parse ExprText into proper AST expressions
+
+    BindingsVar = erl_syntax:variable('_@Bindings'),
+    ExprBody = erl_syntax:binary([
+        erl_syntax:binary_field(
+            erl_syntax:string(binary_to_list(ExprText)),
+            none,
+            [erl_syntax:atom(utf8)]
+        )
+    ]),
+
+    CallbackFun = erl_syntax:fun_expr([
+        erl_syntax:clause([BindingsVar], none, [ExprBody])
+    ]),
+
+    {CallbackFun, Line}.
 
 %% --------------------------------------------------------------------
 %% Private functions
