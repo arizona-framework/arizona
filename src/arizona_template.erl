@@ -123,13 +123,13 @@ get_binding(Key, Bindings) ->
     StatefulTemplate :: '$arizona_stateful_template',
     Template :: template().
 render_stateful(Mod, Bindings) ->
-    {'$arizona_stateful_template', arizona_stateful:call_render_callback(Mod, Bindings)}.
+    {'$arizona_render_stateful_template', Mod, Bindings}.
 
--spec render_stateless(Module, Function, Bindings) -> {StatelessTemplate, Template} when
+-spec render_stateless(Module, Function, Bindings) -> {StatelessTemplate, Template, Bindings} when
     Module :: atom(),
     Function :: atom(),
     Bindings :: map(),
     StatelessTemplate :: '$arizona_stateless_template',
     Template :: template().
 render_stateless(Mod, Fun, Bindings) ->
-    {'$arizona_stateless_template', arizona_stateless:call_render_callback(Mod, Fun, Bindings)}.
+    {'$arizona_render_stateless_template', Mod, Fun, Bindings}.
