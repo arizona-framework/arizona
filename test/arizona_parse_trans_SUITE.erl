@@ -61,7 +61,9 @@ create_test_module(ModuleName, TemplateContent) ->
         {function, 3, test_func, 0, [
             {clause, 3, [], [], [
                 {call, 4, {remote, 4, {atom, 4, arizona_template}, {atom, 4, from_string}}, [
-                    create_template_arg(TemplateContent)
+                    create_template_arg(TemplateContent),
+                    % Empty bindings map
+                    {map, 4, []}
                 ]}
             ]}
         ]}
@@ -148,7 +150,8 @@ transform_non_string_arg(Config) when is_list(Config) ->
         {function, 3, test_func, 0, [
             {clause, 3, [], [], [
                 {call, 4, {remote, 4, {atom, 4, arizona_template}, {atom, 4, from_string}}, [
-                    create_template_arg(variable)
+                    create_template_arg(variable),
+                    {map, 4, []}
                 ]}
             ]}
         ]}
@@ -188,10 +191,12 @@ transform_nested_calls(Config) when is_list(Config) ->
             {clause, 3, [], [], [
                 {tuple, 4, [
                     {call, 5, {remote, 5, {atom, 5, arizona_template}, {atom, 5, from_string}}, [
-                        create_template_arg(~"First {a}")
+                        create_template_arg(~"First {a}"),
+                        {map, 5, []}
                     ]},
                     {call, 6, {remote, 6, {atom, 6, arizona_template}, {atom, 6, from_string}}, [
-                        create_template_arg(~"Second {b}")
+                        create_template_arg(~"Second {b}"),
+                        {map, 6, []}
                     ]}
                 ]}
             ]}
@@ -221,14 +226,16 @@ transform_multiple_templates(Config) when is_list(Config) ->
         {function, 3, func1, 0, [
             {clause, 3, [], [], [
                 {call, 4, {remote, 4, {atom, 4, arizona_template}, {atom, 4, from_string}}, [
-                    create_template_arg(~"Template 1")
+                    create_template_arg(~"Template 1"),
+                    {map, 4, []}
                 ]}
             ]}
         ]},
         {function, 5, func2, 0, [
             {clause, 5, [], [], [
                 {call, 6, {remote, 6, {atom, 6, arizona_template}, {atom, 6, from_string}}, [
-                    create_template_arg(~"Template 2")
+                    create_template_arg(~"Template 2"),
+                    {map, 6, []}
                 ]}
             ]}
         ]}
@@ -293,9 +300,11 @@ transform_eval_error(Config) when is_list(Config) ->
         {attribute, 2, export, [{test_func, 0}]},
         {function, 3, test_func, 0, [
             {clause, 3, [], [], [
-                {call, 4, {remote, 4, {atom, 4, arizona_template}, {atom, 4, from_string}},
+                {call, 4, {remote, 4, {atom, 4, arizona_template}, {atom, 4, from_string}}, [
                     % This will cause eval error
-                    [{call, 5, {atom, 5, undefined_function}, []}]}
+                    {call, 5, {atom, 5, undefined_function}, []},
+                    {map, 4, []}
+                ]}
             ]}
         ]}
     ],
@@ -325,14 +334,15 @@ test_extract_module_name(Config) when is_list(Config) ->
     ok.
 
 test_analyze_application(Config) when is_list(Config) ->
-    % Create application node for arizona_template:from_string/1
+    % Create application node for arizona_template:from_string/2
     AppNode =
         {call, 1, {remote, 1, {atom, 1, arizona_template}, {atom, 1, from_string}}, [
-            {string, 1, "test"}
+            {string, 1, "test"},
+            {map, 1, []}
         ]},
 
     Result = arizona_parse_trans:analyze_application(AppNode),
-    ?assertEqual({arizona_template, from_string, 1, [{string, 1, "test"}]}, Result),
+    ?assertEqual({arizona_template, from_string, 2, [{string, 1, "test"}, {map, 1, []}]}, Result),
 
     % Test with non-remote call
     LocalCall = {call, 1, {atom, 1, local_func}, []},
