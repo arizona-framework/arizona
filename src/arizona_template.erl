@@ -4,6 +4,8 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([from_string/1]).
+-export([from_string/4]).
 -export([static/1]).
 -export([dynamic/1]).
 -export([dynamic_sequence/1]).
@@ -31,6 +33,62 @@
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
+
+-doc ~""""
+Create template from string content.
+
+Processes template string through scanner and parser pipeline to create
+an optimized template structure ready for rendering. Handles static content,
+dynamic expressions, and comments.
+
+## Example
+
+```erlang
+Template = arizona_template:from_string(~"""
+<div class="user">
+    Hello {Username}!
+</div>
+"""),
+Static = arizona_template:static(Template),
+Dynamic = arizona_template:dynamic(Template).
+```
+"""".
+-spec from_string(TemplateContent) -> template() when
+    TemplateContent :: binary().
+from_string(TemplateContent) ->
+    from_string(erlang, 1, TemplateContent, #{}).
+
+-doc ~"""
+Create template from string with module context.
+
+Internal function used by parse transforms and compile-time processing.
+Provides full control over evaluation context including module name,
+line number, and bindings.
+""".
+-spec from_string(Module, Line, TemplateContent, Bindings) -> template() when
+    Module :: atom(),
+    Line :: pos_integer(),
+    TemplateContent :: binary(),
+    Bindings :: map().
+from_string(Module, Line, TemplateContent, Bindings) when
+    is_atom(Module), is_integer(Line), is_binary(TemplateContent), is_map(Bindings)
+->
+    % Scan template content into tokens
+    Tokens = arizona_scanner:scan(#{line => Line}, TemplateContent),
+
+    % Parse tokens into AST
+    AST = arizona_parser:parse_tokens(Tokens),
+
+    % Evaluate AST to get template record
+    erl_eval:expr(
+        erl_syntax:revert(AST),
+        Bindings,
+        {value, fun(Function, Args) ->
+            apply(Module, Function, Args)
+        end},
+        none,
+        value
+    ).
 
 -spec static(template()) -> [binary()].
 static(#template{static = Static}) ->
