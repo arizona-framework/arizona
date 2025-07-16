@@ -1,7 +1,7 @@
 -module(arizona_todo_app_live).
 -encoding(utf8).
 -behaviour(arizona_live).
--compile({parse_transform, arizona_parse_transform}).
+%-compile({parse_transform, arizona_parse_transform}).
 -arizona_parse_transform([render/1]).
 -export([
     mount/2,

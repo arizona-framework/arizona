@@ -10,6 +10,9 @@
 -export([dynamic/1]).
 -export([dynamic_sequence/1]).
 -export([dynamic_anno/1]).
+-export([get_binding/2]).
+-export([render_stateful/2]).
+-export([render_stateless/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -83,7 +86,7 @@ from_string(Module, Line, TemplateContent, Bindings) when
     % Evaluate AST to get template record
     erl_eval:expr(
         erl_syntax:revert(AST),
-        #{'Bindings' => Bindings},
+        Bindings#{'Bindings' => Bindings},
         {value, fun(Function, Args) ->
             apply(Module, Function, Args)
         end},
@@ -106,3 +109,27 @@ dynamic_sequence(#template{dynamic_sequence = Sequence}) ->
 -spec dynamic_anno(template()) -> tuple().
 dynamic_anno(#template{dynamic_anno = Anno}) ->
     Anno.
+
+-spec get_binding(Key, Bindings) -> Value when
+    Key :: atom(),
+    Bindings :: map(),
+    Value :: dynamic().
+get_binding(Key, Bindings) ->
+    maps:get(Key, Bindings).
+
+-spec render_stateful(Module, Bindings) -> {StatefulTemplate, Template} when
+    Module :: atom(),
+    Bindings :: map(),
+    StatefulTemplate :: '$arizona_stateful_template',
+    Template :: template().
+render_stateful(Mod, Bindings) ->
+    {'$arizona_stateful_template', arizona_stateful:call_render_callback(Mod, Bindings)}.
+
+-spec render_stateless(Module, Function, Bindings) -> {StatelessTemplate, Template} when
+    Module :: atom(),
+    Function :: atom(),
+    Bindings :: map(),
+    StatelessTemplate :: '$arizona_stateless_template',
+    Template :: template().
+render_stateless(Mod, Fun, Bindings) ->
+    {'$arizona_stateless_template', arizona_stateless:call_render_callback(Mod, Fun, Bindings)}.

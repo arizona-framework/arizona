@@ -1,6 +1,7 @@
 -module(arizona_counter_live).
 -behaviour(arizona_live).
--compile({parse_transform, arizona_parse_transform}).
+-compile([nowarn_unused_vars]).
+%-compile({parse_transform, arizona_parse_transform}).
 -arizona_parse_transform([render/1]).
 
 -export([mount/2, render/1, handle_event/3]).

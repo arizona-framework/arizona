@@ -1,5 +1,5 @@
 -module(arizona_todo_app_layout).
--compile({parse_transform, arizona_parse_transform}).
+%-compile({parse_transform, arizona_parse_transform}).
 -arizona_parse_transform([render/1]).
 -export([render/1]).
 

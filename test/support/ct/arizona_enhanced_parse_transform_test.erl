@@ -1,5 +1,6 @@
 -module(arizona_enhanced_parse_transform_test).
--compile({parse_transform, arizona_parse_transform}).
+-compile([nowarn_unused_vars]).
+%-compile({parse_transform, arizona_parse_transform}).
 -arizona_parse_transform([render/1]).
 
 -export([render/1]).
