@@ -62,24 +62,11 @@ call_stateful(Mod, Bindings, Socket) ->
         {ok, State} ->
             %% Apply new bindings to existing state before checking remount
             UpdatedState = arizona_stateful:put_bindings(Bindings, State),
-            case arizona_stateful:should_remount(UpdatedState) of
-                true ->
-                    Socket1 = arizona_stateful:call_unmount_callback(Mod, Socket),
-                    %% Call mount callback after unmount for remount
-                    Socket2 = arizona_stateful:call_mount_callback(Mod, Socket1),
-                    %% Call the component's render callback which handles
-                    %% rendering and returns updated socket
-                    MountedState = arizona_socket:get_current_stateful_state(Socket2),
-                    MountedBindings = arizona_stateful:get_bindings(MountedState),
-                    Template = arizona_stateful:call_render_callback(Mod, MountedBindings),
-                    {Template, Socket2};
-                false ->
-                    %% Update socket with new state and call render callback (which handles diffing)
-                    Socket1 = arizona_socket:put_stateful_state(UpdatedState, Socket),
-                    UpdatedBindings = arizona_stateful:get_bindings(UpdatedState),
-                    Template = arizona_stateful:call_render_callback(Mod, UpdatedBindings),
-                    {Template, Socket1}
-            end;
+            %% Update socket with new state and call render callback (which handles diffing)
+            Socket1 = arizona_socket:put_stateful_state(UpdatedState, Socket),
+            UpdatedBindings = arizona_stateful:get_bindings(UpdatedState),
+            Template = arizona_stateful:call_render_callback(Mod, UpdatedBindings),
+            {Template, Socket1};
         error ->
             State = arizona_stateful:new(Id, Mod, Bindings),
             Socket1 = arizona_socket:put_stateful_state(State, Socket),
@@ -87,7 +74,7 @@ call_stateful(Mod, Bindings, Socket) ->
             Socket2 = arizona_stateful:call_mount_callback(Mod, Socket1),
             %% Call the component's render callback which handles
             %% rendering and returns updated socket
-            MountedState = arizona_socket:get_current_stateful_state(Socket2),
+            MountedState = arizona_socket:get_stateful_state(Id, Socket2),
             MountedBindings = arizona_stateful:get_bindings(MountedState),
             Template = arizona_stateful:call_render_callback(Mod, MountedBindings),
             {Template, Socket2}
