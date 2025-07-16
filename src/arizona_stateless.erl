@@ -95,10 +95,10 @@ Ensure the target module and function exist and have the correct signature.
 Direct function invocation with minimal overhead makes this suitable for
 frequently called presentational components.
 """.
--spec call_render_callback(Mod, Fun, Socket) -> Socket1 when
+-spec call_render_callback(Mod, Fun, Bindings) -> Template when
     Mod :: module(),
     Fun :: atom(),
-    Socket :: arizona_socket:socket(),
-    Socket1 :: arizona_socket:socket().
-call_render_callback(Mod, Fun, Socket) ->
-    apply(Mod, Fun, [Socket]).
+    Bindings :: arizona_socket:bindings(),
+    Template :: arizona_template:template().
+call_render_callback(Mod, Fun, Bindings) ->
+    apply(Mod, Fun, [Bindings]).

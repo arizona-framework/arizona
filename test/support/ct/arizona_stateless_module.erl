@@ -1,5 +1,5 @@
 -module(arizona_stateless_module).
--compile({parse_transform, arizona_parse_transform}).
+%-compile({parse_transform, arizona_parse_transform}).
 -arizona_parse_transform([basic_render/1]).
 -arizona_parse_transform([render_with_bindings/1]).
 -arizona_parse_transform([render_simple/1]).

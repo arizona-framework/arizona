@@ -1,6 +1,6 @@
 -module(arizona_live_component_with_info).
 -behaviour(arizona_live).
--compile({parse_transform, arizona_parse_transform}).
+%-compile({parse_transform, arizona_parse_transform}).
 -arizona_parse_transform([render/1]).
 
 %% arizona_live callbacks

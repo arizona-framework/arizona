@@ -92,7 +92,7 @@ test_stateless_transform(Config) when is_list(Config) ->
     % Create a simple AST with a stateless render call using merl:quote
     Forms = merl:quote(~""""
     -module(arizona_stateless_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
@@ -131,7 +131,7 @@ test_stateful_transform(Config) when is_list(Config) ->
     % since the actual transformation is complex
     Forms = merl:quote(~"""
     -module(test_stateful_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
@@ -160,7 +160,7 @@ test_nested_function_calls(Config) when is_list(Config) ->
     % Create a simple AST with nested calls
     Forms = merl:quote(~""""
     -module(test_nested_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_nested/1]).
     -export([test_nested/1]).
     test_nested(Socket) ->
@@ -205,7 +205,7 @@ test_non_binary_template_error(Config) when is_list(Config) ->
     % Create a form with a variable template (should raise badarg)
     Forms = merl:quote(~"""
     -module(test_badarg_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) -> arizona_html:render_stateless(Template, Socket).
@@ -230,7 +230,7 @@ test_stateful_transform_with_variables(Config) when is_list(Config) ->
     % Create a stateful render call with variables using merl:quote
     Forms = merl:quote(~""""
     -module(test_stateful_vars_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
@@ -262,7 +262,7 @@ test_stateless_parse_error(Config) when is_list(Config) ->
     % Mock arizona_scanner to return invalid tokens that will cause parsing to fail
     Forms = merl:quote(~"""
     -module(test_stateless_error_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) -> arizona_html:render_stateless(~"Invalid {unclosed", Socket).
@@ -277,7 +277,7 @@ test_stateful_parse_error(Config) when is_list(Config) ->
     % Create a stateful template that will cause parsing to fail
     Forms = merl:quote(~"""
     -module(test_stateful_error_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) -> arizona_html:render_stateful(~"Invalid {unclosed", Socket).
@@ -303,7 +303,7 @@ test_stateful_non_binary_template_error(Config) when is_list(Config) ->
     % Create a form with a variable stateful template (should raise badarg)
     Forms = merl:quote(~"""
     -module(test_stateful_badarg_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) -> arizona_html:render_stateful(Template, Socket).
@@ -318,7 +318,7 @@ test_complex_stateful_template_with_multiple_variables(Config) when is_list(Conf
     % Create a complex stateful template with multiple variables
     Forms = merl:quote(~""""
     -module(test_complex_stateful_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
@@ -354,7 +354,7 @@ test_stateless_binary_elements(Config) when is_list(Config) ->
     % Create a stateless template that will exercise binary element handling
     Forms = merl:quote(~""""
     -module(test_stateless_binary_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
@@ -454,7 +454,7 @@ test_nested_arizona_optimization(Config) when is_list(Config) ->
     % to test socket variable shadowing fix
     Forms = merl:quote(~""""""
     -module(test_nested_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
@@ -517,7 +517,7 @@ test_slot_template_transform(Config) when is_list(Config) ->
     % Test that render_slot calls with binary template defaults get optimized
     TestCode = ~""""
     -module(test_slot_optimization).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
 
@@ -557,7 +557,7 @@ test_arizona_attribute_extraction(Config) when is_list(Config) ->
     % Create AST with arizona_parse_transform attribute
     Forms = merl:quote(~""""
     -module(test_enhanced_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([render/1, render_card/2]).
     -export([render/1, render_card/2]).
 
@@ -815,7 +815,7 @@ test_enhanced_parse_transform_end_to_end(Config) when is_list(Config) ->
     % Define a test module source code with enhanced parse transform
     Forms = merl:quote(~""""
     -module(test_enhanced_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([render/1]).
     -export([render/1]).
 
@@ -853,7 +853,7 @@ test_enhanced_parse_transform_todo_app_scenario(Config) when is_list(Config) ->
     % Define the exact test_todo_enhanced module from the shell example
     Forms = merl:quote(~""""
     -module(test_todo_enhanced).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([render/1]).
     -export([render/1]).
 
@@ -1052,7 +1052,7 @@ test_no_arizona_parse_transform_attribute_error(Config) when is_list(Config) ->
     % Create a module with parse transform but no arizona_parse_transform attribute
     Forms = merl:quote(~"""
     -module(test_no_attribute_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -export([test_function/0]).
     test_function() -> ok.
     """),
@@ -1068,7 +1068,7 @@ test_render_live_non_binary_template_error(Config) when is_list(Config) ->
     % Create a form with a variable render_live template (should raise badarg)
     Forms = merl:quote(~"""
     -module(test_live_badarg_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) -> arizona_html:render_live(Template, Socket).
@@ -1083,7 +1083,7 @@ test_edge_case_coverage(Config) when is_list(Config) ->
     % Test variable assignment with no dependencies
     Forms = merl:quote(~"""
     -module(test_edge_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
@@ -1114,7 +1114,7 @@ test_variable_name_validation(Config) when is_list(Config) ->
     % Test with lowercase variable name (should return false)
     Forms = merl:quote(~"""
     -module(test_lowercase_var_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
@@ -1146,7 +1146,7 @@ test_render_live_edge_cases(Config) when is_list(Config) ->
     % Test render_live with valid binary template
     Forms = merl:quote(~"""
     -module(test_live_edge_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
@@ -1186,7 +1186,7 @@ test_comprehensive_edge_cases(Config) when is_list(Config) ->
     % Test function with invalid get_binding call patterns
     Forms1 = merl:quote(~"""
     -module(test_invalid_binding_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
@@ -1201,7 +1201,7 @@ test_comprehensive_edge_cases(Config) when is_list(Config) ->
     % Test with variables that have no dependencies (empty list case)
     Forms2 = merl:quote(~"""
     -module(test_no_deps_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([test_render/1]).
     -export([test_render/1]).
     test_render(Socket) ->
@@ -1225,7 +1225,7 @@ test_arizona_function_not_defined_error(Config) when is_list(Config) ->
     % Create a module that declares a function that doesn't exist
     Forms = merl:quote(~"""
     -module(test_undefined_function_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([nonexistent_function/1]).
     -export([actual_function/1]).
     actual_function(Socket) -> arizona_html:render_live(~"<div>Test</div>", Socket).
@@ -1240,7 +1240,7 @@ test_arizona_function_not_exported_error(Config) when is_list(Config) ->
     % Create a module that declares a function that exists but isn't exported
     Forms = merl:quote(~"""
     -module(test_unexported_function_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([private_function/1]).
     -export([public_function/1]).
     public_function(Socket) -> arizona_html:render_live(~"<div>Public</div>", Socket).
@@ -1286,7 +1286,7 @@ test_empty_binary_variable_validation(Config) when is_list(Config) ->
     % Test that parse transform handles modules gracefully even with edge cases
     Forms = merl:quote(~"""
     -module(test_edge_case_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([render/1]).
     -export([render/1]).
 
@@ -1305,7 +1305,7 @@ test_safe_template_extraction_error_handling(Config) when is_list(Config) ->
     % Test that malformed templates are handled gracefully
     Forms = merl:quote(~"""
     -module(test_error_handling_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([render/1]).
     -export([render/1]).
 
@@ -1325,7 +1325,7 @@ test_single_pass_function_extraction_performance(Config) when is_list(Config) ->
     % Create a module with multiple exports and functions
     Forms = merl:quote(~"""
     -module(test_performance_module).
-    -compile({parse_transform, arizona_parse_transform}).
+    %-compile({parse_transform, arizona_parse_transform}).
     -arizona_parse_transform([render/1, other_function/2]).
     -export([render/1, other_function/2, helper/0]).
 

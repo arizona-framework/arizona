@@ -49,6 +49,7 @@ and using fingerprints to determine when full remounting is necessary.
 -export([get_id/1]).
 -export([get_binding/2]).
 -export([get_binding/3]).
+-export([get_bindings/1]).
 -export([put_binding/3]).
 -export([put_bindings/2]).
 -export([get_changed_bindings/1]).
@@ -197,12 +198,12 @@ generating the component's template output.
 #socket{...}
 ```
 """.
--spec call_render_callback(Mod, Socket) -> Socket1 when
+-spec call_render_callback(Mod, Bindings) -> Template when
     Mod :: module(),
-    Socket :: arizona_socket:socket(),
-    Socket1 :: arizona_socket:socket().
-call_render_callback(Mod, Socket) when is_atom(Mod) ->
-    apply(Mod, render, [Socket]).
+    Bindings :: arizona_socket:bindings(),
+    Template :: arizona_template:template().
+call_render_callback(Mod, Bindings) when is_atom(Mod) ->
+    apply(Mod, render, [Bindings]).
 
 -doc ~"""
 Invoke a dynamic function with the provided socket.
@@ -351,6 +352,12 @@ get_binding(Key, #state{} = State, Default) when is_atom(Key) ->
         #{Key := Value} -> Value;
         #{} -> Default
     end.
+
+-spec get_bindings(State) -> Bindings when
+    State :: state(),
+    Bindings :: map().
+get_bindings(#state{} = State) ->
+    State#state.bindings.
 
 -doc ~"""
 Put a binding value into stateful component state.
