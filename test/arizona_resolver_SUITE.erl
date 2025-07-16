@@ -11,7 +11,7 @@ all() ->
     [
         {group, template_resolution},
         {group, callback_handling},
-        {group, zip_static_dynamic}
+        {group, zip_utility}
     ].
 
 groups() ->
@@ -25,22 +25,19 @@ groups() ->
             resolve_template_complex_nesting
         ]},
         {callback_handling, [parallel], [
-            resolve_template_with_binaries,
-            resolve_template_with_integers,
-            resolve_template_with_atoms,
-            resolve_template_with_floats,
-            resolve_template_with_lists,
-            resolve_template_with_socket_return,
-            resolve_template_dynamic_sequence_coverage,
-            resolve_template_with_stateful_callback,
-            resolve_template_with_stateless_callback
+            resolve_with_different_data_types,
+            resolve_with_socket_return,
+            resolve_with_stateful_component,
+            resolve_with_stateless_component,
+            resolve_with_multiple_stateful_components,
+            resolve_with_nested_stateful_calls
         ]},
-        {zip_static_dynamic, [parallel], [
+        {zip_utility, [parallel], [
             zip_empty_lists,
-            zip_static_longer,
-            zip_dynamic_longer,
-            zip_equal_length,
-            zip_single_elements
+            zip_static_longer_than_dynamic,
+            zip_dynamic_longer_than_static,
+            zip_equal_length_lists,
+            zip_single_element_lists
         ]}
     ].
 
@@ -59,83 +56,9 @@ assert_html_equals(Html, Expected) ->
     HtmlBinary = iolist_to_binary(Html),
     ?assertEqual(Expected, HtmlBinary).
 
-create_test_stateful_component() ->
+create_user_component() ->
     Code = merl:quote(~""""
-    -module(test_stateful_component).
-    -behaviour(arizona_stateful).
-    -export([mount/1, render/1, render_nested/1]).
-
-    mount(Socket) ->
-        Socket.
-
-    render(Bindings) ->
-        arizona_template:from_string(test_stateful_component, 1, ~"""
-        <div>
-            <h1>Test Stateful Component</h1>
-            <p>Value: {arizona_template:get_binding(value, Bindings)}</p>
-            {arizona_template:render_stateful(test_stateful_component_1, #{
-                id => arizona_template:get_binding(nested_id, Bindings),
-                value => arizona_template:get_binding(value, Bindings)
-            })}
-            {arizona_template:render_stateful(test_stateful_component_1, #{
-                id => arizona_template:get_binding(nested_id_1, Bindings),
-                value => arizona_template:get_binding(value, Bindings)
-            })}
-            {arizona_template:render_stateless(test_stateful_component, render_nested, #{
-                nested_value => arizona_template:get_binding(value, Bindings)
-            })}
-        </div>
-        """, Bindings).
-
-    render_nested(Bindings) ->
-        arizona_template:from_string(test_stateful_component, 2, ~"""
-        <span>Nested: {arizona_template:get_binding(nested_value, Bindings)}</span>
-        """, Bindings).
-    """"),
-    merl:compile_and_load(Code).
-
-create_test_stateful_component_1() ->
-    Code = merl:quote(~""""
-    -module(test_stateful_component_1).
-    -behaviour(arizona_stateful).
-    -export([mount/1, render/1, render_nested/1]).
-
-    mount(Socket) ->
-        Socket.
-
-    render(Bindings) ->
-        arizona_template:from_string(test_stateful_component_1, 1, ~"""
-        <div>
-            <h1>Test Stateful Component</h1>
-            <p>Value: {arizona_template:get_binding(value, Bindings)}</p>
-            {arizona_template:render_stateless(test_stateful_component_1, render_nested, #{
-                nested_value => arizona_template:get_binding(value, Bindings)
-            })}
-        </div>
-        """, Bindings).
-
-    render_nested(Bindings) ->
-        arizona_template:from_string(test_stateful_component_1, 2, ~"""
-        <span>Nested: {arizona_template:get_binding(nested_value, Bindings)}</span>
-        """, Bindings).
-    """"),
-    merl:compile_and_load(Code).
-
-create_test_stateless_component() ->
-    Code = merl:quote(~""""
-    -module(test_stateless_component).
-    -export([render/1]).
-
-    render(Bindings) ->
-        arizona_template:from_string(test_stateless_component_1, 1, ~"""
-        <div>Stateless: {arizona_template:get_binding(content, Bindings)}</div>
-        """, Bindings).
-    """"),
-    merl:compile_and_load(Code).
-
-create_test_remount_stateful_component() ->
-    Code = merl:quote(~""""
-    -module(test_remount_stateful_component).
+    -module(user_component).
     -behaviour(arizona_stateful).
     -export([mount/1, render/1]).
 
@@ -143,11 +66,47 @@ create_test_remount_stateful_component() ->
         Socket.
 
     render(Bindings) ->
-        arizona_template:from_string(test_remount_stateful_component, 1, ~"""
-        <div>
-            <h1>Remount Component</h1>
-            <p>Value: {arizona_template:get_binding(value, Bindings)}</p>
+        arizona_template:from_string(user_component, 1, ~"""
+        <div class="user">
+            <h2>{arizona_template:get_binding(name, Bindings)}</h2>
+            <p>Role: {arizona_template:get_binding(role, Bindings)}</p>
+            {arizona_template:render_stateful(profile_component, #{
+                id => arizona_template:get_binding(profile_id, Bindings),
+                user_id => arizona_template:get_binding(id, Bindings)
+            })}
         </div>
+        """, Bindings).
+    """"),
+    merl:compile_and_load(Code).
+
+create_profile_component() ->
+    Code = merl:quote(~""""
+    -module(profile_component).
+    -behaviour(arizona_stateful).
+    -export([mount/1, render/1]).
+
+    mount(Socket) ->
+        Socket.
+
+    render(Bindings) ->
+        arizona_template:from_string(profile_component, 1, ~"""
+        <section class="profile">
+            <p>Profile for user: {arizona_template:get_binding(user_id, Bindings)}</p>
+        </section>
+        """, Bindings).
+    """"),
+    merl:compile_and_load(Code).
+
+create_button_component() ->
+    Code = merl:quote(~""""
+    -module(button_component).
+    -export([render/1]).
+
+    render(Bindings) ->
+        arizona_template:from_string(button_component, 1, ~"""
+        <button class="{arizona_template:get_binding(class, Bindings)}">
+            {arizona_template:get_binding(text, Bindings)}
+        </button>
         """, Bindings).
     """"),
     merl:compile_and_load(Code).
@@ -209,141 +168,190 @@ resolve_template_complex_nesting(Config) when is_list(Config) ->
 %% Callback handling tests
 %% --------------------------------------------------------------------
 
-resolve_template_with_binaries(Config) when is_list(Config) ->
+resolve_with_different_data_types(Config) when is_list(Config) ->
+    % Test resolver handles various Erlang data types correctly
     Template = arizona_template:from_string(
-        ~"<p>{arizona_template:get_binding(value, Bindings)}</p>",
-        #{value => ~"Binary value"}
+        ~"""
+        <div>
+            Binary: {arizona_template:get_binding(bin, Bindings)} |
+            Integer: {arizona_template:get_binding(int, Bindings)} |
+            Atom: {arizona_template:get_binding(atom, Bindings)} |
+            Float: {arizona_template:get_binding(float, Bindings)} |
+            List: {arizona_template:get_binding(list, Bindings)}
+        </div>
+        """,
+        #{
+            bin => ~"hello",
+            int => 42,
+            atom => success,
+            float => 3.14,
+            list => [~"x", ~"y"]
+        }
     ),
     Socket = create_test_socket(),
     {Html, _UpdatedSocket} = arizona_resolver:resolve_template(Template, Socket),
-    assert_html_contains(Html, ~"Binary value").
+    HtmlBin = iolist_to_binary(Html),
+    ?assertMatch({_, _}, binary:match(HtmlBin, ~"hello")),
+    ?assertMatch({_, _}, binary:match(HtmlBin, ~"42")),
+    ?assertMatch({_, _}, binary:match(HtmlBin, ~"success")),
+    ?assertMatch({_, _}, binary:match(HtmlBin, ~"3.14")),
+    ?assertMatch({_, _}, binary:match(HtmlBin, ~"xy")).
 
-resolve_template_with_integers(Config) when is_list(Config) ->
+resolve_with_socket_return(Config) when is_list(Config) ->
+    % Test callback returning socket (for stateful operations)
+    SocketWithHtml = arizona_socket:set_html_acc([~"Processed by socket"], create_test_socket()),
     Template = arizona_template:from_string(
-        ~"<p>{arizona_template:get_binding(count, Bindings)}</p>",
-        #{count => 123}
-    ),
-    Socket = create_test_socket(),
-    {Html, _UpdatedSocket} = arizona_resolver:resolve_template(Template, Socket),
-    assert_html_contains(Html, ~"123").
-
-resolve_template_with_atoms(Config) when is_list(Config) ->
-    Template = arizona_template:from_string(
-        ~"<p>{arizona_template:get_binding(status, Bindings)}</p>",
-        #{status => active}
-    ),
-    Socket = create_test_socket(),
-    {Html, _UpdatedSocket} = arizona_resolver:resolve_template(Template, Socket),
-    assert_html_contains(Html, ~"active").
-
-resolve_template_with_floats(Config) when is_list(Config) ->
-    Template = arizona_template:from_string(
-        ~"<p>{arizona_template:get_binding(price, Bindings)}</p>",
-        #{price => 99.99}
-    ),
-    Socket = create_test_socket(),
-    {Html, _UpdatedSocket} = arizona_resolver:resolve_template(Template, Socket),
-    assert_html_contains(Html, ~"99.99").
-
-resolve_template_with_lists(Config) when is_list(Config) ->
-    Template = arizona_template:from_string(
-        ~"<p>{arizona_template:get_binding(items, Bindings)}</p>",
-        #{items => [~"a", ~"b", ~"c"]}
-    ),
-    Socket = create_test_socket(),
-    {Html, _UpdatedSocket} = arizona_resolver:resolve_template(Template, Socket),
-    assert_html_contains(Html, ~"abc").
-
-resolve_template_with_socket_return(Config) when is_list(Config) ->
-    % Create a socket with HTML content for testing socket return case
-    SocketWithHtml = arizona_socket:set_html_acc([~"Socket HTML"], create_test_socket()),
-
-    Template = arizona_template:from_string(
-        ~"{arizona_template:get_binding(socket_result, Bindings)}",
+        ~"<p>Result: {arizona_template:get_binding(socket_result, Bindings)}</p>",
         #{socket_result => SocketWithHtml}
     ),
-
     Socket = create_test_socket(),
     {Html, _UpdatedSocket} = arizona_resolver:resolve_template(Template, Socket),
-    assert_html_contains(Html, ~"Socket HTML").
+    assert_html_contains(Html, ~"Processed by socket").
 
-resolve_template_dynamic_sequence_coverage(Config) when is_list(Config) ->
-    % Test to ensure resolve_template_dynamic and resolve_dynamic_callbacks coverage
-    Template = arizona_template:from_string(
-        erlang,
-        1,
-        ~"<div>{arizona_template:get_binding(first, Bindings)} and {arizona_template:get_binding(second, Bindings)}</div>",
-        #{first => ~"ONE", second => ~"TWO"}
-    ),
-    Socket = create_test_socket(),
-    {Html, _UpdatedSocket} = arizona_resolver:resolve_template(Template, Socket),
-    assert_html_contains(Html, ~"ONE"),
-    assert_html_contains(Html, ~"TWO").
+resolve_with_stateful_component(Config) when is_list(Config) ->
+    % Test stateful component resolution with lifecycle management
+    create_user_component(),
+    create_profile_component(),
 
-resolve_template_with_stateful_callback(Config) when is_list(Config) ->
-    % Create test stateful component
-    create_test_stateful_component(),
-    create_test_stateful_component_1(),
-
-    % Create socket with stateful state
-    StatefulState = arizona_stateful:new(root, test_stateful_component, #{
-        nested_id => ~"nested", nested_id_1 => ~"nested_1", value => ~"TestValue"
+    % Setup user component state
+    UserState = arizona_stateful:new(root, user_component, #{
+        id => ~"user123",
+        name => ~"John Doe",
+        role => ~"admin",
+        profile_id => ~"profile456"
     }),
-    StatefulState1 = arizona_stateful:new(~"nested", test_stateful_component_1, #{}),
-    Socket = arizona_socket:put_stateful_state(StatefulState, create_test_socket()),
-    Socket1 = arizona_socket:put_stateful_state(StatefulState1, Socket),
+    ProfileState = arizona_stateful:new(~"profile456", profile_component, #{
+        id => ~"profile456",
+        user_id => ~"user123"
+    }),
+
+    Socket = arizona_socket:put_stateful_state(UserState, create_test_socket()),
+    Socket1 = arizona_socket:put_stateful_state(ProfileState, Socket),
 
     {Html, _UpdatedSocket} = arizona_resolver:resolve_stateful(root, Socket1),
-    assert_html_contains(Html, ~"Test Stateful Component"),
-    assert_html_contains(Html, ~"TestValue"),
-    assert_html_contains(Html, ~"Nested: TestValue").
+    assert_html_contains(Html, ~"John Doe"),
+    assert_html_contains(Html, ~"admin"),
+    assert_html_contains(Html, ~"Profile for user: user123").
 
-resolve_template_with_stateless_callback(Config) when is_list(Config) ->
-    % Create test stateless component
-    create_test_stateless_component(),
+resolve_with_stateless_component(Config) when is_list(Config) ->
+    % Test stateless component rendering
+    create_button_component(),
 
-    % Create a template that calls a stateless component
     Template = arizona_template:from_string(
-        ~"{arizona_template:render_stateless(test_stateless_component, render, #{content => ~\"StatelessContent\"})}",
+        ~"""
+        <form>
+            {arizona_template:render_stateless(button_component, render, 
+                #{class => ~"btn-primary", text => ~"Submit"})} 
+            {arizona_template:render_stateless(button_component, render, 
+                #{class => ~"btn-secondary", text => ~"Cancel"})}
+        </form>
+        """,
         #{}
     ),
 
     Socket = create_test_socket(),
     {Html, _UpdatedSocket} = arizona_resolver:resolve_template(Template, Socket),
-    assert_html_contains(Html, ~"Stateless: StatelessContent").
+    assert_html_contains(Html, ~"btn-primary"),
+    assert_html_contains(Html, ~"Submit"),
+    assert_html_contains(Html, ~"btn-secondary"),
+    assert_html_contains(Html, ~"Cancel").
+
+resolve_with_multiple_stateful_components(Config) when is_list(Config) ->
+    % Test multiple stateful components to hit more coverage paths
+    create_user_component(),
+    create_profile_component(),
+
+    % Create template that calls stateful components directly (not through resolve_stateful)
+    Template = arizona_template:from_string(
+        ~"""
+        <div class="users">
+            {arizona_template:render_stateful(user_component, #{
+                id => ~"user1", name => ~"Alice", role => ~"user", profile_id => ~"profile1"
+            })}
+            {arizona_template:render_stateful(user_component, #{
+                id => ~"user2", name => ~"Bob", role => ~"admin", profile_id => ~"profile2"
+            })}
+        </div>
+        """,
+        #{}
+    ),
+
+    % Setup states for the components that will be called
+    ProfileState1 = arizona_stateful:new(~"profile1", profile_component, #{
+        id => ~"profile1", user_id => ~"user1"
+    }),
+    ProfileState2 = arizona_stateful:new(~"profile2", profile_component, #{
+        id => ~"profile2", user_id => ~"user2"
+    }),
+
+    Socket = arizona_socket:put_stateful_state(ProfileState1, create_test_socket()),
+    Socket1 = arizona_socket:put_stateful_state(ProfileState2, Socket),
+
+    {Html, _UpdatedSocket} = arizona_resolver:resolve_template(Template, Socket1),
+    assert_html_contains(Html, ~"Alice"),
+    assert_html_contains(Html, ~"Bob"),
+    assert_html_contains(Html, ~"Profile for user: user1"),
+    assert_html_contains(Html, ~"Profile for user: user2").
+
+resolve_with_nested_stateful_calls(Config) when is_list(Config) ->
+    % Test deeply nested stateful calls to exercise call_stateful branches
+    create_user_component(),
+    create_profile_component(),
+
+    UserState = arizona_stateful:new(root, user_component, #{
+        id => ~"nested_user",
+        name => ~"Nested User",
+        role => ~"tester",
+        profile_id => ~"nested_profile"
+    }),
+    ProfileState = arizona_stateful:new(~"nested_profile", profile_component, #{
+        id => ~"nested_profile", user_id => ~"nested_user"
+    }),
+
+    Socket = arizona_socket:put_stateful_state(UserState, create_test_socket()),
+    Socket1 = arizona_socket:put_stateful_state(ProfileState, Socket),
+
+    {Html, _UpdatedSocket} = arizona_resolver:resolve_stateful(root, Socket1),
+    assert_html_contains(Html, ~"Nested User"),
+    assert_html_contains(Html, ~"tester"),
+    assert_html_contains(Html, ~"Profile for user: nested_user").
 
 %% --------------------------------------------------------------------
-%% zip_static_dynamic tests
+%% Utility function tests
 %% --------------------------------------------------------------------
 
 zip_empty_lists(Config) when is_list(Config) ->
     Result = arizona_resolver:zip_static_dynamic([], []),
     ?assertEqual([], Result).
 
-zip_static_longer(Config) when is_list(Config) ->
-    Static = [~"A", ~"B", ~"C"],
-    Dynamic = [~"1", ~"2"],
+zip_static_longer_than_dynamic(Config) when is_list(Config) ->
+    % When static parts outnumber dynamic parts
+    Static = [~"<p>", ~"</p><span>", ~"</span>"],
+    Dynamic = [~"Hello", ~"World"],
     Result = arizona_resolver:zip_static_dynamic(Static, Dynamic),
-    Expected = [~"A", ~"1", ~"B", ~"2", ~"C"],
+    Expected = [~"<p>", ~"Hello", ~"</p><span>", ~"World", ~"</span>"],
     ?assertEqual(Expected, Result).
 
-zip_dynamic_longer(Config) when is_list(Config) ->
-    Static = [~"A", ~"B"],
-    Dynamic = [~"1", ~"2", ~"3"],
+zip_dynamic_longer_than_static(Config) when is_list(Config) ->
+    % When dynamic parts outnumber static parts
+    Static = [~"Value: ", ~", Status: "],
+    Dynamic = [~"42", ~"active", ~"ready"],
     Result = arizona_resolver:zip_static_dynamic(Static, Dynamic),
-    Expected = [~"A", ~"1", ~"B", ~"2", ~"3"],
+    Expected = [~"Value: ", ~"42", ~", Status: ", ~"active", ~"ready"],
     ?assertEqual(Expected, Result).
 
-zip_equal_length(Config) when is_list(Config) ->
-    Static = [~"A", ~"B", ~"C"],
-    Dynamic = [~"1", ~"2", ~"3"],
+zip_equal_length_lists(Config) when is_list(Config) ->
+    % When static and dynamic have equal length
+    Static = [~"<li>", ~"</li><li>", ~"</li>"],
+    Dynamic = [~"Item 1", ~"Item 2", ~"Item 3"],
     Result = arizona_resolver:zip_static_dynamic(Static, Dynamic),
-    Expected = [~"A", ~"1", ~"B", ~"2", ~"C", ~"3"],
+    Expected = [~"<li>", ~"Item 1", ~"</li><li>", ~"Item 2", ~"</li>", ~"Item 3"],
     ?assertEqual(Expected, Result).
 
-zip_single_elements(Config) when is_list(Config) ->
-    Static = [~"A"],
-    Dynamic = [~"1"],
+zip_single_element_lists(Config) when is_list(Config) ->
+    % Simple case with one element each
+    Static = [~"Hello "],
+    Dynamic = [~"Arizona"],
     Result = arizona_resolver:zip_static_dynamic(Static, Dynamic),
-    Expected = [~"A", ~"1"],
+    Expected = [~"Hello ", ~"Arizona"],
     ?assertEqual(Expected, Result).
