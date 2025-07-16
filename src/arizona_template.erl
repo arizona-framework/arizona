@@ -4,7 +4,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([from_string/1]).
+-export([from_string/2]).
 -export([from_string/4]).
 -export([static/1]).
 -export([dynamic/1]).
@@ -53,10 +53,11 @@ Static = arizona_template:static(Template),
 Dynamic = arizona_template:dynamic(Template).
 ```
 """".
--spec from_string(TemplateContent) -> template() when
-    TemplateContent :: binary().
-from_string(TemplateContent) ->
-    from_string(erlang, 1, TemplateContent, #{}).
+-spec from_string(TemplateContent, Bindings) -> template() when
+    TemplateContent :: binary(),
+    Bindings :: map().
+from_string(TemplateContent, Bindings) ->
+    from_string(erlang, 1, TemplateContent, Bindings).
 
 -doc ~"""
 Create template from string with module context.
@@ -82,7 +83,7 @@ from_string(Module, Line, TemplateContent, Bindings) when
     % Evaluate AST to get template record
     erl_eval:expr(
         erl_syntax:revert(AST),
-        Bindings,
+        #{'Bindings' => Bindings},
         {value, fun(Function, Args) ->
             apply(Module, Function, Args)
         end},

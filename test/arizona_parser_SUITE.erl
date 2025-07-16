@@ -165,7 +165,7 @@ parse_multiple_dynamic(Config) when is_list(Config) ->
     assert_dynamic_count(Template, 2).
 
 parse_dynamic_with_complex_expr(Config) when is_list(Config) ->
-    ExprText = ~"arizona_socket:get_binding(user_name, Socket)",
+    ExprText = ~"maps:get(user_name, #{user_name => foo})",
     Tokens = [{dynamic, 1, ExprText}],
     AST = arizona_parser:parse_tokens(Tokens),
     Template = eval_template_ast(AST),
@@ -226,11 +226,11 @@ parse_dynamic_static_dynamic(Config) when is_list(Config) ->
 parse_complex_template(Config) when is_list(Config) ->
     Tokens = [
         {static, 1, ~"<li class=\"item\">"},
-        {dynamic, 1, ~"arizona_socket:get_binding(prefix, Socket)"},
+        {dynamic, 1, ~"maps:get(prefix, #{}, none)"},
         {static, 1, ~"_"},
-        {dynamic, 1, ~"I"},
+        {dynamic, 1, ~"foo"},
         {static, 1, ~": "},
-        {dynamic, 2, ~"item.name"},
+        {dynamic, 2, ~"bar"},
         {static, 2, ~"</li>"}
     ],
     AST = arizona_parser:parse_tokens(Tokens),
@@ -293,7 +293,7 @@ parse_consecutive_statics(Config) when is_list(Config) ->
         {static, 1, ~"part1"},
         {static, 1, ~"part2"},
         {static, 1, ~"part3"},
-        {dynamic, 1, ~"end"}
+        {dynamic, 1, ~"'end'"}
     ],
     AST = arizona_parser:parse_tokens(Tokens),
     Template = eval_template_ast(AST),

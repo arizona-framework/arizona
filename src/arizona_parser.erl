@@ -15,7 +15,7 @@ Returns AST that creates `arizona_template:template()` tuples:
 
 Where:
 - **Static**: List of UTF-8 binaries in template order
-- **Dynamic**: Tuple of callback functions `fun(_@Bindings) -> binary() end`
+- **Dynamic**: Tuple of arity-0 callback functions `fun() -> term() end`
 - **DynamicSequence**: `[1,2,3,...,N]` for efficient tuple traversal
 - **DynamicAnno**: Tuple of line numbers for debugging
 
@@ -23,7 +23,7 @@ Where:
 
 - **Compile-time AST**: Generates optimized syntax trees for performance
 - **Tuple Structure**: High-performance data layout with precomputed sequences  
-- **Callback Functions**: Dynamic expressions as first-class functions
+- **Arity-0 Callbacks**: Dynamic expressions as zero-argument functions
 - **Line Tracking**: Preserves source locations for debugging
 - **Comment Filtering**: Removes comment tokens during parsing
 
@@ -70,7 +70,7 @@ Dynamic parts become callback functions in tuple format.
 Parse tokens into template AST.
 
 Converts tokens into AST that creates arizona_template:template() record.
-Static parts are binary segments, dynamic parts become callback functions.
+Static parts are binary segments, dynamic parts become arity-0 callback functions.
 
 Returns AST that creates #template{} record at runtime.
 """.
@@ -129,8 +129,17 @@ create_dynamic_ast([]) ->
     {EmptyTuple, EmptyTuple, EmptySequence};
 create_dynamic_ast(DynamicElements) ->
     % Create callback functions and extract line numbers
-    {CallbackFuns, LineNumbers} = lists:unzip([
-        create_dynamic_callback_ast(Line, ExprText)
+    {LineNumbers, CallbackFuns} = lists:unzip([
+        try
+            {Line, create_dynamic_callback_ast(ExprText)}
+        catch
+            Class:Reason:Stacktrace ->
+                error(
+                    arizona_create_dynamic_callback_failed,
+                    none,
+                    error_info({Line, ExprText, Class, Reason, Stacktrace})
+                )
+        end
      || {Line, ExprText} <- DynamicElements
     ]),
 
@@ -145,30 +154,12 @@ create_dynamic_ast(DynamicElements) ->
     {DynamicTuple, DynamicAnno, DynamicSequence}.
 
 %% Create callback function AST for dynamic element
--spec create_dynamic_callback_ast(Line, ExprText) ->
-    {erl_syntax:syntaxTree(), pos_integer()}
-when
-    Line :: pos_integer(),
+-spec create_dynamic_callback_ast(ExprText) -> erl_syntax:syntaxTree() when
     ExprText :: binary().
-create_dynamic_callback_ast(Line, ExprText) ->
-    % Create fun(_@Bindings) -> ExprText end
-    % For now, simple approach - return the expression as binary
-    % TODO: Parse ExprText into proper AST expressions
-
-    BindingsVar = erl_syntax:variable('_@Bindings'),
-    ExprBody = erl_syntax:binary([
-        erl_syntax:binary_field(
-            erl_syntax:string(binary_to_list(ExprText)),
-            none,
-            [erl_syntax:atom(utf8)]
-        )
-    ]),
-
-    CallbackFun = erl_syntax:fun_expr([
-        erl_syntax:clause([BindingsVar], none, [ExprBody])
-    ]),
-
-    {CallbackFun, Line}.
+create_dynamic_callback_ast(ExprText) ->
+    erl_syntax:fun_expr([
+        erl_syntax:clause([], none, [merl:quote(ExprText)])
+    ]).
 
 %% --------------------------------------------------------------------
 %% Private functions
@@ -209,3 +200,15 @@ separate_static_dynamic(
 ) ->
     %% Skip comments - preserve previous type
     separate_static_dynamic(Rest, StaticAcc, DynamicAcc, PrevType).
+
+%% Create error_info for proper compiler diagnostics with enhanced details
+-spec error_info(Cause) -> ErrorInfo when
+    Cause :: term(),
+    ErrorInfo :: [{error_info, map()}].
+error_info(Cause) ->
+    [
+        {error_info, #{
+            cause => Cause,
+            module => ?MODULE
+        }}
+    ].

@@ -45,7 +45,7 @@ This module will eventually replace arizona_parse_transform.
 -doc ~"""
 Parse transform entry point.
 
-Processes AST and transforms arizona_template:from_string/1 calls into
+Processes AST and transforms arizona_template:from_string/2 calls into
 compile-time optimized template structures.
 """.
 -spec parse_transform(Forms, Options) -> Forms when
@@ -66,6 +66,9 @@ parse_transform(Forms, Options) ->
 %% --------------------------------------------------------------------
 
 %% Extract module name from forms
+-spec extract_module_name(Forms) -> ModuleName when
+    Forms :: [erl_parse:abstract_form()],
+    ModuleName :: atom() | undefined.
 extract_module_name([{attribute, _Line, module, ModuleName} | _]) ->
     ModuleName;
 extract_module_name([_ | Rest]) ->
@@ -94,7 +97,7 @@ transform_node(Node, ModuleName) ->
 %% Transform function applications
 transform_application(Node, ModuleName) ->
     case analyze_application(Node) of
-        {arizona_template, from_string, 1, [TemplateArg]} ->
+        {arizona_template, from_string, 2, [TemplateArg, _BindingsArg]} ->
             Anno = erl_syntax:get_ann(Node),
             Line = erl_anno:line(Anno),
             transform_from_string(ModuleName, Line, TemplateArg);
@@ -103,6 +106,12 @@ transform_application(Node, ModuleName) ->
     end.
 
 %% Analyze function application to extract module, function, arity, and args
+-spec analyze_application(Node) -> {Module, Function, Arity, Args} | undefined when
+    Node :: erl_syntax:syntaxTree(),
+    Module :: atom(),
+    Function :: atom(),
+    Arity :: non_neg_integer(),
+    Args :: [erl_syntax:syntaxTree()].
 analyze_application(Node) ->
     Operator = erl_syntax:application_operator(Node),
     Arguments = erl_syntax:application_arguments(Node),
@@ -124,7 +133,7 @@ analyze_application(Node) ->
             undefined
     end.
 
-%% Transform arizona_template:from_string/1 calls
+%% Transform arizona_template:from_string/2 calls
 transform_from_string(ModuleName, Line, TemplateArg) ->
     try
         % Extract template content and line number
@@ -147,6 +156,11 @@ transform_from_string(ModuleName, Line, TemplateArg) ->
 %% Utility Functions
 
 %% Evaluate expression
+-spec eval_expr(Module, BinaryForm, Bindings) -> Result when
+    Module :: atom(),
+    BinaryForm :: erl_syntax:syntaxTree(),
+    Bindings :: map(),
+    Result :: term().
 eval_expr(Module, BinaryForm, Bindings) ->
     erl_eval:expr(
         BinaryForm,
