@@ -143,7 +143,7 @@ prepare_stateful_render(Mod, Bindings, Socket) ->
             Socket1 = arizona_socket:put_stateful_state(UpdatedState, Socket),
             UpdatedBindings = arizona_stateful:get_bindings(UpdatedState),
             Template = arizona_stateful:call_render_callback(Mod, UpdatedBindings),
-            {Template, Socket1};
+            {Id, Template, Socket1};
         error ->
             State = arizona_stateful:new(Id, Mod, Bindings),
             Socket1 = arizona_socket:put_stateful_state(State, Socket),
@@ -154,23 +154,34 @@ prepare_stateful_render(Mod, Bindings, Socket) ->
             MountedState = arizona_socket:get_stateful_state(Id, Socket2),
             MountedBindings = arizona_stateful:get_bindings(MountedState),
             Template = arizona_stateful:call_render_callback(Mod, MountedBindings),
-            {Template, Socket2}
+            {Id, Template, Socket2}
     end.
 
 render_stateful(Mod, Bindings, Socket) ->
-    {Template, Socket1} = prepare_stateful_render(Mod, Bindings, Socket),
+    {_Id, Template, Socket1} = prepare_stateful_render(Mod, Bindings, Socket),
     resolve_template(Template, Socket1).
 
-diff_stateful(_Mod, _Bindings, _Socket) ->
-    error(not_implemented).
+diff_stateful(_Mod, _Bindings, Socket) ->
+    %{Id, _Template, Socket1} = prepare_stateful_render(Mod, Bindings, Socket),
+    %StatefulState = arizona_socket:get_stateful_state(Id, Socket1),
+    %ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
+    %case has_changes(ChangedBindings) of
+    %    true ->
+    %        error(not_implemented);
+    %    false ->
+    %        {[], Socket1}
+    %end.
+    %% TODO: Process changes
+    {[], Socket}.
+
+%% Check if there are any changes in the bindings
+%-spec has_changes(ChangedBindings) -> boolean() when
+%    ChangedBindings :: map().
+%has_changes(ChangedBindings) ->
+%    maps:size(ChangedBindings) > 0.
 
 hierarchical_stateful(Mod, Bindings, Socket) ->
-    Id = maps:get(id, Bindings),
-    Struct = #{
-        type => stateful,
-        id => Id
-    },
-    {Template, RenderSocket} = prepare_stateful_render(Mod, Bindings, Socket),
+    {Id, Template, RenderSocket} = prepare_stateful_render(Mod, Bindings, Socket),
     {Dynamic, DynamicSocket} = resolve_template_dynamic(Template, RenderSocket),
     HierarchicalSocket = arizona_socket:put_hierarchical_acc(
         Id,
@@ -181,6 +192,10 @@ hierarchical_stateful(Mod, Bindings, Socket) ->
         },
         DynamicSocket
     ),
+    Struct = #{
+        type => stateful,
+        id => Id
+    },
     {Struct, HierarchicalSocket}.
 
 % resolver copy
@@ -251,8 +266,9 @@ render_stateless(Mod, Fun, Bindings, Socket) ->
     {Template, TempSocket} = prepare_stateless_render(Mod, Fun, Bindings, Socket),
     resolve_template(Template, TempSocket).
 
-diff_stateless(_Mod, _Fun, _Bindings, _Socket) ->
-    error(not_implemented).
+diff_stateless(_Mod, _Fun, _Bindings, Socket) ->
+    %% TODO: Process changes
+    {[], Socket}.
 
 hierarchical_stateless(Mod, Fun, Bindings, Socket) ->
     {Template, TempSocket} = prepare_stateless_render(Mod, Fun, Bindings, Socket),
