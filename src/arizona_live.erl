@@ -63,9 +63,10 @@ callbacks, ensuring robust error handling throughout the LiveView lifecycle.
 -export([call_handle_event_callback/4]).
 -export([call_handle_info_callback/3]).
 -export([set_current_stateful_id/2]).
+-export([get_current_element_index/1]).
 -export([set_current_element_index/2]).
 -export([record_variable_dependency/2]).
--export([get_component_vars_indexes/2]).
+-export([get_component_dependencies/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -420,11 +421,14 @@ handle_call(
         {reply, Reply, UpdatedSocket} ->
             {reply, {reply, Reply, UpdatedSocket}, State#state{socket = UpdatedSocket}}
     end;
+handle_call(get_current_element_index, _From, #state{dependency_tracker = Tracker} = State) ->
+    CurrentElemendIndex = arizona_dependency_tracker:get_current_element_index(Tracker),
+    {reply, CurrentElemendIndex, State};
 handle_call(
-    {get_component_vars_indexes, StatefulId}, _From, #state{dependency_tracker = Tracker} = State
+    {get_component_dependencies, StatefulId}, _From, #state{dependency_tracker = Tracker} = State
 ) ->
-    VarsIndexes = arizona_dependency_tracker:get_component_vars_indexes(StatefulId, Tracker),
-    {reply, VarsIndexes, State}.
+    Dependencies = arizona_dependency_tracker:get_component_dependencies(StatefulId, Tracker),
+    {reply, Dependencies, State}.
 
 -doc ~"""
 Handle asynchronous casts to the LiveView process.
@@ -479,6 +483,9 @@ component is currently being rendered.
 set_current_stateful_id(LivePid, StatefulId) ->
     gen_server:cast(LivePid, {set_current_stateful_id, StatefulId}).
 
+get_current_element_index(LivePid) ->
+    gen_server:call(LivePid, get_current_element_index).
+
 -doc ~"""
 Set the current element index for dependency tracking.
 
@@ -500,12 +507,12 @@ record_variable_dependency(LivePid, VarName) ->
     gen_server:cast(LivePid, {record_variable_dependency, VarName}).
 
 -doc ~"""
-Get the variable indexes for a specific component.
+Get the variable dependencies for a specific component.
 
 Returns the mapping of variable names to element indexes for the
 specified stateful component.
 """.
--spec get_component_vars_indexes(pid(), arizona_stateful:id()) ->
+-spec get_component_dependencies(pid(), arizona_stateful:id()) ->
     #{atom() => [non_neg_integer()]}.
-get_component_vars_indexes(LivePid, StatefulId) ->
-    gen_server:call(LivePid, {get_component_vars_indexes, StatefulId}).
+get_component_dependencies(LivePid, StatefulId) ->
+    gen_server:call(LivePid, {get_component_dependencies, StatefulId}).

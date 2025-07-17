@@ -167,30 +167,25 @@ render_stateful(Mod, Bindings, Socket) ->
     resolve_template(Template, Socket1).
 
 diff_stateful(Mod, Bindings, Socket) ->
-    {Id, Template, Socket1} = prepare_stateful_render(Mod, Bindings, Socket),
-    StatefulState = arizona_socket:get_stateful_state(Id, Socket1),
-    ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
+    % Get runtime-tracked variable dependencies from live process
+    case arizona_socket:get_live_pid(Socket) of
+        undefined ->
+            % No live process, can't do runtime diffing
+            {[], Socket};
+        LivePid ->
+            {Id, Template, Socket1} = prepare_stateful_render(Mod, Bindings, Socket),
+            StatefulState = arizona_socket:get_stateful_state(Id, Socket1),
+            ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
 
-    case has_changes(ChangedBindings) of
-        false ->
-            {[], Socket1};
-        true ->
-            % Get runtime-tracked variable dependencies from live process
-            case arizona_socket:get_live_pid(Socket1) of
-                undefined ->
-                    % No live process, can't do runtime diffing
+            case has_changes(ChangedBindings) of
+                false ->
                     {[], Socket1};
-                LivePid ->
-                    VarsIndexes = arizona_live:get_component_vars_indexes(LivePid, Id),
+                true ->
+                    Dependencies = arizona_live:get_component_dependencies(LivePid, Id),
                     % Find affected elements using runtime dependencies
-                    AffectedElements = get_affected_elements(ChangedBindings, VarsIndexes),
-                    case sets:size(AffectedElements) of
-                        0 ->
-                            {[], Socket1};
-                        _ ->
-                            % Generate diff for affected elements
-                            generate_element_diff(AffectedElements, Template, Socket1)
-                    end
+                    AffectedElements = get_affected_elements(ChangedBindings, Dependencies),
+                    % Generate diff for affected elements
+                    generate_element_diff(AffectedElements, Template, Socket1)
             end
     end.
 
@@ -200,15 +195,15 @@ diff_stateful(Mod, Bindings, Socket) ->
 has_changes(ChangedBindings) ->
     maps:size(ChangedBindings) > 0.
 
-%% Get affected elements from changed bindings and variable indexes
--spec get_affected_elements(ChangedBindings, VarsIndexes) -> AffectedElements when
+%% Get affected elements from changed bindings and variable dependencies
+-spec get_affected_elements(ChangedBindings, Dependencies) -> AffectedElements when
     ChangedBindings :: map(),
-    VarsIndexes :: #{atom() => [non_neg_integer()]},
+    Dependencies :: #{atom() => [non_neg_integer()]},
     AffectedElements :: sets:set(non_neg_integer()).
-get_affected_elements(ChangedBindings, VarsIndexes) ->
+get_affected_elements(ChangedBindings, Dependencies) ->
     ChangedVarNames = maps:keys(ChangedBindings),
     AffectedIndexLists = [
-        maps:get(VarName, VarsIndexes, [])
+        maps:get(VarName, Dependencies, [])
      || VarName <- ChangedVarNames
     ],
     sets:from_list(lists:flatten(AffectedIndexLists)).
@@ -220,10 +215,45 @@ get_affected_elements(ChangedBindings, VarsIndexes) ->
     Socket :: term(),
     Diff :: [term()],
     Socket1 :: term().
-generate_element_diff(_AffectedElements, _Template, Socket) ->
-    % For now, return empty diff - this will be expanded later
-    % when we implement the full diff generation logic
-    {[], Socket}.
+generate_element_diff(AffectedElements, Template, Socket) ->
+    case sets:size(AffectedElements) of
+        0 ->
+            {[], Socket};
+        _ ->
+            DynamicSequence = sets:to_list(AffectedElements),
+            DynamicTuple = arizona_template:dynamic(Template),
+            process_affected_elements(DynamicSequence, DynamicTuple, Socket)
+    end.
+
+%% Process affected elements to create diff changes
+-spec process_affected_elements(DynamicSequence, DynamicTuple, Socket) ->
+    {Changes, Socket1}
+when
+    DynamicSequence :: [pos_integer()],
+    DynamicTuple :: tuple(),
+    Socket :: term(),
+    Changes :: [term()],
+    Socket1 :: term().
+process_affected_elements([], _DynamicTuple, Socket) ->
+    {[], Socket};
+process_affected_elements([ElementIndex | T], DynamicTuple, Socket) ->
+    % Notify live process of current element index
+    ok = arizona_socket:notify_current_element_index(ElementIndex, Socket),
+
+    DynamicCallback = element(ElementIndex, DynamicTuple),
+    case DynamicCallback() of
+        Callback when is_function(Callback, 1) ->
+            {StatefulHtml, StatefulSocket} = Callback(Socket),
+            {Html, HtmlSocket} = arizona_html:to_html(StatefulHtml, StatefulSocket),
+            ElementChange = {ElementIndex, Html},
+            {RestChanges, FinalSocket} = process_affected_elements(T, DynamicTuple, HtmlSocket),
+            {[ElementChange | RestChanges], FinalSocket};
+        Result ->
+            {Html, NewSocket} = arizona_html:to_html(Result, Socket),
+            ElementChange = {ElementIndex, Html},
+            {RestChanges, FinalSocket} = process_affected_elements(T, DynamicTuple, NewSocket),
+            {[ElementChange | RestChanges], FinalSocket}
+    end.
 
 hierarchical_stateful(Mod, Bindings, Socket) ->
     {Id, Template, RenderSocket} = prepare_stateful_render(Mod, Bindings, Socket),
@@ -247,21 +277,22 @@ hierarchical_stateful(Mod, Bindings, Socket) ->
 
 % resolver copy
 resolve_template_dynamic(Template, Socket) ->
-    DynamicTuple = arizona_template:dynamic(Template),
     DynamicSequence = arizona_template:dynamic_sequence(Template),
+    DynamicTuple = arizona_template:dynamic(Template),
     resolve_dynamic_callbacks(DynamicSequence, DynamicTuple, Socket).
 % resolver copy
 resolve_dynamic_callbacks([], _DynamicTuple, Socket) ->
     {[], Socket};
-resolve_dynamic_callbacks([Index | T], DynamicTuple, Socket) ->
+resolve_dynamic_callbacks([ElementIndex | T], DynamicTuple, Socket) ->
     % Notify live process of current element index
-    ok = arizona_socket:notify_current_element_index(Index, Socket),
+    ok = arizona_socket:notify_current_element_index(ElementIndex, Socket),
 
-    DynamicCallback = element(Index, DynamicTuple),
+    DynamicCallback = element(ElementIndex, DynamicTuple),
     case DynamicCallback() of
         Callback when is_function(Callback, 1) ->
-            {Html, StatefulSocket} = Callback(Socket),
-            {RestHtml, FinalSocket} = resolve_dynamic_callbacks(T, DynamicTuple, StatefulSocket),
+            {StatefulHtml, StatefulSocket} = Callback(Socket),
+            {Html, HtmlSocket} = arizona_html:to_html(StatefulHtml, StatefulSocket),
+            {RestHtml, FinalSocket} = resolve_dynamic_callbacks(T, DynamicTuple, HtmlSocket),
             {[Html | RestHtml], FinalSocket};
         Result ->
             {Html, NewSocket} = arizona_html:to_html(Result, Socket),
@@ -316,9 +347,34 @@ render_stateless(Mod, Fun, Bindings, Socket) ->
     {Template, TempSocket} = prepare_stateless_render(Mod, Fun, Bindings, Socket),
     resolve_template(Template, TempSocket).
 
-diff_stateless(_Mod, _Fun, _Bindings, Socket) ->
-    %% TODO: Process changes
-    {[], Socket}.
+diff_stateless(Mod, Fun, Bindings, Socket) ->
+    % Stateless components don't have state tracking like stateful components
+    % For now, we can implement a simple approach that re-renders the entire
+    % stateless component when any changes occur, since stateless components
+    % are typically small and don't benefit from fine-grained diffing
+
+    % Get runtime-tracked variable dependencies from live process
+    case arizona_socket:get_live_pid(Socket) of
+        undefined ->
+            % No live process, can't do runtime diffing
+            {[], Socket};
+        LivePid ->
+            ElementIndex = arizona_live:get_current_element_index(LivePid),
+
+            % Re-render the entire stateless component
+            {Template, TempSocket} = prepare_stateless_render(Mod, Fun, Bindings, Socket),
+
+            % Convert template to HTML for diff
+            {Html, FinalSocket} = resolve_template(Template, TempSocket),
+
+            ElementChange = {ElementIndex, Html},
+
+            % Return the complete HTML as a change
+            % In a more sophisticated implementation, we could track element-level
+            % changes within stateless components, but for now this provides
+            % a working diff mechanism
+            {ElementChange, FinalSocket}
+    end.
 
 hierarchical_stateless(Mod, Fun, Bindings, Socket) ->
     {Template, TempSocket} = prepare_stateless_render(Mod, Fun, Bindings, Socket),

@@ -26,7 +26,7 @@ Tracker0 = arizona_dependency_tracker:new(),
 Tracker1 = arizona_dependency_tracker:set_current_stateful_id(user123, Tracker0),
 Tracker2 = arizona_dependency_tracker:set_current_element_index(0, Tracker1),
 Tracker3 = arizona_dependency_tracker:record_variable_dependency(is_auth, Tracker2),
-VarsIndexes = arizona_dependency_tracker:get_component_vars_indexes(user123, Tracker3).
+Dependencies = arizona_dependency_tracker:get_component_dependencies(user123, Tracker3).
 ```
 
 ## Integration
@@ -39,9 +39,10 @@ centralized dependency tracking across the entire LiveView lifecycle.
 -export([
     new/0,
     set_current_stateful_id/2,
+    get_current_element_index/1,
     set_current_element_index/2,
     record_variable_dependency/2,
-    get_component_vars_indexes/2,
+    get_component_dependencies/2,
     get_stateful_dependencies/1,
     clear_component_dependencies/2,
     reset/1
@@ -104,6 +105,9 @@ set_current_stateful_id(StatefulId, Tracker) ->
         % Reset element index for new component
         current_element_index = undefined
     }.
+
+get_current_element_index(#tracker{} = Tracker) ->
+    Tracker#tracker.current_element_index.
 
 -doc ~"""
 Set the current element index being rendered.
@@ -170,9 +174,9 @@ Get variable dependencies for a specific stateful component.
 
 Returns a map of variable names to the list of element indexes that depend on them.
 """.
--spec get_component_vars_indexes(stateful_id(), tracker()) ->
+-spec get_component_dependencies(stateful_id(), tracker()) ->
     #{var_name() => [element_index()]}.
-get_component_vars_indexes(StatefulId, #tracker{stateful_dependencies = StatefulDependencies}) ->
+get_component_dependencies(StatefulId, #tracker{stateful_dependencies = StatefulDependencies}) ->
     maps:get(StatefulId, StatefulDependencies, #{}).
 
 -doc ~"""
