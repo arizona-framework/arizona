@@ -60,6 +60,11 @@ states, and temporary bindings throughout the rendering process.
 -export([get_temp_binding/2]).
 -export([set_layout/2]).
 -export([get_layout/1]).
+-export([set_live_pid/2]).
+-export([get_live_pid/1]).
+-export([notify_current_stateful_id/2]).
+-export([notify_current_element_index/2]).
+-export([notify_variable_dependency/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -97,7 +102,8 @@ states, and temporary bindings throughout the rendering process.
     stateful_states :: #{arizona_stateful:id() => arizona_stateful:state()},
     % For stateless component bindings, always a map
     temp_bindings :: map(),
-    layout :: layout() | undefined
+    layout :: layout() | undefined,
+    live_pid :: pid() | undefined
 }).
 
 -doc ~"""
@@ -176,7 +182,8 @@ new(Opts) when is_map(Opts) ->
         current_stateful_id = maps:get(current_stateful_id, Opts, root),
         stateful_states = #{},
         temp_bindings = #{},
-        layout = undefined
+        layout = undefined,
+        live_pid = maps:get(live_pid, Opts, undefined)
     }.
 
 -doc ~"""
@@ -885,4 +892,73 @@ merge_element_changes([{ElementIndex, NewChange} | RestNew], ExistingElements) -
                 {ElementIndex, MergedChange}
             ),
             merge_element_changes(RestNew, UpdatedExisting)
+    end.
+
+%% --------------------------------------------------------------------
+%% Live PID and Dependency Tracking Functions
+%% --------------------------------------------------------------------
+
+-doc ~"""
+Set the live process PID for dependency tracking.
+
+Associates the socket with a live process that will receive dependency
+tracking notifications.
+""".
+-spec set_live_pid(pid(), socket()) -> socket().
+set_live_pid(LivePid, Socket) ->
+    Socket#socket{live_pid = LivePid}.
+
+-doc ~"""
+Get the live process PID from the socket.
+
+Returns the PID of the live process associated with this socket, or undefined
+if no live process is set.
+""".
+-spec get_live_pid(socket()) -> pid() | undefined.
+get_live_pid(#socket{live_pid = LivePid}) ->
+    LivePid.
+
+-doc ~"""
+Notify the live process about the current stateful component.
+
+Sends a notification to the live process (if present) about which stateful
+component is currently being rendered for dependency tracking purposes.
+""".
+-spec notify_current_stateful_id(arizona_stateful:id(), socket()) -> ok.
+notify_current_stateful_id(StatefulId, #socket{live_pid = LivePid}) ->
+    case LivePid of
+        undefined ->
+            ok;
+        _ ->
+            arizona_live:set_current_stateful_id(LivePid, StatefulId)
+    end.
+
+-doc ~"""
+Notify the live process about the current element index.
+
+Sends a notification to the live process (if present) about which element
+index is currently being rendered for dependency tracking purposes.
+""".
+-spec notify_current_element_index(non_neg_integer(), socket()) -> ok.
+notify_current_element_index(ElementIndex, #socket{live_pid = LivePid}) ->
+    case LivePid of
+        undefined ->
+            ok;
+        _ ->
+            arizona_live:set_current_element_index(LivePid, ElementIndex)
+    end.
+
+-doc ~"""
+Notify the live process about a variable dependency.
+
+Sends a notification to the live process (if present) that a variable
+has been accessed for dependency tracking purposes.
+""".
+-spec notify_variable_dependency(atom(), socket()) -> ok.
+notify_variable_dependency(VarName, #socket{live_pid = LivePid}) ->
+    case LivePid of
+        undefined ->
+            ok;
+        _ ->
+            arizona_live:record_variable_dependency(LivePid, VarName)
     end.

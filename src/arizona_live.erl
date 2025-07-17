@@ -62,6 +62,10 @@ callbacks, ensuring robust error handling throughout the LiveView lifecycle.
 -export([call_render_callback/2]).
 -export([call_handle_event_callback/4]).
 -export([call_handle_info_callback/3]).
+-export([set_current_stateful_id/2]).
+-export([set_current_element_index/2]).
+-export([record_variable_dependency/2]).
+-export([get_component_vars_indexes/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -92,7 +96,8 @@ callbacks, ensuring robust error handling throughout the LiveView lifecycle.
 %% Internal state record for LiveView processes
 -record(state, {
     module :: atom(),
-    socket :: arizona_socket:socket()
+    socket :: arizona_socket:socket(),
+    dependency_tracker :: arizona_dependency_tracker:tracker()
 }).
 
 -doc ~"""
@@ -381,7 +386,11 @@ state with the LiveView module and socket.
     Socket :: arizona_socket:socket(),
     State :: state().
 init({Module, Socket}) ->
-    {ok, #state{module = Module, socket = Socket}}.
+    {ok, #state{
+        module = Module,
+        socket = Socket,
+        dependency_tracker = arizona_dependency_tracker:new()
+    }}.
 
 -doc ~"""
 Handle synchronous calls to the LiveView process.
@@ -410,7 +419,12 @@ handle_call(
             {reply, {noreply, UpdatedSocket}, State#state{socket = UpdatedSocket}};
         {reply, Reply, UpdatedSocket} ->
             {reply, {reply, Reply, UpdatedSocket}, State#state{socket = UpdatedSocket}}
-    end.
+    end;
+handle_call(
+    {get_component_vars_indexes, StatefulId}, _From, #state{dependency_tracker = Tracker} = State
+) ->
+    VarsIndexes = arizona_dependency_tracker:get_component_vars_indexes(StatefulId, Tracker),
+    {reply, VarsIndexes, State}.
 
 -doc ~"""
 Handle asynchronous casts to the LiveView process.
@@ -424,6 +438,17 @@ blocking the caller.
 handle_cast({set_mode, Mode}, #state{socket = Socket} = State) ->
     Socket1 = arizona_socket:set_mode(Mode, Socket),
     {noreply, State#state{socket = Socket1}};
+handle_cast({set_current_stateful_id, StatefulId}, #state{dependency_tracker = Tracker} = State) ->
+    UpdatedTracker = arizona_dependency_tracker:set_current_stateful_id(StatefulId, Tracker),
+    {noreply, State#state{dependency_tracker = UpdatedTracker}};
+handle_cast(
+    {set_current_element_index, ElementIndex}, #state{dependency_tracker = Tracker} = State
+) ->
+    UpdatedTracker = arizona_dependency_tracker:set_current_element_index(ElementIndex, Tracker),
+    {noreply, State#state{dependency_tracker = UpdatedTracker}};
+handle_cast({record_variable_dependency, VarName}, #state{dependency_tracker = Tracker} = State) ->
+    UpdatedTracker = arizona_dependency_tracker:record_variable_dependency(VarName, Tracker),
+    {noreply, State#state{dependency_tracker = UpdatedTracker}};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -439,3 +464,48 @@ updating the process state with the returned socket.
 handle_info(Info, #state{module = Module, socket = Socket} = State) ->
     {noreply, UpdatedSocket} = call_handle_info_callback(Module, Info, Socket),
     {noreply, State#state{socket = UpdatedSocket}}.
+
+%% --------------------------------------------------------------------
+%% Dependency Tracking Functions
+%% --------------------------------------------------------------------
+
+-doc ~"""
+Set the current stateful component ID for dependency tracking.
+
+Updates the dependency tracker to record that the specified stateful
+component is currently being rendered.
+""".
+-spec set_current_stateful_id(pid(), arizona_stateful:id()) -> ok.
+set_current_stateful_id(LivePid, StatefulId) ->
+    gen_server:cast(LivePid, {set_current_stateful_id, StatefulId}).
+
+-doc ~"""
+Set the current element index for dependency tracking.
+
+Updates the dependency tracker to record that the specified element
+index is currently being rendered.
+""".
+-spec set_current_element_index(pid(), non_neg_integer()) -> ok.
+set_current_element_index(LivePid, ElementIndex) ->
+    gen_server:cast(LivePid, {set_current_element_index, ElementIndex}).
+
+-doc ~"""
+Record a variable dependency for dependency tracking.
+
+Records that a variable has been accessed during the current rendering
+context for efficient diffing.
+""".
+-spec record_variable_dependency(pid(), atom()) -> ok.
+record_variable_dependency(LivePid, VarName) ->
+    gen_server:cast(LivePid, {record_variable_dependency, VarName}).
+
+-doc ~"""
+Get the variable indexes for a specific component.
+
+Returns the mapping of variable names to element indexes for the
+specified stateful component.
+""".
+-spec get_component_vars_indexes(pid(), arizona_stateful:id()) ->
+    #{atom() => [non_neg_integer()]}.
+get_component_vars_indexes(LivePid, StatefulId) ->
+    gen_server:call(LivePid, {get_component_vars_indexes, StatefulId}).

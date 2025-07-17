@@ -115,6 +115,9 @@ dynamic_anno(#template{dynamic_anno = Anno}) ->
     Bindings :: map(),
     Value :: dynamic().
 get_binding(Key, Bindings) ->
+    % Record variable dependency for runtime tracking
+    % Send cast to self (the live process)
+    ok = gen_server:cast(self(), {record_variable_dependency, Key}),
     maps:get(Key, Bindings).
 
 -spec render_stateful(Module, Bindings) -> Callback when
@@ -158,30 +161,74 @@ prepare_stateful_render(Mod, Bindings, Socket) ->
     end.
 
 render_stateful(Mod, Bindings, Socket) ->
-    {_Id, Template, Socket1} = prepare_stateful_render(Mod, Bindings, Socket),
+    {Id, Template, Socket1} = prepare_stateful_render(Mod, Bindings, Socket),
+    % Notify live process of current stateful component
+    ok = arizona_socket:notify_current_stateful_id(Id, Socket1),
     resolve_template(Template, Socket1).
 
-diff_stateful(_Mod, _Bindings, Socket) ->
-    %{Id, _Template, Socket1} = prepare_stateful_render(Mod, Bindings, Socket),
-    %StatefulState = arizona_socket:get_stateful_state(Id, Socket1),
-    %ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
-    %case has_changes(ChangedBindings) of
-    %    true ->
-    %        error(not_implemented);
-    %    false ->
-    %        {[], Socket1}
-    %end.
-    %% TODO: Process changes
-    {[], Socket}.
+diff_stateful(Mod, Bindings, Socket) ->
+    {Id, Template, Socket1} = prepare_stateful_render(Mod, Bindings, Socket),
+    StatefulState = arizona_socket:get_stateful_state(Id, Socket1),
+    ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
+
+    case has_changes(ChangedBindings) of
+        false ->
+            {[], Socket1};
+        true ->
+            % Get runtime-tracked variable dependencies from live process
+            case arizona_socket:get_live_pid(Socket1) of
+                undefined ->
+                    % No live process, can't do runtime diffing
+                    {[], Socket1};
+                LivePid ->
+                    VarsIndexes = arizona_live:get_component_vars_indexes(LivePid, Id),
+                    % Find affected elements using runtime dependencies
+                    AffectedElements = get_affected_elements(ChangedBindings, VarsIndexes),
+                    case sets:size(AffectedElements) of
+                        0 ->
+                            {[], Socket1};
+                        _ ->
+                            % Generate diff for affected elements
+                            generate_element_diff(AffectedElements, Template, Socket1)
+                    end
+            end
+    end.
 
 %% Check if there are any changes in the bindings
-%-spec has_changes(ChangedBindings) -> boolean() when
-%    ChangedBindings :: map().
-%has_changes(ChangedBindings) ->
-%    maps:size(ChangedBindings) > 0.
+-spec has_changes(ChangedBindings) -> boolean() when
+    ChangedBindings :: map().
+has_changes(ChangedBindings) ->
+    maps:size(ChangedBindings) > 0.
+
+%% Get affected elements from changed bindings and variable indexes
+-spec get_affected_elements(ChangedBindings, VarsIndexes) -> AffectedElements when
+    ChangedBindings :: map(),
+    VarsIndexes :: #{atom() => [non_neg_integer()]},
+    AffectedElements :: sets:set(non_neg_integer()).
+get_affected_elements(ChangedBindings, VarsIndexes) ->
+    ChangedVarNames = maps:keys(ChangedBindings),
+    AffectedIndexLists = [
+        maps:get(VarName, VarsIndexes, [])
+     || VarName <- ChangedVarNames
+    ],
+    sets:from_list(lists:flatten(AffectedIndexLists)).
+
+%% Generate diff for affected elements
+-spec generate_element_diff(AffectedElements, Template, Socket) -> {Diff, Socket1} when
+    AffectedElements :: sets:set(non_neg_integer()),
+    Template :: template(),
+    Socket :: term(),
+    Diff :: [term()],
+    Socket1 :: term().
+generate_element_diff(_AffectedElements, _Template, Socket) ->
+    % For now, return empty diff - this will be expanded later
+    % when we implement the full diff generation logic
+    {[], Socket}.
 
 hierarchical_stateful(Mod, Bindings, Socket) ->
     {Id, Template, RenderSocket} = prepare_stateful_render(Mod, Bindings, Socket),
+    % Notify live process of current stateful component
+    ok = arizona_socket:notify_current_stateful_id(Id, RenderSocket),
     {Dynamic, DynamicSocket} = resolve_template_dynamic(Template, RenderSocket),
     HierarchicalSocket = arizona_socket:put_hierarchical_acc(
         Id,
@@ -207,6 +254,9 @@ resolve_template_dynamic(Template, Socket) ->
 resolve_dynamic_callbacks([], _DynamicTuple, Socket) ->
     {[], Socket};
 resolve_dynamic_callbacks([Index | T], DynamicTuple, Socket) ->
+    % Notify live process of current element index
+    ok = arizona_socket:notify_current_element_index(Index, Socket),
+
     DynamicCallback = element(Index, DynamicTuple),
     case DynamicCallback() of
         Callback when is_function(Callback, 1) ->
