@@ -48,6 +48,7 @@ states, and temporary bindings throughout the rendering process.
 -export([clear_changes/1]).
 -export([set_hierarchical_acc/2]).
 -export([get_hierarchical_acc/1]).
+-export([put_hierarchical_acc/3]).
 -export([set_hierarchical_pending_element/2]).
 -export([get_hierarchical_pending_element/1]).
 -export([clear_hierarchical_pending_element/1]).
@@ -453,6 +454,10 @@ Returns the hierarchical structure that has been accumulated during rendering.
     HierarchicalStructure :: arizona_hierarchical:hierarchical_structure().
 get_hierarchical_acc(#socket{} = Socket) ->
     Socket#socket.hierarchical_acc.
+
+put_hierarchical_acc(StatefulId, Struct, #socket{} = Socket) ->
+    Acc = Socket#socket.hierarchical_acc,
+    Socket#socket{hierarchical_acc = Acc#{StatefulId => Struct}}.
 
 -doc ~"""
 Set a pending hierarchical element in the socket.

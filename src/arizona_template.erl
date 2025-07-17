@@ -117,21 +117,23 @@ dynamic_anno(#template{dynamic_anno = Anno}) ->
 get_binding(Key, Bindings) ->
     maps:get(Key, Bindings).
 
--spec render_stateful(Module, Bindings) -> {StatefulTemplate, Template} when
+-spec render_stateful(Module, Bindings) -> Callback when
     Module :: atom(),
     Bindings :: map(),
-    StatefulTemplate :: '$arizona_stateful_template',
-    Template :: template().
+    Callback :: fun((arizona_socket:socket()) -> {iodata() | term(), arizona_socket:socket()}).
 render_stateful(Mod, Bindings) ->
-    fun(Socket) -> call_stateful(Mod, Bindings, Socket) end.
+    fun(Socket) ->
+        case arizona_socket:get_mode(Socket) of
+            render ->
+                render_stateful(Mod, Bindings, Socket);
+            diff ->
+                diff_stateful(Mod, Bindings, Socket);
+            hierarchical ->
+                hierarchical_stateful(Mod, Bindings, Socket)
+        end
+    end.
 
--spec call_stateful(Mod, Bindings, Socket) -> {Template, Socket1} when
-    Mod :: module(),
-    Bindings :: arizona_socket:bindings(),
-    Socket :: arizona_socket:socket(),
-    Template :: arizona_template:template(),
-    Socket1 :: arizona_socket:socket().
-call_stateful(Mod, Bindings, Socket) ->
+prepare_stateful_render(Mod, Bindings, Socket) ->
     Id = maps:get(id, Bindings),
     case arizona_socket:find_stateful_state(Id, Socket) of
         {ok, State} ->
@@ -155,16 +157,109 @@ call_stateful(Mod, Bindings, Socket) ->
             {Template, Socket2}
     end.
 
--spec render_stateless(Module, Function, Bindings) -> {StatelessTemplate, Template, Bindings} when
+render_stateful(Mod, Bindings, Socket) ->
+    {Template, Socket1} = prepare_stateful_render(Mod, Bindings, Socket),
+    resolve_template(Template, Socket1).
+
+diff_stateful(_Mod, _Bindings, _Socket) ->
+    error(not_implemented).
+
+hierarchical_stateful(Mod, Bindings, Socket) ->
+    Id = maps:get(id, Bindings),
+    Struct = #{
+        type => stateful,
+        id => Id
+    },
+    {Template, RenderSocket} = prepare_stateful_render(Mod, Bindings, Socket),
+    {Dynamic, DynamicSocket} = resolve_template_dynamic(Template, RenderSocket),
+    HierarchicalSocket = arizona_socket:put_hierarchical_acc(
+        Id,
+        #{
+            type => stateful,
+            static => Template#template.static,
+            dynamic => Dynamic
+        },
+        DynamicSocket
+    ),
+    {Struct, HierarchicalSocket}.
+
+% resolver copy
+resolve_template_dynamic(Template, Socket) ->
+    DynamicTuple = arizona_template:dynamic(Template),
+    DynamicSequence = arizona_template:dynamic_sequence(Template),
+    resolve_dynamic_callbacks(DynamicSequence, DynamicTuple, Socket).
+% resolver copy
+resolve_dynamic_callbacks([], _DynamicTuple, Socket) ->
+    {[], Socket};
+resolve_dynamic_callbacks([Index | T], DynamicTuple, Socket) ->
+    DynamicCallback = element(Index, DynamicTuple),
+    case DynamicCallback() of
+        Callback when is_function(Callback, 1) ->
+            {Html, StatefulSocket} = Callback(Socket),
+            {RestHtml, FinalSocket} = resolve_dynamic_callbacks(T, DynamicTuple, StatefulSocket),
+            {[Html | RestHtml], FinalSocket};
+        Result ->
+            {Html, NewSocket} = arizona_html:to_html(Result, Socket),
+            {RestHtml, FinalSocket} = resolve_dynamic_callbacks(T, DynamicTuple, NewSocket),
+            {[Html | RestHtml], FinalSocket}
+    end.
+
+-spec resolve_template(Template, Socket) -> {Html, Socket1} when
+    Template :: term(),
+    Socket :: term(),
+    Html :: iodata(),
+    Socket1 :: term().
+resolve_template(Template, Socket) ->
+    Static = arizona_template:static(Template),
+    {Dynamic, FinalSocket} = resolve_template_dynamic(Template, Socket),
+    Html = zip_static_dynamic(Static, Dynamic),
+    {Html, FinalSocket}.
+
+%% Zip static and dynamic parts for list item
+zip_static_dynamic([], []) ->
+    [];
+zip_static_dynamic([S | Static], [D | Dynamic]) ->
+    [S, D | zip_static_dynamic(Static, Dynamic)];
+zip_static_dynamic([S | Static], []) ->
+    [S | zip_static_dynamic(Static, [])];
+zip_static_dynamic([], [D | Dynamic]) ->
+    [D | zip_static_dynamic([], Dynamic)].
+
+-spec render_stateless(Module, Function, Bindings) -> Callback when
     Module :: atom(),
     Function :: atom(),
     Bindings :: map(),
-    StatelessTemplate :: '$arizona_stateless_template',
-    Template :: template().
+    Callback :: fun((arizona_socket:socket()) -> {iodata() | term(), arizona_socket:socket()}).
 render_stateless(Mod, Fun, Bindings) ->
-    fun(Socket) -> call_stateless(Mod, Fun, Bindings, Socket) end.
+    fun(Socket) ->
+        case arizona_socket:get_mode(Socket) of
+            render ->
+                render_stateless(Mod, Fun, Bindings, Socket);
+            diff ->
+                diff_stateless(Mod, Fun, Bindings, Socket);
+            hierarchical ->
+                hierarchical_stateless(Mod, Fun, Bindings, Socket)
+        end
+    end.
 
-call_stateless(Mod, Fun, Bindings, Socket) ->
+prepare_stateless_render(Mod, Fun, Bindings, Socket) ->
     Template = arizona_stateless:call_render_callback(Mod, Fun, Bindings),
     TempSocket = arizona_socket:with_temp_bindings(Bindings, Socket),
     {Template, TempSocket}.
+
+render_stateless(Mod, Fun, Bindings, Socket) ->
+    {Template, TempSocket} = prepare_stateless_render(Mod, Fun, Bindings, Socket),
+    resolve_template(Template, TempSocket).
+
+diff_stateless(_Mod, _Fun, _Bindings, _Socket) ->
+    error(not_implemented).
+
+hierarchical_stateless(Mod, Fun, Bindings, Socket) ->
+    {Template, TempSocket} = prepare_stateless_render(Mod, Fun, Bindings, Socket),
+    {Dynamic, DynamicSocket} = resolve_template_dynamic(Template, TempSocket),
+    Struct = #{
+        type => stateless,
+        static => Template#template.static,
+        dynamic => Dynamic
+    },
+    {Struct, DynamicSocket}.
