@@ -32,7 +32,7 @@ groups() ->
             conditional_dependency_tracking
         ]},
         {component_management, [parallel], [
-            get_component_vars_indexes,
+            get_component_dependencies,
             get_stateful_dependencies,
             clear_component_dependencies,
             multiple_component_tracking,
@@ -112,8 +112,8 @@ record_variable_dependency_active(Config) when is_list(Config) ->
     Tracker2 = arizona_dependency_tracker:set_current_element_index(0, Tracker1),
     Tracker3 = arizona_dependency_tracker:record_variable_dependency(is_auth, Tracker2),
 
-    VarsIndexes = arizona_dependency_tracker:get_component_vars_indexes(user123, Tracker3),
-    ?assertEqual(#{is_auth => [0]}, VarsIndexes).
+    Dependencies = arizona_dependency_tracker:get_component_dependencies(user123, Tracker3),
+    ?assertEqual(#{is_auth => [0]}, Dependencies).
 
 record_variable_dependency_inactive(Config) when is_list(Config) ->
     Tracker0 = arizona_dependency_tracker:new(),
@@ -134,8 +134,8 @@ record_multiple_variables(Config) when is_list(Config) ->
     Tracker3 = arizona_dependency_tracker:record_variable_dependency(is_auth, Tracker2),
     Tracker4 = arizona_dependency_tracker:record_variable_dependency(user_name, Tracker3),
 
-    VarsIndexes = arizona_dependency_tracker:get_component_vars_indexes(user123, Tracker4),
-    ?assertEqual(#{is_auth => [0], user_name => [0]}, VarsIndexes).
+    Dependencies = arizona_dependency_tracker:get_component_dependencies(user123, Tracker4),
+    ?assertEqual(#{is_auth => [0], user_name => [0]}, Dependencies).
 
 record_duplicate_dependencies(Config) when is_list(Config) ->
     Tracker0 = arizona_dependency_tracker:new(),
@@ -145,8 +145,8 @@ record_duplicate_dependencies(Config) when is_list(Config) ->
     Tracker4 = arizona_dependency_tracker:record_variable_dependency(is_auth, Tracker3),
 
     % Should not duplicate the dependency
-    VarsIndexes = arizona_dependency_tracker:get_component_vars_indexes(user123, Tracker4),
-    ?assertEqual(#{is_auth => [0]}, VarsIndexes).
+    Dependencies = arizona_dependency_tracker:get_component_dependencies(user123, Tracker4),
+    ?assertEqual(#{is_auth => [0]}, Dependencies).
 
 conditional_dependency_tracking(Config) when is_list(Config) ->
     % Simulate conditional access pattern from user's example
@@ -160,8 +160,8 @@ conditional_dependency_tracking(Config) when is_list(Config) ->
     % Conditional: if is_auth = true, access greetings
     Tracker4 = arizona_dependency_tracker:record_variable_dependency(greetings, Tracker3),
 
-    VarsIndexes = arizona_dependency_tracker:get_component_vars_indexes(user123, Tracker4),
-    ?assertEqual(#{is_auth => [0], greetings => [0]}, VarsIndexes),
+    Dependencies = arizona_dependency_tracker:get_component_dependencies(user123, Tracker4),
+    ?assertEqual(#{is_auth => [0], greetings => [0]}, Dependencies),
 
     % Simulate different path: if is_auth = false, access unauth_message
     Tracker5 = arizona_dependency_tracker:set_current_stateful_id(user456, Tracker0),
@@ -169,18 +169,18 @@ conditional_dependency_tracking(Config) when is_list(Config) ->
     Tracker7 = arizona_dependency_tracker:record_variable_dependency(is_auth, Tracker6),
     Tracker8 = arizona_dependency_tracker:record_variable_dependency(unauth_message, Tracker7),
 
-    VarsIndexes2 = arizona_dependency_tracker:get_component_vars_indexes(user456, Tracker8),
-    ?assertEqual(#{is_auth => [0], unauth_message => [0]}, VarsIndexes2).
+    Dependencies2 = arizona_dependency_tracker:get_component_dependencies(user456, Tracker8),
+    ?assertEqual(#{is_auth => [0], unauth_message => [0]}, Dependencies2).
 
 %% --------------------------------------------------------------------
 %% Component Management Tests
 %% --------------------------------------------------------------------
 
-get_component_vars_indexes(Config) when is_list(Config) ->
+get_component_dependencies(Config) when is_list(Config) ->
     Tracker0 = arizona_dependency_tracker:new(),
 
     % Test empty component
-    ?assertEqual(#{}, arizona_dependency_tracker:get_component_vars_indexes(nonexistent, Tracker0)),
+    ?assertEqual(#{}, arizona_dependency_tracker:get_component_dependencies(nonexistent, Tracker0)),
 
     % Test component with dependencies
     Tracker1 = arizona_dependency_tracker:set_current_stateful_id(user123, Tracker0),
@@ -188,9 +188,9 @@ get_component_vars_indexes(Config) when is_list(Config) ->
     Tracker3 = arizona_dependency_tracker:record_variable_dependency(name, Tracker2),
 
     ?assertEqual(
-        #{name => [0]}, arizona_dependency_tracker:get_component_vars_indexes(user123, Tracker3)
+        #{name => [0]}, arizona_dependency_tracker:get_component_dependencies(user123, Tracker3)
     ),
-    ?assertEqual(#{}, arizona_dependency_tracker:get_component_vars_indexes(other, Tracker3)).
+    ?assertEqual(#{}, arizona_dependency_tracker:get_component_dependencies(other, Tracker3)).
 
 get_stateful_dependencies(Config) when is_list(Config) ->
     Tracker0 = arizona_dependency_tracker:new(),
@@ -205,12 +205,12 @@ get_stateful_dependencies(Config) when is_list(Config) ->
     Tracker5 = arizona_dependency_tracker:set_current_element_index(1, Tracker4),
     Tracker6 = arizona_dependency_tracker:record_variable_dependency(email, Tracker5),
 
-    AllVarsIndexes = arizona_dependency_tracker:get_stateful_dependencies(Tracker6),
+    AllDependencies = arizona_dependency_tracker:get_stateful_dependencies(Tracker6),
     Expected = #{
         user123 => #{name => [0]},
         profile456 => #{email => [1]}
     },
-    ?assertEqual(Expected, AllVarsIndexes).
+    ?assertEqual(Expected, AllDependencies).
 
 clear_component_dependencies(Config) when is_list(Config) ->
     Tracker0 = arizona_dependency_tracker:new(),
@@ -220,13 +220,13 @@ clear_component_dependencies(Config) when is_list(Config) ->
 
     % Verify dependency exists
     ?assertEqual(
-        #{name => [0]}, arizona_dependency_tracker:get_component_vars_indexes(user123, Tracker3)
+        #{name => [0]}, arizona_dependency_tracker:get_component_dependencies(user123, Tracker3)
     ),
     ?assertEqual(1, arizona_dependency_tracker:tracked_components_count(Tracker3)),
 
     % Clear dependencies
     Tracker4 = arizona_dependency_tracker:clear_component_dependencies(user123, Tracker3),
-    ?assertEqual(#{}, arizona_dependency_tracker:get_component_vars_indexes(user123, Tracker4)),
+    ?assertEqual(#{}, arizona_dependency_tracker:get_component_dependencies(user123, Tracker4)),
     ?assertEqual(0, arizona_dependency_tracker:tracked_components_count(Tracker4)).
 
 multiple_component_tracking(Config) when is_list(Config) ->
@@ -249,8 +249,8 @@ multiple_component_tracking(Config) when is_list(Config) ->
     Tracker10 = arizona_dependency_tracker:record_variable_dependency(status, Tracker9),
 
     % Verify all dependencies
-    User123Vars = arizona_dependency_tracker:get_component_vars_indexes(user123, Tracker10),
-    Profile456Vars = arizona_dependency_tracker:get_component_vars_indexes(profile456, Tracker10),
+    User123Vars = arizona_dependency_tracker:get_component_dependencies(user123, Tracker10),
+    Profile456Vars = arizona_dependency_tracker:get_component_dependencies(profile456, Tracker10),
 
     ?assertEqual(#{name => [0], email => [0], status => [2]}, User123Vars),
     ?assertEqual(#{bio => [1]}, Profile456Vars),
