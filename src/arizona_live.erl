@@ -56,8 +56,10 @@ callbacks, ensuring robust error handling throughout the LiveView lifecycle.
 -export([start_link/2]).
 -export([mount/2]).
 -export([render/1]).
+-export([render/2]).
 -export([handle_event/3]).
 -export([set_mode/2]).
+-export([set_socket/2]).
 -export([call_mount_callback/3]).
 -export([call_render_callback/2]).
 -export([call_handle_event_callback/4]).
@@ -67,6 +69,8 @@ callbacks, ensuring robust error handling throughout the LiveView lifecycle.
 -export([set_current_element_index/2]).
 -export([record_variable_dependency/2]).
 -export([get_component_dependencies/2]).
+-export([clear_component_dependencies/2]).
+-export([get_socket/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -230,6 +234,9 @@ after rendering.
 render(Pid) ->
     gen_server:call(Pid, render, infinity).
 
+render(Pid, StatefulId) ->
+    gen_server:call(Pid, {render, StatefulId}, infinity).
+
 -doc ~"""
 Handle a client event in the LiveView.
 
@@ -275,6 +282,9 @@ ok
     Mode :: arizona_socket:mode().
 set_mode(Pid, Mode) ->
     gen_server:cast(Pid, {set_mode, Mode}).
+
+set_socket(Pid, Socket) ->
+    gen_server:cast(Pid, {set_socket, Socket}).
 
 -doc ~"""
 Call the mount callback for a LiveView module.
@@ -389,7 +399,7 @@ state with the LiveView module and socket.
 init({Module, Socket}) ->
     {ok, #state{
         module = Module,
-        socket = Socket,
+        socket = arizona_socket:set_live_pid(self(), Socket),
         dependency_tracker = arizona_dependency_tracker:new()
     }}.
 
@@ -408,8 +418,15 @@ handle_call({mount, Req}, _From, #state{module = Module, socket = Socket} = Stat
     UpdatedSocket = call_mount_callback(Module, Req, Socket),
     {reply, UpdatedSocket, State#state{socket = UpdatedSocket}};
 handle_call(render, _From, #state{module = Module, socket = Socket} = State) ->
-    UpdatedSocket = call_render_callback(Module, Socket),
-    {reply, UpdatedSocket, State#state{socket = UpdatedSocket}};
+    Template = call_render_callback(Module, Socket),
+    {reply, Template, State};
+handle_call({render, StatefulId}, _From, #state{socket = Socket} = State) ->
+    StatefulState = arizona_socket:get_stateful_state(StatefulId, Socket),
+    Module = arizona_stateful:get_module(StatefulState),
+    Bindings = arizona_stateful:get_bindings(StatefulState),
+    Callback = arizona_template:render_stateful(Module, Bindings),
+    {Rendered, UpdatedSocket} = Callback(Socket),
+    {reply, Rendered, State#state{socket = UpdatedSocket}};
 handle_call(
     {handle_event, Event, Params},
     _From,
@@ -428,7 +445,9 @@ handle_call(
     {get_component_dependencies, StatefulId}, _From, #state{dependency_tracker = Tracker} = State
 ) ->
     Dependencies = arizona_dependency_tracker:get_component_dependencies(StatefulId, Tracker),
-    {reply, Dependencies, State}.
+    {reply, Dependencies, State};
+handle_call(get_socket, _From, #state{socket = Socket} = State) ->
+    {reply, Socket, State}.
 
 -doc ~"""
 Handle asynchronous casts to the LiveView process.
@@ -442,6 +461,8 @@ blocking the caller.
 handle_cast({set_mode, Mode}, #state{socket = Socket} = State) ->
     Socket1 = arizona_socket:set_mode(Mode, Socket),
     {noreply, State#state{socket = Socket1}};
+handle_cast({set_socket, Socket}, #state{} = State) ->
+    {noreply, State#state{socket = Socket}};
 handle_cast({set_current_stateful_id, StatefulId}, #state{dependency_tracker = Tracker} = State) ->
     UpdatedTracker = arizona_dependency_tracker:set_current_stateful_id(StatefulId, Tracker),
     {noreply, State#state{dependency_tracker = UpdatedTracker}};
@@ -452,6 +473,11 @@ handle_cast(
     {noreply, State#state{dependency_tracker = UpdatedTracker}};
 handle_cast({record_variable_dependency, VarName}, #state{dependency_tracker = Tracker} = State) ->
     UpdatedTracker = arizona_dependency_tracker:record_variable_dependency(VarName, Tracker),
+    {noreply, State#state{dependency_tracker = UpdatedTracker}};
+handle_cast(
+    {clear_component_dependencies, StatefulId}, #state{dependency_tracker = Tracker} = State
+) ->
+    UpdatedTracker = arizona_dependency_tracker:clear_component_dependencies(StatefulId, Tracker),
     {noreply, State#state{dependency_tracker = UpdatedTracker}};
 handle_cast(_Request, State) ->
     {noreply, State}.
@@ -516,3 +542,22 @@ specified stateful component.
     #{atom() => [non_neg_integer()]}.
 get_component_dependencies(LivePid, StatefulId) ->
     gen_server:call(LivePid, {get_component_dependencies, StatefulId}).
+
+-doc ~"""
+Clear all variable dependencies for a specific component.
+
+Removes all recorded dependencies for the specified stateful component,
+typically called at the beginning of a new render cycle.
+""".
+-spec clear_component_dependencies(pid(), arizona_stateful:id()) -> ok.
+clear_component_dependencies(LivePid, StatefulId) ->
+    gen_server:cast(LivePid, {clear_component_dependencies, StatefulId}).
+
+-doc ~"""
+Get the current socket from the LiveView process.
+
+Returns the current socket state from the LiveView gen_server process.
+""".
+-spec get_socket(pid()) -> arizona_socket:socket().
+get_socket(LivePid) ->
+    gen_server:call(LivePid, get_socket).
