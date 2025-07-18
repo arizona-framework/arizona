@@ -72,7 +72,7 @@ Component identifier type for stateful components.
 Can be either the special `root` atom for the root component or a binary
 string for nested components.
 """.
--type id() :: root | binary().
+-opaque id() :: binary().
 
 %% Internal state record for stateful components
 -record(state, {
