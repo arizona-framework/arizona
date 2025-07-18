@@ -44,6 +44,7 @@ and using fingerprints to determine when full remounting is necessary.
 -export([call_unmount_callback/2]).
 -export([call_render_callback/2]).
 -export([call_dynamic_function/2]).
+-export([prepare_render/3]).
 -export([new/3]).
 -export([get_module/1]).
 -export([get_id/1]).
@@ -53,7 +54,6 @@ and using fingerprints to determine when full remounting is necessary.
 -export([put_binding/3]).
 -export([put_bindings/2]).
 -export([get_changed_bindings/1]).
--export([should_remount/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -80,8 +80,7 @@ string for nested components.
     module :: module(),
     bindings :: map(),
     % Track which bindings changed
-    changed_bindings :: map(),
-    fingerprint :: arizona_fingerprint:fingerprint()
+    changed_bindings :: map()
 }).
 
 -doc ~"""
@@ -252,8 +251,7 @@ new(Id, Mod, Bindings) when (Id =:= root orelse is_binary(Id)), is_atom(Mod), is
         id = Id,
         module = Mod,
         bindings = Bindings,
-        changed_bindings = #{},
-        fingerprint = generate_fingerprint(Mod, Bindings)
+        changed_bindings = #{}
     }.
 
 -doc ~"""
@@ -439,38 +437,50 @@ get_changed_bindings(#state{} = State) ->
     State#state.changed_bindings.
 
 -doc ~"""
-Determine if a stateful component should be remounted.
+Prepare stateful component for rendering.
 
-Compares the current fingerprint with a newly generated fingerprint to
-determine if the component needs to be remounted due to significant changes.
+Handles the initialization and setup of stateful components, including
+state management, binding updates, and template generation. This function
+manages the complete lifecycle of preparing a stateful component for rendering.
 
 ## Examples
 
 ```erlang
-1> State = arizona_stateful:new(root, my_component, #{name => ~"John"}).
-#state{...}
-2> arizona_stateful:should_remount(State).
-false
+1> Socket = arizona_socket:new(#{}).
+#socket{...}
+2> Bindings = #{id => root, name => ~"John"}.
+#{id => root, name => ~"John"}
+3> {Id, Template, Socket1} = arizona_stateful:prepare_render(my_component, Bindings, Socket).
+{root, #template{...}, #socket{...}}
 ```
 """.
--spec should_remount(State) -> ShouldRemount when
-    State :: state(),
-    ShouldRemount :: boolean().
-should_remount(#state{} = State) ->
-    OldFingerprint = State#state.fingerprint,
-    NewFingerprint = generate_fingerprint(State),
-    not arizona_fingerprint:match(OldFingerprint, NewFingerprint).
-
-%% --------------------------------------------------------------------
-%% Private functions
-%% --------------------------------------------------------------------
-
-%% Generate fingerprint for current state
-generate_fingerprint(#state{} = State) ->
-    Mod = State#state.module,
-    Bindings = State#state.bindings,
-    generate_fingerprint(Mod, Bindings).
-
-%% Generate fingerprint for module and bindings
-generate_fingerprint(Mod, Bindings) ->
-    arizona_fingerprint:generate({Mod, Bindings}).
+-spec prepare_render(Module, Bindings, Socket) -> {Id, Template, Socket1} when
+    Module :: atom(),
+    Bindings :: arizona_binder:bindings(),
+    Socket :: arizona_socket:socket(),
+    Id :: term(),
+    Template :: arizona_template:template(),
+    Socket1 :: arizona_socket:socket().
+prepare_render(Mod, Bindings, Socket) ->
+    Id = arizona_binder:get(id, Bindings),
+    case arizona_socket:find_stateful_state(Id, Socket) of
+        {ok, State} ->
+            %% Apply new bindings to existing state before checking remount
+            UpdatedState = put_bindings(Bindings, State),
+            %% Update socket with new state and call render callback (which handles diffing)
+            Socket1 = arizona_socket:put_stateful_state(UpdatedState, Socket),
+            UpdatedBindings = get_bindings(UpdatedState),
+            Template = call_render_callback(Mod, UpdatedBindings),
+            {Id, Template, Socket1};
+        error ->
+            State = new(Id, Mod, Bindings),
+            Socket1 = arizona_socket:put_stateful_state(State, Socket),
+            %% Call mount callback for new components
+            Socket2 = call_mount_callback(Mod, Socket1),
+            %% Call the component's render callback which handles
+            %% rendering and returns updated socket
+            MountedState = arizona_socket:get_stateful_state(Id, Socket2),
+            MountedBindings = get_bindings(MountedState),
+            Template = call_render_callback(Mod, MountedBindings),
+            {Id, Template, Socket2}
+    end.

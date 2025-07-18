@@ -31,41 +31,26 @@ states, and temporary bindings throughout the rendering process.
 %% --------------------------------------------------------------------
 
 -export([new/1]).
--export([is_socket/1]).
 -export([get_mode/1]).
 -export([set_mode/2]).
--export([get_current_stateful_id/1]).
--export([get_current_stateful_state/1]).
 -export([get_stateful_states/1]).
 -export([get_stateful_state/2]).
--export([find_stateful_state/2]).
--export([set_current_stateful_id/2]).
 -export([put_stateful_state/2]).
--export([set_html_acc/2]).
--export([get_html/1]).
--export([append_changes/2]).
--export([get_changes/1]).
--export([clear_changes/1]).
--export([set_hierarchical_acc/2]).
--export([get_hierarchical_acc/1]).
--export([put_hierarchical_acc/3]).
--export([set_hierarchical_pending_element/2]).
--export([get_hierarchical_pending_element/1]).
--export([clear_hierarchical_pending_element/1]).
--export([get_binding/2]).
--export([get_binding/3]).
--export([put_binding/3]).
--export([put_bindings/2]).
--export([with_temp_bindings/2]).
--export([get_temp_binding/2]).
--export([set_layout/2]).
+-export([find_stateful_state/2]).
 -export([get_layout/1]).
--export([set_live_pid/2]).
+-export([set_layout/2]).
 -export([get_live_pid/1]).
+-export([set_live_pid/2]).
+
+%% --------------------------------------------------------------------
+%% Live PID and Dependency Tracking Functions
+%% --------------------------------------------------------------------
+
 -export([notify_current_stateful_id/2]).
 -export([notify_current_element_index/2]).
 -export([notify_variable_dependency/2]).
 -export([clear_component_dependencies/2]).
+-export([put_hierarchical/3]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -73,9 +58,6 @@ states, and temporary bindings throughout the rendering process.
 
 -ignore_xref([get_stateful_state/2]).
 -ignore_xref([get_stateful_states/1]).
--ignore_xref([get_temp_binding/2]).
--ignore_xref([put_binding/3]).
--ignore_xref([set_current_stateful_id/2]).
 -ignore_xref([set_layout/2]).
 
 %% --------------------------------------------------------------------
@@ -94,15 +76,7 @@ states, and temporary bindings throughout the rendering process.
 
 -record(socket, {
     mode :: mode(),
-    html_acc :: iolist(),
-    changes_acc :: arizona_differ:diff_changes(),
-    hierarchical_acc :: arizona_hierarchical:hierarchical_structure(),
-    hierarchical_pending_element :: arizona_hierarchical:element_content() | undefined,
-    current_stateful_parent_id :: arizona_stateful:id() | undefined,
-    current_stateful_id :: arizona_stateful:id(),
     stateful_states :: #{arizona_stateful:id() => arizona_stateful:state()},
-    % For stateless component bindings, always a map
-    temp_bindings :: map(),
     layout :: layout() | undefined,
     live_pid :: pid() | undefined
 }).
@@ -175,38 +149,10 @@ The socket maintains rendering state and context throughout template operations.
 new(Opts) when is_map(Opts) ->
     #socket{
         mode = maps:get(mode, Opts, render),
-        html_acc = [],
-        changes_acc = [],
-        hierarchical_acc = #{},
-        hierarchical_pending_element = undefined,
-        current_stateful_parent_id = maps:get(current_stateful_parent_id, Opts, undefined),
-        current_stateful_id = maps:get(current_stateful_id, Opts, root),
         stateful_states = #{},
-        temp_bindings = #{},
         layout = undefined,
         live_pid = maps:get(live_pid, Opts, undefined)
     }.
-
--doc ~"""
-Check if a term is a socket.
-
-Type guard function to determine if a given term is a valid socket record.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> arizona_socket:is_socket(Socket).
-true
-3> arizona_socket:is_socket(not_a_socket).
-false
-```
-""".
--spec is_socket(Term) -> boolean() when
-    Term :: term().
-is_socket(#socket{}) -> true;
-is_socket(_) -> false.
 
 -doc ~"""
 Get the current rendering mode from the socket.
@@ -249,47 +195,6 @@ are processed and what data structures are generated.
     Socket1 :: socket().
 set_mode(Mode, #socket{} = Socket) when Mode =:= render; Mode =:= diff; Mode =:= hierarchical ->
     Socket#socket{mode = Mode}.
-
--doc ~"""
-Get the current stateful component ID from the socket.
-
-Returns the ID of the stateful component currently being processed.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{current_stateful_id => my_component}).
-#socket{...}
-2> arizona_socket:get_current_stateful_id(Socket).
-my_component
-```
-""".
--spec get_current_stateful_id(Socket) -> Id when
-    Socket :: socket(),
-    Id :: arizona_stateful:id().
-get_current_stateful_id(#socket{} = Socket) ->
-    Socket#socket.current_stateful_id.
-
--doc ~"""
-Get the current stateful component state from the socket.
-
-Returns the state of the current stateful component being processed.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{current_stateful_id => root}).
-#socket{...}
-2> arizona_socket:get_current_stateful_state(Socket).
-#{id => root, bindings => #{}, ...}
-```
-""".
--spec get_current_stateful_state(Socket) -> StatefulState when
-    Socket :: socket(),
-    StatefulState :: arizona_stateful:state().
-get_current_stateful_state(#socket{} = Socket) ->
-    Id = get_current_stateful_id(Socket),
-    get_stateful_state(Id, Socket).
 
 -doc ~"""
 Get a specific stateful component state by ID.
@@ -357,181 +262,6 @@ find_stateful_state(Id, #socket{} = Socket) when Id =:= root; is_binary(Id) ->
     maps:find(Id, Socket#socket.stateful_states).
 
 -doc ~"""
-Set the current stateful component ID in the socket.
-
-Updates the socket to track a different stateful component as the current one.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{current_stateful_id => root}).
-#socket{...}
-2> Socket2 = arizona_socket:set_current_stateful_id(my_component, Socket).
-#socket{current_stateful_id = my_component, ...}
-```
-""".
--spec set_current_stateful_id(Id, Socket) -> Socket1 when
-    Id :: arizona_stateful:id(),
-    Socket :: socket(),
-    Socket1 :: socket().
-set_current_stateful_id(Id, #socket{} = Socket) when Id =:= root; is_binary(Id) ->
-    Socket#socket{current_stateful_id = Id}.
-
--doc ~"""
-Set the HTML accumulator in the socket.
-
-Updates the socket with HTML content that has been accumulated during rendering.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> Socket2 = arizona_socket:set_html_acc([~"Hello", ~"World"], Socket).
-#socket{html_acc = [~"Hello", ~"World"], ...}
-```
-""".
--spec set_html_acc(Html, Socket) -> Socket1 when
-    Html :: arizona_html:html(),
-    Socket :: socket(),
-    Socket1 :: socket().
-set_html_acc(Html, #socket{} = Socket) when is_list(Html) ->
-    Socket#socket{html_acc = Html}.
-
--doc ~"""
-Get the HTML accumulator from the socket.
-
-Returns the HTML content that has been accumulated during rendering.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> arizona_socket:get_html(Socket).
-[]
-```
-""".
--spec get_html(Socket) -> Html when
-    Socket :: socket(),
-    Html :: arizona_html:html().
-get_html(#socket{} = Socket) ->
-    Socket#socket.html_acc.
-
--doc ~"""
-Set the hierarchical accumulator in the socket.
-
-Updates the socket with a hierarchical structure for hierarchical rendering mode.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> Structure = #{root => #{0 => ~"content"}}.
-#{root => #{0 => ~"content"}}
-3> Socket2 = arizona_socket:set_hierarchical_acc(Structure, Socket).
-#socket{hierarchical_acc = #{root => #{0 => ~"content"}}, ...}
-```
-""".
--spec set_hierarchical_acc(HierarchicalStructure, Socket) -> Socket1 when
-    HierarchicalStructure :: arizona_hierarchical:hierarchical_structure(),
-    Socket :: socket(),
-    Socket1 :: socket().
-set_hierarchical_acc(HierarchicalStructure, #socket{} = Socket) when
-    is_map(HierarchicalStructure)
-->
-    Socket#socket{hierarchical_acc = HierarchicalStructure}.
-
--doc ~"""
-Get the hierarchical accumulator from the socket.
-
-Returns the hierarchical structure that has been accumulated during rendering.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> arizona_socket:get_hierarchical_acc(Socket).
-#{}
-```
-""".
--spec get_hierarchical_acc(Socket) -> HierarchicalStructure when
-    Socket :: socket(),
-    HierarchicalStructure :: arizona_hierarchical:hierarchical_structure().
-get_hierarchical_acc(#socket{} = Socket) ->
-    Socket#socket.hierarchical_acc.
-
-put_hierarchical_acc(StatefulId, Struct, #socket{} = Socket) ->
-    Acc = Socket#socket.hierarchical_acc,
-    Socket#socket{hierarchical_acc = Acc#{StatefulId => Struct}}.
-
--doc ~"""
-Set a pending hierarchical element in the socket.
-
-Stores an element that is pending inclusion in the hierarchical structure.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> Element = #{type => stateless, structure => #{0 => ~"content"}}.
-#{type => stateless, structure => #{0 => ~"content"}}
-3> Socket2 = arizona_socket:set_hierarchical_pending_element(Element, Socket).
-#socket{hierarchical_pending_element = #{type => stateless, ...}, ...}
-```
-""".
--spec set_hierarchical_pending_element(Element, Socket) -> Socket1 when
-    Element :: arizona_hierarchical:element_content(),
-    Socket :: socket(),
-    Socket1 :: socket().
-set_hierarchical_pending_element(Element, #socket{} = Socket) ->
-    Socket#socket{hierarchical_pending_element = Element}.
-
--doc ~"""
-Get the pending hierarchical element from the socket.
-
-Returns the element that is pending inclusion in the hierarchical structure,
-or `undefined` if no element is pending.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> arizona_socket:get_hierarchical_pending_element(Socket).
-undefined
-```
-""".
--spec get_hierarchical_pending_element(Socket) -> Element when
-    Socket :: socket(),
-    Element :: arizona_hierarchical:element_content() | undefined.
-get_hierarchical_pending_element(#socket{} = Socket) ->
-    Socket#socket.hierarchical_pending_element.
-
--doc ~"""
-Clear the pending hierarchical element from the socket.
-
-Resets the pending element to `undefined`.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:set_hierarchical_pending_element(Element, Socket).
-#socket{hierarchical_pending_element = #{...}, ...}
-2> Socket2 = arizona_socket:clear_hierarchical_pending_element(Socket).
-#socket{hierarchical_pending_element = undefined, ...}
-```
-""".
--spec clear_hierarchical_pending_element(Socket) -> Socket1 when
-    Socket :: socket(),
-    Socket1 :: socket().
-clear_hierarchical_pending_element(#socket{} = Socket) ->
-    Socket#socket{hierarchical_pending_element = undefined}.
-
--doc ~"""
 Store a stateful component state in the socket.
 
 Adds or updates a stateful component state in the socket's state map.
@@ -555,240 +285,6 @@ put_stateful_state(State, #socket{} = Socket) ->
     Id = arizona_stateful:get_id(State),
     States = Socket#socket.stateful_states,
     Socket#socket{stateful_states = States#{Id => State}}.
-
--doc ~"""
-Get a binding value from the socket.
-
-Retrieves a binding value, first checking temporary bindings (for stateless components)
-and falling back to stateful component bindings.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> Socket2 = arizona_socket:put_binding(name, ~"John", Socket).
-#socket{...}
-3> arizona_socket:get_binding(name, Socket2).
-~"John"
-```
-""".
--spec get_binding(Key, Socket) -> Value when
-    Key :: atom(),
-    Socket :: socket(),
-    Value :: term().
-get_binding(Key, #socket{} = Socket) when is_atom(Key) ->
-    %% First try temporary bindings (for stateless components)
-    case Socket#socket.temp_bindings of
-        #{Key := Value} ->
-            Value;
-        #{} ->
-            %% Fall back to stateful bindings
-            CurrentState = get_current_stateful_state(Socket),
-            arizona_stateful:get_binding(Key, CurrentState)
-    end.
-
--doc ~"""
-Get a binding value from the socket with a default value.
-
-Retrieves a binding value, returning the default if the binding is not found.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> arizona_socket:get_binding(nonexistent, Socket, ~"default").
-~"default"
-```
-""".
--spec get_binding(Key, Socket, Default) -> Value when
-    Key :: atom(),
-    Socket :: socket(),
-    Default :: term(),
-    Value :: term() | Default.
-get_binding(Key, #socket{} = Socket, Default) when is_atom(Key) ->
-    %% First try temporary bindings (for stateless components)
-    case Socket#socket.temp_bindings of
-        #{Key := Value} ->
-            Value;
-        #{} ->
-            %% Fall back to stateful bindings
-            CurrentState = get_current_stateful_state(Socket),
-            arizona_stateful:get_binding(Key, CurrentState, Default)
-    end.
-
--doc ~"""
-Set temporary bindings for stateless components.
-
-Replaces the temporary bindings map with the provided bindings.
-Used for stateless component rendering.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> Bindings = #{item => ~"value"}.
-#{item => ~"value"}
-3> Socket2 = arizona_socket:with_temp_bindings(Bindings, Socket).
-#socket{temp_bindings = #{item => ~"value"}, ...}
-```
-""".
--spec with_temp_bindings(Bindings, Socket) -> Socket1 when
-    Bindings :: bindings(),
-    Socket :: socket(),
-    Socket1 :: socket().
-with_temp_bindings(Bindings, #socket{} = Socket) when is_map(Bindings) ->
-    Socket#socket{temp_bindings = Bindings}.
-
--doc ~"""
-Get a temporary binding value from the socket.
-
-Retrieves a temporary binding value, throwing an error if not found.
-Used for stateless component rendering.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:with_temp_bindings(#{item => ~"value"}, Socket).
-#socket{...}
-2> arizona_socket:get_temp_binding(item, Socket).
-~"value"
-3> arizona_socket:get_temp_binding(missing, Socket).
-** exception throw: {binding_not_found,missing}
-```
-""".
--spec get_temp_binding(Key, Socket) -> Value when
-    Key :: atom(),
-    Socket :: socket(),
-    Value :: term().
-get_temp_binding(Key, #socket{} = Socket) when is_atom(Key) ->
-    case Socket#socket.temp_bindings of
-        #{Key := Value} -> Value;
-        #{} -> throw({binding_not_found, Key})
-    end.
-
--doc ~"""
-Put a binding value into the socket.
-
-Stores a binding value in the current stateful component's state.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> Socket2 = arizona_socket:put_binding(name, ~"John", Socket).
-#socket{...}
-3> arizona_socket:get_binding(name, Socket2).
-~"John"
-```
-""".
--spec put_binding(Key, Value, Socket) -> Socket1 when
-    Key :: atom(),
-    Value :: term(),
-    Socket :: socket(),
-    Socket1 :: socket().
-put_binding(Key, Value, #socket{} = Socket) when is_atom(Key) ->
-    CurrentState = get_current_stateful_state(Socket),
-    UpdatedState = arizona_stateful:put_binding(Key, Value, CurrentState),
-    put_stateful_state(UpdatedState, Socket).
-
--doc ~"""
-Put multiple binding values into the socket.
-
-Stores multiple binding values in the current stateful component's state.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> Bindings = #{name => ~"John", age => 30}.
-#{name => ~"John", age => 30}
-3> Socket2 = arizona_socket:put_bindings(Bindings, Socket).
-#socket{...}
-```
-""".
--spec put_bindings(Bindings, Socket) -> Socket1 when
-    Bindings :: bindings(),
-    Socket :: socket(),
-    Socket1 :: socket().
-put_bindings(Bindings, #socket{} = Socket) when is_map(Bindings) ->
-    CurrentState = get_current_stateful_state(Socket),
-    UpdatedState = arizona_stateful:put_bindings(Bindings, CurrentState),
-    put_stateful_state(UpdatedState, Socket).
-
-%% Changes accumulator functions (for diff mode)
-
--doc ~"""
-Append changes to the socket's change accumulator.
-
-Merges new changes with existing changes in the socket for diff mode operations.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> Changes = [{root, [{0, ~"new_content"}]}].
-[{root, [{0, ~"new_content"}]}]
-3> Socket2 = arizona_socket:append_changes(Changes, Socket).
-#socket{changes_acc = [{root, [{0, ~"new_content"}]}], ...}
-```
-""".
--spec append_changes(Changes, Socket) -> Socket1 when
-    Changes :: arizona_differ:diff_changes(),
-    Socket :: socket(),
-    Socket1 :: socket().
-append_changes(Changes, #socket{} = Socket) when is_list(Changes) ->
-    CurrentChanges = Socket#socket.changes_acc,
-    % Merge changes at the correct hierarchical path
-    MergedChanges = merge_changes(Changes, CurrentChanges),
-    Socket#socket{changes_acc = MergedChanges}.
-
--doc ~"""
-Get the accumulated changes from the socket.
-
-Returns the changes that have been accumulated during diff mode operations,
-ordered chronologically.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:new(#{}).
-#socket{...}
-2> arizona_socket:get_changes(Socket).
-[]
-```
-""".
--spec get_changes(Socket) -> Changes when
-    Socket :: socket(),
-    Changes :: arizona_differ:diff_changes().
-get_changes(#socket{} = Socket) ->
-    % Reverse to get changes in chronological order
-    lists:reverse(Socket#socket.changes_acc).
-
--doc ~"""
-Clear the changes accumulator in the socket.
-
-Resets the changes accumulator to an empty state.
-
-## Examples
-
-```erlang
-1> Socket = arizona_socket:append_changes([{root, [{0, ~"change"}]}], Socket).
-#socket{changes_acc = [...], ...}
-2> Socket2 = arizona_socket:clear_changes(Socket).
-#socket{changes_acc = [], ...}
-```
-""".
--spec clear_changes(Socket) -> Socket1 when
-    Socket :: socket(),
-    Socket1 :: socket().
-clear_changes(#socket{} = Socket) ->
-    Socket#socket{changes_acc = []}.
 
 -doc ~"""
 Set the layout component in the socket.
@@ -835,70 +331,6 @@ undefined
 get_layout(#socket{} = Socket) ->
     Socket#socket.layout.
 
-%% --------------------------------------------------------------------
-%% Private functions
-%% --------------------------------------------------------------------
-
-%% Merge new changes with existing changes, maintaining hierarchical structure
-%% Format: [{StatefulId, [{ElementIndex, Changes}]}]
--spec merge_changes(NewChanges, ExistingChanges) -> MergedChanges when
-    NewChanges :: arizona_differ:diff_changes(),
-    ExistingChanges :: arizona_differ:diff_changes(),
-    MergedChanges :: arizona_differ:diff_changes().
-merge_changes([], ExistingChanges) ->
-    ExistingChanges;
-merge_changes(NewChanges, []) ->
-    NewChanges;
-merge_changes([{ComponentId, NewElementChanges} | RestNew], ExistingChanges) ->
-    % Find if this component already has changes
-    case lists:keyfind(ComponentId, 1, ExistingChanges) of
-        false ->
-            % Component not found, add it
-            UpdatedExisting = [{ComponentId, NewElementChanges} | ExistingChanges],
-            merge_changes(RestNew, UpdatedExisting);
-        {ComponentId, ExistingElementChanges} ->
-            % Component found, merge element changes
-            MergedElementChanges = merge_element_changes(NewElementChanges, ExistingElementChanges),
-            UpdatedExisting = lists:keyreplace(
-                ComponentId,
-                1,
-                ExistingChanges,
-                {ComponentId, MergedElementChanges}
-            ),
-            merge_changes(RestNew, UpdatedExisting)
-    end.
-
-%% Merge element changes within the same component
--spec merge_element_changes(NewElementChanges, ExistingElementChanges) ->
-    MergedElementChanges
-when
-    NewElementChanges :: [arizona_differ:element_change_entry()],
-    ExistingElementChanges :: [arizona_differ:element_change_entry()],
-    MergedElementChanges :: [arizona_differ:element_change_entry()].
-merge_element_changes([], ExistingElements) ->
-    ExistingElements;
-merge_element_changes([{ElementIndex, NewChange} | RestNew], ExistingElements) ->
-    case lists:keyfind(ElementIndex, 1, ExistingElements) of
-        false ->
-            % Element not found, add it
-            UpdatedExisting = [{ElementIndex, NewChange} | ExistingElements],
-            merge_element_changes(RestNew, UpdatedExisting);
-        {ElementIndex, ExistingChange} ->
-            % Element found, merge the changes using arizona_differ
-            MergedChange = arizona_differ:merge_element_changes(NewChange, ExistingChange),
-            UpdatedExisting = lists:keyreplace(
-                ElementIndex,
-                1,
-                ExistingElements,
-                {ElementIndex, MergedChange}
-            ),
-            merge_element_changes(RestNew, UpdatedExisting)
-    end.
-
-%% --------------------------------------------------------------------
-%% Live PID and Dependency Tracking Functions
-%% --------------------------------------------------------------------
-
 -doc ~"""
 Set the live process PID for dependency tracking.
 
@@ -908,6 +340,10 @@ tracking notifications.
 -spec set_live_pid(pid(), socket()) -> socket().
 set_live_pid(LivePid, Socket) ->
     Socket#socket{live_pid = LivePid}.
+
+%% --------------------------------------------------------------------
+%% Live PID and Dependency Tracking Functions
+%% --------------------------------------------------------------------
 
 -doc ~"""
 Get the live process PID from the socket.
@@ -977,4 +413,21 @@ clear_component_dependencies(StatefulId, #socket{live_pid = LivePid}) ->
             ok;
         _ ->
             arizona_live:clear_component_dependencies(LivePid, StatefulId)
+    end.
+
+-doc ~"""
+Store hierarchical data for a component.
+
+Sends hierarchical rendering data to the live process (if present) for
+accumulation. Used in hierarchical rendering mode to build structured
+component representations.
+""".
+-spec put_hierarchical(arizona_stateful:id(), HierarchicalData, socket()) -> ok when
+    HierarchicalData :: arizona_template_hierarchical:hierarchical_data().
+put_hierarchical(StatefulId, HierarchicalData, #socket{live_pid = LivePid}) ->
+    case LivePid of
+        undefined ->
+            ok;
+        _ ->
+            arizona_live:put_hierarchical(LivePid, StatefulId, HierarchicalData)
     end.

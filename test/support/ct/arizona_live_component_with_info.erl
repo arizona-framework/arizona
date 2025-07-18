@@ -1,7 +1,7 @@
 -module(arizona_live_component_with_info).
 -behaviour(arizona_live).
-%-compile({parse_transform, arizona_parse_transform}).
--arizona_parse_transform([render/1]).
+%-compile({parse_transform, arizona_parse_transformform}).
+-arizona_parse_transformform([render/1]).
 
 %% arizona_live callbacks
 -export([mount/2, render/1, handle_event/3, handle_info/2]).

@@ -1,8 +1,8 @@
 -module(arizona_stateless_module).
-%-compile({parse_transform, arizona_parse_transform}).
--arizona_parse_transform([basic_render/1]).
--arizona_parse_transform([render_with_bindings/1]).
--arizona_parse_transform([render_simple/1]).
+%-compile({parse_transform, arizona_parse_transformform}).
+-arizona_parse_transformform([basic_render/1]).
+-arizona_parse_transformform([render_with_bindings/1]).
+-arizona_parse_transformform([render_simple/1]).
 -export([basic_render/1]).
 -export([render_with_bindings/1]).
 -export([render_simple/1]).

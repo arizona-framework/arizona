@@ -1070,7 +1070,7 @@ conditional_dependency_tracking_websocket_flow(Config) when is_list(Config) ->
     -module(my_live).
     -behavior(arizona_live).
     -export([mount/2, render/1]).
-    -compile({parse_transform, arizona_parse_trans}).
+    -compile({parse_transform, arizona_parse_transform}).
     mount(_Req, Socket) -> Socket.
     render(Bindings) ->
         arizona_template:from_string(~"""
