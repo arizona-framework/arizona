@@ -455,7 +455,7 @@ manages the complete lifecycle of preparing a stateful component for rendering.
 ```
 """.
 -spec prepare_render(Module, Bindings, Socket) -> {Id, Template, Socket1} when
-    Module :: atom(),
+    Module :: module(),
     Bindings :: arizona_binder:bindings(),
     Socket :: arizona_socket:socket(),
     Id :: term(),

@@ -42,7 +42,7 @@
 %% --------------------------------------------------------------------
 
 -spec hierarchical_stateful(Module, Bindings, Socket) -> {Struct, Socket1} when
-    Module :: atom(),
+    Module :: module(),
     Bindings :: arizona_binder:bindings(),
     Socket :: arizona_socket:socket(),
     Struct :: stateful_struct(),
@@ -69,7 +69,7 @@ hierarchical_stateful(Mod, Bindings, Socket) ->
     {Struct, DynamicSocket}.
 
 -spec hierarchical_stateless(Module, Function, Bindings, Socket) -> {Struct, Socket1} when
-    Module :: atom(),
+    Module :: module(),
     Function :: atom(),
     Bindings :: arizona_binder:bindings(),
     Socket :: arizona_socket:socket(),

@@ -108,7 +108,7 @@ transform_application(Node, ModuleName) ->
 %% Analyze function application to extract module, function, arity, and args
 -spec analyze_application(Node) -> {Module, Function, Arity, Args} | undefined when
     Node :: erl_syntax:syntaxTree(),
-    Module :: atom(),
+    Module :: module(),
     Function :: atom(),
     Arity :: non_neg_integer(),
     Args :: [erl_syntax:syntaxTree()].
@@ -157,7 +157,7 @@ transform_from_string(ModuleName, Line, TemplateArg) ->
 
 %% Evaluate expression
 -spec eval_expr(Module, BinaryForm, Bindings) -> Result when
-    Module :: atom(),
+    Module :: module(),
     BinaryForm :: erl_syntax:syntaxTree(),
     Bindings :: map(),
     Result :: term().
