@@ -11,6 +11,8 @@
 -export([dynamic_sequence/1]).
 -export([dynamic_anno/1]).
 -export([get_binding/2]).
+-export([get_binding/3]).
+-export([find_binding/2]).
 -export([render_stateful/2]).
 -export([render_stateless/3]).
 
@@ -129,6 +131,35 @@ get_binding(Key, Bindings) ->
     ok = gen_server:cast(self(), {record_variable_dependency, Key}),
     maps:get(Key, Bindings).
 
+-spec get_binding(Key, Bindings, Default) -> Value when
+    Key :: atom(),
+    Bindings :: map(),
+    Default :: fun(() -> Value),
+    Value :: dynamic().
+get_binding(Key, Bindings, Default) ->
+    ok = gen_server:cast(self(), {record_variable_dependency, Key}),
+    case Bindings of
+        #{Key := Value} ->
+            Value;
+        #{} when is_function(Default, 0) ->
+            Default()
+    end.
+
+-spec find_binding(Key, Bindings) -> {ok, Value} | error when
+    Key :: atom(),
+    Bindings :: map(),
+    Value :: dynamic().
+find_binding(Key, Bindings) ->
+    % Record variable dependency for runtime tracking
+    % Send cast to self (the live process)
+    ok = gen_server:cast(self(), {record_variable_dependency, Key}),
+    case Bindings of
+        #{Key := Value} ->
+            {ok, Value};
+        #{} ->
+            error
+    end.
+
 -spec render_stateful(Module, Bindings) -> Callback when
     Module :: atom(),
     Bindings :: map(),
@@ -147,6 +178,8 @@ render_stateful(Mod, Bindings) ->
 
 prepare_stateful_render(Mod, Bindings, Socket) ->
     Id = maps:get(id, Bindings),
+    % Clear dependencies for this component before starting new render
+    ok = arizona_socket:clear_component_dependencies(Id, Socket),
     case arizona_socket:find_stateful_state(Id, Socket) of
         {ok, State} ->
             %% Apply new bindings to existing state before checking remount

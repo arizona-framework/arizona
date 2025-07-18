@@ -65,6 +65,7 @@ states, and temporary bindings throughout the rendering process.
 -export([notify_current_stateful_id/2]).
 -export([notify_current_element_index/2]).
 -export([notify_variable_dependency/2]).
+-export([clear_component_dependencies/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -961,4 +962,19 @@ notify_variable_dependency(VarName, #socket{live_pid = LivePid}) ->
             ok;
         _ ->
             arizona_live:record_variable_dependency(LivePid, VarName)
+    end.
+
+-doc ~"""
+Clear all dependencies for a specific component.
+
+Sends a notification to the live process (if present) to clear all
+recorded dependencies for the specified stateful component.
+""".
+-spec clear_component_dependencies(arizona_stateful:id(), socket()) -> ok.
+clear_component_dependencies(StatefulId, #socket{live_pid = LivePid}) ->
+    case LivePid of
+        undefined ->
+            ok;
+        _ ->
+            arizona_live:clear_component_dependencies(LivePid, StatefulId)
     end.
