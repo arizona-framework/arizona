@@ -34,7 +34,7 @@ jobs:
 
     needs: [branch]
 
-    if: endsWith(needs.branch.outputs.head_ref, 'package.json-+-.nvmrc-deps')
+    if: endsWith(needs.branch.outputs.head_ref, 'package.json-deps')
 
     runs-on: ubuntu-24.04
 
