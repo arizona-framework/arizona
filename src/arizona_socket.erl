@@ -906,11 +906,11 @@ merge_nested_changes(NewChange, _ExistingChange) ->
     % New change takes precedence (overwrite)
     NewChange.
 
-%% Simple heuristic to distinguish component changes from HTML data
+%% Strict heuristic to distinguish component changes from HTML data
 %% Component changes: [{ComponentId, ElementChanges}] where ComponentId is
-%% atom() | binary()
+%% atom() | binary() and ElementChanges is [{ElementIndex, Change}] where ElementIndex is integer
 %% HTML data: typically contains binaries directly, empty lists, nested structures
-%% without tuple format
+%% without the specific tuple format
 -spec looks_like_component_changes(List) -> boolean() when
     List :: list().
 looks_like_component_changes([]) ->
@@ -919,19 +919,27 @@ looks_like_component_changes([]) ->
 looks_like_component_changes([{ComponentId, ElementChanges} | Rest]) when
     (is_atom(ComponentId) orelse is_binary(ComponentId)) andalso is_list(ElementChanges)
 ->
-    % If element is {ComponentId, ElementChanges} tuple, it's likely component changes
-    looks_like_component_changes(Rest);
-looks_like_component_changes([Binary | _]) when is_binary(Binary) ->
-    % If we see a binary directly (not in a tuple), it's likely HTML data
-    false;
-looks_like_component_changes([[] | Rest]) ->
-    % Empty lists in HTML data are common, but check the rest
-    looks_like_component_changes(Rest);
-looks_like_component_changes([List | Rest]) when is_list(List) ->
-    % Nested list - check if it's component changes or HTML data
-    case looks_like_component_changes(List) of
+    % Check if ElementChanges has the proper format: [{ElementIndex, Change}]
+    case looks_like_element_changes(ElementChanges) of
         true -> looks_like_component_changes(Rest);
         false -> false
     end;
 looks_like_component_changes(_) ->
+    % Any other format is not component changes
+    false.
+
+%% Check if a list looks like element changes: [{ElementIndex, Change}]
+%% where ElementIndex is a non-negative integer
+-spec looks_like_element_changes(List) -> boolean() when
+    List :: list().
+looks_like_element_changes([]) ->
+    % Empty list is valid element changes
+    true;
+looks_like_element_changes([{ElementIndex, _Change} | Rest]) when
+    is_integer(ElementIndex), ElementIndex >= 0
+->
+    % Valid element change entry, check the rest
+    looks_like_element_changes(Rest);
+looks_like_element_changes(_) ->
+    % Any other format is not element changes
     false.

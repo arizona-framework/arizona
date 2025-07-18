@@ -203,7 +203,7 @@ Processes a stateful template and generates a hierarchical structure that can be
 efficiently diffed and transmitted via WebSocket for real-time updates.
 """.
 -spec stateful_structure(TemplateData, Socket) -> {ComponentStructure, Socket1} when
-    TemplateData :: arizona_renderer:stateful_template_data(),
+    TemplateData :: arizona_renderer:template_data(),
     Socket :: arizona_socket:socket(),
     ComponentStructure :: stateful_render(),
     Socket1 :: arizona_socket:socket().
@@ -228,12 +228,13 @@ Processes a stateless template and generates a nested structure that can be
 embedded within stateful components for efficient rendering and updates.
 """.
 -spec stateless_structure(TemplateData, Socket) -> {StatelessElement, Socket1} when
-    TemplateData :: arizona_renderer:stateless_template_data(),
+    TemplateData :: arizona_renderer:template_data(),
     Socket :: arizona_socket:socket(),
     StatelessElement :: element_content(),
     Socket1 :: arizona_socket:socket().
-stateless_structure(StructuredList, Socket) ->
-    {StatelessStructure, UpdatedSocket} = stateless_list_to_structure(StructuredList, Socket),
+stateless_structure(#{elems_order := Order, elems := Elements}, Socket) ->
+    %% Unified format: use same processing as stateful elements
+    {StatelessStructure, UpdatedSocket} = elements_structure(Order, Elements, Socket, #{}),
     StatelessElement = #{type => stateless, structure => StatelessStructure},
     UpdatedSocket1 = arizona_socket:set_hierarchical_pending_element(
         StatelessElement, UpdatedSocket
@@ -645,30 +646,6 @@ binding_error_info(Line, Key, Socket) ->
             module => arizona_hierarchical
         }}
     ].
-
-%% Convert stateless template list to hierarchical structure
--spec stateless_list_to_structure(List, Socket) -> {Structure, Socket1} when
-    List :: list(),
-    Socket :: arizona_socket:socket(),
-    Structure :: #{element_index() => element_content()},
-    Socket1 :: arizona_socket:socket().
-stateless_list_to_structure(List, Socket) ->
-    stateless_list_to_structure(List, Socket, 0, #{}).
-
-%% Helper for stateless list conversion with index tracking
--spec stateless_list_to_structure(List, Socket, Index, Acc) -> {Structure, Socket1} when
-    List :: list(),
-    Socket :: arizona_socket:socket(),
-    Index :: non_neg_integer(),
-    Acc :: #{element_index() => element_content()},
-    Structure :: #{element_index() => element_content()},
-    Socket1 :: arizona_socket:socket().
-stateless_list_to_structure([], Socket, _Index, Acc) ->
-    {Acc, Socket};
-stateless_list_to_structure([Element | Rest], Socket, Index, Acc) ->
-    {Content, UpdatedSocket} = render_element(Element, Socket),
-    NewAcc = Acc#{Index => Content},
-    stateless_list_to_structure(Rest, UpdatedSocket, Index + 1, NewAcc).
 
 %% Convert list items to dynamic data for hierarchical structure
 -spec list_items_to_dynamic_data(DynamicTemplate, Items, Socket, Acc) -> {DynamicData, Socket1} when

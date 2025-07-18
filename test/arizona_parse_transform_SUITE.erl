@@ -57,8 +57,7 @@ groups() ->
         {coverage_tests, [parallel], [
             test_complex_stateful_template_with_multiple_variables,
             test_stateless_binary_elements,
-            test_transform_stateless_to_ast,
-            test_transform_stateful_to_ast,
+            test_transform_template_to_ast,
             test_stateless_binary_handling,
             test_dynamic_expression_ast_creation,
             test_nested_arizona_optimization,
@@ -383,77 +382,69 @@ test_stateless_binary_elements(Config) when is_list(Config) ->
 
     ct:comment("Stateless template with binary elements transformed correctly").
 
-%% Test transform_stateless_to_ast function directly
-test_transform_stateless_to_ast(Config) when is_list(Config) ->
-    % Create a simple stateless result list as expected by the function
-    StatelessList = [
-        {static, 1, ~"<h1>Title</h1><footer>Footer</footer>"}
-    ],
-
-    % Call transform_stateless_to_ast directly
-    ResultAST = arizona_parse_transform:transform_stateless_to_ast(StatelessList),
-
-    % Verify it returns a proper AST list structure
-    ?assert(erl_syntax:is_tree(ResultAST)),
-    ?assertEqual(list, erl_syntax:type(ResultAST)),
-
-    ct:comment("transform_stateless_to_ast handles binary content correctly").
-
-%% Test transform_stateful_to_ast function directly
-test_transform_stateful_to_ast(Config) when is_list(Config) ->
-    % Create a stateful result matching new parser format (without vars_indexes)
-    StatefulResult = #{
-        elems_order => [1, 2, 3],
+%% Test transform_template_to_ast function directly
+test_transform_template_to_ast(Config) when is_list(Config) ->
+    % Test with parsed_template (no vars_indexes)
+    ParsedTemplate = #{
+        elems_order => [0, 1],
         elems => #{
-            1 => {static, 1, ~"Hello, "},
-            2 => {dynamic, 1, ~"arizona_socket:get_binding(name, Socket)"},
-            3 => {static, 1, ~"!"}
+            0 => {static, 1, ~"Hello, "},
+            1 => {dynamic, 1, ~"arizona_socket:get_binding(name, Socket)"}
         }
     },
 
-    % Call transform_stateful_to_ast directly
-    ResultAST = arizona_parse_transform:transform_stateful_to_ast(StatefulResult),
+    % Call transform_template_to_ast with parsed_template
+    ResultAST1 = arizona_parse_transform:transform_template_to_ast(ParsedTemplate, 0),
+    ?assert(erl_syntax:is_tree(ResultAST1)),
+    ?assertEqual(map_expr, erl_syntax:type(ResultAST1)),
 
-    % Verify it returns a proper AST map structure
-    ?assert(erl_syntax:is_tree(ResultAST)),
-    ?assertEqual(map_expr, erl_syntax:type(ResultAST)),
+    % Test with transformed_template (with vars_indexes)
+    TransformedTemplate = ParsedTemplate#{vars_indexes => #{name => [1]}},
+    ResultAST2 = arizona_parse_transform:transform_template_to_ast(TransformedTemplate, 0),
+    ?assert(erl_syntax:is_tree(ResultAST2)),
+    ?assertEqual(map_expr, erl_syntax:type(ResultAST2)),
 
-    ct:comment("transform_stateful_to_ast handles new parser format correctly").
+    ct:comment("transform_template_to_ast handles both parsed and transformed templates correctly").
 
 %% Test stateless with pure binary literals
 test_stateless_binary_handling(Config) when is_list(Config) ->
-    % Create a stateless list with only binary literals
-    PureBinaryList = [
-        {static, 1, ~"<html>"},
-        {static, 1, ~"<body>Static content</body>"},
-        {static, 1, ~"</html>"}
-    ],
+    % Create a stateless template with only binary literals in basic format
+    PureBinaryTemplate = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<html>"},
+            1 => {static, 1, ~"<body>Static content</body>"},
+            2 => {static, 1, ~"</html>"}
+        }
+    },
 
-    % Call transform_stateless_to_ast
-    ResultAST = arizona_parse_transform:transform_stateless_to_ast(PureBinaryList),
+    % Call transform_template_to_ast
+    ResultAST = arizona_parse_transform:transform_template_to_ast(PureBinaryTemplate, 0),
 
-    % Verify it creates proper binary field AST nodes
+    % Verify it creates proper map AST nodes for unified format
     ?assert(erl_syntax:is_tree(ResultAST)),
-    ?assertEqual(list, erl_syntax:type(ResultAST)),
+    ?assertEqual(map_expr, erl_syntax:type(ResultAST)),
 
     ct:comment("Binary literal handling in stateless transform works correctly").
 
 %% Test dynamic expression AST creation
 test_dynamic_expression_ast_creation(Config) when is_list(Config) ->
-    % Test transform_stateless_to_ast with non-binary items to trigger line 123
-    MixedList = [
-        {static, 1, ~"<h1>Title</h1>"},
-        % This will trigger the erl_syntax:abstract(Item) path
-        {dynamic, 1, ~"Item"},
-        {static, 1, ~"<footer>Footer</footer>"}
-    ],
+    % Test transform_template_to_ast with basic format containing dynamic elements
+    MixedTemplate = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<h1>Title</h1>"},
+            1 => {dynamic, 1, ~"Item"},
+            2 => {static, 1, ~"<footer>Footer</footer>"}
+        }
+    },
 
-    % Call transform_stateless_to_ast to trigger the generic item handling
-    ResultAST = arizona_parse_transform:transform_stateless_to_ast(MixedList),
+    % Call transform_template_to_ast to trigger the generic item handling
+    ResultAST = arizona_parse_transform:transform_template_to_ast(MixedTemplate, 0),
 
-    % Verify it returns a proper AST structure
+    % Verify it returns a proper map AST structure for unified format
     ?assert(erl_syntax:is_tree(ResultAST)),
-    ?assertEqual(list, erl_syntax:type(ResultAST)),
+    ?assertEqual(map_expr, erl_syntax:type(ResultAST)),
 
     ct:comment("Mixed item handling in stateless transform works correctly").
 
@@ -497,7 +488,6 @@ test_nested_arizona_optimization(Config) when is_list(Config) ->
 
     % Check that socket variables at different nesting levels use different names to avoid shadowing
     % Level 0 should use _@Socket0, Level 1 should use _@Socket1
-    % Level 2 is a static template with no dynamic content, so no function wrapper needed
     ?assert(string:str(TransformedSource, "_@Socket0") > 0),
     ?assert(string:str(TransformedSource, "_@Socket1") > 0),
 
@@ -670,7 +660,7 @@ test_enhanced_vars_indexes_generation(Config) when is_list(Config) ->
 
 %% Test template with variable context
 test_template_with_variable_context(Config) when is_list(Config) ->
-    % Test the parse_template_for_stateful_with_context function
+    % Test the parse_template function
     TemplateString = ~"<div>Hello {UserName}! Count: {Count}</div>",
     VarBindings = #{
         ~"UserName" => ~"user_name",
@@ -678,7 +668,7 @@ test_template_with_variable_context(Config) when is_list(Config) ->
     },
 
     % This tests the internal function - in practice this would be used by the parse transform
-    Result = arizona_parse_transform:parse_template_for_stateful_with_context(
+    Result = arizona_parse_transform:parse_template(
         TemplateString, 1, [], 0, VarBindings
     ),
 

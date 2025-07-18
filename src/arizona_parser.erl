@@ -49,8 +49,7 @@ template rendering and updates across different Arizona rendering modes.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([parse_stateless_tokens/1]).
--export([parse_stateful_tokens/1]).
+-export([parse_tokens/1]).
 -export([parse_list_tokens/1]).
 
 %% --------------------------------------------------------------------
@@ -58,8 +57,7 @@ template rendering and updates across different Arizona rendering modes.
 %% --------------------------------------------------------------------
 
 -export_type([token/0]).
--export_type([stateless_result/0]).
--export_type([stateful_result/0]).
+-export_type([parsed_template/0]).
 -export_type([list_result/0]).
 
 %% --------------------------------------------------------------------
@@ -74,20 +72,12 @@ Token representation with category, line number, and content.
 }.
 
 -doc ~"""
-Result type for stateless parsing - list of tokens with comments filtered out.
-""".
--type stateless_result() :: [
-    Token :: {
-        Category :: static | dynamic, Line :: pos_integer(), Content :: binary()
-    }
-].
+Result type for template parsing with element ordering and element mapping.
 
--doc ~"""
-Result type for stateful parsing with element ordering and element mapping.
-
+Both stateful and stateless templates use this unified format.
 The parse transform will handle variable analysis and add vars_indexes separately.
 """.
--type stateful_result() :: #{
+-type parsed_template() :: #{
     elems_order := [Index :: non_neg_integer()],
     elems := #{
         Index ::
@@ -123,24 +113,9 @@ The parse transform will handle variable analysis and add vars_indexes separatel
 %% --------------------------------------------------------------------
 
 -doc ~"""
-Parse tokens into stateless iolist structure.
+Parse tokens into template structure.
 
-Converts a list of tokens into a structure suitable for stateless rendering.
-Filters out comment tokens while preserving static and dynamic tokens with
-their line numbers intact.
-
-Returns a list of tokens that can be directly processed by template renderers.
-""".
--spec parse_stateless_tokens(Tokens) -> Result when
-    Tokens :: [token()],
-    Result :: stateless_result().
-parse_stateless_tokens(Tokens) ->
-    [Token || {Category, _Line, _Text} = Token <- Tokens, Category =/= comment].
-
--doc ~"""
-Parse tokens into stateful template structure.
-
-Converts a list of tokens into a structured format for stateful rendering.
+Converts a list of tokens into a structured format for template rendering.
 This includes element ordering and element mapping.
 
 The resulting map contains:
@@ -148,12 +123,13 @@ The resulting map contains:
 - `elems`: Map of element index to token data
 
 Variable analysis and vars_indexes generation is handled by the parse transform.
+Works for both stateful and stateless templates with unified format.
 """.
--spec parse_stateful_tokens(Tokens) -> Result when
+-spec parse_tokens(Tokens) -> ParsedTemplate when
     Tokens :: [token()],
-    Result :: stateful_result().
-parse_stateful_tokens(Tokens) ->
-    Elements = process_tokens_stateful(Tokens, 0, #{}),
+    ParsedTemplate :: parsed_template().
+parse_tokens(Tokens) ->
+    Elements = process_tokens(Tokens, 0, #{}),
     #{
         elems_order => lists:seq(0, maps:size(Elements) - 1),
         elems => Elements
@@ -185,21 +161,21 @@ parse_list_tokens(Tokens) ->
 %% Private functions
 %% --------------------------------------------------------------------
 
-%% Process tokens for stateful structure
-process_tokens_stateful([], _Index, Elements) ->
+%% Process tokens for template structure
+process_tokens([], _Index, Elements) ->
     Elements;
-process_tokens_stateful([Token | Rest], Index, Elements) ->
+process_tokens([Token | Rest], Index, Elements) ->
     case Token of
         {static, Line, Text} ->
             NewElements = Elements#{Index => {static, Line, Text}},
-            process_tokens_stateful(Rest, Index + 1, NewElements);
+            process_tokens(Rest, Index + 1, NewElements);
         {dynamic, Line, ExprText} ->
             %% Keep original expression text - parse transform will handle variable analysis
             NewElements = Elements#{Index => {dynamic, Line, ExprText}},
-            process_tokens_stateful(Rest, Index + 1, NewElements);
+            process_tokens(Rest, Index + 1, NewElements);
         {comment, _Line, _Text} ->
             %% Skip comments (don't increment index)
-            process_tokens_stateful(Rest, Index, Elements)
+            process_tokens(Rest, Index, Elements)
     end.
 
 %% Variable extraction functions removed - parse transform handles variable analysis
