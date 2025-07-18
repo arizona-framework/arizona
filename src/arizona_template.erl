@@ -60,7 +60,7 @@ Dynamic = arizona_template:dynamic(Template).
 """".
 -spec from_string(TemplateContent, Bindings) -> template() when
     TemplateContent :: binary(),
-    Bindings :: map().
+    Bindings :: arizona_binder:bindings().
 from_string(TemplateContent, Bindings) ->
     from_string(erlang, 1, TemplateContent, Bindings).
 
@@ -75,7 +75,7 @@ line number, and bindings.
     Module :: module(),
     Line :: pos_integer(),
     TemplateContent :: binary(),
-    Bindings :: map().
+    Bindings :: arizona_binder:bindings().
 from_string(Module, Line, TemplateContent, Bindings) when
     is_atom(Module), is_integer(Line), is_binary(TemplateContent), is_map(Bindings)
 ->
@@ -113,9 +113,9 @@ dynamic_anno(#template{dynamic_anno = Anno}) ->
     Anno.
 
 -spec get_binding(Key, Bindings) -> Value when
-    Key :: atom(),
-    Bindings :: map(),
-    Value :: dynamic().
+    Key :: arizona_binder:key(),
+    Bindings :: arizona_binder:bindings(),
+    Value :: arizona_binder:value().
 get_binding(Key, Bindings) ->
     % Record variable dependency for runtime tracking
     % Send cast to self (the live process)
@@ -123,18 +123,18 @@ get_binding(Key, Bindings) ->
     arizona_binder:get(Key, Bindings).
 
 -spec get_binding(Key, Bindings, Default) -> Value when
-    Key :: atom(),
-    Bindings :: map(),
-    Default :: fun(() -> Value),
-    Value :: dynamic().
+    Key :: arizona_binder:key(),
+    Bindings :: arizona_binder:bindings(),
+    Default :: arizona_binder:default_fun(),
+    Value :: arizona_binder:value().
 get_binding(Key, Bindings, Default) ->
     ok = gen_server:cast(self(), {record_variable_dependency, Key}),
     arizona_binder:get(Key, Bindings, Default).
 
 -spec find_binding(Key, Bindings) -> {ok, Value} | error when
-    Key :: atom(),
-    Bindings :: map(),
-    Value :: dynamic().
+    Key :: arizona_binder:key(),
+    Bindings :: arizona_binder:bindings(),
+    Value :: arizona_binder:value().
 find_binding(Key, Bindings) ->
     % Record variable dependency for runtime tracking
     % Send cast to self (the live process)
@@ -143,7 +143,7 @@ find_binding(Key, Bindings) ->
 
 -spec render_stateful(Module, Bindings) -> Callback when
     Module :: module(),
-    Bindings :: map(),
+    Bindings :: arizona_binder:bindings(),
     Callback :: fun((arizona_socket:socket()) -> {iodata() | term(), arizona_socket:socket()}).
 render_stateful(Mod, Bindings) ->
     fun(Socket) ->
@@ -160,7 +160,7 @@ render_stateful(Mod, Bindings) ->
 -spec render_stateless(Module, Function, Bindings) -> Callback when
     Module :: module(),
     Function :: atom(),
-    Bindings :: map(),
+    Bindings :: arizona_binder:bindings(),
     Callback :: fun((arizona_socket:socket()) -> {iodata() | term(), arizona_socket:socket()}).
 render_stateless(Mod, Fun, Bindings) ->
     fun(Socket) ->

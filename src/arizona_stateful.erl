@@ -78,9 +78,9 @@ string for nested components.
 -record(state, {
     id :: id(),
     module :: module(),
-    bindings :: map(),
+    bindings :: arizona_binder:bindings(),
     % Track which bindings changed
-    changed_bindings :: map()
+    changed_bindings :: arizona_binder:bindings()
 }).
 
 -doc ~"""
@@ -314,14 +314,11 @@ is not found. Use get_binding/3 for safe access with defaults.
 ```
 """.
 -spec get_binding(Key, State) -> Value when
-    Key :: atom(),
+    Key :: arizona_binder:key(),
     State :: state(),
-    Value :: term().
-get_binding(Key, #state{} = State) when is_atom(Key) ->
-    case State#state.bindings of
-        #{Key := Value} -> Value;
-        #{} -> throw({binding_not_found, Key})
-    end.
+    Value :: arizona_binder:value().
+get_binding(Key, #state{} = State) ->
+    arizona_binder:get(Key, State#state.bindings).
 
 -doc ~"""
 Get a binding value from stateful component state with a default.
@@ -341,19 +338,16 @@ if the binding is not found.
 ```
 """.
 -spec get_binding(Key, State, Default) -> Value when
-    Key :: atom(),
+    Key :: arizona_binder:key(),
     State :: state(),
-    Default :: term(),
-    Value :: term() | Default.
-get_binding(Key, #state{} = State, Default) when is_atom(Key) ->
-    case State#state.bindings of
-        #{Key := Value} -> Value;
-        #{} -> Default
-    end.
+    Default :: arizona_binder:default_fun(),
+    Value :: arizona_binder:value().
+get_binding(Key, #state{} = State, Default) ->
+    arizona_binder:get(Key, State#state.bindings, Default).
 
 -spec get_bindings(State) -> Bindings when
     State :: state(),
-    Bindings :: map().
+    Bindings :: arizona_binder:bindings().
 get_bindings(#state{} = State) ->
     State#state.bindings.
 
@@ -373,19 +367,20 @@ efficient re-rendering. Returns the same state if the value hasn't changed.
 ```
 """.
 -spec put_binding(Key, Value, State) -> State1 when
-    Key :: atom(),
-    Value :: term(),
+    Key :: arizona_binder:key(),
+    Value :: arizona_binder:value(),
     State :: state(),
     State1 :: state().
-put_binding(Key, Value, #state{} = State) when is_atom(Key) ->
-    case State#state.bindings of
-        #{Key := Value} ->
+put_binding(Key, Value, #state{} = State) ->
+    case arizona_binder:find(Key, State#state.bindings) of
+        {ok, Value} ->
             State;
-        Bindings ->
-            ChangedBindings = State#state.changed_bindings,
+        _ ->
+            NewBindings = arizona_binder:put(Key, Value, State#state.bindings),
+            NewChangedBindings = arizona_binder:put(Key, Value, State#state.changed_bindings),
             State#state{
-                bindings = Bindings#{Key => Value},
-                changed_bindings = ChangedBindings#{Key => Value}
+                bindings = NewBindings,
+                changed_bindings = NewChangedBindings
             }
     end.
 
@@ -432,7 +427,7 @@ used for efficient diff generation and change detection.
 """.
 -spec get_changed_bindings(State) -> ChangedBindings when
     State :: state(),
-    ChangedBindings :: map().
+    ChangedBindings :: arizona_binder:bindings().
 get_changed_bindings(#state{} = State) ->
     State#state.changed_bindings.
 
