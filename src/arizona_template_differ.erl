@@ -34,7 +34,7 @@ diff_stateful(Mod, Bindings, Socket) ->
                     ok = arizona_socket:clear_component_dependencies(Id, Socket1),
 
                     {[], Socket1};
-                true ->
+                false ->
                     Dependencies = arizona_live:get_component_dependencies(LivePid, Id),
 
                     % Clear dependencies for this component before starting new render
@@ -111,8 +111,8 @@ process_affected_elements([ElementIndex | T], DynamicTuple, Socket) ->
             {RestChanges, FinalSocket} = process_affected_elements(T, DynamicTuple, CallbackSocket),
             {[ElementChange | RestChanges], FinalSocket};
         Result ->
-            {Html, NewSocket} = arizona_html:to_html(Result, Socket),
+            Html = arizona_html:to_html(Result),
             ElementChange = {ElementIndex, Html},
-            {RestChanges, FinalSocket} = process_affected_elements(T, DynamicTuple, NewSocket),
+            {RestChanges, FinalSocket} = process_affected_elements(T, DynamicTuple, Socket),
             {[ElementChange | RestChanges], FinalSocket}
     end.

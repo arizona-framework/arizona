@@ -76,8 +76,8 @@ render_dynamic_callbacks([ElementIndex | T], DynamicTuple, Socket) ->
             {RestHtml, FinalSocket} = render_dynamic_callbacks(T, DynamicTuple, CallbackSocket),
             {[Html | RestHtml], FinalSocket};
         Result ->
-            {Html, NewSocket} = arizona_html:to_html(Result, Socket),
-            {RestHtml, FinalSocket} = render_dynamic_callbacks(T, DynamicTuple, NewSocket),
+            Html = arizona_html:to_html(Result),
+            {RestHtml, FinalSocket} = render_dynamic_callbacks(T, DynamicTuple, Socket),
             {[Html | RestHtml], FinalSocket}
     end.
 
