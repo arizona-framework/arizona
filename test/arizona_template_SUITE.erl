@@ -178,7 +178,14 @@ diff_stateful_with_changes(Config) when is_list(Config) ->
     % Test diff_stateful when there are binding changes
     create_test_component(),
 
-    {Module, Socket, _LivePid} = start_live_process(),
+    {Module, Socket, LivePid} = start_live_process(),
+
+    % Set up runtime dependencies by simulating variable access
+    % This simulates what happens during template rendering when get_binding is called
+    arizona_live:set_current_stateful_id(LivePid, ~"test_component_1"),
+    % Element 1 depends on title
+    arizona_live:set_current_element_index(LivePid, 1),
+    arizona_live:record_variable_dependency(LivePid, title),
 
     % Create stateful state with changes
     StatefulState0 = arizona_stateful:new(~"test_component_1", Module, #{
@@ -191,16 +198,28 @@ diff_stateful_with_changes(Config) when is_list(Config) ->
     Bindings = #{id => ~"test_component_1", title => ~"New Title"},
     {Changes, _UpdatedSocket} = arizona_template:diff_stateful(Module, Bindings, Socket1),
 
-    % Should generate changes when bindings change
-    ?assert(is_list(Changes)).
+    % Should return element changes for index 1 with the new title
+    ExpectedChanges = [{1, ~"New Title"}],
+    ?assertEqual(ExpectedChanges, Changes).
 
 diff_stateful_with_dependencies(Config) when is_list(Config) ->
     % Test diff_stateful with runtime dependencies
     create_test_component(),
 
-    {Module, Socket, _LivePid} = start_live_process(),
+    {Module, Socket, LivePid} = start_live_process(),
 
-    % Create stateful state with changes that have dependencies
+    % Set up runtime dependencies by simulating variable access
+    arizona_live:set_current_stateful_id(LivePid, ~"test_component_1"),
+    arizona_live:set_current_element_index(LivePid, 1),
+    % Element 1 depends on title (the only dynamic element in test_component template)
+    arizona_live:record_variable_dependency(LivePid, title),
+
+    % Verify dependencies were recorded correctly
+    Dependencies = arizona_live:get_component_dependencies(LivePid, ~"test_component_1"),
+    ExpectedDeps = #{title => [1]},
+    ?assertEqual(ExpectedDeps, Dependencies),
+
+    % Create stateful state with changes
     StatefulState0 = arizona_stateful:new(~"test_component_1", Module, #{
         title => ~"Old Title"
     }),
@@ -211,8 +230,9 @@ diff_stateful_with_dependencies(Config) when is_list(Config) ->
     Bindings = #{id => ~"test_component_1", title => ~"New Title"},
     {Changes, _UpdatedSocket} = arizona_template:diff_stateful(Module, Bindings, Socket1),
 
-    % Should generate element-level changes based on dependencies
-    ?assert(is_list(Changes)).
+    % Should return element changes for index 1 with new value
+    ExpectedChanges = [{1, ~"New Title"}],
+    ?assertEqual(ExpectedChanges, Changes).
 
 diff_stateless_no_live_pid(Config) when is_list(Config) ->
     % Test diff_stateless when no live process is available
@@ -233,15 +253,19 @@ diff_stateless_with_element_index(Config) when is_list(Config) ->
     % Test diff_stateless with element index from live process
     create_simple_component(),
 
-    {_Module, Socket, _LivePid} = start_live_process(),
+    {_Module, Socket, LivePid} = start_live_process(),
+
+    % Set up current element index in the live process
+    arizona_live:set_current_element_index(LivePid, 2),
 
     Bindings = #{text => ~"Test Text"},
     {Change, _UpdatedSocket} = arizona_template:diff_stateless(
         simple_component, render, Bindings, Socket
     ),
 
-    % Should return element change with proper index
-    ?assertMatch({_, _}, Change).
+    % Should return specific element change with known index and HTML content
+    ExpectedChange = {2, [~"<span>", ~"Test Text", ~"</span>"]},
+    ?assertEqual(ExpectedChange, Change).
 
 generate_element_diff_empty_set(Config) when is_list(Config) ->
     % Test generate_element_diff with empty affected elements set
@@ -270,9 +294,13 @@ generate_element_diff_with_elements(Config) when is_list(Config) ->
         AffectedElements, Template, Socket
     ),
 
-    % Should generate changes for affected elements
-    ?assert(is_list(Changes)),
-    ?assert(length(Changes) >= 0).
+    % Should generate specific changes for elements 1 and 2 with expected HTML content
+    % The mock template with dynamics should produce known HTML for elements 1 and 2
+    ExpectedChanges = [
+        {1, ~"Test"},
+        {2, ~"Content"}
+    ],
+    ?assertEqual(ExpectedChanges, Changes).
 
 get_affected_elements_basic(Config) when is_list(Config) ->
     % Test get_affected_elements with basic scenario
@@ -316,7 +344,8 @@ runtime_dependency_integration_test(Config) when is_list(Config) ->
     {Changes, _FinalSocket} = arizona_template:diff_stateful(Module, Bindings2, Socket2),
 
     % Should track dependencies and generate appropriate changes
-    ?assert(is_list(Changes)).
+    % Since no dependencies are tracked initially, should return empty list
+    ?assertEqual([], Changes).
 
 %% --------------------------------------------------------------------
 %% Helper Functions for Diff Tests
