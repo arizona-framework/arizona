@@ -102,7 +102,7 @@ callbacks, ensuring robust error handling throughout the LiveView lifecycle.
 
 %% Internal state record for LiveView processes
 -record(state, {
-    module :: atom(),
+    module :: module(),
     socket :: arizona_socket:socket(),
     dependency_tracker :: arizona_dependency_tracker:tracker(),
     stateful_hierarchical :: #{
@@ -187,7 +187,7 @@ and maintain state throughout its lifetime.
 ```
 """.
 -spec start_link(Module, Socket) -> {ok, Pid} | {error, Reason} when
-    Module :: atom(),
+    Module :: module(),
     Socket :: arizona_socket:socket(),
     Pid :: pid(),
     Reason :: term().
@@ -305,7 +305,7 @@ the provided request and socket. Used internally by the LiveView process.
 ```
 """.
 -spec call_mount_callback(Module, Req, Socket) -> Socket when
-    Module :: atom(),
+    Module :: module(),
     Req :: arizona_request:request(),
     Socket :: arizona_socket:socket().
 call_mount_callback(Module, Req, Socket) ->
@@ -325,7 +325,7 @@ the provided socket. Used internally by the LiveView process.
 ```
 """.
 -spec call_render_callback(Module, Socket) -> Socket when
-    Module :: atom(),
+    Module :: module(),
     Socket :: arizona_socket:socket().
 call_render_callback(Module, Socket) ->
     apply(Module, render, [Socket]).
@@ -347,7 +347,7 @@ by the LiveView process.
 -spec call_handle_event_callback(Module, Event, Params, Socket) ->
     {noreply, Socket} | {reply, Reply, Socket}
 when
-    Module :: atom(),
+    Module :: module(),
     Event :: binary(),
     Params :: map(),
     Socket :: arizona_socket:socket(),
@@ -375,7 +375,7 @@ by the LiveView process.
 ```
 """.
 -spec call_handle_info_callback(Module, Info, Socket) -> {noreply, Socket} when
-    Module :: atom(),
+    Module :: module(),
     Info :: term(),
     Socket :: arizona_socket:socket().
 call_handle_info_callback(Module, Info, Socket) ->
@@ -398,7 +398,7 @@ state with the LiveView module and socket.
 """.
 -spec init(InitArgs) -> {ok, State} when
     InitArgs :: {Module, Socket},
-    Module :: atom(),
+    Module :: module(),
     Socket :: arizona_socket:socket(),
     State :: state().
 init({Module, Socket}) ->

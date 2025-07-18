@@ -123,7 +123,7 @@ template generation and socket preparation with temporary bindings.
 ```
 """.
 -spec prepare_render(Module, Function, Bindings, Socket) -> {Template, TempSocket} when
-    Module :: atom(),
+    Module :: module(),
     Function :: atom(),
     Bindings :: arizona_binder:bindings(),
     Socket :: arizona_socket:socket(),

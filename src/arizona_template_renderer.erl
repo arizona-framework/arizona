@@ -14,7 +14,7 @@
 %% --------------------------------------------------------------------
 
 -spec render_stateful(Module, Bindings, Socket) -> {Html, Socket1} when
-    Module :: atom(),
+    Module :: module(),
     Bindings :: arizona_binder:bindings(),
     Socket :: arizona_socket:socket(),
     Html :: arizona_html:html(),
@@ -28,7 +28,7 @@ render_stateful(Mod, Bindings, Socket) ->
     render_template(Template, Socket1).
 
 -spec render_stateless(Module, Function, Bindings, Socket) -> {Html, Socket1} when
-    Module :: atom(),
+    Module :: module(),
     Function :: atom(),
     Bindings :: arizona_binder:bindings(),
     Socket :: arizona_socket:socket(),

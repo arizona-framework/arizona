@@ -111,7 +111,7 @@ Layout component specification.
 
 Defines a layout with its module, render function, and slot name for content placement.
 """.
--type layout() :: {LayoutModule :: atom(), LayoutRenderFun :: atom(), SlotName :: atom()}.
+-type layout() :: {LayoutModule :: module(), LayoutRenderFun :: atom(), SlotName :: atom()}.
 
 -doc ~"""
 Options for socket creation.

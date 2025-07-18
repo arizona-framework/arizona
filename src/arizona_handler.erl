@@ -84,7 +84,7 @@ init(Req, State) when is_map(State) ->
 
 %% Handle LiveView requests with complete lifecycle management
 -spec handle_live_request(LiveModule, Req, State) -> {ok, Req1, State} when
-    LiveModule :: atom(),
+    LiveModule :: module(),
     Req :: cowboy_req:req(),
     State :: map(),
     Req1 :: cowboy_req:req().

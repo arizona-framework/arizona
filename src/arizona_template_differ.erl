@@ -12,7 +12,7 @@
 %% --------------------------------------------------------------------
 
 -spec diff_stateful(Module, Bindings, Socket) -> {Diff, Socket1} when
-    Module :: atom(),
+    Module :: module(),
     Bindings :: arizona_binder:bindings(),
     Socket :: arizona_socket:socket(),
     Diff :: [term()],
@@ -48,7 +48,7 @@ diff_stateful(Mod, Bindings, Socket) ->
     end.
 
 -spec diff_stateless(Module, Function, Bindings, Socket) -> {Html, Socket1} when
-    Module :: atom(),
+    Module :: module(),
     Function :: atom(),
     Bindings :: arizona_binder:bindings(),
     Socket :: arizona_socket:socket(),

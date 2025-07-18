@@ -72,7 +72,7 @@ Provides full control over evaluation context including module name,
 line number, and bindings.
 """.
 -spec from_string(Module, Line, TemplateContent, Bindings) -> template() when
-    Module :: atom(),
+    Module :: module(),
     Line :: pos_integer(),
     TemplateContent :: binary(),
     Bindings :: map().
@@ -142,7 +142,7 @@ find_binding(Key, Bindings) ->
     arizona_binder:find(Key, Bindings).
 
 -spec render_stateful(Module, Bindings) -> Callback when
-    Module :: atom(),
+    Module :: module(),
     Bindings :: map(),
     Callback :: fun((arizona_socket:socket()) -> {iodata() | term(), arizona_socket:socket()}).
 render_stateful(Mod, Bindings) ->
@@ -158,7 +158,7 @@ render_stateful(Mod, Bindings) ->
     end.
 
 -spec render_stateless(Module, Function, Bindings) -> Callback when
-    Module :: atom(),
+    Module :: module(),
     Function :: atom(),
     Bindings :: map(),
     Callback :: fun((arizona_socket:socket()) -> {iodata() | term(), arizona_socket:socket()}).
