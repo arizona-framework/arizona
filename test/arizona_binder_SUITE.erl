@@ -15,7 +15,8 @@ all() ->
         {group, merge_functions},
         {group, remove_functions},
         {group, keys_functions},
-        {group, values_functions}
+        {group, values_functions},
+        {group, is_empty_functions}
     ].
 
 groups() ->
@@ -60,6 +61,11 @@ groups() ->
             values_single_map,
             values_multiple_map,
             values_type_guards
+        ]},
+        {is_empty_functions, [parallel], [
+            is_empty_true,
+            is_empty_false,
+            is_empty_type_guards
         ]}
     ].
 
@@ -306,3 +312,20 @@ values_multiple_map(Config) when is_list(Config) ->
 values_type_guards(Config) when is_list(Config) ->
     % Test type guards
     ?assertError(function_clause, arizona_binder:values(~"not_map")).
+
+%% --------------------------------------------------------------------
+%% is_empty/1 function tests
+%% --------------------------------------------------------------------
+
+is_empty_true(Config) when is_list(Config) ->
+    % Test empty map returns true
+    ?assert(arizona_binder:is_empty(#{})).
+
+is_empty_false(Config) when is_list(Config) ->
+    % Test non-empty maps return false
+    ?assertNot(arizona_binder:is_empty(#{key => ~"value"})),
+    ?assertNot(arizona_binder:is_empty(create_sample_bindings())).
+
+is_empty_type_guards(Config) when is_list(Config) ->
+    % Test type guards
+    ?assertError(function_clause, arizona_binder:is_empty(~"not_map")).

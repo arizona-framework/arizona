@@ -28,8 +28,8 @@ diff_stateful(Mod, Bindings, Socket) ->
             StatefulState = arizona_socket:get_stateful_state(Id, Socket1),
             ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
 
-            case has_changes(ChangedBindings) of
-                false ->
+            case arizona_binder:is_empty(ChangedBindings) of
+                true ->
                     % Clear dependencies for this component before starting new render
                     ok = arizona_socket:clear_component_dependencies(Id, Socket1),
 
@@ -95,10 +95,6 @@ generate_element_diff(AffectedElements, Template, Socket) ->
             DynamicTuple = arizona_template:dynamic(Template),
             process_affected_elements(DynamicSequence, DynamicTuple, Socket)
     end.
-
-%% Check if there are any changes in the bindings
-has_changes(ChangedBindings) ->
-    length(arizona_binder:keys(ChangedBindings)) > 0.
 
 %% Process affected elements to create diff changes
 process_affected_elements([], _DynamicTuple, Socket) ->

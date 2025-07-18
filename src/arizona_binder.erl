@@ -59,6 +59,7 @@ and arizona_socket.
 -export([remove/2]).
 -export([keys/1]).
 -export([values/1]).
+-export([is_empty/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -315,3 +316,28 @@ Values = arizona_binder:values(#{title => ~"Title", author => ~"Author"}).
 -spec values(bindings()) -> [value()].
 values(Bindings) when is_map(Bindings) ->
     maps:values(Bindings).
+
+-doc ~"""
+Check if bindings map is empty.
+
+Returns true if the bindings map contains no key-value pairs.
+This is a pure function with no side effects.
+
+## Parameters
+
+- `Bindings`: Map of variable bindings
+
+## Returns
+
+`true` if the bindings map is empty, `false` otherwise.
+
+## Example
+
+```erlang
+?assert(arizona_binder:is_empty(#{})),
+?assertNot(arizona_binder:is_empty(#{key => value})).
+```
+""".
+-spec is_empty(bindings()) -> boolean().
+is_empty(Bindings) when is_map(Bindings) ->
+    maps:size(Bindings) =:= 0.
