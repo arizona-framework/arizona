@@ -1,17 +1,6 @@
 #!/bin/bash
 
-# Compile using the test profile
-rebar3 as test compile
-
-# Use erl directly for CI environment instead of rebar3 shell
-exec erl \
-    -pa "_build/test/lib/arizona/ebin" \
-    -pa "_build/test/lib/arizona/test" \
-    -pa "_build/test/lib/cowboy/ebin" \
-    -pa "_build/test/lib/cowlib/ebin" \
-    -pa "_build/test/lib/ranch/ebin" \
-    -noshell -eval "
-{ok, _} = application:ensure_all_started(arizona),
+exec rebar3 as test shell --eval "
 Routes = [
     {live, ~\"/test/counter\", arizona_counter_live},
     {live, ~\"/test/todo\", arizona_todo_app_live},
