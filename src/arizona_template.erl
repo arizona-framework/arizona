@@ -178,8 +178,6 @@ render_stateful(Mod, Bindings) ->
 
 prepare_stateful_render(Mod, Bindings, Socket) ->
     Id = maps:get(id, Bindings),
-    % Clear dependencies for this component before starting new render
-    ok = arizona_socket:clear_component_dependencies(Id, Socket),
     case arizona_socket:find_stateful_state(Id, Socket) of
         {ok, State} ->
             %% Apply new bindings to existing state before checking remount
@@ -204,6 +202,8 @@ prepare_stateful_render(Mod, Bindings, Socket) ->
 
 render_stateful(Mod, Bindings, Socket) ->
     {Id, Template, Socket1} = prepare_stateful_render(Mod, Bindings, Socket),
+    % Clear dependencies for this component before starting new render
+    ok = arizona_socket:clear_component_dependencies(Id, Socket1),
     % Notify live process of current stateful component
     ok = arizona_socket:notify_current_stateful_id(Id, Socket1),
     resolve_template(Template, Socket1).
@@ -221,9 +221,16 @@ diff_stateful(Mod, Bindings, Socket) ->
 
             case has_changes(ChangedBindings) of
                 false ->
+                    % Clear dependencies for this component before starting new render
+                    ok = arizona_socket:clear_component_dependencies(Id, Socket1),
+
                     {[], Socket1};
                 true ->
                     Dependencies = arizona_live:get_component_dependencies(LivePid, Id),
+
+                    % Clear dependencies for this component before starting new render
+                    ok = arizona_socket:clear_component_dependencies(Id, Socket1),
+
                     % Find affected elements using runtime dependencies
                     AffectedElements = get_affected_elements(ChangedBindings, Dependencies),
                     % Generate diff for affected elements
@@ -297,10 +304,12 @@ process_affected_elements([ElementIndex | T], DynamicTuple, Socket) ->
     end.
 
 hierarchical_stateful(Mod, Bindings, Socket) ->
-    {Id, Template, RenderSocket} = prepare_stateful_render(Mod, Bindings, Socket),
+    {Id, Template, Socket1} = prepare_stateful_render(Mod, Bindings, Socket),
+    % Clear dependencies for this component before starting new render
+    ok = arizona_socket:clear_component_dependencies(Id, Socket1),
     % Notify live process of current stateful component
-    ok = arizona_socket:notify_current_stateful_id(Id, RenderSocket),
-    {Dynamic, DynamicSocket} = resolve_template_dynamic(Template, RenderSocket),
+    ok = arizona_socket:notify_current_stateful_id(Id, Socket1),
+    {Dynamic, DynamicSocket} = resolve_template_dynamic(Template, Socket1),
     HierarchicalSocket = arizona_socket:put_hierarchical_acc(
         Id,
         #{
