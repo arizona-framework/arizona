@@ -159,7 +159,7 @@ transform_from_string(ModuleName, Line, TemplateArg) ->
 -spec eval_expr(Module, BinaryForm, Bindings) -> Result when
     Module :: module(),
     BinaryForm :: erl_syntax:syntaxTree(),
-    Bindings :: map(),
+    Bindings :: arizona_binder:bindings(),
     Result :: term().
 eval_expr(Module, BinaryForm, Bindings) ->
     erl_eval:expr(

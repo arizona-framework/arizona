@@ -67,6 +67,7 @@ and arizona_socket.
 
 -export_type([key/0]).
 -export_type([value/0]).
+-export_type([default_fun/0]).
 -export_type([bindings/0]).
 
 %% --------------------------------------------------------------------
@@ -75,6 +76,7 @@ and arizona_socket.
 
 -nominal key() :: atom().
 -nominal value() :: dynamic().
+-nominal default_fun() :: fun(() -> value()).
 -opaque bindings() :: #{key() => value()}.
 
 %% --------------------------------------------------------------------
@@ -144,7 +146,7 @@ end).
 % Returns: ~"Default Greeting"
 ```
 """.
--spec get(key(), bindings(), fun(() -> value())) -> value().
+-spec get(key(), bindings(), default_fun()) -> value().
 get(Key, Bindings, Default) when is_atom(Key), is_map(Bindings), is_function(Default, 0) ->
     case Bindings of
         #{Key := Value} ->
