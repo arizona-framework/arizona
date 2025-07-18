@@ -252,10 +252,9 @@ process_affected_elements([ElementIndex | T], DynamicTuple, Socket) ->
     DynamicCallback = element(ElementIndex, DynamicTuple),
     case DynamicCallback() of
         Callback when is_function(Callback, 1) ->
-            {StatefulHtml, StatefulSocket} = Callback(Socket),
-            {Html, HtmlSocket} = arizona_html:to_html(StatefulHtml, StatefulSocket),
+            {Html, CallbackSocket} = Callback(Socket),
             ElementChange = {ElementIndex, Html},
-            {RestChanges, FinalSocket} = process_affected_elements(T, DynamicTuple, HtmlSocket),
+            {RestChanges, FinalSocket} = process_affected_elements(T, DynamicTuple, CallbackSocket),
             {[ElementChange | RestChanges], FinalSocket};
         Result ->
             {Html, NewSocket} = arizona_html:to_html(Result, Socket),
@@ -299,9 +298,8 @@ resolve_dynamic_callbacks([ElementIndex | T], DynamicTuple, Socket) ->
     DynamicCallback = element(ElementIndex, DynamicTuple),
     case DynamicCallback() of
         Callback when is_function(Callback, 1) ->
-            {StatefulHtml, StatefulSocket} = Callback(Socket),
-            {Html, HtmlSocket} = arizona_html:to_html(StatefulHtml, StatefulSocket),
-            {RestHtml, FinalSocket} = resolve_dynamic_callbacks(T, DynamicTuple, HtmlSocket),
+            {Html, CallbackSocket} = Callback(Socket),
+            {RestHtml, FinalSocket} = resolve_dynamic_callbacks(T, DynamicTuple, CallbackSocket),
             {[Html | RestHtml], FinalSocket};
         Result ->
             {Html, NewSocket} = arizona_html:to_html(Result, Socket),
@@ -362,28 +360,17 @@ diff_stateless(Mod, Fun, Bindings, Socket) ->
     % stateless component when any changes occur, since stateless components
     % are typically small and don't benefit from fine-grained diffing
 
-    % Get runtime-tracked variable dependencies from live process
-    case arizona_socket:get_live_pid(Socket) of
-        undefined ->
-            % No live process, can't do runtime diffing
-            {[], Socket};
-        LivePid ->
-            ElementIndex = arizona_live:get_current_element_index(LivePid),
+    % Re-render the entire stateless component
+    {Template, TempSocket} = prepare_stateless_render(Mod, Fun, Bindings, Socket),
 
-            % Re-render the entire stateless component
-            {Template, TempSocket} = prepare_stateless_render(Mod, Fun, Bindings, Socket),
+    % Convert template to HTML for diff
+    {Html, FinalSocket} = resolve_template(Template, TempSocket),
 
-            % Convert template to HTML for diff
-            {Html, FinalSocket} = resolve_template(Template, TempSocket),
-
-            ElementChange = {ElementIndex, Html},
-
-            % Return the complete HTML as a change
-            % In a more sophisticated implementation, we could track element-level
-            % changes within stateless components, but for now this provides
-            % a working diff mechanism
-            {ElementChange, FinalSocket}
-    end.
+    % Return the complete HTML as a change
+    % In a more sophisticated implementation, we could track element-level
+    % changes within stateless components, but for now this provides
+    % a working diff mechanism
+    {Html, FinalSocket}.
 
 hierarchical_stateless(Mod, Fun, Bindings, Socket) ->
     {Template, TempSocket} = prepare_stateless_render(Mod, Fun, Bindings, Socket),
