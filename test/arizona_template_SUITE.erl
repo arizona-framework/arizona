@@ -21,7 +21,8 @@ groups() ->
             render_stateful_mode_render,
             render_stateful_mode_hierarchical,
             render_stateless_mode_render,
-            render_stateless_mode_hierarchical
+            render_stateless_mode_hierarchical,
+            hierarchical_nested_components_comprehensive
         ]},
         {diff_functionality, [parallel], [
             diff_stateful_no_live_pid,
@@ -119,13 +120,28 @@ render_stateful_mode_hierarchical(Config) when is_list(Config) ->
     }),
 
     {Struct, UpdatedSocket} = Callback(Socket),
-    ?assertEqual(stateful, maps:get(type, Struct)),
-    ?assertEqual(~"test2", maps:get(id, Struct)),
 
+    % Verify exact stateful component structure
+    ExpectedStruct = #{
+        type => stateful,
+        id => ~"test2"
+    },
+    ?assertEqual(ExpectedStruct, Struct),
+
+    % Verify hierarchical accumulator contains exact component data
     HierarchicalAcc = arizona_socket:get_hierarchical_acc(UpdatedSocket),
     ?assert(maps:is_key(~"test2", HierarchicalAcc)),
+
     ComponentData = maps:get(~"test2", HierarchicalAcc),
-    ?assertEqual(stateful, maps:get(type, ComponentData)).
+    ExpectedComponentData = #{
+        type => stateful,
+        static => [
+            ~"<div class=\"test\">\n    <h1>",
+            ~"</h1>\n</div>"
+        ],
+        dynamic => [~"Hierarchical Test"]
+    },
+    ?assertEqual(ExpectedComponentData, ComponentData).
 
 render_stateless_mode_render(Config) when is_list(Config) ->
     create_simple_component(),
@@ -148,9 +164,137 @@ render_stateless_mode_hierarchical(Config) when is_list(Config) ->
     }),
 
     {Struct, _UpdatedSocket} = Callback(Socket),
-    ?assertEqual(stateless, maps:get(type, Struct)),
-    ?assert(maps:is_key(static, Struct)),
-    ?assert(maps:is_key(dynamic, Struct)).
+
+    % Verify exact hierarchical structure for stateless component
+    ExpectedStruct = #{
+        type => stateless,
+        static => [~"<span>", ~"</span>"],
+        dynamic => [~"Hierarchical Stateless"]
+    },
+    ?assertEqual(ExpectedStruct, Struct).
+
+hierarchical_nested_components_comprehensive(Config) when is_list(Config) ->
+    % COMPREHENSIVE TEST: Hierarchical rendering with nested stateful and stateless components
+    % This test verifies exact hierarchical structure for complex nested components
+
+    % Create a nested component that contains both stateful and stateless children
+    create_hierarchical_nested_parent(),
+    create_hierarchical_nested_child(),
+    create_hierarchical_stateless_widget(),
+
+    Socket = create_test_socket(hierarchical),
+    Callback = arizona_template:render_stateful(hierarchical_nested_parent, #{
+        id => ~"parent_1",
+        parent_title => ~"Parent Component",
+        child_name => ~"Child 1",
+        widget_text => ~"Widget Text"
+    }),
+
+    {Struct, UpdatedSocket} = Callback(Socket),
+
+    % Verify parent component structure
+    ExpectedParentStruct = #{
+        type => stateful,
+        id => ~"parent_1"
+    },
+    ?assertEqual(ExpectedParentStruct, Struct),
+
+    % Verify hierarchical accumulator contains all nested components
+    HierarchicalAcc = arizona_socket:get_hierarchical_acc(UpdatedSocket),
+
+    % Check parent component data
+    ?assert(maps:is_key(~"parent_1", HierarchicalAcc)),
+    ParentData = maps:get(~"parent_1", HierarchicalAcc),
+    ExpectedParentData = #{
+        type => stateful,
+        static => [
+            ~"<div class=\"parent\">\n    <h2>",
+            ~"</h2>\n    <div class=\"children\">\n        ",
+            ~"\n        ",
+            ~"\n    </div>\n</div>"
+        ],
+        dynamic => [
+            ~"Parent Component",
+            #{type => stateful, id => ~"child_1"},
+            #{
+                type => stateless,
+                static => [~"<span class=\"widget\">", ~"</span>"],
+                dynamic => [~"Widget Text"]
+            }
+        ]
+    },
+    ?assertEqual(ExpectedParentData, ParentData),
+
+    % Check nested stateful child data
+    ?assert(maps:is_key(~"child_1", HierarchicalAcc)),
+    ChildData = maps:get(~"child_1", HierarchicalAcc),
+    ExpectedChildData = #{
+        type => stateful,
+        static => [
+            ~"<article class=\"child\">\n    <h3>",
+            ~"</h3>\n</article>"
+        ],
+        dynamic => [~"Child 1"]
+    },
+    ?assertEqual(ExpectedChildData, ChildData).
+
+%% Helper functions for hierarchical nested test
+create_hierarchical_nested_parent() ->
+    Code = merl:quote(~""""
+    -module(hierarchical_nested_parent).
+    -behaviour(arizona_stateful).
+    -export([mount/1, render/1]).
+
+    mount(Socket) ->
+        Socket.
+
+    render(Bindings) ->
+        arizona_template:from_string(hierarchical_nested_parent, 1, ~"""
+        <div class="parent">
+            <h2>{arizona_template:get_binding(parent_title, Bindings)}</h2>
+            <div class="children">
+                {arizona_template:render_stateful(hierarchical_nested_child, #{
+                    id => ~"child_1",
+                    child_name => arizona_template:get_binding(child_name, Bindings)
+                })}
+                {arizona_template:render_stateless(hierarchical_stateless_widget, render, #{
+                    widget_text => arizona_template:get_binding(widget_text, Bindings)
+                })}
+            </div>
+        </div>
+        """, Bindings).
+    """"),
+    merl:compile_and_load(Code).
+
+create_hierarchical_nested_child() ->
+    Code = merl:quote(~""""
+    -module(hierarchical_nested_child).
+    -behaviour(arizona_stateful).
+    -export([mount/1, render/1]).
+
+    mount(Socket) ->
+        Socket.
+
+    render(Bindings) ->
+        arizona_template:from_string(hierarchical_nested_child, 1, ~"""
+        <article class="child">
+            <h3>{arizona_template:get_binding(child_name, Bindings)}</h3>
+        </article>
+        """, Bindings).
+    """"),
+    merl:compile_and_load(Code).
+
+create_hierarchical_stateless_widget() ->
+    Code = merl:quote(~""""
+    -module(hierarchical_stateless_widget).
+    -export([render/1]).
+
+    render(Bindings) ->
+        arizona_template:from_string(hierarchical_stateless_widget, 1, ~"""
+        <span class="widget">{arizona_template:get_binding(widget_text, Bindings)}</span>
+        """, Bindings).
+    """"),
+    merl:compile_and_load(Code).
 
 %% --------------------------------------------------------------------
 %% Diff Functionality Tests
