@@ -16,8 +16,8 @@
       "groupName": "rebar.config deps"
     },
     {
-      "matchFileNames": ["package.json", ".nvmrc"],
-      "groupName": "package.json + .nvmrc deps"
+      "matchFileNames": ["package.json"],
+      "groupName": "package.json deps"
     },
     {
       "matchFileNames": ["Dockerfile"],
