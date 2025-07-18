@@ -55,6 +55,7 @@ in Arizona LiveView applications.
 %% --------------------------------------------------------------------
 
 -export([call_render_callback/3]).
+-export([prepare_render/4]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
@@ -102,3 +103,32 @@ frequently called presentational components.
     Template :: arizona_template:template().
 call_render_callback(Mod, Fun, Bindings) ->
     apply(Mod, Fun, [Bindings]).
+
+-doc ~"""
+Prepare stateless component for rendering.
+
+Creates a template and temporary socket for stateless component rendering.
+This function handles the setup required for stateless components including
+template generation and socket preparation with temporary bindings.
+
+## Examples
+
+```erlang
+1> Socket = arizona_socket:new(#{}).
+#socket{...}
+2> Bindings = #{name => ~"John", age => 30}.
+#{name => ~"John", age => 30}
+3> {Template, TempSocket} = arizona_stateless:prepare_render(my_component, render, Bindings, Socket).
+{#template{...}, #socket{...}}
+```
+""".
+-spec prepare_render(Module, Function, Bindings, Socket) -> {Template, TempSocket} when
+    Module :: atom(),
+    Function :: atom(),
+    Bindings :: arizona_binder:bindings(),
+    Socket :: arizona_socket:socket(),
+    Template :: arizona_template:template(),
+    TempSocket :: arizona_socket:socket().
+prepare_render(Mod, Fun, Bindings, Socket) ->
+    Template = call_render_callback(Mod, Fun, Bindings),
+    {Template, Socket}.

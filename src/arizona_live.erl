@@ -70,6 +70,8 @@ callbacks, ensuring robust error handling throughout the LiveView lifecycle.
 -export([record_variable_dependency/2]).
 -export([get_component_dependencies/2]).
 -export([clear_component_dependencies/2]).
+-export([put_hierarchical/3]).
+-export([clear_hierarchical/1]).
 -export([get_socket/1]).
 
 %% --------------------------------------------------------------------
@@ -102,7 +104,10 @@ callbacks, ensuring robust error handling throughout the LiveView lifecycle.
 -record(state, {
     module :: atom(),
     socket :: arizona_socket:socket(),
-    dependency_tracker :: arizona_dependency_tracker:tracker()
+    dependency_tracker :: arizona_dependency_tracker:tracker(),
+    stateful_hierarchical :: #{
+        arizona_stateful:id() => arizona_template_hierarchical:hierarchical_data()
+    }
 }).
 
 -doc ~"""
@@ -400,7 +405,8 @@ init({Module, Socket}) ->
     {ok, #state{
         module = Module,
         socket = arizona_socket:set_live_pid(self(), Socket),
-        dependency_tracker = arizona_dependency_tracker:new()
+        dependency_tracker = arizona_dependency_tracker:new(),
+        stateful_hierarchical = #{}
     }}.
 
 -doc ~"""
@@ -479,6 +485,14 @@ handle_cast(
 ) ->
     UpdatedTracker = arizona_dependency_tracker:clear_component_dependencies(StatefulId, Tracker),
     {noreply, State#state{dependency_tracker = UpdatedTracker}};
+handle_cast(
+    {put_hierarchical, StatefulId, HierarchicalData},
+    #state{stateful_hierarchical = HierarchicalMap} = State
+) ->
+    UpdatedHierarchicalMap = HierarchicalMap#{StatefulId => HierarchicalData},
+    {noreply, State#state{stateful_hierarchical = UpdatedHierarchicalMap}};
+handle_cast(clear_hierarchical, State) ->
+    {noreply, State#state{stateful_hierarchical = #{}}};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -552,6 +566,28 @@ typically called at the beginning of a new render cycle.
 -spec clear_component_dependencies(pid(), arizona_stateful:id()) -> ok.
 clear_component_dependencies(LivePid, StatefulId) ->
     gen_server:cast(LivePid, {clear_component_dependencies, StatefulId}).
+
+-doc ~"""
+Store hierarchical data for a stateful component.
+
+Sends hierarchical rendering data to the LiveView process for accumulation
+in the stateful_hierarchical state field.
+""".
+-spec put_hierarchical(
+    pid(), arizona_stateful:id(), arizona_template_hierarchical:hierarchical_data()
+) -> ok.
+put_hierarchical(LivePid, StatefulId, HierarchicalData) ->
+    gen_server:cast(LivePid, {put_hierarchical, StatefulId, HierarchicalData}).
+
+-doc ~"""
+Clear all hierarchical data.
+
+Clears the stateful_hierarchical map to free memory after the initial
+hierarchical render is complete.
+""".
+-spec clear_hierarchical(pid()) -> ok.
+clear_hierarchical(LivePid) ->
+    gen_server:cast(LivePid, clear_hierarchical).
 
 -doc ~"""
 Get the current socket from the LiveView process.

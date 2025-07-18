@@ -1,7 +1,7 @@
 -module(arizona_request_info_live_component).
 -behaviour(arizona_live).
-%-compile({parse_transform, arizona_parse_transform}).
--arizona_parse_transform([render/1]).
+%-compile({parse_transform, arizona_parse_transformform}).
+-arizona_parse_transformform([render/1]).
 -export([mount/2, render/1]).
 
 %% Component that displays arizona_request information for testing
