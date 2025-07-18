@@ -11,15 +11,30 @@
 %% Types exports
 %% --------------------------------------------------------------------
 
+-export_type([static_content/0]).
+-export_type([dynamic_content/0]).
 -export_type([hierarchical_data/0]).
+-export_type([stateful_struct/0]).
+-export_type([stateless_struct/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
+-nominal static_content() :: [binary()].
+-nominal dynamic_content() :: [arizona_html:html()].
 -nominal hierarchical_data() :: #{
-    static := [binary()],
-    dynamic := [arizona_html:html()]
+    static := static_content(),
+    dynamic := dynamic_content()
+}.
+-nominal stateful_struct() :: #{
+    type := stateful,
+    id := arizona_stateful:id()
+}.
+-nominal stateless_struct() :: #{
+    type := stateless,
+    static := static_content(),
+    dynamic := dynamic_content()
 }.
 
 %% --------------------------------------------------------------------
@@ -30,7 +45,7 @@
     Module :: atom(),
     Bindings :: arizona_binder:bindings(),
     Socket :: arizona_socket:socket(),
-    Struct :: #{type := stateful, id := term()},
+    Struct :: stateful_struct(),
     Socket1 :: arizona_socket:socket().
 hierarchical_stateful(Mod, Bindings, Socket) ->
     {Id, Template, Socket1} = arizona_stateful:prepare_render(Mod, Bindings, Socket),
@@ -58,7 +73,7 @@ hierarchical_stateful(Mod, Bindings, Socket) ->
     Function :: atom(),
     Bindings :: arizona_binder:bindings(),
     Socket :: arizona_socket:socket(),
-    Struct :: #{type := stateless, static := [binary()], dynamic := [arizona_html:html()]},
+    Struct :: stateless_struct(),
     Socket1 :: arizona_socket:socket().
 hierarchical_stateless(Mod, Fun, Bindings, Socket) ->
     {Template, TempSocket} = arizona_stateless:prepare_render(Mod, Fun, Bindings, Socket),
