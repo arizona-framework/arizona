@@ -41,48 +41,43 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
--spec hierarchical_stateful(Module, Bindings, Socket) -> {Struct, Socket1} when
+-spec hierarchical_stateful(Module, Bindings, View) -> {Struct, View1} when
     Module :: module(),
     Bindings :: arizona_binder:bindings(),
-    Socket :: arizona_socket:socket(),
+    View :: arizona_view:view(),
     Struct :: stateful_struct(),
-    Socket1 :: arizona_socket:socket().
-hierarchical_stateful(Mod, Bindings, Socket) ->
-    {Id, Template, Socket1} = arizona_stateful:prepare_render(Mod, Bindings, Socket),
-    % Clear dependencies for this component before starting new render
-    ok = arizona_socket:clear_component_dependencies(Id, Socket1),
-    % Notify live process of current stateful component
-    ok = arizona_socket:notify_current_stateful_id(Id, Socket1),
-    {Dynamic, DynamicSocket} = arizona_template_renderer:render_dynamic_content(
-        Template, Socket1
+    View1 :: arizona_view:view().
+hierarchical_stateful(Module, Bindings, View) ->
+    {Id, Template, View1} = arizona_stateful:prepare_render(Module, Bindings, View),
+    ok = arizona_view:live_clear_component_dependencies(Id, View1),
+    ok = arizona_view:live_set_current_stateful_id(Id, View1),
+    {Dynamic, DynamicView} = arizona_template_renderer:render_dynamic_content(
+        Template, View1
     ),
-    % Store hierarchical data in live process
     HierarchicalData = #{
         static => arizona_template:static(Template),
         dynamic => Dynamic
     },
-    ok = arizona_socket:put_hierarchical(Id, HierarchicalData, DynamicSocket),
+    ok = arizona_view:live_put_stateful_hierarchical(Id, HierarchicalData, DynamicView),
     Struct = #{
         type => stateful,
         id => Id
     },
-    {Struct, DynamicSocket}.
+    {Struct, DynamicView}.
 
--spec hierarchical_stateless(Module, Function, Bindings, Socket) -> {Struct, Socket1} when
+-spec hierarchical_stateless(Module, Function, Bindings, View) -> {Struct, View1} when
     Module :: module(),
     Function :: atom(),
     Bindings :: arizona_binder:bindings(),
-    Socket :: arizona_socket:socket(),
+    View :: arizona_view:view(),
     Struct :: stateless_struct(),
-    Socket1 :: arizona_socket:socket().
-hierarchical_stateless(Mod, Fun, Bindings, Socket) ->
-    {Template, TempSocket} = arizona_stateless:prepare_render(Mod, Fun, Bindings, Socket),
-    {Dynamic, DynamicSocket} = arizona_template_renderer:render_dynamic_content(
-        Template, TempSocket
-    ),
+    View1 :: arizona_view:view().
+hierarchical_stateless(Module, Fun, Bindings, View) ->
+    Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
+    {Dynamic, DynamicView} = arizona_template_renderer:render_dynamic_content(Template, View),
     Struct = #{
         type => stateless,
         static => arizona_template:static(Template),
         dynamic => Dynamic
     },
-    {Struct, DynamicSocket}.
+    {Struct, DynamicView}.

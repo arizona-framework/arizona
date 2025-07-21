@@ -13,72 +13,68 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
--spec render_stateful(Module, Bindings, Socket) -> {Html, Socket1} when
+-spec render_stateful(Module, Bindings, View) -> {Html, View1} when
     Module :: module(),
     Bindings :: arizona_binder:bindings(),
-    Socket :: arizona_socket:socket(),
+    View :: arizona_view:view(),
     Html :: arizona_html:html(),
-    Socket1 :: arizona_socket:socket().
-render_stateful(Mod, Bindings, Socket) ->
-    {Id, Template, Socket1} = arizona_stateful:prepare_render(Mod, Bindings, Socket),
-    % Clear dependencies for this component before starting new render
-    ok = arizona_socket:clear_component_dependencies(Id, Socket1),
-    % Notify live process of current stateful component
-    ok = arizona_socket:notify_current_stateful_id(Id, Socket1),
-    render_template(Template, Socket1).
+    View1 :: arizona_view:view().
+render_stateful(Module, Bindings, View) ->
+    {Id, Template, View1} = arizona_stateful:prepare_render(Module, Bindings, View),
+    ok = arizona_view:live_clear_component_dependencies(Id, View1),
+    ok = arizona_view:live_set_current_stateful_id(Id, View1),
+    render_template(Template, View1).
 
--spec render_stateless(Module, Function, Bindings, Socket) -> {Html, Socket1} when
+-spec render_stateless(Module, Function, Bindings, View) -> {Html, View1} when
     Module :: module(),
     Function :: atom(),
     Bindings :: arizona_binder:bindings(),
-    Socket :: arizona_socket:socket(),
+    View :: arizona_view:view(),
     Html :: arizona_html:html(),
-    Socket1 :: arizona_socket:socket().
-render_stateless(Mod, Fun, Bindings, Socket) ->
-    {Template, TempSocket} = arizona_stateless:prepare_render(Mod, Fun, Bindings, Socket),
-    render_template(Template, TempSocket).
+    View1 :: arizona_view:view().
+render_stateless(Module, Fun, Bindings, View) ->
+    Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
+    render_template(Template, View).
 
--spec render_template(Template, Socket) -> {Html, Socket1} when
+-spec render_template(Template, View) -> {Html, View1} when
     Template :: arizona_template:template(),
-    Socket :: arizona_socket:socket(),
+    View :: arizona_view:view(),
     Html :: arizona_html:html(),
-    Socket1 :: arizona_socket:socket().
-render_template(Template, Socket) ->
+    View1 :: arizona_view:view().
+render_template(Template, View) ->
     Static = arizona_template:static(Template),
-    {Dynamic, FinalSocket} = render_dynamic_content(Template, Socket),
+    {Dynamic, FinalView} = render_dynamic_content(Template, View),
     Html = zip_static_dynamic(Static, Dynamic),
-    {Html, FinalSocket}.
+    {Html, FinalView}.
 
--spec render_dynamic_content(Template, Socket) -> {Dynamic, Socket1} when
+-spec render_dynamic_content(Template, View) -> {Dynamic, View1} when
     Template :: arizona_template:template(),
-    Socket :: arizona_socket:socket(),
+    View :: arizona_view:view(),
     Dynamic :: [arizona_html:html()],
-    Socket1 :: arizona_socket:socket().
-render_dynamic_content(Template, Socket) ->
+    View1 :: arizona_view:view().
+render_dynamic_content(Template, View) ->
     DynamicSequence = arizona_template:dynamic_sequence(Template),
     DynamicTuple = arizona_template:dynamic(Template),
-    render_dynamic_callbacks(DynamicSequence, DynamicTuple, Socket).
+    render_dynamic_callbacks(DynamicSequence, DynamicTuple, View).
 
 %% --------------------------------------------------------------------
 %% Internal Functions
 %% --------------------------------------------------------------------
 
-render_dynamic_callbacks([], _DynamicTuple, Socket) ->
-    {[], Socket};
-render_dynamic_callbacks([ElementIndex | T], DynamicTuple, Socket) ->
-    % Notify live process of current element index
-    ok = arizona_socket:notify_current_element_index(ElementIndex, Socket),
-
+render_dynamic_callbacks([], _DynamicTuple, View) ->
+    {[], View};
+render_dynamic_callbacks([ElementIndex | T], DynamicTuple, View) ->
+    ok = arizona_view:live_set_current_element_index(ElementIndex, View),
     DynamicCallback = element(ElementIndex, DynamicTuple),
     case DynamicCallback() of
         Callback when is_function(Callback, 1) ->
-            {Html, CallbackSocket} = Callback(Socket),
-            {RestHtml, FinalSocket} = render_dynamic_callbacks(T, DynamicTuple, CallbackSocket),
-            {[Html | RestHtml], FinalSocket};
+            {Html, CallbackView} = Callback(View),
+            {RestHtml, FinalView} = render_dynamic_callbacks(T, DynamicTuple, CallbackView),
+            {[Html | RestHtml], FinalView};
         Result ->
             Html = arizona_html:to_html(Result),
-            {RestHtml, FinalSocket} = render_dynamic_callbacks(T, DynamicTuple, Socket),
-            {[Html | RestHtml], FinalSocket}
+            {RestHtml, FinalView} = render_dynamic_callbacks(T, DynamicTuple, View),
+            {[Html | RestHtml], FinalView}
     end.
 
 %% Zip static and dynamic parts for list item

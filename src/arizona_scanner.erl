@@ -1,42 +1,4 @@
 -module(arizona_scanner).
--moduledoc ~"""
-Provides template scanning functionality for Arizona template processing.
-
-## Overview
-
-The scanner module tokenizes Arizona template files into a stream of tokens
-that can be consumed by the parser. It provides the foundation for Arizona's
-template processing pipeline by converting raw template text into structured
-token sequences.
-
-## Features
-
-- **Token Recognition**: Identifies static content, dynamic expressions, and comments
-- **Line Tracking**: Maintains line numbers for error reporting and debugging
-- **Whitespace Normalization**: Handles proper HTML whitespace according to browser rules
-- **Expression Parsing**: Validates Erlang expressions within template syntax
-- **Error Handling**: Provides detailed error messages with context information
-- **Escape Sequences**: Supports escaped braces for literal brace output
-
-## Key Functions
-
-- `scan/2`: Tokenize template content into structured token list
-
-## Token Types
-
-- **static**: HTML/text content rendered as-is with normalized whitespace
-- **dynamic**: Erlang expressions within `{...}` evaluated at runtime
-- **comment**: Template comments within `{% ... %}` stripped from output
-
-## Template Syntax
-
-- `{expr}`: Erlang expression to be evaluated
-- `{% comment %}`: Template comment (ignored in output)
-- `\{`: Escaped brace (produces literal `{` in output)
-
-Token format: `{Category, Line, Text}` where Category is `static | dynamic | comment`,
-Line is a 1-based line number, and Text is the token content as binary.
-""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -55,25 +17,10 @@ Line is a 1-based line number, and Text is the token content as binary.
 %% Types definitions
 %% --------------------------------------------------------------------
 
--doc ~"""
-Scanner options for controlling tokenization behavior.
-
-Specifies the starting line number for token tracking. The scanner only
-tracks line numbers for simplicity and performance, avoiding complexity
-with indentation and column tracking.
-""".
 -type scan_opts() :: #{
     line => pos_integer()
 }.
 
--doc ~"""
-Token representation with category, location, and content information.
-
-Categories define the token type:
-- `static`: Static content with normalized whitespace
-- `dynamic`: Dynamic expression to be evaluated at runtime
-- `comment`: Template comment stripped from final output
-""".
 -type token() :: {
     Category :: static | dynamic | comment,
     Line :: pos_integer(),
@@ -90,48 +37,6 @@ Categories define the token type:
 %% API function definitions
 %% --------------------------------------------------------------------
 
--doc ~"""
-Tokenize template content into a structured list of tokens.
-
-Processes Arizona template content and converts it into tokens that can be
-consumed by the parser. Handles static content, dynamic expressions, and
-comments with proper line number tracking and error reporting.
-
-## Syntax
-
-- `{expr}`: Erlang expression to be evaluated
-- `{% comment %}`: Template comment (ignored in output)
-- `\\{`: Escaped brace (produces literal `{` in output)
-
-## Examples
-
-```erlang
-1> arizona_scanner:scan(#{}, ~"Hello {name}!").
-[{static,1,~"Hello "}, {dynamic,1,~"name"}, {static,1,~"!"}]
-2> arizona_scanner:scan(#{}, ~"Price: \\{100}").
-[{static,1,~"Price: {100}"}]
-3> arizona_scanner:scan(#{}, ~"{% TODO: fix this %} Done").
-[{comment,1,~"TODO: fix this"}, {static,1,~"Done"}]
-```
-
-## Whitespace Handling
-
-The scanner normalizes HTML whitespace according to browser rules:
-- Multiple spaces collapse to single space
-- Leading/trailing whitespace is trimmed
-- Newlines are preserved where significant
-
-## Error Handling
-
-- `{unexpected_expr_end, Line, PartialExpr}`: Unclosed expression with partial content
-- `{badexpr, Line, Content}`: Malformed Erlang expression
-
-Error messages include the problematic expression text for debugging:
-```erlang
-1> arizona_scanner:scan(#{}, ~"{unclosed").
-** exception error: {unexpected_expr_end,1,~"unclosed"}
-```
-""".
 -spec scan(Opts, Html) -> [Token] when
     Opts :: scan_opts(),
     Html :: arizona_html:html(),
@@ -145,7 +50,7 @@ scan(Opts, Html) when is_map(Opts), (is_binary(Html) orelse is_list(Html)) ->
     scan(BinaryTemplate, BinaryTemplate, State).
 
 %% --------------------------------------------------------------------
-%% Private functions
+%% Internal functions
 %% --------------------------------------------------------------------
 
 %% Main scanning loop entry point
