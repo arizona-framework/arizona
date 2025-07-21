@@ -16,27 +16,12 @@
 %% Types definitions
 %% --------------------------------------------------------------------
 
--nominal html() :: binary() | iodata().
+-nominal html() :: iodata().
 
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
--doc ~"""
-Convert various Erlang terms to HTML representation.
-
-Handles binary, list, atom, integer, float, and other terms by converting
-them to appropriate HTML-safe binary strings. This is a pure function
-with no side effects.
-
-## Examples
-
-```erlang
-<<"hello">> = arizona_html:to_html(hello),
-<<"42">> = arizona_html:to_html(42),
-[<<"foo">>, <<"bar">>] = arizona_html:to_html([foo, bar]).
-```
-""".
 -spec to_html(Value) -> Html when
     Value :: dynamic(),
     Html :: html().

@@ -39,38 +39,12 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
--doc ~""""
-Create template from string content.
-
-Processes template string through scanner and parser pipeline to create
-an optimized template structure ready for rendering. Handles static content,
-dynamic expressions, and comments.
-
-## Example
-
-```erlang
-Template = arizona_template:from_string(~"""
-<div class="user">
-    Hello {Username}!
-</div>
-"""),
-Static = arizona_template:static(Template),
-Dynamic = arizona_template:dynamic(Template).
-```
-"""".
 -spec from_string(TemplateContent, Bindings) -> template() when
     TemplateContent :: binary(),
     Bindings :: arizona_binder:bindings().
 from_string(TemplateContent, Bindings) ->
     from_string(erlang, 1, TemplateContent, Bindings).
 
--doc ~"""
-Create template from string with module context.
-
-Internal function used by parse transforms and compile-time processing.
-Provides full control over evaluation context including module name,
-line number, and bindings.
-""".
 -spec from_string(Module, Line, TemplateContent, Bindings) -> template() when
     Module :: module(),
     Line :: pos_integer(),
@@ -144,16 +118,16 @@ find_binding(Key, Bindings) ->
 -spec render_stateful(Module, Bindings) -> Callback when
     Module :: module(),
     Bindings :: arizona_binder:bindings(),
-    Callback :: fun((arizona_socket:socket()) -> {iodata() | term(), arizona_socket:socket()}).
-render_stateful(Mod, Bindings) ->
-    fun(Socket) ->
-        case arizona_socket:get_mode(Socket) of
+    Callback :: fun((arizona_view:view()) -> {iodata() | term(), arizona_view:view()}).
+render_stateful(Module, Bindings) ->
+    fun(View) ->
+        case arizona_view:get_render_mode(View) of
             render ->
-                arizona_template_renderer:render_stateful(Mod, Bindings, Socket);
+                arizona_template_renderer:render_stateful(Module, Bindings, View);
             diff ->
-                arizona_template_differ:diff_stateful(Mod, Bindings, Socket);
+                arizona_template_differ:diff_stateful(Module, Bindings, View);
             hierarchical ->
-                arizona_template_hierarchical:hierarchical_stateful(Mod, Bindings, Socket)
+                arizona_template_hierarchical:hierarchical_stateful(Module, Bindings, View)
         end
     end.
 
@@ -161,15 +135,15 @@ render_stateful(Mod, Bindings) ->
     Module :: module(),
     Function :: atom(),
     Bindings :: arizona_binder:bindings(),
-    Callback :: fun((arizona_socket:socket()) -> {iodata() | term(), arizona_socket:socket()}).
-render_stateless(Mod, Fun, Bindings) ->
-    fun(Socket) ->
-        case arizona_socket:get_mode(Socket) of
+    Callback :: fun((arizona_view:view()) -> {iodata() | term(), arizona_view:view()}).
+render_stateless(Module, Fun, Bindings) ->
+    fun(View) ->
+        case arizona_view:get_render_mode(View) of
             render ->
-                arizona_template_renderer:render_stateless(Mod, Fun, Bindings, Socket);
+                arizona_template_renderer:render_stateless(Module, Fun, Bindings, View);
             diff ->
-                arizona_template_differ:diff_stateless(Mod, Fun, Bindings, Socket);
+                arizona_template_differ:diff_stateless(Module, Fun, Bindings, View);
             hierarchical ->
-                arizona_template_hierarchical:hierarchical_stateless(Mod, Fun, Bindings, Socket)
+                arizona_template_hierarchical:hierarchical_stateless(Module, Fun, Bindings, View)
         end
     end.

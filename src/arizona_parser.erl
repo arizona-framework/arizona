@@ -1,41 +1,4 @@
 -module(arizona_parser).
--moduledoc ~"""
-Template parser for Arizona Web Framework.
-
-Converts tokenized Arizona templates into AST that creates optimized template structures.
-Processes tokens from `arizona_scanner` and generates compile-time AST for efficient rendering.
-
-## AST Generation
-
-Returns AST that creates `arizona_template:template()` tuples:
-
-```erlang
-{template, Static, Dynamic, DynamicSequence, DynamicAnno}
-```
-
-Where:
-- **Static**: List of UTF-8 binaries in template order
-- **Dynamic**: Tuple of arity-0 callback functions `fun() -> term() end`
-- **DynamicSequence**: `[1,2,3,...,N]` for efficient tuple traversal
-- **DynamicAnno**: Tuple of line numbers for debugging
-
-## Features
-
-- **Compile-time AST**: Generates optimized syntax trees for performance
-- **Tuple Structure**: High-performance data layout with precomputed sequences  
-- **Arity-0 Callbacks**: Dynamic expressions as zero-argument functions
-- **Line Tracking**: Preserves source locations for debugging
-- **Comment Filtering**: Removes comment tokens during parsing
-
-## Processing Pipeline
-
-1. **Input**: Token stream from `arizona_scanner`
-2. **Separation**: Static content and dynamic expressions
-3. **AST Creation**: Compile-time syntax trees for template structures
-4. **Output**: AST that evaluates to `arizona_template:template()` instances
-
-Access template data through `arizona_template` module functions.
-""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -53,27 +16,12 @@ Access template data through `arizona_template` module functions.
 %% Types definitions
 %% --------------------------------------------------------------------
 
--doc ~"""
-Template parsing result as AST that creates arizona_template:template() record.
-
-Returns compile-time AST that will create #template{} instances at runtime.
-Static parts are binary segments in template order.
-Dynamic parts become callback functions in tuple format.
-""".
 -type parsed_template() :: erl_syntax:syntaxTree().
 
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
--doc ~"""
-Parse tokens into template AST.
-
-Converts tokens into AST that creates arizona_template:template() record.
-Static parts are binary segments, dynamic parts become arity-0 callback functions.
-
-Returns AST that creates #template{} record at runtime.
-""".
 -spec parse_tokens(Tokens) -> ParsedTemplate when
     Tokens :: [arizona_scanner:token()],
     ParsedTemplate :: parsed_template().
@@ -162,7 +110,7 @@ create_dynamic_callback_ast(ExprText) ->
     ]).
 
 %% --------------------------------------------------------------------
-%% Private functions
+%% Internal functions
 %% --------------------------------------------------------------------
 
 %% Separate static and dynamic parts

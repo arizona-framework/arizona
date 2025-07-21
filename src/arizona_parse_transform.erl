@@ -1,27 +1,4 @@
 -module(arizona_parse_transform).
--moduledoc ~"""
-Arizona Template Parse Transform.
-
-Modern parse transform for Arizona templates. Provides
-compile-time template processing with improved performance and cleaner
-architecture using the arizona_template module.
-
-## Usage
-
-Add to your module:
-```erlang
--compile([{parse_transform, arizona_parse_transform}]).
-```
-
-## Features
-
-- **Template Compilation**: Converts template strings to optimized structures
-- **Static Analysis**: Processes templates at compile time
-- **Clean Architecture**: Uses arizona_template:from_string/4 infrastructure
-- **Error Handling**: Proper error reporting with line numbers
-
-This module provides compile-time template processing for Arizona applications.
-""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -42,34 +19,25 @@ This module provides compile-time template processing for Arizona applications.
 %% Parse Transform Implementation
 %% --------------------------------------------------------------------
 
--doc ~"""
-Parse transform entry point.
-
-Processes AST and transforms arizona_template:from_string/2 calls into
-compile-time optimized template structures.
-""".
 -spec parse_transform(Forms, Options) -> Forms when
     Forms :: [erl_parse:abstract_form()],
     Options :: [compile:option()].
 parse_transform(Forms, Options) ->
-    % Extract module name for context
     ModuleName = extract_module_name(Forms),
-
-    % Transform each form
     erl_syntax:revert_forms([
         transform_form(FormTree, ModuleName, Options)
      || FormTree <- Forms
     ]).
 
 %% --------------------------------------------------------------------
-%% Private functions
+%% Internal functions
 %% --------------------------------------------------------------------
 
 %% Extract module name from forms
 -spec extract_module_name(Forms) -> ModuleName when
     Forms :: [erl_parse:abstract_form()],
     ModuleName :: atom() | undefined.
-extract_module_name([{attribute, _Line, module, ModuleName} | _]) ->
+extract_module_name([{attribute, _Line, module, ModuleName} | _]) when is_atom(ModuleName) ->
     ModuleName;
 extract_module_name([_ | Rest]) ->
     extract_module_name(Rest);
@@ -98,8 +66,7 @@ transform_node(Node, ModuleName) ->
 transform_application(Node, ModuleName) ->
     case analyze_application(Node) of
         {arizona_template, from_string, 2, [TemplateArg, _BindingsArg]} ->
-            Anno = erl_syntax:get_ann(Node),
-            Line = erl_anno:line(Anno),
+            Line = erl_syntax:get_pos(Node),
             transform_from_string(ModuleName, Line, TemplateArg);
         _ ->
             Node
@@ -137,13 +104,14 @@ analyze_application(Node) ->
 transform_from_string(ModuleName, Line, TemplateArg) ->
     try
         % Extract template content and line number
-        TemplateContent = eval_expr(ModuleName, TemplateArg, #{}),
+        case eval_expr(ModuleName, TemplateArg, #{}) of
+            TemplateContent when is_binary(TemplateContent) ->
+                % Scan template content into tokens
+                Tokens = arizona_scanner:scan(#{line => Line}, TemplateContent),
 
-        % Scan template content into tokens
-        Tokens = arizona_scanner:scan(#{line => Line}, TemplateContent),
-
-        % Parse tokens into AST
-        arizona_parser:parse_tokens(Tokens)
+                % Parse tokens into AST
+                arizona_parser:parse_tokens(Tokens)
+        end
     catch
         Class:Reason:Stacktrace ->
             error(
@@ -158,8 +126,8 @@ transform_from_string(ModuleName, Line, TemplateArg) ->
 %% Evaluate expression
 -spec eval_expr(Module, BinaryForm, Bindings) -> Result when
     Module :: module(),
-    BinaryForm :: erl_syntax:syntaxTree(),
-    Bindings :: arizona_binder:bindings(),
+    BinaryForm :: erl_parse:abstract_expr(),
+    Bindings :: #{atom() => dynamic()},
     Result :: term().
 eval_expr(Module, BinaryForm, Bindings) ->
     erl_eval:expr(
