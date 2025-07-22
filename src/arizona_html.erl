@@ -27,27 +27,12 @@
     Html :: html().
 to_html(Value) when is_binary(Value) ->
     Value;
+% Assume it is an iolist()
 to_html(Value) when is_list(Value) ->
-    list_to_html(Value);
+    Value;
 to_html(Value) when is_atom(Value) ->
     atom_to_binary(Value, utf8);
 to_html(Value) when is_integer(Value) ->
     integer_to_binary(Value, 10);
 to_html(Value) when is_float(Value) ->
-    list_to_binary(io_lib:format("~p", [Value]));
-to_html(Value) ->
-    list_to_binary(io_lib:format("~tp", [Value])).
-
-%% --------------------------------------------------------------------
-%% Internal Functions
-%% --------------------------------------------------------------------
-
-list_to_html([]) ->
-    [];
-list_to_html([Value | T]) ->
-    case to_html(Value) of
-        [] ->
-            list_to_html(T);
-        Html ->
-            [Html | list_to_html(T)]
-    end.
+    list_to_binary(io_lib:format("~p", [Value])).
