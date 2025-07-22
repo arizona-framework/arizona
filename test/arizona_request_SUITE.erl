@@ -43,10 +43,9 @@ groups() ->
     ].
 
 init_per_suite(Config) ->
-    % Create mock adapter module for testing
-    MockModuleName = arizona_request_mock_adapter,
+    MockModule = arizona_request_mock_adapter,
     MockAdapterCode = merl:qquote(~"""
-    -module('@module_name').
+    -module('@module').
     -behavior(arizona_request).
 
     -export([parse_bindings/1]).
@@ -70,14 +69,16 @@ init_per_suite(Config) ->
     read_body(RawRequest) ->
         Body = maps:get(body, RawRequest, ~"{\"test\": true}"),
         {Body, RawRequest}.
-    """, [{module_name, merl:term(MockModuleName)}]),
+    """, [{module, merl:term(MockModule)}]),
     {ok, _Binary} = merl:compile_and_load(MockAdapterCode),
-    [{mock_module_name, MockModuleName} | Config].
+
+    [{mock_module, MockModule} | Config].
 
 end_per_suite(Config) ->
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
-    code:purge(MockModuleName),
-    code:delete(MockModuleName),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
+    code:purge(MockModule),
+    code:delete(MockModule),
+
     ok.
 
 %% --------------------------------------------------------------------
@@ -86,15 +87,15 @@ end_per_suite(Config) ->
 
 new_with_minimal_options(Config) when is_list(Config) ->
     ct:comment("new/3 should create request with minimal options"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
-    Request = arizona_request:new(MockModuleName, #{}, #{}),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
+    Request = arizona_request:new(MockModule, #{}, #{}),
     ?assertEqual(~"GET", arizona_request:get_method(Request)),
     ?assertEqual(~"/", arizona_request:get_path(Request)),
     ?assertEqual(#{}, arizona_request:get_raw_request(Request)).
 
 new_with_full_options(Config) when is_list(Config) ->
     ct:comment("new/3 should create request with provided options"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     RawRequest = #{test => ~"data"},
     Opts = #{
         method => ~"POST",
@@ -105,7 +106,7 @@ new_with_full_options(Config) when is_list(Config) ->
         headers => #{~"content-type" => ~"application/json"},
         body => ~"{\"name\":\"test\"}"
     },
-    Request = arizona_request:new(MockModuleName, RawRequest, Opts),
+    Request = arizona_request:new(MockModule, RawRequest, Opts),
     ?assertEqual(~"POST", arizona_request:get_method(Request)),
     ?assertEqual(~"/api/users", arizona_request:get_path(Request)),
     ?assertEqual(RawRequest, arizona_request:get_raw_request(Request)).
@@ -116,21 +117,21 @@ new_with_full_options(Config) when is_list(Config) ->
 
 get_method(Config) when is_list(Config) ->
     ct:comment("get_method/1 should return request method"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
-    Request = arizona_request:new(MockModuleName, #{}, #{method => ~"DELETE"}),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
+    Request = arizona_request:new(MockModule, #{}, #{method => ~"DELETE"}),
     ?assertEqual(~"DELETE", arizona_request:get_method(Request)).
 
 get_path(Config) when is_list(Config) ->
     ct:comment("get_path/1 should return request path"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
-    Request = arizona_request:new(MockModuleName, #{}, #{path => ~"/api/v1/test"}),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
+    Request = arizona_request:new(MockModule, #{}, #{path => ~"/api/v1/test"}),
     ?assertEqual(~"/api/v1/test", arizona_request:get_path(Request)).
 
 get_raw_request(Config) when is_list(Config) ->
     ct:comment("get_raw_request/1 should return raw request data"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     RawData = #{server => cowboy, version => ~"2.9"},
-    Request = arizona_request:new(MockModuleName, RawData, #{}),
+    Request = arizona_request:new(MockModule, RawData, #{}),
     ?assertEqual(RawData, arizona_request:get_raw_request(Request)).
 
 %% --------------------------------------------------------------------
@@ -139,45 +140,45 @@ get_raw_request(Config) when is_list(Config) ->
 
 get_bindings_preloaded(Config) when is_list(Config) ->
     ct:comment("get_bindings/1 should return preloaded bindings without adapter call"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     Bindings = #{user_id => ~"999", category => ~"books"},
-    Request = arizona_request:new(MockModuleName, #{}, #{bindings => Bindings}),
+    Request = arizona_request:new(MockModule, #{}, #{bindings => Bindings}),
     {ResultBindings, UpdatedRequest} = arizona_request:get_bindings(Request),
     ?assertEqual(Bindings, ResultBindings),
     ?assertEqual(Request, UpdatedRequest).
 
 get_params_preloaded(Config) when is_list(Config) ->
     ct:comment("get_params/1 should return preloaded params without adapter call"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     Params = [{~"page", ~"1"}, {~"size", ~"20"}],
-    Request = arizona_request:new(MockModuleName, #{}, #{params => Params}),
+    Request = arizona_request:new(MockModule, #{}, #{params => Params}),
     {ResultParams, UpdatedRequest} = arizona_request:get_params(Request),
     ?assertEqual(Params, ResultParams),
     ?assertEqual(Request, UpdatedRequest).
 
 get_cookies_preloaded(Config) when is_list(Config) ->
     ct:comment("get_cookies/1 should return preloaded cookies without adapter call"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     Cookies = [{~"user", ~"john"}, {~"theme", ~"dark"}],
-    Request = arizona_request:new(MockModuleName, #{}, #{cookies => Cookies}),
+    Request = arizona_request:new(MockModule, #{}, #{cookies => Cookies}),
     {ResultCookies, UpdatedRequest} = arizona_request:get_cookies(Request),
     ?assertEqual(Cookies, ResultCookies),
     ?assertEqual(Request, UpdatedRequest).
 
 get_headers_preloaded(Config) when is_list(Config) ->
     ct:comment("get_headers/1 should return preloaded headers without adapter call"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     Headers = #{~"user-agent" => ~"test/1.0", ~"accept" => ~"text/html"},
-    Request = arizona_request:new(MockModuleName, #{}, #{headers => Headers}),
+    Request = arizona_request:new(MockModule, #{}, #{headers => Headers}),
     {ResultHeaders, UpdatedRequest} = arizona_request:get_headers(Request),
     ?assertEqual(Headers, ResultHeaders),
     ?assertEqual(Request, UpdatedRequest).
 
 get_body_preloaded(Config) when is_list(Config) ->
     ct:comment("get_body/1 should return preloaded body without adapter call"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     Body = ~"{\"data\":\"preloaded\"}",
-    Request = arizona_request:new(MockModuleName, #{}, #{body => Body}),
+    Request = arizona_request:new(MockModule, #{}, #{body => Body}),
     {ResultBody, UpdatedRequest} = arizona_request:get_body(Request),
     ?assertEqual(Body, ResultBody),
     ?assertEqual(Request, UpdatedRequest).
@@ -188,9 +189,9 @@ get_body_preloaded(Config) when is_list(Config) ->
 
 get_bindings_lazy_load(Config) when is_list(Config) ->
     ct:comment("get_bindings/1 should call adapter when bindings undefined"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     RawRequest = #{bindings => #{custom => ~"value"}},
-    Request = arizona_request:new(MockModuleName, RawRequest, #{bindings => undefined}),
+    Request = arizona_request:new(MockModule, RawRequest, #{bindings => undefined}),
     {ResultBindings, UpdatedRequest} = arizona_request:get_bindings(Request),
     ?assertEqual(#{custom => ~"value"}, ResultBindings),
     ?assertNotEqual(Request, UpdatedRequest),
@@ -201,9 +202,9 @@ get_bindings_lazy_load(Config) when is_list(Config) ->
 
 get_params_lazy_load(Config) when is_list(Config) ->
     ct:comment("get_params/1 should call adapter when params undefined"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     RawRequest = #{params => [{~"search", ~"query"}]},
-    Request = arizona_request:new(MockModuleName, RawRequest, #{params => undefined}),
+    Request = arizona_request:new(MockModule, RawRequest, #{params => undefined}),
     {ResultParams, UpdatedRequest} = arizona_request:get_params(Request),
     ?assertEqual([{~"search", ~"query"}], ResultParams),
     ?assertNotEqual(Request, UpdatedRequest),
@@ -214,9 +215,9 @@ get_params_lazy_load(Config) when is_list(Config) ->
 
 get_cookies_lazy_load(Config) when is_list(Config) ->
     ct:comment("get_cookies/1 should call adapter when cookies undefined"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     RawRequest = #{cookies => [{~"lang", ~"en"}]},
-    Request = arizona_request:new(MockModuleName, RawRequest, #{cookies => undefined}),
+    Request = arizona_request:new(MockModule, RawRequest, #{cookies => undefined}),
     {ResultCookies, UpdatedRequest} = arizona_request:get_cookies(Request),
     ?assertEqual([{~"lang", ~"en"}], ResultCookies),
     ?assertNotEqual(Request, UpdatedRequest),
@@ -227,9 +228,9 @@ get_cookies_lazy_load(Config) when is_list(Config) ->
 
 get_headers_lazy_load(Config) when is_list(Config) ->
     ct:comment("get_headers/1 should call adapter when headers undefined"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     RawRequest = #{headers => #{~"authorization" => ~"Bearer token"}},
-    Request = arizona_request:new(MockModuleName, RawRequest, #{headers => undefined}),
+    Request = arizona_request:new(MockModule, RawRequest, #{headers => undefined}),
     {ResultHeaders, UpdatedRequest} = arizona_request:get_headers(Request),
     ?assertEqual(#{~"authorization" => ~"Bearer token"}, ResultHeaders),
     ?assertNotEqual(Request, UpdatedRequest),
@@ -240,9 +241,9 @@ get_headers_lazy_load(Config) when is_list(Config) ->
 
 get_body_lazy_load(Config) when is_list(Config) ->
     ct:comment("get_body/1 should call adapter when body undefined"),
-    {mock_module_name, MockModuleName} = proplists:lookup(mock_module_name, Config),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     RawRequest = #{body => ~"{\"lazy\":\"loaded\"}"},
-    Request = arizona_request:new(MockModuleName, RawRequest, #{body => undefined}),
+    Request = arizona_request:new(MockModule, RawRequest, #{body => undefined}),
     {ResultBody, UpdatedRequest} = arizona_request:get_body(Request),
     ?assertEqual(~"{\"lazy\":\"loaded\"}", ResultBody),
     ?assertNotEqual(Request, UpdatedRequest),
