@@ -45,7 +45,7 @@
 
 -opaque state() :: #state{}.
 -nominal stateful_hierarchical() :: #{
-    arizona_stateful:id() => arizona_template_hierarchical:hierarchical_data()
+    arizona_stateful:id() => arizona_hierarchical:hierarchical_data()
 }.
 
 %% --------------------------------------------------------------------
@@ -67,7 +67,7 @@ mount_view(Pid, ViewModule, ArizonaReq) ->
 -spec initial_render(Pid, ViewState) -> HierarchicalStructure when
     Pid :: pid(),
     ViewState :: arizona_stateful:state(),
-    HierarchicalStructure :: arizona_template_hierarchical:stateful_struct().
+    HierarchicalStructure :: arizona_hierarchical:stateful_struct().
 initial_render(Pid, ViewState) ->
     gen_server:call(Pid, {initial_render, ViewState}).
 
@@ -167,7 +167,7 @@ handle_call({initial_render, ViewState}, _From, #state{view = View} = State) whe
 ->
     Module = arizona_stateful:get_module(ViewState),
     Bindings = arizona_stateful:get_bindings(ViewState),
-    {HierarchicalStructure, RenderView} = arizona_template_hierarchical:hierarchical_stateful(
+    {HierarchicalStructure, RenderView} = arizona_hierarchical:hierarchical_stateful(
         Module, Bindings, View
     ),
     DiffModeView = arizona_view:set_render_mode(diff, RenderView),
@@ -181,7 +181,7 @@ handle_call({diff_stateful, StatefulId}, _From, #state{view = View} = State) whe
     StatefulState = arizona_view:get_stateful_state(StatefulId, View),
     Module = arizona_stateful:get_module(StatefulState),
     Bindings = arizona_stateful:get_bindings(StatefulState),
-    {Diff, DiffView} = arizona_template_differ:diff_stateful(Module, Bindings, View),
+    {Diff, DiffView} = arizona_differ:diff_stateful(Module, Bindings, View),
     {reply, Diff, State#state{view = DiffView}};
 handle_call(get_view, _From, #state{view = View} = State) when View =/= undefined ->
     {reply, View, State};

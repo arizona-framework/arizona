@@ -1,4 +1,4 @@
--module(arizona_template_hierarchical).
+-module(arizona_hierarchical).
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -21,7 +21,7 @@
 
 -nominal hierarchical_data() :: #{
     static := arizona_template:static(),
-    dynamic := arizona_template_renderer:dynamic()
+    dynamic := arizona_renderer:dynamic()
 }.
 -nominal stateful_struct() :: #{
     type := stateful,
@@ -30,7 +30,7 @@
 -nominal stateless_struct() :: #{
     type := stateless,
     static := arizona_template:static(),
-    dynamic := arizona_template_renderer:dynamic()
+    dynamic := arizona_renderer:dynamic()
 }.
 
 %% --------------------------------------------------------------------
@@ -47,7 +47,7 @@ hierarchical_stateful(Module, Bindings, View) ->
     {Id, Template, View1} = arizona_stateful:prepare_render(Module, Bindings, View),
     ok = arizona_view:live_clear_component_dependencies(Id, View1),
     ok = arizona_view:live_set_current_stateful_id(Id, View1),
-    {Dynamic, DynamicView} = arizona_template_renderer:render_dynamic(
+    {Dynamic, DynamicView} = arizona_renderer:render_dynamic(
         Template, View1
     ),
     HierarchicalData = #{
@@ -70,7 +70,7 @@ hierarchical_stateful(Module, Bindings, View) ->
     View1 :: arizona_view:view().
 hierarchical_stateless(Module, Fun, Bindings, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
-    {Dynamic, DynamicView} = arizona_template_renderer:render_dynamic(Template, View),
+    {Dynamic, DynamicView} = arizona_renderer:render_dynamic(Template, View),
     Struct = #{
         type => stateless,
         static => arizona_template:get_static(Template),

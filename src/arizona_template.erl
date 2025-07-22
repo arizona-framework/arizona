@@ -140,11 +140,11 @@ render_stateful(Module, Bindings) ->
     fun(View) ->
         case arizona_view:get_render_mode(View) of
             render ->
-                arizona_template_renderer:render_stateful(Module, Bindings, View);
+                arizona_renderer:render_stateful(Module, Bindings, View);
             diff ->
-                arizona_template_differ:diff_stateful(Module, Bindings, View);
+                arizona_differ:diff_stateful(Module, Bindings, View);
             hierarchical ->
-                arizona_template_hierarchical:hierarchical_stateful(Module, Bindings, View)
+                arizona_hierarchical:hierarchical_stateful(Module, Bindings, View)
         end
     end.
 
@@ -157,10 +157,10 @@ render_stateless(Module, Fun, Bindings) ->
     fun(View) ->
         case arizona_view:get_render_mode(View) of
             render ->
-                arizona_template_renderer:render_stateless(Module, Fun, Bindings, View);
+                arizona_renderer:render_stateless(Module, Fun, Bindings, View);
             diff ->
-                arizona_template_differ:diff_stateless(Module, Fun, Bindings, View);
+                arizona_differ:diff_stateless(Module, Fun, Bindings, View);
             hierarchical ->
-                arizona_template_hierarchical:hierarchical_stateless(Module, Fun, Bindings, View)
+                arizona_hierarchical:hierarchical_stateless(Module, Fun, Bindings, View)
         end
     end.

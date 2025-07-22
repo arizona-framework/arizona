@@ -1,4 +1,4 @@
--module(arizona_template_renderer).
+-module(arizona_renderer).
 -compile({nowarn_redefined_builtin_type, [dynamic/0]}).
 
 %% --------------------------------------------------------------------
