@@ -9,16 +9,17 @@
 -export([get_current_element_index/1]).
 -export([set_current_element_index/2]).
 -export([record_variable_dependency/2]).
+-export([get_dependencies/1]).
 -export([get_stateful_dependencies/2]).
--export([get_stateful_dependencies/1]).
--export([clear_component_dependencies/2]).
+-export([clear_stateful_dependencies/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 
 -export_type([tracker/0]).
--export_type([stateful_id/0]).
+-export_type([dependencies/0]).
+-export_type([stateful_dependencies/0]).
 -export_type([element_index/0]).
 -export_type([var_name/0]).
 
@@ -27,15 +28,16 @@
 %% --------------------------------------------------------------------
 
 -record(tracker, {
-    current_stateful_id :: stateful_id() | undefined,
+    current_stateful_id :: arizona_stateful:id() | undefined,
     current_element_index :: element_index() | undefined,
-    stateful_dependencies :: #{stateful_id() => #{var_name() => [element_index()]}}
+    dependencies :: dependencies()
 }).
 
 -opaque tracker() :: #tracker{}.
--type stateful_id() :: arizona_stateful:id().
--type element_index() :: non_neg_integer().
--type var_name() :: atom().
+-nominal dependencies() :: #{arizona_stateful:id() => stateful_dependencies()}.
+-nominal stateful_dependencies() :: #{var_name() => [element_index()]}.
+-nominal element_index() :: non_neg_integer().
+-nominal var_name() :: arizona_binder:key().
 
 %% --------------------------------------------------------------------
 %% API function definitions
@@ -47,11 +49,11 @@ new() ->
     #tracker{
         current_stateful_id = undefined,
         current_element_index = undefined,
-        stateful_dependencies = #{}
+        dependencies = #{}
     }.
 
 -spec set_current_stateful_id(StatefulId, Tracker) -> Tracker1 when
-    StatefulId :: stateful_id(),
+    StatefulId :: arizona_stateful:id(),
     Tracker :: tracker(),
     Tracker1 :: tracker().
 set_current_stateful_id(StatefulId, #tracker{} = Tracker) ->
@@ -89,9 +91,9 @@ record_variable_dependency(VarName, #tracker{} = Tracker) ->
             % No current element
             Tracker;
         {StatefulId, ElementIndex} ->
-            StatefulDependencies = Tracker#tracker.stateful_dependencies,
-            ComponentVars = maps:get(StatefulId, StatefulDependencies, #{}),
-            ExistingIndexes = maps:get(VarName, ComponentVars, []),
+            Dependencies = Tracker#tracker.dependencies,
+            StatefulDependencies = maps:get(StatefulId, Dependencies, #{}),
+            ExistingIndexes = maps:get(VarName, StatefulDependencies, []),
             NewIndexes =
                 case lists:member(ElementIndex, ExistingIndexes) of
                     % Already tracked
@@ -99,29 +101,29 @@ record_variable_dependency(VarName, #tracker{} = Tracker) ->
                     % Add new dependency
                     false -> [ElementIndex | ExistingIndexes]
                 end,
-            UpdatedComponentVars = ComponentVars#{VarName => NewIndexes},
-            UpdatedStatefulDependencies = StatefulDependencies#{StatefulId => UpdatedComponentVars},
-            Tracker#tracker{stateful_dependencies = UpdatedStatefulDependencies}
+            UpdatedStatefulDependencies = StatefulDependencies#{VarName => NewIndexes},
+            UpdatedDependencies = Dependencies#{StatefulId => UpdatedStatefulDependencies},
+            Tracker#tracker{dependencies = UpdatedDependencies}
     end.
 
--spec get_stateful_dependencies(StatefulId, Tracker) -> ComponentDependencies when
-    StatefulId :: stateful_id(),
+-spec get_dependencies(Tracker) -> Dependencies when
     Tracker :: tracker(),
-    ComponentDependencies :: #{var_name() => [element_index()]}.
+    Dependencies :: dependencies().
+get_dependencies(#tracker{} = Tracker) ->
+    Tracker#tracker.dependencies.
+
+-spec get_stateful_dependencies(StatefulId, Tracker) -> StatefulDependencies when
+    StatefulId :: arizona_stateful:id(),
+    Tracker :: tracker(),
+    StatefulDependencies :: stateful_dependencies().
 get_stateful_dependencies(StatefulId, #tracker{} = Tracker) ->
-    maps:get(StatefulId, Tracker#tracker.stateful_dependencies, #{}).
+    maps:get(StatefulId, Tracker#tracker.dependencies, #{}).
 
--spec get_stateful_dependencies(Tracker) -> Dependencies when
-    Tracker :: tracker(),
-    Dependencies :: #{stateful_id() => #{var_name() => [element_index()]}}.
-get_stateful_dependencies(#tracker{} = Tracker) ->
-    Tracker#tracker.stateful_dependencies.
-
--spec clear_component_dependencies(StatefulId, Tracker) -> Tracker1 when
-    StatefulId :: stateful_id(),
+-spec clear_stateful_dependencies(StatefulId, Tracker) -> Tracker1 when
+    StatefulId :: arizona_stateful:id(),
     Tracker :: tracker(),
     Tracker1 :: tracker().
-clear_component_dependencies(StatefulId, #tracker{} = Tracker) ->
-    StatefulDependencies = Tracker#tracker.stateful_dependencies,
-    UpdatedStatefulDependencies = maps:remove(StatefulId, StatefulDependencies),
-    Tracker#tracker{stateful_dependencies = UpdatedStatefulDependencies}.
+clear_stateful_dependencies(StatefulId, #tracker{} = Tracker) ->
+    Dependencies = Tracker#tracker.dependencies,
+    UpdatedDependencies = maps:remove(StatefulId, Dependencies),
+    Tracker#tracker{dependencies = UpdatedDependencies}.
