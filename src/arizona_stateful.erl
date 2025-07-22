@@ -52,8 +52,8 @@
 %% Behavior callback definitions
 %% --------------------------------------------------------------------
 
--callback mount(View) -> State when
-    View :: arizona_view:view(),
+-callback mount(Bindings) -> State when
+    Bindings :: arizona_binder:bindings(),
     State :: state().
 
 -callback render(Bindings) -> Template when
@@ -79,12 +79,12 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec call_mount_callback(Mod, View) -> State when
+-spec call_mount_callback(Mod, Bindings) -> State when
     Mod :: module(),
-    View :: arizona_view:view(),
+    Bindings :: arizona_binder:bindings(),
     State :: state().
-call_mount_callback(Mod, View) when is_atom(Mod) ->
-    apply(Mod, mount, [View]).
+call_mount_callback(Mod, Bindings) when is_atom(Mod) ->
+    apply(Mod, mount, [Bindings]).
 
 -spec call_render_callback(Mod, Bindings) -> Template when
     Mod :: module(),
@@ -232,9 +232,7 @@ prepare_render(Module, Bindings, View) ->
             StatefulView = arizona_view:put_stateful_state(Id, BindingsState, View),
             {Id, Template, StatefulView};
         error ->
-            NewState = new(Module, Bindings),
-            StatefulView = arizona_view:put_stateful_state(Id, NewState, View),
-            MountState = call_mount_callback(Module, StatefulView),
+            MountState = call_mount_callback(Module, Bindings),
             MountBindings = get_bindings(MountState),
             Template = call_render_callback(Module, MountBindings),
             MountView = arizona_view:put_stateful_state(Id, MountState, View),
