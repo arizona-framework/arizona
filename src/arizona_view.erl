@@ -5,10 +5,11 @@
 %% --------------------------------------------------------------------
 
 -export([call_mount_callback/2]).
+-export([call_handle_info_callback/3]).
 -export([new/4]).
 -export([get_id/1]).
 -export([get_state/1]).
--export([put_state/2]).
+-export([update_state/2]).
 -export([get_render_mode/1]).
 -export([set_render_mode/2]).
 -export([get_stateful_state/2]).
@@ -17,7 +18,6 @@
 -export([get_live_pid/1]).
 -export([live_set_current_stateful_id/2]).
 -export([live_set_current_element_index/2]).
--export([live_record_variable_dependency/2]).
 -export([live_clear_stateful_dependencies/2]).
 -export([live_put_stateful_hierarchical/3]).
 
@@ -67,7 +67,6 @@
     Reply :: arizona_stateful:event_reply(),
     State1 :: arizona_stateful:state().
 
-% Same as arizona_stateful:handle_info/2
 -callback handle_info(Info, State) -> Result when
     Info :: term(),
     State :: arizona_stateful:state(),
@@ -86,6 +85,20 @@
     State :: arizona_stateful:state().
 call_mount_callback(Module, Req) ->
     apply(Module, mount, [Req]).
+
+-spec call_handle_info_callback(Module, Info, State) -> Result when
+    Module :: module(),
+    Info :: term(),
+    State :: arizona_stateful:state(),
+    Result :: {noreply, State1},
+    State1 :: arizona_stateful:state().
+call_handle_info_callback(Module, Info, State) ->
+    case erlang:function_exported(Module, handle_info, 2) of
+        true ->
+            apply(Module, handle_info, [Info, State]);
+        false ->
+            {noreply, State}
+    end.
 
 -spec new(Module, State, RenderMode, LivePid) -> View when
     Module :: module(),
@@ -120,14 +133,16 @@ get_id(#view{} = View) ->
 get_state(#view{} = View) ->
     get_stateful_state(View#view.id, View).
 
--spec put_state(State, View) -> View1 when
+-spec update_state(State, View) -> View1 when
     State :: arizona_stateful:state(),
     View :: view(),
     View1 :: view().
-put_state(State, #view{} = View) ->
+update_state(State, #view{} = View) ->
     Id = View#view.id,
-    States = View#view.stateful_states,
-    View#view{stateful_states = States#{Id => State}}.
+    case View#view.stateful_states of
+        #{Id := _} = States ->
+            View#view{stateful_states = States#{Id => State}}
+    end.
 
 -spec get_render_mode(View) -> RenderMode when
     View :: view(),
@@ -197,21 +212,6 @@ live_set_current_element_index(ElementIndex, #view{} = View) ->
             Tracker = arizona_live:get_dependency_tracker(LivePid),
             UpdatedTracker = arizona_tracker:set_current_element_index(
                 ElementIndex, Tracker
-            ),
-            arizona_live:set_dependency_tracker(LivePid, UpdatedTracker)
-    end.
-
--spec live_record_variable_dependency(VarName, View) -> ok when
-    VarName :: arizona_tracker:var_name(),
-    View :: view().
-live_record_variable_dependency(VarName, #view{} = View) ->
-    case View#view.live_pid of
-        undefined ->
-            ok;
-        LivePid ->
-            Tracker = arizona_live:get_dependency_tracker(LivePid),
-            UpdatedTracker = arizona_tracker:record_variable_dependency(
-                VarName, Tracker
             ),
             arizona_live:set_dependency_tracker(LivePid, UpdatedTracker)
     end.

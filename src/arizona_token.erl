@@ -8,8 +8,6 @@
 -export([get_category/1]).
 -export([get_line/1]).
 -export([get_content/1]).
--export([set_category/2]).
--export([set_line/2]).
 -export([set_content/2]).
 
 %% --------------------------------------------------------------------
@@ -74,22 +72,6 @@ get_line(#token{} = Token) ->
     Content :: content().
 get_content(#token{} = Token) ->
     Token#token.content.
-
--spec set_category(Category, Token) -> Token1 when
-    Category :: category(),
-    Token :: token(),
-    Token1 :: token().
-set_category(Category, #token{} = Token) when
-    (Category =:= static orelse Category =:= dynamic orelse Category =:= comment)
-->
-    Token#token{category = Category}.
-
--spec set_line(Line, Token) -> Token1 when
-    Line :: line(),
-    Token :: token(),
-    Token1 :: token().
-set_line(Line, #token{} = Token) when is_integer(Line), Line >= 1 ->
-    Token#token{line = Line}.
 
 -spec set_content(Content, Token) -> Token1 when
     Content :: content(),

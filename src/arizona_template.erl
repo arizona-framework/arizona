@@ -18,6 +18,19 @@
 -export([render_stateless/3]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([find_binding/2]).
+-ignore_xref([from_string/2]).
+-ignore_xref([from_string/4]).
+-ignore_xref([get_binding/2]).
+-ignore_xref([get_binding/3]).
+-ignore_xref([get_dynamic_anno/1]).
+-ignore_xref([render_stateful/2]).
+-ignore_xref([render_stateless/3]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 
