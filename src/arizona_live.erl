@@ -39,7 +39,7 @@
 %% Internal state record for live processes
 -record(state, {
     view :: arizona_view:view() | undefined,
-    dependency_tracker :: arizona_dependency_tracker:tracker(),
+    dependency_tracker :: arizona_tracker:tracker(),
     stateful_hierarchical :: stateful_hierarchical()
 }).
 
@@ -92,13 +92,13 @@ set_view(Pid, View) ->
 
 -spec get_dependency_tracker(Pid) -> Tracker when
     Pid :: pid(),
-    Tracker :: arizona_dependency_tracker:tracker().
+    Tracker :: arizona_tracker:tracker().
 get_dependency_tracker(Pid) ->
     gen_server:call(Pid, get_dependency_tracker).
 
 -spec set_dependency_tracker(Pid, Tracker) -> ok when
     Pid :: pid(),
-    Tracker :: arizona_dependency_tracker:tracker().
+    Tracker :: arizona_tracker:tracker().
 set_dependency_tracker(Pid, Tracker) ->
     gen_server:cast(Pid, {set_dependency_tracker, Tracker}).
 
@@ -135,7 +135,7 @@ handle_event(Pid, StatefulIdOrUndefined, Event, Params) ->
 init([]) ->
     {ok, #state{
         view = undefined,
-        dependency_tracker = arizona_dependency_tracker:new(),
+        dependency_tracker = arizona_tracker:new(),
         stateful_hierarchical = #{}
     }}.
 
@@ -216,7 +216,7 @@ handle_call(
         | {set_dependency_tracker, Tracker}
         | {set_stateful_hierarchical, Hierarchical},
     View :: arizona_view:view(),
-    Tracker :: arizona_dependency_tracker:tracker(),
+    Tracker :: arizona_tracker:tracker(),
     Hierarchical :: stateful_hierarchical(),
     State :: state(),
     Result :: {noreply, State1},

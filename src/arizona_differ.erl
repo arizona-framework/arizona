@@ -35,7 +35,7 @@ diff_stateful(Module, Bindings, View) ->
             {[], StatefulView};
         false when is_pid(LivePid) ->
             Tracker = arizona_live:get_dependency_tracker(LivePid),
-            Dependencies = arizona_dependency_tracker:get_stateful_dependencies(Id, Tracker),
+            Dependencies = arizona_tracker:get_stateful_dependencies(Id, Tracker),
             % Clear dependencies for this component before starting new render
             ok = arizona_view:live_clear_component_dependencies(Id, PrepRenderView),
             AffectedElements = get_affected_elements(ChangedBindings, Dependencies),

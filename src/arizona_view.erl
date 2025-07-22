@@ -180,14 +180,14 @@ live_set_current_stateful_id(StatefulId, #view{} = View) ->
             ok;
         LivePid ->
             Tracker = arizona_live:get_dependency_tracker(LivePid),
-            UpdatedTracker = arizona_dependency_tracker:set_current_stateful_id(
+            UpdatedTracker = arizona_tracker:set_current_stateful_id(
                 StatefulId, Tracker
             ),
             arizona_live:set_dependency_tracker(LivePid, UpdatedTracker)
     end.
 
 -spec live_set_current_element_index(ElementIndex, View) -> ok when
-    ElementIndex :: arizona_dependency_tracker:element_index(),
+    ElementIndex :: arizona_tracker:element_index(),
     View :: view().
 live_set_current_element_index(ElementIndex, #view{} = View) ->
     case View#view.live_pid of
@@ -195,14 +195,14 @@ live_set_current_element_index(ElementIndex, #view{} = View) ->
             ok;
         LivePid ->
             Tracker = arizona_live:get_dependency_tracker(LivePid),
-            UpdatedTracker = arizona_dependency_tracker:set_current_element_index(
+            UpdatedTracker = arizona_tracker:set_current_element_index(
                 ElementIndex, Tracker
             ),
             arizona_live:set_dependency_tracker(LivePid, UpdatedTracker)
     end.
 
 -spec live_record_variable_dependency(VarName, View) -> ok when
-    VarName :: arizona_dependency_tracker:var_name(),
+    VarName :: arizona_tracker:var_name(),
     View :: view().
 live_record_variable_dependency(VarName, #view{} = View) ->
     case View#view.live_pid of
@@ -210,7 +210,7 @@ live_record_variable_dependency(VarName, #view{} = View) ->
             ok;
         LivePid ->
             Tracker = arizona_live:get_dependency_tracker(LivePid),
-            UpdatedTracker = arizona_dependency_tracker:record_variable_dependency(
+            UpdatedTracker = arizona_tracker:record_variable_dependency(
                 VarName, Tracker
             ),
             arizona_live:set_dependency_tracker(LivePid, UpdatedTracker)
@@ -225,7 +225,7 @@ live_clear_component_dependencies(StatefulId, #view{} = View) ->
             ok;
         LivePid ->
             Tracker = arizona_live:get_dependency_tracker(LivePid),
-            UpdatedTracker = arizona_dependency_tracker:clear_component_dependencies(
+            UpdatedTracker = arizona_tracker:clear_component_dependencies(
                 StatefulId, Tracker
             ),
             arizona_live:set_dependency_tracker(LivePid, UpdatedTracker)

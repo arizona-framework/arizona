@@ -1,4 +1,4 @@
--module(arizona_dependency_tracker).
+-module(arizona_tracker).
 
 %% --------------------------------------------------------------------
 %% API function exports
