@@ -113,7 +113,7 @@ new(Module, Bindings) when is_atom(Module) ->
     #state{
         module = Module,
         bindings = Bindings,
-        changed_bindings = arizona_binder:new()
+        changed_bindings = arizona_binder:new(#{})
     }.
 
 -spec get_id(Bindings) -> Id when

@@ -41,6 +41,8 @@ groups() ->
 
 init_per_suite(Config) ->
     MockModule = arizona_stateful_mock,
+    MockEventsModule = arizona_stateful_mock_events,
+
     MockModuleCode = merl:qquote(~""""
     -module('@module').
     -behavior(arizona_stateful).
@@ -56,9 +58,7 @@ init_per_suite(Config) ->
         <h1>Mock Template</h1>
         """, Bindings).
     """", [{module, merl:term(MockModule)}]),
-    {ok, _Binary} = merl:compile_and_load(MockModuleCode),
 
-    MockEventsModule = arizona_stateful_mock_events,
     MockEventsModuleCode = merl:qquote(~""""
     -module('@module').
     -behavior(arizona_stateful).
@@ -80,17 +80,24 @@ init_per_suite(Config) ->
     handle_event(~"noreply", _Params, State) ->
         {noreply, State}.
     """", [{module, merl:term(MockEventsModule)}]),
+
+    {ok, _Binary} = merl:compile_and_load(MockModuleCode),
     {ok, _EventsBinary} = merl:compile_and_load(MockEventsModuleCode),
 
-    [{mock_module, MockModule}, {mock_events_module, MockEventsModule} | Config].
+    [
+        {mock_module, MockModule},
+        {mock_events_module, MockEventsModule}
+        | Config
+    ].
 
 end_per_suite(Config) ->
     {mock_module, MockModule} = proplists:lookup(mock_module, Config),
-    code:purge(MockModule),
-    code:delete(MockModule),
-
     {mock_events_module, MockEventsModule} = proplists:lookup(mock_events_module, Config),
+
+    code:purge(MockModule),
     code:purge(MockEventsModule),
+
+    code:delete(MockModule),
     code:delete(MockEventsModule),
 
     ok.

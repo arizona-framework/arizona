@@ -63,7 +63,7 @@
     Event :: arizona_stateful:event_name(),
     Params :: arizona_stateful:event_params(),
     State :: arizona_stateful:state(),
-    Result :: {noreply, State1} | {reply, Reply, State1},
+    Result :: {reply, Reply, State1} | {noreply, State1},
     Reply :: arizona_stateful:event_reply(),
     State1 :: arizona_stateful:state().
 
