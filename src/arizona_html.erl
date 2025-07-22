@@ -111,13 +111,13 @@ data generation.
 ```
 """.
 -spec render_stateful(Template, Socket) -> Socket1 when
-    Template :: arizona_renderer:stateful_template_data() | html(),
+    Template :: arizona_renderer:template_data() | html(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 render_stateful(TemplateData, Socket) when is_map(TemplateData) ->
     case arizona_socket:get_mode(Socket) of
         render ->
-            {_Html, UpdatedSocket} = arizona_renderer:render_stateful(TemplateData, Socket),
+            {_Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
             UpdatedSocket;
         diff ->
             % Get current stateful state for diffing
@@ -143,27 +143,36 @@ standard rendering for HTML output.
 ## Examples
 
 ```erlang
-1> TemplateList = [{static, 1, ~"Hello"}, {static, 2, ~"World"}].
-[...]
+1> TemplateData = #{
+    elems_order => [0, 1],
+    elems => #{0 => {static, 1, ~"Hello"}, 1 => {static, 2, ~"World"}},
+    vars_indexes => #{}
+}.
+#{...}
 2> Socket = arizona_socket:new(#{mode => render}).
 #socket{...}
-3> arizona_html:render_stateless(TemplateList, Socket).
+3> arizona_html:render_stateless(TemplateData, Socket).
 #socket{html_acc = [~"Hello", ~"World"], ...}
 ```
 """.
 -spec render_stateless(Template, Socket) -> Socket1 when
-    Template :: arizona_renderer:stateless_template_data() | html(),
+    Template :: arizona_renderer:template_data() | html(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
-render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
+render_stateless(TemplateData, Socket) when is_map(TemplateData) ->
     case arizona_socket:get_mode(Socket) of
-        hierarchical ->
-            {_StatelessElement, UpdatedSocket} = arizona_hierarchical:stateless_structure(
-                StructuredList, Socket
-            ),
+        render ->
+            {_Html, UpdatedSocket} = arizona_renderer:render_template(TemplateData, Socket),
             UpdatedSocket;
-        _ ->
-            {_Html, UpdatedSocket} = arizona_renderer:render_stateless(StructuredList, Socket),
+        diff ->
+            % In diff mode, use stateless diffing for hierarchical updates
+            CurrentState = arizona_socket:get_current_stateful_state(Socket),
+            arizona_differ:diff_stateless(TemplateData, CurrentState, Socket);
+        hierarchical ->
+            % Generate stateless hierarchical structure
+            {_ComponentStructure, UpdatedSocket} = arizona_hierarchical:stateless_structure(
+                TemplateData, Socket
+            ),
             UpdatedSocket
     end;
 render_stateless(Html, Socket) ->
@@ -257,7 +266,7 @@ specified slot, otherwise renders the content directly.
 ```
 """.
 -spec render_live(Template, Socket) -> Socket1 when
-    Template :: arizona_renderer:stateful_template_data() | html(),
+    Template :: arizona_renderer:template_data() | html(),
     Socket :: arizona_socket:socket(),
     Socket1 :: arizona_socket:socket().
 render_live(Template, Socket) ->
@@ -320,7 +329,10 @@ to_html(Value, Socket) when is_list(Value) ->
     lists:foldl(
         fun(Item, {HtmlAcc, AccSocket}) ->
             {HtmlAcc1, AccSocket1} = to_html(Item, AccSocket),
-            {[HtmlAcc, HtmlAcc1], AccSocket1}
+            case HtmlAcc of
+                [] -> {HtmlAcc1, AccSocket1};
+                _ -> {[HtmlAcc, HtmlAcc1], AccSocket1}
+            end
         end,
         {[], Socket},
         Value
@@ -441,10 +453,10 @@ render_stateful_html(Html, Bindings, Socket) when
 ->
     %% Parse template at runtime
     Tokens = arizona_scanner:scan(#{}, Html),
-    ParsedResult = arizona_parser:parse_stateful_tokens(Tokens),
+    ParsedResult = arizona_parser:parse_tokens(Tokens),
 
     %% Transform to optimized format using same logic as parse transform
-    OptimizedAST = arizona_parse_transform:transform_stateful_to_ast(ParsedResult),
+    OptimizedAST = arizona_parse_transform:transform_template_to_ast(ParsedResult, 0),
 
     %% Evaluate AST to get optimized template data with Socket binding
     {value, OptimizedTemplateData, _NewBindings} = erl_eval:expr(
@@ -466,10 +478,10 @@ render_stateless_html(Html, Bindings, Socket) when
 ->
     %% Parse template at runtime
     Tokens = arizona_scanner:scan(#{}, Html),
-    ParsedResult = arizona_parser:parse_stateless_tokens(Tokens),
+    ParsedResult = arizona_parser:parse_tokens(Tokens),
 
     %% Transform to optimized format using same logic as parse transform
-    OptimizedAST = arizona_parse_transform:transform_stateless_to_ast(ParsedResult),
+    OptimizedAST = arizona_parse_transform:transform_template_to_ast(ParsedResult, 0),
 
     %% Evaluate AST to get optimized template data with Socket binding
     {value, OptimizedStructuredList, _NewBindings} = erl_eval:expr(

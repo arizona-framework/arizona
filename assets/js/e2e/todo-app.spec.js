@@ -127,4 +127,40 @@ test.describe('Arizona Todo App', () => {
     await newTodoInput.fill('Test todo');
     await expect(newTodoInput).toHaveValue('Test todo');
   });
+
+  test('should not duplicate todo items in footer when toggling', async ({ page }) => {
+    await page.goto('/test/todo');
+
+    // Wait for initial load
+    await expect(page.getByTestId('todo-1')).toBeVisible();
+
+    // Verify initial state: todo items should only be in main section
+    const mainSection = page.getByTestId('main-section');
+    const footer = page.getByTestId('footer');
+
+    await expect(mainSection.getByTestId('todo-1')).toBeVisible();
+    await expect(mainSection.getByTestId('todo-2')).toBeVisible();
+    await expect(mainSection.getByTestId('todo-3')).toBeVisible();
+
+    // Verify footer doesn't contain todo items initially
+    await expect(footer.getByTestId('todo-1')).not.toBeVisible();
+    await expect(footer.getByTestId('todo-2')).not.toBeVisible();
+    await expect(footer.getByTestId('todo-3')).not.toBeVisible();
+
+    // Click the first todo to toggle it
+    await page.getByTestId('toggle-1').click();
+
+    // Wait for update
+    await expect(page.getByTestId('todo-1')).toHaveClass(/completed/);
+
+    // Verify todo items are still only in main section (not duplicated in footer)
+    await expect(mainSection.getByTestId('todo-1')).toBeVisible();
+    await expect(mainSection.getByTestId('todo-2')).toBeVisible();
+    await expect(mainSection.getByTestId('todo-3')).toBeVisible();
+
+    // Footer should still not contain todo items
+    await expect(footer.getByTestId('todo-1')).not.toBeVisible();
+    await expect(footer.getByTestId('todo-2')).not.toBeVisible();
+    await expect(footer.getByTestId('todo-3')).not.toBeVisible();
+  });
 });

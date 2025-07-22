@@ -10,8 +10,8 @@ components, and list rendering with efficient diff-based updates.
 
 ## Features
 
-- **Stateful Rendering**: Optimized rendering for stateful components with element indexing
-- **Stateless Rendering**: Lightweight rendering for stateless components
+- **Unified Template Rendering**: Optimized rendering for both stateful and
+  stateless components with element indexing
 - **List Rendering**: Efficient list rendering with static/dynamic separation
 - **Error Handling**: Comprehensive error reporting with line number information
 - **Socket Management**: Proper socket state management throughout rendering
@@ -19,10 +19,9 @@ components, and list rendering with efficient diff-based updates.
 
 ## Key Functions
 
-- `render_stateful/2`: Render stateful component templates with indexed elements
-- `render_stateless/2`: Render stateless component templates as linear lists
+- `render_template/2`: Render template data with indexed elements for both
+  stateful and stateless templates
 - `render_list/3`: Render list templates with static/dynamic optimization
-- `render_element/2`: Render individual template elements
 - `evaluate_single_dynamic_element/4`: Evaluate dynamic elements for list items
 - `format_error/2`: Format rendering errors with context information
 
@@ -36,10 +35,8 @@ which provides optimized data structures for different rendering scenarios.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([render_stateful/2]).
--export([render_stateless/2]).
+-export([render_template/2]).
 -export([render_list/3]).
--export([render_element/2]).
 -export([evaluate_single_dynamic_element/4]).
 -export([format_error/2]).
 
@@ -53,8 +50,7 @@ which provides optimized data structures for different rendering scenarios.
 %% Types exports
 %% --------------------------------------------------------------------
 
--export_type([stateful_template_data/0]).
--export_type([stateless_template_data/0]).
+-export_type([template_data/0]).
 -export_type([list_template_data/0]).
 
 %% --------------------------------------------------------------------
@@ -62,12 +58,12 @@ which provides optimized data structures for different rendering scenarios.
 %% --------------------------------------------------------------------
 
 -doc ~"""
-Template data from parse transform optimized for stateful component rendering.
+Template data for unified template rendering.
 
 Contains indexed elements with order information and variable mappings for
-efficient rendering and diff operations.
+efficient rendering and diff operations. Used for both stateful and stateless templates.
 """.
--type stateful_template_data() :: #{
+-type template_data() :: #{
     elems_order := [Index :: non_neg_integer()],
     elems := #{
         Index ::
@@ -83,16 +79,6 @@ efficient rendering and diff operations.
     },
     vars_indexes := #{VarName :: atom() => [Index :: non_neg_integer()]}
 }.
-
--doc ~"""
-Template data from parse transform optimized for stateless component rendering.
-
-Simple list structure with static and dynamic elements for lightweight rendering.
-""".
--type stateless_template_data() :: [
-    {static, pos_integer(), binary()}
-    | {dynamic, pos_integer(), fun((arizona_socket:socket()) -> term())}
-].
 
 -doc ~"""
 Template data from parse transform optimized for list rendering with static/dynamic separation.
@@ -121,52 +107,28 @@ list rendering and updates.
 %% --------------------------------------------------------------------
 
 -doc ~"""
-Render stateful component template data into HTML.
+Render template data into HTML.
 
-Processes stateful template data with indexed elements for efficient rendering
-and diff operations. Updates the socket with the rendered HTML.
+Processes template data with indexed elements for efficient rendering
+and diff operations. Works for both stateful and stateless templates.
+Updates the socket with the rendered HTML.
 
 ## Examples
 
 ```erlang
 1> TemplateData = #{elems_order => [0, 1], elems => #{0 => {static, 1, ~"Hello"}}}.
 #{...}
-2> arizona_renderer:render_stateful(TemplateData, Socket).
+2> arizona_renderer:render_template(TemplateData, Socket).
 {[~"Hello"], UpdatedSocket}
 ```
 """.
--spec render_stateful(TemplateData, Socket) -> {Html, Socket1} when
-    TemplateData :: stateful_template_data(),
+-spec render_template(TemplateData, Socket) -> {Html, Socket1} when
+    TemplateData :: template_data(),
     Socket :: arizona_socket:socket(),
     Html :: arizona_html:html(),
     Socket1 :: arizona_socket:socket().
-render_stateful(#{elems_order := Order, elems := Elements}, Socket) ->
+render_template(#{elems_order := Order, elems := Elements}, Socket) ->
     {Html, UpdatedSocket} = render_elements(Order, Elements, Socket, []),
-    UpdatedSocket1 = arizona_socket:set_html_acc(Html, UpdatedSocket),
-    {Html, UpdatedSocket1}.
-
--doc ~"""
-Render stateless component template data into HTML.
-
-Processes stateless template data as a linear list of elements for lightweight
-rendering without indexed access. Updates the socket with the rendered HTML.
-
-## Examples
-
-```erlang
-1> TemplateData = [{static, 1, ~"Hello"}, {static, 2, ~"World"}].
-[...]
-2> arizona_renderer:render_stateless(TemplateData, Socket).
-{[~"Hello", ~"World"], UpdatedSocket}
-```
-""".
--spec render_stateless(StructuredList, Socket) -> {Html, Socket1} when
-    StructuredList :: stateless_template_data(),
-    Socket :: arizona_socket:socket(),
-    Html :: arizona_html:html(),
-    Socket1 :: arizona_socket:socket().
-render_stateless(StructuredList, Socket) when is_list(StructuredList) ->
-    {Html, UpdatedSocket} = render_iolist(StructuredList, Socket, []),
     UpdatedSocket1 = arizona_socket:set_html_acc(Html, UpdatedSocket),
     {Html, UpdatedSocket1}.
 
@@ -324,14 +286,6 @@ render_elements([Index | Rest], Elements, Socket, Acc) ->
     #{Index := Element} = Elements,
     {RenderedElement, UpdatedSocket} = render_element(Element, Socket),
     render_elements(Rest, Elements, UpdatedSocket, [RenderedElement | Acc]).
-
-%% Render stateless iolist
-render_iolist([], Socket, Acc) ->
-    Html = lists:reverse(Acc),
-    {Html, Socket};
-render_iolist([Element | Rest], Socket, Acc) ->
-    {RenderedElement, UpdatedSocket} = render_element(Element, Socket),
-    render_iolist(Rest, UpdatedSocket, [RenderedElement | Acc]).
 
 %% Render a single list item using template structure
 render_list_item(StaticParts, ElemsOrder, ElemsFuns, Item, Socket) ->

@@ -16,7 +16,8 @@ all() ->
         {group, patch_application},
         {group, round_trip_properties},
         {group, structure_generation},
-        {group, integration_tests}
+        {group, integration_tests},
+        {group, error_handling_edge_cases}
     ].
 
 groups() ->
@@ -58,7 +59,11 @@ groups() ->
             generate_hierarchical_socket,
             detect_stateless_template,
             detect_stateful_socket,
-            detect_list_content
+            detect_list_content,
+            detect_stateless_unified_format,
+            stateless_unified_with_vars_indexes,
+            stateless_unified_cascade_dependency,
+            stateless_unified_empty_template
         ]},
         {integration_tests, [parallel], [
             arizona_html_integration,
@@ -67,7 +72,16 @@ groups() ->
             error_handling_coverage,
             mode_switching_coverage,
             hierarchical_list_in_stateful_template,
-            hierarchical_stateless_in_stateful_template
+            hierarchical_stateless_in_stateful_template,
+            test_duplicate_list_changes_in_multiple_indices
+        ]},
+        {error_handling_edge_cases, [parallel], [
+            test_element_removal_in_diff,
+            test_element_addition_in_diff,
+            test_binding_not_found_hierarchical_error,
+            test_template_render_hierarchical_error,
+            test_empty_component_operations,
+            test_mixed_component_type_changes
         ]}
     ].
 
@@ -701,11 +715,15 @@ generate_hierarchical_socket(Config) when is_list(Config) ->
 
 detect_stateless_template(Config) when is_list(Config) ->
     % Test that stateless template data is properly converted to structure
-    StatelessTemplate = [
-        {static, 1, ~"<h1>"},
-        {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(title, Socket) end},
-        {static, 3, ~"</h1>"}
-    ],
+    StatelessTemplate = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<h1>"},
+            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(title, Socket) end},
+            2 => {static, 3, ~"</h1>"}
+        },
+        vars_indexes => #{title => [1]}
+    },
 
     % Create socket with proper stateful state
     Socket = arizona_socket:new(#{mode => hierarchical}),
@@ -751,8 +769,148 @@ detect_list_content(Config) when is_list(Config) ->
 
     {Content, _UpdatedSocket} = arizona_html:to_html(ListContent, Socket),
 
-    % arizona_html:to_html creates nested iodata structure for lists
-    Expected = [[[[[[[], ~"<li>"], ~"Item 1"], ~"</li>"], ~"<li>"], ~"Item 2"], ~"</li>"],
+    % arizona_html:to_html creates nested iodata for lists
+    Expected = [[[[[~"<li>", ~"Item 1"], ~"</li>"], ~"<li>"], ~"Item 2"], ~"</li>"],
+
+    ?assertEqual(Expected, Content).
+
+%% Tests for unified stateless format
+detect_stateless_unified_format(Config) when is_list(Config) ->
+    % Test that stateless template with unified format (same as stateful)
+    % is properly converted to structure
+    StatelessTemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<section>"},
+            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(title, Socket) end},
+            2 => {static, 3, ~"</section>"}
+        },
+        vars_indexes => #{title => [1]}
+    },
+
+    % Create socket with proper stateful state
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    MockState = arizona_stateful:new(root, test_module, #{title => ~"Unified Title"}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
+
+    {Content, _UpdatedSocket} = arizona_hierarchical:stateless_structure(
+        StatelessTemplateData, SocketWithState
+    ),
+
+    Expected = #{
+        type => stateless,
+        structure => #{
+            0 => ~"<section>",
+            1 => ~"Unified Title",
+            2 => ~"</section>"
+        }
+    },
+
+    ?assertEqual(Expected, Content).
+
+stateless_unified_with_vars_indexes(Config) when is_list(Config) ->
+    % Test that vars_indexes are properly handled in hierarchical mode
+    StatelessTemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<div>User: "},
+            1 =>
+                {dynamic, 2, fun(Socket) ->
+                    UserData = arizona_socket:get_binding(user, Socket, #{}),
+                    maps:get(name, UserData, ~"unknown")
+                end},
+            2 => {static, 3, ~"</div>"}
+        },
+        vars_indexes => #{user => [1]}
+    },
+
+    % Create socket with user binding
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    UserData = #{name => ~"Alice", role => ~"admin"},
+    MockState = arizona_stateful:new(root, test_module, #{user => UserData}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
+
+    {Content, _UpdatedSocket} = arizona_hierarchical:stateless_structure(
+        StatelessTemplateData, SocketWithState
+    ),
+
+    Expected = #{
+        type => stateless,
+        structure => #{
+            0 => ~"<div>User: ",
+            1 => ~"Alice",
+            2 => ~"</div>"
+        }
+    },
+
+    ?assertEqual(Expected, Content).
+
+stateless_unified_cascade_dependency(Config) when is_list(Config) ->
+    % Test cascade dependency pattern: stateless component depending on parent binding
+    % This simulates: {arizona_component:call_stateless(module, fun,
+    %                 #{foo => arizona_socket:get_binding(user, Socket)}, Socket)}
+    StatelessTemplateData = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<span class=\"greeting\">"},
+            1 =>
+                {dynamic, 2, fun(Socket) ->
+                    % Simulate the dependency extraction pattern
+                    UserData = arizona_socket:get_binding(user, Socket, #{}),
+                    Username = maps:get(username, UserData, ~"Guest"),
+                    [~"Hello, ", Username, ~"!"]
+                end},
+            2 => {static, 3, ~"</span>"}
+        },
+        % This ensures proper cascade dependency tracking
+        vars_indexes => #{user => [1]}
+    },
+
+    % Set up socket with user data
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    UserData = #{username => ~"Bob", status => ~"online"},
+    MockState = arizona_stateful:new(root, test_module, #{user => UserData}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
+
+    {Content, _UpdatedSocket} = arizona_hierarchical:stateless_structure(
+        StatelessTemplateData, SocketWithState
+    ),
+
+    % The hierarchical structure should flatten the nested list content
+    Expected = #{
+        type => stateless,
+        structure => #{
+            0 => ~"<span class=\"greeting\">",
+            1 => [~"Hello, ", ~"Bob", ~"!"],
+            2 => ~"</span>"
+        }
+    },
+
+    ?assertEqual(Expected, Content),
+
+    % Verify the vars_indexes for cascade dependency
+    ?assertEqual(#{user => [1]}, maps:get(vars_indexes, StatelessTemplateData)).
+
+stateless_unified_empty_template(Config) when is_list(Config) ->
+    % Test empty stateless template with unified format
+    StatelessTemplateData = #{
+        elems_order => [],
+        elems => #{},
+        vars_indexes => #{}
+    },
+
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    MockState = arizona_stateful:new(root, test_module, #{}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
+
+    {Content, _UpdatedSocket} = arizona_hierarchical:stateless_structure(
+        StatelessTemplateData, SocketWithState
+    ),
+
+    Expected = #{
+        type => stateless,
+        structure => #{}
+    },
 
     ?assertEqual(Expected, Content).
 
@@ -967,11 +1125,15 @@ hierarchical_list_in_stateful_template(Config) when is_list(Config) ->
 hierarchical_stateless_in_stateful_template(Config) when is_list(Config) ->
     % Test that render_stateless called from within a stateful template properly stores
     % hierarchical structures in the parent component via pending element buffer
-    StatelessTemplate = [
-        {static, 1, ~"<span class=\"status\">"},
-        {dynamic, 2, fun(Socket1) -> arizona_socket:get_binding(status_text, Socket1) end},
-        {static, 3, ~"</span>"}
-    ],
+    StatelessTemplate = #{
+        elems_order => [0, 1, 2],
+        elems => #{
+            0 => {static, 1, ~"<span class=\"status\">"},
+            1 => {dynamic, 2, fun(Socket1) -> arizona_socket:get_binding(status_text, Socket1) end},
+            2 => {static, 3, ~"</span>"}
+        },
+        vars_indexes => #{status_text => [1]}
+    },
 
     % Create socket in hierarchical mode with bindings
     Socket = arizona_socket:new(#{mode => hierarchical}),
@@ -1017,3 +1179,302 @@ hierarchical_stateless_in_stateful_template(Config) when is_list(Config) ->
     },
 
     ?assertEqual(ExpectedStructure, HierarchicalAcc).
+
+% IMPORTANT: This test confirms that the hierarchical diff correctly separates:
+% - List changes go to index 3 (main section)
+% - Stateless changes go to index 9 (footer)
+% The bug occurs during WebSocket conversion where the same list changes
+% get incorrectly duplicated to both indices due to the looks_like_component_changes
+% heuristic in arizona_socket.erl
+test_duplicate_list_changes_in_multiple_indices(Config) when is_list(Config) ->
+    % Test scenario similar to TODO app where the same list changes might be applied
+    % to multiple element indices, causing duplication in the diff
+
+    % Create initial structure similar to TODO app with list in main section (index 3)
+    % and stateless components in footer (index 9)
+    InitialStructure = #{
+        root => #{
+            0 => ~"<div><main>",
+            3 => #{
+                type => list,
+                dynamic => [
+                    #{0 => ~"", 1 => ~"1", 6 => ~"Learn Erlang"},
+                    #{0 => ~"completed", 1 => ~"2", 6 => ~"Build web app"}
+                ],
+                static => [~"<div class=\"todo-item ", ~"\" data-testid=\"todo-", ~"\">", ~"</div>"]
+            },
+            4 => ~"</main><footer>",
+            9 => #{
+                type => stateless,
+                structure => #{
+                    0 => ~"<span>Count: ",
+                    1 => 2,
+                    2 => ~"</span>"
+                }
+            },
+            10 => ~"</footer></div>"
+        }
+    },
+
+    % Create updated structure where first item is toggled (should only affect index 3)
+    UpdatedStructure = #{
+        root => #{
+            0 => ~"<div><main>",
+            3 => #{
+                type => list,
+                dynamic => [
+                    #{0 => ~"completed", 1 => ~"1", 6 => ~"Learn Erlang"},
+                    #{0 => ~"completed", 1 => ~"2", 6 => ~"Build web app"}
+                ],
+                static => [~"<div class=\"todo-item ", ~"\" data-testid=\"todo-", ~"\">", ~"</div>"]
+            },
+            4 => ~"</main><footer>",
+            9 => #{
+                type => stateless,
+                structure => #{
+                    0 => ~"<span>Count: ",
+                    1 => 1,
+                    2 => ~"</span>"
+                }
+            },
+            10 => ~"</footer></div>"
+        }
+    },
+
+    % Generate diff between initial and updated structures
+    Changes = arizona_hierarchical:diff_structures(InitialStructure, UpdatedStructure),
+
+    % This test simulates the TODO app bug where the same list changes appear
+    % at both the main section (index 3) and footer (index 9).
+    % The hierarchical diff should correctly separate these changes.
+
+    % Verify the hierarchical diff structure is correct
+    ?assertMatch(
+        [#{type := update_stateful, stateful_id := root, data := ElementDiffs}] when
+            is_list(ElementDiffs),
+        Changes
+    ),
+
+    [#{data := ElementDiffs}] = Changes,
+
+    % Find changes by element index - using lists:search since these are maps
+    Index3Change = lists:search(fun(#{element_index := Index}) -> Index =:= 3 end, ElementDiffs),
+    Index9Change = lists:search(fun(#{element_index := Index}) -> Index =:= 9 end, ElementDiffs),
+
+    % Extract the actual change records
+    {value, Index3ChangeRecord} = Index3Change,
+    {value, Index9ChangeRecord} = Index9Change,
+
+    % Verify that both changes exist
+    ?assertMatch(#{type := update_list_dynamic, element_index := 3}, Index3ChangeRecord),
+    ?assertMatch(#{type := update_stateless, element_index := 9}, Index9ChangeRecord),
+
+    % Extract the change data
+    #{data := Index3Data} = Index3ChangeRecord,
+    #{data := Index9Data} = Index9ChangeRecord,
+
+    % Verify that index 3 has the actual list changes (todo items)
+    ?assertMatch([#{0 := <<"completed">>, 1 := <<"1">>, 6 := <<"Learn Erlang">>}, _], Index3Data),
+
+    % Verify that index 9 has only the stateless component changes (count update)
+    ?assertMatch([#{type := set_element, element_index := 1, data := 1}], Index9Data).
+
+%% --------------------------------------------------------------------
+%% Error handling and edge case tests
+%% --------------------------------------------------------------------
+
+test_element_removal_in_diff(Config) when is_list(Config) ->
+    % Test case where elements are removed from a component
+    OldStructure = #{
+        root => #{
+            0 => ~"<div>",
+            1 => ~"Hello",
+            2 => ~"World",
+            3 => ~"</div>"
+        }
+    },
+    NewStructure = #{
+        root => #{
+            0 => ~"<div>",
+            % Elements 1 and 2 removed
+            3 => ~"</div>"
+        }
+    },
+
+    Diff = arizona_hierarchical:diff_structures(OldStructure, NewStructure),
+
+    % Should contain remove_element operations
+    ?assertMatch(
+        [
+            #{
+                type := update_stateful,
+                data := [
+                    #{type := remove_element, element_index := 1},
+                    #{type := remove_element, element_index := 2}
+                ]
+            }
+        ],
+        Diff
+    ),
+
+    % Test applying the diff
+    ResultStructure = arizona_hierarchical:apply_diff(Diff, OldStructure),
+    ?assertEqual(NewStructure, ResultStructure).
+
+test_element_addition_in_diff(Config) when is_list(Config) ->
+    % Test case where elements are added to a component
+    OldStructure = #{
+        root => #{
+            0 => ~"<div>",
+            3 => ~"</div>"
+        }
+    },
+    NewStructure = #{
+        root => #{
+            0 => ~"<div>",
+            1 => ~"Hello",
+            2 => ~"World",
+            3 => ~"</div>"
+        }
+    },
+
+    Diff = arizona_hierarchical:diff_structures(OldStructure, NewStructure),
+
+    % Should contain set_element operations for new elements
+    ?assertMatch(
+        [
+            #{
+                type := update_stateful,
+                data := [
+                    #{type := set_element, element_index := 1, data := ~"Hello"},
+                    #{type := set_element, element_index := 2, data := ~"World"}
+                ]
+            }
+        ],
+        Diff
+    ),
+
+    % Test applying the diff
+    ResultStructure = arizona_hierarchical:apply_diff(Diff, OldStructure),
+    ?assertEqual(NewStructure, ResultStructure).
+
+test_binding_not_found_hierarchical_error(Config) when is_list(Config) ->
+    % Test template with missing binding in hierarchical mode
+    TemplateData = #{
+        elems_order => [0, 1],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 =>
+                {dynamic, 2, fun(Socket) ->
+                    arizona_socket:get_binding(nonexistent_binding, Socket)
+                end}
+        },
+        vars_indexes => #{trigger => [1]}
+    },
+
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    MockState = arizona_stateful:new(root, test_module, #{}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
+
+    % Should throw binding_not_found error
+    ?assertError(
+        {binding_not_found, nonexistent_binding},
+        arizona_hierarchical:stateful_structure(TemplateData, SocketWithState)
+    ).
+
+test_template_render_hierarchical_error(Config) when is_list(Config) ->
+    % Test template with function that throws an error in hierarchical mode
+    TemplateData = #{
+        elems_order => [0, 1],
+        elems => #{
+            0 => {static, 1, ~"<div>"},
+            1 =>
+                {dynamic, 2, fun(_Socket) ->
+                    throw(some_error)
+                end}
+        },
+        vars_indexes => #{}
+    },
+
+    Socket = arizona_socket:new(#{mode => hierarchical}),
+    MockState = arizona_stateful:new(root, test_module, #{}),
+    SocketWithState = arizona_socket:put_stateful_state(MockState, Socket),
+
+    % Should throw template_render_error
+    ?assertError(
+        {template_render_error, some_error, 2},
+        arizona_hierarchical:stateful_structure(TemplateData, SocketWithState)
+    ).
+
+test_empty_component_operations(Config) when is_list(Config) ->
+    % Test diff between empty components
+    EmptyStructure = #{root => #{}},
+
+    Diff = arizona_hierarchical:diff_structures(EmptyStructure, EmptyStructure),
+    ?assertEqual([], Diff),
+
+    % Test adding elements to empty component
+    NonEmptyStructure = #{root => #{0 => ~"<div>"}},
+
+    Diff2 = arizona_hierarchical:diff_structures(EmptyStructure, NonEmptyStructure),
+    ?assertMatch(
+        [
+            #{
+                type := update_stateful,
+                data := [#{type := set_element, element_index := 0}]
+            }
+        ],
+        Diff2
+    ),
+
+    % Test removing all elements from component
+    Diff3 = arizona_hierarchical:diff_structures(NonEmptyStructure, EmptyStructure),
+    ?assertMatch(
+        [
+            #{
+                type := update_stateful,
+                data := [#{type := remove_element, element_index := 0}]
+            }
+        ],
+        Diff3
+    ).
+
+test_mixed_component_type_changes(Config) when is_list(Config) ->
+    % Test changing from stateless to list component
+    OldStructure = #{
+        root => #{
+            0 => ~"<div>",
+            1 => #{
+                type => stateless,
+                structure => #{0 => ~"Old content"}
+            },
+            2 => ~"</div>"
+        }
+    },
+    NewStructure = #{
+        root => #{
+            0 => ~"<div>",
+            1 => #{
+                type => list,
+                static => [~"<li>", ~"</li>"],
+                dynamic => [#{0 => ~"New item"}]
+            },
+            2 => ~"</div>"
+        }
+    },
+
+    % Should replace entire element due to type change
+    Diff = arizona_hierarchical:diff_structures(OldStructure, NewStructure),
+    ?assertMatch(
+        [
+            #{
+                type := update_stateful,
+                data := [#{type := set_element, element_index := 1}]
+            }
+        ],
+        Diff
+    ),
+
+    % Test applying the diff
+    ResultStructure = arizona_hierarchical:apply_diff(Diff, OldStructure),
+    ?assertEqual(NewStructure, ResultStructure).
