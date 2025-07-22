@@ -4,7 +4,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([new/0]).
+-export([new/1]).
 -export([get/2]).
 -export([get/3]).
 -export([find/2]).
@@ -34,10 +34,11 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
--spec new() -> Bindings when
+-spec new(InitialBindings) -> Bindings when
+    InitialBindings :: map(),
     Bindings :: bindings().
-new() ->
-    #{}.
+new(InitialBindings) when is_map(InitialBindings) ->
+    InitialBindings.
 
 -spec get(Key, Bindings) -> Value when
     Key :: key(),

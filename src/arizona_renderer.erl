@@ -107,7 +107,56 @@ zip_static_dynamic([], [D | Dynamic]) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-zip_static_dynamic_test() ->
-    ?assertEqual([], zip_static_dynamic([], [])).
+zip_static_dynamic_test_() ->
+    [
+        {"Empty lists should return empty list", ?_assertEqual([], zip_static_dynamic([], []))},
+
+        {"Equal length lists should interleave elements",
+            ?_assertEqual(
+                [~"<div>", ~"content", ~"</div>", ~"more"],
+                zip_static_dynamic([~"<div>", ~"</div>"], [~"content", ~"more"])
+            )},
+
+        {"Static longer than dynamic should append static elements",
+            ?_assertEqual(
+                [~"<p>", ~"text", ~"</p>", ~"<footer>"],
+                zip_static_dynamic([~"<p>", ~"</p>", ~"<footer>"], [~"text"])
+            )},
+
+        {"Dynamic longer than static should append dynamic elements",
+            ?_assertEqual(
+                [~"<span>", ~"first", ~"second", ~"third"],
+                zip_static_dynamic([~"<span>"], [~"first", ~"second", ~"third"])
+            )}
+    ].
+
+render_dynamic_callbacks_test_() ->
+    MockView = create_test_view(),
+    MockDynamic = {fun() -> ~"callback1" end, fun() -> ~"callback2" end},
+    [
+        {"Empty sequence should return empty dynamic and unchanged view",
+            ?_assertEqual({[], MockView}, render_dynamic_callbacks([], MockDynamic, MockView))},
+
+        {"Single callback should render one element", fun() ->
+            {Dynamic, _View} = render_dynamic_callbacks([1], MockDynamic, MockView),
+            ?assertEqual([~"callback1"], Dynamic)
+        end},
+
+        {"Multiple callbacks should render in sequence", fun() ->
+            {Dynamic, _View} = render_dynamic_callbacks([1, 2], MockDynamic, MockView),
+            ?assertEqual([~"callback1", ~"callback2"], Dynamic)
+        end},
+
+        {"Callback returning function should be invoked with view", fun() ->
+            MockDynamicWithFunction = {fun() -> fun(View) -> {~"from_function", View} end end},
+            {Dynamic, _View} = render_dynamic_callbacks([1], MockDynamicWithFunction, MockView),
+            ?assertEqual([~"from_function"], Dynamic)
+        end}
+    ].
+
+create_test_view() ->
+    % Create a minimal test view for internal function testing
+    State = arizona_stateful:new(test_module, arizona_binder:new(#{id => ~"test"})),
+    arizona_view:new(test_module, State, render, undefined).
 
 -endif.
