@@ -18,7 +18,7 @@
 -export([live_set_current_stateful_id/2]).
 -export([live_set_current_element_index/2]).
 -export([live_record_variable_dependency/2]).
--export([live_clear_component_dependencies/2]).
+-export([live_clear_stateful_dependencies/2]).
 -export([live_put_stateful_hierarchical/3]).
 
 %% --------------------------------------------------------------------
@@ -216,16 +216,16 @@ live_record_variable_dependency(VarName, #view{} = View) ->
             arizona_live:set_dependency_tracker(LivePid, UpdatedTracker)
     end.
 
--spec live_clear_component_dependencies(StatefulId, View) -> ok when
+-spec live_clear_stateful_dependencies(StatefulId, View) -> ok when
     StatefulId :: arizona_stateful:id(),
     View :: view().
-live_clear_component_dependencies(StatefulId, #view{} = View) ->
+live_clear_stateful_dependencies(StatefulId, #view{} = View) ->
     case View#view.live_pid of
         undefined ->
             ok;
         LivePid ->
             Tracker = arizona_live:get_dependency_tracker(LivePid),
-            UpdatedTracker = arizona_tracker:clear_component_dependencies(
+            UpdatedTracker = arizona_tracker:clear_stateful_dependencies(
                 StatefulId, Tracker
             ),
             arizona_live:set_dependency_tracker(LivePid, UpdatedTracker)

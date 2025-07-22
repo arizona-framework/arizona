@@ -25,7 +25,7 @@ diff_stateful(Module, Bindings, View) ->
     case arizona_binder:is_empty(ChangedBindings) of
         true ->
             % Clear dependencies for this component before starting new render
-            ok = arizona_view:live_clear_component_dependencies(Id, PrepRenderView),
+            ok = arizona_view:live_clear_stateful_dependencies(Id, PrepRenderView),
             NoChangesStatefulState = arizona_stateful:set_changed_bindings(
                 arizona_binder:new(), StatefulState
             ),
@@ -35,10 +35,10 @@ diff_stateful(Module, Bindings, View) ->
             {[], StatefulView};
         false when is_pid(LivePid) ->
             Tracker = arizona_live:get_dependency_tracker(LivePid),
-            Dependencies = arizona_tracker:get_stateful_dependencies(Id, Tracker),
+            StatefulDependencies = arizona_tracker:get_stateful_dependencies(Id, Tracker),
             % Clear dependencies for this component before starting new render
-            ok = arizona_view:live_clear_component_dependencies(Id, PrepRenderView),
-            AffectedElements = get_affected_elements(ChangedBindings, Dependencies),
+            ok = arizona_view:live_clear_stateful_dependencies(Id, PrepRenderView),
+            AffectedElements = get_affected_elements(ChangedBindings, StatefulDependencies),
             {Diff, DiffView} = generate_element_diff(AffectedElements, Template, PrepRenderView),
             NoChangesStatefulState = arizona_stateful:set_changed_bindings(
                 arizona_binder:new(), StatefulState
@@ -77,9 +77,12 @@ diff_stateless(Module, Fun, Bindings, View) ->
 %% --------------------------------------------------------------------
 
 %% Get affected elements from changed bindings and variable dependencies
-get_affected_elements(ChangedBindings, Dependencies) ->
+get_affected_elements(ChangedBindings, StatefulDependencies) ->
     ChangedVarNames = arizona_binder:keys(ChangedBindings),
-    AffectedIndexLists = [maps:get(VarName, Dependencies, []) || VarName <- ChangedVarNames],
+    AffectedIndexLists = [
+        maps:get(VarName, StatefulDependencies, [])
+     || VarName <- ChangedVarNames
+    ],
     sets:from_list(lists:flatten(AffectedIndexLists), [{version, 2}]).
 
 %% Generate diff for affected elements
