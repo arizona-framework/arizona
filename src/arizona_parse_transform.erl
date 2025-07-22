@@ -66,7 +66,8 @@ transform_node(Node, ModuleName) ->
 transform_application(Node, ModuleName) ->
     case analyze_application(Node) of
         {arizona_template, from_string, 2, [TemplateArg, _BindingsArg]} ->
-            Line = erl_syntax:get_pos(Node),
+            Anno = erl_anno:from_term(erl_syntax:get_ann(Node)),
+            Line = erl_anno:line(Anno),
             transform_from_string(ModuleName, Line, TemplateArg);
         _ ->
             Node
@@ -105,9 +106,9 @@ transform_from_string(ModuleName, Line, TemplateArg) ->
     try
         % Extract template content and line number
         case eval_expr(ModuleName, TemplateArg, #{}) of
-            TemplateContent when is_binary(TemplateContent) ->
+            String when is_binary(String) ->
                 % Scan template content into tokens
-                Tokens = arizona_scanner:scan(#{line => Line}, TemplateContent),
+                Tokens = arizona_scanner:scan_string(Line, String),
 
                 % Parse tokens into AST
                 arizona_parser:parse_tokens(Tokens)
