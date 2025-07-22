@@ -7,13 +7,10 @@
 -export([parse_transform/2]).
 
 %% --------------------------------------------------------------------
-%% Testing helper exports
+%% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--export([extract_module_name/1]).
--export([analyze_application/1]).
--export([eval_expr/3]).
--export([error_info/1]).
+-ignore_xref([parse_transform/2]).
 
 %% --------------------------------------------------------------------
 %% Parse Transform Implementation

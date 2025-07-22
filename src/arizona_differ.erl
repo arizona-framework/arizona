@@ -19,7 +19,7 @@
     View1 :: arizona_view:view().
 diff_stateful(Module, Bindings, View) ->
     LivePid = arizona_view:get_live_pid(View),
-    {Id, Template, PrepRenderView} = arizona_stateful:prepare_render(Module, Bindings, View),
+    {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
     StatefulState = arizona_view:get_stateful_state(Id, PrepRenderView),
     ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
     case arizona_binder:is_empty(ChangedBindings) of

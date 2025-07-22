@@ -6,10 +6,8 @@
 
 -export([new/0]).
 -export([set_current_stateful_id/2]).
--export([get_current_element_index/1]).
 -export([set_current_element_index/2]).
 -export([record_variable_dependency/2]).
--export([get_dependencies/1]).
 -export([get_stateful_dependencies/2]).
 -export([clear_stateful_dependencies/2]).
 
@@ -63,12 +61,6 @@ set_current_stateful_id(StatefulId, #tracker{} = Tracker) ->
         current_element_index = undefined
     }.
 
--spec get_current_element_index(Tracker) -> ElementIndex when
-    Tracker :: tracker(),
-    ElementIndex :: element_index() | undefined.
-get_current_element_index(#tracker{} = Tracker) ->
-    Tracker#tracker.current_element_index.
-
 -spec set_current_element_index(ElementIndex, Tracker) -> Tracker1 when
     ElementIndex :: element_index(),
     Tracker :: tracker(),
@@ -105,12 +97,6 @@ record_variable_dependency(VarName, #tracker{} = Tracker) ->
             UpdatedDependencies = Dependencies#{StatefulId => UpdatedStatefulDependencies},
             Tracker#tracker{dependencies = UpdatedDependencies}
     end.
-
--spec get_dependencies(Tracker) -> Dependencies when
-    Tracker :: tracker(),
-    Dependencies :: dependencies().
-get_dependencies(#tracker{} = Tracker) ->
-    Tracker#tracker.dependencies.
 
 -spec get_stateful_dependencies(StatefulId, Tracker) -> StatefulDependencies when
     StatefulId :: arizona_stateful:id(),

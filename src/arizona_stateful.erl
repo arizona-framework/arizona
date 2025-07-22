@@ -7,8 +7,6 @@
 -export([call_mount_callback/2]).
 -export([call_render_callback/2]).
 -export([call_handle_event_callback/4]).
--export([call_handle_info_callback/3]).
--export([call_dynamic_function/2]).
 -export([new/2]).
 -export([get_id/1]).
 -export([get_module/1]).
@@ -19,7 +17,15 @@
 -export([merge_bindings/2]).
 -export([get_changed_bindings/1]).
 -export([set_changed_bindings/2]).
--export([prepare_render/3]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([new/2]).
+-ignore_xref([get_binding/2]).
+-ignore_xref([get_binding/3]).
+-ignore_xref([put_binding/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -68,12 +74,7 @@
     Reply :: event_reply(),
     State1 :: arizona_stateful:state().
 
--callback handle_info(Info, State) -> {noreply, State1} when
-    Info :: term(),
-    State :: arizona_stateful:state(),
-    State1 :: arizona_stateful:state().
-
--optional_callbacks([handle_event/3, handle_info/2]).
+-optional_callbacks([handle_event/3]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
@@ -108,27 +109,6 @@ call_handle_event_callback(Module, Event, Params, State) ->
         false ->
             {noreply, State}
     end.
-
--spec call_handle_info_callback(Module, Info, State) -> Result when
-    Module :: module(),
-    Info :: term(),
-    State :: arizona_stateful:state(),
-    Result :: {noreply, State1},
-    State1 :: arizona_stateful:state().
-call_handle_info_callback(Module, Info, State) ->
-    case erlang:function_exported(Module, handle_info, 2) of
-        true ->
-            apply(Module, handle_info, [Info, State]);
-        false ->
-            {noreply, State}
-    end.
-
--spec call_dynamic_function(Fun, View) -> Result when
-    Fun :: fun((View) -> Result),
-    View :: arizona_view:view(),
-    Result :: term().
-call_dynamic_function(Fun, View) when is_function(Fun, 1) ->
-    apply(Fun, [View]).
 
 -spec new(Module, Bindings) -> State when
     Module :: module(),
@@ -214,27 +194,3 @@ get_changed_bindings(#state{} = State) ->
     State1 :: state().
 set_changed_bindings(ChangedBindings, #state{} = State) ->
     State#state{changed_bindings = ChangedBindings}.
-
--spec prepare_render(Module, Bindings, View1) -> {Id, Template, View2} when
-    Module :: module(),
-    Bindings :: arizona_binder:bindings(),
-    View1 :: arizona_view:view(),
-    Id :: id(),
-    Template :: arizona_template:template(),
-    View2 :: arizona_view:view().
-prepare_render(Module, Bindings, View) ->
-    Id = get_id(Bindings),
-    case arizona_view:find_stateful_state(Id, View) of
-        {ok, State} ->
-            BindingsState = merge_bindings(Bindings, State),
-            RenderBindings = get_bindings(BindingsState),
-            Template = call_render_callback(Module, RenderBindings),
-            StatefulView = arizona_view:put_stateful_state(Id, BindingsState, View),
-            {Id, Template, StatefulView};
-        error ->
-            MountState = call_mount_callback(Module, Bindings),
-            MountBindings = get_bindings(MountState),
-            Template = call_render_callback(Module, MountBindings),
-            MountView = arizona_view:put_stateful_state(Id, MountState, View),
-            {Id, Template, MountView}
-    end.

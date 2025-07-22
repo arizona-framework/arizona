@@ -9,7 +9,6 @@
 -export([mount_view/3]).
 -export([initial_render/2]).
 -export([diff_stateful/2]).
--export([get_view/1]).
 -export([set_view/2]).
 -export([get_dependency_tracker/1]).
 -export([set_dependency_tracker/2]).
@@ -25,6 +24,7 @@
 -export([init/1]).
 -export([handle_call/3]).
 -export([handle_cast/2]).
+-export([handle_info/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -78,12 +78,6 @@ initial_render(Pid, ViewState) ->
     Diff :: [dynamic()].
 diff_stateful(Pid, StatefulId) ->
     gen_server:call(Pid, {diff_stateful, StatefulId}).
-
--spec get_view(Pid) -> View when
-    Pid :: pid(),
-    View :: arizona_view:view().
-get_view(Pid) ->
-    gen_server:call(Pid, get_view).
 
 -spec set_view(Pid, View) -> ok when
     Pid :: pid(),
@@ -151,7 +145,6 @@ init([]) ->
         {mount_view, Module, ArizonaReq}
         | {initial_render, StatefulState}
         | {diff_stateful, StatefulId}
-        | get_view
         | get_dependency_tracker
         | get_stateful_hierarchical
         | {handle_event, StatefulId | undefined, Event, Params},
@@ -190,8 +183,6 @@ handle_call({diff_stateful, StatefulId}, _From, #state{view = View} = State) whe
     Bindings = arizona_stateful:get_bindings(StatefulState),
     {Diff, DiffView} = arizona_differ:diff_stateful(Module, Bindings, View),
     {reply, Diff, State#state{view = DiffView}};
-handle_call(get_view, _From, #state{view = View} = State) when View =/= undefined ->
-    {reply, View, State};
 handle_call(get_dependency_tracker, _From, #state{} = State) ->
     {reply, State#state.dependency_tracker, State};
 handle_call(get_stateful_hierarchical, _From, #state{} = State) ->
@@ -221,9 +212,11 @@ handle_call(
     Message ::
         {set_view, View}
         | {set_dependency_tracker, Tracker}
+        | {record_variable_dependency, VarName}
         | {set_stateful_hierarchical, Hierarchical},
     View :: arizona_view:view(),
     Tracker :: arizona_tracker:tracker(),
+    VarName :: arizona_tracker:var_name(),
     Hierarchical :: stateful_hierarchical(),
     State :: state(),
     Result :: {noreply, State1},
@@ -232,5 +225,21 @@ handle_cast({set_view, View}, #state{} = State) ->
     {noreply, State#state{view = View}};
 handle_cast({set_dependency_tracker, Tracker}, #state{} = State) ->
     {noreply, State#state{dependency_tracker = Tracker}};
+handle_cast({record_variable_dependency, VarName}, #state{} = State) ->
+    Tracker = State#state.dependency_tracker,
+    UpdatedTracker = arizona_tracker:record_variable_dependency(VarName, Tracker),
+    {noreply, State#state{dependency_tracker = UpdatedTracker}};
 handle_cast({set_stateful_hierarchical, Hierarchical}, #state{} = State) ->
     {noreply, State#state{stateful_hierarchical = Hierarchical}}.
+
+-spec handle_info(Info, State) -> Result when
+    Info :: term(),
+    State :: state(),
+    Result :: {noreply, State1},
+    State1 :: state().
+handle_info(Info, #state{view = View} = State) when View =/= undefined ->
+    ViewState = arizona_view:get_state(View),
+    Module = arizona_stateful:get_module(ViewState),
+    {noreply, UpdatedViewState} = arizona_view:call_handle_info_callback(Module, Info, ViewState),
+    UpdatedView = arizona_view:update_state(UpdatedViewState, View),
+    {noreply, State#state{view = UpdatedView}}.

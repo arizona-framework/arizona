@@ -33,7 +33,7 @@
     Html :: arizona_html:html(),
     View1 :: arizona_view:view().
 render_stateful(Module, Bindings, View) ->
-    {Id, Template, View1} = arizona_stateful:prepare_render(Module, Bindings, View),
+    {Id, Template, View1} = arizona_lifecycle:prepare_render(Module, Bindings, View),
     ok = arizona_view:live_clear_stateful_dependencies(Id, View1),
     ok = arizona_view:live_set_current_stateful_id(Id, View1),
     render_template(Template, View1).

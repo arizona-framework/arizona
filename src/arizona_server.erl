@@ -8,7 +8,13 @@
 -export([stop/0]).
 -export([get_route_metadata/1]).
 -export([get_route_handler/1]).
--export([get_route_type/1]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([start/1]).
+-ignore_xref([stop/0]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -90,12 +96,6 @@ get_route_metadata(Req) ->
     Handler :: module().
 get_route_handler(#route_metadata{handler = Handler}) ->
     Handler.
-
--spec get_route_type(RouteMetadata) -> Type when
-    RouteMetadata :: route_metadata(),
-    Type :: atom().
-get_route_type(#route_metadata{type = Type}) ->
-    Type.
 
 %% --------------------------------------------------------------------
 %% Internal functions
