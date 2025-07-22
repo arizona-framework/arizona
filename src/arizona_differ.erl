@@ -1,4 +1,4 @@
--module(arizona_template_differ).
+-module(arizona_differ).
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -64,7 +64,7 @@ diff_stateless(Module, Fun, Bindings, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
 
     % Convert template to HTML for diff
-    {Html, RenderView} = arizona_template_renderer:render_template(Template, View),
+    {Html, RenderView} = arizona_renderer:render_template(Template, View),
 
     % Return the complete HTML as a change
     % In a more sophisticated implementation, we could track element-level

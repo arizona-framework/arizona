@@ -233,7 +233,7 @@ live_clear_component_dependencies(StatefulId, #view{} = View) ->
 
 -spec live_put_stateful_hierarchical(StatefulId, HierarchicalData, View) -> ok when
     StatefulId :: arizona_stateful:id(),
-    HierarchicalData :: arizona_template_hierarchical:hierarchical_data(),
+    HierarchicalData :: arizona_hierarchical:hierarchical_data(),
     View :: view().
 live_put_stateful_hierarchical(StatefulId, HierarchicalData, #view{} = View) ->
     case View#view.live_pid of
