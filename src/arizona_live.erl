@@ -13,6 +13,7 @@
 -export([set_view/2]).
 -export([get_dependency_tracker/1]).
 -export([set_dependency_tracker/2]).
+-export([record_variable_dependency/2]).
 -export([get_stateful_hierarchical/1]).
 -export([set_stateful_hierarchical/2]).
 -export([handle_event/4]).
@@ -101,6 +102,12 @@ get_dependency_tracker(Pid) ->
     Tracker :: arizona_tracker:tracker().
 set_dependency_tracker(Pid, Tracker) ->
     gen_server:cast(Pid, {set_dependency_tracker, Tracker}).
+
+-spec record_variable_dependency(Pid, VarName) -> ok when
+    Pid :: pid(),
+    VarName :: arizona_tracker:var_name().
+record_variable_dependency(Pid, VarName) ->
+    gen_server:cast(Pid, {record_variable_dependency, VarName}).
 
 -spec get_stateful_hierarchical(Pid) -> Hierarchical when
     Pid :: pid(),

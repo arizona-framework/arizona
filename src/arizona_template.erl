@@ -111,8 +111,7 @@ get_dynamic_anno(#template{dynamic_anno = Anno}) ->
     Value :: arizona_binder:value().
 get_binding(Key, Bindings) ->
     % Record variable dependency for runtime tracking
-    % Send cast to self (the live process)
-    ok = gen_server:cast(self(), {record_variable_dependency, Key}),
+    ok = arizona_live:record_variable_dependency(self(), Key),
     arizona_binder:get(Key, Bindings).
 
 -spec get_binding(Key, Bindings, Default) -> Value when
@@ -121,7 +120,8 @@ get_binding(Key, Bindings) ->
     Default :: arizona_binder:default_fun(),
     Value :: arizona_binder:value().
 get_binding(Key, Bindings, Default) ->
-    ok = gen_server:cast(self(), {record_variable_dependency, Key}),
+    % Record variable dependency for runtime tracking
+    ok = arizona_live:record_variable_dependency(self(), Key),
     arizona_binder:get(Key, Bindings, Default).
 
 -spec find_binding(Key, Bindings) -> {ok, Value} | error when
@@ -130,8 +130,7 @@ get_binding(Key, Bindings, Default) ->
     Value :: arizona_binder:value().
 find_binding(Key, Bindings) ->
     % Record variable dependency for runtime tracking
-    % Send cast to self (the live process)
-    ok = gen_server:cast(self(), {record_variable_dependency, Key}),
+    ok = arizona_live:record_variable_dependency(self(), Key),
     arizona_binder:find(Key, Bindings).
 
 -spec render_stateful(Module, Bindings) -> Callback when
