@@ -37,28 +37,28 @@
     State :: map(),
     LiveModule :: module(),
     ArizonaReq :: arizona_request:request().
-init(Req, _State) ->
+init(CowboyRequest, _State) ->
     % Extract path from query parameter ?path=/users
-    PathParams = cowboy_req:parse_qs(Req),
+    PathParams = cowboy_req:parse_qs(CowboyRequest),
     LivePath = proplists:get_value(~"path", PathParams, ~"/"),
 
-    % Create fake request with the Live path to resolve correct handler
-    FakeReq = Req#{path => LivePath},
-    RouteMetadata = arizona_server:get_route_metadata(FakeReq),
+    % Create request with the Live path to resolve correct handler
+    LiveRequest = CowboyRequest#{path => LivePath},
+    RouteMetadata = arizona_server:get_route_metadata(LiveRequest),
     LiveModule = arizona_server:get_route_handler(RouteMetadata),
 
     % Create Arizona request with the original Live path
-    ArizonaReq = arizona_request:from_cowboy(FakeReq),
-    {cowboy_websocket, Req, {LiveModule, ArizonaReq}}.
+    ArizonaRequest = arizona_cowboy_request:new(LiveRequest),
+    {cowboy_websocket, CowboyRequest, {LiveModule, ArizonaRequest}}.
 
 -spec websocket_init(InitData) -> Result when
-    InitData :: {LiveModule, ArizonaReq},
+    InitData :: {LiveModule, ArizonaRequest},
     LiveModule :: module(),
-    ArizonaReq :: arizona_request:request(),
+    ArizonaRequest :: arizona_request:request(),
     Result :: call_result().
-websocket_init({ViewModule, ArizonaReq}) ->
+websocket_init({ViewModule, ArizonaRequest}) ->
     {ok, LivePid} = arizona_live:start_link(),
-    ViewState = arizona_live:mount_view(LivePid, ViewModule, ArizonaReq),
+    ViewState = arizona_live:mount_view(LivePid, ViewModule, ArizonaRequest),
     View = arizona_view:new(ViewModule, ViewState, hierarchical, LivePid),
     ok = arizona_live:set_view(LivePid, View),
     HierarchicalStructure = arizona_live:initial_render(LivePid, ViewState),
