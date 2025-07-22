@@ -99,16 +99,11 @@ call_render_callback(Mod, Bindings) when is_atom(Mod) ->
     Event :: binary(),
     Params :: map(),
     State :: arizona_stateful:state(),
-    Result :: {noreply, State1} | {reply, Reply, State1},
+    Result :: {reply, Reply, State1} | {noreply, State1},
     Reply :: term(),
     State1 :: arizona_stateful:state().
 call_handle_event_callback(Module, Event, Params, State) ->
-    case erlang:function_exported(Module, handle_event, 3) of
-        true ->
-            apply(Module, handle_event, [Event, Params, State]);
-        false ->
-            {noreply, State}
-    end.
+    apply(Module, handle_event, [Event, Params, State]).
 
 -spec new(Module, Bindings) -> State when
     Module :: module(),
