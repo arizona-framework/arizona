@@ -15,7 +15,7 @@
     Module :: module(),
     Bindings :: arizona_binder:bindings(),
     View :: arizona_view:view(),
-    Diff :: [term()],
+    Diff :: [dynamic()],
     View1 :: arizona_view:view().
 diff_stateful(Module, Bindings, View) ->
     LivePid = arizona_view:get_live_pid(View),
@@ -92,25 +92,25 @@ generate_element_diff(AffectedElements, Template, View) ->
             {[], View};
         _ ->
             DynamicSequence = sets:to_list(AffectedElements),
-            DynamicTuple = arizona_template:get_dynamic(Template),
-            process_affected_elements(DynamicSequence, DynamicTuple, View)
+            Dynamic = arizona_template:get_dynamic(Template),
+            process_affected_elements(DynamicSequence, Dynamic, View)
     end.
 
 %% Process affected elements to create diff changes
-process_affected_elements([], _DynamicTuple, View) ->
+process_affected_elements([], _Dynamic, View) ->
     {[], View};
-process_affected_elements([ElementIndex | T], DynamicTuple, View) ->
+process_affected_elements([ElementIndex | T], Dynamic, View) ->
     ok = arizona_view:live_set_current_element_index(ElementIndex, View),
-    DynamicCallback = element(ElementIndex, DynamicTuple),
+    DynamicCallback = element(ElementIndex, Dynamic),
     case DynamicCallback() of
         Callback when is_function(Callback, 1) ->
             {Html, CallbackView} = Callback(View),
             ElementChange = {ElementIndex, Html},
-            {RestChanges, FinalView} = process_affected_elements(T, DynamicTuple, CallbackView),
+            {RestChanges, FinalView} = process_affected_elements(T, Dynamic, CallbackView),
             {[ElementChange | RestChanges], FinalView};
         Result ->
             Html = arizona_html:to_html(Result),
             ElementChange = {ElementIndex, Html},
-            {RestChanges, FinalView} = process_affected_elements(T, DynamicTuple, View),
+            {RestChanges, FinalView} = process_affected_elements(T, Dynamic, View),
             {[ElementChange | RestChanges], FinalView}
     end.

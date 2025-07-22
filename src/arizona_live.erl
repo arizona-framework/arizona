@@ -74,7 +74,7 @@ initial_render(Pid, ViewState) ->
 -spec diff_stateful(Pid, StatefulId) -> Diff when
     Pid :: pid(),
     StatefulId :: arizona_stateful:id(),
-    Diff :: [term()].
+    Diff :: [dynamic()].
 diff_stateful(Pid, StatefulId) ->
     gen_server:call(Pid, {diff_stateful, StatefulId}).
 

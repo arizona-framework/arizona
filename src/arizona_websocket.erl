@@ -26,7 +26,7 @@
 }).
 
 -opaque state() :: #state{}.
--type call_result() :: {Commands :: cowboy_websocket:commands(), State :: state()}.
+-nominal call_result() :: {Commands :: cowboy_websocket:commands(), State :: state()}.
 
 %% --------------------------------------------------------------------
 %% API function definitions

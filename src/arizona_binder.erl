@@ -28,10 +28,10 @@
 %% Types definitions
 %% --------------------------------------------------------------------
 
--type key() :: atom().
--type value() :: dynamic().
--type default_fun() :: fun(() -> value()).
 -opaque bindings() :: #{key() => value()}.
+-nominal key() :: atom().
+-type value() :: dynamic().
+-nominal default_fun() :: fun(() -> value()).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -49,17 +49,17 @@ new() ->
 get(Key, Bindings) when is_atom(Key), is_map(Bindings) ->
     maps:get(Key, Bindings).
 
--spec get(Key, Bindings, Default) -> Value when
+-spec get(Key, Bindings, DefaultFun) -> Value when
     Key :: key(),
     Bindings :: bindings(),
-    Default :: default_fun(),
+    DefaultFun :: default_fun(),
     Value :: value().
-get(Key, Bindings, Default) when is_atom(Key), is_map(Bindings), is_function(Default, 0) ->
+get(Key, Bindings, DefaultFun) when is_atom(Key), is_map(Bindings), is_function(DefaultFun, 0) ->
     case Bindings of
         #{Key := Value} ->
             Value;
         #{} ->
-            Default()
+            DefaultFun()
     end.
 
 -spec find(Key, Bindings) -> Result when

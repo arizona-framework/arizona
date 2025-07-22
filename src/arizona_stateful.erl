@@ -46,7 +46,7 @@
 -nominal id() :: binary().
 -nominal event_name() :: binary().
 -nominal event_params() :: #{binary() => json:decode_value()}.
--nominal event_reply() :: term().
+-nominal event_reply() :: dynamic().
 
 %% --------------------------------------------------------------------
 %% Behavior callback definitions

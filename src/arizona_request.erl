@@ -55,7 +55,7 @@
 -opaque request() :: #request{}.
 -nominal method() :: binary().
 -nominal path() :: binary().
--nominal bindings() :: #{atom() => term()}.
+-nominal bindings() :: #{atom() => dynamic()}.
 -nominal params() :: [{binary(), binary() | true}].
 -nominal cookies() :: [{binary(), binary()}].
 -nominal headers() :: #{binary() => iodata()}.
