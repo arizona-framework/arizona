@@ -4,32 +4,15 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([scan/2]).
-
-%% --------------------------------------------------------------------
-%% Types exports
-%% --------------------------------------------------------------------
-
--export_type([scan_opts/0]).
--export_type([token/0]).
+-export([scan_string/2]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
--type scan_opts() :: #{
-    line => pos_integer()
-}.
-
--type token() :: {
-    Category :: static | dynamic | comment,
-    Line :: pos_integer(),
-    Text :: binary()
-}.
-
 %% Internal state record for scanner operations
 -record(state, {
-    line :: pos_integer(),
+    line :: arizona_token:line(),
     position :: non_neg_integer()
 }).
 
@@ -37,17 +20,15 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec scan(Opts, Html) -> [Token] when
-    Opts :: scan_opts(),
-    Html :: arizona_html:html(),
-    Token :: token().
-scan(Opts, Html) when is_map(Opts), (is_binary(Html) orelse is_list(Html)) ->
-    BinaryTemplate = iolist_to_binary(Html),
-    State = #state{
-        line = maps:get(line, Opts, 1),
+-spec scan_string(Line, String) -> [Token] when
+    Line :: arizona_token:line(),
+    String :: binary(),
+    Token :: arizona_token:token().
+scan_string(Line, String) when is_integer(Line), Line >= 1, is_binary(String) ->
+    scan(String, String, #state{
+        line = Line,
         position = 0
-    },
-    scan(BinaryTemplate, BinaryTemplate, State).
+    }).
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -96,7 +77,8 @@ maybe_prepend_text_token(Bin, Len, State, Tokens) ->
         <<>> ->
             Tokens;
         Text ->
-            [{static, State#state.line, Text} | Tokens]
+            StaticToken = arizona_token:new(static, State#state.line, Text),
+            [StaticToken | Tokens]
     end.
 
 %% Scan an Erlang expression, handling nested braces
@@ -116,7 +98,7 @@ find_expression_end(Rest0, State0) ->
 process_found_expression({Len, EndMarkerLen, State1, Rest1}, Bin, State0) ->
     Expr0 = binary_part(Bin, State0#state.position, Len),
     {Expr, Category} = expr_category(Expr0, State0),
-    Token = {Category, State0#state.line, Expr},
+    Token = arizona_token:new(Category, State0#state.line, Expr),
 
     case maybe_skip_new_line(Rest1) of
         {true, NLMarker, Rest} ->
@@ -132,7 +114,7 @@ continue_after_newline(Token, Rest, Bin, Len, EndMarkerLen, NLMarker, State1) ->
     % Continue scanning normally, then prepend newline to first static token
     NextTokens = scan(Rest, Bin, State),
     % Prepend the newline to the first static token found
-    PrependedTokens = prepend_newline_to_first_static(NLMarker, NextTokens),
+    PrependedTokens = prepend_newline_to_first_static(NextTokens, NLMarker),
     [Token | PrependedTokens].
 
 %% Continue scanning without skipping a newline
@@ -241,9 +223,14 @@ reset_pos(State) ->
     State#state{position = 0}.
 
 %% Prepend newline to the first static token in the list
-prepend_newline_to_first_static(NLMarker, [{static, Line, Text} | Rest]) ->
-    [{static, Line, <<NLMarker/binary, Text/binary>>} | Rest];
-prepend_newline_to_first_static(NLMarker, [Token | Rest]) ->
-    [Token | prepend_newline_to_first_static(NLMarker, Rest)];
-prepend_newline_to_first_static(_NLMarker, []) ->
-    [].
+prepend_newline_to_first_static([], _NLMarker) ->
+    [];
+prepend_newline_to_first_static([Token | Rest], NLMarker) ->
+    case arizona_token:get_category(Token) of
+        static ->
+            Text = arizona_token:get_content(Token),
+            NLStaticToken = arizona_token:set_content(<<NLMarker/binary, Text/binary>>, Token),
+            [NLStaticToken | Rest];
+        _ ->
+            [Token | prepend_newline_to_first_static(Rest, NLMarker)]
+    end.

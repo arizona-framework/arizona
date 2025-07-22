@@ -1,4 +1,5 @@
 -module(arizona_template).
+-compile({nowarn_redefined_builtin_type, [dynamic/0]}).
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -6,10 +7,10 @@
 
 -export([from_string/2]).
 -export([from_string/4]).
--export([static/1]).
--export([dynamic/1]).
--export([dynamic_sequence/1]).
--export([dynamic_anno/1]).
+-export([get_static/1]).
+-export([get_dynamic/1]).
+-export([get_dynamic_sequence/1]).
+-export([get_dynamic_anno/1]).
 -export([get_binding/2]).
 -export([get_binding/3]).
 -export([find_binding/2]).
@@ -21,40 +22,48 @@
 %% --------------------------------------------------------------------
 
 -export_type([template/0]).
+-export_type([static/0]).
+-export_type([dynamic/0]).
+-export_type([dynamic_sequence/0]).
+-export_type([dynamic_anno/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
 -record(template, {
-    static :: [StaticContent :: binary()],
-    dynamic :: tuple(),
-    dynamic_sequence :: [pos_integer()],
-    dynamic_anno :: tuple()
+    static :: static(),
+    dynamic :: dynamic(),
+    dynamic_sequence :: dynamic_sequence(),
+    dynamic_anno :: dynamic_anno()
 }).
 
 -opaque template() :: #template{}.
+-nominal static() :: [binary()].
+-nominal dynamic() :: tuple().
+-nominal dynamic_sequence() :: [pos_integer()].
+-nominal dynamic_anno() :: tuple().
 
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
--spec from_string(TemplateContent, Bindings) -> template() when
-    TemplateContent :: binary(),
+-spec from_string(String, Bindings) -> template() when
+    String :: binary(),
     Bindings :: arizona_binder:bindings().
-from_string(TemplateContent, Bindings) ->
-    from_string(erlang, 1, TemplateContent, Bindings).
+from_string(String, Bindings) ->
+    from_string(erlang, 1, String, Bindings).
 
--spec from_string(Module, Line, TemplateContent, Bindings) -> template() when
+-spec from_string(Module, Line, String, Bindings) -> template() when
     Module :: module(),
     Line :: pos_integer(),
-    TemplateContent :: binary(),
+    String :: binary(),
     Bindings :: arizona_binder:bindings().
-from_string(Module, Line, TemplateContent, Bindings) when
-    is_atom(Module), is_integer(Line), is_binary(TemplateContent), is_map(Bindings)
+from_string(Module, Line, String, Bindings) when
+    is_atom(Module), is_integer(Line), is_binary(String), is_map(Bindings)
 ->
     % Scan template content into tokens
-    Tokens = arizona_scanner:scan(#{line => Line}, TemplateContent),
+    Tokens = arizona_scanner:scan_string(Line, String),
 
     % Parse tokens into AST
     AST = arizona_parser:parse_tokens(Tokens),
@@ -70,20 +79,28 @@ from_string(Module, Line, TemplateContent, Bindings) when
         value
     ).
 
--spec static(template()) -> [binary()].
-static(#template{static = Static}) ->
+-spec get_static(Template) -> StaticContent when
+    Template :: template(),
+    StaticContent :: static().
+get_static(#template{static = Static}) ->
     Static.
 
--spec dynamic(template()) -> tuple().
-dynamic(#template{dynamic = Dynamic}) ->
+-spec get_dynamic(Template) -> DynamicContent when
+    Template :: template(),
+    DynamicContent :: dynamic().
+get_dynamic(#template{dynamic = Dynamic}) ->
     Dynamic.
 
--spec dynamic_sequence(template()) -> [pos_integer()].
-dynamic_sequence(#template{dynamic_sequence = Sequence}) ->
+-spec get_dynamic_sequence(Template) -> DynamicSequence when
+    Template :: template(),
+    DynamicSequence :: dynamic_sequence().
+get_dynamic_sequence(#template{dynamic_sequence = Sequence}) ->
     Sequence.
 
--spec dynamic_anno(template()) -> tuple().
-dynamic_anno(#template{dynamic_anno = Anno}) ->
+-spec get_dynamic_anno(Template) -> DynamicAnno when
+    Template :: template(),
+    DynamicAnno :: dynamic_anno().
+get_dynamic_anno(#template{dynamic_anno = Anno}) ->
     Anno.
 
 -spec get_binding(Key, Bindings) -> Value when

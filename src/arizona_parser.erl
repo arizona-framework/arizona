@@ -22,8 +22,8 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
--spec parse_tokens(Tokens) -> ParsedTemplate when
-    Tokens :: [arizona_scanner:token()],
+-spec parse_tokens([Token]) -> ParsedTemplate when
+    Token :: arizona_token:token(),
     ParsedTemplate :: parsed_template().
 parse_tokens(Tokens) ->
     {StaticParts, DynamicElements} = separate_static_dynamic(Tokens),
@@ -119,35 +119,36 @@ separate_static_dynamic(Tokens) ->
 
 separate_static_dynamic([], StaticAcc, DynamicAcc, _PrevType) ->
     {lists:reverse(StaticAcc), lists:reverse(DynamicAcc)};
-separate_static_dynamic(
-    [{static, _Line, Text} | Rest], StaticAcc, DynamicAcc, _PrevType
-) ->
-    separate_static_dynamic(Rest, [Text | StaticAcc], DynamicAcc, static);
-separate_static_dynamic(
-    [{dynamic, Line, ExprText} | Rest], StaticAcc, DynamicAcc, PrevType
-) ->
-    %% Store dynamic element - parse transform will handle variable analysis
-    NewDynamicAcc = [{Line, ExprText} | DynamicAcc],
+separate_static_dynamic([Token | Rest], StaticAcc, DynamicAcc, PrevType) ->
+    case arizona_token:get_category(Token) of
+        static ->
+            Text = arizona_token:get_content(Token),
+            separate_static_dynamic(Rest, [Text | StaticAcc], DynamicAcc, static);
+        dynamic ->
+            Line = arizona_token:get_line(Token),
+            ExprText = arizona_token:get_content(Token),
 
-    %% Add empty static part when:
-    %% 1. First token is dynamic (PrevType == undefined)
-    %% 2. Previous token was also dynamic (PrevType == dynamic)
-    NewStaticAcc =
-        case PrevType of
-            % First token is dynamic
-            undefined -> [~"" | StaticAcc];
-            % Consecutive dynamics
-            dynamic -> [~"" | StaticAcc];
-            % After static, no empty needed
-            static -> StaticAcc
-        end,
+            %% Store dynamic element - parse transform will handle variable analysis
+            NewDynamicAcc = [{Line, ExprText} | DynamicAcc],
 
-    separate_static_dynamic(Rest, NewStaticAcc, NewDynamicAcc, dynamic);
-separate_static_dynamic(
-    [{comment, _Line, _Text} | Rest], StaticAcc, DynamicAcc, PrevType
-) ->
-    %% Skip comments - preserve previous type
-    separate_static_dynamic(Rest, StaticAcc, DynamicAcc, PrevType).
+            %% Add empty static part when:
+            %% 1. First token is dynamic (PrevType == undefined)
+            %% 2. Previous token was also dynamic (PrevType == dynamic)
+            NewStaticAcc =
+                case PrevType of
+                    % First token is dynamic
+                    undefined -> [~"" | StaticAcc];
+                    % Consecutive dynamics
+                    dynamic -> [~"" | StaticAcc];
+                    % After static, no empty needed
+                    static -> StaticAcc
+                end,
+
+            separate_static_dynamic(Rest, NewStaticAcc, NewDynamicAcc, dynamic);
+        comment ->
+            %% Skip comments - preserve previous type
+            separate_static_dynamic(Rest, StaticAcc, DynamicAcc, PrevType)
+    end.
 
 %% Create error_info for proper compiler diagnostics with enhanced details
 -spec error_info(Cause) -> ErrorInfo when

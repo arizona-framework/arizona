@@ -89,7 +89,7 @@ generate_element_diff(AffectedElements, Template, View) ->
             {[], View};
         _ ->
             DynamicSequence = sets:to_list(AffectedElements),
-            DynamicTuple = arizona_template:dynamic(Template),
+            DynamicTuple = arizona_template:get_dynamic(Template),
             process_affected_elements(DynamicSequence, DynamicTuple, View)
     end.
 
