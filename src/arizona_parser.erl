@@ -38,13 +38,13 @@ create_template_ast(StaticParts, DynamicElements) ->
     StaticListAST = create_static_list_ast(StaticParts),
 
     % Convert dynamic elements to callback functions and create tuple AST
-    {DynamicTupleAST, DynamicAnnoAST, DynamicSequenceAST} = create_dynamic_ast(DynamicElements),
+    {DynamicAST, DynamicAnnoAST, DynamicSequenceAST} = create_dynamic_ast(DynamicElements),
 
     % Create tuple AST: {template, Static, Dynamic, DynamicSequence, DynamicAnno}
     erl_syntax:tuple([
         erl_syntax:atom(template),
         StaticListAST,
-        DynamicTupleAST,
+        DynamicAST,
         DynamicSequenceAST,
         DynamicAnnoAST
     ]).
@@ -92,14 +92,14 @@ create_dynamic_ast(DynamicElements) ->
     ]),
 
     % Create tuples and sequence
-    DynamicTuple = erl_syntax:tuple(CallbackFuns),
+    Dynamic = erl_syntax:tuple(CallbackFuns),
     DynamicAnno = erl_syntax:tuple([erl_syntax:integer(Line) || Line <- LineNumbers]),
     DynamicSequence = erl_syntax:list([
         erl_syntax:integer(N)
      || N <- lists:seq(1, length(DynamicElements))
     ]),
 
-    {DynamicTuple, DynamicAnno, DynamicSequence}.
+    {Dynamic, DynamicAnno, DynamicSequence}.
 
 %% Create callback function AST for dynamic element
 -spec create_dynamic_callback_ast(ExprText) -> erl_syntax:syntaxTree() when

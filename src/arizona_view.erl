@@ -42,8 +42,8 @@
 }).
 
 -opaque view() :: #view{}.
--type render_mode() :: render | diff | hierarchical.
--type layout() :: {LayoutModule :: module(), LayoutRenderFun :: atom(), SlotName :: atom()}.
+-nominal render_mode() :: render | diff | hierarchical.
+-nominal layout() :: {LayoutModule :: module(), LayoutRenderFun :: atom(), SlotName :: atom()}.
 
 %% --------------------------------------------------------------------
 %% Behavior callback definitions

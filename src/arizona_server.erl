@@ -27,7 +27,7 @@
     handler :: module()
 }).
 
--type route() ::
+-opaque route() ::
     {live, Path :: binary(), LiveModule :: module()}
     | {live_websocket, Path :: binary()}
     | {static, Path :: binary(), {dir, Directory :: binary()}}
@@ -37,7 +37,7 @@
 
 -opaque route_metadata() :: #route_metadata{}.
 
--type server_config() :: #{
+-nominal server_config() :: #{
     port := pos_integer(),
     routes := [route()]
 }.

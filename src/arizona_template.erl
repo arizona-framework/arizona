@@ -26,6 +26,7 @@
 -export_type([dynamic/0]).
 -export_type([dynamic_sequence/0]).
 -export_type([dynamic_anno/0]).
+-export_type([render_callback/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -43,6 +44,7 @@
 -nominal dynamic() :: tuple().
 -nominal dynamic_sequence() :: [pos_integer()].
 -nominal dynamic_anno() :: tuple().
+-nominal render_callback() :: fun((arizona_view:view()) -> {dynamic(), arizona_view:view()}).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -135,7 +137,7 @@ find_binding(Key, Bindings) ->
 -spec render_stateful(Module, Bindings) -> Callback when
     Module :: module(),
     Bindings :: arizona_binder:bindings(),
-    Callback :: fun((arizona_view:view()) -> {iodata() | term(), arizona_view:view()}).
+    Callback :: render_callback().
 render_stateful(Module, Bindings) ->
     fun(View) ->
         case arizona_view:get_render_mode(View) of
@@ -152,7 +154,7 @@ render_stateful(Module, Bindings) ->
     Module :: module(),
     Function :: atom(),
     Bindings :: arizona_binder:bindings(),
-    Callback :: fun((arizona_view:view()) -> {iodata() | term(), arizona_view:view()}).
+    Callback :: render_callback().
 render_stateless(Module, Fun, Bindings) ->
     fun(View) ->
         case arizona_view:get_render_mode(View) of
