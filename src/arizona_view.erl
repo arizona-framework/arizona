@@ -93,12 +93,7 @@ call_mount_callback(Module, Req) ->
     Result :: {noreply, State1},
     State1 :: arizona_stateful:state().
 call_handle_info_callback(Module, Info, State) ->
-    case erlang:function_exported(Module, handle_info, 2) of
-        true ->
-            apply(Module, handle_info, [Info, State]);
-        false ->
-            {noreply, State}
-    end.
+    apply(Module, handle_info, [Info, State]).
 
 -spec new(Module, State, RenderMode, LivePid) -> View when
     Module :: module(),
