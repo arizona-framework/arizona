@@ -99,3 +99,15 @@ zip_static_dynamic([S | Static], []) ->
     [S | zip_static_dynamic(Static, [])];
 zip_static_dynamic([], [D | Dynamic]) ->
     [D | zip_static_dynamic([], Dynamic)].
+
+%% --------------------------------------------------------------------
+%% EUnit Tests
+%% --------------------------------------------------------------------
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+zip_static_dynamic_test() ->
+    ?assertEqual([], zip_static_dynamic([], [])).
+
+-endif.
