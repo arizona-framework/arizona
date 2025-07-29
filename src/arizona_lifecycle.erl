@@ -20,18 +20,24 @@
     View1 :: arizona_view:view().
 prepare_render(Module, Bindings, View) ->
     Id = arizona_stateful:get_id(Bindings),
-
     % Check if component already exists or needs mounting
     case arizona_view:find_stateful_state(Id, View) of
         {ok, State} ->
-            RenderBindings = arizona_stateful:get_bindings(State),
-            Template = arizona_stateful:call_render_callback(Module, RenderBindings),
-            StatefulView = arizona_view:put_stateful_state(Id, State, View),
-            {Id, Template, StatefulView};
+            render(Module, View, Id, State);
         error ->
-            MountState = arizona_stateful:call_mount_callback(Module, Bindings),
-            MountBindings = arizona_stateful:get_bindings(MountState),
-            Template = arizona_stateful:call_render_callback(Module, MountBindings),
-            MountView = arizona_view:put_stateful_state(Id, MountState, View),
-            {Id, Template, MountView}
+            mount_and_render(Module, Bindings, View, Id)
     end.
+
+%% --------------------------------------------------------------------
+%% Internal functions
+%% --------------------------------------------------------------------
+
+render(Module, View, Id, State) ->
+    Bindings = arizona_stateful:get_bindings(State),
+    Template = arizona_stateful:call_render_callback(Module, Bindings),
+    MountView = arizona_view:put_stateful_state(Id, State, View),
+    {Id, Template, MountView}.
+
+mount_and_render(Module, Bindings, View, Id) ->
+    State = arizona_stateful:call_mount_callback(Module, Bindings),
+    render(Module, View, Id, State).
