@@ -45,8 +45,8 @@
     View1 :: arizona_view:view().
 hierarchical_stateful(Module, Bindings, View) ->
     {Id, Template, View1} = arizona_lifecycle:prepare_render(Module, Bindings, View),
-    ok = arizona_view:live_clear_stateful_dependencies(Id, View1),
-    ok = arizona_view:live_set_current_stateful_id(Id, View1),
+    ok = arizona_tracker_dict:clear_stateful_dependencies(Id),
+    ok = arizona_tracker_dict:set_current_stateful_id(Id),
     {Dynamic, DynamicView} = arizona_renderer:render_dynamic(
         Template, View1
     ),
