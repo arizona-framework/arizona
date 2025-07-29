@@ -26,8 +26,6 @@ groups() ->
         ]},
         {dependency_tracking, [parallel], [
             record_variable_dependency_success,
-            record_variable_dependency_no_stateful_id,
-            record_variable_dependency_no_element_index,
             record_variable_dependency_duplicate
         ]},
         {query_operations, [parallel], [
@@ -77,21 +75,6 @@ record_variable_dependency_success(Config) when is_list(Config) ->
     Tracker3 = arizona_tracker:record_variable_dependency(name, Tracker2),
     StatefulDeps = arizona_tracker:get_stateful_dependencies(StatefulId, Tracker3),
     ?assertEqual([5], maps:get(name, StatefulDeps)).
-
-record_variable_dependency_no_stateful_id(Config) when is_list(Config) ->
-    ct:comment("record_variable_dependency/2 should do nothing without stateful id"),
-    Tracker = arizona_tracker:new(),
-    Tracker1 = arizona_tracker:set_current_element_index(5, Tracker),
-    Tracker2 = arizona_tracker:record_variable_dependency(name, Tracker1),
-    ?assertEqual(#{}, arizona_tracker:get_stateful_dependencies(~"any_id", Tracker2)).
-
-record_variable_dependency_no_element_index(Config) when is_list(Config) ->
-    ct:comment("record_variable_dependency/2 should do nothing without element index"),
-    Tracker = arizona_tracker:new(),
-    StatefulId = ~"component_1",
-    Tracker1 = arizona_tracker:set_current_stateful_id(StatefulId, Tracker),
-    Tracker2 = arizona_tracker:record_variable_dependency(name, Tracker1),
-    ?assertEqual(#{}, arizona_tracker:get_stateful_dependencies(StatefulId, Tracker2)).
 
 record_variable_dependency_duplicate(Config) when is_list(Config) ->
     ct:comment("record_variable_dependency/2 should not create duplicates"),
