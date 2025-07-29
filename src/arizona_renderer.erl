@@ -7,7 +7,6 @@
 
 -export([render_stateful/3]).
 -export([render_stateless/4]).
--export([render_template/2]).
 -export([render_dynamic/2]).
 
 %% --------------------------------------------------------------------
@@ -34,8 +33,8 @@
     View1 :: arizona_view:view().
 render_stateful(Module, Bindings, View) ->
     {Id, Template, View1} = arizona_lifecycle:prepare_render(Module, Bindings, View),
-    ok = arizona_view:live_clear_stateful_dependencies(Id, View1),
-    ok = arizona_view:live_set_current_stateful_id(Id, View1),
+    ok = arizona_tracker_dict:clear_stateful_dependencies(Id),
+    ok = arizona_tracker_dict:set_current_stateful_id(Id),
     render_template(Template, View1).
 
 -spec render_stateless(Module, Function, Bindings, View) -> {Html, View1} when
@@ -48,17 +47,6 @@ render_stateful(Module, Bindings, View) ->
 render_stateless(Module, Fun, Bindings, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
     render_template(Template, View).
-
--spec render_template(Template, View) -> {Html, View1} when
-    Template :: arizona_template:template(),
-    View :: arizona_view:view(),
-    Html :: arizona_html:html(),
-    View1 :: arizona_view:view().
-render_template(Template, View) ->
-    Static = arizona_template:get_static(Template),
-    {Dynamic, FinalView} = render_dynamic(Template, View),
-    Html = zip_static_dynamic(Static, Dynamic),
-    {Html, FinalView}.
 
 -spec render_dynamic(Template, View) -> {Dynamic, View1} when
     Template :: arizona_template:template(),
@@ -74,10 +62,31 @@ render_dynamic(Template, View) ->
 %% Internal Functions
 %% --------------------------------------------------------------------
 
+-spec render_template(Template, View) -> {Html, View1} when
+    Template :: arizona_template:template(),
+    View :: arizona_view:view(),
+    Html :: arizona_html:html(),
+    View1 :: arizona_view:view().
+render_template(Template, View) ->
+    Static = arizona_template:get_static(Template),
+    {Dynamic, FinalView} = render_dynamic(Template, View),
+    Html = zip_static_dynamic(Static, Dynamic),
+    {Html, FinalView}.
+
+%% Zip static and dynamic parts for list item
+zip_static_dynamic([], []) ->
+    [];
+zip_static_dynamic([S | Static], [D | Dynamic]) ->
+    [S, D | zip_static_dynamic(Static, Dynamic)];
+zip_static_dynamic([S | Static], []) ->
+    [S | zip_static_dynamic(Static, [])];
+zip_static_dynamic([], [D | Dynamic]) ->
+    [D | zip_static_dynamic([], Dynamic)].
+
 render_dynamic_callbacks([], _Dynamic, View) ->
     {[], View};
 render_dynamic_callbacks([ElementIndex | T], Dynamic, View) ->
-    ok = arizona_view:live_set_current_element_index(ElementIndex, View),
+    ok = arizona_tracker_dict:set_current_element_index(ElementIndex),
     DynamicCallback = element(ElementIndex, Dynamic),
     case DynamicCallback() of
         Callback when is_function(Callback, 1) ->
@@ -89,16 +98,6 @@ render_dynamic_callbacks([ElementIndex | T], Dynamic, View) ->
             {RestHtml, FinalView} = render_dynamic_callbacks(T, Dynamic, View),
             {[Html | RestHtml], FinalView}
     end.
-
-%% Zip static and dynamic parts for list item
-zip_static_dynamic([], []) ->
-    [];
-zip_static_dynamic([S | Static], [D | Dynamic]) ->
-    [S, D | zip_static_dynamic(Static, Dynamic)];
-zip_static_dynamic([S | Static], []) ->
-    [S | zip_static_dynamic(Static, [])];
-zip_static_dynamic([], [D | Dynamic]) ->
-    [D | zip_static_dynamic([], Dynamic)].
 
 %% --------------------------------------------------------------------
 %% EUnit Tests

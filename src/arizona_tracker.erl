@@ -76,13 +76,7 @@ record_variable_dependency(VarName, #tracker{} = Tracker) ->
     CurrentStatefulId = Tracker#tracker.current_stateful_id,
     CurrentElementIndex = Tracker#tracker.current_element_index,
     case {CurrentStatefulId, CurrentElementIndex} of
-        {undefined, _} ->
-            % No current stateful component
-            Tracker;
-        {_, undefined} ->
-            % No current element
-            Tracker;
-        {StatefulId, ElementIndex} ->
+        {StatefulId, ElementIndex} when is_binary(StatefulId), is_integer(ElementIndex) ->
             Dependencies = Tracker#tracker.dependencies,
             StatefulDependencies = maps:get(StatefulId, Dependencies, #{}),
             ExistingIndexes = maps:get(VarName, StatefulDependencies, []),

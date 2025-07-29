@@ -16,9 +16,6 @@
 -export([find_stateful_state/2]).
 -export([put_stateful_state/3]).
 -export([get_live_pid/1]).
--export([live_set_current_stateful_id/2]).
--export([live_set_current_element_index/2]).
--export([live_clear_stateful_dependencies/2]).
 -export([live_put_stateful_hierarchical/3]).
 
 %% --------------------------------------------------------------------
@@ -180,51 +177,6 @@ put_stateful_state(Id, State, #view{} = View) ->
     LivePid :: pid() | undefined.
 get_live_pid(#view{} = View) ->
     View#view.live_pid.
-
--spec live_set_current_stateful_id(StatefulId, View) -> ok when
-    StatefulId :: arizona_stateful:id(),
-    View :: view().
-live_set_current_stateful_id(StatefulId, #view{} = View) ->
-    case View#view.live_pid of
-        undefined ->
-            ok;
-        LivePid ->
-            Tracker = arizona_live:get_dependency_tracker(LivePid),
-            UpdatedTracker = arizona_tracker:set_current_stateful_id(
-                StatefulId, Tracker
-            ),
-            arizona_live:set_dependency_tracker(LivePid, UpdatedTracker)
-    end.
-
--spec live_set_current_element_index(ElementIndex, View) -> ok when
-    ElementIndex :: arizona_tracker:element_index(),
-    View :: view().
-live_set_current_element_index(ElementIndex, #view{} = View) ->
-    case View#view.live_pid of
-        undefined ->
-            ok;
-        LivePid ->
-            Tracker = arizona_live:get_dependency_tracker(LivePid),
-            UpdatedTracker = arizona_tracker:set_current_element_index(
-                ElementIndex, Tracker
-            ),
-            arizona_live:set_dependency_tracker(LivePid, UpdatedTracker)
-    end.
-
--spec live_clear_stateful_dependencies(StatefulId, View) -> ok when
-    StatefulId :: arizona_stateful:id(),
-    View :: view().
-live_clear_stateful_dependencies(StatefulId, #view{} = View) ->
-    case View#view.live_pid of
-        undefined ->
-            ok;
-        LivePid ->
-            Tracker = arizona_live:get_dependency_tracker(LivePid),
-            UpdatedTracker = arizona_tracker:clear_stateful_dependencies(
-                StatefulId, Tracker
-            ),
-            arizona_live:set_dependency_tracker(LivePid, UpdatedTracker)
-    end.
 
 -spec live_put_stateful_hierarchical(StatefulId, HierarchicalData, View) -> ok when
     StatefulId :: arizona_stateful:id(),

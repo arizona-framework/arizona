@@ -24,10 +24,9 @@ prepare_render(Module, Bindings, View) ->
     % Check if component already exists or needs mounting
     case arizona_view:find_stateful_state(Id, View) of
         {ok, State} ->
-            BindingsState = arizona_stateful:merge_bindings(Bindings, State),
-            RenderBindings = arizona_stateful:get_bindings(BindingsState),
+            RenderBindings = arizona_stateful:get_bindings(State),
             Template = arizona_stateful:call_render_callback(Module, RenderBindings),
-            StatefulView = arizona_view:put_stateful_state(Id, BindingsState, View),
+            StatefulView = arizona_view:put_stateful_state(Id, State, View),
             {Id, Template, StatefulView};
         error ->
             MountState = arizona_stateful:call_mount_callback(Module, Bindings),
