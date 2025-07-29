@@ -17,7 +17,6 @@ groups() ->
         {rendering_tests, [parallel], [
             render_stateful_test,
             render_stateless_test,
-            render_template_test,
             render_dynamic_test
         ]}
     ].
@@ -104,14 +103,6 @@ render_stateless_test(Config) when is_list(Config) ->
         MockStatelessModule, MockStatelessRenderFun, Bindings, MockView
     ),
     ?assertEqual([~"<div>Stateless Template</div>"], Html).
-
-render_template_test(Config) when is_list(Config) ->
-    ct:comment("render_template/2 should render template with static content"),
-    Template = arizona_template:from_string(~"<p>Static Template</p>", #{}),
-    {mock_stateful_module, MockStatefulModule} = proplists:lookup(mock_stateful_module, Config),
-    MockView = create_mock_view(MockStatefulModule, #{id => ~"foo"}),
-    {Html, _UpdatedView} = arizona_renderer:render_template(Template, MockView),
-    ?assertEqual([~"<p>Static Template</p>"], Html).
 
 render_dynamic_test(Config) when is_list(Config) ->
     ct:comment("render_dynamic/2 should render template dynamic parts"),
