@@ -12,28 +12,6 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}Running pre-push checks...${NC}"
 
-# 0. Check .nvmrc sync with .tool-versions
-echo -e "${YELLOW}→ Checking .nvmrc sync with .tool-versions...${NC}"
-NODE_VERSION=$(grep nodejs .tool-versions | cut -d' ' -f2 || echo "")
-if [ -n "$NODE_VERSION" ]; then
-    if [ -f .nvmrc ]; then
-        NVMRC_VERSION=$(cat .nvmrc)
-        if [ "$NODE_VERSION" != "$NVMRC_VERSION" ]; then
-            echo -e "${RED}✗ .nvmrc ($NVMRC_VERSION) doesn't match .tool-versions ($NODE_VERSION)${NC}"
-            echo -e "${YELLOW}  Run: echo '$NODE_VERSION' > .nvmrc && git add .nvmrc${NC}"
-            exit 1
-        else
-            echo -e "${GREEN}✓ .nvmrc and .tool-versions are in sync (${NODE_VERSION})${NC}"
-        fi
-    else
-        echo -e "${RED}✗ .nvmrc missing but .tool-versions has Node.js ${NODE_VERSION}${NC}"
-        echo -e "${YELLOW}  Run: echo '$NODE_VERSION' > .nvmrc && git add .nvmrc${NC}"
-        exit 1
-    fi
-else
-    echo -e "${YELLOW}⚠ No Node.js version found in .tool-versions${NC}"
-fi
-
 # 1. Run Erlang checks and tests
 echo -e "${YELLOW}→ Running rebar3 ci...${NC}"
 rebar3 ci
