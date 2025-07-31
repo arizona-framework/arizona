@@ -46,7 +46,7 @@
 new(Category, Line, Content) when
     (Category =:= static orelse Category =:= dynamic orelse Category =:= comment),
     is_integer(Line),
-    Line >= 1,
+    Line >= 0,
     is_binary(Content)
 ->
     #token{

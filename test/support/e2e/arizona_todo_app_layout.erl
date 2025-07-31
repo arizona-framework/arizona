@@ -1,10 +1,9 @@
 -module(arizona_todo_app_layout).
-%-compile({parse_transform, arizona_parse_transformform}).
--arizona_parse_transformform([render/1]).
+-compile({parse_transform, arizona_parse_transform}).
 -export([render/1]).
 
-render(Socket) ->
-    arizona_html:render_stateless(~"""
+render(Bindings) ->
+    arizona_template:from_string(~"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -122,7 +121,7 @@ render(Socket) ->
         </style>
     </head>
     <body>
-        {arizona_html:render_slot(main_content, Socket)}
+        {arizona_template:render_slot(main_content, Bindings)}
         <script type="module">
             import Arizona from '/assets/js/arizona.min.js';
             globalThis.arizona = new Arizona();
@@ -130,4 +129,4 @@ render(Socket) ->
         </script>
     </body>
     </html>
-    """, Socket).
+    """).

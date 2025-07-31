@@ -5,8 +5,8 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([from_string/2]).
--export([from_string/4]).
+-export([from_string/1]).
+-export([from_string/3]).
 -export([get_static/1]).
 -export([get_dynamic/1]).
 -export([get_dynamic_sequence/1]).
@@ -16,19 +16,23 @@
 -export([find_binding/2]).
 -export([render_stateful/2]).
 -export([render_stateless/3]).
+-export([render_slot/2]).
+-export([render_list/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([find_binding/2]).
--ignore_xref([from_string/2]).
--ignore_xref([from_string/4]).
+-ignore_xref([from_string/1]).
+-ignore_xref([from_string/3]).
+-ignore_xref([get_dynamic_anno/1]).
 -ignore_xref([get_binding/2]).
 -ignore_xref([get_binding/3]).
--ignore_xref([get_dynamic_anno/1]).
+-ignore_xref([find_binding/2]).
 -ignore_xref([render_stateful/2]).
 -ignore_xref([render_stateless/3]).
+-ignore_xref([render_slot/2]).
+-ignore_xref([render_list/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -63,30 +67,26 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
--spec from_string(String, Bindings) -> template() when
-    String :: binary(),
-    Bindings :: arizona_binder:bindings().
-from_string(String, Bindings) ->
-    from_string(erlang, 1, String, Bindings).
+-spec from_string(String) -> template() when
+    String :: binary().
+from_string(String) ->
+    from_string(erlang, 0, String).
 
--spec from_string(Module, Line, String, Bindings) -> template() when
+-spec from_string(Module, Line, String) -> template() when
     Module :: module(),
     Line :: pos_integer(),
-    String :: binary(),
-    Bindings :: arizona_binder:bindings().
-from_string(Module, Line, String, Bindings) when
-    is_atom(Module), is_integer(Line), is_binary(String), is_map(Bindings)
-->
+    String :: binary().
+from_string(Module, Line, String) when is_atom(Module) ->
     % Scan template content into tokens
     Tokens = arizona_scanner:scan_string(Line, String),
 
     % Parse tokens into AST
-    AST = arizona_parser:parse_tokens(Tokens),
+    AST = arizona_parser:parse_tokens(Tokens, []),
 
     % Evaluate AST to get template record
     erl_eval:expr(
         erl_syntax:revert(AST),
-        Bindings#{'Bindings' => Bindings},
+        #{},
         {value, fun(Function, Args) ->
             apply(Module, Function, Args)
         end},
@@ -178,3 +178,18 @@ render_stateless(Module, Fun, Bindings) ->
                 arizona_hierarchical:hierarchical_stateless(Module, Fun, Bindings, View)
         end
     end.
+
+-spec render_slot(Name, Bindings) -> Result when
+    Name :: arizona_binder:key(),
+    Bindings :: arizona_binder:bindings(),
+    Result :: binary().
+render_slot(_Binding, _Bindings) ->
+    ~"[SLOT]".
+
+-spec render_list(Callback, List) -> Result when
+    Callback :: fun((Item) -> arizona_template:template()),
+    List :: [Item],
+    Item :: dynamic(),
+    Result :: binary().
+render_list(_Callback, _List) ->
+    ~"[LIST]".

@@ -50,7 +50,7 @@ init_per_suite(Config) ->
                 arizona_template:get_binding(name, Bindings)
             end)
         })}
-        """, Bindings).
+        """).
 
     handle_event(~"update_name", #{~"name" := Name}, State) ->
         {noreply, arizona_stateful:put_binding(name, Name, State)};
@@ -65,7 +65,7 @@ init_per_suite(Config) ->
     '@render_fun'(Bindings) ->
         arizona_template:from_string(~"""
         <span>Stateless: {arizona_template:get_binding(title, Bindings)}</span>
-        """, Bindings).
+        """).
     """", [
         {module, merl:term(MockStatelessModule)},
         {render_fun, merl:term(MockStatelessRenderFun)}

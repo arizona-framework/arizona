@@ -53,10 +53,10 @@ init_per_suite(Config) ->
     mount(Bindings) ->
         arizona_stateful:new('@module', Bindings).
 
-    render(Bindings) ->
+    render(_Bindings) ->
         arizona_template:from_string(~"""
         <h1>Mock Template</h1>
-        """, Bindings).
+        """).
     """", [{module, merl:term(MockModule)}]),
 
     MockEventsModuleCode = merl:qquote(~""""
@@ -70,10 +70,10 @@ init_per_suite(Config) ->
     mount(Bindings) ->
         arizona_stateful:new('@module', Bindings).
 
-    render(Bindings) ->
+    render(_Bindings) ->
         arizona_template:from_string(~"""
         <h1>Mock Template</h1>
-        """, Bindings).
+        """).
 
     handle_event(~"reply", Params, State) ->
         {reply, Params, State};
