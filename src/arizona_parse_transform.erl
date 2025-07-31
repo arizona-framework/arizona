@@ -5,6 +5,7 @@
 %% --------------------------------------------------------------------
 
 -export([parse_transform/2]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -17,7 +18,7 @@
 %% --------------------------------------------------------------------
 
 -spec parse_transform(Forms, Options) -> Forms when
-    Forms :: [erl_parse:abstract_form()],
+    Forms :: compile:forms(),
     Options :: [compile:option()].
 parse_transform(Forms, Options) ->
     ModuleName = extract_module_name(Forms),
@@ -26,13 +27,23 @@ parse_transform(Forms, Options) ->
      || FormTree <- Forms
     ]).
 
+format_error(arizona_template_extraction_failed, [{_M, _F, _As, Info} | _]) ->
+    ErrorInfo = proplists:get_value(error_info, Info, #{}),
+    {ModuleName, Line, Class, Reason, Stacktrace} = maps:get(cause, ErrorInfo, undefined),
+    #{
+        general => "Arizona template parsing failed",
+        reason => io_lib:format("Failed to extract template in ~p at line ~p:\n~p:~p:~p", [
+            ModuleName, Line, Class, Reason, Stacktrace
+        ])
+    }.
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
 %% Extract module name from forms
 -spec extract_module_name(Forms) -> ModuleName when
-    Forms :: [erl_parse:abstract_form()],
+    Forms :: compile:forms(),
     ModuleName :: atom() | undefined.
 extract_module_name([{attribute, _Line, module, ModuleName} | _]) when is_atom(ModuleName) ->
     ModuleName;
@@ -42,30 +53,44 @@ extract_module_name([]) ->
     undefined.
 
 %% Transform a single form tree
-transform_form(FormTree, ModuleName, _Options) ->
+transform_form(FormTree, ModuleName, CompileOpts) ->
     erl_syntax_lib:map(
         fun(Node) ->
-            transform_node(erl_syntax:revert(Node), ModuleName)
+            transform_node(erl_syntax:revert(Node), ModuleName, CompileOpts)
         end,
         FormTree
     ).
 
 %% Transform individual AST nodes
-transform_node(Node, ModuleName) ->
+transform_node(Node, ModuleName, CompileOpts) ->
     case erl_syntax:type(Node) of
         application ->
-            transform_application(Node, ModuleName);
+            transform_application(Node, ModuleName, CompileOpts);
         _ ->
             Node
     end.
 
 %% Transform function applications
-transform_application(Node, ModuleName) ->
+transform_application(Node, ModuleName, CompileOpts) ->
     case analyze_application(Node) of
-        {arizona_template, from_string, 2, [TemplateArg, _BindingsArg]} ->
+        {arizona_template, from_string, 1, [TemplateArg]} ->
             Anno = erl_anno:from_term(erl_syntax:get_ann(Node)),
             Line = erl_anno:line(Anno),
-            transform_from_string(ModuleName, Line, TemplateArg);
+            transform_from_string(ModuleName, Line, TemplateArg, CompileOpts);
+        {arizona_template, render_list, 2, [FunArg, ListArg]} ->
+            % Transform the function argument to process nested from_string calls
+            TransformedFun = erl_syntax_lib:map(
+                fun(InnerNode) ->
+                    transform_node(erl_syntax:revert(InnerNode), ModuleName, CompileOpts)
+                end,
+                FunArg
+            ),
+            % Reconstruct the render_list call with the transformed function
+            Module = erl_syntax:atom(arizona_template),
+            Function = erl_syntax:atom(render_list),
+            erl_syntax:application(erl_syntax:module_qualifier(Module, Function), [
+                TransformedFun, ListArg
+            ]);
         _ ->
             Node
     end.
@@ -98,18 +123,15 @@ analyze_application(Node) ->
             undefined
     end.
 
-%% Transform arizona_template:from_string/2 calls
-transform_from_string(ModuleName, Line, TemplateArg) ->
+%% Transform arizona_template:from_string/1 calls
+transform_from_string(ModuleName, Line, TemplateArg, CompileOpts) ->
     try
         % Extract template content and line number
-        case eval_expr(ModuleName, TemplateArg, #{}) of
-            String when is_binary(String) ->
-                % Scan template content into tokens
-                Tokens = arizona_scanner:scan_string(Line, String),
-
-                % Parse tokens into AST
-                arizona_parser:parse_tokens(Tokens)
-        end
+        String = eval_expr(ModuleName, TemplateArg),
+        % Scan template content into tokens
+        Tokens = arizona_scanner:scan_string(Line, String),
+        % Parse tokens into AST
+        arizona_parser:parse_tokens(Tokens, CompileOpts)
     catch
         Class:Reason:Stacktrace ->
             error(
@@ -122,15 +144,14 @@ transform_from_string(ModuleName, Line, TemplateArg) ->
 %% Utility Functions
 
 %% Evaluate expression
--spec eval_expr(Module, BinaryForm, Bindings) -> Result when
+-spec eval_expr(Module, BinaryForm) -> Result when
     Module :: module(),
     BinaryForm :: erl_parse:abstract_expr(),
-    Bindings :: #{atom() => dynamic()},
-    Result :: term().
-eval_expr(Module, BinaryForm, Bindings) ->
+    Result :: dynamic().
+eval_expr(Module, BinaryForm) ->
     erl_eval:expr(
         BinaryForm,
-        Bindings,
+        #{},
         {value, fun(Function, Args) -> apply(Module, Function, Args) end},
         none,
         value
@@ -138,7 +159,7 @@ eval_expr(Module, BinaryForm, Bindings) ->
 
 %% Create error_info for proper compiler diagnostics with enhanced details
 -spec error_info(Cause) -> ErrorInfo when
-    Cause :: term(),
+    Cause :: dynamic(),
     ErrorInfo :: [{error_info, map()}].
 error_info(Cause) ->
     [

@@ -24,7 +24,7 @@
     Line :: arizona_token:line(),
     String :: binary(),
     Token :: arizona_token:token().
-scan_string(Line, String) when is_integer(Line), Line >= 1, is_binary(String) ->
+scan_string(Line, String) when is_integer(Line), Line >= 0, is_binary(String) ->
     scan(String, String, #state{
         line = Line,
         position = 0
