@@ -78,8 +78,14 @@ transform_node(Node, ModuleName, CompileOpts) ->
 transform_application(Node, ModuleName, CompileOpts) ->
     case analyze_application(Node) of
         {arizona_template, from_string, 1, [TemplateArg]} ->
-            Anno = erl_anno:from_term(erl_syntax:get_ann(Node)),
-            Line = erl_anno:line(Anno),
+            Pos = erl_syntax:get_pos(Node),
+            Line =
+                case erl_anno:is_anno(Pos) of
+                    true ->
+                        erl_anno:line(Pos);
+                    false ->
+                        Pos
+                end,
             transform_from_string(ModuleName, Line, TemplateArg, CompileOpts);
         {arizona_template, render_list, 2, [FunArg, ListArg]} ->
             % Transform the function argument to process nested from_string calls
