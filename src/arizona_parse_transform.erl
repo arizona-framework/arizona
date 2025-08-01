@@ -27,9 +27,13 @@ parse_transform(Forms, Options) ->
      || FormTree <- Forms
     ]).
 
+-spec format_error(Reason, StackTrace) -> ErrorMap when
+    Reason :: arizona_template_extraction_failed,
+    StackTrace :: erlang:stacktrace(),
+    ErrorMap :: #{general => string(), reason => io_lib:chars()}.
 format_error(arizona_template_extraction_failed, [{_M, _F, _As, Info} | _]) ->
-    ErrorInfo = proplists:get_value(error_info, Info, #{}),
-    {ModuleName, Line, Class, Reason, Stacktrace} = maps:get(cause, ErrorInfo, undefined),
+    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
+    {ModuleName, Line, Class, Reason, Stacktrace} = maps:get(cause, ErrorInfo),
     #{
         general => "Arizona template parsing failed",
         reason => io_lib:format("Failed to extract template in ~p at line ~p:\n~p:~p:~p", [
