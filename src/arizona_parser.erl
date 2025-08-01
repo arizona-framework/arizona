@@ -31,33 +31,20 @@ parse_tokens(Tokens, CompileOpts) ->
     {StaticParts, DynamicElements} = separate_static_dynamic(Tokens),
     create_template_ast(StaticParts, DynamicElements, CompileOpts).
 
+-spec format_error(Reason, StackTrace) -> ErrorMap when
+    Reason :: arizona_create_dynamic_callback_failed | term(),
+    StackTrace :: erlang:stacktrace(),
+    ErrorMap :: #{general => string(), reason => io_lib:chars()}.
 format_error(arizona_create_dynamic_callback_failed, [{_M, _F, _As, Info} | _]) ->
-    ErrorInfo = proplists:get_value(error_info, Info, #{}),
-    Cause = maps:get(cause, ErrorInfo, undefined),
-    case Cause of
-        {Line, ExprText, Class, Reason, _Stacktrace} ->
-            #{
-                general => "Arizona template dynamic callback creation failed",
-                reason => io_lib:format(
-                    "Failed to create callback for expression '~s' at line ~p: ~p:~p", [
-                        ExprText, Line, Class, Reason
-                    ]
-                )
-            };
-        _ ->
-            #{
-                general => "Arizona template dynamic callback creation failed",
-                reason => io_lib:format("Dynamic callback creation failed with unknown cause: ~p", [
-                    Cause
-                ])
-            }
-    end;
-format_error(Reason, [{_M, _F, _As, Info} | _]) ->
-    ErrorInfo = proplists:get_value(error_info, Info, #{}),
-    Cause = maps:get(cause, ErrorInfo, undefined),
+    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
+    {Line, ExprText, Class, Reason, Stacktrace} = maps:get(cause, ErrorInfo),
     #{
-        general => "Arizona parser error",
-        reason => io_lib:format("~p: ~p (cause: ~p)", [?MODULE, Reason, Cause])
+        general => "Arizona template dynamic callback creation failed",
+        reason => io_lib:format(
+            "Failed to create callback for expression '~s' at line ~p:\n~p:~p:~p", [
+                ExprText, Line, Class, Reason, Stacktrace
+            ]
+        )
     }.
 
 %% --------------------------------------------------------------------
