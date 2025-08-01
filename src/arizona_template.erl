@@ -6,7 +6,7 @@
 %% --------------------------------------------------------------------
 
 -export([from_string/1]).
--export([from_string/3]).
+-export([from_string/4]).
 -export([get_static/1]).
 -export([get_dynamic/1]).
 -export([get_dynamic_sequence/1]).
@@ -24,7 +24,7 @@
 %% --------------------------------------------------------------------
 
 -ignore_xref([from_string/1]).
--ignore_xref([from_string/3]).
+-ignore_xref([from_string/4]).
 -ignore_xref([get_dynamic_anno/1]).
 -ignore_xref([get_binding/2]).
 -ignore_xref([get_binding/3]).
@@ -67,16 +67,19 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
--spec from_string(String) -> template() when
-    String :: binary().
+-spec from_string(String) -> Template when
+    String :: binary(),
+    Template :: template().
 from_string(String) ->
-    from_string(erlang, 0, String).
+    from_string(erlang, 0, String, #{}).
 
--spec from_string(Module, Line, String) -> template() when
+-spec from_string(Module, Line, String, Bindings) -> Template when
     Module :: module(),
     Line :: pos_integer(),
-    String :: binary().
-from_string(Module, Line, String) when is_atom(Module) ->
+    String :: binary(),
+    Bindings :: arizona_binder:bindings(),
+    Template :: template().
+from_string(Module, Line, String, Bindings) when is_atom(Module) ->
     % Scan template content into tokens
     Tokens = arizona_scanner:scan_string(Line, String),
 
@@ -86,7 +89,7 @@ from_string(Module, Line, String) when is_atom(Module) ->
     % Evaluate AST to get template record
     erl_eval:expr(
         erl_syntax:revert(AST),
-        #{},
+        #{'Bindings' => Bindings},
         {value, fun(Function, Args) ->
             apply(Module, Function, Args)
         end},
