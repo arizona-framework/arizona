@@ -156,6 +156,6 @@ render_dynamic_callbacks_test_() ->
 create_test_view() ->
     % Create a minimal test view for internal function testing
     State = arizona_stateful:new(test_module, arizona_binder:new(#{id => ~"test"})),
-    arizona_view:new(test_module, State, render, undefined).
+    arizona_view:new(State, render, undefined).
 
 -endif.

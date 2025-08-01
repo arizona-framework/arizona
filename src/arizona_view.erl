@@ -6,7 +6,7 @@
 
 -export([call_mount_callback/2]).
 -export([call_handle_info_callback/3]).
--export([new/4]).
+-export([new/3]).
 -export([get_id/1]).
 -export([get_state/1]).
 -export([update_state/2]).
@@ -92,14 +92,12 @@ call_mount_callback(Module, Req) ->
 call_handle_info_callback(Module, Info, State) ->
     apply(Module, handle_info, [Info, State]).
 
--spec new(Module, State, RenderMode, LivePid) -> View when
-    Module :: module(),
+-spec new(State, RenderMode, LivePid) -> View when
     State :: arizona_stateful:state(),
     RenderMode :: render | hierarchical,
     LivePid :: pid() | undefined,
     View :: view().
-new(Module, State, RenderMode, LivePid) when
-    is_atom(Module),
+new(State, RenderMode, LivePid) when
     (RenderMode =:= render orelse RenderMode =:= hierarchical),
     (is_pid(LivePid) orelse LivePid =:= undefined)
 ->

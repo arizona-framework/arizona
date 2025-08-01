@@ -34,7 +34,7 @@ handle_live_request(ViewModule, CowboyRequest, State) ->
         ArizonaRequest = arizona_cowboy_request:new(CowboyRequest),
         ViewState = arizona_view:call_mount_callback(ViewModule, ArizonaRequest),
         Bindings = arizona_stateful:get_bindings(ViewState),
-        View = arizona_view:new(ViewModule, ViewState, render, undefined),
+        View = arizona_view:new(ViewState, render, undefined),
         {Html, _RenderView} = arizona_renderer:render_stateful(ViewModule, Bindings, View),
         CowboyRequest1 = cowboy_req:reply(
             200, #{~"content-type" => ~"text/html"}, Html, CowboyRequest

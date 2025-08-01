@@ -59,7 +59,7 @@ init(CowboyRequest, _State) ->
 websocket_init({ViewModule, ArizonaRequest}) ->
     {ok, LivePid} = arizona_live:start_link(),
     ViewState = arizona_live:mount_view(LivePid, ViewModule, ArizonaRequest),
-    View = arizona_view:new(ViewModule, ViewState, hierarchical, LivePid),
+    View = arizona_view:new(ViewState, hierarchical, LivePid),
     ok = arizona_live:set_view(LivePid, View),
     HierarchicalStructure = arizona_live:initial_render(LivePid, ViewState),
 
