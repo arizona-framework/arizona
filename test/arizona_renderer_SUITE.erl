@@ -120,4 +120,4 @@ create_mock_view(MockModule, Bindings) ->
     % Create a minimal mock view that satisfies the arizona_view interface
     % This is a simplified version that returns the view itself for most operations
     State = arizona_stateful:new(MockModule, arizona_binder:new(Bindings)),
-    arizona_view:new(MockModule, State, render, undefined).
+    arizona_view:new(State, render, undefined).

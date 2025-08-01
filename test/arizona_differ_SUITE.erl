@@ -159,7 +159,7 @@ create_mock_view(MockModule, ReqOpts) ->
     {ok, LivePid} = arizona_live:start_link(),
     ArizonaRequest = arizona_request:new(foo, undefined, ReqOpts),
     ViewState = arizona_view:call_mount_callback(MockModule, ArizonaRequest),
-    View = arizona_view:new(MockModule, ViewState, hierarchical, LivePid),
+    View = arizona_view:new(ViewState, hierarchical, LivePid),
     Bindings = arizona_stateful:get_bindings(ViewState),
     {_HierarchicalStructure, RenderView} = arizona_hierarchical:hierarchical_stateful(
         MockModule, Bindings, View
