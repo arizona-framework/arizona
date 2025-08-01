@@ -30,6 +30,7 @@ init_per_suite(Config) ->
     MockStatefulModuleCode = merl:qquote(~""""
     -module('@module').
     -behavior(arizona_view).
+    -compile({parse_transform, arizona_parse_transform}).
 
     -export([mount/1]).
     -export([render/1]).
@@ -60,6 +61,8 @@ init_per_suite(Config) ->
 
     MockStatelessModuleCode = merl:qquote(~""""
     -module('@module').
+    -compile({parse_transform, arizona_parse_transform}).
+
     -export(['@render_fun'/1]).
 
     '@render_fun'(Bindings) ->
