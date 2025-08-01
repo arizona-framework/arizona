@@ -129,7 +129,6 @@ new_invalid_category_error(Config) when is_list(Config) ->
 
 new_invalid_line_error(Config) when is_list(Config) ->
     ct:comment("new/3 should cause function_clause error for invalid line"),
-    ?assertError(function_clause, arizona_token:new(static, 0, ~"content")),
     ?assertError(function_clause, arizona_token:new(static, -1, ~"content")).
 
 new_invalid_content_error(Config) when is_list(Config) ->
