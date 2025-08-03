@@ -45,8 +45,8 @@
 %% Behavior callback definitions
 %% --------------------------------------------------------------------
 
--callback mount(Req) -> View when
-    Req :: arizona_request:request(),
+-callback mount(ArizonaRequest) -> View when
+    ArizonaRequest :: arizona_request:request(),
     View :: view().
 
 -callback render(Bindings) -> Template when
@@ -73,12 +73,12 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec call_mount_callback(Module, Req) -> View when
+-spec call_mount_callback(Module, ArizonaRequest) -> View when
     Module :: module(),
-    Req :: arizona_request:request(),
+    ArizonaRequest :: arizona_request:request(),
     View :: view().
-call_mount_callback(Module, Req) when is_atom(Module) ->
-    apply(Module, mount, [Req]).
+call_mount_callback(Module, ArizonaRequest) when is_atom(Module) ->
+    apply(Module, mount, [ArizonaRequest]).
 
 -spec call_render_callback(View) -> Template when
     View :: view(),

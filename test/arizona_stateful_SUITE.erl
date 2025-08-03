@@ -24,8 +24,7 @@ groups() ->
         ]},
         {state_management_tests, [parallel], [
             new_creates_state,
-            get_module_test,
-            get_id_test
+            get_module_test
         ]},
         {binding_tests, [parallel], [
             get_binding_test,
@@ -118,7 +117,8 @@ call_render_callback_test(Config) when is_list(Config) ->
     ct:comment("call_render_callback/2 should call module render function"),
     {mock_module, MockModule} = proplists:lookup(mock_module, Config),
     Bindings = #{title => ~"Test Page"},
-    Template = arizona_stateful:call_render_callback(MockModule, Bindings),
+    State = arizona_stateful:new(MockModule, Bindings),
+    Template = arizona_stateful:call_render_callback(State),
     ?assertEqual([~"<h1>Mock Template</h1>"], arizona_template:get_static(Template)).
 
 call_handle_event_callback_reply(Config) when is_list(Config) ->
@@ -126,9 +126,7 @@ call_handle_event_callback_reply(Config) when is_list(Config) ->
     {mock_events_module, MockModule} = proplists:lookup(mock_events_module, Config),
     State = arizona_stateful:new(MockModule, #{}),
     Params = #{data => ~"test"},
-    {reply, Reply, NewState} = arizona_stateful:call_handle_event_callback(
-        MockModule, ~"reply", Params, State
-    ),
+    {reply, Reply, NewState} = arizona_stateful:call_handle_event_callback(~"reply", Params, State),
     ?assertEqual(Params, Reply),
     ?assertEqual(State, NewState).
 
@@ -138,9 +136,7 @@ call_handle_event_callback_noreply(Config) when is_list(Config) ->
     ),
     {mock_events_module, MockModule} = proplists:lookup(mock_events_module, Config),
     State = arizona_stateful:new(MockModule, #{}),
-    {Reply, NewState} = arizona_stateful:call_handle_event_callback(
-        MockModule, ~"noreply", #{}, State
-    ),
+    {Reply, NewState} = arizona_stateful:call_handle_event_callback(~"noreply", #{}, State),
     ?assertEqual(noreply, Reply),
     ?assertEqual(State, NewState).
 
@@ -161,12 +157,6 @@ get_module_test(Config) when is_list(Config) ->
     State = arizona_stateful:new(user_live, #{}),
     Module = arizona_stateful:get_module(State),
     ?assertEqual(user_live, Module).
-
-get_id_test(Config) when is_list(Config) ->
-    ct:comment("get_id/1 should extract id from bindings"),
-    Bindings = #{id => ~"user-123", name => ~"John"},
-    Id = arizona_stateful:get_id(Bindings),
-    ?assertEqual(~"user-123", Id).
 
 %% --------------------------------------------------------------------
 %% Binding tests

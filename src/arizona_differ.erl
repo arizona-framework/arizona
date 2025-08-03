@@ -1,5 +1,4 @@
 -module(arizona_differ).
-
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -115,8 +114,8 @@ process_affected_elements([ElementIndex | T], Dynamic, View) ->
     _Tracker = arizona_tracker_dict:set_current_element_index(ElementIndex),
     DynamicCallback = element(ElementIndex, Dynamic),
     case DynamicCallback() of
-        Callback when is_function(Callback, 1) ->
-            {Html, CallbackView} = Callback(View),
+        Callback when is_function(Callback, 2) ->
+            {Html, CallbackView} = Callback(diff, View),
             ElementChange = {ElementIndex, Html},
             {RestChanges, FinalView} = process_affected_elements(T, Dynamic, CallbackView),
             {[ElementChange | RestChanges], FinalView};
