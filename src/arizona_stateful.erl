@@ -5,10 +5,9 @@
 %% --------------------------------------------------------------------
 
 -export([call_mount_callback/2]).
--export([call_render_callback/2]).
--export([call_handle_event_callback/4]).
+-export([call_render_callback/1]).
+-export([call_handle_event_callback/3]).
 -export([new/2]).
--export([get_id/1]).
 -export([get_module/1]).
 -export([get_binding/2]).
 -export([get_binding/3]).
@@ -80,30 +79,28 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec call_mount_callback(Mod, Bindings) -> State when
-    Mod :: module(),
+-spec call_mount_callback(Module, Bindings) -> State when
+    Module :: module(),
     Bindings :: arizona_binder:bindings(),
     State :: state().
-call_mount_callback(Mod, Bindings) when is_atom(Mod) ->
-    apply(Mod, mount, [Bindings]).
+call_mount_callback(Module, Bindings) ->
+    apply(Module, mount, [Bindings]).
 
--spec call_render_callback(Mod, Bindings) -> Template when
-    Mod :: module(),
-    Bindings :: arizona_binder:bindings(),
+-spec call_render_callback(State) -> Template when
+    State :: state(),
     Template :: arizona_template:template().
-call_render_callback(Mod, Bindings) when is_atom(Mod) ->
-    apply(Mod, render, [Bindings]).
+call_render_callback(#state{} = State) ->
+    apply(State#state.module, render, [State#state.bindings]).
 
--spec call_handle_event_callback(Module, Event, Params, State) -> Result when
-    Module :: module(),
+-spec call_handle_event_callback(Event, Params, State) -> Result when
     Event :: binary(),
     Params :: map(),
-    State :: arizona_stateful:state(),
+    State :: state(),
     Result :: {reply, Reply, State1} | {noreply, State1},
     Reply :: term(),
-    State1 :: arizona_stateful:state().
-call_handle_event_callback(Module, Event, Params, State) ->
-    apply(Module, handle_event, [Event, Params, State]).
+    State1 :: state().
+call_handle_event_callback(Event, Params, #state{} = State) ->
+    apply(State#state.module, handle_event, [Event, Params, State]).
 
 -spec new(Module, Bindings) -> State when
     Module :: module(),
@@ -115,15 +112,6 @@ new(Module, Bindings) when is_atom(Module) ->
         bindings = Bindings,
         changed_bindings = arizona_binder:new(#{})
     }.
-
--spec get_id(Bindings) -> Id when
-    Bindings :: arizona_binder:bindings(),
-    Id :: id().
-get_id(Bindings) ->
-    case arizona_binder:get(id, Bindings) of
-        Id when is_binary(Id) ->
-            Id
-    end.
 
 -spec get_module(State) -> Mod when
     State :: state(),

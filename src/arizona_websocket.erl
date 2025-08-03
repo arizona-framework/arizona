@@ -57,15 +57,16 @@ init(CowboyRequest, _State) ->
     ArizonaRequest :: arizona_request:request(),
     Result :: call_result().
 websocket_init({ViewModule, ArizonaRequest}) ->
-    {ok, LivePid} = arizona_live:start_link(),
-    ViewState = arizona_live:mount_view(LivePid, ViewModule, ArizonaRequest),
-    View = arizona_view:new(ViewState, hierarchical, LivePid),
-    ok = arizona_live:set_view(LivePid, View),
-    HierarchicalStructure = arizona_live:initial_render(LivePid, ViewState),
+    {ok, LivePid} = arizona_live:start_link(ViewModule, ArizonaRequest),
+    HierarchicalStructure = arizona_live:initial_render(LivePid),
+    View = arizona_live:get_view(LivePid),
+    ViewState = arizona_view:get_state(View),
+    ViewId = arizona_stateful:get_binding(id, ViewState),
 
     % Send initial hierarchical structure to client
     InitialPayload = json_encode(#{
         type => ~"initial_render",
+        stateful_id => ViewId,
         structure => HierarchicalStructure
     }),
 
@@ -123,49 +124,52 @@ handle_event_message(Message, #state{} = State) ->
     Event = maps:get(~"event", Message),
     Params = maps:get(~"params", Message, #{}),
     case arizona_live:handle_event(LivePid, StatefulIdOrUndefined, Event, Params) of
-        {reply, StatefulId, Reply} ->
-            handle_reply_response(StatefulId, Reply, State);
-        {noreply, StatefulId} ->
-            handle_noreply_response(StatefulId, State)
+        {reply, StatefulId, Diff, Reply} ->
+            handle_reply_response(StatefulId, Diff, Reply, State);
+        {noreply, StatefulId, Diff} ->
+            handle_noreply_response(StatefulId, Diff, State)
     end.
 
 %% Handle reply response from Live
--spec handle_reply_response(StatefulId, Reply, State) -> Result when
+-spec handle_reply_response(StatefulId, Diff, Reply, State) -> Result when
     StatefulId :: arizona_stateful:id(),
+    Diff :: arizona_differ:diff(),
     Reply :: term(),
     State :: state(),
     Result :: call_result().
-handle_reply_response(StatefulId, Reply, #state{} = State) ->
+handle_reply_response(StatefulId, Diff, Reply, #state{} = State) ->
     ReplyPayload = json_encode(#{
         type => ~"reply",
         data => Reply
     }),
     Cmds = [{text, ReplyPayload}],
-    handle_diff_response(StatefulId, Cmds, State).
+    handle_diff_response(StatefulId, Diff, Cmds, State).
 
 %% Handle noreply response from Live
--spec handle_noreply_response(StatefulId, State) -> Result when
+-spec handle_noreply_response(StatefulId, Diff, State) -> Result when
     StatefulId :: arizona_stateful:id(),
+    Diff :: arizona_differ:diff(),
     State :: state(),
     Result :: call_result().
-handle_noreply_response(StatefulId, #state{} = State) ->
-    handle_diff_response(StatefulId, [], State).
+handle_noreply_response(StatefulId, Diff, #state{} = State) ->
+    handle_diff_response(StatefulId, Diff, [], State).
 
 %% Handle noreply response from Live
--spec handle_diff_response(StatefulId, Cmds, State) -> Result when
+-spec handle_diff_response(StatefulId, Diff, Cmds, State) -> Result when
     StatefulId :: arizona_stateful:id(),
+    Diff :: arizona_differ:diff(),
     Cmds :: cowboy_websocket:commands(),
     State :: state(),
     Result :: call_result().
-handle_diff_response(StatefulId, Cmds, #state{} = State) ->
-    LivePid = State#state.live_pid,
-    case arizona_live:diff_stateful(LivePid, StatefulId) of
+handle_diff_response(StatefulId, Diff, Cmds, #state{} = State) ->
+    case Diff of
         [] ->
             {Cmds, State};
-        DiffChanges ->
+        _ ->
             DiffPayload = json_encode(#{
                 type => ~"diff",
-                changes => DiffChanges
+                stateful_id => StatefulId,
+                changes => Diff
             }),
             {[{text, DiffPayload} | Cmds], State}
     end.

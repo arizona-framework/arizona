@@ -32,10 +32,8 @@ init(CowboyRequest, State) when is_map(State) ->
 handle_live_request(ViewModule, CowboyRequest, State) ->
     try
         ArizonaRequest = arizona_cowboy_request:new(CowboyRequest),
-        ViewState = arizona_view:call_mount_callback(ViewModule, ArizonaRequest),
-        Bindings = arizona_stateful:get_bindings(ViewState),
-        View = arizona_view:new(ViewState, render, undefined),
-        {Html, _RenderView} = arizona_renderer:render_stateful(ViewModule, Bindings, View),
+        View = arizona_view:call_mount_callback(ViewModule, ArizonaRequest),
+        {Html, _RenderView} = render_view(View),
         CowboyRequest1 = cowboy_req:reply(
             200, #{~"content-type" => ~"text/html"}, Html, CowboyRequest
         ),
@@ -47,4 +45,16 @@ handle_live_request(ViewModule, CowboyRequest, State) ->
             ]),
             CowboyRequest2 = cowboy_req:reply(500, #{}, iolist_to_binary(ErrorMsg), CowboyRequest),
             {ok, CowboyRequest2, State}
+    end.
+
+render_view(View) ->
+    case arizona_view:get_layout(View) of
+        {LayoutModule, LayoutRenderFun, SlotName, SlotBindings} ->
+            Slot = view,
+            LayoutBindings = arizona_binder:put(SlotName, Slot, SlotBindings),
+            arizona_renderer:render_stateless(
+                LayoutModule, LayoutRenderFun, LayoutBindings, View
+            );
+        none ->
+            arizona_renderer:render_view(View)
     end.

@@ -29,61 +29,80 @@ export class ArizonaHierarchical {
 
   /**
    * Apply diff changes from arizona_differ to hierarchical structure
-   * @param {Array} changes - Changes in format: [[StatefulId, [[ElementIndex, Changes]]]]
+   * @param {string} statefulId - Stateful ID to render
+   * @param {Array} changes - Changes in format: [[ElementIndex, Changes]]
    */
-  applyDiff(changes) {
-    for (const [statefulId, elementChanges] of changes) {
-      if (!this.structure[statefulId]) {
-        console.warn(`[Arizona] StatefulId ${statefulId} not found in structure`);
-        continue;
-      }
+  applyDiff(statefulId, changes) {
+    if (!this.structure[statefulId]) {
+      console.warn(`[Arizona] StatefulId ${statefulId} not found in structure`);
+    }
 
-      for (const [elementIndex, newValue] of elementChanges) {
-        this.structure[statefulId][elementIndex] = newValue;
-      }
+    for (const [elementIndex, newValue] of changes) {
+      this.structure[statefulId].dynamic[elementIndex - 1] = newValue;
     }
   }
 
   /**
    * Generate HTML from current hierarchical structure
-   * @param {string} componentId - Component ID to render (defaults to 'root')
+   * @param {string} componentId - Component ID to render
    * @returns {string} Generated HTML
    */
-  generateHTML(componentId = 'root') {
+  generateHTML(componentId) {
     const component = this.structure[componentId];
     if (!component) {
       return '';
     }
 
+    // Components always have static and dynamic arrays
+    return this.zipStaticDynamic(component.static, component.dynamic);
+  }
+
+  /**
+   * Zip static and dynamic arrays into HTML (matches arizona_renderer:zip_static_dynamic/2)
+   * @param {Array} staticParts - Static HTML parts
+   * @param {Array} dynamicParts - Dynamic content parts
+   * @returns {string} Generated HTML
+   */
+  zipStaticDynamic(staticParts, dynamicParts) {
     const elements = [];
-    const sortedIndexes = Object.keys(component)
-      .map((k) => parseInt(k))
-      .sort((a, b) => a - b);
+    const maxLength = Math.max(staticParts.length, dynamicParts.length);
 
-    for (const index of sortedIndexes) {
-      const element = component[index];
-
-      if (typeof element === 'string') {
-        elements.push(element);
-      } else if (element && element.type === 'stateful') {
-        // Recursively render nested stateful component
-        elements.push(this.generateHTML(element.id));
-      } else if (element && element.type === 'stateless') {
-        // Render stateless structure inline
-        elements.push(this.generateHTMLFromStructure(element.structure));
-      } else if (element && element.type === 'list') {
-        // Render list elements
-        elements.push(this.generateListHTML(element));
-      } else if (Array.isArray(element)) {
-        // Handle nested arrays (iodata from server) - flatten recursively
-        elements.push(this.flattenIoData(element));
-      } else {
-        // Fallback for other types (numbers, etc.)
-        elements.push(String(element));
+    for (let i = 0; i < maxLength; i++) {
+      if (i < staticParts.length) {
+        elements.push(staticParts[i]);
+      }
+      if (i < dynamicParts.length) {
+        elements.push(this.normalizeDynamicElement(dynamicParts[i]));
       }
     }
 
     return elements.join('');
+  }
+
+  /**
+   * Normalize a dynamic element to string (handles stateful, stateless, lists, etc.)
+   * @param {*} element - Dynamic element to normalize
+   * @returns {string} Normalized string content
+   */
+  normalizeDynamicElement(element) {
+    if (typeof element === 'string') {
+      return element;
+    } else if (element && element.type === 'stateful') {
+      // Recursively render nested stateful component
+      return this.generateHTML(element.id);
+    } else if (element && element.type === 'stateless') {
+      // Render stateless structure inline
+      return this.generateHTMLFromStructure(element.structure);
+    } else if (element && element.type === 'list') {
+      // Render list elements
+      return this.generateListHTML(element);
+    } else if (Array.isArray(element)) {
+      // Handle nested arrays (iodata from server) - flatten recursively
+      return this.flattenIoData(element);
+    } else {
+      // Fallback for other types (numbers, etc.)
+      return String(element);
+    }
   }
 
   /**
@@ -101,7 +120,11 @@ export class ArizonaHierarchical {
       return String(element);
     } else if (Array.isArray(element)) {
       // Recursively flatten nested arrays
-      return element.map((item) => this.flattenIoData(item)).join('');
+      return element
+        .map((item) => {
+          return this.flattenIoData(item);
+        })
+        .join('');
     } else if (element && typeof element === 'object') {
       // Handle special object types
       if (element.type === 'stateful') {
@@ -128,8 +151,12 @@ export class ArizonaHierarchical {
   generateHTMLFromStructure(structure) {
     const elements = [];
     const sortedIndexes = Object.keys(structure)
-      .map((k) => parseInt(k))
-      .sort((a, b) => a - b);
+      .map((k) => {
+        return parseInt(k);
+      })
+      .sort((a, b) => {
+        return a - b;
+      });
 
     for (const index of sortedIndexes) {
       const element = structure[index];
@@ -160,8 +187,12 @@ export class ArizonaHierarchical {
 
       // Get dynamic indexes in order
       const dynamicIndexes = Object.keys(dynamicItem)
-        .map((k) => parseInt(k))
-        .sort((a, b) => a - b);
+        .map((k) => {
+          return parseInt(k);
+        })
+        .sort((a, b) => {
+          return a - b;
+        });
 
       // Interleave static and dynamic parts
       let staticIndex = 0;
@@ -239,13 +270,13 @@ export class ArizonaHierarchical {
   /**
    * Create a patch object that can be sent to arizona.js for DOM updating
    * This is used by the worker to send structured data to the main thread
-   * @param {string} statefulId - Stateful ID to render (defaults to 'root')
+   * @param {string} statefulId - Stateful ID to render
    * @returns {Object} Patch object with statefulId and HTML
    */
-  createPatch(statefulId = 'root') {
+  createPatch(statefulId) {
     return {
       type: 'html_patch',
-      statefulId: statefulId,
+      statefulId,
       html: this.generateHTML(statefulId),
       timestamp: Date.now(),
     };
@@ -253,79 +284,17 @@ export class ArizonaHierarchical {
 
   /**
    * Create an initial render patch (used on first load)
-   * @param {string} statefulId - Stateful ID to render (defaults to 'root')
+   * @param {string} statefulId - Stateful ID to render
    * @returns {Object} Initial render patch object
    */
-  createInitialPatch(statefulId = 'root') {
+  createInitialPatch(statefulId) {
     return {
       type: 'initial_render',
-      statefulId: statefulId,
+      statefulId,
       html: this.generateHTML(statefulId),
       structure: this.getStructure(),
       timestamp: Date.now(),
     };
-  }
-
-  /**
-   * Validate a hierarchical structure format
-   * @param {Object} structure - Structure to validate
-   * @returns {boolean} True if structure is valid
-   */
-  static validateStructure(structure) {
-    if (!structure || typeof structure !== 'object') {
-      return false;
-    }
-
-    for (const [componentId, component] of Object.entries(structure)) {
-      if (!component || typeof component !== 'object') {
-        return false;
-      }
-
-      // Check that component has numeric indexes
-      const indexes = Object.keys(component);
-      for (const index of indexes) {
-        if (isNaN(parseInt(index))) {
-          return false;
-        }
-      }
-    }
-
-    return true;
-  }
-
-  /**
-   * Validate diff changes format
-   * @param {Array} changes - Changes to validate
-   * @returns {boolean} True if changes format is valid
-   */
-  static validateDiff(changes) {
-    if (!Array.isArray(changes)) {
-      return false;
-    }
-
-    for (const change of changes) {
-      if (!Array.isArray(change) || change.length !== 2) {
-        return false;
-      }
-
-      const [statefulId, elementChanges] = change;
-      if (typeof statefulId !== 'string' || !Array.isArray(elementChanges)) {
-        return false;
-      }
-
-      for (const elementChange of elementChanges) {
-        if (!Array.isArray(elementChange) || elementChange.length !== 2) {
-          return false;
-        }
-
-        const [elementIndex] = elementChange;
-        if (isNaN(parseInt(elementIndex))) {
-          return false;
-        }
-      }
-    }
-
-    return true;
   }
 }
 
