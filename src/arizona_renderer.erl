@@ -162,7 +162,9 @@ render_dynamic_callbacks_test_() ->
         end},
 
         {"Callback returning function should be invoked with view", fun() ->
-            MockDynamicWithFunction = {fun() -> fun(View) -> {~"from_function", View} end end},
+            MockDynamicWithFunction = {fun() ->
+                fun(render, View) -> {~"from_function", View} end
+            end},
             {Dynamic, _View} = render_dynamic_callbacks(
                 [1], MockDynamicWithFunction, render, MockView
             ),
