@@ -75,8 +75,8 @@ hierarchical_stateless(Module, Fun, Bindings, View) ->
 %% --------------------------------------------------------------------
 
 track_hierarchical_stateful(Id, Template, View) ->
-    ok = arizona_tracker_dict:clear_stateful_dependencies(Id),
-    ok = arizona_tracker_dict:set_current_stateful_id(Id),
+    _ClearTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
+    _Tracker = arizona_tracker_dict:set_current_stateful_id(Id),
     {Dynamic, DynamicView} = arizona_renderer:render_dynamic(
         Template, hierarchical, View
     ),
@@ -84,7 +84,7 @@ track_hierarchical_stateful(Id, Template, View) ->
         static => arizona_template:get_static(Template),
         dynamic => Dynamic
     },
-    ok = arizona_hierarchical_dict:put_stateful_data(Id, HierarchicalData),
+    _HierarchicalStructure = arizona_hierarchical_dict:put_stateful_data(Id, HierarchicalData),
     Struct = #{
         type => stateful,
         id => Id

@@ -67,21 +67,20 @@ diff_stateless(Module, Fun, Bindings, View) ->
 %% --------------------------------------------------------------------
 
 track_diff_stateful(Id, Template, StatefulState, View) ->
-    ok = arizona_tracker_dict:set_current_stateful_id(Id),
+    Tracker = arizona_tracker_dict:set_current_stateful_id(Id),
     ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
     case arizona_binder:is_empty(ChangedBindings) of
         true ->
             % Clear dependencies for this component before starting new render
-            ok = arizona_tracker_dict:clear_stateful_dependencies(Id),
+            _ClearTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
             NoChangesStatefulState = arizona_stateful:set_changed_bindings(
                 arizona_binder:new(#{}), StatefulState
             ),
             {[], NoChangesStatefulState, View};
         false ->
-            Tracker = arizona_tracker_dict:get_tracker(),
             StatefulDependencies = arizona_tracker:get_stateful_dependencies(Id, Tracker),
             % Clear dependencies for this component before starting new render
-            ok = arizona_tracker_dict:clear_stateful_dependencies(Id),
+            _ClearTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
             AffectedElements = get_affected_elements(ChangedBindings, StatefulDependencies),
             {Diff, DiffView} = generate_element_diff(AffectedElements, Template, View),
             NoChangesStatefulState = arizona_stateful:set_changed_bindings(
@@ -113,7 +112,7 @@ generate_element_diff(DynamicSequence, Template, View) ->
 process_affected_elements([], _Dynamic, View) ->
     {[], View};
 process_affected_elements([ElementIndex | T], Dynamic, View) ->
-    ok = arizona_tracker_dict:set_current_element_index(ElementIndex),
+    _Tracker = arizona_tracker_dict:set_current_element_index(ElementIndex),
     DynamicCallback = element(ElementIndex, Dynamic),
     case DynamicCallback() of
         Callback when is_function(Callback, 1) ->

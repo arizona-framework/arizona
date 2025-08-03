@@ -104,7 +104,7 @@ handle_call(get_view, _From, #state{} = State) ->
     {reply, State#state.view, State};
 handle_call(initial_render, _From, #state{} = State) ->
     undefined = arizona_tracker_dict:set_tracker(arizona_tracker:new()),
-    ok = arizona_hierarchical_dict:new(),
+    undefined = arizona_hierarchical_dict:set_structure(#{}),
     View = State#state.view,
     ViewState = arizona_view:get_state(View),
     Module = arizona_stateful:get_module(ViewState),
@@ -112,8 +112,7 @@ handle_call(initial_render, _From, #state{} = State) ->
     {_Struct, HierarchicalView} = arizona_hierarchical:hierarchical_stateful(
         Module, Bindings, View
     ),
-    HierarchicalStructure = arizona_hierarchical_dict:get_structure(),
-    ok = arizona_hierarchical_dict:clear(),
+    HierarchicalStructure = arizona_hierarchical_dict:clear(),
     {reply, HierarchicalStructure, State#state{view = HierarchicalView}};
 handle_call({handle_event, StatefulIdOrUndefined, Event, Params}, _From, State) ->
     case StatefulIdOrUndefined of
