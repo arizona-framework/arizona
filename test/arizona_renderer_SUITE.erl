@@ -109,7 +109,7 @@ render_dynamic_test(Config) when is_list(Config) ->
     Template = arizona_template:from_string(~"<span>Simple</span>"),
     {mock_stateful_module, MockStatefulModule} = proplists:lookup(mock_stateful_module, Config),
     MockView = create_mock_view(MockStatefulModule, #{id => ~"foo"}),
-    {Dynamic, _UpdatedView} = arizona_renderer:render_dynamic(Template, MockView),
+    {Dynamic, _UpdatedView} = arizona_renderer:render_dynamic(Template, render, MockView),
     ?assertEqual([], Dynamic).
 
 %% --------------------------------------------------------------------
@@ -119,5 +119,4 @@ render_dynamic_test(Config) when is_list(Config) ->
 create_mock_view(MockModule, Bindings) ->
     % Create a minimal mock view that satisfies the arizona_view interface
     % This is a simplified version that returns the view itself for most operations
-    State = arizona_stateful:new(MockModule, arizona_binder:new(Bindings)),
-    arizona_view:new(State, render, undefined).
+    arizona_view:new(MockModule, Bindings, none).
