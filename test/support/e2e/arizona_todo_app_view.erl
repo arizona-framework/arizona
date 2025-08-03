@@ -84,7 +84,7 @@ handle_event(~"clear_completed", _Params, State) ->
 render(Bindings) ->
     arizona_template:from_string(~""""
     <div
-        id="{arizona_binder:get(id, Bindings)}"
+        id="{arizona_template:get_binding(id, Bindings)}"
         class="todo-app"
     >
         <header class="header">

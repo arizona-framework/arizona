@@ -19,7 +19,7 @@ mount(_Req) ->
 
 render(Bindings) ->
     arizona_template:from_string(~"""
-    <div id="{arizona_binder:get(id, Bindings)}">
+    <div id="{arizona_template:get_binding(id, Bindings)}">
         <h1>Counter: <span data-testid="count">
             {arizona_template:get_binding(count, Bindings)}
         </span></h1>
