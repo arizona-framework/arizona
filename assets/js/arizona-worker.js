@@ -107,22 +107,17 @@ class ArizonaWebSocketWorker {
   }
 
   handleInitialRender(message) {
-    // Validate structure format
-    if (!ArizonaHierarchical.validateStructure(message.structure)) {
-      throw new Error('Invalid hierarchical structure format');
-    }
-
     // Initialize hierarchical structure
     this.hierarchical.initialize(message.structure);
 
     // Create initial render patch
-    const patch = this.hierarchical.createInitialPatch();
+    const patch = this.hierarchical.createInitialPatch(message.stateful_id);
 
     // Send to main thread for DOM application
     this.postMessage({
       type: 'html_patch',
       data: {
-        patch: patch,
+        patch,
         isInitial: true,
       },
     });
@@ -131,26 +126,21 @@ class ArizonaWebSocketWorker {
   }
 
   handleDiff(message) {
-    // Validate diff format
-    if (!ArizonaHierarchical.validateDiff(message.changes)) {
-      throw new Error('Invalid diff changes format');
-    }
-
     if (!this.hierarchical.isInitialized()) {
       throw new Error('Hierarchical structure not initialized');
     }
 
     // Apply diff to hierarchical structure
-    this.hierarchical.applyDiff(message.changes);
+    this.hierarchical.applyDiff(message.stateful_id, message.changes);
 
     // Create HTML patch
-    const patch = this.hierarchical.createPatch();
+    const patch = this.hierarchical.createPatch(message.stateful_id);
 
     // Send to main thread for DOM application
     this.postMessage({
       type: 'html_patch',
       data: {
-        patch: patch,
+        patch,
         isInitial: false,
       },
     });

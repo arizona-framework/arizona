@@ -16,7 +16,7 @@
 -export([find_binding/2]).
 -export([render_stateful/2]).
 -export([render_stateless/3]).
--export([render_slot/2]).
+-export([render_slot/1]).
 -export([render_list/2]).
 
 %% --------------------------------------------------------------------
@@ -31,7 +31,7 @@
 -ignore_xref([find_binding/2]).
 -ignore_xref([render_stateful/2]).
 -ignore_xref([render_stateless/3]).
--ignore_xref([render_slot/2]).
+-ignore_xref([render_slot/1]).
 -ignore_xref([render_list/2]).
 
 %% --------------------------------------------------------------------
@@ -61,7 +61,9 @@
 -nominal dynamic() :: tuple().
 -nominal dynamic_sequence() :: [pos_integer()].
 -nominal dynamic_anno() :: tuple().
--nominal render_callback() :: fun((arizona_view:view()) -> {dynamic(), arizona_view:view()}).
+-nominal render_callback() :: fun(
+    (arizona_renderer:render_mode(), arizona_view:view()) -> {dynamic(), arizona_view:view()}
+).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -154,15 +156,13 @@ find_binding(Key, Bindings) ->
     Bindings :: arizona_binder:bindings(),
     Callback :: render_callback().
 render_stateful(Module, Bindings) ->
-    fun(View) ->
-        case arizona_view:get_render_mode(View) of
-            render ->
-                arizona_renderer:render_stateful(Module, Bindings, View);
-            diff ->
-                arizona_differ:diff_stateful(Module, Bindings, View);
-            hierarchical ->
-                arizona_hierarchical:hierarchical_stateful(Module, Bindings, View)
-        end
+    fun
+        (render, View) ->
+            arizona_renderer:render_stateful(Module, Bindings, View);
+        (diff, View) ->
+            arizona_differ:diff_stateful(Module, Bindings, View);
+        (hierarchical, View) ->
+            arizona_hierarchical:hierarchical_stateful(Module, Bindings, View)
     end.
 
 -spec render_stateless(Module, Function, Bindings) -> Callback when
@@ -171,23 +171,20 @@ render_stateful(Module, Bindings) ->
     Bindings :: arizona_binder:bindings(),
     Callback :: render_callback().
 render_stateless(Module, Fun, Bindings) ->
-    fun(View) ->
-        case arizona_view:get_render_mode(View) of
-            render ->
-                arizona_renderer:render_stateless(Module, Fun, Bindings, View);
-            diff ->
-                arizona_differ:diff_stateless(Module, Fun, Bindings, View);
-            hierarchical ->
-                arizona_hierarchical:hierarchical_stateless(Module, Fun, Bindings, View)
-        end
+    fun
+        (render, View) ->
+            arizona_renderer:render_stateless(Module, Fun, Bindings, View);
+        (diff, View) ->
+            arizona_differ:diff_stateless(Module, Fun, Bindings, View);
+        (hierarchical, View) ->
+            arizona_hierarchical:hierarchical_stateless(Module, Fun, Bindings, View)
     end.
 
--spec render_slot(Name, Bindings) -> Result when
-    Name :: arizona_binder:key(),
-    Bindings :: arizona_binder:bindings(),
-    Result :: binary().
-render_slot(_Binding, _Bindings) ->
-    ~"[SLOT]".
+-spec render_slot(Slot) -> Callback when
+    Slot :: view | tuple(),
+    Callback :: render_callback().
+render_slot(view) ->
+    render_view().
 
 -spec render_list(Callback, List) -> Result when
     Callback :: fun((Item) -> arizona_template:template()),
@@ -196,3 +193,19 @@ render_slot(_Binding, _Bindings) ->
     Result :: binary().
 render_list(_Callback, _List) ->
     ~"[LIST]".
+
+%% --------------------------------------------------------------------
+%% Internal functions
+%% --------------------------------------------------------------------
+
+-spec render_view() -> Callback when
+    Callback :: render_callback().
+render_view() ->
+    fun
+        (render, View) ->
+            arizona_renderer:render_view(View);
+        (diff, View) ->
+            arizona_differ:diff_view(View);
+        (hierarchical, View) ->
+            arizona_hierarchical:hierarchical_view(View)
+    end.

@@ -15,14 +15,18 @@ mount(_Req) ->
         #{id => 2, text => ~"Build web app", completed => true},
         #{id => 3, text => ~"Write tests", completed => false}
     ],
-    arizona_stateful:new(?MODULE, #{
-        id => ~"todos",
-        todos => InitialTodos,
-        filter => all,
-        new_todo_text => ~"",
-        next_id => 4,
-        layout => {arizona_todo_app_layout, render, main_content}
-    }).
+    Layout = {arizona_todo_app_layout, render, main_content, #{}},
+    arizona_view:new(
+        ?MODULE,
+        #{
+            id => ~"todos",
+            todos => InitialTodos,
+            filter => all,
+            new_todo_text => ~"",
+            next_id => 4
+        },
+        Layout
+    ).
 
 handle_event(~"add_todo", _Params, State) ->
     NewTodoText = arizona_stateful:get_binding(new_todo_text, State),

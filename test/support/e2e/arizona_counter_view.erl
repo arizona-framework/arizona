@@ -7,11 +7,15 @@
 -export([handle_event/3]).
 
 mount(_Req) ->
-    arizona_stateful:new(?MODULE, #{
-        id => ~"counter",
-        count => 0,
-        layout => {arizona_counter_layout, render, main_content}
-    }).
+    Layout = {arizona_counter_layout, render, main_content, #{}},
+    arizona_view:new(
+        ?MODULE,
+        #{
+            id => ~"counter",
+            count => 0
+        },
+        Layout
+    ).
 
 render(Bindings) ->
     arizona_template:from_string(~"""
@@ -25,11 +29,17 @@ render(Bindings) ->
     </div>
     """).
 
-handle_event(~"increment", _Payload, State) ->
+handle_event(~"increment", _Payload, View) ->
+    State = arizona_view:get_state(View),
     Count = arizona_stateful:get_binding(count, State),
-    {noreply, arizona_stateful:put_binding(count, Count + 1, State)};
-handle_event(~"decrement", _Payload, State) ->
+    NewState = arizona_stateful:put_binding(count, Count + 1, State),
+    {noreply, arizona_view:update_state(NewState, View)};
+handle_event(~"decrement", _Payload, View) ->
+    State = arizona_view:get_state(View),
     Count = arizona_stateful:get_binding(count, State),
-    {noreply, arizona_stateful:put_binding(count, Count - 1, State)};
-handle_event(~"reset", _Payload, State) ->
-    {noreply, arizona_stateful:put_binding(count, 0, State)}.
+    NewState = arizona_stateful:put_binding(count, Count - 1, State),
+    {noreply, arizona_view:update_state(NewState, View)};
+handle_event(~"reset", _Payload, View) ->
+    State = arizona_view:get_state(View),
+    NewState = arizona_stateful:put_binding(count, 0, State),
+    {noreply, arizona_view:update_state(NewState, View)}.
