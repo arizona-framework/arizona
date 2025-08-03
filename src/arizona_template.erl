@@ -129,7 +129,7 @@ get_dynamic_anno(#template{dynamic_anno = Anno}) ->
     Value :: arizona_binder:value().
 get_binding(Key, Bindings) ->
     % Record variable dependency for runtime tracking
-    ok = arizona_tracker_dict:record_variable_dependency(Key),
+    _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
     arizona_binder:get(Key, Bindings).
 
 -spec get_binding(Key, Bindings, Default) -> Value when
@@ -139,7 +139,7 @@ get_binding(Key, Bindings) ->
     Value :: arizona_binder:value().
 get_binding(Key, Bindings, Default) ->
     % Record variable dependency for runtime tracking
-    ok = arizona_tracker_dict:record_variable_dependency(Key),
+    _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
     arizona_binder:get(Key, Bindings, Default).
 
 -spec find_binding(Key, Bindings) -> {ok, Value} | error when
@@ -148,7 +148,7 @@ get_binding(Key, Bindings, Default) ->
     Value :: arizona_binder:value().
 find_binding(Key, Bindings) ->
     % Record variable dependency for runtime tracking
-    ok = arizona_tracker_dict:record_variable_dependency(Key),
+    _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
     arizona_binder:find(Key, Bindings).
 
 -spec render_stateful(Module, Bindings) -> Callback when

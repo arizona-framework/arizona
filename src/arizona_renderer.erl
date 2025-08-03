@@ -44,8 +44,8 @@ render_view(View) ->
     View1 :: arizona_view:view().
 render_stateful(Module, Bindings, View) ->
     {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
-    ok = arizona_tracker_dict:clear_stateful_dependencies(Id),
-    ok = arizona_tracker_dict:set_current_stateful_id(Id),
+    _ClearTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
+    _Tracker = arizona_tracker_dict:set_current_stateful_id(Id),
     render_template(Template, render, PrepRenderView).
 
 -spec render_stateless(Module, Function, Bindings, View) -> {Html, View1} when
@@ -99,7 +99,7 @@ zip_static_dynamic([], [D | Dynamic]) ->
 render_dynamic_callbacks([], _Dynamic, _RenderMode, View) ->
     {[], View};
 render_dynamic_callbacks([ElementIndex | T], Dynamic, RenderMode, View) ->
-    ok = arizona_tracker_dict:set_current_element_index(ElementIndex),
+    _Tracker = arizona_tracker_dict:set_current_element_index(ElementIndex),
     DynamicCallback = element(ElementIndex, Dynamic),
     case DynamicCallback() of
         Callback when is_function(Callback, 2) ->
