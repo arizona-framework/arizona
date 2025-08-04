@@ -115,7 +115,8 @@ transform_application(Node, Module, CompileOpts) ->
                     false ->
                         Pos
                 end,
-            transform_from_string(Module, Line, TemplateArg, CompileOpts);
+            CallbackArg = erl_syntax:atom(ok),
+            transform_from_string(Module, Line, TemplateArg, CallbackArg, CompileOpts);
         {arizona_template, render_list, 2, [FunArg, ListArg]} ->
             % Transform the function argument to process nested from_string calls
             TransformedFun = erl_syntax_lib:map(
@@ -163,7 +164,7 @@ analyze_application(Node) ->
     end.
 
 %% Transform arizona_template:from_string/1 calls
-transform_from_string(Module, Line, TemplateArg, CompileOpts) ->
+transform_from_string(Module, Line, TemplateArg, CallbackArg, CompileOpts) ->
     try
         % Extract template content and line number
         String = eval_expr(Module, TemplateArg),
@@ -171,7 +172,7 @@ transform_from_string(Module, Line, TemplateArg, CompileOpts) ->
         % We do Line + 1 because we consider the use of triple-quoted string
         Tokens = arizona_scanner:scan_string(Line + 1, String),
         % Parse tokens into AST
-        arizona_parser:parse_tokens(Tokens, CompileOpts)
+        arizona_parser:parse_tokens(Tokens, CallbackArg, CompileOpts)
     catch
         Class:Reason:Stacktrace ->
             error(

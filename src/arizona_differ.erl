@@ -58,7 +58,7 @@ diff_stateless(Module, Fun, Bindings, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
-    {Diff, RenderView} = process_affected_elements(DynamicSequence, Dynamic, View),
+    {Diff, RenderView} = process_affected_elements(DynamicSequence, Dynamic, ok, View),
     {Diff, RenderView}.
 
 %% --------------------------------------------------------------------
@@ -81,7 +81,7 @@ track_diff_stateful(Id, Template, StatefulState, View) ->
             % Clear dependencies for this component before starting new render
             _ClearTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
             AffectedElements = get_affected_elements(ChangedBindings, StatefulDependencies),
-            {Diff, DiffView} = generate_element_diff(AffectedElements, Template, View),
+            {Diff, DiffView} = generate_element_diff(AffectedElements, Template, ok, View),
             NoChangesStatefulState = arizona_stateful:set_changed_bindings(
                 arizona_binder:new(#{}), StatefulState
             ),
@@ -98,30 +98,32 @@ get_affected_elements(ChangedBindings, StatefulDependencies) ->
     lists:usort(lists:flatten(AffectedIndexLists)).
 
 %% Generate diff for affected elements
-generate_element_diff(DynamicSequence, Template, View) ->
+generate_element_diff(DynamicSequence, Template, CallbackArg, View) ->
     case DynamicSequence of
         [] ->
             {[], View};
         _ ->
             Dynamic = arizona_template:get_dynamic(Template),
-            process_affected_elements(DynamicSequence, Dynamic, View)
+            process_affected_elements(DynamicSequence, Dynamic, CallbackArg, View)
     end.
 
 %% Process affected elements to create diff changes
-process_affected_elements([], _Dynamic, View) ->
+process_affected_elements([], _Dynamic, _CallbackArg, View) ->
     {[], View};
-process_affected_elements([ElementIndex | T], Dynamic, View) ->
+process_affected_elements([ElementIndex | T], Dynamic, CallbackArg, View) ->
     _Tracker = arizona_tracker_dict:set_current_element_index(ElementIndex),
     DynamicCallback = element(ElementIndex, Dynamic),
-    case DynamicCallback() of
+    case DynamicCallback(CallbackArg) of
         Callback when is_function(Callback, 2) ->
             {Html, CallbackView} = Callback(diff, View),
             ElementChange = {ElementIndex, Html},
-            {RestChanges, FinalView} = process_affected_elements(T, Dynamic, CallbackView),
+            {RestChanges, FinalView} = process_affected_elements(
+                T, Dynamic, CallbackArg, CallbackView
+            ),
             {[ElementChange | RestChanges], FinalView};
         Result ->
             Html = arizona_html:to_html(Result),
             ElementChange = {ElementIndex, Html},
-            {RestChanges, FinalView} = process_affected_elements(T, Dynamic, View),
+            {RestChanges, FinalView} = process_affected_elements(T, Dynamic, CallbackArg, View),
             {[ElementChange | RestChanges], FinalView}
     end.

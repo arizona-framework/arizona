@@ -8,7 +8,7 @@
 -export([render_view/1]).
 -export([render_stateful/3]).
 -export([render_stateless/4]).
--export([render_dynamic/3]).
+-export([render_dynamic/4]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -34,7 +34,7 @@
     View1 :: arizona_view:view().
 render_view(View) ->
     Template = arizona_view:call_render_callback(View),
-    render_template(Template, render, View).
+    render_template(Template, render, ok, View).
 
 -spec render_stateful(Module, Bindings, View) -> {Html, View1} when
     Module :: module(),
@@ -46,7 +46,7 @@ render_stateful(Module, Bindings, View) ->
     {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
     _ClearTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
     _Tracker = arizona_tracker_dict:set_current_stateful_id(Id),
-    render_template(Template, render, PrepRenderView).
+    render_template(Template, render, ok, PrepRenderView).
 
 -spec render_stateless(Module, Function, Bindings, View) -> {Html, View1} when
     Module :: module(),
@@ -57,32 +57,34 @@ render_stateful(Module, Bindings, View) ->
     View1 :: arizona_view:view().
 render_stateless(Module, Fun, Bindings, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
-    render_template(Template, render, View).
+    render_template(Template, render, ok, View).
 
--spec render_dynamic(Template, RenderMode, View) -> {Dynamic, View1} when
+-spec render_dynamic(Template, RenderMode, CallbackArg, View) -> {Dynamic, View1} when
     Template :: arizona_template:template(),
     RenderMode :: render_mode(),
     View :: arizona_view:view(),
     Dynamic :: dynamic(),
+    CallbackArg :: dynamic(),
     View1 :: arizona_view:view().
-render_dynamic(Template, RenderMode, View) ->
+render_dynamic(Template, RenderMode, CallbackArg, View) ->
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
-    render_dynamic_callbacks(DynamicSequence, Dynamic, RenderMode, View).
+    render_dynamic_callbacks(DynamicSequence, Dynamic, RenderMode, CallbackArg, View).
 
 %% --------------------------------------------------------------------
 %% Internal Functions
 %% --------------------------------------------------------------------
 
--spec render_template(Template, RenderMode, View) -> {Html, View1} when
+-spec render_template(Template, RenderMode, CallbackArg, View) -> {Html, View1} when
     Template :: arizona_template:template(),
     RenderMode :: render_mode(),
     View :: arizona_view:view(),
     Html :: arizona_html:html(),
+    CallbackArg :: dynamic(),
     View1 :: arizona_view:view().
-render_template(Template, RenderMode, View) ->
+render_template(Template, RenderMode, CallbackArg, View) ->
     Static = arizona_template:get_static(Template),
-    {Dynamic, FinalView} = render_dynamic(Template, RenderMode, View),
+    {Dynamic, FinalView} = render_dynamic(Template, RenderMode, CallbackArg, View),
     Html = zip_static_dynamic(Static, Dynamic),
     {Html, FinalView}.
 
@@ -96,19 +98,23 @@ zip_static_dynamic([S | Static], []) ->
 zip_static_dynamic([], [D | Dynamic]) ->
     [D | zip_static_dynamic([], Dynamic)].
 
-render_dynamic_callbacks([], _Dynamic, _RenderMode, View) ->
+render_dynamic_callbacks([], _Dynamic, _RenderMode, _CallbackArg, View) ->
     {[], View};
-render_dynamic_callbacks([ElementIndex | T], Dynamic, RenderMode, View) ->
+render_dynamic_callbacks([ElementIndex | T], Dynamic, RenderMode, CallbackArg, View) ->
     _Tracker = arizona_tracker_dict:set_current_element_index(ElementIndex),
     DynamicCallback = element(ElementIndex, Dynamic),
-    case DynamicCallback() of
+    case DynamicCallback(CallbackArg) of
         Callback when is_function(Callback, 2) ->
             {Html, CallbackView} = Callback(RenderMode, View),
-            {RestHtml, FinalView} = render_dynamic_callbacks(T, Dynamic, RenderMode, CallbackView),
+            {RestHtml, FinalView} = render_dynamic_callbacks(
+                T, Dynamic, RenderMode, CallbackArg, CallbackView
+            ),
             {[Html | RestHtml], FinalView};
         Result ->
             Html = arizona_html:to_html(Result),
-            {RestHtml, FinalView} = render_dynamic_callbacks(T, Dynamic, RenderMode, View),
+            {RestHtml, FinalView} = render_dynamic_callbacks(
+                T, Dynamic, RenderMode, CallbackArg, View
+            ),
             {[Html | RestHtml], FinalView}
     end.
 
@@ -144,29 +150,29 @@ zip_static_dynamic_test_() ->
 
 render_dynamic_callbacks_test_() ->
     MockView = create_test_view(),
-    MockDynamic = {fun() -> ~"callback1" end, fun() -> ~"callback2" end},
+    MockDynamic = {fun(ok) -> ~"callback1" end, fun(ok) -> ~"callback2" end},
     [
         {"Empty sequence should return empty dynamic and unchanged view",
             ?_assertEqual(
-                {[], MockView}, render_dynamic_callbacks([], MockDynamic, render, MockView)
+                {[], MockView}, render_dynamic_callbacks([], MockDynamic, render, ok, MockView)
             )},
 
         {"Single callback should render one element", fun() ->
-            {Dynamic, _View} = render_dynamic_callbacks([1], MockDynamic, render, MockView),
+            {Dynamic, _View} = render_dynamic_callbacks([1], MockDynamic, render, ok, MockView),
             ?assertEqual([~"callback1"], Dynamic)
         end},
 
         {"Multiple callbacks should render in sequence", fun() ->
-            {Dynamic, _View} = render_dynamic_callbacks([1, 2], MockDynamic, render, MockView),
+            {Dynamic, _View} = render_dynamic_callbacks([1, 2], MockDynamic, render, ok, MockView),
             ?assertEqual([~"callback1", ~"callback2"], Dynamic)
         end},
 
         {"Callback returning function should be invoked with view", fun() ->
-            MockDynamicWithFunction = {fun() ->
+            MockDynamicWithFunction = {fun(ok) ->
                 fun(render, View) -> {~"from_function", View} end
             end},
             {Dynamic, _View} = render_dynamic_callbacks(
-                [1], MockDynamicWithFunction, render, MockView
+                [1], MockDynamicWithFunction, render, ok, MockView
             ),
             ?assertEqual([~"from_function"], Dynamic)
         end}
