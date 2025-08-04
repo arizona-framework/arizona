@@ -62,7 +62,7 @@ hierarchical_stateful(Module, Bindings, View) ->
     View1 :: arizona_view:view().
 hierarchical_stateless(Module, Fun, Bindings, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
-    {Dynamic, DynamicView} = arizona_renderer:render_dynamic(Template, hierarchical, View),
+    {Dynamic, DynamicView} = arizona_renderer:render_dynamic(Template, hierarchical, ok, View),
     Struct = #{
         type => stateless,
         static => arizona_template:get_static(Template),
@@ -78,7 +78,7 @@ track_hierarchical_stateful(Id, Template, View) ->
     _ClearTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
     _Tracker = arizona_tracker_dict:set_current_stateful_id(Id),
     {Dynamic, DynamicView} = arizona_renderer:render_dynamic(
-        Template, hierarchical, View
+        Template, hierarchical, ok, View
     ),
     HierarchicalData = #{
         static => arizona_template:get_static(Template),

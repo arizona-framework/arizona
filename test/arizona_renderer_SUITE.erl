@@ -109,7 +109,7 @@ render_dynamic_test(Config) when is_list(Config) ->
     Template = arizona_template:from_string(~"<span>Simple</span>"),
     {mock_stateful_module, MockStatefulModule} = proplists:lookup(mock_stateful_module, Config),
     MockView = create_mock_view(MockStatefulModule, #{id => ~"foo"}),
-    {Dynamic, _UpdatedView} = arizona_renderer:render_dynamic(Template, render, MockView),
+    {Dynamic, _UpdatedView} = arizona_renderer:render_dynamic(Template, render, ok, MockView),
     ?assertEqual([], Dynamic).
 
 %% --------------------------------------------------------------------

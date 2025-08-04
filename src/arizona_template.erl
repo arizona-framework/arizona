@@ -85,8 +85,11 @@ from_string(Module, Line, String, Bindings) when is_atom(Module) ->
     % Scan template content into tokens
     Tokens = arizona_scanner:scan_string(Line, String),
 
+    % 'ok' is the callback arg for template rendering
+    CallbackArg = erl_syntax:atom(ok),
+
     % Parse tokens into AST
-    AST = arizona_parser:parse_tokens(Tokens, []),
+    AST = arizona_parser:parse_tokens(Tokens, CallbackArg, []),
 
     % Evaluate AST to get template record
     erl_eval:expr(
