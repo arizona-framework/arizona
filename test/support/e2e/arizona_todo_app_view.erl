@@ -28,11 +28,12 @@ mount(_Req) ->
         Layout
     ).
 
-handle_event(~"add_todo", _Params, State) ->
+handle_event(~"add_todo", _Params, View) ->
+    State = arizona_view:get_state(View),
     NewTodoText = arizona_stateful:get_binding(new_todo_text, State),
     case string:trim(NewTodoText) of
         ~"" ->
-            {noreply, State};
+            {noreply, View};
         Text ->
             Todos = arizona_stateful:get_binding(todos, State),
             NextId = arizona_stateful:get_binding(next_id, State),
@@ -46,9 +47,11 @@ handle_event(~"add_todo", _Params, State) ->
                 },
                 State
             ),
-            {noreply, UpdatedState}
+            UpdatedView = arizona_view:update_state(UpdatedState, View),
+            {noreply, UpdatedView}
     end;
-handle_event(~"toggle_todo", #{~"id" := IdBin}, State) ->
+handle_event(~"toggle_todo", #{~"id" := IdBin}, View) ->
+    State = arizona_view:get_state(View),
     Id = binary_to_integer(IdBin),
     Todos = arizona_stateful:get_binding(todos, State),
     UpdatedTodos = lists:map(
@@ -61,25 +64,34 @@ handle_event(~"toggle_todo", #{~"id" := IdBin}, State) ->
         Todos
     ),
     UpdatedState = arizona_stateful:put_binding(todos, UpdatedTodos, State),
-    {noreply, UpdatedState};
-handle_event(~"delete_todo", #{~"id" := IdBin}, State) ->
+    UpdatedView = arizona_view:update_state(UpdatedState, View),
+    {noreply, UpdatedView};
+handle_event(~"delete_todo", #{~"id" := IdBin}, View) ->
+    State = arizona_view:get_state(View),
     Id = binary_to_integer(IdBin),
     Todos = arizona_stateful:get_binding(todos, State),
     UpdatedTodos = lists:filter(fun(#{id := TodoId}) -> TodoId =/= Id end, Todos),
     UpdatedState = arizona_stateful:put_binding(todos, UpdatedTodos, State),
-    {noreply, UpdatedState};
-handle_event(~"set_filter", #{~"filter" := Filter}, State) ->
+    UpdatedView = arizona_view:update_state(UpdatedState, View),
+    {noreply, UpdatedView};
+handle_event(~"set_filter", #{~"filter" := Filter}, View) ->
+    State = arizona_view:get_state(View),
     FilterAtom = binary_to_existing_atom(Filter),
     UpdatedState = arizona_stateful:put_binding(filter, FilterAtom, State),
-    {noreply, UpdatedState};
-handle_event(~"update_new_todo", #{~"value" := Value}, State) ->
+    UpdatedView = arizona_view:update_state(UpdatedState, View),
+    {noreply, UpdatedView};
+handle_event(~"update_new_todo", #{~"value" := Value}, View) ->
+    State = arizona_view:get_state(View),
     UpdatedState = arizona_stateful:put_binding(new_todo_text, Value, State),
-    {noreply, UpdatedState};
-handle_event(~"clear_completed", _Params, State) ->
+    UpdatedView = arizona_view:update_state(UpdatedState, View),
+    {noreply, UpdatedView};
+handle_event(~"clear_completed", _Params, View) ->
+    State = arizona_view:get_state(View),
     Todos = arizona_stateful:get_binding(todos, State),
     UpdatedTodos = lists:filter(fun(#{completed := Completed}) -> not Completed end, Todos),
     UpdatedState = arizona_stateful:put_binding(todos, UpdatedTodos, State),
-    {noreply, UpdatedState}.
+    UpdatedView = arizona_view:update_state(UpdatedState, View),
+    {noreply, UpdatedView}.
 
 render(Bindings) ->
     arizona_template:from_string(~""""
@@ -122,10 +134,14 @@ render(Bindings) ->
         </main>
 
         <footer class="footer" data-testid="footer">
-            {arizona_template:render_stateless(arizona_todo_app_view, render_stats, Bindings)}
-            {arizona_template:render_stateless(arizona_todo_app_view, render_filters, Bindings)}
+            {arizona_template:render_stateless(arizona_todo_app_view, render_stats, #{
+                todos => arizona_template:get_binding(todos, Bindings)
+            })}
+            {arizona_template:render_stateless(arizona_todo_app_view, render_filters, #{
+                filter => arizona_template:get_binding(filter, Bindings)
+            })}
             {case length(arizona_template:get_binding(todos, Bindings)) > length(lists:filter(fun(#{completed := Completed}) -> not Completed end, arizona_template:get_binding(todos, Bindings))) of
-                true -> arizona_template:render_stateless(arizona_todo_app_view, render_clear_button, Bindings);
+                true -> arizona_template:render_stateless(arizona_todo_app_view, render_clear_button, #{});
                 false -> ~""
             end}
         </footer>
