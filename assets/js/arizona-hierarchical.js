@@ -38,23 +38,54 @@ export class ArizonaHierarchical {
     }
 
     for (const [elementIndex, newValue] of changes) {
-      this.structure[statefulId].dynamic[elementIndex - 1] = newValue;
+      const element = this.structure[statefulId].dynamic[elementIndex - 1];
+      if (element.type === 'stateless' && Array.isArray(newValue)) {
+        newValue.forEach(([index, value]) => {
+          // FIXME: Apply diff recursively
+          this.structure[statefulId].dynamic[elementIndex - 1].dynamic[index - 1] = value;
+        });
+      } else if (element.type === 'list' && Array.isArray(newValue)) {
+        this.structure[statefulId].dynamic[elementIndex - 1].dynamic = newValue;
+      } else {
+        this.structure[statefulId].dynamic[elementIndex - 1] = newValue;
+      }
     }
   }
 
   /**
-   * Generate HTML from current hierarchical structure
-   * @param {string} componentId - Component ID to render
+   * Generate HTML for stateful components
+   * @param {Object} element - Stateful element with id
    * @returns {string} Generated HTML
    */
-  generateHTML(componentId) {
-    const component = this.structure[componentId];
-    if (!component) {
-      return '';
+  generateStatefulHTML(statefulId) {
+    const struct = this.structure[statefulId];
+    if (!struct) {
+      console.warn(`[Arizona] StatefulId ${statefulId} not found in structure`);
     }
 
     // Components always have static and dynamic arrays
-    return this.zipStaticDynamic(component.static, component.dynamic);
+    return this.zipStaticDynamic(struct.static, struct.dynamic);
+  }
+
+  /**
+   * Generate HTML for stateless components
+   * @param {Object} element - Stateless element with static and dynamic arrays
+   * @returns {string} Generated HTML
+   */
+  generateStatelessHTML(element) {
+    return this.zipStaticDynamic(element.static, element.dynamic);
+  }
+
+  /**
+   * Generate HTML for list components
+   * @param {Object} listElement - List element with static template and dynamic data
+   * @returns {string} Generated HTML
+   */
+  generateListHTML(listElement) {
+    const { static: staticParts, dynamic: dynamicPartsList } = listElement;
+    return dynamicPartsList.reduce((acc, dynamicParts) => {
+      return acc + this.zipStaticDynamic(staticParts, dynamicParts);
+    }, '');
   }
 
   /**
@@ -89,10 +120,10 @@ export class ArizonaHierarchical {
       return element;
     } else if (element && element.type === 'stateful') {
       // Recursively render nested stateful component
-      return this.generateHTML(element.id);
+      return this.generateStatefulHTML(element.id);
     } else if (element && element.type === 'stateless') {
       // Render stateless structure inline
-      return this.generateHTMLFromStructure(element.structure);
+      return this.generateStatelessHTML(element);
     } else if (element && element.type === 'list') {
       // Render list elements
       return this.generateListHTML(element);
@@ -128,9 +159,9 @@ export class ArizonaHierarchical {
     } else if (element && typeof element === 'object') {
       // Handle special object types
       if (element.type === 'stateful') {
-        return this.generateHTML(element.id);
+        return this.generateStatefulHTML(element.id);
       } else if (element.type === 'stateless') {
-        return this.generateHTMLFromStructure(element.structure);
+        return this.generateStatelessHTML(element);
       } else if (element.type === 'list') {
         return this.generateListHTML(element);
       } else {
@@ -171,51 +202,6 @@ export class ArizonaHierarchical {
     }
 
     return elements.join('');
-  }
-
-  /**
-   * Generate HTML for list components
-   * @param {Object} listElement - List element with static template and dynamic data
-   * @returns {string} Generated HTML
-   */
-  generateListHTML(listElement) {
-    const { static: staticParts, dynamic } = listElement;
-    const items = [];
-
-    for (const dynamicItem of dynamic) {
-      const itemElements = [];
-
-      // Get dynamic indexes in order
-      const dynamicIndexes = Object.keys(dynamicItem)
-        .map((k) => {
-          return parseInt(k);
-        })
-        .sort((a, b) => {
-          return a - b;
-        });
-
-      // Interleave static and dynamic parts
-      let staticIndex = 0;
-      for (const dynIndex of dynamicIndexes) {
-        // Add static part before this dynamic element
-        if (staticIndex < staticParts.length) {
-          itemElements.push(staticParts[staticIndex]);
-          staticIndex++;
-        }
-        // Add dynamic element
-        itemElements.push(String(dynamicItem[dynIndex]));
-      }
-
-      // Add remaining static parts
-      while (staticIndex < staticParts.length) {
-        itemElements.push(staticParts[staticIndex]);
-        staticIndex++;
-      }
-
-      items.push(itemElements.join(''));
-    }
-
-    return items.join('');
   }
 
   /**
@@ -277,7 +263,7 @@ export class ArizonaHierarchical {
     return {
       type: 'html_patch',
       statefulId,
-      html: this.generateHTML(statefulId),
+      html: this.generateStatefulHTML(statefulId),
       timestamp: Date.now(),
     };
   }
@@ -291,7 +277,7 @@ export class ArizonaHierarchical {
     return {
       type: 'initial_render',
       statefulId,
-      html: this.generateHTML(statefulId),
+      html: this.generateStatefulHTML(statefulId),
       structure: this.getStructure(),
       timestamp: Date.now(),
     };
@@ -330,12 +316,13 @@ export const ArizonaHierarchicalUtils = {
   /**
    * Extract all text content from a structure
    * @param {Object} structure - Structure to extract text from
+   * @param {string} rootId - Stateful ID of the root element
    * @returns {string} Extracted text content
    */
-  extractTextContent(structure) {
+  extractTextContent(structure, rootId) {
     const client = new ArizonaHierarchical();
     client.initialize(structure);
-    const html = client.generateHTML();
+    const html = client.generateStatefulHTML(rootId);
 
     // Simple HTML tag removal for text extraction
     return html.replace(/<[^>]*>/g, '').trim();
