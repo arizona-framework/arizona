@@ -95,10 +95,10 @@ hierarchical_list(Template, List, View) ->
     DynamicRender =
         [
             begin
-                {DynamicHtml, _UpdatedView} = arizona_renderer:render_dynamic(
+                {DynamicHierarchical, _UpdatedView} = arizona_renderer:render_dynamic(
                     DynamicSequence, Dynamic, hierarchical, CallbackArg, View
                 ),
-                DynamicHtml
+                DynamicHierarchical
             end
          || CallbackArg <- List
         ],
