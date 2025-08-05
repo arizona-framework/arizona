@@ -68,13 +68,19 @@ create_template_ast(StaticParts, DynamicElements, CallbackArg, CompileOpts) ->
         DynamicElements, CallbackArg, CompileOpts
     ),
 
-    % Create tuple AST: {template, Static, Dynamic, DynamicSequence, DynamicAnno}
+    % Generate fingerprint based on template structure and callback context
+    FingerprintData = {StaticParts, DynamicElements, erl_syntax:revert(CallbackArg)},
+    Fingerprint = erlang:phash2(FingerprintData),
+    FingerprintAST = erl_syntax:integer(Fingerprint),
+
+    % Create tuple AST: {template, Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint}
     erl_syntax:tuple([
         erl_syntax:atom(template),
         StaticListAST,
         DynamicAST,
         DynamicSequenceAST,
-        DynamicAnnoAST
+        DynamicAnnoAST,
+        FingerprintAST
     ]).
 
 %% Create AST for static list

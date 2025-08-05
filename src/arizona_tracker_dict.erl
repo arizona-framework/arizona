@@ -4,6 +4,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([get_tracker/0]).
 -export([set_tracker/1]).
 -export([set_current_stateful_id/1]).
 -export([set_current_element_index/1]).
@@ -13,6 +14,11 @@
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
+
+-spec get_tracker() -> Tracker | undefined when
+    Tracker :: arizona_tracker:tracker().
+get_tracker() ->
+    get(?MODULE).
 
 -spec set_tracker(Tracker) -> OldTracker | undefined when
     Tracker :: arizona_tracker:tracker(),
@@ -71,12 +77,3 @@ clear_stateful_dependencies(StatefulId) ->
             Tracker = set_tracker(UpdatedTracker),
             UpdatedTracker
     end.
-
-%% --------------------------------------------------------------------
-%% Internal functions
-%% --------------------------------------------------------------------
-
--spec get_tracker() -> Tracker | undefined when
-    Tracker :: arizona_tracker:tracker().
-get_tracker() ->
-    get(?MODULE).

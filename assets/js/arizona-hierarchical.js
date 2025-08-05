@@ -30,22 +30,35 @@ export class ArizonaHierarchical {
   /**
    * Apply diff changes from arizona_differ to hierarchical structure
    * @param {string} statefulId - Stateful ID to render
-   * @param {Array} changes - Changes in format: [[ElementIndex, Changes]]
+   * @param {Array|Object} changes - Changes in format: [[ElementIndex, Changes]] or hierarchical structure
    */
   applyDiff(statefulId, changes) {
+    // Check if changes is a hierarchical structure (fingerprint mismatch case)
+    if (changes?.type === 'stateful') {
+      this.structure[changes.id] = changes;
+      return;
+    }
+
     if (!this.structure[statefulId]) {
       console.warn(`[Arizona] StatefulId ${statefulId} not found in structure`);
     }
 
     for (const [elementIndex, newValue] of changes) {
-      const element = this.structure[statefulId].dynamic[elementIndex - 1];
-      if (element.type === 'stateless' && Array.isArray(newValue)) {
-        newValue.forEach(([index, value]) => {
-          // FIXME: Apply diff recursively
-          this.structure[statefulId].dynamic[elementIndex - 1].dynamic[index - 1] = value;
-        });
-      } else if (element.type === 'list' && Array.isArray(newValue)) {
-        this.structure[statefulId].dynamic[elementIndex - 1].dynamic = newValue;
+      // Check if newValue is a hierarchical structure (fingerprint mismatch)
+      if (newValue && typeof newValue === 'object' && newValue.type) {
+        this.structure[statefulId].dynamic[elementIndex - 1] = newValue;
+      } else if (Array.isArray(newValue)) {
+        const element = this.structure[statefulId].dynamic[elementIndex - 1];
+        if (element && element.type === 'list') {
+          this.structure[statefulId].dynamic[elementIndex - 1].dynamic = newValue;
+        } else if (element && element.type === 'stateless') {
+          // Traditional stateless diff - array of [index, value] pairs
+          newValue.forEach(([index, value]) => {
+            this.structure[statefulId].dynamic[elementIndex - 1].dynamic[index - 1] = value;
+          });
+        } else {
+          this.structure[statefulId].dynamic[elementIndex - 1] = newValue;
+        }
       } else {
         this.structure[statefulId].dynamic[elementIndex - 1] = newValue;
       }

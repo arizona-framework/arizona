@@ -11,6 +11,7 @@
 -export([get_dynamic/1]).
 -export([get_dynamic_sequence/1]).
 -export([get_dynamic_anno/1]).
+-export([get_fingerprint/1]).
 -export([get_binding/2]).
 -export([get_binding/3]).
 -export([find_binding/2]).
@@ -27,6 +28,7 @@
 -ignore_xref([from_string/1]).
 -ignore_xref([from_string/5]).
 -ignore_xref([get_dynamic_anno/1]).
+-ignore_xref([get_fingerprint/1]).
 -ignore_xref([get_binding/2]).
 -ignore_xref([get_binding/3]).
 -ignore_xref([find_binding/2]).
@@ -44,6 +46,7 @@
 -export_type([dynamic/0]).
 -export_type([dynamic_sequence/0]).
 -export_type([dynamic_anno/0]).
+-export_type([fingerprint/0]).
 -export_type([render_callback/0]).
 
 %% --------------------------------------------------------------------
@@ -54,7 +57,8 @@
     static :: static(),
     dynamic :: dynamic(),
     dynamic_sequence :: dynamic_sequence(),
-    dynamic_anno :: dynamic_anno()
+    dynamic_anno :: dynamic_anno(),
+    fingerprint :: fingerprint()
 }).
 
 -opaque template() :: #template{}.
@@ -62,6 +66,7 @@
 -nominal dynamic() :: tuple().
 -nominal dynamic_sequence() :: [pos_integer()].
 -nominal dynamic_anno() :: tuple().
+-nominal fingerprint() :: non_neg_integer().
 -nominal render_callback() :: fun(
     (arizona_renderer:render_mode(), arizona_view:view()) -> {dynamic(), arizona_view:view()}
 ).
@@ -127,6 +132,12 @@ get_dynamic_sequence(#template{dynamic_sequence = Sequence}) ->
     DynamicAnno :: dynamic_anno().
 get_dynamic_anno(#template{dynamic_anno = Anno}) ->
     Anno.
+
+-spec get_fingerprint(Template) -> Fingerprint when
+    Template :: template(),
+    Fingerprint :: fingerprint().
+get_fingerprint(#template{fingerprint = Fingerprint}) ->
+    Fingerprint.
 
 -spec get_binding(Key, Bindings) -> Value when
     Key :: arizona_binder:key(),
