@@ -7,6 +7,7 @@
 -export([hierarchical_view/1]).
 -export([hierarchical_stateful/3]).
 -export([hierarchical_stateless/4]).
+-export([hierarchical_list/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -14,6 +15,7 @@
 
 -export_type([stateful_struct/0]).
 -export_type([stateless_struct/0]).
+-export_type([list_struct/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -23,8 +25,15 @@
     type := stateful,
     id := arizona_stateful:id()
 }.
+
 -nominal stateless_struct() :: #{
     type := stateless,
+    static := arizona_template:static(),
+    dynamic := arizona_renderer:dynamic()
+}.
+
+-nominal list_struct() :: #{
+    type := list,
     static := arizona_template:static(),
     dynamic := arizona_renderer:dynamic()
 }.
@@ -62,13 +71,43 @@ hierarchical_stateful(Module, Bindings, View) ->
     View1 :: arizona_view:view().
 hierarchical_stateless(Module, Fun, Bindings, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
-    {Dynamic, DynamicView} = arizona_renderer:render_dynamic(Template, hierarchical, ok, View),
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    Dynamic = arizona_template:get_dynamic(Template),
+    {DynamicRender, DynamicView} = arizona_renderer:render_dynamic(
+        DynamicSequence, Dynamic, hierarchical, ok, View
+    ),
     Struct = #{
         type => stateless,
         static => arizona_template:get_static(Template),
-        dynamic => Dynamic
+        dynamic => DynamicRender
     },
     {Struct, DynamicView}.
+
+-spec hierarchical_list(Template, List, View) -> {Struct, View1} when
+    Template :: arizona_template:template(),
+    List :: [dynamic()],
+    View :: arizona_view:view(),
+    Struct :: list_struct(),
+    View1 :: arizona_view:view().
+hierarchical_list(Template, List, View) ->
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    Dynamic = arizona_template:get_dynamic(Template),
+    DynamicRender =
+        [
+            begin
+                {DynamicHtml, _UpdatedView} = arizona_renderer:render_dynamic(
+                    DynamicSequence, Dynamic, hierarchical, CallbackArg, View
+                ),
+                DynamicHtml
+            end
+         || CallbackArg <- List
+        ],
+    Struct = #{
+        type => list,
+        static => arizona_template:get_static(Template),
+        dynamic => DynamicRender
+    },
+    {Struct, View}.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -77,12 +116,14 @@ hierarchical_stateless(Module, Fun, Bindings, View) ->
 track_hierarchical_stateful(Id, Template, View) ->
     _ClearTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
     _Tracker = arizona_tracker_dict:set_current_stateful_id(Id),
-    {Dynamic, DynamicView} = arizona_renderer:render_dynamic(
-        Template, hierarchical, ok, View
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    Dynamic = arizona_template:get_dynamic(Template),
+    {DynamicRender, DynamicView} = arizona_renderer:render_dynamic(
+        DynamicSequence, Dynamic, hierarchical, ok, View
     ),
     HierarchicalData = #{
         static => arizona_template:get_static(Template),
-        dynamic => Dynamic
+        dynamic => DynamicRender
     },
     _HierarchicalStructure = arizona_hierarchical_dict:put_stateful_data(Id, HierarchicalData),
     Struct = #{
