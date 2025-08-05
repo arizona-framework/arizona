@@ -60,7 +60,14 @@ hierarchical_view(View) ->
     View1 :: arizona_view:view().
 hierarchical_stateful(Module, Bindings, View) ->
     {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
-    track_hierarchical_stateful(Id, Template, PrepRenderView).
+
+    % Store the fingerprint for future comparisons
+    Fingerprint = arizona_template:get_fingerprint(Template),
+    Tracker = arizona_tracker_dict:get_tracker(),
+    ElementIndex = arizona_tracker:get_current_element_index(Tracker),
+    FingerprintView = arizona_view:put_fingerprint(Id, ElementIndex, Fingerprint, PrepRenderView),
+
+    track_hierarchical_stateful(Id, Template, FingerprintView).
 
 -spec hierarchical_stateless(Module, Function, Bindings, View) -> {Struct, View1} when
     Module :: module(),
@@ -71,10 +78,18 @@ hierarchical_stateful(Module, Bindings, View) ->
     View1 :: arizona_view:view().
 hierarchical_stateless(Module, Fun, Bindings, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
+
+    % Store the fingerprint for future comparisons
+    Fingerprint = arizona_template:get_fingerprint(Template),
+    Tracker = arizona_tracker_dict:get_tracker(),
+    ParentId = arizona_tracker:get_current_stateful_id(Tracker),
+    ElementIndex = arizona_tracker:get_current_element_index(Tracker),
+    FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
+
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
     {DynamicRender, DynamicView} = arizona_renderer:render_dynamic(
-        DynamicSequence, Dynamic, hierarchical, ok, View
+        DynamicSequence, Dynamic, hierarchical, ok, FingerprintView
     ),
     Struct = #{
         type => stateless,
@@ -90,6 +105,13 @@ hierarchical_stateless(Module, Fun, Bindings, View) ->
     Struct :: list_struct(),
     View1 :: arizona_view:view().
 hierarchical_list(Template, List, View) ->
+    % Store the fingerprint for future comparisons
+    Fingerprint = arizona_template:get_fingerprint(Template),
+    Tracker = arizona_tracker_dict:get_tracker(),
+    ParentId = arizona_tracker:get_current_stateful_id(Tracker),
+    ElementIndex = arizona_tracker:get_current_element_index(Tracker),
+    FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
+
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
     DynamicRender =
@@ -107,7 +129,7 @@ hierarchical_list(Template, List, View) ->
         static => arizona_template:get_static(Template),
         dynamic => DynamicRender
     },
-    {Struct, View}.
+    {Struct, FingerprintView}.
 
 %% --------------------------------------------------------------------
 %% Internal functions

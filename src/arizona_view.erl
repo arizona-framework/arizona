@@ -13,6 +13,9 @@
 -export([get_state/1]).
 -export([update_state/2]).
 -export([get_stateful_state/2]).
+-export([fingerprint_matches/4]).
+-export([put_fingerprint/4]).
+-export([remove_fingerprint/3]).
 -export([find_stateful_state/2]).
 -export([put_stateful_state/3]).
 
@@ -30,7 +33,12 @@
 -record(view, {
     layout :: layout() | none,
     state :: arizona_stateful:state(),
-    stateful_states :: #{arizona_stateful:id() => arizona_stateful:state()}
+    stateful_states :: #{arizona_stateful:id() => arizona_stateful:state()},
+    fingerprints :: #{
+        arizona_stateful:id() => #{
+            arizona_tracker:element_index() => arizona_template:fingerprint()
+        }
+    }
 }).
 
 -opaque view() :: #view{}.
@@ -114,12 +122,12 @@ call_handle_info_callback(Info, #view{state = State} = View) ->
     Layout :: layout() | none,
     View :: view().
 new(Module, Bindings, Layout) when is_atom(Module), (is_tuple(Layout) orelse Layout =:= none) ->
-    Id = arizona_binder:get(id, Bindings),
     State = arizona_stateful:new(Module, Bindings),
     #view{
         layout = Layout,
         state = State,
-        stateful_states = #{Id => State}
+        stateful_states = #{},
+        fingerprints = #{}
     }.
 
 -spec get_layout(View) -> Layout when
@@ -163,3 +171,41 @@ find_stateful_state(Id, #view{} = View) when is_binary(Id) ->
 put_stateful_state(Id, State, #view{} = View) ->
     States = View#view.stateful_states,
     View#view{stateful_states = States#{Id => State}}.
+
+-spec fingerprint_matches(Id, ElementIndex, Fingerprint, View) -> boolean() when
+    Id :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
+    Fingerprint :: arizona_template:fingerprint(),
+    View :: view().
+fingerprint_matches(Id, ElementIndex, Fingerprint, #view{} = View) ->
+    case View#view.fingerprints of
+        #{Id := #{ElementIndex := Fingerprint}} ->
+            true;
+        #{} ->
+            false
+    end.
+
+-spec put_fingerprint(Id, ElementIndex, Fingerprint, View) -> View1 when
+    Id :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
+    Fingerprint :: arizona_template:fingerprint(),
+    View :: view(),
+    View1 :: view().
+put_fingerprint(Id, ElementIndex, Fingerprint, #view{fingerprints = Fingerprints} = View) ->
+    StatefulFingerprints = maps:get(Id, Fingerprints, #{}),
+    UpdatedStatefulFingerprints = StatefulFingerprints#{ElementIndex => Fingerprint},
+    View#view{fingerprints = Fingerprints#{Id => UpdatedStatefulFingerprints}}.
+
+-spec remove_fingerprint(Id, ElementIndex, View) -> View1 when
+    Id :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
+    View :: view(),
+    View1 :: view().
+remove_fingerprint(Id, ElementIndex, #view{} = View) ->
+    case View#view.fingerprints of
+        #{Id := StatefulFingerprints} = Fingerprints ->
+            UpdatedStatefulFingerprints = maps:remove(ElementIndex, StatefulFingerprints),
+            View#view{fingerprints = Fingerprints#{Id => UpdatedStatefulFingerprints}};
+        #{} ->
+            View
+    end.

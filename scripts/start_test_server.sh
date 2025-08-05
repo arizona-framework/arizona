@@ -10,6 +10,8 @@ exec erl \
     -pa "_build/test/lib/cowboy/ebin" \
     -pa "_build/test/lib/cowlib/ebin" \
     -pa "_build/test/lib/ranch/ebin" \
+    -sname arizona \
+    -setcookie framework \
     -noshell -eval "
 {ok, _} = application:ensure_all_started(arizona),
 Routes = [

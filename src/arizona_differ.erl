@@ -35,53 +35,90 @@ diff_view(View) ->
     {Diff, DiffState, DiffView} = track_diff_stateful(Id, Template, StatefulState, View),
     {Diff, arizona_view:update_state(DiffState, DiffView)}.
 
--spec diff_stateful(Module, Bindings, View) -> {Diff, View1} when
+-spec diff_stateful(Module, Bindings, View) -> {Result, View1} when
     Module :: module(),
     Bindings :: arizona_binder:bindings(),
     View :: arizona_view:view(),
-    Diff :: diff(),
+    Result :: diff() | arizona_hierarchical:stateful_struct(),
     View1 :: arizona_view:view().
 diff_stateful(Module, Bindings, View) ->
     {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
-    StatefulState = arizona_view:get_stateful_state(Id, PrepRenderView),
-    {Diff, DiffState, DiffView} = track_diff_stateful(Id, Template, StatefulState, PrepRenderView),
-    StatefulView = arizona_view:put_stateful_state(Id, DiffState, DiffView),
-    {Diff, StatefulView}.
+    Fingerprint = arizona_template:get_fingerprint(Template),
+    Tracker = arizona_tracker_dict:get_tracker(),
+    ElementIndex = arizona_tracker:get_current_element_index(Tracker),
+    case arizona_view:fingerprint_matches(Id, ElementIndex, Fingerprint, PrepRenderView) of
+        true ->
+            StatefulState = arizona_view:get_stateful_state(Id, PrepRenderView),
+            {Diff, DiffState, DiffView} = track_diff_stateful(
+                Id, Template, StatefulState, PrepRenderView
+            ),
+            StatefulView = arizona_view:put_stateful_state(Id, DiffState, DiffView),
+            case Diff of
+                [] ->
+                    {nodiff, StatefulView};
+                _ ->
+                    {Diff, StatefulView}
+            end;
+        false ->
+            arizona_hierarchical:hierarchical_stateful(Module, Bindings, PrepRenderView)
+    end.
 
--spec diff_stateless(Module, Function, Bindings, View) -> {Diff, View1} when
+-spec diff_stateless(Module, Function, Bindings, View) -> {Result, View1} when
     Module :: module(),
     Function :: atom(),
     Bindings :: arizona_binder:bindings(),
     View :: arizona_view:view(),
-    Diff :: diff(),
+    Result :: diff() | arizona_hierarchical:stateless_struct(),
     View1 :: arizona_view:view().
-diff_stateless(Module, Fun, Bindings, View) ->
-    Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
-    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
-    Dynamic = arizona_template:get_dynamic(Template),
-    {Diff, RenderView} = process_affected_elements(DynamicSequence, Dynamic, ok, View),
-    {Diff, RenderView}.
+diff_stateless(Module, Function, Bindings, View) ->
+    Template = arizona_stateless:call_render_callback(Module, Function, Bindings),
+    Fingerprint = arizona_template:get_fingerprint(Template),
+    Tracker = arizona_tracker_dict:get_tracker(),
+    ParentId = arizona_tracker:get_current_stateful_id(Tracker),
+    ElementIndex = arizona_tracker:get_current_element_index(Tracker),
+    case arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View) of
+        true ->
+            DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+            Dynamic = arizona_template:get_dynamic(Template),
+            case process_affected_elements(DynamicSequence, Dynamic, ok, View) of
+                {[], RenderView} ->
+                    {nodiff, RenderView};
+                {Diff, RenderView} ->
+                    {Diff, RenderView}
+            end;
+        false ->
+            arizona_hierarchical:hierarchical_stateless(Module, Function, Bindings, View)
+    end.
 
--spec diff_list(Template, List, View) -> {Diff, View1} when
+-spec diff_list(Template, List, View) -> {Result, View1} when
     Template :: arizona_template:template(),
     List :: [dynamic()],
     View :: arizona_view:view(),
-    Diff :: diff(),
+    Result :: diff() | arizona_hierarchical:list_struct(),
     View1 :: arizona_view:view().
 diff_list(Template, List, View) ->
-    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
-    Dynamic = arizona_template:get_dynamic(Template),
-    Diff =
-        [
-            begin
-                {DynamicDiff, _UpdatedView} = arizona_renderer:render_dynamic(
-                    DynamicSequence, Dynamic, diff, CallbackArg, View
-                ),
-                DynamicDiff
-            end
-         || CallbackArg <- List
-        ],
-    {Diff, View}.
+    Fingerprint = arizona_template:get_fingerprint(Template),
+    Tracker = arizona_tracker_dict:get_tracker(),
+    ParentId = arizona_tracker:get_current_stateful_id(Tracker),
+    ElementIndex = arizona_tracker:get_current_element_index(Tracker),
+    case arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View) of
+        true ->
+            DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+            Dynamic = arizona_template:get_dynamic(Template),
+            Diff =
+                [
+                    begin
+                        {DynamicDiff, _UpdatedView} = arizona_renderer:render_dynamic(
+                            DynamicSequence, Dynamic, diff, CallbackArg, View
+                        ),
+                        DynamicDiff
+                    end
+                 || CallbackArg <- List
+                ],
+            {Diff, View};
+        false ->
+            arizona_hierarchical:hierarchical_list(Template, List, View)
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal Functions
@@ -142,7 +179,7 @@ process_affected_elements([ElementIndex | T], Dynamic, CallbackArg, View) ->
                 T, Dynamic, CallbackArg, CallbackView
             ),
             case Diff of
-                [] ->
+                nodiff ->
                     {RestChanges, FinalView};
                 _ ->
                     ElementChange = {ElementIndex, Diff},
@@ -151,6 +188,12 @@ process_affected_elements([ElementIndex | T], Dynamic, CallbackArg, View) ->
         Result ->
             Html = arizona_html:to_html(Result),
             ElementChange = {ElementIndex, Html},
-            {RestChanges, FinalView} = process_affected_elements(T, Dynamic, CallbackArg, View),
+            % Remove fingerprint since this is not a template (pure HTML/string)
+            Tracker = arizona_tracker_dict:get_tracker(),
+            ParentId = arizona_tracker:get_current_stateful_id(Tracker),
+            CleanView = arizona_view:remove_fingerprint(ParentId, ElementIndex, View),
+            {RestChanges, FinalView} = process_affected_elements(
+                T, Dynamic, CallbackArg, CleanView
+            ),
             {[ElementChange | RestChanges], FinalView}
     end.
