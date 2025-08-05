@@ -6,7 +6,7 @@
 %% --------------------------------------------------------------------
 
 -export([from_string/1]).
--export([from_string/4]).
+-export([from_string/5]).
 -export([get_static/1]).
 -export([get_dynamic/1]).
 -export([get_dynamic_sequence/1]).
@@ -18,13 +18,14 @@
 -export([render_stateless/3]).
 -export([render_slot/1]).
 -export([render_list/2]).
+-export([render_list_template/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
 -ignore_xref([from_string/1]).
--ignore_xref([from_string/4]).
+-ignore_xref([from_string/5]).
 -ignore_xref([get_dynamic_anno/1]).
 -ignore_xref([get_binding/2]).
 -ignore_xref([get_binding/3]).
@@ -73,20 +74,21 @@
     String :: binary(),
     Template :: template().
 from_string(String) ->
-    from_string(erlang, 0, String, #{}).
+    % 'ok' is the callback arg for template rendering
+    CallbackArg = erl_syntax:atom(ok),
 
--spec from_string(Module, Line, String, Bindings) -> Template when
+    from_string(erlang, 0, String, CallbackArg, #{}).
+
+-spec from_string(Module, Line, String, CallbackArg, Bindings) -> Template when
     Module :: module(),
     Line :: pos_integer(),
     String :: binary(),
+    CallbackArg :: erl_syntax:syntaxTree(),
     Bindings :: arizona_binder:bindings(),
     Template :: template().
-from_string(Module, Line, String, Bindings) when is_atom(Module) ->
+from_string(Module, Line, String, CallbackArg, Bindings) when is_atom(Module) ->
     % Scan template content into tokens
     Tokens = arizona_scanner:scan_string(Line, String),
-
-    % 'ok' is the callback arg for template rendering
-    CallbackArg = erl_syntax:atom(ok),
 
     % Parse tokens into AST
     AST = arizona_parser:parse_tokens(Tokens, CallbackArg, []),
@@ -196,6 +198,20 @@ render_slot(view) ->
     Result :: binary().
 render_list(_Callback, _List) ->
     ~"[LIST]".
+
+-spec render_list_template(Template, List) -> Callback when
+    Template :: template(),
+    List :: [dynamic()],
+    Callback :: render_callback().
+render_list_template(Template, List) ->
+    fun
+        (render, View) ->
+            arizona_renderer:render_list(Template, List, View);
+        (diff, View) ->
+            arizona_differ:diff_list(Template, List, View);
+        (hierarchical, View) ->
+            arizona_hierarchical:hierarchical_list(Template, List, View)
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal functions

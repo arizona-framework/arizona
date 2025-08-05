@@ -17,6 +17,7 @@ groups() ->
         {rendering_tests, [parallel], [
             render_stateful_test,
             render_stateless_test,
+            render_list_test,
             render_dynamic_test
         ]}
     ].
@@ -104,13 +105,39 @@ render_stateless_test(Config) when is_list(Config) ->
     ),
     ?assertEqual([~"<div>Stateless Template</div>"], Html).
 
+render_list_test(Config) when is_list(Config) ->
+    ct:comment("render_list should transform to optimized template structure"),
+    {mock_stateful_module, MockStatefulModule} = proplists:lookup(mock_stateful_module, Config),
+    MockView = create_mock_view(MockStatefulModule, #{id => ~"list"}),
+
+    % Test the parse transform by using render_list in template
+    CallbackArg = erl_syntax:variable('Item'),
+    Template = arizona_template:from_string(?MODULE, ?LINE, ~""""
+    <li>{Item}</li>
+    """", CallbackArg, #{}),
+
+    List = [~"first", ~"second", ~"third"],
+    {Html, _UpdatedView} = arizona_renderer:render_list(Template, List, MockView),
+
+    % The result should contain the list items
+    ExpectedHtml = [
+        [~"<li>", ~"first", ~"</li>"],
+        [~"<li>", ~"second", ~"</li>"],
+        [~"<li>", ~"third", ~"</li>"]
+    ],
+    ?assertEqual(ExpectedHtml, Html).
+
 render_dynamic_test(Config) when is_list(Config) ->
     ct:comment("render_dynamic/2 should render template dynamic parts"),
     Template = arizona_template:from_string(~"<span>Simple</span>"),
     {mock_stateful_module, MockStatefulModule} = proplists:lookup(mock_stateful_module, Config),
     MockView = create_mock_view(MockStatefulModule, #{id => ~"foo"}),
-    {Dynamic, _UpdatedView} = arizona_renderer:render_dynamic(Template, render, ok, MockView),
-    ?assertEqual([], Dynamic).
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    Dynamic = arizona_template:get_dynamic(Template),
+    {DynamicRender, _UpdatedView} = arizona_renderer:render_dynamic(
+        DynamicSequence, Dynamic, render, ok, MockView
+    ),
+    ?assertEqual([], DynamicRender).
 
 %% --------------------------------------------------------------------
 %% Mock helpers

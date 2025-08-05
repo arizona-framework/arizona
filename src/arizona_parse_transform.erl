@@ -34,7 +34,7 @@ parse_transform(Forms, Options) ->
     RevertedForms.
 
 -spec format_error(Reason, StackTrace) -> ErrorMap when
-    Reason :: arizona_template_extraction_failed,
+    Reason :: arizona_template_extraction_failed | arizona_render_list_transformation_failed,
     StackTrace :: erlang:stacktrace(),
     ErrorMap :: #{general => string(), reason => io_lib:chars()}.
 format_error(arizona_template_extraction_failed, [{_M, _F, _As, Info} | _]) ->
@@ -43,6 +43,15 @@ format_error(arizona_template_extraction_failed, [{_M, _F, _As, Info} | _]) ->
     #{
         general => "Arizona template parsing failed",
         reason => io_lib:format("Failed to extract template in ~p at line ~p:\n~p:~p:~p", [
+            Module, Line, Class, Reason, Stacktrace
+        ])
+    };
+format_error(arizona_render_list_transformation_failed, [{_M, _F, _As, Info} | _]) ->
+    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
+    {Module, Line, Class, Reason, Stacktrace} = maps:get(cause, ErrorInfo),
+    #{
+        general => "Arizona render_list transformation failed",
+        reason => io_lib:format("Failed to transform render_list in ~p at line ~p:\n~p:~p:~p", [
             Module, Line, Class, Reason, Stacktrace
         ])
     }.
@@ -107,30 +116,23 @@ transform_node(Node, Module, CompileOpts) ->
 transform_application(Node, Module, CompileOpts) ->
     case analyze_application(Node) of
         {arizona_template, from_string, 1, [TemplateArg]} ->
-            Pos = erl_syntax:get_pos(Node),
-            Line =
-                case erl_anno:is_anno(Pos) of
-                    true ->
-                        erl_anno:line(Pos);
-                    false ->
-                        Pos
-                end,
-            CallbackArg = erl_syntax:atom(ok),
-            transform_from_string(Module, Line, TemplateArg, CallbackArg, CompileOpts);
+            % Check if we're in a dynamic callback context to prevent infinite recursion
+            InDynamicCallback = proplists:get_bool(in_dynamic_callback, CompileOpts),
+
+            case InDynamicCallback of
+                true ->
+                    % Inside dynamic callback - don't transform from_string to prevent infinite recursion
+                    Node;
+                false ->
+                    % Normal context - transform from_string
+                    Line = get_node_line(Node),
+                    CallbackArg = erl_syntax:atom(ok),
+                    transform_from_string(Module, Line, TemplateArg, CallbackArg, CompileOpts)
+            end;
         {arizona_template, render_list, 2, [FunArg, ListArg]} ->
-            % Transform the function argument to process nested from_string calls
-            TransformedFun = erl_syntax_lib:map(
-                fun(InnerNode) ->
-                    transform_node(erl_syntax:revert(InnerNode), Module, CompileOpts)
-                end,
-                FunArg
-            ),
-            % Reconstruct the render_list call with the transformed function
-            TemplateModule = erl_syntax:atom(arizona_template),
-            RenderFunction = erl_syntax:atom(render_list),
-            erl_syntax:application(erl_syntax:module_qualifier(TemplateModule, RenderFunction), [
-                TransformedFun, ListArg
-            ]);
+            % Always transform render_list calls - they don't cause infinite recursion
+            Line = get_node_line(Node),
+            transform_render_list(Module, Line, FunArg, ListArg, CompileOpts);
         _ ->
             Node
     end.
@@ -182,16 +184,83 @@ transform_from_string(Module, Line, TemplateArg, CallbackArg, CompileOpts) ->
             )
     end.
 
+%% Transform arizona_template:render_list/2 calls
+transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) ->
+    try
+        % Extract the item parameter and template string from the function
+        {CallbackArg, TemplateString} = extract_list_function_body(FunArg, Module),
+
+        % Scan template content into tokens
+        Tokens = arizona_scanner:scan_string(Line + 1, TemplateString),
+
+        % Parse tokens into template AST with the actual CallbackArg (not 'ok')
+        % This ensures that dynamic expressions will use the correct parameter
+        TemplateAST = arizona_parser:parse_tokens(Tokens, CallbackArg, CompileOpts),
+
+        % Create application: arizona_template:render_list_template(Template, List)
+        TemplateModule = erl_syntax:atom(arizona_template),
+        TemplateFunction = erl_syntax:atom(render_list_template),
+        erl_syntax:application(erl_syntax:module_qualifier(TemplateModule, TemplateFunction), [
+            TemplateAST, ListArg
+        ])
+    catch
+        Class:Reason:Stacktrace ->
+            error(
+                arizona_render_list_transformation_failed,
+                none,
+                error_info({Module, Line, Class, Reason, Stacktrace})
+            )
+    end.
+
+%% Extract item parameter and template string from list function
+extract_list_function_body(FunExpr, Module) ->
+    case erl_syntax:type(FunExpr) of
+        fun_expr ->
+            [Clause] = erl_syntax:fun_expr_clauses(FunExpr),
+            [CallbackArg] = erl_syntax:clause_patterns(Clause),
+            [TemplateCall] = erl_syntax:clause_body(Clause),
+
+            % Extract template string from raw arizona_template:from_string call
+            case analyze_application(TemplateCall) of
+                {arizona_template, from_string, 1, [TemplateArg]} ->
+                    TemplateString = eval_expr(Module, TemplateArg),
+                    {CallbackArg, TemplateString};
+                _ ->
+                    error({not_from_string_call, TemplateCall})
+            end;
+        _ ->
+            error({invalid_function_expression, FunExpr})
+    end.
+
 %% Utility Functions
 
+%% Get line number from syntax tree node
+-spec get_node_line(Node) -> Line when
+    Node :: erl_syntax:syntaxTree(),
+    Line :: pos_integer().
+get_node_line(Node) ->
+    Pos = erl_syntax:get_pos(Node),
+    case erl_anno:is_anno(Pos) of
+        true ->
+            erl_anno:line(Pos);
+        false ->
+            Pos
+    end.
+
 %% Evaluate expression
--spec eval_expr(Module, BinaryForm) -> Result when
+-spec eval_expr(Module, Form) -> Result when
     Module :: module(),
-    BinaryForm :: erl_parse:abstract_expr(),
+    Form :: erl_syntax:syntaxTree() | erl_parse:abstract_expr(),
     Result :: dynamic().
-eval_expr(Module, BinaryForm) ->
+eval_expr(Module, Form) ->
+    % Convert erl_syntax tree to abstract form if needed
+    AbstractForm =
+        case erl_syntax:is_tree(Form) of
+            true -> erl_syntax:revert(Form);
+            false -> Form
+        end,
     erl_eval:expr(
-        BinaryForm,
+        AbstractForm,
         #{},
         {value, fun(Function, Args) -> apply(Module, Function, Args) end},
         none,

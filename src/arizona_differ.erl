@@ -6,6 +6,7 @@
 -export([diff_view/1]).
 -export([diff_stateful/3]).
 -export([diff_stateless/4]).
+-export([diff_list/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -60,6 +61,15 @@ diff_stateless(Module, Fun, Bindings, View) ->
     Dynamic = arizona_template:get_dynamic(Template),
     {Diff, RenderView} = process_affected_elements(DynamicSequence, Dynamic, ok, View),
     {Diff, RenderView}.
+
+-spec diff_list(Template, List, View) -> {Diff, View1} when
+    Template :: arizona_template:template(),
+    List :: [dynamic()],
+    View :: arizona_view:view(),
+    Diff :: diff(),
+    View1 :: arizona_view:view().
+diff_list(_Template, _List, View) ->
+    {[], View}.
 
 %% --------------------------------------------------------------------
 %% Internal Functions
