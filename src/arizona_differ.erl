@@ -71,17 +71,17 @@ diff_stateless(Module, Fun, Bindings, View) ->
 diff_list(Template, List, View) ->
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
-    DynamicRender =
+    Diff =
         [
             begin
-                {DynamicHtml, _UpdatedView} = arizona_renderer:render_dynamic(
-                    DynamicSequence, Dynamic, hierarchical, CallbackArg, View
+                {DynamicDiff, _UpdatedView} = arizona_renderer:render_dynamic(
+                    DynamicSequence, Dynamic, diff, CallbackArg, View
                 ),
-                DynamicHtml
+                DynamicDiff
             end
          || CallbackArg <- List
         ],
-    {DynamicRender, View}.
+    {Diff, View}.
 
 %% --------------------------------------------------------------------
 %% Internal Functions
