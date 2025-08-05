@@ -125,12 +125,17 @@ process_affected_elements([ElementIndex | T], Dynamic, CallbackArg, View) ->
     DynamicCallback = element(ElementIndex, Dynamic),
     case DynamicCallback(CallbackArg) of
         Callback when is_function(Callback, 2) ->
-            {Html, CallbackView} = Callback(diff, View),
-            ElementChange = {ElementIndex, Html},
+            {Diff, CallbackView} = Callback(diff, View),
             {RestChanges, FinalView} = process_affected_elements(
                 T, Dynamic, CallbackArg, CallbackView
             ),
-            {[ElementChange | RestChanges], FinalView};
+            case Diff of
+                [] ->
+                    {RestChanges, FinalView};
+                _ ->
+                    ElementChange = {ElementIndex, Diff},
+                    {[ElementChange | RestChanges], FinalView}
+            end;
         Result ->
             Html = arizona_html:to_html(Result),
             ElementChange = {ElementIndex, Html},
