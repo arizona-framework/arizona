@@ -27,62 +27,58 @@ get_tracker() ->
 set_tracker(Tracker) ->
     put(?MODULE, Tracker).
 
--spec set_current_stateful_id(StatefulId) -> UpdatedTracker | undefined when
+-spec set_current_stateful_id(StatefulId) -> OldTracker | undefined when
     StatefulId :: arizona_stateful:id(),
-    UpdatedTracker :: arizona_tracker:tracker().
+    OldTracker :: arizona_tracker:tracker().
 set_current_stateful_id(StatefulId) ->
     case get_tracker() of
         undefined ->
             undefined;
         Tracker ->
             UpdatedTracker = arizona_tracker:set_current_stateful_id(StatefulId, Tracker),
-            Tracker = set_tracker(UpdatedTracker),
-            UpdatedTracker
+            set_tracker(UpdatedTracker)
     end.
 
--spec set_current_element_index(ElementIndex) -> UpdatedTracker | undefined when
+-spec set_current_element_index(ElementIndex) -> OldTracker | undefined when
     ElementIndex :: arizona_tracker:element_index(),
-    UpdatedTracker :: arizona_tracker:tracker().
+    OldTracker :: arizona_tracker:tracker().
 set_current_element_index(ElementIndex) ->
     case get_tracker() of
         undefined ->
             undefined;
         Tracker ->
             UpdatedTracker = arizona_tracker:set_current_element_index(ElementIndex, Tracker),
-            Tracker = set_tracker(UpdatedTracker),
-            UpdatedTracker
+            set_tracker(UpdatedTracker)
     end.
 
--spec record_variable_dependency(VarName) -> UpdatedTracker | undefined when
+-spec record_variable_dependency(VarName) -> OldTracker | undefined when
     VarName :: arizona_tracker:var_name(),
-    UpdatedTracker :: arizona_tracker:tracker().
+    OldTracker :: arizona_tracker:tracker().
 record_variable_dependency(VarName) ->
     case get_tracker() of
         undefined ->
             undefined;
         Tracker ->
             UpdatedTracker = arizona_tracker:record_variable_dependency(VarName, Tracker),
-            Tracker = set_tracker(UpdatedTracker),
-            UpdatedTracker
+            set_tracker(UpdatedTracker)
     end.
 
--spec clear_stateful_dependencies(StatefulId) -> UpdatedTracker | undefined when
+-spec clear_stateful_dependencies(StatefulId) -> OldTracker | undefined when
     StatefulId :: arizona_stateful:id(),
-    UpdatedTracker :: arizona_tracker:tracker().
+    OldTracker :: arizona_tracker:tracker().
 clear_stateful_dependencies(StatefulId) ->
     case get_tracker() of
         undefined ->
             undefined;
         Tracker ->
             UpdatedTracker = arizona_tracker:clear_stateful_dependencies(StatefulId, Tracker),
-            Tracker = set_tracker(UpdatedTracker),
-            UpdatedTracker
+            set_tracker(UpdatedTracker)
     end.
 
--spec clear_changed_variable_dependencies(StatefulId, VarNames) -> UpdatedTracker | undefined when
+-spec clear_changed_variable_dependencies(StatefulId, VarNames) -> OldTracker | undefined when
     StatefulId :: arizona_stateful:id(),
     VarNames :: [arizona_tracker:var_name()],
-    UpdatedTracker :: arizona_tracker:tracker().
+    OldTracker :: arizona_tracker:tracker().
 clear_changed_variable_dependencies(StatefulId, VarNames) ->
     case get_tracker() of
         undefined ->
@@ -91,6 +87,5 @@ clear_changed_variable_dependencies(StatefulId, VarNames) ->
             UpdatedTracker = arizona_tracker:clear_changed_variable_dependencies(
                 StatefulId, VarNames, Tracker
             ),
-            Tracker = set_tracker(UpdatedTracker),
-            UpdatedTracker
+            set_tracker(UpdatedTracker)
     end.

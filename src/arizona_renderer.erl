@@ -6,10 +6,10 @@
 %% --------------------------------------------------------------------
 
 -export([render_view/1]).
--export([render_stateful/3]).
--export([render_stateless/4]).
--export([render_list/3]).
--export([render_dynamic/5]).
+-export([render_stateful/4]).
+-export([render_stateless/6]).
+-export([render_list/5]).
+-export([render_dynamic/7]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -34,39 +34,48 @@
     Html :: arizona_html:html(),
     View1 :: arizona_view:view().
 render_view(View) ->
+    State = arizona_view:get_state(View),
+    Id = arizona_stateful:get_binding(id, State),
     Template = arizona_view:call_render_callback(View),
-    render_template(Template, render, ok, View).
+    render_template(Template, ok, render, Id, undefined, View).
 
--spec render_stateful(Module, Bindings, View) -> {Html, View1} when
+-spec render_stateful(Module, Bindings, ElementIndex, View) -> {Html, View1} when
     Module :: module(),
     Bindings :: arizona_binder:bindings(),
+    ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
     Html :: arizona_html:html(),
     View1 :: arizona_view:view().
-render_stateful(Module, Bindings, View) ->
+render_stateful(Module, Bindings, ElementIndex, View) ->
     {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
-    _ClearTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
-    _Tracker = arizona_tracker_dict:set_current_stateful_id(Id),
-    render_template(Template, render, ok, PrepRenderView).
+    _OldTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
+    _ClearTracker = arizona_tracker_dict:set_current_stateful_id(Id),
+    render_template(Template, ok, render, Id, ElementIndex, PrepRenderView).
 
--spec render_stateless(Module, Function, Bindings, View) -> {Html, View1} when
+-spec render_stateless(Module, Function, Bindings, ParentId, ElementIndex, View) ->
+    {Html, View1}
+when
     Module :: module(),
     Function :: atom(),
     Bindings :: arizona_binder:bindings(),
+    ParentId :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
     Html :: arizona_html:html(),
     View1 :: arizona_view:view().
-render_stateless(Module, Fun, Bindings, View) ->
+render_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
-    render_template(Template, render, ok, View).
+    render_template(Template, ok, render, ParentId, ElementIndex, View).
 
--spec render_list(Template, List, View) -> {Html, View1} when
+-spec render_list(Template, List, ParentId, ElementIndex, View) -> {Html, View1} when
     Template :: arizona_template:template(),
     List :: [dynamic()],
+    ParentId :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
     Html :: [arizona_html:html()],
     View1 :: arizona_view:view().
-render_list(Template, List, View) ->
+render_list(Template, List, ParentId, ElementIndex, View) ->
     Static = arizona_template:get_static(Template),
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
@@ -74,7 +83,7 @@ render_list(Template, List, View) ->
         [
             begin
                 {DynamicHtml, _UpdatedView} = render_dynamic(
-                    DynamicSequence, Dynamic, render, CallbackArg, View
+                    DynamicSequence, Dynamic, CallbackArg, render, ParentId, ElementIndex, View
                 ),
                 zip_static_dynamic(Static, DynamicHtml)
             end
@@ -83,30 +92,37 @@ render_list(Template, List, View) ->
         View
     }.
 
--spec render_dynamic(Sequence, Dynamic, RenderMode, CallbackArg, View) -> {Render, View1} when
+%% % TODO: Check if we need ElementIndex
+-spec render_dynamic(Sequence, Dynamic, CallbackArg, RenderMode, ParentId, ElementIndex, View) ->
+    {Render, View1}
+when
     Sequence :: arizona_template:dynamic_sequence(),
     Dynamic :: arizona_template:dynamic(),
+    CallbackArg :: dynamic(),
     RenderMode :: render_mode(),
+    ParentId :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
     Render :: dynamic(),
-    CallbackArg :: dynamic(),
     View1 :: arizona_view:view().
-render_dynamic([], _Dynamic, _RenderMode, _CallbackArg, View) ->
+render_dynamic([], _Dynamic, _CallbackArg, _RenderMode, _ParentId, _ElementIndex, View) ->
     {[], View};
-render_dynamic([ElementIndex | T], Dynamic, RenderMode, CallbackArg, View) ->
-    _Tracker = arizona_tracker_dict:set_current_element_index(ElementIndex),
-    DynamicCallback = element(ElementIndex, Dynamic),
+render_dynamic(
+    [DynamicElementIndex | T], Dynamic, CallbackArg, RenderMode, ParentId, ElementIndex, View
+) ->
+    DynamicCallback = element(DynamicElementIndex, Dynamic),
+    _OldTracker = arizona_tracker_dict:set_current_element_index(DynamicElementIndex),
     case DynamicCallback(CallbackArg) of
-        Callback when is_function(Callback, 2) ->
-            {Html, CallbackView} = Callback(RenderMode, View),
+        Callback when is_function(Callback, 4) ->
+            {Html, CallbackView} = Callback(RenderMode, ParentId, DynamicElementIndex, View),
             {RestHtml, FinalView} = render_dynamic(
-                T, Dynamic, RenderMode, CallbackArg, CallbackView
+                T, Dynamic, CallbackArg, RenderMode, ParentId, ElementIndex, CallbackView
             ),
             {[Html | RestHtml], FinalView};
         Result ->
             Html = arizona_html:to_html(Result),
             {RestHtml, FinalView} = render_dynamic(
-                T, Dynamic, RenderMode, CallbackArg, View
+                T, Dynamic, CallbackArg, RenderMode, ParentId, ElementIndex, View
             ),
             {[Html | RestHtml], FinalView}
     end.
@@ -115,19 +131,23 @@ render_dynamic([ElementIndex | T], Dynamic, RenderMode, CallbackArg, View) ->
 %% Internal Functions
 %% --------------------------------------------------------------------
 
--spec render_template(Template, RenderMode, CallbackArg, View) -> {Html, View1} when
+-spec render_template(Template, CallbackArg, RenderMode, ParentId, ElementIndex, View) ->
+    {Html, View1}
+when
     Template :: arizona_template:template(),
+    CallbackArg :: dynamic(),
     RenderMode :: render_mode(),
+    ParentId :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
     Html :: arizona_html:html(),
-    CallbackArg :: dynamic(),
     View1 :: arizona_view:view().
-render_template(Template, RenderMode, CallbackArg, View) ->
+render_template(Template, CallbackArg, RenderMode, ParentId, ElementIndex, View) ->
     Static = arizona_template:get_static(Template),
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
     {DynamicRender, FinalView} = render_dynamic(
-        DynamicSequence, Dynamic, RenderMode, CallbackArg, View
+        DynamicSequence, Dynamic, CallbackArg, RenderMode, ParentId, ElementIndex, View
     ),
     Html = zip_static_dynamic(Static, DynamicRender),
     {Html, FinalView}.
