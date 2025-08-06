@@ -49,6 +49,7 @@
 -export_type([dynamic_anno/0]).
 -export_type([fingerprint/0]).
 -export_type([render_callback/0]).
+-export_type([render_mode/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -70,12 +71,13 @@
 -nominal fingerprint() :: non_neg_integer().
 -nominal render_callback() :: fun(
     (
-        arizona_renderer:render_mode(),
+        render_mode(),
         arizona_stateful:id(),
         arizona_tracker:element_index(),
         arizona_view:view()
     ) -> {dynamic(), arizona_view:view()}
 ).
+-nominal render_mode() :: render | diff | hierarchical.
 
 %% --------------------------------------------------------------------
 %% API Functions
