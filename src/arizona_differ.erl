@@ -129,16 +129,17 @@ track_diff_stateful(Id, Template, StatefulState, View) ->
     ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
     case arizona_binder:is_empty(ChangedBindings) of
         true ->
-            % Clear dependencies for this component before starting new render
-            _ClearTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
             NoChangesStatefulState = arizona_stateful:set_changed_bindings(
                 arizona_binder:new(#{}), StatefulState
             ),
             {[], NoChangesStatefulState, View};
         false ->
             StatefulDependencies = arizona_tracker:get_stateful_dependencies(Id, Tracker),
-            % Clear dependencies for this component before starting new render
-            _ClearTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
+            % Clear dependencies only for changed variables - INCREMENTAL CLEARING
+            ChangedVarNames = arizona_binder:keys(ChangedBindings),
+            _ClearTracker = arizona_tracker_dict:clear_changed_variable_dependencies(
+                Id, ChangedVarNames
+            ),
             AffectedElements = get_affected_elements(ChangedBindings, StatefulDependencies),
             {Diff, DiffView} = generate_element_diff(AffectedElements, Template, ok, View),
             NoChangesStatefulState = arizona_stateful:set_changed_bindings(

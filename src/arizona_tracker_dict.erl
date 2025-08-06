@@ -10,6 +10,7 @@
 -export([set_current_element_index/1]).
 -export([record_variable_dependency/1]).
 -export([clear_stateful_dependencies/1]).
+-export([clear_changed_variable_dependencies/2]).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -74,6 +75,22 @@ clear_stateful_dependencies(StatefulId) ->
             undefined;
         Tracker ->
             UpdatedTracker = arizona_tracker:clear_stateful_dependencies(StatefulId, Tracker),
+            Tracker = set_tracker(UpdatedTracker),
+            UpdatedTracker
+    end.
+
+-spec clear_changed_variable_dependencies(StatefulId, VarNames) -> UpdatedTracker | undefined when
+    StatefulId :: arizona_stateful:id(),
+    VarNames :: [arizona_tracker:var_name()],
+    UpdatedTracker :: arizona_tracker:tracker().
+clear_changed_variable_dependencies(StatefulId, VarNames) ->
+    case get_tracker() of
+        undefined ->
+            undefined;
+        Tracker ->
+            UpdatedTracker = arizona_tracker:clear_changed_variable_dependencies(
+                StatefulId, VarNames, Tracker
+            ),
             Tracker = set_tracker(UpdatedTracker),
             UpdatedTracker
     end.
