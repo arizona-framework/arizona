@@ -112,19 +112,14 @@ diff_list(Template, List, ParentId, ElementIndex, View) ->
         true ->
             DynamicSequence = arizona_template:get_dynamic_sequence(Template),
             Dynamic = arizona_template:get_dynamic(Template),
+            _OldTracker = arizona_tracker_dict:set_current_element_index(ElementIndex),
             Diff =
                 [
                     begin
-                        {DynamicDiff, _UpdatedView} = arizona_renderer:render_dynamic(
-                            DynamicSequence,
-                            Dynamic,
-                            CallbackArg,
-                            diff,
-                            ParentId,
-                            ElementIndex,
-                            View
+                        {Html, _UpdatedView} = arizona_renderer:render_dynamic(
+                            DynamicSequence, Dynamic, CallbackArg, ParentId, View
                         ),
-                        DynamicDiff
+                        Html
                     end
                  || CallbackArg <- List
                 ],
@@ -149,7 +144,7 @@ track_diff_stateful(Id, Template, StatefulState, ElementIndex, View) ->
         false ->
             Tracker = arizona_tracker_dict:get_tracker(),
             StatefulDependencies = arizona_tracker:get_stateful_dependencies(Id, Tracker),
-            % Clear dependencies only for changed variables - INCREMENTAL CLEARING
+            % Clear dependencies only for changed variables
             ChangedVarNames = arizona_binder:keys(ChangedBindings),
             _NewOldTracker = arizona_tracker_dict:clear_changed_variable_dependencies(
                 Id, ChangedVarNames

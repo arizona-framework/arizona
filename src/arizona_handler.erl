@@ -55,7 +55,7 @@ render_view(View) ->
             State = arizona_view:get_state(View),
             Id = arizona_stateful:get_binding(id, State),
             arizona_renderer:render_stateless(
-                LayoutModule, LayoutRenderFun, LayoutBindings, Id, undefined, View
+                LayoutModule, LayoutRenderFun, LayoutBindings, Id, View
             );
         none ->
             arizona_renderer:render_view(View)
