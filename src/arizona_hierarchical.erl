@@ -173,7 +173,13 @@ hierarchical_dynamic([], _Dynamic, _CallbackArg, _ParentId, _ElementIndex, View)
     {[], View};
 hierarchical_dynamic([DynamicElementIndex | T], Dynamic, CallbackArg, ParentId, ElementIndex, View) ->
     DynamicCallback = element(DynamicElementIndex, Dynamic),
-    _OldTracker = arizona_tracker_dict:set_current_element_index(DynamicElementIndex),
+    _OldTracker =
+        case ElementIndex of
+            undefined ->
+                arizona_tracker_dict:set_current_element_index(DynamicElementIndex);
+            _ ->
+                ok
+        end,
     case DynamicCallback(CallbackArg) of
         Callback when is_function(Callback, 4) ->
             {Struct, CallbackView} = Callback(hierarchical, ParentId, DynamicElementIndex, View),

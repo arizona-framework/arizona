@@ -112,7 +112,6 @@ diff_list(Template, List, ParentId, ElementIndex, View) ->
         true ->
             DynamicSequence = arizona_template:get_dynamic_sequence(Template),
             Dynamic = arizona_template:get_dynamic(Template),
-            _OldTracker = arizona_tracker_dict:set_current_element_index(ElementIndex),
             Diff =
                 [
                     begin
@@ -188,7 +187,13 @@ process_affected_elements(
     [DynamicElementIndex | T], Dynamic, CallbackArg, ParentId, ElementIndex, View
 ) ->
     DynamicCallback = element(DynamicElementIndex, Dynamic),
-    _OldTracker = arizona_tracker_dict:set_current_element_index(DynamicElementIndex),
+    _OldTracker =
+        case ElementIndex of
+            undefined ->
+                arizona_tracker_dict:set_current_element_index(DynamicElementIndex);
+            _ ->
+                ok
+        end,
     case DynamicCallback(CallbackArg) of
         Callback when is_function(Callback, 4) ->
             {Diff, CallbackView} = Callback(diff, ParentId, DynamicElementIndex, View),
