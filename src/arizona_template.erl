@@ -68,7 +68,12 @@
 -nominal dynamic_anno() :: tuple().
 -nominal fingerprint() :: non_neg_integer().
 -nominal render_callback() :: fun(
-    (arizona_renderer:render_mode(), arizona_view:view()) -> {dynamic(), arizona_view:view()}
+    (
+        arizona_renderer:render_mode(),
+        arizona_stateful:id(),
+        arizona_tracker:element_index(),
+        arizona_view:view()
+    ) -> {dynamic(), arizona_view:view()}
 ).
 
 %% --------------------------------------------------------------------
@@ -173,12 +178,12 @@ find_binding(Key, Bindings) ->
     Callback :: render_callback().
 render_stateful(Module, Bindings) ->
     fun
-        (render, View) ->
-            arizona_renderer:render_stateful(Module, Bindings, View);
-        (diff, View) ->
-            arizona_differ:diff_stateful(Module, Bindings, View);
-        (hierarchical, View) ->
-            arizona_hierarchical:hierarchical_stateful(Module, Bindings, View)
+        (render, _ParentId, ElementIndex, View) ->
+            arizona_renderer:render_stateful(Module, Bindings, ElementIndex, View);
+        (diff, _ParentId, ElementIndex, View) ->
+            arizona_differ:diff_stateful(Module, Bindings, ElementIndex, View);
+        (hierarchical, _ParentId, ElementIndex, View) ->
+            arizona_hierarchical:hierarchical_stateful(Module, Bindings, ElementIndex, View)
     end.
 
 -spec render_stateless(Module, Function, Bindings) -> Callback when
@@ -188,12 +193,14 @@ render_stateful(Module, Bindings) ->
     Callback :: render_callback().
 render_stateless(Module, Fun, Bindings) ->
     fun
-        (render, View) ->
-            arizona_renderer:render_stateless(Module, Fun, Bindings, View);
-        (diff, View) ->
-            arizona_differ:diff_stateless(Module, Fun, Bindings, View);
-        (hierarchical, View) ->
-            arizona_hierarchical:hierarchical_stateless(Module, Fun, Bindings, View)
+        (render, ParentId, ElementIndex, View) ->
+            arizona_renderer:render_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View);
+        (diff, ParentId, ElementIndex, View) ->
+            arizona_differ:diff_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View);
+        (hierarchical, ParentId, ElementIndex, View) ->
+            arizona_hierarchical:hierarchical_stateless(
+                Module, Fun, Bindings, ParentId, ElementIndex, View
+            )
     end.
 
 -spec render_slot(Slot) -> Callback when
@@ -216,12 +223,12 @@ render_list(_Callback, _List) ->
     Callback :: render_callback().
 render_list_template(Template, List) ->
     fun
-        (render, View) ->
-            arizona_renderer:render_list(Template, List, View);
-        (diff, View) ->
-            arizona_differ:diff_list(Template, List, View);
-        (hierarchical, View) ->
-            arizona_hierarchical:hierarchical_list(Template, List, View)
+        (render, ParentId, ElementIndex, View) ->
+            arizona_renderer:render_list(Template, List, ParentId, ElementIndex, View);
+        (diff, ParentId, ElementIndex, View) ->
+            arizona_differ:diff_list(Template, List, ParentId, ElementIndex, View);
+        (hierarchical, ParentId, ElementIndex, View) ->
+            arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
     end.
 
 %% --------------------------------------------------------------------
@@ -232,10 +239,10 @@ render_list_template(Template, List) ->
     Callback :: render_callback().
 render_view() ->
     fun
-        (render, View) ->
+        (render, _ParentId, _ElementIndex, View) ->
             arizona_renderer:render_view(View);
-        (diff, View) ->
+        (diff, _ParentId, _ElementIndex, View) ->
             arizona_differ:diff_view(View);
-        (hierarchical, View) ->
+        (hierarchical, _ParentId, _ElementIndex, View) ->
             arizona_hierarchical:hierarchical_view(View)
     end.
