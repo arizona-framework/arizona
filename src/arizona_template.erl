@@ -216,13 +216,44 @@ render_stateless(Module, Fun, Bindings) ->
 render_slot(view) ->
     render_view().
 
--spec render_list(Callback, List) -> Result when
-    Callback :: fun((Item) -> arizona_template:template()),
+-spec render_list(ItemCallback, List) -> Callback when
+    ItemCallback :: fun((Item) -> arizona_template:template()),
     List :: [Item],
     Item :: dynamic(),
-    Result :: binary().
-render_list(_Callback, _List) ->
-    ~"[LIST]".
+    Callback :: render_callback().
+render_list(ItemCallback, List) ->
+    % Extract function clauses from the callback's environment
+    % This requires the function to be compiled with debug_info
+    case erlang:fun_info(ItemCallback, env) of
+        {env, [{_, _, _, _, _, FunClauses}]} ->
+            % Convert function clauses back to AST format
+            FunArg = erl_syntax:revert(erl_syntax:fun_expr(FunClauses)),
+            ListArg = merl:term(List),
+
+            % Use parse transform to process the function and create render_list_template call
+            AST = arizona_parse_transform:transform_render_list(erlang, 0, FunArg, ListArg, []),
+
+            % Evaluate the transformed AST to get the final render callback
+            erl_eval:expr(
+                erl_syntax:revert(AST),
+                #{},
+                {value, fun(Function, Args) ->
+                    apply(erlang, Function, Args)
+                end},
+                none,
+                value
+            );
+        Other ->
+            error(
+                {function_info_failed,
+                    io_lib:format(
+                        "Unable to extract environment from function. "
+                        "This usually means the function was not compiled with debug_info or "
+                        "is not a local function. Got: ~p",
+                        [Other]
+                    )}
+            )
+    end.
 
 -spec render_list_template(Template, List) -> Callback when
     Template :: template(),

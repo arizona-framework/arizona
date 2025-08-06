@@ -5,6 +5,7 @@
 %% --------------------------------------------------------------------
 
 -export([parse_transform/2]).
+-export([transform_render_list/5]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -32,6 +33,41 @@ parse_transform(Forms, Options) ->
     output_forms_to_tmp(Module, RevertedForms),
 
     RevertedForms.
+
+%% Transform arizona_template:render_list/2 calls
+-spec transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) -> AST when
+    Module :: module(),
+    Line :: pos_integer(),
+    FunArg :: erl_syntax:syntaxTree(),
+    ListArg :: erl_syntax:syntaxTree(),
+    CompileOpts :: [compile:option()],
+    AST :: erl_syntax:syntaxTree().
+transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) ->
+    try
+        % Extract the item parameter and template string from the function
+        {CallbackArg, TemplateString} = extract_list_function_body(FunArg, Module),
+
+        % Scan template content into tokens
+        Tokens = arizona_scanner:scan_string(Line + 1, TemplateString),
+
+        % Parse tokens into template AST with the actual CallbackArg (not 'ok')
+        % This ensures that dynamic expressions will use the correct parameter
+        TemplateAST = arizona_parser:parse_tokens(Tokens, CallbackArg, CompileOpts),
+
+        % Create application: arizona_template:render_list_template(Template, List)
+        TemplateModule = erl_syntax:atom(arizona_template),
+        TemplateFunction = erl_syntax:atom(render_list_template),
+        erl_syntax:application(erl_syntax:module_qualifier(TemplateModule, TemplateFunction), [
+            TemplateAST, ListArg
+        ])
+    catch
+        Class:Reason:Stacktrace ->
+            error(
+                arizona_render_list_transformation_failed,
+                none,
+                error_info({Module, Line, Class, Reason, Stacktrace})
+            )
+    end.
 
 -spec format_error(Reason, StackTrace) -> ErrorMap when
     Reason :: arizona_template_extraction_failed | arizona_render_list_transformation_failed,
@@ -179,34 +215,6 @@ transform_from_string(Module, Line, TemplateArg, CallbackArg, CompileOpts) ->
         Class:Reason:Stacktrace ->
             error(
                 arizona_template_extraction_failed,
-                none,
-                error_info({Module, Line, Class, Reason, Stacktrace})
-            )
-    end.
-
-%% Transform arizona_template:render_list/2 calls
-transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) ->
-    try
-        % Extract the item parameter and template string from the function
-        {CallbackArg, TemplateString} = extract_list_function_body(FunArg, Module),
-
-        % Scan template content into tokens
-        Tokens = arizona_scanner:scan_string(Line + 1, TemplateString),
-
-        % Parse tokens into template AST with the actual CallbackArg (not 'ok')
-        % This ensures that dynamic expressions will use the correct parameter
-        TemplateAST = arizona_parser:parse_tokens(Tokens, CallbackArg, CompileOpts),
-
-        % Create application: arizona_template:render_list_template(Template, List)
-        TemplateModule = erl_syntax:atom(arizona_template),
-        TemplateFunction = erl_syntax:atom(render_list_template),
-        erl_syntax:application(erl_syntax:module_qualifier(TemplateModule, TemplateFunction), [
-            TemplateAST, ListArg
-        ])
-    catch
-        Class:Reason:Stacktrace ->
-            error(
-                arizona_render_list_transformation_failed,
                 none,
                 error_info({Module, Line, Class, Reason, Stacktrace})
             )
