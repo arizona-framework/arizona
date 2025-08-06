@@ -178,8 +178,8 @@ find_binding(Key, Bindings) ->
     Callback :: render_callback().
 render_stateful(Module, Bindings) ->
     fun
-        (render, _ParentId, ElementIndex, View) ->
-            arizona_renderer:render_stateful(Module, Bindings, ElementIndex, View);
+        (render, _ParentId, _ElementIndex, View) ->
+            arizona_renderer:render_stateful(Module, Bindings, View);
         (diff, _ParentId, ElementIndex, View) ->
             arizona_differ:diff_stateful(Module, Bindings, ElementIndex, View);
         (hierarchical, _ParentId, ElementIndex, View) ->
@@ -193,8 +193,8 @@ render_stateful(Module, Bindings) ->
     Callback :: render_callback().
 render_stateless(Module, Fun, Bindings) ->
     fun
-        (render, ParentId, ElementIndex, View) ->
-            arizona_renderer:render_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View);
+        (render, ParentId, _ElementIndex, View) ->
+            arizona_renderer:render_stateless(Module, Fun, Bindings, ParentId, View);
         (diff, ParentId, ElementIndex, View) ->
             arizona_differ:diff_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View);
         (hierarchical, ParentId, ElementIndex, View) ->
@@ -223,8 +223,8 @@ render_list(_Callback, _List) ->
     Callback :: render_callback().
 render_list_template(Template, List) ->
     fun
-        (render, ParentId, ElementIndex, View) ->
-            arizona_renderer:render_list(Template, List, ParentId, ElementIndex, View);
+        (render, ParentId, _ElementIndex, View) ->
+            arizona_renderer:render_list(Template, List, ParentId, View);
         (diff, ParentId, ElementIndex, View) ->
             arizona_differ:diff_list(Template, List, ParentId, ElementIndex, View);
         (hierarchical, ParentId, ElementIndex, View) ->

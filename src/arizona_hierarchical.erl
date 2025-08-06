@@ -88,8 +88,8 @@ hierarchical_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View) ->
 
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
-    {DynamicRender, DynamicView} = arizona_renderer:render_dynamic(
-        DynamicSequence, Dynamic, ok, hierarchical, ParentId, ElementIndex, FingerprintView
+    {DynamicRender, DynamicView} = hierarchical_dynamic(
+        DynamicSequence, Dynamic, ok, ParentId, ElementIndex, FingerprintView
     ),
     Struct = #{
         type => stateless,
@@ -116,11 +116,10 @@ hierarchical_list(Template, List, ParentId, ElementIndex, View) ->
     DynamicRender =
         [
             begin
-                {DynamicHierarchical, _UpdatedView} = arizona_renderer:render_dynamic(
+                {DynamicHierarchical, _UpdatedView} = hierarchical_dynamic(
                     DynamicSequence,
                     Dynamic,
                     CallbackArg,
-                    hierarchical,
                     ParentId,
                     ElementIndex,
                     View
@@ -145,8 +144,8 @@ track_hierarchical_stateful(Id, Template, ElementIndex, View) ->
     _ClearTracker = arizona_tracker_dict:set_current_stateful_id(Id),
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
-    {DynamicRender, DynamicView} = arizona_renderer:render_dynamic(
-        DynamicSequence, Dynamic, ok, hierarchical, Id, ElementIndex, View
+    {DynamicRender, DynamicView} = hierarchical_dynamic(
+        DynamicSequence, Dynamic, ok, Id, ElementIndex, View
     ),
     HierarchicalData = #{
         static => arizona_template:get_static(Template),
@@ -158,3 +157,34 @@ track_hierarchical_stateful(Id, Template, ElementIndex, View) ->
         id => Id
     },
     {Struct, DynamicView}.
+
+-spec hierarchical_dynamic(Sequence, Dynamic, CallbackArg, ParentId, ElementIndex, View) ->
+    {Render, View1}
+when
+    Sequence :: arizona_template:dynamic_sequence(),
+    Dynamic :: arizona_template:dynamic(),
+    CallbackArg :: dynamic(),
+    ParentId :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
+    View :: arizona_view:view(),
+    Render :: dynamic(),
+    View1 :: arizona_view:view().
+hierarchical_dynamic([], _Dynamic, _CallbackArg, _ParentId, _ElementIndex, View) ->
+    {[], View};
+hierarchical_dynamic([DynamicElementIndex | T], Dynamic, CallbackArg, ParentId, ElementIndex, View) ->
+    DynamicCallback = element(DynamicElementIndex, Dynamic),
+    _OldTracker = arizona_tracker_dict:set_current_element_index(DynamicElementIndex),
+    case DynamicCallback(CallbackArg) of
+        Callback when is_function(Callback, 4) ->
+            {Struct, CallbackView} = Callback(hierarchical, ParentId, DynamicElementIndex, View),
+            {RestHtml, FinalView} = hierarchical_dynamic(
+                T, Dynamic, CallbackArg, ParentId, ElementIndex, CallbackView
+            ),
+            {[Struct | RestHtml], FinalView};
+        Result ->
+            Html = arizona_html:to_html(Result),
+            {RestHtml, FinalView} = hierarchical_dynamic(
+                T, Dynamic, CallbackArg, ParentId, ElementIndex, View
+            ),
+            {[Html | RestHtml], FinalView}
+    end.

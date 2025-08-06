@@ -104,7 +104,9 @@ record_variable_dependency(VarName, #tracker{} = Tracker) ->
                 end,
             UpdatedStatefulDependencies = StatefulDependencies#{VarName => NewIndexes},
             UpdatedDependencies = Dependencies#{StatefulId => UpdatedStatefulDependencies},
-            Tracker#tracker{dependencies = UpdatedDependencies}
+            Tracker#tracker{dependencies = UpdatedDependencies};
+        {StatefulId, undefined} when is_binary(StatefulId) ->
+            Tracker
     end.
 
 -spec get_stateful_dependencies(StatefulId, Tracker) -> StatefulDependencies when
@@ -132,7 +134,7 @@ clear_changed_variable_dependencies(StatefulId, VarNames, #tracker{} = Tracker) 
     Dependencies = Tracker#tracker.dependencies,
     StatefulDeps = maps:get(StatefulId, Dependencies, #{}),
 
-    % Remove only changed variable dependencies - INCREMENTAL CLEARING
+    % Remove only changed variable dependencies
     UpdatedStatefulDeps = lists:foldl(
         fun(VarName, AccDeps) ->
             maps:remove(VarName, AccDeps)
