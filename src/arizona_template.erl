@@ -6,6 +6,7 @@
 %% --------------------------------------------------------------------
 
 -export([from_string/1]).
+-export([is_template/1]).
 -export([from_string/5]).
 -export([get_static/1]).
 -export([get_dynamic/1]).
@@ -113,6 +114,10 @@ from_string(Module, Line, String, CallbackArg, Bindings) when is_atom(Module) ->
         none,
         value
     ).
+
+-spec is_template(dynamic()) -> boolean().
+is_template(#template{}) -> true;
+is_template(_) -> false.
 
 -spec get_static(Template) -> StaticContent when
     Template :: template(),

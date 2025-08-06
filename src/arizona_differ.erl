@@ -208,12 +208,36 @@ process_affected_elements(
                     {[ElementChange | RestChanges], FinalView}
             end;
         Result ->
-            Html = arizona_html:to_html(Result),
-            ElementChange = {DynamicElementIndex, Html},
-            % Remove fingerprint since this is not a template (pure HTML/string)
-            CleanView = arizona_view:remove_fingerprint(ParentId, DynamicElementIndex, View),
-            {RestChanges, FinalView} = process_affected_elements(
-                T, Dynamic, CallbackArg, ParentId, ElementIndex, CleanView
-            ),
-            {[ElementChange | RestChanges], FinalView}
+            case arizona_template:is_template(Result) of
+                true ->
+                    {Diff, TemplateView} = render_template(
+                        Result, CallbackArg, ParentId, ElementIndex, View
+                    ),
+                    {RestChanges, FinalView} = process_affected_elements(
+                        T, Dynamic, CallbackArg, ParentId, ElementIndex, TemplateView
+                    ),
+                    case Diff of
+                        nodiff ->
+                            {RestChanges, FinalView};
+                        _ ->
+                            ElementChange = {DynamicElementIndex, Diff},
+                            {[ElementChange | RestChanges], FinalView}
+                    end;
+                false ->
+                    Html = arizona_html:to_html(Result),
+                    ElementChange = {DynamicElementIndex, Html},
+                    % Remove fingerprint since this is not a template (pure HTML/string)
+                    CleanView = arizona_view:remove_fingerprint(
+                        ParentId, DynamicElementIndex, View
+                    ),
+                    {RestChanges, FinalView} = process_affected_elements(
+                        T, Dynamic, CallbackArg, ParentId, ElementIndex, CleanView
+                    ),
+                    {[ElementChange | RestChanges], FinalView}
+            end
     end.
+
+render_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    Dynamic = arizona_template:get_dynamic(Template),
+    process_affected_elements(DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View).
