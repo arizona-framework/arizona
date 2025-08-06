@@ -160,13 +160,13 @@ handle_stateful_event(StatefulId, Event, Params, State) ->
             Bindings = arizona_stateful:get_bindings(UpdatedStatefulState),
             DiffStatefulId = arizona_binder:get(id, Bindings),
             UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedStatefulState, View),
-            {Diff, DiffView} = arizona_differ:diff_stateful(Module, Bindings, UpdatedView),
+            {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, Bindings, UpdatedView),
             {reply, {reply, DiffStatefulId, Diff, Reply}, State#state{view = DiffView}};
         {noreply, UpdatedStatefulState} ->
             Module = arizona_stateful:get_module(UpdatedStatefulState),
             Bindings = arizona_stateful:get_bindings(UpdatedStatefulState),
             DiffStatefulId = arizona_binder:get(id, Bindings),
             UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedStatefulState, View),
-            {Diff, DiffView} = arizona_differ:diff_stateful(Module, Bindings, UpdatedView),
+            {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, Bindings, UpdatedView),
             {reply, {noreply, DiffStatefulId, Diff}, State#state{view = DiffView}}
     end.
