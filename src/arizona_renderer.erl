@@ -107,9 +107,18 @@ render_dynamic(
             {RestHtml, FinalView} = render_dynamic(T, Dynamic, CallbackArg, ParentId, CallbackView),
             {[Html | RestHtml], FinalView};
         Result ->
-            Html = arizona_html:to_html(Result),
-            {RestHtml, FinalView} = render_dynamic(T, Dynamic, CallbackArg, ParentId, View),
-            {[Html | RestHtml], FinalView}
+            case arizona_template:is_template(Result) of
+                true ->
+                    {Html, TemplateView} = render_template(Result, CallbackArg, ParentId, View),
+                    {RestHtml, FinalView} = render_dynamic(
+                        T, Dynamic, CallbackArg, ParentId, TemplateView
+                    ),
+                    {[Html | RestHtml], FinalView};
+                false ->
+                    Html = arizona_html:to_html(Result),
+                    {RestHtml, FinalView} = render_dynamic(T, Dynamic, CallbackArg, ParentId, View),
+                    {[Html | RestHtml], FinalView}
+            end
     end.
 
 %% --------------------------------------------------------------------

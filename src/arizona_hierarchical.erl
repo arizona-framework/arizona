@@ -188,9 +188,25 @@ hierarchical_dynamic([DynamicElementIndex | T], Dynamic, CallbackArg, ParentId, 
             ),
             {[Struct | RestHtml], FinalView};
         Result ->
-            Html = arizona_html:to_html(Result),
-            {RestHtml, FinalView} = hierarchical_dynamic(
-                T, Dynamic, CallbackArg, ParentId, ElementIndex, View
-            ),
-            {[Html | RestHtml], FinalView}
+            case arizona_template:is_template(Result) of
+                true ->
+                    {Struct, TemplateView} = render_template(
+                        Result, CallbackArg, ParentId, ElementIndex, View
+                    ),
+                    {RestHtml, FinalView} = hierarchical_dynamic(
+                        T, Dynamic, CallbackArg, ParentId, ElementIndex, TemplateView
+                    ),
+                    {[Struct | RestHtml], FinalView};
+                false ->
+                    Html = arizona_html:to_html(Result),
+                    {RestHtml, FinalView} = hierarchical_dynamic(
+                        T, Dynamic, CallbackArg, ParentId, ElementIndex, View
+                    ),
+                    {[Html | RestHtml], FinalView}
+            end
     end.
+
+render_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    Dynamic = arizona_template:get_dynamic(Template),
+    hierarchical_dynamic(DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View).
