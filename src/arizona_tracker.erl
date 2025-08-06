@@ -12,6 +12,7 @@
 -export([record_variable_dependency/2]).
 -export([get_stateful_dependencies/2]).
 -export([clear_stateful_dependencies/2]).
+-export([clear_changed_variable_dependencies/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -120,4 +121,31 @@ get_stateful_dependencies(StatefulId, #tracker{} = Tracker) ->
 clear_stateful_dependencies(StatefulId, #tracker{} = Tracker) ->
     Dependencies = Tracker#tracker.dependencies,
     UpdatedDependencies = maps:remove(StatefulId, Dependencies),
+    Tracker#tracker{dependencies = UpdatedDependencies}.
+
+-spec clear_changed_variable_dependencies(StatefulId, VarNames, Tracker) -> Tracker1 when
+    StatefulId :: arizona_stateful:id(),
+    VarNames :: [var_name()],
+    Tracker :: tracker(),
+    Tracker1 :: tracker().
+clear_changed_variable_dependencies(StatefulId, VarNames, #tracker{} = Tracker) ->
+    Dependencies = Tracker#tracker.dependencies,
+    StatefulDeps = maps:get(StatefulId, Dependencies, #{}),
+
+    % Remove only changed variable dependencies - INCREMENTAL CLEARING
+    UpdatedStatefulDeps = lists:foldl(
+        fun(VarName, AccDeps) ->
+            maps:remove(VarName, AccDeps)
+        end,
+        StatefulDeps,
+        VarNames
+    ),
+
+    % Clean up empty component entries
+    UpdatedDependencies =
+        case maps:size(UpdatedStatefulDeps) of
+            0 -> maps:remove(StatefulId, Dependencies);
+            _ -> Dependencies#{StatefulId => UpdatedStatefulDeps}
+        end,
+
     Tracker#tracker{dependencies = UpdatedDependencies}.
