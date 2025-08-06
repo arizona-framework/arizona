@@ -19,7 +19,7 @@
 %% Types definitions
 %% --------------------------------------------------------------------
 
--nominal diff() :: [{ElementIndex :: arizona_tracker:element_index(), Html :: arizona_html:html()}].
+-nominal diff() :: [{arizona_tracker:element_index(), arizona_html:html()}].
 
 %% --------------------------------------------------------------------
 %% API Functions
