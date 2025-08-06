@@ -4,7 +4,8 @@
 %% --------------------------------------------------------------------
 
 -export([diff_view/1]).
--export([diff_stateful/4]).
+-export([diff_stateful/5]).
+-export([diff_root_stateful/3]).
 -export([diff_stateless/6]).
 -export([diff_list/5]).
 
@@ -35,17 +36,18 @@ diff_view(View) ->
     {Diff, DiffState, DiffView} = track_diff_stateful(Id, Template, StatefulState, undefined, View),
     {Diff, arizona_view:update_state(DiffState, DiffView)}.
 
--spec diff_stateful(Module, Bindings, ElementIndex, View) -> {Result, View1} when
+-spec diff_stateful(Module, Bindings, ParentId, ElementIndex, View) -> {Result, View1} when
     Module :: module(),
     Bindings :: arizona_binder:bindings(),
+    ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
     Result :: diff() | arizona_hierarchical:stateful_struct(),
     View1 :: arizona_view:view().
-diff_stateful(Module, Bindings, ElementIndex, View) ->
+diff_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
     {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
     Fingerprint = arizona_template:get_fingerprint(Template),
-    case arizona_view:fingerprint_matches(Id, ElementIndex, Fingerprint, PrepRenderView) of
+    case arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, PrepRenderView) of
         true ->
             StatefulState = arizona_view:get_stateful_state(Id, PrepRenderView),
             {Diff, DiffState, DiffView} = track_diff_stateful(
@@ -63,6 +65,21 @@ diff_stateful(Module, Bindings, ElementIndex, View) ->
                 Module, Bindings, ElementIndex, PrepRenderView
             )
     end.
+
+-spec diff_root_stateful(Module, Bindings, View) -> {Diff, View1} when
+    Module :: module(),
+    Bindings :: arizona_binder:bindings(),
+    View :: arizona_view:view(),
+    Diff :: diff(),
+    View1 :: arizona_view:view().
+diff_root_stateful(Module, Bindings, View) ->
+    {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
+    StatefulState = arizona_view:get_stateful_state(Id, PrepRenderView),
+    {Diff, DiffState, DiffView} = track_diff_stateful(
+        Id, Template, StatefulState, undefined, PrepRenderView
+    ),
+    StatefulView = arizona_view:put_stateful_state(Id, DiffState, DiffView),
+    {Diff, StatefulView}.
 
 -spec diff_stateless(Module, Function, Bindings, ParentId, ElementIndex, View) ->
     {Result, View1}
