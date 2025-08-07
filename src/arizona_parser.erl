@@ -148,7 +148,6 @@ create_dynamic_callback_ast(CallbackArg, ExprText, CompileOpts) ->
             F when is_list(F) -> F;
             F -> [F]
         end,
-
     % Check if we're already in a recursive parse transform to prevent infinite loops
     InRecursiveTransform = proplists:get_bool(in_dynamic_callback, CompileOpts),
 
@@ -162,9 +161,8 @@ create_dynamic_callback_ast(CallbackArg, ExprText, CompileOpts) ->
                 RecursionProtectedOpts = [{in_dynamic_callback, true} | CompileOpts],
 
                 % Transform the expression to handle nested arizona_template calls
-                arizona_parse_transform:parse_transform(Forms, RecursionProtectedOpts)
+                arizona_parse_transform:parse_transform(Forms, CallbackArg, RecursionProtectedOpts)
         end,
-
     erl_syntax:fun_expr([erl_syntax:clause([CallbackArg], none, FinalExpr)]).
 
 %% Separate static and dynamic parts
