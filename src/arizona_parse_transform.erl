@@ -5,6 +5,7 @@
 %% --------------------------------------------------------------------
 
 -export([parse_transform/2]).
+-export([parse_transform/3]).
 -export([transform_render_list/5]).
 -export([format_error/2]).
 
@@ -22,9 +23,17 @@
     Forms :: compile:forms(),
     Options :: [compile:option()].
 parse_transform(Forms, Options) ->
+    CallbackArgs = erl_syntax:atom(ok),
+    parse_transform(Forms, CallbackArgs, Options).
+
+-spec parse_transform(Forms, CallbackArg, Options) -> Forms when
+    Forms :: compile:forms(),
+    CallbackArg :: erl_syntax:syntaxTree(),
+    Options :: [compile:option()].
+parse_transform(Forms, CallbackArg, Options) ->
     Module = extract_module(Forms),
     TransformedForms = [
-        transform_form(FormTree, Module, Options)
+        transform_form(FormTree, CallbackArg, Module, Options)
      || FormTree <- Forms
     ],
     RevertedForms = erl_syntax:revert_forms(TransformedForms),
@@ -45,21 +54,26 @@ parse_transform(Forms, Options) ->
 transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) ->
     try
         % Extract the item parameter and template string from the function
-        {CallbackArg, TemplateString} = extract_list_function_body(FunArg, Module),
-
-        % Scan template content into tokens
-        Tokens = arizona_scanner:scan_string(Line + 1, TemplateString),
-
-        % Parse tokens into template AST with the actual CallbackArg (not 'ok')
-        % This ensures that dynamic expressions will use the correct parameter
-        TemplateAST = arizona_parser:parse_tokens(Tokens, CallbackArg, CompileOpts),
+        {RevClauseBody, TemplateAST} = extract_list_function_body(
+            FunArg, Module, Line, CompileOpts
+        ),
 
         % Create application: arizona_template:render_list_template(Template, List)
         TemplateModule = erl_syntax:atom(arizona_template),
         TemplateFunction = erl_syntax:atom(render_list_template),
-        erl_syntax:application(erl_syntax:module_qualifier(TemplateModule, TemplateFunction), [
-            TemplateAST, ListArg
-        ])
+        TemplateCall = erl_syntax:application(
+            erl_syntax:module_qualifier(TemplateModule, TemplateFunction), [
+                TemplateAST, ListArg
+            ]
+        ),
+
+        % If we have variable bindings, wrap everything in a begin...end block
+        case RevClauseBody of
+            [] ->
+                TemplateCall;
+            _ ->
+                erl_syntax:block_expr(lists:reverse([TemplateCall | RevClauseBody]))
+        end
     catch
         Class:Reason:Stacktrace ->
             error(
@@ -131,25 +145,25 @@ extract_module([]) ->
     undefined.
 
 %% Transform a single form tree
-transform_form(FormTree, Module, CompileOpts) ->
+transform_form(FormTree, CallbackArg, Module, CompileOpts) ->
     erl_syntax_lib:map(
         fun(Node) ->
-            transform_node(erl_syntax:revert(Node), Module, CompileOpts)
+            transform_node(erl_syntax:revert(Node), CallbackArg, Module, CompileOpts)
         end,
         FormTree
     ).
 
 %% Transform individual AST nodes
-transform_node(Node, Module, CompileOpts) ->
+transform_node(Node, CallbackArg, Module, CompileOpts) ->
     case erl_syntax:type(Node) of
         application ->
-            transform_application(Node, Module, CompileOpts);
+            transform_application(Node, CallbackArg, Module, CompileOpts);
         _ ->
             Node
     end.
 
 %% Transform function applications
-transform_application(Node, Module, CompileOpts) ->
+transform_application(Node, CallbackArg, Module, CompileOpts) ->
     case analyze_application(Node) of
         {arizona_template, from_string, 1, [TemplateArg]} ->
             % Check if we're in a dynamic callback context to prevent infinite recursion
@@ -162,7 +176,6 @@ transform_application(Node, Module, CompileOpts) ->
                 false ->
                     % Normal context - transform from_string
                     Line = get_node_line(Node),
-                    CallbackArg = erl_syntax:atom(ok),
                     transform_from_string(Module, Line, TemplateArg, CallbackArg, CompileOpts)
             end;
         {arizona_template, render_list, 2, [FunArg, ListArg]} ->
@@ -181,24 +194,29 @@ transform_application(Node, Module, CompileOpts) ->
     Arity :: non_neg_integer(),
     Args :: [erl_syntax:syntaxTree()].
 analyze_application(Node) ->
-    Operator = erl_syntax:application_operator(Node),
-    Arguments = erl_syntax:application_arguments(Node),
+    try
+        Operator = erl_syntax:application_operator(Node),
+        Arguments = erl_syntax:application_arguments(Node),
 
-    case erl_syntax:type(Operator) of
-        module_qualifier ->
-            Module = erl_syntax:module_qualifier_argument(Operator),
-            Function = erl_syntax:module_qualifier_body(Operator),
-            case {erl_syntax:type(Module), erl_syntax:type(Function)} of
-                {atom, atom} ->
-                    ModuleName = erl_syntax:atom_value(Module),
-                    FunctionName = erl_syntax:atom_value(Function),
-                    Arity = length(Arguments),
-                    {ModuleName, FunctionName, Arity, Arguments};
-                _ ->
-                    undefined
-            end;
-        _ ->
-            undefined
+        case erl_syntax:type(Operator) of
+            module_qualifier ->
+                Module = erl_syntax:module_qualifier_argument(Operator),
+                Function = erl_syntax:module_qualifier_body(Operator),
+                case {erl_syntax:type(Module), erl_syntax:type(Function)} of
+                    {atom, atom} ->
+                        ModuleName = erl_syntax:atom_value(Module),
+                        FunctionName = erl_syntax:atom_value(Function),
+                        Arity = length(Arguments),
+                        {ModuleName, FunctionName, Arity, Arguments};
+                    _ ->
+                        undefined
+                end;
+            _ ->
+                undefined
+        end
+    catch
+        _:_ ->
+            Node
     end.
 
 %% Transform arizona_template:from_string/1 calls
@@ -221,18 +239,33 @@ transform_from_string(Module, Line, TemplateArg, CallbackArg, CompileOpts) ->
     end.
 
 %% Extract item parameter and template string from list function
-extract_list_function_body(FunExpr, Module) ->
+extract_list_function_body(FunExpr, Module, Line, CompileOpts) ->
     case erl_syntax:type(FunExpr) of
         fun_expr ->
             [Clause] = erl_syntax:fun_expr_clauses(FunExpr),
             [CallbackArg] = erl_syntax:clause_patterns(Clause),
-            [TemplateCall] = erl_syntax:clause_body(Clause),
+            ClauseBody = erl_syntax:clause_body(Clause),
+            % Find the arizona_template:from_string call in the function body
+            % It might be the only statement or the last statement after variable bindings
+            [TemplateCall | RevClauseBody] = lists:reverse(ClauseBody),
 
             % Extract template string from raw arizona_template:from_string call
             case analyze_application(TemplateCall) of
                 {arizona_template, from_string, 1, [TemplateArg]} ->
                     TemplateString = eval_expr(Module, TemplateArg),
-                    {CallbackArg, TemplateString};
+
+                    % Scan template content into tokens
+                    Tokens = arizona_scanner:scan_string(Line + 1, TemplateString),
+
+                    % Parse tokens into template AST with the actual CallbackArg (not 'ok')
+                    % This ensures that dynamic expressions will use the correct parameter
+                    % Clear in_dynamic_callback flag for render_list templates to allow nested transforms
+                    ClearedOpts = proplists:delete(in_dynamic_callback, CompileOpts),
+                    TemplateAST = arizona_parser:parse_tokens(Tokens, CallbackArg, ClearedOpts),
+
+                    {RevClauseBody, TemplateAST};
+                {tuple, _, [{atom, _, template} | _]} ->
+                    {RevClauseBody, TemplateCall};
                 _ ->
                     error({not_from_string_call, TemplateCall})
             end;
