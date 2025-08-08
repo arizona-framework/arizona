@@ -1,7 +1,6 @@
 -module(arizona_counter_view).
 -behaviour(arizona_view).
 -compile({parse_transform, arizona_parse_transform}).
-
 -export([mount/1]).
 -export([render/1]).
 -export([handle_event/3]).
