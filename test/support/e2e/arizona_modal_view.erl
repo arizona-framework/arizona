@@ -112,23 +112,23 @@ get_modal_slots(ModalType, User, NotificationCount) ->
 
 %% Generate header slot based on modal type
 get_header_slot(success) ->
-    arizona_template:from_string(~"""
+    ~"""
     <div class="border-b-4 border-green-600">
         &#9989; Success modal
     </div>
-    """);
+    """;
 get_header_slot(error) ->
-    arizona_template:from_string(~"""
+    ~"""
     <div class="border-b-4 border-red-600">
         &#10060; Error modal
     </div>
-    """);
+    """;
 get_header_slot(info) ->
-    arizona_template:from_string(~"""
+    ~"""
     <div class="border-b-4 border-blue-600">
         &#8505; Info modal
     </div>
-    """).
+    """.
 
 %% Generate inner_block slot based on modal type
 get_inner_block_slot(success, User, NotificationCount) ->
@@ -179,34 +179,34 @@ get_inner_block_slot(info, User, NotificationCount) ->
 get_confirm_slot(success) ->
     #{
         classes => ~"bg-green-400 rounded-full text-slate-50 text-sm p-2",
-        content => arizona_template:from_string(~"Continue")
+        content => ~"Continue"
     };
 get_confirm_slot(error) ->
     #{
         classes => ~"bg-red-400 rounded-full text-slate-50 text-sm p-2",
-        content => arizona_template:from_string(~"Retry")
+        content => ~"Retry"
     };
 get_confirm_slot(info) ->
     #{
         classes => ~"bg-blue-400 rounded-full text-slate-50 text-sm p-2",
-        content => arizona_template:from_string(~"Got it")
+        content => ~"Got it"
     }.
 
 %% Generate cancel button slot based on modal type
 get_cancel_slot(success) ->
     #{
         classes => ~"bg-gray-400 rounded-full text-slate-50 text-sm p-2",
-        content => arizona_template:from_string(~"Back")
+        content => ~"Back"
     };
 get_cancel_slot(error) ->
     #{
         classes => ~"bg-gray-400 rounded-full text-slate-50 text-sm p-2",
-        content => arizona_template:from_string(~"Cancel")
+        content => ~"Cancel"
     };
 get_cancel_slot(info) ->
     #{
         classes => ~"bg-gray-400 rounded-full text-slate-50 text-sm p-2",
-        content => arizona_template:from_string(~"Close")
+        content => ~"Close"
     }.
 
 %% Event handlers
