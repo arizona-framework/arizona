@@ -4,7 +4,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([scan_string/2]).
+-export([scan_string/2, format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -22,13 +22,53 @@
 
 -spec scan_string(Line, String) -> [Token] when
     Line :: arizona_token:line(),
-    String :: binary(),
+    String :: string() | binary(),
     Token :: arizona_token:token().
-scan_string(Line, String) when is_integer(Line), Line >= 0, is_binary(String) ->
-    scan(String, String, #state{
+scan_string(Line, String) when
+    is_integer(Line), Line >= 0, (is_binary(String) orelse is_list(String))
+->
+    Bin = iolist_to_binary(String),
+    scan(Bin, Bin, #state{
         line = Line,
         position = 0
     }).
+
+-spec format_error(Reason, StackTrace) -> ErrorMap when
+    Reason :: invalid_utf8 | unexpected_expr_end | badexpr | term(),
+    StackTrace :: erlang:stacktrace(),
+    ErrorMap :: #{general => string(), reason => io_lib:chars()}.
+format_error(invalid_utf8, [{_M, _F, _As, Info} | _]) ->
+    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
+    {Line, Position, InvalidByte} = maps:get(cause, ErrorInfo),
+    #{
+        general => "Arizona template scanner UTF-8 validation failed",
+        reason => io_lib:format(
+            "Invalid UTF-8 byte 0x~2.16.0B at line ~p, position ~p. "
+            "Arizona templates must use well-formed UTF-8 encoding.",
+            [InvalidByte, Line, Position]
+        )
+    };
+format_error(unexpected_expr_end, [{_M, _F, _As, Info} | _]) ->
+    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
+    {Line, Expr} = maps:get(cause, ErrorInfo),
+    #{
+        general => "Arizona template scanner expression parsing failed",
+        reason => io_lib:format(
+            "Unexpected end of expression '~s' at line ~p. "
+            "Check for missing closing braces or malformed expressions.",
+            [Expr, Line]
+        )
+    };
+format_error(badexpr, [{_M, _F, _As, Info} | _]) ->
+    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
+    {Line, Expr, Reason} = maps:get(cause, ErrorInfo),
+    #{
+        general => "Arizona template scanner expression validation failed",
+        reason => io_lib:format(
+            "Invalid expression '~s' at line ~p: ~p",
+            [Expr, Line, Reason]
+        )
+    }.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -67,8 +107,15 @@ scan_next(<<$\r, Rest/binary>>, _Bin, Len, State) ->
     {continue, Rest, Len + 1, new_line(State)};
 scan_next(<<$\n, Rest/binary>>, _Bin, Len, State) ->
     {continue, Rest, Len + 1, new_line(State)};
-scan_next(<<_Char, Rest/binary>>, _Bin, Len, State) ->
-    {continue, Rest, Len + 1, State};
+scan_next(<<Char/utf8, Rest/binary>>, _Bin, Len, State) ->
+    CharByteSize = utf8_char_byte_size(Char),
+    {continue, Rest, Len + CharByteSize, State};
+scan_next(<<InvalidByte, _Rest/binary>>, _Bin, _Len, State) ->
+    error(
+        invalid_utf8,
+        none,
+        error_info({State#state.line, State#state.position, InvalidByte})
+    );
 scan_next(<<>>, _Bin, _Len, _State) ->
     end_of_input.
 
@@ -87,7 +134,14 @@ scan_expr(Rest0, Bin, State0) ->
         {ok, ExprInfo} ->
             process_found_expression(ExprInfo, Bin, State0);
         {error, unexpected_expr_end, ErrState} ->
-            handle_scan_error({unexpected_expr_end, ErrState, Bin, State0})
+            Expr = binary_part(
+                Bin, State0#state.position, ErrState#state.position - State0#state.position
+            ),
+            error(
+                unexpected_expr_end,
+                none,
+                error_info({State0#state.line, Expr})
+            )
     end.
 
 %% Find the end of an expression and extract relevant information
@@ -122,13 +176,6 @@ continue_without_newline(Token, Rest1, Bin, Len, EndMarkerLen, State1) ->
     State = incr_pos(Len + EndMarkerLen, State1),
     [Token | scan(Rest1, Bin, State)].
 
-%% Handle all scanning errors
-handle_scan_error({unexpected_expr_end, ErrState, Bin, State0}) ->
-    Expr = binary_part(Bin, State0#state.position, ErrState#state.position - State0#state.position),
-    error({unexpected_expr_end, State0#state.line, Expr});
-handle_scan_error({badexpr, Line, Expr, Reason}) ->
-    error({badexpr, Line, Expr, Reason}).
-
 %% Find the end of an expression, tracking nested braces
 %% Depth tracking ensures expressions like {case X of {ok, Y} -> Y end}
 %% are properly handled.
@@ -144,8 +191,15 @@ scan_expr_end(<<$\r, Rest/binary>>, Depth, Len, State) ->
     scan_expr_end(Rest, Depth, Len + 1, new_line(State));
 scan_expr_end(<<$\n, Rest/binary>>, Depth, Len, State) ->
     scan_expr_end(Rest, Depth, Len + 1, new_line(State));
-scan_expr_end(<<_Char, Rest/binary>>, Depth, Len, State) ->
-    scan_expr_end(Rest, Depth, Len + 1, State);
+scan_expr_end(<<Char/utf8, Rest/binary>>, Depth, Len, State) ->
+    CharByteSize = utf8_char_byte_size(Char),
+    scan_expr_end(Rest, Depth, Len + CharByteSize, State);
+scan_expr_end(<<InvalidByte, _Rest/binary>>, _Depth, _Len, State) ->
+    error(
+        invalid_utf8,
+        none,
+        error_info({State#state.line, State#state.position, InvalidByte})
+    );
 scan_expr_end(<<>>, _Depth, Len, State) ->
     {error, unexpected_expr_end, incr_pos(Len, State)}.
 
@@ -164,7 +218,11 @@ expr_category(Expr, State) ->
         {ok, ParsedForms} ->
             categorize_parsed_forms(ParsedForms, Expr);
         {error, Reason} ->
-            handle_scan_error({badexpr, State#state.line, Expr, Reason})
+            error(
+                badexpr,
+                none,
+                error_info({State#state.line, Expr, Reason})
+            )
     end.
 
 %% Parse expression using merl, handling exceptions gracefully
@@ -239,3 +297,26 @@ prepend_newline_to_first_static([Token | Rest], NLMarker) ->
         _ ->
             [Token | prepend_newline_to_first_static(Rest, NLMarker)]
     end.
+
+%% Calculate byte size of a UTF-8 character from its codepoint
+
+% ASCII (0-127)
+utf8_char_byte_size(Codepoint) when Codepoint =< 16#7F -> 1;
+% 2-byte UTF-8
+utf8_char_byte_size(Codepoint) when Codepoint =< 16#7FF -> 2;
+% 3-byte UTF-8
+utf8_char_byte_size(Codepoint) when Codepoint =< 16#FFFF -> 3;
+% 4-byte UTF-8
+utf8_char_byte_size(Codepoint) when Codepoint =< 16#10FFFF -> 4.
+
+%% Create error_info for proper compiler diagnostics with enhanced details
+-spec error_info(Cause) -> ErrorInfo when
+    Cause :: term(),
+    ErrorInfo :: [{error_info, map()}].
+error_info(Cause) ->
+    [
+        {error_info, #{
+            cause => Cause,
+            module => ?MODULE
+        }}
+    ].

@@ -35,7 +35,7 @@ handle_live_request(ViewModule, CowboyRequest, State) ->
         View = arizona_view:call_mount_callback(ViewModule, ArizonaRequest),
         {Html, _RenderView} = render_view(View),
         CowboyRequest1 = cowboy_req:reply(
-            200, #{~"content-type" => ~"text/html"}, Html, CowboyRequest
+            200, #{~"content-type" => ~"text/html; charset=utf-8"}, Html, CowboyRequest
         ),
         {ok, CowboyRequest1, State}
     catch

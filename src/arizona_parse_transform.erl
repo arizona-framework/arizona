@@ -39,7 +39,7 @@ parse_transform(Forms, CallbackArg, Options) ->
     RevertedForms = erl_syntax:revert_forms(TransformedForms),
 
     % Output forms to Erlang module in /tmp folder if DEBUG defined
-    output_forms_to_tmp(Module, RevertedForms),
+    ok = output_forms_to_tmp(Module, RevertedForms),
 
     RevertedForms.
 
@@ -119,14 +119,12 @@ output_forms_to_tmp(undefined, _Forms) ->
     ok;
 output_forms_to_tmp(Module, Forms) ->
     FileName = "/tmp/" ++ atom_to_list(Module) ++ ".erl",
-    FormStrings = [erl_pp:form(Form, [{linewidth, 100}]) || Form <- Forms],
-    Content = lists:flatten(FormStrings),
+    Content = [erl_pp:form(Form, [{linewidth, 100}]) || Form <- Forms],
     case file:write_file(FileName, Content) of
         ok ->
             ok;
         {error, Reason} ->
-            error_logger:warning_msg("Failed to write forms to ~s: ~p~n", [FileName, Reason]),
-            ok
+            io:format("Failed to write forms to ~s: ~p~n", [FileName, Reason])
     end.
 -else.
 output_forms_to_tmp(_Module, _Forms) ->
