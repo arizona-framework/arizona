@@ -8,6 +8,7 @@
 -export([hierarchical_stateful/4]).
 -export([hierarchical_stateless/6]).
 -export([hierarchical_list/5]).
+-export([hierarchical_template/5]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -86,7 +87,7 @@ hierarchical_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View) ->
     Fingerprint = arizona_template:get_fingerprint(Template),
     FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
 
-    hierarchical_stateless_template(Template, ok, ParentId, ElementIndex, FingerprintView).
+    hierarchical_template(Template, ok, ParentId, ElementIndex, FingerprintView).
 
 -spec hierarchical_list(Template, List, ParentId, ElementIndex, View) -> {Struct, View1} when
     Template :: arizona_template:template(),
@@ -124,6 +125,29 @@ hierarchical_list(Template, List, ParentId, ElementIndex, View) ->
         dynamic => DynamicRender
     },
     {Struct, FingerprintView}.
+
+-spec hierarchical_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
+    {Struct, View1}
+when
+    Template :: arizona_template:template(),
+    CallbackArg :: dynamic(),
+    ParentId :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
+    View :: arizona_view:view(),
+    Struct :: stateless_struct(),
+    View1 :: arizona_view:view().
+hierarchical_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    Dynamic = arizona_template:get_dynamic(Template),
+    {DynamicRender, DynamicView} = hierarchical_dynamic(
+        DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View
+    ),
+    Struct = #{
+        type => stateless,
+        static => arizona_template:get_static(Template),
+        dynamic => DynamicRender
+    },
+    {Struct, DynamicView}.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -180,7 +204,7 @@ hierarchical_dynamic([DynamicElementIndex | T], Dynamic, CallbackArg, ParentId, 
         Result ->
             case arizona_template:is_template(Result) of
                 true ->
-                    {Struct, TemplateView} = hierarchical_stateless_template(
+                    {Struct, TemplateView} = hierarchical_template(
                         Result, ok, ParentId, ElementIndex, View
                     ),
                     {RestHtml, FinalView} = hierarchical_dynamic(
@@ -195,16 +219,3 @@ hierarchical_dynamic([DynamicElementIndex | T], Dynamic, CallbackArg, ParentId, 
                     {[Html | RestHtml], FinalView}
             end
     end.
-
-hierarchical_stateless_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
-    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
-    Dynamic = arizona_template:get_dynamic(Template),
-    {DynamicRender, DynamicView} = hierarchical_dynamic(
-        DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View
-    ),
-    Struct = #{
-        type => stateless,
-        static => arizona_template:get_static(Template),
-        dynamic => DynamicRender
-    },
-    {Struct, DynamicView}.

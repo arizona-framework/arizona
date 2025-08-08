@@ -9,6 +9,7 @@
 -export([render_stateful/3]).
 -export([render_stateless/5]).
 -export([render_list/4]).
+-export([render_template/4]).
 -export([render_dynamic/5]).
 
 %% --------------------------------------------------------------------
@@ -85,6 +86,23 @@ render_list(Template, List, ParentId, View) ->
         View
     }.
 
+-spec render_template(Template, CallbackArg, ParentId, View) -> {Html, View1} when
+    Template :: arizona_template:template(),
+    CallbackArg :: dynamic(),
+    ParentId :: arizona_stateful:id(),
+    View :: arizona_view:view(),
+    Html :: arizona_html:html(),
+    View1 :: arizona_view:view().
+render_template(Template, CallbackArg, ParentId, View) ->
+    Static = arizona_template:get_static(Template),
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    Dynamic = arizona_template:get_dynamic(Template),
+    {DynamicRender, FinalView} = render_dynamic(
+        DynamicSequence, Dynamic, CallbackArg, ParentId, View
+    ),
+    Html = zip_static_dynamic(Static, DynamicRender),
+    {Html, FinalView}.
+
 -spec render_dynamic(Sequence, Dynamic, CallbackArg, ParentId, View) -> {Render, View1} when
     Sequence :: arizona_template:dynamic_sequence(),
     Dynamic :: arizona_template:dynamic(),
@@ -122,23 +140,6 @@ render_dynamic(
 %% --------------------------------------------------------------------
 %% Internal Functions
 %% --------------------------------------------------------------------
-
--spec render_template(Template, CallbackArg, ParentId, View) -> {Html, View1} when
-    Template :: arizona_template:template(),
-    CallbackArg :: dynamic(),
-    ParentId :: arizona_stateful:id(),
-    View :: arizona_view:view(),
-    Html :: arizona_html:html(),
-    View1 :: arizona_view:view().
-render_template(Template, CallbackArg, ParentId, View) ->
-    Static = arizona_template:get_static(Template),
-    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
-    Dynamic = arizona_template:get_dynamic(Template),
-    {DynamicRender, FinalView} = render_dynamic(
-        DynamicSequence, Dynamic, CallbackArg, ParentId, View
-    ),
-    Html = zip_static_dynamic(Static, DynamicRender),
-    {Html, FinalView}.
 
 %% Zip static and dynamic parts for list item
 zip_static_dynamic([], []) ->

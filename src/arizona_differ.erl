@@ -8,6 +8,7 @@
 -export([diff_root_stateful/3]).
 -export([diff_stateless/6]).
 -export([diff_list/5]).
+-export([diff_template/5]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -144,6 +145,29 @@ diff_list(Template, List, ParentId, ElementIndex, View) ->
             arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
     end.
 
+%% TODO: Same stateless fingerprint check
+-spec diff_template(Template, CallbackArg, ParentId, ElementIndex, View) -> {Result, View1} when
+    Template :: arizona_template:template(),
+    CallbackArg :: dynamic(),
+    ParentId :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
+    View :: arizona_view:view(),
+    Result :: diff(),
+    View1 :: arizona_view:view().
+diff_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    Dynamic = arizona_template:get_dynamic(Template),
+    case
+        process_affected_elements(
+            DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View
+        )
+    of
+        {[], RenderView} ->
+            {nodiff, RenderView};
+        {Diff, RenderView} ->
+            {Diff, RenderView}
+    end.
+
 %% --------------------------------------------------------------------
 %% Internal Functions
 %% --------------------------------------------------------------------
@@ -227,7 +251,7 @@ process_affected_elements(
         Result ->
             case arizona_template:is_template(Result) of
                 true ->
-                    {Diff, TemplateView} = render_template(
+                    {Diff, TemplateView} = diff_template(
                         Result, ok, ParentId, ElementIndex, View
                     ),
                     {RestChanges, FinalView} = process_affected_elements(
@@ -253,8 +277,3 @@ process_affected_elements(
                     {[ElementChange | RestChanges], FinalView}
             end
     end.
-
-render_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
-    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
-    Dynamic = arizona_template:get_dynamic(Template),
-    process_affected_elements(DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View).

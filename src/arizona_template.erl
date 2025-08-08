@@ -214,7 +214,23 @@ render_stateless(Module, Fun, Bindings) ->
     Slot :: view | tuple(),
     Callback :: render_callback().
 render_slot(view) ->
-    render_view().
+    fun
+        (render, _ParentId, _ElementIndex, View) ->
+            arizona_renderer:render_view(View);
+        (diff, _ParentId, _ElementIndex, View) ->
+            arizona_differ:diff_view(View);
+        (hierarchical, _ParentId, _ElementIndex, View) ->
+            arizona_hierarchical:hierarchical_view(View)
+    end;
+render_slot(#template{} = Template) ->
+    fun
+        (render, ParentId, _ElementIndex, View) ->
+            arizona_renderer:render_template(Template, ok, ParentId, View);
+        (diff, ParentId, ElementIndex, View) ->
+            arizona_differ:diff_template(Template, ok, ParentId, ElementIndex, View);
+        (hierarchical, ParentId, ElementIndex, View) ->
+            arizona_hierarchical:hierarchical_template(Template, ok, ParentId, ElementIndex, View)
+    end.
 
 -spec render_list(ItemCallback, List) -> Callback when
     ItemCallback :: fun((Item) -> arizona_template:template()),
@@ -259,7 +275,7 @@ render_list(ItemCallback, List) ->
     Template :: template(),
     List :: [dynamic()],
     Callback :: render_callback().
-render_list_template(Template, List) ->
+render_list_template(#template{} = Template, List) ->
     fun
         (render, ParentId, _ElementIndex, View) ->
             arizona_renderer:render_list(Template, List, ParentId, View);
@@ -267,20 +283,4 @@ render_list_template(Template, List) ->
             arizona_differ:diff_list(Template, List, ParentId, ElementIndex, View);
         (hierarchical, ParentId, ElementIndex, View) ->
             arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
-    end.
-
-%% --------------------------------------------------------------------
-%% Internal functions
-%% --------------------------------------------------------------------
-
--spec render_view() -> Callback when
-    Callback :: render_callback().
-render_view() ->
-    fun
-        (render, _ParentId, _ElementIndex, View) ->
-            arizona_renderer:render_view(View);
-        (diff, _ParentId, _ElementIndex, View) ->
-            arizona_differ:diff_view(View);
-        (hierarchical, _ParentId, _ElementIndex, View) ->
-            arizona_hierarchical:hierarchical_view(View)
     end.
