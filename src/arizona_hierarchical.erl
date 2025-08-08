@@ -86,17 +86,7 @@ hierarchical_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View) ->
     Fingerprint = arizona_template:get_fingerprint(Template),
     FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
 
-    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
-    Dynamic = arizona_template:get_dynamic(Template),
-    {DynamicRender, DynamicView} = hierarchical_dynamic(
-        DynamicSequence, Dynamic, ok, ParentId, ElementIndex, FingerprintView
-    ),
-    Struct = #{
-        type => stateless,
-        static => arizona_template:get_static(Template),
-        dynamic => DynamicRender
-    },
-    {Struct, DynamicView}.
+    hierarchical_stateless_template(Template, ok, ParentId, ElementIndex, FingerprintView).
 
 -spec hierarchical_list(Template, List, ParentId, ElementIndex, View) -> {Struct, View1} when
     Template :: arizona_template:template(),
@@ -190,8 +180,8 @@ hierarchical_dynamic([DynamicElementIndex | T], Dynamic, CallbackArg, ParentId, 
         Result ->
             case arizona_template:is_template(Result) of
                 true ->
-                    {Struct, TemplateView} = render_template(
-                        Result, CallbackArg, ParentId, ElementIndex, View
+                    {Struct, TemplateView} = hierarchical_stateless_template(
+                        Result, ok, ParentId, ElementIndex, View
                     ),
                     {RestHtml, FinalView} = hierarchical_dynamic(
                         T, Dynamic, CallbackArg, ParentId, ElementIndex, TemplateView
@@ -206,7 +196,15 @@ hierarchical_dynamic([DynamicElementIndex | T], Dynamic, CallbackArg, ParentId, 
             end
     end.
 
-render_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
+hierarchical_stateless_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
-    hierarchical_dynamic(DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View).
+    {DynamicRender, DynamicView} = hierarchical_dynamic(
+        DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View
+    ),
+    Struct = #{
+        type => stateless,
+        static => arizona_template:get_static(Template),
+        dynamic => DynamicRender
+    },
+    {Struct, DynamicView}.
