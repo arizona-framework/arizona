@@ -212,7 +212,7 @@ render_stateless(Module, Fun, Bindings) ->
 
 -spec render_slot(Slot) -> Callback when
     Slot :: view | tuple(),
-    Callback :: render_callback().
+    Callback :: render_callback() | arizona_html:html().
 render_slot(view) ->
     fun
         (render, _ParentId, _ElementIndex, View) ->
@@ -230,7 +230,9 @@ render_slot(#template{} = Template) ->
             arizona_differ:diff_template(Template, ok, ParentId, ElementIndex, View);
         (hierarchical, ParentId, ElementIndex, View) ->
             arizona_hierarchical:hierarchical_template(Template, ok, ParentId, ElementIndex, View)
-    end.
+    end;
+render_slot(Term) ->
+    arizona_html:to_html(Term).
 
 -spec render_list(ItemCallback, List) -> Callback when
     ItemCallback :: fun((Item) -> arizona_template:template()),
