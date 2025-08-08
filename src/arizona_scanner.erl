@@ -87,7 +87,7 @@ scan_expr(Rest0, Bin, State0) ->
         {ok, ExprInfo} ->
             process_found_expression(ExprInfo, Bin, State0);
         {error, unexpected_expr_end, ErrState} ->
-            handle_scan_error({unexpected_expr_end, ErrState}, Bin, State0)
+            handle_scan_error({unexpected_expr_end, ErrState, Bin, State0})
     end.
 
 %% Find the end of an expression and extract relevant information
@@ -123,11 +123,11 @@ continue_without_newline(Token, Rest1, Bin, Len, EndMarkerLen, State1) ->
     [Token | scan(Rest1, Bin, State)].
 
 %% Handle all scanning errors
-handle_scan_error({unexpected_expr_end, ErrState}, Bin, State0) ->
+handle_scan_error({unexpected_expr_end, ErrState, Bin, State0}) ->
     Expr = binary_part(Bin, State0#state.position, ErrState#state.position - State0#state.position),
     error({unexpected_expr_end, State0#state.line, Expr});
-handle_scan_error({badexpr, Line, Expr}, _Bin, _State) ->
-    error({badexpr, Line, Expr}).
+handle_scan_error({badexpr, Line, Expr, Reason}) ->
+    error({badexpr, Line, Expr, Reason}).
 
 %% Find the end of an expression, tracking nested braces
 %% Depth tracking ensures expressions like {case X of {ok, Y} -> Y end}
@@ -163,17 +163,22 @@ expr_category(Expr, State) ->
     case parse_expression(Expr) of
         {ok, ParsedForms} ->
             categorize_parsed_forms(ParsedForms, Expr);
-        {error, _Reason} ->
-            handle_scan_error({badexpr, State#state.line, Expr}, <<>>, State)
+        {error, Reason} ->
+            handle_scan_error({badexpr, State#state.line, Expr, Reason})
     end.
 
 %% Parse expression using merl, handling exceptions gracefully
 parse_expression(Expr) ->
     try
-        {ok, merl:quote(Expr)}
+        Forms =
+            case merl:quote(Expr) of
+                F when is_list(F) -> F;
+                F -> [F]
+            end,
+        {ok, Forms}
     catch
-        _Class:_Exception ->
-            {error, parse_failed}
+        Class:Exception:Stacktrace ->
+            {error, {parse_failed, Class, Exception, Stacktrace}}
     end.
 
 %% Categorize parsed forms as either comments or dynamic expressions

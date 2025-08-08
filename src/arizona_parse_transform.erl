@@ -158,9 +158,47 @@ transform_node(Node, CallbackArg, Module, CompileOpts) ->
     case erl_syntax:type(Node) of
         application ->
             transform_application(Node, CallbackArg, Module, CompileOpts);
+        case_expr ->
+            % Transform case expressions by applying transformation to argument and clauses
+            Argument = erl_syntax:case_expr_argument(Node),
+            Clauses = erl_syntax:case_expr_clauses(Node),
+            TransformedArgument = apply_transformation(Argument, CallbackArg, Module, CompileOpts),
+            TransformedClauses = [
+                apply_transformation(Clause, CallbackArg, Module, CompileOpts)
+             || Clause <- Clauses
+            ],
+            erl_syntax:case_expr(TransformedArgument, TransformedClauses);
+        clause ->
+            % Transform clauses by applying transformation to patterns, guard, and body
+            Patterns = erl_syntax:clause_patterns(Node),
+            Guard = erl_syntax:clause_guard(Node),
+            Body = erl_syntax:clause_body(Node),
+            TransformedPatterns = [
+                apply_transformation(Pattern, CallbackArg, Module, CompileOpts)
+             || Pattern <- Patterns
+            ],
+            TransformedGuard =
+                case Guard of
+                    none -> none;
+                    _ -> apply_transformation(Guard, CallbackArg, Module, CompileOpts)
+                end,
+            TransformedBody = [
+                apply_transformation(BodyExpr, CallbackArg, Module, CompileOpts)
+             || BodyExpr <- Body
+            ],
+            erl_syntax:clause(TransformedPatterns, TransformedGuard, TransformedBody);
         _ ->
             Node
     end.
+
+%% Generic transformation function - reusable for any AST node
+apply_transformation(Node, CallbackArg, Module, CompileOpts) ->
+    erl_syntax_lib:map(
+        fun(ChildNode) ->
+            transform_node(erl_syntax:revert(ChildNode), CallbackArg, Module, CompileOpts)
+        end,
+        Node
+    ).
 
 %% Transform function applications
 transform_application(Node, CallbackArg, Module, CompileOpts) ->

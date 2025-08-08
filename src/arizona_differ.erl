@@ -228,7 +228,7 @@ process_affected_elements(
             case arizona_template:is_template(Result) of
                 true ->
                     {Diff, TemplateView} = render_template(
-                        Result, CallbackArg, ParentId, ElementIndex, View
+                        Result, ok, ParentId, ElementIndex, View
                     ),
                     {RestChanges, FinalView} = process_affected_elements(
                         T, Dynamic, CallbackArg, ParentId, ElementIndex, TemplateView
