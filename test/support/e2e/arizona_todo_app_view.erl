@@ -9,13 +9,16 @@
 -export([render_clear_button/1]).
 -export([filter_todos/2]).
 
-mount(_Req) ->
+mount(Req) ->
     InitialTodos = [
         #{id => 1, text => ~"Learn Erlang", completed => false},
         #{id => 2, text => ~"Build web app", completed => true},
         #{id => 3, text => ~"Write tests", completed => false}
     ],
-    Layout = {arizona_todo_app_layout, render, main_content, #{}},
+    Layout =
+        {arizona_todo_app_layout, render, main_content, #{
+            active_url => arizona_request:get_path(Req)
+        }},
     arizona_view:new(
         ?MODULE,
         #{
