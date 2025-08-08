@@ -20,6 +20,7 @@ Routes = [
     {live, ~\"/test/counter\", arizona_counter_view},
     {live, ~\"/test/todo\", arizona_todo_app_view},
     {live, ~\"/test/datagrid\", arizona_datagrid_view},
+    {live, ~\"/test/modal\", arizona_modal_view},
     {live_websocket, ~\"/live/websocket\"},
     {static, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}}
 ],
