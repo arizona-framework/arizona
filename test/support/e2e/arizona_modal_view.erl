@@ -15,97 +15,99 @@ mount(_Req) ->
             id => ~"modal",
             user => #{username => ~"Joe"},
             modal_type => success,
-            notification_count => 3
+            modal_visible => false
         },
         Layout
     ).
 
-%% Ref: https://fly.io/phoenix-files/function-components/
 render(Bindings) ->
     arizona_template:from_string(~""""
     <div id="{arizona_template:get_binding(id, Bindings)}">
-        <!-- Control buttons to test slot updating -->
+        <!-- Control buttons to test modal functionality -->
         <div class="control-container">
             <button
                 class="control-btn control-btn-success"
                 onclick="arizona.sendEvent('set_modal_type', \{type: 'success'})"
             >
-                Success Modal
+                Open Success Modal
             </button>
             <button
                 class="control-btn control-btn-error"
                 onclick="arizona.sendEvent('set_modal_type', \{type: 'error'})"
             >
-                Error Modal
+                Open Error Modal
             </button>
             <button
                 class="control-btn control-btn-info"
                 onclick="arizona.sendEvent('set_modal_type', \{type: 'info'})"
             >
-                Info Modal
-            </button>
-            <button
-                class="control-btn control-btn-action"
-                onclick="arizona.sendEvent('add_notification')"
-            >
-                Add Notification
+                Open Info Modal
             </button>
         </div>
 
-        {
-            User = arizona_template:get_binding(user, Bindings),
-            ModalType = arizona_template:get_binding(modal_type, Bindings),
-            NotificationCount = arizona_template:get_binding(notification_count, Bindings),
-            get_modal_slots(ModalType, User, NotificationCount)
-        }
+        {case arizona_template:get_binding(modal_visible, Bindings) of
+            true ->
+                User = arizona_template:get_binding(user, Bindings),
+                ModalType = arizona_template:get_binding(modal_type, Bindings),
+                get_modal_slots(ModalType, User);
+            false ->
+                ~""
+        end}
     </div>
     """").
 
 render_modal(Bindings) ->
     arizona_template:from_string(~""""
-    <div class="modal-container">
-        <div class="header">
-            <h1>
-            {arizona_template:render_slot(
-                arizona_template:get_binding(header, Bindings)
-            )}
-            </h1>
-        </div>
+    <div class="modal-overlay" onclick="arizona.sendEvent('close_modal')">
+        <div class="modal-container" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h1>
+                    {arizona_template:render_slot(
+                        arizona_template:get_binding(header, Bindings)
+                    )}
+                </h1>
+                <button
+                    class="modal-close-btn"
+                    onclick="arizona.sendEvent('close_modal')"
+                    style="position: absolute; top: 16px; right: 16px; background: none; border: none; font-size: 24px; cursor: pointer; color: #6b7280; padding: 8px;"
+                >
+                    &times;
+                </button>
+            </div>
 
-        <div class="modal-body">
-            <p class="text-sm text-gray-500">
+            <div class="modal-body">
                 {arizona_template:render_slot(
                    arizona_template:get_binding(inner_block, Bindings)
                 )}
-            </p>
-        </div>
+            </div>
 
-        <div class="modal-footer">
-            {
-                Confirm = arizona_template:get_binding(confirm, Bindings),
-                arizona_template:from_string(~"""
-                <button class="{maps:get(classes, Confirm)}">
-                    {arizona_template:render_slot(maps:get(content, Confirm))}
-                </button>
-                """)
-            }
-            {
-                Cancel = arizona_template:get_binding(cancel, Bindings),
-                arizona_template:from_string(~"""
-                <button class="{maps:get(classes, Cancel)}">
-                    {arizona_template:render_slot(maps:get(content, Cancel))}
-                </button>
-                """)
-            }
+            <div class="modal-footer">
+                {
+                    Confirm = arizona_template:get_binding(confirm, Bindings),
+                    arizona_template:from_string(~"""
+                    <button class="{maps:get(classes, Confirm)}" onclick="arizona.sendEvent('close_modal')">
+                        {arizona_template:render_slot(maps:get(content, Confirm))}
+                    </button>
+                    """)
+                }
+                {
+                    Cancel = arizona_template:get_binding(cancel, Bindings),
+                    arizona_template:from_string(~"""
+                    <button class="{maps:get(classes, Cancel)}" onclick="arizona.sendEvent('close_modal')">
+                        {arizona_template:render_slot(maps:get(content, Cancel))}
+                    </button>
+                    """)
+                }
+            </div>
         </div>
     </div>
     """").
 
 %% Helper function to generate modal slots based on type
-get_modal_slots(ModalType, User, NotificationCount) ->
+get_modal_slots(ModalType, User) ->
     arizona_template:render_stateless(arizona_modal_view, render_modal, #{
         header => get_header_slot(ModalType),
-        inner_block => get_inner_block_slot(ModalType, User, NotificationCount),
+        inner_block => get_inner_block_slot(ModalType, User),
         confirm => get_confirm_slot(ModalType),
         cancel => get_cancel_slot(ModalType)
     }).
@@ -113,99 +115,86 @@ get_modal_slots(ModalType, User, NotificationCount) ->
 %% Generate header slot based on modal type
 get_header_slot(success) ->
     ~"""
-    <div class="border-b-4 border-green-600">
-        &#9989; Success modal
-    </div>
+    <span class="header-icon success">&#9989;</span> Success modal
     """;
 get_header_slot(error) ->
     ~"""
-    <div class="border-b-4 border-red-600">
-        &#10060; Error modal
-    </div>
+    <span class="header-icon error">&#10060;</span> Error modal
     """;
 get_header_slot(info) ->
     ~"""
-    <div class="border-b-4 border-blue-600">
-        &#8505; Info modal
-    </div>
+    <span class="header-icon info">&#8505;</span> Info modal
     """.
 
 %% Generate inner_block slot based on modal type
-get_inner_block_slot(success, User, NotificationCount) ->
+get_inner_block_slot(success, User) ->
     arizona_template:from_string(~"""
-    <div class="text-center justify-center items-center">
-        <h1 class="text-green-600">
-            Hey, {maps:get(username, User)}!
-        </h1>
-        <p>Your settings have been <strong>successfully</strong> saved</p>
-        <p>You have {NotificationCount} new notifications</p>
-        <div class="flex items-center justify-center">
-            <img
-                class="h-20 w-20 rounded-full flex items-center"
-                src="https://www.erlang.org/assets/img/erlang-logo.svg"
-                width="64"
-            />
-        </div>
+    <div class="modal-icon modal-icon-success">
+        <div class="icon-checkmark"></div>
+    </div>
+    <div class="greeting text-success">
+        Hey, {maps:get(username, User)}!
+    </div>
+    <div class="message">
+        Your settings have been <strong>successfully</strong> saved
     </div>
     """);
-get_inner_block_slot(error, User, NotificationCount) ->
+get_inner_block_slot(error, User) ->
     arizona_template:from_string(~"""
-    <div class="text-center justify-center items-center">
-        <h1 class="text-red-600">
-            Sorry, {maps:get(username, User)}!
-        </h1>
-        <p>There was an <strong>error</strong> processing your request</p>
-        <p>Failed to send {NotificationCount} notifications</p>
-        <div class="flex items-center justify-center">
-            <div style="color: red; font-size: 64px;">&#9888;</div>
-        </div>
+    <div class="modal-icon modal-icon-error">
+        <div class="icon-warning"></div>
+    </div>
+    <div class="greeting text-error">
+        Sorry, {maps:get(username, User)}!
+    </div>
+    <div class="message">
+        There was an <strong>error</strong> processing your request
     </div>
     """);
-get_inner_block_slot(info, User, NotificationCount) ->
+get_inner_block_slot(info, User) ->
     arizona_template:from_string(~"""
-    <div class="text-center justify-center items-center">
-        <h1 class="text-blue-600">
-            Hello, {maps:get(username, User)}!
-        </h1>
-        <p>Here's some <strong>information</strong> for you</p>
-        <p>You have {NotificationCount} pending notifications to review</p>
-        <div class="flex items-center justify-center">
-            <div style="color: blue; font-size: 64px;">&#8505;</div>
-        </div>
+    <div class="modal-icon modal-icon-info">
+        <div class="icon-info"></div>
+    </div>
+    <div class="greeting text-info">
+        Hello, {maps:get(username, User)}!
+    </div>
+    <div class="message">
+        Here's some <strong>information</strong> for you
     </div>
     """).
 
 %% Generate confirm button slot based on modal type
 get_confirm_slot(success) ->
     #{
-        classes => ~"bg-green-400 rounded-full text-slate-50 text-sm p-2",
-        content => ~"Continue"
+        classes => ~"modal-btn modal-btn-success",
+        content => ~"Return to profile"
     };
 get_confirm_slot(error) ->
     #{
-        classes => ~"bg-red-400 rounded-full text-slate-50 text-sm p-2",
+        classes => ~"modal-btn modal-btn-danger",
         content => ~"Retry"
     };
 get_confirm_slot(info) ->
     #{
-        classes => ~"bg-blue-400 rounded-full text-slate-50 text-sm p-2",
+        classes => ~"modal-btn modal-btn-primary",
         content => ~"Got it"
     }.
 
 %% Generate cancel button slot based on modal type
 get_cancel_slot(success) ->
     #{
-        classes => ~"bg-gray-400 rounded-full text-slate-50 text-sm p-2",
-        content => ~"Back"
+        classes => ~"modal-btn modal-btn-secondary",
+        content => ~"Back to index"
     };
 get_cancel_slot(error) ->
     #{
-        classes => ~"bg-gray-400 rounded-full text-slate-50 text-sm p-2",
+        classes => ~"modal-btn modal-btn-secondary",
         content => ~"Cancel"
     };
 get_cancel_slot(info) ->
     #{
-        classes => ~"bg-gray-400 rounded-full text-slate-50 text-sm p-2",
+        classes => ~"modal-btn modal-btn-secondary",
         content => ~"Close"
     }.
 
@@ -213,13 +202,17 @@ get_cancel_slot(info) ->
 handle_event(~"set_modal_type", #{~"type" := TypeBin}, View) ->
     State = arizona_view:get_state(View),
     Type = binary_to_existing_atom(TypeBin, utf8),
-    UpdatedState = arizona_stateful:put_binding(modal_type, Type, State),
+    UpdatedState = arizona_stateful:merge_bindings(
+        #{
+            modal_type => Type,
+            modal_visible => true
+        },
+        State
+    ),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
     {noreply, UpdatedView};
-handle_event(~"add_notification", _Params, View) ->
+handle_event(~"close_modal", _Params, View) ->
     State = arizona_view:get_state(View),
-    CurrentCount = arizona_stateful:get_binding(notification_count, State),
-    NewCount = CurrentCount + 1,
-    UpdatedState = arizona_stateful:put_binding(notification_count, NewCount, State),
+    UpdatedState = arizona_stateful:put_binding(modal_visible, false, State),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
     {noreply, UpdatedView}.
