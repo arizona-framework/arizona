@@ -6,8 +6,11 @@
 -export([render_table/1]).
 -export([handle_event/3]).
 
-mount(_Req) ->
-    Layout = {arizona_datagrid_layout, render, main_content, #{}},
+mount(Req) ->
+    Layout =
+        {arizona_datagrid_layout, render, main_content, #{
+            active_url => arizona_request:get_path(Req)
+        }},
     arizona_view:new(
         ?MODULE,
         #{

@@ -17,10 +17,10 @@ exec erl \
     -noshell -eval "
 {ok, _} = application:ensure_all_started(arizona),
 Routes = [
-    {live, ~\"/test/counter\", arizona_counter_view},
-    {live, ~\"/test/todo\", arizona_todo_app_view},
-    {live, ~\"/test/datagrid\", arizona_datagrid_view},
-    {live, ~\"/test/modal\", arizona_modal_view},
+    {live, ~\"/counter\", arizona_counter_view},
+    {live, ~\"/todo\", arizona_todo_app_view},
+    {live, ~\"/datagrid\", arizona_datagrid_view},
+    {live, ~\"/modal\", arizona_modal_view},
     {live_websocket, ~\"/live/websocket\"},
     {static, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}}
 ],

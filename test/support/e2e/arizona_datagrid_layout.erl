@@ -170,6 +170,9 @@ render(Bindings) ->
         </style>
     </head>
     <body>
+        {arizona_template:render_stateless(arizona_test_components, render_menu, #{
+            active_url => arizona_template:get_binding(active_url, Bindings)
+        })}
         {arizona_template:render_slot(arizona_template:get_binding(main_content, Bindings))}
         <script type="module">
             import Arizona from '/assets/js/arizona.min.js';
