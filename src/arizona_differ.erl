@@ -95,26 +95,7 @@ when
     View1 :: arizona_view:view().
 diff_stateless(Module, Function, Bindings, ParentId, ElementIndex, View) ->
     Template = arizona_stateless:call_render_callback(Module, Function, Bindings),
-    Fingerprint = arizona_template:get_fingerprint(Template),
-    case arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View) of
-        true ->
-            DynamicSequence = arizona_template:get_dynamic_sequence(Template),
-            Dynamic = arizona_template:get_dynamic(Template),
-            case
-                process_affected_elements(
-                    DynamicSequence, Dynamic, ok, ParentId, ElementIndex, View
-                )
-            of
-                {[], RenderView} ->
-                    {nodiff, RenderView};
-                {Diff, RenderView} ->
-                    {Diff, RenderView}
-            end;
-        false ->
-            arizona_hierarchical:hierarchical_stateless(
-                Module, Function, Bindings, ParentId, ElementIndex, View
-            )
-    end.
+    diff_template(Template, ok, ParentId, ElementIndex, View).
 
 -spec diff_list(Template, List, ParentId, ElementIndex, View) -> {Result, View1} when
     Template :: arizona_template:template(),
@@ -145,27 +126,34 @@ diff_list(Template, List, ParentId, ElementIndex, View) ->
             arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
     end.
 
-%% TODO: Same stateless fingerprint check
 -spec diff_template(Template, CallbackArg, ParentId, ElementIndex, View) -> {Result, View1} when
     Template :: arizona_template:template(),
     CallbackArg :: dynamic(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
-    Result :: diff(),
+    Result :: diff() | arizona_hierarchical:stateless_struct(),
     View1 :: arizona_view:view().
 diff_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
-    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
-    Dynamic = arizona_template:get_dynamic(Template),
-    case
-        process_affected_elements(
-            DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View
-        )
-    of
-        {[], RenderView} ->
-            {nodiff, RenderView};
-        {Diff, RenderView} ->
-            {Diff, RenderView}
+    Fingerprint = arizona_template:get_fingerprint(Template),
+    case arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View) of
+        true ->
+            DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+            Dynamic = arizona_template:get_dynamic(Template),
+            case
+                process_affected_elements(
+                    DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View
+                )
+            of
+                {[], RenderView} ->
+                    {nodiff, RenderView};
+                {Diff, RenderView} ->
+                    {Diff, RenderView}
+            end;
+        false ->
+            arizona_hierarchical:hierarchical_template(
+                Template, CallbackArg, ParentId, ElementIndex, View
+            )
     end.
 
 %% --------------------------------------------------------------------

@@ -82,12 +82,7 @@ when
     View1 :: arizona_view:view().
 hierarchical_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
-
-    % Store the fingerprint for future comparisons
-    Fingerprint = arizona_template:get_fingerprint(Template),
-    FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
-
-    hierarchical_template(Template, ok, ParentId, ElementIndex, FingerprintView).
+    hierarchical_template(Template, ok, ParentId, ElementIndex, View).
 
 -spec hierarchical_list(Template, List, ParentId, ElementIndex, View) -> {Struct, View1} when
     Template :: arizona_template:template(),
@@ -137,10 +132,14 @@ when
     Struct :: stateless_struct(),
     View1 :: arizona_view:view().
 hierarchical_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
+    % Store the fingerprint for future comparisons
+    Fingerprint = arizona_template:get_fingerprint(Template),
+    FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
+
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
     {DynamicRender, DynamicView} = hierarchical_dynamic(
-        DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View
+        DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, FingerprintView
     ),
     Struct = #{
         type => stateless,
