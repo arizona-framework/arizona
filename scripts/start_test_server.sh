@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # Compile using the test profile
-rebar3 as test compile
+if ! rebar3 as test compile; then
+    exit 1
+fi
 
 # Use erl directly for CI environment instead of rebar3 shell
 exec erl \
@@ -17,6 +19,7 @@ exec erl \
 Routes = [
     {live, ~\"/test/counter\", arizona_counter_view},
     {live, ~\"/test/todo\", arizona_todo_app_view},
+    {live, ~\"/test/datagrid\", arizona_datagrid_view},
     {live_websocket, ~\"/live/websocket\"},
     {static, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}}
 ],
