@@ -176,27 +176,6 @@ render(Bindings) ->
             globalThis.arizona = new Arizona();
             arizona.connect();
         </script>
-        <script>
-            function sortTable(column) \{
-                console.log('Sorting by:', column);
-                // TODO: Implement sorting logic via LiveView event
-                alert('Sorting by ' + column + ' (not implemented yet)');
-            }
-
-            function editUser(userId) \{
-                console.log('Editing user:', userId);
-                // TODO: Implement edit functionality
-                alert('Edit user ' + userId + ' (not implemented yet)');
-            }
-
-            function deleteUser(userId) \{
-                if (confirm('Are you sure you want to delete this user?')) \{
-                    console.log('Deleting user:', userId);
-                    // TODO: Implement delete functionality
-                    alert('Delete user ' + userId + ' (not implemented yet)');
-                }
-            }
-        </script>
     </body>
     </html>
     """).
