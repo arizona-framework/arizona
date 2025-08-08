@@ -15,7 +15,7 @@ mount(_Req) ->
             id => ~"modal",
             user => #{username => ~"Joe"},
             modal_type => success,
-            message_count => 3
+            notification_count => 3
         },
         Layout
     ).
@@ -46,17 +46,17 @@ render(Bindings) ->
             </button>
             <button
                 class="control-btn control-btn-action"
-                onclick="arizona.sendEvent('increment_count')"
+                onclick="arizona.sendEvent('add_notification')"
             >
-                Increment Count
+                Add Notification
             </button>
         </div>
 
         {
             User = arizona_template:get_binding(user, Bindings),
             ModalType = arizona_template:get_binding(modal_type, Bindings),
-            MessageCount = arizona_template:get_binding(message_count, Bindings),
-            get_modal_slots(ModalType, User, MessageCount)
+            NotificationCount = arizona_template:get_binding(notification_count, Bindings),
+            get_modal_slots(ModalType, User, NotificationCount)
         }
     </div>
     """").
@@ -102,10 +102,10 @@ render_modal(Bindings) ->
     """").
 
 %% Helper function to generate modal slots based on type
-get_modal_slots(ModalType, User, MessageCount) ->
+get_modal_slots(ModalType, User, NotificationCount) ->
     arizona_template:render_stateless(arizona_modal_view, render_modal, #{
         header => get_header_slot(ModalType),
-        inner_block => get_inner_block_slot(ModalType, User, MessageCount),
+        inner_block => get_inner_block_slot(ModalType, User, NotificationCount),
         confirm => get_confirm_slot(ModalType),
         cancel => get_cancel_slot(ModalType)
     }).
@@ -131,14 +131,14 @@ get_header_slot(info) ->
     """).
 
 %% Generate inner_block slot based on modal type
-get_inner_block_slot(success, User, MessageCount) ->
+get_inner_block_slot(success, User, NotificationCount) ->
     arizona_template:from_string(~"""
     <div class="text-center justify-center items-center">
         <h1 class="text-green-600">
             Hey, {maps:get(username, User)}!
         </h1>
         <p>Your settings have been <strong>successfully</strong> saved</p>
-        <p>You have {MessageCount} unread messages</p>
+        <p>You have {NotificationCount} new notifications</p>
         <div class="flex items-center justify-center">
             <img
                 class="h-20 w-20 rounded-full flex items-center"
@@ -148,27 +148,27 @@ get_inner_block_slot(success, User, MessageCount) ->
         </div>
     </div>
     """);
-get_inner_block_slot(error, User, MessageCount) ->
+get_inner_block_slot(error, User, NotificationCount) ->
     arizona_template:from_string(~"""
     <div class="text-center justify-center items-center">
         <h1 class="text-red-600">
             Sorry, {maps:get(username, User)}!
         </h1>
         <p>There was an <strong>error</strong> processing your request</p>
-        <p>Failed to update {MessageCount} items</p>
+        <p>Failed to send {NotificationCount} notifications</p>
         <div class="flex items-center justify-center">
             <div style="color: red; font-size: 64px;">&#9888;</div>
         </div>
     </div>
     """);
-get_inner_block_slot(info, User, MessageCount) ->
+get_inner_block_slot(info, User, NotificationCount) ->
     arizona_template:from_string(~"""
     <div class="text-center justify-center items-center">
         <h1 class="text-blue-600">
             Hello, {maps:get(username, User)}!
         </h1>
         <p>Here's some <strong>information</strong> for you</p>
-        <p>System has processed {MessageCount} items today</p>
+        <p>You have {NotificationCount} pending notifications to review</p>
         <div class="flex items-center justify-center">
             <div style="color: blue; font-size: 64px;">&#8505;</div>
         </div>
@@ -216,10 +216,10 @@ handle_event(~"set_modal_type", #{~"type" := TypeBin}, View) ->
     UpdatedState = arizona_stateful:put_binding(modal_type, Type, State),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
     {noreply, UpdatedView};
-handle_event(~"increment_count", _Params, View) ->
+handle_event(~"add_notification", _Params, View) ->
     State = arizona_view:get_state(View),
-    CurrentCount = arizona_stateful:get_binding(message_count, State),
+    CurrentCount = arizona_stateful:get_binding(notification_count, State),
     NewCount = CurrentCount + 1,
-    UpdatedState = arizona_stateful:put_binding(message_count, NewCount, State),
+    UpdatedState = arizona_stateful:put_binding(notification_count, NewCount, State),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
     {noreply, UpdatedView}.
