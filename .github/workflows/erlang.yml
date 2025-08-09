@@ -55,7 +55,7 @@ jobs:
           >> "${GITHUB_OUTPUT}"
 
       - name: Cache _build
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: _build
           key: ${{ steps.set-build-key.outputs.key }}
@@ -64,7 +64,7 @@ jobs:
             _build-${{ runner.os }}-
 
       - name: Cache rebar3
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: ~/.cache/rebar3
           key: ${{ steps.set-rebar-key.outputs.key }}
@@ -94,7 +94,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: _build
           key: ${{ needs.cache.outputs.build-cache-key }}
@@ -104,7 +104,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache.outputs.rebar-cache-key }}
@@ -134,7 +134,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: _build
           key: ${{ needs.cache.outputs.build-cache-key }}
@@ -144,7 +144,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache.outputs.rebar-cache-key }}
@@ -174,7 +174,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: _build
           key: ${{ needs.cache.outputs.build-cache-key }}
@@ -184,7 +184,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache.outputs.rebar-cache-key }}
@@ -223,7 +223,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: _build
           key: ${{ needs.cache.outputs.build-cache-key }}
@@ -233,7 +233,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache.outputs.rebar-cache-key }}
