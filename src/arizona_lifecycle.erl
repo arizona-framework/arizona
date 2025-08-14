@@ -22,7 +22,7 @@ prepare_render(Module, Bindings, View) ->
     maybe
         % Check if component already exists or needs mounting
         {ok, Id} ?= arizona_binder:find(id, Bindings),
-        {ok, State} = arizona_view:find_stateful_state(Id, View),
+        {ok, State} ?= arizona_view:find_stateful_state(Id, View),
         render(Id, State, View)
     else
         _Other ->
