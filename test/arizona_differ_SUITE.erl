@@ -39,7 +39,8 @@ groups() ->
             diff_root_stateful_with_changes,
             diff_stateless_fingerprint_match,
             diff_stateless_fingerprint_mismatch,
-            diff_list_fingerprint_match
+            diff_list_fingerprint_match,
+            diff_list_fingerprint_mismatch
         ]}
     ].
 
@@ -225,6 +226,36 @@ diff_list_fingerprint_match(Config) when is_list(Config) ->
         [
             {1, ~"Arizona"},
             {2, [[~"Item 1"], [~"Item 2"], [~"Item 3"]]}
+        ],
+        Diff
+    ).
+
+diff_list_fingerprint_mismatch(Config) when is_list(Config) ->
+    {ViewModule, _ViewId, _StatefulModule, StatefulId, _StatefulElementIndex, StatelessModule,
+        StatelessFunction, StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    % Mount view WITHOUT list items, creating different template fingerprint
+    % This establishes a fingerprint for StatelessElementIndex without list rendering
+    View = mount_view(ViewModule, #{stateless_items => []}),
+
+    % Create bindings with list items for the stateless component
+    % This will create a template with list rendering, different from stored fingerprint
+    Bindings = #{title => ~"Arizona", items => [~"Item 1", ~"Item 2", ~"Item 3"]},
+    {Diff, _ViewWithList} = arizona_differ:diff_stateless(
+        StatelessModule, StatelessFunction, Bindings, StatefulId, StatelessElementIndex, View
+    ),
+
+    % Should return hierarchical list struct due to fingerprint mismatch
+    % When diff_list detects mismatch, it falls back to hierarchical rendering
+    ?assertEqual(
+        [
+            {1, ~"Arizona"},
+            {2, #{
+                type => list,
+                dynamic => [[~"Item 1"], [~"Item 2"], [~"Item 3"]],
+                static => [~"<li>", ~"</li>"]
+            }}
         ],
         Diff
     ).
