@@ -35,7 +35,8 @@ groups() ->
             diff_view_with_changes,
             diff_stateful_fingerprint_match_with_changes,
             diff_stateful_fingerprint_match_no_changes,
-            diff_stateful_fingerprint_mismatch
+            diff_stateful_fingerprint_mismatch,
+            diff_root_stateful_with_changes
         ]}
     ].
 
@@ -129,6 +130,25 @@ diff_stateful_fingerprint_mismatch(Config) when is_list(Config) ->
 
     % Should return a hierarchical struct (not a diff) since fingerprint doesn't match
     ?assertEqual(#{type => stateful, id => StatefulId}, Result).
+
+diff_root_stateful_with_changes(Config) when is_list(Config) ->
+    {ViewModule, _ViewId, StatefulModule, StatefulId, _StatefulElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    View = mount_view(ViewModule, #{}),
+
+    % Get the stateful component's current bindings and update them
+    StatefulState = arizona_view:get_stateful_state(StatefulId, View),
+    CurrentBindings = arizona_stateful:get_bindings(StatefulState),
+    UpdatedBindings = CurrentBindings#{title => ~"Root Updated Title"},
+
+    % Test diff_root_stateful/3 with changed bindings (bypasses fingerprint checking)
+    {Diff, _DiffView} = arizona_differ:diff_root_stateful(
+        StatefulModule, UpdatedBindings, View
+    ),
+
+    % Should return a diff since bindings changed
+    ?assertEqual([{2, ~"Root Updated Title"}, {3, [{1, ~"Root Updated Title"}]}], Diff).
 
 %% --------------------------------------------------------------------
 %% Helper functions
