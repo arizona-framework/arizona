@@ -44,7 +44,7 @@ groups() ->
 %% --------------------------------------------------------------------
 
 diff_view_without_changes(Config) when is_list(Config) ->
-    {ok, Module, _Id, _StatefulModule, _StatefulId} = mock_view_module(
+    {ok, Module, _Id, _StatefulModule, _StatefulId, _StatefulElementIndex} = mock_view_module(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
     View = mount_view(Module, #{}),
@@ -52,7 +52,7 @@ diff_view_without_changes(Config) when is_list(Config) ->
     ?assertEqual([], Diff).
 
 diff_view_with_changes(Config) when is_list(Config) ->
-    {ok, Module, _Id, _StatefulModule, _StatefulId} = mock_view_module(
+    {ok, Module, _Id, _StatefulModule, _StatefulId, _StatefulElementIndex} = mock_view_module(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
     View = mount_view(Module, #{}),
@@ -69,7 +69,7 @@ diff_view_with_changes(Config) when is_list(Config) ->
     ).
 
 diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
-    {ok, ViewModule, ViewId, StatefulModule, StatefulId} = mock_view_module(
+    {ok, ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex} = mock_view_module(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
     View = mount_view(ViewModule, #{}),
@@ -82,14 +82,14 @@ diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
 
     % Test diff_stateful/5 with fingerprint match and changes
     {Result, _DiffView} = arizona_differ:diff_stateful(
-        StatefulModule, UpdatedBindings, ViewId, 3, UpdatedView
+        StatefulModule, UpdatedBindings, ViewId, StatefulElementIndex, UpdatedView
     ),
 
     % Should return a diff (not nodiff) since bindings changed
     ?assertMatch([{2, ~"Updated Title"}, {3, [{1, ~"Updated Title"}]}], Result).
 
 diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
-    {ok, ViewModule, ViewId, StatefulModule, StatefulId} = mock_view_module(
+    {ok, ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex} = mock_view_module(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
     View = mount_view(ViewModule, #{}),
@@ -100,18 +100,18 @@ diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
 
     % Test diff_stateful/5 with fingerprint match but no changes
     {Result, _DiffView} = arizona_differ:diff_stateful(
-        StatefulModule, Bindings, ViewId, 3, View
+        StatefulModule, Bindings, ViewId, StatefulElementIndex, View
     ),
 
     % Should return nodiff since no bindings changed
     ?assertEqual(nodiff, Result).
 
 diff_stateful_fingerprint_mismatch(Config) when is_list(Config) ->
-    {ok, ViewModule, ViewId, StatefulModule, StatefulId} = mock_view_module(
+    {ok, ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex} = mock_view_module(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
     % Mount view with show_stateful = false, which creates a template without the stateful component
-    % This establishes a fingerprint for element index 3 that doesn't include the stateful component
+    % This establishes a fingerprint for StatefulElementIndex that doesn't include the stateful component
     View1 = mount_view(ViewModule, #{show_stateful => false}),
 
     % Create bindings for the stateful component we want to diff
@@ -121,10 +121,10 @@ diff_stateful_fingerprint_mismatch(Config) when is_list(Config) ->
     },
 
     % Test diff_stateful/5 with view template that has different fingerprint
-    % Since the view was mounted with show_stateful=false, the template fingerprint at element 3
+    % Since the view was mounted with show_stateful=false, the template fingerprint at element index
     % won't match what diff_stateful expects for a stateful component, causing fallback to hierarchical
     {Result, _DiffView} = arizona_differ:diff_stateful(
-        StatefulModule, Bindings, ViewId, 3, View1
+        StatefulModule, Bindings, ViewId, StatefulElementIndex, View1
     ),
 
     % Should return a hierarchical struct (not a diff) since fingerprint doesn't match
@@ -138,6 +138,8 @@ mock_view_module(ViewModule, StatefulModule, StatelessModule) ->
     maybe
         ViewId = ~"view",
         StatefulId = ~"stateful",
+        % Element index where stateful component is rendered in template
+        StatefulElementIndex = 3,
         {ok, _} ?=
             merl:compile_and_load(
                 merl:qquote(~""""
@@ -180,7 +182,7 @@ mock_view_module(ViewModule, StatefulModule, StatelessModule) ->
             ),
         {ok, StatefulModule, StatelessModule} ?=
             mock_stateful_module(StatefulModule, StatelessModule, render),
-        {ok, ViewModule, ViewId, StatefulModule, StatefulId}
+        {ok, ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex}
     else
         error ->
             error(ViewModule);
