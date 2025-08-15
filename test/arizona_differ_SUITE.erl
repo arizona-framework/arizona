@@ -32,7 +32,8 @@ groups() ->
     [
         {diff_tests, [parallel], [
             diff_view_without_changes,
-            diff_view_with_changes
+            diff_view_with_changes,
+            diff_stateful_fingerprint_match_with_changes
         ]}
     ].
 
@@ -64,6 +65,26 @@ diff_view_with_changes(Config) when is_list(Config) ->
         ],
         Diff
     ).
+
+diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
+    {ok, _ViewModule, ViewId, StatefulModule, StatefulId} = mock_view_module(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    View = mount_view(_ViewModule),
+
+    % Get the stateful component and change its state
+    StatefulState = arizona_view:get_stateful_state(StatefulId, View),
+    UpdatedState = arizona_stateful:put_binding(title, ~"Updated Title", StatefulState),
+    UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedState, View),
+    UpdatedBindings = arizona_stateful:get_bindings(UpdatedState),
+
+    % Test diff_stateful/5 with fingerprint match and changes
+    {Result, _DiffView} = arizona_differ:diff_stateful(
+        StatefulModule, UpdatedBindings, ViewId, 3, UpdatedView
+    ),
+
+    % Should return a diff (not nodiff) since bindings changed
+    ?assertMatch([{2, ~"Updated Title"}, {3, [{1, ~"Updated Title"}]}], Result).
 
 %% --------------------------------------------------------------------
 %% Helper functions
