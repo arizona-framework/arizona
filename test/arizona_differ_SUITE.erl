@@ -70,7 +70,7 @@ diff_view_with_changes(Config) when is_list(Config) ->
     ?assertEqual(
         [
             {2, ~"Arizona Framework"},
-            {3, [{2, ~"Arizona Framework"}, {3, [{1, ~"Arizona Framework"}]}]}
+            {3, [{2, ~"Arizona Framework"}, {3, [{1, ~"Arizona Framework"}, {2, ~""}]}]}
         ],
         Diff
     ).
@@ -94,7 +94,7 @@ diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
     ),
 
     % Should return a diff (not nodiff) since bindings changed
-    ?assertEqual([{2, ~"Updated Title"}, {3, [{1, ~"Updated Title"}]}], Result).
+    ?assertEqual([{2, ~"Updated Title"}, {3, [{1, ~"Updated Title"}, {2, ~""}]}], Result).
 
 diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
     {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, _StatelessModule,
@@ -158,7 +158,7 @@ diff_root_stateful_with_changes(Config) when is_list(Config) ->
     ),
 
     % Should return a diff since bindings changed
-    ?assertEqual([{2, ~"Root Updated Title"}, {3, [{1, ~"Root Updated Title"}]}], Diff).
+    ?assertEqual([{2, ~"Root Updated Title"}, {3, [{1, ~"Root Updated Title"}, {2, ~""}]}], Diff).
 
 diff_stateless_fingerprint_match(Config) when is_list(Config) ->
     {ViewModule, _ViewId, _StatefulModule, StatefulId, _StatefulElementIndex, StatelessModule,
@@ -176,7 +176,7 @@ diff_stateless_fingerprint_match(Config) when is_list(Config) ->
     ),
 
     % Should return a diff containing the stateless component's rendered content
-    ?assertEqual([{1, ~"Stateless Title"}], Result).
+    ?assertEqual([{1, ~"Stateless Title"}, {2, ~""}], Result).
 
 diff_stateless_fingerprint_mismatch(Config) when is_list(Config) ->
     {ViewModule, _ViewId, StatefulModule, StatefulId, _StatefulElementIndex, _StatelessModule,
@@ -200,8 +200,8 @@ diff_stateless_fingerprint_mismatch(Config) when is_list(Config) ->
         [
             {3, #{
                 type => stateless,
-                dynamic => [~"Arizona"],
-                static => [~"<h1>", ~"</h1>"]
+                dynamic => [~"Arizona", ~""],
+                static => [~"<h1>", ~"</h1>\n"]
             }}
         ],
         Diff
@@ -387,19 +387,17 @@ mock_stateless_module(Module, RenderFun) ->
 
                 '@render_fun'(Bindings) ->
                     arizona_template:from_string(~""""
-                    <div>
-                        <h1>{arizona_template:get_binding(title, Bindings)}</h1>
-                        {case arizona_template:get_binding(items, Bindings, fun() -> [] end) of
-                            [] ->
-                                ~"";
-                            Items ->
-                                arizona_template:render_list(fun(Item) ->
-                                    arizona_template:from_string(~"""
-                                    <li>{Item}</li>
-                                    """)
-                                end, Items)
-                        end}
-                    </div>
+                    <h1>{arizona_template:get_binding(title, Bindings)}</h1>
+                    {case arizona_template:get_binding(items, Bindings, fun() -> [] end) of
+                        [] ->
+                            ~"";
+                        Items ->
+                            arizona_template:render_list(fun(Item) ->
+                                arizona_template:from_string(~"""
+                                <li>{Item}</li>
+                                """)
+                            end, Items)
+                    end}
                     """").
                 """"", [
                     {module, merl:term(Module)},
