@@ -189,8 +189,10 @@ render_stateful(Module, Bindings) ->
             arizona_renderer:render_stateful(Module, Bindings, View);
         (diff, ParentId, ElementIndex, View) ->
             arizona_differ:diff_stateful(Module, Bindings, ParentId, ElementIndex, View);
-        (hierarchical, _ParentId, ElementIndex, View) ->
-            arizona_hierarchical:hierarchical_stateful(Module, Bindings, ElementIndex, View)
+        (hierarchical, ParentId, ElementIndex, View) ->
+            arizona_hierarchical:hierarchical_stateful(
+                Module, Bindings, ParentId, ElementIndex, View
+            )
     end.
 
 -spec render_stateless(Module, Function, Bindings) -> Callback when
