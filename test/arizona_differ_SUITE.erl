@@ -36,7 +36,8 @@ groups() ->
             diff_stateful_fingerprint_match_with_changes,
             diff_stateful_fingerprint_match_no_changes,
             diff_stateful_fingerprint_mismatch,
-            diff_root_stateful_with_changes
+            diff_root_stateful_with_changes,
+            diff_stateless_fingerprint_match
         ]}
     ].
 
@@ -45,7 +46,8 @@ groups() ->
 %% --------------------------------------------------------------------
 
 diff_view_without_changes(Config) when is_list(Config) ->
-    {Module, _Id, _StatefulModule, _StatefulId, _StatefulElementIndex} = mock_modules(
+    {Module, _Id, _StatefulModule, _StatefulId, _StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
     View = mount_view(Module, #{}),
@@ -53,7 +55,8 @@ diff_view_without_changes(Config) when is_list(Config) ->
     ?assertEqual([], Diff).
 
 diff_view_with_changes(Config) when is_list(Config) ->
-    {Module, _Id, _StatefulModule, _StatefulId, _StatefulElementIndex} = mock_modules(
+    {Module, _Id, _StatefulModule, _StatefulId, _StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
     View = mount_view(Module, #{}),
@@ -70,7 +73,8 @@ diff_view_with_changes(Config) when is_list(Config) ->
     ).
 
 diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
-    {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex} = mock_modules(
+    {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
     View = mount_view(ViewModule, #{}),
@@ -90,7 +94,8 @@ diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
     ?assertEqual([{2, ~"Updated Title"}, {3, [{1, ~"Updated Title"}]}], Result).
 
 diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
-    {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex} = mock_modules(
+    {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
     View = mount_view(ViewModule, #{}),
@@ -108,7 +113,8 @@ diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
     ?assertEqual(nodiff, Result).
 
 diff_stateful_fingerprint_mismatch(Config) when is_list(Config) ->
-    {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex} = mock_modules(
+    {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
     % Mount view with show_stateful = false, which creates a template without the stateful component
@@ -132,7 +138,8 @@ diff_stateful_fingerprint_mismatch(Config) when is_list(Config) ->
     ?assertEqual(#{type => stateful, id => StatefulId}, Result).
 
 diff_root_stateful_with_changes(Config) when is_list(Config) ->
-    {ViewModule, _ViewId, StatefulModule, StatefulId, _StatefulElementIndex} = mock_modules(
+    {ViewModule, _ViewId, StatefulModule, StatefulId, _StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
     View = mount_view(ViewModule, #{}),
@@ -150,6 +157,24 @@ diff_root_stateful_with_changes(Config) when is_list(Config) ->
     % Should return a diff since bindings changed
     ?assertEqual([{2, ~"Root Updated Title"}, {3, [{1, ~"Root Updated Title"}]}], Diff).
 
+diff_stateless_fingerprint_match(Config) when is_list(Config) ->
+    {ViewModule, _ViewId, _StatefulModule, StatefulId, _StatefulElementIndex, StatelessModule,
+        StatelessFunction, StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    View = mount_view(ViewModule, #{}),
+
+    % Create bindings for the stateless component
+    Bindings = #{title => ~"Stateless Title"},
+
+    % Test diff_stateless/6 with fingerprint match
+    {Result, _DiffView} = arizona_differ:diff_stateless(
+        StatelessModule, StatelessFunction, Bindings, StatefulId, StatelessElementIndex, View
+    ),
+
+    % Should return a diff containing the stateless component's rendered content
+    ?assertEqual([{1, ~"Stateless Title"}], Result).
+
 %% --------------------------------------------------------------------
 %% Helper functions
 %% --------------------------------------------------------------------
@@ -160,13 +185,14 @@ mock_modules(ViewModule, StatefulModule, StatelessModule) ->
     StatelessRenderFun = render,
     {ViewModule, StatefulElementIndex} =
         mock_view_module(ViewModule, ViewId, StatefulModule, StatefulId, StatelessModule),
-    StatefulModule = mock_stateful_module(
+    {StatefulModule, StatelessElementIndex} = mock_stateful_module(
         StatefulModule, StatelessModule, StatelessRenderFun
     ),
     {StatelessModule, StatelessRenderFun} = mock_stateless_module(
         StatelessModule, StatelessRenderFun
     ),
-    {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex}.
+    {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, StatelessModule,
+        StatelessRenderFun, StatelessElementIndex}.
 
 mock_view_module(ViewModule, ViewId, StatefulModule, StatefulId, StatelessModule) ->
     maybe
@@ -249,7 +275,9 @@ mock_stateful_module(StatefulModule, StatelessModule, StatelessFun) ->
                     {stateless_fun, merl:term(StatelessFun)}
                 ])
             ),
-        StatefulModule
+        % Stateless component is at element 3 within stateful template
+        StatelessElementIndex = 3,
+        {StatefulModule, StatelessElementIndex}
     else
         Error ->
             error(Error, [StatefulModule, StatelessModule, StatelessFun])
