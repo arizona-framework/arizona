@@ -34,7 +34,7 @@ diff_view(View) ->
     StatefulState = arizona_view:get_state(View),
     Template = arizona_view:call_render_callback(View),
     Id = arizona_stateful:get_binding(id, StatefulState),
-    {Diff, DiffState, DiffView} = track_diff_stateful(Id, Template, StatefulState, Id, View),
+    {Diff, DiffState, DiffView} = track_diff_stateful(Id, Template, StatefulState, View),
     {Diff, arizona_view:update_state(DiffState, DiffView)}.
 
 -spec diff_stateful(Module, Bindings, ParentId, ElementIndex, View) -> {Result, View1} when
@@ -48,11 +48,14 @@ diff_view(View) ->
 diff_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
     {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
     Fingerprint = arizona_template:get_fingerprint(Template),
-    case arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, PrepRenderView) of
+    MatchResult = arizona_view:fingerprint_matches(
+        ParentId, ElementIndex, Fingerprint, PrepRenderView
+    ),
+    case MatchResult of
         true ->
             StatefulState = arizona_view:get_stateful_state(Id, PrepRenderView),
             {Diff, DiffState, DiffView} = track_diff_stateful(
-                Id, Template, StatefulState, ParentId, PrepRenderView
+                Id, Template, StatefulState, PrepRenderView
             ),
             StatefulView = arizona_view:put_stateful_state(Id, DiffState, DiffView),
             case Diff of
@@ -76,9 +79,7 @@ diff_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
 diff_root_stateful(Module, Bindings, View) ->
     {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
     StatefulState = arizona_view:get_stateful_state(Id, PrepRenderView),
-    {Diff, DiffState, DiffView} = track_diff_stateful(
-        Id, Template, StatefulState, Id, PrepRenderView
-    ),
+    {Diff, DiffState, DiffView} = track_diff_stateful(Id, Template, StatefulState, PrepRenderView),
     StatefulView = arizona_view:put_stateful_state(Id, DiffState, DiffView),
     {Diff, StatefulView}.
 
@@ -160,7 +161,7 @@ diff_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
 %% Internal Functions
 %% --------------------------------------------------------------------
 
-track_diff_stateful(Id, Template, StatefulState, ParentId, View) ->
+track_diff_stateful(Id, Template, StatefulState, View) ->
     _OldTracker = arizona_tracker_dict:set_current_stateful_id(Id),
     ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
     case arizona_binder:is_empty(ChangedBindings) of
@@ -176,7 +177,7 @@ track_diff_stateful(Id, Template, StatefulState, ParentId, View) ->
             ),
             AffectedElements = get_affected_elements(ChangedBindings, StatefulDependencies),
             {Diff, DiffView} = generate_element_diff(
-                AffectedElements, Template, ok, ParentId, undefined, View
+                AffectedElements, Template, ok, Id, undefined, View
             ),
             NoChangesStatefulState = arizona_stateful:set_changed_bindings(
                 arizona_binder:new(#{}), StatefulState
