@@ -34,7 +34,8 @@ groups() ->
             diff_view_without_changes,
             diff_view_with_changes,
             diff_stateful_fingerprint_match_with_changes,
-            diff_stateful_fingerprint_match_no_changes
+            diff_stateful_fingerprint_match_no_changes,
+            diff_stateful_fingerprint_mismatch
         ]}
     ].
 
@@ -46,7 +47,7 @@ diff_view_without_changes(Config) when is_list(Config) ->
     {ok, Module, _Id, _StatefulModule, _StatefulId} = mock_view_module(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
-    View = mount_view(Module),
+    View = mount_view(Module, #{}),
     {Diff, _DiffView} = arizona_differ:diff_view(View),
     ?assertEqual([], Diff).
 
@@ -54,7 +55,7 @@ diff_view_with_changes(Config) when is_list(Config) ->
     {ok, Module, _Id, _StatefulModule, _StatefulId} = mock_view_module(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
-    View = mount_view(Module),
+    View = mount_view(Module, #{}),
     State = arizona_view:get_state(View),
     UpdatedState = arizona_stateful:put_binding(title, ~"Arizona Framework", State),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
@@ -68,10 +69,10 @@ diff_view_with_changes(Config) when is_list(Config) ->
     ).
 
 diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
-    {ok, _ViewModule, ViewId, StatefulModule, StatefulId} = mock_view_module(
+    {ok, ViewModule, ViewId, StatefulModule, StatefulId} = mock_view_module(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
-    View = mount_view(_ViewModule),
+    View = mount_view(ViewModule, #{}),
 
     % Get the stateful component and change its state
     StatefulState = arizona_view:get_stateful_state(StatefulId, View),
@@ -88,10 +89,10 @@ diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
     ?assertMatch([{2, ~"Updated Title"}, {3, [{1, ~"Updated Title"}]}], Result).
 
 diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
-    {ok, _ViewModule, ViewId, StatefulModule, StatefulId} = mock_view_module(
+    {ok, ViewModule, ViewId, StatefulModule, StatefulId} = mock_view_module(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
-    View = mount_view(_ViewModule),
+    View = mount_view(ViewModule, #{}),
 
     % Get the stateful component without changing its state
     StatefulState = arizona_view:get_stateful_state(StatefulId, View),
@@ -104,6 +105,30 @@ diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
 
     % Should return nodiff since no bindings changed
     ?assertEqual(nodiff, Result).
+
+diff_stateful_fingerprint_mismatch(Config) when is_list(Config) ->
+    {ok, ViewModule, ViewId, StatefulModule, StatefulId} = mock_view_module(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    % Mount view with show_stateful = false, which creates a template without the stateful component
+    % This establishes a fingerprint for element index 3 that doesn't include the stateful component
+    View1 = mount_view(ViewModule, #{show_stateful => false}),
+
+    % Create bindings for the stateful component we want to diff
+    Bindings = #{
+        id => StatefulId,
+        title => ~"Arizona"
+    },
+
+    % Test diff_stateful/5 with view template that has different fingerprint
+    % Since the view was mounted with show_stateful=false, the template fingerprint at element 3
+    % won't match what diff_stateful expects for a stateful component, causing fallback to hierarchical
+    {Result, _DiffView} = arizona_differ:diff_stateful(
+        StatefulModule, Bindings, ViewId, 3, View1
+    ),
+
+    % Should return a hierarchical struct (not a diff) since fingerprint doesn't match
+    ?assertEqual(#{type => stateful, id => StatefulId}, Result).
 
 %% --------------------------------------------------------------------
 %% Helper functions
@@ -122,22 +147,28 @@ mock_view_module(ViewModule, StatefulModule, StatelessModule) ->
                 -export([mount/1]).
                 -export([render/1]).
 
-                mount(_Req) ->
-                    arizona_view:new('@view_module', #{
+                mount(Req) ->
+                    {ReqBindings, _Req1} = arizona_request:get_bindings(Req),
+                    arizona_view:new('@view_module', maps:merge(#{
                         id => ~"'@view_id",
                         stateful_id => ~"'@stateful_id",
                         title => ~"Arizona"
-                    }, none).
+                    }, ReqBindings), none).
 
                 render(Bindings) ->
                     StatefulModule = '@stateful_module',
                     arizona_template:from_string(~"""
                     <div {arizona_template:get_binding(id, Bindings)}>
                         {arizona_template:get_binding(title, Bindings)}
-                        {arizona_template:render_stateful(StatefulModule, #{
-                            id => arizona_template:get_binding(stateful_id, Bindings),
-                            title => arizona_template:get_binding(title, Bindings)
-                        })}
+                        {case arizona_template:get_binding(show_stateful, Bindings, fun() -> true end) of
+                            true ->
+                                arizona_template:render_stateful(StatefulModule, #{
+                                    id => arizona_template:get_binding(stateful_id, Bindings),
+                                    title => arizona_template:get_binding(title, Bindings)
+                                });
+                            false ->
+                                ~""
+                        end})
                     </div>
                     """).
                 """", [
@@ -223,13 +254,15 @@ mock_stateless_module(Module, RenderFun) ->
             error({Module, Reason})
     end.
 
-mount_view(Module) ->
+mount_view(Module, Bindings) ->
     % Init process dictionaries
     undefined = arizona_tracker_dict:set_tracker(arizona_tracker:new()),
     undefined = arizona_hierarchical_dict:set_structure(#{}),
 
     % Hierarchical struct is required for diffing
-    ArizonaRequest = arizona_request:new(?MODULE, undefined, #{}),
+    ArizonaRequest = arizona_request:new(?MODULE, undefined, #{
+        bindings => Bindings
+    }),
     View = arizona_view:call_mount_callback(Module, ArizonaRequest),
     {_Struct, HierarchicalView} = arizona_hierarchical:hierarchical_view(View),
     HierarchicalView.
