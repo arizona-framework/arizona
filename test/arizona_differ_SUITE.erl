@@ -87,7 +87,7 @@ diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
     ),
 
     % Should return a diff (not nodiff) since bindings changed
-    ?assertMatch([{2, ~"Updated Title"}, {3, [{1, ~"Updated Title"}]}], Result).
+    ?assertEqual([{2, ~"Updated Title"}, {3, [{1, ~"Updated Title"}]}], Result).
 
 diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
     {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex} = mock_modules(
