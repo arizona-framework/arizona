@@ -5,7 +5,7 @@
 %% --------------------------------------------------------------------
 
 -export([hierarchical_view/1]).
--export([hierarchical_stateful/4]).
+-export([hierarchical_stateful/5]).
 -export([hierarchical_stateless/6]).
 -export([hierarchical_list/5]).
 -export([hierarchical_template/5]).
@@ -51,23 +51,26 @@ hierarchical_view(View) ->
     State = arizona_view:get_state(View),
     Id = arizona_stateful:get_binding(id, State),
     Template = arizona_view:call_render_callback(View),
-    track_hierarchical_stateful(Id, Template, undefined, View).
+    track_hierarchical_stateful(Id, Template, Id, View).
 
--spec hierarchical_stateful(Module, Bindings, ElementIndex, View) -> {Struct, View1} when
+-spec hierarchical_stateful(Module, Bindings, ParentId, ElementIndex, View) -> {Struct, View1} when
     Module :: module(),
     Bindings :: arizona_binder:bindings(),
+    ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
     Struct :: stateful_struct(),
     View1 :: arizona_view:view().
-hierarchical_stateful(Module, Bindings, ElementIndex, View) ->
+hierarchical_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
     {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
 
     % Store the fingerprint for future comparisons
     Fingerprint = arizona_template:get_fingerprint(Template),
-    FingerprintView = arizona_view:put_fingerprint(Id, ElementIndex, Fingerprint, PrepRenderView),
+    FingerprintView = arizona_view:put_fingerprint(
+        ParentId, ElementIndex, Fingerprint, PrepRenderView
+    ),
 
-    track_hierarchical_stateful(Id, Template, ElementIndex, FingerprintView).
+    track_hierarchical_stateful(Id, Template, ParentId, FingerprintView).
 
 -spec hierarchical_stateless(Module, Function, Bindings, ParentId, ElementIndex, View) ->
     {Struct, View1}
@@ -152,13 +155,13 @@ hierarchical_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-track_hierarchical_stateful(Id, Template, ElementIndex, View) ->
+track_hierarchical_stateful(Id, Template, ParentId, View) ->
     _OldTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
     _ClearTracker = arizona_tracker_dict:set_current_stateful_id(Id),
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
     {DynamicRender, DynamicView} = hierarchical_dynamic(
-        DynamicSequence, Dynamic, ok, Id, ElementIndex, View
+        DynamicSequence, Dynamic, ok, ParentId, undefined, View
     ),
     HierarchicalData = #{
         static => arizona_template:get_static(Template),
@@ -186,10 +189,11 @@ hierarchical_dynamic([], _Dynamic, _CallbackArg, _ParentId, _ElementIndex, View)
     {[], View};
 hierarchical_dynamic([DynamicElementIndex | T], Dynamic, CallbackArg, ParentId, ElementIndex, View) ->
     DynamicCallback = element(DynamicElementIndex, Dynamic),
-    _OldTracker =
+    ok =
         case ElementIndex of
             undefined ->
-                arizona_tracker_dict:set_current_element_index(DynamicElementIndex);
+                _OldTracker = arizona_tracker_dict:set_current_element_index(DynamicElementIndex),
+                ok;
             _ ->
                 ok
         end,
