@@ -38,7 +38,8 @@ groups() ->
             diff_stateful_fingerprint_mismatch,
             diff_root_stateful_with_changes,
             diff_stateless_fingerprint_match,
-            diff_stateless_fingerprint_mismatch
+            diff_stateless_fingerprint_mismatch,
+            diff_list_fingerprint_match
         ]}
     ].
 
@@ -205,6 +206,29 @@ diff_stateless_fingerprint_mismatch(Config) when is_list(Config) ->
         Diff
     ).
 
+diff_list_fingerprint_match(Config) when is_list(Config) ->
+    {ViewModule, _ViewId, _StatefulModule, StatefulId, _StatefulElementIndex, StatelessModule,
+        StatelessFunction, StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    View = mount_view(ViewModule, #{stateless_items => [~"Item 1", ~"Item 2"]}),
+
+    % Test diff_stateless first to render the stateless component with list items
+    % This will create the list template through arizona_template:render_list
+    Bindings = #{title => ~"Arizona", items => [~"Item 1", ~"Item 2", ~"Item 3"]},
+    {Diff, _ViewWithList} = arizona_differ:diff_stateless(
+        StatelessModule, StatelessFunction, Bindings, StatefulId, StatelessElementIndex, View
+    ),
+
+    % Should return a list of rendered HTML for each item
+    ?assertEqual(
+        [
+            {1, ~"Arizona"},
+            {2, [[~"Item 1"], [~"Item 2"], [~"Item 3"]]}
+        ],
+        Diff
+    ).
+
 %% --------------------------------------------------------------------
 %% Helper functions
 %% --------------------------------------------------------------------
@@ -255,7 +279,8 @@ mock_view_module(ViewModule, ViewId, StatefulModule, StatefulId, StatelessModule
                                 arizona_template:render_stateful(StatefulModule, #{
                                     id => arizona_template:get_binding(stateful_id, Bindings),
                                     title => arizona_template:get_binding(title, Bindings),
-                                    show_stateless => arizona_template:get_binding(show_stateless, Bindings, fun() -> true end)
+                                    show_stateless => arizona_template:get_binding(show_stateless, Bindings, fun() -> true end),
+                                    stateless_items => arizona_template:get_binding(stateless_items, Bindings, fun() -> [] end)
                                 });
                             false ->
                                 ~""
@@ -298,7 +323,8 @@ mock_stateful_module(StatefulModule, StatelessModule, StatelessFun) ->
                         {case arizona_template:get_binding(show_stateless, Bindings, fun() -> true end) of
                             true ->
                                 arizona_template:render_stateless(StatelessModule, StatelessFun, #{
-                                    title => arizona_template:get_binding(title, Bindings)
+                                    title => arizona_template:get_binding(title, Bindings),
+                                    items => arizona_template:get_binding(stateless_items, Bindings, fun() -> [] end)
                                 });
                             false ->
                                 ~""
@@ -323,16 +349,28 @@ mock_stateless_module(Module, RenderFun) ->
     maybe
         {ok, _} ?=
             merl:compile_and_load(
-                merl:qquote(~""""
+                merl:qquote(~"""""
                 -module('@module').
                 -compile({parse_transform, arizona_parse_transform}).
                 -export(['@render_fun'/1]).
 
                 '@render_fun'(Bindings) ->
-                    arizona_template:from_string(~"""
-                    <h1>{arizona_template:get_binding(title, Bindings)}</h1>
-                    """).
-                """", [
+                    arizona_template:from_string(~""""
+                    <div>
+                        <h1>{arizona_template:get_binding(title, Bindings)}</h1>
+                        {case arizona_template:get_binding(items, Bindings, fun() -> [] end) of
+                            [] ->
+                                ~"";
+                            Items ->
+                                arizona_template:render_list(fun(Item) ->
+                                    arizona_template:from_string(~"""
+                                    <li>{Item}</li>
+                                    """)
+                                end, Items)
+                        end}
+                    </div>
+                    """").
+                """"", [
                     {module, merl:term(Module)},
                     {render_fun, merl:term(RenderFun)}
                 ])
