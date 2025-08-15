@@ -37,7 +37,8 @@ groups() ->
             diff_stateful_fingerprint_match_no_changes,
             diff_stateful_fingerprint_mismatch,
             diff_root_stateful_with_changes,
-            diff_stateless_fingerprint_match
+            diff_stateless_fingerprint_match,
+            diff_stateless_fingerprint_mismatch
         ]}
     ].
 
@@ -175,6 +176,35 @@ diff_stateless_fingerprint_match(Config) when is_list(Config) ->
     % Should return a diff containing the stateless component's rendered content
     ?assertEqual([{1, ~"Stateless Title"}], Result).
 
+diff_stateless_fingerprint_mismatch(Config) when is_list(Config) ->
+    {ViewModule, _ViewId, StatefulModule, StatefulId, _StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    % Mount view with show_stateless = false, creating a stateful template WITHOUT stateless component
+    % This establishes a fingerprint at element index 3 that doesn't include the stateless component
+    View = mount_view(ViewModule, #{show_stateless => false}),
+
+    % Test diff_root_stateful with show_stateless = true, which creates a template WITH stateless component
+    % This creates a fingerprint mismatch: stored fingerprint (no stateless) vs new template (with stateless)
+    Bindings = #{id => StatefulId, title => ~"Arizona", show_stateless => true},
+    {Diff, _DiffView} = arizona_differ:diff_root_stateful(
+        StatefulModule, Bindings, View
+    ),
+
+    % Should return hierarchical stateless struct (not a diff) due to fingerprint mismatch
+    % When diff_stateless detects fingerprint mismatch, it falls back to hierarchical rendering
+    ?assertEqual(
+        [
+            {3, #{
+                type => stateless,
+                dynamic => [~"Arizona"],
+                static => [~"<h1>", ~"</h1>"]
+            }}
+        ],
+        Diff
+    ).
+
 %% --------------------------------------------------------------------
 %% Helper functions
 %% --------------------------------------------------------------------
@@ -224,7 +254,8 @@ mock_view_module(ViewModule, ViewId, StatefulModule, StatefulId, StatelessModule
                             true ->
                                 arizona_template:render_stateful(StatefulModule, #{
                                     id => arizona_template:get_binding(stateful_id, Bindings),
-                                    title => arizona_template:get_binding(title, Bindings)
+                                    title => arizona_template:get_binding(title, Bindings),
+                                    show_stateless => arizona_template:get_binding(show_stateless, Bindings, fun() -> true end)
                                 });
                             false ->
                                 ~""
@@ -264,9 +295,14 @@ mock_stateful_module(StatefulModule, StatelessModule, StatelessFun) ->
                     arizona_template:from_string(~"""
                     <div {arizona_template:get_binding(id, Bindings)}>
                         {arizona_template:get_binding(title, Bindings)}
-                        {arizona_template:render_stateless(StatelessModule, StatelessFun, #{
-                            title => arizona_template:get_binding(title, Bindings)
-                        })}
+                        {case arizona_template:get_binding(show_stateless, Bindings, fun() -> true end) of
+                            true ->
+                                arizona_template:render_stateless(StatelessModule, StatelessFun, #{
+                                    title => arizona_template:get_binding(title, Bindings)
+                                });
+                            false ->
+                                ~""
+                        end})
                     </div>
                     """).
                 """", [
