@@ -70,7 +70,7 @@ export default defineConfig({
   /* Run your local dev server before starting the tests */
   webServer: {
     command: './scripts/start_test_server.sh',
-    url: 'http://localhost:8080/test/counter', // TODO: Create dedicated /healthcheck endpoint
+    url: 'http://localhost:8080/counter', // TODO: Create dedicated /healthcheck endpoint
     reuseExistingServer: !process.env.CI,
     stdout: 'pipe',
     stderr: 'pipe',
