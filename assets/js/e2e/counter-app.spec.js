@@ -3,7 +3,7 @@ import { waitForCondition, collectWebSocketMessages } from './test-utils.js';
 
 test.describe('Arizona Counter App', () => {
   test('should load counter page and display initial state', async ({ page }) => {
-    await page.goto('/test/counter');
+    await page.goto('/counter');
 
     // Check that the page loads with initial counter value
     await expect(page.getByTestId('count')).toHaveText('0');
@@ -12,7 +12,7 @@ test.describe('Arizona Counter App', () => {
     await expect(page.getByTestId('reset')).toBeVisible();
 
     // Verify only one counter container exists (no duplication)
-    const counterContainers = page.locator('#root');
+    const counterContainers = page.locator('#counter');
     await expect(counterContainers).toHaveCount(1);
   });
 
@@ -21,7 +21,7 @@ test.describe('Arizona Counter App', () => {
   }) => {
     const initialMessages = collectWebSocketMessages(page, 'initial_render');
 
-    await page.goto('/test/counter');
+    await page.goto('/counter');
 
     // Wait for initial render message to arrive
     await waitForCondition(() => {
@@ -47,7 +47,7 @@ test.describe('Arizona Counter App', () => {
   }) => {
     const diffMessages = collectWebSocketMessages(page, 'diff');
 
-    await page.goto('/test/counter');
+    await page.goto('/counter');
 
     // Wait for initial load
     await expect(page.getByTestId('count')).toHaveText('0');
@@ -93,7 +93,7 @@ test.describe('Arizona Counter App', () => {
       });
     });
 
-    await page.goto('/test/counter');
+    await page.goto('/counter');
     await expect(page.getByTestId('count')).toHaveText('0');
 
     // Perform multiple rapid increments with smaller delays
@@ -139,7 +139,7 @@ test.describe('Arizona Counter App', () => {
   test('should reset counter and verify hierarchical diff structure', async ({ page }) => {
     const resetDiffMessages = collectWebSocketMessages(page, 'diff');
 
-    await page.goto('/test/counter');
+    await page.goto('/counter');
 
     // Increment to non-zero value first
     await page.getByTestId('increment').click();
@@ -181,7 +181,7 @@ test.describe('Arizona Counter App', () => {
   });
 
   test('should handle decrement operations correctly', async ({ page }) => {
-    await page.goto('/test/counter');
+    await page.goto('/counter');
 
     // First increment to 1
     await page.getByTestId('increment').click();

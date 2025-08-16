@@ -91,8 +91,8 @@ npm run lint:check
 # Start test server for manual testing
 ./scripts/start_test_server.sh
 
-# Visit http://localhost:8080/test/counter
-# Visit http://localhost:8080/test/todo
+# Visit http://localhost:8080/counter
+# Visit http://localhost:8080/todo
 ```
 
 ## Pre-commit Hooks
