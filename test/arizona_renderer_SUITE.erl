@@ -101,7 +101,7 @@ render_stateless_test(Config) when is_list(Config) ->
     Bindings = #{id => ~"foo", content => ~"Test Content"},
     MockView = create_mock_view(MockStatefulModule, Bindings),
     {Html, _UpdatedView} = arizona_renderer:render_stateless(
-        MockStatelessModule, MockStatelessRenderFun, Bindings, MockView
+        MockStatelessModule, MockStatelessRenderFun, Bindings, ~"foo", MockView
     ),
     ?assertEqual([~"<div>Stateless Template</div>"], Html).
 
@@ -117,7 +117,7 @@ render_list_test(Config) when is_list(Config) ->
     """", CallbackArg, #{}),
 
     List = [~"first", ~"second", ~"third"],
-    {Html, _UpdatedView} = arizona_renderer:render_list(Template, List, MockView),
+    {Html, _UpdatedView} = arizona_renderer:render_list(Template, List, ~"list", MockView),
 
     % The result should contain the list items
     ExpectedHtml = [
