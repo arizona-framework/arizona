@@ -37,6 +37,7 @@
 -ignore_xref([render_stateless/3]).
 -ignore_xref([render_slot/1]).
 -ignore_xref([render_list/2]).
+-ignore_xref([render_list_template/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
