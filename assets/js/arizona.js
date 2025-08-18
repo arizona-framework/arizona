@@ -161,11 +161,6 @@ export default class ArizonaClient {
     console.log('[Arizona] WebSocket message:', data);
   }
 
-  // Utility methods
-  getHierarchicalStructure() {
-    return this.hierarchical.getStructure();
-  }
-
   isConnected() {
     return this.connected;
   }
