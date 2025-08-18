@@ -39,8 +39,7 @@ describe('ArizonaHierarchical', () => {
 
       expect(client.isInitialized()).toBe(true);
       expect(client.getComponentIds()).toEqual(['root']);
-      expect(client.hasComponent('root')).toBe(true);
-      expect(client.getComponent('root')).toEqual(structure.root);
+      expect(client.getStructure().root).toEqual(structure.root);
     });
 
     it('should deep clone structure to prevent mutations', () => {
@@ -54,7 +53,7 @@ describe('ArizonaHierarchical', () => {
       client.initialize(structure);
       structure.root.dynamic[0] = 'Modified';
 
-      expect(client.getComponent('root').dynamic[0]).toBe('Original');
+      expect(client.getStructure().root.dynamic[0]).toBe('Original');
     });
 
     it('should initialize with multiple components', () => {
@@ -72,8 +71,8 @@ describe('ArizonaHierarchical', () => {
       client.initialize(structure);
 
       expect(client.getComponentIds().sort()).toEqual(['counter', 'root']);
-      expect(client.hasComponent('root')).toBe(true);
-      expect(client.hasComponent('counter')).toBe(true);
+      expect(client.getStructure().root).toEqual(structure.root);
+      expect(client.getStructure().counter).toEqual(structure.counter);
     });
   });
 
@@ -93,7 +92,7 @@ describe('ArizonaHierarchical', () => {
 
         client.applyDiff('root', changes);
 
-        expect(client.getComponent('root').dynamic[0]).toBe('Updated Value');
+        expect(client.getStructure().root.dynamic[0]).toBe('Updated Value');
       });
 
       it('should apply multiple element changes', () => {
@@ -112,8 +111,8 @@ describe('ArizonaHierarchical', () => {
 
         client.applyDiff('root', changes);
 
-        expect(client.getComponent('root').dynamic[0]).toBe('Updated First');
-        expect(client.getComponent('root').dynamic[1]).toBe('Updated Second');
+        expect(client.getStructure().root.dynamic[0]).toBe('Updated First');
+        expect(client.getStructure().root.dynamic[1]).toBe('Updated Second');
       });
 
       it('should handle numeric values', () => {
@@ -121,7 +120,7 @@ describe('ArizonaHierarchical', () => {
 
         client.applyDiff('root', changes);
 
-        expect(client.getComponent('root').dynamic[0]).toBe(42);
+        expect(client.getStructure().root.dynamic[0]).toBe(42);
       });
 
       it('should warn for unknown components then throw', () => {
@@ -157,7 +156,7 @@ describe('ArizonaHierarchical', () => {
 
         client.applyDiff('root', newStatefulStruct);
 
-        expect(client.getComponent('new-component')).toEqual(newStatefulStruct);
+        expect(client.getStructure()['new-component']).toEqual(newStatefulStruct);
       });
 
       it('should handle stateless structure as element value', () => {
@@ -171,7 +170,7 @@ describe('ArizonaHierarchical', () => {
 
         client.applyDiff('root', changes);
 
-        expect(client.getComponent('root').dynamic[0]).toEqual(statelessStruct);
+        expect(client.getStructure().root.dynamic[0]).toEqual(statelessStruct);
       });
 
       it('should handle list structure as element value', () => {
@@ -185,7 +184,7 @@ describe('ArizonaHierarchical', () => {
 
         client.applyDiff('root', changes);
 
-        expect(client.getComponent('root').dynamic[0]).toEqual(listStruct);
+        expect(client.getStructure().root.dynamic[0]).toEqual(listStruct);
       });
     });
 
@@ -211,7 +210,7 @@ describe('ArizonaHierarchical', () => {
 
         client.applyDiff('root', changes);
 
-        const listComponent = client.getComponent('root').dynamic[0];
+        const listComponent = client.getStructure().root.dynamic[0];
         expect(listComponent.dynamic).toEqual(newListData);
       });
     });
@@ -239,7 +238,7 @@ describe('ArizonaHierarchical', () => {
 
         client.applyDiff('root', changes);
 
-        const statelessComponent = client.getComponent('root').dynamic[0];
+        const statelessComponent = client.getStructure().root.dynamic[0];
         expect(statelessComponent.dynamic[0]).toBe('Updated Text');
       });
     });
@@ -559,7 +558,7 @@ describe('ArizonaHierarchical', () => {
     });
 
     it('should get component by ID', () => {
-      const component = client.getComponent('root');
+      const component = client.getStructure().root;
 
       expect(component).toEqual({
         static: ['<div>', '</div>'],
@@ -568,15 +567,16 @@ describe('ArizonaHierarchical', () => {
     });
 
     it('should return null for nonexistent component', () => {
-      const component = client.getComponent('nonexistent');
+      const component = client.getStructure().nonexistent;
 
-      expect(component).toBeNull();
+      expect(component).toBeUndefined();
     });
 
-    it('should check component existence', () => {
-      expect(client.hasComponent('root')).toBe(true);
-      expect(client.hasComponent('sidebar')).toBe(true);
-      expect(client.hasComponent('nonexistent')).toBe(false);
+    it('should check component existence via structure', () => {
+      const structure = client.getStructure();
+      expect('root' in structure).toBe(true);
+      expect('sidebar' in structure).toBe(true);
+      expect('nonexistent' in structure).toBe(false);
     });
 
     it('should get all component IDs', () => {
@@ -610,7 +610,6 @@ describe('ArizonaHierarchical', () => {
       expect(patch.type).toBe('html_patch');
       expect(patch.statefulId).toBe('root');
       expect(patch.html).toBe('<div class="app">Hello Arizona</div>');
-      expect(typeof patch.timestamp).toBe('number');
     });
 
     it('should create initial render patch', () => {
@@ -619,8 +618,6 @@ describe('ArizonaHierarchical', () => {
       expect(patch.type).toBe('initial_render');
       expect(patch.statefulId).toBe('root');
       expect(patch.html).toBe('<div class="app">Hello Arizona</div>');
-      expect(patch.structure).toEqual(client.getStructure());
-      expect(typeof patch.timestamp).toBe('number');
     });
   });
 
@@ -746,7 +743,7 @@ describe('ArizonaHierarchical', () => {
       expect(() => {
         return client.applyDiff('root', []);
       }).not.toThrow();
-      expect(client.getComponent('root').dynamic[0]).toBe('Original');
+      expect(client.getStructure().root.dynamic[0]).toBe('Original');
     });
 
     it('should handle empty string values', () => {

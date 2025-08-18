@@ -188,36 +188,6 @@ export class ArizonaHierarchical {
   }
 
   /**
-   * Generate HTML from a structure object (for stateless components)
-   * @param {Object} structure - Structure object with indexed elements
-   * @returns {string} Generated HTML
-   */
-  generateHTMLFromStructure(structure) {
-    const elements = [];
-    const sortedIndexes = Object.keys(structure)
-      .map((k) => {
-        return parseInt(k);
-      })
-      .sort((a, b) => {
-        return a - b;
-      });
-
-    for (const index of sortedIndexes) {
-      const element = structure[index];
-      if (typeof element === 'string') {
-        elements.push(element);
-      } else if (Array.isArray(element)) {
-        // Handle nested arrays in stateless structures too
-        elements.push(this.flattenIoData(element));
-      } else {
-        elements.push(String(element));
-      }
-    }
-
-    return elements.join('');
-  }
-
-  /**
    * Get current structure (for debugging/testing)
    * @returns {Object} Deep copy of current structure
    */
@@ -231,24 +201,6 @@ export class ArizonaHierarchical {
    */
   isInitialized() {
     return Object.keys(this.structure).length > 0;
-  }
-
-  /**
-   * Get component by ID
-   * @param {string} componentId - Component ID to retrieve
-   * @returns {Object|null} Component structure or null if not found
-   */
-  getComponent(componentId) {
-    return this.structure[componentId] || null;
-  }
-
-  /**
-   * Check if component exists
-   * @param {string} componentId - Component ID to check
-   * @returns {boolean} True if component exists
-   */
-  hasComponent(componentId) {
-    return componentId in this.structure;
   }
 
   /**
@@ -277,7 +229,6 @@ export class ArizonaHierarchical {
       type: 'html_patch',
       statefulId,
       html: this.generateStatefulHTML(statefulId),
-      timestamp: Date.now(),
     };
   }
 
@@ -291,95 +242,9 @@ export class ArizonaHierarchical {
       type: 'initial_render',
       statefulId,
       html: this.generateStatefulHTML(statefulId),
-      structure: this.getStructure(),
-      timestamp: Date.now(),
     };
   }
 }
-
-/**
- * Utility functions for working with hierarchical structures
- */
-export const ArizonaHierarchicalUtils = {
-  /**
-   * Deep clone a structure
-   * @param {Object} structure - Structure to clone
-   * @returns {Object} Deep cloned structure
-   */
-  cloneStructure(structure) {
-    return JSON.parse(JSON.stringify(structure));
-  },
-
-  /**
-   * Merge two structures (second structure wins on conflicts)
-   * @param {Object} base - Base structure
-   * @param {Object} overlay - Overlay structure
-   * @returns {Object} Merged structure
-   */
-  mergeStructures(base, overlay) {
-    const merged = this.cloneStructure(base);
-
-    for (const [componentId, component] of Object.entries(overlay)) {
-      merged[componentId] = { ...merged[componentId], ...component };
-    }
-
-    return merged;
-  },
-
-  /**
-   * Extract all text content from a structure
-   * @param {Object} structure - Structure to extract text from
-   * @param {string} rootId - Stateful ID of the root element
-   * @returns {string} Extracted text content
-   */
-  extractTextContent(structure, rootId) {
-    const client = new ArizonaHierarchical();
-    client.initialize(structure);
-    const html = client.generateStatefulHTML(rootId);
-
-    // Simple HTML tag removal for text extraction
-    return html.replace(/<[^>]*>/g, '').trim();
-  },
-
-  /**
-   * Get statistics about a structure
-   * @param {Object} structure - Structure to analyze
-   * @returns {Object} Statistics object
-   */
-  getStructureStats(structure) {
-    let componentCount = 0;
-    let elementCount = 0;
-    let statefulRefs = 0;
-    let statelessComponents = 0;
-    let listComponents = 0;
-
-    for (const [componentId, component] of Object.entries(structure)) {
-      componentCount++;
-
-      for (const element of Object.values(component)) {
-        elementCount++;
-
-        if (element && typeof element === 'object') {
-          if (element.type === 'stateful') {
-            statefulRefs++;
-          } else if (element.type === 'stateless') {
-            statelessComponents++;
-          } else if (element.type === 'list') {
-            listComponents++;
-          }
-        }
-      }
-    }
-
-    return {
-      componentCount,
-      elementCount,
-      statefulRefs,
-      statelessComponents,
-      listComponents,
-    };
-  },
-};
 
 /**
  * Default export for convenience
