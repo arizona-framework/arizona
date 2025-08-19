@@ -20,6 +20,12 @@
 ).
 
 %% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+-elvis([{elvis_style, no_macros, #{allow => ['RAND_MODULE_NAME', 'assertEqual']}}]).
+
+%% --------------------------------------------------------------------
 %% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
 
@@ -120,8 +126,9 @@ diff_stateful_fingerprint_mismatch(Config) when is_list(Config) ->
         _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
-    % Mount view with show_stateful = false, which creates a template without the stateful component
-    % This establishes a fingerprint for StatefulElementIndex that doesn't include the stateful component
+    % Mount view with show_stateful = false, which creates a template without
+    % the stateful component. This establishes a fingerprint for StatefulElementIndex
+    % that doesn't include the stateful component
     View1 = mount_view(ViewModule, #{show_stateful => false}),
 
     % Create bindings for the stateful component we want to diff
@@ -131,8 +138,9 @@ diff_stateful_fingerprint_mismatch(Config) when is_list(Config) ->
     },
 
     % Test diff_stateful/5 with view template that has different fingerprint
-    % Since the view was mounted with show_stateful=false, the template fingerprint at element index
-    % won't match what diff_stateful expects for a stateful component, causing fallback to hierarchical
+    % Since the view was mounted with show_stateful=false, the template fingerprint
+    % at element index won't match what diff_stateful expects for a stateful component,
+    % causing fallback to hierarchical
     {Result, _DiffView} = arizona_differ:diff_stateful(
         StatefulModule, Bindings, ViewId, StatefulElementIndex, View1
     ),
@@ -183,12 +191,14 @@ diff_stateless_fingerprint_mismatch(Config) when is_list(Config) ->
         _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
-    % Mount view with show_stateless = false, creating a stateful template WITHOUT stateless component
-    % This establishes a fingerprint at element index 3 that doesn't include the stateless component
+    % Mount view with show_stateless = false, creating a stateful template WITHOUT
+    % stateless component. This establishes a fingerprint at element index 3 that
+    % doesn't include the stateless component
     View = mount_view(ViewModule, #{show_stateless => false}),
 
-    % Test diff_root_stateful with show_stateless = true, which creates a template WITH stateless component
-    % This creates a fingerprint mismatch: stored fingerprint (no stateless) vs new template (with stateless)
+    % Test diff_root_stateful with show_stateless = true, which creates a template
+    % WITH stateless component. This creates a fingerprint mismatch: stored
+    % fingerprint (no stateless) vs new template (with stateless)
     Bindings = #{id => StatefulId, title => ~"Arizona", show_stateless => true},
     {Diff, _DiffView} = arizona_differ:diff_root_stateful(
         StatefulModule, Bindings, View
@@ -305,13 +315,19 @@ mock_view_module(ViewModule, ViewId, StatefulModule, StatefulId, StatelessModule
                     arizona_template:from_string(~"""
                     <div {arizona_template:get_binding(id, Bindings)}>
                         {arizona_template:get_binding(title, Bindings)}
-                        {case arizona_template:get_binding(show_stateful, Bindings, fun() -> true end) of
+                        {case arizona_template:get_binding(
+                            show_stateful, Bindings, fun() -> true end
+                        ) of
                             true ->
                                 arizona_template:render_stateful(StatefulModule, #{
                                     id => arizona_template:get_binding(stateful_id, Bindings),
                                     title => arizona_template:get_binding(title, Bindings),
-                                    show_stateless => arizona_template:get_binding(show_stateless, Bindings, fun() -> true end),
-                                    stateless_items => arizona_template:get_binding(stateless_items, Bindings, fun() -> [] end)
+                                    show_stateless => arizona_template:get_binding(
+                                        show_stateless, Bindings, fun() -> true end
+                                    ),
+                                    stateless_items => arizona_template:get_binding(
+                                        stateless_items, Bindings, fun() -> [] end
+                                    )
                                 });
                             false ->
                                 ~""
@@ -351,11 +367,15 @@ mock_stateful_module(StatefulModule, StatelessModule, StatelessFun) ->
                     arizona_template:from_string(~"""
                     <div {arizona_template:get_binding(id, Bindings)}>
                         {arizona_template:get_binding(title, Bindings)}
-                        {case arizona_template:get_binding(show_stateless, Bindings, fun() -> true end) of
+                        {case arizona_template:get_binding(
+                            show_stateless, Bindings, fun() -> true end
+                        ) of
                             true ->
                                 arizona_template:render_stateless(StatelessModule, StatelessFun, #{
                                     title => arizona_template:get_binding(title, Bindings),
-                                    items => arizona_template:get_binding(stateless_items, Bindings, fun() -> [] end)
+                                    items => arizona_template:get_binding(
+                                        stateless_items, Bindings, fun() -> [] end
+                                    )
                                 });
                             false ->
                                 ~""

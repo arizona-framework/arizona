@@ -29,7 +29,7 @@ init_per_suite(Config) ->
 
     MockStatefulModuleCode = merl:qquote(~""""
     -module('@module').
-    -behavior(arizona_stateful).
+    -behaviour(arizona_stateful).
 
     -export([mount/1]).
     -export([render/1]).

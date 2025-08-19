@@ -52,13 +52,13 @@ start_link(ViewModule, ArizonaRequest) ->
     Pid :: pid(),
     View :: arizona_view:view().
 get_view(Pid) ->
-    gen_server:call(Pid, get_view).
+    gen_server:call(Pid, get_view, infinity).
 
 -spec initial_render(Pid) -> HierarchicalStructure when
     Pid :: pid(),
     HierarchicalStructure :: arizona_hierarchical_dict:hierarchical_structure().
 initial_render(Pid) ->
-    gen_server:call(Pid, initial_render).
+    gen_server:call(Pid, initial_render, infinity).
 
 -spec handle_event(Pid, StatefulIdOrUndefined, Event, Params) -> Result when
     Pid :: pid(),
@@ -69,7 +69,7 @@ initial_render(Pid) ->
     StatefulId :: arizona_stateful:id(),
     Reply :: arizona_stateful:event_reply().
 handle_event(Pid, StatefulIdOrUndefined, Event, Params) ->
-    gen_server:call(Pid, {handle_event, StatefulIdOrUndefined, Event, Params}).
+    gen_server:call(Pid, {handle_event, StatefulIdOrUndefined, Event, Params}, infinity).
 
 %% --------------------------------------------------------------------
 %% Gen_server callback implementations

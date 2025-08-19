@@ -241,8 +241,8 @@ parse_expression(Expr) ->
             end,
         {ok, Forms}
     catch
-        Class:Exception:Stacktrace ->
-            {error, {parse_failed, Class, Exception, Stacktrace}}
+        Class:Exception:StackTrace ->
+            {error, {parse_failed, Class, Exception, StackTrace}}
     end.
 
 %% Categorize parsed forms as either comments or dynamic expressions

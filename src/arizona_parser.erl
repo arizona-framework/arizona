@@ -44,12 +44,12 @@ parse_tokens(Tokens, CallbackArg, CompileOpts) ->
     ErrorMap :: #{general => string(), reason => io_lib:chars()}.
 format_error(arizona_create_dynamic_callback_failed, [{_M, _F, _As, Info} | _]) ->
     {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
-    {Line, ExprText, Class, Reason, Stacktrace} = maps:get(cause, ErrorInfo),
+    {Line, ExprText, Class, Reason, StackTrace} = maps:get(cause, ErrorInfo),
     #{
         general => "Arizona template dynamic callback creation failed",
         reason => io_lib:format(
             "Failed to create callback for expression '~s' at line ~p:\n~p:~p:~p", [
-                ExprText, Line, Class, Reason, Stacktrace
+                ExprText, Line, Class, Reason, StackTrace
             ]
         )
     }.
@@ -122,11 +122,11 @@ create_dynamic_ast(DynamicElements, CallbackArg, CompileOpts) ->
         try
             {Line, create_dynamic_callback_ast(CallbackArg, ExprText, CompileOpts)}
         catch
-            Class:Reason:Stacktrace ->
+            Class:Reason:StackTrace ->
                 error(
                     arizona_create_dynamic_callback_failed,
                     none,
-                    error_info({Line, ExprText, Class, Reason, Stacktrace})
+                    error_info({Line, ExprText, Class, Reason, StackTrace})
                 )
         end
      || {Line, ExprText} <- DynamicElements

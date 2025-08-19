@@ -44,7 +44,7 @@ init_per_suite(Config) ->
 
     MockModuleCode = merl:qquote(~""""
     -module('@module').
-    -behavior(arizona_stateful).
+    -behaviour(arizona_stateful).
 
     -export([mount/1]).
     -export([render/1]).
@@ -60,7 +60,7 @@ init_per_suite(Config) ->
 
     MockEventsModuleCode = merl:qquote(~""""
     -module('@module').
-    -behavior(arizona_stateful).
+    -behaviour(arizona_stateful).
 
     -export([mount/1]).
     -export([render/1]).

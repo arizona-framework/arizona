@@ -46,7 +46,7 @@ init_per_suite(Config) ->
     MockModule = arizona_request_mock_adapter,
     MockAdapterCode = merl:qquote(~"""
     -module('@module').
-    -behavior(arizona_request).
+    -behaviour(arizona_request).
 
     -export([parse_bindings/1]).
     -export([parse_params/1]).

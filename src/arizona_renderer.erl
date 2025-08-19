@@ -73,18 +73,11 @@ render_list(Template, List, ParentId, View) ->
     Static = arizona_template:get_static(Template),
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
-    {
-        [
-            begin
-                {DynamicHtml, _UpdatedView} = render_dynamic(
-                    DynamicSequence, Dynamic, CallbackArg, ParentId, View
-                ),
-                zip_static_dynamic(Static, DynamicHtml)
-            end
-         || CallbackArg <- List
-        ],
-        View
-    }.
+    HtmlList = [
+        render_list_item(DynamicSequence, Dynamic, Static, CallbackArg, ParentId, View)
+     || CallbackArg <- List
+    ],
+    {HtmlList, View}.
 
 -spec render_template(Template, CallbackArg, ParentId, View) -> {Html, View1} when
     Template :: arizona_template:template(),
@@ -182,3 +175,10 @@ zip_static_dynamic_test_() ->
     ].
 
 -endif.
+
+%% Helper function for render_list
+render_list_item(DynamicSequence, Dynamic, Static, CallbackArg, ParentId, View) ->
+    {DynamicHtml, _UpdatedView} = render_dynamic(
+        DynamicSequence, Dynamic, CallbackArg, ParentId, View
+    ),
+    zip_static_dynamic(Static, DynamicHtml).

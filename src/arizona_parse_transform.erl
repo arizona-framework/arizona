@@ -76,11 +76,11 @@ transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) ->
                 erl_syntax:block_expr(lists:reverse([TemplateCall | RevClauseBody]))
         end
     catch
-        Class:Reason:Stacktrace ->
+        Class:Reason:StackTrace ->
             error(
                 arizona_render_list_transformation_failed,
                 none,
-                error_info({Module, Line, Class, Reason, Stacktrace})
+                error_info({Module, Line, Class, Reason, StackTrace})
             )
     end.
 
@@ -90,20 +90,20 @@ transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) ->
     ErrorMap :: #{general => string(), reason => io_lib:chars()}.
 format_error(arizona_template_extraction_failed, [{_M, _F, _As, Info} | _]) ->
     {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
-    {Module, Line, Class, Reason, Stacktrace} = maps:get(cause, ErrorInfo),
+    {Module, Line, Class, Reason, StackTrace} = maps:get(cause, ErrorInfo),
     #{
         general => "Arizona template parsing failed",
         reason => io_lib:format("Failed to extract template in ~p at line ~p:\n~p:~p:~p", [
-            Module, Line, Class, Reason, Stacktrace
+            Module, Line, Class, Reason, StackTrace
         ])
     };
 format_error(arizona_render_list_transformation_failed, [{_M, _F, _As, Info} | _]) ->
     {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
-    {Module, Line, Class, Reason, Stacktrace} = maps:get(cause, ErrorInfo),
+    {Module, Line, Class, Reason, StackTrace} = maps:get(cause, ErrorInfo),
     #{
         general => "Arizona render_list transformation failed",
         reason => io_lib:format("Failed to transform render_list in ~p at line ~p:\n~p:~p:~p", [
-            Module, Line, Class, Reason, Stacktrace
+            Module, Line, Class, Reason, StackTrace
         ])
     }.
 
@@ -121,12 +121,7 @@ output_forms_to_tmp(undefined, _Forms) ->
 output_forms_to_tmp(Module, Forms) ->
     FileName = "/tmp/" ++ atom_to_list(Module) ++ ".erl",
     Content = [erl_pp:form(Form, [{linewidth, 100}]) || Form <- Forms],
-    case file:write_file(FileName, Content) of
-        ok ->
-            ok;
-        {error, Reason} ->
-            io:format("Failed to write forms to ~s: ~p~n", [FileName, Reason])
-    end.
+    ok = file:write_file(FileName, Content).
 -else.
 output_forms_to_tmp(_Module, _Forms) ->
     ok.
@@ -158,46 +153,12 @@ transform_node(Node, CallbackArg, Module, CompileOpts) ->
         application ->
             transform_application(Node, CallbackArg, Module, CompileOpts);
         case_expr ->
-            % Transform case expressions by applying transformation to argument and clauses
-            Argument = erl_syntax:case_expr_argument(Node),
-            Clauses = erl_syntax:case_expr_clauses(Node),
-            TransformedArgument = apply_transformation(Argument, CallbackArg, Module, CompileOpts),
-            TransformedClauses = [
-                apply_transformation(Clause, CallbackArg, Module, CompileOpts)
-             || Clause <- Clauses
-            ],
-            erl_syntax:case_expr(TransformedArgument, TransformedClauses);
+            transform_case_expr(Node, CallbackArg, Module, CompileOpts);
         clause ->
-            % Transform clauses by applying transformation to patterns, guard, and body
-            Patterns = erl_syntax:clause_patterns(Node),
-            Guard = erl_syntax:clause_guard(Node),
-            Body = erl_syntax:clause_body(Node),
-            TransformedPatterns = [
-                apply_transformation(Pattern, CallbackArg, Module, CompileOpts)
-             || Pattern <- Patterns
-            ],
-            TransformedGuard =
-                case Guard of
-                    none -> none;
-                    _ -> apply_transformation(Guard, CallbackArg, Module, CompileOpts)
-                end,
-            TransformedBody = [
-                apply_transformation(BodyExpr, CallbackArg, Module, CompileOpts)
-             || BodyExpr <- Body
-            ],
-            erl_syntax:clause(TransformedPatterns, TransformedGuard, TransformedBody);
+            transform_clause(Node, CallbackArg, Module, CompileOpts);
         _ ->
             Node
     end.
-
-%% Generic transformation function - reusable for any AST node
-apply_transformation(Node, CallbackArg, Module, CompileOpts) ->
-    erl_syntax_lib:map(
-        fun(ChildNode) ->
-            transform_node(erl_syntax:revert(ChildNode), CallbackArg, Module, CompileOpts)
-        end,
-        Node
-    ).
 
 %% Transform function applications
 transform_application(Node, CallbackArg, Module, CompileOpts) ->
@@ -208,12 +169,15 @@ transform_application(Node, CallbackArg, Module, CompileOpts) ->
 
             case InDynamicCallback of
                 true ->
-                    % Inside dynamic callback - don't transform from_string to prevent infinite recursion
+                    % Inside dynamic callback - don't transform from_string
+                    % to prevent infinite recursion
                     Node;
                 false ->
                     % Normal context - transform from_string
                     Line = get_node_line(Node),
-                    transform_from_string(Module, Line, TemplateArg, CallbackArg, CompileOpts)
+                    transform_from_string(
+                        Module, Line, TemplateArg, CallbackArg, CompileOpts
+                    )
             end;
         {arizona_template, render_list, 2, [FunArg, ListArg]} ->
             % Always transform render_list calls - they don't cause infinite recursion
@@ -222,6 +186,46 @@ transform_application(Node, CallbackArg, Module, CompileOpts) ->
         _ ->
             Node
     end.
+
+%% Transform case expressions
+transform_case_expr(Node, CallbackArg, Module, CompileOpts) ->
+    Argument = erl_syntax:case_expr_argument(Node),
+    Clauses = erl_syntax:case_expr_clauses(Node),
+    TransformedArgument = apply_transformation(Argument, CallbackArg, Module, CompileOpts),
+    TransformedClauses = [
+        apply_transformation(Clause, CallbackArg, Module, CompileOpts)
+     || Clause <- Clauses
+    ],
+    erl_syntax:case_expr(TransformedArgument, TransformedClauses).
+
+%% Transform clauses
+transform_clause(Node, CallbackArg, Module, CompileOpts) ->
+    Patterns = erl_syntax:clause_patterns(Node),
+    Guard = erl_syntax:clause_guard(Node),
+    Body = erl_syntax:clause_body(Node),
+    TransformedPatterns = [
+        apply_transformation(Pattern, CallbackArg, Module, CompileOpts)
+     || Pattern <- Patterns
+    ],
+    TransformedGuard =
+        case Guard of
+            none -> none;
+            _ -> apply_transformation(Guard, CallbackArg, Module, CompileOpts)
+        end,
+    TransformedBody = [
+        apply_transformation(BodyExpr, CallbackArg, Module, CompileOpts)
+     || BodyExpr <- Body
+    ],
+    erl_syntax:clause(TransformedPatterns, TransformedGuard, TransformedBody).
+
+%% Generic transformation function - reusable for any AST node
+apply_transformation(Node, CallbackArg, Module, CompileOpts) ->
+    erl_syntax_lib:map(
+        fun(ChildNode) ->
+            transform_node(erl_syntax:revert(ChildNode), CallbackArg, Module, CompileOpts)
+        end,
+        Node
+    ).
 
 %% Analyze function application to extract module, function, arity, and args
 -spec analyze_application(Node) -> {Module, Function, Arity, Args} | undefined when
@@ -267,11 +271,11 @@ transform_from_string(Module, Line, TemplateArg, CallbackArg, CompileOpts) ->
         % Parse tokens into AST
         arizona_parser:parse_tokens(Tokens, CallbackArg, CompileOpts)
     catch
-        Class:Reason:Stacktrace ->
+        Class:Reason:StackTrace ->
             error(
                 arizona_template_extraction_failed,
                 none,
-                error_info({Module, Line, Class, Reason, Stacktrace})
+                error_info({Module, Line, Class, Reason, StackTrace})
             )
     end.
 
@@ -295,10 +299,13 @@ extract_list_function_body(FunExpr, Module, Line, CompileOpts) ->
                     Tokens = arizona_scanner:scan_string(Line + 1, TemplateString),
 
                     % Parse tokens into template AST with the actual CallbackArg (not 'ok')
-                    % This ensures that dynamic expressions will use the correct parameter
-                    % Clear in_dynamic_callback flag for render_list templates to allow nested transforms
+                    % This ensures dynamic expressions will use the correct parameter
+                    % Clear in_dynamic_callback flag for render_list templates to allow
+                    % nested transforms
                     ClearedOpts = proplists:delete(in_dynamic_callback, CompileOpts),
-                    TemplateAST = arizona_parser:parse_tokens(Tokens, CallbackArg, ClearedOpts),
+                    TemplateAST = arizona_parser:parse_tokens(
+                        Tokens, CallbackArg, ClearedOpts
+                    ),
 
                     {RevClauseBody, TemplateAST};
                 {tuple, _, [{atom, _, template} | _]} ->

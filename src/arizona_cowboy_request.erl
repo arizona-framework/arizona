@@ -1,5 +1,5 @@
 -module(arizona_cowboy_request).
--behavior(arizona_request).
+-behaviour(arizona_request).
 
 %% --------------------------------------------------------------------
 %% API function exports

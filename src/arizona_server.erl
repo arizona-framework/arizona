@@ -80,16 +80,8 @@ get_route_metadata(Req) ->
         Req,
         #{dispatch => {persistent_term, arizona_dispatch}}
     ),
-    case maps:get(handler_opts, Env) of
-        #{type := Type, handler := Handler} when
-            (Type =:= live orelse Type =:= live_websocket orelse Type =:= static),
-            is_atom(Handler)
-        ->
-            #route_metadata{
-                type = Type,
-                handler = Handler
-            }
-    end.
+    HandlerOpts = maps:get(handler_opts, Env),
+    validate_and_create_route_metadata(HandlerOpts).
 
 -spec get_route_handler(RouteMetadata) -> Handler when
     RouteMetadata :: route_metadata(),
@@ -144,3 +136,13 @@ route_to_cowboy({static, Path, {priv_file, App, FileName}}) when
 ->
     % Static file serving for single file from priv directory
     {Path, cowboy_static, {priv_file, App, FileName}}.
+
+%% Validate handler options and create route metadata
+validate_and_create_route_metadata(#{type := Type, handler := Handler}) when
+    (Type =:= live orelse Type =:= live_websocket orelse Type =:= static),
+    is_atom(Handler)
+->
+    #route_metadata{
+        type = Type,
+        handler = Handler
+    }.
