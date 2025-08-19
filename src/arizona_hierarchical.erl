@@ -212,23 +212,21 @@ process_hierarchical_callback(
     ),
     {[Struct | RestHtml], FinalView};
 process_hierarchical_callback(
-    Result, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
+    Result, _DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
 ) ->
     case arizona_template:is_template(Result) of
         true ->
             process_hierarchical_template(
-                Result, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
+                Result, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
             );
         false ->
             process_hierarchical_html(
-                Result, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
+                Result, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
             )
     end.
 
 %% Helper function to process hierarchical template results
-process_hierarchical_template(
-    Result, _DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
-) ->
+process_hierarchical_template(Result, T, Dynamic, CallbackArg, ParentId, ElementIndex, View) ->
     {Struct, TemplateView} = hierarchical_template(Result, ok, ParentId, ElementIndex, View),
     {RestHtml, FinalView} = hierarchical_dynamic(
         T, Dynamic, CallbackArg, ParentId, ElementIndex, TemplateView
@@ -236,9 +234,7 @@ process_hierarchical_template(
     {[Struct | RestHtml], FinalView}.
 
 %% Helper function to process hierarchical HTML results
-process_hierarchical_html(
-    Result, _DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
-) ->
+process_hierarchical_html(Result, T, Dynamic, CallbackArg, ParentId, ElementIndex, View) ->
     Html = arizona_html:to_html(Result),
     {RestHtml, FinalView} = hierarchical_dynamic(
         T, Dynamic, CallbackArg, ParentId, ElementIndex, View
