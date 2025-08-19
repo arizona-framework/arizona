@@ -1,10 +1,12 @@
 -module(arizona_binder).
+-compile({nowarn_redefined_builtin_type, [map/0]}).
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
 -export([new/1]).
+-export([to_map/1]).
 -export([get/2]).
 -export([get/3]).
 -export([find/2]).
@@ -16,16 +18,18 @@
 %% Types exports
 %% --------------------------------------------------------------------
 
+-export_type([bindings/0]).
+-export_type([map/0]).
 -export_type([key/0]).
 -export_type([value/0]).
 -export_type([default_fun/0]).
--export_type([bindings/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
 -opaque bindings() :: #{key() => value()}.
+-nominal map() :: #{key() => value()}.
 -nominal key() :: atom().
 -type value() :: dynamic().
 -nominal default_fun() :: fun(() -> value()).
@@ -39,6 +43,12 @@
     Bindings :: bindings().
 new(InitialBindings) when is_map(InitialBindings) ->
     InitialBindings.
+
+-spec to_map(Bindings) -> Map when
+    Bindings :: bindings(),
+    Map :: map().
+to_map(Bindings) when is_map(Bindings) ->
+    Bindings.
 
 -spec get(Key, Bindings) -> Value when
     Key :: key(),

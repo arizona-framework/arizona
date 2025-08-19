@@ -64,7 +64,7 @@
 -nominal raw_request() :: dynamic().
 -nominal method() :: binary().
 -nominal path() :: binary().
--nominal bindings() :: #{atom() => dynamic()}.
+-nominal bindings() :: arizona_binder:map().
 -nominal params() :: [{binary(), binary() | true}].
 -nominal cookies() :: [{binary(), binary()}].
 -nominal headers() :: #{binary() => iodata()}.

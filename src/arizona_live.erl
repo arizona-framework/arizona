@@ -65,8 +65,9 @@ initial_render(Pid) ->
     StatefulIdOrUndefined :: arizona_stateful:id() | undefined,
     Event :: arizona_stateful:event_name(),
     Params :: arizona_stateful:event_params(),
-    Result :: {reply, StatefulId, Reply} | {noreply, StatefulId},
+    Result :: {reply, StatefulId, Diff, Reply} | {noreply, StatefulId, Diff},
     StatefulId :: arizona_stateful:id(),
+    Diff :: arizona_differ:diff(),
     Reply :: arizona_stateful:event_reply().
 handle_event(Pid, StatefulIdOrUndefined, Event, Params) ->
     gen_server:call(Pid, {handle_event, StatefulIdOrUndefined, Event, Params}, infinity).
@@ -160,13 +161,15 @@ handle_stateful_event(StatefulId, Event, Params, State) ->
             Bindings = arizona_stateful:get_bindings(UpdatedStatefulState),
             DiffStatefulId = arizona_binder:get(id, Bindings),
             UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedStatefulState, View),
-            {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, Bindings, UpdatedView),
+            DiffBindings = arizona_binder:to_map(Bindings),
+            {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, DiffBindings, UpdatedView),
             {reply, {reply, DiffStatefulId, Diff, Reply}, State#state{view = DiffView}};
         {noreply, UpdatedStatefulState} ->
             Module = arizona_stateful:get_module(UpdatedStatefulState),
             Bindings = arizona_stateful:get_bindings(UpdatedStatefulState),
             DiffStatefulId = arizona_binder:get(id, Bindings),
             UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedStatefulState, View),
-            {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, Bindings, UpdatedView),
+            DiffBindings = arizona_binder:to_map(Bindings),
+            {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, DiffBindings, UpdatedView),
             {reply, {noreply, DiffStatefulId, Diff}, State#state{view = DiffView}}
     end.

@@ -58,7 +58,7 @@
 %% --------------------------------------------------------------------
 
 -callback mount(Bindings) -> State when
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     State :: state().
 
 -callback render(Bindings) -> Template when
@@ -81,7 +81,7 @@
 
 -spec call_mount_callback(Module, Bindings) -> State when
     Module :: module(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     State :: state().
 call_mount_callback(Module, Bindings) ->
     apply(Module, mount, [Bindings]).
@@ -104,12 +104,12 @@ call_handle_event_callback(Event, Params, #state{} = State) ->
 
 -spec new(Module, Bindings) -> State when
     Module :: module(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     State :: state().
-new(Module, Bindings) when is_atom(Module) ->
+new(Module, Bindings) when is_atom(Module), is_map(Bindings) ->
     #state{
         module = Module,
-        bindings = Bindings,
+        bindings = arizona_binder:new(Bindings),
         changed_bindings = arizona_binder:new(#{})
     }.
 
@@ -159,7 +159,7 @@ put_binding(Key, Value, #state{} = State) ->
     end.
 
 -spec merge_bindings(Bindings, State) -> State1 when
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     State :: state(),
     State1 :: state().
 merge_bindings(Bindings, #state{} = State) when is_map(Bindings) ->

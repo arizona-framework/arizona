@@ -20,7 +20,12 @@
 %% Types definitions
 %% --------------------------------------------------------------------
 
--nominal diff() :: [{arizona_tracker:element_index(), arizona_html:html()}].
+-nominal diff() :: [
+    {
+        arizona_tracker:element_index(),
+        diff() | arizona_hierarchical:hierarchical_structure() | arizona_html:html()
+    }
+].
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -39,11 +44,11 @@ diff_view(View) ->
 
 -spec diff_stateful(Module, Bindings, ParentId, ElementIndex, View) -> {Result, View1} when
     Module :: module(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
-    Result :: diff() | arizona_hierarchical:stateful_struct(),
+    Result :: nodiff | diff() | arizona_hierarchical:stateful_struct(),
     View1 :: arizona_view:view().
 diff_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
     {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
@@ -72,7 +77,7 @@ diff_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
 
 -spec diff_root_stateful(Module, Bindings, View) -> {Diff, View1} when
     Module :: module(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     View :: arizona_view:view(),
     Diff :: diff(),
     View1 :: arizona_view:view().
@@ -88,11 +93,11 @@ diff_root_stateful(Module, Bindings, View) ->
 when
     Module :: module(),
     Function :: atom(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
-    Result :: diff() | arizona_hierarchical:stateless_struct(),
+    Result :: nodiff | diff() | arizona_hierarchical:stateless_struct(),
     View1 :: arizona_view:view().
 diff_stateless(Module, Function, Bindings, ParentId, ElementIndex, View) ->
     Template = arizona_stateless:call_render_callback(Module, Function, Bindings),
@@ -127,7 +132,7 @@ diff_list(Template, List, ParentId, ElementIndex, View) ->
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
-    Result :: diff() | arizona_hierarchical:stateless_struct(),
+    Result :: nodiff | diff() | arizona_hierarchical:stateless_struct(),
     View1 :: arizona_view:view().
 diff_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
     Fingerprint = arizona_template:get_fingerprint(Template),

@@ -95,12 +95,12 @@ from_string(String) ->
 
 -spec from_string(Module, Line, String, CallbackArg, Bindings) -> Template when
     Module :: module(),
-    Line :: pos_integer(),
-    String :: binary(),
+    Line :: arizona_token:line(),
+    String :: string() | binary(),
     CallbackArg :: erl_syntax:syntaxTree(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     Template :: template().
-from_string(Module, Line, String, CallbackArg, Bindings) when is_atom(Module) ->
+from_string(Module, Line, String, CallbackArg, Bindings) when is_atom(Module), is_map(Bindings) ->
     % Scan template content into tokens
     Tokens = arizona_scanner:scan_string(Line, String),
 
@@ -182,7 +182,7 @@ find_binding(Key, Bindings) ->
 
 -spec render_stateful(Module, Bindings) -> Callback when
     Module :: module(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     Callback :: render_callback().
 render_stateful(Module, Bindings) ->
     fun
@@ -199,7 +199,7 @@ render_stateful(Module, Bindings) ->
 -spec render_stateless(Module, Function, Bindings) -> Callback when
     Module :: module(),
     Function :: atom(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     Callback :: render_callback().
 render_stateless(Module, Fun, Bindings) ->
     fun

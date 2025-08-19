@@ -12,7 +12,7 @@
 
 -spec prepare_render(Module, Bindings, View) -> Result when
     Module :: module(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     View :: arizona_view:view(),
     Result :: {Id, Template, View1},
     Id :: arizona_stateful:id(),
@@ -21,7 +21,7 @@
 prepare_render(Module, Bindings, View) ->
     maybe
         % Check if component already exists or needs mounting
-        {ok, Id} ?= arizona_binder:find(id, Bindings),
+        #{id := Id} ?= Bindings,
         {ok, State} ?= arizona_view:find_stateful_state(Id, View),
         UpdatedState = arizona_stateful:merge_bindings(Bindings, State),
         render(Id, UpdatedState, View)

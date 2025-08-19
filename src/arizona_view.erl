@@ -52,7 +52,7 @@
     Module :: module(),
     RenderFun :: atom(),
     SlotName :: atom(),
-    Bindings :: arizona_binder:bindings()
+    Bindings :: arizona_binder:map()
 }.
 
 %% --------------------------------------------------------------------
@@ -124,13 +124,17 @@ call_handle_info_callback(Info, #view{state = State} = View) ->
 
 -spec new(Module, Bindings, Layout) -> View when
     Module :: module(),
-    Bindings :: arizona_binder:bindings(),
-    Layout :: layout() | none,
+    Bindings :: arizona_binder:map(),
+    Layout :: {LayoutModule, LayoutRenderFun, LayoutSlotName, LayoutBindings} | none,
+    LayoutModule :: module(),
+    LayoutRenderFun :: atom(),
+    LayoutSlotName :: atom(),
+    LayoutBindings :: arizona_binder:map(),
     View :: view().
-new(Module, Bindings, Layout) when is_atom(Module), (is_tuple(Layout) orelse Layout =:= none) ->
+new(Module, Bindings, Layout) when is_atom(Module) ->
     State = arizona_stateful:new(Module, Bindings),
     #view{
-        layout = Layout,
+        layout = norm_layout(Layout),
         state = State,
         stateful_states = #{},
         fingerprints = #{}
@@ -215,3 +219,12 @@ remove_fingerprint(Id, ElementIndex, #view{} = View) ->
         #{} ->
             View
     end.
+
+%% --------------------------------------------------------------------
+%% Internal functions
+%% --------------------------------------------------------------------
+
+norm_layout({Module, RenderFun, Name, Bindings}) ->
+    {Module, RenderFun, Name, Bindings};
+norm_layout(none) ->
+    none.

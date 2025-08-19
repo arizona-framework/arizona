@@ -135,7 +135,7 @@ render_dynamic_test(Config) when is_list(Config) ->
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
     {DynamicRender, _UpdatedView} = arizona_renderer:render_dynamic(
-        DynamicSequence, Dynamic, render, ok, MockView
+        DynamicSequence, Dynamic, render, ~"test_parent_id", MockView
     ),
     ?assertEqual([], DynamicRender).
 

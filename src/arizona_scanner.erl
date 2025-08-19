@@ -252,13 +252,6 @@ categorize_parsed_forms(Forms, OriginalExpr) when is_list(Forms) ->
             {normalize_multiline_comment(OriginalExpr), comment};
         false ->
             {OriginalExpr, dynamic}
-    end;
-categorize_parsed_forms(SingleForm, OriginalExpr) ->
-    case is_comment(SingleForm) of
-        true ->
-            {norm_comment(OriginalExpr), comment};
-        false ->
-            {OriginalExpr, dynamic}
     end.
 
 %% Check if all forms in a list are comments

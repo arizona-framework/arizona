@@ -2,6 +2,14 @@
 -behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).
+-dialyzer(
+    {nowarn_function, [
+        new_invalid_category_error/1,
+        new_invalid_line_error/1,
+        new_invalid_content_error/1,
+        set_content_invalid_error/1
+    ]}
+).
 
 %% --------------------------------------------------------------------
 %% Behaviour (ct_suite) callbacks

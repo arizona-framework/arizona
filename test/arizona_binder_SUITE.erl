@@ -2,6 +2,7 @@
 -behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).
+-dialyzer({nowarn_function, [get_invalid_key_error/1, put_invalid_key_error/1]}).
 
 %% --------------------------------------------------------------------
 %% Behaviour (ct_suite) callbacks

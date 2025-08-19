@@ -53,7 +53,7 @@ parse_transform(Forms, CallbackArg, Options) ->
 %% Transform arizona_template:render_list/2 calls
 -spec transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) -> AST when
     Module :: module(),
-    Line :: pos_integer(),
+    Line :: arizona_token:line(),
     FunArg :: erl_syntax:syntaxTree(),
     ListArg :: erl_syntax:syntaxTree(),
     CompileOpts :: [compile:option()],
@@ -234,7 +234,7 @@ apply_transformation(Node, CallbackArg, Module, CompileOpts) ->
     ).
 
 %% Analyze function application to extract module, function, arity, and args
--spec analyze_application(Node) -> {Module, Function, Arity, Args} | undefined when
+-spec analyze_application(Node) -> {Module, Function, Arity, Args} | undefined | Node when
     Node :: erl_syntax:syntaxTree(),
     Module :: module(),
     Function :: atom(),
@@ -314,10 +314,18 @@ extract_list_function_body(FunExpr, Module, Line, CompileOpts) ->
                     ),
 
                     {RevClauseBody, TemplateAST};
-                {tuple, _, [{atom, _, template} | _]} ->
-                    {RevClauseBody, TemplateCall};
-                _ ->
-                    error({not_from_string_call, TemplateCall})
+                TemplateCall ->
+                    % analyze_application returned the Node itself, check if it's a template tuple
+                    maybe
+                        tuple ?= erl_syntax:type(TemplateCall),
+                        [FirstElement | _] ?= erl_syntax:tuple_elements(TemplateCall),
+                        atom ?= erl_syntax:type(FirstElement),
+                        template ?= erl_syntax:atom_value(FirstElement),
+                        {RevClauseBody, TemplateCall}
+                    else
+                        _ ->
+                            error({not_from_string_call, TemplateCall})
+                    end
             end;
         _ ->
             error({invalid_function_expression, FunExpr})

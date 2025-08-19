@@ -17,6 +17,7 @@
 -export_type([stateful_struct/0]).
 -export_type([stateless_struct/0]).
 -export_type([list_struct/0]).
+-export_type([hierarchical_structure/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -39,6 +40,8 @@
     dynamic := arizona_renderer:dynamic()
 }.
 
+-nominal hierarchical_structure() :: stateful_struct() | stateless_struct() | list_struct().
+
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
@@ -55,7 +58,7 @@ hierarchical_view(View) ->
 
 -spec hierarchical_stateful(Module, Bindings, ParentId, ElementIndex, View) -> {Struct, View1} when
     Module :: module(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
@@ -77,7 +80,7 @@ hierarchical_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
 when
     Module :: module(),
     Function :: atom(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
@@ -172,7 +175,7 @@ when
     Dynamic :: arizona_template:dynamic(),
     CallbackArg :: dynamic(),
     ParentId :: arizona_stateful:id(),
-    ElementIndex :: arizona_tracker:element_index(),
+    ElementIndex :: arizona_tracker:element_index() | undefined,
     View :: arizona_view:view(),
     Render :: dynamic(),
     View1 :: arizona_view:view().
@@ -182,18 +185,18 @@ hierarchical_dynamic(
     [DynamicElementIndex | T], Dynamic, CallbackArg, ParentId, ElementIndex, View
 ) ->
     DynamicCallback = element(DynamicElementIndex, Dynamic),
-    ok =
-        case ElementIndex of
-            undefined ->
-                _OldTracker = arizona_tracker_dict:set_current_element_index(DynamicElementIndex),
-                ok;
-            _ ->
-                ok
-        end,
+    ok = maybe_set_tracker_index(ElementIndex, DynamicElementIndex),
     CallbackResult = DynamicCallback(CallbackArg),
     process_hierarchical_callback(
         CallbackResult, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
     ).
+
+%% Helper function to set tracker index when needed
+maybe_set_tracker_index(undefined, DynamicElementIndex) ->
+    _OldTracker = arizona_tracker_dict:set_current_element_index(DynamicElementIndex),
+    ok;
+maybe_set_tracker_index(_ElementIndex, _DynamicElementIndex) ->
+    ok.
 
 %% Helper function to render list hierarchical elements
 render_list_hierarchical(DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View) ->

@@ -23,7 +23,15 @@
 %% Ignore elvis warnings
 %% --------------------------------------------------------------------
 
--elvis([{elvis_style, no_macros, #{allow => ['RAND_MODULE_NAME', 'assertEqual']}}]).
+-elvis([
+    {elvis_style, no_macros, #{
+        allow => [
+            'RAND_MODULE_NAME',
+            'assertEqual',
+            'assertMatch'
+        ]
+    }}
+]).
 
 %% --------------------------------------------------------------------
 %% Behaviour (ct_suite) callbacks
@@ -73,7 +81,7 @@ diff_view_with_changes(Config) when is_list(Config) ->
     UpdatedState = arizona_stateful:put_binding(title, ~"Arizona Framework", State),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
     {Diff, _DiffView} = arizona_differ:diff_view(UpdatedView),
-    ?assertEqual(
+    ?assertMatch(
         [
             {2, ~"Arizona Framework"},
             {3, [{2, ~"Arizona Framework"}, {3, [{1, ~"Arizona Framework"}, {2, ~""}]}]}
@@ -93,14 +101,15 @@ diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
     UpdatedState = arizona_stateful:put_binding(title, ~"Updated Title", StatefulState),
     UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedState, View),
     UpdatedBindings = arizona_stateful:get_bindings(UpdatedState),
+    DiffBindings = arizona_binder:to_map(UpdatedBindings),
 
     % Test diff_stateful/5 with fingerprint match and changes
     {Result, _DiffView} = arizona_differ:diff_stateful(
-        StatefulModule, UpdatedBindings, ViewId, StatefulElementIndex, UpdatedView
+        StatefulModule, DiffBindings, ViewId, StatefulElementIndex, UpdatedView
     ),
 
     % Should return a diff (not nodiff) since bindings changed
-    ?assertEqual([{2, ~"Updated Title"}, {3, [{1, ~"Updated Title"}, {2, ~""}]}], Result).
+    ?assertMatch([{2, ~"Updated Title"}, {3, [{1, ~"Updated Title"}, {2, ~""}]}], Result).
 
 diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
     {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, _StatelessModule,
@@ -112,10 +121,11 @@ diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
     % Get the stateful component without changing its state
     StatefulState = arizona_view:get_stateful_state(StatefulId, View),
     Bindings = arizona_stateful:get_bindings(StatefulState),
+    DiffBindings = arizona_binder:to_map(Bindings),
 
     % Test diff_stateful/5 with fingerprint match but no changes
     {Result, _DiffView} = arizona_differ:diff_stateful(
-        StatefulModule, Bindings, ViewId, StatefulElementIndex, View
+        StatefulModule, DiffBindings, ViewId, StatefulElementIndex, View
     ),
 
     % Should return nodiff since no bindings changed
@@ -158,7 +168,8 @@ diff_root_stateful_with_changes(Config) when is_list(Config) ->
     % Get the stateful component's current bindings and update them
     StatefulState = arizona_view:get_stateful_state(StatefulId, View),
     CurrentBindings = arizona_stateful:get_bindings(StatefulState),
-    UpdatedBindings = CurrentBindings#{title => ~"Root Updated Title"},
+    CurrentBindingsMap = arizona_binder:to_map(CurrentBindings),
+    UpdatedBindings = CurrentBindingsMap#{title => ~"Root Updated Title"},
 
     % Test diff_root_stateful/3 with changed bindings (bypasses fingerprint checking)
     {Diff, _DiffView} = arizona_differ:diff_root_stateful(
@@ -166,7 +177,7 @@ diff_root_stateful_with_changes(Config) when is_list(Config) ->
     ),
 
     % Should return a diff since bindings changed
-    ?assertEqual([{2, ~"Root Updated Title"}, {3, [{1, ~"Root Updated Title"}, {2, ~""}]}], Diff).
+    ?assertMatch([{2, ~"Root Updated Title"}, {3, [{1, ~"Root Updated Title"}, {2, ~""}]}], Diff).
 
 diff_stateless_fingerprint_match(Config) when is_list(Config) ->
     {ViewModule, _ViewId, _StatefulModule, StatefulId, _StatefulElementIndex, StatelessModule,

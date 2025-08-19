@@ -51,7 +51,7 @@ render_view(View) ->
     case arizona_view:get_layout(View) of
         {LayoutModule, LayoutRenderFun, SlotName, SlotBindings} ->
             Slot = view,
-            LayoutBindings = arizona_binder:put(SlotName, Slot, SlotBindings),
+            LayoutBindings = SlotBindings#{SlotName => Slot},
             State = arizona_view:get_state(View),
             Id = arizona_stateful:get_binding(id, State),
             arizona_renderer:render_stateless(

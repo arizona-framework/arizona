@@ -40,7 +40,7 @@ render_view(View) ->
 
 -spec render_stateful(Module, Bindings, View) -> {Html, View1} when
     Module :: module(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     View :: arizona_view:view(),
     Html :: arizona_html:html(),
     View1 :: arizona_view:view().
@@ -53,7 +53,7 @@ render_stateful(Module, Bindings, View) ->
 -spec render_stateless(Module, Function, Bindings, ParentId, View) -> {Html, View1} when
     Module :: module(),
     Function :: atom(),
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: arizona_binder:map(),
     ParentId :: arizona_stateful:id(),
     View :: arizona_view:view(),
     Html :: arizona_html:html(),
