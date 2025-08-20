@@ -114,25 +114,31 @@ render(Bindings) ->
         </header>
 
         <main class="main" data-testid="main-section">
-            {arizona_template:render_list(
-                fun(Todo) -> arizona_template:from_string(~"""
-                <div class="todo-item {case maps:get(completed, Todo) of true -> ~"completed"; false -> ~"" end}" data-testid="todo-{maps:get(id, Todo)}">
+            {Todos = arizona_template:get_binding(todos, Bindings),
+             Filter = arizona_template:get_binding(filter, Bindings),
+             arizona_template:render_list(fun(#{id := Id} = Todo) ->
+                arizona_template:from_string(~"""
+                <div class="todo-item {case maps:get(completed, Todo) of true -> ~"completed"; false -> ~"" end}" data-testid="todo-{Id}">
                     <input
                         type="checkbox"
                         class="toggle"
-                        data-testid="toggle-{maps:get(id, Todo)}"
+                        data-testid="toggle-{Id}"
                         {case maps:get(completed, Todo) of true -> ~"checked"; false -> ~"" end}
-                        onclick="arizona.sendEvent('toggle_todo', \{id: '{maps:get(id, Todo)}'})"
+                        onclick="arizona.sendEvent('toggle_todo', \{id: '{Id}'})"
                     />
-                    <label class="todo-text" data-testid="todo-text-{maps:get(id, Todo)}">{maps:get(text, Todo)}</label>
+                    <label class="todo-text" data-testid="todo-text-{Id}">
+                        {maps:get(text, Todo)}
+                    </label>
                     <button
                         class="destroy"
-                        data-testid="delete-{maps:get(id, Todo)}"
-                        onclick="arizona.sendEvent('delete_todo', \{id: '{maps:get(id, Todo)}'})"
-                    >&times;</button>
+                        data-testid="delete-{Id}"
+                        onclick="arizona.sendEvent('delete_todo', \{id: '{Id}'})"
+                    >
+                        &times;
+                    </button>
                 </div>
                 """) end,
-                arizona_todo_app_view:filter_todos(arizona_template:get_binding(todos, Bindings), arizona_template:get_binding(filter, Bindings))
+                arizona_todo_app_view:filter_todos(Todos, Filter)
             )}
         </main>
 
@@ -143,7 +149,9 @@ render(Bindings) ->
             {arizona_template:render_stateless(arizona_todo_app_view, render_filters, #{
                 filter => arizona_template:get_binding(filter, Bindings)
             })}
-            {case length(arizona_template:get_binding(todos, Bindings)) > length(lists:filter(fun(#{completed := Completed}) -> not Completed end, arizona_template:get_binding(todos, Bindings))) of
+            {case length(arizona_template:get_binding(todos, Bindings)) >
+                  length(lists:filter(fun(#{completed := Completed}) -> not Completed end, arizona_template:get_binding(todos, Bindings)))
+             of
                 true -> arizona_template:render_stateless(arizona_todo_app_view, render_clear_button, #{});
                 false -> ~""
             end}
@@ -154,7 +162,11 @@ render(Bindings) ->
 render_stats(Bindings) ->
     arizona_template:from_string(~"""
     <span class="todo-count" data-testid="todo-count">
-        <strong>{length(lists:filter(fun(#{completed := Completed}) -> not Completed end, arizona_template:get_binding(todos, Bindings)))}</strong> {case length(lists:filter(fun(#{completed := Completed}) -> not Completed end, arizona_template:get_binding(todos, Bindings))) of 1 -> ~"item"; _ -> ~"items" end} left
+        <strong>{length(lists:filter(fun(#{completed := Completed}) -> not Completed end, arizona_template:get_binding(todos, Bindings)))}</strong>
+        {case length(lists:filter(fun(#{completed := Completed}) -> not Completed end, arizona_template:get_binding(todos, Bindings))) of
+             1 -> ~"item";
+             _ -> ~"items"
+         end} left
     </span>
     """).
 

@@ -12,15 +12,16 @@ render_menu(Bindings) ->
             <ul class="nav-menu">
                 {
                     ActiveUrl = arizona_template:get_binding(active_url, Bindings),
-                    arizona_template:render_list(fun(Item) ->
+                    arizona_template:render_list(fun(#{url := Url, name := Name, desc := Desc}) ->
+                        Class = case Url of ActiveUrl -> ~"active"; _ -> ~"" end,
                         arizona_template:from_string(~"""
                         <li class="nav-item">
                             <a
-                                href="{maps:get(url, Item)}"
-                                class="nav-link {case maps:get(url, Item) of ActiveUrl -> ~"active"; _ -> ~"" end}"
+                                href="{Url}"
+                                class="nav-link {Class}"
                             >
-                                <span class="nav-name">{maps:get(name, Item)}</span>
-                                <small class="nav-desc">{maps:get(desc, Item)}</small>
+                                <span class="nav-name">{Name}</span>
+                                <small class="nav-desc">{Desc}</small>
                             </a>
                         </li>
                         """)

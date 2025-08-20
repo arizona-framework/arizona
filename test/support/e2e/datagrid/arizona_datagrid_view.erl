@@ -229,14 +229,15 @@ render_table(Bindings) ->
             <thead class="table-dark">
                 <tr>
                     {arizona_template:render_list(fun(Col) ->
+                        Sortable = maps:get(sortable, Col, false),
                         arizona_template:from_string(~""""
                         <th scope="col" class="{
-                            case maps:get(sortable, Col, false) of
+                            case Sortable of
                                 true -> ~"sortable";
                                 false -> ~""
                             end
                         }" {
-                            case maps:get(sortable, Col, false) of
+                            case Sortable of
                                 true ->
                                     ColumnName = maps:get(name, Col),
                                     arizona_template:from_string(~"""
@@ -248,7 +249,7 @@ render_table(Bindings) ->
                         }>
                             {maps:get(label, Col)}
                             {
-                                case maps:get(sortable, Col, false) of
+                                case Sortable of
                                     true -> ~" <i class=\"fas fa-sort\"></i>";
                                     false -> ~""
                                 end
