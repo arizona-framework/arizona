@@ -111,10 +111,16 @@ render_list_test(Config) when is_list(Config) ->
     MockView = create_mock_view(MockStatefulModule, #{id => ~"list"}),
 
     % Test the parse transform by using render_list in template
-    CallbackArg = erl_syntax:variable('Item'),
-    Template = arizona_template:from_string(?MODULE, ?LINE, ~""""
-    <li>{Item}</li>
-    """", CallbackArg, #{}),
+    TemplateAST = arizona_parse_transform:extract_list_function_body(
+        ?MODULE, ?LINE, merl:quote(~""""
+        fun(Item) ->
+            arizona_template:from_string(~"""
+            <li>{Item}</li>
+            """)
+        end
+        """"), []
+    ),
+    {value, Template, #{}} = erl_eval:expr(erl_syntax:revert(TemplateAST), #{}),
 
     List = [~"first", ~"second", ~"third"],
     {Html, _UpdatedView} = arizona_renderer:render_list(Template, List, ~"list", MockView),
@@ -135,7 +141,7 @@ render_dynamic_test(Config) when is_list(Config) ->
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
     {DynamicRender, _UpdatedView} = arizona_renderer:render_dynamic(
-        DynamicSequence, Dynamic, render, ~"test_parent_id", MockView
+        DynamicSequence, Dynamic, ~"test_parent_id", MockView
     ),
     ?assertEqual([], DynamicRender).
 

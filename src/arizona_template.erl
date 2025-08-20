@@ -7,7 +7,7 @@
 
 -export([from_string/1]).
 -export([is_template/1]).
--export([from_string/5]).
+-export([from_string/4]).
 -export([get_static/1]).
 -export([get_dynamic/1]).
 -export([get_dynamic_sequence/1]).
@@ -27,7 +27,7 @@
 %% --------------------------------------------------------------------
 
 -ignore_xref([from_string/1]).
--ignore_xref([from_string/5]).
+-ignore_xref([from_string/4]).
 -ignore_xref([get_dynamic_anno/1]).
 -ignore_xref([get_fingerprint/1]).
 -ignore_xref([get_binding/2]).
@@ -58,7 +58,7 @@
 
 -record(template, {
     static :: static(),
-    dynamic :: dynamic(),
+    dynamic :: dynamic() | fun((CallbackArg :: term()) -> dynamic()),
     dynamic_sequence :: dynamic_sequence(),
     dynamic_anno :: dynamic_anno(),
     fingerprint :: fingerprint()
@@ -88,24 +88,20 @@
     String :: binary(),
     Template :: template().
 from_string(String) ->
-    % 'ok' is the callback arg for template rendering
-    CallbackArg = erl_syntax:atom(ok),
+    from_string(erlang, 0, String, #{}).
 
-    from_string(erlang, 0, String, CallbackArg, #{}).
-
--spec from_string(Module, Line, String, CallbackArg, Bindings) -> Template when
+-spec from_string(Module, Line, String, Bindings) -> Template when
     Module :: module(),
     Line :: arizona_token:line(),
     String :: string() | binary(),
-    CallbackArg :: erl_syntax:syntaxTree(),
     Bindings :: arizona_binder:map(),
     Template :: template().
-from_string(Module, Line, String, CallbackArg, Bindings) when is_atom(Module), is_map(Bindings) ->
+from_string(Module, Line, String, Bindings) when is_atom(Module), is_map(Bindings) ->
     % Scan template content into tokens
     Tokens = arizona_scanner:scan_string(Line, String),
 
     % Parse tokens into AST
-    AST = arizona_parser:parse_tokens(Tokens, CallbackArg, []),
+    AST = arizona_parser:parse_tokens(Tokens, []),
 
     % Evaluate AST to get template record
     erl_eval:expr(
@@ -228,11 +224,11 @@ render_slot(view) ->
 render_slot(#template{} = Template) ->
     fun
         (render, ParentId, _ElementIndex, View) ->
-            arizona_renderer:render_template(Template, ok, ParentId, View);
+            arizona_renderer:render_template(Template, ParentId, View);
         (diff, ParentId, ElementIndex, View) ->
-            arizona_differ:diff_template(Template, ok, ParentId, ElementIndex, View);
+            arizona_differ:diff_template(Template, ParentId, ElementIndex, View);
         (hierarchical, ParentId, ElementIndex, View) ->
-            arizona_hierarchical:hierarchical_template(Template, ok, ParentId, ElementIndex, View)
+            arizona_hierarchical:hierarchical_template(Template, ParentId, ElementIndex, View)
     end;
 render_slot(Term) ->
     arizona_html:to_html(Term).

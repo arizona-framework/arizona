@@ -4,7 +4,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([parse_tokens/3]).
+-export([parse_tokens/2]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -29,14 +29,13 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
--spec parse_tokens(Tokens, CallbackArg, CompileOpts) -> ParsedTemplate when
+-spec parse_tokens(Tokens, CompileOpts) -> ParsedTemplate when
     Tokens :: [arizona_token:token()],
-    CallbackArg :: erl_syntax:syntaxTree(),
     CompileOpts :: [compile:option()],
     ParsedTemplate :: parsed_template().
-parse_tokens(Tokens, CallbackArg, CompileOpts) ->
+parse_tokens(Tokens, CompileOpts) ->
     {StaticParts, DynamicElements} = separate_static_dynamic(Tokens),
-    create_template_ast(StaticParts, DynamicElements, CallbackArg, CompileOpts).
+    create_template_ast(StaticParts, DynamicElements, CompileOpts).
 
 -spec format_error(Reason, StackTrace) -> ErrorMap when
     Reason :: arizona_create_dynamic_callback_failed | term(),
@@ -59,23 +58,22 @@ format_error(arizona_create_dynamic_callback_failed, [{_M, _F, _As, Info} | _]) 
 %% --------------------------------------------------------------------
 
 %% Create AST that builds arizona_template:template() record
--spec create_template_ast(StaticParts, DynamicElements, CallbackArg, CompileOpts) -> Ast when
+-spec create_template_ast(StaticParts, DynamicElements, CompileOpts) -> Ast when
     StaticParts :: [binary()],
     DynamicElements :: [{pos_integer(), binary()}],
-    CallbackArg :: erl_syntax:syntaxTree(),
     CompileOpts :: [compile:option()],
     Ast :: erl_syntax:syntaxTree().
-create_template_ast(StaticParts, DynamicElements, CallbackArg, CompileOpts) ->
+create_template_ast(StaticParts, DynamicElements, CompileOpts) ->
     % Create static list AST
     StaticListAST = create_static_list_ast(StaticParts),
 
     % Convert dynamic elements to callback functions and create tuple AST
     {DynamicAST, DynamicAnnoAST, DynamicSequenceAST} = create_dynamic_ast(
-        DynamicElements, CallbackArg, CompileOpts
+        DynamicElements, CompileOpts
     ),
 
     % Generate fingerprint based on template structure and callback context
-    FingerprintData = {StaticParts, DynamicElements, erl_syntax:revert(CallbackArg)},
+    FingerprintData = {StaticParts, DynamicElements},
     Fingerprint = erlang:phash2(FingerprintData),
     FingerprintAST = erl_syntax:integer(Fingerprint),
 
@@ -106,21 +104,20 @@ create_static_list_ast(StaticParts) ->
     erl_syntax:list(StaticElements).
 
 %% Create AST for dynamic elements (tuple, annotations, sequence)
--spec create_dynamic_ast(DynamicElements, CallbackArg, CompileOpts) -> Result when
+-spec create_dynamic_ast(DynamicElements, CompileOpts) -> Result when
     DynamicElements :: [{pos_integer(), binary()}],
-    CallbackArg :: erl_syntax:syntaxTree(),
     CompileOpts :: [compile:option()],
     Result :: {erl_syntax:syntaxTree(), erl_syntax:syntaxTree(), erl_syntax:syntaxTree()}.
-create_dynamic_ast([], _CallbackArg, _CompileOpts) ->
+create_dynamic_ast([], _CompileOpts) ->
     % Empty case: empty tuple, empty tuple, empty sequence
     EmptyTuple = erl_syntax:tuple([]),
     EmptySequence = erl_syntax:list([]),
     {EmptyTuple, EmptyTuple, EmptySequence};
-create_dynamic_ast(DynamicElements, CallbackArg, CompileOpts) ->
+create_dynamic_ast(DynamicElements, CompileOpts) ->
     % Create callback functions and extract line numbers
     {LineNumbers, CallbackFuns} = lists:unzip([
         try
-            {Line, create_dynamic_callback_ast(CallbackArg, ExprText, CompileOpts)}
+            {Line, create_dynamic_callback_ast(ExprText, CompileOpts)}
         catch
             Class:Reason:StackTrace ->
                 error(
@@ -143,12 +140,11 @@ create_dynamic_ast(DynamicElements, CallbackArg, CompileOpts) ->
     {Dynamic, DynamicAnno, DynamicSequence}.
 
 %% Create callback function AST for dynamic element
--spec create_dynamic_callback_ast(CallbackArg, ExprText, CompileOpts) -> Ast when
-    CallbackArg :: erl_syntax:syntaxTree(),
+-spec create_dynamic_callback_ast(ExprText, CompileOpts) -> Ast when
     ExprText :: binary(),
     CompileOpts :: [compile:option()],
     Ast :: erl_syntax:syntaxTree().
-create_dynamic_callback_ast(CallbackArg, ExprText, CompileOpts) ->
+create_dynamic_callback_ast(ExprText, CompileOpts) ->
     Forms =
         case merl:quote(ExprText) of
             F when is_list(F) -> F;
@@ -167,9 +163,9 @@ create_dynamic_callback_ast(CallbackArg, ExprText, CompileOpts) ->
                 RecursionProtectedOpts = [{in_dynamic_callback, true} | CompileOpts],
 
                 % Transform the expression to handle nested arizona_template calls
-                arizona_parse_transform:parse_transform(Forms, CallbackArg, RecursionProtectedOpts)
+                arizona_parse_transform:parse_transform(Forms, RecursionProtectedOpts)
         end,
-    erl_syntax:fun_expr([erl_syntax:clause([CallbackArg], none, FinalExpr)]).
+    erl_syntax:fun_expr([erl_syntax:clause([], none, FinalExpr)]).
 
 %% Separate static and dynamic parts
 separate_static_dynamic(Tokens) ->

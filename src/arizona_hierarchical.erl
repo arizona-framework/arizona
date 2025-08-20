@@ -8,7 +8,7 @@
 -export([hierarchical_stateful/5]).
 -export([hierarchical_stateless/6]).
 -export([hierarchical_list/5]).
--export([hierarchical_template/5]).
+-export([hierarchical_template/4]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -88,7 +88,7 @@ when
     View1 :: arizona_view:view().
 hierarchical_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
-    hierarchical_template(Template, ok, ParentId, ElementIndex, View).
+    hierarchical_template(Template, ParentId, ElementIndex, View).
 
 -spec hierarchical_list(Template, List, ParentId, ElementIndex, View) -> {Struct, View1} when
     Template :: arizona_template:template(),
@@ -104,10 +104,10 @@ hierarchical_list(Template, List, ParentId, ElementIndex, View) ->
     FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
 
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
-    Dynamic = arizona_template:get_dynamic(Template),
+    DynamicCallback = arizona_template:get_dynamic(Template),
     DynamicRender = [
         render_list_hierarchical(
-            DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View
+            DynamicSequence, DynamicCallback, CallbackArg, ParentId, ElementIndex, View
         )
      || CallbackArg <- List
     ],
@@ -118,17 +118,14 @@ hierarchical_list(Template, List, ParentId, ElementIndex, View) ->
     },
     {Struct, FingerprintView}.
 
--spec hierarchical_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
-    {Struct, View1}
-when
+-spec hierarchical_template(Template, ParentId, ElementIndex, View) -> {Struct, View1} when
     Template :: arizona_template:template(),
-    CallbackArg :: dynamic(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
     Struct :: stateless_struct(),
     View1 :: arizona_view:view().
-hierarchical_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
+hierarchical_template(Template, ParentId, ElementIndex, View) ->
     % Store the fingerprint for future comparisons
     Fingerprint = arizona_template:get_fingerprint(Template),
     FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
@@ -136,7 +133,7 @@ hierarchical_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
     {DynamicRender, DynamicView} = hierarchical_dynamic(
-        DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, FingerprintView
+        DynamicSequence, Dynamic, ParentId, ElementIndex, FingerprintView
     ),
     Struct = #{
         type => stateless,
@@ -155,7 +152,7 @@ track_hierarchical_stateful(Id, Template, View) ->
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
     {DynamicRender, DynamicView} = hierarchical_dynamic(
-        DynamicSequence, Dynamic, ok, Id, undefined, View
+        DynamicSequence, Dynamic, Id, undefined, View
     ),
     HierarchicalData = #{
         static => arizona_template:get_static(Template),
@@ -168,27 +165,24 @@ track_hierarchical_stateful(Id, Template, View) ->
     },
     {Struct, DynamicView}.
 
--spec hierarchical_dynamic(Sequence, Dynamic, CallbackArg, ParentId, ElementIndex, View) ->
-    {Render, View1}
-when
+-spec hierarchical_dynamic(Sequence, Dynamic, ParentId, ElementIndex, View) -> {Render, View1} when
     Sequence :: arizona_template:dynamic_sequence(),
     Dynamic :: arizona_template:dynamic(),
-    CallbackArg :: dynamic(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index() | undefined,
     View :: arizona_view:view(),
     Render :: dynamic(),
     View1 :: arizona_view:view().
-hierarchical_dynamic([], _Dynamic, _CallbackArg, _ParentId, _ElementIndex, View) ->
+hierarchical_dynamic([], _Dynamic, _ParentId, _ElementIndex, View) ->
     {[], View};
 hierarchical_dynamic(
-    [DynamicElementIndex | T], Dynamic, CallbackArg, ParentId, ElementIndex, View
+    [DynamicElementIndex | T], Dynamic, ParentId, ElementIndex, View
 ) ->
     DynamicCallback = element(DynamicElementIndex, Dynamic),
     ok = maybe_set_tracker_index(ElementIndex, DynamicElementIndex),
-    CallbackResult = DynamicCallback(CallbackArg),
+    CallbackResult = DynamicCallback(),
     process_hierarchical_callback(
-        CallbackResult, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
+        CallbackResult, DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View
     ).
 
 %% Helper function to set tracker index when needed
@@ -199,47 +193,40 @@ maybe_set_tracker_index(_ElementIndex, _DynamicElementIndex) ->
     ok.
 
 %% Helper function to render list hierarchical elements
-render_list_hierarchical(DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View) ->
+render_list_hierarchical(
+    DynamicSequence, DynamicCallback, CallbackArg, ParentId, ElementIndex, View
+) ->
+    Dynamic = DynamicCallback(CallbackArg),
     {DynamicHierarchical, _UpdatedView} = hierarchical_dynamic(
-        DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View
+        DynamicSequence, Dynamic, ParentId, ElementIndex, View
     ),
     DynamicHierarchical.
 
 %% Helper function to process hierarchical callback results
 process_hierarchical_callback(
-    Callback, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
+    Callback, DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View
 ) when is_function(Callback, 4) ->
     {Struct, CallbackView} = Callback(hierarchical, ParentId, DynamicElementIndex, View),
-    {RestHtml, FinalView} = hierarchical_dynamic(
-        T, Dynamic, CallbackArg, ParentId, ElementIndex, CallbackView
-    ),
+    {RestHtml, FinalView} = hierarchical_dynamic(T, Dynamic, ParentId, ElementIndex, CallbackView),
     {[Struct | RestHtml], FinalView};
 process_hierarchical_callback(
-    Result, _DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
+    Result, _DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View
 ) ->
     case arizona_template:is_template(Result) of
         true ->
-            process_hierarchical_template(
-                Result, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
-            );
+            process_hierarchical_template(Result, T, Dynamic, ParentId, ElementIndex, View);
         false ->
-            process_hierarchical_html(
-                Result, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
-            )
+            process_hierarchical_html(Result, T, Dynamic, ParentId, ElementIndex, View)
     end.
 
 %% Helper function to process hierarchical template results
-process_hierarchical_template(Result, T, Dynamic, CallbackArg, ParentId, ElementIndex, View) ->
-    {Struct, TemplateView} = hierarchical_template(Result, ok, ParentId, ElementIndex, View),
-    {RestHtml, FinalView} = hierarchical_dynamic(
-        T, Dynamic, CallbackArg, ParentId, ElementIndex, TemplateView
-    ),
+process_hierarchical_template(Result, T, Dynamic, ParentId, ElementIndex, View) ->
+    {Struct, TemplateView} = hierarchical_template(Result, ParentId, ElementIndex, View),
+    {RestHtml, FinalView} = hierarchical_dynamic(T, Dynamic, ParentId, ElementIndex, TemplateView),
     {[Struct | RestHtml], FinalView}.
 
 %% Helper function to process hierarchical HTML results
-process_hierarchical_html(Result, T, Dynamic, CallbackArg, ParentId, ElementIndex, View) ->
+process_hierarchical_html(Result, T, Dynamic, ParentId, ElementIndex, View) ->
     Html = arizona_html:to_html(Result),
-    {RestHtml, FinalView} = hierarchical_dynamic(
-        T, Dynamic, CallbackArg, ParentId, ElementIndex, View
-    ),
+    {RestHtml, FinalView} = hierarchical_dynamic(T, Dynamic, ParentId, ElementIndex, View),
     {[Html | RestHtml], FinalView}.

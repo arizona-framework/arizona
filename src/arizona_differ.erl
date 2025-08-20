@@ -8,7 +8,7 @@
 -export([diff_root_stateful/3]).
 -export([diff_stateless/6]).
 -export([diff_list/5]).
--export([diff_template/5]).
+-export([diff_template/4]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -101,7 +101,7 @@ when
     View1 :: arizona_view:view().
 diff_stateless(Module, Function, Bindings, ParentId, ElementIndex, View) ->
     Template = arizona_stateless:call_render_callback(Module, Function, Bindings),
-    diff_template(Template, ok, ParentId, ElementIndex, View).
+    diff_template(Template, ParentId, ElementIndex, View).
 
 -spec diff_list(Template, List, ParentId, ElementIndex, View) -> {Result, View1} when
     Template :: arizona_template:template(),
@@ -116,9 +116,9 @@ diff_list(Template, List, ParentId, ElementIndex, View) ->
     case arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View) of
         true ->
             DynamicSequence = arizona_template:get_dynamic_sequence(Template),
-            Dynamic = arizona_template:get_dynamic(Template),
+            DynamicCallback = arizona_template:get_dynamic(Template),
             Diff = [
-                render_list_dynamic(DynamicSequence, Dynamic, CallbackArg, ParentId, View)
+                render_list_dynamic(DynamicSequence, DynamicCallback, CallbackArg, ParentId, View)
              || CallbackArg <- List
             ],
             {Diff, View};
@@ -126,24 +126,21 @@ diff_list(Template, List, ParentId, ElementIndex, View) ->
             arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
     end.
 
--spec diff_template(Template, CallbackArg, ParentId, ElementIndex, View) -> {Result, View1} when
+-spec diff_template(Template, ParentId, ElementIndex, View) -> {Result, View1} when
     Template :: arizona_template:template(),
-    CallbackArg :: dynamic(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
     Result :: nodiff | diff() | arizona_hierarchical:stateless_struct(),
     View1 :: arizona_view:view().
-diff_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
+diff_template(Template, ParentId, ElementIndex, View) ->
     Fingerprint = arizona_template:get_fingerprint(Template),
     case arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View) of
         true ->
             DynamicSequence = arizona_template:get_dynamic_sequence(Template),
             Dynamic = arizona_template:get_dynamic(Template),
             case
-                process_affected_elements(
-                    DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View
-                )
+                process_affected_elements(DynamicSequence, Dynamic, ParentId, ElementIndex, View)
             of
                 {[], RenderView} ->
                     {nodiff, RenderView};
@@ -151,9 +148,7 @@ diff_template(Template, CallbackArg, ParentId, ElementIndex, View) ->
                     {Diff, RenderView}
             end;
         false ->
-            arizona_hierarchical:hierarchical_template(
-                Template, CallbackArg, ParentId, ElementIndex, View
-            )
+            arizona_hierarchical:hierarchical_template(Template, ParentId, ElementIndex, View)
     end.
 
 %% --------------------------------------------------------------------
@@ -176,7 +171,7 @@ track_diff_stateful(Id, Template, StatefulState, View) ->
             ),
             AffectedElements = get_affected_elements(ChangedBindings, StatefulDependencies),
             {Diff, DiffView} = generate_element_diff(
-                AffectedElements, Template, ok, Id, undefined, View
+                AffectedElements, Template, Id, undefined, View
             ),
             NoChangesStatefulState = arizona_stateful:set_changed_bindings(
                 arizona_binder:new(#{}), StatefulState
@@ -194,28 +189,26 @@ get_affected_elements(ChangedBindings, StatefulDependencies) ->
     lists:usort(lists:flatten(AffectedIndexLists)).
 
 %% Generate diff for affected elements
-generate_element_diff(DynamicSequence, Template, CallbackArg, ParentId, ElementIndex, View) ->
+generate_element_diff(DynamicSequence, Template, ParentId, ElementIndex, View) ->
     case DynamicSequence of
         [] ->
             {[], View};
         _ ->
             Dynamic = arizona_template:get_dynamic(Template),
-            process_affected_elements(
-                DynamicSequence, Dynamic, CallbackArg, ParentId, ElementIndex, View
-            )
+            process_affected_elements(DynamicSequence, Dynamic, ParentId, ElementIndex, View)
     end.
 
 %% Process affected elements to create diff changes
-process_affected_elements([], _Dynamic, _CallbackArg, _ParentId, _ElementIndex, View) ->
+process_affected_elements([], _Dynamic, _ParentId, _ElementIndex, View) ->
     {[], View};
 process_affected_elements(
-    [DynamicElementIndex | T], Dynamic, CallbackArg, ParentId, ElementIndex, View
+    [DynamicElementIndex | T], Dynamic, ParentId, ElementIndex, View
 ) ->
     DynamicCallback = element(DynamicElementIndex, Dynamic),
     ok = maybe_set_tracker_index(ElementIndex, DynamicElementIndex),
-    CallbackResult = DynamicCallback(CallbackArg),
+    CallbackResult = DynamicCallback(),
     process_callback_result(
-        CallbackResult, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
+        CallbackResult, DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View
     ).
 
 %% Helper function to set tracker index when needed
@@ -227,53 +220,48 @@ maybe_set_tracker_index(_ElementIndex, _DynamicElementIndex) ->
 
 %% Helper function to process callback results
 process_callback_result(
-    Callback, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
+    Callback, DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View
 ) when is_function(Callback, 4) ->
     {Diff, CallbackView} = Callback(diff, ParentId, DynamicElementIndex, View),
     {RestChanges, FinalView} = process_affected_elements(
-        T, Dynamic, CallbackArg, ParentId, ElementIndex, CallbackView
+        T, Dynamic, ParentId, ElementIndex, CallbackView
     ),
     process_diff_result(Diff, DynamicElementIndex, RestChanges, FinalView);
-process_callback_result(
-    Result, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
-) ->
+process_callback_result(Result, DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View) ->
     case arizona_template:is_template(Result) of
         true ->
             process_template_result(
-                Result, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
+                Result, DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View
             );
         false ->
             process_html_result(
-                Result, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
+                Result, DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View
             )
     end.
 
 %% Helper function to process template results
-process_template_result(
-    Result, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
-) ->
-    {Diff, TemplateView} = diff_template(Result, ok, ParentId, ElementIndex, View),
+process_template_result(Result, DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View) ->
+    {Diff, TemplateView} = diff_template(Result, ParentId, ElementIndex, View),
     {RestChanges, FinalView} = process_affected_elements(
-        T, Dynamic, CallbackArg, ParentId, ElementIndex, TemplateView
+        T, Dynamic, ParentId, ElementIndex, TemplateView
     ),
     process_diff_result(Diff, DynamicElementIndex, RestChanges, FinalView).
 
 %% Helper function to process HTML results
-process_html_result(
-    Result, DynamicElementIndex, T, Dynamic, CallbackArg, ParentId, ElementIndex, View
-) ->
+process_html_result(Result, DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View) ->
     Html = arizona_html:to_html(Result),
     ElementChange = {DynamicElementIndex, Html},
     CleanView = arizona_view:remove_fingerprint(ParentId, DynamicElementIndex, View),
     {RestChanges, FinalView} = process_affected_elements(
-        T, Dynamic, CallbackArg, ParentId, ElementIndex, CleanView
+        T, Dynamic, ParentId, ElementIndex, CleanView
     ),
     {[ElementChange | RestChanges], FinalView}.
 
 %% Helper function to render list dynamic elements
-render_list_dynamic(DynamicSequence, Dynamic, CallbackArg, ParentId, View) ->
+render_list_dynamic(DynamicSequence, DynamicCallback, CallbackArg, ParentId, View) ->
+    Dynamic = DynamicCallback(CallbackArg),
     {Html, _UpdatedView} = arizona_renderer:render_dynamic(
-        DynamicSequence, Dynamic, CallbackArg, ParentId, View
+        DynamicSequence, Dynamic, ParentId, View
     ),
     Html.
 
