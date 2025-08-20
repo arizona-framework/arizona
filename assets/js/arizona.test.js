@@ -86,7 +86,9 @@ describe('ArizonaClient', () => {
       client.connect();
 
       // Give the mock worker time to process and respond
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => {
+        return setTimeout(resolve, 50);
+      });
 
       expect(client.connected).toBe(true);
     });
@@ -125,6 +127,36 @@ describe('ArizonaClient', () => {
       });
 
       expect(eventMessage.data.params).toEqual({});
+    });
+
+    test('sends event to specific stateful component when stateful_id provided', () => {
+      client.sendEvent('increment', { amount: 1 }, 'counter_component');
+
+      const messages = client.worker.getAllPostedMessages();
+      const eventMessage = messages.find((msg) => {
+        return msg.type === 'send';
+      });
+
+      expect(eventMessage).toEqual({
+        type: 'send',
+        data: {
+          type: 'event',
+          event: 'increment',
+          params: { amount: 1 },
+          stateful_id: 'counter_component',
+        },
+      });
+    });
+
+    test('does not include stateful_id when not provided', () => {
+      client.sendEvent('click', { target: 'button1' });
+
+      const messages = client.worker.getAllPostedMessages();
+      const eventMessage = messages.find((msg) => {
+        return msg.type === 'send';
+      });
+
+      expect(eventMessage.data).not.toHaveProperty('stateful_id');
     });
 
     test('does not send when not connected', () => {
