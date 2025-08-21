@@ -40,7 +40,7 @@ handle_live_request(ViewModule, CowboyRequest, State) ->
         {ok, CowboyRequest1, State}
     catch
         Error:Reason:Stacktrace ->
-            ErrorMsg = io_lib:format("LiveView Error: ~p:~p~nStacktrace: ~p", [
+            ErrorMsg = io_lib:format("Error: ~p:~p~nStacktrace: ~p", [
                 Error, Reason, Stacktrace
             ]),
             CowboyRequest2 = cowboy_req:reply(500, #{}, iolist_to_binary(ErrorMsg), CowboyRequest),
