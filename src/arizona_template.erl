@@ -210,7 +210,7 @@ render_stateless(Module, Fun, Bindings) ->
     end.
 
 -spec render_slot(Slot) -> Callback when
-    Slot :: view | tuple(),
+    Slot :: view | template() | arizona_html:value(),
     Callback :: render_callback() | arizona_html:html().
 render_slot(view) ->
     fun
