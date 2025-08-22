@@ -209,46 +209,23 @@ export const validateDiffMessage = (diffMessage) => {
     throw new Error('Diff message changes must be an array');
   }
 
-  // Validate each component change
-  diffMessage.changes.forEach((componentChange, index) => {
-    if (!Array.isArray(componentChange)) {
-      throw new Error(`Component change ${index} must be an array`);
+  // Validate each element change
+  diffMessage.changes.forEach((elementChange, index) => {
+    if (!Array.isArray(elementChange)) {
+      throw new Error(`Element change ${index} must be an array`);
     }
 
-    if (componentChange.length !== 2) {
-      throw new Error(`Component change ${index} must have exactly 2 elements`);
+    if (elementChange.length !== 2) {
+      throw new Error(`Element change ${index} must have exactly 2 elements`);
     }
 
-    const [componentId, elementChanges] = componentChange;
+    const [elementIndex, newValue] = elementChange;
 
-    if (typeof componentId !== 'string') {
-      throw new Error(`Component ID in change ${index} must be a string`);
+    if (typeof elementIndex !== 'number') {
+      throw new Error(`Element index in change ${index} must be a number`);
     }
 
-    if (!Array.isArray(elementChanges)) {
-      throw new Error(`Element changes in change ${index} must be an array`);
-    }
-
-    // Validate each element change
-    elementChanges.forEach((elementChange, elemIndex) => {
-      if (!Array.isArray(elementChange)) {
-        throw new Error(`Element change ${elemIndex} in component ${index} must be an array`);
-      }
-
-      if (elementChange.length !== 2) {
-        throw new Error(
-          `Element change ${elemIndex} in component ${index} must have exactly 2 elements`
-        );
-      }
-
-      const [elementIndex, newValue] = elementChange;
-
-      if (typeof elementIndex !== 'number') {
-        throw new Error(
-          `Element index in change ${elemIndex} of component ${index} must be a number`
-        );
-      }
-    });
+    // newValue can be string, number, etc. - no strict validation needed
   });
 };
 

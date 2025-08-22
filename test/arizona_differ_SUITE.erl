@@ -3,8 +3,35 @@
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).
 
-%% Suppress dialyzer warnings for validation tests that test function arities
--dialyzer({nowarn_function, test_diff_stateless_missing_vars_indexes/1}).
+%% --------------------------------------------------------------------
+%% Macros
+%% --------------------------------------------------------------------
+
+-define(RAND_MODULE_NAME,
+    binary_to_atom(<<
+        ?MODULE_STRING,
+        "_",
+        (atom_to_binary(?FUNCTION_NAME))/binary,
+        "_",
+        (integer_to_binary(?LINE))/binary,
+        "_",
+        (integer_to_binary(erlang:unique_integer([positive])))/binary
+    >>)
+).
+
+%% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+-elvis([
+    {elvis_style, no_macros, #{
+        allow => [
+            'RAND_MODULE_NAME',
+            'assertEqual',
+            'assertMatch'
+        ]
+    }}
+]).
 
 %% --------------------------------------------------------------------
 %% Behaviour (ct_suite) callbacks
@@ -12,1398 +39,429 @@
 
 all() ->
     [
-        {group, socket_changes},
-        {group, diff_stateful},
-        {group, diff_stateless},
-        {group, diff_list},
-        {group, diff_optimization},
-        {group, error_handling},
-        {group, edge_cases}
+        {group, diff_tests}
     ].
 
 groups() ->
     [
-        {socket_changes, [parallel], [
-            socket_changes_accumulation,
-            socket_changes_merging,
-            socket_changes_nested_structure,
-            socket_changes_clear
-        ]},
-        {diff_stateful, [parallel], [
-            diff_stateful_no_changes,
-            diff_stateful_with_changes,
-            diff_stateful_changes_no_affected_elements,
-            diff_mode_vs_render_mode
-        ]},
-        {diff_stateless, [parallel], [
-            diff_stateless_component_changes,
-            diff_stateless_no_optimization,
-            diff_stateless_unified_cascade_dependency,
-            diff_stateless_unified_vars_indexes,
-            diff_stateless_unified_no_changes
-        ]},
-        {diff_list, [parallel], [
-            diff_list_basic_change,
-            diff_list_item_addition,
-            diff_list_item_removal
-        ]},
-        {diff_optimization, [parallel], [
-            get_affected_elements_basic,
-            get_affected_elements_multiple_vars
-        ]},
-        {complex_hierarchical, [parallel], [
-            test_complex_hierarchical_change_detection,
-            test_reproduce_websocket_bug_empty_vars_indexes,
-            test_enhanced_parse_transform_missing_todos_mapping
-        ]},
-        {error_handling, [parallel], [
-            test_binding_not_found_error,
-            test_template_render_error,
-            test_diff_stateless_missing_vars_indexes
-        ]},
-        {edge_cases, [parallel], [
-            test_skip_element_scenario,
-            test_socket_with_html_no_changes,
-            test_diff_stateful_empty_elems,
-            test_diff_stateful_invalid_element_index,
-            test_diff_stateless_empty_element_changes
+        {diff_tests, [parallel], [
+            diff_view_without_changes,
+            diff_view_with_changes,
+            diff_stateful_fingerprint_match_with_changes,
+            diff_stateful_fingerprint_match_no_changes,
+            diff_stateful_fingerprint_mismatch,
+            diff_root_stateful_with_changes,
+            diff_stateless_fingerprint_match,
+            diff_stateless_fingerprint_mismatch,
+            diff_list_fingerprint_match,
+            diff_list_fingerprint_mismatch
         ]}
     ].
 
 %% --------------------------------------------------------------------
-%% Socket changes tests
+%% Diff tests
 %% --------------------------------------------------------------------
 
-socket_changes_accumulation(Config) when is_list(Config) ->
-    Socket = arizona_socket:new(#{mode => diff}),
-
-    % Add first change
-    Change1 = [{root, [{1, ~"value1"}]}],
-    Socket1 = arizona_socket:append_changes(Change1, Socket),
-
-    % Add second change
-    Change2 = [{~"other_component", [{2, ~"value2"}]}],
-    Socket2 = arizona_socket:append_changes(Change2, Socket1),
-
-    % Get accumulated changes
-    AllChanges = arizona_socket:get_changes(Socket2),
-
-    % Changes are flattened and merged into a single structure
-    ExpectedChanges = [{root, [{1, ~"value1"}]}, {~"other_component", [{2, ~"value2"}]}],
-    ?assertEqual(ExpectedChanges, AllChanges).
-
-socket_changes_merging(Config) when is_list(Config) ->
-    Socket = arizona_socket:new(#{mode => diff}),
-
-    % Add changes to the same component at different elements
-    Change1 = [{root, [{1, ~"value1"}]}],
-    Socket1 = arizona_socket:append_changes(Change1, Socket),
-
-    Change2 = [{root, [{2, ~"value2"}]}],
-    Socket2 = arizona_socket:append_changes(Change2, Socket1),
-
-    % Changes should be merged under the same component
-    AllChanges = arizona_socket:get_changes(Socket2),
-
-    % The merge function combines element changes for the same component
-    % Order may vary due to how merge_element_changes works
-    ?assertMatch([{root, _ElementChanges}], AllChanges),
-    [{root, ElementChanges}] = AllChanges,
-
-    % Should contain both element changes (order may vary)
-    ?assertEqual(2, length(ElementChanges)),
-    ?assert(lists:member({1, ~"value1"}, ElementChanges)),
-    ?assert(lists:member({2, ~"value2"}, ElementChanges)).
-
-socket_changes_nested_structure(Config) when is_list(Config) ->
-    Socket = arizona_socket:new(#{mode => diff}),
-
-    % Create a nested change structure like [{root, [{3, [{counter, [{2, 42}]}]}]}]
-    NestedChange = [{root, [{3, [{~"counter", [{2, 42}]}]}]}],
-    Socket1 = arizona_socket:append_changes(NestedChange, Socket),
-
-    % Add another change to the same nested structure
-    AnotherNestedChange = [{root, [{3, [{~"counter", [{4, ~"new_value"}]}]}]}],
-    Socket2 = arizona_socket:append_changes(AnotherNestedChange, Socket1),
-
-    % Verify the nested structure is maintained
-    AllChanges = arizona_socket:get_changes(Socket2),
-    ?assert(length(AllChanges) >= 1).
-
-socket_changes_clear(Config) when is_list(Config) ->
-    Socket = arizona_socket:new(#{mode => diff}),
-    Change = [{root, [{1, ~"value"}]}],
-    Socket1 = arizona_socket:append_changes(Change, Socket),
-
-    % Test clearing changes
-    ClearedSocket = arizona_socket:clear_changes(Socket1),
-    ?assertEqual([], arizona_socket:get_changes(ClearedSocket)).
-
-%% --------------------------------------------------------------------
-%% Diff stateful tests
-%% --------------------------------------------------------------------
-
-diff_stateful_no_changes(Config) when is_list(Config) ->
-    % Create a stateful component with no changed bindings
-    StatefulState = arizona_stateful:new(~"test_component", test_module, #{
-        name => ~"John", age => 30
-    }),
-
-    % Create template data for testing
-    TemplateData = #{
-        elems_order => [0, 1, 2],
-        elems => #{
-            0 => {static, 1, ~"<div>"},
-            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(name, Socket) end},
-            2 => {static, 3, ~"</div>"}
-        },
-        vars_indexes => #{
-            name => [1]
-        }
-    },
-
-    % Create socket in diff mode
-    Socket = arizona_socket:new(#{mode => diff}),
-
-    % Run diff - should return unchanged socket since no changed_bindings
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, StatefulState, Socket),
-
-    % Verify no changes were accumulated
-    Changes = arizona_socket:get_changes(ResultSocket),
-    ?assertEqual([], Changes).
-
-diff_stateful_with_changes(Config) when is_list(Config) ->
-    % Create stateful component with some initial state
-    InitialState = arizona_stateful:new(root, test_module, #{
-        name => ~"John", counter => 0
-    }),
-
-    % Simulate binding changes (this would normally happen through put_binding)
-    ChangedState = arizona_stateful:put_binding(counter, 42, InitialState),
-
-    % Create template data for testing
-    TemplateData = #{
-        elems_order => [0, 1, 2],
-        elems => #{
-            0 => {static, 1, ~"<div>Count: "},
-            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(counter, Socket) end},
-            2 => {static, 3, ~"</div>"}
-        },
-        vars_indexes => #{
-            counter => [1]
-        }
-    },
-
-    % Create socket in diff mode with the stateful state
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Run diff
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-
-    % Verify changes were accumulated
-    Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [{root, [{1, ~"42"}]}],
-    ?assertEqual(ExpectedChanges, Changes).
-
-diff_stateful_changes_no_affected_elements(Config) when is_list(Config) ->
-    % Create stateful component with initial state
-    InitialState = arizona_stateful:new(~"test_component", test_module, #{
-        name => ~"John", counter => 0
-    }),
-
-    % Change a binding that doesn't affect any template elements
-    % The template only has vars_indexes for "counter" and "name" but we change "unused_var"
-    ChangedState = arizona_stateful:put_binding(unused_var, ~"some_value", InitialState),
-
-    % Create template data with only "counter" and "name" in vars_indexes
-    TemplateData = #{
-        elems_order => [0, 1, 2],
-        elems => #{
-            0 => {static, 1, ~"<div>"},
-            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(counter, Socket) end},
-            2 => {static, 3, ~"</div>"}
-        },
-        vars_indexes => #{
-            counter => [1],
-            % Not used in this template but listed
-            name => []
-        }
-    },
-
-    % Create socket in diff mode
-    Socket = arizona_socket:new(#{mode => diff}),
-
-    % Run diff - should return unchanged socket since no elements are affected
-    % This tests the case where changed_bindings exists but AffectedElements is empty
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, Socket),
-
-    % Verify no changes were accumulated (line 92 coverage)
-    Changes = arizona_socket:get_changes(ResultSocket),
-    ?assertEqual([], Changes).
-
-diff_mode_vs_render_mode(Config) when is_list(Config) ->
-    StatefulState = arizona_stateful:new(root, test_module, #{counter => 0}),
-    ChangedState = arizona_stateful:put_binding(counter, 42, StatefulState),
-
-    % Create template data for testing
-    TemplateData = #{
-        elems_order => [0, 1, 2],
-        elems => #{
-            0 => {static, 1, ~"<div>Count: "},
-            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(counter, Socket) end},
-            2 => {static, 3, ~"</div>"}
-        },
-        vars_indexes => #{
-            counter => [1]
-        }
-    },
-
-    % Test render mode - differ should still generate diffs (mode check moved to arizona_html)
-    RenderSocket = arizona_socket:new(#{mode => render}),
-    RenderSocketWithState = arizona_socket:put_stateful_state(ChangedState, RenderSocket),
-    RenderResult = arizona_differ:diff_stateful(TemplateData, ChangedState, RenderSocketWithState),
-    % Note: differ no longer checks mode - it always diffs when called
-    ?assert(length(arizona_socket:get_changes(RenderResult)) > 0),
-
-    % Test diff mode - should generate diffs
-    DiffSocket = arizona_socket:new(#{mode => diff}),
-    DiffSocketWithState = arizona_socket:put_stateful_state(ChangedState, DiffSocket),
-    DiffResult = arizona_differ:diff_stateful(TemplateData, ChangedState, DiffSocketWithState),
-    DiffChanges = arizona_socket:get_changes(DiffResult),
-    ?assert(length(DiffChanges) > 0).
-
-%% --------------------------------------------------------------------
-%% Diff optimization tests
-%% --------------------------------------------------------------------
-
-get_affected_elements_basic(Config) when is_list(Config) ->
-    ChangedBindings = #{counter => 42},
-    VarsIndexes = #{
-        counter => [2, 5],
-        name => [1, 3]
-    },
-
-    AffectedElements = arizona_differ:get_affected_elements(ChangedBindings, VarsIndexes),
-
-    % Should include elements [2, 5] but not [1, 3]
-    ExpectedElements = sets:from_list([2, 5]),
-    ?assertEqual(ExpectedElements, AffectedElements).
-
-get_affected_elements_multiple_vars(Config) when is_list(Config) ->
-    ChangedBindings = #{counter => 42, name => ~"Jane"},
-    VarsIndexes = #{
-        counter => [2, 5],
-        name => [1, 3, 7],
-        % Should not be affected
-        other => [4, 6]
-    },
-
-    AffectedElements = arizona_differ:get_affected_elements(ChangedBindings, VarsIndexes),
-
-    % Should include elements [1, 2, 3, 5, 7] but not [4, 6]
-    ExpectedElements = sets:from_list([1, 2, 3, 5, 7]),
-    ?assertEqual(ExpectedElements, AffectedElements).
-
-%% --------------------------------------------------------------------
-%% Diff stateless tests
-%% --------------------------------------------------------------------
-
-diff_stateless_component_changes(Config) when is_list(Config) ->
-    % Test that stateless components with unified format work with diffing optimization
-    % Now stateless components have vars_indexes and benefit from efficient diffing
-    InitialState = arizona_stateful:new(root, test_module, #{
-        name => ~"John",
-        message => ~"Hello"
-    }),
-
-    % Change a binding that would affect stateless components
-    ChangedState = arizona_stateful:put_binding(name, ~"Jane", InitialState),
-
-    % Create template data that includes a stateless component call with unified format
-    TemplateData = #{
-        elems_order => [0, 1, 2],
-        elems => #{
-            0 => {static, 1, ~"<div>"},
-            1 =>
-                {dynamic, 2, fun(Socket) ->
-                    % This simulates a stateless component call using unified format
-                    StatelessTemplate = #{
-                        elems_order => [0, 1, 2],
-                        elems => #{
-                            0 => {static, 1, ~"<span>"},
-                            1 => {dynamic, 2, fun(S) -> arizona_socket:get_binding(name, S) end},
-                            2 => {static, 3, ~"</span>"}
-                        },
-                        vars_indexes => #{name => [1]}
-                    },
-                    arizona_html:render_stateless(StatelessTemplate, Socket)
-                end},
-            2 => {static, 3, ~"</div>"}
-        },
-        vars_indexes => #{
-            % name affects element 1 (the stateless component)
-            name => [1],
-            % message not used in this template
-            message => []
-        }
-    },
-
-    % Create socket and run diff
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Run diff
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-
-    % Verify changes were generated for the stateless component
-    Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [{root, [{1, [{1, ~"Jane"}]}]}],
-    ?assertEqual(ExpectedChanges, Changes).
-
-diff_stateless_no_optimization(Config) when is_list(Config) ->
-    % Test stateless component with multiple variable dependencies
-    % Both variables affect the same element, so changing both still results in one element change
-    InitialState = arizona_stateful:new(root, test_module, #{
-        title => ~"Page Title",
-        content => ~"Page content"
-    }),
-
-    % Change both variables
-    ChangedState1 = arizona_stateful:put_binding(title, ~"New Title", InitialState),
-    ChangedState = arizona_stateful:put_binding(content, ~"New content", ChangedState1),
-
-    % Template with stateless component that uses both variables in unified format
-    TemplateData = #{
-        elems_order => [0],
-        elems => #{
-            0 =>
-                {dynamic, 1, fun(Socket) ->
-                    % Stateless component that renders both variables using unified format
-                    StatelessTemplate = #{
-                        elems_order => [0, 1, 2, 3, 4],
-                        elems => #{
-                            0 => {static, 1, ~"<h1>"},
-                            1 => {dynamic, 2, fun(S) -> arizona_socket:get_binding(title, S) end},
-                            2 => {static, 3, ~"</h1><p>"},
-                            3 => {dynamic, 4, fun(S) -> arizona_socket:get_binding(content, S) end},
-                            4 => {static, 5, ~"</p>"}
-                        },
-                        vars_indexes => #{
-                            title => [1],
-                            content => [3]
-                        }
-                    },
-                    arizona_html:render_stateless(StatelessTemplate, Socket)
-                end}
-        },
-        vars_indexes => #{
-            title => [0],
-            % Both variables affect the same element (the stateless component)
-            content => [0]
-        }
-    },
-
-    % Create socket and run diff
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Run diff
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-
-    % Verify changes were generated (individual element changes from hierarchical diffing)
-    Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [
-        {root, [{0, [{3, ~"New content"}, {1, ~"New Title"}]}]}
-    ],
-    ?assertEqual(ExpectedChanges, Changes).
-
-%% New tests for unified stateless format
-diff_stateless_unified_cascade_dependency(Config) when is_list(Config) ->
-    % Test the cascade dependency pattern: stateless component depending on parent binding
-    % This tests: {arizona_component:call_stateless(module, fun,
-    %              #{foo => arizona_socket:get_binding(user, Socket)}, Socket)}
-    InitialState = arizona_stateful:new(root, test_module, #{
-        user => #{name => ~"Alice", status => ~"online"}
-    }),
-
-    % Change user data that should trigger cascade re-render
-    ChangedState = arizona_stateful:put_binding(
-        user, #{name => ~"Bob", status => ~"offline"}, InitialState
+diff_view_without_changes(Config) when is_list(Config) ->
+    ct:comment("diff_view should return empty diff when view has no changes"),
+    {Module, _Id, _StatefulModule, _StatefulId, _StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
-
-    % Parent template that calls stateless component with dependency
-    TemplateData = #{
-        elems_order => [0, 1, 2],
-        elems => #{
-            0 => {static, 1, ~"<div class=\"wrapper\">"},
-            1 =>
-                {dynamic, 2, fun(Socket) ->
-                    % Simulate arizona_component:call_stateless dependency pattern
-                    UserData = arizona_socket:get_binding(user, Socket),
-                    StatelessTemplate = #{
-                        elems_order => [0, 1, 2],
-                        elems => #{
-                            0 => {static, 1, ~"<span>User: "},
-                            1 => {dynamic, 2, fun(_) -> maps:get(name, UserData) end},
-                            2 => {static, 3, ~"</span>"}
-                        },
-                        % Stateless component doesn't directly track user
-                        vars_indexes => #{}
-                    },
-                    arizona_html:render_stateless(StatelessTemplate, Socket)
-                end},
-            2 => {static, 3, ~"</div>"}
-        },
-        % user affects element 1 (the stateless component call)
-        vars_indexes => #{user => [1]}
-    },
-
-    % Create socket and run diff
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Run diff - should detect user change and re-render element 1
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-
-    % Verify correct behavior: no changes because stateless component has empty vars_indexes
-    Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [],
-    ?assertEqual(ExpectedChanges, Changes).
-
-diff_stateless_unified_vars_indexes(Config) when is_list(Config) ->
-    % Test that stateless components with their own vars_indexes work efficiently
-    InitialState = arizona_stateful:new(root, test_module, #{
-        theme => ~"dark",
-        title => ~"Dashboard"
-    }),
-
-    % Change only theme, not title
-    ChangedState = arizona_stateful:put_binding(theme, ~"light", InitialState),
-
-    TemplateData = #{
-        elems_order => [0],
-        elems => #{
-            0 =>
-                {dynamic, 1, fun(Socket) ->
-                    % Stateless component that has its own vars_indexes optimization
-                    StatelessTemplate = #{
-                        elems_order => [0, 1, 2, 3, 4],
-                        elems => #{
-                            0 => {static, 1, ~"<div class=\""},
-                            1 => {dynamic, 2, fun(S) -> arizona_socket:get_binding(theme, S) end},
-                            2 => {static, 3, ~"\"><h1>"},
-                            3 => {dynamic, 4, fun(S) -> arizona_socket:get_binding(title, S) end},
-                            4 => {static, 5, ~"</h1></div>"}
-                        },
-                        % This stateless component tracks which elements depend on which vars
-                        vars_indexes => #{
-                            % Only element 1 depends on theme
-                            theme => [1],
-                            % Only element 3 depends on title
-                            title => [3]
-                        }
-                    },
-                    arizona_html:render_stateless(StatelessTemplate, Socket)
-                end}
-        },
-        vars_indexes => #{
-            % theme affects the stateless component
-            theme => [0],
-            % title also affects the stateless component
-            title => [0]
-        }
-    },
-
-    % Create socket and run diff
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Run diff
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-
-    % Verify only theme-related change is detected (hierarchical format)
-    Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [
-        {root, [{0, [{1, ~"light"}]}]}
-    ],
-    ?assertEqual(ExpectedChanges, Changes).
-
-diff_stateless_unified_no_changes(Config) when is_list(Config) ->
-    % Test that stateless components with no changes don't generate diffs
-    InitialState = arizona_stateful:new(root, test_module, #{
-        user => ~"Alice",
-        count => 42
-    }),
-
-    % Change a variable that doesn't affect the stateless component
-    ChangedState = arizona_stateful:put_binding(count, 43, InitialState),
-
-    TemplateData = #{
-        elems_order => [0, 1],
-        elems => #{
-            0 =>
-                {dynamic, 1, fun(Socket) ->
-                    % Stateless component that only depends on user, not count
-                    StatelessTemplate = #{
-                        elems_order => [0, 1, 2],
-                        elems => #{
-                            0 => {static, 1, ~"<p>Hello, "},
-                            1 => {dynamic, 2, fun(S) -> arizona_socket:get_binding(user, S) end},
-                            2 => {static, 3, ~"!</p>"}
-                        },
-                        % Only depends on user
-                        vars_indexes => #{user => [1]}
-                    },
-                    arizona_html:render_stateless(StatelessTemplate, Socket)
-                end},
-            1 =>
-                {dynamic, 2, fun(Socket) ->
-                    % This element uses count and should change
-                    [~"Count: ", arizona_socket:get_binding(count, Socket)]
-                end}
-        },
-        vars_indexes => #{
-            % user affects stateless component
-            user => [0],
-            % count affects element 1
-            count => [1]
-        }
-    },
-
-    % Create socket and run diff
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Run diff
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-
-    % Verify only count element changed, not the stateless component
-    Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [{root, [{1, [~"Count: ", ~"43"]}]}],
-    ?assertEqual(ExpectedChanges, Changes).
-
-%% --------------------------------------------------------------------
-%% Diff list tests
-%% --------------------------------------------------------------------
-
-diff_list_basic_change(Config) when is_list(Config) ->
-    % Test basic list diffing using proper list_template_data
-    InitialList = [~"Alice", ~"Bob"],
-    InitialState = arizona_stateful:new(root, test_module, #{list => InitialList}),
-
-    % Change the list
-    NewList = [~"Alice", ~"Bob", ~"Charlie"],
-    ChangedState = arizona_stateful:put_binding(list, NewList, InitialState),
-
-    % Create list template data
-    ListTemplateData = #{
-        static => [~"<li>", ~"</li>"],
-        dynamic => #{
-            elems_order => [0],
-            elems => #{
-                0 => {dynamic, 1, fun(Item, _Socket) -> Item end}
-            },
-            vars_indexes => #{
-                list => [0]
-            }
-        }
-    },
-
-    % Create stateful template data that uses arizona_renderer:render_list
-    TemplateData = #{
-        elems_order => [0],
-        elems => #{
-            0 =>
-                {dynamic, 1, fun(Socket) ->
-                    CurrentList = arizona_socket:get_binding(list, Socket),
-                    arizona_html:render_list(
-                        ListTemplateData, CurrentList, Socket
-                    )
-                end}
-        },
-        vars_indexes => #{
-            list => [0]
-        }
-    },
-
-    % Create socket and run diff
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Run diff
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-
-    % Verify changes were generated for the list
-    Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [
-        {root, [
-            {0, [
-                [[[], [~"<li>", ~"Alice", ~"</li>"]], [~"<li>", ~"Bob", ~"</li>"]],
-                [~"<li>", ~"Charlie", ~"</li>"]
-            ]}
-        ]}
-    ],
-    ?assertEqual(ExpectedChanges, Changes).
-
-diff_list_item_addition(Config) when is_list(Config) ->
-    % Test list diffing when items are added using proper list_template_data
-    InitialItems = [#{id => 1, name => ~"Alice"}, #{id => 2, name => ~"Bob"}],
-    InitialState = arizona_stateful:new(root, test_module, #{items => InitialItems}),
-
-    % Add a new item
-    NewItems = [
-        #{id => 1, name => ~"Alice"},
-        #{id => 2, name => ~"Bob"},
-        #{id => 3, name => ~"Charlie"}
-    ],
-    ChangedState = arizona_stateful:put_binding(items, NewItems, InitialState),
-
-    % Create list template data for item rendering
-    ListTemplateData = #{
-        static => [~"<li>", ~"</li>"],
-        dynamic => #{
-            elems_order => [0],
-            elems => #{
-                0 => {dynamic, 1, fun(Item, _Socket) -> maps:get(name, Item) end}
-            },
-            vars_indexes => #{
-                name => [0]
-            }
-        }
-    },
-
-    % Template that renders list items using arizona_renderer:render_list
-    TemplateData = #{
-        elems_order => [0, 1, 2],
-        elems => #{
-            0 => {static, 1, ~"<ul>"},
-            1 =>
-                {dynamic, 2, fun(Socket) ->
-                    Items = arizona_socket:get_binding(items, Socket),
-                    arizona_html:render_list(
-                        ListTemplateData, Items, Socket
-                    )
-                end},
-            2 => {static, 3, ~"</ul>"}
-        },
-        vars_indexes => #{
-            % items variable affects element 1
-            items => [1]
-        }
-    },
-
-    % Create socket and run diff
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Run diff
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-
-    % Verify changes were generated for the list element
-    Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [
-        {root, [
-            {1, [
-                [[[], [~"<li>", ~"Alice", ~"</li>"]], [~"<li>", ~"Bob", ~"</li>"]],
-                [~"<li>", ~"Charlie", ~"</li>"]
-            ]}
-        ]}
-    ],
-    ?assertEqual(ExpectedChanges, Changes).
-
-diff_list_item_removal(Config) when is_list(Config) ->
-    % Test list diffing when items are removed using proper list_template_data
-    InitialItems = [
-        #{id => 1, name => ~"Alice"},
-        #{id => 2, name => ~"Bob"},
-        #{id => 3, name => ~"Charlie"}
-    ],
-    InitialState = arizona_stateful:new(root, test_module, #{items => InitialItems}),
-
-    % Remove an item
-    NewItems = [#{id => 1, name => ~"Alice"}, #{id => 3, name => ~"Charlie"}],
-    ChangedState = arizona_stateful:put_binding(items, NewItems, InitialState),
-
-    % Create complex list template data with dynamic attributes
-    ListTemplateData = #{
-        static => [~"<div class=\"item\" data-id=\"", ~"\">", ~"</div>"],
-        dynamic => #{
-            elems_order => [0, 1],
-            elems => #{
-                0 => {dynamic, 1, fun(Item, _Socket) -> integer_to_binary(maps:get(id, Item)) end},
-                1 => {dynamic, 1, fun(Item, _Socket) -> maps:get(name, Item) end}
-            },
-            vars_indexes => #{
-                id => [0],
-                name => [1]
-            }
-        }
-    },
-
-    % Template that renders list with dynamic content using arizona_renderer:render_list
-    TemplateData = #{
-        elems_order => [0, 1, 2, 3],
-        elems => #{
-            0 => {static, 1, ~"<div class=\"list\">"},
-            1 => {static, 2, ~"<span>Total: "},
-            2 =>
-                {dynamic, 3, fun(Socket) ->
-                    Items = arizona_socket:get_binding(items, Socket),
-                    integer_to_binary(length(Items))
-                end},
-            3 =>
-                {dynamic, 4, fun(Socket) ->
-                    Items = arizona_socket:get_binding(items, Socket),
-                    arizona_html:render_list(
-                        ListTemplateData, Items, Socket
-                    )
-                end}
-        },
-        vars_indexes => #{
-            % items variable affects elements 2 and 3
-            items => [2, 3]
-        }
-    },
-
-    % Create socket and run diff
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Run diff
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-
-    % Verify changes were generated for the affected elements
-    Changes = arizona_socket:get_changes(ResultSocket),
-    ExpectedChanges = [
-        {root, [
-            {2, ~"2"},
-            {3, [
-                [[], [~"<div class=\"item\" data-id=\"", ~"1", ~"\">", ~"Alice", ~"</div>"]],
-                [~"<div class=\"item\" data-id=\"", ~"3", ~"\">", ~"Charlie", ~"</div>"]
-            ]}
-        ]}
-    ],
-    ?assertEqual(ExpectedChanges, Changes).
-
-%% --------------------------------------------------------------------
-%% Complex hierarchical tests
-%% --------------------------------------------------------------------
-
-test_complex_hierarchical_change_detection(Config) when is_list(Config) ->
-    % Test reproducing exact WebSocket debug scenario where state changes but diff returns []
-    % Based on actual debug output showing todos binding changed but changes=[]
-
-    % Create exact initial state from debug output
-    InitialTodos = [
-        #{id => 1, text => ~"Learn Erlang", completed => false},
-        #{id => 2, text => ~"Build web app", completed => true},
-        #{id => 3, text => ~"Write tests", completed => false}
-    ],
-
-    InitialState = arizona_stateful:new(root, arizona_todo_app_live, #{
-        todos => InitialTodos,
-        filter => all,
-        new_todo_text => ~"",
-        next_id => 4
-    }),
-
-    % Simulate exact toggle_todo event: todo #1 becomes completed
-    % This matches the debug output state change
-    UpdatedTodos = [
-        % false -> true
-        #{id => 1, text => ~"Learn Erlang", completed => true},
-        #{id => 2, text => ~"Build web app", completed => true},
-        #{id => 3, text => ~"Write tests", completed => false}
-    ],
-
-    ChangedState = arizona_stateful:put_binding(todos, UpdatedTodos, InitialState),
-
-    % Create template structure that SHOULD generate vars_indexes but might not be
-    % This simulates the parse transform output for TODO app
-    TemplateData = #{
-        elems_order => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-        elems => #{
-            0 => {static, 1, ~"<div id=\"root\" class=\"todo-app\">"},
-            1 => {static, 2, ~"<input value=\""},
-            2 => {dynamic, 3, fun(Socket) -> arizona_socket:get_binding(new_todo_text, Socket) end},
-            3 => {static, 4, ~"\"/><main>"},
-            % Element 4: render_list with todos - this should be affected by todos change
-            4 =>
-                {dynamic, 5, fun(Socket) ->
-                    Todos = arizona_socket:get_binding(todos, Socket),
-                    Filter = arizona_socket:get_binding(filter, Socket),
-                    FilteredTodos = arizona_todo_app_live:filter_todos(Todos, Filter),
-                    arizona_html:render_list(
-                        #{
-                            static => [
-                                ~"<div class=\"todo-item ",
-                                ~"\" data-testid=\"todo-",
-                                ~"\"><input type=\"checkbox\" ",
-                                ~" onclick=\"...\"/><label>",
-                                ~"</label><button>×</button></div>"
-                            ],
-                            dynamic => #{
-                                elems_order => [0, 1, 2, 3],
-                                elems => #{
-                                    0 =>
-                                        {dynamic, 1, fun(Todo, _Socket) ->
-                                            case maps:get(completed, Todo) of
-                                                true -> ~"completed";
-                                                false -> ~""
-                                            end
-                                        end},
-                                    1 =>
-                                        {dynamic, 1, fun(Todo, _Socket) ->
-                                            integer_to_binary(maps:get(id, Todo))
-                                        end},
-                                    2 =>
-                                        {dynamic, 1, fun(Todo, _Socket) ->
-                                            case maps:get(completed, Todo) of
-                                                true -> ~"checked";
-                                                false -> ~""
-                                            end
-                                        end},
-                                    3 =>
-                                        {dynamic, 1, fun(Todo, _Socket) ->
-                                            maps:get(text, Todo)
-                                        end}
-                                },
-                                vars_indexes => #{
-                                    completed => [0, 2],
-                                    id => [1],
-                                    text => [3]
-                                }
-                            }
-                        },
-                        FilteredTodos,
-                        Socket
-                    )
-                end},
-            5 => {static, 6, ~"</main><footer>"},
-            % Nested stateless components (stats, filters, clear button)
-            6 =>
-                {dynamic, 7, fun(Socket) ->
-                    Todos = arizona_socket:get_binding(todos, Socket),
-                    Count = length(lists:filter(fun(#{completed := C}) -> not C end, Todos)),
-                    CountBin = integer_to_binary(Count),
-                    Items =
-                        case Count of
-                            1 -> ~"item";
-                            _ -> ~"items"
-                        end,
-                    iolist_to_binary([
-                        ~"<span><strong>", CountBin, ~"</strong> ", Items, ~" left</span>"
-                    ])
-                end},
-            7 =>
-                {dynamic, 8, fun(Socket) ->
-                    Filter = arizona_socket:get_binding(filter, Socket),
-                    AllClass =
-                        case Filter of
-                            all -> ~"selected";
-                            _ -> ~""
-                        end,
-                    iolist_to_binary([~"<ul><li><a class=\"", AllClass, ~"\">All</a></li></ul>"])
-                end},
-            8 =>
-                {dynamic, 9, fun(Socket) ->
-                    Todos = arizona_socket:get_binding(todos, Socket),
-                    HasCompleted =
-                        length(Todos) >
-                            length(lists:filter(fun(#{completed := C}) -> not C end, Todos)),
-                    case HasCompleted of
-                        true -> ~"<button>Clear completed</button>";
-                        false -> ~""
-                    end
-                end},
-            9 => {static, 10, ~"</footer></div>"}
-        },
-        % This might be missing or empty from parse transform
-        vars_indexes => #{
-            % These mappings should exist but might not be generated correctly
-
-            % List content, stats, clear button
-            todos => [4, 6, 8],
-            % List content, filter buttons
-            filter => [4, 7],
-            % Input value
-            new_todo_text => [2]
-        }
-    },
-
-    % Create socket in diff mode (matches WebSocket debug output)
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Run diff - this reproduces the WebSocket "Calling render for diff" step
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-
-    % Debug: This should match the WebSocket "Render completed, changes=[]" output
-    Changes = arizona_socket:get_changes(ResultSocket),
-
-    % This should fail because we expect changes but get []
-    % This reproduces the exact WebSocket issue
-    ?assertNotEqual([], Changes),
-
-    % Should contain changes for elements affected by 'todos' binding: [4, 6, 8]
-    ?assertMatch([{root, ElementChanges}] when is_list(ElementChanges), Changes),
-    [{root, ElementChanges}] = Changes,
-
-    % Extract element indices that were changed
-    ChangedElements = [Element || {Element, _Value} <- ElementChanges],
-
-    % Should include elements 4, 6, and 8 (affected by 'todos' binding)
-
-    % render_list with todos
-    ?assert(lists:member(4, ChangedElements)),
-    % stats component with todos count
-    ?assert(lists:member(6, ChangedElements)),
-    % clear button depends on todos
-    ?assert(lists:member(8, ChangedElements)).
-
-test_reproduce_websocket_bug_empty_vars_indexes(Config) when is_list(Config) ->
-    % This test reproduces the ACTUAL bug: empty vars_indexes from parse transform
-    % This should FAIL, demonstrating the real issue from WebSocket debug output
-
-    % Same setup as previous test
-    InitialTodos = [
-        #{id => 1, text => ~"Learn Erlang", completed => false},
-        #{id => 2, text => ~"Build web app", completed => true},
-        #{id => 3, text => ~"Write tests", completed => false}
-    ],
-
-    InitialState = arizona_stateful:new(root, arizona_todo_app_live, #{
-        todos => InitialTodos,
-        filter => all,
-        new_todo_text => ~"",
-        next_id => 4
-    }),
-
-    % Same state change: toggle todo #1
-    UpdatedTodos = [
-        #{id => 1, text => ~"Learn Erlang", completed => true},
-        #{id => 2, text => ~"Build web app", completed => true},
-        #{id => 3, text => ~"Write tests", completed => false}
-    ],
-
-    ChangedState = arizona_stateful:put_binding(todos, UpdatedTodos, InitialState),
-    ChangedBindings = arizona_stateful:get_changed_bindings(ChangedState),
-
-    % Same template structure but with EMPTY vars_indexes (the actual bug!)
-    TemplateData = #{
-        elems_order => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-        elems => #{
-            0 => {static, 1, ~"<div id=\"root\" class=\"todo-app\">"},
-            1 => {static, 2, ~"<input value=\""},
-            2 => {dynamic, 3, fun(Socket) -> arizona_socket:get_binding(new_todo_text, Socket) end},
-            3 => {static, 4, ~"\"/><main>"},
-            4 =>
-                {dynamic, 5, fun(Socket) ->
-                    Todos = arizona_socket:get_binding(todos, Socket),
-                    Filter = arizona_socket:get_binding(filter, Socket),
-                    FilteredTodos = arizona_todo_app_live:filter_todos(Todos, Filter),
-                    arizona_html:render_list(
-                        #{
-                            static => [
-                                ~"<div class=\"todo-item ", ~"\" data-testid=\"todo-", ~"\">"
-                            ],
-                            dynamic => #{
-                                elems_order => [0, 1],
-                                elems => #{
-                                    0 =>
-                                        {dynamic, 1, fun(Todo, _Socket) ->
-                                            case maps:get(completed, Todo) of
-                                                true -> ~"completed";
-                                                false -> ~""
-                                            end
-                                        end},
-                                    1 =>
-                                        {dynamic, 1, fun(Todo, _Socket) ->
-                                            maps:get(text, Todo)
-                                        end}
-                                },
-                                vars_indexes => #{}
-                            }
-                        },
-                        FilteredTodos,
-                        Socket
-                    )
-                end},
-            5 => {static, 6, ~"</main><footer>"},
-            6 =>
-                {dynamic, 7, fun(Socket) ->
-                    Todos = arizona_socket:get_binding(todos, Socket),
-                    Count = length(lists:filter(fun(#{completed := C}) -> not C end, Todos)),
-                    iolist_to_binary([~"<span>", integer_to_binary(Count), ~" items left</span>"])
-                end},
-            7 => {static, 8, ~"</footer></div>"}
-        },
-        % vars_indexes is empty in this test case
-        % This is what the parse transform is generating for TODO app
-        vars_indexes => #{}
-    },
-
-    % Debug the empty vars_indexes
-    VarsIndexes = maps:get(vars_indexes, TemplateData, #{}),
-
-    % This should return empty set because vars_indexes is empty
-    AffectedElements = arizona_differ:get_affected_elements(ChangedBindings, VarsIndexes),
-
-    % Create socket and run diff
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % This reproduces the WebSocket bug: changes=[] despite todos binding change
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-    Changes = arizona_socket:get_changes(ResultSocket),
-
-    % This assertion demonstrates the issue with empty vars_indexes
-    % When vars_indexes is empty, no elements are detected as affected
-    % even though the todos binding changed and should affect elements 4 and 6
-
-    % With empty vars_indexes, we get no changes despite state updates
-    ?assertEqual([], Changes),
-
-    % Additional verification: with empty vars_indexes, affected elements is empty
-    ?assertEqual([], sets:to_list(AffectedElements)).
-
-test_enhanced_parse_transform_missing_todos_mapping(Config) when is_list(Config) ->
-    % Test that reproduces the enhanced parse transform issue from the erlang shell example
-    % This shows that even with enhanced parse transform, todos binding is not mapped to elements
-
-    % Create exact state from the shell example
-    InitialState = arizona_stateful:new(root, undefined, #{
-        new_todo_text => ~"",
-        todos => [],
-        filter => all
-    }),
-
-    % Simulate the exact state change from the shell example
-    UpdatedState1 = arizona_stateful:put_binding(new_todo_text, ~"foo", InitialState),
-    UpdatedState = arizona_stateful:put_binding(
-        todos, [#{id => 1, text => ~"Foo", completed => false}], UpdatedState1
+    View = mount_view(Module, #{}),
+    {Diff, _DiffView} = arizona_differ:diff_view(View),
+    ?assertEqual([], Diff).
+
+diff_view_with_changes(Config) when is_list(Config) ->
+    ct:comment("diff_view should return diff when view state changes"),
+    {Module, _Id, _StatefulModule, _StatefulId, _StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
     ),
-
-    ChangedBindings = arizona_stateful:get_changed_bindings(UpdatedState),
-
-    % Create template structure that simulates what enhanced parse transform should generate
-    % Based on the shell output, we know it generates: #{filter => [7], new_todo_text => [1]}
-    % But it should ALSO have todos mappings for elements that use
-    % FilteredTodos, UncompletedLength, HasCompleted
-    TemplateData = #{
-        elems_order => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-        elems => #{
-            0 => {static, 1, ~"<div id=\"root\" class=\"todo-app\">"},
-            % NewTodoText
-            1 => {dynamic, 2, fun(Socket) -> arizona_socket:get_binding(new_todo_text, Socket) end},
-            2 => {static, 3, ~"<main>"},
-            % FilteredTodos (depends on todos + filter)
-            3 => {dynamic, 4, fun(_Socket) -> ~"FilteredTodos placeholder" end},
-            4 => {static, 5, ~"</main><footer><span>Count: "},
-            % UncompletedLength (depends on todos)
-            5 => {dynamic, 6, fun(_Socket) -> ~"2" end},
-            6 => {static, 7, ~"</span><div>Filter: "},
-            % Filter
-            7 => {dynamic, 8, fun(Socket) -> arizona_socket:get_binding(filter, Socket) end},
-            8 => {static, 9, ~"</div>"},
-            % HasCompleted (depends on todos)
-            9 => {dynamic, 10, fun(_Socket) -> ~"<button>Clear completed</button>" end}
-        },
-        % Current enhanced parse transform generates incomplete vars_indexes
-        % From shell output: #{filter => [7], new_todo_text => [1]}
-        % MISSING: todos should map to elements [3, 5, 9]
-        % (FilteredTodos, UncompletedLength, HasCompleted)
-        vars_indexes => #{
-            % Correct: filter affects element 7
-            filter => [7],
-            % Correct: new_todo_text affects element 1
-            new_todo_text => [1]
-            % MISSING: todos => [3, 5, 9]  % todos should affect elements 3, 5, 9
-        }
-    },
-
-    % Run diff with incomplete vars_indexes
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(UpdatedState, Socket),
-
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, UpdatedState, SocketWithState),
-    Changes = arizona_socket:get_changes(ResultSocket),
-
-    % CURRENTLY FAILING: only element 1 (new_todo_text) changes, todos changes are missed
-    % With incomplete vars_indexes, we get limited changes
-    CurrentChanges = Changes,
-    % Current broken behavior
-    ?assertMatch([{root, [{1, ~"foo"}]}], CurrentChanges),
-
-    % Now test what SHOULD happen with correct vars_indexes
-    CorrectVarsIndexes = #{
-        % filter affects element 7
-        filter => [7],
-        % new_todo_text affects element 1
-        new_todo_text => [1],
-        % todos should affect elements 3, 5, 9
-        todos => [3, 5, 9]
-    },
-
-    CorrectTemplateData = TemplateData#{vars_indexes => CorrectVarsIndexes},
-    CorrectAffectedElements = arizona_differ:get_affected_elements(
-        ChangedBindings, CorrectVarsIndexes
-    ),
-
-    % With correct vars_indexes, should affect elements [1, 3, 5, 9]
-    ?assertEqual([1, 3, 5, 9], lists:sort(sets:to_list(CorrectAffectedElements))),
-
-    % Run diff with correct vars_indexes
-    CorrectResultSocket = arizona_differ:diff_stateful(
-        CorrectTemplateData, UpdatedState, SocketWithState
-    ),
-    CorrectChanges = arizona_socket:get_changes(CorrectResultSocket),
-
-    % Should generate changes for all affected elements, not just new_todo_text
-    ?assertMatch([{root, ElementChanges}] when length(ElementChanges) > 1, CorrectChanges),
-    [{root, ElementChanges}] = CorrectChanges,
-    ChangedElementIndexes = [Index || {Index, _Value} <- ElementChanges],
-
-    % Should include todos-affected elements (3, 5, 9) plus new_todo_text element (1)
-
-    % new_todo_text
-    ?assert(lists:member(1, ChangedElementIndexes)),
-    % FilteredTodos (todos dependency)
-    ?assert(lists:member(3, ChangedElementIndexes)),
-    % UncompletedLength (todos dependency)
-    ?assert(lists:member(5, ChangedElementIndexes)),
-    % HasCompleted (todos dependency)
-    ?assert(lists:member(9, ChangedElementIndexes)),
-
-    % THE REAL TEST: The current enhanced parse transform should FAIL here
-    % Because it's not generating todos mappings in vars_indexes
-    % We need to fix generate_vars_indexes to make this pass
-
-    % First, let's demonstrate that the CURRENT vars_indexes is missing todos
-    CurrentVarsIndexes = maps:get(vars_indexes, TemplateData, #{}),
-    % todos is missing (BUG)
-    ?assertNot(maps:is_key(todos, CurrentVarsIndexes)),
-
-    % And the CURRENT differ behavior misses todos changes
-    CurrentElementIndexes = [Index || {Index, _Value} <- element(2, hd(CurrentChanges))],
-    % Missing FilteredTodos change
-    ?assertNot(lists:member(3, CurrentElementIndexes)),
-    % Missing UncompletedLength change
-    ?assertNot(lists:member(5, CurrentElementIndexes)),
-    % Missing HasCompleted change
-    ?assertNot(lists:member(9, CurrentElementIndexes)),
-
-    % THE FIX IS WORKING: Enhanced parse transform now generates todos mappings correctly!
-    % Since the parse transform is fixed, our simulated "current" scenario should fail
-    % but the real enhanced parse transform will work correctly
-
-    % For now, verify the current test setup still shows the issue in the simulated scenario
-    ?assertMatch([{root, [{1, ~"foo"}]}], CurrentChanges).
-
-%% --------------------------------------------------------------------
-%% Error handling tests
-%% --------------------------------------------------------------------
-
-test_binding_not_found_error(Config) when is_list(Config) ->
-    % Test that binding_not_found errors are properly caught and formatted
-    TemplateData = #{
-        elems_order => [0, 1],
-        elems => #{
-            0 => {static, 1, ~"<div>"},
-            1 =>
-                {dynamic, 42, fun(Socket) ->
-                    % Try to get a binding that doesn't exist in the socket
-                    arizona_socket:get_binding(truly_nonexistent_key, Socket)
-                end}
-        },
-        vars_indexes => #{trigger_key => [1]}
-    },
-
-    StatefulState = arizona_stateful:new(root, test_module, #{}),
-    % Add a different binding to trigger the diff, but the function will try to access a missing one
-    ChangedState = arizona_stateful:put_binding(trigger_key, ~"value", StatefulState),
-
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Should throw binding_not_found with proper error info
-    ?assertError(
-        {binding_not_found, truly_nonexistent_key},
-        arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState)
+    View = mount_view(Module, #{}),
+    State = arizona_view:get_state(View),
+    UpdatedState = arizona_stateful:put_binding(title, ~"Arizona Framework", State),
+    UpdatedView = arizona_view:update_state(UpdatedState, View),
+    {Diff, _DiffView} = arizona_differ:diff_view(UpdatedView),
+    ?assertMatch(
+        [
+            {2, ~"Arizona Framework"},
+            {3, [{2, ~"Arizona Framework"}, {3, [{1, ~"Arizona Framework"}, {2, ~""}]}]}
+        ],
+        Diff
     ).
 
-test_template_render_error(Config) when is_list(Config) ->
-    % Test that template render errors are properly caught and formatted
-    TemplateData = #{
-        elems_order => [0, 1],
-        elems => #{
-            0 => {static, 1, ~"<div>"},
-            1 =>
-                {dynamic, 42, fun(_Socket) ->
-                    error(custom_error)
-                end}
-        },
-        vars_indexes => #{trigger => [1]}
+diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
+    ct:comment("diff_stateful should return diff when fingerprint matches and bindings change"),
+    {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    View = mount_view(ViewModule, #{}),
+
+    % Get the stateful component and change its state
+    StatefulState = arizona_view:get_stateful_state(StatefulId, View),
+    UpdatedState = arizona_stateful:put_binding(title, ~"Updated Title", StatefulState),
+    UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedState, View),
+    UpdatedBindings = arizona_stateful:get_bindings(UpdatedState),
+    DiffBindings = arizona_binder:to_map(UpdatedBindings),
+
+    % Test diff_stateful/5 with fingerprint match and changes
+    {Result, _DiffView} = arizona_differ:diff_stateful(
+        StatefulModule, DiffBindings, ViewId, StatefulElementIndex, UpdatedView
+    ),
+
+    % Should return a diff (not nodiff) since bindings changed
+    ?assertMatch([{2, ~"Updated Title"}, {3, [{1, ~"Updated Title"}, {2, ~""}]}], Result).
+
+diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
+    ct:comment(
+        "diff_stateful should return nodiff when fingerprint matches and bindings unchanged"
+    ),
+    {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    View = mount_view(ViewModule, #{}),
+
+    % Get the stateful component without changing its state
+    StatefulState = arizona_view:get_stateful_state(StatefulId, View),
+    Bindings = arizona_stateful:get_bindings(StatefulState),
+    DiffBindings = arizona_binder:to_map(Bindings),
+
+    % Test diff_stateful/5 with fingerprint match but no changes
+    {Result, _DiffView} = arizona_differ:diff_stateful(
+        StatefulModule, DiffBindings, ViewId, StatefulElementIndex, View
+    ),
+
+    % Should return nodiff since no bindings changed
+    ?assertEqual(nodiff, Result).
+
+diff_stateful_fingerprint_mismatch(Config) when is_list(Config) ->
+    ct:comment("diff_stateful should return hierarchical struct when fingerprint mismatch"),
+    {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    % Mount view with show_stateful = false, which creates a template without
+    % the stateful component. This establishes a fingerprint for StatefulElementIndex
+    % that doesn't include the stateful component
+    View1 = mount_view(ViewModule, #{show_stateful => false}),
+
+    % Create bindings for the stateful component we want to diff
+    Bindings = #{
+        id => StatefulId,
+        title => ~"Arizona"
     },
 
-    StatefulState = arizona_stateful:new(root, test_module, #{}),
-    ChangedState = arizona_stateful:put_binding(trigger, ~"value", StatefulState),
+    % Test diff_stateful/5 with view template that has different fingerprint
+    % Since the view was mounted with show_stateful=false, the template fingerprint
+    % at element index won't match what diff_stateful expects for a stateful component,
+    % causing fallback to hierarchical
+    {Result, _DiffView} = arizona_differ:diff_stateful(
+        StatefulModule, Bindings, ViewId, StatefulElementIndex, View1
+    ),
 
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+    % Should return a hierarchical struct (not a diff) since fingerprint doesn't match
+    ?assertEqual(#{type => stateful, id => StatefulId}, Result).
 
-    % Should throw template_render_error with line info
-    ?assertError(
-        {template_render_error, custom_error, 42},
-        arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState)
+diff_root_stateful_with_changes(Config) when is_list(Config) ->
+    ct:comment("diff_root_stateful should return diff when root stateful component changes"),
+    {ViewModule, _ViewId, StatefulModule, StatefulId, _StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    View = mount_view(ViewModule, #{}),
+
+    % Get the stateful component's current bindings and update them
+    StatefulState = arizona_view:get_stateful_state(StatefulId, View),
+    CurrentBindings = arizona_stateful:get_bindings(StatefulState),
+    CurrentBindingsMap = arizona_binder:to_map(CurrentBindings),
+    UpdatedBindings = CurrentBindingsMap#{title => ~"Root Updated Title"},
+
+    % Test diff_root_stateful/3 with changed bindings (bypasses fingerprint checking)
+    {Diff, _DiffView} = arizona_differ:diff_root_stateful(
+        StatefulModule, UpdatedBindings, View
+    ),
+
+    % Should return a diff since bindings changed
+    ?assertMatch([{2, ~"Root Updated Title"}, {3, [{1, ~"Root Updated Title"}, {2, ~""}]}], Diff).
+
+diff_stateless_fingerprint_match(Config) when is_list(Config) ->
+    ct:comment("diff_stateless should return diff when fingerprint matches"),
+    {ViewModule, _ViewId, _StatefulModule, StatefulId, _StatefulElementIndex, StatelessModule,
+        StatelessFunction, StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    View = mount_view(ViewModule, #{}),
+
+    % Create bindings for the stateless component
+    Bindings = #{title => ~"Stateless Title"},
+
+    % Test diff_stateless/6 with fingerprint match
+    {Result, _DiffView} = arizona_differ:diff_stateless(
+        StatelessModule, StatelessFunction, Bindings, StatefulId, StatelessElementIndex, View
+    ),
+
+    % Should return a diff containing the stateless component's rendered content
+    ?assertEqual([{1, ~"Stateless Title"}, {2, ~""}], Result).
+
+diff_stateless_fingerprint_mismatch(Config) when is_list(Config) ->
+    ct:comment("diff_stateless should return hierarchical struct when fingerprint mismatch"),
+    {ViewModule, _ViewId, StatefulModule, StatefulId, _StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    % Mount view with show_stateless = false, creating a stateful template WITHOUT
+    % stateless component. This establishes a fingerprint at element index 3 that
+    % doesn't include the stateless component
+    View = mount_view(ViewModule, #{show_stateless => false}),
+
+    % Test diff_root_stateful with show_stateless = true, which creates a template
+    % WITH stateless component. This creates a fingerprint mismatch: stored
+    % fingerprint (no stateless) vs new template (with stateless)
+    Bindings = #{id => StatefulId, title => ~"Arizona", show_stateless => true},
+    {Diff, _DiffView} = arizona_differ:diff_root_stateful(
+        StatefulModule, Bindings, View
+    ),
+
+    % Should return hierarchical stateless struct (not a diff) due to fingerprint mismatch
+    % When diff_stateless detects fingerprint mismatch, it falls back to hierarchical rendering
+    ?assertEqual(
+        [
+            {3, #{
+                type => stateless,
+                dynamic => [~"Arizona", ~""],
+                static => [~"<h1>", ~"</h1>\n"]
+            }}
+        ],
+        Diff
     ).
 
-test_diff_stateless_missing_vars_indexes(Config) when is_list(Config) ->
-    % Test diff_stateless with missing vars_indexes key
-    TemplateData = #{
-        elems_order => [0, 1],
-        elems => #{
-            0 => {static, 1, ~"<div>"},
-            1 =>
-                {dynamic, 2, fun(Socket) ->
-                    arizona_socket:get_binding(name, Socket)
-                end}
-        }
-        % Missing vars_indexes key
-    },
+diff_list_fingerprint_match(Config) when is_list(Config) ->
+    ct:comment("diff_list should return diff when fingerprint matches and list items change"),
+    {ViewModule, _ViewId, _StatefulModule, StatefulId, _StatefulElementIndex, StatelessModule,
+        StatelessFunction, StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    View = mount_view(ViewModule, #{stateless_items => [~"Item 1", ~"Item 2"]}),
 
-    StatefulState = arizona_stateful:new(root, test_module, #{}),
-    ChangedState = arizona_stateful:put_binding(name, ~"value", StatefulState),
+    % Test diff_stateless first to render the stateless component with list items
+    % This will create the list template through arizona_template:render_list
+    Bindings = #{title => ~"Arizona", items => [~"Item 1", ~"Item 2", ~"Item 3"]},
+    {Diff, _ViewWithList} = arizona_differ:diff_stateless(
+        StatelessModule, StatelessFunction, Bindings, StatefulId, StatelessElementIndex, View
+    ),
 
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+    % Should return a list of rendered HTML for each item
+    ?assertEqual(
+        [
+            {1, ~"Arizona"},
+            {2, [[~"Item 1"], [~"Item 2"], [~"Item 3"]]}
+        ],
+        Diff
+    ).
 
-    % Should handle missing vars_indexes gracefully (default to #{})
-    % Note: intentionally malformed template data to test error handling
-    ?assertError(
-        {badkey, vars_indexes},
-        arizona_differ:diff_stateless(TemplateData, ChangedState, SocketWithState)
+diff_list_fingerprint_mismatch(Config) when is_list(Config) ->
+    ct:comment("diff_list should return hierarchical struct when fingerprint mismatch"),
+    {ViewModule, _ViewId, _StatefulModule, StatefulId, _StatefulElementIndex, StatelessModule,
+        StatelessFunction, StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+    % Mount view WITHOUT list items, creating different template fingerprint
+    % This establishes a fingerprint for StatelessElementIndex without list rendering
+    View = mount_view(ViewModule, #{stateless_items => []}),
+
+    % Create bindings with list items for the stateless component
+    % This will create a template with list rendering, different from stored fingerprint
+    Bindings = #{title => ~"Arizona", items => [~"Item 1", ~"Item 2", ~"Item 3"]},
+    {Diff, _ViewWithList} = arizona_differ:diff_stateless(
+        StatelessModule, StatelessFunction, Bindings, StatefulId, StatelessElementIndex, View
+    ),
+
+    % Should return hierarchical list struct due to fingerprint mismatch
+    % When diff_list detects mismatch, it falls back to hierarchical rendering
+    ?assertEqual(
+        [
+            {1, ~"Arizona"},
+            {2, #{
+                type => list,
+                dynamic => [[~"Item 1"], [~"Item 2"], [~"Item 3"]],
+                static => [~"<li>", ~"</li>"]
+            }}
+        ],
+        Diff
     ).
 
 %% --------------------------------------------------------------------
-%% Edge case tests
+%% Helper functions
 %% --------------------------------------------------------------------
 
-test_skip_element_scenario(Config) when is_list(Config) ->
-    % Test that elements are skipped when they return sockets with no changes and no HTML
-    TemplateData = #{
-        elems_order => [0, 1],
-        elems => #{
-            0 => {static, 1, ~"<div>"},
-            1 =>
-                {dynamic, 2, fun(_Socket) ->
-                    % Return socket with no changes and empty HTML
-                    EmptySocket = arizona_socket:new(#{mode => diff}),
-                    arizona_socket:set_html_acc([], EmptySocket)
-                end}
-        },
-        vars_indexes => #{trigger => [1]}
-    },
+mock_modules(ViewModule, StatefulModule, StatelessModule) ->
+    ViewId = ~"view",
+    StatefulId = ~"stateful",
+    StatelessRenderFun = render,
+    {ViewModule, StatefulElementIndex} =
+        mock_view_module(ViewModule, ViewId, StatefulModule, StatefulId, StatelessModule),
+    {StatefulModule, StatelessElementIndex} = mock_stateful_module(
+        StatefulModule, StatelessModule, StatelessRenderFun
+    ),
+    {StatelessModule, StatelessRenderFun} = mock_stateless_module(
+        StatelessModule, StatelessRenderFun
+    ),
+    {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, StatelessModule,
+        StatelessRenderFun, StatelessElementIndex}.
 
-    StatefulState = arizona_stateful:new(root, test_module, #{}),
-    ChangedState = arizona_stateful:put_binding(trigger, ~"value", StatefulState),
+mock_view_module(ViewModule, ViewId, StatefulModule, StatefulId, StatelessModule) ->
+    maybe
+        % Element index where stateful component is rendered in template
+        StatefulElementIndex = 3,
+        {ok, _} ?=
+            merl:compile_and_load(
+                merl:qquote(~""""
+                -module('@view_module').
+                -behaviour(arizona_view).
+                -compile({parse_transform, arizona_parse_transform}).
+                -export([mount/1]).
+                -export([render/1]).
 
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+                mount(Req) ->
+                    {ReqBindings, _Req1} = arizona_request:get_bindings(Req),
+                    arizona_view:new('@view_module', maps:merge(#{
+                        id => ~"'@view_id",
+                        stateful_id => ~"'@stateful_id",
+                        title => ~"Arizona"
+                    }, ReqBindings), none).
 
-    % Should return socket with no changes (element was skipped)
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-    ?assertEqual([], arizona_socket:get_changes(ResultSocket)).
+                render(Bindings) ->
+                    StatefulModule = '@stateful_module',
+                    arizona_template:from_string(~"""
+                    <div {arizona_template:get_binding(id, Bindings)}>
+                        {arizona_template:get_binding(title, Bindings)}
+                        {case arizona_template:get_binding(
+                            show_stateful, Bindings, fun() -> true end
+                        ) of
+                            true ->
+                                arizona_template:render_stateful(StatefulModule, #{
+                                    id => arizona_template:get_binding(stateful_id, Bindings),
+                                    title => arizona_template:get_binding(title, Bindings),
+                                    show_stateless => arizona_template:get_binding(
+                                        show_stateless, Bindings, fun() -> true end
+                                    ),
+                                    stateless_items => arizona_template:get_binding(
+                                        stateless_items, Bindings, fun() -> [] end
+                                    )
+                                });
+                            false ->
+                                ~""
+                        end})
+                    </div>
+                    """).
+                """", [
+                    {view_module, merl:term(ViewModule)},
+                    {view_id, merl:term(binary_to_list(ViewId))},
+                    {stateful_module, merl:term(StatefulModule)},
+                    {stateful_id, merl:term(binary_to_list(StatefulId))}
+                ])
+            ),
+        {ViewModule, StatefulElementIndex}
+    else
+        Error ->
+            error(Error, [ViewModule, ViewId, StatefulModule, StatefulId, StatelessModule])
+    end.
 
-test_socket_with_html_no_changes(Config) when is_list(Config) ->
-    % Test socket result with HTML but no changes
-    TemplateData = #{
-        elems_order => [0, 1],
-        elems => #{
-            0 => {static, 1, ~"<div>"},
-            1 =>
-                {dynamic, 2, fun(_Socket) ->
-                    HtmlSocket = arizona_socket:new(#{mode => diff}),
-                    arizona_socket:set_html_acc([~"<span>content</span>"], HtmlSocket)
-                end}
-        },
-        vars_indexes => #{trigger => [1]}
-    },
+mock_stateful_module(StatefulModule, StatelessModule, StatelessFun) ->
+    maybe
+        {ok, _} ?=
+            merl:compile_and_load(
+                merl:qquote(~""""
+                -module('@stateful_module').
+                -behaviour(arizona_stateful).
+                -compile({parse_transform, arizona_parse_transform}).
+                -export([mount/1]).
+                -export([render/1]).
 
-    StatefulState = arizona_stateful:new(root, test_module, #{}),
-    ChangedState = arizona_stateful:put_binding(trigger, ~"value", StatefulState),
+                mount(Bindings) ->
+                    arizona_stateful:new('@stateful_module', Bindings).
 
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
+                render(Bindings) ->
+                    StatelessModule = '@stateless_module',
+                    StatelessFun = '@stateless_fun',
+                    arizona_template:from_string(~"""
+                    <div {arizona_template:get_binding(id, Bindings)}>
+                        {arizona_template:get_binding(title, Bindings)}
+                        {case arizona_template:get_binding(
+                            show_stateless, Bindings, fun() -> true end
+                        ) of
+                            true ->
+                                arizona_template:render_stateless(StatelessModule, StatelessFun, #{
+                                    title => arizona_template:get_binding(title, Bindings),
+                                    items => arizona_template:get_binding(
+                                        stateless_items, Bindings, fun() -> [] end
+                                    )
+                                });
+                            false ->
+                                ~""
+                        end})
+                    </div>
+                    """).
+                """", [
+                    {stateful_module, merl:term(StatefulModule)},
+                    {stateless_module, merl:term(StatelessModule)},
+                    {stateless_fun, merl:term(StatelessFun)}
+                ])
+            ),
+        % Stateless component is at element 3 within stateful template
+        StatelessElementIndex = 3,
+        {StatefulModule, StatelessElementIndex}
+    else
+        Error ->
+            error(Error, [StatefulModule, StatelessModule, StatelessFun])
+    end.
 
-    % Should return changes with HTML content
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-    Changes = arizona_socket:get_changes(ResultSocket),
-    ?assertEqual([{root, [{1, [~"<span>content</span>"]}]}], Changes).
+mock_stateless_module(Module, RenderFun) ->
+    maybe
+        {ok, _} ?=
+            merl:compile_and_load(
+                merl:qquote(~"""""
+                -module('@module').
+                -compile({parse_transform, arizona_parse_transform}).
+                -export(['@render_fun'/1]).
 
-test_diff_stateful_empty_elems(Config) when is_list(Config) ->
-    % Test diff_stateful with empty elems map
-    TemplateData = #{
-        elems_order => [],
-        elems => #{},
-        vars_indexes => #{name => []}
-    },
+                '@render_fun'(Bindings) ->
+                    arizona_template:from_string(~""""
+                    <h1>{arizona_template:get_binding(title, Bindings)}</h1>
+                    {case arizona_template:get_binding(items, Bindings, fun() -> [] end) of
+                        [] ->
+                            ~"";
+                        Items ->
+                            arizona_template:render_list(fun(Item) ->
+                                arizona_template:from_string(~"""
+                                <li>{Item}</li>
+                                """)
+                            end, Items)
+                    end}
+                    """").
+                """"", [
+                    {module, merl:term(Module)},
+                    {render_fun, merl:term(RenderFun)}
+                ])
+            ),
+        {Module, RenderFun}
+    else
+        Error ->
+            error(Error, [Module, RenderFun])
+    end.
 
-    StatefulState = arizona_stateful:new(root, test_module, #{}),
-    ChangedState = arizona_stateful:put_binding(name, ~"value", StatefulState),
+mount_view(Module, Bindings) ->
+    % Init process dictionaries
+    undefined = arizona_tracker_dict:set_tracker(arizona_tracker:new()),
+    undefined = arizona_hierarchical_dict:set_structure(#{}),
 
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Should handle empty elems gracefully
-    ResultSocket = arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState),
-    ?assertEqual([], arizona_socket:get_changes(ResultSocket)).
-
-test_diff_stateful_invalid_element_index(Config) when is_list(Config) ->
-    % Test diff_stateful with non-existent element index
-    TemplateData = #{
-        elems_order => [0],
-        elems => #{
-            0 => {static, 1, ~"content"}
-        },
-        % References non-existent element 1
-        vars_indexes => #{name => [1]}
-    },
-
-    StatefulState = arizona_stateful:new(root, test_module, #{}),
-    ChangedState = arizona_stateful:put_binding(name, ~"value", StatefulState),
-
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Should throw badkey error when trying to get non-existent element
-    ?assertError(
-        {badkey, 1},
-        arizona_differ:diff_stateful(TemplateData, ChangedState, SocketWithState)
-    ).
-
-test_diff_stateless_empty_element_changes(Config) when is_list(Config) ->
-    % Test diff_stateless with empty element changes
-    TemplateData = #{
-        elems_order => [0, 1],
-        elems => #{
-            0 => {static, 1, ~"<div>"},
-            1 =>
-                {dynamic, 2, fun(_Socket) ->
-                    % Return socket with no changes and no HTML
-                    arizona_socket:new(#{mode => diff})
-                end}
-        },
-        vars_indexes => #{trigger => [1]}
-    },
-
-    StatefulState = arizona_stateful:new(root, test_module, #{}),
-    ChangedState = arizona_stateful:put_binding(trigger, ~"value", StatefulState),
-
-    Socket = arizona_socket:new(#{mode => diff}),
-    SocketWithState = arizona_socket:put_stateful_state(ChangedState, Socket),
-
-    % Should return socket with no changes
-    ResultSocket = arizona_differ:diff_stateless(TemplateData, ChangedState, SocketWithState),
-    ?assertEqual([], arizona_socket:get_changes(ResultSocket)).
+    % Hierarchical struct is required for diffing
+    ArizonaRequest = arizona_request:new(?MODULE, undefined, #{
+        bindings => Bindings
+    }),
+    View = arizona_view:call_mount_callback(Module, ArizonaRequest),
+    {_Struct, HierarchicalView} = arizona_hierarchical:hierarchical_view(View),
+    HierarchicalView.

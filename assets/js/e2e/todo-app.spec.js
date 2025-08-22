@@ -15,7 +15,7 @@ test.describe('Arizona Todo App', () => {
   const assertions = createAssertions(expect);
 
   test('should load todo app and display initial todos', async ({ page }) => {
-    await page.goto('/test/todo');
+    await page.goto('/todo');
 
     // Check that the page loads with initial todos
     await expect(page.getByTestId('todo-1')).toBeVisible();
@@ -33,7 +33,7 @@ test.describe('Arizona Todo App', () => {
   });
 
   test('should verify delete buttons render correctly with times symbol', async ({ page }) => {
-    await page.goto('/test/todo');
+    await page.goto('/todo');
 
     // Wait for initial load
     await expect(page.getByTestId('todo-1')).toBeVisible();
@@ -56,7 +56,7 @@ test.describe('Arizona Todo App', () => {
   });
 
   test('should display todo items with correct initial state', async ({ page }) => {
-    await page.goto('/test/todo');
+    await page.goto('/todo');
 
     // Verify initial state: todo-1 should not be completed
     const todo1 = page.getByTestId('todo-1');
@@ -84,7 +84,7 @@ test.describe('Arizona Todo App', () => {
   });
 
   test('should display filter buttons with correct initial state', async ({ page }) => {
-    await page.goto('/test/todo');
+    await page.goto('/todo');
 
     // Verify filter buttons exist and are clickable
     await expect(page.getByTestId('filter-all')).toBeVisible();
@@ -103,7 +103,7 @@ test.describe('Arizona Todo App', () => {
   });
 
   test('should display clear completed button when there are completed todos', async ({ page }) => {
-    await page.goto('/test/todo');
+    await page.goto('/todo');
 
     // Verify clear completed button exists (since todo-2 is completed)
     await expect(page.getByTestId('clear-completed')).toBeVisible();
@@ -112,7 +112,7 @@ test.describe('Arizona Todo App', () => {
   });
 
   test('should display input field for adding new todos', async ({ page }) => {
-    await page.goto('/test/todo');
+    await page.goto('/todo');
 
     // Verify input field exists and is functional
     const newTodoInput = page.getByTestId('new-todo-input');
@@ -129,7 +129,7 @@ test.describe('Arizona Todo App', () => {
   });
 
   test('should not duplicate todo items in footer when toggling', async ({ page }) => {
-    await page.goto('/test/todo');
+    await page.goto('/todo');
 
     // Wait for initial load
     await expect(page.getByTestId('todo-1')).toBeVisible();

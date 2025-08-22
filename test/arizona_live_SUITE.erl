@@ -9,294 +9,386 @@
 
 all() ->
     [
-        {group, live_component_lifecycle},
-        {group, live_component_rendering},
-        {group, live_component_events},
-        {group, layout_integration},
-        {group, gen_server_callbacks},
-        {group, callback_wrappers},
-        {group, error_conditions}
+        {group, live_process_tests}
     ].
 
 groups() ->
     [
-        {live_component_lifecycle, [], [
-            test_start_live_component,
-            test_mount_callback
-        ]},
-        {live_component_rendering, [], [
-            test_render_without_layout,
-            test_render_with_layout,
-            test_socket_bindings
-        ]},
-        {live_component_events, [], [
-            test_handle_event_increment,
-            test_handle_event_decrement,
-            test_handle_event_reset,
-            test_handle_event_reply_branch
-        ]},
-        {layout_integration, [], [
-            test_layout_injection,
-            test_layout_slot_rendering
-        ]},
-        {gen_server_callbacks, [], [
-            test_handle_info_callback,
-            test_handle_cast_callback
-        ]},
-        {callback_wrappers, [], [
-            test_call_handle_info_callback_with_function,
-            test_call_handle_info_callback_without_function,
-            test_call_handle_event_callback_with_function,
-            test_call_handle_event_callback_without_function
-        ]},
-        {error_conditions, [], [
-            test_unknown_handle_call,
-            test_handle_event_unknown_event
+        {live_process_tests, [parallel], [
+            start_link_success_test,
+            get_view_test,
+            initial_render_test,
+            handle_view_event_reply_test,
+            handle_view_event_noreply_test,
+            handle_stateful_event_reply_test,
+            handle_stateful_event_noreply_test,
+            handle_cast_test,
+            handle_info_test,
+            concurrent_event_handling_test
         ]}
     ].
 
 init_per_suite(Config) ->
-    Config.
+    % Mock modules for testing
+    MockViewModule = arizona_live_mock_view,
+    MockViewWithStatefulModule = arizona_live_mock_view_with_stateful,
+    MockStatefulComponentModule = arizona_live_mock_stateful_component,
+    MockViewWithHandleInfoModule = arizona_live_mock_view_with_handle_info,
+
+    % Create mock view module
+    MockViewCode = merl:qquote(~""""
+    -module('@module').
+    -compile({parse_transform, arizona_parse_transform}).
+    -behaviour(arizona_view).
+
+    -export([mount/1]).
+    -export([render/1]).
+    -export([handle_event/3]).
+
+    mount(_Req) ->
+        arizona_view:new('@module', #{
+            id => ~"live_test_id",
+            counter => 0
+        }, none).
+
+    render(Bindings) ->
+        arizona_template:from_string(~"""
+        <div>
+            <p>Counter: {arizona_template:get_binding(counter, Bindings)}</p>
+            <button>Increment</button>
+        </div>
+        """).
+
+    handle_event(~"increment", _Params, View) ->
+        ViewState = arizona_view:get_state(View),
+        CurrentCounter = arizona_stateful:get_binding(counter, ViewState),
+        NewCounter = CurrentCounter + 1,
+        UpdatedViewState = arizona_stateful:put_binding(counter, NewCounter, ViewState),
+        UpdatedView = arizona_view:update_state(UpdatedViewState, View),
+        {reply, #{new_count => NewCounter}, UpdatedView};
+    handle_event(~"no_reply", _Params, View) ->
+        {noreply, View}.
+    """", [{module, merl:term(MockViewModule)}]),
+
+    % Create mock stateful component
+    MockStatefulComponentCode = merl:qquote(~""""
+    -module('@module').
+    -compile({parse_transform, arizona_parse_transform}).
+    -behaviour(arizona_stateful).
+
+    -export([mount/1]).
+    -export([render/1]).
+    -export([handle_event/3]).
+
+    mount(Bindings) ->
+        arizona_stateful:new('@module', #{
+            id => maps:get(id, Bindings),
+            value => maps:get(value, Bindings, 0)
+        }).
+
+    render(Bindings) ->
+        arizona_template:from_string(~"""
+        <span>Value: {arizona_template:get_binding(value, Bindings)}</span>
+        """).
+
+    handle_event(~"update", #{~"value" := NewValue}, State) ->
+        UpdatedState = arizona_stateful:put_binding(value, NewValue, State),
+        {reply, #{updated => true}, UpdatedState};
+    handle_event(~"update_no_reply", #{~"value" := NewValue}, State) ->
+        UpdatedState = arizona_stateful:put_binding(value, NewValue, State),
+        {noreply, UpdatedState}.
+    """", [{module, merl:term(MockStatefulComponentModule)}]),
+
+    % Create mock view with stateful components
+    MockViewWithStatefulCode = merl:qquote(~""""
+    -module('@module').
+    -compile({parse_transform, arizona_parse_transform}).
+    -behaviour(arizona_view).
+
+    -export([mount/1]).
+    -export([render/1]).
+
+    mount(_Req) ->
+        arizona_view:new('@module', #{
+            id => ~"view_with_stateful_id"
+        }, none).
+
+    render(_Bindings) ->
+        StatefulModule = '@stateful_module',
+        arizona_template:from_string(~"""
+        <div>
+            {arizona_template:render_stateful(StatefulModule, #{
+                id => ~"stateful_1",
+                value => 10
+            })}
+            {arizona_template:render_stateful(StatefulModule, #{
+                id => ~"stateful_2",
+                value => 20
+            })}
+        </div>
+        """).
+    """", [
+        {module, merl:term(MockViewWithStatefulModule)},
+        {stateful_module, merl:term(MockStatefulComponentModule)}
+    ]),
+
+    % Create mock view with handle_info
+    MockViewWithHandleInfoCode = merl:qquote(~""""
+    -module('@module').
+    -compile({parse_transform, arizona_parse_transform}).
+    -behaviour(arizona_view).
+
+    -export([mount/1]).
+    -export([render/1]).
+    -export([handle_info/2]).
+
+    mount(_Req) ->
+        arizona_view:new('@module', #{
+            id => ~"handle_info_test_id",
+            message_count => 0
+        }, none).
+
+    render(Bindings) ->
+        arizona_template:from_string(~"""
+        <div>Messages: {arizona_template:get_binding(message_count, Bindings)}</div>
+        """).
+
+    handle_info(test_message, View) ->
+        ViewState = arizona_view:get_state(View),
+        CurrentCount = arizona_stateful:get_binding(message_count, ViewState),
+        NewCount = CurrentCount + 1,
+        UpdatedViewState = arizona_stateful:put_binding(message_count, NewCount, ViewState),
+        UpdatedView = arizona_view:update_state(UpdatedViewState, View),
+        {noreply, UpdatedView}.
+    """", [{module, merl:term(MockViewWithHandleInfoModule)}]),
+
+    % Compile and load mock modules
+    {ok, _ViewBinary} = merl:compile_and_load(MockViewCode),
+    {ok, _StatefulComponentBinary} = merl:compile_and_load(MockStatefulComponentCode),
+    {ok, _ViewWithStatefulBinary} = merl:compile_and_load(MockViewWithStatefulCode),
+    {ok, _ViewWithHandleInfoBinary} = merl:compile_and_load(MockViewWithHandleInfoCode),
+
+    [
+        {mock_view_module, MockViewModule},
+        {mock_view_with_stateful_module, MockViewWithStatefulModule},
+        {mock_stateful_component_module, MockStatefulComponentModule},
+        {mock_view_with_handle_info_module, MockViewWithHandleInfoModule}
+        | Config
+    ].
 
 end_per_suite(Config) ->
-    Config.
+    % Clean up mock modules
+    {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
+    {mock_view_with_stateful_module, MockViewWithStatefulModule} = proplists:lookup(
+        mock_view_with_stateful_module, Config
+    ),
+    {mock_stateful_component_module, MockStatefulComponentModule} = proplists:lookup(
+        mock_stateful_component_module, Config
+    ),
+    {mock_view_with_handle_info_module, MockViewWithHandleInfoModule} = proplists:lookup(
+        mock_view_with_handle_info_module, Config
+    ),
+
+    Modules = [
+        MockViewModule,
+        MockViewWithStatefulModule,
+        MockStatefulComponentModule,
+        MockViewWithHandleInfoModule
+    ],
+
+    lists:foreach(
+        fun(Module) ->
+            code:purge(Module),
+            code:delete(Module)
+        end,
+        Modules
+    ),
+
+    ok.
+
+init_per_testcase(initial_render_test, Config) ->
+    % Start basic live process but don't call initial_render (test will do it)
+    {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
+    MockRequest = arizona_request:new(arizona_cowboy_request, #{}, #{
+        method => ~"GET", path => ~"/test"
+    }),
+    {ok, Pid} = arizona_live:start_link(MockViewModule, MockRequest),
+    [{live_pid, Pid} | Config];
+init_per_testcase(TestcaseName, Config) when
+    TestcaseName =:= handle_stateful_event_reply_test;
+    TestcaseName =:= handle_stateful_event_noreply_test
+->
+    % Start live process with stateful components and initialize
+    {mock_view_with_stateful_module, MockViewWithStatefulModule} = proplists:lookup(
+        mock_view_with_stateful_module, Config
+    ),
+    MockRequest = arizona_request:new(arizona_cowboy_request, #{}, #{
+        method => ~"GET", path => ~"/test"
+    }),
+    {ok, Pid} = arizona_live:start_link(MockViewWithStatefulModule, MockRequest),
+    % Initialize with render to create stateful components
+    _HierarchicalStructure = arizona_live:initial_render(Pid),
+    [{live_pid, Pid} | Config];
+init_per_testcase(handle_info_test, Config) ->
+    % Start live process with handle_info capability
+    {mock_view_with_handle_info_module, MockViewWithHandleInfoModule} = proplists:lookup(
+        mock_view_with_handle_info_module, Config
+    ),
+    MockRequest = arizona_request:new(arizona_cowboy_request, #{}, #{
+        method => ~"GET", path => ~"/test"
+    }),
+    {ok, Pid} = arizona_live:start_link(MockViewWithHandleInfoModule, MockRequest),
+    [{live_pid, Pid} | Config];
+init_per_testcase(_TestcaseName, Config) ->
+    % Default: start basic live process and initialize render
+    {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
+    MockRequest = arizona_request:new(arizona_cowboy_request, #{}, #{
+        method => ~"GET", path => ~"/test"
+    }),
+    {ok, Pid} = arizona_live:start_link(MockViewModule, MockRequest),
+    % Initialize render to set up tracker
+    _HierarchicalStructure = arizona_live:initial_render(Pid),
+    [{live_pid, Pid} | Config].
+
+end_per_testcase(_TestcaseName, Config) ->
+    case proplists:lookup(live_pid, Config) of
+        {live_pid, Pid} when is_pid(Pid) ->
+            gen_server:stop(Pid);
+        _ ->
+            ok
+    end.
 
 %% --------------------------------------------------------------------
-%% Live Component Lifecycle Tests
+%% Test cases
 %% --------------------------------------------------------------------
 
-test_start_live_component(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
-
-    % Verify process was started
+start_link_success_test(Config) when is_list(Config) ->
+    ct:comment("Test successful arizona_live process start"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
     ?assert(is_pid(Pid)),
     ?assert(is_process_alive(Pid)).
 
-test_mount_callback(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
+get_view_test(Config) when is_list(Config) ->
+    ct:comment("Test get_view API call"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
+    View = arizona_live:get_view(Pid),
 
-    % Test mount with different request options
-    Socket = arizona_live_test_helpers:mount_live(Pid, #{
-        bindings => #{test => ~"value"},
-        params => [{~"session", ~"data"}]
-    }),
+    ViewState = arizona_view:get_state(View),
+    ViewId = arizona_stateful:get_binding(id, ViewState),
+    ?assertEqual(~"live_test_id", ViewId).
 
-    % Verify socket is returned
-    ?assert(arizona_socket:is_socket(Socket)).
+initial_render_test(Config) when is_list(Config) ->
+    ct:comment("Test initial_render API call and hierarchical structure"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
+    HierarchicalStructure = arizona_live:initial_render(Pid),
 
-%% --------------------------------------------------------------------
-%% Live Component Rendering Tests
-%% --------------------------------------------------------------------
+    ?assertMatch(#{~"live_test_id" := #{static := _, dynamic := _}}, HierarchicalStructure),
+    #{~"live_test_id" := #{static := Static, dynamic := Dynamic}} = HierarchicalStructure,
+    ?assert(is_list(Static)),
+    ?assert(is_list(Dynamic)).
 
-test_render_without_layout(Config) when is_list(Config) ->
-    % Create a socket without layout
-    Socket = arizona_socket:new(#{mode => render}),
+handle_view_event_reply_test(Config) when is_list(Config) ->
+    ct:comment("Test handle_event with undefined StatefulId (view events) - reply"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
-    % Render simple template
-    RenderedSocket = arizona_html:render_live(~"""
-    <div>Test content</div>
-    """, Socket),
+    Result = arizona_live:handle_event(Pid, undefined, ~"increment", #{}),
+    ?assertMatch({reply, ~"live_test_id", _Diff, #{new_count := 1}}, Result),
+    {reply, ViewId, Diff, Reply} = Result,
+    ?assertEqual(~"live_test_id", ViewId),
+    ?assertMatch(#{new_count := 1}, Reply),
+    ?assert(is_list(Diff)).
 
-    % Check rendered HTML
-    arizona_live_test_helpers:assert_html_contains(RenderedSocket, ~"Test content").
+handle_view_event_noreply_test(Config) when is_list(Config) ->
+    ct:comment("Test handle_event with undefined StatefulId (view events) - noreply"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
-test_render_with_layout(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
+    Result = arizona_live:handle_event(Pid, undefined, ~"no_reply", #{}),
+    ?assertMatch({noreply, ~"live_test_id", _Diff}, Result),
+    {noreply, ViewId, Diff} = Result,
+    ?assertEqual(~"live_test_id", ViewId),
+    ?assert(is_list(Diff)).
 
-    % Render with layout
-    Socket = arizona_live_test_helpers:render_live(Pid),
+handle_stateful_event_reply_test(Config) when is_list(Config) ->
+    ct:comment("Test handle_event with specific StatefulId (stateful events) - reply"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
-    % Check that layout is applied
-    arizona_live_test_helpers:assert_html_contains(Socket, ~"<html>"),
-    arizona_live_test_helpers:assert_html_contains(Socket, ~"Test Layout"),
-    arizona_live_test_helpers:assert_html_contains(Socket, ~"Arizona Framework"),
-    arizona_live_test_helpers:assert_html_contains(Socket, ~"Hello, World!").
+    Result = arizona_live:handle_event(Pid, ~"stateful_1", ~"update", #{~"value" => 100}),
+    ?assertMatch({reply, ~"stateful_1", _Diff, #{updated := true}}, Result),
+    {reply, StatefulId, Diff, Reply} = Result,
+    ?assertEqual(~"stateful_1", StatefulId),
+    ?assertMatch(#{updated := true}, Reply),
+    ?assert(is_list(Diff)).
 
-test_socket_bindings(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
+handle_stateful_event_noreply_test(Config) when is_list(Config) ->
+    ct:comment("Test handle_event with specific StatefulId (stateful events) - noreply"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
-    % Test initial bindings
-    Socket = arizona_live_test_helpers:render_live(Pid),
-    arizona_live_test_helpers:assert_binding(Socket, name, ~"World"),
-    arizona_live_test_helpers:assert_binding(Socket, count, 0).
+    Result = arizona_live:handle_event(Pid, ~"stateful_2", ~"update_no_reply", #{~"value" => 200}),
+    ?assertMatch({noreply, ~"stateful_2", _Diff}, Result),
+    {noreply, StatefulId, Diff} = Result,
+    ?assertEqual(~"stateful_2", StatefulId),
+    ?assert(is_list(Diff)).
 
-%% --------------------------------------------------------------------
-%% Live Component Events Tests
-%% --------------------------------------------------------------------
+handle_cast_test(Config) when is_list(Config) ->
+    ct:comment("Test handle_cast message handling"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
-test_handle_event_increment(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
+    % Send cast message - should be ignored but not crash
+    ok = gen_server:cast(Pid, test_cast_message),
 
-    % Test increment event
-    {noreply, Socket1} = arizona_live_test_helpers:send_event(Pid, ~"increment", #{}),
-    arizona_live_test_helpers:assert_binding(Socket1, count, 1),
-
-    % Test another increment
-    {noreply, Socket2} = arizona_live_test_helpers:send_event(Pid, ~"increment", #{}),
-    arizona_live_test_helpers:assert_binding(Socket2, count, 2).
-
-test_handle_event_decrement(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
-
-    % Increment first to have something to decrement
-    {noreply, _Socket1} = arizona_live_test_helpers:send_event(Pid, ~"increment", #{}),
-    {noreply, _Socket2} = arizona_live_test_helpers:send_event(Pid, ~"increment", #{}),
-
-    % Test decrement
-    {noreply, Socket3} = arizona_live_test_helpers:send_event(Pid, ~"decrement", #{}),
-    arizona_live_test_helpers:assert_binding(Socket3, count, 1).
-
-test_handle_event_reset(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
-
-    % Increment first
-    {noreply, _Socket1} = arizona_live_test_helpers:send_event(Pid, ~"increment", #{}),
-    {noreply, _Socket2} = arizona_live_test_helpers:send_event(Pid, ~"increment", #{}),
-
-    % Test reset
-    {noreply, Socket3} = arizona_live_test_helpers:send_event(Pid, ~"reset", #{}),
-    arizona_live_test_helpers:assert_binding(Socket3, count, 0).
-
-%% --------------------------------------------------------------------
-%% Layout Integration Tests
-%% --------------------------------------------------------------------
-
-test_layout_injection(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
-
-    % Render and check layout injection
-    Socket = arizona_live_test_helpers:render_live(Pid),
-
-    % Verify live content is inside layout
-    arizona_live_test_helpers:assert_html_contains(Socket, ~"<main>"),
-    arizona_live_test_helpers:assert_html_contains(Socket, ~"live-component"),
-    arizona_live_test_helpers:assert_html_contains(Socket, ~"</main>").
-
-test_layout_slot_rendering(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
-
-    % Render and check slot content
-    Socket = arizona_live_test_helpers:render_live(Pid),
-
-    % Verify slot content is rendered correctly
-    arizona_live_test_helpers:assert_html_contains(Socket, ~"Hello, World!"),
-    arizona_live_test_helpers:assert_html_contains(Socket, ~"You clicked 0 times").
-
-%% --------------------------------------------------------------------
-%% Live Component Events Tests - Reply Branch
-%% --------------------------------------------------------------------
-
-test_handle_event_reply_branch(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component_with_info),
-
-    % Test handle_event that returns {reply, Reply, Socket}
-    {reply, Reply, Socket} = arizona_live_test_helpers:send_event(Pid, ~"reply_test", #{}),
-
-    % Verify reply and socket
-    ?assertEqual(~"test_reply", Reply),
-    ?assert(arizona_socket:is_socket(Socket)).
-
-%% --------------------------------------------------------------------
-%% Gen Server Callbacks Tests
-%% --------------------------------------------------------------------
-
-test_handle_info_callback(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component_with_info),
-
-    % Send info message to the gen_server process
-    Pid ! {add_message, ~"Test message"},
-
-    % Give some time for the message to be processed
-    timer:sleep(10),
-
-    % Render to get updated socket and verify message was handled
-    Socket = arizona_live_test_helpers:render_live(Pid),
-    arizona_live_test_helpers:assert_binding_contains(Socket, messages, ~"Test message").
-
-test_handle_cast_callback(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
-
-    % Send a cast message (should be ignored but not crash)
-    gen_server:cast(Pid, test_cast_message),
-
-    % Verify process is still alive
+    % Process should still be alive
     ?assert(is_process_alive(Pid)).
 
-%% --------------------------------------------------------------------
-%% Callback Wrappers Tests
-%% --------------------------------------------------------------------
+handle_info_test(Config) when is_list(Config) ->
+    ct:comment("Test handle_info callback delegation"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
-test_call_handle_info_callback_with_function(Config) when is_list(Config) ->
-    Socket = arizona_socket:new(#{mode => render}),
+    % Send info message that should be handled by view's handle_info
+    Pid ! test_message,
 
-    % Test with module that exports handle_info/2
-    Result = arizona_live:call_handle_info_callback(
-        arizona_live_component_with_info, test_info, Socket
-    ),
+    % Give some time for message processing
+    timer:sleep(100),
 
-    % Should return {noreply, Socket}
-    ?assertMatch({noreply, Socket}, Result),
-    ?assert(arizona_socket:is_socket(Socket)).
+    % Process should still be alive
+    ?assert(is_process_alive(Pid)),
 
-test_call_handle_info_callback_without_function(Config) when is_list(Config) ->
-    Socket = arizona_socket:new(#{mode => render}),
+    % Verify that the message was processed by checking state change
+    View = arizona_live:get_view(Pid),
+    ViewState = arizona_view:get_state(View),
+    MessageCount = arizona_stateful:get_binding(message_count, ViewState),
+    ?assertEqual(1, MessageCount).
 
-    % Test with module that does NOT export handle_info/2
-    Result = arizona_live:call_handle_info_callback(arizona_live_component, test_info, Socket),
+concurrent_event_handling_test(Config) when is_list(Config) ->
+    ct:comment("Test concurrent event handling"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
-    % Should return {noreply, Socket} as default
-    ?assertMatch({noreply, Socket}, Result),
-    ?assert(arizona_socket:is_socket(Socket)).
+    % Send multiple concurrent events
+    Parent = self(),
+    spawn(fun() ->
+        Result1 = arizona_live:handle_event(Pid, undefined, ~"increment", #{}),
+        Parent ! {result, 1, Result1}
+    end),
+    spawn(fun() ->
+        Result2 = arizona_live:handle_event(Pid, undefined, ~"increment", #{}),
+        Parent ! {result, 2, Result2}
+    end),
 
-test_call_handle_event_callback_with_function(Config) when is_list(Config) ->
-    Socket = arizona_socket:new(#{mode => render}),
+    % Collect results
+    Results = [
+        receive
+            {result, 1, R1} -> R1
+        after 5000 -> timeout
+        end,
+        receive
+            {result, 2, R2} -> R2
+        after 5000 -> timeout
+        end
+    ],
 
-    % Test with module that exports handle_event/3
-    Result = arizona_live:call_handle_event_callback(
-        arizona_live_component, ~"test_event", #{}, Socket
-    ),
-
-    % Should return {noreply, Socket}
-    ?assertMatch({noreply, _}, Result).
-
-test_call_handle_event_callback_without_function(Config) when is_list(Config) ->
-    Socket = arizona_socket:new(#{mode => render}),
-
-    % Test with a module that does NOT export handle_event/3
-    % Create a simple test module without handle_event
-    Result = arizona_live:call_handle_event_callback(arizona_socket, ~"test_event", #{}, Socket),
-
-    % Should return {noreply, Socket} as default
-    ?assertMatch({noreply, _}, Result).
-
-%% --------------------------------------------------------------------
-%% Error Conditions Tests
-%% --------------------------------------------------------------------
-
-test_unknown_handle_call(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
-
-    % This should test the handle_call pattern matching, but since all patterns
-    % are covered in arizona_live.erl, we test the mount/render/handle_event functions
-    % to ensure handle_call coverage
-
-    % Test mount
-    Socket1 = arizona_live:mount(Pid, arizona_request:new(#{})),
-    ?assert(arizona_socket:is_socket(Socket1)),
-
-    % Test render
-    Socket2 = arizona_live:render(Pid),
-    ?assert(arizona_socket:is_socket(Socket2)),
-
-    % Test handle_event
-    {noreply, Socket3} = arizona_live:handle_event(Pid, ~"increment", #{}),
-    ?assert(arizona_socket:is_socket(Socket3)).
-
-test_handle_event_unknown_event(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live_test_helpers:start_live(arizona_live_component),
-
-    % Test unknown event (should be handled by catch-all clause)
-    {noreply, Socket} = arizona_live_test_helpers:send_event(Pid, ~"unknown_event", #{}),
-
-    % Should return socket unchanged
-    ?assert(arizona_socket:is_socket(Socket)).
+    % Both should succeed
+    lists:foreach(
+        fun(Result) ->
+            ?assertMatch({reply, ~"live_test_id", _Diff, #{new_count := _}}, Result)
+        end,
+        Results
+    ).

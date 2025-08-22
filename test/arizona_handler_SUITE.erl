@@ -9,232 +9,235 @@
 
 all() ->
     [
-        {group, basic_handler_tests},
-        {group, request_processing_tests},
-        {group, error_handling_tests}
+        {group, handler_integration_tests}
     ].
 
 groups() ->
     [
-        {basic_handler_tests, [sequence], [
-            test_simple_component_rendering,
-            test_component_with_layout
-        ]},
-        {request_processing_tests, [sequence], [
-            test_get_request_processing,
-            test_post_request_processing,
-            test_request_with_query_params,
-            test_request_with_path_bindings
-        ]},
-        {error_handling_tests, [sequence], [
-            test_nonexistent_module_error,
-            test_mount_callback_error
+        {handler_integration_tests, [parallel], [
+            handler_init_success_test,
+            handler_with_layout_test,
+            handler_error_handling_test
         ]}
     ].
 
 init_per_suite(Config) ->
+    % Config
+    ServerPort = 8081,
+    ViewRouteUrl = ~"/test",
+    ErrorViewRouteUrl = ~"/error-test",
+    ViewWithLayoutRouteUrl = ~"/layout-test",
+    MockViewModule = arizona_handler_mock_view,
+    MockErrorViewModule = arizona_handler_mock_error_view,
+    MockViewWithLayoutModule = arizona_handler_mock_view_with_layout,
+    MockLayoutModule = arizona_handler_mock_layout,
+    LayoutRenderFun = render,
+    LayoutSlotName = main_content,
+
     % Ensure applications are started
     {ok, _} = application:ensure_all_started(cowboy),
     % For httpc
     {ok, _} = application:ensure_all_started(inets),
-    Config.
+    % Start arizona server
+    {ok, _Pid} = arizona_server:start(#{
+        port => ServerPort,
+        routes => [
+            {live, ViewRouteUrl, MockViewModule},
+            {live, ErrorViewRouteUrl, MockErrorViewModule},
+            {live, ViewWithLayoutRouteUrl, MockViewWithLayoutModule}
+        ]
+    }),
 
-end_per_suite(_Config) ->
-    inets:stop(),
+    % Create mock modules for testing
+    MockViewCode = merl:qquote(~""""
+    -module('@module').
+    -compile({parse_transform, arizona_parse_transform}).
+    -behaviour(arizona_view).
+
+    -export([mount/1]).
+    -export([render/1]).
+
+    mount(_Req) ->
+        arizona_view:new('@module', #{
+            id => ~"test_id",
+            title => ~"Arizona"
+        }, none).
+
+    render(Bindings) ->
+        arizona_template:from_string(~"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>{arizona_template:get_binding(title, Bindings)}</title>
+        </head>
+        <body>
+            Hello, World!
+        </body>
+        </html>
+        """).
+    """", [{module, merl:term(MockViewModule)}]),
+
+    % Create mock modules for testing
+    MockErrorViewCode = merl:qquote(~""""
+    -module('@module').
+    -compile({parse_transform, arizona_parse_transform}).
+    -behaviour(arizona_view).
+
+    -export([mount/1]).
+    -export([render/1]).
+
+    mount(_Req) ->
+        error('@module').
+
+    render(Bindings) ->
+        arizona_template:from_string(~"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Error</title>
+        </head>
+        <body>
+            Should not render!
+        </body>
+        </html>
+        """).
+    """", [{module, merl:term(MockErrorViewModule)}]),
+
+    MockViewWithLayoutCode = merl:qquote(~""""
+    -module('@module').
+    -compile({parse_transform, arizona_parse_transform}).
+    -behaviour(arizona_view).
+
+    -export([mount/1]).
+    -export([render/1]).
+
+    mount(_Req) ->
+        Layout = {'@layout_module', '@layout_render_fun', '@layout_slot_name', #{
+            title => ~"Arizona With Layout"
+        }},
+        arizona_view:new('@module', #{
+            id => ~"test_id"
+        }, Layout).
+
+    render(_Bindings) ->
+        arizona_template:from_string(~"""
+        <h1>Mock View</h1>
+        """).
+    """", [
+        {module, merl:term(MockViewWithLayoutModule)},
+        {layout_module, merl:term(MockLayoutModule)},
+        {layout_render_fun, merl:term(LayoutRenderFun)},
+        {layout_slot_name, merl:term(LayoutSlotName)}
+    ]),
+
+    MockLayoutCode = merl:qquote(~""""
+    -module('@module').
+    -compile({parse_transform, arizona_parse_transform}).
+    -export([render/1]).
+
+    '@render_fun'(Bindings) ->
+        SlotName = '@slot_name',
+        arizona_template:from_string(~"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>{arizona_template:get_binding(title, Bindings)}</title>
+        </head>
+        <body>
+            {arizona_template:render_slot(arizona_template:get_binding(SlotName, Bindings))}
+        </body>
+        </html>
+        """).
+    """", [
+        {module, merl:term(MockLayoutModule)},
+        {render_fun, merl:term(LayoutRenderFun)},
+        {slot_name, merl:term(LayoutSlotName)}
+    ]),
+
+    {ok, _ViewBinary} = merl:compile_and_load(MockViewCode),
+    {ok, _ErrorViewBinary} = merl:compile_and_load(MockErrorViewCode),
+    {ok, _ViewWithLayoutBinary} = merl:compile_and_load(MockViewWithLayoutCode),
+    {ok, _LayoutBinary} = merl:compile_and_load(MockLayoutCode),
+
+    [
+        {server_port, ServerPort},
+        {view_route_url, ViewRouteUrl},
+        {error_view_route_url, ErrorViewRouteUrl},
+        {view_with_layout_route_url, ViewWithLayoutRouteUrl},
+        {mock_view_module, MockViewModule},
+        {mock_error_view_module, MockErrorViewModule},
+        {mock_view_with_layout_module, MockViewWithLayoutModule},
+        {mock_layout_module, MockLayoutModule}
+        | Config
+    ].
+
+end_per_suite(Config) ->
+    % Stop arizona server
+    arizona_server:stop(),
+
+    {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
+    {mock_error_view_module, MockErrorViewModule} = proplists:lookup(
+        mock_error_view_module, Config
+    ),
+    {mock_view_with_layout_module, MockViewWithLayoutModule} = proplists:lookup(
+        mock_view_with_layout_module, Config
+    ),
+    {mock_layout_module, MockLayoutModule} = proplists:lookup(mock_layout_module, Config),
+
+    code:purge(MockViewModule),
+    code:purge(MockErrorViewModule),
+    code:purge(MockViewWithLayoutModule),
+    code:purge(MockLayoutModule),
+
+    code:delete(MockViewModule),
+    code:delete(MockErrorViewModule),
+    code:delete(MockViewWithLayoutModule),
+    code:delete(MockLayoutModule),
+
     ok.
 
-init_per_testcase(_TestCase, Config) ->
-    Config.
+%% --------------------------------------------------------------------
+%% Handler integration tests
+%% --------------------------------------------------------------------
 
-end_per_testcase(_TestCase, _Config) ->
-    % Stop server after each test
-    _ = arizona_server:stop(),
-    ok.
+handler_init_success_test(Config) when is_list(Config) ->
+    ct:comment("Handler should successfully initialize and process view requests"),
+    {server_port, ServerPort} = proplists:lookup(server_port, Config),
+    {view_route_url, ViewRouteUrl} = proplists:lookup(view_route_url, Config),
+    HttpResponse = http_get(ServerPort, ViewRouteUrl),
+    ?assertMatch({ok, {200, _HtmlBody}}, HttpResponse),
+    {ok, {200, HtmlBody}} = HttpResponse,
+    ?assert(binary:match(HtmlBody, ~"Hello, World!") =/= nomatch).
+
+handler_with_layout_test(Config) when is_list(Config) ->
+    ct:comment("Handler should successfully render views with layout integration"),
+    {server_port, ServerPort} = proplists:lookup(server_port, Config),
+    {view_with_layout_route_url, LayoutRouteUrl} = proplists:lookup(
+        view_with_layout_route_url, Config
+    ),
+    HttpResponse = http_get(ServerPort, LayoutRouteUrl),
+    ?assertMatch({ok, {200, _HtmlBody}}, HttpResponse),
+    {ok, {200, HtmlBody}} = HttpResponse,
+    ?assert(binary:match(HtmlBody, ~"Arizona With Layout") =/= nomatch),
+    ?assert(binary:match(HtmlBody, ~"<h1>Mock View</h1>") =/= nomatch).
+
+handler_error_handling_test(Config) when is_list(Config) ->
+    ct:comment("Handler should gracefully handle view mounting errors"),
+    {server_port, ServerPort} = proplists:lookup(server_port, Config),
+    {error_view_route_url, ErrorRouteUrl} = proplists:lookup(error_view_route_url, Config),
+    HttpResponse = http_get(ServerPort, ErrorRouteUrl),
+    ?assertMatch({ok, {500, _ErrorBody}}, HttpResponse),
+    {ok, {500, HtmlBody}} = HttpResponse,
+    ?assert(binary:match(HtmlBody, ~"Error:") =/= nomatch).
 
 %% --------------------------------------------------------------------
 %% HTTP Helper Functions
 %% --------------------------------------------------------------------
 
 %% Simple GET request helper
-http_get(Url) ->
-    httpc:request(get, {Url, []}, [], [
+http_get(ServerPort, RouteUrl) ->
+    RequestUrl = io_lib:format("http://localhost:~p~s", [ServerPort, RouteUrl]),
+    httpc:request(get, {RequestUrl, []}, [], [
         {body_format, binary},
         {full_result, false}
     ]).
-
-%% POST request helper
-http_post(Url, ContentType, Body) ->
-    httpc:request(post, {Url, [], ContentType, Body}, [], [
-        {body_format, binary},
-        {full_result, false}
-    ]).
-
-%% --------------------------------------------------------------------
-%% Basic Handler Tests
-%% --------------------------------------------------------------------
-
-test_simple_component_rendering(Config) when is_list(Config) ->
-    % Start server with simple component
-    {ok, _Pid} = arizona_server:start(#{
-        port => 8083,
-        routes => [{live, ~"/simple", arizona_simple_live_component}]
-    }),
-
-    % Test HTTP request
-    {ok, {200, Body}} = http_get("http://localhost:8083/simple"),
-
-    % Verify component content
-    ?assert(binary:match(Body, ~"Simple Live Component") =/= nomatch),
-    ?assert(binary:match(Body, ~"basic arizona_live component") =/= nomatch),
-
-    ct:comment("Simple arizona_live component renders via arizona_handler").
-
-test_component_with_layout(Config) when is_list(Config) ->
-    % Start server with layout component (test_live_component already has layout)
-    {ok, _Pid} = arizona_server:start(#{
-        port => 8083,
-        routes => [{live, ~"/layout", arizona_live_component}]
-    }),
-
-    % Test HTTP request
-    {ok, {200, Body}} = http_get("http://localhost:8083/layout"),
-
-    % Verify layout and component content are both present
-
-    % from component
-    ?assert(binary:match(Body, ~"Hello, World!") =/= nomatch),
-    % from layout
-    ?assert(binary:match(Body, ~"Test Layout") =/= nomatch),
-
-    ct:comment("Component with layout renders correctly via arizona_handler").
-
-%% --------------------------------------------------------------------
-%% Request Processing Tests
-%% --------------------------------------------------------------------
-
-test_get_request_processing(Config) when is_list(Config) ->
-    % Start server with request info component
-    {ok, _Pid} = arizona_server:start(#{
-        port => 8083,
-        routes => [{live, ~"/request-info", arizona_request_info_live_component}]
-    }),
-
-    % Test GET request
-    {ok, {200, Body}} = http_get("http://localhost:8083/request-info"),
-
-    % Verify request method and path are captured
-    ?assert(binary:match(Body, ~"Method: GET") =/= nomatch),
-    ?assert(binary:match(Body, ~"Path: /request-info") =/= nomatch),
-    ?assert(binary:match(Body, ~"Params: none") =/= nomatch),
-    ?assert(binary:match(Body, ~"Bindings: none") =/= nomatch),
-
-    ct:comment("GET request processing works correctly").
-
-test_post_request_processing(Config) when is_list(Config) ->
-    % Start server with request info component
-    {ok, _Pid} = arizona_server:start(#{
-        port => 8083,
-        routes => [{live, ~"/request-info", arizona_request_info_live_component}]
-    }),
-
-    % Test POST request with body
-    {ok, {200, Body}} = http_post(
-        "http://localhost:8083/request-info",
-        "application/x-www-form-urlencoded",
-        "name=test&value=123"
-    ),
-
-    % Verify POST method is captured
-    ?assert(binary:match(Body, ~"Method: POST") =/= nomatch),
-    ?assert(binary:match(Body, ~"Path: /request-info") =/= nomatch),
-
-    ct:comment("POST request processing works correctly").
-
-test_request_with_query_params(Config) when is_list(Config) ->
-    % Start server with request info component
-    {ok, _Pid} = arizona_server:start(#{
-        port => 8083,
-        routes => [{live, ~"/request-info", arizona_request_info_live_component}]
-    }),
-
-    % Test request with query parameters
-    {ok, {200, Body}} = http_get("http://localhost:8083/request-info?name=test&count=42"),
-
-    % Verify query parameters are processed
-    ?assert(binary:match(Body, ~"Params: name=test, count=42") =/= nomatch),
-
-    ct:comment("Query parameter processing works correctly").
-
-test_request_with_path_bindings(Config) when is_list(Config) ->
-    % Start server with parameterized route
-    {ok, _Pid} = arizona_server:start(#{
-        port => 8083,
-        routes => [{live, ~"/users/:id", arizona_request_info_live_component}]
-    }),
-
-    % Test request with path parameters
-    {ok, {200, Body}} = http_get("http://localhost:8083/users/123"),
-
-    % Verify path bindings are processed
-    ?assert(binary:match(Body, ~"Bindings: id=123") =/= nomatch),
-
-    ct:comment("Path binding processing works correctly").
-
-%% --------------------------------------------------------------------
-%% Error Handling Tests
-%% --------------------------------------------------------------------
-
-test_nonexistent_module_error(Config) when is_list(Config) ->
-    % Start server with nonexistent module
-    {ok, _Pid} = arizona_server:start(#{
-        port => 8083,
-        routes => [{live, ~"/nonexistent", nonexistent_module}]
-    }),
-
-    % Test request should return 500
-    {ok, {500, Body}} = http_get("http://localhost:8083/nonexistent"),
-
-    % Verify error response contains expected error information
-    ?assert(binary:match(Body, ~"LiveView Error") =/= nomatch),
-    ?assert(binary:match(Body, ~"undef") =/= nomatch),
-
-    ct:comment("Nonexistent module returns 500 error as expected").
-
-test_mount_callback_error(Config) when is_list(Config) ->
-    % Create component that throws in mount
-    {ok, _} = create_error_component(),
-
-    % Start server with error component
-    {ok, _Pid} = arizona_server:start(#{
-        port => 8083,
-        routes => [{live, ~"/mount-error", mount_error_component}]
-    }),
-
-    % Test request should return 500
-    {ok, {500, Body}} = http_get("http://localhost:8083/mount-error"),
-
-    % Verify error response contains mount error
-    ?assert(binary:match(Body, ~"LiveView Error") =/= nomatch),
-    ?assert(binary:match(Body, ~"mount_failed") =/= nomatch),
-
-    ct:comment("Mount callback error is handled with 500 response").
-
-%% --------------------------------------------------------------------
-%% Helper Functions
-%% --------------------------------------------------------------------
-
-create_error_component() ->
-    Code = merl:quote(~""""
-    -module(mount_error_component).
-    -behaviour(arizona_live).
-    -export([mount/2, render/1]).
-
-    mount(_Req, _Socket) ->
-        throw(mount_failed).
-
-    render(Socket) ->
-        arizona_html:render_live(~"""
-        <div>Should not render</div>
-        """, Socket).
-    """"),
-    merl:compile_and_load(Code).

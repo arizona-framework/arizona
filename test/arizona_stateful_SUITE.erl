@@ -3,9 +3,6 @@
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).
 
-%% Dialyzer suppressions for intentional type violations in negative tests
--dialyzer({nowarn_function, test_stateful_creation_validation/1}).
-
 %% --------------------------------------------------------------------
 %% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
@@ -13,267 +10,230 @@
 all() ->
     [
         {group, callback_tests},
-        {group, stateful_creation_tests},
-        {group, state_access_tests},
-        {group, binding_tests},
-        {group, remount_tests}
+        {group, state_management_tests},
+        {group, binding_tests}
     ].
 
 groups() ->
     [
         {callback_tests, [parallel], [
-            test_call_mount_callback,
-            test_call_unmount_callback_with_export,
-            test_call_unmount_callback_without_export,
-            test_call_render_callback,
-            test_call_dynamic_function
+            call_mount_callback_test,
+            call_render_callback_test,
+            call_handle_event_callback_reply,
+            call_handle_event_callback_noreply
         ]},
-        {stateful_creation_tests, [parallel], [
-            test_stateful_creation_root,
-            test_stateful_creation_binary_id,
-            test_stateful_creation_validation
-        ]},
-        {state_access_tests, [parallel], [
-            test_get_module
+        {state_management_tests, [parallel], [
+            new_creates_state,
+            get_module_test
         ]},
         {binding_tests, [parallel], [
-            test_get_binding_existing,
-            test_get_binding_not_found,
-            test_put_binding_new,
-            test_put_binding_unchanged,
-            test_put_binding_changed,
-            test_put_bindings_multiple
-        ]},
-        {remount_tests, [parallel], [
-            test_should_remount_changed_bindings,
-            test_should_remount_matching,
-            test_should_remount_different
+            get_binding_test,
+            get_binding_with_default_test,
+            get_bindings_test,
+            put_binding_test,
+            put_binding_same_value_test,
+            merge_bindings_test,
+            get_changed_bindings_test,
+            set_changed_bindings_test
         ]}
     ].
 
-%% --------------------------------------------------------------------
-%% Callback Tests
-%% --------------------------------------------------------------------
+init_per_suite(Config) ->
+    MockModule = arizona_stateful_mock,
+    MockEventsModule = arizona_stateful_mock_events,
 
-test_call_mount_callback(Config) when is_list(Config) ->
-    Module = arizona_stateful_module_with_mount,
-    Socket = create_mock_socket(),
+    MockModuleCode = merl:qquote(~""""
+    -module('@module').
+    -behaviour(arizona_stateful).
 
-    %% Should call mount/1 and return updated socket
-    UpdatedSocket = arizona_stateful:call_mount_callback(Module, Socket),
-    ?assertNotEqual(Socket, UpdatedSocket).
+    -export([mount/1]).
+    -export([render/1]).
 
-test_call_unmount_callback_with_export(Config) when is_list(Config) ->
-    Module = arizona_stateful_module_with_unmount,
-    Socket = create_mock_socket(),
+    mount(Bindings) ->
+        arizona_stateful:new('@module', Bindings).
 
-    %% Should call unmount/1 when exported
-    UpdatedSocket = arizona_stateful:call_unmount_callback(Module, Socket),
-    %% Check that unmount was called by verifying socket is modified
-    ?assert(arizona_socket:is_socket(UpdatedSocket)).
+    render(_Bindings) ->
+        arizona_template:from_string(~"""
+        <h1>Mock Template</h1>
+        """).
+    """", [{module, merl:term(MockModule)}]),
 
-test_call_unmount_callback_without_export(Config) when is_list(Config) ->
-    % This module doesn't export unmount/1
-    Module = arizona_stateful_module_with_mount,
-    Socket = create_mock_socket(),
+    MockEventsModuleCode = merl:qquote(~""""
+    -module('@module').
+    -behaviour(arizona_stateful).
 
-    %% Should return socket unchanged when unmount/1 not exported
-    Result = arizona_stateful:call_unmount_callback(Module, Socket),
-    ?assertEqual(Socket, Result).
+    -export([mount/1]).
+    -export([render/1]).
+    -export([handle_event/3]).
 
-test_call_render_callback(Config) when is_list(Config) ->
-    Module = arizona_stateful_module_with_mount,
-    %% Need to mount first to initialize status binding
-    Socket = create_mock_socket(),
-    MountedSocket = arizona_stateful:call_mount_callback(Module, Socket),
+    mount(Bindings) ->
+        arizona_stateful:new('@module', Bindings).
 
-    %% Should call render/1 and return template data
-    Result = arizona_stateful:call_render_callback(Module, MountedSocket),
-    ?assert(arizona_socket:is_socket(Result)).
+    render(_Bindings) ->
+        arizona_template:from_string(~"""
+        <h1>Mock Template</h1>
+        """).
 
-test_call_dynamic_function(Config) when is_list(Config) ->
-    Socket = create_mock_socket(),
-    Fun = fun(S) -> {dynamic_result, S} end,
+    handle_event(~"reply", Params, State) ->
+        {reply, Params, State};
+    handle_event(~"noreply", _Params, State) ->
+        {noreply, State}.
+    """", [{module, merl:term(MockEventsModule)}]),
 
-    %% Should apply function with socket
-    Result = arizona_stateful:call_dynamic_function(Fun, Socket),
-    ?assertEqual({dynamic_result, Socket}, Result).
+    {ok, _Binary} = merl:compile_and_load(MockModuleCode),
+    {ok, _EventsBinary} = merl:compile_and_load(MockEventsModuleCode),
 
-%% --------------------------------------------------------------------
-%% Stateful Creation Tests
-%% --------------------------------------------------------------------
+    [
+        {mock_module, MockModule},
+        {mock_events_module, MockEventsModule}
+        | Config
+    ].
 
-test_stateful_creation_root(Config) when is_list(Config) ->
-    Id = root,
-    Module = test_module,
-    Bindings = #{name => ~"Test", count => 5},
+end_per_suite(Config) ->
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
+    {mock_events_module, MockEventsModule} = proplists:lookup(mock_events_module, Config),
 
-    %% Test creating stateful with root ID
-    StatefulState = arizona_stateful:new(Id, Module, Bindings),
-    ?assertEqual(Module, arizona_stateful:get_module(StatefulState)),
-    ?assertEqual(~"Test", arizona_stateful:get_binding(name, StatefulState)),
-    ?assertEqual(5, arizona_stateful:get_binding(count, StatefulState)).
+    code:purge(MockModule),
+    code:purge(MockEventsModule),
 
-test_stateful_creation_binary_id(Config) when is_list(Config) ->
-    Id = ~"component_123",
-    Module = test_module,
-    Bindings = #{active => true},
+    code:delete(MockModule),
+    code:delete(MockEventsModule),
 
-    %% Test creating stateful with binary ID
-    StatefulState = arizona_stateful:new(Id, Module, Bindings),
-    ?assertEqual(Module, arizona_stateful:get_module(StatefulState)),
-    ?assertEqual(true, arizona_stateful:get_binding(active, StatefulState)).
-
-test_stateful_creation_validation(Config) when is_list(Config) ->
-    ValidBindings = #{test => value},
-
-    %% Test invalid ID types should fail
-    ?assertError(function_clause, arizona_stateful:new(invalid_atom, test_mod, ValidBindings)),
-    ?assertError(function_clause, arizona_stateful:new(123, test_mod, ValidBindings)),
-
-    %% Test invalid module should fail
-    ?assertError(function_clause, arizona_stateful:new(root, "not_atom", ValidBindings)),
-    ?assertError(function_clause, arizona_stateful:new(root, 123, ValidBindings)),
-
-    %% Test invalid bindings should fail
-    ?assertError(function_clause, arizona_stateful:new(root, test_mod, "not_map")),
-    ?assertError(function_clause, arizona_stateful:new(root, test_mod, [])).
+    ok.
 
 %% --------------------------------------------------------------------
-%% State Access Tests
+%% Callback tests
 %% --------------------------------------------------------------------
 
-test_get_module(Config) when is_list(Config) ->
-    Module = my_test_module,
-    StatefulState = arizona_stateful:new(root, Module, #{}),
+call_mount_callback_test(Config) when is_list(Config) ->
+    ct:comment("call_mount_callback/2 should call module mount function"),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
+    Bindings = #{name => ~"Arizona", version => ~"1.0"},
+    State = arizona_stateful:call_mount_callback(MockModule, Bindings),
+    ?assertEqual(MockModule, arizona_stateful:get_module(State)),
+    ?assertEqual(arizona_binder:new(Bindings), arizona_stateful:get_bindings(State)).
 
-    %% Should return the module
-    ?assertEqual(Module, arizona_stateful:get_module(StatefulState)).
+call_render_callback_test(Config) when is_list(Config) ->
+    ct:comment("call_render_callback/2 should call module render function"),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
+    Bindings = #{title => ~"Test Page"},
+    State = arizona_stateful:new(MockModule, Bindings),
+    Template = arizona_stateful:call_render_callback(State),
+    ?assertEqual([~"<h1>Mock Template</h1>"], arizona_template:get_static(Template)).
 
-%% --------------------------------------------------------------------
-%% Binding Tests
-%% --------------------------------------------------------------------
+call_handle_event_callback_reply(Config) when is_list(Config) ->
+    ct:comment("call_handle_event_callback/4 should return reply tuple when event returns reply"),
+    {mock_events_module, MockModule} = proplists:lookup(mock_events_module, Config),
+    State = arizona_stateful:new(MockModule, #{}),
+    Params = #{data => ~"test"},
+    {reply, Reply, NewState} = arizona_stateful:call_handle_event_callback(~"reply", Params, State),
+    ?assertEqual(Params, Reply),
+    ?assertEqual(State, NewState).
 
-test_get_binding_existing(Config) when is_list(Config) ->
-    Bindings = #{user => ~"Alice", role => admin, count => 42},
-    StatefulState = arizona_stateful:new(root, test_mod, Bindings),
-
-    %% Should get existing bindings
-    ?assertEqual(~"Alice", arizona_stateful:get_binding(user, StatefulState)),
-    ?assertEqual(admin, arizona_stateful:get_binding(role, StatefulState)),
-    ?assertEqual(42, arizona_stateful:get_binding(count, StatefulState)).
-
-test_get_binding_not_found(Config) when is_list(Config) ->
-    Bindings = #{existing => value},
-    StatefulState = arizona_stateful:new(root, test_mod, Bindings),
-
-    %% Should throw when binding not found
-    ?assertThrow(
-        {binding_not_found, missing_key}, arizona_stateful:get_binding(missing_key, StatefulState)
-    ).
-
-test_put_binding_new(Config) when is_list(Config) ->
-    StatefulState = arizona_stateful:new(root, test_mod, #{}),
-
-    %% Add new binding
-    UpdatedStateful = arizona_stateful:put_binding(new_key, new_value, StatefulState),
-    ?assertEqual(new_value, arizona_stateful:get_binding(new_key, UpdatedStateful)).
-
-test_put_binding_unchanged(Config) when is_list(Config) ->
-    Bindings = #{key => existing_value},
-    StatefulState = arizona_stateful:new(root, test_mod, Bindings),
-
-    %% Set same value (no change)
-    UpdatedStateful = arizona_stateful:put_binding(key, existing_value, StatefulState),
-    ?assertEqual(existing_value, arizona_stateful:get_binding(key, UpdatedStateful)).
-
-test_put_binding_changed(Config) when is_list(Config) ->
-    Bindings = #{key => old_value},
-    StatefulState = arizona_stateful:new(root, test_mod, Bindings),
-
-    %% Change existing binding value
-    UpdatedStateful = arizona_stateful:put_binding(key, new_value, StatefulState),
-    ?assertEqual(new_value, arizona_stateful:get_binding(key, UpdatedStateful)).
-
-test_put_bindings_multiple(Config) when is_list(Config) ->
-    InitialBindings = #{existing => value},
-    StatefulState = arizona_stateful:new(root, test_mod, InitialBindings),
-
-    %% Add multiple bindings
-    NewBindings = #{
-        name => ~"John",
-        age => 30,
-        active => true,
-        existing => updated_value
-    },
-    UpdatedStateful = arizona_stateful:put_bindings(NewBindings, StatefulState),
-
-    %% Verify all bindings
-    ?assertEqual(~"John", arizona_stateful:get_binding(name, UpdatedStateful)),
-    ?assertEqual(30, arizona_stateful:get_binding(age, UpdatedStateful)),
-    ?assertEqual(true, arizona_stateful:get_binding(active, UpdatedStateful)),
-    ?assertEqual(updated_value, arizona_stateful:get_binding(existing, UpdatedStateful)).
+call_handle_event_callback_noreply(Config) when is_list(Config) ->
+    ct:comment(
+        "call_handle_event_callback/4 should return noreply tuple when event returns noreply"
+    ),
+    {mock_events_module, MockModule} = proplists:lookup(mock_events_module, Config),
+    State = arizona_stateful:new(MockModule, #{}),
+    {Reply, NewState} = arizona_stateful:call_handle_event_callback(~"noreply", #{}, State),
+    ?assertEqual(noreply, Reply),
+    ?assertEqual(State, NewState).
 
 %% --------------------------------------------------------------------
-%% Remount Tests
+%% State management tests
 %% --------------------------------------------------------------------
 
-test_should_remount_changed_bindings(Config) when is_list(Config) ->
-    %% Create stateful and modify it to trigger fingerprint mismatch
-    StatefulState1 = arizona_stateful:new(root, test_mod, #{key => value}),
-    %% Change binding to create different fingerprint
-    StatefulState2 = arizona_stateful:put_binding(key, different_value, StatefulState1),
+new_creates_state(Config) when is_list(Config) ->
+    ct:comment("new/2 should create state record with module and bindings"),
+    Bindings = #{user => ~"john", role => ~"admin"},
+    State = arizona_stateful:new(my_module, Bindings),
+    ?assertEqual(my_module, arizona_stateful:get_module(State)),
+    ?assertEqual(arizona_binder:new(Bindings), arizona_stateful:get_bindings(State)),
+    ?assertEqual(arizona_binder:new(#{}), arizona_stateful:get_changed_bindings(State)).
 
-    %% Should remount when fingerprints differ due to changed bindings
-    ?assertEqual(true, arizona_stateful:should_remount(StatefulState2)).
-
-test_should_remount_matching(Config) when is_list(Config) ->
-    %% Create stateful with initial bindings
-    Bindings = #{name => ~"Test", count => 1},
-    StatefulState1 = arizona_stateful:new(root, test_mod, Bindings),
-
-    %% Create another with same bindings (should have matching fingerprints)
-    StatefulState2 = arizona_stateful:new(root, test_mod, Bindings),
-
-    %% Simulate fingerprint matching by creating the same bindings
-    %% In real usage, this would be compared against previous fingerprint
-    ?assertEqual(
-        false,
-        arizona_stateful:should_remount(StatefulState1) orelse
-            arizona_stateful:should_remount(StatefulState2)
-    ).
-
-test_should_remount_different(Config) when is_list(Config) ->
-    %% Create stateful with initial bindings
-    StatefulState1 = arizona_stateful:new(root, test_mod, #{count => 1}),
-
-    %% Update bindings to create different fingerprint
-    UpdatedStateful = arizona_stateful:put_binding(count, 2, StatefulState1),
-
-    %% Should remount when fingerprints differ
-    %% This tests the internal fingerprint comparison logic
-    ?assertEqual(true, arizona_stateful:should_remount(UpdatedStateful)).
+get_module_test(Config) when is_list(Config) ->
+    ct:comment("get_module/1 should return module from state"),
+    State = arizona_stateful:new(user_live, #{}),
+    Module = arizona_stateful:get_module(State),
+    ?assertEqual(user_live, Module).
 
 %% --------------------------------------------------------------------
-%% Helper Functions
+%% Binding tests
 %% --------------------------------------------------------------------
 
-%% Create a mock socket for testing
-create_mock_socket() ->
-    Socket = arizona_socket:new(#{mode => render, current_stateful_id => root}),
-    %% Add a stateful state for the root component
-    StatefulState = arizona_stateful:new(root, test_module, #{test => initial_value}),
-    arizona_socket:put_stateful_state(StatefulState, Socket).
+get_binding_test(Config) when is_list(Config) ->
+    ct:comment("get_binding/2 should retrieve value from state bindings"),
+    State = arizona_stateful:new(test_module, #{name => ~"Alice", age => 25}),
+    Name = arizona_stateful:get_binding(name, State),
+    Age = arizona_stateful:get_binding(age, State),
+    ?assertEqual(~"Alice", Name),
+    ?assertEqual(25, Age).
 
-%% --------------------------------------------------------------------
-%% Mock Callback Modules
-%% --------------------------------------------------------------------
+get_binding_with_default_test(Config) when is_list(Config) ->
+    ct:comment("get_binding/3 should use default when key not found"),
+    State = arizona_stateful:new(test_module, #{name => ~"Bob"}),
+    Name = arizona_stateful:get_binding(name, State, fun() -> ~"Default" end),
+    Role = arizona_stateful:get_binding(role, State, fun() -> ~"guest" end),
+    ?assertEqual(~"Bob", Name),
+    ?assertEqual(~"guest", Role).
 
-%% These would normally be separate modules, but for testing we can use
-%% module attributes and dynamic function creation. In practice, you'd
-%% create actual test modules that implement the arizona_stateful behavior.
+get_bindings_test(Config) when is_list(Config) ->
+    ct:comment("get_bindings/1 should return all bindings from state"),
+    Bindings = #{title => ~"Page", count => 42},
+    State = arizona_stateful:new(test_module, Bindings),
+    ResultBindings = arizona_stateful:get_bindings(State),
+    ?assertEqual(arizona_binder:new(Bindings), ResultBindings).
 
-%% Test module with mount callback
--ifdef(TEST).
-% Mock implementations would be defined here or in separate test modules
--endif.
+put_binding_test(Config) when is_list(Config) ->
+    ct:comment("put_binding/3 should add binding and mark as changed"),
+    State = arizona_stateful:new(test_module, #{existing => ~"value"}),
+    NewState = arizona_stateful:put_binding(new_key, ~"new_value", State),
+
+    ?assertEqual(~"new_value", arizona_stateful:get_binding(new_key, NewState)),
+    ?assertEqual(~"value", arizona_stateful:get_binding(existing, NewState)),
+
+    ChangedBindings = arizona_stateful:get_changed_bindings(NewState),
+    ?assertEqual(~"new_value", maps:get(new_key, ChangedBindings)).
+
+put_binding_same_value_test(Config) when is_list(Config) ->
+    ct:comment("put_binding/3 should not change state when value is same"),
+    State = arizona_stateful:new(test_module, #{key => ~"value"}),
+    NewState = arizona_stateful:put_binding(key, ~"value", State),
+
+    ?assertEqual(State, NewState),
+    ?assertEqual(arizona_binder:new(#{}), arizona_stateful:get_changed_bindings(NewState)).
+
+merge_bindings_test(Config) when is_list(Config) ->
+    ct:comment("merge_bindings/2 should merge new bindings into state"),
+    State = arizona_stateful:new(test_module, #{a => 1, b => 2}),
+    NewBindings = #{b => 20, c => 3},
+    MergedState = arizona_stateful:merge_bindings(NewBindings, State),
+
+    ?assertEqual(1, arizona_stateful:get_binding(a, MergedState)),
+    ?assertEqual(20, arizona_stateful:get_binding(b, MergedState)),
+    ?assertEqual(3, arizona_stateful:get_binding(c, MergedState)),
+
+    ChangedBindings = arizona_stateful:get_changed_bindings(MergedState),
+    ?assertEqual(20, maps:get(b, ChangedBindings)),
+    ?assertEqual(3, maps:get(c, ChangedBindings)).
+
+get_changed_bindings_test(Config) when is_list(Config) ->
+    ct:comment("get_changed_bindings/1 should return changed bindings"),
+    State = arizona_stateful:new(test_module, #{}),
+    State1 = arizona_stateful:put_binding(key1, ~"value1", State),
+    State2 = arizona_stateful:put_binding(key2, ~"value2", State1),
+
+    ChangedBindings = arizona_stateful:get_changed_bindings(State2),
+    ?assertEqual(~"value1", maps:get(key1, ChangedBindings)),
+    ?assertEqual(~"value2", maps:get(key2, ChangedBindings)).
+
+set_changed_bindings_test(Config) when is_list(Config) ->
+    ct:comment("set_changed_bindings/2 should update changed bindings"),
+    State = arizona_stateful:new(test_module, #{original => ~"value"}),
+    NewChangedBindings = arizona_binder:new(#{custom => ~"changed"}),
+    UpdatedState = arizona_stateful:set_changed_bindings(NewChangedBindings, State),
+
+    ResultChangedBindings = arizona_stateful:get_changed_bindings(UpdatedState),
+    ?assertEqual(NewChangedBindings, ResultChangedBindings),
+    ?assertEqual(~"value", arizona_stateful:get_binding(original, UpdatedState)).

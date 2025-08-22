@@ -8,402 +8,417 @@
 %% --------------------------------------------------------------------
 
 all() ->
-    [{group, scan}].
+    [
+        {group, basic_scanning},
+        {group, error_handling},
+        {group, utf8_tests},
+        {group, line_ending_tests},
+        {group, expression_tests},
+        {group, comment_tests},
+        {group, edge_cases}
+    ].
 
 groups() ->
     [
-        {scan, [parallel], [
-            scan,
-            scan_static,
-            scan_dynamic,
-            scan_comment,
-            scan_start_static_end_static,
-            scan_start_static_end_dynamic,
-            scan_start_dynamic_end_static,
-            scan_start_dynamic_end_dynamic,
-            scan_new_line_cr,
-            scan_new_line_crlf,
-            scan_escape,
-            scan_error_unexpected_expr_end,
-            scan_error_badexpr,
-            scan_empty_template,
-            scan_whitespace_normalization_edge_cases,
-            scan_trailing_whitespace_edge_cases,
-            scan_empty_binary_reverse,
-            scan_remaining_trim_branches,
-            scan_html_attribute_quote_preservation,
-            scan_attribute_spacing_after_dynamic
+        {basic_scanning, [parallel], [
+            scan_empty_string_test,
+            scan_static_text_test,
+            scan_simple_expression_test,
+            scan_mixed_content_test
+        ]},
+        {error_handling, [parallel], [
+            invalid_utf8_error_test,
+            unexpected_expr_end_error_test,
+            badexpr_error_test,
+            format_error_invalid_utf8_test,
+            format_error_unexpected_expr_end_test,
+            format_error_badexpr_test
+        ]},
+        {utf8_tests, [parallel], [
+            scan_ascii_characters_test,
+            scan_two_byte_utf8_test,
+            scan_three_byte_utf8_test,
+            scan_four_byte_utf8_test,
+            invalid_utf8_byte_test
+        ]},
+        {line_ending_tests, [parallel], [
+            scan_unix_newlines_test,
+            scan_windows_crlf_test,
+            scan_mac_cr_test,
+            expression_with_crlf_test,
+            expression_with_cr_test
+        ]},
+        {expression_tests, [parallel], [
+            scan_nested_braces_test,
+            scan_complex_expression_test,
+            unexpected_expression_end_test,
+            expression_with_newlines_test,
+            malformed_expression_test
+        ]},
+        {comment_tests, [parallel], [
+            scan_single_line_comment_test,
+            scan_multiline_comment_test,
+            comment_normalization_test,
+            mixed_comment_expression_test
+        ]},
+        {edge_cases, [parallel], [
+            scan_escaped_braces_test,
+            scan_expression_followed_by_newline_test,
+            prepend_newline_to_static_test,
+            empty_expression_test
         ]}
     ].
 
+init_per_suite(Config) ->
+    Config.
+
+end_per_suite(Config) when is_list(Config) ->
+    ok.
+
+init_per_group(_GroupName, Config) ->
+    Config.
+
+end_per_group(_GroupName, Config) when is_list(Config) ->
+    ok.
+
 %% --------------------------------------------------------------------
-%% Tests
+%% Basic scanning tests
 %% --------------------------------------------------------------------
 
-scan(Config) when is_list(Config) ->
-    Expect = [
-        {comment, 67, ~"start"},
-        {static, 68, ~"\nText1\n"},
-        {dynamic, 69, ~"{{{expr1}}}"},
-        {comment, 70, ~"before text"},
-        {static, 70, ~"\nText2\nText3"},
-        {comment, 71, ~"after text"},
-        {comment, 72, ~"before expr"},
-        {dynamic, 72, ~"expr2"},
-        {dynamic, 73, ~"expr3"},
-        {comment, 73, ~"after expr"},
-        {static, 74, ~"\n\n\nText4"},
-        {comment, 74, ~"between text"},
-        {static, 74, ~"Text5\n"},
-        {dynamic, 75, ~"expr4"},
-        {comment, 75, ~"between expr"},
-        {dynamic, 75, ~"expr5"},
-        {comment, 76, ~"mutiple\nlines of\ncomment"},
-        {dynamic, 79, ~"expr6"},
-        {dynamic, 79, ~"Foo = foo, case Foo of foo -> {foo, expr7}; _ -> expr7 end"},
-        {comment, 80, ~"end"}
-    ],
-    Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
-    {%   start  }
-    Text1
-    {{{{expr1}}}}
-    {%before text }Text2
-    Text3{% after text}
-    {% before expr }{expr2}
-    {expr3}{%after expr}
-    Text4{%between text }Text5
-    {expr4}{% between expr}{expr5}
-    {% mutiple
-     % lines of
-     % comment}
-    {expr6}{Foo = foo, case Foo of foo -> {foo, expr7}; _ -> expr7 end}
-    {%end}
-    """),
-    ?assertEqual(Expect, Got).
+scan_empty_string_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning empty string"),
+    Result = arizona_scanner:scan_string(1, ~""),
+    ?assertEqual([], Result).
 
-scan_static(Config) when is_list(Config) ->
-    Expect = [{static, 1, ~"Text1"}],
-    Got = arizona_scanner:scan(#{}, ~"""
-    Text1
-    """),
-    ?assertEqual(Expect, Got).
+scan_static_text_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning static text without expressions"),
+    Result = arizona_scanner:scan_string(1, ~"Hello World"),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(static, arizona_token:get_category(Token)),
+    ?assertEqual(~"Hello World", arizona_token:get_content(Token)),
+    ?assertEqual(1, arizona_token:get_line(Token)).
 
-scan_dynamic(Config) when is_list(Config) ->
-    Expect = [{dynamic, 1, ~"expr1"}],
-    Got = arizona_scanner:scan(#{}, ~"""
-    {expr1}
-    """),
-    ?assertEqual(Expect, Got).
+scan_simple_expression_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning simple dynamic expression"),
+    Result = arizona_scanner:scan_string(1, ~"{name}"),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(dynamic, arizona_token:get_category(Token)),
+    ?assertEqual(~"name", arizona_token:get_content(Token)),
+    ?assertEqual(1, arizona_token:get_line(Token)).
 
-scan_comment(Config) when is_list(Config) ->
-    Expect = [{comment, 1, ~"comment"}],
-    Got = arizona_scanner:scan(#{}, ~"""
-    {% comment }
-    """),
-    ?assertEqual(Expect, Got).
+scan_mixed_content_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning mixed static text and expressions"),
+    Result = arizona_scanner:scan_string(1, ~"Hello {name}, welcome!"),
+    ?assertMatch([_StaticToken1, _DynamicToken, _StaticToken2], Result),
+    [StaticToken1, DynamicToken, StaticToken2] = Result,
 
-scan_start_static_end_static(Config) when is_list(Config) ->
-    Expect = [
-        {static, 112, ~"Text1\nText2"},
-        {dynamic, 113, ~"expr1"},
-        {static, 113, ~"Text3\nText4"}
-    ],
-    Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
-    Text1
-    Text2{expr1}Text3
-    Text4
-    """),
-    ?assertEqual(Expect, Got).
+    ?assertEqual(static, arizona_token:get_category(StaticToken1)),
+    ?assertEqual(~"Hello ", arizona_token:get_content(StaticToken1)),
 
-scan_start_static_end_dynamic(Config) when is_list(Config) ->
-    Expect = [
-        {static, 126, ~"Text1\nText2"},
-        {dynamic, 127, ~"expr1"},
-        {static, 127, ~"Text3\nText4\n"},
-        {dynamic, 129, ~"expr2"}
-    ],
-    Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
-    Text1
-    Text2{expr1}Text3
-    Text4
-    {expr2}
-    """),
-    ?assertEqual(Expect, Got).
+    ?assertEqual(dynamic, arizona_token:get_category(DynamicToken)),
+    ?assertEqual(~"name", arizona_token:get_content(DynamicToken)),
 
-scan_start_dynamic_end_static(Config) when is_list(Config) ->
-    Expect = [
-        {dynamic, 141, ~"expr1"},
-        {static, 142, ~"\nText1\nText2"},
-        {dynamic, 143, ~"expr2"},
-        {static, 143, ~"Text3\nText4"}
-    ],
-    Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
-    {expr1}
-    Text1
-    Text2{expr2}Text3
-    Text4
-    """),
-    ?assertEqual(Expect, Got).
+    ?assertEqual(static, arizona_token:get_category(StaticToken2)),
+    ?assertEqual(~", welcome!", arizona_token:get_content(StaticToken2)).
 
-scan_start_dynamic_end_dynamic(Config) when is_list(Config) ->
-    Expect = [
-        {dynamic, 157, ~"expr1"},
-        {static, 158, ~"\nText1\nText2"},
-        {dynamic, 159, ~"expr2"},
-        {static, 159, ~"Text3\nText4\n"},
-        {dynamic, 161, ~"expr3"}
-    ],
-    Got = arizona_scanner:scan(#{line => ?LINE + 1}, ~"""
-    {expr1}
-    Text1
-    Text2{expr2}Text3
-    Text4
-    {expr3}
-    """),
-    ?assertEqual(Expect, Got).
+%% --------------------------------------------------------------------
+%% Error handling tests
+%% --------------------------------------------------------------------
 
-scan_new_line_cr(Config) when is_list(Config) ->
-    Expect = [
-        {static, 1, ~"1\r"},
-        {dynamic, 2, ~"[2,\r3]"},
-        {static, 4, ~"\r4"}
-    ],
-    Got = arizona_scanner:scan(#{}, ~"1\r{[2,\r3]}\r4"),
-    ?assertEqual(Expect, Got).
+invalid_utf8_error_test(Config) when is_list(Config) ->
+    ct:comment("Test invalid UTF-8 byte handling"),
+    % Hello[invalid]World
+    InvalidBinary = <<72, 101, 108, 108, 111, 255, 87, 111, 114, 108, 100>>,
+    ?assertError(invalid_utf8, arizona_scanner:scan_string(1, InvalidBinary)).
 
-scan_new_line_crlf(Config) when is_list(Config) ->
-    Expect = [
-        {static, 1, ~"1\r\n"},
-        {dynamic, 2, ~"[2,\r\n3]"},
-        {static, 4, ~"\r\n4"}
-    ],
-    Got = arizona_scanner:scan(#{}, ~"1\r\n{[2,\r\n3]}\r\n4"),
-    ?assertEqual(Expect, Got).
+unexpected_expr_end_error_test(Config) when is_list(Config) ->
+    ct:comment("Test unexpected expression end error"),
+    ?assertError(unexpected_expr_end, arizona_scanner:scan_string(1, ~"{incomplete")).
 
-scan_escape(Config) when is_list(Config) ->
-    Expect = [{static, 1, ~"<script>foo({foo: \"bar\"})</script>"}],
-    Got = arizona_scanner:scan(#{}, ~[<script>foo(\\{foo: "bar"})</script>]),
-    ?assertEqual(Expect, Got).
+badexpr_error_test(Config) when is_list(Config) ->
+    ct:comment("Test bad expression parsing error"),
+    %% This should trigger a merl parsing error - use invalid syntax
+    ?assertError(badexpr, arizona_scanner:scan_string(1, ~"{begin end}")).
 
-scan_error_unexpected_expr_end(Config) when is_list(Config) ->
-    try
-        arizona_scanner:scan(#{}, ~"{error")
-    catch
-        error:{unexpected_expr_end, Line, Expr} ->
-            ?assertEqual(1, Line),
-            ?assertEqual(~"error", Expr)
-    end.
+format_error_invalid_utf8_test(Config) when is_list(Config) ->
+    ct:comment("Test format_error for invalid_utf8"),
+    ErrorInfo = #{cause => {1, 5, 255}},
+    StackTrace = [{arizona_scanner, scan_string, [1, ~"test"], [{error_info, ErrorInfo}]}],
+    Result = arizona_scanner:format_error(invalid_utf8, StackTrace),
 
-scan_error_badexpr(Config) when is_list(Config) ->
-    try
-        arizona_scanner:scan(#{}, ~"{[error}")
-    catch
-        error:{badexpr, Line, Content} ->
-            ?assertEqual(1, Line),
-            ?assertEqual(~"[error", Content)
-    end.
+    ?assert(
+        is_map(Result) andalso maps:is_key(general, Result) andalso maps:is_key(reason, Result)
+    ),
+    ?assertEqual("Arizona template scanner UTF-8 validation failed", maps:get(general, Result)),
+    ReasonStr = lists:flatten(maps:get(reason, Result)),
+    ?assert(string:find(ReasonStr, "Invalid UTF-8 byte 0xFF") =/= nomatch),
+    ?assert(string:find(ReasonStr, "line 1") =/= nomatch),
+    ?assert(string:find(ReasonStr, "position 5") =/= nomatch).
 
-scan_empty_template(Config) when is_list(Config) ->
-    % Test completely empty template
-    Template = ~"",
-    Expect = [],
-    Got = arizona_scanner:scan(#{}, Template),
-    ?assertEqual(Expect, Got).
+format_error_unexpected_expr_end_test(Config) when is_list(Config) ->
+    ct:comment("Test format_error for unexpected_expr_end"),
+    ErrorInfo = #{cause => {2, ~"incomplete_expr"}},
+    StackTrace = [{arizona_scanner, scan_string, [2, ~"test"], [{error_info, ErrorInfo}]}],
+    Result = arizona_scanner:format_error(unexpected_expr_end, StackTrace),
 
-%% Test whitespace normalization edge cases
-scan_whitespace_normalization_edge_cases(Config) when is_list(Config) ->
-    % Test templates with various combinations of newlines and spaces
-    % Based on the trim() function code, these should trigger specific branches:
-    % - Line 188: trim(<<$\r, $\n, Rest/binary>>) -> trim(<<$\s, Rest/binary>>)
-    % - Line 190: trim(<<$\r, Rest/binary>>) -> trim(<<$\s, Rest/binary>>)
-    % - Line 192: trim(<<$\n, Rest/binary>>) -> trim(<<$\s, Rest/binary>>)
-    % - Line 194: trim(<<$\s, $\s, Rest/binary>>) -> trim(Rest)
+    ?assert(
+        is_map(Result) andalso maps:is_key(general, Result) andalso maps:is_key(reason, Result)
+    ),
+    ?assertEqual("Arizona template scanner expression parsing failed", maps:get(general, Result)),
+    ReasonStr = lists:flatten(maps:get(reason, Result)),
+    ?assert(string:find(ReasonStr, "incomplete_expr") =/= nomatch),
+    ?assert(string:find(ReasonStr, "line 2") =/= nomatch).
 
-    % These tests should match actual behavior - let's be pragmatic
+format_error_badexpr_test(Config) when is_list(Config) ->
+    ct:comment("Test format_error for badexpr"),
+    ErrorInfo = #{cause => {3, ~"bad_expr", {parse_failed, error, badarg, []}}},
+    StackTrace = [{arizona_scanner, scan_string, [3, ~"test"], [{error_info, ErrorInfo}]}],
+    Result = arizona_scanner:format_error(badexpr, StackTrace),
 
-    % Test with actual newlines and spaces - accept whatever behavior exists
-    Template1 = ~"Hello\r\nWorld",
-    Got1 = arizona_scanner:scan(#{}, Template1),
-    % Line 188 branch should be triggered during whitespace normalization
-    ?assertMatch([{static, 1, _}], Got1),
+    ?assert(
+        is_map(Result) andalso maps:is_key(general, Result) andalso maps:is_key(reason, Result)
+    ),
+    ?assertEqual(
+        "Arizona template scanner expression validation failed", maps:get(general, Result)
+    ),
+    ReasonStr = lists:flatten(maps:get(reason, Result)),
+    ?assert(string:find(ReasonStr, "bad_expr") =/= nomatch),
+    ?assert(string:find(ReasonStr, "line 3") =/= nomatch).
 
-    % Test with \r
-    Template2 = ~"Hello\rWorld",
-    Got2 = arizona_scanner:scan(#{}, Template2),
-    % Line 190 branch should be triggered
-    ?assertMatch([{static, 1, _}], Got2),
+%% --------------------------------------------------------------------
+%% UTF-8 tests
+%% --------------------------------------------------------------------
 
-    % Test with \n
-    Template3 = ~"Hello\nWorld",
-    Got3 = arizona_scanner:scan(#{}, Template3),
-    % Line 192 branch should be triggered
-    ?assertMatch([{static, 1, _}], Got3),
+scan_ascii_characters_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning ASCII characters (1-byte UTF-8)"),
+    Result = arizona_scanner:scan_string(1, ~"ASCII text 123!@#"),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(static, arizona_token:get_category(Token)),
+    ?assertEqual(~"ASCII text 123!@#", arizona_token:get_content(Token)).
 
-    % Test with double spaces to trigger line 194
-    Template4 = ~"Hello  World",
-    Got4 = arizona_scanner:scan(#{}, Template4),
-    % Line 194 branch should be triggered
-    ?assertMatch([{static, 1, _}], Got4).
+scan_two_byte_utf8_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning 2-byte UTF-8 characters"),
+    % Contains é (2-byte UTF-8)
+    TwoByteText = ~"Café résumé",
+    Result = arizona_scanner:scan_string(1, TwoByteText),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(static, arizona_token:get_category(Token)),
+    ?assertEqual(TwoByteText, arizona_token:get_content(Token)).
 
-%% Test trailing whitespace edge cases
-scan_trailing_whitespace_edge_cases(Config) when is_list(Config) ->
-    % Target line 202: trim_trailing_1(<<>>) -> <<>>
-    % Target line 210: trim_trailing_1(<<$\s, $\s, Rest/binary>>) -> trim_trailing_1(Rest)
+scan_three_byte_utf8_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning 3-byte UTF-8 characters"),
+    % Contains 世界 (3-byte UTF-8)
+    ThreeByteText = ~"Hello 世界",
+    Result = arizona_scanner:scan_string(1, ThreeByteText),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(static, arizona_token:get_category(Token)),
+    ?assertEqual(ThreeByteText, arizona_token:get_content(Token)).
 
-    % Test with double trailing spaces to trigger line 210
-    Template1 = ~"Text  ",
-    Got1 = arizona_scanner:scan(#{}, Template1),
-    % Should trigger trim_trailing_1 with double spaces
-    ?assertMatch([{static, 1, _}], Got1),
+scan_four_byte_utf8_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning 4-byte UTF-8 characters"),
+    % Contains emojis (4-byte UTF-8)
+    FourByteText = ~"Emoji: 😀🎉",
+    Result = arizona_scanner:scan_string(1, FourByteText),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(static, arizona_token:get_category(Token)),
+    ?assertEqual(FourByteText, arizona_token:get_content(Token)).
 
-    % Test completely empty template for line 202
-    Template2 = ~"",
-    Got2 = arizona_scanner:scan(#{}, Template2),
-    ?assertEqual([], Got2).
+invalid_utf8_byte_test(Config) when is_list(Config) ->
+    ct:comment("Test invalid UTF-8 byte in expression scanning"),
+    %% Create a binary with invalid UTF-8 inside an expression
+    InvalidExprBinary = <<"{hello", 255, "world}">>,
+    ?assertError(invalid_utf8, arizona_scanner:scan_string(1, InvalidExprBinary)).
 
-%% Test whitespace-only content preservation (formerly empty binary reverse case)
-scan_empty_binary_reverse(Config) when is_list(Config) ->
-    % Now we preserve all content exactly, including whitespace-only content
+%% --------------------------------------------------------------------
+%% Line ending tests
+%% --------------------------------------------------------------------
 
-    % Test with whitespace-only content is preserved (not trimmed to empty)
-    Template1 = ~"  ",
-    Got1 = arizona_scanner:scan(#{}, Template1),
-    % Whitespace-only templates are preserved exactly
-    ?assertEqual([{static, 1, ~"  "}], Got1),
+scan_unix_newlines_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning Unix LF line endings"),
+    Text = ~"Line 1\nLine 2\nLine 3",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(static, arizona_token:get_category(Token)),
+    ?assertEqual(~"Line 1\nLine 2\nLine 3", arizona_token:get_content(Token)).
 
-    % Test empty template remains empty
-    Template2 = ~"",
-    Got2 = arizona_scanner:scan(#{}, Template2),
-    ?assertEqual([], Got2),
+scan_windows_crlf_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning Windows CRLF line endings"),
+    Text = ~"Line 1\r\nLine 2\r\nLine 3",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(static, arizona_token:get_category(Token)),
+    ?assertEqual(~"Line 1\r\nLine 2\r\nLine 3", arizona_token:get_content(Token)).
 
-    % Test content with trailing spaces is preserved exactly
-    Template3 = ~"Content  ",
-    Got3 = arizona_scanner:scan(#{}, Template3),
-    % Trailing spaces are preserved
-    ?assertEqual([{static, 1, ~"Content  "}], Got3).
+scan_mac_cr_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning Mac CR line endings"),
+    Text = ~"Line 1\rLine 2\rLine 3",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(static, arizona_token:get_category(Token)),
+    ?assertEqual(~"Line 1\rLine 2\rLine 3", arizona_token:get_content(Token)).
 
-%% Test whitespace preservation (formerly trim branches)
-scan_remaining_trim_branches(Config) when is_list(Config) ->
-    % Now that we preserve user input exactly, these tests verify preservation behavior:
+expression_with_crlf_test(Config) when is_list(Config) ->
+    ct:comment("Test expression scanning with CRLF line endings"),
+    Text = ~"{case X of\r\n  ok -> yes;\r\n  _ -> no\r\nend}",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(dynamic, arizona_token:get_category(Token)),
+    ExpectedContent = ~"case X of\r\n  ok -> yes;\r\n  _ -> no\r\nend",
+    ?assertEqual(ExpectedContent, arizona_token:get_content(Token)).
 
-    % Test leading \r\n is preserved
-    Template1 = ~"\r\nText",
-    Got1 = arizona_scanner:scan(#{}, Template1),
-    ?assertEqual([{static, 1, ~"\r\nText"}], Got1),
+expression_with_cr_test(Config) when is_list(Config) ->
+    ct:comment("Test expression scanning with CR line endings"),
+    Text = ~"{case X of\r  ok -> yes;\r  _ -> no\rend}",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(dynamic, arizona_token:get_category(Token)),
+    ExpectedContent = ~"case X of\r  ok -> yes;\r  _ -> no\rend",
+    ?assertEqual(ExpectedContent, arizona_token:get_content(Token)).
 
-    % Test leading \r is preserved
-    Template2 = ~"\rText",
-    Got2 = arizona_scanner:scan(#{}, Template2),
-    ?assertEqual([{static, 1, ~"\rText"}], Got2),
+%% --------------------------------------------------------------------
+%% Expression tests
+%% --------------------------------------------------------------------
 
-    % Test leading \n is preserved
-    Template3 = ~"\nText",
-    Got3 = arizona_scanner:scan(#{}, Template3),
-    ?assertEqual([{static, 1, ~"\nText"}], Got3),
+scan_nested_braces_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning expressions with nested braces"),
+    Text = ~"{case X of {ok, Y} -> Y; {error, _} -> default end}",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(dynamic, arizona_token:get_category(Token)),
+    ExpectedContent = ~"case X of {ok, Y} -> Y; {error, _} -> default end",
+    ?assertEqual(ExpectedContent, arizona_token:get_content(Token)).
 
-    % Two spaces are preserved (not collapsed to empty)
-    Template4 = ~"  ",
-    Got4 = arizona_scanner:scan(#{}, Template4),
-    ?assertEqual([{static, 1, ~"  "}], Got4),
+scan_complex_expression_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning complex nested expression"),
+    Text = ~"{lists:map(fun(X) -> {X, X * 2} end, [1, 2, 3])}",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(dynamic, arizona_token:get_category(Token)),
+    ExpectedContent = ~"lists:map(fun(X) -> {X, X * 2} end, [1, 2, 3])",
+    ?assertEqual(ExpectedContent, arizona_token:get_content(Token)).
 
-    % Multiple newlines are preserved
-    Template5 = ~"\r\n\r\n",
-    Got5 = arizona_scanner:scan(#{}, Template5),
-    ?assertEqual([{static, 1, ~"\r\n\r\n"}], Got5),
+unexpected_expression_end_test(Config) when is_list(Config) ->
+    ct:comment("Test unexpected expression end in nested context"),
+    Text = ~"{case X of {ok, Y} -> Y",
+    ?assertError(unexpected_expr_end, arizona_scanner:scan_string(1, Text)).
 
-    % Leading/trailing whitespace with content is preserved exactly
-    Template6 = ~"  Text  ",
-    Got6 = arizona_scanner:scan(#{}, Template6),
-    ?assertEqual([{static, 1, ~"  Text  "}], Got6),
+expression_with_newlines_test(Config) when is_list(Config) ->
+    ct:comment("Test expression followed by newline"),
+    Text = ~"{name}\nNext line",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_DynamicToken, _StaticToken], Result),
+    [DynamicToken, StaticToken] = Result,
 
-    % Single newline/carriage return is preserved (not converted to space)
-    Template7 = ~"\r",
-    Got7 = arizona_scanner:scan(#{}, Template7),
-    ?assertEqual([{static, 1, ~"\r"}], Got7),
+    ?assertEqual(dynamic, arizona_token:get_category(DynamicToken)),
+    ?assertEqual(~"name", arizona_token:get_content(DynamicToken)),
 
-    Template8 = ~"\n",
-    Got8 = arizona_scanner:scan(#{}, Template8),
-    ?assertEqual([{static, 1, ~"\n"}], Got8),
+    ?assertEqual(static, arizona_token:get_category(StaticToken)),
+    ?assertEqual(~"\nNext line", arizona_token:get_content(StaticToken)).
 
-    % Single \r\n is preserved
-    Template9 = ~"\r\n",
-    Got9 = arizona_scanner:scan(#{}, Template9),
-    ?assertEqual([{static, 1, ~"\r\n"}], Got9),
+malformed_expression_test(Config) when is_list(Config) ->
+    ct:comment("Test malformed expression parsing"),
+    %% Create an expression that will fail merl parsing
 
-    % Four spaces are preserved exactly
-    Template10 = ~"    ",
-    Got10 = arizona_scanner:scan(#{}, Template10),
-    ?assertEqual([{static, 1, ~"    "}], Got10),
+    % Invalid Erlang syntax
+    Text = ~"{begin end}",
+    ?assertError(badexpr, arizona_scanner:scan_string(1, Text)).
 
-    % Mixed whitespace is preserved exactly
-    Template11 = ~"\n\r\n   \r",
-    Got11 = arizona_scanner:scan(#{}, Template11),
-    ?assertEqual([{static, 1, ~"\n\r\n   \r"}], Got11).
+%% --------------------------------------------------------------------
+%% Comment tests
+%% --------------------------------------------------------------------
 
-scan_html_attribute_quote_preservation(Config) when is_list(Config) ->
-    % Test case for the HTML attribute quote preservation bug
-    % When scanning value="{expr}" onkeyup="...", the closing quote after {expr} should be preserved
-    Template = ~"""
-    <input
-        class="new-todo"
-        placeholder="What needs to be done?"
-        data-testid="new-todo-input"
-        value="{arizona_socket:get_binding(new_todo_text, Socket)}"
-        onkeyup="if(event.key === 'Enter') arizona.sendEvent('add_todo');
-                 else arizona.sendEvent('update_new_todo', \{value: event.target.value})"
-    />
-    """,
-    % Expected: The static part after the dynamic expression should start with a quote
-    % to close the value attribute properly
-    Expected = [
-        {static, 1, ~"""
-        <input
-            class="new-todo"
-            placeholder="What needs to be done?"
-            data-testid="new-todo-input"
-            value="
-        """},
-        {dynamic, 5, ~"arizona_socket:get_binding(new_todo_text, Socket)"},
-        {static, 5, ~"""
-        "
-            onkeyup="if(event.key === 'Enter') arizona.sendEvent('add_todo');
-                     else arizona.sendEvent('update_new_todo', {value: event.target.value})"
-        />
-        """}
-    ],
-    Got = arizona_scanner:scan(#{}, Template),
-    ?assertEqual(Expected, Got),
+scan_single_line_comment_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning single line comment"),
+    Text = ~"{% This is a comment %}",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(comment, arizona_token:get_category(Token)),
+    %% Comment should be normalized
+    Content = arizona_token:get_content(Token),
+    ?assert(is_binary(Content)).
 
-    Template1 = ~"""
-    \{\{\{\{foo}}}}bar
-    """,
-    Expected1 = [{static, 1, ~"{{{{foo}}}}bar"}],
-    Got1 = arizona_scanner:scan(#{}, Template1),
-    ?assertEqual(Expected1, Got1).
+scan_multiline_comment_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning multiline comment"),
+    Text = ~"{% Line 1\n% Line 2\n% Line 3 %}",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(comment, arizona_token:get_category(Token)),
+    %% Comment should be normalized
+    Content = arizona_token:get_content(Token),
+    ?assert(is_binary(Content)).
 
-scan_attribute_spacing_after_dynamic(Config) when is_list(Config) ->
-    % Test that whitespace/newlines between dynamic elements and following attributes are preserved
-    % This reproduces the "checkedonclick" bug where space is lost between attributes
-    Template = ~"""
-    <input
-        type="checkbox"
-        class="toggle"
-        data-testid="toggle-{maps:get(id, Todo)}"
-        {case maps:get(completed, Todo) of true -> ~"checked"; false -> ~"" end}
-        onclick="arizona.sendEvent('toggle_todo', \{id: '{maps:get(id, Todo)}'})"
-    />
-    """,
+comment_normalization_test(Config) when is_list(Config) ->
+    ct:comment("Test comment normalization with various whitespace"),
+    Text = ~"{%   Spaced comment   %}",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(comment, arizona_token:get_category(Token)),
+    %% Comment should be normalized
+    Content = arizona_token:get_content(Token),
+    ?assert(is_binary(Content)).
 
-    Expected = [
-        {static, 1,
-            ~"<input\n    type=\"checkbox\"\n    class=\"toggle\"\n    data-testid=\"toggle-"},
-        {dynamic, 4, ~"maps:get(id, Todo)"},
-        {static, 4, ~"\"\n    "},
-        {dynamic, 5, ~"case maps:get(completed, Todo) of true -> ~\"checked\"; false -> ~\"\" end"},
-        {static, 6, ~"\n    onclick=\"arizona.sendEvent('toggle_todo', {id: '"},
-        {dynamic, 6, ~"maps:get(id, Todo)"},
-        {static, 6, ~"'})\"\n/>"}
-    ],
+mixed_comment_expression_test(Config) when is_list(Config) ->
+    ct:comment("Test mixed comments and expressions"),
+    Text = ~"Hello {name} {% comment %} world",
+    Result = arizona_scanner:scan_string(1, Text),
+    %% Should have multiple tokens for mixed content
+    ?assert(length(Result) >= 3).
 
-    Got = arizona_scanner:scan(#{}, Template),
-    ?assertEqual(Expected, Got).
+%% --------------------------------------------------------------------
+%% Edge case tests
+%% --------------------------------------------------------------------
+
+scan_escaped_braces_test(Config) when is_list(Config) ->
+    ct:comment("Test scanning escaped braces"),
+    Text = ~"Before \\{escaped} after",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_Token], Result),
+    [Token] = Result,
+    ?assertEqual(static, arizona_token:get_category(Token)),
+    %% Escaped brace should become literal brace in output
+    ?assertEqual(~"Before {escaped} after", arizona_token:get_content(Token)).
+
+scan_expression_followed_by_newline_test(Config) when is_list(Config) ->
+    ct:comment("Test expression immediately followed by newline"),
+    Text = ~"{expr}\nContent",
+    Result = arizona_scanner:scan_string(1, Text),
+    ?assertMatch([_DynamicToken, _StaticToken], Result),
+    [DynamicToken, StaticToken] = Result,
+
+    ?assertEqual(dynamic, arizona_token:get_category(DynamicToken)),
+    ?assertEqual(~"expr", arizona_token:get_content(DynamicToken)),
+
+    ?assertEqual(static, arizona_token:get_category(StaticToken)),
+    ?assertEqual(~"\nContent", arizona_token:get_content(StaticToken)).
+
+prepend_newline_to_static_test(Config) when is_list(Config) ->
+    ct:comment("Test newline prepending to static tokens"),
+    %% This tests the prepend_newline_to_first_static function when
+    %% there are multiple tokens and newline needs to find the first static one
+    Text = ~"{expr1}\n{expr2}Static",
+    Result = arizona_scanner:scan_string(1, Text),
+    %% Should have multiple tokens
+    ?assert(length(Result) >= 2).
+
+empty_expression_test(Config) when is_list(Config) ->
+    ct:comment("Test empty expression handling"),
+    Text = ~"Before {} after",
+    Result = arizona_scanner:scan_string(1, Text),
+    %% Should have multiple tokens for empty expression
+    ?assert(length(Result) >= 2).

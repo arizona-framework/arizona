@@ -2,7 +2,8 @@
 
 ![arizona_256x256](https://github.com/arizona-framework/arizona/assets/35941533/88b76a0c-0dfc-4f99-8608-b0ebd9c9fbd9)
 
-Arizona is a modern LiveView web framework for Erlang with real-time capabilities and optimized performance.
+Arizona is a modern web framework for Erlang, delivering real-time web applications with optimized
+performance and compile-time efficiency.
 
 ## ⚠️ Warning
 
@@ -10,94 +11,20 @@ Work in progress.
 
 Use it at your own risk, as the API may change at any time.
 
-## Overview
+## Key Features
 
-Arizona provides a complete LiveView framework with hierarchical rendering, real-time WebSocket
-updates, and stateful/stateless component architecture. It features compile-time template
-optimization and surgical DOM updates for optimal performance.
+- Real-time WebSocket updates
+- Hierarchical component rendering
+- Compile-time template optimization
+- Type-safe stateful and stateless components
+- Efficient differential DOM updates
+- Simple template syntax: plain HTML with Erlang expressions in `{}`
 
-### Key Features
+## Quick Start
 
-- **📡 Real-time LiveView**: WebSocket-based live updates with minimal payload
-- **🏗️ Hierarchical Rendering**: Efficient differential rendering with surgical DOM updates
-- **⚡ Performance Optimized**: Compile-time template processing with selective parse transform optimization
-- **🧩 Component Architecture**: Stateful and stateless components with lifecycle management
-- **🎯 Type Safe**: Comprehensive Dialyzer support with proper type contracts
-- **🔧 OTP Integration**: Full OTP compliance with gen_server and supervisor patterns
-- **🚀 Compile-time Optimized Templates**: Variable assignment support with automatic change detection
+### 1. Add Dependency
 
-## Template Syntax
-
-Arizona supports two template patterns for different use cases:
-
-### Standard Templates
-
-Arizona templates are binary or string content with embedded Erlang expressions:
-
-```erlang
-render(Socket) ->
-    arizona_html:render_stateful(~"""
-    <div class="counter">
-        <h1>Count: {arizona_socket:get_binding(count, Socket)}</h1>
-        <button onclick="increment">+</button>
-        <button onclick="decrement">-</button>
-    </div>
-    """, Socket).
-```
-
-**Note**: You can use `~"..."`, `<<"...">>`, or regular strings - they're all
-equivalent binary content.
-
-### Compile-time Optimized Templates
-
-Use the compile-time parse transform to enable dependency tracking and automatic
-performance optimizations for Arizona templates:
-
-```erlang
--module(my_live).
--compile({parse_transform, arizona_parse_transform}).
--arizona_parse_transform([render/1]).
-
-render(Socket) ->
-    % The parse transform analyzes arizona_socket:get_binding calls within templates
-    % and generates optimized vars_indexes for surgical DOM updates
-    Count = arizona_socket:get_binding(count, Socket),
-    UserName = arizona_socket:get_binding(user_name, Socket),
-    arizona_html:render_stateful(~"""
-    <div class="counter">
-        <h1>Hello {UserName}! Count: {Count}</h1>
-        <button onclick="increment">+</button>
-        <button onclick="decrement">-</button>
-    </div>
-    """, Socket).
-```
-
-**Compile-time Optimizations:**
-
-- **Selective Processing**: Only functions explicitly declared with
-  `-arizona_parse_transform([function/arity])` are optimized
-- **Dependency Tracking**: Analyzes `arizona_socket:get_binding/2` calls in templates at compile time
-- **Automatic Change Detection**: Generates optimized `vars_indexes` for surgical DOM updates
-- **Multi-Function Support**: Different variable contexts per function
-- **Dependency Tracking**: Handles nested and conditional binding calls
-- **Explicit Opt-in**: Modules must declare which functions need optimization,
-  preventing unnecessary processing
-
-## Basic Usage
-
-### 1. Create a new rebar3 application
-
-```bash
-# Create a new rebar3 application
-$ rebar3 new app arizona_example
-
-# Navigate to the project directory
-$ cd arizona_example
-```
-
-### 2. Add Arizona dependency
-
-Add Arizona as a dependency in `rebar.config`:
+In your `rebar.config`:
 
 ```erlang
 {deps, [
@@ -105,192 +32,74 @@ Add Arizona as a dependency in `rebar.config`:
 ]}.
 ```
 
-Update the application dependencies in `src/arizona_example.app.src`:
+### 2. Start Server
 
 ```erlang
-{application, arizona_example, [
-    {description, "Arizona Example Application"},
-    {applications, [
-        kernel,
-        stdlib,
-        arizona
-    ]}
-]}.
+{ok, _Pid} = arizona_server:start(#{
+    port => 8080,
+    routes => [
+        {live, ~"/my-view", my_view_module},
+        {live_websocket, ~"/live/websocket"},
+        {static, ~"/assets", {priv_dir, arizona, ~"static/assets"}}
+    ]
+}).
 ```
 
-### 3. Create a LiveView module
+## Live Demo
 
-Create `src/arizona_example_counter.erl` using the compile-time optimized templates:
-
-```erlang
--module(arizona_example_counter).
--behaviour(arizona_live).
--compile({parse_transform, arizona_parse_transform}).
--arizona_parse_transform([render/1]).
-
--export([mount/2, render/1, handle_event/3]).
-
-mount(_Req, Socket) ->
-    Socket1 = arizona_socket:put_binding(count, 0, Socket),
-    {ok, Socket1}.
-
-render(Socket) ->
-    arizona_html:render_stateful(~"""
-    <div class="counter">
-        <h1>Count: {arizona_socket:get_binding(count, Socket)}</h1>
-        <button onclick="increment">Increment</button>
-        <button onclick="decrement">Decrement</button>
-    </div>
-    """, Socket).
-
-handle_event(~"increment", _Params, Socket) ->
-    Count = arizona_socket:get_binding(count, Socket),
-    Socket1 = arizona_socket:put_binding(count, Count + 1, Socket),
-    {noreply, Socket1};
-handle_event(~"decrement", _Params, Socket) ->
-    Count = arizona_socket:get_binding(count, Socket),
-    Socket1 = arizona_socket:put_binding(count, Count - 1, Socket),
-    {noreply, Socket1}.
-```
-
-**What's happening here:**
-
-- The `-arizona_parse_transform([render/1])` attribute enables compile-time template optimization
-- The parse transform analyzes `arizona_socket:get_binding(count, Socket)` calls within templates
-- Automatically generates optimized `vars_indexes` mapping binding keys to template elements
-- When the `count` binding changes, only the specific template element containing that binding re-renders
-
-### 4. Start the server
+Try the complete working examples:
 
 ```bash
-# Start the Erlang shell with your application
-$ rebar3 shell
+# Clone and run the test server
+$ git clone https://github.com/arizona-framework/arizona
+$ cd arizona
+$ ./scripts/start_test_server.sh
 ```
 
-Then in the Erlang shell:
+Then visit:
+
+- **<http://localhost:8080/counter>** - Simple stateful interactions
+- **<http://localhost:8080/todo>** - CRUD operations and list management
+- **<http://localhost:8080/modal>** - Dynamic overlays and slot composition
+- **<http://localhost:8080/datagrid>** - Sortable tables with complex data
+
+### Explore the Code
+
+Each demo corresponds to complete source code in [`test/support/e2e/`](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/):
+
+- **[Counter App](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/counter/)**
+  - Layout + View with event handling
+- **[Todo App](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/todo/)**
+  - Complex state management patterns
+- **[Modal System](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/modal/)**
+  - Component composition and slots
+- **[Data Grid](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/datagrid/)**
+  - Advanced data presentation
+
+## Template Syntax
+
+Arizona templates use plain HTML with Erlang expressions in `{}`:
 
 ```erlang
-% Define routes for your application
-1> Routes = [
-    {live, ~"/counter", arizona_example_counter},
-    {live_websocket, ~"/live/websocket"},
-    {static, ~"/assets", {priv_dir, arizona_example, ~"assets"}}
-].
-
-% Start the Arizona server
-2> {ok, _} = arizona_server:start(#{port => 8080, routes => Routes}).
+arizona_template:from_string(~"""
+<div class="counter">
+    <h1>Count: {arizona_template:get_binding(count, Bindings)}</h1>
+    <button onclick="arizona.sendEvent('increment')">+</button>
+</div>
+""")
 ```
 
-### 5. Add client-side JavaScript
+## Component Architecture
 
-Create the client-side JavaScript file `priv/assets/js/app.js`:
-
-```javascript
-// Import the Arizona client library
-import ArizonaClient from '/assets/js/arizona.min.js';
-
-// Create and connect the client for real-time updates
-const client = new ArizonaClient();
-client.connect();
-```
-
-### 6. Create HTML page
-
-Create the main HTML file `priv/assets/index.html`:
-
-```html
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Arizona Example</title>
-    <script type="module" src="/assets/js/app.js"></script>
-</head>
-<body>
-    <div id="arizona-app">
-        <!-- LiveView will mount here -->
-    </div>
-</body>
-</html>
-```
-
-Visit `http://localhost:8080/counter` to see your LiveView in action! The counter will update in
-real-time as you click the buttons.
-
-## Architecture
-
-### Component Types
-
-- **Stateful Components**: Maintain state across renders with lifecycle callbacks
-- **Stateless Components**: Lightweight function-based components
+- **Layouts**: HTML document wrappers with slots for dynamic content insertion
+- **Views**: Top-level components managing application state
+- **Stateful Components**: Components with lifecycle and persistent state
+- **Stateless Components**: Pure rendering functions
 - **List Components**: Optimized rendering for collections
-
-### Compile-time Parse Transform
-
-Arizona's parse transform provides advanced compile-time optimizations with
-selective processing:
-
-- **Selective Processing**: Only modules with
-  `-arizona_parse_transform([function/arity])` attributes are processed
-- **Variable Dependency Tracking**: Analyzes `arizona_socket:get_binding/2,3`
-  calls to map variables to template elements
-- **Automatic vars_indexes Generation**: Creates precise change detection maps for surgical DOM updates
-- **Multi-Function Support**: Each function marked with
-  `-arizona_parse_transform([function/arity])` gets its own variable context
-- **Complex Dependency Handling**: Supports nested calls, conditionals, and multiple binding dependencies
-- **Performance Optimization**: Prevents unnecessary processing of modules that don't use Arizona templates
-
-```erlang
-% Compile-time optimization automatically generates:
-vars_indexes => #{
-    user_name => [1],    % UserName variable affects element 1
-    count => [3]         % Count variable affects element 3
-}
-
-% IMPORTANT: Modules MUST declare which functions need optimization:
--arizona_parse_transform([render/1, other_template_function/2]).
-```
-
-### Rendering Modes
-
-- **render**: Standard HTML output
-- **diff**: Differential updates for efficiency
-- **hierarchical**: Structured JSON for WebSocket transmission
-
-### Real-time Updates
-
-Arizona sends minimal JSON diffs over WebSocket containing only changed elements,
-ensuring optimal performance for real-time applications. With compile-time optimized
-templates, updates are even more precise, targeting only the specific DOM elements
-that depend on changed bindings.
-
-## API Documentation
-
-### Core Modules
-
-- `arizona_live`: LiveView behavior and process management
-- `arizona_socket`: State management and binding system
-- `arizona_html`: Template rendering and component invocation
-- `arizona_server`: HTTP server and routing configuration
-- `arizona_hierarchical`: Differential rendering engine
-
-### Request Handling
-
-- `arizona_request`: HTTP request abstraction
-- `arizona_handler`: Request lifecycle management
-- `arizona_websocket`: WebSocket connection handling
-
-For detailed API documentation, see the module documentation in the source code.
 
 ## Requirements
 
 - Erlang/OTP 27+
-
-## Performance
-
-- **Compile-time optimization**: Templates processed at build time
-- **Minimal WebSocket payloads**: Only changed elements transmitted
-- **Efficient diffing**: Hierarchical change detection
-- **Lazy loading**: Request data loaded on demand
 
 ## Sponsors
 

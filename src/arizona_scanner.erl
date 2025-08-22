@@ -1,88 +1,24 @@
 -module(arizona_scanner).
--moduledoc ~"""
-Provides template scanning functionality for Arizona template processing.
-
-## Overview
-
-The scanner module tokenizes Arizona template files into a stream of tokens
-that can be consumed by the parser. It provides the foundation for Arizona's
-template processing pipeline by converting raw template text into structured
-token sequences.
-
-## Features
-
-- **Token Recognition**: Identifies static content, dynamic expressions, and comments
-- **Line Tracking**: Maintains line numbers for error reporting and debugging
-- **Whitespace Normalization**: Handles proper HTML whitespace according to browser rules
-- **Expression Parsing**: Validates Erlang expressions within template syntax
-- **Error Handling**: Provides detailed error messages with context information
-- **Escape Sequences**: Supports escaped braces for literal brace output
-
-## Key Functions
-
-- `scan/2`: Tokenize template content into structured token list
-
-## Token Types
-
-- **static**: HTML/text content rendered as-is with normalized whitespace
-- **dynamic**: Erlang expressions within `{...}` evaluated at runtime
-- **comment**: Template comments within `{% ... %}` stripped from output
-
-## Template Syntax
-
-- `{expr}`: Erlang expression to be evaluated
-- `{% comment %}`: Template comment (ignored in output)
-- `\{`: Escaped brace (produces literal `{` in output)
-
-Token format: `{Category, Line, Text}` where Category is `static | dynamic | comment`,
-Line is a 1-based line number, and Text is the token content as binary.
-""".
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([scan/2]).
+-export([scan_string/2, format_error/2]).
 
 %% --------------------------------------------------------------------
-%% Types exports
+%% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--export_type([scan_opts/0]).
--export_type([token/0]).
+-ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
--doc ~"""
-Scanner options for controlling tokenization behavior.
-
-Specifies the starting line number for token tracking. The scanner only
-tracks line numbers for simplicity and performance, avoiding complexity
-with indentation and column tracking.
-""".
--type scan_opts() :: #{
-    line => pos_integer()
-}.
-
--doc ~"""
-Token representation with category, location, and content information.
-
-Categories define the token type:
-- `static`: Static content with normalized whitespace
-- `dynamic`: Dynamic expression to be evaluated at runtime
-- `comment`: Template comment stripped from final output
-""".
--type token() :: {
-    Category :: static | dynamic | comment,
-    Line :: pos_integer(),
-    Text :: binary()
-}.
-
 %% Internal state record for scanner operations
 -record(state, {
-    line :: pos_integer(),
+    line :: arizona_token:line(),
     position :: non_neg_integer()
 }).
 
@@ -90,62 +26,58 @@ Categories define the token type:
 %% API function definitions
 %% --------------------------------------------------------------------
 
--doc ~"""
-Tokenize template content into a structured list of tokens.
-
-Processes Arizona template content and converts it into tokens that can be
-consumed by the parser. Handles static content, dynamic expressions, and
-comments with proper line number tracking and error reporting.
-
-## Syntax
-
-- `{expr}`: Erlang expression to be evaluated
-- `{% comment %}`: Template comment (ignored in output)
-- `\\{`: Escaped brace (produces literal `{` in output)
-
-## Examples
-
-```erlang
-1> arizona_scanner:scan(#{}, ~"Hello {name}!").
-[{static,1,~"Hello "}, {dynamic,1,~"name"}, {static,1,~"!"}]
-2> arizona_scanner:scan(#{}, ~"Price: \\{100}").
-[{static,1,~"Price: {100}"}]
-3> arizona_scanner:scan(#{}, ~"{% TODO: fix this %} Done").
-[{comment,1,~"TODO: fix this"}, {static,1,~"Done"}]
-```
-
-## Whitespace Handling
-
-The scanner normalizes HTML whitespace according to browser rules:
-- Multiple spaces collapse to single space
-- Leading/trailing whitespace is trimmed
-- Newlines are preserved where significant
-
-## Error Handling
-
-- `{unexpected_expr_end, Line, PartialExpr}`: Unclosed expression with partial content
-- `{badexpr, Line, Content}`: Malformed Erlang expression
-
-Error messages include the problematic expression text for debugging:
-```erlang
-1> arizona_scanner:scan(#{}, ~"{unclosed").
-** exception error: {unexpected_expr_end,1,~"unclosed"}
-```
-""".
--spec scan(Opts, Html) -> [Token] when
-    Opts :: scan_opts(),
-    Html :: arizona_html:html(),
-    Token :: token().
-scan(Opts, Html) when is_map(Opts), (is_binary(Html) orelse is_list(Html)) ->
-    BinaryTemplate = iolist_to_binary(Html),
-    State = #state{
-        line = maps:get(line, Opts, 1),
+-spec scan_string(Line, String) -> [Token] when
+    Line :: arizona_token:line(),
+    String :: string() | binary(),
+    Token :: arizona_token:token().
+scan_string(Line, String) when
+    is_integer(Line), Line >= 0, (is_binary(String) orelse is_list(String))
+->
+    Bin = iolist_to_binary(String),
+    scan(Bin, Bin, #state{
+        line = Line,
         position = 0
-    },
-    scan(BinaryTemplate, BinaryTemplate, State).
+    }).
+
+-spec format_error(Reason, StackTrace) -> ErrorMap when
+    Reason :: invalid_utf8 | unexpected_expr_end | badexpr | term(),
+    StackTrace :: erlang:stacktrace(),
+    ErrorMap :: #{general => string(), reason => io_lib:chars()}.
+format_error(invalid_utf8, [{_M, _F, _As, Info} | _]) ->
+    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
+    {Line, Position, InvalidByte} = maps:get(cause, ErrorInfo),
+    #{
+        general => "Arizona template scanner UTF-8 validation failed",
+        reason => io_lib:format(
+            "Invalid UTF-8 byte 0x~2.16.0B at line ~p, position ~p. "
+            "Arizona templates must use well-formed UTF-8 encoding.",
+            [InvalidByte, Line, Position]
+        )
+    };
+format_error(unexpected_expr_end, [{_M, _F, _As, Info} | _]) ->
+    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
+    {Line, Expr} = maps:get(cause, ErrorInfo),
+    #{
+        general => "Arizona template scanner expression parsing failed",
+        reason => io_lib:format(
+            "Unexpected end of expression '~s' at line ~p. "
+            "Check for missing closing braces or malformed expressions.",
+            [Expr, Line]
+        )
+    };
+format_error(badexpr, [{_M, _F, _As, Info} | _]) ->
+    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
+    {Line, Expr, Reason} = maps:get(cause, ErrorInfo),
+    #{
+        general => "Arizona template scanner expression validation failed",
+        reason => io_lib:format(
+            "Invalid expression '~s' at line ~p: ~p",
+            [Expr, Line, Reason]
+        )
+    }.
 
 %% --------------------------------------------------------------------
-%% Private functions
+%% Internal functions
 %% --------------------------------------------------------------------
 
 %% Main scanning loop entry point
@@ -181,8 +113,15 @@ scan_next(<<$\r, Rest/binary>>, _Bin, Len, State) ->
     {continue, Rest, Len + 1, new_line(State)};
 scan_next(<<$\n, Rest/binary>>, _Bin, Len, State) ->
     {continue, Rest, Len + 1, new_line(State)};
-scan_next(<<_Char, Rest/binary>>, _Bin, Len, State) ->
-    {continue, Rest, Len + 1, State};
+scan_next(<<Char/utf8, Rest/binary>>, _Bin, Len, State) ->
+    CharByteSize = utf8_char_byte_size(Char),
+    {continue, Rest, Len + CharByteSize, State};
+scan_next(<<InvalidByte, _Rest/binary>>, _Bin, _Len, State) ->
+    error(
+        invalid_utf8,
+        none,
+        error_info({State#state.line, State#state.position, InvalidByte})
+    );
 scan_next(<<>>, _Bin, _Len, _State) ->
     end_of_input.
 
@@ -191,7 +130,8 @@ maybe_prepend_text_token(Bin, Len, State, Tokens) ->
         <<>> ->
             Tokens;
         Text ->
-            [{static, State#state.line, Text} | Tokens]
+            StaticToken = arizona_token:new(static, State#state.line, Text),
+            [StaticToken | Tokens]
     end.
 
 %% Scan an Erlang expression, handling nested braces
@@ -200,7 +140,14 @@ scan_expr(Rest0, Bin, State0) ->
         {ok, ExprInfo} ->
             process_found_expression(ExprInfo, Bin, State0);
         {error, unexpected_expr_end, ErrState} ->
-            handle_scan_error({unexpected_expr_end, ErrState}, Bin, State0)
+            Expr = binary_part(
+                Bin, State0#state.position, ErrState#state.position - State0#state.position
+            ),
+            error(
+                unexpected_expr_end,
+                none,
+                error_info({State0#state.line, Expr})
+            )
     end.
 
 %% Find the end of an expression and extract relevant information
@@ -211,7 +158,7 @@ find_expression_end(Rest0, State0) ->
 process_found_expression({Len, EndMarkerLen, State1, Rest1}, Bin, State0) ->
     Expr0 = binary_part(Bin, State0#state.position, Len),
     {Expr, Category} = expr_category(Expr0, State0),
-    Token = {Category, State0#state.line, Expr},
+    Token = arizona_token:new(Category, State0#state.line, Expr),
 
     case maybe_skip_new_line(Rest1) of
         {true, NLMarker, Rest} ->
@@ -227,20 +174,13 @@ continue_after_newline(Token, Rest, Bin, Len, EndMarkerLen, NLMarker, State1) ->
     % Continue scanning normally, then prepend newline to first static token
     NextTokens = scan(Rest, Bin, State),
     % Prepend the newline to the first static token found
-    PrependedTokens = prepend_newline_to_first_static(NLMarker, NextTokens),
+    PrependedTokens = prepend_newline_to_first_static(NextTokens, NLMarker),
     [Token | PrependedTokens].
 
 %% Continue scanning without skipping a newline
 continue_without_newline(Token, Rest1, Bin, Len, EndMarkerLen, State1) ->
     State = incr_pos(Len + EndMarkerLen, State1),
     [Token | scan(Rest1, Bin, State)].
-
-%% Handle all scanning errors
-handle_scan_error({unexpected_expr_end, ErrState}, Bin, State0) ->
-    Expr = binary_part(Bin, State0#state.position, ErrState#state.position - State0#state.position),
-    error({unexpected_expr_end, State0#state.line, Expr});
-handle_scan_error({badexpr, Line, Expr}, _Bin, _State) ->
-    error({badexpr, Line, Expr}).
 
 %% Find the end of an expression, tracking nested braces
 %% Depth tracking ensures expressions like {case X of {ok, Y} -> Y end}
@@ -257,8 +197,15 @@ scan_expr_end(<<$\r, Rest/binary>>, Depth, Len, State) ->
     scan_expr_end(Rest, Depth, Len + 1, new_line(State));
 scan_expr_end(<<$\n, Rest/binary>>, Depth, Len, State) ->
     scan_expr_end(Rest, Depth, Len + 1, new_line(State));
-scan_expr_end(<<_Char, Rest/binary>>, Depth, Len, State) ->
-    scan_expr_end(Rest, Depth, Len + 1, State);
+scan_expr_end(<<Char/utf8, Rest/binary>>, Depth, Len, State) ->
+    CharByteSize = utf8_char_byte_size(Char),
+    scan_expr_end(Rest, Depth, Len + CharByteSize, State);
+scan_expr_end(<<InvalidByte, _Rest/binary>>, _Depth, _Len, State) ->
+    error(
+        invalid_utf8,
+        none,
+        error_info({State#state.line, State#state.position, InvalidByte})
+    );
 scan_expr_end(<<>>, _Depth, Len, State) ->
     {error, unexpected_expr_end, incr_pos(Len, State)}.
 
@@ -276,17 +223,26 @@ expr_category(Expr, State) ->
     case parse_expression(Expr) of
         {ok, ParsedForms} ->
             categorize_parsed_forms(ParsedForms, Expr);
-        {error, _Reason} ->
-            handle_scan_error({badexpr, State#state.line, Expr}, <<>>, State)
+        {error, Reason} ->
+            error(
+                badexpr,
+                none,
+                error_info({State#state.line, Expr, Reason})
+            )
     end.
 
 %% Parse expression using merl, handling exceptions gracefully
 parse_expression(Expr) ->
     try
-        {ok, merl:quote(Expr)}
+        Forms =
+            case merl:quote(Expr) of
+                F when is_list(F) -> F;
+                F -> [F]
+            end,
+        {ok, Forms}
     catch
-        _Class:_Exception ->
-            {error, parse_failed}
+        Class:Exception:StackTrace ->
+            {error, {parse_failed, Class, Exception, StackTrace}}
     end.
 
 %% Categorize parsed forms as either comments or dynamic expressions
@@ -294,13 +250,6 @@ categorize_parsed_forms(Forms, OriginalExpr) when is_list(Forms) ->
     case all_comments(Forms) of
         true ->
             {normalize_multiline_comment(OriginalExpr), comment};
-        false ->
-            {OriginalExpr, dynamic}
-    end;
-categorize_parsed_forms(SingleForm, OriginalExpr) ->
-    case is_comment(SingleForm) of
-        true ->
-            {norm_comment(OriginalExpr), comment};
         false ->
             {OriginalExpr, dynamic}
     end.
@@ -336,9 +285,37 @@ reset_pos(State) ->
     State#state{position = 0}.
 
 %% Prepend newline to the first static token in the list
-prepend_newline_to_first_static(NLMarker, [{static, Line, Text} | Rest]) ->
-    [{static, Line, <<NLMarker/binary, Text/binary>>} | Rest];
-prepend_newline_to_first_static(NLMarker, [Token | Rest]) ->
-    [Token | prepend_newline_to_first_static(NLMarker, Rest)];
-prepend_newline_to_first_static(_NLMarker, []) ->
-    [].
+prepend_newline_to_first_static([], _NLMarker) ->
+    [];
+prepend_newline_to_first_static([Token | Rest], NLMarker) ->
+    case arizona_token:get_category(Token) of
+        static ->
+            Text = arizona_token:get_content(Token),
+            NLStaticToken = arizona_token:set_content(<<NLMarker/binary, Text/binary>>, Token),
+            [NLStaticToken | Rest];
+        _ ->
+            [Token | prepend_newline_to_first_static(Rest, NLMarker)]
+    end.
+
+%% Calculate byte size of a UTF-8 character from its codepoint
+
+% ASCII (0-127)
+utf8_char_byte_size(Codepoint) when Codepoint =< 16#7F -> 1;
+% 2-byte UTF-8
+utf8_char_byte_size(Codepoint) when Codepoint =< 16#7FF -> 2;
+% 3-byte UTF-8
+utf8_char_byte_size(Codepoint) when Codepoint =< 16#FFFF -> 3;
+% 4-byte UTF-8
+utf8_char_byte_size(Codepoint) when Codepoint =< 16#10FFFF -> 4.
+
+%% Create error_info for proper compiler diagnostics with enhanced details
+-spec error_info(Cause) -> ErrorInfo when
+    Cause :: term(),
+    ErrorInfo :: [{error_info, map()}].
+error_info(Cause) ->
+    [
+        {error_info, #{
+            cause => Cause,
+            module => ?MODULE
+        }}
+    ].

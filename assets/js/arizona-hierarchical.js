@@ -16,7 +16,7 @@
  */
 export class ArizonaHierarchical {
   constructor() {
-    this.structure = {};
+    this.structure = new Map();
   }
 
   /**
@@ -24,66 +24,131 @@ export class ArizonaHierarchical {
    * @param {Object} structure - Hierarchical structure from arizona_hierarchical
    */
   initialize(structure) {
-    this.structure = JSON.parse(JSON.stringify(structure)); // Deep clone
+    this.structure = new Map(Object.entries(JSON.parse(JSON.stringify(structure)))); // Deep clone and convert to Map
   }
 
   /**
    * Apply diff changes from arizona_differ to hierarchical structure
-   * @param {Array} changes - Changes in format: [[StatefulId, [[ElementIndex, Changes]]]]
+   * @param {string} statefulId - Stateful ID to render
+   * @param {Array|Object} changes - Changes in format: [[ElementIndex, Changes]] or hierarchical structure
    */
-  applyDiff(changes) {
-    for (const [statefulId, elementChanges] of changes) {
-      if (!this.structure[statefulId]) {
-        console.warn(`[Arizona] StatefulId ${statefulId} not found in structure`);
-        continue;
-      }
+  applyDiff(statefulId, changes) {
+    // Check if changes is a hierarchical structure (fingerprint mismatch case)
+    if (changes?.type === 'stateful') {
+      this.structure.set(changes.id, changes);
+      return;
+    }
 
-      for (const [elementIndex, newValue] of elementChanges) {
-        this.structure[statefulId][elementIndex] = newValue;
+    if (!this.structure.has(statefulId)) {
+      const sanitizedStatefulId = String(statefulId).replace(/\r|\n/g, '');
+      console.warn(`[Arizona] StatefulId '${sanitizedStatefulId}' not found in structure`);
+    }
+
+    for (const [elementIndex, newValue] of changes) {
+      // Check if newValue is a hierarchical structure (fingerprint mismatch)
+      if (newValue && typeof newValue === 'object' && newValue.type) {
+        this.structure.get(statefulId).dynamic[elementIndex - 1] = newValue;
+      } else if (Array.isArray(newValue)) {
+        const element = this.structure.get(statefulId).dynamic[elementIndex - 1];
+        if (element && element.type === 'list') {
+          this.structure.get(statefulId).dynamic[elementIndex - 1].dynamic = newValue;
+        } else if (element && element.type === 'stateless') {
+          // Traditional stateless diff - array of [index, value] pairs
+          newValue.forEach(([index, value]) => {
+            this.structure.get(statefulId).dynamic[elementIndex - 1].dynamic[index - 1] = value;
+          });
+        } else {
+          this.structure.get(statefulId).dynamic[elementIndex - 1] = newValue;
+        }
+      } else {
+        this.structure.get(statefulId).dynamic[elementIndex - 1] = newValue;
       }
     }
   }
 
   /**
-   * Generate HTML from current hierarchical structure
-   * @param {string} componentId - Component ID to render (defaults to 'root')
+   * Generate HTML for stateful components
+   * @param {Object} element - Stateful element with id
    * @returns {string} Generated HTML
    */
-  generateHTML(componentId = 'root') {
-    const component = this.structure[componentId];
-    if (!component) {
-      return '';
+  generateStatefulHTML(statefulId) {
+    const struct = this.structure.get(statefulId);
+    if (!struct) {
+      const sanitizedStatefulId = String(statefulId).replace(/\r|\n/g, '');
+      console.warn(`[Arizona] StatefulId '${sanitizedStatefulId}' not found in structure`);
     }
 
+    // Components always have static and dynamic arrays
+    return this.zipStaticDynamic(struct.static, struct.dynamic);
+  }
+
+  /**
+   * Generate HTML for stateless components
+   * @param {Object} element - Stateless element with static and dynamic arrays
+   * @returns {string} Generated HTML
+   */
+  generateStatelessHTML(element) {
+    return this.zipStaticDynamic(element.static, element.dynamic);
+  }
+
+  /**
+   * Generate HTML for list components
+   * @param {Object} listElement - List element with static template and dynamic data
+   * @returns {string} Generated HTML
+   */
+  generateListHTML(listElement) {
+    const { static: staticParts, dynamic: dynamicPartsList } = listElement;
+    return dynamicPartsList.reduce((acc, dynamicParts) => {
+      return acc + this.zipStaticDynamic(staticParts, dynamicParts);
+    }, '');
+  }
+
+  /**
+   * Zip static and dynamic arrays into HTML (matches arizona_renderer:zip_static_dynamic/2)
+   * @param {Array} staticParts - Static HTML parts
+   * @param {Array} dynamicParts - Dynamic content parts
+   * @returns {string} Generated HTML
+   */
+  zipStaticDynamic(staticParts, dynamicParts) {
     const elements = [];
-    const sortedIndexes = Object.keys(component)
-      .map((k) => parseInt(k))
-      .sort((a, b) => a - b);
+    const maxLength = Math.max(staticParts.length, dynamicParts.length);
 
-    for (const index of sortedIndexes) {
-      const element = component[index];
-
-      if (typeof element === 'string') {
-        elements.push(element);
-      } else if (element && element.type === 'stateful') {
-        // Recursively render nested stateful component
-        elements.push(this.generateHTML(element.id));
-      } else if (element && element.type === 'stateless') {
-        // Render stateless structure inline
-        elements.push(this.generateHTMLFromStructure(element.structure));
-      } else if (element && element.type === 'list') {
-        // Render list elements
-        elements.push(this.generateListHTML(element));
-      } else if (Array.isArray(element)) {
-        // Handle nested arrays (iodata from server) - flatten recursively
-        elements.push(this.flattenIoData(element));
-      } else {
-        // Fallback for other types (numbers, etc.)
-        elements.push(String(element));
+    for (let i = 0; i < maxLength; i++) {
+      if (i < staticParts.length) {
+        elements.push(staticParts[i]);
+      }
+      if (i < dynamicParts.length) {
+        elements.push(this.normalizeDynamicElement(dynamicParts[i]));
       }
     }
 
     return elements.join('');
+  }
+
+  /**
+   * Normalize a dynamic element to string (handles stateful, stateless, lists, etc.)
+   * @param {*} element - Dynamic element to normalize
+   * @returns {string} Normalized string content
+   */
+  normalizeDynamicElement(element) {
+    if (typeof element === 'string') {
+      return element;
+    } else if (element && element.type === 'stateful') {
+      // Recursively render nested stateful component
+      return this.generateStatefulHTML(element.id);
+    } else if (element && element.type === 'stateless') {
+      // Render stateless structure inline
+      return this.generateStatelessHTML(element);
+    } else if (element && element.type === 'list') {
+      // Render list elements
+      return this.generateListHTML(element);
+    } else if (Array.isArray(element)) {
+      // Handle nested arrays (iodata from server) - flatten recursively
+      return this.flattenIoData(element);
+    } else {
+      // Fallback for other types (numbers, etc.)
+      return String(element);
+    }
   }
 
   /**
@@ -101,13 +166,17 @@ export class ArizonaHierarchical {
       return String(element);
     } else if (Array.isArray(element)) {
       // Recursively flatten nested arrays
-      return element.map((item) => this.flattenIoData(item)).join('');
+      return element
+        .map((item) => {
+          return this.flattenIoData(item);
+        })
+        .join('');
     } else if (element && typeof element === 'object') {
       // Handle special object types
       if (element.type === 'stateful') {
-        return this.generateHTML(element.id);
+        return this.generateStatefulHTML(element.id);
       } else if (element.type === 'stateless') {
-        return this.generateHTMLFromStructure(element.structure);
+        return this.generateStatelessHTML(element);
       } else if (element.type === 'list') {
         return this.generateListHTML(element);
       } else {
@@ -121,78 +190,11 @@ export class ArizonaHierarchical {
   }
 
   /**
-   * Generate HTML from a structure object (for stateless components)
-   * @param {Object} structure - Structure object with indexed elements
-   * @returns {string} Generated HTML
-   */
-  generateHTMLFromStructure(structure) {
-    const elements = [];
-    const sortedIndexes = Object.keys(structure)
-      .map((k) => parseInt(k))
-      .sort((a, b) => a - b);
-
-    for (const index of sortedIndexes) {
-      const element = structure[index];
-      if (typeof element === 'string') {
-        elements.push(element);
-      } else if (Array.isArray(element)) {
-        // Handle nested arrays in stateless structures too
-        elements.push(this.flattenIoData(element));
-      } else {
-        elements.push(String(element));
-      }
-    }
-
-    return elements.join('');
-  }
-
-  /**
-   * Generate HTML for list components
-   * @param {Object} listElement - List element with static template and dynamic data
-   * @returns {string} Generated HTML
-   */
-  generateListHTML(listElement) {
-    const { static: staticParts, dynamic } = listElement;
-    const items = [];
-
-    for (const dynamicItem of dynamic) {
-      const itemElements = [];
-
-      // Get dynamic indexes in order
-      const dynamicIndexes = Object.keys(dynamicItem)
-        .map((k) => parseInt(k))
-        .sort((a, b) => a - b);
-
-      // Interleave static and dynamic parts
-      let staticIndex = 0;
-      for (const dynIndex of dynamicIndexes) {
-        // Add static part before this dynamic element
-        if (staticIndex < staticParts.length) {
-          itemElements.push(staticParts[staticIndex]);
-          staticIndex++;
-        }
-        // Add dynamic element
-        itemElements.push(String(dynamicItem[dynIndex]));
-      }
-
-      // Add remaining static parts
-      while (staticIndex < staticParts.length) {
-        itemElements.push(staticParts[staticIndex]);
-        staticIndex++;
-      }
-
-      items.push(itemElements.join(''));
-    }
-
-    return items.join('');
-  }
-
-  /**
    * Get current structure (for debugging/testing)
    * @returns {Object} Deep copy of current structure
    */
   getStructure() {
-    return JSON.parse(JSON.stringify(this.structure));
+    return JSON.parse(JSON.stringify(Object.fromEntries(this.structure)));
   }
 
   /**
@@ -200,25 +202,7 @@ export class ArizonaHierarchical {
    * @returns {boolean} True if structure contains any components
    */
   isInitialized() {
-    return Object.keys(this.structure).length > 0;
-  }
-
-  /**
-   * Get component by ID
-   * @param {string} componentId - Component ID to retrieve
-   * @returns {Object|null} Component structure or null if not found
-   */
-  getComponent(componentId) {
-    return this.structure[componentId] || null;
-  }
-
-  /**
-   * Check if component exists
-   * @param {string} componentId - Component ID to check
-   * @returns {boolean} True if component exists
-   */
-  hasComponent(componentId) {
-    return componentId in this.structure;
+    return this.structure.size > 0;
   }
 
   /**
@@ -226,191 +210,43 @@ export class ArizonaHierarchical {
    * @returns {string[]} Array of all component IDs
    */
   getComponentIds() {
-    return Object.keys(this.structure);
+    return Array.from(this.structure.keys());
   }
 
   /**
    * Clear all structure data
    */
   clear() {
-    this.structure = {};
+    this.structure = new Map();
   }
 
   /**
    * Create a patch object that can be sent to arizona.js for DOM updating
    * This is used by the worker to send structured data to the main thread
-   * @param {string} statefulId - Stateful ID to render (defaults to 'root')
+   * @param {string} statefulId - Stateful ID to render
    * @returns {Object} Patch object with statefulId and HTML
    */
-  createPatch(statefulId = 'root') {
+  createPatch(statefulId) {
     return {
       type: 'html_patch',
-      statefulId: statefulId,
-      html: this.generateHTML(statefulId),
-      timestamp: Date.now(),
+      statefulId,
+      html: this.generateStatefulHTML(statefulId),
     };
   }
 
   /**
    * Create an initial render patch (used on first load)
-   * @param {string} statefulId - Stateful ID to render (defaults to 'root')
+   * @param {string} statefulId - Stateful ID to render
    * @returns {Object} Initial render patch object
    */
-  createInitialPatch(statefulId = 'root') {
+  createInitialPatch(statefulId) {
     return {
       type: 'initial_render',
-      statefulId: statefulId,
-      html: this.generateHTML(statefulId),
-      structure: this.getStructure(),
-      timestamp: Date.now(),
+      statefulId,
+      html: this.generateStatefulHTML(statefulId),
     };
-  }
-
-  /**
-   * Validate a hierarchical structure format
-   * @param {Object} structure - Structure to validate
-   * @returns {boolean} True if structure is valid
-   */
-  static validateStructure(structure) {
-    if (!structure || typeof structure !== 'object') {
-      return false;
-    }
-
-    for (const [componentId, component] of Object.entries(structure)) {
-      if (!component || typeof component !== 'object') {
-        return false;
-      }
-
-      // Check that component has numeric indexes
-      const indexes = Object.keys(component);
-      for (const index of indexes) {
-        if (isNaN(parseInt(index))) {
-          return false;
-        }
-      }
-    }
-
-    return true;
-  }
-
-  /**
-   * Validate diff changes format
-   * @param {Array} changes - Changes to validate
-   * @returns {boolean} True if changes format is valid
-   */
-  static validateDiff(changes) {
-    if (!Array.isArray(changes)) {
-      return false;
-    }
-
-    for (const change of changes) {
-      if (!Array.isArray(change) || change.length !== 2) {
-        return false;
-      }
-
-      const [statefulId, elementChanges] = change;
-      if (typeof statefulId !== 'string' || !Array.isArray(elementChanges)) {
-        return false;
-      }
-
-      for (const elementChange of elementChanges) {
-        if (!Array.isArray(elementChange) || elementChange.length !== 2) {
-          return false;
-        }
-
-        const [elementIndex] = elementChange;
-        if (isNaN(parseInt(elementIndex))) {
-          return false;
-        }
-      }
-    }
-
-    return true;
   }
 }
-
-/**
- * Utility functions for working with hierarchical structures
- */
-export const ArizonaHierarchicalUtils = {
-  /**
-   * Deep clone a structure
-   * @param {Object} structure - Structure to clone
-   * @returns {Object} Deep cloned structure
-   */
-  cloneStructure(structure) {
-    return JSON.parse(JSON.stringify(structure));
-  },
-
-  /**
-   * Merge two structures (second structure wins on conflicts)
-   * @param {Object} base - Base structure
-   * @param {Object} overlay - Overlay structure
-   * @returns {Object} Merged structure
-   */
-  mergeStructures(base, overlay) {
-    const merged = this.cloneStructure(base);
-
-    for (const [componentId, component] of Object.entries(overlay)) {
-      merged[componentId] = { ...merged[componentId], ...component };
-    }
-
-    return merged;
-  },
-
-  /**
-   * Extract all text content from a structure
-   * @param {Object} structure - Structure to extract text from
-   * @returns {string} Extracted text content
-   */
-  extractTextContent(structure) {
-    const client = new ArizonaHierarchical();
-    client.initialize(structure);
-    const html = client.generateHTML();
-
-    // Simple HTML tag removal for text extraction
-    return html.replace(/<[^>]*>/g, '').trim();
-  },
-
-  /**
-   * Get statistics about a structure
-   * @param {Object} structure - Structure to analyze
-   * @returns {Object} Statistics object
-   */
-  getStructureStats(structure) {
-    let componentCount = 0;
-    let elementCount = 0;
-    let statefulRefs = 0;
-    let statelessComponents = 0;
-    let listComponents = 0;
-
-    for (const [componentId, component] of Object.entries(structure)) {
-      componentCount++;
-
-      for (const element of Object.values(component)) {
-        elementCount++;
-
-        if (element && typeof element === 'object') {
-          if (element.type === 'stateful') {
-            statefulRefs++;
-          } else if (element.type === 'stateless') {
-            statelessComponents++;
-          } else if (element.type === 'list') {
-            listComponents++;
-          }
-        }
-      }
-    }
-
-    return {
-      componentCount,
-      elementCount,
-      statefulRefs,
-      statelessComponents,
-      listComponents,
-    };
-  },
-};
 
 /**
  * Default export for convenience

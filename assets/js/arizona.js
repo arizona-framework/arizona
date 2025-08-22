@@ -34,16 +34,23 @@ export default class ArizonaClient {
     };
   }
 
-  sendEvent(event, params = {}) {
+  sendEvent(event, params = {}, statefulId) {
     if (!this.connected) return;
+
+    const data = {
+      type: 'event',
+      event,
+      params,
+    };
+
+    // Only include stateful_id if provided
+    if (statefulId !== undefined) {
+      data.stateful_id = statefulId;
+    }
 
     this.worker.postMessage({
       type: 'send',
-      data: {
-        type: 'event',
-        event,
-        params,
-      },
+      data,
     });
   }
 
@@ -159,11 +166,6 @@ export default class ArizonaClient {
   handleWebSocketMessage(data) {
     // Handle other WebSocket message types that aren't processed by the worker
     console.log('[Arizona] WebSocket message:', data);
-  }
-
-  // Utility methods
-  getHierarchicalStructure() {
-    return this.hierarchical.getStructure();
   }
 
   isConnected() {
