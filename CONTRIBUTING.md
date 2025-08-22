@@ -14,7 +14,8 @@
 
 ## Development Setup
 
-Arizona uses modern Erlang/OTP patterns. See [.tool-versions](../.tool-versions) for exact version requirements.
+Arizona uses modern Erlang/OTP patterns. See [.tool-versions](./..tool-versions)
+for exact version requirements.
 
 ### Quick Start
 

@@ -65,12 +65,16 @@ Then visit:
 
 ### Explore the Code
 
-Each demo corresponds to complete source code in [`test/support/e2e/`](test/support/e2e/):
+Each demo corresponds to complete source code in [`test/support/e2e/`](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/):
 
-- **[Counter App](test/support/e2e/counter/)** - Layout + View with event handling
-- **[Todo App](test/support/e2e/todo/)** - Complex state management patterns
-- **[Modal System](test/support/e2e/modal/)** - Component composition and slots
-- **[Data Grid](test/support/e2e/datagrid/)** - Advanced data presentation
+- **[Counter App](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/counter/)**
+  - Layout + View with event handling
+- **[Todo App](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/todo/)**
+  - Complex state management patterns
+- **[Modal System](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/modal/)**
+  - Component composition and slots
+- **[Data Grid](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/datagrid/)**
+  - Advanced data presentation
 
 ## Template Syntax
 
