@@ -63,6 +63,7 @@ groups() ->
 %% --------------------------------------------------------------------
 
 diff_view_without_changes(Config) when is_list(Config) ->
+    ct:comment("diff_view should return empty diff when view has no changes"),
     {Module, _Id, _StatefulModule, _StatefulId, _StatefulElementIndex, _StatelessModule,
         _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
@@ -72,6 +73,7 @@ diff_view_without_changes(Config) when is_list(Config) ->
     ?assertEqual([], Diff).
 
 diff_view_with_changes(Config) when is_list(Config) ->
+    ct:comment("diff_view should return diff when view state changes"),
     {Module, _Id, _StatefulModule, _StatefulId, _StatefulElementIndex, _StatelessModule,
         _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
@@ -90,6 +92,7 @@ diff_view_with_changes(Config) when is_list(Config) ->
     ).
 
 diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
+    ct:comment("diff_stateful should return diff when fingerprint matches and bindings change"),
     {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, _StatelessModule,
         _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
@@ -112,6 +115,9 @@ diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
     ?assertMatch([{2, ~"Updated Title"}, {3, [{1, ~"Updated Title"}, {2, ~""}]}], Result).
 
 diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
+    ct:comment(
+        "diff_stateful should return nodiff when fingerprint matches and bindings unchanged"
+    ),
     {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, _StatelessModule,
         _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
@@ -132,6 +138,7 @@ diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
     ?assertEqual(nodiff, Result).
 
 diff_stateful_fingerprint_mismatch(Config) when is_list(Config) ->
+    ct:comment("diff_stateful should return hierarchical struct when fingerprint mismatch"),
     {ViewModule, ViewId, StatefulModule, StatefulId, StatefulElementIndex, _StatelessModule,
         _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
@@ -159,6 +166,7 @@ diff_stateful_fingerprint_mismatch(Config) when is_list(Config) ->
     ?assertEqual(#{type => stateful, id => StatefulId}, Result).
 
 diff_root_stateful_with_changes(Config) when is_list(Config) ->
+    ct:comment("diff_root_stateful should return diff when root stateful component changes"),
     {ViewModule, _ViewId, StatefulModule, StatefulId, _StatefulElementIndex, _StatelessModule,
         _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
@@ -180,6 +188,7 @@ diff_root_stateful_with_changes(Config) when is_list(Config) ->
     ?assertMatch([{2, ~"Root Updated Title"}, {3, [{1, ~"Root Updated Title"}, {2, ~""}]}], Diff).
 
 diff_stateless_fingerprint_match(Config) when is_list(Config) ->
+    ct:comment("diff_stateless should return diff when fingerprint matches"),
     {ViewModule, _ViewId, _StatefulModule, StatefulId, _StatefulElementIndex, StatelessModule,
         StatelessFunction, StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
@@ -198,6 +207,7 @@ diff_stateless_fingerprint_match(Config) when is_list(Config) ->
     ?assertEqual([{1, ~"Stateless Title"}, {2, ~""}], Result).
 
 diff_stateless_fingerprint_mismatch(Config) when is_list(Config) ->
+    ct:comment("diff_stateless should return hierarchical struct when fingerprint mismatch"),
     {ViewModule, _ViewId, StatefulModule, StatefulId, _StatefulElementIndex, _StatelessModule,
         _StatelessFunction, _StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
@@ -229,6 +239,7 @@ diff_stateless_fingerprint_mismatch(Config) when is_list(Config) ->
     ).
 
 diff_list_fingerprint_match(Config) when is_list(Config) ->
+    ct:comment("diff_list should return diff when fingerprint matches and list items change"),
     {ViewModule, _ViewId, _StatefulModule, StatefulId, _StatefulElementIndex, StatelessModule,
         StatelessFunction, StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
@@ -252,6 +263,7 @@ diff_list_fingerprint_match(Config) when is_list(Config) ->
     ).
 
 diff_list_fingerprint_mismatch(Config) when is_list(Config) ->
+    ct:comment("diff_list should return hierarchical struct when fingerprint mismatch"),
     {ViewModule, _ViewId, _StatefulModule, StatefulId, _StatefulElementIndex, StatelessModule,
         StatelessFunction, StatelessElementIndex} = mock_modules(
         ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME

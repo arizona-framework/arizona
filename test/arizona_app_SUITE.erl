@@ -37,7 +37,7 @@ end_per_suite(Config) ->
 %% --------------------------------------------------------------------
 
 test_start_function(Config) when is_list(Config) ->
-    % Test the start/2 function directly
+    ct:comment("Test the start/2 function directly"),
     {ok, Pid} = arizona_app:start(normal, []),
 
     % Verify a supervisor process was started
@@ -48,7 +48,7 @@ test_start_function(Config) when is_list(Config) ->
     exit(Pid, normal).
 
 test_stop_function(Config) when is_list(Config) ->
-    % Test the stop/1 function directly
+    ct:comment("Test the stop/1 function directly"),
     Result = arizona_app:stop(some_state),
 
     % stop/1 should always return ok
@@ -59,8 +59,7 @@ test_stop_function(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 
 test_application_start_stop(Config) when is_list(Config) ->
-    % Test application start/stop cycle using application:ensure_all_started
-    % This will start arizona and all its dependencies
+    ct:comment("Test application start/stop cycle using application:ensure_all_started"),
     {ok, StartedApps} = application:ensure_all_started(arizona),
 
     % Expected apps that should be started (arizona and its dependencies)
