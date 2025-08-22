@@ -134,7 +134,7 @@ call_handle_info_callback(Info, #view{state = State} = View) ->
 new(Module, Bindings, Layout) when is_atom(Module) ->
     State = arizona_stateful:new(Module, Bindings),
     #view{
-        layout = norm_layout(Layout),
+        layout = Layout,
         state = State,
         stateful_states = #{},
         fingerprints = #{}
@@ -219,12 +219,3 @@ remove_fingerprint(Id, ElementIndex, #view{} = View) ->
         #{} ->
             View
     end.
-
-%% --------------------------------------------------------------------
-%% Internal functions
-%% --------------------------------------------------------------------
-
-norm_layout({Module, RenderFun, Name, Bindings}) ->
-    {Module, RenderFun, Name, Bindings};
-norm_layout(none) ->
-    none.
