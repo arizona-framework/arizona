@@ -131,7 +131,7 @@ describe('ArizonaHierarchical', () => {
         }).toThrow();
 
         expect(consoleSpy).toHaveBeenCalledWith(
-          '[Arizona] StatefulId unknown not found in structure'
+          "[Arizona] StatefulId 'unknown' not found in structure"
         );
       });
     });
@@ -306,7 +306,7 @@ describe('ArizonaHierarchical', () => {
         }).toThrow();
 
         expect(consoleSpy).toHaveBeenCalledWith(
-          '[Arizona] StatefulId nonexistent not found in structure'
+          "[Arizona] StatefulId 'nonexistent' not found in structure"
         );
       });
     });

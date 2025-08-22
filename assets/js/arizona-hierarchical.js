@@ -40,7 +40,8 @@ export class ArizonaHierarchical {
     }
 
     if (!this.structure.has(statefulId)) {
-      console.warn(`[Arizona] StatefulId ${statefulId} not found in structure`);
+      const sanitizedStatefulId = String(statefulId).replace(/\r|\n/g, '');
+      console.warn(`[Arizona] StatefulId '${sanitizedStatefulId}' not found in structure`);
     }
 
     for (const [elementIndex, newValue] of changes) {
@@ -73,7 +74,8 @@ export class ArizonaHierarchical {
   generateStatefulHTML(statefulId) {
     const struct = this.structure.get(statefulId);
     if (!struct) {
-      console.warn(`[Arizona] StatefulId ${statefulId} not found in structure`);
+      const sanitizedStatefulId = String(statefulId).replace(/\r|\n/g, '');
+      console.warn(`[Arizona] StatefulId '${sanitizedStatefulId}' not found in structure`);
     }
 
     // Components always have static and dynamic arrays
