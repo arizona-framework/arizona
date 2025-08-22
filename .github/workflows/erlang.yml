@@ -51,7 +51,8 @@ jobs:
           rebar3-\
           ${{ runner.os }}-\
           otp-${{ steps.setup-beam.outputs.otp-version }}-\
-          rebar3-${{ steps.setup-beam.outputs.rebar3-version }}" \
+          rebar3-${{ steps.setup-beam.outputs.rebar3-version }}-\
+          config-${{ hashFiles('rebar.config') }}" \
           >> "${GITHUB_OUTPUT}"
 
       - name: Cache _build
