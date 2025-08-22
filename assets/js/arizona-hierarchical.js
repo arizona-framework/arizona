@@ -16,7 +16,7 @@
  */
 export class ArizonaHierarchical {
   constructor() {
-    this.structure = {};
+    this.structure = new Map();
   }
 
   /**
@@ -24,7 +24,7 @@ export class ArizonaHierarchical {
    * @param {Object} structure - Hierarchical structure from arizona_hierarchical
    */
   initialize(structure) {
-    this.structure = JSON.parse(JSON.stringify(structure)); // Deep clone
+    this.structure = new Map(Object.entries(JSON.parse(JSON.stringify(structure)))); // Deep clone and convert to Map
   }
 
   /**
@@ -35,32 +35,32 @@ export class ArizonaHierarchical {
   applyDiff(statefulId, changes) {
     // Check if changes is a hierarchical structure (fingerprint mismatch case)
     if (changes?.type === 'stateful') {
-      this.structure[changes.id] = changes;
+      this.structure.set(changes.id, changes);
       return;
     }
 
-    if (!this.structure[statefulId]) {
+    if (!this.structure.has(statefulId)) {
       console.warn(`[Arizona] StatefulId ${statefulId} not found in structure`);
     }
 
     for (const [elementIndex, newValue] of changes) {
       // Check if newValue is a hierarchical structure (fingerprint mismatch)
       if (newValue && typeof newValue === 'object' && newValue.type) {
-        this.structure[statefulId].dynamic[elementIndex - 1] = newValue;
+        this.structure.get(statefulId).dynamic[elementIndex - 1] = newValue;
       } else if (Array.isArray(newValue)) {
-        const element = this.structure[statefulId].dynamic[elementIndex - 1];
+        const element = this.structure.get(statefulId).dynamic[elementIndex - 1];
         if (element && element.type === 'list') {
-          this.structure[statefulId].dynamic[elementIndex - 1].dynamic = newValue;
+          this.structure.get(statefulId).dynamic[elementIndex - 1].dynamic = newValue;
         } else if (element && element.type === 'stateless') {
           // Traditional stateless diff - array of [index, value] pairs
           newValue.forEach(([index, value]) => {
-            this.structure[statefulId].dynamic[elementIndex - 1].dynamic[index - 1] = value;
+            this.structure.get(statefulId).dynamic[elementIndex - 1].dynamic[index - 1] = value;
           });
         } else {
-          this.structure[statefulId].dynamic[elementIndex - 1] = newValue;
+          this.structure.get(statefulId).dynamic[elementIndex - 1] = newValue;
         }
       } else {
-        this.structure[statefulId].dynamic[elementIndex - 1] = newValue;
+        this.structure.get(statefulId).dynamic[elementIndex - 1] = newValue;
       }
     }
   }
@@ -71,7 +71,7 @@ export class ArizonaHierarchical {
    * @returns {string} Generated HTML
    */
   generateStatefulHTML(statefulId) {
-    const struct = this.structure[statefulId];
+    const struct = this.structure.get(statefulId);
     if (!struct) {
       console.warn(`[Arizona] StatefulId ${statefulId} not found in structure`);
     }
@@ -192,7 +192,7 @@ export class ArizonaHierarchical {
    * @returns {Object} Deep copy of current structure
    */
   getStructure() {
-    return JSON.parse(JSON.stringify(this.structure));
+    return JSON.parse(JSON.stringify(Object.fromEntries(this.structure)));
   }
 
   /**
@@ -200,7 +200,7 @@ export class ArizonaHierarchical {
    * @returns {boolean} True if structure contains any components
    */
   isInitialized() {
-    return Object.keys(this.structure).length > 0;
+    return this.structure.size > 0;
   }
 
   /**
@@ -208,14 +208,14 @@ export class ArizonaHierarchical {
    * @returns {string[]} Array of all component IDs
    */
   getComponentIds() {
-    return Object.keys(this.structure);
+    return Array.from(this.structure.keys());
   }
 
   /**
    * Clear all structure data
    */
   clear() {
-    this.structure = {};
+    this.structure = new Map();
   }
 
   /**

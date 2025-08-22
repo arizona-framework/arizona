@@ -148,14 +148,6 @@ class ArizonaWebSocketWorker {
     console.log('[Arizona Worker] Diff applied and patch sent');
   }
 
-  getHierarchicalState() {
-    return {
-      initialized: this.hierarchical.isInitialized(),
-      componentIds: this.hierarchical.getComponentIds(),
-      structure: this.hierarchical.getStructure(),
-    };
-  }
-
   postMessage(data) {
     self.postMessage(data);
   }
