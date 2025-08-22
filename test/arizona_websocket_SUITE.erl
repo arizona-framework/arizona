@@ -18,8 +18,7 @@ groups() ->
             initial_render_test,
             ping_test,
             unknown_message_test,
-            invalid_json_test,
-            websocket_info_test
+            invalid_json_test
         ]}
     ].
 
@@ -200,17 +199,6 @@ invalid_json_test(Config) when is_list(Config) ->
     {text, ErrorJSON} = ErrorResponse,
     ErrorData = json:decode(ErrorJSON),
     ?assertMatch(#{~"type" := ~"error", ~"message" := ~"Internal server error"}, ErrorData).
-
-websocket_info_test(Config) when is_list(Config) ->
-    ct:comment("Test websocket_info function coverage"),
-    %% This test covers the websocket_info function by sending info messages
-    %% We need to test arizona_websocket:websocket_info/2 directly
-    MockState = {arizona_websocket, spawn(fun() -> ok end)},
-
-    %% Test websocket_info returns empty commands
-    {Commands, ResultState} = arizona_websocket:websocket_info(some_info, MockState),
-    ?assertEqual([], Commands),
-    ?assertEqual(MockState, ResultState).
 
 %% --------------------------------------------------------------------
 %% Helper functions

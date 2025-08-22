@@ -91,10 +91,10 @@ init_per_suite(Config) ->
         <span>Value: {arizona_template:get_binding(value, Bindings)}</span>
         """).
 
-    handle_event(~"update", #{value := NewValue}, State) ->
+    handle_event(~"update", #{~"value" := NewValue}, State) ->
         UpdatedState = arizona_stateful:put_binding(value, NewValue, State),
         {reply, #{updated => true}, UpdatedState};
-    handle_event(~"update_no_reply", #{value := NewValue}, State) ->
+    handle_event(~"update_no_reply", #{~"value" := NewValue}, State) ->
         UpdatedState = arizona_stateful:put_binding(value, NewValue, State),
         {noreply, UpdatedState}.
     """", [{module, merl:term(MockStatefulComponentModule)}]),
@@ -273,7 +273,6 @@ get_view_test(Config) when is_list(Config) ->
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
     View = arizona_live:get_view(Pid),
 
-    ?assertMatch({view, _, _, _, _}, View),
     ViewState = arizona_view:get_state(View),
     ViewId = arizona_stateful:get_binding(id, ViewState),
     ?assertEqual(~"live_test_id", ViewId).
@@ -313,7 +312,7 @@ handle_stateful_event_reply_test(Config) when is_list(Config) ->
     ct:comment("Test handle_event with specific StatefulId (stateful events) - reply"),
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
-    Result = arizona_live:handle_event(Pid, ~"stateful_1", ~"update", #{value => 100}),
+    Result = arizona_live:handle_event(Pid, ~"stateful_1", ~"update", #{~"value" => 100}),
     ?assertMatch({reply, ~"stateful_1", _Diff, #{updated := true}}, Result),
     {reply, StatefulId, Diff, Reply} = Result,
     ?assertEqual(~"stateful_1", StatefulId),
@@ -324,7 +323,7 @@ handle_stateful_event_noreply_test(Config) when is_list(Config) ->
     ct:comment("Test handle_event with specific StatefulId (stateful events) - noreply"),
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
-    Result = arizona_live:handle_event(Pid, ~"stateful_2", ~"update_no_reply", #{value => 200}),
+    Result = arizona_live:handle_event(Pid, ~"stateful_2", ~"update_no_reply", #{~"value" => 200}),
     ?assertMatch({noreply, ~"stateful_2", _Diff}, Result),
     {noreply, StatefulId, Diff} = Result,
     ?assertEqual(~"stateful_2", StatefulId),

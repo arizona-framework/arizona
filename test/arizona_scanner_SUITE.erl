@@ -148,7 +148,9 @@ format_error_invalid_utf8_test(_Config) ->
     StackTrace = [{arizona_scanner, scan_string, [1, ~"test"], [{error_info, ErrorInfo}]}],
     Result = arizona_scanner:format_error(invalid_utf8, StackTrace),
 
-    ?assertMatch(#{general := _, reason := _}, Result),
+    ?assert(
+        is_map(Result) andalso maps:is_key(general, Result) andalso maps:is_key(reason, Result)
+    ),
     ?assertEqual("Arizona template scanner UTF-8 validation failed", maps:get(general, Result)),
     ReasonStr = lists:flatten(maps:get(reason, Result)),
     ?assert(string:find(ReasonStr, "Invalid UTF-8 byte 0xFF") =/= nomatch),
@@ -161,7 +163,9 @@ format_error_unexpected_expr_end_test(_Config) ->
     StackTrace = [{arizona_scanner, scan_string, [2, ~"test"], [{error_info, ErrorInfo}]}],
     Result = arizona_scanner:format_error(unexpected_expr_end, StackTrace),
 
-    ?assertMatch(#{general := _, reason := _}, Result),
+    ?assert(
+        is_map(Result) andalso maps:is_key(general, Result) andalso maps:is_key(reason, Result)
+    ),
     ?assertEqual("Arizona template scanner expression parsing failed", maps:get(general, Result)),
     ReasonStr = lists:flatten(maps:get(reason, Result)),
     ?assert(string:find(ReasonStr, "incomplete_expr") =/= nomatch),
@@ -173,7 +177,9 @@ format_error_badexpr_test(_Config) ->
     StackTrace = [{arizona_scanner, scan_string, [3, ~"test"], [{error_info, ErrorInfo}]}],
     Result = arizona_scanner:format_error(badexpr, StackTrace),
 
-    ?assertMatch(#{general := _, reason := _}, Result),
+    ?assert(
+        is_map(Result) andalso maps:is_key(general, Result) andalso maps:is_key(reason, Result)
+    ),
     ?assertEqual(
         "Arizona template scanner expression validation failed", maps:get(general, Result)
     ),

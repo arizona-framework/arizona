@@ -196,7 +196,7 @@ render_list_template_callback_test(Config) when is_list(Config) ->
 from_string_with_module_function_test(Config) when is_list(Config) ->
     ct:comment("from_string/4 should handle module function calls"),
     TestModule = ?MODULE,
-    Bindings = arizona_binder:new(#{name => ~"World"}),
+    Bindings = #{name => ~"World"},
     Template = arizona_template:from_string(
         TestModule,
         ?LINE,
@@ -209,7 +209,7 @@ from_string_with_module_function_test(Config) when is_list(Config) ->
 
 render_list_error_test(Config) when is_list(Config) ->
     ct:comment("render_list/2 should handle function info failure gracefully"),
-    BadCallback = fun() -> ok end,
+    BadCallback = fun(_Item) -> ok end,
     List = [~"item1", ~"item2"],
     ?assertError(
         {function_info_failed, _},

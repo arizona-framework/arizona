@@ -33,7 +33,7 @@
     handler :: module()
 }).
 
--opaque route() ::
+-nominal route() ::
     {live, Path :: binary(), LiveModule :: module()}
     | {live_websocket, Path :: binary()}
     | {static, Path :: binary(), {dir, Directory :: binary()}}
