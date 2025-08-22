@@ -2,6 +2,11 @@
 -behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).
+
+%% --------------------------------------------------------------------
+%% Ignore dialyzer warnings
+%% --------------------------------------------------------------------
+
 -dialyzer(
     {nowarn_function, [
         new_invalid_category_error/1,
