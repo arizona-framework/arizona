@@ -74,7 +74,7 @@ jobs:
             -os-${{runner.os}}\
             -otp-${{steps.setup-beam.outputs.otp-version}}\
             -rebar3-${{steps.setup-beam.outputs.rebar3-version}}\
-            -hash-${{hashFiles('rebar.lock')}}"
+            -hash-${{hashFiles('rebar.lock')}}-${{hashFiles('rebar.config')}}"
 
       - run: |
           rebar3 upgrade --all
