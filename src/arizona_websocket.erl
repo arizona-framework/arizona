@@ -78,9 +78,9 @@ websocket_init({ViewModule, ArizonaRequest}) ->
     Message :: {text, binary()},
     State :: state(),
     Result :: call_result().
-websocket_handle({text, JsonBinary}, State) ->
+websocket_handle({text, JSONBinary}, State) ->
     try
-        Message = json:decode(JsonBinary),
+        Message = json:decode(JSONBinary),
         MessageType = maps:get(~"type", Message, undefined),
         handle_message_type(MessageType, Message, State)
     catch
@@ -210,18 +210,18 @@ handle_websocket_error(Error, Reason, Stacktrace, State) ->
     }),
     {[{text, ErrorPayload}], State}.
 
--spec json_encode(Term) -> JsonData when
+-spec json_encode(Term) -> JSONData when
     Term :: term(),
-    JsonData :: iodata().
+    JSONData :: iodata().
 json_encode(Term) ->
     % Convert tuples to arrays for JavaScript compatibility
     json:encode(Term, fun json_encoder/2).
 
 %% Custom JSON encoder that converts tuples to arrays for JavaScript compatibility
--spec json_encoder(Term, Encoder) -> JsonData when
+-spec json_encoder(Term, Encoder) -> JSONData when
     Term :: term(),
     Encoder :: json:encoder(),
-    JsonData :: iodata().
+    JSONData :: iodata().
 json_encoder(Tuple, Encoder) when is_tuple(Tuple) ->
     json:encode_list(tuple_to_list(Tuple), Encoder);
 json_encoder(Other, Encoder) ->
