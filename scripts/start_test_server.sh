@@ -5,7 +5,8 @@ if ! rebar3 as test compile; then
     exit 1
 fi
 
-# Use erl directly for CI environment instead of rebar3 shell
+# Use erl directly instead of rebar3 shell because we need the -noshell option
+# for automated/CI environments where interactive shell is not available
 exec erl \
     -pa "_build/test/lib/arizona/ebin" \
     -pa "_build/test/lib/arizona/test" \
