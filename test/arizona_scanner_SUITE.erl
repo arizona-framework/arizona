@@ -72,25 +72,25 @@ groups() ->
 init_per_suite(Config) ->
     Config.
 
-end_per_suite(_Config) ->
+end_per_suite(Config) when is_list(Config) ->
     ok.
 
 init_per_group(_GroupName, Config) ->
     Config.
 
-end_per_group(_GroupName, _Config) ->
+end_per_group(_GroupName, Config) when is_list(Config) ->
     ok.
 
 %% --------------------------------------------------------------------
 %% Basic scanning tests
 %% --------------------------------------------------------------------
 
-scan_empty_string_test(_Config) ->
+scan_empty_string_test(Config) when is_list(Config) ->
     ct:comment("Test scanning empty string"),
     Result = arizona_scanner:scan_string(1, ~""),
     ?assertEqual([], Result).
 
-scan_static_text_test(_Config) ->
+scan_static_text_test(Config) when is_list(Config) ->
     ct:comment("Test scanning static text without expressions"),
     Result = arizona_scanner:scan_string(1, ~"Hello World"),
     ?assertMatch([_Token], Result),
@@ -99,7 +99,7 @@ scan_static_text_test(_Config) ->
     ?assertEqual(~"Hello World", arizona_token:get_content(Token)),
     ?assertEqual(1, arizona_token:get_line(Token)).
 
-scan_simple_expression_test(_Config) ->
+scan_simple_expression_test(Config) when is_list(Config) ->
     ct:comment("Test scanning simple dynamic expression"),
     Result = arizona_scanner:scan_string(1, ~"{name}"),
     ?assertMatch([_Token], Result),
@@ -108,7 +108,7 @@ scan_simple_expression_test(_Config) ->
     ?assertEqual(~"name", arizona_token:get_content(Token)),
     ?assertEqual(1, arizona_token:get_line(Token)).
 
-scan_mixed_content_test(_Config) ->
+scan_mixed_content_test(Config) when is_list(Config) ->
     ct:comment("Test scanning mixed static text and expressions"),
     Result = arizona_scanner:scan_string(1, ~"Hello {name}, welcome!"),
     ?assertMatch([_StaticToken1, _DynamicToken, _StaticToken2], Result),
@@ -127,22 +127,22 @@ scan_mixed_content_test(_Config) ->
 %% Error handling tests
 %% --------------------------------------------------------------------
 
-invalid_utf8_error_test(_Config) ->
+invalid_utf8_error_test(Config) when is_list(Config) ->
     ct:comment("Test invalid UTF-8 byte handling"),
     % Hello[invalid]World
     InvalidBinary = <<72, 101, 108, 108, 111, 255, 87, 111, 114, 108, 100>>,
     ?assertError(invalid_utf8, arizona_scanner:scan_string(1, InvalidBinary)).
 
-unexpected_expr_end_error_test(_Config) ->
+unexpected_expr_end_error_test(Config) when is_list(Config) ->
     ct:comment("Test unexpected expression end error"),
     ?assertError(unexpected_expr_end, arizona_scanner:scan_string(1, ~"{incomplete")).
 
-badexpr_error_test(_Config) ->
+badexpr_error_test(Config) when is_list(Config) ->
     ct:comment("Test bad expression parsing error"),
     %% This should trigger a merl parsing error - use invalid syntax
     ?assertError(badexpr, arizona_scanner:scan_string(1, ~"{begin end}")).
 
-format_error_invalid_utf8_test(_Config) ->
+format_error_invalid_utf8_test(Config) when is_list(Config) ->
     ct:comment("Test format_error for invalid_utf8"),
     ErrorInfo = #{cause => {1, 5, 255}},
     StackTrace = [{arizona_scanner, scan_string, [1, ~"test"], [{error_info, ErrorInfo}]}],
@@ -157,7 +157,7 @@ format_error_invalid_utf8_test(_Config) ->
     ?assert(string:find(ReasonStr, "line 1") =/= nomatch),
     ?assert(string:find(ReasonStr, "position 5") =/= nomatch).
 
-format_error_unexpected_expr_end_test(_Config) ->
+format_error_unexpected_expr_end_test(Config) when is_list(Config) ->
     ct:comment("Test format_error for unexpected_expr_end"),
     ErrorInfo = #{cause => {2, ~"incomplete_expr"}},
     StackTrace = [{arizona_scanner, scan_string, [2, ~"test"], [{error_info, ErrorInfo}]}],
@@ -171,7 +171,7 @@ format_error_unexpected_expr_end_test(_Config) ->
     ?assert(string:find(ReasonStr, "incomplete_expr") =/= nomatch),
     ?assert(string:find(ReasonStr, "line 2") =/= nomatch).
 
-format_error_badexpr_test(_Config) ->
+format_error_badexpr_test(Config) when is_list(Config) ->
     ct:comment("Test format_error for badexpr"),
     ErrorInfo = #{cause => {3, ~"bad_expr", {parse_failed, error, badarg, []}}},
     StackTrace = [{arizona_scanner, scan_string, [3, ~"test"], [{error_info, ErrorInfo}]}],
@@ -191,7 +191,7 @@ format_error_badexpr_test(_Config) ->
 %% UTF-8 tests
 %% --------------------------------------------------------------------
 
-scan_ascii_characters_test(_Config) ->
+scan_ascii_characters_test(Config) when is_list(Config) ->
     ct:comment("Test scanning ASCII characters (1-byte UTF-8)"),
     Result = arizona_scanner:scan_string(1, ~"ASCII text 123!@#"),
     ?assertMatch([_Token], Result),
@@ -199,7 +199,7 @@ scan_ascii_characters_test(_Config) ->
     ?assertEqual(static, arizona_token:get_category(Token)),
     ?assertEqual(~"ASCII text 123!@#", arizona_token:get_content(Token)).
 
-scan_two_byte_utf8_test(_Config) ->
+scan_two_byte_utf8_test(Config) when is_list(Config) ->
     ct:comment("Test scanning 2-byte UTF-8 characters"),
     % Contains é (2-byte UTF-8)
     TwoByteText = ~"Café résumé",
@@ -209,7 +209,7 @@ scan_two_byte_utf8_test(_Config) ->
     ?assertEqual(static, arizona_token:get_category(Token)),
     ?assertEqual(TwoByteText, arizona_token:get_content(Token)).
 
-scan_three_byte_utf8_test(_Config) ->
+scan_three_byte_utf8_test(Config) when is_list(Config) ->
     ct:comment("Test scanning 3-byte UTF-8 characters"),
     % Contains 世界 (3-byte UTF-8)
     ThreeByteText = ~"Hello 世界",
@@ -219,7 +219,7 @@ scan_three_byte_utf8_test(_Config) ->
     ?assertEqual(static, arizona_token:get_category(Token)),
     ?assertEqual(ThreeByteText, arizona_token:get_content(Token)).
 
-scan_four_byte_utf8_test(_Config) ->
+scan_four_byte_utf8_test(Config) when is_list(Config) ->
     ct:comment("Test scanning 4-byte UTF-8 characters"),
     % Contains emojis (4-byte UTF-8)
     FourByteText = ~"Emoji: 😀🎉",
@@ -229,7 +229,7 @@ scan_four_byte_utf8_test(_Config) ->
     ?assertEqual(static, arizona_token:get_category(Token)),
     ?assertEqual(FourByteText, arizona_token:get_content(Token)).
 
-invalid_utf8_byte_test(_Config) ->
+invalid_utf8_byte_test(Config) when is_list(Config) ->
     ct:comment("Test invalid UTF-8 byte in expression scanning"),
     %% Create a binary with invalid UTF-8 inside an expression
     InvalidExprBinary = <<"{hello", 255, "world}">>,
@@ -239,7 +239,7 @@ invalid_utf8_byte_test(_Config) ->
 %% Line ending tests
 %% --------------------------------------------------------------------
 
-scan_unix_newlines_test(_Config) ->
+scan_unix_newlines_test(Config) when is_list(Config) ->
     ct:comment("Test scanning Unix LF line endings"),
     Text = ~"Line 1\nLine 2\nLine 3",
     Result = arizona_scanner:scan_string(1, Text),
@@ -248,7 +248,7 @@ scan_unix_newlines_test(_Config) ->
     ?assertEqual(static, arizona_token:get_category(Token)),
     ?assertEqual(~"Line 1\nLine 2\nLine 3", arizona_token:get_content(Token)).
 
-scan_windows_crlf_test(_Config) ->
+scan_windows_crlf_test(Config) when is_list(Config) ->
     ct:comment("Test scanning Windows CRLF line endings"),
     Text = ~"Line 1\r\nLine 2\r\nLine 3",
     Result = arizona_scanner:scan_string(1, Text),
@@ -257,7 +257,7 @@ scan_windows_crlf_test(_Config) ->
     ?assertEqual(static, arizona_token:get_category(Token)),
     ?assertEqual(~"Line 1\r\nLine 2\r\nLine 3", arizona_token:get_content(Token)).
 
-scan_mac_cr_test(_Config) ->
+scan_mac_cr_test(Config) when is_list(Config) ->
     ct:comment("Test scanning Mac CR line endings"),
     Text = ~"Line 1\rLine 2\rLine 3",
     Result = arizona_scanner:scan_string(1, Text),
@@ -266,7 +266,7 @@ scan_mac_cr_test(_Config) ->
     ?assertEqual(static, arizona_token:get_category(Token)),
     ?assertEqual(~"Line 1\rLine 2\rLine 3", arizona_token:get_content(Token)).
 
-expression_with_crlf_test(_Config) ->
+expression_with_crlf_test(Config) when is_list(Config) ->
     ct:comment("Test expression scanning with CRLF line endings"),
     Text = ~"{case X of\r\n  ok -> yes;\r\n  _ -> no\r\nend}",
     Result = arizona_scanner:scan_string(1, Text),
@@ -276,7 +276,7 @@ expression_with_crlf_test(_Config) ->
     ExpectedContent = ~"case X of\r\n  ok -> yes;\r\n  _ -> no\r\nend",
     ?assertEqual(ExpectedContent, arizona_token:get_content(Token)).
 
-expression_with_cr_test(_Config) ->
+expression_with_cr_test(Config) when is_list(Config) ->
     ct:comment("Test expression scanning with CR line endings"),
     Text = ~"{case X of\r  ok -> yes;\r  _ -> no\rend}",
     Result = arizona_scanner:scan_string(1, Text),
@@ -290,7 +290,7 @@ expression_with_cr_test(_Config) ->
 %% Expression tests
 %% --------------------------------------------------------------------
 
-scan_nested_braces_test(_Config) ->
+scan_nested_braces_test(Config) when is_list(Config) ->
     ct:comment("Test scanning expressions with nested braces"),
     Text = ~"{case X of {ok, Y} -> Y; {error, _} -> default end}",
     Result = arizona_scanner:scan_string(1, Text),
@@ -300,7 +300,7 @@ scan_nested_braces_test(_Config) ->
     ExpectedContent = ~"case X of {ok, Y} -> Y; {error, _} -> default end",
     ?assertEqual(ExpectedContent, arizona_token:get_content(Token)).
 
-scan_complex_expression_test(_Config) ->
+scan_complex_expression_test(Config) when is_list(Config) ->
     ct:comment("Test scanning complex nested expression"),
     Text = ~"{lists:map(fun(X) -> {X, X * 2} end, [1, 2, 3])}",
     Result = arizona_scanner:scan_string(1, Text),
@@ -310,12 +310,12 @@ scan_complex_expression_test(_Config) ->
     ExpectedContent = ~"lists:map(fun(X) -> {X, X * 2} end, [1, 2, 3])",
     ?assertEqual(ExpectedContent, arizona_token:get_content(Token)).
 
-unexpected_expression_end_test(_Config) ->
+unexpected_expression_end_test(Config) when is_list(Config) ->
     ct:comment("Test unexpected expression end in nested context"),
     Text = ~"{case X of {ok, Y} -> Y",
     ?assertError(unexpected_expr_end, arizona_scanner:scan_string(1, Text)).
 
-expression_with_newlines_test(_Config) ->
+expression_with_newlines_test(Config) when is_list(Config) ->
     ct:comment("Test expression followed by newline"),
     Text = ~"{name}\nNext line",
     Result = arizona_scanner:scan_string(1, Text),
@@ -328,7 +328,7 @@ expression_with_newlines_test(_Config) ->
     ?assertEqual(static, arizona_token:get_category(StaticToken)),
     ?assertEqual(~"\nNext line", arizona_token:get_content(StaticToken)).
 
-malformed_expression_test(_Config) ->
+malformed_expression_test(Config) when is_list(Config) ->
     ct:comment("Test malformed expression parsing"),
     %% Create an expression that will fail merl parsing
 
@@ -340,7 +340,7 @@ malformed_expression_test(_Config) ->
 %% Comment tests
 %% --------------------------------------------------------------------
 
-scan_single_line_comment_test(_Config) ->
+scan_single_line_comment_test(Config) when is_list(Config) ->
     ct:comment("Test scanning single line comment"),
     Text = ~"{% This is a comment %}",
     Result = arizona_scanner:scan_string(1, Text),
@@ -351,7 +351,7 @@ scan_single_line_comment_test(_Config) ->
     Content = arizona_token:get_content(Token),
     ?assert(is_binary(Content)).
 
-scan_multiline_comment_test(_Config) ->
+scan_multiline_comment_test(Config) when is_list(Config) ->
     ct:comment("Test scanning multiline comment"),
     Text = ~"{% Line 1\n% Line 2\n% Line 3 %}",
     Result = arizona_scanner:scan_string(1, Text),
@@ -362,7 +362,7 @@ scan_multiline_comment_test(_Config) ->
     Content = arizona_token:get_content(Token),
     ?assert(is_binary(Content)).
 
-comment_normalization_test(_Config) ->
+comment_normalization_test(Config) when is_list(Config) ->
     ct:comment("Test comment normalization with various whitespace"),
     Text = ~"{%   Spaced comment   %}",
     Result = arizona_scanner:scan_string(1, Text),
@@ -373,7 +373,7 @@ comment_normalization_test(_Config) ->
     Content = arizona_token:get_content(Token),
     ?assert(is_binary(Content)).
 
-mixed_comment_expression_test(_Config) ->
+mixed_comment_expression_test(Config) when is_list(Config) ->
     ct:comment("Test mixed comments and expressions"),
     Text = ~"Hello {name} {% comment %} world",
     Result = arizona_scanner:scan_string(1, Text),
@@ -384,7 +384,7 @@ mixed_comment_expression_test(_Config) ->
 %% Edge case tests
 %% --------------------------------------------------------------------
 
-scan_escaped_braces_test(_Config) ->
+scan_escaped_braces_test(Config) when is_list(Config) ->
     ct:comment("Test scanning escaped braces"),
     Text = ~"Before \\{escaped} after",
     Result = arizona_scanner:scan_string(1, Text),
@@ -394,7 +394,7 @@ scan_escaped_braces_test(_Config) ->
     %% Escaped brace should become literal brace in output
     ?assertEqual(~"Before {escaped} after", arizona_token:get_content(Token)).
 
-scan_expression_followed_by_newline_test(_Config) ->
+scan_expression_followed_by_newline_test(Config) when is_list(Config) ->
     ct:comment("Test expression immediately followed by newline"),
     Text = ~"{expr}\nContent",
     Result = arizona_scanner:scan_string(1, Text),
@@ -407,7 +407,7 @@ scan_expression_followed_by_newline_test(_Config) ->
     ?assertEqual(static, arizona_token:get_category(StaticToken)),
     ?assertEqual(~"\nContent", arizona_token:get_content(StaticToken)).
 
-prepend_newline_to_static_test(_Config) ->
+prepend_newline_to_static_test(Config) when is_list(Config) ->
     ct:comment("Test newline prepending to static tokens"),
     %% This tests the prepend_newline_to_first_static function when
     %% there are multiple tokens and newline needs to find the first static one
@@ -416,7 +416,7 @@ prepend_newline_to_static_test(_Config) ->
     %% Should have multiple tokens
     ?assert(length(Result) >= 2).
 
-empty_expression_test(_Config) ->
+empty_expression_test(Config) when is_list(Config) ->
     ct:comment("Test empty expression handling"),
     Text = ~"Before {} after",
     Result = arizona_scanner:scan_string(1, Text),
