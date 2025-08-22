@@ -349,7 +349,7 @@ scan_single_line_comment_test(_Config) ->
     ?assertEqual(comment, arizona_token:get_category(Token)),
     %% Comment should be normalized
     Content = arizona_token:get_content(Token),
-    ct:pal("Comment content: ~p", [Content]).
+    ?assert(is_binary(Content)).
 
 scan_multiline_comment_test(_Config) ->
     ct:comment("Test scanning multiline comment"),
@@ -360,7 +360,7 @@ scan_multiline_comment_test(_Config) ->
     ?assertEqual(comment, arizona_token:get_category(Token)),
     %% Comment should be normalized
     Content = arizona_token:get_content(Token),
-    ct:pal("Multiline comment content: ~p", [Content]).
+    ?assert(is_binary(Content)).
 
 comment_normalization_test(_Config) ->
     ct:comment("Test comment normalization with various whitespace"),
@@ -371,14 +371,13 @@ comment_normalization_test(_Config) ->
     ?assertEqual(comment, arizona_token:get_category(Token)),
     %% Comment should be normalized
     Content = arizona_token:get_content(Token),
-    ct:pal("Spaced comment content: ~p", [Content]).
+    ?assert(is_binary(Content)).
 
 mixed_comment_expression_test(_Config) ->
     ct:comment("Test mixed comments and expressions"),
     Text = ~"Hello {name} {% comment %} world",
     Result = arizona_scanner:scan_string(1, Text),
-    ct:pal("Mixed comment result: ~p", [Result]),
-    %% Let's see what tokens we actually get
+    %% Should have multiple tokens for mixed content
     ?assert(length(Result) >= 3).
 
 %% --------------------------------------------------------------------
@@ -414,14 +413,12 @@ prepend_newline_to_static_test(_Config) ->
     %% there are multiple tokens and newline needs to find the first static one
     Text = ~"{expr1}\n{expr2}Static",
     Result = arizona_scanner:scan_string(1, Text),
-    ct:pal("Prepend newline result: ~p", [Result]),
-    %% Let's see what we actually get
+    %% Should have multiple tokens
     ?assert(length(Result) >= 2).
 
 empty_expression_test(_Config) ->
     ct:comment("Test empty expression handling"),
     Text = ~"Before {} after",
     Result = arizona_scanner:scan_string(1, Text),
-    ct:pal("Empty expression result: ~p", [Result]),
-    %% Let's see what we actually get
+    %% Should have multiple tokens for empty expression
     ?assert(length(Result) >= 2).
