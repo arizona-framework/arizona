@@ -77,15 +77,14 @@ create_template_ast(StaticParts, DynamicElements, CompileOpts) ->
     Fingerprint = erlang:phash2(FingerprintData),
     FingerprintAST = erl_syntax:integer(Fingerprint),
 
-    % Create tuple AST: {template, Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint}
-    erl_syntax:tuple([
-        erl_syntax:atom(template),
-        StaticListAST,
-        DynamicAST,
-        DynamicSequenceAST,
-        DynamicAnnoAST,
-        FingerprintAST
-    ]).
+    % Create arizona_template:new/5 call
+    erl_syntax:application(
+        erl_syntax:module_qualifier(
+            erl_syntax:atom(arizona_template),
+            erl_syntax:atom(new)
+        ),
+        [StaticListAST, DynamicAST, DynamicSequenceAST, DynamicAnnoAST, FingerprintAST]
+    ).
 
 %% Create AST for static list
 -spec create_static_list_ast(StaticParts) -> erl_syntax:syntaxTree() when

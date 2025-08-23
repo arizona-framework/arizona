@@ -5,6 +5,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([new/5]).
 -export([from_string/1]).
 -export([is_template/1]).
 -export([from_string/4]).
@@ -26,6 +27,7 @@
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
+-ignore_xref([new/5]).
 -ignore_xref([from_string/1]).
 -ignore_xref([from_string/4]).
 -ignore_xref([get_dynamic_anno/1]).
@@ -46,6 +48,8 @@
 -export_type([template/0]).
 -export_type([static/0]).
 -export_type([dynamic/0]).
+-export_type([dynamic_tuple/0]).
+-export_type([dynamic_tuple_callback/0]).
 -export_type([dynamic_sequence/0]).
 -export_type([dynamic_anno/0]).
 -export_type([fingerprint/0]).
@@ -58,7 +62,7 @@
 
 -record(template, {
     static :: static(),
-    dynamic :: dynamic() | fun((CallbackArg :: term()) -> dynamic()),
+    dynamic :: dynamic(),
     dynamic_sequence :: dynamic_sequence(),
     dynamic_anno :: dynamic_anno(),
     fingerprint :: fingerprint()
@@ -66,7 +70,9 @@
 
 -opaque template() :: #template{}.
 -nominal static() :: [binary()].
--nominal dynamic() :: tuple().
+-nominal dynamic() :: dynamic_tuple() | dynamic_tuple_callback().
+-nominal dynamic_tuple() :: tuple().
+-nominal dynamic_tuple_callback() :: fun((CallbackArg :: term()) -> dynamic_tuple()).
 -nominal dynamic_sequence() :: [pos_integer()].
 -nominal dynamic_anno() :: tuple().
 -nominal fingerprint() :: non_neg_integer().
@@ -83,6 +89,22 @@
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
+
+-spec new(Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint) -> Template when
+    Static :: static(),
+    Dynamic :: dynamic(),
+    DynamicSequence :: dynamic_sequence(),
+    DynamicAnno :: dynamic_anno(),
+    Fingerprint :: fingerprint(),
+    Template :: template().
+new(Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint) ->
+    #template{
+        static = Static,
+        dynamic = Dynamic,
+        dynamic_sequence = DynamicSequence,
+        dynamic_anno = DynamicAnno,
+        fingerprint = Fingerprint
+    }.
 
 -spec from_string(String) -> Template when
     String :: binary(),
