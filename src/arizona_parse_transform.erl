@@ -326,23 +326,23 @@ when
     CallbackArg :: erl_syntax:syntaxTree(),
     WrappedTemplateAST :: erl_syntax:syntaxTree().
 wrap_dynamic_tuple_in_function(TemplateAST, RevClauseBody, CallbackArg) ->
-    case erl_syntax:type(TemplateAST) of
-        tuple ->
-            % Extract template tuple elements
-            [TemplateAtom, Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint] =
-                erl_syntax:tuple_elements(TemplateAST),
-
+    case analyze_application(TemplateAST) of
+        {arizona_template, new, 5, [Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint]} ->
             % Wrap the Dynamic tuple in fun(CallbackArg) -> ClauseBody end
             ClauseBody = lists:reverse([Dynamic | RevClauseBody]),
             FunClause = erl_syntax:clause([CallbackArg], none, ClauseBody),
             WrappedDynamic = erl_syntax:fun_expr([FunClause]),
 
-            % Reconstruct the template tuple with wrapped dynamic
-            erl_syntax:tuple([
-                TemplateAtom, Static, WrappedDynamic, DynamicSequence, DynamicAnno, Fingerprint
-            ]);
+            % Reconstruct the arizona_template:new/5 call with wrapped dynamic
+            erl_syntax:application(
+                erl_syntax:module_qualifier(
+                    erl_syntax:atom(arizona_template),
+                    erl_syntax:atom(new)
+                ),
+                [Static, WrappedDynamic, DynamicSequence, DynamicAnno, Fingerprint]
+            );
         _ ->
-            % If not a tuple, return as-is (shouldn't happen for valid templates)
+            % If not arizona_template:new/5, return as-is
             TemplateAST
     end.
 
