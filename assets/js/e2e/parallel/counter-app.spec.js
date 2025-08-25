@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { waitForCondition, collectWebSocketMessages } from './test-utils.js';
+import { waitForCondition, collectWebSocketMessages } from '../test-utils.js';
 
 test.describe('Arizona Counter App', () => {
   test('should load counter page and display initial state', async ({ page }) => {

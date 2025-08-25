@@ -8,7 +8,7 @@ import {
   waitForInputValue,
   selectors,
   createAssertions,
-} from './test-utils.js';
+} from '../test-utils.js';
 
 test.describe('Arizona Todo App', () => {
   // Create assertions with expect function

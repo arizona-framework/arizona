@@ -40,10 +40,11 @@
 init(CowboyRequest, _State) ->
     % Extract path from query parameter ?path=/users
     PathParams = cowboy_req:parse_qs(CowboyRequest),
-    LivePath = proplists:get_value(~"path", PathParams, ~"/"),
+    {~"path", LivePath} = proplists:lookup(~"path", PathParams),
+    {~"qs", Qs} = proplists:lookup(~"qs", PathParams),
 
     % Create request with the Live path to resolve correct handler
-    LiveRequest = CowboyRequest#{path => LivePath},
+    LiveRequest = CowboyRequest#{path => LivePath, qs => Qs},
     RouteMetadata = arizona_server:get_route_metadata(LiveRequest),
     LiveModule = arizona_server:get_route_handler(RouteMetadata),
 

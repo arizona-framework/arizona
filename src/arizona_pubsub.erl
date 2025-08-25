@@ -5,6 +5,7 @@
 %% --------------------------------------------------------------------
 
 -export([broadcast/2]).
+-export([broadcast_from/3]).
 -export([join/2]).
 -export([leave/2]).
 -export([get_members/1]).
@@ -37,6 +38,22 @@ broadcast(Topic, Data) when is_binary(Topic) ->
         Members
     ),
     ok.
+
+-spec broadcast_from(From, Topic, Data) -> ok when
+    From :: pid(),
+    Topic :: topic(),
+    Data :: dynamic().
+broadcast_from(From, Topic, Data) when is_binary(Topic) ->
+    Members = pg:get_members(?MODULE, Topic),
+    lists:foreach(
+        fun
+            (Pid) when Pid =:= From ->
+                ok;
+            (Pid) ->
+                Pid ! {pubsub_message, Topic, Data}
+        end,
+        Members
+    ).
 
 -spec join(Topic, Pid) -> ok when
     Topic :: topic(),
