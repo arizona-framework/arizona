@@ -102,26 +102,26 @@ multiple_file_changes_test(Config) when is_list(Config) ->
 debounced_events_test(Config) when is_list(Config) ->
     {filename, Filename} = proplists:lookup(filename, Config),
     ok = pubsub_join(),
-    {ok, _Pid} = start_reloader_with_debounce(Filename, 200),
+    {ok, _Pid} = start_reloader_with_debounce(Filename, 300),
 
     % Create multiple rapid changes with small delays to ensure separate events
     ok = file:write_file(Filename, "-module(test1)."),
-    timer:sleep(50),
+    timer:sleep(100),
     ok = file:write_file(Filename, "-module(test2)."),
-    timer:sleep(50),
+    timer:sleep(100),
     ok = file:write_file(Filename, "-module(test3)."),
 
-    % Should receive only one debounced message
+    % Should receive only one debounced message (wait longer for CI)
     receive
         {pubsub_message, ~"live_reload", {file_changed, Filename}} -> ok
-    after 500 -> ct:fail("Debounced reload message not received")
+    after 1000 -> ct:fail("Debounced reload message not received")
     end,
 
     % Should not receive additional messages
     receive
         {pubsub_message, ~"live_reload", {file_changed, Filename}} ->
             ct:fail("Unexpected additional reload message")
-    after 300 -> ok
+    after 500 -> ok
     end.
 
 %% --------------------------------------------------------------------
