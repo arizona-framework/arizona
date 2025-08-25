@@ -91,9 +91,17 @@ init(Config) ->
     Request :: term(),
     From :: {pid(), term()},
     State :: state(),
-    Reply :: term().
-handle_call(_Request, _From, State) ->
-    {reply, ok, State}.
+    Reply :: map().
+handle_call(get_state, _From, State) ->
+    % Return state as map for testing
+    StateMap = #{
+        watch_paths => State#state.watch_paths,
+        file_patterns => State#state.file_patterns,
+        debounce_ms => State#state.debounce_ms,
+        reload_command => State#state.reload_command,
+        debounce_timer => State#state.debounce_timer
+    },
+    {reply, StateMap, State}.
 
 -spec handle_cast(Request, State) -> {noreply, State} when
     Request :: term(),
@@ -166,6 +174,7 @@ validate_and_start_watchers(MergedConfig) ->
         ValidPaths ->
             case start_fs_watchers(ValidPaths) of
                 ok ->
+                    ok = wait_for_fs_ready(),
                     ConfigData = #{
                         file_patterns => FilePatterns,
                         debounce_ms => DebounceMs,
@@ -285,7 +294,9 @@ start_fs_watchers(WatchPaths) ->
     try
         lists:foreach(
             fun(Path) ->
-                Name = list_to_atom(Path),
+                % Create short, safe atom name using hash of path
+                Hash = erlang:phash2(Path),
+                Name = list_to_atom("fs_watcher_" ++ integer_to_list(Hash)),
                 case fs:start_link(Name, Path) of
                     {ok, _Pid} ->
                         ok = fs:subscribe(Name);
@@ -300,3 +311,7 @@ start_fs_watchers(WatchPaths) ->
     catch
         throw:Reason -> {error, Reason}
     end.
+
+% Give fs watcher time to initialize
+wait_for_fs_ready() ->
+    timer:sleep(100).
