@@ -26,6 +26,7 @@ render_menu(Bindings) ->
                         </li>
                         """)
                     end, [
+                        #{url => ~"/realtime", name => ~"Realtime", desc => ~"PubSub system"},
                         #{url => ~"/counter", name => ~"Counter", desc => ~"Simple state management"},
                         #{url => ~"/todo", name => ~"Todo App", desc => ~"CRUD operations & filtering"},
                         #{url => ~"/datagrid", name => ~"Data Grid", desc => ~"Interactive table with sorting"},
