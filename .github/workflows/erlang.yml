@@ -153,6 +153,11 @@ jobs:
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
 
+      - name: Install inotify tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y inotify-tools
+
       - name: Test
         run: |
           rebar3 as test test
