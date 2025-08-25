@@ -174,7 +174,11 @@ export default class ArizonaClient {
   }
 
   handleReload(data) {
-    console.log(`[Arizona] File changed: ${data.file}, reloading page...`);
+    const sanitizedFile =
+      typeof data.file === 'string'
+        ? data.file.replace(/\r?\n/g, '')
+        : String(data.file).replace(/\r?\n/g, '');
+    console.log(`[Arizona] File changed: ${sanitizedFile}, reloading page...`);
     window.location.reload();
   }
 
