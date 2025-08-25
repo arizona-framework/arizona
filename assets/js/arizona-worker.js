@@ -1,5 +1,6 @@
 // Import ArizonaHierarchical for client-side structure management
 import ArizonaHierarchical from './arizona-hierarchical.js';
+import { sanitizeForLog } from './arizona-utils.js';
 
 // Arizona WebWorker for WebSocket connection with hierarchical rendering
 class ArizonaWebSocketWorker {
@@ -152,11 +153,8 @@ class ArizonaWebSocketWorker {
   }
 
   handleReload(message) {
-    const sanitizedFile =
-      typeof message.file === 'string'
-        ? message.file.replace(/\r?\n/g, '')
-        : String(message.file).replace(/\r?\n/g, '');
-    console.log('[Arizona Worker] Received reload message for file:', sanitizedFile);
+    const sanitizedFile = sanitizeForLog(message.file);
+    console.log('[Arizona Worker] Received reload message for file: "%s"', sanitizedFile);
 
     // Send reload message to main thread
     this.postMessage({

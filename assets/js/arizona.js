@@ -1,6 +1,7 @@
 // Import dependencies
 import morphdom from 'morphdom';
 import ArizonaHierarchical from './arizona-hierarchical.js';
+import { sanitizeForLog } from './arizona-utils.js';
 
 // Arizona Client API
 export default class ArizonaClient {
@@ -174,11 +175,8 @@ export default class ArizonaClient {
   }
 
   handleReload(data) {
-    const sanitizedFile =
-      typeof data.file === 'string'
-        ? data.file.replace(/\r?\n/g, '')
-        : String(data.file).replace(/\r?\n/g, '');
-    console.log(`[Arizona] File changed: ${sanitizedFile}, reloading page...`);
+    const sanitizedFile = sanitizeForLog(data.file);
+    console.log('[Arizona] File changed: "%s", reloading page...', sanitizedFile);
     window.location.reload();
   }
 
