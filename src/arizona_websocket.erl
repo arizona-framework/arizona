@@ -59,6 +59,10 @@ init(CowboyRequest, _State) ->
     Result :: call_result().
 websocket_init({ViewModule, ArizonaRequest}) ->
     {ok, LivePid} = arizona_live:start_link(ViewModule, ArizonaRequest, self()),
+
+    % Subscribe to live reload if arizona_reloader process is alive
+    ok = maybe_join_live_reload(),
+
     HierarchicalStructure = arizona_live:initial_render(LivePid),
     View = arizona_live:get_view(LivePid),
     ViewState = arizona_view:get_state(View),
@@ -96,11 +100,25 @@ websocket_handle({text, JSONBinary}, State) ->
 websocket_info({reply_response, StatefulId, Diff, Reply}, State) ->
     handle_reply_response(StatefulId, Diff, Reply, State);
 websocket_info({noreply_response, StatefulId, Diff}, State) ->
-    handle_noreply_response(StatefulId, Diff, State).
+    handle_noreply_response(StatefulId, Diff, State);
+% Handle live reload messages
+websocket_info({pubsub_message, ~"live_reload", {file_changed, FilePath}}, State) ->
+    Message = #{
+        type => ~"reload",
+        file => list_to_binary(FilePath)
+    },
+    ReloadPayload = json_encode(Message),
+    {[{text, ReloadPayload}], State}.
 
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+maybe_join_live_reload() ->
+    case whereis(arizona_reloader) of
+        undefined -> ok;
+        _Pid -> arizona_pubsub:join(~"live_reload", self())
+    end.
 
 %% Handle different message types
 -spec handle_message_type(MessageType, Message, State) -> Result when

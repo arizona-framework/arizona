@@ -10,6 +10,7 @@ fi
 exec erl \
     -pa "_build/test/lib/arizona/ebin" \
     -pa "_build/test/lib/arizona/test" \
+    -pa "_build/test/lib/fs/ebin" \
     -pa "_build/test/lib/cowboy/ebin" \
     -pa "_build/test/lib/cowlib/ebin" \
     -pa "_build/test/lib/ranch/ebin" \
@@ -27,7 +28,15 @@ Routes = [
     {static, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}}
 ],
 {ok, _ClockPid} = arizona_clock_server:start_link(),
-case arizona_server:start(#{port => 8080, routes => Routes}) of
+case arizona_server:start(#{
+    port => 8080,
+    routes => Routes,
+    live_reload => #{
+        enabled => true,
+        watch_paths => [\"src\", \"test\"],
+        reload_command => \"rebar3 as test compile\"
+    }
+}) of
     {ok, _} ->
         io:format(\"Arizona test server started on port 8080~n\"),
         receive stop -> ok end;

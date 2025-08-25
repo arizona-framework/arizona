@@ -45,7 +45,8 @@
 
 -nominal server_config() :: #{
     port := pos_integer(),
-    routes := [route()]
+    routes := [route()],
+    live_reload => arizona_reloader:config()
 }.
 
 %% --------------------------------------------------------------------
@@ -55,17 +56,30 @@
 -spec start(Config) -> Result when
     Config :: server_config(),
     Result :: {ok, pid()} | {error, term()}.
-start(#{port := Port, routes := Routes}) ->
-    % Compile routes into Cowboy dispatch format
-    Dispatch = compile_routes(Routes),
-    ok = persistent_term:put(arizona_dispatch, Dispatch),
+start(#{port := Port, routes := Routes} = Config) ->
+    % Check if live reload is enabled
+    LiveReloadEnabled =
+        case maps:get(live_reload, Config, undefined) of
+            undefined -> false;
+            LiveReloadConfig -> maps:get(enabled, LiveReloadConfig, false)
+        end,
 
-    % Start Cowboy HTTP listener
-    cowboy:start_clear(
-        arizona_http_listener,
-        [{port, Port}],
-        #{env => #{dispatch => {persistent_term, arizona_dispatch}}}
-    ).
+    % Start live reload system if enabled
+    case maybe_start_live_reload(LiveReloadEnabled, Config) of
+        ok ->
+            % Compile routes
+            Dispatch = compile_routes(Routes),
+            ok = persistent_term:put(arizona_dispatch, Dispatch),
+
+            % Start Cowboy HTTP listener
+            cowboy:start_clear(
+                arizona_http_listener,
+                [{port, Port}],
+                #{env => #{dispatch => {persistent_term, arizona_dispatch}}}
+            );
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 -spec stop() -> ok.
 stop() ->
@@ -136,6 +150,16 @@ route_to_cowboy({static, Path, {priv_file, App, FileName}}) when
 ->
     % Static file serving for single file from priv directory
     {Path, cowboy_static, {priv_file, App, FileName}}.
+
+%% Start live reload system if enabled
+maybe_start_live_reload(false, _Config) ->
+    ok;
+maybe_start_live_reload(true, Config) ->
+    LiveReloadConfig = maps:get(live_reload, Config),
+    case arizona_reloader:start_link(LiveReloadConfig) of
+        {ok, _Pid} -> ok;
+        {error, Reason} -> {error, {live_reload_failed, Reason}}
+    end.
 
 %% Validate handler options and create route metadata
 validate_and_create_route_metadata(#{type := Type, handler := Handler}) when

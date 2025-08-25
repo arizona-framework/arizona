@@ -79,6 +79,9 @@ export default class ArizonaClient {
         case 'error':
           this.handleWorkerError(data);
           break;
+        case 'reload':
+          this.handleReload(data);
+          break;
         case 'message':
           // Pass through other WebSocket messages
           this.handleWebSocketMessage(data);
@@ -168,6 +171,11 @@ export default class ArizonaClient {
   handleWebSocketMessage(data) {
     // Handle other WebSocket message types that aren't processed by the worker
     console.log('[Arizona] WebSocket message:', data);
+  }
+
+  handleReload(data) {
+    console.log(`[Arizona] File changed: ${data.file}, reloading page...`);
+    window.location.reload();
   }
 
   isConnected() {
