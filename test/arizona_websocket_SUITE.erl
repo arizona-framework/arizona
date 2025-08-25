@@ -32,6 +32,18 @@ init_per_suite(Config) ->
     LayoutRenderFun = render,
     LayoutSlotName = main_content,
 
+    % Start pg groups for testing (ignore if already started)
+    PgLivePid =
+        case pg:start(arizona_live) of
+            {ok, Pid1} -> Pid1;
+            {error, {already_started, Pid1}} -> Pid1
+        end,
+    PgPubSubPid =
+        case pg:start(arizona_pubsub) of
+            {ok, Pid2} -> Pid2;
+            {error, {already_started, Pid2}} -> Pid2
+        end,
+
     %% Ensure applications are started
     {ok, _} = application:ensure_all_started(cowboy),
     %% For gun WebSocket client
@@ -101,6 +113,8 @@ init_per_suite(Config) ->
     {ok, _LayoutBinary} = merl:compile_and_load(MockLayoutCode),
 
     [
+        {pg_live_pid, PgLivePid},
+        {pg_pubsub_pid, PgPubSubPid},
         {server_port, ServerPort},
         {view_with_layout_route_url, ViewWithLayoutRouteUrl},
         {websocket_route_url, WebSocketRouteUrl},
@@ -110,6 +124,11 @@ init_per_suite(Config) ->
     ].
 
 end_per_suite(Config) ->
+    {pg_live_pid, PgLivePid} = proplists:lookup(pg_live_pid, Config),
+    {pg_pubsub_pid, PgPubSubPid} = proplists:lookup(pg_pubsub_pid, Config),
+    exit(PgLivePid, normal),
+    exit(PgPubSubPid, normal),
+
     %% Stop arizona server
     arizona_server:stop(),
 
@@ -211,7 +230,7 @@ ws_open_and_upgrade(ServerPort, WebSocketRouteUrl, ViewRouteUrl) ->
         {ok, ConnPid} ?= gun:open("localhost", ServerPort),
         {ok, http} ?= gun:await_up(ConnPid),
         %% Upgrade to WebSocket
-        QueryString = io_lib:format("path=~s", [ViewRouteUrl]),
+        QueryString = io_lib:format("path=~s&qs=", [ViewRouteUrl]),
         WsUrl = io_lib:format("~s?~s", [WebSocketRouteUrl, QueryString]),
         StreamRef = gun:ws_upgrade(ConnPid, WsUrl),
         Conn = {ConnPid, StreamRef},

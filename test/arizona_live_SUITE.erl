@@ -30,9 +30,17 @@ groups() ->
     ].
 
 init_per_suite(Config) ->
-    % Start pg groups for testing
-    {ok, PgLivePid} = pg:start(arizona_live),
-    {ok, PgPubSubPid} = pg:start(arizona_pubsub),
+    % Start pg groups for testing (ignore if already started)
+    PgLivePid =
+        case pg:start(arizona_live) of
+            {ok, Pid1} -> Pid1;
+            {error, {already_started, Pid1}} -> Pid1
+        end,
+    PgPubSubPid =
+        case pg:start(arizona_pubsub) of
+            {ok, Pid2} -> Pid2;
+            {error, {already_started, Pid2}} -> Pid2
+        end,
 
     % Mock modules for testing
     MockViewModule = arizona_live_mock_view,
