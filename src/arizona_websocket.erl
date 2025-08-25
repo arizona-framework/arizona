@@ -40,10 +40,11 @@
 init(CowboyRequest, _State) ->
     % Extract path from query parameter ?path=/users
     PathParams = cowboy_req:parse_qs(CowboyRequest),
-    LivePath = proplists:get_value(~"path", PathParams, ~"/"),
+    {~"path", LivePath} = proplists:lookup(~"path", PathParams),
+    {~"qs", Qs} = proplists:lookup(~"qs", PathParams),
 
     % Create request with the Live path to resolve correct handler
-    LiveRequest = CowboyRequest#{path => LivePath},
+    LiveRequest = CowboyRequest#{path => LivePath, qs => Qs},
     RouteMetadata = arizona_server:get_route_metadata(LiveRequest),
     LiveModule = arizona_server:get_route_handler(RouteMetadata),
 
@@ -57,7 +58,7 @@ init(CowboyRequest, _State) ->
     ArizonaRequest :: arizona_request:request(),
     Result :: call_result().
 websocket_init({ViewModule, ArizonaRequest}) ->
-    {ok, LivePid} = arizona_live:start_link(ViewModule, ArizonaRequest),
+    {ok, LivePid} = arizona_live:start_link(ViewModule, ArizonaRequest, self()),
     HierarchicalStructure = arizona_live:initial_render(LivePid),
     View = arizona_live:get_view(LivePid),
     ViewState = arizona_view:get_state(View),
@@ -92,9 +93,10 @@ websocket_handle({text, JSONBinary}, State) ->
     Info :: term(),
     State :: state(),
     Result :: call_result().
-websocket_info(_Info, State) ->
-    % TODO: Handle real-time updates (push notifications, live data feeds, etc.)
-    {[], State}.
+websocket_info({reply_response, StatefulId, Diff, Reply}, State) ->
+    handle_reply_response(StatefulId, Diff, Reply, State);
+websocket_info({noreply_response, StatefulId, Diff}, State) ->
+    handle_noreply_response(StatefulId, Diff, State).
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -123,12 +125,8 @@ handle_event_message(Message, #state{} = State) ->
     StatefulIdOrUndefined = maps:get(~"stateful_id", Message, undefined),
     Event = maps:get(~"event", Message),
     Params = maps:get(~"params", Message, #{}),
-    case arizona_live:handle_event(LivePid, StatefulIdOrUndefined, Event, Params) of
-        {reply, StatefulId, Diff, Reply} ->
-            handle_reply_response(StatefulId, Diff, Reply, State);
-        {noreply, StatefulId, Diff} ->
-            handle_noreply_response(StatefulId, Diff, State)
-    end.
+    ok = arizona_live:handle_event(LivePid, StatefulIdOrUndefined, Event, Params),
+    {[], State}.
 
 %% Handle reply response from Live
 -spec handle_reply_response(StatefulId, Diff, Reply, State) -> Result when

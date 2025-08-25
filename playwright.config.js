@@ -30,13 +30,31 @@ export default defineConfig({
 
   /* Configure projects for major browsers */
   projects: [
+    // Parallel tests (normal execution)
     {
-      name: 'chromium',
+      name: 'chromium-parallel',
+      testDir: './assets/js/e2e/parallel',
       use: { ...devices['Desktop Chrome'] },
     },
-
     {
-      name: 'firefox',
+      name: 'firefox-parallel',
+      testDir: './assets/js/e2e/parallel',
+      use: { ...devices['Desktop Firefox'] },
+    },
+
+    // Sequential tests (single worker)
+    {
+      name: 'chromium-sequential',
+      testDir: './assets/js/e2e/sequential',
+      fullyParallel: false,
+      workers: 1,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'firefox-sequential',
+      testDir: './assets/js/e2e/sequential',
+      fullyParallel: false,
+      workers: 1,
       use: { ...devices['Desktop Firefox'] },
     },
 

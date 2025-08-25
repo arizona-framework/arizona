@@ -21,8 +21,10 @@ export default class ArizonaClient {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
     const path = window.location.pathname;
+    const qs = window.location.search;
     const encodedPath = encodeURIComponent(path);
-    const wsUrl = `${protocol}//${host}${wsPath}?path=${encodedPath}`;
+    const encodeQs = qs ? encodeURIComponent(qs.substring(1)) : '';
+    const wsUrl = `${protocol}//${host}${wsPath}?path=${encodedPath}&qs=${encodeQs}`;
 
     this.worker.postMessage({
       type: 'connect',

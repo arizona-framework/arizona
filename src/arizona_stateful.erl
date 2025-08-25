@@ -50,8 +50,8 @@
 -opaque state() :: #state{}.
 -nominal id() :: binary().
 -nominal event_name() :: binary().
--nominal event_params() :: #{binary() => json:decode_value()}.
--nominal event_reply() :: dynamic().
+-nominal event_params() :: dynamic().
+-nominal event_reply() :: json:encode_value().
 
 %% --------------------------------------------------------------------
 %% Behavior callback definitions
@@ -93,11 +93,11 @@ call_render_callback(#state{} = State) ->
     apply(State#state.module, render, [State#state.bindings]).
 
 -spec call_handle_event_callback(Event, Params, State) -> Result when
-    Event :: binary(),
-    Params :: map(),
+    Event :: event_name(),
+    Params :: event_params(),
     State :: state(),
     Result :: {reply, Reply, State1} | {noreply, State1},
-    Reply :: term(),
+    Reply :: event_reply(),
     State1 :: state().
 call_handle_event_callback(Event, Params, #state{} = State) ->
     apply(State#state.module, handle_event, [Event, Params, State]).
