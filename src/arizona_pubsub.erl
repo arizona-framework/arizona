@@ -8,6 +8,7 @@
 -export([broadcast_from/3]).
 -export([join/2]).
 -export([leave/2]).
+-export([get_members/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -17,6 +18,7 @@
 -ignore_xref([broadcast_from/3]).
 -ignore_xref([join/2]).
 -ignore_xref([leave/2]).
+-ignore_xref([get_members/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -72,14 +74,14 @@ join(Topic, Pid) when is_binary(Topic), is_pid(Pid) ->
 leave(Topic, Pid) when is_binary(Topic), is_pid(Pid) ->
     pg:leave(?MODULE, Topic, Pid).
 
-%% --------------------------------------------------------------------
-%% Internal functions
-%% --------------------------------------------------------------------
-
 -spec get_members(Topic) -> [pid()] when
     Topic :: topic().
 get_members(Topic) when is_binary(Topic) ->
     pg:get_members(?MODULE, Topic).
+
+%% --------------------------------------------------------------------
+%% Internal functions
+%% --------------------------------------------------------------------
 
 send_message(Pid, Topic, Data) ->
     Pid ! {pubsub_message, Topic, Data}.
