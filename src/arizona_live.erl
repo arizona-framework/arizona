@@ -5,7 +5,8 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([start_link/2]).
+-export([start_link/3]).
+-export([is_connected/1]).
 -export([get_view/1]).
 -export([initial_render/1]).
 -export([handle_event/4]).
@@ -32,7 +33,8 @@
 %% Internal state record for live processes
 -record(state, {
     view :: arizona_view:view(),
-    tracker :: arizona_tracker:tracker()
+    tracker :: arizona_tracker:tracker(),
+    transport_pid :: pid()
 }).
 
 -opaque state() :: #state{}.
@@ -41,12 +43,20 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec start_link(ViewModule, ArizonaRequest) -> Return when
+-spec start_link(ViewModule, ArizonaRequest, TransportPid) -> Return when
     ViewModule :: module(),
     ArizonaRequest :: arizona_request:request(),
+    TransportPid :: pid(),
     Return :: gen_server:start_ret().
-start_link(ViewModule, ArizonaRequest) ->
-    gen_server:start_link(?MODULE, {ViewModule, ArizonaRequest}, []).
+start_link(ViewModule, ArizonaRequest, TransportPid) ->
+    gen_server:start_link(?MODULE, {ViewModule, ArizonaRequest, TransportPid}, []).
+
+-spec is_connected(Pid) -> IsConnected when
+    Pid :: pid(),
+    IsConnected :: boolean().
+is_connected(Pid) ->
+    Members = pg:get_local_members(?MODULE, connected),
+    lists:member(Pid, Members).
 
 -spec get_view(Pid) -> View when
     Pid :: pid(),
@@ -60,32 +70,31 @@ get_view(Pid) ->
 initial_render(Pid) ->
     gen_server:call(Pid, initial_render, infinity).
 
--spec handle_event(Pid, StatefulIdOrUndefined, Event, Params) -> Result when
+-spec handle_event(Pid, StatefulIdOrUndefined, Event, Params) -> ok when
     Pid :: pid(),
     StatefulIdOrUndefined :: arizona_stateful:id() | undefined,
     Event :: arizona_stateful:event_name(),
-    Params :: arizona_stateful:event_params(),
-    Result :: {reply, StatefulId, Diff, Reply} | {noreply, StatefulId, Diff},
-    StatefulId :: arizona_stateful:id(),
-    Diff :: arizona_differ:diff(),
-    Reply :: arizona_stateful:event_reply().
+    Params :: arizona_stateful:event_params().
 handle_event(Pid, StatefulIdOrUndefined, Event, Params) ->
-    gen_server:call(Pid, {handle_event, StatefulIdOrUndefined, Event, Params}, infinity).
+    gen_server:cast(Pid, {handle_event, StatefulIdOrUndefined, Event, Params}).
 
 %% --------------------------------------------------------------------
 %% Gen_server callback implementations
 %% --------------------------------------------------------------------
 
 -spec init(InitArgs) -> {ok, State} when
-    InitArgs :: {ViewModule, ArizonaRequest},
+    InitArgs :: {ViewModule, ArizonaRequest, TransportPid},
     ViewModule :: module(),
     ArizonaRequest :: arizona_request:request(),
+    TransportPid :: pid(),
     State :: state().
-init({ViewModule, ArizonaRequest}) ->
+init({ViewModule, ArizonaRequest, TransportPid}) ->
+    ok = pg:join(?MODULE, connected, self()),
     View = arizona_view:call_mount_callback(ViewModule, ArizonaRequest),
     {ok, #state{
         view = View,
-        tracker = arizona_tracker:new()
+        tracker = arizona_tracker:new(),
+        transport_pid = TransportPid
     }}.
 
 -spec handle_call(Message, From, State) -> Result when
@@ -108,8 +117,14 @@ handle_call(initial_render, _From, #state{} = State) ->
     undefined = arizona_hierarchical_dict:set_structure(#{}),
     {_Struct, HierarchicalView} = arizona_hierarchical:hierarchical_view(State#state.view),
     HierarchicalStructure = arizona_hierarchical_dict:clear(),
-    {reply, HierarchicalStructure, State#state{view = HierarchicalView}};
-handle_call({handle_event, StatefulIdOrUndefined, Event, Params}, _From, State) ->
+    {reply, HierarchicalStructure, State#state{view = HierarchicalView}}.
+
+-spec handle_cast(Message, State) -> Result when
+    Message :: term(),
+    State :: state(),
+    Result :: {noreply, State1},
+    State1 :: state().
+handle_cast({handle_event, StatefulIdOrUndefined, Event, Params}, #state{} = State) ->
     case StatefulIdOrUndefined of
         undefined ->
             handle_view_event(Event, Params, State);
@@ -117,22 +132,15 @@ handle_call({handle_event, StatefulIdOrUndefined, Event, Params}, _From, State) 
             handle_stateful_event(StatefulId, Event, Params, State)
     end.
 
--spec handle_cast(Message, State) -> Result when
-    Message :: term(),
-    State :: state(),
-    Result :: {noreply, State1},
-    State1 :: state().
-handle_cast(_Message, #state{} = State) ->
-    {noreply, State}.
-
 -spec handle_info(Info, State) -> Result when
     Info :: term(),
     State :: state(),
     Result :: {noreply, State1},
     State1 :: state().
+handle_info({pubsub_message, Topic, Data}, #state{} = State) ->
+    handle_view_event(Topic, Data, State);
 handle_info(Info, #state{} = State) ->
-    {noreply, UpdatedView} = arizona_view:call_handle_info_callback(Info, State#state.view),
-    {noreply, State#state{view = UpdatedView}}.
+    handle_view_info(Info, State).
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -144,12 +152,14 @@ handle_view_event(Event, Params, State) ->
             {Diff, DiffView} = arizona_differ:diff_view(UpdatedView),
             ViewState = arizona_view:get_state(DiffView),
             ViewId = arizona_stateful:get_binding(id, ViewState),
-            {reply, {reply, ViewId, Diff, Reply}, State#state{view = DiffView}};
+            ok = handle_reply_response(ViewId, Diff, Reply, State),
+            {noreply, State#state{view = DiffView}};
         {noreply, UpdatedView} ->
             {Diff, DiffView} = arizona_differ:diff_view(UpdatedView),
             ViewState = arizona_view:get_state(DiffView),
             ViewId = arizona_stateful:get_binding(id, ViewState),
-            {reply, {noreply, ViewId, Diff}, State#state{view = DiffView}}
+            ok = handle_noreply_response(ViewId, Diff, State),
+            {noreply, State#state{view = DiffView}}
     end.
 
 handle_stateful_event(StatefulId, Event, Params, State) ->
@@ -163,7 +173,8 @@ handle_stateful_event(StatefulId, Event, Params, State) ->
             UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedStatefulState, View),
             DiffBindings = arizona_binder:to_map(Bindings),
             {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, DiffBindings, UpdatedView),
-            {reply, {reply, DiffStatefulId, Diff, Reply}, State#state{view = DiffView}};
+            ok = handle_reply_response(DiffStatefulId, Diff, Reply, State),
+            {noreply, State#state{view = DiffView}};
         {noreply, UpdatedStatefulState} ->
             Module = arizona_stateful:get_module(UpdatedStatefulState),
             Bindings = arizona_stateful:get_bindings(UpdatedStatefulState),
@@ -171,5 +182,22 @@ handle_stateful_event(StatefulId, Event, Params, State) ->
             UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedStatefulState, View),
             DiffBindings = arizona_binder:to_map(Bindings),
             {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, DiffBindings, UpdatedView),
-            {reply, {noreply, DiffStatefulId, Diff}, State#state{view = DiffView}}
+            ok = handle_noreply_response(DiffStatefulId, Diff, State),
+            {noreply, State#state{view = DiffView}}
     end.
+
+handle_reply_response(StatefulId, Diff, Reply, State) ->
+    State#state.transport_pid ! {reply_response, StatefulId, Diff, Reply},
+    ok.
+
+handle_noreply_response(StatefulId, Diff, State) ->
+    State#state.transport_pid ! {noreply_response, StatefulId, Diff},
+    ok.
+
+handle_view_info(Info, State) ->
+    {noreply, UpdatedView} = arizona_view:call_handle_info_callback(Info, State#state.view),
+    {Diff, DiffView} = arizona_differ:diff_view(UpdatedView),
+    ViewState = arizona_view:get_state(DiffView),
+    ViewId = arizona_stateful:get_binding(id, ViewState),
+    ok = handle_noreply_response(ViewId, Diff, State),
+    {noreply, State#state{view = DiffView}}.

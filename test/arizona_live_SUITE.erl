@@ -22,13 +22,18 @@ groups() ->
             handle_view_event_noreply_test,
             handle_stateful_event_reply_test,
             handle_stateful_event_noreply_test,
-            handle_cast_test,
             handle_info_test,
+            is_connected_test,
+            pubsub_message_test,
             concurrent_event_handling_test
         ]}
     ].
 
 init_per_suite(Config) ->
+    % Start pg groups for testing
+    {ok, PgLivePid} = pg:start(arizona_live),
+    {ok, PgPubSubPid} = pg:start(arizona_pubsub),
+
     % Mock modules for testing
     MockViewModule = arizona_live_mock_view,
     MockViewWithStatefulModule = arizona_live_mock_view_with_stateful,
@@ -169,6 +174,8 @@ init_per_suite(Config) ->
     {ok, _ViewWithHandleInfoBinary} = merl:compile_and_load(MockViewWithHandleInfoCode),
 
     [
+        {pg_live_pid, PgLivePid},
+        {pg_pubsub_pid, PgPubSubPid},
         {mock_view_module, MockViewModule},
         {mock_view_with_stateful_module, MockViewWithStatefulModule},
         {mock_stateful_component_module, MockStatefulComponentModule},
@@ -177,6 +184,11 @@ init_per_suite(Config) ->
     ].
 
 end_per_suite(Config) ->
+    {pg_live_pid, PgLivePid} = proplists:lookup(pg_live_pid, Config),
+    {pg_pubsub_pid, PgPubSubPid} = proplists:lookup(pg_pubsub_pid, Config),
+    exit(PgLivePid, normal),
+    exit(PgPubSubPid, normal),
+
     % Clean up mock modules
     {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
     {mock_view_with_stateful_module, MockViewWithStatefulModule} = proplists:lookup(
@@ -206,13 +218,20 @@ end_per_suite(Config) ->
 
     ok.
 
+%% --------------------------------------------------------------------
+%% Helper functions
+%% --------------------------------------------------------------------
+
+%% Create a standard mock request for testing
+mock_request() ->
+    arizona_request:new(arizona_cowboy_request, #{}, #{
+        method => ~"GET", path => ~"/test"
+    }).
+
 init_per_testcase(initial_render_test, Config) ->
     % Start basic live process but don't call initial_render (test will do it)
     {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
-    MockRequest = arizona_request:new(arizona_cowboy_request, #{}, #{
-        method => ~"GET", path => ~"/test"
-    }),
-    {ok, Pid} = arizona_live:start_link(MockViewModule, MockRequest),
+    {ok, Pid} = arizona_live:start_link(MockViewModule, mock_request(), self()),
     [{live_pid, Pid} | Config];
 init_per_testcase(TestcaseName, Config) when
     TestcaseName =:= handle_stateful_event_reply_test;
@@ -222,10 +241,8 @@ init_per_testcase(TestcaseName, Config) when
     {mock_view_with_stateful_module, MockViewWithStatefulModule} = proplists:lookup(
         mock_view_with_stateful_module, Config
     ),
-    MockRequest = arizona_request:new(arizona_cowboy_request, #{}, #{
-        method => ~"GET", path => ~"/test"
-    }),
-    {ok, Pid} = arizona_live:start_link(MockViewWithStatefulModule, MockRequest),
+    MockRequest = mock_request(),
+    {ok, Pid} = arizona_live:start_link(MockViewWithStatefulModule, MockRequest, self()),
     % Initialize with render to create stateful components
     _HierarchicalStructure = arizona_live:initial_render(Pid),
     [{live_pid, Pid} | Config];
@@ -234,18 +251,16 @@ init_per_testcase(handle_info_test, Config) ->
     {mock_view_with_handle_info_module, MockViewWithHandleInfoModule} = proplists:lookup(
         mock_view_with_handle_info_module, Config
     ),
-    MockRequest = arizona_request:new(arizona_cowboy_request, #{}, #{
-        method => ~"GET", path => ~"/test"
-    }),
-    {ok, Pid} = arizona_live:start_link(MockViewWithHandleInfoModule, MockRequest),
+    MockRequest = mock_request(),
+    {ok, Pid} = arizona_live:start_link(MockViewWithHandleInfoModule, MockRequest, self()),
+    % Initialize render to set up tracker
+    _HierarchicalStructure = arizona_live:initial_render(Pid),
     [{live_pid, Pid} | Config];
 init_per_testcase(_TestcaseName, Config) ->
     % Default: start basic live process and initialize render
     {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
-    MockRequest = arizona_request:new(arizona_cowboy_request, #{}, #{
-        method => ~"GET", path => ~"/test"
-    }),
-    {ok, Pid} = arizona_live:start_link(MockViewModule, MockRequest),
+    MockRequest = mock_request(),
+    {ok, Pid} = arizona_live:start_link(MockViewModule, MockRequest, self()),
     % Initialize render to set up tracker
     _HierarchicalStructure = arizona_live:initial_render(Pid),
     [{live_pid, Pid} | Config].
@@ -279,7 +294,9 @@ get_view_test(Config) when is_list(Config) ->
 
 initial_render_test(Config) when is_list(Config) ->
     ct:comment("Test initial_render API call and hierarchical structure"),
-    {live_pid, Pid} = proplists:lookup(live_pid, Config),
+    {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
+    MockRequest = mock_request(),
+    {ok, Pid} = arizona_live:start_link(MockViewModule, MockRequest, self()),
     HierarchicalStructure = arizona_live:initial_render(Pid),
 
     ?assertMatch(#{~"live_test_id" := #{static := _, dynamic := _}}, HierarchicalStructure),
@@ -292,52 +309,56 @@ handle_view_event_reply_test(Config) when is_list(Config) ->
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
     Result = arizona_live:handle_event(Pid, undefined, ~"increment", #{}),
-    ?assertMatch({reply, ~"live_test_id", _Diff, #{new_count := 1}}, Result),
-    {reply, ViewId, Diff, Reply} = Result,
-    ?assertEqual(~"live_test_id", ViewId),
-    ?assertMatch(#{new_count := 1}, Reply),
-    ?assert(is_list(Diff)).
+    ?assertEqual(ok, Result),
+
+    % Verify transport message was sent
+    receive
+        {reply_response, ~"live_test_id", _Diff, #{new_count := 1}} -> ok
+    after 1000 ->
+        ct:fail("Expected reply_response message not received")
+    end.
 
 handle_view_event_noreply_test(Config) when is_list(Config) ->
     ct:comment("Test handle_event with undefined StatefulId (view events) - noreply"),
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
     Result = arizona_live:handle_event(Pid, undefined, ~"no_reply", #{}),
-    ?assertMatch({noreply, ~"live_test_id", _Diff}, Result),
-    {noreply, ViewId, Diff} = Result,
-    ?assertEqual(~"live_test_id", ViewId),
-    ?assert(is_list(Diff)).
+    ?assertEqual(ok, Result),
+
+    % Verify transport message was sent
+    receive
+        {noreply_response, ~"live_test_id", _Diff} -> ok
+    after 1000 ->
+        ct:fail("Expected noreply_response message not received")
+    end.
 
 handle_stateful_event_reply_test(Config) when is_list(Config) ->
     ct:comment("Test handle_event with specific StatefulId (stateful events) - reply"),
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
     Result = arizona_live:handle_event(Pid, ~"stateful_1", ~"update", #{~"value" => 100}),
-    ?assertMatch({reply, ~"stateful_1", _Diff, #{updated := true}}, Result),
-    {reply, StatefulId, Diff, Reply} = Result,
-    ?assertEqual(~"stateful_1", StatefulId),
-    ?assertMatch(#{updated := true}, Reply),
-    ?assert(is_list(Diff)).
+    ?assertEqual(ok, Result),
+
+    % Verify transport message was sent
+    receive
+        {reply_response, ~"stateful_1", _Diff, #{updated := true}} -> ok
+    after 1000 ->
+        ct:fail("Expected reply_response message not received")
+    end.
 
 handle_stateful_event_noreply_test(Config) when is_list(Config) ->
     ct:comment("Test handle_event with specific StatefulId (stateful events) - noreply"),
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
     Result = arizona_live:handle_event(Pid, ~"stateful_2", ~"update_no_reply", #{~"value" => 200}),
-    ?assertMatch({noreply, ~"stateful_2", _Diff}, Result),
-    {noreply, StatefulId, Diff} = Result,
-    ?assertEqual(~"stateful_2", StatefulId),
-    ?assert(is_list(Diff)).
+    ?assertEqual(ok, Result),
 
-handle_cast_test(Config) when is_list(Config) ->
-    ct:comment("Test handle_cast message handling"),
-    {live_pid, Pid} = proplists:lookup(live_pid, Config),
-
-    % Send cast message - should be ignored but not crash
-    ok = gen_server:cast(Pid, test_cast_message),
-
-    % Process should still be alive
-    ?assert(is_process_alive(Pid)).
+    % Verify transport message was sent
+    receive
+        {noreply_response, ~"stateful_2", _Diff} -> ok
+    after 1000 ->
+        ct:fail("Expected noreply_response message not received")
+    end.
 
 handle_info_test(Config) when is_list(Config) ->
     ct:comment("Test handle_info callback delegation"),
@@ -358,37 +379,46 @@ handle_info_test(Config) when is_list(Config) ->
     MessageCount = arizona_stateful:get_binding(message_count, ViewState),
     ?assertEqual(1, MessageCount).
 
+is_connected_test(Config) when is_list(Config) ->
+    ct:comment("Test is_connected API"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
+
+    % Process should be connected
+    ?assert(arizona_live:is_connected(Pid)),
+
+    % Non-existent process should not be connected
+    ?assertNot(arizona_live:is_connected(spawn(fun() -> ok end))).
+
+pubsub_message_test(Config) when is_list(Config) ->
+    ct:comment("Test pubsub message handling"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
+
+    % Send pubsub message to live process
+    Pid ! {pubsub_message, ~"increment", #{amount => 5}},
+
+    % Expect reply message since increment returns a reply
+    receive
+        {reply_response, ~"live_test_id", _Diff, #{new_count := _}} -> ok
+    after 1000 ->
+        ct:fail("Expected reply_response message not received")
+    end.
+
 concurrent_event_handling_test(Config) when is_list(Config) ->
     ct:comment("Test concurrent event handling"),
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
     % Send multiple concurrent events
-    Parent = self(),
-    spawn(fun() ->
-        Result1 = arizona_live:handle_event(Pid, undefined, ~"increment", #{}),
-        Parent ! {result, 1, Result1}
-    end),
-    spawn(fun() ->
-        Result2 = arizona_live:handle_event(Pid, undefined, ~"increment", #{}),
-        Parent ! {result, 2, Result2}
-    end),
+    ok = arizona_live:handle_event(Pid, undefined, ~"increment", #{}),
+    ok = arizona_live:handle_event(Pid, undefined, ~"increment", #{}),
 
-    % Collect results
-    Results = [
-        receive
-            {result, 1, R1} -> R1
-        after 5000 -> timeout
-        end,
-        receive
-            {result, 2, R2} -> R2
-        after 5000 -> timeout
-        end
-    ],
-
-    % Both should succeed
-    lists:foreach(
-        fun(Result) ->
-            ?assertMatch({reply, ~"live_test_id", _Diff, #{new_count := _}}, Result)
-        end,
-        Results
-    ).
+    % Expect two reply messages
+    receive
+        {reply_response, ~"live_test_id", _Diff1, #{new_count := _}} -> ok
+    after 1000 ->
+        ct:fail("Expected first reply_response message not received")
+    end,
+    receive
+        {reply_response, ~"live_test_id", _Diff2, #{new_count := _}} -> ok
+    after 1000 ->
+        ct:fail("Expected second reply_response message not received")
+    end.
