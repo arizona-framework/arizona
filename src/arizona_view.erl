@@ -103,11 +103,11 @@ call_render_callback(#view{state = State}) ->
     apply(Module, render, [Bindings]).
 
 -spec call_handle_event_callback(Event, Params, View) -> Result when
-    Event :: binary(),
-    Params :: map(),
+    Event :: arizona_stateful:event_name(),
+    Params :: arizona_stateful:event_params(),
     View :: view(),
     Result :: {reply, Reply, View1} | {noreply, View1},
-    Reply :: term(),
+    Reply :: arizona_stateful:event_reply(),
     View1 :: view().
 call_handle_event_callback(Event, Params, #view{state = State} = View) ->
     Module = arizona_stateful:get_module(State),
