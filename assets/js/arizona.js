@@ -1,6 +1,7 @@
 // Import dependencies
 import morphdom from 'morphdom';
 import ArizonaHierarchical from './arizona-hierarchical.js';
+import { sanitizeForLog } from './arizona-utils.js';
 
 // Arizona Client API
 export default class ArizonaClient {
@@ -78,6 +79,9 @@ export default class ArizonaClient {
           break;
         case 'error':
           this.handleWorkerError(data);
+          break;
+        case 'reload':
+          this.handleReload(data);
           break;
         case 'message':
           // Pass through other WebSocket messages
@@ -168,6 +172,11 @@ export default class ArizonaClient {
   handleWebSocketMessage(data) {
     // Handle other WebSocket message types that aren't processed by the worker
     console.log('[Arizona] WebSocket message:', data);
+  }
+
+  handleReload(data) {
+    console.log('[Arizona] File changed. Reloading page...');
+    window.location.reload();
   }
 
   isConnected() {

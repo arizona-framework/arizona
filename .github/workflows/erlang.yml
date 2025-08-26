@@ -153,6 +153,12 @@ jobs:
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
 
+      - name: Install inotify tools
+        uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17 # v1.5.3
+        with:
+          packages: inotify-tools
+          version: 1.0
+
       - name: Test
         run: |
           rebar3 as test test

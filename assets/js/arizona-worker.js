@@ -1,5 +1,6 @@
 // Import ArizonaHierarchical for client-side structure management
 import ArizonaHierarchical from './arizona-hierarchical.js';
+import { sanitizeForLog } from './arizona-utils.js';
 
 // Arizona WebWorker for WebSocket connection with hierarchical rendering
 class ArizonaWebSocketWorker {
@@ -92,6 +93,9 @@ class ArizonaWebSocketWorker {
         case 'diff':
           this.handleDiff(message);
           break;
+        case 'reload':
+          this.handleReload(message);
+          break;
         default:
           // Pass through other message types unchanged
           this.postMessage({ type: 'message', data: message });
@@ -146,6 +150,16 @@ class ArizonaWebSocketWorker {
     });
 
     console.log('[Arizona Worker] Diff applied and patch sent');
+  }
+
+  handleReload(message) {
+    console.log('[Arizona Worker] Received reload message');
+
+    // Send reload message to main thread
+    this.postMessage({
+      type: 'reload',
+      data: message,
+    });
   }
 
   postMessage(data) {

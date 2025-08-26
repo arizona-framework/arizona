@@ -45,7 +45,8 @@
 
 -nominal server_config() :: #{
     port := pos_integer(),
-    routes := [route()]
+    routes := [route()],
+    reloader => arizona_reloader:config()
 }.
 
 %% --------------------------------------------------------------------
@@ -55,17 +56,30 @@
 -spec start(Config) -> Result when
     Config :: server_config(),
     Result :: {ok, pid()} | {error, term()}.
-start(#{port := Port, routes := Routes}) ->
-    % Compile routes into Cowboy dispatch format
-    Dispatch = compile_routes(Routes),
-    ok = persistent_term:put(arizona_dispatch, Dispatch),
+start(#{port := Port, routes := Routes} = Config) ->
+    % Check if reloader is enabled
+    ReloaderEnabled =
+        case maps:get(reloader, Config, undefined) of
+            undefined -> false;
+            ReloaderConfig -> maps:get(enabled, ReloaderConfig, false)
+        end,
 
-    % Start Cowboy HTTP listener
-    cowboy:start_clear(
-        arizona_http_listener,
-        [{port, Port}],
-        #{env => #{dispatch => {persistent_term, arizona_dispatch}}}
-    ).
+    % Start reloader system if enabled
+    case maybe_start_reloader(ReloaderEnabled, Config) of
+        ok ->
+            % Compile routes
+            Dispatch = compile_routes(Routes),
+            ok = persistent_term:put(arizona_dispatch, Dispatch),
+
+            % Start Cowboy HTTP listener
+            cowboy:start_clear(
+                arizona_http_listener,
+                [{port, Port}],
+                #{env => #{dispatch => {persistent_term, arizona_dispatch}}}
+            );
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 -spec stop() -> ok.
 stop() ->
@@ -136,6 +150,16 @@ route_to_cowboy({static, Path, {priv_file, App, FileName}}) when
 ->
     % Static file serving for single file from priv directory
     {Path, cowboy_static, {priv_file, App, FileName}}.
+
+%% Start reloader system if enabled
+maybe_start_reloader(false, _Config) ->
+    ok;
+maybe_start_reloader(true, Config) ->
+    ReloaderConfig = maps:get(reloader, Config),
+    case arizona_reloader:start_link(ReloaderConfig) of
+        {ok, _Pid} -> ok;
+        {error, Reason} -> {error, {reloader_failed, Reason}}
+    end.
 
 %% Validate handler options and create route metadata
 validate_and_create_route_metadata(#{type := Type, handler := Handler}) when
