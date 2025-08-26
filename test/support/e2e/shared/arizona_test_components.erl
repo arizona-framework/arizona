@@ -7,7 +7,7 @@ render_menu(Bindings) ->
     <nav class="test-nav">
         <div class="nav-container">
             <div class="nav-brand">
-                <h1>Arizona Test Apps</h1>
+                <h1>🌵 Arizona Test Apps</h1>
             </div>
             <ul class="nav-menu">
                 {
