@@ -90,16 +90,7 @@ create_template_ast(StaticParts, DynamicElements, CompileOpts) ->
 -spec create_static_list_ast(StaticParts) -> erl_syntax:syntaxTree() when
     StaticParts :: [binary()].
 create_static_list_ast(StaticParts) ->
-    StaticElements = [
-        erl_syntax:binary([
-            erl_syntax:binary_field(
-                erl_syntax:string(binary_to_list(Part)),
-                none,
-                [erl_syntax:atom(utf8)]
-            )
-        ])
-     || Part <- StaticParts
-    ],
+    StaticElements = [erl_syntax:abstract(Part) || Part <- StaticParts],
     erl_syntax:list(StaticElements).
 
 %% Create AST for dynamic elements (tuple, annotations, sequence)
