@@ -153,8 +153,7 @@ class ArizonaWebSocketWorker {
   }
 
   handleReload(message) {
-    const sanitizedFile = sanitizeForLog(message.file);
-    console.log('[Arizona Worker] Received reload message for file: "%s"', sanitizedFile);
+    console.log('[Arizona Worker] Received reload message');
 
     // Send reload message to main thread
     this.postMessage({

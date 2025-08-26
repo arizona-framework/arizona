@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Build assets files
+if ! npm run build; then
+    exit 1
+fi
+
 # Compile using the test profile
 if ! rebar3 as test compile; then
     exit 1
@@ -31,10 +36,41 @@ Routes = [
 case arizona_server:start(#{
     port => 8080,
     routes => Routes,
-    live_reload => #{
+    reloader => #{
         enabled => true,
-        watch_paths => [\"src\", \"test\"],
-        reload_command => \"rebar3 as test compile\"
+        rules => [
+            #{
+                directories => [\"src\", \"test/support/e2e\"],
+                patterns => [\".*\\\\.erl$\"],
+                callback => fun(Files) ->
+                    os:cmd(\"rebar3 as test compile\"),
+                    ErlangFiles = [F || F <- Files, filename:extension(F) =:= \".erl\"],
+                    lists:foreach(fun(FilePath) ->
+                        BaseName = filename:basename(FilePath, \".erl\"),
+                        try
+                            Module = list_to_existing_atom(BaseName),
+                            case code:is_loaded(Module) of
+                                {file, _} ->
+                                    logger:info(\"Reloading module: ~p\", [Module]),
+                                    % code:purge/1 removes old version from memory
+                                    % Required before loading new version to avoid conflicts
+                                    code:purge(Module),
+                                    % code:load_file/1 loads the newly compiled .beam file
+                                    % This makes the updated code active in the running system
+                                    code:load_file(Module);
+                                false -> ok
+                            end
+                        catch _:_ -> ok
+                        end
+                    end, ErlangFiles)
+                end
+            },
+            #{
+                directories => [\"assets/js\"],
+                patterns => [\".*\\\\.js$\"],
+                callback => fun(_Files) -> os:cmd(\"npm run build\") end
+            }
+        ]
     }
 }) of
     {ok, _} ->

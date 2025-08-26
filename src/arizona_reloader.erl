@@ -30,35 +30,40 @@
 
 -export_type([state/0]).
 -export_type([config/0]).
--export_type([watch_paths/0]).
--export_type([file_patterns/0]).
+-export_type([reload_rule/0]).
+-export_type([directory/0]).
+-export_type([rule_pattern/0]).
+-export_type([rule_callback/0]).
+-export_type([filename/0]).
 -export_type([debounce_ms/0]).
--export_type([reload_command/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
 -record(state, {
-    watch_paths :: watch_paths(),
-    file_patterns :: file_patterns(),
+    rules :: [reload_rule()],
     debounce_ms :: debounce_ms(),
     debounce_timer :: reference() | undefined,
-    reload_command :: reload_command() | undefined
+    pending_rules :: #{}
 }).
 
 -opaque state() :: #state{}.
 -nominal config() :: #{
     enabled := boolean(),
-    watch_paths => watch_paths(),
-    file_patterns => file_patterns(),
-    debounce_ms => debounce_ms(),
-    reload_command => reload_command()
+    rules := [reload_rule()],
+    debounce_ms => debounce_ms()
 }.
--nominal watch_paths() :: [string()].
--nominal file_patterns() :: [binary()].
+-nominal reload_rule() :: #{
+    directories := [directory()],
+    patterns := [rule_pattern()],
+    callback := rule_callback()
+}.
+-nominal directory() :: string().
+-nominal rule_pattern() :: string().
+-nominal rule_callback() :: fun(([filename()]) -> any()).
+-nominal filename() :: string().
 -nominal debounce_ms() :: pos_integer().
--nominal reload_command() :: string().
 
 %% --------------------------------------------------------------------
 %% API function definitions
@@ -80,8 +85,8 @@ start_link(Config) ->
 init(Config) ->
     MergedConfig = merge_config_with_defaults(Config),
     case validate_and_start_watchers(MergedConfig) of
-        {ok, ValidPaths, ConfigData} ->
-            State = create_initial_state(ValidPaths, ConfigData),
+        {ok, ConfigData} ->
+            State = create_initial_state(ConfigData),
             {ok, State};
         {error, Reason} ->
             {stop, Reason}
@@ -95,11 +100,10 @@ init(Config) ->
 handle_call(get_state, _From, State) ->
     % Return state as map for testing
     StateMap = #{
-        watch_paths => State#state.watch_paths,
-        file_patterns => State#state.file_patterns,
+        rules => State#state.rules,
         debounce_ms => State#state.debounce_ms,
-        reload_command => State#state.reload_command,
-        debounce_timer => State#state.debounce_timer
+        debounce_timer => State#state.debounce_timer,
+        pending_rules => State#state.pending_rules
     },
     {reply, StateMap, State}.
 
@@ -114,30 +118,20 @@ handle_cast(_Request, State) ->
     State :: state().
 handle_info({_Pid, {fs, file_event}, {FilePath, Events}}, State) ->
     case should_trigger_reload(FilePath, Events, State) of
-        true ->
-            debounced_broadcast(FilePath, State);
+        {true, MatchingRules} ->
+            accumulate_pending_rules(FilePath, MatchingRules, State);
         false ->
             {noreply, State}
     end;
-% Handle debounced reload message
-handle_info({send_reload, FilePath}, #state{reload_command = Command} = State) ->
-    % Run reload command if configured
-    case run_reload_command(Command) of
+% Handle debounced rule execution
+handle_info({execute_rules, PendingRules}, State) ->
+    case execute_pending_rules(PendingRules) of
         ok ->
-            % Reload the changed module
-            reload_changed_module(FilePath),
-
-            % Send reload message to browsers
-            ok = arizona_pubsub:broadcast(~"live_reload", {file_changed, FilePath}),
-
-            % Clear the timer from state
-            {noreply, State#state{debounce_timer = undefined}};
-        {error, Reason} ->
-            % Log error but continue with reload
-            logger:warning("Reload command failed: ~s~nReason: ~s", [Command, Reason]),
-
-            % Clear the timer from state
-            {noreply, State#state{debounce_timer = undefined}}
+            % Send simple reload message to browsers
+            ok = arizona_pubsub:broadcast(~"live_reload", {file_changed, reload}),
+            {noreply, State#state{debounce_timer = undefined, pending_rules = #{}}};
+        error ->
+            {noreply, State#state{debounce_timer = undefined, pending_rules = #{}}}
     end;
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -149,61 +143,144 @@ handle_info(_Info, State) ->
 % Merge user configuration with defaults
 merge_config_with_defaults(Config) ->
     DefaultOpts = #{
-        watch_paths => ["include", "src", "c_src"],
-        file_patterns => [".*\\.erl$", ".*\\.hrl$", ".*\\.src$", ".*\\.config$", ".*\\.lock$"],
-        debounce_ms => 100,
-        reload_command => "rebar3 compile"
+        rules => [],
+        debounce_ms => 100
     },
     maps:merge(DefaultOpts, Config).
 
 % Validate paths and start watchers
 validate_and_start_watchers(MergedConfig) ->
     #{
-        watch_paths := WatchPaths,
-        file_patterns := FilePatterns,
-        debounce_ms := DebounceMs,
-        reload_command := ReloadCommand
+        rules := Rules,
+        debounce_ms := DebounceMs
     } = MergedConfig,
 
-    % Filter to existing directories only
-    ExistingPaths = lists:filter(fun filelib:is_dir/1, WatchPaths),
+    % Collect all directories from all rules
+    AllDirectories = lists:flatmap(fun(#{directories := Dirs}) -> Dirs end, Rules),
 
-    case ExistingPaths of
+    % Remove duplicates and filter to existing directories only
+    UniqueDirs = lists:usort(AllDirectories),
+    ExistingDirs = lists:filter(fun filelib:is_dir/1, UniqueDirs),
+
+    case ExistingDirs of
         [] ->
-            {error, no_valid_watch_paths};
-        ValidPaths ->
-            case start_fs_watchers(ValidPaths) of
+            {error, no_valid_directories};
+        ValidDirs ->
+            case start_fs_watchers(ValidDirs) of
                 ok ->
                     ok = wait_for_fs_ready(),
                     ConfigData = #{
-                        file_patterns => FilePatterns,
-                        debounce_ms => DebounceMs,
-                        reload_command => ReloadCommand
+                        rules => Rules,
+                        debounce_ms => DebounceMs
                     },
-                    {ok, ValidPaths, ConfigData};
+                    {ok, ConfigData};
                 {error, Reason} ->
                     {error, Reason}
             end
     end.
 
 % Create initial state record
-create_initial_state(ValidPaths, ConfigData) ->
+create_initial_state(ConfigData) ->
     #{
-        file_patterns := FilePatterns,
-        debounce_ms := DebounceMs,
-        reload_command := ReloadCommand
+        rules := Rules,
+        debounce_ms := DebounceMs
     } = ConfigData,
     #state{
-        watch_paths = ValidPaths,
-        file_patterns = FilePatterns,
+        rules = Rules,
         debounce_ms = DebounceMs,
         debounce_timer = undefined,
-        reload_command = ReloadCommand
+        pending_rules = #{}
     }.
 
-% Implement file pattern matching
+% Find matching rules for a file
 should_trigger_reload(FilePath, Events, State) ->
-    is_relevant_event(Events) andalso matches_patterns(FilePath, State).
+    case is_relevant_event(Events) of
+        true ->
+            MatchingRules = find_matching_rules(FilePath, State#state.rules),
+            case MatchingRules of
+                [] -> false;
+                _ -> {true, MatchingRules}
+            end;
+        false ->
+            false
+    end.
+
+% Find all rules that match the given file path
+find_matching_rules(FilePath, Rules) ->
+    lists:filter(
+        fun(Rule) ->
+            #{directories := Directories, patterns := Patterns} = Rule,
+
+            % Check if file is in one of the rule's directories (including subdirectories)
+            InDirectory = lists:any(
+                fun(Dir) ->
+                    % Convert relative dir to absolute for comparison
+                    AbsDir = filename:absname(Dir),
+                    lists:prefix(AbsDir ++ "/", FilePath) orelse
+                        filename:dirname(FilePath) =:= AbsDir
+                end,
+                Directories
+            ),
+
+            % Check if file matches one of the patterns
+            MatchesPattern = lists:any(
+                fun(Pattern) ->
+                    case re:run(FilePath, Pattern) of
+                        {match, _} -> true;
+                        nomatch -> false
+                    end
+                end,
+                Patterns
+            ),
+
+            InDirectory andalso MatchesPattern
+        end,
+        Rules
+    ).
+
+% Accumulate files for matching rules during debounce period
+accumulate_pending_rules(FilePath, MatchingRules, #state{pending_rules = Pending} = State) ->
+    UpdatedPending = lists:foldl(
+        fun(Rule, Acc) ->
+            Files =
+                case Acc of
+                    #{Rule := ExistingFiles} -> [FilePath | ExistingFiles];
+                    #{} -> [FilePath]
+                end,
+            Acc#{Rule => lists:usort(Files)}
+        end,
+        Pending,
+        MatchingRules
+    ),
+
+    start_debounce_timer(UpdatedPending, State).
+
+% Start or restart the debounce timer
+start_debounce_timer(
+    UpdatedPending, #state{debounce_ms = DebounceMs, debounce_timer = Timer} = State
+) ->
+    ok = cancel_timer(Timer),
+    NewTimer = erlang:send_after(DebounceMs, self(), {execute_rules, UpdatedPending}),
+    {noreply, State#state{debounce_timer = NewTimer, pending_rules = UpdatedPending}}.
+
+% Execute all pending rules sequentially
+execute_pending_rules(PendingRules) ->
+    Results = [execute_rule(Rule, Files) || Rule := Files <- PendingRules],
+    case [ok || ok <- Results] of
+        [] -> error;
+        _ -> ok
+    end.
+
+% Execute a single rule with its files
+execute_rule(#{callback := Callback}, Files) ->
+    try
+        _ = Callback(Files),
+        ok
+    catch
+        _:Reason ->
+            logger:warning("Rule callback failed: ~p", [Reason]),
+            error
+    end.
 
 % Check if this is a relevant file system event
 is_relevant_event(Events) ->
@@ -211,83 +288,12 @@ is_relevant_event(Events) ->
         lists:member(modified, Events) orelse
         lists:member(deleted, Events).
 
-% Check if file matches any of the configured patterns
-matches_patterns(FilePath, #state{file_patterns = Patterns}) ->
-    lists:any(
-        fun(Pattern) ->
-            case re:run(FilePath, Pattern) of
-                {match, _} -> true;
-                nomatch -> false
-            end
-        end,
-        Patterns
-    ).
-
-% Handle debouncing of file change events
-debounced_broadcast(FilePath, #state{debounce_ms = DebounceMs, debounce_timer = Timer} = State) ->
-    % Cancel any existing timer
-    ok = cancel_timer(Timer),
-
-    % Start new debounce timer
-    NewTimer = erlang:send_after(DebounceMs, self(), {send_reload, FilePath}),
-
-    % Update state with new timer
-    {noreply, State#state{debounce_timer = NewTimer}}.
-
 % Cancel timer safely
 cancel_timer(undefined) ->
     ok;
 cancel_timer(TimerRef) ->
     _ = erlang:cancel_timer(TimerRef),
     ok.
-
-% Reload a specific module based on file path
-reload_changed_module(FilePath) ->
-    case filename:extension(FilePath) of
-        ".erl" ->
-            % Extract module name from file path
-            BaseName = filename:basename(FilePath, ".erl"),
-            Module = list_to_existing_atom(BaseName),
-
-            % Only reload if module is currently loaded
-            case code:is_loaded(Module) of
-                {file, _} ->
-                    logger:info("Reloading module: ~p", [Module]),
-                    code:purge(Module),
-                    case code:load_file(Module) of
-                        {module, Module} ->
-                            ok;
-                        {error, Reason} ->
-                            logger:warning("Failed to reload module ~p: ~p", [Module, Reason])
-                    end;
-                false ->
-                    % Module not loaded, nothing to do
-                    ok
-            end;
-        _ ->
-            % Not an Erlang file, nothing to reload
-            ok
-    end.
-
-% Run the configured reload command
-run_reload_command(Command) ->
-    case Command of
-        undefined ->
-            ok;
-        Command ->
-            try
-                case os:cmd(Command) of
-                    [] ->
-                        ok;
-                    Output ->
-                        logger:info("Reload command output: ~s", [Output]),
-                        ok
-                end
-            catch
-                _:Reason ->
-                    {error, Reason}
-            end
-    end.
 
 % Start fs watchers for all watch paths
 start_fs_watchers(WatchPaths) ->

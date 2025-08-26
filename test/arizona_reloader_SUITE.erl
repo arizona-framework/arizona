@@ -76,7 +76,7 @@ file_change_detection_test(Config) when is_list(Config) ->
     {ok, _Pid} = start_reloader(Filename),
     ok = file:write_file(Filename, "-module(test)."),
     receive
-        {pubsub_message, ~"live_reload", {file_changed, Filename}} -> ok
+        {pubsub_message, ~"live_reload", {file_changed, reload}} -> ok
     after 500 -> ct:fail("No reload message received")
     end.
 
@@ -88,14 +88,14 @@ multiple_file_changes_test(Config) when is_list(Config) ->
     % First change
     ok = file:write_file(Filename, "-module(test1)."),
     receive
-        {pubsub_message, ~"live_reload", {file_changed, Filename}} -> ok
+        {pubsub_message, ~"live_reload", {file_changed, reload}} -> ok
     after 500 -> ct:fail("First reload message not received")
     end,
 
     % Second change
     ok = file:write_file(Filename, "-module(test2)."),
     receive
-        {pubsub_message, ~"live_reload", {file_changed, Filename}} -> ok
+        {pubsub_message, ~"live_reload", {file_changed, reload}} -> ok
     after 500 -> ct:fail("Second reload message not received")
     end.
 
@@ -113,13 +113,13 @@ debounced_events_test(Config) when is_list(Config) ->
 
     % Should receive only one debounced message (wait longer for CI)
     receive
-        {pubsub_message, ~"live_reload", {file_changed, Filename}} -> ok
+        {pubsub_message, ~"live_reload", {file_changed, reload}} -> ok
     after 1000 -> ct:fail("Debounced reload message not received")
     end,
 
     % Should not receive additional messages
     receive
-        {pubsub_message, ~"live_reload", {file_changed, Filename}} ->
+        {pubsub_message, ~"live_reload", {file_changed, reload}} ->
             ct:fail("Unexpected additional reload message")
     after 500 -> ok
     end.
@@ -134,7 +134,13 @@ default_config_test(Config) when is_list(Config) ->
         arizona_reloader,
         #{
             enabled => true,
-            watch_paths => [filename:dirname(Filename)]
+            rules => [
+                #{
+                    directories => [filename:dirname(Filename)],
+                    patterns => [".*\\.erl$"],
+                    callback => fun(_) -> ok end
+                }
+            ]
         },
         []
     ),
@@ -142,7 +148,8 @@ default_config_test(Config) when is_list(Config) ->
 
     % Verify defaults
     ?assertEqual(100, maps:get(debounce_ms, State)),
-    ?assertEqual("rebar3 compile", maps:get(reload_command, State)).
+    Rules = maps:get(rules, State),
+    ?assertEqual(1, length(Rules)).
 
 custom_config_test(Config) when is_list(Config) ->
     {filename, Filename} = proplists:lookup(filename, Config),
@@ -150,9 +157,14 @@ custom_config_test(Config) when is_list(Config) ->
         arizona_reloader,
         #{
             enabled => true,
-            watch_paths => [filename:dirname(Filename)],
-            debounce_ms => 500,
-            reload_command => "echo test"
+            rules => [
+                #{
+                    directories => [filename:dirname(Filename)],
+                    patterns => [".*\\.erl$"],
+                    callback => fun(Files) -> {ok, length(Files)} end
+                }
+            ],
+            debounce_ms => 500
         },
         []
     ),
@@ -160,7 +172,8 @@ custom_config_test(Config) when is_list(Config) ->
 
     % Verify custom values
     ?assertEqual(500, maps:get(debounce_ms, State)),
-    ?assertEqual("echo test", maps:get(reload_command, State)).
+    Rules = maps:get(rules, State),
+    ?assertEqual(1, length(Rules)).
 
 %% --------------------------------------------------------------------
 %% File pattern tests
@@ -174,7 +187,7 @@ erl_file_pattern_test(Config) when is_list(Config) ->
     % .erl file should trigger reload
     ok = file:write_file(Filename, "-module(test)."),
     receive
-        {pubsub_message, ~"live_reload", {file_changed, Filename}} -> ok
+        {pubsub_message, ~"live_reload", {file_changed, reload}} -> ok
     after 500 -> ct:fail("Erlang file should trigger reload")
     end.
 
@@ -187,7 +200,7 @@ ignore_non_matching_files_test(Config) when is_list(Config) ->
     % .txt file should not trigger reload
     ok = file:write_file(TxtFile, "some content"),
     receive
-        {pubsub_message, ~"live_reload", {file_changed, TxtFile}} ->
+        {pubsub_message, ~"live_reload", {file_changed, reload}} ->
             ct:fail("Text file should not trigger reload")
     after 300 -> ok
     end,
@@ -203,7 +216,7 @@ successful_command_test(Config) when is_list(Config) ->
     {ok, _Pid} = start_reloader_with_command(Filename, "true"),
     ok = file:write_file(Filename, "-module(test)."),
     receive
-        {pubsub_message, ~"live_reload", {file_changed, Filename}} -> ok
+        {pubsub_message, ~"live_reload", {file_changed, reload}} -> ok
     after 500 -> ct:fail("Reload with successful command failed")
     end.
 
@@ -213,7 +226,7 @@ undefined_command_test(Config) when is_list(Config) ->
     {ok, _Pid} = start_reloader_with_command(Filename, undefined),
     ok = file:write_file(Filename, "-module(test)."),
     receive
-        {pubsub_message, ~"live_reload", {file_changed, Filename}} -> ok
+        {pubsub_message, ~"live_reload", {file_changed, reload}} -> ok
     after 500 -> ct:fail("Reload without command failed")
     end.
 
@@ -226,7 +239,13 @@ start_reloader(Filename) ->
         arizona_reloader,
         #{
             enabled => true,
-            watch_paths => [filename:dirname(Filename)],
+            rules => [
+                #{
+                    directories => [filename:dirname(Filename)],
+                    patterns => [".*\\.erl$"],
+                    callback => fun(_) -> ok end
+                }
+            ],
             debounce_ms => 0
         },
         []
@@ -237,7 +256,13 @@ start_reloader_with_debounce(Filename, DebounceMs) ->
         arizona_reloader,
         #{
             enabled => true,
-            watch_paths => [filename:dirname(Filename)],
+            rules => [
+                #{
+                    directories => [filename:dirname(Filename)],
+                    patterns => [".*\\.erl$"],
+                    callback => fun(_) -> ok end
+                }
+            ],
             debounce_ms => DebounceMs
         },
         []
@@ -248,8 +273,13 @@ start_reloader_with_patterns(Filename, Patterns) ->
         arizona_reloader,
         #{
             enabled => true,
-            watch_paths => [filename:dirname(Filename)],
-            file_patterns => Patterns,
+            rules => [
+                #{
+                    directories => [filename:dirname(Filename)],
+                    patterns => Patterns,
+                    callback => fun(_) -> ok end
+                }
+            ],
             debounce_ms => 0
         },
         []
@@ -260,8 +290,17 @@ start_reloader_with_command(Filename, Command) ->
         arizona_reloader,
         #{
             enabled => true,
-            watch_paths => [filename:dirname(Filename)],
-            reload_command => Command,
+            rules => [
+                #{
+                    directories => [filename:dirname(Filename)],
+                    patterns => [".*\\.erl$"],
+                    callback =>
+                        case Command of
+                            undefined -> fun(_) -> ok end;
+                            Cmd -> fun(_) -> os:cmd(Cmd) end
+                        end
+                }
+            ],
             debounce_ms => 0
         },
         []

@@ -102,11 +102,8 @@ websocket_info({reply_response, StatefulId, Diff, Reply}, State) ->
 websocket_info({noreply_response, StatefulId, Diff}, State) ->
     handle_noreply_response(StatefulId, Diff, State);
 % Handle live reload messages
-websocket_info({pubsub_message, ~"live_reload", {file_changed, FilePath}}, State) ->
-    Message = #{
-        type => ~"reload",
-        file => list_to_binary(FilePath)
-    },
+websocket_info({pubsub_message, ~"live_reload", {file_changed, reload}}, State) ->
+    Message = #{type => ~"reload"},
     ReloadPayload = json_encode(Message),
     {[{text, ReloadPayload}], State}.
 

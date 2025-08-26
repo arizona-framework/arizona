@@ -175,8 +175,7 @@ export default class ArizonaClient {
   }
 
   handleReload(data) {
-    const sanitizedFile = sanitizeForLog(data.file);
-    console.log('[Arizona] File changed: "%s", reloading page...', sanitizedFile);
+    console.log('[Arizona] File changed. Reloading page...');
     window.location.reload();
   }
 

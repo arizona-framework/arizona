@@ -46,7 +46,7 @@
 -nominal server_config() :: #{
     port := pos_integer(),
     routes := [route()],
-    live_reload => arizona_reloader:config()
+    reloader => arizona_reloader:config()
 }.
 
 %% --------------------------------------------------------------------
@@ -57,15 +57,15 @@
     Config :: server_config(),
     Result :: {ok, pid()} | {error, term()}.
 start(#{port := Port, routes := Routes} = Config) ->
-    % Check if live reload is enabled
-    LiveReloadEnabled =
-        case maps:get(live_reload, Config, undefined) of
+    % Check if reloader is enabled
+    ReloaderEnabled =
+        case maps:get(reloader, Config, undefined) of
             undefined -> false;
-            LiveReloadConfig -> maps:get(enabled, LiveReloadConfig, false)
+            ReloaderConfig -> maps:get(enabled, ReloaderConfig, false)
         end,
 
-    % Start live reload system if enabled
-    case maybe_start_live_reload(LiveReloadEnabled, Config) of
+    % Start reloader system if enabled
+    case maybe_start_reloader(ReloaderEnabled, Config) of
         ok ->
             % Compile routes
             Dispatch = compile_routes(Routes),
@@ -151,14 +151,14 @@ route_to_cowboy({static, Path, {priv_file, App, FileName}}) when
     % Static file serving for single file from priv directory
     {Path, cowboy_static, {priv_file, App, FileName}}.
 
-%% Start live reload system if enabled
-maybe_start_live_reload(false, _Config) ->
+%% Start reloader system if enabled
+maybe_start_reloader(false, _Config) ->
     ok;
-maybe_start_live_reload(true, Config) ->
-    LiveReloadConfig = maps:get(live_reload, Config),
-    case arizona_reloader:start_link(LiveReloadConfig) of
+maybe_start_reloader(true, Config) ->
+    ReloaderConfig = maps:get(reloader, Config),
+    case arizona_reloader:start_link(ReloaderConfig) of
         {ok, _Pid} -> ok;
-        {error, Reason} -> {error, {live_reload_failed, Reason}}
+        {error, Reason} -> {error, {reloader_failed, Reason}}
     end.
 
 %% Validate handler options and create route metadata
