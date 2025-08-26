@@ -31,7 +31,7 @@
 -export_type([state/0]).
 -export_type([config/0]).
 -export_type([reload_rule/0]).
--export_type([directory/0]).
+-export_type([rule_directory/0]).
 -export_type([rule_pattern/0]).
 -export_type([rule_callback/0]).
 -export_type([filename/0]).
@@ -55,11 +55,11 @@
     debounce_ms => debounce_ms()
 }.
 -nominal reload_rule() :: #{
-    directories := [directory()],
+    directories := [rule_directory()],
     patterns := [rule_pattern()],
-    callback := rule_callback()
+    callback => rule_callback() | undefined
 }.
--nominal directory() :: string().
+-nominal rule_directory() :: string().
 -nominal rule_pattern() :: string().
 -nominal rule_callback() :: fun(([filename()]) -> any()).
 -nominal filename() :: string().
@@ -265,14 +265,26 @@ start_debounce_timer(
 
 % Execute all pending rules sequentially
 execute_pending_rules(PendingRules) ->
-    Results = [execute_rule(Rule, Files) || Rule := Files <- PendingRules],
+    Results = [
+        execute_rule_callback(Callback, Files)
+     || #{callback := Callback} := Files <- PendingRules, Callback =/= undefined
+    ],
     case [ok || ok <- Results] of
-        [] -> error;
-        _ -> ok
+        [] ->
+            % If no callbacks to execute, still consider it successful
+            % (e.g., when all callbacks are undefined - watch-only mode)
+            case maps:size(PendingRules) > 0 of
+                % Rules exist but no callbacks, still reload browsers
+                true -> ok;
+                % No rules at all
+                false -> error
+            end;
+        _ ->
+            ok
     end.
 
 % Execute a single rule with its files
-execute_rule(#{callback := Callback}, Files) ->
+execute_rule_callback(Callback, Files) ->
     try
         _ = Callback(Files),
         ok

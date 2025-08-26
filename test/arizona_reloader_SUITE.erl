@@ -32,7 +32,8 @@ groups() ->
         ]},
         {reload_commands, [sequence], [
             successful_command_test,
-            undefined_command_test
+            undefined_command_test,
+            undefined_callback_test
         ]}
     ].
 
@@ -230,6 +231,16 @@ undefined_command_test(Config) when is_list(Config) ->
     after 500 -> ct:fail("Reload without command failed")
     end.
 
+undefined_callback_test(Config) when is_list(Config) ->
+    {filename, Filename} = proplists:lookup(filename, Config),
+    ok = pubsub_join(),
+    {ok, _Pid} = start_reloader_with_undefined_callback(Filename),
+    ok = file:write_file(Filename, "-module(test)."),
+    receive
+        {pubsub_message, ~"live_reload", {file_changed, reload}} -> ok
+    after 500 -> ct:fail("Reload with undefined callback failed")
+    end.
+
 %% --------------------------------------------------------------------
 %% Helper functions
 %% --------------------------------------------------------------------
@@ -299,6 +310,23 @@ start_reloader_with_command(Filename, Command) ->
                             undefined -> fun(_) -> ok end;
                             Cmd -> fun(_) -> os:cmd(Cmd) end
                         end
+                }
+            ],
+            debounce_ms => 0
+        },
+        []
+    ).
+
+start_reloader_with_undefined_callback(Filename) ->
+    gen_server:start_link(
+        arizona_reloader,
+        #{
+            enabled => true,
+            rules => [
+                #{
+                    directories => [filename:dirname(Filename)],
+                    patterns => [".*\\.erl$"],
+                    callback => undefined
                 }
             ],
             debounce_ms => 0
