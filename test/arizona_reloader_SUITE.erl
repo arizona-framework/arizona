@@ -32,7 +32,6 @@ groups() ->
         ]},
         {reload_commands, [sequence], [
             successful_command_test,
-            undefined_command_test,
             undefined_callback_test
         ]}
     ].
@@ -221,16 +220,6 @@ successful_command_test(Config) when is_list(Config) ->
     after 500 -> ct:fail("Reload with successful command failed")
     end.
 
-undefined_command_test(Config) when is_list(Config) ->
-    {filename, Filename} = proplists:lookup(filename, Config),
-    ok = pubsub_join(),
-    {ok, _Pid} = start_reloader_with_command(Filename, undefined),
-    ok = file:write_file(Filename, "-module(test)."),
-    receive
-        {pubsub_message, ~"live_reload", {file_changed, reload}} -> ok
-    after 500 -> ct:fail("Reload without command failed")
-    end.
-
 undefined_callback_test(Config) when is_list(Config) ->
     {filename, Filename} = proplists:lookup(filename, Config),
     ok = pubsub_join(),
@@ -245,7 +234,14 @@ undefined_callback_test(Config) when is_list(Config) ->
 %% Helper functions
 %% --------------------------------------------------------------------
 
-start_reloader(Filename) ->
+% Unified helper function for starting reloader with configurable options
+start_reloader_with_opts(Filename, Opts) ->
+    DefaultOpts = #{
+        patterns => [".*\\.erl$"],
+        debounce_ms => 0,
+        callback => fun(_) -> ok end
+    },
+    MergedOpts = maps:merge(DefaultOpts, Opts),
     gen_server:start_link(
         arizona_reloader,
         #{
@@ -253,86 +249,30 @@ start_reloader(Filename) ->
             rules => [
                 #{
                     directories => [filename:dirname(Filename)],
-                    patterns => [".*\\.erl$"],
-                    callback => fun(_) -> ok end
+                    patterns => maps:get(patterns, MergedOpts),
+                    callback => maps:get(callback, MergedOpts)
                 }
             ],
-            debounce_ms => 0
+            debounce_ms => maps:get(debounce_ms, MergedOpts)
         },
         []
     ).
+
+% Wrapper functions for backward compatibility and readability
+start_reloader(Filename) ->
+    start_reloader_with_opts(Filename, #{}).
 
 start_reloader_with_debounce(Filename, DebounceMs) ->
-    gen_server:start_link(
-        arizona_reloader,
-        #{
-            enabled => true,
-            rules => [
-                #{
-                    directories => [filename:dirname(Filename)],
-                    patterns => [".*\\.erl$"],
-                    callback => fun(_) -> ok end
-                }
-            ],
-            debounce_ms => DebounceMs
-        },
-        []
-    ).
+    start_reloader_with_opts(Filename, #{debounce_ms => DebounceMs}).
 
 start_reloader_with_patterns(Filename, Patterns) ->
-    gen_server:start_link(
-        arizona_reloader,
-        #{
-            enabled => true,
-            rules => [
-                #{
-                    directories => [filename:dirname(Filename)],
-                    patterns => Patterns,
-                    callback => fun(_) -> ok end
-                }
-            ],
-            debounce_ms => 0
-        },
-        []
-    ).
+    start_reloader_with_opts(Filename, #{patterns => Patterns}).
 
 start_reloader_with_command(Filename, Command) ->
-    gen_server:start_link(
-        arizona_reloader,
-        #{
-            enabled => true,
-            rules => [
-                #{
-                    directories => [filename:dirname(Filename)],
-                    patterns => [".*\\.erl$"],
-                    callback =>
-                        case Command of
-                            undefined -> fun(_) -> ok end;
-                            Cmd -> fun(_) -> os:cmd(Cmd) end
-                        end
-                }
-            ],
-            debounce_ms => 0
-        },
-        []
-    ).
+    start_reloader_with_opts(Filename, #{callback => fun(_) -> os:cmd(Command) end}).
 
 start_reloader_with_undefined_callback(Filename) ->
-    gen_server:start_link(
-        arizona_reloader,
-        #{
-            enabled => true,
-            rules => [
-                #{
-                    directories => [filename:dirname(Filename)],
-                    patterns => [".*\\.erl$"],
-                    callback => undefined
-                }
-            ],
-            debounce_ms => 0
-        },
-        []
-    ).
+    start_reloader_with_opts(Filename, #{callback => undefined}).
 
 pubsub_join() ->
     arizona_pubsub:join(~"live_reload", self()).
