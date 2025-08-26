@@ -34,34 +34,9 @@ render(Bindings) ->
                 cursor: pointer;
                 transition: all var(--transition-fast);
                 position: relative;
-                padding-right: 2rem;
             }
             .table th.sortable:hover \{
                 background-color: var(--color-gray-100);
-            }
-            .table th.sortable::after \{
-                content: '';
-                position: absolute;
-                right: 0.875rem;
-                top: 50%;
-                transform: translateY(-50%) translateY(2px);
-                width: 0;
-                height: 0;
-                border-left: 3px solid transparent;
-                border-right: 3px solid transparent;
-                border-top: 4px solid var(--color-gray-400);
-            }
-            .table th.sortable::before \{
-                content: '';
-                position: absolute;
-                right: 0.875rem;
-                top: 50%;
-                transform: translateY(-50%) translateY(-2px);
-                width: 0;
-                height: 0;
-                border-left: 3px solid transparent;
-                border-right: 3px solid transparent;
-                border-bottom: 4px solid var(--color-gray-400);
             }
             .table th.sortable:hover::after \{
                 border-top-color: var(--color-gray-600);

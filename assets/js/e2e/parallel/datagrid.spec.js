@@ -189,11 +189,11 @@ test.describe('Arizona Datagrid App', () => {
     const statusHeader = page.locator('th').filter({ hasText: 'Status' });
     const actionsHeader = page.locator('th').filter({ hasText: 'Actions' });
 
-    await expect(roleHeader).not.toHaveClass(/sortable/);
-    await expect(statusHeader).not.toHaveClass(/sortable/);
+    await expect(roleHeader).toHaveClass(/sortable/);
+    await expect(statusHeader).toHaveClass(/sortable/);
     await expect(actionsHeader).not.toHaveClass(/sortable/);
 
-    // Verify these headers don't have pointer cursor
+    // Verify these headers have pointer cursor
     const roleCursor = await roleHeader.evaluate((el) => {
       return getComputedStyle(el).cursor;
     });
@@ -201,8 +201,8 @@ test.describe('Arizona Datagrid App', () => {
       return getComputedStyle(el).cursor;
     });
 
-    expect(roleCursor).not.toBe('pointer');
-    expect(statusCursor).not.toBe('pointer');
+    expect(roleCursor).toBe('pointer');
+    expect(statusCursor).toBe('pointer');
   });
 
   test('should delete user via action button with WebSocket updates', async ({ page }) => {
@@ -343,13 +343,13 @@ test.describe('Arizona Datagrid App', () => {
     const inactiveBadge = page.locator('.status-badge-inactive').first();
     const pendingBadge = page.locator('.status-badge-pending').first();
 
-    await expect(activeBadge).toContainText('✓'); // Check mark
+    await expect(activeBadge).toContainText('✅');
     await expect(activeBadge).toContainText('active');
 
-    await expect(inactiveBadge).toContainText('○'); // Circle
+    await expect(inactiveBadge).toContainText('⚪');
     await expect(inactiveBadge).toContainText('inactive');
 
-    await expect(pendingBadge).toContainText('⌛'); // Hourglass
+    await expect(pendingBadge).toContainText('⏳');
     await expect(pendingBadge).toContainText('pending');
   });
 
@@ -366,7 +366,7 @@ test.describe('Arizona Datagrid App', () => {
 
     // Verify sortable headers are keyboard accessible
     const sortableHeaders = page.locator('th.sortable');
-    await expect(sortableHeaders).toHaveCount(3); // Name, Email, Created
+    await expect(sortableHeaders).toHaveCount(5); // Name, Email, Role, Status, Created
 
     // Test keyboard navigation on sortable header (click instead of Enter as that's the implemented interaction)
     await sortableHeaders.first().click();

@@ -18,8 +18,8 @@ mount(Req) ->
             cols => [
                 #{name => name, label => ~"Name", sortable => true},
                 #{name => email, label => ~"Email", sortable => true},
-                #{name => role, label => ~"Role", sortable => false},
-                #{name => status, label => ~"Status", sortable => false},
+                #{name => role, label => ~"Role", sortable => true},
+                #{name => status, label => ~"Status", sortable => true},
                 #{name => created_at, label => ~"Created", sortable => true},
                 #{name => actions, label => ~"Actions", sortable => false}
             ],
@@ -173,9 +173,9 @@ mount(Req) ->
                         #{name := status} ->
                             {StatusClass, StatusIcon} =
                                 case maps:get(status, Row) of
-                                    ~"active" -> {~"status-badge status-badge-active", ~"&#10003;"};
-                                    ~"inactive" -> {~"status-badge status-badge-inactive", ~"&#9675;"};
-                                    ~"pending" -> {~"status-badge status-badge-pending", ~"&#8987;"}
+                                    ~"active" -> {~"status-badge status-badge-active", ~"✅"};
+                                    ~"inactive" -> {~"status-badge status-badge-inactive", ~"⚪"};
+                                    ~"pending" -> {~"status-badge status-badge-pending", ~"⏳"}
                                 end,
                             arizona_template:from_string(~"""
                             <span class="{StatusClass}">
@@ -197,7 +197,7 @@ mount(Req) ->
                                     class="action-btn action-btn-danger"
                                     onclick="arizona.sendEvent('delete_user', \{id: '{UserId}'})"
                                 >
-                                    &#128465; Delete
+                                    🗑️ Delete
                                 </button>
                             </div>
                             """)
@@ -217,7 +217,9 @@ render(Bindings) ->
         {arizona_template:render_stateless(arizona_datagrid_view, render_table, #{
             cols => arizona_template:get_binding(cols, Bindings),
             rows => arizona_template:get_binding(rows, Bindings),
-            callback => arizona_template:get_binding(callback, Bindings)
+            callback => arizona_template:get_binding(callback, Bindings),
+            sort_column => arizona_template:get_binding(sort_column, Bindings),
+            sort_direction => arizona_template:get_binding(sort_direction, Bindings)
         })}
     </div>
     """").
@@ -230,6 +232,8 @@ render_table(Bindings) ->
                 <tr>
                     {arizona_template:render_list(fun(Col) ->
                         Sortable = maps:get(sortable, Col, false),
+                        SortColumn = arizona_template:get_binding(sort_column, Bindings),
+                        SortDirection = arizona_template:get_binding(sort_direction, Bindings),
                         arizona_template:from_string(~""""
                         <th scope="col" class="{
                             case Sortable of
@@ -250,7 +254,13 @@ render_table(Bindings) ->
                             {maps:get(label, Col)}
                             {
                                 case Sortable of
-                                    true -> ~" <i class=\"fas fa-sort\"></i>";
+                                    true ->
+                                        ColumnName = maps:get(name, Col),
+                                        case {SortColumn, SortDirection} of
+                                            {ColumnName, asc} -> ~" 🔼";
+                                            {ColumnName, desc} -> ~" 🔽";
+                                            _ -> ~""
+                                        end;
                                     false -> ~""
                                 end
                             }

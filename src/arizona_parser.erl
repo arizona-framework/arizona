@@ -5,6 +5,7 @@
 %% --------------------------------------------------------------------
 
 -export([parse_tokens/2]).
+-export([quote/1]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -36,6 +37,17 @@
 parse_tokens(Tokens, CompileOpts) ->
     {StaticParts, DynamicElements} = separate_static_dynamic(Tokens),
     create_template_ast(StaticParts, DynamicElements, CompileOpts).
+
+-spec quote(Text) -> Ast when
+    Text :: binary(),
+    Ast :: [erl_syntax:syntaxTree()].
+quote(Text) ->
+    % Convert UTF-8 binary to proper Unicode character list for merl:quote
+    SafeText = unicode:characters_to_list(Text),
+    case merl:quote(SafeText) of
+        F when is_list(F) -> F;
+        F -> [F]
+    end.
 
 -spec format_error(Reason, StackTrace) -> ErrorMap when
     Reason :: arizona_create_dynamic_callback_failed | term(),
@@ -90,16 +102,7 @@ create_template_ast(StaticParts, DynamicElements, CompileOpts) ->
 -spec create_static_list_ast(StaticParts) -> erl_syntax:syntaxTree() when
     StaticParts :: [binary()].
 create_static_list_ast(StaticParts) ->
-    StaticElements = [
-        erl_syntax:binary([
-            erl_syntax:binary_field(
-                erl_syntax:string(binary_to_list(Part)),
-                none,
-                [erl_syntax:atom(utf8)]
-            )
-        ])
-     || Part <- StaticParts
-    ],
+    StaticElements = [erl_syntax:abstract(Part) || Part <- StaticParts],
     erl_syntax:list(StaticElements).
 
 %% Create AST for dynamic elements (tuple, annotations, sequence)
@@ -144,11 +147,8 @@ create_dynamic_ast(DynamicElements, CompileOpts) ->
     CompileOpts :: [compile:option()],
     Ast :: erl_syntax:syntaxTree().
 create_dynamic_callback_ast(ExprText, CompileOpts) ->
-    Forms =
-        case merl:quote(ExprText) of
-            F when is_list(F) -> F;
-            F -> [F]
-        end,
+    Forms = quote(ExprText),
+
     % Check if we're already in a recursive parse transform to prevent infinite loops
     InRecursiveTransform = proplists:get_bool(in_dynamic_callback, CompileOpts),
 

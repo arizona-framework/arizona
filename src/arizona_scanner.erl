@@ -234,11 +234,7 @@ expr_category(Expr, State) ->
 %% Parse expression using merl, handling exceptions gracefully
 parse_expression(Expr) ->
     try
-        Forms =
-            case merl:quote(Expr) of
-                F when is_list(F) -> F;
-                F -> [F]
-            end,
+        Forms = arizona_parser:quote(Expr),
         {ok, Forms}
     catch
         Class:Exception:StackTrace ->
