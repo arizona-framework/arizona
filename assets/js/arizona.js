@@ -37,23 +37,30 @@ export default class ArizonaClient {
     };
   }
 
-  sendEvent(event, params = {}, statefulId) {
+  sendEvent(event, params = {}) {
     if (!this.connected) return;
-
-    const data = {
-      type: 'event',
-      event,
-      params,
-    };
-
-    // Only include stateful_id if provided
-    if (statefulId !== undefined) {
-      data.stateful_id = statefulId;
-    }
 
     this.worker.postMessage({
       type: 'send',
-      data,
+      data: {
+        type: 'event',
+        event,
+        params,
+      },
+    });
+  }
+
+  sendEventTo(statefulId, event, params = {}) {
+    if (!this.connected) return;
+
+    this.worker.postMessage({
+      type: 'send',
+      data: {
+        type: 'event',
+        stateful_id: statefulId,
+        event,
+        params,
+      },
     });
   }
 

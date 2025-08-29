@@ -129,26 +129,7 @@ describe('ArizonaClient', () => {
       expect(eventMessage.data.params).toEqual({});
     });
 
-    test('sends event to specific stateful component when stateful_id provided', () => {
-      client.sendEvent('increment', { amount: 1 }, 'counter_component');
-
-      const messages = client.worker.getAllPostedMessages();
-      const eventMessage = messages.find((msg) => {
-        return msg.type === 'send';
-      });
-
-      expect(eventMessage).toEqual({
-        type: 'send',
-        data: {
-          type: 'event',
-          event: 'increment',
-          params: { amount: 1 },
-          stateful_id: 'counter_component',
-        },
-      });
-    });
-
-    test('does not include stateful_id when not provided', () => {
+    test('sends to arizona_view handle_event callback (no stateful_id)', () => {
       client.sendEvent('click', { target: 'button1' });
 
       const messages = client.worker.getAllPostedMessages();
@@ -157,6 +138,7 @@ describe('ArizonaClient', () => {
       });
 
       expect(eventMessage.data).not.toHaveProperty('stateful_id');
+      expect(eventMessage.data.event).toBe('click');
     });
 
     test('does not send when not connected', () => {
@@ -167,6 +149,87 @@ describe('ArizonaClient', () => {
 
       const messages = client.worker.getAllPostedMessages();
       expect(messages.length).toBe(0);
+    });
+  });
+
+  describe('sendEventTo()', () => {
+    beforeEach(() => {
+      client.connect();
+      client.connected = true;
+    });
+
+    test('sends event directly to arizona_stateful component', () => {
+      client.sendEventTo('counter_component', 'increment', { amount: 1 });
+
+      const messages = client.worker.getAllPostedMessages();
+      const eventMessage = messages.find((msg) => {
+        return msg.type === 'send';
+      });
+
+      expect(eventMessage).toEqual({
+        type: 'send',
+        data: {
+          type: 'event',
+          stateful_id: 'counter_component',
+          event: 'increment',
+          params: { amount: 1 },
+        },
+      });
+    });
+
+    test('uses empty params by default when targeting stateful component', () => {
+      client.sendEventTo('form_component', 'submit');
+
+      const messages = client.worker.getAllPostedMessages();
+      const eventMessage = messages.find((msg) => {
+        return msg.type === 'send';
+      });
+
+      expect(eventMessage).toEqual({
+        type: 'send',
+        data: {
+          type: 'event',
+          stateful_id: 'form_component',
+          event: 'submit',
+          params: {},
+        },
+      });
+    });
+
+    test('always includes stateful_id for arizona_stateful targeting', () => {
+      client.sendEventTo('widget_123', 'update', { value: 42 });
+
+      const messages = client.worker.getAllPostedMessages();
+      const eventMessage = messages.find((msg) => {
+        return msg.type === 'send';
+      });
+
+      expect(eventMessage.data).toHaveProperty('stateful_id', 'widget_123');
+    });
+
+    test('does not send when not connected', () => {
+      client.connected = false;
+      client.worker.clearPostedMessages();
+
+      client.sendEventTo('component_id', 'action');
+
+      const messages = client.worker.getAllPostedMessages();
+      expect(messages.length).toBe(0);
+    });
+
+    test('separates concerns from sendEvent by targeting specific stateful components', () => {
+      // sendEvent goes to arizona_view
+      client.sendEvent('page_action', { data: 'view_level' });
+
+      // sendEventTo goes to arizona_stateful
+      client.sendEventTo('stateful_comp', 'component_action', { data: 'component_level' });
+
+      const messages = client.worker.getAllPostedMessages();
+      const viewMessage = messages.find((msg) => msg.data.event === 'page_action');
+      const statefulMessage = messages.find((msg) => msg.data.event === 'component_action');
+
+      expect(viewMessage.data).not.toHaveProperty('stateful_id');
+      expect(statefulMessage.data).toHaveProperty('stateful_id', 'stateful_comp');
     });
   });
 

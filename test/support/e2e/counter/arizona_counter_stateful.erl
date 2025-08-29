@@ -14,19 +14,19 @@ render(Bindings) ->
         <h1>Counter: <span data-testid="count">{arizona_template:get_binding(count, Bindings)}</span></h1>
         <button
             data-testid="increment"
-            onclick="arizona.sendEvent('increment', \{}, '{arizona_template:get_binding(id, Bindings)}')"
+            onclick="arizona.sendEventTo('{arizona_template:get_binding(id, Bindings)}', 'increment')"
         >
             +
         </button>
         <button
             data-testid="decrement"
-            onclick="arizona.sendEvent('increment', \{incr: -1}, '{arizona_template:get_binding(id, Bindings)}')"
+            onclick="arizona.sendEventTo('{arizona_template:get_binding(id, Bindings)}', 'increment', \{incr: -1})"
         >
             -
         </button>
         <button
             data-testid="reset"
-            onclick="arizona.sendEvent('reset', \{}, '{arizona_template:get_binding(id, Bindings)}')"
+            onclick="arizona.sendEventTo('{arizona_template:get_binding(id, Bindings)}', 'reset')"
         >
             Reset
         </button>
