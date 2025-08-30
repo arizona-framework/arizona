@@ -35,13 +35,15 @@ In your `rebar.config`:
 ### 2. Start Server
 
 ```erlang
-{ok, _Pid} = arizona_server:start(#{
-    port => 8080,
-    routes => [
-        {live, ~"/my-view", my_view_module},
-        {live_websocket, ~"/live/websocket"},
-        {static, ~"/assets", {priv_dir, arizona, ~"static/assets"}}
-    ]
+arizona:start(#{
+    server => #{
+        transport_opts => [{port, 1912}],
+        routes => [
+            {live, ~"/my-view", my_view_module},
+            {live_websocket, ~"/live/websocket"},
+            {static, ~"/assets", {priv_dir, arizona, ~"static/assets"}}
+        ]
+    }
 }).
 ```
 

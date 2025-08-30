@@ -19,9 +19,11 @@
     Pid :: pid(),
     ErrReason :: term().
 start(_StartType, _StartArgs) ->
-    case arizona_sup:start_link() of
-        {ok, Pid} ->
-            {ok, Pid};
+    maybe
+        {ok, SupPid} ?= arizona_sup:start_link(),
+        ok ?= arizona:start(get_env_config()),
+        {ok, SupPid}
+    else
         {error, Reason} ->
             {error, Reason}
     end.
@@ -30,3 +32,15 @@ start(_StartType, _StartArgs) ->
     State :: term().
 stop(_State) ->
     ok.
+
+%% --------------------------------------------------------------------
+%% Internal functions
+%% --------------------------------------------------------------------
+
+get_env_config() ->
+    ServerConfig = application:get_env(arizona, server, #{enabled => false}),
+    ReloaderConfig = application:get_env(arizona, reloader, #{enabled => false}),
+    #{
+        server => ServerConfig,
+        reloader => ReloaderConfig
+    }.

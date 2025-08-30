@@ -20,9 +20,12 @@
 %% Types exports
 %% --------------------------------------------------------------------
 
+-export_type([route_metadata/0]).
 -export_type([route/0]).
 -export_type([server_config/0]).
--export_type([route_metadata/0]).
+-export_type([scheme/0]).
+-export_type([transport_opts/0]).
+-export_type([proto_opts/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -44,10 +47,15 @@
 -opaque route_metadata() :: #route_metadata{}.
 
 -nominal server_config() :: #{
-    port := pos_integer(),
-    routes := [route()],
-    reloader => arizona_reloader:config()
+    enabled => boolean(),
+    scheme => scheme(),
+    transport_opts => transport_opts(),
+    proto_opts => proto_opts(),
+    routes := [route()]
 }.
+-nominal scheme() :: http | https.
+-nominal transport_opts() :: ranch:opts().
+-nominal proto_opts() :: cowboy:opts().
 
 %% --------------------------------------------------------------------
 %% API function definitions
@@ -56,34 +64,24 @@
 -spec start(Config) -> Result when
     Config :: server_config(),
     Result :: {ok, pid()} | {error, term()}.
-start(#{port := Port, routes := Routes} = Config) ->
-    % Check if reloader is enabled
-    ReloaderEnabled =
-        case maps:get(reloader, Config, undefined) of
-            undefined -> false;
-            ReloaderConfig -> maps:get(enabled, ReloaderConfig, false)
-        end,
+start(Config) when is_map(Config) ->
+    % Compile routes
+    Dispatch = compile_routes(maps:get(routes, Config)),
+    ok = persistent_term:put(arizona_dispatch, Dispatch),
 
-    % Start reloader system if enabled
-    case maybe_start_reloader(ReloaderEnabled, Config) of
-        ok ->
-            % Compile routes
-            Dispatch = compile_routes(Routes),
-            ok = persistent_term:put(arizona_dispatch, Dispatch),
+    % Get transport and protocol options
+    DefaultPort = 1912,
+    TransportOpts = get_transport_opts(Config, DefaultPort),
+    ProtoOpts = get_proto_opts(Config),
 
-            % Start Cowboy HTTP listener
-            cowboy:start_clear(
-                arizona_http_listener,
-                [{port, Port}],
-                #{env => #{dispatch => {persistent_term, arizona_dispatch}}}
-            );
-        {error, Reason} ->
-            {error, Reason}
-    end.
+    % Start listener based on scheme
+    Scheme = maps:get(scheme, Config, http),
+    Ref = arizona_listener,
+    start_listener(Scheme, Ref, TransportOpts, ProtoOpts).
 
 -spec stop() -> ok.
 stop() ->
-    ok = cowboy:stop_listener(arizona_http_listener),
+    ok = cowboy:stop_listener(arizona_listener),
     ok.
 
 -spec get_route_metadata(Req) -> RouteMetadata when
@@ -151,15 +149,58 @@ route_to_cowboy({static, Path, {priv_file, App, FileName}}) when
     % Static file serving for single file from priv directory
     {Path, cowboy_static, {priv_file, App, FileName}}.
 
-%% Start reloader system if enabled
-maybe_start_reloader(false, _Config) ->
-    ok;
-maybe_start_reloader(true, Config) ->
-    ReloaderConfig = maps:get(reloader, Config),
-    case arizona_reloader:start_link(ReloaderConfig) of
-        {ok, _Pid} -> ok;
-        {error, Reason} -> {error, {reloader_failed, Reason}}
+%% Get transport options with defaults
+get_transport_opts(Config, DefaultPort) ->
+    UserTransportOpts = maps:get(transport_opts, Config, []),
+    ensure_transport_port(UserTransportOpts, DefaultPort).
+
+%% Ensure a proplist has a port, adding default if missing
+ensure_port_in_proplist(PropList, DefaultPort) when is_list(PropList) ->
+    case proplists:lookup(port, PropList) of
+        {port, _Port} ->
+            PropList;
+        none ->
+            [{port, DefaultPort} | PropList]
     end.
+
+%% Ensure transport options have a port
+ensure_transport_port(TransportOpts, DefaultPort) when is_list(TransportOpts) ->
+    ensure_port_in_proplist(TransportOpts, DefaultPort);
+ensure_transport_port(TransportOpts, DefaultPort) when is_map(TransportOpts) ->
+    case TransportOpts of
+        #{socket_opts := SocketOpts} ->
+            NewSocketOpts = ensure_port_in_proplist(SocketOpts, DefaultPort),
+            TransportOpts#{socket_opts => NewSocketOpts};
+        #{} ->
+            % socket_opts not present, add default socket_opts with port
+            TransportOpts#{socket_opts => [{port, DefaultPort}]}
+    end.
+
+%% Get protocol options, ensuring Arizona controls dispatch
+get_proto_opts(Config) ->
+    UserProtoOpts = maps:get(proto_opts, Config, #{}),
+    UserEnv = maps:get(env, UserProtoOpts, #{}),
+
+    % Warn if user tries to set dispatch
+    case maps:is_key(dispatch, UserEnv) of
+        true ->
+            logger:warning(
+                "User-defined 'dispatch' in proto_opts env "
+                "will be overridden by Arizona"
+            );
+        false ->
+            ok
+    end,
+
+    % Arizona always controls dispatch
+    ArizonaEnv = UserEnv#{dispatch => {persistent_term, arizona_dispatch}},
+    UserProtoOpts#{env => ArizonaEnv}.
+
+%% Start listener based on scheme
+start_listener(http, Ref, TransportOpts, ProtoOpts) ->
+    cowboy:start_clear(Ref, TransportOpts, ProtoOpts);
+start_listener(https, Ref, TransportOpts, ProtoOpts) ->
+    cowboy:start_tls(Ref, TransportOpts, ProtoOpts).
 
 %% Validate handler options and create route metadata
 validate_and_create_route_metadata(#{type := Type, handler := Handler}) when
