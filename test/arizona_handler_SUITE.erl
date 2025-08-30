@@ -40,7 +40,7 @@ init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(inets),
     % Start arizona server
     {ok, _Pid} = arizona_server:start(#{
-        port => ServerPort,
+        transport_opts => [{port, ServerPort}],
         routes => [
             {live, ViewRouteUrl, MockViewModule},
             {live, ErrorViewRouteUrl, MockErrorViewModule},

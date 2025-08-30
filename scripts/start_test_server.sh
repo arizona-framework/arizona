@@ -33,9 +33,12 @@ Routes = [
     {static, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}}
 ],
 {ok, _ClockPid} = arizona_clock_server:start_link(),
-case arizona_server:start(#{
-    port => 8080,
-    routes => Routes,
+case arizona:start(#{
+    server => #{
+        enabled => true,
+        transport_opts => [{port, 8080}],
+        routes => Routes
+    },
     reloader => #{
         enabled => true,
         rules => [
@@ -87,7 +90,7 @@ case arizona_server:start(#{
         ]
     }
 }) of
-    {ok, _} ->
+    ok ->
         io:format(\"Arizona test server started on port 8080~n\"),
         receive stop -> ok end;
     Error ->

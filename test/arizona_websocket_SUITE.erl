@@ -50,7 +50,7 @@ init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(gun),
     %% Start arizona server
     {ok, _Pid} = arizona_server:start(#{
-        port => ServerPort,
+        transport_opts => [{port, ServerPort}],
         routes => [
             {live, ViewWithLayoutRouteUrl, MockViewWithLayoutModule},
             {live_websocket, WebSocketRouteUrl}
