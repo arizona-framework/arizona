@@ -5,6 +5,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([render_layout/1]).
 -export([render_view/1]).
 -export([render_stateful/3]).
 -export([render_stateless/5]).
@@ -27,6 +28,24 @@
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
+
+-spec render_layout(View) -> {Html, View1} when
+    View :: arizona_view:view(),
+    Html :: arizona_html:html(),
+    View1 :: arizona_view:view().
+render_layout(View) ->
+    case arizona_view:get_layout(View) of
+        {LayoutModule, LayoutRenderFun, SlotName, SlotBindings} ->
+            Slot = view,
+            LayoutBindings = SlotBindings#{SlotName => Slot},
+            State = arizona_view:get_state(View),
+            Id = arizona_stateful:get_binding(id, State),
+            arizona_renderer:render_stateless(
+                LayoutModule, LayoutRenderFun, LayoutBindings, Id, View
+            );
+        none ->
+            arizona_renderer:render_view(View)
+    end.
 
 -spec render_view(View) -> {Html, View1} when
     View :: arizona_view:view(),
