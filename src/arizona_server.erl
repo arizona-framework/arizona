@@ -22,6 +22,7 @@
 %% --------------------------------------------------------------------
 
 -export_type([route/0]).
+-export_type([path/0]).
 -export_type([config/0]).
 -export_type([scheme/0]).
 -export_type([transport_opts/0]).
@@ -32,12 +33,13 @@
 %% --------------------------------------------------------------------
 
 -nominal route() ::
-    {view, Path :: binary(), ViewModule :: module(), MountArg :: dynamic()}
-    | {websocket, Path :: binary()}
-    | {asset, Path :: binary(), {dir, Directory :: binary()}}
-    | {asset, Path :: binary(), {file, FileName :: binary()}}
-    | {asset, Path :: binary(), {priv_dir, App :: atom(), Directory :: binary()}}
-    | {asset, Path :: binary(), {priv_file, App :: atom(), FileName :: binary()}}.
+    {view, Path :: path(), ViewModule :: module(), MountArg :: dynamic()}
+    | {websocket, Path :: path()}
+    | {asset, Path :: path(), {dir, Directory :: binary()}}
+    | {asset, Path :: path(), {file, FileName :: binary()}}
+    | {asset, Path :: path(), {priv_dir, App :: atom(), Directory :: binary()}}
+    | {asset, Path :: path(), {priv_file, App :: atom(), FileName :: binary()}}.
+-nominal path() :: binary().
 
 -nominal config() :: #{
     enabled => boolean(),

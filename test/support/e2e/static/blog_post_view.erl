@@ -13,7 +13,7 @@ mount(Posts, Req) ->
             },
             Layout =
                 {blog_layout, render, main_content, #{
-                    page_title => arizona_template:get_binding(title, Post),
+                    page_title => maps:get(title, Post),
                     nav_active => ~"blog"
                 }},
             arizona_view:new(?MODULE, Bindings, Layout);

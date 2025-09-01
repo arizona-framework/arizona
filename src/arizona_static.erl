@@ -7,30 +7,46 @@
 -export([generate/1]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([generate/1]).
+
+%% --------------------------------------------------------------------
+%% Types exports
+%% --------------------------------------------------------------------
+
+-export_type([config/0]).
+-export_type([generation_error/0]).
+
+%% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
--nominal page() :: binary().
-
 -nominal config() :: #{
-    pages := [page()],
+    route_paths := [arizona_server:path()],
     output_dir := binary(),
     base_url => binary()
 }.
+
+-nominal generation_error() ::
+    server_not_running
+    | {http_request_failed, arizona_server:path(), term()}
+    | {file_operation_failed, binary(), term()}.
 
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
--spec generate(Config) -> ok | {error, Reason} when
+-spec generate(Config) -> ok | {error, ErrReason} when
     Config :: config(),
-    Reason :: term().
-generate(#{pages := Pages, output_dir := OutputDir} = Config) ->
+    ErrReason :: generation_error().
+generate(#{route_paths := RoutePaths, output_dir := OutputDir} = Config) ->
     maybe
         ok ?= check_server_running(),
         ok ?= ensure_output_dir(OutputDir),
-        {ok, RealPages} ?= generate_pages(Pages, OutputDir),
-        ok ?= generate_sitemap(RealPages, Config),
+        {ok, HtmlPages} ?= generate_pages(RoutePaths, OutputDir),
+        ok ?= generate_sitemap(HtmlPages, Config),
         ok
     else
         {error, Reason} ->
@@ -50,55 +66,55 @@ check_server_running() ->
             {error, server_not_running}
     end.
 
-%% Render a complete page to HTML string
-render_file(Page) ->
+%% Fetch page content from running server
+fetch_page(RoutePath) ->
     maybe
         ok ?= application:ensure_started(inets),
         ServerConfig = arizona:get_config(server),
         Scheme = atom_to_binary(maps:get(scheme, ServerConfig)),
         {ok, IpAddress, Port} = arizona_server:get_address(),
         Address = inet:ntoa(IpAddress),
-        Url = io_lib:format("~s://~s:~p~s", [Scheme, Address, Port, Page]),
+        Url = io_lib:format("~s://~s:~p~s", [Scheme, Address, Port, RoutePath]),
         {ok, {{_HttpVersion, 200, "OK"}, Headers, Body}} ?=
             httpc:request(get, {Url, []}, [], [{body_format, binary}]),
         ContentType = proplists:get_value("content-type", Headers),
         {ok, ContentType, Body}
     else
         {error, Reason} ->
-            {error, Reason}
+            {error, {http_request_failed, RoutePath, Reason}}
     end.
 
-generate_pages(Pages, OutputDir) ->
-    case do_generate_pages(Pages, OutputDir) of
+generate_pages(RoutePaths, OutputDir) ->
+    case do_generate_pages(RoutePaths, OutputDir) of
         {error, Reason} ->
             {error, Reason};
-        RealPages ->
-            {ok, RealPages}
+        HtmlPages ->
+            {ok, HtmlPages}
     end.
 
-%% Generate all pages
+%% Generate all pages from route paths
 do_generate_pages([], _OutputDir) ->
     [];
-do_generate_pages([Page | T], OutputDir) ->
-    case generate_file(Page, OutputDir) of
+do_generate_pages([RoutePath | T], OutputDir) ->
+    case generate_file(RoutePath, OutputDir) of
         {ok, "text/html" ++ _} ->
-            [Page | do_generate_pages(T, OutputDir)];
+            [RoutePath | do_generate_pages(T, OutputDir)];
         {ok, _FileType} ->
             do_generate_pages(T, OutputDir);
         {error, Reason} ->
             {error, Reason}
     end.
 
-generate_file(Url, OutputDir) ->
+generate_file(RoutePath, OutputDir) ->
     maybe
-        {ok, Type, Content} ?= render_file(Url),
-        FilePath = build_file_path(Url, OutputDir),
+        {ok, Type, Content} ?= fetch_page(RoutePath),
+        FilePath = build_file_path(RoutePath, OutputDir),
         ok ?= ensure_file_dir(FilePath),
         ok ?= write_file(FilePath, Content),
         {ok, Type}
     else
         {error, Reason} ->
-            {error, {generate_page_failed, Url, Reason}}
+            {error, Reason}
     end.
 
 %% Build file path from route path
@@ -141,25 +157,25 @@ ensure_file_dir(FilePath) ->
         {error, Reason} -> {error, {create_file_dir_failed, Reason}}
     end.
 
-%% Write HTML content to file
-write_file(FilePath, Html) ->
-    case file:write_file(FilePath, Html) of
+%% Write content to file
+write_file(FilePath, Content) ->
+    case file:write_file(FilePath, Content) of
         ok -> ok;
-        {error, Reason} -> {error, {write_file_failed, FilePath, Reason}}
+        {error, Reason} -> {error, {file_operation_failed, FilePath, Reason}}
     end.
 
 %% Generate sitemap.xml
-generate_sitemap(Pages, #{output_dir := OutputDir} = Config) ->
+generate_sitemap(HtmlPages, #{output_dir := OutputDir} = Config) ->
     BaseUrl = maps:get(base_url, Config, ~"https://example.com"),
-    SitemapContent = build_sitemap_xml(Pages, BaseUrl),
+    SitemapContent = build_sitemap_xml(HtmlPages, BaseUrl),
     SitemapPath = filename:join(OutputDir, ~"sitemap.xml"),
     case file:write_file(SitemapPath, SitemapContent) of
         ok -> ok;
-        {error, Reason} -> {error, {write_sitemap_failed, Reason}}
+        {error, Reason} -> {error, {file_operation_failed, SitemapPath, Reason}}
     end.
 
-build_sitemap_xml(Pages, BaseUrl) ->
-    Urls = [build_sitemap_url(Url, BaseUrl) || Url <- Pages],
+build_sitemap_xml(HtmlRoutePaths, BaseUrl) ->
+    Urls = [build_sitemap_url(RoutePath, BaseUrl) || RoutePath <- HtmlRoutePaths],
     [
         ~"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
         ~"<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
@@ -167,8 +183,8 @@ build_sitemap_xml(Pages, BaseUrl) ->
         ~"</urlset>\n"
     ].
 
-build_sitemap_url(PageUrl, BaseUrl) ->
-    Url = <<BaseUrl/binary, PageUrl/binary>>,
+build_sitemap_url(RoutePath, BaseUrl) ->
+    Url = <<BaseUrl/binary, RoutePath/binary>>,
     [
         ~"  <url>\n",
         ~"    <loc>",
