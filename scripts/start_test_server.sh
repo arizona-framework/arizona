@@ -21,7 +21,8 @@ exec erl \
     -pa "_build/test/lib/ranch/ebin" \
     -sname arizona \
     -setcookie framework \
-    -noshell -eval "
+    ${ERLANG_EXTRA_ARGS} \
+    -eval "
 {ok, _} = application:ensure_all_started(arizona),
 Routes = [
     {view, ~\"/realtime\", arizona_realtime_view, #{}},
