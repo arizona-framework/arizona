@@ -32,12 +32,13 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec init(Req, State) -> {cowboy_websocket, Req, {LiveModule, ArizonaReq}} when
+-spec init(Req, State) -> {cowboy_websocket, Req, {ViewModule, MountArg, ArizonaReq}} when
     Req :: cowboy_req:req(),
-    State :: map(),
-    LiveModule :: module(),
+    State :: undefined,
+    ViewModule :: module(),
+    MountArg :: dynamic(),
     ArizonaReq :: arizona_request:request().
-init(CowboyRequest, _State) ->
+init(CowboyRequest, undefined) ->
     % Extract path from query parameter ?path=/users
     PathParams = cowboy_req:parse_qs(CowboyRequest),
     {~"path", LivePath} = proplists:lookup(~"path", PathParams),
@@ -45,20 +46,20 @@ init(CowboyRequest, _State) ->
 
     % Create request with the Live path to resolve correct handler
     LiveRequest = CowboyRequest#{path => LivePath, qs => Qs},
-    RouteMetadata = arizona_server:get_route_metadata(LiveRequest),
-    LiveModule = arizona_server:get_route_handler(RouteMetadata),
+    {ViewModule, MountArg} = arizona_server:get_handler_opts(LiveRequest),
 
     % Create Arizona request with the original Live path
     ArizonaRequest = arizona_cowboy_request:new(LiveRequest),
-    {cowboy_websocket, CowboyRequest, {LiveModule, ArizonaRequest}}.
+    {cowboy_websocket, CowboyRequest, {ViewModule, MountArg, ArizonaRequest}}.
 
 -spec websocket_init(InitData) -> Result when
-    InitData :: {LiveModule, ArizonaRequest},
-    LiveModule :: module(),
+    InitData :: {ViewModule, MountArg, ArizonaRequest},
+    ViewModule :: module(),
+    MountArg :: dynamic(),
     ArizonaRequest :: arizona_request:request(),
     Result :: call_result().
-websocket_init({ViewModule, ArizonaRequest}) ->
-    {ok, LivePid} = arizona_live:start_link(ViewModule, ArizonaRequest, self()),
+websocket_init({ViewModule, MountArg, ArizonaRequest}) ->
+    {ok, LivePid} = arizona_live:start_link(ViewModule, MountArg, ArizonaRequest, self()),
 
     % Subscribe to live reload if arizona_reloader process is alive
     ok = maybe_join_live_reload(),

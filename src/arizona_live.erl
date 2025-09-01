@@ -5,7 +5,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([start_link/3]).
+-export([start_link/4]).
 -export([is_connected/1]).
 -export([get_view/1]).
 -export([initial_render/1]).
@@ -49,13 +49,14 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec start_link(ViewModule, ArizonaRequest, TransportPid) -> Return when
+-spec start_link(ViewModule, MountArg, ArizonaRequest, TransportPid) -> Return when
     ViewModule :: module(),
+    MountArg :: dynamic(),
     ArizonaRequest :: arizona_request:request(),
     TransportPid :: pid(),
     Return :: gen_server:start_ret().
-start_link(ViewModule, ArizonaRequest, TransportPid) ->
-    gen_server:start_link(?MODULE, {ViewModule, ArizonaRequest, TransportPid}, []).
+start_link(ViewModule, MountArg, ArizonaRequest, TransportPid) ->
+    gen_server:start_link(?MODULE, {ViewModule, MountArg, ArizonaRequest, TransportPid}, []).
 
 -spec is_connected(Pid) -> IsConnected when
     Pid :: pid(),
@@ -89,14 +90,15 @@ handle_event(Pid, StatefulIdOrUndefined, Event, Params) ->
 %% --------------------------------------------------------------------
 
 -spec init(InitArgs) -> {ok, State} when
-    InitArgs :: {ViewModule, ArizonaRequest, TransportPid},
+    InitArgs :: {ViewModule, MountArg, ArizonaRequest, TransportPid},
     ViewModule :: module(),
+    MountArg :: dynamic(),
     ArizonaRequest :: arizona_request:request(),
     TransportPid :: pid(),
     State :: state().
-init({ViewModule, ArizonaRequest, TransportPid}) ->
+init({ViewModule, MountArg, ArizonaRequest, TransportPid}) ->
     ok = pg:join(?MODULE, connected, self()),
-    View = arizona_view:call_mount_callback(ViewModule, ArizonaRequest),
+    View = arizona_view:call_mount_callback(ViewModule, MountArg, ArizonaRequest),
     {ok, #state{
         view = View,
         tracker = arizona_tracker:new(),

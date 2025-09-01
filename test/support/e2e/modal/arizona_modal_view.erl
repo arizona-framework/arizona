@@ -1,12 +1,12 @@
 -module(arizona_modal_view).
 -behaviour(arizona_view).
 -compile({parse_transform, arizona_parse_transform}).
--export([mount/1]).
+-export([mount/2]).
 -export([render/1]).
 -export([render_modal/1]).
 -export([handle_event/3]).
 
-mount(Req) ->
+mount(_Arg, Req) ->
     Layout =
         {arizona_modal_layout, render, main_content, #{
             active_url => arizona_request:get_path(Req)

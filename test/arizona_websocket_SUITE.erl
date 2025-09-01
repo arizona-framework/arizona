@@ -52,7 +52,7 @@ init_per_suite(Config) ->
     {ok, _Pid} = arizona_server:start(#{
         transport_opts => [{port, ServerPort}],
         routes => [
-            {live, ViewWithLayoutRouteUrl, MockViewWithLayoutModule},
+            {live, ViewWithLayoutRouteUrl, MockViewWithLayoutModule, #{}},
             {live_websocket, WebSocketRouteUrl}
         ]
     }),
@@ -63,10 +63,10 @@ init_per_suite(Config) ->
     -compile({parse_transform, arizona_parse_transform}).
     -behaviour(arizona_view).
 
-    -export([mount/1]).
+    -export([mount/2]).
     -export([render/1]).
 
-    mount(_Req) ->
+    mount(_Arg, _Req) ->
         Layout = {'@layout_module', '@layout_render_fun', '@layout_slot_name', #{
             title => ~"Arizona With Layout"
         }},

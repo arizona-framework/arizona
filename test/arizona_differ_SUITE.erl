@@ -322,10 +322,10 @@ mock_view_module(ViewModule, ViewId, StatefulModule, StatefulId, StatelessModule
                 -module('@view_module').
                 -behaviour(arizona_view).
                 -compile({parse_transform, arizona_parse_transform}).
-                -export([mount/1]).
+                -export([mount/2]).
                 -export([render/1]).
 
-                mount(Req) ->
+                mount(_Arg, Req) ->
                     {ReqBindings, _Req1} = arizona_request:get_bindings(Req),
                     arizona_view:new('@view_module', maps:merge(#{
                         id => ~"'@view_id",
@@ -462,6 +462,6 @@ mount_view(Module, Bindings) ->
     ArizonaRequest = arizona_request:new(?MODULE, undefined, #{
         bindings => Bindings
     }),
-    View = arizona_view:call_mount_callback(Module, ArizonaRequest),
+    View = arizona_view:call_mount_callback(Module, #{}, ArizonaRequest),
     {_Struct, HierarchicalView} = arizona_hierarchical:hierarchical_view(View),
     HierarchicalView.

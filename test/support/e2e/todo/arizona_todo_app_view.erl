@@ -1,7 +1,7 @@
 -module(arizona_todo_app_view).
 -behaviour(arizona_view).
 -compile({parse_transform, arizona_parse_transform}).
--export([mount/1]).
+-export([mount/2]).
 -export([render/1]).
 -export([handle_event/3]).
 -export([render_stats/1]).
@@ -9,7 +9,7 @@
 -export([render_clear_button/1]).
 -export([filter_todos/2]).
 
-mount(Req) ->
+mount(_Arg, Req) ->
     InitialTodos = [
         #{id => 1, text => ~"Learn Erlang", completed => false},
         #{id => 2, text => ~"Build web app", completed => true},

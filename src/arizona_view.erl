@@ -4,7 +4,7 @@
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([call_mount_callback/2]).
+-export([call_mount_callback/3]).
 -export([call_render_callback/1]).
 -export([call_handle_event_callback/3]).
 -export([call_handle_info_callback/2]).
@@ -59,7 +59,8 @@
 %% Behavior callback definitions
 %% --------------------------------------------------------------------
 
--callback mount(ArizonaRequest) -> View when
+-callback mount(MountArg, ArizonaRequest) -> View when
+    MountArg :: dynamic(),
     ArizonaRequest :: arizona_request:request(),
     View :: view().
 
@@ -87,12 +88,13 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
--spec call_mount_callback(Module, ArizonaRequest) -> View when
+-spec call_mount_callback(Module, MountArg, ArizonaRequest) -> View when
     Module :: module(),
+    MountArg :: dynamic(),
     ArizonaRequest :: arizona_request:request(),
     View :: view().
-call_mount_callback(Module, ArizonaRequest) when is_atom(Module) ->
-    apply(Module, mount, [ArizonaRequest]).
+call_mount_callback(Module, MountArg, ArizonaRequest) when is_atom(Module) ->
+    apply(Module, mount, [MountArg, ArizonaRequest]).
 
 -spec call_render_callback(View) -> Template when
     View :: view(),
