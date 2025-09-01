@@ -21,7 +21,8 @@ groups() ->
             generate_with_assets_test,
             generate_nested_paths_test,
             generate_index_page_test,
-            file_extension_handling_test
+            file_extension_handling_test,
+            parallel_generation_test
         ]},
         {error_handling_tests, [parallel], [
             file_permission_error_test
@@ -289,7 +290,10 @@ generate_simple_html_test(Config) when is_list(Config) ->
     {test_output_dir, OutputDir} = proplists:lookup(test_output_dir, Config),
 
     StaticConfig = #{
-        route_paths => [~"/", ~"/about"],
+        route_paths => #{
+            ~"/" => #{},
+            ~"/about" => #{}
+        },
         output_dir => list_to_binary(OutputDir)
     },
 
@@ -314,7 +318,11 @@ generate_with_assets_test(Config) when is_list(Config) ->
     {test_output_dir, OutputDir} = proplists:lookup(test_output_dir, Config),
 
     StaticConfig = #{
-        route_paths => [~"/", ~"/assets/css/style.css", ~"/assets/js/app.js"],
+        route_paths => #{
+            ~"/" => #{},
+            ~"/assets/css/style.css" => #{},
+            ~"/assets/js/app.js" => #{}
+        },
         output_dir => list_to_binary(OutputDir)
     },
 
@@ -335,7 +343,10 @@ generate_nested_paths_test(Config) when is_list(Config) ->
     {test_output_dir, OutputDir} = proplists:lookup(test_output_dir, Config),
 
     StaticConfig = #{
-        route_paths => [~"/post/hello-world", ~"/post/arizona-static"],
+        route_paths => #{
+            ~"/post/hello-world" => #{},
+            ~"/post/arizona-static" => #{}
+        },
         output_dir => list_to_binary(OutputDir)
     },
 
@@ -356,7 +367,7 @@ generate_index_page_test(Config) when is_list(Config) ->
     {test_output_dir, OutputDir} = proplists:lookup(test_output_dir, Config),
 
     StaticConfig = #{
-        route_paths => [~"/"],
+        route_paths => #{~"/" => #{}},
         output_dir => list_to_binary(OutputDir)
     },
 
@@ -372,14 +383,14 @@ file_extension_handling_test(Config) when is_list(Config) ->
     {test_output_dir, OutputDir} = proplists:lookup(test_output_dir, Config),
 
     StaticConfig = #{
-        route_paths => [
+        route_paths => #{
             % Should become about.html
-            ~"/about",
+            ~"/about" => #{},
             % Should keep .css extension
-            ~"/assets/css/style.css",
+            ~"/assets/css/style.css" => #{},
             % Should keep .js extension
-            ~"/assets/js/app.js"
-        ],
+            ~"/assets/js/app.js" => #{}
+        },
         output_dir => list_to_binary(OutputDir)
     },
 
@@ -391,6 +402,31 @@ file_extension_handling_test(Config) when is_list(Config) ->
     % Assets should keep original extensions
     ?assert(filelib:is_file(filename:join([OutputDir, "assets", "css", "style.css"]))),
     ?assert(filelib:is_file(filename:join([OutputDir, "assets", "js", "app.js"]))),
+
+    ok.
+
+parallel_generation_test(Config) when is_list(Config) ->
+    {test_output_dir, OutputDir} = proplists:lookup(test_output_dir, Config),
+
+    StaticConfig = #{
+        route_paths => #{
+            % Sequential generation
+            ~"/" => #{},
+            ~"/about" => #{parallel => false},
+            % Parallel generation
+            ~"/post/hello-world" => #{parallel => true},
+            ~"/post/arizona-static" => #{parallel => true}
+        },
+        output_dir => list_to_binary(OutputDir)
+    },
+
+    ?assertEqual(ok, arizona_static:generate(StaticConfig)),
+
+    % Check all files were generated
+    ?assert(filelib:is_file(filename:join(OutputDir, "index.html"))),
+    ?assert(filelib:is_file(filename:join(OutputDir, "about.html"))),
+    ?assert(filelib:is_file(filename:join([OutputDir, "post", "hello-world.html"]))),
+    ?assert(filelib:is_file(filename:join([OutputDir, "post", "arizona-static.html"]))),
 
     ok.
 
@@ -406,7 +442,7 @@ file_permission_error_test(Config) when is_list(Config) ->
     ok = file:change_mode(ReadOnlyDir, 8#444),
 
     StaticConfig = #{
-        route_paths => [~"/"],
+        route_paths => #{~"/" => #{}},
         output_dir => list_to_binary(ReadOnlyDir)
     },
 
@@ -427,16 +463,16 @@ html_only_in_sitemap_test(Config) when is_list(Config) ->
     {test_output_dir, OutputDir} = proplists:lookup(test_output_dir, Config),
 
     StaticConfig = #{
-        route_paths => [
+        route_paths => #{
             % HTML - should be in sitemap
-            ~"/",
+            ~"/" => #{},
             % HTML - should be in sitemap
-            ~"/about",
+            ~"/about" => #{},
             % CSS - should NOT be in sitemap
-            ~"/assets/css/style.css",
+            ~"/assets/css/style.css" => #{},
             % JS - should NOT be in sitemap
-            ~"/assets/js/app.js"
-        ],
+            ~"/assets/js/app.js" => #{}
+        },
         output_dir => list_to_binary(OutputDir)
     },
 
@@ -459,7 +495,10 @@ sitemap_xml_structure_test(Config) when is_list(Config) ->
     {test_output_dir, OutputDir} = proplists:lookup(test_output_dir, Config),
 
     StaticConfig = #{
-        route_paths => [~"/", ~"/about"],
+        route_paths => #{
+            ~"/" => #{},
+            ~"/about" => #{}
+        },
         output_dir => list_to_binary(OutputDir)
     },
 
@@ -487,7 +526,7 @@ sitemap_base_url_test(Config) when is_list(Config) ->
     {test_output_dir, OutputDir} = proplists:lookup(test_output_dir, Config),
 
     StaticConfig = #{
-        route_paths => [~"/"],
+        route_paths => #{~"/" => #{}},
         output_dir => list_to_binary(OutputDir),
         base_url => ~"https://mysite.com"
     },
@@ -507,7 +546,7 @@ empty_sitemap_test(Config) when is_list(Config) ->
 
     StaticConfig = #{
         % Only assets, no HTML
-        route_paths => [~"/assets/css/style.css"],
+        route_paths => #{~"/assets/css/style.css" => #{}},
         output_dir => list_to_binary(OutputDir)
     },
 

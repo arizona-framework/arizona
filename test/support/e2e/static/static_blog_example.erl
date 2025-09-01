@@ -9,14 +9,14 @@ generate_site() ->
 
     % Configuration for static site generation
     Config = #{
-        route_paths => [
-            ~"/",
-            ~"/about",
-            ~"/post/hello-world",
-            ~"/post/arizona-static",
-            ~"/assets/js/arizona.min.js",
-            ~"/assets/js/arizona-worker.min.js"
-        ],
+        route_paths => #{
+            ~"/" => #{parallel => true},
+            ~"/about" => #{parallel => true},
+            ~"/post/hello-world" => #{parallel => true},
+            ~"/post/arizona-static" => #{parallel => true},
+            ~"/assets/js/arizona.min.js" => #{parallel => true},
+            ~"/assets/js/arizona-worker.min.js" => #{parallel => true}
+        },
         output_dir => OutputDir
     },
 

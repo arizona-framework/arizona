@@ -24,9 +24,14 @@
 %% --------------------------------------------------------------------
 
 -nominal config() :: #{
-    route_paths := [arizona_server:path()],
+    route_paths := #{arizona_server:path() => route_options()},
     output_dir := binary(),
-    base_url => binary()
+    base_url => binary(),
+    timeout => pos_integer()
+}.
+
+-type route_options() :: #{
+    parallel => boolean()
 }.
 
 -nominal generation_error() ::
@@ -45,7 +50,8 @@ generate(#{route_paths := RoutePaths, output_dir := OutputDir} = Config) ->
     maybe
         ok ?= check_server_running(),
         ok ?= ensure_output_dir(OutputDir),
-        {ok, HtmlPages} ?= generate_pages(RoutePaths, OutputDir),
+        Timeout = maps:get(timeout, Config, 5_000),
+        {ok, HtmlPages} ?= generate_pages(RoutePaths, OutputDir, Timeout),
         ok ?= generate_sitemap(HtmlPages, Config),
         ok
     else
@@ -84,25 +90,50 @@ fetch_page(RoutePath) ->
             {error, {http_request_failed, RoutePath, Reason}}
     end.
 
-generate_pages(RoutePaths, OutputDir) ->
-    case do_generate_pages(RoutePaths, OutputDir) of
-        {error, Reason} ->
-            {error, Reason};
-        HtmlPages ->
-            {ok, HtmlPages}
-    end.
+%% Generate all pages from route paths map
+generate_pages(RouteConfigs, OutputDir, Timeout) ->
+    MainPid = self(),
+    TotalTasks = map_size(RouteConfigs),
 
-%% Generate all pages from route paths
-do_generate_pages([], _OutputDir) ->
-    [];
-do_generate_pages([RoutePath | T], OutputDir) ->
-    case generate_file(RoutePath, OutputDir) of
-        {ok, "text/html" ++ _} ->
-            [RoutePath | do_generate_pages(T, OutputDir)];
-        {ok, _FileType} ->
-            do_generate_pages(T, OutputDir);
-        {error, Reason} ->
+    % Process all routes
+    _ = [
+        case is_parallel_route(Options) of
+            true ->
+                % Spawn parallel worker
+                spawn(fun() ->
+                    Result = generate_file(RoutePath, OutputDir),
+                    MainPid ! {task_complete, RoutePath, Result}
+                end);
+            false ->
+                % Run sequential task in same process, then send message
+                Result = generate_file(RoutePath, OutputDir),
+                self() ! {task_complete, RoutePath, Result}
+        end
+     || RoutePath := Options <- RouteConfigs
+    ],
+
+    % Collect all results
+    collect_task_results(TotalTasks, [], Timeout).
+
+%% Check if route should be processed in parallel
+is_parallel_route(#{parallel := true}) ->
+    true;
+is_parallel_route(_Options) ->
+    false.
+
+%% Collect results from all tasks
+collect_task_results(0, HtmlPages, _Timeout) ->
+    {ok, HtmlPages};
+collect_task_results(Remaining, HtmlPages, Timeout) ->
+    receive
+        {task_complete, RoutePath, {ok, "text/html" ++ _}} ->
+            collect_task_results(Remaining - 1, [RoutePath | HtmlPages], Timeout);
+        {task_complete, _RoutePath, {ok, _FileType}} ->
+            collect_task_results(Remaining - 1, HtmlPages, Timeout);
+        {task_complete, _RoutePath, {error, Reason}} ->
             {error, Reason}
+    after Timeout ->
+        {error, timeout}
     end.
 
 generate_file(RoutePath, OutputDir) ->
