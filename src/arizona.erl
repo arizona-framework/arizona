@@ -6,6 +6,8 @@
 
 -export([start/1]).
 -export([stop/0]).
+-export([get_config/0]).
+-export([get_config/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -13,6 +15,8 @@
 
 -ignore_xref([start/1]).
 -ignore_xref([stop/0]).
+-ignore_xref([get_config/0]).
+-ignore_xref([get_config/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -25,7 +29,7 @@
 %% --------------------------------------------------------------------
 
 -nominal config() :: #{
-    server => arizona_server:server_config(),
+    server => arizona_server:config(),
     reloader => arizona_reloader:config()
 }.
 
@@ -45,6 +49,10 @@ start(Opts) when is_map(Opts) ->
         ReloaderConfig = maps:get(reloader, Opts, #{}),
         ok ?= maybe_start_reloader(ReloaderConfig),
         ok ?= maybe_start_server(ServerConfig),
+        ok = persistent_term:put(arizona_config, #{
+            server => ServerConfig,
+            reloader => ReloaderConfig
+        }),
         ok
     else
         {error, Reason} ->
@@ -54,6 +62,16 @@ start(Opts) when is_map(Opts) ->
 -spec stop() -> ok.
 stop() ->
     arizona_server:stop().
+
+-spec get_config() -> config().
+get_config() ->
+    persistent_term:get(arizona_config).
+
+-spec get_config(Key) -> Config when
+    Key :: server | reloader,
+    Config :: arizona_server:config() | arizona_reloader:config().
+get_config(Key) ->
+    maps:get(Key, get_config()).
 
 %% --------------------------------------------------------------------
 %% Internal functions
