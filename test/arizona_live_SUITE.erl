@@ -54,11 +54,11 @@ init_per_suite(Config) ->
     -compile({parse_transform, arizona_parse_transform}).
     -behaviour(arizona_view).
 
-    -export([mount/1]).
+    -export([mount/2]).
     -export([render/1]).
     -export([handle_event/3]).
 
-    mount(_Req) ->
+    mount(_Arg, _Req) ->
         arizona_view:new('@module', #{
             id => ~"live_test_id",
             counter => 0
@@ -118,10 +118,10 @@ init_per_suite(Config) ->
     -compile({parse_transform, arizona_parse_transform}).
     -behaviour(arizona_view).
 
-    -export([mount/1]).
+    -export([mount/2]).
     -export([render/1]).
 
-    mount(_Req) ->
+    mount(_Arg, _Req) ->
         arizona_view:new('@module', #{
             id => ~"view_with_stateful_id"
         }, none).
@@ -151,11 +151,11 @@ init_per_suite(Config) ->
     -compile({parse_transform, arizona_parse_transform}).
     -behaviour(arizona_view).
 
-    -export([mount/1]).
+    -export([mount/2]).
     -export([render/1]).
     -export([handle_info/2]).
 
-    mount(_Req) ->
+    mount(_Arg, _Req) ->
         arizona_view:new('@module', #{
             id => ~"handle_info_test_id",
             message_count => 0
@@ -239,7 +239,7 @@ mock_request() ->
 init_per_testcase(initial_render_test, Config) ->
     % Start basic live process but don't call initial_render (test will do it)
     {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
-    {ok, Pid} = arizona_live:start_link(MockViewModule, mock_request(), self()),
+    {ok, Pid} = arizona_live:start_link(MockViewModule, #{}, mock_request(), self()),
     [{live_pid, Pid} | Config];
 init_per_testcase(TestcaseName, Config) when
     TestcaseName =:= handle_stateful_event_reply_test;
@@ -250,7 +250,7 @@ init_per_testcase(TestcaseName, Config) when
         mock_view_with_stateful_module, Config
     ),
     MockRequest = mock_request(),
-    {ok, Pid} = arizona_live:start_link(MockViewWithStatefulModule, MockRequest, self()),
+    {ok, Pid} = arizona_live:start_link(MockViewWithStatefulModule, #{}, MockRequest, self()),
     % Initialize with render to create stateful components
     _HierarchicalStructure = arizona_live:initial_render(Pid),
     [{live_pid, Pid} | Config];
@@ -260,7 +260,7 @@ init_per_testcase(handle_info_test, Config) ->
         mock_view_with_handle_info_module, Config
     ),
     MockRequest = mock_request(),
-    {ok, Pid} = arizona_live:start_link(MockViewWithHandleInfoModule, MockRequest, self()),
+    {ok, Pid} = arizona_live:start_link(MockViewWithHandleInfoModule, #{}, MockRequest, self()),
     % Initialize render to set up tracker
     _HierarchicalStructure = arizona_live:initial_render(Pid),
     [{live_pid, Pid} | Config];
@@ -268,7 +268,7 @@ init_per_testcase(_TestcaseName, Config) ->
     % Default: start basic live process and initialize render
     {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
     MockRequest = mock_request(),
-    {ok, Pid} = arizona_live:start_link(MockViewModule, MockRequest, self()),
+    {ok, Pid} = arizona_live:start_link(MockViewModule, #{}, MockRequest, self()),
     % Initialize render to set up tracker
     _HierarchicalStructure = arizona_live:initial_render(Pid),
     [{live_pid, Pid} | Config].
@@ -304,7 +304,7 @@ initial_render_test(Config) when is_list(Config) ->
     ct:comment("Test initial_render API call and hierarchical structure"),
     {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
     MockRequest = mock_request(),
-    {ok, Pid} = arizona_live:start_link(MockViewModule, MockRequest, self()),
+    {ok, Pid} = arizona_live:start_link(MockViewModule, #{}, MockRequest, self()),
     HierarchicalStructure = arizona_live:initial_render(Pid),
 
     ?assertMatch(#{~"live_test_id" := #{static := _, dynamic := _}}, HierarchicalStructure),

@@ -13,26 +13,15 @@
 
 -spec init(CowboyRequest, State) -> {ok, CowboyRequest1, State} when
     CowboyRequest :: cowboy_req:req(),
-    State :: map(),
-    CowboyRequest1 :: cowboy_req:req().
-init(CowboyRequest, State) when is_map(State) ->
-    Handler = maps:get(handler, State),
-    handle_live_request(Handler, CowboyRequest, State).
-
-%% --------------------------------------------------------------------
-%% Internal functions
-%% --------------------------------------------------------------------
-
-%% Handle LiveView requests with complete lifecycle management
--spec handle_live_request(ViewModule, CowboyRequest, State) -> {ok, CowboyRequest1, State} when
+    State :: {ViewModule, MountArg},
     ViewModule :: module(),
-    CowboyRequest :: cowboy_req:req(),
-    State :: map(),
+    MountArg :: dynamic(),
     CowboyRequest1 :: cowboy_req:req().
-handle_live_request(ViewModule, CowboyRequest, State) ->
+init(CowboyRequest, State) ->
     try
+        {ViewModule, MountArg} = State,
         ArizonaRequest = arizona_cowboy_request:new(CowboyRequest),
-        View = arizona_view:call_mount_callback(ViewModule, ArizonaRequest),
+        View = arizona_view:call_mount_callback(ViewModule, MountArg, ArizonaRequest),
         {Html, _RenderView} = render_view(View),
         CowboyRequest1 = cowboy_req:reply(
             200, #{~"content-type" => ~"text/html; charset=utf-8"}, Html, CowboyRequest
@@ -46,6 +35,10 @@ handle_live_request(ViewModule, CowboyRequest, State) ->
             CowboyRequest2 = cowboy_req:reply(500, #{}, iolist_to_binary(ErrorMsg), CowboyRequest),
             {ok, CowboyRequest2, State}
     end.
+
+%% --------------------------------------------------------------------
+%% Internal functions
+%% --------------------------------------------------------------------
 
 render_view(View) ->
     case arizona_view:get_layout(View) of

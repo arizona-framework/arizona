@@ -39,7 +39,7 @@ arizona:start(#{
     server => #{
         transport_opts => [{port, 1912}],
         routes => [
-            {live, ~"/my-view", my_view_module},
+            {live, ~"/my-view", my_view_module, #{mount => arg}},
             {live_websocket, ~"/live/websocket"},
             {static, ~"/assets", {priv_dir, arizona, ~"static/assets"}}
         ]

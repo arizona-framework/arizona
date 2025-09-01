@@ -42,9 +42,9 @@ init_per_suite(Config) ->
     {ok, _Pid} = arizona_server:start(#{
         transport_opts => [{port, ServerPort}],
         routes => [
-            {live, ViewRouteUrl, MockViewModule},
-            {live, ErrorViewRouteUrl, MockErrorViewModule},
-            {live, ViewWithLayoutRouteUrl, MockViewWithLayoutModule}
+            {live, ViewRouteUrl, MockViewModule, #{}},
+            {live, ErrorViewRouteUrl, MockErrorViewModule, #{}},
+            {live, ViewWithLayoutRouteUrl, MockViewWithLayoutModule, #{}}
         ]
     }),
 
@@ -54,10 +54,10 @@ init_per_suite(Config) ->
     -compile({parse_transform, arizona_parse_transform}).
     -behaviour(arizona_view).
 
-    -export([mount/1]).
+    -export([mount/2]).
     -export([render/1]).
 
-    mount(_Req) ->
+    mount(_Arg, _Req) ->
         arizona_view:new('@module', #{
             id => ~"test_id",
             title => ~"Arizona"
@@ -83,10 +83,10 @@ init_per_suite(Config) ->
     -compile({parse_transform, arizona_parse_transform}).
     -behaviour(arizona_view).
 
-    -export([mount/1]).
+    -export([mount/2]).
     -export([render/1]).
 
-    mount(_Req) ->
+    mount(_Arg, _Req) ->
         error('@module').
 
     render(Bindings) ->
@@ -108,10 +108,10 @@ init_per_suite(Config) ->
     -compile({parse_transform, arizona_parse_transform}).
     -behaviour(arizona_view).
 
-    -export([mount/1]).
+    -export([mount/2]).
     -export([render/1]).
 
-    mount(_Req) ->
+    mount(_Arg, _Req) ->
         Layout = {'@layout_module', '@layout_render_fun', '@layout_slot_name', #{
             title => ~"Arizona With Layout"
         }},
