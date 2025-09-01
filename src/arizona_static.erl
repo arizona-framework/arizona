@@ -5,22 +5,16 @@
 %% --------------------------------------------------------------------
 
 -export([generate/1]).
--export([generate_page/2]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
--nominal page() :: #{
-    path := binary(),
-    view := module(),
-    bindings => arizona_binder:map()
-}.
+-nominal page() :: binary().
 
--nominal static_config() :: #{
+-nominal config() :: #{
     pages := [page()],
     output_dir := binary(),
-    assets_dir => binary(),
     base_url => binary()
 }.
 
@@ -29,84 +23,108 @@
 %% --------------------------------------------------------------------
 
 -spec generate(Config) -> ok | {error, Reason} when
-    Config :: static_config(),
+    Config :: config(),
     Reason :: term().
 generate(#{pages := Pages, output_dir := OutputDir} = Config) ->
     maybe
+        ok ?= check_server_running(),
         ok ?= ensure_output_dir(OutputDir),
-        ok ?= maybe_copy_assets(Config),
-        ok ?= generate_pages(Pages, OutputDir),
-        ok ?= generate_sitemap(Pages, Config),
+        {ok, RealPages} ?= generate_pages(Pages, OutputDir),
+        ok ?= generate_sitemap(RealPages, Config),
         ok
     else
         {error, Reason} ->
             {error, Reason}
-    end.
-
--spec generate_page(Page, OutputDir) -> ok | {error, Reason} when
-    Page :: page(),
-    OutputDir :: binary(),
-    Reason :: term().
-generate_page(#{path := Path, view := ViewModule} = Page, OutputDir) ->
-    maybe
-        Bindings = maps:get(bindings, Page, #{}),
-        {ok, Html} ?= render_page_html(ViewModule, Bindings),
-        FilePath = build_file_path(Path, OutputDir),
-        ok ?= ensure_file_dir(FilePath),
-        ok ?= write_html_file(FilePath, Html),
-        ok
-    else
-        {error, Reason} ->
-            {error, {generate_page_failed, Path, Reason}}
     end.
 
 %% --------------------------------------------------------------------
 %% Internal Functions
 %% --------------------------------------------------------------------
 
-%% Render a complete page to HTML string
-render_page_html(ViewModule, Bindings) ->
-    try
-        % Create a mock request for mounting
-        ArizonaRequest = arizona_request:new(?MODULE, undefined, #{
-            bindings => Bindings
-        }),
-
-        % Mount the view (without live functionality)
-        View = arizona_view:call_mount_callback(ViewModule, ArizonaRequest),
-
-        % Render the complete view including layout
-        {Html, _UpdatedView} = arizona_renderer:render_layout(View),
-
-        {ok, Html}
-    catch
-        error:Reason:StackTrace ->
-            {error, {render_failed, ViewModule, Reason, StackTrace}}
+%% Check if server is running
+check_server_running() ->
+    case arizona_server:is_running() of
+        true ->
+            ok;
+        false ->
+            {error, server_not_running}
     end.
 
-%% Generate all pages
-generate_pages([], _OutputDir) ->
-    ok;
-generate_pages([Page | Rest], OutputDir) ->
-    case generate_page(Page, OutputDir) of
-        ok ->
-            generate_pages(Rest, OutputDir);
+%% Render a complete page to HTML string
+render_file(Page) ->
+    maybe
+        ok ?= application:ensure_started(inets),
+        ServerConfig = arizona:get_config(server),
+        Scheme = atom_to_binary(maps:get(scheme, ServerConfig)),
+        {ok, IpAddress, Port} = arizona_server:get_address(),
+        Address = inet:ntoa(IpAddress),
+        Url = io_lib:format("~s://~s:~p~s", [Scheme, Address, Port, Page]),
+        {ok, {{_HttpVersion, 200, "OK"}, Headers, Body}} ?=
+            httpc:request(get, {Url, []}, [], [{body_format, binary}]),
+        ContentType = proplists:get_value("content-type", Headers),
+        {ok, ContentType, Body}
+    else
         {error, Reason} ->
             {error, Reason}
     end.
 
+generate_pages(Pages, OutputDir) ->
+    case do_generate_pages(Pages, OutputDir) of
+        {error, Reason} ->
+            {error, Reason};
+        RealPages ->
+            {ok, RealPages}
+    end.
+
+%% Generate all pages
+do_generate_pages([], _OutputDir) ->
+    [];
+do_generate_pages([Page | T], OutputDir) ->
+    case generate_file(Page, OutputDir) of
+        {ok, "text/html" ++ _} ->
+            [Page | do_generate_pages(T, OutputDir)];
+        {ok, _FileType} ->
+            do_generate_pages(T, OutputDir);
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+generate_file(Url, OutputDir) ->
+    maybe
+        {ok, Type, Content} ?= render_file(Url),
+        FilePath = build_file_path(Url, OutputDir),
+        ok ?= ensure_file_dir(FilePath),
+        ok ?= write_file(FilePath, Content),
+        {ok, Type}
+    else
+        {error, Reason} ->
+            {error, {generate_page_failed, Url, Reason}}
+    end.
+
 %% Build file path from route path
-build_file_path(<<"/", _/binary>> = Path, OutputDir) ->
+build_file_path(<<"/", Path/binary>>, OutputDir) ->
     % Remove leading slash and add .html extension
-    CleanPath = binary:part(Path, 1, byte_size(Path) - 1),
-    case CleanPath of
+    case Path of
         <<>> ->
-            filename:join(OutputDir, ~"index.html");
+            add_html_extension(~"index", OutputDir);
         _ ->
-            filename:join(OutputDir, <<CleanPath/binary, ".html">>)
-    end;
-build_file_path(Path, OutputDir) ->
-    filename:join(OutputDir, <<Path/binary, ".html">>).
+            add_extension(Path, OutputDir)
+    end.
+
+add_extension(Filename, OutputDir) ->
+    case filename:extension(Filename) of
+        <<>> ->
+            add_html_extension(Filename, OutputDir);
+        _ ->
+            filename:join(OutputDir, Filename)
+    end.
+
+add_html_extension(Filename, OutputDir) ->
+    add_extension(Filename, ~".html", OutputDir).
+
+%%  Add .html extension and join output dir
+add_extension(Filename, Extension, OutputDir) ->
+    filename:join(OutputDir, <<Filename/binary, Extension/binary>>).
 
 %% Ensure output directory exists
 ensure_output_dir(OutputDir) ->
@@ -124,49 +142,10 @@ ensure_file_dir(FilePath) ->
     end.
 
 %% Write HTML content to file
-write_html_file(FilePath, Html) ->
+write_file(FilePath, Html) ->
     case file:write_file(FilePath, Html) of
         ok -> ok;
         {error, Reason} -> {error, {write_file_failed, FilePath, Reason}}
-    end.
-
-%% Copy assets if specified
-maybe_copy_assets(#{assets_dir := AssetsDir, output_dir := OutputDir}) ->
-    TargetDir = filename:join(OutputDir, ~"assets"),
-    copy_directory(AssetsDir, TargetDir);
-maybe_copy_assets(_Config) ->
-    ok.
-
-%% Simple directory copy (recursive)
-copy_directory(SourceDir, TargetDir) ->
-    case filelib:ensure_dir(filename:join(TargetDir, "dummy")) of
-        ok ->
-            case file:list_dir(SourceDir) of
-                {ok, Files} ->
-                    copy_files(Files, SourceDir, TargetDir);
-                {error, Reason} ->
-                    {error, {copy_assets_failed, Reason}}
-            end;
-        {error, Reason} ->
-            {error, {create_assets_dir_failed, Reason}}
-    end.
-
-copy_files([], _SourceDir, _TargetDir) ->
-    ok;
-copy_files([File | Rest], SourceDir, TargetDir) ->
-    SourcePath = filename:join(SourceDir, File),
-    TargetPath = filename:join(TargetDir, File),
-    case filelib:is_dir(SourcePath) of
-        true ->
-            case copy_directory(SourcePath, TargetPath) of
-                ok -> copy_files(Rest, SourceDir, TargetDir);
-                Error -> Error
-            end;
-        false ->
-            case file:copy(SourcePath, TargetPath) of
-                {ok, _} -> copy_files(Rest, SourceDir, TargetDir);
-                {error, Reason} -> {error, {copy_file_failed, File, Reason}}
-            end
     end.
 
 %% Generate sitemap.xml
@@ -180,7 +159,7 @@ generate_sitemap(Pages, #{output_dir := OutputDir} = Config) ->
     end.
 
 build_sitemap_xml(Pages, BaseUrl) ->
-    Urls = [build_sitemap_url(Page, BaseUrl) || Page <- Pages],
+    Urls = [build_sitemap_url(Url, BaseUrl) || Url <- Pages],
     [
         ~"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
         ~"<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
@@ -188,8 +167,8 @@ build_sitemap_xml(Pages, BaseUrl) ->
         ~"</urlset>\n"
     ].
 
-build_sitemap_url(#{path := Path}, BaseUrl) ->
-    Url = <<BaseUrl/binary, Path/binary>>,
+build_sitemap_url(PageUrl, BaseUrl) ->
+    Url = <<BaseUrl/binary, PageUrl/binary>>,
     [
         ~"  <url>\n",
         ~"    <loc>",

@@ -36,10 +36,7 @@ render(Bindings) ->
                        {Label}
                    </a>
                    """)
-                end, [
-                   {~"/", ~"home", ~"Home"},
-                   {~"/about", ~"about", ~"About"}
-                ])
+                end, links())
             }
         </nav>
         <main>
@@ -51,3 +48,11 @@ render(Bindings) ->
     </body>
     </html>
     """").
+
+% Internal functions
+
+links() ->
+    [
+        {~"/", ~"home", ~"Home"},
+        {~"/about", ~"about", ~"About"}
+    ].

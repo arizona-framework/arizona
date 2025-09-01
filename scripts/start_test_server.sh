@@ -32,6 +32,17 @@ Routes = [
     {view, ~\"/modal\", arizona_modal_view, #{}},
     {view, ~\"/\", blog_home_view, #{title => ~\"My Arizona Blog\"}},
     {view, ~\"/about\", blog_about_view, #{title => ~\"About Me\"}},
+    % In a real implementation, you might load post data from files or database
+    {view, ~\"/post/:post_id\", blog_post_view, #{
+        ~\"hello-world\" => #{
+            title => ~\"Hello World\",
+            content => ~\"Welcome to my first blog post!\"
+        },
+        ~\"arizona-static\" => #{
+            title => ~\"Arizona Static Site Generation\",
+            content => ~\"How to build static sites with Arizona framework.\"
+        }
+    }},
     {websocket, ~\"/live\"},
     {asset, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}}
 ],

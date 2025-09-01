@@ -1,21 +1,25 @@
 -module(blog_post_view).
 -behaviour(arizona_view).
 -compile({parse_transform, arizona_parse_transform}).
--export([mount/1, render/1]).
+-export([mount/2, render/1]).
 
-mount(Req) ->
-    {ReqBindings, _Req} = arizona_request:get_bindings(Req),
-    % In a real implementation, you might load post data from files or database
-    Bindings = ReqBindings#{
-        id => ~"post"
-        % title, post_id, content will be provided via static config bindings
-    },
-    Layout =
-        {blog_layout, render, main_content, #{
-            page_title => arizona_template:get_binding(title, Bindings),
-            nav_active => ~"blog"
-        }},
-    arizona_view:new(?MODULE, Bindings, Layout).
+mount(Posts, Req) ->
+    {ReqBindings, _UpdatedReq} = arizona_request:get_bindings(Req),
+    PostId = maps:get(post_id, ReqBindings),
+    case Posts of
+        #{PostId := Post} ->
+            Bindings = Post#{
+                id => ~"post"
+            },
+            Layout =
+                {blog_layout, render, main_content, #{
+                    page_title => arizona_template:get_binding(title, Post),
+                    nav_active => ~"blog"
+                }},
+            arizona_view:new(?MODULE, Bindings, Layout);
+        #{} ->
+            error({404, PostId})
+    end.
 
 render(Bindings) ->
     arizona_template:from_string(~""""
