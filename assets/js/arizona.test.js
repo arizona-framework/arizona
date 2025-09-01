@@ -50,7 +50,7 @@ describe('ArizonaClient', () => {
       const postedMessage = client.worker.getLastPostedMessage();
       expect(postedMessage).toEqual({
         type: 'connect',
-        data: { url: 'ws://localhost:3000/live/websocket?path=%2Fusers&qs=' },
+        data: { url: 'ws://localhost:3000/live?path=%2Fusers&qs=' },
       });
     });
 
@@ -66,7 +66,7 @@ describe('ArizonaClient', () => {
       client.connect();
 
       const postedMessage = client.worker.getLastPostedMessage();
-      expect(postedMessage.data.url).toBe('wss://localhost:3000/live/websocket?path=%2Fusers&qs=');
+      expect(postedMessage.data.url).toBe('wss://localhost:3000/live?path=%2Fusers&qs=');
 
       // Reset for other tests
       window.location.protocol = 'http:';
@@ -225,8 +225,12 @@ describe('ArizonaClient', () => {
       client.sendEventTo('stateful_comp', 'component_action', { data: 'component_level' });
 
       const messages = client.worker.getAllPostedMessages();
-      const viewMessage = messages.find((msg) => msg.data.event === 'page_action');
-      const statefulMessage = messages.find((msg) => msg.data.event === 'component_action');
+      const viewMessage = messages.find((msg) => {
+        return msg.data.event === 'page_action';
+      });
+      const statefulMessage = messages.find((msg) => {
+        return msg.data.event === 'component_action';
+      });
 
       expect(viewMessage.data).not.toHaveProperty('stateful_id');
       expect(statefulMessage.data).toHaveProperty('stateful_id', 'stateful_comp');

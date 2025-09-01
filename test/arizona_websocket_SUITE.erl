@@ -52,8 +52,8 @@ init_per_suite(Config) ->
     {ok, _Pid} = arizona_server:start(#{
         transport_opts => [{port, ServerPort}],
         routes => [
-            {live, ViewWithLayoutRouteUrl, MockViewWithLayoutModule, #{}},
-            {live_websocket, WebSocketRouteUrl}
+            {view, ViewWithLayoutRouteUrl, MockViewWithLayoutModule, #{}},
+            {websocket, WebSocketRouteUrl}
         ]
     }),
 

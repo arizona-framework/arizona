@@ -14,7 +14,7 @@ export default class ArizonaClient {
   connect(opts = {}) {
     if (this.connected) return;
 
-    const wsPath = opts.wsPath || '/live/websocket';
+    const wsPath = opts.wsPath || '/live';
     const workerPath = opts.workerPath || '/assets/js/arizona-worker.min.js';
 
     this.worker = new Worker(workerPath, { type: 'module' });

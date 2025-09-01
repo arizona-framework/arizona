@@ -7,6 +7,8 @@
 -export([start/1]).
 -export([stop/0]).
 -export([get_handler_opts/1]).
+-export([is_running/0]).
+-export([get_address/0]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -20,7 +22,7 @@
 %% --------------------------------------------------------------------
 
 -export_type([route/0]).
--export_type([server_config/0]).
+-export_type([config/0]).
 -export_type([scheme/0]).
 -export_type([transport_opts/0]).
 -export_type([proto_opts/0]).
@@ -30,14 +32,14 @@
 %% --------------------------------------------------------------------
 
 -nominal route() ::
-    {live, Path :: binary(), ViewModule :: module(), MountArg :: dynamic()}
-    | {live_websocket, Path :: binary()}
-    | {static, Path :: binary(), {dir, Directory :: binary()}}
-    | {static, Path :: binary(), {file, FileName :: binary()}}
-    | {static, Path :: binary(), {priv_dir, App :: atom(), Directory :: binary()}}
-    | {static, Path :: binary(), {priv_file, App :: atom(), FileName :: binary()}}.
+    {view, Path :: binary(), ViewModule :: module(), MountArg :: dynamic()}
+    | {websocket, Path :: binary()}
+    | {asset, Path :: binary(), {dir, Directory :: binary()}}
+    | {asset, Path :: binary(), {file, FileName :: binary()}}
+    | {asset, Path :: binary(), {priv_dir, App :: atom(), Directory :: binary()}}
+    | {asset, Path :: binary(), {priv_file, App :: atom(), FileName :: binary()}}.
 
--nominal server_config() :: #{
+-nominal config() :: #{
     enabled => boolean(),
     scheme => scheme(),
     transport_opts => transport_opts(),
@@ -53,12 +55,12 @@
 %% --------------------------------------------------------------------
 
 -spec start(Config) -> Result when
-    Config :: server_config(),
+    Config :: config(),
     Result :: {ok, pid()} | {error, term()}.
 start(Config) when is_map(Config) ->
     % Compile routes
     Dispatch = compile_routes(maps:get(routes, Config)),
-    ok = persistent_term:put(get_dispatch(), Dispatch),
+    ok = persistent_term:put(get_dispatch_key(), Dispatch),
 
     % Get transport and protocol options
     DefaultPort = 1912,
@@ -67,12 +69,12 @@ start(Config) when is_map(Config) ->
 
     % Start listener based on scheme
     Scheme = maps:get(scheme, Config, http),
-    Ref = get_listener(),
+    Ref = get_listener_key(),
     start_listener(Scheme, Ref, TransportOpts, ProtoOpts).
 
 -spec stop() -> ok.
 stop() ->
-    ok = cowboy:stop_listener(get_listener()),
+    ok = cowboy:stop_listener(get_listener_key()),
     ok.
 
 -spec get_handler_opts(Req) -> Opts when
@@ -81,17 +83,32 @@ stop() ->
 get_handler_opts(Req) ->
     {ok, _Req, Env} = cowboy_router:execute(
         Req,
-        #{dispatch => {persistent_term, get_dispatch()}}
+        #{dispatch => {persistent_term, get_dispatch_key()}}
     ),
     maps:get(handler_opts, Env).
+
+-spec is_running() -> boolean().
+is_running() ->
+    ranch:get_status(get_listener_key()) =:= running.
+
+-spec get_address() -> {ok, IpAddress, Port} | error when
+    IpAddress :: inet:ip_address(),
+    Port :: inet:port_number().
+get_address() ->
+    case ranch:get_addr(arizona_listener) of
+        {IpAddress, Port} when is_tuple(IpAddress), is_integer(Port) ->
+            {ok, IpAddress, Port};
+        {undefined, undefined} ->
+            error
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
-get_dispatch() -> arizona_dispatch.
+get_dispatch_key() -> arizona_dispatch.
 
-get_listener() -> arizona_listener.
+get_listener_key() -> arizona_listener.
 
 compile_routes(Routes) ->
     % Convert Arizona routes to Cowboy routes
@@ -107,26 +124,26 @@ compile_routes(Routes) ->
 -spec route_to_cowboy(Route) -> CowboyRoute when
     Route :: route(),
     CowboyRoute :: {'_' | iodata(), module(), term()}.
-route_to_cowboy({live, Path, ViewModule, MountArg}) when is_binary(Path), is_atom(ViewModule) ->
-    % LiveView routes use arizona_handler
+route_to_cowboy({view, Path, ViewModule, MountArg}) when is_binary(Path), is_atom(ViewModule) ->
+    % View routes use arizona_handler
     {Path, arizona_handler, {ViewModule, MountArg}};
-route_to_cowboy({live_websocket, Path}) when is_binary(Path) ->
-    % WebSocket endpoint for all LiveView connections
+route_to_cowboy({websocket, Path}) when is_binary(Path) ->
+    % WebSocket endpoint for all View connections
     {Path, arizona_websocket, undefined};
-route_to_cowboy({static, Path, {dir, Directory}}) when is_binary(Path), is_binary(Directory) ->
+route_to_cowboy({asset, Path, {dir, Directory}}) when is_binary(Path), is_binary(Directory) ->
     % Static file serving from filesystem directory
     DirPath = filename:join(Path, "[...]"),
     {DirPath, cowboy_static, {dir, Directory}};
-route_to_cowboy({static, Path, {file, FileName}}) when is_binary(Path), is_binary(FileName) ->
+route_to_cowboy({asset, Path, {file, FileName}}) when is_binary(Path), is_binary(FileName) ->
     % Static file serving for single file from priv directory
     {Path, cowboy_static, {file, FileName}};
-route_to_cowboy({static, Path, {priv_dir, App, Directory}}) when
+route_to_cowboy({asset, Path, {priv_dir, App, Directory}}) when
     is_binary(Path), is_atom(App), is_binary(Directory)
 ->
     % Static file serving from priv directory
     DirPath = filename:join(Path, "[...]"),
     {DirPath, cowboy_static, {priv_dir, App, Directory}};
-route_to_cowboy({static, Path, {priv_file, App, FileName}}) when
+route_to_cowboy({asset, Path, {priv_file, App, FileName}}) when
     is_binary(Path), is_atom(App), is_binary(FileName)
 ->
     % Static file serving for single file from priv directory
@@ -176,7 +193,7 @@ get_proto_opts(Config) ->
     end,
 
     % Arizona always controls dispatch
-    ArizonaEnv = UserEnv#{dispatch => {persistent_term, get_dispatch()}},
+    ArizonaEnv = UserEnv#{dispatch => {persistent_term, get_dispatch_key()}},
     UserProtoOpts#{env => ArizonaEnv}.
 
 %% Start listener based on scheme
