@@ -93,5 +93,8 @@ export default defineConfig({
     stdout: 'pipe',
     stderr: 'pipe',
     timeout: 30000,
+    env: {
+      ERLANG_EXTRA_ARGS: '-noshell',
+    },
   },
 });

@@ -42,9 +42,9 @@ init_per_suite(Config) ->
     {ok, _Pid} = arizona_server:start(#{
         transport_opts => [{port, ServerPort}],
         routes => [
-            {live, ViewRouteUrl, MockViewModule, #{}},
-            {live, ErrorViewRouteUrl, MockErrorViewModule, #{}},
-            {live, ViewWithLayoutRouteUrl, MockViewWithLayoutModule, #{}}
+            {view, ViewRouteUrl, MockViewModule, #{}},
+            {view, ErrorViewRouteUrl, MockErrorViewModule, #{}},
+            {view, ViewWithLayoutRouteUrl, MockViewWithLayoutModule, #{}}
         ]
     }),
 

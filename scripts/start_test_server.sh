@@ -21,16 +21,30 @@ exec erl \
     -pa "_build/test/lib/ranch/ebin" \
     -sname arizona \
     -setcookie framework \
-    -noshell -eval "
+    ${ERLANG_EXTRA_ARGS} \
+    -eval "
 {ok, _} = application:ensure_all_started(arizona),
 Routes = [
-    {live, ~\"/realtime\", arizona_realtime_view, #{}},
-    {live, ~\"/counter\", arizona_counter_view, #{}},
-    {live, ~\"/todo\", arizona_todo_app_view, #{}},
-    {live, ~\"/datagrid\", arizona_datagrid_view, #{}},
-    {live, ~\"/modal\", arizona_modal_view, #{}},
-    {live_websocket, ~\"/live/websocket\"},
-    {static, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}}
+    {view, ~\"/realtime\", arizona_realtime_view, #{}},
+    {view, ~\"/counter\", arizona_counter_view, #{}},
+    {view, ~\"/todo\", arizona_todo_app_view, #{}},
+    {view, ~\"/datagrid\", arizona_datagrid_view, #{}},
+    {view, ~\"/modal\", arizona_modal_view, #{}},
+    {view, ~\"/\", blog_home_view, #{title => ~\"My Arizona Blog\"}},
+    {view, ~\"/about\", blog_about_view, #{title => ~\"About Me\"}},
+    % In a real implementation, you might load post data from files or database
+    {view, ~\"/post/:post_id\", blog_post_view, #{
+        ~\"hello-world\" => #{
+            title => ~\"Hello World\",
+            content => ~\"Welcome to my first blog post!\"
+        },
+        ~\"arizona-static\" => #{
+            title => ~\"Arizona Static Site Generation\",
+            content => ~\"How to build static sites with Arizona framework.\"
+        }
+    }},
+    {websocket, ~\"/live\"},
+    {asset, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}}
 ],
 {ok, _ClockPid} = arizona_clock_server:start_link(),
 case arizona:start(#{
