@@ -1,4 +1,53 @@
 -module(arizona_request).
+-moduledoc ~"""
+HTTP request abstraction with adapter pattern for different web servers.
+
+Provides a unified interface for HTTP requests across different web server
+adapters (Cowboy, etc.). Features lazy-loading of request data and caching
+to avoid re-parsing. Uses adapter behavior pattern for pluggable web server support.
+
+## Adapter Pattern
+
+Web server adapters implement the behavior callbacks:
+- `parse_bindings/1` - Extract path bindings from routes
+- `parse_params/1` - Parse query string parameters
+- `parse_cookies/1` - Parse HTTP cookies
+- `parse_headers/1` - Parse HTTP headers
+- `read_body/1` - Read and return request body
+
+## Lazy Loading
+
+Request data is parsed on-demand and cached:
+1. Initial request contains only basic info (method, path)
+2. First access triggers adapter parsing via callbacks
+3. Subsequent accesses return cached data
+4. Returns updated request with cached data
+
+## Example Usage
+
+```erlang
+%% Create request via adapter (e.g., arizona_cowboy_request)
+Request = arizona_cowboy_request:new(CowboyReq),
+
+%% Access request data (lazy-loaded and cached)
+Method = arizona_request:get_method(Request),
+Path = arizona_request:get_path(Request),
+{Bindings, Request1} = arizona_request:get_bindings(Request),
+{Params, Request2} = arizona_request:get_params(Request1),
+{Body, Request3} = arizona_request:get_body(Request2).
+```
+
+## Adapter Implementation Example
+
+```erlang
+-module(my_server_request).
+-behaviour(arizona_request).
+
+parse_bindings(RawRequest) ->
+    %% Extract path bindings from your server's request format
+    #{user_id => ~"123", action => ~"edit"}.
+```
+""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -99,6 +148,13 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Creates a new request with adapter and options.
+
+Initializes request with adapter module, raw request object, and
+optional pre-computed values. Used by adapter modules to create
+request instances.
+""".
 -spec new(Adapter, RawRequest, Opts) -> Request when
     Adapter :: adapter(),
     RawRequest :: raw_request(),
@@ -117,18 +173,34 @@ new(Adapter, RawRequest, Opts) when is_atom(Adapter), is_map(Opts) ->
         body = maps:get(body, Opts, undefined)
     }.
 
+-doc ~"""
+Returns the HTTP method.
+
+Gets the HTTP method (GET, POST, PUT, DELETE, etc.) as a binary.
+""".
 -spec get_method(Request) -> Method when
     Request :: request(),
     Method :: method().
 get_method(#request{method = Method}) ->
     Method.
 
+-doc ~"""
+Returns the request path.
+
+Gets the URL path (e.g., `~"/users/123/edit"`) as a binary.
+""".
 -spec get_path(Request) -> Path when
     Request :: request(),
     Path :: path().
 get_path(#request{path = Path}) ->
     Path.
 
+-doc ~"""
+Gets path bindings with lazy loading.
+
+Returns route path bindings (e.g., from `"/users/:id"` routes).
+Lazy-loads via adapter on first access, caches for subsequent calls.
+""".
 -spec get_bindings(Request) -> {Bindings, Request1} when
     Request :: request(),
     Bindings :: bindings(),
@@ -142,6 +214,12 @@ get_bindings(#request{bindings = undefined} = Request) ->
 get_bindings(#request{bindings = Bindings} = Request) ->
     {Bindings, Request}.
 
+-doc ~"""
+Gets query parameters with lazy loading.
+
+Returns parsed query string parameters as key-value pairs.
+Lazy-loads via adapter on first access, caches for subsequent calls.
+""".
 -spec get_params(Request) -> {Params, Request1} when
     Request :: request(),
     Params :: params(),
@@ -155,6 +233,12 @@ get_params(#request{params = undefined} = Request) ->
 get_params(#request{params = Params} = Request) ->
     {Params, Request}.
 
+-doc ~"""
+Gets HTTP cookies with lazy loading.
+
+Returns parsed HTTP cookies as key-value pairs.
+Lazy-loads via adapter on first access, caches for subsequent calls.
+""".
 -spec get_cookies(Request) -> {Cookies, Request1} when
     Request :: request(),
     Cookies :: cookies(),
@@ -168,6 +252,12 @@ get_cookies(#request{cookies = undefined} = Request) ->
 get_cookies(#request{cookies = Cookies} = Request) ->
     {Cookies, Request}.
 
+-doc ~"""
+Gets HTTP headers with lazy loading.
+
+Returns HTTP headers as a map of header names to values.
+Lazy-loads via adapter on first access, caches for subsequent calls.
+""".
 -spec get_headers(Request) -> {Headers, Request1} when
     Request :: request(),
     Headers :: headers(),
@@ -181,6 +271,13 @@ get_headers(#request{headers = undefined} = Request) ->
 get_headers(#request{headers = Headers} = Request) ->
     {Headers, Request}.
 
+-doc ~"""
+Gets request body with lazy loading.
+
+Returns the complete request body as binary. May update the
+raw request object during reading (streaming protocols).
+Lazy-loads via adapter on first access, caches for subsequent calls.
+""".
 -spec get_body(Request) -> {Body, Request1} when
     Request :: request(),
     Body :: body(),
@@ -194,6 +291,12 @@ get_body(#request{body = undefined} = Request) ->
 get_body(#request{body = Body} = Request) ->
     {Body, Request}.
 
+-doc ~"""
+Returns the underlying raw request object.
+
+Provides access to the original web server's request object
+for adapter implementations or advanced usage.
+""".
 -spec get_raw_request(Request) -> RawRequest when
     Request :: request(),
     RawRequest :: raw_request().
