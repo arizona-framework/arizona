@@ -1,4 +1,53 @@
 -module(arizona_websocket).
+-moduledoc ~"""
+Cowboy WebSocket handler providing WebSocket transport for Arizona framework.
+
+Implements the `cowboy_websocket` behavior to provide real-time bidirectional
+communication between clients and Arizona live processes. Handles WebSocket
+upgrade, message routing, JSON serialization, and error management.
+
+## Message Protocol
+
+JSON messages with `type` field for routing:
+
+### Client to Server
+- `{"type": "event", "stateful_id": "comp1", "event": "click", "params": {}}`
+- `{"type": "ping"}`
+
+### Server to Client
+- `{"type": "initial_render", "stateful_id": "view1", "structure": {...}}`
+- `{"type": "diff", "stateful_id": "comp1", "changes": [...]}`
+- `{"type": "reply", "data": {...}}`
+- `{"type": "pong"}`
+- `{"type": "reload"}` (development)
+- `{"type": "error", "message": "..."}`
+
+## Connection Lifecycle
+
+1. HTTP request upgraded to WebSocket via `init/2`
+2. WebSocket initialized with `websocket_init/1`
+3. Live process started and initial render sent
+4. Bidirectional message handling begins
+5. Live reload subscription for development
+
+## Error Handling
+
+All message processing errors are caught and converted to error messages
+sent back to the client, preventing WebSocket disconnection.
+
+## Example Usage
+
+```javascript
+// Client-side WebSocket connection
+const ws = new WebSocket('ws://localhost:4000/live?path=/users&qs=');
+ws.send(JSON.stringify({
+  type: 'event',
+  stateful_id: 'button1',
+  event: 'click',
+  params: {}
+}));
+```
+""".
 -behaviour(cowboy_websocket).
 
 %% --------------------------------------------------------------------
@@ -32,6 +81,12 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Initializes WebSocket upgrade from HTTP request.
+
+Extracts path and query string parameters, resolves the view module
+and mount arguments, and prepares data for WebSocket initialization.
+""".
 -spec init(Req, State) -> {cowboy_websocket, Req, {ViewModule, MountArg, ArizonaReq}} when
     Req :: cowboy_req:req(),
     State :: undefined,
@@ -52,6 +107,12 @@ init(CowboyRequest, undefined) ->
     ArizonaRequest = arizona_cowboy_request:new(LiveRequest),
     {cowboy_websocket, CowboyRequest, {ViewModule, MountArg, ArizonaRequest}}.
 
+-doc ~"""
+Initializes WebSocket connection and starts live process.
+
+Starts `arizona_live` process, subscribes to live reload (development),
+performs initial render, and sends initial hierarchical structure to client.
+""".
 -spec websocket_init(InitData) -> Result when
     InitData :: {ViewModule, MountArg, ArizonaRequest},
     ViewModule :: module(),
@@ -80,6 +141,12 @@ websocket_init({ViewModule, MountArg, ArizonaRequest}) ->
 
     {[{text, InitialPayload}], State}.
 
+-doc ~"""
+Handles WebSocket messages from client.
+
+Parses JSON messages and routes them based on type. Handles DOM events,
+ping messages, and unknown message types with proper error handling.
+""".
 -spec websocket_handle(Message, State) -> Result when
     Message :: {text, binary()},
     State :: state(),
@@ -94,6 +161,13 @@ websocket_handle({text, JSONBinary}, State) ->
             handle_websocket_error(Error, Reason, Stacktrace, State)
     end.
 
+-doc ~"""
+Handles Erlang messages from live process and other sources.
+
+Processes differential updates, event replies, and live reload messages
+from the associated `arizona_live` process, converting them to WebSocket
+messages for the client.
+""".
 -spec websocket_info(Info, State) -> Result when
     Info :: term(),
     State :: state(),
