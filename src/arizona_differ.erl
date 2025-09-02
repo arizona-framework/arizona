@@ -1,4 +1,32 @@
 -module(arizona_differ).
+-moduledoc ~"""
+Differential update engine for real-time WebSocket updates.
+
+Generates minimal diff patches by comparing current component state with
+previous renders, enabling efficient DOM updates in the browser via WebSocket.
+Only changed dynamic parts are included in the diff.
+
+## Diff Process
+
+1. Check template fingerprints to detect structural changes
+2. Track variable dependencies to identify affected elements
+3. Generate diffs only for changed dynamic parts
+4. Fall back to full hierarchical rendering when templates change
+
+## Diff Types
+
+- `nodiff` - No changes detected, no update needed
+- `diff/0` - List of element index and updated content pairs
+- `arizona_hierarchical:hierarchical_structure/0` - Full re-render when template changed
+
+## Example
+
+```erlang
+1> {Diff, View1} = arizona_differ:diff_view(View).
+{[{2, ~"New Content"}], UpdatedView}  % Only element 2 changed
+```
+""".
+
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -31,6 +59,12 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Generates differential updates for a view component.
+
+Extracts the view's stateful state, calls the render callback to get
+a template, and generates a diff based on changed variable bindings.
+""".
 -spec diff_view(View) -> {Diff, View1} when
     View :: arizona_view:view(),
     Diff :: diff(),
@@ -42,6 +76,13 @@ diff_view(View) ->
     {Diff, DiffState, DiffView} = track_diff_stateful(Id, Template, StatefulState, View),
     {Diff, arizona_view:update_state(DiffState, DiffView)}.
 
+-doc ~"""
+Generates differential updates for a stateful component.
+
+Checks template fingerprint for structural changes. If template matches,
+generates a diff of changed elements. If fingerprint changed, falls back
+to full hierarchical rendering.
+""".
 -spec diff_stateful(Module, Bindings, ParentId, ElementIndex, View) -> {Result, View1} when
     Module :: module(),
     Bindings :: arizona_binder:map(),
@@ -75,6 +116,12 @@ diff_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
             )
     end.
 
+-doc ~"""
+Generates differential updates for a root stateful component.
+
+Similar to `diff_stateful/5` but used for root-level components without
+a parent context. Always generates a diff without fingerprint checking.
+""".
 -spec diff_root_stateful(Module, Bindings, View) -> {Diff, View1} when
     Module :: module(),
     Bindings :: arizona_binder:map(),
@@ -88,6 +135,12 @@ diff_root_stateful(Module, Bindings, View) ->
     StatefulView = arizona_view:put_stateful_state(Id, DiffState, DiffView),
     {Diff, StatefulView}.
 
+-doc ~"""
+Generates differential updates for a stateless component.
+
+Calls the stateless component's render function to get a template,
+then delegates to `diff_template/4` for the actual diff generation.
+""".
 -spec diff_stateless(Module, Function, Bindings, ParentId, ElementIndex, View) ->
     {Result, View1}
 when
@@ -103,6 +156,13 @@ diff_stateless(Module, Function, Bindings, ParentId, ElementIndex, View) ->
     Template = arizona_stateless:call_render_callback(Module, Function, Bindings),
     diff_template(Template, ParentId, ElementIndex, View).
 
+-doc ~"""
+Generates differential updates for list rendering.
+
+Checks template fingerprint and renders each list item with the template's
+dynamic callback. Falls back to `t:arizona_hierarchical:list_struct/0` rendering
+if template changed.
+""".
 -spec diff_list(Template, List, ParentId, ElementIndex, View) -> {Result, View1} when
     Template :: arizona_template:template(),
     List :: [dynamic()],
@@ -126,6 +186,13 @@ diff_list(Template, List, ParentId, ElementIndex, View) ->
             arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
     end.
 
+-doc ~"""
+Generates differential updates for a template.
+
+Checks template fingerprint and processes affected dynamic elements.
+Returns `nodiff` if no elements changed, `diff/0` if elements updated,
+or `t:arizona_hierarchical:stateless_struct/0` if template changed.
+""".
 -spec diff_template(Template, ParentId, ElementIndex, View) -> {Result, View1} when
     Template :: arizona_template:template(),
     ParentId :: arizona_stateful:id(),
