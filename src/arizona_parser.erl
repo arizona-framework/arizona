@@ -1,4 +1,27 @@
 -module(arizona_parser).
+-moduledoc ~"""
+Template parsing for Arizona templates.
+
+Converts tokenized templates into Erlang AST for compile-time optimization.
+Transforms tokens from the scanner into compiled template representations
+that generate efficient runtime code.
+
+## Process
+
+1. Separates tokens into static HTML and dynamic Erlang expressions
+2. Creates AST that builds `arizona_template` records at compile time
+3. Generates callback functions for dynamic content evaluation
+4. Handles recursive template compilation safely
+
+## Example
+
+```erlang
+1> Tokens = arizona_scanner:scan_string(1, ~"<h1>{Title}</h1>").
+[{token, static, 1, ~"<h1>"}, {token, dynamic, 1, ~"Title"}, ...]
+2> arizona_parser:parse_tokens(Tokens, []).
+{call, {remote, {atom, arizona_template}, {atom, new}}, [...]}
+```
+""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -30,6 +53,12 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Parses tokens into an AST that creates an arizona_template record.
+
+Transforms the token list into optimized compile-time AST that generates
+efficient template rendering code with callback functions for dynamic content.
+""".
 -spec parse_tokens(Tokens, CompileOpts) -> ParsedTemplate when
     Tokens :: [arizona_token:token()],
     CompileOpts :: [compile:option()],
@@ -38,6 +67,12 @@ parse_tokens(Tokens, CompileOpts) ->
     {StaticParts, DynamicElements} = separate_static_dynamic(Tokens),
     create_template_ast(StaticParts, DynamicElements, CompileOpts).
 
+-doc ~"""
+Parses Erlang expression text into AST using merl:quote/1.
+
+Converts UTF-8 binary text containing Erlang expressions into syntax trees
+for further processing. Always returns a list of forms for consistency.
+""".
 -spec quote(Text) -> Ast when
     Text :: binary(),
     Ast :: [erl_syntax:syntaxTree()].
@@ -49,6 +84,12 @@ quote(Text) ->
         F -> [F]
     end.
 
+-doc ~"""
+Formats parser errors for compiler diagnostics.
+
+Converts internal parser errors into human-readable messages with context
+about failed dynamic callback creation or other parsing issues.
+""".
 -spec format_error(Reason, StackTrace) -> ErrorMap when
     Reason :: arizona_create_dynamic_callback_failed | term(),
     StackTrace :: erlang:stacktrace(),
