@@ -1,4 +1,51 @@
 -module(arizona_server).
+-moduledoc ~"""
+HTTP/WebSocket server configuration and startup using Cowboy web server.
+
+Provides high-level interface for configuring and managing the Arizona
+web server built on Cowboy. Handles route compilation, server lifecycle,
+and integration between Arizona components and Cowboy infrastructure.
+
+## Route Types
+
+- **View Routes**: `{view, Path, ViewModule, MountArg}` - Arizona view handling
+- **WebSocket Routes**: `{websocket, Path}` - Live connection endpoints
+- **Asset Routes**: Static file serving with multiple source options:
+  - `{asset, Path, {dir, Directory}}` - Filesystem directory
+  - `{asset, Path, {file, FileName}}` - Single file
+  - `{asset, Path, {priv_dir, App, Directory}}` - Application priv directory
+  - `{asset, Path, {priv_file, App, FileName}}` - Application priv file
+
+## Server Configuration
+
+```erlang
+Config = #{
+    scheme => http,  % or https
+    transport_opts => #{socket_opts => [{port, 4000}]},
+    proto_opts => #{env => #{custom_option => value}},
+    routes => [
+        {view, ~"/", home_view, #{}},
+        {view, ~"/users/[:id]", users_view, #{}},
+        {websocket, ~"/live"},
+        {asset, ~"/static/[...]", {priv_dir, myapp, ~"static"}}
+    ]
+}.
+```
+
+## Lifecycle Management
+
+1. **Start**: Route compilation → Transport/Protocol setup → Listener start
+2. **Runtime**: Request routing through compiled dispatch table
+3. **Stop**: Graceful listener shutdown
+
+## Integration
+
+Integrates Arizona components with Cowboy:
+- `arizona_handler` for view rendering
+- `arizona_websocket` for live connections
+- `cowboy_static` for asset serving
+- Route-based dispatch with persistent term storage
+""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -56,6 +103,13 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Starts the HTTP/WebSocket server with the given configuration.
+
+Compiles routes, configures transport and protocol options, and starts
+the Cowboy listener. Stores dispatch table in persistent term for
+efficient request routing.
+""".
 -spec start(Config) -> Result when
     Config :: config(),
     Result :: {ok, pid()} | {error, term()}.
@@ -74,11 +128,22 @@ start(Config) when is_map(Config) ->
     Ref = get_listener_key(),
     start_listener(Scheme, Ref, TransportOpts, ProtoOpts).
 
+-doc ~"""
+Stops the running HTTP/WebSocket server.
+
+Gracefully shuts down the Cowboy listener and cleans up resources.
+""".
 -spec stop() -> ok.
 stop() ->
     ok = cowboy:stop_listener(get_listener_key()),
     ok.
 
+-doc ~"""
+Retrieves handler options for a Cowboy request.
+
+Used internally by Arizona handlers to get view module and mount
+arguments from the compiled route dispatch table.
+""".
 -spec get_handler_opts(Req) -> Opts when
     Req :: cowboy_req:req(),
     Opts :: dynamic().
@@ -89,10 +154,21 @@ get_handler_opts(Req) ->
     ),
     maps:get(handler_opts, Env).
 
+-doc ~"""
+Checks if the Arizona server is currently running.
+
+Returns `true` if the Ranch listener is active, `false` otherwise.
+""".
 -spec is_running() -> boolean().
 is_running() ->
     ranch:get_status(get_listener_key()) =:= running.
 
+-doc ~"""
+Gets the server's current IP address and port.
+
+Returns the actual address the server is listening on, which may
+differ from configuration if port 0 was specified (random port).
+""".
 -spec get_address() -> {ok, IpAddress, Port} | error when
     IpAddress :: inet:ip_address(),
     Port :: inet:port_number().

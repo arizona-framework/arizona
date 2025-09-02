@@ -1,4 +1,79 @@
 -module(arizona_static).
+-moduledoc ~"""
+Static site generation by crawling a running Arizona server.
+
+Generates static HTML files by making HTTP requests to a running Arizona
+server and saving the responses to disk. Useful for creating static builds
+for deployment, SEO optimization, or JAMstack-style architectures.
+
+## Generation Process
+
+1. **Server Check**: Ensures Arizona server is running
+2. **Directory Setup**: Creates output directory structure
+3. **Page Crawling**: Fetches pages via HTTP (parallel or sequential)
+4. **File Writing**: Saves HTML content with proper file extensions
+5. **Sitemap Generation**: Creates `sitemap.xml` for SEO
+
+## Configuration
+
+```erlang
+Config = #{
+    route_paths => #{
+        ~"/" => #{parallel => false},
+        ~"/about" => #{parallel => true},
+        ~"/users/123" => #{parallel => true}
+    },
+    output_dir => ~"./dist",
+    base_url => ~"https://mysite.com",
+    timeout => 10000  % 10 seconds per request
+}.
+```
+
+## Route Options
+
+- `parallel => true` - Process route in parallel worker
+- `parallel => false` - Process route sequentially (default)
+
+## File Generation
+
+- `/` → `index.html`
+- `/about` → `about.html`
+- `/users/123` → `users/123.html`
+- Files with extensions preserved as-is
+
+## Sitemap Generation
+
+Automatically generates `sitemap.xml` with:
+- All HTML pages discovered during generation
+- Configurable base URL for absolute links
+- Weekly change frequency for SEO
+
+## Example Usage
+
+```erlang
+%% Start Arizona server first
+ok = arizona:start(ServerConfig),
+
+%% Generate static site
+StaticConfig = #{
+    route_paths => #{~"/" => #{}, ~"/about" => #{}},
+    output_dir => ~"./build"
+},
+ok = arizona_static:generate(StaticConfig).
+
+%% Files created:
+%% ./build/index.html
+%% ./build/about.html
+%% ./build/sitemap.xml
+```
+
+## Error Handling
+
+Returns specific errors for different failure modes:
+- `server_not_running` - Arizona server not started
+- `{http_request_failed, Path, Reason}` - HTTP request failed
+- `{file_operation_failed, FilePath, Reason}` - File write failed
+""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -17,6 +92,7 @@
 %% --------------------------------------------------------------------
 
 -export_type([config/0]).
+-export_type([route_options/0]).
 -export_type([generation_error/0]).
 
 %% --------------------------------------------------------------------
@@ -43,6 +119,13 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Generates a static site from the given configuration.
+
+Crawls the running Arizona server, fetches HTML content, and writes
+static files to the output directory. Also generates a sitemap.xml
+for SEO purposes.
+""".
 -spec generate(Config) -> ok | {error, ErrReason} when
     Config :: config(),
     ErrReason :: generation_error().

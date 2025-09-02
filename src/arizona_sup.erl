@@ -1,4 +1,5 @@
 -module(arizona_sup).
+-moduledoc false.
 -behaviour(supervisor).
 
 %% --------------------------------------------------------------------

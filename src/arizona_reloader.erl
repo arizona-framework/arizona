@@ -1,4 +1,55 @@
 -module(arizona_reloader).
+-moduledoc ~"""
+Development-time file watcher for automatic code reloading and live browser refresh.
+
+Provides a GenServer-based file system watcher that monitors specified
+directories for file changes and triggers configurable reload actions.
+Designed for development environments to enable fast feedback loops
+with automatic browser refresh and custom reload callbacks.
+
+## Features
+
+- **File System Watching**: Monitors directories and subdirectories
+- **Pattern Matching**: Uses regex patterns to filter relevant files
+- **Debounced Execution**: Groups rapid file changes to prevent spam
+- **Custom Callbacks**: Execute custom functions on file changes
+- **Browser Refresh**: Automatic live reload for connected browsers
+- **Rule-Based**: Multiple watch rules with different behaviors
+
+## Configuration
+
+```erlang
+Config = #{
+    enabled => true,
+    debounce_ms => 100,  % Wait 100ms before executing
+    rules => [
+        #{
+            directories => ["src", "templates"],
+            patterns => [".*\\.erl$", ".*\\.html$"],
+            callback => fun(Files) -> recompile_modules(Files) end
+        },
+        #{
+            directories => ["assets"],
+            patterns => [".*\\.(css|js)$"],
+            % No callback = browser refresh only
+        }
+    ]
+}.
+```
+
+## Event Flow
+
+1. File system event occurs (create/modify/delete)
+2. Check if file matches any rule (directory + pattern)
+3. Accumulate matching rules during debounce period
+4. Execute custom callbacks for each rule
+5. Broadcast live reload message to browsers
+
+## Development Integration
+
+Typically started by development server and integrated with
+`arizona_websocket` for browser live reload functionality.
+""".
 -behaviour(gen_server).
 
 %% --------------------------------------------------------------------
@@ -69,6 +120,13 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Starts the file watcher with the given configuration.
+
+Initializes file system watchers for all directories specified in
+the rules configuration. Validates directories and patterns before
+starting watchers.
+""".
 -spec start_link(Config) -> gen_server:start_ret() when
     Config :: config().
 start_link(Config) ->

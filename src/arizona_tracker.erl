@@ -1,4 +1,37 @@
 -module(arizona_tracker).
+-moduledoc ~"""
+Variable dependency tracking for differential rendering updates.
+
+Tracks which template variables are used by which dynamic elements in
+stateful components, enabling efficient differential updates when only
+specific variables change. Essential for WebSocket-based real-time updates.
+
+## Tracking Process
+
+1. Set current stateful component ID during rendering
+2. Set current element index for each dynamic element
+3. Record variable dependencies as templates access bindings
+4. Store mappings of variables to element indices per component
+5. Use dependencies to generate minimal diffs when variables change
+
+## Data Structure
+
+- `current_stateful_id` - ID of component currently being rendered
+- `current_element_index` - Index of dynamic element being processed
+- `dependencies` - Nested map of component → variable → element indices
+
+## Example
+
+```erlang
+1> Tracker = arizona_tracker:new().
+#tracker{...}
+2> T1 = arizona_tracker:set_current_stateful_id(~"my_comp", Tracker).
+3> T2 = arizona_tracker:set_current_element_index(2, T1).
+4> T3 = arizona_tracker:record_variable_dependency(title, T2).
+5> arizona_tracker:get_stateful_dependencies(~"my_comp", T3).
+#{title => [2]}
+```
+""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -42,6 +75,12 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Creates a new empty tracker for dependency tracking.
+
+Initializes tracker with no current context and empty dependency maps.
+Used to start fresh dependency tracking for a rendering session.
+""".
 -spec new() -> Tracker when
     Tracker :: tracker().
 new() ->
@@ -51,6 +90,12 @@ new() ->
         dependencies = #{}
     }.
 
+-doc ~"""
+Sets the current stateful component ID for dependency tracking.
+
+Updates the tracker to record dependencies for the specified component.
+Resets element index since we're starting a new component context.
+""".
 -spec set_current_stateful_id(StatefulId, Tracker) -> Tracker1 when
     StatefulId :: arizona_stateful:id(),
     Tracker :: tracker(),
@@ -62,6 +107,12 @@ set_current_stateful_id(StatefulId, #tracker{} = Tracker) ->
         current_element_index = undefined
     }.
 
+-doc ~"""
+Sets the current dynamic element index for dependency tracking.
+
+Updates the tracker with the index of the dynamic element currently
+being processed, used to associate variable dependencies with specific elements.
+""".
 -spec set_current_element_index(ElementIndex, Tracker) -> Tracker1 when
     ElementIndex :: element_index(),
     Tracker :: tracker(),
@@ -69,6 +120,12 @@ set_current_stateful_id(StatefulId, #tracker{} = Tracker) ->
 set_current_element_index(ElementIndex, #tracker{} = Tracker) ->
     Tracker#tracker{current_element_index = ElementIndex}.
 
+-doc ~"""
+Records a variable dependency for the current element.
+
+Tracks that the current dynamic element depends on the specified variable.
+Only records dependencies when both stateful ID and element index are set.
+""".
 -spec record_variable_dependency(VarName, Tracker) -> Tracker1 when
     VarName :: var_name(),
     Tracker :: tracker(),
@@ -95,6 +152,12 @@ record_variable_dependency(VarName, #tracker{} = Tracker) ->
             Tracker
     end.
 
+-doc ~"""
+Retrieves all variable dependencies for a stateful component.
+
+Returns a map of variable names to lists of element indices that
+depend on those variables. Empty map if component has no dependencies.
+""".
 -spec get_stateful_dependencies(StatefulId, Tracker) -> StatefulDependencies when
     StatefulId :: arizona_stateful:id(),
     Tracker :: tracker(),
@@ -102,6 +165,12 @@ record_variable_dependency(VarName, #tracker{} = Tracker) ->
 get_stateful_dependencies(StatefulId, #tracker{} = Tracker) ->
     maps:get(StatefulId, Tracker#tracker.dependencies, #{}).
 
+-doc ~"""
+Clears all variable dependencies for a stateful component.
+
+Removes all dependency tracking for the specified component.
+Used when re-rendering a component to start fresh tracking.
+""".
 -spec clear_stateful_dependencies(StatefulId, Tracker) -> Tracker1 when
     StatefulId :: arizona_stateful:id(),
     Tracker :: tracker(),
@@ -111,6 +180,12 @@ clear_stateful_dependencies(StatefulId, #tracker{} = Tracker) ->
     UpdatedDependencies = maps:remove(StatefulId, Dependencies),
     Tracker#tracker{dependencies = UpdatedDependencies}.
 
+-doc ~"""
+Clears dependencies for specific changed variables.
+
+Removes dependency tracking for only the specified variables,
+keeping other variable dependencies intact. Cleans up empty component entries.
+""".
 -spec clear_changed_variable_dependencies(StatefulId, VarNames, Tracker) -> Tracker1 when
     StatefulId :: arizona_stateful:id(),
     VarNames :: [var_name()],

@@ -1,4 +1,32 @@
 -module(arizona_hierarchical).
+-moduledoc ~"""
+Hierarchical component structure generation for tracking and updates.
+
+Generates structured representations of component hierarchies that enable
+efficient tracking and differential updates. Used as fallback when templates
+change and diff updates aren't possible.
+
+## Structure Types
+
+- `stateful_struct/0` - Stateful component with ID reference
+- `stateless_struct/0` - Stateless component with static/dynamic parts
+- `list_struct/0` - List rendering with item structures
+
+## Process
+
+1. Generate hierarchical structures for all component types
+2. Store template fingerprints for future diff comparisons
+3. Track component relationships and element indices
+4. Store stateful component data in hierarchical dictionary
+5. Build nested component trees from dynamic callbacks
+
+## Example
+
+```erlang
+1> {Struct, View1} = arizona_hierarchical:hierarchical_template(Template, ParentId, Index, View).
+{#{type => stateless, static => [...], dynamic => [...]}, UpdatedView}
+```
+""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -46,6 +74,12 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Generates hierarchical structure for a view component.
+
+Extracts the view's stateful ID and template, then creates a stateful
+structure with component tracking and dependency management.
+""".
 -spec hierarchical_view(View) -> {Struct, View1} when
     View :: arizona_view:view(),
     Struct :: stateful_struct(),
@@ -56,6 +90,12 @@ hierarchical_view(View) ->
     Template = arizona_view:call_render_callback(View),
     track_hierarchical_stateful(Id, Template, View).
 
+-doc ~"""
+Generates hierarchical structure for a stateful component.
+
+Prepares the component for rendering, stores template fingerprint for
+future diff comparisons, and creates hierarchical tracking structure.
+""".
 -spec hierarchical_stateful(Module, Bindings, ParentId, ElementIndex, View) -> {Struct, View1} when
     Module :: module(),
     Bindings :: arizona_binder:map(),
@@ -75,6 +115,12 @@ hierarchical_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
 
     track_hierarchical_stateful(Id, Template, FingerprintView).
 
+-doc ~"""
+Generates hierarchical structure for a stateless component.
+
+Calls the stateless component's render function to get a template,
+then delegates to `hierarchical_template/4` for structure generation.
+""".
 -spec hierarchical_stateless(Module, Function, Bindings, ParentId, ElementIndex, View) ->
     {Struct, View1}
 when
@@ -90,6 +136,12 @@ hierarchical_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
     hierarchical_template(Template, ParentId, ElementIndex, View).
 
+-doc ~"""
+Generates hierarchical structure for list rendering.
+
+Stores template fingerprint and creates hierarchical structures for
+each list item using the template's dynamic callback function.
+""".
 -spec hierarchical_list(Template, List, ParentId, ElementIndex, View) -> {Struct, View1} when
     Template :: arizona_template:template(),
     List :: [dynamic()],
@@ -118,6 +170,12 @@ hierarchical_list(Template, List, ParentId, ElementIndex, View) ->
     },
     {Struct, FingerprintView}.
 
+-doc ~"""
+Generates hierarchical structure for a template.
+
+Stores template fingerprint and processes dynamic callbacks to create
+a stateless structure with static parts and hierarchical dynamic elements.
+""".
 -spec hierarchical_template(Template, ParentId, ElementIndex, View) -> {Struct, View1} when
     Template :: arizona_template:template(),
     ParentId :: arizona_stateful:id(),

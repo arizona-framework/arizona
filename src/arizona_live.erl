@@ -1,4 +1,53 @@
 -module(arizona_live).
+-moduledoc ~"""
+GenServer-based live process for managing connected views with real-time updates.
+
+Manages a single transport connection and its associated view, handling
+real-time updates through differential patching. Each live process
+represents one connected client and maintains view state, nested
+component states, and dependency tracking for efficient updates.
+
+## Process Lifecycle
+
+1. Started via `start_link/4` with view module and mount arguments
+2. Joins process group for connection tracking
+3. Mounts view and initializes tracker
+4. Handles initial rendering with hierarchical structure
+5. Processes events and generates differential updates
+6. Sends patches to transport process
+
+## Event Handling
+
+- View events: Handled by the main view module
+- Component events: Routed to specific stateful components by ID
+- Process messages: Handled by view's `handle_info/2` callback
+- PubSub messages: Treated as view events with topic/data
+
+## Differential Updates
+
+All state changes trigger differential update generation:
+- Compares old vs new state using `arizona_differ`
+- Generates minimal patches for transport process
+- Supports both `reply` (with data) and `noreply` responses
+
+## Example Usage
+
+```erlang
+%% Start live process for transport connection
+{ok, LivePid} = arizona_live:start_link(
+    my_view,
+    #{user_id => 123},
+    Request,
+    TransportPid
+).
+
+%% Handle transport event
+ok = arizona_live:handle_event(LivePid, ~"button1", ~"click", #{}).
+
+%% Check connection status
+true = arizona_live:is_connected(LivePid).
+```
+""".
 -behaviour(gen_server).
 
 %% --------------------------------------------------------------------
@@ -49,6 +98,13 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Starts a live process for a transport connection.
+
+Creates a new GenServer process to manage the view and transport
+connection. The process mounts the view and joins the connection
+process group for tracking.
+""".
 -spec start_link(ViewModule, MountArg, ArizonaRequest, TransportPid) -> Return when
     ViewModule :: module(),
     MountArg :: dynamic(),
@@ -58,6 +114,12 @@
 start_link(ViewModule, MountArg, ArizonaRequest, TransportPid) ->
     gen_server:start_link(?MODULE, {ViewModule, MountArg, ArizonaRequest, TransportPid}, []).
 
+-doc ~"""
+Checks if a live process is still connected.
+
+Returns `true` if the process is in the connected process group,
+`false` otherwise. Used to verify connection status.
+""".
 -spec is_connected(Pid) -> IsConnected when
     Pid :: pid(),
     IsConnected :: boolean().
@@ -65,18 +127,38 @@ is_connected(Pid) ->
     Members = pg:get_local_members(?MODULE, connected),
     lists:member(Pid, Members).
 
+-doc ~"""
+Retrieves the current view state from a live process.
+
+Synchronous call to get the complete view state including
+nested component states and fingerprints.
+""".
 -spec get_view(Pid) -> View when
     Pid :: pid(),
     View :: arizona_view:view().
 get_view(Pid) ->
     gen_server:call(Pid, get_view, infinity).
 
+-doc ~"""
+Generates the initial hierarchical structure for rendering.
+
+Performs complete view rendering and returns hierarchical structure
+suitable for initial HTML generation. Sets up dependency tracking
+and component fingerprints.
+""".
 -spec initial_render(Pid) -> HierarchicalStructure when
     Pid :: pid(),
     HierarchicalStructure :: arizona_hierarchical_dict:hierarchical_structure().
 initial_render(Pid) ->
     gen_server:call(Pid, initial_render, infinity).
 
+-doc ~"""
+Handles a transport event asynchronously.
+
+Routes the event to either the main view (if StatefulId is `undefined`)
+or to a specific stateful component. Generates differential updates
+and sends them to the transport process.
+""".
 -spec handle_event(Pid, StatefulIdOrUndefined, Event, Params) -> ok when
     Pid :: pid(),
     StatefulIdOrUndefined :: arizona_stateful:id() | undefined,

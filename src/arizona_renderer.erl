@@ -1,4 +1,34 @@
 -module(arizona_renderer).
+-moduledoc ~"""
+HTML rendering engine for Arizona templates and components.
+
+Converts templates, views, and components into HTML output by executing
+dynamic callbacks and combining results with static content. Handles
+the full component lifecycle and template evaluation.
+
+## Rendering Process
+
+1. Extract static HTML parts and dynamic callback sequences from templates
+2. Execute dynamic callbacks to get content or nested templates
+3. Convert results to HTML using arizona_html
+4. Zip static and dynamic parts together into final HTML
+
+## Component Types
+
+- **Layouts** - Wrapper components with slot insertion
+- **Views** - Top-level stateful components
+- **Stateful Components** - Components with persistent state
+- **Stateless Components** - Pure rendering functions
+- **Lists** - Rendered collections with item templates
+
+## Example
+
+```erlang
+1> Template = arizona_template:from_string(~\"<h1>{Title}</h1>\").
+2> {Html, View1} = arizona_renderer:render_template(Template, parent_id, View).
+{[~\"<h1>\", ~\"Hello\", ~\"</h1>\"], UpdatedView}
+```
+""".
 -compile({nowarn_redefined_builtin_type, [dynamic/0]}).
 
 %% --------------------------------------------------------------------
@@ -29,6 +59,12 @@
 %% API Functions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Renders a view within its layout wrapper.
+
+If the view has a layout, renders the layout with the view inserted
+into the specified slot. Otherwise renders the view directly.
+""".
 -spec render_layout(View) -> {Html, View1} when
     View :: arizona_view:view(),
     Html :: arizona_html:html(),
@@ -47,6 +83,12 @@ render_layout(View) ->
             arizona_renderer:render_view(View)
     end.
 
+-doc ~"""
+Renders a view component by calling its render callback.
+
+Extracts the view's ID and calls the render callback to get a template,
+then renders that template to HTML.
+""".
 -spec render_view(View) -> {Html, View1} when
     View :: arizona_view:view(),
     Html :: arizona_html:html(),
@@ -57,6 +99,12 @@ render_view(View) ->
     Template = arizona_view:call_render_callback(View),
     render_template(Template, Id, View).
 
+-doc ~"""
+Renders a stateful component with full lifecycle management.
+
+Prepares the component for rendering (mount if needed), clears tracking
+state, sets current component ID, and renders the resulting template.
+""".
 -spec render_stateful(Module, Bindings, View) -> {Html, View1} when
     Module :: module(),
     Bindings :: arizona_binder:map(),
@@ -69,6 +117,12 @@ render_stateful(Module, Bindings, View) ->
     _ClearTracker = arizona_tracker_dict:set_current_stateful_id(Id),
     render_template(Template, Id, PrepRenderView).
 
+-doc ~"""
+Renders a stateless component function.
+
+Calls the stateless component's render function with bindings to get
+a template, then renders that template to HTML.
+""".
 -spec render_stateless(Module, Function, Bindings, ParentId, View) -> {Html, View1} when
     Module :: module(),
     Function :: atom(),
@@ -81,6 +135,12 @@ render_stateless(Module, Fun, Bindings, ParentId, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
     render_template(Template, ParentId, View).
 
+-doc ~"""
+Renders a list of items using a template with item callbacks.
+
+Applies the template to each item in the list, executing the dynamic
+callback function for each item to generate individual HTML outputs.
+""".
 -spec render_list(Template, List, ParentId, View) -> {Html, View1} when
     Template :: arizona_template:template(),
     List :: [dynamic()],
@@ -98,6 +158,12 @@ render_list(Template, List, ParentId, View) ->
     ],
     {HtmlList, View}.
 
+-doc ~"""
+Renders a template by executing dynamic callbacks and combining with static parts.
+
+Extracts static HTML and dynamic callback sequences from the template,
+executes the callbacks, and zips the results together into final HTML.
+""".
 -spec render_template(Template, ParentId, View) -> {Html, View1} when
     Template :: arizona_template:template(),
     ParentId :: arizona_stateful:id(),
@@ -110,6 +176,14 @@ render_template(Template, ParentId, View) ->
     Dynamic = arizona_template:get_dynamic(Template),
     render_static_dynamic(Static, DynamicSequence, Dynamic, ParentId, View).
 
+-doc ~"""
+Renders dynamic template parts by executing callback sequences.
+
+Executes each dynamic callback in sequence, handling three result types:
+- 4-arity functions (render callbacks) - called with render mode
+- Templates - recursively rendered
+- Other values - converted to HTML
+""".
 -spec render_dynamic(Sequence, Dynamic, ParentId, View) -> {Render, View1} when
     Sequence :: arizona_template:dynamic_sequence(),
     Dynamic :: arizona_template:dynamic(),

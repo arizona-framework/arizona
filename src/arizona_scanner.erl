@@ -1,4 +1,30 @@
 -module(arizona_scanner).
+-moduledoc ~""""
+Template tokenization for Arizona templates.
+
+Converts Arizona template strings containing HTML mixed with Erlang expressions
+into structured tokens for the parser. Handles UTF-8 validation, nested brace
+tracking, and expression validation.
+
+## Token Types
+
+- `static` - Plain HTML text content
+- `dynamic` - Erlang expressions enclosed in `{}`
+- `comment` - Erlang comments (lines starting with `%`)
+
+## Example
+
+```erlang
+1> arizona_scanner:scan_string(1, ~"""
+.. <h1>{Title}</h1>
+.. """).
+[
+    #token{category = static, line = 1, content = ~"<h1>"},
+    #token{category = dynamic, line = 1, content = ~"Title"},
+    #token{category = static, line = 1, content = ~"</h1>"}
+]
+```
+"""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -26,6 +52,12 @@
 %% API function definitions
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Scans a template string and returns a list of tokens.
+
+Tokenizes the input string starting from the specified line number.
+Handles UTF-8 validation and nested Erlang expressions.
+""".
 -spec scan_string(Line, String) -> [Token] when
     Line :: arizona_token:line(),
     String :: string() | binary(),
@@ -39,6 +71,12 @@ scan_string(Line, String) when
         position = 0
     }).
 
+-doc ~"""
+Formats scanner errors for compiler diagnostics.
+
+Converts internal error reasons into human-readable error messages
+with context and suggestions for fixing template syntax issues.
+""".
 -spec format_error(Reason, StackTrace) -> ErrorMap when
     Reason :: invalid_utf8 | unexpected_expr_end | badexpr | term(),
     StackTrace :: erlang:stacktrace(),

@@ -1,4 +1,5 @@
 -module(arizona_app).
+-moduledoc false.
 -behaviour(application).
 
 %% --------------------------------------------------------------------
