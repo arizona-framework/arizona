@@ -1,4 +1,40 @@
 -module(arizona_parse_transform).
+-moduledoc ~""""
+Compile-time AST transformation for Arizona templates.
+
+Erlang parse transform that converts Arizona template function calls into
+optimized compile-time AST. Transforms `arizona_template:from_string/1` and
+`arizona_template:render_list/2` calls for maximum runtime performance.
+
+## Transformations
+
+- `arizona_template:from_string/1` → Compiled template record
+- `arizona_template:render_list/2` → Optimized list rendering with callbacks
+- Prevents infinite recursion in nested template expressions
+- Evaluates template strings at compile time for validation
+
+## Usage
+
+Add to module compile options:
+
+```erlang
+-compile([{parse_transform, arizona_parse_transform}]).
+
+render() ->
+    arizona_template:from_string(~"""
+    <h1>{Title}</h1>
+    """).
+    %% → Becomes compile-time optimized template record
+```
+
+## Debug
+
+Use debug profile to output transformed modules to `/tmp/`:
+
+```bash
+$ rebar3 as debug compile
+```
+"""".
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -27,6 +63,12 @@
 %% Parse Transform Implementation
 %% --------------------------------------------------------------------
 
+-doc ~"""
+Main parse transform entry point called by the Erlang compiler.
+
+Transforms all applicable Arizona template calls in the given forms,
+returning the modified AST for compilation.
+""".
 -spec parse_transform(Forms, Options) -> Forms when
     Forms :: compile:forms(),
     Options :: [compile:option()].
@@ -44,6 +86,12 @@ parse_transform(Forms, Options) ->
     RevertedForms.
 
 %% Transform arizona_template:render_list/2 calls
+-doc ~"""
+Transforms `arizona_template:render_list/2` calls into optimized AST.
+
+Extracts the template function body, compiles it into a template record,
+and creates a call to `arizona_template:render_list_template/2`.
+""".
 -spec transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) -> AST when
     Module :: module(),
     Line :: arizona_token:line(),
@@ -76,6 +124,12 @@ transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) ->
     end.
 
 %% Extract item parameter and template string from list function
+-doc ~"""
+Extracts template content from a render_list callback function.
+
+Analyzes the function expression to find `arizona_template:from_string/1`
+calls, extracts the template string, and compiles it into optimized AST.
+""".
 -spec extract_list_function_body(Module, Line, FunExpr, CompileOpts) -> TemplateAST when
     Module :: module(),
     Line :: arizona_token:line(),
@@ -124,6 +178,12 @@ extract_list_function_body(Module, Line, FunExpr, CompileOpts) ->
             error({invalid_function_expression, FunExpr})
     end.
 
+-doc ~"""
+Formats parse transform errors for compiler diagnostics.
+
+Converts internal transformation errors into human-readable messages
+with context about failed template extraction or render_list transformation.
+""".
 -spec format_error(Reason, StackTrace) -> ErrorMap when
     Reason :: arizona_template_extraction_failed | arizona_render_list_transformation_failed,
     StackTrace :: erlang:stacktrace(),
