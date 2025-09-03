@@ -58,6 +58,7 @@ ws.send(JSON.stringify({
 -export([websocket_init/1]).
 -export([websocket_handle/2]).
 -export([websocket_info/2]).
+-export([terminate/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -65,17 +66,56 @@ ws.send(JSON.stringify({
 
 -export_type([state/0]).
 -export_type([call_result/0]).
+-export_type([terminate_reason/0]).
+-export_type([websocket_close_code/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
 -record(state, {
-    live_pid :: pid()
+    live_pid :: pid(),
+    live_shutdown_timeout :: timeout()
 }).
 
 -opaque state() :: #state{}.
+
 -nominal call_result() :: {Commands :: cowboy_websocket:commands(), State :: state()}.
+
+-nominal terminate_reason() ::
+    normal
+    | shutdown
+    | {shutdown, term()}
+    | {remote, websocket_close_code(), Reason :: binary()}
+    | term().
+
+-nominal websocket_close_code() ::
+    % Normal Closure
+    1000
+    % Going Away
+    | 1001
+    % Protocol Error
+    | 1002
+    % Unsupported Data
+    | 1003
+    % No Status Rcvd
+    | 1005
+    % Abnormal Closure
+    | 1006
+    % Invalid frame payload data
+    | 1007
+    % Policy Violation
+    | 1008
+    % Message Too Big
+    | 1009
+    % Mandatory Extension
+    | 1010
+    % Internal Server Error
+    | 1011
+    % TLS handshake
+    | 1015
+    % Other codes
+    | pos_integer().
 
 %% --------------------------------------------------------------------
 %% API function definitions
@@ -87,12 +127,14 @@ Initializes WebSocket upgrade from HTTP request.
 Extracts path and query string parameters, resolves the view module
 and mount arguments, and prepares data for WebSocket initialization.
 """.
--spec init(Req, State) -> {cowboy_websocket, Req, {ViewModule, MountArg, ArizonaReq}} when
+-spec init(Req, State) -> Result when
     Req :: cowboy_req:req(),
     State :: undefined,
+    Result :: {cowboy_websocket, Req, {ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout}},
     ViewModule :: module(),
     MountArg :: arizona_view:mount_arg(),
-    ArizonaReq :: arizona_request:request().
+    ArizonaRequest :: arizona_request:request(),
+    LiveShutdownTimeout :: timeout().
 init(CowboyRequest, undefined) ->
     % Extract path from query parameter ?path=/users
     PathParams = cowboy_req:parse_qs(CowboyRequest),
@@ -105,7 +147,8 @@ init(CowboyRequest, undefined) ->
 
     % Create Arizona request with the original Live path
     ArizonaRequest = arizona_cowboy_request:new(LiveRequest),
-    {cowboy_websocket, CowboyRequest, {ViewModule, MountArg, ArizonaRequest}}.
+    LiveShutdownTimeout = 5_000,
+    {cowboy_websocket, CowboyRequest, {ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout}}.
 
 -doc ~"""
 Initializes WebSocket connection and starts live process.
@@ -114,12 +157,13 @@ Starts `arizona_live` process, subscribes to live reload (development),
 performs initial render, and sends initial hierarchical structure to client.
 """.
 -spec websocket_init(InitData) -> Result when
-    InitData :: {ViewModule, MountArg, ArizonaRequest},
+    InitData :: {ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout},
     ViewModule :: module(),
     MountArg :: arizona_view:mount_arg(),
     ArizonaRequest :: arizona_request:request(),
+    LiveShutdownTimeout :: timeout(),
     Result :: call_result().
-websocket_init({ViewModule, MountArg, ArizonaRequest}) ->
+websocket_init({ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout}) ->
     {ok, LivePid} = arizona_live:start_link(ViewModule, MountArg, ArizonaRequest, self()),
 
     % Subscribe to live reload if arizona_reloader process is alive
@@ -137,7 +181,10 @@ websocket_init({ViewModule, MountArg, ArizonaRequest}) ->
         structure => HierarchicalStructure
     }),
 
-    State = #state{live_pid = LivePid},
+    State = #state{
+        live_pid = LivePid,
+        live_shutdown_timeout = LiveShutdownTimeout
+    },
 
     {[{text, InitialPayload}], State}.
 
@@ -181,6 +228,19 @@ websocket_info({pubsub_message, ~"live_reload", {file_changed, reload}}, State) 
     Message = #{type => ~"reload"},
     ReloadPayload = json_encode(Message),
     {[{text, ReloadPayload}], State}.
+
+-doc ~"""
+Handles WebSocket connection termination.
+
+Forwards the termination reason to the live process for graceful shutdown,
+allowing views to perform cleanup operations via their terminate/2 callback.
+""".
+-spec terminate(Reason, Req, State) -> ok when
+    Reason :: terminate_reason(),
+    Req :: cowboy_req:req(),
+    State :: state().
+terminate(Reason, _Req, State) ->
+    gen_server:stop(State#state.live_pid, {shutdown, Reason}, State#state.live_shutdown_timeout).
 
 %% --------------------------------------------------------------------
 %% Internal functions

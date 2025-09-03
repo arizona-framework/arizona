@@ -68,6 +68,7 @@ true = arizona_live:is_connected(LivePid).
 -export([handle_call/3]).
 -export([handle_cast/2]).
 -export([handle_info/2]).
+-export([terminate/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -231,6 +232,26 @@ handle_info({pubsub_message, Topic, Data}, #state{} = State) ->
     handle_view_event(Topic, Data, State);
 handle_info(Info, #state{} = State) ->
     handle_view_info(Info, State).
+
+-doc ~"""
+Handles live process termination.
+
+Called when the live process is shutting down, typically due to WebSocket
+connection closure. Forwards the termination reason to the view's terminate
+callback for cleanup operations like removing user presence, saving state, etc.
+
+The reason parameter provides context about why the process is terminating:
+- `normal`: Clean shutdown
+- `{shutdown, Reason}`: Shutdown with specific reason
+- `{remote, Code, Reason}`: WebSocket closed by client (browser)
+- Other reasons: Internal errors, timeouts, etc.
+""".
+-spec terminate(Reason, State) -> Result when
+    Reason :: arizona_websocket:terminate_reason(),
+    State :: state(),
+    Result :: term().
+terminate(Reason, State) ->
+    arizona_view:call_terminate_callback(Reason, State#state.view).
 
 %% --------------------------------------------------------------------
 %% Internal functions
