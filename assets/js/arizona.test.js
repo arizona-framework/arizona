@@ -7,11 +7,19 @@ import MockWebSocket from './__mocks__/WebSocket.js';
 // Mock global APIs
 vi.stubGlobal('Worker', MockWorker);
 vi.stubGlobal('WebSocket', MockWebSocket);
+
+const mockDocument = {
+  dispatchEvent: vi.fn(),
+  getElementById: vi.fn().mockReturnValue(null),
+};
+vi.stubGlobal('document', mockDocument);
+
 vi.stubGlobal('window', {
   location: {
     protocol: 'http:',
     host: 'localhost:3000',
     pathname: '/users',
+    reload: vi.fn(),
   },
 });
 
@@ -24,6 +32,8 @@ describe('ArizonaClient', () => {
     if (global.Worker.prototype.clearPostedMessages) {
       global.Worker.prototype.clearPostedMessages();
     }
+    // Clear document event dispatch mock
+    mockDocument.dispatchEvent.mockClear();
   });
 
   afterEach(() => {
@@ -255,6 +265,84 @@ describe('ArizonaClient', () => {
         return client.disconnect();
       }).not.toThrow();
       expect(client.connected).toBe(false);
+    });
+  });
+
+  describe('custom event dispatching', () => {
+    test('dispatches arizonaEvent for reply messages', () => {
+      const replyData = { success: true, userId: 123 };
+      client.handleReply(replyData);
+
+      expect(mockDocument.dispatchEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'arizonaEvent',
+          detail: { type: 'reply', data: replyData },
+        })
+      );
+    });
+
+    test('dispatches arizonaEvent for error messages', () => {
+      const errorData = { error: 'Something went wrong' };
+      client.handleWorkerError(errorData);
+
+      expect(mockDocument.dispatchEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'arizonaEvent',
+          detail: { type: 'error', data: errorData },
+        })
+      );
+    });
+
+    test('dispatches arizonaEvent for status changes', () => {
+      const statusData = { status: 'connected' };
+      client.handleStatus(statusData);
+
+      expect(mockDocument.dispatchEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'arizonaEvent',
+          detail: { type: 'status', data: statusData },
+        })
+      );
+    });
+
+    test('does not dispatch events for reload messages', () => {
+      client.handleReload({});
+
+      expect(mockDocument.dispatchEvent).not.toHaveBeenCalled();
+      expect(window.location.reload).toHaveBeenCalled();
+    });
+
+    test('does not dispatch events for HTML patch messages', () => {
+      const patchData = { patch: '<div>test</div>', isInitial: true };
+      client.handleHtmlPatch(patchData);
+
+      expect(mockDocument.dispatchEvent).not.toHaveBeenCalled();
+    });
+
+    test('dispatchArizonaEvent creates custom event with correct structure', () => {
+      const eventType = 'test_event';
+      const eventData = { test: 'data' };
+
+      client.dispatchArizonaEvent(eventType, eventData);
+
+      expect(mockDocument.dispatchEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'arizonaEvent',
+          detail: { type: eventType, data: eventData },
+        })
+      );
+    });
+  });
+
+  describe('unknown message handling', () => {
+    test('logs warning for unknown messages', () => {
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const unknownMessage = { type: 'unknown', data: 'test' };
+
+      client.handleUnknownMessage(unknownMessage);
+
+      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Unknown worker message:', unknownMessage);
+      consoleSpy.mockRestore();
     });
   });
 });
