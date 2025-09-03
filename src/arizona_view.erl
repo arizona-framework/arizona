@@ -197,13 +197,9 @@ Layout tuple specifies wrapper module, function, slot name, and bindings.
 -spec new(Module, Bindings, Layout) -> View when
     Module :: module(),
     Bindings :: arizona_binder:map(),
-    Layout :: {LayoutModule, LayoutRenderFun, LayoutSlotName, LayoutBindings} | none,
-    LayoutModule :: module(),
-    LayoutRenderFun :: atom(),
-    LayoutSlotName :: atom(),
-    LayoutBindings :: arizona_binder:map(),
+    Layout :: layout() | none,
     View :: view().
-new(Module, Bindings, Layout) when is_atom(Module) ->
+new(Module, Bindings, Layout) when is_atom(Module), (is_tuple(Layout) orelse Layout =:= none) ->
     State = arizona_stateful:new(Module, Bindings),
     #view{
         layout = Layout,
