@@ -43,10 +43,13 @@ Routes = [
             content => ~\"How to build static sites with Arizona framework.\"
         }
     }},
+    {view, ~\"/presence\", presence_view, #{}},
+    {controller, ~\"/api/presence/[:action]\", presence_controller, #{}},
     {websocket, ~\"/live\"},
     {asset, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}}
 ],
 {ok, _ClockPid} = arizona_clock_server:start_link(),
+{ok, _PresencePid} = presence_server:start_link(),
 case arizona:start(#{
     server => #{
         enabled => true,

@@ -30,7 +30,8 @@ render_menu(Bindings) ->
                         #{url => ~"/counter", name => ~"Counter", desc => ~"Simple state management"},
                         #{url => ~"/todo", name => ~"Todo App", desc => ~"CRUD operations & filtering"},
                         #{url => ~"/datagrid", name => ~"Data Grid", desc => ~"Interactive table with sorting"},
-                        #{url => ~"/modal", name => ~"Modal", desc => ~"Dynamic slot updates"}
+                        #{url => ~"/modal", name => ~"Modal", desc => ~"Dynamic slot updates"},
+                        #{url => ~"/presence", name => ~"Presence", desc => ~"REST API + real-time updates"}
                     ])
                 }
             </ul>
