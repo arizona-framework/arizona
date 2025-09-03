@@ -90,13 +90,11 @@ export default class ArizonaClient {
         case 'reload':
           this.handleReload(data);
           break;
-        case 'message':
-          // Pass through other WebSocket messages
-          this.handleWebSocketMessage(data);
+        case 'reply':
+          this.handleReply(data);
           break;
         default:
-          console.warn('[Arizona] Unknown worker message type:', type);
-          break;
+          this.handleUnknownMessage(message);
       }
     } catch (error) {
       console.error('[Arizona] Error handling worker message:', error);
@@ -111,6 +109,7 @@ export default class ArizonaClient {
       this.connected = false;
       console.log('[Arizona] Disconnected from WebSocket');
     }
+    this.dispatchArizonaEvent('status', data);
   }
 
   handleHtmlPatch(data) {
@@ -174,16 +173,29 @@ export default class ArizonaClient {
 
   handleWorkerError(data) {
     console.error('[Arizona Worker Error]:', data.error);
+    this.dispatchArizonaEvent('error', data);
   }
 
-  handleWebSocketMessage(data) {
-    // Handle other WebSocket message types that aren't processed by the worker
-    console.log('[Arizona] WebSocket message:', data);
-  }
-
-  handleReload(data) {
+  handleReload(_data) {
     console.log('[Arizona] File changed. Reloading page...');
     window.location.reload();
+  }
+
+  handleReply(data) {
+    console.log('[Arizona] WebSocket reply:', data);
+    this.dispatchArizonaEvent('reply', data);
+  }
+
+  handleUnknownMessage(message) {
+    console.warn('[Arizona] Unknown worker message:', message);
+  }
+
+  dispatchArizonaEvent(eventType, eventData) {
+    document.dispatchEvent(
+      new CustomEvent('arizonaEvent', {
+        detail: { type: eventType, data: eventData },
+      })
+    );
   }
 
   isConnected() {

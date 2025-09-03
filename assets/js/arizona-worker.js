@@ -96,10 +96,11 @@ class ArizonaWebSocketWorker {
         case 'reload':
           this.handleReload(message);
           break;
-        default:
-          // Pass through other message types unchanged
-          this.postMessage({ type: 'message', data: message });
+        case 'reply':
+          this.handleReply(message);
           break;
+        default:
+          this.handleUnknownMessage(message);
       }
     } catch (error) {
       console.error('[Arizona Worker] Error handling message:', error);
@@ -160,6 +161,21 @@ class ArizonaWebSocketWorker {
       type: 'reload',
       data: message,
     });
+  }
+
+  handleReply(message) {
+    console.log('[Arizona Worker] Received reply message');
+
+    // Send reply message to main thread
+    this.postMessage({
+      type: 'reply',
+      data: message.data,
+    });
+  }
+
+  handleUnknownMessage(message) {
+    // Pass through other message types unchanged
+    this.postMessage(message);
   }
 
   postMessage(data) {
