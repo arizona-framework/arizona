@@ -9,10 +9,24 @@ messages, and support optional layout wrapping.
 
 ## Behavior Callbacks
 
+### Required
+
 - `mount/2` - Initialize view from mount arg and HTTP request
 - `render/1` - Generate template from current bindings
-- `handle_event/3` - Handle WebSocket events (optional, raises if events triggered but not defined)
-- `handle_info/2` - Handle Erlang process messages (optional)
+
+### Optional
+
+- `handle_event/3` - Handle WebSocket events (raises if events triggered but not defined)
+- `handle_info/2` - Handle Erlang process messages
+- `terminate/2` - Cleanup when view process terminates
+
+## View Lifecycle
+
+1. **Mount**: View is initialized via `mount/2` callback
+2. **Render**: Initial HTML is generated with `render/1`
+3. **Events**: User interactions trigger `handle_event/3` callbacks
+4. **Messages**: External messages are handled by `handle_info/2`
+5. **Terminate**: View cleanup via `terminate/2` when WebSocket disconnects
 
 ## View State Management
 
@@ -28,7 +42,7 @@ View state includes:
 -module(home_view).
 -compile({parse_transform, arizona_parse_transform}).
 -behaviour(arizona_view).
--export([mount/2, render/1]).
+-export([mount/2, render/1, terminate/2]).
 
 mount(_MountArg, _Request) ->
     arizona_view:new(?MODULE, #{user => ~"Anonymous"}, none).
@@ -37,6 +51,10 @@ render(Bindings) ->
     arizona_template:from_string(~"""
     <h1>Welcome {arizona_template:get_binding(user, Bindings)}!</h1>
     """).
+
+terminate(_Reason, _View) ->
+    % Cleanup resources
+    ok.
 ```
 """".
 
@@ -48,6 +66,7 @@ render(Bindings) ->
 -export([call_render_callback/1]).
 -export([call_handle_event_callback/3]).
 -export([call_handle_info_callback/2]).
+-export([call_terminate_callback/2]).
 -export([new/3]).
 -export([get_layout/1]).
 -export([get_state/1]).
@@ -126,7 +145,12 @@ render(Bindings) ->
     Result :: {noreply, View1},
     View1 :: view().
 
--optional_callbacks([handle_event/3, handle_info/2]).
+-callback terminate(Reason, View) -> Result when
+    Reason :: arizona_websocket:terminate_reason(),
+    View :: view(),
+    Result :: term().
+
+-optional_callbacks([handle_event/3, handle_info/2, terminate/2]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
@@ -191,6 +215,48 @@ messages. Returns updated view without replies.
 call_handle_info_callback(Info, #view{state = State} = View) ->
     Module = arizona_stateful:get_module(State),
     apply(Module, handle_info, [Info, View]).
+
+-doc ~"""
+Calls the view module's terminate callback if it exists.
+
+Invokes the optional `terminate/2` callback in the view module to perform
+cleanup operations when the live process is shutting down. The callback
+receives the termination reason and the current view state.
+
+The terminate callback is useful for:
+- Cleaning up external resources (database connections, file handles)
+- Removing user presence or session data
+- Logging termination events
+- Graceful shutdown operations
+
+If the view module doesn't implement the terminate/2 callback, this function
+does nothing and returns `ok`.
+
+## Examples
+
+In your view module:
+```erlang
+terminate({remote, 1001, _}, View) ->
+    % User closed browser tab - clean up presence
+    UserId = get_user_id_from_view(View),
+    presence_server:remove_user(UserId);
+terminate(normal, _View) ->
+    % Normal shutdown - no special cleanup needed
+    ok.
+```
+""".
+-spec call_terminate_callback(Reason, View) -> Result when
+    Reason :: arizona_websocket:terminate_reason(),
+    View :: view(),
+    Result :: term().
+call_terminate_callback(Reason, #view{state = State} = View) ->
+    Module = arizona_stateful:get_module(State),
+    case erlang:function_exported(Module, terminate, 2) of
+        true ->
+            apply(Module, terminate, [Reason, View]);
+        false ->
+            ok
+    end.
 
 -doc ~"""
 Creates a new view with optional layout configuration.
