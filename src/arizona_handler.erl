@@ -55,7 +55,7 @@ stacktrace information for debugging.
     CowboyRequest :: cowboy_req:req(),
     State :: {ViewModule, MountArg},
     ViewModule :: module(),
-    MountArg :: dynamic(),
+    MountArg :: arizona_view:mount_arg(),
     CowboyRequest1 :: cowboy_req:req().
 init(CowboyRequest, State) ->
     try

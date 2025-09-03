@@ -91,7 +91,7 @@ and mount arguments, and prepares data for WebSocket initialization.
     Req :: cowboy_req:req(),
     State :: undefined,
     ViewModule :: module(),
-    MountArg :: dynamic(),
+    MountArg :: arizona_view:mount_arg(),
     ArizonaReq :: arizona_request:request().
 init(CowboyRequest, undefined) ->
     % Extract path from query parameter ?path=/users
@@ -116,7 +116,7 @@ performs initial render, and sends initial hierarchical structure to client.
 -spec websocket_init(InitData) -> Result when
     InitData :: {ViewModule, MountArg, ArizonaRequest},
     ViewModule :: module(),
-    MountArg :: dynamic(),
+    MountArg :: arizona_view:mount_arg(),
     ArizonaRequest :: arizona_request:request(),
     Result :: call_result().
 websocket_init({ViewModule, MountArg, ArizonaRequest}) ->
