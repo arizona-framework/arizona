@@ -1,11 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://example.com/</loc>
-    <changefreq>weekly</changefreq>
-  </url>
-  <url>
-    <loc>https://example.com/about</loc>
+    <loc>https://example.com/post/arizona-static</loc>
     <changefreq>weekly</changefreq>
   </url>
   <url>
@@ -13,7 +9,11 @@
     <changefreq>weekly</changefreq>
   </url>
   <url>
-    <loc>https://example.com/post/arizona-static</loc>
+    <loc>https://example.com/about</loc>
+    <changefreq>weekly</changefreq>
+  </url>
+  <url>
+    <loc>https://example.com/</loc>
     <changefreq>weekly</changefreq>
   </url>
 </urlset>
