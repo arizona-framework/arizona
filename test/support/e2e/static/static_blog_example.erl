@@ -4,8 +4,12 @@
 %% Generate the complete static site
 generate_site() ->
     {ok, Cwd} = file:get_cwd(),
-    OutputDir = filename:join(Cwd, ~"examples/static/blog"),
-    ok = file:del_dir_r(OutputDir),
+    OutputDir = filename:join(Cwd, ~"test/support/e2e/static/generated"),
+    ok =
+        case file:del_dir_r(OutputDir) of
+            ok -> ok;
+            {error, enoent} -> ok
+        end,
 
     % Configuration for static site generation
     Config = #{
