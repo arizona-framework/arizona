@@ -107,7 +107,7 @@ process group for tracking.
 """.
 -spec start_link(ViewModule, MountArg, ArizonaRequest, TransportPid) -> Return when
     ViewModule :: module(),
-    MountArg :: dynamic(),
+    MountArg :: arizona_view:mount_arg(),
     ArizonaRequest :: arizona_request:request(),
     TransportPid :: pid(),
     Return :: gen_server:start_ret().
@@ -174,7 +174,7 @@ handle_event(Pid, StatefulIdOrUndefined, Event, Params) ->
 -spec init(InitArgs) -> {ok, State} when
     InitArgs :: {ViewModule, MountArg, ArizonaRequest, TransportPid},
     ViewModule :: module(),
-    MountArg :: dynamic(),
+    MountArg :: arizona_view:mount_arg(),
     ArizonaRequest :: arizona_request:request(),
     TransportPid :: pid(),
     State :: state().

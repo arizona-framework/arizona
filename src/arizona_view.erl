@@ -71,6 +71,7 @@ render(Bindings) ->
 
 -export_type([view/0]).
 -export_type([layout/0]).
+-export_type([mount_arg/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -88,6 +89,7 @@ render(Bindings) ->
 }).
 
 -opaque view() :: #view{}.
+
 -nominal layout() :: {
     Module :: module(),
     RenderFun :: atom(),
@@ -95,12 +97,14 @@ render(Bindings) ->
     Bindings :: arizona_binder:map()
 }.
 
+-nominal mount_arg() :: dynamic().
+
 %% --------------------------------------------------------------------
 %% Behavior callback definitions
 %% --------------------------------------------------------------------
 
 -callback mount(MountArg, ArizonaRequest) -> View when
-    MountArg :: dynamic(),
+    MountArg :: mount_arg(),
     ArizonaRequest :: arizona_request:request(),
     View :: view().
 
@@ -136,7 +140,7 @@ to initialize the view. Used during page navigation and initial load.
 """.
 -spec call_mount_callback(Module, MountArg, ArizonaRequest) -> View when
     Module :: module(),
-    MountArg :: dynamic(),
+    MountArg :: mount_arg(),
     ArizonaRequest :: arizona_request:request(),
     View :: view().
 call_mount_callback(Module, MountArg, ArizonaRequest) when is_atom(Module) ->
