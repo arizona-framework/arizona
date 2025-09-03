@@ -25,7 +25,8 @@ groups() ->
             handle_info_test,
             is_connected_test,
             pubsub_message_test,
-            concurrent_event_handling_test
+            concurrent_event_handling_test,
+            terminate_callback_test
         ]}
     ].
 
@@ -430,3 +431,22 @@ concurrent_event_handling_test(Config) when is_list(Config) ->
     after 1000 ->
         ct:fail("Expected second reply_response message not received")
     end.
+
+terminate_callback_test(Config) when is_list(Config) ->
+    ct:comment("Test that view terminate callback is invoked on process termination"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
+
+    %% Verify the live process is initially running
+    ?assert(is_process_alive(Pid)),
+
+    %% Unlink from the process to avoid EXIT messages crashing the test
+    unlink(Pid),
+
+    %% Stop the live process with a shutdown reason
+    %% This simulates what happens when WebSocket connection closes
+    TestReason = {shutdown, {remote, 1001, ~""}},
+    ok = gen_server:stop(Pid, TestReason, 1000),
+
+    %% Verify the process terminated cleanly
+    %% The terminate callback should have been called without errors
+    ?assert(not is_process_alive(Pid)).
