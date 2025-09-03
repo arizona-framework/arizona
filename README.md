@@ -350,6 +350,50 @@ handle_info({timer, update}, View) ->
     {noreply, UpdatedView}.
 ```
 
+### **Client-Side Event Listening**
+
+Arizona automatically dispatches custom events for meaningful server interactions,
+allowing application code to react to server responses.
+
+The `reply` event is triggered when `handle_event/3` returns `{reply, Reply, View}`
+(in views) or `{reply, Reply, StatefulState}` (in stateful components):
+
+```javascript
+// Listen for server events in your application
+document.addEventListener('arizonaEvent', (event) => {
+    const { type, data } = event.detail;
+
+    if (type === 'reply') {
+        // Handle server replies to user actions
+        console.log('Server replied:', data);
+        showNotification('Action completed successfully');
+    }
+
+    if (type === 'error') {
+        // Handle server errors
+        console.error('Server error:', data.error);
+        showErrorMessage(data.error);
+    }
+
+    if (type === 'status') {
+        // Track connection status
+        if (data.status === 'connected') {
+            showConnectionIndicator('online');
+        } else if (data.status === 'disconnected') {
+            showConnectionIndicator('offline');
+        }
+    }
+});
+
+// Example: Handle form submission with server feedback
+function submitForm(formData) {
+    arizona.sendEvent('submit_form', formData);
+
+    // The arizonaEvent will fire when the server responds
+    // allowing you to show success/error messages or update UI
+}
+```
+
 ## Development Features
 
 ### **Hot Code Reloading**
