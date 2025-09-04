@@ -1,4 +1,4 @@
--module(blog_about_view).
+-module(arizona_blog_about_view).
 -behaviour(arizona_view).
 -compile({parse_transform, arizona_parse_transform}).
 -export([mount/2, render/1]).
@@ -6,7 +6,7 @@
 mount(PageBindings, _Req) ->
     Bindings = #{id => ~"about"},
     Layout =
-        {blog_layout, render, main_content, #{
+        {arizona_blog_layout, render, main_content, #{
             page_title => maps:get(title, PageBindings),
             nav_active => ~"about"
         }},

@@ -1,4 +1,4 @@
--module(blog_layout).
+-module(arizona_blog_layout).
 -compile({parse_transform, arizona_parse_transform}).
 -export([render/1]).
 
