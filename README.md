@@ -176,7 +176,7 @@ arizona_template:from_string(~"""
 """)
 ```
 
-### Component Rendering
+### Stateful Component Rendering
 
 ```erlang
 arizona_template:from_string(~"""
@@ -189,17 +189,44 @@ arizona_template:from_string(~"""
 """)
 ```
 
+### Stateless Component Rendering
+
+```erlang
+arizona_template:from_string(~"""
+<div>
+    {arizona_template:render_stateless(my_module, render_header, #{
+        title => ~"Welcome",
+        user => ~"John"
+    })}
+</div>
+""")
+```
+
 ### List Rendering
 
 ```erlang
 arizona_template:from_string(~"""
 <ul>
-    {arizona_template:render_list(items, Bindings, fun(Item) ->
+    {arizona_template:render_list(fun(Item) ->
         arizona_template:from_string(~"""
         <li>{arizona_template:get_binding(name, Item)}</li>
         """)
-    end)}
+    end, arizona_template:get_binding(items, Bindings))}
 </ul>
+""")
+```
+
+### Map Rendering
+
+```erlang
+arizona_template:from_string(~"""
+<div>
+    {arizona_template:render_map(fun({Key, Value}) ->
+        arizona_template:from_string(~"""
+        <p>{Key}: {Value}</p>
+        """)
+    end, #{~"name" => ~"Arizona", ~"type" => ~"Framework"})}
+</div>
 """)
 ```
 
@@ -285,14 +312,14 @@ render(Bindings) ->
     <html>
     <head>
         <title>My Arizona App</title>
-    </head>
-    <body>
-        {arizona_template:render_slot(arizona_template:get_binding(main_content, Bindings))}
-        <script type="module">
+        <script type="module" async>
             import Arizona from '/assets/js/arizona.min.js';
             globalThis.arizona = new Arizona();
             arizona.connect();
         </script>
+    </head>
+    <body>
+        {arizona_template:render_slot(arizona_template:get_binding(main_content, Bindings))}
     </body>
     </html>
     """).
