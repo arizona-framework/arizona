@@ -10,7 +10,8 @@ and integration between Arizona components and Cowboy infrastructure.
 
 - **View Routes**: `{view, Path, ViewModule, MountArg}` - Arizona view handling
 - **WebSocket Routes**: `{websocket, Path}` - Live connection endpoints
-- **Controller Routes**: `{controller, Path, Handler, State}` - Custom Cowboy handlers for API endpoints
+- **Controller Routes**: `{controller, Path, Handler, State}` - Custom Cowboy handlers for
+  API endpoints
 - **Asset Routes**: Static file serving with multiple source options:
   - `{asset, Path, {dir, Directory}}` - Filesystem directory
   - `{asset, Path, {file, FileName}}` - Single file
