@@ -41,6 +41,7 @@ render(Bindings) ->
     arizona_template:from_string(~""""
     <div
         id="{arizona_template:get_binding(id, Bindings)}"
+        data-testid="presence-view"
         class="container"
     >
         <h1>User Presence Demo</h1>
@@ -71,8 +72,8 @@ render(Bindings) ->
         </div>
 
         <div class="controls">
-            <button id="join-btn" class="join-btn" onclick="joinPresence()">Join Presence</button>
-            <button id="leave-btn" class="leave-btn" onclick="leavePresence()" disabled>Leave Presence</button>
+            <button id="join-btn" data-testid="join-btn" class="join-btn" onclick="joinPresence()">Join Presence</button>
+            <button id="leave-btn" data-testid="leave-btn" class="leave-btn" onclick="leavePresence()" disabled>Leave Presence</button>
         </div>
 
         <div id="status"></div>
