@@ -42,6 +42,8 @@ groups() ->
             render_slot_template_callback_test,
             render_slot_term_test,
             render_list_template_callback_test,
+            render_map_template_callback_test,
+            render_map_error_test,
             from_string_with_module_function_test,
             render_list_error_test
         ]}
@@ -214,4 +216,20 @@ render_list_error_test(Config) when is_list(Config) ->
     ?assertError(
         {function_info_failed, _},
         arizona_template:render_list(BadCallback, List)
+    ).
+
+render_map_template_callback_test(Config) when is_list(Config) ->
+    ct:comment("render_map_template/2 should return arity 4 render callback"),
+    Template = arizona_template:from_string(~"<li>Key: {Key}, Value: {Value}</li>"),
+    Map = #{~"first" => ~"1", ~"second" => ~"2"},
+    Callback = arizona_template:render_map_template(Template, Map),
+    ?assert(is_function(Callback, 4)).
+
+render_map_error_test(Config) when is_list(Config) ->
+    ct:comment("render_map/2 should handle function info failure gracefully"),
+    BadCallback = fun(_Item) -> ok end,
+    Map = #{~"key1" => ~"value1", ~"key2" => ~"value2"},
+    ?assertError(
+        {function_info_failed, _},
+        arizona_template:render_map(BadCallback, Map)
     ).
