@@ -10,6 +10,8 @@ and integration between Arizona components and Cowboy infrastructure.
 
 - **View Routes**: `{view, Path, ViewModule, MountArg}` - Arizona view handling
 - **WebSocket Routes**: `{websocket, Path}` - Live connection endpoints
+- **Controller Routes**: `{controller, Path, Handler, State}` - Custom Cowboy handlers for
+  API endpoints
 - **Asset Routes**: Static file serving with multiple source options:
   - `{asset, Path, {dir, Directory}}` - Filesystem directory
   - `{asset, Path, {file, FileName}}` - Single file
@@ -27,7 +29,8 @@ Config = #{
         {view, ~"/", home_view, #{}},
         {view, ~"/users/[:id]", users_view, #{}},
         {websocket, ~"/live"},
-        {asset, ~"/static/[...]", {priv_dir, myapp, ~"static"}}
+        {controller, ~"/api/presence", my_api_controller, #{}},
+        {asset, ~"/static", {priv_dir, myapp, ~"static"}}
     ]
 }.
 ```
@@ -80,12 +83,13 @@ Integrates Arizona components with Cowboy:
 %% --------------------------------------------------------------------
 
 -nominal route() ::
-    {view, Path :: path(), ViewModule :: module(), MountArg :: dynamic()}
+    {view, Path :: path(), ViewModule :: module(), MountArg :: arizona_view:mount_arg()}
     | {websocket, Path :: path()}
     | {asset, Path :: path(), {dir, Directory :: binary()}}
     | {asset, Path :: path(), {file, FileName :: binary()}}
     | {asset, Path :: path(), {priv_dir, App :: atom(), Directory :: binary()}}
-    | {asset, Path :: path(), {priv_file, App :: atom(), FileName :: binary()}}.
+    | {asset, Path :: path(), {priv_file, App :: atom(), FileName :: binary()}}
+    | {controller, Path :: path(), Handler :: module(), State :: dynamic()}.
 -nominal path() :: binary().
 
 -nominal config() :: #{
@@ -225,7 +229,10 @@ route_to_cowboy({asset, Path, {priv_file, App, FileName}}) when
     is_binary(Path), is_atom(App), is_binary(FileName)
 ->
     % Static file serving for single file from priv directory
-    {Path, cowboy_static, {priv_file, App, FileName}}.
+    {Path, cowboy_static, {priv_file, App, FileName}};
+route_to_cowboy({controller, Path, Handler, State}) when is_binary(Path), is_atom(Handler) ->
+    % View routes use arizona_handler
+    {Path, Handler, State}.
 
 %% Get transport options with defaults
 get_transport_opts(Config, DefaultPort) ->

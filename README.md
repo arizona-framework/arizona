@@ -104,6 +104,7 @@ arizona:start(#{
         routes => [
             {view, ~"/", home_view, #{}},
             {websocket, ~"/live"},
+            {controller, ~"/api/presence", my_api_controller, #{}},
             {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}  % Required for live features
         ]
     },

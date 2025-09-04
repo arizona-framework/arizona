@@ -26,7 +26,8 @@ Config = #{
             {view, ~"/", home_view, #{}},
             {view, ~"/users/[:id]", users_view, #{}},
             {websocket, ~"/live"},
-            {asset, ~"/static/[...]", {priv_dir, myapp, ~"static"}}
+            {controller, ~"/api/presence", my_api_controller, #{}},
+            {asset, ~"/static", {priv_dir, myapp, ~"static"}}
         ]
     },
     reloader => #{
