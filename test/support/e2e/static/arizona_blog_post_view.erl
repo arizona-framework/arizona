@@ -1,4 +1,4 @@
--module(blog_post_view).
+-module(arizona_blog_post_view).
 -behaviour(arizona_view).
 -compile({parse_transform, arizona_parse_transform}).
 -export([mount/2, render/1]).
@@ -12,7 +12,7 @@ mount(Posts, Req) ->
                 id => ~"post"
             },
             Layout =
-                {blog_layout, render, main_content, #{
+                {arizona_blog_layout, render, main_content, #{
                     page_title => maps:get(title, Post),
                     nav_active => ~"blog"
                 }},

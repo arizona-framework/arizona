@@ -1,4 +1,4 @@
--module(static_blog_example).
+-module(arizona_static_blog_example).
 -export([generate_site/0]).
 
 %% Generate the complete static site

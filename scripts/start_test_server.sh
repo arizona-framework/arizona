@@ -30,10 +30,10 @@ Routes = [
     {view, ~\"/todo\", arizona_todo_app_view, #{}},
     {view, ~\"/datagrid\", arizona_datagrid_view, #{}},
     {view, ~\"/modal\", arizona_modal_view, #{}},
-    {view, ~\"/\", blog_home_view, #{title => ~\"My Arizona Blog\"}},
-    {view, ~\"/about\", blog_about_view, #{title => ~\"About Me\"}},
+    {view, ~\"/\", arizona_blog_home_view, #{title => ~\"My Arizona Blog\"}},
+    {view, ~\"/about\", arizona_blog_about_view, #{title => ~\"About Me\"}},
     % In a real implementation, you might load post data from files or database
-    {view, ~\"/post/:post_id\", blog_post_view, #{
+    {view, ~\"/post/:post_id\", arizona_blog_post_view, #{
         ~\"hello-world\" => #{
             title => ~\"Hello World\",
             content => ~\"Welcome to my first blog post!\"
