@@ -82,11 +82,11 @@ render(Bindings) ->
             <div id="users-list">
                 {
                     OnlineUsers = arizona_template:get_binding(online_users, Bindings),
-                    arizona_template:render_list(fun(User) ->
+                    arizona_template:render_map(fun({UserId, UserInfo}) ->
                         arizona_template:from_string(~"""
                         <div class="user-item">
-                            <strong>{maps:get(user_name, User)}</strong>
-                            (ID: {maps:get(user_id, User)})
+                            <strong>{maps:get(user_name, UserInfo)}</strong>
+                            (ID: {UserId})
                         </div>
                         """)
                     end, OnlineUsers)
@@ -210,7 +210,7 @@ handle_event(~"set_user_info", Params, View) ->
     {noreply, UpdatedView};
 handle_event(~"presence", Event, View) ->
     % The server already includes the updated online_users list and count in events
-    OnlineUsers = maps:get(online_users, Event, []),
+    OnlineUsers = maps:get(online_users, Event, #{}),
     OnlineUsersCount = maps:get(online_users_count, Event, 0),
 
     State = arizona_view:get_state(View),

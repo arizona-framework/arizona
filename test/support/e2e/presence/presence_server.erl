@@ -5,9 +5,17 @@
 -export([join_user/2, leave_user/1, get_online_users/0, get_online_users_count/0, is_user_joined/1]).
 -export([init/1, handle_call/3, handle_cast/2]).
 
+-export_type([user_id/0, user_name/0, user_info/0, online_users/0]).
+
+%% Types
+-type user_id() :: binary().
+-type user_name() :: binary().
+-type timestamp() :: integer().
+-type user_info() :: #{user_name := user_name(), timestamp := timestamp()}.
+-type online_users() :: #{user_id() => user_info()}.
+
 -record(state, {
-    % UserId => #{user_name, timestamp}
-    online_users = #{}
+    online_users = #{} :: online_users()
 }).
 
 start_link() ->
@@ -48,7 +56,7 @@ handle_call({join_user, UserId, UserName}, _From, State) ->
                 user_id => UserId,
                 user_name => UserName,
                 timestamp => Timestamp,
-                online_users => format_users_for_broadcast(UpdatedUsers),
+                online_users => UpdatedUsers,
                 online_users_count => maps:size(UpdatedUsers)
             },
             arizona_pubsub:broadcast(~"presence", JoinEvent),
@@ -66,7 +74,7 @@ handle_call({leave_user, UserId}, _From, State) ->
                 user_id => UserId,
                 user_name => UserName,
                 timestamp => erlang:system_time(second),
-                online_users => format_users_for_broadcast(UpdatedUsers),
+                online_users => UpdatedUsers,
                 online_users_count => maps:size(UpdatedUsers)
             },
             arizona_pubsub:broadcast(~"presence", LeaveEvent),
@@ -77,8 +85,7 @@ handle_call({leave_user, UserId}, _From, State) ->
             {reply, {error, user_not_found}, State}
     end;
 handle_call(get_online_users, _From, State) ->
-    Users = format_users_for_broadcast(State#state.online_users),
-    {reply, Users, State};
+    {reply, State#state.online_users, State};
 handle_call(get_online_users_count, _From, State) ->
     Count = maps:size(State#state.online_users),
     {reply, Count, State};
@@ -88,13 +95,3 @@ handle_call({is_user_joined, UserId}, _From, State) ->
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
-
-%% Internal functions
-format_users_for_broadcast(UsersMap) ->
-    maps:fold(
-        fun(UserId, #{user_name := UserName, timestamp := Timestamp}, Acc) ->
-            [#{user_id => UserId, user_name => UserName, timestamp => Timestamp} | Acc]
-        end,
-        [],
-        UsersMap
-    ).
