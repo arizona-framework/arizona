@@ -1,4 +1,4 @@
--module(presence_server).
+-module(arizona_presence_server).
 -behaviour(gen_server).
 
 -export([start_link/0]).

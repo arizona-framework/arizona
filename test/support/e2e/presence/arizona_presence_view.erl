@@ -1,4 +1,4 @@
--module(presence_view).
+-module(arizona_presence_view).
 -compile({parse_transform, arizona_parse_transform}).
 -behaviour(arizona_view).
 
@@ -14,8 +14,8 @@ mount(_MountArg, Request) ->
     end,
 
     % Get current online users from server
-    OnlineUsers = presence_server:get_online_users(),
-    OnlineUsersCount = presence_server:get_online_users_count(),
+    OnlineUsers = arizona_presence_server:get_online_users(),
+    OnlineUsersCount = arizona_presence_server:get_online_users_count(),
 
     Bindings = #{
         id => ~"presence-view",
@@ -31,7 +31,7 @@ mount(_MountArg, Request) ->
     },
 
     Layout =
-        {presence_layout, render, main_content, #{
+        {arizona_presence_layout, render, main_content, #{
             active_url => arizona_request:get_path(Request)
         }},
 
@@ -232,9 +232,9 @@ terminate(_Reason, View) ->
     case arizona_stateful:get_binding(is_joined, State) of
         true ->
             CurrentUserId = arizona_stateful:get_binding(current_user_id, State),
-            case presence_server:is_user_joined(CurrentUserId) of
+            case arizona_presence_server:is_user_joined(CurrentUserId) of
                 true ->
-                    presence_server:leave_user(CurrentUserId);
+                    arizona_presence_server:leave_user(CurrentUserId);
                 false ->
                     ok
             end;

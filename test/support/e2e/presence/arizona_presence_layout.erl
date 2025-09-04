@@ -1,4 +1,4 @@
--module(presence_layout).
+-module(arizona_presence_layout).
 -compile({parse_transform, arizona_parse_transform}).
 -export([render/1]).
 

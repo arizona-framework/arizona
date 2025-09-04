@@ -1,4 +1,4 @@
--module(presence_controller).
+-module(arizona_presence_controller).
 -behaviour(cowboy_rest).
 
 -export([
@@ -45,8 +45,8 @@ handle_json_post(Req, State) ->
 
 handle_json_get(Req, State) ->
     try
-        OnlineUsers = presence_server:get_online_users(),
-        OnlineUsersCount = presence_server:get_online_users_count(),
+        OnlineUsers = arizona_presence_server:get_online_users(),
+        OnlineUsersCount = arizona_presence_server:get_online_users_count(),
 
         Response = json:encode(#{
             online_users => OnlineUsers,
@@ -71,7 +71,7 @@ handle_join(Req, State) ->
     UserName = maps:get(~"user_name", UserData, ~"Anonymous"),
 
     % Use presence server to manage state
-    Result = presence_server:join_user(UserId, UserName),
+    Result = arizona_presence_server:join_user(UserId, UserName),
     Response =
         case Result of
             ok ->
@@ -98,7 +98,7 @@ handle_leave(Req, State) ->
     UserId = maps:get(~"user_id", UserData),
 
     % Use presence server to manage state - handle user not found gracefully
-    Result = presence_server:leave_user(UserId),
+    Result = arizona_presence_server:leave_user(UserId),
     Response =
         case Result of
             ok ->
