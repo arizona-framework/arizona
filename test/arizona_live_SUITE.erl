@@ -227,16 +227,6 @@ end_per_suite(Config) ->
 
     ok.
 
-%% --------------------------------------------------------------------
-%% Helper functions
-%% --------------------------------------------------------------------
-
-%% Create a standard mock request for testing
-mock_request() ->
-    arizona_request:new(arizona_cowboy_request, #{}, #{
-        method => ~"GET", path => ~"/test"
-    }).
-
 init_per_testcase(initial_render_test, Config) ->
     % Start basic live process but don't call initial_render (test will do it)
     {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
@@ -450,3 +440,13 @@ terminate_callback_test(Config) when is_list(Config) ->
     %% Verify the process terminated cleanly
     %% The terminate callback should have been called without errors
     ?assert(not is_process_alive(Pid)).
+
+%% --------------------------------------------------------------------
+%% Helper functions
+%% --------------------------------------------------------------------
+
+%% Create a standard mock request for testing
+mock_request() ->
+    arizona_request:new(arizona_cowboy_request, #{}, #{
+        method => ~"GET", path => ~"/test"
+    }).
