@@ -20,12 +20,12 @@ be created at compile-time via parse transforms or at runtime.
 - Template creation: `new/5`, `from_string/1`, `from_string/4`
 - Type checking: `is_template/1`
 - Accessors: `get_static/1`, `get_dynamic/1`, etc.
-- List rendering: `render_list_template/2`
+- Collection rendering: `render_list_template/2`, `render_map_template/2`
 
 **Template DSL functions (only for use inside template strings):**
 - Variable access: `get_binding/2`, `get_binding/3`, `find_binding/2`
 - Components: `render_stateful/2`, `render_stateless/3`, `render_slot/1`
-- Lists: `render_list/2`
+- Collections: `render_list/2`, `render_map/2`
 
 ## Example
 
@@ -61,6 +61,8 @@ be created at compile-time via parse transforms or at runtime.
 -export([render_slot/1]).
 -export([render_list/2]).
 -export([render_list_template/2]).
+-export([render_map/2]).
+-export([render_map_template/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -79,6 +81,8 @@ be created at compile-time via parse transforms or at runtime.
 -ignore_xref([render_slot/1]).
 -ignore_xref([render_list/2]).
 -ignore_xref([render_list_template/2]).
+-ignore_xref([render_map/2]).
+-ignore_xref([render_map_template/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -478,16 +482,91 @@ Requires `debug_info` when used at runtime without parse transform.
     Item :: dynamic(),
     Callback :: render_callback().
 render_list(ItemCallback, List) ->
+    render_callback_collection(
+        ItemCallback, List, fun arizona_parse_transform:transform_render_list/5
+    ).
+
+-doc ~"""
+Creates a list rendering callback from a compiled template.
+
+Regular API function for rendering lists with pre-compiled templates.
+Used internally by the parse transform optimization.
+""".
+-spec render_list_template(Template, List) -> Callback when
+    Template :: template(),
+    List :: [dynamic()],
+    Callback :: render_callback().
+render_list_template(#template{} = Template, List) ->
+    fun
+        (render, ParentId, _ElementIndex, View) ->
+            arizona_renderer:render_list(Template, List, ParentId, View);
+        (diff, ParentId, ElementIndex, View) ->
+            arizona_differ:diff_list(Template, List, ParentId, ElementIndex, View);
+        (hierarchical, ParentId, ElementIndex, View) ->
+            arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
+    end.
+
+-spec render_map(ItemCallback, Map) -> Callback when
+    ItemCallback :: fun((Item) -> arizona_template:template()),
+    Map :: map(),
+    Item :: {Key, Value},
+    Key :: dynamic(),
+    Value :: dynamic(),
+    Callback :: render_callback().
+render_map(ItemCallback, Map) ->
+    render_callback_collection(
+        ItemCallback, Map, fun arizona_parse_transform:transform_render_map/5
+    ).
+
+-spec render_map_template(Template, Map) -> Callback when
+    Template :: template(),
+    Map :: map(),
+    Callback :: render_callback().
+render_map_template(#template{} = Template, Map) ->
+    fun
+        (render, ParentId, _ElementIndex, View) ->
+            arizona_renderer:render_map(Template, Map, ParentId, View);
+        (diff, ParentId, ElementIndex, View) ->
+            arizona_differ:diff_map(Template, Map, ParentId, ElementIndex, View);
+        (hierarchical, ParentId, ElementIndex, View) ->
+            arizona_hierarchical:hierarchical_map(Template, Map, ParentId, ElementIndex, View)
+    end.
+
+%% --------------------------------------------------------------------
+%% Internal helper functions
+%% --------------------------------------------------------------------
+
+%% Generic helper for render_list and render_map callbacks.
+%%
+%% Extracts function clauses from callback environment, converts to AST,
+%% applies the specified transformation function, and evaluates the result.
+%% Both render_list and render_map use this same pattern with different
+%% transformation functions.
+-spec render_callback_collection(ItemCallback, Collection, TransformFun) -> Callback when
+    ItemCallback :: fun((Item) -> arizona_template:template()),
+    Collection :: [Item] | map(),
+    Item :: dynamic(),
+    TransformFun :: fun(
+        (
+            module(),
+            arizona_token:line(),
+            erl_syntax:syntaxTree(),
+            erl_syntax:syntaxTree(),
+            [compile:option()]
+        ) -> erl_syntax:syntaxTree()
+    ),
+    Callback :: render_callback().
+render_callback_collection(ItemCallback, Collection, TransformFun) ->
     % Extract function clauses from the callback's environment
     % This requires the function to be compiled with debug_info
     case erlang:fun_info(ItemCallback, env) of
         {env, [{_, _, _, _, _, FunClauses}]} ->
             % Convert function clauses back to AST format
             FunArg = erl_syntax:revert(erl_syntax:fun_expr(FunClauses)),
-            ListArg = merl:term(List),
+            CollectionArg = merl:term(Collection),
 
-            % Use parse transform to process the function and create render_list_template call
-            AST = arizona_parse_transform:transform_render_list(erlang, 0, FunArg, ListArg, []),
+            % Use the provided transformation function
+            AST = TransformFun(erlang, 0, FunArg, CollectionArg, []),
 
             % Evaluate the transformed AST to get the final render callback
             erl_eval:expr(
@@ -509,24 +588,4 @@ render_list(ItemCallback, List) ->
                         [Other]
                     )}
             )
-    end.
-
--doc ~"""
-Creates a list rendering callback from a compiled template.
-
-Regular API function for rendering lists with pre-compiled templates.
-Used internally by the parse transform optimization.
-""".
--spec render_list_template(Template, List) -> Callback when
-    Template :: template(),
-    List :: [dynamic()],
-    Callback :: render_callback().
-render_list_template(#template{} = Template, List) ->
-    fun
-        (render, ParentId, _ElementIndex, View) ->
-            arizona_renderer:render_list(Template, List, ParentId, View);
-        (diff, ParentId, ElementIndex, View) ->
-            arizona_differ:diff_list(Template, List, ParentId, ElementIndex, View);
-        (hierarchical, ParentId, ElementIndex, View) ->
-            arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
     end.

@@ -40,6 +40,7 @@ the full component lifecycle and template evaluation.
 -export([render_stateful/3]).
 -export([render_stateless/5]).
 -export([render_list/4]).
+-export([render_map/4]).
 -export([render_template/3]).
 -export([render_dynamic/4]).
 
@@ -153,8 +154,32 @@ render_list(Template, List, ParentId, View) ->
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     DynamicCallback = arizona_template:get_dynamic(Template),
     HtmlList = [
-        render_list_item(DynamicSequence, DynamicCallback, Static, CallbackArg, ParentId, View)
+        render_callback_item(DynamicSequence, DynamicCallback, Static, CallbackArg, ParentId, View)
      || CallbackArg <- List
+    ],
+    {HtmlList, View}.
+
+-doc ~"""
+Renders a map using a template with item callbacks.
+
+Applies the template to each map entry, executing the dynamic callback
+function for each {Key, Value} tuple to generate individual HTML outputs.
+Uses map comprehension for efficient iteration over map entries.
+""".
+-spec render_map(Template, Map, ParentId, View) -> {Html, View1} when
+    Template :: arizona_template:template(),
+    Map :: map(),
+    ParentId :: arizona_stateful:id(),
+    View :: arizona_view:view(),
+    Html :: [arizona_html:html()],
+    View1 :: arizona_view:view().
+render_map(Template, Map, ParentId, View) ->
+    Static = arizona_template:get_static(Template),
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    DynamicCallback = arizona_template:get_dynamic(Template),
+    HtmlList = [
+        render_callback_item(DynamicSequence, DynamicCallback, Static, {Key, Value}, ParentId, View)
+     || Key := Value <- Map
     ],
     {HtmlList, View}.
 
@@ -274,8 +299,8 @@ zip_static_dynamic_test_() ->
 
 -endif.
 
-%% Helper function for render_list
-render_list_item(DynamicSequence, DynamicCallback, Static, CallbackArg, ParentId, View) ->
+%% Helper function for render_list and render_map
+render_callback_item(DynamicSequence, DynamicCallback, Static, CallbackArg, ParentId, View) ->
     Dynamic = DynamicCallback(CallbackArg),
     {DynamicHtml, _UpdatedView} = render_dynamic(DynamicSequence, Dynamic, ParentId, View),
     zip_static_dynamic(Static, DynamicHtml).

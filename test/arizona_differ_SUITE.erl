@@ -27,6 +27,7 @@
     {elvis_style, no_macros, #{
         allow => [
             'RAND_MODULE_NAME',
+            'assert',
             'assertEqual',
             'assertMatch'
         ]
@@ -54,7 +55,9 @@ groups() ->
             diff_stateless_fingerprint_match,
             diff_stateless_fingerprint_mismatch,
             diff_list_fingerprint_match,
-            diff_list_fingerprint_mismatch
+            diff_list_fingerprint_mismatch,
+            diff_map_fingerprint_match,
+            diff_map_fingerprint_mismatch
         ]}
     ].
 
@@ -293,6 +296,92 @@ diff_list_fingerprint_mismatch(Config) when is_list(Config) ->
         Diff
     ).
 
+diff_map_fingerprint_match(Config) when is_list(Config) ->
+    ct:comment("diff_map should return diff when fingerprint matches"),
+
+    % Create a proper map template using parse transform like the renderer test does
+    TemplateAST = arizona_parse_transform:extract_callback_function_body(
+        ?MODULE, ?LINE, merl:quote(~""""
+        fun({Key, Value}) ->
+            arizona_template:from_string(~"""
+            <li>Key: {Key}, Value: {Value}</li>
+            """)
+        end
+        """"), []
+    ),
+    {value, Template, #{}} = erl_eval:expr(erl_syntax:revert(TemplateAST), #{}),
+
+    Map = #{~"first" => ~"1", ~"second" => ~"2"},
+
+    % Create a mock view to provide context
+    ViewModule = ?RAND_MODULE_NAME,
+    View = create_simple_view(ViewModule, ~"map_test"),
+
+    % Test diff_map directly - first establish fingerprint by setting it
+    ParentId = ~"parent",
+    ElementIndex = 1,
+    Fingerprint = arizona_template:get_fingerprint(Template),
+    ViewWithFingerprint = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
+
+    % Now call diff_map - should return diff since fingerprints match
+    {Diff, _UpdatedView} = arizona_differ:diff_map(
+        Template, Map, ParentId, ElementIndex, ViewWithFingerprint
+    ),
+
+    % Should return list of dynamic content (not hierarchical struct)
+    ?assertEqual(2, length(Diff)),
+
+    % Check that expected dynamic content is present (map order may vary)
+    ExpectedItems = [
+        [~"first", ~"1"],
+        [~"second", ~"2"]
+    ],
+    lists:foreach(
+        fun(ExpectedItem) ->
+            ?assert(lists:member(ExpectedItem, Diff))
+        end,
+        ExpectedItems
+    ).
+
+diff_map_fingerprint_mismatch(Config) when is_list(Config) ->
+    ct:comment("diff_map should return hierarchical struct when fingerprint mismatch"),
+
+    % Create a proper map template using parse transform
+    TemplateAST = arizona_parse_transform:extract_callback_function_body(
+        ?MODULE, ?LINE, merl:quote(~""""
+        fun({Key, Value}) ->
+            arizona_template:from_string(~"""
+            <li>Key: {Key}, Value: {Value}</li>
+            """)
+        end
+        """"), []
+    ),
+    {value, Template, #{}} = erl_eval:expr(erl_syntax:revert(TemplateAST), #{}),
+
+    Map = #{~"first" => ~"1", ~"second" => ~"2"},
+
+    % Create mock view and set a DIFFERENT fingerprint to force mismatch
+    ViewModule = ?RAND_MODULE_NAME,
+    View = create_simple_view(ViewModule, ~"map_mismatch_test"),
+
+    ParentId = ~"parent",
+    ElementIndex = 1,
+    % Different from template's actual fingerprint
+    WrongFingerprint = 12345,
+    ViewWithWrongFingerprint = arizona_view:put_fingerprint(
+        ParentId, ElementIndex, WrongFingerprint, View
+    ),
+
+    % Call diff_map - should return hierarchical struct due to fingerprint mismatch
+    {HierarchicalStruct, _UpdatedView} = arizona_differ:diff_map(
+        Template, Map, ParentId, ElementIndex, ViewWithWrongFingerprint
+    ),
+
+    % Should return hierarchical list struct (not a diff list)
+    ?assertEqual(list, maps:get(type, HierarchicalStruct)),
+    ?assertEqual([~"<li>Key: ", ~", Value: ", ~"</li>"], maps:get(static, HierarchicalStruct)),
+    ?assertEqual(2, length(maps:get(dynamic, HierarchicalStruct))).
+
 %% --------------------------------------------------------------------
 %% Helper functions
 %% --------------------------------------------------------------------
@@ -465,3 +554,9 @@ mount_view(Module, Bindings) ->
     View = arizona_view:call_mount_callback(Module, #{}, ArizonaRequest),
     {_Struct, HierarchicalView} = arizona_hierarchical:hierarchical_view(View),
     HierarchicalView.
+
+create_simple_view(Module, Id) ->
+    % Create a minimal view for testing without complex mock setup
+    undefined = arizona_tracker_dict:set_tracker(arizona_tracker:new()),
+    undefined = arizona_hierarchical_dict:set_structure(#{}),
+    arizona_view:new(Module, #{id => Id}, none).

@@ -10,7 +10,7 @@ change and diff updates aren't possible.
 
 - `stateful_struct/0` - Stateful component with ID reference
 - `stateless_struct/0` - Stateless component with static/dynamic parts
-- `list_struct/0` - List rendering with item structures
+- `list_struct/0` - Collection rendering with item structures (lists and maps)
 
 ## Process
 
@@ -36,6 +36,7 @@ change and diff updates aren't possible.
 -export([hierarchical_stateful/5]).
 -export([hierarchical_stateless/6]).
 -export([hierarchical_list/5]).
+-export([hierarchical_map/5]).
 -export([hierarchical_template/4]).
 
 %% --------------------------------------------------------------------
@@ -158,10 +159,44 @@ hierarchical_list(Template, List, ParentId, ElementIndex, View) ->
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     DynamicCallback = arizona_template:get_dynamic(Template),
     DynamicRender = [
-        render_list_hierarchical(
+        render_callback_hierarchical(
             DynamicSequence, DynamicCallback, CallbackArg, ParentId, ElementIndex, View
         )
      || CallbackArg <- List
+    ],
+    Struct = #{
+        type => list,
+        static => arizona_template:get_static(Template),
+        dynamic => DynamicRender
+    },
+    {Struct, FingerprintView}.
+
+-doc ~"""
+Generates hierarchical structure for map rendering.
+
+Similar to list rendering but iterates over map entries as {Key, Value} tuples.
+Returns the same structure type as lists since the rendering pattern is identical.
+""".
+-spec hierarchical_map(Template, Map, ParentId, ElementIndex, View) -> {Struct, View1} when
+    Template :: arizona_template:template(),
+    Map :: map(),
+    ParentId :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
+    View :: arizona_view:view(),
+    Struct :: list_struct(),
+    View1 :: arizona_view:view().
+hierarchical_map(Template, Map, ParentId, ElementIndex, View) ->
+    % Store the fingerprint for future comparisons
+    Fingerprint = arizona_template:get_fingerprint(Template),
+    FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
+
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    DynamicCallback = arizona_template:get_dynamic(Template),
+    DynamicRender = [
+        render_callback_hierarchical(
+            DynamicSequence, DynamicCallback, {Key, Value}, ParentId, ElementIndex, View
+        )
+     || Key := Value <- Map
     ],
     Struct = #{
         type => list,
@@ -251,7 +286,7 @@ maybe_set_tracker_index(_ElementIndex, _DynamicElementIndex) ->
     ok.
 
 %% Helper function to render list hierarchical elements
-render_list_hierarchical(
+render_callback_hierarchical(
     DynamicSequence, DynamicCallback, CallbackArg, ParentId, ElementIndex, View
 ) ->
     Dynamic = DynamicCallback(CallbackArg),

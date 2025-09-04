@@ -42,7 +42,8 @@ $ rebar3 as debug compile
 
 -export([parse_transform/2]).
 -export([transform_render_list/5]).
--export([extract_list_function_body/4]).
+-export([transform_render_map/5]).
+-export([extract_callback_function_body/4]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -50,7 +51,7 @@ $ rebar3 as debug compile
 %% --------------------------------------------------------------------
 
 -ignore_xref([parse_transform/2]).
--ignore_xref([extract_list_function_body/4]).
+-ignore_xref([extract_callback_function_body/4]).
 -ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -102,7 +103,7 @@ and creates a call to `arizona_template:render_list_template/2`.
 transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) ->
     try
         % Extract the item parameter and template string from the function
-        TemplateAST = extract_list_function_body(
+        TemplateAST = extract_callback_function_body(
             Module, Line, FunArg, CompileOpts
         ),
 
@@ -123,20 +124,60 @@ transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) ->
             )
     end.
 
-%% Extract item parameter and template string from list function
 -doc ~"""
-Extracts template content from a render_list callback function.
+Transforms render_map calls to optimized render_map_template calls.
+
+Similar to render_list transformation but for map rendering.
+Extracts the callback function and converts it to a compiled template.
+""".
+-spec transform_render_map(Module, Line, FunArg, MapArg, CompileOpts) -> AST when
+    Module :: module(),
+    Line :: arizona_token:line(),
+    FunArg :: erl_syntax:syntaxTree(),
+    MapArg :: erl_syntax:syntaxTree(),
+    CompileOpts :: [compile:option()],
+    AST :: erl_syntax:syntaxTree().
+transform_render_map(Module, Line, FunArg, MapArg, CompileOpts) ->
+    try
+        % Extract the item parameter and template string from the function
+        % Reuse the same extraction logic as render_list since both use fun(Item) -> Template
+        TemplateAST = extract_callback_function_body(
+            Module, Line, FunArg, CompileOpts
+        ),
+
+        % Create application: arizona_template:render_map_template(Template, Map)
+        TemplateModule = erl_syntax:atom(arizona_template),
+        TemplateFunction = erl_syntax:atom(render_map_template),
+        erl_syntax:application(
+            erl_syntax:module_qualifier(TemplateModule, TemplateFunction), [
+                TemplateAST, MapArg
+            ]
+        )
+    catch
+        Class:Reason:StackTrace ->
+            error(
+                arizona_render_map_transformation_failed,
+                none,
+                error_info({Module, Line, Class, Reason, StackTrace})
+            )
+    end.
+
+%% Extract item parameter and template string from callback function
+-doc ~"""
+Extracts template content from render callback functions (render_list/render_map).
 
 Analyzes the function expression to find `arizona_template:from_string/1`
 calls, extracts the template string, and compiles it into optimized AST.
+Generic function that works for both render_list and render_map since both
+use the same callback pattern: fun(Item) -> Template.
 """.
--spec extract_list_function_body(Module, Line, FunExpr, CompileOpts) -> TemplateAST when
+-spec extract_callback_function_body(Module, Line, FunExpr, CompileOpts) -> TemplateAST when
     Module :: module(),
     Line :: arizona_token:line(),
     FunExpr :: erl_syntax:syntaxTree(),
     CompileOpts :: [compile:option()],
     TemplateAST :: erl_syntax:syntaxTree().
-extract_list_function_body(Module, Line, FunExpr, CompileOpts) ->
+extract_callback_function_body(Module, Line, FunExpr, CompileOpts) ->
     case erl_syntax:type(FunExpr) of
         fun_expr ->
             [Clause] = erl_syntax:fun_expr_clauses(FunExpr),
@@ -182,10 +223,13 @@ extract_list_function_body(Module, Line, FunExpr, CompileOpts) ->
 Formats parse transform errors for compiler diagnostics.
 
 Converts internal transformation errors into human-readable messages
-with context about failed template extraction or render_list transformation.
+with context about failed template extraction or render_list/render_map transformation.
 """.
 -spec format_error(Reason, StackTrace) -> ErrorMap when
-    Reason :: arizona_template_extraction_failed | arizona_render_list_transformation_failed,
+    Reason ::
+        arizona_template_extraction_failed
+        | arizona_render_list_transformation_failed
+        | arizona_render_map_transformation_failed,
     StackTrace :: erlang:stacktrace(),
     ErrorMap :: #{general => string(), reason => io_lib:chars()}.
 format_error(arizona_template_extraction_failed, [{_M, _F, _As, Info} | _]) ->
@@ -203,6 +247,15 @@ format_error(arizona_render_list_transformation_failed, [{_M, _F, _As, Info} | _
     #{
         general => "Arizona render_list transformation failed",
         reason => io_lib:format("Failed to transform render_list in ~p at line ~p:\n~p:~p:~p", [
+            Module, Line, Class, Reason, StackTrace
+        ])
+    };
+format_error(arizona_render_map_transformation_failed, [{_M, _F, _As, Info} | _]) ->
+    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
+    {Module, Line, Class, Reason, StackTrace} = maps:get(cause, ErrorInfo),
+    #{
+        general => "Arizona render_map transformation failed",
+        reason => io_lib:format("Failed to transform render_map in ~p at line ~p:\n~p:~p:~p", [
             Module, Line, Class, Reason, StackTrace
         ])
     }.
@@ -281,6 +334,10 @@ transform_application(Node, Module, CompileOpts) ->
             % Always transform render_list calls - they don't cause infinite recursion
             Line = get_node_line(Node),
             transform_render_list(Module, Line, FunArg, ListArg, CompileOpts);
+        {arizona_template, render_map, 2, [FunArg, MapArg]} ->
+            % Always transform render_map calls - they don't cause infinite recursion
+            Line = get_node_line(Node),
+            transform_render_map(Module, Line, FunArg, MapArg, CompileOpts);
         _ ->
             Node
     end.

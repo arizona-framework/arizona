@@ -195,8 +195,8 @@ init_per_suite(Config) ->
 end_per_suite(Config) ->
     {pg_live_pid, PgLivePid} = proplists:lookup(pg_live_pid, Config),
     {pg_pubsub_pid, PgPubSubPid} = proplists:lookup(pg_pubsub_pid, Config),
-    exit(PgLivePid, normal),
-    exit(PgPubSubPid, normal),
+    is_process_alive(PgLivePid) andalso exit(PgLivePid, normal),
+    is_process_alive(PgPubSubPid) andalso exit(PgPubSubPid, normal),
 
     % Clean up mock modules
     {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
@@ -226,16 +226,6 @@ end_per_suite(Config) ->
     ),
 
     ok.
-
-%% --------------------------------------------------------------------
-%% Helper functions
-%% --------------------------------------------------------------------
-
-%% Create a standard mock request for testing
-mock_request() ->
-    arizona_request:new(arizona_cowboy_request, #{}, #{
-        method => ~"GET", path => ~"/test"
-    }).
 
 init_per_testcase(initial_render_test, Config) ->
     % Start basic live process but don't call initial_render (test will do it)
@@ -277,7 +267,7 @@ init_per_testcase(_TestcaseName, Config) ->
 end_per_testcase(_TestcaseName, Config) ->
     case proplists:lookup(live_pid, Config) of
         {live_pid, Pid} when is_pid(Pid) ->
-            gen_server:stop(Pid);
+            is_process_alive(Pid) andalso gen_server:stop(Pid);
         _ ->
             ok
     end.
@@ -450,3 +440,13 @@ terminate_callback_test(Config) when is_list(Config) ->
     %% Verify the process terminated cleanly
     %% The terminate callback should have been called without errors
     ?assert(not is_process_alive(Pid)).
+
+%% --------------------------------------------------------------------
+%% Helper functions
+%% --------------------------------------------------------------------
+
+%% Create a standard mock request for testing
+mock_request() ->
+    arizona_request:new(arizona_cowboy_request, #{}, #{
+        method => ~"GET", path => ~"/test"
+    }).
