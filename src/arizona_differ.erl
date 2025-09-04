@@ -36,6 +36,7 @@ Only changed dynamic parts are included in the diff.
 -export([diff_root_stateful/3]).
 -export([diff_stateless/6]).
 -export([diff_list/5]).
+-export([diff_map/5]).
 -export([diff_template/4]).
 
 %% --------------------------------------------------------------------
@@ -178,12 +179,49 @@ diff_list(Template, List, ParentId, ElementIndex, View) ->
             DynamicSequence = arizona_template:get_dynamic_sequence(Template),
             DynamicCallback = arizona_template:get_dynamic(Template),
             Diff = [
-                render_list_dynamic(DynamicSequence, DynamicCallback, CallbackArg, ParentId, View)
+                render_callback_dynamic(
+                    DynamicSequence, DynamicCallback, CallbackArg, ParentId, View
+                )
              || CallbackArg <- List
             ],
             {Diff, View};
         false ->
             arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
+    end.
+
+-doc ~"""
+Generates differential updates for a map template.
+
+Compares current map rendering with previous state to generate minimal
+diff patches for changed map elements. Each map entry is rendered as
+a {Key, Value} tuple to the callback function.
+
+Returns `t:diff/0` if fingerprints match and elements can be diffed,
+otherwise falls back to `t:arizona_hierarchical:map_struct/0`.
+""".
+-spec diff_map(Template, Map, ParentId, ElementIndex, View) -> {Result, View1} when
+    Template :: arizona_template:template(),
+    Map :: map(),
+    ParentId :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
+    View :: arizona_view:view(),
+    Result :: diff() | arizona_hierarchical:list_struct(),
+    View1 :: arizona_view:view().
+diff_map(Template, Map, ParentId, ElementIndex, View) ->
+    Fingerprint = arizona_template:get_fingerprint(Template),
+    case arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View) of
+        true ->
+            DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+            DynamicCallback = arizona_template:get_dynamic(Template),
+            Diff = [
+                render_callback_dynamic(
+                    DynamicSequence, DynamicCallback, {Key, Value}, ParentId, View
+                )
+             || Key := Value <- Map
+            ],
+            {Diff, View};
+        false ->
+            arizona_hierarchical:hierarchical_map(Template, Map, ParentId, ElementIndex, View)
     end.
 
 -doc ~"""
@@ -324,8 +362,8 @@ process_html_result(Result, DynamicElementIndex, T, Dynamic, ParentId, ElementIn
     ),
     {[ElementChange | RestChanges], FinalView}.
 
-%% Helper function to render list dynamic elements
-render_list_dynamic(DynamicSequence, DynamicCallback, CallbackArg, ParentId, View) ->
+%% Helper function to render dynamic elements from callback functions
+render_callback_dynamic(DynamicSequence, DynamicCallback, CallbackArg, ParentId, View) ->
     Dynamic = DynamicCallback(CallbackArg),
     {Html, _UpdatedView} = arizona_renderer:render_dynamic(
         DynamicSequence, Dynamic, ParentId, View

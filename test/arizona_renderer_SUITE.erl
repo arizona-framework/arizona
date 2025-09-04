@@ -111,7 +111,7 @@ render_list_test(Config) when is_list(Config) ->
     MockView = create_mock_view(MockStatefulModule, #{id => ~"list"}),
 
     % Test the parse transform by using render_list in template
-    TemplateAST = arizona_parse_transform:extract_list_function_body(
+    TemplateAST = arizona_parse_transform:extract_callback_function_body(
         ?MODULE, ?LINE, merl:quote(~""""
         fun(Item) ->
             arizona_template:from_string(~"""
