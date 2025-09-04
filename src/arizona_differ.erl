@@ -197,7 +197,7 @@ diff patches for changed map elements. Each map entry is rendered as
 a {Key, Value} tuple to the callback function.
 
 Returns `t:diff/0` if fingerprints match and elements can be diffed,
-otherwise falls back to `t:arizona_hierarchical:map_struct/0`.
+otherwise falls back to `t:arizona_hierarchical:list_struct/0`.
 """.
 -spec diff_map(Template, Map, ParentId, ElementIndex, View) -> {Result, View1} when
     Template :: arizona_template:template(),
