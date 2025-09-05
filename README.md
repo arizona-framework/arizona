@@ -573,6 +573,36 @@ I also accept coffees :coffee:
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup,
 testing guidelines, and contribution workflow.
 
+### Contributors
+
+<a href="https://github.com/arizona-framework/arizona/graphs/contributors">
+  <img
+    src="https://contrib.rocks/image?repo=arizona-framework/arizona&max=100&columns=10"
+    width="15%"
+    alt="Contributors"
+  />
+</a>
+
+## Star History
+
+<a href="https://star-history.com/#arizona-framework/arizona">
+  <picture>
+    <source
+      media="(prefers-color-scheme: dark)"
+      srcset="https://api.star-history.com/svg?repos=arizona-framework/arizona&type=Date&theme=dark"
+    />
+    <source
+      media="(prefers-color-scheme: light)"
+      srcset="https://api.star-history.com/svg?repos=arizona-framework/arizona&type=Date"
+    />
+    <img
+      src="https://api.star-history.com/svg?repos=arizona-framework/arizona&type=Date"
+      alt="Star History Chart"
+      width="100%"
+    />
+  </picture>
+</a>
+
 ## License
 
 Copyright (c) 2023-2025 [William Fank Thomé](https://github.com/williamthome)
