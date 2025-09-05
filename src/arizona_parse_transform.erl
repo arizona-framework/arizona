@@ -274,7 +274,7 @@ output_forms_to_tmp(undefined, _Forms) ->
 output_forms_to_tmp(Module, Forms) ->
     FileName = "/tmp/" ++ atom_to_list(Module) ++ ".erl",
     Content = [erl_pp:form(Form, [{linewidth, 100}]) || Form <- Forms],
-    ok = file:write_file(FileName, Content).
+    ok = file:write_file(FileName, unicode:characters_to_binary(Content)).
 -else.
 output_forms_to_tmp(_Module, _Forms) ->
     ok.
