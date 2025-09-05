@@ -25,10 +25,11 @@ Arizona follows a component-based architecture with three main layers:
 
 ### **Component Types**
 
-- **Views** - Top-level page components with full lifecycle management
-- **Stateful Components** - Interactive components with persistent state
+- **Views** - Top-level page components with full lifecycle management (require `id` field)
+- **Stateful Components** - Interactive components with persistent state (require `id` field)
 - **Stateless Components** - Pure rendering functions for simple UI elements
 - **Layouts** - Document wrappers with slot-based content insertion
+- **Collections** - List and map rendering with optimized iteration patterns
 
 ### **Real-time Infrastructure**
 
@@ -100,15 +101,42 @@ handle_event(~"increment", _Params, View) ->
 ```erlang
 arizona:start(#{
     server => #{
-        transport_opts => [{port, 1912}],
+        scheme => http,  % or https
+        transport_opts => [{port, 1912}],  % Cowboy/Ranch transport options
+        proto_opts => #{env => #{custom_option => value}},  % Optional Cowboy protocol options
         routes => [
             {view, ~"/", home_view, #{}},
             {websocket, ~"/live"},
-            {controller, ~"/api/presence", my_api_controller, #{}},
+            {controller, ~"/api/presence", my_api_controller, #{}},  % Plain Cowboy REST handler
             {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}  % Required for live features
         ]
     },
-    reloader => #{enabled => true}  % Development mode
+    reloader => #{
+        enabled => true,  % Development mode
+        rules => [
+            #{
+                directories => ["src"],
+                patterns => [".*\\.erl$"],
+                callback => fun(Files) ->
+                    _ = os:cmd("rebar3 compile"),
+                    lists:foreach(
+                        fun(File) ->
+                            BaseName = filename:basename(File, ".erl"),
+                            Module = list_to_existing_atom(BaseName),
+                            code:purge(Module),
+                            code:load_file(Module)
+                        end,
+                        Files
+                    )
+                end
+            },
+            #{
+                directories => ["assets/js"],
+                patterns => [".*\\.js$"],
+                callback => fun(_Files) -> os:cmd("npm run build") end
+            }
+        ]
+    }
 }).
 ```
 
@@ -179,6 +207,8 @@ arizona_template:from_string(~"""
 
 ### Stateful Component Rendering
 
+Render interactive components that maintain their own state between updates:
+
 ```erlang
 arizona_template:from_string(~"""
 <div>
@@ -192,6 +222,8 @@ arizona_template:from_string(~"""
 
 ### Stateless Component Rendering
 
+Render pure functions that return templates based solely on their input:
+
 ```erlang
 arizona_template:from_string(~"""
 <div>
@@ -204,6 +236,8 @@ arizona_template:from_string(~"""
 ```
 
 ### List Rendering
+
+Iterate over lists with automatic compile-time optimization via parse transforms:
 
 ```erlang
 arizona_template:from_string(~"""
@@ -219,6 +253,8 @@ arizona_template:from_string(~"""
 
 ### Map Rendering
 
+Iterate over key-value pairs with optimized rendering performance:
+
 ```erlang
 arizona_template:from_string(~"""
 <div>
@@ -233,6 +269,8 @@ arizona_template:from_string(~"""
 
 ### Slot Rendering
 
+Insert dynamic content into predefined slots for flexible component composition:
+
 ```erlang
 arizona_template:from_string(~"""
 <div class="modal">
@@ -245,6 +283,8 @@ arizona_template:from_string(~"""
 ```
 
 ### Comments and Escaping
+
+Use template comments and escape braces for literal output in CSS or JavaScript:
 
 ```erlang
 arizona_template:from_string(~"""
@@ -266,6 +306,7 @@ Arizona follows a hierarchical component model with clear separation of concerns
 
 Top-level page components that represent complete routes. Views:
 
+- **Require an `id` field** in their bindings for internal state management and component tracking
 - Initialize from mount arguments and HTTP requests via `mount/2`
 - Manage their own state plus nested stateful components
 - Handle WebSocket events via `handle_event/3`
@@ -276,6 +317,7 @@ Top-level page components that represent complete routes. Views:
 
 Interactive components with persistent internal state. They:
 
+- **Require an `id` field** in their bindings for state management, event routing, and lifecycle tracking
 - Mount with initial bindings via `mount/1`
 - Maintain state between renders for efficient diff updates
 - Handle events independently via `handle_event/3`
@@ -356,17 +398,26 @@ handle_event(~"my_event", Params, State) ->
 
 ### **PubSub Messaging**
 
+Subscribe to topics, broadcast messages, and handle real-time updates:
+
 ```erlang
-% Subscribe to topics
-arizona_pubsub:join(~"notifications", self()),
+% Subscribe to topics during mount
+mount(_Arg, _Request) ->
+    case arizona_live:is_connected(self()) of
+        true -> arizona_pubsub:join(~"time_update", self());
+        false -> ok
+    end,
+    arizona_view:new(?MODULE, #{current_time => ~"Loading..."}).
 
-% Publish messages
-arizona_pubsub:broadcast(~"notifications", #{type => alert, msg => ~"Hello"}),
+% Publish messages from external processes
+arizona_pubsub:broadcast(~"time_update", #{~"time" => TimeString}),
 
-% Handle PubSub in views (treated as events)
-handle_event({pubsub_message, ~"notifications", Data}, _Params, View) ->
-    % Process real-time message
-    {noreply, UpdatedView}.
+% Handle PubSub messages in views (treated as events)
+handle_event(~"time_update", Data, View) ->
+    NewTime = maps:get(~"time", Data),
+    State = arizona_view:get_state(View),
+    UpdatedState = arizona_stateful:put_binding(current_time, NewTime, State),
+    {noreply, arizona_view:update_state(UpdatedState, View)}.
 ```
 
 ### **Process Messages**
@@ -426,12 +477,14 @@ function submitForm(formData) {
 
 ### **Hot Code Reloading**
 
-Arizona includes a development-time file watcher that:
+Arizona provides configurable development-time file watching capabilities:
 
-- Monitors source files for changes
-- Automatically recompiles modified modules
-- Hot-loads updated code without server restart
-- Rebuilds client assets when JS files change
+- Monitor source files for changes (requires manual configuration)
+- Automatically recompile modified modules (via custom callback functions)
+- Hot-load updated code without server restart (using `code:purge/1` and `code:load_file/1`)
+- Rebuild client assets when JS files change (via custom build commands)
+
+> **Note**: Hot reloading requires manual configuration as shown in the Quick Start section.
 
 ### **Static Site Generation**
 
@@ -461,6 +514,16 @@ arizona:start(#{
         transport_opts => #{
             socket_opts => [{port, 443}],
             % Add SSL certificates and options
+            ssl_opts => [
+                {certfile, "/path/to/cert.pem"},
+                {keyfile, "/path/to/key.pem"}
+            ]
+        },
+        proto_opts => #{
+            env => #{
+                max_keepalive => 100,
+                timeout => 60000
+            }
         },
         routes => YourRoutes
     },
@@ -470,9 +533,10 @@ arizona:start(#{
 
 ### **Static Assets**
 
-- Use `arizona_static:generate/1` for pre-generated static sites
-- Serve Arizona's JavaScript assets via CDN for better performance
-- Enable gzip compression at the reverse proxy level
+- Arizona provides required JavaScript client files (`arizona.min.js`, `arizona-worker.min.js`)
+- Asset route `{asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}` is required for WebSocket
+- Use `arizona_static:generate/1` to generate static HTML files from your views
+- Static generation creates SEO-friendly HTML that can be deployed to any web server
 
 ### **Performance Considerations**
 
