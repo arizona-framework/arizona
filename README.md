@@ -577,8 +577,9 @@ testing guidelines, and contribution workflow.
 
 <a href="https://github.com/arizona-framework/arizona/graphs/contributors">
   <img
-    src="https://contrib.rocks/image?repo=arizona-framework/arizona&max=400&columns=20"
-    width="100%"
+    src="https://contrib.rocks/image?repo=arizona-framework/arizona&max=100&columns=10"
+    width="15%"
+    alt="Contributors"
   />
 </a>
 
