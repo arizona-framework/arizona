@@ -114,7 +114,9 @@ hierarchical_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
         ParentId, ElementIndex, Fingerprint, PrepRenderView
     ),
 
-    track_hierarchical_stateful(Id, Template, FingerprintView).
+    Result = track_hierarchical_stateful(Id, Template, FingerprintView),
+    _OldTracker = arizona_tracker_dict:set_current_stateful_id(ParentId),
+    Result.
 
 -doc ~"""
 Generates hierarchical structure for a stateless component.

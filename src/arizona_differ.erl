@@ -104,6 +104,7 @@ diff_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
             {Diff, DiffState, DiffView} = track_diff_stateful(
                 Id, Template, StatefulState, PrepRenderView
             ),
+            _OldTracker = arizona_tracker_dict:set_current_stateful_id(ParentId),
             StatefulView = arizona_view:put_stateful_state(Id, DiffState, DiffView),
             case Diff of
                 [] ->
@@ -261,13 +262,12 @@ diff_template(Template, ParentId, ElementIndex, View) ->
 %% --------------------------------------------------------------------
 
 track_diff_stateful(Id, Template, StatefulState, View) ->
-    _OldTracker = arizona_tracker_dict:set_current_stateful_id(Id),
+    Tracker = arizona_tracker_dict:set_current_stateful_id(Id),
     ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
     case arizona_binder:is_empty(ChangedBindings) of
         true ->
             {[], StatefulState, View};
         false ->
-            Tracker = arizona_tracker_dict:get_tracker(),
             StatefulDependencies = arizona_tracker:get_stateful_dependencies(Id, Tracker),
             % Clear dependencies only for changed variables
             ChangedVarNames = arizona_binder:keys(ChangedBindings),
