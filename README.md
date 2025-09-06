@@ -608,6 +608,6 @@ testing guidelines, and contribution workflow.
 Copyright (c) 2023-2025 [William Fank Thomé](https://github.com/williamthome)
 
 Arizona is 100% open-source and community-driven. All components are
-available under the Apache 2 License on [GitHub](https://github.com/williamthome/arizona).
+available under the Apache 2 License on [GitHub](https://github.com/arizona-framework/arizona).
 
 See [LICENSE.md](LICENSE.md) for more information.
