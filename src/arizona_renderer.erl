@@ -255,6 +255,12 @@ render_static_dynamic(Static, DynamicSequence, Dynamic, ParentId, View) ->
     Html = zip_static_dynamic(Static, DynamicRender),
     {Html, FinalView}.
 
+%% Helper function for render_list and render_map
+render_callback_item(DynamicSequence, DynamicCallback, Static, CallbackArg, ParentId, View) ->
+    Dynamic = DynamicCallback(CallbackArg),
+    {DynamicHtml, _UpdatedView} = render_dynamic(DynamicSequence, Dynamic, ParentId, View),
+    zip_static_dynamic(Static, DynamicHtml).
+
 %% Zip static and dynamic parts for list item
 zip_static_dynamic([], []) ->
     [];
@@ -296,9 +302,3 @@ zip_static_dynamic_test_() ->
     ].
 
 -endif.
-
-%% Helper function for render_list and render_map
-render_callback_item(DynamicSequence, DynamicCallback, Static, CallbackArg, ParentId, View) ->
-    Dynamic = DynamicCallback(CallbackArg),
-    {DynamicHtml, _UpdatedView} = render_dynamic(DynamicSequence, Dynamic, ParentId, View),
-    zip_static_dynamic(Static, DynamicHtml).
