@@ -217,7 +217,23 @@ separate_static_dynamic([Token | Rest], StaticAcc, DynamicAcc, PrevType) ->
     case arizona_token:get_category(Token) of
         static ->
             Text = arizona_token:get_content(Token),
-            separate_static_dynamic(Rest, [Text | StaticAcc], DynamicAcc, static);
+
+            % Consolidate adjacent static parts when processing comment boundaries
+            % When comments are skipped with PrevType = static preserved,
+            % merge the current static text with the previous static text
+            % to maintain proper static part boundaries
+            NewStaticAcc =
+                case PrevType of
+                    static ->
+                        % Consolidate: merge current text with previous static part
+                        PrevText = hd(StaticAcc),
+                        [<<PrevText/binary, Text/binary>> | tl(StaticAcc)];
+                    _ ->
+                        % First static or after dynamic: add as new static part
+                        [Text | StaticAcc]
+                end,
+
+            separate_static_dynamic(Rest, NewStaticAcc, DynamicAcc, static);
         dynamic ->
             Line = arizona_token:get_line(Token),
             ExprText = arizona_token:get_content(Token),
@@ -255,3 +271,56 @@ error_info(Cause) ->
             module => ?MODULE
         }}
     ].
+
+%% --------------------------------------------------------------------
+%% EUnit Tests
+%% --------------------------------------------------------------------
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+separate_static_dynamic_test_() ->
+    [
+        {"Adjacent static parts should consolidate after comments",
+            test_comment_boundary_consolidation()},
+        {"Regular static/dynamic separation", test_normal_separation()}
+    ].
+
+test_comment_boundary_consolidation() ->
+    % Create tokens: static, comment, static, dynamic, static
+    StaticToken1 = arizona_token:new(static, 1, ~"<div>"),
+    CommentToken = arizona_token:new(comment, 1, ~" comment "),
+    StaticToken2 = arizona_token:new(static, 1, ~"<section>"),
+    DynamicToken = arizona_token:new(dynamic, 1, ~"title"),
+    StaticToken3 = arizona_token:new(static, 1, ~"</section></div>"),
+
+    Tokens = [StaticToken1, CommentToken, StaticToken2, DynamicToken, StaticToken3],
+    {Static, Dynamic} = separate_static_dynamic(Tokens),
+
+    % Should consolidate first two static parts due to comment boundary
+    % Result: ["<div><section>", "</section></div>"], not ["<div>", "<section>", "</section></div>"]
+    [
+        ?_assertEqual(2, length(Static)),
+        ?_assertEqual(~"<div><section>", lists:nth(1, Static)),
+        ?_assertEqual(~"</section></div>", lists:nth(2, Static)),
+        ?_assertEqual(1, length(Dynamic))
+    ].
+
+test_normal_separation() ->
+    % Create tokens: static, dynamic, static
+    StaticToken1 = arizona_token:new(static, 1, ~"<h1>"),
+    DynamicToken = arizona_token:new(dynamic, 1, ~"title"),
+    StaticToken2 = arizona_token:new(static, 1, ~"</h1>"),
+
+    Tokens = [StaticToken1, DynamicToken, StaticToken2],
+    {Static, Dynamic} = separate_static_dynamic(Tokens),
+
+    % Should NOT consolidate across dynamic boundary
+    [
+        ?_assertEqual(2, length(Static)),
+        ?_assertEqual(~"<h1>", lists:nth(1, Static)),
+        ?_assertEqual(~"</h1>", lists:nth(2, Static)),
+        ?_assertEqual(1, length(Dynamic))
+    ].
+
+-endif.
