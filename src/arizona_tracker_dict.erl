@@ -21,8 +21,6 @@ undefined
 #tracker{...}
 3> arizona_tracker_dict:record_variable_dependency(title).
 #tracker{...}
-4> Tracker = arizona_tracker_dict:get_tracker().
-#tracker{...}
 ```
 """.
 
@@ -30,7 +28,6 @@ undefined
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([get_tracker/0]).
 -export([set_tracker/1]).
 -export([set_current_stateful_id/1]).
 -export([set_current_element_index/1]).
@@ -41,16 +38,6 @@ undefined
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
-
--doc ~"""
-Retrieves the tracker stored in the process dictionary.
-
-Returns the current tracker or `undefined` if none is stored.
-""".
--spec get_tracker() -> Tracker | undefined when
-    Tracker :: arizona_tracker:tracker().
-get_tracker() ->
-    get(?MODULE).
 
 -doc ~"""
 Stores a tracker in the process dictionary.
@@ -155,3 +142,12 @@ clear_changed_variable_dependencies(StatefulId, VarNames) ->
             ),
             set_tracker(UpdatedTracker)
     end.
+
+%% --------------------------------------------------------------------
+%% Internal helper functions
+%% --------------------------------------------------------------------
+
+-spec get_tracker() -> Tracker | undefined when
+    Tracker :: arizona_tracker:tracker().
+get_tracker() ->
+    get(?MODULE).

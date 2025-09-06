@@ -40,7 +40,8 @@
 
 all() ->
     [
-        {group, diff_tests}
+        {group, diff_tests},
+        {group, tracker_context_tests}
     ].
 
 groups() ->
@@ -58,6 +59,9 @@ groups() ->
             diff_list_fingerprint_mismatch,
             diff_map_fingerprint_match,
             diff_map_fingerprint_mismatch
+        ]},
+        {tracker_context_tests, [parallel], [
+            tracker_context_restoration_fix
         ]}
     ].
 
@@ -383,6 +387,38 @@ diff_map_fingerprint_mismatch(Config) when is_list(Config) ->
     ?assertEqual(2, length(maps:get(dynamic, HierarchicalStruct))).
 
 %% --------------------------------------------------------------------
+%% Tracker context tests
+%% --------------------------------------------------------------------
+
+tracker_context_restoration_fix(Config) when is_list(Config) ->
+    ct:comment("Variables after stateful components should be tracked correctly"),
+
+    % Template layout: title -> render_stateful -> footer
+    % Tests that 'footer' variable (positioned after stateful component) is tracked
+    {Module, _Id, _StatefulModule, _StatefulId, _StatefulElementIndex, _StatelessModule,
+        _StatelessFunction, _StatelessElementIndex} = mock_modules(
+        ?RAND_MODULE_NAME, ?RAND_MODULE_NAME, ?RAND_MODULE_NAME
+    ),
+
+    % Initial mount with footer having default empty value
+    View = mount_view(Module, #{}),
+    State = arizona_view:get_state(View),
+
+    % Change footer variable - this tests tracker context restoration
+    % If context isn't restored after processing stateful component,
+    % footer dependency won't be tracked and no diff will be generated
+    UpdatedState = arizona_stateful:put_binding(footer, ~"Changed footer", State),
+    ViewWithChanges = arizona_view:update_state(UpdatedState, View),
+
+    % Generate diff - should include footer change if tracking works correctly
+    {Diff, _UpdatedView} = arizona_differ:diff_view(ViewWithChanges),
+
+    % Verify footer change was tracked and included in diff
+    ?assert(length(Diff) > 0),
+    DiffStr = lists:flatten(io_lib:format("~p", [Diff])),
+    ?assert(string:find(DiffStr, "Changed footer") =/= nomatch).
+
+%% --------------------------------------------------------------------
 %% Helper functions
 %% --------------------------------------------------------------------
 
@@ -444,6 +480,7 @@ mock_view_module(ViewModule, ViewId, StatefulModule, StatefulId, StatelessModule
                             false ->
                                 ~""
                         end})
+                        {arizona_template:get_binding(footer, Bindings, fun() -> ~"" end)}
                     </div>
                     """).
                 """", [

@@ -114,8 +114,6 @@ state, sets current component ID, and renders the resulting template.
     View1 :: arizona_view:view().
 render_stateful(Module, Bindings, View) ->
     {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
-    _OldTracker = arizona_tracker_dict:clear_stateful_dependencies(Id),
-    _ClearTracker = arizona_tracker_dict:set_current_stateful_id(Id),
     render_template(Template, Id, PrepRenderView).
 
 -doc ~"""
