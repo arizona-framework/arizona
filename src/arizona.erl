@@ -10,7 +10,7 @@ server and development-time file reloader.
 
 The framework accepts a configuration map with two main sections:
 - `server` - HTTP/WebSocket server configuration
-- `reloader` - Development-time file watcher configuration
+- `watcher` - Development-time file watcher configuration
 
 Both subsystems can be independently enabled or disabled.
 
@@ -30,13 +30,16 @@ Config = #{
             {asset, ~"/static", {priv_dir, myapp, ~"static"}}
         ]
     },
-    reloader => #{
+    watcher => #{
         enabled => true,
-        debounce_ms => 100,
         rules => [
             #{
                 directories => ["src"],
-                patterns => [".*\\.erl$"]
+                patterns => [".*\\.erl$"],
+                callback => fun(Files) ->
+                    lists:foreach(fun compile:file/1, Files)
+                end,
+                debounce_ms => 100
             }
         ]
     }
@@ -46,7 +49,7 @@ Config = #{
 ## Startup Sequence
 
 1. Apply defaults to server configuration
-2. Start reloader if enabled
+2. Start file watchers if enabled
 3. Start HTTP/WebSocket server if enabled
 4. Store final configuration in persistent term
 5. Return `ok` or `{error, Reason}`
@@ -88,6 +91,8 @@ ok = arizona:stop().
 %% --------------------------------------------------------------------
 
 -export_type([config/0]).
+-export_type([watcher_config/0]).
+-export_type([watcher_rule/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -95,7 +100,17 @@ ok = arizona:stop().
 
 -nominal config() :: #{
     server => arizona_server:config(),
-    reloader => arizona_reloader:config()
+    watcher => watcher_config()
+}.
+-nominal watcher_config() :: #{
+    enabled := boolean(),
+    rules := [watcher_rule()]
+}.
+-nominal watcher_rule() :: #{
+    directories := [string()],
+    patterns => [string()],
+    callback := arizona_watcher:watcher_callback(),
+    debounce_ms => pos_integer()
 }.
 
 %% --------------------------------------------------------------------
@@ -118,12 +133,12 @@ start(Opts) when is_map(Opts) ->
         % Apply defaults to server config
         UserServerConfig = maps:get(server, Opts, #{}),
         ServerConfig = apply_server_defaults(UserServerConfig),
-        ReloaderConfig = maps:get(reloader, Opts, #{}),
-        ok ?= maybe_start_reloader(ReloaderConfig),
+        WatcherConfig = maps:get(watcher, Opts, #{}),
+        ok ?= maybe_start_watchers(WatcherConfig),
         ok ?= maybe_start_server(ServerConfig),
         ok = persistent_term:put(arizona_config, #{
             server => ServerConfig,
-            reloader => ReloaderConfig
+            watcher => WatcherConfig
         }),
         ok
     else
@@ -159,8 +174,8 @@ Gets either the server or reloader configuration from the stored
 framework configuration.
 """.
 -spec get_config(Key) -> Config when
-    Key :: server | reloader,
-    Config :: arizona_server:config() | arizona_reloader:config().
+    Key :: server | watcher,
+    Config :: arizona_server:config() | watcher_config().
 get_config(Key) ->
     maps:get(Key, get_config()).
 
@@ -168,14 +183,33 @@ get_config(Key) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-%% Start reloader system if enabled
-maybe_start_reloader(#{enabled := true} = ReloaderConfig) ->
-    case arizona_reloader:start_link(ReloaderConfig) of
-        {ok, _Pid} -> ok;
-        {error, Reason} -> {error, {reloader_failed, Reason}}
+%% Start file watcher system if enabled
+maybe_start_watchers(#{enabled := true, rules := Rules}) ->
+    case start_watcher_supervisor() of
+        {ok, _SupPid} ->
+            start_watcher_instances(Rules);
+        {error, Reason} ->
+            {error, {watcher_supervisor_failed, Reason}}
     end;
-maybe_start_reloader(_ReloaderConfig) ->
+maybe_start_watchers(_WatcherConfig) ->
     ok.
+
+start_watcher_supervisor() ->
+    case arizona_watcher_sup:start_link() of
+        {ok, Pid} -> {ok, Pid};
+        {error, {already_started, Pid}} -> {ok, Pid};
+        Error -> Error
+    end.
+
+start_watcher_instances([]) ->
+    ok;
+start_watcher_instances([Rule | Rules]) ->
+    case arizona_watcher_sup:start_child(Rule) of
+        {ok, _Pid} ->
+            start_watcher_instances(Rules);
+        {error, Reason} ->
+            {error, {watcher_instance_failed, Reason}}
+    end.
 
 maybe_start_server(#{enabled := true} = ServerConfig) ->
     case arizona_server:start(ServerConfig) of
