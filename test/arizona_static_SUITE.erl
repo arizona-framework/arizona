@@ -209,12 +209,11 @@ init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(cowboy),
     %% For gun WebSocket client
     {ok, _} = application:ensure_all_started(gun),
-    %% Start arizona with complete configuration
-    ok = arizona:start(#{
-        server => #{
-            transport_opts => [{port, ServerPort}],
-            routes => Routes
-        }
+    %% Start arizona server
+    {ok, _Pid} = arizona_server:start(#{
+        enabled => true,
+        transport_opts => [{port, ServerPort}],
+        routes => Routes
     }),
 
     [
@@ -227,8 +226,10 @@ init_per_suite(Config) ->
     ].
 
 end_per_suite(Config) ->
-    % Stop arizona
-    _ = arizona:stop(),
+    % Stop apps
+    ok = arizona_server:stop(),
+    ok = application:stop(gun),
+    ok = application:stop(cowboy),
 
     % Clean up asset files
     TmpDir = proplists:get_value(priv_dir, Config),

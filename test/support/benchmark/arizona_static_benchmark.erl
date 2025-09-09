@@ -135,31 +135,33 @@ benchmark_mixed(RouteCount) ->
 %% --------------------------------------------------------------------
 
 setup_benchmark_server() ->
-    % Ensure applications are started
-    {ok, _} = application:ensure_all_started(cowboy),
-    {ok, _} = application:ensure_all_started(gun),
-
     % Create mock view module
     {ok, _} = create_benchmark_view_module(),
 
-    % Start arizona server
-    Routes = [
-        {view, ~"/", arizona_benchmark_view, #{}}
-    ],
+    % Ensure applications are started
+    {ok, _} = application:ensure_all_started(gun),
+    ok = application:set_env(arizona, server, #{
+        enabled => true,
+        % Random port
+        transport_opts => [{port, 0}],
+        routes => [
+            {view, ~"/", arizona_benchmark_view, #{}}
+        ]
+    }),
+    {ok, _} = application:ensure_all_started(arizona),
 
-    ok = arizona:start(#{
-        server => #{
-            % Random port
-            transport_opts => [{port, 0}],
-            routes => Routes
-        }
-    }).
+    ok.
 
 cleanup_benchmark_server() ->
-    _ = arizona:stop(),
+    % Stop apps
+    ok = application:stop(gun),
+    ok = application:stop(arizona),
+
     % Clean up mock module
     true = code:purge(arizona_benchmark_view),
-    true = code:delete(arizona_benchmark_view).
+    true = code:delete(arizona_benchmark_view),
+
+    ok.
 
 create_benchmark_view_module() ->
     % Create a simple view module for benchmarking
