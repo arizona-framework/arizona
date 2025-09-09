@@ -61,6 +61,13 @@ Can be integrated into application supervision trees:
 -export([stop_child/1]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([start_link/0]).
+-ignore_xref([stop_child/1]).
+
+%% --------------------------------------------------------------------
 %% Behaviour (supervisor) exports
 %% --------------------------------------------------------------------
 
@@ -109,8 +116,12 @@ stop_child(ChildPid) ->
 %% Behaviour (supervisor) callbacks
 %% --------------------------------------------------------------------
 
--spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
-init([]) ->
+-spec init(Args) -> Return when
+    Args :: [],
+    Return :: {ok, {Flags, [ChildSpec]}},
+    Flags :: supervisor:sup_flags(),
+    ChildSpec :: supervisor:child_spec().
+init(_Args) ->
     SupFlags = #{
         strategy => simple_one_for_one,
         % Allow 5 restarts

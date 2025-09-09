@@ -8,6 +8,7 @@
 
 -export([start/2]).
 -export([stop/1]).
+-export([get_server_config/0]).
 
 %% --------------------------------------------------------------------
 %% Behaviour (application) callbacks
@@ -24,11 +25,11 @@ start(_StartType, _StartArgs) ->
         % Start supervisor with config
         SupConfig = create_sup_config(),
         {ok, SupPid} ?= arizona_sup:start_link(SupConfig),
-        % Start watcher instances if enabled
-        WatcherConfig = create_watcher_config(),
-        ok ?= maybe_start_watchers(WatcherConfig),
+        % Start reloader instances if enabled
+        ReloaderConfig = get_reloader_config(),
+        ok ?= maybe_start_reloader(ReloaderConfig),
         % Start server if enabled
-        ServerConfig = create_server_config(),
+        ServerConfig = get_server_config(),
         ok ?= maybe_start_server(ServerConfig),
         {ok, SupPid}
     else
@@ -41,36 +42,25 @@ start(_StartType, _StartArgs) ->
 stop(_State) ->
     ok.
 
+-spec get_server_config() -> Config when
+    Config :: arizona_server:config().
+get_server_config() ->
+    application:get_env(arizona, server, #{enabled => false}).
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
 create_sup_config() ->
-    WatcherConfig = application:get_env(arizona, watcher, #{}),
-    WatcherEnabled = maps:get(enabled, WatcherConfig, false),
-    #{watcher_enabled => WatcherEnabled}.
+    ReloaderConfig = application:get_env(arizona, reloader, #{}),
+    ReloaderEnabled = maps:get(enabled, ReloaderConfig, false),
+    #{watcher_enabled => ReloaderEnabled}.
 
-create_server_config() ->
-    application:get_env(arizona, server, #{enabled => false}).
+get_reloader_config() ->
+    application:get_env(arizona, reloader, #{enabled => false}).
 
-create_watcher_config() ->
-    application:get_env(arizona, watcher, #{enabled => false}).
-
-maybe_start_watchers(#{enabled := true, rules := Rules}) ->
-    % arizona_watcher_sup should already be started by arizona_sup
-    start_watcher_instances(Rules);
-maybe_start_watchers(_WatcherConfig) ->
-    ok.
-
-start_watcher_instances([]) ->
-    ok;
-start_watcher_instances([Rule | Rules]) ->
-    case arizona_watcher_sup:start_child(Rule) of
-        {ok, _Pid} ->
-            start_watcher_instances(Rules);
-        {error, Reason} ->
-            {error, {watcher_instance_failed, Reason}}
-    end.
+maybe_start_reloader(ReloaderConfig) ->
+    arizona_reloader:start(ReloaderConfig).
 
 maybe_start_server(#{enabled := true} = ServerConfig) ->
     case arizona_server:start(ServerConfig) of

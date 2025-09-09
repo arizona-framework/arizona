@@ -68,7 +68,7 @@ The watcher continues running regardless of the callback's return value.
 %% Ignore elvis warnings
 %% --------------------------------------------------------------------
 
-% list_to_atom/1 is acceptable here: atoms are created from process and path hashes for fs watcher names
+% list_to_atom/1 is acceptable here: atoms created from process/path hashes
 -elvis([{elvis_style, no_common_caveats_call, #{caveat_functions => []}}]).
 
 %% --------------------------------------------------------------------
@@ -76,6 +76,12 @@ The watcher continues running regardless of the callback's return value.
 %% --------------------------------------------------------------------
 
 -export([start_link/1]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([start_link/1]).
 
 %% --------------------------------------------------------------------
 %% gen_server callback exports
@@ -95,6 +101,7 @@ The watcher continues running regardless of the callback's return value.
 -export_type([watcher_directory/0]).
 -export_type([watcher_pattern/0]).
 -export_type([watcher_callback/0]).
+-export_type([watcher_callback_result/0]).
 -export_type([filename/0]).
 -export_type([debounce_ms/0]).
 
@@ -125,7 +132,8 @@ The watcher continues running regardless of the callback's return value.
 }.
 -nominal watcher_directory() :: string().
 -nominal watcher_pattern() :: string().
--nominal watcher_callback() :: fun(([filename()]) -> any()).
+-nominal watcher_callback() :: fun(([filename()]) -> watcher_callback_result()).
+-nominal watcher_callback_result() :: dynamic().
 -nominal filename() :: string().
 -nominal debounce_ms() :: pos_integer().
 
@@ -270,13 +278,7 @@ create_initial_state(ConfigData) ->
     AbsDirectories = [filename:absname(Dir) || Dir <- Directories],
 
     % Precompile regex patterns for fast matching
-    CompiledPatterns = [
-        begin
-            {ok, MP} = re:compile(Pattern),
-            MP
-        end
-     || Pattern <- Patterns
-    ],
+    CompiledPatterns = [compile_pattern(Pattern) || Pattern <- Patterns],
 
     #state{
         directories = Directories,
@@ -384,3 +386,8 @@ start_fs_watchers(WatchPaths) ->
 % Give fs watcher time to initialize
 wait_for_fs_ready() ->
     timer:sleep(100).
+
+% Compile regex pattern for fast matching
+compile_pattern(Pattern) ->
+    {ok, MP} = re:compile(Pattern),
+    MP.
