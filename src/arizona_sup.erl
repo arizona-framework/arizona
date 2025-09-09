@@ -9,6 +9,20 @@
 -export([start_link/1]).
 
 %% --------------------------------------------------------------------
+%% Types exports
+%% --------------------------------------------------------------------
+
+-export_type([config/0]).
+
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
+
+-nominal config() :: #{
+    watcher_enabled => boolean()
+}.
+
+%% --------------------------------------------------------------------
 %% Behaviour (supervisor) exports
 %% --------------------------------------------------------------------
 
@@ -19,7 +33,7 @@
 %% --------------------------------------------------------------------
 
 -spec start_link(Config) -> supervisor:startlink_ret() when
-    Config :: arizona:config().
+    Config :: config().
 start_link(Config) ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, Config).
 
@@ -28,7 +42,7 @@ start_link(Config) ->
 %% --------------------------------------------------------------------
 
 -spec init(Config) -> {ok, {SupFlags, [ChildSpec]}} when
-    Config :: arizona:config(),
+    Config :: config(),
     SupFlags :: supervisor:sup_flags(),
     ChildSpec :: supervisor:child_spec().
 init(Config) ->
@@ -55,17 +69,14 @@ build_child_specs(Config) ->
             start => {pg, start_link, [arizona_pubsub]}
         }
     ],
-    maybe_add_watcher_sup(BaseSpecs, Config).
+    maybe_add_watcher_sup(Config, BaseSpecs).
 
-maybe_add_watcher_sup(BaseSpecs, Config) ->
-    case maps:get(watcher, Config, #{}) of
-        #{enabled := true} ->
-            WatcherSupSpec = #{
-                id => arizona_watcher_sup,
-                start => {arizona_watcher_sup, start_link, []},
-                type => supervisor
-            },
-            [WatcherSupSpec | BaseSpecs];
-        _ ->
-            BaseSpecs
-    end.
+maybe_add_watcher_sup(#{watcher_enabled := true}, BaseSpecs) ->
+    WatcherSupSpec = #{
+        id => arizona_watcher_sup,
+        start => {arizona_watcher_sup, start_link, []},
+        type => supervisor
+    },
+    [WatcherSupSpec | BaseSpecs];
+maybe_add_watcher_sup(_Config, BaseSpecs) ->
+    BaseSpecs.
