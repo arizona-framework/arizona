@@ -39,7 +39,7 @@ handle_event(Event, Params, State) ->
 
 ### Redirect:
 ```erlang
-{[{redirect, ~"/dashboard", ~"_self"}], State}
+{[{redirect, ~"/dashboard", #{target => ~"_self"}}], State}
 ```
 
 ### No action (equivalent to old noreply):
@@ -56,7 +56,7 @@ handle_event(Event, Params, State) ->
 -export_type([actions/0]).
 -export_type([reply_data/0]).
 -export_type([redirect_url/0]).
--export_type([redirect_target/0]).
+-export_type([redirect_options/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -64,12 +64,14 @@ handle_event(Event, Params, State) ->
 
 -nominal action() ::
     {reply, reply_data()}
-    | {redirect, redirect_url(), redirect_target()}
+    | {redirect, redirect_url(), redirect_options()}
     | reload.
 
 -nominal actions() :: [action()].
 
 -nominal reply_data() :: dynamic().
 -nominal redirect_url() :: binary().
-% e.g., ~"_self", ~"_blank"
--nominal redirect_target() :: binary().
+-nominal redirect_options() :: #{
+    target => binary(),
+    window_features => binary()
+}.

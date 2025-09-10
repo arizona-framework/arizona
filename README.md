@@ -434,8 +434,14 @@ Arizona uses a flexible action system for handling callback responses. All callb
 {[{reply, #{status => success, data => Value}}], NewState}
 
 % Redirect to new URL
-{[{redirect, ~"/new-page", ~"_self"}], NewState}     % Same tab
-{[{redirect, ~"/external", ~"_blank"}], NewState}    % New tab
+{[{redirect, ~"/new-page", #{target => ~"_self"}}], NewState}     % Same tab
+{[{redirect, ~"/external", #{target => ~"_blank"}}], NewState}    % New tab
+
+% Redirect with window features
+{[{redirect, ~"/popup", #{
+    target => ~"popup_window",
+    window_features => ~"width=600,height=400,resizable=yes"
+}}], NewState}
 
 % Reload the current page
 {[reload], NewState}
@@ -443,7 +449,7 @@ Arizona uses a flexible action system for handling callback responses. All callb
 % Multiple actions - executed in sequence
 {[
     {reply, #{message => ~"Saved successfully!"}},
-    {redirect, ~"/dashboard", ~"_self"}
+    {redirect, ~"/dashboard", #{target => ~"_self"}}
 ], NewState}
 ```
 
@@ -481,7 +487,7 @@ handle_event(~"save_data", Params, State) ->
 % Example with redirect action
 handle_event(~"login_success", _Params, State) ->
     % Redirect user to dashboard after login
-    {[{redirect, ~"/dashboard", ~"_self"}], State}.
+    {[{redirect, ~"/dashboard", #{target => ~"_self"}}], State}.
 
 % Example with reload action
 handle_event(~"reset_app", _Params, State) ->
@@ -493,7 +499,7 @@ handle_event(~"complete_task", _Params, State) ->
     % Send reply and then redirect
     Actions = [
         {reply, #{message => ~"Task completed!"}},
-        {redirect, ~"/tasks", ~"_self"}
+        {redirect, ~"/tasks", #{target => ~"_self"}}
     ],
     {Actions, State}.
 ```

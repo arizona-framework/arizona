@@ -1,7 +1,6 @@
 // Import dependencies
 import morphdom from 'morphdom';
 import ArizonaHierarchical from './arizona-hierarchical.js';
-import { sanitizeForLog } from './arizona-utils.js';
 
 // Arizona Client API
 export default class ArizonaClient {
@@ -193,12 +192,8 @@ export default class ArizonaClient {
     console.log('[Arizona] Redirecting to:', data.url);
     this.dispatchArizonaEvent('redirect', data);
 
-    // Perform the redirect
-    if (data.target === '_blank') {
-      window.open(data.url, '_blank');
-    } else {
-      window.location.href = data.url;
-    }
+    // Perform the redirect with safe option access
+    window.open(data.url, data.options?.target, data.options?.window_features);
   }
 
   handleUnknownMessage(message) {

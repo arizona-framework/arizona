@@ -298,11 +298,11 @@ action_to_command({reply, Data}) ->
         data => Data
     }),
     {text, Payload};
-action_to_command({redirect, Url, Target}) ->
+action_to_command({redirect, Url, Options}) ->
     Payload = json_encode(#{
         type => ~"redirect",
         url => Url,
-        target => Target
+        options => Options
     }),
     {text, Payload};
 action_to_command(reload) ->
