@@ -93,6 +93,9 @@ export default class ArizonaClient {
         case 'reply':
           this.handleReply(data);
           break;
+        case 'redirect':
+          this.handleRedirect(data);
+          break;
         default:
           this.handleUnknownMessage(message);
       }
@@ -184,6 +187,18 @@ export default class ArizonaClient {
   handleReply(data) {
     console.log('[Arizona] WebSocket reply:', data);
     this.dispatchArizonaEvent('reply', data);
+  }
+
+  handleRedirect(data) {
+    console.log('[Arizona] Redirecting to:', data.url);
+    this.dispatchArizonaEvent('redirect', data);
+
+    // Perform the redirect
+    if (data.target === '_blank') {
+      window.open(data.url, '_blank');
+    } else {
+      window.location.href = data.url;
+    }
   }
 
   handleUnknownMessage(message) {

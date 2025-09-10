@@ -40,4 +40,4 @@ handle_event(~"increment", Params, View) ->
     State = arizona_view:get_state(View),
     CounterId = arizona_stateful:get_binding(counter_id, State),
     ok = arizona_live:handle_event(self(), CounterId, ~"pubsub:increment", Params),
-    {noreply, View}.
+    {[], View}.

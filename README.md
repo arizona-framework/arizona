@@ -93,7 +93,7 @@ handle_event(~"increment", _Params, View) ->
     State = arizona_view:get_state(View),
     Count = arizona_stateful:get_binding(count, State),
     NewState = arizona_stateful:put_binding(count, Count + 1, State),
-    {noreply, arizona_view:update_state(NewState, View)}.
+    {[], arizona_view:update_state(NewState, View)}.
 ```
 
 ### 3. Configure and Start Server
@@ -419,6 +419,42 @@ All components support slot-based composition:
 - Enable flexible component composition and reuse
 - Used in layouts for content insertion and views for dynamic sections
 
+## Action System
+
+Arizona uses a flexible action system for handling callback responses. All callbacks return
+`{Actions, State}` where `Actions` is a list of action tuples.
+
+### **Available Actions**
+
+```erlang
+% No action - just update state
+{[], NewState}
+
+% Reply with data to client
+{[{reply, #{status => success, data => Value}}], NewState}
+
+% Redirect to new URL
+{[{redirect, ~"/new-page", ~"_self"}], NewState}     % Same tab
+{[{redirect, ~"/external", ~"_blank"}], NewState}    % New tab
+
+% Reload the current page
+{[reload], NewState}
+
+% Multiple actions - executed in sequence
+{[
+    {reply, #{message => ~"Saved successfully!"}},
+    {redirect, ~"/dashboard", ~"_self"}
+], NewState}
+```
+
+### **Benefits of the Action System**
+
+- **Multiple Responses**: Send multiple actions per callback
+- **Built-in Functionality**: No need to implement redirects or reloads manually
+- **Consistent API**: Same pattern across views and stateful components
+- **Type Safety**: All actions are validated and processed uniformly
+- **Future Extensible**: Easy to add new action types as needed
+
 ## Event Handling & Real-time Updates
 
 Arizona provides multiple ways to handle user interactions and real-time updates:
@@ -434,8 +470,32 @@ Arizona provides multiple ways to handle user interactions and real-time updates
 
 % In view/component modules - handle events
 handle_event(~"my_event", Params, State) ->
-    % Update state and return {noreply, NewState}
-    {noreply, arizona_stateful:put_binding(updated, true, State)}.
+    % Update state and return {Actions, NewState} where Actions is a list
+    {[], arizona_stateful:put_binding(updated, true, State)}.
+
+% Example with actions - reply to client with data
+handle_event(~"save_data", Params, State) ->
+    % Process data and send reply action to client
+    {[{reply, #{status => success, id => 123}}], UpdatedState}.
+
+% Example with redirect action
+handle_event(~"login_success", _Params, State) ->
+    % Redirect user to dashboard after login
+    {[{redirect, ~"/dashboard", ~"_self"}], State}.
+
+% Example with reload action
+handle_event(~"reset_app", _Params, State) ->
+    % Reload the entire page
+    {[reload], State}.
+
+% Example with multiple actions
+handle_event(~"complete_task", _Params, State) ->
+    % Send reply and then redirect
+    Actions = [
+        {reply, #{message => ~"Task completed!"}},
+        {redirect, ~"/tasks", ~"_self"}
+    ],
+    {Actions, State}.
 ```
 
 ### **PubSub Messaging**
@@ -459,7 +519,7 @@ handle_event(~"time_update", Data, View) ->
     NewTime = maps:get(~"time", Data),
     State = arizona_view:get_state(View),
     UpdatedState = arizona_stateful:put_binding(current_time, NewTime, State),
-    {noreply, arizona_view:update_state(UpdatedState, View)}.
+    {[], arizona_view:update_state(UpdatedState, View)}.
 ```
 
 ### **Process Messages**
@@ -468,7 +528,7 @@ handle_event(~"time_update", Data, View) ->
 % Views can handle arbitrary Erlang messages
 handle_info({timer, update}, View) ->
     % Handle timer or other process messages
-    {noreply, UpdatedView}.
+    {[], UpdatedView}.
 ```
 
 ### **Client-Side Event Listening**
@@ -476,8 +536,8 @@ handle_info({timer, update}, View) ->
 Arizona automatically dispatches custom events for meaningful server interactions,
 allowing application code to react to server responses.
 
-The `reply` event is triggered when `handle_event/3` returns `{reply, Reply, View}`
-(in views) or `{reply, Reply, StatefulState}` (in stateful components):
+The `reply` event is triggered when `handle_event/3` returns `{[{reply, Data}], View}`
+(in views) or `{[{reply, Data}], StatefulState}` (in stateful components):
 
 ```javascript
 // Listen for server events in your application

@@ -208,7 +208,7 @@ handle_event(~"set_user_info", Params, View) ->
         State
     ),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
-    {noreply, UpdatedView};
+    {[], UpdatedView};
 handle_event(~"presence", Event, View) ->
     % The server already includes the updated online_users list and count in events
     OnlineUsers = maps:get(online_users, Event, #{}),
@@ -224,7 +224,7 @@ handle_event(~"presence", Event, View) ->
         State
     ),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
-    {noreply, UpdatedView}.
+    {[], UpdatedView}.
 
 terminate(_Reason, View) ->
     State = arizona_view:get_state(View),

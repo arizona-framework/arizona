@@ -135,14 +135,13 @@ terminate(_Reason, _View) ->
     Event :: arizona_stateful:event_name(),
     Params :: arizona_stateful:event_params(),
     View :: view(),
-    Result :: {reply, Reply, View1} | {noreply, View1},
-    Reply :: arizona_stateful:event_reply(),
+    Result :: {arizona_action:actions(), View1},
     View1 :: view().
 
 -callback handle_info(Info, View) -> Result when
     Info :: term(),
     View :: view(),
-    Result :: {noreply, View1},
+    Result :: {arizona_action:actions(), View1},
     View1 :: view().
 
 -callback terminate(Reason, View) -> Result when
@@ -188,14 +187,13 @@ call_render_callback(#view{state = State}) ->
 Executes a view's event handler callback.
 
 Calls the module's `handle_event/3` function to process WebSocket events.
-Returns either a reply to send back or no reply with updated view.
+Returns a list of actions to execute and the updated view.
 """.
 -spec call_handle_event_callback(Event, Params, View) -> Result when
     Event :: arizona_stateful:event_name(),
     Params :: arizona_stateful:event_params(),
     View :: view(),
-    Result :: {reply, Reply, View1} | {noreply, View1},
-    Reply :: arizona_stateful:event_reply(),
+    Result :: {arizona_action:actions(), View1},
     View1 :: view().
 call_handle_event_callback(Event, Params, #view{state = State} = View) ->
     Module = arizona_stateful:get_module(State),
@@ -205,12 +203,12 @@ call_handle_event_callback(Event, Params, #view{state = State} = View) ->
 Executes a view's info handler callback.
 
 Calls the module's `handle_info/2` function to process Erlang process
-messages. Returns updated view without replies.
+messages. Returns a list of actions to execute and the updated view.
 """.
 -spec call_handle_info_callback(Info, View) -> Result when
     Info :: term(),
     View :: view(),
-    Result :: {noreply, View1},
+    Result :: {arizona_action:actions(), View1},
     View1 :: view().
 call_handle_info_callback(Info, #view{state = State} = View) ->
     Module = arizona_stateful:get_module(State),

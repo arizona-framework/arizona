@@ -18,10 +18,10 @@ groups() ->
             start_link_success_test,
             get_view_test,
             initial_render_test,
-            handle_view_event_reply_test,
-            handle_view_event_noreply_test,
-            handle_stateful_event_reply_test,
-            handle_stateful_event_noreply_test,
+            handle_view_event_with_actions_test,
+            handle_view_event_no_actions_test,
+            handle_stateful_event_with_actions_test,
+            handle_stateful_event_no_actions_test,
             handle_info_test,
             is_connected_test,
             pubsub_message_test,
@@ -79,9 +79,9 @@ init_per_suite(Config) ->
         NewCounter = CurrentCounter + 1,
         UpdatedViewState = arizona_stateful:put_binding(counter, NewCounter, ViewState),
         UpdatedView = arizona_view:update_state(UpdatedViewState, View),
-        {reply, #{new_count => NewCounter}, UpdatedView};
-    handle_event(~"no_reply", _Params, View) ->
-        {noreply, View}.
+        {[{reply, #{new_count => NewCounter}}], UpdatedView};
+    handle_event(~"no_action", _Params, View) ->
+        {[], View}.
     """", [{module, merl:term(MockViewModule)}]),
 
     % Create mock stateful component
@@ -107,10 +107,10 @@ init_per_suite(Config) ->
 
     handle_event(~"update", #{~"value" := NewValue}, State) ->
         UpdatedState = arizona_stateful:put_binding(value, NewValue, State),
-        {reply, #{updated => true}, UpdatedState};
-    handle_event(~"update_no_reply", #{~"value" := NewValue}, State) ->
+        {[{reply, #{updated => true}}], UpdatedState};
+    handle_event(~"update_no_action", #{~"value" := NewValue}, State) ->
         UpdatedState = arizona_stateful:put_binding(value, NewValue, State),
-        {noreply, UpdatedState}.
+        {[], UpdatedState}.
     """", [{module, merl:term(MockStatefulComponentModule)}]),
 
     % Create mock view with stateful components
@@ -173,7 +173,7 @@ init_per_suite(Config) ->
         NewCount = CurrentCount + 1,
         UpdatedViewState = arizona_stateful:put_binding(message_count, NewCount, ViewState),
         UpdatedView = arizona_view:update_state(UpdatedViewState, View),
-        {noreply, UpdatedView}.
+        {[], UpdatedView}.
     """", [{module, merl:term(MockViewWithHandleInfoModule)}]),
 
     % Compile and load mock modules
@@ -233,8 +233,8 @@ init_per_testcase(initial_render_test, Config) ->
     {ok, Pid} = arizona_live:start_link(MockViewModule, #{}, mock_request(), self()),
     [{live_pid, Pid} | Config];
 init_per_testcase(TestcaseName, Config) when
-    TestcaseName =:= handle_stateful_event_reply_test;
-    TestcaseName =:= handle_stateful_event_noreply_test
+    TestcaseName =:= handle_stateful_event_with_actions_test;
+    TestcaseName =:= handle_stateful_event_no_actions_test
 ->
     % Start live process with stateful components and initialize
     {mock_view_with_stateful_module, MockViewWithStatefulModule} = proplists:lookup(
@@ -303,8 +303,8 @@ initial_render_test(Config) when is_list(Config) ->
     ?assert(is_list(Static)),
     ?assert(is_list(Dynamic)).
 
-handle_view_event_reply_test(Config) when is_list(Config) ->
-    ct:comment("Test handle_event with undefined StatefulId (view events) - reply"),
+handle_view_event_with_actions_test(Config) when is_list(Config) ->
+    ct:comment("Test handle_event with undefined StatefulId (view events) - with actions"),
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
     Result = arizona_live:handle_event(Pid, undefined, ~"increment", #{}),
@@ -312,27 +312,27 @@ handle_view_event_reply_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent
     receive
-        {reply_response, ~"live_test_id", _Diff, #{new_count := 1}} -> ok
+        {actions_response, ~"live_test_id", _Diff, [{reply, #{new_count := 1}}]} -> ok
     after 1000 ->
-        ct:fail("Expected reply_response message not received")
+        ct:fail("Expected actions_response message not received")
     end.
 
-handle_view_event_noreply_test(Config) when is_list(Config) ->
-    ct:comment("Test handle_event with undefined StatefulId (view events) - noreply"),
+handle_view_event_no_actions_test(Config) when is_list(Config) ->
+    ct:comment("Test handle_event with undefined StatefulId (view events) - no actions"),
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
-    Result = arizona_live:handle_event(Pid, undefined, ~"no_reply", #{}),
+    Result = arizona_live:handle_event(Pid, undefined, ~"no_action", #{}),
     ?assertEqual(ok, Result),
 
     % Verify transport message was sent
     receive
-        {noreply_response, ~"live_test_id", _Diff} -> ok
+        {actions_response, ~"live_test_id", _Diff, []} -> ok
     after 1000 ->
-        ct:fail("Expected noreply_response message not received")
+        ct:fail("Expected actions_response message not received")
     end.
 
-handle_stateful_event_reply_test(Config) when is_list(Config) ->
-    ct:comment("Test handle_event with specific StatefulId (stateful events) - reply"),
+handle_stateful_event_with_actions_test(Config) when is_list(Config) ->
+    ct:comment("Test handle_event with specific StatefulId (stateful events) - with actions"),
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
     Result = arizona_live:handle_event(Pid, ~"stateful_1", ~"update", #{~"value" => 100}),
@@ -340,23 +340,23 @@ handle_stateful_event_reply_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent
     receive
-        {reply_response, ~"stateful_1", _Diff, #{updated := true}} -> ok
+        {actions_response, ~"stateful_1", _Diff, [{reply, #{updated := true}}]} -> ok
     after 1000 ->
-        ct:fail("Expected reply_response message not received")
+        ct:fail("Expected actions_response message not received")
     end.
 
-handle_stateful_event_noreply_test(Config) when is_list(Config) ->
-    ct:comment("Test handle_event with specific StatefulId (stateful events) - noreply"),
+handle_stateful_event_no_actions_test(Config) when is_list(Config) ->
+    ct:comment("Test handle_event with specific StatefulId (stateful events) - no actions"),
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
-    Result = arizona_live:handle_event(Pid, ~"stateful_2", ~"update_no_reply", #{~"value" => 200}),
+    Result = arizona_live:handle_event(Pid, ~"stateful_2", ~"update_no_action", #{~"value" => 200}),
     ?assertEqual(ok, Result),
 
     % Verify transport message was sent
     receive
-        {noreply_response, ~"stateful_2", _Diff} -> ok
+        {actions_response, ~"stateful_2", _Diff, []} -> ok
     after 1000 ->
-        ct:fail("Expected noreply_response message not received")
+        ct:fail("Expected actions_response message not received")
     end.
 
 handle_info_test(Config) when is_list(Config) ->
@@ -395,11 +395,11 @@ pubsub_message_test(Config) when is_list(Config) ->
     % Send pubsub message to live process
     Pid ! {pubsub_message, ~"increment", #{amount => 5}},
 
-    % Expect reply message since increment returns a reply
+    % Expect actions message since increment returns actions
     receive
-        {reply_response, ~"live_test_id", _Diff, #{new_count := _}} -> ok
+        {actions_response, ~"live_test_id", _Diff, [{reply, #{new_count := _}}]} -> ok
     after 1000 ->
-        ct:fail("Expected reply_response message not received")
+        ct:fail("Expected actions_response message not received")
     end.
 
 concurrent_event_handling_test(Config) when is_list(Config) ->
@@ -410,16 +410,16 @@ concurrent_event_handling_test(Config) when is_list(Config) ->
     ok = arizona_live:handle_event(Pid, undefined, ~"increment", #{}),
     ok = arizona_live:handle_event(Pid, undefined, ~"increment", #{}),
 
-    % Expect two reply messages
+    % Expect two actions messages
     receive
-        {reply_response, ~"live_test_id", _Diff1, #{new_count := _}} -> ok
+        {actions_response, ~"live_test_id", _Diff1, [{reply, #{new_count := _}}]} -> ok
     after 1000 ->
-        ct:fail("Expected first reply_response message not received")
+        ct:fail("Expected first actions_response message not received")
     end,
     receive
-        {reply_response, ~"live_test_id", _Diff2, #{new_count := _}} -> ok
+        {actions_response, ~"live_test_id", _Diff2, [{reply, #{new_count := _}}]} -> ok
     after 1000 ->
-        ct:fail("Expected second reply_response message not received")
+        ct:fail("Expected second actions_response message not received")
     end.
 
 terminate_callback_test(Config) when is_list(Config) ->

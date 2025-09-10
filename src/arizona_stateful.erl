@@ -122,8 +122,7 @@ handle_event(~"increment", _Params, State) ->
     Event :: event_name(),
     Params :: event_params(),
     State :: arizona_stateful:state(),
-    Result :: {noreply, State1} | {reply, Reply, State1},
-    Reply :: event_reply(),
+    Result :: {arizona_action:actions(), State1},
     State1 :: arizona_stateful:state().
 
 -optional_callbacks([handle_event/3]).
@@ -161,14 +160,13 @@ call_render_callback(#state{} = State) ->
 Executes a component's event handler callback.
 
 Calls the module's `handle_event/3` function to process WebSocket events.
-Returns either a reply to send back or no reply with updated state.
+Returns a list of actions to execute and the updated state.
 """.
 -spec call_handle_event_callback(Event, Params, State) -> Result when
     Event :: event_name(),
     Params :: event_params(),
     State :: state(),
-    Result :: {reply, Reply, State1} | {noreply, State1},
-    Reply :: event_reply(),
+    Result :: {arizona_action:actions(), State1},
     State1 :: state().
 call_handle_event_callback(Event, Params, #state{} = State) ->
     apply(State#state.module, handle_event, [Event, Params, State]).

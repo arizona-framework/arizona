@@ -37,4 +37,4 @@ handle_event(~"time_update", Data, View) ->
     State = arizona_view:get_state(View),
     UpdatedState = arizona_stateful:put_binding(current_time, NewTime, State),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
-    {noreply, UpdatedView}.
+    {[], UpdatedView}.

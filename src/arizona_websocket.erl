@@ -219,10 +219,8 @@ messages for the client.
     Info :: term(),
     State :: state(),
     Result :: call_result().
-websocket_info({reply_response, StatefulId, Diff, Reply}, State) ->
-    handle_reply_response(StatefulId, Diff, Reply, State);
-websocket_info({noreply_response, StatefulId, Diff}, State) ->
-    handle_noreply_response(StatefulId, Diff, State);
+websocket_info({actions_response, StatefulId, Diff, Actions}, State) ->
+    handle_actions_response(StatefulId, Diff, Actions, State);
 % Handle live reload messages
 websocket_info({pubsub_message, ~"live_reload", {file_changed, reload}}, State) ->
     Message = #{type => ~"reload"},
@@ -278,29 +276,40 @@ handle_event_message(Message, #state{} = State) ->
     ok = arizona_live:handle_event(LivePid, StatefulIdOrUndefined, Event, Params),
     {[], State}.
 
-%% Handle reply response from Live
--spec handle_reply_response(StatefulId, Diff, Reply, State) -> Result when
+%% Handle actions response from Live
+-spec handle_actions_response(StatefulId, Diff, Actions, State) -> Result when
     StatefulId :: arizona_stateful:id(),
     Diff :: arizona_differ:diff(),
-    Reply :: term(),
+    Actions :: arizona_action:actions(),
     State :: state(),
     Result :: call_result().
-handle_reply_response(StatefulId, Diff, Reply, #state{} = State) ->
-    ReplyPayload = json_encode(#{
-        type => ~"reply",
-        data => Reply
-    }),
-    Cmds = [{text, ReplyPayload}],
-    handle_diff_response(StatefulId, Diff, Cmds, State).
+handle_actions_response(StatefulId, Diff, Actions, #state{} = State) ->
+    ActionCmds = [action_to_command(Action) || Action <- Actions],
+    handle_diff_response(StatefulId, Diff, ActionCmds, State).
 
-%% Handle noreply response from Live
--spec handle_noreply_response(StatefulId, Diff, State) -> Result when
-    StatefulId :: arizona_stateful:id(),
-    Diff :: arizona_differ:diff(),
-    State :: state(),
-    Result :: call_result().
-handle_noreply_response(StatefulId, Diff, #state{} = State) ->
-    handle_diff_response(StatefulId, Diff, [], State).
+%% Convert action to WebSocket command
+-spec action_to_command(Action) -> Command when
+    Action :: arizona_action:action(),
+    Command :: {text, JSON},
+    JSON :: json:encode_value().
+action_to_command({reply, Data}) ->
+    Payload = json_encode(#{
+        type => ~"reply",
+        data => Data
+    }),
+    {text, Payload};
+action_to_command({redirect, Url, Target}) ->
+    Payload = json_encode(#{
+        type => ~"redirect",
+        url => Url,
+        target => Target
+    }),
+    {text, Payload};
+action_to_command(reload) ->
+    Payload = json_encode(#{
+        type => ~"reload"
+    }),
+    {text, Payload}.
 
 %% Handle noreply response from Live
 -spec handle_diff_response(StatefulId, Diff, Cmds, State) -> Result when

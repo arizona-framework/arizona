@@ -99,6 +99,9 @@ class ArizonaWebSocketWorker {
         case 'reply':
           this.handleReply(message);
           break;
+        case 'redirect':
+          this.handleRedirect(message);
+          break;
         default:
           this.handleUnknownMessage(message);
       }
@@ -170,6 +173,19 @@ class ArizonaWebSocketWorker {
     this.postMessage({
       type: 'reply',
       data: message.data,
+    });
+  }
+
+  handleRedirect(message) {
+    console.log('[Arizona Worker] Received redirect message');
+
+    // Send redirect message to main thread
+    this.postMessage({
+      type: 'redirect',
+      data: {
+        url: message.url,
+        target: message.target,
+      },
     });
   }
 

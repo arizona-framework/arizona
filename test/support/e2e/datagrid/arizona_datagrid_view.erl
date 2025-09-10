@@ -300,7 +300,7 @@ handle_event(~"delete_user", #{~"id" := IdBin}, View) ->
     UpdatedRows = lists:filter(fun(#{id := UserId}) -> UserId =/= Id end, Rows),
     UpdatedState = arizona_stateful:put_binding(rows, UpdatedRows, State),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
-    {noreply, UpdatedView};
+    {[], UpdatedView};
 handle_event(~"sort_table", #{~"column" := ColumnBin}, View) ->
     State = arizona_view:get_state(View),
     Column = binary_to_existing_atom(ColumnBin, utf8),
@@ -327,7 +327,7 @@ handle_event(~"sort_table", #{~"column" := ColumnBin}, View) ->
         State
     ),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
-    {noreply, UpdatedView}.
+    {[], UpdatedView}.
 
 %% Helper function to sort rows by column and direction
 sort_rows(Rows, Column, Direction) ->
