@@ -96,35 +96,78 @@ handle_event(~"increment", _Params, View) ->
     {noreply, arizona_view:update_state(NewState, View)}.
 ```
 
-### 3. Start Server
+### 3. Configure and Start Server
+
+#### Using sys.config (Recommended)
+
+Create `config/sys.config`:
 
 ```erlang
-arizona:start(#{
-    server => #{
-        scheme => http,  % or https
-        transport_opts => [{port, 1912}],  % Cowboy/Ranch transport options
-        proto_opts => #{env => #{custom_option => value}},  % Optional Cowboy protocol options
+[
+    {arizona, [
+        {server, #{
+            enabled => true,
+            scheme => http,  % or https
+            transport_opts => [{port, 1912}],  % Cowboy/Ranch transport options
+            proto_opts => #{env => #{custom_option => value}},  % Optional Cowboy protocol options
+            routes => [
+                {view, ~"/", home_view, #{}},
+                {websocket, ~"/live"},
+                {controller, ~"/api/presence", my_api_controller, #{}},  % Plain Cowboy REST handler
+                {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}  % Required for live features
+            ]
+        }},
+        {reloader, #{
+            enabled => true,  % Enable file watcher coordination
+            rules => [
+                #{
+                    handler => my_erlang_handler,  % Your custom handler module
+                    watcher => #{
+                        directories => ["src"],
+                        patterns => [".*\\.erl$"],
+                        debounce_ms => 100
+                    }
+                }
+            ]
+        }}
+    ]}
+].
+```
+
+Then start the application:
+
+```erlang
+{ok, _Started} = application:ensure_all_started(arizona).
+```
+
+> [!Note]
+>
+> Add to your `rebar.config` to automatically load the config with `rebar3 shell`:
+>
+> ```erlang
+> {shell, [{config, "config/sys.config"}]}.
+> ```
+
+#### Alternative: Programmatic Configuration
+
+```erlang
+% Configure the application environment
+application:set_env([{arizona, [
+    {server, #{
+        enabled => true,
+        scheme => http,
+        transport_opts => [{port, 1912}],
         routes => [
             {view, ~"/", home_view, #{}},
             {websocket, ~"/live"},
-            {controller, ~"/api/presence", my_api_controller, #{}},  % Plain Cowboy REST handler
-            {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}  % Required for live features
+            {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}
         ]
-    },
-    reloader => #{
-        enabled => true,  % Enable file watcher coordination
-        rules => [
-            #{
-                handler => my_erlang_handler,  % Your custom handler module
-                watcher => #{
-                    directories => ["src"],
-                    patterns => [".*\\.erl$"],
-                    debounce_ms => 100
-                }
-            }
-        ]
-    }
-}).
+    }},
+    {reloader, #{enabled => false}}  % Typically disabled when using programmatic config
+]}]),
+
+% Start the application
+{ok, _Started} = application:ensure_all_started(arizona).
 
 % You must implement your own handler modules:
 
@@ -522,30 +565,39 @@ arizona_static:generate(#{
 
 ### **Server Configuration**
 
-For production, disable development features and configure appropriate settings:
+Configure your production `config/sys.config`:
 
 ```erlang
-arizona:start(#{
-    server => #{
-        scheme => https,  % Use HTTPS in production
-        transport_opts => #{
-            socket_opts => [{port, 443}],
-            % Add SSL certificates and options
-            ssl_opts => [
-                {certfile, "/path/to/cert.pem"},
-                {keyfile, "/path/to/key.pem"}
-            ]
-        },
-        proto_opts => #{
-            env => #{
-                max_keepalive => 100,
-                timeout => 60000
-            }
-        },
-        routes => YourRoutes
-    },
-    reloader => #{enabled => false}  % Disable file watchers in production
-}).
+[
+    {arizona, [
+        {server, #{
+            enabled => true,
+            scheme => https,  % Use HTTPS in production
+            transport_opts => #{
+                socket_opts => [{port, 443}],
+                % Add SSL certificates and options
+                ssl_opts => [
+                    {certfile, "/path/to/cert.pem"},
+                    {keyfile, "/path/to/key.pem"}
+                ]
+            },
+            proto_opts => #{
+                env => #{
+                    max_keepalive => 100,
+                    timeout => 60000
+                }
+            },
+            routes => YourRoutes
+        }},
+        {reloader, #{enabled => false}}  % Disable file watchers in production
+    ]}
+].
+```
+
+Then start normally:
+
+```erlang
+{ok, _Started} = application:ensure_all_started(arizona).
 ```
 
 ### **Static Assets**
