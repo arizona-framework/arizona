@@ -105,12 +105,7 @@ the supervisor's child list.
 -spec stop_child(pid()) -> ok | {error, ErrReason} when
     ErrReason :: running | restarting | not_found | simple_one_for_one.
 stop_child(ChildPid) ->
-    case supervisor:terminate_child(?MODULE, ChildPid) of
-        ok ->
-            supervisor:delete_child(?MODULE, ChildPid);
-        Error ->
-            Error
-    end.
+    supervisor:terminate_child(?MODULE, ChildPid).
 
 %% --------------------------------------------------------------------
 %% Behaviour (supervisor) callbacks
