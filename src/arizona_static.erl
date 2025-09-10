@@ -159,8 +159,8 @@ check_server_running() ->
 fetch_page(RoutePath) ->
     maybe
         ok ?= application:ensure_started(inets),
-        ServerConfig = arizona:get_config(server),
-        Scheme = atom_to_binary(maps:get(scheme, ServerConfig)),
+        ServerConfig = arizona_app:get_server_config(),
+        Scheme = atom_to_binary(maps:get(scheme, ServerConfig, http)),
         {ok, IpAddress, Port} = arizona_server:get_address(),
         Address = inet:ntoa(IpAddress),
         Url = io_lib:format("~s://~s:~p~s", [Scheme, Address, Port, RoutePath]),

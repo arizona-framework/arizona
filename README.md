@@ -47,7 +47,7 @@ Arizona follows a component-based architecture with three main layers:
 - **Efficient differential DOM updates** reducing browser workload
 - **Simple template syntax** using plain HTML with `{}` Erlang expressions
 - **Static site generation** for deployment flexibility and SEO optimization
-- **Development-time file reloader** for fast iteration cycles
+- **File watching infrastructure** for custom development automation
 
 ## Quick Start
 
@@ -96,48 +96,90 @@ handle_event(~"increment", _Params, View) ->
     {noreply, arizona_view:update_state(NewState, View)}.
 ```
 
-### 3. Start Server
+### 3. Configure and Start Server
+
+#### Using sys.config (Recommended)
+
+Create `config/sys.config`:
 
 ```erlang
-arizona:start(#{
-    server => #{
-        scheme => http,  % or https
-        transport_opts => [{port, 1912}],  % Cowboy/Ranch transport options
-        proto_opts => #{env => #{custom_option => value}},  % Optional Cowboy protocol options
+[
+    {arizona, [
+        {server, #{
+            enabled => true,
+            scheme => http,  % or https
+            transport_opts => [{port, 1912}],  % Cowboy/Ranch transport options
+            proto_opts => #{env => #{custom_option => value}},  % Optional Cowboy protocol options
+            routes => [
+                {view, ~"/", home_view, #{}},
+                {websocket, ~"/live"},
+                {controller, ~"/api/presence", my_api_controller, #{}},  % Plain Cowboy REST handler
+                {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}  % Required for live features
+            ]
+        }},
+        {reloader, #{
+            enabled => true,  % Enable file watcher coordination
+            rules => [
+                #{
+                    handler => my_erlang_handler,  % Your custom handler module
+                    watcher => #{
+                        directories => ["src"],
+                        patterns => [".*\\.erl$"],
+                        debounce_ms => 100
+                    }
+                }
+            ]
+        }}
+    ]}
+].
+```
+
+Then start the application:
+
+```erlang
+{ok, _Started} = application:ensure_all_started(arizona).
+```
+
+> [!Note]
+>
+> Add to your `rebar.config` to automatically load the config with `rebar3 shell`:
+>
+> ```erlang
+> {shell, [{config, "config/sys.config"}]}.
+> ```
+
+#### Alternative: Programmatic Configuration
+
+```erlang
+% Configure the application environment
+application:set_env([{arizona, [
+    {server, #{
+        enabled => true,
+        scheme => http,
+        transport_opts => [{port, 1912}],
         routes => [
             {view, ~"/", home_view, #{}},
             {websocket, ~"/live"},
-            {controller, ~"/api/presence", my_api_controller, #{}},  % Plain Cowboy REST handler
-            {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}  % Required for live features
+            {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}
         ]
-    },
-    reloader => #{
-        enabled => true,  % Development mode
-        rules => [
-            #{
-                directories => ["src"],
-                patterns => [".*\\.erl$"],
-                callback => fun(Files) ->
-                    _ = os:cmd("rebar3 compile"),
-                    lists:foreach(
-                        fun(File) ->
-                            BaseName = filename:basename(File, ".erl"),
-                            Module = list_to_existing_atom(BaseName),
-                            code:purge(Module),
-                            code:load_file(Module)
-                        end,
-                        Files
-                    )
-                end
-            },
-            #{
-                directories => ["assets/js"],
-                patterns => [".*\\.js$"],
-                callback => fun(_Files) -> os:cmd("npm run build") end
-            }
-        ]
-    }
-}).
+    }},
+    {reloader, #{enabled => false}}  % Typically disabled when using programmatic config
+]}]),
+
+% Start the application
+{ok, _Started} = application:ensure_all_started(arizona).
+
+% You must implement your own handler modules:
+
+% Example:
+-module(my_erlang_handler).
+-behaviour(arizona_reloader).
+-export([reload/1]).
+
+reload(Files) ->
+    io:format("Compiling ~p~n", [Files]),
+    % Your custom build logic here
+    ok.
 ```
 
 > **Note:** The asset route `{asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}` is required
@@ -475,16 +517,34 @@ function submitForm(formData) {
 
 ## Development Features
 
-### **Hot Code Reloading**
+### **File Watching Infrastructure**
 
-Arizona provides configurable development-time file watching capabilities:
+Arizona provides file watching tools that you can use to build custom development automation:
 
-- Monitor source files for changes (requires manual configuration)
-- Automatically recompile modified modules (via custom callback functions)
-- Hot-load updated code without server restart (using `code:purge/1` and `code:load_file/1`)
-- Rebuild client assets when JS files change (via custom build commands)
+- **Generic File Watcher**: `arizona_watcher` GenServer for monitoring directories
+- **Watcher Supervisor**: `arizona_watcher_sup` for managing multiple watcher instances
+- **Reloader Coordination**: `arizona_reloader` system for organizing multiple handlers
+- **Custom Handler Pattern**: Implement your own reload/build/compilation logic
 
-> **Note**: Hot reloading requires manual configuration as shown in the Quick Start section.
+**Arizona does not provide any built-in reloading functionality.** You must implement your own
+handler modules with custom logic for compilation, hot-loading, asset building, etc.
+
+Example handler implementing the `arizona_reloader` behavior:
+
+```erlang
+-module(my_custom_handler).
+-behaviour(arizona_reloader).
+-export([reload/1]).
+
+reload(Files) ->
+    % Your custom logic: compile, build, reload, etc.
+    io:format("Files changed: ~p~n", [Files]),
+    % You implement what happens here
+    ok.
+```
+
+**Key Point**: The reloader system is just infrastructure. All actual reloading, compilation,
+and automation logic is your responsibility to implement in handler modules.
 
 ### **Static Site Generation**
 
@@ -505,30 +565,39 @@ arizona_static:generate(#{
 
 ### **Server Configuration**
 
-For production, disable development features and configure appropriate settings:
+Configure your production `config/sys.config`:
 
 ```erlang
-arizona:start(#{
-    server => #{
-        scheme => https,  % Use HTTPS in production
-        transport_opts => #{
-            socket_opts => [{port, 443}],
-            % Add SSL certificates and options
-            ssl_opts => [
-                {certfile, "/path/to/cert.pem"},
-                {keyfile, "/path/to/key.pem"}
-            ]
-        },
-        proto_opts => #{
-            env => #{
-                max_keepalive => 100,
-                timeout => 60000
-            }
-        },
-        routes => YourRoutes
-    },
-    reloader => #{enabled => false}  % Disable in production
-}).
+[
+    {arizona, [
+        {server, #{
+            enabled => true,
+            scheme => https,  % Use HTTPS in production
+            transport_opts => #{
+                socket_opts => [{port, 443}],
+                % Add SSL certificates and options
+                ssl_opts => [
+                    {certfile, "/path/to/cert.pem"},
+                    {keyfile, "/path/to/key.pem"}
+                ]
+            },
+            proto_opts => #{
+                env => #{
+                    max_keepalive => 100,
+                    timeout => 60000
+                }
+            },
+            routes => YourRoutes
+        }},
+        {reloader, #{enabled => false}}  % Disable file watchers in production
+    ]}
+].
+```
+
+Then start normally:
+
+```erlang
+{ok, _Started} = application:ensure_all_started(arizona).
 ```
 
 ### **Static Assets**

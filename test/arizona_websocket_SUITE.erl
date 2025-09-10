@@ -49,7 +49,8 @@ init_per_suite(Config) ->
     %% For gun WebSocket client
     {ok, _} = application:ensure_all_started(gun),
     %% Start arizona server
-    {ok, _Pid} = arizona_server:start(#{
+    ok = arizona_server:start(#{
+        enabled => true,
         transport_opts => [{port, ServerPort}],
         routes => [
             {view, ViewWithLayoutRouteUrl, MockViewWithLayoutModule, #{}},
@@ -124,13 +125,15 @@ init_per_suite(Config) ->
     ].
 
 end_per_suite(Config) ->
+    % Stop apps
+    ok = arizona_server:stop(),
+    ok = application:stop(gun),
+    ok = application:stop(cowboy),
+
     {pg_live_pid, PgLivePid} = proplists:lookup(pg_live_pid, Config),
     {pg_pubsub_pid, PgPubSubPid} = proplists:lookup(pg_pubsub_pid, Config),
-    exit(PgLivePid, normal),
-    exit(PgPubSubPid, normal),
-
-    %% Stop arizona server
-    arizona_server:stop(),
+    is_process_alive(PgLivePid) andalso exit(PgLivePid, normal),
+    is_process_alive(PgPubSubPid) andalso exit(PgPubSubPid, normal),
 
     {mock_view_with_layout_module, MockViewWithLayoutModule} = proplists:lookup(
         mock_view_with_layout_module, Config

@@ -8,6 +8,7 @@
 
 -export([start/2]).
 -export([stop/1]).
+-export([get_server_config/0]).
 
 %% --------------------------------------------------------------------
 %% Behaviour (application) callbacks
@@ -21,8 +22,15 @@
     ErrReason :: term().
 start(_StartType, _StartArgs) ->
     maybe
-        {ok, SupPid} ?= arizona_sup:start_link(),
-        ok ?= arizona:start(get_env_config()),
+        % Start supervisor with config
+        SupConfig = create_sup_config(),
+        {ok, SupPid} ?= arizona_sup:start_link(SupConfig),
+        % Start reloader instances if enabled
+        ReloaderConfig = get_reloader_config(),
+        ok ?= maybe_start_reloader(ReloaderConfig),
+        % Start server if enabled
+        ServerConfig = get_server_config(),
+        ok ?= maybe_start_server(ServerConfig),
         {ok, SupPid}
     else
         {error, Reason} ->
@@ -34,14 +42,31 @@ start(_StartType, _StartArgs) ->
 stop(_State) ->
     ok.
 
+-spec get_server_config() -> Config when
+    Config :: arizona_server:config().
+get_server_config() ->
+    application:get_env(arizona, server, #{enabled => false}).
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
-get_env_config() ->
-    ServerConfig = application:get_env(arizona, server, #{enabled => false}),
-    ReloaderConfig = application:get_env(arizona, reloader, #{enabled => false}),
-    #{
-        server => ServerConfig,
-        reloader => ReloaderConfig
-    }.
+create_sup_config() ->
+    ReloaderConfig = application:get_env(arizona, reloader, #{}),
+    ReloaderEnabled = maps:get(enabled, ReloaderConfig, false),
+    #{watcher_enabled => ReloaderEnabled}.
+
+get_reloader_config() ->
+    application:get_env(arizona, reloader, #{enabled => false}).
+
+maybe_start_reloader(ReloaderConfig) ->
+    case arizona_reloader:start(ReloaderConfig) of
+        ok -> ok;
+        {error, Reason} -> {error, {reloader_failed, Reason}}
+    end.
+
+maybe_start_server(ServerConfig) ->
+    case arizona_server:start(ServerConfig) of
+        ok -> ok;
+        {error, Reason} -> {error, {server_failed, Reason}}
+    end.

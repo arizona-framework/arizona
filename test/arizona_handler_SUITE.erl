@@ -39,7 +39,8 @@ init_per_suite(Config) ->
     % For httpc
     {ok, _} = application:ensure_all_started(inets),
     % Start arizona server
-    {ok, _Pid} = arizona_server:start(#{
+    ok = arizona_server:start(#{
+        enabled => true,
         transport_opts => [{port, ServerPort}],
         routes => [
             {view, ViewRouteUrl, MockViewModule, #{}},
@@ -173,7 +174,9 @@ init_per_suite(Config) ->
 
 end_per_suite(Config) ->
     % Stop arizona server
-    arizona_server:stop(),
+    ok = arizona_server:stop(),
+    ok = application:stop(inets),
+    ok = application:stop(cowboy),
 
     {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
     {mock_error_view_module, MockErrorViewModule} = proplists:lookup(

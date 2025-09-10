@@ -116,8 +116,8 @@ efficient request routing.
 """.
 -spec start(Config) -> Result when
     Config :: config(),
-    Result :: {ok, pid()} | {error, term()}.
-start(Config) when is_map(Config) ->
+    Result :: ok | {error, term()}.
+start(#{enabled := true} = Config) when is_map(Config) ->
     % Compile routes
     Dispatch = compile_routes(maps:get(routes, Config)),
     ok = persistent_term:put(get_dispatch_key(), Dispatch),
@@ -130,7 +130,14 @@ start(Config) when is_map(Config) ->
     % Start listener based on scheme
     Scheme = maps:get(scheme, Config, http),
     Ref = get_listener_key(),
-    start_listener(Scheme, Ref, TransportOpts, ProtoOpts).
+    case start_listener(Scheme, Ref, TransportOpts, ProtoOpts) of
+        {ok, _Pid} ->
+            ok;
+        {error, Reason} ->
+            {error, Reason}
+    end;
+start(Config) when is_map(Config) ->
+    ok.
 
 -doc ~"""
 Stops the running HTTP/WebSocket server.
