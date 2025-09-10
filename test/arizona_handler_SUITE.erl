@@ -39,7 +39,8 @@ init_per_suite(Config) ->
     % For httpc
     {ok, _} = application:ensure_all_started(inets),
     % Start arizona server
-    {ok, _Pid} = arizona_server:start(#{
+    ok = arizona_server:start(#{
+        enabled => true,
         transport_opts => [{port, ServerPort}],
         routes => [
             {view, ViewRouteUrl, MockViewModule, #{}},

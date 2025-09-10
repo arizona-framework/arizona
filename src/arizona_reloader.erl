@@ -147,7 +147,7 @@ Returns `ok` on success or `{error, Reason}` on failure.
     Reason :: dynamic().
 start(#{enabled := true, rules := Rules}) ->
     start_reloader_instances(Rules);
-start(_Config) ->
+start(Config) when is_map(Config) ->
     ok.
 
 -doc ~"""

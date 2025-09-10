@@ -210,7 +210,7 @@ init_per_suite(Config) ->
     %% For gun WebSocket client
     {ok, _} = application:ensure_all_started(gun),
     %% Start arizona server
-    {ok, _Pid} = arizona_server:start(#{
+    ok = arizona_server:start(#{
         enabled => true,
         transport_opts => [{port, ServerPort}],
         routes => Routes

@@ -60,12 +60,13 @@ get_reloader_config() ->
     application:get_env(arizona, reloader, #{enabled => false}).
 
 maybe_start_reloader(ReloaderConfig) ->
-    arizona_reloader:start(ReloaderConfig).
+    case arizona_reloader:start(ReloaderConfig) of
+        ok -> ok;
+        {error, Reason} -> {error, {reloader_failed, Reason}}
+    end.
 
-maybe_start_server(#{enabled := true} = ServerConfig) ->
+maybe_start_server(ServerConfig) ->
     case arizona_server:start(ServerConfig) of
-        {ok, _Pid} -> ok;
+        ok -> ok;
         {error, Reason} -> {error, {server_failed, Reason}}
-    end;
-maybe_start_server(_ServerConfig) ->
-    ok.
+    end.
