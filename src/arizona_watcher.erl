@@ -76,12 +76,14 @@ The watcher continues running regardless of the callback's return value.
 %% --------------------------------------------------------------------
 
 -export([start_link/1]).
+-export([get_state/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
 -ignore_xref([start_link/1]).
+-ignore_xref([get_state/1]).
 
 %% --------------------------------------------------------------------
 %% gen_server callback exports
@@ -97,8 +99,9 @@ The watcher continues running regardless of the callback's return value.
 %% --------------------------------------------------------------------
 
 -export_type([state/0]).
+-export_type([state_map/0]).
 -export_type([config/0]).
--export_type([watcher_directory/0]).
+-export_type([directory/0]).
 -export_type([watcher_pattern/0]).
 -export_type([watcher_callback/0]).
 -export_type([watcher_callback_result/0]).
@@ -110,9 +113,9 @@ The watcher continues running regardless of the callback's return value.
 %% --------------------------------------------------------------------
 
 -record(state, {
-    directories :: [watcher_directory()],
+    directories :: [directory()],
     % Precomputed absolute directories
-    abs_directories :: [string()],
+    abs_directories :: [directory()],
     patterns :: [watcher_pattern()],
     % Precompiled regex patterns
     compiled_patterns :: [re:mp()],
@@ -124,18 +127,28 @@ The watcher continues running regardless of the callback's return value.
 }).
 
 -opaque state() :: #state{}.
+-nominal state_map() :: #{
+    directories := [directory()],
+    abs_directories := [directory()],
+    patterns := [watcher_pattern()],
+    compiled_patterns := [re:mp()],
+    callback := watcher_callback(),
+    debounce_ms := debounce_ms(),
+    debounce_timer := reference() | undefined,
+    pending_files := [filename()]
+}.
 -nominal config() :: #{
-    directories := [watcher_directory()],
+    directories := [directory()],
     patterns => [watcher_pattern()],
     callback := watcher_callback(),
     debounce_ms => debounce_ms()
 }.
--nominal watcher_directory() :: string().
+-nominal directory() :: string().
 -nominal watcher_pattern() :: string().
 -nominal watcher_callback() :: fun(([filename()]) -> watcher_callback_result()).
 -nominal watcher_callback_result() :: dynamic().
 -nominal filename() :: string().
--nominal debounce_ms() :: pos_integer().
+-nominal debounce_ms() :: non_neg_integer().
 
 %% --------------------------------------------------------------------
 %% API function definitions
@@ -152,6 +165,12 @@ Returns {ok, Pid} for the new watcher instance.
     Config :: config().
 start_link(Config) ->
     gen_server:start_link(?MODULE, Config, []).
+
+-spec get_state(Pid) -> StateMap when
+    Pid :: pid(),
+    StateMap :: state_map().
+get_state(Pid) ->
+    gen_server:call(Pid, get_state).
 
 %% --------------------------------------------------------------------
 %% gen_server callback definitions
@@ -175,7 +194,7 @@ init(Config) ->
     Request :: term(),
     From :: {pid(), term()},
     State :: state(),
-    Reply :: map().
+    Reply :: state_map().
 handle_call(get_state, _From, State) ->
     % Return state as map for testing
     StateMap = #{
@@ -208,10 +227,7 @@ handle_info({_Pid, {fs, file_event}, {FilePath, Events}}, State) ->
     end;
 % Handle debounced callback execution
 handle_info({execute_callback, PendingFiles}, State) ->
-    FilesList = sets:to_list(PendingFiles),
-    _Result = execute_callback(State#state.callback, FilesList),
-    % Continue watching regardless of callback return value
-    {noreply, State#state{debounce_timer = undefined, pending_files = sets:new([{version, 2}])}};
+    execute_and_clear_pending(PendingFiles, State#state{debounce_timer = undefined});
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -333,11 +349,21 @@ accumulate_pending_files(FilePath, #state{pending_files = Pending} = State) ->
 
 % Start or restart the debounce timer
 start_debounce_timer(
+    UpdatedPending, #state{debounce_ms = 0} = State
+) ->
+    execute_and_clear_pending(UpdatedPending, State);
+start_debounce_timer(
     UpdatedPending, #state{debounce_ms = DebounceMs, debounce_timer = Timer} = State
 ) ->
     ok = cancel_timer(Timer),
     NewTimer = erlang:send_after(DebounceMs, self(), {execute_callback, UpdatedPending}),
     {noreply, State#state{debounce_timer = NewTimer, pending_files = UpdatedPending}}.
+
+% Execute callback and clear pending files
+execute_and_clear_pending(PendingFiles, State) ->
+    FilesList = sets:to_list(PendingFiles),
+    _Result = execute_callback(State#state.callback, FilesList),
+    {noreply, State#state{pending_files = sets:new([{version, 2}])}}.
 
 % Execute callback with pending files
 execute_callback(Callback, Files) ->
