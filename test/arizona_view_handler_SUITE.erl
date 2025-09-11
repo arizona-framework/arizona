@@ -1,4 +1,4 @@
--module(arizona_handler_SUITE).
+-module(arizona_view_handler_SUITE).
 -behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
 -compile([export_all, nowarn_export_all]).

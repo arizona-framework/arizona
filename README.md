@@ -553,7 +553,6 @@ validate_jwt(_Token, _Secret) ->
 - Each middleware returns `{continue, Req1}` or `{halt, Req1}`
 - If any middleware returns `{halt, Req1}`, processing stops (response already sent)
 - If all middlewares return `{continue, Req1}`, the request reaches the main handler
-- Middlewares can pass data using `cowboy_req:set_meta/3` and `cowboy_req:meta/3`
 
 ### **Architecture Integration**
 
