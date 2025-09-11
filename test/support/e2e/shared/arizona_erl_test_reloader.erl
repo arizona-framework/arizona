@@ -1,10 +1,11 @@
 -module(arizona_erl_test_reloader).
 -behaviour(arizona_reloader).
--export([reload/1]).
+-export([reload/2]).
 
-reload(Files) ->
+reload(Files, Options) ->
     try
-        Cmd = "rebar3 as test compile",
+        Profile = maps:get(profile, Options, test),
+        Cmd = io_lib:format("rebar3 as ~p compile", [Profile]),
         ok = io:format("~n$ ~s~n", [Cmd]),
         CompileResult = os:cmd(Cmd, #{exception_on_failure => true}),
         ok = io:format("~ts", [CompileResult]),
