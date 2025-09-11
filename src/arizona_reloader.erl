@@ -13,7 +13,7 @@ Config = #{
     enabled => true,
     rules => [
         #{
-            handler => my_erl_reloader,     % -behaviour(arizona_reloader)
+            handler => {my_erl_reloader, #{profile => test}}, % {Module, Options}
             watcher => #{                   % arizona_watcher:config()
                 directories => ["src"],
                 patterns => [".*\\.erl$"],
@@ -21,7 +21,7 @@ Config = #{
             }
         },
         #{
-            handler => my_assets_reloader,
+            handler => {my_assets_reloader, #{build_env => development}},
             watcher => #{
                 directories => ["assets"],
                 patterns => [".*\\.js$"],
@@ -39,10 +39,13 @@ Reload handlers must implement the arizona_reloader behavior:
 ```erlang
 -module(my_erl_reloader).
 -behaviour(arizona_reloader).
--export([reload/1]).
+-export([reload/2]).
 
-reload(Files) ->
-    % Custom reload logic for Erlang files
+reload(Files, Options) ->
+    % Custom reload logic for Erlang files with options
+    Profile = maps:get(profile, Options, default),
+    Cmd = io_lib:format("rebar3 as ~s compile", [Profile]),
+    os:cmd(Cmd),
     lists:foreach(fun compile:file/1, Files),
     ok.
 ```
@@ -84,6 +87,7 @@ monitors specific directories and delegates to the configured handler.
 
 -export_type([config/0]).
 -export_type([rule/0]).
+-export_type([handler_options/0]).
 -export_type([reload_files/0]).
 -export_type([reload_result/0]).
 
@@ -96,9 +100,10 @@ monitors specific directories and delegates to the configured handler.
     rules := [rule()]
 }.
 -nominal rule() :: #{
-    handler := module(),
+    handler := {module(), handler_options()},
     watcher := arizona_watcher:config()
 }.
+-nominal handler_options() :: dynamic().
 -nominal reload_files() :: [arizona_watcher:filename()].
 -nominal reload_result() :: arizona_watcher:watcher_callback_result().
 
@@ -110,11 +115,12 @@ monitors specific directories and delegates to the configured handler.
 Callback for handling file reload operations.
 
 Invoked when files matching the watcher configuration are changed.
-Handlers receive a list of changed files and should perform their
-specific reload logic (compilation, building, etc.).
+Handlers receive a list of changed files and their configured options,
+then should perform their specific reload logic (compilation, building, etc.).
 """.
--callback reload(Files) -> Result when
+-callback reload(Files, HandlerOptions) -> Result when
     Files :: reload_files(),
+    HandlerOptions :: handler_options(),
     Result :: reload_result().
 
 %% --------------------------------------------------------------------
@@ -124,15 +130,16 @@ specific reload logic (compilation, building, etc.).
 -doc ~"""
 Executes a reload handler callback.
 
-Calls the handler module's `reload/1` function with the list of changed files.
-Used by the watcher callback to delegate to appropriate reload handlers.
+Calls the handler module's `reload/2` function with the list of changed files
+and handler options. Used by the watcher callback to delegate to appropriate
+reload handlers.
 """.
 -spec call_reload_callback(Handler, Files) -> Result when
-    Handler :: module(),
+    Handler :: {module(), handler_options()},
     Files :: reload_files(),
     Result :: reload_result().
-call_reload_callback(Handler, Files) ->
-    apply(Handler, reload, [Files]).
+call_reload_callback({HandlerModule, HandlerOptions}, Files) ->
+    apply(HandlerModule, reload, [Files, HandlerOptions]).
 
 -doc ~"""
 Starts the reloader system with the given configuration.

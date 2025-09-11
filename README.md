@@ -123,7 +123,7 @@ Create `config/sys.config`:
             enabled => true,  % Enable file watcher coordination
             rules => [
                 #{
-                    handler => my_erlang_handler,  % Your custom handler module
+                    handler => {my_erlang_handler, #{profile => dev}},  % {Module, Options}
                     watcher => #{
                         directories => ["src"],
                         patterns => [".*\\.erl$"],
@@ -176,10 +176,11 @@ application:set_env([{arizona, [
 % Example:
 -module(my_erlang_handler).
 -behaviour(arizona_reloader).
--export([reload/1]).
+-export([reload/2]).
 
-reload(Files) ->
-    io:format("Compiling ~p~n", [Files]),
+reload(Files, Options) ->
+    Profile = maps:get(profile, Options, default),
+    io:format("Compiling ~p with profile ~p~n", [Files, Profile]),
     % Your custom build logic here
     ok.
 ```
@@ -804,11 +805,11 @@ Example handler implementing the `arizona_reloader` behavior:
 ```erlang
 -module(my_custom_handler).
 -behaviour(arizona_reloader).
--export([reload/1]).
+-export([reload/2]).
 
-reload(Files) ->
+reload(Files, Options) ->
     % Your custom logic: compile, build, reload, etc.
-    io:format("Files changed: ~p~n", [Files]),
+    io:format("Files changed: ~p with options: ~p~n", [Files, Options]),
     % You implement what happens here
     ok.
 ```

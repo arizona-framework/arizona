@@ -57,7 +57,7 @@ maybe
             enabled => true,
             rules => [
                 #{
-                    handler => arizona_erl_test_reloader,
+                    handler => {arizona_erl_test_reloader, #{}},
                     watcher => #{
                         directories => [\"src\", \"test/support/e2e\"],
                         patterns => [\".*\\\\.erl$\"],
@@ -65,7 +65,7 @@ maybe
                     }
                 },
                 #{
-                    handler => arizona_js_test_reloader,
+                    handler => {arizona_js_test_reloader, undefined},
                     watcher => #{
                         directories => [\"assets/js\"],
                         patterns => [\".*\\\\.js$\"],
