@@ -91,6 +91,8 @@ terminate(_Reason, _View) ->
 -export_type([view/0]).
 -export_type([layout/0]).
 -export_type([mount_arg/0]).
+-export_type([handle_event_result/0]).
+-export_type([handle_info_result/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -108,15 +110,15 @@ terminate(_Reason, _View) ->
 }).
 
 -opaque view() :: #view{}.
-
 -nominal layout() :: {
     Module :: module(),
     RenderFun :: atom(),
     SlotName :: atom(),
     Bindings :: arizona_binder:map()
 }.
-
 -nominal mount_arg() :: dynamic().
+-nominal handle_event_result() :: {Actions :: arizona_action:actions(), View :: view()}.
+-nominal handle_info_result() :: {Actions :: arizona_action:actions(), View :: view()}.
 
 %% --------------------------------------------------------------------
 %% Behavior callback definitions
@@ -135,14 +137,12 @@ terminate(_Reason, _View) ->
     Event :: arizona_stateful:event_name(),
     Params :: arizona_stateful:event_params(),
     View :: view(),
-    Result :: {arizona_action:actions(), View1},
-    View1 :: view().
+    Result :: handle_event_result().
 
 -callback handle_info(Info, View) -> Result when
     Info :: term(),
     View :: view(),
-    Result :: {arizona_action:actions(), View1},
-    View1 :: view().
+    Result :: handle_info_result().
 
 -callback terminate(Reason, View) -> Result when
     Reason :: arizona_websocket:terminate_reason(),
@@ -193,8 +193,7 @@ Returns a list of actions to execute and the updated view.
     Event :: arizona_stateful:event_name(),
     Params :: arizona_stateful:event_params(),
     View :: view(),
-    Result :: {arizona_action:actions(), View1},
-    View1 :: view().
+    Result :: handle_event_result().
 call_handle_event_callback(Event, Params, #view{state = State} = View) ->
     Module = arizona_stateful:get_module(State),
     apply(Module, handle_event, [Event, Params, View]).
@@ -208,8 +207,7 @@ messages. Returns a list of actions to execute and the updated view.
 -spec call_handle_info_callback(Info, View) -> Result when
     Info :: term(),
     View :: view(),
-    Result :: {arizona_action:actions(), View1},
-    View1 :: view().
+    Result :: handle_info_result().
 call_handle_info_callback(Info, #view{state = State} = View) ->
     Module = arizona_stateful:get_module(State),
     apply(Module, handle_info, [Info, View]).
