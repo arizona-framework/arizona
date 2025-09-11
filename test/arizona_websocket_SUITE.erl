@@ -53,8 +53,8 @@ init_per_suite(Config) ->
         enabled => true,
         transport_opts => [{port, ServerPort}],
         routes => [
-            {view, ViewWithLayoutRouteUrl, MockViewWithLayoutModule, #{}},
-            {websocket, WebSocketRouteUrl}
+            {view, ViewWithLayoutRouteUrl, MockViewWithLayoutModule, #{}, []},
+            {websocket, WebSocketRouteUrl, #{}, []}
         ]
     }),
 

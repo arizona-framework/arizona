@@ -43,9 +43,9 @@ init_per_suite(Config) ->
         enabled => true,
         transport_opts => [{port, ServerPort}],
         routes => [
-            {view, ViewRouteUrl, MockViewModule, #{}},
-            {view, ErrorViewRouteUrl, MockErrorViewModule, #{}},
-            {view, ViewWithLayoutRouteUrl, MockViewWithLayoutModule, #{}}
+            {view, ViewRouteUrl, MockViewModule, #{}, []},
+            {view, ErrorViewRouteUrl, MockErrorViewModule, #{}, []},
+            {view, ViewWithLayoutRouteUrl, MockViewWithLayoutModule, #{}, []}
         ]
     }),
 

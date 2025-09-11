@@ -68,6 +68,7 @@ ws.send(JSON.stringify({
 -export_type([call_result/0]).
 -export_type([terminate_reason/0]).
 -export_type([websocket_close_code/0]).
+-export_type([options/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -117,6 +118,10 @@ ws.send(JSON.stringify({
     % Other codes
     | pos_integer().
 
+-nominal options() :: #{
+    idle_timeout => timeout()
+}.
+
 %% --------------------------------------------------------------------
 %% API function definitions
 %% --------------------------------------------------------------------
@@ -127,15 +132,18 @@ Initializes WebSocket upgrade from HTTP request.
 Extracts path and query string parameters, resolves the view module
 and mount arguments, and prepares data for WebSocket initialization.
 """.
--spec init(Req, State) -> Result when
+-spec init(Req, WebSocketOpts) -> Result when
     Req :: cowboy_req:req(),
-    State :: undefined,
-    Result :: {cowboy_websocket, Req, {ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout}},
+    Result ::
+        {cowboy_websocket, Req1,
+            {ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout, WebSocketOpts}},
     ViewModule :: module(),
     MountArg :: arizona_view:mount_arg(),
     ArizonaRequest :: arizona_request:request(),
-    LiveShutdownTimeout :: timeout().
-init(CowboyRequest, undefined) ->
+    LiveShutdownTimeout :: timeout(),
+    WebSocketOpts :: options(),
+    Req1 :: cowboy_req:req().
+init(CowboyRequest, WebSocketOpts) ->
     % Extract path from query parameter ?path=/users
     PathParams = cowboy_req:parse_qs(CowboyRequest),
     {~"path", LivePath} = proplists:lookup(~"path", PathParams),
@@ -143,12 +151,13 @@ init(CowboyRequest, undefined) ->
 
     % Create request with the Live path to resolve correct handler
     LiveRequest = CowboyRequest#{path => LivePath, qs => Qs},
-    {ViewModule, MountArg} = arizona_server:get_handler_opts(LiveRequest),
+    {view, ViewModule, MountArg, _Middlewares} = arizona_server:get_handler_opts(LiveRequest),
 
     % Create Arizona request with the original Live path
     ArizonaRequest = arizona_cowboy_request:new(LiveRequest),
     LiveShutdownTimeout = 5_000,
-    {cowboy_websocket, CowboyRequest, {ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout}}.
+    {cowboy_websocket, CowboyRequest,
+        {ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout, WebSocketOpts}}.
 
 -doc ~"""
 Initializes WebSocket connection and starts live process.
@@ -157,13 +166,14 @@ Starts `arizona_live` process, subscribes to live reload (development),
 performs initial render, and sends initial hierarchical structure to client.
 """.
 -spec websocket_init(InitData) -> Result when
-    InitData :: {ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout},
+    InitData :: {ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout, WebSocketOpts},
     ViewModule :: module(),
     MountArg :: arizona_view:mount_arg(),
     ArizonaRequest :: arizona_request:request(),
     LiveShutdownTimeout :: timeout(),
+    WebSocketOpts :: options(),
     Result :: call_result().
-websocket_init({ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout}) ->
+websocket_init({ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout, WebSocketOpts}) ->
     {ok, LivePid} = arizona_live:start_link(ViewModule, MountArg, ArizonaRequest, self()),
 
     % Subscribe to live reload if arizona_reloader process is alive
@@ -186,7 +196,7 @@ websocket_init({ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout}) ->
         live_shutdown_timeout = LiveShutdownTimeout
     },
 
-    {[{text, InitialPayload}], State}.
+    {[{set_options, WebSocketOpts}, {text, InitialPayload}], State}.
 
 -doc ~"""
 Handles WebSocket messages from client.
@@ -237,8 +247,12 @@ allowing views to perform cleanup operations via their terminate/2 callback.
     Reason :: terminate_reason(),
     Req :: cowboy_req:req(),
     State :: state().
-terminate(Reason, _Req, State) ->
-    gen_server:stop(State#state.live_pid, {shutdown, Reason}, State#state.live_shutdown_timeout).
+terminate(Reason, _Req, #state{} = State) ->
+    gen_server:stop(State#state.live_pid, {shutdown, Reason}, State#state.live_shutdown_timeout);
+terminate(_Reason, _Req, _State) ->
+    % When WebSocket crashes during init/1, no state record is built
+    % and no Live process has been started, so we just return ok
+    ok.
 
 %% --------------------------------------------------------------------
 %% Internal functions

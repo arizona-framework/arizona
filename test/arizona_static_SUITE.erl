@@ -188,21 +188,23 @@ init_per_suite(Config) ->
 
     % Start test server
     Routes = [
-        {view, ~"/", MockHomeViewModule, #{}},
-        {view, ~"/about", MockAboutViewModule, #{}},
-        {view, ~"/post/:post_id", MockPostViewModule, #{
-            ~"hello-world" => #{
-                title => ~"Hello World",
-                content => ~"Welcome to my first blog post!"
+        {view, ~"/", MockHomeViewModule, #{}, []},
+        {view, ~"/about", MockAboutViewModule, #{}, []},
+        {view, ~"/post/:post_id", MockPostViewModule,
+            #{
+                ~"hello-world" => #{
+                    title => ~"Hello World",
+                    content => ~"Welcome to my first blog post!"
+                },
+                ~"arizona-static" => #{
+                    title => ~"Arizona Static",
+                    content => ~"How to build static sites."
+                }
             },
-            ~"arizona-static" => #{
-                title => ~"Arizona Static",
-                content => ~"How to build static sites."
-            }
-        }},
-        {asset, ~"/assets/css/style.css", {file, list_to_binary(CssFile)}},
-        {asset, ~"/assets/js/app.js", {file, list_to_binary(JsFile)}},
-        {websocket, ~"/live"}
+            []},
+        {asset, ~"/assets/css/style.css", {file, list_to_binary(CssFile)}, []},
+        {asset, ~"/assets/js/app.js", {file, list_to_binary(JsFile)}, []},
+        {websocket, ~"/live", #{}, []}
     ],
 
     %% Ensure applications are started
