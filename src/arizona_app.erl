@@ -28,9 +28,10 @@ start(_StartType, _StartArgs) ->
         % Start reloader instances if enabled
         ReloaderConfig = get_reloader_config(),
         ok ?= maybe_start_reloader(ReloaderConfig),
-        % Start server if enabled
-        ServerConfig = get_server_config(),
-        ok ?= maybe_start_server(ServerConfig),
+        % Apply plugins and start server if enabled
+        BaseServerConfig = get_server_config(),
+        ProcessedServerConfig = arizona_plugin:apply_plugins(BaseServerConfig),
+        ok ?= maybe_start_server(ProcessedServerConfig),
         {ok, SupPid}
     else
         {error, Reason} ->
