@@ -48,6 +48,7 @@ Arizona follows a component-based architecture with three main layers:
 - **Simple template syntax** using plain HTML with `{}` Erlang expressions
 - **Static site generation** for deployment flexibility and SEO optimization
 - **File watching infrastructure** for custom development automation
+- **Unified middleware system** for request processing across all route types
 
 ## Quick Start
 
@@ -111,10 +112,10 @@ Create `config/sys.config`:
             transport_opts => [{port, 1912}],  % Cowboy/Ranch transport options
             proto_opts => #{env => #{custom_option => value}},  % Optional Cowboy protocol options
             routes => [
-                {view, ~"/", home_view, #{}},
-                {websocket, ~"/live"},
-                {controller, ~"/api/presence", my_api_controller, #{}},  % Plain Cowboy REST handler
-                {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}  % Required for live features
+                {view, ~"/", home_view, #{}, []},  % Empty middleware list
+                {websocket, ~"/live", #{}, []},    % WebSocket options + middleware list
+                {controller, ~"/api/presence", my_api_controller, #{}, []},  % Plain Cowboy handler
+                {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}, []}  % Required for live features
             ]
         }},
         {reloader, #{
@@ -158,9 +159,9 @@ application:set_env([{arizona, [
         scheme => http,
         transport_opts => [{port, 1912}],
         routes => [
-            {view, ~"/", home_view, #{}},
-            {websocket, ~"/live"},
-            {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}
+            {view, ~"/", home_view, #{}, []},
+            {websocket, ~"/live", #{}, []},
+            {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}, []}
         ]
     }},
     {reloader, #{enabled => false}}  % Typically disabled when using programmatic config
@@ -460,6 +461,110 @@ Arizona uses a flexible action system for handling callback responses. All callb
 - **Consistent API**: Same pattern across views and stateful components
 - **Type Safety**: All actions are validated and processed uniformly
 - **Future Extensible**: Easy to add new action types as needed
+
+## Middleware System
+
+Arizona includes a unified middleware system that works consistently across all route types
+(view, controller, websocket, and asset). Middlewares process requests before they reach the
+main handler, enabling powerful features like authentication, authorization, CORS handling,
+request modification, and custom response generation.
+
+> [!NOTE]
+>
+> Arizona does not provide any built-in middleware implementations. All middleware examples
+> shown below are for demonstration purposes and must be implemented by you according to your
+> application's specific requirements.
+
+### **Route Configuration with Middlewares**
+
+All routes support middleware lists as their final parameter:
+
+```erlang
+routes => [
+    % View routes with authentication middleware
+    {view, ~"/admin", admin_view, #{}, [
+        {auth_middleware, #{jwt_secret => ~"secret123", redirect_on_fail => true}},
+        {role_middleware, #{required_role => admin}}
+    ]},
+
+    % Controller routes with CORS and auth
+    {controller, ~"/api/users", users_controller, #{}, [
+        {cors_middleware, #{origins => [~"https://app.com"]}},
+        {auth_middleware, #{jwt_secret => ~"secret123"}}
+    ]},
+
+    % WebSocket routes with authentication
+    {websocket, ~"/live", #{idle_timeout => 60000}, [
+        {auth_middleware, #{jwt_secret => ~"secret123"}}
+    ]},
+
+    % Asset routes with authentication (for protected files)
+    {asset, ~"/private", {priv_dir, myapp, ~"private"}, [
+        {auth_middleware, #{jwt_secret => ~"secret123"}}
+    ]},
+
+    % Public routes with no middlewares
+    {view, ~"/public", public_view, #{}, []}
+]
+```
+
+### **Creating Custom Middlewares**
+
+Implement the `arizona_middleware` behavior:
+
+```erlang
+-module(auth_middleware).
+-behaviour(arizona_middleware).
+-export([execute/2]).
+
+execute(Req, #{jwt_secret := Secret} = Opts) ->
+    case cowboy_req:header(~"authorization", Req) of
+        <<"Bearer ", Token/binary>> ->
+            case validate_jwt(Token, Secret) of
+                {ok, Claims} ->
+                    % Add user info for downstream middlewares/handlers
+                    Req1 = cowboy_req:set_meta(user_claims, Claims, Req),
+                    {continue, Req1};
+                {error, _} ->
+                    Req1 = cowboy_req:reply(401, #{}, ~"Invalid token", Req),
+                    {halt, Req1}
+            end;
+        undefined ->
+            case maps:get(redirect_on_fail, Opts, false) of
+                true ->
+                    % Redirect to login for views
+                    Req1 = cowboy_req:reply(302, #{~"location" => ~"/login"}, ~"", Req),
+                    {halt, Req1};
+                false ->
+                    % JSON error for APIs
+                    Req1 = cowboy_req:reply(401, #{}, ~"Unauthorized", Req),
+                    {halt, Req1}
+            end
+    end.
+
+validate_jwt(_Token, _Secret) ->
+    % Your JWT validation logic
+    {ok, #{user_id => ~"123", role => ~"admin"}}.
+```
+
+### **Middleware Chain Processing**
+
+- Middlewares execute **sequentially** in the order specified
+- Each middleware returns `{continue, Req1}` or `{halt, Req1}`
+- If any middleware returns `{halt, Req1}`, processing stops (response already sent)
+- If all middlewares return `{continue, Req1}`, the request reaches the main handler
+- Middlewares can pass data using `cowboy_req:set_meta/3` and `cowboy_req:meta/3`
+
+### **Architecture Integration**
+
+Arizona integrates middlewares into Cowboy's pipeline as a generic middleware:
+
+```text
+cowboy_router -> arizona_middleware_cowboy -> cowboy_handler
+```
+
+This ensures proper integration with Cowboy's request processing while maintaining Arizona's
+flexibility and performance.
 
 ## Event Handling & Real-time Updates
 
