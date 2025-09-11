@@ -29,13 +29,13 @@ maybe
             enabled => true,
             transport_opts => [{port, 8080}],
             routes => [
-                {view, ~\"/realtime\", arizona_realtime_view, #{}},
-                {view, ~\"/counter\", arizona_counter_view, #{}},
-                {view, ~\"/todo\", arizona_todo_app_view, #{}},
-                {view, ~\"/datagrid\", arizona_datagrid_view, #{}},
-                {view, ~\"/modal\", arizona_modal_view, #{}},
-                {view, ~\"/\", arizona_blog_home_view, #{title => ~\"My Arizona Blog\"}},
-                {view, ~\"/about\", arizona_blog_about_view, #{title => ~\"About Me\"}},
+                {view, ~\"/realtime\", arizona_realtime_view, #{}, []},
+                {view, ~\"/counter\", arizona_counter_view, #{}, []},
+                {view, ~\"/todo\", arizona_todo_app_view, #{}, []},
+                {view, ~\"/datagrid\", arizona_datagrid_view, #{}, []},
+                {view, ~\"/modal\", arizona_modal_view, #{}, []},
+                {view, ~\"/\", arizona_blog_home_view, #{title => ~\"My Arizona Blog\"}, []},
+                {view, ~\"/about\", arizona_blog_about_view, #{title => ~\"About Me\"}, []},
                 % In a real implementation, you might load post data from files or database
                 {view, ~\"/post/:post_id\", arizona_blog_post_view, #{
                     ~\"hello-world\" => #{
@@ -46,11 +46,11 @@ maybe
                         title => ~\"Arizona Static Site Generation\",
                         content => ~\"How to build static sites with Arizona framework.\"
                     }
-                }},
-                {view, ~\"/presence\", arizona_presence_view, #{}},
-                {controller, ~\"/api/presence/[:action]\", arizona_presence_controller, #{}},
-                {websocket, ~\"/live\"},
-                {asset, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}}
+                }, []},
+                {view, ~\"/presence\", arizona_presence_view, #{}, []},
+                {controller, ~\"/api/presence/[:action]\", arizona_presence_controller, #{}, []},
+                {websocket, ~\"/live\", #{}, []},
+                {asset, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}, []}
             ]
         }},
         {reloader, #{

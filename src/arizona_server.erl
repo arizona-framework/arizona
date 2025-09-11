@@ -73,6 +73,7 @@ Integrates Arizona components with Cowboy:
 
 -export_type([route/0]).
 -export_type([path/0]).
+-export_type([asset_config/0]).
 -export_type([config/0]).
 -export_type([scheme/0]).
 -export_type([transport_opts/0]).
@@ -83,14 +84,18 @@ Integrates Arizona components with Cowboy:
 %% --------------------------------------------------------------------
 
 -nominal route() ::
-    {view, Path :: path(), ViewModule :: module(), MountArg :: arizona_view:mount_arg()}
-    | {websocket, Path :: path()}
-    | {asset, Path :: path(), {dir, Directory :: binary()}}
-    | {asset, Path :: path(), {file, FileName :: binary()}}
-    | {asset, Path :: path(), {priv_dir, App :: atom(), Directory :: binary()}}
-    | {asset, Path :: path(), {priv_file, App :: atom(), FileName :: binary()}}
-    | {controller, Path :: path(), Handler :: module(), State :: dynamic()}.
+    {view, Path :: path(), ViewModule :: module(), MountArg :: arizona_view:mount_arg(),
+        Middlewares :: [arizona_middleware:middleware()]}
+    | {controller, Path :: path(), Handler :: module(), State :: dynamic(),
+        Middlewares :: [arizona_middleware:middleware()]}
+    | {websocket, Path :: path(), WebSocketOpts :: arizona_websocket:options(),
+        Middlewares :: [arizona_middleware:middleware()]}
+    | {asset, Path :: path(), AssetConfig :: asset_config(),
+        Middlewares :: [arizona_middleware:middleware()]}.
+
 -nominal path() :: binary().
+
+-nominal asset_config() :: cowboy_static:opts().
 
 -nominal config() :: #{
     enabled => boolean(),
@@ -213,33 +218,32 @@ compile_routes(Routes) ->
 -spec route_to_cowboy(Route) -> CowboyRoute when
     Route :: route(),
     CowboyRoute :: {'_' | iodata(), module(), term()}.
-route_to_cowboy({view, Path, ViewModule, MountArg}) when is_binary(Path), is_atom(ViewModule) ->
-    % View routes use arizona_handler
-    {Path, arizona_handler, {ViewModule, MountArg}};
-route_to_cowboy({websocket, Path}) when is_binary(Path) ->
-    % WebSocket endpoint for all View connections
-    {Path, arizona_websocket, undefined};
-route_to_cowboy({asset, Path, {dir, Directory}}) when is_binary(Path), is_binary(Directory) ->
-    % Static file serving from filesystem directory
-    DirPath = filename:join(Path, "[...]"),
-    {DirPath, cowboy_static, {dir, Directory}};
-route_to_cowboy({asset, Path, {file, FileName}}) when is_binary(Path), is_binary(FileName) ->
-    % Static file serving for single file from priv directory
-    {Path, cowboy_static, {file, FileName}};
-route_to_cowboy({asset, Path, {priv_dir, App, Directory}}) when
-    is_binary(Path), is_atom(App), is_binary(Directory)
+route_to_cowboy({view, Path, ViewModule, MountArg, Middlewares}) when
+    is_binary(Path), is_atom(ViewModule), is_list(Middlewares)
 ->
-    % Static file serving from priv directory
-    DirPath = filename:join(Path, "[...]"),
-    {DirPath, cowboy_static, {priv_dir, App, Directory}};
-route_to_cowboy({asset, Path, {priv_file, App, FileName}}) when
-    is_binary(Path), is_atom(App), is_binary(FileName)
+    % View routes use arizona_view_handler with middleware support
+    {Path, arizona_view_handler, {view, ViewModule, MountArg, Middlewares}};
+route_to_cowboy({controller, Path, Handler, State, Middlewares}) when
+    is_binary(Path), is_atom(Handler), is_list(Middlewares)
 ->
-    % Static file serving for single file from priv directory
-    {Path, cowboy_static, {priv_file, App, FileName}};
-route_to_cowboy({controller, Path, Handler, State}) when is_binary(Path), is_atom(Handler) ->
-    % View routes use arizona_handler
-    {Path, Handler, State}.
+    % Controller routes use arizona_controller_handler
+    {Path, Handler, {controller, Handler, State, Middlewares}};
+route_to_cowboy({websocket, Path, WebSocketOpts, Middlewares}) when
+    is_binary(Path), is_map(WebSocketOpts), is_list(Middlewares)
+->
+    % WebSocket endpoint with options and middleware support
+    {Path, arizona_websocket, {websocket, WebSocketOpts, Middlewares}};
+route_to_cowboy({asset, Path, AssetConfig, Middlewares}) when
+    is_binary(Path), is_list(Middlewares)
+->
+    % Asset serving with middleware support
+    DirPath =
+        case AssetConfig of
+            {dir, _} -> filename:join(Path, "[...]");
+            {priv_dir, _, _} -> filename:join(Path, "[...]");
+            _ -> Path
+        end,
+    {DirPath, cowboy_static, {asset, AssetConfig, Middlewares}}.
 
 %% Get transport options with defaults
 get_transport_opts(Config, DefaultPort) ->
@@ -268,12 +272,12 @@ ensure_transport_port(TransportOpts, DefaultPort) when is_map(TransportOpts) ->
             TransportOpts#{socket_opts => [{port, DefaultPort}]}
     end.
 
-%% Get protocol options, ensuring Arizona controls dispatch
+%% Get protocol options, ensuring Arizona controls dispatch and middlewares
 get_proto_opts(Config) ->
     UserProtoOpts = maps:get(proto_opts, Config, #{}),
     UserEnv = maps:get(env, UserProtoOpts, #{}),
 
-    % Warn if user tries to set dispatch
+    % Warn if user tries to set dispatch or middlewares
     case maps:is_key(dispatch, UserEnv) of
         true ->
             logger:warning(
@@ -283,10 +287,22 @@ get_proto_opts(Config) ->
         false ->
             ok
     end,
+    case maps:is_key(middlewares, UserProtoOpts) of
+        true ->
+            logger:warning(
+                "User-defined 'middlewares' in proto_opts "
+                "will be overridden by Arizona"
+            );
+        false ->
+            ok
+    end,
 
-    % Arizona always controls dispatch
+    % Arizona always controls dispatch and middlewares
     ArizonaEnv = UserEnv#{dispatch => {persistent_term, get_dispatch_key()}},
-    UserProtoOpts#{env => ArizonaEnv}.
+    UserProtoOpts#{
+        env => ArizonaEnv,
+        middlewares => [cowboy_router, arizona_middleware_cowboy, cowboy_handler]
+    }.
 
 %% Start listener based on scheme
 start_listener(http, Ref, TransportOpts, ProtoOpts) ->
