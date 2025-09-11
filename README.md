@@ -49,6 +49,7 @@ Arizona follows a component-based architecture with three main layers:
 - **Static site generation** for deployment flexibility and SEO optimization
 - **File watching infrastructure** for custom development automation
 - **Unified middleware system** for request processing across all route types
+- **Simple plugin system** for configuration transformation and extensibility
 
 ## Quick Start
 
@@ -564,6 +565,105 @@ cowboy_router -> arizona_middleware_cowboy -> cowboy_handler
 
 This ensures proper integration with Cowboy's request processing while maintaining Arizona's
 flexibility and performance.
+
+## Plugin System
+
+Arizona includes a simple plugin system that allows you to transform the server configuration
+before startup. Plugins are perfect for adding middleware, modifying routes, or customizing
+server behavior across your application.
+
+> [!NOTE]
+>
+> Arizona does not provide any built-in plugins. All plugin examples shown below are for
+> demonstration purposes and must be implemented according to your application's requirements.
+
+### **Creating a Plugin**
+
+Implement the `arizona_plugin` behavior:
+
+```erlang
+-module(my_auth_plugin).
+-behaviour(arizona_plugin).
+-export([transform_config/2]).
+
+transform_config(Config, PluginConfig) ->
+    JwtSecret = maps:get(jwt_secret, PluginConfig),
+
+    % Transform routes to add auth middleware to protected paths
+    Routes = maps:get(routes, Config, []),
+    NewRoutes = lists:map(fun(Route) ->
+        case Route of
+            {view, Path, ViewModule, MountArg, Middlewares} when
+                binary:match(Path, <<"admin">>) =/= nomatch ->
+                % Add auth middleware to admin routes
+                AuthMiddleware = {auth_middleware, #{jwt_secret => JwtSecret}},
+                {view, Path, ViewModule, MountArg, [AuthMiddleware | Middlewares]};
+            Other ->
+                Other
+        end
+    end, Routes),
+
+    Config#{routes => NewRoutes}.
+```
+
+### **Using Plugins**
+
+Configure plugins in your `sys.config`:
+
+```erlang
+[
+    {arizona, [
+        {server, #{
+            enabled => true,
+            transport_opts => [{port, 1912}],
+            routes => [
+                {view, ~"/", home_view, #{}, []},
+                {view, ~"/admin", admin_view, #{}, []},  % Plugin will add auth middleware
+                {controller, ~"/api/users", users_controller, #{}, []}
+            ]
+        }},
+
+        % Configure plugins with their options
+        {plugins, [
+            {my_auth_plugin, #{jwt_secret => "secret123"}},
+            {my_cors_plugin, #{origins => ["*"]}},
+            {my_logging_plugin, true}  % Plugin config can be any term
+        ]}
+    ]}
+].
+```
+
+### **Plugin Execution**
+
+- Plugins execute **before server startup** in the order specified
+- Each plugin receives the current config and returns the transformed config
+- Plugin configuration can be any Erlang term (maps, lists, atoms, tuples, etc.)
+- If a plugin fails, Arizona startup fails with a clear error message
+
+### **Example Use Cases**
+
+- **Authentication**: Automatically add auth middleware to protected routes
+- **CORS**: Add CORS headers to API routes
+- **Logging**: Add request logging middleware to all routes
+- **Rate Limiting**: Add rate limiting middleware based on route patterns
+- **Environment Configuration**: Modify routes or options based on deployment environment
+
+### **Distribution**
+
+Plugins are distributed as standard Erlang applications via Hex.pm:
+
+```erlang
+% rebar.config
+{deps, [
+    {arizona, "~> 1.0"},
+    {arizona_auth_plugin, "~> 1.0"}  % Add plugin dependency
+]}.
+
+% sys.config - just reference by name
+{plugins, [
+    {arizona_auth_plugin, #{jwt_secret => "secret123"}}
+]}
+```
 
 ## Event Handling & Real-time Updates
 
