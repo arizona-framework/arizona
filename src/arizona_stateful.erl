@@ -88,12 +88,12 @@ handle_event(~"increment", _Params, State) ->
 -export_type([event_name/0]).
 -export_type([event_params/0]).
 -export_type([event_reply/0]).
+-export_type([handle_event_result/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
-%% Internal state record for stateful components
 -record(state, {
     module :: module(),
     bindings :: arizona_binder:bindings(),
@@ -105,6 +105,7 @@ handle_event(~"increment", _Params, State) ->
 -nominal event_name() :: binary().
 -nominal event_params() :: dynamic().
 -nominal event_reply() :: json:encode_value().
+-nominal handle_event_result() :: {Actions :: arizona_action:actions(), State :: state()}.
 
 %% --------------------------------------------------------------------
 %% Behavior callback definitions
@@ -122,9 +123,7 @@ handle_event(~"increment", _Params, State) ->
     Event :: event_name(),
     Params :: event_params(),
     State :: arizona_stateful:state(),
-    Result :: {noreply, State1} | {reply, Reply, State1},
-    Reply :: event_reply(),
-    State1 :: arizona_stateful:state().
+    Result :: handle_event_result().
 
 -optional_callbacks([handle_event/3]).
 
@@ -161,15 +160,13 @@ call_render_callback(#state{} = State) ->
 Executes a component's event handler callback.
 
 Calls the module's `handle_event/3` function to process WebSocket events.
-Returns either a reply to send back or no reply with updated state.
+Returns a list of actions to execute and the updated state.
 """.
 -spec call_handle_event_callback(Event, Params, State) -> Result when
     Event :: event_name(),
     Params :: event_params(),
     State :: state(),
-    Result :: {reply, Reply, State1} | {noreply, State1},
-    Reply :: event_reply(),
-    State1 :: state().
+    Result :: handle_event_result().
 call_handle_event_callback(Event, Params, #state{} = State) ->
     apply(State#state.module, handle_event, [Event, Params, State]).
 

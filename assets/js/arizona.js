@@ -1,7 +1,6 @@
 // Import dependencies
 import morphdom from 'morphdom';
 import ArizonaHierarchical from './arizona-hierarchical.js';
-import { sanitizeForLog } from './arizona-utils.js';
 
 // Arizona Client API
 export default class ArizonaClient {
@@ -92,6 +91,9 @@ export default class ArizonaClient {
           break;
         case 'reply':
           this.handleReply(data);
+          break;
+        case 'redirect':
+          this.handleRedirect(data);
           break;
         default:
           this.handleUnknownMessage(message);
@@ -184,6 +186,14 @@ export default class ArizonaClient {
   handleReply(data) {
     console.log('[Arizona] WebSocket reply:', data);
     this.dispatchArizonaEvent('reply', data);
+  }
+
+  handleRedirect(data) {
+    console.log('[Arizona] Redirecting to:', data.url);
+    this.dispatchArizonaEvent('redirect', data);
+
+    // Perform the redirect with safe option access
+    window.open(data.url, data.options?.target, data.options?.window_features);
   }
 
   handleUnknownMessage(message) {

@@ -212,9 +212,9 @@ handle_event(~"set_modal_type", #{~"type" := TypeBin}, View) ->
         State
     ),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
-    {noreply, UpdatedView};
+    {[], UpdatedView};
 handle_event(~"close_modal", _Params, View) ->
     State = arizona_view:get_state(View),
     UpdatedState = arizona_stateful:put_binding(modal_visible, false, State),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
-    {noreply, UpdatedView}.
+    {[], UpdatedView}.

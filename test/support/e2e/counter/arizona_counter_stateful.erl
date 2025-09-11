@@ -37,13 +37,13 @@ handle_event(~"increment", Payload, State) ->
     ok = broadcast_increment(Payload, State),
     Incr = maps:get(~"incr", Payload, 1),
     Count = arizona_stateful:get_binding(count, State),
-    {noreply, arizona_stateful:put_binding(count, Count + Incr, State)};
+    {[], arizona_stateful:put_binding(count, Count + Incr, State)};
 handle_event(~"pubsub:increment", Payload, State) ->
     Incr = maps:get(~"incr", Payload, 1),
     Count = arizona_stateful:get_binding(count, State),
-    {noreply, arizona_stateful:put_binding(count, Count + Incr, State)};
+    {[], arizona_stateful:put_binding(count, Count + Incr, State)};
 handle_event(~"reset", _Payload, State) ->
-    {noreply, arizona_stateful:put_binding(count, 0, State)}.
+    {[], arizona_stateful:put_binding(count, 0, State)}.
 
 broadcast_increment(Payload, State) ->
     case arizona_stateful:get_binding(is_realtime_enabled, State) of

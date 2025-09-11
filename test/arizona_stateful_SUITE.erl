@@ -9,7 +9,7 @@
 
 -dialyzer(
     {nowarn_function, [
-        call_handle_event_callback_reply/1
+        call_handle_event_callback_with_actions/1
     ]}
 ).
 
@@ -29,8 +29,8 @@ groups() ->
         {callback_tests, [parallel], [
             call_mount_callback_test,
             call_render_callback_test,
-            call_handle_event_callback_reply,
-            call_handle_event_callback_noreply
+            call_handle_event_callback_with_actions,
+            call_handle_event_callback_no_actions
         ]},
         {state_management_tests, [parallel], [
             new_creates_state,
@@ -84,10 +84,10 @@ init_per_suite(Config) ->
         <h1>Mock Template</h1>
         """).
 
-    handle_event(~"reply", Params, State) ->
-        {reply, Params, State};
-    handle_event(~"noreply", _Params, State) ->
-        {noreply, State}.
+    handle_event(~"with_actions", Params, State) ->
+        {[{reply, Params}], State};
+    handle_event(~"no_actions", _Params, State) ->
+        {[], State}.
     """", [{module, merl:term(MockEventsModule)}]),
 
     {ok, _Binary} = merl:compile_and_load(MockModuleCode),
@@ -131,23 +131,28 @@ call_render_callback_test(Config) when is_list(Config) ->
     Template = arizona_stateful:call_render_callback(State),
     ?assertEqual([~"<h1>Mock Template</h1>"], arizona_template:get_static(Template)).
 
-call_handle_event_callback_reply(Config) when is_list(Config) ->
-    ct:comment("call_handle_event_callback/4 should return reply tuple when event returns reply"),
-    {mock_events_module, MockModule} = proplists:lookup(mock_events_module, Config),
-    State = arizona_stateful:new(MockModule, #{}),
-    Params = #{data => ~"test"},
-    {reply, Reply, NewState} = arizona_stateful:call_handle_event_callback(~"reply", Params, State),
-    ?assertEqual(Params, Reply),
-    ?assertEqual(State, NewState).
-
-call_handle_event_callback_noreply(Config) when is_list(Config) ->
+call_handle_event_callback_with_actions(Config) when is_list(Config) ->
     ct:comment(
-        "call_handle_event_callback/4 should return noreply tuple when event returns noreply"
+        "call_handle_event_callback/4 should return actions tuple when event returns actions"
     ),
     {mock_events_module, MockModule} = proplists:lookup(mock_events_module, Config),
     State = arizona_stateful:new(MockModule, #{}),
-    {Reply, NewState} = arizona_stateful:call_handle_event_callback(~"noreply", #{}, State),
-    ?assertEqual(noreply, Reply),
+    Params = #{data => ~"test"},
+    {Actions, NewState} = arizona_stateful:call_handle_event_callback(
+        ~"with_actions", Params, State
+    ),
+    ?assertEqual([{reply, Params}], Actions),
+    ?assertEqual(State, NewState).
+
+call_handle_event_callback_no_actions(Config) when is_list(Config) ->
+    ct:comment(
+        "call_handle_event_callback/4 should return empty actions list "
+        "when event returns no actions"
+    ),
+    {mock_events_module, MockModule} = proplists:lookup(mock_events_module, Config),
+    State = arizona_stateful:new(MockModule, #{}),
+    {Actions, NewState} = arizona_stateful:call_handle_event_callback(~"no_actions", #{}, State),
+    ?assertEqual([], Actions),
     ?assertEqual(State, NewState).
 
 %% --------------------------------------------------------------------

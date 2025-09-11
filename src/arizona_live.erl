@@ -258,57 +258,38 @@ terminate(Reason, State) ->
 %% --------------------------------------------------------------------
 
 handle_view_event(Event, Params, State) ->
-    case arizona_view:call_handle_event_callback(Event, Params, State#state.view) of
-        {reply, Reply, UpdatedView} ->
-            {Diff, DiffView} = arizona_differ:diff_view(UpdatedView),
-            ViewState = arizona_view:get_state(DiffView),
-            ViewId = arizona_stateful:get_binding(id, ViewState),
-            ok = handle_reply_response(ViewId, Diff, Reply, State),
-            {noreply, State#state{view = DiffView}};
-        {noreply, UpdatedView} ->
-            {Diff, DiffView} = arizona_differ:diff_view(UpdatedView),
-            ViewState = arizona_view:get_state(DiffView),
-            ViewId = arizona_stateful:get_binding(id, ViewState),
-            ok = handle_noreply_response(ViewId, Diff, State),
-            {noreply, State#state{view = DiffView}}
-    end.
+    {Actions, UpdatedView} = arizona_view:call_handle_event_callback(
+        Event, Params, State#state.view
+    ),
+    {Diff, DiffView} = arizona_differ:diff_view(UpdatedView),
+    ViewState = arizona_view:get_state(DiffView),
+    ViewId = arizona_stateful:get_binding(id, ViewState),
+    ok = handle_actions_response(ViewId, Diff, Actions, State),
+    {noreply, State#state{view = DiffView}}.
 
 handle_stateful_event(StatefulId, Event, Params, State) ->
     View = State#state.view,
     StatefulState = arizona_view:get_stateful_state(StatefulId, View),
-    case arizona_stateful:call_handle_event_callback(Event, Params, StatefulState) of
-        {reply, Reply, UpdatedStatefulState} ->
-            Module = arizona_stateful:get_module(UpdatedStatefulState),
-            Bindings = arizona_stateful:get_bindings(UpdatedStatefulState),
-            DiffStatefulId = arizona_binder:get(id, Bindings),
-            UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedStatefulState, View),
-            DiffBindings = arizona_binder:to_map(Bindings),
-            {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, DiffBindings, UpdatedView),
-            ok = handle_reply_response(DiffStatefulId, Diff, Reply, State),
-            {noreply, State#state{view = DiffView}};
-        {noreply, UpdatedStatefulState} ->
-            Module = arizona_stateful:get_module(UpdatedStatefulState),
-            Bindings = arizona_stateful:get_bindings(UpdatedStatefulState),
-            DiffStatefulId = arizona_binder:get(id, Bindings),
-            UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedStatefulState, View),
-            DiffBindings = arizona_binder:to_map(Bindings),
-            {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, DiffBindings, UpdatedView),
-            ok = handle_noreply_response(DiffStatefulId, Diff, State),
-            {noreply, State#state{view = DiffView}}
-    end.
+    {Actions, UpdatedStatefulState} = arizona_stateful:call_handle_event_callback(
+        Event, Params, StatefulState
+    ),
+    Module = arizona_stateful:get_module(UpdatedStatefulState),
+    Bindings = arizona_stateful:get_bindings(UpdatedStatefulState),
+    DiffStatefulId = arizona_binder:get(id, Bindings),
+    UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedStatefulState, View),
+    DiffBindings = arizona_binder:to_map(Bindings),
+    {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, DiffBindings, UpdatedView),
+    ok = handle_actions_response(DiffStatefulId, Diff, Actions, State),
+    {noreply, State#state{view = DiffView}}.
 
-handle_reply_response(StatefulId, Diff, Reply, State) ->
-    State#state.transport_pid ! {reply_response, StatefulId, Diff, Reply},
-    ok.
-
-handle_noreply_response(StatefulId, Diff, State) ->
-    State#state.transport_pid ! {noreply_response, StatefulId, Diff},
+handle_actions_response(StatefulId, Diff, Actions, State) ->
+    State#state.transport_pid ! {actions_response, StatefulId, Diff, Actions},
     ok.
 
 handle_view_info(Info, State) ->
-    {noreply, UpdatedView} = arizona_view:call_handle_info_callback(Info, State#state.view),
+    {Actions, UpdatedView} = arizona_view:call_handle_info_callback(Info, State#state.view),
     {Diff, DiffView} = arizona_differ:diff_view(UpdatedView),
     ViewState = arizona_view:get_state(DiffView),
     ViewId = arizona_stateful:get_binding(id, ViewState),
-    ok = handle_noreply_response(ViewId, Diff, State),
+    ok = handle_actions_response(ViewId, Diff, Actions, State),
     {noreply, State#state{view = DiffView}}.
