@@ -8,41 +8,15 @@ and built-in functionality like redirects and reloads.
 
 ## Usage
 
-Instead of the old pattern:
-```erlang
-handle_event(Event, Params, State) ->
-    {reply, Reply, State}  % or {noreply, State}
-```
+Callbacks return a tuple containing a list of actions and the updated state:
 
-Use the new action pattern:
 ```erlang
 handle_event(Event, Params, State) ->
     {[Action1, Action2, ...], State}
 ```
 
-## Examples
+No action:
 
-### Single reply:
-```erlang
-{[{reply, #{success => true}}], State}
-```
-
-### Multiple replies:
-```erlang
-{[{reply, #{step => 1}}, {reply, #{step => 2}}], State}
-```
-
-### Reply with reload:
-```erlang
-{[{reply, #{saved => true}}, reload], State}
-```
-
-### Redirect:
-```erlang
-{[{redirect, ~"/dashboard", #{target => ~"_self"}}], State}
-```
-
-### No action (equivalent to old noreply):
 ```erlang
 {[], State}
 ```
