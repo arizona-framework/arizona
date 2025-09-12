@@ -176,7 +176,7 @@ performs initial render, and sends initial hierarchical structure to client.
 websocket_init({ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout, WebSocketOpts}) ->
     {ok, LivePid} = arizona_live:start_link(ViewModule, MountArg, ArizonaRequest, self()),
 
-    % Subscribe to live reload if arizona_reloader process is alive
+    % Subscribe to arizona:reload topic
     ok = maybe_join_live_reload(),
 
     HierarchicalStructure = arizona_live:initial_render(LivePid),
@@ -232,8 +232,8 @@ messages for the client.
 websocket_info({actions_response, StatefulId, Diff, Actions}, State) ->
     handle_actions_response(StatefulId, Diff, Actions, State);
 % Handle live reload messages
-websocket_info({pubsub_message, ~"live_reload", {file_changed, reload}}, State) ->
-    Message = #{type => ~"reload"},
+websocket_info({pubsub_message, ~"arizona:reload", FileType}, State) ->
+    Message = #{type => ~"reload", file_type => FileType},
     ReloadPayload = json_encode(Message),
     {[{text, ReloadPayload}], State}.
 
@@ -259,9 +259,12 @@ terminate(_Reason, _Req, _State) ->
 %% --------------------------------------------------------------------
 
 maybe_join_live_reload() ->
-    case whereis(arizona_reloader) of
-        undefined -> ok;
-        _Pid -> arizona_pubsub:join(~"live_reload", self())
+    case arizona:get_config() of
+        #{reloader := #{enabled := true}} ->
+            ok = arizona_pubsub:join(~"arizona:reload", self()),
+            logger:debug("Subscribed to arizona:reload topic");
+        #{} ->
+            logger:debug("Reloader is disabled, skipping arizona:reload subscription")
     end.
 
 %% Handle different message types

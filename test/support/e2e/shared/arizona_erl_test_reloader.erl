@@ -10,7 +10,7 @@ reload(Files, Options) ->
         CompileResult = os:cmd(Cmd, #{exception_on_failure => true}),
         ok = io:format("~ts", [CompileResult]),
         ErlangFiles = [F || F <- Files, filename:extension(F) =:= ".erl"],
-        lists:foreach(
+        ok = lists:foreach(
             fun(FilePath) ->
                 {ok, Cwd} = file:get_cwd(),
                 RelativePath =
@@ -39,7 +39,8 @@ reload(Files, Options) ->
                 end
             end,
             ErlangFiles
-        )
+        ),
+        arizona_pubsub:broadcast(~"arizona:reload", erl)
     catch
         error:{command_failed, ResultBeforeFailure, _ExitCode} ->
             io:format("~ts~n", [ResultBeforeFailure])

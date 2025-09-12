@@ -41,12 +41,19 @@ plugins, and any future configuration sections.
 
 -spec get_config() -> config().
 get_config() ->
-    BaseConfig = #{
-        server => get_server_config(),
-        reloader => get_reloader_config(),
-        plugins => get_plugins()
-    },
-    arizona_plugin:apply_plugins(BaseConfig).
+    case persistent_term:get(arizona_config, undefined) of
+        undefined ->
+            BaseConfig = #{
+                server => get_server_config(),
+                reloader => get_reloader_config(),
+                plugins => get_plugins()
+            },
+            Config = arizona_plugin:apply_plugins(BaseConfig),
+            ok = persistent_term:put(arizona_config, Config),
+            Config;
+        Config ->
+            Config
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal functions

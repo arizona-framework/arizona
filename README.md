@@ -819,6 +819,29 @@ reload(Files, Options) ->
 **Key Point**: The reloader system is just infrastructure. All actual reloading, compilation,
 and automation logic is your responsibility to implement in handler modules.
 
+### **Smart Reload System**
+
+Arizona's JavaScript client includes intelligent reload handling that optimizes the development experience:
+
+- **CSS-only reloading**: When CSS files change, only stylesheets are refreshed without full page reload
+- **Application state preservation**: Form inputs, scroll position, and component state remain intact
+  during CSS updates
+- **Automatic fallback**: Non-CSS file changes trigger full page reload as expected
+- **File type detection**: Reload handlers can specify `file_type` to control client behavior
+
+When implementing custom reload handlers, you can leverage this feature:
+
+```erlang
+% In your reload handler, specify file type for smart client handling
+reload(_Files, _Options) ->
+    % Compile logic here
+    FileType = css,
+    arizona_pubsub:broadcast(~"arizona:reload", FileType).
+```
+
+This enhancement significantly improves the development workflow by avoiding unnecessary page
+reloads during CSS development.
+
 ### **Static Site Generation**
 
 Generate static HTML for deployment:

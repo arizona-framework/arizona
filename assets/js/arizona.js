@@ -178,9 +178,19 @@ export default class ArizonaClient {
     this.dispatchArizonaEvent('error', data);
   }
 
-  handleReload(_data) {
-    console.log('[Arizona] File changed. Reloading page...');
-    window.location.reload();
+  handleReload(data) {
+    switch (data.file_type) {
+      case 'css':
+        console.log('[Arizona] CSS file changed. Refreshing stylesheets without page reload...');
+        document.querySelectorAll('link[rel="stylesheet"]').forEach((link) => {
+          const href = link.href.split('?')[0];
+          link.href = `${href}?t=${Date.now()}`;
+        });
+        break;
+      default:
+        console.log(`[Arizona] ${data.file_type || 'File'} changed. Reloading page...`);
+        window.location.reload();
+    }
   }
 
   handleReply(data) {
