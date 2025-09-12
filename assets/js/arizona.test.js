@@ -46,6 +46,20 @@ describe('ArizonaClient', () => {
     test('initializes with correct default state', () => {
       expect(client.worker).toBeNull();
       expect(client.connected).toBe(false);
+      expect(client.logLevel).toBe(-1); // Silent by default
+    });
+
+    test('accepts logLevel option', () => {
+      const clientWithInfo = new ArizonaClient({ logLevel: 'info' });
+      expect(clientWithInfo.logLevel).toBe(6);
+
+      const clientWithDebug = new ArizonaClient({ logLevel: 'debug' });
+      expect(clientWithDebug.logLevel).toBe(7);
+    });
+
+    test('defaults to silent for unknown log levels', () => {
+      const clientWithUnknown = new ArizonaClient({ logLevel: 'unknown' });
+      expect(clientWithUnknown.logLevel).toBe(-1);
     });
   });
 
@@ -335,13 +349,80 @@ describe('ArizonaClient', () => {
   });
 
   describe('unknown message handling', () => {
-    test('logs warning for unknown messages', () => {
+    test('logs warning for unknown messages when logLevel allows', () => {
+      const clientWithWarnings = new ArizonaClient({ logLevel: 'warning' });
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const unknownMessage = { type: 'unknown', data: 'test' };
 
-      client.handleUnknownMessage(unknownMessage);
+      clientWithWarnings.handleUnknownMessage(unknownMessage);
 
       expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Unknown worker message:', unknownMessage);
+      consoleSpy.mockRestore();
+    });
+
+    test('does not log warning when logLevel is silent', () => {
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const unknownMessage = { type: 'unknown', data: 'test' };
+
+      client.handleUnknownMessage(unknownMessage); // client uses silent by default
+
+      expect(consoleSpy).not.toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('logging methods', () => {
+    test('error() always logs regardless of level', () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      client.error('Test error', { detail: 'info' });
+
+      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Test error', { detail: 'info' });
+      consoleSpy.mockRestore();
+    });
+
+    test('warning() respects log level', () => {
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      // Silent client should not log warnings
+      client.warning('Test warning');
+      expect(consoleSpy).not.toHaveBeenCalled();
+
+      // Warning level client should log warnings
+      const warningClient = new ArizonaClient({ logLevel: 'warning' });
+      warningClient.warning('Test warning');
+      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Test warning');
+
+      consoleSpy.mockRestore();
+    });
+
+    test('info() respects log level', () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      // Silent client should not log info
+      client.info('Test info');
+      expect(consoleSpy).not.toHaveBeenCalled();
+
+      // Info level client should log info
+      const infoClient = new ArizonaClient({ logLevel: 'info' });
+      infoClient.info('Test info');
+      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Test info');
+
+      consoleSpy.mockRestore();
+    });
+
+    test('debug() respects log level', () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      // Silent client should not log debug
+      client.debug('Test debug');
+      expect(consoleSpy).not.toHaveBeenCalled();
+
+      // Debug level client should log debug
+      const debugClient = new ArizonaClient({ logLevel: 'debug' });
+      debugClient.debug('Test debug');
+      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Test debug');
+
       consoleSpy.mockRestore();
     });
   });
