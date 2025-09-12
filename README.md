@@ -591,7 +591,8 @@ transform_config(Config, PluginConfig) ->
     JwtSecret = maps:get(jwt_secret, PluginConfig),
 
     % Transform routes to add auth middleware to protected paths
-    Routes = maps:get(routes, Config, []),
+    ServerConfig = maps:get(server, Config),
+    Routes = maps:get(routes, ServerConfig, []),
     NewRoutes = lists:map(fun(Route) ->
         case Route of
             {view, Path, ViewModule, MountArg, Middlewares} when
@@ -604,7 +605,8 @@ transform_config(Config, PluginConfig) ->
         end
     end, Routes),
 
-    Config#{routes => NewRoutes}.
+    UpdatedServerConfig = ServerConfig#{routes => NewRoutes},
+    Config#{server => UpdatedServerConfig}.
 ```
 
 ### **Using Plugins**
