@@ -106,7 +106,6 @@ class ArizonaWebSocketWorker {
           this.handleUnknownMessage(message);
       }
     } catch (error) {
-      console.error('[Arizona Worker] Error handling message:', error);
       this.postMessage({
         type: 'error',
         data: { error: `Message handling failed: ${error.message}` },
@@ -129,8 +128,6 @@ class ArizonaWebSocketWorker {
         isInitial: true,
       },
     });
-
-    console.log('[Arizona Worker] Initial render processed');
   }
 
   handleDiff(message) {
@@ -152,13 +149,9 @@ class ArizonaWebSocketWorker {
         isInitial: false,
       },
     });
-
-    console.log('[Arizona Worker] Diff applied and patch sent');
   }
 
   handleReload(message) {
-    console.log('[Arizona Worker] Received reload message');
-
     // Send reload message to main thread
     this.postMessage({
       type: 'reload',
@@ -167,8 +160,6 @@ class ArizonaWebSocketWorker {
   }
 
   handleReply(message) {
-    console.log('[Arizona Worker] Received reply message');
-
     // Send reply message to main thread
     this.postMessage({
       type: 'reply',
@@ -177,8 +168,6 @@ class ArizonaWebSocketWorker {
   }
 
   handleRedirect(message) {
-    console.log('[Arizona Worker] Received redirect message');
-
     // Send redirect message to main thread
     this.postMessage({
       type: 'redirect',

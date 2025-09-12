@@ -2,12 +2,22 @@
 import morphdom from 'morphdom';
 import ArizonaHierarchical from './arizona-hierarchical.js';
 
+// Log levels (aligned with Erlang logger levels)
+const LOG_LEVELS = {
+  silent: -1,
+  error: 3,
+  warning: 4,
+  info: 6,
+  debug: 7,
+};
+
 // Arizona Client API
 export default class ArizonaClient {
-  constructor() {
+  constructor(opts = {}) {
     this.worker = null;
     this.connected = false;
     this.hierarchical = new ArizonaHierarchical();
+    this.logLevel = LOG_LEVELS[opts.logLevel] ?? LOG_LEVELS.silent; // Default: silent (production-safe)
   }
 
   connect(opts = {}) {
@@ -99,17 +109,17 @@ export default class ArizonaClient {
           this.handleUnknownMessage(message);
       }
     } catch (error) {
-      console.error('[Arizona] Error handling worker message:', error);
+      this.error('Error handling worker message:', error);
     }
   }
 
   handleStatus(data) {
     if (data.status === 'connected') {
       this.connected = true;
-      console.log('[Arizona] Connected to WebSocket');
+      this.info('Connected to WebSocket');
     } else if (data.status === 'disconnected') {
       this.connected = false;
-      console.log('[Arizona] Disconnected from WebSocket');
+      this.info('Disconnected from WebSocket');
     }
     this.dispatchArizonaEvent('status', data);
   }
@@ -125,7 +135,7 @@ export default class ArizonaClient {
   }
 
   handleInitialRender(patch) {
-    console.log('[Arizona] Applying initial render');
+    this.debug('Applying initial render');
 
     // Store structure in client-side hierarchical instance for debugging
     if (patch.structure) {
@@ -137,7 +147,7 @@ export default class ArizonaClient {
   }
 
   handleDiffPatch(patch) {
-    console.log('[Arizona] Applying diff patch');
+    this.debug('Applying diff patch');
 
     // Apply HTML patch to DOM
     this.applyHtmlPatch(patch);
@@ -147,7 +157,7 @@ export default class ArizonaClient {
     const target = document.getElementById(patch.statefulId);
 
     if (!target) {
-      console.warn(`[Arizona] Target element not found: ${patch.statefulId}`);
+      this.warning(`Target element not found: ${patch.statefulId}`);
       return;
     }
 
@@ -160,7 +170,7 @@ export default class ArizonaClient {
         },
       });
 
-      console.log(`[Arizona] Patch applied successfully`);
+      this.debug('Patch applied successfully');
 
       // Trigger custom event for other code to listen to
       target.dispatchEvent(
@@ -169,37 +179,37 @@ export default class ArizonaClient {
         })
       );
     } catch (error) {
-      console.error('[Arizona] Error applying HTML patch:', error);
+      this.error('Error applying HTML patch:', error);
     }
   }
 
   handleWorkerError(data) {
-    console.error('[Arizona Worker Error]:', data.error);
+    this.error('Worker Error:', data.error);
     this.dispatchArizonaEvent('error', data);
   }
 
   handleReload(data) {
     switch (data.file_type) {
       case 'css':
-        console.log('[Arizona] CSS file changed. Refreshing stylesheets without page reload...');
+        this.info('CSS file changed. Refreshing stylesheets without page reload...');
         document.querySelectorAll('link[rel="stylesheet"]').forEach((link) => {
           const href = link.href.split('?')[0];
           link.href = `${href}?t=${Date.now()}`;
         });
         break;
       default:
-        console.log(`[Arizona] ${data.file_type || 'File'} changed. Reloading page...`);
+        this.info(`${data.file_type || 'File'} changed. Reloading page...`);
         window.location.reload();
     }
   }
 
   handleReply(data) {
-    console.log('[Arizona] WebSocket reply:', data);
+    this.debug('WebSocket reply:', data);
     this.dispatchArizonaEvent('reply', data);
   }
 
   handleRedirect(data) {
-    console.log('[Arizona] Redirecting to:', data.url);
+    this.info('Redirecting to:', data.url);
     this.dispatchArizonaEvent('redirect', data);
 
     // Perform the redirect with safe option access
@@ -207,7 +217,7 @@ export default class ArizonaClient {
   }
 
   handleUnknownMessage(message) {
-    console.warn('[Arizona] Unknown worker message:', message);
+    this.warning('Unknown worker message:', message);
   }
 
   dispatchArizonaEvent(eventType, eventData) {
@@ -220,5 +230,29 @@ export default class ArizonaClient {
 
   isConnected() {
     return this.connected;
+  }
+
+  // Logging methods aligned with Erlang logger levels
+  error(message, ...args) {
+    // Always show errors (critical for debugging)
+    console.error(`[Arizona] ${message}`, ...args);
+  }
+
+  warning(message, ...args) {
+    if (this.logLevel >= LOG_LEVELS.warning) {
+      console.warn(`[Arizona] ${message}`, ...args);
+    }
+  }
+
+  info(message, ...args) {
+    if (this.logLevel >= LOG_LEVELS.info) {
+      console.log(`[Arizona] ${message}`, ...args);
+    }
+  }
+
+  debug(message, ...args) {
+    if (this.logLevel >= LOG_LEVELS.debug) {
+      console.log(`[Arizona] ${message}`, ...args);
+    }
   }
 }

@@ -402,7 +402,7 @@ render(Bindings) ->
         <title>My Arizona App</title>
         <script type="module" async>
             import Arizona from '/assets/js/arizona.min.js';
-            globalThis.arizona = new Arizona();
+            globalThis.arizona = new Arizona({ logLevel: 'info' }); // Optional: configure logging
             arizona.connect();
         </script>
     </head>
@@ -841,6 +841,44 @@ reload(_Files, _Options) ->
 
 This enhancement significantly improves the development workflow by avoiding unnecessary page
 reloads during CSS development.
+
+### **JavaScript Client Logging**
+
+Arizona's JavaScript client supports configurable logging levels aligned with Erlang's logger
+system for consistent debugging across the stack:
+
+```javascript
+import Arizona from '/assets/js/arizona.min.js';
+
+// Production - silent (default)
+const arizona = new Arizona();
+
+// Development - show info and above (connections, reloads, redirects)
+const arizona = new Arizona({ logLevel: 'info' });
+
+// Full debugging - show all internal operations
+const arizona = new Arizona({ logLevel: 'debug' });
+
+// Programmatic control
+const arizona = new Arizona({
+    logLevel: process.env.NODE_ENV === 'development' ? 'debug' : 'silent'
+});
+```
+
+**Available Log Levels** (aligned with Erlang logger):
+
+- `silent` (-1): No logs (production default)
+- `error` (3): Errors only (always shown)
+- `warning` (4): Warnings and above
+- `info` (6): Connection status, reload notifications, redirects
+- `debug` (7): All internal operations and message details
+
+**Benefits:**
+
+- **Production-safe**: Silent by default, no logs unless explicitly enabled
+- **Flexible development**: Choose appropriate verbosity for debugging
+- **Erlang alignment**: Log levels match backend for consistent configuration
+- **Zero overhead**: Disabled logs have minimal performance impact
 
 ### **Static Site Generation**
 
