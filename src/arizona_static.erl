@@ -80,12 +80,14 @@ Returns specific errors for different failure modes:
 %% --------------------------------------------------------------------
 
 -export([generate/1]).
+-export([generate/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
 -ignore_xref([generate/1]).
+-ignore_xref([generate/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -120,21 +122,34 @@ Returns specific errors for different failure modes:
 %% --------------------------------------------------------------------
 
 -doc ~"""
+Generates a static site from the given configuration using current Arizona config.
+
+Convenience function that calls generate/2 with the current Arizona application
+configuration obtained from arizona:get_config/0.
+""".
+-spec generate(Config) -> ok | {error, ErrReason} when
+    Config :: config(),
+    ErrReason :: generation_error().
+generate(Config) ->
+    generate(Config, arizona:get_config()).
+
+-doc ~"""
 Generates a static site from the given configuration.
 
 Crawls the running Arizona server, fetches HTML content, and writes
 static files to the output directory. Also generates a sitemap.xml
 for SEO purposes.
 """.
--spec generate(Config) -> ok | {error, ErrReason} when
+-spec generate(Config, ArizonaConfig) -> ok | {error, ErrReason} when
     Config :: config(),
+    ArizonaConfig :: arizona:config(),
     ErrReason :: generation_error().
-generate(#{route_paths := RoutePaths, output_dir := OutputDir} = Config) ->
+generate(#{route_paths := RoutePaths, output_dir := OutputDir} = Config, ArizonaConfig) ->
     maybe
         ok ?= check_server_running(),
         ok ?= ensure_output_dir(OutputDir),
         Timeout = maps:get(timeout, Config, 5_000),
-        {ok, HtmlPages} ?= generate_pages(RoutePaths, OutputDir, Timeout),
+        {ok, HtmlPages} ?= generate_pages(ArizonaConfig, RoutePaths, OutputDir, Timeout),
         ok ?= generate_sitemap(HtmlPages, Config),
         ok
     else
@@ -156,10 +171,10 @@ check_server_running() ->
     end.
 
 %% Fetch page content from running server
-fetch_page(RoutePath) ->
+fetch_page(ArizonaConfig, RoutePath) ->
     maybe
         ok ?= application:ensure_started(inets),
-        ServerConfig = arizona_app:get_server_config(),
+        ServerConfig = maps:get(server, ArizonaConfig),
         Scheme = atom_to_binary(maps:get(scheme, ServerConfig, http)),
         {ok, IpAddress, Port} = arizona_server:get_address(),
         Address = inet:ntoa(IpAddress),
@@ -174,7 +189,7 @@ fetch_page(RoutePath) ->
     end.
 
 %% Generate all pages from route paths map
-generate_pages(RouteConfigs, OutputDir, Timeout) ->
+generate_pages(ArizonaConfig, RouteConfigs, OutputDir, Timeout) ->
     MainPid = self(),
     TotalTasks = map_size(RouteConfigs),
 
@@ -184,12 +199,12 @@ generate_pages(RouteConfigs, OutputDir, Timeout) ->
             true ->
                 % Spawn parallel worker
                 spawn(fun() ->
-                    Result = generate_file(RoutePath, OutputDir),
+                    Result = generate_file(ArizonaConfig, RoutePath, OutputDir),
                     MainPid ! {task_complete, RoutePath, Result}
                 end);
             false ->
                 % Run sequential task in same process, then send message
-                Result = generate_file(RoutePath, OutputDir),
+                Result = generate_file(ArizonaConfig, RoutePath, OutputDir),
                 self() ! {task_complete, RoutePath, Result}
         end
      || RoutePath := Options <- RouteConfigs
@@ -219,9 +234,9 @@ collect_task_results(Remaining, HtmlPages, Timeout) ->
         {error, timeout}
     end.
 
-generate_file(RoutePath, OutputDir) ->
+generate_file(ArizonaConfig, RoutePath, OutputDir) ->
     maybe
-        {ok, Type, Content} ?= fetch_page(RoutePath),
+        {ok, Type, Content} ?= fetch_page(ArizonaConfig, RoutePath),
         FilePath = build_file_path(RoutePath, OutputDir),
         ok ?= ensure_file_dir(FilePath),
         ok ?= write_file(FilePath, Content),

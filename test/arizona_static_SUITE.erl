@@ -300,7 +300,7 @@ generate_simple_html_test(Config) when is_list(Config) ->
         output_dir => list_to_binary(OutputDir)
     },
 
-    ?assertEqual(ok, arizona_static:generate(StaticConfig)),
+    ?assertEqual(ok, arizona_static:generate(StaticConfig, mock_arizona_config())),
 
     % Check files exist
     ?assert(filelib:is_file(filename:join(OutputDir, "index.html"))),
@@ -329,7 +329,7 @@ generate_with_assets_test(Config) when is_list(Config) ->
         output_dir => list_to_binary(OutputDir)
     },
 
-    ?assertEqual(ok, arizona_static:generate(StaticConfig)),
+    ?assertEqual(ok, arizona_static:generate(StaticConfig, mock_arizona_config())),
 
     % Check HTML and asset files exist
     ?assert(filelib:is_file(filename:join(OutputDir, "index.html"))),
@@ -353,7 +353,7 @@ generate_nested_paths_test(Config) when is_list(Config) ->
         output_dir => list_to_binary(OutputDir)
     },
 
-    ?assertEqual(ok, arizona_static:generate(StaticConfig)),
+    ?assertEqual(ok, arizona_static:generate(StaticConfig, mock_arizona_config())),
 
     % Check nested directory structure
     ?assert(filelib:is_file(filename:join([OutputDir, "post", "hello-world.html"]))),
@@ -374,7 +374,7 @@ generate_index_page_test(Config) when is_list(Config) ->
         output_dir => list_to_binary(OutputDir)
     },
 
-    ?assertEqual(ok, arizona_static:generate(StaticConfig)),
+    ?assertEqual(ok, arizona_static:generate(StaticConfig, mock_arizona_config())),
 
     % Root path should create index.html
     ?assert(filelib:is_file(filename:join(OutputDir, "index.html"))),
@@ -397,7 +397,7 @@ file_extension_handling_test(Config) when is_list(Config) ->
         output_dir => list_to_binary(OutputDir)
     },
 
-    ?assertEqual(ok, arizona_static:generate(StaticConfig)),
+    ?assertEqual(ok, arizona_static:generate(StaticConfig, mock_arizona_config())),
 
     % HTML route should get .html extension
     ?assert(filelib:is_file(filename:join(OutputDir, "about.html"))),
@@ -423,7 +423,7 @@ parallel_generation_test(Config) when is_list(Config) ->
         output_dir => list_to_binary(OutputDir)
     },
 
-    ?assertEqual(ok, arizona_static:generate(StaticConfig)),
+    ?assertEqual(ok, arizona_static:generate(StaticConfig, mock_arizona_config())),
 
     % Check all files were generated
     ?assert(filelib:is_file(filename:join(OutputDir, "index.html"))),
@@ -449,7 +449,7 @@ file_permission_error_test(Config) when is_list(Config) ->
         output_dir => list_to_binary(ReadOnlyDir)
     },
 
-    Result = arizona_static:generate(StaticConfig),
+    Result = arizona_static:generate(StaticConfig, mock_arizona_config()),
     ?assertMatch({error, {file_operation_failed, _, _}}, Result),
 
     % Cleanup
@@ -479,7 +479,7 @@ html_only_in_sitemap_test(Config) when is_list(Config) ->
         output_dir => list_to_binary(OutputDir)
     },
 
-    ?assertEqual(ok, arizona_static:generate(StaticConfig)),
+    ?assertEqual(ok, arizona_static:generate(StaticConfig, mock_arizona_config())),
 
     % Check sitemap content
     {ok, SitemapContent} = file:read_file(filename:join(OutputDir, "sitemap.xml")),
@@ -505,7 +505,7 @@ sitemap_xml_structure_test(Config) when is_list(Config) ->
         output_dir => list_to_binary(OutputDir)
     },
 
-    ?assertEqual(ok, arizona_static:generate(StaticConfig)),
+    ?assertEqual(ok, arizona_static:generate(StaticConfig, mock_arizona_config())),
 
     {ok, SitemapContent} = file:read_file(filename:join(OutputDir, "sitemap.xml")),
 
@@ -534,7 +534,7 @@ sitemap_base_url_test(Config) when is_list(Config) ->
         base_url => ~"https://mysite.com"
     },
 
-    ?assertEqual(ok, arizona_static:generate(StaticConfig)),
+    ?assertEqual(ok, arizona_static:generate(StaticConfig, mock_arizona_config())),
 
     {ok, SitemapContent} = file:read_file(filename:join(OutputDir, "sitemap.xml")),
 
@@ -553,7 +553,7 @@ empty_sitemap_test(Config) when is_list(Config) ->
         output_dir => list_to_binary(OutputDir)
     },
 
-    ?assertEqual(ok, arizona_static:generate(StaticConfig)),
+    ?assertEqual(ok, arizona_static:generate(StaticConfig, mock_arizona_config())),
 
     {ok, SitemapContent} = file:read_file(filename:join(OutputDir, "sitemap.xml")),
 
@@ -570,3 +570,23 @@ empty_sitemap_test(Config) when is_list(Config) ->
     ?assert(binary:match(SitemapContent, ~"<url>") =:= nomatch),
 
     ok.
+
+%% --------------------------------------------------------------------
+%% Helper Functions
+%% --------------------------------------------------------------------
+
+mock_arizona_config() ->
+    #{
+        server => #{
+            enabled => true,
+            transport_opts => [{port, 8080}],
+            scheme => http,
+            routes => [
+                {view, ~"/", home_view, #{}, []},
+                {view, ~"/about", about_view, #{}, []},
+                {view, ~"/contact", contact_view, #{}, []}
+            ]
+        },
+        reloader => #{enabled => false, rules => []},
+        plugins => []
+    }.

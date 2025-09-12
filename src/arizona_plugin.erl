@@ -25,9 +25,9 @@ Plugins are configured as a proplist in sys.config:
 ```erlang
 {plugins, [
     {my_auth_plugin, #{jwt_secret => "secret123"}},  % Map config
-    {my_cors_plugin, ["*"]},                          % List config
-    {my_simple_plugin, true},                         % Boolean config
-    {my_other_plugin, {option, value}}                % Tuple config
+    {my_cors_plugin, ["*"]},                         % List config
+    {my_simple_plugin, true},                        % Boolean config
+    {my_other_plugin, {option, value}}               % Tuple config
 ]}
 ```
 
@@ -41,11 +41,23 @@ Plugins execute in list order during Arizona application startup.
 -export([apply_plugins/1]).
 
 %% --------------------------------------------------------------------
+%% Types exports
+%% --------------------------------------------------------------------
+
+-export_type([plugin/0]).
+
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
+
+-nominal plugin() :: {PluginName :: atom(), PluginConfig :: dynamic()}.
+
+%% --------------------------------------------------------------------
 %% Behavior callback exports
 %% --------------------------------------------------------------------
 
 -callback transform_config(Config, PluginConfig) -> Config when
-    Config :: arizona_server:config(),
+    Config :: arizona:config(),
     PluginConfig :: dynamic().
 
 %% --------------------------------------------------------------------
@@ -53,17 +65,17 @@ Plugins execute in list order during Arizona application startup.
 %% --------------------------------------------------------------------
 
 -doc ~"""
-Apply all configured plugins to transform the Arizona server config.
+Apply all configured plugins to transform the Arizona application config.
 
 Plugins are executed sequentially in the order they appear in the configuration.
 If any plugin fails, the application startup will fail with a clear error
 message indicating which plugin caused the failure.
 """.
 -spec apply_plugins(Config) -> Config when
-    Config :: arizona_server:config().
+    Config :: arizona:config().
 apply_plugins(Config) ->
-    % Get list of plugins from Arizona config
-    Plugins = application:get_env(arizona, plugins, []),
+    % Get list of plugins from the config
+    Plugins = maps:get(plugins, Config),
 
     % Apply each plugin transformation in order
     lists:foldl(fun apply_plugin/2, Config, Plugins).
