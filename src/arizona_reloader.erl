@@ -97,7 +97,7 @@ monitors specific directories and delegates to the configured handler.
 
 -nominal config() :: #{
     enabled := boolean(),
-    rules := [rule()]
+    rules => [rule()]
 }.
 -nominal rule() :: #{
     handler := {module(), handler_options()},
@@ -152,7 +152,8 @@ Returns `ok` on success or `{error, Reason}` on failure.
     Config :: config(),
     Result :: ok | {error, Reason},
     Reason :: dynamic().
-start(#{enabled := true, rules := Rules}) ->
+start(#{enabled := true} = Config) ->
+    Rules = maps:get(rules, Config, []),
     start_reloader_instances(Rules);
 start(Config) when is_map(Config) ->
     ok.
