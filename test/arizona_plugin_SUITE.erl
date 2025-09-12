@@ -22,12 +22,6 @@ groups() ->
         ]}
     ].
 
-init_per_suite(Config) ->
-    Config.
-
-end_per_suite(_Config) ->
-    ok.
-
 %% --------------------------------------------------------------------
 %% Plugin tests
 %% --------------------------------------------------------------------
@@ -35,52 +29,36 @@ end_per_suite(_Config) ->
 apply_plugins_empty_list_test(_Config) ->
     ct:comment("Test applying empty plugin list returns original config"),
 
-    % Set empty plugins list
-    application:set_env(arizona, plugins, []),
+    ArizonaConfig = mock_arizona_config([{view, ~"/", home_view, #{}, []}], []),
 
-    OriginalConfig = #{
-        enabled => true,
-        routes => [{view, ~"/", home_view, #{}, []}]
-    },
-
-    Result = arizona_plugin:apply_plugins(OriginalConfig),
-    ?assertEqual(OriginalConfig, Result).
+    Result = arizona_plugin:apply_plugins(ArizonaConfig),
+    ?assertEqual(ArizonaConfig, Result).
 
 apply_plugins_single_plugin_test(_Config) ->
     ct:comment("Test applying single plugin transforms config correctly"),
 
-    % Set single plugin
-    application:set_env(arizona, plugins, [{arizona_example_plugin, #{test => true}}]),
+    ArizonaConfig = mock_arizona_config([{view, ~"/test", test_view, #{}, []}], [
+        {arizona_example_plugin, #{test => true}}
+    ]),
 
-    OriginalConfig = #{
-        enabled => true,
-        routes => [{view, ~"/test", test_view, #{}, []}]
-    },
-
-    Result = arizona_plugin:apply_plugins(OriginalConfig),
+    Result = arizona_plugin:apply_plugins(ArizonaConfig),
 
     % Check that arizona_example_plugin added middleware to the view route
-    #{routes := [{view, ~"/test", test_view, #{}, Middlewares}]} = Result,
+    #{server := #{routes := [{view, ~"/test", test_view, #{}, Middlewares}]}} = Result,
     ?assertMatch([{example_middleware, #{test := true}} | _], Middlewares).
 
 apply_plugins_multiple_plugins_test(_Config) ->
     ct:comment("Test applying multiple plugins in order"),
 
-    % Set multiple plugins
-    application:set_env(arizona, plugins, [
+    ArizonaConfig = mock_arizona_config([{view, ~"/test", test_view, #{}, []}], [
         {arizona_example_plugin, #{test => plugin1}},
         {arizona_example_plugin, #{test => plugin2}}
     ]),
 
-    OriginalConfig = #{
-        enabled => true,
-        routes => [{view, ~"/test", test_view, #{}, []}]
-    },
-
-    Result = arizona_plugin:apply_plugins(OriginalConfig),
+    Result = arizona_plugin:apply_plugins(ArizonaConfig),
 
     % Check that both plugins added middleware (plugin2 should be first in list)
-    #{routes := [{view, ~"/test", test_view, #{}, Middlewares}]} = Result,
+    #{server := #{routes := [{view, ~"/test", test_view, #{}, Middlewares}]}} = Result,
     ?assertMatch(
         [
             {example_middleware, #{test := plugin2}},
@@ -92,13 +70,21 @@ apply_plugins_multiple_plugins_test(_Config) ->
 apply_plugins_plugin_error_test(_Config) ->
     ct:comment("Test plugin error handling"),
 
-    % Set plugin that doesn't exist
-    application:set_env(arizona, plugins, [{nonexistent_plugin, #{}}]),
-
-    OriginalConfig = #{enabled => true, routes => []},
+    ArizonaConfig = mock_arizona_config([], [{nonexistent_plugin, #{}}]),
 
     % Should crash with clear error message
     ?assertError(
         {plugin_failed, nonexistent_plugin, error, undef},
-        arizona_plugin:apply_plugins(OriginalConfig)
+        arizona_plugin:apply_plugins(ArizonaConfig)
     ).
+
+%% --------------------------------------------------------------------
+%% Helper Functions
+%% --------------------------------------------------------------------
+
+mock_arizona_config(Routes, Plugins) ->
+    #{
+        server => #{enabled => true, routes => Routes},
+        reloader => #{enabled => false, rules => []},
+        plugins => Plugins
+    }.

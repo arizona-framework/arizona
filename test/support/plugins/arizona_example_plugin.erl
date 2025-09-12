@@ -26,7 +26,8 @@ This example plugin adds a simple logging middleware to all view routes
 to demonstrate config transformation.
 """.
 transform_config(Config, PluginConfig) ->
-    Routes = maps:get(routes, Config, []),
+    ServerConfig = maps:get(server, Config, #{}),
+    Routes = maps:get(routes, ServerConfig, []),
 
     % Add example middleware to all view routes
     TransformedRoutes = lists:map(
@@ -43,4 +44,5 @@ transform_config(Config, PluginConfig) ->
         Routes
     ),
 
-    Config#{routes => TransformedRoutes}.
+    UpdatedServerConfig = ServerConfig#{routes => TransformedRoutes},
+    Config#{server => UpdatedServerConfig}.

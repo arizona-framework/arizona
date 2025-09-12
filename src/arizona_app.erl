@@ -8,7 +8,6 @@
 
 -export([start/2]).
 -export([stop/1]).
--export([get_server_config/0]).
 
 %% --------------------------------------------------------------------
 %% Behaviour (application) callbacks
@@ -22,16 +21,17 @@
     ErrReason :: term().
 start(_StartType, _StartArgs) ->
     maybe
-        % Start supervisor with config
-        SupConfig = create_sup_config(),
+        Config = arizona:get_config(),
+        % Extract configs
+        ReloaderConfig = maps:get(reloader, Config),
+        ServerConfig = maps:get(server, Config),
+        % Start supervisor with processed config
+        SupConfig = create_sup_config(ReloaderConfig),
         {ok, SupPid} ?= arizona_sup:start_link(SupConfig),
         % Start reloader instances if enabled
-        ReloaderConfig = get_reloader_config(),
         ok ?= maybe_start_reloader(ReloaderConfig),
-        % Apply plugins and start server if enabled
-        BaseServerConfig = get_server_config(),
-        ProcessedServerConfig = arizona_plugin:apply_plugins(BaseServerConfig),
-        ok ?= maybe_start_server(ProcessedServerConfig),
+        % Start server if enabled
+        ok ?= maybe_start_server(ServerConfig),
         {ok, SupPid}
     else
         {error, Reason} ->
@@ -43,22 +43,13 @@ start(_StartType, _StartArgs) ->
 stop(_State) ->
     ok.
 
--spec get_server_config() -> Config when
-    Config :: arizona_server:config().
-get_server_config() ->
-    application:get_env(arizona, server, #{enabled => false}).
-
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
-create_sup_config() ->
-    ReloaderConfig = application:get_env(arizona, reloader, #{}),
-    ReloaderEnabled = maps:get(enabled, ReloaderConfig, false),
+create_sup_config(ReloaderConfig) ->
+    ReloaderEnabled = maps:get(enabled, ReloaderConfig),
     #{watcher_enabled => ReloaderEnabled}.
-
-get_reloader_config() ->
-    application:get_env(arizona, reloader, #{enabled => false}).
 
 maybe_start_reloader(ReloaderConfig) ->
     case arizona_reloader:start(ReloaderConfig) of
