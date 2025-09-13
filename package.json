@@ -72,8 +72,7 @@
     "test:e2e:ui": "playwright test --ui",
     "ci": "npm run format:check && npm run lint:check && npm test",
     "prepare": "husky",
-    "prepack": "npm run build",
-    "prepublishOnly": "npm run ci"
+    "prepack": "npm run build"
   },
   "devDependencies": {
     "@eslint/js": "9.35.0",
