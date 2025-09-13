@@ -231,7 +231,7 @@ handler_error_handling_test(Config) when is_list(Config) ->
     HttpResponse = http_get(ServerPort, ErrorRouteUrl),
     ?assertMatch({ok, {500, _ErrorBody}}, HttpResponse),
     {ok, {500, HtmlBody}} = HttpResponse,
-    ?assert(binary:match(HtmlBody, ~"Error:") =/= nomatch).
+    ?assert(binary:match(HtmlBody, ~"Arizona Framework - Error") =/= nomatch).
 
 %% --------------------------------------------------------------------
 %% HTTP Helper Functions
