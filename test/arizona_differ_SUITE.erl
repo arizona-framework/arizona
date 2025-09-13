@@ -463,24 +463,22 @@ mock_view_module(ViewModule, ViewId, StatefulModule, StatefulId, StatelessModule
                     arizona_template:from_string(~"""
                     <div {arizona_template:get_binding(id, Bindings)}>
                         {arizona_template:get_binding(title, Bindings)}
-                        {case arizona_template:get_binding(
-                            show_stateful, Bindings, fun() -> true end
-                        ) of
+                        {case arizona_template:get_binding(show_stateful, Bindings, true) of
                             true ->
                                 arizona_template:render_stateful(StatefulModule, #{
                                     id => arizona_template:get_binding(stateful_id, Bindings),
                                     title => arizona_template:get_binding(title, Bindings),
                                     show_stateless => arizona_template:get_binding(
-                                        show_stateless, Bindings, fun() -> true end
+                                        show_stateless, Bindings, true
                                     ),
                                     stateless_items => arizona_template:get_binding(
-                                        stateless_items, Bindings, fun() -> [] end
+                                        stateless_items, Bindings, []
                                     )
                                 });
                             false ->
                                 ~""
                         end})
-                        {arizona_template:get_binding(footer, Bindings, fun() -> ~"" end)}
+                        {arizona_template:get_binding(footer, Bindings, ~"")}
                     </div>
                     """).
                 """", [
@@ -517,13 +515,13 @@ mock_stateful_module(StatefulModule, StatelessModule, StatelessFun) ->
                     <div {arizona_template:get_binding(id, Bindings)}>
                         {arizona_template:get_binding(title, Bindings)}
                         {case arizona_template:get_binding(
-                            show_stateless, Bindings, fun() -> true end
+                            show_stateless, Bindings, true
                         ) of
                             true ->
                                 arizona_template:render_stateless(StatelessModule, StatelessFun, #{
                                     title => arizona_template:get_binding(title, Bindings),
                                     items => arizona_template:get_binding(
-                                        stateless_items, Bindings, fun() -> [] end
+                                        stateless_items, Bindings, []
                                     )
                                 });
                             false ->
@@ -557,7 +555,7 @@ mock_stateless_module(Module, RenderFun) ->
                 '@render_fun'(Bindings) ->
                     arizona_template:from_string(~""""
                     <h1>{arizona_template:get_binding(title, Bindings)}</h1>
-                    {case arizona_template:get_binding(items, Bindings, fun() -> [] end) of
+                    {case arizona_template:get_binding(items, Bindings, []) of
                         [] ->
                             ~"";
                         Items ->

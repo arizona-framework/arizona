@@ -55,6 +55,7 @@ be created at compile-time via parse transforms or at runtime.
 -export([get_fingerprint/1]).
 -export([get_binding/2]).
 -export([get_binding/3]).
+-export([get_binding_lazy/3]).
 -export([find_binding/2]).
 -export([render_stateful/2]).
 -export([render_stateless/3]).
@@ -75,6 +76,7 @@ be created at compile-time via parse transforms or at runtime.
 -ignore_xref([get_fingerprint/1]).
 -ignore_xref([get_binding/2]).
 -ignore_xref([get_binding/3]).
+-ignore_xref([get_binding_lazy/3]).
 -ignore_xref([find_binding/2]).
 -ignore_xref([render_stateful/2]).
 -ignore_xref([render_stateless/3]).
@@ -365,17 +367,34 @@ get_binding(Key, Bindings) ->
 Retrieves a variable binding value with default and dependency tracking.
 
 Template DSL function - only use inside `arizona_template:from_string/1` strings.
-Returns the bound value or calls default function if key not found.
+Returns the bound value or provided default value if key not found.
 """.
 -spec get_binding(Key, Bindings, Default) -> Value when
     Key :: arizona_binder:key(),
     Bindings :: arizona_binder:bindings(),
-    Default :: arizona_binder:default_fun(),
+    Default :: arizona_binder:value(),
     Value :: arizona_binder:value().
 get_binding(Key, Bindings, Default) ->
     % Record variable dependency for runtime tracking
     _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
     arizona_binder:get(Key, Bindings, Default).
+
+-doc ~"""
+Retrieves a variable binding value with lazy default function and dependency tracking.
+
+Template DSL function - only use inside `arizona_template:from_string/1` strings.
+Returns the bound value or calls default function if key not found. Useful for
+expensive computations that should only be performed when needed.
+""".
+-spec get_binding_lazy(Key, Bindings, DefaultFun) -> Value when
+    Key :: arizona_binder:key(),
+    Bindings :: arizona_binder:bindings(),
+    DefaultFun :: arizona_binder:default_fun(),
+    Value :: arizona_binder:value().
+get_binding_lazy(Key, Bindings, DefaultFun) ->
+    % Record variable dependency for runtime tracking
+    _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
+    arizona_binder:get_lazy(Key, Bindings, DefaultFun).
 
 -doc ~"""
 Safely finds a variable binding value with dependency tracking.

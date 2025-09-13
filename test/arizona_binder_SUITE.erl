@@ -37,6 +37,9 @@ groups() ->
             get_existing_key,
             get_with_default_existing,
             get_with_default_missing,
+            get_lazy_with_default_existing,
+            get_lazy_with_default_missing,
+            get_lazy_function_not_called_when_key_exists,
             find_existing_key,
             find_missing_key
         ]},
@@ -90,14 +93,31 @@ get_existing_key(Config) when is_list(Config) ->
 get_with_default_existing(Config) when is_list(Config) ->
     ct:comment("get/3 should return existing value, not default"),
     Bindings = arizona_binder:new(#{name => ~"Alice"}),
-    DefaultFun = fun() -> ~"Default" end,
-    ?assertEqual(~"Alice", arizona_binder:get(name, Bindings, DefaultFun)).
+    ?assertEqual(~"Alice", arizona_binder:get(name, Bindings, ~"Default")).
 
 get_with_default_missing(Config) when is_list(Config) ->
     ct:comment("get/3 should return default value for missing key"),
     Bindings = arizona_binder:new(#{}),
+    ?assertEqual(~"Default", arizona_binder:get(missing_key, Bindings, ~"Default")).
+
+get_lazy_with_default_existing(Config) when is_list(Config) ->
+    ct:comment("get_lazy/3 should return existing value, not call default function"),
+    Bindings = arizona_binder:new(#{name => ~"Alice"}),
     DefaultFun = fun() -> ~"Default" end,
-    ?assertEqual(~"Default", arizona_binder:get(missing_key, Bindings, DefaultFun)).
+    ?assertEqual(~"Alice", arizona_binder:get_lazy(name, Bindings, DefaultFun)).
+
+get_lazy_with_default_missing(Config) when is_list(Config) ->
+    ct:comment("get_lazy/3 should call default function for missing key"),
+    Bindings = arizona_binder:new(#{}),
+    DefaultFun = fun() -> ~"Default" end,
+    ?assertEqual(~"Default", arizona_binder:get_lazy(missing_key, Bindings, DefaultFun)).
+
+get_lazy_function_not_called_when_key_exists(Config) when is_list(Config) ->
+    ct:comment("get_lazy/3 should not call default function when key exists"),
+    Bindings = arizona_binder:new(#{name => ~"Alice"}),
+    % This function would crash if called, proving laziness
+    CrashingFun = fun() -> error(should_not_be_called) end,
+    ?assertEqual(~"Alice", arizona_binder:get_lazy(name, Bindings, CrashingFun)).
 
 find_existing_key(Config) when is_list(Config) ->
     ct:comment("find/2 should return {ok, Value} for existing key"),

@@ -135,9 +135,9 @@ get_binding_with_default_test(Config) when is_list(Config) ->
     ct:comment("get_binding/3 should use default when key not found"),
     BindingsMap = #{name => ~"John"},
     Bindings = arizona_binder:new(BindingsMap),
-    ?assertEqual(~"John", arizona_template:get_binding(name, Bindings, fun() -> ~"Default" end)),
+    ?assertEqual(~"John", arizona_template:get_binding(name, Bindings, ~"Default")),
     ?assertEqual(
-        ~"Default", arizona_template:get_binding(missing, Bindings, fun() -> ~"Default" end)
+        ~"Default", arizona_template:get_binding(missing, Bindings, ~"Default")
     ).
 
 find_binding_test(Config) when is_list(Config) ->

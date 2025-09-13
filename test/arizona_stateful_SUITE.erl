@@ -188,8 +188,8 @@ get_binding_test(Config) when is_list(Config) ->
 get_binding_with_default_test(Config) when is_list(Config) ->
     ct:comment("get_binding/3 should use default when key not found"),
     State = arizona_stateful:new(test_module, #{name => ~"Bob"}),
-    Name = arizona_stateful:get_binding(name, State, fun() -> ~"Default" end),
-    Role = arizona_stateful:get_binding(role, State, fun() -> ~"guest" end),
+    Name = arizona_stateful:get_binding(name, State, ~"Default"),
+    Role = arizona_stateful:get_binding(role, State, ~"guest"),
     ?assertEqual(~"Bob", Name),
     ?assertEqual(~"guest", Role).
 
