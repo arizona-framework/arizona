@@ -1,6 +1,55 @@
 {
-  "name": "Arizona JS",
+  "name": "@arizona-framework/client",
+  "version": "0.1.0",
+  "description": "JavaScript client library for Arizona Framework",
   "type": "module",
+  "main": "./priv/static/assets/js/arizona.min.js",
+  "module": "./priv/static/assets/js/arizona.min.js",
+  "types": "./assets/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./assets/types/index.d.ts",
+      "import": "./priv/static/assets/js/arizona.min.js",
+      "require": "./priv/static/assets/js/arizona.min.js"
+    },
+    "./worker": {
+      "import": "./priv/static/assets/js/arizona-worker.min.js",
+      "require": "./priv/static/assets/js/arizona-worker.min.js"
+    }
+  },
+  "files": [
+    "README.md",
+    "LICENSE.md",
+    "package.json",
+    "priv/static/assets/js/*",
+    "assets/types/*"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arizona-framework/arizona.git"
+  },
+  "homepage": "https://github.com/arizona-framework/arizona",
+  "bugs": {
+    "url": "https://github.com/arizona-framework/arizona/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "browserslist": ["defaults", "not IE 11"],
+  "keywords": [
+    "arizona",
+    "framework",
+    "javascript",
+    "client",
+    "websocket",
+    "realtime"
+  ],
+  "author": "William Fank Thomé <willilamthome@hotmail.com>",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "node ./esbuild.config.js",
     "format": "prettier --write \"./*.js\" \"./assets/**/*.js\" \"**/*.json\" \"**/*.yml\" --config prettier.config.js --ignore-path .gitignore --ignore-path .prettierignore",
@@ -22,7 +71,9 @@
     "test:e2e:report": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "ci": "npm run format:check && npm run lint:check && npm test",
-    "prepare": "husky"
+    "prepare": "husky",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run ci"
   },
   "devDependencies": {
     "@eslint/js": "9.35.0",
