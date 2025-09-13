@@ -68,7 +68,8 @@ describe('ArizonaClient', () => {
       client.connect();
 
       expect(client.worker).toBeInstanceOf(Worker);
-      expect(client.worker.scriptURL).toBe('/assets/js/arizona-worker.min.js');
+      expect(client.worker.scriptURL).toBeInstanceOf(URL);
+      expect(client.worker.scriptURL.pathname).toContain('arizona-worker.min.js');
       expect(client.worker.options).toEqual({ type: 'module' });
 
       const postedMessage = client.worker.getLastPostedMessage();
