@@ -2,13 +2,15 @@
 name: Publish to npm
 
 "on":
-  release:
-    types:
-      - published
+  push:
+    paths:
+      - "package.json"
+    branches:
+      - main
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Tag to publish (e.g., v0.1.0)"
+      version:
+        description: "Version to publish (from package.json)"
         required: true
         type: string
 
@@ -44,13 +46,28 @@ jobs:
       - name: Run full CI suite
         run: npm run ci
 
+      - name: Check if version needs publishing
+        id: check-version
+        run: |
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          if npm view @arizona-framework/client@$CURRENT_VERSION version 2>/dev/null; then
+            echo "Version $CURRENT_VERSION already published, skipping"
+            echo "should-publish=false" >> $GITHUB_OUTPUT
+          else
+            echo "Version $CURRENT_VERSION not published, proceeding"
+            echo "should-publish=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build package
+        if: steps.check-version.outputs.should-publish == 'true'
         run: npm run build
 
       - name: Verify package contents
+        if: steps.check-version.outputs.should-publish == 'true'
         run: npm pack --dry-run
 
       - name: Publish to npm
+        if: steps.check-version.outputs.should-publish == 'true'
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
