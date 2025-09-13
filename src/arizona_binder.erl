@@ -23,8 +23,10 @@ access template data with atom keys and any dynamic values.
 ~"John"
 3> arizona_binder:find(email, Bindings).
 error
-4> arizona_binder:get(email, Bindings, fun() -> ~"unknown" end).
+4> arizona_binder:get(email, Bindings, ~"unknown").
 ~"unknown"
+5> arizona_binder:get_lazy(email, Bindings, fun() -> ~"computed_default" end).
+~"computed_default"
 ```
 """.
 -compile({nowarn_redefined_builtin_type, [map/0]}).
@@ -37,6 +39,7 @@ error
 -export([to_map/1]).
 -export([get/2]).
 -export([get/3]).
+-export([get_lazy/3]).
 -export([find/2]).
 -export([put/3]).
 -export([keys/1]).
@@ -104,22 +107,37 @@ get(Key, Bindings) when is_atom(Key), is_map(Bindings) ->
     maps:get(Key, Bindings).
 
 -doc ~"""
+Gets a value by key with default fallback.
+
+Returns the value if the key exists, otherwise returns the provided
+default value. This is a safe lookup that never raises an exception.
+""".
+-spec get(Key, Bindings, Default) -> Value when
+    Key :: key(),
+    Bindings :: bindings(),
+    Value :: value() | Default.
+get(Key, Bindings, Default) when is_atom(Key), is_map(Bindings) ->
+    maps:get(Key, Bindings, Default).
+
+-doc ~"""
 Gets a value by key with default function fallback.
 
 Returns the value if the key exists, otherwise calls the default
 function to generate a fallback value. Useful for optional bindings.
 """.
--spec get(Key, Bindings, DefaultFun) -> Value when
+-spec get_lazy(Key, Bindings, DefaultFun) -> Value when
     Key :: key(),
     Bindings :: bindings(),
     DefaultFun :: default_fun(),
     Value :: value().
-get(Key, Bindings, DefaultFun) when is_atom(Key), is_map(Bindings), is_function(DefaultFun, 0) ->
+get_lazy(Key, Bindings, DefaultFun) when
+    is_atom(Key), is_map(Bindings), is_function(DefaultFun, 0)
+->
     case Bindings of
         #{Key := Value} ->
             Value;
         #{} ->
-            DefaultFun()
+            apply(DefaultFun, [])
     end.
 
 -doc ~"""

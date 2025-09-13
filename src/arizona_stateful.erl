@@ -64,6 +64,7 @@ handle_event(~"increment", _Params, State) ->
 -export([get_module/1]).
 -export([get_binding/2]).
 -export([get_binding/3]).
+-export([get_binding_lazy/3]).
 -export([get_bindings/1]).
 -export([put_binding/3]).
 -export([merge_bindings/2]).
@@ -77,6 +78,7 @@ handle_event(~"increment", _Params, State) ->
 -ignore_xref([new/2]).
 -ignore_xref([get_binding/2]).
 -ignore_xref([get_binding/3]).
+-ignore_xref([get_binding_lazy/3]).
 -ignore_xref([put_binding/3]).
 
 %% --------------------------------------------------------------------
@@ -212,18 +214,33 @@ get_binding(Key, #state{} = State) ->
     arizona_binder:get(Key, State#state.bindings).
 
 -doc ~"""
-Gets a binding value by key with default function fallback.
+Gets a binding value by key with default fallback.
 
-Returns the value if key exists, otherwise calls the default function.
-Useful for optional component properties.
+Returns the value if key exists, otherwise returns the provided
+default value. This is a safe lookup that never raises an exception.
 """.
 -spec get_binding(Key, State, Default) -> Value when
     Key :: arizona_binder:key(),
     State :: state(),
-    Default :: arizona_binder:default_fun(),
+    Default :: arizona_binder:value(),
     Value :: arizona_binder:value().
 get_binding(Key, #state{} = State, Default) ->
     arizona_binder:get(Key, State#state.bindings, Default).
+
+-doc ~"""
+Gets a binding value by key with lazy default function fallback.
+
+Returns the value if key exists, otherwise calls the default function
+to generate a fallback value. Useful for expensive computations that
+should only be performed when needed.
+""".
+-spec get_binding_lazy(Key, State, DefaultFun) -> Value when
+    Key :: arizona_binder:key(),
+    State :: state(),
+    DefaultFun :: arizona_binder:default_fun(),
+    Value :: arizona_binder:value().
+get_binding_lazy(Key, #state{} = State, DefaultFun) ->
+    arizona_binder:get_lazy(Key, State#state.bindings, DefaultFun).
 
 -doc ~"""
 Returns all component bindings.
