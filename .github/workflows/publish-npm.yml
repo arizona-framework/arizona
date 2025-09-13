@@ -50,12 +50,12 @@ jobs:
         id: check-version
         run: |
           CURRENT_VERSION=$(node -p "require('./package.json').version")
-          if npm view @arizona-framework/client@$CURRENT_VERSION version 2>/dev/null; then
-            echo "Version $CURRENT_VERSION already published, skipping"
-            echo "should-publish=false" >> $GITHUB_OUTPUT
+          if npm view "@arizona-framework/client@${CURRENT_VERSION}" version 2>/dev/null; then
+            echo "Version ${CURRENT_VERSION} already published, skipping"
+            echo "should-publish=false" >> "${GITHUB_OUTPUT}"
           else
-            echo "Version $CURRENT_VERSION not published, proceeding"
-            echo "should-publish=true" >> $GITHUB_OUTPUT
+            echo "Version ${CURRENT_VERSION} not published, proceeding"
+            echo "should-publish=true" >> "${GITHUB_OUTPUT}"
           fi
 
       - name: Build package
