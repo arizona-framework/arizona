@@ -6,7 +6,6 @@ export interface ArizonaClientOptions {
 
 export interface ConnectOptions {
   wsPath?: string;
-  workerPath?: string;
 }
 
 export interface EventParams {
