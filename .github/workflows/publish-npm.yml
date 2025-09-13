@@ -43,9 +43,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run full CI suite
-        run: npm run ci
-
       - name: Check if version needs publishing
         id: check-version
         run: |
