@@ -61,19 +61,28 @@ error handling with stacktrace information for debugging.
     MountArg :: arizona_view:mount_arg(),
     CowboyRequest1 :: cowboy_req:req().
 init(CowboyRequest, {ViewModule, MountArg} = State) ->
+    ArizonaRequest = arizona_cowboy_request:new(CowboyRequest),
     try
-        ArizonaRequest = arizona_cowboy_request:new(CowboyRequest),
         View = arizona_view:call_mount_callback(ViewModule, MountArg, ArizonaRequest),
         {Html, _RenderView} = arizona_renderer:render_layout(View),
         CowboyRequest1 = cowboy_req:reply(
-            200, #{~"content-type" => ~"text/html; charset=utf-8"}, Html, CowboyRequest
+            200,
+            #{~"content-type" => ~"text/html; charset=utf-8"},
+            Html,
+            CowboyRequest
         ),
         {ok, CowboyRequest1, State}
     catch
         Error:Reason:Stacktrace ->
-            ErrorMsg = io_lib:format("Error: ~p:~p~nStacktrace: ~p", [
-                Error, Reason, Stacktrace
-            ]),
-            CowboyRequest2 = cowboy_req:reply(500, #{}, iolist_to_binary(ErrorMsg), CowboyRequest),
+            ErrorView = arizona_view:call_mount_callback(
+                arizona_error_template, {Error, Reason, Stacktrace}, ArizonaRequest
+            ),
+            {ErrorHtml, _ErroreRenderView} = arizona_renderer:render_view(ErrorView),
+            CowboyRequest2 = cowboy_req:reply(
+                500,
+                #{~"content-type" => ~"text/html; charset=utf-8"},
+                ErrorHtml,
+                CowboyRequest
+            ),
             {ok, CowboyRequest2, State}
     end.
