@@ -960,7 +960,7 @@ Arizona provides additional tools to enhance the development experience:
 
 ## Requirements
 
-- Erlang/OTP 27+
+- Erlang/OTP 28+
 
 ## Sponsors
 
