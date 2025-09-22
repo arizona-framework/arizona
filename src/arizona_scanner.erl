@@ -30,7 +30,8 @@ tracking, and expression validation.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([scan_string/2, format_error/2]).
+-export([scan_string/2]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -60,10 +61,12 @@ Handles UTF-8 validation and nested Erlang expressions.
 """.
 -spec scan_string(Line, String) -> [Token] when
     Line :: arizona_token:line(),
-    String :: string() | binary(),
+    String :: iodata(),
     Token :: arizona_token:token().
 scan_string(Line, String) when
-    is_integer(Line), Line >= 0, (is_binary(String) orelse is_list(String))
+    is_integer(Line),
+    Line >= 0,
+    (is_binary(String) orelse is_list(String))
 ->
     Bin = iolist_to_binary(String),
     scan(Bin, Bin, #state{
