@@ -10,3 +10,7 @@ rebar3.crashdump
 /test-results/
 /playwright-report/
 /playwright/.cache/
+
+# NIF
+*.o
+*.so
