@@ -43,4 +43,16 @@ else
     echo -e "${YELLOW}⚠ npm not found, skipping JavaScript format check${NC}"
 fi
 
+# 4. Check C code formatting
+echo -e "${YELLOW}→ Checking C code formatting...${NC}"
+if command -v npm >/dev/null 2>&1; then
+    if ! npm run format:c:check >/dev/null 2>&1; then
+        echo -e "${RED}✗ C code formatting issues found${NC}"
+        echo -e "${RED}  Run: npm run format:c${NC}"
+        exit 1
+    fi
+else
+    echo -e "${YELLOW}⚠ npm not found, skipping C format check${NC}"
+fi
+
 echo -e "${GREEN}✓ All pre-commit checks passed!${NC}"

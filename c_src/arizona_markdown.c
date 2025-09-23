@@ -1,11 +1,12 @@
-#include <erl_nif.h>
-#include <string.h>
-#include "cmark-gfm/cmark-gfm.h"
 #include "cmark-gfm/cmark-gfm-extension_api.h"
+#include "cmark-gfm/cmark-gfm.h"
 #include "extensions/cmark-gfm-core-extensions.h"
 
+#include <erl_nif.h>
+#include <string.h>
+
 // Safety limits
-#define MAX_INPUT_SIZE (16 * 1024 * 1024)  // 16MB limit to prevent DoS
+#define MAX_INPUT_SIZE (16 * 1024 * 1024) // 16MB limit to prevent DoS
 #define MIN_INPUT_SIZE 0
 
 // Atom declarations
@@ -22,14 +23,14 @@ static ERL_NIF_TERM atom_unsafe;
 static ERL_NIF_TERM atom_smart;
 
 // Global extension pointers (initialized once in load callback)
-static cmark_syntax_extension* g_table_ext = NULL;
-static cmark_syntax_extension* g_autolink_ext = NULL;
-static cmark_syntax_extension* g_strikethrough_ext = NULL;
-static cmark_syntax_extension* g_tagfilter_ext = NULL;
-static cmark_syntax_extension* g_tasklist_ext = NULL;
+static cmark_syntax_extension *g_table_ext = NULL;
+static cmark_syntax_extension *g_autolink_ext = NULL;
+static cmark_syntax_extension *g_strikethrough_ext = NULL;
+static cmark_syntax_extension *g_tagfilter_ext = NULL;
+static cmark_syntax_extension *g_tasklist_ext = NULL;
 
 // Helper function to convert options list to cmark flags
-static int parse_options(ErlNifEnv* env, ERL_NIF_TERM options_list, int* flags) {
+static int parse_options(ErlNifEnv *env, ERL_NIF_TERM options_list, int *flags) {
     ERL_NIF_TERM head, tail;
     *flags = CMARK_OPT_DEFAULT;
 
@@ -54,23 +55,23 @@ static int parse_options(ErlNifEnv* env, ERL_NIF_TERM options_list, int* flags) 
 }
 
 // Helper function to create error tuple
-static ERL_NIF_TERM make_error(ErlNifEnv* env, ERL_NIF_TERM reason) {
+static ERL_NIF_TERM make_error(ErlNifEnv *env, ERL_NIF_TERM reason) {
     return enif_make_tuple2(env, atom_error, reason);
 }
 
 // Helper function to create ok tuple
-static ERL_NIF_TERM make_ok(ErlNifEnv* env, ERL_NIF_TERM value) {
+static ERL_NIF_TERM make_ok(ErlNifEnv *env, ERL_NIF_TERM value) {
     return enif_make_tuple2(env, atom_ok, value);
 }
 
 // Main conversion function
-static ERL_NIF_TERM do_markdown_to_html(ErlNifEnv* env, ERL_NIF_TERM markdown_term, int options) {
+static ERL_NIF_TERM do_markdown_to_html(ErlNifEnv *env, ERL_NIF_TERM markdown_term, int options) {
     ErlNifBinary markdown_bin;
-    char* html_result;
+    char *html_result;
     ERL_NIF_TERM result_term;
-    cmark_parser* parser;
-    cmark_node* document;
-    cmark_mem* mem = cmark_get_default_mem_allocator();
+    cmark_parser *parser;
+    cmark_node *document;
+    cmark_mem *mem = cmark_get_default_mem_allocator();
 
     // Convert iodata to binary (supports binaries, strings, iolists)
     if (!enif_inspect_iolist_as_binary(env, markdown_term, &markdown_bin)) {
@@ -111,7 +112,7 @@ static ERL_NIF_TERM do_markdown_to_html(ErlNifEnv* env, ERL_NIF_TERM markdown_te
     }
 
     // Parse markdown
-    cmark_parser_feed(parser, (const char*)markdown_bin.data, markdown_bin.size);
+    cmark_parser_feed(parser, (const char *)markdown_bin.data, markdown_bin.size);
     document = cmark_parser_finish(parser);
     cmark_parser_free(parser);
 
@@ -129,7 +130,7 @@ static ERL_NIF_TERM do_markdown_to_html(ErlNifEnv* env, ERL_NIF_TERM markdown_te
 
     // Create Erlang binary from result
     size_t html_len = strlen(html_result);
-    unsigned char* result_data = enif_make_new_binary(env, html_len, &result_term);
+    unsigned char *result_data = enif_make_new_binary(env, html_len, &result_term);
     if (result_data == NULL) {
         mem->free(html_result);
         return make_error(env, atom_nomem);
@@ -142,7 +143,7 @@ static ERL_NIF_TERM do_markdown_to_html(ErlNifEnv* env, ERL_NIF_TERM markdown_te
 }
 
 // NIF function: to_html/1
-static ERL_NIF_TERM to_html_1(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+static ERL_NIF_TERM to_html_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     if (argc != 1) {
         return enif_make_badarg(env);
     }
@@ -151,7 +152,7 @@ static ERL_NIF_TERM to_html_1(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
 }
 
 // NIF function: to_html/2
-static ERL_NIF_TERM to_html_2(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+static ERL_NIF_TERM to_html_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     int options;
 
     if (argc != 2) {
@@ -166,9 +167,9 @@ static ERL_NIF_TERM to_html_2(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
 }
 
 // Load callback - initialize atoms and register extensions once
-static int load(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) {
-    (void)priv_data;  // Unused parameter
-    (void)load_info;  // Unused parameter
+static int load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info) {
+    (void)priv_data; // Unused parameter
+    (void)load_info; // Unused parameter
     // Initialize atoms
     atom_ok = enif_make_atom(env, "ok");
     atom_error = enif_make_atom(env, "error");
@@ -196,11 +197,11 @@ static int load(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) {
 }
 
 // Upgrade callback - called when NIF is reloaded (e.g., during testing)
-static int upgrade(ErlNifEnv* env, void** priv_data, void** old_priv_data, ERL_NIF_TERM load_info) {
-    (void)env;          // Unused parameter
-    (void)priv_data;    // Unused parameter
+static int upgrade(ErlNifEnv *env, void **priv_data, void **old_priv_data, ERL_NIF_TERM load_info) {
+    (void)env;           // Unused parameter
+    (void)priv_data;     // Unused parameter
     (void)old_priv_data; // Unused parameter
-    (void)load_info;    // Unused parameter
+    (void)load_info;     // Unused parameter
 
     // For this NIF, no special upgrade handling is needed since we don't
     // maintain state between loads. The extension pointers are re-initialized
@@ -209,10 +210,7 @@ static int upgrade(ErlNifEnv* env, void** priv_data, void** old_priv_data, ERL_N
 }
 
 // NIF function exports
-static ErlNifFunc nif_funcs[] = {
-    {"to_html", 1, to_html_1, 0},
-    {"to_html", 2, to_html_2, 0}
-};
+static ErlNifFunc nif_funcs[] = {{"to_html", 1, to_html_1, 0}, {"to_html", 2, to_html_2, 0}};
 
 // NIF initialization
 ERL_NIF_INIT(arizona_markdown, nif_funcs, load, NULL, upgrade, NULL)

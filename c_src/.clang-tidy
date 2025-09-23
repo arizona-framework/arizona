@@ -1,0 +1,44 @@
+# Arizona Framework C Code Linting Configuration
+# Focus on security, performance, and readability
+
+Checks: >
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  concurrency-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  security-*,
+  -bugprone-easily-swappable-parameters,
+  -readability-magic-numbers,
+  -readability-function-cognitive-complexity,
+  -cert-err33-c,
+  -readability-isolate-declaration
+
+CheckOptions:
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.MacroCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.ConstantCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.StructCase
+    value: lower_case
+  - key: readability-identifier-naming.EnumCase
+    value: lower_case
+  - key: readability-function-size.LineThreshold
+    value: 100
+  - key: readability-function-size.StatementThreshold
+    value: 50
+  - key: performance-unnecessary-value-param.AllowedTypes
+    value: 'ERL_NIF_TERM;ErlNifBinary'
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*'
+AnalyzeTemporaryDtors: false
+FormatStyle: file

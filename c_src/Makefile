@@ -64,4 +64,29 @@ $(NIF_SO): $(PRIV_DIR) $(CMARK_OBJECTS) $(EXTENSION_OBJECTS) $(NIF_OBJECTS)
 clean:
 	rm -f $(CMARK_OBJECTS) $(EXTENSION_OBJECTS) $(NIF_OBJECTS) $(NIF_SO)
 
-.PHONY: all clean
+# Code quality targets
+format-check:
+	@echo "Checking C code formatting..."
+	@npx clang-format --dry-run --Werror $(NIF_SOURCES) || \
+		(echo "❌ Code formatting issues found. Run 'make format' to fix."; exit 1)
+	@echo "✅ C code formatting is correct"
+
+format:
+	@echo "Formatting C code..."
+	@npx clang-format -i $(NIF_SOURCES)
+	@echo "✅ C code formatted"
+
+lint:
+	@echo "Running C code linter..."
+	@if command -v clang-tidy >/dev/null 2>&1; then \
+		clang-tidy $(NIF_SOURCES) -- $(CFLAGS) || \
+		(echo "❌ Linting issues found. Please fix the warnings above."; exit 1); \
+	else \
+		echo "⚠️  clang-tidy not found, skipping C linting"; \
+	fi
+	@echo "✅ C code linting completed"
+
+check: format-check lint
+	@echo "✅ All C code quality checks passed"
+
+.PHONY: all clean format-check format lint check
