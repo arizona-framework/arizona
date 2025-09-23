@@ -39,6 +39,5 @@ CheckOptions:
     value: 'ERL_NIF_TERM;ErlNifBinary'
 
 WarningsAsErrors: ''
-HeaderFilterRegex: '.*'
-AnalyzeTemporaryDtors: false
+HeaderFilterRegex: '^(?!.*/.asdf/).*$'
 FormatStyle: file
