@@ -39,7 +39,7 @@ init_per_suite(Config) ->
         arizona_stateful:new('@module', Bindings).
 
     render(_Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <h1>Stateful Template</h1>
         """).
     """", [{module, merl:term(MockStatefulModule)}]),
@@ -50,7 +50,7 @@ init_per_suite(Config) ->
     -export(['@render_fun'/1]).
 
     '@render_fun'(_Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <div>Stateless Template</div>
         """).
     """", [
@@ -115,7 +115,7 @@ render_list_test(Config) when is_list(Config) ->
     TemplateAST = arizona_parse_transform:extract_callback_function_body(
         ?MODULE, ?LINE, merl:quote(~""""
         fun(Item) ->
-            arizona_template:from_string(~"""
+            arizona_template:from_html(~"""
             <li>{Item}</li>
             """)
         end
@@ -143,7 +143,7 @@ render_map_test(Config) when is_list(Config) ->
     TemplateAST = arizona_parse_transform:extract_callback_function_body(
         ?MODULE, ?LINE, merl:quote(~""""
         fun({Key, Value}) ->
-            arizona_template:from_string(~"""
+            arizona_template:from_html(~"""
             <li>Key: {Key}, Value: {Value}</li>
             """)
         end
@@ -170,7 +170,7 @@ render_map_test(Config) when is_list(Config) ->
 
 render_dynamic_test(Config) when is_list(Config) ->
     ct:comment("render_dynamic/2 should render template dynamic parts"),
-    Template = arizona_template:from_string(~"<span>Simple</span>"),
+    Template = arizona_template:from_html(~"<span>Simple</span>"),
     {mock_stateful_module, MockStatefulModule} = proplists:lookup(mock_stateful_module, Config),
     MockView = create_mock_view(MockStatefulModule, #{id => ~"foo"}),
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),

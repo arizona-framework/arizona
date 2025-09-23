@@ -63,7 +63,7 @@ init_per_suite(Config) ->
         arizona_stateful:new('@module', Bindings).
 
     render(_Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <h1>Mock Template</h1>
         """).
     """", [{module, merl:term(MockModule)}]),
@@ -80,7 +80,7 @@ init_per_suite(Config) ->
         arizona_stateful:new('@module', Bindings).
 
     render(_Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <h1>Mock Template</h1>
         """).
 

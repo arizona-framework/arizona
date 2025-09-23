@@ -13,7 +13,7 @@ mount(PageBindings, _Req) ->
     arizona_view:new(?MODULE, Bindings, Layout).
 
 render(Bindings) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <div id="{arizona_template:get_binding(id, Bindings)}" class="about">
         <h1>About Me</h1>
         <p>This is a static blog built with Arizona framework!</p>

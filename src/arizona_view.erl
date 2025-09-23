@@ -48,7 +48,7 @@ mount(_MountArg, _Request) ->
     arizona_view:new(?MODULE, #{user => ~"Anonymous"}, none).
 
 render(Bindings) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <h1>Welcome {arizona_template:get_binding(user, Bindings)}!</h1>
     """).
 

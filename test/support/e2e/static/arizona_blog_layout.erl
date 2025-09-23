@@ -3,7 +3,7 @@
 -export([render/1]).
 
 render(Bindings) ->
-    arizona_template:from_string(~""""
+    arizona_template:from_html(~""""
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -28,7 +28,7 @@ render(Bindings) ->
             {
                 NavActive = arizona_template:get_binding(nav_active, Bindings),
                 arizona_template:render_list(fun({URL, Slug, Label}) ->
-                   arizona_template:from_string(~"""
+                   arizona_template:from_html(~"""
                    <a
                        href="{URL}"
                        class="{case NavActive of Slug -> ~"active"; _ -> ~"" end}"

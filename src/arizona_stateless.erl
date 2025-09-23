@@ -19,7 +19,7 @@ Stateless components are implemented as functions that:
 ```erlang
 %% In my_component.erl:
 render(Bindings) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <div>
         Hello {arizona_template:get_binding(name, Bindings)},
         you are {arizona_template:get_binding(age, Bindings)} years old

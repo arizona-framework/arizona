@@ -24,7 +24,7 @@ the full component lifecycle and template evaluation.
 ## Example
 
 ```erlang
-1> Template = arizona_template:from_string(~\"<h1>{Title}</h1>\").
+1> Template = arizona_template:from_html(~\"<h1>{Title}</h1>\").
 2> {Html, View1} = arizona_renderer:render_template(Template, parent_id, View).
 {[~\"<h1>\", ~\"Hello\", ~\"</h1>\"], UpdatedView}
 ```

@@ -25,12 +25,12 @@ mount(PageBindings, _Req) ->
     arizona_view:new(?MODULE, Bindings, Layout).
 
 render(Bindings) ->
-    arizona_template:from_string(~""""
+    arizona_template:from_html(~""""
     <div id="{arizona_template:get_binding(id, Bindings)}" class="home">
         <h1>Welcome to My Blog</h1>
         <div class="posts">
             {arizona_template:render_list(fun(#{url := URL, title := Title}) ->
-                arizona_template:from_string(~"""
+                arizona_template:from_html(~"""
                 <article class="post-preview">
                     <h2><a href="{URL}">{Title}</a></h2>
                 </article>

@@ -307,7 +307,7 @@ diff_map_fingerprint_match(Config) when is_list(Config) ->
     TemplateAST = arizona_parse_transform:extract_callback_function_body(
         ?MODULE, ?LINE, merl:quote(~""""
         fun({Key, Value}) ->
-            arizona_template:from_string(~"""
+            arizona_template:from_html(~"""
             <li>Key: {Key}, Value: {Value}</li>
             """)
         end
@@ -354,7 +354,7 @@ diff_map_fingerprint_mismatch(Config) when is_list(Config) ->
     TemplateAST = arizona_parse_transform:extract_callback_function_body(
         ?MODULE, ?LINE, merl:quote(~""""
         fun({Key, Value}) ->
-            arizona_template:from_string(~"""
+            arizona_template:from_html(~"""
             <li>Key: {Key}, Value: {Value}</li>
             """)
         end
@@ -460,7 +460,7 @@ mock_view_module(ViewModule, ViewId, StatefulModule, StatefulId, StatelessModule
 
                 render(Bindings) ->
                     StatefulModule = '@stateful_module',
-                    arizona_template:from_string(~"""
+                    arizona_template:from_html(~"""
                     <div {arizona_template:get_binding(id, Bindings)}>
                         {arizona_template:get_binding(title, Bindings)}
                         {case arizona_template:get_binding(show_stateful, Bindings, true) of
@@ -511,7 +511,7 @@ mock_stateful_module(StatefulModule, StatelessModule, StatelessFun) ->
                 render(Bindings) ->
                     StatelessModule = '@stateless_module',
                     StatelessFun = '@stateless_fun',
-                    arizona_template:from_string(~"""
+                    arizona_template:from_html(~"""
                     <div {arizona_template:get_binding(id, Bindings)}>
                         {arizona_template:get_binding(title, Bindings)}
                         {case arizona_template:get_binding(
@@ -553,14 +553,14 @@ mock_stateless_module(Module, RenderFun) ->
                 -export(['@render_fun'/1]).
 
                 '@render_fun'(Bindings) ->
-                    arizona_template:from_string(~""""
+                    arizona_template:from_html(~""""
                     <h1>{arizona_template:get_binding(title, Bindings)}</h1>
                     {case arizona_template:get_binding(items, Bindings, []) of
                         [] ->
                             ~"";
                         Items ->
                             arizona_template:render_list(fun(Item) ->
-                                arizona_template:from_string(~"""
+                                arizona_template:from_html(~"""
                                 <li>{Item}</li>
                                 """)
                             end, Items)

@@ -65,7 +65,7 @@ init_per_suite(Config) ->
     -export([render/1]).
 
     render(Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <!DOCTYPE html>
         <html>
         <head>
@@ -102,7 +102,7 @@ init_per_suite(Config) ->
         }, Layout).
 
     render(_Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <div id="home">
             <h1>Welcome Home</h1>
             <p>This is the home page.</p>
@@ -131,7 +131,7 @@ init_per_suite(Config) ->
         }, Layout).
 
     render(_Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <div id="about">
             <h1>About Us</h1>
             <p>This is the about page.</p>
@@ -167,7 +167,7 @@ init_per_suite(Config) ->
         end.
 
     render(Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <article id="post">
             <h1>{arizona_template:get_binding(title, Bindings)}</h1>
             <div class="content">
