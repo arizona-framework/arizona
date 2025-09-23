@@ -3,13 +3,13 @@
 Compile-time AST transformation for Arizona templates.
 
 Erlang parse transform that converts Arizona template function calls into
-optimized compile-time AST. Transforms `arizona_template:from_string/1`,
+optimized compile-time AST. Transforms `arizona_template:from_html/1`,
 `arizona_template:from_markdown/1`, and `arizona_template:render_list/2` calls
 for maximum runtime performance.
 
 ## Transformations
 
-- `arizona_template:from_string/1` → Compiled template record
+- `arizona_template:from_html/1` → Compiled template record
 - `arizona_template:from_markdown/1` → Compiled markdown template record
 - `arizona_template:render_list/2` → Optimized list rendering with callbacks
 - Prevents infinite recursion in nested template expressions
@@ -23,7 +23,7 @@ Add to module compile options:
 -compile([{parse_transform, arizona_parse_transform}]).
 
 render() ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <h1>{Title}</h1>
     """).
     %% → Becomes compile-time optimized template record
@@ -175,7 +175,7 @@ transform_render_map(Module, Line, FunArg, MapArg, CompileOpts) ->
 -doc ~"""
 Extracts template content from render callback functions (render_list/render_map).
 
-Analyzes the function expression to find `arizona_template:from_string/1`
+Analyzes the function expression to find `arizona_template:from_html/1`
 calls, extracts the template string, and compiles it into optimized AST.
 Generic function that works for both render_list and render_map since both
 use the same callback pattern: fun(Item) -> Template.
@@ -192,13 +192,13 @@ extract_callback_function_body(Module, Line, FunExpr, CompileOpts) ->
             [Clause] = erl_syntax:fun_expr_clauses(FunExpr),
             [CallbackArg] = erl_syntax:clause_patterns(Clause),
             ClauseBody = erl_syntax:clause_body(Clause),
-            % Find the arizona_template:from_string call in the function body
+            % Find the arizona_template:from_html call in the function body
             % It might be the only statement or the last statement after variable bindings
             [TemplateCall | RevClauseBody] = lists:reverse(ClauseBody),
 
-            % Extract template string from raw arizona_template:from_string call
+            % Extract template string from raw arizona_template:from_html call
             case analyze_application(TemplateCall) of
-                {arizona_template, from_string, 1, [TemplateArg]} ->
+                {arizona_template, from_html, 1, [TemplateArg]} ->
                     TemplateString = eval_expr(Module, TemplateArg),
 
                     % Scan template content into tokens
@@ -221,7 +221,7 @@ extract_callback_function_body(Module, Line, FunExpr, CompileOpts) ->
                         TemplateCall
                     else
                         _ ->
-                            error({not_from_string_call, TemplateCall})
+                            error({not_from_html_call, TemplateCall})
                     end
             end;
         _ ->
@@ -335,19 +335,19 @@ transform_node(Node, Module, CompileOpts) ->
 %% Transform function applications
 transform_application(Node, Module, CompileOpts) ->
     case analyze_application(Node) of
-        {arizona_template, from_string, 1, [TemplateArg]} ->
+        {arizona_template, from_html, 1, [TemplateArg]} ->
             % Check if we're in a dynamic callback context to prevent infinite recursion
             InDynamicCallback = proplists:get_bool(in_dynamic_callback, CompileOpts),
 
             case InDynamicCallback of
                 true ->
-                    % Inside dynamic callback - don't transform from_string
+                    % Inside dynamic callback - don't transform from_html
                     % to prevent infinite recursion
                     Node;
                 false ->
-                    % Normal context - transform from_string
+                    % Normal context - transform from_html
                     Line = get_node_line(Node),
-                    transform_from_string(Module, Line, TemplateArg, CompileOpts)
+                    transform_from_html(Module, Line, TemplateArg, CompileOpts)
             end;
         {arizona_template, from_markdown, 1, [MarkdownArg]} ->
             % Check if we're in a dynamic callback context to prevent infinite recursion
@@ -448,8 +448,8 @@ analyze_application(Node) ->
             Node
     end.
 
-%% Transform arizona_template:from_string/1 calls
-transform_from_string(Module, Line, TemplateArg, CompileOpts) ->
+%% Transform arizona_template:from_html/1 calls
+transform_from_html(Module, Line, TemplateArg, CompileOpts) ->
     try
         % Extract template content and line number
         String = eval_expr(Module, TemplateArg),

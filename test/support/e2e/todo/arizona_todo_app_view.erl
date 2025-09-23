@@ -97,7 +97,7 @@ handle_event(~"clear_completed", _Params, View) ->
     {[], UpdatedView}.
 
 render(Bindings) ->
-    arizona_template:from_string(~""""
+    arizona_template:from_html(~""""
     <div
         id="{arizona_template:get_binding(id, Bindings)}"
         class="todo-app"
@@ -117,7 +117,7 @@ render(Bindings) ->
             {Todos = arizona_template:get_binding(todos, Bindings),
              Filter = arizona_template:get_binding(filter, Bindings),
              arizona_template:render_list(fun(#{id := Id} = Todo) ->
-                arizona_template:from_string(~"""
+                arizona_template:from_html(~"""
                 <div class="todo-item {case maps:get(completed, Todo) of true -> ~"completed"; false -> ~"" end}" data-testid="todo-{Id}">
                     <input
                         type="checkbox"
@@ -160,7 +160,7 @@ render(Bindings) ->
     """").
 
 render_stats(Bindings) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <span class="todo-count" data-testid="todo-count">
         <strong>{length(lists:filter(fun(#{completed := Completed}) -> not Completed end, arizona_template:get_binding(todos, Bindings)))}</strong>
         {case length(lists:filter(fun(#{completed := Completed}) -> not Completed end, arizona_template:get_binding(todos, Bindings))) of
@@ -171,7 +171,7 @@ render_stats(Bindings) ->
     """).
 
 render_filters(Bindings) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <ul class="filters" data-testid="filters">
         <li>
             <a class="{case arizona_template:get_binding(filter, Bindings) of all -> ~"selected"; _ -> ~"" end}"
@@ -192,7 +192,7 @@ render_filters(Bindings) ->
     """).
 
 render_clear_button(_Bindings) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <button
         class="clear-completed"
         data-testid="clear-completed"

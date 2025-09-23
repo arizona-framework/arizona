@@ -37,7 +37,7 @@ mount({Error, Reason, StackTrace}, Req) ->
     Bindings :: arizona_binder:bindings(),
     Template :: arizona_template:template().
 render(Bindings) ->
-    arizona_template:from_string(~""""
+    arizona_template:from_html(~""""
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -339,7 +339,7 @@ render(Bindings) ->
                 <div class="main-section">
                     {arizona_template:render_list(
                         fun({Title, Content, Open}) ->
-                        arizona_template:from_string(~"""
+                        arizona_template:from_html(~"""
                         <details class="section" {
                             case Open of
                                 true -> ~"open";

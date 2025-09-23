@@ -22,7 +22,7 @@ mount(Posts, Req) ->
     end.
 
 render(Bindings) ->
-    arizona_template:from_string(~""""
+    arizona_template:from_html(~""""
     <article id="{arizona_template:get_binding(id, Bindings)}" class="post">
         <header>
             <h1>{arizona_template:get_binding(title, Bindings)}</h1>

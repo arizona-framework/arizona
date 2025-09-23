@@ -179,7 +179,7 @@ create_benchmark_view_module() ->
         }, none).
 
     render(_Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <!DOCTYPE html>
         <html>
         <head>

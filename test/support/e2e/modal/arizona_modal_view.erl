@@ -23,7 +23,7 @@ mount(_Arg, Req) ->
     ).
 
 render(Bindings) ->
-    arizona_template:from_string(~""""
+    arizona_template:from_html(~""""
     <div id="{arizona_template:get_binding(id, Bindings)}">
         <!-- Control buttons to test modal functionality -->
         <div class="control-container">
@@ -59,7 +59,7 @@ render(Bindings) ->
     """").
 
 render_modal(Bindings) ->
-    arizona_template:from_string(~""""
+    arizona_template:from_html(~""""
     <div class="modal-overlay" onclick="arizona.sendEvent('close_modal')">
         <div class="modal-container" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -86,7 +86,7 @@ render_modal(Bindings) ->
             <div class="modal-footer">
                 {
                     Confirm = arizona_template:get_binding(confirm, Bindings),
-                    arizona_template:from_string(~"""
+                    arizona_template:from_html(~"""
                     <button class="{maps:get(classes, Confirm)}" onclick="arizona.sendEvent('close_modal')">
                         {arizona_template:render_slot(maps:get(content, Confirm))}
                     </button>
@@ -94,7 +94,7 @@ render_modal(Bindings) ->
                 }
                 {
                     Cancel = arizona_template:get_binding(cancel, Bindings),
-                    arizona_template:from_string(~"""
+                    arizona_template:from_html(~"""
                     <button class="{maps:get(classes, Cancel)}" onclick="arizona.sendEvent('close_modal')">
                         {arizona_template:render_slot(maps:get(content, Cancel))}
                     </button>
@@ -130,7 +130,7 @@ get_header_slot(info) ->
 
 %% Generate inner_block slot based on modal type
 get_inner_block_slot(success, User) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <div class="modal-icon modal-icon-success">
         <div class="icon-checkmark"></div>
     </div>
@@ -142,7 +142,7 @@ get_inner_block_slot(success, User) ->
     </div>
     """);
 get_inner_block_slot(error, User) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <div class="modal-icon modal-icon-error">
         <div class="icon-warning"></div>
     </div>
@@ -154,7 +154,7 @@ get_inner_block_slot(error, User) ->
     </div>
     """);
 get_inner_block_slot(info, User) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <div class="modal-icon modal-icon-info">
         <div class="icon-info"></div>
     </div>

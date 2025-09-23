@@ -9,7 +9,7 @@ mount(Bindings) ->
     arizona_stateful:new(?MODULE, Bindings).
 
 render(Bindings) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <div id="{arizona_template:get_binding(id, Bindings)}">
         <h1>Counter: <span data-testid="count">{arizona_template:get_binding(count, Bindings)}</span></h1>
         <button

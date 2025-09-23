@@ -38,7 +38,7 @@ mount(_MountArg, Request) ->
     arizona_view:new(?MODULE, Bindings, Layout).
 
 render(Bindings) ->
-    arizona_template:from_string(~""""
+    arizona_template:from_html(~""""
     <div
         id="{arizona_template:get_binding(id, Bindings)}"
         data-testid="presence-view"
@@ -84,7 +84,7 @@ render(Bindings) ->
                 {
                     OnlineUsers = arizona_template:get_binding(online_users, Bindings),
                     arizona_template:render_map(fun({UserId, UserInfo}) ->
-                        arizona_template:from_string(~"""
+                        arizona_template:from_html(~"""
                         <div class="user-item">
                             <strong>{maps:get(user_name, UserInfo)}</strong>
                             (ID: {UserId})

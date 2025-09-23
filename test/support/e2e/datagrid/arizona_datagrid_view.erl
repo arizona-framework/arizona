@@ -146,15 +146,15 @@ mount(_Arg, Req) ->
                 }
             ],
             callback => fun(Col, Row) ->
-                arizona_template:from_string(~""""
+                arizona_template:from_html(~""""
                 {
                     case Col of
                         #{name := name} ->
-                            arizona_template:from_string(~"""
+                            arizona_template:from_html(~"""
                             <strong>{maps:get(name, Row)}</strong>
                             """);
                         #{name := email} ->
-                            arizona_template:from_string(~"""
+                            arizona_template:from_html(~"""
                             <a href="mailto:{maps:get(email, Row)}">
                                 {maps:get(email, Row)}
                             </a>
@@ -165,7 +165,7 @@ mount(_Arg, Req) ->
                                 ~"moderator" -> ~"status-badge role-badge-moderator";
                                 ~"user" -> ~"status-badge role-badge-user"
                             end,
-                            arizona_template:from_string(~"""
+                            arizona_template:from_html(~"""
                             <span class="{RoleClass}">
                                 {maps:get(role, Row)}
                             </span>
@@ -177,20 +177,20 @@ mount(_Arg, Req) ->
                                     ~"inactive" -> {~"status-badge status-badge-inactive", ~"⚪"};
                                     ~"pending" -> {~"status-badge status-badge-pending", ~"⏳"}
                                 end,
-                            arizona_template:from_string(~"""
+                            arizona_template:from_html(~"""
                             <span class="{StatusClass}">
                                 {StatusIcon} {maps:get(status, Row)}
                             </span>
                             """);
                         #{name := created_at} ->
-                            arizona_template:from_string(~"""
+                            arizona_template:from_html(~"""
                             <small class="text-muted">
                                 {maps:get(created_at, Row)}
                             </small>
                             """);
                         #{name := actions} ->
                             UserId = maps:get(id, Row),
-                            arizona_template:from_string(~"""
+                            arizona_template:from_html(~"""
                             <div class="action-button-group" role="group">
                                 <button
                                     type="button"
@@ -212,7 +212,7 @@ mount(_Arg, Req) ->
     ).
 
 render(Bindings) ->
-    arizona_template:from_string(~""""
+    arizona_template:from_html(~""""
     <div id="{arizona_template:get_binding(id, Bindings)}">
         {arizona_template:render_stateless(arizona_datagrid_view, render_table, #{
             cols => arizona_template:get_binding(cols, Bindings),
@@ -225,7 +225,7 @@ render(Bindings) ->
     """").
 
 render_table(Bindings) ->
-    arizona_template:from_string(~""""""
+    arizona_template:from_html(~""""""
     <div class="table-responsive">
         <table class="table table-striped table-hover">
             <thead class="table-dark">
@@ -234,7 +234,7 @@ render_table(Bindings) ->
                         Sortable = maps:get(sortable, Col, false),
                         SortColumn = arizona_template:get_binding(sort_column, Bindings),
                         SortDirection = arizona_template:get_binding(sort_direction, Bindings),
-                        arizona_template:from_string(~""""
+                        arizona_template:from_html(~""""
                         <th scope="col" class="{
                             case Sortable of
                                 true -> ~"sortable";
@@ -244,7 +244,7 @@ render_table(Bindings) ->
                             case Sortable of
                                 true ->
                                     ColumnName = maps:get(name, Col),
-                                    arizona_template:from_string(~"""
+                                    arizona_template:from_html(~"""
                                     style="cursor: pointer;"
                                     onclick="arizona.sendEvent('sort_table', \{column: '{ColumnName}'})"
                                     """);
@@ -275,10 +275,10 @@ render_table(Bindings) ->
                     Cols = arizona_template:get_binding(cols, Bindings),
                     Callback = arizona_template:get_binding(callback, Bindings),
                     arizona_template:render_list(fun(Row) ->
-                        arizona_template:from_string(~""""
+                        arizona_template:from_html(~""""
                         <tr class="user-row" data-user-id="{maps:get(id, Row)}">
                             {arizona_template:render_list(fun(Col) ->
-                                arizona_template:from_string(~"""
+                                arizona_template:from_html(~"""
                                 <td class="align-middle">
                                     {Callback(Col, Row)}
                                 </td>

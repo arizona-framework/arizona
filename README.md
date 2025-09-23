@@ -85,7 +85,7 @@ mount(_Arg, _Request) ->
     ).
 
 render(Bindings) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <div id="{arizona_template:get_binding(id, Bindings)}">
         <h1>{arizona_template:get_binding(greeting, Bindings)}</h1>
         <p>Clicked: {arizona_template:get_binding(count, Bindings)} times</p>
@@ -247,7 +247,7 @@ Arizona templates combine HTML with Erlang expressions using a simple and intuit
 ### Basic Expressions
 
 ```erlang
-arizona_template:from_string(~"""
+arizona_template:from_html(~"""
 <div>
     <h1>{arizona_template:get_binding(title, Bindings)}</h1>
     <p>User: {arizona_template:get_binding(username, Bindings)}</p>
@@ -260,7 +260,7 @@ arizona_template:from_string(~"""
 Render interactive components that maintain their own state between updates:
 
 ```erlang
-arizona_template:from_string(~"""
+arizona_template:from_html(~"""
 <div>
     {arizona_template:render_stateful(counter_component, #{
         id => ~"my_counter",
@@ -275,7 +275,7 @@ arizona_template:from_string(~"""
 Render pure functions that return templates based solely on their input:
 
 ```erlang
-arizona_template:from_string(~"""
+arizona_template:from_html(~"""
 <div>
     {arizona_template:render_stateless(my_module, render_header, #{
         title => ~"Welcome",
@@ -290,10 +290,10 @@ arizona_template:from_string(~"""
 Iterate over lists with automatic compile-time optimization via parse transforms:
 
 ```erlang
-arizona_template:from_string(~"""
+arizona_template:from_html(~"""
 <ul>
     {arizona_template:render_list(fun(Item) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <li>{arizona_template:get_binding(name, Item)}</li>
         """)
     end, arizona_template:get_binding(items, Bindings))}
@@ -306,10 +306,10 @@ arizona_template:from_string(~"""
 Iterate over key-value pairs with optimized rendering performance:
 
 ```erlang
-arizona_template:from_string(~"""
+arizona_template:from_html(~"""
 <div>
     {arizona_template:render_map(fun({Key, Value}) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <p>{Key}: {Value}</p>
         """)
     end, #{~"name" => ~"Arizona", ~"type" => ~"Framework"})}
@@ -322,7 +322,7 @@ arizona_template:from_string(~"""
 Insert dynamic content into predefined slots for flexible component composition:
 
 ```erlang
-arizona_template:from_string(~"""
+arizona_template:from_html(~"""
 <div class="modal">
     <h1>{arizona_template:render_slot(arizona_template:get_binding(header, Bindings))}</h1>
     <div class="content">
@@ -337,7 +337,7 @@ arizona_template:from_string(~"""
 Use template comments and escape braces for literal output in CSS or JavaScript:
 
 ```erlang
-arizona_template:from_string(~"""
+arizona_template:from_html(~"""
 <div>
     {% This is a comment and is not rendered }
     <h1>{arizona_template:get_binding(title, Bindings)}</h1>
@@ -452,7 +452,7 @@ Example layout with JavaScript client setup:
 -export([render/1]).
 
 render(Bindings) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <!DOCTYPE html>
     <html>
     <head>

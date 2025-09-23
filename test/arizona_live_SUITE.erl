@@ -66,7 +66,7 @@ init_per_suite(Config) ->
         }, none).
 
     render(Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <div>
             <p>Counter: {arizona_template:get_binding(counter, Bindings)}</p>
             <button>Increment</button>
@@ -101,7 +101,7 @@ init_per_suite(Config) ->
         }).
 
     render(Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <span>Value: {arizona_template:get_binding(value, Bindings)}</span>
         """).
 
@@ -129,7 +129,7 @@ init_per_suite(Config) ->
 
     render(_Bindings) ->
         StatefulModule = '@stateful_module',
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <div>
             {arizona_template:render_stateful(StatefulModule, #{
                 id => ~"stateful_1",
@@ -163,7 +163,7 @@ init_per_suite(Config) ->
         }, none).
 
     render(Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <div>Messages: {arizona_template:get_binding(message_count, Bindings)}</div>
         """).
 

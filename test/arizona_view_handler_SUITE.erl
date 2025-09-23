@@ -65,7 +65,7 @@ init_per_suite(Config) ->
         }, none).
 
     render(Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <!DOCTYPE html>
         <html>
         <head>
@@ -91,7 +91,7 @@ init_per_suite(Config) ->
         error('@module').
 
     render(Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <!DOCTYPE html>
         <html>
         <head>
@@ -121,7 +121,7 @@ init_per_suite(Config) ->
         }, Layout).
 
     render(_Bindings) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <h1>Mock View</h1>
         """).
     """", [
@@ -138,7 +138,7 @@ init_per_suite(Config) ->
 
     '@render_fun'(Bindings) ->
         SlotName = '@slot_name',
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <!DOCTYPE html>
         <html>
         <head>

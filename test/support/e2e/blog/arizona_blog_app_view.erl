@@ -29,7 +29,7 @@ mount(_Arg, Req) ->
 
 render(Bindings) ->
     Module = ?MODULE,
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <div id="{arizona_template:get_binding(id, Bindings)}">
     {
         ViewMode = arizona_template:get_binding(view_mode, Bindings),
@@ -68,7 +68,7 @@ render_post_list(Bindings) ->
         SelectedTag = arizona_template:get_binding(selected_tag, Bindings),
         AllTags = lists:usort(lists:flatten([maps:get(tags, Post) || Post <- Posts])),
         arizona_template:render_list(fun(Tag) ->
-            arizona_template:from_string(~"""
+            arizona_template:from_html(~"""
             {arizona_template:render_stateless(arizona_blog_app_view, render_tag, #{
                 tag => Tag,
                 selected => Tag =:= SelectedTag
@@ -86,7 +86,7 @@ render_post_list(Bindings) ->
         SelectedTag = arizona_template:get_binding(selected_tag, Bindings),
         FilteredPosts = filter_posts_by_tag(Posts, SelectedTag),
         arizona_template:render_list(fun(Post) ->
-            arizona_template:from_string(~"""
+            arizona_template:from_html(~"""
             {arizona_template:render_stateless(arizona_blog_app_view, render_post_preview, #{
                 post => Post
             })}
@@ -109,7 +109,7 @@ render_post_detail(Bindings) ->
     **By {Author}** • *{Date}*
 
     {arizona_template:render_list(fun(Tag) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <span
             class="tag"
             style="{[
@@ -145,7 +145,7 @@ render_post_preview(Bindings) ->
     {Excerpt}
 
     {arizona_template:render_list(fun(Tag) ->
-        arizona_template:from_string(~"""
+        arizona_template:from_html(~"""
         <span
             class="tag"
             style="{[
@@ -186,7 +186,7 @@ render_tag(Bindings) ->
             all -> ~"All";
             _ -> atom_to_binary(Tag)
         end,
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <button onclick="arizona.sendEvent('filter_by_tag', \{tag: '{Tag}'})" style="{Style}">
         {TagDisplay}
     </button>
@@ -248,7 +248,7 @@ get_posts() ->
 
                 ```erlang
                 render(Bindings) ->
-                    arizona_template:from_string(~"""
+                    arizona_template:from_html(~"""
                     <div>
                         <h1>Count: \{arizona_template:get_binding(count, Bindings)}</h1>
                         <button onclick="arizona.sendEvent('increment')">+</button>

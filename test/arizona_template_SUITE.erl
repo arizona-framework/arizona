@@ -18,9 +18,9 @@ all() ->
 groups() ->
     [
         {template_creation_tests, [parallel], [
-            from_string_simple_test,
-            from_string_with_dynamic_test,
-            from_string_full_params_test,
+            from_html_simple_test,
+            from_html_with_dynamic_test,
+            from_html_full_params_test,
             from_markdown_simple_test,
             from_markdown_with_dynamic_test,
             from_markdown_mixed_content_test,
@@ -48,7 +48,7 @@ groups() ->
             render_list_template_callback_test,
             render_map_template_callback_test,
             render_map_error_test,
-            from_string_with_module_function_test,
+            from_html_with_module_function_test,
             render_list_error_test
         ]}
     ].
@@ -57,24 +57,24 @@ groups() ->
 %% Template creation tests
 %% --------------------------------------------------------------------
 
-from_string_simple_test(Config) when is_list(Config) ->
-    ct:comment("from_string/1 should create template from simple string"),
-    Template = arizona_template:from_string(~"<h1>Hello World</h1>"),
+from_html_simple_test(Config) when is_list(Config) ->
+    ct:comment("from_html/1 should create template from simple string"),
+    Template = arizona_template:from_html(~"<h1>Hello World</h1>"),
     ?assert(arizona_template:is_template(Template)),
     Static = arizona_template:get_static(Template),
     ?assertEqual([~"<h1>Hello World</h1>"], Static).
 
-from_string_with_dynamic_test(Config) when is_list(Config) ->
-    ct:comment("from_string/1 should create template with dynamic content"),
-    Template = arizona_template:from_string(~"<h1>{~\"Test\"}</h1>"),
+from_html_with_dynamic_test(Config) when is_list(Config) ->
+    ct:comment("from_html/1 should create template with dynamic content"),
+    Template = arizona_template:from_html(~"<h1>{~\"Test\"}</h1>"),
     ?assert(arizona_template:is_template(Template)),
     Static = arizona_template:get_static(Template),
     ?assertEqual([~"<h1>", ~"</h1>"], Static).
 
-from_string_full_params_test(Config) when is_list(Config) ->
-    ct:comment("from_string/4 should create template with module, line, and bindings"),
+from_html_full_params_test(Config) when is_list(Config) ->
+    ct:comment("from_html/4 should create template with module, line, and bindings"),
     Bindings = #{title => ~"Test Title"},
-    Template = arizona_template:from_string(
+    Template = arizona_template:from_html(
         ?MODULE, ?LINE, ~"<h1>{arizona_template:get_binding(title, Bindings)}</h1>", Bindings
     ),
     ?assert(arizona_template:is_template(Template)),
@@ -150,7 +150,7 @@ from_markdown_with_comments_test(Config) when is_list(Config) ->
 
 is_template_test(Config) when is_list(Config) ->
     ct:comment("is_template/1 should correctly identify template records"),
-    Template = arizona_template:from_string(~"<div>Test</div>"),
+    Template = arizona_template:from_html(~"<div>Test</div>"),
     ?assert(arizona_template:is_template(Template)),
     ?assertNot(arizona_template:is_template(~"not a template")),
     ?assertNot(arizona_template:is_template(#{not_a => template})),
@@ -162,31 +162,31 @@ is_template_test(Config) when is_list(Config) ->
 
 get_static_test(Config) when is_list(Config) ->
     ct:comment("get_static/1 should return static content"),
-    Template = arizona_template:from_string(~"<div>Static</div>"),
+    Template = arizona_template:from_html(~"<div>Static</div>"),
     Static = arizona_template:get_static(Template),
     ?assertEqual([~"<div>Static</div>"], Static).
 
 get_dynamic_test(Config) when is_list(Config) ->
     ct:comment("get_dynamic/1 should return dynamic content"),
-    Template = arizona_template:from_string(~"<div>{~\"dynamic\"}</div>"),
+    Template = arizona_template:from_html(~"<div>{~\"dynamic\"}</div>"),
     Dynamic = arizona_template:get_dynamic(Template),
     ?assert(is_tuple(Dynamic)).
 
 get_dynamic_sequence_test(Config) when is_list(Config) ->
     ct:comment("get_dynamic_sequence/1 should return dynamic sequence"),
-    Template = arizona_template:from_string(~"<div>{~\"dynamic\"}</div>"),
+    Template = arizona_template:from_html(~"<div>{~\"dynamic\"}</div>"),
     Sequence = arizona_template:get_dynamic_sequence(Template),
     ?assert(is_list(Sequence)).
 
 get_dynamic_anno_test(Config) when is_list(Config) ->
     ct:comment("get_dynamic_anno/1 should return dynamic annotation"),
-    Template = arizona_template:from_string(~"<div>{~\"dynamic\"}</div>"),
+    Template = arizona_template:from_html(~"<div>{~\"dynamic\"}</div>"),
     Anno = arizona_template:get_dynamic_anno(Template),
     ?assert(is_tuple(Anno)).
 
 get_fingerprint_test(Config) when is_list(Config) ->
     ct:comment("get_fingerprint/1 should return template fingerprint"),
-    Template = arizona_template:from_string(~"<div>Test</div>"),
+    Template = arizona_template:from_html(~"<div>Test</div>"),
     Fingerprint = arizona_template:get_fingerprint(Template),
     ?assert(is_integer(Fingerprint)),
     ?assert(Fingerprint >= 0).
@@ -245,7 +245,7 @@ render_slot_view_callback_test(Config) when is_list(Config) ->
 
 render_slot_template_callback_test(Config) when is_list(Config) ->
     ct:comment("render_slot/1 with template should return arity 4 render callback"),
-    Template = arizona_template:from_string(~"<span>Slot Content</span>"),
+    Template = arizona_template:from_html(~"<span>Slot Content</span>"),
     Callback = arizona_template:render_slot(Template),
     ?assert(is_function(Callback, 4)).
 
@@ -261,16 +261,16 @@ render_slot_term_test(Config) when is_list(Config) ->
 
 render_list_template_callback_test(Config) when is_list(Config) ->
     ct:comment("render_list_template/2 should return arity 4 render callback"),
-    Template = arizona_template:from_string(~"<li>Static Item</li>"),
+    Template = arizona_template:from_html(~"<li>Static Item</li>"),
     List = [~"first", ~"second", ~"third"],
     Callback = arizona_template:render_list_template(Template, List),
     ?assert(is_function(Callback, 4)).
 
-from_string_with_module_function_test(Config) when is_list(Config) ->
-    ct:comment("from_string/4 should handle module function calls"),
+from_html_with_module_function_test(Config) when is_list(Config) ->
+    ct:comment("from_html/4 should handle module function calls"),
     TestModule = ?MODULE,
     Bindings = #{name => ~"World"},
-    Template = arizona_template:from_string(
+    Template = arizona_template:from_html(
         TestModule,
         ?LINE,
         ~"<h1>{arizona_template:get_binding(name, Bindings)}</h1>",
@@ -291,7 +291,7 @@ render_list_error_test(Config) when is_list(Config) ->
 
 render_map_template_callback_test(Config) when is_list(Config) ->
     ct:comment("render_map_template/2 should return arity 4 render callback"),
-    Template = arizona_template:from_string(~"<li>Key: {Key}, Value: {Value}</li>"),
+    Template = arizona_template:from_html(~"<li>Key: {Key}, Value: {Value}</li>"),
     Map = #{~"first" => ~"1", ~"second" => ~"2"},
     Callback = arizona_template:render_map_template(Template, Map),
     ?assert(is_function(Callback, 4)).

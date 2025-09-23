@@ -17,7 +17,7 @@ be created at compile-time via parse transforms or at runtime.
 ## API vs Template DSL Functions
 
 **Regular API functions:**
-- Template creation: `new/5`, `from_string/1`, `from_string/4`, `from_markdown/1`, `from_markdown/4`
+- Template creation: `new/5`, `from_html/1`, `from_html/4`, `from_markdown/1`, `from_markdown/4`
 - Type checking: `is_template/1`
 - Accessors: `get_static/1`, `get_dynamic/1`, etc.
 - Collection rendering: `render_list_template/2`, `render_map_template/2`
@@ -30,7 +30,7 @@ be created at compile-time via parse transforms or at runtime.
 ## Example
 
 ```erlang
-1> Template = arizona_template:from_string(~"""
+1> Template = arizona_template:from_html(~"""
 .. <h1>{arizona_template:get_binding(title, Bindings)}</h1>
 .. """).
 #template{...}
@@ -51,9 +51,9 @@ be created at compile-time via parse transforms or at runtime.
 %% --------------------------------------------------------------------
 
 -export([new/5]).
--export([from_string/1]).
+-export([from_html/1]).
 -export([is_template/1]).
--export([from_string/4]).
+-export([from_html/4]).
 -export([from_markdown/1]).
 -export([from_markdown/4]).
 -export([get_static/1]).
@@ -78,8 +78,8 @@ be created at compile-time via parse transforms or at runtime.
 %% --------------------------------------------------------------------
 
 -ignore_xref([new/5]).
--ignore_xref([from_string/1]).
--ignore_xref([from_string/4]).
+-ignore_xref([from_html/1]).
+-ignore_xref([from_html/4]).
 -ignore_xref([from_markdown/1]).
 -ignore_xref([from_markdown/4]).
 -ignore_xref([get_dynamic_anno/1]).
@@ -167,12 +167,12 @@ new(Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint) ->
         fingerprint = Fingerprint
     }.
 
--doc #{equiv => from_string(erlang, 0, String, #{})}.
--spec from_string(String) -> Template when
+-doc #{equiv => from_html(erlang, 0, String, #{})}.
+-spec from_html(String) -> Template when
     String :: binary(),
     Template :: template().
-from_string(String) ->
-    from_string(erlang, 0, String, #{}).
+from_html(String) ->
+    from_html(erlang, 0, String, #{}).
 
 -doc ~"""""
 Compiles a template string into a template record at runtime.
@@ -193,12 +193,12 @@ Arizona templates embed Erlang expressions within HTML using curly braces:
 
 ## Expression Examples
 
-> The following examples use `from_string/1` for simplicity.
+> The following examples use `from_html/1` for simplicity.
 
 ### Simple variable access
 
 ```erlang
-arizona_template:from_string(~"""
+arizona_template:from_html(~"""
 <h1>{arizona_template:get_binding(title, Bindings)}</h1>
 """).
 ```
@@ -206,7 +206,7 @@ arizona_template:from_string(~"""
 ### Complex expressions with case statements
 
 ```erlang
-arizona_template:from_string(~"""
+arizona_template:from_html(~"""
 <div class="todo {case maps:get(completed, Todo) of
       true -> ~"completed";
       false -> ~""
@@ -217,12 +217,12 @@ arizona_template:from_string(~"""
 ### Variable assignment within expressions
 
 ```erlang
-arizona_template:from_string(~""""
+arizona_template:from_html(~""""
 {
     Todos = arizona_template:get_binding(todos, Bindings),
     Filter = arizona_template:get_binding(filter, Bindings),
     arizona_template:render_list(fun(Todo) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <li>{maps:get(text, Todo)}</li>
     """)
     end, filter_todos(Todos, Filter))
@@ -233,7 +233,7 @@ arizona_template:from_string(~""""
 ### Conditional rendering
 
 ```erlang
-arizona_template:from_string(~"""
+arizona_template:from_html(~"""
 {
     case length(TodoList) > 0 of
         true -> arizona_template:render_stateless(Module, render_footer, #{});
@@ -246,7 +246,7 @@ arizona_template:from_string(~"""
 ### Escaped braces in CSS
 
 ```erlang
-arizona_template:from_string(~"""
+arizona_template:from_html(~"""
 <style>
     .nav-container \{
         display: flex;
@@ -270,13 +270,13 @@ Within `{}` expressions, you have access to:
 2. **Parsing** - Tokens are parsed into an Abstract Syntax Tree (AST)
 3. **Evaluation** - AST is evaluated to create the final template record
 """"".
--spec from_string(Module, Line, String, Bindings) -> Template when
+-spec from_html(Module, Line, String, Bindings) -> Template when
     Module :: module(),
     Line :: arizona_token:line(),
     String :: string() | binary(),
     Bindings :: arizona_binder:map(),
     Template :: template().
-from_string(Module, Line, String, Bindings) when is_atom(Module), is_map(Bindings) ->
+from_html(Module, Line, String, Bindings) when is_atom(Module), is_map(Bindings) ->
     % Scan template content into tokens
     Tokens = arizona_scanner:scan_string(Line, String),
 
@@ -294,7 +294,7 @@ from_string(Module, Line, String, Bindings) when is_atom(Module), is_map(Binding
         value
     ).
 
--doc #{equiv => from_string(erlang, 0, String, #{})}.
+-doc #{equiv => from_html(erlang, 0, String, #{})}.
 -spec from_markdown(Markdown) -> Template when
     Markdown :: arizona_markdown:markdown(),
     Template :: template().
@@ -334,7 +334,7 @@ You have **{length(arizona_template:get_binding(todos, Bindings))}** tasks.
 
 ## Tasks
 {arizona_template:render_list(fun(Todo) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     - {maps:get(text, Todo)}
     """)
 end, arizona_template:get_binding(todos, Bindings))}
@@ -348,7 +348,7 @@ arizona_template:from_markdown(~""""
 | Name | Score | Status |
 |------|-------|--------|
 {arizona_template:render_list(fun(Player) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     | {maps:get(name, Player)} | {maps:get(score, Player)} | {maps:get(status, Player)} |
     """)
 end, arizona_template:get_binding(players, Bindings))}
@@ -405,7 +405,7 @@ from_markdown(Module, Line, Markdown, Bindings) when is_atom(Module), is_map(Bin
     HTML = arizona_markdown_processor:process_markdown_template(Markdown, Line),
 
     % Process final HTML as template
-    from_string(Module, Line, HTML, Bindings).
+    from_html(Module, Line, HTML, Bindings).
 
 -doc ~"""
 Checks if the given value is a template record.
@@ -474,7 +474,7 @@ get_fingerprint(#template{fingerprint = Fingerprint}) ->
 -doc ~"""
 Retrieves a variable binding value with dependency tracking.
 
-Template DSL function - only use inside `arizona_template:from_string/1` strings.
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
 Records the variable dependency for differential updates and returns the bound value.
 """.
 -spec get_binding(Key, Bindings) -> Value when
@@ -489,7 +489,7 @@ get_binding(Key, Bindings) ->
 -doc ~"""
 Retrieves a variable binding value with default and dependency tracking.
 
-Template DSL function - only use inside `arizona_template:from_string/1` strings.
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
 Returns the bound value or provided default value if key not found.
 """.
 -spec get_binding(Key, Bindings, Default) -> Value when
@@ -505,7 +505,7 @@ get_binding(Key, Bindings, Default) ->
 -doc ~"""
 Retrieves a variable binding value with lazy default function and dependency tracking.
 
-Template DSL function - only use inside `arizona_template:from_string/1` strings.
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
 Returns the bound value or calls default function if key not found. Useful for
 expensive computations that should only be performed when needed.
 """.
@@ -522,7 +522,7 @@ get_binding_lazy(Key, Bindings, DefaultFun) ->
 -doc ~"""
 Safely finds a variable binding value with dependency tracking.
 
-Template DSL function - only use inside `arizona_template:from_string/1` strings.
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
 Returns `{ok, Value}` if found, `error` if not found.
 """.
 -spec find_binding(Key, Bindings) -> {ok, Value} | error when
@@ -537,7 +537,7 @@ find_binding(Key, Bindings) ->
 -doc ~"""
 Creates a stateful component rendering callback.
 
-Template DSL function - only use inside `arizona_template:from_string/1` strings.
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
 Returns a callback that handles all three rendering modes for the component.
 """.
 -spec render_stateful(Module, Bindings) -> Callback when
@@ -559,7 +559,7 @@ render_stateful(Module, Bindings) ->
 -doc ~"""
 Creates a stateless component rendering callback.
 
-Template DSL function - only use inside `arizona_template:from_string/1` strings.
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
 Returns a callback that handles all three rendering modes for the component.
 """.
 -spec render_stateless(Module, Function, Bindings) -> Callback when
@@ -582,7 +582,7 @@ render_stateless(Module, Fun, Bindings) ->
 -doc ~"""
 Renders a slot with view, template, or HTML content.
 
-Template DSL function - only use inside `arizona_template:from_string/1` strings.
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
 Handles different slot types: view (current view), template records, or HTML values.
 """.
 -spec render_slot(Slot) -> Callback when
@@ -612,7 +612,7 @@ render_slot(Term) ->
 -doc ~"""
 Creates a list rendering callback from an item template function.
 
-Template DSL function - only use inside `arizona_template:from_string/1` strings.
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
 At compile time, arizona_parse_transform converts this into an optimized
 `render_list_template/2` call for better performance.
 

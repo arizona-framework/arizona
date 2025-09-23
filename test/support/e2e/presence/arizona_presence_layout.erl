@@ -3,7 +3,7 @@
 -export([render/1]).
 
 render(Bindings) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <!DOCTYPE html>
     <html>
     <head>

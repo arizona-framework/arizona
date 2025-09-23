@@ -26,7 +26,7 @@ mount(_Arg, Req) ->
     arizona_view:new(?MODULE, Bindings, Layout).
 
 render(Bindings) ->
-    arizona_template:from_string(~"""
+    arizona_template:from_html(~"""
     <div id="{arizona_template:get_binding(id, Bindings)}">
         {arizona_template:render_stateful(arizona_counter_stateful, #{
             id => arizona_template:get_binding(counter_id, Bindings),

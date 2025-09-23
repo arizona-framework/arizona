@@ -3,7 +3,7 @@
 -export([render_menu/1]).
 
 render_menu(Bindings) ->
-    arizona_template:from_string(~""""
+    arizona_template:from_html(~""""
     <nav class="test-nav">
         <div class="nav-container">
             <div class="nav-brand">
@@ -14,7 +14,7 @@ render_menu(Bindings) ->
                     ActiveUrl = arizona_template:get_binding(active_url, Bindings),
                     arizona_template:render_list(fun(#{url := Url, name := Name, desc := Desc}) ->
                         Class = case Url of ActiveUrl -> ~"active"; _ -> ~"" end,
-                        arizona_template:from_string(~"""
+                        arizona_template:from_html(~"""
                         <li class="nav-item">
                             <a
                                 href="{Url}"
