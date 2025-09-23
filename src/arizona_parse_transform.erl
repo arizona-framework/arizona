@@ -3,12 +3,14 @@
 Compile-time AST transformation for Arizona templates.
 
 Erlang parse transform that converts Arizona template function calls into
-optimized compile-time AST. Transforms `arizona_template:from_string/1` and
-`arizona_template:render_list/2` calls for maximum runtime performance.
+optimized compile-time AST. Transforms `arizona_template:from_string/1`,
+`arizona_template:from_markdown/1`, and `arizona_template:render_list/2` calls
+for maximum runtime performance.
 
 ## Transformations
 
 - `arizona_template:from_string/1` → Compiled template record
+- `arizona_template:from_markdown/1` → Compiled markdown template record
 - `arizona_template:render_list/2` → Optimized list rendering with callbacks
 - Prevents infinite recursion in nested template expressions
 - Evaluates template strings at compile time for validation
@@ -59,6 +61,13 @@ $ rebar3 as debug compile
 %% --------------------------------------------------------------------
 
 -hank([{unnecessary_function_arguments, [output_forms_to_tmp/2]}]).
+
+%% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+% format_error/2 exceeds 30 lines
+-elvis([{elvis_style, max_function_length, #{max_length => 40}}]).
 
 %% --------------------------------------------------------------------
 %% Parse Transform Implementation
@@ -228,6 +237,7 @@ with context about failed template extraction or render_list/render_map transfor
 -spec format_error(Reason, StackTrace) -> ErrorMap when
     Reason ::
         arizona_template_extraction_failed
+        | arizona_markdown_extraction_failed
         | arizona_render_list_transformation_failed
         | arizona_render_map_transformation_failed,
     StackTrace :: erlang:stacktrace(),
@@ -238,6 +248,15 @@ format_error(arizona_template_extraction_failed, [{_M, _F, _As, Info} | _]) ->
     #{
         general => "Arizona template parsing failed",
         reason => io_lib:format("Failed to extract template in ~p at line ~p:\n~p:~p:~p", [
+            Module, Line, Class, Reason, StackTrace
+        ])
+    };
+format_error(arizona_markdown_extraction_failed, [{_M, _F, _As, Info} | _]) ->
+    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
+    {Module, Line, Class, Reason, StackTrace} = maps:get(cause, ErrorInfo),
+    #{
+        general => "Arizona markdown template parsing failed",
+        reason => io_lib:format("Failed to extract markdown template in ~p at line ~p:\n~p:~p:~p", [
             Module, Line, Class, Reason, StackTrace
         ])
     };
@@ -329,6 +348,20 @@ transform_application(Node, Module, CompileOpts) ->
                     % Normal context - transform from_string
                     Line = get_node_line(Node),
                     transform_from_string(Module, Line, TemplateArg, CompileOpts)
+            end;
+        {arizona_template, from_markdown, 1, [MarkdownArg]} ->
+            % Check if we're in a dynamic callback context to prevent infinite recursion
+            InDynamicCallback = proplists:get_bool(in_dynamic_callback, CompileOpts),
+
+            case InDynamicCallback of
+                true ->
+                    % Inside dynamic callback - don't transform from_markdown
+                    % to prevent infinite recursion
+                    Node;
+                false ->
+                    % Normal context - transform from_markdown
+                    Line = get_node_line(Node),
+                    transform_from_markdown(Module, Line, MarkdownArg, CompileOpts)
             end;
         {arizona_template, render_list, 2, [FunArg, ListArg]} ->
             % Always transform render_list calls - they don't cause infinite recursion
@@ -429,6 +462,30 @@ transform_from_string(Module, Line, TemplateArg, CompileOpts) ->
         Class:Reason:StackTrace ->
             error(
                 arizona_template_extraction_failed,
+                none,
+                error_info({Module, Line, Class, Reason, StackTrace})
+            )
+    end.
+
+%% Transform arizona_template:from_markdown/1 calls
+transform_from_markdown(Module, Line, MarkdownArg, CompileOpts) ->
+    try
+        % Extract markdown content and line number
+        Markdown = eval_expr(Module, MarkdownArg),
+
+        % Process markdown content with Arizona template syntax
+        % We do Line + 1 because we consider the use of triple-quoted string
+        HTML = arizona_markdown_processor:process_markdown_template(Markdown, Line + 1),
+
+        % Scan the final HTML into tokens
+        FinalTokens = arizona_scanner:scan_string(Line + 1, HTML),
+
+        % Parse tokens into AST
+        arizona_parser:parse_tokens(FinalTokens, CompileOpts)
+    catch
+        Class:Reason:StackTrace ->
+            error(
+                arizona_markdown_extraction_failed,
                 none,
                 error_info({Module, Line, Class, Reason, StackTrace})
             )

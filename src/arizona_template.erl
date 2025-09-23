@@ -1,5 +1,5 @@
 -module(arizona_template).
--moduledoc ~"""
+-moduledoc ~""""
 Core template record and rendering abstraction.
 
 Defines the template data structure and provides high-level rendering
@@ -17,7 +17,7 @@ be created at compile-time via parse transforms or at runtime.
 ## API vs Template DSL Functions
 
 **Regular API functions:**
-- Template creation: `new/5`, `from_string/1`, `from_string/4`
+- Template creation: `new/5`, `from_string/1`, `from_string/4`, `from_markdown/1`, `from_markdown/4`
 - Type checking: `is_template/1`
 - Accessors: `get_static/1`, `get_dynamic/1`, etc.
 - Collection rendering: `render_list_template/2`, `render_map_template/2`
@@ -37,8 +37,14 @@ be created at compile-time via parse transforms or at runtime.
 2> {Html, View1} = arizona_renderer:render_template(Template, ParentId, View).
 {[~\"<h1>\", ~\"Hello\", ~\"</h1>\"], UpdatedView}
 ```
-""".
+"""".
 -compile({nowarn_redefined_builtin_type, [dynamic/0]}).
+
+%% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+-elvis([{elvis_style, max_module_length, disable}]).
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -48,6 +54,8 @@ be created at compile-time via parse transforms or at runtime.
 -export([from_string/1]).
 -export([is_template/1]).
 -export([from_string/4]).
+-export([from_markdown/1]).
+-export([from_markdown/4]).
 -export([get_static/1]).
 -export([get_dynamic/1]).
 -export([get_dynamic_sequence/1]).
@@ -72,6 +80,8 @@ be created at compile-time via parse transforms or at runtime.
 -ignore_xref([new/5]).
 -ignore_xref([from_string/1]).
 -ignore_xref([from_string/4]).
+-ignore_xref([from_markdown/1]).
+-ignore_xref([from_markdown/4]).
 -ignore_xref([get_dynamic_anno/1]).
 -ignore_xref([get_fingerprint/1]).
 -ignore_xref([get_binding/2]).
@@ -283,6 +293,119 @@ from_string(Module, Line, String, Bindings) when is_atom(Module), is_map(Binding
         none,
         value
     ).
+
+-doc #{equiv => from_string(erlang, 0, String, #{})}.
+-spec from_markdown(Markdown) -> Template when
+    Markdown :: arizona_markdown:markdown(),
+    Template :: template().
+from_markdown(String) ->
+    from_markdown(erlang, 0, String, #{}).
+
+-doc ~"""""
+Compiles a markdown string with Arizona template syntax into a template record at runtime.
+
+This function processes markdown content through GitHub Flavored Markdown parser while
+preserving Arizona template expressions (`{...}`) and Erlang comments (`%`).
+The markdown is first converted to HTML, then processed as a regular template.
+
+For best performance, use compile-time parse transforms instead.
+
+## Markdown + Template Syntax
+
+Arizona markdown templates combine standard GitHub Flavored Markdown with embedded
+Erlang expressions:
+
+- Standard markdown syntax (headers, emphasis, lists, tables, etc.)
+- `{}` - Contains Erlang expressions evaluated at render time
+- `%` - Erlang comments (preserved in final template)
+- `\{` - Escaped opening brace (renders as literal `{`)
+
+## Expression Examples
+
+> The following examples use `from_markdown/1` for simplicity.
+
+### Markdown with dynamic content
+
+```erlang
+arizona_template:from_markdown(~"""
+# Welcome {arizona_template:get_binding(user, Bindings)}!
+
+You have **{length(arizona_template:get_binding(todos, Bindings))}** tasks.
+
+## Tasks
+{arizona_template:render_list(fun(Todo) ->
+    arizona_template:from_string(~"""
+    - {maps:get(text, Todo)}
+    """)
+end, arizona_template:get_binding(todos, Bindings))}
+""").
+```
+
+### Tables with dynamic data
+
+```erlang
+arizona_template:from_markdown(~""""
+| Name | Score | Status |
+|------|-------|--------|
+{arizona_template:render_list(fun(Player) ->
+    arizona_template:from_string(~"""
+    | {maps:get(name, Player)} | {maps:get(score, Player)} | {maps:get(status, Player)} |
+    """)
+end, arizona_template:get_binding(players, Bindings))}
+"""").
+```
+
+### Conditional markdown blocks
+
+```erlang
+arizona_template:from_markdown(~""""
+# Dashboard
+
+{case arizona_template:get_binding(user_type, Bindings) of
+    admin ->
+        ~"""
+        ## Admin Panel
+        - [Manage Users](/admin/users)
+        - [View Reports](/admin/reports)
+        """;
+    user ->
+        ~"""
+        ## User Dashboard
+        Welcome back! Check your recent activity below.
+        """
+end}
+"""").
+```
+
+## Expression Context
+
+Within `{}` expressions, you have access to:
+- All standard Erlang functions, operators, and control structures
+- The `Bindings` variable containing template data
+- Template DSL functions like `get_binding/2`, `render_stateful/2`, `render_list/2`
+- Local variables assigned within the same expression block
+- Any functions from modules imported in the calling context
+
+## Processing Pipeline
+
+1. **Scanning** - Markdown content is tokenized into text and expression parts
+2. **Protection** - Dynamic expressions and comments are protected from markdown processing
+3. **Markdown Conversion** - Protected content is processed through GitHub Flavored Markdown
+4. **Restoration** - Protected expressions are restored to original Arizona syntax
+5. **Template Creation** - Final HTML is processed as a regular Arizona template
+""""".
+-spec from_markdown(Module, Line, Markdown, Bindings) -> Template when
+    Module :: module(),
+    Line :: arizona_token:line(),
+    Markdown :: arizona_markdown:markdown(),
+    Bindings :: arizona_binder:map(),
+    Template :: template().
+from_markdown(Module, Line, Markdown, Bindings) when is_atom(Module), is_map(Bindings) ->
+    % Process markdown content with Arizona template syntax
+    HTML = arizona_markdown_processor:process_markdown_template(Markdown, Line),
+
+    % Process final HTML as template
+    from_string(Module, Line, HTML, Bindings).
 
 -doc ~"""
 Checks if the given value is a template record.

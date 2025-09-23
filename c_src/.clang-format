@@ -1,0 +1,58 @@
+# Arizona Framework C Code Style Configuration
+# Based on LLVM style with customizations for readability and consistency
+
+BasedOnStyle: LLVM
+
+# Indentation
+IndentWidth: 4
+UseTab: Never
+ColumnLimit: 100
+
+# Braces
+BreakBeforeBraces: Attach
+Cpp11BracedListStyle: true
+
+# Spacing
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# Alignment
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignOperands: true
+AlignTrailingComments: true
+
+# Function declarations
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+
+# Pointers and references
+PointerAlignment: Right
+DerivePointerAlignment: false
+
+# Comments
+ReflowComments: true
+
+# Include sorting
+SortIncludes: true
+IncludeBlocks: Regroup
+
+# Line breaks
+MaxEmptyLinesToKeep: 2
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+# Binary operators
+BreakBeforeBinaryOperators: None
+
+# String literals
+BreakStringLiterals: true
+
+# Case statements
+IndentCaseLabels: true
+
+# Preprocessor
+IndentPPDirectives: None

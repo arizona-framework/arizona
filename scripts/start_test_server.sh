@@ -48,6 +48,7 @@ maybe
                     }
                 }, []},
                 {view, ~\"/presence\", arizona_presence_view, #{}, []},
+                {view, ~\"/blog\", arizona_blog_app_view, #{}, []},
                 {controller, ~\"/api/presence/[:action]\", arizona_presence_controller, #{}, []},
                 {websocket, ~\"/live\", #{}, []},
                 {asset, ~\"/assets\", {priv_dir, arizona, ~\"static/assets\"}, []}

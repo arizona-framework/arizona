@@ -21,6 +21,10 @@ groups() ->
             from_string_simple_test,
             from_string_with_dynamic_test,
             from_string_full_params_test,
+            from_markdown_simple_test,
+            from_markdown_with_dynamic_test,
+            from_markdown_mixed_content_test,
+            from_markdown_with_comments_test,
             is_template_test
         ]},
         {template_accessor_tests, [parallel], [
@@ -76,6 +80,73 @@ from_string_full_params_test(Config) when is_list(Config) ->
     ?assert(arizona_template:is_template(Template)),
     Static = arizona_template:get_static(Template),
     ?assertEqual([~"<h1>", ~"</h1>"], Static).
+
+from_markdown_simple_test(Config) when is_list(Config) ->
+    ct:comment("from_markdown/1 should create template from simple markdown"),
+    Template = arizona_template:from_markdown(~"# Hello World\n\nThis is **bold** text."),
+    ?assert(arizona_template:is_template(Template)),
+    Static = arizona_template:get_static(Template),
+    ?assertEqual([~"<h1>Hello World</h1>\n<p>This is <strong>bold</strong> text.</p>\n"], Static).
+
+from_markdown_with_dynamic_test(Config) when is_list(Config) ->
+    ct:comment("from_markdown/1 should create template with dynamic content in markdown"),
+    Template = arizona_template:from_markdown(~"# {~\"Test Title\"}\n\nContent here."),
+    ?assert(arizona_template:is_template(Template)),
+    Static = arizona_template:get_static(Template),
+    ?assertEqual([~"<h1>", ~"</h1>\n<p>Content here.</p>\n"], Static),
+
+    % Test that dynamic parts are correctly preserved
+    Dynamic = arizona_template:get_dynamic(Template),
+    ?assert(is_tuple(Dynamic)),
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    ?assertEqual(1, length(DynamicSequence)).
+
+from_markdown_mixed_content_test(Config) when is_list(Config) ->
+    ct:comment("from_markdown/1 should handle mixed static and dynamic content"),
+    Template = arizona_template:from_markdown(~"""
+    # Hello {~"World"}!
+
+    You have **{42}** items.
+
+    - Item 1
+    - Item {42}
+    """),
+    ?assert(arizona_template:is_template(Template)),
+    Static = arizona_template:get_static(Template),
+    ExpectedStatic = [
+        ~"<h1>Hello ",
+        ~"!</h1>\n<p>You have <strong>",
+        ~"</strong> items.</p>\n<ul>\n<li>Item 1</li>\n<li>Item ",
+        ~"</li>\n</ul>\n"
+    ],
+    ?assertEqual(ExpectedStatic, Static),
+
+    % Test that multiple dynamic parts are preserved
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    ?assertEqual(3, length(DynamicSequence)).
+
+from_markdown_with_comments_test(Config) when is_list(Config) ->
+    ct:comment("from_markdown/1 should preserve Erlang comments"),
+    Template = arizona_template:from_markdown(~"""
+    # Title
+    % This is an Erlang comment
+    Hello {~"Test"}!
+    """),
+    ?assert(arizona_template:is_template(Template)),
+    Static = arizona_template:get_static(Template),
+    % Comments should be preserved in the final template
+    ?assert(
+        lists:any(
+            fun(Part) ->
+                binary:match(Part, ~"% This is an Erlang comment") =/= nomatch
+            end,
+            Static
+        )
+    ),
+
+    % Test that both dynamic and comment parts are preserved
+    DynamicSequence = arizona_template:get_dynamic_sequence(Template),
+    ?assertEqual(1, length(DynamicSequence)).
 
 is_template_test(Config) when is_list(Config) ->
     ct:comment("is_template/1 should correctly identify template records"),
