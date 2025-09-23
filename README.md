@@ -20,6 +20,7 @@ Arizona follows a component-based architecture with three main layers:
 
 - **Compile-time optimization** via parse transforms for maximum performance
 - **Template DSL** with plain HTML, `{}` Erlang expressions, and `\{` escaping for literal braces
+- **GitHub Flavored Markdown support** with template syntax preservation for content-driven applications
 - **Differential rendering** for minimal DOM updates
 - **Static site generation** support for SEO and deployment flexibility
 
@@ -46,6 +47,7 @@ Arizona follows a component-based architecture with three main layers:
 - **Type-safe stateful and stateless components** with behavior validation
 - **Efficient differential DOM updates** reducing browser workload
 - **Simple template syntax** using plain HTML with `{}` Erlang expressions
+- **GitHub Flavored Markdown processing** with Arizona template integration
 - **Static site generation** for deployment flexibility and SEO optimization
 - **File watching infrastructure** for custom development automation
 - **Unified middleware system** for request processing across all route types
@@ -206,6 +208,7 @@ Then visit:
 - **<http://localhost:8080/modal>** - Dynamic overlays and slot composition
 - **<http://localhost:8080/datagrid>** - Sortable tables with complex data
 - **<http://localhost:8080/realtime>** - Real-time PubSub updates and live data
+- **<http://localhost:8080/blog>** - Markdown template processing with Arizona syntax
 - **<http://localhost:8080/>** - Static blog home page
 - **<http://localhost:8080/about>** - Static about page
 - **<http://localhost:8080/post/hello-world>** - Dynamic blog post routing
@@ -225,6 +228,8 @@ Each demo corresponds to complete source code in [`test/support/e2e/`](https://g
   - Advanced data presentation and sorting functionality
 - **[Real-time App](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/realtime/)**
   - Live data updates and WebSocket communication
+- **[Blog App](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/blog/)**
+  - Markdown template processing with Arizona syntax integration
 - **[Static Blog](https://github.com/arizona-framework/arizona/tree/main/test/support/e2e/static/)**
   - Static site generation with layouts and dynamic routing
 
@@ -341,6 +346,58 @@ arizona_template:from_string(~"""
     </style>
 </div>
 """)
+```
+
+## Markdown Template Support
+
+Arizona includes GitHub Flavored Markdown processing with full template syntax preservation for
+content-driven applications.
+
+### **Features**
+
+- **Full GFM**: Tables, autolinks, strikethrough, task lists, tag filtering
+- **Template Integration**: `{expressions}` and `%` comments work within markdown
+- **High Performance**: Built on `cmark-gfm` C library via NIF
+- **Production Ready**: Safety limits, error handling, comprehensive tests
+
+### **Basic Usage**
+
+```erlang
+% Pure markdown to HTML
+{ok, Html} = arizona_markdown:to_html(~"# Hello **World**")
+% Returns: ~"<h1>Hello <strong>World</strong></h1>\n"
+
+% Markdown with Arizona template syntax
+arizona_template:from_markdown(~"""
+# {arizona_template:get_binding(title, Bindings)}
+Welcome **{arizona_template:get_binding(user, Bindings)}**!
+
+{% Template comment - not rendered %}
+
+{arizona_template:render_stateful(my_widget_component, #{
+    id => ~"widget",
+    data => arizona_template:get_binding(widget_data, Bindings)
+})}
+""")
+
+% With markdown options
+{ok, Html} = arizona_markdown:to_html(~"# Hello", [source_pos, smart])
+```
+
+### **Blog Example**
+
+```erlang
+render(Bindings) ->
+    arizona_template:from_markdown(~"""
+    # {arizona_template:get_binding(title, Bindings)}
+
+    {arizona_template:get_binding(content, Bindings)}
+
+    {arizona_template:render_stateful(comment_section, #{
+        id => ~"comments",
+        post_id => arizona_template:get_binding(id, Bindings)
+    })}
+    """).
 ```
 
 ## Component Architecture
