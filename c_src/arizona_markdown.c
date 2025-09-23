@@ -195,6 +195,19 @@ static int load(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) {
     return 0; // Success
 }
 
+// Upgrade callback - called when NIF is reloaded (e.g., during testing)
+static int upgrade(ErlNifEnv* env, void** priv_data, void** old_priv_data, ERL_NIF_TERM load_info) {
+    (void)env;          // Unused parameter
+    (void)priv_data;    // Unused parameter
+    (void)old_priv_data; // Unused parameter
+    (void)load_info;    // Unused parameter
+
+    // For this NIF, no special upgrade handling is needed since we don't
+    // maintain state between loads. The extension pointers are re-initialized
+    // in the load callback.
+    return 0; // Success
+}
+
 // NIF function exports
 static ErlNifFunc nif_funcs[] = {
     {"to_html", 1, to_html_1, 0},
@@ -202,4 +215,4 @@ static ErlNifFunc nif_funcs[] = {
 };
 
 // NIF initialization
-ERL_NIF_INIT(arizona_markdown, nif_funcs, load, NULL, NULL, NULL)
+ERL_NIF_INIT(arizona_markdown, nif_funcs, load, NULL, upgrade, NULL)
