@@ -63,6 +63,13 @@ $ rebar3 as debug compile
 -hank([{unnecessary_function_arguments, [output_forms_to_tmp/2]}]).
 
 %% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+% format_error/2 exceeds 30 lines
+-elvis([{elvis_style, max_function_length, #{max_length => 40}}]).
+
+%% --------------------------------------------------------------------
 %% Parse Transform Implementation
 %% --------------------------------------------------------------------
 
