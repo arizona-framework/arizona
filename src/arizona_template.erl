@@ -401,20 +401,11 @@ Within `{}` expressions, you have access to:
     Bindings :: arizona_binder:map(),
     Template :: template().
 from_markdown(Module, Line, Markdown, Bindings) when is_atom(Module), is_map(Bindings) ->
-    % Scan template content into tokens
-    Tokens = arizona_scanner:scan_string(Line, Markdown),
-
-    % Protect dynamic tokens from markdown processing
-    {ProtectedMarkdown, TokenMap} = protect_dynamic_tokens(Tokens),
-
-    % Convert protected markdown to HTML
-    {ok, HTML} = arizona_markdown:to_html(ProtectedMarkdown),
-
-    % Restore dynamic tokens in HTML
-    RestoredHTML = restore_dynamic_tokens(HTML, TokenMap),
+    % Process markdown content with Arizona template syntax
+    HTML = arizona_markdown_processor:process_markdown_template(Markdown, Line),
 
     % Process final HTML as template
-    from_string(Module, Line, RestoredHTML, Bindings).
+    from_string(Module, Line, HTML, Bindings).
 
 -doc ~"""
 Checks if the given value is a template record.
@@ -740,64 +731,3 @@ render_callback_collection(ItemCallback, Collection, TransformFun) ->
                     )}
             )
     end.
-
-%% Protects dynamic and comment tokens by replacing them with unique placeholders.
-%% Returns {ProtectedMarkdown, TokenMap} where TokenMap maps IDs to original tokens.
-protect_dynamic_tokens(Tokens) ->
-    protect_dynamic_tokens(Tokens, [], #{}, 0).
-
-protect_dynamic_tokens([], Acc, TokenMap, _Counter) ->
-    {iolist_to_binary(lists:reverse(Acc)), TokenMap};
-protect_dynamic_tokens([Token | Rest], Acc, TokenMap, Counter) ->
-    case arizona_token:get_category(Token) of
-        dynamic ->
-            % Generate unique ID for this dynamic token
-            ID = integer_to_binary(Counter),
-
-            % Create protected placeholder using unique text that won't be modified by markdown
-            Placeholder = [~"ARIZONA_DYNAMIC_TOKEN_", ID, ~"_END"],
-
-            % Store original token in map (preserves line info)
-            NewTokenMap = TokenMap#{ID => Token},
-
-            protect_dynamic_tokens(Rest, [Placeholder | Acc], NewTokenMap, Counter + 1);
-        comment ->
-            % Generate unique ID for this comment token
-            ID = integer_to_binary(Counter),
-
-            % Create protected placeholder using unique text that won't be modified by markdown
-            Placeholder = [~"ARIZONA_COMMENT_TOKEN_", ID, ~"_END"],
-
-            % Store original token in map (preserves line info)
-            NewTokenMap = TokenMap#{ID => Token},
-
-            protect_dynamic_tokens(Rest, [Placeholder | Acc], NewTokenMap, Counter + 1);
-        static ->
-            % Static tokens pass through unchanged
-            Content = arizona_token:get_content(Token),
-            protect_dynamic_tokens(Rest, [Content | Acc], TokenMap, Counter)
-    end.
-
-%% Restores dynamic and comment tokens by replacing unique placeholders with original content.
-restore_dynamic_tokens(HTML, TokenMap) ->
-    maps:fold(
-        fun(ID, Token, CurrentHTML) ->
-            case arizona_token:get_category(Token) of
-                dynamic ->
-                    Placeholder = [~"ARIZONA_DYNAMIC_TOKEN_", ID, ~"_END"],
-                    Content = arizona_token:get_content(Token),
-                    OriginalContent = [~"{", Content, ~"}"],
-                    binary:replace(
-                        CurrentHTML,
-                        iolist_to_binary(Placeholder),
-                        iolist_to_binary(OriginalContent)
-                    );
-                comment ->
-                    Placeholder = [~"ARIZONA_COMMENT_TOKEN_", ID, ~"_END"],
-                    Content = arizona_token:get_content(Token),
-                    binary:replace(CurrentHTML, iolist_to_binary(Placeholder), Content)
-            end
-        end,
-        HTML,
-        TokenMap
-    ).
