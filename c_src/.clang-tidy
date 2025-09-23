@@ -38,6 +38,6 @@ CheckOptions:
   - key: performance-unnecessary-value-param.AllowedTypes
     value: 'ERL_NIF_TERM;ErlNifBinary'
 
-WarningsAsErrors: ''
+WarningsAsErrors: '*'
 HeaderFilterRegex: '^(?!.*/.asdf/).*$'
 FormatStyle: file

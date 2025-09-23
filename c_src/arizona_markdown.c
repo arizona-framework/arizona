@@ -6,7 +6,7 @@
 #include <string.h>
 
 // Safety limits
-#define MAX_INPUT_SIZE (16 * 1024 * 1024) // 16MB limit to prevent DoS
+#define MAX_INPUT_SIZE (16UL * 1024UL * 1024UL) // 16MB limit to prevent DoS
 #define MIN_INPUT_SIZE 0
 
 // Atom declarations
@@ -64,34 +64,32 @@ static ERL_NIF_TERM make_ok(ErlNifEnv *env, ERL_NIF_TERM value) {
     return enif_make_tuple2(env, atom_ok, value);
 }
 
-// Main conversion function
-static ERL_NIF_TERM do_markdown_to_html(ErlNifEnv *env, ERL_NIF_TERM markdown_term, int options) {
-    ErlNifBinary markdown_bin;
-    char *html_result;
-    ERL_NIF_TERM result_term;
-    cmark_parser *parser;
-    cmark_node *document;
-    cmark_mem *mem = cmark_get_default_mem_allocator();
-
+// Helper function to validate input binary
+static ERL_NIF_TERM validate_input(ErlNifEnv *env, ERL_NIF_TERM markdown_term,
+                                   ErlNifBinary *markdown_bin) {
     // Convert iodata to binary (supports binaries, strings, iolists)
-    if (!enif_inspect_iolist_as_binary(env, markdown_term, &markdown_bin)) {
+    if (!enif_inspect_iolist_as_binary(env, markdown_term, markdown_bin)) {
         return make_error(env, atom_badarg);
     }
 
     // Check input size limits to prevent DoS attacks
-    if (markdown_bin.size > MAX_INPUT_SIZE) {
+    if (markdown_bin->size > MAX_INPUT_SIZE) {
         return make_error(env, atom_input_too_large);
     }
 
     // Validate input is not NULL (defensive programming)
-    if (markdown_bin.data == NULL && markdown_bin.size > 0) {
+    if (markdown_bin->data == NULL && markdown_bin->size > 0) {
         return make_error(env, atom_badarg);
     }
 
-    // Create parser with GFM extensions
-    parser = cmark_parser_new(options);
+    return atom_ok; // Success indicator
+}
+
+// Helper function to setup parser with GFM extensions
+static cmark_parser *setup_parser_with_extensions(int options) {
+    cmark_parser *parser = cmark_parser_new(options);
     if (parser == NULL) {
-        return make_error(env, atom_nomem);
+        return NULL;
     }
 
     // Attach pre-registered GFM extensions (thread-safe, already initialized in load callback)
@@ -109,6 +107,30 @@ static ERL_NIF_TERM do_markdown_to_html(ErlNifEnv *env, ERL_NIF_TERM markdown_te
     }
     if (g_tasklist_ext) {
         cmark_parser_attach_syntax_extension(parser, g_tasklist_ext);
+    }
+
+    return parser;
+}
+
+// Main conversion function
+static ERL_NIF_TERM do_markdown_to_html(ErlNifEnv *env, ERL_NIF_TERM markdown_term, int options) {
+    ErlNifBinary markdown_bin;
+    char *html_result;
+    ERL_NIF_TERM result_term;
+    cmark_parser *parser;
+    cmark_node *document;
+    cmark_mem *mem = cmark_get_default_mem_allocator();
+
+    // Validate input
+    ERL_NIF_TERM validation_result = validate_input(env, markdown_term, &markdown_bin);
+    if (!enif_is_identical(validation_result, atom_ok)) {
+        return validation_result; // Return error from validation
+    }
+
+    // Create parser with GFM extensions
+    parser = setup_parser_with_extensions(options);
+    if (parser == NULL) {
+        return make_error(env, atom_nomem);
     }
 
     // Parse markdown
@@ -136,7 +158,10 @@ static ERL_NIF_TERM do_markdown_to_html(ErlNifEnv *env, ERL_NIF_TERM markdown_te
         return make_error(env, atom_nomem);
     }
 
+    // Copy HTML result to Erlang binary (no null termination needed for binary data)
+    // NOLINTBEGIN(bugprone-not-null-terminated-result)
     memcpy(result_data, html_result, html_len);
+    // NOLINTEND(bugprone-not-null-terminated-result)
     mem->free(html_result);
 
     return make_ok(env, result_term);

@@ -79,7 +79,7 @@ format:
 lint:
 	@echo "Running C code linter..."
 	@if command -v clang-tidy >/dev/null 2>&1; then \
-		clang-tidy $(NIF_SOURCES) -- $(CFLAGS) || \
+		clang-tidy --warnings-as-errors='*' $(NIF_SOURCES) -- $(CFLAGS) || \
 		(echo "❌ Linting issues found. Please fix the warnings above."; exit 1); \
 	else \
 		echo "⚠️  clang-tidy not found, skipping C linting"; \
