@@ -1,0 +1,16 @@
+<html>
+<head>
+    <title>{arizona_template:get_binding(title, Bindings)}</title>
+</head>
+<body>
+    <h1>{arizona_template:get_binding(heading, Bindings)}</h1>
+    <p>Welcome {arizona_template:get_binding(name, Bindings)}!</p>
+    <ul>
+        {arizona_template:render_list(fun(Item) ->
+            arizona_template:from_html(~"""
+            <li>{arizona_template:get_binding(text, Item)}</li>
+            """)
+        end, arizona_template:get_binding(items, Bindings))}
+    </ul>
+</body>
+</html>

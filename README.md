@@ -247,12 +247,17 @@ Arizona templates combine HTML with Erlang expressions using a simple and intuit
 ### Basic Expressions
 
 ```erlang
+% Inline HTML template
 arizona_template:from_html(~"""
 <div>
     <h1>{arizona_template:get_binding(title, Bindings)}</h1>
     <p>User: {arizona_template:get_binding(username, Bindings)}</p>
 </div>
 """)
+
+% File-based template with compile-time optimization
+arizona_template:from_html({file, "templates/user.html"})
+arizona_template:from_html({priv_file, myapp, "templates/user.html"})
 ```
 
 ### Stateful Component Rendering
@@ -367,7 +372,7 @@ content-driven applications.
 {ok, Html} = arizona_markdown:to_html(~"# Hello **World**")
 % Returns: ~"<h1>Hello <strong>World</strong></h1>\n"
 
-% Markdown with Arizona template syntax
+% Inline markdown template
 arizona_template:from_markdown(~"""
 # {arizona_template:get_binding(title, Bindings)}
 Welcome **{arizona_template:get_binding(user, Bindings)}**!
@@ -379,6 +384,10 @@ Welcome **{arizona_template:get_binding(user, Bindings)}**!
     data => arizona_template:get_binding(widget_data, Bindings)
 })}
 """)
+
+% File-based markdown template with compile-time optimization
+arizona_template:from_markdown({file, "content/blog-post.md"})
+arizona_template:from_markdown({priv_file, myapp, "content/blog-post.md"})
 
 % With markdown options
 {ok, Html} = arizona_markdown:to_html(~"# Hello", [source_pos, smart])

@@ -168,8 +168,11 @@ new(Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint) ->
     }.
 
 -doc #{equiv => from_html(erlang, 0, String, #{})}.
--spec from_html(String) -> Template when
-    String :: binary(),
+-spec from_html(Payload) -> Template when
+    Payload :: {file, Filename} | {priv_file, App, Filename} | HTML,
+    Filename :: file:filename_all(),
+    App :: atom(),
+    HTML :: arizona_html:html(),
     Template :: template().
 from_html(String) ->
     from_html(erlang, 0, String, #{}).
@@ -270,15 +273,21 @@ Within `{}` expressions, you have access to:
 2. **Parsing** - Tokens are parsed into an Abstract Syntax Tree (AST)
 3. **Evaluation** - AST is evaluated to create the final template record
 """"".
--spec from_html(Module, Line, String, Bindings) -> Template when
+-spec from_html(Module, Line, Payload, Bindings) -> Template when
     Module :: module(),
     Line :: arizona_token:line(),
-    String :: string() | binary(),
+    Payload :: {file, Filename} | {priv_file, App, Filename} | HTML,
+    Filename :: file:filename_all(),
+    App :: atom(),
+    HTML :: arizona_html:html(),
     Bindings :: arizona_binder:map(),
     Template :: template().
-from_html(Module, Line, String, Bindings) when is_atom(Module), is_map(Bindings) ->
+from_html(Module, Line, Payload, Bindings) when is_atom(Module), is_map(Bindings) ->
+    % Extract template content from file, priv_file, or direct content
+    HTML = extract_template_content(Payload),
+
     % Scan template content into tokens
-    Tokens = arizona_scanner:scan_string(Line, String),
+    Tokens = arizona_scanner:scan_string(Line, HTML),
 
     % Parse tokens into AST
     AST = arizona_parser:parse_tokens(Tokens, []),
@@ -295,7 +304,10 @@ from_html(Module, Line, String, Bindings) when is_atom(Module), is_map(Bindings)
     ).
 
 -doc #{equiv => from_html(erlang, 0, String, #{})}.
--spec from_markdown(Markdown) -> Template when
+-spec from_markdown(Payload) -> Template when
+    Payload :: {file, Filename} | {priv_file, App, Filename} | Markdown,
+    Filename :: file:filename_all(),
+    App :: atom(),
     Markdown :: arizona_markdown:markdown(),
     Template :: template().
 from_markdown(String) ->
@@ -394,13 +406,19 @@ Within `{}` expressions, you have access to:
 4. **Restoration** - Protected expressions are restored to original Arizona syntax
 5. **Template Creation** - Final HTML is processed as a regular Arizona template
 """"".
--spec from_markdown(Module, Line, Markdown, Bindings) -> Template when
+-spec from_markdown(Module, Line, Payload, Bindings) -> Template when
     Module :: module(),
     Line :: arizona_token:line(),
+    Payload :: {file, Filename} | {priv_file, App, Filename} | Markdown,
+    Filename :: file:filename_all(),
+    App :: atom(),
     Markdown :: arizona_markdown:markdown(),
     Bindings :: arizona_binder:map(),
     Template :: template().
-from_markdown(Module, Line, Markdown, Bindings) when is_atom(Module), is_map(Bindings) ->
+from_markdown(Module, Line, Payload, Bindings) when is_atom(Module), is_map(Bindings) ->
+    % Extract template content from file, priv_file, or direct content
+    Markdown = extract_template_content(Payload),
+
     % Process markdown content with Arizona template syntax
     HTML = arizona_markdown_processor:process_markdown_template(Markdown, Line),
 
@@ -677,6 +695,44 @@ render_map_template(#template{} = Template, Map) ->
 %% --------------------------------------------------------------------
 %% Internal helper functions
 %% --------------------------------------------------------------------
+
+%% Extract template content from various sources (string, file, priv_file)
+-spec extract_template_content(Payload) -> Content when
+    Payload :: {file, Filename} | {priv_file, App, Filename} | Content,
+    Filename :: file:filename_all(),
+    App :: atom(),
+    Content :: arizona_html:html() | arizona_markdown:markdown().
+extract_template_content({file, Filename}) ->
+    read_file_content(Filename);
+extract_template_content({priv_file, App, Filename}) ->
+    case priv_filename(App, Filename) of
+        {ok, PrivFilename} ->
+            read_file_content(PrivFilename);
+        {error, Reason} ->
+            error({priv_dir_error, App, Reason})
+    end;
+extract_template_content(Content) when is_binary(Content); is_list(Content) ->
+    Content.
+
+%% Read file content and return as binary
+-spec read_file_content(Filename) -> Content when
+    Filename :: file:filename_all(),
+    Content :: binary().
+read_file_content(Filename) ->
+    case file:read_file(Filename) of
+        {ok, Content} ->
+            Content;
+        {error, Reason} ->
+            error({file_read_error, Filename, Reason})
+    end.
+
+priv_filename(App, Filename) ->
+    case code:priv_dir(App) of
+        {error, Reason} ->
+            {error, Reason};
+        PrivDir ->
+            {ok, filename:join(PrivDir, Filename)}
+    end.
 
 %% Generic helper for render_list and render_map callbacks.
 %%

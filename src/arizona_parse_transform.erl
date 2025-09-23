@@ -5,7 +5,7 @@ Compile-time AST transformation for Arizona templates.
 Erlang parse transform that converts Arizona template function calls into
 optimized compile-time AST. Transforms `arizona_template:from_html/1`,
 `arizona_template:from_markdown/1`, and `arizona_template:render_list/2` calls
-for maximum runtime performance.
+for maximum runtime performance. Supports file-based template compilation.
 
 ## Transformations
 
@@ -13,7 +13,8 @@ for maximum runtime performance.
 - `arizona_template:from_markdown/1` → Compiled markdown template record
 - `arizona_template:render_list/2` → Optimized list rendering with callbacks
 - Prevents infinite recursion in nested template expressions
-- Evaluates template strings at compile time for validation
+- Evaluates template strings and files at compile time for validation
+- Supports file-based templates: `{file, "path.html"}`, `{priv_file, app, "template.html"}`
 
 ## Usage
 
@@ -27,6 +28,14 @@ render() ->
     <h1>{Title}</h1>
     """).
     %% → Becomes compile-time optimized template record
+
+render_from_file() ->
+    arizona_template:from_html({file, "/path/to/template.html"}).
+    %% → File content compiled at build time
+
+render_from_priv() ->
+    arizona_template:from_html({priv_file, myapp, "templates/page.html"}).
+    %% → Priv file content compiled at build time
 ```
 
 ## Debug
@@ -37,6 +46,12 @@ Use debug profile to output transformed modules to `/tmp/`:
 $ rebar3 as debug compile
 ```
 """".
+
+%% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+-elvis([{elvis_style, max_module_length, disable}]).
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -199,7 +214,7 @@ extract_callback_function_body(Module, Line, FunExpr, CompileOpts) ->
             % Extract template string from raw arizona_template:from_html call
             case analyze_application(TemplateCall) of
                 {arizona_template, from_html, 1, [TemplateArg]} ->
-                    TemplateString = eval_expr(Module, TemplateArg),
+                    TemplateString = extract_template_content(Module, TemplateArg),
 
                     % Scan template content into tokens
                     Tokens = arizona_scanner:scan_string(Line + 1, TemplateString),
@@ -291,9 +306,9 @@ format_error(arizona_render_map_transformation_failed, [{_M, _F, _As, Info} | _]
 output_forms_to_tmp(undefined, _Forms) ->
     ok;
 output_forms_to_tmp(Module, Forms) ->
-    FileName = "/tmp/" ++ atom_to_list(Module) ++ ".erl",
+    Filename = "/tmp/" ++ atom_to_list(Module) ++ ".erl",
     Content = [erl_pp:form(Form, [{linewidth, 100}]) || Form <- Forms],
-    ok = file:write_file(FileName, unicode:characters_to_binary(Content)).
+    ok = file:write_file(Filename, unicode:characters_to_binary(Content)).
 -else.
 output_forms_to_tmp(_Module, _Forms) ->
     ok.
@@ -451,8 +466,8 @@ analyze_application(Node) ->
 %% Transform arizona_template:from_html/1 calls
 transform_from_html(Module, Line, TemplateArg, CompileOpts) ->
     try
-        % Extract template content and line number
-        String = eval_expr(Module, TemplateArg),
+        % Extract template content based on argument type
+        String = extract_template_content(Module, TemplateArg),
         % Scan template content into tokens
         % We do Line + 1 because we consider the use of triple-quoted string
         Tokens = arizona_scanner:scan_string(Line + 1, String),
@@ -470,8 +485,8 @@ transform_from_html(Module, Line, TemplateArg, CompileOpts) ->
 %% Transform arizona_template:from_markdown/1 calls
 transform_from_markdown(Module, Line, MarkdownArg, CompileOpts) ->
     try
-        % Extract markdown content and line number
-        Markdown = eval_expr(Module, MarkdownArg),
+        % Extract markdown content based on argument type
+        Markdown = extract_template_content(Module, MarkdownArg),
 
         % Process markdown content with Arizona template syntax
         % We do Line + 1 because we consider the use of triple-quoted string
@@ -518,6 +533,101 @@ wrap_dynamic_tuple_in_function(TemplateAST, RevClauseBody, CallbackArg) ->
         _ ->
             % If not arizona_template:new/5, return as-is
             TemplateAST
+    end.
+
+%% Extract template content from various sources (string, file, priv_file)
+-spec extract_template_content(Module, TemplateArg) -> String when
+    Module :: module(),
+    TemplateArg :: erl_syntax:syntaxTree(),
+    String :: binary().
+extract_template_content(Module, TemplateArg) ->
+    case erl_syntax:type(TemplateArg) of
+        tuple ->
+            extract_from_tuple(Module, TemplateArg);
+        _ ->
+            % Direct string/binary content
+            eval_expr(Module, TemplateArg)
+    end.
+
+%% Extract template content from tuple expressions
+-spec extract_from_tuple(Module, TupleArg) -> String when
+    Module :: module(),
+    TupleArg :: erl_syntax:syntaxTree(),
+    String :: binary().
+extract_from_tuple(Module, TupleArg) ->
+    Elements = erl_syntax:tuple_elements(TupleArg),
+    case Elements of
+        [FileAtom, FilenameArg] ->
+            extract_from_two_tuple(Module, FileAtom, FilenameArg, TupleArg);
+        [AppAtom, AppArg, FilenameArg] ->
+            extract_from_three_tuple(Module, AppAtom, AppArg, FilenameArg, TupleArg);
+        _ ->
+            % Not a recognized tuple format, treat as regular expression
+            eval_expr(Module, TupleArg)
+    end.
+
+%% Handle {file, Filename} tuples
+-spec extract_from_two_tuple(Module, FileAtom, FilenameArg, TupleArg) -> String when
+    Module :: module(),
+    FileAtom :: erl_syntax:syntaxTree(),
+    FilenameArg :: erl_syntax:syntaxTree(),
+    TupleArg :: erl_syntax:syntaxTree(),
+    String :: binary().
+extract_from_two_tuple(Module, FileAtom, FilenameArg, TupleArg) ->
+    case {erl_syntax:type(FileAtom), erl_syntax:atom_value(FileAtom)} of
+        {atom, file} ->
+            % {file, Filename} - read from absolute path
+            Filename = eval_expr(Module, FilenameArg),
+            read_file_content(Filename);
+        _ ->
+            % Not a recognized file tuple, treat as regular expression
+            eval_expr(Module, TupleArg)
+    end.
+
+%% Handle {priv_file, App, Filename} tuples
+-spec extract_from_three_tuple(Module, AppAtom, AppArg, FilenameArg, TupleArg) -> String when
+    Module :: module(),
+    AppAtom :: erl_syntax:syntaxTree(),
+    AppArg :: erl_syntax:syntaxTree(),
+    FilenameArg :: erl_syntax:syntaxTree(),
+    TupleArg :: erl_syntax:syntaxTree(),
+    String :: binary().
+extract_from_three_tuple(Module, AppAtom, AppArg, FilenameArg, TupleArg) ->
+    case {erl_syntax:type(AppAtom), erl_syntax:atom_value(AppAtom)} of
+        {atom, priv_file} ->
+            % {priv_file, App, Filename} - read from priv directory
+            App = eval_expr(Module, AppArg),
+            Filename = eval_expr(Module, FilenameArg),
+            PrivFilename = get_priv_filename(App, Filename),
+            read_file_content(PrivFilename);
+        _ ->
+            % Not a recognized priv_file tuple, treat as regular expression
+            eval_expr(Module, TupleArg)
+    end.
+
+%% Read file content and return as binary
+-spec read_file_content(Filename) -> Content when
+    Filename :: file:filename_all(),
+    Content :: binary().
+read_file_content(Filename) ->
+    case file:read_file(Filename) of
+        {ok, Content} ->
+            Content;
+        {error, Reason} ->
+            error({file_read_error, Filename, Reason})
+    end.
+
+%% Get priv directory filename
+-spec get_priv_filename(App, Filename) -> PrivFilename when
+    App :: atom(),
+    Filename :: file:filename_all(),
+    PrivFilename :: file:filename_all().
+get_priv_filename(App, Filename) ->
+    case code:priv_dir(App) of
+        {error, Reason} ->
+            error({priv_dir_error, App, Reason});
+        PrivDir ->
+            filename:join(PrivDir, Filename)
     end.
 
 %% Utility Functions
