@@ -21,10 +21,14 @@ groups() ->
             from_html_simple_test,
             from_html_with_dynamic_test,
             from_html_full_params_test,
+            from_html_file_test,
+            from_html_priv_file_test,
             from_markdown_simple_test,
             from_markdown_with_dynamic_test,
             from_markdown_mixed_content_test,
             from_markdown_with_comments_test,
+            from_markdown_file_test,
+            from_markdown_priv_file_test,
             is_template_test
         ]},
         {template_accessor_tests, [parallel], [
@@ -53,6 +57,45 @@ groups() ->
         ]}
     ].
 
+init_per_testcase(from_html_file_test, Config) ->
+    DataDir = proplists:get_value(data_dir, Config),
+    Filename = filename:join(DataDir, "html_template.herl"),
+    [{filename, Filename} | Config];
+init_per_testcase(from_html_priv_file_test, Config) ->
+    DataDir = proplists:get_value(data_dir, Config),
+    ArizonaPrivDir = code:priv_dir(arizona),
+    ok = filelib:ensure_dir(filename:join(ArizonaPrivDir, "dummy")),
+    SourceFile = filename:join(DataDir, "html_template.herl"),
+    Filename = "test_template.herl",
+    TargetFile = filename:join(ArizonaPrivDir, Filename),
+    {ok, _} = file:copy(SourceFile, TargetFile),
+    [{priv_file, TargetFile}, {filename, Filename} | Config];
+init_per_testcase(from_markdown_file_test, Config) ->
+    DataDir = proplists:get_value(data_dir, Config),
+    Filename = filename:join(DataDir, "markdown_template.herl"),
+    [{filename, Filename} | Config];
+init_per_testcase(from_markdown_priv_file_test, Config) ->
+    DataDir = proplists:get_value(data_dir, Config),
+    ArizonaPrivDir = code:priv_dir(arizona),
+    ok = filelib:ensure_dir(filename:join(ArizonaPrivDir, "dummy")),
+    SourceFile = filename:join(DataDir, "markdown_template.herl"),
+    Filename = "test_markdown.herl",
+    TargetFile = filename:join(ArizonaPrivDir, Filename),
+    {ok, _} = file:copy(SourceFile, TargetFile),
+    [{priv_file, TargetFile}, {filename, Filename} | Config];
+init_per_testcase(_TestCase, Config) ->
+    Config.
+
+end_per_testcase(TestCase, Config) when
+    TestCase =:= from_html_priv_file_test;
+    TestCase =:= from_markdown_priv_file_test
+->
+    {priv_file, PrivFile} = proplists:lookup(priv_file, Config),
+    ok = file:delete(PrivFile),
+    ok;
+end_per_testcase(_TestCase, _Config) ->
+    ok.
+
 %% --------------------------------------------------------------------
 %% Template creation tests
 %% --------------------------------------------------------------------
@@ -80,6 +123,39 @@ from_html_full_params_test(Config) when is_list(Config) ->
     ?assert(arizona_template:is_template(Template)),
     Static = arizona_template:get_static(Template),
     ?assertEqual([~"<h1>", ~"</h1>"], Static).
+
+from_html_file_test(Config) when is_list(Config) ->
+    ct:comment("from_html/1 should create template from file"),
+    {filename, Filename} = proplists:lookup(filename, Config),
+    Template = arizona_template:from_html({file, Filename}),
+    ?assert(arizona_template:is_template(Template)),
+    Static = arizona_template:get_static(Template),
+    % Verify it contains expected HTML structure
+    ExpectedStatic = [
+        ~"<html>\n<head>\n    <title>",
+        ~"</title>\n</head>\n<body>\n    <h1>",
+        ~"</h1>\n    <p>Welcome ",
+        ~"!</p>\n    <ul>\n        ",
+        ~"\n    </ul>\n</body>\n</html>\n"
+    ],
+    ?assertEqual(ExpectedStatic, Static).
+
+from_html_priv_file_test(Config) when is_list(Config) ->
+    ct:comment("from_html/1 should create template from priv file"),
+    % Test priv_file loading (file setup handled in init_per_testcase)
+    {filename, Filename} = proplists:lookup(filename, Config),
+    Template = arizona_template:from_html({priv_file, arizona, Filename}),
+    ?assert(arizona_template:is_template(Template)),
+    Static = arizona_template:get_static(Template),
+    % Verify it contains expected HTML structure
+    ExpectedStatic = [
+        ~"<html>\n<head>\n    <title>",
+        ~"</title>\n</head>\n<body>\n    <h1>",
+        ~"</h1>\n    <p>Welcome ",
+        ~"!</p>\n    <ul>\n        ",
+        ~"\n    </ul>\n</body>\n</html>\n"
+    ],
+    ?assertEqual(ExpectedStatic, Static).
 
 from_markdown_simple_test(Config) when is_list(Config) ->
     ct:comment("from_markdown/1 should create template from simple markdown"),
@@ -147,6 +223,39 @@ from_markdown_with_comments_test(Config) when is_list(Config) ->
     % Test that both dynamic and comment parts are preserved
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     ?assertEqual(1, length(DynamicSequence)).
+
+from_markdown_file_test(Config) when is_list(Config) ->
+    ct:comment("from_markdown/1 should create template from file"),
+    {filename, Filename} = proplists:lookup(filename, Config),
+    Template = arizona_template:from_markdown({file, Filename}),
+    ?assert(arizona_template:is_template(Template)),
+    Static = arizona_template:get_static(Template),
+    % Verify it contains expected markdown-to-HTML structure
+    ExpectedStatic = [
+        ~"<h1>",
+        ~"</h1>\n<p>Welcome <strong>",
+        ~"</strong>!</p>\n<p>",
+        ~"</p>\n<h2>List of items</h2>\n<p>",
+        ~"</p>\n"
+    ],
+    ?assertEqual(ExpectedStatic, Static).
+
+from_markdown_priv_file_test(Config) when is_list(Config) ->
+    ct:comment("from_markdown/1 should create template from priv file"),
+    % Test priv_file loading (file setup handled in init_per_testcase)
+    {filename, Filename} = proplists:lookup(filename, Config),
+    Template = arizona_template:from_markdown({priv_file, arizona, Filename}),
+    ?assert(arizona_template:is_template(Template)),
+    Static = arizona_template:get_static(Template),
+    % Verify it contains expected markdown-to-HTML structure
+    ExpectedStatic = [
+        ~"<h1>",
+        ~"</h1>\n<p>Welcome <strong>",
+        ~"</strong>!</p>\n<p>",
+        ~"</p>\n<h2>List of items</h2>\n<p>",
+        ~"</p>\n"
+    ],
+    ?assertEqual(ExpectedStatic, Static).
 
 is_template_test(Config) when is_list(Config) ->
     ct:comment("is_template/1 should correctly identify template records"),

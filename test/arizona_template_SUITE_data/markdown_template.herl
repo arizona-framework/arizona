@@ -1,0 +1,18 @@
+# {arizona_template:get_binding(title, Bindings)}
+
+Welcome **{arizona_template:get_binding(name, Bindings)}**!
+
+{% Template comment - not rendered %}
+
+{arizona_template:render_stateful(my_widget_component, #{
+    id => ~"widget",
+    data => arizona_template:get_binding(widget_data, Bindings)
+})}
+
+## List of items
+
+{arizona_template:render_list(fun(Item) ->
+    arizona_template:from_html(~"""
+    - {arizona_template:get_binding(name, Item)}
+    """)
+end, arizona_template:get_binding(items, Bindings))}
