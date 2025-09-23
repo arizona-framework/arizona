@@ -31,6 +31,7 @@ render_menu(Bindings) ->
                         #{url => ~"/todo", name => ~"Todo App", desc => ~"CRUD operations & filtering"},
                         #{url => ~"/datagrid", name => ~"Data Grid", desc => ~"Interactive table with sorting"},
                         #{url => ~"/modal", name => ~"Modal", desc => ~"Dynamic slot updates"},
+                        #{url => ~"/blog", name => ~"Blog", desc => ~"Markdown templates with dynamic content"},
                         #{url => ~"/presence", name => ~"Presence", desc => ~"REST API + real-time updates"}
                     ])
                 }
