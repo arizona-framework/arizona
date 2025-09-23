@@ -5,8 +5,8 @@
 extern "C" {
 #endif
 
-#include "cmark-gfm-extension_api.h"
-#include "cmark-gfm_export.h"
+#include "../cmark-gfm/cmark-gfm-extension_api.h"
+#include "../cmark-gfm/cmark-gfm_export.h"
 #include <stdbool.h>
 #include <stdint.h>
 
