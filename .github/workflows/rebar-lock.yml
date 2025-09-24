@@ -57,7 +57,7 @@ jobs:
           version-file: .tool-versions
 
       - name: Restore _build
-        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: _build
           key: "_build-cache-for\
@@ -67,7 +67,7 @@ jobs:
             -hash-${{hashFiles('rebar.lock')}}-${{hashFiles('rebar.config')}}"
 
       - name: Restore rebar3's cache
-        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/rebar3
           key: "rebar3-cache-for\
