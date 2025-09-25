@@ -37,7 +37,7 @@ Only changed dynamic parts are included in the diff.
 -export([diff_stateless/6]).
 -export([diff_list/5]).
 -export([diff_map/5]).
--export([diff_template/4]).
+-export([diff_template/5]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -112,7 +112,8 @@ diff_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
                 _ ->
                     {Diff, StatefulView}
             end;
-        false ->
+        _Other ->
+            ok = process_match_result(MatchResult, PrepRenderView),
             arizona_hierarchical:hierarchical_stateful(
                 Module, Bindings, ParentId, ElementIndex, PrepRenderView
             )
@@ -141,7 +142,7 @@ diff_root_stateful(Module, Bindings, View) ->
 Generates differential updates for a stateless component.
 
 Calls the stateless component's render function to get a template,
-then delegates to `diff_template/4` for the actual diff generation.
+then delegates to `diff_template/5` for the actual diff generation.
 """.
 -spec diff_stateless(Module, Function, Bindings, ParentId, ElementIndex, View) ->
     {Result, View1}
@@ -156,7 +157,7 @@ when
     View1 :: arizona_view:view().
 diff_stateless(Module, Function, Bindings, ParentId, ElementIndex, View) ->
     Template = arizona_stateless:call_render_callback(Module, Function, Bindings),
-    diff_template(Template, ParentId, ElementIndex, View).
+    diff_template(Template, ParentId, ElementIndex, stateless, View).
 
 -doc ~"""
 Generates differential updates for list rendering.
@@ -175,7 +176,8 @@ if template changed.
     View1 :: arizona_view:view().
 diff_list(Template, List, ParentId, ElementIndex, View) ->
     Fingerprint = arizona_template:get_fingerprint(Template),
-    case arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View) of
+    MatchResult = arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View),
+    case MatchResult of
         true ->
             DynamicSequence = arizona_template:get_dynamic_sequence(Template),
             DynamicCallback = arizona_template:get_dynamic(Template),
@@ -186,7 +188,8 @@ diff_list(Template, List, ParentId, ElementIndex, View) ->
              || CallbackArg <- List
             ],
             {Diff, View};
-        false ->
+        _Other ->
+            ok = process_match_result(MatchResult, View),
             arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
     end.
 
@@ -210,7 +213,8 @@ otherwise falls back to `t:arizona_hierarchical:list_struct/0`.
     View1 :: arizona_view:view().
 diff_map(Template, Map, ParentId, ElementIndex, View) ->
     Fingerprint = arizona_template:get_fingerprint(Template),
-    case arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View) of
+    MatchResult = arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View),
+    case MatchResult of
         true ->
             DynamicSequence = arizona_template:get_dynamic_sequence(Template),
             DynamicCallback = arizona_template:get_dynamic(Template),
@@ -221,7 +225,8 @@ diff_map(Template, Map, ParentId, ElementIndex, View) ->
              || Key := Value <- Map
             ],
             {Diff, View};
-        false ->
+        _Other ->
+            ok = process_match_result(MatchResult, View),
             arizona_hierarchical:hierarchical_map(Template, Map, ParentId, ElementIndex, View)
     end.
 
@@ -232,16 +237,18 @@ Checks template fingerprint and processes affected dynamic elements.
 Returns `nodiff` if no elements changed, `diff/0` if elements updated,
 or `t:arizona_hierarchical:stateless_struct/0` if template changed.
 """.
--spec diff_template(Template, ParentId, ElementIndex, View) -> {Result, View1} when
+-spec diff_template(Template, ParentId, ElementIndex, ComponentType, View) -> {Result, View1} when
     Template :: arizona_template:template(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
+    ComponentType :: arizona_view:component_type(),
     View :: arizona_view:view(),
     Result :: nodiff | diff() | arizona_hierarchical:stateless_struct(),
     View1 :: arizona_view:view().
-diff_template(Template, ParentId, ElementIndex, View) ->
+diff_template(Template, ParentId, ElementIndex, ComponentType, View) ->
     Fingerprint = arizona_template:get_fingerprint(Template),
-    case arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View) of
+    MatchResult = arizona_view:fingerprint_matches(ParentId, ElementIndex, Fingerprint, View),
+    case MatchResult of
         true ->
             DynamicSequence = arizona_template:get_dynamic_sequence(Template),
             Dynamic = arizona_template:get_dynamic(Template),
@@ -253,8 +260,11 @@ diff_template(Template, ParentId, ElementIndex, View) ->
                 {Diff, RenderView} ->
                     {Diff, RenderView}
             end;
-        false ->
-            arizona_hierarchical:hierarchical_template(Template, ParentId, ElementIndex, View)
+        _Other ->
+            ok = process_match_result(MatchResult, View),
+            arizona_hierarchical:hierarchical_template(
+                Template, ParentId, ElementIndex, ComponentType, View
+            )
     end.
 
 %% --------------------------------------------------------------------
@@ -346,7 +356,7 @@ process_callback_result(Result, DynamicElementIndex, T, Dynamic, ParentId, Eleme
 
 %% Helper function to process template results
 process_template_result(Result, DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View) ->
-    {Diff, TemplateView} = diff_template(Result, ParentId, ElementIndex, View),
+    {Diff, TemplateView} = diff_template(Result, ParentId, ElementIndex, stateless, View),
     {RestChanges, FinalView} = process_affected_elements(
         T, Dynamic, ParentId, ElementIndex, TemplateView
     ),
@@ -376,3 +386,22 @@ process_diff_result(nodiff, _DynamicElementIndex, RestChanges, FinalView) ->
 process_diff_result(Diff, DynamicElementIndex, RestChanges, FinalView) ->
     ElementChange = {DynamicElementIndex, Diff},
     {[ElementChange | RestChanges], FinalView}.
+
+% Handles the result of fingerprint matching for component lifecycle management.
+% When a stateful component's fingerprint doesn't match (component is being replaced
+% or removed), this function ensures proper cleanup by calling the component's unmount
+% callback if it exists.
+process_match_result({false, {stateful, StatefulId}}, View) ->
+    case arizona_view:find_stateful_state(StatefulId, View) of
+        {ok, StatefulState} ->
+            arizona_stateful:call_unmount_callback(StatefulState);
+        error ->
+            % Component may have already been cleaned up
+            ok
+    end;
+process_match_result({false, _NonStatefulComponentType}, _View) ->
+    % Non-stateful components don't need cleanup
+    ok;
+process_match_result(none, _View) ->
+    % No previous component to clean up
+    ok.

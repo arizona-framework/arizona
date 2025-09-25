@@ -23,7 +23,9 @@ change and diff updates aren't possible.
 ## Example
 
 ```erlang
-1> {Struct, View1} = arizona_hierarchical:hierarchical_template(Template, ParentId, Index, View).
+1> {Struct, View1} = arizona_hierarchical:hierarchical_template(
+..     Template, ParentId, Index, stateless, View
+.. ).
 {#{type => stateless, static => [...], dynamic => [...]}, UpdatedView}
 ```
 """.
@@ -37,7 +39,7 @@ change and diff updates aren't possible.
 -export([hierarchical_stateless/6]).
 -export([hierarchical_list/5]).
 -export([hierarchical_map/5]).
--export([hierarchical_template/4]).
+-export([hierarchical_template/5]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -111,7 +113,7 @@ hierarchical_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
     % Store the fingerprint for future comparisons
     Fingerprint = arizona_template:get_fingerprint(Template),
     FingerprintView = arizona_view:put_fingerprint(
-        ParentId, ElementIndex, Fingerprint, PrepRenderView
+        ParentId, ElementIndex, Fingerprint, {stateful, Id}, PrepRenderView
     ),
 
     Result = track_hierarchical_stateful(Id, Template, FingerprintView),
@@ -122,7 +124,7 @@ hierarchical_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
 Generates hierarchical structure for a stateless component.
 
 Calls the stateless component's render function to get a template,
-then delegates to `hierarchical_template/4` for structure generation.
+then delegates to `hierarchical_template/5` for structure generation.
 """.
 -spec hierarchical_stateless(Module, Function, Bindings, ParentId, ElementIndex, View) ->
     {Struct, View1}
@@ -137,7 +139,7 @@ when
     View1 :: arizona_view:view().
 hierarchical_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View) ->
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
-    hierarchical_template(Template, ParentId, ElementIndex, View).
+    hierarchical_template(Template, ParentId, ElementIndex, stateless, View).
 
 -doc ~"""
 Generates hierarchical structure for list rendering.
@@ -156,7 +158,7 @@ each list item using the template's dynamic callback function.
 hierarchical_list(Template, List, ParentId, ElementIndex, View) ->
     % Store the fingerprint for future comparisons
     Fingerprint = arizona_template:get_fingerprint(Template),
-    FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
+    FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, list, View),
 
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     DynamicCallback = arizona_template:get_dynamic(Template),
@@ -190,7 +192,7 @@ Returns the same structure type as lists since the rendering pattern is identica
 hierarchical_map(Template, Map, ParentId, ElementIndex, View) ->
     % Store the fingerprint for future comparisons
     Fingerprint = arizona_template:get_fingerprint(Template),
-    FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
+    FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, list, View),
 
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     DynamicCallback = arizona_template:get_dynamic(Template),
@@ -213,17 +215,22 @@ Generates hierarchical structure for a template.
 Stores template fingerprint and processes dynamic callbacks to create
 a stateless structure with static parts and hierarchical dynamic elements.
 """.
--spec hierarchical_template(Template, ParentId, ElementIndex, View) -> {Struct, View1} when
+-spec hierarchical_template(Template, ParentId, ElementIndex, ComponentType, View) ->
+    {Struct, View1}
+when
     Template :: arizona_template:template(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
+    ComponentType :: arizona_view:component_type(),
     View :: arizona_view:view(),
     Struct :: stateless_struct(),
     View1 :: arizona_view:view().
-hierarchical_template(Template, ParentId, ElementIndex, View) ->
+hierarchical_template(Template, ParentId, ElementIndex, ComponentType, View) ->
     % Store the fingerprint for future comparisons
     Fingerprint = arizona_template:get_fingerprint(Template),
-    FingerprintView = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
+    FingerprintView = arizona_view:put_fingerprint(
+        ParentId, ElementIndex, Fingerprint, ComponentType, View
+    ),
 
     DynamicSequence = arizona_template:get_dynamic_sequence(Template),
     Dynamic = arizona_template:get_dynamic(Template),
@@ -316,7 +323,7 @@ process_hierarchical_callback(
 
 %% Helper function to process hierarchical template results
 process_hierarchical_template(Result, T, Dynamic, ParentId, ElementIndex, View) ->
-    {Struct, TemplateView} = hierarchical_template(Result, ParentId, ElementIndex, View),
+    {Struct, TemplateView} = hierarchical_template(Result, ParentId, ElementIndex, stateless, View),
     {RestHtml, FinalView} = hierarchical_dynamic(T, Dynamic, ParentId, ElementIndex, TemplateView),
     {[Struct | RestHtml], FinalView}.
 

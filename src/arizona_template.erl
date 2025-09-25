@@ -620,9 +620,9 @@ render_slot(#template{} = Template) ->
         (render, ParentId, _ElementIndex, View) ->
             arizona_renderer:render_template(Template, ParentId, View);
         (diff, ParentId, ElementIndex, View) ->
-            arizona_differ:diff_template(Template, ParentId, ElementIndex, View);
+            arizona_differ:diff_template(Template, ParentId, ElementIndex, slot, View);
         (hierarchical, ParentId, ElementIndex, View) ->
-            arizona_hierarchical:hierarchical_template(Template, ParentId, ElementIndex, View)
+            arizona_hierarchical:hierarchical_template(Template, ParentId, ElementIndex, slot, View)
     end;
 render_slot(Term) ->
     arizona_html:to_html(Term).
