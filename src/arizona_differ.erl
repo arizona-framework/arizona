@@ -113,7 +113,7 @@ diff_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
                     {Diff, StatefulView}
             end;
         _Other ->
-            ok = process_match_result(MatchResult, PrepRenderView),
+            ok = unmount_if_stateful_component(MatchResult, PrepRenderView),
             arizona_hierarchical:hierarchical_stateful(
                 Module, Bindings, ParentId, ElementIndex, PrepRenderView
             )
@@ -189,7 +189,7 @@ diff_list(Template, List, ParentId, ElementIndex, View) ->
             ],
             {Diff, View};
         _Other ->
-            ok = process_match_result(MatchResult, View),
+            ok = unmount_if_stateful_component(MatchResult, View),
             arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
     end.
 
@@ -226,7 +226,7 @@ diff_map(Template, Map, ParentId, ElementIndex, View) ->
             ],
             {Diff, View};
         _Other ->
-            ok = process_match_result(MatchResult, View),
+            ok = unmount_if_stateful_component(MatchResult, View),
             arizona_hierarchical:hierarchical_map(Template, Map, ParentId, ElementIndex, View)
     end.
 
@@ -261,7 +261,7 @@ diff_template(Template, ParentId, ElementIndex, ComponentType, View) ->
                     {Diff, RenderView}
             end;
         _Other ->
-            ok = process_match_result(MatchResult, View),
+            ok = unmount_if_stateful_component(MatchResult, View),
             arizona_hierarchical:hierarchical_template(
                 Template, ParentId, ElementIndex, ComponentType, View
             )
@@ -387,11 +387,11 @@ process_diff_result(Diff, DynamicElementIndex, RestChanges, FinalView) ->
     ElementChange = {DynamicElementIndex, Diff},
     {[ElementChange | RestChanges], FinalView}.
 
-% Handles the result of fingerprint matching for component lifecycle management.
+% Unmounts stateful components when they are being replaced or removed.
 % When a stateful component's fingerprint doesn't match (component is being replaced
 % or removed), this function ensures proper cleanup by calling the component's unmount
-% callback if it exists.
-process_match_result({false, {stateful, StatefulId}}, View) ->
+% callback if it exists. Non-stateful components require no cleanup.
+unmount_if_stateful_component({false, {stateful, StatefulId}}, View) ->
     case arizona_view:find_stateful_state(StatefulId, View) of
         {ok, StatefulState} ->
             arizona_stateful:call_unmount_callback(StatefulState);
@@ -399,9 +399,9 @@ process_match_result({false, {stateful, StatefulId}}, View) ->
             % Component may have already been cleaned up
             ok
     end;
-process_match_result({false, _NonStatefulComponentType}, _View) ->
+unmount_if_stateful_component({false, _NonStatefulComponentType}, _View) ->
     % Non-stateful components don't need cleanup
     ok;
-process_match_result(none, _View) ->
+unmount_if_stateful_component(none, _View) ->
     % No previous component to clean up
     ok.
