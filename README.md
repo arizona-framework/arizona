@@ -426,13 +426,65 @@ Top-level page components that represent complete routes. Views:
 
 ### **Stateful Components** (`arizona_stateful`)
 
-Interactive components with persistent internal state. They:
+Interactive components with persistent internal state and full lifecycle management. They:
 
 - **Require an `id` field** in their bindings for state management, event routing, and lifecycle tracking
 - Mount with initial bindings via `mount/1`
 - Maintain state between renders for efficient diff updates
 - Handle events independently via `handle_event/3`
 - Track changes for differential DOM updates
+- Support automatic cleanup via optional `unmount/1` callback when removed from component tree
+
+#### **Component Lifecycle**
+
+1. **Mount**: Component initialized with `mount/1` using initial bindings
+2. **Render**: Template generated with `render/1` using current state
+3. **Events**: User interactions processed via `handle_event/3`
+4. **Updates**: State changes trigger re-rendering with minimal DOM updates
+5. **Unmount**: Optional cleanup via `unmount/1` when component removed from template
+
+The `unmount/1` callback is automatically called when:
+
+- Parent template changes and component is no longer rendered
+- Component is replaced with a different component at the same location
+- View navigation removes the entire component tree
+
+Use `unmount/1` for cleanup tasks such as:
+
+- Canceling timers and intervals
+- Unsubscribing from PubSub topics
+- Closing network connections
+- Releasing GenServer references
+- Cleaning up ETS tables or other shared resources
+
+```erlang
+-module(timer_component).
+-behaviour(arizona_stateful).
+-export([mount/1, render/1, handle_event/3, unmount/1]).
+
+mount(Bindings) ->
+    % Start a timer when component mounts
+    {ok, TimerRef} = timer:send_interval(1000, tick),
+    arizona_pubsub:join(~"time_updates", self()),
+    NewBindings = Bindings#{timer_ref => TimerRef, seconds => 0},
+    arizona_stateful:new(?MODULE, NewBindings).
+
+handle_event(~"tick", _Params, State) ->
+    Seconds = arizona_stateful:get_binding(seconds, State),
+    NewState = arizona_stateful:put_binding(seconds, Seconds + 1, State),
+    {[], NewState}.
+
+% Automatic cleanup when component is unmounted
+unmount(State) ->
+    % Cancel timer to prevent memory leaks
+    case arizona_stateful:get_binding(timer_ref, State) of
+        undefined -> ok;
+        TimerRef -> timer:cancel(TimerRef)
+    end,
+    % Unsubscribe from PubSub
+    arizona_pubsub:leave(~"time_updates", self()),
+    ok.
+```
 
 ### **Stateless Components**
 

@@ -4,14 +4,28 @@ Stateful component behavior definition and state management.
 
 Defines the behavior for stateful components that maintain internal state
 and can handle WebSocket events. Components implement callbacks for
-mounting, rendering, and event handling while the module manages state
+mounting, rendering, event handling, and cleanup while the module manages state
 and change tracking for efficient differential updates.
 
 ## Behavior Callbacks
 
+### Required
+
 - `mount/1` - Initialize component state from initial bindings
 - `render/1` - Generate template from current bindings
-- `handle_event/3` - Handle WebSocket events (optional, raises if events triggered but not defined)
+
+### Optional
+
+- `handle_event/3` - Handle WebSocket events (raises if events triggered but not defined)
+- `unmount/1` - Cleanup resources when component is removed from component tree
+
+## Component Lifecycle
+
+1. **Mount**: Component is initialized via `mount/1` with initial bindings
+2. **Render**: Template is generated with `render/1` using current bindings
+3. **Events**: User interactions trigger `handle_event/3` callbacks
+4. **Updates**: State changes trigger re-rendering with differential updates
+5. **Unmount**: Component cleanup via `unmount/1` when removed from template
 
 ## State Management
 
@@ -26,9 +40,11 @@ Component state includes:
 -module(counter_component).
 -compile({parse_transform, arizona_parse_transform}).
 -behaviour(arizona_stateful).
--export([mount/1, render/1, handle_event/3]).
+-export([mount/1, render/1, handle_event/3, unmount/1]).
 
 mount(InitialBindings) ->
+    % Subscribe to timer updates
+    arizona_pubsub:join(~"timer_tick", self()),
     arizona_stateful:new(?MODULE, InitialBindings#{count => 0}).
 
 render(Bindings) ->
@@ -49,7 +65,12 @@ render(Bindings) ->
 handle_event(~"increment", _Params, State) ->
     Count = arizona_stateful:get_binding(count, State),
     NewState = arizona_stateful:put_binding(count, Count + 1, State),
-    {noreply, NewState}.
+    {[], NewState}.
+
+% Cleanup when component is removed
+unmount(State) ->
+    arizona_pubsub:leave(~"timer_tick", self()),
+    ok.
 ```
 """".
 
