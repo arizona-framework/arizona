@@ -21,7 +21,8 @@ all() ->
     [
         {group, callback_tests},
         {group, state_management_tests},
-        {group, binding_tests}
+        {group, binding_tests},
+        {group, lifecycle_tests}
     ].
 
 groups() ->
@@ -45,6 +46,11 @@ groups() ->
             merge_bindings_test,
             get_changed_bindings_test,
             set_changed_bindings_test
+        ]},
+        {lifecycle_tests, [parallel], [
+            call_unmount_callback_with_callback,
+            call_unmount_callback_without_callback,
+            unmount_callback_receives_correct_state
         ]}
     ].
 
@@ -75,6 +81,7 @@ init_per_suite(Config) ->
     -export([mount/1]).
     -export([render/1]).
     -export([handle_event/3]).
+    -export([unmount/1]).
 
     mount(Bindings) ->
         arizona_stateful:new('@module', Bindings).
@@ -88,6 +95,12 @@ init_per_suite(Config) ->
         {[{reply, Params}], State};
     handle_event(~"no_actions", _Params, State) ->
         {[], State}.
+
+    unmount(State) ->
+        Module = arizona_stateful:get_module(State),
+        Bindings = arizona_stateful:get_bindings(State),
+        put(unmount_evidence, {unmounted, Module, Bindings}),
+        ok.
     """", [{module, merl:term(MockEventsModule)}]),
 
     {ok, _Binary} = merl:compile_and_load(MockModuleCode),
@@ -252,3 +265,58 @@ set_changed_bindings_test(Config) when is_list(Config) ->
     ResultChangedBindings = arizona_stateful:get_changed_bindings(UpdatedState),
     ?assertEqual(NewChangedBindings, ResultChangedBindings),
     ?assertEqual(~"value", arizona_stateful:get_binding(original, UpdatedState)).
+
+%% --------------------------------------------------------------------
+%% Lifecycle Test Cases
+%% --------------------------------------------------------------------
+
+call_unmount_callback_with_callback(Config) when is_list(Config) ->
+    ct:comment("call_unmount_callback/1 should invoke unmount callback when it exists"),
+
+    % Use the mock module that has unmount callback
+    MockEventsModule = proplists:get_value(mock_events_module, Config),
+
+    % Test the unmount callback
+    TestBindings = #{user_id => ~"test_user", count => 42},
+    State = arizona_stateful:new(MockEventsModule, TestBindings),
+    Result = arizona_stateful:call_unmount_callback(State),
+
+    % Verify the callback was called with correct data
+    ?assertEqual(ok, Result),
+    ?assertEqual(
+        {unmounted, MockEventsModule, arizona_binder:new(TestBindings)}, get(unmount_evidence)
+    ).
+
+call_unmount_callback_without_callback(Config) when is_list(Config) ->
+    ct:comment("call_unmount_callback/1 should return ok when unmount callback doesn't exist"),
+
+    % Use the basic mock module that doesn't have unmount callback
+    MockModule = proplists:get_value(mock_module, Config),
+
+    % Test without unmount callback
+    State = arizona_stateful:new(MockModule, #{test => ~"data"}),
+    Result = arizona_stateful:call_unmount_callback(State),
+
+    % Should return ok without error
+    ?assertEqual(ok, Result).
+
+unmount_callback_receives_correct_state(Config) when is_list(Config) ->
+    ct:comment("unmount callback should receive the correct state with all bindings"),
+
+    % Use the mock events module that has unmount callback
+    MockEventsModule = proplists:get_value(mock_events_module, Config),
+
+    % Test with specific bindings including complex data
+    TimerRef = make_ref(),
+    TestBindings = #{user_id => ~"validation_user", timer_ref => TimerRef, count => 123},
+    State = arizona_stateful:new(MockEventsModule, TestBindings),
+
+    Result = arizona_stateful:call_unmount_callback(State),
+
+    % Verify the callback received correct state
+    ?assertEqual(ok, Result),
+
+    % Check that unmount was called with the correct state data
+    {unmounted, ReceivedModule, ReceivedBindings} = get(unmount_evidence),
+    ?assertEqual(MockEventsModule, ReceivedModule),
+    ?assertEqual(arizona_binder:new(TestBindings), ReceivedBindings).

@@ -73,7 +73,7 @@ terminate(_Reason, _View) ->
 -export([update_state/2]).
 -export([get_stateful_state/2]).
 -export([fingerprint_matches/4]).
--export([put_fingerprint/4]).
+-export([put_fingerprint/5]).
 -export([remove_fingerprint/3]).
 -export([find_stateful_state/2]).
 -export([put_stateful_state/3]).
@@ -93,6 +93,7 @@ terminate(_Reason, _View) ->
 -export_type([mount_arg/0]).
 -export_type([handle_event_result/0]).
 -export_type([handle_info_result/0]).
+-export_type([component_type/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -104,7 +105,7 @@ terminate(_Reason, _View) ->
     stateful_states :: #{arizona_stateful:id() => arizona_stateful:state()},
     fingerprints :: #{
         arizona_stateful:id() => #{
-            arizona_tracker:element_index() => arizona_template:fingerprint()
+            arizona_tracker:element_index() => {arizona_template:fingerprint(), component_type()}
         }
     }
 }).
@@ -119,6 +120,7 @@ terminate(_Reason, _View) ->
 -nominal mount_arg() :: dynamic().
 -nominal handle_event_result() :: {Actions :: arizona_action:actions(), View :: view()}.
 -nominal handle_info_result() :: {Actions :: arizona_action:actions(), View :: view()}.
+-nominal component_type() :: {stateful, arizona_stateful:id()} | stateless | slot | list.
 
 %% --------------------------------------------------------------------
 %% Behavior callback definitions
@@ -349,39 +351,62 @@ put_stateful_state(Id, State, #view{} = View) ->
     View#view{stateful_states = States#{Id => State}}.
 
 -doc ~"""
-Checks if a stored template fingerprint matches the given fingerprint.
+Checks if a component element has a matching fingerprint.
 
-Returns `true` if the component and element have a matching fingerprint,
-`false` otherwise. Used to determine if differential updates are needed.
+Returns:
+- `true` if the component and element have a matching fingerprint
+- `{false, ComponentType}` if fingerprint exists but doesn't match (component changed)
+- `none` if no fingerprint exists for this component/element (new component)
+
+The component type in the `{false, ComponentType}` case is used for proper component
+lifecycle management, particularly for calling unmount callbacks on stateful
+components that are being replaced.
 """.
--spec fingerprint_matches(Id, ElementIndex, Fingerprint, View) -> boolean() when
-    Id :: arizona_stateful:id(),
-    ElementIndex :: arizona_tracker:element_index(),
-    Fingerprint :: arizona_template:fingerprint(),
-    View :: view().
-fingerprint_matches(Id, ElementIndex, Fingerprint, #view{} = View) ->
-    case View#view.fingerprints of
-        #{Id := #{ElementIndex := Fingerprint}} ->
-            true;
-        #{} ->
-            false
-    end.
-
--doc ~"""
-Stores a template fingerprint for a component element.
-
-Saves the fingerprint for future differential update comparisons.
-Creates nested maps as needed for new components.
-""".
--spec put_fingerprint(Id, ElementIndex, Fingerprint, View) -> View1 when
+-spec fingerprint_matches(Id, ElementIndex, Fingerprint, View) -> Result when
     Id :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     Fingerprint :: arizona_template:fingerprint(),
     View :: view(),
+    Result :: true | {false, component_type()} | none.
+fingerprint_matches(Id, ElementIndex, Fingerprint, #view{} = View) ->
+    case View#view.fingerprints of
+        #{Id := #{ElementIndex := {Fingerprint, _ComponentType}}} ->
+            true;
+        #{Id := #{ElementIndex := {_OtherFingerprint, ComponentType}}} ->
+            {false, ComponentType};
+        #{} ->
+            none
+    end.
+
+-doc ~"""
+Stores a template fingerprint with component type for a component element.
+
+Saves the fingerprint and component type for future differential update
+comparisons. The component type is used for proper component lifecycle management,
+particularly for calling unmount callbacks on stateful components.
+
+Component types:
+- `{stateful, StatefulId}` - For stateful components that may need cleanup
+- `stateless` - For stateless template components
+- `list` - For list and map rendering components
+- `slot` - For slot rendering components
+
+Creates nested maps as needed for new components.
+""".
+-spec put_fingerprint(Id, ElementIndex, Fingerprint, ComponentType, View) -> View1 when
+    Id :: arizona_stateful:id(),
+    ElementIndex :: arizona_tracker:element_index(),
+    Fingerprint :: arizona_template:fingerprint(),
+    ComponentType :: component_type(),
+    View :: view(),
     View1 :: view().
-put_fingerprint(Id, ElementIndex, Fingerprint, #view{fingerprints = Fingerprints} = View) ->
+put_fingerprint(
+    Id, ElementIndex, Fingerprint, ComponentType, #view{fingerprints = Fingerprints} = View
+) ->
     StatefulFingerprints = maps:get(Id, Fingerprints, #{}),
-    UpdatedStatefulFingerprints = StatefulFingerprints#{ElementIndex => Fingerprint},
+    UpdatedStatefulFingerprints = StatefulFingerprints#{
+        ElementIndex => {Fingerprint, ComponentType}
+    },
     View#view{fingerprints = Fingerprints#{Id => UpdatedStatefulFingerprints}}.
 
 -doc ~"""

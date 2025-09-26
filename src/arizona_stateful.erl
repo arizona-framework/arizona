@@ -4,14 +4,28 @@ Stateful component behavior definition and state management.
 
 Defines the behavior for stateful components that maintain internal state
 and can handle WebSocket events. Components implement callbacks for
-mounting, rendering, and event handling while the module manages state
+mounting, rendering, event handling, and cleanup while the module manages state
 and change tracking for efficient differential updates.
 
 ## Behavior Callbacks
 
+### Required
+
 - `mount/1` - Initialize component state from initial bindings
 - `render/1` - Generate template from current bindings
-- `handle_event/3` - Handle WebSocket events (optional, raises if events triggered but not defined)
+
+### Optional
+
+- `handle_event/3` - Handle WebSocket events (raises if events triggered but not defined)
+- `unmount/1` - Cleanup resources when component is removed from component tree
+
+## Component Lifecycle
+
+1. **Mount**: Component is initialized via `mount/1` with initial bindings
+2. **Render**: Template is generated with `render/1` using current bindings
+3. **Events**: User interactions trigger `handle_event/3` callbacks
+4. **Updates**: State changes trigger re-rendering with differential updates
+5. **Unmount**: Component cleanup via `unmount/1` when removed from template
 
 ## State Management
 
@@ -26,9 +40,11 @@ Component state includes:
 -module(counter_component).
 -compile({parse_transform, arizona_parse_transform}).
 -behaviour(arizona_stateful).
--export([mount/1, render/1, handle_event/3]).
+-export([mount/1, render/1, handle_event/3, unmount/1]).
 
 mount(InitialBindings) ->
+    % Subscribe to timer updates
+    arizona_pubsub:join(~"timer_tick", self()),
     arizona_stateful:new(?MODULE, InitialBindings#{count => 0}).
 
 render(Bindings) ->
@@ -49,7 +65,12 @@ render(Bindings) ->
 handle_event(~"increment", _Params, State) ->
     Count = arizona_stateful:get_binding(count, State),
     NewState = arizona_stateful:put_binding(count, Count + 1, State),
-    {noreply, NewState}.
+    {[], NewState}.
+
+% Cleanup when component is removed
+unmount(State) ->
+    arizona_pubsub:leave(~"timer_tick", self()),
+    ok.
 ```
 """".
 
@@ -58,6 +79,7 @@ handle_event(~"increment", _Params, State) ->
 %% --------------------------------------------------------------------
 
 -export([call_mount_callback/2]).
+-export([call_unmount_callback/1]).
 -export([call_render_callback/1]).
 -export([call_handle_event_callback/3]).
 -export([new/2]).
@@ -117,6 +139,42 @@ handle_event(~"increment", _Params, State) ->
     Bindings :: arizona_binder:map(),
     State :: state().
 
+-doc ~"""
+Optional callback for component cleanup when unmounted.
+
+This callback is invoked when a stateful component is removed from the component
+tree (e.g., when the parent template changes and the component is no longer
+rendered). Use this callback to clean up resources such as:
+
+- Cancel active timers
+- Close network connections
+- Unsubscribe from PubSub topics
+- Release GenServer references
+- Clean up ETS tables or other shared resources
+
+Example implementations:
+
+```erlang
+% Timer cleanup
+unmount(State) ->
+    case arizona_stateful:get_binding(timer_ref, State) of
+        undefined -> ok;
+        TimerRef -> timer:cancel(TimerRef)
+    end.
+
+% PubSub cleanup
+unmount(State) ->
+    TopicName = arizona_stateful:get_binding(topic, State),
+    arizona_pubsub:leave(TopicName, self()).
+```
+
+The callback should always return `ok`. If the unmount callback crashes,
+the error will propagate following Erlang's "let it crash" philosophy.
+""".
+-callback unmount(State) -> Result when
+    State :: state(),
+    Result :: ok.
+
 -callback render(Bindings) -> Template when
     Bindings :: arizona_binder:bindings(),
     Template :: arizona_template:template().
@@ -127,7 +185,7 @@ handle_event(~"increment", _Params, State) ->
     State :: arizona_stateful:state(),
     Result :: handle_event_result().
 
--optional_callbacks([handle_event/3]).
+-optional_callbacks([unmount/1, handle_event/3]).
 
 %% --------------------------------------------------------------------
 %% API function definitions
@@ -145,6 +203,29 @@ initialize component state. Used during component lifecycle startup.
     State :: state().
 call_mount_callback(Module, Bindings) ->
     apply(Module, mount, [Bindings]).
+
+-doc ~"""
+Safely calls a component's unmount callback if it exists.
+
+Checks if the component module exports an `unmount/1` function and calls it
+if available. This function handles the optional nature of the unmount callback.
+
+The unmount callback is called when:
+- A stateful component's template fingerprint doesn't match the previous render
+- This happens when the component is replaced by a different component at the same location
+- The previous component at that location was a stateful component that needs cleanup
+""".
+-spec call_unmount_callback(State) -> Result when
+    State :: state(),
+    Result :: ok.
+call_unmount_callback(#state{} = State) ->
+    Module = State#state.module,
+    case erlang:function_exported(Module, unmount, 1) of
+        true ->
+            apply(Module, unmount, [State]);
+        false ->
+            ok
+    end.
 
 -doc ~"""
 Executes a component's render callback.

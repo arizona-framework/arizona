@@ -325,7 +325,9 @@ diff_map_fingerprint_match(Config) when is_list(Config) ->
     ParentId = ~"parent",
     ElementIndex = 1,
     Fingerprint = arizona_template:get_fingerprint(Template),
-    ViewWithFingerprint = arizona_view:put_fingerprint(ParentId, ElementIndex, Fingerprint, View),
+    ViewWithFingerprint = arizona_view:put_fingerprint(
+        ParentId, ElementIndex, Fingerprint, stateless, View
+    ),
 
     % Now call diff_map - should return diff since fingerprints match
     {Diff, _UpdatedView} = arizona_differ:diff_map(
@@ -373,7 +375,7 @@ diff_map_fingerprint_mismatch(Config) when is_list(Config) ->
     % Different from template's actual fingerprint
     WrongFingerprint = 12345,
     ViewWithWrongFingerprint = arizona_view:put_fingerprint(
-        ParentId, ElementIndex, WrongFingerprint, View
+        ParentId, ElementIndex, WrongFingerprint, stateless, View
     ),
 
     % Call diff_map - should return hierarchical struct due to fingerprint mismatch
