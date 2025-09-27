@@ -144,8 +144,13 @@ export default class ArizonaClient {
       // Use Morphdom to efficiently patch the DOM
       morphdom(target, patch.html, {
         onBeforeElUpdated(fromEl, toEl) {
-          // Skip update if nodes are identical
-          return !fromEl.isEqualNode(toEl);
+          // Skip update if data-arizona-update="false"
+          if (toEl.dataset?.arizonaUpdate === 'false') {
+            return false;
+          } else {
+            // Skip update if nodes are identical
+            return !fromEl.isEqualNode(toEl);
+          }
         },
       });
 
