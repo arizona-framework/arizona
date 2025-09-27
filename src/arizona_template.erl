@@ -44,6 +44,7 @@ be created at compile-time via parse transforms or at runtime.
 %% Ignore elvis warnings
 %% --------------------------------------------------------------------
 
+-elvis([{elvis_style, god_modules, disable}]).
 -elvis([{elvis_style, max_module_length, disable}]).
 
 %% --------------------------------------------------------------------
@@ -66,12 +67,18 @@ be created at compile-time via parse transforms or at runtime.
 -export([get_binding_lazy/3]).
 -export([find_binding/2]).
 -export([render_stateful/2]).
+-export([render_stateful/3]).
 -export([render_stateless/3]).
+-export([render_stateless/4]).
 -export([render_slot/1]).
 -export([render_list/2]).
+-export([render_list/3]).
 -export([render_list_template/2]).
+-export([render_list_template/3]).
 -export([render_map/2]).
+-export([render_map/3]).
 -export([render_map_template/2]).
+-export([render_map_template/3]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -89,12 +96,18 @@ be created at compile-time via parse transforms or at runtime.
 -ignore_xref([get_binding_lazy/3]).
 -ignore_xref([find_binding/2]).
 -ignore_xref([render_stateful/2]).
+-ignore_xref([render_stateful/3]).
 -ignore_xref([render_stateless/3]).
+-ignore_xref([render_stateless/4]).
 -ignore_xref([render_slot/1]).
 -ignore_xref([render_list/2]).
+-ignore_xref([render_list/3]).
 -ignore_xref([render_list_template/2]).
+-ignore_xref([render_list_template/3]).
 -ignore_xref([render_map/2]).
+-ignore_xref([render_map/3]).
 -ignore_xref([render_map_template/2]).
+-ignore_xref([render_map_template/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -110,6 +123,7 @@ be created at compile-time via parse transforms or at runtime.
 -export_type([fingerprint/0]).
 -export_type([render_callback/0]).
 -export_type([render_mode/0]).
+-export_type([render_options/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -131,15 +145,21 @@ be created at compile-time via parse transforms or at runtime.
 -nominal dynamic_sequence() :: [pos_integer()].
 -nominal dynamic_anno() :: tuple().
 -nominal fingerprint() :: non_neg_integer().
+% Using specific arizona types instead of erlang:dynamic() makes
+% dialyzer stuck in an infinite check.
 -nominal render_callback() :: fun(
     (
         render_mode(),
         arizona_stateful:id(),
         arizona_tracker:element_index(),
         arizona_view:view()
-    ) -> {dynamic(), arizona_view:view()}
+    ) -> {erlang:dynamic(), arizona_view:view()}
 ).
 -nominal render_mode() :: render | diff | hierarchical.
+-nominal render_options() :: #{
+    % false = skip diff updates for this component
+    update => boolean()
+}.
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -563,11 +583,32 @@ Returns a callback that handles all three rendering modes for the component.
     Bindings :: arizona_binder:map(),
     Callback :: render_callback().
 render_stateful(Module, Bindings) ->
+    render_stateful(Module, Bindings, #{}).
+
+-doc ~"""
+Creates a stateful component rendering callback with options.
+
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
+Returns a callback that handles all three rendering modes for the component.
+
+See `t:render_options/0` for available options.
+""".
+-spec render_stateful(Module, Bindings, Options) -> Callback when
+    Module :: module(),
+    Bindings :: arizona_binder:map(),
+    Options :: render_options(),
+    Callback :: render_callback().
+render_stateful(Module, Bindings, Options) ->
     fun
         (render, _ParentId, _ElementIndex, View) ->
             arizona_renderer:render_stateful(Module, Bindings, View);
         (diff, ParentId, ElementIndex, View) ->
-            arizona_differ:diff_stateful(Module, Bindings, ParentId, ElementIndex, View);
+            case Options of
+                #{update := false} ->
+                    {nodiff, View};
+                #{} ->
+                    arizona_differ:diff_stateful(Module, Bindings, ParentId, ElementIndex, View)
+            end;
         (hierarchical, ParentId, ElementIndex, View) ->
             arizona_hierarchical:hierarchical_stateful(
                 Module, Bindings, ParentId, ElementIndex, View
@@ -586,11 +627,35 @@ Returns a callback that handles all three rendering modes for the component.
     Bindings :: arizona_binder:map(),
     Callback :: render_callback().
 render_stateless(Module, Fun, Bindings) ->
+    render_stateless(Module, Fun, Bindings, #{}).
+
+-doc ~"""
+Creates a stateless component rendering callback with options.
+
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
+Returns a callback that handles all three rendering modes for the component.
+
+See `t:render_options/0` for available options.
+""".
+-spec render_stateless(Module, Function, Bindings, Options) -> Callback when
+    Module :: module(),
+    Function :: atom(),
+    Bindings :: arizona_binder:map(),
+    Options :: render_options(),
+    Callback :: render_callback().
+render_stateless(Module, Fun, Bindings, Options) ->
     fun
         (render, ParentId, _ElementIndex, View) ->
             arizona_renderer:render_stateless(Module, Fun, Bindings, ParentId, View);
         (diff, ParentId, ElementIndex, View) ->
-            arizona_differ:diff_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View);
+            case Options of
+                #{update := false} ->
+                    {nodiff, View};
+                #{} ->
+                    arizona_differ:diff_stateless(
+                        Module, Fun, Bindings, ParentId, ElementIndex, View
+                    )
+            end;
         (hierarchical, ParentId, ElementIndex, View) ->
             arizona_hierarchical:hierarchical_stateless(
                 Module, Fun, Bindings, ParentId, ElementIndex, View
@@ -642,8 +707,28 @@ Requires `debug_info` when used at runtime without parse transform.
     Item :: dynamic(),
     Callback :: render_callback().
 render_list(ItemCallback, List) ->
+    render_list(ItemCallback, List, #{}).
+
+-doc ~"""
+Creates a list rendering callback from an item template function with options.
+
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
+At compile time, arizona_parse_transform converts this into an optimized
+`render_list_template/3` call for better performance.
+
+See `t:render_options/0` for available options.
+
+Requires `debug_info` when used at runtime without parse transform.
+""".
+-spec render_list(ItemCallback, List, Options) -> Callback when
+    ItemCallback :: fun((Item) -> arizona_template:template()),
+    List :: [Item],
+    Item :: dynamic(),
+    Options :: render_options(),
+    Callback :: render_callback().
+render_list(ItemCallback, List, Options) ->
     render_callback_collection(
-        ItemCallback, List, fun arizona_parse_transform:transform_render_list/5
+        ItemCallback, List, Options, fun arizona_parse_transform:transform_render_list/6
     ).
 
 -doc ~"""
@@ -657,11 +742,32 @@ Used internally by the parse transform optimization.
     List :: [dynamic()],
     Callback :: render_callback().
 render_list_template(#template{} = Template, List) ->
+    render_list_template(Template, List, #{}).
+
+-doc ~"""
+Creates a list rendering callback from a compiled template with options.
+
+Regular API function for rendering lists with pre-compiled templates.
+Used internally by the parse transform optimization.
+
+See `t:render_options/0` for available options.
+""".
+-spec render_list_template(Template, List, Options) -> Callback when
+    Template :: template(),
+    List :: [dynamic()],
+    Options :: render_options(),
+    Callback :: render_callback().
+render_list_template(#template{} = Template, List, Options) ->
     fun
         (render, ParentId, _ElementIndex, View) ->
             arizona_renderer:render_list(Template, List, ParentId, View);
         (diff, ParentId, ElementIndex, View) ->
-            arizona_differ:diff_list(Template, List, ParentId, ElementIndex, View);
+            case Options of
+                #{update := false} ->
+                    {nodiff, View};
+                #{} ->
+                    arizona_differ:diff_list(Template, List, ParentId, ElementIndex, View)
+            end;
         (hierarchical, ParentId, ElementIndex, View) ->
             arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
     end.
@@ -674,8 +780,30 @@ render_list_template(#template{} = Template, List) ->
     Value :: dynamic(),
     Callback :: render_callback().
 render_map(ItemCallback, Map) ->
+    render_map(ItemCallback, Map, #{}).
+
+-doc ~"""
+Creates a map rendering callback from an item template function with options.
+
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
+At compile time, arizona_parse_transform converts this into an optimized
+`render_map_template/3` call for better performance.
+
+See `t:render_options/0` for available options.
+
+Requires `debug_info` when used at runtime without parse transform.
+""".
+-spec render_map(ItemCallback, Map, Options) -> Callback when
+    ItemCallback :: fun((Item) -> arizona_template:template()),
+    Map :: map(),
+    Item :: {Key, Value},
+    Key :: dynamic(),
+    Value :: dynamic(),
+    Options :: render_options(),
+    Callback :: render_callback().
+render_map(ItemCallback, Map, Options) ->
     render_callback_collection(
-        ItemCallback, Map, fun arizona_parse_transform:transform_render_map/5
+        ItemCallback, Map, Options, fun arizona_parse_transform:transform_render_map/6
     ).
 
 -spec render_map_template(Template, Map) -> Callback when
@@ -683,11 +811,32 @@ render_map(ItemCallback, Map) ->
     Map :: map(),
     Callback :: render_callback().
 render_map_template(#template{} = Template, Map) ->
+    render_map_template(Template, Map, #{}).
+
+-doc ~"""
+Creates a map rendering callback from a compiled template with options.
+
+Regular API function for rendering maps with pre-compiled templates.
+Used internally by the parse transform optimization.
+
+See `t:render_options/0` for available options.
+""".
+-spec render_map_template(Template, Map, Options) -> Callback when
+    Template :: template(),
+    Map :: map(),
+    Options :: render_options(),
+    Callback :: render_callback().
+render_map_template(#template{} = Template, Map, Options) ->
     fun
         (render, ParentId, _ElementIndex, View) ->
             arizona_renderer:render_map(Template, Map, ParentId, View);
         (diff, ParentId, ElementIndex, View) ->
-            arizona_differ:diff_map(Template, Map, ParentId, ElementIndex, View);
+            case Options of
+                #{update := false} ->
+                    {nodiff, View};
+                #{} ->
+                    arizona_differ:diff_map(Template, Map, ParentId, ElementIndex, View)
+            end;
         (hierarchical, ParentId, ElementIndex, View) ->
             arizona_hierarchical:hierarchical_map(Template, Map, ParentId, ElementIndex, View)
     end.
@@ -740,21 +889,23 @@ priv_filename(App, Filename) ->
 %% applies the specified transformation function, and evaluates the result.
 %% Both render_list and render_map use this same pattern with different
 %% transformation functions.
--spec render_callback_collection(ItemCallback, Collection, TransformFun) -> Callback when
+-spec render_callback_collection(ItemCallback, Collection, Options, TransformFun) -> Callback when
     ItemCallback :: fun((Item) -> arizona_template:template()),
     Collection :: [Item] | map(),
     Item :: dynamic(),
+    Options :: render_options(),
     TransformFun :: fun(
         (
             module(),
             arizona_token:line(),
             erl_syntax:syntaxTree(),
             erl_syntax:syntaxTree(),
+            render_options(),
             [compile:option()]
         ) -> erl_syntax:syntaxTree()
     ),
     Callback :: render_callback().
-render_callback_collection(ItemCallback, Collection, TransformFun) ->
+render_callback_collection(ItemCallback, Collection, Options, TransformFun) ->
     % Extract function clauses from the callback's environment
     % This requires the function to be compiled with debug_info
     case erlang:fun_info(ItemCallback, env) of
@@ -763,8 +914,8 @@ render_callback_collection(ItemCallback, Collection, TransformFun) ->
             FunArg = erl_syntax:revert(erl_syntax:fun_expr(FunClauses)),
             CollectionArg = merl:term(Collection),
 
-            % Use the provided transformation function
-            AST = TransformFun(erlang, 0, FunArg, CollectionArg, []),
+            % Use the provided transformation function with options
+            AST = TransformFun(erlang, 0, FunArg, CollectionArg, Options, []),
 
             % Evaluate the transformed AST to get the final render callback
             erl_eval:expr(
