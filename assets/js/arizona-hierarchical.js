@@ -233,19 +233,6 @@ export class ArizonaHierarchical {
       html: this.generateStatefulHTML(statefulId),
     };
   }
-
-  /**
-   * Create an initial render patch (used on first load)
-   * @param {string} statefulId - Stateful ID to render
-   * @returns {Object} Initial render patch object
-   */
-  createInitialPatch(statefulId) {
-    return {
-      type: 'initial_render',
-      statefulId,
-      html: this.generateStatefulHTML(statefulId),
-    };
-  }
 }
 
 /**

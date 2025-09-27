@@ -147,9 +147,11 @@ Performs complete view rendering and returns hierarchical structure
 suitable for initial HTML generation. Sets up dependency tracking
 and component fingerprints.
 """.
--spec initial_render(Pid) -> HierarchicalStructure when
+-spec initial_render(Pid) -> Result when
     Pid :: pid(),
-    HierarchicalStructure :: arizona_hierarchical_dict:hierarchical_structure().
+    Result :: {HierarchicalStructure, Diff},
+    HierarchicalStructure :: arizona_hierarchical_dict:hierarchical_structure(),
+    Diff :: arizona_differ:diff().
 initial_render(Pid) ->
     gen_server:call(Pid, initial_render, infinity).
 
@@ -208,7 +210,8 @@ handle_call(initial_render, _From, #state{} = State) ->
     undefined = arizona_hierarchical_dict:set_structure(#{}),
     {_Struct, HierarchicalView} = arizona_hierarchical:hierarchical_view(State#state.view),
     HierarchicalStructure = arizona_hierarchical_dict:clear(),
-    {reply, HierarchicalStructure, State#state{view = HierarchicalView}}.
+    {Diff, DiffView} = arizona_differ:diff_view(HierarchicalView),
+    {reply, {HierarchicalStructure, Diff}, State#state{view = DiffView}}.
 
 -spec handle_cast(Message, State) -> Result when
     Message :: term(),

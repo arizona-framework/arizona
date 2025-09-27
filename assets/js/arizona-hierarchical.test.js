@@ -611,14 +611,6 @@ describe('ArizonaHierarchical', () => {
       expect(patch.statefulId).toBe('root');
       expect(patch.html).toBe('<div class="app">Hello Arizona</div>');
     });
-
-    it('should create initial render patch', () => {
-      const patch = client.createInitialPatch('root');
-
-      expect(patch.type).toBe('initial_render');
-      expect(patch.statefulId).toBe('root');
-      expect(patch.html).toBe('<div class="app">Hello Arizona</div>');
-    });
   });
 
   describe('Integration Scenarios', () => {

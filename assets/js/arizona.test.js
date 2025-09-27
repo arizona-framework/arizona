@@ -327,7 +327,7 @@ describe('ArizonaClient', () => {
     });
 
     test('does not dispatch events for HTML patch messages', () => {
-      const patchData = { patch: '<div>test</div>', isInitial: true };
+      const patchData = { patch: { statefulId: 'test', html: '<div>test</div>' } };
       client.handleHtmlPatch(patchData);
 
       expect(mockDocument.dispatchEvent).not.toHaveBeenCalled();

@@ -4,6 +4,12 @@
 -compile([export_all, nowarn_export_all]).
 
 %% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+-elvis([{elvis_style, max_module_length, disable}]).
+
+%% --------------------------------------------------------------------
 %% Behaviour (ct_suite) callbacks
 %% --------------------------------------------------------------------
 
@@ -644,7 +650,7 @@ render_list_with_parse_transform_test(Config) when is_list(Config) ->
     {mock_module, MockModule} = proplists:lookup(mock_module, Config),
 
     % Test that the module compiles and returns a template
-    Template = MockModule:test_template(),
+    Template = apply(MockModule, test_template, []),
     ?assert(arizona_template:is_template(Template)).
 
 render_map_with_parse_transform_test(Config) when is_list(Config) ->
@@ -652,5 +658,5 @@ render_map_with_parse_transform_test(Config) when is_list(Config) ->
     {mock_module, MockModule} = proplists:lookup(mock_module, Config),
 
     % Test that the module compiles and returns a template
-    Template = MockModule:test_template(),
+    Template = apply(MockModule, test_template, []),
     ?assert(arizona_template:is_template(Template)).
