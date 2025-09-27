@@ -12,7 +12,8 @@ all() ->
         {group, template_creation_tests},
         {group, template_accessor_tests},
         {group, template_binding_tests},
-        {group, template_render_callback_tests}
+        {group, template_render_callback_tests},
+        {group, template_render_options_tests}
     ].
 
 groups() ->
@@ -54,6 +55,20 @@ groups() ->
             render_map_error_test,
             from_html_with_module_function_test,
             render_list_error_test
+        ]},
+        {template_render_options_tests, [parallel], [
+            render_stateful_with_options_test,
+            render_stateful_options_diff_false_test,
+            render_stateless_with_options_test,
+            render_stateless_options_diff_false_test,
+            render_list_with_options_test,
+            render_list_options_diff_false_test,
+            render_list_template_with_options_test,
+            render_list_template_options_diff_false_test,
+            render_map_with_options_test,
+            render_map_options_diff_false_test,
+            render_map_template_with_options_test,
+            render_map_template_options_diff_false_test
         ]}
     ].
 
@@ -413,3 +428,153 @@ render_map_error_test(Config) when is_list(Config) ->
         {function_info_failed, _},
         arizona_template:render_map(BadCallback, Map)
     ).
+
+%% --------------------------------------------------------------------
+%% Template render options tests
+%% --------------------------------------------------------------------
+
+render_stateful_with_options_test(Config) when is_list(Config) ->
+    ct:comment("render_stateful/3 should return arity 4 render callback with options"),
+    MockModule = test_module,
+    Bindings = #{id => ~"test"},
+    Options = #{update => true},
+    Callback = arizona_template:render_stateful(MockModule, Bindings, Options),
+    ?assert(is_function(Callback, 4)).
+
+render_stateful_options_diff_false_test(Config) when is_list(Config) ->
+    ct:comment("render_stateful/3 with update => false should return nodiff on diff mode"),
+    MockModule = test_module,
+    Bindings = #{id => ~"test"},
+    Options = #{update => false},
+    Callback = arizona_template:render_stateful(MockModule, Bindings, Options),
+
+    % Mock view for testing
+    MockView = arizona_view:new(test_module, #{}, none),
+    MockParentId = ~"parent",
+    MockElementIndex = 1,
+
+    % Call diff mode - should return nodiff
+    Result = Callback(diff, MockParentId, MockElementIndex, MockView),
+    ?assertEqual({nodiff, MockView}, Result).
+
+render_stateless_with_options_test(Config) when is_list(Config) ->
+    ct:comment("render_stateless/4 should return arity 4 render callback with options"),
+    MockModule = test_module,
+    MockFun = test_function,
+    Bindings = #{data => ~"test"},
+    Options = #{update => true},
+    Callback = arizona_template:render_stateless(MockModule, MockFun, Bindings, Options),
+    ?assert(is_function(Callback, 4)).
+
+render_stateless_options_diff_false_test(Config) when is_list(Config) ->
+    ct:comment("render_stateless/4 with update => false should return nodiff on diff mode"),
+    MockModule = test_module,
+    MockFun = test_function,
+    Bindings = #{data => ~"test"},
+    Options = #{update => false},
+    Callback = arizona_template:render_stateless(MockModule, MockFun, Bindings, Options),
+
+    % Mock view for testing
+    MockView = arizona_view:new(test_module, #{}, none),
+    MockParentId = ~"parent",
+    MockElementIndex = 1,
+
+    % Call diff mode - should return nodiff
+    Result = Callback(diff, MockParentId, MockElementIndex, MockView),
+    ?assertEqual({nodiff, MockView}, Result).
+
+render_list_with_options_test(Config) when is_list(Config) ->
+    ct:comment("render_list/3 should return arity 4 render callback with options"),
+    ItemCallback = fun(_Item) ->
+        arizona_template:from_html(~"<li>test</li>")
+    end,
+    List = [~"item1", ~"item2"],
+    Options = #{update => true},
+    ?assertError(
+        {function_info_failed, _},
+        arizona_template:render_list(ItemCallback, List, Options)
+    ).
+
+render_list_options_diff_false_test(Config) when is_list(Config) ->
+    ct:comment("render_list/3 with update => false should handle options correctly"),
+    ItemCallback = fun(_Item) ->
+        arizona_template:from_html(~"<li>test</li>")
+    end,
+    List = [~"item1", ~"item2"],
+    Options = #{update => false},
+    ?assertError(
+        {function_info_failed, _},
+        arizona_template:render_list(ItemCallback, List, Options)
+    ).
+
+render_list_template_with_options_test(Config) when is_list(Config) ->
+    ct:comment("render_list_template/3 should return arity 4 render callback with options"),
+    Template = arizona_template:from_html(~"<li>{Item}</li>"),
+    List = [~"item1", ~"item2"],
+    Options = #{update => true},
+    Callback = arizona_template:render_list_template(Template, List, Options),
+    ?assert(is_function(Callback, 4)).
+
+render_list_template_options_diff_false_test(Config) when is_list(Config) ->
+    ct:comment("render_list_template/3 with update => false should return nodiff on diff mode"),
+    Template = arizona_template:from_html(~"<li>{Item}</li>"),
+    List = [~"item1", ~"item2"],
+    Options = #{update => false},
+    Callback = arizona_template:render_list_template(Template, List, Options),
+
+    % Mock view for testing
+    MockView = arizona_view:new(test_module, #{}, none),
+    MockParentId = ~"parent",
+    MockElementIndex = 1,
+
+    % Call diff mode - should return nodiff
+    Result = Callback(diff, MockParentId, MockElementIndex, MockView),
+    ?assertEqual({nodiff, MockView}, Result).
+
+render_map_with_options_test(Config) when is_list(Config) ->
+    ct:comment("render_map/3 should return arity 4 render callback with options"),
+    ItemCallback = fun({_Key, _Value}) ->
+        arizona_template:from_html(~"<li>test</li>")
+    end,
+    Map = #{~"key1" => ~"value1"},
+    Options = #{update => true},
+    ?assertError(
+        {function_info_failed, _},
+        arizona_template:render_map(ItemCallback, Map, Options)
+    ).
+
+render_map_options_diff_false_test(Config) when is_list(Config) ->
+    ct:comment("render_map/3 with update => false should handle options correctly"),
+    ItemCallback = fun({_Key, _Value}) ->
+        arizona_template:from_html(~"<li>test</li>")
+    end,
+    Map = #{~"key1" => ~"value1"},
+    Options = #{update => false},
+    ?assertError(
+        {function_info_failed, _},
+        arizona_template:render_map(ItemCallback, Map, Options)
+    ).
+
+render_map_template_with_options_test(Config) when is_list(Config) ->
+    ct:comment("render_map_template/3 should return arity 4 render callback with options"),
+    Template = arizona_template:from_html(~"<li>Key: {Key}, Value: {Value}</li>"),
+    Map = #{~"key1" => ~"value1"},
+    Options = #{update => true},
+    Callback = arizona_template:render_map_template(Template, Map, Options),
+    ?assert(is_function(Callback, 4)).
+
+render_map_template_options_diff_false_test(Config) when is_list(Config) ->
+    ct:comment("render_map_template/3 with update => false should return nodiff on diff mode"),
+    Template = arizona_template:from_html(~"<li>Key: {Key}, Value: {Value}</li>"),
+    Map = #{~"key1" => ~"value1"},
+    Options = #{update => false},
+    Callback = arizona_template:render_map_template(Template, Map, Options),
+
+    % Mock view for testing
+    MockView = arizona_view:new(test_module, #{}, none),
+    MockParentId = ~"parent",
+    MockElementIndex = 1,
+
+    % Call diff mode - should return nodiff
+    Result = Callback(diff, MockParentId, MockElementIndex, MockView),
+    ?assertEqual({nodiff, MockView}, Result).

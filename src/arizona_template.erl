@@ -145,13 +145,15 @@ be created at compile-time via parse transforms or at runtime.
 -nominal dynamic_sequence() :: [pos_integer()].
 -nominal dynamic_anno() :: tuple().
 -nominal fingerprint() :: non_neg_integer().
+% Using specific arizona types instead of erlang:dynamic() makes
+% dialyzer stuck in an infinite check.
 -nominal render_callback() :: fun(
     (
         render_mode(),
         arizona_stateful:id(),
         arizona_tracker:element_index(),
         arizona_view:view()
-    ) -> {dynamic(), arizona_view:view()}
+    ) -> {erlang:dynamic(), arizona_view:view()}
 ).
 -nominal render_mode() :: render | diff | hierarchical.
 -nominal render_options() :: #{
