@@ -68,7 +68,9 @@ groups() ->
             render_map_with_options_test,
             render_map_options_diff_false_test,
             render_map_template_with_options_test,
-            render_map_template_options_diff_false_test
+            render_map_template_options_diff_false_test,
+            render_list_with_parse_transform_test,
+            render_map_with_parse_transform_test
         ]}
     ].
 
@@ -98,6 +100,56 @@ init_per_testcase(from_markdown_priv_file_test, Config) ->
     TargetFile = filename:join(ArizonaPrivDir, Filename),
     {ok, _} = file:copy(SourceFile, TargetFile),
     [{priv_file, TargetFile}, {filename, Filename} | Config];
+init_per_testcase(render_list_with_parse_transform_test, Config) ->
+    MockModule = test_render_list_options,
+    MockModuleCode = merl:qquote(~"""""
+    -module('@module').
+    -compile({parse_transform, arizona_parse_transform}).
+    -export([test_template/0]).
+
+    test_template() ->
+        List = [~"item1", ~"item2"],
+        arizona_template:from_html(~""""
+        <ul>
+        {arizona_template:render_list(
+            fun(Item) ->
+                arizona_template:from_html(~"""
+                <li>{Item}</li>
+                """)
+            end,
+            List,
+            #{update => false}
+        )}
+        </ul>
+        """").
+    """"", [{module, merl:term(MockModule)}]),
+    {ok, _Binary} = merl:compile_and_load(MockModuleCode, []),
+    [{mock_module, MockModule} | Config];
+init_per_testcase(render_map_with_parse_transform_test, Config) ->
+    MockModule = test_render_map_options,
+    MockModuleCode = merl:qquote(~"""""
+    -module('@module').
+    -compile({parse_transform, arizona_parse_transform}).
+    -export([test_template/0]).
+
+    test_template() ->
+        Map = #{~"key1" => ~"value1", ~"key2" => ~"value2"},
+        arizona_template:from_html(~""""
+        <ul>
+        {arizona_template:render_map(
+            fun({Key, Value}) ->
+                arizona_template:from_html(~"""
+                <li>{Key}: {Value}</li>
+                """)
+            end,
+            Map,
+            #{update => false}
+        )}
+        </ul>
+        """").
+    """"", [{module, merl:term(MockModule)}]),
+    {ok, _Binary} = merl:compile_and_load(MockModuleCode, []),
+    [{mock_module, MockModule} | Config];
 init_per_testcase(_TestCase, Config) ->
     Config.
 
@@ -107,6 +159,14 @@ end_per_testcase(TestCase, Config) when
 ->
     {priv_file, PrivFile} = proplists:lookup(priv_file, Config),
     ok = file:delete(PrivFile),
+    ok;
+end_per_testcase(TestCase, Config) when
+    TestCase =:= render_list_with_parse_transform_test;
+    TestCase =:= render_map_with_parse_transform_test
+->
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
+    code:purge(MockModule),
+    code:delete(MockModule),
     ok;
 end_per_testcase(_TestCase, _Config) ->
     ok.
@@ -578,3 +638,19 @@ render_map_template_options_diff_false_test(Config) when is_list(Config) ->
     % Call diff mode - should return nodiff
     Result = Callback(diff, MockParentId, MockElementIndex, MockView),
     ?assertEqual({nodiff, MockView}, Result).
+
+render_list_with_parse_transform_test(Config) when is_list(Config) ->
+    ct:comment("render_list/3 with options should work through parse transform"),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
+
+    % Test that the module compiles and returns a template
+    Template = MockModule:test_template(),
+    ?assert(arizona_template:is_template(Template)).
+
+render_map_with_parse_transform_test(Config) when is_list(Config) ->
+    ct:comment("render_map/3 with options should work through parse transform"),
+    {mock_module, MockModule} = proplists:lookup(mock_module, Config),
+
+    % Test that the module compiles and returns a template
+    Template = MockModule:test_template(),
+    ?assert(arizona_template:is_template(Template)).
