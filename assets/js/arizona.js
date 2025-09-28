@@ -46,13 +46,11 @@ export default class ArizonaClient {
 
   /**
    * Connect to the Arizona WebSocket server
-   * @param {ConnectOptions} [opts={}] - Connection options
+   * @param {string} websocketEndpoint - WebSocket endpoint path
    * @returns {void}
    */
-  connect(opts = {}) {
+  connect(websocketEndpoint) {
     if (this.connected) return;
-
-    const wsPath = opts.wsPath || '/live';
 
     // Use Vite's worker import pattern - more efficient and bundler-aware
     this.worker = new ArizonaWorker();
@@ -63,7 +61,7 @@ export default class ArizonaClient {
     const qs = window.location.search;
     const encodedPath = encodeURIComponent(path);
     const encodeQs = qs ? encodeURIComponent(qs.substring(1)) : '';
-    const wsUrl = `${protocol}//${host}${wsPath}?path=${encodedPath}&qs=${encodeQs}`;
+    const wsUrl = `${protocol}//${host}${websocketEndpoint}?path=${encodedPath}&qs=${encodeQs}`;
 
     this.worker.postMessage({
       type: 'connect',

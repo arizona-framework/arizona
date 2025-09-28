@@ -16,10 +16,10 @@ export default class ArizonaClient {
     logLevel: number;
     /**
      * Connect to the Arizona WebSocket server
-     * @param {ConnectOptions} [opts={}] - Connection options
+     * @param {string} websocketEndpoint - WebSocket endpoint path
      * @returns {void}
      */
-    connect(opts?: ConnectOptions): void;
+    connect(websocketEndpoint: string): void;
     /**
      * Send an event to the Arizona server
      * @param {string} event - Event name

@@ -72,7 +72,7 @@ describe('ArizonaClient', () => {
 
   describe('connect()', () => {
     test('creates inline worker and generates correct WebSocket URL', () => {
-      client.connect();
+      client.connect('/live');
 
       expect(client.worker).toBeInstanceOf(Worker);
       // Inline workers have embedded script source rather than file URLs
@@ -87,7 +87,7 @@ describe('ArizonaClient', () => {
     });
 
     test('uses custom WebSocket path', () => {
-      client.connect({ wsPath: '/custom/ws' });
+      client.connect('/custom/ws');
 
       const postedMessage = client.worker.getLastPostedMessage();
       expect(postedMessage.data.url).toBe('ws://localhost:3000/custom/ws?path=%2Fusers&qs=');
@@ -95,7 +95,7 @@ describe('ArizonaClient', () => {
 
     test('uses wss:// for HTTPS', () => {
       window.location.protocol = 'https:';
-      client.connect();
+      client.connect('/live');
 
       const postedMessage = client.worker.getLastPostedMessage();
       expect(postedMessage.data.url).toBe('wss://localhost:3000/live?path=%2Fusers&qs=');
@@ -105,17 +105,17 @@ describe('ArizonaClient', () => {
     });
 
     test('does not create new worker if already connected', () => {
-      client.connect();
+      client.connect('/live');
       const firstWorker = client.worker;
 
       client.connected = true;
-      client.connect();
+      client.connect('/live');
 
       expect(client.worker).toBe(firstWorker);
     });
 
     test('sets connected state when worker reports connected status', async () => {
-      client.connect();
+      client.connect('/live');
 
       // Give the mock worker time to process and respond
       await new Promise((resolve) => {
@@ -128,7 +128,7 @@ describe('ArizonaClient', () => {
 
   describe('sendEvent()', () => {
     beforeEach(() => {
-      client.connect();
+      client.connect('/live');
       client.connected = true;
     });
 
@@ -186,7 +186,7 @@ describe('ArizonaClient', () => {
 
   describe('sendEventTo()', () => {
     beforeEach(() => {
-      client.connect();
+      client.connect('/live');
       client.connected = true;
     });
 
@@ -271,7 +271,7 @@ describe('ArizonaClient', () => {
 
   describe('disconnect()', () => {
     test('terminates worker and resets state', () => {
-      client.connect();
+      client.connect('/live');
       client.connected = true;
 
       const worker = client.worker;
