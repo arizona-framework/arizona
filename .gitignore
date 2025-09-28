@@ -13,4 +13,3 @@ rebar3.crashdump
 
 # NIF
 *.o
-*.so
