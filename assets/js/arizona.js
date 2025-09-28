@@ -22,11 +22,9 @@ export default class ArizonaClient {
     if (this.connected) return;
 
     const wsPath = opts.wsPath || '/live';
-    const workerPath = opts.workerPath || '/assets/js/arizona-worker.min.js';
 
-    this.worker = new Worker(workerPath, {
-      type: 'module',
-    });
+    // Use Vite's worker import pattern - more efficient and bundler-aware
+    this.worker = new Worker(new URL('./arizona-worker.js', import.meta.url), { type: 'module' });
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
