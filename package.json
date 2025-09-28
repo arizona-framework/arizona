@@ -11,17 +11,13 @@
       "types": "./assets/types/index.d.ts",
       "import": "./priv/static/assets/js/arizona.min.js",
       "require": "./priv/static/assets/js/arizona.min.js"
-    },
-    "./worker": {
-      "import": "./priv/static/assets/js/arizona-worker.min.js",
-      "require": "./priv/static/assets/js/arizona-worker.min.js"
     }
   },
   "files": [
     "README.md",
     "LICENSE.md",
     "package.json",
-    "priv/static/assets/js/*",
+    "priv/static/assets/js/**/*",
     "assets/types/*"
   ],
   "repository": {

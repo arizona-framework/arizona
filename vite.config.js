@@ -1,32 +1,20 @@
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-export default defineConfig(({ mode }) => {
-  const isDev = mode === 'development';
-
+export default defineConfig(({ mode: _mode }) => {
   return {
     build: {
       outDir: 'priv/static/assets/js',
-      minify: !isDev,
+      minify: true,
       sourcemap: true,
-      reportCompressedSize: !isDev,
+      reportCompressedSize: true,
       emptyOutDir: false,
-      lib: {
-        entry: {
-          arizona: resolve(__dirname, 'assets/js/arizona.js'),
-          'arizona-worker': resolve(__dirname, 'assets/js/arizona-worker.js'),
-        },
-        name: 'Arizona',
-        fileName: (_format, entryName) => {
-          return `${entryName}.min.js`;
-        },
-        formats: ['es'],
-      },
       rollupOptions: {
-        external: [],
+        input: 'assets/js/arizona.js',
+        output: {
+          entryFileNames: 'arizona.min.js',
+          chunkFileNames: 'chunks/[name]-[hash].js',
+          assetFileNames: 'assets/[name]-[hash][extname]',
+        },
       },
     },
   };
