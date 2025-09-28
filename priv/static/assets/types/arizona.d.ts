@@ -15,6 +15,12 @@ export default class ArizonaClient {
     /** @type {number} */
     logLevel: number;
     /**
+     * Initialize worker if not already created
+     * @private
+     * @returns {void}
+     */
+    private initializeWorker;
+    /**
      * Connect to the Arizona WebSocket server
      * @param {string} websocketEndpoint - WebSocket endpoint path
      * @returns {void}

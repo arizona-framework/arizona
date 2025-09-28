@@ -45,6 +45,22 @@ export default class ArizonaClient {
   }
 
   /**
+   * Initialize worker if not already created
+   * @private
+   * @returns {void}
+   */
+  initializeWorker() {
+    if (this.worker) return;
+
+    // Use Vite's worker import pattern - more efficient and bundler-aware
+    this.worker = new ArizonaWorker();
+
+    this.worker.onmessage = (event) => {
+      this.handleWorkerMessage(event.data);
+    };
+  }
+
+  /**
    * Connect to the Arizona WebSocket server
    * @param {string} websocketEndpoint - WebSocket endpoint path
    * @returns {void}
@@ -52,8 +68,7 @@ export default class ArizonaClient {
   connect(websocketEndpoint) {
     if (this.connected) return;
 
-    // Use Vite's worker import pattern - more efficient and bundler-aware
-    this.worker = new ArizonaWorker();
+    this.initializeWorker();
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
@@ -67,10 +82,6 @@ export default class ArizonaClient {
       type: 'connect',
       data: { url: wsUrl },
     });
-
-    this.worker.onmessage = (event) => {
-      this.handleWorkerMessage(event.data);
-    };
   }
 
   /**
