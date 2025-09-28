@@ -179,7 +179,7 @@ websocket_init({ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout, WebSo
     % Subscribe to arizona:reload topic
     ok = maybe_join_live_reload(),
 
-    HierarchicalStructure = arizona_live:initial_render(LivePid),
+    {HierarchicalStructure, Diff} = arizona_live:initial_render(LivePid),
     View = arizona_live:get_view(LivePid),
     ViewState = arizona_view:get_state(View),
     ViewId = arizona_stateful:get_binding(id, ViewState),
@@ -191,12 +191,14 @@ websocket_init({ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout, WebSo
         structure => HierarchicalStructure
     }),
 
+    Cmds = [{set_options, WebSocketOpts}, {text, InitialPayload}],
+
     State = #state{
         live_pid = LivePid,
         live_shutdown_timeout = LiveShutdownTimeout
     },
 
-    {[{set_options, WebSocketOpts}, {text, InitialPayload}], State}.
+    handle_diff_response(ViewId, Diff, Cmds, State).
 
 -doc ~"""
 Handles WebSocket messages from client.
@@ -345,7 +347,7 @@ handle_diff_response(StatefulId, Diff, Cmds, #state{} = State) ->
                 stateful_id => StatefulId,
                 changes => Diff
             }),
-            {[{text, DiffPayload} | Cmds], State}
+            {Cmds ++ [{text, DiffPayload}], State}
     end.
 
 %% Handle ping message

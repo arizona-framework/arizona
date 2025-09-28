@@ -58,8 +58,8 @@ $ rebar3 as debug compile
 %% --------------------------------------------------------------------
 
 -export([parse_transform/2]).
--export([transform_render_list/5]).
--export([transform_render_map/5]).
+-export([transform_render_list/6]).
+-export([transform_render_map/6]).
 -export([extract_callback_function_body/4]).
 -export([format_error/2]).
 
@@ -112,31 +112,32 @@ parse_transform(Forms, Options) ->
 
 %% Transform arizona_template:render_list/2 calls
 -doc ~"""
-Transforms `arizona_template:render_list/2` calls into optimized AST.
+Transforms `arizona_template:render_list/3` calls into optimized AST.
 
 Extracts the template function body, compiles it into a template record,
-and creates a call to `arizona_template:render_list_template/2`.
+and creates a call to `arizona_template:render_list_template/3`.
 """.
--spec transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) -> AST when
+-spec transform_render_list(Module, Line, FunArg, ListArg, OptionsArg, CompileOpts) -> AST when
     Module :: module(),
     Line :: arizona_token:line(),
     FunArg :: erl_syntax:syntaxTree(),
     ListArg :: erl_syntax:syntaxTree(),
+    OptionsArg :: erl_syntax:syntaxTree(),
     CompileOpts :: [compile:option()],
     AST :: erl_syntax:syntaxTree().
-transform_render_list(Module, Line, FunArg, ListArg, CompileOpts) ->
+transform_render_list(Module, Line, FunArg, ListArg, OptionsArg, CompileOpts) ->
     try
         % Extract the item parameter and template string from the function
         TemplateAST = extract_callback_function_body(
             Module, Line, FunArg, CompileOpts
         ),
 
-        % Create application: arizona_template:render_list_template(Template, List)
+        % Create application: arizona_template:render_list_template(Template, List, Options)
         TemplateModule = erl_syntax:atom(arizona_template),
         TemplateFunction = erl_syntax:atom(render_list_template),
         erl_syntax:application(
             erl_syntax:module_qualifier(TemplateModule, TemplateFunction), [
-                TemplateAST, ListArg
+                TemplateAST, ListArg, OptionsArg
             ]
         )
     catch
@@ -154,14 +155,15 @@ Transforms render_map calls to optimized render_map_template calls.
 Similar to render_list transformation but for map rendering.
 Extracts the callback function and converts it to a compiled template.
 """.
--spec transform_render_map(Module, Line, FunArg, MapArg, CompileOpts) -> AST when
+-spec transform_render_map(Module, Line, FunArg, MapArg, OptionsArg, CompileOpts) -> AST when
     Module :: module(),
     Line :: arizona_token:line(),
     FunArg :: erl_syntax:syntaxTree(),
     MapArg :: erl_syntax:syntaxTree(),
+    OptionsArg :: erl_syntax:syntaxTree(),
     CompileOpts :: [compile:option()],
     AST :: erl_syntax:syntaxTree().
-transform_render_map(Module, Line, FunArg, MapArg, CompileOpts) ->
+transform_render_map(Module, Line, FunArg, MapArg, OptionsArg, CompileOpts) ->
     try
         % Extract the item parameter and template string from the function
         % Reuse the same extraction logic as render_list since both use fun(Item) -> Template
@@ -169,12 +171,12 @@ transform_render_map(Module, Line, FunArg, MapArg, CompileOpts) ->
             Module, Line, FunArg, CompileOpts
         ),
 
-        % Create application: arizona_template:render_map_template(Template, Map)
+        % Create application: arizona_template:render_map_template(Template, Map, Options)
         TemplateModule = erl_syntax:atom(arizona_template),
         TemplateFunction = erl_syntax:atom(render_map_template),
         erl_syntax:application(
             erl_syntax:module_qualifier(TemplateModule, TemplateFunction), [
-                TemplateAST, MapArg
+                TemplateAST, MapArg, OptionsArg
             ]
         )
     catch
@@ -351,43 +353,61 @@ transform_node(Node, Module, CompileOpts) ->
 transform_application(Node, Module, CompileOpts) ->
     case analyze_application(Node) of
         {arizona_template, from_html, 1, [TemplateArg]} ->
-            % Check if we're in a dynamic callback context to prevent infinite recursion
-            InDynamicCallback = proplists:get_bool(in_dynamic_callback, CompileOpts),
-
-            case InDynamicCallback of
-                true ->
-                    % Inside dynamic callback - don't transform from_html
-                    % to prevent infinite recursion
-                    Node;
-                false ->
-                    % Normal context - transform from_html
-                    Line = get_node_line(Node),
-                    transform_from_html(Module, Line, TemplateArg, CompileOpts)
-            end;
+            transform_template_function(Node, Module, from_html, TemplateArg, CompileOpts);
         {arizona_template, from_markdown, 1, [MarkdownArg]} ->
-            % Check if we're in a dynamic callback context to prevent infinite recursion
-            InDynamicCallback = proplists:get_bool(in_dynamic_callback, CompileOpts),
-
-            case InDynamicCallback of
-                true ->
-                    % Inside dynamic callback - don't transform from_markdown
-                    % to prevent infinite recursion
-                    Node;
-                false ->
-                    % Normal context - transform from_markdown
-                    Line = get_node_line(Node),
-                    transform_from_markdown(Module, Line, MarkdownArg, CompileOpts)
-            end;
+            transform_template_function(Node, Module, from_markdown, MarkdownArg, CompileOpts);
         {arizona_template, render_list, 2, [FunArg, ListArg]} ->
-            % Always transform render_list calls - they don't cause infinite recursion
-            Line = get_node_line(Node),
-            transform_render_list(Module, Line, FunArg, ListArg, CompileOpts);
+            transform_render_collection(
+                Node, Module, render_list, FunArg, ListArg, #{}, CompileOpts
+            );
+        {arizona_template, render_list, 3, [FunArg, ListArg, OptionsArg]} ->
+            transform_render_collection(
+                Node, Module, render_list, FunArg, ListArg, OptionsArg, CompileOpts
+            );
         {arizona_template, render_map, 2, [FunArg, MapArg]} ->
-            % Always transform render_map calls - they don't cause infinite recursion
-            Line = get_node_line(Node),
-            transform_render_map(Module, Line, FunArg, MapArg, CompileOpts);
+            transform_render_collection(Node, Module, render_map, FunArg, MapArg, #{}, CompileOpts);
+        {arizona_template, render_map, 3, [FunArg, MapArg, OptionsArg]} ->
+            transform_render_collection(
+                Node, Module, render_map, FunArg, MapArg, OptionsArg, CompileOpts
+            );
         _ ->
             Node
+    end.
+
+%% Transform template functions (from_html, from_markdown) with recursion prevention
+transform_template_function(Node, Module, FunctionName, TemplateArg, CompileOpts) ->
+    InDynamicCallback = proplists:get_bool(in_dynamic_callback, CompileOpts),
+    case InDynamicCallback of
+        true ->
+            % Inside dynamic callback - don't transform to prevent infinite recursion
+            Node;
+        false ->
+            % Normal context - transform the template function
+            Line = get_node_line(Node),
+            case FunctionName of
+                from_html ->
+                    transform_from_html(Module, Line, TemplateArg, CompileOpts);
+                from_markdown ->
+                    transform_from_markdown(Module, Line, TemplateArg, CompileOpts)
+            end
+    end.
+
+%% Transform render collection functions (render_list, render_map)
+transform_render_collection(
+    Node, Module, FunctionName, FunArg, CollectionArg, OptionsArg, CompileOpts
+) ->
+    Line = get_node_line(Node),
+    % Convert options to AST if it's a literal map
+    OptionsAST =
+        case OptionsArg of
+            #{} -> erl_syntax:abstract(#{});
+            _ -> OptionsArg
+        end,
+    case FunctionName of
+        render_list ->
+            transform_render_list(Module, Line, FunArg, CollectionArg, OptionsAST, CompileOpts);
+        render_map ->
+            transform_render_map(Module, Line, FunArg, CollectionArg, OptionsAST, CompileOpts)
     end.
 
 %% Transform case expressions

@@ -1,6 +1,5 @@
 // Import dependencies
 import morphdom from 'morphdom';
-import ArizonaHierarchical from './arizona-hierarchical.js';
 
 // Log levels (aligned with Erlang logger levels)
 const LOG_LEVELS = {
@@ -16,7 +15,6 @@ export default class ArizonaClient {
   constructor(opts = {}) {
     this.worker = null;
     this.connected = false;
-    this.hierarchical = new ArizonaHierarchical();
     this.logLevel = LOG_LEVELS[opts.logLevel] ?? LOG_LEVELS.silent; // Default: silent (production-safe)
   }
 
@@ -81,7 +79,6 @@ export default class ArizonaClient {
       this.worker = null;
     }
     this.connected = false;
-    this.hierarchical.clear();
   }
 
   handleWorkerMessage(message) {
@@ -91,6 +88,8 @@ export default class ArizonaClient {
       switch (type) {
         case 'status':
           this.handleStatus(data);
+          break;
+        case 'initial_render':
           break;
         case 'html_patch':
           this.handleHtmlPatch(data);
@@ -127,32 +126,10 @@ export default class ArizonaClient {
   }
 
   handleHtmlPatch(data) {
-    const { patch, isInitial } = data;
-
-    if (isInitial) {
-      this.handleInitialRender(patch);
-    } else {
-      this.handleDiffPatch(patch);
-    }
-  }
-
-  handleInitialRender(patch) {
-    this.debug('Applying initial render');
-
-    // Store structure in client-side hierarchical instance for debugging
-    if (patch.structure) {
-      this.hierarchical.initialize(patch.structure);
-    }
-
-    // Apply initial HTML to DOM
-    this.applyHtmlPatch(patch);
-  }
-
-  handleDiffPatch(patch) {
-    this.debug('Applying diff patch');
+    this.debug('Applying HTML patch');
 
     // Apply HTML patch to DOM
-    this.applyHtmlPatch(patch);
+    this.applyHtmlPatch(data.patch);
   }
 
   applyHtmlPatch(patch) {
@@ -167,8 +144,13 @@ export default class ArizonaClient {
       // Use Morphdom to efficiently patch the DOM
       morphdom(target, patch.html, {
         onBeforeElUpdated(fromEl, toEl) {
-          // Skip update if nodes are identical
-          return !fromEl.isEqualNode(toEl);
+          // Skip update if data-arizona-update="false"
+          if (toEl.dataset?.arizonaUpdate === 'false') {
+            return false;
+          } else {
+            // Skip update if nodes are identical
+            return !fromEl.isEqualNode(toEl);
+          }
         },
       });
 

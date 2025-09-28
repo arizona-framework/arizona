@@ -296,9 +296,10 @@ initial_render_test(Config) when is_list(Config) ->
     {mock_view_module, MockViewModule} = proplists:lookup(mock_view_module, Config),
     MockRequest = mock_request(),
     {ok, Pid} = arizona_live:start_link(MockViewModule, #{}, MockRequest, self()),
-    HierarchicalStructure = arizona_live:initial_render(Pid),
+    {HierarchicalStructure, Diff} = arizona_live:initial_render(Pid),
 
     ?assertMatch(#{~"live_test_id" := #{static := _, dynamic := _}}, HierarchicalStructure),
+    ?assertEqual([], Diff),
     #{~"live_test_id" := #{static := Static, dynamic := Dynamic}} = HierarchicalStructure,
     ?assert(is_list(Static)),
     ?assert(is_list(Dynamic)).

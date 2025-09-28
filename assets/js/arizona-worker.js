@@ -1,6 +1,5 @@
 // Import ArizonaHierarchical for client-side structure management
 import ArizonaHierarchical from './arizona-hierarchical.js';
-import { sanitizeForLog } from './arizona-utils.js';
 
 // Arizona WebWorker for WebSocket connection with hierarchical rendering
 class ArizonaWebSocketWorker {
@@ -116,18 +115,6 @@ class ArizonaWebSocketWorker {
   handleInitialRender(message) {
     // Initialize hierarchical structure
     this.hierarchical.initialize(message.structure);
-
-    // Create initial render patch
-    const patch = this.hierarchical.createInitialPatch(message.stateful_id);
-
-    // Send to main thread for DOM application
-    this.postMessage({
-      type: 'html_patch',
-      data: {
-        patch,
-        isInitial: true,
-      },
-    });
   }
 
   handleDiff(message) {
@@ -144,10 +131,7 @@ class ArizonaWebSocketWorker {
     // Send to main thread for DOM application
     this.postMessage({
       type: 'html_patch',
-      data: {
-        patch,
-        isInitial: false,
-      },
+      data: { patch },
     });
   }
 

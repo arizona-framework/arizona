@@ -1,8 +1,15 @@
 // ArizonaClient tests
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// Mock morphdom at the top level
+vi.mock('morphdom', () => ({
+  default: vi.fn(),
+}));
+
 import ArizonaClient from './arizona.js';
 import MockWorker from './__mocks__/Worker.js';
 import MockWebSocket from './__mocks__/WebSocket.js';
+import morphdom from 'morphdom';
 
 // Mock global APIs
 vi.stubGlobal('Worker', MockWorker);
@@ -327,7 +334,7 @@ describe('ArizonaClient', () => {
     });
 
     test('does not dispatch events for HTML patch messages', () => {
-      const patchData = { patch: '<div>test</div>', isInitial: true };
+      const patchData = { patch: { statefulId: 'test', html: '<div>test</div>' } };
       client.handleHtmlPatch(patchData);
 
       expect(mockDocument.dispatchEvent).not.toHaveBeenCalled();
@@ -423,6 +430,93 @@ describe('ArizonaClient', () => {
       debugClient.debug('Test debug');
       expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Test debug');
 
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('data-arizona-update="false" third-party framework integration', () => {
+    let targetElement;
+
+    beforeEach(() => {
+      // Create a target element for morphing
+      targetElement = {
+        id: 'test-component',
+        dispatchEvent: vi.fn(),
+      };
+      mockDocument.getElementById.mockReturnValue(targetElement);
+
+      // Clear morphdom mock before each test
+      vi.mocked(morphdom).mockClear();
+    });
+
+    afterEach(() => {
+      mockDocument.getElementById.mockReturnValue(null);
+    });
+
+    test('skips DOM updates for elements with data-arizona-update="false"', () => {
+      let callback;
+      vi.mocked(morphdom).mockImplementation((target, html, options) => {
+        callback = options.onBeforeElUpdated;
+        return target;
+      });
+
+      client.applyHtmlPatch({
+        statefulId: 'test-component',
+        html: '<div>Updated content</div>',
+      });
+
+      // Test the core feature: skip elements with data-arizona-update="false"
+      const fromEl = { isEqualNode: vi.fn() };
+      const skipEl = { dataset: { arizonaUpdate: 'false' } };
+      expect(callback(fromEl, skipEl)).toBe(false);
+      expect(fromEl.isEqualNode).not.toHaveBeenCalled();
+
+      // Test normal behavior: process other elements with equality check
+      const normalEl = { dataset: {} };
+      fromEl.isEqualNode.mockReturnValue(false);
+      expect(callback(fromEl, normalEl)).toBe(true); // Different nodes = update
+      expect(fromEl.isEqualNode).toHaveBeenCalledWith(normalEl);
+
+      fromEl.isEqualNode.mockReturnValue(true);
+      expect(callback(fromEl, normalEl)).toBe(false); // Same nodes = skip
+    });
+
+    test('triggers arizona:patched event after successful patch', () => {
+      vi.mocked(morphdom).mockImplementation((target) => target);
+
+      const patch = { statefulId: 'test-component', html: '<div>content</div>' };
+      client.applyHtmlPatch(patch);
+
+      expect(targetElement.dispatchEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'arizona:patched',
+          detail: { patch },
+        })
+      );
+    });
+
+    test('handles missing target element gracefully', () => {
+      mockDocument.getElementById.mockReturnValue(null);
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const warningClient = new ArizonaClient({ logLevel: 'warning' });
+
+      warningClient.applyHtmlPatch({ statefulId: 'missing', html: '<div></div>' });
+
+      expect(vi.mocked(morphdom)).not.toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Target element not found: missing');
+      consoleSpy.mockRestore();
+    });
+
+    test('handles morphdom errors gracefully', () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const error = new Error('Morphdom failed');
+      vi.mocked(morphdom).mockImplementation(() => {
+        throw error;
+      });
+
+      client.applyHtmlPatch({ statefulId: 'test-component', html: '<div></div>' });
+
+      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Error applying HTML patch:', error);
       consoleSpy.mockRestore();
     });
   });
