@@ -1,4 +1,5 @@
 // Import dependencies
+import ArizonaWorker from './arizona-worker?worker&inline';
 import morphdom from 'morphdom';
 
 /**
@@ -54,7 +55,7 @@ export default class ArizonaClient {
     const wsPath = opts.wsPath || '/live';
 
     // Use Vite's worker import pattern - more efficient and bundler-aware
-    this.worker = new Worker(new URL('./arizona-worker.js', import.meta.url), { type: 'module' });
+    this.worker = new ArizonaWorker();
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;

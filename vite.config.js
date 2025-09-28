@@ -30,7 +30,22 @@ export default defineConfig(({ mode }) => {
       }),
     ],
 
+    worker: {
+      rollupOptions: {
+        output: {
+          entryFileNames: '[name].min.js',
+          chunkFileNames: 'chunks/[name].min.js',
+          assetFileNames: 'assets/[name].min.js',
+        },
+      },
+    },
+
     build: {
+      lib: {
+        entry: 'assets/js/arizona.js',
+        formats: ['es'],
+        fileName: 'arizona',
+      },
       outDir: 'priv/static/assets/js',
       minify: !isDev,
       sourcemap: true,
@@ -39,9 +54,10 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         input: 'assets/js/arizona.js',
         output: {
-          entryFileNames: 'arizona.min.js',
-          chunkFileNames: 'chunks/[name]-[hash].js',
-          assetFileNames: 'assets/[name]-[hash][extname]',
+          format: 'es',
+          entryFileNames: '[name].min.js',
+          chunkFileNames: 'chunks/[name].min.js',
+          assetFileNames: 'assets/[name].min.js',
         },
         plugins: [
           // License management
