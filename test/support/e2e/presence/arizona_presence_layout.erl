@@ -26,7 +26,7 @@ render(Bindings) ->
         <script type="module" async>
             import Arizona from '/assets/js/arizona.min.js';
             globalThis.arizona = new Arizona();
-            arizona.connect();
+            arizona.connect('/live');
         </script>
     </head>
     <body>

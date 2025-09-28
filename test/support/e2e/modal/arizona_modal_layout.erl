@@ -304,7 +304,7 @@ render(Bindings) ->
         <script type="module">
             import Arizona from '/assets/js/arizona.min.js';
             globalThis.arizona = new Arizona();
-            arizona.connect();
+            arizona.connect('/live');
         </script>
     </body>
     </html>
