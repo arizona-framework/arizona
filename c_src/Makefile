@@ -46,22 +46,38 @@ PRIV_DIR = ../priv
 NIF_SO = $(PRIV_DIR)/arizona_markdown.so
 
 # Default target
-all: $(NIF_SO)
+all: check_nif
 
 # Create priv directory if it doesn't exist
 $(PRIV_DIR):
 	mkdir -p $(PRIV_DIR)
 
-# Compile NIF
-$(NIF_SO): $(PRIV_DIR) $(CMARK_OBJECTS) $(EXTENSION_OBJECTS) $(NIF_OBJECTS)
+# Check if pre-compiled NIF exists
+check_nif: $(PRIV_DIR)
+	@if [ -f $(NIF_SO) ]; then \
+		echo "✅ Using existing pre-compiled NIF: $(NIF_SO)"; \
+	else \
+		echo "🔨 Compiling NIF from source..."; \
+		$(MAKE) compile_nif; \
+	fi
+
+# Actual compilation target
+compile_nif: $(CMARK_OBJECTS) $(EXTENSION_OBJECTS) $(NIF_OBJECTS)
 	$(CC) $(CMARK_OBJECTS) $(EXTENSION_OBJECTS) $(NIF_OBJECTS) $(LDFLAGS) -o $(NIF_SO)
+
+# Force recompilation (ignores pre-compiled)
+force: clean compile_nif
 
 # Compile object files
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Clean target
+# Clean target (preserve pre-compiled .so)
 clean:
+	rm -f $(CMARK_OBJECTS) $(EXTENSION_OBJECTS) $(NIF_OBJECTS)
+
+# Clean everything including pre-compiled .so
+clean-all:
 	rm -f $(CMARK_OBJECTS) $(EXTENSION_OBJECTS) $(NIF_OBJECTS) $(NIF_SO)
 
 # Code quality targets
@@ -89,4 +105,4 @@ lint:
 check: format-check lint
 	@echo "✅ All C code quality checks passed"
 
-.PHONY: all clean format-check format lint check
+.PHONY: all clean clean-all format-check format lint check check_nif compile_nif force
