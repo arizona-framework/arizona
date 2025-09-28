@@ -1,6 +1,6 @@
 {
   "name": "@arizona-framework/client",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "JavaScript client library for Arizona Framework",
   "type": "module",
   "main": "./priv/static/assets/js/arizona.min.js",
