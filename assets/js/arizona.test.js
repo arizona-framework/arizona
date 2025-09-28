@@ -71,13 +71,13 @@ describe('ArizonaClient', () => {
   });
 
   describe('connect()', () => {
-    test('creates worker and generates correct WebSocket URL', () => {
+    test('creates inline worker and generates correct WebSocket URL', () => {
       client.connect();
 
       expect(client.worker).toBeInstanceOf(Worker);
-      expect(client.worker.scriptURL).toBeInstanceOf(URL);
-      expect(client.worker.scriptURL.pathname).toMatch(/arizona-worker\.js$/);
-      expect(client.worker.options).toEqual({ type: 'module' });
+      // Inline workers have embedded script source rather than file URLs
+      expect(client.worker.scriptURL).toBeDefined();
+      expect(client.worker.options).toEqual({ type: 'module', name: undefined });
 
       const postedMessage = client.worker.getLastPostedMessage();
       expect(postedMessage).toEqual({
