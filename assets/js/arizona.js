@@ -1,6 +1,21 @@
 // Import dependencies
 import morphdom from 'morphdom';
 
+/**
+ * @typedef {Object} ArizonaClientOptions
+ * @property {'silent' | 'error' | 'warning' | 'info' | 'debug'} [logLevel] - Log level for client output
+ */
+
+/**
+ * @typedef {Object} ConnectOptions
+ * @property {string} [wsPath] - WebSocket path (default: '/live')
+ */
+
+/**
+ * @typedef {Object} EventParams
+ * @property {*} [key] - Event parameters
+ */
+
 // Log levels (aligned with Erlang logger levels)
 const LOG_LEVELS = {
   silent: -1,
@@ -10,14 +25,29 @@ const LOG_LEVELS = {
   debug: 7,
 };
 
-// Arizona Client API
+/**
+ * Arizona Framework JavaScript Client
+ * Provides real-time WebSocket communication with the Arizona server
+ */
 export default class ArizonaClient {
+  /**
+   * Creates a new Arizona client instance
+   * @param {ArizonaClientOptions} [opts={}] - Client configuration options
+   */
   constructor(opts = {}) {
+    /** @type {Worker|null} */
     this.worker = null;
+    /** @type {boolean} */
     this.connected = false;
+    /** @type {number} */
     this.logLevel = LOG_LEVELS[opts.logLevel] ?? LOG_LEVELS.silent; // Default: silent (production-safe)
   }
 
+  /**
+   * Connect to the Arizona WebSocket server
+   * @param {ConnectOptions} [opts={}] - Connection options
+   * @returns {void}
+   */
   connect(opts = {}) {
     if (this.connected) return;
 
@@ -44,6 +74,12 @@ export default class ArizonaClient {
     };
   }
 
+  /**
+   * Send an event to the Arizona server
+   * @param {string} event - Event name
+   * @param {EventParams} [params={}] - Event parameters
+   * @returns {void}
+   */
   sendEvent(event, params = {}) {
     if (!this.connected) return;
 
@@ -57,6 +93,13 @@ export default class ArizonaClient {
     });
   }
 
+  /**
+   * Send an event to a specific stateful component
+   * @param {string} statefulId - Target stateful component ID
+   * @param {string} event - Event name
+   * @param {EventParams} [params={}] - Event parameters
+   * @returns {void}
+   */
   sendEventTo(statefulId, event, params = {}) {
     if (!this.connected) return;
 
@@ -71,6 +114,10 @@ export default class ArizonaClient {
     });
   }
 
+  /**
+   * Disconnect from the Arizona WebSocket server
+   * @returns {void}
+   */
   disconnect() {
     if (this.worker) {
       this.worker.terminate();
@@ -79,6 +126,12 @@ export default class ArizonaClient {
     this.connected = false;
   }
 
+  /**
+   * Handle messages from the worker thread
+   * @private
+   * @param {Object} message - Worker message
+   * @returns {void}
+   */
   handleWorkerMessage(message) {
     const { type, data } = message;
 
@@ -210,28 +263,57 @@ export default class ArizonaClient {
     );
   }
 
+  /**
+   * Check if client is connected to server
+   * @returns {boolean} True if connected
+   */
   isConnected() {
     return this.connected;
   }
 
   // Logging methods aligned with Erlang logger levels
+
+  /**
+   * Log error message (always shown)
+   * @param {string} message - Error message
+   * @param {...*} args - Additional arguments
+   * @returns {void}
+   */
   error(message, ...args) {
     // Always show errors (critical for debugging)
     console.error(`[Arizona] ${message}`, ...args);
   }
 
+  /**
+   * Log warning message (shown if log level allows)
+   * @param {string} message - Warning message
+   * @param {...*} args - Additional arguments
+   * @returns {void}
+   */
   warning(message, ...args) {
     if (this.logLevel >= LOG_LEVELS.warning) {
       console.warn(`[Arizona] ${message}`, ...args);
     }
   }
 
+  /**
+   * Log info message (shown if log level allows)
+   * @param {string} message - Info message
+   * @param {...*} args - Additional arguments
+   * @returns {void}
+   */
   info(message, ...args) {
     if (this.logLevel >= LOG_LEVELS.info) {
       console.log(`[Arizona] ${message}`, ...args);
     }
   }
 
+  /**
+   * Log debug message (shown if log level allows)
+   * @param {string} message - Debug message
+   * @param {...*} args - Additional arguments
+   * @returns {void}
+   */
   debug(message, ...args) {
     if (this.logLevel >= LOG_LEVELS.debug) {
       console.log(`[Arizona] ${message}`, ...args);
