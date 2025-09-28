@@ -27,7 +27,7 @@ export default [
       eqeqeq: 'error', // Require `===` and `!==` (no loose equality)
       'no-implicit-coercion': 'error', // Ban `+str`, `!!bool` coercions
       strict: ['error', 'global'], // Require `'use strict'` (for older JS)
-      'no-console': 'error', // Ban console.* functions
+      'no-console': 'off', // Allow console.* functions in client library for logging
 
       // Error Prevention
       'no-undef': 'error', // All variables must be defined

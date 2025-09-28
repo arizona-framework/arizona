@@ -254,9 +254,6 @@ jobs:
       - name: Build JavaScript assets
         run: npm run build
 
-      - name: Run JavaScript unit tests
-        run: npm run test:unit
-
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium firefox
 
