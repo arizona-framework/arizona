@@ -75,6 +75,8 @@ groups() ->
             render_map_options_diff_false_test,
             render_map_template_with_options_test,
             render_map_template_options_diff_false_test,
+            render_slot_with_options_test,
+            render_slot_options_diff_false_test,
             render_list_with_parse_transform_test,
             render_map_with_parse_transform_test
         ]}
@@ -660,3 +662,40 @@ render_map_with_parse_transform_test(Config) when is_list(Config) ->
     % Test that the module compiles and returns a template
     Template = apply(MockModule, test_template, []),
     ?assert(arizona_template:is_template(Template)).
+
+render_slot_with_options_test(Config) when is_list(Config) ->
+    ct:comment("render_slot/2 should return arity 4 render callback with options for view slot"),
+    Options = #{update => true},
+    Callback = arizona_template:render_slot(view, Options),
+    ?assert(is_function(Callback, 4)),
+
+    % Test with template slot
+    Template = arizona_template:from_html(~"<div>Test content</div>"),
+    TemplateCallback = arizona_template:render_slot(Template, Options),
+    ?assert(is_function(TemplateCallback, 4)),
+
+    % Test with HTML term slot
+    HtmlResult = arizona_template:render_slot(~"<span>HTML term</span>", Options),
+    ?assertEqual(~"<span>HTML term</span>", HtmlResult).
+
+render_slot_options_diff_false_test(Config) when is_list(Config) ->
+    ct:comment("render_slot/2 with update => false should return nodiff on diff mode"),
+    Options = #{update => false},
+
+    % Test with view slot
+    ViewCallback = arizona_template:render_slot(view, Options),
+    MockView = arizona_view:new(test_module, #{}, none),
+    MockParentId = ~"parent",
+    MockElementIndex = 1,
+    ViewResult = ViewCallback(diff, MockParentId, MockElementIndex, MockView),
+    ?assertEqual({nodiff, MockView}, ViewResult),
+
+    % Test with template slot
+    Template = arizona_template:from_html(~"<div>Test content</div>"),
+    TemplateCallback = arizona_template:render_slot(Template, Options),
+    TemplateResult = TemplateCallback(diff, MockParentId, MockElementIndex, MockView),
+    ?assertEqual({nodiff, MockView}, TemplateResult),
+
+    % Test with HTML term slot (should not be affected by options)
+    HtmlResult = arizona_template:render_slot(~"<span>HTML term</span>", Options),
+    ?assertEqual(~"<span>HTML term</span>", HtmlResult).

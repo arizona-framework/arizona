@@ -71,6 +71,7 @@ be created at compile-time via parse transforms or at runtime.
 -export([render_stateless/3]).
 -export([render_stateless/4]).
 -export([render_slot/1]).
+-export([render_slot/2]).
 -export([render_list/2]).
 -export([render_list/3]).
 -export([render_list_template/2]).
@@ -100,6 +101,7 @@ be created at compile-time via parse transforms or at runtime.
 -ignore_xref([render_stateless/3]).
 -ignore_xref([render_stateless/4]).
 -ignore_xref([render_slot/1]).
+-ignore_xref([render_slot/2]).
 -ignore_xref([render_list/2]).
 -ignore_xref([render_list/3]).
 -ignore_xref([render_list_template/2]).
@@ -671,25 +673,50 @@ Handles different slot types: view (current view), template records, or HTML val
 -spec render_slot(Slot) -> Callback when
     Slot :: view | template() | arizona_html:value(),
     Callback :: render_callback() | arizona_html:html().
-render_slot(view) ->
+render_slot(Slot) ->
+    render_slot(Slot, #{}).
+
+-doc ~"""
+Renders a slot with view, template, or HTML content with options.
+
+Template DSL function - only use inside `arizona_template:from_html/1` strings.
+Handles different slot types: view (current view), template records, or HTML values.
+
+See `t:render_options/0` for available options.
+""".
+-spec render_slot(Slot, Options) -> Callback when
+    Slot :: view | template() | arizona_html:value(),
+    Options :: render_options(),
+    Callback :: render_callback() | arizona_html:html().
+render_slot(view, Options) ->
     fun
         (render, _ParentId, _ElementIndex, View) ->
             arizona_renderer:render_view(View);
         (diff, _ParentId, _ElementIndex, View) ->
-            arizona_differ:diff_view(View);
+            case Options of
+                #{update := false} ->
+                    {nodiff, View};
+                #{} ->
+                    arizona_differ:diff_view(View)
+            end;
         (hierarchical, _ParentId, _ElementIndex, View) ->
             arizona_hierarchical:hierarchical_view(View)
     end;
-render_slot(#template{} = Template) ->
+render_slot(#template{} = Template, Options) ->
     fun
         (render, ParentId, _ElementIndex, View) ->
             arizona_renderer:render_template(Template, ParentId, View);
         (diff, ParentId, ElementIndex, View) ->
-            arizona_differ:diff_template(Template, ParentId, ElementIndex, slot, View);
+            case Options of
+                #{update := false} ->
+                    {nodiff, View};
+                #{} ->
+                    arizona_differ:diff_template(Template, ParentId, ElementIndex, slot, View)
+            end;
         (hierarchical, ParentId, ElementIndex, View) ->
             arizona_hierarchical:hierarchical_template(Template, ParentId, ElementIndex, slot, View)
     end;
-render_slot(Term) ->
+render_slot(Term, _Options) ->
     arizona_html:to_html(Term).
 
 -doc ~"""
