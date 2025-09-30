@@ -18,6 +18,7 @@ vi.stubGlobal('WebSocket', MockWebSocket);
 const mockDocument = {
   dispatchEvent: vi.fn(),
   getElementById: vi.fn().mockReturnValue(null),
+  querySelector: vi.fn().mockReturnValue(null),
 };
 vi.stubGlobal('document', mockDocument);
 
@@ -41,6 +42,7 @@ describe('ArizonaClient', () => {
     }
     // Clear document event dispatch mock
     mockDocument.dispatchEvent.mockClear();
+    mockDocument.querySelector.mockClear();
   });
 
   afterEach(() => {
@@ -353,6 +355,77 @@ describe('ArizonaClient', () => {
           detail: { type: eventType, data: eventData },
         })
       );
+    });
+
+    test('handles dispatch_to messages and dispatches custom events to target elements', () => {
+      const mockElement = {
+        dispatchEvent: vi.fn(),
+      };
+      mockDocument.querySelector.mockReturnValue(mockElement);
+
+      const dispatchData = {
+        selector: '.target-button',
+        event: 'customClick',
+        options: { detail: { userId: 123, action: 'increment' } },
+      };
+
+      client.handleDispatchTo(dispatchData);
+
+      expect(mockDocument.querySelector).toHaveBeenCalledWith('.target-button');
+      expect(mockElement.dispatchEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'customClick',
+          detail: { userId: 123, action: 'increment' },
+        })
+      );
+    });
+
+    test('handles dispatch_to with element not found gracefully', () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockDocument.querySelector.mockReturnValue(null);
+
+      const dispatchData = {
+        selector: '.non-existent',
+        event: 'testEvent',
+        options: { detail: { data: 'test' } },
+      };
+
+      expect(() => {
+        client.handleDispatchTo(dispatchData);
+      }).toThrow();
+
+      consoleSpy.mockRestore();
+    });
+
+    test('handles dispatch_to with various CSS selectors', () => {
+      const mockElement = {
+        dispatchEvent: vi.fn(),
+      };
+      mockDocument.querySelector.mockReturnValue(mockElement);
+
+      // Test ID selector
+      client.handleDispatchTo({
+        selector: '#my-button',
+        event: 'click',
+        options: { detail: { buttonId: 'my-button' } },
+      });
+
+      // Test class selector
+      client.handleDispatchTo({
+        selector: '.notification',
+        event: 'dismiss',
+        options: { detail: { notificationId: 'alert-1' } },
+      });
+
+      // Test attribute selector
+      client.handleDispatchTo({
+        selector: '[data-component="counter"]',
+        event: 'update',
+        options: { detail: { value: 42 } },
+      });
+
+      expect(mockDocument.querySelector).toHaveBeenCalledTimes(3);
+      expect(mockElement.dispatchEvent).toHaveBeenCalledTimes(3);
     });
   });
 
