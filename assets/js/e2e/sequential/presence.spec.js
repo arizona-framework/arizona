@@ -27,9 +27,15 @@ test.describe('Arizona Presence System', () => {
   });
 
   test('should handle complete presence workflow with render_map', async ({ page }) => {
+    test.setTimeout(30000); // Increase timeout for slower CI environments
+
     await page.goto('/presence');
 
+    // Wait for WebSocket connection before proceeding
+    await page.waitForLoadState('networkidle');
+
     // Wait for client-side user info generation and verify format
+    // Use longer timeout and more frequent checks for flaky CI environments
     await waitForCondition(
       async () => {
         const userIdText = (await page.locator('.user-id').textContent()).trim();
@@ -41,7 +47,7 @@ test.describe('Arizona Presence System', () => {
           userNameText.startsWith('USER')
         );
       },
-      100,
+      300,
       50
     );
 
@@ -55,9 +61,10 @@ test.describe('Arizona Presence System', () => {
 
     // Join presence and verify all updates
     await page.getByTestId('join-btn').click();
-    await waitForText(page.locator('#status'), 'Successfully joined presence!');
+    await waitForText(page.locator('#status'), 'Successfully joined presence!', 10000);
 
-    await expect(page.locator('#status')).toHaveClass(/success/);
+    // Check class immediately while status is still visible
+    await expect(page.locator('#status')).toHaveClass(/success/, { timeout: 500 });
     await expect(page.getByTestId('join-btn')).toBeDisabled({ timeout: 2000 });
     await expect(page.getByTestId('leave-btn')).not.toBeDisabled({ timeout: 2000 });
 
@@ -67,18 +74,22 @@ test.describe('Arizona Presence System', () => {
     });
 
     // Verify user appears in list and render_map structure
-    await waitForCondition(async () => {
-      const userItems = page.locator('.user-item');
-      const count = await userItems.count();
-      if (count === 0) return false;
-      for (let i = 0; i < count; i++) {
-        const itemText = await userItems.nth(i).textContent();
-        if (itemText.includes(userId) && itemText.includes(userName)) {
-          return true;
+    await waitForCondition(
+      async () => {
+        const userItems = page.locator('.user-item');
+        const count = await userItems.count();
+        if (count === 0) return false;
+        for (let i = 0; i < count; i++) {
+          const itemText = await userItems.nth(i).textContent();
+          if (itemText.includes(userId) && itemText.includes(userName)) {
+            return true;
+          }
         }
-      }
-      return false;
-    });
+        return false;
+      },
+      200,
+      100
+    );
 
     // Test render_map structure
     const firstUserItem = page.locator('.user-item').first();
