@@ -293,30 +293,6 @@ describe('ArizonaClient', () => {
   });
 
   describe('custom event dispatching', () => {
-    test('dispatches arizonaEvent for error messages', () => {
-      const errorData = { error: 'Something went wrong' };
-      client.handleWorkerError(errorData);
-
-      expect(mockDocument.dispatchEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'arizonaEvent',
-          detail: { type: 'error', data: errorData },
-        })
-      );
-    });
-
-    test('dispatches arizonaEvent for status changes', () => {
-      const statusData = { status: 'connected' };
-      client.handleStatus(statusData);
-
-      expect(mockDocument.dispatchEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'arizonaEvent',
-          detail: { type: 'status', data: statusData },
-        })
-      );
-    });
-
     test('does not dispatch events for reload messages', () => {
       client.handleReload({});
 
@@ -329,20 +305,6 @@ describe('ArizonaClient', () => {
       client.handleHtmlPatch(patchData);
 
       expect(mockDocument.dispatchEvent).not.toHaveBeenCalled();
-    });
-
-    test('dispatchArizonaEvent creates custom event with correct structure', () => {
-      const eventType = 'test_event';
-      const eventData = { test: 'data' };
-
-      client.dispatchArizonaEvent(eventType, eventData);
-
-      expect(mockDocument.dispatchEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'arizonaEvent',
-          detail: { type: eventType, data: eventData },
-        })
-      );
     });
 
     test('handles dispatch_to messages and dispatches custom events to target elements', () => {
@@ -493,6 +455,157 @@ describe('ArizonaClient', () => {
       expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Test debug');
 
       consoleSpy.mockRestore();
+    });
+  });
+
+  describe('Event subscription system', () => {
+    test('on() subscribes to events and returns unsubscribe function', () => {
+      const callback = vi.fn();
+      const unsubscribe = client.on('connected', callback);
+
+      expect(typeof unsubscribe).toBe('function');
+      expect(client.eventListeners.has('connected')).toBe(true);
+      expect(client.eventListeners.get('connected').has(callback)).toBe(true);
+    });
+
+    test('on() with non-function callback logs error and returns noop', () => {
+      const errorSpy = vi.spyOn(client, 'error').mockImplementation(() => {});
+      const unsubscribe = client.on('connected', 'not-a-function');
+
+      expect(errorSpy).toHaveBeenCalledWith('on: callback must be a function, got string');
+      expect(typeof unsubscribe).toBe('function');
+      expect(client.eventListeners.has('connected')).toBe(false);
+
+      errorSpy.mockRestore();
+    });
+
+    test('emit() calls all subscribed listeners with event data', () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+      const eventData = { status: 'connected' };
+
+      client.on('connected', callback1);
+      client.on('connected', callback2);
+      client.emit('connected', eventData);
+
+      expect(callback1).toHaveBeenCalledWith(eventData);
+      expect(callback2).toHaveBeenCalledWith(eventData);
+      expect(callback1).toHaveBeenCalledTimes(1);
+      expect(callback2).toHaveBeenCalledTimes(1);
+    });
+
+    test('emit() handles listener errors gracefully', () => {
+      const errorSpy = vi.spyOn(client, 'error').mockImplementation(() => {});
+      const error = new Error('Listener error');
+      const failingCallback = vi.fn(() => {
+        throw error;
+      });
+      const successCallback = vi.fn();
+
+      client.on('connected', failingCallback);
+      client.on('connected', successCallback);
+      client.emit('connected', { status: 'connected' });
+
+      expect(failingCallback).toHaveBeenCalled();
+      expect(successCallback).toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith("Error in event listener for 'connected':", error);
+
+      errorSpy.mockRestore();
+    });
+
+    test('emit() with no listeners does nothing', () => {
+      expect(() => client.emit('nonexistent', {})).not.toThrow();
+    });
+
+    test('off() unsubscribes callback from event', () => {
+      const callback = vi.fn();
+      client.on('connected', callback);
+      client.off('connected', callback);
+
+      expect(client.eventListeners.has('connected')).toBe(false);
+      client.emit('connected', {});
+      expect(callback).not.toHaveBeenCalled();
+    });
+
+    test('off() cleans up empty listener sets', () => {
+      const callback = vi.fn();
+      client.on('connected', callback);
+      expect(client.eventListeners.has('connected')).toBe(true);
+
+      client.off('connected', callback);
+      expect(client.eventListeners.has('connected')).toBe(false);
+    });
+
+    test('unsubscribe function returned by on() works correctly', () => {
+      const callback = vi.fn();
+      const unsubscribe = client.on('connected', callback);
+
+      client.emit('connected', {});
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      unsubscribe();
+      client.emit('connected', {});
+      expect(callback).toHaveBeenCalledTimes(1);
+    });
+
+    test('handleStatus emits connected event', () => {
+      const callback = vi.fn();
+      client.on('connected', callback);
+
+      client.handleStatus({ status: 'connected' });
+
+      expect(callback).toHaveBeenCalledWith({ status: 'connected' });
+      expect(client.connected).toBe(true);
+    });
+
+    test('handleStatus emits disconnected event', () => {
+      const callback = vi.fn();
+      client.on('disconnected', callback);
+
+      client.handleStatus({ status: 'disconnected' });
+
+      expect(callback).toHaveBeenCalledWith({ status: 'disconnected' });
+      expect(client.connected).toBe(false);
+    });
+
+    test('multiple listeners can subscribe to same event', () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+      const callback3 = vi.fn();
+
+      client.on('connected', callback1);
+      client.on('connected', callback2);
+      client.on('connected', callback3);
+
+      client.emit('connected', {});
+
+      expect(callback1).toHaveBeenCalledTimes(1);
+      expect(callback2).toHaveBeenCalledTimes(1);
+      expect(callback3).toHaveBeenCalledTimes(1);
+    });
+
+    test('removing one listener does not affect others', () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+
+      client.on('connected', callback1);
+      client.on('connected', callback2);
+      client.off('connected', callback1);
+
+      client.emit('connected', {});
+
+      expect(callback1).not.toHaveBeenCalled();
+      expect(callback2).toHaveBeenCalledTimes(1);
+    });
+
+    test('handleWorkerError emits error event', () => {
+      const callback = vi.fn();
+      client.on('error', callback);
+
+      const errorData = { error: 'Something went wrong' };
+      client.handleWorkerError(errorData);
+
+      expect(callback).toHaveBeenCalledWith(errorData);
     });
   });
 

@@ -14,6 +14,8 @@ export default class ArizonaClient {
     connected: boolean;
     /** @type {number} */
     logLevel: number;
+    /** @type {Map<string, Set<Function>>} */
+    eventListeners: Map<string, Set<Function>>;
     /**
      * Initialize worker if not already created
      * @private
@@ -61,7 +63,6 @@ export default class ArizonaClient {
     handleDispatchTo(data: any): void;
     handleRedirect(data: any): void;
     handleUnknownMessage(message: any): void;
-    dispatchArizonaEvent(eventType: any, eventData: any): void;
     /**
      * Check if client is connected to server
      * @returns {boolean} True if connected
@@ -95,6 +96,28 @@ export default class ArizonaClient {
      * @returns {void}
      */
     debug(message: string, ...args: any[]): void;
+    /**
+     * Subscribe to an Arizona event
+     * @param {string} event - Event name (e.g., 'connected', 'disconnected')
+     * @param {Function} callback - Callback function to invoke when event occurs
+     * @returns {Function} Unsubscribe function
+     */
+    on(event: string, callback: Function): Function;
+    /**
+     * Unsubscribe from an Arizona event
+     * @param {string} event - Event name
+     * @param {Function} callback - Callback function to remove
+     * @returns {void}
+     */
+    off(event: string, callback: Function): void;
+    /**
+     * Emit an Arizona event to all subscribed listeners
+     * @private
+     * @param {string} event - Event name
+     * @param {*} data - Event data to pass to listeners
+     * @returns {void}
+     */
+    private emit;
 }
 export type ArizonaClientOptions = {
     /**

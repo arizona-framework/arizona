@@ -42,6 +42,8 @@ export default class ArizonaClient {
     this.connected = false;
     /** @type {number} */
     this.logLevel = LOG_LEVELS[opts.logLevel] ?? LOG_LEVELS.silent; // Default: silent (production-safe)
+    /** @type {Map<string, Set<Function>>} */
+    this.eventListeners = new Map();
   }
 
   /**
@@ -179,11 +181,12 @@ export default class ArizonaClient {
     if (data.status === 'connected') {
       this.connected = true;
       this.info('Connected to WebSocket');
+      this.emit('connected', data);
     } else if (data.status === 'disconnected') {
       this.connected = false;
       this.info('Disconnected from WebSocket');
+      this.emit('disconnected', data);
     }
-    this.dispatchArizonaEvent('status', data);
   }
 
   handleHtmlPatch(data) {
@@ -230,7 +233,7 @@ export default class ArizonaClient {
 
   handleWorkerError(data) {
     this.error('Worker Error:', data.error);
-    this.dispatchArizonaEvent('error', data);
+    this.emit('error', data);
   }
 
   handleReload(data) {
@@ -256,7 +259,6 @@ export default class ArizonaClient {
 
   handleRedirect(data) {
     this.info('Redirecting to:', data.url);
-    this.dispatchArizonaEvent('redirect', data);
 
     // Perform the redirect with safe option access
     window.open(data.url, data.options?.target, data.options?.window_features);
@@ -264,14 +266,6 @@ export default class ArizonaClient {
 
   handleUnknownMessage(message) {
     this.warning('Unknown worker message:', message);
-  }
-
-  dispatchArizonaEvent(eventType, eventData) {
-    document.dispatchEvent(
-      new CustomEvent('arizonaEvent', {
-        detail: { type: eventType, data: eventData },
-      })
-    );
   }
 
   /**
@@ -328,6 +322,70 @@ export default class ArizonaClient {
   debug(message, ...args) {
     if (this.logLevel >= LOG_LEVELS.debug) {
       console.log(`[Arizona] ${message}`, ...args);
+    }
+  }
+
+  /**
+   * Subscribe to an Arizona event
+   * @param {string} event - Event name (e.g., 'connected', 'disconnected')
+   * @param {Function} callback - Callback function to invoke when event occurs
+   * @returns {Function} Unsubscribe function
+   */
+  on(event, callback) {
+    if (typeof callback !== 'function') {
+      this.error(`on: callback must be a function, got ${typeof callback}`);
+      return () => {};
+    }
+
+    if (!this.eventListeners.has(event)) {
+      this.eventListeners.set(event, new Set());
+    }
+
+    this.eventListeners.get(event).add(callback);
+    this.debug(`Subscribed to event: ${event}`);
+
+    // Return unsubscribe function
+    return () => {
+      return this.off(event, callback);
+    };
+  }
+
+  /**
+   * Unsubscribe from an Arizona event
+   * @param {string} event - Event name
+   * @param {Function} callback - Callback function to remove
+   * @returns {void}
+   */
+  off(event, callback) {
+    const listeners = this.eventListeners.get(event);
+    if (listeners) {
+      listeners.delete(callback);
+      this.debug(`Unsubscribed from event: ${event}`);
+
+      // Clean up empty listener sets
+      if (listeners.size === 0) {
+        this.eventListeners.delete(event);
+      }
+    }
+  }
+
+  /**
+   * Emit an Arizona event to all subscribed listeners
+   * @private
+   * @param {string} event - Event name
+   * @param {*} data - Event data to pass to listeners
+   * @returns {void}
+   */
+  emit(event, data) {
+    const listeners = this.eventListeners.get(event);
+    if (listeners) {
+      listeners.forEach((callback) => {
+        try {
+          callback(data);
+        } catch (error) {
+          this.error(`Error in event listener for '${event}':`, error);
+        }
+      });
     }
   }
 }
