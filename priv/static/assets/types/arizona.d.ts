@@ -14,6 +14,8 @@ export default class ArizonaClient {
     connected: boolean;
     /** @type {number} */
     logLevel: number;
+    /** @type {Map<string, Set<Function>>} */
+    eventListeners: Map<string, Set<Function>>;
     /**
      * Initialize worker if not already created
      * @private
@@ -27,20 +29,20 @@ export default class ArizonaClient {
      */
     connect(websocketEndpoint: string): void;
     /**
-     * Send an event to the Arizona server
+     * Push an event to the Arizona server
      * @param {string} event - Event name
      * @param {EventParams} [params={}] - Event parameters
      * @returns {void}
      */
-    sendEvent(event: string, params?: EventParams): void;
+    pushEvent(event: string, params?: EventParams): void;
     /**
-     * Send an event to a specific stateful component
+     * Push an event to a specific stateful component
      * @param {string} statefulId - Target stateful component ID
      * @param {string} event - Event name
      * @param {EventParams} [params={}] - Event parameters
      * @returns {void}
      */
-    sendEventTo(statefulId: string, event: string, params?: EventParams): void;
+    pushEventTo(statefulId: string, event: string, params?: EventParams): void;
     /**
      * Disconnect from the Arizona WebSocket server
      * @returns {void}
@@ -58,10 +60,9 @@ export default class ArizonaClient {
     applyHtmlPatch(patch: any): void;
     handleWorkerError(data: any): void;
     handleReload(data: any): void;
-    handleDispatchTo(data: any): void;
+    handleDispatch(data: any): void;
     handleRedirect(data: any): void;
     handleUnknownMessage(message: any): void;
-    dispatchArizonaEvent(eventType: any, eventData: any): void;
     /**
      * Check if client is connected to server
      * @returns {boolean} True if connected
@@ -95,6 +96,41 @@ export default class ArizonaClient {
      * @returns {void}
      */
     debug(message: string, ...args: any[]): void;
+    /**
+     * Subscribe to an Arizona event
+     * @param {string} event - Event name (e.g., 'connected', 'disconnected')
+     * @param {Function} callback - Callback function to invoke when event occurs
+     * @returns {Function} Unsubscribe function
+     */
+    on(event: string, callback: Function): Function;
+    /**
+     * Subscribe to an Arizona event that will only fire once
+     * @param {string} event - Event name
+     * @param {Function} callback - Callback function to invoke when event occurs
+     * @returns {Function} Unsubscribe function
+     */
+    once(event: string, callback: Function): Function;
+    /**
+     * Unsubscribe from an Arizona event
+     * @param {string} event - Event name
+     * @param {Function} callback - Callback function to remove
+     * @returns {void}
+     */
+    off(event: string, callback: Function): void;
+    /**
+     * Remove all listeners for a specific event, or all events if no event specified
+     * @param {string} [event] - Optional event name. If not provided, removes all listeners for all events
+     * @returns {void}
+     */
+    removeAllListeners(event?: string): void;
+    /**
+     * Emit an Arizona event to all subscribed listeners
+     * @private
+     * @param {string} event - Event name
+     * @param {*} data - Event data to pass to listeners
+     * @returns {void}
+     */
+    private emit;
 }
 export type ArizonaClientOptions = {
     /**

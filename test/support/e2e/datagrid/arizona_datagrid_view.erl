@@ -195,7 +195,7 @@ mount(_Arg, Req) ->
                                 <button
                                     type="button"
                                     class="action-btn action-btn-danger"
-                                    onclick="arizona.sendEvent('delete_user', \{id: '{UserId}'})"
+                                    onclick="arizona.pushEvent('delete_user', \{id: '{UserId}'})"
                                 >
                                     🗑️ Delete
                                 </button>
@@ -246,7 +246,7 @@ render_table(Bindings) ->
                                     ColumnName = maps:get(name, Col),
                                     arizona_template:from_html(~"""
                                     style="cursor: pointer;"
-                                    onclick="arizona.sendEvent('sort_table', \{column: '{ColumnName}'})"
+                                    onclick="arizona.pushEvent('sort_table', \{column: '{ColumnName}'})"
                                     """);
                                 false -> ~""
                             end

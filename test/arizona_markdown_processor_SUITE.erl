@@ -46,11 +46,11 @@ process_markdown_with_dynamic_test(Config) when is_list(Config) ->
 process_markdown_with_escaped_braces_test(Config) when is_list(Config) ->
     ct:comment("process_markdown_template/2 should handle escaped braces correctly"),
     Markdown = ~"""
-    <button onclick="arizona.sendEvent('test', \{id: {42}});">Click</button>
+    <button onclick="arizona.pushEvent('test', \{id: {42}});">Click</button>
     """,
     HTML = arizona_markdown_processor:process_markdown_template(Markdown, 1),
     Expected = ~"""
-    <p><button onclick="arizona.sendEvent('test', \{id: {42}});">Click</button></p>
+    <p><button onclick="arizona.pushEvent('test', \{id: {42}});">Click</button></p>
 
     """,
     ?assertEqual(Expected, HTML).
@@ -62,7 +62,7 @@ process_markdown_with_mixed_content_test(Config) when is_list(Config) ->
 
     Some **markdown** with `code` and {42}.
 
-    <button onclick="arizona.sendEvent('click', \{value: {~"test"}});">
+    <button onclick="arizona.pushEvent('click', \{value: {~"test"}});">
         Click Me
     </button>
 
@@ -74,7 +74,7 @@ process_markdown_with_mixed_content_test(Config) when is_list(Config) ->
     Expected = ~"""
     <h1>Title {~"Dynamic"}</h1>
     <p>Some <strong>markdown</strong> with <code>code</code> and {42}.</p>
-    <button onclick="arizona.sendEvent('click', \{value: {~"test"}});">
+    <button onclick="arizona.pushEvent('click', \{value: {~"test"}});">
         Click Me
     </button>
     <ul>

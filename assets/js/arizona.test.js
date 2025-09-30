@@ -128,14 +128,14 @@ describe('ArizonaClient', () => {
     });
   });
 
-  describe('sendEvent()', () => {
+  describe('pushEvent()', () => {
     beforeEach(() => {
       client.connect('/live');
       client.connected = true;
     });
 
     test('sends event when connected', () => {
-      client.sendEvent('click', { target: 'button1' });
+      client.pushEvent('click', { target: 'button1' });
 
       const messages = client.worker.getAllPostedMessages();
       const eventMessage = messages.find((msg) => {
@@ -153,7 +153,7 @@ describe('ArizonaClient', () => {
     });
 
     test('uses empty params by default', () => {
-      client.sendEvent('submit');
+      client.pushEvent('submit');
 
       const messages = client.worker.getAllPostedMessages();
       const eventMessage = messages.find((msg) => {
@@ -164,7 +164,7 @@ describe('ArizonaClient', () => {
     });
 
     test('sends to arizona_view handle_event callback (no stateful_id)', () => {
-      client.sendEvent('click', { target: 'button1' });
+      client.pushEvent('click', { target: 'button1' });
 
       const messages = client.worker.getAllPostedMessages();
       const eventMessage = messages.find((msg) => {
@@ -179,21 +179,21 @@ describe('ArizonaClient', () => {
       client.connected = false;
       client.worker.clearPostedMessages();
 
-      client.sendEvent('click');
+      client.pushEvent('click');
 
       const messages = client.worker.getAllPostedMessages();
       expect(messages.length).toBe(0);
     });
   });
 
-  describe('sendEventTo()', () => {
+  describe('pushEventTo()', () => {
     beforeEach(() => {
       client.connect('/live');
       client.connected = true;
     });
 
     test('sends event directly to arizona_stateful component', () => {
-      client.sendEventTo('counter_component', 'increment', { amount: 1 });
+      client.pushEventTo('counter_component', 'increment', { amount: 1 });
 
       const messages = client.worker.getAllPostedMessages();
       const eventMessage = messages.find((msg) => {
@@ -212,7 +212,7 @@ describe('ArizonaClient', () => {
     });
 
     test('uses empty params by default when targeting stateful component', () => {
-      client.sendEventTo('form_component', 'submit');
+      client.pushEventTo('form_component', 'submit');
 
       const messages = client.worker.getAllPostedMessages();
       const eventMessage = messages.find((msg) => {
@@ -231,7 +231,7 @@ describe('ArizonaClient', () => {
     });
 
     test('always includes stateful_id for arizona_stateful targeting', () => {
-      client.sendEventTo('widget_123', 'update', { value: 42 });
+      client.pushEventTo('widget_123', 'update', { value: 42 });
 
       const messages = client.worker.getAllPostedMessages();
       const eventMessage = messages.find((msg) => {
@@ -245,18 +245,18 @@ describe('ArizonaClient', () => {
       client.connected = false;
       client.worker.clearPostedMessages();
 
-      client.sendEventTo('component_id', 'action');
+      client.pushEventTo('component_id', 'action');
 
       const messages = client.worker.getAllPostedMessages();
       expect(messages.length).toBe(0);
     });
 
-    test('separates concerns from sendEvent by targeting specific stateful components', () => {
-      // sendEvent goes to arizona_view
-      client.sendEvent('page_action', { data: 'view_level' });
+    test('separates concerns from pushEvent by targeting specific stateful components', () => {
+      // pushEvent goes to arizona_view
+      client.pushEvent('page_action', { data: 'view_level' });
 
-      // sendEventTo goes to arizona_stateful
-      client.sendEventTo('stateful_comp', 'component_action', { data: 'component_level' });
+      // pushEventTo goes to arizona_stateful
+      client.pushEventTo('stateful_comp', 'component_action', { data: 'component_level' });
 
       const messages = client.worker.getAllPostedMessages();
       const viewMessage = messages.find((msg) => {
@@ -293,30 +293,6 @@ describe('ArizonaClient', () => {
   });
 
   describe('custom event dispatching', () => {
-    test('dispatches arizonaEvent for error messages', () => {
-      const errorData = { error: 'Something went wrong' };
-      client.handleWorkerError(errorData);
-
-      expect(mockDocument.dispatchEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'arizonaEvent',
-          detail: { type: 'error', data: errorData },
-        })
-      );
-    });
-
-    test('dispatches arizonaEvent for status changes', () => {
-      const statusData = { status: 'connected' };
-      client.handleStatus(statusData);
-
-      expect(mockDocument.dispatchEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'arizonaEvent',
-          detail: { type: 'status', data: statusData },
-        })
-      );
-    });
-
     test('does not dispatch events for reload messages', () => {
       client.handleReload({});
 
@@ -331,89 +307,51 @@ describe('ArizonaClient', () => {
       expect(mockDocument.dispatchEvent).not.toHaveBeenCalled();
     });
 
-    test('dispatchArizonaEvent creates custom event with correct structure', () => {
-      const eventType = 'test_event';
-      const eventData = { test: 'data' };
-
-      client.dispatchArizonaEvent(eventType, eventData);
-
-      expect(mockDocument.dispatchEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'arizonaEvent',
-          detail: { type: eventType, data: eventData },
-        })
-      );
-    });
-
-    test('handles dispatch_to messages and dispatches custom events to target elements', () => {
-      const mockElement = {
-        dispatchEvent: vi.fn(),
-      };
-      mockDocument.querySelector.mockReturnValue(mockElement);
+    test('handles dispatch messages and emits events', () => {
+      const callback = vi.fn();
+      client.on('customClick', callback);
 
       const dispatchData = {
-        selector: '.target-button',
         event: 'customClick',
-        options: { detail: { userId: 123, action: 'increment' } },
+        data: { userId: 123, action: 'increment' },
       };
 
-      client.handleDispatchTo(dispatchData);
+      client.handleDispatch(dispatchData);
 
-      expect(mockDocument.querySelector).toHaveBeenCalledWith('.target-button');
-      expect(mockElement.dispatchEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'customClick',
-          detail: { userId: 123, action: 'increment' },
-        })
-      );
+      expect(callback).toHaveBeenCalledWith({ userId: 123, action: 'increment' });
     });
 
-    test('handles dispatch_to with element not found gracefully', () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      mockDocument.querySelector.mockReturnValue(null);
+    test('handles dispatch with namespaced component events', () => {
+      const callback = vi.fn();
+      client.on('counter_123:incr', callback);
 
       const dispatchData = {
-        selector: '.non-existent',
-        event: 'testEvent',
-        options: { detail: { data: 'test' } },
+        event: 'counter_123:incr',
+        data: { count: 5 },
       };
 
-      expect(() => {
-        client.handleDispatchTo(dispatchData);
-      }).toThrow();
+      client.handleDispatch(dispatchData);
 
-      consoleSpy.mockRestore();
+      expect(callback).toHaveBeenCalledWith({ count: 5 });
     });
 
-    test('handles dispatch_to with various CSS selectors', () => {
-      const mockElement = {
-        dispatchEvent: vi.fn(),
-      };
-      mockDocument.querySelector.mockReturnValue(mockElement);
+    test('handles dispatch with multiple subscribers', () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+      const callback3 = vi.fn();
 
-      // Test ID selector
-      client.handleDispatchTo({
-        selector: '#my-button',
-        event: 'click',
-        options: { detail: { buttonId: 'my-button' } },
+      client.on('dataLoaded', callback1);
+      client.on('dataLoaded', callback2);
+      client.on('dataLoaded', callback3);
+
+      client.handleDispatch({
+        event: 'dataLoaded',
+        data: { status: 'success' },
       });
 
-      // Test class selector
-      client.handleDispatchTo({
-        selector: '.notification',
-        event: 'dismiss',
-        options: { detail: { notificationId: 'alert-1' } },
-      });
-
-      // Test attribute selector
-      client.handleDispatchTo({
-        selector: '[data-component="counter"]',
-        event: 'update',
-        options: { detail: { value: 42 } },
-      });
-
-      expect(mockDocument.querySelector).toHaveBeenCalledTimes(3);
-      expect(mockElement.dispatchEvent).toHaveBeenCalledTimes(3);
+      expect(callback1).toHaveBeenCalledWith({ status: 'success' });
+      expect(callback2).toHaveBeenCalledWith({ status: 'success' });
+      expect(callback3).toHaveBeenCalledWith({ status: 'success' });
     });
   });
 
@@ -493,6 +431,245 @@ describe('ArizonaClient', () => {
       expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Test debug');
 
       consoleSpy.mockRestore();
+    });
+  });
+
+  describe('Event subscription system', () => {
+    test('on() subscribes to events and returns unsubscribe function', () => {
+      const callback = vi.fn();
+      const unsubscribe = client.on('connected', callback);
+
+      expect(typeof unsubscribe).toBe('function');
+      expect(client.eventListeners.has('connected')).toBe(true);
+      expect(client.eventListeners.get('connected').has(callback)).toBe(true);
+    });
+
+    test('on() with non-function callback logs error and returns noop', () => {
+      const errorSpy = vi.spyOn(client, 'error').mockImplementation(() => {});
+      const unsubscribe = client.on('connected', 'not-a-function');
+
+      expect(errorSpy).toHaveBeenCalledWith('on: callback must be a function, got string');
+      expect(typeof unsubscribe).toBe('function');
+      expect(client.eventListeners.has('connected')).toBe(false);
+
+      errorSpy.mockRestore();
+    });
+
+    test('emit() calls all subscribed listeners with event data', () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+      const eventData = { status: 'connected' };
+
+      client.on('connected', callback1);
+      client.on('connected', callback2);
+      client.emit('connected', eventData);
+
+      expect(callback1).toHaveBeenCalledWith(eventData);
+      expect(callback2).toHaveBeenCalledWith(eventData);
+      expect(callback1).toHaveBeenCalledTimes(1);
+      expect(callback2).toHaveBeenCalledTimes(1);
+    });
+
+    test('emit() handles listener errors gracefully', () => {
+      const errorSpy = vi.spyOn(client, 'error').mockImplementation(() => {});
+      const error = new Error('Listener error');
+      const failingCallback = vi.fn(() => {
+        throw error;
+      });
+      const successCallback = vi.fn();
+
+      client.on('connected', failingCallback);
+      client.on('connected', successCallback);
+      client.emit('connected', { status: 'connected' });
+
+      expect(failingCallback).toHaveBeenCalled();
+      expect(successCallback).toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith("Error in event listener for 'connected':", error);
+
+      errorSpy.mockRestore();
+    });
+
+    test('emit() with no listeners does nothing', () => {
+      expect(() => client.emit('nonexistent', {})).not.toThrow();
+    });
+
+    test('off() unsubscribes callback from event', () => {
+      const callback = vi.fn();
+      client.on('connected', callback);
+      client.off('connected', callback);
+
+      expect(client.eventListeners.has('connected')).toBe(false);
+      client.emit('connected', {});
+      expect(callback).not.toHaveBeenCalled();
+    });
+
+    test('off() cleans up empty listener sets', () => {
+      const callback = vi.fn();
+      client.on('connected', callback);
+      expect(client.eventListeners.has('connected')).toBe(true);
+
+      client.off('connected', callback);
+      expect(client.eventListeners.has('connected')).toBe(false);
+    });
+
+    test('unsubscribe function returned by on() works correctly', () => {
+      const callback = vi.fn();
+      const unsubscribe = client.on('connected', callback);
+
+      client.emit('connected', {});
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      unsubscribe();
+      client.emit('connected', {});
+      expect(callback).toHaveBeenCalledTimes(1);
+    });
+
+    test('handleStatus emits connected event', () => {
+      const callback = vi.fn();
+      client.on('connected', callback);
+
+      client.handleStatus({ status: 'connected' });
+
+      expect(callback).toHaveBeenCalledWith({ status: 'connected' });
+      expect(client.connected).toBe(true);
+    });
+
+    test('handleStatus emits disconnected event', () => {
+      const callback = vi.fn();
+      client.on('disconnected', callback);
+
+      client.handleStatus({ status: 'disconnected' });
+
+      expect(callback).toHaveBeenCalledWith({ status: 'disconnected' });
+      expect(client.connected).toBe(false);
+    });
+
+    test('multiple listeners can subscribe to same event', () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+      const callback3 = vi.fn();
+
+      client.on('connected', callback1);
+      client.on('connected', callback2);
+      client.on('connected', callback3);
+
+      client.emit('connected', {});
+
+      expect(callback1).toHaveBeenCalledTimes(1);
+      expect(callback2).toHaveBeenCalledTimes(1);
+      expect(callback3).toHaveBeenCalledTimes(1);
+    });
+
+    test('removing one listener does not affect others', () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+
+      client.on('connected', callback1);
+      client.on('connected', callback2);
+      client.off('connected', callback1);
+
+      client.emit('connected', {});
+
+      expect(callback1).not.toHaveBeenCalled();
+      expect(callback2).toHaveBeenCalledTimes(1);
+    });
+
+    test('handleWorkerError emits error event', () => {
+      const callback = vi.fn();
+      client.on('error', callback);
+
+      const errorData = { error: 'Something went wrong' };
+      client.handleWorkerError(errorData);
+
+      expect(callback).toHaveBeenCalledWith(errorData);
+    });
+
+    test('once() subscribes to event that fires only once', () => {
+      const callback = vi.fn();
+      client.once('dataLoaded', callback);
+
+      // First emit - callback should be called
+      client.emit('dataLoaded', { data: 'first' });
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(callback).toHaveBeenCalledWith({ data: 'first' });
+
+      // Second emit - callback should NOT be called again
+      client.emit('dataLoaded', { data: 'second' });
+      expect(callback).toHaveBeenCalledTimes(1);
+    });
+
+    test('once() with non-function callback logs error and returns noop', () => {
+      const errorSpy = vi.spyOn(client, 'error').mockImplementation(() => {});
+      const unsubscribe = client.once('connected', 'not-a-function');
+
+      expect(errorSpy).toHaveBeenCalledWith('once: callback must be a function, got string');
+      expect(typeof unsubscribe).toBe('function');
+      expect(client.eventListeners.has('connected')).toBe(false);
+
+      errorSpy.mockRestore();
+    });
+
+    test('once() returns unsubscribe function that works before event fires', () => {
+      const callback = vi.fn();
+      const unsubscribe = client.once('dataLoaded', callback);
+
+      // Unsubscribe before event fires
+      unsubscribe();
+
+      // Emit event - callback should NOT be called
+      client.emit('dataLoaded', { data: 'test' });
+      expect(callback).not.toHaveBeenCalled();
+    });
+
+    test('removeAllListeners() removes all listeners for specific event', () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+      const callback3 = vi.fn();
+
+      client.on('event1', callback1);
+      client.on('event1', callback2);
+      client.on('event2', callback3);
+
+      expect(client.eventListeners.has('event1')).toBe(true);
+      expect(client.eventListeners.has('event2')).toBe(true);
+
+      client.removeAllListeners('event1');
+
+      expect(client.eventListeners.has('event1')).toBe(false);
+      expect(client.eventListeners.has('event2')).toBe(true);
+
+      // Verify event1 listeners are removed
+      client.emit('event1', {});
+      expect(callback1).not.toHaveBeenCalled();
+      expect(callback2).not.toHaveBeenCalled();
+
+      // Verify event2 listener still works
+      client.emit('event2', {});
+      expect(callback3).toHaveBeenCalled();
+    });
+
+    test('removeAllListeners() without argument removes all listeners', () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+      const callback3 = vi.fn();
+
+      client.on('event1', callback1);
+      client.on('event2', callback2);
+      client.on('event3', callback3);
+
+      expect(client.eventListeners.size).toBe(3);
+
+      client.removeAllListeners();
+
+      expect(client.eventListeners.size).toBe(0);
+
+      // Verify no listeners are called
+      client.emit('event1', {});
+      client.emit('event2', {});
+      client.emit('event3', {});
+      expect(callback1).not.toHaveBeenCalled();
+      expect(callback2).not.toHaveBeenCalled();
+      expect(callback3).not.toHaveBeenCalled();
     });
   });
 

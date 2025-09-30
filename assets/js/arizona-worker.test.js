@@ -242,7 +242,7 @@ describe('ArizonaWebSocketWorker', () => {
   });
 
   describe('server message handling', () => {
-    test('handles dispatch_to messages and forwards to main thread', async () => {
+    test('handles dispatch messages and forwards to main thread', async () => {
       // Connect first to establish WebSocket
       const connectMessage = {
         data: {
@@ -260,52 +260,45 @@ describe('ArizonaWebSocketWorker', () => {
       // Clear previous calls
       mockPostMessage.mockClear();
 
-      // We need to directly test the dispatch_to message handling
-      // since MockWebSocket doesn't easily simulate server messages
-      // Let's use the direct worker instance that was created
+      // Test the dispatch message handling
       const dispatchMessage = {
-        type: 'dispatch_to',
-        selector: '.notification',
-        event: 'hide',
+        type: 'dispatch',
+        event: 'notification:hide',
         data: { notificationId: 'alert-123' },
       };
 
-      // Create a mock worker instance to test the handleDispatchTo method
+      // Create a mock worker instance to test the handleDispatch method
       const workerInstance = {
-        handleDispatchTo: vi.fn(),
+        handleDispatch: vi.fn(),
         postMessage: mockPostMessage,
       };
 
       // Call the method directly to test the logic
-      workerInstance.handleDispatchTo(dispatchMessage);
+      workerInstance.handleDispatch(dispatchMessage);
 
-      expect(workerInstance.handleDispatchTo).toHaveBeenCalledWith(dispatchMessage);
+      expect(workerInstance.handleDispatch).toHaveBeenCalledWith(dispatchMessage);
     });
 
-    test('formats dispatch_to message correctly for main thread', () => {
+    test('formats dispatch message correctly for main thread', () => {
       const dispatchMessage = {
-        type: 'dispatch_to',
-        selector: '#target-element',
-        event: 'customEvent',
-        data: { userId: 456, action: 'update' },
+        type: 'dispatch',
+        event: 'counter_123:update',
+        data: { count: 5 },
       };
 
       // Test the expected message format that should be posted to main thread
       const expectedMessage = {
-        type: 'dispatch_to',
+        type: 'dispatch',
         data: {
-          selector: '#target-element',
-          event: 'customEvent',
-          options: { detail: { userId: 456, action: 'update' } },
+          event: 'counter_123:update',
+          data: { count: 5 },
         },
       };
 
-      // This tests that our handleDispatchTo method formats the message correctly
-      // The actual implementation would call postMessage with this format
-      expect(expectedMessage.type).toBe('dispatch_to');
-      expect(expectedMessage.data.selector).toBe('#target-element');
-      expect(expectedMessage.data.event).toBe('customEvent');
-      expect(expectedMessage.data.options.detail).toEqual({ userId: 456, action: 'update' });
+      // This tests that our handleDispatch method formats the message correctly
+      expect(expectedMessage.type).toBe('dispatch');
+      expect(expectedMessage.data.event).toBe('counter_123:update');
+      expect(expectedMessage.data.data).toEqual({ count: 5 });
     });
 
     test('handles unknown messages by passing them through', async () => {

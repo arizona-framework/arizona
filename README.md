@@ -89,7 +89,7 @@ render(Bindings) ->
     <div id="{arizona_template:get_binding(id, Bindings)}">
         <h1>{arizona_template:get_binding(greeting, Bindings)}</h1>
         <p>Clicked: {arizona_template:get_binding(count, Bindings)} times</p>
-        <button onclick="arizona.sendEvent('increment')">Click me</button>
+        <button onclick="arizona.pushEvent('increment')">Click me</button>
     </div>
     """).
 
@@ -551,10 +551,10 @@ Arizona uses a flexible action system for handling callback responses. All callb
 % No action - just update state
 {[], NewState}
 
-% Dispatch custom events to DOM elements
-{[{dispatch_to, ~"document", ~"dataLoaded", #{status => success, data => Value}}], NewState}
-{[{dispatch_to, ~"#notification", ~"show", #{message => ~"Success!"}}], NewState}
-{[{dispatch_to, ~".alert", ~"hide", #{}}], NewState}
+% Dispatch custom events - subscribe using arizona.on('event_name', callback)
+{[{dispatch, ~"dataLoaded", #{status => success, data => Value}}], NewState}
+{[{dispatch, ~"notification:show", #{message => ~"Success!"}}], NewState}
+{[{dispatch, ~"counter_123:update", #{count => 5}}], NewState}
 
 % Redirect to new URL
 {[{redirect, ~"/new-page", #{target => ~"_self"}}], NewState}     % Same tab
@@ -571,7 +571,7 @@ Arizona uses a flexible action system for handling callback responses. All callb
 
 % Multiple actions - executed in sequence
 {[
-    {dispatch_to, ~"document", ~"taskCompleted", #{message => ~"Saved successfully!"}},
+    {dispatch, ~"taskCompleted", #{message => ~"Saved successfully!"}},
     {redirect, ~"/dashboard", #{target => ~"_self"}}
 ], NewState}
 ```
@@ -580,7 +580,7 @@ Arizona uses a flexible action system for handling callback responses. All callb
 
 - **Multiple Responses**: Send multiple actions per callback
 - **Built-in Functionality**: No need to implement redirects or reloads manually
-- **Custom Event Dispatching**: Integrate with any JavaScript framework or library via DOM events
+- **Custom Event Dispatching**: Integrate with any JavaScript framework or library via client events
 - **Consistent API**: Same pattern across views and stateful components
 - **Type Safety**: All actions are validated and processed uniformly
 - **Future Extensible**: Easy to add new action types as needed
@@ -797,10 +797,10 @@ Arizona provides multiple ways to handle user interactions and real-time updates
 
 ```erlang
 % In templates - send events to current view
-<button onclick="arizona.sendEvent('my_event')">Click</button>
+<button onclick="arizona.pushEvent('my_event')">Click</button>
 
 % Send events to specific components
-<button onclick="arizona.sendEventTo('component_id', 'increment', \{amount: 5})">+5</button>
+<button onclick="arizona.pushEventTo('component_id', 'increment', \{amount: 5})">+5</button>
 
 % In view/component modules - handle events
 handle_event(~"my_event", Params, State) ->
@@ -810,7 +810,7 @@ handle_event(~"my_event", Params, State) ->
 % Example with actions - dispatch custom event to client
 handle_event(~"save_data", Params, State) ->
     % Process data and dispatch event to client
-    {[{dispatch_to, ~"document", ~"dataSaved", #{status => success, id => 123}}], UpdatedState}.
+    {[{dispatch, ~"dataSaved", #{status => success, id => 123}}], UpdatedState}.
 
 % Example with redirect action
 handle_event(~"login_success", _Params, State) ->
@@ -826,7 +826,7 @@ handle_event(~"reset_app", _Params, State) ->
 handle_event(~"complete_task", _Params, State) ->
     % Dispatch event and then redirect
     Actions = [
-        {dispatch_to, ~"document", ~"taskCompleted", #{message => ~"Task completed!"}},
+        {dispatch, ~"taskCompleted", #{message => ~"Task completed!"}},
         {redirect, ~"/tasks", #{target => ~"_self"}}
     ],
     {Actions, State}.
@@ -867,57 +867,65 @@ handle_info({timer, update}, View) ->
 
 ### **Client-Side Event Listening**
 
-Arizona dispatches custom events to DOM elements based on server actions, allowing seamless
-integration with any JavaScript framework or library.
+Arizona provides a built-in event subscription system that allows seamless integration with any
+JavaScript framework or library.
 
-Custom events are triggered by `dispatch_to` actions from `handle_event/3`:
+Subscribe to events triggered by `dispatch` actions from `handle_event/3`:
 
 ```javascript
-// Listen for custom events dispatched from the server
-document.addEventListener('dataSaved', (event) => {
+// Subscribe to custom events dispatched from the server
+const unsubscribe = arizona.on('dataSaved', (data) => {
     // Handle data saved event with custom data
-    console.log('Data saved:', event.detail);
+    console.log('Data saved:', data);
     showNotification('Saved successfully!');
 });
 
-// Listen on specific elements
-const notification = document.querySelector('#notification');
-notification.addEventListener('show', (event) => {
-    notification.textContent = event.detail.message;
+// Component-scoped events using namespace pattern
+arizona.on('notification:show', (data) => {
+    const notification = document.querySelector('#notification');
+    notification.textContent = data.message;
     notification.classList.add('visible');
 });
 
-// Listen for Arizona framework events
-document.addEventListener('arizonaEvent', (event) => {
-    const { type, data } = event.detail;
+// Multiple component instances with unique IDs
+arizona.on('counter_123:update', (data) => {
+    document.querySelector('#counter_123 .count').textContent = data.count;
+});
 
-    if (type === 'error') {
-        // Handle server errors
-        console.error('Server error:', data.error);
-        showErrorMessage(data.error);
-    }
+arizona.on('counter_456:update', (data) => {
+    document.querySelector('#counter_456 .count').textContent = data.count;
+});
 
-    if (type === 'status') {
-        // Track connection status
-        if (data.status === 'connected') {
-            showConnectionIndicator('online');
-        } else if (data.status === 'disconnected') {
-            showConnectionIndicator('offline');
-        }
-    }
+// Unsubscribe when no longer needed
+const cleanup = arizona.on('myEvent', handleEvent);
+cleanup(); // Removes the event listener
+
+// Subscribe to Arizona framework events
+arizona.on('connected', (data) => {
+    showConnectionIndicator('online');
+});
+
+arizona.on('disconnected', (data) => {
+    showConnectionIndicator('offline');
+});
+
+arizona.on('error', (data) => {
+    console.error('Server error:', data.error);
+    showErrorMessage(data.error);
 });
 
 // Example: Handle form submission with custom event feedback
 function submitForm(formData) {
     // Send event to server
-    arizona.sendEvent('submit_form', formData);
+    arizona.pushEvent('submit_form', formData);
 
-    // Listen for custom event response from server
-    document.addEventListener('formSubmitted', (event) => {
-        if (event.detail.success) {
+    // Listen for response (one-time subscription)
+    const cleanup = arizona.on('formSubmitted', (data) => {
+        if (data.success) {
             showSuccess('Form submitted successfully!');
         }
-    }, { once: true });
+        cleanup(); // Clean up after handling
+    });
 }
 ```
 

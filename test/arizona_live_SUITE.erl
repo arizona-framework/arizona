@@ -20,7 +20,7 @@ groups() ->
             initial_render_test,
             handle_view_event_with_actions_test,
             handle_view_event_no_actions_test,
-            handle_view_event_dispatch_to_action_test,
+            handle_view_event_dispatch_action_test,
             handle_stateful_event_with_actions_test,
             handle_stateful_event_no_actions_test,
             handle_info_test,
@@ -80,9 +80,9 @@ init_per_suite(Config) ->
         NewCounter = CurrentCounter + 1,
         UpdatedViewState = arizona_stateful:put_binding(counter, NewCounter, ViewState),
         UpdatedView = arizona_view:update_state(UpdatedViewState, View),
-        {[{dispatch_to, ~"document", ~"counterUpdate", #{new_count => NewCounter}}], UpdatedView};
-    handle_event(~"dispatch_to_test", _Params, View) ->
-        {[{dispatch_to, ~".notification", ~"hideAlert", #{
+        {[{dispatch, ~"counterUpdate", #{new_count => NewCounter}}], UpdatedView};
+    handle_event(~"dispatch_test", _Params, View) ->
+        {[{dispatch, ~"notification:hideAlert", #{
             alert_id => ~"test-alert",
             dismissed => true
         }}], View};
@@ -113,7 +113,7 @@ init_per_suite(Config) ->
 
     handle_event(~"update", #{~"value" := NewValue}, State) ->
         UpdatedState = arizona_stateful:put_binding(value, NewValue, State),
-        {[{dispatch_to, ~"#status", ~"componentUpdated", #{
+        {[{dispatch, ~"status:componentUpdated", #{
             updated => true,
             value => NewValue
         }}], UpdatedState};
@@ -323,7 +323,7 @@ handle_view_event_with_actions_test(Config) when is_list(Config) ->
     % Verify transport message was sent
     receive
         {actions_response, ~"live_test_id", _Diff, [
-            {dispatch_to, ~"document", ~"counterUpdate", #{new_count := 1}}
+            {dispatch, ~"counterUpdate", #{new_count := 1}}
         ]} ->
             ok
     after 1000 ->
@@ -344,23 +344,23 @@ handle_view_event_no_actions_test(Config) when is_list(Config) ->
         ct:fail("Expected actions_response message not received")
     end.
 
-handle_view_event_dispatch_to_action_test(Config) when is_list(Config) ->
-    ct:comment("Test handle_event with undefined StatefulId (view events) - dispatch_to action"),
+handle_view_event_dispatch_action_test(Config) when is_list(Config) ->
+    ct:comment("Test handle_event with undefined StatefulId (view events) - dispatch action"),
     {live_pid, Pid} = proplists:lookup(live_pid, Config),
 
-    Result = arizona_live:handle_event(Pid, undefined, ~"dispatch_to_test", #{}),
+    Result = arizona_live:handle_event(Pid, undefined, ~"dispatch_test", #{}),
     ?assertEqual(ok, Result),
 
-    % Verify transport message was sent with dispatch_to action
+    % Verify transport message was sent with dispatch action
     receive
         {actions_response, ~"live_test_id", _Diff, [
-            {dispatch_to, ~".notification", ~"hideAlert", #{
+            {dispatch, ~"notification:hideAlert", #{
                 alert_id := ~"test-alert", dismissed := true
             }}
         ]} ->
             ok
     after 1000 ->
-        ct:fail("Expected actions_response message with dispatch_to action not received")
+        ct:fail("Expected actions_response message with dispatch action not received")
     end.
 
 handle_stateful_event_with_actions_test(Config) when is_list(Config) ->
@@ -373,7 +373,7 @@ handle_stateful_event_with_actions_test(Config) when is_list(Config) ->
     % Verify transport message was sent
     receive
         {actions_response, ~"stateful_1", _Diff, [
-            {dispatch_to, ~"#status", ~"componentUpdated", #{updated := true, value := 100}}
+            {dispatch, ~"status:componentUpdated", #{updated := true, value := 100}}
         ]} ->
             ok
     after 1000 ->
@@ -433,7 +433,7 @@ pubsub_message_test(Config) when is_list(Config) ->
     % Expect actions message since increment returns actions
     receive
         {actions_response, ~"live_test_id", _Diff, [
-            {dispatch_to, ~"document", ~"counterUpdate", #{new_count := _}}
+            {dispatch, ~"counterUpdate", #{new_count := _}}
         ]} ->
             ok
     after 1000 ->
@@ -451,7 +451,7 @@ concurrent_event_handling_test(Config) when is_list(Config) ->
     % Expect two actions messages
     receive
         {actions_response, ~"live_test_id", _Diff1, [
-            {dispatch_to, ~"document", ~"counterUpdate", #{new_count := _}}
+            {dispatch, ~"counterUpdate", #{new_count := _}}
         ]} ->
             ok
     after 1000 ->
@@ -459,7 +459,7 @@ concurrent_event_handling_test(Config) when is_list(Config) ->
     end,
     receive
         {actions_response, ~"live_test_id", _Diff2, [
-            {dispatch_to, ~"document", ~"counterUpdate", #{new_count := _}}
+            {dispatch, ~"counterUpdate", #{new_count := _}}
         ]} ->
             ok
     after 1000 ->
