@@ -29,20 +29,20 @@ export default class ArizonaClient {
      */
     connect(websocketEndpoint: string): void;
     /**
-     * Send an event to the Arizona server
+     * Push an event to the Arizona server
      * @param {string} event - Event name
      * @param {EventParams} [params={}] - Event parameters
      * @returns {void}
      */
-    sendEvent(event: string, params?: EventParams): void;
+    pushEvent(event: string, params?: EventParams): void;
     /**
-     * Send an event to a specific stateful component
+     * Push an event to a specific stateful component
      * @param {string} statefulId - Target stateful component ID
      * @param {string} event - Event name
      * @param {EventParams} [params={}] - Event parameters
      * @returns {void}
      */
-    sendEventTo(statefulId: string, event: string, params?: EventParams): void;
+    pushEventTo(statefulId: string, event: string, params?: EventParams): void;
     /**
      * Disconnect from the Arizona WebSocket server
      * @returns {void}

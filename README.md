@@ -89,7 +89,7 @@ render(Bindings) ->
     <div id="{arizona_template:get_binding(id, Bindings)}">
         <h1>{arizona_template:get_binding(greeting, Bindings)}</h1>
         <p>Clicked: {arizona_template:get_binding(count, Bindings)} times</p>
-        <button onclick="arizona.sendEvent('increment')">Click me</button>
+        <button onclick="arizona.pushEvent('increment')">Click me</button>
     </div>
     """).
 
@@ -797,10 +797,10 @@ Arizona provides multiple ways to handle user interactions and real-time updates
 
 ```erlang
 % In templates - send events to current view
-<button onclick="arizona.sendEvent('my_event')">Click</button>
+<button onclick="arizona.pushEvent('my_event')">Click</button>
 
 % Send events to specific components
-<button onclick="arizona.sendEventTo('component_id', 'increment', \{amount: 5})">+5</button>
+<button onclick="arizona.pushEventTo('component_id', 'increment', \{amount: 5})">+5</button>
 
 % In view/component modules - handle events
 handle_event(~"my_event", Params, State) ->
@@ -910,7 +910,7 @@ document.addEventListener('arizonaEvent', (event) => {
 // Example: Handle form submission with custom event feedback
 function submitForm(formData) {
     // Send event to server
-    arizona.sendEvent('submit_form', formData);
+    arizona.pushEvent('submit_form', formData);
 
     // Listen for custom event response from server
     document.addEventListener('formSubmitted', (event) => {

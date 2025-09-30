@@ -87,12 +87,12 @@ export default class ArizonaClient {
   }
 
   /**
-   * Send an event to the Arizona server
+   * Push an event to the Arizona server
    * @param {string} event - Event name
    * @param {EventParams} [params={}] - Event parameters
    * @returns {void}
    */
-  sendEvent(event, params = {}) {
+  pushEvent(event, params = {}) {
     if (!this.connected) return;
 
     this.worker.postMessage({
@@ -106,13 +106,13 @@ export default class ArizonaClient {
   }
 
   /**
-   * Send an event to a specific stateful component
+   * Push an event to a specific stateful component
    * @param {string} statefulId - Target stateful component ID
    * @param {string} event - Event name
    * @param {EventParams} [params={}] - Event parameters
    * @returns {void}
    */
-  sendEventTo(statefulId, event, params = {}) {
+  pushEventTo(statefulId, event, params = {}) {
     if (!this.connected) return;
 
     this.worker.postMessage({

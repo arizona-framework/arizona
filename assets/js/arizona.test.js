@@ -128,14 +128,14 @@ describe('ArizonaClient', () => {
     });
   });
 
-  describe('sendEvent()', () => {
+  describe('pushEvent()', () => {
     beforeEach(() => {
       client.connect('/live');
       client.connected = true;
     });
 
     test('sends event when connected', () => {
-      client.sendEvent('click', { target: 'button1' });
+      client.pushEvent('click', { target: 'button1' });
 
       const messages = client.worker.getAllPostedMessages();
       const eventMessage = messages.find((msg) => {
@@ -153,7 +153,7 @@ describe('ArizonaClient', () => {
     });
 
     test('uses empty params by default', () => {
-      client.sendEvent('submit');
+      client.pushEvent('submit');
 
       const messages = client.worker.getAllPostedMessages();
       const eventMessage = messages.find((msg) => {
@@ -164,7 +164,7 @@ describe('ArizonaClient', () => {
     });
 
     test('sends to arizona_view handle_event callback (no stateful_id)', () => {
-      client.sendEvent('click', { target: 'button1' });
+      client.pushEvent('click', { target: 'button1' });
 
       const messages = client.worker.getAllPostedMessages();
       const eventMessage = messages.find((msg) => {
@@ -179,21 +179,21 @@ describe('ArizonaClient', () => {
       client.connected = false;
       client.worker.clearPostedMessages();
 
-      client.sendEvent('click');
+      client.pushEvent('click');
 
       const messages = client.worker.getAllPostedMessages();
       expect(messages.length).toBe(0);
     });
   });
 
-  describe('sendEventTo()', () => {
+  describe('pushEventTo()', () => {
     beforeEach(() => {
       client.connect('/live');
       client.connected = true;
     });
 
     test('sends event directly to arizona_stateful component', () => {
-      client.sendEventTo('counter_component', 'increment', { amount: 1 });
+      client.pushEventTo('counter_component', 'increment', { amount: 1 });
 
       const messages = client.worker.getAllPostedMessages();
       const eventMessage = messages.find((msg) => {
@@ -212,7 +212,7 @@ describe('ArizonaClient', () => {
     });
 
     test('uses empty params by default when targeting stateful component', () => {
-      client.sendEventTo('form_component', 'submit');
+      client.pushEventTo('form_component', 'submit');
 
       const messages = client.worker.getAllPostedMessages();
       const eventMessage = messages.find((msg) => {
@@ -231,7 +231,7 @@ describe('ArizonaClient', () => {
     });
 
     test('always includes stateful_id for arizona_stateful targeting', () => {
-      client.sendEventTo('widget_123', 'update', { value: 42 });
+      client.pushEventTo('widget_123', 'update', { value: 42 });
 
       const messages = client.worker.getAllPostedMessages();
       const eventMessage = messages.find((msg) => {
@@ -245,18 +245,18 @@ describe('ArizonaClient', () => {
       client.connected = false;
       client.worker.clearPostedMessages();
 
-      client.sendEventTo('component_id', 'action');
+      client.pushEventTo('component_id', 'action');
 
       const messages = client.worker.getAllPostedMessages();
       expect(messages.length).toBe(0);
     });
 
-    test('separates concerns from sendEvent by targeting specific stateful components', () => {
-      // sendEvent goes to arizona_view
-      client.sendEvent('page_action', { data: 'view_level' });
+    test('separates concerns from pushEvent by targeting specific stateful components', () => {
+      // pushEvent goes to arizona_view
+      client.pushEvent('page_action', { data: 'view_level' });
 
-      // sendEventTo goes to arizona_stateful
-      client.sendEventTo('stateful_comp', 'component_action', { data: 'component_level' });
+      // pushEventTo goes to arizona_stateful
+      client.pushEventTo('stateful_comp', 'component_action', { data: 'component_level' });
 
       const messages = client.worker.getAllPostedMessages();
       const viewMessage = messages.find((msg) => {

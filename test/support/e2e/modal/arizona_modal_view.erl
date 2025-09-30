@@ -29,19 +29,19 @@ render(Bindings) ->
         <div class="control-container">
             <button
                 class="control-btn control-btn-success"
-                onclick="arizona.sendEvent('set_modal_type', \{type: 'success'})"
+                onclick="arizona.pushEvent('set_modal_type', \{type: 'success'})"
             >
                 Open Success Modal
             </button>
             <button
                 class="control-btn control-btn-error"
-                onclick="arizona.sendEvent('set_modal_type', \{type: 'error'})"
+                onclick="arizona.pushEvent('set_modal_type', \{type: 'error'})"
             >
                 Open Error Modal
             </button>
             <button
                 class="control-btn control-btn-info"
-                onclick="arizona.sendEvent('set_modal_type', \{type: 'info'})"
+                onclick="arizona.pushEvent('set_modal_type', \{type: 'info'})"
             >
                 Open Info Modal
             </button>
@@ -60,7 +60,7 @@ render(Bindings) ->
 
 render_modal(Bindings) ->
     arizona_template:from_html(~""""
-    <div class="modal-overlay" onclick="arizona.sendEvent('close_modal')">
+    <div class="modal-overlay" onclick="arizona.pushEvent('close_modal')">
         <div class="modal-container" onclick="event.stopPropagation()">
             <div class="modal-header">
                 <h1>
@@ -70,7 +70,7 @@ render_modal(Bindings) ->
                 </h1>
                 <button
                     class="modal-close-btn"
-                    onclick="arizona.sendEvent('close_modal')"
+                    onclick="arizona.pushEvent('close_modal')"
                     style="position: absolute; top: 16px; right: 16px; background: none; border: none; font-size: 24px; cursor: pointer; color: #6b7280; padding: 8px;"
                 >
                     &times;
@@ -87,7 +87,7 @@ render_modal(Bindings) ->
                 {
                     Confirm = arizona_template:get_binding(confirm, Bindings),
                     arizona_template:from_html(~"""
-                    <button class="{maps:get(classes, Confirm)}" onclick="arizona.sendEvent('close_modal')">
+                    <button class="{maps:get(classes, Confirm)}" onclick="arizona.pushEvent('close_modal')">
                         {arizona_template:render_slot(maps:get(content, Confirm))}
                     </button>
                     """)
@@ -95,7 +95,7 @@ render_modal(Bindings) ->
                 {
                     Cancel = arizona_template:get_binding(cancel, Bindings),
                     arizona_template:from_html(~"""
-                    <button class="{maps:get(classes, Cancel)}" onclick="arizona.sendEvent('close_modal')">
+                    <button class="{maps:get(classes, Cancel)}" onclick="arizona.pushEvent('close_modal')">
                         {arizona_template:render_slot(maps:get(content, Cancel))}
                     </button>
                     """)

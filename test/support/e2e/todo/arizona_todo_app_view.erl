@@ -109,7 +109,7 @@ render(Bindings) ->
                 placeholder="What needs to be done?"
                 data-testid="new-todo-input"
                 value="{arizona_template:get_binding(new_todo_text, Bindings)}"
-                onkeyup="if(event.key === 'Enter') arizona.sendEvent('add_todo'); else arizona.sendEvent('update_new_todo', \{value: event.target.value})"
+                onkeyup="if(event.key === 'Enter') arizona.pushEvent('add_todo'); else arizona.pushEvent('update_new_todo', \{value: event.target.value})"
             />
         </header>
 
@@ -124,7 +124,7 @@ render(Bindings) ->
                         class="toggle"
                         data-testid="toggle-{Id}"
                         {case maps:get(completed, Todo) of true -> ~"checked"; false -> ~"" end}
-                        onclick="arizona.sendEvent('toggle_todo', \{id: '{Id}'})"
+                        onclick="arizona.pushEvent('toggle_todo', \{id: '{Id}'})"
                     />
                     <label class="todo-text" data-testid="todo-text-{Id}">
                         {maps:get(text, Todo)}
@@ -132,7 +132,7 @@ render(Bindings) ->
                     <button
                         class="destroy"
                         data-testid="delete-{Id}"
-                        onclick="arizona.sendEvent('delete_todo', \{id: '{Id}'})"
+                        onclick="arizona.pushEvent('delete_todo', \{id: '{Id}'})"
                     >
                         &times;
                     </button>
@@ -176,17 +176,17 @@ render_filters(Bindings) ->
         <li>
             <a class="{case arizona_template:get_binding(filter, Bindings) of all -> ~"selected"; _ -> ~"" end}"
                data-testid="filter-all"
-               onclick="arizona.sendEvent('set_filter', \{filter: 'all'})">All</a>
+               onclick="arizona.pushEvent('set_filter', \{filter: 'all'})">All</a>
         </li>
         <li>
             <a class="{case arizona_template:get_binding(filter, Bindings) of active -> ~"selected"; _ -> ~"" end}"
                data-testid="filter-active"
-               onclick="arizona.sendEvent('set_filter', \{filter: 'active'})">Active</a>
+               onclick="arizona.pushEvent('set_filter', \{filter: 'active'})">Active</a>
         </li>
         <li>
             <a class="{case arizona_template:get_binding(filter, Bindings) of completed -> ~"selected"; _ -> ~"" end}"
                data-testid="filter-completed"
-               onclick="arizona.sendEvent('set_filter', \{filter: 'completed'})">Completed</a>
+               onclick="arizona.pushEvent('set_filter', \{filter: 'completed'})">Completed</a>
         </li>
     </ul>
     """).
@@ -196,7 +196,7 @@ render_clear_button(_Bindings) ->
     <button
         class="clear-completed"
         data-testid="clear-completed"
-        onclick="arizona.sendEvent('clear_completed')"
+        onclick="arizona.pushEvent('clear_completed')"
     >
         Clear completed
     </button>

@@ -112,7 +112,7 @@ render(Bindings) ->
                 if (event.data.status !== 'connected') return;
 
                 // Send user info when WebSocket connects
-                arizona.sendEvent('set_user_info', \{
+                arizona.pushEvent('set_user_info', \{
                     user_id: currentUserId,
                     user_name: currentUserName
                 });

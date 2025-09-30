@@ -100,7 +100,7 @@ render_post_detail(Bindings) ->
         post, Bindings
     ),
     arizona_template:from_markdown(~""""
-    <button onclick="arizona.sendEvent('back_to_list')" style="margin-bottom: 1rem;">
+    <button onclick="arizona.pushEvent('back_to_list')" style="margin-bottom: 1rem;">
         ← Back to Posts
     </button>
 
@@ -158,7 +158,7 @@ render_post_preview(Bindings) ->
         """)
     end, Tags)}
 
-    <button onclick="arizona.sendEvent('view_post', \{id: {Id}})" style="margin-top: 0.5rem;">
+    <button onclick="arizona.pushEvent('view_post', \{id: {Id}})" style="margin-top: 0.5rem;">
         Read More →
     </button>
 
@@ -187,7 +187,7 @@ render_tag(Bindings) ->
             _ -> atom_to_binary(Tag)
         end,
     arizona_template:from_html(~"""
-    <button onclick="arizona.sendEvent('filter_by_tag', \{tag: '{Tag}'})" style="{Style}">
+    <button onclick="arizona.pushEvent('filter_by_tag', \{tag: '{Tag}'})" style="{Style}">
         {TagDisplay}
     </button>
     """).
@@ -251,8 +251,8 @@ get_posts() ->
                     arizona_template:from_html(~"""
                     <div>
                         <h1>Count: \{arizona_template:get_binding(count, Bindings)}</h1>
-                        <button onclick="arizona.sendEvent('increment')">+</button>
-                        <button onclick="arizona.sendEvent('decrement')">-</button>
+                        <button onclick="arizona.pushEvent('increment')">+</button>
+                        <button onclick="arizona.pushEvent('decrement')">-</button>
                     </div>
                     """).
                 ```
