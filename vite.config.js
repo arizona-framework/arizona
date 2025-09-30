@@ -24,9 +24,15 @@ export default defineConfig(({ mode }) => {
 
       // TypeScript declarations from JSDoc
       dts({
-        entry: 'arizona.js',
-        entryRoot: 'assets/js',
+        include: [
+          'assets/js/index.js',
+          'assets/js/arizona.js',
+          'assets/js/patcher/index.js',
+          'assets/js/patcher/arizona-patcher.js',
+          'assets/js/patcher/arizona-morphdom-patcher.js',
+        ],
         outDir: 'priv/static/assets/types',
+        rollupTypes: false,
       }),
     ],
 
@@ -42,9 +48,14 @@ export default defineConfig(({ mode }) => {
 
     build: {
       lib: {
-        entry: 'assets/js/arizona.js',
+        entry: {
+          index: 'assets/js/index.js',
+          arizona: 'assets/js/arizona.js',
+          'patcher/index': 'assets/js/patcher/index.js',
+          'patcher/arizona-patcher': 'assets/js/patcher/arizona-patcher.js',
+          'patcher/arizona-morphdom-patcher': 'assets/js/patcher/arizona-morphdom-patcher.js',
+        },
         formats: ['es'],
-        fileName: 'arizona',
       },
       outDir: 'priv/static/assets/js',
       minify: !isDev,
@@ -52,7 +63,7 @@ export default defineConfig(({ mode }) => {
       reportCompressedSize: !isDev,
       emptyOutDir: false,
       rollupOptions: {
-        input: 'assets/js/arizona.js',
+        external: ['morphdom'],
         output: {
           format: 'es',
           entryFileNames: '[name].min.js',

@@ -16,6 +16,8 @@ export default class ArizonaClient {
     logLevel: number;
     /** @type {Map<string, Set<Function>>} */
     eventListeners: Map<string, Set<Function>>;
+    /** @type {import('./patcher/arizona-patcher.js').default|null} */
+    patcher: import('./patcher/arizona-patcher.js').default | null;
     /**
      * Initialize worker if not already created
      * @private
@@ -137,6 +139,10 @@ export type ArizonaClientOptions = {
      * - Log level for client output
      */
     logLevel?: "silent" | "error" | "warning" | "info" | "debug" | undefined;
+    /**
+     * - DOM patcher implementation
+     */
+    patcher?: import('./patcher/arizona-patcher.js').default | undefined;
 };
 export type ConnectOptions = {
     /**

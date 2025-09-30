@@ -1,10 +1,10 @@
 // Import dependencies
 import ArizonaWorker from './arizona-worker?worker&inline';
-import morphdom from 'morphdom';
 
 /**
  * @typedef {Object} ArizonaClientOptions
  * @property {'silent' | 'error' | 'warning' | 'info' | 'debug'} [logLevel] - Log level for client output
+ * @property {import('./patcher/arizona-patcher.js').default} [patcher] - DOM patcher implementation
  */
 
 /**
@@ -44,6 +44,8 @@ export default class ArizonaClient {
     this.logLevel = LOG_LEVELS[opts.logLevel] ?? LOG_LEVELS.silent; // Default: silent (production-safe)
     /** @type {Map<string, Set<Function>>} */
     this.eventListeners = new Map();
+    /** @type {import('./patcher/arizona-patcher.js').default|null} */
+    this.patcher = opts.patcher || null;
   }
 
   /**
@@ -204,28 +206,16 @@ export default class ArizonaClient {
       return;
     }
 
+    if (!this.patcher) {
+      this.error('No patcher configured. Please provide a patcher implementation.');
+      return;
+    }
+
     try {
-      // Use Morphdom to efficiently patch the DOM
-      morphdom(target, patch.html, {
-        onBeforeElUpdated(fromEl, toEl) {
-          // Skip update if data-arizona-update="false"
-          if (toEl.dataset?.arizonaUpdate === 'false') {
-            return false;
-          } else {
-            // Skip update if nodes are identical
-            return !fromEl.isEqualNode(toEl);
-          }
-        },
-      });
+      // Use provided patcher to patch the DOM
+      this.patcher.patch(target, patch.html);
 
       this.debug('Patch applied successfully');
-
-      // Trigger custom event for other code to listen to
-      target.dispatchEvent(
-        new CustomEvent('arizona:patched', {
-          detail: { patch },
-        })
-      );
     } catch (error) {
       this.error('Error applying HTML patch:', error);
     }

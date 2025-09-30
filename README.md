@@ -519,8 +519,14 @@ render(Bindings) ->
     <head>
         <title>My Arizona App</title>
         <script type="module" async>
-            import Arizona from '/assets/js/arizona.min.js';
-            globalThis.arizona = new Arizona({ logLevel: 'info' }); // Optional: configure logging
+            import Arizona, { ArizonaMorphdomPatcher } from '@arizona-framework/client';
+
+            // Create client with DOM patcher for live updates
+            const patcher = new ArizonaMorphdomPatcher();
+            globalThis.arizona = new Arizona({
+                patcher,
+                logLevel: 'info'  // Optional: configure logging
+            });
             arizona.connect('/live');
         </script>
     </head>
@@ -1075,12 +1081,48 @@ Then start normally:
 {ok, _Started} = application:ensure_all_started(arizona).
 ```
 
-### **Static Assets**
+### **JavaScript Client Setup**
 
-- Arizona provides required JavaScript client files (`arizona.min.js`, `arizona-worker.min.js`)
-- Asset route `{asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}` is required for WebSocket
-- Use `arizona_static:generate/1` to generate static HTML files from your views
-- Static generation creates SEO-friendly HTML that can be deployed to any web server
+Install the Arizona client via npm:
+
+```bash
+npm install @arizona-framework/client morphdom
+```
+
+> **Note:** `morphdom` is an optional peer dependency. Only install it if you're using `ArizonaMorphdomPatcher`.
+> Arizona requires a patcher implementation for live DOM updates. You can use the included morphdom patcher
+> or implement your own custom patcher by extending `ArizonaPatcher`.
+
+**Import Options:**
+
+```javascript
+// Recommended: Import everything from main entry point
+import Arizona, { ArizonaMorphdomPatcher, ArizonaPatcher } from '@arizona-framework/client';
+
+// Or: Import from specific subpaths
+import Arizona from '@arizona-framework/client';
+import { ArizonaMorphdomPatcher } from '@arizona-framework/client/patcher';
+
+// Or: Import individual patchers
+import ArizonaMorphdomPatcher from '@arizona-framework/client/patcher/morphdom';
+```
+
+**Asset Route (Optional):**
+
+If you're **not** using the npm package and serving Arizona's JavaScript files directly from
+the `priv/static/assets` directory, you need this asset route:
+
+```erlang
+{asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}, []}
+```
+
+When using the npm package with a bundler (Vite, Webpack, esbuild, etc.), this route is not required
+as your bundler will handle the JavaScript files.
+
+**Static Site Generation:**
+
+Use `arizona_static:generate/1` to generate static HTML files from your views.
+Static generation creates SEO-friendly HTML that can be deployed to any web server.
 
 ### **Performance Considerations**
 

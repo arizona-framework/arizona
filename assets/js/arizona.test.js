@@ -7,6 +7,7 @@ vi.mock('morphdom', () => ({
 }));
 
 import ArizonaClient from './arizona.js';
+import ArizonaMorphdomPatcher from './patcher/arizona-morphdom-patcher.js';
 import MockWorker from './__mocks__/Worker.js';
 import MockWebSocket from './__mocks__/WebSocket.js';
 import morphdom from 'morphdom';
@@ -33,9 +34,11 @@ vi.stubGlobal('window', {
 
 describe('ArizonaClient', () => {
   let client;
+  let patcher;
 
   beforeEach(() => {
-    client = new ArizonaClient();
+    patcher = new ArizonaMorphdomPatcher();
+    client = new ArizonaClient({ patcher });
     // Clear any stored messages from previous tests
     if (global.Worker.prototype.clearPostedMessages) {
       global.Worker.prototype.clearPostedMessages();
@@ -718,20 +721,6 @@ describe('ArizonaClient', () => {
 
       fromEl.isEqualNode.mockReturnValue(true);
       expect(callback(fromEl, normalEl)).toBe(false); // Same nodes = skip
-    });
-
-    test('triggers arizona:patched event after successful patch', () => {
-      vi.mocked(morphdom).mockImplementation((target) => target);
-
-      const patch = { statefulId: 'test-component', html: '<div>content</div>' };
-      client.applyHtmlPatch(patch);
-
-      expect(targetElement.dispatchEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'arizona:patched',
-          detail: { patch },
-        })
-      );
     });
 
     test('handles missing target element gracefully', () => {
