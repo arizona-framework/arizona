@@ -98,6 +98,9 @@ class ArizonaWebSocketWorker {
         case 'reply':
           this.handleReply(message);
           break;
+        case 'dispatch_to':
+          this.handleDispatchTo(message);
+          break;
         case 'redirect':
           this.handleRedirect(message);
           break;
@@ -148,6 +151,18 @@ class ArizonaWebSocketWorker {
     this.postMessage({
       type: 'reply',
       data: message.data,
+    });
+  }
+
+  handleDispatchTo(message) {
+    // Send dispatch event message to main thread
+    this.postMessage({
+      type: 'dispatch_to',
+      data: {
+        selector: message.selector,
+        event: message.event,
+        options: { detail: message.data },
+      },
     });
   }
 

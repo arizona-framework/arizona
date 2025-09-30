@@ -317,6 +317,14 @@ action_to_command({reply, Data}) ->
         data => Data
     }),
     {text, Payload};
+action_to_command({dispatch_to, CSSSelector, Event, Data}) ->
+    Payload = json_encode(#{
+        type => ~"dispatch_to",
+        selector => CSSSelector,
+        event => Event,
+        data => Data
+    }),
+    {text, Payload};
 action_to_command({redirect, Url, Options}) ->
     Payload = json_encode(#{
         type => ~"redirect",

@@ -59,6 +59,7 @@ export default class ArizonaClient {
     handleWorkerError(data: any): void;
     handleReload(data: any): void;
     handleReply(data: any): void;
+    handleDispatchTo(data: any): void;
     handleRedirect(data: any): void;
     handleUnknownMessage(message: any): void;
     dispatchArizonaEvent(eventType: any, eventData: any): void;

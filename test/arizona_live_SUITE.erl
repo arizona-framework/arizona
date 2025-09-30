@@ -20,6 +20,7 @@ groups() ->
             initial_render_test,
             handle_view_event_with_actions_test,
             handle_view_event_no_actions_test,
+            handle_view_event_dispatch_to_action_test,
             handle_stateful_event_with_actions_test,
             handle_stateful_event_no_actions_test,
             handle_info_test,
@@ -80,6 +81,11 @@ init_per_suite(Config) ->
         UpdatedViewState = arizona_stateful:put_binding(counter, NewCounter, ViewState),
         UpdatedView = arizona_view:update_state(UpdatedViewState, View),
         {[{reply, #{new_count => NewCounter}}], UpdatedView};
+    handle_event(~"dispatch_to_test", _Params, View) ->
+        {[{dispatch_to, ~".notification", ~"hideAlert", #{
+            alert_id => ~"test-alert",
+            dismissed => true
+        }}], View};
     handle_event(~"no_action", _Params, View) ->
         {[], View}.
     """", [{module, merl:term(MockViewModule)}]),
@@ -330,6 +336,25 @@ handle_view_event_no_actions_test(Config) when is_list(Config) ->
         {actions_response, ~"live_test_id", _Diff, []} -> ok
     after 1000 ->
         ct:fail("Expected actions_response message not received")
+    end.
+
+handle_view_event_dispatch_to_action_test(Config) when is_list(Config) ->
+    ct:comment("Test handle_event with undefined StatefulId (view events) - dispatch_to action"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
+
+    Result = arizona_live:handle_event(Pid, undefined, ~"dispatch_to_test", #{}),
+    ?assertEqual(ok, Result),
+
+    % Verify transport message was sent with dispatch_to action
+    receive
+        {actions_response, ~"live_test_id", _Diff, [
+            {dispatch_to, ~".notification", ~"hideAlert", #{
+                alert_id := ~"test-alert", dismissed := true
+            }}
+        ]} ->
+            ok
+    after 1000 ->
+        ct:fail("Expected actions_response message with dispatch_to action not received")
     end.
 
 handle_stateful_event_with_actions_test(Config) when is_list(Config) ->
