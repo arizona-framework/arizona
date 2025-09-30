@@ -350,6 +350,26 @@ export default class ArizonaClient {
   }
 
   /**
+   * Subscribe to an Arizona event that will only fire once
+   * @param {string} event - Event name
+   * @param {Function} callback - Callback function to invoke when event occurs
+   * @returns {Function} Unsubscribe function
+   */
+  once(event, callback) {
+    if (typeof callback !== 'function') {
+      this.error(`once: callback must be a function, got ${typeof callback}`);
+      return () => {};
+    }
+
+    const wrapper = (data) => {
+      callback(data);
+      this.off(event, wrapper);
+    };
+
+    return this.on(event, wrapper);
+  }
+
+  /**
    * Unsubscribe from an Arizona event
    * @param {string} event - Event name
    * @param {Function} callback - Callback function to remove
@@ -365,6 +385,21 @@ export default class ArizonaClient {
       if (listeners.size === 0) {
         this.eventListeners.delete(event);
       }
+    }
+  }
+
+  /**
+   * Remove all listeners for a specific event, or all events if no event specified
+   * @param {string} [event] - Optional event name. If not provided, removes all listeners for all events
+   * @returns {void}
+   */
+  removeAllListeners(event) {
+    if (event) {
+      this.eventListeners.delete(event);
+      this.debug(`Removed all listeners for event: ${event}`);
+    } else {
+      this.eventListeners.clear();
+      this.debug('Removed all event listeners');
     }
   }
 

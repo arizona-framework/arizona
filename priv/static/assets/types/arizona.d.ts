@@ -104,12 +104,25 @@ export default class ArizonaClient {
      */
     on(event: string, callback: Function): Function;
     /**
+     * Subscribe to an Arizona event that will only fire once
+     * @param {string} event - Event name
+     * @param {Function} callback - Callback function to invoke when event occurs
+     * @returns {Function} Unsubscribe function
+     */
+    once(event: string, callback: Function): Function;
+    /**
      * Unsubscribe from an Arizona event
      * @param {string} event - Event name
      * @param {Function} callback - Callback function to remove
      * @returns {void}
      */
     off(event: string, callback: Function): void;
+    /**
+     * Remove all listeners for a specific event, or all events if no event specified
+     * @param {string} [event] - Optional event name. If not provided, removes all listeners for all events
+     * @returns {void}
+     */
+    removeAllListeners(event?: string): void;
     /**
      * Emit an Arizona event to all subscribed listeners
      * @private

@@ -583,6 +583,94 @@ describe('ArizonaClient', () => {
 
       expect(callback).toHaveBeenCalledWith(errorData);
     });
+
+    test('once() subscribes to event that fires only once', () => {
+      const callback = vi.fn();
+      client.once('dataLoaded', callback);
+
+      // First emit - callback should be called
+      client.emit('dataLoaded', { data: 'first' });
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(callback).toHaveBeenCalledWith({ data: 'first' });
+
+      // Second emit - callback should NOT be called again
+      client.emit('dataLoaded', { data: 'second' });
+      expect(callback).toHaveBeenCalledTimes(1);
+    });
+
+    test('once() with non-function callback logs error and returns noop', () => {
+      const errorSpy = vi.spyOn(client, 'error').mockImplementation(() => {});
+      const unsubscribe = client.once('connected', 'not-a-function');
+
+      expect(errorSpy).toHaveBeenCalledWith('once: callback must be a function, got string');
+      expect(typeof unsubscribe).toBe('function');
+      expect(client.eventListeners.has('connected')).toBe(false);
+
+      errorSpy.mockRestore();
+    });
+
+    test('once() returns unsubscribe function that works before event fires', () => {
+      const callback = vi.fn();
+      const unsubscribe = client.once('dataLoaded', callback);
+
+      // Unsubscribe before event fires
+      unsubscribe();
+
+      // Emit event - callback should NOT be called
+      client.emit('dataLoaded', { data: 'test' });
+      expect(callback).not.toHaveBeenCalled();
+    });
+
+    test('removeAllListeners() removes all listeners for specific event', () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+      const callback3 = vi.fn();
+
+      client.on('event1', callback1);
+      client.on('event1', callback2);
+      client.on('event2', callback3);
+
+      expect(client.eventListeners.has('event1')).toBe(true);
+      expect(client.eventListeners.has('event2')).toBe(true);
+
+      client.removeAllListeners('event1');
+
+      expect(client.eventListeners.has('event1')).toBe(false);
+      expect(client.eventListeners.has('event2')).toBe(true);
+
+      // Verify event1 listeners are removed
+      client.emit('event1', {});
+      expect(callback1).not.toHaveBeenCalled();
+      expect(callback2).not.toHaveBeenCalled();
+
+      // Verify event2 listener still works
+      client.emit('event2', {});
+      expect(callback3).toHaveBeenCalled();
+    });
+
+    test('removeAllListeners() without argument removes all listeners', () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+      const callback3 = vi.fn();
+
+      client.on('event1', callback1);
+      client.on('event2', callback2);
+      client.on('event3', callback3);
+
+      expect(client.eventListeners.size).toBe(3);
+
+      client.removeAllListeners();
+
+      expect(client.eventListeners.size).toBe(0);
+
+      // Verify no listeners are called
+      client.emit('event1', {});
+      client.emit('event2', {});
+      client.emit('event3', {});
+      expect(callback1).not.toHaveBeenCalled();
+      expect(callback2).not.toHaveBeenCalled();
+      expect(callback3).not.toHaveBeenCalled();
+    });
   });
 
   describe('data-arizona-update="false" third-party framework integration', () => {
