@@ -123,6 +123,7 @@ be created at compile-time via parse transforms or at runtime.
 -export_type([dynamic_sequence/0]).
 -export_type([dynamic_anno/0]).
 -export_type([fingerprint/0]).
+-export_type([slot/0]).
 -export_type([render_callback/0]).
 -export_type([render_mode/0]).
 -export_type([render_options/0]).
@@ -147,6 +148,7 @@ be created at compile-time via parse transforms or at runtime.
 -nominal dynamic_sequence() :: [pos_integer()].
 -nominal dynamic_anno() :: tuple().
 -nominal fingerprint() :: non_neg_integer().
+-nominal slot() :: view | template() | arizona_html:value().
 % Using specific arizona types instead of erlang:dynamic() makes
 % dialyzer stuck in an infinite check.
 -nominal render_callback() :: fun(
@@ -665,19 +667,19 @@ render_stateless(Module, Fun, Bindings, Options) ->
     end.
 
 -doc ~"""
-Renders a slot with view, template, or HTML content.
+Renders a `t:slot` with view, template, or HTML content.
 
 Template DSL function - only use inside `arizona_template:from_html/1` strings.
 Handles different slot types: view (current view), template records, or HTML values.
 """.
 -spec render_slot(Slot) -> Callback when
-    Slot :: view | template() | arizona_html:value(),
+    Slot :: slot(),
     Callback :: render_callback() | arizona_html:html().
 render_slot(Slot) ->
     render_slot(Slot, #{}).
 
 -doc ~"""
-Renders a slot with view, template, or HTML content with options.
+Renders a `t:slot` with view, template, or HTML content with options.
 
 Template DSL function - only use inside `arizona_template:from_html/1` strings.
 Handles different slot types: view (current view), template records, or HTML values.
@@ -685,7 +687,7 @@ Handles different slot types: view (current view), template records, or HTML val
 See `t:render_options/0` for available options.
 """.
 -spec render_slot(Slot, Options) -> Callback when
-    Slot :: view | template() | arizona_html:value(),
+    Slot :: slot(),
     Options :: render_options(),
     Callback :: render_callback() | arizona_html:html().
 render_slot(view, Options) ->
