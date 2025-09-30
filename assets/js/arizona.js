@@ -44,8 +44,6 @@ export default class ArizonaClient {
     this.logLevel = LOG_LEVELS[opts.logLevel] ?? LOG_LEVELS.silent; // Default: silent (production-safe)
     /** @type {Map<string, Set<Function>>} */
     this.eventListeners = new Map();
-    /** @type {Map<string, Map<string, Set<Function>>>} */
-    this.scopedEventListeners = new Map();
   }
 
   /**
@@ -255,12 +253,8 @@ export default class ArizonaClient {
 
   handleDispatchTo(data) {
     this.debug('WebSocket dispatch to:', data);
-
-    // Extract target ID from selector (e.g., "#counter_123" -> "counter_123")
-    const targetId = data.selector.replace(/^[#.]/, '');
-
-    // Emit to arizona scoped event listeners
-    this.emitFor(targetId, data.event, data.options?.detail);
+    const elem = document.querySelector(data.selector);
+    elem.dispatchEvent(new CustomEvent(data.event, data.options));
   }
 
   handleRedirect(data) {
@@ -392,93 +386,6 @@ export default class ArizonaClient {
           this.error(`Error in event listener for '${event}':`, error);
         }
       });
-    }
-  }
-
-  /**
-   * Subscribe to a component-scoped Arizona event
-   * @param {string|HTMLElement} target - Target element ID or element reference
-   * @param {string} event - Event name (e.g., 'incr', 'update')
-   * @param {Function} callback - Callback function to invoke when event occurs
-   * @returns {Function} Unsubscribe function
-   */
-  onFor(target, event, callback) {
-    if (typeof callback !== 'function') {
-      this.error(`onFor: callback must be a function, got ${typeof callback}`);
-      return () => {};
-    }
-
-    const targetId = typeof target === 'string' ? target : target?.id;
-    if (!targetId) {
-      this.error('onFor: target must be a string ID or element with id attribute');
-      return () => {};
-    }
-
-    if (!this.scopedEventListeners.has(targetId)) {
-      this.scopedEventListeners.set(targetId, new Map());
-    }
-
-    const targetEvents = this.scopedEventListeners.get(targetId);
-    if (!targetEvents.has(event)) {
-      targetEvents.set(event, new Set());
-    }
-
-    targetEvents.get(event).add(callback);
-    this.debug(`Subscribed to scoped event: ${targetId}:${event}`);
-
-    // Return unsubscribe function
-    return () => {
-      return this.offFor(targetId, event, callback);
-    };
-  }
-
-  /**
-   * Unsubscribe from a component-scoped Arizona event
-   * @param {string} targetId - Target element ID
-   * @param {string} event - Event name
-   * @param {Function} callback - Callback function to remove
-   * @returns {void}
-   */
-  offFor(targetId, event, callback) {
-    const targetEvents = this.scopedEventListeners.get(targetId);
-    if (targetEvents) {
-      const listeners = targetEvents.get(event);
-      if (listeners) {
-        listeners.delete(callback);
-        this.debug(`Unsubscribed from scoped event: ${targetId}:${event}`);
-
-        // Clean up empty listener sets
-        if (listeners.size === 0) {
-          targetEvents.delete(event);
-        }
-        if (targetEvents.size === 0) {
-          this.scopedEventListeners.delete(targetId);
-        }
-      }
-    }
-  }
-
-  /**
-   * Emit a component-scoped event to all subscribed listeners
-   * @private
-   * @param {string} targetId - Target element ID
-   * @param {string} event - Event name
-   * @param {*} data - Event data to pass to listeners
-   * @returns {void}
-   */
-  emitFor(targetId, event, data) {
-    const targetEvents = this.scopedEventListeners.get(targetId);
-    if (targetEvents) {
-      const listeners = targetEvents.get(event);
-      if (listeners) {
-        listeners.forEach((callback) => {
-          try {
-            callback(data);
-          } catch (error) {
-            this.error(`Error in scoped event listener for '${targetId}:${event}':`, error);
-          }
-        });
-      }
     }
   }
 }

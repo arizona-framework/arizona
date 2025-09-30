@@ -292,7 +292,7 @@ describe('ArizonaClient', () => {
     });
   });
 
-  describe('reload behavior', () => {
+  describe('custom event dispatching', () => {
     test('does not dispatch events for reload messages', () => {
       client.handleReload({});
 
@@ -305,6 +305,77 @@ describe('ArizonaClient', () => {
       client.handleHtmlPatch(patchData);
 
       expect(mockDocument.dispatchEvent).not.toHaveBeenCalled();
+    });
+
+    test('handles dispatch_to messages and dispatches custom events to target elements', () => {
+      const mockElement = {
+        dispatchEvent: vi.fn(),
+      };
+      mockDocument.querySelector.mockReturnValue(mockElement);
+
+      const dispatchData = {
+        selector: '.target-button',
+        event: 'customClick',
+        options: { detail: { userId: 123, action: 'increment' } },
+      };
+
+      client.handleDispatchTo(dispatchData);
+
+      expect(mockDocument.querySelector).toHaveBeenCalledWith('.target-button');
+      expect(mockElement.dispatchEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'customClick',
+          detail: { userId: 123, action: 'increment' },
+        })
+      );
+    });
+
+    test('handles dispatch_to with element not found gracefully', () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockDocument.querySelector.mockReturnValue(null);
+
+      const dispatchData = {
+        selector: '.non-existent',
+        event: 'testEvent',
+        options: { detail: { data: 'test' } },
+      };
+
+      expect(() => {
+        client.handleDispatchTo(dispatchData);
+      }).toThrow();
+
+      consoleSpy.mockRestore();
+    });
+
+    test('handles dispatch_to with various CSS selectors', () => {
+      const mockElement = {
+        dispatchEvent: vi.fn(),
+      };
+      mockDocument.querySelector.mockReturnValue(mockElement);
+
+      // Test ID selector
+      client.handleDispatchTo({
+        selector: '#my-button',
+        event: 'click',
+        options: { detail: { buttonId: 'my-button' } },
+      });
+
+      // Test class selector
+      client.handleDispatchTo({
+        selector: '.notification',
+        event: 'dismiss',
+        options: { detail: { notificationId: 'alert-1' } },
+      });
+
+      // Test attribute selector
+      client.handleDispatchTo({
+        selector: '[data-component="counter"]',
+        event: 'update',
+        options: { detail: { value: 42 } },
+      });
+
+      expect(mockDocument.querySelector).toHaveBeenCalledTimes(3);
+      expect(mockElement.dispatchEvent).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -535,228 +606,6 @@ describe('ArizonaClient', () => {
       client.handleWorkerError(errorData);
 
       expect(callback).toHaveBeenCalledWith(errorData);
-    });
-  });
-
-  describe('Component-scoped event subscription system', () => {
-    test('onFor() subscribes to scoped events and returns unsubscribe function', () => {
-      const callback = vi.fn();
-      const unsubscribe = client.onFor('component_123', 'update', callback);
-
-      expect(typeof unsubscribe).toBe('function');
-      expect(client.scopedEventListeners.has('component_123')).toBe(true);
-      expect(client.scopedEventListeners.get('component_123').has('update')).toBe(true);
-    });
-
-    test('onFor() accepts element reference with id', () => {
-      const element = { id: 'component_123' };
-      const callback = vi.fn();
-
-      client.onFor(element, 'update', callback);
-
-      expect(client.scopedEventListeners.has('component_123')).toBe(true);
-    });
-
-    test('onFor() returns empty unsubscribe function for invalid target', () => {
-      const callback = vi.fn();
-      const element = {}; // No id
-      const unsubscribe = client.onFor(element, 'update', callback);
-
-      expect(typeof unsubscribe).toBe('function');
-      expect(client.scopedEventListeners.size).toBe(0);
-    });
-
-    test('onFor() returns empty unsubscribe function for non-function callback', () => {
-      const unsubscribe = client.onFor('component_123', 'update', 'not a function');
-
-      expect(typeof unsubscribe).toBe('function');
-      expect(client.scopedEventListeners.size).toBe(0);
-    });
-
-    test('emitFor() calls all subscribed listeners for target', () => {
-      const callback1 = vi.fn();
-      const callback2 = vi.fn();
-      const eventData = { count: 5 };
-
-      client.onFor('component_123', 'incr', callback1);
-      client.onFor('component_123', 'incr', callback2);
-      client.emitFor('component_123', 'incr', eventData);
-
-      expect(callback1).toHaveBeenCalledWith(eventData);
-      expect(callback2).toHaveBeenCalledWith(eventData);
-    });
-
-    test('emitFor() only calls listeners for matching target', () => {
-      const callback1 = vi.fn();
-      const callback2 = vi.fn();
-
-      client.onFor('component_123', 'update', callback1);
-      client.onFor('component_456', 'update', callback2);
-      client.emitFor('component_123', 'update', {});
-
-      expect(callback1).toHaveBeenCalledTimes(1);
-      expect(callback2).not.toHaveBeenCalled();
-    });
-
-    test('emitFor() only calls listeners for matching event', () => {
-      const callback1 = vi.fn();
-      const callback2 = vi.fn();
-
-      client.onFor('component_123', 'incr', callback1);
-      client.onFor('component_123', 'decr', callback2);
-      client.emitFor('component_123', 'incr', {});
-
-      expect(callback1).toHaveBeenCalledTimes(1);
-      expect(callback2).not.toHaveBeenCalled();
-    });
-
-    test('emitFor() handles listener errors gracefully', () => {
-      const errorSpy = vi.spyOn(client, 'error').mockImplementation(() => {});
-      const error = new Error('Listener error');
-      const failingCallback = vi.fn(() => {
-        throw error;
-      });
-      const successCallback = vi.fn();
-
-      client.onFor('component_123', 'update', failingCallback);
-      client.onFor('component_123', 'update', successCallback);
-      client.emitFor('component_123', 'update', {});
-
-      expect(failingCallback).toHaveBeenCalled();
-      expect(successCallback).toHaveBeenCalled();
-      expect(errorSpy).toHaveBeenCalledWith(
-        "Error in scoped event listener for 'component_123:update':",
-        error
-      );
-
-      errorSpy.mockRestore();
-    });
-
-    test('emitFor() with no listeners does nothing', () => {
-      expect(() => client.emitFor('nonexistent', 'update', {})).not.toThrow();
-    });
-
-    test('offFor() unsubscribes callback from scoped event', () => {
-      const callback = vi.fn();
-      client.onFor('component_123', 'update', callback);
-      client.offFor('component_123', 'update', callback);
-
-      expect(client.scopedEventListeners.has('component_123')).toBe(false);
-      client.emitFor('component_123', 'update', {});
-      expect(callback).not.toHaveBeenCalled();
-    });
-
-    test('offFor() cleans up empty listener sets', () => {
-      const callback = vi.fn();
-      client.onFor('component_123', 'update', callback);
-      expect(client.scopedEventListeners.has('component_123')).toBe(true);
-
-      client.offFor('component_123', 'update', callback);
-      expect(client.scopedEventListeners.has('component_123')).toBe(false);
-    });
-
-    test('unsubscribe function returned by onFor() works correctly', () => {
-      const callback = vi.fn();
-      const unsubscribe = client.onFor('component_123', 'update', callback);
-
-      client.emitFor('component_123', 'update', {});
-      expect(callback).toHaveBeenCalledTimes(1);
-
-      unsubscribe();
-      client.emitFor('component_123', 'update', {});
-      expect(callback).toHaveBeenCalledTimes(1);
-    });
-
-    test('multiple listeners can subscribe to same scoped event', () => {
-      const callback1 = vi.fn();
-      const callback2 = vi.fn();
-      const callback3 = vi.fn();
-
-      client.onFor('component_123', 'update', callback1);
-      client.onFor('component_123', 'update', callback2);
-      client.onFor('component_123', 'update', callback3);
-
-      client.emitFor('component_123', 'update', {});
-
-      expect(callback1).toHaveBeenCalledTimes(1);
-      expect(callback2).toHaveBeenCalledTimes(1);
-      expect(callback3).toHaveBeenCalledTimes(1);
-    });
-
-    test('removing one scoped listener does not affect others', () => {
-      const callback1 = vi.fn();
-      const callback2 = vi.fn();
-
-      client.onFor('component_123', 'update', callback1);
-      client.onFor('component_123', 'update', callback2);
-      client.offFor('component_123', 'update', callback1);
-
-      client.emitFor('component_123', 'update', {});
-
-      expect(callback1).not.toHaveBeenCalled();
-      expect(callback2).toHaveBeenCalledTimes(1);
-    });
-
-    test('handleDispatchTo emits scoped event with correct target ID', () => {
-      const callback = vi.fn();
-      client.onFor('component_123', 'incr', callback);
-
-      const dispatchData = {
-        selector: '#component_123',
-        event: 'incr',
-        options: { detail: { count: 5 } },
-      };
-      client.handleDispatchTo(dispatchData);
-
-      expect(callback).toHaveBeenCalledWith({ count: 5 });
-    });
-
-    test('handleDispatchTo extracts ID from class selector', () => {
-      const callback = vi.fn();
-      client.onFor('component_123', 'update', callback);
-
-      const dispatchData = {
-        selector: '.component_123',
-        event: 'update',
-        options: { detail: { value: 'test' } },
-      };
-      client.handleDispatchTo(dispatchData);
-
-      expect(callback).toHaveBeenCalledWith({ value: 'test' });
-    });
-
-    test('scoped events are isolated per target', () => {
-      const callback1 = vi.fn();
-      const callback2 = vi.fn();
-
-      client.onFor('component_123', 'update', callback1);
-      client.onFor('component_456', 'update', callback2);
-
-      client.handleDispatchTo({
-        selector: '#component_123',
-        event: 'update',
-        options: { detail: { value: 1 } },
-      });
-
-      expect(callback1).toHaveBeenCalledWith({ value: 1 });
-      expect(callback2).not.toHaveBeenCalled();
-    });
-
-    test('scoped events are isolated per event name', () => {
-      const callback1 = vi.fn();
-      const callback2 = vi.fn();
-
-      client.onFor('component_123', 'incr', callback1);
-      client.onFor('component_123', 'decr', callback2);
-
-      client.handleDispatchTo({
-        selector: '#component_123',
-        event: 'incr',
-        options: { detail: { count: 5 } },
-      });
-
-      expect(callback1).toHaveBeenCalledWith({ count: 5 });
-      expect(callback2).not.toHaveBeenCalled();
     });
   });
 
