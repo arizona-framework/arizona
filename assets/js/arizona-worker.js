@@ -95,9 +95,6 @@ class ArizonaWebSocketWorker {
         case 'reload':
           this.handleReload(message);
           break;
-        case 'reply':
-          this.handleReply(message);
-          break;
         case 'dispatch_to':
           this.handleDispatchTo(message);
           break;
@@ -143,14 +140,6 @@ class ArizonaWebSocketWorker {
     this.postMessage({
       type: 'reload',
       data: message,
-    });
-  }
-
-  handleReply(message) {
-    // Send reply message to main thread
-    this.postMessage({
-      type: 'reply',
-      data: message.data,
     });
   }
 
