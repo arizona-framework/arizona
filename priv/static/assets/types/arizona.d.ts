@@ -16,6 +16,8 @@ export default class ArizonaClient {
     logLevel: number;
     /** @type {Map<string, Set<Function>>} */
     eventListeners: Map<string, Set<Function>>;
+    /** @type {Map<string, Map<string, Set<Function>>>} */
+    scopedEventListeners: Map<string, Map<string, Set<Function>>>;
     /**
      * Initialize worker if not already created
      * @private
@@ -118,6 +120,31 @@ export default class ArizonaClient {
      * @returns {void}
      */
     private emit;
+    /**
+     * Subscribe to a component-scoped Arizona event
+     * @param {string|HTMLElement} target - Target element ID or element reference
+     * @param {string} event - Event name (e.g., 'incr', 'update')
+     * @param {Function} callback - Callback function to invoke when event occurs
+     * @returns {Function} Unsubscribe function
+     */
+    onFor(target: string | HTMLElement, event: string, callback: Function): Function;
+    /**
+     * Unsubscribe from a component-scoped Arizona event
+     * @param {string} targetId - Target element ID
+     * @param {string} event - Event name
+     * @param {Function} callback - Callback function to remove
+     * @returns {void}
+     */
+    offFor(targetId: string, event: string, callback: Function): void;
+    /**
+     * Emit a component-scoped event to all subscribed listeners
+     * @private
+     * @param {string} targetId - Target element ID
+     * @param {string} event - Event name
+     * @param {*} data - Event data to pass to listeners
+     * @returns {void}
+     */
+    private emitFor;
 }
 export type ArizonaClientOptions = {
     /**

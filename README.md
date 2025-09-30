@@ -867,58 +867,109 @@ handle_info({timer, update}, View) ->
 
 ### **Client-Side Event Listening**
 
-Arizona dispatches custom events to DOM elements based on server actions, allowing seamless
-integration with any JavaScript framework or library.
+Arizona provides a unified event subscription system for both framework-level and component-scoped events.
 
-Custom events are triggered by `dispatch_to` actions from `handle_event/3`:
+#### **Framework Events**
+
+Subscribe to connection and error events using `arizona.on()`:
 
 ```javascript
-// Listen for custom events dispatched from the server
-document.addEventListener('dataSaved', (event) => {
-    // Handle data saved event with custom data
-    console.log('Data saved:', event.detail);
-    showNotification('Saved successfully!');
+// Listen for connection events
+arizona.on('connected', (data) => {
+    console.log('Connected to server');
+    showConnectionIndicator('online');
 });
 
-// Listen on specific elements
-const notification = document.querySelector('#notification');
-notification.addEventListener('show', (event) => {
-    notification.textContent = event.detail.message;
-    notification.classList.add('visible');
+arizona.on('disconnected', (data) => {
+    console.log('Disconnected from server');
+    showConnectionIndicator('offline');
 });
 
-// Listen for Arizona framework events
-document.addEventListener('arizonaEvent', (event) => {
-    const { type, data } = event.detail;
-
-    if (type === 'error') {
-        // Handle server errors
-        console.error('Server error:', data.error);
-        showErrorMessage(data.error);
-    }
-
-    if (type === 'status') {
-        // Track connection status
-        if (data.status === 'connected') {
-            showConnectionIndicator('online');
-        } else if (data.status === 'disconnected') {
-            showConnectionIndicator('offline');
-        }
-    }
+// Listen for errors
+arizona.on('error', (data) => {
+    console.error('Server error:', data.error);
+    showErrorMessage(data.error);
 });
 
-// Example: Handle form submission with custom event feedback
-function submitForm(formData) {
-    // Send event to server
-    arizona.pushEvent('submit_form', formData);
+// Unsubscribe when done
+const unsubscribe = arizona.on('connected', callback);
+unsubscribe(); // Or use arizona.off('connected', callback)
+```
 
-    // Listen for custom event response from server
-    document.addEventListener('formSubmitted', (event) => {
-        if (event.detail.success) {
-            showSuccess('Form submitted successfully!');
-        }
-    }, { once: true });
+#### **Component-Scoped Events**
+
+Subscribe to events for specific components using `arizona.onFor()`. This is triggered by `dispatch_to` actions from the server:
+
+```javascript
+// Svelte component example
+import { onMount } from 'svelte';
+
+let { id, initialCount = 0 } = $props();
+let count = $state(initialCount);
+
+function increment() {
+    arizona.pushEventTo(id, 'incr', { count });
 }
+
+onMount(() => {
+    // Subscribe to events for this component
+    return arizona.onFor(id, 'incr', (data) => {
+        count = data.count; // Update local state
+    });
+});
+```
+
+```javascript
+// React component example
+import { useEffect, useState } from 'react';
+
+function Counter({ id, initialCount = 0 }) {
+    const [count, setCount] = useState(initialCount);
+
+    useEffect(() => {
+        // Subscribe to component-scoped events
+        const unsubscribe = arizona.onFor(id, 'update', (data) => {
+            setCount(data.count);
+        });
+
+        return unsubscribe; // Cleanup on unmount
+    }, [id]);
+
+    const increment = () => {
+        arizona.pushEventTo(id, 'incr', { count });
+    };
+
+    return <button onClick={increment}>Count: {count}</button>;
+}
+```
+
+```javascript
+// Vanilla JavaScript example
+const componentId = 'counter_123';
+
+// Subscribe to events for specific component
+arizona.onFor(componentId, 'update', (data) => {
+    document.getElementById(componentId).textContent = data.count;
+});
+
+// Send event to server targeting this component
+arizona.pushEventTo(componentId, 'incr', { amount: 1 });
+
+// Unsubscribe when done
+arizona.offFor(componentId, 'update', callback);
+```
+
+#### **Server-Side dispatch_to Action**
+
+From Erlang, dispatch events to specific components:
+
+```erlang
+% In handle_event/3, dispatch to specific component
+handle_event(~"incr", #{~"count" := Count}, State) ->
+    Id = arizona_stateful:get_binding(id, State),
+    NewCount = Count + 1,
+    NewState = arizona_stateful:put_binding(count, NewCount, State),
+    {[{dispatch_to, Id, ~"incr", #{count => NewCount}}], NewState}.
 ```
 
 ## Development Features
