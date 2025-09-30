@@ -307,75 +307,51 @@ describe('ArizonaClient', () => {
       expect(mockDocument.dispatchEvent).not.toHaveBeenCalled();
     });
 
-    test('handles dispatch_to messages and dispatches custom events to target elements', () => {
-      const mockElement = {
-        dispatchEvent: vi.fn(),
-      };
-      mockDocument.querySelector.mockReturnValue(mockElement);
+    test('handles dispatch messages and emits events', () => {
+      const callback = vi.fn();
+      client.on('customClick', callback);
 
       const dispatchData = {
-        selector: '.target-button',
         event: 'customClick',
-        options: { detail: { userId: 123, action: 'increment' } },
+        data: { userId: 123, action: 'increment' },
       };
 
-      client.handleDispatchTo(dispatchData);
+      client.handleDispatch(dispatchData);
 
-      expect(mockDocument.querySelector).toHaveBeenCalledWith('.target-button');
-      expect(mockElement.dispatchEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'customClick',
-          detail: { userId: 123, action: 'increment' },
-        })
-      );
+      expect(callback).toHaveBeenCalledWith({ userId: 123, action: 'increment' });
     });
 
-    test('handles dispatch_to with element not found gracefully', () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      mockDocument.querySelector.mockReturnValue(null);
+    test('handles dispatch with namespaced component events', () => {
+      const callback = vi.fn();
+      client.on('counter_123:incr', callback);
 
       const dispatchData = {
-        selector: '.non-existent',
-        event: 'testEvent',
-        options: { detail: { data: 'test' } },
+        event: 'counter_123:incr',
+        data: { count: 5 },
       };
 
-      expect(() => {
-        client.handleDispatchTo(dispatchData);
-      }).toThrow();
+      client.handleDispatch(dispatchData);
 
-      consoleSpy.mockRestore();
+      expect(callback).toHaveBeenCalledWith({ count: 5 });
     });
 
-    test('handles dispatch_to with various CSS selectors', () => {
-      const mockElement = {
-        dispatchEvent: vi.fn(),
-      };
-      mockDocument.querySelector.mockReturnValue(mockElement);
+    test('handles dispatch with multiple subscribers', () => {
+      const callback1 = vi.fn();
+      const callback2 = vi.fn();
+      const callback3 = vi.fn();
 
-      // Test ID selector
-      client.handleDispatchTo({
-        selector: '#my-button',
-        event: 'click',
-        options: { detail: { buttonId: 'my-button' } },
+      client.on('dataLoaded', callback1);
+      client.on('dataLoaded', callback2);
+      client.on('dataLoaded', callback3);
+
+      client.handleDispatch({
+        event: 'dataLoaded',
+        data: { status: 'success' },
       });
 
-      // Test class selector
-      client.handleDispatchTo({
-        selector: '.notification',
-        event: 'dismiss',
-        options: { detail: { notificationId: 'alert-1' } },
-      });
-
-      // Test attribute selector
-      client.handleDispatchTo({
-        selector: '[data-component="counter"]',
-        event: 'update',
-        options: { detail: { value: 42 } },
-      });
-
-      expect(mockDocument.querySelector).toHaveBeenCalledTimes(3);
-      expect(mockElement.dispatchEvent).toHaveBeenCalledTimes(3);
+      expect(callback1).toHaveBeenCalledWith({ status: 'success' });
+      expect(callback2).toHaveBeenCalledWith({ status: 'success' });
+      expect(callback3).toHaveBeenCalledWith({ status: 'success' });
     });
   });
 

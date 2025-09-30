@@ -95,8 +95,8 @@ class ArizonaWebSocketWorker {
         case 'reload':
           this.handleReload(message);
           break;
-        case 'dispatch_to':
-          this.handleDispatchTo(message);
+        case 'dispatch':
+          this.handleDispatch(message);
           break;
         case 'redirect':
           this.handleRedirect(message);
@@ -143,15 +143,11 @@ class ArizonaWebSocketWorker {
     });
   }
 
-  handleDispatchTo(message) {
+  handleDispatch(message) {
     // Send dispatch event message to main thread
     this.postMessage({
-      type: 'dispatch_to',
-      data: {
-        selector: message.selector,
-        event: message.event,
-        options: { detail: message.data },
-      },
+      type: 'dispatch',
+      data: message,
     });
   }
 

@@ -60,7 +60,7 @@ export default class ArizonaClient {
     applyHtmlPatch(patch: any): void;
     handleWorkerError(data: any): void;
     handleReload(data: any): void;
-    handleDispatchTo(data: any): void;
+    handleDispatch(data: any): void;
     handleRedirect(data: any): void;
     handleUnknownMessage(message: any): void;
     /**

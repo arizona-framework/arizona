@@ -163,8 +163,8 @@ export default class ArizonaClient {
         case 'reload':
           this.handleReload(data);
           break;
-        case 'dispatch_to':
-          this.handleDispatchTo(data);
+        case 'dispatch':
+          this.handleDispatch(data);
           break;
         case 'redirect':
           this.handleRedirect(data);
@@ -251,10 +251,9 @@ export default class ArizonaClient {
     }
   }
 
-  handleDispatchTo(data) {
-    this.debug('WebSocket dispatch to:', data);
-    const elem = document.querySelector(data.selector);
-    elem.dispatchEvent(new CustomEvent(data.event, data.options));
+  handleDispatch(data) {
+    this.debug('Dispatching event:', data.event);
+    this.emit(data.event, data.data);
   }
 
   handleRedirect(data) {

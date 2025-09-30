@@ -311,10 +311,9 @@ handle_actions_response(StatefulId, Diff, Actions, #state{} = State) ->
     Action :: arizona_action:action(),
     Command :: {text, JSON},
     JSON :: json:encode_value().
-action_to_command({dispatch_to, CSSSelector, Event, Data}) ->
+action_to_command({dispatch, Event, Data}) ->
     Payload = json_encode(#{
-        type => ~"dispatch_to",
-        selector => CSSSelector,
+        type => ~"dispatch",
         event => Event,
         data => Data
     }),
