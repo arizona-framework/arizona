@@ -293,18 +293,6 @@ describe('ArizonaClient', () => {
   });
 
   describe('custom event dispatching', () => {
-    test('dispatches arizonaEvent for reply messages', () => {
-      const replyData = { success: true, userId: 123 };
-      client.handleReply(replyData);
-
-      expect(mockDocument.dispatchEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'arizonaEvent',
-          detail: { type: 'reply', data: replyData },
-        })
-      );
-    });
-
     test('dispatches arizonaEvent for error messages', () => {
       const errorData = { error: 'Something went wrong' };
       client.handleWorkerError(errorData);

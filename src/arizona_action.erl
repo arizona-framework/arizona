@@ -37,8 +37,7 @@ No action:
 %% --------------------------------------------------------------------
 
 -nominal action() ::
-    {reply, Data :: reply_data()}
-    | {dispatch_to, CSSSelector :: binary(), Event :: binary(), Data :: reply_data()}
+    {dispatch_to, CSSSelector :: binary(), Event :: binary(), Data :: reply_data()}
     | {redirect, URL :: redirect_url(), Options :: redirect_options()}
     | reload.
 

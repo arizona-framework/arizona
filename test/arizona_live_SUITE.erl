@@ -80,7 +80,7 @@ init_per_suite(Config) ->
         NewCounter = CurrentCounter + 1,
         UpdatedViewState = arizona_stateful:put_binding(counter, NewCounter, ViewState),
         UpdatedView = arizona_view:update_state(UpdatedViewState, View),
-        {[{reply, #{new_count => NewCounter}}], UpdatedView};
+        {[{dispatch_to, ~"document", ~"counterUpdate", #{new_count => NewCounter}}], UpdatedView};
     handle_event(~"dispatch_to_test", _Params, View) ->
         {[{dispatch_to, ~".notification", ~"hideAlert", #{
             alert_id => ~"test-alert",
@@ -113,7 +113,10 @@ init_per_suite(Config) ->
 
     handle_event(~"update", #{~"value" := NewValue}, State) ->
         UpdatedState = arizona_stateful:put_binding(value, NewValue, State),
-        {[{reply, #{updated => true}}], UpdatedState};
+        {[{dispatch_to, ~"#status", ~"componentUpdated", #{
+            updated => true,
+            value => NewValue
+        }}], UpdatedState};
     handle_event(~"update_no_action", #{~"value" := NewValue}, State) ->
         UpdatedState = arizona_stateful:put_binding(value, NewValue, State),
         {[], UpdatedState}.
@@ -319,7 +322,10 @@ handle_view_event_with_actions_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent
     receive
-        {actions_response, ~"live_test_id", _Diff, [{reply, #{new_count := 1}}]} -> ok
+        {actions_response, ~"live_test_id", _Diff, [
+            {dispatch_to, ~"document", ~"counterUpdate", #{new_count := 1}}
+        ]} ->
+            ok
     after 1000 ->
         ct:fail("Expected actions_response message not received")
     end.
@@ -366,7 +372,10 @@ handle_stateful_event_with_actions_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent
     receive
-        {actions_response, ~"stateful_1", _Diff, [{reply, #{updated := true}}]} -> ok
+        {actions_response, ~"stateful_1", _Diff, [
+            {dispatch_to, ~"#status", ~"componentUpdated", #{updated := true, value := 100}}
+        ]} ->
+            ok
     after 1000 ->
         ct:fail("Expected actions_response message not received")
     end.
@@ -423,7 +432,10 @@ pubsub_message_test(Config) when is_list(Config) ->
 
     % Expect actions message since increment returns actions
     receive
-        {actions_response, ~"live_test_id", _Diff, [{reply, #{new_count := _}}]} -> ok
+        {actions_response, ~"live_test_id", _Diff, [
+            {dispatch_to, ~"document", ~"counterUpdate", #{new_count := _}}
+        ]} ->
+            ok
     after 1000 ->
         ct:fail("Expected actions_response message not received")
     end.
@@ -438,12 +450,18 @@ concurrent_event_handling_test(Config) when is_list(Config) ->
 
     % Expect two actions messages
     receive
-        {actions_response, ~"live_test_id", _Diff1, [{reply, #{new_count := _}}]} -> ok
+        {actions_response, ~"live_test_id", _Diff1, [
+            {dispatch_to, ~"document", ~"counterUpdate", #{new_count := _}}
+        ]} ->
+            ok
     after 1000 ->
         ct:fail("Expected first actions_response message not received")
     end,
     receive
-        {actions_response, ~"live_test_id", _Diff2, [{reply, #{new_count := _}}]} -> ok
+        {actions_response, ~"live_test_id", _Diff2, [
+            {dispatch_to, ~"document", ~"counterUpdate", #{new_count := _}}
+        ]} ->
+            ok
     after 1000 ->
         ct:fail("Expected second actions_response message not received")
     end.

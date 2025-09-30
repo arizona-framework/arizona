@@ -161,9 +161,6 @@ export default class ArizonaClient {
         case 'reload':
           this.handleReload(data);
           break;
-        case 'reply':
-          this.handleReply(data);
-          break;
         case 'dispatch_to':
           this.handleDispatchTo(data);
           break;
@@ -249,11 +246,6 @@ export default class ArizonaClient {
         this.info(`${data.file_type || 'File'} changed. Reloading page...`);
         window.location.reload();
     }
-  }
-
-  handleReply(data) {
-    this.debug('WebSocket reply:', data);
-    this.dispatchArizonaEvent('reply', data);
   }
 
   handleDispatchTo(data) {

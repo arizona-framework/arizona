@@ -551,8 +551,10 @@ Arizona uses a flexible action system for handling callback responses. All callb
 % No action - just update state
 {[], NewState}
 
-% Reply with data to client
-{[{reply, #{status => success, data => Value}}], NewState}
+% Dispatch custom events to DOM elements
+{[{dispatch_to, ~"document", ~"dataLoaded", #{status => success, data => Value}}], NewState}
+{[{dispatch_to, ~"#notification", ~"show", #{message => ~"Success!"}}], NewState}
+{[{dispatch_to, ~".alert", ~"hide", #{}}], NewState}
 
 % Redirect to new URL
 {[{redirect, ~"/new-page", #{target => ~"_self"}}], NewState}     % Same tab
@@ -569,7 +571,7 @@ Arizona uses a flexible action system for handling callback responses. All callb
 
 % Multiple actions - executed in sequence
 {[
-    {reply, #{message => ~"Saved successfully!"}},
+    {dispatch_to, ~"document", ~"taskCompleted", #{message => ~"Saved successfully!"}},
     {redirect, ~"/dashboard", #{target => ~"_self"}}
 ], NewState}
 ```
@@ -578,6 +580,7 @@ Arizona uses a flexible action system for handling callback responses. All callb
 
 - **Multiple Responses**: Send multiple actions per callback
 - **Built-in Functionality**: No need to implement redirects or reloads manually
+- **Custom Event Dispatching**: Integrate with any JavaScript framework or library via DOM events
 - **Consistent API**: Same pattern across views and stateful components
 - **Type Safety**: All actions are validated and processed uniformly
 - **Future Extensible**: Easy to add new action types as needed
@@ -804,10 +807,10 @@ handle_event(~"my_event", Params, State) ->
     % Update state and return {Actions, NewState} where Actions is a list
     {[], arizona_stateful:put_binding(updated, true, State)}.
 
-% Example with actions - reply to client with data
+% Example with actions - dispatch custom event to client
 handle_event(~"save_data", Params, State) ->
-    % Process data and send reply action to client
-    {[{reply, #{status => success, id => 123}}], UpdatedState}.
+    % Process data and dispatch event to client
+    {[{dispatch_to, ~"document", ~"dataSaved", #{status => success, id => 123}}], UpdatedState}.
 
 % Example with redirect action
 handle_event(~"login_success", _Params, State) ->
@@ -821,9 +824,9 @@ handle_event(~"reset_app", _Params, State) ->
 
 % Example with multiple actions
 handle_event(~"complete_task", _Params, State) ->
-    % Send reply and then redirect
+    % Dispatch event and then redirect
     Actions = [
-        {reply, #{message => ~"Task completed!"}},
+        {dispatch_to, ~"document", ~"taskCompleted", #{message => ~"Task completed!"}},
         {redirect, ~"/tasks", #{target => ~"_self"}}
     ],
     {Actions, State}.
@@ -864,22 +867,29 @@ handle_info({timer, update}, View) ->
 
 ### **Client-Side Event Listening**
 
-Arizona automatically dispatches custom events for meaningful server interactions,
-allowing application code to react to server responses.
+Arizona dispatches custom events to DOM elements based on server actions, allowing seamless
+integration with any JavaScript framework or library.
 
-The `reply` event is triggered when `handle_event/3` returns `{[{reply, Data}], View}`
-(in views) or `{[{reply, Data}], StatefulState}` (in stateful components):
+Custom events are triggered by `dispatch_to` actions from `handle_event/3`:
 
 ```javascript
-// Listen for server events in your application
+// Listen for custom events dispatched from the server
+document.addEventListener('dataSaved', (event) => {
+    // Handle data saved event with custom data
+    console.log('Data saved:', event.detail);
+    showNotification('Saved successfully!');
+});
+
+// Listen on specific elements
+const notification = document.querySelector('#notification');
+notification.addEventListener('show', (event) => {
+    notification.textContent = event.detail.message;
+    notification.classList.add('visible');
+});
+
+// Listen for Arizona framework events
 document.addEventListener('arizonaEvent', (event) => {
     const { type, data } = event.detail;
-
-    if (type === 'reply') {
-        // Handle server replies to user actions
-        console.log('Server replied:', data);
-        showNotification('Action completed successfully');
-    }
 
     if (type === 'error') {
         // Handle server errors
@@ -897,12 +907,17 @@ document.addEventListener('arizonaEvent', (event) => {
     }
 });
 
-// Example: Handle form submission with server feedback
+// Example: Handle form submission with custom event feedback
 function submitForm(formData) {
+    // Send event to server
     arizona.sendEvent('submit_form', formData);
 
-    // The arizonaEvent will fire when the server responds
-    // allowing you to show success/error messages or update UI
+    // Listen for custom event response from server
+    document.addEventListener('formSubmitted', (event) => {
+        if (event.detail.success) {
+            showSuccess('Form submitted successfully!');
+        }
+    }, { once: true });
 }
 ```
 
