@@ -27,9 +27,6 @@ export default defineConfig(({ mode }) => {
         include: [
           'assets/js/index.js',
           'assets/js/arizona.js',
-          'assets/js/patcher/index.js',
-          'assets/js/patcher/arizona-patcher.js',
-          'assets/js/patcher/arizona-morphdom-patcher.js',
           'assets/js/logger/index.js',
           'assets/js/logger/arizona-logger.js',
           'assets/js/logger/arizona-console-logger.js',
@@ -54,9 +51,6 @@ export default defineConfig(({ mode }) => {
         entry: {
           index: 'assets/js/index.js',
           arizona: 'assets/js/arizona.js',
-          'patcher/index': 'assets/js/patcher/index.js',
-          'patcher/arizona-patcher': 'assets/js/patcher/arizona-patcher.js',
-          'patcher/arizona-morphdom-patcher': 'assets/js/patcher/arizona-morphdom-patcher.js',
           'logger/index': 'assets/js/logger/index.js',
           'logger/arizona-logger': 'assets/js/logger/arizona-logger.js',
           'logger/arizona-console-logger': 'assets/js/logger/arizona-console-logger.js',
@@ -69,7 +63,6 @@ export default defineConfig(({ mode }) => {
       reportCompressedSize: !isDev,
       emptyOutDir: false,
       rollupOptions: {
-        external: ['morphdom'],
         output: {
           format: 'es',
           entryFileNames: '[name].min.js',

@@ -519,13 +519,12 @@ render(Bindings) ->
     <head>
         <title>My Arizona App</title>
         <script type="module" async>
-            import Arizona, { ArizonaMorphdomPatcher, ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
+            import Arizona, { ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
 
-            // Create client with DOM patcher and logger
-            const patcher = new ArizonaMorphdomPatcher();
+            // Create client with optional logger
             const logger = new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.info });
 
-            globalThis.arizona = new Arizona({ patcher, logger });
+            globalThis.arizona = new Arizona({ logger });
             arizona.connect('/live');
         </script>
     </head>
@@ -996,28 +995,23 @@ Erlang's logger for consistent debugging across the stack.
 **Basic Usage:**
 
 ```javascript
-import Arizona, { ArizonaMorphdomPatcher, ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
+import Arizona, { ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
 
 // Production - no logger (silent by default)
-const arizona = new Arizona({
-    patcher: new ArizonaMorphdomPatcher()
-});
+const arizona = new Arizona();
 
 // Development - console logger with info level
 const arizona = new Arizona({
-    patcher: new ArizonaMorphdomPatcher(),
     logger: new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.info })
 });
 
 // Full debugging - all internal operations
 const arizona = new Arizona({
-    patcher: new ArizonaMorphdomPatcher(),
     logger: new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.debug })
 });
 
 // Programmatic control
 const arizona = new Arizona({
-    patcher: new ArizonaMorphdomPatcher(),
     logger: process.env.NODE_ENV === 'development'
         ? new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.debug })
         : null
@@ -1049,7 +1043,6 @@ class MyCustomLogger extends ArizonaLogger {
 }
 
 const arizona = new Arizona({
-    patcher: new ArizonaMorphdomPatcher(),
     logger: new MyCustomLogger({ logLevel: LOG_LEVELS.warning })
 });
 ```
@@ -1121,25 +1114,19 @@ Then start normally:
 Install the Arizona client via npm:
 
 ```bash
-npm install @arizona-framework/client morphdom
+npm install @arizona-framework/client
 ```
-
-> **Note:** `morphdom` is an optional peer dependency. Only install it if you're using `ArizonaMorphdomPatcher`.
-> Arizona requires a patcher implementation for live DOM updates. You can use the included morphdom patcher
-> or implement your own custom patcher by extending `ArizonaPatcher`.
 
 **Import Options:**
 
 ```javascript
 // Recommended: Import everything from main entry point
-import Arizona, { ArizonaMorphdomPatcher, ArizonaPatcher } from '@arizona-framework/client';
+import Arizona, { ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
 
 // Or: Import from specific subpaths
 import Arizona from '@arizona-framework/client';
-import { ArizonaMorphdomPatcher } from '@arizona-framework/client/patcher';
-
-// Or: Import individual patchers
-import ArizonaMorphdomPatcher from '@arizona-framework/client/patcher/morphdom';
+import { ArizonaConsoleLogger } from '@arizona-framework/client/logger';
+import ArizonaConsoleLogger from '@arizona-framework/client/logger/console';
 ```
 
 **Asset Route (Optional):**

@@ -1,6 +1,5 @@
 /**
  * @typedef {Object} ArizonaClientOptions
- * @property {import('./patcher/arizona-patcher.js').default} [patcher] - DOM patcher implementation
  * @property {import('./logger/arizona-logger.js').default} [logger] - Logger implementation
  */
 /**
@@ -27,8 +26,6 @@ export default class ArizonaClient {
     connected: boolean;
     /** @type {Map<string, Set<Function>>} */
     eventListeners: Map<string, Set<Function>>;
-    /** @type {import('./patcher/arizona-patcher.js').default|null} */
-    patcher: import('./patcher/arizona-patcher.js').default | null;
     /** @type {import('./logger/arizona-logger.js').default|null} */
     logger: import('./logger/arizona-logger.js').default | null;
     /**
@@ -120,10 +117,6 @@ export default class ArizonaClient {
     private emit;
 }
 export type ArizonaClientOptions = {
-    /**
-     * - DOM patcher implementation
-     */
-    patcher?: import('./patcher/arizona-patcher.js').default | undefined;
     /**
      * - Logger implementation
      */

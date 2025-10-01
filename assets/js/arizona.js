@@ -1,9 +1,9 @@
 // Import dependencies
 import ArizonaWorker from './arizona-worker?worker&inline';
+import morphdom from 'morphdom';
 
 /**
  * @typedef {Object} ArizonaClientOptions
- * @property {import('./patcher/arizona-patcher.js').default} [patcher] - DOM patcher implementation
  * @property {import('./logger/arizona-logger.js').default} [logger] - Logger implementation
  */
 
@@ -33,8 +33,6 @@ export default class ArizonaClient {
     this.connected = false;
     /** @type {Map<string, Set<Function>>} */
     this.eventListeners = new Map();
-    /** @type {import('./patcher/arizona-patcher.js').default|null} */
-    this.patcher = opts.patcher || null;
     /** @type {import('./logger/arizona-logger.js').default|null} */
     this.logger = opts.logger || null;
   }
@@ -197,14 +195,18 @@ export default class ArizonaClient {
       return;
     }
 
-    if (!this.patcher) {
-      this.logger?.error('No patcher configured. Please provide a patcher implementation.');
-      return;
-    }
-
     try {
-      // Use provided patcher to patch the DOM
-      this.patcher.patch(target, patch.html);
+      // Use morphdom to efficiently patch the DOM
+      morphdom(target, patch.html, {
+        onBeforeElUpdated(fromEl, toEl) {
+          // Skip update if element has data-arizona-update="false"
+          if (toEl.dataset?.arizonaUpdate === 'false') {
+            return false;
+          }
+          // Skip update if nodes are identical (optimization)
+          return !fromEl.isEqualNode(toEl);
+        },
+      });
 
       this.logger?.debug('Patch applied successfully');
     } catch (error) {
