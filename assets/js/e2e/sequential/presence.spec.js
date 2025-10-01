@@ -60,8 +60,21 @@ test.describe('Arizona Presence System', () => {
     const initialCount = parseInt(initialCountText.match(/\((\d+)\)/)[1]);
 
     // Join presence and verify all updates
+    // Set up promise to wait for network request before clicking
+    const joinRequestPromise = page.waitForResponse(
+      (response) => response.url().includes('/api/presence/join') && response.status() === 200,
+      { timeout: 10000 }
+    );
+
     await page.getByTestId('join-btn').click();
-    await waitForText(page.locator('#status'), 'Successfully joined presence!', 10000);
+
+    // Wait for the join API request to complete
+    await joinRequestPromise;
+
+    // Wait for status to become visible, then check text
+    // This prevents race condition where status auto-hides after 3s
+    await page.locator('#status').waitFor({ state: 'visible', timeout: 5000 });
+    await waitForText(page.locator('#status'), 'Successfully joined presence!', 5000);
 
     // Check class immediately while status is still visible
     await expect(page.locator('#status')).toHaveClass(/success/, { timeout: 500 });
@@ -104,8 +117,20 @@ test.describe('Arizona Presence System', () => {
     expect(strongText).toMatch(/^USER\d+_\d+$/);
 
     // Leave presence and verify cleanup
+    // Set up promise to wait for network request before clicking
+    const leaveRequestPromise = page.waitForResponse(
+      (response) => response.url().includes('/api/presence/leave') && response.status() === 200,
+      { timeout: 10000 }
+    );
+
     await page.getByTestId('leave-btn').click();
-    await waitForText(page.locator('#status'), 'Successfully left presence!');
+
+    // Wait for the leave API request to complete
+    await leaveRequestPromise;
+
+    // Wait for status to become visible, then check text
+    await page.locator('#status').waitFor({ state: 'visible', timeout: 5000 });
+    await waitForText(page.locator('#status'), 'Successfully left presence!', 5000);
 
     await expect(page.getByTestId('join-btn')).not.toBeDisabled({ timeout: 2000 });
     await expect(page.getByTestId('leave-btn')).toBeDisabled({ timeout: 2000 });
