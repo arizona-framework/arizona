@@ -1,4 +1,17 @@
 /**
+ * @typedef {Object} ArizonaClientOptions
+ * @property {import('./patcher/arizona-patcher.js').default} [patcher] - DOM patcher implementation
+ * @property {import('./logger/arizona-logger.js').default} [logger] - Logger implementation
+ */
+/**
+ * @typedef {Object} ConnectOptions
+ * @property {string} [wsPath] - WebSocket path (default: '/live')
+ */
+/**
+ * @typedef {Object} EventParams
+ * @property {*} [key] - Event parameters
+ */
+/**
  * Arizona Framework JavaScript Client
  * Provides real-time WebSocket communication with the Arizona server
  */
@@ -12,12 +25,12 @@ export default class ArizonaClient {
     worker: Worker | null;
     /** @type {boolean} */
     connected: boolean;
-    /** @type {number} */
-    logLevel: number;
     /** @type {Map<string, Set<Function>>} */
     eventListeners: Map<string, Set<Function>>;
     /** @type {import('./patcher/arizona-patcher.js').default|null} */
     patcher: import('./patcher/arizona-patcher.js').default | null;
+    /** @type {import('./logger/arizona-logger.js').default|null} */
+    logger: import('./logger/arizona-logger.js').default | null;
     /**
      * Initialize worker if not already created
      * @private
@@ -71,34 +84,6 @@ export default class ArizonaClient {
      */
     isConnected(): boolean;
     /**
-     * Log error message (always shown)
-     * @param {string} message - Error message
-     * @param {...*} args - Additional arguments
-     * @returns {void}
-     */
-    error(message: string, ...args: any[]): void;
-    /**
-     * Log warning message (shown if log level allows)
-     * @param {string} message - Warning message
-     * @param {...*} args - Additional arguments
-     * @returns {void}
-     */
-    warning(message: string, ...args: any[]): void;
-    /**
-     * Log info message (shown if log level allows)
-     * @param {string} message - Info message
-     * @param {...*} args - Additional arguments
-     * @returns {void}
-     */
-    info(message: string, ...args: any[]): void;
-    /**
-     * Log debug message (shown if log level allows)
-     * @param {string} message - Debug message
-     * @param {...*} args - Additional arguments
-     * @returns {void}
-     */
-    debug(message: string, ...args: any[]): void;
-    /**
      * Subscribe to an Arizona event
      * @param {string} event - Event name (e.g., 'connected', 'disconnected')
      * @param {Function} callback - Callback function to invoke when event occurs
@@ -136,13 +121,13 @@ export default class ArizonaClient {
 }
 export type ArizonaClientOptions = {
     /**
-     * - Log level for client output
-     */
-    logLevel?: "silent" | "error" | "warning" | "info" | "debug" | undefined;
-    /**
      * - DOM patcher implementation
      */
     patcher?: import('./patcher/arizona-patcher.js').default | undefined;
+    /**
+     * - Logger implementation
+     */
+    logger?: import('./logger/arizona-logger.js').default | undefined;
 };
 export type ConnectOptions = {
     /**

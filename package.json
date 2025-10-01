@@ -21,6 +21,16 @@
       "types": "./priv/static/assets/types/patcher/arizona-morphdom-patcher.d.ts",
       "import": "./priv/static/assets/js/patcher/arizona-morphdom-patcher.min.js",
       "require": "./priv/static/assets/js/patcher/arizona-morphdom-patcher.min.js"
+    },
+    "./logger": {
+      "types": "./priv/static/assets/types/logger/index.d.ts",
+      "import": "./priv/static/assets/js/logger/index.min.js",
+      "require": "./priv/static/assets/js/logger/index.min.js"
+    },
+    "./logger/console": {
+      "types": "./priv/static/assets/types/logger/arizona-console-logger.d.ts",
+      "import": "./priv/static/assets/js/logger/arizona-console-logger.min.js",
+      "require": "./priv/static/assets/js/logger/arizona-console-logger.min.js"
     }
   },
   "files": [

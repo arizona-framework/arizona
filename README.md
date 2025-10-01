@@ -519,14 +519,13 @@ render(Bindings) ->
     <head>
         <title>My Arizona App</title>
         <script type="module" async>
-            import Arizona, { ArizonaMorphdomPatcher } from '@arizona-framework/client';
+            import Arizona, { ArizonaMorphdomPatcher, ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
 
-            // Create client with DOM patcher for live updates
+            // Create client with DOM patcher and logger
             const patcher = new ArizonaMorphdomPatcher();
-            globalThis.arizona = new Arizona({
-                patcher,
-                logLevel: 'info'  // Optional: configure logging
-            });
+            const logger = new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.info });
+
+            globalThis.arizona = new Arizona({ patcher, logger });
             arizona.connect('/live');
         </script>
     </head>
@@ -991,41 +990,77 @@ reloads during CSS development.
 
 ### **JavaScript Client Logging**
 
-Arizona's JavaScript client supports configurable logging levels aligned with Erlang's logger
-system for consistent debugging across the stack:
+Arizona's JavaScript client provides a pluggable logging system with log levels aligned with
+Erlang's logger for consistent debugging across the stack.
+
+**Basic Usage:**
 
 ```javascript
-import Arizona from '/assets/js/arizona.min.js';
+import Arizona, { ArizonaMorphdomPatcher, ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
 
-// Production - silent (default)
-const arizona = new Arizona();
+// Production - no logger (silent by default)
+const arizona = new Arizona({
+    patcher: new ArizonaMorphdomPatcher()
+});
 
-// Development - show info and above (connections, reloads, redirects)
-const arizona = new Arizona({ logLevel: 'info' });
+// Development - console logger with info level
+const arizona = new Arizona({
+    patcher: new ArizonaMorphdomPatcher(),
+    logger: new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.info })
+});
 
-// Full debugging - show all internal operations
-const arizona = new Arizona({ logLevel: 'debug' });
+// Full debugging - all internal operations
+const arizona = new Arizona({
+    patcher: new ArizonaMorphdomPatcher(),
+    logger: new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.debug })
+});
 
 // Programmatic control
 const arizona = new Arizona({
-    logLevel: process.env.NODE_ENV === 'development' ? 'debug' : 'silent'
+    patcher: new ArizonaMorphdomPatcher(),
+    logger: process.env.NODE_ENV === 'development'
+        ? new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.debug })
+        : null
 });
 ```
 
 **Available Log Levels** (aligned with Erlang logger):
 
-- `silent` (-1): No logs (production default)
-- `error` (3): Errors only (always shown)
-- `warning` (4): Warnings and above
-- `info` (6): Connection status, reload notifications, redirects
-- `debug` (7): All internal operations and message details
+- `LOG_LEVELS.error` (3): Errors only
+- `LOG_LEVELS.warning` (4): Warnings and errors
+- `LOG_LEVELS.info` (6): Connection status, reload notifications, redirects (default)
+- `LOG_LEVELS.debug` (7): All internal operations and message details
+
+**Custom Logger:**
+
+Implement your own logger by extending `ArizonaLogger`:
+
+```javascript
+import { ArizonaLogger, LOG_LEVELS } from '@arizona-framework/client';
+
+class MyCustomLogger extends ArizonaLogger {
+    handleLog(level, message, ...args) {
+        // Send to your logging service, format differently, etc.
+        fetch('/api/logs', {
+            method: 'POST',
+            body: JSON.stringify({ level, message, args })
+        });
+    }
+}
+
+const arizona = new Arizona({
+    patcher: new ArizonaMorphdomPatcher(),
+    logger: new MyCustomLogger({ logLevel: LOG_LEVELS.warning })
+});
+```
 
 **Benefits:**
 
-- **Production-safe**: Silent by default, no logs unless explicitly enabled
+- **Optional**: Logger is completely optional - production apps can omit it entirely
+- **Pluggable**: Use built-in console logger or implement custom logging backends
 - **Flexible development**: Choose appropriate verbosity for debugging
 - **Erlang alignment**: Log levels match backend for consistent configuration
-- **Zero overhead**: Disabled logs have minimal performance impact
+- **Zero overhead**: No logger means zero logging overhead
 
 ### **Static Site Generation**
 
