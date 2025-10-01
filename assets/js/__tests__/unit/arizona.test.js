@@ -6,10 +6,10 @@ vi.mock('morphdom', () => ({
   default: vi.fn(),
 }));
 
-import ArizonaClient from './arizona.js';
-import { ArizonaConsoleLogger, LOG_LEVELS } from './logger/index.js';
-import MockWorker from './__mocks__/Worker.js';
-import MockWebSocket from './__mocks__/WebSocket.js';
+import ArizonaClient from '../../client/arizona.js';
+import { ArizonaConsoleLogger, LOG_LEVELS } from '../../client/logger/index.js';
+import MockWorker from '../__mocks__/Worker.js';
+import MockWebSocket from '../__mocks__/WebSocket.js';
 import morphdom from 'morphdom';
 
 // Mock global APIs

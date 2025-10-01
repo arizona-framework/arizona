@@ -1,7 +1,7 @@
 // ArizonaConsoleLogger tests
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
-import ArizonaConsoleLogger from './arizona-console-logger.js';
-import { LOG_LEVELS } from './arizona-logger.js';
+import ArizonaConsoleLogger from '../../../client/logger/arizona-console-logger.js';
+import { LOG_LEVELS } from '../../../client/logger/arizona-logger.js';
 
 describe('ArizonaConsoleLogger', () => {
   let logger;

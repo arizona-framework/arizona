@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { waitForCondition, waitForText } from '../test-utils.js';
+import { waitForCondition, waitForText } from '../utils.js';
 
 test.describe.configure({ mode: 'serial' });
 

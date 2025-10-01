@@ -1,6 +1,6 @@
 // ArizonaLogger tests
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import ArizonaLogger, { LOG_LEVELS } from './arizona-logger.js';
+import ArizonaLogger, { LOG_LEVELS } from '../../../client/logger/arizona-logger.js';
 
 // Create a test implementation of ArizonaLogger
 class TestLogger extends ArizonaLogger {
