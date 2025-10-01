@@ -23,6 +23,13 @@ declare class ArizonaLogger {
         logLevel?: number | undefined;
     };
     /**
+     * Sanitizes a value for safe logging by removing control characters from strings
+     * @private
+     * @param {*} value - The value to sanitize
+     * @returns {*} - The sanitized value (strings sanitized, other types passed through)
+     */
+    private sanitize;
+    /**
      * Handle a log message (must be implemented by subclass)
      * @param {number} level - Log level (from LOG_LEVELS enum)
      * @param {string} message - Log message
@@ -31,7 +38,7 @@ declare class ArizonaLogger {
      */
     handleLog(level: number, message: string, ...args: any[]): void;
     /**
-     * Log a message with level filtering
+     * Log a message with level filtering and sanitization
      * @param {number} level - Log level (from LOG_LEVELS enum)
      * @param {string} message - Log message
      * @param {...*} args - Additional arguments

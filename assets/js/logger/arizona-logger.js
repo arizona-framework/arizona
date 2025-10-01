@@ -23,6 +23,27 @@ class ArizonaLogger {
   }
 
   /**
+   * Sanitizes a value for safe logging by removing control characters from strings
+   * @private
+   * @param {*} value - The value to sanitize
+   * @returns {*} - The sanitized value (strings sanitized, other types passed through)
+   */
+  sanitize(value) {
+    // Only sanitize strings - preserve objects/errors/numbers for proper formatting
+    if (typeof value !== 'string') return value;
+
+    // Remove control characters from strings to prevent log injection
+    return (
+      value
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\r\n\u2028\u2029\t\v\f\b\0\x1B]/g, '')
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\x00-\x1f\x7f]/g, '') // further strip ASCII control chars
+        .trim()
+    );
+  }
+
+  /**
    * Handle a log message (must be implemented by subclass)
    * @param {number} level - Log level (from LOG_LEVELS enum)
    * @param {string} message - Log message
@@ -35,7 +56,7 @@ class ArizonaLogger {
   }
 
   /**
-   * Log a message with level filtering
+   * Log a message with level filtering and sanitization
    * @param {number} level - Log level (from LOG_LEVELS enum)
    * @param {string} message - Log message
    * @param {...*} args - Additional arguments
@@ -47,7 +68,13 @@ class ArizonaLogger {
       return;
     }
 
-    this.handleLog(level, message, ...args);
+    // Sanitize message and args to prevent log injection attacks
+    const sanitizedMessage = this.sanitize(message);
+    const sanitizedArgs = args.map((arg) => {
+      return this.sanitize(arg);
+    });
+
+    this.handleLog(level, sanitizedMessage, ...sanitizedArgs);
   }
 
   /**

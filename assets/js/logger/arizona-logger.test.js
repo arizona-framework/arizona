@@ -107,9 +107,100 @@ describe('ArizonaLogger', () => {
     });
 
     test('passes additional arguments to handleLog', () => {
-      logger.log(LOG_LEVELS.info, 'message', 'arg1', { key: 'value' }, 123);
+      const obj = { key: 'value' };
+      logger.log(LOG_LEVELS.info, 'message', 'arg1', obj, 123);
 
-      expect(logger.logs[0].args).toEqual(['arg1', { key: 'value' }, 123]);
+      expect(logger.logs[0].args).toEqual(['arg1', obj, 123]);
+    });
+  });
+
+  describe('sanitize()', () => {
+    test('removes newlines from strings', () => {
+      expect(logger.sanitize('line1\nline2\rline3')).toBe('line1line2line3');
+    });
+
+    test('removes Unicode line and paragraph separators', () => {
+      expect(logger.sanitize('text\u2028with\u2029separators')).toBe('textwithseparators');
+    });
+
+    test('removes tabs and control characters', () => {
+      expect(logger.sanitize('text\twith\vtabs\fand\bcontrol')).toBe('textwithtabsandcontrol');
+    });
+
+    test('removes ASCII control characters', () => {
+      expect(logger.sanitize('text\x00with\x1Bcontrol\x7Fchars')).toBe('textwithcontrolchars');
+    });
+
+    test('trims whitespace', () => {
+      expect(logger.sanitize('  text with spaces  ')).toBe('text with spaces');
+    });
+
+    test('passes through non-strings unchanged', () => {
+      expect(logger.sanitize(123)).toBe(123);
+      expect(logger.sanitize(true)).toBe(true);
+      expect(logger.sanitize(null)).toBe(null);
+      expect(logger.sanitize(undefined)).toBe(undefined);
+    });
+
+    test('passes through objects unchanged', () => {
+      const obj = { key: 'value' };
+      expect(logger.sanitize(obj)).toBe(obj);
+    });
+
+    test('passes through arrays unchanged', () => {
+      const arr = [1, 2, 3];
+      expect(logger.sanitize(arr)).toBe(arr);
+    });
+
+    test('prevents log injection attacks', () => {
+      const malicious = 'User input\n[Arizona] FAKE ERROR: Injected message';
+      expect(logger.sanitize(malicious)).toBe('User input[Arizona] FAKE ERROR: Injected message');
+    });
+
+    test('handles empty strings', () => {
+      expect(logger.sanitize('')).toBe('');
+    });
+
+    test('preserves normal spaces', () => {
+      expect(logger.sanitize('normal text with spaces')).toBe('normal text with spaces');
+    });
+  });
+
+  describe('log() sanitization', () => {
+    beforeEach(() => {
+      logger.options.logLevel = LOG_LEVELS.debug;
+    });
+
+    test('sanitizes message before logging', () => {
+      logger.log(LOG_LEVELS.info, 'message\nwith\nnewlines');
+
+      expect(logger.logs[0].message).toBe('messagewithnewlines');
+    });
+
+    test('sanitizes string arguments but preserves other types', () => {
+      logger.log(LOG_LEVELS.info, 'message', 'arg1\ninjection', 'arg2\tcontrol');
+
+      expect(logger.logs[0].args).toEqual(['arg1injection', 'arg2control']);
+    });
+
+    test('sanitizes only string arguments, preserves non-strings', () => {
+      const obj = { data: 'value' };
+      logger.log(LOG_LEVELS.info, 'message', 123, true, 'text\ninjection', obj);
+
+      expect(logger.logs[0].args).toEqual([123, true, 'textinjection', obj]);
+    });
+
+    test('convenience methods sanitize inputs', () => {
+      logger.error('error\nmessage', 'detail\ndata');
+      logger.warning('warning\nmessage', 'detail\ndata');
+      logger.info('info\nmessage', 'detail\ndata');
+      logger.debug('debug\nmessage', 'detail\ndata');
+
+      expect(logger.logs).toHaveLength(4);
+      logger.logs.forEach((log) => {
+        expect(log.message).not.toContain('\n');
+        expect(log.args[0]).not.toContain('\n');
+      });
     });
   });
 
