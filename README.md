@@ -519,8 +519,12 @@ render(Bindings) ->
     <head>
         <title>My Arizona App</title>
         <script type="module" async>
-            import Arizona from '/assets/js/arizona.min.js';
-            globalThis.arizona = new Arizona({ logLevel: 'info' }); // Optional: configure logging
+            import Arizona, { ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
+
+            // Create client with optional logger
+            const logger = new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.info });
+
+            globalThis.arizona = new Arizona({ logger });
             arizona.connect('/live');
         </script>
     </head>
@@ -985,41 +989,71 @@ reloads during CSS development.
 
 ### **JavaScript Client Logging**
 
-Arizona's JavaScript client supports configurable logging levels aligned with Erlang's logger
-system for consistent debugging across the stack:
+Arizona's JavaScript client provides a pluggable logging system with log levels aligned with
+Erlang's logger for consistent debugging across the stack.
+
+**Basic Usage:**
 
 ```javascript
-import Arizona from '/assets/js/arizona.min.js';
+import Arizona, { ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
 
-// Production - silent (default)
+// Production - no logger (silent by default)
 const arizona = new Arizona();
 
-// Development - show info and above (connections, reloads, redirects)
-const arizona = new Arizona({ logLevel: 'info' });
+// Development - console logger with info level
+const arizona = new Arizona({
+    logger: new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.info })
+});
 
-// Full debugging - show all internal operations
-const arizona = new Arizona({ logLevel: 'debug' });
+// Full debugging - all internal operations
+const arizona = new Arizona({
+    logger: new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.debug })
+});
 
 // Programmatic control
 const arizona = new Arizona({
-    logLevel: process.env.NODE_ENV === 'development' ? 'debug' : 'silent'
+    logger: process.env.NODE_ENV === 'development'
+        ? new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.debug })
+        : null
 });
 ```
 
 **Available Log Levels** (aligned with Erlang logger):
 
-- `silent` (-1): No logs (production default)
-- `error` (3): Errors only (always shown)
-- `warning` (4): Warnings and above
-- `info` (6): Connection status, reload notifications, redirects
-- `debug` (7): All internal operations and message details
+- `LOG_LEVELS.error` (3): Errors only
+- `LOG_LEVELS.warning` (4): Warnings and errors
+- `LOG_LEVELS.info` (6): Connection status, reload notifications, redirects (default)
+- `LOG_LEVELS.debug` (7): All internal operations and message details
+
+**Custom Logger:**
+
+Implement your own logger by extending `ArizonaLogger`:
+
+```javascript
+import { ArizonaLogger, LOG_LEVELS } from '@arizona-framework/client';
+
+class MyCustomLogger extends ArizonaLogger {
+    handleLog(level, message, ...args) {
+        // Send to your logging service, format differently, etc.
+        fetch('/api/logs', {
+            method: 'POST',
+            body: JSON.stringify({ level, message, args })
+        });
+    }
+}
+
+const arizona = new Arizona({
+    logger: new MyCustomLogger({ logLevel: LOG_LEVELS.warning })
+});
+```
 
 **Benefits:**
 
-- **Production-safe**: Silent by default, no logs unless explicitly enabled
+- **Optional**: Logger is completely optional - production apps can omit it entirely
+- **Pluggable**: Use built-in console logger or implement custom logging backends
 - **Flexible development**: Choose appropriate verbosity for debugging
 - **Erlang alignment**: Log levels match backend for consistent configuration
-- **Zero overhead**: Disabled logs have minimal performance impact
+- **Zero overhead**: No logger means zero logging overhead
 
 ### **Static Site Generation**
 
@@ -1075,12 +1109,42 @@ Then start normally:
 {ok, _Started} = application:ensure_all_started(arizona).
 ```
 
-### **Static Assets**
+### **JavaScript Client Setup**
 
-- Arizona provides required JavaScript client files (`arizona.min.js`, `arizona-worker.min.js`)
-- Asset route `{asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}}` is required for WebSocket
-- Use `arizona_static:generate/1` to generate static HTML files from your views
-- Static generation creates SEO-friendly HTML that can be deployed to any web server
+Install the Arizona client via npm:
+
+```bash
+npm install @arizona-framework/client
+```
+
+**Import Options:**
+
+```javascript
+// Recommended: Import everything from main entry point
+import Arizona, { ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
+
+// Or: Import from specific subpaths
+import Arizona from '@arizona-framework/client';
+import { ArizonaConsoleLogger } from '@arizona-framework/client/logger';
+import ArizonaConsoleLogger from '@arizona-framework/client/logger/console';
+```
+
+**Asset Route (Optional):**
+
+If you're **not** using the npm package and serving Arizona's JavaScript files directly from
+the `priv/static/assets` directory, you need this asset route:
+
+```erlang
+{asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}, []}
+```
+
+When using the npm package with a bundler (Vite, Webpack, esbuild, etc.), this route is not required
+as your bundler will handle the JavaScript files.
+
+**Static Site Generation:**
+
+Use `arizona_static:generate/1` to generate static HTML files from your views.
+Static generation creates SEO-friendly HTML that can be deployed to any web server.
 
 ### **Performance Considerations**
 

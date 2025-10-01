@@ -24,9 +24,15 @@ export default defineConfig(({ mode }) => {
 
       // TypeScript declarations from JSDoc
       dts({
-        entry: 'arizona.js',
-        entryRoot: 'assets/js',
+        include: [
+          'assets/js/index.js',
+          'assets/js/arizona.js',
+          'assets/js/logger/index.js',
+          'assets/js/logger/arizona-logger.js',
+          'assets/js/logger/arizona-console-logger.js',
+        ],
         outDir: 'priv/static/assets/types',
+        rollupTypes: false,
       }),
     ],
 
@@ -42,9 +48,14 @@ export default defineConfig(({ mode }) => {
 
     build: {
       lib: {
-        entry: 'assets/js/arizona.js',
+        entry: {
+          index: 'assets/js/index.js',
+          arizona: 'assets/js/arizona.js',
+          'logger/index': 'assets/js/logger/index.js',
+          'logger/arizona-logger': 'assets/js/logger/arizona-logger.js',
+          'logger/arizona-console-logger': 'assets/js/logger/arizona-console-logger.js',
+        },
         formats: ['es'],
-        fileName: 'arizona',
       },
       outDir: 'priv/static/assets/js',
       minify: !isDev,
@@ -52,7 +63,6 @@ export default defineConfig(({ mode }) => {
       reportCompressedSize: !isDev,
       emptyOutDir: false,
       rollupOptions: {
-        input: 'assets/js/arizona.js',
         output: {
           format: 'es',
           entryFileNames: '[name].min.js',

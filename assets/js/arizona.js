@@ -4,7 +4,7 @@ import morphdom from 'morphdom';
 
 /**
  * @typedef {Object} ArizonaClientOptions
- * @property {'silent' | 'error' | 'warning' | 'info' | 'debug'} [logLevel] - Log level for client output
+ * @property {import('./logger/arizona-logger.js').default} [logger] - Logger implementation
  */
 
 /**
@@ -16,15 +16,6 @@ import morphdom from 'morphdom';
  * @typedef {Object} EventParams
  * @property {*} [key] - Event parameters
  */
-
-// Log levels (aligned with Erlang logger levels)
-const LOG_LEVELS = {
-  silent: -1,
-  error: 3,
-  warning: 4,
-  info: 6,
-  debug: 7,
-};
 
 /**
  * Arizona Framework JavaScript Client
@@ -40,10 +31,10 @@ export default class ArizonaClient {
     this.worker = null;
     /** @type {boolean} */
     this.connected = false;
-    /** @type {number} */
-    this.logLevel = LOG_LEVELS[opts.logLevel] ?? LOG_LEVELS.silent; // Default: silent (production-safe)
     /** @type {Map<string, Set<Function>>} */
     this.eventListeners = new Map();
+    /** @type {import('./logger/arizona-logger.js').default|null} */
+    this.logger = opts.logger || null;
   }
 
   /**
@@ -173,24 +164,24 @@ export default class ArizonaClient {
           this.handleUnknownMessage(message);
       }
     } catch (error) {
-      this.error('Error handling worker message:', error);
+      this.logger?.error('Error handling worker message:', error);
     }
   }
 
   handleStatus(data) {
     if (data.status === 'connected') {
       this.connected = true;
-      this.info('Connected to WebSocket');
+      this.logger?.info('Connected to WebSocket');
       this.emit('connected', data);
     } else if (data.status === 'disconnected') {
       this.connected = false;
-      this.info('Disconnected from WebSocket');
+      this.logger?.info('Disconnected from WebSocket');
       this.emit('disconnected', data);
     }
   }
 
   handleHtmlPatch(data) {
-    this.debug('Applying HTML patch');
+    this.logger?.debug('Applying HTML patch');
 
     // Apply HTML patch to DOM
     this.applyHtmlPatch(data.patch);
@@ -200,71 +191,63 @@ export default class ArizonaClient {
     const target = document.getElementById(patch.statefulId);
 
     if (!target) {
-      this.warning(`Target element not found: ${patch.statefulId}`);
+      this.logger?.warning(`Target element not found: ${patch.statefulId}`);
       return;
     }
 
     try {
-      // Use Morphdom to efficiently patch the DOM
+      // Use morphdom to efficiently patch the DOM
       morphdom(target, patch.html, {
         onBeforeElUpdated(fromEl, toEl) {
-          // Skip update if data-arizona-update="false"
+          // Skip update if element has data-arizona-update="false"
           if (toEl.dataset?.arizonaUpdate === 'false') {
             return false;
-          } else {
-            // Skip update if nodes are identical
-            return !fromEl.isEqualNode(toEl);
           }
+          // Skip update if nodes are identical (optimization)
+          return !fromEl.isEqualNode(toEl);
         },
       });
 
-      this.debug('Patch applied successfully');
-
-      // Trigger custom event for other code to listen to
-      target.dispatchEvent(
-        new CustomEvent('arizona:patched', {
-          detail: { patch },
-        })
-      );
+      this.logger?.debug('Patch applied successfully');
     } catch (error) {
-      this.error('Error applying HTML patch:', error);
+      this.logger?.error('Error applying HTML patch:', error);
     }
   }
 
   handleWorkerError(data) {
-    this.error('Worker Error:', data.error);
+    this.logger?.error('Worker Error:', data.error);
     this.emit('error', data);
   }
 
   handleReload(data) {
     switch (data.file_type) {
       case 'css':
-        this.info('CSS file changed. Refreshing stylesheets without page reload...');
+        this.logger?.info('CSS file changed. Refreshing stylesheets without page reload...');
         document.querySelectorAll('link[rel="stylesheet"]').forEach((link) => {
           const href = link.href.split('?')[0];
           link.href = `${href}?t=${Date.now()}`;
         });
         break;
       default:
-        this.info(`${data.file_type || 'File'} changed. Reloading page...`);
+        this.logger?.info(`${data.file_type || 'File'} changed. Reloading page...`);
         window.location.reload();
     }
   }
 
   handleDispatch(data) {
-    this.debug('Dispatching event:', data.event);
+    this.logger?.debug('Dispatching event:', data.event);
     this.emit(data.event, data.data);
   }
 
   handleRedirect(data) {
-    this.info('Redirecting to:', data.url);
+    this.logger?.info('Redirecting to:', data.url);
 
     // Perform the redirect with safe option access
     window.open(data.url, data.options?.target, data.options?.window_features);
   }
 
   handleUnknownMessage(message) {
-    this.warning('Unknown worker message:', message);
+    this.logger?.warning('Unknown worker message:', message);
   }
 
   /**
@@ -275,55 +258,6 @@ export default class ArizonaClient {
     return this.connected;
   }
 
-  // Logging methods aligned with Erlang logger levels
-
-  /**
-   * Log error message (always shown)
-   * @param {string} message - Error message
-   * @param {...*} args - Additional arguments
-   * @returns {void}
-   */
-  error(message, ...args) {
-    // Always show errors (critical for debugging)
-    console.error(`[Arizona] ${message}`, ...args);
-  }
-
-  /**
-   * Log warning message (shown if log level allows)
-   * @param {string} message - Warning message
-   * @param {...*} args - Additional arguments
-   * @returns {void}
-   */
-  warning(message, ...args) {
-    if (this.logLevel >= LOG_LEVELS.warning) {
-      console.warn(`[Arizona] ${message}`, ...args);
-    }
-  }
-
-  /**
-   * Log info message (shown if log level allows)
-   * @param {string} message - Info message
-   * @param {...*} args - Additional arguments
-   * @returns {void}
-   */
-  info(message, ...args) {
-    if (this.logLevel >= LOG_LEVELS.info) {
-      console.log(`[Arizona] ${message}`, ...args);
-    }
-  }
-
-  /**
-   * Log debug message (shown if log level allows)
-   * @param {string} message - Debug message
-   * @param {...*} args - Additional arguments
-   * @returns {void}
-   */
-  debug(message, ...args) {
-    if (this.logLevel >= LOG_LEVELS.debug) {
-      console.log(`[Arizona] ${message}`, ...args);
-    }
-  }
-
   /**
    * Subscribe to an Arizona event
    * @param {string} event - Event name (e.g., 'connected', 'disconnected')
@@ -332,7 +266,7 @@ export default class ArizonaClient {
    */
   on(event, callback) {
     if (typeof callback !== 'function') {
-      this.error(`on: callback must be a function, got ${typeof callback}`);
+      this.logger?.error(`on: callback must be a function, got ${typeof callback}`);
       return () => {};
     }
 
@@ -341,7 +275,7 @@ export default class ArizonaClient {
     }
 
     this.eventListeners.get(event).add(callback);
-    this.debug(`Subscribed to event: ${event}`);
+    this.logger?.debug(`Subscribed to event: ${event}`);
 
     // Return unsubscribe function
     return () => {
@@ -357,7 +291,7 @@ export default class ArizonaClient {
    */
   once(event, callback) {
     if (typeof callback !== 'function') {
-      this.error(`once: callback must be a function, got ${typeof callback}`);
+      this.logger?.error(`once: callback must be a function, got ${typeof callback}`);
       return () => {};
     }
 
@@ -379,7 +313,7 @@ export default class ArizonaClient {
     const listeners = this.eventListeners.get(event);
     if (listeners) {
       listeners.delete(callback);
-      this.debug(`Unsubscribed from event: ${event}`);
+      this.logger?.debug(`Unsubscribed from event: ${event}`);
 
       // Clean up empty listener sets
       if (listeners.size === 0) {
@@ -396,10 +330,10 @@ export default class ArizonaClient {
   removeAllListeners(event) {
     if (event) {
       this.eventListeners.delete(event);
-      this.debug(`Removed all listeners for event: ${event}`);
+      this.logger?.debug(`Removed all listeners for event: ${event}`);
     } else {
       this.eventListeners.clear();
-      this.debug('Removed all event listeners');
+      this.logger?.debug('Removed all event listeners');
     }
   }
 
@@ -417,7 +351,7 @@ export default class ArizonaClient {
         try {
           callback(data);
         } catch (error) {
-          this.error(`Error in event listener for '${event}':`, error);
+          this.logger?.error(`Error in event listener for '${event}':`, error);
         }
       });
     }

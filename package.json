@@ -3,14 +3,24 @@
   "version": "0.2.0",
   "description": "JavaScript client library for Arizona Framework",
   "type": "module",
-  "main": "./priv/static/assets/js/arizona.min.js",
-  "module": "./priv/static/assets/js/arizona.min.js",
-  "types": "./priv/static/assets/types/arizona.d.ts",
+  "main": "./priv/static/assets/js/index.min.js",
+  "module": "./priv/static/assets/js/index.min.js",
+  "types": "./priv/static/assets/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./priv/static/assets/types/arizona.d.ts",
-      "import": "./priv/static/assets/js/arizona.min.js",
-      "require": "./priv/static/assets/js/arizona.min.js"
+      "types": "./priv/static/assets/types/index.d.ts",
+      "import": "./priv/static/assets/js/index.min.js",
+      "require": "./priv/static/assets/js/index.min.js"
+    },
+    "./logger": {
+      "types": "./priv/static/assets/types/logger/index.d.ts",
+      "import": "./priv/static/assets/js/logger/index.min.js",
+      "require": "./priv/static/assets/js/logger/index.min.js"
+    },
+    "./logger/console": {
+      "types": "./priv/static/assets/types/logger/arizona-console-logger.d.ts",
+      "import": "./priv/static/assets/js/logger/arizona-console-logger.min.js",
+      "require": "./priv/static/assets/js/logger/arizona-console-logger.min.js"
     }
   },
   "files": [
@@ -75,6 +85,9 @@
     "prepare": "husky",
     "prepack": "npm run build"
   },
+  "dependencies": {
+    "morphdom": "2.7.7"
+  },
   "devDependencies": {
     "@eslint/js": "9.36.0",
     "@playwright/test": "1.55.1",
@@ -95,8 +108,5 @@
     "vite-plugin-eslint": "1.8.1",
     "vite-tsconfig-paths": "5.1.4",
     "vitest": "3.2.4"
-  },
-  "dependencies": {
-    "morphdom": "2.7.7"
   }
 }

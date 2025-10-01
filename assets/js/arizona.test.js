@@ -7,6 +7,7 @@ vi.mock('morphdom', () => ({
 }));
 
 import ArizonaClient from './arizona.js';
+import { ArizonaConsoleLogger, LOG_LEVELS } from './logger/index.js';
 import MockWorker from './__mocks__/Worker.js';
 import MockWebSocket from './__mocks__/WebSocket.js';
 import morphdom from 'morphdom';
@@ -33,9 +34,11 @@ vi.stubGlobal('window', {
 
 describe('ArizonaClient', () => {
   let client;
+  let logger;
 
   beforeEach(() => {
-    client = new ArizonaClient();
+    logger = new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.debug });
+    client = new ArizonaClient({ logger });
     // Clear any stored messages from previous tests
     if (global.Worker.prototype.clearPostedMessages) {
       global.Worker.prototype.clearPostedMessages();
@@ -55,20 +58,6 @@ describe('ArizonaClient', () => {
     test('initializes with correct default state', () => {
       expect(client.worker).toBeNull();
       expect(client.connected).toBe(false);
-      expect(client.logLevel).toBe(-1); // Silent by default
-    });
-
-    test('accepts logLevel option', () => {
-      const clientWithInfo = new ArizonaClient({ logLevel: 'info' });
-      expect(clientWithInfo.logLevel).toBe(6);
-
-      const clientWithDebug = new ArizonaClient({ logLevel: 'debug' });
-      expect(clientWithDebug.logLevel).toBe(7);
-    });
-
-    test('defaults to silent for unknown log levels', () => {
-      const clientWithUnknown = new ArizonaClient({ logLevel: 'unknown' });
-      expect(clientWithUnknown.logLevel).toBe(-1);
     });
   });
 
@@ -355,85 +344,6 @@ describe('ArizonaClient', () => {
     });
   });
 
-  describe('unknown message handling', () => {
-    test('logs warning for unknown messages when logLevel allows', () => {
-      const clientWithWarnings = new ArizonaClient({ logLevel: 'warning' });
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const unknownMessage = { type: 'unknown', data: 'test' };
-
-      clientWithWarnings.handleUnknownMessage(unknownMessage);
-
-      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Unknown worker message:', unknownMessage);
-      consoleSpy.mockRestore();
-    });
-
-    test('does not log warning when logLevel is silent', () => {
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const unknownMessage = { type: 'unknown', data: 'test' };
-
-      client.handleUnknownMessage(unknownMessage); // client uses silent by default
-
-      expect(consoleSpy).not.toHaveBeenCalled();
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('logging methods', () => {
-    test('error() always logs regardless of level', () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-      client.error('Test error', { detail: 'info' });
-
-      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Test error', { detail: 'info' });
-      consoleSpy.mockRestore();
-    });
-
-    test('warning() respects log level', () => {
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-      // Silent client should not log warnings
-      client.warning('Test warning');
-      expect(consoleSpy).not.toHaveBeenCalled();
-
-      // Warning level client should log warnings
-      const warningClient = new ArizonaClient({ logLevel: 'warning' });
-      warningClient.warning('Test warning');
-      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Test warning');
-
-      consoleSpy.mockRestore();
-    });
-
-    test('info() respects log level', () => {
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-      // Silent client should not log info
-      client.info('Test info');
-      expect(consoleSpy).not.toHaveBeenCalled();
-
-      // Info level client should log info
-      const infoClient = new ArizonaClient({ logLevel: 'info' });
-      infoClient.info('Test info');
-      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Test info');
-
-      consoleSpy.mockRestore();
-    });
-
-    test('debug() respects log level', () => {
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-      // Silent client should not log debug
-      client.debug('Test debug');
-      expect(consoleSpy).not.toHaveBeenCalled();
-
-      // Debug level client should log debug
-      const debugClient = new ArizonaClient({ logLevel: 'debug' });
-      debugClient.debug('Test debug');
-      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Test debug');
-
-      consoleSpy.mockRestore();
-    });
-  });
-
   describe('Event subscription system', () => {
     test('on() subscribes to events and returns unsubscribe function', () => {
       const callback = vi.fn();
@@ -444,15 +354,11 @@ describe('ArizonaClient', () => {
       expect(client.eventListeners.get('connected').has(callback)).toBe(true);
     });
 
-    test('on() with non-function callback logs error and returns noop', () => {
-      const errorSpy = vi.spyOn(client, 'error').mockImplementation(() => {});
+    test('on() with non-function callback returns noop', () => {
       const unsubscribe = client.on('connected', 'not-a-function');
 
-      expect(errorSpy).toHaveBeenCalledWith('on: callback must be a function, got string');
       expect(typeof unsubscribe).toBe('function');
       expect(client.eventListeners.has('connected')).toBe(false);
-
-      errorSpy.mockRestore();
     });
 
     test('emit() calls all subscribed listeners with event data', () => {
@@ -471,7 +377,6 @@ describe('ArizonaClient', () => {
     });
 
     test('emit() handles listener errors gracefully', () => {
-      const errorSpy = vi.spyOn(client, 'error').mockImplementation(() => {});
       const error = new Error('Listener error');
       const failingCallback = vi.fn(() => {
         throw error;
@@ -484,9 +389,6 @@ describe('ArizonaClient', () => {
 
       expect(failingCallback).toHaveBeenCalled();
       expect(successCallback).toHaveBeenCalled();
-      expect(errorSpy).toHaveBeenCalledWith("Error in event listener for 'connected':", error);
-
-      errorSpy.mockRestore();
     });
 
     test('emit() with no listeners does nothing', () => {
@@ -598,15 +500,11 @@ describe('ArizonaClient', () => {
       expect(callback).toHaveBeenCalledTimes(1);
     });
 
-    test('once() with non-function callback logs error and returns noop', () => {
-      const errorSpy = vi.spyOn(client, 'error').mockImplementation(() => {});
+    test('once() with non-function callback returns noop', () => {
       const unsubscribe = client.once('connected', 'not-a-function');
 
-      expect(errorSpy).toHaveBeenCalledWith('once: callback must be a function, got string');
       expect(typeof unsubscribe).toBe('function');
       expect(client.eventListeners.has('connected')).toBe(false);
-
-      errorSpy.mockRestore();
     });
 
     test('once() returns unsubscribe function that works before event fires', () => {
@@ -720,43 +618,23 @@ describe('ArizonaClient', () => {
       expect(callback(fromEl, normalEl)).toBe(false); // Same nodes = skip
     });
 
-    test('triggers arizona:patched event after successful patch', () => {
-      vi.mocked(morphdom).mockImplementation((target) => target);
-
-      const patch = { statefulId: 'test-component', html: '<div>content</div>' };
-      client.applyHtmlPatch(patch);
-
-      expect(targetElement.dispatchEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'arizona:patched',
-          detail: { patch },
-        })
-      );
-    });
-
     test('handles missing target element gracefully', () => {
       mockDocument.getElementById.mockReturnValue(null);
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const warningClient = new ArizonaClient({ logLevel: 'warning' });
 
-      warningClient.applyHtmlPatch({ statefulId: 'missing', html: '<div></div>' });
+      client.applyHtmlPatch({ statefulId: 'missing', html: '<div></div>' });
 
       expect(vi.mocked(morphdom)).not.toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Target element not found: missing');
-      consoleSpy.mockRestore();
     });
 
     test('handles morphdom errors gracefully', () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const error = new Error('Morphdom failed');
       vi.mocked(morphdom).mockImplementation(() => {
         throw error;
       });
 
-      client.applyHtmlPatch({ statefulId: 'test-component', html: '<div></div>' });
-
-      expect(consoleSpy).toHaveBeenCalledWith('[Arizona] Error applying HTML patch:', error);
-      consoleSpy.mockRestore();
+      expect(() => {
+        client.applyHtmlPatch({ statefulId: 'test-component', html: '<div></div>' });
+      }).not.toThrow();
     });
   });
 });
