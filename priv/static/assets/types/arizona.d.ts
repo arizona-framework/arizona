@@ -1,5 +1,5 @@
 /**
- * @typedef {Object} ArizonaClientOptions
+ * @typedef {Object} ArizonaOptions
  * @property {import('./logger/arizona-logger.js').default} [logger] - Logger implementation
  */
 /**
@@ -14,12 +14,12 @@
  * Arizona Framework JavaScript Client
  * Provides real-time WebSocket communication with the Arizona server
  */
-export default class ArizonaClient {
+export default class Arizona {
     /**
      * Creates a new Arizona client instance
-     * @param {ArizonaClientOptions} [opts={}] - Client configuration options
+     * @param {ArizonaOptions} [opts={}] - Client configuration options
      */
-    constructor(opts?: ArizonaClientOptions);
+    constructor(opts?: ArizonaOptions);
     /** @type {Worker|null} */
     worker: Worker | null;
     /** @type {boolean} */
@@ -116,7 +116,7 @@ export default class ArizonaClient {
      */
     private emit;
 }
-export type ArizonaClientOptions = {
+export type ArizonaOptions = {
     /**
      * - Logger implementation
      */

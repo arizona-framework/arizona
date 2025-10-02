@@ -1,4 +1,4 @@
-// ArizonaClient tests
+// Arizona tests
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock morphdom at the top level
@@ -6,7 +6,7 @@ vi.mock('morphdom', () => ({
   default: vi.fn(),
 }));
 
-import ArizonaClient from '../../client/arizona.js';
+import Arizona from '../../client/arizona.js';
 import { ArizonaConsoleLogger, LOG_LEVELS } from '../../client/logger/index.js';
 import MockWorker from '../__mocks__/Worker.js';
 import MockWebSocket from '../__mocks__/WebSocket.js';
@@ -32,13 +32,13 @@ vi.stubGlobal('window', {
   },
 });
 
-describe('ArizonaClient', () => {
+describe('Arizona', () => {
   let client;
   let logger;
 
   beforeEach(() => {
     logger = new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.debug });
-    client = new ArizonaClient({ logger });
+    client = new Arizona({ logger });
     // Clear any stored messages from previous tests
     if (global.Worker.prototype.clearPostedMessages) {
       global.Worker.prototype.clearPostedMessages();
