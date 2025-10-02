@@ -52,8 +52,11 @@ prepare_render(Module, Bindings, View) ->
         % Check if component already exists or needs mounting
         #{id := Id} ?= Bindings,
         {ok, State} ?= arizona_view:find_stateful_state(Id, View),
-        UpdatedState = arizona_stateful:merge_bindings(Bindings, State),
-        render(Id, UpdatedState, View)
+        % IMPORTANT: Do NOT merge bindings for existing components!
+        % Bindings are initialization parameters (props). Once a component
+        % is mounted, it manages its own state through event handlers.
+        % Parent re-renders must not overwrite child component state.
+        render(Id, State, View)
     else
         _Other ->
             mount_and_render(Module, Bindings, View)

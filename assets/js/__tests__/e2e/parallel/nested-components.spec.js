@@ -99,8 +99,9 @@ test.describe('Arizona Nested Components', () => {
     // Verify parent counter incremented by 10
     await expect(page.getByTestId('parent-stateful-counter')).toHaveText('Counter: 10');
 
-    // Verify all descendants received the propagated value (10)
-    await expect(page.getByTestId('child-stateful-counter')).toHaveText('Counter: 10');
+    // Verify only ACTUAL descendants received the propagated value (10)
+    // Note: child-stateful-1 is a SIBLING of parent-stateful, not a descendant
+    await expect(page.getByTestId('child-stateful-counter')).toHaveText('Counter: 0');
     await expect(page.getByTestId('grandchild-stateful-counter-grandchild-stateful-1')).toHaveText(
       'Counter: 10'
     );
@@ -216,12 +217,13 @@ test.describe('Arizona Nested Components', () => {
     await page.getByTestId('child-increment').click();
     await expect(page.getByTestId('child-stateful-counter')).toHaveText('Counter: 1');
 
-    // Step 4: Propagate from parent (should override all descendants)
+    // Step 4: Propagate from parent (should update parent + descendants only)
     await page.getByTestId('parent-propagate').click();
     await expect(page.getByTestId('parent-stateful-counter')).toHaveText('Counter: 13'); // 3 + 10
 
-    // All descendants should now be 13
-    await expect(page.getByTestId('child-stateful-counter')).toHaveText('Counter: 13');
+    // Only parent's ACTUAL descendants should be 13
+    // child-stateful-1 is a SIBLING of parent-stateful, not a descendant
+    await expect(page.getByTestId('child-stateful-counter')).toHaveText('Counter: 1');
     await expect(page.getByTestId('grandchild-stateful-counter-grandchild-stateful-1')).toHaveText(
       'Counter: 13'
     );
@@ -270,6 +272,13 @@ test.describe('Arizona Nested Components', () => {
   test('should render child-stateful correctly after view re-render (stateful inside stateless)', async ({
     page,
   }) => {
+    // Capture console logs
+    page.on('console', msg => {
+      if (msg.text().includes('[DEBUG]')) {
+        console.log('BROWSER:', msg.text());
+      }
+    });
+
     await page.goto('/nested');
 
     // Verify child-stateful-1 (nested inside stateless wrapper) renders correctly initially

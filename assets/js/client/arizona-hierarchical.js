@@ -64,6 +64,7 @@ export default class ArizonaHierarchical {
 
     // 1. Check if newValue is a hierarchical structure (fingerprint mismatch)
     if (newValue && typeof newValue === 'object' && newValue.type) {
+      console.log(`[DEBUG] applyDiffValue: Replacing with hierarchical structure at index ${targetIndex}`, newValue);
       container[targetIndex] = newValue;
       return;
     }
@@ -72,6 +73,7 @@ export default class ArizonaHierarchical {
     // with anything except a hierarchical structure (handled above)
     // Stateful components manage their own state and receive their own diff messages
     if (existingElement && typeof existingElement === 'object' && existingElement.type === 'stateful') {
+      console.log(`[DEBUG] applyDiffValue: PRESERVING stateful component at index ${targetIndex}:`, existingElement.id, 'ignoring value:', newValue);
       // Skip - preserve the stateful component reference
       return;
     }
