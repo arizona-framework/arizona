@@ -241,6 +241,134 @@ describe('ArizonaHierarchical', () => {
         const statelessComponent = client.getStructure().root.dynamic[0];
         expect(statelessComponent.dynamic[0]).toBe('Updated Text');
       });
+
+      it('should preserve stateful component references when applying stateless diffs', () => {
+        // Initialize with stateless component containing a stateful child
+        client.initialize({
+          parent: {
+            static: ['<div>', '</div>'],
+            dynamic: [
+              {
+                type: 'stateless',
+                static: ['<section>Count: ', ' | ', '</section>'],
+                dynamic: ['0', { type: 'stateful', id: 'child' }],
+              },
+            ],
+          },
+          child: {
+            static: ['<span>', '</span>'],
+            dynamic: ['Child Content'],
+          },
+        });
+
+        // Apply diff to stateless component - updating index 1 (the counter)
+        // but NOT touching index 2 (the stateful child reference)
+        const nestedDiff = [[1, '5']];
+        const changes = [[1, nestedDiff]];
+
+        client.applyDiff('parent', changes);
+
+        const statelessComponent = client.getStructure().parent.dynamic[0];
+
+        // Verify counter updated
+        expect(statelessComponent.dynamic[0]).toBe('5');
+
+        // CRITICAL: Verify stateful child reference is PRESERVED
+        expect(statelessComponent.dynamic[1]).toEqual({ type: 'stateful', id: 'child' });
+
+        // Verify HTML generation still works correctly
+        const html = client.generateStatefulHTML('parent');
+        expect(html).toBe('<div><section>Count: 5 | <span>Child Content</span></section></div>');
+      });
+
+      it('should NOT overwrite stateful child references with diff values', () => {
+        // This tests the BUG scenario where diffs incorrectly include nested changes
+        // for stateful components
+        client.initialize({
+          view: {
+            static: ['<div>', '</div>'],
+            dynamic: [
+              {
+                type: 'stateless',
+                static: ['<p>Parent: ', '</p><div>', '</div>'],
+                dynamic: ['1', { type: 'stateful', id: 'child-component' }],
+              },
+            ],
+          },
+          'child-component': {
+            static: ['<span>Child: ', '</span>'],
+            dynamic: ['0'],
+          },
+        });
+
+        // BUG SCENARIO: Diff incorrectly includes nested changes for index 2
+        // (where the stateful child reference lives)
+        // This simulates what the Erlang differ is currently sending
+        const buggyNestedDiff = [
+          [1, '1'],  // Update parent counter - CORRECT
+          [2, [[3, '0']]]  // Nested diff for stateful child - INCORRECT!
+        ];
+        const changes = [[1, buggyNestedDiff]];
+
+        client.applyDiff('view', changes);
+
+        const statelessComponent = client.getStructure().view.dynamic[0];
+
+        // The stateful child reference should be PRESERVED, not corrupted
+        expect(statelessComponent.dynamic[1]).toEqual({
+          type: 'stateful',
+          id: 'child-component'
+        });
+
+        // Verify HTML generation doesn't produce placeholder text
+        const html = client.generateStatefulHTML('view');
+
+        // Should render the child component correctly, NOT as "30610" or similar
+        expect(html).toContain('<span>Child: 0</span>');
+        expect(html).not.toMatch(/\d{5}/);  // Should not contain placeholder integers
+      });
+
+      it('should ignore diff changes for indices containing stateful components', () => {
+        client.initialize({
+          root: {
+            static: ['<div>', '</div>'],
+            dynamic: [
+              {
+                type: 'stateless',
+                static: ['<section>', ' ', '</section>'],
+                dynamic: [
+                  'Text Content',
+                  { type: 'stateful', id: 'stateful-child' },
+                ],
+              },
+            ],
+          },
+          'stateful-child': {
+            static: ['<button>', '</button>'],
+            dynamic: ['Click Me'],
+          },
+        });
+
+        // Attempt to apply diff that includes changes to stateful child index
+        const nestedDiff = [
+          [1, 'Updated Text'],
+          [2, 'THIS SHOULD BE IGNORED'],  // Index 2 has stateful component
+        ];
+        const changes = [[1, nestedDiff]];
+
+        client.applyDiff('root', changes);
+
+        const statelessComponent = client.getStructure().root.dynamic[0];
+
+        // Text should be updated
+        expect(statelessComponent.dynamic[0]).toBe('Updated Text');
+
+        // Stateful reference should remain unchanged
+        expect(statelessComponent.dynamic[1]).toEqual({
+          type: 'stateful',
+          id: 'stateful-child'
+        });
+      });
     });
   });
 

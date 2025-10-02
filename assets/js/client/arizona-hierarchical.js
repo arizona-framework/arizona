@@ -44,26 +44,61 @@ export default class ArizonaHierarchical {
       console.warn(`[Arizona] StatefulId '${sanitizedStatefulId}' not found in structure`);
     }
 
+    const component = this.structure.get(statefulId);
     for (const [elementIndex, newValue] of changes) {
-      // Check if newValue is a hierarchical structure (fingerprint mismatch)
-      if (newValue && typeof newValue === 'object' && newValue.type) {
-        this.structure.get(statefulId).dynamic[elementIndex - 1] = newValue;
-      } else if (Array.isArray(newValue)) {
-        const element = this.structure.get(statefulId).dynamic[elementIndex - 1];
-        if (element && element.type === 'list') {
-          this.structure.get(statefulId).dynamic[elementIndex - 1].dynamic = newValue;
-        } else if (element && element.type === 'stateless') {
-          // Traditional stateless diff - array of [index, value] pairs
-          newValue.forEach(([index, value]) => {
-            this.structure.get(statefulId).dynamic[elementIndex - 1].dynamic[index - 1] = value;
-          });
-        } else {
-          this.structure.get(statefulId).dynamic[elementIndex - 1] = newValue;
-        }
-      } else {
-        this.structure.get(statefulId).dynamic[elementIndex - 1] = newValue;
-      }
+      this.applyDiffValue(component.dynamic, elementIndex - 1, newValue);
     }
+  }
+
+  /**
+   * Recursively apply a diff value to a container at a specific index
+   * Handles all types: hierarchical structures, lists, stateless components, and simple values
+   * @private
+   * @param {Array} container - The dynamic array to update
+   * @param {number} targetIndex - The index to update (0-based)
+   * @param {*} newValue - The new value to apply
+   * @returns {void}
+   */
+  applyDiffValue(container, targetIndex, newValue) {
+    const existingElement = container[targetIndex];
+
+    // 1. Check if newValue is a hierarchical structure (fingerprint mismatch)
+    if (newValue && typeof newValue === 'object' && newValue.type) {
+      container[targetIndex] = newValue;
+      return;
+    }
+
+    // 2. CRITICAL: If existing element is a stateful component, NEVER replace it
+    // with anything except a hierarchical structure (handled above)
+    // Stateful components manage their own state and receive their own diff messages
+    if (existingElement && typeof existingElement === 'object' && existingElement.type === 'stateful') {
+      // Skip - preserve the stateful component reference
+      return;
+    }
+
+    // 3. Check if newValue is an array (nested diff or list data)
+    if (Array.isArray(newValue)) {
+      // 3a. If existing element is a list, replace its dynamic data
+      if (existingElement && existingElement.type === 'list') {
+        existingElement.dynamic = newValue;
+        return;
+      }
+
+      // 3b. If existing element is stateless, apply nested diff recursively
+      if (existingElement && existingElement.type === 'stateless') {
+        newValue.forEach(([index, value]) => {
+          this.applyDiffValue(existingElement.dynamic, index - 1, value);
+        });
+        return;
+      }
+
+      // 3c. Otherwise, replace with array value
+      container[targetIndex] = newValue;
+      return;
+    }
+
+    // 4. Simple value - just replace
+    container[targetIndex] = newValue;
   }
 
   /**
