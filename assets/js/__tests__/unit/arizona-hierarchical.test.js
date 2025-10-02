@@ -305,8 +305,8 @@ describe('ArizonaHierarchical', () => {
         // (where the stateful child reference lives)
         // This simulates what the Erlang differ is currently sending
         const buggyNestedDiff = [
-          [1, '1'],  // Update parent counter - CORRECT
-          [2, [[3, '0']]]  // Nested diff for stateful child - INCORRECT!
+          [1, '1'], // Update parent counter - CORRECT
+          [2, [[3, '0']]], // Nested diff for stateful child - INCORRECT!
         ];
         const changes = [[1, buggyNestedDiff]];
 
@@ -317,7 +317,7 @@ describe('ArizonaHierarchical', () => {
         // The stateful child reference should be PRESERVED, not corrupted
         expect(statelessComponent.dynamic[1]).toEqual({
           type: 'stateful',
-          id: 'child-component'
+          id: 'child-component',
         });
 
         // Verify HTML generation doesn't produce placeholder text
@@ -325,7 +325,7 @@ describe('ArizonaHierarchical', () => {
 
         // Should render the child component correctly, NOT as "30610" or similar
         expect(html).toContain('<span>Child: 0</span>');
-        expect(html).not.toMatch(/\d{5}/);  // Should not contain placeholder integers
+        expect(html).not.toMatch(/\d{5}/); // Should not contain placeholder integers
       });
 
       it('should ignore diff changes for indices containing stateful components', () => {
@@ -336,10 +336,7 @@ describe('ArizonaHierarchical', () => {
               {
                 type: 'stateless',
                 static: ['<section>', ' ', '</section>'],
-                dynamic: [
-                  'Text Content',
-                  { type: 'stateful', id: 'stateful-child' },
-                ],
+                dynamic: ['Text Content', { type: 'stateful', id: 'stateful-child' }],
               },
             ],
           },
@@ -352,7 +349,7 @@ describe('ArizonaHierarchical', () => {
         // Attempt to apply diff that includes changes to stateful child index
         const nestedDiff = [
           [1, 'Updated Text'],
-          [2, 'THIS SHOULD BE IGNORED'],  // Index 2 has stateful component
+          [2, 'THIS SHOULD BE IGNORED'], // Index 2 has stateful component
         ];
         const changes = [[1, nestedDiff]];
 
@@ -366,7 +363,7 @@ describe('ArizonaHierarchical', () => {
         // Stateful reference should remain unchanged
         expect(statelessComponent.dynamic[1]).toEqual({
           type: 'stateful',
-          id: 'stateful-child'
+          id: 'stateful-child',
         });
       });
     });

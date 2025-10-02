@@ -185,14 +185,11 @@ websocket_init({ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout, WebSo
     ViewId = arizona_stateful:get_binding(id, ViewState),
 
     % Send initial hierarchical structure to client
-    io:format("[DEBUG] websocket_init: Sending initial_render for ViewId=~p~n", [ViewId]),
-    io:format("[DEBUG] websocket_init: HierarchicalStructure=~p~n", [HierarchicalStructure]),
     InitialPayload = json_encode(#{
         type => ~"initial_render",
         stateful_id => ViewId,
         structure => HierarchicalStructure
     }),
-    io:format("[DEBUG] websocket_init: InitialPayload JSON=~p~n", [iolist_to_binary(InitialPayload)]),
 
     Cmds = [{set_options, WebSocketOpts}, {text, InitialPayload}],
 
@@ -214,10 +211,8 @@ ping messages, and unknown message types with proper error handling.
     State :: state(),
     Result :: call_result().
 websocket_handle({text, JSONBinary}, State) ->
-    io:format("[DEBUG] websocket_handle: Received message: ~s~n", [JSONBinary]),
     try
         Message = json:decode(JSONBinary),
-        io:format("[DEBUG] websocket_handle: Decoded message: ~p~n", [Message]),
         MessageType = maps:get(~"type", Message, undefined),
         handle_message_type(MessageType, Message, State)
     catch
@@ -360,10 +355,8 @@ action_to_command(reload) ->
     State :: state(),
     Result :: call_result().
 handle_diff_response(StatefulId, Diff, Cmds, #state{} = State) ->
-    io:format("[DEBUG] handle_diff_response: StatefulId=~p, Diff=~p~n", [StatefulId, Diff]),
     case Diff of
         [] ->
-            io:format("[DEBUG] handle_diff_response: No diff to send~n"),
             {Cmds, State};
         _ ->
             DiffPayload = json_encode(#{
@@ -371,8 +364,6 @@ handle_diff_response(StatefulId, Diff, Cmds, #state{} = State) ->
                 stateful_id => StatefulId,
                 changes => Diff
             }),
-            io:format("[DEBUG] handle_diff_response: Sending diff payload, JSON=~p~n",
-                      [iolist_to_binary(DiffPayload)]),
             {Cmds ++ [{text, DiffPayload}], State}
     end.
 

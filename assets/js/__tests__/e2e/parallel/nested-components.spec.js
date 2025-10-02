@@ -272,13 +272,6 @@ test.describe('Arizona Nested Components', () => {
   test('should render child-stateful correctly after view re-render (stateful inside stateless)', async ({
     page,
   }) => {
-    // Capture console logs
-    page.on('console', msg => {
-      if (msg.text().includes('[DEBUG]')) {
-        console.log('BROWSER:', msg.text());
-      }
-    });
-
     await page.goto('/nested');
 
     // Verify child-stateful-1 (nested inside stateless wrapper) renders correctly initially
@@ -290,7 +283,9 @@ test.describe('Arizona Nested Components', () => {
     // Verify child's nested components also visible
     await expect(page.getByTestId('child-nested-stateless-counter')).toBeVisible();
     await expect(page.getByTestId('child-nested-stateless-counter')).toHaveText('Child Counter: 0');
-    await expect(page.getByTestId('grandchild-stateful-counter-grandchild-stateful-2')).toBeVisible();
+    await expect(
+      page.getByTestId('grandchild-stateful-counter-grandchild-stateful-2')
+    ).toBeVisible();
 
     // Increment view counter (triggers view re-render with full HTML patch)
     await page.getByTestId('view-increment').click();

@@ -70,8 +70,6 @@ to_html(Value) when is_list(Value) ->
 to_html(Value) when is_atom(Value) ->
     atom_to_binary(Value, utf8);
 to_html(Value) when is_integer(Value) ->
-    io:format("[DEBUG] arizona_html:to_html converting integer: ~p~n  Stacktrace: ~p~n",
-              [Value, erlang:process_info(self(), current_stacktrace)]),
     integer_to_binary(Value, 10);
 to_html(Value) when is_float(Value) ->
     list_to_binary(io_lib:format("~p", [Value])).
