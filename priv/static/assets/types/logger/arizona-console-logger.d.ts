@@ -1,5 +1,4 @@
 import { default as ArizonaLogger } from './arizona-logger.js';
-export default ArizonaConsoleLogger;
 /**
  * Console-based logger implementation
  *
@@ -17,6 +16,6 @@ export default ArizonaConsoleLogger;
  * // With custom log level
  * const logger = new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.debug });
  */
-declare class ArizonaConsoleLogger extends ArizonaLogger {
+export default class ArizonaConsoleLogger extends ArizonaLogger {
     handleLog(level: any, message: any, ...args: any[]): void;
 }

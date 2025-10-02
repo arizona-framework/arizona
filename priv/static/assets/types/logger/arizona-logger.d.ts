@@ -4,14 +4,13 @@ export namespace LOG_LEVELS {
     let info: number;
     let debug: number;
 }
-export default ArizonaLogger;
 /**
  * Base class for Arizona logging strategies
  *
  * Implementations must provide a `handleLog` method that handles
  * writing log messages to the output target.
  */
-declare class ArizonaLogger {
+export default class ArizonaLogger {
     /**
      * @param {Object} [options] - Logger options
      * @param {number} [options.logLevel] - Minimum log level to display (default: LOG_LEVELS.info)

@@ -17,7 +17,7 @@ import ArizonaLogger, { LOG_LEVELS } from './arizona-logger.js';
  * // With custom log level
  * const logger = new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.debug });
  */
-class ArizonaConsoleLogger extends ArizonaLogger {
+export default class ArizonaConsoleLogger extends ArizonaLogger {
   handleLog(level, message, ...args) {
     // Map level to console method
     const prefix = '[Arizona]';
@@ -37,5 +37,3 @@ class ArizonaConsoleLogger extends ArizonaLogger {
     }
   }
 }
-
-export default ArizonaConsoleLogger;

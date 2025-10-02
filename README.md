@@ -519,7 +519,7 @@ render(Bindings) ->
     <head>
         <title>My Arizona App</title>
         <script type="module" async>
-            import Arizona, { ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
+            import { Arizona, ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
 
             // Create client with optional logger
             const logger = new ArizonaConsoleLogger({ logLevel: LOG_LEVELS.info });
@@ -995,7 +995,7 @@ Erlang's logger for consistent debugging across the stack.
 **Basic Usage:**
 
 ```javascript
-import Arizona, { ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
+import { Arizona, ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
 
 // Production - no logger (silent by default)
 const arizona = new Arizona();
@@ -1121,10 +1121,10 @@ npm install @arizona-framework/client
 
 ```javascript
 // Recommended: Import everything from main entry point
-import Arizona, { ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
+import { Arizona, ArizonaConsoleLogger, LOG_LEVELS } from '@arizona-framework/client';
 
 // Or: Import from specific subpaths
-import Arizona from '@arizona-framework/client';
+import { Arizona } from '@arizona-framework/client';
 import { ArizonaConsoleLogger } from '@arizona-framework/client/logger';
 import ArizonaConsoleLogger from '@arizona-framework/client/logger/console';
 ```
