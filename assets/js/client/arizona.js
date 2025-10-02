@@ -222,6 +222,7 @@ export default class Arizona {
         case 'initial_render':
           break;
         case 'html_patch':
+          console.log(data);
           this.handleHtmlPatch(data);
           break;
         case 'error':
@@ -360,7 +361,7 @@ export default class Arizona {
   on(event, callback) {
     if (typeof callback !== 'function') {
       this.logger?.error(`on: callback must be a function, got ${typeof callback}`);
-      return () => {};
+      return () => { };
     }
 
     if (!this.eventListeners.has(event)) {
@@ -385,7 +386,7 @@ export default class Arizona {
   once(event, callback) {
     if (typeof callback !== 'function') {
       this.logger?.error(`once: callback must be a function, got ${typeof callback}`);
-      return () => {};
+      return () => { };
     }
 
     const wrapper = (data) => {

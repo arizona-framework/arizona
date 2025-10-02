@@ -108,7 +108,11 @@ future diff comparisons, and creates hierarchical tracking structure.
     Struct :: stateful_struct(),
     View1 :: arizona_view:view().
 hierarchical_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
+    io:format("[DEBUG] hierarchical_stateful: Module=~p, ParentId=~p, ElementIndex=~p~n",
+              [Module, ParentId, ElementIndex]),
     {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
+    io:format("[DEBUG] hierarchical_stateful: Created Id=~p, Fingerprint=~p~n",
+              [Id, arizona_template:get_fingerprint(Template)]),
 
     % Store the fingerprint for future comparisons
     Fingerprint = arizona_template:get_fingerprint(Template),
@@ -138,7 +142,11 @@ when
     Struct :: stateless_struct(),
     View1 :: arizona_view:view().
 hierarchical_stateless(Module, Fun, Bindings, ParentId, ElementIndex, View) ->
+    io:format("[DEBUG] hierarchical_stateless: Module=~p, Fun=~p, ParentId=~p, ElementIndex=~p~n",
+              [Module, Fun, ParentId, ElementIndex]),
     Template = arizona_stateless:call_render_callback(Module, Fun, Bindings),
+    io:format("[DEBUG] hierarchical_stateless: Template fingerprint=~p~n",
+              [arizona_template:get_fingerprint(Template)]),
     hierarchical_template(Template, ParentId, ElementIndex, stateless, View).
 
 -doc ~"""
@@ -308,12 +316,17 @@ render_callback_hierarchical(
 process_hierarchical_callback(
     Callback, DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View
 ) when is_function(Callback, 4) ->
+    io:format("[DEBUG] process_hierarchical_callback: Callback function, ParentId=~p, DynamicElementIndex=~p~n",
+              [ParentId, DynamicElementIndex]),
     {Struct, CallbackView} = Callback(hierarchical, ParentId, DynamicElementIndex, View),
+    io:format("[DEBUG] process_hierarchical_callback: Struct=~p~n", [Struct]),
     {RestHtml, FinalView} = hierarchical_dynamic(T, Dynamic, ParentId, ElementIndex, CallbackView),
     {[Struct | RestHtml], FinalView};
 process_hierarchical_callback(
     Result, _DynamicElementIndex, T, Dynamic, ParentId, ElementIndex, View
 ) ->
+    io:format("[DEBUG] process_hierarchical_callback: Non-callback result, is_template=~p, Result=~p~n",
+              [arizona_template:is_template(Result), Result]),
     case arizona_template:is_template(Result) of
         true ->
             process_hierarchical_template(Result, T, Dynamic, ParentId, ElementIndex, View);
