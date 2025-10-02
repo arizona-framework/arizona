@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { waitForCondition, collectWebSocketMessages } from '../test-utils.js';
+import { waitForCondition, collectWebSocketMessages } from '../utils.js';
 
 test.describe('Arizona Modal App', () => {
   test('should load modal page and display initial state', async ({ page }) => {

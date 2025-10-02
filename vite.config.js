@@ -25,11 +25,11 @@ export default defineConfig(({ mode }) => {
       // TypeScript declarations from JSDoc
       dts({
         include: [
-          'assets/js/index.js',
-          'assets/js/arizona.js',
-          'assets/js/logger/index.js',
-          'assets/js/logger/arizona-logger.js',
-          'assets/js/logger/arizona-console-logger.js',
+          'assets/js/client/index.js',
+          'assets/js/client/arizona.js',
+          'assets/js/client/logger/index.js',
+          'assets/js/client/logger/arizona-logger.js',
+          'assets/js/client/logger/arizona-console-logger.js',
         ],
         outDir: 'priv/static/assets/types',
         rollupTypes: false,
@@ -49,11 +49,11 @@ export default defineConfig(({ mode }) => {
     build: {
       lib: {
         entry: {
-          index: 'assets/js/index.js',
-          arizona: 'assets/js/arizona.js',
-          'logger/index': 'assets/js/logger/index.js',
-          'logger/arizona-logger': 'assets/js/logger/arizona-logger.js',
-          'logger/arizona-console-logger': 'assets/js/logger/arizona-console-logger.js',
+          index: 'assets/js/client/index.js',
+          arizona: 'assets/js/client/arizona.js',
+          'logger/index': 'assets/js/client/logger/index.js',
+          'logger/arizona-logger': 'assets/js/client/logger/arizona-logger.js',
+          'logger/arizona-console-logger': 'assets/js/client/logger/arizona-console-logger.js',
         },
         formats: ['es'],
       },

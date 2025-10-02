@@ -1,6 +1,6 @@
 // ArizonaWebSocketWorker tests
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import MockWebSocket from './__mocks__/WebSocket.js';
+import MockWebSocket from '../__mocks__/WebSocket.js';
 
 // Mock self.postMessage for worker environment
 const mockPostMessage = vi.fn();
@@ -28,7 +28,7 @@ describe('ArizonaWebSocketWorker', () => {
     vi.resetModules();
 
     // Import and create worker instance
-    await import('./arizona-worker.js');
+    await import('../../client/arizona-worker.js');
 
     // Get the worker instance (created by the module)
     worker = global.self;
