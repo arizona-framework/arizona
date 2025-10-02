@@ -12,7 +12,7 @@ export const LOG_LEVELS = {
  * Implementations must provide a `handleLog` method that handles
  * writing log messages to the output target.
  */
-class ArizonaLogger {
+export default class ArizonaLogger {
   /**
    * @param {Object} [options] - Logger options
    * @param {number} [options.logLevel] - Minimum log level to display (default: LOG_LEVELS.info)
@@ -117,5 +117,3 @@ class ArizonaLogger {
     this.log(LOG_LEVELS.debug, message, ...args);
   }
 }
-
-export default ArizonaLogger;

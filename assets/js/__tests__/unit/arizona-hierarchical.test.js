@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ArizonaHierarchical } from '../../client/arizona-hierarchical.js';
+import ArizonaHierarchical from '../../client/arizona-hierarchical.js';
 
 describe('ArizonaHierarchical', () => {
   let client;

@@ -14,7 +14,7 @@
 /**
  * ArizonaHierarchical - Client-side hierarchical structure manager
  */
-export class ArizonaHierarchical {
+export default class ArizonaHierarchical {
   constructor() {
     this.structure = new Map();
   }
@@ -234,8 +234,3 @@ export class ArizonaHierarchical {
     };
   }
 }
-
-/**
- * Default export for convenience
- */
-export default ArizonaHierarchical;
