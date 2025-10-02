@@ -1,4 +1,4 @@
-// ArizonaWebSocketWorker tests
+// ArizonaWorker tests
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import MockWebSocket from '../__mocks__/WebSocket.js';
 
@@ -16,7 +16,7 @@ const WebSocketSpy = vi.fn().mockImplementation((url) => {
 
 vi.stubGlobal('WebSocket', WebSocketSpy);
 
-describe('ArizonaWebSocketWorker', () => {
+describe('ArizonaWorker', () => {
   let worker;
 
   beforeEach(async () => {

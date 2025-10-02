@@ -3,7 +3,7 @@ import ArizonaWorker from './arizona-worker?worker&inline';
 import morphdom from 'morphdom';
 
 /**
- * @typedef {Object} ArizonaClientOptions
+ * @typedef {Object} ArizonaOptions
  * @property {import('./logger/arizona-logger.js').default} [logger] - Logger implementation
  */
 
@@ -21,10 +21,10 @@ import morphdom from 'morphdom';
  * Arizona Framework JavaScript Client
  * Provides real-time WebSocket communication with the Arizona server
  */
-export default class ArizonaClient {
+export default class Arizona {
   /**
    * Creates a new Arizona client instance
-   * @param {ArizonaClientOptions} [opts={}] - Client configuration options
+   * @param {ArizonaOptions} [opts={}] - Client configuration options
    */
   constructor(opts = {}) {
     /** @type {Worker|null} */

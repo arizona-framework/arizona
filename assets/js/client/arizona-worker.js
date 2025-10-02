@@ -1,8 +1,8 @@
 // Import ArizonaHierarchical for client-side structure management
 import ArizonaHierarchical from './arizona-hierarchical.js';
 
-// Arizona WebWorker for WebSocket connection with hierarchical rendering
-class ArizonaWebSocketWorker {
+// Arizona Worker for WebSocket connection with hierarchical rendering
+class ArizonaWorker {
   constructor() {
     this.socket = null;
     this.connected = false;
@@ -172,4 +172,4 @@ class ArizonaWebSocketWorker {
   }
 }
 
-new ArizonaWebSocketWorker();
+new ArizonaWorker();
