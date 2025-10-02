@@ -18,7 +18,10 @@ groups() ->
             initial_render_test,
             ping_test,
             unknown_message_test,
-            invalid_json_test
+            invalid_json_test,
+            event_with_ref_id_test,
+            event_without_ref_id_test,
+            reply_action_test
         ]}
     ].
 
@@ -66,19 +69,32 @@ init_per_suite(Config) ->
 
     -export([mount/2]).
     -export([render/1]).
+    -export([handle_event/3]).
 
     mount(_Arg, _Req) ->
         Layout = {'@layout_module', '@layout_render_fun', '@layout_slot_name', #{
             title => ~"Arizona With Layout"
         }},
         arizona_view:new('@module', #{
-            id => ~"test_id"
+            id => ~"test_id",
+            count => 0
         }, Layout).
 
     render(_Bindings) ->
         arizona_template:from_html(~"""
         <h1>Mock View</h1>
         """).
+
+    handle_event(~"test_with_reply", {Ref, Params}, View) ->
+        Data = maps:get(~"data", Params, #{}),
+        {[{reply, Ref, Data}], View};
+    handle_event(~"test_no_reply", Params, View) ->
+        State = arizona_view:get_state(View),
+        Count = arizona_stateful:get_binding(count, State),
+        NewCount = Count + maps:get(~"increment", Params, 1),
+        UpdatedState = arizona_stateful:put_binding(count, NewCount, State),
+        UpdatedView = arizona_view:update_state(UpdatedState, View),
+        {[], UpdatedView}.
     """", [
         {module, merl:term(MockViewWithLayoutModule)},
         {layout_module, merl:term(MockLayoutModule)},
@@ -221,6 +237,74 @@ invalid_json_test(Config) when is_list(Config) ->
     {text, ErrorJSON} = ErrorResponse,
     ErrorData = json:decode(ErrorJSON),
     ?assertMatch(#{~"type" := ~"error", ~"message" := ~"Internal server error"}, ErrorData).
+
+event_with_ref_id_test(Config) when is_list(Config) ->
+    ct:comment("Test event with ref_id receives reply"),
+    {conn, Conn} = proplists:lookup(conn, Config),
+
+    RefId = ~"test-ref-123",
+    TestData = #{~"message" => ~"hello"},
+    EventMessage = json:encode(#{
+        type => ~"event",
+        event => ~"test_with_reply",
+        ref_id => RefId,
+        params => #{~"data" => TestData}
+    }),
+
+    Response = ws_send(Conn, {text, EventMessage}),
+    ?assertMatch({text, _ResponseJSON}, Response),
+    {text, ResponseJSON} = Response,
+    ResponseData = json:decode(ResponseJSON),
+    ?assertMatch(
+        #{~"type" := ~"reply", ~"ref_id" := RefId, ~"data" := TestData},
+        ResponseData
+    ).
+
+event_without_ref_id_test(Config) when is_list(Config) ->
+    ct:comment("Test event without ref_id (fire-and-forget)"),
+    {conn, Conn} = proplists:lookup(conn, Config),
+
+    EventMessage = json:encode(#{
+        type => ~"event",
+        event => ~"test_no_reply",
+        params => #{~"increment" => 5}
+    }),
+
+    % Send event - since there's no reply, we need to send a ping to verify connection still works
+    ok = gun:ws_send(element(1, Conn), element(2, Conn), {text, EventMessage}),
+
+    % Verify connection is still active by sending ping
+    PingMessage = json:encode(#{type => ~"ping"}),
+    PingResponse = ws_send(Conn, {text, PingMessage}),
+    ?assertMatch({text, _PingJSON}, PingResponse),
+    {text, PingJSON} = PingResponse,
+    ?assertMatch(#{~"type" := ~"pong"}, json:decode(PingJSON)).
+
+reply_action_test(Config) when is_list(Config) ->
+    ct:comment("Test reply action returns data to client"),
+    {conn, Conn} = proplists:lookup(conn, Config),
+
+    RefId = ~"action-ref-456",
+    ExpectedData = #{
+        ~"user" => #{~"name" => ~"Test User", ~"email" => ~"test@example.com"},
+        ~"status" => ~"success"
+    },
+
+    EventMessage = json:encode(#{
+        type => ~"event",
+        event => ~"test_with_reply",
+        ref_id => RefId,
+        params => #{~"data" => ExpectedData}
+    }),
+
+    Response = ws_send(Conn, {text, EventMessage}),
+    ?assertMatch({text, _ResponseJSON}, Response),
+    {text, ResponseJSON} = Response,
+    ResponseData = json:decode(ResponseJSON),
+
+    ?assertMatch(#{~"type" := ~"reply"}, ResponseData),
+    ?assertMatch(#{~"ref_id" := RefId}, ResponseData),
+    ?assertMatch(#{~"data" := ExpectedData}, ResponseData).
 
 %% --------------------------------------------------------------------
 %% Helper functions
