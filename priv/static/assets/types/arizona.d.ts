@@ -28,6 +28,14 @@ export default class Arizona {
     eventListeners: Map<string, Set<Function>>;
     /** @type {import('./logger/arizona-logger.js').default|null} */
     logger: import('./logger/arizona-logger.js').default | null;
+    /** @type {number} */
+    nextRefId: number;
+    /** @type {Map<string, {resolve: Function, reject: Function, timeout: number}>} */
+    pendingCalls: Map<string, {
+        resolve: Function;
+        reject: Function;
+        timeout: number;
+    }>;
     /**
      * Initialize worker if not already created
      * @private
@@ -56,6 +64,39 @@ export default class Arizona {
      */
     pushEventTo(statefulId: string, event: string, params?: EventParams): void;
     /**
+     * Call an event on the Arizona server and wait for reply
+     * @param {string} event - Event name
+     * @param {EventParams} [params={}] - Event parameters
+     * @param {Object} [options={}] - Call options
+     * @param {number} [options.timeout=10000] - Timeout in milliseconds
+     * @returns {Promise<*>} Promise that resolves with reply data
+     */
+    callEvent(event: string, params?: EventParams, options?: {
+        timeout?: number | undefined;
+    }): Promise<any>;
+    /**
+     * Call an event on a specific stateful component and wait for reply
+     * @param {string} statefulId - Target stateful component ID
+     * @param {string} event - Event name
+     * @param {EventParams} [params={}] - Event parameters
+     * @param {Object} [options={}] - Call options
+     * @param {number} [options.timeout=10000] - Timeout in milliseconds
+     * @returns {Promise<*>} Promise that resolves with reply data
+     */
+    callEventFrom(statefulId: string, event: string, params?: EventParams, options?: {
+        timeout?: number | undefined;
+    }): Promise<any>;
+    /**
+     * Internal helper to call an event and wait for reply
+     * @private
+     * @param {string|undefined} statefulId - Target stateful component ID (undefined for view)
+     * @param {string} event - Event name
+     * @param {EventParams} params - Event parameters
+     * @param {Object} options - Call options
+     * @returns {Promise<*>} Promise that resolves with reply data
+     */
+    private _callEvent;
+    /**
      * Disconnect from the Arizona WebSocket server
      * @returns {void}
      */
@@ -73,6 +114,7 @@ export default class Arizona {
     handleWorkerError(data: any): void;
     handleReload(data: any): void;
     handleDispatch(data: any): void;
+    handleReply(data: any): void;
     handleRedirect(data: any): void;
     handleUnknownMessage(message: any): void;
     /**

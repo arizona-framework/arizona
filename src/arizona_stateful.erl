@@ -111,6 +111,8 @@ unmount(State) ->
 -export_type([id/0]).
 -export_type([event_name/0]).
 -export_type([event_params/0]).
+-export_type([event_ref/0]).
+-export_type([event_payload/0]).
 -export_type([event_reply/0]).
 -export_type([handle_event_result/0]).
 
@@ -128,6 +130,8 @@ unmount(State) ->
 -nominal id() :: binary().
 -nominal event_name() :: binary().
 -nominal event_params() :: dynamic().
+-nominal event_ref() :: binary().
+-nominal event_payload() :: event_params() | {event_ref(), event_params()}.
 -nominal event_reply() :: json:encode_value().
 -nominal handle_event_result() :: {Actions :: arizona_action:actions(), State :: state()}.
 
@@ -179,9 +183,9 @@ the error will propagate following Erlang's "let it crash" philosophy.
     Bindings :: arizona_binder:bindings(),
     Template :: arizona_template:template().
 
--callback handle_event(Event, Params, State) -> Result when
+-callback handle_event(Event, Payload, State) -> Result when
     Event :: event_name(),
-    Params :: event_params(),
+    Payload :: event_payload(),
     State :: arizona_stateful:state(),
     Result :: handle_event_result().
 

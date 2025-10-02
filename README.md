@@ -836,6 +836,65 @@ handle_event(~"complete_task", _Params, State) ->
     {Actions, State}.
 ```
 
+### **Request-Reply Pattern with callEvent**
+
+For operations that need to return data to the client (like fetching data, validations, etc.),
+use `callEvent` which returns a Promise that resolves when the server sends a reply:
+
+**Client-side:**
+
+```javascript
+// Call event and wait for reply from view
+const user = await arizona.callEvent('get_user', {id: 123});
+console.log(user); // {name: "Alice", email: "alice@example.com"}
+
+// Call event on specific component and wait for reply
+const data = await arizona.callEventFrom('data-grid', 'fetch_rows', {page: 1});
+console.log(data); // {rows: [...], total: 100}
+
+// With custom timeout (default: 10000ms)
+try {
+  const result = await arizona.callEvent('slow_operation', {}, {timeout: 30000});
+} catch (error) {
+  console.error('Timeout or error:', error);
+}
+```
+
+**Server-side:**
+
+```erlang
+% In view or stateful component - handle with reply action
+handle_event(~"get_user", {Ref, Params}, State) ->
+    % Extract params
+    UserId = maps:get(~"id", Params),
+
+    % Fetch data
+    User = fetch_user(UserId),
+    UserData = #{
+        ~"name" => User#user.name,
+        ~"email" => User#user.email
+    },
+
+    % Return reply action with the ref
+    {[{reply, Ref, UserData}], State};
+
+% Fire-and-forget events (without ref) work as before
+handle_event(~"increment", Params, State) ->
+    Count = arizona_stateful:get_binding(count, State),
+    {[], arizona_stateful:put_binding(count, Count + 1, State)}.
+```
+
+**Key differences:**
+
+- **pushEvent** / **pushEventTo**: Fire-and-forget, no reply expected
+  - Server receives `Params` (map)
+  - Returns `{[Actions], State}` with optional actions
+
+- **callEvent** / **callEventFrom**: Request-reply pattern
+  - Server receives `{Ref, Params}` (tuple with ref ID)
+  - Must include `{reply, Ref, Data}` action to resolve the promise
+  - Client awaits the response
+
 ### **PubSub Messaging**
 
 Subscribe to topics, broadcast messages, and handle real-time updates:
