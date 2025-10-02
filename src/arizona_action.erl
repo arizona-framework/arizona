@@ -38,6 +38,7 @@ No action:
 
 -nominal action() ::
     {dispatch, Event :: binary(), Data :: reply_data()}
+    | {reply, Ref :: binary(), Data :: reply_data()}
     | {redirect, URL :: redirect_url(), Options :: redirect_options()}
     | reload.
 

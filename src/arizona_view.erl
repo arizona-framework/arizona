@@ -135,9 +135,9 @@ terminate(_Reason, _View) ->
     Bindings :: arizona_binder:bindings(),
     Template :: arizona_template:template().
 
--callback handle_event(Event, Params, View) -> Result when
+-callback handle_event(Event, Payload, View) -> Result when
     Event :: arizona_stateful:event_name(),
-    Params :: arizona_stateful:event_params(),
+    Payload :: arizona_stateful:event_payload(),
     View :: view(),
     Result :: handle_event_result().
 

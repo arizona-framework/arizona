@@ -50,6 +50,11 @@ describe('Arizona', () => {
 
   afterEach(() => {
     if (client.worker) {
+      // Clear pending calls without rejecting to avoid unhandled promise rejections
+      client.pendingCalls.forEach((pending) => {
+        clearTimeout(pending.timeout);
+      });
+      client.pendingCalls.clear();
       client.disconnect();
     }
   });
@@ -635,6 +640,221 @@ describe('Arizona', () => {
       expect(() => {
         client.applyHtmlPatch({ statefulId: 'test-component', html: '<div></div>' });
       }).not.toThrow();
+    });
+  });
+
+  describe('callEvent()', () => {
+    test('sends event with ref_id and returns promise', () => {
+      client.connect('/live');
+      // Simulate connection
+      client.handleWorkerMessage({ type: 'status', data: { status: 'connected' } });
+      client.worker.clearPostedMessages();
+
+      const promise = client.callEvent('get_user', { id: 123 });
+
+      expect(promise).toBeInstanceOf(Promise);
+
+      const messages = client.worker.getAllPostedMessages();
+      const eventMessage = messages.find((msg) => msg.type === 'send');
+
+      expect(eventMessage).toMatchObject({
+        type: 'send',
+        data: {
+          type: 'event',
+          event: 'get_user',
+          params: { id: 123 },
+        },
+      });
+      expect(eventMessage.data).toHaveProperty('ref_id');
+      expect(eventMessage.data.ref_id).toBe('1');
+      expect(eventMessage.data).not.toHaveProperty('stateful_id');
+    });
+
+    test('resolves promise when reply message received', async () => {
+      client.connect('/live');
+      client.handleWorkerMessage({ type: 'status', data: { status: 'connected' } });
+
+      const promise = client.callEvent('get_data');
+
+      // Simulate reply from server
+      client.handleWorkerMessage({
+        type: 'reply',
+        data: {
+          ref_id: '1',
+          data: { result: 'success', value: 42 },
+        },
+      });
+
+      const result = await promise;
+      expect(result).toEqual({ result: 'success', value: 42 });
+    });
+
+    test('rejects promise on timeout', async () => {
+      client.connect('/live');
+      client.handleWorkerMessage({ type: 'status', data: { status: 'connected' } });
+
+      const promise = client.callEvent('slow_operation', {}, { timeout: 100 });
+
+      await expect(promise).rejects.toThrow('Call timeout: slow_operation');
+    });
+
+    test('rejects when not connected', async () => {
+      client.connected = false;
+
+      const promise = client.callEvent('test_event');
+
+      await expect(promise).rejects.toThrow('Not connected');
+    });
+
+    test('increments ref_id for each call', () => {
+      client.connect('/live');
+      client.handleWorkerMessage({ type: 'status', data: { status: 'connected' } });
+      client.worker.clearPostedMessages();
+
+      client.callEvent('event1');
+      client.callEvent('event2');
+      client.callEvent('event3');
+
+      const messages = client.worker.getAllPostedMessages();
+      const refIds = messages.filter((msg) => msg.type === 'send').map((msg) => msg.data.ref_id);
+
+      expect(refIds).toEqual(['1', '2', '3']);
+    });
+
+    test('cleans up pending call after resolution', async () => {
+      client.connect('/live');
+      client.handleWorkerMessage({ type: 'status', data: { status: 'connected' } });
+
+      const promise = client.callEvent('test');
+
+      expect(client.pendingCalls.size).toBe(1);
+
+      client.handleWorkerMessage({
+        type: 'reply',
+        data: { ref_id: '1', data: { success: true } },
+      });
+
+      await promise;
+
+      expect(client.pendingCalls.size).toBe(0);
+    });
+
+    test('clears timeout after resolution', async () => {
+      vi.useFakeTimers();
+      client.connect('/live');
+      client.handleWorkerMessage({ type: 'status', data: { status: 'connected' } });
+
+      const promise = client.callEvent('test', {}, { timeout: 5000 });
+
+      client.handleWorkerMessage({
+        type: 'reply',
+        data: { ref_id: '1', data: { done: true } },
+      });
+
+      const result = await promise;
+      expect(result).toEqual({ done: true });
+
+      // Advance time - should not trigger timeout
+      vi.advanceTimersByTime(6000);
+
+      vi.useRealTimers();
+    });
+
+    test('logs warning for unknown ref_id', () => {
+      client.connect('/live');
+      const warnSpy = vi.spyOn(logger, 'warning');
+
+      client.handleWorkerMessage({
+        type: 'reply',
+        data: { ref_id: '999', data: { value: 'orphan' } },
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith('Received reply for unknown ref: 999');
+    });
+  });
+
+  describe('callEventFrom()', () => {
+    test('sends event with ref_id and stateful_id', () => {
+      client.connect('/live');
+      client.handleWorkerMessage({ type: 'status', data: { status: 'connected' } });
+      client.worker.clearPostedMessages();
+
+      const promise = client.callEventFrom('component-123', 'fetch_data', { filter: 'active' });
+
+      expect(promise).toBeInstanceOf(Promise);
+
+      const messages = client.worker.getAllPostedMessages();
+      const eventMessage = messages.find((msg) => msg.type === 'send');
+
+      expect(eventMessage).toMatchObject({
+        type: 'send',
+        data: {
+          type: 'event',
+          stateful_id: 'component-123',
+          event: 'fetch_data',
+          params: { filter: 'active' },
+        },
+      });
+      expect(eventMessage.data).toHaveProperty('ref_id');
+    });
+
+    test('resolves promise when component replies', async () => {
+      client.connect('/live');
+      client.handleWorkerMessage({ type: 'status', data: { status: 'connected' } });
+
+      const promise = client.callEventFrom('widget-1', 'get_state');
+
+      client.handleWorkerMessage({
+        type: 'reply',
+        data: {
+          ref_id: '1',
+          data: { state: 'ready', count: 5 },
+        },
+      });
+
+      const result = await promise;
+      expect(result).toEqual({ state: 'ready', count: 5 });
+    });
+
+    test('rejects on timeout', async () => {
+      client.connect('/live');
+      client.handleWorkerMessage({ type: 'status', data: { status: 'connected' } });
+
+      const promise = client.callEventFrom('slow-component', 'process', {}, { timeout: 50 });
+
+      await expect(promise).rejects.toThrow('Call timeout: process');
+    });
+
+    test('uses custom timeout option', async () => {
+      vi.useFakeTimers();
+      client.connect('/live');
+      client.handleWorkerMessage({ type: 'status', data: { status: 'connected' } });
+
+      const promise = client.callEventFrom('component', 'action', {}, { timeout: 1000 });
+
+      vi.advanceTimersByTime(999);
+      expect(client.pendingCalls.size).toBe(1);
+
+      vi.advanceTimersByTime(2);
+      await expect(promise).rejects.toThrow('Call timeout: action');
+
+      vi.useRealTimers();
+    });
+
+    test('rejects pending calls on disconnect', async () => {
+      client.connect('/live');
+      client.handleWorkerMessage({ type: 'status', data: { status: 'connected' } });
+
+      const promise1 = client.callEvent('event1');
+      const promise2 = client.callEventFrom('comp', 'event2');
+
+      expect(client.pendingCalls.size).toBe(2);
+
+      client.disconnect();
+
+      await expect(promise1).rejects.toThrow('Disconnected');
+      await expect(promise2).rejects.toThrow('Disconnected');
+      expect(client.pendingCalls.size).toBe(0);
     });
   });
 });

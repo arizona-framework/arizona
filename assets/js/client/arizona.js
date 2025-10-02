@@ -35,6 +35,10 @@ export default class Arizona {
     this.eventListeners = new Map();
     /** @type {import('./logger/arizona-logger.js').default|null} */
     this.logger = opts.logger || null;
+    /** @type {number} */
+    this.nextRefId = 0;
+    /** @type {Map<string, {resolve: Function, reject: Function, timeout: number}>} */
+    this.pendingCalls = new Map();
   }
 
   /**
@@ -118,6 +122,71 @@ export default class Arizona {
   }
 
   /**
+   * Call an event on the Arizona server and wait for reply
+   * @param {string} event - Event name
+   * @param {EventParams} [params={}] - Event parameters
+   * @param {Object} [options={}] - Call options
+   * @param {number} [options.timeout=10000] - Timeout in milliseconds
+   * @returns {Promise<*>} Promise that resolves with reply data
+   */
+  callEvent(event, params = {}, options = {}) {
+    return this._callEvent(undefined, event, params, options);
+  }
+
+  /**
+   * Call an event on a specific stateful component and wait for reply
+   * @param {string} statefulId - Target stateful component ID
+   * @param {string} event - Event name
+   * @param {EventParams} [params={}] - Event parameters
+   * @param {Object} [options={}] - Call options
+   * @param {number} [options.timeout=10000] - Timeout in milliseconds
+   * @returns {Promise<*>} Promise that resolves with reply data
+   */
+  callEventFrom(statefulId, event, params = {}, options = {}) {
+    return this._callEvent(statefulId, event, params, options);
+  }
+
+  /**
+   * Internal helper to call an event and wait for reply
+   * @private
+   * @param {string|undefined} statefulId - Target stateful component ID (undefined for view)
+   * @param {string} event - Event name
+   * @param {EventParams} params - Event parameters
+   * @param {Object} options - Call options
+   * @returns {Promise<*>} Promise that resolves with reply data
+   */
+  _callEvent(statefulId, event, params, options) {
+    if (!this.connected) return Promise.reject(new Error('Not connected'));
+
+    const refId = `${++this.nextRefId}`;
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingCalls.delete(refId);
+        reject(new Error(`Call timeout: ${event}`));
+      }, options.timeout || 10000);
+
+      this.pendingCalls.set(refId, { resolve, reject, timeout });
+
+      const data = {
+        type: 'event',
+        ref_id: refId,
+        event,
+        params,
+      };
+
+      if (statefulId !== undefined) {
+        data.stateful_id = statefulId;
+      }
+
+      this.worker.postMessage({
+        type: 'send',
+        data,
+      });
+    });
+  }
+
+  /**
    * Disconnect from the Arizona WebSocket server
    * @returns {void}
    */
@@ -127,6 +196,13 @@ export default class Arizona {
       this.worker = null;
     }
     this.connected = false;
+
+    // Reject all pending calls and clean up
+    this.pendingCalls.forEach((pending) => {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error('Disconnected'));
+    });
+    this.pendingCalls.clear();
   }
 
   /**
@@ -156,6 +232,9 @@ export default class Arizona {
           break;
         case 'dispatch':
           this.handleDispatch(data);
+          break;
+        case 'reply':
+          this.handleReply(data);
           break;
         case 'redirect':
           this.handleRedirect(data);
@@ -237,6 +316,20 @@ export default class Arizona {
   handleDispatch(data) {
     this.logger?.debug('Dispatching event:', data.event);
     this.emit(data.event, data.data);
+  }
+
+  handleReply(data) {
+    const { ref_id, data: replyData } = data;
+    const pending = this.pendingCalls.get(ref_id);
+
+    if (pending) {
+      clearTimeout(pending.timeout);
+      pending.resolve(replyData);
+      this.pendingCalls.delete(ref_id);
+      this.logger?.debug(`Reply received for ref: ${ref_id}`);
+    } else {
+      this.logger?.warning(`Received reply for unknown ref: ${ref_id}`);
+    }
   }
 
   handleRedirect(data) {

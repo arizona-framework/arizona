@@ -22,7 +22,8 @@ all() ->
         {group, callback_tests},
         {group, state_management_tests},
         {group, binding_tests},
-        {group, lifecycle_tests}
+        {group, lifecycle_tests},
+        {group, event_payload_tests}
     ].
 
 groups() ->
@@ -32,6 +33,11 @@ groups() ->
             call_render_callback_test,
             call_handle_event_callback_with_actions,
             call_handle_event_callback_no_actions
+        ]},
+        {event_payload_tests, [parallel], [
+            handle_event_with_ref_payload_test,
+            handle_event_with_params_only_payload_test,
+            handle_event_reply_action_with_ref_test
         ]},
         {state_management_tests, [parallel], [
             new_creates_state,
@@ -94,7 +100,14 @@ init_per_suite(Config) ->
     handle_event(~"with_actions", Params, State) ->
         {[{reply, Params}], State};
     handle_event(~"no_actions", _Params, State) ->
-        {[], State}.
+        {[], State};
+    handle_event(~"with_ref", {Ref, Params}, State) ->
+        Data = maps:get(~"result", Params, ~"success"),
+        {[{reply, Ref, Data}], State};
+    handle_event(~"params_only", Params, State) ->
+        Count = arizona_stateful:get_binding(count, State, 0),
+        NewCount = Count + maps:get(~"increment", Params, 1),
+        {[], arizona_stateful:put_binding(count, NewCount, State)}.
 
     unmount(State) ->
         Module = arizona_stateful:get_module(State),
@@ -320,3 +333,51 @@ unmount_callback_receives_correct_state(Config) when is_list(Config) ->
     {unmounted, ReceivedModule, ReceivedBindings} = get(unmount_evidence),
     ?assertEqual(MockEventsModule, ReceivedModule),
     ?assertEqual(arizona_binder:new(TestBindings), ReceivedBindings).
+
+%% --------------------------------------------------------------------
+%% Event Payload Test Cases
+%% --------------------------------------------------------------------
+
+handle_event_with_ref_payload_test(Config) when is_list(Config) ->
+    ct:comment("handle_event/3 should accept {Ref, Params} payload pattern"),
+    {mock_events_module, MockModule} = proplists:lookup(mock_events_module, Config),
+    State = arizona_stateful:new(MockModule, #{}),
+
+    Ref = ~"test-ref-123",
+    Params = #{~"result" => ~"data-value"},
+    Payload = {Ref, Params},
+
+    {Actions, _NewState} = arizona_stateful:call_handle_event_callback(
+        ~"with_ref", Payload, State
+    ),
+
+    ?assertMatch([{reply, Ref, ~"data-value"}], Actions).
+
+handle_event_with_params_only_payload_test(Config) when is_list(Config) ->
+    ct:comment("handle_event/3 should accept Params-only payload (backward compatibility)"),
+    {mock_events_module, MockModule} = proplists:lookup(mock_events_module, Config),
+    State = arizona_stateful:new(MockModule, #{count => 10}),
+
+    Params = #{~"increment" => 5},
+
+    {Actions, NewState} = arizona_stateful:call_handle_event_callback(
+        ~"params_only", Params, State
+    ),
+
+    ?assertEqual([], Actions),
+    ?assertEqual(15, arizona_stateful:get_binding(count, NewState)).
+
+handle_event_reply_action_with_ref_test(Config) when is_list(Config) ->
+    ct:comment("handle_event/3 should return reply action with correct ref and data"),
+    {mock_events_module, MockModule} = proplists:lookup(mock_events_module, Config),
+    State = arizona_stateful:new(MockModule, #{}),
+
+    Ref = ~"action-ref-456",
+    Params = #{~"result" => ~"custom-result"},
+    Payload = {Ref, Params},
+
+    {Actions, _NewState} = arizona_stateful:call_handle_event_callback(
+        ~"with_ref", Payload, State
+    ),
+
+    ?assertEqual([{reply, Ref, ~"custom-result"}], Actions).

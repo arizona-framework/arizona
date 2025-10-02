@@ -292,7 +292,16 @@ handle_event_message(Message, #state{} = State) ->
     StatefulIdOrUndefined = maps:get(~"stateful_id", Message, undefined),
     Event = maps:get(~"event", Message),
     Params = maps:get(~"params", Message, #{}),
-    ok = arizona_live:handle_event(LivePid, StatefulIdOrUndefined, Event, Params),
+    RefId = maps:get(~"ref_id", Message, undefined),
+
+    % Resolve payload pattern - tuple if ref_id present, otherwise just params
+    Payload =
+        case RefId of
+            undefined -> Params;
+            _ -> {RefId, Params}
+        end,
+
+    ok = arizona_live:handle_event(LivePid, StatefulIdOrUndefined, Event, Payload),
     {[], State}.
 
 %% Handle actions response from Live
@@ -315,6 +324,13 @@ action_to_command({dispatch, Event, Data}) ->
     Payload = json_encode(#{
         type => ~"dispatch",
         event => Event,
+        data => Data
+    }),
+    {text, Payload};
+action_to_command({reply, Ref, Data}) ->
+    Payload = json_encode(#{
+        type => ~"reply",
+        ref_id => Ref,
         data => Data
     }),
     {text, Payload};

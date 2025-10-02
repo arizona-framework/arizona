@@ -98,6 +98,9 @@ class ArizonaWorker {
         case 'dispatch':
           this.handleDispatch(message);
           break;
+        case 'reply':
+          this.handleReply(message);
+          break;
         case 'redirect':
           this.handleRedirect(message);
           break;
@@ -147,6 +150,14 @@ class ArizonaWorker {
     // Send dispatch event message to main thread
     this.postMessage({
       type: 'dispatch',
+      data: message,
+    });
+  }
+
+  handleReply(message) {
+    // Send reply message to main thread
+    this.postMessage({
+      type: 'reply',
       data: message,
     });
   }
