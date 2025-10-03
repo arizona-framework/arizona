@@ -90,13 +90,9 @@ diff_view_with_changes(Config) when is_list(Config) ->
     UpdatedState = arizona_stateful:put_binding(title, ~"Arizona Framework", State),
     UpdatedView = arizona_view:update_state(UpdatedState, View),
     {Diff, _DiffView} = arizona_differ:diff_view(UpdatedView),
-    ?assertMatch(
-        [
-            {2, ~"Arizona Framework"},
-            {3, [{2, ~"Arizona Framework"}, {3, [{1, ~"Arizona Framework"}, {2, ~""}]}]}
-        ],
-        Diff
-    ).
+    % With preserve_state mode, child components maintain their own state
+    % Only the view's own title changes, not nested child titles
+    ?assertMatch([{2, ~"Arizona Framework"}], Diff).
 
 diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
     ct:comment("diff_stateful should return diff when fingerprint matches and bindings change"),
