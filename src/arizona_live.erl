@@ -223,34 +223,21 @@ handle_cast({handle_event, StatefulIdOrUndefined, Event, Params}, #state{} = Sta
         undefined ->
             handle_view_event(Event, Params, State);
         StatefulId ->
-            io:format("[DEBUG] Event received - StatefulId: ~p, Event: ~p~n", [StatefulId, Event]),
             View = State#state.view,
             case arizona_view:find_stateful_state(StatefulId, View) of
                 {ok, StatefulState} ->
-                    io:format("[DEBUG] Component found: ~p~n", [StatefulId]),
                     % Stateful component found - handle as stateful event
                     handle_stateful_event(StatefulId, StatefulState, Event, Params, State);
                 error ->
-                    io:format("[DEBUG] Component NOT found: ~p, checking if it's the view~n", [
-                        StatefulId
-                    ]),
                     % Stateful component not found - check if it's the view itself
                     % The view is also a stateful component and might be the target
                     ViewState = arizona_view:get_state(View),
                     ViewId = arizona_stateful:get_binding(id, ViewState),
-                    io:format("[DEBUG] ViewId: ~p~n", [ViewId]),
                     case ViewId of
                         StatefulId ->
-                            io:format("[DEBUG] Target is the view itself~n"),
                             % The target is the view itself
                             handle_view_event(Event, Params, State);
                         _ ->
-                            io:format(
-                                "[DEBUG] Component not found - StatefulId: ~p, ViewId: ~p, Available: ~p~n",
-                                [
-                                    StatefulId, ViewId, arizona_view:get_stateful_ids(View)
-                                ]
-                            ),
                             % Target not found - error
                             error({stateful_component_not_found, StatefulId}, [
                                 {handle_event, StatefulId, Event, Params}, State

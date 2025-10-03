@@ -33,7 +33,6 @@ export default class ArizonaHierarchical {
    */
   mergeStructures(newStructures) {
     for (const [id, data] of Object.entries(newStructures)) {
-      console.log('[Arizona] Merging new structure into map:', id);
       this.structure.set(id, data);
     }
   }
@@ -56,20 +55,9 @@ export default class ArizonaHierarchical {
     }
 
     const component = this.structure.get(statefulId);
-    console.log('[Arizona] Applying diff to', statefulId);
-    console.log('[Arizona] Changes:', changes);
-    console.log(
-      '[Arizona] Component dynamic before:',
-      JSON.parse(JSON.stringify(component.dynamic))
-    );
     for (const [elementIndex, newValue] of changes) {
-      console.log('[Arizona] Applying change - index:', elementIndex, 'value:', newValue);
       this.applyDiffValue(component.dynamic, elementIndex - 1, newValue);
     }
-    console.log(
-      '[Arizona] Component dynamic after:',
-      JSON.parse(JSON.stringify(component.dynamic))
-    );
   }
 
   /**
@@ -88,7 +76,6 @@ export default class ArizonaHierarchical {
     if (existing?.type === 'stateful') {
       // 1a. Replacing with component reference (fingerprint mismatch)
       if (newValue?.type === 'stateful') {
-        console.log('[Arizona] Updating component reference:', newValue.id);
         container[targetIndex] = newValue;
         return;
       }
@@ -101,7 +88,6 @@ export default class ArizonaHierarchical {
           console.warn(`[Arizona] Component '${sanitizedId}' not found in structure`);
           return;
         }
-        console.log('[Arizona] Applying nested diff to:', existing.id);
         newValue.forEach(([index, value]) => {
           this.applyDiffValue(component.dynamic, index - 1, value);
         });
@@ -109,7 +95,6 @@ export default class ArizonaHierarchical {
       }
 
       // 1c. Removing component (replacing with simple value)
-      console.log('[Arizona] Removing component reference:', existing.id);
       container[targetIndex] = newValue;
       return;
     }
@@ -151,7 +136,6 @@ export default class ArizonaHierarchical {
    * @returns {string} Generated HTML
    */
   generateStatefulHTML(statefulId) {
-    console.log('[Arizona] generateStatefulHTML for', statefulId);
     const struct = this.structure.get(statefulId);
     if (!struct) {
       const sanitizedStatefulId = String(statefulId).replace(/\r|\n/g, '');
@@ -159,10 +143,8 @@ export default class ArizonaHierarchical {
       throw new Error(`Component ${sanitizedStatefulId} not found`);
     }
 
-    console.log('[Arizona] Structure found, generating HTML...');
     // Components always have static and dynamic arrays
     const html = this.zipStaticDynamic(struct.static, struct.dynamic);
-    console.log('[Arizona] HTML generated for', statefulId, 'length:', html.length);
     return html;
   }
 
@@ -311,9 +293,7 @@ export default class ArizonaHierarchical {
    * @returns {Object} Patch object with statefulId and HTML
    */
   createPatch(statefulId) {
-    console.log('[Arizona] createPatch called for', statefulId);
     const html = this.generateStatefulHTML(statefulId);
-    console.log('[Arizona] HTML generated, length:', html.length);
     return {
       type: 'html_patch',
       statefulId,
