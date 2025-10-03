@@ -10,6 +10,13 @@ class ArizonaWorker {
     this.hierarchical = new ArizonaHierarchical();
 
     self.onmessage = (event) => {
+      // Validate message structure
+      // Note: This is a dedicated worker, so messages can only come from the parent window
+      // Origin checking is not applicable for dedicated workers
+      if (!event.data || typeof event.data !== 'object' || !event.data.type) {
+        return;
+      }
+
       const { type, data } = event.data;
 
       switch (type) {
