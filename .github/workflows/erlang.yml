@@ -1,4 +1,15 @@
 ---
+# Erlang CI/CD workflow
+#
+# Job dependency structure:
+# - resolve-playwright-version: Standalone, runs first for E2E jobs
+# - cache-erlang: Standalone, caches Erlang build artifacts
+# - check/test/artifacts: Depend on cache-erlang only
+# - e2e-parallel/e2e-sequential: Depend on both resolve-playwright-version
+#   and cache-erlang
+#
+# E2E tests use Playwright Docker containers with pre-installed browsers,
+# eliminating the need for browser caching and installation steps.
 name: Erlang
 
 "on":
@@ -19,6 +30,31 @@ permissions:
   contents: read
 
 jobs:
+  # Extracts Playwright version from package.json to ensure E2E tests run in
+  # Docker containers with matching browser versions. This eliminates the need
+  # for browser caching and manual installation steps.
+  resolve-playwright-version:
+    name: Resolve Playwright version
+
+    runs-on: ubuntu-24.04
+
+    outputs:
+      version: ${{ steps.resolve-playwright-version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Resolve Playwright version
+        id: resolve-playwright-version
+        run: |
+          # Extract version from package.json devDependencies
+          version="$(grep -oP '(?<="@playwright/test": ")[^"]+' package.json)"
+          test -n "$version" || {
+            echo "No @playwright/test version found in package.json"
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   cache-erlang:
     name: Cache Erlang
 
@@ -79,49 +115,6 @@ jobs:
       - name: Compile
         run: |
           rebar3 as test compile
-
-  cache-node:
-    name: Cache Node
-
-    runs-on: ubuntu-24.04
-
-    outputs:
-      playwright-cache-key: ${{ steps.set-playwright-key.outputs.key }}
-
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-
-      - name: Set Playwright cache key
-        id: set-playwright-key
-        run: |
-          echo "key=\
-          playwright-\
-          ${{ runner.os }}-\
-          playwright-${{ hashFiles('package-lock.json') }}" \
-          >> "${GITHUB_OUTPUT}"
-
-      - name: Cache Playwright browsers
-        id: cache-playwright
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ steps.set-playwright-key.outputs.key }}
-          restore-keys: |
-            playwright-${{ runner.os }}-
-
-      - name: Setup Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version-file: .tool-versions
-          cache: "npm"
-          cache-dependency-path: "package-lock.json"
-
-      - name: Install Node.js dependencies
-        run: npm ci
-
-      - name: Install Playwright browsers
-        if: steps.cache-playwright.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium firefox
 
   check:
     name: Check
@@ -251,21 +244,63 @@ jobs:
           rebar3 upgrade --all
           git diff --exit-code
 
+  # Runs E2E tests in parallel using Playwright Docker containers with
+  # pre-installed browsers. The container image version matches package.json
+  # to ensure consistency. Using containers eliminates browser installation
+  # time and caching complexity.
+  #
+  # Container details:
+  # - Base: Ubuntu 24.04 (noble) matching runner OS
+  # - User: root (required for apt package caching)
+  # - Browsers: Chromium and Firefox pre-installed
   e2e-parallel:
     name: E2E Tests (Parallel)
 
-    needs: [cache-erlang, cache-node]
+    needs: [resolve-playwright-version, cache-erlang]
 
     runs-on: ubuntu-24.04
 
+    # Set ImageOS for erlef/setup-beam to work in containers
+    # Set HOME=/root for Firefox to work when running as root
+    env:
+      ImageOS: ubuntu22
+      HOME: /root
+
+    container:
+      image: >-
+        mcr.microsoft.com/playwright:v${{
+          needs.resolve-playwright-version.outputs.version
+        }}-noble
+      options: --user root
+
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      # Fix Docker config warnings for GitHub Actions cleanup
+      - name: Setup Docker config
+        run: |
+          mkdir -p /root/.docker
+          echo '{}' > /root/.docker/config.json
 
       - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         id: setup-beam
         with:
           version-type: strict
           version-file: .tool-versions
+
+      # Composite actions don't work in container jobs, use manual apt caching
+      # Ref: https://github.com/orgs/community/discussions/53771
+      - name: Cache apt packages
+        id: cache-apt
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-build-essential-inotify-tools
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential inotify-tools
 
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
@@ -294,21 +329,8 @@ jobs:
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
 
-      - name: Restore Playwright browsers cache
-        id: restore-playwright-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ needs.cache-node.outputs.playwright-cache-key }}
-          restore-keys: |
-            playwright-${{ runner.os }}-
-
       - name: Install Node.js dependencies
         run: npm ci
-
-      - name: Install Playwright system dependencies
-        if: steps.restore-playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium firefox
 
       - name: Compile Arizona for test
         run: rebar3 as test compile
@@ -324,21 +346,58 @@ jobs:
           path: test-results/
           retention-days: 7
 
+  # Runs E2E tests sequentially (--workers=1) using Playwright Docker
+  # containers. Same container setup as e2e-parallel job. Sequential execution
+  # is required for tests that interact with shared state or perform operations
+  # that cannot run safely in parallel.
   e2e-sequential:
     name: E2E Tests (Sequential)
 
-    needs: [cache-erlang, cache-node]
+    needs: [resolve-playwright-version, cache-erlang]
 
     runs-on: ubuntu-24.04
 
+    # Set ImageOS for erlef/setup-beam to work in containers
+    # Set HOME=/root for Firefox to work when running as root
+    env:
+      ImageOS: ubuntu22
+      HOME: /root
+
+    container:
+      image: >-
+        mcr.microsoft.com/playwright:v${{
+          needs.resolve-playwright-version.outputs.version
+        }}-noble
+      options: --user root
+
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      # Fix Docker config warnings for GitHub Actions cleanup
+      - name: Setup Docker config
+        run: |
+          mkdir -p /root/.docker
+          echo '{}' > /root/.docker/config.json
 
       - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         id: setup-beam
         with:
           version-type: strict
           version-file: .tool-versions
+
+      # Composite actions don't work in container jobs, use manual apt caching
+      # Ref: https://github.com/orgs/community/discussions/53771
+      - name: Cache apt packages
+        id: cache-apt
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-build-essential-inotify-tools
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential inotify-tools
 
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
@@ -367,21 +426,8 @@ jobs:
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
 
-      - name: Restore Playwright browsers cache
-        id: restore-playwright-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ needs.cache-node.outputs.playwright-cache-key }}
-          restore-keys: |
-            playwright-${{ runner.os }}-
-
       - name: Install Node.js dependencies
         run: npm ci
-
-      - name: Install Playwright system dependencies
-        if: steps.restore-playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium firefox
 
       - name: Compile Arizona for test
         run: rebar3 as test compile
