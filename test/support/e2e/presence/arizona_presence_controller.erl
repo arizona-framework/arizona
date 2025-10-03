@@ -78,13 +78,15 @@ handle_join(Req, State) ->
                 json:encode(#{
                     status => ~"success",
                     message => ~"User joined successfully",
-                    user_id => UserId
+                    user_id => UserId,
+                    user_name => UserName
                 });
             {error, already_joined} ->
                 json:encode(#{
                     status => ~"error",
                     message => ~"User is already in presence",
-                    user_id => UserId
+                    user_id => UserId,
+                    user_name => UserName
                 })
         end,
 

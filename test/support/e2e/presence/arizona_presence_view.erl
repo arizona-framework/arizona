@@ -102,10 +102,12 @@ render(Bindings) ->
             let isJoined = false;
 
             // Update the displayed user info
-            const userIdSpan = document.querySelector('.user-id');
-            const userNameSpan = document.querySelector('.user-name');
-            if (userIdSpan) userIdSpan.textContent = currentUserId;
-            if (userNameSpan) userNameSpan.textContent = currentUserName;
+            function updateUserInfo() \{
+                const userIdSpan = document.querySelector('.user-id');
+                const userNameSpan = document.querySelector('.user-name');
+                if (userIdSpan) userIdSpan.textContent = currentUserId;
+                if (userNameSpan) userNameSpan.textContent = currentUserName;
+            }
 
             document.addEventListener('arizonaEvent', (\{ detail: event }) => \{
                 if (event.type !== 'status') return
@@ -156,6 +158,7 @@ render(Bindings) ->
                     const result = await response.json();
                     if (response.ok && result.status === 'success') \{
                         isJoined = true;
+                        updateUserInfo();
                         updateButtons();
                         showStatus('Successfully joined presence!');
                     } else \{
@@ -180,6 +183,7 @@ render(Bindings) ->
                     const result = await response.json();
                     if (response.ok && result.status === 'success') \{
                         isJoined = false;
+                        updateUserInfo();
                         updateButtons();
                         showStatus('Successfully left presence!');
                     } else \{
@@ -189,6 +193,8 @@ render(Bindings) ->
                     showStatus('Network error: ' + error.message, true);
                 }
             }
+
+            updateUserInfo();
         </script>
     </div>
     """").
