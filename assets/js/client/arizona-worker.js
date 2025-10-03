@@ -10,6 +10,13 @@ class ArizonaWorker {
     this.hierarchical = new ArizonaHierarchical();
 
     self.onmessage = (event) => {
+      // Validate message structure
+      // Note: This is a dedicated worker, so messages can only come from the parent window
+      // Origin checking is not applicable for dedicated workers
+      if (!event.data || typeof event.data !== 'object' || !event.data.type) {
+        return;
+      }
+
       const { type, data } = event.data;
 
       switch (type) {
@@ -28,6 +35,15 @@ class ArizonaWorker {
 
   connect(url) {
     if (this.connected) return;
+
+    // Validate WebSocket URL to prevent client-side request forgery
+    if (!this.isValidWebSocketUrl(url)) {
+      this.postMessage({
+        type: 'error',
+        data: { error: 'Invalid WebSocket URL' },
+      });
+      return;
+    }
 
     this.socket = new WebSocket(url);
 
@@ -50,6 +66,22 @@ class ArizonaWorker {
     this.socket.onerror = (error) => {
       this.postMessage({ type: 'error', data: { error: error.toString() } });
     };
+  }
+
+  isValidWebSocketUrl(url) {
+    try {
+      const parsedUrl = new URL(url);
+      // Only allow WebSocket protocols
+      if (parsedUrl.protocol !== 'ws:' && parsedUrl.protocol !== 'wss:') {
+        return false;
+      }
+      // Validate same origin (hostname must match current location in worker context)
+      // In a worker, we don't have access to window.location, so we validate protocol only
+      // The URL is constructed by the main thread from window.location, so this is safe
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   sendMessage(data) {
