@@ -72,61 +72,37 @@ export default class ArizonaHierarchical {
   applyDiffValue(container, targetIndex, newValue) {
     const existing = container[targetIndex];
 
-    // 1. Existing is stateful reference - handle replacements/updates/removals
-    if (existing?.type === 'stateful') {
-      // 1a. Replacing with component reference (fingerprint mismatch)
-      if (newValue?.type === 'stateful') {
-        container[targetIndex] = newValue;
-        return;
-      }
-
-      // 1b. Applying nested diff
-      if (Array.isArray(newValue)) {
-        const component = this.structure.get(existing.id);
-        if (!component) {
-          const sanitizedId = String(existing.id).replace(/\r|\n/g, '');
-          console.warn(`[Arizona] Component '${sanitizedId}' not found in structure`);
+    // Array of changes - apply to component
+    if (existing?.type && Array.isArray(newValue)) {
+      switch (existing.type) {
+        case 'stateful': {
+          // Fetch actual component from Map
+          const component = this.structure.get(existing.id);
+          if (!component) {
+            const sanitizedId = String(existing.id).replace(/\r|\n/g, '');
+            console.warn(`[Arizona] Component '${sanitizedId}' not found in structure`);
+            return;
+          }
+          // Apply nested diff
+          newValue.forEach(([index, value]) => {
+            this.applyDiffValue(component.dynamic, index - 1, value);
+          });
           return;
         }
-        newValue.forEach(([index, value]) => {
-          this.applyDiffValue(component.dynamic, index - 1, value);
-        });
-        return;
+        case 'stateless':
+          // Apply nested diff to inline component
+          newValue.forEach(([index, value]) => {
+            this.applyDiffValue(existing.dynamic, index - 1, value);
+          });
+          return;
+        case 'list':
+          // Replace list dynamic content
+          existing.dynamic = newValue;
+          return;
       }
-
-      // 1c. Removing component (replacing with simple value)
-      container[targetIndex] = newValue;
-      return;
     }
 
-    // 2. New value is hierarchical reference (stateful/stateless/list)
-    if (newValue?.type) {
-      container[targetIndex] = newValue;
-      return;
-    }
-
-    // 3. New value is array
-    if (Array.isArray(newValue)) {
-      // 3a. Existing is list - replace dynamic data
-      if (existing?.type === 'list') {
-        existing.dynamic = newValue;
-        return;
-      }
-
-      // 3b. Existing is stateless - apply nested diff
-      if (existing?.type === 'stateless') {
-        newValue.forEach(([index, value]) => {
-          this.applyDiffValue(existing.dynamic, index - 1, value);
-        });
-        return;
-      }
-
-      // 3c. Replace with array
-      container[targetIndex] = newValue;
-      return;
-    }
-
-    // 4. Simple value - replace
+    // Simple replacement - new reference or simple value
     container[targetIndex] = newValue;
   }
 
