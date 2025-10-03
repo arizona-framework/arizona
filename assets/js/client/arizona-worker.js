@@ -21,7 +21,7 @@ class ArizonaWorker {
 
       switch (type) {
         case 'connect':
-          this.connect(data.url);
+          this.connect(data.url, data.expectedHost);
           break;
         case 'send':
           this.sendMessage(data);
@@ -33,11 +33,11 @@ class ArizonaWorker {
     };
   }
 
-  connect(url) {
+  connect(url, expectedHost) {
     if (this.connected) return;
 
     // Validate WebSocket URL to prevent client-side request forgery
-    if (!this.isValidWebSocketUrl(url)) {
+    if (!this.isValidWebSocketUrl(url, expectedHost)) {
       this.postMessage({
         type: 'error',
         data: { error: 'Invalid WebSocket URL' },
@@ -68,16 +68,26 @@ class ArizonaWorker {
     };
   }
 
-  isValidWebSocketUrl(url) {
+  isValidWebSocketUrl(url, expectedHost) {
     try {
       const parsedUrl = new URL(url);
+
       // Only allow WebSocket protocols
       if (parsedUrl.protocol !== 'ws:' && parsedUrl.protocol !== 'wss:') {
         return false;
       }
-      // Validate same origin (hostname must match current location in worker context)
-      // In a worker, we don't have access to window.location, so we validate protocol only
-      // The URL is constructed by the main thread from window.location, so this is safe
+
+      // Validate hostname matches expected host to prevent request forgery
+      // The expectedHost comes from window.location.host in the main thread
+      if (expectedHost && parsedUrl.host !== expectedHost) {
+        return false;
+      }
+
+      // Prevent path traversal attacks in the pathname
+      if (parsedUrl.pathname.includes('../') || parsedUrl.pathname.includes('..\\')) {
+        return false;
+      }
+
       return true;
     } catch {
       return false;

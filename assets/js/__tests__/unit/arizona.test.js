@@ -78,7 +78,10 @@ describe('Arizona', () => {
       const postedMessage = client.worker.getLastPostedMessage();
       expect(postedMessage).toEqual({
         type: 'connect',
-        data: { url: 'ws://localhost:3000/live?path=%2Fusers&qs=' },
+        data: {
+          url: 'ws://localhost:3000/live?path=%2Fusers&qs=',
+          expectedHost: 'localhost:3000',
+        },
       });
     });
 

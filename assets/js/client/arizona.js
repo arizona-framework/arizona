@@ -77,7 +77,7 @@ export default class Arizona {
 
     this.worker.postMessage({
       type: 'connect',
-      data: { url: wsUrl },
+      data: { url: wsUrl, expectedHost: host },
     });
   }
 
