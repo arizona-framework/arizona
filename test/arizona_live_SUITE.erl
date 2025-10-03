@@ -322,7 +322,7 @@ handle_view_event_with_actions_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent
     receive
-        {actions_response, ~"live_test_id", _Diff, [
+        {actions_response, ~"live_test_id", _Diff, _HierarchicalStructure, [
             {dispatch, ~"counterUpdate", #{new_count := 1}}
         ]} ->
             ok
@@ -339,7 +339,7 @@ handle_view_event_no_actions_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent
     receive
-        {actions_response, ~"live_test_id", _Diff, []} -> ok
+        {actions_response, ~"live_test_id", _Diff, _HierarchicalStructure, []} -> ok
     after 1000 ->
         ct:fail("Expected actions_response message not received")
     end.
@@ -353,7 +353,7 @@ handle_view_event_dispatch_action_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent with dispatch action
     receive
-        {actions_response, ~"live_test_id", _Diff, [
+        {actions_response, ~"live_test_id", _Diff, _HierarchicalStructure, [
             {dispatch, ~"notification:hideAlert", #{
                 alert_id := ~"test-alert", dismissed := true
             }}
@@ -372,7 +372,7 @@ handle_stateful_event_with_actions_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent
     receive
-        {actions_response, ~"stateful_1", _Diff, [
+        {actions_response, ~"stateful_1", _Diff, _HierarchicalStructure, [
             {dispatch, ~"status:componentUpdated", #{updated := true, value := 100}}
         ]} ->
             ok
@@ -389,7 +389,7 @@ handle_stateful_event_no_actions_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent
     receive
-        {actions_response, ~"stateful_2", _Diff, []} -> ok
+        {actions_response, ~"stateful_2", _Diff, _HierarchicalStructure, []} -> ok
     after 1000 ->
         ct:fail("Expected actions_response message not received")
     end.
@@ -432,7 +432,7 @@ pubsub_message_test(Config) when is_list(Config) ->
 
     % Expect actions message since increment returns actions
     receive
-        {actions_response, ~"live_test_id", _Diff, [
+        {actions_response, ~"live_test_id", _Diff, _HierarchicalStructure, [
             {dispatch, ~"counterUpdate", #{new_count := _}}
         ]} ->
             ok
@@ -450,7 +450,7 @@ concurrent_event_handling_test(Config) when is_list(Config) ->
 
     % Expect two actions messages
     receive
-        {actions_response, ~"live_test_id", _Diff1, [
+        {actions_response, ~"live_test_id", _Diff1, _HierarchicalStructure1, [
             {dispatch, ~"counterUpdate", #{new_count := _}}
         ]} ->
             ok
@@ -458,7 +458,7 @@ concurrent_event_handling_test(Config) when is_list(Config) ->
         ct:fail("Expected first actions_response message not received")
     end,
     receive
-        {actions_response, ~"live_test_id", _Diff2, [
+        {actions_response, ~"live_test_id", _Diff2, _HierarchicalStructure2, [
             {dispatch, ~"counterUpdate", #{new_count := _}}
         ]} ->
             ok

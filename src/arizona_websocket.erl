@@ -198,7 +198,7 @@ websocket_init({ViewModule, MountArg, ArizonaRequest, LiveShutdownTimeout, WebSo
         live_shutdown_timeout = LiveShutdownTimeout
     },
 
-    handle_diff_response(ViewId, Diff, Cmds, State).
+    handle_diff_response(ViewId, Diff, #{}, Cmds, State).
 
 -doc ~"""
 Handles WebSocket messages from client.
@@ -231,8 +231,8 @@ messages for the client.
     Info :: term(),
     State :: state(),
     Result :: call_result().
-websocket_info({actions_response, StatefulId, Diff, Actions}, State) ->
-    handle_actions_response(StatefulId, Diff, Actions, State);
+websocket_info({actions_response, StatefulId, Diff, HierarchicalStructure, Actions}, State) ->
+    handle_actions_response(StatefulId, Diff, HierarchicalStructure, Actions, State);
 % Handle live reload messages
 websocket_info({pubsub_message, ~"arizona:reload", FileType}, State) ->
     Message = #{type => ~"reload", file_type => FileType},
@@ -305,15 +305,18 @@ handle_event_message(Message, #state{} = State) ->
     {[], State}.
 
 %% Handle actions response from Live
--spec handle_actions_response(StatefulId, Diff, Actions, State) -> Result when
+-spec handle_actions_response(StatefulId, Diff, HierarchicalStructure, Actions, State) ->
+    Result
+when
     StatefulId :: arizona_stateful:id(),
     Diff :: arizona_differ:diff(),
+    HierarchicalStructure :: arizona_hierarchical_dict:hierarchical_structure(),
     Actions :: arizona_action:actions(),
     State :: state(),
     Result :: call_result().
-handle_actions_response(StatefulId, Diff, Actions, #state{} = State) ->
+handle_actions_response(StatefulId, Diff, HierarchicalStructure, Actions, #state{} = State) ->
     ActionCmds = [action_to_command(Action) || Action <- Actions],
-    handle_diff_response(StatefulId, Diff, ActionCmds, State).
+    handle_diff_response(StatefulId, Diff, HierarchicalStructure, ActionCmds, State).
 
 %% Convert action to WebSocket command
 -spec action_to_command(Action) -> Command when
@@ -348,13 +351,14 @@ action_to_command(reload) ->
     {text, Payload}.
 
 %% Handle noreply response from Live
--spec handle_diff_response(StatefulId, Diff, Cmds, State) -> Result when
+-spec handle_diff_response(StatefulId, Diff, HierarchicalStructure, Cmds, State) -> Result when
     StatefulId :: arizona_stateful:id(),
     Diff :: arizona_differ:diff(),
+    HierarchicalStructure :: arizona_hierarchical_dict:hierarchical_structure(),
     Cmds :: cowboy_websocket:commands(),
     State :: state(),
     Result :: call_result().
-handle_diff_response(StatefulId, Diff, Cmds, #state{} = State) ->
+handle_diff_response(StatefulId, Diff, HierarchicalStructure, Cmds, #state{} = State) ->
     case Diff of
         [] ->
             {Cmds, State};
@@ -362,7 +366,8 @@ handle_diff_response(StatefulId, Diff, Cmds, #state{} = State) ->
             DiffPayload = json_encode(#{
                 type => ~"diff",
                 stateful_id => StatefulId,
-                changes => Diff
+                changes => Diff,
+                structure => HierarchicalStructure
             }),
             {Cmds ++ [{text, DiffPayload}], State}
     end.

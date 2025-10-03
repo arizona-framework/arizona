@@ -28,6 +28,17 @@ export default class ArizonaHierarchical {
   }
 
   /**
+   * Merge new structures from fingerprint mismatches into existing Map
+   * @param {Object} newStructures - New structures from arizona_hierarchical_dict
+   */
+  mergeStructures(newStructures) {
+    for (const [id, data] of Object.entries(newStructures)) {
+      console.log('[Arizona] Merging new structure into map:', id);
+      this.structure.set(id, data);
+    }
+  }
+
+  /**
    * Apply diff changes from arizona_differ to hierarchical structure
    * @param {string} statefulId - Stateful ID to render
    * @param {Array|Object} changes - Changes in format: [[ElementIndex, Changes]] or hierarchical structure
@@ -71,88 +82,66 @@ export default class ArizonaHierarchical {
    * @returns {void}
    */
   applyDiffValue(container, targetIndex, newValue) {
-    const existingElement = container[targetIndex];
+    const existing = container[targetIndex];
 
-    // 1. Handle existing stateful component references
-    if (
-      existingElement &&
-      typeof existingElement === 'object' &&
-      existingElement.type === 'stateful'
-    ) {
-      // 1a. If newValue is a hierarchical structure, replace the old component
-      if (newValue && typeof newValue === 'object' && newValue.type) {
-        // Remove old stateful component from structure
-        this.structure.delete(existingElement.id);
-        // Replace with new structure
+    // 1. Existing is stateful reference - handle replacements/updates/removals
+    if (existing?.type === 'stateful') {
+      // 1a. Replacing with component reference (fingerprint mismatch)
+      if (newValue?.type === 'stateful') {
+        console.log('[Arizona] Updating component reference:', newValue.id);
         container[targetIndex] = newValue;
-        // If new value is also stateful with full structure, add it to structure
-        if (newValue.type === 'stateful' && newValue.static && newValue.dynamic) {
-          console.log('[Arizona] Replacing stateful component in map:', newValue.id);
-          this.structure.set(newValue.id, newValue);
-        }
         return;
       }
 
-      // 1b. If newValue is an array, it's a diff for the nested component
+      // 1b. Applying nested diff
       if (Array.isArray(newValue)) {
-        const statefulComponent = this.structure.get(existingElement.id);
-        if (!statefulComponent) {
-          const sanitizedId = String(existingElement.id).replace(/\r|\n/g, '');
-          console.warn(
-            `[Arizona] Nested stateful component '${sanitizedId}' not found in structure`
-          );
+        const component = this.structure.get(existing.id);
+        if (!component) {
+          const sanitizedId = String(existing.id).replace(/\r|\n/g, '');
+          console.warn(`[Arizona] Component '${sanitizedId}' not found in structure`);
           return;
         }
-        // Recursively apply diff changes to the nested component's dynamic array
-        newValue.forEach(([elementIndex, elementValue]) => {
-          this.applyDiffValue(statefulComponent.dynamic, elementIndex - 1, elementValue);
-        });
-        return;
-      }
-
-      // 1c. If newValue is a simple value, component was removed from template
-      // Remove from structure and replace with simple value
-      this.structure.delete(existingElement.id);
-      container[targetIndex] = newValue;
-      return;
-    }
-
-    // 2. Check if newValue is a hierarchical structure (fingerprint mismatch)
-    if (newValue && typeof newValue === 'object' && newValue.type) {
-      container[targetIndex] = newValue;
-      // If it's a stateful component with full structure, add to structure map
-      // Only add if it has static/dynamic arrays (full structure), not just a reference
-      if (newValue.type === 'stateful' && newValue.static && newValue.dynamic) {
-        console.log('[Arizona] Adding full stateful structure to map:', newValue.id);
-        this.structure.set(newValue.id, newValue);
-      } else if (newValue.type === 'stateful') {
-        console.log('[Arizona] Skipping stateful reference (no static/dynamic):', newValue.id);
-      }
-      return;
-    }
-
-    // 3. Check if newValue is an array (nested diff or list data)
-    if (Array.isArray(newValue)) {
-      // 3a. If existing element is a list, replace its dynamic data
-      if (existingElement && existingElement.type === 'list') {
-        existingElement.dynamic = newValue;
-        return;
-      }
-
-      // 3b. If existing element is stateless, apply nested diff recursively
-      if (existingElement && existingElement.type === 'stateless') {
+        console.log('[Arizona] Applying nested diff to:', existing.id);
         newValue.forEach(([index, value]) => {
-          this.applyDiffValue(existingElement.dynamic, index - 1, value);
+          this.applyDiffValue(component.dynamic, index - 1, value);
         });
         return;
       }
 
-      // 3c. Otherwise, replace with array value
+      // 1c. Removing component (replacing with simple value)
+      console.log('[Arizona] Removing component reference:', existing.id);
       container[targetIndex] = newValue;
       return;
     }
 
-    // 4. Simple value - just replace
+    // 2. New value is hierarchical reference (stateful/stateless/list)
+    if (newValue?.type) {
+      container[targetIndex] = newValue;
+      return;
+    }
+
+    // 3. New value is array
+    if (Array.isArray(newValue)) {
+      // 3a. Existing is list - replace dynamic data
+      if (existing?.type === 'list') {
+        existing.dynamic = newValue;
+        return;
+      }
+
+      // 3b. Existing is stateless - apply nested diff
+      if (existing?.type === 'stateless') {
+        newValue.forEach(([index, value]) => {
+          this.applyDiffValue(existing.dynamic, index - 1, value);
+        });
+        return;
+      }
+
+      // 3c. Replace with array
+      container[targetIndex] = newValue;
+      return;
+    }
+
+    // 4. Simple value - replace
     container[targetIndex] = newValue;
   }
 

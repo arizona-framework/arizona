@@ -297,10 +297,12 @@ handle_view_event(Event, Params, State) ->
     {Actions, UpdatedView} = arizona_view:call_handle_event_callback(
         Event, Params, State#state.view
     ),
+    undefined = arizona_hierarchical_dict:set_structure(#{}),
     {Diff, DiffView} = arizona_differ:diff_view(UpdatedView),
+    HierarchicalStructure = arizona_hierarchical_dict:clear(),
     ViewState = arizona_view:get_state(DiffView),
     ViewId = arizona_stateful:get_binding(id, ViewState),
-    ok = handle_actions_response(ViewId, Diff, Actions, State),
+    ok = handle_actions_response(ViewId, Diff, HierarchicalStructure, Actions, State),
     {noreply, State#state{view = DiffView}}.
 
 handle_stateful_event(StatefulId, StatefulState, Event, Params, State) ->
@@ -314,18 +316,23 @@ handle_stateful_event(StatefulId, StatefulState, Event, Params, State) ->
         StatefulId, UpdatedStatefulState, State#state.view
     ),
     DiffBindings = arizona_binder:to_map(Bindings),
+    undefined = arizona_hierarchical_dict:set_structure(#{}),
     {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, DiffBindings, UpdatedView),
-    ok = handle_actions_response(DiffStatefulId, Diff, Actions, State),
+    HierarchicalStructure = arizona_hierarchical_dict:clear(),
+    ok = handle_actions_response(DiffStatefulId, Diff, HierarchicalStructure, Actions, State),
     {noreply, State#state{view = DiffView}}.
 
-handle_actions_response(StatefulId, Diff, Actions, State) ->
-    State#state.transport_pid ! {actions_response, StatefulId, Diff, Actions},
+handle_actions_response(StatefulId, Diff, HierarchicalStructure, Actions, State) ->
+    State#state.transport_pid !
+        {actions_response, StatefulId, Diff, HierarchicalStructure, Actions},
     ok.
 
 handle_view_info(Info, State) ->
     {Actions, UpdatedView} = arizona_view:call_handle_info_callback(Info, State#state.view),
+    undefined = arizona_hierarchical_dict:set_structure(#{}),
     {Diff, DiffView} = arizona_differ:diff_view(UpdatedView),
+    HierarchicalStructure = arizona_hierarchical_dict:clear(),
     ViewState = arizona_view:get_state(DiffView),
     ViewId = arizona_stateful:get_binding(id, ViewState),
-    ok = handle_actions_response(ViewId, Diff, Actions, State),
+    ok = handle_actions_response(ViewId, Diff, HierarchicalStructure, Actions, State),
     {noreply, State#state{view = DiffView}}.

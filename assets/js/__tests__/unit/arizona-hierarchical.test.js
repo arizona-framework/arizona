@@ -363,8 +363,8 @@ describe('ArizonaHierarchical', () => {
         // Stateful component should be REPLACED with simple value
         expect(statelessComponent.dynamic[1]).toBe('Replacement Text');
 
-        // Stateful component should be REMOVED from structure
-        expect(client.getStructure()['stateful-child']).toBeUndefined();
+        // Component stays in Map (orphaned) - Map only modified by initialize/mergeStructures
+        expect(client.getStructure()['stateful-child']).toBeDefined();
       });
     });
 
@@ -498,14 +498,20 @@ describe('ArizonaHierarchical', () => {
           },
         });
 
-        // Replace nested stateful component with new hierarchical structure
-        const newChildStruct = {
+        // Fingerprint mismatch sends reference in diff + full structure in message.structure
+        const childReference = {
           type: 'stateful',
           id: 'child',
-          static: ['<button>', '</button>'],
-          dynamic: ['New Button'],
         };
-        const changes = [[1, newChildStruct]];
+        const changes = [[1, childReference]];
+
+        // Full structure comes via mergeStructures (from message.structure field)
+        client.mergeStructures({
+          child: {
+            static: ['<button>', '</button>'],
+            dynamic: ['New Button'],
+          },
+        });
 
         client.applyDiff('parent', changes);
 
@@ -535,7 +541,7 @@ describe('ArizonaHierarchical', () => {
         client.applyDiff('parent', changes);
 
         expect(consoleSpy).toHaveBeenCalledWith(
-          "[Arizona] Nested stateful component 'missing-child' not found in structure"
+          "[Arizona] Component 'missing-child' not found in structure"
         );
       });
     });
