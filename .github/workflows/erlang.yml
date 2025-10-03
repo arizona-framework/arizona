@@ -24,6 +24,7 @@ jobs:
     outputs:
       build-cache-key: ${{ steps.set-build-key.outputs.key }}
       rebar-cache-key: ${{ steps.set-rebar-key.outputs.key }}
+      playwright-cache-key: ${{ steps.set-playwright-key.outputs.key }}
 
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -55,6 +56,15 @@ jobs:
           config-${{ hashFiles('rebar.config') }}" \
           >> "${GITHUB_OUTPUT}"
 
+      - name: Set Playwright cache key
+        id: set-playwright-key
+        run: |
+          echo "key=\
+          playwright-\
+          ${{ runner.os }}-\
+          playwright-${{ hashFiles('package-lock.json') }}" \
+          >> "${GITHUB_OUTPUT}"
+
       - name: Cache _build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -72,6 +82,29 @@ jobs:
           restore-keys: |
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
+
+      - name: Cache Playwright browsers
+        id: cache-playwright
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.set-playwright-key.outputs.key }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .tool-versions
+          cache: "npm"
+          cache-dependency-path: "package-lock.json"
+
+      - name: Install Node.js dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        if: steps.cache-playwright.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium firefox
 
       - name: Compile
         run: |
@@ -205,8 +238,8 @@ jobs:
           rebar3 upgrade --all
           git diff --exit-code
 
-  e2e:
-    name: E2E Tests
+  e2e-parallel:
+    name: E2E Tests (Parallel)
 
     needs: cache
 
@@ -248,25 +281,105 @@ jobs:
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
 
+      - name: Restore Playwright browsers cache
+        id: restore-playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ needs.cache.outputs.playwright-cache-key }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
       - name: Install Node.js dependencies
         run: npm ci
 
-      - name: Build JavaScript assets
-        run: npm run build
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium firefox
+      - name: Install Playwright system dependencies
+        if: steps.restore-playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium firefox
 
       - name: Compile Arizona for test
         run: rebar3 as test compile
 
-      - name: Run E2E tests
-        run: npm run test:e2e
+      - name: Run parallel E2E tests
+        run: npm run test:e2e:parallel
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
-          name: playwright-report
+          name: playwright-report-parallel
+          path: test-results/
+          retention-days: 7
+
+  e2e-sequential:
+    name: E2E Tests (Sequential)
+
+    needs: cache
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
+        id: setup-beam
+        with:
+          version-type: strict
+          version-file: .tool-versions
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .tool-versions
+          cache: "npm"
+          cache-dependency-path: "package-lock.json"
+
+      - name: Restore _build cache
+        id: restore-build-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: _build
+          key: ${{ needs.cache.outputs.build-cache-key }}
+          restore-keys: |
+            _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
+            _build-${{ runner.os }}-
+
+      - name: Restore rebar3 cache
+        id: restore-rebar3-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/rebar3
+          key: ${{ needs.cache.outputs.rebar-cache-key }}
+          restore-keys: |
+            rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
+            rebar3-${{ runner.os }}-
+
+      - name: Restore Playwright browsers cache
+        id: restore-playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ needs.cache.outputs.playwright-cache-key }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Node.js dependencies
+        run: npm ci
+
+      - name: Install Playwright system dependencies
+        if: steps.restore-playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium firefox
+
+      - name: Compile Arizona for test
+        run: rebar3 as test compile
+
+      - name: Run sequential E2E tests
+        run: npm run test:e2e:sequential
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: playwright-report-sequential
           path: test-results/
           retention-days: 7
