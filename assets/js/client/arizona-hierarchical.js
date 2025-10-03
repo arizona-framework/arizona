@@ -68,15 +68,27 @@ export default class ArizonaHierarchical {
       return;
     }
 
-    // 2. CRITICAL: If existing element is a stateful component, NEVER replace it
-    // with anything except a hierarchical structure (handled above)
-    // Stateful components manage their own state and receive their own diff messages
+    // 2. Handle nested stateful components by recursively applying diffs
+    // If the existing element is a stateful component reference, apply the diff
+    // to that component's internal structure rather than replacing the reference.
+    // This preserves the component's identity while updating its content.
     if (
       existingElement &&
       typeof existingElement === 'object' &&
       existingElement.type === 'stateful'
     ) {
-      // Skip - preserve the stateful component reference
+      // Look up the actual component structure
+      const statefulComponent = this.structure.get(existingElement.id);
+      if (!statefulComponent) {
+        const sanitizedId = String(existingElement.id).replace(/\r|\n/g, '');
+        console.warn(`[Arizona] Nested stateful component '${sanitizedId}' not found in structure`);
+        return;
+      }
+
+      // Recursively apply diff changes to the nested component's dynamic array
+      newValue.forEach(([elementIndex, elementValue]) => {
+        this.applyDiffValue(statefulComponent.dynamic, elementIndex - 1, elementValue);
+      });
       return;
     }
 

@@ -39,7 +39,7 @@ render(Bindings) ->
         <div class="nested">
             {arizona_template:render_stateless(arizona_nested_view, render_stateless_wrapper, #{
                 parent_counter => arizona_template:get_binding(view_counter, Bindings),
-                parent_stateful_id => arizona_template:get_binding(parent_stateful_id, Bindings),
+                parent_stateful_id => arizona_template:get_binding(id, Bindings),
                 child_stateful_id => arizona_template:get_binding(child_stateful_id, Bindings)
             })}
         </div>
@@ -92,4 +92,11 @@ handle_event(~"broadcast_from_view", _Params, View) ->
         ~"value" => 10
     }),
 
-    {[], View}.
+    {[], View};
+% Handle notification from child component to update view counter
+handle_event(~"child_notification", #{~"value" := Value}, View) ->
+    State = arizona_view:get_state(View),
+    ViewCounter = arizona_stateful:get_binding(view_counter, State),
+    UpdatedState = arizona_stateful:put_binding(view_counter, ViewCounter + Value, State),
+    UpdatedView = arizona_view:update_state(UpdatedState, View),
+    {[], UpdatedView}.

@@ -223,7 +223,26 @@ handle_cast({handle_event, StatefulIdOrUndefined, Event, Params}, #state{} = Sta
         undefined ->
             handle_view_event(Event, Params, State);
         StatefulId ->
-            handle_stateful_event(StatefulId, Event, Params, State)
+            View = State#state.view,
+            case arizona_view:find_stateful_state(StatefulId, View) of
+                {ok, StatefulState} ->
+                    % Stateful component found - handle as stateful event
+                    handle_stateful_event(StatefulId, StatefulState, Event, Params, State);
+                error ->
+                    % Stateful component not found - check if it's the view itself
+                    % The view is also a stateful component and might be the target
+                    ViewState = arizona_view:get_state(View),
+                    case arizona_stateful:get_binding(id, ViewState) of
+                        StatefulId ->
+                            % The target is the view itself
+                            handle_view_event(Event, Params, State);
+                        _ViewId ->
+                            % Target not found - error
+                            error({stateful_component_not_found, StatefulId}, [
+                                {handle_event, StatefulId, Event, Params}, State
+                            ])
+                    end
+            end
     end.
 
 -spec handle_info(Info, State) -> Result when
@@ -270,16 +289,16 @@ handle_view_event(Event, Params, State) ->
     ok = handle_actions_response(ViewId, Diff, Actions, State),
     {noreply, State#state{view = DiffView}}.
 
-handle_stateful_event(StatefulId, Event, Params, State) ->
-    View = State#state.view,
-    StatefulState = arizona_view:get_stateful_state(StatefulId, View),
+handle_stateful_event(StatefulId, StatefulState, Event, Params, State) ->
     {Actions, UpdatedStatefulState} = arizona_stateful:call_handle_event_callback(
         Event, Params, StatefulState
     ),
     Module = arizona_stateful:get_module(UpdatedStatefulState),
     Bindings = arizona_stateful:get_bindings(UpdatedStatefulState),
     DiffStatefulId = arizona_binder:get(id, Bindings),
-    UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedStatefulState, View),
+    UpdatedView = arizona_view:put_stateful_state(
+        StatefulId, UpdatedStatefulState, State#state.view
+    ),
     DiffBindings = arizona_binder:to_map(Bindings),
     {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, DiffBindings, UpdatedView),
     ok = handle_actions_response(DiffStatefulId, Diff, Actions, State),
