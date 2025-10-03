@@ -328,7 +328,7 @@ describe('ArizonaHierarchical', () => {
         expect(html).not.toMatch(/\d{5}/); // Should not contain placeholder integers
       });
 
-      it('should ignore diff changes for indices containing stateful components', () => {
+      it('should replace stateful component when diff contains simple value', () => {
         client.initialize({
           root: {
             static: ['<div>', '</div>'],
@@ -346,10 +346,10 @@ describe('ArizonaHierarchical', () => {
           },
         });
 
-        // Attempt to apply diff that includes changes to stateful child index
+        // Apply diff that replaces stateful component with simple value
         const nestedDiff = [
           [1, 'Updated Text'],
-          [2, 'THIS SHOULD BE IGNORED'], // Index 2 has stateful component
+          [2, 'Replacement Text'], // Index 2 has stateful component - replace it
         ];
         const changes = [[1, nestedDiff]];
 
@@ -360,11 +360,183 @@ describe('ArizonaHierarchical', () => {
         // Text should be updated
         expect(statelessComponent.dynamic[0]).toBe('Updated Text');
 
-        // Stateful reference should remain unchanged
-        expect(statelessComponent.dynamic[1]).toEqual({
-          type: 'stateful',
-          id: 'stateful-child',
+        // Stateful component should be REPLACED with simple value
+        expect(statelessComponent.dynamic[1]).toBe('Replacement Text');
+
+        // Stateful component should be REMOVED from structure
+        expect(client.getStructure()['stateful-child']).toBeUndefined();
+      });
+    });
+
+    describe('Nested stateful component diffs', () => {
+      it('should apply diff to nested stateful component recursively', () => {
+        // Initialize parent with nested stateful child
+        client.initialize({
+          parent: {
+            static: ['<div>Parent text', '</div>'],
+            dynamic: [{ type: 'stateful', id: 'child' }],
+          },
+          child: {
+            static: ['<span>Counter: ', '</span>'],
+            dynamic: ['0'],
+          },
         });
+
+        // Apply diff that updates the nested stateful component
+        // Element index 1 contains the stateful child reference
+        // The diff value is a nested diff for that child
+        const childDiff = [[1, '5']]; // Update child's counter to 5
+        const changes = [[1, childDiff]];
+
+        client.applyDiff('parent', changes);
+
+        // Verify child component was updated
+        const childComponent = client.getStructure().child;
+        expect(childComponent.dynamic[0]).toBe('5');
+
+        // Verify parent reference to child is preserved
+        const parentComponent = client.getStructure().parent;
+        expect(parentComponent.dynamic.length).toBe(1); // Should have 1 element
+        expect(parentComponent.dynamic[0]).toEqual({
+          type: 'stateful',
+          id: 'child',
+        });
+
+        // Verify HTML generation includes updated child
+        const html = client.generateStatefulHTML('parent');
+        expect(html).toBe('<div>Parent text<span>Counter: 5</span></div>');
+      });
+
+      it('should handle deeply nested stateful component diffs', () => {
+        // Initialize grandparent -> parent -> child hierarchy
+        client.initialize({
+          grandparent: {
+            static: ['<div class="gp">', '</div>'],
+            dynamic: [{ type: 'stateful', id: 'parent' }],
+          },
+          parent: {
+            static: ['<div class="p">', '</div>'],
+            dynamic: [{ type: 'stateful', id: 'child' }],
+          },
+          child: {
+            static: ['<span>', '</span>'],
+            dynamic: ['Initial'],
+          },
+        });
+
+        // Apply diff to grandparent that affects deeply nested child
+        // The diff cascades: grandparent[1] -> parent[1] -> child[1]
+        const childDiff = [[1, 'Updated']];
+        const parentDiff = [[1, childDiff]];
+        const grandparentDiff = [[1, parentDiff]];
+
+        client.applyDiff('grandparent', grandparentDiff);
+
+        // Verify child was updated
+        const childComponent = client.getStructure().child;
+        expect(childComponent.dynamic[0]).toBe('Updated');
+
+        // Verify all references preserved
+        expect(client.getStructure().grandparent.dynamic[0]).toEqual({
+          type: 'stateful',
+          id: 'parent',
+        });
+        expect(client.getStructure().parent.dynamic[0]).toEqual({
+          type: 'stateful',
+          id: 'child',
+        });
+
+        // Verify complete HTML generation
+        const html = client.generateStatefulHTML('grandparent');
+        expect(html).toBe('<div class="gp"><div class="p"><span>Updated</span></div></div>');
+      });
+
+      it('should handle multiple nested stateful components with independent diffs', () => {
+        client.initialize({
+          parent: {
+            static: ['<div>', ' | ', '</div>'],
+            dynamic: [
+              { type: 'stateful', id: 'child1' },
+              { type: 'stateful', id: 'child2' },
+            ],
+          },
+          child1: {
+            static: ['<span>A: ', '</span>'],
+            dynamic: ['0'],
+          },
+          child2: {
+            static: ['<span>B: ', '</span>'],
+            dynamic: ['0'],
+          },
+        });
+
+        // Update only child1
+        const child1Diff = [[1, '3']];
+        const changes = [[1, child1Diff]];
+
+        client.applyDiff('parent', changes);
+
+        // Child1 should be updated
+        expect(client.getStructure().child1.dynamic[0]).toBe('3');
+
+        // Child2 should remain unchanged
+        expect(client.getStructure().child2.dynamic[0]).toBe('0');
+
+        const html = client.generateStatefulHTML('parent');
+        expect(html).toBe('<div><span>A: 3</span> | <span>B: 0</span></div>');
+      });
+
+      it('should apply hierarchical structure replacement to nested stateful component', () => {
+        client.initialize({
+          parent: {
+            static: ['<div>', '</div>'],
+            dynamic: [{ type: 'stateful', id: 'child' }],
+          },
+          child: {
+            static: ['<span>', '</span>'],
+            dynamic: ['Old'],
+          },
+        });
+
+        // Replace nested stateful component with new hierarchical structure
+        const newChildStruct = {
+          type: 'stateful',
+          id: 'child',
+          static: ['<button>', '</button>'],
+          dynamic: ['New Button'],
+        };
+        const changes = [[1, newChildStruct]];
+
+        client.applyDiff('parent', changes);
+
+        // Child should be completely replaced
+        const childComponent = client.getStructure().child;
+        expect(childComponent.static).toEqual(['<button>', '</button>']);
+        expect(childComponent.dynamic).toEqual(['New Button']);
+
+        const html = client.generateStatefulHTML('parent');
+        expect(html).toBe('<div><button>New Button</button></div>');
+      });
+
+      it('should warn if nested stateful component is not found in structure', () => {
+        client.initialize({
+          parent: {
+            static: ['<div>', '</div>'],
+            dynamic: [{ type: 'stateful', id: 'missing-child' }],
+          },
+        });
+
+        const consoleSpy = vi.spyOn(console, 'warn');
+
+        // Try to apply diff to missing nested component
+        const childDiff = [[1, 'value']];
+        const changes = [[1, childDiff]];
+
+        client.applyDiff('parent', changes);
+
+        expect(consoleSpy).toHaveBeenCalledWith(
+          "[Arizona] Nested stateful component 'missing-child' not found in structure"
+        );
       });
     });
   });
