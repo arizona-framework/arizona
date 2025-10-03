@@ -28,8 +28,7 @@ groups() ->
             pubsub_message_test,
             concurrent_event_handling_test,
             terminate_callback_test,
-            hierarchical_structure_empty_test,
-            hierarchical_structure_populated_test
+            hierarchical_structure_empty_test
         ]}
     ].
 
@@ -502,13 +501,6 @@ hierarchical_structure_empty_test(Config) when is_list(Config) ->
     after 1000 ->
         ct:fail("Expected actions_response message not received")
     end.
-
-hierarchical_structure_populated_test(_Config) when is_list(_Config) ->
-    ct:comment("Test that hierarchical structure is populated on fingerprint mismatch"),
-    % This test would require a more complex setup with actual fingerprint mismatches
-    % For now, we verify the structure field is present in the message format
-    % TODO: Add comprehensive fingerprint mismatch test when e2e test infrastructure is ready
-    ok.
 
 %% --------------------------------------------------------------------
 %% Helper functions
