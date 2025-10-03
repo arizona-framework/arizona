@@ -108,7 +108,9 @@ future diff comparisons, and creates hierarchical tracking structure.
     Struct :: stateful_struct(),
     View1 :: arizona_view:view().
 hierarchical_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
-    {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
+    {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(
+        Module, Bindings, View, preserve_state
+    ),
 
     % Store the fingerprint for future comparisons
     Fingerprint = arizona_template:get_fingerprint(Template),
