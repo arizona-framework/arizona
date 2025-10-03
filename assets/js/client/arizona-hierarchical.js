@@ -45,9 +45,20 @@ export default class ArizonaHierarchical {
     }
 
     const component = this.structure.get(statefulId);
+    console.log('[Arizona] Applying diff to', statefulId);
+    console.log('[Arizona] Changes:', changes);
+    console.log(
+      '[Arizona] Component dynamic before:',
+      JSON.parse(JSON.stringify(component.dynamic))
+    );
     for (const [elementIndex, newValue] of changes) {
+      console.log('[Arizona] Applying change - index:', elementIndex, 'value:', newValue);
       this.applyDiffValue(component.dynamic, elementIndex - 1, newValue);
     }
+    console.log(
+      '[Arizona] Component dynamic after:',
+      JSON.parse(JSON.stringify(component.dynamic))
+    );
   }
 
   /**
@@ -74,8 +85,9 @@ export default class ArizonaHierarchical {
         this.structure.delete(existingElement.id);
         // Replace with new structure
         container[targetIndex] = newValue;
-        // If new value is also stateful, add it to structure
-        if (newValue.type === 'stateful') {
+        // If new value is also stateful with full structure, add it to structure
+        if (newValue.type === 'stateful' && newValue.static && newValue.dynamic) {
+          console.log('[Arizona] Replacing stateful component in map:', newValue.id);
           this.structure.set(newValue.id, newValue);
         }
         return;
@@ -108,9 +120,13 @@ export default class ArizonaHierarchical {
     // 2. Check if newValue is a hierarchical structure (fingerprint mismatch)
     if (newValue && typeof newValue === 'object' && newValue.type) {
       container[targetIndex] = newValue;
-      // If it's a stateful component, add to structure map
-      if (newValue.type === 'stateful') {
+      // If it's a stateful component with full structure, add to structure map
+      // Only add if it has static/dynamic arrays (full structure), not just a reference
+      if (newValue.type === 'stateful' && newValue.static && newValue.dynamic) {
+        console.log('[Arizona] Adding full stateful structure to map:', newValue.id);
         this.structure.set(newValue.id, newValue);
+      } else if (newValue.type === 'stateful') {
+        console.log('[Arizona] Skipping stateful reference (no static/dynamic):', newValue.id);
       }
       return;
     }
@@ -146,14 +162,19 @@ export default class ArizonaHierarchical {
    * @returns {string} Generated HTML
    */
   generateStatefulHTML(statefulId) {
+    console.log('[Arizona] generateStatefulHTML for', statefulId);
     const struct = this.structure.get(statefulId);
     if (!struct) {
       const sanitizedStatefulId = String(statefulId).replace(/\r|\n/g, '');
       console.warn(`[Arizona] StatefulId '${sanitizedStatefulId}' not found in structure`);
+      throw new Error(`Component ${sanitizedStatefulId} not found`);
     }
 
+    console.log('[Arizona] Structure found, generating HTML...');
     // Components always have static and dynamic arrays
-    return this.zipStaticDynamic(struct.static, struct.dynamic);
+    const html = this.zipStaticDynamic(struct.static, struct.dynamic);
+    console.log('[Arizona] HTML generated for', statefulId, 'length:', html.length);
+    return html;
   }
 
   /**
@@ -301,10 +322,13 @@ export default class ArizonaHierarchical {
    * @returns {Object} Patch object with statefulId and HTML
    */
   createPatch(statefulId) {
+    console.log('[Arizona] createPatch called for', statefulId);
+    const html = this.generateStatefulHTML(statefulId);
+    console.log('[Arizona] HTML generated, length:', html.length);
     return {
       type: 'html_patch',
       statefulId,
-      html: this.generateStatefulHTML(statefulId),
+      html,
     };
   }
 }

@@ -125,17 +125,21 @@ class ArizonaWorker {
       throw new Error('Hierarchical structure not initialized');
     }
 
+    console.log('[Worker] Handling diff for', message.stateful_id);
     // Apply diff to hierarchical structure
     this.hierarchical.applyDiff(message.stateful_id, message.changes);
 
+    console.log('[Worker] Creating patch for', message.stateful_id);
     // Create HTML patch
     const patch = this.hierarchical.createPatch(message.stateful_id);
+    console.log('[Worker] Patch created:', patch);
 
     // Send to main thread for DOM application
     this.postMessage({
       type: 'html_patch',
       data: { patch },
     });
+    console.log('[Worker] Patch sent to main thread');
   }
 
   handleReload(message) {

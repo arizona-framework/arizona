@@ -260,6 +260,7 @@ export default class Arizona {
   }
 
   handleHtmlPatch(data) {
+    console.log('[Arizona] Received HTML patch:', data.patch);
     this.logger?.debug('Applying HTML patch');
 
     // Apply HTML patch to DOM
@@ -267,12 +268,19 @@ export default class Arizona {
   }
 
   applyHtmlPatch(patch) {
+    console.log('[Arizona] Applying HTML patch to', patch.statefulId);
     const target = document.getElementById(patch.statefulId);
 
     if (!target) {
+      console.warn('[Arizona] Target element not found:', patch.statefulId);
       this.logger?.warning(`Target element not found: ${patch.statefulId}`);
       return;
     }
+
+    console.log(
+      '[Arizona] Target found, morphing with HTML:',
+      `${patch.html.substring(0, 100)}...`
+    );
 
     try {
       // Use morphdom to efficiently patch the DOM
