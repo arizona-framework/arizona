@@ -19,15 +19,14 @@ permissions:
   contents: read
 
 jobs:
-  cache:
-    name: Cache
+  cache-erlang:
+    name: Cache Erlang
 
     runs-on: ubuntu-24.04
 
     outputs:
       build-cache-key: ${{ steps.set-build-key.outputs.key }}
       rebar-cache-key: ${{ steps.set-rebar-key.outputs.key }}
-      playwright-cache-key: ${{ steps.set-playwright-key.outputs.key }}
 
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -59,15 +58,6 @@ jobs:
           config-${{ hashFiles('rebar.config') }}" \
           >> "${GITHUB_OUTPUT}"
 
-      - name: Set Playwright cache key
-        id: set-playwright-key
-        run: |
-          echo "key=\
-          playwright-\
-          ${{ runner.os }}-\
-          playwright-${{ hashFiles('package-lock.json') }}" \
-          >> "${GITHUB_OUTPUT}"
-
       - name: Cache _build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -85,6 +75,30 @@ jobs:
           restore-keys: |
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
+
+      - name: Compile
+        run: |
+          rebar3 as test compile
+
+  cache-node:
+    name: Cache Node
+
+    runs-on: ubuntu-24.04
+
+    outputs:
+      playwright-cache-key: ${{ steps.set-playwright-key.outputs.key }}
+
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set Playwright cache key
+        id: set-playwright-key
+        run: |
+          echo "key=\
+          playwright-\
+          ${{ runner.os }}-\
+          playwright-${{ hashFiles('package-lock.json') }}" \
+          >> "${GITHUB_OUTPUT}"
 
       - name: Cache Playwright browsers
         id: cache-playwright
@@ -109,14 +123,10 @@ jobs:
         if: steps.cache-playwright.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium firefox
 
-      - name: Compile
-        run: |
-          rebar3 as test compile
-
   check:
     name: Check
 
-    needs: cache
+    needs: cache-erlang
 
     runs-on: ubuntu-24.04
 
@@ -134,7 +144,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: _build
-          key: ${{ needs.cache.outputs.build-cache-key }}
+          key: ${{ needs.cache-erlang.outputs.build-cache-key }}
           restore-keys: |
             _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             _build-${{ runner.os }}-
@@ -144,7 +154,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/rebar3
-          key: ${{ needs.cache.outputs.rebar-cache-key }}
+          key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
           restore-keys: |
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
@@ -156,7 +166,7 @@ jobs:
   test:
     name: Test
 
-    needs: cache
+    needs: cache-erlang
 
     runs-on: ubuntu-24.04
 
@@ -174,7 +184,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: _build
-          key: ${{ needs.cache.outputs.build-cache-key }}
+          key: ${{ needs.cache-erlang.outputs.build-cache-key }}
           restore-keys: |
             _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             _build-${{ runner.os }}-
@@ -184,7 +194,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/rebar3
-          key: ${{ needs.cache.outputs.rebar-cache-key }}
+          key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
           restore-keys: |
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
@@ -202,7 +212,7 @@ jobs:
   artifacts:
     name: Verify artifacts
 
-    needs: cache
+    needs: cache-erlang
 
     runs-on: ubuntu-24.04
 
@@ -220,7 +230,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: _build
-          key: ${{ needs.cache.outputs.build-cache-key }}
+          key: ${{ needs.cache-erlang.outputs.build-cache-key }}
           restore-keys: |
             _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             _build-${{ runner.os }}-
@@ -230,7 +240,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/rebar3
-          key: ${{ needs.cache.outputs.rebar-cache-key }}
+          key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
           restore-keys: |
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
@@ -244,7 +254,7 @@ jobs:
   e2e-parallel:
     name: E2E Tests (Parallel)
 
-    needs: cache
+    needs: [cache-erlang, cache-node]
 
     runs-on: ubuntu-24.04
 
@@ -269,7 +279,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: _build
-          key: ${{ needs.cache.outputs.build-cache-key }}
+          key: ${{ needs.cache-erlang.outputs.build-cache-key }}
           restore-keys: |
             _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             _build-${{ runner.os }}-
@@ -279,7 +289,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/rebar3
-          key: ${{ needs.cache.outputs.rebar-cache-key }}
+          key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
           restore-keys: |
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
@@ -289,7 +299,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ needs.cache.outputs.playwright-cache-key }}
+          key: ${{ needs.cache-node.outputs.playwright-cache-key }}
           restore-keys: |
             playwright-${{ runner.os }}-
 
@@ -317,7 +327,7 @@ jobs:
   e2e-sequential:
     name: E2E Tests (Sequential)
 
-    needs: cache
+    needs: [cache-erlang, cache-node]
 
     runs-on: ubuntu-24.04
 
@@ -342,7 +352,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: _build
-          key: ${{ needs.cache.outputs.build-cache-key }}
+          key: ${{ needs.cache-erlang.outputs.build-cache-key }}
           restore-keys: |
             _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             _build-${{ runner.os }}-
@@ -352,7 +362,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/rebar3
-          key: ${{ needs.cache.outputs.rebar-cache-key }}
+          key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
           restore-keys: |
             rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
             rebar3-${{ runner.os }}-
@@ -362,7 +372,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ needs.cache.outputs.playwright-cache-key }}
+          key: ${{ needs.cache-node.outputs.playwright-cache-key }}
           restore-keys: |
             playwright-${{ runner.os }}-
 
