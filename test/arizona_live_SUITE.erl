@@ -27,7 +27,8 @@ groups() ->
             is_connected_test,
             pubsub_message_test,
             concurrent_event_handling_test,
-            terminate_callback_test
+            terminate_callback_test,
+            hierarchical_structure_empty_test
         ]}
     ].
 
@@ -322,7 +323,7 @@ handle_view_event_with_actions_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent
     receive
-        {actions_response, ~"live_test_id", _Diff, [
+        {actions_response, ~"live_test_id", _Diff, _HierarchicalStructure, [
             {dispatch, ~"counterUpdate", #{new_count := 1}}
         ]} ->
             ok
@@ -339,7 +340,7 @@ handle_view_event_no_actions_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent
     receive
-        {actions_response, ~"live_test_id", _Diff, []} -> ok
+        {actions_response, ~"live_test_id", _Diff, _HierarchicalStructure, []} -> ok
     after 1000 ->
         ct:fail("Expected actions_response message not received")
     end.
@@ -353,7 +354,7 @@ handle_view_event_dispatch_action_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent with dispatch action
     receive
-        {actions_response, ~"live_test_id", _Diff, [
+        {actions_response, ~"live_test_id", _Diff, _HierarchicalStructure, [
             {dispatch, ~"notification:hideAlert", #{
                 alert_id := ~"test-alert", dismissed := true
             }}
@@ -372,7 +373,7 @@ handle_stateful_event_with_actions_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent
     receive
-        {actions_response, ~"stateful_1", _Diff, [
+        {actions_response, ~"stateful_1", _Diff, _HierarchicalStructure, [
             {dispatch, ~"status:componentUpdated", #{updated := true, value := 100}}
         ]} ->
             ok
@@ -389,7 +390,7 @@ handle_stateful_event_no_actions_test(Config) when is_list(Config) ->
 
     % Verify transport message was sent
     receive
-        {actions_response, ~"stateful_2", _Diff, []} -> ok
+        {actions_response, ~"stateful_2", _Diff, _HierarchicalStructure, []} -> ok
     after 1000 ->
         ct:fail("Expected actions_response message not received")
     end.
@@ -432,7 +433,7 @@ pubsub_message_test(Config) when is_list(Config) ->
 
     % Expect actions message since increment returns actions
     receive
-        {actions_response, ~"live_test_id", _Diff, [
+        {actions_response, ~"live_test_id", _Diff, _HierarchicalStructure, [
             {dispatch, ~"counterUpdate", #{new_count := _}}
         ]} ->
             ok
@@ -450,7 +451,7 @@ concurrent_event_handling_test(Config) when is_list(Config) ->
 
     % Expect two actions messages
     receive
-        {actions_response, ~"live_test_id", _Diff1, [
+        {actions_response, ~"live_test_id", _Diff1, _HierarchicalStructure1, [
             {dispatch, ~"counterUpdate", #{new_count := _}}
         ]} ->
             ok
@@ -458,7 +459,7 @@ concurrent_event_handling_test(Config) when is_list(Config) ->
         ct:fail("Expected first actions_response message not received")
     end,
     receive
-        {actions_response, ~"live_test_id", _Diff2, [
+        {actions_response, ~"live_test_id", _Diff2, _HierarchicalStructure2, [
             {dispatch, ~"counterUpdate", #{new_count := _}}
         ]} ->
             ok
@@ -484,6 +485,22 @@ terminate_callback_test(Config) when is_list(Config) ->
     %% Verify the process terminated cleanly
     %% The terminate callback should have been called without errors
     ?assert(not is_process_alive(Pid)).
+
+hierarchical_structure_empty_test(Config) when is_list(Config) ->
+    ct:comment("Test that hierarchical structure is empty when no fingerprint mismatches occur"),
+    {live_pid, Pid} = proplists:lookup(live_pid, Config),
+
+    % Handle event that doesn't cause fingerprint mismatch
+    Result = arizona_live:handle_event(Pid, undefined, ~"increment", #{}),
+    ?assertEqual(ok, Result),
+
+    % Verify transport message contains empty hierarchical structure
+    receive
+        {actions_response, ~"live_test_id", _Diff, HierarchicalStructure, _Actions} ->
+            ?assertEqual(#{}, HierarchicalStructure)
+    after 1000 ->
+        ct:fail("Expected actions_response message not received")
+    end.
 
 %% --------------------------------------------------------------------
 %% Helper functions

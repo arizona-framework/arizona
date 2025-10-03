@@ -270,6 +270,7 @@ export default class Arizona {
     const target = document.getElementById(patch.statefulId);
 
     if (!target) {
+      console.warn('[Arizona] Target element not found:', patch.statefulId);
       this.logger?.warning(`Target element not found: ${patch.statefulId}`);
       return;
     }

@@ -28,6 +28,16 @@ export default class ArizonaHierarchical {
   }
 
   /**
+   * Merge new structures from fingerprint mismatches into existing Map
+   * @param {Object} newStructures - New structures from arizona_hierarchical_dict
+   */
+  mergeStructures(newStructures) {
+    for (const [id, data] of Object.entries(newStructures)) {
+      this.structure.set(id, data);
+    }
+  }
+
+  /**
    * Apply diff changes from arizona_differ to hierarchical structure
    * @param {string} statefulId - Stateful ID to render
    * @param {Array|Object} changes - Changes in format: [[ElementIndex, Changes]] or hierarchical structure
@@ -44,26 +54,56 @@ export default class ArizonaHierarchical {
       console.warn(`[Arizona] StatefulId '${sanitizedStatefulId}' not found in structure`);
     }
 
+    const component = this.structure.get(statefulId);
     for (const [elementIndex, newValue] of changes) {
-      // Check if newValue is a hierarchical structure (fingerprint mismatch)
-      if (newValue && typeof newValue === 'object' && newValue.type) {
-        this.structure.get(statefulId).dynamic[elementIndex - 1] = newValue;
-      } else if (Array.isArray(newValue)) {
-        const element = this.structure.get(statefulId).dynamic[elementIndex - 1];
-        if (element && element.type === 'list') {
-          this.structure.get(statefulId).dynamic[elementIndex - 1].dynamic = newValue;
-        } else if (element && element.type === 'stateless') {
-          // Traditional stateless diff - array of [index, value] pairs
+      this.applyDiffValue(component.dynamic, elementIndex - 1, newValue);
+    }
+  }
+
+  /**
+   * Recursively apply a diff value to a container at a specific index
+   * Handles all types: hierarchical structures, lists, stateless components, and simple values
+   * @private
+   * @param {Array} container - The dynamic array to update
+   * @param {number} targetIndex - The index to update (0-based)
+   * @param {*} newValue - The new value to apply
+   * @returns {void}
+   */
+  applyDiffValue(container, targetIndex, newValue) {
+    const existing = container[targetIndex];
+
+    // Array of changes - apply to component
+    if (existing?.type && Array.isArray(newValue)) {
+      switch (existing.type) {
+        case 'stateful': {
+          // Fetch actual component from Map
+          const component = this.structure.get(existing.id);
+          if (!component) {
+            const sanitizedId = String(existing.id).replace(/\r|\n/g, '');
+            console.warn(`[Arizona] Component '${sanitizedId}' not found in structure`);
+            return;
+          }
+          // Apply nested diff
           newValue.forEach(([index, value]) => {
-            this.structure.get(statefulId).dynamic[elementIndex - 1].dynamic[index - 1] = value;
+            this.applyDiffValue(component.dynamic, index - 1, value);
           });
-        } else {
-          this.structure.get(statefulId).dynamic[elementIndex - 1] = newValue;
+          return;
         }
-      } else {
-        this.structure.get(statefulId).dynamic[elementIndex - 1] = newValue;
+        case 'stateless':
+          // Apply nested diff to inline component
+          newValue.forEach(([index, value]) => {
+            this.applyDiffValue(existing.dynamic, index - 1, value);
+          });
+          return;
+        case 'list':
+          // Replace list dynamic content
+          existing.dynamic = newValue;
+          return;
       }
     }
+
+    // Simple replacement - new reference or simple value
+    container[targetIndex] = newValue;
   }
 
   /**
@@ -76,10 +116,12 @@ export default class ArizonaHierarchical {
     if (!struct) {
       const sanitizedStatefulId = String(statefulId).replace(/\r|\n/g, '');
       console.warn(`[Arizona] StatefulId '${sanitizedStatefulId}' not found in structure`);
+      throw new Error(`Component ${sanitizedStatefulId} not found`);
     }
 
     // Components always have static and dynamic arrays
-    return this.zipStaticDynamic(struct.static, struct.dynamic);
+    const html = this.zipStaticDynamic(struct.static, struct.dynamic);
+    return html;
   }
 
   /**
@@ -227,10 +269,11 @@ export default class ArizonaHierarchical {
    * @returns {Object} Patch object with statefulId and HTML
    */
   createPatch(statefulId) {
+    const html = this.generateStatefulHTML(statefulId);
     return {
       type: 'html_patch',
       statefulId,
-      html: this.generateStatefulHTML(statefulId),
+      html,
     };
   }
 }

@@ -93,7 +93,9 @@ to full hierarchical rendering.
     Result :: nodiff | diff() | arizona_hierarchical:stateful_struct(),
     View1 :: arizona_view:view().
 diff_stateful(Module, Bindings, ParentId, ElementIndex, View) ->
-    {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(Module, Bindings, View),
+    {Id, Template, PrepRenderView} = arizona_lifecycle:prepare_render(
+        Module, Bindings, View, preserve_state
+    ),
     Fingerprint = arizona_template:get_fingerprint(Template),
     MatchResult = arizona_view:fingerprint_matches(
         ParentId, ElementIndex, Fingerprint, PrepRenderView

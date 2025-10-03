@@ -125,6 +125,11 @@ class ArizonaWorker {
       throw new Error('Hierarchical structure not initialized');
     }
 
+    // Merge new structures from fingerprint mismatches
+    if (message.structure && Object.keys(message.structure).length > 0) {
+      this.hierarchical.mergeStructures(message.structure);
+    }
+
     // Apply diff to hierarchical structure
     this.hierarchical.applyDiff(message.stateful_id, message.changes);
 

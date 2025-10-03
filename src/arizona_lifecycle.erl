@@ -27,6 +27,19 @@ based on component ID and view state.
 %% --------------------------------------------------------------------
 
 -export([prepare_render/3]).
+-export([prepare_render/4]).
+
+%% --------------------------------------------------------------------
+%% Type exports
+%% --------------------------------------------------------------------
+
+-export_type([mode/0]).
+
+%% --------------------------------------------------------------------
+%% Type definitions
+%% --------------------------------------------------------------------
+
+-type mode() :: merge_bindings | preserve_state.
 
 %% --------------------------------------------------------------------
 %% API function definitions
@@ -48,11 +61,40 @@ Returns the component ID, rendered template, and updated view.
     Template :: arizona_template:template(),
     View1 :: arizona_view:view().
 prepare_render(Module, Bindings, View) ->
+    prepare_render(Module, Bindings, View, merge_bindings).
+
+-doc ~"""
+Prepares a stateful component for rendering with a specific mode.
+
+Mode controls whether bindings are merged for existing components:
+- `merge_bindings`: Merge bindings (for diff_root_stateful API calls)
+- `preserve_state`: Do NOT merge bindings (for hierarchical/nested re-renders)
+
+For existing components in preserve_state mode, bindings are ignored to preserve
+component state during parent re-renders. Only merge_bindings mode allows
+updating component props from outside.
+""".
+-spec prepare_render(Module, Bindings, View, Mode) -> Result when
+    Module :: module(),
+    Bindings :: arizona_binder:map(),
+    View :: arizona_view:view(),
+    Mode :: mode(),
+    Result :: {Id, Template, View1},
+    Id :: arizona_stateful:id(),
+    Template :: arizona_template:template(),
+    View1 :: arizona_view:view().
+prepare_render(Module, Bindings, View, Mode) ->
     maybe
         % Check if component already exists or needs mounting
         #{id := Id} ?= Bindings,
         {ok, State} ?= arizona_view:find_stateful_state(Id, View),
-        UpdatedState = arizona_stateful:merge_bindings(Bindings, State),
+        % Only merge bindings in merge_bindings mode
+        % In preserve_state mode, preserve existing state
+        UpdatedState =
+            case Mode of
+                merge_bindings -> arizona_stateful:merge_bindings(Bindings, State);
+                preserve_state -> State
+            end,
         render(Id, UpdatedState, View)
     else
         _Other ->

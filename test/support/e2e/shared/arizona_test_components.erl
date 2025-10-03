@@ -32,7 +32,8 @@ render_menu(Bindings) ->
                         #{url => ~"/datagrid", name => ~"Data Grid", desc => ~"Interactive table with sorting"},
                         #{url => ~"/modal", name => ~"Modal", desc => ~"Dynamic slot updates"},
                         #{url => ~"/blog", name => ~"Blog", desc => ~"Markdown templates with dynamic content"},
-                        #{url => ~"/presence", name => ~"Presence", desc => ~"REST API + real-time updates"}
+                        #{url => ~"/presence", name => ~"Presence", desc => ~"REST API + real-time updates"},
+                        #{url => ~"/nested", name => ~"Nested Components", desc => ~"Hierarchical state preservation"}
                     ])
                 }
             </ul>
@@ -58,6 +59,7 @@ render_menu(Bindings) ->
             align-items: center;
             justify-content: space-between;
             padding: 1rem 2rem;
+            overflow-x: auto;
         }
 
         .nav-brand h1 \{
