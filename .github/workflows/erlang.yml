@@ -251,7 +251,7 @@ jobs:
   #
   # Container details:
   # - Base: Ubuntu 24.04 (noble) matching runner OS
-  # - User: 1001 (GitHub Actions default non-root user)
+  # - User: root (required for apt package caching)
   # - Browsers: Chromium and Firefox pre-installed
   e2e-parallel:
     name: E2E Tests (Parallel)
@@ -260,21 +260,47 @@ jobs:
 
     runs-on: ubuntu-24.04
 
+    # Set ImageOS for erlef/setup-beam to work in containers
+    # Set HOME=/root for Firefox to work when running as root
+    env:
+      ImageOS: ubuntu22
+      HOME: /root
+
     container:
       image: >-
         mcr.microsoft.com/playwright:v${{
           needs.resolve-playwright-version.outputs.version
         }}-noble
-      options: --user 1001
+      options: --user root
 
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      # Fix Docker config warnings for GitHub Actions cleanup
+      - name: Setup Docker config
+        run: |
+          mkdir -p /root/.docker
+          echo '{}' > /root/.docker/config.json
 
       - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         id: setup-beam
         with:
           version-type: strict
           version-file: .tool-versions
+
+      # Composite actions don't work in container jobs, use manual apt caching
+      # Ref: https://github.com/orgs/community/discussions/53771
+      - name: Cache apt packages
+        id: cache-apt
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-build-essential-inotify-tools
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential inotify-tools
 
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
@@ -331,21 +357,47 @@ jobs:
 
     runs-on: ubuntu-24.04
 
+    # Set ImageOS for erlef/setup-beam to work in containers
+    # Set HOME=/root for Firefox to work when running as root
+    env:
+      ImageOS: ubuntu22
+      HOME: /root
+
     container:
       image: >-
         mcr.microsoft.com/playwright:v${{
           needs.resolve-playwright-version.outputs.version
         }}-noble
-      options: --user 1001
+      options: --user root
 
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      # Fix Docker config warnings for GitHub Actions cleanup
+      - name: Setup Docker config
+        run: |
+          mkdir -p /root/.docker
+          echo '{}' > /root/.docker/config.json
 
       - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         id: setup-beam
         with:
           version-type: strict
           version-file: .tool-versions
+
+      # Composite actions don't work in container jobs, use manual apt caching
+      # Ref: https://github.com/orgs/community/discussions/53771
+      - name: Cache apt packages
+        id: cache-apt
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-build-essential-inotify-tools
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential inotify-tools
 
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
