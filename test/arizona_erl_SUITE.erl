@@ -19,6 +19,7 @@ groups() ->
             to_html_simple_element,
             to_html_element_with_attrs,
             to_html_element_with_boolean_attrs,
+            to_html_void_elements,
             to_html_nested_elements,
             to_html_list_of_elements,
             to_html_escape_special_chars,
@@ -53,9 +54,25 @@ to_html_element_with_attrs(_Config) ->
     ok.
 
 to_html_element_with_boolean_attrs(_Config) ->
-    ct:comment("Element with boolean attributes"),
+    ct:comment("Void element with boolean attributes"),
     HTML = arizona_erl:to_html({input, [disabled, {type, ~"text"}, hidden], []}),
-    ?assertEqual(~"<input disabled type=\"text\" hidden></input>", HTML),
+    ?assertEqual(~"<input disabled type=\"text\" hidden>", HTML),
+    ok.
+
+to_html_void_elements(_Config) ->
+    ct:comment("Void elements have no closing tag"),
+
+    % Test various void elements
+    ?assertEqual(~"<br>", arizona_erl:to_html({br, [], []})),
+    ?assertEqual(~"<hr>", arizona_erl:to_html({hr, [], []})),
+    ?assertEqual(~"<img src=\"test.jpg\">", arizona_erl:to_html({img, [{src, ~"test.jpg"}], []})),
+    ?assertEqual(
+        ~"<link rel=\"stylesheet\">", arizona_erl:to_html({link, [{rel, ~"stylesheet"}], []})
+    ),
+    ?assertEqual(
+        ~"<meta charset=\"utf-8\">", arizona_erl:to_html({meta, [{charset, ~"utf-8"}], []})
+    ),
+
     ok.
 
 to_html_nested_elements(_Config) ->
@@ -126,10 +143,10 @@ ast_to_html_element_with_static_attrs(_Config) ->
     ok.
 
 ast_to_html_element_with_boolean_attrs(_Config) ->
-    ct:comment("Convert element with boolean attributes"),
+    ct:comment("Convert void element with boolean attributes"),
     AST = merl:quote("{input, [disabled, {type, ~\"text\"}, hidden], []}"),
     HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
-    ?assertEqual(~"<input disabled type=\"text\" hidden></input>", HTML),
+    ?assertEqual(~"<input disabled type=\"text\" hidden>", HTML),
     ok.
 
 ast_to_html_element_with_dynamic_attr(_Config) ->

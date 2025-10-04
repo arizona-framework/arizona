@@ -105,8 +105,13 @@ ast_to_html(ElementAST) ->
 element_to_html({Tag, Attrs, Children}) when is_atom(Tag), is_list(Attrs), is_list(Children) ->
     TagBin = atom_to_binary(Tag),
     AttrsHTML = attrs_to_html(Attrs),
-    ChildrenHTML = children_to_html(Children),
-    build_element_html(TagBin, AttrsHTML, ChildrenHTML).
+    case is_void_element(Tag) of
+        true ->
+            build_void_element_html(TagBin, AttrsHTML);
+        false ->
+            ChildrenHTML = children_to_html(Children),
+            build_element_html(TagBin, AttrsHTML, ChildrenHTML)
+    end.
 
 %% Convert attributes list to HTML
 attrs_to_html(Attrs) ->
@@ -132,7 +137,7 @@ child_to_html({_Tag, _Attrs, _Children} = Element) ->
 child_to_html(Child) ->
     arizona_html:to_html(Child).
 
-%% Build HTML element from prepared parts (shared by runtime and AST conversion)
+%% Build HTML element from prepared parts
 build_element_html(TagBin, AttrsHTML, ChildrenHTML) ->
     [
         $<,
@@ -146,14 +151,40 @@ build_element_html(TagBin, AttrsHTML, ChildrenHTML) ->
         $>
     ].
 
+%% Build void HTML element (no closing tag)
+build_void_element_html(TagBin, AttrsHTML) ->
+    [$<, TagBin, AttrsHTML, $>].
+
+%% Check if element is a void element (no closing tag)
+is_void_element(area) -> true;
+is_void_element(base) -> true;
+is_void_element(br) -> true;
+is_void_element(col) -> true;
+is_void_element(embed) -> true;
+is_void_element(hr) -> true;
+is_void_element(img) -> true;
+is_void_element(input) -> true;
+is_void_element(link) -> true;
+is_void_element(meta) -> true;
+is_void_element(param) -> true;
+is_void_element(source) -> true;
+is_void_element(track) -> true;
+is_void_element(wbr) -> true;
+is_void_element(_) -> false.
+
 %% Convert single element AST to HTML
 element_ast_to_html(ElementAST) ->
     case extract_element_tuple(ElementAST) of
         {ok, Tag, AttrsAST, ChildrenAST} ->
             TagBin = atom_to_binary(Tag),
             AttrsHTML = attrs_ast_to_html(AttrsAST),
-            ChildrenHTML = children_ast_to_html(ChildrenAST),
-            build_element_html(TagBin, AttrsHTML, ChildrenHTML);
+            case is_void_element(Tag) of
+                true ->
+                    build_void_element_html(TagBin, AttrsHTML);
+                false ->
+                    ChildrenHTML = children_ast_to_html(ChildrenAST),
+                    build_element_html(TagBin, AttrsHTML, ChildrenHTML)
+            end;
         error ->
             % Not an element, convert to dynamic expression
             ast_to_html_expr(ElementAST)
