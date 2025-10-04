@@ -52,11 +52,12 @@ be created at compile-time via parse transforms or at runtime.
 %% --------------------------------------------------------------------
 
 -export([new/5]).
+-export([from_erl/1]).
 -export([from_html/1]).
 -export([is_template/1]).
--export([from_html/4]).
+-export([from_html/5]).
 -export([from_markdown/1]).
--export([from_markdown/4]).
+-export([from_markdown/5]).
 -export([get_static/1]).
 -export([get_dynamic/1]).
 -export([get_dynamic_sequence/1]).
@@ -86,10 +87,11 @@ be created at compile-time via parse transforms or at runtime.
 %% --------------------------------------------------------------------
 
 -ignore_xref([new/5]).
+-ignore_xref([from_erl/1]).
 -ignore_xref([from_html/1]).
--ignore_xref([from_html/4]).
+-ignore_xref([from_html/5]).
 -ignore_xref([from_markdown/1]).
--ignore_xref([from_markdown/4]).
+-ignore_xref([from_markdown/5]).
 -ignore_xref([get_dynamic_anno/1]).
 -ignore_xref([get_fingerprint/1]).
 -ignore_xref([get_binding/2]).
@@ -191,6 +193,11 @@ new(Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint) ->
         fingerprint = Fingerprint
     }.
 
+-spec from_erl(Term) -> no_return() when
+    Term :: arizona_erl:element() | [arizona_erl:element()].
+from_erl(Term) when is_tuple(Term); is_list(Term) ->
+    error(parse_transform_required).
+
 -doc #{equiv => from_html(erlang, 0, String, #{})}.
 -spec from_html(Payload) -> Template when
     Payload :: {file, Filename} | {priv_file, App, Filename} | HTML,
@@ -199,7 +206,7 @@ new(Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint) ->
     HTML :: arizona_html:html(),
     Template :: template().
 from_html(String) ->
-    from_html(erlang, 0, String, #{}).
+    from_html(erlang, 0, String, #{}, []).
 
 -doc ~"""""
 Compiles a template string into a template record at runtime.
@@ -297,7 +304,7 @@ Within `{}` expressions, you have access to:
 2. **Parsing** - Tokens are parsed into an Abstract Syntax Tree (AST)
 3. **Evaluation** - AST is evaluated to create the final template record
 """"".
--spec from_html(Module, Line, Payload, Bindings) -> Template when
+-spec from_html(Module, Line, Payload, Bindings, CompileOpts) -> Template when
     Module :: module(),
     Line :: arizona_token:line(),
     Payload :: {file, Filename} | {priv_file, App, Filename} | HTML,
@@ -305,8 +312,9 @@ Within `{}` expressions, you have access to:
     App :: atom(),
     HTML :: arizona_html:html(),
     Bindings :: arizona_binder:map(),
+    CompileOpts :: [compile:option()],
     Template :: template().
-from_html(Module, Line, Payload, Bindings) when is_atom(Module), is_map(Bindings) ->
+from_html(Module, Line, Payload, Bindings, CompileOpts) when is_atom(Module), is_map(Bindings) ->
     % Extract template content from file, priv_file, or direct content
     HTML = extract_template_content(Payload),
 
@@ -314,7 +322,9 @@ from_html(Module, Line, Payload, Bindings) when is_atom(Module), is_map(Bindings
     Tokens = arizona_scanner:scan_string(Line, HTML),
 
     % Parse tokens into AST
-    AST = arizona_parser:parse_tokens(Tokens, []),
+    AST = arizona_parser:parse_tokens(Tokens, [
+        {d, 'MODULE', Module}, {parse_transform, arizona_parse_transform} | CompileOpts
+    ]),
 
     % Evaluate AST to get template record
     erl_eval:expr(
@@ -335,7 +345,7 @@ from_html(Module, Line, Payload, Bindings) when is_atom(Module), is_map(Bindings
     Markdown :: arizona_markdown:markdown(),
     Template :: template().
 from_markdown(String) ->
-    from_markdown(erlang, 0, String, #{}).
+    from_markdown(erlang, 0, String, #{}, []).
 
 -doc ~"""""
 Compiles a markdown string with Arizona template syntax into a template record at runtime.
@@ -430,7 +440,7 @@ Within `{}` expressions, you have access to:
 4. **Restoration** - Protected expressions are restored to original Arizona syntax
 5. **Template Creation** - Final HTML is processed as a regular Arizona template
 """"".
--spec from_markdown(Module, Line, Payload, Bindings) -> Template when
+-spec from_markdown(Module, Line, Payload, Bindings, CompileOpts) -> Template when
     Module :: module(),
     Line :: arizona_token:line(),
     Payload :: {file, Filename} | {priv_file, App, Filename} | Markdown,
@@ -438,8 +448,11 @@ Within `{}` expressions, you have access to:
     App :: atom(),
     Markdown :: arizona_markdown:markdown(),
     Bindings :: arizona_binder:map(),
+    CompileOpts :: [compile:option()],
     Template :: template().
-from_markdown(Module, Line, Payload, Bindings) when is_atom(Module), is_map(Bindings) ->
+from_markdown(Module, Line, Payload, Bindings, CompileOpts) when
+    is_atom(Module), is_map(Bindings)
+->
     % Extract template content from file, priv_file, or direct content
     Markdown = extract_template_content(Payload),
 
@@ -447,7 +460,7 @@ from_markdown(Module, Line, Payload, Bindings) when is_atom(Module), is_map(Bind
     HTML = arizona_markdown_processor:process_markdown_template(Markdown, Line),
 
     % Process final HTML as template
-    from_html(Module, Line, HTML, Bindings).
+    from_html(Module, Line, HTML, Bindings, CompileOpts).
 
 -doc ~"""
 Checks if the given value is a template record.

@@ -59,9 +59,9 @@ Handles multiple Erlang data types and converts them to a format
 suitable for HTML output. Binaries and iolists are passed through
 unchanged, while other types are converted to binary representation.
 """.
--spec to_html(Value) -> Html when
+-spec to_html(Value) -> HTML when
     Value :: value(),
-    Html :: html().
+    HTML :: html().
 to_html(Value) when is_binary(Value) ->
     Value;
 % Assume it is an iolist()

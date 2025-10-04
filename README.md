@@ -19,7 +19,9 @@ Arizona follows a component-based architecture with three main layers:
 ### **Template System**
 
 - **Compile-time optimization** via parse transforms for maximum performance
+- **Multiple syntax options**: HTML strings, Erlang terms, or Markdown with template expressions
 - **Template DSL** with plain HTML, `{}` Erlang expressions, and `\{` escaping for literal braces
+- **Erlang term syntax** for type-safe template construction with full editor support
 - **GitHub Flavored Markdown support** with template syntax preservation for content-driven applications
 - **Differential rendering** for minimal DOM updates
 - **Static site generation** support for SEO and deployment flexibility
@@ -259,6 +261,61 @@ arizona_template:from_html(~"""
 arizona_template:from_html({file, "templates/user.html"})
 arizona_template:from_html({priv_file, myapp, "templates/user.html"})
 ```
+
+### Erlang Term-Based Templates
+
+As an alternative to HTML strings, use pure Erlang terms for type-safe template construction:
+
+```erlang
+% Erlang term syntax with full editor support
+arizona_template:from_erl([
+    {'div', [], [
+        {h1, [], [arizona_template:get_binding(title, Bindings)]},
+        {p, [], [
+            ~"User: ",
+            arizona_template:get_binding(username, Bindings)
+        ]}
+    ]}
+])
+
+% Elements are tuples: {Tag, Attributes, Children}
+% Note: 'div' must be quoted since it's the division operator in Erlang
+arizona_template:from_erl([
+    {'div', [{id, ~"main"}, {class, ~"container"}], [
+        {h1, [], [~"Welcome"]}  % Other tags don't need quotes
+    ]}
+])
+
+% Boolean attributes and void elements (self-closing)
+arizona_template:from_erl([
+    % Renders as: <input disabled type="text" hidden />
+    {input, [disabled, {type, ~"text"}, hidden], []}
+])
+
+arizona_template:from_erl([
+    {br, [], []},           % <br />
+    {hr, [], []},           % <hr />
+    {img, [{src, ~"logo.png"}, {alt, ~"Logo"}], []}  % <img src="logo.png" alt="Logo" />
+])
+
+% Nested components work seamlessly
+arizona_template:from_erl([
+    {'div', [], [
+        arizona_template:render_stateful(counter_component, #{
+            id => ~"counter",
+            count => 0
+        })
+    ]}
+])
+```
+
+**Benefits:**
+
+- Full editor support with syntax highlighting and auto-completion
+- Compile-time validation of element structure
+- Automatic self-closing for void elements (XHTML compatible)
+- No string escaping issues for dynamic attributes
+- Type-safe component composition
 
 ### Stateful Component Rendering
 

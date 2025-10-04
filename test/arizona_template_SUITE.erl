@@ -201,7 +201,7 @@ from_html_full_params_test(Config) when is_list(Config) ->
     ct:comment("from_html/4 should create template with module, line, and bindings"),
     Bindings = #{title => ~"Test Title"},
     Template = arizona_template:from_html(
-        ?MODULE, ?LINE, ~"<h1>{arizona_template:get_binding(title, Bindings)}</h1>", Bindings
+        ?MODULE, ?LINE, ~"<h1>{arizona_template:get_binding(title, Bindings)}</h1>", Bindings, []
     ),
     ?assert(arizona_template:is_template(Template)),
     Static = arizona_template:get_static(Template),
@@ -466,7 +466,8 @@ from_html_with_module_function_test(Config) when is_list(Config) ->
         TestModule,
         ?LINE,
         ~"<h1>{arizona_template:get_binding(name, Bindings)}</h1>",
-        Bindings
+        Bindings,
+        []
     ),
     ?assert(arizona_template:is_template(Template)),
     Static = arizona_template:get_static(Template),
