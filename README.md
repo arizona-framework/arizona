@@ -285,9 +285,16 @@ arizona_template:from_erl([
     ]}
 ])
 
-% Boolean attributes
+% Boolean attributes and void elements (self-closing)
 arizona_template:from_erl([
+    % Renders as: <input disabled type="text" hidden />
     {input, [disabled, {type, ~"text"}, hidden], []}
+])
+
+arizona_template:from_erl([
+    {br, [], []},           % <br />
+    {hr, [], []},           % <hr />
+    {img, [{src, ~"logo.png"}, {alt, ~"Logo"}], []}  % <img src="logo.png" alt="Logo" />
 ])
 
 % Nested components work seamlessly
@@ -305,6 +312,7 @@ arizona_template:from_erl([
 
 - Full editor support with syntax highlighting and auto-completion
 - Compile-time validation of element structure
+- Automatic self-closing for void elements (XHTML compatible)
 - No string escaping issues for dynamic attributes
 - Type-safe component composition
 
