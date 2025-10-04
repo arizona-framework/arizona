@@ -9,7 +9,8 @@
 
 all() ->
     [
-        {group, to_html}
+        {group, to_html},
+        {group, ast_to_html}
     ].
 
 groups() ->
@@ -22,6 +23,16 @@ groups() ->
             to_html_list_of_elements,
             to_html_escape_special_chars,
             to_html_with_various_types
+        ]},
+        {ast_to_html, [parallel], [
+            ast_to_html_simple_element,
+            ast_to_html_element_with_static_attrs,
+            ast_to_html_element_with_boolean_attrs,
+            ast_to_html_element_with_dynamic_attr,
+            ast_to_html_nested_elements,
+            ast_to_html_dynamic_child,
+            ast_to_html_list_of_elements,
+            ast_to_html_escape_braces
         ]}
     ].
 
@@ -93,5 +104,78 @@ to_html_with_various_types(_Config) ->
     % Integer attribute
     HTML4 = arizona_erl:to_html({'div', [{width, 100}], []}),
     ?assertEqual(~"<div width=\"100\"></div>", HTML4),
+
+    ok.
+
+%% --------------------------------------------------------------------
+%% AST conversion tests
+%% --------------------------------------------------------------------
+
+ast_to_html_simple_element(_Config) ->
+    ct:comment("Convert simple element AST to HTML"),
+    AST = merl:quote("{'div', [], [~\"Hello\"]}"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<div>Hello</div>", HTML),
+    ok.
+
+ast_to_html_element_with_static_attrs(_Config) ->
+    ct:comment("Convert element with static attributes"),
+    AST = merl:quote("{'div', [{class, ~\"app\"}, {id, ~\"main\"}], [~\"Content\"]}"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<div class=\"app\" id=\"main\">Content</div>", HTML),
+    ok.
+
+ast_to_html_element_with_boolean_attrs(_Config) ->
+    ct:comment("Convert element with boolean attributes"),
+    AST = merl:quote("{input, [disabled, {type, ~\"text\"}, hidden], []}"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<input disabled type=\"text\" hidden></input>", HTML),
+    ok.
+
+ast_to_html_element_with_dynamic_attr(_Config) ->
+    ct:comment("Convert element with dynamic attribute to {Expr}"),
+    AST = merl:quote("{'div', [{id, Id}], []}"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<div id=\"{Id}\"></div>", HTML),
+    ok.
+
+ast_to_html_nested_elements(_Config) ->
+    ct:comment("Convert nested elements"),
+    AST = merl:quote("{'div', [], [{span, [], [~\"inner\"]}]}"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<div><span>inner</span></div>", HTML),
+    ok.
+
+ast_to_html_dynamic_child(_Config) ->
+    ct:comment("Convert dynamic child to {Expr}"),
+    AST = merl:quote("{'div', [], [Title]}"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<div>{Title}</div>", HTML),
+    ok.
+
+ast_to_html_list_of_elements(_Config) ->
+    ct:comment("Convert list of elements"),
+    AST = merl:quote("[{'div', [], [~\"First\"]}, {span, [], [~\"Second\"]}]"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<div>First</div><span>Second</span>", HTML),
+    ok.
+
+ast_to_html_escape_braces(_Config) ->
+    ct:comment("Escape { and \" in static content"),
+
+    % Test { escaping in attributes
+    AST1 = merl:quote("{'div', [{onclick, ~\"arizona.pushEvent('click', {id: 1})\"}], []}"),
+    HTML1 = iolist_to_binary(arizona_erl:ast_to_html(AST1)),
+    ?assertEqual(~"<div onclick=\"arizona.pushEvent('click', \\{id: 1})\"></div>", HTML1),
+
+    % Test already escaped \{ is preserved
+    AST2 = merl:quote("{'div', [{onclick, ~\"arizona.pushEvent('click', \\{id: 1})\"}], []}"),
+    HTML2 = iolist_to_binary(arizona_erl:ast_to_html(AST2)),
+    ?assertEqual(~"<div onclick=\"arizona.pushEvent('click', \\{id: 1})\"></div>", HTML2),
+
+    % Test " escaping
+    AST3 = merl:quote("{'div', [{data, ~\"{\\\"key\\\": \\\"value\\\"}\"}], []}"),
+    HTML3 = iolist_to_binary(arizona_erl:ast_to_html(AST3)),
+    ?assertEqual(~"<div data=\"\\{\\\"key\\\": \\\"value\\\"}\"></div>", HTML3),
 
     ok.
