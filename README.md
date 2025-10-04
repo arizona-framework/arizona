@@ -279,9 +279,10 @@ arizona_template:from_erl([
 ])
 
 % Elements are tuples: {Tag, Attributes, Children}
+% Note: 'div' must be quoted since it's the division operator in Erlang
 arizona_template:from_erl([
     {'div', [{id, ~"main"}, {class, ~"container"}], [
-        {h1, [], [~"Welcome"]}
+        {h1, [], [~"Welcome"]}  % Other tags don't need quotes
     ]}
 ])
 
