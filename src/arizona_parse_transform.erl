@@ -48,12 +48,6 @@ $ rebar3 as debug compile
 """".
 
 %% --------------------------------------------------------------------
-%% Ignore elvis warnings
-%% --------------------------------------------------------------------
-
--elvis([{elvis_style, max_module_length, disable}]).
-
-%% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
@@ -81,8 +75,9 @@ $ rebar3 as debug compile
 %% Ignore elvis warnings
 %% --------------------------------------------------------------------
 
-% format_error/2 exceeds 30 lines
--elvis([{elvis_style, max_function_length, #{max_length => 40}}]).
+-elvis([{elvis_style, max_module_length, disable}]).
+-elvis([{elvis_style, max_function_length, disable}]).
+-elvis([{elvis_style, max_function_clause_length, disable}]).
 
 %% --------------------------------------------------------------------
 %% Parse Transform Implementation
@@ -228,6 +223,23 @@ extract_callback_function_body(Module, Line, FunExpr, CompileOpts) ->
 
                     % Wrap the dynamic tuple in fun(Item) -> ... end for render_list
                     wrap_dynamic_tuple_in_function(TemplateAST, RevClauseBody, CallbackArg);
+                {arizona_template, from_erl, 1, [ErlTermListArg]} ->
+                    % Convert Erlang term to HTML using arizona_html:from_erl/1
+                    HTML = arizona_html:from_erl(ErlTermListArg),
+
+                    % Scan and parse
+                    Tokens = arizona_scanner:scan_string(Line + 1, HTML),
+
+                    % Clear in_dynamic_callback flag to allow nested transforms
+                    ClearedOpts = proplists:delete(in_dynamic_callback, CompileOpts),
+                    TemplateAST = arizona_parser:parse_tokens(Tokens, ClearedOpts),
+
+                    % Wrap the dynamic tuple in fun(Item) -> ... end for render_list
+                    wrap_dynamic_tuple_in_function(TemplateAST, RevClauseBody, CallbackArg);
+                {arizona_template, new, 5, _Args} ->
+                    % Already transformed (from_erl/from_html was transformed during AST walk)
+                    % Just wrap the already-compiled template
+                    wrap_dynamic_tuple_in_function(TemplateCall, RevClauseBody, CallbackArg);
                 TemplateCall ->
                     % analyze_application returned the Node itself, check if it's a template tuple
                     maybe
@@ -255,6 +267,7 @@ with context about failed template extraction or render_list/render_map transfor
     Reason ::
         arizona_template_extraction_failed
         | arizona_markdown_extraction_failed
+        | arizona_erl_extraction_failed
         | arizona_render_list_transformation_failed
         | arizona_render_map_transformation_failed,
     StackTrace :: erlang:stacktrace(),
@@ -276,6 +289,17 @@ format_error(arizona_markdown_extraction_failed, [{_M, _F, _As, Info} | _]) ->
         reason => io_lib:format("Failed to extract markdown template in ~p at line ~p:\n~p:~p:~p", [
             Module, Line, Class, Reason, StackTrace
         ])
+    };
+format_error(arizona_erl_extraction_failed, [{_M, _F, _As, Info} | _]) ->
+    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
+    {Module, Line, Class, Reason, StackTrace} = maps:get(cause, ErrorInfo),
+    #{
+        general => "Arizona Erlang term template parsing failed",
+        reason => io_lib:format(
+            "Failed to convert Erlang terms to template in ~p at line ~p:\n~p:~p:~p", [
+                Module, Line, Class, Reason, StackTrace
+            ]
+        )
     };
 format_error(arizona_render_list_transformation_failed, [{_M, _F, _As, Info} | _]) ->
     {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
@@ -356,6 +380,8 @@ transform_application(Node, Module, CompileOpts) ->
             transform_template_function(Node, Module, from_html, TemplateArg, CompileOpts);
         {arizona_template, from_markdown, 1, [MarkdownArg]} ->
             transform_template_function(Node, Module, from_markdown, MarkdownArg, CompileOpts);
+        {arizona_template, from_erl, 1, [ErlTermArg]} ->
+            transform_template_function(Node, Module, from_erl, ErlTermArg, CompileOpts);
         {arizona_template, render_list, 2, [FunArg, ListArg]} ->
             transform_render_collection(
                 Node, Module, render_list, FunArg, ListArg, #{}, CompileOpts
@@ -374,21 +400,26 @@ transform_application(Node, Module, CompileOpts) ->
             Node
     end.
 
-%% Transform template functions (from_html, from_markdown) with recursion prevention
+%% Transform template functions (from_html, from_markdown, from_erl) with recursion prevention
 transform_template_function(Node, Module, FunctionName, TemplateArg, CompileOpts) ->
-    InDynamicCallback = proplists:get_bool(in_dynamic_callback, CompileOpts),
-    case InDynamicCallback of
-        true ->
-            % Inside dynamic callback - don't transform to prevent infinite recursion
-            Node;
-        false ->
-            % Normal context - transform the template function
-            Line = get_node_line(Node),
-            case FunctionName of
-                from_html ->
-                    transform_from_html(Module, Line, TemplateArg, CompileOpts);
-                from_markdown ->
-                    transform_from_markdown(Module, Line, TemplateArg, CompileOpts)
+    % Normal context - transform the template function
+    Line = get_node_line(Node),
+    case FunctionName of
+        from_erl ->
+            transform_from_erl(Module, Line, TemplateArg, CompileOpts);
+        _Other ->
+            InDynamicCallback = proplists:get_bool(in_dynamic_callback, CompileOpts),
+            case InDynamicCallback of
+                true ->
+                    % Inside dynamic callback - don't transform to prevent infinite recursion
+                    Node;
+                false ->
+                    case FunctionName of
+                        from_html ->
+                            transform_from_html(Module, Line, TemplateArg, CompileOpts);
+                        from_markdown ->
+                            transform_from_markdown(Module, Line, TemplateArg, CompileOpts)
+                    end
             end
     end.
 
@@ -521,6 +552,26 @@ transform_from_markdown(Module, Line, MarkdownArg, CompileOpts) ->
         Class:Reason:StackTrace ->
             error(
                 arizona_markdown_extraction_failed,
+                none,
+                error_info({Module, Line, Class, Reason, StackTrace})
+            )
+    end.
+
+%% Transform arizona_template:from_erl/1 calls
+transform_from_erl(Module, Line, ErlTermArg, CompileOpts) ->
+    try
+        % Convert Erlang term AST to HTML string
+        HTML = arizona_html:from_erl(ErlTermArg),
+
+        % Scan the HTML into tokens
+        Tokens = arizona_scanner:scan_string(Line + 1, HTML),
+
+        % Parse tokens into AST
+        arizona_parser:parse_tokens(Tokens, CompileOpts)
+    catch
+        Class:Reason:StackTrace ->
+            error(
+                arizona_erl_extraction_failed,
                 none,
                 error_info({Module, Line, Class, Reason, StackTrace})
             )
