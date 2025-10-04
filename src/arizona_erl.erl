@@ -151,9 +151,9 @@ build_element_html(TagBin, AttrsHTML, ChildrenHTML) ->
         $>
     ].
 
-%% Build void HTML element (no closing tag)
+%% Build void HTML element (self-closing, XHTML compatible)
 build_void_element_html(TagBin, AttrsHTML) ->
-    [$<, TagBin, AttrsHTML, $>].
+    [$<, TagBin, AttrsHTML, $\s, $/, $>].
 
 %% Check if element is a void element (no closing tag)
 is_void_element(area) -> true;
