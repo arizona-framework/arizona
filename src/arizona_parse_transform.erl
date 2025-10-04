@@ -223,19 +223,6 @@ extract_callback_function_body(Module, Line, FunExpr, CompileOpts) ->
 
                     % Wrap the dynamic tuple in fun(Item) -> ... end for render_list
                     wrap_dynamic_tuple_in_function(TemplateAST, RevClauseBody, CallbackArg);
-                {arizona_template, from_erl, 1, [ErlTermListArg]} ->
-                    % Convert Erlang term to HTML using arizona_erl:ast_to_html/1
-                    HTML = arizona_erl:ast_to_html(ErlTermListArg),
-
-                    % Scan and parse
-                    Tokens = arizona_scanner:scan_string(Line + 1, HTML),
-
-                    % Clear in_dynamic_callback flag to allow nested transforms
-                    ClearedOpts = proplists:delete(in_dynamic_callback, CompileOpts),
-                    TemplateAST = arizona_parser:parse_tokens(Tokens, ClearedOpts),
-
-                    % Wrap the dynamic tuple in fun(Item) -> ... end for render_list
-                    wrap_dynamic_tuple_in_function(TemplateAST, RevClauseBody, CallbackArg);
                 {arizona_template, new, 5, _Args} ->
                     % Already transformed (from_erl/from_html was transformed during AST walk)
                     % Just wrap the already-compiled template
@@ -400,27 +387,16 @@ transform_application(Node, Module, CompileOpts) ->
             Node
     end.
 
-%% Transform template functions (from_html, from_markdown, from_erl) with recursion prevention
+%% Transform template functions (from_html, from_markdown, from_erl)
 transform_template_function(Node, Module, FunctionName, TemplateArg, CompileOpts) ->
-    % Normal context - transform the template function
     Line = get_node_line(Node),
     case FunctionName of
+        from_html ->
+            transform_from_html(Module, Line, TemplateArg, CompileOpts);
+        from_markdown ->
+            transform_from_markdown(Module, Line, TemplateArg, CompileOpts);
         from_erl ->
-            transform_from_erl(Module, Line, TemplateArg, CompileOpts);
-        _Other ->
-            InDynamicCallback = proplists:get_bool(in_dynamic_callback, CompileOpts),
-            case InDynamicCallback of
-                true ->
-                    % Inside dynamic callback - don't transform to prevent infinite recursion
-                    Node;
-                false ->
-                    case FunctionName of
-                        from_html ->
-                            transform_from_html(Module, Line, TemplateArg, CompileOpts);
-                        from_markdown ->
-                            transform_from_markdown(Module, Line, TemplateArg, CompileOpts)
-                    end
-            end
+            transform_from_erl(Module, Line, TemplateArg, CompileOpts)
     end.
 
 %% Transform render collection functions (render_list, render_map)
