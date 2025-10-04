@@ -193,9 +193,9 @@ new(Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint) ->
         fingerprint = Fingerprint
     }.
 
--spec from_erl(Terms) -> no_return() when
-    Terms :: list().
-from_erl(Terms) when is_list(Terms) ->
+-spec from_erl(Term) -> no_return() when
+    Term :: arizona_erl:element() | [arizona_erl:element()].
+from_erl(Term) when is_tuple(Term); is_list(Term) ->
     error(parse_transform_required).
 
 -doc #{equiv => from_html(erlang, 0, String, #{})}.

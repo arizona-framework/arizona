@@ -224,8 +224,8 @@ extract_callback_function_body(Module, Line, FunExpr, CompileOpts) ->
                     % Wrap the dynamic tuple in fun(Item) -> ... end for render_list
                     wrap_dynamic_tuple_in_function(TemplateAST, RevClauseBody, CallbackArg);
                 {arizona_template, from_erl, 1, [ErlTermListArg]} ->
-                    % Convert Erlang term to HTML using arizona_html:from_erl/1
-                    HTML = arizona_html:from_erl(ErlTermListArg),
+                    % Convert Erlang term to HTML using arizona_erl:ast_to_html/1
+                    HTML = arizona_erl:ast_to_html(ErlTermListArg),
 
                     % Scan and parse
                     Tokens = arizona_scanner:scan_string(Line + 1, HTML),
@@ -561,7 +561,7 @@ transform_from_markdown(Module, Line, MarkdownArg, CompileOpts) ->
 transform_from_erl(Module, Line, ErlTermArg, CompileOpts) ->
     try
         % Convert Erlang term AST to HTML string
-        HTML = arizona_html:from_erl(ErlTermArg),
+        HTML = arizona_erl:ast_to_html(ErlTermArg),
 
         % Scan the HTML into tokens
         Tokens = arizona_scanner:scan_string(Line + 1, HTML),
