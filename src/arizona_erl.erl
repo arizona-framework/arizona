@@ -10,20 +10,23 @@ Provides both runtime term conversion and compile-time AST conversion:
 
 Elements are represented as tuples:
 ```erlang
-{Tag :: atom(), Attributes :: [attr()], Children :: [child()]}
+{Tag :: atom(), Attributes :: [attr()], Children :: children()}
 ```
 
 Where:
 - `attr()` is `{Key :: atom(), Value :: term()}` or `atom()` (boolean attribute)
-- `child()` is `binary() | iolist() | element()`
+- `child()` is `binary() | iolist() | atom() | number() | element()`
+- `children()` is `[child()] | child()` (can be a list or a single child)
 
 ## Example
 
 ```erlang
 1> arizona_erl:to_html({'div', [{id, "main"}], ["Hello"]}).
 <<"<div id=\"main\">Hello</div>">>
-2> arizona_erl:to_html({'input', [disabled, {type, "text"}], []}).
-<<"<input disabled type=\"text\"></input>">>
+2> arizona_erl:to_html({'div', [], ~"Hello"}).
+<<"<div>Hello</div>">>
+3> arizona_erl:to_html({'input', [disabled, {type, ~"text"}], []}).
+<<"<input disabled type=\"text\" />">>
 ```
 """.
 
@@ -47,14 +50,16 @@ Where:
 -export_type([element/0]).
 -export_type([attr/0]).
 -export_type([child/0]).
+-export_type([children/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
--nominal element() :: {Tag :: atom(), Attributes :: [attr()], Children :: [child()]}.
+-nominal element() :: {Tag :: atom(), Attributes :: [attr()], Children :: children()}.
 -nominal attr() :: {Key :: atom(), Value :: term()} | atom().
 -nominal child() :: arizona_html:value() | element().
+-nominal children() :: [child()] | child().
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -102,7 +107,7 @@ ast_to_html(ElementAST) ->
 %% --------------------------------------------------------------------
 
 %% Convert single element to HTML
-element_to_html({Tag, Attrs, Children}) when is_atom(Tag), is_list(Attrs), is_list(Children) ->
+element_to_html({Tag, Attrs, Children}) when is_atom(Tag), is_list(Attrs) ->
     TagBin = atom_to_binary(Tag),
     AttrsHTML = attrs_to_html(Attrs),
     case is_void_element(Tag) of
@@ -126,9 +131,11 @@ attr_to_html(Key) when is_atom(Key) ->
     % Boolean attribute
     [$\s, atom_to_binary(Key)].
 
-%% Convert children list to HTML
-children_to_html(Children) ->
-    [child_to_html(Child) || Child <- Children].
+%% Convert children to HTML (can be a list or a single child)
+children_to_html(Children) when is_list(Children) ->
+    [child_to_html(Child) || Child <- Children];
+children_to_html(Child) ->
+    child_to_html(Child).
 
 %% Convert single child to HTML
 child_to_html({_Tag, _Attrs, _Children} = Element) ->
@@ -245,13 +252,16 @@ attr_value_ast_to_html(ValueAST) ->
     % Dynamic expression
     ast_to_html_expr(ValueAST).
 
-%% Convert children list AST to HTML
+%% Convert children AST to HTML (can be a list or a single child)
 children_ast_to_html({nil, _}) ->
     [];
 children_ast_to_html({cons, _, Child, Rest}) ->
     ChildHTML = child_ast_to_html(Child),
     RestHTML = children_ast_to_html(Rest),
-    [ChildHTML | RestHTML].
+    [ChildHTML | RestHTML];
+children_ast_to_html(ChildAST) ->
+    % Single child (binary, element, or dynamic expression)
+    child_ast_to_html(ChildAST).
 
 %% Convert single child AST to HTML
 child_ast_to_html({bin, _, Elements}) ->
