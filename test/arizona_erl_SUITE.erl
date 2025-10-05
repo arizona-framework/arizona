@@ -26,7 +26,10 @@ groups() ->
             to_html_with_various_types,
             to_html_single_binary_child,
             to_html_single_element_child,
-            to_html_single_atom_child
+            to_html_single_atom_child,
+            to_html_2tuple_self_closing,
+            to_html_2tuple_with_attrs,
+            to_html_nested_2tuple
         ]},
         {ast_to_html, [parallel], [
             ast_to_html_simple_element,
@@ -39,7 +42,10 @@ groups() ->
             ast_to_html_escape_braces,
             ast_to_html_single_binary_child,
             ast_to_html_single_element_child,
-            ast_to_html_single_dynamic_child
+            ast_to_html_single_dynamic_child,
+            ast_to_html_2tuple_self_closing,
+            ast_to_html_2tuple_with_attrs,
+            ast_to_html_nested_2tuple
         ]}
     ].
 
@@ -60,23 +66,23 @@ to_html_element_with_attrs(_Config) ->
     ok.
 
 to_html_element_with_boolean_attrs(_Config) ->
-    ct:comment("Void element with boolean attributes"),
-    HTML = arizona_erl:to_html({input, [disabled, {type, ~"text"}, hidden], []}),
+    ct:comment("Self-closing element with boolean attributes using 2-tuple"),
+    HTML = arizona_erl:to_html({input, [disabled, {type, ~"text"}, hidden]}),
     ?assertEqual(~"<input disabled type=\"text\" hidden />", HTML),
     ok.
 
 to_html_void_elements(_Config) ->
-    ct:comment("Void elements are self-closing (XHTML compatible)"),
+    ct:comment("Self-closing elements using 2-tuple syntax"),
 
-    % Test various void elements
-    ?assertEqual(~"<br />", arizona_erl:to_html({br, [], []})),
-    ?assertEqual(~"<hr />", arizona_erl:to_html({hr, [], []})),
-    ?assertEqual(~"<img src=\"test.jpg\" />", arizona_erl:to_html({img, [{src, ~"test.jpg"}], []})),
+    % Test various void elements using 2-tuple syntax
+    ?assertEqual(~"<br />", arizona_erl:to_html({br, []})),
+    ?assertEqual(~"<hr />", arizona_erl:to_html({hr, []})),
+    ?assertEqual(~"<img src=\"test.jpg\" />", arizona_erl:to_html({img, [{src, ~"test.jpg"}]})),
     ?assertEqual(
-        ~"<link rel=\"stylesheet\" />", arizona_erl:to_html({link, [{rel, ~"stylesheet"}], []})
+        ~"<link rel=\"stylesheet\" />", arizona_erl:to_html({link, [{rel, ~"stylesheet"}]})
     ),
     ?assertEqual(
-        ~"<meta charset=\"utf-8\" />", arizona_erl:to_html({meta, [{charset, ~"utf-8"}], []})
+        ~"<meta charset=\"utf-8\" />", arizona_erl:to_html({meta, [{charset, ~"utf-8"}]})
     ),
 
     ok.
@@ -149,8 +155,8 @@ ast_to_html_element_with_static_attrs(_Config) ->
     ok.
 
 ast_to_html_element_with_boolean_attrs(_Config) ->
-    ct:comment("Convert void element with boolean attributes"),
-    AST = merl:quote("{input, [disabled, {type, ~\"text\"}, hidden], []}"),
+    ct:comment("Convert self-closing element with boolean attributes using 2-tuple"),
+    AST = merl:quote("{input, [disabled, {type, ~\"text\"}, hidden]}"),
     HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
     ?assertEqual(~"<input disabled type=\"text\" hidden />", HTML),
     ok.
@@ -248,4 +254,51 @@ ast_to_html_single_dynamic_child(_Config) ->
     AST = merl:quote("{'div', [], Title}"),
     HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
     ?assertEqual(~"<div>{Title}</div>", HTML),
+    ok.
+
+%% --------------------------------------------------------------------
+%% 2-tuple self-closing element tests (runtime)
+%% --------------------------------------------------------------------
+
+to_html_2tuple_self_closing(_Config) ->
+    ct:comment("2-tuple element without attributes"),
+    HTML = arizona_erl:to_html({br, []}),
+    ?assertEqual(~"<br />", HTML),
+    ok.
+
+to_html_2tuple_with_attrs(_Config) ->
+    ct:comment("2-tuple element with attributes"),
+    HTML = arizona_erl:to_html({input, [{type, ~"text"}, disabled]}),
+    ?assertEqual(~"<input type=\"text\" disabled />", HTML),
+    ok.
+
+to_html_nested_2tuple(_Config) ->
+    ct:comment("2-tuple element nested in 3-tuple element"),
+    HTML = arizona_erl:to_html({'div', [], [{br, []}, ~"After break"]}),
+    ?assertEqual(~"<div><br />After break</div>", HTML),
+    ok.
+
+%% --------------------------------------------------------------------
+%% 2-tuple self-closing element tests (AST)
+%% --------------------------------------------------------------------
+
+ast_to_html_2tuple_self_closing(_Config) ->
+    ct:comment("Convert 2-tuple element AST without attributes"),
+    AST = merl:quote("{br, []}"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<br />", HTML),
+    ok.
+
+ast_to_html_2tuple_with_attrs(_Config) ->
+    ct:comment("Convert 2-tuple element AST with attributes"),
+    AST = merl:quote("{input, [{type, ~\"text\"}, disabled]}"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<input type=\"text\" disabled />", HTML),
+    ok.
+
+ast_to_html_nested_2tuple(_Config) ->
+    ct:comment("Convert nested 2-tuple element AST"),
+    AST = merl:quote("{'div', [], [{br, []}, ~\"After break\"]}"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<div><br />After break</div>", HTML),
     ok.
