@@ -101,7 +101,7 @@ future diff comparisons, and creates hierarchical tracking structure.
 """.
 -spec hierarchical_stateful(Module, Bindings, ParentId, ElementIndex, View) -> {Struct, View1} when
     Module :: module(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
@@ -133,7 +133,7 @@ then delegates to `hierarchical_template/5` for structure generation.
 when
     Module :: module(),
     Function :: atom(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),

@@ -298,13 +298,12 @@ handle_stateful_event(StatefulId, StatefulState, Event, Params, State) ->
     ),
     Module = arizona_stateful:get_module(UpdatedStatefulState),
     Bindings = arizona_stateful:get_bindings(UpdatedStatefulState),
-    DiffStatefulId = arizona_binder:get(id, Bindings),
+    DiffStatefulId = maps:get(id, Bindings),
     UpdatedView = arizona_view:put_stateful_state(
         StatefulId, UpdatedStatefulState, State#state.view
     ),
-    DiffBindings = arizona_binder:to_map(Bindings),
     undefined = arizona_hierarchical_dict:set_structure(#{}),
-    {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, DiffBindings, UpdatedView),
+    {Diff, DiffView} = arizona_differ:diff_root_stateful(Module, Bindings, UpdatedView),
     HierarchicalStructure = arizona_hierarchical_dict:clear(),
     ok = handle_actions_response(DiffStatefulId, Diff, HierarchicalStructure, Actions, State),
     {noreply, State#state{view = DiffView}}.

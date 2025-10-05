@@ -96,7 +96,7 @@ render_post_list(Bindings) ->
     """").
 
 render_post_detail(Bindings) ->
-    #{title := Title, content := Content, author := Author, date := Date, tags := Tags} = arizona_binder:get(
+    #{title := Title, content := Content, author := Author, date := Date, tags := Tags} = maps:get(
         post, Bindings
     ),
     arizona_template:from_markdown(~""""
@@ -128,7 +128,7 @@ render_post_detail(Bindings) ->
     """").
 
 render_post_preview(Bindings) ->
-    Post = arizona_binder:get(post, Bindings),
+    Post = maps:get(post, Bindings),
     #{
         id := Id,
         title := Title,

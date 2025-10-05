@@ -122,8 +122,8 @@ unmount(State) ->
 
 -record(state, {
     module :: module(),
-    bindings :: arizona_binder:bindings(),
-    changed_bindings :: arizona_binder:bindings()
+    bindings :: map(),
+    changed_bindings :: map()
 }).
 
 -opaque state() :: #state{}.
@@ -140,7 +140,7 @@ unmount(State) ->
 %% --------------------------------------------------------------------
 
 -callback mount(Bindings) -> State when
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     State :: state().
 
 -doc ~"""
@@ -180,7 +180,7 @@ the error will propagate following Erlang's "let it crash" philosophy.
     Result :: ok.
 
 -callback render(Bindings) -> Template when
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: map(),
     Template :: arizona_template:template().
 
 -callback handle_event(Event, Payload, State) -> Result when
@@ -203,7 +203,7 @@ initialize component state. Used during component lifecycle startup.
 """.
 -spec call_mount_callback(Module, Bindings) -> State when
     Module :: module(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     State :: state().
 call_mount_callback(Module, Bindings) ->
     apply(Module, mount, [Bindings]).
@@ -265,13 +265,13 @@ start empty and are populated as bindings are modified.
 """.
 -spec new(Module, Bindings) -> State when
     Module :: module(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     State :: state().
 new(Module, Bindings) when is_atom(Module), is_map(Bindings) ->
     #state{
         module = Module,
-        bindings = arizona_binder:new(Bindings),
-        changed_bindings = arizona_binder:new(#{})
+        bindings = Bindings,
+        changed_bindings = #{}
     }.
 
 -doc ~"""
@@ -292,11 +292,11 @@ Returns the value associated with the key from component bindings.
 Raises `{badkey, Key}` exception if key is missing.
 """.
 -spec get_binding(Key, State) -> Value when
-    Key :: arizona_binder:key(),
+    Key :: dynamic(),
     State :: state(),
-    Value :: arizona_binder:value().
+    Value :: dynamic().
 get_binding(Key, #state{} = State) ->
-    arizona_binder:get(Key, State#state.bindings).
+    maps:get(Key, State#state.bindings).
 
 -doc ~"""
 Gets a binding value by key with default fallback.
@@ -305,12 +305,12 @@ Returns the value if key exists, otherwise returns the provided
 default value. This is a safe lookup that never raises an exception.
 """.
 -spec get_binding(Key, State, Default) -> Value when
-    Key :: arizona_binder:key(),
+    Key :: dynamic(),
     State :: state(),
-    Default :: arizona_binder:value(),
-    Value :: arizona_binder:value().
+    Default :: dynamic(),
+    Value :: dynamic().
 get_binding(Key, #state{} = State, Default) ->
-    arizona_binder:get(Key, State#state.bindings, Default).
+    maps:get(Key, State#state.bindings, Default).
 
 -doc ~"""
 Gets a binding value by key with lazy default function fallback.
@@ -320,12 +320,17 @@ to generate a fallback value. Useful for expensive computations that
 should only be performed when needed.
 """.
 -spec get_binding_lazy(Key, State, DefaultFun) -> Value when
-    Key :: arizona_binder:key(),
+    Key :: dynamic(),
     State :: state(),
-    DefaultFun :: arizona_binder:default_fun(),
-    Value :: arizona_binder:value().
-get_binding_lazy(Key, #state{} = State, DefaultFun) ->
-    arizona_binder:get_lazy(Key, State#state.bindings, DefaultFun).
+    DefaultFun :: fun(() -> dynamic()),
+    Value :: dynamic().
+get_binding_lazy(Key, #state{} = State, DefaultFun) when is_function(DefaultFun, 0) ->
+    case State#state.bindings of
+        #{Key := Value} ->
+            Value;
+        #{} ->
+            apply(DefaultFun, [])
+    end.
 
 -doc ~"""
 Returns all component bindings.
@@ -335,7 +340,7 @@ and other operations that need all component data.
 """.
 -spec get_bindings(State) -> Bindings when
     State :: state(),
-    Bindings :: arizona_binder:bindings().
+    Bindings :: map().
 get_bindings(#state{} = State) ->
     State#state.bindings.
 
@@ -346,17 +351,17 @@ Sets the key-value pair in bindings and adds it to changed bindings
 for differential update tracking. No-op if value is unchanged.
 """.
 -spec put_binding(Key, Value, State) -> State1 when
-    Key :: arizona_binder:key(),
-    Value :: arizona_binder:value(),
+    Key :: dynamic(),
+    Value :: dynamic(),
     State :: state(),
     State1 :: state().
 put_binding(Key, Value, #state{} = State) ->
-    case arizona_binder:find(Key, State#state.bindings) of
-        {ok, Value} ->
+    case State#state.bindings of
+        #{Key := Value} ->
             State;
-        _ ->
-            NewBindings = arizona_binder:put(Key, Value, State#state.bindings),
-            NewChangedBindings = arizona_binder:put(Key, Value, State#state.changed_bindings),
+        Bindings ->
+            NewBindings = Bindings#{Key => Value},
+            NewChangedBindings = (State#state.changed_bindings)#{Key => Value},
             State#state{
                 bindings = NewBindings,
                 changed_bindings = NewChangedBindings
@@ -370,7 +375,7 @@ Applies multiple key-value pairs using `put_binding/3`, tracking
 all changes for differential updates.
 """.
 -spec merge_bindings(Bindings, State) -> State1 when
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     State :: state(),
     State1 :: state().
 merge_bindings(Bindings, #state{} = State) when is_map(Bindings) ->
@@ -384,7 +389,7 @@ variables need re-rendering for WebSocket updates.
 """.
 -spec get_changed_bindings(State) -> ChangedBindings when
     State :: state(),
-    ChangedBindings :: arizona_binder:bindings().
+    ChangedBindings :: map().
 get_changed_bindings(#state{} = State) ->
     State#state.changed_bindings.
 
@@ -395,7 +400,7 @@ Usually called with empty bindings after differential updates are
 processed to reset change tracking.
 """.
 -spec set_changed_bindings(ChangedBindings, State) -> State1 when
-    ChangedBindings :: arizona_binder:bindings(),
+    ChangedBindings :: map(),
     State :: state(),
     State1 :: state().
 set_changed_bindings(ChangedBindings, #state{} = State) ->

@@ -34,7 +34,7 @@ mount({Error, Reason, StackTrace}, Req) ->
     ).
 
 -spec render(Bindings) -> Template when
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: map(),
     Template :: arizona_template:template().
 render(Bindings) ->
     arizona_template:from_html(~""""

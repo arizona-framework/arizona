@@ -147,7 +147,7 @@ call_mount_callback_test(Config) when is_list(Config) ->
     Bindings = #{name => ~"Arizona", version => ~"1.0"},
     State = arizona_stateful:call_mount_callback(MockModule, Bindings),
     ?assertEqual(MockModule, arizona_stateful:get_module(State)),
-    ?assertEqual(arizona_binder:new(Bindings), arizona_stateful:get_bindings(State)).
+    ?assertEqual(Bindings, arizona_stateful:get_bindings(State)).
 
 call_render_callback_test(Config) when is_list(Config) ->
     ct:comment("call_render_callback/2 should call module render function"),
@@ -190,8 +190,8 @@ new_creates_state(Config) when is_list(Config) ->
     Bindings = #{user => ~"john", role => ~"admin"},
     State = arizona_stateful:new(my_module, Bindings),
     ?assertEqual(my_module, arizona_stateful:get_module(State)),
-    ?assertEqual(arizona_binder:new(Bindings), arizona_stateful:get_bindings(State)),
-    ?assertEqual(arizona_binder:new(#{}), arizona_stateful:get_changed_bindings(State)).
+    ?assertEqual(Bindings, arizona_stateful:get_bindings(State)),
+    ?assertEqual(#{}, arizona_stateful:get_changed_bindings(State)).
 
 get_module_test(Config) when is_list(Config) ->
     ct:comment("get_module/1 should return module from state"),
@@ -224,7 +224,7 @@ get_bindings_test(Config) when is_list(Config) ->
     Bindings = #{title => ~"Page", count => 42},
     State = arizona_stateful:new(test_module, Bindings),
     ResultBindings = arizona_stateful:get_bindings(State),
-    ?assertEqual(arizona_binder:new(Bindings), ResultBindings).
+    ?assertEqual(Bindings, ResultBindings).
 
 put_binding_test(Config) when is_list(Config) ->
     ct:comment("put_binding/3 should add binding and mark as changed"),
@@ -243,7 +243,7 @@ put_binding_same_value_test(Config) when is_list(Config) ->
     NewState = arizona_stateful:put_binding(key, ~"value", State),
 
     ?assertEqual(State, NewState),
-    ?assertEqual(arizona_binder:new(#{}), arizona_stateful:get_changed_bindings(NewState)).
+    ?assertEqual(#{}, arizona_stateful:get_changed_bindings(NewState)).
 
 merge_bindings_test(Config) when is_list(Config) ->
     ct:comment("merge_bindings/2 should merge new bindings into state"),
@@ -272,7 +272,7 @@ get_changed_bindings_test(Config) when is_list(Config) ->
 set_changed_bindings_test(Config) when is_list(Config) ->
     ct:comment("set_changed_bindings/2 should update changed bindings"),
     State = arizona_stateful:new(test_module, #{original => ~"value"}),
-    NewChangedBindings = arizona_binder:new(#{custom => ~"changed"}),
+    NewChangedBindings = #{custom => ~"changed"},
     UpdatedState = arizona_stateful:set_changed_bindings(NewChangedBindings, State),
 
     ResultChangedBindings = arizona_stateful:get_changed_bindings(UpdatedState),
@@ -297,7 +297,7 @@ call_unmount_callback_with_callback(Config) when is_list(Config) ->
     % Verify the callback was called with correct data
     ?assertEqual(ok, Result),
     ?assertEqual(
-        {unmounted, MockEventsModule, arizona_binder:new(TestBindings)}, get(unmount_evidence)
+        {unmounted, MockEventsModule, TestBindings}, get(unmount_evidence)
     ).
 
 call_unmount_callback_without_callback(Config) when is_list(Config) ->
@@ -332,7 +332,7 @@ unmount_callback_receives_correct_state(Config) when is_list(Config) ->
     % Check that unmount was called with the correct state data
     {unmounted, ReceivedModule, ReceivedBindings} = get(unmount_evidence),
     ?assertEqual(MockEventsModule, ReceivedModule),
-    ?assertEqual(arizona_binder:new(TestBindings), ReceivedBindings).
+    ?assertEqual(TestBindings, ReceivedBindings).
 
 %% --------------------------------------------------------------------
 %% Event Payload Test Cases

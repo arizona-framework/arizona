@@ -9,7 +9,7 @@ and return templates without maintaining any internal state.
 ## Stateless Component Pattern
 
 Stateless components are implemented as functions that:
-1. Accept `arizona_binder:map/0` with template variables
+1. Accept `map()` with template variables
 2. Return `arizona_template:template/0` for rendering
 3. Have no internal state
 4. Are deterministic based solely on input bindings
@@ -53,7 +53,7 @@ for stateless component execution.
 -spec call_render_callback(Mod, Fun, Bindings) -> Template when
     Mod :: module(),
     Fun :: atom(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     Template :: arizona_template:template().
 call_render_callback(Mod, Fun, Bindings) ->
     apply(Mod, Fun, [Bindings]).

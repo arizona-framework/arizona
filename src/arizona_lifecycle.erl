@@ -54,7 +54,7 @@ Returns the component ID, rendered template, and updated view.
 """.
 -spec prepare_render(Module, Bindings, View) -> Result when
     Module :: module(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     View :: arizona_view:view(),
     Result :: {Id, Template, View1},
     Id :: arizona_stateful:id(),
@@ -76,7 +76,7 @@ updating component props from outside.
 """.
 -spec prepare_render(Module, Bindings, View, Mode) -> Result when
     Module :: module(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     View :: arizona_view:view(),
     Mode :: mode(),
     Result :: {Id, Template, View1},

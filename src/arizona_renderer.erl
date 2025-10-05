@@ -108,7 +108,7 @@ state, sets current component ID, and renders the resulting template.
 """.
 -spec render_stateful(Module, Bindings, View) -> {Html, View1} when
     Module :: module(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     View :: arizona_view:view(),
     Html :: arizona_html:html(),
     View1 :: arizona_view:view().
@@ -125,7 +125,7 @@ a template, then renders that template to HTML.
 -spec render_stateless(Module, Function, Bindings, ParentId, View) -> {Html, View1} when
     Module :: module(),
     Function :: atom(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     ParentId :: arizona_stateful:id(),
     View :: arizona_view:view(),
     Html :: arizona_html:html(),
