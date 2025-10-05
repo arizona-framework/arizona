@@ -8,15 +8,20 @@ Provides both runtime term conversion and compile-time AST conversion:
 
 ## Supported Syntax
 
-Elements are represented as tuples:
+Elements are represented as `t:element/0` tuples:
 ```erlang
-{Tag :: atom(), Attributes :: [attr()], Children :: children()}
+% t:element_with_children/0
+{Tag :: t:tag/0, Attributes :: [t:attr/0], Children :: t:children/0}
+
+% t:self_closing_element/0
+{Tag :: t:tag/0, Attributes :: [t:attr/0]}
 ```
 
 Where:
-- `attr()` is `{Key :: atom(), Value :: term()}` or `atom()` (boolean attribute)
-- `child()` is `binary() | iolist() | atom() | number() | element()`
-- `children()` is `[child()] | child()` (can be a list or a single child)
+- `t:tag/0` is an `t:atom/0` representing the HTML tag name
+- `t:attr/0` is `{Key :: atom(), Value :: dynamic()}` or `atom()` (boolean attribute)
+- `t:child/0` is `t:arizona_html:value/0` or `t:element/0`
+- `t:children/0` is `[t:child/0]` or `t:child/0` (can be a list or a single child)
 
 ## Example
 
@@ -25,8 +30,10 @@ Where:
 <<"<div id=\"main\">Hello</div>">>
 2> arizona_erl:to_html({'div', [], ~"Hello"}).
 <<"<div>Hello</div>">>
-3> arizona_erl:to_html({'input', [disabled, {type, ~"text"}], []}).
-<<"<input disabled type=\"text\" />">>
+3> arizona_erl:to_html({input, [{type, ~"text"}, disabled]}).
+<<"<input type=\"text\" disabled />">>
+4> arizona_erl:to_html({br, []}).
+<<"<br />">>
 ```
 """.
 
@@ -48,6 +55,9 @@ Where:
 %% --------------------------------------------------------------------
 
 -export_type([element/0]).
+-export_type([element_with_children/0]).
+-export_type([self_closing_element/0]).
+-export_type([tag/0]).
 -export_type([attr/0]).
 -export_type([child/0]).
 -export_type([children/0]).
@@ -56,10 +66,13 @@ Where:
 %% Types definitions
 %% --------------------------------------------------------------------
 
--nominal element() :: {Tag :: atom(), Attributes :: [attr()], Children :: children()}.
--nominal attr() :: {Key :: atom(), Value :: term()} | atom().
--nominal child() :: arizona_html:value() | element().
+-nominal element() :: element_with_children() | self_closing_element().
+-nominal element_with_children() :: {Tag :: tag(), Attributes :: [attr()], Children :: children()}.
+-nominal self_closing_element() :: {Tag :: tag(), Attributes :: [attr()]}.
+-nominal tag() :: atom().
+-nominal attr() :: {Key :: atom(), Value :: dynamic()} | atom().
 -nominal children() :: [child()] | child().
+-nominal child() :: arizona_html:value() | element().
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -106,17 +119,17 @@ ast_to_html(ElementAST) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-%% Convert single element to HTML
+%% Convert 2-tuple element to self-closing HTML
+element_to_html({Tag, Attrs}) when is_atom(Tag), is_list(Attrs) ->
+    TagBin = atom_to_binary(Tag),
+    AttrsHTML = attrs_to_html(Attrs),
+    build_void_element_html(TagBin, AttrsHTML);
+%% Convert 3-tuple element to HTML
 element_to_html({Tag, Attrs, Children}) when is_atom(Tag), is_list(Attrs) ->
     TagBin = atom_to_binary(Tag),
     AttrsHTML = attrs_to_html(Attrs),
-    case is_void_element(Tag) of
-        true ->
-            build_void_element_html(TagBin, AttrsHTML);
-        false ->
-            ChildrenHTML = children_to_html(Children),
-            build_element_html(TagBin, AttrsHTML, ChildrenHTML)
-    end.
+    ChildrenHTML = children_to_html(Children),
+    build_element_html(TagBin, AttrsHTML, ChildrenHTML).
 
 %% Convert attributes list to HTML
 attrs_to_html(Attrs) ->
@@ -138,8 +151,11 @@ children_to_html(Child) ->
     child_to_html(Child).
 
 %% Convert single child to HTML
+child_to_html({_Tag, _Attrs} = Element) ->
+    % 2-tuple element (self-closing)
+    element_to_html(Element);
 child_to_html({_Tag, _Attrs, _Children} = Element) ->
-    % Nested element
+    % 3-tuple element
     element_to_html(Element);
 child_to_html(Child) ->
     arizona_html:to_html(Child).
@@ -162,36 +178,20 @@ build_element_html(TagBin, AttrsHTML, ChildrenHTML) ->
 build_void_element_html(TagBin, AttrsHTML) ->
     [$<, TagBin, AttrsHTML, $\s, $/, $>].
 
-%% Check if element is a void element (no closing tag)
-is_void_element(area) -> true;
-is_void_element(base) -> true;
-is_void_element(br) -> true;
-is_void_element(col) -> true;
-is_void_element(embed) -> true;
-is_void_element(hr) -> true;
-is_void_element(img) -> true;
-is_void_element(input) -> true;
-is_void_element(link) -> true;
-is_void_element(meta) -> true;
-is_void_element(param) -> true;
-is_void_element(source) -> true;
-is_void_element(track) -> true;
-is_void_element(wbr) -> true;
-is_void_element(_) -> false.
-
 %% Convert single element AST to HTML
 element_ast_to_html(ElementAST) ->
     case extract_element_tuple(ElementAST) of
-        {ok, Tag, AttrsAST, ChildrenAST} ->
+        {ok, Tag, AttrsAST} ->
+            % 2-tuple: self-closing element
             TagBin = atom_to_binary(Tag),
             AttrsHTML = attrs_ast_to_html(AttrsAST),
-            case is_void_element(Tag) of
-                true ->
-                    build_void_element_html(TagBin, AttrsHTML);
-                false ->
-                    ChildrenHTML = children_ast_to_html(ChildrenAST),
-                    build_element_html(TagBin, AttrsHTML, ChildrenHTML)
-            end;
+            build_void_element_html(TagBin, AttrsHTML);
+        {ok, Tag, AttrsAST, ChildrenAST} ->
+            % 3-tuple: element with children
+            TagBin = atom_to_binary(Tag),
+            AttrsHTML = attrs_ast_to_html(AttrsAST),
+            ChildrenHTML = children_ast_to_html(ChildrenAST),
+            build_element_html(TagBin, AttrsHTML, ChildrenHTML);
         error ->
             % Not an element, convert to dynamic expression
             ast_to_html_expr(ElementAST)
@@ -202,7 +202,14 @@ extract_element_tuple(ElementAST) ->
     case erl_syntax:type(ElementAST) of
         tuple ->
             case erl_syntax:tuple_elements(ElementAST) of
+                [{atom, _, Tag}, AttrsAST] ->
+                    % 2-tuple: self-closing element
+                    case is_attr_list(AttrsAST) of
+                        true -> {ok, Tag, AttrsAST};
+                        false -> error
+                    end;
                 [{atom, _, Tag}, AttrsAST, ChildrenAST] ->
+                    % 3-tuple: element with children
                     case is_attr_list(AttrsAST) of
                         true -> {ok, Tag, AttrsAST, ChildrenAST};
                         false -> error
@@ -268,7 +275,11 @@ child_ast_to_html({bin, _, Elements}) ->
     extract_binary_value(Elements);
 child_ast_to_html(ChildAST) ->
     case extract_element_tuple(ChildAST) of
+        {ok, _Tag, _Attrs} ->
+            % 2-tuple element
+            element_ast_to_html(ChildAST);
         {ok, _Tag, _Attrs, _Children} ->
+            % 3-tuple element
             element_ast_to_html(ChildAST);
         error ->
             ast_to_html_expr(ChildAST)
