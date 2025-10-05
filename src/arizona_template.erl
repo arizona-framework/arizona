@@ -198,15 +198,15 @@ new(Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint) ->
 from_erl(Term) when is_tuple(Term); is_list(Term) ->
     error(parse_transform_required).
 
--doc #{equiv => from_html(erlang, 0, String, #{})}.
+-doc #{equiv => from_html(erlang, 0, String, #{}, [])}.
 -spec from_html(Payload) -> Template when
     Payload :: {file, Filename} | {priv_file, App, Filename} | HTML,
     Filename :: file:filename_all(),
     App :: atom(),
     HTML :: arizona_html:html(),
     Template :: template().
-from_html(String) ->
-    from_html(erlang, 0, String, #{}, []).
+from_html(Payload) ->
+    from_html(erlang, 0, Payload, #{}, []).
 
 -doc ~"""""
 Compiles a template string into a template record at runtime.
@@ -337,15 +337,15 @@ from_html(Module, Line, Payload, Bindings, CompileOpts) when is_atom(Module), is
         value
     ).
 
--doc #{equiv => from_html(erlang, 0, String, #{})}.
+-doc #{equiv => from_html(erlang, 0, Payload, #{}, [])}.
 -spec from_markdown(Payload) -> Template when
     Payload :: {file, Filename} | {priv_file, App, Filename} | Markdown,
     Filename :: file:filename_all(),
     App :: atom(),
     Markdown :: arizona_markdown:markdown(),
     Template :: template().
-from_markdown(String) ->
-    from_markdown(erlang, 0, String, #{}, []).
+from_markdown(Payload) ->
+    from_markdown(erlang, 0, Payload, #{}, []).
 
 -doc ~"""""
 Compiles a markdown string with Arizona template syntax into a template record at runtime.
