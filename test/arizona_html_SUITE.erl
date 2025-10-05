@@ -72,10 +72,10 @@ to_html_float(Config) when is_list(Config) ->
     ?assertEqual(~"-1.23", arizona_html:to_html(-1.23)).
 
 to_html_iolist(Config) when is_list(Config) ->
-    ct:comment("Lists should be assumed to be iolists and returned as-is"),
-    ?assertEqual([], arizona_html:to_html([])),
-    ?assertEqual([~"hello", ~"world"], arizona_html:to_html([~"hello", ~"world"])),
-    ?assertEqual([~"hello", 32, ~"world"], arizona_html:to_html([~"hello", 32, ~"world"])).
+    ct:comment("Lists should be converted to binary"),
+    ?assertEqual(<<>>, arizona_html:to_html([])),
+    ?assertEqual(~"hello world", arizona_html:to_html([~"hello ", ~"world"])),
+    ?assertEqual(~"hello world", arizona_html:to_html([~"hello", 32, ~"world"])).
 
 %% --------------------------------------------------------------------
 %% Error cases tests

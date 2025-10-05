@@ -26,6 +26,7 @@ render_menu(Bindings) ->
                         </li>
                         """)
                     end, [
+                        #{url => ~"/hello-world", name => ~"Hello World", desc => ~"Simple event handling"},
                         #{url => ~"/realtime", name => ~"Realtime", desc => ~"PubSub system"},
                         #{url => ~"/counter", name => ~"Counter", desc => ~"Simple state management"},
                         #{url => ~"/todo", name => ~"Todo App", desc => ~"CRUD operations & filtering"},

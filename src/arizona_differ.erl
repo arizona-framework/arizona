@@ -52,7 +52,10 @@ Only changed dynamic parts are included in the diff.
 -nominal diff() :: [
     {
         arizona_tracker:element_index(),
-        diff() | arizona_hierarchical:hierarchical_structure() | arizona_html:html()
+        diff()
+        | arizona_hierarchical:hierarchical_structure()
+        | arizona_html:html()
+        | [arizona_html:html() | [arizona_html:html()]]
     }
 ].
 
