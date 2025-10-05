@@ -23,7 +23,10 @@ groups() ->
             to_html_nested_elements,
             to_html_list_of_elements,
             to_html_escape_special_chars,
-            to_html_with_various_types
+            to_html_with_various_types,
+            to_html_single_binary_child,
+            to_html_single_element_child,
+            to_html_single_atom_child
         ]},
         {ast_to_html, [parallel], [
             ast_to_html_simple_element,
@@ -33,7 +36,10 @@ groups() ->
             ast_to_html_nested_elements,
             ast_to_html_dynamic_child,
             ast_to_html_list_of_elements,
-            ast_to_html_escape_braces
+            ast_to_html_escape_braces,
+            ast_to_html_single_binary_child,
+            ast_to_html_single_element_child,
+            ast_to_html_single_dynamic_child
         ]}
     ].
 
@@ -195,4 +201,51 @@ ast_to_html_escape_braces(_Config) ->
     HTML3 = iolist_to_binary(arizona_erl:ast_to_html(AST3)),
     ?assertEqual(~"<div data=\"\\{\\\"key\\\": \\\"value\\\"}\"></div>", HTML3),
 
+    ok.
+
+%% --------------------------------------------------------------------
+%% Single child tests (runtime)
+%% --------------------------------------------------------------------
+
+to_html_single_binary_child(_Config) ->
+    ct:comment("Element with single binary child (not in a list)"),
+    HTML = arizona_erl:to_html({'div', [], ~"Hello"}),
+    ?assertEqual(~"<div>Hello</div>", HTML),
+    ok.
+
+to_html_single_element_child(_Config) ->
+    ct:comment("Element with single element child (not in a list)"),
+    HTML = arizona_erl:to_html({'div', [], {span, [], [~"inner"]}}),
+    ?assertEqual(~"<div><span>inner</span></div>", HTML),
+    ok.
+
+to_html_single_atom_child(_Config) ->
+    ct:comment("Element with single atom child (not in a list)"),
+    HTML = arizona_erl:to_html({'div', [], hello}),
+    ?assertEqual(~"<div>hello</div>", HTML),
+    ok.
+
+%% --------------------------------------------------------------------
+%% Single child tests (AST)
+%% --------------------------------------------------------------------
+
+ast_to_html_single_binary_child(_Config) ->
+    ct:comment("Convert element with single binary child AST"),
+    AST = merl:quote("{'div', [], ~\"Hello\"}"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<div>Hello</div>", HTML),
+    ok.
+
+ast_to_html_single_element_child(_Config) ->
+    ct:comment("Convert element with single element child AST"),
+    AST = merl:quote("{'div', [], {span, [], [~\"inner\"]}}"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<div><span>inner</span></div>", HTML),
+    ok.
+
+ast_to_html_single_dynamic_child(_Config) ->
+    ct:comment("Convert element with single dynamic child AST"),
+    AST = merl:quote("{'div', [], Title}"),
+    HTML = iolist_to_binary(arizona_erl:ast_to_html(AST)),
+    ?assertEqual(~"<div>{Title}</div>", HTML),
     ok.
