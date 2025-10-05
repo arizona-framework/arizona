@@ -45,7 +45,7 @@ values into HTML content.
 %% Types definitions
 %% --------------------------------------------------------------------
 
--nominal html() :: iodata().
+-nominal html() :: binary().
 -type value() :: binary() | iolist() | atom() | number().
 
 %% --------------------------------------------------------------------
@@ -66,7 +66,7 @@ to_html(Value) when is_binary(Value) ->
     Value;
 % Assume it is an iolist()
 to_html(Value) when is_list(Value) ->
-    Value;
+    iolist_to_binary(Value);
 to_html(Value) when is_atom(Value) ->
     atom_to_binary(Value, utf8);
 to_html(Value) when is_integer(Value) ->

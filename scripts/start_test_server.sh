@@ -29,6 +29,7 @@ maybe
             enabled => true,
             transport_opts => [{port, 8080}],
             routes => [
+                {view, ~\"/hello-world\", arizona_hello_world_view, #{}, []},
                 {view, ~\"/realtime\", arizona_realtime_view, #{}, []},
                 {view, ~\"/counter\", arizona_counter_view, #{}, []},
                 {view, ~\"/todo\", arizona_todo_app_view, #{}, []},

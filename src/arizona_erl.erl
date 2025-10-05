@@ -109,10 +109,10 @@ ast_to_html(ElementAST) ->
         list ->
             % List of elements
             Elements = erl_syntax:list_elements(ElementAST),
-            [element_ast_to_html(El) || El <- Elements];
+            arizona_html:to_html([element_ast_to_html(El) || El <- Elements]);
         _Other ->
             % Single element
-            element_ast_to_html(ElementAST)
+            arizona_html:to_html(element_ast_to_html(ElementAST))
     end.
 
 %% --------------------------------------------------------------------
