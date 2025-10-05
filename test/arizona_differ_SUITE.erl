@@ -106,8 +106,7 @@ diff_stateful_fingerprint_match_with_changes(Config) when is_list(Config) ->
     StatefulState = arizona_view:get_stateful_state(StatefulId, View),
     UpdatedState = arizona_stateful:put_binding(title, ~"Updated Title", StatefulState),
     UpdatedView = arizona_view:put_stateful_state(StatefulId, UpdatedState, View),
-    UpdatedBindings = arizona_stateful:get_bindings(UpdatedState),
-    DiffBindings = arizona_binder:to_map(UpdatedBindings),
+    DiffBindings = arizona_stateful:get_bindings(UpdatedState),
 
     % Test diff_stateful/5 with fingerprint match and changes
     {Result, _DiffView} = arizona_differ:diff_stateful(
@@ -129,8 +128,7 @@ diff_stateful_fingerprint_match_no_changes(Config) when is_list(Config) ->
 
     % Get the stateful component without changing its state
     StatefulState = arizona_view:get_stateful_state(StatefulId, View),
-    Bindings = arizona_stateful:get_bindings(StatefulState),
-    DiffBindings = arizona_binder:to_map(Bindings),
+    DiffBindings = arizona_stateful:get_bindings(StatefulState),
 
     % Test diff_stateful/5 with fingerprint match but no changes
     {Result, _DiffView} = arizona_differ:diff_stateful(
@@ -179,8 +177,7 @@ diff_root_stateful_with_changes(Config) when is_list(Config) ->
     % Get the stateful component's current bindings and update them
     StatefulState = arizona_view:get_stateful_state(StatefulId, View),
     CurrentBindings = arizona_stateful:get_bindings(StatefulState),
-    CurrentBindingsMap = arizona_binder:to_map(CurrentBindings),
-    UpdatedBindings = CurrentBindingsMap#{title => ~"Root Updated Title"},
+    UpdatedBindings = CurrentBindings#{title => ~"Root Updated Title"},
 
     % Test diff_root_stateful/3 with changed bindings (bypasses fingerprint checking)
     {Diff, _DiffView} = arizona_differ:diff_root_stateful(

@@ -311,7 +311,7 @@ Within `{}` expressions, you have access to:
     Filename :: file:filename_all(),
     App :: atom(),
     HTML :: arizona_html:html(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     CompileOpts :: [compile:option()],
     Template :: template().
 from_html(Module, Line, Payload, Bindings, CompileOpts) when is_atom(Module), is_map(Bindings) ->
@@ -447,7 +447,7 @@ Within `{}` expressions, you have access to:
     Filename :: file:filename_all(),
     App :: atom(),
     Markdown :: arizona_markdown:markdown(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     CompileOpts :: [compile:option()],
     Template :: template().
 from_markdown(Module, Line, Payload, Bindings, CompileOpts) when
@@ -533,13 +533,13 @@ Template DSL function - only use inside `arizona_template:from_html/1` strings.
 Records the variable dependency for differential updates and returns the bound value.
 """.
 -spec get_binding(Key, Bindings) -> Value when
-    Key :: arizona_binder:key(),
-    Bindings :: arizona_binder:bindings(),
-    Value :: arizona_binder:value().
+    Key :: dynamic(),
+    Bindings :: map(),
+    Value :: dynamic().
 get_binding(Key, Bindings) ->
     % Record variable dependency for runtime tracking
     _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
-    arizona_binder:get(Key, Bindings).
+    maps:get(Key, Bindings).
 
 -doc ~"""
 Retrieves a variable binding value with default and dependency tracking.
@@ -548,14 +548,14 @@ Template DSL function - only use inside `arizona_template:from_html/1` strings.
 Returns the bound value or provided default value if key not found.
 """.
 -spec get_binding(Key, Bindings, Default) -> Value when
-    Key :: arizona_binder:key(),
-    Bindings :: arizona_binder:bindings(),
-    Default :: arizona_binder:value(),
-    Value :: arizona_binder:value().
+    Key :: dynamic(),
+    Bindings :: map(),
+    Default :: dynamic(),
+    Value :: dynamic().
 get_binding(Key, Bindings, Default) ->
     % Record variable dependency for runtime tracking
     _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
-    arizona_binder:get(Key, Bindings, Default).
+    maps:get(Key, Bindings, Default).
 
 -doc ~"""
 Retrieves a variable binding value with lazy default function and dependency tracking.
@@ -565,14 +565,19 @@ Returns the bound value or calls default function if key not found. Useful for
 expensive computations that should only be performed when needed.
 """.
 -spec get_binding_lazy(Key, Bindings, DefaultFun) -> Value when
-    Key :: arizona_binder:key(),
-    Bindings :: arizona_binder:bindings(),
-    DefaultFun :: arizona_binder:default_fun(),
-    Value :: arizona_binder:value().
-get_binding_lazy(Key, Bindings, DefaultFun) ->
+    Key :: dynamic(),
+    Bindings :: map(),
+    DefaultFun :: fun(() -> dynamic()),
+    Value :: dynamic().
+get_binding_lazy(Key, Bindings, DefaultFun) when is_map(Bindings), is_function(DefaultFun, 0) ->
     % Record variable dependency for runtime tracking
     _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
-    arizona_binder:get_lazy(Key, Bindings, DefaultFun).
+    case Bindings of
+        #{Key := Value} ->
+            Value;
+        #{} ->
+            apply(DefaultFun, [])
+    end.
 
 -doc ~"""
 Safely finds a variable binding value with dependency tracking.
@@ -581,13 +586,13 @@ Template DSL function - only use inside `arizona_template:from_html/1` strings.
 Returns `{ok, Value}` if found, `error` if not found.
 """.
 -spec find_binding(Key, Bindings) -> {ok, Value} | error when
-    Key :: arizona_binder:key(),
-    Bindings :: arizona_binder:bindings(),
-    Value :: arizona_binder:value().
-find_binding(Key, Bindings) ->
+    Key :: dynamic(),
+    Bindings :: map(),
+    Value :: dynamic().
+find_binding(Key, Bindings) when is_map(Bindings) ->
     % Record variable dependency for runtime tracking
     _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
-    arizona_binder:find(Key, Bindings).
+    maps:find(Key, Bindings).
 
 -doc ~"""
 Creates a stateful component rendering callback.
@@ -597,7 +602,7 @@ Returns a callback that handles all three rendering modes for the component.
 """.
 -spec render_stateful(Module, Bindings) -> Callback when
     Module :: module(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     Callback :: render_callback().
 render_stateful(Module, Bindings) ->
     render_stateful(Module, Bindings, #{}).
@@ -612,7 +617,7 @@ See `t:render_options/0` for available options.
 """.
 -spec render_stateful(Module, Bindings, Options) -> Callback when
     Module :: module(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     Options :: render_options(),
     Callback :: render_callback().
 render_stateful(Module, Bindings, Options) ->
@@ -641,7 +646,7 @@ Returns a callback that handles all three rendering modes for the component.
 -spec render_stateless(Module, Function, Bindings) -> Callback when
     Module :: module(),
     Function :: atom(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     Callback :: render_callback().
 render_stateless(Module, Fun, Bindings) ->
     render_stateless(Module, Fun, Bindings, #{}).
@@ -657,7 +662,7 @@ See `t:render_options/0` for available options.
 -spec render_stateless(Module, Function, Bindings, Options) -> Callback when
     Module :: module(),
     Function :: atom(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     Options :: render_options(),
     Callback :: render_callback().
 render_stateless(Module, Fun, Bindings, Options) ->

@@ -86,7 +86,7 @@ to full hierarchical rendering.
 """.
 -spec diff_stateful(Module, Bindings, ParentId, ElementIndex, View) -> {Result, View1} when
     Module :: module(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
@@ -129,7 +129,7 @@ a parent context. Always generates a diff without fingerprint checking.
 """.
 -spec diff_root_stateful(Module, Bindings, View) -> {Diff, View1} when
     Module :: module(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     View :: arizona_view:view(),
     Diff :: diff(),
     View1 :: arizona_view:view().
@@ -151,7 +151,7 @@ then delegates to `diff_template/5` for the actual diff generation.
 when
     Module :: module(),
     Function :: atom(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     ParentId :: arizona_stateful:id(),
     ElementIndex :: arizona_tracker:element_index(),
     View :: arizona_view:view(),
@@ -276,13 +276,13 @@ diff_template(Template, ParentId, ElementIndex, ComponentType, View) ->
 track_diff_stateful(Id, Template, StatefulState, View) ->
     Tracker = arizona_tracker_dict:set_current_stateful_id(Id),
     ChangedBindings = arizona_stateful:get_changed_bindings(StatefulState),
-    case arizona_binder:is_empty(ChangedBindings) of
-        true ->
+    case map_size(ChangedBindings) of
+        0 ->
             {[], StatefulState, View};
-        false ->
+        _ChangedSize ->
             StatefulDependencies = arizona_tracker:get_stateful_dependencies(Id, Tracker),
             % Clear dependencies only for changed variables
-            ChangedVarNames = arizona_binder:keys(ChangedBindings),
+            ChangedVarNames = maps:keys(ChangedBindings),
             _NewOldTracker = arizona_tracker_dict:clear_changed_variable_dependencies(
                 Id, ChangedVarNames
             ),
@@ -291,14 +291,14 @@ track_diff_stateful(Id, Template, StatefulState, View) ->
                 AffectedElements, Template, Id, undefined, View
             ),
             NoChangesStatefulState = arizona_stateful:set_changed_bindings(
-                arizona_binder:new(#{}), StatefulState
+                #{}, StatefulState
             ),
             {Diff, NoChangesStatefulState, DiffView}
     end.
 
 %% Get affected elements from changed bindings and variable dependencies
 get_affected_elements(ChangedBindings, StatefulDependencies) ->
-    ChangedVarNames = arizona_binder:keys(ChangedBindings),
+    ChangedVarNames = maps:keys(ChangedBindings),
     AffectedIndexLists = [
         maps:get(VarName, StatefulDependencies, [])
      || VarName <- ChangedVarNames

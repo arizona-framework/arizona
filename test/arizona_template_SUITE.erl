@@ -389,15 +389,13 @@ get_fingerprint_test(Config) when is_list(Config) ->
 
 get_binding_test(Config) when is_list(Config) ->
     ct:comment("get_binding/2 should retrieve binding value"),
-    BindingsMap = #{name => ~"John", age => 25},
-    Bindings = arizona_binder:new(BindingsMap),
+    Bindings = #{name => ~"John", age => 25},
     ?assertEqual(~"John", arizona_template:get_binding(name, Bindings)),
     ?assertEqual(25, arizona_template:get_binding(age, Bindings)).
 
 get_binding_with_default_test(Config) when is_list(Config) ->
     ct:comment("get_binding/3 should use default when key not found"),
-    BindingsMap = #{name => ~"John"},
-    Bindings = arizona_binder:new(BindingsMap),
+    Bindings = #{name => ~"John"},
     ?assertEqual(~"John", arizona_template:get_binding(name, Bindings, ~"Default")),
     ?assertEqual(
         ~"Default", arizona_template:get_binding(missing, Bindings, ~"Default")
@@ -405,8 +403,7 @@ get_binding_with_default_test(Config) when is_list(Config) ->
 
 find_binding_test(Config) when is_list(Config) ->
     ct:comment("find_binding/2 should return {ok, Value} or error"),
-    BindingsMap = #{name => ~"John", age => 25},
-    Bindings = arizona_binder:new(BindingsMap),
+    Bindings = #{name => ~"John", age => 25},
     ?assertEqual({ok, ~"John"}, arizona_template:find_binding(name, Bindings)),
     ?assertEqual({ok, 25}, arizona_template:find_binding(age, Bindings)),
     ?assertEqual(error, arizona_template:find_binding(missing, Bindings)).

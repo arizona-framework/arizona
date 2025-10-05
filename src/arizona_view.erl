@@ -115,7 +115,7 @@ terminate(_Reason, _View) ->
     Module :: module(),
     RenderFun :: atom(),
     SlotName :: atom(),
-    Bindings :: arizona_binder:map()
+    Bindings :: map()
 }.
 -nominal mount_arg() :: dynamic().
 -nominal handle_event_result() :: {Actions :: arizona_action:actions(), View :: view()}.
@@ -132,7 +132,7 @@ terminate(_Reason, _View) ->
     View :: view().
 
 -callback render(Bindings) -> Template when
-    Bindings :: arizona_binder:bindings(),
+    Bindings :: map(),
     Template :: arizona_template:template().
 
 -callback handle_event(Event, Payload, View) -> Result when
@@ -264,7 +264,7 @@ Layout tuple specifies wrapper module, function, slot name, and bindings.
 """.
 -spec new(Module, Bindings, Layout) -> View when
     Module :: module(),
-    Bindings :: arizona_binder:map(),
+    Bindings :: map(),
     Layout :: layout() | none,
     View :: view().
 new(Module, Bindings, Layout) when is_atom(Module), (is_tuple(Layout) orelse Layout =:= none) ->

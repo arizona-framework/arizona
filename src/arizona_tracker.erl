@@ -69,7 +69,7 @@ specific variables change. Essential for WebSocket-based real-time updates.
 -nominal dependencies() :: #{arizona_stateful:id() => stateful_dependencies()}.
 -nominal stateful_dependencies() :: #{var_name() => [element_index()]}.
 -nominal element_index() :: non_neg_integer().
--nominal var_name() :: arizona_binder:key().
+-nominal var_name() :: dynamic().
 
 %% --------------------------------------------------------------------
 %% API function definitions
