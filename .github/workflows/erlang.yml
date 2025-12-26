@@ -49,11 +49,11 @@ jobs:
         run: |
           # Extract version from package.json devDependencies
           version="$(grep -oP '(?<="@playwright/test": ")[^"]+' package.json)"
-          test -n "$version" || {
+          test -n "${version}" || {
             echo "No @playwright/test version found in package.json"
             exit 1
           }
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
   cache-erlang:
     name: Cache Erlang
