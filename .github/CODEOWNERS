@@ -2,30 +2,30 @@
 # See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
 # Global ownership - all files require review from maintainers
-* @williamthome @paulo-ferraz-oliveira
+* @williamthome
 
 # Core Erlang modules - require maintainer review
-/src/ @williamthome @paulo-ferraz-oliveira
-/test/ @williamthome @paulo-ferraz-oliveira
+/src/ @williamthome
+/test/ @williamthome
 
 # Build and configuration files
-/rebar.config @williamthome @paulo-ferraz-oliveira
-/rebar.lock @williamthome @paulo-ferraz-oliveira
-/.tool-versions @williamthome @paulo-ferraz-oliveira
+/rebar.config @williamthome
+/rebar.lock @williamthome
+/.tool-versions @williamthome
 
 # CI/CD and GitHub configuration
-/.github/ @williamthome @paulo-ferraz-oliveira
+/.github/ @williamthome
 
 # Documentation
-/README.md @williamthome @paulo-ferraz-oliveira
-/CONTRIBUTING.md @williamthome @paulo-ferraz-oliveira
-/CHANGELOG.md @williamthome @paulo-ferraz-oliveira
+/README.md @williamthome
+/CONTRIBUTING.md @williamthome
+/CHANGELOG.md @williamthome
 
 # JavaScript assets and configuration
-/assets/ @williamthome @paulo-ferraz-oliveira
-/package.json @williamthome @paulo-ferraz-oliveira
-/package-lock.json @williamthome @paulo-ferraz-oliveira
+/assets/ @williamthome
+/package.json @williamthome
+/package-lock.json @williamthome
 
 # Git hooks and development tools
-/.husky/ @williamthome @paulo-ferraz-oliveira
-/scripts/ @williamthome @paulo-ferraz-oliveira
+/.husky/ @williamthome
+/scripts/ @williamthome
