@@ -10,7 +10,9 @@ vi.stubGlobal('self', {
 });
 
 // Create spy for MockWebSocket
-const WebSocketSpy = vi.fn().mockImplementation((url) => {
+// Note: Must use 'function' instead of arrow function for vitest 4.x
+// Arrow functions cannot be constructors (called with 'new')
+const WebSocketSpy = vi.fn().mockImplementation(function (url) {
   return new MockWebSocket(url);
 });
 
