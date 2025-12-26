@@ -240,9 +240,9 @@ jobs:
 
       - name: Check if build left artifacts
         run: |
-          rebar3 unlock --all
-          rebar3 upgrade --all
-          git diff --exit-code
+          rebar3 compile
+          # Exclude NIF binary - not reproducible across environments
+          git diff --exit-code -- ':!priv/*.so'
 
   # Runs E2E tests in parallel using Playwright Docker containers with
   # pre-installed browsers. The container image version matches package.json
