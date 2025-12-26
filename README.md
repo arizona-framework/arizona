@@ -120,7 +120,7 @@ Create `config/sys.config`:
                 {view, ~"/", home_view, #{}, []},  % Empty middleware list
                 {websocket, ~"/live", #{}, []},    % WebSocket options + middleware list
                 {controller, ~"/api/presence", my_api_controller, #{}, []},  % Plain Cowboy handler
-                {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}, []}  % Required for live features
+                {asset, ~"/assets", {priv_dir, arizona, ~"static/assets"}, []}  % Live features
             ]
         }},
         {reloader, #{
@@ -1275,7 +1275,7 @@ Arizona provides additional tools to enhance the development experience:
 
 ### **Editor Support**
 
-- **[arizona.nvim](https://github.com/arizona-framework/arizona.nvim)** - Neovim plugin for Arizona development
+- **[arizona.nvim](https://github.com/arizona-framework/arizona.nvim)** - Neovim plugin for development
 - **[tree-sitter-arizona](https://github.com/arizona-framework/tree-sitter-arizona)** - Tree-sitter
   grammar for Arizona templates
 
