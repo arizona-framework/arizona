@@ -42,7 +42,7 @@ jobs:
       version: ${{ steps.resolve-playwright-version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: Resolve Playwright version
         id: resolve-playwright-version
@@ -65,7 +65,7 @@ jobs:
       rebar-cache-key: ${{ steps.set-rebar-key.outputs.key }}
 
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         id: setup-beam
@@ -95,7 +95,7 @@ jobs:
           >> "${GITHUB_OUTPUT}"
 
       - name: Cache _build
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: _build
           key: ${{ steps.set-build-key.outputs.key }}
@@ -104,7 +104,7 @@ jobs:
             _build-${{ runner.os }}-
 
       - name: Cache rebar3
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.cache/rebar3
           key: ${{ steps.set-rebar-key.outputs.key }}
@@ -124,7 +124,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         id: setup-beam
@@ -134,7 +134,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -144,7 +144,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -164,7 +164,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         id: setup-beam
@@ -174,7 +174,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -184,7 +184,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -210,7 +210,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         id: setup-beam
@@ -220,7 +220,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -230,7 +230,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -274,7 +274,7 @@ jobs:
       options: --user root
 
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       # Fix Docker config warnings for GitHub Actions cleanup
       - name: Setup Docker config
@@ -292,7 +292,7 @@ jobs:
       # Ref: https://github.com/orgs/community/discussions/53771
       - name: Cache apt packages
         id: cache-apt
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: /var/cache/apt/archives
           key: apt-${{ runner.os }}-build-essential-inotify-tools
@@ -311,7 +311,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -321,7 +321,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -339,7 +339,7 @@ jobs:
         run: npm run test:e2e:parallel
 
       - name: Upload Playwright report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: failure()
         with:
           name: playwright-report-parallel
@@ -371,7 +371,7 @@ jobs:
       options: --user root
 
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       # Fix Docker config warnings for GitHub Actions cleanup
       - name: Setup Docker config
@@ -389,7 +389,7 @@ jobs:
       # Ref: https://github.com/orgs/community/discussions/53771
       - name: Cache apt packages
         id: cache-apt
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: /var/cache/apt/archives
           key: apt-${{ runner.os }}-build-essential-inotify-tools
@@ -408,7 +408,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -418,7 +418,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -436,7 +436,7 @@ jobs:
         run: npm run test:e2e:sequential
 
       - name: Upload Playwright report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: failure()
         with:
           name: playwright-report-sequential
