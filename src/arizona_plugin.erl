@@ -57,7 +57,7 @@ Plugins execute in list order during Arizona application startup.
 %% --------------------------------------------------------------------
 
 -callback transform_config(Config, PluginConfig) -> Config when
-    Config :: arizona:config(),
+    Config :: arizona_config:config(),
     PluginConfig :: dynamic().
 
 %% --------------------------------------------------------------------
@@ -72,7 +72,7 @@ If any plugin fails, the application startup will fail with a clear error
 message indicating which plugin caused the failure.
 """.
 -spec apply_plugins(Config) -> Config when
-    Config :: arizona:config().
+    Config :: arizona_config:config().
 apply_plugins(Config) ->
     % Get list of plugins from the config
     Plugins = maps:get(plugins, Config),

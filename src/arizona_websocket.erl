@@ -261,7 +261,7 @@ terminate(_Reason, _Req, _State) ->
 %% --------------------------------------------------------------------
 
 maybe_join_live_reload() ->
-    case arizona:get_config() of
+    case arizona_config:get() of
         #{reloader := #{enabled := true}} ->
             ok = arizona_pubsub:join(~"arizona:reload", self()),
             logger:debug("Subscribed to arizona:reload topic");
