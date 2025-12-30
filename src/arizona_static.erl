@@ -125,13 +125,13 @@ Returns specific errors for different failure modes:
 Generates a static site from the given configuration using current Arizona config.
 
 Convenience function that calls generate/2 with the current Arizona application
-configuration obtained from arizona:get_config/0.
+configuration obtained from arizona_config:get/0.
 """.
 -spec generate(Config) -> ok | {error, ErrReason} when
     Config :: config(),
     ErrReason :: generation_error().
 generate(Config) ->
-    generate(Config, arizona:get_config()).
+    generate(Config, arizona_config:get()).
 
 -doc ~"""
 Generates a static site from the given configuration.
@@ -142,7 +142,7 @@ for SEO purposes.
 """.
 -spec generate(Config, ArizonaConfig) -> ok | {error, ErrReason} when
     Config :: config(),
-    ArizonaConfig :: arizona:config(),
+    ArizonaConfig :: arizona_config:config(),
     ErrReason :: generation_error().
 generate(#{route_paths := RoutePaths, output_dir := OutputDir} = Config, ArizonaConfig) ->
     maybe

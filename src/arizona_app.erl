@@ -21,7 +21,7 @@
     ErrReason :: term().
 start(_StartType, _StartArgs) ->
     maybe
-        Config = arizona:get_config(),
+        Config = arizona_config:get(),
         % Extract configs
         ReloaderConfig = maps:get(reloader, Config),
         ServerConfig = maps:get(server, Config),
