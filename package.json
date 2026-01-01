@@ -94,7 +94,7 @@
     "@vitest/coverage-v8": "4.0.16",
     "clang-format": "1.8.0",
     "eslint": "9.39.2",
-    "globals": "16.5.0",
+    "globals": "17.0.0",
     "husky": "9.1.7",
     "markdownlint-cli2": "0.20.0",
     "prettier": "3.7.4",
