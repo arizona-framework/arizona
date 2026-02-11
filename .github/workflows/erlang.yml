@@ -241,8 +241,7 @@ jobs:
       - name: Check if build left artifacts
         run: |
           rebar3 compile
-          # Exclude NIF binary - not reproducible across environments
-          git diff --exit-code -- ':!priv/*.so'
+          git diff --exit-code
 
   # Runs E2E tests in parallel using Playwright Docker containers with
   # pre-installed browsers. The container image version matches package.json
@@ -295,12 +294,12 @@ jobs:
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-build-essential-inotify-tools
+          key: apt-${{ runner.os }}-inotify-tools
 
       - name: Install build dependencies
         run: |
           apt-get update
-          apt-get install -y build-essential inotify-tools
+          apt-get install -y inotify-tools
 
       - name: Setup Node.js
         uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
@@ -392,12 +391,12 @@ jobs:
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-build-essential-inotify-tools
+          key: apt-${{ runner.os }}-inotify-tools
 
       - name: Install build dependencies
         run: |
           apt-get update
-          apt-get install -y build-essential inotify-tools
+          apt-get install -y inotify-tools
 
       - name: Setup Node.js
         uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0

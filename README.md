@@ -419,7 +419,8 @@ content-driven applications.
 
 - **Full GFM**: Tables, autolinks, strikethrough, task lists, tag filtering
 - **Template Integration**: `{expressions}` and `%` comments work within markdown
-- **High Performance**: Built on `cmark-gfm` C library via NIF
+- **Pure Erlang**: Built on WhatsApp's
+  [erlang-markdown](https://github.com/WhatsApp/erlang-markdown) library
 - **Production Ready**: Safety limits, error handling, comprehensive tests
 
 ### **Basic Usage**
@@ -427,7 +428,7 @@ content-driven applications.
 ```erlang
 % Pure markdown to HTML
 {ok, Html} = arizona_markdown:to_html(~"# Hello **World**")
-% Returns: ~"<h1>Hello <strong>World</strong></h1>\n"
+% Returns: ~"<h1>Hello <strong>World</strong></h1>"
 
 % Inline markdown template
 arizona_template:from_markdown(~"""
@@ -446,8 +447,8 @@ Welcome **{arizona_template:get_binding(user, Bindings)}**!
 arizona_template:from_markdown({file, "content/blog-post.md"})
 arizona_template:from_markdown({priv_file, myapp, "content/blog-post.md"})
 
-% With markdown options
-{ok, Html} = arizona_markdown:to_html(~"# Hello", [source_pos, smart])
+% With unsafe option (allows raw HTML passthrough)
+{ok, Html} = arizona_markdown:to_html(~"<div>raw html</div>", [unsafe])
 ```
 
 ### **Blog Example**
