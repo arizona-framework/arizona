@@ -42,7 +42,7 @@ jobs:
       version: ${{ steps.resolve-playwright-version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Resolve Playwright version
         id: resolve-playwright-version
@@ -65,7 +65,7 @@ jobs:
       rebar-cache-key: ${{ steps.set-rebar-key.outputs.key }}
 
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         id: setup-beam
@@ -95,7 +95,7 @@ jobs:
           >> "${GITHUB_OUTPUT}"
 
       - name: Cache _build
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: _build
           key: ${{ steps.set-build-key.outputs.key }}
@@ -104,7 +104,7 @@ jobs:
             _build-${{ runner.os }}-
 
       - name: Cache rebar3
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: ~/.cache/rebar3
           key: ${{ steps.set-rebar-key.outputs.key }}
@@ -124,7 +124,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         id: setup-beam
@@ -134,7 +134,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -144,7 +144,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -164,7 +164,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         id: setup-beam
@@ -174,7 +174,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -184,7 +184,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -210,7 +210,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         id: setup-beam
@@ -220,7 +220,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -230,7 +230,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -273,7 +273,7 @@ jobs:
       options: --user root
 
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # Fix Docker config warnings for GitHub Actions cleanup
       - name: Setup Docker config
@@ -291,7 +291,7 @@ jobs:
       # Ref: https://github.com/orgs/community/discussions/53771
       - name: Cache apt packages
         id: cache-apt
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: /var/cache/apt/archives
           key: apt-${{ runner.os }}-inotify-tools
@@ -302,7 +302,7 @@ jobs:
           apt-get install -y inotify-tools
 
       - name: Setup Node.js
-        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
         with:
           node-version-file: .tool-versions
           cache: "npm"
@@ -310,7 +310,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -320,7 +320,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -370,7 +370,7 @@ jobs:
       options: --user root
 
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # Fix Docker config warnings for GitHub Actions cleanup
       - name: Setup Docker config
@@ -388,7 +388,7 @@ jobs:
       # Ref: https://github.com/orgs/community/discussions/53771
       - name: Cache apt packages
         id: cache-apt
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: /var/cache/apt/archives
           key: apt-${{ runner.os }}-inotify-tools
@@ -399,7 +399,7 @@ jobs:
           apt-get install -y inotify-tools
 
       - name: Setup Node.js
-        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
         with:
           node-version-file: .tool-versions
           cache: "npm"
@@ -407,7 +407,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -417,7 +417,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
