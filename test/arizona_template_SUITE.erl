@@ -245,14 +245,14 @@ from_markdown_simple_test(Config) when is_list(Config) ->
     Template = arizona_template:from_markdown(~"# Hello World\n\nThis is **bold** text."),
     ?assert(arizona_template:is_template(Template)),
     Static = arizona_template:get_static(Template),
-    ?assertEqual([~"<h1>Hello World</h1>\n<p>This is <strong>bold</strong> text.</p>\n"], Static).
+    ?assertEqual([~"<h1>Hello World</h1>\n<p>This is <strong>bold</strong> text.</p>"], Static).
 
 from_markdown_with_dynamic_test(Config) when is_list(Config) ->
     ct:comment("from_markdown/1 should create template with dynamic content in markdown"),
     Template = arizona_template:from_markdown(~"# {~\"Test Title\"}\n\nContent here."),
     ?assert(arizona_template:is_template(Template)),
     Static = arizona_template:get_static(Template),
-    ?assertEqual([~"<h1>", ~"</h1>\n<p>Content here.</p>\n"], Static),
+    ?assertEqual([~"<h1>", ~"</h1>\n<p>Content here.</p>"], Static),
 
     % Test that dynamic parts are correctly preserved
     Dynamic = arizona_template:get_dynamic(Template),
@@ -276,7 +276,7 @@ from_markdown_mixed_content_test(Config) when is_list(Config) ->
         ~"<h1>Hello ",
         ~"!</h1>\n<p>You have <strong>",
         ~"</strong> items.</p>\n<ul>\n<li>Item 1</li>\n<li>Item ",
-        ~"</li>\n</ul>\n"
+        ~"</li>\n</ul>"
     ],
     ?assertEqual(ExpectedStatic, Static),
 
@@ -319,7 +319,7 @@ from_markdown_file_test(Config) when is_list(Config) ->
         ~"</h1>\n<p>Welcome <strong>",
         ~"</strong>!</p>\n<p>",
         ~"</p>\n<h2>List of items</h2>\n<p>",
-        ~"</p>\n"
+        ~"</p>"
     ],
     ?assertEqual(ExpectedStatic, Static).
 
@@ -336,7 +336,7 @@ from_markdown_priv_file_test(Config) when is_list(Config) ->
         ~"</h1>\n<p>Welcome <strong>",
         ~"</strong>!</p>\n<p>",
         ~"</p>\n<h2>List of items</h2>\n<p>",
-        ~"</p>\n"
+        ~"</p>"
     ],
     ?assertEqual(ExpectedStatic, Static).
 

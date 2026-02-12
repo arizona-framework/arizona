@@ -33,14 +33,14 @@ process_simple_markdown_test(Config) when is_list(Config) ->
     ct:comment("process_markdown_template/2 should handle simple markdown"),
     Markdown = ~"# Hello World\n\nThis is **bold** text.",
     HTML = arizona_markdown_processor:process_markdown_template(Markdown, 1),
-    Expected = ~"<h1>Hello World</h1>\n<p>This is <strong>bold</strong> text.</p>\n",
+    Expected = ~"<h1>Hello World</h1>\n<p>This is <strong>bold</strong> text.</p>",
     ?assertEqual(Expected, HTML).
 
 process_markdown_with_dynamic_test(Config) when is_list(Config) ->
     ct:comment("process_markdown_template/2 should preserve dynamic expressions"),
     Markdown = ~"# {~\"Test Title\"}\n\nContent here.",
     HTML = arizona_markdown_processor:process_markdown_template(Markdown, 1),
-    Expected = ~"<h1>{~\"Test Title\"}</h1>\n<p>Content here.</p>\n",
+    Expected = ~"<h1>{~\"Test Title\"}</h1>\n<p>Content here.</p>",
     ?assertEqual(Expected, HTML).
 
 process_markdown_with_escaped_braces_test(Config) when is_list(Config) ->
@@ -51,7 +51,6 @@ process_markdown_with_escaped_braces_test(Config) when is_list(Config) ->
     HTML = arizona_markdown_processor:process_markdown_template(Markdown, 1),
     Expected = ~"""
     <p><button onclick="arizona.pushEvent('test', \{id: {42}});">Click</button></p>
-
     """,
     ?assertEqual(Expected, HTML).
 
@@ -81,7 +80,6 @@ process_markdown_with_mixed_content_test(Config) when is_list(Config) ->
     <li>List item</li>
     <li>Another {~"item"}</li>
     </ul>
-
     """,
     ?assertEqual(Expected, HTML).
 
@@ -99,7 +97,6 @@ process_markdown_with_comments_test(Config) when is_list(Config) ->
     Expected = ~"""
     <h1>Title</h1>
     <p>Hello {~"World"}!</p>
-
     """,
     ?assertEqual(Expected, HTML).
 
