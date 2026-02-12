@@ -86,11 +86,11 @@
     "morphdom": "2.7.7"
   },
   "devDependencies": {
-    "@eslint/js": "9.39.2",
+    "@eslint/js": "10.0.1",
     "@playwright/test": "1.57.0",
     "@vitest/coverage-v8": "4.0.16",
-    "eslint": "9.39.2",
-    "globals": "16.5.0",
+    "eslint": "10.0.0",
+    "globals": "17.3.0",
     "husky": "9.1.7",
     "markdownlint-cli2": "0.20.0",
     "prettier": "3.7.4",
