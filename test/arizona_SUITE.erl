@@ -452,10 +452,17 @@ stateless_diff(Config) when is_list(Config) ->
     Statics = maps:get(<<"s">>, Payload),
     ?assertEqual(5, length(Statics)),
     StaticsBin = iolist_to_binary(Statics),
-    ?assertNotEqual(nomatch, binary:match(StaticsBin, <<"az-click=\"">>)),
+    %% Attr names are no longer baked into statics -- check az-view and Count:
+    ?assertNotEqual(nomatch, binary:match(StaticsBin, <<"az-view">>)),
     ?assertNotEqual(nomatch, binary:match(StaticsBin, <<"Count: ">>)),
+    %% Dynamics now carry full attribute strings via unwrap_val
     ?assertEqual(
-        [<<"sl">>, <<"[0,&quot;inc&quot;]">>, <<"[0,&quot;dec&quot;]">>, <<"5">>],
+        [
+            <<" id=\"sl\"">>,
+            <<" az-click=\"[0,&quot;inc&quot;]\"">>,
+            <<" az-click=\"[0,&quot;dec&quot;]\"">>,
+            <<"5">>
+        ],
         maps:get(<<"d">>, Payload)
     ).
 

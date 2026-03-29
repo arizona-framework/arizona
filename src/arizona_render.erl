@@ -129,8 +129,8 @@ zip_item(#{s := S}, D) ->
 render_ssr_dynamics(Dynamics) ->
     [render_ssr_one(D) || D <:- Dynamics].
 
-render_ssr_one({_Az, {attr, _Name, Fun}, _Loc}) when is_function(Fun, 0) ->
-    render_ssr_val(Fun());
+render_ssr_one({_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
+    render_ssr_attr(Name, Fun());
 render_ssr_one({_Az, Spec, {Mod, Line}}) ->
     try
         render_ssr_val(Spec)
@@ -138,8 +138,8 @@ render_ssr_one({_Az, Spec, {Mod, Line}}) ->
         Class:Reason:ST ->
             erlang:raise(Class, {arizona_loc, {Mod, Line}, Reason}, ST)
     end;
-render_ssr_one({_Az, {attr, _Name, Fun}}) when is_function(Fun, 0) ->
-    render_ssr_val(Fun());
+render_ssr_one({_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
+    render_ssr_attr(Name, Fun());
 render_ssr_one({_Az, Spec}) ->
     render_ssr_val(Spec).
 
@@ -179,6 +179,9 @@ render_ssr_val(#{s := Statics, d := Dynamics} = Tmpl) ->
 render_ssr_val(Val) ->
     arizona_template:to_bin(Val).
 
+render_ssr_attr(Name, Val) ->
+    arizona_template:render_attr(Name, Val).
+
 %% --- make_ssr_child_snap/1 ---------------------------------------------------
 
 make_ssr_child_snap(#{s := S, d := Dynamics} = Tmpl) ->
@@ -210,8 +213,8 @@ fingerprint_payload(#{s := S, d := D}) ->
 
 %% --- render_fp_val/1 ---------------------------------------------------------
 
-render_fp_val({attr, _, V}) ->
-    render_fp_val(V);
+render_fp_val({attr, Name, V}) ->
+    arizona_template:render_attr(Name, V);
 render_fp_val(#{f := _} = Nested) ->
     fingerprint_payload(Nested);
 render_fp_val(#{s := S, d := D}) ->
@@ -335,7 +338,7 @@ render_ssr_one_3tuple_text_test() ->
 
 render_ssr_one_3tuple_attr_test() ->
     Dyn = {<<"0">>, {attr, <<"class">>, fun() -> <<"box">> end}, {test_mod, 20}},
-    ?assertEqual(<<"box">>, render_ssr_one(Dyn)).
+    ?assertEqual(<<" class=\"box\"">>, render_ssr_one(Dyn)).
 
 render_ssr_one_2tuple_bad_value_test() ->
     Dyn = {<<"0">>, fun() -> {} end},

@@ -11,6 +11,7 @@
     dyn_az/1,
     format_error/1,
     unwrap_val/1,
+    render_attr/2,
     maybe_propagate/2,
     maybe_put_fingerprint/2,
     make_child_snap/4,
@@ -127,8 +128,12 @@ format_error({bad_template_value, V}) ->
 
 %% --- unwrap_val ---------------------------------------------------------------
 
-unwrap_val({attr, _, V}) -> V;
+unwrap_val({attr, Name, V}) -> render_attr(Name, V);
 unwrap_val(V) -> V.
+
+render_attr(_Name, false) -> <<>>;
+render_attr(Name, true) -> <<" ", Name/binary>>;
+render_attr(Name, V) -> <<" ", Name/binary, "=\"", (to_bin(V))/binary, "\"">>.
 
 %% --- maybe_propagate/2 --------------------------------------------------------
 %% Propagate both `f` and `diff => false` from template to snapshot.

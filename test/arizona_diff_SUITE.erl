@@ -5,6 +5,9 @@
 -export([all/0, groups/0]).
 -export([
     diff_attr_op/1,
+    diff_bool_attr_add/1,
+    diff_bool_attr_remove/1,
+    diff_bool_attr_no_change/1,
     diff_mixed_op/1,
     diff_nested_text_op/1,
     diff_no_change_op/1,
@@ -34,7 +37,10 @@ groups() ->
             diff_mixed_op,
             diff_remove_node_op,
             diff_replace_with_template_op,
-            diff_only_changed_emits_ops
+            diff_only_changed_emits_ops,
+            diff_bool_attr_add,
+            diff_bool_attr_remove,
+            diff_bool_attr_no_change
         ]},
         {no_diff, [parallel], [
             no_diff_ops,
@@ -75,6 +81,48 @@ diff_attr_op(Config) when is_list(Config) ->
     },
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
     ?assertEqual([[?OP_SET_ATTR, <<"0">>, <<"class">>, <<"inactive">>]], Ops).
+
+%% Bool attr: false -> true produces OP_SET_ATTR with empty value.
+diff_bool_attr_add(Config) when is_list(Config) ->
+    OldSnap = #{
+        s => [<<"<input az=\"0\"">>, <<" />">>],
+        d => [{<<"0">>, {attr, <<"checked">>, false}}]
+    },
+    NewTmpl = #{
+        s => [<<"<input az=\"0\"">>, <<" />">>],
+        d => [{<<"0">>, {attr, <<"checked">>, fun() -> true end}}],
+        f => <<"test">>
+    },
+    {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
+    ?assertEqual([[?OP_SET_ATTR, <<"0">>, <<"checked">>, <<>>]], Ops).
+
+%% Bool attr: true -> false produces OP_REM_ATTR.
+diff_bool_attr_remove(Config) when is_list(Config) ->
+    OldSnap = #{
+        s => [<<"<input az=\"0\"">>, <<" />">>],
+        d => [{<<"0">>, {attr, <<"checked">>, true}}]
+    },
+    NewTmpl = #{
+        s => [<<"<input az=\"0\"">>, <<" />">>],
+        d => [{<<"0">>, {attr, <<"checked">>, fun() -> false end}}],
+        f => <<"test">>
+    },
+    {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
+    ?assertEqual([[?OP_REM_ATTR, <<"0">>, <<"checked">>]], Ops).
+
+%% Bool attr: true -> true produces no ops.
+diff_bool_attr_no_change(Config) when is_list(Config) ->
+    OldSnap = #{
+        s => [<<"<input az=\"0\"">>, <<" />">>],
+        d => [{<<"0">>, {attr, <<"checked">>, true}}]
+    },
+    NewTmpl = #{
+        s => [<<"<input az=\"0\"">>, <<" />">>],
+        d => [{<<"0">>, {attr, <<"checked">>, fun() -> true end}}],
+        f => <<"test">>
+    },
+    {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
+    ?assertEqual([], Ops).
 
 diff_no_change_op(Config) when is_list(Config) ->
     OldSnap = #{

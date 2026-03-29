@@ -174,7 +174,7 @@ render_text(Config) when is_list(Config) ->
 
 render_attr(Config) when is_list(Config) ->
     T = #{
-        s => [<<"<div az=\"0\" class=\"">>, <<"\">ok</div>">>],
+        s => [<<"<div az=\"0\"">>, <<">ok</div>">>],
         d => [{<<"0">>, {attr, <<"class">>, fun() -> <<"active">> end}}],
         f => <<"test">>
     },
@@ -182,7 +182,7 @@ render_attr(Config) when is_list(Config) ->
     ?assertEqual(<<"<div az=\"0\" class=\"active\">ok</div>">>, iolist_to_binary(HTML)),
     ?assertEqual(
         #{
-            s => [<<"<div az=\"0\" class=\"">>, <<"\">ok</div>">>],
+            s => [<<"<div az=\"0\"">>, <<">ok</div>">>],
             d => [{<<"0">>, {attr, <<"class">>, <<"active">>}}],
             f => <<"test">>
         },
@@ -191,7 +191,7 @@ render_attr(Config) when is_list(Config) ->
 
 render_nested_sd(Config) when is_list(Config) ->
     T = #{
-        s => [<<"<div az=\"0\" class=\"">>, <<"\">ok</div>">>],
+        s => [<<"<p az=\"0\">">>, <<"</p>">>],
         d => [
             {<<"0">>, #{
                 s => [<<"a ">>, <<>>], d => [{<<"i">>, fun() -> <<"b">> end}], f => <<"test">>
@@ -200,10 +200,10 @@ render_nested_sd(Config) when is_list(Config) ->
         f => <<"test">>
     },
     {HTML, Snap} = arizona_render:render(T),
-    ?assertEqual(<<"<div az=\"0\" class=\"a b\">ok</div>">>, iolist_to_binary(HTML)),
+    ?assertEqual(<<"<p az=\"0\">a b</p>">>, iolist_to_binary(HTML)),
     ?assertEqual(
         #{
-            s => [<<"<div az=\"0\" class=\"">>, <<"\">ok</div>">>],
+            s => [<<"<p az=\"0\">">>, <<"</p>">>],
             d => [{<<"0">>, #{s => [<<"a ">>, <<>>], d => [{<<"i">>, <<"b">>}], f => <<"test">>}}],
             f => <<"test">>
         },

@@ -417,17 +417,13 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, CS0, _ElemLine) when
             buf_append(CS0, <<" ", NameBin/binary, "=\"", ValBin/binary, "\"">>);
         false when CS0#cs.nodiff ->
             Module = CS0#cs.module,
-            CS1 = buf_append(CS0, <<" ", NameBin/binary, "=\"">>),
-            DynAST = make_nodiff_dynamic_ast(ValueAST, Module, line(ValueAST)),
-            CS2 = flush(CS1, DynAST),
-            CS2#cs{buf = <<"\"">>};
+            DynAST = make_nodiff_attr_dynamic_ast(NameBin, ValueAST, Module, line(ValueAST)),
+            flush(CS0, DynAST);
         false ->
             Module = CS0#cs.module,
             AzBin = integer_to_binary(ElemAz),
-            CS1 = buf_append(CS0, <<" ", NameBin/binary, "=\"">>),
             DynAST = make_attr_dynamic_ast(AzBin, NameBin, ValueAST, Module, line(ValueAST)),
-            CS2 = flush(CS1, DynAST),
-            CS2#cs{buf = <<"\"">>}
+            flush(CS0, DynAST)
     end;
 compile_attr({atom, _, Name}, _ElemAz, CS0, _ElemLine) ->
     NameBin = atom_to_html_binary(Name),
@@ -513,6 +509,18 @@ make_nodiff_dynamic_ast(ExprAST, Module, ExprLine) ->
     {tuple, 0, [
         {atom, 0, undefined},
         {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
+        LocAST
+    ]}.
+
+make_nodiff_attr_dynamic_ast(AttrNameBin, ExprAST, Module, ExprLine) ->
+    LocAST = loc_ast(Module, ExprLine),
+    {tuple, 0, [
+        {atom, 0, undefined},
+        {tuple, 0, [
+            {atom, 0, attr},
+            ast_binary(AttrNameBin),
+            {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}}
+        ]},
         LocAST
     ]}.
 

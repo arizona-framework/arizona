@@ -15,6 +15,9 @@
     bare_binary_bool/1,
     bool_attr_false/1,
     bool_attr_true/1,
+    bool_dynamic_false/1,
+    bool_dynamic_true/1,
+    bool_dynamic_value/1,
     boolean_attr/1,
     case_expression_dynamic/1,
     counter_pattern/1,
@@ -226,6 +229,9 @@ groups() ->
             bool_attr_true,
             bool_attr_false,
             bare_binary_bool,
+            bool_dynamic_true,
+            bool_dynamic_false,
+            bool_dynamic_value,
             nodiff_with_other_attrs,
             nodiff_each,
             mixed_attr_forms
@@ -430,8 +436,8 @@ single_dynamic_attr(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<div az=\"0\" class=\"">>,
-                <<"\">content</div>">>
+                <<"<div az=\"0\"">>,
+                <<">content</div>">>
             ]
         ),
         maps:get(s, T)
@@ -460,9 +466,9 @@ counter_pattern(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<div az=\"0\" id=\"">>,
+                <<"<div az=\"0\"">>,
                 <<
-                    "\">"
+                    ">"
                     "<button az-click=\"inc\">+</button>"
                     "<button az-click=\"dec\">-</button>"
                     "<p az=\"1\">Count: <!--az:1-->"
@@ -541,8 +547,8 @@ void_element(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<div><input az=\"0\" type=\"text\" value=\"">>,
-                <<"\" /></div>">>
+                <<"<div><input az=\"0\" type=\"text\"">>,
+                <<" /></div>">>
             ]
         ),
         maps:get(s, T)
@@ -581,8 +587,8 @@ shared_az(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<div az=\"0\" class=\"">>,
-                <<"\"><!--az:0-->">>,
+                <<"<div az=\"0\"">>,
+                <<"><!--az:0-->">>,
                 <<"<!--/az--></div>">>
             ]
         ),
@@ -717,9 +723,9 @@ two_dynamic_attrs(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<div az=\"0\" class=\"">>,
-                <<"\" id=\"">>,
-                <<"\">content</div>">>
+                <<"<div az=\"0\"">>,
+                <<>>,
+                <<">content</div>">>
             ]
         ),
         maps:get(s, T)
@@ -1054,8 +1060,8 @@ static_after_dynamic_attr(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<input az=\"0\" value=\"">>,
-                <<"\" type=\"text\" />">>
+                <<"<input az=\"0\"">>,
+                <<" type=\"text\" />">>
             ]
         ),
         maps:get(s, T)
@@ -1118,9 +1124,9 @@ template2_dynamic_attr(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<div az=\"0\" az-key=\"">>,
-                <<"\" class=\"">>,
-                <<"\"><!--az:0-->">>,
+                <<"<div az=\"0\"">>,
+                <<>>,
+                <<"><!--az:0-->">>,
                 <<"<!--/az--></div>">>
             ]
         ),
@@ -1158,9 +1164,9 @@ template2_multiple_children(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<tr az=\"0\" az-key=\"">>,
+                <<"<tr az=\"0\"">>,
                 <<
-                    "\">"
+                    ">"
                     "<td az=\"1\"><!--az:1-->"
                 >>,
                 <<
@@ -1210,8 +1216,8 @@ template2_nested_in_template(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<div az=\"0\" id=\"">>,
-                <<"\"><!--az:0-->">>,
+                <<"<div az=\"0\"">>,
+                <<"><!--az:0-->">>,
                 <<"<!--/az--></div>">>
             ]
         ),
@@ -1437,8 +1443,8 @@ template2_void_item(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<input az=\"0\" type=\"text\" value=\"">>,
-                <<"\" />">>
+                <<"<input az=\"0\" type=\"text\"">>,
+                <<" />">>
             ]
         ),
         maps:get(s, Tmpl)
@@ -2054,6 +2060,50 @@ bare_binary_bool(Config) when is_list(Config) ->
     [Static] = maps:get(s, T),
     ?assertEqual(<<"<div hidden>content</div>">>, Static).
 
+%% Dynamic bool: {checked, Expr} where Expr evaluates to true at runtime.
+bool_dynamic_true(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_bool_dyn_true). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'input', [{type, <<\"checkbox\">>}, {checked, maps:get(c, Bindings)}], []}"
+        "    ). "
+    ),
+    T = Mod:render(#{c => true}),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(T)),
+    ?assertMatch(<<"<input", _/binary>>, HTML),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"checked">>)),
+    ?assertEqual(nomatch, binary:match(HTML, <<"checked=\"">>)).
+
+%% Dynamic bool: {checked, Expr} where Expr evaluates to false at runtime.
+bool_dynamic_false(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_bool_dyn_false). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'input', [{type, <<\"checkbox\">>}, {checked, maps:get(c, Bindings)}], []}"
+        "    ). "
+    ),
+    T = Mod:render(#{c => false}),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(T)),
+    ?assertEqual(nomatch, binary:match(HTML, <<"checked">>)).
+
+%% Dynamic bool: {checked, Expr} where Expr evaluates to a string value.
+bool_dynamic_value(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_bool_dyn_val). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [{class, maps:get(cls, Bindings)}], [<<\"ok\">>]}"
+        "    ). "
+    ),
+    T = Mod:render(#{cls => <<"active">>}),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(T)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"class=\"active\"">>)).
+
 %% Test 65: az-nodiff coexists with other attrs -- directive stripped, others kept.
 nodiff_with_other_attrs(Config) when is_list(Config) ->
     Mod = compile_module(
@@ -2156,10 +2206,10 @@ layout_dynamic_attr(Config) when is_list(Config) ->
         "    ). "
     ),
     T = Mod:render(#{cls => <<"active">>}),
-    ?assertEqual([<<"<div class=\"">>, <<"\">ok</div>">>], maps:get(s, T)),
+    ?assertEqual([<<"<div">>, <<">ok</div>">>], maps:get(s, T)),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, Fun, {pt_layout_dyn_attr, 1}}] = maps:get(d, T),
+    [{undefined, {attr, <<"class">>, Fun}, {pt_layout_dyn_attr, 1}}] = maps:get(d, T),
     ?assert(is_function(Fun, 0)),
     ?assertEqual(<<"active">>, Fun()).
 
@@ -2242,10 +2292,10 @@ layout_void_dynamic_attr(Config) when is_list(Config) ->
         "    ). "
     ),
     T = Mod:render(#{v => <<"hello">>}),
-    ?assertEqual([<<"<input value=\"">>, <<"\" />">>], maps:get(s, T)),
+    ?assertEqual([<<"<input">>, <<" />">>], maps:get(s, T)),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, Fun, {pt_layout_void_dyn, 1}}] = maps:get(d, T),
+    [{undefined, {attr, <<"value">>, Fun}, {pt_layout_void_dyn, 1}}] = maps:get(d, T),
     ?assertEqual(<<"hello">>, Fun()),
     %% No az attr in statics
     StaticsBin = iolist_to_binary(maps:get(s, T)),
@@ -2521,8 +2571,8 @@ void_two_element_dynamic_attr(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<input az=\"0\" type=\"text\" value=\"">>,
-                <<"\" />">>
+                <<"<input az=\"0\" type=\"text\"">>,
+                <<" />">>
             ]
         ),
         maps:get(s, T)
@@ -2905,8 +2955,8 @@ az_html_dynamic_attr(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<div az=\"0\" class=\"">>,
-                <<"\">content</div>">>
+                <<"<div az=\"0\"">>,
+                <<">content</div>">>
             ]
         ),
         maps:get(s, T)
@@ -2966,8 +3016,8 @@ az_each_inside_html(Config) when is_list(Config) ->
         scope_s(
             Fp,
             [
-                <<"<div az=\"0\" id=\"">>,
-                <<"\"><!--az:0-->">>,
+                <<"<div az=\"0\"">>,
+                <<"><!--az:0-->">>,
                 <<"<!--/az--></div>">>
             ]
         ),

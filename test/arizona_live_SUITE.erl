@@ -563,7 +563,12 @@ live_navigate_round_trip(Config) when is_list(Config) ->
     CounterPayload = lists:nth(5, Dynamics),
     ?assert(is_binary(maps:get(<<"f">>, CounterPayload))),
     ?assertEqual(
-        [<<"counter">>, <<"[0,&quot;inc&quot;]">>, <<"[0,&quot;dec&quot;]">>, <<"0">>],
+        [
+            <<" id=\"counter\"">>,
+            <<" az-click=\"[0,&quot;inc&quot;]\"">>,
+            <<" az-click=\"[0,&quot;dec&quot;]\"">>,
+            <<"0">>
+        ],
         maps:get(<<"d">>, CounterPayload)
     ).
 

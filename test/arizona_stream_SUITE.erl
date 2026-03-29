@@ -357,9 +357,9 @@ stream_diff_insert(Config) when is_list(Config) ->
     ?assert(is_binary(maps:get(<<"f">>, Payload))),
     %% Statics contain fingerprint-scoped az values
     StaticsBin = iolist_to_binary(maps:get(<<"s">>, Payload)),
-    ?assertNotEqual(nomatch, binary:match(StaticsBin, <<"az-key=\"">>)),
+    %% az-key is now in dynamics (full attr string), not baked into statics
     ?assertNotEqual(nomatch, binary:match(StaticsBin, <<"<!--/az--></li>">>)),
-    ?assertEqual([<<"1">>, <<"First">>], maps:get(<<"d">>, Payload)).
+    ?assertEqual([<<" az-key=\"1\"">>, <<"First">>], maps:get(<<"d">>, Payload)).
 
 stream_diff_remove(Config) when is_list(Config) ->
     %% OP_REMOVE with correct key
@@ -716,7 +716,7 @@ stream_live_insert(Config) when is_list(Config) ->
     %% First insert includes statics (fingerprint not yet sent)
     ?assertMatch(#{<<"f">> := _, <<"s">> := _, <<"d">> := _}, Payload),
     ?assert(is_binary(maps:get(<<"f">>, Payload))),
-    ?assertEqual([<<"1">>, <<"First">>], maps:get(<<"d">>, Payload)).
+    ?assertEqual([<<" az-key=\"1\"">>, <<"First">>], maps:get(<<"d">>, Payload)).
 
 stream_live_remove(Config) when is_list(Config) ->
     %% add items, remove one, assert OP_REMOVE
@@ -841,11 +841,14 @@ page_add_todo_live(Config) when is_list(Config) ->
     ?assert(is_binary(maps:get(<<"f">>, Payload))),
     ?assertEqual(
         [
-            <<"1">>,
-            <<"[0,&quot;update_todo&quot;,{&quot;id&quot;:1}]">>,
-            <<"[16,[&quot;enter&quot;],[0,&quot;update_todo&quot;,{&quot;id&quot;:1}]]">>,
-            <<"Todo 1">>,
-            <<"[0,&quot;remove_todo&quot;,{&quot;id&quot;:1}]">>
+            <<" az-key=\"1\"">>,
+            <<" az-focusout=\"[0,&quot;update_todo&quot;,{&quot;id&quot;:1}]\"">>,
+            <<
+                " az-keydown=\"[16,[&quot;enter&quot;],"
+                "[0,&quot;update_todo&quot;,{&quot;id&quot;:1}]]\""
+            >>,
+            <<" value=\"Todo 1\"">>,
+            <<" az-click=\"[0,&quot;remove_todo&quot;,{&quot;id&quot;:1}]\"">>
         ],
         maps:get(<<"d">>, Payload)
     ).
@@ -1899,7 +1902,7 @@ stream_dedup_strips_statics(Config) when is_list(Config) ->
     [[_, _, _, _, P2]] = Ops2,
     ?assertNot(maps:is_key(<<"s">>, P2)),
     ?assert(is_binary(maps:get(<<"f">>, P2))),
-    ?assertEqual([<<"2">>, <<"B">>], maps:get(<<"d">>, P2)).
+    ?assertEqual([<<" az-key=\"2\"">>, <<"B">>], maps:get(<<"d">>, P2)).
 
 %% --- B4: render_fp_val uses zip_item for stream items ----------------------
 
@@ -2544,12 +2547,14 @@ datatable_live_add_row(Config) when is_list(Config) ->
     [[_, _, _, _, Payload]] = Ops,
     ?assert(is_binary(maps:get(<<"f">>, Payload))),
     D = maps:get(<<"d">>, Payload),
-    ?assertEqual(<<"6">>, lists:nth(1, D)),
+    ?assertEqual(<<" az-key=\"6\"">>, lists:nth(1, D)),
     ?assertEqual(<<"6">>, lists:nth(2, D)),
     ?assertEqual(<<"New 6">>, lists:nth(3, D)),
     ?assertEqual(<<"20">>, lists:nth(4, D)),
-    ?assertEqual(<<"[0,&quot;delete_row&quot;,{&quot;id&quot;:6}]">>, lists:nth(5, D)),
-    ?assertEqual(<<"[0,&quot;move_top&quot;,{&quot;id&quot;:6}]">>, lists:nth(6, D)).
+    ?assertEqual(
+        <<" az-click=\"[0,&quot;delete_row&quot;,{&quot;id&quot;:6}]\"">>, lists:nth(5, D)
+    ),
+    ?assertEqual(<<" az-click=\"[0,&quot;move_top&quot;,{&quot;id&quot;:6}]\"">>, lists:nth(6, D)).
 
 datatable_live_add_row_sequence(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(arizona_datatable),

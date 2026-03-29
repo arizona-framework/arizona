@@ -689,6 +689,10 @@ emit_move_ops(Az, LIS, [Key | Rest], I, Prev) ->
 
 %% --- make_op -----------------------------------------------------------------
 
+make_op(Az, {attr, Attr, false}, _Old) ->
+    [?OP_REM_ATTR, Az, Attr];
+make_op(Az, {attr, Attr, true}, _Old) ->
+    [?OP_SET_ATTR, Az, Attr, <<>>];
 make_op(Az, {attr, Attr, Val}, _Old) ->
     [?OP_SET_ATTR, Az, Attr, arizona_template:to_bin(Val)];
 make_op(_Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := OldD}) ->
@@ -747,6 +751,10 @@ diff_child_dynamics([{Az, Same} | NR], [{Az, Same} | OR]) ->
 diff_child_dynamics([{Az, New} | NR], [{Az, Old} | OR]) ->
     [make_child_op(Az, New, Old) | diff_child_dynamics(NR, OR)].
 
+make_child_op(Az, {attr, Attr, false}, _Old) ->
+    [?OP_REM_ATTR, Az, Attr];
+make_child_op(Az, {attr, Attr, true}, _Old) ->
+    [?OP_SET_ATTR, Az, Attr, <<>>];
 make_child_op(Az, {attr, Attr, Val}, _Old) ->
     [?OP_SET_ATTR, Az, Attr, arizona_template:to_bin(Val)];
 make_child_op(_Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := OldD}) ->
