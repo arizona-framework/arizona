@@ -1862,11 +1862,11 @@ describe('saveFormState / restoreFormState edge cases', () => {
         const mod = await import('./arizona.js');
 
         document.body.innerHTML =
-            '<form id="f" az-change="validate"><div id="v" az-view><input name="x" value="val"></div></form>';
+            '<form id="f" az-change="[0,&quot;validate&quot;]"><div id="v" az-view><input name="x" value="val"></div></form>';
         mod.saveFormState();
 
         document.body.innerHTML =
-            '<form id="f" az-change="validate"><div id="v" az-view><input name="x" value=""></div></form>';
+            '<form id="f" az-change="[0,&quot;validate&quot;]"><div id="v" az-view><input name="x" value=""></div></form>';
 
         const mock = setupMockWorker(mod);
         mock.simulateOpen();
@@ -1875,6 +1875,30 @@ describe('saveFormState / restoreFormState edge cases', () => {
         const changeMsgs = mock.getSentMessages().filter(s => s[1] === 'validate');
         expect(changeMsgs).toHaveLength(1);
         expect(changeMsgs[0][2]).toEqual({ x: 'val' });
+        mock.restore();
+    });
+
+    it('az-change replay sends event name not raw command string', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+
+        document.body.innerHTML =
+            '<form id="f" az-change="[0,&quot;my_change&quot;]"><div id="v" az-view><input name="a" value="1"></div></form>';
+        mod.saveFormState();
+
+        document.body.innerHTML =
+            '<form id="f" az-change="[0,&quot;my_change&quot;]"><div id="v" az-view><input name="a" value=""></div></form>';
+
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mock.posted.length = 0;
+        mod.restoreFormState();
+        const sent = mock.getSentMessages();
+        // Event name should be "my_change", not the raw "[0,\"my_change\"]"
+        const correct = sent.filter(s => s[1] === 'my_change');
+        const raw = sent.filter(s => typeof s[1] === 'string' && s[1].startsWith('['));
+        expect(correct).toHaveLength(1);
+        expect(raw).toHaveLength(0);
         mock.restore();
     });
 

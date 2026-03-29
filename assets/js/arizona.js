@@ -844,7 +844,7 @@ function restoreFormState() {
             }
         }
         if (azChange && _connected) {
-            workerSend(JSON.stringify([resolveTarget(form), azChange, fields]));
+            executeJS(form, null, JSON.parse(azChange));
         }
     }
     _savedForms.clear();
