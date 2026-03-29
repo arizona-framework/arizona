@@ -1,6 +1,6 @@
 {application, arizona, [
-    {description, "Erlang template engine with server-side diffing"},
-    {vsn, "0.1.0"},
+    {description, "Real-time web framework for Erlang"},
+    {vsn, semver},
     {registered, []},
     {applications, [
         kernel,
@@ -11,5 +11,5 @@
     {env, []},
     {modules, []},
     {licenses, ["Apache-2.0"]},
-    {links, []}
+    {links, [{"GitHub", "https://github.com/arizona-framework/arizona"}]}
 ]}.
