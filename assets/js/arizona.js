@@ -667,7 +667,7 @@ function executeJS(el, event, cmds) {
             case JS_SET_ATTR: { const t = document.querySelector(cmd[1]); if (t) t.setAttribute(cmd[2], cmd[3]); break; }
             case JS_REMOVE_ATTR: { const t = document.querySelector(cmd[1]); if (t) t.removeAttribute(cmd[2]); break; }
             case JS_DISPATCH_EVENT: { document.dispatchEvent(new CustomEvent(cmd[1], { detail: cmd[2] || {} })); break; }
-            case JS_NAVIGATE: { const path = cmd[1]; const opts = cmd[2] || {}; if (opts.replace) { history.replaceState(null, '', path); } else { history.pushState(null, '', path); } workerSend(JSON.stringify(['navigate', { path }])); break; }
+            case JS_NAVIGATE: { const path = cmd[1]; const opts = cmd[2] || {}; if (opts.replace) { history.replaceState(null, '', path); } else { history.pushState(null, '', path); } workerSend(JSON.stringify(['navigate', { path }])); if (_worker) _worker.postMessage([3, path]); break; }
             case JS_FOCUS: { const t = document.querySelector(cmd[1]); if (t) /** @type {HTMLElement} */ (t).focus(); break; }
             case JS_BLUR: { const t = document.querySelector(cmd[1]); if (t) /** @type {HTMLElement} */ (t).blur(); break; }
             case JS_SCROLL_TO: { const t = document.querySelector(cmd[1]); if (t) t.scrollIntoView(cmd[2] || { behavior: 'smooth' }); break; }
@@ -908,13 +908,16 @@ function connect(endpoint, params = {}) {
         e.preventDefault();
         history.pushState(null, '', path);
         workerSend(JSON.stringify(['navigate', { path }]));
+        if (_worker) _worker.postMessage([3, path]);
     });
 
     // Browser back/forward: send navigate on popstate so the server
     // renders the correct page for the current URL.
     window.addEventListener('popstate', () => {
         if (!_connected) return;
-        workerSend(JSON.stringify(['navigate', { path: location.pathname }]));
+        const path = location.pathname;
+        workerSend(JSON.stringify(['navigate', { path }]));
+        if (_worker) _worker.postMessage([3, path]);
     });
 
     // Drag-and-drop: uses az-key on draggable items and az-drop on the

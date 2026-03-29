@@ -1348,6 +1348,23 @@ test('two sequential reconnects leave page functional', async ({ page }) => {
     await expect(countText(page, 'counter')).toHaveText('Count: 1');
 });
 
+test('reconnect after SPA navigate mounts correct handler', async ({ page }) => {
+    await page.goto('/');
+    await wsReady(page);
+
+    // SPA navigate to /about
+    await page.click('a[href="/about"]');
+    await expect(page.locator('main h1')).toHaveText('About');
+
+    // Close WS to trigger reconnect
+    await page.evaluate(() => window._ws.close(4000));
+    await wsReady(page);
+
+    // Should still be on about page (not home) after reconnect
+    await expect(page.locator('main h1')).toHaveText('About');
+    expect(page.url()).toContain('/about');
+});
+
 test('about page timer restarts after reconnect', async ({ page }) => {
     await page.goto('/about');
     await wsReady(page);

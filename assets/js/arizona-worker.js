@@ -277,5 +277,12 @@ self.onmessage = (e) => {
             // [2, code] -- close WS
             if (_ws) _ws.close(msg[1]);
             break;
+        case 3: {
+            // [3, newPath] -- update path for reconnect
+            if (!_wsUrl) break;
+            const newPath = encodeURIComponent(msg[1]);
+            _wsUrl = _wsUrl.replace(/path=[^&]*/, 'path=' + newPath);
+            break;
+        }
     }
 };
