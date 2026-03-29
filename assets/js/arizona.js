@@ -293,6 +293,7 @@ function resolveEl(target) {
     const az = target.substring(i + 1);
     const view = document.getElementById(viewId);
     if (!view) return null;
+    if (view.getAttribute('az') === az) return view;
     let el = view.querySelector('[az="' + az + '"]');
     if (!el) {
         const j = az.indexOf(':');

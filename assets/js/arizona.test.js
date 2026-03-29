@@ -115,6 +115,14 @@ describe('resolveEl', () => {
         expect(el.id).toBe('page');
     });
 
+    it('resolves az on the view root element itself', () => {
+        document.body.innerHTML = '<div id="v" az-view az="0"><!--az:0-->content<!--/az--></div>';
+        const el = resolveEl('v:0');
+        expect(el).not.toBeNull();
+        expect(el.id).toBe('v');
+        expect(el.getAttribute('az')).toBe('0');
+    });
+
     it('resolves compound target by falling back to base az', () => {
         setupView('v', '<p az="0"><!--az:0-->A<!--/az--><!--az:0:1-->B<!--/az--></p>');
         const el = resolveEl('v:0:1');
@@ -186,6 +194,15 @@ describe('applyOps -- OP.TEXT', () => {
         const el = resolveEl('v:0');
         expect(el.querySelector('b')).not.toBeNull();
         expect(el.querySelector('b').textContent).toBe('bold');
+    });
+
+    it('updates content when az target is the view root element', () => {
+        document.body.innerHTML = '<div id="v" az-view az="0"><!--az:0-->old<!--/az--></div>';
+        applyOps([[OP.TEXT, 'v:0', '<b>new</b>']]);
+        const el = resolveEl('v:0');
+        expect(el).not.toBeNull();
+        expect(el.querySelector('b')).not.toBeNull();
+        expect(el.querySelector('b').textContent).toBe('new');
     });
 });
 
