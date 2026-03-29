@@ -1,0 +1,21 @@
+{
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "1.58.2",
+    "jsdom": "28.1.0",
+    "rollup-plugin-filesize": "10.0.0",
+    "rollup-plugin-license": "3.7.0",
+    "rollup-plugin-visualizer": "7.0.1",
+    "terser": "5.46.0",
+    "vite": "7.3.1",
+    "vitest": "4.0.18"
+  },
+  "scripts": {
+    "build": "vite build",
+    "build:dev": "vite build --mode development",
+    "test:e2e": "npx playwright test",
+    "test:unit": "vitest run"
+  }
+}

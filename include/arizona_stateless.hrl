@@ -1,0 +1,2 @@
+-compile({parse_transform, arizona_parse_transform}).
+-include("arizona_template.hrl").

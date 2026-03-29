@@ -1,0 +1,18 @@
+%% JS command op codes -- shared between arizona_js.erl and client runtime
+-define(JS_PUSH_EVENT, 0).
+-define(JS_TOGGLE, 1).
+-define(JS_SHOW, 2).
+-define(JS_HIDE, 3).
+-define(JS_ADD_CLASS, 4).
+-define(JS_REMOVE_CLASS, 5).
+-define(JS_TOGGLE_CLASS, 6).
+-define(JS_SET_ATTR, 7).
+-define(JS_REMOVE_ATTR, 8).
+-define(JS_DISPATCH_EVENT, 9).
+-define(JS_NAVIGATE, 10).
+-define(JS_FOCUS, 11).
+-define(JS_BLUR, 12).
+-define(JS_SCROLL_TO, 13).
+-define(JS_SET_TITLE, 14).
+-define(JS_RELOAD, 15).
+-define(JS_ON_KEY, 16).

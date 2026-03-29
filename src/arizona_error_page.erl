@@ -1,0 +1,162 @@
+-module(arizona_error_page).
+-include("arizona_stateless.hrl").
+-export([render/1]).
+-ignore_xref([render/1]).
+
+render(Bindings) ->
+    ErrorInfo = maps:get(error_info, Bindings),
+    Class = maps:get(class, ErrorInfo),
+    Reason = maps:get(reason, ErrorInfo),
+    Stacktrace = maps:get(stacktrace, ErrorInfo),
+    ReloadUrl = maps:get(reload_url, ErrorInfo, undefined),
+    Title = escape(format_title(Class, Reason, Stacktrace)),
+    ReasonStr = format_reason(Reason),
+    ?html(
+        {html, [], [
+            {head, [], [
+                {meta, [{charset, <<"utf-8">>}]},
+                {title, [], [<<"500 -- Server Error">>]},
+                {style, [],
+                    ~"""
+                    *{margin:0;padding:0;box-sizing:border-box}
+                    body{font-family:monospace;background:#1e1e2e;color:#cdd6f4;padding:2rem}
+                    h1{color:#f38ba8;font-size:1.4rem;margin-bottom:1rem}
+                    .reason{background:#313244;padding:1rem;border-radius:6px;
+                    margin-bottom:1.5rem;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
+                    .frame{padding:.5rem 1rem;border-left:2px solid #45475a}
+                    .frame+.frame{margin-top:.25rem}
+                    .mod{color:#89b4fa}.fun{color:#a6e3a1}.loc{color:#9399b2}
+                    """}
+            ]},
+            {body, [], [
+                {h1, [], [Title]},
+                {pre, [{class, <<"reason">>}], [ReasonStr]},
+                {'div', [{id, <<"stacktrace">>}], [
+                    ?each(
+                        fun({M, F, A, Info}) ->
+                            Loc = format_loc(Info),
+                            {'div', [{class, <<"frame">>}], [
+                                {span, [{class, <<"mod">>}], [escape(atom_to_binary(M))]},
+                                <<":">>,
+                                {span, [{class, <<"fun">>}], [
+                                    <<
+                                        (escape(atom_to_binary(F)))/binary,
+                                        "/",
+                                        (integer_to_binary(arity(A)))/binary
+                                    >>
+                                ]},
+                                {span, [{class, <<"loc">>}], [<<" ">>, Loc]}
+                            ]}
+                        end,
+                        Stacktrace
+                    )
+                ]},
+                reload_script(ReloadUrl)
+            ]}
+        ]}
+    ).
+
+format_title(_Class, {compile_error, _Errors}, _Stacktrace) ->
+    <<"Compilation Error">>;
+format_title(Class, {arizona_loc, {Mod, Line}, Reason}, Stacktrace) ->
+    Prefix = unicode:characters_to_binary(io_lib:format("~s:~b: ", [Mod, Line])),
+    unicode:characters_to_binary([Prefix, error_summary(Class, Reason, Stacktrace)]);
+format_title(Class, Reason, Stacktrace) ->
+    unicode:characters_to_binary(
+        io_lib:format("~s: ~ts", [Class, error_summary(Class, Reason, Stacktrace)])
+    ).
+
+%% Use erl_error:format_exception to get the rich, shell-style summary.
+%% Output looks like:
+%%   "exception error: no function clause matching \n
+%%                     arizona_template:to_bin({}) (src/...erl:68)\n
+%%     in function  arizona_render:zip/2 ..."
+%% We extract everything after "exception <class>: " up to "\n  in ",
+%% collapsing continuation newlines into spaces.
+error_summary(Class, Reason, Stacktrace) ->
+    try
+        Flat = lists:flatten(erl_error:format_exception(Class, Reason, Stacktrace)),
+        extract_summary(Flat)
+    catch
+        _:_ ->
+            io_lib:format("~w:~0tp", [Class, Reason])
+    end.
+
+extract_summary("exception " ++ Rest) ->
+    skip_class(Rest);
+extract_summary(Other) ->
+    Other.
+
+skip_class([$:, $\s | Rest]) ->
+    take_summary(Rest, []);
+skip_class([_ | Rest]) ->
+    skip_class(Rest);
+skip_class([]) ->
+    [].
+
+%% "\n  in " marks start of stack frames -- stop here.
+take_summary([$\n | Rest], Acc) ->
+    Trimmed = skip_spaces(Rest),
+    case Trimmed of
+        [$i, $n, $\s | _] -> lists:reverse(Acc);
+        _ -> take_summary(Trimmed, [$\s | Acc])
+    end;
+take_summary([C | Rest], Acc) ->
+    take_summary(Rest, [C | Acc]);
+take_summary([], Acc) ->
+    lists:reverse(Acc).
+
+skip_spaces([$\s | Rest]) -> skip_spaces(Rest);
+skip_spaces(Other) -> Other.
+
+format_reason({compile_error, Errors}) ->
+    escape(
+        unicode:characters_to_binary(
+            lists:join("\n\n", [format_file_errors(F, Es) || {F, Es} <:- Errors])
+        )
+    );
+format_reason({arizona_loc, _Loc, Reason}) ->
+    format_reason(Reason);
+format_reason(Reason) ->
+    escape(unicode:characters_to_binary(io_lib:format("~0tp", [Reason]))).
+
+format_file_errors(File, Errors) ->
+    [File, ":\n", lists:join("\n", [format_one_error(E) || E <:- Errors])].
+
+format_one_error({Location, Mod, Reason}) ->
+    Line = erl_anno:line(Location),
+    Msg = Mod:format_error(Reason),
+    io_lib:format("  line ~b: ~ts", [Line, Msg]).
+
+format_loc(Info) ->
+    File = proplists:get_value(file, Info, ""),
+    Line = proplists:get_value(line, Info, 0),
+    case File of
+        "" -> <<"">>;
+        _ -> unicode:characters_to_binary([File, ":", integer_to_list(Line)])
+    end.
+
+escape(Bin) when is_binary(Bin) ->
+    escape(Bin, <<>>).
+
+escape(<<>>, Acc) ->
+    Acc;
+escape(<<"&", Rest/binary>>, Acc) ->
+    escape(Rest, <<Acc/binary, "&amp;">>);
+escape(<<"<", Rest/binary>>, Acc) ->
+    escape(Rest, <<Acc/binary, "&lt;">>);
+escape(<<">", Rest/binary>>, Acc) ->
+    escape(Rest, <<Acc/binary, "&gt;">>);
+escape(<<"\"", Rest/binary>>, Acc) ->
+    escape(Rest, <<Acc/binary, "&quot;">>);
+escape(<<C, Rest/binary>>, Acc) ->
+    escape(Rest, <<Acc/binary, C>>).
+
+reload_script(undefined) ->
+    <<>>;
+reload_script(Url) ->
+    <<"<script>new EventSource('", Url/binary,
+        "').addEventListener('reload',function(){location.reload()})</script>">>.
+
+arity(A) when is_list(A) -> length(A);
+arity(N) when is_integer(N) -> N.
