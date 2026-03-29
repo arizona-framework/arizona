@@ -12,7 +12,8 @@ render(Bindings) ->
     ?html(
         {'div', [{id, ?get(id)}], [
             {p, [], [~"Status: ", ?get(status, ~"ok")]},
-            {p, [], [~"Locale: ", ?get(<<"locale">>, ~"none")]}
+            {p, [], [~"Locale: ", ?get(<<"locale">>, ~"none")]},
+            {p, [], [~"Item: ", ?get(item_id, ~"none")]}
         ]}
     ).
 

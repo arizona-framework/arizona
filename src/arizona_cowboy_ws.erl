@@ -12,7 +12,9 @@ init(Req, Opts) ->
             JSON -> json:decode(JSON)
         end,
     LiveReq = Req#{path => Path},
-    {_CowboyHandler, RouteOpts} = arizona_cowboy_adapter:resolve_cowboy_route(LiveReq),
+    {_CowboyHandler, _ResolvedReq, RouteOpts} = arizona_cowboy_adapter:resolve_cowboy_route(
+        LiveReq
+    ),
     H = maps:get(handler, RouteOpts),
     IB = maps:merge(maps:get(bindings, RouteOpts, #{}), Params),
     OnMount = maps:get(on_mount, RouteOpts, []),

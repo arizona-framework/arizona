@@ -12,6 +12,8 @@
     reconnect_init/1,
     connect_with_params/1,
     http_query_params/1,
+    http_path_bindings/1,
+    ws_path_bindings/1,
     middleware_cont_enriches_bindings/1,
     middleware_cont_ws_connects/1,
     middleware_halt_redirects/1,
@@ -42,6 +44,8 @@ groups() ->
             reconnect_init,
             connect_with_params,
             http_query_params,
+            http_path_bindings,
+            ws_path_bindings,
             middleware_cont_enriches_bindings,
             middleware_cont_ws_connects,
             middleware_halt_redirects,
@@ -82,6 +86,7 @@ init_per_suite(Config) ->
                 fun(Req, #{step := N} = B) -> {cont, Req, B#{step => N + 1}} end
             ]
         }},
+        {live, <<"/items/:item_id">>, arizona_crashable, #{}},
         {ws, <<"/ws">>, #{}}
     ],
     {ok, _} = arizona_cowboy_server:start(ws_test, #{
@@ -167,6 +172,29 @@ http_query_params(Config) ->
     {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"pt<!--/az-->">>)).
+
+http_path_bindings(Config) ->
+    %% HTTP: path param :item_id available in rendered HTML
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /items/my-item HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"my-item">>)).
+
+ws_path_bindings(Config) ->
+    %% WS: path param :item_id resolved via ?path= query param
+    {ok, Sock} = ws_connect(Config, <<"/items/my-item">>),
+    ok = ws_send(Sock, <<"0">>),
+    {text, <<"1">>} = ws_recv(Sock),
+    ws_close(Sock).
 
 middleware_cont_enriches_bindings(Config) ->
     %% HTTP: middleware adds session to bindings, rendered in page

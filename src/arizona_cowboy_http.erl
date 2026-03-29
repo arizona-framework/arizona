@@ -3,8 +3,9 @@
 -ignore_xref([init/2]).
 
 init(Req, #{handler := H} = State) ->
-    Params = maps:from_list(cowboy_req:parse_qs(Req)),
-    Bindings = maps:merge(maps:get(bindings, State, #{}), Params),
+    PathBindings = cowboy_req:bindings(Req),
+    QueryParams = maps:from_list(cowboy_req:parse_qs(Req)),
+    Bindings = maps:merge(maps:merge(maps:get(bindings, State, #{}), PathBindings), QueryParams),
     Middlewares = maps:get(middlewares, State, []),
     case arizona_cowboy_req:apply_middlewares(Middlewares, Req, Bindings) of
         {halt, Req1} ->
