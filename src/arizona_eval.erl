@@ -56,6 +56,8 @@ eval_val(#{
 eval_val(#{t := ?EACH, source := Source, template := Tmpl}) when is_map(Source) ->
     ItemSnaps = render_map_items_simple(Source, Tmpl),
     #{t => ?EACH, items => ItemSnaps, template => Tmpl};
+eval_val(#{callback := Callback, props := Props}) ->
+    eval_val(Callback(Props));
 eval_val(#{s := Statics, d := Dynamics} = Tmpl) ->
     Snap0 = #{s => Statics, d => eval_dynamics(Dynamics)},
     arizona_template:maybe_propagate(Tmpl, Snap0);
@@ -308,6 +310,13 @@ eval_one_strips_location_attr_test() ->
     %% eval_one with 3-tuple attr returns 2-tuple snapshot entry
     Result = eval_one({<<"0">>, {attr, <<"class">>, fun() -> <<"x">> end}, {m, 1}}),
     ?assertEqual({<<"0">>, {attr, <<"class">>, <<"x">>}}, Result).
+
+eval_val_stateless_descriptor_test() ->
+    Cb = fun(Props) ->
+        #{s => [<<"<b>">>, <<"</b>">>], d => [{<<"0">>, maps:get(t, Props)}], f => <<"x">>}
+    end,
+    Result = eval_val(#{callback => Cb, props => #{t => <<"hi">>}}),
+    ?assertMatch(#{s := [<<"<b>">>, <<"</b>">>], d := [{<<"0">>, <<"hi">>}]}, Result).
 
 eval_one_v_3tuple_test() ->
     %% eval_one_v with 3-tuple returns {Az, Val, Deps} triple
