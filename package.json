@@ -1,7 +1,52 @@
 {
-  "private": true,
-  "version": "0.1.0",
+  "name": "@arizona-framework/client",
+  "version": "0.3.0",
+  "description": "JavaScript client library for Arizona Framework",
   "type": "module",
+  "main": "./priv/static/assets/js/arizona.min.js",
+  "module": "./priv/static/assets/js/arizona.min.js",
+  "exports": {
+    ".": {
+      "import": "./priv/static/assets/js/arizona.min.js",
+      "require": "./priv/static/assets/js/arizona.min.js"
+    }
+  },
+  "files": [
+    "README.md",
+    "LICENSE.md",
+    "package.json",
+    "priv/static/assets/js/*.js"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arizona-framework/arizona.git"
+  },
+  "homepage": "https://github.com/arizona-framework/arizona",
+  "bugs": {
+    "url": "https://github.com/arizona-framework/arizona/issues"
+  },
+  "keywords": [
+    "arizona",
+    "framework",
+    "erlang",
+    "javascript",
+    "client",
+    "websocket",
+    "realtime",
+    "server-side-rendering"
+  ],
+  "author": "William Fank Thomé <contact@willilamthome.dev>",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vite build",
+    "build:dev": "vite build --mode development",
+    "test:e2e": "npx playwright test",
+    "test:unit": "vitest run"
+  },
   "devDependencies": {
     "@playwright/test": "1.58.2",
     "jsdom": "28.1.0",
@@ -11,11 +56,5 @@
     "terser": "5.46.0",
     "vite": "7.3.1",
     "vitest": "4.0.18"
-  },
-  "scripts": {
-    "build": "vite build",
-    "build:dev": "vite build --mode development",
-    "test:e2e": "npx playwright test",
-    "test:unit": "vitest run"
   }
 }

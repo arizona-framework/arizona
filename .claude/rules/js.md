@@ -7,7 +7,7 @@ paths:
 
 # Client Runtime
 
-`assets/js/arizona.js` -- ES module, zero dependencies. Built by Vite to `priv/static/arizona.min.js`.
+`assets/js/arizona.js` -- ES module, zero dependencies. Built by Vite to `priv/static/assets/js/arizona.min.js`.
 
 Exports: `connect`, `applyOps`, `applyEffects`, `resolveEl`, `pushEvent`, `pushEventTo`, `OP`, `hooks`, `mountHooks`.
 

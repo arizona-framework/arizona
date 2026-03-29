@@ -23,7 +23,7 @@ export default defineConfig(({ mode }) => ({
         license({
             thirdParty: {
                 output: {
-                    file: resolve(import.meta.dirname, 'priv/static/LICENSES.txt'),
+                    file: resolve(import.meta.dirname, 'priv/static/assets/js/LICENSES.txt'),
                 },
             },
         }),
@@ -44,7 +44,7 @@ export default defineConfig(({ mode }) => ({
             },
         },
         target: 'es2020',
-        outDir: resolve(import.meta.dirname, 'priv/static'),
+        outDir: resolve(import.meta.dirname, 'priv/static/assets/js'),
         emptyOutDir: true,
         sourcemap: mode === 'development',
         minify: 'terser',

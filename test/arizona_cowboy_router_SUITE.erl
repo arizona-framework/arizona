@@ -106,10 +106,10 @@ compile_routes_asset_dir(Config) when is_list(Config) ->
 
 compile_routes_asset_priv_dir(Config) when is_list(Config) ->
     ok = arizona_cowboy_router:compile_routes([
-        {asset, <<"/priv">>, {priv_dir, arizona, "static"}}
+        {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}
     ]),
     {Handler, Opts} = route_match(<<"/priv/arizona.min.js">>),
-    ExpectedDir = filename:join(code:priv_dir(arizona), "static"),
+    ExpectedDir = filename:join(code:priv_dir(arizona), "static/assets/js"),
     ?assertEqual(arizona_cowboy_static, Handler),
     ?assertEqual(#{dir => ExpectedDir}, Opts).
 

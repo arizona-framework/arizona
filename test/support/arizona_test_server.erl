@@ -26,7 +26,7 @@ start() ->
         }},
         {live, <<"/crashable">>, arizona_crashable, #{layout => Layout}},
         {ws, <<"/ws">>, #{}},
-        {asset, <<"/priv">>, {priv_dir, arizona, "static"}}
+        {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}
     ],
     {ok, _} = arizona_cowboy_server:start(http, #{
         transport_opts => [{port, port()}],

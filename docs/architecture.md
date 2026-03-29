@@ -391,6 +391,6 @@ handle_result({close, Code, Reason, _Socket}, State) ->
     {close, Code, Reason, State}.
 ```
 
-**5. Serve Arizona's client JS** from `priv/static/arizona.min.js` through your framework's static file handler.
+**5. Serve Arizona's client JS** from `priv/static/assets/js/arizona.min.js` through your framework's static file handler.
 
 The shipped Cowboy integration (`arizona_cowboy_ws`, `arizona_cowboy_http`, `arizona_cowboy_adapter`, `arizona_cowboy_router`, `arizona_cowboy_server`) serves as a reference implementation.
