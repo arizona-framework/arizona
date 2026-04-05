@@ -1,20 +1,104 @@
 -module(arizona_parse_transform).
--export([parse_transform/2, format_error/1]).
+-moduledoc """
+Compile-time parse transform that converts Erlang element tuples into
+optimized template maps with static/dynamic separation.
+
+Intercepts calls to `arizona_template:html/1` (or `az:html/1`) and
+`arizona_template:each/2` (or `az:each/2`), compiling element tuples
+into `#{s => Statics, d => Dynamics, f => Fingerprint}` maps at compile
+time. For `arizona_stateful` modules, it additionally validates and
+transforms the `render/1` callback (single root element, `?get(id)` on
+root, auto-injection of `az-view`).
+
+## Compilation Pipeline
+
+1. Detect `arizona_stateful` behaviour to enable live-render mode
+2. Walk all function bodies, transforming `?html(...)` and `?each(...)` calls
+3. For stateful `render/1`, validate root element constraints and inject `az-view`
+4. Compile element tuples into statics (binaries) and dynamics (closures)
+5. Assign `az` indices to elements with dynamic content for diff targeting
+6. Generate a base-36 `phash2` fingerprint from statics for change detection
+7. Scope `az` values with the fingerprint prefix to avoid collisions
+
+## Element Forms
+
+| Form | Example | Description |
+|------|---------|-------------|
+| `{Tag, Attrs, Children}` | `{'div', [], [?get(x)]}` | Standard element |
+| `{Tag, Attrs, Expr}` | `{'span', [], ?get(x)}` | Single expression as children |
+| `{Tag, Attrs}` | `{'br', []}` | Void element shorthand |
+
+## Attribute Forms
+
+| Form | Example | Output |
+|------|---------|--------|
+| `{name, ~"value"}` | `{class, ~"box"}` | `class="box"` |
+| `{name, Expr}` | `{class, Theme}` | Dynamic attribute |
+| `name` (atom) | `disabled` | Boolean attribute |
+| `~"name"` (binary) | `~"hidden"` | Boolean attribute |
+| `{name, true}` | `{hidden, true}` | Emitted |
+| `{name, false}` | `{hidden, false}` | Stripped |
+| `'az-nodiff'` | Directive | Stripped; emits `diff => false` |
+
+## Dynamic Tuple Forms
+
+```erlang
+{Az, fun(() -> term()), {Module, Line}}               %% text dynamic
+{Az, {attr, Name, fun(() -> term())}, {Module, Line}} %% attribute dynamic
+{undefined, fun(() -> term()), {Module, Line}}        %% nodiff dynamic
+```
+
+## Example
+
+```erlang
+%% Input (in a module including arizona_stateless.hrl):
+render(Bindings) ->
+    ?html({'div', [{class, ~"box"}], [?get(name)]}).
+
+%% Output (after parse transform):
+render(Bindings) ->
+    #{s => [~"<div class=\"box\" az=\"a1-0\"><!--az:a1-0-->", ~"<!--/az--></div>"],
+      d => [{~"a1-0", fun() -> arizona_template:get(name, Bindings) end, {?MODULE, 3}}],
+      f => ~"a1"}.
+```
+""".
+
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
+-export([parse_transform/2]).
+-export([format_error/1]).
+
 -ignore_xref([parse_transform/2, format_error/1]).
 
+%% Compile state threaded through element/attribute/child compilation.
 -record(cs, {
     buf = <<>> :: binary(),
     statics = [] :: [binary()],
     dynamics = [] :: [term()],
     az = 0 :: non_neg_integer(),
     nodiff = false :: boolean(),
-    module = undefined :: atom() | undefined,
+    module = undefined :: module() | undefined,
     live_render = false :: boolean(),
     root = false :: boolean()
 }).
 
-%% --- Parse Transform Entry Point --------------------------------------------
+%% --------------------------------------------------------------------
+%% API Functions
+%% --------------------------------------------------------------------
 
+-doc """
+Entry point for the Erlang compiler parse transform.
+
+Walks all forms in the module, transforming `arizona_template:html/1`
+and `arizona_template:each/2` calls into compiled template maps. For
+modules with `-behaviour(arizona_stateful)`, the `render/1` callback
+receives additional validation and `az-view` injection.
+""".
+-spec parse_transform(Forms, Options) -> Forms when
+    Forms :: [erl_parse:abstract_form()],
+    Options :: [compile:option()].
 parse_transform(Forms, _Options) ->
     File = extract_file(Forms),
     Module = extract_module(Forms),
@@ -27,21 +111,13 @@ parse_transform(Forms, _Options) ->
             {error, [{File, [{Line, ?MODULE, Reason}]}], []}
     end.
 
-extract_file([{attribute, _, file, {File, _}} | _]) -> File;
-extract_file([_ | Rest]) -> extract_file(Rest);
-extract_file([]) -> "nofile".
+-doc """
+Formats parse transform error reasons into human-readable messages.
 
-extract_module([{attribute, _, module, Mod} | _]) -> Mod;
-extract_module([_ | Rest]) -> extract_module(Rest);
-extract_module([]) -> undefined.
-
-has_behaviour([{attribute, _, behaviour, B} | _], B) -> true;
-has_behaviour([{attribute, _, behavior, B} | _], B) -> true;
-has_behaviour([_ | Rest], B) -> has_behaviour(Rest, B);
-has_behaviour([], _) -> false.
-
-%% --- Error Reporting --------------------------------------------------------
-
+Called by the compiler when `parse_transform/2` returns an error tuple.
+""".
+-spec format_error(Reason) -> string() when
+    Reason :: term().
 format_error(invalid_element) ->
     "invalid element form, expected {Tag, Attrs, Children}, "
     "{Tag, Attrs, Expr}, or {Tag, Attrs} where Tag is an atom";
@@ -76,6 +152,10 @@ format_error({invalid_child, ValueStr}) ->
         )
     ).
 
+%% --------------------------------------------------------------------
+%% Internal Functions
+%% --------------------------------------------------------------------
+
 parse_error(Reason, Line) ->
     throw({arizona_parse_error, Line, Reason}).
 
@@ -84,7 +164,18 @@ line(Node) when is_tuple(Node), tuple_size(Node) >= 2 ->
 line(_) ->
     0.
 
-%% --- Form / Expression Transformation ---------------------------------------
+extract_file([{attribute, _, file, {File, _}} | _]) -> File;
+extract_file([_ | Rest]) -> extract_file(Rest);
+extract_file([]) -> "nofile".
+
+extract_module([{attribute, _, module, Mod} | _]) -> Mod;
+extract_module([_ | Rest]) -> extract_module(Rest);
+extract_module([]) -> undefined.
+
+has_behaviour([{attribute, _, behaviour, B} | _], B) -> true;
+has_behaviour([{attribute, _, behavior, B} | _], B) -> true;
+has_behaviour([_ | Rest], B) -> has_behaviour(Rest, B);
+has_behaviour([], _) -> false.
 
 transform_form({function, L, render, 1, Clauses}, Module, true) ->
     {function, L, render, 1, [transform_live_render_clause(C, Module) || C <:- Clauses]};
@@ -93,15 +184,33 @@ transform_form({function, L, Name, Arity, Clauses}, Module, _IsLive) ->
 transform_form(Form, _Module, _IsLive) ->
     Form.
 
+transform_clause({clause, L, Patterns, Guards, Body}, Module) ->
+    {clause, L, Patterns, Guards, [transform_expr(Expr, Module) || Expr <:- Body]}.
+
+transform_expr(Expr, Module) ->
+    erl_syntax_lib:map(fun(Node) -> transform_node(Node, Module) end, Expr).
+
+transform_node(Node, Module) ->
+    N = erl_syntax:revert(Node),
+    case N of
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, [Arg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            compile_template(Arg, L, Module);
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}}, [FunArg, SourceArg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            compile_each(FunArg, SourceArg, L, Module);
+        _ ->
+            N
+    end.
+
 transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module) ->
     {Init, [Last]} = lists:split(length(Body) - 1, Body),
     TransformedInit = [transform_expr(Expr, Module) || Expr <:- Init],
     TransformedLast = transform_live_render_last(Last, Module),
     {clause, L, Patterns, Guards, TransformedInit ++ [TransformedLast]}.
 
-%% Walk the last expression of render/1 looking for ?html(...) calls.
-%% Recurses into branching expressions so that conditional renders
-%% get az-view auto-injected on each branch's root element.
 transform_live_render_last(Expr, Module) ->
     N = erl_syntax:revert(Expr),
     case N of
@@ -176,28 +285,53 @@ is_get_id_call({call, _, {remote, _, {atom, _, Mod}, {atom, _, get}}, [{atom, _,
 is_get_id_call(_) ->
     false.
 
-transform_clause({clause, L, Patterns, Guards, Body}, Module) ->
-    {clause, L, Patterns, Guards, [transform_expr(Expr, Module) || Expr <:- Body]}.
-
-transform_expr(Expr, Module) ->
-    erl_syntax_lib:map(fun(Node) -> transform_node(Node, Module) end, Expr).
-
-transform_node(Node, Module) ->
-    N = erl_syntax:revert(Node),
-    case N of
-        {call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, [Arg]} when
-            Mod =:= arizona_template; Mod =:= az
-        ->
-            compile_template(Arg, L, Module);
-        {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}}, [FunArg, SourceArg]} when
-            Mod =:= arizona_template; Mod =:= az
-        ->
-            compile_each(FunArg, SourceArg, L, Module);
-        _ ->
-            N
+maybe_inject_or_raise_az_view(Attrs, Line, #cs{live_render = true, root = true}) ->
+    case lists:any(fun is_az_view_attr/1, Attrs) of
+        true -> Attrs;
+        false -> [{atom, Line, az_view} | Attrs]
+    end;
+maybe_inject_or_raise_az_view(Attrs, Line, _CS) ->
+    case lists:any(fun is_az_view_attr/1, Attrs) of
+        true -> parse_error(az_view_not_allowed, Line);
+        false -> Attrs
     end.
 
-%% --- Template Compilation ----------------------------------------------------
+is_az_view_attr({atom, _, Name}) ->
+    Name =:= az_view orelse Name =:= 'az-view';
+is_az_view_attr({tuple, _, [{atom, _, Name} | _]}) ->
+    Name =:= az_view orelse Name =:= 'az-view';
+is_az_view_attr({bin, _, [{bin_element, _, {string, _, "az-view"}, _, _}]}) ->
+    true;
+is_az_view_attr(_) ->
+    false.
+
+compile_template(Arg, Line, Module) ->
+    compile_template(Arg, Line, Module, false).
+
+compile_template(Arg, Line, Module, LiveRender) ->
+    {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(Arg, Module, LiveRender),
+    {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
+    build_template_ast(Line, S1, D1, Fingerprint, Opts).
+
+compile_each(FunAST, SourceAST, Line, Module) ->
+    case FunAST of
+        {'fun', _, {clauses, [{clause, _, [ItemVar, KeyVar], Guards, Body}]}} ->
+            {Prefix, LastExpr} = split_fun_body(Body),
+            {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(LastExpr, Module),
+            {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
+            build_each_ast(
+                Line, SourceAST, [ItemVar, KeyVar], Guards, Prefix, S1, D1, Fingerprint, Opts
+            );
+        {'fun', _, {clauses, [{clause, _, [ItemVar], Guards, Body}]}} ->
+            {Prefix, LastExpr} = split_fun_body(Body),
+            {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(LastExpr, Module),
+            {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
+            build_each_ast(
+                Line, SourceAST, [ItemVar], Guards, Prefix, S1, D1, Fingerprint, Opts
+            );
+        _ ->
+            parse_error(invalid_each_fun, Line)
+    end.
 
 compile_body_parts(ExprAST, Module) ->
     compile_body_parts(ExprAST, Module, false).
@@ -287,36 +421,6 @@ compile_mixed_items(Items, Module) ->
     Fingerprint = generate_fingerprint(Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
 
-compile_template(Arg, Line, Module) ->
-    compile_template(Arg, Line, Module, false).
-
-compile_template(Arg, Line, Module, LiveRender) ->
-    {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(Arg, Module, LiveRender),
-    {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
-    build_template_ast(Line, S1, D1, Fingerprint, Opts).
-
-compile_each(FunAST, SourceAST, Line, Module) ->
-    case FunAST of
-        {'fun', _, {clauses, [{clause, _, [ItemVar, KeyVar], Guards, Body}]}} ->
-            {Prefix, LastExpr} = split_fun_body(Body),
-            {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(LastExpr, Module),
-            {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
-            build_each_ast(
-                Line, SourceAST, [ItemVar, KeyVar], Guards, Prefix, S1, D1, Fingerprint, Opts
-            );
-        {'fun', _, {clauses, [{clause, _, [ItemVar], Guards, Body}]}} ->
-            {Prefix, LastExpr} = split_fun_body(Body),
-            {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(LastExpr, Module),
-            {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
-            build_each_ast(
-                Line, SourceAST, [ItemVar], Guards, Prefix, S1, D1, Fingerprint, Opts
-            );
-        _ ->
-            parse_error(invalid_each_fun, Line)
-    end.
-
-%% --- Element Compilation -----------------------------------------------------
-
 extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node) ->
     case is_list_ast(AttrsAST) of
         true ->
@@ -333,26 +437,6 @@ extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node) ->
     end;
 extract_element(Node) ->
     parse_error(invalid_element, line(Node)).
-
-maybe_inject_or_raise_az_view(Attrs, Line, #cs{live_render = true, root = true}) ->
-    case lists:any(fun is_az_view_attr/1, Attrs) of
-        true -> Attrs;
-        false -> [{atom, Line, az_view} | Attrs]
-    end;
-maybe_inject_or_raise_az_view(Attrs, Line, _CS) ->
-    case lists:any(fun is_az_view_attr/1, Attrs) of
-        true -> parse_error(az_view_not_allowed, Line);
-        false -> Attrs
-    end.
-
-is_az_view_attr({atom, _, Name}) ->
-    Name =:= az_view orelse Name =:= 'az-view';
-is_az_view_attr({tuple, _, [{atom, _, Name} | _]}) ->
-    Name =:= az_view orelse Name =:= 'az-view';
-is_az_view_attr({bin, _, [{bin_element, _, {string, _, "az-view"}, _, _}]}) ->
-    true;
-is_az_view_attr(_) ->
-    false.
 
 compile_element(Tag, Attrs0, Children, Line, CS0) ->
     Attrs = maybe_inject_or_raise_az_view(Attrs0, Line, CS0),
@@ -386,8 +470,6 @@ compile_element(Tag, Attrs0, Children, Line, CS0) ->
             CS7 = compile_children(Children, ElemAz, CS6),
             buf_append(CS7, <<"</", TagBin/binary, ">">>)
     end.
-
-%% --- Attribute Compilation ---------------------------------------------------
 
 compile_attrs([], _ElemAz, CS, _ElemLine) ->
     CS;
@@ -437,8 +519,6 @@ compile_attr(Attr, _ElemAz, _CS0, ElemLine) ->
         end,
     parse_error(invalid_attribute, AttrLine).
 
-%% --- Children Compilation ----------------------------------------------------
-
 compile_children(Children, ElemAz, CS) ->
     compile_children(Children, ElemAz, CS, 0).
 
@@ -481,8 +561,6 @@ compile_child(Child, ElemAz, CS0, Slot) ->
                     end
             end
     end.
-
-%% --- Dynamic AST Construction ------------------------------------------------
 
 make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
     LocAST = loc_ast(Module, ExprLine),
@@ -527,8 +605,6 @@ make_nodiff_attr_dynamic_ast(AttrNameBin, ExprAST, Module, ExprLine) ->
 loc_ast(Module, Line) ->
     {tuple, 0, [{atom, 0, Module}, {integer, 0, Line}]}.
 
-%% --- Compile State Operations ------------------------------------------------
-
 buf_append(CS, Bin) ->
     CS#cs{buf = <<(CS#cs.buf)/binary, Bin/binary>>}.
 
@@ -544,10 +620,8 @@ finalize(CS) ->
     Dynamics = CS#cs.dynamics,
     {Statics, Dynamics}.
 
-%% --- Az Scoping --------------------------------------------------------------
-%% Prefix az values with the template fingerprint to prevent collisions when
-%% stateless children are inlined in a parent template.
-
+%% Prefix az values with the template fingerprint to prevent collisions
+%% when stateless children are inlined in a parent template.
 scope_az(_Fp, Statics, []) ->
     {Statics, []};
 scope_az(Fp, Statics, DynASTs) ->
@@ -563,22 +637,15 @@ scope_dynamic_ast(Fp, {tuple, L, [AzAST | Rest]}) ->
     AzBin = extract_binary_value(AzAST),
     {tuple, L, [ast_binary(<<Fp/binary, "-", AzBin/binary>>) | Rest]}.
 
-%% --- Fingerprint -------------------------------------------------------------
-
-%% Base-36 encoding of phash2 for compact wire representation (max 6 chars).
 generate_fingerprint(Statics) ->
     Hash = erlang:phash2(Statics),
     integer_to_binary(Hash, 36).
-
-%% --- Fun Body Helpers --------------------------------------------------------
 
 split_fun_body([Last]) ->
     {[], Last};
 split_fun_body([H | T]) ->
     {Rest, Last} = split_fun_body(T),
     {[H | Rest], Last}.
-
-%% --- Output AST Construction ------------------------------------------------
 
 compile_parts_ast(Statics, DynASTs, Fingerprint) ->
     {ast_list([ast_binary(S) || S <:- Statics]), ast_list(DynASTs), ast_binary(Fingerprint)}.
@@ -610,8 +677,6 @@ build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerpr
         SourceAST, TmplAST
     ]}.
 
-%% --- AST Helpers -------------------------------------------------------------
-
 ast_binary(Bin) ->
     {bin, 0, [{bin_element, 0, {string, 0, binary_to_list(Bin)}, default, default}]}.
 
@@ -629,8 +694,6 @@ normalize_children(AST) ->
         false -> [AST]
     end.
 
-%% --- Value Extraction --------------------------------------------------------
-
 extract_attr_name({atom, _, Name}) -> atom_to_html_binary(Name);
 extract_attr_name(BinAST) -> extract_binary_value(BinAST).
 
@@ -641,8 +704,6 @@ extract_bin_element({bin_element, _, {string, _, Chars}, _, _}) ->
     unicode:characters_to_binary(Chars);
 extract_bin_element({bin_element, _, {integer, _, N}, _, _}) ->
     <<N/utf8>>.
-
-%% --- Static Detection --------------------------------------------------------
 
 is_static_binary({bin, _, Elements}) ->
     lists:all(
@@ -681,8 +742,6 @@ is_list_ast({nil, _}) -> true;
 is_list_ast({cons, _, _, _}) -> true;
 is_list_ast(_) -> false.
 
-%% --- Dynamic Detection -------------------------------------------------------
-
 has_dynamic_attr([]) ->
     false;
 has_dynamic_attr([{bin, _, _} | Rest]) ->
@@ -709,12 +768,8 @@ has_dynamic_child([Child | Rest]) ->
         false -> true
     end.
 
-%% --- Static Child Validation -------------------------------------------------
-
 is_invalid_static_child({tuple, _, _}) -> true;
 is_invalid_static_child(_) -> false.
-
-%% --- Directive Extraction ----------------------------------------------------
 
 %% Pre-scan items (elements or mixed) for directives before compilation.
 %% This ensures nodiff is known upfront so all items compile consistently.
@@ -767,8 +822,6 @@ extract_directives([Attr | Rest], Opts) ->
             {[Attr | Tail], Opts1}
     end.
 
-%% --- Template Options --------------------------------------------------------
-
 opts_to_map_fields(Opts, Line) ->
     maps:fold(
         fun(K, V, Acc) ->
@@ -778,12 +831,8 @@ opts_to_map_fields(Opts, Line) ->
         Opts
     ).
 
-%% --- Atom to HTML Binary -----------------------------------------------------
-
 atom_to_html_binary(Atom) ->
     binary:replace(atom_to_binary(Atom), <<"_">>, <<"-">>, [global]).
-
-%% --- Void Elements -----------------------------------------------------------
 
 is_void(area) -> true;
 is_void(base) -> true;
