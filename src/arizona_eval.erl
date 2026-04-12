@@ -347,94 +347,92 @@ eval_one_v({Az, Spec}, Views0) ->
 
 eval_val_v(Fun, Views0) when is_function(Fun, 0) ->
     eval_val_v(Fun(), Views0);
-eval_val_v(#{stateful := H, props := Props}, {Old, New}) ->
-    Id = maps:get(id, Props),
+eval_val_v(#{stateful := H, props := Props}, Views) ->
+    eval_stateful(H, Props, Views);
+eval_val_v(#{t := ?EACH, source := Items, template := Tmpl}, Views) when is_list(Items) ->
+    eval_each_list(Items, Tmpl, Views);
+eval_val_v(#{t := ?EACH, source := #stream{} = Source, template := Tmpl}, Views) ->
+    eval_each_stream(Source, Tmpl, Views);
+eval_val_v(#{t := ?EACH, source := Source, template := Tmpl}, Views) when is_map(Source) ->
+    eval_each_map(Source, Tmpl, Views);
+eval_val_v(#{callback := Callback, props := Props}, Views) ->
+    eval_val_v(Callback(Props), Views);
+eval_val_v(#{s := _, d := _} = Tmpl, Views) ->
+    eval_template(Tmpl, Views);
+eval_val_v(Val, Views) ->
+    {Val, Views}.
+
+%% Wrap Fun so any deps captured during its execution are scoped: the
+%% caller's existing `$arizona_deps` is restored when Fun returns.
+with_saved_deps(Fun) ->
     SavedDeps = erlang:get('$arizona_deps'),
+    Result = Fun(),
+    erlang:put('$arizona_deps', SavedDeps),
+    Result.
+
+eval_stateful(H, Props, {Old, New}) ->
+    Id = maps:get(id, Props),
+    {B1, Resets} = mount_or_update_stateful(H, Props, Id, Old),
+    with_saved_deps(fun() ->
+        Tmpl = H:render(B1),
+        {ChildTriples, {Old, New1}} = eval_dynamics_v(maps:get(d, Tmpl), {Old, New}),
+        {ChildD, ChildDeps} = arizona_template:split_triples(ChildTriples),
+        Snap = arizona_template:make_child_snap(Tmpl, ChildD, ChildDeps, Id),
+        B2 = maps:merge(B1, Resets),
+        ChildEntry = #{handler => H, bindings => B2, snapshot => Snap},
+        {Snap, {Old, New1#{Id => ChildEntry}}}
+    end).
+
+mount_or_update_stateful(H, Props, Id, Old) ->
     case Old of
         #{Id := #{handler := H, bindings := B}} ->
-            {B2, Resets} = arizona_template:call_handle_update(H, Props, B),
-            Tmpl = H:render(B2),
-            {ChildTriples, {Old, New1}} = eval_dynamics_v(maps:get(d, Tmpl), {Old, New}),
-            {ChildD, ChildDeps} = arizona_template:split_triples(ChildTriples),
-            Snap = arizona_template:make_child_snap(Tmpl, ChildD, ChildDeps, Id),
-            B3 = maps:merge(B2, Resets),
-            erlang:put('$arizona_deps', SavedDeps),
-            {Snap, {Old, New1#{Id => #{handler => H, bindings => B3, snapshot => Snap}}}};
+            arizona_template:call_handle_update(H, Props, B);
         #{} ->
             {B1, Resets} = H:mount(Props),
             ok = check_restricted_keys(B1, Props, H),
-            Tmpl = H:render(B1),
-            {ChildTriples, {Old, New1}} = eval_dynamics_v(maps:get(d, Tmpl), {Old, New}),
-            {ChildD, ChildDeps} = arizona_template:split_triples(ChildTriples),
-            Snap = arizona_template:make_child_snap(Tmpl, ChildD, ChildDeps, Id),
-            B2 = maps:merge(B1, Resets),
-            erlang:put('$arizona_deps', SavedDeps),
-            {Snap, {Old, New1#{Id => #{handler => H, bindings => B2, snapshot => Snap}}}}
-    end;
-eval_val_v(#{t := ?EACH, source := Items, template := Tmpl}, {Old, New0}) when
-    is_list(Items)
-->
-    SavedDeps = erlang:get('$arizona_deps'),
-    {ItemSnaps, {_, LocalNew}} = render_list_items(Items, Tmpl, {Old, #{}}),
-    erlang:put('$arizona_deps', SavedDeps),
-    ChildViews = maps:keys(LocalNew),
-    {
-        #{t => ?EACH, items => ItemSnaps, template => Tmpl, child_views => ChildViews},
-        {Old, maps:merge(New0, LocalNew)}
-    };
-eval_val_v(
-    #{
-        t := ?EACH,
-        source := #stream{
-            items = ItemsMap,
-            order = Order,
-            limit = Limit
-        } = Source,
-        template := Tmpl
-    },
-    {Old, New0}
-) ->
+            {B1, Resets}
+    end.
+
+eval_each_list(Items, Tmpl, Views) ->
+    eval_each(fun(Old) -> render_list_items(Items, Tmpl, {Old, #{}}) end, Tmpl, Views, undefined).
+
+eval_each_stream(#stream{items = ItemsMap, order = Order, limit = Limit} = Source, Tmpl, Views) ->
     VKeys = arizona_template:visible_keys(Order, Limit),
-    SavedDeps = erlang:get('$arizona_deps'),
-    {ItemSnaps, {_, LocalNew}} = eval_stream_items(VKeys, ItemsMap, Tmpl, {Old, #{}}),
-    erlang:put('$arizona_deps', SavedDeps),
+    eval_each(
+        fun(Old) -> eval_stream_items(VKeys, ItemsMap, Tmpl, {Old, #{}}) end,
+        Tmpl,
+        Views,
+        {VKeys, Source}
+    ).
+
+eval_each_map(Source, Tmpl, Views) ->
+    eval_each(fun(Old) -> render_map_items(Source, Tmpl, {Old, #{}}) end, Tmpl, Views, undefined).
+
+eval_each(RenderFun, Tmpl, {Old, New0}, StreamExtra) ->
+    {ItemSnaps, {_, LocalNew}} = with_saved_deps(fun() -> RenderFun(Old) end),
     ChildViews = maps:keys(LocalNew),
-    {
-        #{
-            t => ?EACH,
-            items => ItemSnaps,
-            order => VKeys,
-            source => Source,
-            template => Tmpl,
-            child_views => ChildViews
-        },
-        {Old, maps:merge(New0, LocalNew)}
-    };
-eval_val_v(#{t := ?EACH, source := Source, template := Tmpl}, {Old, New0}) when
-    is_map(Source)
-->
-    SavedDeps = erlang:get('$arizona_deps'),
-    {ItemSnaps, {_, LocalNew}} = render_map_items(Source, Tmpl, {Old, #{}}),
-    erlang:put('$arizona_deps', SavedDeps),
-    ChildViews = maps:keys(LocalNew),
-    {
-        #{t => ?EACH, items => ItemSnaps, template => Tmpl, child_views => ChildViews},
-        {Old, maps:merge(New0, LocalNew)}
-    };
-eval_val_v(#{callback := Callback, props := Props}, Views0) ->
-    Tmpl = Callback(Props),
-    eval_val_v(Tmpl, Views0);
-eval_val_v(#{s := Statics, d := Dynamics} = Tmpl, {Old, New0}) ->
-    SavedDeps = erlang:get('$arizona_deps'),
-    {Triples, {_, LocalNew}} = eval_dynamics_v(Dynamics, {Old, #{}}),
+    Snap = build_each_snap(ItemSnaps, Tmpl, ChildViews, StreamExtra),
+    {Snap, {Old, maps:merge(New0, LocalNew)}}.
+
+build_each_snap(ItemSnaps, Tmpl, ChildViews, undefined) ->
+    #{t => ?EACH, items => ItemSnaps, template => Tmpl, child_views => ChildViews};
+build_each_snap(ItemSnaps, Tmpl, ChildViews, {VKeys, Source}) ->
+    #{
+        t => ?EACH,
+        items => ItemSnaps,
+        order => VKeys,
+        source => Source,
+        template => Tmpl,
+        child_views => ChildViews
+    }.
+
+eval_template(#{s := Statics, d := Dynamics} = Tmpl, {Old, New0}) ->
+    {Triples, {_, LocalNew}} = with_saved_deps(fun() -> eval_dynamics_v(Dynamics, {Old, #{}}) end),
     {D, DepsList} = arizona_template:split_triples(Triples),
-    erlang:put('$arizona_deps', SavedDeps),
     ChildViews = maps:keys(LocalNew),
     Snap0 = #{s => Statics, d => D, deps => DepsList},
     Snap1 = arizona_template:maybe_propagate(Tmpl, Snap0),
-    {Snap1#{child_views => ChildViews}, {Old, maps:merge(New0, LocalNew)}};
-eval_val_v(Val, Views) ->
-    {Val, Views}.
+    {Snap1#{child_views => ChildViews}, {Old, maps:merge(New0, LocalNew)}}.
 
 eval_stream_items([], _ItemsMap, _Tmpl, Views, Acc) ->
     {Acc, Views};

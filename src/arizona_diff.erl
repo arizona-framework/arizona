@@ -158,72 +158,71 @@ diff_dynamics_v(
     Changed,
     Views0
 ) ->
-    Views1 = carry_skipped_view(Old, Views0),
-    {OpsRest, DRest, DepsRest, Views2} =
-        diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-    {OpsRest, [{Az, Old} | DRest], [ODeps | DepsRest], Views2};
+    skip_dynamic(Az, Old, ODeps, DR, OR, DepsR, Changed, Views0);
 diff_dynamics_v([Def | DR], [{Az, Old} | OR], [ODeps | DepsR], Changed, Views0) ->
     case deps_changed(ODeps, Changed) of
         false ->
-            Views1 = carry_skipped_view(Old, Views0),
-            {OpsRest, DRest, DepsRest, Views2} =
-                diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-            {OpsRest, [{Az, Old} | DRest], [ODeps | DepsRest], Views2};
+            skip_dynamic(Az, Old, ODeps, DR, OR, DepsR, Changed, Views0);
         true ->
-            case Old of
-                #{t := ?EACH} ->
-                    {Az2, EachDesc, Deps} = arizona_eval:eval_each_def(Def),
-                    case EachDesc of
-                        #{source := #stream{} = Source} ->
-                            {Old0, New0} = Views0,
-                            OldChildViews = maps:get(child_views, Old, []),
-                            {StreamOps, NewSnap0, {_, LocalNew}} =
-                                diff_stream(Az2, EachDesc, Old, {Old0, #{}}),
-                            %% Incremental child_views: old - deleted + rendered
-                            #{items := OldItems} = Old,
-                            Deleted = deleted_item_children(Source#stream.pending, OldItems),
-                            Surviving = OldChildViews -- Deleted -- maps:keys(LocalNew),
-                            LocalNew1 = carry_item_children(Surviving, Old0, LocalNew),
-                            ChildViews = maps:keys(LocalNew1),
-                            NewSnap = NewSnap0#{child_views => ChildViews},
-                            Views1 = {Old0, maps:merge(New0, LocalNew1)},
-                            {OpsRest, DRest, DepsRest, Views2} =
-                                diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-                            {
-                                StreamOps ++ OpsRest,
-                                [{Az2, NewSnap} | DRest],
-                                [Deps | DepsRest],
-                                Views2
-                            };
-                        #{source := Items} when is_list(Items) ->
-                            {Old0, New0} = Views0,
-                            {ListOps, NewSnap0, {_, LocalNew}} =
-                                diff_list(Az2, EachDesc, Old, {Old0, #{}}),
-                            ChildViews = maps:keys(LocalNew),
-                            NewSnap = NewSnap0#{child_views => ChildViews},
-                            Views1 = {Old0, maps:merge(New0, LocalNew)},
-                            {OpsRest, DRest, DepsRest, Views2} =
-                                diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-                            {
-                                ListOps ++ OpsRest,
-                                [{Az2, NewSnap} | DRest],
-                                [Deps | DepsRest],
-                                Views2
-                            }
-                    end;
-                _ ->
-                    {Az, New, NewDeps, Views1} =
-                        arizona_eval:eval_one_v_flat(Def, Views0),
-                    {OpsRest, DRest, DepsRest, Views2} =
-                        diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-                    Ops =
-                        case New =:= Old of
-                            true -> OpsRest;
-                            false -> [make_op(Az, New, Old) | OpsRest]
-                        end,
-                    {Ops, [{Az, New} | DRest], [NewDeps | DepsRest], Views2}
-            end
+            diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, Changed, Views0)
     end.
+
+%% Skip a dynamic whose deps haven't changed: carry its child views to the
+%% new accumulator and continue with the original Az/Old/Deps.
+skip_dynamic(Az, Old, ODeps, DR, OR, DepsR, Changed, Views0) ->
+    Views1 = carry_skipped_view(Old, Views0),
+    {OpsRest, DRest, DepsRest, Views2} =
+        diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
+    {OpsRest, [{Az, Old} | DRest], [ODeps | DepsRest], Views2}.
+
+%% Re-evaluate a dynamic whose deps have changed. Each-containers take a
+%% special path because their child snapshots need merging; everything else
+%% goes through eval_one_v_flat and a value comparison.
+diff_changed_dynamic(Def, _Az, #{t := ?EACH} = Old, DR, OR, DepsR, Changed, Views0) ->
+    {Az2, EachDesc, Deps} = arizona_eval:eval_each_def(Def),
+    diff_each(Az2, EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0);
+diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, Changed, Views0) ->
+    {Az, New, NewDeps, Views1} = arizona_eval:eval_one_v_flat(Def, Views0),
+    {OpsRest, DRest, DepsRest, Views2} =
+        diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
+    Ops =
+        case New of
+            Old -> OpsRest;
+            _ -> [make_op(Az, New, Old) | OpsRest]
+        end,
+    {Ops, [{Az, New} | DRest], [NewDeps | DepsRest], Views2}.
+
+diff_each(
+    Az, #{source := #stream{} = Source} = EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0
+) ->
+    {Old0, New0} = Views0,
+    {StreamOps, NewSnap0, {_, LocalNew}} =
+        diff_stream(Az, EachDesc, Old, {Old0, #{}}),
+    LocalNew1 = merge_stream_child_views(Source, Old, LocalNew, Old0),
+    NewSnap = NewSnap0#{child_views => maps:keys(LocalNew1)},
+    Views1 = {Old0, maps:merge(New0, LocalNew1)},
+    {OpsRest, DRest, DepsRest, Views2} =
+        diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
+    {StreamOps ++ OpsRest, [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
+diff_each(
+    Az, #{source := Items} = EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0
+) when is_list(Items) ->
+    {Old0, New0} = Views0,
+    {ListOps, NewSnap0, {_, LocalNew}} =
+        diff_list(Az, EachDesc, Old, {Old0, #{}}),
+    NewSnap = NewSnap0#{child_views => maps:keys(LocalNew)},
+    Views1 = {Old0, maps:merge(New0, LocalNew)},
+    {OpsRest, DRest, DepsRest, Views2} =
+        diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
+    {ListOps ++ OpsRest, [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2}.
+
+%% Incremental stream child_views: old - deleted + rendered.
+merge_stream_child_views(Source, Old, LocalNew, Old0) ->
+    OldChildViews = maps:get(child_views, Old, []),
+    #{items := OldItems} = Old,
+    Deleted = deleted_item_children(Source#stream.pending, OldItems),
+    Surviving = OldChildViews -- Deleted -- maps:keys(LocalNew),
+    carry_item_children(Surviving, Old0, LocalNew).
 
 %% When a dynamic is skipped (deps unchanged), carry its child views over
 %% from OldViews to NewViews so they aren't pruned.
@@ -332,160 +331,90 @@ diff_stream_pending(Az, Queue, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
             diff_stream_op(Az, Op, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0)
     end.
 
-diff_stream_op(
-    Az,
-    {insert, Key, Item, Pos},
-    Rest,
-    Source,
-    Tmpl,
-    SnapAcc,
-    OldOrder,
-    Views0
-) ->
+diff_stream_op(Az, {insert, Key, Item, Pos}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_insert(Az, Key, Item, Pos, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, {delete, Key}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_delete(Az, Key, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, {update, Key, NewItem}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_update(Az, Key, NewItem, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, {move, Key, AfterKey}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_move(Az, Key, AfterKey, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, reorder, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_reorder(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, reset, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_reset(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views).
+
+stream_insert(Az, Key, Item, Pos, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     {ItemD, Views1} = arizona_eval:render_stream_item(Key, Item, Tmpl, Views0),
     HTML = arizona_render:zip_item(Tmpl, ItemD),
     InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), Pos, HTML],
     NewSnapAcc = SnapAcc#{Key => ItemD},
     {RestOps, FinalSnap, Views2} =
         diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views1),
-    {[InsOp | RestOps], FinalSnap, Views2};
-diff_stream_op(
-    Az,
-    {delete, Key},
-    Rest,
-    Source,
-    Tmpl,
-    SnapAcc,
-    OldOrder,
-    Views0
-) ->
+    {[InsOp | RestOps], FinalSnap, Views2}.
+
+stream_delete(Az, Key, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     DelOp = [?OP_REMOVE, Az, arizona_template:to_bin(Key)],
     NewSnapAcc = maps:remove(Key, SnapAcc),
     {RestOps, FinalSnap, Views1} =
         diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views0),
-    {[DelOp | RestOps], FinalSnap, Views1};
-diff_stream_op(
-    Az,
-    {update, Key, NewItem},
-    Rest,
-    Source,
-    Tmpl,
-    SnapAcc,
-    OldOrder,
-    Views0
-) ->
+    {[DelOp | RestOps], FinalSnap, Views1}.
+
+stream_update(Az, Key, NewItem, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
     case SnapAcc of
         #{Key := OldD} ->
-            {InnerOps, Views2} = diff_item_dynamics_v(NewD, OldD, Views1),
-            case InnerOps of
-                [] ->
-                    {RestOps, FinalSnap, Views3} =
-                        diff_stream_pending(
-                            Az,
-                            Rest,
-                            Source,
-                            Tmpl,
-                            SnapAcc,
-                            OldOrder,
-                            Views2
-                        ),
-                    {RestOps, FinalSnap, Views3};
-                _ ->
-                    PatchOp = [?OP_ITEM_PATCH, Az, arizona_template:to_bin(Key), InnerOps],
-                    NewSnapAcc = SnapAcc#{Key => NewD},
-                    {RestOps, FinalSnap, Views3} =
-                        diff_stream_pending(
-                            Az,
-                            Rest,
-                            Source,
-                            Tmpl,
-                            NewSnapAcc,
-                            OldOrder,
-                            Views2
-                        ),
-                    {[PatchOp | RestOps], FinalSnap, Views3}
-            end;
+            stream_update_existing(
+                Az, Key, NewD, OldD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views1
+            );
         #{} ->
-            HTML = arizona_render:zip_item(Tmpl, NewD),
-            InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), -1, HTML],
+            stream_update_missing(Az, Key, NewD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views1)
+    end.
+
+stream_update_existing(Az, Key, NewD, OldD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+    {InnerOps, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
+    case InnerOps of
+        [] ->
+            diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views1);
+        _ ->
+            PatchOp = [?OP_ITEM_PATCH, Az, arizona_template:to_bin(Key), InnerOps],
             NewSnapAcc = SnapAcc#{Key => NewD},
             {RestOps, FinalSnap, Views2} =
-                diff_stream_pending(
-                    Az,
-                    Rest,
-                    Source,
-                    Tmpl,
-                    NewSnapAcc,
-                    OldOrder,
-                    Views1
-                ),
-            {[InsOp | RestOps], FinalSnap, Views2}
-    end;
-diff_stream_op(
-    Az,
-    {move, Key, AfterKey},
-    Rest,
-    Source,
-    Tmpl,
-    SnapAcc,
-    OldOrder,
-    Views0
-) ->
+                diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views1),
+            {[PatchOp | RestOps], FinalSnap, Views2}
+    end.
+
+stream_update_missing(Az, Key, NewD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+    HTML = arizona_render:zip_item(Tmpl, NewD),
+    InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), -1, HTML],
+    NewSnapAcc = SnapAcc#{Key => NewD},
+    {RestOps, FinalSnap, Views1} =
+        diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views0),
+    {[InsOp | RestOps], FinalSnap, Views1}.
+
+stream_move(Az, Key, AfterKey, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SnapAcc of
         #{Key := _} ->
-            Ref =
-                case AfterKey of
-                    null -> null;
-                    _ -> arizona_template:to_bin(AfterKey)
-                end,
+            Ref = move_after_ref(AfterKey),
             MoveOp = [?OP_MOVE, Az, arizona_template:to_bin(Key), Ref],
             {RestOps, FinalSnap, Views1} =
-                diff_stream_pending(
-                    Az,
-                    Rest,
-                    Source,
-                    Tmpl,
-                    SnapAcc,
-                    OldOrder,
-                    Views0
-                ),
+                diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0),
             {[MoveOp | RestOps], FinalSnap, Views1};
         #{} ->
-            diff_stream_pending(
-                Az,
-                Rest,
-                Source,
-                Tmpl,
-                SnapAcc,
-                OldOrder,
-                Views0
-            )
-    end;
-diff_stream_op(
-    Az,
-    reorder,
-    Rest,
-    Source,
-    Tmpl,
-    SnapAcc,
-    OldOrder,
-    Views0
-) ->
+            diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0)
+    end.
+
+move_after_ref(null) -> null;
+move_after_ref(AfterKey) -> arizona_template:to_bin(AfterKey).
+
+stream_reorder(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
     MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc),
     {RestOps, FinalSnap, Views1} =
-        diff_stream_pending(
-            Az,
-            Rest,
-            Source,
-            Tmpl,
-            SnapAcc,
-            VKeys,
-            Views0
-        ),
-    {MoveOps ++ RestOps, FinalSnap, Views1};
-diff_stream_op(Az, reset, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+        diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, VKeys, Views0),
+    {MoveOps ++ RestOps, FinalSnap, Views1}.
+
+stream_reset(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
     VSet = maps:from_keys(VKeys, true),
     RemOps = [
