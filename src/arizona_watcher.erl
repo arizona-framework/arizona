@@ -1,8 +1,69 @@
 -module(arizona_watcher).
+-moduledoc """
+File system watcher with debouncing and pattern matching.
+
+Wraps the `fs` library in a `gen_server` that watches a directory for
+file events, debounces bursts of changes, filters by regex patterns,
+and broadcasts the resulting file list via `arizona_pubsub` (and
+optionally invokes a user callback).
+
+## Usage
+
+```erlang
+1> arizona_watcher:watch("/home/me/myapp/src", #{
+       patterns => [".*\\.erl$"],
+       debounce => 200,
+       callback => fun(Files) -> io:format("changed: ~p~n", [Files]) end
+   }).
+{ok, <0.123.0>}
+```
+
+Subscribers receive `{arizona_watcher, Files}` messages via the pubsub
+topic named `arizona_watcher`.
+
+## Options
+
+- `patterns` -- list of regex strings to filter file paths (default `[".*"]`)
+- `callback` -- optional `fun([string()]) -> term()` invoked synchronously
+  with the changed file list before the broadcast
+- `debounce` -- milliseconds to wait after the last event before flushing
+  (default `100`); coalesces editor-save bursts into a single event
+
+## Lifecycle and shutdown
+
+The `fs` library spawns an OS process (`sh` + `inotifywait`) with the
+watched directory as cwd. `terminate/2` shuts that down explicitly and
+sleeps briefly so callers that delete the watched directory don't race
+with the OS process's `getcwd`.
+""".
 -behaviour(gen_server).
--export([watch/2, broadcast/1]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
+-export([watch/2]).
+-export([broadcast/1]).
+
+%% --------------------------------------------------------------------
+%% gen_server callback exports
+%% --------------------------------------------------------------------
+
+-export([init/1]).
+-export([handle_call/3]).
+-export([handle_cast/2]).
+-export([handle_info/2]).
+-export([terminate/2]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
 -ignore_xref([watch/2, broadcast/1]).
+
+%% --------------------------------------------------------------------
+%% Records
+%% --------------------------------------------------------------------
 
 -record(state, {
     abs_dir :: string(),
@@ -14,13 +75,37 @@
     pending_files :: sets:set(string())
 }).
 
--spec watch(string(), map()) -> {ok, pid()} | {error, term()}.
+%% --------------------------------------------------------------------
+%% API Functions
+%% --------------------------------------------------------------------
+
+-doc """
+Starts a watcher process for `Dir` with the given options.
+
+Errors with `{not_a_directory, Dir}` if the path is not an existing
+directory.
+""".
+-spec watch(Dir, Opts) -> {ok, pid()} | {error, term()} when
+    Dir :: string(),
+    Opts :: map().
 watch(Dir, Opts) ->
     gen_server:start(?MODULE, {Dir, Opts}, []).
 
--spec broadcast([string()]) -> ok.
+-doc """
+Broadcasts a `{arizona_watcher, Files}` message on the
+`arizona_watcher` pubsub topic.
+
+Called internally after debounce expires; exposed so callers can
+manually trigger a broadcast (useful in tests).
+""".
+-spec broadcast(Files) -> ok when
+    Files :: [string()].
 broadcast(Files) ->
     arizona_pubsub:broadcast(?MODULE, {?MODULE, Files}).
+
+%% --------------------------------------------------------------------
+%% gen_server Callbacks
+%% --------------------------------------------------------------------
 
 init({Dir, Opts}) ->
     case filelib:is_dir(Dir) of
@@ -107,7 +192,9 @@ terminate(_Reason, #state{fs_sup = SupName}) ->
     %% who delete the watched directory don't race with its getcwd.
     timer:sleep(10).
 
-%% Internal -------------------------------------------------------------------
+%% --------------------------------------------------------------------
+%% Internal functions
+%% --------------------------------------------------------------------
 
 watcher_name(AbsDir) ->
     Hash = erlang:phash2({self(), AbsDir}),
