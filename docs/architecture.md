@@ -332,7 +332,7 @@ The `id` serves three roles simultaneously: DOM id (`document.getElementById`), 
 
 ## Target scoping
 
-Patch targets are `"viewId:relativeTarget"`. Root view `<<"page">>`: `"page:0"`, `"page:1"`. Child view `<<"counter">>`: `"counter:0"`, `"counter:1"`. `arizona_socket:scope_ops/2` prefixes ops with the view id. Child view ops use `[ChildViewId, ChildOps]` nesting -- `scope_op/2` recurses into these. Bare targets (no `:`) resolve to the view root via `document.getElementById(target)` -- used by `OP_REPLACE` during navigate.
+Patch targets are `"viewId:relativeTarget"`. Root view `<<"page">>`: `"page:0"`, `"page:1"`. Child view `<<"counter">>`: `"counter:0"`, `"counter:1"`. `arizona_socket` prefixes ops with the view id via internal scoping. Child view ops use `[ChildViewId, ChildOps]` nesting and recurse into these. Bare targets (no `:`) resolve to the view root via `document.getElementById(target)` -- used by `OP_REPLACE` during navigate.
 
 ## Framework integration
 
