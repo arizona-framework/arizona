@@ -96,9 +96,10 @@ and `arizona_template:each/2` calls into compiled template maps. For
 modules with `-behaviour(arizona_stateful)`, the `render/1` callback
 receives additional validation and `az-view` injection.
 """.
--spec parse_transform(Forms, Options) -> Forms when
+-spec parse_transform(Forms, Options) -> Forms | {error, Errors, []} when
     Forms :: [erl_parse:abstract_form()],
-    Options :: [compile:option()].
+    Options :: [compile:option()],
+    Errors :: [{file:filename(), [{erl_anno:line(), module(), term()}]}].
 parse_transform(Forms, _Options) ->
     File = extract_file(Forms),
     Module = extract_module(Forms),
