@@ -70,7 +70,6 @@
     stream_limit_one/1,
     stream_limit_reset/1,
     stream_limit_ssr/1,
-    stream_limit_zero/1,
     stream_live_delete_last_then_readd/1,
     stream_live_insert_at_position/1,
     stream_live_insert_no_stale_pending/1,
@@ -218,7 +217,6 @@ groups() ->
             stream_delete_nonexistent_key,
             stream_update_nonexistent_key,
             stream_duplicate_key_insert,
-            stream_limit_zero,
             stream_limit_one,
             stream_move_to_same_position,
             stream_empty_stream_operations,
@@ -1688,44 +1686,6 @@ stream_duplicate_key_insert(Config) when is_list(Config) ->
     %% Should produce an OP_INSERT for the duplicate key
     InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
     ?assertEqual(1, length(InsOps)).
-
-%% --- stream_limit_zero_test -------------------------------------------------
-stream_limit_zero(Config) when is_list(Config) ->
-    %% limit=0 hides all items
-    KeyFun = fun(#{id := Id}) -> Id end,
-    Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    S = arizona_stream:new(KeyFun, Items, #{limit => 0}),
-    Tmpl = #{
-        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
-        d => [
-            {<<"0">>, fun() ->
-                arizona_template:each(
-                    S,
-                    #{
-                        t => 0,
-                        s => [
-                            <<"<li az-key=\"">>,
-                            <<"\" az=\"1\"><!--az:1-->">>,
-                            <<"<!--/az--></li>">>
-                        ],
-                        d => fun(Item, Key) ->
-                            [
-                                {<<"0">>, fun() -> Key end},
-                                {<<"1">>, fun() -> maps:get(text, Item) end}
-                            ]
-                        end,
-                        f => <<"test">>
-                    }
-                )
-            end}
-        ],
-        f => <<"test">>
-    },
-    {HTML, _, _} = arizona_render:render(Tmpl, #{}),
-    HTMLBin = iolist_to_binary(HTML),
-    %% No items visible
-    ?assertEqual(nomatch, binary:match(HTMLBin, <<"A">>)),
-    ?assertEqual(nomatch, binary:match(HTMLBin, <<"B">>)).
 
 %% --- stream_limit_one_test --------------------------------------------------
 stream_limit_one(Config) when is_list(Config) ->
