@@ -75,6 +75,15 @@ fingerprints already shipped in the initial HTML.
 -ignore_xref([start_link/1, start_link/2]).
 
 %% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+%% Several handlers (mount/event/info; root vs child) call the same helper
+%% functions with the same destructure shape. That call-site shape is
+%% intentional -- it's the point of having shared helpers.
+-elvis([{elvis_style, dont_repeat_yourself, disable}]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 
@@ -302,14 +311,7 @@ handle_call(
     } = State
 ) ->
     {ViewId, HTML, Snap, B2, V1} = do_mount(H, B0, V0, OM),
-    PageContent =
-        case Snap of
-            #{f := _} ->
-                arizona_render:fingerprint_payload(Snap);
-            #{} ->
-                iolist_to_binary(HTML)
-        end,
-    {PageContent1, Fps1} = dedup_fp_val(PageContent, Fps0),
+    {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
     {reply, {ok, ViewId, PageContent1}, State#state{
         bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1
     }};
@@ -328,14 +330,7 @@ handle_call(
     ok = cancel_pending_timers(),
     ok = maybe_unmount(OldH, OldB),
     {NewViewId, HTML, Snap, B2, V1} = do_mount(NewHandler, NewIB, #{}, NewOnMount),
-    PageContent =
-        case Snap of
-            #{f := _} ->
-                arizona_render:fingerprint_payload(Snap);
-            #{} ->
-                iolist_to_binary(HTML)
-        end,
-    {PageContent1, Fps1} = dedup_fp_val(PageContent, Fps0),
+    {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
     {reply, {ok, NewViewId, PageContent1}, #state{
         handler = NewHandler,
         bindings = B2,
@@ -378,6 +373,11 @@ terminate(_Reason, _State) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
+page_content(#{f := _} = Snap, _HTML) ->
+    arizona_render:fingerprint_payload(Snap);
+page_content(_Snap, HTML) ->
+    iolist_to_binary(HTML).
+
 do_mount(H, B0, V0, OnMount) ->
     B1 = apply_on_mount(OnMount, B0),
     {B2, Resets} = H:mount(B1),
@@ -389,96 +389,77 @@ do_mount(H, B0, V0, OnMount) ->
     B4 = maps:merge(B3, Resets),
     {ViewId, HTML, Snap, B4, V1}.
 
-handle_root_event(
-    Event,
-    Payload,
+handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
+    {B1, Resets, Effects} = H:handle_event(Event, Payload, B0),
+    {Ops1, Snap1, V1, B3, Fps1, NewState} = process_root_change(H, B1, Resets, State),
+    {reply, {ok, Ops1, Effects}, NewState#state{
+        bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
+    }}.
+
+handle_child_event(ViewId, Event, Payload, #state{views = V0} = State) ->
+    #{ViewId := #{handler := H, bindings := B0} = View} = V0,
+    {B1, Resets, Effects} = H:handle_event(Event, Payload, B0),
+    {Ops1, V1, Fps1} = process_child_change(H, B1, Resets, ViewId, View, State),
+    {reply, {ok, Ops1, Effects}, State#state{views = V1, sent_fps = Fps1}}.
+
+handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
+    case erlang:function_exported(H, handle_info, 2) of
+        false ->
+            {noreply, State};
+        true ->
+            {B1, Resets, Effects} = H:handle_info(Info, B0),
+            {Ops1, Snap1, V1, B3, Fps1, NewState} = process_root_change(H, B1, Resets, State),
+            push(TPid, Ops1, Effects),
+            {noreply, NewState#state{
+                bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
+            }}
+    end.
+
+handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State) ->
+    #{ViewId := #{handler := H, bindings := B0} = View} = V0,
+    case erlang:function_exported(H, handle_info, 2) of
+        false ->
+            {noreply, State};
+        true ->
+            {B1, Resets, Effects} = H:handle_info(Msg, B0),
+            {Ops1, V1, Fps1} = process_child_change(H, B1, Resets, ViewId, View, State),
+            push(TPid, Ops1, Effects),
+            {noreply, State#state{views = V1, sent_fps = Fps1}}
+    end.
+
+%% Render the new template, diff against the root snapshot, dedup fingerprints,
+%% unmount removed child views, and merge resets back into bindings.
+process_root_change(
+    H,
+    B1,
+    Resets,
     #state{
-        handler = H,
-        bindings = B0,
-        snapshot = Snap0,
-        views = V0,
-        sent_fps = Fps0
+        bindings = B0, snapshot = Snap0, views = V0, sent_fps = Fps0
     } = State
 ) ->
-    {B1, Resets, Effects} = H:handle_event(Event, Payload, B0),
     Tmpl = H:render(B1),
     Changed = compute_changed(B0, B1),
     {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
     RemovedViews = maps:without(maps:keys(V1), V0),
     ok = unmount_removed_views(RemovedViews),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
-    B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),
-    B3 = maps:merge(B2, Resets),
-    {reply, {ok, Ops1, Effects}, State#state{
-        bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
-    }}.
+    B3 = clear_streams_and_apply_resets(B1, Resets),
+    {Ops1, Snap1, V1, B3, Fps1, State}.
 
-handle_child_event(
-    ViewId,
-    Event,
-    Payload,
-    #state{views = V0, sent_fps = Fps0} = State
-) ->
-    #{ViewId := #{handler := H, bindings := B0, snapshot := Snap0} = View} = V0,
-    {B1, Resets, Effects} = H:handle_event(Event, Payload, B0),
+%% Same idea as process_root_change/4 but for a nested child view.
+process_child_change(H, B1, Resets, ViewId, #{snapshot := Snap0} = View, #state{
+    views = V0, sent_fps = Fps0
+}) ->
     Tmpl = H:render(B1),
     {Ops, Snap1} = arizona_diff:diff(Tmpl, Snap0),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
-    B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),
-    B3 = maps:merge(B2, Resets),
+    B3 = clear_streams_and_apply_resets(B1, Resets),
     V1 = V0#{ViewId => View#{bindings => B3, snapshot => maps:merge(Snap0, Snap1)}},
-    {reply, {ok, Ops1, Effects}, State#state{views = V1, sent_fps = Fps1}}.
+    {Ops1, V1, Fps1}.
 
-handle_root_info(
-    Info,
-    #state{
-        handler = H,
-        bindings = B0,
-        snapshot = Snap0,
-        views = V0,
-        transport_pid = TPid,
-        sent_fps = Fps0
-    } = State
-) ->
-    case erlang:function_exported(H, handle_info, 2) of
-        false ->
-            {noreply, State};
-        true ->
-            {B1, Resets, Effects} = H:handle_info(Info, B0),
-            Tmpl = H:render(B1),
-            Changed = compute_changed(B0, B1),
-            {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
-            RemovedViews = maps:without(maps:keys(V1), V0),
-            ok = unmount_removed_views(RemovedViews),
-            {Ops1, Fps1} = dedup_fps(Ops, Fps0),
-            B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),
-            B3 = maps:merge(B2, Resets),
-            push(TPid, Ops1, Effects),
-            {noreply, State#state{
-                bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
-            }}
-    end.
-
-handle_child_info(
-    ViewId,
-    Msg,
-    #state{views = V0, transport_pid = TPid, sent_fps = Fps0} = State
-) ->
-    #{ViewId := #{handler := H, bindings := B0, snapshot := Snap0} = View} = V0,
-    case erlang:function_exported(H, handle_info, 2) of
-        false ->
-            {noreply, State};
-        true ->
-            {B1, Resets, Effects} = H:handle_info(Msg, B0),
-            Tmpl = H:render(B1),
-            {Ops, Snap1} = arizona_diff:diff(Tmpl, Snap0),
-            {Ops1, Fps1} = dedup_fps(Ops, Fps0),
-            B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),
-            B3 = maps:merge(B2, Resets),
-            V1 = V0#{ViewId => View#{bindings => B3, snapshot => maps:merge(Snap0, Snap1)}},
-            push(TPid, Ops1, Effects),
-            {noreply, State#state{views = V1, sent_fps = Fps1}}
-    end.
+clear_streams_and_apply_resets(B1, Resets) ->
+    B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),
+    maps:merge(B2, Resets).
 
 maybe_unmount(H, Bindings) ->
     case erlang:function_exported(H, unmount, 1) of

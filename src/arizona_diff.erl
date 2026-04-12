@@ -53,6 +53,16 @@ never reach op-code targets.
 -ignore_xref([diff/3]).
 
 %% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+%% Stream operation helpers (stream_insert, stream_delete, ...) all chain
+%% into diff_stream_pending and assemble similar reply tuples. The shared
+%% shape is intentional -- it's the queue-draining loop. Op-code clauses
+%% in make_op also have inherent structural similarity.
+-elvis([{elvis_style, dont_repeat_yourself, disable}]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 
@@ -745,29 +755,4 @@ diff_child_dynamics([{Az, _New} | NR], [{Az, #{diff := false}} | OR]) ->
 diff_child_dynamics([{Az, Same} | NR], [{Az, Same} | OR]) ->
     diff_child_dynamics(NR, OR);
 diff_child_dynamics([{Az, New} | NR], [{Az, Old} | OR]) ->
-    [make_child_op(Az, New, Old) | diff_child_dynamics(NR, OR)].
-
-make_child_op(Az, {attr, Attr, false}, _Old) ->
-    [?OP_REM_ATTR, Az, Attr];
-make_child_op(Az, {attr, Attr, true}, _Old) ->
-    [?OP_SET_ATTR, Az, Attr, <<>>];
-make_child_op(Az, {attr, Attr, Val}, _Old) ->
-    [?OP_SET_ATTR, Az, Attr, arizona_template:to_bin(Val)];
-make_child_op(_Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := OldD}) ->
-    [VId, diff_child_dynamics(NewD, OldD)];
-make_child_op(Az, #{s := _, d := _} = New, #{s := _, d := _}) ->
-    [?OP_TEXT, Az, arizona_render:zip_or_fp(New)];
-make_child_op(Az, #{s := _, d := _} = New, _Old) ->
-    [?OP_UPDATE, Az, arizona_render:zip_or_fp(New)];
-make_child_op(Az, #{t := ?EACH, items := Items, template := Tmpl}, _Old) when
-    is_list(Items)
-->
-    [?OP_UPDATE, Az, arizona_render:zip_list_fp(Tmpl, Items)];
-make_child_op(Az, #{t := ?EACH, items := Items, order := Order, template := Tmpl}, _Old) ->
-    [?OP_UPDATE, Az, arizona_render:zip_stream_fp(Tmpl, Items, Order)];
-make_child_op(Az, remove, {attr, Attr, _}) ->
-    [?OP_REM_ATTR, Az, Attr];
-make_child_op(Az, remove, _Old) ->
-    [?OP_REMOVE_NODE, Az];
-make_child_op(Az, New, _Old) ->
-    [?OP_TEXT, Az, arizona_template:to_bin(New)].
+    [make_op(Az, New, Old) | diff_child_dynamics(NR, OR)].

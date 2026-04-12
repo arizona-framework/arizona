@@ -79,6 +79,15 @@ render(Bindings) ->
 -ignore_xref([parse_transform/2, format_error/1]).
 
 %% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+%% AST construction is inherently repetitive: each make_*_dynamic_ast and
+%% build_*_ast helper builds nested {tuple, ...} / {map_field_assoc, ...}
+%% literals that look structurally similar but represent different shapes.
+-elvis([{elvis_style, dont_repeat_yourself, disable}]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 

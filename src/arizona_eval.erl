@@ -61,6 +61,16 @@ framework-owned bindings like `id`. Violations raise
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+-ifdef(TEST).
+%% Inline EUnit tests intentionally repeat input/expected tuples for
+%% clarity of the assertions.
+-elvis([{elvis_style, dont_repeat_yourself, disable}]).
+-endif.
+
+%% --------------------------------------------------------------------
 %% Macros
 %% --------------------------------------------------------------------
 

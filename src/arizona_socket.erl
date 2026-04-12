@@ -44,6 +44,16 @@ socket closes with code `4500` (server crash).
 -export([handle_info/2]).
 
 %% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+-ifdef(TEST).
+%% Inline EUnit tests intentionally repeat op tuples (input vs expected
+%% scoped output) for readability of the assertions.
+-elvis([{elvis_style, dont_repeat_yourself, disable}]).
+-endif.
+
+%% --------------------------------------------------------------------
 %% Macros
 %% --------------------------------------------------------------------
 
@@ -123,7 +133,7 @@ init(Handler, Bindings, Opts) ->
         case Reconnect of
             true ->
                 {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
-                Ops = [[?OP_REPLACE, ViewId, PageHTML]],
+                Ops = replace_ops(ViewId, PageHTML),
                 {reply, encode(#{?OPS => Ops}), Socket#socket{pid = Pid, view_id = ViewId}};
             false ->
                 {ok, ViewId} = arizona_live:mount(Pid),
@@ -211,7 +221,7 @@ remount_or_close(
     try
         {ok, Pid} = arizona_live:start_link(H, IB, self(), OnMount),
         {ok, NewVId, PageHTML} = arizona_live:mount_and_render(Pid),
-        Ops = [[?OP_REPLACE, OldVId, PageHTML]],
+        Ops = replace_ops(OldVId, PageHTML),
         encode_reply(Ops, [], Socket#socket{pid = Pid, view_id = NewVId})
     catch
         Class:Reason:Stacktrace ->
@@ -226,8 +236,11 @@ handle_navigate(
     IB = maps:get(bindings, RouteOpts, #{}),
     OnMount = maps:get(on_mount, RouteOpts, []),
     {ok, NewVId, PageHTML} = arizona_live:navigate(Pid, H, IB, OnMount),
-    Ops = [[?OP_REPLACE, OldVId, PageHTML]],
+    Ops = replace_ops(OldVId, PageHTML),
     encode_reply(Ops, [], Socket#socket{view_id = NewVId, on_mount = OnMount}).
+
+replace_ops(ViewId, PageHTML) ->
+    [[?OP_REPLACE, ViewId, PageHTML]].
 
 dispatch_event(Pid, ViewId, Event, Payload) ->
     {ok, Ops, Effects} = arizona_live:handle_event(Pid, ViewId, Event, Payload),

@@ -90,12 +90,14 @@ route_to_cowboy({live, Path, Handler, Opts}) ->
 route_to_cowboy({ws, Path, Opts}) ->
     [{binary_to_list(Path), arizona_cowboy_ws, Opts}];
 route_to_cowboy({asset, Path, {dir, Dir}}) ->
-    [{binary_to_list(Path) ++ "/[...]", arizona_cowboy_static, #{dir => Dir}}];
+    asset_route(Path, Dir);
 route_to_cowboy({asset, Path, {priv_dir, App, SubDir}}) ->
-    Dir = filename:join(code:priv_dir(App), SubDir),
-    [{binary_to_list(Path) ++ "/[...]", arizona_cowboy_static, #{dir => Dir}}];
+    asset_route(Path, filename:join(code:priv_dir(App), SubDir));
 route_to_cowboy({controller, Path, Handler, State}) ->
     [{binary_to_list(Path), Handler, State}];
 route_to_cowboy({reload, Path, Opts}) ->
     persistent_term:put(arizona_reload_url, Path),
     [{binary_to_list(Path), arizona_cowboy_reload, Opts}].
+
+asset_route(Path, Dir) ->
+    [{binary_to_list(Path) ++ "/[...]", arizona_cowboy_static, #{dir => Dir}}].

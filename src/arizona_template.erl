@@ -325,12 +325,7 @@ Builds a stateful child snapshot, propagating `diff => false` from the template.
 make_child_snap(Tmpl, ChildD, ChildDeps, Id) ->
     #{s := S} = Tmpl,
     Snap = #{s => S, d => ChildD, deps => ChildDeps, view_id => Id},
-    Snap1 =
-        case Tmpl of
-            #{diff := false} -> Snap#{diff => false};
-            #{} -> Snap
-        end,
-    maybe_put_fingerprint(Tmpl, Snap1).
+    maybe_propagate(Tmpl, Snap).
 
 -doc """
 Invokes the optional `handle_update/2` callback on a stateful handler module.

@@ -93,6 +93,16 @@ inside an HTML attribute value.
 ]).
 
 %% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+-ifdef(TEST).
+%% Inline EUnit tests intentionally repeat command tuples to verify
+%% structural equality at different nesting levels.
+-elvis([{elvis_style, dont_repeat_yourself, disable}]).
+-endif.
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 

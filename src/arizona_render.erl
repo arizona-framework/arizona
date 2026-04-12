@@ -214,10 +214,7 @@ zip([S | Statics], [D | Dynamics]) ->
         case D of
             #{t := ?EACH, items := Items, template := Tmpl} when is_list(Items) ->
                 #{s := ItemS} = Tmpl,
-                [
-                    zip(ItemS, [arizona_template:unwrap_val(V) || {_Az, V} <:- ItemD])
-                 || ItemD <:- Items
-                ];
+                [zip_stream_item(ItemS, ItemD) || ItemD <:- Items];
             #{t := ?EACH, items := Items, order := Order, template := Tmpl} ->
                 #{s := ItemS} = Tmpl,
                 [zip_stream_item(ItemS, maps:get(K, Items)) || K <:- Order];
@@ -275,10 +272,7 @@ zip_list_fp(#{f := F, s := S, t := T}, ItemsList) ->
         ]
     };
 zip_list_fp(#{s := S}, ItemsList) ->
-    iolist_to_binary([
-        zip(S, [arizona_template:unwrap_val(V) || {_Az, V} <:- D])
-     || D <:- ItemsList
-    ]).
+    iolist_to_binary([zip_stream_item(S, D) || D <:- ItemsList]).
 
 -doc """
 Renders a stream's visible items (looked up from `Items` by `Order` keys)
