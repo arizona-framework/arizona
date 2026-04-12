@@ -232,7 +232,7 @@ remount_or_close(
 handle_navigate(
     Path, #socket{pid = Pid, view_id = OldVId, adapter = Adapter, adapter_state = AS} = Socket
 ) ->
-    {H, RouteOpts} = Adapter:resolve_route(Path, AS),
+    {H, RouteOpts} = arizona_adapter:call_resolve_route(Adapter, Path, AS),
     IB = maps:get(bindings, RouteOpts, #{}),
     OnMount = maps:get(on_mount, RouteOpts, []),
     {ok, NewVId, PageHTML} = arizona_live:navigate(Pid, H, IB, OnMount),

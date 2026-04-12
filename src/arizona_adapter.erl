@@ -8,7 +8,7 @@ has. The Cowboy adapter (`arizona_cowboy_router`) walks the compiled
 Cowboy dispatch table; alternative adapters could front a different
 HTTP server, an in-memory map, or a config file.
 
-`arizona_socket` is one consumer -- it calls `Adapter:resolve_route/2`
+`arizona_socket` is one consumer -- it calls `call_resolve_route/3`
 to look up the handler for a new path -- but nothing about the
 behaviour is specific to that caller.
 
@@ -22,6 +22,12 @@ resolve_route(Path :: path(), State :: term()) ->
 `State` is opaque to the caller -- whatever the adapter needs to
 perform the lookup (e.g. a compiled dispatch table reference).
 """.
+
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
+-export([call_resolve_route/3]).
 
 %% --------------------------------------------------------------------
 %% Behaviour callbacks
@@ -49,3 +55,17 @@ perform the lookup (e.g. a compiled dispatch table reference).
     layout => {module(), atom()},
     _ => term()
 }.
+
+%% --------------------------------------------------------------------
+%% API Functions
+%% --------------------------------------------------------------------
+
+-doc """
+Invokes the `resolve_route/2` callback on an adapter module.
+""".
+-spec call_resolve_route(Adapter, Path, State) -> {module(), route_opts()} when
+    Adapter :: module(),
+    Path :: path(),
+    State :: term().
+call_resolve_route(Adapter, Path, State) ->
+    Adapter:resolve_route(Path, State).
