@@ -113,6 +113,8 @@ fingerprints already shipped in the initial HTML.
     sent_fps :: map()
 }).
 
+-type state() :: #state{}.
+
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
@@ -285,6 +287,11 @@ apply_on_mount([Fun | Rest], Bindings) -> apply_on_mount(Rest, Fun(Bindings)).
 %% gen_server Callbacks
 %% --------------------------------------------------------------------
 
+-spec init({Handler, InitBindings, TransportPid, OnMount}) -> {ok, state()} when
+    Handler :: module(),
+    InitBindings :: map(),
+    TransportPid :: pid() | undefined,
+    OnMount :: on_mount().
 init({Handler, InitBindings, TransportPid, OnMount}) ->
     TransportPid =/= undefined andalso erlang:put('$arizona_connected', true),
     {ok, #state{
