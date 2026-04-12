@@ -369,35 +369,46 @@ compile_body_parts(ExprAST, Module) ->
     compile_body_parts(ExprAST, Module, false).
 
 compile_body_parts(ExprAST, Module, LiveRender) ->
-    case is_static_binary(ExprAST) of
-        true ->
-            Bin = extract_binary_value(ExprAST),
-            Statics = [Bin],
-            {Statics, [], generate_fingerprint(Statics), #{}};
-        false ->
-            case is_element_tuple(ExprAST) of
-                true ->
-                    compile_fragment_parts([ExprAST], Module, LiveRender);
-                false ->
-                    case is_element_list(ExprAST) of
-                        true ->
-                            compile_fragment_parts(ast_list_to_list(ExprAST), Module, LiveRender);
-                        false ->
-                            case is_list_ast(ExprAST) of
-                                true ->
-                                    compile_mixed_items(ast_list_to_list(ExprAST), Module);
-                                false ->
-                                    Statics = [<<>>, <<>>],
-                                    DynASTs = [
-                                        make_text_dynamic_ast(
-                                            <<"0">>, ExprAST, Module, line(ExprAST)
-                                        )
-                                    ],
-                                    {Statics, DynASTs, generate_fingerprint(Statics), #{}}
-                            end
-                    end
-            end
+    compile_classified_body(classify_body(ExprAST), ExprAST, Module, LiveRender).
+
+classify_body(AST) ->
+    case is_static_binary(AST) of
+        true -> static_binary;
+        false -> classify_complex_body(AST)
     end.
+
+classify_complex_body(AST) ->
+    case is_element_tuple(AST) of
+        true -> element_tuple;
+        false -> classify_list_body(AST)
+    end.
+
+classify_list_body(AST) ->
+    case is_element_list(AST) of
+        true -> element_list;
+        false -> classify_other_body(AST)
+    end.
+
+classify_other_body(AST) ->
+    case is_list_ast(AST) of
+        true -> list_ast;
+        false -> text_dynamic
+    end.
+
+compile_classified_body(static_binary, ExprAST, _Module, _LiveRender) ->
+    Bin = extract_binary_value(ExprAST),
+    Statics = [Bin],
+    {Statics, [], generate_fingerprint(Statics), #{}};
+compile_classified_body(element_tuple, ExprAST, Module, LiveRender) ->
+    compile_fragment_parts([ExprAST], Module, LiveRender);
+compile_classified_body(element_list, ExprAST, Module, LiveRender) ->
+    compile_fragment_parts(ast_list_to_list(ExprAST), Module, LiveRender);
+compile_classified_body(list_ast, ExprAST, Module, _LiveRender) ->
+    compile_mixed_items(ast_list_to_list(ExprAST), Module);
+compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender) ->
+    Statics = [<<>>, <<>>],
+    DynASTs = [make_text_dynamic_ast(<<"0">>, ExprAST, Module, line(ExprAST))],
+    {Statics, DynASTs, generate_fingerprint(Statics), #{}}.
 
 compile_fragment_parts(ElementASTs, Module, LiveRender) ->
     Opts = prescan_directives(ElementASTs),
@@ -424,34 +435,32 @@ compile_mixed_items(Items, Module) ->
     Opts = prescan_directives(Items),
     State0 = #state{module = Module, nodiff = maps:is_key(diff, Opts)},
     State1 = lists:foldl(
-        fun(Item, State) ->
-            case is_static_binary(Item) of
-                true ->
-                    buf_append(State, extract_binary_value(Item));
-                false ->
-                    case is_element_tuple(Item) of
-                        true ->
-                            {Tag, Attrs0, Children, ElemLine} = extract_element(Item),
-                            {Attrs, _ElemOpts} = extract_directives(Attrs0),
-                            compile_element(Tag, Attrs, Children, ElemLine, State);
-                        false ->
-                            DynAST =
-                                case State#state.nodiff of
-                                    true ->
-                                        make_nodiff_dynamic_ast(Item, Module, line(Item));
-                                    false ->
-                                        make_text_dynamic_ast(<<"0">>, Item, Module, line(Item))
-                                end,
-                            flush(State, DynAST)
-                    end
-            end
-        end,
-        State0,
-        Items
+        fun(Item, State) -> compile_mixed_item(Item, Module, State) end, State0, Items
     ),
     {Statics, DynASTs} = finalize(State1),
     Fingerprint = generate_fingerprint(Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
+
+compile_mixed_item(Item, Module, State) ->
+    case is_static_binary(Item) of
+        true -> buf_append(State, extract_binary_value(Item));
+        false -> compile_mixed_non_static(Item, Module, State)
+    end.
+
+compile_mixed_non_static(Item, Module, State) ->
+    case is_element_tuple(Item) of
+        true ->
+            {Tag, Attrs0, Children, ElemLine} = extract_element(Item),
+            {Attrs, _ElemOpts} = extract_directives(Attrs0),
+            compile_element(Tag, Attrs, Children, ElemLine, State);
+        false ->
+            compile_mixed_dynamic(Item, Module, State)
+    end.
+
+compile_mixed_dynamic(Item, Module, #state{nodiff = true} = State) ->
+    flush(State, make_nodiff_dynamic_ast(Item, Module, line(Item)));
+compile_mixed_dynamic(Item, Module, State) ->
+    flush(State, make_text_dynamic_ast(<<"0">>, Item, Module, line(Item))).
 
 extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node) ->
     case is_list_ast(AttrsAST) of
@@ -565,34 +574,42 @@ compile_child(Child, ElemAz, State0, Slot) ->
         true ->
             {buf_append(State0, extract_binary_value(Child)), Slot};
         false ->
-            case is_element_tuple(Child) of
-                true ->
-                    {Tag, Attrs, Children, ElemLine} = extract_element(Child),
-                    {compile_element(Tag, Attrs, Children, ElemLine, State0), Slot};
-                false ->
-                    case is_invalid_static_child(Child) of
-                        true ->
-                            ValueStr = erl_pp:expr(Child),
-                            parse_error({invalid_child, ValueStr}, line(Child));
-                        false when State0#state.nodiff ->
-                            Module = State0#state.module,
-                            DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child)),
-                            {flush(State0, DynAST), Slot};
-                        false ->
-                            Module = State0#state.module,
-                            ElemAzBin = integer_to_binary(ElemAz),
-                            MarkerAz =
-                                case Slot of
-                                    0 -> ElemAzBin;
-                                    N -> <<ElemAzBin/binary, ":", (integer_to_binary(N))/binary>>
-                                end,
-                            State1 = buf_append(State0, <<"<!--az:", MarkerAz/binary, "-->">>),
-                            DynAST = make_text_dynamic_ast(MarkerAz, Child, Module, line(Child)),
-                            State2 = flush(State1, DynAST),
-                            {State2#state{buf = <<"<!--/az-->">>}, Slot + 1}
-                    end
-            end
+            compile_non_static_child(Child, ElemAz, State0, Slot)
     end.
+
+compile_non_static_child(Child, ElemAz, State0, Slot) ->
+    case is_element_tuple(Child) of
+        true ->
+            {Tag, Attrs, Children, ElemLine} = extract_element(Child),
+            {compile_element(Tag, Attrs, Children, ElemLine, State0), Slot};
+        false ->
+            compile_dynamic_child(Child, ElemAz, State0, Slot)
+    end.
+
+compile_dynamic_child(Child, ElemAz, State0, Slot) ->
+    case is_invalid_static_child(Child) of
+        true ->
+            ValueStr = erl_pp:expr(Child),
+            parse_error({invalid_child, ValueStr}, line(Child));
+        false ->
+            emit_child_dynamic(Child, ElemAz, State0, Slot)
+    end.
+
+emit_child_dynamic(Child, _ElemAz, #state{nodiff = true, module = Module} = State0, Slot) ->
+    DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child)),
+    {flush(State0, DynAST), Slot};
+emit_child_dynamic(Child, ElemAz, #state{module = Module} = State0, Slot) ->
+    ElemAzBin = integer_to_binary(ElemAz),
+    MarkerAz = marker_az(ElemAzBin, Slot),
+    State1 = buf_append(State0, <<"<!--az:", MarkerAz/binary, "-->">>),
+    DynAST = make_text_dynamic_ast(MarkerAz, Child, Module, line(Child)),
+    State2 = flush(State1, DynAST),
+    {State2#state{buf = <<"<!--/az-->">>}, Slot + 1}.
+
+marker_az(ElemAzBin, 0) ->
+    ElemAzBin;
+marker_az(ElemAzBin, Slot) ->
+    <<ElemAzBin/binary, ":", (integer_to_binary(Slot))/binary>>.
 
 make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
     LocAST = loc_ast(Module, ExprLine),

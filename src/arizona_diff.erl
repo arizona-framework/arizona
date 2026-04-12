@@ -624,14 +624,7 @@ lis_scan([Key | Rest], PosMap, I, Len, Tails, Parent) ->
                             );
                         false ->
                             Pos = lis_bsearch(Tails, V, 0, Len - 1),
-                            Parent2 =
-                                case Pos of
-                                    0 ->
-                                        Parent;
-                                    _ ->
-                                        #{(Pos - 1) := {_, PrevIdx}} = Tails,
-                                        Parent#{I => PrevIdx}
-                                end,
+                            Parent2 = update_lis_parent(Pos, I, Parent, Tails),
                             lis_scan(
                                 Rest,
                                 PosMap,
@@ -645,6 +638,12 @@ lis_scan([Key | Rest], PosMap, I, Len, Tails, Parent) ->
         #{} ->
             lis_scan(Rest, PosMap, I + 1, Len, Tails, Parent)
     end.
+
+update_lis_parent(0, _I, Parent, _Tails) ->
+    Parent;
+update_lis_parent(Pos, I, Parent, Tails) ->
+    #{(Pos - 1) := {_, PrevIdx}} = Tails,
+    Parent#{I => PrevIdx}.
 
 lis_bsearch(_Tails, _V, Lo, Hi) when Lo >= Hi -> Lo;
 lis_bsearch(Tails, V, Lo, Hi) ->
