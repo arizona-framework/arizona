@@ -91,7 +91,7 @@ render_page(H, Req, Bindings, State) ->
 
 reply_error(Bindings, ErrorInfo, Req, State) ->
     {Mod, Fun} = error_page(),
-    Tmpl = Mod:Fun(Bindings#{error_info => ErrorInfo}),
+    Tmpl = apply(Mod, Fun, [Bindings#{error_info => ErrorInfo}]),
     reply(500, arizona_render:render_to_iolist(Tmpl), Req, State).
 
 reply(Status, Body, Req, State) ->

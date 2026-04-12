@@ -253,7 +253,7 @@ reload_module(Mod, File, Binary) ->
 
 get_compile_opts(Mod) ->
     try
-        Info = Mod:module_info(compile),
+        Info = apply(Mod, module_info, [compile]),
         RawOpts = proplists:get_value(options, Info, []),
         filter_opts(RawOpts)
     catch

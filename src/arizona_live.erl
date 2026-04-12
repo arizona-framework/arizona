@@ -280,8 +280,8 @@ exposed for SSR-style rendering paths in `arizona_render`.
     Bindings :: map(),
     Bindings1 :: map().
 apply_on_mount([], Bindings) -> Bindings;
-apply_on_mount([{Mod, Fun} | Rest], Bindings) -> apply_on_mount(Rest, Mod:Fun(Bindings));
-apply_on_mount([Fun | Rest], Bindings) -> apply_on_mount(Rest, Fun(Bindings)).
+apply_on_mount([{Mod, Fun} | Rest], Bindings) -> apply_on_mount(Rest, apply(Mod, Fun, [Bindings]));
+apply_on_mount([Fun | Rest], Bindings) -> apply_on_mount(Rest, apply(Fun, [Bindings])).
 
 %% --------------------------------------------------------------------
 %% gen_server Callbacks

@@ -72,8 +72,8 @@ apply_middlewares([H | Rest], Req, Bindings) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-call({Mod, Fun}, Req, Bindings) -> Mod:Fun(Req, Bindings);
-call(Fun, Req, Bindings) -> Fun(Req, Bindings).
+call({Mod, Fun}, Req, Bindings) -> apply(Mod, Fun, [Req, Bindings]);
+call(Fun, Req, Bindings) -> apply(Fun, [Req, Bindings]).
 
 -ifdef(TEST).
 
