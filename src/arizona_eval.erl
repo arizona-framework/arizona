@@ -397,11 +397,19 @@ mount_or_update_stateful(H, Props, Id, Old) ->
     case Old of
         #{Id := #{handler := H, bindings := B}} ->
             arizona_template:call_handle_update(H, Props, B);
+        #{Id := #{handler := OldH, bindings := OldB}} ->
+            %% Same id, different handler: unmount the old instance before
+            %% mounting the new one so it can release resources.
+            ok = arizona_stateful:call_unmount(OldH, OldB),
+            fresh_mount_stateful(H, Props);
         #{} ->
-            {B1, Resets} = H:mount(Props),
-            ok = check_restricted_keys(B1, Props, H),
-            {B1, Resets}
+            fresh_mount_stateful(H, Props)
     end.
+
+fresh_mount_stateful(H, Props) ->
+    {B1, Resets} = H:mount(Props),
+    ok = check_restricted_keys(B1, Props, H),
+    {B1, Resets}.
 
 eval_each_list(Items, Tmpl, Views) ->
     eval_each(fun(Old) -> render_list_items(Items, Tmpl, {Old, #{}}) end, Tmpl, Views, undefined).

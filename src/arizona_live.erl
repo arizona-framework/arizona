@@ -335,7 +335,7 @@ handle_call(
     #state{handler = OldH, bindings = OldB, transport_pid = TPid, sent_fps = Fps0} = _State
 ) ->
     ok = cancel_pending_timers(),
-    ok = maybe_unmount(OldH, OldB),
+    ok = arizona_stateful:call_unmount(OldH, OldB),
     {NewViewId, HTML, Snap, B2, V1} = do_mount(NewHandler, NewIB, #{}, NewOnMount),
     {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
     {reply, {ok, NewViewId, PageContent1}, #state{
@@ -372,7 +372,7 @@ handle_info(Info, State) ->
     handle_root_info(Info, State).
 
 terminate(_Reason, #state{handler = H, bindings = B}) ->
-    ok = maybe_unmount(H, B);
+    ok = arizona_stateful:call_unmount(H, B);
 terminate(_Reason, _State) ->
     ok.
 
@@ -468,16 +468,10 @@ clear_streams_and_apply_resets(B1, Resets) ->
     B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),
     maps:merge(B2, Resets).
 
-maybe_unmount(H, Bindings) ->
-    case erlang:function_exported(H, unmount, 1) of
-        true -> H:unmount(Bindings);
-        false -> ok
-    end.
-
 unmount_removed_views(RemovedViews) ->
     maps:foreach(
         fun(_Id, #{handler := H, bindings := B}) ->
-            ok = maybe_unmount(H, B)
+            ok = arizona_stateful:call_unmount(H, B)
         end,
         RemovedViews
     ).

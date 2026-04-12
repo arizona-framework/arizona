@@ -37,6 +37,12 @@ the diff is applied (e.g. focus a field, dispatch a custom event).
 """.
 
 %% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
+-export([call_unmount/2]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 
@@ -115,3 +121,23 @@ rendering it, or the page is being navigated away). Optional.
 -callback unmount(Bindings :: bindings()) -> ok.
 
 -optional_callbacks([handle_event/3, handle_info/2, handle_update/2, unmount/1]).
+
+%% --------------------------------------------------------------------
+%% API Functions
+%% --------------------------------------------------------------------
+
+-doc """
+Invokes the optional `unmount/1` callback on a stateful handler module.
+
+No-op if the callback is not exported. Used by the live process when a
+child view is removed from the parent template and by the evaluator when
+a stateful slot swaps handlers at the same id.
+""".
+-spec call_unmount(Handler, Bindings) -> ok when
+    Handler :: module(),
+    Bindings :: bindings().
+call_unmount(H, Bindings) ->
+    case erlang:function_exported(H, unmount, 1) of
+        true -> H:unmount(Bindings);
+        false -> ok
+    end.
