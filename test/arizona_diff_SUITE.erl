@@ -434,7 +434,7 @@ no_diff_diff4_top_level(Config) when is_list(Config) ->
     OldSnap = #{
         s => [<<"<div az=\"0\">">>, <<"</div>">>],
         d => [{<<"0">>, <<"old">>}],
-        deps => [[title]],
+        deps => [#{title => true}],
         diff => false
     },
     NewTmpl = #{
