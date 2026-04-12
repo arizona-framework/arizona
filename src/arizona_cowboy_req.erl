@@ -1,16 +1,64 @@
 -module(arizona_cowboy_req).
+-moduledoc """
+Middleware pipeline for Arizona Cowboy handlers.
+
+Provides a tiny `apply_middlewares/3` runner that threads a Cowboy
+`req` and a bindings map through a list of middleware steps. Each
+middleware can either let the chain continue (`{cont, Req, Bindings}`)
+or halt with a final response (`{halt, Req}`).
+
+Used by `arizona_cowboy_http:init/2` to run any middlewares declared
+on a route before the Arizona handler is invoked. Typical use cases:
+auth checks, locale negotiation, request logging, redirect-on-condition.
+
+## Middleware shape
+
+```erlang
+fun((cowboy_req:req(), Bindings) -> {cont, Req, Bindings} | {halt, Req})
+%% or
+{Module, Function}     %% same arity, called as Module:Function/2
+```
+""".
+
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([apply_middlewares/3]).
+
 -ifdef(TEST).
 -export([test_cont_middleware/2]).
+-include_lib("eunit/include/eunit.hrl").
 -endif.
 
--type req() :: cowboy_req:req().
--type middleware() ::
-    fun((req(), arizona_stateful:bindings()) -> middleware_result()) | {module(), atom()}.
--type middleware_result() :: {cont, req(), arizona_stateful:bindings()} | {halt, req()}.
--export_type([middleware/0, middleware_result/0]).
+%% --------------------------------------------------------------------
+%% Types exports
+%% --------------------------------------------------------------------
 
--spec apply_middlewares([middleware()], req(), arizona_stateful:bindings()) -> middleware_result().
+-export_type([middleware/0]).
+-export_type([middleware_result/0]).
+
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
+
+-nominal req() :: cowboy_req:req().
+-nominal middleware() ::
+    fun((req(), arizona_stateful:bindings()) -> middleware_result()) | {module(), atom()}.
+-nominal middleware_result() :: {cont, req(), arizona_stateful:bindings()} | {halt, req()}.
+
+%% --------------------------------------------------------------------
+%% API Functions
+%% --------------------------------------------------------------------
+
+-doc """
+Runs the middleware list left to right, threading `Req` and `Bindings`
+through each step. Stops on the first `{halt, Req}` and returns it.
+""".
+-spec apply_middlewares(Middlewares, Req, Bindings) -> middleware_result() when
+    Middlewares :: [middleware()],
+    Req :: req(),
+    Bindings :: arizona_stateful:bindings().
 apply_middlewares([], Req, Bindings) ->
     {cont, Req, Bindings};
 apply_middlewares([H | Rest], Req, Bindings) ->
@@ -19,11 +67,14 @@ apply_middlewares([H | Rest], Req, Bindings) ->
         {halt, _Req1} = Halt -> Halt
     end.
 
+%% --------------------------------------------------------------------
+%% Internal functions
+%% --------------------------------------------------------------------
+
 call({Mod, Fun}, Req, Bindings) -> Mod:Fun(Req, Bindings);
 call(Fun, Req, Bindings) -> Fun(Req, Bindings).
 
 -ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
 
 mock_req() ->
     #{
