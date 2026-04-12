@@ -1,8 +1,55 @@
 -module(arizona_error_page).
+-moduledoc """
+Stateless template that renders the dev-mode error page.
+
+When a request crashes, `arizona_cowboy_http` builds an `error_info`
+map and calls this template's `render/1` to produce a self-contained
+HTML page with the exception class, reason, and stack frames styled
+for monospace display.
+
+If a `reload_url` is present in the bindings, the page also embeds a
+small `EventSource` script so the browser auto-reloads as soon as
+the dev watcher reports a successful recompile.
+
+## Bindings
+
+- `error_info` -- map with `class`, `reason`, `stacktrace`, and
+  optional `reload_url`
+
+## Reason formatting
+
+For known reason shapes, the renderer produces a richer summary:
+
+- `{compile_error, Errors}` -- formatted as a per-file error list
+- `{arizona_loc, {Mod, Line}, Reason}` -- prefixes the title with the
+  source location captured by `arizona_render` during dynamic eval
+
+For everything else it falls back to `erl_error:format_exception/3`,
+extracts the shell-style summary, and pretty-prints the raw reason.
+""".
 -include("arizona_stateless.hrl").
+
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
 -export([render/1]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
 -ignore_xref([render/1]).
 
+%% --------------------------------------------------------------------
+%% API Functions
+%% --------------------------------------------------------------------
+
+-doc """
+Renders the error page from `error_info` bindings.
+""".
+-spec render(Bindings) -> arizona_template:template() when
+    Bindings :: map().
 render(Bindings) ->
     ErrorInfo = maps:get(error_info, Bindings),
     Class = maps:get(class, ErrorInfo),
@@ -14,8 +61,8 @@ render(Bindings) ->
     ?html(
         {html, [], [
             {head, [], [
-                {meta, [{charset, <<"utf-8">>}]},
-                {title, [], [<<"500 -- Server Error">>]},
+                {meta, [{charset, ~"utf-8"}]},
+                {title, [], [~"500 -- Server Error"]},
                 {style, [],
                     ~"""
                     *{margin:0;padding:0;box-sizing:border-box}
@@ -30,22 +77,22 @@ render(Bindings) ->
             ]},
             {body, [], [
                 {h1, [], [Title]},
-                {pre, [{class, <<"reason">>}], [ReasonStr]},
-                {'div', [{id, <<"stacktrace">>}], [
+                {pre, [{class, ~"reason"}], [ReasonStr]},
+                {'div', [{id, ~"stacktrace"}], [
                     ?each(
                         fun({M, F, A, Info}) ->
                             Loc = format_loc(Info),
-                            {'div', [{class, <<"frame">>}], [
-                                {span, [{class, <<"mod">>}], [escape(atom_to_binary(M))]},
-                                <<":">>,
-                                {span, [{class, <<"fun">>}], [
+                            {'div', [{class, ~"frame"}], [
+                                {span, [{class, ~"mod"}], [escape(atom_to_binary(M))]},
+                                ~":",
+                                {span, [{class, ~"fun"}], [
                                     <<
                                         (escape(atom_to_binary(F)))/binary,
                                         "/",
                                         (integer_to_binary(arity(A)))/binary
                                     >>
                                 ]},
-                                {span, [{class, <<"loc">>}], [<<" ">>, Loc]}
+                                {span, [{class, ~"loc"}], [~" ", Loc]}
                             ]}
                         end,
                         Stacktrace
@@ -56,8 +103,12 @@ render(Bindings) ->
         ]}
     ).
 
+%% --------------------------------------------------------------------
+%% Internal functions
+%% --------------------------------------------------------------------
+
 format_title(_Class, {compile_error, _Errors}, _Stacktrace) ->
-    <<"Compilation Error">>;
+    ~"Compilation Error";
 format_title(Class, {arizona_loc, {Mod, Line}, Reason}, Stacktrace) ->
     Prefix = unicode:characters_to_binary(io_lib:format("~s:~b: ", [Mod, Line])),
     unicode:characters_to_binary([Prefix, error_summary(Class, Reason, Stacktrace)]);
@@ -132,7 +183,7 @@ format_loc(Info) ->
     File = proplists:get_value(file, Info, ""),
     Line = proplists:get_value(line, Info, 0),
     case File of
-        "" -> <<"">>;
+        "" -> <<>>;
         _ -> unicode:characters_to_binary([File, ":", integer_to_list(Line)])
     end.
 
