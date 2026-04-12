@@ -1,21 +1,85 @@
 -module(arizona_diff).
--export([diff/2, diff/3, diff/4]).
--ignore_xref([diff/3]).
+-moduledoc """
+Computes the minimal set of patch operations between an old snapshot and a
+freshly evaluated template.
+
+Three entry points, each more powerful than the last:
+
+- `diff/2` -- bare diff: walks new dynamics against old, emits patch ops.
+- `diff/3` -- adds a `Views` accumulator so nested stateful children can be
+  tracked across the recursion.
+- `diff/4` -- adds a `Changed` set of dirty bindings, so dynamics whose
+  dependencies didn't change are skipped entirely (the fast path).
+
+Each op is a list whose first element is one of the `?OP_*` codes defined
+in `arizona.hrl`; the rest are operands consumed by the JS client. The
+op codes:
+
+```
+?OP_TEXT, ?OP_SET_ATTR, ?OP_REM_ATTR, ?OP_UPDATE, ?OP_REMOVE_NODE,
+?OP_INSERT, ?OP_REMOVE, ?OP_ITEM_PATCH, ?OP_REPLACE, ?OP_MOVE
+```
+
+## Stream diffing
+
+Streams ship with a queue of pending mutations (`insert`, `delete`,
+`update`, `move`, `reorder`, `reset`). `diff_stream/4` drains that queue
+into the corresponding ops, then `apply_limit/5` enforces visibility
+limits and `compute_reorder_ops/4` uses Longest Increasing Subsequence
+(LIS) to emit the minimum number of `?OP_MOVE`s for a reorder.
+
+## Az-nodiff safety
+
+Templates compiled with `az-nodiff` carry `diff => false` and dynamics
+with `Az = undefined`. The diff functions short-circuit on `diff => false`
+before ever inspecting individual dynamics, so `undefined` Az values
+never reach op-code targets.
+""".
+
 -include("arizona.hrl").
 
-%% --- Types ------------------------------------------------------------------
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
 
--type op() :: [integer() | binary() | term()].
+-export([diff/2]).
+-export([diff/3]).
+-export([diff/4]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([diff/3]).
+
+%% --------------------------------------------------------------------
+%% Types exports
+%% --------------------------------------------------------------------
 
 -export_type([op/0]).
 
-%% --- diff/2 ------------------------------------------------------------------
-%%
-%% Note: dynamics with Az = `undefined` (from az-nodiff templates) are never
-%% reached here because their parent template always has `diff => false`,
-%% which short-circuits before individual dynamics are examined.
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
 
--spec diff(map(), map()) -> {list(), map()}.
+-nominal op() :: [integer() | binary() | term()].
+
+%% --------------------------------------------------------------------
+%% API Functions
+%% --------------------------------------------------------------------
+
+-doc """
+Bare diff: returns `{Ops, NewSnapshot}` for a new template against an old
+snapshot.
+
+Short-circuits to `{[], OldSnap}` when the old snapshot carries
+`diff => false` (set by `az-nodiff`).
+""".
+-spec diff(Template, OldSnapshot) -> {Ops, NewSnapshot} when
+    Template :: arizona_template:template(),
+    OldSnapshot :: arizona_template:snapshot(),
+    Ops :: [op()],
+    NewSnapshot :: arizona_template:snapshot().
 diff(_NewTmpl, #{diff := false} = OldSnap) ->
     {[], OldSnap};
 diff(#{s := Statics, d := NewDynamics} = Tmpl, #{s := Statics, d := OldEvals}) ->
@@ -24,9 +88,17 @@ diff(#{s := Statics, d := NewDynamics} = Tmpl, #{s := Statics, d := OldEvals}) -
     Snap0 = #{s => Statics, d => EvalNew},
     {Ops, arizona_template:maybe_put_fingerprint(Tmpl, Snap0)}.
 
-%% --- diff/3 ------------------------------------------------------------------
-
--spec diff(map(), map(), map()) -> {list(), map(), map()}.
+-doc """
+Diff with view tracking: threads a `Views` map through the recursion so
+nested stateful children are accumulated alongside the patch ops.
+""".
+-spec diff(Template, OldSnapshot, Views) -> {Ops, NewSnapshot, Views1} when
+    Template :: arizona_template:template(),
+    OldSnapshot :: arizona_template:snapshot(),
+    Views :: map(),
+    Ops :: [op()],
+    NewSnapshot :: arizona_template:snapshot(),
+    Views1 :: map().
 diff(_NewTmpl, #{diff := false} = OldSnap, Views) ->
     {[], OldSnap, Views};
 diff(#{s := Statics, d := NewDynamics} = Tmpl, #{s := Statics, d := OldEvals}, Views0) ->
@@ -36,9 +108,21 @@ diff(#{s := Statics, d := NewDynamics} = Tmpl, #{s := Statics, d := OldEvals}, V
     Snap0 = #{s => Statics, d => EvalNew, deps => NewDeps},
     {Ops, arizona_template:maybe_put_fingerprint(Tmpl, Snap0), NewViews}.
 
-%% --- diff/4 ------------------------------------------------------------------
+-doc """
+Dependency-aware diff: takes a `Changed` map of dirty binding keys and
+skips dynamics whose stored deps don't intersect with it.
 
--spec diff(map(), map(), map(), map()) -> {list(), map(), map()}.
+This is the production fast path -- only the dynamics actually affected
+by the bindings that changed are re-evaluated.
+""".
+-spec diff(Template, OldSnapshot, Views, Changed) -> {Ops, NewSnapshot, Views1} when
+    Template :: arizona_template:template(),
+    OldSnapshot :: arizona_template:snapshot(),
+    Views :: map(),
+    Changed :: map(),
+    Ops :: [op()],
+    NewSnapshot :: arizona_template:snapshot(),
+    Views1 :: map().
 diff(_NewTmpl, #{diff := false} = OldSnap, Views, _Changed) ->
     {[], OldSnap, Views};
 diff(
@@ -52,7 +136,9 @@ diff(
     Snap0 = #{s => Statics, d => NewD, deps => NewDeps},
     {Ops, arizona_template:maybe_put_fingerprint(Tmpl, Snap0), NewViews}.
 
-%% --- diff_dynamics (no views) ------------------------------------------------
+%% --------------------------------------------------------------------
+%% Internal functions
+%% --------------------------------------------------------------------
 
 diff_dynamics([], []) ->
     [];
@@ -62,8 +148,6 @@ diff_dynamics([{Az, Same} | NR], [{Az, Same} | OR]) ->
     diff_dynamics(NR, OR);
 diff_dynamics([{Az, New} | NR], [{Az, Old} | OR]) ->
     [make_op(Az, New, Old) | diff_dynamics(NR, OR)].
-
-%% --- diff_dynamics_v (with views + dep skip) ---------------------------------
 
 diff_dynamics_v([], [], [], _Changed, Views) ->
     {[], [], [], Views};
@@ -203,8 +287,6 @@ carry_item_children(ChildViewIds, Old, New) ->
 
 deps_changed(Deps, Changed) ->
     map_size(maps:intersect(Deps, Changed)) > 0.
-
-%% --- diff_stream -------------------------------------------------------------
 
 diff_stream(
     Az,
@@ -418,8 +500,6 @@ diff_stream_op(Az, reset, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
         diff_stream_pending(Az, Rest, Source, Tmpl, NewSnaps, VKeys, Views1),
     {RemOps ++ DiffOps ++ MoveOps ++ RestOps, FinalSnap, Views2}.
 
-%% --- diff_list ---------------------------------------------------------------
-
 diff_list(Az, #{source := Items, template := Tmpl}, #{items := OldItemsList}, Views0) ->
     {NewItemsList, Views1} = arizona_eval:render_list_items(Items, Tmpl, Views0),
     NewSnap = #{t => ?EACH, items => NewItemsList, template => Tmpl},
@@ -453,8 +533,6 @@ diff_list_zip(Az, [NewD | NR], [OldD | OR], Views0) ->
     {Ops, NewTail, OldTail, Views2};
 diff_list_zip(_Az, NewTail, OldTail, Views) ->
     {[], NewTail, OldTail, Views}.
-
-%% --- smart_reset_items -------------------------------------------------------
 
 smart_reset_items(_Az, [], _Kept, _ItemsMap, _Tmpl, Views, Snaps) ->
     {[], Snaps, Views};
@@ -505,8 +583,6 @@ smart_reset_items(Az, [K | Rest], Kept, ItemsMap, Tmpl, Views0, Snaps) ->
                 ),
             {[InsOp | RestOps], FinalSnaps, Views2}
     end.
-
-%% --- Limit reconciliation ----------------------------------------------------
 
 apply_limit(
     _Az,
@@ -576,8 +652,7 @@ snap_add_missing(Az, [K | Rest], Snaps, ItemsMap, Tmpl, Views0) ->
             {[InsOp | RestOps], FinalSnaps, Views2}
     end.
 
-%% --- LIS (Longest Increasing Subsequence) ------------------------------------
-
+%% Longest Increasing Subsequence -- minimal moves for stream reorder.
 lis_indices(NewOrder, OldPosMap) ->
     {Len, Tails, Parent} = lis_scan(NewOrder, OldPosMap, 1, 0, #{}, #{}),
     case Len of
@@ -651,8 +726,6 @@ lis_backtrack(Idx, Parent, Acc) ->
         end,
     lis_backtrack(Next, Parent, Acc#{Idx => true}).
 
-%% --- compute_reorder_ops ----------------------------------------------------
-
 compute_reorder_ops(_Az, OldOrder, NewOrder, _Kept) when OldOrder =:= NewOrder ->
     [];
 compute_reorder_ops(Az, OldOrder, NewOrder, Kept) ->
@@ -687,8 +760,6 @@ emit_move_ops(Az, LIS, [Key | Rest], I, Prev) ->
             ]
     end.
 
-%% --- make_op -----------------------------------------------------------------
-
 make_op(Az, {attr, Attr, false}, _Old) ->
     [?OP_REM_ATTR, Az, Attr];
 make_op(Az, {attr, Attr, true}, _Old) ->
@@ -714,8 +785,6 @@ make_op(Az, remove, _Old) ->
 make_op(Az, New, _Old) ->
     [?OP_TEXT, Az, arizona_template:to_bin(New)].
 
-%% --- diff_item_dynamics_v ----------------------------------------------------
-
 diff_item_dynamics_v([], [], Views) ->
     {[], Views};
 diff_item_dynamics_v([{Az, _} | NR], [{Az, #{diff := false}} | OR], Views0) ->
@@ -739,8 +808,6 @@ diff_item_dynamics_v([{Az, New} | NR], [{Az, Old} | OR], Views0) ->
             {RestOps, Views1} = diff_item_dynamics_v(NR, OR, Views0),
             {[make_op(Az, New, Old) | RestOps], Views1}
     end.
-
-%% --- diff_child_dynamics -----------------------------------------------------
 
 diff_child_dynamics([], []) ->
     [];
