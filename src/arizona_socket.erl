@@ -25,8 +25,8 @@ Outbound text frames are JSON maps with keys `~"o"` (ops) and/or
 ## Crash handling
 
 The live process is linked. If it exits with a non-normal reason, the
-socket attempts to remount the same handler (`remount_or_close/1`); if
-that also fails, the socket closes with code `4500` (server crash).
+socket attempts to remount the same handler; if that also fails, the
+socket closes with code `4500` (server crash).
 """.
 
 -include("arizona.hrl").

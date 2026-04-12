@@ -20,7 +20,7 @@ against the `Changed` set in `arizona_diff:diff/4`.
 
 ## Container handling
 
-`eval_val` and `eval_val_v` recurse into:
+Evaluation recurses into the following dynamic value shapes:
 
 - **`each` containers** -- lists (`source := [_]`), streams
   (`source := #stream{}`), and maps (`source := #{...}`)

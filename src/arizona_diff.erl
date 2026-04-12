@@ -23,10 +23,10 @@ op codes:
 ## Stream diffing
 
 Streams ship with a queue of pending mutations (`insert`, `delete`,
-`update`, `move`, `reorder`, `reset`). `diff_stream/4` drains that queue
-into the corresponding ops, then `apply_limit/5` enforces visibility
-limits and `compute_reorder_ops/4` uses Longest Increasing Subsequence
-(LIS) to emit the minimum number of `?OP_MOVE`s for a reorder.
+`update`, `move`, `reorder`, `reset`). The diff drains that queue into
+the corresponding ops, enforces visibility limits, and uses Longest
+Increasing Subsequence (LIS) to emit the minimum number of `?OP_MOVE`s
+for a reorder.
 
 ## Az-nodiff safety
 
