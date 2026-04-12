@@ -63,6 +63,8 @@ render(Bindings) ->
 ```
 """.
 
+-compile({nowarn_redefined_builtin_type, [{dynamic, 0}]}).
+
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -70,14 +72,34 @@ render(Bindings) ->
 -export([parse_transform/2]).
 -export([format_error/1]).
 
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
 -ignore_xref([parse_transform/2, format_error/1]).
 
+%% --------------------------------------------------------------------
+%% Types exports
+%% --------------------------------------------------------------------
+
+-export_type([static/0]).
+-export_type([dynamic/0]).
+-export_type([az/0]).
+
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
+
+-nominal static() :: binary().
+-nominal dynamic() :: erl_parse:abstract_form().
+-nominal az() :: non_neg_integer().
+
 %% Compile state threaded through element/attribute/child compilation.
--record(cs, {
+-record(state, {
     buf = <<>> :: binary(),
-    statics = [] :: [binary()],
-    dynamics = [] :: [term()],
-    az = 0 :: non_neg_integer(),
+    statics = [] :: [static()],
+    dynamics = [] :: [dynamic()],
+    az = 0 :: az(),
     nodiff = false :: boolean(),
     module = undefined :: module() | undefined,
     live_render = false :: boolean(),
@@ -154,7 +176,7 @@ format_error({invalid_child, ValueStr}) ->
     ).
 
 %% --------------------------------------------------------------------
-%% Internal Functions
+%% Internal functions
 %% --------------------------------------------------------------------
 
 parse_error(Reason, Line) ->
@@ -286,12 +308,12 @@ is_get_id_call({call, _, {remote, _, {atom, _, Mod}, {atom, _, get}}, [{atom, _,
 is_get_id_call(_) ->
     false.
 
-maybe_inject_or_raise_az_view(Attrs, Line, #cs{live_render = true, root = true}) ->
+maybe_inject_or_raise_az_view(Attrs, Line, #state{live_render = true, root = true}) ->
     case lists:any(fun is_az_view_attr/1, Attrs) of
         true -> Attrs;
         false -> [{atom, Line, az_view} | Attrs]
     end;
-maybe_inject_or_raise_az_view(Attrs, Line, _CS) ->
+maybe_inject_or_raise_az_view(Attrs, Line, _State) ->
     case lists:any(fun is_az_view_attr/1, Attrs) of
         true -> parse_error(az_view_not_allowed, Line);
         false -> Attrs
@@ -370,55 +392,55 @@ compile_body_parts(ExprAST, Module, LiveRender) ->
 
 compile_fragment_parts(ElementASTs, Module, LiveRender) ->
     Opts = prescan_directives(ElementASTs),
-    CS0 = #cs{
+    State0 = #state{
         module = Module,
         nodiff = maps:is_key(diff, Opts),
         live_render = LiveRender,
         root = LiveRender
     },
-    CS1 = lists:foldl(
-        fun(Elem, CS) ->
+    State1 = lists:foldl(
+        fun(Elem, State) ->
             {Tag, Attrs0, Children, ElemLine} = extract_element(Elem),
             {Attrs, _ElemOpts} = extract_directives(Attrs0),
-            compile_element(Tag, Attrs, Children, ElemLine, CS)
+            compile_element(Tag, Attrs, Children, ElemLine, State)
         end,
-        CS0,
+        State0,
         ElementASTs
     ),
-    {Statics, DynASTs} = finalize(CS1),
+    {Statics, DynASTs} = finalize(State1),
     Fingerprint = generate_fingerprint(Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
 
 compile_mixed_items(Items, Module) ->
     Opts = prescan_directives(Items),
-    CS0 = #cs{module = Module, nodiff = maps:is_key(diff, Opts)},
-    CS1 = lists:foldl(
-        fun(Item, CS) ->
+    State0 = #state{module = Module, nodiff = maps:is_key(diff, Opts)},
+    State1 = lists:foldl(
+        fun(Item, State) ->
             case is_static_binary(Item) of
                 true ->
-                    buf_append(CS, extract_binary_value(Item));
+                    buf_append(State, extract_binary_value(Item));
                 false ->
                     case is_element_tuple(Item) of
                         true ->
                             {Tag, Attrs0, Children, ElemLine} = extract_element(Item),
                             {Attrs, _ElemOpts} = extract_directives(Attrs0),
-                            compile_element(Tag, Attrs, Children, ElemLine, CS);
+                            compile_element(Tag, Attrs, Children, ElemLine, State);
                         false ->
                             DynAST =
-                                case CS#cs.nodiff of
+                                case State#state.nodiff of
                                     true ->
                                         make_nodiff_dynamic_ast(Item, Module, line(Item));
                                     false ->
                                         make_text_dynamic_ast(<<"0">>, Item, Module, line(Item))
                                 end,
-                            flush(CS, DynAST)
+                            flush(State, DynAST)
                     end
             end
         end,
-        CS0,
+        State0,
         Items
     ),
-    {Statics, DynASTs} = finalize(CS1),
+    {Statics, DynASTs} = finalize(State1),
     Fingerprint = generate_fingerprint(Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
 
@@ -439,79 +461,79 @@ extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node) ->
 extract_element(Node) ->
     parse_error(invalid_element, line(Node)).
 
-compile_element(Tag, Attrs0, Children, Line, CS0) ->
-    Attrs = maybe_inject_or_raise_az_view(Attrs0, Line, CS0),
-    CS1 = CS0#cs{root = false},
+compile_element(Tag, Attrs0, Children, Line, State0) ->
+    Attrs = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
+    State1 = State0#state{root = false},
     HasDyn = has_dynamic_attr(Attrs) orelse has_dynamic_child(Children),
-    {ElemAz, CS2} =
-        case HasDyn andalso (not CS1#cs.nodiff) of
-            true -> {CS1#cs.az, CS1#cs{az = CS1#cs.az + 1}};
-            false -> {none, CS1}
+    {ElemAz, State2} =
+        case HasDyn andalso (not State1#state.nodiff) of
+            true -> {State1#state.az, State1#state{az = State1#state.az + 1}};
+            false -> {none, State1}
         end,
     TagBin = atom_to_html_binary(Tag),
-    CS3 = buf_append(CS2, <<"<", TagBin/binary>>),
-    CS4 =
+    State3 = buf_append(State2, <<"<", TagBin/binary>>),
+    State4 =
         case ElemAz of
             none ->
-                CS3;
+                State3;
             N ->
                 AzBin = integer_to_binary(N),
-                buf_append(CS3, <<" az=\"", AzBin/binary, "\"">>)
+                buf_append(State3, <<" az=\"", AzBin/binary, "\"">>)
         end,
-    CS5 = compile_attrs(Attrs, ElemAz, CS4, Line),
+    State5 = compile_attrs(Attrs, ElemAz, State4, Line),
     case is_void(Tag) andalso Children =/= [] of
         true -> parse_error({void_with_children, Tag}, Line);
         false -> ok
     end,
     case is_void(Tag) of
         true ->
-            buf_append(CS5, <<" />">>);
+            buf_append(State5, <<" />">>);
         false ->
-            CS6 = buf_append(CS5, <<">">>),
-            CS7 = compile_children(Children, ElemAz, CS6),
-            buf_append(CS7, <<"</", TagBin/binary, ">">>)
+            State6 = buf_append(State5, <<">">>),
+            State7 = compile_children(Children, ElemAz, State6),
+            buf_append(State7, <<"</", TagBin/binary, ">">>)
     end.
 
-compile_attrs([], _ElemAz, CS, _ElemLine) ->
-    CS;
-compile_attrs([Attr | Rest], ElemAz, CS0, ElemLine) ->
-    CS1 = compile_attr(Attr, ElemAz, CS0, ElemLine),
-    compile_attrs(Rest, ElemAz, CS1, ElemLine).
+compile_attrs([], _ElemAz, State, _ElemLine) ->
+    State;
+compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
+    State1 = compile_attr(Attr, ElemAz, State0, ElemLine),
+    compile_attrs(Rest, ElemAz, State1, ElemLine).
 
-compile_attr({bin, _, _} = Bin, _ElemAz, CS0, _ElemLine) ->
+compile_attr({bin, _, _} = Bin, _ElemAz, State0, _ElemLine) ->
     NameBin = extract_binary_value(Bin),
-    buf_append(CS0, <<" ", NameBin/binary>>);
-compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, CS0, _ElemLine) when
+    buf_append(State0, <<" ", NameBin/binary>>);
+compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
-    CS0;
-compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, CS0, _ElemLine) when
+    State0;
+compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
     NameBin = extract_attr_name(NameAST),
-    buf_append(CS0, <<" ", NameBin/binary>>);
-compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, CS0, _ElemLine) when
+    buf_append(State0, <<" ", NameBin/binary>>);
+compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
     NameBin = extract_attr_name(NameAST),
     case is_static_binary(ValueAST) of
         true ->
             ValBin = extract_binary_value(ValueAST),
-            buf_append(CS0, <<" ", NameBin/binary, "=\"", ValBin/binary, "\"">>);
-        false when CS0#cs.nodiff ->
-            Module = CS0#cs.module,
+            buf_append(State0, <<" ", NameBin/binary, "=\"", ValBin/binary, "\"">>);
+        false when State0#state.nodiff ->
+            Module = State0#state.module,
             DynAST = make_nodiff_attr_dynamic_ast(NameBin, ValueAST, Module, line(ValueAST)),
-            flush(CS0, DynAST);
+            flush(State0, DynAST);
         false ->
-            Module = CS0#cs.module,
+            Module = State0#state.module,
             AzBin = integer_to_binary(ElemAz),
             DynAST = make_attr_dynamic_ast(AzBin, NameBin, ValueAST, Module, line(ValueAST)),
-            flush(CS0, DynAST)
+            flush(State0, DynAST)
     end;
-compile_attr({atom, _, Name}, _ElemAz, CS0, _ElemLine) ->
+compile_attr({atom, _, Name}, _ElemAz, State0, _ElemLine) ->
     NameBin = atom_to_html_binary(Name),
-    buf_append(CS0, <<" ", NameBin/binary>>);
-compile_attr(Attr, _ElemAz, _CS0, ElemLine) ->
+    buf_append(State0, <<" ", NameBin/binary>>);
+compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     AttrLine =
         try
             line(Attr)
@@ -520,45 +542,45 @@ compile_attr(Attr, _ElemAz, _CS0, ElemLine) ->
         end,
     parse_error(invalid_attribute, AttrLine).
 
-compile_children(Children, ElemAz, CS) ->
-    compile_children(Children, ElemAz, CS, 0).
+compile_children(Children, ElemAz, State) ->
+    compile_children(Children, ElemAz, State, 0).
 
-compile_children([], _ElemAz, CS, _Slot) ->
-    CS;
-compile_children([Child | Rest], ElemAz, CS0, Slot) ->
-    {CS1, NextSlot} = compile_child(Child, ElemAz, CS0, Slot),
-    compile_children(Rest, ElemAz, CS1, NextSlot).
+compile_children([], _ElemAz, State, _Slot) ->
+    State;
+compile_children([Child | Rest], ElemAz, State0, Slot) ->
+    {State1, NextSlot} = compile_child(Child, ElemAz, State0, Slot),
+    compile_children(Rest, ElemAz, State1, NextSlot).
 
-compile_child(Child, ElemAz, CS0, Slot) ->
+compile_child(Child, ElemAz, State0, Slot) ->
     case is_static_binary(Child) of
         true ->
-            {buf_append(CS0, extract_binary_value(Child)), Slot};
+            {buf_append(State0, extract_binary_value(Child)), Slot};
         false ->
             case is_element_tuple(Child) of
                 true ->
                     {Tag, Attrs, Children, ElemLine} = extract_element(Child),
-                    {compile_element(Tag, Attrs, Children, ElemLine, CS0), Slot};
+                    {compile_element(Tag, Attrs, Children, ElemLine, State0), Slot};
                 false ->
                     case is_invalid_static_child(Child) of
                         true ->
                             ValueStr = erl_pp:expr(Child),
                             parse_error({invalid_child, ValueStr}, line(Child));
-                        false when CS0#cs.nodiff ->
-                            Module = CS0#cs.module,
+                        false when State0#state.nodiff ->
+                            Module = State0#state.module,
                             DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child)),
-                            {flush(CS0, DynAST), Slot};
+                            {flush(State0, DynAST), Slot};
                         false ->
-                            Module = CS0#cs.module,
+                            Module = State0#state.module,
                             ElemAzBin = integer_to_binary(ElemAz),
                             MarkerAz =
                                 case Slot of
                                     0 -> ElemAzBin;
                                     N -> <<ElemAzBin/binary, ":", (integer_to_binary(N))/binary>>
                                 end,
-                            CS1 = buf_append(CS0, <<"<!--az:", MarkerAz/binary, "-->">>),
+                            State1 = buf_append(State0, <<"<!--az:", MarkerAz/binary, "-->">>),
                             DynAST = make_text_dynamic_ast(MarkerAz, Child, Module, line(Child)),
-                            CS2 = flush(CS1, DynAST),
-                            {CS2#cs{buf = <<"<!--/az-->">>}, Slot + 1}
+                            State2 = flush(State1, DynAST),
+                            {State2#state{buf = <<"<!--/az-->">>}, Slot + 1}
                     end
             end
     end.
@@ -606,19 +628,19 @@ make_nodiff_attr_dynamic_ast(AttrNameBin, ExprAST, Module, ExprLine) ->
 loc_ast(Module, Line) ->
     {tuple, 0, [{atom, 0, Module}, {integer, 0, Line}]}.
 
-buf_append(CS, Bin) ->
-    CS#cs{buf = <<(CS#cs.buf)/binary, Bin/binary>>}.
+buf_append(State, Bin) ->
+    State#state{buf = <<(State#state.buf)/binary, Bin/binary>>}.
 
-flush(CS, DynAST) ->
-    CS#cs{
-        statics = CS#cs.statics ++ [CS#cs.buf],
-        dynamics = CS#cs.dynamics ++ [DynAST],
+flush(State, DynAST) ->
+    State#state{
+        statics = State#state.statics ++ [State#state.buf],
+        dynamics = State#state.dynamics ++ [DynAST],
         buf = <<>>
     }.
 
-finalize(CS) ->
-    Statics = CS#cs.statics ++ [CS#cs.buf],
-    Dynamics = CS#cs.dynamics,
+finalize(State) ->
+    Statics = State#state.statics ++ [State#state.buf],
+    Dynamics = State#state.dynamics,
     {Statics, Dynamics}.
 
 %% Prefix az values with the template fingerprint to prevent collisions
