@@ -53,7 +53,6 @@ render(Bindings) ->
 -export([maybe_propagate/2]).
 -export([maybe_put_fingerprint/2]).
 -export([make_child_snap/4]).
--export([call_handle_update/3]).
 -export([unzip_triples/1]).
 -export([split_triples/1]).
 -export([visible_keys/2]).
@@ -326,23 +325,6 @@ make_child_snap(Tmpl, ChildD, ChildDeps, Id) ->
     #{s := S} = Tmpl,
     Snap = #{s => S, d => ChildD, deps => ChildDeps, view_id => Id},
     maybe_propagate(Tmpl, Snap).
-
--doc """
-Invokes the optional `handle_update/2` callback on a stateful handler module.
-
-Falls back to merging `Props` into `Bindings` if the callback is not exported.
-""".
--spec call_handle_update(Handler, Props, Bindings) -> {Bindings1, Effects} when
-    Handler :: module(),
-    Props :: map(),
-    Bindings :: map(),
-    Bindings1 :: map(),
-    Effects :: map().
-call_handle_update(H, Props, Bindings) ->
-    case erlang:function_exported(H, handle_update, 2) of
-        true -> H:handle_update(Props, Bindings);
-        false -> {maps:merge(Bindings, Props), #{}}
-    end.
 
 -doc """
 Splits a list of `{Az, Val, Deps}` triples into the snapshot d-list, deps list,

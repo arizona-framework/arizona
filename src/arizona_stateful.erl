@@ -40,6 +40,11 @@ the diff is applied (e.g. focus a field, dispatch a custom event).
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([call_mount/2]).
+-export([call_render/2]).
+-export([call_handle_event/4]).
+-export([call_handle_info/3]).
+-export([call_handle_update/3]).
 -export([call_unmount/2]).
 
 %% --------------------------------------------------------------------
@@ -125,6 +130,76 @@ rendering it, or the page is being navigated away). Optional.
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
+
+-doc """
+Invokes the required `mount/1` callback on a stateful handler module.
+""".
+-spec call_mount(Handler, Bindings) -> {bindings(), resets()} when
+    Handler :: module(),
+    Bindings :: bindings().
+call_mount(H, Bindings) ->
+    H:mount(Bindings).
+
+-doc """
+Invokes the required `render/1` callback on a stateful handler module.
+""".
+-spec call_render(Handler, Bindings) -> arizona_template:template() when
+    Handler :: module(),
+    Bindings :: bindings().
+call_render(H, Bindings) ->
+    H:render(Bindings).
+
+-doc """
+Invokes the optional `handle_event/3` callback.
+
+The callback is declared optional but callers that dispatch an event
+expect it to be exported -- an unhandled event is a programming error
+and will crash with `undef`.
+""".
+-spec call_handle_event(Handler, Event, Payload, Bindings) ->
+    {bindings(), resets(), effects()}
+when
+    Handler :: module(),
+    Event :: binary(),
+    Payload :: map(),
+    Bindings :: bindings().
+call_handle_event(H, Event, Payload, Bindings) ->
+    H:handle_event(Event, Payload, Bindings).
+
+-doc """
+Invokes the optional `handle_info/2` callback.
+
+Returns `ok` if the handler does not export `handle_info/2`, letting
+the caller skip the subsequent diff + push cycle.
+""".
+-spec call_handle_info(Handler, Info, Bindings) ->
+    {bindings(), resets(), effects()} | ok
+when
+    Handler :: module(),
+    Info :: term(),
+    Bindings :: bindings().
+call_handle_info(H, Info, Bindings) ->
+    case erlang:function_exported(H, handle_info, 2) of
+        true -> H:handle_info(Info, Bindings);
+        false -> ok
+    end.
+
+-doc """
+Invokes the optional `handle_update/2` callback on a stateful handler
+module.
+
+Falls back to merging `Props` into `Bindings` if the callback is not
+exported.
+""".
+-spec call_handle_update(Handler, Props, Bindings) -> {bindings(), resets()} when
+    Handler :: module(),
+    Props :: map(),
+    Bindings :: bindings().
+call_handle_update(H, Props, Bindings) ->
+    case erlang:function_exported(H, handle_update, 2) of
+        true -> H:handle_update(Props, Bindings);
+        false -> {maps:merge(Bindings, Props), #{}}
+    end.
 
 -doc """
 Invokes the optional `unmount/1` callback on a stateful handler module.

@@ -173,8 +173,8 @@ render_to_iolist(Handler, Opts) ->
     Bindings0 = maps:get(bindings, Opts, #{}),
     OnMount = maps:get(on_mount, Opts, []),
     Bindings = arizona_live:apply_on_mount(OnMount, Bindings0),
-    {B1, _Resets} = Handler:mount(Bindings),
-    PageTmpl = Handler:render(B1),
+    {B1, _Resets} = arizona_stateful:call_mount(Handler, Bindings),
+    PageTmpl = arizona_stateful:call_render(Handler, B1),
     PageHTML = zip(maps:get(s, PageTmpl), render_ssr_dynamics(maps:get(d, PageTmpl))),
     case maps:get(layout, Opts, undefined) of
         undefined ->
@@ -360,8 +360,8 @@ render_ssr_val(#{
     ItemSnaps = arizona_eval:render_stream_items_simple(VKeys, ItemsMap, Tmpl),
     #{t => ?EACH, items => ItemSnaps, order => VKeys, template => Tmpl};
 render_ssr_val(#{stateful := H, props := Props}) ->
-    {B1, _Resets} = H:mount(Props),
-    make_ssr_child_snap(H:render(B1));
+    {B1, _Resets} = arizona_stateful:call_mount(H, Props),
+    make_ssr_child_snap(arizona_stateful:call_render(H, B1));
 render_ssr_val(#{callback := Callback, props := Props}) ->
     Tmpl = Callback(Props),
     render_ssr_val(Tmpl);
