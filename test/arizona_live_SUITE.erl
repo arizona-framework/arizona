@@ -532,11 +532,10 @@ live_navigate_resets_views(Config) when is_list(Config) ->
     Ref = monitor(process, Pid),
     #{level := OldLevel} = logger:get_primary_config(),
     _ = logger:set_primary_config(level, none),
-    try
+    ?assertExit(
+        _,
         arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{})
-    catch
-        _:_ -> ok
-    end,
+    ),
     receive
         {'DOWN', Ref, process, Pid, _} -> ok
     after 1000 -> error(timeout)
