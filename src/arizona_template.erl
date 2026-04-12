@@ -1,36 +1,93 @@
 -module(arizona_template).
--export([
-    get/2, get/3,
-    get_lazy/3,
-    track/1,
-    html/1,
-    stateful/2,
-    stateless/2, stateless/3,
-    each/2,
-    to_bin/1,
-    dyn_az/1,
-    format_error/1,
-    unwrap_val/1,
-    render_attr/2,
-    maybe_propagate/2,
-    maybe_put_fingerprint/2,
-    make_child_snap/4,
-    call_handle_update/3,
-    unzip_triples/1,
-    split_triples/1,
-    visible_keys/2
-]).
--ignore_xref([format_error/1]).
--include("arizona.hrl").
+-moduledoc """
+Runtime template API: bindings, descriptors, value rendering, and snapshots.
+
+Most of this module's surface is exposed through the macros in
+`include/arizona_template.hrl` (`?get`, `?html`, `?each`, `?stateful`,
+`?stateless`). Templates themselves are produced by `arizona_parse_transform`
+at compile time -- `html/1` is only a runtime stub that errors if the parse
+transform was not applied.
+
+## Concepts
+
+- **Bindings** -- the map passed to `render/1`. `get/2` and `get/3` access
+  bindings while tracking which keys were read, so the differ knows which
+  dynamics depend on which bindings.
+- **Templates** -- compile-time maps `#{s := Statics, d := Dynamics, f := Fp}`
+  emitted by the parse transform.
+- **Descriptors** -- lightweight tuples returned by `stateful/2` and
+  `stateless/2,3` that tell the renderer how to mount a child component.
+- **Snapshots** -- cached `#{s, d, deps, ...}` maps used by the differ to
+  detect what changed between renders.
+
+## Example
+
+```erlang
+render(Bindings) ->
+    ?html({'div', [{class, ?get(theme)}], [?get(name)]}).
+```
+""".
+
 -compile({nowarn_redefined_builtin_type, [{dynamic, 0}]}).
 
-%% --- Types ------------------------------------------------------------------
+-include("arizona.hrl").
 
--type az() :: binary() | undefined.
--type deps() :: #{term() => true}.
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
 
--type loc() :: {module(), pos_integer()}.
--type dynamic() ::
+-export([get/2]).
+-export([get/3]).
+-export([get_lazy/3]).
+-export([track/1]).
+-export([html/1]).
+-export([stateful/2]).
+-export([stateless/2]).
+-export([stateless/3]).
+-export([each/2]).
+-export([to_bin/1]).
+-export([dyn_az/1]).
+-export([format_error/1]).
+-export([unwrap_val/1]).
+-export([render_attr/2]).
+-export([maybe_propagate/2]).
+-export([maybe_put_fingerprint/2]).
+-export([make_child_snap/4]).
+-export([call_handle_update/3]).
+-export([unzip_triples/1]).
+-export([split_triples/1]).
+-export([visible_keys/2]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([format_error/1]).
+
+%% --------------------------------------------------------------------
+%% Types exports
+%% --------------------------------------------------------------------
+
+-export_type([az/0]).
+-export_type([deps/0]).
+-export_type([loc/0]).
+-export_type([dynamic/0]).
+-export_type([template/0]).
+-export_type([each_template/0]).
+-export_type([each_container/0]).
+-export_type([snapshot/0]).
+-export_type([stateful_descriptor/0]).
+-export_type([stateless_descriptor/0]).
+
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
+
+-nominal az() :: binary() | undefined.
+-nominal deps() :: #{term() => true}.
+-nominal loc() :: {module(), pos_integer()}.
+
+-nominal dynamic() ::
     {az(), fun(() -> term()), loc()}
     | {az(), {attr, binary(), fun(() -> term())}, loc()}
     | {az(), template(), loc()}
@@ -40,9 +97,22 @@
     | {az(), template()}
     | {az(), term()}.
 
--type template() :: #{s := [binary()], d := [dynamic()], f := binary(), diff => false}.
+-nominal template() :: #{s := [binary()], d := [dynamic()], f := binary(), diff => false}.
 
--type snapshot() :: #{
+-nominal each_template() :: #{
+    t := 0,
+    s := [binary()],
+    d := fun((term()) -> [dynamic()]) | fun((term(), term()) -> [dynamic()]),
+    f := binary()
+}.
+
+-nominal each_container() :: #{
+    t := 0,
+    source := term(),
+    template := each_template()
+}.
+
+-nominal snapshot() :: #{
     s := [binary()],
     d := [{az(), term()}],
     f => binary(),
@@ -51,23 +121,46 @@
     view_id => binary()
 }.
 
--type stateful_descriptor() :: #{stateful := module(), props := map()}.
--type stateless_descriptor() :: #{callback := fun((map()) -> template()), props := map()}.
+-nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
+-nominal stateless_descriptor() :: #{callback := fun((map()) -> template()), props := map()}.
 
--export_type([
-    az/0,
-    dynamic/0,
-    template/0
-]).
+%% --------------------------------------------------------------------
+%% API Functions
+%% --------------------------------------------------------------------
 
-%% --- Binding access with dep tracking ----------------------------------------
+-doc """
+Reads `Key` from `Bindings` and tracks the access for diff dependency analysis.
 
+Errors with `{badkey, Key}` if not present. Use `get/3` for a default.
+""".
+-spec get(Key, Bindings) -> Value when
+    Key :: term(),
+    Bindings :: map(),
+    Value :: term().
 get(Key, Bindings) ->
     track(Key),
     maps:get(Key, Bindings).
+
+-doc """
+Reads `Key` from `Bindings`, returning `Default` if absent. Tracks the access.
+""".
+-spec get(Key, Bindings, Default) -> Value when
+    Key :: term(),
+    Bindings :: map(),
+    Default :: term(),
+    Value :: term().
 get(Key, Bindings, Default) ->
     track(Key),
     maps:get(Key, Bindings, Default).
+
+-doc """
+Like `get/3` but the default is computed lazily by a 0-arity fun.
+""".
+-spec get_lazy(Key, Bindings, DefaultFun) -> Value when
+    Key :: term(),
+    Bindings :: map(),
+    DefaultFun :: fun(() -> term()),
+    Value :: term().
 get_lazy(Key, Bindings, DefaultFun) when is_function(DefaultFun, 0) ->
     track(Key),
     case Bindings of
@@ -75,36 +168,77 @@ get_lazy(Key, Bindings, DefaultFun) when is_function(DefaultFun, 0) ->
         #{} -> DefaultFun()
     end.
 
+-doc """
+Records `Key` as a dependency of the dynamic element currently being rendered.
+
+Called automatically by `get/2,3` and `get_lazy/3`. Public so render code
+can attribute dependencies that bypass binding access.
+""".
+-spec track(Key) -> ok when
+    Key :: term().
 track(Key) ->
     case erlang:get('$arizona_deps') of
         undefined -> ok;
         Deps -> erlang:put('$arizona_deps', Deps#{Key => true})
     end.
 
-%% --- Template construction (replaced by parse transform) ---------------------
-
+-doc """
+Compile-time stub. The parse transform replaces every `?html(...)` (and
+`arizona_template:html/1`) call with a precomputed `t:template/0` map. If
+this function runs, the parse transform was not applied -- include
+`arizona_stateful.hrl` or `arizona_stateless.hrl`.
+""".
 -spec html(term()) -> no_return().
 html(_Elems) ->
     erlang:error(parse_transform_not_applied).
 
-%% --- Descriptor constructors -------------------------------------------------
-
--spec stateful(module(), map()) -> stateful_descriptor().
+-doc """
+Builds a stateful child descriptor. The renderer mounts `Handler` with `Props`.
+""".
+-spec stateful(Handler, Props) -> stateful_descriptor() when
+    Handler :: module(),
+    Props :: map().
 stateful(Handler, Props) when is_atom(Handler), is_map(Props) ->
     #{stateful => Handler, props => Props}.
 
--spec stateless(fun((map()) -> template()), map()) -> stateless_descriptor().
+-doc """
+Builds a stateless child descriptor from a 1-arity render fun.
+""".
+-spec stateless(Callback, Props) -> stateless_descriptor() when
+    Callback :: fun((map()) -> template()),
+    Props :: map().
 stateless(Callback, Props) when is_function(Callback, 1), is_map(Props) ->
     #{callback => Callback, props => Props}.
--spec stateless(module(), atom(), map()) -> stateless_descriptor().
+
+-doc """
+Builds a stateless child descriptor from a `Handler:Fun/1` reference.
+""".
+-spec stateless(Handler, Fun, Props) -> stateless_descriptor() when
+    Handler :: module(),
+    Fun :: atom(),
+    Props :: map().
 stateless(Handler, Fun, Props) when is_atom(Handler), is_atom(Fun), is_map(Props) ->
     #{callback => fun Handler:Fun/1, props => Props}.
 
+-doc """
+Wraps a `t:template/0` produced by the parse transform with an `each` source.
+
+Called by the parse transform to compile `?each(Fun, Source)` -- pairs
+the per-item template with its source list, stream, or map.
+""".
+-spec each(Source, Template) -> each_container() when
+    Source :: term(),
+    Template :: each_template().
 each(Source, #{t := ?EACH, d := DFun} = Tmpl) when is_function(DFun, 1); is_function(DFun, 2) ->
     #{t => ?EACH, source => Source, template => Tmpl}.
 
-%% --- to_bin ------------------------------------------------------------------
+-doc """
+Converts a template value to its binary HTML representation.
 
+Errors with `{bad_template_value, V}` for unsupported types.
+""".
+-spec to_bin(Value) -> binary() when
+    Value :: term().
 to_bin(V) when is_binary(V) -> V;
 to_bin(V) when is_integer(V) -> integer_to_binary(V);
 to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
@@ -114,31 +248,54 @@ to_bin([{arizona_js, _} | _] = Cmds) -> arizona_js:encode(Cmds);
 to_bin(V) when is_list(V) -> iolist_to_binary(V);
 to_bin(V) -> erlang:error({bad_template_value, V}).
 
-%% --- dyn_az ------------------------------------------------------------------
-
+-doc """
+Extracts the `t:az/0` index from a 2- or 3-tuple `t:dynamic/0`.
+""".
+-spec dyn_az(Dynamic) -> az() when
+    Dynamic :: dynamic().
 dyn_az({Az, _}) -> Az;
 dyn_az({Az, _, _}) -> Az.
 
-%% --- format_error ------------------------------------------------------------
-
+-doc """
+Formats compile/runtime error reasons emitted by this module.
+""".
+-spec format_error(Reason) -> string() when
+    Reason :: term().
 format_error(parse_transform_not_applied) ->
     "parse transform not applied -- include arizona_stateful.hrl or arizona_stateless.hrl";
 format_error({bad_template_value, V}) ->
     lists:flatten(io_lib:format("cannot convert ~0tp to binary in template", [V])).
 
-%% --- unwrap_val ---------------------------------------------------------------
-
+-doc """
+Materializes an attribute dynamic into its rendered binary, leaving plain
+values untouched.
+""".
+-spec unwrap_val(Value) -> term() when
+    Value :: term().
 unwrap_val({attr, Name, V}) -> render_attr(Name, V);
 unwrap_val(V) -> V.
 
+-doc """
+Renders one HTML attribute, handling boolean true/false specially.
+
+`false` strips the attribute, `true` emits a bare `name`, anything else
+becomes `name="value"`.
+""".
+-spec render_attr(Name, Value) -> binary() when
+    Name :: binary(),
+    Value :: term().
 render_attr(_Name, false) -> <<>>;
 render_attr(Name, true) -> <<" ", Name/binary>>;
 render_attr(Name, V) -> <<" ", Name/binary, "=\"", (to_bin(V))/binary, "\"">>.
 
-%% --- maybe_propagate/2 --------------------------------------------------------
-%% Propagate both `f` and `diff => false` from template to snapshot.
-
--spec maybe_propagate(template(), snapshot()) -> snapshot().
+-doc """
+Propagates `f` (fingerprint) and the optional `diff => false` flag from a
+template into a snapshot.
+""".
+-spec maybe_propagate(Template, Snapshot) -> Snapshot1 when
+    Template :: template(),
+    Snapshot :: snapshot(),
+    Snapshot1 :: snapshot().
 maybe_propagate(Tmpl, Snap) ->
     Snap1 =
         case Tmpl of
@@ -147,16 +304,24 @@ maybe_propagate(Tmpl, Snap) ->
         end,
     maybe_put_fingerprint(Tmpl, Snap1).
 
-%% --- maybe_put_fingerprint/2 --------------------------------------------------
-%% Copy `f` from template to snapshot if present.
-
+-doc """
+Copies the `f` field from a template to a snapshot if present.
+""".
+-spec maybe_put_fingerprint(Template, Snapshot) -> Snapshot1 when
+    Template :: template(),
+    Snapshot :: snapshot(),
+    Snapshot1 :: snapshot().
 maybe_put_fingerprint(#{f := F}, Snap) -> Snap#{f => F};
 maybe_put_fingerprint(#{}, Snap) -> Snap.
 
-%% --- make_child_snap/4 -------------------------------------------------------
-%% Build a stateful child snapshot, propagating diff => false from the template.
-
--spec make_child_snap(template(), [{az(), term()}], [deps()], binary()) -> snapshot().
+-doc """
+Builds a stateful child snapshot, propagating `diff => false` from the template.
+""".
+-spec make_child_snap(Template, ChildD, ChildDeps, Id) -> snapshot() when
+    Template :: template(),
+    ChildD :: [{az(), term()}],
+    ChildDeps :: [deps()],
+    Id :: binary().
 make_child_snap(Tmpl, ChildD, ChildDeps, Id) ->
     #{s := S} = Tmpl,
     Snap = #{s => S, d => ChildD, deps => ChildDeps, view_id => Id},
@@ -167,31 +332,59 @@ make_child_snap(Tmpl, ChildD, ChildDeps, Id) ->
         end,
     maybe_put_fingerprint(Tmpl, Snap1).
 
-%% --- call_handle_update/3 ----------------------------------------------------
+-doc """
+Invokes the optional `handle_update/2` callback on a stateful handler module.
 
+Falls back to merging `Props` into `Bindings` if the callback is not exported.
+""".
+-spec call_handle_update(Handler, Props, Bindings) -> {Bindings1, Effects} when
+    Handler :: module(),
+    Props :: map(),
+    Bindings :: map(),
+    Bindings1 :: map(),
+    Effects :: map().
 call_handle_update(H, Props, Bindings) ->
     case erlang:function_exported(H, handle_update, 2) of
         true -> H:handle_update(Props, Bindings);
         false -> {maps:merge(Bindings, Props), #{}}
     end.
 
-%% --- unzip_triples/1 ---------------------------------------------------------
-
+-doc """
+Splits a list of `{Az, Val, Deps}` triples into the snapshot d-list, deps list,
+and rendered values list.
+""".
+-spec unzip_triples(Triples) -> {DList, DepsList, Vals} when
+    Triples :: [{az(), term(), deps()}],
+    DList :: [{az(), term()}],
+    DepsList :: [deps()],
+    Vals :: [term()].
 unzip_triples([]) ->
     {[], [], []};
 unzip_triples([{Az, Val, Deps} | Rest]) ->
     {RestD, RestDeps, RestVals} = unzip_triples(Rest),
     {[{Az, Val} | RestD], [Deps | RestDeps], [unwrap_val(Val) | RestVals]}.
 
-%% --- split_triples/1 ---------------------------------------------------------
-
+-doc """
+Like `unzip_triples/1` but discards the rendered values list.
+""".
+-spec split_triples(Triples) -> {DList, DepsList} when
+    Triples :: [{az(), term(), deps()}],
+    DList :: [{az(), term()}],
+    DepsList :: [deps()].
 split_triples([]) ->
     {[], []};
 split_triples([{Az, Val, Deps} | Rest]) ->
     {RestD, RestDeps} = split_triples(Rest),
     {[{Az, Val} | RestD], [Deps | RestDeps]}.
 
-%% --- visible_keys/2 -----------------------------------------------------------
+-doc """
+Returns the visible portion of a stream order list given a `Limit`.
 
+`infinity` returns the full order; an integer truncates with `lists:sublist/2`.
+""".
+-spec visible_keys(Order, Limit) -> Order1 when
+    Order :: [term()],
+    Limit :: pos_integer() | infinity,
+    Order1 :: [term()].
 visible_keys(Order, infinity) -> Order;
 visible_keys(Order, Limit) -> lists:sublist(Order, Limit).
