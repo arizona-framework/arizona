@@ -35,6 +35,7 @@ fun((cowboy_req:req(), Bindings) -> {cont, Req, Bindings} | {halt, Req})
 %% Types exports
 %% --------------------------------------------------------------------
 
+-export_type([req/0]).
 -export_type([middleware/0]).
 -export_type([middleware_result/0]).
 

@@ -769,9 +769,7 @@ has_dynamic_attr([]) ->
     false;
 has_dynamic_attr([{bin, _, _} | Rest]) ->
     has_dynamic_attr(Rest);
-has_dynamic_attr([{tuple, _, [_, {atom, _, Val}]} | Rest]) when
-    Val =:= true; Val =:= false
-->
+has_dynamic_attr([{tuple, _, [_, {atom, _, Val}]} | Rest]) when is_boolean(Val) ->
     has_dynamic_attr(Rest);
 has_dynamic_attr([{tuple, _, [_NameAST, ValueAST]} | Rest]) ->
     case is_static_binary(ValueAST) of

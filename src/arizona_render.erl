@@ -71,6 +71,10 @@ op-code targets.
 
 -export_type([layout/0]).
 -export_type([render_opts/0]).
+-export_type([static/0]).
+-export_type([dynamic/0]).
+-export_type([each_list/0]).
+-export_type([each_stream/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -216,13 +220,7 @@ zip([S | Statics], [D | Dynamics]) ->
                 ];
             #{t := ?EACH, items := Items, order := Order, template := Tmpl} ->
                 #{s := ItemS} = Tmpl,
-                [
-                    begin
-                        ItemD = maps:get(K, Items),
-                        zip(ItemS, [arizona_template:unwrap_val(V) || {_Az, V} <:- ItemD])
-                    end
-                 || K <:- Order
-                ];
+                [zip_stream_item(ItemS, maps:get(K, Items)) || K <:- Order];
             #{s := InnerS, d := InnerD} ->
                 zip(InnerS, [arizona_template:unwrap_val(V) || {_Az, V} <:- InnerD]);
             V ->
@@ -305,13 +303,7 @@ zip_stream_fp(#{f := F, s := S, t := T}, Items, Order) ->
         ]
     };
 zip_stream_fp(#{s := S}, Items, Order) ->
-    iolist_to_binary([
-        begin
-            ItemD = maps:get(K, Items),
-            zip(S, [arizona_template:unwrap_val(V) || {_Az, V} <:- ItemD])
-        end
-     || K <:- Order
-    ]).
+    iolist_to_binary([zip_stream_item(S, maps:get(K, Items)) || K <:- Order]).
 
 -doc """
 Builds the wire-format fingerprint payload for a snapshot.
@@ -333,6 +325,9 @@ fingerprint_payload(#{s := S, d := D}) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+zip_stream_item(Statics, ItemD) ->
+    zip(Statics, [arizona_template:unwrap_val(V) || {_Az, V} <:- ItemD]).
 
 %% Az is ignored during SSR (only used for diff targeting), so `undefined` Az
 %% from az-nodiff templates flows through harmlessly.
@@ -457,13 +452,7 @@ render_fp_val(#{
     order := Order,
     template := #{s := S}
 }) ->
-    [
-        begin
-            ItemD = maps:get(K, Items),
-            iolist_to_binary(zip(S, [arizona_template:unwrap_val(V) || {_Az, V} <:- ItemD]))
-        end
-     || K <:- Order
-    ];
+    [iolist_to_binary(zip_stream_item(S, maps:get(K, Items))) || K <:- Order];
 render_fp_val(V) when is_list(V) ->
     iolist_to_binary(V);
 render_fp_val(V) ->

@@ -62,6 +62,14 @@ with the OS process's `getcwd`.
 -ignore_xref([watch/2, broadcast/1]).
 
 %% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+%% Watcher names are derived from a hash of {self, dir} and registered as
+%% atoms because the underlying `fs` library requires named processes.
+-elvis([{elvis_style, no_common_caveats_call, disable}]).
+
+%% --------------------------------------------------------------------
 %% Records
 %% --------------------------------------------------------------------
 
@@ -112,13 +120,7 @@ init({Dir, Opts}) ->
         true ->
             AbsDir = filename:absname(Dir),
             Patterns = maps:get(patterns, Opts, [".*"]),
-            Compiled = [
-                begin
-                    {ok, MP} = re:compile(P),
-                    MP
-                end
-             || P <:- Patterns
-            ],
+            Compiled = [compile_pattern(P) || P <:- Patterns],
             Callback = maps:get(callback, Opts, undefined),
             DebounceMs = maps:get(debounce, Opts, 100),
             Name = watcher_name(AbsDir),
@@ -195,6 +197,10 @@ terminate(_Reason, #state{fs_sup = SupName}) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+compile_pattern(Pattern) ->
+    {ok, MP} = re:compile(Pattern),
+    MP.
 
 watcher_name(AbsDir) ->
     Hash = erlang:phash2({self(), AbsDir}),

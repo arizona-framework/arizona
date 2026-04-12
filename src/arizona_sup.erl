@@ -30,17 +30,17 @@ Starts the supervisor under the well-known name `arizona_sup`.
 """.
 -spec start_link() -> supervisor:startlink_ret().
 start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+    supervisor:start_link({local, ?MODULE}, ?MODULE, #{}).
 
 %% --------------------------------------------------------------------
 %% supervisor Callbacks
 %% --------------------------------------------------------------------
 
 -spec init(Args) -> {ok, {SupFlags, [ChildSpec]}} when
-    Args :: list(),
+    Args :: map(),
     SupFlags :: supervisor:sup_flags(),
     ChildSpec :: supervisor:child_spec().
-init([]) ->
+init(#{}) ->
     {ok,
         {#{strategy => one_for_one}, [
             #{

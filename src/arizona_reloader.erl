@@ -52,6 +52,14 @@ recompile and broadcasts a reload message:
 -ignore_xref({rebar_agent, do, 1}).
 
 %% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+%% Module names from filenames are bounded by the project's source files;
+%% list_to_atom is the standard way to derive them in dev hot-reload code.
+-elvis([{elvis_style, no_common_caveats_call, disable}]).
+
+%% --------------------------------------------------------------------
 %% Macros
 %% --------------------------------------------------------------------
 

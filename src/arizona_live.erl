@@ -114,7 +114,10 @@ transport, `false` otherwise (e.g. during SSR).
 """.
 -spec connected() -> boolean().
 connected() ->
-    erlang:get('$arizona_connected') =:= true.
+    case erlang:get('$arizona_connected') of
+        true -> true;
+        _ -> false
+    end.
 
 -doc """
 Sends a message to a specific view by id. The message is delivered to
