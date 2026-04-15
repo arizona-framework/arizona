@@ -49,7 +49,7 @@ extracts the shell-style summary, and pretty-prints the raw reason.
 Renders the error page from `error_info` bindings.
 """.
 -spec render(Bindings) -> arizona_template:template() when
-    Bindings :: map().
+    Bindings :: #{error_info := arizona_cowboy_http:error_info(), _ => _}.
 render(Bindings) ->
     ErrorInfo = maps:get(error_info, Bindings),
     Class = maps:get(class, ErrorInfo),

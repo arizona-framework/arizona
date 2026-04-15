@@ -1,10 +1,12 @@
 -module(az).
 -moduledoc """
-Short alias module for `arizona_template`.
+Short alias module for `arizona_template` and `arizona_stateful`.
 
-Provides the same API surface as `arizona_template` under a shorter
-prefix so handcrafted templates that don't use the macros can be
-written as `az:get(...)`, `az:html(...)`, etc.
+Provides the same runtime API surface as `arizona_template` under a
+shorter prefix so handcrafted templates that don't use the macros can
+be written as `az:get(...)`, `az:html(...)`, etc. It also re-exports
+the common types so users writing handler specs can reference them
+through a single module: `az:bindings()`, `az:mount_ret()`, etc.
 
 The parse transform recognizes both `arizona_template:html/1` and
 `az:html/1` (same for `each/2`), so either alias compiles to the same
@@ -55,6 +57,40 @@ binding, used by stateless layouts to render the wrapped page.
     stateless/3,
     each/2
 ]).
+
+%% --------------------------------------------------------------------
+%% Types exports
+%% --------------------------------------------------------------------
+
+-export_type([bindings/0]).
+-export_type([template/0]).
+-export_type([render_fun/0]).
+-export_type([resets/0]).
+-export_type([effect/0]).
+-export_type([effects/0]).
+-export_type([event_name/0]).
+-export_type([event_payload/0]).
+-export_type([mount_ret/0]).
+-export_type([handle_event_ret/0]).
+-export_type([handle_info_ret/0]).
+-export_type([handle_update_ret/0]).
+
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
+
+-type bindings() :: arizona_template:bindings().
+-type template() :: arizona_template:template().
+-type render_fun() :: arizona_template:render_fun().
+-type resets() :: arizona_stateful:resets().
+-type effect() :: arizona_stateful:effect().
+-type effects() :: arizona_stateful:effects().
+-type event_name() :: arizona_stateful:event_name().
+-type event_payload() :: arizona_stateful:event_payload().
+-type mount_ret() :: arizona_stateful:mount_ret().
+-type handle_event_ret() :: arizona_stateful:handle_event_ret().
+-type handle_info_ret() :: arizona_stateful:handle_info_ret().
+-type handle_update_ret() :: arizona_stateful:handle_update_ret().
 
 %% --------------------------------------------------------------------
 %% API Functions

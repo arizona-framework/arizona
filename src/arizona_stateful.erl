@@ -55,15 +55,29 @@ the diff is applied (e.g. focus a field, dispatch a custom event).
 -export_type([resets/0]).
 -export_type([effect/0]).
 -export_type([effects/0]).
+-export_type([event_name/0]).
+-export_type([event_payload/0]).
+-export_type([mount_ret/0]).
+-export_type([handle_event_ret/0]).
+-export_type([handle_info_ret/0]).
+-export_type([handle_update_ret/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
--nominal bindings() :: map().
--nominal resets() :: map().
+-type bindings() :: arizona_template:bindings().
+-type resets() :: map().
 -nominal effect() :: arizona_js:cmd().
 -nominal effects() :: [effect()].
+
+-type event_name() :: binary().
+-type event_payload() :: map().
+
+-type mount_ret() :: {bindings(), resets()}.
+-type handle_event_ret() :: {bindings(), resets(), effects()}.
+-type handle_info_ret() :: {bindings(), resets(), effects()}.
+-type handle_update_ret() :: {bindings(), resets()}.
 
 %% --------------------------------------------------------------------
 %% Behaviour callbacks
@@ -77,7 +91,7 @@ Returns `{Bindings, Resets}` where `Resets` is reapplied after every
 subsequent `handle_event/3` / `handle_info/2` to clear transient
 fields. Use the empty map `#{}` if you have nothing to reset.
 """.
--callback mount(Bindings :: bindings()) -> {bindings(), resets()}.
+-callback mount(Bindings :: bindings()) -> mount_ret().
 
 -doc """
 Returns the template for the current bindings. Called on the first
@@ -97,8 +111,7 @@ etc. `Payload` carries any auto-collected form data plus explicit
 extra fields. Returns updated bindings, resets, and a list of
 client-side effects to run after the diff applies.
 """.
--callback handle_event(Event :: binary(), Payload :: map(), Bindings :: bindings()) ->
-    {bindings(), resets(), effects()}.
+-callback handle_event(event_name(), event_payload(), bindings()) -> handle_event_ret().
 
 -doc """
 Handles a mailbox message. Optional.
@@ -107,8 +120,7 @@ Triggered by anything that lands in the live process's mailbox --
 `?send/1,2`, `?send_after/2,3`, pubsub broadcasts, or arbitrary
 `Pid ! Msg` calls. Returns updated bindings, resets, and effects.
 """.
--callback handle_info(Info :: term(), Bindings :: bindings()) ->
-    {bindings(), resets(), effects()}.
+-callback handle_info(Info :: term(), bindings()) -> handle_info_ret().
 
 -doc """
 Intercepts a parent prop update before it reaches the bindings. Optional.
@@ -117,13 +129,13 @@ When a parent re-renders and its child stateful instance receives
 new props, this callback gets the chance to merge / transform them.
 If not exported, the framework merges `Props` into `Bindings` directly.
 """.
--callback handle_update(Props :: map(), Bindings :: bindings()) -> {bindings(), resets()}.
+-callback handle_update(Props :: bindings(), Bindings :: bindings()) -> handle_update_ret().
 
 -doc """
 Cleanup hook called when the instance is removed (parent stopped
 rendering it, or the page is being navigated away). Optional.
 """.
--callback unmount(Bindings :: bindings()) -> ok.
+-callback unmount(Bindings :: bindings()) -> term().
 
 -optional_callbacks([handle_event/3, handle_info/2, handle_update/2, unmount/1]).
 

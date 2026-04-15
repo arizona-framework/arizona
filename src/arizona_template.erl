@@ -68,6 +68,7 @@ render(Bindings) ->
 %% --------------------------------------------------------------------
 
 -export_type([az/0]).
+-export_type([bindings/0]).
 -export_type([deps/0]).
 -export_type([loc/0]).
 -export_type([dynamic/0]).
@@ -77,12 +78,14 @@ render(Bindings) ->
 -export_type([snapshot/0]).
 -export_type([stateful_descriptor/0]).
 -export_type([stateless_descriptor/0]).
+-export_type([render_fun/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
 -nominal az() :: binary() | undefined.
+-type bindings() :: map().
 -nominal deps() :: #{term() => true}.
 -nominal loc() :: {module(), pos_integer()}.
 
@@ -122,6 +125,8 @@ render(Bindings) ->
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
 -nominal stateless_descriptor() :: #{callback := fun((map()) -> template()), props := map()}.
+
+-nominal render_fun() :: fun((bindings()) -> template()).
 
 %% --------------------------------------------------------------------
 %% API Functions
