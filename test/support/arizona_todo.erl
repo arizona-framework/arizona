@@ -2,12 +2,14 @@
 -include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
 
+-spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
     Items = maps:get(items, Bindings, []),
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
     B = maps:merge(#{id => ~"todo"}, Bindings),
     {B#{items => Stream}, #{}}.
 
+-spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html(
         {ul, [{id, ?get(id)}], [
@@ -20,6 +22,8 @@ render(Bindings) ->
         ]}
     ).
 
+-spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
+    az:handle_event_ret().
 handle_event(~"add", #{~"id" := Id, ~"text" := Text}, Bindings) ->
     S = arizona_stream:insert(maps:get(items, Bindings), #{id => Id, text => Text}),
     {Bindings#{items => S}, #{}, []};

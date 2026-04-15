@@ -5,6 +5,7 @@
 %% A handler with a stateful child (arizona_counter) inside stream items.
 %% Used to test that child views survive dep-skipping of the stream.
 
+-spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings0) ->
     Items = [#{id => 1, label => ~"Item 1"}],
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
@@ -14,6 +15,7 @@ mount(Bindings0) ->
     ),
     {Bindings, #{}}.
 
+-spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html(
         {'div', [{id, ?get(id)}], [
@@ -40,6 +42,8 @@ render(Bindings) ->
         ]}
     ).
 
+-spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
+    az:handle_event_ret().
 handle_event(~"set_title", #{~"title" := T}, Bindings) ->
     {Bindings#{title => T}, #{}, []};
 handle_event(~"add_item", #{~"id" := Id, ~"label" := Label}, Bindings) ->

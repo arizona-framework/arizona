@@ -2,14 +2,18 @@
 -include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
 
+-spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
     {maps:merge(#{id => ~"effectful", value => ~"initial"}, Bindings), #{}}.
 
+-spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html(
         {'div', [{id, ?get(id)}], [?get(value, ~"initial")]}
     ).
 
+-spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
+    az:handle_event_ret().
 handle_event(~"notify", #{~"message" := Msg}, Bindings) ->
     {Bindings#{value => Msg}, #{}, [
         arizona_js:dispatch_event(~"notification", #{~"message" => Msg})

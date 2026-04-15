@@ -2,6 +2,7 @@
 -include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3, handle_info/2]).
 
+-spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings0) ->
     Todos = arizona_stream:new(fun(#{id := Id}) -> Id end),
     Bindings = maps:merge(
@@ -19,6 +20,7 @@ mount(Bindings0) ->
     ?connected andalso ?send(arizona_connected),
     {Bindings, #{}}.
 
+-spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html(
         {main, [{id, ?get(id)}], [
@@ -92,6 +94,8 @@ render(Bindings) ->
         ]}
     ).
 
+-spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
+    az:handle_event_ret().
 handle_event(~"title_change", _Payload, Bindings) ->
     {Bindings#{title => ~"Changed"}, #{}, []};
 handle_event(~"add", _Payload, Bindings) ->
@@ -119,5 +123,6 @@ handle_event(~"clear_todos", _Payload, Bindings) ->
     S = arizona_stream:reset(maps:get(todos, Bindings)),
     {Bindings#{todos => S}, #{}, []}.
 
+-spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
 handle_info(arizona_connected, Bindings) ->
     {Bindings#{connected => true}, #{}, [arizona_js:set_title(maps:get(title, Bindings))]}.

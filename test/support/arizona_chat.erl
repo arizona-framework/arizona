@@ -2,15 +2,18 @@
 -include("arizona_stateful.hrl").
 -export([mount/1, unmount/1, render/1, handle_event/3, handle_info/2]).
 
+-spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
     ?connected andalso ?subscribe(chat),
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end),
     {maps:merge(#{id => ~"page", messages => Stream}, Bindings), #{}}.
 
+-spec unmount(az:bindings()) -> ok.
 unmount(_Bindings) ->
     _ = ?unsubscribe(chat),
     ok.
 
+-spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html(
         {main, [{id, ?get(id)}], [
@@ -56,6 +59,8 @@ render(Bindings) ->
         ]}
     ).
 
+-spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
+    az:handle_event_ret().
 handle_event(~"send", Payload, Bindings) ->
     case maps:get(~"text", Payload, ~"") of
         ~"" ->
@@ -79,6 +84,7 @@ handle_event(~"delete", #{~"id" := Id}, Bindings) ->
             {Bindings, #{}, []}
     end.
 
+-spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
 handle_info({chat_msg, Msg}, Bindings) ->
     S = arizona_stream:insert(maps:get(messages, Bindings), Msg),
     {Bindings#{messages => S}, #{}, []};

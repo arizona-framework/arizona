@@ -26,6 +26,7 @@
 %%     </div>
 %%   </div>
 
+-spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
     B = maps:merge(
         #{
@@ -40,6 +41,7 @@ mount(Bindings) ->
     ),
     {B, #{}}.
 
+-spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html(
         {'div', [{id, ?get(id)}], [
@@ -70,6 +72,7 @@ render(Bindings) ->
         ]}
     ).
 
+-spec render_card(az:bindings()) -> az:template().
 render_card(Props) ->
     ?html(
         {'div', [{class, maps:get(class, Props)}], [
@@ -77,6 +80,8 @@ render_card(Props) ->
         ]}
     ).
 
+-spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
+    az:handle_event_ret().
 handle_event(~"show", #{~"text" := Text}, Bindings) ->
     {
         Bindings#{

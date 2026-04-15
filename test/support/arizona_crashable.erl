@@ -2,12 +2,14 @@
 -include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3, handle_info/2]).
 
+-spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
     case maps:get(crash_on_mount, Bindings, false) of
         true -> error(crash_on_mount);
         false -> {maps:merge(#{id => ~"crashable", status => ~"ok"}, Bindings), #{}}
     end.
 
+-spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html(
         {'div', [{id, ?get(id)}], [
@@ -17,6 +19,8 @@ render(Bindings) ->
         ]}
     ).
 
+-spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
+    az:handle_event_ret().
 handle_event(~"crash", _Payload, _Bindings) ->
     error(crash_on_event);
 handle_event(~"crash_async", _Payload, Bindings) ->
@@ -27,6 +31,7 @@ handle_event(~"set_status", #{~"value" := V}, Bindings) ->
 handle_event(~"with_effect", _Payload, Bindings) ->
     {Bindings, #{}, [arizona_js:dispatch_event(~"test_effect", #{~"ok" => true})]}.
 
+-spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
 handle_info(crash, _Bindings) ->
     error(crash_on_info);
 handle_info(_Info, Bindings) ->

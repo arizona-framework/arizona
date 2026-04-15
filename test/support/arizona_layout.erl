@@ -2,6 +2,7 @@
 -include("arizona_stateless.hrl").
 -export([render/1]).
 
+-spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html([
         ~"<!DOCTYPE html>",

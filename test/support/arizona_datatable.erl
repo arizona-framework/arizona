@@ -2,6 +2,7 @@
 -include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3, handle_info/2]).
 
+-spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings0) ->
     Items = [
         #{id => 1, name => ~"Alice", age => 30},
@@ -26,6 +27,7 @@ mount(Bindings0) ->
     ?connected andalso ?send(arizona_connected),
     {Bindings, #{}}.
 
+-spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html(
         {main, [{id, ?get(id)}], [
@@ -82,6 +84,8 @@ render(Bindings) ->
         ]}
     ).
 
+-spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
+    az:handle_event_ret().
 handle_event(~"sort", #{~"col" := ColBin}, Bindings) ->
     Col = binary_to_existing_atom(ColBin),
     OldCol = maps:get(sort_col, Bindings),
@@ -125,5 +129,6 @@ handle_event(~"shuffle", _Payload, Bindings) ->
     S = arizona_stream:reset(maps:get(rows, Bindings), Shuffled),
     {Bindings#{rows => S}, #{}, []}.
 
+-spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
 handle_info(arizona_connected, Bindings) ->
     {Bindings#{connected => true}, #{}, [arizona_js:set_title(maps:get(title, Bindings))]}.
