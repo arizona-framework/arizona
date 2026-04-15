@@ -6,11 +6,10 @@ Arizona is a real-time web framework for Erlang/OTP. It renders HTML on the serv
 
 Templates are plain Erlang terms compiled via parse transform. The server owns the state; the client is a thin DOM patcher.
 
-## ⚠️ Warning
+## Status
 
-Work in progress.
-
-Use it at your own risk, as the API may change at any time.
+Arizona is in `0.x`. The core is functional and covered by tests, but
+the API may change between minor versions. Pin a version in your deps.
 
 ## Features
 
@@ -29,28 +28,154 @@ Use it at your own risk, as the API may change at any time.
 - **Element hooks**: client-side `mounted`, `updated`, `destroyed` callbacks via `az-hook`
 - **Framework-agnostic transport**: `arizona_socket` + adapter behaviour, cowboy is optional
 
-## Quick start
+## Requirements
+
+- Erlang/OTP 28 or later
+
+## Installation
+
+Add `arizona` to your `rebar.config` dependencies:
 
 ```erlang
+{deps, [
+    {arizona, "0.1.0"},
+    {cowboy, "2.14.2"}
+]}.
+```
+
+Cowboy is required for the built-in HTTP/WebSocket transport. If you
+write your own `arizona_adapter`, you can skip it.
+
+## Quick start
+
+This walks through a minimal page with an embedded counter: a parent page,
+a child stateful counter, a layout, and the Cowboy server wiring.
+
+### 1. Create the counter component
+
+The counter is a child component. Its `id` and initial `count` come from
+the parent via the `?stateful` macro (see step 2), so `mount/1` just
+passes them through:
+
+```erlang
+%% src/my_counter.erl
 -module(my_counter).
--include("arizona_stateful.hrl").
+-include_lib("arizona/include/arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
 
-mount(Bindings0) ->
-    Bindings = maps:merge(#{id => ~"counter", count => 0}, Bindings0),
+mount(Bindings) ->
     {Bindings, #{}}.
 
 render(Bindings) ->
     ?html(
         {'div', [{id, ?get(id)}], [
-            {button, [{az_click, arizona_js:push_event(~"inc")}], [~"+"]},
-            {p, [], [~"Count: ", ?get(count)]}
+            {button, [{az_click, arizona_js:push_event(~"dec")}], [~"-"]},
+            {span, [], [~" Count: ", ?get(count), ~" "]},
+            {button, [{az_click, arizona_js:push_event(~"inc")}], [~"+"]}
         ]}
     ).
 
 handle_event(~"inc", _Payload, Bindings) ->
-    {Bindings#{count => maps:get(count, Bindings) + 1}, #{}, []}.
+    {Bindings#{count => maps:get(count, Bindings) + 1}, #{}, []};
+handle_event(~"dec", _Payload, Bindings) ->
+    {Bindings#{count => maps:get(count, Bindings) - 1}, #{}, []}.
 ```
+
+### 2. Create the parent page
+
+The page is the route's root handler. It receives its own `id` from the
+route's `bindings` (see step 4) and mounts the counter as a child:
+
+```erlang
+%% src/my_page.erl
+-module(my_page).
+-include_lib("arizona/include/arizona_stateful.hrl").
+-export([mount/1, render/1]).
+
+mount(Bindings) ->
+    {Bindings, #{}}.
+
+render(Bindings) ->
+    ?html(
+        {main, [{id, ?get(id)}], [
+            {h1, [], [~"Counter demo"]},
+            ?stateful(my_counter, #{id => ~"counter", count => 0})
+        ]}
+    ).
+```
+
+### 3. Create the layout
+
+The layout wraps every page with the HTML shell and loads the client
+runtime that connects over WebSocket:
+
+```erlang
+%% src/my_layout.erl
+-module(my_layout).
+-include_lib("arizona/include/arizona_stateless.hrl").
+-export([render/1]).
+
+render(Bindings) ->
+    ?html([
+        ~"<!DOCTYPE html>",
+        {html, [az_nodiff], [
+            {head, [], [
+                {meta, [{charset, ~"utf-8"}]},
+                {title, [], [?get(title, ~"Arizona")]}
+            ]},
+            {body, [], [
+                ?inner_content,
+                {script, [{type, ~"module"}], [
+                    ~"""
+                    import { connect } from '/assets/arizona.min.js';
+                    connect('/ws');
+                    """
+                ]}
+            ]}
+        ]}
+    ]).
+```
+
+### 4. Wire up routes and start Cowboy
+
+Start the listener from your application's `start/2` callback (or from a
+`rebar3 shell` one-liner for experimentation). The page's `id` is supplied
+here via the route's `bindings`:
+
+```erlang
+%% src/my_app.erl
+-module(my_app).
+-behaviour(application).
+-export([start/2, stop/1]).
+
+start(_Type, _Args) ->
+    Routes = [
+        {live, ~"/", my_page, #{
+            layout => {my_layout, render},
+            bindings => #{id => ~"page", title => ~"Counter demo"}
+        }},
+        {ws, ~"/ws", #{}},
+        {asset, ~"/assets", {priv_dir, arizona, "static/assets/js"}}
+    ],
+    {ok, _} = arizona_cowboy_server:start(http, #{
+        transport_opts => [{port, 4040}],
+        routes => Routes
+    }),
+    my_sup:start_link().
+
+stop(_State) ->
+    ok = arizona_cowboy_server:stop(http).
+```
+
+### 5. Run it
+
+```bash
+rebar3 shell
+```
+
+Open <http://localhost:4040> and click the buttons -- the server renders
+the initial HTML, then pushes minimal diffs over WebSocket as the count
+changes.
 
 ## Documentation
 
