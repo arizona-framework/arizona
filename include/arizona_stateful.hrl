@@ -1,6 +1,6 @@
 -behaviour(arizona_stateful).
 -compile({parse_transform, arizona_parse_transform}).
--include("arizona_template.hrl").
+-include("arizona_common.hrl").
 
 %% Per-view messaging -- short forms (?send/1, ?send_after/2) require `Bindings` in scope
 -define(send(ViewId, Msg), arizona_live:send(ViewId, Msg)).

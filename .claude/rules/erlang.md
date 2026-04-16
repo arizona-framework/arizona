@@ -26,9 +26,9 @@ Templates are plain maps: `#{s => [binary()], d => [dynamic()], f => binary()}`.
 ## Header files
 
 ```
-include/arizona_template.hrl    -- utility macros (?get, ?html, ?each, etc.)
-include/arizona_stateful.hrl    -- -behaviour(arizona_live), parse_transform, includes arizona_template.hrl
-include/arizona_stateless.hrl   -- parse_transform, includes arizona_template.hrl
+include/arizona_common.hrl      -- utility macros (?get, ?html, ?each, etc.)
+include/arizona_stateful.hrl    -- -behaviour(arizona_live), parse_transform, includes arizona_common.hrl
+include/arizona_stateless.hrl   -- parse_transform, includes arizona_common.hrl
 ```
 
 Stateful handlers include `arizona_stateful.hrl`. Stateless template modules include `arizona_stateless.hrl`.

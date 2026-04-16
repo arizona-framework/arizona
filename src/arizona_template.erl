@@ -3,7 +3,7 @@
 Runtime template API: bindings, descriptors, value rendering, and snapshots.
 
 Most of this module's surface is exposed through the macros in
-`include/arizona_template.hrl` (`?get`, `?html`, `?each`, `?stateful`,
+`include/arizona_common.hrl` (`?get`, `?html`, `?each`, `?stateful`,
 `?stateless`). Templates themselves are produced by `arizona_parse_transform`
 at compile time -- `html/1` is only a runtime stub that errors if the parse
 transform was not applied.
