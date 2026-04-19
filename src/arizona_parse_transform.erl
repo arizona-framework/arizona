@@ -364,12 +364,14 @@ compile_each(FunAST, SourceAST, Line, Module) ->
         %% `fun name/arity` / `fun Mod:name/arity` -- synthesize an anonymous
         %% wrapper clause that calls the referenced function with the item
         %% (and optional key) var, then recurse into the clause path above.
-        {'fun', L, {function, Name, Arity}} when is_atom(Name), Arity =:= 1 orelse Arity =:= 2 ->
-            compile_each(wrap_fun_ref(L, Arity, {atom, L, Name}, none), SourceAST, Line, Module);
-        {'fun', L, {function, Mod, Name, Arity}} when
-            is_integer(element(3, Arity)), element(3, Arity) =:= 1 orelse element(3, Arity) =:= 2
+        {'fun', L, {function, Name, Arity}} when
+            is_atom(Name) andalso (Arity =:= 1 orelse Arity =:= 2)
         ->
-            compile_each(wrap_fun_ref(L, element(3, Arity), Name, Mod), SourceAST, Line, Module);
+            compile_each(wrap_fun_ref(L, Arity, {atom, L, Name}, none), SourceAST, Line, Module);
+        {'fun', L, {function, Mod, Name, {integer, _, Arity}}} when
+            Arity =:= 1 orelse Arity =:= 2
+        ->
+            compile_each(wrap_fun_ref(L, Arity, Name, Mod), SourceAST, Line, Module);
         _ ->
             parse_error(invalid_each_fun, Line)
     end.
