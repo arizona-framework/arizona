@@ -361,9 +361,31 @@ compile_each(FunAST, SourceAST, Line, Module) ->
             build_each_ast(
                 Line, SourceAST, [ItemVar], Guards, Prefix, S1, D1, Fingerprint, Opts
             );
+        %% `fun name/arity` / `fun Mod:name/arity` -- synthesize an anonymous
+        %% wrapper clause that calls the referenced function with the item
+        %% (and optional key) var, then recurse into the clause path above.
+        {'fun', L, {function, Name, Arity}} when is_atom(Name), Arity =:= 1 orelse Arity =:= 2 ->
+            compile_each(wrap_fun_ref(L, Arity, {atom, L, Name}, none), SourceAST, Line, Module);
+        {'fun', L, {function, Mod, Name, Arity}} when
+            is_integer(element(3, Arity)), element(3, Arity) =:= 1 orelse element(3, Arity) =:= 2
+        ->
+            compile_each(wrap_fun_ref(L, element(3, Arity), Name, Mod), SourceAST, Line, Module);
         _ ->
             parse_error(invalid_each_fun, Line)
     end.
+
+%% Build `fun(I) -> Callee(I) end` or `fun(I, K) -> Callee(I, K) end`,
+%% where Callee is either `Name(...)` or `Mod:Name(...)`.
+wrap_fun_ref(L, Arity, NameAST, ModAST) ->
+    VarNames = ['__I', '__K'],
+    Vars = [{var, L, V} || V <- lists:sublist(VarNames, Arity)],
+    Callee =
+        case ModAST of
+            none -> NameAST;
+            _ -> {remote, L, ModAST, NameAST}
+        end,
+    Call = {call, L, Callee, Vars},
+    {'fun', L, {clauses, [{clause, L, Vars, [], [Call]}]}}.
 
 compile_body_parts(ExprAST, Module) ->
     compile_body_parts(ExprAST, Module, false).

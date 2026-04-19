@@ -6,6 +6,8 @@
 -export([
     az_each_basic/1,
     az_each_inside_html/1,
+    each_with_named_fun_ref/1,
+    each_with_remote_fun_ref/1,
     az_html_dynamic_attr/1,
     az_html_dynamic/1,
     az_html_nested/1,
@@ -200,7 +202,9 @@ groups() ->
             template2_static_item,
             template2_void_item,
             template2_inner_template1,
-            template2_empty_list_render
+            template2_empty_list_render,
+            each_with_named_fun_ref,
+            each_with_remote_fun_ref
         ]},
         %% Tests 40-67: integration, fragments, patterns, nodiff, bool attrs
         {integration, [parallel], [
@@ -2736,6 +2740,39 @@ invalid_element_binary_tag(Config) when is_list(Config) ->
             (_) -> false
         end
     ).
+
+%% each/2 accepts `fun name/arity` references by synthesizing a wrapper clause.
+each_with_named_fun_ref(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_named_ref). "
+        "-export([render/1, row/1]). "
+        "row(Name) -> <<\"row:\", Name/binary>>. "
+        "render(Bindings) -> "
+        "    arizona_template:each(fun row/1, "
+        "        arizona_template:get(items, Bindings, [])). "
+    ),
+    Result = Mod:render(#{items => [<<"a">>, <<"b">>]}),
+    ?assertEqual(0, maps:get(t, Result)),
+    Tmpl = maps:get(template, Result),
+    DFun = maps:get(d, Tmpl),
+    ?assert(is_function(DFun, 1)),
+    [{_, Fun, _}] = DFun(<<"a">>),
+    ?assertEqual(<<"row:a">>, Fun()).
+
+%% each/2 accepts `fun Mod:Name/Arity` remote references too.
+each_with_remote_fun_ref(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_remote_ref). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:each(fun erlang:integer_to_binary/1, "
+        "        arizona_template:get(items, Bindings, [])). "
+    ),
+    Result = Mod:render(#{items => [1, 2]}),
+    Tmpl = maps:get(template, Result),
+    DFun = maps:get(d, Tmpl),
+    [{_, Fun, _}] = DFun(42),
+    ?assertEqual(<<"42">>, Fun()).
 
 %% Test 97: each/2 with 2-arity fun raises compile-time error.
 invalid_each_fun_arity(Config) when is_list(Config) ->
