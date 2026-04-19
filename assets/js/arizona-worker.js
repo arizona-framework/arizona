@@ -190,16 +190,16 @@ function openSocket() {
     _fpsSent = false;
 
     if (!_wsUrl) return;
-    let url = _wsUrl;
-    if (_reconnecting) url += '&reconnect=1';
 
-    // Pin the WebSocket target to the current page's origin. Prevents a
-    // malformed `connect(endpoint, params)` call from steering the socket to
-    // a different host, and closes CodeQL's js/client-side-request-forgery
-    // flow by making the origin invariant explicit.
-    const parsed = new URL(url);
-    const expectedProtocol = self.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    if (parsed.protocol !== expectedProtocol || parsed.host !== self.location.host) return;
+    // Rebuild the WebSocket URL from this worker's own origin instead of
+    // using the host/protocol that came in via postMessage. Even though the
+    // main thread always constructs _wsUrl from location.host, reconstructing
+    // here guarantees the socket target can never be steered off-origin and
+    // makes the origin invariant legible to static analyzers.
+    const incoming = new URL(_wsUrl);
+    const protocol = self.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    let url = protocol + '//' + self.location.host + incoming.pathname + incoming.search;
+    if (_reconnecting) url += '&reconnect=1';
 
     const ws = new WebSocket(url);
     _ws = ws;
