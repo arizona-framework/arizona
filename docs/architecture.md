@@ -21,11 +21,16 @@
 | `src/arizona_cowboy_http.erl` | Cowboy HTTP handler -- calls `render_to_iolist` and serves result |
 | `src/arizona_cowboy_ws.erl` | Cowboy WebSocket handler -- thin wrapper over `arizona_socket` |
 | `src/arizona_cowboy_static.erl` | Cowboy static file handler -- serves files from a directory with content-type detection |
-| `src/arizona_app.erl` | Application start -- Cowboy routes |
+| `src/arizona_cowboy_server.erl` | Cowboy listener boot -- compiles routes, stashes them in persistent terms, starts a clear/TLS listener |
+| `src/arizona_cowboy_req.erl` | Cowboy `Req` helpers -- bindings/query/body extraction + middleware application |
+| `src/arizona_cowboy_reload.erl` | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser |
+| `src/arizona_error_page.erl` | Dev-mode error page renderer -- pretty-prints compile and runtime errors |
+| `src/arizona_app.erl` | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches a Cowboy listener via `arizona_cowboy_server:start/2` |
 | `src/arizona_watcher.erl` | File watcher gen_server -- subscribes to `fs` events, debounces, calls callback, broadcasts via `arizona_pubsub` |
-| `src/arizona_dev.erl` | Dev-mode relay -- named gen_server subscribing to `arizona_watcher` channel, broadcasts `arizona_dev_reload` to browser WS handlers |
+| `src/arizona_reloader.erl` | Dev-mode hot reloader -- recompiles changed `.erl` files, broadcasts reload messages on the `arizona_reloader` pubsub topic |
 | `src/arizona_pubsub.erl` | PubSub -- thin `pg` wrapper for cross-view communication |
-| `src/arizona_sup.erl` | Supervisor -- starts `arizona_pubsub` worker and `arizona_dev` worker |
+| `src/arizona_sup.erl` | Supervisor -- always starts `arizona_pubsub`; additionally starts one `arizona_watcher` per configured reloader rule |
+| `src/az.erl` | User-facing facade -- shared type aliases and short-form helpers re-exported from internal modules |
 
 ## API -- `arizona_template.erl`
 
@@ -148,17 +153,6 @@ File watcher gen_server -- subscribes to `fs` events for a directory, debounces,
 - `start_link(Dir, Opts)` -- starts a linked gen_server that subscribes to `fs` events for `Dir`. Options: `patterns` (list of regex strings, default `[".*"]`), `callback` (fun receiving list of changed file paths), `debounce` (ms, default 100). On debounce fire: calls callback, then `broadcast/1`
 - `broadcast(Files)` -- broadcasts `{arizona_watcher, Files}` via `arizona_pubsub` on channel `arizona_watcher`
 
-## API -- `arizona_dev.erl`
-
-Dev-mode relay -- named gen_server that subscribes to the `arizona_watcher` pubsub channel and relays file change notifications as browser reload messages.
-
-- `start_link/0` -- starts named gen_server (`{local, arizona_dev}`), subscribes to `arizona_watcher` pubsub channel
-- `watch/2` -- delegates to `arizona_watcher:watch/2`
-- `join/1` -- subscribes `Pid` to the `arizona_dev` pubsub channel. No-op if `arizona_pubsub` isn't running
-- `broadcast_reload/0` -- broadcasts `arizona_dev_reload` to all subscribers of the `arizona_dev` pubsub channel
-
-When the watcher fires, `arizona_dev` receives `{arizona_watcher, Files}` via `handle_info/2` and calls `broadcast_reload/0`.
-
 ## API -- `arizona_pubsub.erl`
 
 PubSub for cross-view communication. Thin wrapper around `pg` with scope `arizona_pubsub`. Channels are arbitrary terms. Messages are raw data (no wrapper tuple).
@@ -173,13 +167,13 @@ PubSub for cross-view communication. Thin wrapper around `pg` with scope `arizon
 
 Simplified gen_server wrapper:
 
-- `start_link/1,2,3` -- start with handler module, optional initial bindings (default `#{}`), and optional transport PID. `/3` accepts `TransportPid` for server-push; `/1` and `/2` pass `undefined`
+- `start_link/1,2,3,4` -- start with handler module, optional initial bindings (default `#{}`), optional transport PID, and optional `on_mount` hook list. `/3` and `/4` accept `TransportPid` for server-push; `/1` and `/2` pass `undefined`
 - `mount/1` -- calls `Handler:mount(Bindings)` -> extracts `ViewId = maps:get(id, Bindings)` -> `Handler:render(B1)` -> `arizona_render:render/2` to establish snapshot. Returns `{ok, ViewId}` (no HTML -- SSR is handled separately by `arizona_cowboy_http`)
 - `handle_event/4` -- unified event dispatch: `handle_event(Pid, ViewId, Event, Payload)`. Checks views map -- if `ViewId` is a known child, dispatches to child handler; otherwise dispatches to root handler. Returns `{ok, Ops, Effects}`
 - `handle_info/2` -- gen_server callback for Erlang messages (`Pid ! Msg`, `erlang:send_after`, etc.). If handler exports `handle_info/2`, calls it, diffs, and pushes `{arizona_push, Ops, Effects}` to `transport_pid`. Pre-mount messages and handlers without `handle_info/2` are silently dropped. Empty ops+effects are not pushed
-- `navigate/3` -- `navigate(Pid, NewHandler, InitBindings)`. Mounts new handler, resets gen_server state (handler, bindings, snapshot, views), preserves `transport_pid`, returns `{ok, NewViewId, PageHTML}`
+- `navigate/3,4` -- `navigate(Pid, NewHandler, InitBindings [, OnMount])`. Mounts new handler (applying any `OnMount` hooks), resets gen_server state (handler, bindings, snapshot, views), preserves `transport_pid`, returns `{ok, NewViewId, PageContent}`
 
-Internal state: `#state{handler, bindings, snapshot, views, transport_pid}` where `views :: #{ViewId => #{handler, bindings, snapshot}}`.
+Internal state: `#state{handler, bindings, snapshot, views, on_mount, transport_pid, sent_fps}` where `views :: #{ViewId => #{handler, bindings, snapshot}}` and `sent_fps` tracks fingerprints already shipped to the client for deduplication.
 
 `compute_changed/2` builds the Changed map by comparing old and new bindings key-by-key.
 
@@ -189,7 +183,7 @@ Internal state: `#state{handler, bindings, snapshot, views, transport_pid}` wher
 
 Framework-agnostic WebSocket protocol state machine. Extracted from `arizona_cowboy_ws` so any framework can integrate Arizona without reimplementing the wire protocol. Cowboy is an optional dependency -- the core engine works without it.
 
-- `init/3` -- `init(Handler, Bindings, Opts)`. Traps exits, starts `arizona_live:start_link/3` (passing `self()` as transport PID), mounts. On reconnect (`#{reconnect => true}`), also renders and returns `OP_REPLACE` frame. Opts: `reconnect` (boolean), `adapter` (module implementing `arizona_adapter`), `adapter_state` (passed to adapter callbacks)
+- `init/3` -- `init(Handler, Bindings, Opts)`. Traps exits, starts `arizona_live:start_link/4` (passing `self()` as transport PID and any `on_mount` hooks from Opts), mounts. On reconnect (`#{reconnect => true}`), also renders and returns `OP_REPLACE` frame. Opts: `reconnect` (boolean), `adapter` (module implementing `arizona_adapter`), `adapter_state` (passed to adapter callbacks), `on_mount` (list of `t:arizona_live:on_mount_hook/0`)
 - `handle_in/2` -- decode incoming text frame: ping/pong, `["cached_fps", FpList]`, `["navigate", {path}]`, `[target, event, payload]`
 - `handle_info/2` -- handle `{arizona_push, Ops, Effects}` from `arizona_live`, `EXIT` signals (crash → remount, normal → close)
 
@@ -221,7 +215,7 @@ Called by `arizona_socket` during client-side SPA navigation to resolve a path t
 `arizona_cowboy_http` calls `arizona_render:render_to_iolist(Handler, Opts)` where Opts may contain `layout => {Mod, Fun}` and `bindings => map()`. When a layout is provided, it mounts the page handler, renders to page HTML, then injects the page HTML into mount bindings as `inner_content` and passes the bindings to the layout's `render/1`. The layout uses `?html` with `az_nodiff` on the root element -- a stateless HTML shell (DOCTYPE, head, body, scripts) with no markers or `az` attributes. When layout is absent, the page is rendered directly without a wrapper. Route config provides `handler`, `layout`, and `bindings`.
 
 **WebSocket mount:**
-`arizona_cowboy_ws` calls `arizona_live:start_link/3` (passing `self()` as transport PID) then `arizona_live:mount/1`. Mount establishes the server-side snapshot (matching SSR). Returns `{ok, ViewId}` where ViewId comes from `maps:get(id, MountBindings)`. Handlers detect the connected context via `?connected` macro (delegates to `arizona_live:connected()`) which reads a process dictionary flag set in `arizona_live:init/1`. For post-connection effects, handlers use `?send(arizona_connected)` in mount and handle it in `handle_info/2`.
+`arizona_cowboy_ws` calls `arizona_live:start_link/4` (passing `self()` as transport PID and route `on_mount` hooks) then `arizona_live:mount/1`. Mount establishes the server-side snapshot (matching SSR). Returns `{ok, ViewId}` where ViewId comes from `maps:get(id, MountBindings)`. Handlers detect the connected context via `?connected` macro (delegates to `arizona_live:connected()`) which reads a process dictionary flag set in `arizona_live:init/1`. For post-connection effects, handlers use `?send(arizona_connected)` in mount and handle it in `handle_info/2`.
 
 **Server push (`handle_info`) -- per-view routing:**
 Messages sent via `?send(Msg)` / `arizona_live:send(ViewId, Msg)` are tagged as `{arizona_view, ViewId, Msg}` and routed to the correct handler's `handle_info/2` -- root or child. The root view ID is matched from `#state.bindings`, children from the views map. Unknown view IDs crash with `{unknown_view, ViewId, Msg}`. Plain untagged messages (`Pid ! Msg`) route to the root handler for backward compatibility. Delayed sends use `?send_after(Time, Msg)` / `arizona_live:send_after(ViewId, Time, Msg)`. PubSub subscriptions use `?subscribe(Topic)` / `?unsubscribe(Topic)`. After `handle_info/2` returns, the template is re-rendered and diffed, and ops+effects are sent as `{arizona_push, Ops, Effects}` to the transport PID.
@@ -256,40 +250,45 @@ Handlers include `arizona_stateful.hrl` (which sets the behaviour, parse transfo
 -export([mount/1, render/1, handle_event/3]).
 
 mount(Bindings) ->
-    maps:merge(#{id => ~"page", count => 0}, Bindings).
+    {maps:merge(#{id => ~"page", count => 0}, Bindings), #{}}.
 
 render(Bindings) ->
     ?html({'div', [], [?get(count, 0)]}).
 
 handle_event(~"inc", _Payload, Bindings) ->
-    {Bindings#{count => maps:get(count, Bindings, 0) + 1}, []}.
+    {Bindings#{count => maps:get(count, Bindings, 0) + 1}, #{}, []}.
 ```
 
-**Callback signatures:**
+**Callback signatures** (see `src/arizona_stateful.erl` for authoritative types):
 
 ```erlang
-mount(Bindings) -> NewBindings.                     %% Required
-render(Bindings) -> #{s => [...], d => [...]}.      %% Required
-handle_event(Event, Payload, Bindings) -> {NewBindings, Resets, Effects}.  %% Optional
-handle_info(Info, Bindings) -> {NewBindings, Resets, Effects}.             %% Optional (server push)
-handle_update(Props, Bindings) -> NewBindings.                     %% Optional (child views)
+mount(Bindings) -> {NewBindings, Resets}.                                     %% Required
+render(Bindings) -> #{s => [...], d => [...]}.                                %% Required
+handle_event(Event, Payload, Bindings) -> {NewBindings, Resets, Effects}.     %% Optional
+handle_info(Info, Bindings) -> {NewBindings, Resets, Effects}.                %% Optional (server push)
+handle_update(Props, Bindings) -> {NewBindings, Resets}.                      %% Optional (child views)
+unmount(Bindings) -> term().                                                   %% Optional (cleanup)
 ```
 
-`mount/1` returns `Bindings :: map()`. Bindings must include an `id` key -- this becomes the ViewId used for event routing and navigate targeting. The parse transform auto-injects `az-view` as a boolean attribute on the root element of `render/1` in `arizona_stateful` modules. Using `az_view` manually outside this context raises a compile error.
+`Resets` is a map of binding values reapplied on top of `NewBindings` after the callback returns -- typically `#{}`, or a subset of keys you want cleared (form fields, transient flags). `Effects` is a list of `arizona_js:cmd()` values to run client-side after the diff is applied.
+
+`mount/1` must produce `Bindings` containing an `id` key -- this becomes the ViewId used for event routing and navigate targeting. The parse transform auto-injects `az-view` as a boolean attribute on the root element of `render/1` in `arizona_stateful` modules. Using `az_view` manually outside this context raises a compile error.
 
 **`id` attribute restriction:** The root element's `id` MUST use `{id, ?get(id)}` (or the equivalent `arizona_template:get(id, Bindings)` / `az:get(id, Bindings)`). Static binaries and composed values are not allowed. This is a compile-time check.
 
 The `id` serves three roles simultaneously: DOM id (`document.getElementById`), views map key (server-side state tracking), and wire protocol target (op scoping). All three must be the same value. Using `?get(id)` ensures the template renders the same value the parent passed in Props and the server uses for tracking. `id` is a restricted key -- `mount/1` cannot override the value passed by the parent in Props.
 
-`handle_event/3` returns `{Bindings, Resets, Effects}`. Effects is a list of `arizona_js:cmd()` tuples, built using functions in `arizona_js.erl`. Same commands used in template attributes. Supported effects:
+`handle_event/3` effects: a list of `arizona_js:cmd()` tuples, built using functions in `arizona_js.erl`. Same commands used in template attributes. Common effects:
 - `arizona_js:dispatch_event(Name, Payload)` -- dispatches a CustomEvent on the client's document
 - `arizona_js:set_title(Title)` -- sets the browser document title
 - `arizona_js:reload()` -- reloads the page
 - Any other `arizona_js` command (toggle, show, hide, etc.) also works as an effect
 
-`handle_info/2` returns `{Bindings, Effects}`. Same return format as `handle_event/3`. `Info` is any Erlang term sent to the gen_server PID. If not exported, messages are silently dropped (checked via `erlang:function_exported/3`).
+`handle_info/2` is invoked for any Erlang term landing in the gen_server mailbox (`?send`, `?send_after`, pubsub, raw `Pid ! Msg`). If not exported, messages are silently dropped (checked via `erlang:function_exported/3`).
 
-`handle_update/2` returns `NewBindings` (pure state sync, no side effects). Called on stateful children when the parent re-renders. If not exported, `maps:merge(Bindings, Props)` is used as default (`call_handle_update/3`).
+`handle_update/2` intercepts parent prop updates before they reach the bindings. Called on stateful children when the parent re-renders with new `Props`. If not exported, the framework merges `Props` into `Bindings` directly (`call_handle_update/3`).
+
+`unmount/1` runs when an instance is removed -- either the parent stopped rendering it (conditional or navigate) or the live process is shutting down. Use it to release resources (timers, external subscriptions). Return value is discarded.
 
 ## Dynamic `eval` return values
 
@@ -311,7 +310,7 @@ The `id` serves three roles simultaneously: DOM id (`document.getElementById`), 
 
 **Nesting:** Stateful children and nested templates save/restore `'$arizona_deps'` (`SavedDeps = erlang:get(...)` before, `erlang:put(..., SavedDeps)` after) to prevent child `get` calls from polluting the parent's dep list.
 
-**Inactive paths:** `render/1`, `diff/2`, and SSR never set `'$arizona_deps'`, so `track_dep/1` sees `undefined` and is a no-op.
+**Inactive paths:** `render/1`, `diff/2`, and SSR never set `'$arizona_deps'`, so `arizona_template:track/1` sees `undefined` and is a no-op.
 
 **Consumption:** Only `diff/4` uses deps. `deps_changed/2` checks whether any key in a dynamic's dep map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic is skipped entirely -- its fun is never called.
 
