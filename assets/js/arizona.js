@@ -1012,6 +1012,14 @@ function connect(endpoint, params = {}) {
     // comment above applyScroll for the full model.
     if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 
+    // On initial load with a URL hash, honor it -- with scrollRestoration set
+    // to 'manual', the browser may have skipped or raced its native anchor
+    // jump, so we take care of it ourselves.
+    if (location.hash) {
+        const hash = location.hash.slice(1);
+        requestAnimationFrame(() => applyScroll({ kind: 'push', hash }));
+    }
+
     // SPA navigation: az-navigate (boolean attr) on <a> triggers client-side
     // navigation. The path is read from href (hash stripped before sending
     // to the server). Sends ["navigate", {path}] to the server, which renders

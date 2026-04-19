@@ -1056,6 +1056,20 @@ test.describe('SPA navigation', () => {
         expect(Math.abs(top)).toBeLessThan(50);
     });
 
+    test('direct load of URL with #hash scrolls to the anchor', async ({ page }) => {
+        // Not an SPA nav -- a full page load. The browser's native anchor
+        // jump is suppressed by scrollRestoration='manual', so connect() must
+        // do the scroll itself.
+        await page.goto('/scroll-about#section');
+        await page.waitForSelector('#status:has-text("Connected")');
+        await page.waitForFunction(() => {
+            const el = document.getElementById('section');
+            return el && Math.abs(el.getBoundingClientRect().top) < 50;
+        }, null, { timeout: 2000 });
+        const top = await page.locator('#section').evaluate((el) => el.getBoundingClientRect().top);
+        expect(Math.abs(top)).toBeLessThan(50);
+    });
+
     test('replace nav preserves scroll position', async ({ page }) => {
         await page.goto('/scroll-home');
         await page.waitForSelector('#status:has-text("Connected")');
