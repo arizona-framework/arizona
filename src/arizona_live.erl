@@ -171,7 +171,7 @@ send_after(ViewId, Time, Msg) ->
 Starts a live process for `Handler`. Equivalent to
 `start_link(Handler, #{}, undefined, [])`.
 """.
--spec start_link(Handler) -> {ok, pid()} | {error, term()} when
+-spec start_link(Handler) -> gen_server:start_ret() when
     Handler :: module().
 start_link(Handler) ->
     start_link(Handler, #{}, undefined, []).
@@ -179,7 +179,7 @@ start_link(Handler) ->
 -doc """
 Starts a live process with initial bindings.
 """.
--spec start_link(Handler, InitBindings) -> {ok, pid()} | {error, term()} when
+-spec start_link(Handler, InitBindings) -> gen_server:start_ret() when
     Handler :: module(),
     InitBindings :: map().
 start_link(Handler, InitBindings) ->
@@ -190,7 +190,7 @@ Starts a live process with initial bindings and a transport pid.
 The transport pid receives `{arizona_push, Ops, Effects}` messages
 when the live process diffs and emits updates.
 """.
--spec start_link(Handler, InitBindings, TransportPid) -> {ok, pid()} | {error, term()} when
+-spec start_link(Handler, InitBindings, TransportPid) -> gen_server:start_ret() when
     Handler :: module(),
     InitBindings :: map(),
     TransportPid :: pid() | undefined.
@@ -201,7 +201,7 @@ start_link(Handler, InitBindings, TransportPid) ->
 Starts a live process with initial bindings, a transport pid, and a
 list of `on_mount` hooks applied before the handler's `mount/1`.
 """.
--spec start_link(Handler, InitBindings, TransportPid, OnMount) -> {ok, pid()} | {error, term()} when
+-spec start_link(Handler, InitBindings, TransportPid, OnMount) -> gen_server:start_ret() when
     Handler :: module(),
     InitBindings :: map(),
     TransportPid :: pid() | undefined,

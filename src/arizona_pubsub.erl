@@ -59,7 +59,7 @@ ok
 -doc """
 Starts the pubsub `pg` scope. Called from the application supervisor.
 """.
--spec start_link() -> {ok, pid()} | {error, term()}.
+-spec start_link() -> gen_server:start_ret().
 start_link() ->
     pg:start_link(?MODULE).
 

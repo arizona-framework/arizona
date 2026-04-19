@@ -99,7 +99,7 @@ Starts a watcher process for `Dir` with the given options.
 Errors with `{not_a_directory, Dir}` if the path is not an existing
 directory.
 """.
--spec start_link(Dir, Opts) -> {ok, pid()} | {error, term()} when
+-spec start_link(Dir, Opts) -> gen_server:start_ret() when
     Dir :: string(),
     Opts :: map().
 start_link(Dir, Opts) ->
