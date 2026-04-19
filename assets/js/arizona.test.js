@@ -2137,3 +2137,213 @@ describe('pushEventTo', () => {
         expect(msgs).toContainEqual(['counter', 'update', { count: 5 }]);
     });
 });
+
+// ---------------------------------------------------------------------------
+// Navigation scroll
+// ---------------------------------------------------------------------------
+
+describe('navigation scroll', () => {
+    /** @type {ReturnType<typeof setupMockWorker>} */
+    let mock;
+    /** @type {ReturnType<typeof vi.spyOn>} */
+    let scrollSpy;
+    /** @type {string} */
+    let originalHref;
+    /** @type {any} */
+    let origScrollIntoView;
+
+    beforeEach(() => {
+        originalHref = location.href;
+        history.replaceState(null, '', '/start');
+        scrollSpy = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+        Object.defineProperty(window, 'scrollX', { value: 0, configurable: true });
+        Object.defineProperty(window, 'scrollY', { value: 0, configurable: true });
+        // jsdom does not implement scrollIntoView; stub on the prototype.
+        origScrollIntoView = Element.prototype.scrollIntoView;
+        Element.prototype.scrollIntoView = vi.fn();
+    });
+
+    afterEach(() => {
+        if (mock) { mock.restore(); mock = /** @type {any} */ (null); }
+        if (scrollSpy) scrollSpy.mockRestore();
+        Element.prototype.scrollIntoView = origScrollIntoView;
+        history.replaceState(null, '', originalHref);
+    });
+
+    function clickLink(href, { noscroll = false, modifier = null } = {}) {
+        const a = document.createElement('a');
+        a.setAttribute('az-navigate', '');
+        a.setAttribute('href', href);
+        if (noscroll) a.setAttribute('az-noscroll', '');
+        document.body.appendChild(a);
+        const evt = new MouseEvent('click', {
+            bubbles: true, cancelable: true, button: 0,
+            ctrlKey: modifier === 'ctrl',
+            metaKey: modifier === 'meta',
+            shiftKey: modifier === 'shift',
+            altKey: modifier === 'alt',
+        });
+        a.dispatchEvent(evt);
+        return { anchor: a, event: evt };
+    }
+
+    it('push nav saves outgoing scroll onto the outgoing history entry', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        history.replaceState(null, '', '/from');
+        Object.defineProperty(window, 'scrollY', { value: 240, configurable: true });
+        Object.defineProperty(window, 'scrollX', { value: 0, configurable: true });
+
+        const replaceSpy = vi.spyOn(history, 'replaceState');
+        clickLink('/to');
+
+        // The outgoing /from entry was updated via replaceState with the saved scroll.
+        const savingCall = replaceSpy.mock.calls.find(
+            (c) => c[0] && typeof c[0] === 'object' && c[0]._azScroll,
+        );
+        expect(savingCall).toBeTruthy();
+        expect(savingCall[0]._azScroll).toEqual({ x: 0, y: 240 });
+        replaceSpy.mockRestore();
+    });
+
+    it('push nav scrolls to top after OP_REPLACE (no hash, no noscroll)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        clickLink('/next');
+        // OP_REPLACE simulates server-rendered new page content arriving.
+        mod.applyOps([[OP.REPLACE, 'page', '<div id="page" az-view></div>']]);
+
+        expect(scrollSpy).toHaveBeenCalledWith(0, 0);
+    });
+
+    it('push nav with az-noscroll does not scroll', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        clickLink('/next', { noscroll: true });
+        mod.applyOps([[OP.REPLACE, 'page', '<div id="page" az-view></div>']]);
+
+        expect(scrollSpy).not.toHaveBeenCalled();
+    });
+
+    it('push nav with #hash scrolls into the target element', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // Seed the DOM BEFORE dispatching the click so the click handler's
+        // same-pathname hash short-circuit does not fire and so #page/#section
+        // exist when OP_REPLACE runs.
+        setupView('page', '<section id="section">x</section>');
+        clickLink('/next#section');
+        mod.applyOps([[OP.REPLACE, 'page', '<div id="page" az-view><section id="section">x</section></div>']]);
+
+        expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    });
+
+    it('replace nav (via JS_NAVIGATE) does not save outgoing scroll and does not reset', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        history.replaceState(null, '', '/from');
+        Object.defineProperty(window, 'scrollY', { value: 150, configurable: true });
+
+        // Simulate a handler effect: arizona_js:navigate(~"/to", #{replace => true}).
+        // Cmd shape is [JS_NAVIGATE=10, path, opts].
+        mod.applyEffects([[10, '/to', { replace: true }]]);
+        mod.applyOps([[OP.REPLACE, 'page', '<div id="page" az-view></div>']]);
+
+        expect(scrollSpy).not.toHaveBeenCalled();
+        expect(history.state && history.state._azScroll).toBeFalsy();
+    });
+
+    it('popstate with saved state restores exact coordinates after OP_REPLACE', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // Simulate a popstate with saved scroll on e.state.
+        const popEvent = new PopStateEvent('popstate', { state: { _azScroll: { x: 0, y: 320 } } });
+        window.dispatchEvent(popEvent);
+        mod.applyOps([[OP.REPLACE, 'page', '<div id="page" az-view></div>']]);
+
+        expect(scrollSpy).toHaveBeenCalledWith(0, 320);
+    });
+
+    it('popstate without saved state falls through to #hash target', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // Simulate URL having a hash at popstate time.
+        history.replaceState(null, '', '/x#target');
+        const popEvent = new PopStateEvent('popstate', { state: null });
+        window.dispatchEvent(popEvent);
+        setupView('page', '<section id="target">x</section>');
+        mod.applyOps([[OP.REPLACE, 'page', '<div id="page" az-view><section id="target">x</section></div>']]);
+
+        expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    });
+
+    it('popstate without saved state and no hash scrolls to top', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        history.replaceState(null, '', '/x');
+        const popEvent = new PopStateEvent('popstate', { state: null });
+        window.dispatchEvent(popEvent);
+        mod.applyOps([[OP.REPLACE, 'page', '<div id="page" az-view></div>']]);
+
+        expect(scrollSpy).toHaveBeenCalledWith(0, 0);
+    });
+
+    it('modifier-click (ctrl) lets the browser handle the link', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const urlBefore = location.href;
+        const { event } = clickLink('/other', { modifier: 'ctrl' });
+
+        expect(event.defaultPrevented).toBe(false);
+        expect(location.href).toBe(urlBefore);
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
+    });
+
+    it('same-path hash nav updates URL client-side without a server round-trip', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        history.replaceState(null, '', '/same');
+        setupView('page', '<section id="sec">x</section>');
+
+        clickLink('/same#sec');
+
+        expect(location.pathname + location.hash).toBe('/same#sec');
+        expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
+    });
+});

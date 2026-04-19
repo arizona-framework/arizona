@@ -104,6 +104,89 @@ let _connected = false;
 /** @type {Map<string, {fields: Object<string, string|string[]>, azChange: string|null}>} */
 const _savedForms = new Map();
 
+// --------------------------------------------------------------------------
+// Scroll on SPA navigation
+// --------------------------------------------------------------------------
+// Semantics (matches Phoenix LiveView's push_navigate):
+//   push (az-navigate click, arizona_js:navigate/1,2 without replace)
+//     -> save outgoing scroll to history entry; scroll to top (or #hash)
+//        after OP_REPLACE. Opt out with az-noscroll / {noscroll: true}.
+//   replace (arizona_js:navigate with #{replace => true})
+//     -> in-place URL swap; do NOT save outgoing scroll; do NOT reset.
+//   popstate (back)
+//     -> restore the saved scroll stored on the destination entry.
+//   popstate (forward, after back)
+//     -> destination entry has no saved scroll (we only save on push),
+//        so falls through to #hash-or-top. Restoring forward-nav scroll
+//        is a deliberate non-goal for this release; adding it later
+//        should use a state-ID-keyed Map + sessionStorage, not
+//        replaceState-on-scroll.
+
+/**
+ * Pending scroll intent set when az-navigate / popstate is handled, applied
+ * after OP_REPLACE renders the new page.
+ * @type {{kind: 'push'|'pop', hash: string, saved?: {x:number,y:number}|null}|null}
+ */
+let _pendingScroll = null;
+
+/**
+ * Apply a scroll intent. pop+saved restores prior position; otherwise scroll
+ * to #hash target if present, else to top.
+ * @param {{kind: 'push'|'pop', hash: string, saved?: {x:number,y:number}|null}} p
+ */
+function applyScroll(p) {
+    if (p.kind === 'pop' && p.saved) {
+        window.scrollTo(p.saved.x, p.saved.y);
+        return;
+    }
+    if (p.hash) {
+        const el = document.getElementById(p.hash);
+        if (el) { el.scrollIntoView(); return; }
+    }
+    window.scrollTo(0, 0);
+}
+
+/**
+ * Save the current scroll position onto the current history entry so
+ * back/popstate can restore it.
+ */
+function saveCurrentScroll() {
+    const st = history.state || {};
+    history.replaceState(
+        { ...st, _azScroll: { x: window.scrollX, y: window.scrollY } },
+        '',
+        location.href,
+    );
+}
+
+/**
+ * Perform an SPA navigation. Shared code path for `az-navigate` clicks and
+ * `arizona_js:navigate/1,2` effects.
+ *
+ * @param {string} pathname Path portion (no hash), sent to the server.
+ * @param {string} hash     Fragment without leading `#`; used client-side
+ *                          to scroll to the target after OP_REPLACE.
+ * @param {{replace?: boolean, noscroll?: boolean, fullUrl?: string}} opts
+ *   - replace  Use `replaceState` instead of `pushState`. Does not save
+ *              outgoing scroll, does not reset scroll.
+ *   - noscroll Push only: skip the scroll-to-top/hash after REPLACE.
+ *   - fullUrl  Exact URL to write to history (defaults to
+ *              `pathname + '#' + hash`). Lets the click handler preserve
+ *              the original href verbatim.
+ */
+function navigateTo(pathname, hash, opts) {
+    const fullUrl = opts.fullUrl || (hash ? pathname + '#' + hash : pathname);
+    if (opts.replace) {
+        history.replaceState(null, '', fullUrl);
+    } else {
+        saveCurrentScroll();
+        history.pushState(null, '', fullUrl);
+        if (!opts.noscroll) _pendingScroll = { kind: 'push', hash };
+    }
+    workerSend(JSON.stringify(['navigate', { path: pathname }]));
+    if (_worker) _worker.postMessage([3, pathname]);
+}
+
 /**
  * Send a pre-stringified JSON message to the server via the Worker.
  * @param {string} jsonString
@@ -215,6 +298,7 @@ function mountHooksBetweenMarkers(startMarker) {
  * @param {Array<Array<*>>} ops
  */
 function applyOps(ops) {
+    let didReplace = false;
     for (const op of ops) {
         const el = resolveEl(op[1]);
         if (!el) continue;
@@ -257,6 +341,7 @@ function applyOps(ops) {
                 el.outerHTML = op[2];
                 const newEl = resolveEl(op[1]);
                 if (newEl) mountHooks(newEl);
+                didReplace = true;
                 break;
             }
             case OP.REMOVE_NODE:
@@ -276,6 +361,10 @@ function applyOps(ops) {
                 moveItem(op[1], op[2], op[3]);
                 break;
         }
+    }
+    if (didReplace && _pendingScroll) {
+        applyScroll(_pendingScroll);
+        _pendingScroll = null;
     }
 }
 
@@ -667,7 +756,15 @@ function executeJS(el, event, cmds) {
             case JS_SET_ATTR: { const t = document.querySelector(cmd[1]); if (t) t.setAttribute(cmd[2], cmd[3]); break; }
             case JS_REMOVE_ATTR: { const t = document.querySelector(cmd[1]); if (t) t.removeAttribute(cmd[2]); break; }
             case JS_DISPATCH_EVENT: { document.dispatchEvent(new CustomEvent(cmd[1], { detail: cmd[2] || {} })); break; }
-            case JS_NAVIGATE: { const path = cmd[1]; const opts = cmd[2] || {}; if (opts.replace) { history.replaceState(null, '', path); } else { history.pushState(null, '', path); } workerSend(JSON.stringify(['navigate', { path }])); if (_worker) _worker.postMessage([3, path]); break; }
+            case JS_NAVIGATE: {
+                const full = cmd[1];
+                const opts = cmd[2] || {};
+                const hashIdx = full.indexOf('#');
+                const pathname = hashIdx === -1 ? full : full.slice(0, hashIdx);
+                const hash = hashIdx === -1 ? '' : full.slice(hashIdx + 1);
+                navigateTo(pathname, hash, { ...opts, fullUrl: full });
+                break;
+            }
             case JS_FOCUS: { const t = document.querySelector(cmd[1]); if (t) /** @type {HTMLElement} */ (t).focus(); break; }
             case JS_BLUR: { const t = document.querySelector(cmd[1]); if (t) /** @type {HTMLElement} */ (t).blur(); break; }
             case JS_SCROLL_TO: { const t = document.querySelector(cmd[1]); if (t) t.scrollIntoView(cmd[2] || { behavior: 'smooth' }); break; }
@@ -896,26 +993,51 @@ function connect(endpoint, params = {}) {
         if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
     });
 
+    // Take over scroll restoration so the browser doesn't scroll to a stale
+    // position before OP_REPLACE swaps in the new content. See the block
+    // comment above applyScroll for the full model.
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+
     // SPA navigation: az-navigate (boolean attr) on <a> triggers client-side
-    // navigation. The path is read from href. Sends ["navigate", {path}]
-    // to the server, which renders the new page and sends OP_REPLACE on the
-    // content slot.
+    // navigation. The path is read from href (hash stripped before sending
+    // to the server). Sends ["navigate", {path}] to the server, which renders
+    // the new page and sends OP_REPLACE on the content slot. Scroll resets to
+    // top (or #hash target) on new nav; opt out with az-noscroll.
     document.addEventListener('click', (e) => {
+        const me = /** @type {MouseEvent} */ (e);
+        // Let the browser handle modifier-key and non-primary clicks (open in
+        // new tab/window, etc.) so az-navigate doesn't hijack them.
+        if (me.button !== 0 || me.ctrlKey || me.metaKey || me.shiftKey || me.altKey) return;
         const el = /** @type {Element} */ (e.target).closest('[az-navigate]');
         if (!el || !_connected) return;
-        const path = el.getAttribute('href');
-        if (!path || path === location.pathname) return;
+        const href = el.getAttribute('href');
+        if (!href) return;
+        const hashIdx = href.indexOf('#');
+        const pathname = hashIdx === -1 ? href : href.slice(0, hashIdx);
+        const hash = hashIdx === -1 ? '' : href.slice(hashIdx + 1);
+        const noscroll = el.hasAttribute('az-noscroll');
+
         e.preventDefault();
-        history.pushState(null, '', path);
-        workerSend(JSON.stringify(['navigate', { path }]));
-        if (_worker) _worker.postMessage([3, path]);
+
+        // Same-page hash nav: update URL + scroll, no server round-trip.
+        if (!pathname || pathname === location.pathname) {
+            history.pushState(null, '', href);
+            if (!noscroll) applyScroll({ kind: 'push', hash });
+            return;
+        }
+
+        navigateTo(pathname, hash, { noscroll, fullUrl: href });
     });
 
     // Browser back/forward: send navigate on popstate so the server
-    // renders the correct page for the current URL.
-    window.addEventListener('popstate', () => {
+    // renders the correct page for the current URL. Restore the saved
+    // scroll position (or #hash target) after REPLACE applies.
+    window.addEventListener('popstate', (e) => {
         if (!_connected) return;
         const path = location.pathname;
+        const hash = location.hash ? location.hash.slice(1) : '';
+        const saved = (e.state && e.state._azScroll) || null;
+        _pendingScroll = { kind: 'pop', hash, saved };
         workerSend(JSON.stringify(['navigate', { path }]));
         if (_worker) _worker.postMessage([3, path]);
     });

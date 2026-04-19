@@ -32,7 +32,12 @@ render(Bindings) ->
                     end,
                     ?get(tags)
                 )
-            ]}
+            ]},
+            %% Scroll target for hash-navigation E2E tests. Offset down the
+            %% page and pad after so the section can sit at viewport top.
+            {'div', [{style, ~"height: 1500px"}], []},
+            {section, [{id, ~"section"}, {style, ~"height: 200px"}], [~"anchor target"]},
+            {'div', [{style, ~"height: 1500px"}], []}
         ]}
     ).
 

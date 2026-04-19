@@ -11,7 +11,7 @@ rebar3 compile                            # compile Erlang
 rebar3 ct                                 # all CT suites
 rebar3 ct --suite=arizona_SUITE           # single suite
 rebar3 eunit --module=my_module           # inline EUnit tests (private fn testing)
-npx vitest run                            # JS unit tests (Vitest + happy-dom)
+npx vitest run                            # JS unit tests (Vitest + jsdom)
 ```
 
 **Always run `make precommit` before committing** if any `.erl` or `.js` files were touched -- it formats, runs fast checks (no dialyzer), and runs unit/JS tests.

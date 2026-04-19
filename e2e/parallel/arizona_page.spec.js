@@ -1009,6 +1009,48 @@ test.describe('SPA navigation', () => {
         // Should still be on home, no error
         await expect(page.locator('main h1')).toHaveText('Welcome');
     });
+
+    test('back after navigate restores prior scroll position', async ({ page }) => {
+        await page.goto('/');
+        await page.waitForSelector('#status:has-text("Connected")');
+        await page.evaluate(() => window.scrollTo(0, 600));
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+
+        // Dispatch the click via evaluate so Playwright's auto-scroll-into-view
+        // doesn't reset scrollY before the click fires.
+        await page.evaluate(() => {
+            const el = /** @type {HTMLAnchorElement} */ (document.querySelector('a[href="/about"]'));
+            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+        });
+        await expect(page.locator('main h1')).toHaveText('About');
+
+        await page.goBack();
+        await expect(page.locator('main h1')).toHaveText('Welcome');
+        await page.waitForFunction(() => window.scrollY > 0, null, { timeout: 2000 }).catch(() => {});
+        const y = await page.evaluate(() => window.scrollY);
+        expect(Math.abs(y - 600)).toBeLessThanOrEqual(2);
+    });
+
+    test('navigate to /about#section scrolls to the anchor', async ({ page }) => {
+        await page.goto('/');
+        await page.waitForSelector('#status:has-text("Connected")');
+        await page.evaluate(() => {
+            const a = document.createElement('a');
+            a.setAttribute('href', '/about#section');
+            a.setAttribute('az-navigate', '');
+            a.id = '__nav_hash';
+            a.textContent = 'About section';
+            document.body.appendChild(a);
+            a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+        });
+        await expect(page.locator('main h1')).toHaveText('About');
+        await page.waitForFunction(() => {
+            const el = document.getElementById('section');
+            return el && Math.abs(el.getBoundingClientRect().top) < 50;
+        }, null, { timeout: 2000 });
+        const top = await page.locator('#section').evaluate((el) => el.getBoundingClientRect().top);
+        expect(Math.abs(top)).toBeLessThan(50);
+    });
 });
 
 // ---------------------------------------------------------------------------
