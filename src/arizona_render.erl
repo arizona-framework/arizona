@@ -334,6 +334,10 @@ render_ssr_one({_Az, Spec, {Mod, Line}}) ->
     try
         render_ssr_val(Spec)
     catch
+        %% Already wrapped by a nested render -- preserve the deepest location,
+        %% which is closest to the actual failure.
+        Class:{arizona_loc, _, _} = Reason:ST ->
+            erlang:raise(Class, Reason, ST);
         Class:Reason:ST ->
             erlang:raise(Class, {arizona_loc, {Mod, Line}, Reason}, ST)
     end;

@@ -29,6 +29,7 @@
     render_nodiff_layout_location_wrapping/1,
     render_nodiff_snapshot/1,
     render_ssr_nested_3tuple_dyn_az/1,
+    render_ssr_nested_failure_preserves_deepest_loc/1,
     render_text/1,
     render_to_iolist_nodiff_multi/1,
     render_to_iolist_nodiff_static/1,
@@ -100,6 +101,7 @@ groups() ->
             render_nodiff_layout_location_wrapping,
             render_nodiff_layout_location_success,
             render_ssr_nested_3tuple_dyn_az,
+            render_ssr_nested_failure_preserves_deepest_loc,
             error_page_format_reason_unwraps_loc,
             error_page_error_summaries
         ]},
@@ -475,6 +477,24 @@ render_ssr_nested_3tuple_dyn_az(Config) when is_list(Config) ->
     },
     Result = iolist_to_binary(arizona_render:render_to_iolist(Outer)),
     ?assertEqual(<<"<div><b>bold</b></div>">>, Result).
+
+%% Nested failures must surface the DEEPEST arizona_loc (the one closest to the
+%% actual bug) rather than wrapping it again at each enclosing render frame.
+render_ssr_nested_failure_preserves_deepest_loc(Config) when is_list(Config) ->
+    Inner = #{
+        s => [<<"<b>">>, <<"</b>">>],
+        d => [{<<"i">>, fun() -> erlang:error({badkey, oops}) end, {inner_mod, 42}}],
+        f => <<"test">>
+    },
+    Outer = #{
+        s => [<<"<div>">>, <<"</div>">>],
+        d => [{<<"0">>, Inner, {outer_mod, 7}}],
+        f => <<"test">>
+    },
+    ?assertError(
+        {arizona_loc, {inner_mod, 42}, {badkey, oops}},
+        iolist_to_binary(arizona_render:render_to_iolist(Outer))
+    ).
 
 %% =============================================================================
 %% 9. diff => false (nodiff) render tests
