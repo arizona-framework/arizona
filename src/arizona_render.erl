@@ -359,6 +359,9 @@ render_ssr_val(#{
     VKeys = arizona_template:visible_keys(Order, Limit),
     ItemSnaps = arizona_eval:render_stream_items_simple(VKeys, ItemsMap, Tmpl),
     #{t => ?EACH, items => ItemSnaps, order => VKeys, template => Tmpl};
+render_ssr_val(#{t := ?EACH, source := Source, template := Tmpl}) when is_map(Source) ->
+    ItemSnaps = arizona_eval:render_map_items_simple(Source, Tmpl),
+    #{t => ?EACH, items => ItemSnaps, template => Tmpl};
 render_ssr_val(#{stateful := H, props := Props}) ->
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
     make_ssr_child_snap(arizona_stateful:call_render(H, B1));

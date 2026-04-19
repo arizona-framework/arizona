@@ -65,7 +65,7 @@ check-hank:
 	rebar3 hank
 
 check-xref:
-	rebar3 as test xref
+	rebar3 xref
 
 check-dialyzer:
 	rebar3 as test dialyzer

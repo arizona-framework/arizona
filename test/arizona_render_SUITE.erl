@@ -41,6 +41,7 @@
     ssr_counter_custom_id/1,
     ssr_counter/1,
     ssr_counter_with_bindings/1,
+    ssr_each_map/1,
     ssr_page_with_child/1,
     zip_nested_element/1,
     zip_nested_sd/1,
@@ -78,6 +79,7 @@ groups() ->
             ssr_counter_custom_id,
             ssr_page_with_child,
             ssr_about_page,
+            ssr_each_map,
             resolve_id_binary,
             resolve_id_template
         ]},
@@ -253,6 +255,15 @@ ssr_page_with_child(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, <<"az-navigate">>)),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"connect('/ws')">>)),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"</html>">>)).
+
+ssr_each_map(Config) when is_list(Config) ->
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(arizona_each_map, #{})),
+    %% Both map entries (order not guaranteed) should render as <li>key: value</li>.
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"<li">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"a<!--/az-->">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"b<!--/az-->">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"1<!--/az-->">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"2<!--/az-->">>)).
 
 %% =============================================================================
 %% 4. resolve_id tests

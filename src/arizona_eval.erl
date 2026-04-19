@@ -55,10 +55,15 @@ framework-owned bindings like `id`. Violations raise
 -export([render_stream_items_simple/3]).
 -export([render_list_items/3]).
 -export([render_list_items_simple/2]).
--export([render_map_items/3]).
 -export([render_map_items_simple/2]).
 -export([check_restricted_keys/3]).
 -export([format_error/2]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+-ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -207,29 +212,6 @@ Renders list items without view tracking. Returns `[ItemD]`.
     ItemDs :: [[{arizona_template:az(), term()}]].
 render_list_items_simple(Items, #{d := DFun}) ->
     [eval_dynamics(DFun(Item)) || Item <:- Items].
-
--doc """
-Renders map entries with view tracking. Returns `{[ItemD], Views1}`.
-
-Each map entry is passed to the template's `d` callback as `(Key, Value)`.
-""".
--spec render_map_items(Map, Template, Views) -> {ItemDs, Views1} when
-    Map :: map(),
-    Template :: map(),
-    Views :: {map(), map()},
-    ItemDs :: [[{arizona_template:az(), term()}]],
-    Views1 :: {map(), map()}.
-render_map_items(Map, #{d := DFun}, Views) ->
-    maps:fold(
-        fun(K, V, {Acc, V0}) ->
-            Dynamics = DFun(K, V),
-            {Triples, V1} = eval_dynamics_v(Dynamics, V0),
-            D = [{Az, Val} || {Az, Val, _Deps} <:- Triples],
-            {[D | Acc], V1}
-        end,
-        {[], Views},
-        Map
-    ).
 
 -doc """
 Renders map entries without view tracking. Returns `[ItemD]`.
@@ -425,6 +407,20 @@ eval_each_stream(#stream{items = ItemsMap, order = Order, limit = Limit} = Sourc
 
 eval_each_map(Source, Tmpl, Views) ->
     eval_each(fun(Old) -> render_map_items(Source, Tmpl, {Old, #{}}) end, Tmpl, Views, undefined).
+
+%% Renders map entries with view tracking. Returns `{[ItemD], Views1}`.
+%% Each map entry is passed to the template's `d` callback as `(Key, Value)`.
+render_map_items(Map, #{d := DFun}, Views) ->
+    maps:fold(
+        fun(K, V, {Acc, V0}) ->
+            Dynamics = DFun(K, V),
+            {Triples, V1} = eval_dynamics_v(Dynamics, V0),
+            D = [{Az, Val} || {Az, Val, _Deps} <:- Triples],
+            {[D | Acc], V1}
+        end,
+        {[], Views},
+        Map
+    ).
 
 eval_each(RenderFun, Tmpl, {Old, New0}, StreamExtra) ->
     {ItemSnaps, {_, LocalNew}} = with_saved_deps(fun() -> RenderFun(Old) end),

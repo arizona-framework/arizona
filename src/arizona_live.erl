@@ -72,7 +72,15 @@ fingerprints already shipped in the initial HTML.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([start_link/1, start_link/2]).
+-ignore_xref([
+    start_link/1,
+    start_link/2,
+    start_link/3,
+    connected/0,
+    send/2,
+    send_after/3,
+    navigate/3
+]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
