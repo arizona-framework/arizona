@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // ---------------------------------------------------------------------------
 // Helpers -- shared
@@ -6,50 +6,38 @@ import { test, expect } from '@playwright/test';
 
 /** Wait for the WebSocket to be open so events can be dispatched. */
 const wsReady = (page) =>
-    page.waitForFunction(() =>
-        document.documentElement.classList.contains('az-connected'));
+    page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
 
 // ---------------------------------------------------------------------------
 // Helpers -- counter
 // ---------------------------------------------------------------------------
 
 /** Locate a counter's count <p> by its view id. */
-const countText = (page, viewId) =>
-    page.locator(`#${viewId} p[az$="-3"]`);
+const countText = (page, viewId) => page.locator(`#${viewId} p[az$="-3"]`);
 
 /** Locate the inc/dec button inside a specific counter view. */
-const incBtn = (page, viewId) =>
-    page.locator(`#${viewId} button[az-click*='"inc"']`);
-const decBtn = (page, viewId) =>
-    page.locator(`#${viewId} button[az-click*='"dec"']`);
+const incBtn = (page, viewId) => page.locator(`#${viewId} button[az-click*='"inc"']`);
+const decBtn = (page, viewId) => page.locator(`#${viewId} button[az-click*='"dec"']`);
 
 // ---------------------------------------------------------------------------
 // Helpers -- stream (todos)
 // ---------------------------------------------------------------------------
 
-const todoList = (page) =>
-    page.locator('#page ul[az-drop]');
+const todoList = (page) => page.locator('#page ul[az-drop]');
 
-const todoItems = (page) =>
-    page.locator('#page ul[az-drop] > [az-key]');
+const todoItems = (page) => page.locator('#page ul[az-drop] > [az-key]');
 
-const todoItem = (page, key) =>
-    page.locator(`#page ul[az-drop] > [az-key="${key}"]`);
+const todoItem = (page, key) => page.locator(`#page ul[az-drop] > [az-key="${key}"]`);
 
-const todoInput = (page, key) =>
-    page.locator(`#page ul[az-drop] > [az-key="${key}"] input`);
+const todoInput = (page, key) => page.locator(`#page ul[az-drop] > [az-key="${key}"] input`);
 
-const addTodoBtn = (page) =>
-    page.locator('form[az-submit*="add_todo"] button[type="submit"]');
+const addTodoBtn = (page) => page.locator('form[az-submit*="add_todo"] button[type="submit"]');
 
-const clearBtn = (page) =>
-    page.locator('button[az-click*="clear_todos"]');
+const clearBtn = (page) => page.locator('button[az-click*="clear_todos"]');
 
-const removeBtn = (page, key) =>
-    page.locator(`[az-key="${key}"] button[az-click*="remove_todo"]`);
+const removeBtn = (page, key) => page.locator(`[az-key="${key}"] button[az-click*="remove_todo"]`);
 
-const newTodoInput = (page) =>
-    page.locator('form[az-submit*="add_todo"] input[name="text"]');
+const newTodoInput = (page) => page.locator('form[az-submit*="add_todo"] input[name="text"]');
 
 // ---------------------------------------------------------------------------
 // 1. SSR -- initial HTML rendered server-side
@@ -262,8 +250,11 @@ test.describe('comment markers', () => {
         const hasMarkers = await page.evaluate(() => {
             const p = document.querySelector('#counter p[az$="-3"]');
             const children = Array.from(p.childNodes);
-            return children.some(n => n.nodeType === 8 && n.data.startsWith('az:') && n.data.endsWith('-3')) &&
-                   children.some(n => n.nodeType === 8 && n.data === '/az');
+            return (
+                children.some(
+                    (n) => n.nodeType === 8 && n.data.startsWith('az:') && n.data.endsWith('-3'),
+                ) && children.some((n) => n.nodeType === 8 && n.data === '/az')
+            );
         });
         expect(hasMarkers).toBe(true);
     });
@@ -310,9 +301,13 @@ test.describe('effects', () => {
         // Listen for the CustomEvent before sending the reset
         const eventPromise = page.evaluate(() => {
             return new Promise((resolve) => {
-                document.addEventListener('counter_reset', (e) => {
-                    resolve(e.detail);
-                }, { once: true });
+                document.addEventListener(
+                    'counter_reset',
+                    (e) => {
+                        resolve(e.detail);
+                    },
+                    { once: true },
+                );
             });
         });
 
@@ -360,9 +355,13 @@ test.describe('effects', () => {
         // Listen for the CustomEvent
         const eventPromise = page.evaluate(() => {
             return new Promise((resolve) => {
-                document.addEventListener('counter_reset', (e) => {
-                    resolve(e.detail);
-                }, { once: true });
+                document.addEventListener(
+                    'counter_reset',
+                    (e) => {
+                        resolve(e.detail);
+                    },
+                    { once: true },
+                );
             });
         });
 
@@ -658,9 +657,9 @@ test.describe('OP_ITEM_PATCH -- update todo items', () => {
 
         // Update via WS
         await page.evaluate(() => {
-            window._ws.send(JSON.stringify([
-                'page', 'update_todo', { id: 1, value: 'Updated Todo 1' }
-            ]));
+            window._ws.send(
+                JSON.stringify(['page', 'update_todo', { id: 1, value: 'Updated Todo 1' }]),
+            );
         });
 
         // Value changed in-place
@@ -682,9 +681,7 @@ test.describe('OP_ITEM_PATCH -- update todo items', () => {
 
         // Update middle item
         await page.evaluate(() => {
-            window._ws.send(JSON.stringify([
-                'page', 'update_todo', { id: 2, value: 'Changed' }
-            ]));
+            window._ws.send(JSON.stringify(['page', 'update_todo', { id: 2, value: 'Changed' }]));
         });
 
         // Middle item updated
@@ -705,9 +702,7 @@ test.describe('OP_ITEM_PATCH -- update todo items', () => {
 
         // Update it
         await page.evaluate(() => {
-            window._ws.send(JSON.stringify([
-                'page', 'update_todo', { id: 1, value: 'Updated' }
-            ]));
+            window._ws.send(JSON.stringify(['page', 'update_todo', { id: 1, value: 'Updated' }]));
         });
         await expect(todoInput(page, '1')).toHaveValue('Updated');
 
@@ -891,12 +886,37 @@ test.describe('special character keys', () => {
         // Type special characters that would break unescaped CSS selectors.
         // Covers CSS combinators, brackets, regex-like chars, and punctuation.
         const specialKeys = [
-            '!', '@', '#', '$', '%', '^', '&', '*',
-            '(', ')', '[', ']', '{', '}',
-            '<', '>', '+', '~', '|',
-            '\\', '/', '?', '.',
-            ':', ';', "'", '"', '`',
-            ',', '=', ' ',
+            '!',
+            '@',
+            '#',
+            '$',
+            '%',
+            '^',
+            '&',
+            '*',
+            '(',
+            ')',
+            '[',
+            ']',
+            '{',
+            '}',
+            '<',
+            '>',
+            '+',
+            '~',
+            '|',
+            '\\',
+            '/',
+            '?',
+            '.',
+            ':',
+            ';',
+            "'",
+            '"',
+            '`',
+            ',',
+            '=',
+            ' ',
         ];
         await todoInput(page, '1').focus();
         for (const key of specialKeys) {
@@ -1025,13 +1045,17 @@ test.describe('SPA navigation', () => {
             a.setAttribute('az-navigate', '');
             a.id = '__nav_push';
             document.body.appendChild(a);
-            a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+            a.dispatchEvent(
+                new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }),
+            );
         });
         await expect(page.locator('main h1')).toHaveText('Scroll About');
 
         await page.goBack();
         await expect(page.locator('main h1')).toHaveText('Scroll Home');
-        await page.waitForFunction(() => window.scrollY > 0, null, { timeout: 2000 }).catch(() => {});
+        await page
+            .waitForFunction(() => window.scrollY > 0, null, { timeout: 2000 })
+            .catch(() => {});
         const y = await page.evaluate(() => window.scrollY);
         expect(Math.abs(y - 600)).toBeLessThanOrEqual(2);
     });
@@ -1045,13 +1069,19 @@ test.describe('SPA navigation', () => {
             a.setAttribute('az-navigate', '');
             a.id = '__nav_hash';
             document.body.appendChild(a);
-            a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+            a.dispatchEvent(
+                new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }),
+            );
         });
         await expect(page.locator('main h1')).toHaveText('Scroll About');
-        await page.waitForFunction(() => {
-            const el = document.getElementById('section');
-            return el && Math.abs(el.getBoundingClientRect().top) < 50;
-        }, null, { timeout: 2000 });
+        await page.waitForFunction(
+            () => {
+                const el = document.getElementById('section');
+                return el && Math.abs(el.getBoundingClientRect().top) < 50;
+            },
+            null,
+            { timeout: 2000 },
+        );
         const top = await page.locator('#section').evaluate((el) => el.getBoundingClientRect().top);
         expect(Math.abs(top)).toBeLessThan(50);
     });
@@ -1062,10 +1092,14 @@ test.describe('SPA navigation', () => {
         // do the scroll itself.
         await page.goto('/scroll-about#section');
         await page.waitForSelector('#status:has-text("Connected")');
-        await page.waitForFunction(() => {
-            const el = document.getElementById('section');
-            return el && Math.abs(el.getBoundingClientRect().top) < 50;
-        }, null, { timeout: 2000 });
+        await page.waitForFunction(
+            () => {
+                const el = document.getElementById('section');
+                return el && Math.abs(el.getBoundingClientRect().top) < 50;
+            },
+            null,
+            { timeout: 2000 },
+        );
         const top = await page.locator('#section').evaluate((el) => el.getBoundingClientRect().top);
         expect(Math.abs(top)).toBeLessThan(50);
     });
@@ -1103,7 +1137,9 @@ test.describe('SPA navigation', () => {
             a.setAttribute('az-navigate', '');
             a.id = '__nav_push';
             document.body.appendChild(a);
-            a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+            a.dispatchEvent(
+                new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }),
+            );
         });
         await expect(page.locator('main h1')).toHaveText('Scroll About');
         // Scroll on the destination too, so if forward somehow restored we'd see a non-zero value.
@@ -1116,7 +1152,9 @@ test.describe('SPA navigation', () => {
         await expect(page.locator('main h1')).toHaveText('Scroll About');
         // Forward restore is a non-goal: destination entry has null state so we scroll-to-top.
         // Give the OP_REPLACE + applyScroll a moment to settle.
-        await page.waitForFunction(() => location.pathname === '/scroll-about', null, { timeout: 2000 });
+        await page.waitForFunction(() => location.pathname === '/scroll-about', null, {
+            timeout: 2000,
+        });
         await page.evaluate(() => new Promise((r) => setTimeout(r, 50)));
         const y = await page.evaluate(() => window.scrollY);
         expect(y).toBe(0);
@@ -1140,9 +1178,9 @@ test.describe('drag-and-drop reorder', () => {
 
         // Move item 3 to position 0 via WS
         await page.evaluate(() => {
-            window._ws.send(JSON.stringify([
-                'page', 'reorder_todo', { data_transfer: '3', drop_index: 0 }
-            ]));
+            window._ws.send(
+                JSON.stringify(['page', 'reorder_todo', { data_transfer: '3', drop_index: 0 }]),
+            );
         });
 
         // Wait for reorder -- item 3 should now be first
@@ -1163,9 +1201,9 @@ test.describe('drag-and-drop reorder', () => {
 
         // Move item 1 to position 2 via WS
         await page.evaluate(() => {
-            window._ws.send(JSON.stringify([
-                'page', 'reorder_todo', { data_transfer: '1', drop_index: 2 }
-            ]));
+            window._ws.send(
+                JSON.stringify(['page', 'reorder_todo', { data_transfer: '1', drop_index: 2 }]),
+            );
         });
 
         // Values should follow their items
@@ -1189,17 +1227,15 @@ test.describe('drag-and-drop reorder', () => {
 
         // Edit item 1
         await page.evaluate(() => {
-            window._ws.send(JSON.stringify([
-                'page', 'update_todo', { id: 1, value: 'Edited' }
-            ]));
+            window._ws.send(JSON.stringify(['page', 'update_todo', { id: 1, value: 'Edited' }]));
         });
         await expect(todoInput(page, '1')).toHaveValue('Edited');
 
         // Move item 2 to position 0
         await page.evaluate(() => {
-            window._ws.send(JSON.stringify([
-                'page', 'reorder_todo', { data_transfer: '2', drop_index: 0 }
-            ]));
+            window._ws.send(
+                JSON.stringify(['page', 'reorder_todo', { data_transfer: '2', drop_index: 0 }]),
+            );
         });
 
         // Order: 2, 1 -- values preserved
@@ -1216,8 +1252,7 @@ test.describe('drag-and-drop reorder', () => {
 
 test.describe('handle_info + az-hook (about page timer)', () => {
     /** Locate the tick span on the about page. */
-    const tickSpan = (page) =>
-        page.locator('main#page[az-view] span[az-hook="Tick"]');
+    const tickSpan = (page) => page.locator('main#page[az-view] span[az-hook="Tick"]');
 
     test('tick count increments via handle_info', async ({ page }) => {
         await page.goto('/about');
@@ -1230,15 +1265,22 @@ test.describe('handle_info + az-hook (about page timer)', () => {
         await page.goto('/about');
         await wsReady(page);
         // Capture an early value, then wait for it to increase -- proves recurring timer
-        await page.waitForFunction(() => {
-            const el = document.querySelector('main#page span[az-hook="Tick"]');
-            return el && parseInt(el.textContent, 10) >= 1;
-        }, { timeout: 3000 });
+        await page.waitForFunction(
+            () => {
+                const el = document.querySelector('main#page span[az-hook="Tick"]');
+                return el && parseInt(el.textContent, 10) >= 1;
+            },
+            { timeout: 3000 },
+        );
         const first = parseInt(await tickSpan(page).textContent(), 10);
-        await page.waitForFunction((prev) => {
-            const el = document.querySelector('main#page span[az-hook="Tick"]');
-            return el && parseInt(el.textContent, 10) > prev;
-        }, first, { timeout: 3000 });
+        await page.waitForFunction(
+            (prev) => {
+                const el = document.querySelector('main#page span[az-hook="Tick"]');
+                return el && parseInt(el.textContent, 10) > prev;
+            },
+            first,
+            { timeout: 3000 },
+        );
     });
 
     test('hook mounted fires on connect', async ({ page }) => {
@@ -1252,10 +1294,13 @@ test.describe('handle_info + az-hook (about page timer)', () => {
         await page.goto('/about');
         await wsReady(page);
         // Wait until tick reaches at least 2 (don't match exact text -- it's a race)
-        await page.waitForFunction(() => {
-            const el = document.querySelector('main#page span[az-hook="Tick"]');
-            return el && parseInt(el.textContent, 10) >= 2;
-        }, { timeout: 5000 });
+        await page.waitForFunction(
+            () => {
+                const el = document.querySelector('main#page span[az-hook="Tick"]');
+                return el && parseInt(el.textContent, 10) >= 2;
+            },
+            { timeout: 5000 },
+        );
         // updated() increments data-hook-updated each time the tick changes
         const count = await tickSpan(page).getAttribute('data-hook-updated');
         expect(parseInt(count, 10)).toBeGreaterThanOrEqual(2);
@@ -1287,9 +1332,13 @@ test.describe('handle_info + az-hook (about page timer)', () => {
         // Set up listener before navigating back
         const ackPromise = page.evaluate(() => {
             return new Promise((resolve) => {
-                document.addEventListener('tick_ack', (e) => {
-                    resolve(e.detail);
-                }, { once: true });
+                document.addEventListener(
+                    'tick_ack',
+                    (e) => {
+                        resolve(e.detail);
+                    },
+                    { once: true },
+                );
             });
         });
 
@@ -1320,8 +1369,7 @@ test.describe('handle_info + az-hook (about page timer)', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('List comprehension (about page tags)', () => {
-    const tagItems = (page) =>
-        page.locator('#tags > li');
+    const tagItems = (page) => page.locator('#tags > li');
 
     test('SSR renders tag list with 3 items', async ({ page }) => {
         await page.goto('/about');
@@ -1379,7 +1427,8 @@ test('reconnects after WS close and re-mounts with fresh state', async ({ page }
 
     // Should get az-disconnected class
     await page.waitForFunction(() =>
-        document.documentElement.classList.contains('az-disconnected'));
+        document.documentElement.classList.contains('az-disconnected'),
+    );
 
     // Wait for reconnection
     await wsReady(page);
@@ -1420,7 +1469,8 @@ test('hook re-mounts after reconnect on about page', async ({ page }) => {
     // Close WS to trigger reconnect
     await page.evaluate(() => window._ws.close(4000));
     await page.waitForFunction(() =>
-        document.documentElement.classList.contains('az-disconnected'));
+        document.documentElement.classList.contains('az-disconnected'),
+    );
 
     // Wait for reconnection
     await wsReady(page);
@@ -1495,8 +1545,11 @@ test('about page timer restarts after reconnect', async ({ page }) => {
     await expect(tickSpan).toHaveText('1', { timeout: 5000 });
 
     // Verify timer is still running -- tick increments beyond 1
-    await page.waitForFunction(() => {
-        const el = document.querySelector('main#page span[az-hook="Tick"]');
-        return el && parseInt(el.textContent, 10) >= 2;
-    }, { timeout: 5000 });
+    await page.waitForFunction(
+        () => {
+            const el = document.querySelector('main#page span[az-hook="Tick"]');
+            return el && parseInt(el.textContent, 10) >= 2;
+        },
+        { timeout: 5000 },
+    );
 });

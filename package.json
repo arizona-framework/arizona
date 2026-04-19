@@ -44,10 +44,14 @@
   "scripts": {
     "build": "vite build",
     "build:dev": "vite build --mode development",
+    "check:js": "biome check",
+    "fix:js": "biome check --write",
+    "format:js": "biome format --write",
     "test:e2e": "npx playwright test",
     "test:unit": "vitest run"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.12",
     "@playwright/test": "1.58.2",
     "jsdom": "28.1.0",
     "rollup-plugin-filesize": "10.0.0",

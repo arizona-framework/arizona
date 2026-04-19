@@ -1,41 +1,32 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const wsReady = (page) =>
-    page.waitForFunction(() =>
-        document.documentElement.classList.contains('az-connected'));
+    page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
 
 /** The parent view root. */
-const view = (page) =>
-    page.locator('#mixed[az-view]');
+const _view = (page) => page.locator('#mixed[az-view]');
 
 /** The stateless card child (inside section.left). */
-const card = (page) =>
-    page.locator('#mixed section.left > div');
+const card = (page) => page.locator('#mixed section.left > div');
 
-const cardSpan = (page) =>
-    page.locator('#mixed section.left > div > span');
+const cardSpan = (page) => page.locator('#mixed section.left > div > span');
 
 /** The dynamic section (rack). */
-const rackSection = (page) =>
-    page.locator('#mixed > section:nth-of-type(2)');
+const rackSection = (page) => page.locator('#mixed > section:nth-of-type(2)');
 
 /** The dynamic paragraph (message). */
-const messagePara = (page) =>
-    page.locator('#mixed > p');
+const messagePara = (page) => page.locator('#mixed > p');
 
 /** Action buttons. */
-const showBtn = (page) =>
-    page.locator(`#mixed button[az-click*='"show"']`);
+const showBtn = (page) => page.locator(`#mixed button[az-click*='"show"']`);
 
-const hideBtn = (page) =>
-    page.locator(`#mixed button[az-click*='"hide"']`);
+const hideBtn = (page) => page.locator(`#mixed button[az-click*='"hide"']`);
 
-const updateCardBtn = (page) =>
-    page.locator(`#mixed button[az-click*='"update_card"']`);
+const updateCardBtn = (page) => page.locator(`#mixed button[az-click*='"update_card"']`);
 
 // ---------------------------------------------------------------------------
 // SSR -- initial render

@@ -1,5 +1,12 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { resolveHtml, zipTemplate, backoff, fpCache, loadFpEntries, setOnPersist } from './arizona-core.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+    backoff,
+    fpCache,
+    loadFpEntries,
+    resolveHtml,
+    setOnPersist,
+    zipTemplate,
+} from './arizona-core.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -73,12 +80,16 @@ describe('resolveHtml -- stream type', () => {
 
     it('handles stream items with multiple dynamics', () => {
         const payload = {
-            t: 0, f: 'stream_fp_4',
+            t: 0,
+            f: 'stream_fp_4',
             s: ['<tr><td>', '</td><td>', '</td></tr>'],
-            d: [['Alice', '30'], ['Bob', '25']],
+            d: [
+                ['Alice', '30'],
+                ['Bob', '25'],
+            ],
         };
         expect(resolveHtml(payload)).toBe(
-            '<tr><td>Alice</td><td>30</td></tr><tr><td>Bob</td><td>25</td></tr>'
+            '<tr><td>Alice</td><td>30</td></tr><tr><td>Bob</td><td>25</td></tr>',
         );
     });
 
@@ -113,7 +124,9 @@ describe('zipTemplate', () => {
     });
 
     it('handles array dynamics (stream items as plain strings)', () => {
-        expect(zipTemplate(['<ul>', '</ul>'], [['<li>a</li>', '<li>b</li>']])).toBe('<ul><li>a</li><li>b</li></ul>');
+        expect(zipTemplate(['<ul>', '</ul>'], [['<li>a</li>', '<li>b</li>']])).toBe(
+            '<ul><li>a</li><li>b</li></ul>',
+        );
     });
 
     it('handles array dynamics with fingerprinted items', () => {
@@ -121,13 +134,16 @@ describe('zipTemplate', () => {
             { f: 'stream_item', s: ['<li>', '</li>'], d: ['first'] },
             { f: 'stream_item', d: ['second'] },
         ];
-        expect(zipTemplate(['<ul>', '</ul>'], [items])).toBe('<ul><li>first</li><li>second</li></ul>');
+        expect(zipTemplate(['<ul>', '</ul>'], [items])).toBe(
+            '<ul><li>first</li><li>second</li></ul>',
+        );
     });
 
     it('handles mixed array and scalar dynamics', () => {
         const items = ['<li>a</li>', '<li>b</li>'];
-        expect(zipTemplate(['<h1>', '</h1><ul>', '</ul>'], ['Title', items]))
-            .toBe('<h1>Title</h1><ul><li>a</li><li>b</li></ul>');
+        expect(zipTemplate(['<h1>', '</h1><ul>', '</ul>'], ['Title', items])).toBe(
+            '<h1>Title</h1><ul><li>a</li><li>b</li></ul>',
+        );
     });
 
     it('handles empty array dynamic', () => {
@@ -139,8 +155,9 @@ describe('zipTemplate', () => {
             '<li>plain</li>',
             { f: 'mixed_arr', s: ['<li class="fp">', '</li>'], d: ['rich'] },
         ];
-        expect(zipTemplate(['<ul>', '</ul>'], [items]))
-            .toBe('<ul><li>plain</li><li class="fp">rich</li></ul>');
+        expect(zipTemplate(['<ul>', '</ul>'], [items])).toBe(
+            '<ul><li>plain</li><li class="fp">rich</li></ul>',
+        );
     });
 });
 
@@ -151,7 +168,9 @@ describe('zipTemplate', () => {
 describe('resolveHtml -- cache miss', () => {
     it('throws a clear error when statics are not cached', () => {
         const payload = { f: 'unknown_fp_xyz', d: ['val'] };
-        expect(() => resolveHtml(payload)).toThrow('arizona: unknown template fingerprint "unknown_fp_xyz"');
+        expect(() => resolveHtml(payload)).toThrow(
+            'arizona: unknown template fingerprint "unknown_fp_xyz"',
+        );
     });
 
     it('does not throw when statics are provided in payload', () => {
@@ -197,10 +216,14 @@ describe('cache persistence', () => {
     });
 
     it('onPersist error does not crash resolveHtml', () => {
-        setOnPersist(() => { throw new Error('QuotaExceededError'); });
+        setOnPersist(() => {
+            throw new Error('QuotaExceededError');
+        });
         // Should not throw -- onPersist errors are the caller's problem
         // (In the real Worker, idbPut swallows errors, so this tests robustness)
-        expect(() => resolveHtml({ f: 'ls_err', s: ['<em>', '</em>'], d: ['ok'] })).toThrow('QuotaExceededError');
+        expect(() => resolveHtml({ f: 'ls_err', s: ['<em>', '</em>'], d: ['ok'] })).toThrow(
+            'QuotaExceededError',
+        );
     });
 
     it('stream type t is included in onPersist entry', () => {
@@ -232,8 +255,9 @@ describe('loadFpEntries', () => {
 
     it('loaded stream entries resolve correctly', () => {
         loadFpEntries([['fp_stream_hydrated', { s: ['<li>', '</li>'], t: 0 }]]);
-        expect(resolveHtml({ t: 0, f: 'fp_stream_hydrated', d: [['a'], ['b']] }))
-            .toBe('<li>a</li><li>b</li>');
+        expect(resolveHtml({ t: 0, f: 'fp_stream_hydrated', d: [['a'], ['b']] })).toBe(
+            '<li>a</li><li>b</li>',
+        );
     });
 
     it('does not trigger onPersist', () => {

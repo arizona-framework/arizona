@@ -1,27 +1,21 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const wsReady = (page) =>
-    page.waitForFunction(() =>
-        document.documentElement.classList.contains('az-connected'));
+    page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
 
-const tableRows = (page) =>
-    page.locator('#page tbody > [az-key]');
+const tableRows = (page) => page.locator('#page tbody > [az-key]');
 
-const tableRow = (page, key) =>
-    page.locator(`#page tbody > [az-key="${key}"]`);
+const tableRow = (page, key) => page.locator(`#page tbody > [az-key="${key}"]`);
 
-const cellId = (page, key) =>
-    page.locator(`#page tbody > [az-key="${key}"] td:nth-child(1)`);
+const cellId = (page, key) => page.locator(`#page tbody > [az-key="${key}"] td:nth-child(1)`);
 
-const cellName = (page, key) =>
-    page.locator(`#page tbody > [az-key="${key}"] td:nth-child(2)`);
+const cellName = (page, key) => page.locator(`#page tbody > [az-key="${key}"] td:nth-child(2)`);
 
-const cellAge = (page, key) =>
-    page.locator(`#page tbody > [az-key="${key}"] td:nth-child(3)`);
+const cellAge = (page, key) => page.locator(`#page tbody > [az-key="${key}"] td:nth-child(3)`);
 
 const deleteBtn = (page, key) =>
     page.locator(`#page tbody > [az-key="${key}"] button[az-click*='"delete_row"']`);
@@ -29,17 +23,13 @@ const deleteBtn = (page, key) =>
 const moveTopBtn = (page, key) =>
     page.locator(`#page tbody > [az-key="${key}"] button[az-click*='"move_top"']`);
 
-const addRowBtn = (page) =>
-    page.locator(`button[az-click*='"add_row"']`);
+const addRowBtn = (page) => page.locator(`button[az-click*='"add_row"']`);
 
-const resetBtn = (page) =>
-    page.locator(`button[az-click*='"reset_data"']`);
+const resetBtn = (page) => page.locator(`button[az-click*='"reset_data"']`);
 
-const shuffleBtn = (page) =>
-    page.locator(`button[az-click*='"shuffle"']`);
+const shuffleBtn = (page) => page.locator(`button[az-click*='"shuffle"']`);
 
-const sortColBtn = (page, col) =>
-    page.locator(`th[az-click*='"sort"'][az-click*='"${col}"']`);
+const sortColBtn = (page, col) => page.locator(`th[az-click*='"sort"'][az-click*='"${col}"']`);
 
 /** Helper to get az-key values in DOM order */
 const getRowKeys = async (page) => {

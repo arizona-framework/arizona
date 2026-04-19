@@ -141,7 +141,10 @@ function applyScroll(p) {
     }
     if (p.hash) {
         const el = document.getElementById(p.hash);
-        if (el) { el.scrollIntoView(); return; }
+        if (el) {
+            el.scrollIntoView();
+            return;
+        }
     }
     window.scrollTo(0, 0);
 }
@@ -175,7 +178,7 @@ function saveCurrentScroll() {
  *              the original href verbatim.
  */
 function navigateTo(pathname, hash, opts) {
-    const fullUrl = opts.fullUrl || (hash ? pathname + '#' + hash : pathname);
+    const fullUrl = opts.fullUrl || (hash ? `${pathname}#${hash}` : pathname);
     if (opts.replace) {
         history.replaceState(null, '', fullUrl);
     } else {
@@ -225,7 +228,7 @@ function destroyHook(el) {
     const instance = _hooks.get(el);
     if (!instance) return;
     const def = hooks[instance.__name];
-    if (def && def.destroyed) def.destroyed.call(instance);
+    if (def?.destroyed) def.destroyed.call(instance);
     _hooks.delete(el);
 }
 
@@ -237,7 +240,7 @@ function notifyUpdated(el) {
     const instance = _hooks.get(el);
     if (!instance) return;
     const def = hooks[instance.__name];
-    if (def && def.updated) def.updated.call(instance);
+    if (def?.updated) def.updated.call(instance);
 }
 
 /**
@@ -245,7 +248,8 @@ function notifyUpdated(el) {
  * @param {Element|Document} root
  */
 function mountHooks(root) {
-    if (root instanceof Element && root.hasAttribute && root.hasAttribute('az-hook')) mountHook(root);
+    if (root instanceof Element && root.hasAttribute && root.hasAttribute('az-hook'))
+        mountHook(root);
     root.querySelectorAll('[az-hook]').forEach(mountHook);
 }
 
@@ -255,7 +259,9 @@ function mountHooks(root) {
  * @param {Element} root
  */
 function destroyChildHooks(root) {
-    root.querySelectorAll('[az-hook]').forEach((el) => destroyHook(el));
+    root.querySelectorAll('[az-hook]').forEach((el) => {
+        destroyHook(el);
+    });
 }
 
 /**
@@ -274,8 +280,8 @@ function destroyHooks(root) {
  */
 function destroyHooksBetweenMarkers(startMarker) {
     let node = startMarker.nextSibling;
-    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === "/az")) {
-        if (node.nodeType === 1) destroyHooks(/** @type {Element} */(node));
+    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
+        if (node.nodeType === 1) destroyHooks(/** @type {Element} */ (node));
         node = node.nextSibling;
     }
 }
@@ -286,8 +292,8 @@ function destroyHooksBetweenMarkers(startMarker) {
  */
 function mountHooksBetweenMarkers(startMarker) {
     let node = startMarker.nextSibling;
-    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === "/az")) {
-        if (node.nodeType === 1) mountHooks(/** @type {Element} */(node));
+    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
+        if (node.nodeType === 1) mountHooks(/** @type {Element} */ (node));
         node = node.nextSibling;
     }
 }
@@ -302,7 +308,7 @@ function applyOps(ops) {
     for (const op of ops) {
         const el = resolveEl(op[1]);
         if (!el) continue;
-        const az = op[1].substring(op[1].indexOf(":") + 1);
+        const az = op[1].substring(op[1].indexOf(':') + 1);
         switch (op[0]) {
             case OP.TEXT: {
                 const val = op[2];
@@ -376,17 +382,17 @@ function applyOps(ops) {
  * @returns {Element|null}
  */
 function resolveEl(target) {
-    const i = target.indexOf(":");
+    const i = target.indexOf(':');
     if (i === -1) return document.getElementById(target);
     const viewId = target.substring(0, i);
     const az = target.substring(i + 1);
     const view = document.getElementById(viewId);
     if (!view) return null;
     if (view.getAttribute('az') === az) return view;
-    let el = view.querySelector('[az="' + az + '"]');
+    let el = view.querySelector(`[az="${az}"]`);
     if (!el) {
         const j = az.indexOf(':');
-        if (j !== -1) el = view.querySelector('[az="' + az.substring(0, j) + '"]');
+        if (j !== -1) el = view.querySelector(`[az="${az.substring(0, j)}"]`);
     }
     return el;
 }
@@ -401,7 +407,7 @@ function resolveEl(target) {
  */
 function findMarker(el, az) {
     for (const node of el.childNodes) {
-        if (node.nodeType === 8 && /** @type {Comment} */ (node).data === "az:" + az) {
+        if (node.nodeType === 8 && /** @type {Comment} */ (node).data === `az:${az}`) {
             return /** @type {Comment} */ (node);
         }
     }
@@ -416,14 +422,14 @@ function findMarker(el, az) {
  */
 function updateMarkerContent(startMarker, value) {
     let node = startMarker.nextSibling;
-    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === "/az")) {
+    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
         const next = node.nextSibling;
         node.remove();
         node = next;
     }
     // Insert new content before the closing marker
-    if (value.includes("<")) {
-        const tpl = document.createElement("template");
+    if (value.includes('<')) {
+        const tpl = document.createElement('template');
         tpl.innerHTML = value;
         startMarker.after(tpl.content);
     } else {
@@ -439,22 +445,22 @@ function updateMarkerContent(startMarker, value) {
  * @param {string} html
  */
 function insertItemEl(el, key, pos, html) {
-    const tpl = document.createElement("template");
+    const tpl = document.createElement('template');
     tpl.innerHTML = html;
     const fragment = tpl.content;
     if (pos === -1) {
         el.appendChild(fragment);
     } else {
-        const children = el.querySelectorAll(":scope > [az-key]");
+        const children = el.querySelectorAll(':scope > [az-key]');
         if (pos < children.length) {
             el.insertBefore(fragment, children[pos]);
         } else {
             el.appendChild(fragment);
         }
     }
-    const item = el.querySelector('[az-key="' + key + '"]');
+    const item = el.querySelector(`[az-key="${key}"]`);
     if (item) mountHooks(item);
-    else console.warn('[arizona] stream item missing az-key="' + key + '" after insert');
+    else console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
 }
 
 /**
@@ -478,8 +484,11 @@ function insertItem(target, key, pos, html) {
  * @param {string} key
  */
 function removeItemEl(el, key) {
-    const item = el.querySelector(':scope > [az-key="' + key + '"]');
-    if (!item) { console.warn('[arizona] stream item az-key="' + key + '" not found for remove'); return; }
+    const item = el.querySelector(`:scope > [az-key="${key}"]`);
+    if (!item) {
+        console.warn(`[arizona] stream item az-key="${key}" not found for remove`);
+        return;
+    }
     destroyHooks(item);
     item.remove();
 }
@@ -502,12 +511,15 @@ function removeItem(target, key) {
  * @param {string|null} afterKey -- key of preceding sibling, or null for prepend
  */
 function moveItemEl(el, key, afterKey) {
-    const item = el.querySelector(':scope > [az-key="' + key + '"]');
-    if (!item) { console.warn('[arizona] stream item az-key="' + key + '" not found for move'); return; }
+    const item = el.querySelector(`:scope > [az-key="${key}"]`);
+    if (!item) {
+        console.warn(`[arizona] stream item az-key="${key}" not found for move`);
+        return;
+    }
     if (afterKey === null) {
         el.prepend(item);
     } else {
-        const ref = el.querySelector(':scope > [az-key="' + afterKey + '"]');
+        const ref = el.querySelector(`:scope > [az-key="${afterKey}"]`);
         if (ref) ref.after(item);
         else el.appendChild(item);
     }
@@ -538,8 +550,11 @@ function moveItem(target, key, afterKey) {
  */
 function patchItemEl(parentEl, az, key, innerOps) {
     const container = resolveInnerEl(parentEl, az);
-    const item = container.querySelector(':scope > [az-key="' + key + '"]');
-    if (!item) { console.warn('[arizona] stream item az-key="' + key + '" not found for patch'); return; }
+    const item = container.querySelector(`:scope > [az-key="${key}"]`);
+    if (!item) {
+        console.warn(`[arizona] stream item az-key="${key}" not found for patch`);
+        return;
+    }
     applyItemOps(item, innerOps);
 }
 
@@ -553,8 +568,11 @@ function patchItemEl(parentEl, az, key, innerOps) {
 function patchItem(target, key, innerOps) {
     const el = resolveEl(target);
     if (!el) return;
-    const item = el.querySelector(':scope > [az-key="' + key + '"]');
-    if (!item) { console.warn('[arizona] stream item az-key="' + key + '" not found for patch'); return; }
+    const item = el.querySelector(`:scope > [az-key="${key}"]`);
+    if (!item) {
+        console.warn(`[arizona] stream item az-key="${key}" not found for patch`);
+        return;
+    }
     applyItemOps(item, innerOps);
 }
 
@@ -566,9 +584,9 @@ function patchItem(target, key, innerOps) {
  * @returns {Element}
  */
 function resolveInnerEl(parent, az) {
-    let el = parent.querySelector('[az="' + az + '"]');
+    let el = parent.querySelector(`[az="${az}"]`);
     if (!el && az.includes(':')) {
-        el = parent.querySelector('[az="' + az.substring(0, az.indexOf(':')) + '"]');
+        el = parent.querySelector(`[az="${az.substring(0, az.indexOf(':'))}"]`);
     }
     return el || parent;
 }
@@ -620,7 +638,7 @@ function applyItemOps(item, innerOps) {
                 break;
             }
             case OP.REMOVE_NODE: {
-                const innerEl = item.querySelector('[az="' + az + '"]');
+                const innerEl = item.querySelector(`[az="${az}"]`);
                 if (innerEl) {
                     destroyHooks(innerEl);
                     innerEl.remove();
@@ -668,7 +686,7 @@ function applyEffects(effects) {
  */
 function pushEvent(event, payload) {
     const view = document.querySelector('[az-view]')?.id;
-    pushEventTo(view, event, payload)
+    pushEventTo(view, event, payload);
 }
 
 /**
@@ -688,9 +706,7 @@ function pushEventTo(view, event, payload) {
  * @returns {string|null}
  */
 function resolveTarget(el) {
-    return el.getAttribute('az-target')
-        || el.closest('[az-view]')?.id
-        || null;
+    return el.getAttribute('az-target') || el.closest('[az-view]')?.id || null;
 }
 
 /**
@@ -707,21 +723,35 @@ function autoPayload(el, event) {
         const children = Array.from(el.querySelectorAll(':scope > [az-key]'));
         return {
             data_transfer: /** @type {any} */ (event).dataTransfer.getData('text/plain'),
-            drop_index: dropTarget ? children.indexOf(dropTarget) : -1
+            drop_index: dropTarget ? children.indexOf(dropTarget) : -1,
         };
     }
     const tag = el.tagName;
-    if (tag === 'FORM') return Object.fromEntries(new FormData(/** @type {HTMLFormElement} */(el)));
-    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return { value: /** @type {any} */ (el).value || '' };
+    if (tag === 'FORM')
+        return Object.fromEntries(new FormData(/** @type {HTMLFormElement} */ (el)));
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA')
+        return { value: /** @type {any} */ (el).value || '' };
     return {};
 }
 
 // JS command op codes -- must match include/arizona_js.hrl
-const JS_PUSH_EVENT = 0, JS_TOGGLE = 1, JS_SHOW = 2, JS_HIDE = 3,
-      JS_ADD_CLASS = 4, JS_REMOVE_CLASS = 5, JS_TOGGLE_CLASS = 6,
-      JS_SET_ATTR = 7, JS_REMOVE_ATTR = 8, JS_DISPATCH_EVENT = 9,
-      JS_NAVIGATE = 10, JS_FOCUS = 11, JS_BLUR = 12, JS_SCROLL_TO = 13,
-      JS_SET_TITLE = 14, JS_RELOAD = 15, JS_ON_KEY = 16;
+const JS_PUSH_EVENT = 0,
+    JS_TOGGLE = 1,
+    JS_SHOW = 2,
+    JS_HIDE = 3,
+    JS_ADD_CLASS = 4,
+    JS_REMOVE_CLASS = 5,
+    JS_TOGGLE_CLASS = 6,
+    JS_SET_ATTR = 7,
+    JS_REMOVE_ATTR = 8,
+    JS_DISPATCH_EVENT = 9,
+    JS_NAVIGATE = 10,
+    JS_FOCUS = 11,
+    JS_BLUR = 12,
+    JS_SCROLL_TO = 13,
+    JS_SET_TITLE = 14,
+    JS_RELOAD = 15,
+    JS_ON_KEY = 16;
 
 /**
  * Execute JS commands from an az-* attribute value.
@@ -738,24 +768,64 @@ function executeJS(el, event, cmds) {
         switch (op) {
             case JS_PUSH_EVENT: {
                 const evt = cmd[1];
-                const payload = cmd.length > 2 ? {...autoPayload(el, event), ...cmd[2]} : autoPayload(el, event);
+                const payload =
+                    cmd.length > 2
+                        ? { ...autoPayload(el, event), ...cmd[2] }
+                        : autoPayload(el, event);
                 const msg = JSON.stringify([resolveTarget(el), evt, payload]);
                 if (event) {
-                    scheduleSend(el, event, () => { if (_connected) workerSend(msg); });
+                    scheduleSend(el, event, () => {
+                        if (_connected) workerSend(msg);
+                    });
                 } else {
                     workerSend(msg);
                 }
                 break;
             }
-            case JS_TOGGLE: { const t = document.querySelector(cmd[1]); if (t) t.hidden = !t.hidden; break; }
-            case JS_SHOW: { const t = document.querySelector(cmd[1]); if (t) t.hidden = false; break; }
-            case JS_HIDE: { const t = document.querySelector(cmd[1]); if (t) t.hidden = true; break; }
-            case JS_ADD_CLASS: { const t = document.querySelector(cmd[1]); if (t) t.classList.add(cmd[2]); break; }
-            case JS_REMOVE_CLASS: { const t = document.querySelector(cmd[1]); if (t) t.classList.remove(cmd[2]); break; }
-            case JS_TOGGLE_CLASS: { const t = document.querySelector(cmd[1]); if (t) t.classList.toggle(cmd[2]); break; }
-            case JS_SET_ATTR: { const t = document.querySelector(cmd[1]); if (t) t.setAttribute(cmd[2], cmd[3]); break; }
-            case JS_REMOVE_ATTR: { const t = document.querySelector(cmd[1]); if (t) t.removeAttribute(cmd[2]); break; }
-            case JS_DISPATCH_EVENT: { document.dispatchEvent(new CustomEvent(cmd[1], { detail: cmd[2] || {} })); break; }
+            case JS_TOGGLE: {
+                const t = document.querySelector(cmd[1]);
+                if (t) t.hidden = !t.hidden;
+                break;
+            }
+            case JS_SHOW: {
+                const t = document.querySelector(cmd[1]);
+                if (t) t.hidden = false;
+                break;
+            }
+            case JS_HIDE: {
+                const t = document.querySelector(cmd[1]);
+                if (t) t.hidden = true;
+                break;
+            }
+            case JS_ADD_CLASS: {
+                const t = document.querySelector(cmd[1]);
+                if (t) t.classList.add(cmd[2]);
+                break;
+            }
+            case JS_REMOVE_CLASS: {
+                const t = document.querySelector(cmd[1]);
+                if (t) t.classList.remove(cmd[2]);
+                break;
+            }
+            case JS_TOGGLE_CLASS: {
+                const t = document.querySelector(cmd[1]);
+                if (t) t.classList.toggle(cmd[2]);
+                break;
+            }
+            case JS_SET_ATTR: {
+                const t = document.querySelector(cmd[1]);
+                if (t) t.setAttribute(cmd[2], cmd[3]);
+                break;
+            }
+            case JS_REMOVE_ATTR: {
+                const t = document.querySelector(cmd[1]);
+                if (t) t.removeAttribute(cmd[2]);
+                break;
+            }
+            case JS_DISPATCH_EVENT: {
+                document.dispatchEvent(new CustomEvent(cmd[1], { detail: cmd[2] || {} }));
+                break;
+            }
             case JS_NAVIGATE: {
                 const full = cmd[1];
                 const opts = cmd[2] || {};
@@ -765,12 +835,39 @@ function executeJS(el, event, cmds) {
                 navigateTo(pathname, hash, { ...opts, fullUrl: full });
                 break;
             }
-            case JS_FOCUS: { const t = document.querySelector(cmd[1]); if (t) /** @type {HTMLElement} */ (t).focus(); break; }
-            case JS_BLUR: { const t = document.querySelector(cmd[1]); if (t) /** @type {HTMLElement} */ (t).blur(); break; }
-            case JS_SCROLL_TO: { const t = document.querySelector(cmd[1]); if (t) t.scrollIntoView(cmd[2] || { behavior: 'smooth' }); break; }
-            case JS_SET_TITLE: { document.title = cmd[1]; break; }
-            case JS_RELOAD: { location.reload(); break; }
-            case JS_ON_KEY: { const f = cmd[1]; const lk = event && /** @type {any} */ (event).key ? /** @type {any} */ (event).key.toLowerCase() : ''; if (Array.isArray(f) ? f.includes(lk) : new RegExp(f).test(lk)) executeJS(el, event, cmd[2]); break; }
+            case JS_FOCUS: {
+                const t = document.querySelector(cmd[1]);
+                if (t) /** @type {HTMLElement} */ (t).focus();
+                break;
+            }
+            case JS_BLUR: {
+                const t = document.querySelector(cmd[1]);
+                if (t) /** @type {HTMLElement} */ (t).blur();
+                break;
+            }
+            case JS_SCROLL_TO: {
+                const t = document.querySelector(cmd[1]);
+                if (t) t.scrollIntoView(cmd[2] || { behavior: 'smooth' });
+                break;
+            }
+            case JS_SET_TITLE: {
+                document.title = cmd[1];
+                break;
+            }
+            case JS_RELOAD: {
+                location.reload();
+                break;
+            }
+            case JS_ON_KEY: {
+                const f = cmd[1];
+                const lk =
+                    event && /** @type {any} */ (event).key
+                        ? /** @type {any} */ (event).key.toLowerCase()
+                        : '';
+                if (Array.isArray(f) ? f.includes(lk) : new RegExp(f).test(lk))
+                    executeJS(el, event, cmd[2]);
+                break;
+            }
         }
     }
 }
@@ -816,9 +913,12 @@ const _timers = new WeakMap();
 function scheduleSend(el, event, sendFn) {
     const debounceAttr = el.getAttribute('az-debounce') || '';
     const debounceMs = parseInt(debounceAttr, 10);
-    const debounceEvent = isNaN(debounceMs) && debounceAttr !== '' ? debounceAttr : '';
+    const debounceEvent = Number.isNaN(debounceMs) && debounceAttr !== '' ? debounceAttr : '';
     const throttleMs = parseInt(el.getAttribute('az-throttle') || '', 10);
-    if (!debounceMs && !throttleMs && !debounceEvent) { sendFn(); return; }
+    if (!debounceMs && !throttleMs && !debounceEvent) {
+        sendFn();
+        return;
+    }
     if (!_timers.has(el)) _timers.set(el, {});
     const t = /** @type {TimerState} */ (_timers.get(el));
     // Event-name debounce: just store the latest send, flush on the named event.
@@ -888,14 +988,14 @@ function flushTimer(el) {
 function saveFormState() {
     _savedForms.clear();
     document.querySelectorAll('form[id]').forEach((form) => {
-        const fd = new FormData(/** @type {HTMLFormElement} */(form));
+        const fd = new FormData(/** @type {HTMLFormElement} */ (form));
         /** @type {Object<string, string|string[]>} */
         const data = {};
         for (const [k, v] of fd.entries()) {
             if (k in data) {
                 const prev = data[k];
                 data[k] = Array.isArray(prev)
-                    ? prev.concat(/** @type {string} */(v))
+                    ? prev.concat(/** @type {string} */ (v))
                     : [prev, /** @type {string} */ (v)];
             } else {
                 data[k] = /** @type {string} */ (v);
@@ -956,14 +1056,18 @@ function restoreFormState() {
  * @param {AbortSignal} signal
  */
 function handleEvent(eventType, signal) {
-    document.addEventListener(eventType, (e) => {
-        const el = /** @type {Element} */ (e.target).closest('[az-' + eventType + ']');
-        if (!el || !_connected) return;
-        if (el.hasAttribute('az-prevent-default')) e.preventDefault();
-        const raw = el.getAttribute('az-' + eventType);
-        if (!raw) return;
-        executeJS(el, e, JSON.parse(raw));
-    }, { signal });
+    document.addEventListener(
+        eventType,
+        (e) => {
+            const el = /** @type {Element} */ (e.target).closest(`[az-${eventType}]`);
+            if (!el || !_connected) return;
+            if (el.hasAttribute('az-prevent-default')) e.preventDefault();
+            const raw = el.getAttribute(`az-${eventType}`);
+            if (!raw) return;
+            executeJS(el, e, JSON.parse(raw));
+        },
+        { signal },
+    );
 }
 
 /**
@@ -997,15 +1101,19 @@ function connect(endpoint, params = {}) {
     // Form submission: flush any pending debounced/throttled inputs first so
     // the server sees final values, then execute JS commands from az-submit.
     // az-form-reset opts in to clearing the form after submit.
-    document.addEventListener('submit', (e) => {
-        const form = /** @type {Element} */ (e.target).closest('[az-submit]');
-        if (!form || !_connected) return;
-        e.preventDefault();
-        form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
-        const raw = form.getAttribute('az-submit');
-        if (raw) executeJS(form, e, JSON.parse(raw));
-        if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
-    }, { signal });
+    document.addEventListener(
+        'submit',
+        (e) => {
+            const form = /** @type {Element} */ (e.target).closest('[az-submit]');
+            if (!form || !_connected) return;
+            e.preventDefault();
+            form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
+            const raw = form.getAttribute('az-submit');
+            if (raw) executeJS(form, e, JSON.parse(raw));
+            if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
+        },
+        { signal },
+    );
 
     // Take over scroll restoration so the browser doesn't scroll to a stale
     // position before OP_REPLACE swaps in the new content. See the block
@@ -1025,76 +1133,99 @@ function connect(endpoint, params = {}) {
     // to the server). Sends ["navigate", {path}] to the server, which renders
     // the new page and sends OP_REPLACE on the content slot. Scroll resets to
     // top (or #hash target) on new nav; opt out with az-noscroll.
-    document.addEventListener('click', (e) => {
-        const me = /** @type {MouseEvent} */ (e);
-        // Let the browser handle modifier-key and non-primary clicks (open in
-        // new tab/window, etc.) so az-navigate doesn't hijack them.
-        if (me.button !== 0 || me.ctrlKey || me.metaKey || me.shiftKey || me.altKey) return;
-        const el = /** @type {Element} */ (e.target).closest('[az-navigate]');
-        if (!el || !_connected) return;
-        const href = el.getAttribute('href');
-        if (!href) return;
-        const hashIdx = href.indexOf('#');
-        const pathname = hashIdx === -1 ? href : href.slice(0, hashIdx);
-        const hash = hashIdx === -1 ? '' : href.slice(hashIdx + 1);
-        const noscroll = el.hasAttribute('az-noscroll');
+    document.addEventListener(
+        'click',
+        (e) => {
+            const me = /** @type {MouseEvent} */ (e);
+            // Let the browser handle modifier-key and non-primary clicks (open in
+            // new tab/window, etc.) so az-navigate doesn't hijack them.
+            if (me.button !== 0 || me.ctrlKey || me.metaKey || me.shiftKey || me.altKey) return;
+            const el = /** @type {Element} */ (e.target).closest('[az-navigate]');
+            if (!el || !_connected) return;
+            const href = el.getAttribute('href');
+            if (!href) return;
+            const hashIdx = href.indexOf('#');
+            const pathname = hashIdx === -1 ? href : href.slice(0, hashIdx);
+            const hash = hashIdx === -1 ? '' : href.slice(hashIdx + 1);
+            const noscroll = el.hasAttribute('az-noscroll');
 
-        e.preventDefault();
+            e.preventDefault();
 
-        // Same-page hash nav: update URL + scroll, no server round-trip.
-        if (!pathname || pathname === location.pathname) {
-            history.pushState(null, '', href);
-            if (!noscroll) applyScroll({ kind: 'push', hash });
-            return;
-        }
+            // Same-page hash nav: update URL + scroll, no server round-trip.
+            if (!pathname || pathname === location.pathname) {
+                history.pushState(null, '', href);
+                if (!noscroll) applyScroll({ kind: 'push', hash });
+                return;
+            }
 
-        navigateTo(pathname, hash, { noscroll, fullUrl: href });
-    }, { signal });
+            navigateTo(pathname, hash, { noscroll, fullUrl: href });
+        },
+        { signal },
+    );
 
     // Browser back/forward: send navigate on popstate so the server
     // renders the correct page for the current URL. Restore the saved
     // scroll position (or #hash target) after REPLACE applies.
-    window.addEventListener('popstate', (e) => {
-        if (!_connected) return;
-        const path = location.pathname;
-        const hash = location.hash ? location.hash.slice(1) : '';
-        const saved = (e.state && e.state._azScroll) || null;
-        _pendingScroll = { kind: 'pop', hash, saved };
-        workerSend(JSON.stringify(['navigate', { path }]));
-        if (_worker) _worker.postMessage([3, path]);
-    }, { signal });
+    window.addEventListener(
+        'popstate',
+        (e) => {
+            if (!_connected) return;
+            const path = location.pathname;
+            const hash = location.hash ? location.hash.slice(1) : '';
+            const saved = e.state?._azScroll || null;
+            _pendingScroll = { kind: 'pop', hash, saved };
+            workerSend(JSON.stringify(['navigate', { path }]));
+            if (_worker) _worker.postMessage([3, path]);
+        },
+        { signal },
+    );
 
     // Drag-and-drop: uses az-key on draggable items and az-drop on the
     // container. dragstart stores the item's key; drop executes the az-drop
     // command with auto-collected {data_transfer, drop_index} payload.
-    document.addEventListener('dragstart', (e) => {
-        const keyEl = /** @type {Element} */ (e.target).closest('[az-key]');
-        if (keyEl && e.dataTransfer) e.dataTransfer.setData('text/plain', keyEl.getAttribute('az-key') || '');
-    }, { signal });
-    document.addEventListener('dragover', (e) => {
-        if (/** @type {Element} */ (e.target).closest('[az-key]')) e.preventDefault();
-    }, { signal });
-    document.addEventListener('drop', (e) => {
-        const dropTarget = /** @type {Element} */ (e.target).closest('[az-key]');
-        if (!dropTarget) return;
-        e.preventDefault();
-        const container = dropTarget.closest('[az-drop]');
-        if (!container || !_connected) return;
-        const raw = container.getAttribute('az-drop');
-        if (!raw) return;
-        executeJS(container, e, JSON.parse(raw));
-    }, { signal });
+    document.addEventListener(
+        'dragstart',
+        (e) => {
+            const keyEl = /** @type {Element} */ (e.target).closest('[az-key]');
+            if (keyEl && e.dataTransfer)
+                e.dataTransfer.setData('text/plain', keyEl.getAttribute('az-key') || '');
+        },
+        { signal },
+    );
+    document.addEventListener(
+        'dragover',
+        (e) => {
+            if (/** @type {Element} */ (e.target).closest('[az-key]')) e.preventDefault();
+        },
+        { signal },
+    );
+    document.addEventListener(
+        'drop',
+        (e) => {
+            const dropTarget = /** @type {Element} */ (e.target).closest('[az-key]');
+            if (!dropTarget) return;
+            e.preventDefault();
+            const container = dropTarget.closest('[az-drop]');
+            if (!container || !_connected) return;
+            const raw = container.getAttribute('az-drop');
+            if (!raw) return;
+            executeJS(container, e, JSON.parse(raw));
+        },
+        { signal },
+    );
 
     // Build full WS URL -- Worker can't access location.*
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const path = encodeURIComponent(location.pathname);
     const merged = { ...Object.fromEntries(new URLSearchParams(location.search)), ...params };
-    const paramsStr = Object.keys(merged).length ? '&params=' + encodeURIComponent(JSON.stringify(merged)) : '';
-    const wsUrl = protocol + '//' + location.host + endpoint + '?path=' + path + paramsStr;
+    const paramsStr = Object.keys(merged).length
+        ? `&params=${encodeURIComponent(JSON.stringify(merged))}`
+        : '';
+    const wsUrl = `${protocol}//${location.host}${endpoint}?path=${path}${paramsStr}`;
 
     // Spawn the Worker -- co-located with this script
     const baseUrl = new URL(/* @vite-ignore */ '.', import.meta.url).href;
-    _worker = new Worker(baseUrl + 'arizona-worker.min.js', { type: 'module' });
+    _worker = new Worker(`${baseUrl}arizona-worker.min.js`, { type: 'module' });
 
     /** @type {Function|null} */
     let _onmessageHook = null;
@@ -1148,11 +1279,21 @@ function connect(endpoint, params = {}) {
     // window._ws proxy for E2E test compatibility
     if (typeof window !== 'undefined') {
         /** @type {any} */ (window)._ws = {
-            get readyState() { return _connected ? 1 : 3; },
-            /** @param {string} data */ send(data) { workerSend(data); },
-            /** @param {number} [code] */ close(code) { if (_worker) _worker.postMessage([2, code || 1000]); },
-            set onmessage(fn) { _onmessageHook = fn; },
-            get onmessage() { return _onmessageHook; },
+            get readyState() {
+                return _connected ? 1 : 3;
+            },
+            /** @param {string} data */ send(data) {
+                workerSend(data);
+            },
+            /** @param {number} [code] */ close(code) {
+                if (_worker) _worker.postMessage([2, code || 1000]);
+            },
+            set onmessage(fn) {
+                _onmessageHook = fn;
+            },
+            get onmessage() {
+                return _onmessageHook;
+            },
         };
     }
 
@@ -1161,7 +1302,10 @@ function connect(endpoint, params = {}) {
         if (disconnected) return;
         disconnected = true;
         controller.abort();
-        if (_worker) { _worker.terminate(); _worker = null; }
+        if (_worker) {
+            _worker.terminate();
+            _worker = null;
+        }
         _connected = false;
         _pendingScroll = null;
         _savedForms.clear();
@@ -1175,9 +1319,22 @@ function connect(endpoint, params = {}) {
             /** @type {any} */ (history).scrollRestoration = prevScrollRestoration;
         }
         if (typeof window !== 'undefined') {
-            delete /** @type {any} */ (window)._ws;
+            delete (/** @type {any} */ (window)._ws);
         }
     };
 }
 
-export { connect, applyOps, applyEffects, executeJS, resolveEl, pushEvent, pushEventTo, OP, hooks, mountHooks, saveFormState, restoreFormState };
+export {
+    applyEffects,
+    applyOps,
+    connect,
+    executeJS,
+    hooks,
+    mountHooks,
+    OP,
+    pushEvent,
+    pushEventTo,
+    resolveEl,
+    restoreFormState,
+    saveFormState,
+};

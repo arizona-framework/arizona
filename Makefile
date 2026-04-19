@@ -42,7 +42,7 @@ fmt-erl:
 	rebar3 fmt
 
 fmt-js:
-	@echo "No JS formatter configured yet"
+	npx biome format --write
 
 check: check-erl check-js
 
@@ -71,6 +71,7 @@ check-dialyzer:
 	rebar3 as test dialyzer
 
 check-js:
+	npx biome check
 	npx -p typescript tsc --noEmit --allowJs --checkJs --strict --target es2020 --module node16 --moduleResolution node16 assets/js/arizona.js assets/js/arizona-core.js assets/js/arizona-worker.js assets/js/arizona-reloader.js
 
 build-js:

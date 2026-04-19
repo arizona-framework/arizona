@@ -16,7 +16,7 @@
  *   [2, code]       -- close WS
  */
 
-import { resolveHtml, fpCache, loadFpEntries, setOnPersist } from './arizona-core.js';
+import { fpCache, loadFpEntries, resolveHtml, setOnPersist } from './arizona-core.js';
 
 /** Op codes -- must match server and main thread. */
 const OP_TEXT = 0;
@@ -52,17 +52,22 @@ function getDB() {
 
 /** Read all entries as [[fpId, {s, t?}], ...] for cache hydration. */
 function idbLoadAll() {
-    return getDB().then(db => new Promise((resolve) => {
-        /** @type {Array<[string, {s: Array<string>, t?: number}]>} */
-        const entries = [];
-        const req = db.transaction(STORE).objectStore(STORE).openCursor();
-        req.onsuccess = () => {
-            const c = req.result;
-            if (c) { entries.push([/** @type {string} */ (c.key), c.value]); c.continue(); }
-            else resolve(entries);
-        };
-        req.onerror = () => resolve([]);
-    }));
+    return getDB().then(
+        (db) =>
+            new Promise((resolve) => {
+                /** @type {Array<[string, {s: Array<string>, t?: number}]>} */
+                const entries = [];
+                const req = db.transaction(STORE).objectStore(STORE).openCursor();
+                req.onsuccess = () => {
+                    const c = req.result;
+                    if (c) {
+                        entries.push([/** @type {string} */ (c.key), c.value]);
+                        c.continue();
+                    } else resolve(entries);
+                };
+                req.onerror = () => resolve([]);
+            }),
+    );
 }
 
 /**
@@ -71,9 +76,11 @@ function idbLoadAll() {
  * @param {{s: Array<string>, t?: number}} entry
  */
 function idbPut(fpId, entry) {
-    getDB().then(db => {
-        db.transaction(STORE, 'readwrite').objectStore(STORE).put(entry, fpId);
-    }).catch(() => {});
+    getDB()
+        .then((db) => {
+            db.transaction(STORE, 'readwrite').objectStore(STORE).put(entry, fpId);
+        })
+        .catch(() => {});
 }
 
 /** @type {WebSocket|null} */
@@ -112,9 +119,11 @@ function sendCachedFps() {
 }
 
 // Wire up fp cache persistence: write each new fingerprint to IndexedDB.
-setOnPersist(/** @param {string} fpId @param {{s: Array<string>, t?: number}} entry */ (fpId, entry) => {
-    idbPut(fpId, entry);
-});
+setOnPersist(
+    /** @param {string} fpId @param {{s: Array<string>, t?: number}} entry */ (fpId, entry) => {
+        idbPut(fpId, entry);
+    },
+);
 
 // ---------------------------------------------------------------------------
 // Op resolution -- resolve template payloads to HTML strings in-place
@@ -198,7 +207,7 @@ function openSocket() {
     // makes the origin invariant legible to static analyzers.
     const incoming = new URL(_wsUrl);
     const protocol = self.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let url = protocol + '//' + self.location.host + incoming.pathname + incoming.search;
+    let url = `${protocol}//${self.location.host}${incoming.pathname}${incoming.search}`;
     if (_reconnecting) url += '&reconnect=1';
 
     const ws = new WebSocket(url);
@@ -271,10 +280,12 @@ self.onmessage = (e) => {
 
             // Hydrate in-memory cache from IDB (cross-session persistence),
             // then announce cached fingerprints to the server.
-            idbLoadAll().then(entries => {
-                if (entries.length > 0) loadFpEntries(entries);
-                sendCachedFps();
-            }).catch(() => {});
+            idbLoadAll()
+                .then((entries) => {
+                    if (entries.length > 0) loadFpEntries(entries);
+                    sendCachedFps();
+                })
+                .catch(() => {});
             break;
         }
         case 1:
@@ -289,7 +300,7 @@ self.onmessage = (e) => {
             // [3, newPath] -- update path for reconnect
             if (!_wsUrl) break;
             const newPath = encodeURIComponent(msg[1]);
-            _wsUrl = _wsUrl.replace(/path=[^&]*/, 'path=' + newPath);
+            _wsUrl = _wsUrl.replace(/path=[^&]*/, `path=${newPath}`);
             break;
         }
     }

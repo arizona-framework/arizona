@@ -1,8 +1,7 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 const wsReady = (page) =>
-    page.waitForFunction(() =>
-        document.documentElement.classList.contains('az-connected'));
+    page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
 
 test.describe('connection params', () => {
     test('SSR renders URL query param', async ({ page }) => {

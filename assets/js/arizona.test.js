@@ -1,5 +1,15 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { OP, applyOps, applyEffects, executeJS, resolveEl, pushEvent, pushEventTo, connect, hooks, mountHooks, saveFormState, restoreFormState } from './arizona.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+    applyEffects,
+    applyOps,
+    executeJS,
+    hooks,
+    mountHooks,
+    OP,
+    resolveEl,
+    restoreFormState,
+    saveFormState,
+} from './arizona.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -14,8 +24,7 @@ beforeEach(() => {
 
 /** Minimal DOM with a single view and one dynamic element. */
 function setupView(viewId, innerHTML) {
-    document.body.innerHTML =
-        `<div id="${viewId}" az-view>${innerHTML}</div>`;
+    document.body.innerHTML = `<div id="${viewId}" az-view>${innerHTML}</div>`;
 }
 
 /**
@@ -31,12 +40,18 @@ function setupMockWorker(mod) {
     let workerOnmessage = null;
     const mockWorkerInstance = {
         postMessage: (data) => posted.push(data),
-        set onmessage(fn) { workerOnmessage = fn; },
-        get onmessage() { return workerOnmessage; },
+        set onmessage(fn) {
+            workerOnmessage = fn;
+        },
+        get onmessage() {
+            return workerOnmessage;
+        },
         terminate: vi.fn(),
     };
     const OrigWorker = globalThis.Worker;
-    globalThis.Worker = function () { return mockWorkerInstance; };
+    globalThis.Worker = function () {
+        return mockWorkerInstance;
+    };
 
     const disconnect = mod.connect('/ws');
 
@@ -57,9 +72,7 @@ function setupMockWorker(mod) {
         },
         /** Get all [1, jsonString] sends (Main->Worker) and parse them */
         getSentMessages() {
-            return posted
-                .filter(d => d[0] === 1)
-                .map(d => JSON.parse(d[1]));
+            return posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1]));
         },
         /** Tear down listeners the module registered, terminate the worker, restore Worker ctor. */
         restore() {
@@ -157,7 +170,10 @@ describe('applyOps -- OP.TEXT with compound markers', () => {
     });
 
     it('updates second dynamic without affecting first', () => {
-        setupView('v', '<p az="0"><!--az:0-->first<!--/az--> and <!--az:0:1-->second<!--/az--></p>');
+        setupView(
+            'v',
+            '<p az="0"><!--az:0-->first<!--/az--> and <!--az:0:1-->second<!--/az--></p>',
+        );
         applyOps([[OP.TEXT, 'v:0:1', 'updated']]);
         const el = resolveEl('v:0');
         expect(el.textContent).toBe('first and updated');
@@ -284,8 +300,8 @@ describe('applyOps -- OP.INSERT', () => {
         setupView('v', '<div az="0"><p az-key="a">A</p><p az-key="c">C</p></div>');
         applyOps([[OP.INSERT, 'v:0', 'b', 1, '<p az-key="b">B</p>']]);
         const el = resolveEl('v:0');
-        const keys = Array.from(el.querySelectorAll('[az-key]')).map(
-            (c) => c.getAttribute('az-key')
+        const keys = Array.from(el.querySelectorAll('[az-key]')).map((c) =>
+            c.getAttribute('az-key'),
         );
         expect(keys).toEqual(['a', 'b', 'c']);
     });
@@ -294,8 +310,8 @@ describe('applyOps -- OP.INSERT', () => {
         setupView('v', '<div az="0"><p az-key="a">A</p></div>');
         applyOps([[OP.INSERT, 'v:0', 'z', 99, '<p az-key="z">Z</p>']]);
         const el = resolveEl('v:0');
-        const keys = Array.from(el.querySelectorAll('[az-key]')).map(
-            (c) => c.getAttribute('az-key')
+        const keys = Array.from(el.querySelectorAll('[az-key]')).map((c) =>
+            c.getAttribute('az-key'),
         );
         expect(keys).toEqual(['a', 'z']);
     });
@@ -320,13 +336,16 @@ describe('applyOps -- OP.REMOVE', () => {
 
 describe('applyOps -- OP.MOVE (after_key)', () => {
     it('moves a keyed child after another key, preserving the DOM node', () => {
-        setupView('v', '<div az="0"><p az-key="a">A</p><p az-key="b">B</p><p az-key="c">C</p></div>');
+        setupView(
+            'v',
+            '<div az="0"><p az-key="a">A</p><p az-key="b">B</p><p az-key="c">C</p></div>',
+        );
         const el = resolveEl('v:0');
         const originalNode = el.querySelector('[az-key="c"]');
         // Move c after null (prepend) → [c, a, b]
         applyOps([[OP.MOVE, 'v:0', 'c', null]]);
-        const keys = Array.from(el.querySelectorAll(':scope > [az-key]')).map(
-            (c) => c.getAttribute('az-key')
+        const keys = Array.from(el.querySelectorAll(':scope > [az-key]')).map((c) =>
+            c.getAttribute('az-key'),
         );
         expect(keys).toEqual(['c', 'a', 'b']);
         // Verify same DOM node was reused (not destroyed and recreated)
@@ -334,11 +353,14 @@ describe('applyOps -- OP.MOVE (after_key)', () => {
     });
 
     it('prepends when afterKey is null', () => {
-        setupView('v', '<div az="0"><p az-key="a">A</p><p az-key="b">B</p><p az-key="c">C</p></div>');
+        setupView(
+            'v',
+            '<div az="0"><p az-key="a">A</p><p az-key="b">B</p><p az-key="c">C</p></div>',
+        );
         applyOps([[OP.MOVE, 'v:0', 'c', null]]);
         const el = resolveEl('v:0');
-        const keys = Array.from(el.querySelectorAll(':scope > [az-key]')).map(
-            (c) => c.getAttribute('az-key')
+        const keys = Array.from(el.querySelectorAll(':scope > [az-key]')).map((c) =>
+            c.getAttribute('az-key'),
         );
         expect(keys).toEqual(['c', 'a', 'b']);
     });
@@ -347,8 +369,8 @@ describe('applyOps -- OP.MOVE (after_key)', () => {
         setupView('v', '<div az="0"><p az-key="a">A</p><p az-key="b">B</p></div>');
         applyOps([[OP.MOVE, 'v:0', 'a', 'nonexistent']]);
         const el = resolveEl('v:0');
-        const keys = Array.from(el.querySelectorAll(':scope > [az-key]')).map(
-            (c) => c.getAttribute('az-key')
+        const keys = Array.from(el.querySelectorAll(':scope > [az-key]')).map((c) =>
+            c.getAttribute('az-key'),
         );
         expect(keys).toEqual(['b', 'a']);
     });
@@ -358,8 +380,8 @@ describe('applyOps -- OP.MOVE (after_key)', () => {
         setupView('v', '<div az="0"><p az-key="a">A</p></div>');
         applyOps([[OP.MOVE, 'v:0', 'nonexistent', 'a']]);
         const el = resolveEl('v:0');
-        const keys = Array.from(el.querySelectorAll(':scope > [az-key]')).map(
-            (c) => c.getAttribute('az-key')
+        const keys = Array.from(el.querySelectorAll(':scope > [az-key]')).map((c) =>
+            c.getAttribute('az-key'),
         );
         expect(keys).toEqual(['a']);
         expect(spy).toHaveBeenCalledWith(expect.stringContaining('nonexistent'));
@@ -370,15 +392,18 @@ describe('applyOps -- OP.MOVE (after_key)', () => {
         // Simulate [a, b, c, d] → [d, c, b, a] using LIS-style moves
         // LIS of [4,3,2,1] is length 1 (d stays), 3 items need to move
         // Applied left-to-right: move d→null, move c→d, move b→c
-        setupView('v', '<div az="0"><p az-key="a">A</p><p az-key="b">B</p><p az-key="c">C</p><p az-key="d">D</p></div>');
+        setupView(
+            'v',
+            '<div az="0"><p az-key="a">A</p><p az-key="b">B</p><p az-key="c">C</p><p az-key="d">D</p></div>',
+        );
         applyOps([
             [OP.MOVE, 'v:0', 'd', null],
             [OP.MOVE, 'v:0', 'c', 'd'],
             [OP.MOVE, 'v:0', 'b', 'c'],
         ]);
         const el = resolveEl('v:0');
-        const keys = Array.from(el.querySelectorAll(':scope > [az-key]')).map(
-            (c) => c.getAttribute('az-key')
+        const keys = Array.from(el.querySelectorAll(':scope > [az-key]')).map((c) =>
+            c.getAttribute('az-key'),
         );
         expect(keys).toEqual(['d', 'c', 'b', 'a']);
     });
@@ -390,108 +415,102 @@ describe('applyOps -- OP.MOVE (after_key)', () => {
 
 describe('applyOps -- OP.ITEM_PATCH', () => {
     it('patches text within a keyed child', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><span az="0">old</span></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.TEXT, '0', 'new'],
-        ]]]);
+        setupView('v', '<div az="0"><div az-key="k1"><span az="0">old</span></div></div>');
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '0', 'new']]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="0"]').textContent).toBe('new');
     });
 
     it('sets attribute within a keyed child', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><span az="0">x</span></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.SET_ATTR, '0', 'class', 'highlight'],
-        ]]]);
+        setupView('v', '<div az="0"><div az-key="k1"><span az="0">x</span></div></div>');
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.SET_ATTR, '0', 'class', 'highlight']]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="0"]').getAttribute('class')).toBe('highlight');
     });
 
     it('removes attribute within a keyed child', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><span az="0" class="old">x</span></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.REM_ATTR, '0', 'class'],
-        ]]]);
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><span az="0" class="old">x</span></div></div>',
+        );
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.REM_ATTR, '0', 'class']]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="0"]').hasAttribute('class')).toBe(false);
     });
 
     it('replaces innerHTML within a keyed child', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><div az="0">old</div></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.UPDATE, '0', '<em>new</em>'],
-        ]]]);
+        setupView('v', '<div az="0"><div az-key="k1"><div az="0">old</div></div></div>');
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.UPDATE, '0', '<em>new</em>']]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="0"]').innerHTML).toBe('<em>new</em>');
     });
 
     it('removes node within a keyed child', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><span az="0">bye</span></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.REMOVE_NODE, '0'],
-        ]]]);
+        setupView('v', '<div az="0"><div az-key="k1"><span az="0">bye</span></div></div>');
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.REMOVE_NODE, '0']]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="0"]')).toBeNull();
     });
 
     it('patches text with comment markers within a keyed child', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><span az="0"><!--az:0-->old<!--/az--></span></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.TEXT, '0', 'new'],
-        ]]]);
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><span az="0"><!--az:0-->old<!--/az--></span></div></div>',
+        );
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '0', 'new']]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="0"]').textContent).toBe('new');
     });
 
     it('handles nested INSERT inside a keyed child', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><ul az="0"></ul></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.INSERT, '0', 'c1', -1, '<li az-key="c1">cell1</li>'],
-        ]]]);
+        setupView('v', '<div az="0"><div az-key="k1"><ul az="0"></ul></div></div>');
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                'v:0',
+                'k1',
+                [[OP.INSERT, '0', 'c1', -1, '<li az-key="c1">cell1</li>']],
+            ],
+        ]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         const inner = item.querySelector('[az="0"]');
         expect(inner.querySelector('[az-key="c1"]').textContent).toBe('cell1');
     });
 
     it('handles nested REMOVE inside a keyed child', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><ul az="0"><li az-key="c1">cell1</li></ul></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.REMOVE, '0', 'c1'],
-        ]]]);
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><ul az="0"><li az-key="c1">cell1</li></ul></div></div>',
+        );
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.REMOVE, '0', 'c1']]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         const inner = item.querySelector('[az="0"]');
         expect(inner.querySelector('[az-key="c1"]')).toBeNull();
     });
 
     it('handles nested MOVE inside a keyed child', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><ul az="0"><li az-key="c1">A</li><li az-key="c2">B</li></ul></div></div>');
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><ul az="0"><li az-key="c1">A</li><li az-key="c2">B</li></ul></div></div>',
+        );
         // Move c2 after null (prepend) → [c2, c1]
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.MOVE, '0', 'c2', null],
-        ]]]);
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.MOVE, '0', 'c2', null]]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         const inner = item.querySelector('[az="0"]');
-        const keys = Array.from(inner.querySelectorAll(':scope > [az-key]')).map(
-            (c) => c.getAttribute('az-key')
+        const keys = Array.from(inner.querySelectorAll(':scope > [az-key]')).map((c) =>
+            c.getAttribute('az-key'),
         );
         expect(keys).toEqual(['c2', 'c1']);
     });
 
     it('handles nested ITEM_PATCH inside a keyed child', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><ul az="0"><li az-key="c1"><span az="0">old</span></li></ul></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.ITEM_PATCH, '0', 'c1', [[OP.TEXT, '0', 'new']]],
-        ]]]);
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><ul az="0"><li az-key="c1"><span az="0">old</span></li></ul></div></div>',
+        );
+        applyOps([
+            [OP.ITEM_PATCH, 'v:0', 'k1', [[OP.ITEM_PATCH, '0', 'c1', [[OP.TEXT, '0', 'new']]]]],
+        ]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         const inner = item.querySelector('[az="0"]');
         const cell = inner.querySelector('[az-key="c1"]');
@@ -578,12 +597,15 @@ describe('comment markers', () => {
     });
 
     it('only matches the correct marker index', () => {
-        setupView('v', `
+        setupView(
+            'v',
+            `
             <div az="0">
                 <!--az:0-->first<!--/az-->
                 <!--az:1-->second<!--/az-->
             </div>
-        `);
+        `,
+        );
         applyOps([[OP.TEXT, 'v:0', 'UPDATED']]);
         const el = resolveEl('v:0');
         // az:0 content should be updated, az:1 content should remain
@@ -606,7 +628,10 @@ describe('comment markers', () => {
     });
 
     it('only changes marker content, leaving static siblings untouched', () => {
-        setupView('v', '<div az="0"><b>static</b><!--az:0-->dynamic<!--/az--><i>also static</i></div>');
+        setupView(
+            'v',
+            '<div az="0"><b>static</b><!--az:0-->dynamic<!--/az--><i>also static</i></div>',
+        );
         applyOps([[OP.TEXT, 'v:0', 'updated']]);
         const el = resolveEl('v:0');
         expect(el.querySelector('b').textContent).toBe('static');
@@ -633,10 +658,8 @@ describe('applyEffects -- set_title', () => {
 
 describe('applyOps -- OP.REPLACE edge cases', () => {
     it('replaces element with new content', () => {
-        document.body.innerHTML =
-            '<div id="page" az-view><p az="0">old</p></div>';
-        applyOps([[OP.REPLACE, 'page',
-            '<div id="page" az-view><p az="0">new</p></div>']]);
+        document.body.innerHTML = '<div id="page" az-view><p az="0">old</p></div>';
+        applyOps([[OP.REPLACE, 'page', '<div id="page" az-view><p az="0">new</p></div>']]);
         const el = document.querySelector('#page[az-view]');
         expect(el).not.toBeNull();
         expect(el.querySelector('[az="0"]').textContent).toBe('new');
@@ -706,7 +729,10 @@ describe('applyOps -- OP.SET_ATTR edge cases', () => {
     });
 
     it('syncs value property on select elements', () => {
-        setupView('v', '<select az="0"><option value="a">A</option><option value="b">B</option></select>');
+        setupView(
+            'v',
+            '<select az="0"><option value="a">A</option><option value="b">B</option></select>',
+        );
         applyOps([[OP.SET_ATTR, 'v:0', 'value', 'b']]);
         const el = /** @type {HTMLSelectElement} */ (resolveEl('v:0'));
         expect(el.getAttribute('value')).toBe('b');
@@ -757,7 +783,9 @@ describe('applyOps -- OP.REPLACE', () => {
         setupView('page', '<h1 az="0">old title</h1>');
         const container = document.querySelector('#page[az-view]');
         const parent = container.parentElement;
-        applyOps([[OP.REPLACE, 'page', '<main id="page" az-view><h1 az="0">new title</h1></main>']]);
+        applyOps([
+            [OP.REPLACE, 'page', '<main id="page" az-view><h1 az="0">new title</h1></main>'],
+        ]);
         const newView = parent.querySelector('#page[az-view]');
         expect(newView).not.toBeNull();
         expect(newView.querySelector('[az="0"]').textContent).toBe('new title');
@@ -772,8 +800,8 @@ describe('applyOps -- OP.INSERT edge cases', () => {
     it('inserts at position 0 (before first child)', () => {
         setupView('v', '<div az="0"><p az-key="b">B</p></div>');
         applyOps([[OP.INSERT, 'v:0', 'a', 0, '<p az-key="a">A</p>']]);
-        const keys = Array.from(resolveEl('v:0').querySelectorAll('[az-key]')).map(
-            (c) => c.getAttribute('az-key')
+        const keys = Array.from(resolveEl('v:0').querySelectorAll('[az-key]')).map((c) =>
+            c.getAttribute('az-key'),
         );
         expect(keys).toEqual(['a', 'b']);
     });
@@ -819,10 +847,17 @@ describe('applyOps -- OP.ITEM_PATCH edge cases', () => {
     it('skips inner ops when key does not exist and warns', () => {
         const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         setupView('v', '<div az="0"><div az-key="k1"><span az="0">ok</span></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'nonexistent', [
-            [OP.TEXT, '0', 'new'],
-            [OP.SET_ATTR, '0', 'class', 'x'],
-        ]]]);
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                'v:0',
+                'nonexistent',
+                [
+                    [OP.TEXT, '0', 'new'],
+                    [OP.SET_ATTR, '0', 'class', 'x'],
+                ],
+            ],
+        ]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="0"]').textContent).toBe('ok');
         expect(spy).toHaveBeenCalledWith(expect.stringContaining('nonexistent'));
@@ -830,23 +865,29 @@ describe('applyOps -- OP.ITEM_PATCH edge cases', () => {
     });
 
     it('applies multiple inner ops sequentially', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><span az="0">old</span><span az="1">x</span></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.TEXT, '0', 'new'],
-            [OP.SET_ATTR, '1', 'class', 'highlight'],
-        ]]]);
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><span az="0">old</span><span az="1">x</span></div></div>',
+        );
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                'v:0',
+                'k1',
+                [
+                    [OP.TEXT, '0', 'new'],
+                    [OP.SET_ATTR, '1', 'class', 'highlight'],
+                ],
+            ],
+        ]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="0"]').textContent).toBe('new');
         expect(item.querySelector('[az="1"]').getAttribute('class')).toBe('highlight');
     });
 
     it('syncs value property on input within keyed child', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><input az="0" value="old" /></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.SET_ATTR, '0', 'value', 'new'],
-        ]]]);
+        setupView('v', '<div az="0"><div az-key="k1"><input az="0" value="old" /></div></div>');
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.SET_ATTR, '0', 'value', 'new']]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         const input = /** @type {HTMLInputElement} */ (item.querySelector('[az="0"]'));
         expect(input.getAttribute('value')).toBe('new');
@@ -854,11 +895,8 @@ describe('applyOps -- OP.ITEM_PATCH edge cases', () => {
     });
 
     it('falls back to item element itself when no [az] found', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1">plain text</div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.SET_ATTR, '0', 'data-test', 'fallback'],
-        ]]]);
+        setupView('v', '<div az="0"><div az-key="k1">plain text</div></div>');
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.SET_ATTR, '0', 'data-test', 'fallback']]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.getAttribute('data-test')).toBe('fallback');
     });
@@ -994,7 +1032,10 @@ describe('executeJS', () => {
 
     it('executes multiple commands in order', () => {
         document.body.innerHTML = '<div id="a" hidden></div><div id="b"></div>';
-        executeJS(document.body, null, [[2, '#a'], [3, '#b']]);
+        executeJS(document.body, null, [
+            [2, '#a'],
+            [3, '#b'],
+        ]);
         expect(document.getElementById('a').hidden).toBe(false);
         expect(document.getElementById('b').hidden).toBe(true);
     });
@@ -1092,7 +1133,14 @@ describe('executeJS -- on_key', () => {
         document.body.innerHTML = '<div id="a" hidden></div><div id="b"></div>';
         const event = new KeyboardEvent('keydown', { key: 'Enter' });
         // [16, ["enter"], [[2, "#a"], [3, "#b"]]] -- show a + hide b
-        executeJS(document.body, event, [16, ['enter'], [[2, '#a'], [3, '#b']]]);
+        executeJS(document.body, event, [
+            16,
+            ['enter'],
+            [
+                [2, '#a'],
+                [3, '#b'],
+            ],
+        ]);
         expect(document.getElementById('a').hidden).toBe(false);
         expect(document.getElementById('b').hidden).toBe(true);
     });
@@ -1122,7 +1170,11 @@ describe('hooks -- mounted', () => {
 
     it('provides this.el in mounted callback', () => {
         let capturedEl = null;
-        hooks.Chart = { mounted() { capturedEl = this.el; } };
+        hooks.Chart = {
+            mounted() {
+                capturedEl = this.el;
+            },
+        };
         setupView('v', '<div az="0" az-hook="Chart">content</div>');
         mountHooks(document);
         expect(capturedEl).toBe(resolveEl('v:0'));
@@ -1148,7 +1200,9 @@ describe('hooks -- mounted', () => {
         const mounted = vi.fn();
         hooks.Page = { mounted };
         document.body.innerHTML = '<div id="page" az-view><p>old</p></div>';
-        applyOps([[OP.REPLACE, 'page', '<div id="page" az-view><span az-hook="Page">new</span></div>']]);
+        applyOps([
+            [OP.REPLACE, 'page', '<div id="page" az-view><span az-hook="Page">new</span></div>'],
+        ]);
         expect(mounted).toHaveBeenCalledOnce();
     });
 
@@ -1264,8 +1318,7 @@ describe('hooks -- destroyed', () => {
     it('fires before OP_REPLACE for hooked element + descendants', () => {
         const destroyed = vi.fn();
         hooks.Page = { mounted() {}, destroyed };
-        document.body.innerHTML =
-            '<div id="page" az-view><span az-hook="Page">child</span></div>';
+        document.body.innerHTML = '<div id="page" az-view><span az-hook="Page">child</span></div>';
         mountHooks(document);
         applyOps([[OP.REPLACE, 'page', '<div id="page" az-view><p>new</p></div>']]);
         expect(destroyed).toHaveBeenCalledOnce();
@@ -1299,7 +1352,11 @@ describe('hooks -- pushEvent', () => {
         // pushEvent requires _ws to be set. We use connect indirectly through mountHooks,
         // but for unit testing we can test the hook instance directly.
         let instance = null;
-        hooks.Sender = { mounted() { instance = this; } };
+        hooks.Sender = {
+            mounted() {
+                instance = this;
+            },
+        };
         setupView('v', '<div az="0" az-hook="Sender">content</div>');
         mountHooks(document);
         expect(instance).not.toBeNull();
@@ -1322,11 +1379,17 @@ describe('hooks -- edge cases', () => {
     it('multiple ops in one batch fire hooks in correct order', () => {
         const calls = [];
         hooks.A = {
-            mounted() { calls.push('mount:A'); },
-            destroyed() { calls.push('destroy:A'); },
+            mounted() {
+                calls.push('mount:A');
+            },
+            destroyed() {
+                calls.push('destroy:A');
+            },
         };
         hooks.B = {
-            mounted() { calls.push('mount:B'); },
+            mounted() {
+                calls.push('mount:B');
+            },
         };
         setupView('v', '<div az="0" az-hook="A">old</div>');
         mountHooks(document);
@@ -1340,7 +1403,10 @@ describe('hooks -- edge cases', () => {
     it('OP_ITEM_PATCH inner SET_ATTR triggers updated hook', () => {
         const updated = vi.fn();
         hooks.Cell = { mounted() {}, updated };
-        setupView('v', '<div az="0"><div az-key="k1"><span az="1" az-hook="Cell">val</span></div></div>');
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><span az="1" az-hook="Cell">val</span></div></div>',
+        );
         mountHooks(document);
         applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.SET_ATTR, '1', 'class', 'bold']]]]);
         expect(updated).toHaveBeenCalledOnce();
@@ -1349,7 +1415,10 @@ describe('hooks -- edge cases', () => {
     it('OP_ITEM_PATCH inner REM_ATTR triggers updated hook', () => {
         const updated = vi.fn();
         hooks.Cell = { mounted() {}, updated };
-        setupView('v', '<div az="0"><div az-key="k1"><span az="1" az-hook="Cell" class="x">val</span></div></div>');
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><span az="1" az-hook="Cell" class="x">val</span></div></div>',
+        );
         mountHooks(document);
         applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.REM_ATTR, '1', 'class']]]]);
         expect(updated).toHaveBeenCalledOnce();
@@ -1358,7 +1427,10 @@ describe('hooks -- edge cases', () => {
     it('OP_ITEM_PATCH inner REMOVE_NODE triggers destroyed hook', () => {
         const destroyed = vi.fn();
         hooks.Cell = { mounted() {}, destroyed };
-        setupView('v', '<div az="0"><div az-key="k1"><span az="1" az-hook="Cell">val</span></div></div>');
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><span az="1" az-hook="Cell">val</span></div></div>',
+        );
         mountHooks(document);
         applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.REMOVE_NODE, '1']]]]);
         expect(destroyed).toHaveBeenCalledOnce();
@@ -1369,9 +1441,14 @@ describe('hooks -- edge cases', () => {
         const mounted = vi.fn();
         hooks.Old = { mounted() {}, destroyed };
         hooks.New = { mounted };
-        setupView('v', '<div az="0"><div az-key="k1"><div az="1"><span az-hook="Old">old</span></div></div></div>');
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><div az="1"><span az-hook="Old">old</span></div></div></div>',
+        );
         mountHooks(document);
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.UPDATE, '1', '<span az-hook="New">new</span>']]]]);
+        applyOps([
+            [OP.ITEM_PATCH, 'v:0', 'k1', [[OP.UPDATE, '1', '<span az-hook="New">new</span>']]],
+        ]);
         expect(destroyed).toHaveBeenCalledOnce();
         expect(mounted).toHaveBeenCalledOnce();
     });
@@ -1381,9 +1458,14 @@ describe('hooks -- edge cases', () => {
         const mounted = vi.fn();
         hooks.Old = { mounted() {}, destroyed };
         hooks.New = { mounted };
-        setupView('v', '<div az="0"><div az-key="k1"><div az="1"><!--az:1--><span az-hook="Old">old</span><!--/az--></div></div></div>');
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><div az="1"><!--az:1--><span az-hook="Old">old</span><!--/az--></div></div></div>',
+        );
         mountHooks(document);
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', '<span az-hook="New">new</span>']]]]);
+        applyOps([
+            [OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', '<span az-hook="New">new</span>']]],
+        ]);
         expect(destroyed).toHaveBeenCalledOnce();
         expect(mounted).toHaveBeenCalledOnce();
     });
@@ -1415,7 +1497,9 @@ describe('hooks -- edge cases', () => {
         let elInDocument = false;
         hooks.Check = {
             mounted() {},
-            destroyed() { elInDocument = document.body.contains(this.el); },
+            destroyed() {
+                elInDocument = document.body.contains(this.el);
+            },
         };
         setupView('v', '<div az="0" az-hook="Check">content</div>');
         mountHooks(document);
@@ -1427,7 +1511,9 @@ describe('hooks -- edge cases', () => {
         let capturedEl = null;
         hooks.Track = {
             mounted() {},
-            updated() { capturedEl = this.el; },
+            updated() {
+                capturedEl = this.el;
+            },
         };
         setupView('v', '<div az="0" az-hook="Track">content</div>');
         mountHooks(document);
@@ -1496,42 +1582,48 @@ describe('pre-resolved ops', () => {
 
 describe('OP.ITEM_PATCH with pre-resolved inner ops', () => {
     it('TEXT inner op with pre-resolved HTML', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><span az="1"><!--az:1-->old<!--/az--></span></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.TEXT, '1', '<em>new</em>'],
-        ]]]);
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><span az="1"><!--az:1-->old<!--/az--></span></div></div>',
+        );
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', '<em>new</em>']]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="1"]').innerHTML).toContain('<em>new</em>');
     });
 
     it('TEXT inner op with marker and pre-resolved HTML', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><span az="1"><!--az:1-->old<!--/az--></span></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.TEXT, '1', '<b>marked</b>'],
-        ]]]);
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><span az="1"><!--az:1-->old<!--/az--></span></div></div>',
+        );
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', '<b>marked</b>']]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="1"]').innerHTML).toContain('<b>marked</b>');
     });
 
     it('UPDATE inner op with pre-resolved HTML', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><div az="1">old</div></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.UPDATE, '1', '<strong>updated</strong>'],
-        ]]]);
+        setupView('v', '<div az="0"><div az-key="k1"><div az="1">old</div></div></div>');
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.UPDATE, '1', '<strong>updated</strong>']]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="1"]').innerHTML).toBe('<strong>updated</strong>');
     });
 
     it('mixed plain and pre-resolved inner ops work together', () => {
-        setupView('v',
-            '<div az="0"><div az-key="k1"><span az="1"><!--az:1-->old<!--/az--></span><span az="2" class="x">y</span></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [
-            [OP.TEXT, '1', '<i>fancy</i>'],
-            [OP.SET_ATTR, '2', 'class', 'highlight'],
-        ]]]);
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1"><span az="1"><!--az:1-->old<!--/az--></span><span az="2" class="x">y</span></div></div>',
+        );
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                'v:0',
+                'k1',
+                [
+                    [OP.TEXT, '1', '<i>fancy</i>'],
+                    [OP.SET_ATTR, '2', 'class', 'highlight'],
+                ],
+            ],
+        ]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="1"]').innerHTML).toContain('<i>fancy</i>');
         expect(item.querySelector('[az="2"]').getAttribute('class')).toBe('highlight');
@@ -1545,14 +1637,15 @@ describe('OP.ITEM_PATCH with pre-resolved inner ops', () => {
 
 describe('onmessage partial envelopes', () => {
     let mock;
-    afterEach(() => { if (mock) mock.restore(); });
+    afterEach(() => {
+        if (mock) mock.restore();
+    });
 
     it('ops-only message applies ops without error', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
 
-        document.body.innerHTML =
-            '<div id="v" az-view><span az="0">old</span></div>';
+        document.body.innerHTML = '<div id="v" az-view><span az="0">old</span></div>';
 
         mock = setupMockWorker(mod);
         mock.simulateOpen();
@@ -1577,18 +1670,14 @@ describe('onmessage partial envelopes', () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
 
-        document.body.innerHTML =
-            '<div id="v" az-view><span az="0">old</span></div>';
+        document.body.innerHTML = '<div id="v" az-view><span az="0">old</span></div>';
 
         const received = [];
         document.addEventListener('full_effect', (e) => received.push(e.detail), { once: true });
 
         mock = setupMockWorker(mod);
         mock.simulateOpen();
-        mock.simulateMessage(
-            [[0, 'v:0', 'updated']],
-            [[9, 'full_effect', { n: 1 }]]
-        );
+        mock.simulateMessage([[0, 'v:0', 'updated']], [[9, 'full_effect', { n: 1 }]]);
         expect(document.querySelector('[az="0"]').textContent).toBe('updated');
         expect(received).toEqual([{ n: 1 }]);
     });
@@ -1597,8 +1686,7 @@ describe('onmessage partial envelopes', () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
 
-        document.body.innerHTML =
-            '<div id="v" az-view><span az="0">unchanged</span></div>';
+        document.body.innerHTML = '<div id="v" az-view><span az="0">unchanged</span></div>';
 
         mock = setupMockWorker(mod);
         mock.simulateOpen();
@@ -1614,8 +1702,13 @@ describe('onmessage partial envelopes', () => {
 
 describe('heartbeat', () => {
     let mock;
-    beforeEach(() => { vi.useFakeTimers(); });
-    afterEach(() => { vi.useRealTimers(); if (mock) mock.restore(); });
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+        if (mock) mock.restore();
+    });
 
     it('sends ping via Worker when connected', async () => {
         vi.resetModules();
@@ -1646,25 +1739,21 @@ describe('heartbeat', () => {
 
 describe('saveFormState / restoreFormState', () => {
     it('saves and restores form field values', () => {
-        document.body.innerHTML =
-            '<form id="myform"><input name="title" value="hello"></form>';
+        document.body.innerHTML = '<form id="myform"><input name="title" value="hello"></form>';
         saveFormState();
 
         // Simulate DOM replacement (OP_REPLACE wipes the DOM)
-        document.body.innerHTML =
-            '<form id="myform"><input name="title" value=""></form>';
+        document.body.innerHTML = '<form id="myform"><input name="title" value=""></form>';
 
         restoreFormState();
         expect(document.querySelector('input[name="title"]').value).toBe('hello');
     });
 
     it('ignores forms without id', () => {
-        document.body.innerHTML =
-            '<form><input name="x" value="val"></form>';
+        document.body.innerHTML = '<form><input name="x" value="val"></form>';
         saveFormState();
 
-        document.body.innerHTML =
-            '<form><input name="x" value=""></form>';
+        document.body.innerHTML = '<form><input name="x" value=""></form>';
         restoreFormState();
         // Without form id, value should NOT be restored
         expect(document.querySelector('input[name="x"]').value).toBe('');
@@ -1686,8 +1775,7 @@ describe('saveFormState / restoreFormState', () => {
     });
 
     it('skips missing forms on restore', () => {
-        document.body.innerHTML =
-            '<form id="gone"><input name="x" value="val"></form>';
+        document.body.innerHTML = '<form id="gone"><input name="x" value="val"></form>';
         saveFormState();
 
         document.body.innerHTML = '<div>no form here</div>';
@@ -1696,18 +1784,15 @@ describe('saveFormState / restoreFormState', () => {
     });
 
     it('clears saved state after restore', () => {
-        document.body.innerHTML =
-            '<form id="f"><input name="x" value="saved"></form>';
+        document.body.innerHTML = '<form id="f"><input name="x" value="saved"></form>';
         saveFormState();
 
-        document.body.innerHTML =
-            '<form id="f"><input name="x" value=""></form>';
+        document.body.innerHTML = '<form id="f"><input name="x" value=""></form>';
         restoreFormState();
         expect(document.querySelector('input').value).toBe('saved');
 
         // Restore again -- should be no-op since state was cleared
-        document.body.innerHTML =
-            '<form id="f"><input name="x" value="empty"></form>';
+        document.body.innerHTML = '<form id="f"><input name="x" value="empty"></form>';
         restoreFormState();
         expect(document.querySelector('input').value).toBe('empty');
     });
@@ -1724,21 +1809,18 @@ describe('saveFormState / restoreFormState edge cases', () => {
         saveFormState();
 
         // Simulate DOM replacement -- unchecked by default
-        document.body.innerHTML =
-            '<form id="f"><input type="checkbox" name="agree"></form>';
+        document.body.innerHTML = '<form id="f"><input type="checkbox" name="agree"></form>';
         restoreFormState();
         expect(document.querySelector('input[name="agree"]').checked).toBe(true);
     });
 
     it('unchecks checkboxes absent from saved state', () => {
         // Checkbox unchecked → FormData omits it → field NOT in saved fields
-        document.body.innerHTML =
-            '<form id="f"><input type="checkbox" name="opt"></form>';
+        document.body.innerHTML = '<form id="f"><input type="checkbox" name="opt"></form>';
         saveFormState();
 
         // After replace, checkbox might be pre-checked by server HTML
-        document.body.innerHTML =
-            '<form id="f"><input type="checkbox" name="opt" checked></form>';
+        document.body.innerHTML = '<form id="f"><input type="checkbox" name="opt" checked></form>';
         restoreFormState();
         expect(document.querySelector('input[name="opt"]').checked).toBe(false);
     });
@@ -1799,9 +1881,9 @@ describe('saveFormState / restoreFormState edge cases', () => {
         restoreFormState();
 
         const options = document.querySelectorAll('select[name="colors"] option');
-        expect(options[0].selected).toBe(true);   // red
-        expect(options[1].selected).toBe(false);  // green
-        expect(options[2].selected).toBe(true);   // blue
+        expect(options[0].selected).toBe(true); // red
+        expect(options[1].selected).toBe(false); // green
+        expect(options[2].selected).toBe(true); // blue
     });
 
     it('saves and restores select multiple with single selection', () => {
@@ -1832,8 +1914,7 @@ describe('saveFormState / restoreFormState edge cases', () => {
             '<form id="f"><textarea name="note">hello world</textarea></form>';
         saveFormState();
 
-        document.body.innerHTML =
-            '<form id="f"><textarea name="note"></textarea></form>';
+        document.body.innerHTML = '<form id="f"><textarea name="note"></textarea></form>';
         restoreFormState();
         expect(document.querySelector('textarea[name="note"]').value).toBe('hello world');
     });
@@ -1847,8 +1928,7 @@ describe('saveFormState / restoreFormState edge cases', () => {
 
     it('preserves defaults for fields not in saved state', () => {
         // Save form with only one field
-        document.body.innerHTML =
-            '<form id="f"><input name="a" value="saved"></form>';
+        document.body.innerHTML = '<form id="f"><input name="a" value="saved"></form>';
         saveFormState();
 
         // After replace, form has a new field not in saved data
@@ -1874,7 +1954,7 @@ describe('saveFormState / restoreFormState edge cases', () => {
         mock.simulateOpen();
         mock.posted.length = 0;
         mod.restoreFormState();
-        const changeMsgs = mock.getSentMessages().filter(s => s[1] === 'validate');
+        const changeMsgs = mock.getSentMessages().filter((s) => s[1] === 'validate');
         expect(changeMsgs).toHaveLength(1);
         expect(changeMsgs[0][2]).toEqual({ x: 'val' });
         mock.restore();
@@ -1897,8 +1977,8 @@ describe('saveFormState / restoreFormState edge cases', () => {
         mod.restoreFormState();
         const sent = mock.getSentMessages();
         // Event name should be "my_change", not the raw "[0,\"my_change\"]"
-        const correct = sent.filter(s => s[1] === 'my_change');
-        const raw = sent.filter(s => typeof s[1] === 'string' && s[1].startsWith('['));
+        const correct = sent.filter((s) => s[1] === 'my_change');
+        const raw = sent.filter((s) => typeof s[1] === 'string' && s[1].startsWith('['));
         expect(correct).toHaveLength(1);
         expect(raw).toHaveLength(0);
         mock.restore();
@@ -1919,7 +1999,7 @@ describe('saveFormState / restoreFormState edge cases', () => {
         mock.simulateOpen();
         mock.posted.length = 0;
         mod.restoreFormState();
-        const changeMsgs = mock.getSentMessages().filter(s => s[1] === 'validate');
+        const changeMsgs = mock.getSentMessages().filter((s) => s[1] === 'validate');
         expect(changeMsgs).toHaveLength(0);
         mock.restore();
     });
@@ -1931,7 +2011,9 @@ describe('saveFormState / restoreFormState edge cases', () => {
 
 describe('connection CSS classes', () => {
     let mock;
-    afterEach(() => { if (mock) mock.restore(); });
+    afterEach(() => {
+        if (mock) mock.restore();
+    });
 
     it('adds az-connected on open and az-disconnected on close', async () => {
         vi.resetModules();
@@ -1954,8 +2036,7 @@ describe('connection CSS classes', () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
 
-        document.body.innerHTML =
-            '<form id="f"><input name="x" value="saved"></form>';
+        document.body.innerHTML = '<form id="f"><input name="x" value="saved"></form>';
 
         mock = setupMockWorker(mod);
         mock.simulateOpen();
@@ -1963,8 +2044,7 @@ describe('connection CSS classes', () => {
 
         // After abnormal close, form state should be saved
         // Verify by replacing DOM and restoring
-        document.body.innerHTML =
-            '<form id="f"><input name="x" value=""></form>';
+        document.body.innerHTML = '<form id="f"><input name="x" value=""></form>';
         mock.simulateOpen(true); // reconnect
         mock.simulateMessage(null, null, true); // firstAfterReconnect
         expect(document.querySelector('input[name="x"]').value).toBe('saved');
@@ -1974,16 +2054,14 @@ describe('connection CSS classes', () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
 
-        document.body.innerHTML =
-            '<form id="f"><input name="x" value="saved"></form>';
+        document.body.innerHTML = '<form id="f"><input name="x" value="saved"></form>';
 
         mock = setupMockWorker(mod);
         mock.simulateOpen();
         mock.simulateClose(1000);
 
         // Replace DOM -- form state should NOT be restored
-        document.body.innerHTML =
-            '<form id="f"><input name="x" value=""></form>';
+        document.body.innerHTML = '<form id="f"><input name="x" value=""></form>';
         mock.simulateOpen(true);
         mock.simulateMessage(null, null, true);
         expect(document.querySelector('input[name="x"]').value).toBe('');
@@ -2023,7 +2101,9 @@ describe('connection params', () => {
             return {
                 postMessage: (d) => posted.push(d),
                 set onmessage(_) {},
-                get onmessage() { return null; },
+                get onmessage() {
+                    return null;
+                },
             };
         };
         mod.connect('/ws');
@@ -2041,7 +2121,9 @@ describe('connection params', () => {
             return {
                 postMessage: (d) => posted.push(d),
                 set onmessage(_) {},
-                get onmessage() { return null; },
+                get onmessage() {
+                    return null;
+                },
             };
         };
         mod.connect('/ws', { locale: 'en' });
@@ -2062,7 +2144,9 @@ describe('pushEvent', () => {
     /** @type {ReturnType<typeof setupMockWorker>} */
     let mock;
 
-    afterEach(() => { if (mock) mock.restore(); });
+    afterEach(() => {
+        if (mock) mock.restore();
+    });
 
     it('sends event targeting the root az-view with null payload when omitted', async () => {
         vi.resetModules();
@@ -2101,7 +2185,7 @@ describe('pushEvent', () => {
 
         const msgs = mock.getSentMessages();
         // target is null/undefined since no [az-view] element exists
-        const msg = msgs.find(m => m[1] === 'orphan_event');
+        const msg = msgs.find((m) => m[1] === 'orphan_event');
         expect(msg).toBeTruthy();
         expect(msg[0]).toBeNull();
     });
@@ -2111,7 +2195,9 @@ describe('pushEventTo', () => {
     /** @type {ReturnType<typeof setupMockWorker>} */
     let mock;
 
-    afterEach(() => { if (mock) mock.restore(); });
+    afterEach(() => {
+        if (mock) mock.restore();
+    });
 
     it('sends event targeting a specific view with null payload when omitted', async () => {
         vi.resetModules();
@@ -2166,7 +2252,10 @@ describe('navigation scroll', () => {
     });
 
     afterEach(() => {
-        if (mock) { mock.restore(); mock = /** @type {any} */ (null); }
+        if (mock) {
+            mock.restore();
+            mock = /** @type {any} */ (null);
+        }
         if (scrollSpy) scrollSpy.mockRestore();
         Element.prototype.scrollIntoView = origScrollIntoView;
         history.replaceState(null, '', originalHref);
@@ -2179,7 +2268,9 @@ describe('navigation scroll', () => {
         if (noscroll) a.setAttribute('az-noscroll', '');
         document.body.appendChild(a);
         const evt = new MouseEvent('click', {
-            bubbles: true, cancelable: true, button: 0,
+            bubbles: true,
+            cancelable: true,
+            button: 0,
             ctrlKey: modifier === 'ctrl',
             metaKey: modifier === 'meta',
             shiftKey: modifier === 'shift',
@@ -2249,7 +2340,9 @@ describe('navigation scroll', () => {
         // exist when OP_REPLACE runs.
         setupView('page', '<section id="section">x</section>');
         clickLink('/next#section');
-        mod.applyOps([[OP.REPLACE, 'page', '<div id="page" az-view><section id="section">x</section></div>']]);
+        mod.applyOps([
+            [OP.REPLACE, 'page', '<div id="page" az-view><section id="section">x</section></div>'],
+        ]);
 
         // Verify scrollIntoView fired exactly once, on the current #section.
         const sivMock = /** @type {any} */ (Element.prototype.scrollIntoView).mock;
@@ -2274,7 +2367,7 @@ describe('navigation scroll', () => {
         mod.applyOps([[OP.REPLACE, 'page', '<div id="page" az-view></div>']]);
 
         expect(scrollSpy).not.toHaveBeenCalled();
-        expect(history.state && history.state._azScroll).toBeFalsy();
+        expect(history.state?._azScroll).toBeFalsy();
         // Replace still re-renders the destination route -- server must be notified.
         const msgs = mock.getSentMessages();
         expect(msgs).toContainEqual(['navigate', { path: '/to' }]);
@@ -2323,7 +2416,9 @@ describe('navigation scroll', () => {
         const popEvent = new PopStateEvent('popstate', { state: null });
         window.dispatchEvent(popEvent);
         setupView('page', '<section id="target">x</section>');
-        mod.applyOps([[OP.REPLACE, 'page', '<div id="page" az-view><section id="target">x</section></div>']]);
+        mod.applyOps([
+            [OP.REPLACE, 'page', '<div id="page" az-view><section id="target">x</section></div>'],
+        ]);
 
         expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
     });

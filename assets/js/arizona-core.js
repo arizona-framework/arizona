@@ -62,9 +62,10 @@ function resolveHtml(payload) {
         if (_onPersist) _onPersist(f, entry);
     }
     const cached = fpCache.get(f);
-    if (!cached) throw new Error('arizona: unknown template fingerprint "' + f + '" (statics not cached)');
+    if (!cached)
+        throw new Error(`arizona: unknown template fingerprint "${f}" (statics not cached)`);
     if (payload.t === EACH) {
-        return payload.d.map(itemD => zipTemplate(cached.s, itemD)).join('');
+        return payload.d.map((itemD) => zipTemplate(cached.s, itemD)).join('');
     }
     return zipTemplate(cached.s, payload.d);
 }
@@ -83,13 +84,13 @@ function zipTemplate(statics, dynamics) {
         if (Array.isArray(d)) {
             for (let j = 0; j < d.length; j++) {
                 const item = d[j];
-                html += (item !== null && typeof item === 'object' && item.f !== undefined)
-                    ? resolveHtml(item) : item;
+                html +=
+                    item !== null && typeof item === 'object' && item.f !== undefined
+                        ? resolveHtml(item)
+                        : item;
             }
         } else {
-            html += (d !== null && typeof d === 'object' && d.f !== undefined)
-                ? resolveHtml(d)
-                : d;
+            html += d !== null && typeof d === 'object' && d.f !== undefined ? resolveHtml(d) : d;
         }
         html += statics[i + 1];
     }
@@ -107,4 +108,4 @@ function backoff(attempt) {
     return Math.round(base * (0.8 + Math.random() * 0.4));
 }
 
-export { resolveHtml, zipTemplate, backoff, fpCache, loadFpEntries, setOnPersist };
+export { backoff, fpCache, loadFpEntries, resolveHtml, setOnPersist, zipTemplate };

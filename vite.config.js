@@ -1,9 +1,9 @@
-import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
-import { defineConfig, createLogger } from 'vite';
-import license from 'rollup-plugin-license';
+import { resolve } from 'node:path';
 import filesize from 'rollup-plugin-filesize';
+import license from 'rollup-plugin-license';
 import { visualizer } from 'rollup-plugin-visualizer';
+import { createLogger, defineConfig } from 'vite';
 
 const require = createRequire(import.meta.url);
 const pkg = require('./package.json');
@@ -29,12 +29,14 @@ export default defineConfig(({ mode }) => ({
         }),
         filesize({ showBrotliSize: true }),
         ...(process.env.ANALYZE === 'true'
-            ? [visualizer({
-                  filename: resolve(import.meta.dirname, 'build-analysis.html'),
-                  open: true,
-                  gzipSize: true,
-                  brotliSize: true,
-              })]
+            ? [
+                  visualizer({
+                      filename: resolve(import.meta.dirname, 'build-analysis.html'),
+                      open: true,
+                      gzipSize: true,
+                      brotliSize: true,
+                  }),
+              ]
             : []),
     ],
     build: {
@@ -70,7 +72,7 @@ export default defineConfig(({ mode }) => ({
                 'arizona-reloader': resolve(import.meta.dirname, 'assets/js/arizona-reloader.js'),
             },
             formats: ['es'],
-            fileName: (_format, entryName) => entryName + '.min.js',
+            fileName: (_format, entryName) => `${entryName}.min.js`,
         },
     },
     test: {
