@@ -180,7 +180,7 @@ render_to_iolist(Handler, Opts) ->
         undefined ->
             PageHTML;
         {LayoutMod, LayoutFun} ->
-            LayoutTmpl = apply(LayoutMod, LayoutFun, [B1#{inner_content => PageHTML}]),
+            LayoutTmpl = LayoutMod:LayoutFun(B1#{inner_content => PageHTML}),
             render_to_iolist(LayoutTmpl)
     end.
 

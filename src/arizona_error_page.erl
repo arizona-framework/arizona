@@ -176,7 +176,7 @@ format_file_errors(File, Errors) ->
 
 format_one_error({Location, Mod, Reason}) ->
     Line = erl_anno:line(Location),
-    Msg = apply(Mod, format_error, [Reason]),
+    Msg = Mod:format_error(Reason),
     io_lib:format("  line ~b: ~ts", [Line, Msg]).
 
 format_loc(Info) ->
