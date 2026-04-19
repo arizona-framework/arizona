@@ -10,7 +10,7 @@ optionally invokes a user callback).
 ## Usage
 
 ```erlang
-1> arizona_watcher:watch("/home/me/myapp/src", #{
+1> arizona_watcher:start_link("/home/me/myapp/src", #{
        patterns => [".*\\.erl$"],
        debounce => 200,
        callback => fun(Files) -> io:format("changed: ~p~n", [Files]) end
@@ -42,7 +42,7 @@ with the OS process's `getcwd`.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([watch/2]).
+-export([start_link/2]).
 -export([broadcast/1]).
 
 %% --------------------------------------------------------------------
@@ -59,7 +59,7 @@ with the OS process's `getcwd`.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([watch/2, broadcast/1]).
+-ignore_xref([start_link/2, broadcast/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -99,11 +99,14 @@ Starts a watcher process for `Dir` with the given options.
 Errors with `{not_a_directory, Dir}` if the path is not an existing
 directory.
 """.
--spec watch(Dir, Opts) -> {ok, pid()} | {error, term()} when
+-spec start_link(Dir, Opts) -> {ok, pid()} | {error, term()} when
     Dir :: string(),
     Opts :: map().
-watch(Dir, Opts) ->
-    gen_server:start(?MODULE, {Dir, Opts}, []).
+start_link(Dir, Opts) ->
+    case filelib:is_dir(Dir) of
+        true -> gen_server:start_link(?MODULE, {Dir, Opts}, []);
+        false -> {error, {not_a_directory, Dir}}
+    end.
 
 -doc """
 Broadcasts a `{arizona_watcher, Files}` message on the
@@ -121,33 +124,28 @@ broadcast(Files) ->
 %% gen_server Callbacks
 %% --------------------------------------------------------------------
 
--spec init({Dir, Opts}) -> {ok, state()} | {stop, term()} when
+-spec init({Dir, Opts}) -> {ok, state()} when
     Dir :: string(),
     Opts :: map().
 init({Dir, Opts}) ->
-    case filelib:is_dir(Dir) of
-        true ->
-            AbsDir = filename:absname(Dir),
-            Patterns = maps:get(patterns, Opts, [".*"]),
-            Compiled = [compile_pattern(P) || P <:- Patterns],
-            Callback = maps:get(callback, Opts, undefined),
-            DebounceMs = maps:get(debounce, Opts, 100),
-            Name = watcher_name(AbsDir),
-            SupName = list_to_atom(atom_to_list(Name) ++ "sup"),
-            {ok, _} = fs:start_link(Name, AbsDir),
-            fs:subscribe(Name),
-            {ok, #state{
-                abs_dir = AbsDir,
-                fs_sup = SupName,
-                compiled = Compiled,
-                callback = Callback,
-                debounce_ms = DebounceMs,
-                debounce_timer = undefined,
-                pending_files = sets:new([{version, 2}])
-            }};
-        false ->
-            {stop, {not_a_directory, Dir}}
-    end.
+    AbsDir = filename:absname(Dir),
+    Patterns = maps:get(patterns, Opts, [".*"]),
+    Compiled = [compile_pattern(P) || P <:- Patterns],
+    Callback = maps:get(callback, Opts, undefined),
+    DebounceMs = maps:get(debounce, Opts, 100),
+    Name = watcher_name(AbsDir),
+    SupName = list_to_atom(atom_to_list(Name) ++ "sup"),
+    {ok, _} = fs:start_link(Name, AbsDir),
+    ok = fs:subscribe(Name),
+    {ok, #state{
+        abs_dir = AbsDir,
+        fs_sup = SupName,
+        compiled = Compiled,
+        callback = Callback,
+        debounce_ms = DebounceMs,
+        debounce_timer = undefined,
+        pending_files = sets:new([{version, 2}])
+    }}.
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.

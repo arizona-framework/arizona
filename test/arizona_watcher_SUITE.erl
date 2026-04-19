@@ -91,7 +91,7 @@ end_per_testcase(_TC, Config) ->
 watch_bad_dir(Config) when is_list(Config) ->
     ?assertMatch(
         {error, {not_a_directory, _}},
-        arizona_watcher:watch(
+        arizona_watcher:start_link(
             "/nonexistent_" ++ integer_to_list(erlang:unique_integer([positive])), #{}
         )
     ).
@@ -273,7 +273,7 @@ init_watcher(Config, Opts) ->
             true -> Opts;
             false -> Opts#{callback => fun(Files) -> Self ! {cb, Files} end}
         end,
-    {ok, W} = arizona_watcher:watch(Dir, WatcherOpts),
+    {ok, W} = arizona_watcher:start_link(Dir, WatcherOpts),
     [{watcher, W}, {tmp_dir, Dir} | Config].
 
 stop_watcher(Config) ->

@@ -177,6 +177,55 @@ Open <http://localhost:4040> and click the buttons -- the server renders
 the initial HTML, then pushes minimal diffs over WebSocket as the count
 changes.
 
+## Configuration
+
+As an alternative to starting the listener imperatively from your own
+`start/2` callback (step 4 above), you can add `arizona` to your
+application's `applications` list and drive boot from `sys.config`.
+
+In your app's `.app.src`:
+
+```erlang
+{applications, [kernel, stdlib, cowboy, arizona]}
+```
+
+In `config/sys.config`:
+
+```erlang
+[{arizona, [
+    {server, #{
+        scheme => http,                               %% http | https
+        transport_opts => [{port, 4040}],
+        proto_opts => #{stream_handlers => [cowboy_compress_h, cowboy_stream_h]},
+        routes => [
+            {live, <<"/">>, my_page, #{
+                layout => {my_layout, render},
+                bindings => #{id => <<"page">>, title => <<"Counter demo">>}
+            }},
+            {ws, <<"/ws">>, #{}},
+            {asset, <<"/assets">>, {priv_dir, arizona, "static/assets/js"}}
+        ]
+    }},
+    %% Dev-mode file watchers -- omit in production
+    {reloader, #{
+        enabled => true,
+        rules => [
+            #{directory => "src",
+              patterns => [".*\\.erl$"],
+              callback => fun arizona_reloader:reload_erl/1},
+            #{directory => "priv/static",
+              patterns => [".*\\.css$"],
+              callback => fun arizona_reloader:reload_css/1}
+        ]
+    }}
+]}].
+```
+
+On boot, arizona starts `arizona_pubsub`, spawns one watcher per
+reloader rule (if `enabled`), and -- if `server` is set -- launches a
+Cowboy listener named `arizona_http`. Both `server` and `reloader` keys
+are optional: omit either to skip that subsystem.
+
 ## Documentation
 
 See [docs/architecture.md](docs/architecture.md) for the full architecture reference.

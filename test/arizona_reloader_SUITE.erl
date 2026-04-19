@@ -207,7 +207,7 @@ broadcast_dead_member(Config) when is_list(Config) ->
 watcher_triggers_reload(Config) ->
     Dir = proplists:get_value(tmp_dir, Config),
     arizona_reloader:join(self()),
-    {ok, W} = arizona_watcher:watch(Dir, #{
+    {ok, W} = arizona_watcher:start_link(Dir, #{
         debounce => 30,
         callback => fun(_Files) -> arizona_reloader:broadcast() end
     }),
@@ -222,7 +222,7 @@ watcher_triggers_reload(Config) ->
 watch_delegates_to_watcher(Config) ->
     Dir = proplists:get_value(tmp_dir, Config),
     Self = self(),
-    {ok, W} = arizona_watcher:watch(Dir, #{
+    {ok, W} = arizona_watcher:start_link(Dir, #{
         callback => fun(Files) -> Self ! {cb, Files} end,
         debounce => 30
     }),

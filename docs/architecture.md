@@ -145,7 +145,7 @@ Pure stream data structure -- create, mutate, and query streams. The `#stream{}`
 
 File watcher gen_server -- subscribes to `fs` events for a directory, debounces, calls optional callback, broadcasts changed files via `arizona_pubsub`.
 
-- `watch(Dir, Opts)` -- spawns a gen_server that subscribes to `fs` events for `Dir`. Options: `patterns` (list of regex strings, default `[".*"]`), `callback` (fun receiving list of changed file paths), `debounce` (ms, default 100). On debounce fire: calls callback, then `broadcast/1`
+- `start_link(Dir, Opts)` -- starts a linked gen_server that subscribes to `fs` events for `Dir`. Options: `patterns` (list of regex strings, default `[".*"]`), `callback` (fun receiving list of changed file paths), `debounce` (ms, default 100). On debounce fire: calls callback, then `broadcast/1`
 - `broadcast(Files)` -- broadcasts `{arizona_watcher, Files}` via `arizona_pubsub` on channel `arizona_watcher`
 
 ## API -- `arizona_dev.erl`
