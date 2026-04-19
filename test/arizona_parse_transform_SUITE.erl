@@ -7,6 +7,7 @@
     az_each_basic/1,
     az_each_inside_html/1,
     each_with_named_fun_ref/1,
+    each_with_named_fun_ref_arity_2/1,
     each_with_remote_fun_ref/1,
     az_html_dynamic_attr/1,
     az_html_dynamic/1,
@@ -204,6 +205,7 @@ groups() ->
             template2_inner_template1,
             template2_empty_list_render,
             each_with_named_fun_ref,
+            each_with_named_fun_ref_arity_2,
             each_with_remote_fun_ref
         ]},
         %% Tests 40-67: integration, fragments, patterns, nodiff, bool attrs
@@ -2758,6 +2760,22 @@ each_with_named_fun_ref(Config) when is_list(Config) ->
     ?assert(is_function(DFun, 1)),
     [{_, Fun, _}] = DFun(<<"a">>),
     ?assertEqual(<<"row:a">>, Fun()).
+
+%% each/2 accepts 2-arity fun references for stream/map sources.
+each_with_named_fun_ref_arity_2(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_named_ref_2). "
+        "-export([render/1, row/2]). "
+        "row(Item, Key) -> <<Key/binary, \"=\", Item/binary>>. "
+        "render(Bindings) -> "
+        "    arizona_template:each(fun row/2, "
+        "        arizona_template:get(items, Bindings, [])). "
+    ),
+    Tmpl = maps:get(template, Mod:render(#{items => []})),
+    DFun = maps:get(d, Tmpl),
+    ?assert(is_function(DFun, 2)),
+    [{_, Fun, _}] = DFun(<<"v">>, <<"k">>),
+    ?assertEqual(<<"k=v">>, Fun()).
 
 %% each/2 accepts `fun Mod:Name/Arity` remote references too.
 each_with_remote_fun_ref(Config) when is_list(Config) ->
