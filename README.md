@@ -226,6 +226,62 @@ reloader rule (if `enabled`), and -- if `server` is set -- launches a
 Cowboy listener named `arizona_http`. Both `server` and `reloader` keys
 are optional: omit either to skip that subsystem.
 
+## Navigation
+
+SPA-style client-side navigation is triggered by the `az-navigate`
+attribute on anchor elements or by the `arizona_js:navigate/1,2`
+effect returned from handlers.
+
+```erlang
+%% In a template
+{a, [{href, ~"/settings"}, az_navigate], [~"Settings"]}
+
+%% From a handler effect
+handle_event(~"go", _Payload, Bindings) ->
+    {Bindings, #{}, [arizona_js:navigate(~"/settings")]}.
+```
+
+### Scroll behavior
+
+- **Push nav** (new entry): scrolls to the top, or to a `#hash` target
+  if the URL has one.
+- **Back**: restores the scroll position the user had on the previous
+  page.
+- **Forward after back**: scrolls to the top (restoring forward-nav
+  position is a deliberate non-goal for this release).
+- **Modifier clicks** (`ctrl`, `cmd`, `shift`, `alt`, middle-click) on
+  `az-navigate` links fall through to the browser's default so users
+  can open in a new tab or window.
+- **Same-path hash** (only the fragment changes): URL is updated and
+  the page scrolls to the hash target without a server round-trip.
+
+### Replace semantics
+
+Use `arizona_js:navigate(Path, #{replace => true})` for in-place URL
+updates -- pagination query strings, sort state, canonical paths.
+Replace updates the URL without adding a history entry and **preserves
+scroll position** (it's an in-place swap, not a fresh nav).
+
+```erlang
+%% Update the URL to reflect filter state without pushing a history entry
+arizona_js:navigate(<<"/products?category=", Cat/binary>>, #{replace => true})
+```
+
+### Opt-outs
+
+Per-link: add `az-noscroll` to an anchor to skip the scroll reset on
+that navigation.
+
+```erlang
+{a, [{href, ~"/feed"}, az_navigate, az_noscroll], [~"Refresh feed"]}
+```
+
+Per-effect: pass `#{noscroll => true}` to `arizona_js:navigate/2`.
+
+```erlang
+arizona_js:navigate(~"/feed", #{noscroll => true})
+```
+
 ## Documentation
 
 See [docs/architecture.md](docs/architecture.md) for the full architecture reference.

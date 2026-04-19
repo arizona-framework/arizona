@@ -948,12 +948,14 @@ function restoreFormState() {
 }
 
 /**
- * Delegate a DOM event type via document-level listener.
+ * Delegate a DOM event type via document-level listener. Bound to the supplied
+ * AbortSignal so all delegated listeners can be torn down together.
  * Key filtering is handled by the JS_ON_KEY command inside executeJS,
  * not by attribute name suffixes.
  * @param {string} eventType
+ * @param {AbortSignal} signal
  */
-function handleEvent(eventType) {
+function handleEvent(eventType, signal) {
     document.addEventListener(eventType, (e) => {
         const el = /** @type {Element} */ (e.target).closest('[az-' + eventType + ']');
         if (!el || !_connected) return;
@@ -961,24 +963,36 @@ function handleEvent(eventType) {
         const raw = el.getAttribute('az-' + eventType);
         if (!raw) return;
         executeJS(el, e, JSON.parse(raw));
-    });
+    }, { signal });
 }
 
 /**
  * Bootstrap: spawn Worker, set up document-level event delegation for all
  * supported event types, and wire up form submission and drag-and-drop.
+ *
+ * Returns a `disconnect` function that tears down every listener this call
+ * registered and terminates the Worker. Idempotent -- calling it twice is
+ * a no-op. Useful for tests that spin Arizona up and down repeatedly, and
+ * for host apps that need to shut Arizona down on route change.
+ *
  * @param {string} endpoint
+ * @param {Object<string, unknown>} [params]
+ * @returns {() => void} disconnect
  */
 function connect(endpoint, params = {}) {
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const prevScrollRestoration = /** @type {any} */ (history).scrollRestoration;
+
     // Event delegation -- one document listener per event type, attributes on
     // elements opt them in (e.g. az-click="increment", az-keydown-enter="submit").
-    handleEvent('click');
-    handleEvent('change');
-    handleEvent('input');
-    handleEvent('keydown');
-    handleEvent('keyup');
-    handleEvent('focusin');
-    handleEvent('focusout');
+    handleEvent('click', signal);
+    handleEvent('change', signal);
+    handleEvent('input', signal);
+    handleEvent('keydown', signal);
+    handleEvent('keyup', signal);
+    handleEvent('focusin', signal);
+    handleEvent('focusout', signal);
 
     // Form submission: flush any pending debounced/throttled inputs first so
     // the server sees final values, then execute JS commands from az-submit.
@@ -991,7 +1005,7 @@ function connect(endpoint, params = {}) {
         const raw = form.getAttribute('az-submit');
         if (raw) executeJS(form, e, JSON.parse(raw));
         if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
-    });
+    }, { signal });
 
     // Take over scroll restoration so the browser doesn't scroll to a stale
     // position before OP_REPLACE swaps in the new content. See the block
@@ -1027,7 +1041,7 @@ function connect(endpoint, params = {}) {
         }
 
         navigateTo(pathname, hash, { noscroll, fullUrl: href });
-    });
+    }, { signal });
 
     // Browser back/forward: send navigate on popstate so the server
     // renders the correct page for the current URL. Restore the saved
@@ -1040,7 +1054,7 @@ function connect(endpoint, params = {}) {
         _pendingScroll = { kind: 'pop', hash, saved };
         workerSend(JSON.stringify(['navigate', { path }]));
         if (_worker) _worker.postMessage([3, path]);
-    });
+    }, { signal });
 
     // Drag-and-drop: uses az-key on draggable items and az-drop on the
     // container. dragstart stores the item's key; drop executes the az-drop
@@ -1048,10 +1062,10 @@ function connect(endpoint, params = {}) {
     document.addEventListener('dragstart', (e) => {
         const keyEl = /** @type {Element} */ (e.target).closest('[az-key]');
         if (keyEl && e.dataTransfer) e.dataTransfer.setData('text/plain', keyEl.getAttribute('az-key') || '');
-    });
+    }, { signal });
     document.addEventListener('dragover', (e) => {
         if (/** @type {Element} */ (e.target).closest('[az-key]')) e.preventDefault();
-    });
+    }, { signal });
     document.addEventListener('drop', (e) => {
         const dropTarget = /** @type {Element} */ (e.target).closest('[az-key]');
         if (!dropTarget) return;
@@ -1061,7 +1075,7 @@ function connect(endpoint, params = {}) {
         const raw = container.getAttribute('az-drop');
         if (!raw) return;
         executeJS(container, e, JSON.parse(raw));
-    });
+    }, { signal });
 
     // Build full WS URL -- Worker can't access location.*
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1133,6 +1147,29 @@ function connect(endpoint, params = {}) {
             get onmessage() { return _onmessageHook; },
         };
     }
+
+    let disconnected = false;
+    return function disconnect() {
+        if (disconnected) return;
+        disconnected = true;
+        controller.abort();
+        if (_worker) { _worker.terminate(); _worker = null; }
+        _connected = false;
+        _pendingScroll = null;
+        _savedForms.clear();
+        // Debounce/throttle timers live in a WeakMap keyed by element and
+        // aren't iterable. They all guard on `_connected` inside their fun,
+        // so after setting `_connected = false` above a late-firing timer
+        // won't actually send anything -- leave them to expire naturally.
+        document.documentElement.classList.remove('az-connected');
+        document.documentElement.classList.remove('az-disconnected');
+        if ('scrollRestoration' in history) {
+            /** @type {any} */ (history).scrollRestoration = prevScrollRestoration;
+        }
+        if (typeof window !== 'undefined') {
+            delete /** @type {any} */ (window)._ws;
+        }
+    };
 }
 
 export { connect, applyOps, applyEffects, executeJS, resolveEl, pushEvent, pushEventTo, OP, hooks, mountHooks, saveFormState, restoreFormState };

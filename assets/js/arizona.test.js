@@ -38,7 +38,7 @@ function setupMockWorker(mod) {
     const OrigWorker = globalThis.Worker;
     globalThis.Worker = function () { return mockWorkerInstance; };
 
-    mod.connect('/ws');
+    const disconnect = mod.connect('/ws');
 
     return {
         worker: mockWorkerInstance,
@@ -61,7 +61,9 @@ function setupMockWorker(mod) {
                 .filter(d => d[0] === 1)
                 .map(d => JSON.parse(d[1]));
         },
+        /** Tear down listeners the module registered, terminate the worker, restore Worker ctor. */
         restore() {
+            disconnect();
             globalThis.Worker = OrigWorker;
         },
     };
@@ -2236,7 +2238,7 @@ describe('navigation scroll', () => {
         expect(scrollSpy).not.toHaveBeenCalled();
     });
 
-    it('push nav with #hash scrolls into the target element', async () => {
+    it('push nav with #hash scrolls into the #section element specifically', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         mock = setupMockWorker(mod);
@@ -2249,10 +2251,14 @@ describe('navigation scroll', () => {
         clickLink('/next#section');
         mod.applyOps([[OP.REPLACE, 'page', '<div id="page" az-view><section id="section">x</section></div>']]);
 
-        expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+        // Verify scrollIntoView fired exactly once, on the current #section.
+        const sivMock = /** @type {any} */ (Element.prototype.scrollIntoView).mock;
+        const section = document.getElementById('section');
+        expect(sivMock.calls.length).toBe(1);
+        expect(sivMock.contexts[0]).toBe(section);
     });
 
-    it('replace nav (via JS_NAVIGATE) does not save outgoing scroll and does not reset', async () => {
+    it('replace nav (via JS_NAVIGATE) does not save outgoing scroll, does not reset, but DOES notify the server', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         setupView('page', '<div az="0"></div>');
@@ -2269,6 +2275,26 @@ describe('navigation scroll', () => {
 
         expect(scrollSpy).not.toHaveBeenCalled();
         expect(history.state && history.state._azScroll).toBeFalsy();
+        // Replace still re-renders the destination route -- server must be notified.
+        const msgs = mock.getSentMessages();
+        expect(msgs).toContainEqual(['navigate', { path: '/to' }]);
+    });
+
+    it('JS_NAVIGATE with {noscroll: true} skips the scroll reset on push', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // Push-style (no replace) nav with opts.noscroll should NOT call scrollTo.
+        mod.applyEffects([[10, '/to', { noscroll: true }]]);
+        mod.applyOps([[OP.REPLACE, 'page', '<div id="page" az-view></div>']]);
+
+        expect(scrollSpy).not.toHaveBeenCalled();
+        // But the navigate message is still sent (server still re-renders).
+        const msgs = mock.getSentMessages();
+        expect(msgs).toContainEqual(['navigate', { path: '/to' }]);
     });
 
     it('popstate with saved state restores exact coordinates after OP_REPLACE', async () => {

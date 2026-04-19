@@ -19,8 +19,9 @@ Playwright, split into two directories:
 
 ## Common Test suites
 
+- `arizona_app_SUITE.erl` -- application boot: env-driven server + reloader wiring
 - `arizona_watcher_SUITE.erl` -- file watcher: events, debounce, patterns, broadcast
-- `arizona_dev_SUITE.erl` -- dev relay: pubsub join/broadcast, watcher integration
+- `arizona_reloader_SUITE.erl` -- dev reloader: pubsub join/broadcast, watcher integration
 - `arizona_pubsub_SUITE.erl` -- pubsub: subscribe, broadcast, isolation, cleanup
 
 ## Test handler modules (in `test/`)
@@ -38,4 +39,5 @@ All use `arizona_stateful.hrl` / `arizona_stateless.hrl`.
 - `arizona_chat.erl` -- pubsub cross-tab messaging, stream-based, owner-guarded delete
 - `arizona_datatable.erl` -- stream sort/move/reset, 5 initial rows
 - `arizona_layout.erl` -- stateless layout with `?html`/`az_nodiff`, render/2 with InnerContent
+- `arizona_scroll_home.erl` / `arizona_scroll_about.erl` -- dedicated E2E scroll fixtures (tall content + hash anchor + replace-nav button). Routed at `/scroll-home` and `/scroll-about`; kept off the demo nav to avoid polluting the other E2E cases.
 - `arizona_parse_transform_test.erl` -- parse transform EUnit tests

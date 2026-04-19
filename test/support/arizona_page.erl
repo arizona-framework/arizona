@@ -90,9 +90,7 @@ render(Bindings) ->
                     end,
                     ?get(todos)
                 )
-            ]},
-            %% Tall spacer so E2E scroll-restoration tests have vertical range.
-            {'div', [{id, ~"spacer"}, {style, ~"height: 3000px"}], []}
+            ]}
         ]}
     ).
 

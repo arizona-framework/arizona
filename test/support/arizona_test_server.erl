@@ -25,6 +25,8 @@ start() ->
             layout => Layout
         }},
         {live, <<"/crashable">>, arizona_crashable, #{layout => Layout}},
+        {live, <<"/scroll-home">>, arizona_scroll_home, #{layout => Layout}},
+        {live, <<"/scroll-about">>, arizona_scroll_about, #{layout => Layout}},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}
     ],

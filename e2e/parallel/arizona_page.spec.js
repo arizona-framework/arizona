@@ -1011,45 +1011,101 @@ test.describe('SPA navigation', () => {
     });
 
     test('back after navigate restores prior scroll position', async ({ page }) => {
-        await page.goto('/');
+        // Dedicated scroll test fixtures -- tall enough to scroll.
+        await page.goto('/scroll-home');
         await page.waitForSelector('#status:has-text("Connected")');
         await page.evaluate(() => window.scrollTo(0, 600));
         await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
 
-        // Dispatch the click via evaluate so Playwright's auto-scroll-into-view
-        // doesn't reset scrollY before the click fires.
+        // Seed a link we can click without Playwright's auto-scroll-into-view
+        // (which would reset scrollY before the click fires).
         await page.evaluate(() => {
-            const el = /** @type {HTMLAnchorElement} */ (document.querySelector('a[href="/about"]'));
-            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+            const a = document.createElement('a');
+            a.setAttribute('href', '/scroll-about');
+            a.setAttribute('az-navigate', '');
+            a.id = '__nav_push';
+            document.body.appendChild(a);
+            a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
         });
-        await expect(page.locator('main h1')).toHaveText('About');
+        await expect(page.locator('main h1')).toHaveText('Scroll About');
 
         await page.goBack();
-        await expect(page.locator('main h1')).toHaveText('Welcome');
+        await expect(page.locator('main h1')).toHaveText('Scroll Home');
         await page.waitForFunction(() => window.scrollY > 0, null, { timeout: 2000 }).catch(() => {});
         const y = await page.evaluate(() => window.scrollY);
         expect(Math.abs(y - 600)).toBeLessThanOrEqual(2);
     });
 
-    test('navigate to /about#section scrolls to the anchor', async ({ page }) => {
-        await page.goto('/');
+    test('navigate to /scroll-about#section scrolls to the anchor', async ({ page }) => {
+        await page.goto('/scroll-home');
         await page.waitForSelector('#status:has-text("Connected")');
         await page.evaluate(() => {
             const a = document.createElement('a');
-            a.setAttribute('href', '/about#section');
+            a.setAttribute('href', '/scroll-about#section');
             a.setAttribute('az-navigate', '');
             a.id = '__nav_hash';
-            a.textContent = 'About section';
             document.body.appendChild(a);
             a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
         });
-        await expect(page.locator('main h1')).toHaveText('About');
+        await expect(page.locator('main h1')).toHaveText('Scroll About');
         await page.waitForFunction(() => {
             const el = document.getElementById('section');
             return el && Math.abs(el.getBoundingClientRect().top) < 50;
         }, null, { timeout: 2000 });
         const top = await page.locator('#section').evaluate((el) => el.getBoundingClientRect().top);
         expect(Math.abs(top)).toBeLessThan(50);
+    });
+
+    test('replace nav preserves scroll position', async ({ page }) => {
+        await page.goto('/scroll-home');
+        await page.waitForSelector('#status:has-text("Connected")');
+        await page.evaluate(() => window.scrollTo(0, 500));
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+
+        // Button on the page fires arizona_js:navigate(Path, #{replace => true}).
+        // Native .click() via evaluate avoids Playwright's auto-scroll reset.
+        await page.evaluate(() => {
+            const btn = /** @type {HTMLButtonElement} */ (document.querySelector('#replace-nav'));
+            btn.click();
+        });
+        await page.waitForFunction(() => location.search === '?x=1', null, { timeout: 2000 });
+        const y = await page.evaluate(() => window.scrollY);
+        expect(Math.abs(y - 500)).toBeLessThanOrEqual(2);
+    });
+
+    test('forward after back does not restore scroll (documented non-goal)', async ({ page }) => {
+        // Lock the documented limitation: after back -> forward, the destination
+        // entry has no saved scroll so we fall through to scroll-to-top. If
+        // forward-nav restore is added later, this test will fail and force an
+        // intentional decision about docs + behavior.
+        await page.goto('/scroll-home');
+        await page.waitForSelector('#status:has-text("Connected")');
+        await page.evaluate(() => window.scrollTo(0, 400));
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+
+        await page.evaluate(() => {
+            const a = document.createElement('a');
+            a.setAttribute('href', '/scroll-about');
+            a.setAttribute('az-navigate', '');
+            a.id = '__nav_push';
+            document.body.appendChild(a);
+            a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+        });
+        await expect(page.locator('main h1')).toHaveText('Scroll About');
+        // Scroll on the destination too, so if forward somehow restored we'd see a non-zero value.
+        await page.evaluate(() => window.scrollTo(0, 250));
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+
+        await page.goBack();
+        await expect(page.locator('main h1')).toHaveText('Scroll Home');
+        await page.goForward();
+        await expect(page.locator('main h1')).toHaveText('Scroll About');
+        // Forward restore is a non-goal: destination entry has null state so we scroll-to-top.
+        // Give the OP_REPLACE + applyScroll a moment to settle.
+        await page.waitForFunction(() => location.pathname === '/scroll-about', null, { timeout: 2000 });
+        await page.evaluate(() => new Promise((r) => setTimeout(r, 50)));
+        const y = await page.evaluate(() => window.scrollY);
+        expect(y).toBe(0);
     });
 });
 
