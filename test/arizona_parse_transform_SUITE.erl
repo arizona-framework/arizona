@@ -9,6 +9,9 @@
     each_with_named_fun_ref/1,
     each_with_named_fun_ref_arity_2/1,
     each_with_remote_fun_ref/1,
+    stateless_with_atom_callback/1,
+    stateless_with_fun_ref_callback/1,
+    stateless_with_remote_fun_ref_callback/1,
     az_html_dynamic_attr/1,
     az_html_dynamic/1,
     az_html_nested/1,
@@ -206,7 +209,10 @@ groups() ->
             template2_empty_list_render,
             each_with_named_fun_ref,
             each_with_named_fun_ref_arity_2,
-            each_with_remote_fun_ref
+            each_with_remote_fun_ref,
+            stateless_with_atom_callback,
+            stateless_with_fun_ref_callback,
+            stateless_with_remote_fun_ref_callback
         ]},
         %% Tests 40-67: integration, fragments, patterns, nodiff, bool attrs
         {integration, [parallel], [
@@ -2791,6 +2797,53 @@ each_with_remote_fun_ref(Config) when is_list(Config) ->
     DFun = maps:get(d, Tmpl),
     [{_, Fun, _}] = DFun(42),
     ?assertEqual(<<"42">>, Fun()).
+
+%% The parse transform rewrites `arizona_template:stateless(atom, Props)` into
+%% `arizona_template:stateless(fun atom/1, Props)` so bare atoms and fun
+%% references are interchangeable.
+stateless_with_atom_callback(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_stateless_atom). "
+        "-export([render/1, card/1]). "
+        "card(#{label := L}) -> L. "
+        "render(Bindings) -> "
+        "    arizona_template:stateless(card, #{label => maps:get(label, Bindings)}). "
+    ),
+    #{callback := CB, props := Props} = Mod:render(#{label => <<"ok">>}),
+    ?assert(is_function(CB, 1)),
+    ?assertEqual(<<"ok">>, CB(Props)).
+
+stateless_with_fun_ref_callback(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_stateless_funref). "
+        "-export([render/1, card/1]). "
+        "card(#{label := L}) -> L. "
+        "render(Bindings) -> "
+        "    arizona_template:stateless(fun card/1, #{label => maps:get(label, Bindings)}). "
+    ),
+    #{callback := CB, props := Props} = Mod:render(#{label => <<"ok">>}),
+    ?assert(is_function(CB, 1)),
+    ?assertEqual(<<"ok">>, CB(Props)).
+
+%% Remote fun refs (`fun Mod:Fn/1`) pass through the parse transform unchanged
+%% and work via the runtime `is_function(Callback, 1)` guard.
+stateless_with_remote_fun_ref_callback(Config) when is_list(Config) ->
+    %% Helper module with the callback.
+    _HelperMod = compile_module(
+        "-module(pt_stateless_helper). "
+        "-export([card/1]). "
+        "card(#{label := L}) -> L. "
+    ),
+    Mod = compile_module(
+        "-module(pt_stateless_remote_funref). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:stateless(fun pt_stateless_helper:card/1, "
+        "        #{label => maps:get(label, Bindings)}). "
+    ),
+    #{callback := CB, props := Props} = Mod:render(#{label => <<"hi">>}),
+    ?assert(is_function(CB, 1)),
+    ?assertEqual(<<"hi">>, CB(Props)).
 
 %% Test 97: each/2 with 2-arity fun raises compile-time error.
 invalid_each_fun_arity(Config) when is_list(Config) ->

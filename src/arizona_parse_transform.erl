@@ -233,6 +233,16 @@ transform_node(Node, Module) ->
             Mod =:= arizona_template; Mod =:= az
         ->
             compile_each(FunArg, SourceArg, L, Module);
+        %% Sugar: `arizona_template:stateless(atom, Props)` with a literal atom
+        %% callback is rewritten to `arizona_template:stateless(fun atom/1, Props)`.
+        %% Fun references and other shapes pass through unchanged.
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, stateless}} = Callee, [
+            {atom, AL, Name}, PropsArg
+        ]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            FunRef = {'fun', AL, {function, Name, 1}},
+            {call, L, Callee, [FunRef, PropsArg]};
         _ ->
             N
     end.

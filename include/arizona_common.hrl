@@ -15,5 +15,5 @@
 
 %% Descriptor constructors
 -define(stateful(Handler, Props), arizona_template:stateful(Handler, Props)).
--define(stateless(Fun, Props), arizona_template:stateless(fun Fun/1, Props)).
+-define(stateless(Fun, Props), arizona_template:stateless(Fun, Props)).
 -define(stateless(Module, Fun, Props), arizona_template:stateless(Module, Fun, Props)).
