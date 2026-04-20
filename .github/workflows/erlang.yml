@@ -62,6 +62,7 @@ jobs:
 
     outputs:
       build-cache-key: ${{ steps.set-build-key.outputs.key }}
+      build-cache-prefix: ${{ steps.set-build-key.outputs.prefix }}
       rebar-cache-key: ${{ steps.set-rebar-key.outputs.key }}
 
     steps:
@@ -76,12 +77,13 @@ jobs:
       - name: Set build cache key
         id: set-build-key
         run: |
-          echo "key=\
-          _build-\
-          ${{ runner.os }}-\
-          otp-${{ steps.setup-beam.outputs.otp-version }}-\
-          rebar3-hash-${{ hashFiles('rebar.lock') }}" \
-          >> "${GITHUB_OUTPUT}"
+          os="${{ runner.os }}"
+          otp="${{ steps.setup-beam.outputs.otp-version }}"
+          cfg_hash="${{ hashFiles('rebar.config') }}"
+          lock_hash="${{ hashFiles('rebar.lock') }}"
+          prefix="_build-${os}-otp-${otp}-cfg-${cfg_hash}-"
+          echo "prefix=${prefix}" >> "${GITHUB_OUTPUT}"
+          echo "key=${prefix}lock-${lock_hash}" >> "${GITHUB_OUTPUT}"
 
       - name: Set rebar cache key
         id: set-rebar-key
@@ -99,6 +101,7 @@ jobs:
         with:
           path: _build
           key: ${{ steps.set-build-key.outputs.key }}
+          restore-keys: ${{ steps.set-build-key.outputs.prefix }}
 
       - name: Cache rebar3
         uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
@@ -134,6 +137,7 @@ jobs:
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
+          restore-keys: ${{ needs.cache-erlang.outputs.build-cache-prefix }}
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
@@ -170,6 +174,7 @@ jobs:
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
+          restore-keys: ${{ needs.cache-erlang.outputs.build-cache-prefix }}
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
@@ -189,6 +194,9 @@ jobs:
 
       - name: Test
         run: make test-erl
+
+      - name: Coverage
+        run: make cover-erl
 
   artifacts:
     name: Verify artifacts
@@ -212,6 +220,7 @@ jobs:
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
+          restore-keys: ${{ needs.cache-erlang.outputs.build-cache-prefix }}
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
@@ -299,6 +308,7 @@ jobs:
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
+          restore-keys: ${{ needs.cache-erlang.outputs.build-cache-prefix }}
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
@@ -393,6 +403,7 @@ jobs:
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
+          restore-keys: ${{ needs.cache-erlang.outputs.build-cache-prefix }}
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
