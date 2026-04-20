@@ -103,8 +103,14 @@ test-erl:
 test-js:
 	npx vitest run
 
-test-e2e: build-js
+test-e2e:
 	npx playwright test
+
+test-e2e-parallel:
+	npx playwright test --project parallel
+
+test-e2e-sequential:
+	npx playwright test --project sequential
 
 cover: cover-erl cover-js
 
@@ -112,7 +118,7 @@ cover-erl:
 	rebar3 as test check_cover
 
 cover-js:
-	@echo "No JS coverage configured yet"
+	npx vitest run --coverage
 
 doc: doc-erl doc-js
 

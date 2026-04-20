@@ -11,5 +11,8 @@ rebar3.crashdump
 /playwright-report/
 /playwright/.cache/
 
+# Vitest coverage
+/coverage/
+
 # Build analysis
 /build-analysis.html

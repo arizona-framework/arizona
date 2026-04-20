@@ -57,6 +57,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.4.12",
     "@playwright/test": "1.58.2",
+    "@vitest/coverage-v8": "4.0.18",
     "jsdom": "28.1.0",
     "markdownlint-cli2": "0.22.0",
     "rollup-plugin-filesize": "10.0.0",

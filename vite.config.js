@@ -78,5 +78,16 @@ export default defineConfig(({ mode }) => ({
     test: {
         environment: 'jsdom',
         include: ['assets/**/*.test.js'],
+        coverage: {
+            provider: 'v8',
+            include: ['assets/**/*.js'],
+            exclude: ['assets/**/*.test.js'],
+            thresholds: {
+                statements: 50,
+                branches: 50,
+                functions: 50,
+                lines: 50,
+            },
+        },
     },
 }));
