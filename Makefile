@@ -33,8 +33,11 @@ precommit:
 	$(MAKE) check-fmt check-js
 	$(MAKE) test-erl test-js
 
-compile:
-	rebar3 compile && rebar3 as test compile
+compile: compile-test
+	rebar3 compile
+
+compile-test:
+	rebar3 as test compile
 
 fmt: fmt-erl fmt-js
 

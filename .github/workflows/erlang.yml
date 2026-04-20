@@ -113,8 +113,7 @@ jobs:
             rebar3-${{ runner.os }}-
 
       - name: Compile
-        run: |
-          rebar3 as test compile
+        run: make compile-test
 
   check:
     name: Check
@@ -153,8 +152,7 @@ jobs:
             rebar3-${{ runner.os }}-
 
       - name: Check code
-        run: |
-          rebar3 as test check
+        run: make check-erl
 
   test:
     name: Test
@@ -199,8 +197,7 @@ jobs:
           version: 1.0
 
       - name: Test
-        run: |
-          rebar3 as test test
+        run: make test-erl
 
   artifacts:
     name: Verify artifacts
@@ -332,10 +329,10 @@ jobs:
         run: npm ci
 
       - name: Compile Arizona for test
-        run: rebar3 as test compile
+        run: make compile-test
 
       - name: Run parallel E2E tests
-        run: npm run test:e2e:parallel
+        run: make test-e2e-parallel
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -429,10 +426,10 @@ jobs:
         run: npm ci
 
       - name: Compile Arizona for test
-        run: rebar3 as test compile
+        run: make compile-test
 
       - name: Run sequential E2E tests
-        run: npm run test:e2e:sequential
+        run: make test-e2e-sequential
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0

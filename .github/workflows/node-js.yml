@@ -37,9 +37,7 @@ jobs:
         run: npm ci
 
       - name: Check code
-        run: |
-          npm run format:check
-          npm run lint:js:check
+        run: make check-js
 
   test:
     name: Unit Test
@@ -59,7 +57,7 @@ jobs:
         run: npm ci
 
       - name: Run unit tests with coverage
-        run: npm run test:unit:coverage
+        run: make cover-js
 
   artifacts:
     name: Verify artifacts
@@ -80,5 +78,5 @@ jobs:
 
       - name: Check if build left artifacts
         run: |
-          npm run build
+          make build-js
           git diff --exit-code
