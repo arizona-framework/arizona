@@ -44,9 +44,9 @@ fmt-erl:
 fmt-js:
 	npx biome format --write
 
-check: check-erl check-js
+check: check-erl check-js check-md
 
-check-fast: check-fmt check-js
+check-fast: check-fmt check-js check-md
 
 check-erl:
 	$(MAKE) check-fmt
@@ -73,6 +73,9 @@ check-dialyzer:
 check-js:
 	npx biome check
 	npx -p typescript tsc --noEmit --allowJs --checkJs --strict --target es2020 --module node16 --moduleResolution node16 assets/js/arizona.js assets/js/arizona-core.js assets/js/arizona-worker.js assets/js/arizona-reloader.js
+
+check-md:
+	npm run check:md
 
 build-js:
 	npx vite build

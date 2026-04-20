@@ -47,6 +47,8 @@
     "check:js": "biome check",
     "fix:js": "biome check --write",
     "format:js": "biome format --write",
+    "check:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#_build\" \"#_checkouts\" \"#doc\" \"#.claude\" \"#CLAUDE.md\" \"#AGENTS.md\"",
+    "fix:md": "markdownlint-cli2 --fix \"**/*.md\" \"#node_modules\" \"#_build\" \"#_checkouts\" \"#doc\" \"#.claude\" \"#CLAUDE.md\" \"#AGENTS.md\"",
     "test:e2e": "npx playwright test",
     "test:unit": "vitest run"
   },
@@ -54,6 +56,7 @@
     "@biomejs/biome": "2.4.12",
     "@playwright/test": "1.58.2",
     "jsdom": "28.1.0",
+    "markdownlint-cli2": "0.22.0",
     "rollup-plugin-filesize": "10.0.0",
     "rollup-plugin-license": "3.7.0",
     "rollup-plugin-visualizer": "7.0.1",

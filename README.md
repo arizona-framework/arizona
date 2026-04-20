@@ -2,27 +2,35 @@
 
 ![arizona_256x256](https://github.com/arizona-framework/arizona/assets/35941533/88b76a0c-0dfc-4f99-8608-b0ebd9c9fbd9)
 
-Arizona is a real-time web framework for Erlang/OTP. It renders HTML on the server, diffs changes at the template level, and pushes minimal updates to the browser over WebSocket.
+Arizona is a real-time web framework for Erlang/OTP. It renders HTML on the server, diffs changes at
+the template level, and pushes minimal updates to the browser over WebSocket.
 
-Templates are plain Erlang terms compiled via parse transform. The server owns the state; the client is a thin DOM patcher.
+Templates are plain Erlang terms compiled via parse transform. The server owns the state; the client
+is a thin DOM patcher.
 
 ## Status
 
-Arizona is in `0.x`. The core is functional and covered by tests, but
-the API may change between minor versions. Pin a version in your deps.
+Arizona is in `0.x`. The core is functional and covered by tests, but the API may change between
+minor versions. Pin a version in your deps.
 
 ## Features
 
-- **Server-side rendering + live updates**: SSR for the first page load, WebSocket for real-time changes
-- **Erlang-native templates**: `{Tag, Attrs, Children}` tuples compiled at build time, no separate template language
+- **Server-side rendering + live updates**: SSR for the first page load, WebSocket for real-time
+  changes
+- **Erlang-native templates**: `{Tag, Attrs, Children}` tuples compiled at build time, no separate
+  template language
 - **Compile-time diffing**: fingerprinted statics sent once, only dynamic values cross the wire
-- **Stateful handlers**: `mount/1`, `render/1`, `handle_event/3`, `handle_info/2`, `unmount/1` lifecycle
-- **Per-view messaging**: `?send`/`?send_after` route messages to any stateful handler (root or child)
+- **Stateful handlers**: `mount/1`, `render/1`, `handle_event/3`, `handle_info/2`, `unmount/1`
+  lifecycle
+- **Per-view messaging**: `?send`/`?send_after` route messages to any stateful handler (root or
+  child)
 - **Streams**: keyed collections with insert, delete, update, move, sort, and limit operations
-- **SPA navigation**: client-side routing with `az-navigate`, server renders the new page via WebSocket
+- **SPA navigation**: client-side routing with `az-navigate`, server renders the new page via
+  WebSocket
 - **Connection context**: `?connected` macro distinguishes SSR from live mount
 - **PubSub**: `?subscribe`/`?unsubscribe` for cross-view and cross-tab messaging
-- **Route middlewares**: `fun(Req, Bindings) -> {cont, Req, Bindings} | {halt, Req}` for auth and sessions
+- **Route middlewares**: `fun(Req, Bindings) -> {cont, Req, Bindings} | {halt, Req}` for auth and
+  sessions
 - **On-mount hooks**: per-route `on_mount` pipeline runs before every mount including navigate
 - **Connection params**: URL query params + custom JS params merged into handler bindings
 - **Element hooks**: client-side `mounted`, `updated`, `destroyed` callbacks via `az-hook`
@@ -43,19 +51,18 @@ Add `arizona` to your `rebar.config` dependencies:
 ]}.
 ```
 
-Cowboy is required for the built-in HTTP/WebSocket transport. If you
-write your own `arizona_adapter`, you can skip it.
+Cowboy is required for the built-in HTTP/WebSocket transport. If you write your own
+`arizona_adapter`, you can skip it.
 
 ## Quick start
 
-This walks through a minimal page with an embedded counter: a parent page,
-a child stateful counter, a layout, and the Cowboy server wiring.
+This walks through a minimal page with an embedded counter: a parent page, a child stateful counter,
+a layout, and the Cowboy server wiring.
 
 ### 1. Create the counter component
 
-The counter is a child component. Its `id` and initial `count` come from
-the parent via the `?stateful` macro (see step 2), so `mount/1` just
-passes them through:
+The counter is a child component. Its `id` and initial `count` come from the parent via the
+`?stateful` macro (see step 2), so `mount/1` just passes them through:
 
 ```erlang
 %% src/my_counter.erl
@@ -83,8 +90,8 @@ handle_event(~"dec", _Payload, Bindings) ->
 
 ### 2. Create the parent page
 
-The page is the route's root handler. It receives its own `id` from the
-route's `bindings` (see step 4) and mounts the counter as a child:
+The page is the route's root handler. It receives its own `id` from the route's `bindings` (see
+step 4) and mounts the counter as a child:
 
 ```erlang
 %% src/my_page.erl
@@ -106,8 +113,8 @@ render(Bindings) ->
 
 ### 3. Create the layout
 
-The layout wraps every page with the HTML shell and loads the client
-runtime that connects over WebSocket:
+The layout wraps every page with the HTML shell and loads the client runtime that connects over
+WebSocket:
 
 ```erlang
 %% src/my_layout.erl
@@ -138,9 +145,8 @@ render(Bindings) ->
 
 ### 4. Wire up routes and start Cowboy
 
-Start the listener from your application's `start/2` callback (or from a
-`rebar3 shell` one-liner for experimentation). The page's `id` is supplied
-here via the route's `bindings`:
+Start the listener from your application's `start/2` callback (or from a `rebar3 shell` one-liner
+for experimentation). The page's `id` is supplied here via the route's `bindings`:
 
 ```erlang
 %% src/my_app.erl
@@ -173,15 +179,14 @@ stop(_State) ->
 rebar3 shell
 ```
 
-Open <http://localhost:4040> and click the buttons -- the server renders
-the initial HTML, then pushes minimal diffs over WebSocket as the count
-changes.
+Open <http://localhost:4040> and click the buttons -- the server renders the initial HTML, then
+pushes minimal diffs over WebSocket as the count changes.
 
 ## Configuration
 
-As an alternative to starting the listener imperatively from your own
-`start/2` callback (step 4 above), you can add `arizona` to your
-application's `applications` list and drive boot from `sys.config`.
+As an alternative to starting the listener imperatively from your own `start/2` callback (step 4
+above), you can add `arizona` to your application's `applications` list and drive boot from
+`sys.config`.
 
 In your app's `.app.src`:
 
@@ -221,16 +226,14 @@ In `config/sys.config`:
 ]}].
 ```
 
-On boot, arizona starts `arizona_pubsub`, spawns one watcher per
-reloader rule (if `enabled`), and -- if `server` is set -- launches a
-Cowboy listener named `arizona_http`. Both `server` and `reloader` keys
-are optional: omit either to skip that subsystem.
+On boot, arizona starts `arizona_pubsub`, spawns one watcher per reloader rule (if `enabled`), and
+-- if `server` is set -- launches a Cowboy listener named `arizona_http`. Both `server` and
+`reloader` keys are optional: omit either to skip that subsystem.
 
 ## Navigation
 
-SPA-style client-side navigation is triggered by the `az-navigate`
-attribute on anchor elements or by the `arizona_js:navigate/1,2`
-effect returned from handlers.
+SPA-style client-side navigation is triggered by the `az-navigate` attribute on anchor elements or
+by the `arizona_js:navigate/1,2` effect returned from handlers.
 
 ```erlang
 %% In a template
@@ -243,24 +246,20 @@ handle_event(~"go", _Payload, Bindings) ->
 
 ### Scroll behavior
 
-- **Push nav** (new entry): scrolls to the top, or to a `#hash` target
-  if the URL has one.
-- **Back**: restores the scroll position the user had on the previous
-  page.
-- **Forward after back**: scrolls to the top (restoring forward-nav
-  position is a deliberate non-goal for this release).
-- **Modifier clicks** (`ctrl`, `cmd`, `shift`, `alt`, middle-click) on
-  `az-navigate` links fall through to the browser's default so users
-  can open in a new tab or window.
-- **Same-path hash** (only the fragment changes): URL is updated and
-  the page scrolls to the hash target without a server round-trip.
+- **Push nav** (new entry): scrolls to the top, or to a `#hash` target if the URL has one.
+- **Back**: restores the scroll position the user had on the previous page.
+- **Forward after back**: scrolls to the top (restoring forward-nav position is a deliberate
+  non-goal for this release).
+- **Modifier clicks** (`ctrl`, `cmd`, `shift`, `alt`, middle-click) on `az-navigate` links fall
+  through to the browser's default so users can open in a new tab or window.
+- **Same-path hash** (only the fragment changes): URL is updated and the page scrolls to the hash
+  target without a server round-trip.
 
 ### Replace semantics
 
-Use `arizona_js:navigate(Path, #{replace => true})` for in-place URL
-updates -- pagination query strings, sort state, canonical paths.
-Replace updates the URL without adding a history entry and **preserves
-scroll position** (it's an in-place swap, not a fresh nav).
+Use `arizona_js:navigate(Path, #{replace => true})` for in-place URL updates -- pagination query
+strings, sort state, canonical paths. Replace updates the URL without adding a history entry and
+**preserves scroll position** (it's an in-place swap, not a fresh nav).
 
 ```erlang
 %% Update the URL to reflect filter state without pushing a history entry
@@ -269,8 +268,7 @@ arizona_js:navigate(<<"/products?category=", Cat/binary>>, #{replace => true})
 
 ### Opt-outs
 
-Per-link: add `az-noscroll` to an anchor to skip the scroll reset on
-that navigation.
+Per-link: add `az-noscroll` to an anchor to skip the scroll reset on that navigation.
 
 ```erlang
 {a, [{href, ~"/feed"}, az_navigate, az_noscroll], [~"Refresh feed"]}
@@ -334,7 +332,7 @@ testing guidelines, and contribution workflow.
 
 Copyright (c) 2023-2026 [William Fank Thomé](https://github.com/williamthome)
 
-Arizona is 100% open-source and community-driven. All components are
-available under the Apache 2 License on [GitHub](https://github.com/arizona-framework/arizona).
+Arizona is 100% open-source and community-driven. All components are available under the Apache 2
+License on [GitHub](https://github.com/arizona-framework/arizona).
 
 See [LICENSE.md](LICENSE.md) for more information.
