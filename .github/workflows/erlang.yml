@@ -99,9 +99,6 @@ jobs:
         with:
           path: _build
           key: ${{ steps.set-build-key.outputs.key }}
-          restore-keys: |
-            _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
-            _build-${{ runner.os }}-
 
       - name: Cache rebar3
         uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
@@ -137,9 +134,6 @@ jobs:
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
-          restore-keys: |
-            _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
-            _build-${{ runner.os }}-
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
@@ -176,9 +170,6 @@ jobs:
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
-          restore-keys: |
-            _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
-            _build-${{ runner.os }}-
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
@@ -221,9 +212,6 @@ jobs:
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
-          restore-keys: |
-            _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
-            _build-${{ runner.os }}-
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
@@ -311,9 +299,6 @@ jobs:
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
-          restore-keys: |
-            _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
-            _build-${{ runner.os }}-
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
@@ -408,9 +393,6 @@ jobs:
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
-          restore-keys: |
-            _build-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
-            _build-${{ runner.os }}-
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
