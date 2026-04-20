@@ -50,6 +50,7 @@
     "check:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#_build\" \"#_checkouts\" \"#doc\" \"#.claude\" \"#CLAUDE.md\" \"#AGENTS.md\"",
     "fix:md": "markdownlint-cli2 --fix \"**/*.md\" \"#node_modules\" \"#_build\" \"#_checkouts\" \"#doc\" \"#.claude\" \"#CLAUDE.md\" \"#AGENTS.md\"",
     "check:yaml": "uvx yamllint .",
+    "check:actions": "actionlint",
     "test:e2e": "npx playwright test",
     "test:unit": "vitest run"
   },

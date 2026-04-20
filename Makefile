@@ -44,7 +44,7 @@ fmt-erl:
 fmt-js:
 	npx biome format --write
 
-check: check-erl check-js check-md check-yaml
+check: check-erl check-js check-md check-yaml check-actions
 
 check-fast: check-fmt check-js check-md
 
@@ -79,6 +79,9 @@ check-md:
 
 check-yaml:
 	npm run check:yaml
+
+check-actions:
+	npm run check:actions
 
 build-js:
 	npx vite build
