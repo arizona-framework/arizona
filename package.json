@@ -49,6 +49,7 @@
     "format:js": "biome format --write",
     "check:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#_build\" \"#_checkouts\" \"#doc\" \"#.claude\" \"#CLAUDE.md\" \"#AGENTS.md\"",
     "fix:md": "markdownlint-cli2 --fix \"**/*.md\" \"#node_modules\" \"#_build\" \"#_checkouts\" \"#doc\" \"#.claude\" \"#CLAUDE.md\" \"#AGENTS.md\"",
+    "check:yaml": "uvx yamllint .",
     "test:e2e": "npx playwright test",
     "test:unit": "vitest run"
   },
