@@ -6,9 +6,12 @@ server-side render.
 Wired up by `arizona_cowboy_router` for every Arizona route. The
 handler:
 
-1. Merges path bindings, query params, and any static `bindings` from
-   the route opts into a single `Bindings` map
-2. Runs any configured middlewares (`arizona_cowboy_req:apply_middlewares/3`)
+1. Wraps the cowboy request in an `arizona_req:request()` and takes
+   the initial bindings from the route's `bindings` option. URL-derived
+   data (path bindings, query params) is NOT flat-merged -- handlers
+   reach it through `arizona_req` accessors or a middleware that
+   projects what it wants into the bindings.
+2. Runs any configured middlewares (`arizona_req:apply_middlewares/3`)
 3. Calls `arizona_render:render_to_iolist/2` to produce the page HTML
 4. On crash, renders the dev error page (or the configured override)
    with status 500
@@ -60,15 +63,14 @@ replies with HTML.
     State :: map(),
     Req1 :: cowboy_req:req().
 init(Req, #{handler := H} = State) ->
-    PathBindings = cowboy_req:bindings(Req),
-    QueryParams = maps:from_list(cowboy_req:parse_qs(Req)),
-    Bindings = maps:merge(maps:merge(maps:get(bindings, State, #{}), PathBindings), QueryParams),
+    Bindings = maps:get(bindings, State, #{}),
     Middlewares = maps:get(middlewares, State, []),
-    case arizona_cowboy_req:apply_middlewares(Middlewares, Req, Bindings) of
-        {halt, Req1} ->
-            {ok, Req1, State};
-        {cont, Req1, Bindings1} ->
-            render_page(H, Req1, Bindings1, State)
+    ArzReq = arizona_cowboy_req:new(Req),
+    case arizona_req:apply_middlewares(Middlewares, ArzReq, Bindings) of
+        {halt, HaltReq} ->
+            {ok, arizona_req:raw(HaltReq), State};
+        {cont, ArzReq1, Bindings1} ->
+            render_page(H, arizona_req:raw(ArzReq1), Bindings1, State)
     end.
 
 %% --------------------------------------------------------------------

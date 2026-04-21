@@ -46,10 +46,11 @@ groups() ->
     ].
 
 route_match(Path) ->
-    {Handler, _ResolvedReq, Opts} = arizona_cowboy_adapter:resolve_cowboy_route(#{
-        host => <<"localhost">>, path => Path
-    }),
-    {Handler, Opts}.
+    {ok, _ResolvedReq, Env} = cowboy_router:execute(
+        #{host => <<"localhost">>, path => Path},
+        #{dispatch => {persistent_term, arizona_dispatch}}
+    ),
+    {maps:get(handler, Env), maps:get(handler_opts, Env)}.
 
 compile_routes_live(Config) when is_list(Config) ->
     ok = arizona_cowboy_router:compile_routes([

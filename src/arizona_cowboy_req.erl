@@ -1,139 +1,73 @@
 -module(arizona_cowboy_req).
 -moduledoc """
-Middleware pipeline for Arizona Cowboy handlers.
+Cowboy adapter for the `arizona_req` abstraction.
 
-Provides a tiny `apply_middlewares/3` runner that threads a Cowboy
-`req` and a bindings map through a list of middleware steps. Each
-middleware can either let the chain continue (`{cont, Req, Bindings}`)
-or halt with a final response (`{halt, Req}`).
-
-Used by `arizona_cowboy_http:init/2` to run any middlewares declared
-on a route before the Arizona handler is invoked. Typical use cases:
-auth checks, locale negotiation, request logging, redirect-on-condition.
-
-## Middleware shape
-
-```erlang
-fun((cowboy_req:req(), Bindings) -> {cont, Req, Bindings} | {halt, Req})
-%% or
-{Module, Function}     %% same arity, called as Module:Function/2
-```
+Implements the `arizona_req` behaviour by delegating each callback to
+the matching `cowboy_req` primitive. `new/1` wraps a raw cowboy request
+in an `arizona_req:request()` with `method` and `path` eagerly
+populated and everything else lazy-loaded on first access.
 """.
+
+-behaviour(arizona_req).
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([apply_middlewares/3]).
-
--ifdef(TEST).
--export([test_cont_middleware/2]).
--include_lib("eunit/include/eunit.hrl").
--endif.
+-export([new/1]).
 
 %% --------------------------------------------------------------------
-%% Types exports
+%% arizona_req adapter callbacks
 %% --------------------------------------------------------------------
 
--export_type([req/0]).
--export_type([middleware/0]).
--export_type([middleware_result/0]).
-
-%% --------------------------------------------------------------------
-%% Types definitions
-%% --------------------------------------------------------------------
-
--nominal req() :: cowboy_req:req().
--nominal middleware() ::
-    fun((req(), arizona_stateful:bindings()) -> middleware_result()) | {module(), atom()}.
--nominal middleware_result() :: {cont, req(), arizona_stateful:bindings()} | {halt, req()}.
+-export([parse_bindings/1]).
+-export([parse_params/1]).
+-export([parse_cookies/1]).
+-export([parse_headers/1]).
+-export([read_body/1]).
 
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
 -doc """
-Runs the middleware list left to right, threading `Req` and `Bindings`
-through each step. Stops on the first `{halt, Req}` and returns it.
+Wraps a cowboy request in an `arizona_req:request()` with `method`
+and `path` eagerly populated.
 """.
--spec apply_middlewares(Middlewares, Req, Bindings) -> middleware_result() when
-    Middlewares :: [middleware()],
-    Req :: req(),
-    Bindings :: arizona_stateful:bindings().
-apply_middlewares([], Req, Bindings) ->
-    {cont, Req, Bindings};
-apply_middlewares([H | Rest], Req, Bindings) ->
-    case call(H, Req, Bindings) of
-        {cont, Req1, B1} -> apply_middlewares(Rest, Req1, B1);
-        {halt, _Req1} = Halt -> Halt
-    end.
+-spec new(CowboyReq) -> arizona_req:request() when
+    CowboyReq :: cowboy_req:req().
+new(CowboyReq) ->
+    arizona_req:new(?MODULE, CowboyReq, #{
+        method => cowboy_req:method(CowboyReq),
+        path => cowboy_req:path(CowboyReq)
+    }).
 
 %% --------------------------------------------------------------------
-%% Internal functions
+%% arizona_req behaviour callbacks
 %% --------------------------------------------------------------------
 
-call({Mod, Fun}, Req, Bindings) -> Mod:Fun(Req, Bindings);
-call(Fun, Req, Bindings) -> Fun(Req, Bindings).
+-spec parse_bindings(CowboyReq) -> arizona_req:bindings() when
+    CowboyReq :: cowboy_req:req().
+parse_bindings(CowboyReq) ->
+    cowboy_req:bindings(CowboyReq).
 
--ifdef(TEST).
+-spec parse_params(CowboyReq) -> arizona_req:params() when
+    CowboyReq :: cowboy_req:req().
+parse_params(CowboyReq) ->
+    cowboy_req:parse_qs(CowboyReq).
 
-mock_req() ->
-    #{
-        method => ~"GET",
-        version => 'HTTP/1.1',
-        scheme => ~"http",
-        host => ~"localhost",
-        port => 8080,
-        path => ~"/",
-        qs => ~"",
-        headers => #{},
-        bindings => #{},
-        has_body => false,
-        body_length => undefined,
-        peer => {{127, 0, 0, 1}, 12345},
-        sock => {{127, 0, 0, 1}, 8080},
-        cert => undefined,
-        ref => test_ref,
-        pid => self(),
-        streamid => 1
-    }.
+-spec parse_cookies(CowboyReq) -> arizona_req:cookies() when
+    CowboyReq :: cowboy_req:req().
+parse_cookies(CowboyReq) ->
+    cowboy_req:parse_cookies(CowboyReq).
 
-empty_list_test() ->
-    Req = mock_req(),
-    ?assertEqual({cont, Req, #{}}, apply_middlewares([], Req, #{})).
+-spec parse_headers(CowboyReq) -> arizona_req:headers() when
+    CowboyReq :: cowboy_req:req().
+parse_headers(CowboyReq) ->
+    cowboy_req:headers(CowboyReq).
 
-fun_cont_test() ->
-    Req = mock_req(),
-    M = [fun(R, B) -> {cont, R, B#{x => 1}} end],
-    ?assertEqual({cont, Req, #{x => 1}}, apply_middlewares(M, Req, #{})).
-
-fun_halt_test() ->
-    Req = mock_req(),
-    M = [fun(R, _B) -> {halt, R} end],
-    ?assertEqual({halt, Req}, apply_middlewares(M, Req, #{})).
-
-mf_cont_test() ->
-    Req = mock_req(),
-    M = [{?MODULE, test_cont_middleware}],
-    ?assertEqual({cont, Req, #{from_mf => true}}, apply_middlewares(M, Req, #{})).
-
-pipeline_halt_stops_early_test() ->
-    Req = mock_req(),
-    M = [
-        fun(R, _B) -> {halt, R} end,
-        fun(_, _) -> error(should_not_reach) end
-    ],
-    ?assertEqual({halt, Req}, apply_middlewares(M, Req, #{})).
-
-pipeline_threads_bindings_test() ->
-    Req = mock_req(),
-    M = [
-        fun(R, B) -> {cont, R, B#{a => 1}} end,
-        fun(R, B) -> {cont, R, B#{b => 2}} end
-    ],
-    ?assertEqual({cont, Req, #{a => 1, b => 2}}, apply_middlewares(M, Req, #{})).
-
-test_cont_middleware(Req, Bindings) ->
-    {cont, Req, Bindings#{from_mf => true}}.
-
--endif.
+-spec read_body(CowboyReq) -> {arizona_req:body(), CowboyReq} when
+    CowboyReq :: cowboy_req:req().
+read_body(CowboyReq) ->
+    {ok, Body, CowboyReq1} = cowboy_req:read_body(CowboyReq),
+    {Body, CowboyReq1}.

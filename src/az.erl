@@ -65,6 +65,7 @@ binding, used by stateless layouts to render the wrapped page.
 -export_type([bindings/0]).
 -export_type([template/0]).
 -export_type([render_fun/0]).
+-export_type([request/0]).
 -export_type([resets/0]).
 -export_type([effect/0]).
 -export_type([effects/0]).
@@ -82,6 +83,7 @@ binding, used by stateless layouts to render the wrapped page.
 -type bindings() :: arizona_template:bindings().
 -type template() :: arizona_template:template().
 -type render_fun() :: arizona_template:render_fun().
+-type request() :: arizona_req:request().
 -type resets() :: arizona_stateful:resets().
 -type effect() :: arizona_stateful:effect().
 -type effects() :: arizona_stateful:effects().

@@ -12,6 +12,7 @@
     reconnect_init/1,
     connect_with_params/1,
     http_query_params/1,
+    http_query_params_not_merged_without_middleware/1,
     http_path_bindings/1,
     ws_path_bindings/1,
     middleware_cont_enriches_bindings/1,
@@ -44,6 +45,7 @@ groups() ->
             reconnect_init,
             connect_with_params,
             http_query_params,
+            http_query_params_not_merged_without_middleware,
             http_path_bindings,
             ws_path_bindings,
             middleware_cont_enriches_bindings,
@@ -64,8 +66,18 @@ groups() ->
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(cowboy),
     Port = 14040,
+    %% Test-only URL -> Bindings middleware. Tests that assert on URL
+    %% data in rendered HTML opt into this on their routes; the
+    %% framework itself no longer flat-merges URL data into bindings.
+    UrlToBindings =
+        fun(Req, B) ->
+            {PathBs, Req1} = arizona_req:bindings(Req),
+            {Params, Req2} = arizona_req:params(Req1),
+            ParamsMap = maps:from_list(Params),
+            {cont, Req2, maps:merge(maps:merge(B, PathBs), ParamsMap)}
+        end,
     Routes = [
-        {live, <<"/">>, arizona_crashable, #{}},
+        {live, <<"/">>, arizona_crashable, #{middlewares => [UrlToBindings]}},
         {live, <<"/crash_on_mount">>, arizona_crashable, #{
             bindings => #{crash_on_mount => true}
         }},
@@ -75,8 +87,11 @@ init_per_suite(Config) ->
         {live, <<"/halt_middleware">>, arizona_crashable, #{
             middlewares => [
                 fun(Req, _B) ->
-                    Req1 = cowboy_req:reply(302, #{<<"location">> => <<"/login">>}, Req),
-                    {halt, Req1}
+                    RawReq = arizona_req:raw(Req),
+                    RawReq1 = cowboy_req:reply(
+                        302, #{<<"location">> => <<"/login">>}, RawReq
+                    ),
+                    {halt, arizona_req:set_raw(Req, RawReq1)}
                 end
             ]
         }},
@@ -86,7 +101,7 @@ init_per_suite(Config) ->
                 fun(Req, #{step := N} = B) -> {cont, Req, B#{step => N + 1}} end
             ]
         }},
-        {live, <<"/items/:item_id">>, arizona_crashable, #{}},
+        {live, <<"/items/:item_id">>, arizona_crashable, #{middlewares => [UrlToBindings]}},
         {ws, <<"/ws">>, #{}}
     ],
     {ok, _} = arizona_cowboy_server:start(ws_test, #{
@@ -172,6 +187,27 @@ http_query_params(Config) ->
     {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"pt<!--/az-->">>)).
+
+http_query_params_not_merged_without_middleware(Config) ->
+    %% `/with_middleware` has a middleware that enriches bindings with
+    %% `session` but does NOT merge URL data. Sending `?locale=pt` must
+    %% NOT populate `locale` in bindings -- the handler renders the
+    %% default, so `pt` does not appear as a dynamic value in the
+    %% rendered HTML.
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /with_middleware?locale=pt HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
+    ?assertEqual(nomatch, binary:match(Resp, <<"pt<!--/az-->">>)).
 
 http_path_bindings(Config) ->
     %% HTTP: path param :item_id available in rendered HTML

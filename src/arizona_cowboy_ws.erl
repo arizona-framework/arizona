@@ -57,18 +57,15 @@ init(Req, Opts) ->
             undefined -> #{};
             JSON -> json:decode(JSON)
         end,
-    LiveReq = Req#{path => Path},
-    {_CowboyHandler, _ResolvedReq, RouteOpts} = arizona_cowboy_adapter:resolve_cowboy_route(
-        LiveReq
-    ),
-    H = maps:get(handler, RouteOpts),
+    {H, RouteOpts} = arizona_cowboy_adapter:resolve_route(Path, Req),
     IB = maps:merge(maps:get(bindings, RouteOpts, #{}), Params),
     OnMount = maps:get(on_mount, RouteOpts, []),
     Middlewares = maps:get(middlewares, RouteOpts, []),
-    case arizona_cowboy_req:apply_middlewares(Middlewares, Req, IB) of
-        {halt, Req1} ->
-            {ok, Req1, #{}};
-        {cont, _Req1, Bindings1} ->
+    ArzReq = arizona_cowboy_req:new(Req),
+    case arizona_req:apply_middlewares(Middlewares, ArzReq, IB) of
+        {halt, HaltReq} ->
+            {ok, arizona_req:raw(HaltReq), #{}};
+        {cont, _ArzReq1, Bindings1} ->
             State = #{
                 handler => H,
                 bindings => Bindings1,
