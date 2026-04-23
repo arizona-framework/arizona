@@ -5,13 +5,11 @@ Cowboy WebSocket handler that bridges to `arizona_socket`.
 Translates Cowboy WebSocket callbacks into the transport-agnostic
 `arizona_socket` API:
 
-- `init/2` -- reads the framework keys `_az_path` and `_az_reconnect`
-  from the upgrade URL's query string, strips them out to recover the
-  user-page query string, resolves the target route via
-  `arizona_cowboy_adapter`, runs any middlewares declared on the
-  route, and prepares the upgrade state. User-page query params and
-  connect params arrive as regular URL query keys alongside
-  `_az_path`/`_az_reconnect`.
+- `init/2` -- delegates the upgrade-time handshake to
+  `arizona_ws:prepare/3` (parse `_az_path`/`_az_reconnect`, resolve
+  the route via `arizona_cowboy_adapter`, run middlewares) and
+  returns either a plain HTTP halt reply or the `cowboy_websocket`
+  upgrade tuple.
 - `websocket_init/1` -- creates the socket and starts the live process
 - `websocket_handle/2` -- forwards incoming text frames to
   `arizona_socket:handle_in/2`
@@ -54,24 +52,10 @@ when
     State :: map().
 init(Req, Opts) ->
     QS = cowboy_req:parse_qs(Req),
-    Path = proplists:get_value(~"_az_path", QS, ~"/"),
-    Reconnect = proplists:get_value(~"_az_reconnect", QS, ~"0") =:= ~"1",
-    UserQs = user_qs(QS),
-    {H, RouteOpts, ArzReq} = arizona_cowboy_adapter:resolve_route(Path, UserQs, Req),
-    IB = maps:get(bindings, RouteOpts, #{}),
-    OnMount = maps:get(on_mount, RouteOpts, []),
-    Middlewares = maps:get(middlewares, RouteOpts, []),
-    case arizona_req:apply_middlewares(Middlewares, ArzReq, IB) of
+    case arizona_ws:prepare(QS, arizona_cowboy_adapter, Req) of
         {halt, HaltReq} ->
             {ok, arizona_req:raw(HaltReq), #{}};
-        {cont, ArzReq1, Bindings1} ->
-            State = #{
-                handler => H,
-                bindings => Bindings1,
-                on_mount => OnMount,
-                req => ArzReq1,
-                reconnect => Reconnect
-            },
+        {cont, State} ->
             {cowboy_websocket, Req, State, Opts}
     end.
 
@@ -119,20 +103,6 @@ websocket_info(Msg, #{socket := Sock}) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
-
-%% Strip framework keys (`_az_*`) from the parsed qs and rebuild a raw qs
-%% binary for the adapter / arizona_req. Leaves user params untouched.
-user_qs(QS) ->
-    iolist_to_binary(
-        lists:join(~"&", [encode_pair(Pair) || {Key, _} = Pair <:- QS, not is_framework_key(Key)])
-    ).
-
-is_framework_key(~"_az_path") -> true;
-is_framework_key(~"_az_reconnect") -> true;
-is_framework_key(_) -> false.
-
-encode_pair({K, true}) -> uri_string:quote(K);
-encode_pair({K, V}) -> [uri_string:quote(K), $=, uri_string:quote(V)].
 
 to_cowboy({ok, Sock}) ->
     {ok, #{socket => Sock}};
