@@ -75,6 +75,7 @@ binding, used by stateless layouts to render the wrapped page.
 -export_type([handle_event_ret/0]).
 -export_type([handle_info_ret/0]).
 -export_type([handle_update_ret/0]).
+-export_type([error_info/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -93,6 +94,7 @@ binding, used by stateless layouts to render the wrapped page.
 -type handle_event_ret() :: arizona_stateful:handle_event_ret().
 -type handle_info_ret() :: arizona_stateful:handle_info_ret().
 -type handle_update_ret() :: arizona_stateful:handle_update_ret().
+-type error_info() :: arizona_http:error_info().
 
 %% --------------------------------------------------------------------
 %% API Functions

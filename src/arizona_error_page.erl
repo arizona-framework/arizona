@@ -2,8 +2,8 @@
 -moduledoc """
 Stateless template that renders the dev-mode error page.
 
-When a request crashes, `arizona_cowboy_http` builds an `error_info`
-map and calls this template's `render/1` to produce a self-contained
+When a request crashes, `arizona_http` builds an `error_info` map
+and calls this template's `render/1` to produce a self-contained
 HTML page with the exception class, reason, and stack frames styled
 for monospace display.
 
@@ -49,7 +49,7 @@ extracts the shell-style summary, and pretty-prints the raw reason.
 Renders the error page from `error_info` bindings.
 """.
 -spec render(Bindings) -> arizona_template:template() when
-    Bindings :: #{error_info := arizona_cowboy_http:error_info(), _ => _}.
+    Bindings :: #{error_info := az:error_info(), _ => _}.
 render(Bindings) ->
     ErrorInfo = maps:get(error_info, Bindings),
     Class = maps:get(class, ErrorInfo),
