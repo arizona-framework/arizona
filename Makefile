@@ -65,7 +65,8 @@ check-lint:
 	rebar3 lint
 
 check-hank:
-	rebar3 hank
+	@set -o pipefail; rebar3 hank 2>&1 | tee /dev/stderr | \
+		(! grep -q "no longer needed")
 
 check-xref:
 	rebar3 xref
