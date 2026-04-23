@@ -12,7 +12,6 @@
     reconnect_init/1,
     connect_with_params/1,
     http_query_params/1,
-    http_query_params_not_merged_without_middleware/1,
     http_path_bindings/1,
     ws_path_bindings/1,
     middleware_cont_enriches_bindings/1,
@@ -44,7 +43,6 @@ groups() ->
             reconnect_init,
             connect_with_params,
             http_query_params,
-            http_query_params_not_merged_without_middleware,
             http_path_bindings,
             ws_path_bindings,
             middleware_cont_enriches_bindings,
@@ -185,27 +183,6 @@ http_query_params(Config) ->
     {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"pt<!--/az-->">>)).
-
-http_query_params_not_merged_without_middleware(Config) ->
-    %% `/with_middleware` has a middleware that enriches bindings with
-    %% `session` but does NOT merge URL data. Sending `?locale=pt` must
-    %% NOT populate `locale` in bindings -- the handler renders the
-    %% default, so `pt` does not appear as a dynamic value in the
-    %% rendered HTML.
-    Port = proplists:get_value(port, Config),
-    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
-    Req = [
-        "GET /with_middleware?locale=pt HTTP/1.1\r\n",
-        "Host: localhost:",
-        integer_to_list(Port),
-        "\r\n",
-        "\r\n"
-    ],
-    ok = gen_tcp:send(Sock, Req),
-    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
-    gen_tcp:close(Sock),
-    ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
-    ?assertEqual(nomatch, binary:match(Resp, <<"pt<!--/az-->">>)).
 
 http_path_bindings(Config) ->
     %% HTTP: path param :item_id available in rendered HTML

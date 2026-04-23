@@ -3,10 +3,18 @@
 -export([mount/2, render/1, handle_event/3, handle_info/2]).
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
+mount(Bindings, Req) ->
     case maps:get(crash_on_mount, Bindings, false) of
-        true -> error(crash_on_mount);
-        false -> {maps:merge(#{id => ~"crashable", status => ~"ok"}, Bindings), #{}}
+        true ->
+            error(crash_on_mount);
+        false ->
+            {Params, _Req1} = arizona_req:params(Req),
+            Locale = proplists:get_value(~"locale", Params, ~"none"),
+            Merged = maps:merge(
+                #{id => ~"crashable", status => ~"ok", <<"locale">> => Locale},
+                Bindings
+            ),
+            {Merged, #{}}
     end.
 
 -spec render(az:bindings()) -> az:template().
