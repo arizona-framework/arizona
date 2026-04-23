@@ -20,8 +20,12 @@ minor versions. Pin a version in your deps.
 - **Erlang-native templates**: `{Tag, Attrs, Children}` tuples compiled at build time, no separate
   template language
 - **Compile-time diffing**: fingerprinted statics sent once, only dynamic values cross the wire
-- **Stateful handlers**: `mount/1`, `render/1`, `handle_event/3`, `handle_info/2`, `unmount/1`
-  lifecycle
+- **Handler taxonomy**: `arizona_view` for route-level pages (`mount/2` takes Bindings + Request),
+  `arizona_stateful` for embeddable components (`mount/1`), `arizona_stateless` for pure
+  templates. All three share `render/1`, `handle_event/3`, `handle_info/2`, `handle_update/2`,
+  `unmount/1` via `arizona_handler`
+- **Request abstraction**: `arizona_req` is an opaque, adapter-pluggable request with eager
+  `method`/`path` and lazy-cached `bindings`, `params`, `cookies`, `headers`, `body`
 - **Per-view messaging**: `?send`/`?send_after` route messages to any stateful handler (root or
   child)
 - **Streams**: keyed collections with insert, delete, update, move, sort, and limit operations
@@ -29,10 +33,12 @@ minor versions. Pin a version in your deps.
   WebSocket
 - **Connection context**: `?connected` macro distinguishes SSR from live mount
 - **PubSub**: `?subscribe`/`?unsubscribe` for cross-view and cross-tab messaging
-- **Route middlewares**: `fun(Req, Bindings) -> {cont, Req, Bindings} | {halt, Req}` for auth and
-  sessions
-- **On-mount hooks**: per-route `on_mount` pipeline runs before every mount including navigate
-- **Connection params**: URL query params + custom JS params merged into handler bindings
+- **Route middlewares**: `fun(Req, Bindings) -> {cont, Req, Bindings} | {halt, Req}` for auth,
+  sessions, and URL-to-Bindings projection
+- **On-mount hooks**: per-route `on_mount` pipeline (`fun((Bindings, Request) -> Bindings)`) runs
+  before every mount including navigate
+- **Connection params**: URL query params + connect-time JS params arrive as regular query keys,
+  reachable via `arizona_req:params/1` or a projection middleware
 - **Element hooks**: client-side `mounted`, `updated`, `destroyed` callbacks via `az-hook`
 - **Framework-agnostic transport**: `arizona_socket` + adapter behaviour, cowboy is optional
 
@@ -90,16 +96,17 @@ handle_event(~"dec", _Payload, Bindings) ->
 
 ### 2. Create the parent page
 
-The page is the route's root handler. It receives its own `id` from the route's `bindings` (see
-step 4) and mounts the counter as a child:
+The page is the route's root handler -- a **view**. Views take the initial Bindings plus an
+`az:request()`, giving access to URL path bindings, query params, cookies, and headers via
+accessors on the Request:
 
 ```erlang
 %% src/my_page.erl
 -module(my_page).
--include_lib("arizona/include/arizona_stateful.hrl").
--export([mount/1, render/1]).
+-include_lib("arizona/include/arizona_view.hrl").
+-export([mount/2, render/1]).
 
-mount(Bindings) ->
+mount(Bindings, _Req) ->
     {Bindings, #{}}.
 
 render(Bindings) ->

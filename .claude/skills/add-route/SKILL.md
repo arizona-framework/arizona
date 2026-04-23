@@ -20,10 +20,12 @@ Choose the appropriate route type based on the user's intent:
 {live, Path, Handler, Opts}
 ```
 - `Path` -- Cowboy route pattern, e.g. `<<"/">>`  or `<<"/users/:id">>`
-- `Handler` -- stateful handler module (needs `mount/1`, `render/1`)
+- `Handler` -- a view module that includes `arizona_view.hrl` and exports `mount/2`, `render/1`
 - `Opts` -- map with optional keys:
-  - `bindings => map()` -- initial bindings passed to `mount/1` (default `#{}`)
+  - `bindings => map()` -- initial bindings passed to `mount/2` (default `#{}`)
   - `layout => {LayoutMod, LayoutFun}` -- layout to wrap the page (optional)
+  - `on_mount => [Hook]` -- `on_mount` hooks run before the handler's `mount/2`
+  - `middlewares => [fun((az:request(), map()) -> {cont, az:request(), map()} | {halt, az:request()})]`
 
 **WebSocket endpoint:**
 ```erlang
@@ -43,9 +45,9 @@ Choose the appropriate route type based on the user's intent:
 
 ## 3. If creating a new live page
 
-Also scaffold the handler module using the `/new-handler` skill pattern:
-- Include `arizona_stateful.hrl`
-- `mount/1` must set `id => <<"page">>` (or appropriate view id)
+Also scaffold the view module using the `/new-handler` skill pattern (choose "route-level view"):
+- Include `arizona_view.hrl`
+- `mount/2` takes `(Bindings, az:request())` and must set `id => <<"page">>` (or appropriate view id)
 - `render/1` with `?html(...)`
 - `handle_event/3` if interactive
 

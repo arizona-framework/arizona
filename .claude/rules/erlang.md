@@ -26,12 +26,18 @@ Templates are plain maps: `#{s => [binary()], d => [dynamic()], f => binary()}`.
 ## Header files
 
 ```
-include/arizona_common.hrl      -- utility macros (?get, ?html, ?each, etc.)
-include/arizona_stateful.hrl    -- -behaviour(arizona_live), parse_transform, includes arizona_common.hrl
+include/arizona_common.hrl      -- utility macros (?get, ?html, ?each, etc.) + arizona_js.hrl
+include/arizona_handler.hrl     -- shared base: parse_transform, send/subscribe macros, arizona_common.hrl
+include/arizona_view.hrl        -- -behaviour(arizona_view) + -behaviour(arizona_handler); pulls arizona_handler.hrl
+include/arizona_stateful.hrl    -- -behaviour(arizona_stateful) + -behaviour(arizona_handler); pulls arizona_handler.hrl
 include/arizona_stateless.hrl   -- parse_transform, includes arizona_common.hrl
 ```
 
-Stateful handlers include `arizona_stateful.hrl`. Stateless template modules include `arizona_stateless.hrl`.
+Rule of thumb:
+
+- Route-level pages → `arizona_view.hrl` (`mount/2` takes Bindings + `az:request()`)
+- Embeddable components → `arizona_stateful.hrl` (`mount/1`, instantiated via `?stateful(Handler, Props)`)
+- Pure template modules → `arizona_stateless.hrl`
 
 ## Parse transform element forms
 

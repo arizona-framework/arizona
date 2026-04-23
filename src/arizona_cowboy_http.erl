@@ -12,7 +12,8 @@ handler:
    reach it through `arizona_req` accessors or a middleware that
    projects what it wants into the bindings.
 2. Runs any configured middlewares (`arizona_req:apply_middlewares/3`)
-3. Calls `arizona_render:render_to_iolist/2` to produce the page HTML
+3. Calls `arizona_render:render_view_to_iolist/3` (threading the Request) to
+   produce the page HTML
 4. On crash, renders the dev error page (or the configured override)
    with status 500
 

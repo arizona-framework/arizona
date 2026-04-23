@@ -7,22 +7,25 @@
 | `src/arizona.hrl`                 | Shared header -- op codes, `?EACH` constant, `#stream{}` record                                                                                                           |
 | `src/arizona_template.erl`        | Pure helpers -- binding access (`get/2,3`), dep tracking (`track/1`), descriptor constructors (`stateful/2`, `stateless/2,3`), `each/2`, `to_bin/1`, snapshot utilities   |
 | `src/arizona_eval.erl`            | Template evaluation -- dynamics to snapshots, stateful/stateless child eval, stream/each eval                                                                             |
-| `src/arizona_render.erl`          | HTML output -- `render/1,2`, SSR (`render_to_iolist/1,2`), `zip/2`, `fingerprint_payload/1`                                                                               |
+| `src/arizona_render.erl`          | HTML output -- `render/1,2`, SSR (`render_to_iolist/1,2`, `render_view_to_iolist/3`), `zip/2`, `fingerprint_payload/1`                                                    |
 | `src/arizona_diff.erl`            | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                           |
 | `src/arizona_cowboy_router.erl`   | Cowboy route compilation -- `compile_routes/1`                                                                                                                            |
 | `src/arizona_js.erl`              | Unified client commands and server effects -- `push_event/1,2`, `toggle/1`, `show/1`, `hide/1`, `dispatch_event/2`, `set_title/1`, `reload/0`, etc.                       |
 | `src/arizona_stream.erl`          | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`                                                |
-| `src/arizona_stateful.erl`        | Behaviour -- callbacks (`mount/1`, `render/1`, `handle_event/3`, `handle_info/2`, `handle_update/2`) and types (`bindings/0`, `resets/0`, `effects/0`)                    |
-| `src/arizona_live.erl`            | Gen_server -- mount, handle_event, handle_info, views map, transport push                                                                                                 |
+| `src/arizona_stateful.erl`        | Behaviour for embedded components -- `mount/1` callback + `call_mount/2` dispatcher; shared callbacks come from `arizona_handler`                                         |
+| `src/arizona_view.erl`            | Behaviour for route-level pages -- `mount/2` callback taking `(Bindings, Request)` + `call_mount/3` dispatcher; shared callbacks come from `arizona_handler`              |
+| `src/arizona_handler.erl`         | Shared behaviour hosting callbacks common to views and stateful components (`render/1`, `handle_event/3`, `handle_info/2`, `handle_update/2`, `unmount/1`) + dispatchers  |
+| `src/arizona_req.erl`             | Opaque, adapter-pluggable request abstraction -- eager `method/1`/`path/1`, lazy `bindings/1`/`params/1`/`cookies/1`/`headers/1`/`body/1`, `apply_middlewares/3`          |
+| `src/arizona_live.erl`            | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                              |
 | `src/arizona_parse_transform.erl` | Compile-time transform -- `?html`, `?each` (1-arg or 2-arg) DSL to `#{s, d, f}` maps, `az-view` auto-injection, directive extraction (`az-nodiff`), attribute compilation |
-| `src/arizona_socket.erl`          | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, crash recovery, op scoping                                         |
-| `src/arizona_adapter.erl`         | Behaviour defining `resolve_route/2` callback for framework adapters                                                                                                      |
-| `src/arizona_cowboy_adapter.erl`  | Cowboy implementation of `arizona_adapter` -- route resolution via `cowboy_router`                                                                                        |
-| `src/arizona_cowboy_http.erl`     | Cowboy HTTP handler -- calls `render_to_iolist` and serves result                                                                                                         |
+| `src/arizona_socket.erl`          | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff    |
+| `src/arizona_adapter.erl`         | Behaviour defining `resolve_route/3` callback for framework adapters (returns `{Handler, RouteOpts, Request}`)                                                            |
+| `src/arizona_cowboy_adapter.erl`  | Cowboy implementation of `arizona_adapter` -- route resolution via `cowboy_router`, synthesizes a navigate-scoped `arizona_req`                                           |
+| `src/arizona_cowboy_http.erl`     | Cowboy HTTP handler -- builds `arizona_req`, runs middleware, calls `render_view_to_iolist/3`                                                                             |
 | `src/arizona_cowboy_ws.erl`       | Cowboy WebSocket handler -- thin wrapper over `arizona_socket`                                                                                                            |
 | `src/arizona_cowboy_static.erl`   | Cowboy static file handler -- serves files from a directory with content-type detection                                                                                   |
 | `src/arizona_cowboy_server.erl`   | Cowboy listener boot -- compiles routes, stashes them in persistent terms, starts a clear/TLS listener                                                                    |
-| `src/arizona_cowboy_req.erl`      | Cowboy `Req` helpers -- bindings/query/body extraction + middleware application                                                                                           |
+| `src/arizona_cowboy_req.erl`      | `arizona_req` adapter for Cowboy -- implements `parse_bindings/1`, `parse_params/1`, `parse_cookies/1`, `parse_headers/1`, `read_body/1`                                  |
 | `src/arizona_cowboy_reload.erl`   | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                     |
 | `src/arizona_error_page.erl`      | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                  |
 | `src/arizona_app.erl`             | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches a Cowboy listener via `arizona_cowboy_server:start/2`                            |
@@ -56,8 +59,12 @@ HTML output and rendering.
   `{HTML, Snapshot, Views}`
 - `render_to_iolist/1` -- render a template to iolist (used for layout templates with
   `diff => false`)
-- `render_to_iolist/2` -- SSR: `render_to_iolist(Handler, Opts)` where Opts may contain
-  `layout => {Mod, Fun}` and `bindings => map()`
+- `render_to_iolist/2` -- stateful-component SSR (test-only): `render_to_iolist(Handler, Opts)`
+  where Opts may contain `layout => {Mod, Fun}` and `bindings => map()`. `on_mount` is not
+  honored -- it's a route-level concept
+- `render_view_to_iolist/3` -- production HTTP SSR for views: `render_view_to_iolist(Handler, Req, Opts)`.
+  Mounts via `arizona_view:call_mount/3`, applies `on_mount` hooks (threading `Req`), optionally
+  wraps in a layout
 - `resolve_id/1` -- resolves a binary id (passthrough) or a `#{s, d}` template (renders to binary)
 - `zip/2` -- interleave statics and evaluated dynamics into iolist
 - `fingerprint_payload/1` -- convert a snapshot to fingerprint wire format
@@ -201,12 +208,15 @@ are arbitrary terms. Messages are raw data (no wrapper tuple).
 
 Simplified gen_server wrapper:
 
-- `start_link/1,2,3,4` -- start with handler module, optional initial bindings (default `#{}`),
-  optional transport PID, and optional `on_mount` hook list. `/3` and `/4` accept `TransportPid` for
-  server-push; `/1` and `/2` pass `undefined`
-- `mount/1` -- calls `Handler:mount(Bindings)` -> extracts `ViewId = maps:get(id, Bindings)` ->
-  `Handler:render(B1)` -> `arizona_render:render/2` to establish snapshot. Returns `{ok, ViewId}`
-  (no HTML -- SSR is handled separately by `arizona_cowboy_http`)
+- `start_link/1,2,3,4,5` -- start with handler module, optional initial bindings (default `#{}`),
+  optional `az:request()` (required for views with `mount/2`), optional transport PID, and optional
+  `on_mount` hook list. `/5` takes all five positional args explicitly; the lower arities delegate
+  with `undefined` for the missing params
+- `mount/1` -- dispatches by handler arity: `Handler:mount(Bindings)` for stateful handlers,
+  `Handler:mount(Bindings, Request)` for views. Extracts `ViewId = maps:get(id, Bindings)`, calls
+  `Handler:render(B1)` via `arizona_handler:call_render/2`, builds a snapshot via
+  `arizona_render:render/2`. Returns `{ok, ViewId}` (no HTML -- SSR is handled separately by
+  `arizona_cowboy_http`)
 - `handle_event/4` -- unified event dispatch: `handle_event(Pid, ViewId, Event, Payload)`. Checks
   views map -- if `ViewId` is a known child, dispatches to child handler; otherwise dispatches to
   root handler. Returns `{ok, Ops, Effects}`
@@ -214,12 +224,16 @@ Simplified gen_server wrapper:
   etc.). If handler exports `handle_info/2`, calls it, diffs, and pushes
   `{arizona_push, Ops, Effects}` to `transport_pid`. Pre-mount messages and handlers without
   `handle_info/2` are silently dropped. Empty ops+effects are not pushed
-- `navigate/3,4` -- `navigate(Pid, NewHandler, InitBindings [, OnMount])`. Mounts new handler
-  (applying any `OnMount` hooks), resets gen_server state (handler, bindings, snapshot, views),
-  preserves `transport_pid`, returns `{ok, NewViewId, PageContent}`
+- `navigate/4,5` -- `navigate(Pid, NewHandler, InitBindings, NewReq [, OnMount])`. Mounts new
+  handler (applying any `OnMount` hooks with the new `Request`), resets gen_server state
+  (handler, bindings, req, snapshot, views), preserves `transport_pid`, returns
+  `{ok, NewViewId, PageContent}`
+- `apply_on_mount/3` -- folds the `on_mount` hook chain: `apply_on_mount(OnMount, Bindings, Req)`.
+  Each hook is `fun((Bindings, az:request()) -> Bindings)` or `{Module, Function}`
 
-Internal state: `#state{handler, bindings, snapshot, views, on_mount, transport_pid, sent_fps}`
-where `views :: #{ViewId => #{handler, bindings, snapshot}}` and `sent_fps` tracks fingerprints
+Internal state: `#state{handler, bindings, req, snapshot, views, on_mount, transport_pid,
+sent_fps}` where `views :: #{ViewId => #{handler, bindings, snapshot}}`, `req` is the currently
+mounted `az:request()` (or `undefined` for stateful-only flows), and `sent_fps` tracks fingerprints
 already shipped to the client for deduplication.
 
 `compute_changed/2` builds the Changed map by comparing old and new bindings key-by-key.
@@ -233,38 +247,47 @@ Framework-agnostic WebSocket protocol state machine. Extracted from `arizona_cow
 framework can integrate Arizona without reimplementing the wire protocol. Cowboy is an optional
 dependency -- the core engine works without it.
 
-- `init/3` -- `init(Handler, Bindings, Opts)`. Traps exits, starts `arizona_live:start_link/4`
-  (passing `self()` as transport PID and any `on_mount` hooks from Opts), mounts. On reconnect
-  (`#{reconnect => true}`), also renders and returns `OP_REPLACE` frame. Opts: `reconnect`
-  (boolean), `adapter` (module implementing `arizona_adapter`), `adapter_state` (passed to adapter
-  callbacks), `on_mount` (list of `t:arizona_live:on_mount_hook/0`)
+- `init/3` -- `init(Handler, Bindings, Opts)`. Traps exits, starts `arizona_live:start_link/5`
+  (passing `self()` as transport PID, the `Req` from Opts, and any `on_mount` hooks), mounts. On
+  reconnect (`#{reconnect => true}`), also renders and returns `OP_REPLACE` frame. Opts:
+  `reconnect` (boolean), `req` (`az:request() | undefined`), `adapter` (module implementing
+  `arizona_adapter`), `adapter_state` (passed to adapter callbacks), `on_mount` (list of
+  `t:arizona_live:on_mount_hook/0`)
 - `handle_in/2` -- decode incoming text frame: ping/pong, `["cached_fps", FpList]`,
-  `["navigate", {path}]`, `[target, event, payload]`
-- `handle_info/2` -- handle `{arizona_push, Ops, Effects}` from `arizona_live`, `EXIT` signals
-  (crash → remount, normal → close)
+  `["navigate", #{~"path" := Path, ~"qs" := Qs}]`, `[target, event, payload]`
+- `handle_info/2` -- handle `{arizona_push, Ops, Effects}` from `arizona_live` and `EXIT` signals.
+  On non-normal exit the socket closes with `?CLOSE_CRASH` (4500); on normal exit with 1000. The
+  client reconnects via backoff in `arizona-worker.js` -- crash remount is intentionally not
+  attempted server-side
 
 **Return type** (`result()`): `{ok, Socket}` | `{reply, iodata(), Socket}` |
 `{close, Code, Reason, Socket}`
 
+The `#socket{}` record carries only `pid, view_id, adapter, adapter_state` -- the post-mount
+state needed to dispatch events and navigate.
+
 Internal functions: `scope_ops/2` (prepend view ID to op targets), `encode_reply/3` (build
-`#{<<"o">> => Ops, <<"e">> => Effects}` JSON), `remount_or_close/1` (crash recovery),
-`dispatch_event/4`, `handle_navigate/2` (calls `Adapter:resolve_route/2`).
+`#{<<"o">> => Ops, <<"e">> => Effects}` JSON), `close_crash/1` (crash close tuple),
+`dispatch_event/4`, `handle_navigate/3` (calls `arizona_adapter:call_resolve_route/4`).
 
 ## API -- `arizona_adapter` behaviour
 
 Defines the integration contract for framework adapters. A single callback:
 
 ```erlang
--callback resolve_route(Path :: binary(), State :: term()) ->
-    {module(), map()}.
+-callback resolve_route(Path :: binary(), Qs :: binary(), State :: term()) ->
+    {module(), route_opts(), arizona_req:request()}.
 ```
 
-Called by `arizona_socket` during client-side SPA navigation to resolve a path to a handler module
-and initial bindings.
+Called by `arizona_socket` during client-side SPA navigation to resolve a path + query string to
+a handler module, the route's static options (`bindings`, `on_mount`, `layout`, `middlewares`),
+and a navigate-scoped `arizona_req` carrying the new URL. Cookies/headers on the returned Request
+are inherited from the original upgrade Req; `path`, `bindings` (path bindings from the router),
+and `params` reflect the new path/qs.
 
 **Shipped implementation:** `arizona_cowboy_adapter` -- resolves routes via
-`cowboy_router:execute/2` and the compiled dispatch stored by `arizona_cowboy_router`. Also exports
-`resolve_cowboy_route/1` used by `arizona_cowboy_ws` during init.
+`cowboy_router:execute/2` and the compiled dispatch stored by `arizona_cowboy_router`, then wraps
+the resolved cowboy req in `arizona_cowboy_req:new/1`.
 
 ## Cowboy handlers
 
@@ -277,16 +300,23 @@ and initial bindings.
 
 ## Data flow
 
-**SSR (HTTP):** `arizona_cowboy_http` calls `arizona_render:render_to_iolist(Handler, Opts)` where
-Opts may contain `layout => {Mod, Fun}` and `bindings => map()`. When a layout is provided, it
-mounts the page handler, renders to page HTML, then injects the page HTML into mount bindings as
-`inner_content` and passes the bindings to the layout's `render/1`. The layout uses `?html` with
-`az_nodiff` on the root element -- a stateless HTML shell (DOCTYPE, head, body, scripts) with no
-markers or `az` attributes. When layout is absent, the page is rendered directly without a wrapper.
-Route config provides `handler`, `layout`, and `bindings`.
+**SSR (HTTP):** `arizona_cowboy_http:init/2` wraps the cowboy req in an `arizona_req:request()`,
+runs any route middlewares (`arizona_req:apply_middlewares/3`), then calls
+`arizona_render:render_view_to_iolist(Handler, Req, Opts)` where Opts may contain
+`layout => {Mod, Fun}`, `bindings => map()`, and `on_mount => [...]`. `render_view_to_iolist/3`
+mounts the page via `arizona_view:call_mount/3` (passing the Request), applies `on_mount` hooks,
+renders to page HTML, then optionally injects the page HTML into mount bindings as `inner_content`
+and passes the bindings to the layout's `render/1`. The layout uses `?html` with `az_nodiff` on
+the root element -- a stateless HTML shell (DOCTYPE, head, body, scripts) with no markers or `az`
+attributes. When layout is absent, the page is rendered directly without a wrapper. Route config
+provides `handler`, `layout`, `bindings`, `on_mount`, and `middlewares`. URL data (path bindings,
+query params) does NOT flat-merge into Bindings -- handlers reach it via `arizona_req:bindings/1`
+/ `arizona_req:params/1` or a middleware that projects what it wants.
 
-**WebSocket mount:** `arizona_cowboy_ws` calls `arizona_live:start_link/4` (passing `self()` as
-transport PID and route `on_mount` hooks) then `arizona_live:mount/1`. Mount establishes the
+**WebSocket mount:** `arizona_cowboy_ws:init/2` builds an `arizona_req:request()`, runs
+middlewares, then hands off to `arizona_socket:init/3`, which calls
+`arizona_live:start_link/5` (passing `self()` as transport PID, the Req, and route `on_mount`
+hooks) then `arizona_live:mount/1`. Mount establishes the
 server-side snapshot (matching SSR). Returns `{ok, ViewId}` where ViewId comes from
 `maps:get(id, MountBindings)`. Handlers detect the connected context via `?connected` macro
 (delegates to `arizona_live:connected()`) which reads a process dictionary flag set in
@@ -340,15 +370,24 @@ render(Bindings) ->
 
 ## Handler callbacks
 
-Handlers include `arizona_stateful.hrl` (which sets the behaviour, parse transform, and template
-macros) and export these functions:
+Three roles, each with its own header:
+
+- **Route-level pages** include `arizona_view.hrl` (sets `-behaviour(arizona_view)` +
+  `-behaviour(arizona_handler)`, parse transform, template macros). Mount is `mount/2` and takes
+  `(Bindings, az:request())`.
+- **Embeddable stateful components** include `arizona_stateful.hrl` (sets
+  `-behaviour(arizona_stateful)` + `-behaviour(arizona_handler)`). Mount is `mount/1`;
+  instantiated from a parent template via `?stateful(Handler, Props)`.
+- **Pure stateless templates** include `arizona_stateless.hrl` (parse transform only, no
+  behaviour). Invoked via `?stateless(Callback, Props)` or `?stateless(Mod, Fun, Props)`.
 
 ```erlang
--module(my_handler).
--include("arizona_stateful.hrl").
--export([mount/1, render/1, handle_event/3]).
+%% Route-level page
+-module(my_page).
+-include("arizona_view.hrl").
+-export([mount/2, render/1, handle_event/3]).
 
-mount(Bindings) ->
+mount(Bindings, _Req) ->
     {maps:merge(#{id => ~"page", count => 0}, Bindings), #{}}.
 
 render(Bindings) ->
@@ -358,25 +397,27 @@ handle_event(~"inc", _Payload, Bindings) ->
     {Bindings#{count => maps:get(count, Bindings, 0) + 1}, #{}, []}.
 ```
 
-**Callback signatures** (see `src/arizona_stateful.erl` for authoritative types):
+**Callback signatures** (see `src/arizona_view.erl`, `src/arizona_stateful.erl`, and
+`src/arizona_handler.erl` for authoritative types):
 
 ```erlang
-mount(Bindings) -> {NewBindings, Resets}.                                     %% Required
-render(Bindings) -> #{s => [...], d => [...]}.                                %% Required
-handle_event(Event, Payload, Bindings) -> {NewBindings, Resets, Effects}.     %% Optional
-handle_info(Info, Bindings) -> {NewBindings, Resets, Effects}.                %% Optional (server push)
-handle_update(Props, Bindings) -> {NewBindings, Resets}.                      %% Optional (child views)
-unmount(Bindings) -> term().                                                   %% Optional (cleanup)
+mount(Bindings, Request) -> {NewBindings, Resets}.                             %% Required -- view
+mount(Bindings) -> {NewBindings, Resets}.                                      %% Required -- stateful
+render(Bindings) -> #{s => [...], d => [...]}.                                 %% Required (arizona_handler)
+handle_event(Event, Payload, Bindings) -> {NewBindings, Resets, Effects}.      %% Optional (arizona_handler)
+handle_info(Info, Bindings) -> {NewBindings, Resets, Effects}.                 %% Optional (arizona_handler)
+handle_update(Props, Bindings) -> {NewBindings, Resets}.                       %% Optional (arizona_handler; stateful only in practice)
+unmount(Bindings) -> term().                                                   %% Optional (arizona_handler)
 ```
 
 `Resets` is a map of binding values reapplied on top of `NewBindings` after the callback returns --
 typically `#{}`, or a subset of keys you want cleared (form fields, transient flags). `Effects` is a
 list of `arizona_js:cmd()` values to run client-side after the diff is applied.
 
-`mount/1` must produce `Bindings` containing an `id` key -- this becomes the ViewId used for event
-routing and navigate targeting. The parse transform auto-injects `az-view` as a boolean attribute on
-the root element of `render/1` in `arizona_stateful` modules. Using `az_view` manually outside this
-context raises a compile error.
+Mount must produce `Bindings` containing an `id` key -- this becomes the ViewId used for event
+routing and navigate targeting. The parse transform auto-injects `az-view` as a boolean attribute
+on the root element of `render/1` when the module declares either `arizona_view` or
+`arizona_stateful` behaviour. Using `az_view` manually outside this context raises a compile error.
 
 **`id` attribute restriction:** The root element's `id` MUST use `{id, ?get(id)}` (or the equivalent
 `arizona_template:get(id, Bindings)` / `az:get(id, Bindings)`). Static binaries and composed values
@@ -385,8 +426,8 @@ are not allowed. This is a compile-time check.
 The `id` serves three roles simultaneously: DOM id (`document.getElementById`), views map key
 (server-side state tracking), and wire protocol target (op scoping). All three must be the same
 value. Using `?get(id)` ensures the template renders the same value the parent passed in Props and
-the server uses for tracking. `id` is a restricted key -- `mount/1` cannot override the value passed
-by the parent in Props.
+the server uses for tracking. `id` is a restricted key -- the handler's mount callback cannot
+override the value passed by the parent in Props.
 
 `handle_event/3` effects: a list of `arizona_js:cmd()` tuples, built using functions in
 `arizona_js.erl`. Same commands used in template attributes. Common effects:
@@ -474,39 +515,76 @@ To integrate Arizona into any Erlang web framework:
 **1. Add `arizona` as a dependency.** Ensure `cowboy` is NOT required (unless your framework already
 uses it).
 
-**2. Implement the `arizona_adapter` behaviour** for route resolution during SPA navigation:
+**2. Implement the `arizona_req` behaviour** to adapt your framework's native request to
+Arizona's abstraction. The adapter exposes eager `method`/`path` plus lazy `bindings`, `params`,
+`cookies`, `headers`, `body` to handlers.
+
+```erlang
+-module(my_framework_req).
+-behaviour(arizona_req).
+-export([new/1]).
+-export([parse_bindings/1, parse_params/1, parse_cookies/1, parse_headers/1, read_body/1]).
+
+new(NativeReq) ->
+    arizona_req:new(?MODULE, NativeReq, #{
+        method => my_framework:method(NativeReq),
+        path => my_framework:path(NativeReq)
+    }).
+
+parse_bindings(Req) -> my_framework:bindings(Req).
+parse_params(Req)   -> my_framework:qs(Req).
+%% ... etc
+```
+
+**3. Implement the `arizona_adapter` behaviour** for route resolution during SPA navigation:
 
 ```erlang
 -module(my_framework_adapter).
 -behaviour(arizona_adapter).
--export([resolve_route/2]).
+-export([resolve_route/3]).
 
-resolve_route(Path, _State) ->
-    %% Use your framework's routing to resolve Path -> {Handler, Bindings}
+resolve_route(Path, Qs, State) ->
+    %% Use your framework's routing to resolve Path -> {Handler, RouteOpts}
     case my_framework_router:match(Path) of
-        {ok, Handler, Bindings} -> {Handler, Bindings};
-        error -> error({no_route, Path})
+        {ok, Handler, RouteOpts} ->
+            NativeReq = my_framework:synthesize_navigate(State, Path, Qs),
+            ArzReq = my_framework_req:new(NativeReq),
+            {Handler, RouteOpts, ArzReq};
+        error ->
+            error({no_route, Path})
     end.
 ```
 
-**3. Handle HTTP requests** -- mount the handler and render HTML:
+**4. Handle HTTP requests** -- build an `arizona_req`, run middlewares, render via
+`render_view_to_iolist/3`:
 
 ```erlang
-handle_http_request(Req) ->
+handle_http_request(NativeReq) ->
     Handler = my_page_handler,
-    Opts = #{layout => {my_layout, render}, bindings => #{title => <<"Home">>}},
-    HTML = arizona_render:render_to_iolist(Handler, Opts),
-    {200, #{<<"content-type">> => <<"text/html">>}, HTML}.
+    ArzReq = my_framework_req:new(NativeReq),
+    Bindings = #{title => <<"Home">>},
+    case arizona_req:apply_middlewares(Middlewares, ArzReq, Bindings) of
+        {halt, HaltReq} ->
+            my_framework:raw(arizona_req:raw(HaltReq));
+        {cont, ArzReq1, Bindings1} ->
+            Opts = #{layout => {my_layout, render}, bindings => Bindings1},
+            HTML = arizona_render:render_view_to_iolist(Handler, ArzReq1, Opts),
+            {200, #{<<"content-type">> => <<"text/html">>}, HTML}
+    end.
 ```
 
-**4. Handle WebSocket connections** -- delegate to `arizona_socket`:
+**5. Handle WebSocket connections** -- delegate to `arizona_socket`:
 
 ```erlang
 -module(my_framework_ws).
 
 ws_init(State) ->
-    {Handler, Bindings} = resolve_handler_from_framework(State),
-    Opts = #{adapter => my_framework_adapter, adapter_state => State},
+    {Handler, Bindings, ArzReq} = resolve_handler_from_framework(State),
+    Opts = #{
+        req => ArzReq,
+        adapter => my_framework_adapter,
+        adapter_state => my_framework:native(State)
+    },
     handle_result(arizona_socket:init(Handler, Bindings, Opts), State).
 
 ws_receive(Data, #{socket := Socket} = State) ->
@@ -523,7 +601,7 @@ handle_result({close, Code, Reason, _Socket}, State) ->
     {close, Code, Reason, State}.
 ```
 
-**5. Serve Arizona's client JS** from `priv/static/assets/js/arizona.min.js` through your
+**6. Serve Arizona's client JS** from `priv/static/assets/js/arizona.min.js` through your
 framework's static file handler.
 
 The shipped Cowboy integration (`arizona_cowboy_ws`, `arizona_cowboy_http`,

@@ -16,18 +16,20 @@ How the event is triggered in `assets/js/arizona.js`:
 
 ## 2. WebSocket handler
 
-How `src/arizona_ws_handler.erl` receives and routes:
-- `websocket_handle` decodes the JSON array
-- Calls `arizona_live:handle_event/4` with `(Pid, ViewId, Event, Payload)`
+How `src/arizona_cowboy_ws.erl` receives and `src/arizona_socket.erl` routes:
+- `websocket_handle` forwards the text frame to `arizona_socket:handle_in/2`
+- `handle_in` decodes the JSON array and calls `arizona_live:handle_event/4` with
+  `(Pid, ViewId, Event, Payload)`
 
 ## 3. Live process
 
 How `src/arizona_live.erl` dispatches:
 - Root vs child view routing (checks `views` map for `ViewId`)
-- Calls `Handler:handle_event(Event, Payload, Bindings)`
-- Gets back `{NewBindings, Effects}`
+- Calls `arizona_handler:call_handle_event(H, Event, Payload, Bindings)` which invokes the
+  handler's `handle_event/3`
+- Gets back `{NewBindings, Resets, Effects}`
 - Computes changed keys via `compute_changed/2`
-- Re-renders: `Handler:render(NewBindings)`
+- Re-renders via `arizona_handler:call_render/2`
 - Diffs: `arizona_diff:diff/4(NewTmpl, OldSnap, Views, Changed)`
 
 ## 4. Diff & ops
