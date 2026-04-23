@@ -20,11 +20,10 @@
     middleware_halt_redirects/1,
     middleware_halt_rejects_ws/1,
     middleware_pipeline_runs_in_order/1,
-    crash_event_remount/1,
-    crash_info_remount/1,
+    crash_event_closes/1,
+    crash_info_closes/1,
     crash_init_closes/1,
-    normal_exit_closes/1,
-    remount_keeps_connection/1
+    normal_exit_closes/1
 ]).
 
 all() ->
@@ -55,11 +54,10 @@ groups() ->
             middleware_pipeline_runs_in_order
         ]},
         {crash_recovery, [sequence], [
-            crash_event_remount,
-            crash_info_remount,
+            crash_event_closes,
+            crash_info_closes,
             crash_init_closes,
-            normal_exit_closes,
-            remount_keeps_connection
+            normal_exit_closes
         ]}
     ].
 
@@ -327,65 +325,38 @@ reconnect_init(Config) ->
 %% Crash recovery tests
 %% --------------------------------------------------------------------
 
-crash_event_remount(Config) ->
+crash_event_closes(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/">>),
-    %% Trigger a crash via event
+    %% Trigger a crash via event -- socket closes with 4500; the client
+    %% reconnects on its own on a fresh handshake.
     ok = ws_send_json(Sock, [~"crashable", ~"crash", #{}]),
-    %% Should receive a REPLACE op from remount
-    {text, Resp} = ws_recv(Sock),
-    Decoded = json:decode(Resp),
-    ?assertMatch(#{~"o" := _}, Decoded),
-    ws_close(Sock).
+    {close, 4500, _} = ws_recv(Sock),
+    gen_tcp:close(Sock).
 
-crash_info_remount(Config) ->
+crash_info_closes(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/">>),
     %% crash_async sends self() ! crash, which causes handle_info to
-    %% crash the live process asynchronously. This exercises the
-    %% websocket_info({'EXIT', Pid, Reason}) path.
+    %% crash the live process asynchronously. The linked EXIT is
+    %% trapped by the socket and closes with 4500.
     ok = ws_send_json(Sock, [~"crashable", ~"crash_async", #{}]),
-    %% The event itself returns no ops. The crash happens after,
-    %% triggering remount which sends a REPLACE op.
-    {text, Resp} = ws_recv(Sock),
-    Decoded = json:decode(Resp),
-    ?assertMatch(#{~"o" := _}, Decoded),
-    ws_close(Sock).
+    {close, 4500, _} = ws_recv(Sock),
+    gen_tcp:close(Sock).
 
 crash_init_closes(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/crash_on_mount">>),
-    %% Init crashes, remount also crashes → close with 4500
+    %% Mount crashes -- socket closes with 4500.
     {close, 4500, _} = ws_recv(Sock),
     gen_tcp:close(Sock).
 
 normal_exit_closes(Config) ->
-    %% When the live process exits normally, WS should close with 1000.
-    %% We test this by connecting, then killing the live process normally
-    %% via a direct exit signal from outside.
+    %% When the live process exits normally, the socket should close
+    %% cleanly with 1000. Verifying this from the client side without
+    %% direct access to the live pid is structurally covered by the
+    %% EXIT-normal clause in handle_info/2; exercise the live path end
+    %% to end by mounting, sending an event, and closing the client.
     {ok, Sock} = ws_connect(Config, <<"/">>),
-    %% Send an event to ensure the process is fully mounted
     ok = ws_send_json(Sock, [~"crashable", ~"set_status", #{~"value" => ~"alive"}]),
     _ = ws_recv(Sock, 1000),
-    %% We can't directly access the live pid from the test, but we can
-    %% trigger a crash and verify remount works, which also exercises
-    %% the EXIT handler. For normal exit specifically, we verify the
-    %% close behavior by observing that the connection remains healthy
-    %% after a crash+remount (covered by remount_keeps_connection).
-    %% The normal exit path (EXIT normal → close 1000) is structurally
-    %% similar and is covered by the EUnit/integration level.
-    ws_close(Sock).
-
-remount_keeps_connection(Config) ->
-    {ok, Sock} = ws_connect(Config, <<"/">>),
-    %% Crash and remount
-    ok = ws_send_json(Sock, [~"crashable", ~"crash", #{}]),
-    {text, _} = ws_recv(Sock),
-    %% After remount, events should work on the new live process
-    ok = ws_send_json(Sock, [~"crashable", ~"set_status", #{~"value" => ~"after_crash"}]),
-    {text, Resp} = ws_recv(Sock),
-    Decoded = json:decode(Resp),
-    ?assertMatch(#{~"o" := _}, Decoded),
-    %% Ping still works
-    ok = ws_send(Sock, <<"0">>),
-    {text, <<"1">>} = ws_recv(Sock),
     ws_close(Sock).
 
 %% --------------------------------------------------------------------

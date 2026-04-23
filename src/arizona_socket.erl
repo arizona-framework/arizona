@@ -24,9 +24,10 @@ Outbound text frames are JSON maps with keys `~"o"` (ops) and/or
 
 ## Crash handling
 
-The live process is linked. If it exits with a non-normal reason, the
-socket attempts to remount the same handler; if that also fails, the
-socket closes with code `4500` (server crash).
+The live process is linked. If it exits with a non-normal reason
+(or any handler in `handle_in/2` raises), the socket closes with
+code `4500` (server crash). The client reconnects on its own and
+the fresh handshake re-runs `init/3` with a new live process.
 """.
 
 -include("arizona.hrl").
@@ -70,10 +71,6 @@ socket closes with code `4500` (server crash).
 -record(socket, {
     pid :: pid() | undefined,
     view_id :: binary() | undefined,
-    handler :: module(),
-    bindings :: map(),
-    req :: az:request() | undefined,
-    on_mount :: arizona_live:on_mount(),
     adapter :: module(),
     adapter_state :: term()
 }).
@@ -123,15 +120,8 @@ init(Handler, Bindings, Opts) ->
     Req = maps:get(req, Opts, undefined),
     Adapter = maps:get(adapter, Opts, undefined),
     AdapterState = maps:get(adapter_state, Opts, undefined),
-    Socket = #socket{
-        handler = Handler,
-        bindings = Bindings,
-        req = Req,
-        on_mount = OnMount,
-        adapter = Adapter,
-        adapter_state = AdapterState
-    },
-    safe_init(Socket, fun() ->
+    Socket = #socket{adapter = Adapter, adapter_state = AdapterState},
+    safe_init(Handler, Socket, fun() ->
         {ok, Pid} = arizona_live:start_link(Handler, Bindings, Req, self(), OnMount),
         case Reconnect of
             true ->
@@ -171,15 +161,18 @@ handle_in(JSON, #socket{pid = Pid} = Socket) ->
             try
                 handle_navigate(Path, Qs, Socket)
             catch
-                _:_ -> remount_or_close(Socket)
+                Class:Reason:Stacktrace ->
+                    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
+                    close_crash(Socket)
             end;
         [Target, Event, Payload] when is_binary(Event) ->
             try dispatch_event(Pid, Target, Event, Payload) of
                 {AllOps, AllEffects} ->
                     encode_reply(AllOps, AllEffects, Socket)
             catch
-                _:_ ->
-                    remount_or_close(Socket)
+                Class:Reason:Stacktrace ->
+                    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
+                    close_crash(Socket)
             end;
         _ ->
             {ok, Socket}
@@ -189,8 +182,9 @@ handle_in(JSON, #socket{pid = Pid} = Socket) ->
 Handles inbox messages forwarded by the transport.
 
 Routes `{arizona_push, Ops, Effects}` from the live process into a
-reply frame. Handles `'EXIT'` from the linked live process by either
-remounting (non-normal exit) or closing cleanly (normal exit).
+reply frame. Handles `'EXIT'` from the linked live process by
+closing the socket: cleanly on normal exit, with `?CLOSE_CRASH`
+otherwise. The client reconnects on its own.
 """.
 -spec handle_info(Info, Socket) -> result() when
     Info :: term(),
@@ -200,7 +194,7 @@ handle_info({arizona_push, Ops, Effects}, #socket{view_id = ViewId} = Socket) ->
     encode_reply(ScopedOps, Effects, Socket);
 handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid} = Socket) when Reason =/= normal ->
     logger:error("Live process ~p crashed: ~p", [Pid, Reason]),
-    remount_or_close(Socket);
+    close_crash(Socket);
 handle_info({'EXIT', Pid, normal}, #socket{pid = Pid} = Socket) ->
     {close, 1000, <<>>, Socket};
 handle_info(_Info, Socket) ->
@@ -210,29 +204,18 @@ handle_info(_Info, Socket) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-safe_init(Socket, Fun) ->
+safe_init(Handler, Socket, Fun) ->
     process_flag(trap_exit, true),
     try
         Fun()
     catch
         Class:Reason:Stacktrace ->
-            logger:error("~s in ~p:~p~n~p", [Class, Socket#socket.handler, Reason, Stacktrace]),
-            {close, ?CLOSE_CRASH, ~"server crash", Socket}
+            logger:error("~s in ~p:~p~n~p", [Class, Handler, Reason, Stacktrace]),
+            close_crash(Socket)
     end.
 
-remount_or_close(
-    #socket{handler = H, bindings = IB, req = Req, on_mount = OnMount, view_id = OldVId} = Socket
-) ->
-    try
-        {ok, Pid} = arizona_live:start_link(H, IB, Req, self(), OnMount),
-        {ok, NewVId, PageHTML} = arizona_live:mount_and_render(Pid),
-        Ops = replace_ops(OldVId, PageHTML),
-        encode_reply(Ops, [], Socket#socket{pid = Pid, view_id = NewVId})
-    catch
-        Class:Reason:Stacktrace ->
-            logger:error("~s in ~p:~p~n~p", [Class, H, Reason, Stacktrace]),
-            {close, ?CLOSE_CRASH, ~"server crash", Socket}
-    end.
+close_crash(Socket) ->
+    {close, ?CLOSE_CRASH, ~"server crash", Socket}.
 
 handle_navigate(
     Path,
@@ -244,7 +227,7 @@ handle_navigate(
     OnMount = maps:get(on_mount, RouteOpts, []),
     {ok, NewVId, PageHTML} = arizona_live:navigate(Pid, H, IB, NewReq, OnMount),
     Ops = replace_ops(OldVId, PageHTML),
-    encode_reply(Ops, [], Socket#socket{req = NewReq, view_id = NewVId, on_mount = OnMount}).
+    encode_reply(Ops, [], Socket#socket{view_id = NewVId}).
 
 replace_ops(ViewId, PageHTML) ->
     [[?OP_REPLACE, ViewId, PageHTML]].

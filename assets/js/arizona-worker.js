@@ -258,7 +258,6 @@ function openSocket() {
         postMessage([2, e.code]);
 
         if (e.code === 1000) return;
-        if (e.code === 4500) return;
         _reconnecting = true;
         _reconnectTimer = setTimeout(openSocket, backoff(_attempt++));
     };
