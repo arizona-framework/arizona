@@ -127,7 +127,8 @@ cover-js:
 doc: doc-erl doc-js
 
 doc-erl:
-	rebar3 doc
+	@set -o pipefail; rebar3 doc 2>&1 | tee /dev/stderr | \
+		(! grep -q "warning")
 
 doc-js:
 	@echo "No JS docs configured yet"

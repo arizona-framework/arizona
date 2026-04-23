@@ -310,8 +310,8 @@ known child view, dispatches to child; otherwise dispatches to root handler. Ret
 envelope `{"o": scopedOps, "e": effects}`.
 
 **SPA navigation + unmount:** Client clicks `[az-navigate]` link -> JS intercepts, calls
-`history.pushState`, sends `["navigate", {path}]` over WebSocket. `arizona_cowboy_ws` calls
-`arizona_live:navigate/3`. Before mounting the new handler, the framework cancels pending
+`history.pushState`, sends `["navigate", {path, qs}]` over WebSocket. `arizona_cowboy_ws` calls
+`arizona_live:navigate/4`. Before mounting the new handler, the framework cancels pending
 `send_after` timers and calls the old root handler's `unmount/1` callback (if exported). Propagation
 to children is opt-in -- the root can broadcast via pubsub in its `unmount/1`. Then the new handler
 is mounted and gen_server state is reset. Returns `{ok, NewViewId, PageHTML}`. WS handler sends
