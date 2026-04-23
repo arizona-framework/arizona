@@ -58,7 +58,7 @@ fingerprints already shipped in the initial HTML.
 -export([navigate/5]).
 -export([handle_event/4]).
 -export([seed_fps/2]).
--export([apply_on_mount/2]).
+-export([apply_on_mount/3]).
 
 %% --------------------------------------------------------------------
 %% gen_server callback exports
@@ -105,7 +105,8 @@ fingerprints already shipped in the initial HTML.
 %% Types definitions
 %% --------------------------------------------------------------------
 
--nominal on_mount_hook() :: fun((map()) -> map()) | {module(), atom()}.
+-nominal on_mount_hook() ::
+    fun((map(), az:request()) -> map()) | {module(), atom()}.
 -nominal on_mount() :: [on_mount_hook()].
 
 %% --------------------------------------------------------------------
@@ -303,17 +304,23 @@ seed_fps(Pid, FpList) ->
     gen_server:cast(Pid, {seed_fps, FpList}).
 
 -doc """
-Folds an `on_mount` hook chain over `Bindings`. Each hook is either a
-1-arity fun or a `{Module, Function}` tuple. Used both internally and
-exposed for SSR-style rendering paths in `arizona_render`.
+Folds an `on_mount` hook chain over `Bindings`, threading the
+current `az:request()` into each hook. Each hook is either a
+2-arity fun or a `{Module, Function}` tuple whose target has
+arity 2. Used both internally and exposed for SSR-style rendering
+paths in `arizona_render`.
 """.
--spec apply_on_mount(OnMount, Bindings) -> Bindings1 when
+-spec apply_on_mount(OnMount, Bindings, Req) -> Bindings1 when
     OnMount :: on_mount(),
     Bindings :: map(),
+    Req :: az:request(),
     Bindings1 :: map().
-apply_on_mount([], Bindings) -> Bindings;
-apply_on_mount([{Mod, Fun} | Rest], Bindings) -> apply_on_mount(Rest, Mod:Fun(Bindings));
-apply_on_mount([Fun | Rest], Bindings) -> apply_on_mount(Rest, Fun(Bindings)).
+apply_on_mount([], Bindings, _Req) ->
+    Bindings;
+apply_on_mount([{Mod, Fun} | Rest], Bindings, Req) ->
+    apply_on_mount(Rest, Mod:Fun(Bindings, Req), Req);
+apply_on_mount([Fun | Rest], Bindings, Req) ->
+    apply_on_mount(Rest, Fun(Bindings, Req), Req).
 
 %% --------------------------------------------------------------------
 %% gen_server Callbacks
@@ -426,7 +433,7 @@ page_content(_Snap, HTML) ->
     iolist_to_binary(HTML).
 
 do_mount(H, B0, Req, V0, OnMount) ->
-    B1 = apply_on_mount(OnMount, B0),
+    B1 = apply_on_mount(OnMount, B0, Req),
     {B2, Resets} = call_mount(H, B1, Req),
     ok = arizona_eval:check_restricted_keys(B2, B1, H),
     ViewId = maps:get(id, B2),

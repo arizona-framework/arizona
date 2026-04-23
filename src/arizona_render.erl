@@ -167,31 +167,36 @@ render_to_iolist(#{s := Statics, d := Dynamics}) ->
 -doc """
 SSR render for a stateful handler.
 
-Mounts via `mount/1`, renders, optionally wraps in a layout. Used by
-tests that SSR stateful components in isolation; production HTTP SSR
-goes through `render_view_to_iolist/3`.
+Mounts via `mount/1`, renders, optionally wraps in a layout. Used
+by tests that SSR stateful components in isolation; production
+HTTP SSR goes through `render_view_to_iolist/3`. `on_mount` is a
+route-level concept and is not honored on this path.
 """.
 -spec render_to_iolist(Handler, Opts) -> iolist() when
     Handler :: module(),
     Opts :: render_opts().
 render_to_iolist(Handler, Opts) ->
-    Bindings0 = initial_bindings(Opts),
+    Bindings0 = maps:get(bindings, Opts, #{}),
     {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
     finish_ssr(Handler, Bindings, Opts).
 
 -doc """
 SSR render for a route-level view.
 
-Mounts the view with the provided `arizona_req:request()`, optionally
-applies an `on_mount` chain, renders, and optionally wraps the page
-output in a layout module.
+Mounts the view with the provided `az:request()`, applies the
+`on_mount` chain (threading the Request into each hook), renders,
+and optionally wraps the page output in a layout module.
 """.
 -spec render_view_to_iolist(Handler, Req, Opts) -> iolist() when
     Handler :: module(),
     Req :: az:request(),
     Opts :: render_opts().
 render_view_to_iolist(Handler, Req, Opts) ->
-    Bindings0 = initial_bindings(Opts),
+    Bindings0 = arizona_live:apply_on_mount(
+        maps:get(on_mount, Opts, []),
+        maps:get(bindings, Opts, #{}),
+        Req
+    ),
     {Bindings, _Resets} = arizona_view:call_mount(Handler, Bindings0, Req),
     finish_ssr(Handler, Bindings, Opts).
 
@@ -330,12 +335,6 @@ fingerprint_payload(#{s := S, d := D}) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
-
-initial_bindings(Opts) ->
-    arizona_live:apply_on_mount(
-        maps:get(on_mount, Opts, []),
-        maps:get(bindings, Opts, #{})
-    ).
 
 finish_ssr(Handler, Bindings, Opts) ->
     PageTmpl = arizona_handler:call_render(Handler, Bindings),

@@ -895,7 +895,7 @@ two_children_per_item_survive_dep_skip(Config) when is_list(Config) ->
 
 on_mount_transforms_bindings(Config) when is_list(Config) ->
     %% on_mount adds a key to bindings before mount
-    OnMount = [fun(B) -> B#{extra => <<"from_on_mount">>} end],
+    OnMount = [fun(B, _Req) -> B#{extra => <<"from_on_mount">>} end],
     {ok, Pid} = arizona_live:start_link(arizona_timer, #{}, self(), OnMount),
     {ok, _} = arizona_live:mount(Pid),
     %% Timer renders ?get(message). On mount, message defaults to "none".
@@ -912,7 +912,7 @@ on_mount_transforms_bindings(Config) when is_list(Config) ->
 
 on_mount_works_on_navigate(Config) when is_list(Config) ->
     %% on_mount runs on navigate too
-    OnMount = [fun(B) -> B#{extra => <<"nav_mount">>} end],
+    OnMount = [fun(B, _Req) -> B#{extra => <<"nav_mount">>} end],
     {ok, Pid} = arizona_live:start_link(arizona_timer, #{}, self()),
     {ok, _} = arizona_live:mount(Pid),
     %% Navigate with on_mount
@@ -933,8 +933,8 @@ on_mount_empty_is_noop(Config) when is_list(Config) ->
 
 on_mount_pipeline(Config) when is_list(Config) ->
     %% Multiple on_mount hooks run in order, each transforms bindings.
-    Step1 = fun(B) -> B#{step => 1} end,
-    Step2 = fun(#{step := N} = B) -> B#{step => N + 1} end,
+    Step1 = fun(B, _Req) -> B#{step => 1} end,
+    Step2 = fun(#{step := N} = B, _Req) -> B#{step => N + 1} end,
     OnMount = [Step1, Step2],
     {ok, Pid} = arizona_live:start_link(arizona_timer, #{}, self(), OnMount),
     {ok, _} = arizona_live:mount(Pid),
