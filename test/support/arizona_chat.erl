@@ -1,9 +1,9 @@
 -module(arizona_chat).
--include("arizona_stateful.hrl").
--export([mount/1, unmount/1, render/1, handle_event/3, handle_info/2]).
+-include("arizona_view.hrl").
+-export([mount/2, unmount/1, render/1, handle_event/3, handle_info/2]).
 
--spec mount(az:bindings()) -> az:mount_ret().
-mount(Bindings) ->
+-spec mount(az:bindings(), az:request()) -> az:mount_ret().
+mount(Bindings, _Req) ->
     ?connected andalso ?subscribe(chat),
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end),
     {maps:merge(#{id => ~"page", messages => Stream}, Bindings), #{}}.

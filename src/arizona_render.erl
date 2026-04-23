@@ -51,6 +51,7 @@ op-code targets.
 -export([render/2]).
 -export([render_to_iolist/1]).
 -export([render_to_iolist/2]).
+-export([render_view_to_iolist/3]).
 -export([resolve_id/1]).
 -export([zip/2]).
 -export([zip_item/2]).
@@ -63,7 +64,10 @@ op-code targets.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([render/1, resolve_id/1, zip/2]).
+-ignore_xref([render/1]).
+-ignore_xref([render_to_iolist/2]).
+-ignore_xref([resolve_id/1]).
+-ignore_xref([zip/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -161,28 +165,35 @@ render_to_iolist(#{s := Statics, d := Dynamics}) ->
     zip(Statics, render_ssr_dynamics(Dynamics)).
 
 -doc """
-SSR render starting from a handler module and `t:render_opts/0`.
+SSR render for a stateful handler.
 
-Mounts the handler, optionally applies an `on_mount` chain, renders, and
-optionally wraps the page output in a layout module.
+Mounts via `mount/1`, renders, optionally wraps in a layout. Used by
+tests that SSR stateful components in isolation; production HTTP SSR
+goes through `render_view_to_iolist/3`.
 """.
 -spec render_to_iolist(Handler, Opts) -> iolist() when
     Handler :: module(),
     Opts :: render_opts().
 render_to_iolist(Handler, Opts) ->
-    Bindings0 = maps:get(bindings, Opts, #{}),
-    OnMount = maps:get(on_mount, Opts, []),
-    Bindings = arizona_live:apply_on_mount(OnMount, Bindings0),
-    {B1, _Resets} = arizona_stateful:call_mount(Handler, Bindings),
-    PageTmpl = arizona_stateful:call_render(Handler, B1),
-    PageHTML = zip(maps:get(s, PageTmpl), render_ssr_dynamics(maps:get(d, PageTmpl))),
-    case maps:get(layout, Opts, undefined) of
-        undefined ->
-            PageHTML;
-        {LayoutMod, LayoutFun} ->
-            LayoutTmpl = LayoutMod:LayoutFun(B1#{inner_content => PageHTML}),
-            render_to_iolist(LayoutTmpl)
-    end.
+    Bindings0 = initial_bindings(Opts),
+    {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
+    finish_ssr(Handler, Bindings, Opts).
+
+-doc """
+SSR render for a route-level view.
+
+Mounts the view with the provided `arizona_req:request()`, optionally
+applies an `on_mount` chain, renders, and optionally wraps the page
+output in a layout module.
+""".
+-spec render_view_to_iolist(Handler, Req, Opts) -> iolist() when
+    Handler :: module(),
+    Req :: az:request(),
+    Opts :: render_opts().
+render_view_to_iolist(Handler, Req, Opts) ->
+    Bindings0 = initial_bindings(Opts),
+    {Bindings, _Resets} = arizona_view:call_mount(Handler, Bindings0, Req),
+    finish_ssr(Handler, Bindings, Opts).
 
 -doc """
 Resolves an id-or-template to a binary id.
@@ -193,7 +204,7 @@ SSR-renders it and converts the iolist to a binary.
 -spec resolve_id(Input) -> binary() when
     Input :: binary() | arizona_template:template().
 resolve_id(Id) when is_binary(Id) -> Id;
-resolve_id(#{s := _, d := _} = Tmpl) ->
+resolve_id(Tmpl) ->
     {HTML, _Snap} = render(Tmpl),
     iolist_to_binary(HTML).
 
@@ -320,6 +331,23 @@ fingerprint_payload(#{s := S, d := D}) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
+initial_bindings(Opts) ->
+    arizona_live:apply_on_mount(
+        maps:get(on_mount, Opts, []),
+        maps:get(bindings, Opts, #{})
+    ).
+
+finish_ssr(Handler, Bindings, Opts) ->
+    PageTmpl = arizona_handler:call_render(Handler, Bindings),
+    PageHTML = zip(maps:get(s, PageTmpl), render_ssr_dynamics(maps:get(d, PageTmpl))),
+    case maps:get(layout, Opts, undefined) of
+        undefined ->
+            PageHTML;
+        {LayoutMod, LayoutFun} ->
+            LayoutTmpl = LayoutMod:LayoutFun(Bindings#{inner_content => PageHTML}),
+            render_to_iolist(LayoutTmpl)
+    end.
+
 zip_stream_item(Statics, ItemD) ->
     zip(Statics, [arizona_template:unwrap_val(V) || {_Az, V} <:- ItemD]).
 
@@ -368,7 +396,7 @@ render_ssr_val(#{t := ?EACH, source := Source, template := Tmpl}) when is_map(So
     #{t => ?EACH, items => ItemSnaps, template => Tmpl};
 render_ssr_val(#{stateful := H, props := Props}) ->
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
-    make_ssr_child_snap(arizona_stateful:call_render(H, B1));
+    make_ssr_child_snap(arizona_handler:call_render(H, B1));
 render_ssr_val(#{callback := Callback, props := Props}) ->
     Tmpl = Callback(Props),
     render_ssr_val(Tmpl);

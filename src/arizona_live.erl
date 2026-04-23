@@ -9,15 +9,16 @@ WebSocket handler) with the render and diff pipeline.
 ## Lifecycle
 
 1. **Mount** -- `mount/1` or `mount_and_render/1` calls the root handler's
-   `mount/1`, runs `on_mount` hooks, renders the first template, and
-   stores the resulting snapshot.
+   `mount/1` (stateful) or `mount/2` (view, with Request), runs
+   `on_mount` hooks, renders the first template, and stores the
+   resulting snapshot.
 2. **Events** -- `handle_event/4` dispatches a client event to either
    the root handler or a nested child view (located via `ViewId`),
    then diffs the resulting template against the prior snapshot and
    pushes ops back over the transport.
 3. **Info messages** -- `handle_info/2` invokes the handler's optional
    `handle_info/2` callback, diffs, and pushes the resulting ops.
-4. **Navigate** -- `navigate/3,4` unmounts the old root, cancels pending
+4. **Navigate** -- `navigate/4,5` unmounts the old root, cancels pending
    timers, mounts the new handler, and replies with fresh content.
 
 ## Process dictionary keys
@@ -25,7 +26,7 @@ WebSocket handler) with the render and diff pipeline.
 - `$arizona_connected` -- set to `true` while a transport is attached;
   consulted by `connected/0` so render code can branch on SSR vs live.
 - `$arizona_timers` -- list of refs from `send_after/3`, drained on
-  `navigate/3,4` so stale timers don't fire after a page change.
+  `navigate/4,5` so stale timers don't fire after a page change.
 - `$arizona_deps` -- per-dynamic dependency capture set, used by
   `arizona_eval` and `arizona_template:track/1`.
 
@@ -47,13 +48,14 @@ fingerprints already shipped in the initial HTML.
 -export([start_link/2]).
 -export([start_link/3]).
 -export([start_link/4]).
+-export([start_link/5]).
 -export([connected/0]).
 -export([send/2]).
 -export([send_after/3]).
 -export([mount/1]).
 -export([mount_and_render/1]).
--export([navigate/3]).
 -export([navigate/4]).
+-export([navigate/5]).
 -export([handle_event/4]).
 -export([seed_fps/2]).
 -export([apply_on_mount/2]).
@@ -76,10 +78,11 @@ fingerprints already shipped in the initial HTML.
     start_link/1,
     start_link/2,
     start_link/3,
+    start_link/4,
     connected/0,
     send/2,
     send_after/3,
-    navigate/3
+    navigate/4
 ]).
 
 %% --------------------------------------------------------------------
@@ -112,6 +115,7 @@ fingerprints already shipped in the initial HTML.
 -record(state, {
     handler :: module(),
     bindings :: map(),
+    req :: az:request() | undefined,
     snapshot :: map() | undefined,
     %% #{ViewId => #{handler, bindings, snapshot}}
     views :: map(),
@@ -150,7 +154,7 @@ send(ViewId, Msg) ->
 
 -doc """
 Like `send/2` but delivers after `Time` milliseconds. Returns the timer
-ref, which is also tracked in the process dictionary so `navigate/3,4`
+ref, which is also tracked in the process dictionary so `navigate/4,5`
 can cancel pending timers on page change.
 """.
 -spec send_after(ViewId, Time, Msg) -> reference() when
@@ -199,7 +203,7 @@ start_link(Handler, InitBindings, TransportPid) ->
 
 -doc """
 Starts a live process with initial bindings, a transport pid, and a
-list of `on_mount` hooks applied before the handler's `mount/1`.
+list of `on_mount` hooks applied before the handler's mount callback.
 """.
 -spec start_link(Handler, InitBindings, TransportPid, OnMount) -> gen_server:start_ret() when
     Handler :: module(),
@@ -207,7 +211,23 @@ list of `on_mount` hooks applied before the handler's `mount/1`.
     TransportPid :: pid() | undefined,
     OnMount :: on_mount().
 start_link(Handler, InitBindings, TransportPid, OnMount) ->
-    gen_server:start_link(?MODULE, {Handler, InitBindings, TransportPid, OnMount}, []).
+    start_link(Handler, InitBindings, undefined, TransportPid, OnMount).
+
+-doc """
+Starts a live process with initial bindings, an optional request
+(required for views that take `mount/2`), a transport pid, and a
+list of `on_mount` hooks.
+""".
+-spec start_link(Handler, InitBindings, Req, TransportPid, OnMount) ->
+    gen_server:start_ret()
+when
+    Handler :: module(),
+    InitBindings :: map(),
+    Req :: az:request() | undefined,
+    TransportPid :: pid() | undefined,
+    OnMount :: on_mount().
+start_link(Handler, InitBindings, Req, TransportPid, OnMount) ->
+    gen_server:start_link(?MODULE, {Handler, InitBindings, Req, TransportPid, OnMount}, []).
 
 -doc """
 Mounts the handler without rendering. Returns `{ok, ViewId}`.
@@ -245,27 +265,31 @@ handle_event(Pid, ViewId, Event, Payload) ->
 -doc """
 SPA navigation: unmounts the current root handler, mounts a new one,
 and returns fresh page content. Equivalent to
-`navigate(Pid, NewHandler, InitBindings, [])`.
+`navigate(Pid, NewHandler, InitBindings, Req, [])`.
 """.
--spec navigate(Pid, NewHandler, InitBindings) -> {ok, binary(), binary() | map()} when
-    Pid :: pid(),
-    NewHandler :: module(),
-    InitBindings :: map().
-navigate(Pid, NewHandler, InitBindings) ->
-    navigate(Pid, NewHandler, InitBindings, []).
-
--doc """
-SPA navigation with `on_mount` hooks for the new handler.
-""".
--spec navigate(Pid, NewHandler, InitBindings, OnMount) ->
+-spec navigate(Pid, NewHandler, InitBindings, Req) ->
     {ok, binary(), binary() | map()}
 when
     Pid :: pid(),
     NewHandler :: module(),
     InitBindings :: map(),
+    Req :: az:request() | undefined.
+navigate(Pid, NewHandler, InitBindings, Req) ->
+    navigate(Pid, NewHandler, InitBindings, Req, []).
+
+-doc """
+SPA navigation with `on_mount` hooks for the new handler.
+""".
+-spec navigate(Pid, NewHandler, InitBindings, Req, OnMount) ->
+    {ok, binary(), binary() | map()}
+when
+    Pid :: pid(),
+    NewHandler :: module(),
+    InitBindings :: map(),
+    Req :: az:request() | undefined,
     OnMount :: on_mount().
-navigate(Pid, NewHandler, InitBindings, OnMount) ->
-    gen_server:call(Pid, {navigate, NewHandler, InitBindings, OnMount}, infinity).
+navigate(Pid, NewHandler, InitBindings, Req, OnMount) ->
+    gen_server:call(Pid, {navigate, NewHandler, InitBindings, Req, OnMount}, infinity).
 
 -doc """
 Seeds the live process's `sent_fps` set with fingerprints already
@@ -295,24 +319,30 @@ apply_on_mount([Fun | Rest], Bindings) -> apply_on_mount(Rest, Fun(Bindings)).
 %% gen_server Callbacks
 %% --------------------------------------------------------------------
 
--spec init({Handler, InitBindings, TransportPid, OnMount}) -> {ok, state()} when
+-spec init({Handler, InitBindings, Req, TransportPid, OnMount}) -> {ok, state()} when
     Handler :: module(),
     InitBindings :: map(),
+    Req :: az:request() | undefined,
     TransportPid :: pid() | undefined,
     OnMount :: on_mount().
-init({Handler, InitBindings, TransportPid, OnMount}) ->
+init({Handler, InitBindings, Req, TransportPid, OnMount}) ->
     TransportPid =/= undefined andalso erlang:put('$arizona_connected', true),
     {ok, #state{
         handler = Handler,
         bindings = InitBindings,
+        req = Req,
         views = #{},
         on_mount = OnMount,
         transport_pid = TransportPid,
         sent_fps = #{}
     }}.
 
-handle_call(mount, _From, #state{handler = H, bindings = B0, views = V0, on_mount = OM} = State) ->
-    {ViewId, _HTML, Snap, B2, V1} = do_mount(H, B0, V0, OM),
+handle_call(
+    mount,
+    _From,
+    #state{handler = H, bindings = B0, req = Req, views = V0, on_mount = OM} = State
+) ->
+    {ViewId, _HTML, Snap, B2, V1} = do_mount(H, B0, Req, V0, OM),
     {reply, {ok, ViewId}, State#state{bindings = B2, snapshot = Snap, views = V1}};
 handle_call(
     mount_and_render,
@@ -320,12 +350,13 @@ handle_call(
     #state{
         handler = H,
         bindings = B0,
+        req = Req,
         views = V0,
         on_mount = OM,
         sent_fps = Fps0
     } = State
 ) ->
-    {ViewId, HTML, Snap, B2, V1} = do_mount(H, B0, V0, OM),
+    {ViewId, HTML, Snap, B2, V1} = do_mount(H, B0, Req, V0, OM),
     {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
     {reply, {ok, ViewId, PageContent1}, State#state{
         bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1
@@ -338,17 +369,18 @@ handle_call({event, ViewId, Event, Payload}, _From, #state{views = V0} = State) 
             handle_root_event(Event, Payload, State)
     end;
 handle_call(
-    {navigate, NewHandler, NewIB, NewOnMount},
+    {navigate, NewHandler, NewIB, NewReq, NewOnMount},
     _From,
     #state{handler = OldH, bindings = OldB, transport_pid = TPid, sent_fps = Fps0} = _State
 ) ->
     ok = cancel_pending_timers(),
-    ok = arizona_stateful:call_unmount(OldH, OldB),
-    {NewViewId, HTML, Snap, B2, V1} = do_mount(NewHandler, NewIB, #{}, NewOnMount),
+    ok = arizona_handler:call_unmount(OldH, OldB),
+    {NewViewId, HTML, Snap, B2, V1} = do_mount(NewHandler, NewIB, NewReq, #{}, NewOnMount),
     {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
     {reply, {ok, NewViewId, PageContent1}, #state{
         handler = NewHandler,
         bindings = B2,
+        req = NewReq,
         snapshot = Snap,
         views = V1,
         on_mount = NewOnMount,
@@ -380,7 +412,7 @@ handle_info(Info, State) ->
     handle_root_info(Info, State).
 
 terminate(_Reason, #state{handler = H, bindings = B}) ->
-    ok = arizona_stateful:call_unmount(H, B);
+    ok = arizona_handler:call_unmount(H, B);
 terminate(_Reason, _State) ->
     ok.
 
@@ -393,19 +425,26 @@ page_content(#{f := _} = Snap, _HTML) ->
 page_content(_Snap, HTML) ->
     iolist_to_binary(HTML).
 
-do_mount(H, B0, V0, OnMount) ->
+do_mount(H, B0, Req, V0, OnMount) ->
     B1 = apply_on_mount(OnMount, B0),
-    {B2, Resets} = arizona_stateful:call_mount(H, B1),
+    {B2, Resets} = call_mount(H, B1, Req),
     ok = arizona_eval:check_restricted_keys(B2, B1, H),
     ViewId = maps:get(id, B2),
-    Tmpl = arizona_stateful:call_render(H, B2),
+    Tmpl = arizona_handler:call_render(H, B2),
     {HTML, Snap, V1} = arizona_render:render(Tmpl, V0),
     B3 = arizona_stream:clear_stream_pending(B2, arizona_stream:stream_keys(B2)),
     B4 = maps:merge(B3, Resets),
     {ViewId, HTML, Snap, B4, V1}.
 
+call_mount(H, Bindings, Req) ->
+    _ = code:ensure_loaded(H),
+    case erlang:function_exported(H, mount, 2) of
+        true -> arizona_view:call_mount(H, Bindings, Req);
+        false -> arizona_stateful:call_mount(H, Bindings)
+    end.
+
 handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
-    {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
+    {B1, Resets, Effects} = arizona_handler:call_handle_event(H, Event, Payload, B0),
     {Ops1, Snap1, V1, B3, Fps1, NewState} = process_root_change(H, B1, Resets, State),
     {reply, {ok, Ops1, Effects}, NewState#state{
         bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
@@ -413,12 +452,12 @@ handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
 
 handle_child_event(ViewId, Event, Payload, #state{views = V0} = State) ->
     #{ViewId := #{handler := H, bindings := B0} = View} = V0,
-    {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
+    {B1, Resets, Effects} = arizona_handler:call_handle_event(H, Event, Payload, B0),
     {Ops1, V1, Fps1} = process_child_change(H, B1, Resets, ViewId, View, State),
     {reply, {ok, Ops1, Effects}, State#state{views = V1, sent_fps = Fps1}}.
 
 handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
-    case arizona_stateful:call_handle_info(H, Info, B0) of
+    case arizona_handler:call_handle_info(H, Info, B0) of
         ok ->
             {noreply, State};
         {B1, Resets, Effects} ->
@@ -431,7 +470,7 @@ handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} 
 
 handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State) ->
     #{ViewId := #{handler := H, bindings := B0} = View} = V0,
-    case arizona_stateful:call_handle_info(H, Msg, B0) of
+    case arizona_handler:call_handle_info(H, Msg, B0) of
         ok ->
             {noreply, State};
         {B1, Resets, Effects} ->
@@ -450,7 +489,7 @@ process_root_change(
         bindings = B0, snapshot = Snap0, views = V0, sent_fps = Fps0
     } = State
 ) ->
-    Tmpl = arizona_stateful:call_render(H, B1),
+    Tmpl = arizona_handler:call_render(H, B1),
     Changed = compute_changed(B0, B1),
     {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
     RemovedViews = maps:without(maps:keys(V1), V0),
@@ -463,7 +502,7 @@ process_root_change(
 process_child_change(H, B1, Resets, ViewId, #{snapshot := Snap0} = View, #state{
     views = V0, sent_fps = Fps0
 }) ->
-    Tmpl = arizona_stateful:call_render(H, B1),
+    Tmpl = arizona_handler:call_render(H, B1),
     {Ops, Snap1} = arizona_diff:diff(Tmpl, Snap0),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
@@ -477,7 +516,7 @@ clear_streams_and_apply_resets(B1, Resets) ->
 unmount_removed_views(RemovedViews) ->
     maps:foreach(
         fun(_Id, #{handler := H, bindings := B}) ->
-            ok = arizona_stateful:call_unmount(H, B)
+            ok = arizona_handler:call_unmount(H, B)
         end,
         RemovedViews
     ).

@@ -491,7 +491,7 @@ live_navigate(Config) when is_list(Config) ->
     {ok, <<"page">>} = arizona_live:mount(Pid),
     %% Navigate to about -- returns fingerprint payload since about has f key
     NavOpts = #{title => <<"About">>},
-    {ok, NewViewId, PageContent} = arizona_live:navigate(Pid, arizona_about, NavOpts),
+    {ok, NewViewId, PageContent} = arizona_live:navigate(Pid, arizona_about, NavOpts, undefined),
     ?assertEqual(<<"page">>, NewViewId),
     ?assertMatch(#{<<"f">> := _, <<"s">> := _, <<"d">> := _}, PageContent),
     ?assert(lists:member(<<"About">>, maps:get(<<"d">>, PageContent))).
@@ -505,7 +505,7 @@ live_navigate_then_event(Config) when is_list(Config) ->
     after 1000 -> ct:fail(timeout)
     end,
     %% Navigate to about
-    {ok, _, _} = arizona_live:navigate(Pid, arizona_about, #{title => <<"About">>}),
+    {ok, _, _} = arizona_live:navigate(Pid, arizona_about, #{title => <<"About">>}, undefined),
     %% About's mount sends arizona_connected via handle_info
     receive
         {arizona_push, Ops, Effects} ->
@@ -524,7 +524,7 @@ live_navigate_resets_views(Config) when is_list(Config) ->
     %% Increment counter
     {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     %% Navigate to about (has no children)
-    {ok, _, _} = arizona_live:navigate(Pid, arizona_about, #{}),
+    {ok, _, _} = arizona_live:navigate(Pid, arizona_about, #{}, undefined),
     %% Counter events should no longer work as child events
     %% <<"counter">> is not in views map, so it falls through to root
     %% arizona_about has no <<"inc">> handler -> gen_server crashes
@@ -550,10 +550,12 @@ live_navigate_round_trip(Config) when is_list(Config) ->
     {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     %% Navigate away to about
-    {ok, _, _} = arizona_live:navigate(Pid, arizona_about, #{}),
+    {ok, _, _} = arizona_live:navigate(Pid, arizona_about, #{}, undefined),
     %% Navigate back to page -- fresh mount, counter starts at 0
     %% Returns fingerprint payload; verify counter dynamics contain "0"
-    {ok, _, PageContent} = arizona_live:navigate(Pid, arizona_page, #{title => <<"Welcome">>}),
+    {ok, _, PageContent} = arizona_live:navigate(
+        Pid, arizona_page, #{title => <<"Welcome">>}, undefined
+    ),
     ?assert(is_binary(maps:get(<<"f">>, PageContent))),
     %% Counter child dynamics should show count 0
     Dynamics = maps:get(<<"d">>, PageContent),
@@ -641,7 +643,7 @@ live_handle_info_after_navigate(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(arizona_timer, #{}, self()),
     {ok, _} = arizona_live:mount(Pid),
     %% Navigate to a different handler
-    {ok, _, _} = arizona_live:navigate(Pid, arizona_timer, #{message => <<"fresh">>}),
+    {ok, _, _} = arizona_live:navigate(Pid, arizona_timer, #{message => <<"fresh">>}, undefined),
     %% Send message after navigate -- should still push
     Pid ! {set_message, <<"after_nav">>},
     receive
@@ -732,7 +734,7 @@ unmount_on_navigate(Config) when is_list(Config) ->
     after 1000 -> error(timeout)
     end,
     %% Navigate to page -- should not crash
-    {ok, _, _} = arizona_live:navigate(Pid, arizona_page, #{}).
+    {ok, _, _} = arizona_live:navigate(Pid, arizona_page, #{}, undefined).
 
 unmount_timer_cancelled_on_navigate(Config) when is_list(Config) ->
     %% About's handle_info(arizona_connected) starts a tick timer via ?send_after.
@@ -745,7 +747,7 @@ unmount_timer_cancelled_on_navigate(Config) when is_list(Config) ->
     after 1000 -> error(timeout)
     end,
     %% Navigate to page -- cancels pending timers
-    {ok, _, _} = arizona_live:navigate(Pid, arizona_page, #{}),
+    {ok, _, _} = arizona_live:navigate(Pid, arizona_page, #{}, undefined),
     %% Drain page's arizona_connected push
     receive
         {arizona_push, _, _} -> ok
@@ -914,7 +916,7 @@ on_mount_works_on_navigate(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(arizona_timer, #{}, self()),
     {ok, _} = arizona_live:mount(Pid),
     %% Navigate with on_mount
-    {ok, _, _} = arizona_live:navigate(Pid, arizona_timer, #{}, OnMount),
+    {ok, _, _} = arizona_live:navigate(Pid, arizona_timer, #{}, undefined, OnMount),
     %% Verify process is alive and functional
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"after_nav">>}},
     receive
@@ -953,17 +955,17 @@ navigate_dedup_across_visits(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(arizona_page),
     {ok, _} = arizona_live:mount(Pid),
     %% First navigate to about -- has statics
-    {ok, _, Content1} = arizona_live:navigate(Pid, arizona_about, #{}),
+    {ok, _, Content1} = arizona_live:navigate(Pid, arizona_about, #{}, undefined),
     ?assert(maps:is_key(<<"s">>, Content1)),
     AboutFp = maps:get(<<"f">>, Content1),
     ?assert(is_binary(AboutFp)),
     %% Navigate back to page (different fingerprint -- has statics)
-    {ok, _, Content2} = arizona_live:navigate(Pid, arizona_page, #{}),
+    {ok, _, Content2} = arizona_live:navigate(Pid, arizona_page, #{}, undefined),
     ?assert(maps:is_key(<<"s">>, Content2)),
     PageFp = maps:get(<<"f">>, Content2),
     ?assertNotEqual(AboutFp, PageFp),
     %% Navigate to about again -- statics should be stripped
-    {ok, _, Content3} = arizona_live:navigate(Pid, arizona_about, #{}),
+    {ok, _, Content3} = arizona_live:navigate(Pid, arizona_about, #{}, undefined),
     ?assertNot(maps:is_key(<<"s">>, Content3)),
     ?assertEqual(AboutFp, maps:get(<<"f">>, Content3)).
 
@@ -1115,7 +1117,7 @@ dedup_navigate_nested_dynamics(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(arizona_page),
     {ok, _} = arizona_live:mount(Pid),
     %% First navigate to page -- page fp is new, keeps statics
-    {ok, _, Content1} = arizona_live:navigate(Pid, arizona_page, #{}),
+    {ok, _, Content1} = arizona_live:navigate(Pid, arizona_page, #{}, undefined),
     ?assert(maps:is_key(<<"s">>, Content1)),
     %% Counter child dynamics are fingerprinted
     D1 = maps:get(<<"d">>, Content1),
@@ -1128,7 +1130,7 @@ dedup_navigate_nested_dynamics(Config) when is_list(Config) ->
     %% at least one stripped (3 counters, same fp)
     ?assert(length(WithoutS1) >= 1),
     %% Second navigate -- page statics stripped, ALL counter statics stripped
-    {ok, _, Content2} = arizona_live:navigate(Pid, arizona_page, #{}),
+    {ok, _, Content2} = arizona_live:navigate(Pid, arizona_page, #{}, undefined),
     ?assertNot(maps:is_key(<<"s">>, Content2)),
     D2 = maps:get(<<"d">>, Content2),
     CounterPayloads2 = [P || P <- D2, is_map(P), maps:is_key(<<"f">>, P)],
@@ -1190,7 +1192,7 @@ seed_fps_merges_with_existing(Config) when is_list(Config) ->
     %% First, discover the outer template fingerprint via a navigate
     {ok, Pid0} = arizona_live:start_link(arizona_todo),
     {ok, _} = arizona_live:mount(Pid0),
-    {ok, _, Content0} = arizona_live:navigate(Pid0, arizona_todo, #{items => []}),
+    {ok, _, Content0} = arizona_live:navigate(Pid0, arizona_todo, #{items => []}, undefined),
     TodoTplFp = maps:get(<<"f">>, Content0),
     %% Now start the real test
     {ok, Pid} = arizona_live:start_link(arizona_todo),
@@ -1218,7 +1220,7 @@ seed_fps_merges_with_existing(Config) when is_list(Config) ->
     ?assertNot(maps:is_key(<<"s">>, P2)),
     %% Navigate to todo -- todo_tpl should be stripped (seeded)
     InitItems = [#{id => 3, text => <<"C">>}],
-    {ok, _, Content} = arizona_live:navigate(Pid, arizona_todo, #{items => InitItems}),
+    {ok, _, Content} = arizona_live:navigate(Pid, arizona_todo, #{items => InitItems}, undefined),
     ?assert(maps:is_key(<<"f">>, Content)),
     ?assertNot(maps:is_key(<<"s">>, Content)).
 

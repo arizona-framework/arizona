@@ -27,20 +27,21 @@ perform the lookup (e.g. a compiled dispatch table reference).
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([call_resolve_route/3]).
+-export([call_resolve_route/4]).
 
 %% --------------------------------------------------------------------
 %% Behaviour callbacks
 %% --------------------------------------------------------------------
 
--callback resolve_route(Path :: path(), State :: term()) ->
-    {module(), route_opts()}.
+-callback resolve_route(Path :: path(), Qs :: qs(), State :: term()) ->
+    {module(), route_opts(), arizona_req:request()}.
 
 %% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 
 -export_type([path/0]).
+-export_type([qs/0]).
 -export_type([route_opts/0]).
 
 %% --------------------------------------------------------------------
@@ -48,6 +49,7 @@ perform the lookup (e.g. a compiled dispatch table reference).
 %% --------------------------------------------------------------------
 
 -nominal path() :: binary().
+-nominal qs() :: binary().
 
 -nominal route_opts() :: #{
     bindings => map(),
@@ -61,11 +63,14 @@ perform the lookup (e.g. a compiled dispatch table reference).
 %% --------------------------------------------------------------------
 
 -doc """
-Invokes the `resolve_route/2` callback on an adapter module.
+Invokes the `resolve_route/3` callback on an adapter module.
 """.
--spec call_resolve_route(Adapter, Path, State) -> {module(), route_opts()} when
+-spec call_resolve_route(Adapter, Path, Qs, State) ->
+    {module(), route_opts(), arizona_req:request()}
+when
     Adapter :: module(),
     Path :: path(),
+    Qs :: qs(),
     State :: term().
-call_resolve_route(Adapter, Path, State) ->
-    Adapter:resolve_route(Path, State).
+call_resolve_route(Adapter, Path, Qs, State) ->
+    Adapter:resolve_route(Path, Qs, State).

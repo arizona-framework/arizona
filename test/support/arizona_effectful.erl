@@ -1,9 +1,9 @@
 -module(arizona_effectful).
--include("arizona_stateful.hrl").
--export([mount/1, render/1, handle_event/3]).
+-include("arizona_view.hrl").
+-export([mount/2, render/1, handle_event/3]).
 
--spec mount(az:bindings()) -> az:mount_ret().
-mount(Bindings) ->
+-spec mount(az:bindings(), az:request()) -> az:mount_ret().
+mount(Bindings, _Req) ->
     {maps:merge(#{id => ~"effectful", value => ~"initial"}, Bindings), #{}}.
 
 -spec render(az:bindings()) -> az:template().

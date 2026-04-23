@@ -31,8 +31,8 @@ Evaluation recurses into the following dynamic value shapes:
 
 ## Restricted keys
 
-`check_restricted_keys/3` enforces that `mount/1` cannot modify
-framework-owned bindings like `id`. Violations raise
+`check_restricted_keys/3` enforces that a handler's mount callback
+cannot modify framework-owned bindings like `id`. Violations raise
 `restricted_key_modified` with a human-readable message via `format_error/2`.
 """.
 
@@ -232,7 +232,7 @@ Asserts that `Bindings` did not modify any framework-restricted keys
 (currently just `id`) compared to the original `Props`.
 
 Raises `restricted_key_modified` with handler info if a restricted key
-was changed by `mount/1`.
+was changed by the handler's mount callback.
 """.
 -spec check_restricted_keys(Bindings, Props, Handler) -> ok when
     Bindings :: map(),
@@ -269,7 +269,7 @@ naming the offending handler and key.
 format_error(restricted_key_modified, [{_M, _F, [Key, Handler], _Info} | _]) ->
     #{
         general => io_lib:format(
-            "~s:mount/1 modified restricted key '~s'. "
+            "~s's mount callback modified restricted key '~s'. "
             "This key is owned by the framework and cannot be changed.",
             [Handler, Key]
         )
@@ -366,7 +366,7 @@ eval_stateful(H, Props, {Old, New}) ->
     Id = maps:get(id, Props),
     {B1, Resets} = mount_or_update_stateful(H, Props, Id, Old),
     with_saved_deps(fun() ->
-        Tmpl = arizona_stateful:call_render(H, B1),
+        Tmpl = arizona_handler:call_render(H, B1),
         {ChildTriples, {Old, New1}} = eval_dynamics_v(maps:get(d, Tmpl), {Old, New}),
         {ChildD, ChildDeps} = arizona_template:split_triples(ChildTriples),
         Snap = arizona_template:make_child_snap(Tmpl, ChildD, ChildDeps, Id),
@@ -378,11 +378,11 @@ eval_stateful(H, Props, {Old, New}) ->
 mount_or_update_stateful(H, Props, Id, Old) ->
     case Old of
         #{Id := #{handler := H, bindings := B}} ->
-            arizona_stateful:call_handle_update(H, Props, B);
+            arizona_handler:call_handle_update(H, Props, B);
         #{Id := #{handler := OldH, bindings := OldB}} ->
             %% Same id, different handler: unmount the old instance before
             %% mounting the new one so it can release resources.
-            ok = arizona_stateful:call_unmount(OldH, OldB),
+            ok = arizona_handler:call_unmount(OldH, OldB),
             fresh_mount_stateful(H, Props);
         #{} ->
             fresh_mount_stateful(H, Props)
@@ -584,7 +584,7 @@ format_error_restricted_key_test() ->
     StackFrame = [{arizona_eval, check, [id, my_handler], []}],
     #{general := Msg} = format_error(restricted_key_modified, StackFrame),
     MsgBin = iolist_to_binary(Msg),
-    ?assertNotEqual(nomatch, binary:match(MsgBin, ~"my_handler:mount/1")),
+    ?assertNotEqual(nomatch, binary:match(MsgBin, ~"my_handler's mount callback")),
     ?assertNotEqual(nomatch, binary:match(MsgBin, ~"'id'")).
 
 -endif.

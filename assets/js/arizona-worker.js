@@ -208,7 +208,7 @@ function openSocket() {
     const incoming = new URL(_wsUrl);
     const protocol = self.location.protocol === 'https:' ? 'wss:' : 'ws:';
     let url = `${protocol}//${self.location.host}${incoming.pathname}${incoming.search}`;
-    if (_reconnecting) url += '&reconnect=1';
+    if (_reconnecting) url += '&_az_reconnect=1';
 
     const ws = new WebSocket(url);
     _ws = ws;

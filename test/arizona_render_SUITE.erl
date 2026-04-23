@@ -239,9 +239,11 @@ ssr_counter_custom_id(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, <<"99<!--/az-->">>)).
 
 ssr_page_with_child(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{}),
     HTML = iolist_to_binary(
-        arizona_render:render_to_iolist(
+        arizona_render:render_view_to_iolist(
             arizona_page,
+            Req,
             #{bindings => #{title => <<"Welcome">>}, layout => {arizona_layout, render}}
         )
     ),
@@ -298,11 +300,12 @@ render_with_views_no_children(Config) when is_list(Config) ->
 %% =============================================================================
 
 ssr_about_page(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{}),
     HTML = iolist_to_binary(
-        arizona_render:render_to_iolist(
-            arizona_about, #{
-                bindings => #{title => <<"About">>}, layout => {arizona_layout, render}
-            }
+        arizona_render:render_view_to_iolist(
+            arizona_about,
+            Req,
+            #{bindings => #{title => <<"About">>}, layout => {arizona_layout, render}}
         )
     ),
     ?assertMatch({_, _}, binary:match(HTML, <<"<title>About</title>">>)),

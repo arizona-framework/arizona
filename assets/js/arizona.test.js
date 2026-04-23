@@ -2112,7 +2112,7 @@ describe('connection params', () => {
         expect(wsUrl).not.toContain('params=');
     });
 
-    it('sends WS URL with merged params', async () => {
+    it('sends WS URL with connect params as regular query keys', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         const posted = [];
@@ -2129,10 +2129,9 @@ describe('connection params', () => {
         mod.connect('/ws', { locale: 'en' });
         globalThis.Worker = OrigWorker;
         const wsUrl = posted[0][1];
-        expect(wsUrl).toContain('params=');
-        const paramsStr = decodeURIComponent(wsUrl.split('params=')[1]);
-        const params = JSON.parse(paramsStr);
-        expect(params.locale).toBe('en');
+        const qs = new URL(wsUrl.replace(/^ws/, 'http')).searchParams;
+        expect(qs.get('_az_path')).toBe('/');
+        expect(qs.get('locale')).toBe('en');
     });
 });
 
@@ -2370,7 +2369,7 @@ describe('navigation scroll', () => {
         expect(history.state?._azScroll).toBeFalsy();
         // Replace still re-renders the destination route -- server must be notified.
         const msgs = mock.getSentMessages();
-        expect(msgs).toContainEqual(['navigate', { path: '/to' }]);
+        expect(msgs).toContainEqual(['navigate', { path: '/to', qs: '' }]);
     });
 
     it('JS_NAVIGATE with {noscroll: true} skips the scroll reset on push', async () => {
@@ -2387,7 +2386,7 @@ describe('navigation scroll', () => {
         expect(scrollSpy).not.toHaveBeenCalled();
         // But the navigate message is still sent (server still re-renders).
         const msgs = mock.getSentMessages();
-        expect(msgs).toContainEqual(['navigate', { path: '/to' }]);
+        expect(msgs).toContainEqual(['navigate', { path: '/to', qs: '' }]);
     });
 
     it('popstate with saved state restores exact coordinates after OP_REPLACE', async () => {

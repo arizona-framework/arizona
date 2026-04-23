@@ -70,24 +70,24 @@ init(Req, #{handler := H} = State) ->
         {halt, HaltReq} ->
             {ok, arizona_req:raw(HaltReq), State};
         {cont, ArzReq1, Bindings1} ->
-            render_page(H, arizona_req:raw(ArzReq1), Bindings1, State)
+            render_page(H, ArzReq1, Bindings1, State)
     end.
 
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
-render_page(H, Req, Bindings, State) ->
+render_page(H, ArzReq, Bindings, State) ->
     case arizona_reloader:get_error() of
         undefined ->
-            RenderOpts = #{
-                bindings => Bindings,
-                layout => maps:get(layout, State, undefined),
-                on_mount => maps:get(on_mount, State, [])
-            },
-            try arizona_render:render_to_iolist(H, RenderOpts) of
-                Page ->
-                    reply(200, Page, Req, State)
+            try
+                RenderOpts = #{
+                    bindings => Bindings,
+                    layout => maps:get(layout, State, undefined),
+                    on_mount => maps:get(on_mount, State, [])
+                },
+                Page = arizona_render:render_view_to_iolist(H, ArzReq, RenderOpts),
+                reply(200, Page, arizona_req:raw(ArzReq), State)
             catch
                 Class:Reason:Stacktrace ->
                     ErrorInfo = #{
@@ -96,7 +96,7 @@ render_page(H, Req, Bindings, State) ->
                         stacktrace => Stacktrace,
                         reload_url => reload_url()
                     },
-                    reply_error(Bindings, ErrorInfo, Req, State)
+                    reply_error(Bindings, ErrorInfo, arizona_req:raw(ArzReq), State)
             end;
         #{errors := Errors} ->
             ErrorInfo = #{
@@ -105,7 +105,7 @@ render_page(H, Req, Bindings, State) ->
                 stacktrace => [],
                 reload_url => reload_url()
             },
-            reply_error(Bindings, ErrorInfo, Req, State)
+            reply_error(Bindings, ErrorInfo, arizona_req:raw(ArzReq), State)
     end.
 
 reply_error(Bindings, ErrorInfo, Req, State) ->

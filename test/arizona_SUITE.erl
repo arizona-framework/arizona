@@ -218,7 +218,7 @@ counter_no_change(Config) when is_list(Config) ->
 %% =============================================================================
 
 page_mount(Config) when is_list(Config) ->
-    {Bindings, _} = arizona_page:mount(#{}),
+    {Bindings, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     ?assertEqual(<<"page">>, maps:get(id, Bindings)),
     ?assertEqual(<<"Welcome">>, maps:get(title, Bindings)),
     ?assertEqual(<<"light">>, maps:get(theme, Bindings)),
@@ -226,7 +226,7 @@ page_mount(Config) when is_list(Config) ->
     ?assertEqual(false, maps:get(connected, Bindings)).
 
 page_render_with_views(Config) when is_list(Config) ->
-    {B, _} = arizona_page:mount(#{}),
+    {B, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl = arizona_page:render(B),
     {HTML, Snap, Views} = arizona_render:render(Tmpl, #{}),
     %% HTML includes all three counters
@@ -254,7 +254,7 @@ page_render_with_views(Config) when is_list(Config) ->
     ?assert(maps:is_key(snapshot, CView)).
 
 page_diff_title_only(Config) when is_list(Config) ->
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_page:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     %% Change title only
@@ -264,7 +264,7 @@ page_diff_title_only(Config) when is_list(Config) ->
     ?assertMatch([[?OP_TEXT, _, <<"About">>]], Ops).
 
 page_diff_theme_attr(Config) when is_list(Config) ->
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_page:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     %% Change theme only
@@ -274,7 +274,7 @@ page_diff_theme_attr(Config) when is_list(Config) ->
     ?assertMatch([[?OP_SET_ATTR, _, <<"class">>, <<"dark">>]], Ops).
 
 page_diff_count_recursive(Config) when is_list(Config) ->
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_page:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     %% Change count -- counter and counter2 produce recursive ops,
@@ -294,7 +294,7 @@ page_diff_count_recursive(Config) when is_list(Config) ->
     ).
 
 page_diff_count_counter3_stable(Config) when is_list(Config) ->
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_page:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     %% Change count to 99 -- counter3 has hardcoded count=42, no ops for it
@@ -310,7 +310,7 @@ page_diff_count_counter3_stable(Config) when is_list(Config) ->
     ?assertEqual(#{count => 42, id => <<"counter3">>}, maps:get(bindings, C3)).
 
 page_diff_all_changes(Config) when is_list(Config) ->
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_page:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     %% Change title + theme + count
@@ -330,8 +330,8 @@ page_diff_all_changes(Config) when is_list(Config) ->
 %% =============================================================================
 
 stateful_first_mount(Config) when is_list(Config) ->
-    %% First render calls mount/1, stores view in Views map
-    {B, _} = arizona_page:mount(#{}),
+    %% First render calls mount, stores view in Views map
+    {B, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl = arizona_page:render(B),
     {_, _, Views} = arizona_render:render(Tmpl, #{}),
     %% All three counters are mounted
@@ -349,7 +349,7 @@ stateful_first_mount(Config) when is_list(Config) ->
 
 stateful_handle_update(Config) when is_list(Config) ->
     %% Second render (via diff/3) calls handle_update (default: maps:merge)
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_page:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     %% Change count -- counter already exists in Views, triggers handle_update
@@ -362,7 +362,7 @@ stateful_handle_update(Config) when is_list(Config) ->
 
 stateful_bindings_sync(Config) when is_list(Config) ->
     %% After handle_update, bindings and snapshot stay in sync
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_page:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     %% Update count
@@ -510,7 +510,7 @@ stateless_no_change(Config) when is_list(Config) ->
 
 deps_skip_unchanged(Config) when is_list(Config) ->
     %% diff/4 with Changed map -- unchanged dynamics are skipped entirely
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_page:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     %% Only title changed -- theme and count deps not in Changed map
@@ -553,7 +553,7 @@ deps_dedup_and_multi_key(Config) when is_list(Config) ->
 deps_page_tracks_correctly(Config) when is_list(Config) ->
     %% Verify page deps: id, title, az-click (static), theme, count (counter1),
     %% count (counter2), counter3 (static), connected (status), form statics, todos
-    {B, _} = arizona_page:mount(#{}),
+    {B, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl = arizona_page:render(B),
     {_, Snap, _} = arizona_render:render(Tmpl, #{}),
     ?assertEqual(
@@ -576,7 +576,7 @@ deps_page_tracks_correctly(Config) when is_list(Config) ->
 
 deps_count_change_skips_title(Config) when is_list(Config) ->
     %% diff/4 with count change -- title dep not in Changed, title skipped
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_page:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = B0#{count => 10},
@@ -590,7 +590,7 @@ deps_count_change_skips_title(Config) when is_list(Config) ->
 
 deps_theme_change_only(Config) when is_list(Config) ->
     %% diff/4 with theme change -- only OP_SET_ATTR on theme
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_page:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = B0#{theme => <<"dark">>},
@@ -601,7 +601,7 @@ deps_theme_change_only(Config) when is_list(Config) ->
 
 deps_all_changed(Config) when is_list(Config) ->
     %% diff/4 with all bindings changed
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_page:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = B0#{title => <<"X">>, theme => <<"dark">>, count => 7, connected => true},
@@ -636,17 +636,17 @@ counter_handle_event_reset(Config) when is_list(Config) ->
 
 %% Test page handle_event
 page_handle_event_title_change(Config) when is_list(Config) ->
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     {B1, _, _} = arizona_page:handle_event(<<"title_change">>, #{}, B0),
     ?assertEqual(<<"Changed">>, maps:get(title, B1)).
 
 page_handle_event_add(Config) when is_list(Config) ->
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     {B1, _, _} = arizona_page:handle_event(<<"add">>, #{}, B0),
     ?assertEqual(1, maps:get(count, B1)).
 
 page_handle_event_connected(Config) when is_list(Config) ->
-    {B0, _} = arizona_page:mount(#{}),
+    {B0, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     ?assertEqual(false, maps:get(connected, B0)),
     {B1, _, Effects} = arizona_page:handle_info(arizona_connected, B0),
     ?assertEqual(true, maps:get(connected, B1)),
@@ -670,13 +670,13 @@ diff_with_views_no_children(Config) when is_list(Config) ->
     ?assertEqual(#{}, V1).
 
 about_mount(Config) when is_list(Config) ->
-    {B, _} = arizona_about:mount(#{}),
+    {B, _} = arizona_about:mount(#{}, arizona_req_test_adapter:new(#{})),
     ?assertEqual(<<"page">>, maps:get(id, B)),
     ?assertEqual(<<"About">>, maps:get(title, B)),
     ?assertEqual(0, maps:get(tick, B)).
 
 about_render(Config) when is_list(Config) ->
-    {B, _} = arizona_about:mount(#{}),
+    {B, _} = arizona_about:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl = arizona_about:render(B),
     {HTML, _Snap} = arizona_render:render(Tmpl),
     HTMLBin = iolist_to_binary(HTML),
@@ -689,13 +689,13 @@ about_render(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"arizona">>)).
 
 about_connected_event(Config) when is_list(Config) ->
-    {B, _} = arizona_about:mount(#{}),
+    {B, _} = arizona_about:mount(#{}, arizona_req_test_adapter:new(#{})),
     {B2, _, Effects} = arizona_about:handle_info(arizona_connected, B),
     ?assertEqual(B, B2),
     ?assertEqual([{arizona_js, [14, <<"About">>]}], Effects).
 
 about_handle_info_tick(Config) when is_list(Config) ->
-    {B, _} = arizona_about:mount(#{}),
+    {B, _} = arizona_about:mount(#{}, arizona_req_test_adapter:new(#{})),
     ?assertEqual(0, maps:get(tick, B)),
     {B1, _, E1} = arizona_about:handle_info(tick, B),
     ?assertEqual(1, maps:get(tick, B1)),
@@ -704,7 +704,7 @@ about_handle_info_tick(Config) when is_list(Config) ->
     ?assertEqual(2, maps:get(tick, B2)).
 
 about_tick_started_event(Config) when is_list(Config) ->
-    {B, _} = arizona_about:mount(#{}),
+    {B, _} = arizona_about:mount(#{}, arizona_req_test_adapter:new(#{})),
     {B2, _, Effects} = arizona_about:handle_event(<<"tick_started">>, #{}, B),
     ?assertEqual(B, B2),
     ?assertEqual([{arizona_js, [9, <<"tick_ack">>, #{<<"status">> => <<"ok">>}]}], Effects).

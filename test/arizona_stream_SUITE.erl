@@ -294,7 +294,7 @@ groups() ->
 
 stream_render(Config) when is_list(Config) ->
     %% First render of empty stream produces empty <ul>
-    {B, _} = arizona_todo:mount(#{}),
+    {B, _} = arizona_todo:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl = arizona_todo:render(B),
     {HTML, _Snap, _Views} = arizona_render:render(Tmpl, #{}),
     HTMLBin = iolist_to_binary(HTML),
@@ -304,7 +304,7 @@ stream_render(Config) when is_list(Config) ->
 stream_render_with_items(Config) when is_list(Config) ->
     %% Render with initial items produces correct HTML
     Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    {B, _} = arizona_todo:mount(#{items => Items}),
+    {B, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl = arizona_todo:render(B),
     {HTML, _Snap, _Views} = arizona_render:render(Tmpl, #{}),
     HTMLBin = iolist_to_binary(HTML),
@@ -317,8 +317,9 @@ stream_ssr(Config) when is_list(Config) ->
     %% SSR path produces correct HTML for stream
     Items = [#{id => 1, text => <<"A">>}],
     HTML = iolist_to_binary(
-        arizona_render:render_to_iolist(
+        arizona_render:render_view_to_iolist(
             arizona_todo,
+            arizona_req_test_adapter:new(#{}),
             #{bindings => #{items => Items}}
         )
     ),
@@ -327,7 +328,9 @@ stream_ssr(Config) when is_list(Config) ->
 
 stream_diff_no_change(Config) when is_list(Config) ->
     %% No ops when stream unchanged
-    {B, _} = arizona_todo:mount(#{items => [#{id => 1, text => <<"A">>}]}),
+    {B, _} = arizona_todo:mount(
+        #{items => [#{id => 1, text => <<"A">>}]}, arizona_req_test_adapter:new(#{})
+    ),
     Tmpl0 = arizona_todo:render(B),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     %% Same bindings, no pending ops -- clear pending first
@@ -339,7 +342,7 @@ stream_diff_no_change(Config) when is_list(Config) ->
 
 stream_diff_insert(Config) when is_list(Config) ->
     %% OP_INSERT at correct position
-    {B0, _} = arizona_todo:mount(#{}),
+    {B0, _} = arizona_todo:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -362,7 +365,7 @@ stream_diff_insert(Config) when is_list(Config) ->
 stream_diff_remove(Config) when is_list(Config) ->
     %% OP_REMOVE with correct key
     Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -376,7 +379,7 @@ stream_diff_remove(Config) when is_list(Config) ->
 stream_diff_update(Config) when is_list(Config) ->
     %% OP_ITEM_PATCH with inner TEXT op
     Items = [#{id => 1, text => <<"Old">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -394,7 +397,7 @@ stream_diff_update(Config) when is_list(Config) ->
 stream_diff_reset(Config) when is_list(Config) ->
     %% OP_REMOVE for each old + OP_INSERT for each new (if any)
     Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -410,7 +413,7 @@ stream_diff_reset(Config) when is_list(Config) ->
 stream_diff_mixed(Config) when is_list(Config) ->
     %% insert + delete + update in one event cycle
     Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -435,7 +438,7 @@ stream_diff_mixed(Config) when is_list(Config) ->
 stream_deps_skip(Config) when is_list(Config) ->
     %% diff/4 skips stream when deps unchanged
     Items = [#{id => 1, text => <<"A">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -453,7 +456,7 @@ stream_deps_skip(Config) when is_list(Config) ->
 stream_insert_at_position(Config) when is_list(Config) ->
     %% stream_insert/3 at position 0 (beginning)
     Items = [#{id => 1, text => <<"A">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -468,7 +471,7 @@ stream_insert_at_position(Config) when is_list(Config) ->
 stream_insert_at_middle_position(Config) when is_list(Config) ->
     %% 2 initial items, insert at position 1
     Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -489,7 +492,7 @@ stream_insert_at_middle_position(Config) when is_list(Config) ->
 stream_reset_with_new_items(Config) when is_list(Config) ->
     %% 2 initial items, stream_reset/2 with 2 new items
     Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -522,7 +525,7 @@ stream_reset_overlap_same_content(Config) when is_list(Config) ->
         #{id => 2, text => <<"B">>},
         #{id => 3, text => <<"C">>}
     ],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -551,7 +554,7 @@ stream_reset_overlap_changed_content(Config) when is_list(Config) ->
     %% Old=[1,2], New=[2(modified),3] -- key 2 overlaps but content changed
     %% Expect: 1 remove (key 1), 1 OP_ITEM_PATCH (key 2), 1 insert (key 3)
     Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -579,7 +582,7 @@ stream_reset_overlap_changed_content(Config) when is_list(Config) ->
 stream_reset_full_overlap(Config) when is_list(Config) ->
     %% Old=[1,2], New=[1,2] same items -- expect 0 ops
     Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -599,7 +602,7 @@ stream_reset_full_overlap(Config) when is_list(Config) ->
 stream_update_no_change(Config) when is_list(Config) ->
     %% 1 initial item, stream_update/3 with identical data → Ops = []
     Items = [#{id => 1, text => <<"A">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -613,7 +616,7 @@ stream_update_no_change(Config) when is_list(Config) ->
 
 stream_snapshot_after_multiple_cycles(Config) when is_list(Config) ->
     %% 3 sequential diff cycles: insert 2 items → update item 1 → delete item 2
-    {B0, _} = arizona_todo:mount(#{}),
+    {B0, _} = arizona_todo:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -654,7 +657,7 @@ stream_empty_pending_deps_changed(Config) when is_list(Config) ->
     %% Mount with 1 item, clear pending, re-render with same stream but Changed = #{items => true}
     %% Exercises Bug 4 fix (empty pending passthrough) and Bug 1 fix
     Items = [#{id => 1, text => <<"A">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -667,7 +670,7 @@ stream_empty_pending_deps_changed(Config) when is_list(Config) ->
 stream_move(Config) when is_list(Config) ->
     %% Move item from position 2 to position 0
     Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}, #{id => 3, text => <<"C">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -683,7 +686,7 @@ stream_move(Config) when is_list(Config) ->
 stream_move_nonexistent_key(Config) when is_list(Config) ->
     %% Move with nonexistent key is a no-op
     Items = [#{id => 1, text => <<"A">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -1639,7 +1642,9 @@ stream_delete_nonexistent_key(Config) when is_list(Config) ->
     S0 = arizona_stream:new(KeyFun, [#{id => 1, text => <<"A">>}]),
     S1 = arizona_stream:delete(S0, 99),
     %% Stream unchanged -- mount, render, and verify 1 item still there
-    {B0, _} = arizona_todo:mount(#{items => [#{id => 1, text => <<"A">>}]}),
+    {B0, _} = arizona_todo:mount(
+        #{items => [#{id => 1, text => <<"A">>}]}, arizona_req_test_adapter:new(#{})
+    ),
     Tmpl0 = arizona_todo:render(B0),
     {HTML, _, _} = arizona_render:render(Tmpl0, #{}),
     HTMLBin = iolist_to_binary(HTML),
@@ -1653,7 +1658,7 @@ stream_delete_nonexistent_key(Config) when is_list(Config) ->
 stream_update_nonexistent_key(Config) when is_list(Config) ->
     %% Update key not in snapshot falls through to OP_INSERT
     Items = [#{id => 1, text => <<"A">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -1733,7 +1738,7 @@ stream_limit_one(Config) when is_list(Config) ->
 stream_move_to_same_position(Config) when is_list(Config) ->
     %% Move item to its current position -- generates ops but no visual change
     Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -1800,7 +1805,7 @@ stream_order_after_complex_sequence(Config) when is_list(Config) ->
         #{id => 2, text => <<"B">>},
         #{id => 3, text => <<"C">>}
     ],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -1825,10 +1830,11 @@ stream_order_after_complex_sequence(Config) when is_list(Config) ->
 
 %% --- render_to_iolist with stream items -------------------------------------
 render_to_iolist_with_stream_items(Config) when is_list(Config) ->
-    %% SSR via render_to_iolist with non-empty stream
+    %% SSR via render_view_to_iolist with non-empty stream
     HTML = iolist_to_binary(
-        arizona_render:render_to_iolist(
+        arizona_render:render_view_to_iolist(
             arizona_todo,
+            arizona_req_test_adapter:new(#{}),
             #{
                 bindings => #{items => [#{id => 1, text => <<"Hello">>}]},
                 layout => {arizona_layout, render}
@@ -2014,7 +2020,7 @@ navigate_with_stream_items(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(arizona_todo, #{items => InitItems}),
     {ok, _} = arizona_live:mount(Pid),
     %% Navigate back to todo with same items -- produces fingerprinted payload
-    {ok, _, Content} = arizona_live:navigate(Pid, arizona_todo, #{items => InitItems}),
+    {ok, _, Content} = arizona_live:navigate(Pid, arizona_todo, #{items => InitItems}, undefined),
     ?assert(maps:is_key(<<"f">>, Content)),
     ?assert(is_binary(maps:get(<<"f">>, Content))),
     %% The dynamics should contain the id attr and a stream map with f key and list-of-lists d
@@ -2273,7 +2279,7 @@ stream_reset_reorder(Config) when is_list(Config) ->
         #{id => 2, text => <<"B">>},
         #{id => 3, text => <<"C">>}
     ],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -2308,7 +2314,7 @@ stream_reset_reorder(Config) when is_list(Config) ->
 stream_reset_same_order_no_moves(Config) when is_list(Config) ->
     %% Reset with same items in same order -- no moves
     Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -2336,7 +2342,7 @@ stream_move_after_key_first(Config) when is_list(Config) ->
         #{id => 2, text => <<"B">>},
         #{id => 3, text => <<"C">>}
     ],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -2355,7 +2361,7 @@ stream_move_after_key_last(Config) when is_list(Config) ->
         #{id => 2, text => <<"B">>},
         #{id => 3, text => <<"C">>}
     ],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -2375,7 +2381,7 @@ stream_move_after_key_middle(Config) when is_list(Config) ->
         #{id => 3, text => <<"C">>},
         #{id => 4, text => <<"D">>}
     ],
-    {B0, _} = arizona_todo:mount(#{items => Items}),
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
     Tmpl0 = arizona_todo:render(B0),
     {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
@@ -2451,7 +2457,7 @@ nested_stream_render(Config) when is_list(Config) ->
 %% =============================================================================
 
 datatable_mount(Config) when is_list(Config) ->
-    {B, _} = arizona_datatable:mount(#{}),
+    {B, _} = arizona_datatable:mount(#{}, arizona_req_test_adapter:new(#{})),
     ?assertEqual(<<"page">>, maps:get(id, B)),
     ?assertEqual(<<"DataTable">>, maps:get(title, B)),
     ?assertEqual(false, maps:get(connected, B)),
@@ -2461,8 +2467,9 @@ datatable_mount(Config) when is_list(Config) ->
 
 datatable_ssr(Config) when is_list(Config) ->
     HTML = iolist_to_binary(
-        arizona_render:render_to_iolist(
+        arizona_render:render_view_to_iolist(
             arizona_datatable,
+            arizona_req_test_adapter:new(#{}),
             #{bindings => #{title => <<"DataTable">>}, layout => {arizona_layout, render}}
         )
     ),

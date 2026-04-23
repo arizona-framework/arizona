@@ -107,7 +107,7 @@ const _savedForms = new Map();
 // --------------------------------------------------------------------------
 // Scroll on SPA navigation
 // --------------------------------------------------------------------------
-// Semantics (matches Phoenix LiveView's push_navigate):
+// Semantics:
 //   push (az-navigate click, arizona_js:navigate/1,2 without replace)
 //     -> save outgoing scroll to history entry; scroll to top (or #hash)
 //        after OP_REPLACE. Opt out with az-noscroll / {noscroll: true}.
@@ -166,7 +166,8 @@ function saveCurrentScroll() {
  * Perform an SPA navigation. Shared code path for `az-navigate` clicks and
  * `arizona_js:navigate/1,2` effects.
  *
- * @param {string} pathname Path portion (no hash), sent to the server.
+ * @param {string} path     Path portion (no hash, no query), sent to the server.
+ * @param {string} qs       Query string without leading `?`, sent to the server.
  * @param {string} hash     Fragment without leading `#`; used client-side
  *                          to scroll to the target after OP_REPLACE.
  * @param {{replace?: boolean, noscroll?: boolean, fullUrl?: string}} opts
@@ -174,11 +175,12 @@ function saveCurrentScroll() {
  *              outgoing scroll, does not reset scroll.
  *   - noscroll Push only: skip the scroll-to-top/hash after REPLACE.
  *   - fullUrl  Exact URL to write to history (defaults to
- *              `pathname + '#' + hash`). Lets the click handler preserve
- *              the original href verbatim.
+ *              `path + '?' + qs + '#' + hash`). Lets the click handler
+ *              preserve the original href verbatim.
  */
-function navigateTo(pathname, hash, opts) {
-    const fullUrl = opts.fullUrl || (hash ? `${pathname}#${hash}` : pathname);
+function navigateTo(path, qs, hash, opts) {
+    const pathAndQs = qs ? `${path}?${qs}` : path;
+    const fullUrl = opts.fullUrl || (hash ? `${pathAndQs}#${hash}` : pathAndQs);
     if (opts.replace) {
         history.replaceState(null, '', fullUrl);
     } else {
@@ -186,8 +188,8 @@ function navigateTo(pathname, hash, opts) {
         history.pushState(null, '', fullUrl);
         if (!opts.noscroll) _pendingScroll = { kind: 'push', hash };
     }
-    workerSend(JSON.stringify(['navigate', { path: pathname }]));
-    if (_worker) _worker.postMessage([3, pathname]);
+    workerSend(JSON.stringify(['navigate', { path, qs }]));
+    if (_worker) _worker.postMessage([3, path]);
 }
 
 /**
@@ -829,10 +831,10 @@ function executeJS(el, event, cmds) {
             case JS_NAVIGATE: {
                 const full = cmd[1];
                 const opts = cmd[2] || {};
-                const hashIdx = full.indexOf('#');
-                const pathname = hashIdx === -1 ? full : full.slice(0, hashIdx);
-                const hash = hashIdx === -1 ? '' : full.slice(hashIdx + 1);
-                navigateTo(pathname, hash, { ...opts, fullUrl: full });
+                const u = new URL(full, location.origin);
+                const hash = u.hash ? u.hash.slice(1) : '';
+                const qs = u.search ? u.search.slice(1) : '';
+                navigateTo(u.pathname, qs, hash, { ...opts, fullUrl: full });
                 break;
             }
             case JS_FOCUS: {
@@ -1140,25 +1142,28 @@ function connect(endpoint, params = {}) {
             // Let the browser handle modifier-key and non-primary clicks (open in
             // new tab/window, etc.) so az-navigate doesn't hijack them.
             if (me.button !== 0 || me.ctrlKey || me.metaKey || me.shiftKey || me.altKey) return;
-            const el = /** @type {Element} */ (e.target).closest('[az-navigate]');
+            const el = /** @type {HTMLAnchorElement} */ (
+                /** @type {Element} */ (e.target).closest('[az-navigate]')
+            );
             if (!el || !_connected) return;
             const href = el.getAttribute('href');
             if (!href) return;
-            const hashIdx = href.indexOf('#');
-            const pathname = hashIdx === -1 ? href : href.slice(0, hashIdx);
-            const hash = hashIdx === -1 ? '' : href.slice(hashIdx + 1);
+            // Anchors implement the URL interface -- use browser-parsed parts.
+            const path = el.pathname;
+            const qs = el.search ? el.search.slice(1) : '';
+            const hash = el.hash ? el.hash.slice(1) : '';
             const noscroll = el.hasAttribute('az-noscroll');
 
             e.preventDefault();
 
             // Same-page hash nav: update URL + scroll, no server round-trip.
-            if (!pathname || pathname === location.pathname) {
+            if (path === location.pathname && qs === location.search.slice(1)) {
                 history.pushState(null, '', href);
                 if (!noscroll) applyScroll({ kind: 'push', hash });
                 return;
             }
 
-            navigateTo(pathname, hash, { noscroll, fullUrl: href });
+            navigateTo(path, qs, hash, { noscroll, fullUrl: href });
         },
         { signal },
     );
@@ -1171,10 +1176,11 @@ function connect(endpoint, params = {}) {
         (e) => {
             if (!_connected) return;
             const path = location.pathname;
+            const qs = location.search ? location.search.slice(1) : '';
             const hash = location.hash ? location.hash.slice(1) : '';
             const saved = e.state?._azScroll || null;
             _pendingScroll = { kind: 'pop', hash, saved };
-            workerSend(JSON.stringify(['navigate', { path }]));
+            workerSend(JSON.stringify(['navigate', { path, qs }]));
             if (_worker) _worker.postMessage([3, path]);
         },
         { signal },
@@ -1215,13 +1221,19 @@ function connect(endpoint, params = {}) {
     );
 
     // Build full WS URL -- Worker can't access location.*
+    // Framework keys are `_az_`-prefixed so they can't collide with user params
+    // or the page's own query string; user-page qs and connect params ride as
+    // regular URL query keys (server reaches them via arizona_req:params/1).
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const path = encodeURIComponent(location.pathname);
-    const merged = { ...Object.fromEntries(new URLSearchParams(location.search)), ...params };
-    const paramsStr = Object.keys(merged).length
-        ? `&params=${encodeURIComponent(JSON.stringify(merged))}`
-        : '';
-    const wsUrl = `${protocol}//${location.host}${endpoint}?path=${path}${paramsStr}`;
+    const pagePath = encodeURIComponent(location.pathname);
+    const pageQs = location.search ? location.search.slice(1) : '';
+    /** @type {Record<string, string>} */
+    const stringParams = {};
+    for (const k of Object.keys(params)) stringParams[k] = String(params[k]);
+    const extraQs = new URLSearchParams(stringParams).toString();
+    const userQs = [pageQs, extraQs].filter(Boolean).join('&');
+    const qs = userQs ? `_az_path=${pagePath}&${userQs}` : `_az_path=${pagePath}`;
+    const wsUrl = `${protocol}//${location.host}${endpoint}?${qs}`;
 
     // Spawn the Worker -- co-located with this script
     const baseUrl = new URL(/* @vite-ignore */ '.', import.meta.url).href;

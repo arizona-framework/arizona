@@ -1,6 +1,6 @@
 -module(arizona_mixed_children).
--include("arizona_stateful.hrl").
--export([mount/1, render/1, handle_event/3]).
+-include("arizona_view.hrl").
+-export([mount/2, render/1, handle_event/3]).
 -export([render_card/1]).
 
 %% Reproduces a bug where a parent template mixes stateless children
@@ -26,8 +26,8 @@
 %%     </div>
 %%   </div>
 
--spec mount(az:bindings()) -> az:mount_ret().
-mount(Bindings) ->
+-spec mount(az:bindings(), az:request()) -> az:mount_ret().
+mount(Bindings, _Req) ->
     B = maps:merge(
         #{
             id => ~"mixed",

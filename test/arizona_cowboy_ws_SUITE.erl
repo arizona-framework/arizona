@@ -279,7 +279,7 @@ middleware_halt_rejects_ws(Config) ->
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
     Key = base64:encode(crypto:strong_rand_bytes(16)),
     Req = [
-        "GET /ws?path=/halt_middleware HTTP/1.1\r\n",
+        "GET /ws?_az_path=/halt_middleware HTTP/1.1\r\n",
         "Host: localhost:",
         integer_to_list(Port),
         "\r\n",
@@ -410,12 +410,12 @@ ws_handshake(Sock, Port, Path, Opts) ->
     ParamsQS =
         case map_size(Params) of
             0 -> "";
-            _ -> ["&params=", uri_string:quote(json:encode(Params))]
+            _ -> [[$&, uri_string:quote(K), $=, uri_string:quote(V)] || K := V <- Params]
         end,
     QS =
         case Reconnect of
-            true -> ["path=", Path, "&reconnect=1", ParamsQS];
-            false -> ["path=", Path, ParamsQS]
+            true -> ["_az_path=", Path, "&_az_reconnect=1", ParamsQS];
+            false -> ["_az_path=", Path, ParamsQS]
         end,
     Req = [
         "GET /ws?",

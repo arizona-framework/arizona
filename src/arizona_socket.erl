@@ -12,10 +12,10 @@ that the transport translates into WebSocket frames or close codes.
 Inbound text frames are JSON arrays:
 
 ```
-[~"cached_fps", FpList]            %% client tells us which fingerprints it has
-[~"navigate", #{~"path" := Path}]  %% SPA navigation request
-[ViewId, Event, Payload]           %% UI event
-~"0"                               %% ping (replied with ~"1")
+[~"cached_fps", FpList]                           %% client tells us which fingerprints it has
+[~"navigate", #{~"path" := Path, ~"qs" := Qs}]    %% SPA navigation request
+[ViewId, Event, Payload]                          %% UI event
+~"0"                                              %% ping (replied with ~"1")
 ```
 
 Outbound text frames are JSON maps with keys `~"o"` (ops) and/or
@@ -72,6 +72,7 @@ socket closes with code `4500` (server crash).
     view_id :: binary() | undefined,
     handler :: module(),
     bindings :: map(),
+    req :: az:request() | undefined,
     on_mount :: arizona_live:on_mount(),
     adapter :: module(),
     adapter_state :: term()
@@ -119,17 +120,19 @@ its live process.
 init(Handler, Bindings, Opts) ->
     Reconnect = maps:get(reconnect, Opts, false),
     OnMount = maps:get(on_mount, Opts, []),
+    Req = maps:get(req, Opts, undefined),
     Adapter = maps:get(adapter, Opts, undefined),
     AdapterState = maps:get(adapter_state, Opts, undefined),
     Socket = #socket{
         handler = Handler,
         bindings = Bindings,
+        req = Req,
         on_mount = OnMount,
         adapter = Adapter,
         adapter_state = AdapterState
     },
     safe_init(Socket, fun() ->
-        {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount),
+        {ok, Pid} = arizona_live:start_link(Handler, Bindings, Req, self(), OnMount),
         case Reconnect of
             true ->
                 {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
@@ -147,7 +150,7 @@ Handles an inbound text frame.
 Recognized payloads:
 - `~"0"` -- ping, replied with `~"1"`
 - `[~"cached_fps", FpList]` -- seeds fingerprints into the live process
-- `[~"navigate", #{~"path" := Path}]` -- SPA navigation
+- `[~"navigate", #{~"path" := Path, ~"qs" := Qs}]` -- SPA navigation
 - `[ViewId, Event, Payload]` -- UI event dispatch
 
 Unrecognized payloads are silently dropped.
@@ -162,9 +165,11 @@ handle_in(JSON, #socket{pid = Pid} = Socket) ->
         [~"cached_fps", FpList] when is_list(FpList) ->
             arizona_live:seed_fps(Pid, FpList),
             {ok, Socket};
-        [~"navigate", #{~"path" := Path}] ->
+        [~"navigate", #{~"path" := Path, ~"qs" := Qs}] when
+            is_binary(Path), is_binary(Qs)
+        ->
             try
-                handle_navigate(Path, Socket)
+                handle_navigate(Path, Qs, Socket)
             catch
                 _:_ -> remount_or_close(Socket)
             end;
@@ -216,10 +221,10 @@ safe_init(Socket, Fun) ->
     end.
 
 remount_or_close(
-    #socket{handler = H, bindings = IB, on_mount = OnMount, view_id = OldVId} = Socket
+    #socket{handler = H, bindings = IB, req = Req, on_mount = OnMount, view_id = OldVId} = Socket
 ) ->
     try
-        {ok, Pid} = arizona_live:start_link(H, IB, self(), OnMount),
+        {ok, Pid} = arizona_live:start_link(H, IB, Req, self(), OnMount),
         {ok, NewVId, PageHTML} = arizona_live:mount_and_render(Pid),
         Ops = replace_ops(OldVId, PageHTML),
         encode_reply(Ops, [], Socket#socket{pid = Pid, view_id = NewVId})
@@ -230,14 +235,16 @@ remount_or_close(
     end.
 
 handle_navigate(
-    Path, #socket{pid = Pid, view_id = OldVId, adapter = Adapter, adapter_state = AS} = Socket
+    Path,
+    Qs,
+    #socket{pid = Pid, view_id = OldVId, adapter = Adapter, adapter_state = AS} = Socket
 ) ->
-    {H, RouteOpts} = arizona_adapter:call_resolve_route(Adapter, Path, AS),
+    {H, RouteOpts, NewReq} = arizona_adapter:call_resolve_route(Adapter, Path, Qs, AS),
     IB = maps:get(bindings, RouteOpts, #{}),
     OnMount = maps:get(on_mount, RouteOpts, []),
-    {ok, NewVId, PageHTML} = arizona_live:navigate(Pid, H, IB, OnMount),
+    {ok, NewVId, PageHTML} = arizona_live:navigate(Pid, H, IB, NewReq, OnMount),
     Ops = replace_ops(OldVId, PageHTML),
-    encode_reply(Ops, [], Socket#socket{view_id = NewVId, on_mount = OnMount}).
+    encode_reply(Ops, [], Socket#socket{req = NewReq, view_id = NewVId, on_mount = OnMount}).
 
 replace_ops(ViewId, PageHTML) ->
     [[?OP_REPLACE, ViewId, PageHTML]].

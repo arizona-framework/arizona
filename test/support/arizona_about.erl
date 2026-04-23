@@ -1,9 +1,9 @@
 -module(arizona_about).
--include("arizona_stateful.hrl").
--export([mount/1, render/1, handle_event/3, handle_info/2]).
+-include("arizona_view.hrl").
+-export([mount/2, render/1, handle_event/3, handle_info/2]).
 
--spec mount(az:bindings()) -> az:mount_ret().
-mount(Bindings0) ->
+-spec mount(az:bindings(), az:request()) -> az:mount_ret().
+mount(Bindings0, _Req) ->
     Bindings = maps:merge(
         #{
             id => ~"page",
