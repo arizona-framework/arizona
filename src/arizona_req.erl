@@ -71,6 +71,9 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 -export([headers/1]).
 -export([body/1]).
 -export([apply_middlewares/3]).
+-export([redirect/2]).
+-export([redirect/3]).
+-export([halted_redirect/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -84,6 +87,9 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 -ignore_xref([cookies/1]).
 -ignore_xref([headers/1]).
 -ignore_xref([body/1]).
+-ignore_xref([redirect/2]).
+-ignore_xref([redirect/3]).
+-ignore_xref([halted_redirect/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -101,6 +107,7 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 -export_type([body/0]).
 -export_type([middleware/0]).
 -export_type([middleware_result/0]).
+-export_type([redirect_status/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -115,7 +122,8 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
     params => params(),
     cookies => cookies(),
     headers => headers(),
-    body => body()
+    body => body(),
+    redirect => {redirect_status(), binary()}
 }.
 
 -nominal adapter() :: module().
@@ -131,6 +139,13 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 -nominal middleware() ::
     fun((request(), az:bindings()) -> middleware_result()) | {module(), atom()}.
 -nominal middleware_result() :: {cont, request(), az:bindings()} | {halt, request()}.
+
+%% HTTP redirect status codes (RFC 9110 §15.4). The most common are
+%% 301 (moved permanently), 302 (found), 303 (see other), 307
+%% (temporary redirect), 308 (permanent redirect). The full 3xx range
+%% is allowed so rarer codes (300 multiple choices, 304 not modified,
+%% etc.) remain expressible -- callers pick the semantics they want.
+-nominal redirect_status() :: 300..399.
 
 %% --------------------------------------------------------------------
 %% Behaviour callbacks
@@ -257,6 +272,43 @@ apply_middlewares([Mw | Rest], Req, Bindings) ->
         {cont, Req1, Bindings1} -> apply_middlewares(Rest, Req1, Bindings1);
         {halt, _Req1} = Halt -> Halt
     end.
+
+-doc """
+Stashes a 302 redirect intent in `Request` so downstream transports
+translate it uniformly.
+
+Middleware authors should return `{halt, arizona_req:redirect(Req,
+Location)}` instead of writing a transport-specific response
+directly. HTTP transports read the intent and emit a proper redirect
+reply; WS navigate transports emit an `arizona_js:navigate/1`
+client effect so the browser pushes the new URL.
+""".
+-spec redirect(Request, Location) -> Request when
+    Request :: request(),
+    Location :: binary().
+redirect(Req, Location) ->
+    redirect(Req, 302, Location).
+
+-doc "Like `redirect/2` but lets callers pick the 3xx status code.".
+-spec redirect(Request, Status, Location) -> Request when
+    Request :: request(),
+    Status :: redirect_status(),
+    Location :: binary().
+redirect(Req, Status, Location) when
+    is_integer(Status), Status >= 300, Status =< 399, is_binary(Location)
+->
+    Req#{redirect => {Status, Location}}.
+
+-doc """
+Returns the stashed redirect intent, or `undefined` when no
+`redirect/2,3` was called on this request. Transports use this to
+translate a middleware `{halt, Req}` return into the appropriate
+client-visible response.
+""".
+-spec halted_redirect(Request) -> {redirect_status(), binary()} | undefined when
+    Request :: request().
+halted_redirect(#{redirect := Redirect}) -> Redirect;
+halted_redirect(_) -> undefined.
 
 %% --------------------------------------------------------------------
 %% Internal functions

@@ -225,9 +225,31 @@ handle_navigate(
     {H, RouteOpts, NewReq} = arizona_adapter:call_resolve_route(Adapter, Path, Qs, AS),
     IB = maps:get(bindings, RouteOpts, #{}),
     OnMount = maps:get(on_mount, RouteOpts, []),
-    {ok, NewVId, PageHTML} = arizona_live:navigate(Pid, H, IB, NewReq, OnMount),
-    Ops = replace_ops(OldVId, PageHTML),
-    encode_reply(Ops, [], Socket#socket{view_id = NewVId}).
+    Middlewares = maps:get(middlewares, RouteOpts, []),
+    case arizona_req:apply_middlewares(Middlewares, NewReq, IB) of
+        {halt, HaltReq} ->
+            halt_navigate(HaltReq, Socket);
+        {cont, NewReq1, Bindings1} ->
+            {ok, NewVId, PageHTML} = arizona_live:navigate(
+                Pid, H, Bindings1, NewReq1, OnMount
+            ),
+            Ops = replace_ops(OldVId, PageHTML),
+            encode_reply(Ops, [], Socket#socket{view_id = NewVId})
+    end.
+
+%% Middleware halt during WS navigate -- there is no HTTP response channel
+%% mid-session, so we translate an `arizona_req:redirect/2` halt into an
+%% `arizona_js:navigate/1` client effect. Halts without a stashed redirect
+%% close the socket so the client reconnects and the next HTTP handshake
+%% receives the full middleware response.
+halt_navigate(HaltReq, Socket) ->
+    case arizona_req:halted_redirect(HaltReq) of
+        {_Status, Location} ->
+            Effects = [arizona_js:navigate(Location)],
+            encode_reply([], Effects, Socket);
+        undefined ->
+            close_crash(Socket)
+    end.
 
 replace_ops(ViewId, PageHTML) ->
     [[?OP_REPLACE, ViewId, PageHTML]].

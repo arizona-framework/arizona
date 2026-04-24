@@ -27,6 +27,14 @@ start() ->
         {live, <<"/crashable">>, arizona_crashable, #{layout => Layout}},
         {live, <<"/scroll-home">>, arizona_scroll_home, #{layout => Layout}},
         {live, <<"/scroll-about">>, arizona_scroll_about, #{layout => Layout}},
+        {live, <<"/navigate-halt">>, arizona_navigate_halt, #{layout => Layout}},
+        {live, <<"/login">>, arizona_login, #{layout => Layout}},
+        {live, <<"/protected">>, arizona_navigate_halt, #{
+            layout => Layout,
+            middlewares => [
+                fun(Req, _B) -> {halt, arizona_req:redirect(Req, <<"/login">>)} end
+            ]
+        }},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}
     ],

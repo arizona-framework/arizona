@@ -1,5 +1,7 @@
 -module(arizona_cowboy_ws_SUITE).
 -include_lib("stdlib/include/assert.hrl").
+-include("arizona.hrl").
+-include_lib("arizona/include/arizona_js.hrl").
 
 -export([all/0, groups/0, init_per_suite/1, end_per_suite/1]).
 -export([
@@ -19,6 +21,8 @@
     middleware_halt_redirects/1,
     middleware_halt_rejects_ws/1,
     middleware_pipeline_runs_in_order/1,
+    middleware_halt_redirects_on_navigate/1,
+    middleware_cont_on_navigate/1,
     crash_event_closes/1,
     crash_info_closes/1,
     crash_init_closes/1,
@@ -49,7 +53,9 @@ groups() ->
             middleware_cont_ws_connects,
             middleware_halt_redirects,
             middleware_halt_rejects_ws,
-            middleware_pipeline_runs_in_order
+            middleware_pipeline_runs_in_order,
+            middleware_halt_redirects_on_navigate,
+            middleware_cont_on_navigate
         ]},
         {crash_recovery, [sequence], [
             crash_event_closes,
@@ -95,6 +101,16 @@ init_per_suite(Config) ->
             middlewares => [
                 fun(Req, B) -> {cont, Req, B#{step => 1}} end,
                 fun(Req, #{step := N} = B) -> {cont, Req, B#{step => N + 1}} end
+            ]
+        }},
+        {live, <<"/navigate_halt_redirect">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, _B) -> {halt, arizona_req:redirect(Req, <<"/login">>)} end
+            ]
+        }},
+        {live, <<"/navigate_enriched">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) -> {cont, Req, B#{session => <<"from_navigate">>}} end
             ]
         }},
         {live, <<"/items/:item_id">>, arizona_crashable, #{middlewares => [UrlToBindings]}},
@@ -289,6 +305,32 @@ middleware_pipeline_runs_in_order(Config) ->
     gen_tcp:close(Sock),
     %% Both middlewares ran, page rendered (200 OK)
     ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)).
+
+middleware_halt_redirects_on_navigate(Config) ->
+    %% WS navigate: middleware halts via `arizona_req:redirect/2`. The
+    %% server can't emit an HTTP response mid-session, so it translates
+    %% the halt into an `arizona_js:navigate` client effect.
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/navigate_halt_redirect", ~"qs" => ~""}]),
+    {text, Resp} = ws_recv(Sock),
+    Decoded = json:decode(Resp),
+    %% No ops, only a navigate effect pointing at /login
+    ?assertMatch(#{~"e" := [_ | _]}, Decoded),
+    ?assertNot(maps:is_key(~"o", Decoded)),
+    [[OpCode | Rest] | _] = maps:get(~"e", Decoded),
+    ?assertEqual(?JS_NAVIGATE, OpCode),
+    ?assertEqual(~"/login", hd(Rest)),
+    ws_close(Sock).
+
+middleware_cont_on_navigate(Config) ->
+    %% WS navigate: middleware enriches bindings and passes through; the
+    %% new view mounts successfully and OP_REPLACE lands at the client.
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/navigate_enriched", ~"qs" => ~""}]),
+    {text, Resp} = ws_recv(Sock),
+    Decoded = json:decode(Resp),
+    ?assertMatch(#{~"o" := [[?OP_REPLACE, _, _]]}, Decoded),
+    ws_close(Sock).
 
 reconnect_init(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/">>, [{reconnect, true}]),

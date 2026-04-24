@@ -26,7 +26,6 @@ its transport's native reply shape.
 %% --------------------------------------------------------------------
 
 -export([render/3]).
--export([reload_url/0]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -57,6 +56,7 @@ its transport's native reply shape.
 
 -nominal result() ::
     {halt, cowboy_req:req()}
+    | {redirect, arizona_req:redirect_status(), binary()}
     | {ok, 200, iolist()}
     | {error, 500, iolist()}.
 
@@ -77,22 +77,22 @@ render(Handler, Req, Opts) ->
     Middlewares = maps:get(middlewares, Opts, []),
     case arizona_req:apply_middlewares(Middlewares, ArzReq, Bindings) of
         {halt, HaltReq} ->
-            {halt, arizona_req:raw(HaltReq)};
+            case arizona_req:halted_redirect(HaltReq) of
+                {Status, Location} -> {redirect, Status, Location};
+                undefined -> {halt, arizona_req:raw(HaltReq)}
+            end;
         {cont, ArzReq1, Bindings1} ->
             do_render(Handler, ArzReq1, Bindings1, Opts)
     end.
 
--doc """
-Dev-mode hot-reload SSE endpoint URL (set in `persistent_term` by
-the dev reloader wiring). Returns `undefined` in production.
-""".
--spec reload_url() -> binary() | undefined.
-reload_url() ->
-    persistent_term:get(arizona_reload_url, undefined).
-
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% Dev-mode hot-reload SSE endpoint URL (set in `persistent_term` by
+%% the dev reloader wiring). Returns `undefined` in production.
+reload_url() ->
+    persistent_term:get(arizona_reload_url, undefined).
 
 do_render(H, ArzReq, Bindings, Opts) ->
     case arizona_reloader:get_error() of

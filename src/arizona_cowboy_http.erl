@@ -39,6 +39,9 @@ init(Req, #{handler := H} = State) ->
     case arizona_http:render(H, Req, State) of
         {halt, RawReq} ->
             {ok, RawReq, State};
+        {redirect, Status, Location} ->
+            Req2 = cowboy_req:reply(Status, #{~"location" => Location}, Req),
+            {ok, Req2, State};
         {ok, Status, Body} ->
             reply(Status, Body, Req, State);
         {error, Status, Body} ->
