@@ -56,13 +56,13 @@ compile_routes_live(Config) when is_list(Config) ->
     ok = arizona_cowboy_router:compile_routes([
         {live, <<"/foo">>, my_handler, #{
             bindings => #{page => home},
-            layout => {my_layout, render}
+            layouts => [{my_layout, render}]
         }}
     ]),
     {Handler, Opts} = route_match(<<"/foo">>),
     ?assertEqual(arizona_cowboy_http, Handler),
     ?assertEqual(my_handler, maps:get(handler, Opts)),
-    ?assertEqual({my_layout, render}, maps:get(layout, Opts)),
+    ?assertEqual([{my_layout, render}], maps:get(layouts, Opts)),
     ?assertEqual(#{page => home}, maps:get(bindings, Opts)).
 
 compile_routes_live_no_layout(Config) when is_list(Config) ->
@@ -72,12 +72,12 @@ compile_routes_live_no_layout(Config) when is_list(Config) ->
     {Handler, Opts} = route_match(<<"/bare">>),
     ?assertEqual(arizona_cowboy_http, Handler),
     ?assertEqual(my_handler, maps:get(handler, Opts)),
-    ?assertEqual(undefined, maps:get(layout, Opts)),
+    ?assertEqual([], maps:get(layouts, Opts)),
     ?assertEqual(#{x => 1}, maps:get(bindings, Opts)).
 
 compile_routes_live_multiple_pages(Config) when is_list(Config) ->
     RouteOpts = fun(Id) ->
-        #{bindings => #{id => Id}, layout => {layout, render}}
+        #{bindings => #{id => Id}, layouts => [{layout, render}]}
     end,
     ok = arizona_cowboy_router:compile_routes([
         {live, <<"/page1">>, handler1, RouteOpts(<<"p1">>)},
@@ -127,7 +127,7 @@ compile_routes_controller(Config) when is_list(Config) ->
 
 compile_routes_mixed(Config) when is_list(Config) ->
     ok = arizona_cowboy_router:compile_routes([
-        {live, <<"/">>, page_h, #{layout => {lay, render}}},
+        {live, <<"/">>, page_h, #{layouts => [{lay, render}]}},
         {ws, <<"/ws">>, #{timeout => 30}},
         {asset, <<"/assets">>, {dir, "/var/www"}},
         {controller, <<"/health">>, health_h, #{status => ok}}

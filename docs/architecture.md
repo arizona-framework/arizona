@@ -15,9 +15,9 @@
 | `src/arizona_stateful.erl`        | Behaviour for embedded components -- `mount/1` callback + `call_mount/2` dispatcher; shared callbacks come from `arizona_handler`                                         |
 | `src/arizona_view.erl`            | Behaviour for route-level pages -- `mount/2` callback taking `(Bindings, Request)` + `call_mount/3` dispatcher; shared callbacks come from `arizona_handler`              |
 | `src/arizona_handler.erl`         | Shared behaviour hosting callbacks common to views and stateful components (`render/1`, `handle_event/3`, `handle_info/2`, `handle_update/2`, `unmount/1`) + dispatchers  |
-| `src/arizona_req.erl`             | Opaque, adapter-pluggable request abstraction -- eager `method/1`/`path/1`, lazy `bindings/1`/`params/1`/`cookies/1`/`headers/1`/`body/1`, `apply_middlewares/3`, middleware halt redirects (`redirect/2,3` + `halted_redirect/1`) |
-| `src/arizona_http.erl`            | Transport-agnostic HTTP render pipeline shared by cowboy and Nova integrations -- `render/3` wraps the native req, runs middlewares, renders the view, translates halt redirects into `{redirect, Status, Location}`          |
-| `src/arizona_ws.erl`              | Transport-agnostic WebSocket upgrade bootstrap -- `prepare/3` parses `_az_path`/`_az_reconnect`, resolves the route, runs middlewares, and hands the caller the state to feed into `arizona_socket:init/3`                     |
+| `src/arizona_req.erl`             | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`, `apply_middlewares/3`, `redirect`/`halted_redirect`                         |
+| `src/arizona_http.erl`            | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|redirect\|ok\|error, ...}` tuples                               |
+| `src/arizona_ws.erl`              | Transport-agnostic WS upgrade bootstrap -- `prepare/3` parses framework keys, resolves the route, runs middlewares, returns state for `arizona_socket`                    |
 | `src/arizona_live.erl`            | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                              |
 | `src/arizona_parse_transform.erl` | Compile-time transform -- `?html`, `?each` (1-arg or 2-arg) DSL to `#{s, d, f}` maps, `az-view` auto-injection, directive extraction (`az-nodiff`), attribute compilation |
 | `src/arizona_socket.erl`          | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff    |
@@ -62,7 +62,7 @@ HTML output and rendering.
 - `render_to_iolist/1` -- render a template to iolist (used for layout templates with
   `diff => false`)
 - `render_to_iolist/2` -- stateful-component SSR (test-only): `render_to_iolist(Handler, Opts)`
-  where Opts may contain `layout => {Mod, Fun}` and `bindings => map()`. `on_mount` is not
+  where Opts may contain `layouts => [{Mod, Fun}]` and `bindings => map()`. `on_mount` is not
   honored -- it's a route-level concept
 - `render_view_to_iolist/3` -- production HTTP SSR for views: `render_view_to_iolist(Handler, Req, Opts)`.
   Mounts via `arizona_view:call_mount/3`, applies `on_mount` hooks (threading `Req`), optionally
@@ -154,7 +154,7 @@ Cowboy route compilation.
 
 **Route types** (via `compile_routes/1`):
 
-- `{live, Path, Handler, Opts}` -- live route (`Opts` may contain `layout => {Mod, Fun}` and
+- `{live, Path, Handler, Opts}` -- live route (`Opts` may contain `layouts => [{Mod, Fun}]` and
   `bindings => map()`)
 - `{ws, Path, Opts}` -- WebSocket endpoint
 - `{asset, Path, {priv_dir, App, SubDir}}` -- static asset route from priv directory
@@ -298,11 +298,13 @@ Opaque, adapter-pluggable request abstraction. Constructed by transport adapters
 adapter's behaviour callbacks on first access and cached in the returned request.
 
 **Accessors** (eager):
+
 - `method/1` -- HTTP method (`~"GET"`, `~"POST"`, ...)
 - `path/1` -- request path, no query string
 - `raw/1` -- the native transport value the adapter wraps
 
 **Accessors** (lazy, return `{Value, Req1}`):
+
 - `bindings/1` -- route-pattern path bindings (map of atoms)
 - `params/1` -- parsed query string as a proplist
 - `cookies/1` -- parsed cookies as a proplist
@@ -310,6 +312,7 @@ adapter's behaviour callbacks on first access and cached in the returned request
 - `body/1` -- the request body
 
 **Other:**
+
 - `set_raw/2` -- swap the native raw value, clear all lazy caches
 - `apply_middlewares/3(Middlewares, Req, Bindings)` -- threads a request and bindings map through
   a list of `middleware()`, returning `{cont, Req1, Bindings1}` or `{halt, HaltReq}`
@@ -368,7 +371,7 @@ invoke `arizona_ws:prepare/3`, and wire the result into their framework's callba
 the cowboy req in an `arizona_req:request()`, runs any route middlewares
 (`arizona_req:apply_middlewares/3`), then calls
 `arizona_render:render_view_to_iolist(Handler, Req, Opts)` where Opts may contain
-`layout => {Mod, Fun}`, `bindings => map()`, and `on_mount => [...]`. `render_view_to_iolist/3`
+`layouts => [{Mod, Fun}]`, `bindings => map()`, and `on_mount => [...]`. `render_view_to_iolist/3`
 mounts the page via `arizona_view:call_mount/3` (passing the Request), applies `on_mount` hooks,
 renders to page HTML, then optionally injects the page HTML into mount bindings as `inner_content`
 and passes the bindings to the layout's `render/1`. The layout uses `?html` with `az_nodiff` on
@@ -408,9 +411,9 @@ known child view, dispatches to child; otherwise dispatches to root handler. Ret
 envelope `{"o": scopedOps, "e": effects}`.
 
 **SPA navigation + unmount:** Client clicks `[az-navigate]` link -> JS intercepts, calls
-`history.pushState`, sends `["navigate", {path, qs}]` over WebSocket. `arizona_socket`'s
-navigate handler resolves the new route via the adapter, then runs the new route's middlewares (lifecycle parity
-with HTTP init and WS upgrade). If middleware halts with `arizona_req:redirect/2,3`, the socket
+`history.pushState`, sends `["navigate", {path, qs}]` over WebSocket. `arizona_socket`'s navigate
+handler resolves the new route via the adapter, then runs the new route's middlewares (lifecycle
+parity with HTTP init and WS upgrade). If middleware halts with `arizona_req:redirect/2,3`, the socket
 emits `[arizona_js:navigate(Location)]` as a client effect -- no `arizona_live:navigate` call
 happens; the browser pushes the new URL and the fresh HTTP handshake runs middleware again on
 the redirect target. On `cont`, `arizona_live:navigate/5` is called. Before mounting the new
@@ -637,7 +640,7 @@ handle_http_request(NativeReq) ->
     Handler = my_page_handler,
     Opts = #{
         bindings => #{title => <<"Home">>},
-        layout => {my_layout, render},
+        layouts => [{my_layout, render}],
         on_mount => [],
         middlewares => []
     },

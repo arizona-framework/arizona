@@ -44,7 +44,7 @@ persistent term so the dev error page can build the SSE connect URL.
 -nominal path() :: binary().
 
 -nominal live_opts() :: #{
-    layout => arizona_render:layout(),
+    layouts => [arizona_render:layout()],
     bindings => map()
 }.
 
@@ -81,7 +81,7 @@ route_to_cowboy({live, Path, Handler, Opts}) ->
     [
         {binary_to_list(Path), arizona_cowboy_http, #{
             handler => Handler,
-            layout => maps:get(layout, Opts, undefined),
+            layouts => maps:get(layouts, Opts, []),
             bindings => maps:get(bindings, Opts, #{}),
             on_mount => maps:get(on_mount, Opts, []),
             middlewares => maps:get(middlewares, Opts, [])

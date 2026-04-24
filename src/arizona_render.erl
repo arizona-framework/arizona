@@ -87,7 +87,7 @@ op-code targets.
 -nominal layout() :: {module(), atom()}.
 
 -nominal render_opts() :: #{
-    layout => layout(),
+    layouts => [layout()],
     bindings => map(),
     on_mount => arizona_live:on_mount()
 }.
@@ -339,13 +339,18 @@ fingerprint_payload(#{s := S, d := D}) ->
 finish_ssr(Handler, Bindings, Opts) ->
     PageTmpl = arizona_handler:call_render(Handler, Bindings),
     PageHTML = zip(maps:get(s, PageTmpl), render_ssr_dynamics(maps:get(d, PageTmpl))),
-    case maps:get(layout, Opts, undefined) of
-        undefined ->
-            PageHTML;
-        {LayoutMod, LayoutFun} ->
-            LayoutTmpl = LayoutMod:LayoutFun(Bindings#{inner_content => PageHTML}),
-            render_to_iolist(LayoutTmpl)
-    end.
+    Layouts = maps:get(layouts, Opts, []),
+    apply_layouts(Layouts, PageHTML, Bindings).
+
+%% Wraps `Inner` with each layer. List is outermost-first, so the page
+%% HTML ends up nested inside every layer in the order given:
+%% `apply_layouts([Root, Sub], Page, _)` → `Root(Sub(Page))`.
+apply_layouts([], Inner, _Bindings) ->
+    Inner;
+apply_layouts([{Mod, Fun} | Rest], Inner, Bindings) ->
+    Wrapped = apply_layouts(Rest, Inner, Bindings),
+    Tmpl = Mod:Fun(Bindings#{inner_content => Wrapped}),
+    render_to_iolist(Tmpl).
 
 zip_stream_item(Statics, ItemD) ->
     zip(Statics, [arizona_template:unwrap_val(V) || {_Az, V} <:- ItemD]).

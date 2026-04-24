@@ -164,7 +164,7 @@ for experimentation). The page's `id` is supplied here via the route's `bindings
 start(_Type, _Args) ->
     Routes = [
         {live, ~"/", my_page, #{
-            layout => {my_layout, render},
+            layouts => [{my_layout, render}],
             bindings => #{id => ~"page", title => ~"Counter demo"}
         }},
         {ws, ~"/ws", #{}},
@@ -211,7 +211,7 @@ In `config/sys.config`:
         proto_opts => #{stream_handlers => [cowboy_compress_h, cowboy_stream_h]},
         routes => [
             {live, <<"/">>, my_page, #{
-                layout => {my_layout, render},
+                layouts => [{my_layout, render}],
                 bindings => #{id => <<"page">>, title => <<"Counter demo">>}
             }},
             {ws, <<"/ws">>, #{}},

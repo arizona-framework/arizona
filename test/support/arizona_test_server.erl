@@ -2,35 +2,35 @@
 -export([start/0, stop/0, port/0]).
 
 start() ->
-    Layout = {arizona_layout, render},
+    Layouts = [{arizona_layout, render}],
     Routes = [
         {live, <<"/">>, arizona_page, #{
             bindings => #{title => <<"Welcome">>},
-            layout => Layout
+            layouts => Layouts
         }},
         {live, <<"/about">>, arizona_about, #{
             bindings => #{title => <<"About">>},
-            layout => Layout
+            layouts => Layouts
         }},
         {live, <<"/datatable">>, arizona_datatable, #{
             bindings => #{title => <<"DataTable">>},
-            layout => Layout
+            layouts => Layouts
         }},
         {live, <<"/mixed">>, arizona_mixed_children, #{
             bindings => #{title => <<"Mixed">>},
-            layout => Layout
+            layouts => Layouts
         }},
         {live, <<"/chat">>, arizona_chat, #{
             bindings => #{title => <<"Chat">>},
-            layout => Layout
+            layouts => Layouts
         }},
-        {live, <<"/crashable">>, arizona_crashable, #{layout => Layout}},
-        {live, <<"/scroll-home">>, arizona_scroll_home, #{layout => Layout}},
-        {live, <<"/scroll-about">>, arizona_scroll_about, #{layout => Layout}},
-        {live, <<"/navigate-halt">>, arizona_navigate_halt, #{layout => Layout}},
-        {live, <<"/login">>, arizona_login, #{layout => Layout}},
+        {live, <<"/crashable">>, arizona_crashable, #{layouts => Layouts}},
+        {live, <<"/scroll-home">>, arizona_scroll_home, #{layouts => Layouts}},
+        {live, <<"/scroll-about">>, arizona_scroll_about, #{layouts => Layouts}},
+        {live, <<"/navigate-halt">>, arizona_navigate_halt, #{layouts => Layouts}},
+        {live, <<"/login">>, arizona_login, #{layouts => Layouts}},
         {live, <<"/protected">>, arizona_navigate_halt, #{
-            layout => Layout,
+            layouts => Layouts,
             middlewares => [
                 fun(Req, _B) -> {halt, arizona_req:redirect(Req, <<"/login">>)} end
             ]

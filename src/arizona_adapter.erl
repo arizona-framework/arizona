@@ -56,7 +56,7 @@ the new path and query.
 -nominal route_opts() :: #{
     bindings => map(),
     on_mount => arizona_live:on_mount(),
-    layout => {module(), atom()},
+    layouts => [{module(), atom()}],
     _ => term()
 }.
 

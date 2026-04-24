@@ -49,7 +49,7 @@ its transport's native reply shape.
 -nominal render_opts() :: #{
     bindings => map(),
     middlewares => [arizona_req:middleware()],
-    layout => arizona_render:layout() | undefined,
+    layouts => [arizona_render:layout()],
     on_mount => arizona_live:on_mount(),
     _ => term()
 }.
@@ -100,7 +100,7 @@ do_render(H, ArzReq, Bindings, Opts) ->
             try
                 RenderOpts = #{
                     bindings => Bindings,
-                    layout => maps:get(layout, Opts, undefined),
+                    layouts => maps:get(layouts, Opts, []),
                     on_mount => maps:get(on_mount, Opts, [])
                 },
                 Page = arizona_render:render_view_to_iolist(H, ArzReq, RenderOpts),

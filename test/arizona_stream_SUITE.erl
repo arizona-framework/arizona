@@ -1837,7 +1837,7 @@ render_to_iolist_with_stream_items(Config) when is_list(Config) ->
             arizona_req_test_adapter:new(#{}),
             #{
                 bindings => #{items => [#{id => 1, text => <<"Hello">>}]},
-                layout => {arizona_layout, render}
+                layouts => [{arizona_layout, render}]
             }
         )
     ),
@@ -2470,7 +2470,7 @@ datatable_ssr(Config) when is_list(Config) ->
         arizona_render:render_view_to_iolist(
             arizona_datatable,
             arizona_req_test_adapter:new(#{}),
-            #{bindings => #{title => <<"DataTable">>}, layout => {arizona_layout, render}}
+            #{bindings => #{title => <<"DataTable">>}, layouts => [{arizona_layout, render}]}
         )
     ),
     ?assertMatch({_, _}, binary:match(HTML, <<"<title>DataTable</title>">>)),

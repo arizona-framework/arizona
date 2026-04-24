@@ -43,6 +43,8 @@
     ssr_counter/1,
     ssr_counter_with_bindings/1,
     ssr_each_map/1,
+    ssr_layouts_empty_list/1,
+    ssr_layouts_nest_outer_first/1,
     ssr_page_with_child/1,
     zip_nested_element/1,
     zip_nested_sd/1,
@@ -81,6 +83,8 @@ groups() ->
             ssr_page_with_child,
             ssr_about_page,
             ssr_each_map,
+            ssr_layouts_nest_outer_first,
+            ssr_layouts_empty_list,
             resolve_id_binary,
             resolve_id_template
         ]},
@@ -244,7 +248,7 @@ ssr_page_with_child(Config) when is_list(Config) ->
         arizona_render:render_view_to_iolist(
             arizona_page,
             Req,
-            #{bindings => #{title => <<"Welcome">>}, layout => {arizona_layout, render}}
+            #{bindings => #{title => <<"Welcome">>}, layouts => [{arizona_layout, render}]}
         )
     ),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"<!DOCTYPE html>">>)),
@@ -259,6 +263,38 @@ ssr_page_with_child(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, <<"az-navigate">>)),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"connect('/ws')">>)),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"</html>">>)).
+
+ssr_layouts_nest_outer_first(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{}),
+    HTML = iolist_to_binary(
+        arizona_render:render_view_to_iolist(
+            arizona_about,
+            Req,
+            #{
+                bindings => #{title => <<"Nested">>},
+                layouts => [{arizona_outer_layout, render}, {arizona_inner_layout, render}]
+            }
+        )
+    ),
+    {OuterOpenAt, _} = binary:match(HTML, <<"<outer>">>),
+    {InnerOpenAt, _} = binary:match(HTML, <<"<inner>">>),
+    {InnerCloseAt, _} = binary:match(HTML, <<"</inner>">>),
+    {OuterCloseAt, _} = binary:match(HTML, <<"</outer>">>),
+    ?assert(OuterOpenAt < InnerOpenAt),
+    ?assert(InnerCloseAt < OuterCloseAt),
+    ?assert(InnerOpenAt < InnerCloseAt).
+
+ssr_layouts_empty_list(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{}),
+    HTML = iolist_to_binary(
+        arizona_render:render_view_to_iolist(
+            arizona_about,
+            Req,
+            #{bindings => #{title => <<"Bare">>}, layouts => []}
+        )
+    ),
+    ?assertEqual(nomatch, binary:match(HTML, <<"<!DOCTYPE html>">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"az-view id=\"page\"">>)).
 
 ssr_each_map(Config) when is_list(Config) ->
     HTML = iolist_to_binary(arizona_render:render_to_iolist(arizona_each_map, #{})),
@@ -305,7 +341,7 @@ ssr_about_page(Config) when is_list(Config) ->
         arizona_render:render_view_to_iolist(
             arizona_about,
             Req,
-            #{bindings => #{title => <<"About">>}, layout => {arizona_layout, render}}
+            #{bindings => #{title => <<"About">>}, layouts => [{arizona_layout, render}]}
         )
     ),
     ?assertMatch({_, _}, binary:match(HTML, <<"<title>About</title>">>)),

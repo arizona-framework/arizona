@@ -15,7 +15,7 @@ starts a Cowboy listener named `arizona_http` via
         transport_opts => [{port, 4040}],        %% cowboy transport opts
         proto_opts => #{stream_handlers => [cowboy_compress_h, cowboy_stream_h]},
         routes => [
-            {live, <<"/">>, my_page, #{layout => {my_layout, render}}},
+            {live, <<"/">>, my_page, #{layouts => [{my_layout, render}]}},
             {ws, <<"/ws">>, #{}},
             {asset, <<"/priv">>, {priv_dir, my_app, "static"}}
         ]
