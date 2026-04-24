@@ -464,10 +464,14 @@ reload_endpoint_streams_event(Config) ->
     wait_for_subscriber(1000),
     ok = arizona_reloader:broadcast(),
     %% Drain up to 5s worth of chunks, accumulating what we get.
-    Data = recv_until(Sock, <<"event: reload">>, 5000),
-    ?assertNotEqual(nomatch, binary:match(Data, <<"200 OK">>)),
-    ?assertNotEqual(nomatch, binary:match(Data, <<"text/event-stream">>)),
-    ?assertNotEqual(nomatch, binary:match(Data, <<"event: reload">>)),
+    Data1 = recv_until(Sock, <<"event: reload\n">>, 5000),
+    ?assertNotEqual(nomatch, binary:match(Data1, <<"200 OK">>)),
+    ?assertNotEqual(nomatch, binary:match(Data1, <<"text/event-stream">>)),
+    ?assertNotEqual(nomatch, binary:match(Data1, <<"event: reload\n">>)),
+    %% Second broadcast covers the reload_css info clause.
+    ok = arizona_reloader:reload_css(),
+    Data2 = recv_until(Sock, <<"event: reload_css">>, 5000),
+    ?assertNotEqual(nomatch, binary:match(Data2, <<"event: reload_css">>)),
     gen_tcp:close(Sock).
 
 wait_for_subscriber(0) ->

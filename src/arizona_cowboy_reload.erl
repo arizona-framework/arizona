@@ -1,4 +1,9 @@
 -module(arizona_cowboy_reload).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -moduledoc """
 Cowboy long-poll handler that streams dev-mode reload events as
 Server-Sent Events.
@@ -62,3 +67,13 @@ info({arizona_reloader, reload_css}, Req, State) ->
     {ok, Req, State};
 info(_Info, Req, State) ->
     {ok, Req, State}.
+
+-ifdef(TEST).
+
+%% The streaming branches are covered end-to-end by
+%% `arizona_cowboy_ws_SUITE:reload_endpoint_streams_event`; here we just
+%% exercise the unknown-info fallthrough, which otherwise has no caller.
+info_ignores_unknown_test() ->
+    ?assertEqual({ok, my_req, my_state}, info(some_random_msg, my_req, my_state)).
+
+-endif.

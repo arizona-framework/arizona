@@ -1,4 +1,9 @@
 -module(arizona_cowboy_static).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -moduledoc """
 Cowboy handler that serves static files from a directory.
 
@@ -74,3 +79,18 @@ content_type(Path) ->
         Ext when Ext =:= ".ico"; Ext =:= ~".ico" -> ~"image/x-icon";
         _ -> ~"application/octet-stream"
     end.
+
+-ifdef(TEST).
+
+content_type_test() ->
+    ?assertEqual(~"application/javascript", content_type("app.js")),
+    ?assertEqual(~"text/css", content_type("style.css")),
+    ?assertEqual(~"text/html", content_type("index.html")),
+    ?assertEqual(~"application/json", content_type("data.json")),
+    ?assertEqual(~"image/svg+xml", content_type("logo.svg")),
+    ?assertEqual(~"image/png", content_type("img.png")),
+    ?assertEqual(~"image/x-icon", content_type("favicon.ico")),
+    ?assertEqual(~"application/octet-stream", content_type("data.bin")),
+    ?assertEqual(~"application/octet-stream", content_type("no-extension")).
+
+-endif.
