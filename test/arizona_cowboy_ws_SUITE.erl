@@ -30,6 +30,9 @@
     static_asset_missing_returns_404/1,
     reload_endpoint_streams_event/1,
     recompile_routes_runs/1,
+    http_preserves_duplicate_qs_keys/1,
+    ws_navigate_preserves_duplicate_qs_keys/1,
+    ws_upgrade_preserves_duplicate_qs_keys/1,
     crash_event_closes/1,
     crash_info_closes/1,
     crash_init_closes/1,
@@ -69,7 +72,10 @@ groups() ->
             static_asset_served,
             static_asset_missing_returns_404,
             reload_endpoint_streams_event,
-            recompile_routes_runs
+            recompile_routes_runs,
+            http_preserves_duplicate_qs_keys,
+            ws_navigate_preserves_duplicate_qs_keys,
+            ws_upgrade_preserves_duplicate_qs_keys
         ]},
         {crash_recovery, [sequence], [
             crash_event_closes,
@@ -92,6 +98,17 @@ init_per_suite(Config) ->
             {Params, Req2} = arizona_req:params(Req1),
             ParamsMap = maps:from_list(Params),
             {cont, Req2, maps:merge(maps:merge(B, PathBs), ParamsMap)}
+        end,
+    %% Projects every `foo=X` occurrence -- preserving duplicates and
+    %% insertion order -- into the `status` binding so assertions can
+    %% read them off the rendered HTML. Used to verify that the full qs
+    %% (including duplicates) flows through every entry point.
+    DupePreserving =
+        fun(Req, B) ->
+            {Params, Req1} = arizona_req:params(Req),
+            Values = [V || {K, V} <:- Params, K =:= ~"foo"],
+            Joined = iolist_to_binary(lists:join(~",", Values)),
+            {cont, Req1, B#{status => <<"foo=[", Joined/binary, "]">>}}
         end,
     Routes = [
         {live, <<"/">>, arizona_crashable, #{middlewares => [UrlToBindings]}},
@@ -129,6 +146,7 @@ init_per_suite(Config) ->
             ]
         }},
         {live, <<"/items/:item_id">>, arizona_crashable, #{middlewares => [UrlToBindings]}},
+        {live, <<"/preserves_dupes">>, arizona_crashable, #{middlewares => [DupePreserving]}},
         {live, <<"/halt_redirect_req">>, arizona_crashable, #{
             middlewares => [
                 fun(Req, _B) -> {halt, arizona_req:redirect(Req, <<"/login">>)} end
@@ -445,6 +463,58 @@ static_asset_missing_returns_404(Config) ->
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"404">>)).
 
+http_preserves_duplicate_qs_keys(Config) ->
+    %% HTTP: cowboy_req:parse_qs preserves duplicate keys in order; the
+    %% middleware reads every `foo=` value via `arizona_req:params/1`
+    %% and projects them into the rendered page.
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /preserves_dupes?foo=bar&foo=baz&foo=qux HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"foo=[bar,baz,qux]">>)).
+
+ws_navigate_preserves_duplicate_qs_keys(Config) ->
+    %% WS navigate: the frame's `qs` binary flows through
+    %% arizona_socket:handle_navigate -> adapter -> cowboy_router, which
+    %% writes it onto the synthesized Req's `qs` field. The handler's
+    %% `arizona_req:params/1` parses it with `cowboy_req:parse_qs`,
+    %% preserving duplicates.
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [
+        ~"navigate",
+        #{~"path" => ~"/preserves_dupes", ~"qs" => ~"foo=bar&foo=baz&foo=qux"}
+    ]),
+    {text, Resp} = ws_recv(Sock),
+    %% Search the raw wire payload -- the rendered HTML is serialized
+    %% into the OP_REPLACE payload (either as a binary or a fingerprint
+    %% map with dynamic values); both formats carry the projected
+    %% `foo=[...]` string verbatim.
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"foo=[bar,baz,qux]">>)),
+    ws_close(Sock).
+
+ws_upgrade_preserves_duplicate_qs_keys(Config) ->
+    %% WS upgrade: user qs (including duplicate keys) sits alongside the
+    %% `_az_path`/`_az_reconnect` framework keys on the upgrade URL.
+    %% `arizona_cowboy_ws:user_qs/1` strips only the framework keys, so
+    %% duplicates flow through to the adapter and reach the handler via
+    %% `arizona_req:params/1`. `reconnect` mode forces an immediate
+    %% mount-and-render so we can read the rendered HTML off the wire.
+    {ok, Sock} = ws_connect(Config, <<"/preserves_dupes">>, [
+        {reconnect, true},
+        {raw_qs, <<"foo=bar&foo=baz">>}
+    ]),
+    {text, Resp} = ws_recv(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"foo=[bar,baz]">>)),
+    ws_close(Sock).
+
 recompile_routes_runs(Config) when is_list(Config) ->
     %% Exercises `arizona_cowboy_server:recompile_routes/0` -- walks the
     %% persistent_term dispatch registry and rebuilds each listener's
@@ -601,15 +671,21 @@ ws_handshake(Sock, Port, Path, Opts) ->
     Key = base64:encode(crypto:strong_rand_bytes(16)),
     Reconnect = proplists:get_value(reconnect, Opts, false),
     Params = proplists:get_value(params, Opts, #{}),
+    RawQs = proplists:get_value(raw_qs, Opts, <<>>),
     ParamsQS =
         case map_size(Params) of
             0 -> "";
             _ -> [[$&, uri_string:quote(K), $=, uri_string:quote(V)] || K := V <- Params]
         end,
+    RawSuffix =
+        case RawQs of
+            <<>> -> "";
+            _ -> [$&, RawQs]
+        end,
     QS =
         case Reconnect of
-            true -> ["_az_path=", Path, "&_az_reconnect=1", ParamsQS];
-            false -> ["_az_path=", Path, ParamsQS]
+            true -> ["_az_path=", Path, "&_az_reconnect=1", ParamsQS, RawSuffix];
+            false -> ["_az_path=", Path, ParamsQS, RawSuffix]
         end,
     Req = [
         "GET /ws?",
