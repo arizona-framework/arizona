@@ -2467,3 +2467,354 @@ describe('navigation scroll', () => {
         expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
     });
 });
+
+// ---------------------------------------------------------------------------
+// executeJS -- scroll_to (JS_SCROLL_TO = 13)
+// ---------------------------------------------------------------------------
+
+describe('executeJS -- JS_SCROLL_TO', () => {
+    let origScrollIntoView;
+
+    beforeEach(() => {
+        origScrollIntoView = Element.prototype.scrollIntoView;
+        Element.prototype.scrollIntoView = vi.fn();
+    });
+
+    afterEach(() => {
+        Element.prototype.scrollIntoView = origScrollIntoView;
+    });
+
+    it('scrolls target into view with explicit options', () => {
+        document.body.innerHTML = '<div id="t"></div>';
+        executeJS(document.body, null, [13, '#t', { behavior: 'auto' }]);
+        expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto' });
+    });
+
+    it('defaults to smooth behavior when options omitted', () => {
+        document.body.innerHTML = '<div id="t"></div>';
+        executeJS(document.body, null, [13, '#t']);
+        expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth' });
+    });
+
+    it('no-ops when selector matches nothing', () => {
+        executeJS(document.body, null, [13, '#missing']);
+        expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// scheduleSend -- debounce / throttle
+// ---------------------------------------------------------------------------
+
+describe('scheduleSend -- debounce / throttle', () => {
+    /** @type {ReturnType<typeof setupMockWorker>} */
+    let mock;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        if (mock) mock.restore();
+    });
+
+    it('numeric debounce delays send and resets on rapid events', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<input id="inp" az-change='[[0,"change"]]' az-debounce="200" />`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const inp = document.getElementById('inp');
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        vi.advanceTimersByTime(100);
+        expect(mock.getSentMessages()).toHaveLength(0);
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        vi.advanceTimersByTime(150);
+        expect(mock.getSentMessages()).toHaveLength(0);
+        vi.advanceTimersByTime(100);
+        expect(mock.getSentMessages()).toHaveLength(1);
+    });
+
+    it('throttle sends immediately then suppresses within window', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<input id="inp" az-change='[[0,"change"]]' az-throttle="200" />`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const inp = document.getElementById('inp');
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(mock.getSentMessages()).toHaveLength(1);
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(mock.getSentMessages()).toHaveLength(1);
+        vi.advanceTimersByTime(250);
+        expect(mock.getSentMessages()).toHaveLength(2);
+    });
+
+    it('event-name debounce stores pending, flushes on named event', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<input id="inp" az-change='[[0,"change"]]' az-debounce="blur" />`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const inp = document.getElementById('inp');
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(mock.getSentMessages()).toHaveLength(0);
+        inp.dispatchEvent(new Event('blur', { bubbles: true }));
+        expect(mock.getSentMessages()).toHaveLength(1);
+    });
+
+    it('blur auto-flushes pending debounced send', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<input id="inp" az-change='[[0,"change"]]' az-debounce="200" />`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const inp = document.getElementById('inp');
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        expect(mock.getSentMessages()).toHaveLength(0);
+        inp.dispatchEvent(new Event('blur', { bubbles: true }));
+        expect(mock.getSentMessages()).toHaveLength(1);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Form submit
+// ---------------------------------------------------------------------------
+
+describe('form submit', () => {
+    /** @type {ReturnType<typeof setupMockWorker>} */
+    let mock;
+
+    afterEach(() => {
+        if (mock) mock.restore();
+    });
+
+    it('az-submit executes JS commands, az-form-reset resets the form', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-submit='[[0,"save"]]' az-form-reset>
+                <input name="x" value="abc" />
+            </form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const form = document.getElementById('f');
+        const resetSpy = vi.spyOn(HTMLFormElement.prototype, 'reset');
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        expect(mock.getSentMessages()).toContainEqual(['page', 'save', { x: 'abc' }]);
+        expect(resetSpy).toHaveBeenCalled();
+        resetSpy.mockRestore();
+    });
+
+    it('submit without az-submit does nothing', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<form id="f"><input name="x" value="abc" /></form>`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const form = document.getElementById('f');
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        expect(mock.getSentMessages()).toHaveLength(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Drag and drop
+// ---------------------------------------------------------------------------
+
+describe('drag-and-drop', () => {
+    /** @type {ReturnType<typeof setupMockWorker>} */
+    let mock;
+
+    afterEach(() => {
+        if (mock) mock.restore();
+    });
+
+    it('dragstart stashes az-key, drop dispatches az-drop with data_transfer + drop_index', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<ul id="list" az-drop='[[0,"reorder"]]'>
+                <li az-key="a" draggable="true">A</li>
+                <li az-key="b" draggable="true">B</li>
+                <li az-key="c" draggable="true">C</li>
+            </ul>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const aItem = document.querySelector('[az-key="a"]');
+        const cItem = document.querySelector('[az-key="c"]');
+
+        const dt = {
+            _data: {},
+            setData(type, val) {
+                this._data[type] = val;
+            },
+            getData(type) {
+                return this._data[type] || '';
+            },
+        };
+
+        const dragstart = new Event('dragstart', { bubbles: true, cancelable: true });
+        Object.defineProperty(dragstart, 'dataTransfer', { value: dt });
+        aItem.dispatchEvent(dragstart);
+        expect(dt.getData('text/plain')).toBe('a');
+
+        const drop = new Event('drop', { bubbles: true, cancelable: true });
+        Object.defineProperty(drop, 'dataTransfer', { value: dt });
+        cItem.dispatchEvent(drop);
+
+        const reorderMsg = mock.getSentMessages().find((m) => m[1] === 'reorder');
+        expect(reorderMsg).toBeDefined();
+        expect(reorderMsg[2]).toEqual({ data_transfer: 'a', drop_index: 2 });
+    });
+
+    it('dragover with az-key ancestor prevents default', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<ul id="list" az-drop='[[0,"reorder"]]'>
+                <li az-key="a">A</li>
+            </ul>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const item = document.querySelector('[az-key="a"]');
+        const ev = new Event('dragover', { bubbles: true, cancelable: true });
+        item.dispatchEvent(ev);
+        expect(ev.defaultPrevented).toBe(true);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// OP.ITEM_PATCH -- key not found warning
+// ---------------------------------------------------------------------------
+
+describe('OP.ITEM_PATCH -- key not found', () => {
+    /** @type {ReturnType<typeof vi.spyOn>} */
+    let warnSpy;
+
+    beforeEach(() => {
+        warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        warnSpy.mockRestore();
+    });
+
+    it('warns when top-level ITEM_PATCH target key is missing', () => {
+        setupView('page', `<ul az="0"><li az-key="alive">x</li></ul>`);
+        applyOps([[7, 'page:0', 'ghost', [[0, '0', 'hi']]]]);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('az-key="ghost" not found'));
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Nested OP.ITEM_PATCH -- compound az fallback
+// ---------------------------------------------------------------------------
+
+describe('nested OP.ITEM_PATCH -- compound az fallback', () => {
+    it('falls back to base az when compound az selector finds nothing', () => {
+        setupView(
+            'page',
+            `<ul az="0">
+                <li az-key="r1">
+                    <div az="1"><span az-key="c1">old</span></div>
+                </li>
+            </ul>`,
+        );
+        applyOps([[7, 'page:0', 'r1', [[7, '1:5', 'c1', [[0, '0', 'new']]]]]]);
+        expect(document.querySelector('[az-key="c1"]').textContent).toContain('new');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// window._ws proxy
+// ---------------------------------------------------------------------------
+
+describe('window._ws proxy', () => {
+    /** @type {ReturnType<typeof setupMockWorker>} */
+    let mock;
+
+    afterEach(() => {
+        if (mock) mock.restore();
+    });
+
+    it('exposes readyState 1 when connected and 3 otherwise', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        expect(/** @type {any} */ (window)._ws.readyState).toBe(3);
+        mock.simulateOpen();
+        expect(/** @type {any} */ (window)._ws.readyState).toBe(1);
+    });
+
+    it('send() forwards to worker when connected', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        /** @type {any} */ (window)._ws.send('["page","ev",null]');
+        expect(mock.getSentMessages()).toContainEqual(['page', 'ev', null]);
+    });
+
+    it('close() posts [2, code] to worker', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        /** @type {any} */ (window)._ws.close(4000);
+        expect(mock.posted).toContainEqual([2, 4000]);
+    });
+
+    it('close() defaults to 1000 when code omitted', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        /** @type {any} */ (window)._ws.close();
+        expect(mock.posted).toContainEqual([2, 1000]);
+    });
+
+    it('onmessage hook fires on resolved messages', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const hook = vi.fn();
+        /** @type {any} */ (window)._ws.onmessage = hook;
+        mock.simulateMessage([[0, 'page:0', 'hi']], null, false);
+        expect(hook).toHaveBeenCalledOnce();
+        expect(/** @type {any} */ (window)._ws.onmessage).toBe(hook);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// disconnect -- scrollRestoration restore
+// ---------------------------------------------------------------------------
+
+describe('disconnect -- scrollRestoration restore', () => {
+    it('resets scrollRestoration to previous value on disconnect', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        /** @type {any} */ (history).scrollRestoration = 'auto';
+        const mock = setupMockWorker(mod);
+        expect(/** @type {any} */ (history).scrollRestoration).toBe('manual');
+        mock.restore();
+        expect(/** @type {any} */ (history).scrollRestoration).toBe('auto');
+    });
+});
