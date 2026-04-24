@@ -662,9 +662,10 @@ ws_connect(Config, Path) ->
 ws_connect(Config, Path, Opts) ->
     Port = proplists:get_value(port, Config),
     {ok, Sock} = gen_tcp:connect("localhost", Port, [
-        binary, {active, false}, {packet, raw}
+        binary, {active, false}, {packet, http_bin}
     ]),
     ok = ws_handshake(Sock, Port, Path, Opts),
+    ok = inet:setopts(Sock, [{packet, raw}]),
     {ok, Sock}.
 
 ws_handshake(Sock, Port, Path, Opts) ->
@@ -703,10 +704,13 @@ ws_handshake(Sock, Port, Path, Opts) ->
         "\r\n"
     ],
     ok = gen_tcp:send(Sock, Req),
-    {ok, RespData} = gen_tcp:recv(Sock, 0, 5000),
-    case binary:match(RespData, <<"101 Switching Protocols">>) of
-        nomatch -> {error, {upgrade_failed, RespData}};
-        _ -> ok
+    {ok, {http_response, _Version, 101, _Reason}} = gen_tcp:recv(Sock, 0, 5000),
+    drain_http_headers(Sock).
+
+drain_http_headers(Sock) ->
+    case gen_tcp:recv(Sock, 0, 5000) of
+        {ok, http_eoh} -> ok;
+        {ok, {http_header, _, _, _, _}} -> drain_http_headers(Sock)
     end.
 
 ws_send_json(Sock, Term) ->
