@@ -365,6 +365,28 @@ on_key_empty_list_test() ->
     {arizona_js, [?JS_ON_KEY, [], [?JS_PUSH_EVENT, ~"x"]]} =
         on_key([], push_event(~"x")).
 
+builders_test() ->
+    %% Each builder returns `{arizona_js, [OpCode, ...Args]}` unchanged.
+    ?assertEqual({arizona_js, [?JS_SHOW, ~"#m"]}, show(~"#m")),
+    ?assertEqual({arizona_js, [?JS_HIDE, ~"#m"]}, hide(~"#m")),
+    ?assertEqual({arizona_js, [?JS_ADD_CLASS, ~"#m", ~"c"]}, add_class(~"#m", ~"c")),
+    ?assertEqual({arizona_js, [?JS_REMOVE_CLASS, ~"#m", ~"c"]}, remove_class(~"#m", ~"c")),
+    ?assertEqual({arizona_js, [?JS_TOGGLE_CLASS, ~"#m", ~"c"]}, toggle_class(~"#m", ~"c")),
+    ?assertEqual({arizona_js, [?JS_SET_ATTR, ~"#m", ~"a", ~"v"]}, set_attr(~"#m", ~"a", ~"v")),
+    ?assertEqual({arizona_js, [?JS_REMOVE_ATTR, ~"#m", ~"a"]}, remove_attr(~"#m", ~"a")),
+    ?assertEqual({arizona_js, [?JS_NAVIGATE, ~"/p"]}, navigate(~"/p")),
+    ?assertEqual(
+        {arizona_js, [?JS_NAVIGATE, ~"/p", #{replace => true}]},
+        navigate(~"/p", #{replace => true})
+    ),
+    ?assertEqual({arizona_js, [?JS_FOCUS, ~"#m"]}, focus(~"#m")),
+    ?assertEqual({arizona_js, [?JS_BLUR, ~"#m"]}, blur(~"#m")),
+    ?assertEqual({arizona_js, [?JS_SCROLL_TO, ~"#m"]}, scroll_to(~"#m")),
+    ?assertEqual(
+        {arizona_js, [?JS_SCROLL_TO, ~"#m", #{behavior => smooth}]},
+        scroll_to(~"#m", #{behavior => smooth})
+    ).
+
 on_key_nested_test() ->
     Inner = on_key(enter, push_event(~"x")),
     {arizona_js, [?JS_ON_KEY, [escape], [?JS_ON_KEY, [enter], [?JS_PUSH_EVENT, ~"x"]]]} =

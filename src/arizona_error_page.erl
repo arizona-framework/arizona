@@ -29,6 +29,10 @@ extracts the shell-style summary, and pretty-prints the raw reason.
 """.
 -include("arizona_stateless.hrl").
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -211,3 +215,37 @@ reload_script(Url) ->
 
 arity(A) when is_list(A) -> length(A);
 arity(N) when is_integer(N) -> N.
+
+-ifdef(TEST).
+
+format_title_compile_error_test() ->
+    ?assertEqual(~"Compilation Error", format_title(error, {compile_error, []}, [])).
+
+format_title_arizona_loc_test() ->
+    Title = format_title(error, {arizona_loc, {my_mod, 42}, badarg}, []),
+    ?assertNotEqual(nomatch, binary:match(Title, <<"my_mod:42: ">>)).
+
+format_reason_compile_error_test() ->
+    Errors = [{"src/foo.erl", [{{10, 1}, erl_lint, {unused_var, 'X'}}]}],
+    Bin = format_reason({compile_error, Errors}),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"src/foo.erl">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"line 10">>)).
+
+format_reason_arizona_loc_test() ->
+    %% arizona_loc wraps another reason -- the wrapper is stripped for body.
+    Bin = format_reason({arizona_loc, {m, 1}, badarg}),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"badarg">>)).
+
+render_with_reload_url_test() ->
+    ErrorInfo = #{
+        class => error,
+        reason => badarg,
+        stacktrace => [],
+        reload_url => <<"/reload">>
+    },
+    Tmpl = render(#{error_info => ErrorInfo}),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Tmpl)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"EventSource">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"/reload">>)).
+
+-endif.

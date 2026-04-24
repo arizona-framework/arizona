@@ -73,6 +73,9 @@ info(_Info, Req, State) ->
 %% The streaming branches are covered end-to-end by
 %% `arizona_cowboy_ws_SUITE:reload_endpoint_streams_event`; here we just
 %% exercise the unknown-info fallthrough, which otherwise has no caller.
+%% The dummy Req/State atoms intentionally violate `cowboy_req:req()` --
+%% only the fallthrough clause's identity pass-through is exercised.
+-dialyzer({nowarn_function, [info_ignores_unknown_test/0]}).
 info_ignores_unknown_test() ->
     ?assertEqual({ok, my_req, my_state}, info(some_random_msg, my_req, my_state)).
 

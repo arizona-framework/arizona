@@ -29,6 +29,7 @@
     static_asset_served/1,
     static_asset_missing_returns_404/1,
     reload_endpoint_streams_event/1,
+    recompile_routes_runs/1,
     crash_event_closes/1,
     crash_info_closes/1,
     crash_init_closes/1,
@@ -67,7 +68,8 @@ groups() ->
             http_reads_cookies_headers_body,
             static_asset_served,
             static_asset_missing_returns_404,
-            reload_endpoint_streams_event
+            reload_endpoint_streams_event,
+            recompile_routes_runs
         ]},
         {crash_recovery, [sequence], [
             crash_event_closes,
@@ -442,6 +444,13 @@ static_asset_missing_returns_404(Config) ->
     {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"404">>)).
+
+recompile_routes_runs(Config) when is_list(Config) ->
+    %% Exercises `arizona_cowboy_server:recompile_routes/0` -- walks the
+    %% persistent_term dispatch registry and rebuilds each listener's
+    %% dispatch. Called by the dev hot reloader in production; here we
+    %% just run it against the suite's live listener and assert it succeeds.
+    ?assertEqual(ok, arizona_cowboy_server:recompile_routes()).
 
 reload_endpoint_streams_event(Config) ->
     %% Connect to the dev reload SSE endpoint, broadcast a reload, and
