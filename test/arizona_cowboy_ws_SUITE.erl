@@ -23,6 +23,12 @@
     middleware_pipeline_runs_in_order/1,
     middleware_halt_redirects_on_navigate/1,
     middleware_cont_on_navigate/1,
+    http_halt_redirect_via_req/1,
+    http_render_crash_emits_error_page/1,
+    http_reads_cookies_headers_body/1,
+    static_asset_served/1,
+    static_asset_missing_returns_404/1,
+    reload_endpoint_streams_event/1,
     crash_event_closes/1,
     crash_info_closes/1,
     crash_init_closes/1,
@@ -55,7 +61,13 @@ groups() ->
             middleware_halt_rejects_ws,
             middleware_pipeline_runs_in_order,
             middleware_halt_redirects_on_navigate,
-            middleware_cont_on_navigate
+            middleware_cont_on_navigate,
+            http_halt_redirect_via_req,
+            http_render_crash_emits_error_page,
+            http_reads_cookies_headers_body,
+            static_asset_served,
+            static_asset_missing_returns_404,
+            reload_endpoint_streams_event
         ]},
         {crash_recovery, [sequence], [
             crash_event_closes,
@@ -67,6 +79,7 @@ groups() ->
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(cowboy),
+    {ok, _} = application:ensure_all_started(arizona),
     Port = 14040,
     %% Test-only URL -> Bindings middleware. Tests that assert on URL
     %% data in rendered HTML opt into this on their routes; the
@@ -114,7 +127,39 @@ init_per_suite(Config) ->
             ]
         }},
         {live, <<"/items/:item_id">>, arizona_crashable, #{middlewares => [UrlToBindings]}},
-        {ws, <<"/ws">>, #{}}
+        {live, <<"/halt_redirect_req">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, _B) -> {halt, arizona_req:redirect(Req, <<"/login">>)} end
+            ]
+        }},
+        {live, <<"/crash_on_render_http">>, arizona_crashable, #{
+            bindings => #{crash_on_mount => true}
+        }},
+        {live, <<"/reads_cookies_headers_body">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    {Cookies, Req1} = arizona_req:cookies(Req),
+                    {Headers, Req2} = arizona_req:headers(Req1),
+                    {Body, Req3} = arizona_req:body(Req2),
+                    CookieCount = integer_to_binary(length(Cookies)),
+                    HeaderCount = integer_to_binary(map_size(Headers)),
+                    BodyLen = integer_to_binary(byte_size(Body)),
+                    {cont, Req3, B#{
+                        status => <<
+                            "c=",
+                            CookieCount/binary,
+                            " h=",
+                            HeaderCount/binary,
+                            " b=",
+                            BodyLen/binary
+                        >>
+                    }}
+                end
+            ]
+        }},
+        {ws, <<"/ws">>, #{}},
+        {asset, <<"/assets">>, {priv_dir, arizona, "static/assets/js"}},
+        {reload, <<"/reload">>, #{}}
     ],
     {ok, _} = arizona_cowboy_server:start(ws_test, #{
         transport_opts => [{port, Port}],
@@ -123,7 +168,9 @@ init_per_suite(Config) ->
     [{port, Port} | Config].
 
 end_per_suite(_Config) ->
-    arizona_cowboy_server:stop(ws_test).
+    _ = arizona_cowboy_server:stop(ws_test),
+    _ = application:stop(arizona),
+    ok.
 
 %% --------------------------------------------------------------------
 %% Basic tests
@@ -331,6 +378,150 @@ middleware_cont_on_navigate(Config) ->
     Decoded = json:decode(Resp),
     ?assertMatch(#{~"o" := [[?OP_REPLACE, _, _]]}, Decoded),
     ws_close(Sock).
+
+http_halt_redirect_via_req(Config) ->
+    %% HTTP: middleware halts via `arizona_req:redirect/2`; transport emits
+    %% 302 with Location header (instead of middleware calling cowboy_req:reply).
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /halt_redirect_req HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"302">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"location: /login">>)).
+
+http_render_crash_emits_error_page(Config) ->
+    %% HTTP: view mount raises; transport renders the dev error page with 500.
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /crash_on_render_http HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"500">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"crash_on_mount">>)).
+
+static_asset_served(Config) ->
+    %% HTTP GET for an `{asset, ...}` route serves the file with an inferred
+    %% content-type. Exercises `arizona_cowboy_static`.
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /assets/arizona.min.js HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"content-type: application/javascript">>)).
+
+static_asset_missing_returns_404(Config) ->
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /assets/does-not-exist.js HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"404">>)).
+
+reload_endpoint_streams_event(Config) ->
+    %% Connect to the dev reload SSE endpoint, broadcast a reload, and
+    %% verify the event is written to the stream. Exercises
+    %% `arizona_cowboy_reload:init/2` and `info/3`.
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /reload HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "Accept: text/event-stream\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    %% Wait until the handler has subscribed to the reloader pubsub topic
+    %% (otherwise the broadcast would fire before `arizona_reloader:join/1`
+    %% runs and the event would never reach our stream).
+    wait_for_subscriber(1000),
+    ok = arizona_reloader:broadcast(),
+    %% Drain up to 5s worth of chunks, accumulating what we get.
+    Data = recv_until(Sock, <<"event: reload">>, 5000),
+    ?assertNotEqual(nomatch, binary:match(Data, <<"200 OK">>)),
+    ?assertNotEqual(nomatch, binary:match(Data, <<"text/event-stream">>)),
+    ?assertNotEqual(nomatch, binary:match(Data, <<"event: reload">>)),
+    gen_tcp:close(Sock).
+
+wait_for_subscriber(0) ->
+    ok;
+wait_for_subscriber(N) ->
+    case arizona_pubsub:subscribers(arizona_reloader) of
+        [] ->
+            timer:sleep(20),
+            wait_for_subscriber(N - 20);
+        [_ | _] ->
+            ok
+    end.
+
+recv_until(Sock, Needle, Timeout) ->
+    recv_until(Sock, Needle, Timeout, <<>>).
+recv_until(_Sock, _Needle, Timeout, Acc) when Timeout =< 0 ->
+    Acc;
+recv_until(Sock, Needle, Timeout, Acc) ->
+    T0 = erlang:monotonic_time(millisecond),
+    case gen_tcp:recv(Sock, 0, min(Timeout, 500)) of
+        {ok, Chunk} ->
+            Acc1 = <<Acc/binary, Chunk/binary>>,
+            case binary:match(Acc1, Needle) of
+                nomatch ->
+                    Elapsed = erlang:monotonic_time(millisecond) - T0,
+                    recv_until(Sock, Needle, Timeout - Elapsed, Acc1);
+                _ ->
+                    Acc1
+            end;
+        {error, timeout} ->
+            Acc
+    end.
+
+http_reads_cookies_headers_body(Config) ->
+    %% HTTP: middleware exercises arizona_req:cookies/1, headers/1, body/1
+    %% (lazy accessors). Cover the adapter's parse_cookies/parse_headers/read_body
+    %% callbacks end to end.
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /reads_cookies_headers_body HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "Cookie: a=1; b=2\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
+    %% status binding projects into the rendered page: c=2 h=N b=0
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"c=2">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"b=0">>)).
 
 reconnect_init(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/">>, [{reconnect, true}]),
