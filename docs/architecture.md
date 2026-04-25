@@ -22,12 +22,11 @@
 | `src/arizona_parse_transform.erl` | Compile-time transform -- `?html`, `?each` (1-arg or 2-arg) DSL to `#{s, d, f}` maps, `az-view` auto-injection, directive extraction (`az-nodiff`), attribute compilation |
 | `src/arizona_socket.erl`          | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff    |
 | `src/arizona_adapter.erl`         | Behaviour defining `resolve_route/3` callback for framework adapters (returns `{Handler, RouteOpts, Request}`)                                                            |
-| `src/arizona_cowboy_adapter.erl`  | Cowboy implementation of `arizona_adapter` -- route resolution via `cowboy_router`, synthesizes a navigate-scoped `arizona_req`                                           |
 | `src/arizona_cowboy_http.erl`     | Cowboy HTTP handler -- thin wrapper: delegates the pipeline to `arizona_http:render/3` and translates its result into Cowboy's reply shape                                |
 | `src/arizona_cowboy_ws.erl`       | Cowboy WebSocket handler -- thin wrapper: delegates the upgrade to `arizona_ws:prepare/3`, forwards frames to `arizona_socket`                                            |
 | `src/arizona_cowboy_static.erl`   | Cowboy static file handler -- serves files from a directory with content-type detection                                                                                   |
 | `src/arizona_cowboy_server.erl`   | Cowboy listener boot -- compiles routes, stashes them in persistent terms, starts a clear/TLS listener                                                                    |
-| `src/arizona_cowboy_req.erl`      | `arizona_req` adapter for Cowboy -- implements `parse_bindings/1`, `parse_params/1`, `parse_cookies/1`, `parse_headers/1`, `read_body/1`                                  |
+| `src/arizona_cowboy_req.erl`      | Cowboy implementation of both `arizona_req` and `arizona_adapter` -- request parsing plus `resolve_route/3` for SPA navigate                                              |
 | `src/arizona_cowboy_reload.erl`   | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                     |
 | `src/arizona_error_page.erl`      | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                  |
 | `src/arizona_app.erl`             | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches a Cowboy listener via `arizona_cowboy_server:start/2`                            |
@@ -287,9 +286,11 @@ and a navigate-scoped `arizona_req` carrying the new URL. Cookies/headers on the
 are inherited from the original upgrade Req; `path`, `bindings` (path bindings from the router),
 and `params` reflect the new path/qs.
 
-**Shipped implementation:** `arizona_cowboy_adapter` -- resolves routes via
-`cowboy_router:execute/2` and the compiled dispatch stored by `arizona_cowboy_router`, then wraps
-the resolved cowboy req in `arizona_cowboy_req:new/1`.
+**Shipped implementation:** `arizona_cowboy_req` implements both `arizona_req` and
+`arizona_adapter` -- parsing for the request callbacks plus `resolve_route/3` for SPA navigate via
+`cowboy_router:execute/2` against the compiled dispatch stored by `arizona_cowboy_router`.
+`arizona_socket` recovers the adapter from the request itself (`arizona_req:adapter/1`), so route
+resolution doesn't need a separately-threaded adapter argument.
 
 ## API -- `arizona_req.erl`
 
@@ -696,5 +697,5 @@ handle_result({close, Code, Reason, _Socket}, State) ->
 framework's static file handler.
 
 The shipped Cowboy integration (`arizona_cowboy_ws`, `arizona_cowboy_http`,
-`arizona_cowboy_adapter`, `arizona_cowboy_router`, `arizona_cowboy_server`) serves as a reference
+`arizona_cowboy_req`, `arizona_cowboy_router`, `arizona_cowboy_server`) serves as a reference
 implementation.

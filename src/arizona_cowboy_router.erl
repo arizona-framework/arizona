@@ -3,7 +3,7 @@
 Compiles a list of Arizona route specs into a Cowboy dispatch table.
 
 The resulting dispatch is stored under the persistent term key
-`arizona_dispatch`, where Cowboy and `arizona_cowboy_adapter` look it
+`arizona_dispatch`, where Cowboy and `arizona_cowboy_req` look it
 up. Calling `compile_routes/1` again replaces the previous dispatch,
 which is how `arizona_cowboy_server:recompile_routes/0` picks up new
 routes after a hot reload without restarting the listener.

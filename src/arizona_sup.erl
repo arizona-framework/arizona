@@ -6,7 +6,7 @@ Always supervises `arizona_pubsub` (the `pg`-based pubsub scope). Also
 supervises one `arizona_watcher` per rule when the dev-mode reloader is
 enabled via the `reloader` application env. Live processes are not
 managed here -- they're started ad hoc by the transport layer
-(`arizona_socket:init/3`) and linked to the calling WebSocket process
+(`arizona_socket:init/4`) and linked to the calling WebSocket process
 so they share its lifetime.
 
 ## Reloader config

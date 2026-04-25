@@ -1,12 +1,12 @@
 -module(arizona_stream_with_child).
--include("arizona_stateful.hrl").
--export([mount/1, render/1, handle_event/3]).
+-include("arizona_view.hrl").
+-export([mount/2, render/1, handle_event/3]).
 
-%% A handler with a stateful child (arizona_counter) inside stream items.
+%% A view with a stateful child (arizona_counter) inside stream items.
 %% Used to test that child views survive dep-skipping of the stream.
 
--spec mount(az:bindings()) -> az:mount_ret().
-mount(Bindings0) ->
+-spec mount(az:bindings(), az:request()) -> az:mount_ret().
+mount(Bindings0, _Req) ->
     Items = [#{id => 1, label => ~"Item 1"}],
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
     Bindings = maps:merge(

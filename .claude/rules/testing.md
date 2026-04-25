@@ -43,15 +43,17 @@ Handlers pick one of the three header forms:
 - `arizona_todo.erl` -- stream operations (add/remove/update/clear/move/insert_at/reset_with)
 - `arizona_timer.erl` -- `handle_info/2` with set_message/set_message_with_effect
 - `arizona_effectful.erl` -- dispatch_event effects (notify/multi/noop)
+- `arizona_stream_with_child.erl` -- stream items each wrap an embedded `arizona_counter`; used to test child views surviving dep-skip
+- `arizona_root_counter.erl` -- minimal counter view (inc/dec/noop) for `arizona_live` machinery tests
+- `arizona_no_info_root.erl` -- view without `handle_info/2`; asserts inbox messages are silently dropped
 
 ### Embeddable stateful components (`arizona_stateful.hrl`)
 - `arizona_counter.erl` -- simple counter (inc/dec/reset), `handle_update/2` with counter2 special case
 - `arizona_no_diff_counter.erl` -- `az-nodiff` directive with stateful children; embedded via `arizona_template:stateful/2` in `arizona_diff_SUITE`
-- `arizona_stream_with_child.erl` -- stream items each wrap an embedded `arizona_counter`
 
 ### Stateless templates (`arizona_stateless.hrl`)
 - `arizona_layout.erl` -- stateless layout with `?html`/`az_nodiff`, render/2 with InnerContent
 
 ### Other
 - `arizona_parse_transform_test.erl` -- parse transform EUnit tests
-- `arizona_req_test_adapter.erl` -- test double for `arizona_req` used in view SSR tests
+- `arizona_req_test_adapter.erl` -- stub `arizona_req` adapter; `new/0` returns the canonical test request used for every `arizona_live:start_link` call in the suites

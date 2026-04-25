@@ -7,7 +7,7 @@ Translates Cowboy WebSocket callbacks into the transport-agnostic
 
 - `init/2` -- delegates the upgrade-time handshake to
   `arizona_ws:prepare/3` (parse `_az_path`/`_az_reconnect`, resolve
-  the route via `arizona_cowboy_adapter`, run middlewares) and
+  the route via `arizona_cowboy_req`, run middlewares) and
   returns either a plain HTTP halt reply or the `cowboy_websocket`
   upgrade tuple.
 - `websocket_init/1` -- creates the socket and starts the live process
@@ -52,7 +52,7 @@ when
     State :: map().
 init(Req, Opts) ->
     QS = cowboy_req:parse_qs(Req),
-    case arizona_ws:prepare(QS, arizona_cowboy_adapter, Req) of
+    case arizona_ws:prepare(QS, arizona_cowboy_req, Req) of
         {halt, HaltReq} ->
             {ok, arizona_req:raw(HaltReq), #{}};
         {cont, State} ->
@@ -67,14 +67,8 @@ starts the live process.
     State :: map(),
     CowboyResult :: term().
 websocket_init(#{handler := H, bindings := IB, on_mount := OM, req := ArzReq, reconnect := R}) ->
-    Opts = #{
-        reconnect => R,
-        on_mount => OM,
-        req => ArzReq,
-        adapter => arizona_cowboy_adapter,
-        adapter_state => arizona_req:raw(ArzReq)
-    },
-    to_cowboy(arizona_socket:init(H, IB, Opts)).
+    Opts = #{reconnect => R, on_mount => OM},
+    to_cowboy(arizona_socket:init(H, IB, ArzReq, Opts)).
 
 -doc """
 Cowboy `websocket_handle/2` callback. Forwards text frames to the

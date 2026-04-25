@@ -14,7 +14,7 @@
     ]}
 ).
 
-%% Helper: resolve route via arizona_cowboy_adapter to get both handler and opts.
+%% Helper: resolve route via arizona_cowboy_req to get both handler and opts.
 
 -export([all/0, groups/0]).
 -export([

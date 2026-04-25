@@ -44,10 +44,6 @@ fingerprints already shipped in the initial HTML.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([start_link/1]).
--export([start_link/2]).
--export([start_link/3]).
--export([start_link/4]).
 -export([start_link/5]).
 -export([connected/0]).
 -export([send/2]).
@@ -75,10 +71,6 @@ fingerprints already shipped in the initial HTML.
 %% --------------------------------------------------------------------
 
 -ignore_xref([
-    start_link/1,
-    start_link/2,
-    start_link/3,
-    start_link/4,
     connected/0,
     send/2,
     send_after/3,
@@ -116,7 +108,7 @@ fingerprints already shipped in the initial HTML.
 -record(state, {
     handler :: module(),
     bindings :: map(),
-    req :: az:request() | undefined,
+    req :: az:request(),
     snapshot :: map() | undefined,
     %% #{ViewId => #{handler, bindings, snapshot}}
     views :: map(),
@@ -173,62 +165,24 @@ send_after(ViewId, Time, Msg) ->
     Ref.
 
 -doc """
-Starts a live process for `Handler`. Equivalent to
-`start_link(Handler, #{}, undefined, [])`.
-""".
--spec start_link(Handler) -> gen_server:start_ret() when
-    Handler :: module().
-start_link(Handler) ->
-    start_link(Handler, #{}, undefined, []).
+Starts a live process for a route-level view `Handler`.
 
--doc """
-Starts a live process with initial bindings.
+`Handler` must export `mount/2`. The transport pid receives
+`{arizona_push, Ops, Effects}` messages when the live process
+diffs and emits updates. `OnMount` is the route's hook chain;
+`Req` is the current request, threaded into both hooks and the
+view's `mount/2` callback.
 """.
--spec start_link(Handler, InitBindings) -> gen_server:start_ret() when
-    Handler :: module(),
-    InitBindings :: map().
-start_link(Handler, InitBindings) ->
-    start_link(Handler, InitBindings, undefined, []).
-
--doc """
-Starts a live process with initial bindings and a transport pid.
-The transport pid receives `{arizona_push, Ops, Effects}` messages
-when the live process diffs and emits updates.
-""".
--spec start_link(Handler, InitBindings, TransportPid) -> gen_server:start_ret() when
-    Handler :: module(),
-    InitBindings :: map(),
-    TransportPid :: pid() | undefined.
-start_link(Handler, InitBindings, TransportPid) ->
-    start_link(Handler, InitBindings, TransportPid, []).
-
--doc """
-Starts a live process with initial bindings, a transport pid, and a
-list of `on_mount` hooks applied before the handler's mount callback.
-""".
--spec start_link(Handler, InitBindings, TransportPid, OnMount) -> gen_server:start_ret() when
-    Handler :: module(),
-    InitBindings :: map(),
-    TransportPid :: pid() | undefined,
-    OnMount :: on_mount().
-start_link(Handler, InitBindings, TransportPid, OnMount) ->
-    start_link(Handler, InitBindings, undefined, TransportPid, OnMount).
-
--doc """
-Starts a live process with initial bindings, an optional request
-(required for views that take `mount/2`), a transport pid, and a
-list of `on_mount` hooks.
-""".
--spec start_link(Handler, InitBindings, Req, TransportPid, OnMount) ->
+-spec start_link(Handler, InitBindings, TransportPid, OnMount, Req) ->
     gen_server:start_ret()
 when
     Handler :: module(),
     InitBindings :: map(),
-    Req :: az:request() | undefined,
     TransportPid :: pid() | undefined,
-    OnMount :: on_mount().
-start_link(Handler, InitBindings, Req, TransportPid, OnMount) ->
-    gen_server:start_link(?MODULE, {Handler, InitBindings, Req, TransportPid, OnMount}, []).
+    OnMount :: on_mount(),
+    Req :: az:request().
+start_link(Handler, InitBindings, TransportPid, OnMount, Req) ->
+    gen_server:start_link(?MODULE, {Handler, InitBindings, TransportPid, OnMount, Req}, []).
 
 -doc """
 Mounts the handler without rendering. Returns `{ok, ViewId}`.
@@ -274,7 +228,7 @@ when
     Pid :: pid(),
     NewHandler :: module(),
     InitBindings :: map(),
-    Req :: az:request() | undefined.
+    Req :: az:request().
 navigate(Pid, NewHandler, InitBindings, Req) ->
     navigate(Pid, NewHandler, InitBindings, Req, []).
 
@@ -287,7 +241,7 @@ when
     Pid :: pid(),
     NewHandler :: module(),
     InitBindings :: map(),
-    Req :: az:request() | undefined,
+    Req :: az:request(),
     OnMount :: on_mount().
 navigate(Pid, NewHandler, InitBindings, Req, OnMount) ->
     gen_server:call(Pid, {navigate, NewHandler, InitBindings, Req, OnMount}, infinity).
@@ -326,13 +280,13 @@ apply_on_mount([Fun | Rest], Bindings, Req) ->
 %% gen_server Callbacks
 %% --------------------------------------------------------------------
 
--spec init({Handler, InitBindings, Req, TransportPid, OnMount}) -> {ok, state()} when
+-spec init({Handler, InitBindings, TransportPid, OnMount, Req}) -> {ok, state()} when
     Handler :: module(),
     InitBindings :: map(),
-    Req :: az:request() | undefined,
     TransportPid :: pid() | undefined,
-    OnMount :: on_mount().
-init({Handler, InitBindings, Req, TransportPid, OnMount}) ->
+    OnMount :: on_mount(),
+    Req :: az:request().
+init({Handler, InitBindings, TransportPid, OnMount, Req}) ->
     TransportPid =/= undefined andalso erlang:put('$arizona_connected', true),
     {ok, #state{
         handler = Handler,
@@ -444,11 +398,7 @@ do_mount(H, B0, Req, V0, OnMount) ->
     {ViewId, HTML, Snap, B4, V1}.
 
 call_mount(H, Bindings, Req) ->
-    _ = code:ensure_loaded(H),
-    case erlang:function_exported(H, mount, 2) of
-        true -> arizona_view:call_mount(H, Bindings, Req);
-        false -> arizona_stateful:call_mount(H, Bindings)
-    end.
+    arizona_view:call_mount(H, Bindings, Req).
 
 handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
     {B1, Resets, Effects} = arizona_handler:call_handle_event(H, Event, Payload, B0),

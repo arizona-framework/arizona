@@ -40,7 +40,7 @@ the fresh handshake re-runs `init/3` with a new live process.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([init/3]).
+-export([init/4]).
 -export([handle_in/2]).
 -export([handle_info/2]).
 
@@ -71,8 +71,7 @@ the fresh handshake re-runs `init/3` with a new live process.
 -record(socket, {
     pid :: pid() | undefined,
     view_id :: binary() | undefined,
-    adapter :: module(),
-    adapter_state :: term()
+    req :: az:request()
 }).
 
 %% --------------------------------------------------------------------
@@ -98,31 +97,29 @@ the fresh handshake re-runs `init/3` with a new live process.
 %% --------------------------------------------------------------------
 
 -doc """
-Creates a socket for `Handler` with the given `Bindings` and starts
-its live process.
+Creates a socket for `Handler` with the given `Bindings` and `Req`,
+and starts its live process.
 
 `Opts` may include:
 - `reconnect` -- if `true`, immediately renders the page and replies
   with an `?OP_REPLACE` op (used when the client is reconnecting after
   a network drop)
 - `on_mount` -- list of `t:arizona_live:on_mount/0` hooks
-- `adapter` -- transport adapter module (used by SPA navigate to
-  resolve new routes)
-- `adapter_state` -- opaque state passed back to the adapter
+
+The route adapter (used by SPA navigate to resolve new routes) is
+recovered from `Req` itself via `arizona_req:adapter/1`.
 """.
--spec init(Handler, Bindings, Opts) -> result() when
+-spec init(Handler, Bindings, Req, Opts) -> result() when
     Handler :: module(),
     Bindings :: map(),
+    Req :: az:request(),
     Opts :: map().
-init(Handler, Bindings, Opts) ->
+init(Handler, Bindings, Req, Opts) ->
     Reconnect = maps:get(reconnect, Opts, false),
     OnMount = maps:get(on_mount, Opts, []),
-    Req = maps:get(req, Opts, undefined),
-    Adapter = maps:get(adapter, Opts, undefined),
-    AdapterState = maps:get(adapter_state, Opts, undefined),
-    Socket = #socket{adapter = Adapter, adapter_state = AdapterState},
+    Socket = #socket{req = Req},
     safe_init(Handler, Socket, fun() ->
-        {ok, Pid} = arizona_live:start_link(Handler, Bindings, Req, self(), OnMount),
+        {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount, Req),
         case Reconnect of
             true ->
                 {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
@@ -220,9 +217,12 @@ close_crash(Socket) ->
 handle_navigate(
     Path,
     Qs,
-    #socket{pid = Pid, view_id = OldVId, adapter = Adapter, adapter_state = AS} = Socket
+    #socket{pid = Pid, view_id = OldVId, req = Req} = Socket
 ) ->
-    {H, RouteOpts, NewReq} = arizona_adapter:call_resolve_route(Adapter, Path, Qs, AS),
+    Adapter = arizona_req:adapter(Req),
+    {H, RouteOpts, NewReq} = arizona_adapter:call_resolve_route(
+        Adapter, Path, Qs, arizona_req:raw(Req)
+    ),
     IB = maps:get(bindings, RouteOpts, #{}),
     OnMount = maps:get(on_mount, RouteOpts, []),
     Middlewares = maps:get(middlewares, RouteOpts, []),

@@ -11,7 +11,7 @@ transport adapter:
 3. Resolve the target route via `arizona_adapter:call_resolve_route/4`.
 4. Apply any route middlewares against the synthesized `az:request()`.
 5. Return either a halt signal (middleware blocked) or the state the
-   transport should feed into `arizona_socket:init/3`.
+   transport should feed into `arizona_socket:init/4`.
 
 The helper is transport-agnostic: callers pre-parse the query string
 into the standard `[{binary(), binary() | true}]` shape (cowboy's
@@ -65,7 +65,7 @@ transport extracts the native raw request via `arizona_req:raw/1`
 and emits its own response. Returns `{cont, State}` otherwise; the
 transport passes `State` (which carries `handler`, `bindings`,
 `on_mount`, `req`, `reconnect`) on through to
-`arizona_socket:init/3`.
+`arizona_socket:init/4`.
 """.
 -spec prepare(QS, Adapter, AdapterState) -> result() when
     QS :: qs(),

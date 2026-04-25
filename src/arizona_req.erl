@@ -19,6 +19,13 @@ A web-server adapter implements the behaviour callbacks:
 The adapter module is stored inside the request record itself, so every
 accessor dispatches to the correct backend.
 
+Adapters whose requests are used with `arizona_socket` (i.e. live
+WebSocket sessions) must **also** implement the `arizona_adapter`
+behaviour and export `resolve_route/3`. `arizona_socket:handle_navigate`
+recovers the adapter via `arizona_req:adapter/1` and calls
+`resolve_route/3` for SPA navigation. Adapters used only for HTTP SSR
+(no live process) can skip `arizona_adapter`.
+
 ## Lazy loading
 
 Fields other than `method` and `path` are populated on first access and
@@ -61,6 +68,7 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 %% --------------------------------------------------------------------
 
 -export([new/3]).
+-export([adapter/1]).
 -export([method/1]).
 -export([path/1]).
 -export([raw/1]).
@@ -183,6 +191,10 @@ skip their adapter callbacks on first access.
 new(Adapter, Raw, #{method := Method, path := Path} = Opts) when is_atom(Adapter) ->
     Base = #{adapter => Adapter, raw => Raw, method => Method, path => Path},
     maps:merge(Base, maps:without([method, path], Opts)).
+
+-doc "Returns the adapter module that backs the request.".
+-spec adapter(request()) -> adapter().
+adapter(#{adapter := Adapter}) -> Adapter.
 
 -doc "Returns the HTTP method (e.g. `~\"GET\"`, `~\"POST\"`).".
 -spec method(request()) -> method().

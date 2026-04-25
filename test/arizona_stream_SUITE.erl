@@ -704,7 +704,9 @@ stream_move_nonexistent_key(Config) when is_list(Config) ->
 
 stream_live_insert(Config) when is_list(Config) ->
     %% mount, add item, assert OP_INSERT with fingerprint payload
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(
         Pid,
@@ -721,7 +723,9 @@ stream_live_insert(Config) when is_list(Config) ->
 
 stream_live_remove(Config) when is_list(Config) ->
     %% add items, remove one, assert OP_REMOVE
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _, _} = arizona_live:handle_event(
         Pid,
@@ -745,7 +749,9 @@ stream_live_remove(Config) when is_list(Config) ->
 
 stream_live_update(Config) when is_list(Config) ->
     %% add item, update text, assert OP_ITEM_PATCH
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _, _} = arizona_live:handle_event(
         Pid,
@@ -765,7 +771,9 @@ stream_live_update(Config) when is_list(Config) ->
 
 stream_live_reset(Config) when is_list(Config) ->
     %% add items, clear, assert OP_REMOVE for each
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _, _} = arizona_live:handle_event(
         Pid,
@@ -786,7 +794,9 @@ stream_live_reset(Config) when is_list(Config) ->
 
 stream_live_multi_event(Config) when is_list(Config) ->
     %% multiple events in sequence, snapshots track correctly
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% Add three items
     {ok, Ops1, _} = arizona_live:handle_event(
@@ -833,7 +843,9 @@ stream_live_multi_event(Config) when is_list(Config) ->
 
 page_add_todo_live(Config) when is_list(Config) ->
     %% add_todo event produces OP_INSERT with fingerprint payload
-    {ok, Pid} = arizona_live:start_link(arizona_page),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_page, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
     ?assertMatch([[?OP_INSERT, _, <<"1">>, -1, _]], Ops),
@@ -856,7 +868,9 @@ page_add_todo_live(Config) when is_list(Config) ->
 
 page_remove_todo_live(Config) when is_list(Config) ->
     %% remove_todo produces OP_REMOVE
-    {ok, Pid} = arizona_live:start_link(arizona_page),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_page, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
     {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
@@ -871,7 +885,9 @@ page_remove_todo_live(Config) when is_list(Config) ->
 
 page_clear_todos_live(Config) when is_list(Config) ->
     %% clear_todos produces OP_REMOVE for each
-    {ok, Pid} = arizona_live:start_link(arizona_page),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_page, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
     {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
@@ -884,7 +900,9 @@ stream_live_mount_with_items_then_insert(Config) when is_list(Config) ->
     %% Mount with 1 initial item, then add a new item
     %% Only 1 OP_INSERT for the new item (no stale inserts from mount)
     InitItems = [#{id => 1, text => <<"First">>}],
-    {ok, Pid} = arizona_live:start_link(arizona_todo, #{items => InitItems}),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{items => InitItems}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(
         Pid,
@@ -898,7 +916,9 @@ stream_live_mount_with_items_then_insert(Config) when is_list(Config) ->
 stream_live_mount_with_items_then_delete(Config) when is_list(Config) ->
     %% Mount with 2 initial items, then remove one
     InitItems = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    {ok, Pid} = arizona_live:start_link(arizona_todo, #{items => InitItems}),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{items => InitItems}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(Pid, <<"todo">>, <<"remove">>, #{<<"id">> => 1}),
     ?assertMatch([[?OP_REMOVE, _, <<"1">>]], Ops),
@@ -909,7 +929,9 @@ stream_live_mount_with_items_then_delete(Config) when is_list(Config) ->
 stream_live_mount_with_items_then_reset(Config) when is_list(Config) ->
     %% Mount with 2 initial items, then clear
     InitItems = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    {ok, Pid} = arizona_live:start_link(arizona_todo, #{items => InitItems}),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{items => InitItems}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(Pid, <<"todo">>, <<"clear">>, #{}),
     RemOps = [Op || [?OP_REMOVE | _] = Op <- Ops],
@@ -919,7 +941,9 @@ stream_live_mount_with_items_then_reset(Config) when is_list(Config) ->
 
 stream_live_delete_last_then_readd(Config) when is_list(Config) ->
     %% Add 1 item, delete it (empty stream), add another -- recovery from emptiness
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _, _} = arizona_live:handle_event(
         Pid,
@@ -939,7 +963,9 @@ stream_live_delete_last_then_readd(Config) when is_list(Config) ->
 
 stream_live_update_no_change(Config) when is_list(Config) ->
     %% Add item, update with identical data → Ops = []
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _, _} = arizona_live:handle_event(
         Pid,
@@ -957,7 +983,9 @@ stream_live_update_no_change(Config) when is_list(Config) ->
 
 stream_live_three_sequential_inserts(Config) when is_list(Config) ->
     %% 3 sequential inserts, each must produce exactly 1 OP_INSERT
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops1, _} = arizona_live:handle_event(
         Pid,
@@ -983,7 +1011,9 @@ stream_live_three_sequential_inserts(Config) when is_list(Config) ->
 
 stream_live_insert_at_position(Config) when is_list(Config) ->
     %% Add 2 items, insert_at position 0
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _, _} = arizona_live:handle_event(
         Pid,
@@ -1007,7 +1037,9 @@ stream_live_insert_at_position(Config) when is_list(Config) ->
 
 stream_live_reset_with_items(Config) when is_list(Config) ->
     %% Add 2 items, reset_with 1 new item
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _, _} = arizona_live:handle_event(
         Pid,
@@ -1035,7 +1067,9 @@ stream_live_reset_with_items(Config) when is_list(Config) ->
 
 page_title_change_skips_stream(Config) when is_list(Config) ->
     %% title_change produces only OP_TEXT for title, zero stream ops
-    {ok, Pid} = arizona_live:start_link(arizona_page),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_page, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% Add 1 todo first
     {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
@@ -1054,7 +1088,9 @@ page_title_change_skips_stream(Config) when is_list(Config) ->
 
 page_add_todo_then_title_change_then_add_todo(Config) when is_list(Config) ->
     %% Interleave: add_todo → title_change → add_todo
-    {ok, Pid} = arizona_live:start_link(arizona_page),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_page, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% Event 1: add_todo
     {ok, Ops1, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
@@ -1076,7 +1112,9 @@ page_add_todo_then_title_change_then_add_todo(Config) when is_list(Config) ->
 
 page_connected_event_skips_stream(Config) when is_list(Config) ->
     %% connected event produces only OP_TEXT for status span, zero stream ops
-    {ok, Pid} = arizona_live:start_link(arizona_page, #{}, self()),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_page, #{}, self(), [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% Drain the arizona_connected push from mount
     receive
@@ -1100,7 +1138,9 @@ stream_live_mount_with_items(Config) when is_list(Config) ->
         #{id => <<"a">>, text => <<"Alpha">>},
         #{id => <<"b">>, text => <<"Beta">>}
     ],
-    {ok, Pid} = arizona_live:start_link(arizona_todo, #{items => InitItems}),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{items => InitItems}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% Update item "a" -- should only produce OP_ITEM_PATCH, not OP_INSERT
     {ok, Ops, []} = arizona_live:handle_event(
@@ -1120,7 +1160,9 @@ stream_live_insert_no_stale_pending(Config) when is_list(Config) ->
     %% Bug 3 regression (child event path, but tested on root):
     %% After inserting an item (event 1), a second insert (event 2) should
     %% produce exactly 1 OP_INSERT -- not 2 from stale pending accumulation.
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% First insert
     {ok, Ops1, []} = arizona_live:handle_event(
@@ -1847,7 +1889,9 @@ render_to_iolist_with_stream_items(Config) when is_list(Config) ->
 
 stream_dedup_strips_statics(Config) when is_list(Config) ->
     %% Second insert with same fingerprint gets statics stripped by dedup
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% First insert -- should have statics
     {ok, Ops1, []} = arizona_live:handle_event(
@@ -2017,10 +2061,14 @@ navigate_with_stream_items(Config) when is_list(Config) ->
     %% Navigate to a todo page with initial items -- the fingerprinted
     %% payload should contain stream items that are properly structured
     InitItems = [#{id => 1, text => <<"First">>}, #{id => 2, text => <<"Second">>}],
-    {ok, Pid} = arizona_live:start_link(arizona_todo, #{items => InitItems}),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{items => InitItems}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% Navigate back to todo with same items -- produces fingerprinted payload
-    {ok, _, Content} = arizona_live:navigate(Pid, arizona_todo, #{items => InitItems}, undefined),
+    {ok, _, Content} = arizona_live:navigate(
+        Pid, arizona_todo, #{items => InitItems}, arizona_req_test_adapter:new()
+    ),
     ?assert(maps:is_key(<<"f">>, Content)),
     ?assert(is_binary(maps:get(<<"f">>, Content))),
     %% The dynamics should contain the id attr and a stream map with f key and list-of-lists d
@@ -2040,7 +2088,9 @@ dedup_stream_insert_then_item_patch(Config) when is_list(Config) ->
     %% -- the item patch inner ops should NOT contain fingerprinted payloads
     %% for arizona_todo's simple items (text only), but verify the dedup
     %% pipeline processes them without crashing
-    {ok, Pid} = arizona_live:start_link(arizona_todo),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_todo, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% Insert
     {ok, Ops1, []} = arizona_live:handle_event(
@@ -2491,11 +2541,15 @@ datatable_ssr(Config) when is_list(Config) ->
     ?assertMatch({_, _}, binary:match(HTML, <<"az-click=\"[0,&quot;move_top&quot;">>)).
 
 datatable_live_mount(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, <<"page">>} = arizona_live:mount(Pid).
 
 datatable_live_connected(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable, #{}, self()),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, self(), [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% mount sends self() ! arizona_connected, handle_info pushes to transport
     receive
@@ -2507,7 +2561,9 @@ datatable_live_connected(Config) when is_list(Config) ->
     end.
 
 datatable_live_add_row(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
     ?assertMatch([[?OP_INSERT, _, <<"6">>, -1, _]], Ops),
@@ -2524,7 +2580,9 @@ datatable_live_add_row(Config) when is_list(Config) ->
     ?assertEqual(<<" az-click=\"[0,&quot;move_top&quot;,{&quot;id&quot;:6}]\"">>, lists:nth(6, D)).
 
 datatable_live_add_row_sequence(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops1, []} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
     ?assertMatch([[?OP_INSERT, _, <<"6">>, -1, _]], Ops1),
@@ -2532,7 +2590,9 @@ datatable_live_add_row_sequence(Config) when is_list(Config) ->
     ?assertMatch([[?OP_INSERT, _, <<"7">>, -1, _]], Ops2).
 
 datatable_live_delete_row(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(
         Pid,
@@ -2543,7 +2603,9 @@ datatable_live_delete_row(Config) when is_list(Config) ->
     ?assertMatch([[?OP_REMOVE, _, <<"1">>]], Ops).
 
 datatable_live_delete_row_middle(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(
         Pid,
@@ -2554,7 +2616,9 @@ datatable_live_delete_row_middle(Config) when is_list(Config) ->
     ?assertMatch([[?OP_REMOVE, _, <<"3">>]], Ops).
 
 datatable_live_sort_asc(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(
         Pid,
@@ -2572,7 +2636,9 @@ datatable_live_sort_asc(Config) when is_list(Config) ->
 datatable_live_sort_name_no_move(Config) when is_list(Config) ->
     %% Default data is already sorted by name (Alice, Bob, Charlie, Diana, Eve)
     %% so sorting by name asc should produce no moves
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(
         Pid,
@@ -2584,7 +2650,9 @@ datatable_live_sort_name_no_move(Config) when is_list(Config) ->
     ?assertEqual([], MoveOps).
 
 datatable_live_sort_toggle(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% First sort by age asc
     {ok, _, []} = arizona_live:handle_event(
@@ -2604,7 +2672,9 @@ datatable_live_sort_toggle(Config) when is_list(Config) ->
     ?assert(length(MoveOps) > 0).
 
 datatable_live_sort_col_change(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% Sort by age
     {ok, _, []} = arizona_live:handle_event(
@@ -2624,7 +2694,9 @@ datatable_live_sort_col_change(Config) when is_list(Config) ->
     ?assert(length(MoveOps) > 0).
 
 datatable_live_move_top(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(
         Pid,
@@ -2636,7 +2708,9 @@ datatable_live_move_top(Config) when is_list(Config) ->
 
 datatable_live_move_top_already_first(Config) when is_list(Config) ->
     %% Moving the first item to position 0 -- no crash, no effects
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _Ops, []} = arizona_live:handle_event(
         Pid,
@@ -2646,7 +2720,9 @@ datatable_live_move_top_already_first(Config) when is_list(Config) ->
     ).
 
 datatable_live_reset(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% Add a row
     {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
@@ -2666,7 +2742,9 @@ datatable_live_reset(Config) when is_list(Config) ->
     ?assertEqual(1, length(InsOps)).
 
 datatable_live_reset_restores_next_id(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% Add 2 rows (ids 6, 7)
     {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
@@ -2678,7 +2756,9 @@ datatable_live_reset_restores_next_id(Config) when is_list(Config) ->
     ?assertMatch([[?OP_INSERT, _, <<"6">>, -1, _]], Ops).
 
 datatable_live_shuffle(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"shuffle">>, #{}),
     InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
@@ -2689,7 +2769,9 @@ datatable_live_shuffle(Config) when is_list(Config) ->
 datatable_live_sort_dom_simulation(Config) when is_list(Config) ->
     %% Verify OP_MOVE ops produce correct DOM order when applied left-to-right
     %% (the way the client applies them). Tests sort asc then sort desc toggle.
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% Sort age asc: expected DOM order [2,4,1,5,3]
     {ok, Ops1, []} = arizona_live:handle_event(
@@ -2713,7 +2795,9 @@ datatable_live_sort_dom_simulation(Config) when is_list(Config) ->
     ?assertEqual([3, 5, 1, 4, 2], Dom2).
 
 datatable_live_delete_all_then_reset(Config) when is_list(Config) ->
-    {ok, Pid} = arizona_live:start_link(arizona_datatable),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
     {ok, _} = arizona_live:mount(Pid),
     %% Delete all 5 rows
     {ok, _, _} = arizona_live:handle_event(
