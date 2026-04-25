@@ -363,7 +363,7 @@ Returns all items in display order as a list.
 -spec to_list(Stream) -> [item()] when
     Stream :: stream().
 to_list(#stream{items = Items, order = Order}) ->
-    [maps:get(K, Items) || K <:- Order].
+    [maps:get(K, Items) || K <- Order].
 
 -doc """
 Returns the item at `Key`. Errors with `{badkey, Key}` if not present.

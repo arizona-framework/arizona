@@ -138,7 +138,7 @@ parse_transform(Forms, _Options) ->
         has_behaviour(Forms, arizona_stateful) orelse
             has_behaviour(Forms, arizona_view),
     try
-        Transformed = [transform_form(Form, Module, IsLive) || Form <:- Forms],
+        Transformed = [transform_form(Form, Module, IsLive) || Form <- Forms],
         erl_syntax:revert_forms(Transformed)
     catch
         throw:{arizona_parse_error, Line, Reason} ->
@@ -212,14 +212,14 @@ has_behaviour([_ | Rest], B) -> has_behaviour(Rest, B);
 has_behaviour([], _) -> false.
 
 transform_form({function, L, render, 1, Clauses}, Module, true) ->
-    {function, L, render, 1, [transform_live_render_clause(C, Module) || C <:- Clauses]};
+    {function, L, render, 1, [transform_live_render_clause(C, Module) || C <- Clauses]};
 transform_form({function, L, Name, Arity, Clauses}, Module, _IsLive) ->
-    {function, L, Name, Arity, [transform_clause(C, Module) || C <:- Clauses]};
+    {function, L, Name, Arity, [transform_clause(C, Module) || C <- Clauses]};
 transform_form(Form, _Module, _IsLive) ->
     Form.
 
 transform_clause({clause, L, Patterns, Guards, Body}, Module) ->
-    {clause, L, Patterns, Guards, [transform_expr(Expr, Module) || Expr <:- Body]}.
+    {clause, L, Patterns, Guards, [transform_expr(Expr, Module) || Expr <- Body]}.
 
 transform_expr(Expr, Module) ->
     erl_syntax_lib:map(fun(Node) -> transform_node(Node, Module) end, Expr).
@@ -251,7 +251,7 @@ transform_node(Node, Module) ->
 
 transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module) ->
     {Init, [Last]} = lists:split(length(Body) - 1, Body),
-    TransformedInit = [transform_expr(Expr, Module) || Expr <:- Init],
+    TransformedInit = [transform_expr(Expr, Module) || Expr <- Init],
     TransformedLast = transform_live_render_last(Last, Module),
     {clause, L, Patterns, Guards, TransformedInit ++ [TransformedLast]}.
 
@@ -267,30 +267,30 @@ transform_live_render_last(Expr, Module) ->
         {'case', L, CaseExpr, Clauses} ->
             {'case', L, transform_expr(CaseExpr, Module), [
                 transform_live_render_branch(C, Module)
-             || C <:- Clauses
+             || C <- Clauses
             ]};
         {'if', L, Clauses} ->
-            {'if', L, [transform_live_render_branch(C, Module) || C <:- Clauses]};
+            {'if', L, [transform_live_render_branch(C, Module) || C <- Clauses]};
         {block, L, Body} ->
             transform_live_render_block(L, Body, Module);
         {'receive', L, Clauses} ->
-            {'receive', L, [transform_live_render_branch(C, Module) || C <:- Clauses]};
+            {'receive', L, [transform_live_render_branch(C, Module) || C <- Clauses]};
         {'receive', L, Clauses, AfterExpr, AfterBody} ->
-            {'receive', L, [transform_live_render_branch(C, Module) || C <:- Clauses],
+            {'receive', L, [transform_live_render_branch(C, Module) || C <- Clauses],
                 transform_expr(AfterExpr, Module),
                 transform_live_render_block_body(AfterBody, Module)};
         {'try', L, Body, OfClauses, CatchClauses, AfterBody} ->
             {'try', L, transform_live_render_block_body(Body, Module),
-                [transform_live_render_branch(C, Module) || C <:- OfClauses],
-                [transform_live_render_branch(C, Module) || C <:- CatchClauses], [
+                [transform_live_render_branch(C, Module) || C <- OfClauses],
+                [transform_live_render_branch(C, Module) || C <- CatchClauses], [
                     transform_expr(E, Module)
-                 || E <:- AfterBody
+                 || E <- AfterBody
                 ]};
         {'maybe', L, Body} ->
             {'maybe', L, transform_live_render_block_body(Body, Module)};
         {'maybe', L, Body, {'else', L2, ElseClauses}} ->
             {'maybe', L, transform_live_render_block_body(Body, Module),
-                {'else', L2, [transform_live_render_branch(C, Module) || C <:- ElseClauses]}};
+                {'else', L2, [transform_live_render_branch(C, Module) || C <- ElseClauses]}};
         _ ->
             transform_expr(Expr, Module)
     end.
@@ -300,11 +300,11 @@ transform_live_render_block(L, Body, Module) ->
 
 transform_live_render_block_body(Body, Module) ->
     {Init, [Last]} = lists:split(length(Body) - 1, Body),
-    [transform_expr(E, Module) || E <:- Init] ++ [transform_live_render_last(Last, Module)].
+    [transform_expr(E, Module) || E <- Init] ++ [transform_live_render_last(Last, Module)].
 
 transform_live_render_branch({clause, L, Patterns, Guards, Body}, Module) ->
     {Init, [Last]} = lists:split(length(Body) - 1, Body),
-    TransInit = [transform_expr(E, Module) || E <:- Init],
+    TransInit = [transform_expr(E, Module) || E <- Init],
     {clause, L, Patterns, Guards, TransInit ++ [transform_live_render_last(Last, Module)]}.
 
 validate_live_root({tuple, _, [_Tag, Attrs | _]}, L) ->
@@ -710,7 +710,7 @@ finalize(State) ->
 scope_az(_Fp, Statics, []) ->
     {Statics, []};
 scope_az(Fp, Statics, DynASTs) ->
-    {[scope_static(Fp, S) || S <:- Statics], [scope_dynamic_ast(Fp, D) || D <:- DynASTs]}.
+    {[scope_static(Fp, S) || S <- Statics], [scope_dynamic_ast(Fp, D) || D <- DynASTs]}.
 
 scope_static(Fp, S0) ->
     S1 = binary:replace(S0, <<" az=\"">>, <<" az=\"", Fp/binary, "-">>, [global]),
@@ -733,7 +733,7 @@ split_fun_body([H | T]) ->
     {[H | Rest], Last}.
 
 compile_parts_ast(Statics, DynASTs, Fingerprint) ->
-    {ast_list([ast_binary(S) || S <:- Statics]), ast_list(DynASTs), ast_binary(Fingerprint)}.
+    {ast_list([ast_binary(S) || S <- Statics]), ast_list(DynASTs), ast_binary(Fingerprint)}.
 
 build_template_ast(Line, Statics, DynASTs, Fingerprint, Opts) ->
     {StaticsAST, DynamicsAST, FpAST} = compile_parts_ast(Statics, DynASTs, Fingerprint),
@@ -783,7 +783,7 @@ extract_attr_name({atom, _, Name}) -> atom_to_html_binary(Name);
 extract_attr_name(BinAST) -> extract_binary_value(BinAST).
 
 extract_binary_value({bin, _, Elements}) ->
-    iolist_to_binary([extract_bin_element(E) || E <:- Elements]).
+    iolist_to_binary([extract_bin_element(E) || E <- Elements]).
 
 extract_bin_element({bin_element, _, {string, _, Chars}, _, _}) ->
     unicode:characters_to_binary(Chars);

@@ -223,10 +223,10 @@ zip([S | Statics], [D | Dynamics]) ->
         case D of
             #{t := ?EACH, items := Items, template := Tmpl} when is_list(Items) ->
                 #{s := ItemS} = Tmpl,
-                [zip_stream_item(ItemS, ItemD) || ItemD <:- Items];
+                [zip_stream_item(ItemS, ItemD) || ItemD <- Items];
             #{t := ?EACH, items := Items, order := Order, template := Tmpl} ->
                 #{s := ItemS} = Tmpl,
-                [zip_stream_item(ItemS, maps:get(K, Items)) || K <:- Order];
+                [zip_stream_item(ItemS, maps:get(K, Items)) || K <- Order];
             #{s := InnerS, d := InnerD} ->
                 zip(InnerS, [arizona_template:unwrap_val(V) || {_Az, V} <:- InnerD]);
             V ->
@@ -277,11 +277,11 @@ zip_list_fp(#{f := F, s := S, t := T}, ItemsList) ->
         ~"s" => S,
         ~"d" => [
             [render_fp_val(arizona_template:unwrap_val(V)) || {_Az, V} <:- D]
-         || D <:- ItemsList
+         || D <- ItemsList
         ]
     };
 zip_list_fp(#{s := S}, ItemsList) ->
-    iolist_to_binary([zip_stream_item(S, D) || D <:- ItemsList]).
+    iolist_to_binary([zip_stream_item(S, D) || D <- ItemsList]).
 
 -doc """
 Renders a stream's visible items (looked up from `Items` by `Order` keys)
@@ -302,11 +302,11 @@ zip_stream_fp(#{f := F, s := S, t := T}, Items, Order) ->
                 render_fp_val(arizona_template:unwrap_val(V))
              || {_Az, V} <:- maps:get(K, Items)
             ]
-         || K <:- Order
+         || K <- Order
         ]
     };
 zip_stream_fp(#{s := S}, Items, Order) ->
-    iolist_to_binary([zip_stream_item(S, maps:get(K, Items)) || K <:- Order]).
+    iolist_to_binary([zip_stream_item(S, maps:get(K, Items)) || K <- Order]).
 
 -doc """
 Builds the wire-format fingerprint payload for a snapshot.
@@ -351,7 +351,7 @@ zip_stream_item(Statics, ItemD) ->
 %% Az is ignored during SSR (only used for diff targeting), so `undefined` Az
 %% from az-nodiff templates flows through harmlessly.
 render_ssr_dynamics(Dynamics) ->
-    [render_ssr_one(D) || D <:- Dynamics].
+    [render_ssr_one(D) || D <- Dynamics].
 
 render_ssr_one({_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
     render_ssr_attr(Name, Fun());
@@ -403,7 +403,7 @@ render_ssr_val(#{s := Statics, d := Dynamics} = Tmpl) ->
         s => Statics,
         d => [
             {arizona_template:dyn_az(D), Val}
-         || D <:- Dynamics && Val <:- Vals
+         || D <- Dynamics && Val <- Vals
         ]
     },
     arizona_template:maybe_propagate(Tmpl, Snap0);
@@ -428,7 +428,7 @@ render_fp_val(#{t := ?EACH, items := Items, template := #{f := F, t := T, s := S
         ~"s" => S,
         ~"d" => [
             [render_fp_val(arizona_template:unwrap_val(V)) || {_Az, V} <:- D]
-         || D <:- Items
+         || D <- Items
         ]
     };
 render_fp_val(#{t := ?EACH, items := Items, template := #{s := S}}) when
@@ -436,7 +436,7 @@ render_fp_val(#{t := ?EACH, items := Items, template := #{s := S}}) when
 ->
     [
         iolist_to_binary(zip(S, [arizona_template:unwrap_val(V) || {_Az, V} <:- D]))
-     || D <:- Items
+     || D <- Items
     ];
 render_fp_val(#{
     t := ?EACH,
@@ -453,7 +453,7 @@ render_fp_val(#{
                 render_fp_val(arizona_template:unwrap_val(V))
              || {_Az, V} <:- maps:get(K, Items)
             ]
-         || K <:- Order
+         || K <- Order
         ]
     };
 render_fp_val(#{
@@ -462,7 +462,7 @@ render_fp_val(#{
     order := Order,
     template := #{s := S}
 }) ->
-    [iolist_to_binary(zip_stream_item(S, maps:get(K, Items))) || K <:- Order];
+    [iolist_to_binary(zip_stream_item(S, maps:get(K, Items))) || K <- Order];
 render_fp_val(V) when is_list(V) ->
     iolist_to_binary(V);
 render_fp_val(V) ->

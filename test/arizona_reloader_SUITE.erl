@@ -165,7 +165,7 @@ broadcast_multiple(Config) when is_list(Config) ->
                 Self ! {timeout, self()}
             end
         end)
-     || _ <:- [1, 2, 3]
+     || _ <- [1, 2, 3]
     ],
     %% Wait for all to join.
     [
@@ -173,7 +173,7 @@ broadcast_multiple(Config) when is_list(Config) ->
             {joined, P} -> ok
         after 1000 -> ct:fail({join_timeout, P})
         end
-     || P <:- Pids
+     || P <- Pids
     ],
     arizona_reloader:broadcast(),
     Received = [
@@ -183,7 +183,7 @@ broadcast_multiple(Config) when is_list(Config) ->
         after 2000 ->
             ct:fail(collect_timeout)
         end
-     || P <:- Pids
+     || P <- Pids
     ],
     ?assertEqual(lists:sort(Pids), lists:sort(Received)).
 

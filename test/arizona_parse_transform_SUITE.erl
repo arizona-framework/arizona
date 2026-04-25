@@ -344,7 +344,7 @@ compile_module(Source) ->
             {ok, F} = erl_parse:parse_form(Toks),
             F
         end
-     || Toks <:- Forms
+     || Toks <- Forms
     ],
     TransformedForms = arizona_parse_transform:parse_transform(ParsedForms, []),
     {ok, Mod, Bin} = compile:forms(TransformedForms, [return_errors]),
@@ -371,7 +371,7 @@ assert_parse_error(Source, MatchFun) ->
             {ok, F} = erl_parse:parse_form(Toks),
             F
         end
-     || Toks <:- Forms
+     || Toks <- Forms
     ],
     case arizona_parse_transform:parse_transform(ParsedForms, []) of
         {error, [{_File, [{_Line, arizona_parse_transform, Reason}]}], []} ->
@@ -382,7 +382,7 @@ assert_parse_error(Source, MatchFun) ->
 
 %% Scope helpers -- account for fingerprint-prefixed az values
 scope_s(Fp, Statics) ->
-    [scope_static(Fp, S) || S <:- Statics].
+    [scope_static(Fp, S) || S <- Statics].
 
 scope_static(Fp, S) ->
     S1 = binary:replace(S, <<" az=\"">>, <<" az=\"", Fp/binary, "-">>, [global]),

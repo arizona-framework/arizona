@@ -96,7 +96,7 @@ Sends `Data` as a mailbox message to every subscriber of `Channel`.
     Channel :: channel(),
     Data :: term().
 broadcast(Channel, Data) ->
-    _ = [Pid ! Data || Pid <:- subscribers(Channel)],
+    _ = [Pid ! Data || Pid <- subscribers(Channel)],
     ok.
 
 -doc """
@@ -108,7 +108,7 @@ also a subscriber and shouldn't echo to itself.
     Channel :: channel(),
     Data :: term().
 broadcast_from(From, Channel, Data) ->
-    _ = [Pid ! Data || Pid <:- subscribers(Channel), Pid =/= From],
+    _ = [Pid ! Data || Pid <- subscribers(Channel), Pid =/= From],
     ok.
 
 -doc """

@@ -130,7 +130,7 @@ broadcast(Files) ->
 init({Dir, Opts}) ->
     AbsDir = filename:absname(Dir),
     Patterns = maps:get(patterns, Opts, [".*"]),
-    Compiled = [compile_pattern(P) || P <:- Patterns],
+    Compiled = [compile_pattern(P) || P <- Patterns],
     Callback = maps:get(callback, Opts, undefined),
     DebounceMs = maps:get(debounce, Opts, 100),
     Name = watcher_name(AbsDir),

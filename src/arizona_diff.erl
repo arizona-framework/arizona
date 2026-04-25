@@ -677,7 +677,7 @@ lis_backtrack(Idx, Parent, Acc) ->
 compute_reorder_ops(_Az, OldOrder, NewOrder, _Kept) when OldOrder =:= NewOrder ->
     [];
 compute_reorder_ops(Az, OldOrder, NewOrder, Kept) ->
-    KeptOld = [K || K <:- OldOrder, is_map_key(K, Kept)],
+    KeptOld = [K || K <- OldOrder, is_map_key(K, Kept)],
     case KeptOld of
         [] ->
             [];

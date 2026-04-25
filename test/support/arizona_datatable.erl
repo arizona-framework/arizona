@@ -125,7 +125,7 @@ handle_event(~"reset_data", _Payload, Bindings) ->
     {Bindings#{rows => S, next_id => 6, sort_col => id, sort_dir => asc}, #{}, []};
 handle_event(~"shuffle", _Payload, Bindings) ->
     Items = arizona_stream:to_list(maps:get(rows, Bindings)),
-    Shuffled = [X || {_, X} <:- lists:sort([{rand:uniform(), I} || I <:- Items])],
+    Shuffled = [X || {_, X} <:- lists:sort([{rand:uniform(), I} || I <- Items])],
     S = arizona_stream:reset(maps:get(rows, Bindings), Shuffled),
     {Bindings#{rows => S}, #{}, []}.
 

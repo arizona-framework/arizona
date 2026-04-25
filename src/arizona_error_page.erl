@@ -176,7 +176,7 @@ format_reason(Reason) ->
     escape(unicode:characters_to_binary(io_lib:format("~0tp", [Reason]))).
 
 format_file_errors(File, Errors) ->
-    [File, ":\n", lists:join("\n", [format_one_error(E) || E <:- Errors])].
+    [File, ":\n", lists:join("\n", [format_one_error(E) || E <- Errors])].
 
 format_one_error({Location, Mod, Reason}) ->
     Line = erl_anno:line(Location),

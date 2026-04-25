@@ -1413,8 +1413,8 @@ mixed_children_roundtrip(Config) when is_list(Config) ->
     ).
 
 mixed_render_html(#{<<"f">> := _, <<"s">> := S, <<"d">> := D}) ->
-    arizona_render:zip(S, [mixed_render_html(X) || X <:- D]);
+    arizona_render:zip(S, [mixed_render_html(X) || X <- D]);
 mixed_render_html(#{<<"f">> := _, <<"d">> := D}) ->
-    [mixed_render_html(X) || X <:- D];
+    [mixed_render_html(X) || X <- D];
 mixed_render_html(V) ->
     V.

@@ -95,7 +95,7 @@ where there is no diff state to maintain.
     Dynamics :: [arizona_template:dynamic()],
     EvaledDynamics :: [{arizona_template:az(), term()}].
 eval_dynamics(Dynamics) ->
-    [eval_one(D) || D <:- Dynamics].
+    [eval_one(D) || D <- Dynamics].
 
 -doc """
 Evaluates a list of dynamics with view tracking and dependency capture.
@@ -211,7 +211,7 @@ Renders list items without view tracking. Returns `[ItemD]`.
     Template :: map(),
     ItemDs :: [[{arizona_template:az(), term()}]].
 render_list_items_simple(Items, #{d := DFun}) ->
-    [eval_dynamics(DFun(Item)) || Item <:- Items].
+    [eval_dynamics(DFun(Item)) || Item <- Items].
 
 -doc """
 Renders map entries without view tracking. Returns `[ItemD]`.

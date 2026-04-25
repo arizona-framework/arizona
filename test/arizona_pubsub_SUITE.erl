@@ -96,14 +96,14 @@ multiple_subscribers(Config) when is_list(Config) ->
             after 5000 -> exit(timeout)
             end
         end)
-     || _ <:- [1, 2, 3]
+     || _ <- [1, 2, 3]
     ],
     [
         receive
             {joined, P} -> ok
         after 1000 -> ct:fail({join_timeout, P})
         end
-     || P <:- Pids
+     || P <- Pids
     ],
     ok = arizona_pubsub:broadcast(test_group, msg),
     Received = [
@@ -111,7 +111,7 @@ multiple_subscribers(Config) when is_list(Config) ->
             {got, P} -> P
         after 1000 -> ct:fail({timeout, P})
         end
-     || P <:- Pids
+     || P <- Pids
     ],
     ?assertEqual(lists:sort(Pids), lists:sort(Received)).
 

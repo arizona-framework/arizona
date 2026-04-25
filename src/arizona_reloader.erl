@@ -129,7 +129,7 @@ can read it via `get_error/0`.
 -spec compile(Files) -> ok | {error, map()} when
     Files :: [file:filename()].
 compile(Files) ->
-    ErlFiles = [F || F <:- Files, filename:extension(F) =:= ".erl"],
+    ErlFiles = [F || F <- Files, filename:extension(F) =:= ".erl"],
     case ErlFiles of
         [] ->
             clear_error(),
@@ -261,7 +261,7 @@ get_compile_opts(Mod) ->
     end.
 
 filter_opts(Opts) ->
-    [O || O <:- Opts, keep_opt(O)].
+    [O || O <- Opts, keep_opt(O)].
 
 keep_opt({outdir, _}) -> false;
 keep_opt(binary) -> false;

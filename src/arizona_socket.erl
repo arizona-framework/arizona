@@ -274,7 +274,7 @@ encode(Map) ->
     json:encode(Map).
 
 scope_ops(ViewId, Ops) ->
-    lists:append([scope_op(ViewId, Op) || Op <:- Ops]).
+    lists:append([scope_op(ViewId, Op) || Op <- Ops]).
 
 scope_op(_ParentViewId, [ChildViewId, ChildOps]) when is_binary(ChildViewId) ->
     %% Recursive child diff -- flatten with child's own view id
