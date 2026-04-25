@@ -47,6 +47,12 @@ const OP = {
     MOVE: 9,
 };
 
+/** Worker protocol opcodes -- must match arizona-worker.js. */
+const W_CONNECT = 0;
+const W_SEND = 1;
+const W_CLOSE = 2;
+const W_UPDATE_PATH = 3;
+
 // ---------------------------------------------------------------------------
 // Hook system -- element lifecycle hooks via az-hook attribute
 //
@@ -188,16 +194,20 @@ function navigateTo(path, qs, hash, opts) {
         history.pushState(null, '', fullUrl);
         if (!opts.noscroll) _pendingScroll = { kind: 'push', hash };
     }
-    workerSend(JSON.stringify(['navigate', { path, qs }]));
-    if (_worker) _worker.postMessage([3, path]);
+    workerPost(W_SEND, JSON.stringify(['navigate', { path, qs }]));
+    workerPost(W_UPDATE_PATH, path);
 }
 
 /**
- * Send a pre-stringified JSON message to the server via the Worker.
- * @param {string} jsonString
+ * Post a control message to the Worker. No-op if the Worker isn't
+ * spawned. The Worker is the authority on transport state -- pre-open
+ * `W_SEND` messages are dropped by the Worker itself, so the main
+ * thread doesn't gate on `_connected` before posting.
+ * @param {number} opcode
+ * @param {...*} args
  */
-function workerSend(jsonString) {
-    if (_worker && _connected) _worker.postMessage([1, jsonString]);
+function workerPost(opcode, ...args) {
+    if (_worker) _worker.postMessage([opcode, ...args]);
 }
 
 /**
@@ -215,7 +225,7 @@ function mountHook(el) {
         __name: name,
         /** @param {string} eventName @param {*} payload */
         pushEvent(eventName, payload) {
-            workerSend(JSON.stringify([resolveTarget(el), eventName, payload || {}]));
+            workerPost(W_SEND, JSON.stringify([resolveTarget(el), eventName, payload || {}]));
         },
     };
     _hooks.set(el, instance);
@@ -699,7 +709,7 @@ function pushEvent(event, payload) {
  * @param {*} [payload]
  */
 function pushEventTo(view, event, payload) {
-    workerSend(JSON.stringify([view, event, payload]));
+    workerPost(W_SEND, JSON.stringify([view, event, payload]));
 }
 
 /**
@@ -790,10 +800,10 @@ function executeJS(el, event, cmds) {
                 const msg = JSON.stringify([resolveTarget(el), evt, payload]);
                 if (event) {
                     scheduleSend(el, event, () => {
-                        if (_connected) workerSend(msg);
+                        workerPost(W_SEND, msg);
                     });
                 } else {
-                    workerSend(msg);
+                    workerPost(W_SEND, msg);
                 }
                 break;
             }
@@ -1167,8 +1177,8 @@ function connect(endpoint, params = {}) {
             const hash = location.hash ? location.hash.slice(1) : '';
             const saved = e.state?._azScroll || null;
             _pendingScroll = { kind: 'pop', hash, saved };
-            workerSend(JSON.stringify(['navigate', { path, qs }]));
-            if (_worker) _worker.postMessage([3, path]);
+            workerPost(W_SEND, JSON.stringify(['navigate', { path, qs }]));
+            workerPost(W_UPDATE_PATH, path);
         },
         { signal },
     );
@@ -1273,7 +1283,7 @@ function connect(endpoint, params = {}) {
     };
 
     // Send connect message to Worker
-    _worker.postMessage([0, wsUrl]);
+    workerPost(W_CONNECT, wsUrl);
 
     // window._ws proxy for E2E test compatibility
     if (typeof window !== 'undefined') {
@@ -1282,10 +1292,10 @@ function connect(endpoint, params = {}) {
                 return _connected ? 1 : 3;
             },
             /** @param {string} data */ send(data) {
-                workerSend(data);
+                workerPost(W_SEND, data);
             },
             /** @param {number} [code] */ close(code) {
-                if (_worker) _worker.postMessage([2, code || 1000]);
+                workerPost(W_CLOSE, code || 1000);
             },
             set onmessage(fn) {
                 _onmessageHook = fn;
