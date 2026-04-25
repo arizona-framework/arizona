@@ -82,19 +82,22 @@ function zipTemplate(statics, dynamics) {
     for (let i = 0; i < dynamics.length; i++) {
         const d = dynamics[i];
         if (Array.isArray(d)) {
-            for (let j = 0; j < d.length; j++) {
-                const item = d[j];
-                html +=
-                    item !== null && typeof item === 'object' && item.f !== undefined
-                        ? resolveHtml(item)
-                        : item;
-            }
+            for (let j = 0; j < d.length; j++) html += resolveOrPassthrough(d[j]);
         } else {
-            html += d !== null && typeof d === 'object' && d.f !== undefined ? resolveHtml(d) : d;
+            html += resolveOrPassthrough(d);
         }
         html += statics[i + 1];
     }
     return html;
+}
+
+/**
+ * If `v` is a fingerprinted template object (`{f, ...}`), resolve it to
+ * HTML; otherwise return it as-is.
+ * @param {*} v
+ */
+function resolveOrPassthrough(v) {
+    return v !== null && typeof v === 'object' && v.f !== undefined ? resolveHtml(v) : v;
 }
 
 /**

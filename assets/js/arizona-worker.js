@@ -130,50 +130,24 @@ setOnPersist(
 // ---------------------------------------------------------------------------
 
 /**
- * Walk ops array, resolving HTML payloads in-place so the main thread
- * receives pure strings ready for DOM insertion.
+ * Walk an ops array (top-level or inner), resolving HTML payloads in-place
+ * so the main thread receives pure strings ready for DOM insertion.
+ * `OP_REPLACE` only appears at the top level; inner-op cases simply skip it.
  * @param {Array<Array<*>>} ops
  */
 function resolveOps(ops) {
     for (const op of ops) {
         switch (op[0]) {
             case OP_TEXT:
-                op[2] = resolveHtml(op[2]);
-                break;
             case OP_UPDATE:
-                op[2] = resolveHtml(op[2]);
-                break;
-            case OP_INSERT:
-                op[4] = resolveHtml(op[4]);
-                break;
             case OP_REPLACE:
                 op[2] = resolveHtml(op[2]);
                 break;
-            case OP_ITEM_PATCH:
-                resolveInnerOps(op[3]);
-                break;
-        }
-    }
-}
-
-/**
- * Resolve inner ops (within ITEM_PATCH).
- * @param {Array<Array<*>>} innerOps
- */
-function resolveInnerOps(innerOps) {
-    for (const op of innerOps) {
-        switch (op[0]) {
-            case OP_TEXT:
-                op[2] = resolveHtml(op[2]);
-                break;
-            case OP_UPDATE:
-                op[2] = resolveHtml(op[2]);
-                break;
             case OP_INSERT:
                 op[4] = resolveHtml(op[4]);
                 break;
             case OP_ITEM_PATCH:
-                resolveInnerOps(op[3]);
+                resolveOps(op[3]);
                 break;
         }
     }

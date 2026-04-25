@@ -223,14 +223,24 @@ function mountHook(el) {
 }
 
 /**
+ * Run hook lifecycle callback `phase` on `el` if it is tracked and the
+ * hook def exports that phase.
+ * @param {Element} el
+ * @param {'mounted'|'updated'|'destroyed'} phase
+ */
+function runHookPhase(el, phase) {
+    const instance = _hooks.get(el);
+    if (!instance) return;
+    const def = hooks[instance.__name];
+    if (def?.[phase]) def[phase].call(instance);
+}
+
+/**
  * Destroy a hook on an element. Calls destroyed() if defined, then removes from tracking.
  * @param {Element} el
  */
 function destroyHook(el) {
-    const instance = _hooks.get(el);
-    if (!instance) return;
-    const def = hooks[instance.__name];
-    if (def?.destroyed) def.destroyed.call(instance);
+    runHookPhase(el, 'destroyed');
     _hooks.delete(el);
 }
 
@@ -239,10 +249,7 @@ function destroyHook(el) {
  * @param {Element} el
  */
 function notifyUpdated(el) {
-    const instance = _hooks.get(el);
-    if (!instance) return;
-    const def = hooks[instance.__name];
-    if (def?.updated) def.updated.call(instance);
+    runHookPhase(el, 'updated');
 }
 
 /**
@@ -277,27 +284,62 @@ function destroyHooks(root) {
 }
 
 /**
- * Destroy hooks on elements between a start marker and its closing <!--/az--> marker.
+ * Walk elements between a start marker and its closing <!--/az--> marker,
+ * applying `fn` to each Element-typed node.
  * @param {Comment} startMarker
+ * @param {(el: Element) => void} fn
  */
-function destroyHooksBetweenMarkers(startMarker) {
+function forEachElementBetweenMarkers(startMarker, fn) {
     let node = startMarker.nextSibling;
     while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
-        if (node.nodeType === 1) destroyHooks(/** @type {Element} */ (node));
+        if (node.nodeType === 1) fn(/** @type {Element} */ (node));
         node = node.nextSibling;
     }
 }
 
 /**
- * Mount hooks on elements between a start marker and its closing <!--/az--> marker.
- * @param {Comment} startMarker
+ * Apply a TEXT op: replace marker content (or el.textContent if no marker)
+ * and walk hook lifecycle.
+ * @param {Element} el
+ * @param {string} az
+ * @param {string} val
  */
-function mountHooksBetweenMarkers(startMarker) {
-    let node = startMarker.nextSibling;
-    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
-        if (node.nodeType === 1) mountHooks(/** @type {Element} */ (node));
-        node = node.nextSibling;
+function applyTextOp(el, az, val) {
+    const marker = findMarker(el, az);
+    if (marker) {
+        forEachElementBetweenMarkers(marker, destroyHooks);
+        updateMarkerContent(marker, val);
+        forEachElementBetweenMarkers(marker, mountHooks);
+    } else {
+        destroyChildHooks(el);
+        el.textContent = val;
     }
+    notifyUpdated(el);
+}
+
+/**
+ * Apply a SET_ATTR op: setAttribute and sync the DOM `value` property for
+ * form elements (setAttribute alone doesn't update the live value).
+ * @param {Element} el
+ * @param {string} name
+ * @param {string} val
+ */
+function applySetAttrOp(el, name, val) {
+    el.setAttribute(name, val);
+    if (name === 'value' && 'value' in el) el.value = val;
+    notifyUpdated(el);
+}
+
+/**
+ * Apply an UPDATE op: replace innerHTML, walking hook lifecycle.
+ * @param {Element} el
+ * @param {string} html
+ */
+function applyUpdateOp(el, html) {
+    destroyChildHooks(el);
+    el.innerHTML = html;
+    mountHooks(el);
+    notifyUpdated(el);
 }
 
 /**
@@ -312,37 +354,18 @@ function applyOps(ops) {
         if (!el) continue;
         const az = op[1].substring(op[1].indexOf(':') + 1);
         switch (op[0]) {
-            case OP.TEXT: {
-                const val = op[2];
-                const marker = findMarker(el, az);
-                if (marker) {
-                    destroyHooksBetweenMarkers(marker);
-                    updateMarkerContent(marker, val);
-                    mountHooksBetweenMarkers(marker);
-                    notifyUpdated(el);
-                } else {
-                    destroyChildHooks(el);
-                    el.textContent = val;
-                    notifyUpdated(el);
-                }
+            case OP.TEXT:
+                applyTextOp(el, az, op[2]);
                 break;
-            }
             case OP.SET_ATTR:
-                el.setAttribute(op[2], op[3]);
-                // Sync the DOM property for form elements -- setAttribute alone
-                // doesn't update the live value of <input>/<select>/<textarea>.
-                if (op[2] === 'value' && 'value' in el) el.value = op[3];
-                notifyUpdated(el);
+                applySetAttrOp(el, op[2], op[3]);
                 break;
             case OP.REM_ATTR:
                 el.removeAttribute(op[2]);
                 notifyUpdated(el);
                 break;
             case OP.UPDATE:
-                destroyChildHooks(el);
-                el.innerHTML = op[2];
-                mountHooks(el);
-                notifyUpdated(el);
+                applyUpdateOp(el, op[2]);
                 break;
             case OP.REPLACE: {
                 destroyHooks(el);
@@ -466,6 +489,16 @@ function insertItemEl(el, key, pos, html) {
 }
 
 /**
+ * If `target` resolves to an element, call `fn` with it. Otherwise no-op.
+ * @param {string} target
+ * @param {(el: Element) => void} fn
+ */
+function withTarget(target, fn) {
+    const el = resolveEl(target);
+    if (el) fn(el);
+}
+
+/**
  * Stream ops -- insert, remove, and patch operate on keyed children (az-key)
  * within a container element. pos=-1 means append; otherwise insert before
  * the child at that index.
@@ -475,9 +508,7 @@ function insertItemEl(el, key, pos, html) {
  * @param {string} html
  */
 function insertItem(target, key, pos, html) {
-    const el = resolveEl(target);
-    if (!el) return;
-    insertItemEl(el, key, pos, html);
+    withTarget(target, (el) => insertItemEl(el, key, pos, html));
 }
 
 /**
@@ -501,9 +532,7 @@ function removeItemEl(el, key) {
  * @param {string} key
  */
 function removeItem(target, key) {
-    const el = resolveEl(target);
-    if (!el) return;
-    removeItemEl(el, key);
+    withTarget(target, (el) => removeItemEl(el, key));
 }
 
 /**
@@ -537,9 +566,7 @@ function moveItemEl(el, key, afterKey) {
  * @param {string|null} afterKey -- key of preceding sibling, or null for prepend
  */
 function moveItem(target, key, afterKey) {
-    const el = resolveEl(target);
-    if (!el) return;
-    moveItemEl(el, key, afterKey);
+    withTarget(target, (el) => moveItemEl(el, key, afterKey));
 }
 
 /**
@@ -568,14 +595,14 @@ function patchItemEl(parentEl, az, key, innerOps) {
  * @param {Array<Array<*>>} innerOps
  */
 function patchItem(target, key, innerOps) {
-    const el = resolveEl(target);
-    if (!el) return;
-    const item = el.querySelector(`:scope > [az-key="${key}"]`);
-    if (!item) {
-        console.warn(`[arizona] stream item az-key="${key}" not found for patch`);
-        return;
-    }
-    applyItemOps(item, innerOps);
+    withTarget(target, (el) => {
+        const item = el.querySelector(`:scope > [az-key="${key}"]`);
+        if (!item) {
+            console.warn(`[arizona] stream item az-key="${key}" not found for patch`);
+            return;
+        }
+        applyItemOps(item, innerOps);
+    });
 }
 
 /**
@@ -595,6 +622,9 @@ function resolveInnerEl(parent, az) {
 
 /**
  * Apply inner ops to an item element. Ops arrive pre-resolved from the Worker.
+ * Per-op behaviour matches `applyOps` via the shared `apply*Op` helpers,
+ * differing only in element resolution: bare `az` resolved against `item`
+ * via `resolveInnerEl/2`, with a separate fallback for `REMOVE_NODE`.
  * @param {Element} item
  * @param {Array<Array<*>>} innerOps
  */
@@ -602,43 +632,21 @@ function applyItemOps(item, innerOps) {
     for (const op of innerOps) {
         const az = op[1];
         switch (op[0]) {
-            case OP.TEXT: {
-                const val = op[2];
-                const innerEl = resolveInnerEl(item, az);
-                const marker = findMarker(innerEl, az);
-                if (marker) {
-                    destroyHooksBetweenMarkers(marker);
-                    updateMarkerContent(marker, val);
-                    mountHooksBetweenMarkers(marker);
-                    notifyUpdated(innerEl);
-                } else {
-                    destroyChildHooks(innerEl);
-                    innerEl.textContent = val;
-                    notifyUpdated(innerEl);
-                }
+            case OP.TEXT:
+                applyTextOp(resolveInnerEl(item, az), az, op[2]);
                 break;
-            }
-            case OP.SET_ATTR: {
-                const innerEl = resolveInnerEl(item, az);
-                innerEl.setAttribute(op[2], op[3]);
-                if (op[2] === 'value' && 'value' in innerEl) innerEl.value = op[3];
-                notifyUpdated(innerEl);
+            case OP.SET_ATTR:
+                applySetAttrOp(resolveInnerEl(item, az), op[2], op[3]);
                 break;
-            }
             case OP.REM_ATTR: {
                 const innerEl = resolveInnerEl(item, az);
                 innerEl.removeAttribute(op[2]);
                 notifyUpdated(innerEl);
                 break;
             }
-            case OP.UPDATE: {
-                const innerEl = resolveInnerEl(item, az);
-                destroyChildHooks(innerEl);
-                innerEl.innerHTML = op[2];
-                mountHooks(innerEl);
-                notifyUpdated(innerEl);
+            case OP.UPDATE:
+                applyUpdateOp(resolveInnerEl(item, az), op[2]);
                 break;
-            }
             case OP.REMOVE_NODE: {
                 const innerEl = item.querySelector(`[az="${az}"]`);
                 if (innerEl) {
@@ -647,25 +655,18 @@ function applyItemOps(item, innerOps) {
                 }
                 break;
             }
-            case OP.INSERT: {
-                const container = resolveInnerEl(item, az);
-                insertItemEl(container, op[2], op[3], op[4]);
+            case OP.INSERT:
+                insertItemEl(resolveInnerEl(item, az), op[2], op[3], op[4]);
                 break;
-            }
-            case OP.REMOVE: {
-                const container = resolveInnerEl(item, az);
-                removeItemEl(container, op[2]);
+            case OP.REMOVE:
+                removeItemEl(resolveInnerEl(item, az), op[2]);
                 break;
-            }
-            case OP.ITEM_PATCH: {
+            case OP.ITEM_PATCH:
                 patchItemEl(item, az, op[2], op[3]);
                 break;
-            }
-            case OP.MOVE: {
-                const container = resolveInnerEl(item, az);
-                moveItemEl(container, op[2], op[3]);
+            case OP.MOVE:
+                moveItemEl(resolveInnerEl(item, az), op[2], op[3]);
                 break;
-            }
         }
     }
 }
@@ -756,6 +757,18 @@ const JS_PUSH_EVENT = 0,
     JS_ON_KEY = 16;
 
 /**
+ * If `sel` matches an element, call `fn` with it cast to `HTMLElement`.
+ * Used by the executeJS targeted commands; some need HTMLElement-only
+ * properties (`hidden`, `focus`, `blur`).
+ * @param {string} sel
+ * @param {(el: HTMLElement) => void} fn
+ */
+function withQuery(sel, fn) {
+    const t = /** @type {HTMLElement|null} */ (document.querySelector(sel));
+    if (t) fn(t);
+}
+
+/**
  * Execute JS commands from an az-* attribute value.
  * Single command: [opcode, ...args]
  * Multiple commands: [[opcode, ...args], [opcode, ...args]]
@@ -784,82 +797,56 @@ function executeJS(el, event, cmds) {
                 }
                 break;
             }
-            case JS_TOGGLE: {
-                const t = document.querySelector(cmd[1]);
-                if (t) t.hidden = !t.hidden;
+            case JS_TOGGLE:
+                withQuery(cmd[1], (t) => (t.hidden = !t.hidden));
                 break;
-            }
-            case JS_SHOW: {
-                const t = document.querySelector(cmd[1]);
-                if (t) t.hidden = false;
+            case JS_SHOW:
+                withQuery(cmd[1], (t) => (t.hidden = false));
                 break;
-            }
-            case JS_HIDE: {
-                const t = document.querySelector(cmd[1]);
-                if (t) t.hidden = true;
+            case JS_HIDE:
+                withQuery(cmd[1], (t) => (t.hidden = true));
                 break;
-            }
-            case JS_ADD_CLASS: {
-                const t = document.querySelector(cmd[1]);
-                if (t) t.classList.add(cmd[2]);
+            case JS_ADD_CLASS:
+                withQuery(cmd[1], (t) => t.classList.add(cmd[2]));
                 break;
-            }
-            case JS_REMOVE_CLASS: {
-                const t = document.querySelector(cmd[1]);
-                if (t) t.classList.remove(cmd[2]);
+            case JS_REMOVE_CLASS:
+                withQuery(cmd[1], (t) => t.classList.remove(cmd[2]));
                 break;
-            }
-            case JS_TOGGLE_CLASS: {
-                const t = document.querySelector(cmd[1]);
-                if (t) t.classList.toggle(cmd[2]);
+            case JS_TOGGLE_CLASS:
+                withQuery(cmd[1], (t) => t.classList.toggle(cmd[2]));
                 break;
-            }
-            case JS_SET_ATTR: {
-                const t = document.querySelector(cmd[1]);
-                if (t) t.setAttribute(cmd[2], cmd[3]);
+            case JS_SET_ATTR:
+                withQuery(cmd[1], (t) => t.setAttribute(cmd[2], cmd[3]));
                 break;
-            }
-            case JS_REMOVE_ATTR: {
-                const t = document.querySelector(cmd[1]);
-                if (t) t.removeAttribute(cmd[2]);
+            case JS_REMOVE_ATTR:
+                withQuery(cmd[1], (t) => t.removeAttribute(cmd[2]));
                 break;
-            }
-            case JS_DISPATCH_EVENT: {
+            case JS_DISPATCH_EVENT:
                 document.dispatchEvent(new CustomEvent(cmd[1], { detail: cmd[2] || {} }));
                 break;
-            }
             case JS_NAVIGATE: {
                 const full = cmd[1];
-                const opts = cmd[2] || {};
                 const u = new URL(full, location.origin);
                 const hash = u.hash ? u.hash.slice(1) : '';
                 const qs = u.search ? u.search.slice(1) : '';
-                navigateTo(u.pathname, qs, hash, { ...opts, fullUrl: full });
+                navigateTo(u.pathname, qs, hash, { ...(cmd[2] || {}), fullUrl: full });
                 break;
             }
-            case JS_FOCUS: {
-                const t = document.querySelector(cmd[1]);
-                if (t) /** @type {HTMLElement} */ (t).focus();
+            case JS_FOCUS:
+                withQuery(cmd[1], (t) => t.focus());
                 break;
-            }
-            case JS_BLUR: {
-                const t = document.querySelector(cmd[1]);
-                if (t) /** @type {HTMLElement} */ (t).blur();
+            case JS_BLUR:
+                withQuery(cmd[1], (t) => t.blur());
                 break;
-            }
-            case JS_SCROLL_TO: {
-                const t = document.querySelector(cmd[1]);
-                if (t) t.scrollIntoView(cmd[2] || { behavior: 'smooth' });
+            case JS_SCROLL_TO:
+                withQuery(cmd[1], (t) => t.scrollIntoView(cmd[2] || { behavior: 'smooth' }));
                 break;
-            }
-            case JS_SET_TITLE: {
+            case JS_SET_TITLE:
                 document.title = cmd[1];
                 break;
-            }
-            case JS_RELOAD: {
+            case JS_RELOAD:
                 location.reload();
                 break;
-            }
             case JS_ON_KEY: {
                 const f = cmd[1];
                 const lk =
