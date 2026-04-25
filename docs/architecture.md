@@ -267,11 +267,12 @@ dispatch events and navigate. The route adapter is recovered from `req` on deman
 
 Internal functions: `scope_ops/2` (prepend view ID to op targets), `encode_reply/3` (build
 `#{<<"o">> => Ops, <<"e">> => Effects}` JSON), `close_crash/1` (crash close tuple),
-`dispatch_event/4`, `handle_navigate/3` (calls `arizona_req:call_resolve_route/4`).
+`dispatch_event/4`, `handle_navigate/3` (drives SPA navigate by invoking the adapter's
+`resolve_route/3`).
 
 ## SPA navigate route resolution
 
-When the client sends a navigate frame, `arizona_socket:handle_navigate/3` calls the optional
+When the client sends a navigate frame, `arizona_socket` invokes the optional
 `resolve_route/3` callback declared on the `arizona_req` behaviour:
 
 ```erlang
@@ -347,8 +348,8 @@ Transport-agnostic upgrade bootstrap for WebSocket handlers.
 
 - `prepare/3(QS, Adapter, AdapterState)` -- accepts the pre-parsed upgrade query string
   (`[{binary(), binary() | true}]`), reads `_az_path` and `_az_reconnect` framework keys,
-  strips them to compute the user-visible query string, resolves the target route via
-  `arizona_req:call_resolve_route/4`, runs middlewares, and returns:
+  strips them to compute the user-visible query string, resolves the target route via the
+  adapter's `resolve_route/3` callback, runs middlewares, and returns:
   - `{halt, az:request()}` -- middleware blocked the upgrade; caller extracts the native raw
     via `arizona_req:raw/1` to emit its transport response
   - `{cont, State}` -- `State` is a map carrying `handler`, `bindings`, `on_mount`, `req`,

@@ -8,7 +8,8 @@ transport adapter:
 1. Read the framework keys `_az_path` and `_az_reconnect` from the
    parsed upgrade query string.
 2. Strip framework keys to recover the user-page query string.
-3. Resolve the target route via `arizona_req:call_resolve_route/4`.
+3. Resolve the target route via the `arizona_req` adapter's
+   `resolve_route/3` callback.
 4. Apply any route middlewares against the synthesized `az:request()`.
 5. Return either a halt signal (middleware blocked) or the state the
    transport should feed into `arizona_socket:init/4`.
