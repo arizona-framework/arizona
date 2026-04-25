@@ -32,6 +32,8 @@ Handlers pick one of the three header forms:
 - `arizona_stateful.hrl` -- embeddable components (`mount/1`, instantiated via `?stateful(...)` in a parent template)
 - `arizona_stateless.hrl` -- pure template modules
 
+**Spawn rule:** `arizona_live:start_link/5` only accepts views. Stateful handlers are embedded children inside a parent view's render tree -- never spawned as their own live processes. Tests of stateful handler behaviour must drive them either via direct calls (`arizona_stateful:call_mount/2`, `arizona_render:render_to_iolist/2`) or via a parent view that embeds the stateful handler and dispatches events to it.
+
 ### Route-level views (`arizona_view.hrl`)
 - `arizona_page.erl` -- page with 3 stateful counter children, connected status
 - `arizona_about.erl` -- about page with `handle_info/2` tick timer, `az-hook="Tick"`, SPA navigation

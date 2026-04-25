@@ -61,6 +61,24 @@ Void elements (`br`, `img`, `input`, `hr`, `meta`, `link`, `base`, `col`, `embed
 | `{name, false}` | `{hidden, false}` | Stripped |
 | `'az-nodiff'` / `<<"az-nodiff">>` | Directive | Stripped, emits `diff => false` |
 
+## Route options
+
+A route's static config is the single canonical type `arizona_live:route_opts/0`:
+
+```erlang
+-nominal route_opts() :: #{
+    bindings => arizona_template:bindings(),
+    on_mount => on_mount(),
+    layouts => [arizona_render:layout()],
+    middlewares => [arizona_req:middleware()],
+    _ => term()
+}.
+```
+
+Used in route declarations, `arizona_render:render_view_to_iolist/3`, `arizona_http:render/3`, and the optional `arizona_req:resolve_route/3` callback's return tuple. All keys are optional; consumers default at use-site (`maps:get(K, M, Default)`).
+
+`layouts` is always a list, applied outermost-first: `[Root, Section]` produces `Root(Section(Page))`. Empty list = no wrap.
+
 ## Comprehension generators
 
 Use the strict generator (`<:-`, `K := V <:-`) only when the LHS is a pattern that
