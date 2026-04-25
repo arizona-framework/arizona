@@ -92,10 +92,10 @@ Short-circuits to `{[], OldSnap}` when the old snapshot carries
     NewSnapshot :: arizona_template:snapshot().
 diff(_NewTmpl, #{diff := false} = OldSnap) ->
     {[], OldSnap};
-diff(#{s := Statics, d := NewDynamics} = Tmpl, #{s := Statics, d := OldEvals}) ->
+diff(#{s := Statics, d := NewDynamics} = Tmpl, #{s := Statics, d := OldEvals} = OldSnap) ->
     EvalNew = arizona_eval:eval_dynamics(NewDynamics),
     Ops = diff_dynamics(EvalNew, OldEvals),
-    Snap0 = #{s => Statics, d => EvalNew},
+    Snap0 = preserve_view_id(OldSnap, #{s => Statics, d => EvalNew}),
     {Ops, arizona_template:maybe_put_fingerprint(Tmpl, Snap0)}.
 
 -doc """
@@ -111,11 +111,15 @@ nested stateful children are accumulated alongside the patch ops.
     Views1 :: map().
 diff(_NewTmpl, #{diff := false} = OldSnap, Views) ->
     {[], OldSnap, Views};
-diff(#{s := Statics, d := NewDynamics} = Tmpl, #{s := Statics, d := OldEvals}, Views0) ->
+diff(
+    #{s := Statics, d := NewDynamics} = Tmpl,
+    #{s := Statics, d := OldEvals} = OldSnap,
+    Views0
+) ->
     {Triples, {_Old, NewViews}} = arizona_eval:eval_dynamics_v(NewDynamics, {Views0, #{}}),
     {EvalNew, NewDeps, _Vals} = arizona_template:unzip_triples(Triples),
     Ops = diff_dynamics(EvalNew, OldEvals),
-    Snap0 = #{s => Statics, d => EvalNew, deps => NewDeps},
+    Snap0 = preserve_view_id(OldSnap, #{s => Statics, d => EvalNew, deps => NewDeps}),
     {Ops, arizona_template:maybe_put_fingerprint(Tmpl, Snap0), NewViews}.
 
 -doc """
@@ -137,14 +141,20 @@ diff(_NewTmpl, #{diff := false} = OldSnap, Views, _Changed) ->
     {[], OldSnap, Views};
 diff(
     #{s := Statics, d := NewDynamics} = Tmpl,
-    #{s := Statics, d := OldEvals, deps := OldDeps},
+    #{s := Statics, d := OldEvals, deps := OldDeps} = OldSnap,
     Views0,
     Changed
 ) ->
     {Ops, NewD, NewDeps, {_Old, NewViews}} =
         diff_dynamics_v(NewDynamics, OldEvals, OldDeps, Changed, {Views0, #{}}),
-    Snap0 = #{s => Statics, d => NewD, deps => NewDeps},
+    Snap0 = preserve_view_id(OldSnap, #{s => Statics, d => NewD, deps => NewDeps}),
     {Ops, arizona_template:maybe_put_fingerprint(Tmpl, Snap0), NewViews}.
+
+%% `view_id` lives on child-view snapshots (set by `make_child_snap`) and is
+%% read by `make_op/3` to detect child diffs. The rebuilt snapshot must carry
+%% it forward so subsequent diffs keep matching the child-view clause.
+preserve_view_id(#{view_id := VId}, Snap) -> Snap#{view_id => VId};
+preserve_view_id(#{}, Snap) -> Snap.
 
 %% --------------------------------------------------------------------
 %% Internal functions

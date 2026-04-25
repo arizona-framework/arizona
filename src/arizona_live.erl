@@ -513,7 +513,7 @@ process_child_change(H, B1, Resets, ViewId, #{snapshot := Snap0} = View, #state{
     {Ops, Snap1} = arizona_diff:diff(Tmpl, Snap0),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
-    V1 = V0#{ViewId => View#{bindings => B3, snapshot => maps:merge(Snap0, Snap1)}},
+    V1 = V0#{ViewId => View#{bindings => B3, snapshot => Snap1}},
     {Ops1, V1, Fps1}.
 
 clear_streams_and_apply_resets(B1, Resets) ->
