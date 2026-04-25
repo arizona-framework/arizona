@@ -73,12 +73,18 @@ init_per_testcase(watch_bad_dir, Config) ->
 init_per_testcase(broadcast_on_debounce, Config) ->
     ok = arizona_pubsub:subscribe(arizona_watcher, self()),
     init_watcher(Config, watcher_opts(broadcast_on_debounce));
+init_per_testcase(callback_undefined, Config) ->
+    ok = arizona_pubsub:subscribe(arizona_watcher, self()),
+    init_watcher(Config, watcher_opts(callback_undefined));
 init_per_testcase(TC, Config) ->
     init_watcher(Config, watcher_opts(TC)).
 
 %% -- end_per_testcase --------------------------------------------------------
 
 end_per_testcase(broadcast_on_debounce, Config) ->
+    ok = arizona_pubsub:unsubscribe(arizona_watcher, self()),
+    cleanup(Config);
+end_per_testcase(callback_undefined, Config) ->
     ok = arizona_pubsub:unsubscribe(arizona_watcher, self()),
     cleanup(Config);
 end_per_testcase(_TC, Config) ->
@@ -192,8 +198,15 @@ debounce_deduplicates(Config) when is_list(Config) ->
 callback_undefined(Config) when is_list(Config) ->
     W = proplists:get_value(watcher, Config),
     Dir = proplists:get_value(tmp_dir, Config),
-    send_fs_event(W, Dir ++ "/file.erl", [modified]),
-    timer:sleep(100),
+    File = Dir ++ "/file.erl",
+    %% Synchronize on the broadcast rather than wallclock: with
+    %% callback => undefined the watcher must still fire the debounce,
+    %% broadcast on pubsub, and stay alive.
+    send_fs_event(W, File, [modified]),
+    receive
+        {arizona_watcher, Files} -> ?assert(lists:member(File, Files))
+    after 500 -> ct:fail(no_broadcast)
+    end,
     ?assert(is_process_alive(W)).
 
 callback_receives_filtered(Config) when is_list(Config) ->
