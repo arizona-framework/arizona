@@ -8,7 +8,7 @@ transport adapter:
 1. Read the framework keys `_az_path` and `_az_reconnect` from the
    parsed upgrade query string.
 2. Strip framework keys to recover the user-page query string.
-3. Resolve the target route via `arizona_adapter:call_resolve_route/4`.
+3. Resolve the target route via `arizona_req:call_resolve_route/4`.
 4. Apply any route middlewares against the synthesized `az:request()`.
 5. Return either a halt signal (middleware blocked) or the state the
    transport should feed into `arizona_socket:init/4`.
@@ -75,7 +75,7 @@ prepare(QS, Adapter, AdapterState) ->
     Path = proplists:get_value(~"_az_path", QS, ~"/"),
     Reconnect = proplists:get_value(~"_az_reconnect", QS, ~"0") =:= ~"1",
     UserQs = user_qs(QS),
-    {H, RouteOpts, ArzReq} = arizona_adapter:call_resolve_route(
+    {H, RouteOpts, ArzReq} = arizona_req:call_resolve_route(
         Adapter, Path, UserQs, AdapterState
     ),
     IB = maps:get(bindings, RouteOpts, #{}),

@@ -19,12 +19,13 @@
 -export([apply_middlewares_cont_mf/1]).
 -export([apply_middlewares_halt_stops_pipeline/1]).
 -export([apply_middlewares_threads_bindings/1]).
+-export([call_resolve_route_dispatches_to_adapter/1]).
 
 %% Exported for use via {?MODULE, Fun} in apply_middlewares_cont_mf.
 -export([sample_cont_middleware/2]).
 
 all() ->
-    [{group, accessors}, {group, middlewares}].
+    [{group, accessors}, {group, middlewares}, {group, resolve_route}].
 
 groups() ->
     [
@@ -46,6 +47,9 @@ groups() ->
             apply_middlewares_cont_mf,
             apply_middlewares_halt_stops_pipeline,
             apply_middlewares_threads_bindings
+        ]},
+        {resolve_route, [parallel], [
+            call_resolve_route_dispatches_to_adapter
         ]}
     ].
 
@@ -174,6 +178,21 @@ apply_middlewares_threads_bindings(Config) when is_list(Config) ->
         {cont, Req, #{a => 1, b => 2}},
         arizona_req:apply_middlewares(Mw, Req, #{})
     ).
+
+%% --------------------------------------------------------------------
+%% resolve_route -- exercises the optional callback wiring
+%% --------------------------------------------------------------------
+
+call_resolve_route_dispatches_to_adapter(Config) when is_list(Config) ->
+    Routes = #{~"/items" => {items_handler, #{bindings => #{kind => ~"item"}}}},
+    Raw = #{routes => Routes},
+    {Handler, RouteOpts, NavReq} = arizona_req:call_resolve_route(
+        arizona_req_test_adapter, ~"/items", ~"q=1", Raw
+    ),
+    ?assertEqual(items_handler, Handler),
+    ?assertEqual(#{bindings => #{kind => ~"item"}}, RouteOpts),
+    ?assertEqual(~"/items", arizona_req:path(NavReq)),
+    ?assertEqual(arizona_req_test_adapter, arizona_req:adapter(NavReq)).
 
 %% --------------------------------------------------------------------
 %% Module-function middleware helper

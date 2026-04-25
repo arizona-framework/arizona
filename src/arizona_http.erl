@@ -32,7 +32,6 @@ its transport's native reply shape.
 %% --------------------------------------------------------------------
 
 -export_type([error_info/0]).
--export_type([render_opts/0]).
 -export_type([result/0]).
 
 %% --------------------------------------------------------------------
@@ -44,14 +43,6 @@ its transport's native reply shape.
     reason := term(),
     stacktrace := erlang:stacktrace(),
     reload_url => binary() | undefined
-}.
-
--nominal render_opts() :: #{
-    bindings => map(),
-    middlewares => [arizona_req:middleware()],
-    layouts => [arizona_render:layout()],
-    on_mount => arizona_live:on_mount(),
-    _ => term()
 }.
 
 -nominal result() ::
@@ -70,7 +61,7 @@ Runs the full render pipeline for `Handler` against a cowboy `Req`.
 -spec render(Handler, Req, Opts) -> result() when
     Handler :: module(),
     Req :: cowboy_req:req(),
-    Opts :: render_opts().
+    Opts :: arizona_live:route_opts().
 render(Handler, Req, Opts) ->
     ArzReq = arizona_cowboy_req:new(Req),
     Bindings = maps:get(bindings, Opts, #{}),

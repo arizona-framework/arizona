@@ -58,7 +58,7 @@ Add `arizona` to your `rebar.config` dependencies:
 ```
 
 Cowboy is required for the built-in HTTP/WebSocket transport. If you write your own
-`arizona_adapter`, you can skip it.
+`arizona_req` adapter, you can skip it.
 
 ## Quick start
 

@@ -1,21 +1,14 @@
 -module(arizona_cowboy_req).
 -moduledoc """
-Cowboy adapter for the `arizona_req` and `arizona_adapter` behaviours.
+Cowboy adapter for the `arizona_req` behaviour.
 
-Implements the `arizona_req` callbacks by delegating each to the
-matching `cowboy_req` primitive. `new/1` wraps a raw cowboy request
-in an `arizona_req:request()` with `method` and `path` eagerly
-populated and everything else lazy-loaded on first access.
-
-Also implements `arizona_adapter:resolve_route/3` so the same module
-that knows how to parse a request also knows how to resolve a navigate
-target through the cowboy router. `arizona_socket` recovers the adapter
-from the request itself via `arizona_req:adapter/1` -- no separate
-adapter argument is threaded through.
+Implements the parsing callbacks by delegating each to the matching
+`cowboy_req` primitive. `new/1` wraps a raw cowboy request in an
+`arizona_req:request()` with `method` and `path` eagerly populated
+and everything else lazy-loaded on first access.
 """.
 
 -behaviour(arizona_req).
--behaviour(arizona_adapter).
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -32,18 +25,7 @@ adapter argument is threaded through.
 -export([parse_cookies/1]).
 -export([parse_headers/1]).
 -export([read_body/1]).
-
-%% --------------------------------------------------------------------
-%% arizona_adapter callbacks
-%% --------------------------------------------------------------------
-
 -export([resolve_route/3]).
-
-%% --------------------------------------------------------------------
-%% Ignore xref warnings
-%% --------------------------------------------------------------------
-
--ignore_xref([resolve_route/3]).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -91,10 +73,6 @@ read_body(CowboyReq) ->
     {ok, Body, CowboyReq1} = cowboy_req:read_body(CowboyReq),
     {Body, CowboyReq1}.
 
-%% --------------------------------------------------------------------
-%% arizona_adapter callbacks
-%% --------------------------------------------------------------------
-
 -doc """
 Resolves a path to `{Handler, RouteOpts, Request}` by running the
 Cowboy router.
@@ -105,11 +83,11 @@ synthesized from the stored upgrade cowboy req with the new path and
 query applied.
 """.
 -spec resolve_route(Path, Qs, Req) -> {Handler, RouteOpts, ArzReq} when
-    Path :: arizona_adapter:path(),
-    Qs :: arizona_adapter:qs(),
+    Path :: arizona_req:path(),
+    Qs :: arizona_req:qs(),
     Req :: cowboy_req:req(),
     Handler :: module(),
-    RouteOpts :: arizona_adapter:route_opts(),
+    RouteOpts :: arizona_live:route_opts(),
     ArzReq :: arizona_req:request().
 resolve_route(Path, Qs, Req) ->
     NavReq = Req#{path => Path, qs => Qs},

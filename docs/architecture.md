@@ -21,12 +21,11 @@
 | `src/arizona_live.erl`            | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                              |
 | `src/arizona_parse_transform.erl` | Compile-time transform -- `?html`, `?each` (1-arg or 2-arg) DSL to `#{s, d, f}` maps, `az-view` auto-injection, directive extraction (`az-nodiff`), attribute compilation |
 | `src/arizona_socket.erl`          | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff    |
-| `src/arizona_adapter.erl`         | Behaviour defining `resolve_route/3` callback for framework adapters (returns `{Handler, RouteOpts, Request}`)                                                            |
 | `src/arizona_cowboy_http.erl`     | Cowboy HTTP handler -- thin wrapper: delegates the pipeline to `arizona_http:render/3` and translates its result into Cowboy's reply shape                                |
 | `src/arizona_cowboy_ws.erl`       | Cowboy WebSocket handler -- thin wrapper: delegates the upgrade to `arizona_ws:prepare/3`, forwards frames to `arizona_socket`                                            |
 | `src/arizona_cowboy_static.erl`   | Cowboy static file handler -- serves files from a directory with content-type detection                                                                                   |
 | `src/arizona_cowboy_server.erl`   | Cowboy listener boot -- compiles routes, stashes them in persistent terms, starts a clear/TLS listener                                                                    |
-| `src/arizona_cowboy_req.erl`      | Cowboy implementation of both `arizona_req` and `arizona_adapter` -- request parsing plus `resolve_route/3` for SPA navigate                                              |
+| `src/arizona_cowboy_req.erl`      | Cowboy `arizona_req` adapter -- parsing callbacks plus optional `resolve_route/3` for SPA navigate                                                                        |
 | `src/arizona_cowboy_reload.erl`   | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                     |
 | `src/arizona_error_page.erl`      | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                  |
 | `src/arizona_app.erl`             | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches a Cowboy listener via `arizona_cowboy_server:start/2`                            |
@@ -248,12 +247,11 @@ Framework-agnostic WebSocket protocol state machine. Extracted from `arizona_cow
 framework can integrate Arizona without reimplementing the wire protocol. Cowboy is an optional
 dependency -- the core engine works without it.
 
-- `init/3` -- `init(Handler, Bindings, Opts)`. Traps exits, starts `arizona_live:start_link/5`
-  (passing `self()` as transport PID, the `Req` from Opts, and any `on_mount` hooks), mounts. On
-  reconnect (`#{reconnect => true}`), also renders and returns `OP_REPLACE` frame. Opts:
-  `reconnect` (boolean), `req` (`az:request() | undefined`), `adapter` (module implementing
-  `arizona_adapter`), `adapter_state` (passed to adapter callbacks), `on_mount` (list of
-  `t:arizona_live:on_mount_hook/0`)
+- `init/4` -- `init(Handler, Bindings, Req, Opts)`. Traps exits, starts
+  `arizona_live:start_link/5` (passing `self()` as transport PID, `Req`, and any `on_mount`
+  hooks), mounts. On reconnect (`#{reconnect => true}`), also renders and returns `OP_REPLACE`
+  frame. Opts: `reconnect` (boolean), `on_mount` (list of `t:arizona_live:on_mount_hook/0`).
+  The route adapter for SPA navigate is recovered from `Req` via `arizona_req:adapter/1`
 - `handle_in/2` -- decode incoming text frame: ping/pong, `["cached_fps", FpList]`,
   `["navigate", #{~"path" := Path, ~"qs" := Qs}]`, `[target, event, payload]`
 - `handle_info/2` -- handle `{arizona_push, Ops, Effects}` from `arizona_live` and `EXIT` signals.
@@ -264,33 +262,34 @@ dependency -- the core engine works without it.
 **Return type** (`result()`): `{ok, Socket}` | `{reply, iodata(), Socket}` |
 `{close, Code, Reason, Socket}`
 
-The `#socket{}` record carries only `pid, view_id, adapter, adapter_state` -- the post-mount
-state needed to dispatch events and navigate.
+The `#socket{}` record carries only `pid, view_id, req` -- the post-mount state needed to
+dispatch events and navigate. The route adapter is recovered from `req` on demand.
 
 Internal functions: `scope_ops/2` (prepend view ID to op targets), `encode_reply/3` (build
 `#{<<"o">> => Ops, <<"e">> => Effects}` JSON), `close_crash/1` (crash close tuple),
-`dispatch_event/4`, `handle_navigate/3` (calls `arizona_adapter:call_resolve_route/4`).
+`dispatch_event/4`, `handle_navigate/3` (calls `arizona_req:call_resolve_route/4`).
 
-## API -- `arizona_adapter` behaviour
+## SPA navigate route resolution
 
-Defines the integration contract for framework adapters. A single callback:
+When the client sends a navigate frame, `arizona_socket:handle_navigate/3` calls the optional
+`resolve_route/3` callback declared on the `arizona_req` behaviour:
 
 ```erlang
--callback resolve_route(Path :: binary(), Qs :: binary(), State :: term()) ->
-    {module(), route_opts(), arizona_req:request()}.
+-callback resolve_route(Path :: binary(), Qs :: binary(), Raw :: term()) ->
+    {module(), arizona_live:route_opts(), arizona_req:request()}.
+
+-optional_callbacks([resolve_route/3]).
 ```
 
-Called by `arizona_socket` during client-side SPA navigation to resolve a path + query string to
-a handler module, the route's static options (`bindings`, `on_mount`, `layout`, `middlewares`),
-and a navigate-scoped `arizona_req` carrying the new URL. Cookies/headers on the returned Request
-are inherited from the original upgrade Req; `path`, `bindings` (path bindings from the router),
-and `params` reflect the new path/qs.
+The callback returns a handler module, the route's static options
+(`t:arizona_live:route_opts/0` -- `bindings`, `on_mount`, `layouts`, `middlewares`), and a
+navigate-scoped `arizona_req` carrying the new URL. Cookies/headers on the returned Request are
+inherited from the original upgrade Req; `path`, `bindings` (path bindings from the router), and
+`params` reflect the new path/qs.
 
-**Shipped implementation:** `arizona_cowboy_req` implements both `arizona_req` and
-`arizona_adapter` -- parsing for the request callbacks plus `resolve_route/3` for SPA navigate via
+**Shipped implementation:** `arizona_cowboy_req` exports the optional `resolve_route/3` and runs
 `cowboy_router:execute/2` against the compiled dispatch stored by `arizona_cowboy_router`.
-`arizona_socket` recovers the adapter from the request itself (`arizona_req:adapter/1`), so route
-resolution doesn't need a separately-threaded adapter argument.
+HTTP-only adapters (no live process) can omit the callback entirely.
 
 ## API -- `arizona_req.erl`
 
@@ -349,11 +348,11 @@ Transport-agnostic upgrade bootstrap for WebSocket handlers.
 - `prepare/3(QS, Adapter, AdapterState)` -- accepts the pre-parsed upgrade query string
   (`[{binary(), binary() | true}]`), reads `_az_path` and `_az_reconnect` framework keys,
   strips them to compute the user-visible query string, resolves the target route via
-  `arizona_adapter:call_resolve_route/4`, runs middlewares, and returns:
+  `arizona_req:call_resolve_route/4`, runs middlewares, and returns:
   - `{halt, az:request()}` -- middleware blocked the upgrade; caller extracts the native raw
     via `arizona_req:raw/1` to emit its transport response
   - `{cont, State}` -- `State` is a map carrying `handler`, `bindings`, `on_mount`, `req`,
-    `reconnect` that the caller threads into `arizona_socket:init/3`
+    `reconnect` that the caller threads into `arizona_socket:init/4`
 
 Both `arizona_cowboy_ws` and `arizona_nova_ws` collapse to a few lines that call `parse_qs`,
 invoke `arizona_ws:prepare/3`, and wire the result into their framework's callback contract.
@@ -386,7 +385,7 @@ emits as a 3xx reply.
 
 **WebSocket mount:** `arizona_cowboy_ws:init/2` delegates to `arizona_ws:prepare/3`, which
 reads `_az_path`/`_az_reconnect`, resolves the route, runs middlewares, and returns the state
-for the transport to hand to `arizona_socket:init/3`. The socket calls
+for the transport to hand to `arizona_socket:init/4`. The socket calls
 `arizona_live:start_link/5` (passing `self()` as transport PID, the Req, and route `on_mount`
 hooks) then `arizona_live:mount/1`. Mount establishes the
 server-side snapshot (matching SSR). Returns `{ok, ViewId}` where ViewId comes from
@@ -613,11 +612,11 @@ parse_params(Req)   -> my_framework:qs(Req).
 %% ... etc
 ```
 
-**3. Implement the `arizona_adapter` behaviour** for route resolution during SPA navigation:
+**3. Implement the optional `resolve_route/3` callback** on the same `arizona_req` adapter
+module for route resolution during SPA navigation. HTTP-only adapters can skip this:
 
 ```erlang
--module(my_framework_adapter).
--behaviour(arizona_adapter).
+%% Adds to the same -module/-behaviour declared above.
 -export([resolve_route/3]).
 
 resolve_route(Path, Qs, State) ->

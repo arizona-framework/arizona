@@ -8,7 +8,7 @@ of request data with caching to avoid re-parsing across accesses.
 
 ## Adapter pattern
 
-A web-server adapter implements the behaviour callbacks:
+A web-server adapter implements the mandatory parsing callbacks:
 
 - `parse_bindings/1` -- extract route-pattern path bindings
 - `parse_params/1` -- parse the query string as a proplist
@@ -16,15 +16,14 @@ A web-server adapter implements the behaviour callbacks:
 - `parse_headers/1` -- headers as a map
 - `read_body/1` -- consume the request body
 
-The adapter module is stored inside the request record itself, so every
-accessor dispatches to the correct backend.
+Plus one optional callback for live-capable transports:
 
-Adapters whose requests are used with `arizona_socket` (i.e. live
-WebSocket sessions) must **also** implement the `arizona_adapter`
-behaviour and export `resolve_route/3`. `arizona_socket:handle_navigate`
-recovers the adapter via `arizona_req:adapter/1` and calls
-`resolve_route/3` for SPA navigation. Adapters used only for HTTP SSR
-(no live process) can skip `arizona_adapter`.
+- `resolve_route/3` -- resolve a SPA-navigate target. Required for
+  WebSocket sessions, omitted for HTTP-only adapters.
+
+The adapter module is stored inside the request record itself, so every
+accessor dispatches to the correct backend, and `arizona_socket`
+recovers the adapter via `arizona_req:adapter/1` for navigate.
 
 ## Lazy loading
 
@@ -79,6 +78,7 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 -export([headers/1]).
 -export([body/1]).
 -export([apply_middlewares/3]).
+-export([call_resolve_route/4]).
 -export([redirect/2]).
 -export([redirect/3]).
 -export([halted_redirect/1]).
@@ -116,6 +116,7 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 -export_type([middleware/0]).
 -export_type([middleware_result/0]).
 -export_type([redirect_status/0]).
+-export_type([qs/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -155,6 +156,9 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 %% etc.) remain expressible -- callers pick the semantics they want.
 -nominal redirect_status() :: 300..399.
 
+%% Query string passed to `resolve_route/3` for SPA navigate.
+-nominal qs() :: binary().
+
 %% --------------------------------------------------------------------
 %% Behaviour callbacks
 %% --------------------------------------------------------------------
@@ -164,6 +168,15 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 -callback parse_cookies(raw()) -> cookies().
 -callback parse_headers(raw()) -> headers().
 -callback read_body(raw()) -> {body(), raw()}.
+
+%% Optional: live-capable adapters export this for SPA navigate.
+%% Returns the route's `{Handler, RouteOpts, NavRequest}` triple.
+%% HTTP-only adapters can omit it; `arizona_socket:handle_navigate`
+%% only runs against adapters that supply the callback.
+-callback resolve_route(path(), qs(), raw()) ->
+    {module(), arizona_live:route_opts(), request()}.
+
+-optional_callbacks([resolve_route/3]).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -284,6 +297,20 @@ apply_middlewares([Mw | Rest], Req, Bindings) ->
         {cont, Req1, Bindings1} -> apply_middlewares(Rest, Req1, Bindings1);
         {halt, _Req1} = Halt -> Halt
     end.
+
+%% Internal use only -- invoked by `arizona_socket:handle_navigate/3`
+%% and `arizona_ws:prepare/3`. Crashes with `undef` if `Adapter` did
+%% not implement the optional `resolve_route/3` callback.
+-doc false.
+-spec call_resolve_route(Adapter, Path, Qs, Raw) ->
+    {module(), arizona_live:route_opts(), request()}
+when
+    Adapter :: adapter(),
+    Path :: path(),
+    Qs :: qs(),
+    Raw :: raw().
+call_resolve_route(Adapter, Path, Qs, Raw) ->
+    Adapter:resolve_route(Path, Qs, Raw).
 
 -doc """
 Stashes a 302 redirect intent in `Request` so downstream transports

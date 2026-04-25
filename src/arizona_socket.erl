@@ -220,7 +220,7 @@ handle_navigate(
     #socket{pid = Pid, view_id = OldVId, req = Req} = Socket
 ) ->
     Adapter = arizona_req:adapter(Req),
-    {H, RouteOpts, NewReq} = arizona_adapter:call_resolve_route(
+    {H, RouteOpts, NewReq} = arizona_req:call_resolve_route(
         Adapter, Path, Qs, arizona_req:raw(Req)
     ),
     IB = maps:get(bindings, RouteOpts, #{}),

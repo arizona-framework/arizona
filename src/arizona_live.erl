@@ -92,6 +92,7 @@ fingerprints already shipped in the initial HTML.
 
 -export_type([on_mount/0]).
 -export_type([on_mount_hook/0]).
+-export_type([route_opts/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -100,6 +101,18 @@ fingerprints already shipped in the initial HTML.
 -nominal on_mount_hook() ::
     fun((map(), az:request()) -> map()) | {module(), atom()}.
 -nominal on_mount() :: [on_mount_hook()].
+
+%% Route's static config: the map a router associates with each route
+%% declaration. Consumed by `arizona_http`, `arizona_render`, and the
+%% live runtime; produced by routers and the `arizona_req:resolve_route/3`
+%% callback. All keys are optional and defaulted at use-site.
+-nominal route_opts() :: #{
+    bindings => arizona_template:bindings(),
+    on_mount => on_mount(),
+    layouts => [arizona_render:layout()],
+    middlewares => [arizona_req:middleware()],
+    _ => term()
+}.
 
 %% --------------------------------------------------------------------
 %% Records

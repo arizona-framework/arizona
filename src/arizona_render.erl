@@ -74,7 +74,6 @@ op-code targets.
 %% --------------------------------------------------------------------
 
 -export_type([layout/0]).
--export_type([render_opts/0]).
 -export_type([static/0]).
 -export_type([dynamic/0]).
 -export_type([each_list/0]).
@@ -85,12 +84,6 @@ op-code targets.
 %% --------------------------------------------------------------------
 
 -nominal layout() :: {module(), atom()}.
-
--nominal render_opts() :: #{
-    layouts => [layout()],
-    bindings => map(),
-    on_mount => arizona_live:on_mount()
-}.
 
 -nominal static() :: binary().
 
@@ -174,7 +167,7 @@ route-level concept and is intentionally not honored here.
 """.
 -spec render_to_iolist(Handler, Opts) -> iolist() when
     Handler :: module(),
-    Opts :: render_opts().
+    Opts :: arizona_live:route_opts().
 render_to_iolist(Handler, Opts) ->
     Bindings0 = maps:get(bindings, Opts, #{}),
     {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
@@ -190,7 +183,7 @@ and optionally wraps the page output in a layout module.
 -spec render_view_to_iolist(Handler, Req, Opts) -> iolist() when
     Handler :: module(),
     Req :: az:request(),
-    Opts :: render_opts().
+    Opts :: arizona_live:route_opts().
 render_view_to_iolist(Handler, Req, Opts) ->
     Bindings0 = arizona_live:apply_on_mount(
         maps:get(on_mount, Opts, []),

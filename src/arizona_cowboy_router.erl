@@ -34,7 +34,6 @@ persistent term so the dev error page can build the SSE connect URL.
 %% --------------------------------------------------------------------
 
 -export_type([path/0]).
--export_type([live_opts/0]).
 -export_type([route/0]).
 
 %% --------------------------------------------------------------------
@@ -43,13 +42,8 @@ persistent term so the dev error page can build the SSE connect URL.
 
 -nominal path() :: binary().
 
--nominal live_opts() :: #{
-    layouts => [arizona_render:layout()],
-    bindings => map()
-}.
-
 -nominal route() ::
-    {live, path(), module(), live_opts()}
+    {live, path(), module(), arizona_live:route_opts()}
     | {ws, path(), map()}
     | {asset, path(), {dir, file:filename_all()}}
     | {asset, path(), {priv_dir, atom(), file:filename_all()}}

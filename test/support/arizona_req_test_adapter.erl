@@ -7,13 +7,12 @@ Backing `raw` value is a map carrying pre-computed values; each
 `arizona_req` callback is a simple map lookup. `read_body/1` also marks
 the raw map so tests can assert the updated raw is threaded through.
 
-Implements `arizona_adapter` as a no-op: tests never trigger a real
-`resolve_route/3` against this adapter (navigate paths exercised at the
-socket layer use the cowboy adapter), but the behaviour is declared so
-the contract surfaces in the module attributes and in dialyzer.
+`resolve_route/3` looks up a `routes` map on the raw value
+(`#{Path => {Handler, RouteOpts}}`); useful for exercising the optional
+`arizona_req` callback wiring at the unit-test layer without spinning
+up a cowboy router.
 """.
 -behaviour(arizona_req).
--behaviour(arizona_adapter).
 
 -export([new/0]).
 -export([new/1]).
@@ -40,4 +39,7 @@ parse_headers(#{headers := Headers}) -> Headers.
 
 read_body(#{body := Body} = Raw) -> {Body, Raw#{body_read => true}}.
 
-resolve_route(_Path, _Qs, _Raw) -> error(test_adapter_resolve_route_not_implemented).
+resolve_route(Path, _Qs, #{routes := Routes} = Raw) ->
+    {Handler, RouteOpts} = maps:get(Path, Routes),
+    NavReq = arizona_req:new(?MODULE, Raw, #{method => ~"GET", path => Path}),
+    {Handler, RouteOpts, NavReq}.
