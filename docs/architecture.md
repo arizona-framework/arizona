@@ -670,12 +670,8 @@ ws_init(NativeReq) ->
             my_framework:send_raw(arizona_req:raw(HaltReq));
         {cont, #{handler := H, bindings := IB, on_mount := OM,
                  req := ArzReq, reconnect := R}} ->
-            Opts = #{
-                reconnect => R, on_mount => OM, req => ArzReq,
-                adapter => my_framework_adapter,
-                adapter_state => my_framework:native(NativeReq)
-            },
-            handle_result(arizona_socket:init(H, IB, Opts), NativeReq)
+            Opts = #{reconnect => R, on_mount => OM},
+            handle_result(arizona_socket:init(H, IB, ArzReq, Opts), NativeReq)
     end.
 
 ws_receive(Data, #{socket := Socket} = State) ->

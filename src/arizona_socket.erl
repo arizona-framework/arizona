@@ -3,7 +3,7 @@
 Bridges a WebSocket frame stream with the live process.
 
 The transport layer (typically `arizona_cowboy_ws`) creates a socket
-via `init/3`, then forwards inbound text frames to `handle_in/2` and
+via `init/4`, then forwards inbound text frames to `handle_in/2` and
 inbox messages to `handle_info/2`. Each call returns a result tuple
 that the transport translates into WebSocket frames or close codes.
 
@@ -27,7 +27,7 @@ Outbound text frames are JSON maps with keys `~"o"` (ops) and/or
 The live process is linked. If it exits with a non-normal reason
 (or any handler in `handle_in/2` raises), the socket closes with
 code `4500` (server crash). The client reconnects on its own and
-the fresh handshake re-runs `init/3` with a new live process.
+the fresh handshake re-runs `init/4` with a new live process.
 """.
 
 -include("arizona.hrl").
