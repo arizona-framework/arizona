@@ -856,8 +856,13 @@ is_invalid_static_child(_) -> false.
 
 %% Pre-scan items (elements or mixed) for directives before compilation.
 %% This ensures nodiff is known upfront so all items compile consistently.
+%%
+%% Templates that contain a `?inner_content` slot (i.e. layouts) are
+%% automatically marked nodiff: a layout is rendered once at SSR and never
+%% re-rendered, so its dynamics can never update -- no point emitting `az`
+%% targets that are never patched.
 prescan_directives(Items) ->
-    lists:foldl(
+    Opts = lists:foldl(
         fun(Item, Acc) ->
             case is_element_tuple(Item) of
                 true ->
@@ -870,7 +875,23 @@ prescan_directives(Items) ->
         end,
         #{},
         Items
-    ).
+    ),
+    case lists:any(fun contains_inner_content/1, Items) of
+        true -> Opts#{diff => false};
+        false -> Opts
+    end.
+
+%% Walks an AST node looking for a `az:inner_content(_)` remote call.
+%% `?inner_content` expands to `az:inner_content(Bindings)` before the
+%% parse transform runs, so any layout template surfaces this call.
+contains_inner_content({call, _, {remote, _, {atom, _, az}, {atom, _, inner_content}}, _}) ->
+    true;
+contains_inner_content(Tuple) when is_tuple(Tuple) ->
+    lists:any(fun contains_inner_content/1, tuple_to_list(Tuple));
+contains_inner_content(List) when is_list(List) ->
+    lists:any(fun contains_inner_content/1, List);
+contains_inner_content(_) ->
+    false.
 
 directive_opts(<<"az-nodiff">>) -> {ok, #{diff => false}};
 directive_opts(_) -> false.
