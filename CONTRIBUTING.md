@@ -13,7 +13,7 @@
 
 ## Setup
 
-See [.tool-versions](.tool-versions) for required Erlang/OTP and Node versions.
+See `.tool-versions` for required Erlang/OTP and Node versions.
 
 ```bash
 git clone https://github.com/arizona-framework/arizona.git
@@ -33,8 +33,8 @@ Two commands cover day-to-day development:
   Dialyzer, coverage, E2E, and docs. CI re-runs it on the PR.
 
 For everything else (single-suite runs, coverage reports, individual
-check stages, doc generation, etc.) see the targets in the
-[Makefile](Makefile).
+check stages, doc generation, etc.) see the targets in the project's
+`Makefile`.
 
 ## License
 

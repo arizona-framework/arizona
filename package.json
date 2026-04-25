@@ -35,7 +35,7 @@
     "realtime",
     "server-side-rendering"
   ],
-  "author": "William Fank Thomé <contact@willilamthome.dev>",
+  "author": "William Fank Thomé <contact@williamthome.dev>",
   "license": "Apache-2.0",
   "sideEffects": false,
   "publishConfig": {
