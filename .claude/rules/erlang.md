@@ -61,6 +61,26 @@ Void elements (`br`, `img`, `input`, `hr`, `meta`, `link`, `base`, `col`, `embed
 | `{name, false}` | `{hidden, false}` | Stripped |
 | `'az-nodiff'` / `<<"az-nodiff">>` | Directive | Stripped, emits `diff => false` |
 
+## Comprehension generators
+
+Use the strict generator (`<:-`, `K := V <:-`) only when the LHS is a pattern that
+can fail to match -- a tuple, a map key/value pattern, an equality bind, etc. A
+strict generator with a pure variable LHS (`X <:- Source`) adds noise without
+adding any guarantee, since a bare variable always matches. In that case use the
+lazy generator (`<-`).
+
+```erlang
+%% Pattern LHS -- strict makes mismatches loud:
+[V || {_Az, V} <:- Snapshot]
+[K || K := _ <:- Map]
+
+%% Bare-variable LHS -- lazy:
+[F || F <- Files]
+[Pid || Pid <- Subscribers, Pid =/= Self]
+```
+
+Map comprehension generators are always strict (`<-` is not supported for maps).
+
 ## az-nodiff
 
 Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time directive. The parse transform strips it from HTML and emits `diff => false`. All dynamics in that compile unit get `undefined` Az (pre-scanned via `prescan_directives/1`). Children in separate `?html` calls are not affected at compile time, but safe because the parent's `diff => false` short-circuits before their dynamics are reached by the diff engine.
