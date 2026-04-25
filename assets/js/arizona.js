@@ -53,6 +53,10 @@ const W_SEND = 1;
 const W_CLOSE = 2;
 const W_UPDATE_PATH = 3;
 
+/** WebSocket close codes used by Arizona (must match `arizona_socket.erl`). */
+const WS_CLOSE_NORMAL = 1000;
+const WS_CLOSE_CRASH = 4500;
+
 // ---------------------------------------------------------------------------
 // Hook system -- element lifecycle hooks via az-hook attribute
 //
@@ -580,21 +584,31 @@ function moveItem(target, key, afterKey) {
 }
 
 /**
- * Resolve a nested item for patching: find the item element within a parent
- * element, then apply innerOps scoped to it.
- * @param {Element} parentEl -- parent item or container element
- * @param {string} az -- az attribute to find the container within parentEl
- * @param {string} key -- az-key of the item to patch
- * @param {Array<Array<*>>} innerOps -- ops scoped to the item
+ * Apply `innerOps` to the keyed child of `container`. Warns and no-ops if
+ * the key isn't present.
+ * @param {Element} container
+ * @param {string} key
+ * @param {Array<Array<*>>} innerOps
  */
-function patchItemEl(parentEl, az, key, innerOps) {
-    const container = resolveInnerEl(parentEl, az);
+function applyItemPatch(container, key, innerOps) {
     const item = container.querySelector(`:scope > [az-key="${key}"]`);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for patch`);
         return;
     }
     applyItemOps(item, innerOps);
+}
+
+/**
+ * Resolve a nested item for patching: find the inner container by az,
+ * then apply innerOps scoped to its keyed child.
+ * @param {Element} parentEl -- parent item or container element
+ * @param {string} az -- az attribute to find the container within parentEl
+ * @param {string} key -- az-key of the item to patch
+ * @param {Array<Array<*>>} innerOps -- ops scoped to the item
+ */
+function patchItemEl(parentEl, az, key, innerOps) {
+    applyItemPatch(resolveInnerEl(parentEl, az), key, innerOps);
 }
 
 /**
@@ -605,14 +619,7 @@ function patchItemEl(parentEl, az, key, innerOps) {
  * @param {Array<Array<*>>} innerOps
  */
 function patchItem(target, key, innerOps) {
-    withTarget(target, (el) => {
-        const item = el.querySelector(`:scope > [az-key="${key}"]`);
-        if (!item) {
-            console.warn(`[arizona] stream item az-key="${key}" not found for patch`);
-            return;
-        }
-        applyItemOps(item, innerOps);
-    });
+    withTarget(target, (el) => applyItemPatch(el, key, innerOps));
 }
 
 /**
@@ -1272,11 +1279,11 @@ function connect(endpoint, params = {}) {
                 _connected = false;
                 document.documentElement.classList.add('az-disconnected');
                 document.documentElement.classList.remove('az-connected');
-                if (msg[1] === 4500) {
+                if (msg[1] === WS_CLOSE_CRASH) {
                     location.reload();
                     return;
                 }
-                if (msg[1] !== 1000) saveFormState();
+                if (msg[1] !== WS_CLOSE_NORMAL) saveFormState();
                 break;
             }
         }
@@ -1295,7 +1302,7 @@ function connect(endpoint, params = {}) {
                 workerPost(W_SEND, data);
             },
             /** @param {number} [code] */ close(code) {
-                workerPost(W_CLOSE, code || 1000);
+                workerPost(W_CLOSE, code || WS_CLOSE_NORMAL);
             },
             set onmessage(fn) {
                 _onmessageHook = fn;
@@ -1318,6 +1325,11 @@ function connect(endpoint, params = {}) {
         _connected = false;
         _pendingScroll = null;
         _savedForms.clear();
+        // Run destroyed() on every tracked hook and clear the map. Without
+        // this, hook instances leak when host code removes the DOM by means
+        // arizona didn't observe (third-party libs, test teardown via
+        // `document.body.innerHTML = ''`).
+        for (const el of [..._hooks.keys()]) destroyHook(el);
         // Debounce/throttle timers live in a WeakMap keyed by element and
         // aren't iterable. They all guard on `_connected` inside their fun,
         // so after setting `_connected = false` above a late-firing timer

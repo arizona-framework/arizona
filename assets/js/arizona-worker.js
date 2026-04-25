@@ -65,7 +65,10 @@ function idbLoadAll() {
                         c.continue();
                     } else resolve(entries);
                 };
-                req.onerror = () => resolve([]);
+                req.onerror = () => {
+                    console.warn('[arizona] idb cache cursor error:', req.error);
+                    resolve([]);
+                };
             }),
     );
 }
@@ -270,10 +273,14 @@ self.onmessage = (e) => {
             if (_ws) _ws.close(msg[1]);
             break;
         case 3: {
-            // [3, newPath] -- update path for reconnect
+            // [3, newPath] -- update the framework `_az_path` query
+            // parameter so the next reconnect URL reflects the SPA-navigated
+            // path. Use URL/searchParams to target the exact key (a regex
+            // on `path=` would match user params like `upload_path=...`).
             if (!_wsUrl) break;
-            const newPath = encodeURIComponent(msg[1]);
-            _wsUrl = _wsUrl.replace(/path=[^&]*/, `path=${newPath}`);
+            const u = new URL(_wsUrl);
+            u.searchParams.set('_az_path', msg[1]);
+            _wsUrl = u.toString();
             break;
         }
     }

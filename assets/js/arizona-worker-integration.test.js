@@ -221,6 +221,16 @@ describe('arizona-worker', () => {
         expect(ws.latest().url).toContain('_az_path=%2Fnew');
     });
 
+    it('update-path leaves user params containing "path" in their name untouched', () => {
+        slf.send([0, 'ws://host/ws?upload_path=%2Ffoo&_az_path=%2Fold']);
+        slf.send([3, '/new']);
+        ws.latest().close(1006);
+        vi.advanceTimersByTime(10000);
+        const url = ws.latest().url;
+        expect(url).toContain('upload_path=%2Ffoo');
+        expect(url).toContain('_az_path=%2Fnew');
+    });
+
     it('heartbeat sends ping after 30s, closes if pong not received before next tick', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();

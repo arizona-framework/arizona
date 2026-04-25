@@ -93,15 +93,21 @@ function zipTemplate(statics, dynamics) {
 
 /**
  * If `v` is a fingerprinted template object (`{f, ...}`), resolve it to
- * HTML; otherwise return it as-is.
+ * HTML. `null`/`undefined` flatten to empty string so a stray nullish
+ * value never lands in the DOM as the literal "null" or "undefined".
+ * Everything else passes through (numbers, booleans, plain strings).
  * @param {*} v
  */
 function resolveOrPassthrough(v) {
-    return v !== null && typeof v === 'object' && v.f !== undefined ? resolveHtml(v) : v;
+    if (v === null || v === undefined) return '';
+    return typeof v === 'object' && v.f !== undefined ? resolveHtml(v) : v;
 }
 
 /**
- * Compute reconnection delay with step backoff and jitter.
+ * Compute reconnection delay with step backoff and ±20% jitter.
+ * Caps at 10 s deliberately -- after 4 attempts we keep retrying at the
+ * same cadence rather than escalating, so a long server outage doesn't
+ * turn into hour-long client gaps.
  * @param {number} attempt
  * @returns {number}
  */
