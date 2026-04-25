@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
+      - uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
         id: setup-beam
         with:
           version-type: strict
@@ -97,14 +97,14 @@ jobs:
           >> "${GITHUB_OUTPUT}"
 
       - name: Cache _build
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: _build
           key: ${{ steps.set-build-key.outputs.key }}
           restore-keys: ${{ steps.set-build-key.outputs.prefix }}
 
       - name: Cache rebar3
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/rebar3
           key: ${{ steps.set-rebar-key.outputs.key }}
@@ -125,7 +125,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
+      - uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
         id: setup-beam
         with:
           version-type: strict
@@ -133,7 +133,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -141,7 +141,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -162,7 +162,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
+      - uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
         id: setup-beam
         with:
           version-type: strict
@@ -170,7 +170,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -178,7 +178,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -208,7 +208,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
+      - uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
         id: setup-beam
         with:
           version-type: strict
@@ -216,7 +216,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -224,7 +224,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -275,7 +275,7 @@ jobs:
           mkdir -p /root/.docker
           echo '{}' > /root/.docker/config.json
 
-      - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
+      - uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
         id: setup-beam
         with:
           version-type: strict
@@ -285,7 +285,7 @@ jobs:
       # Ref: https://github.com/orgs/community/discussions/53771
       - name: Cache apt packages
         id: cache-apt
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: /var/cache/apt/archives
           key: apt-${{ runner.os }}-inotify-tools
@@ -296,7 +296,7 @@ jobs:
           apt-get install -y inotify-tools make
 
       - name: Setup Node.js
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: .tool-versions
           cache: "npm"
@@ -304,7 +304,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -312,7 +312,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
@@ -370,7 +370,7 @@ jobs:
           mkdir -p /root/.docker
           echo '{}' > /root/.docker/config.json
 
-      - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
+      - uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
         id: setup-beam
         with:
           version-type: strict
@@ -380,7 +380,7 @@ jobs:
       # Ref: https://github.com/orgs/community/discussions/53771
       - name: Cache apt packages
         id: cache-apt
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: /var/cache/apt/archives
           key: apt-${{ runner.os }}-inotify-tools
@@ -391,7 +391,7 @@ jobs:
           apt-get install -y inotify-tools make
 
       - name: Setup Node.js
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: .tool-versions
           cache: "npm"
@@ -399,7 +399,7 @@ jobs:
 
       - name: Restore _build cache
         id: restore-build-cache
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: _build
           key: ${{ needs.cache-erlang.outputs.build-cache-key }}
@@ -407,7 +407,7 @@ jobs:
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/rebar3
           key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}

@@ -53,14 +53,14 @@ jobs:
           token: ${{steps.app-token.outputs.token}}
           ref: ${{needs.branch.outputs.head_ref}}
 
-      - uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
+      - uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
         id: setup-beam
         with:
           version-type: strict
           version-file: .tool-versions
 
       - name: Restore _build
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: _build
           key: "_build-cache-for\
@@ -70,7 +70,7 @@ jobs:
             -hash-${{hashFiles('rebar.lock')}}-${{hashFiles('rebar.config')}}"
 
       - name: Restore rebar3's cache
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/rebar3
           key: "rebar3-cache-for\
