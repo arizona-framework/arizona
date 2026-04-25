@@ -1,5 +1,9 @@
 MAKEFLAGS += -j$(shell nproc)
 
+# Force bash so recipes using `set -o pipefail` (check-hank, check-doc) work
+# on systems where /bin/sh is dash (Debian/Ubuntu CI runners).
+SHELL := /bin/bash
+
 .PHONY: all start ci precommit compile \
 	fmt fmt-erl fmt-js \
 	lint \
