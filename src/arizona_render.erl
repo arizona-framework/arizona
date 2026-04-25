@@ -400,7 +400,7 @@ render_ssr_val(#{t := ?EACH, source := Source, template := Tmpl}) when is_map(So
     #{t => ?EACH, items => ItemSnaps, template => Tmpl};
 render_ssr_val(#{stateful := H, props := Props}) ->
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
-    make_ssr_child_snap(arizona_handler:call_render(H, B1));
+    render_ssr_val(arizona_handler:call_render(H, B1));
 render_ssr_val(#{callback := Callback, props := Props}) ->
     Tmpl = Callback(Props),
     render_ssr_val(Tmpl);
@@ -419,22 +419,6 @@ render_ssr_val(Val) ->
 
 render_ssr_attr(Name, Val) ->
     arizona_template:render_attr(Name, Val).
-
-make_ssr_child_snap(#{s := S, d := Dynamics} = Tmpl) ->
-    Vals = render_ssr_dynamics(Dynamics),
-    Snap = #{
-        s => S,
-        d => [
-            {arizona_template:dyn_az(D), Val}
-         || D <:- Dynamics && Val <:- Vals
-        ]
-    },
-    Snap1 =
-        case Tmpl of
-            #{diff := false} -> Snap#{diff => false};
-            #{} -> Snap
-        end,
-    arizona_template:maybe_put_fingerprint(Tmpl, Snap1).
 
 render_fp_val({attr, Name, V}) ->
     arizona_template:render_attr(Name, V);
