@@ -6,7 +6,7 @@
 render(Bindings) ->
     ?html([
         ~"<!DOCTYPE html>",
-        {html, [az_nodiff], [
+        {html, [], [
             {head, [], [
                 {meta, [{charset, ~"utf-8"}], []},
                 {title, [], [maps:get(title, Bindings, ~"Arizona")]}

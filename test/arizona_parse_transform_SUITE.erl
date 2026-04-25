@@ -60,6 +60,9 @@
     layout_single_element/1,
     layout_static_only/1,
     layout_void_dynamic_attr/1,
+    auto_nodiff_inner_content_top_level/1,
+    auto_nodiff_inner_content_nested/1,
+    auto_nodiff_no_inner_content_no_diff_key/1,
     mixed_attr_forms/1,
     mixed_list_no_nodiff/1,
     multiple_stateful_calls/1,
@@ -261,6 +264,9 @@ groups() ->
             layout_mixed_dynamic_item,
             layout_nested_no_az,
             layout_mixed_with_bare_dynamic,
+            auto_nodiff_inner_content_top_level,
+            auto_nodiff_inner_content_nested,
+            auto_nodiff_no_inner_content_no_diff_key,
             mixed_list_no_nodiff
         ]},
         %% Tests 78-82: UTF-8 tests
@@ -2421,6 +2427,62 @@ mixed_list_no_nodiff(Config) when is_list(Config) ->
     StaticsBin = iolist_to_binary(maps:get(s, T)),
     ?assertNotEqual(nomatch, binary:match(StaticsBin, <<"az=\"">>)),
     ?assertNotEqual(nomatch, binary:match(StaticsBin, <<"<!--az:">>)).
+
+%% Test 77d: ?inner_content at top level of a mixed list -- auto-detected
+%% as a layout, gets `diff => false` without explicit `az-nodiff`.
+auto_nodiff_inner_content_top_level(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_auto_nodiff_top). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html(["
+        "        <<\"<outer>\">>, "
+        "        az:inner_content(Bindings), "
+        "        <<\"</outer>\">>"
+        "    ]). "
+    ),
+    T = Mod:render(#{inner_content => <<"hi">>}),
+    ?assertEqual(false, maps:get(diff, T)),
+    %% Dynamics carry undefined Az (nodiff -- never used as op target)
+    [{undefined, Fun, {pt_auto_nodiff_top, 1}}] = maps:get(d, T),
+    ?assertEqual(<<"hi">>, Fun()).
+
+%% Test 77e: ?inner_content nested inside an element's children -- the
+%% recursive AST walker still finds it and auto-marks the template.
+auto_nodiff_inner_content_nested(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_auto_nodiff_nested). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'html', [], ["
+        "            {'body', [], [az:inner_content(Bindings)]}"
+        "        ]}"
+        "    ). "
+    ),
+    T = Mod:render(#{inner_content => <<"page">>}),
+    ?assertEqual(false, maps:get(diff, T)),
+    [{undefined, Fun, {pt_auto_nodiff_nested, 1}}] = maps:get(d, T),
+    ?assertEqual(<<"page">>, Fun()).
+
+%% Test 77f: A mixed list shaped like a layout but without ?inner_content
+%% (e.g. `[{p, [], []}, ~"foo", {p, [], []}]`) is NOT auto-marked. The
+%% template emits no `diff` key and dynamics get normal binary Az targets.
+auto_nodiff_no_inner_content_no_diff_key(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_auto_nodiff_absent). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html(["
+        "        {'p', [], []}, "
+        "        <<\"foo\">>, "
+        "        {'p', [], [maps:get(x, Bindings)]}"
+        "    ]). "
+    ),
+    T = Mod:render(#{x => <<"hello">>}),
+    ?assertNot(maps:is_key(diff, T)),
+    [{Az, _Fun, {pt_auto_nodiff_absent, _}}] = maps:get(d, T),
+    ?assert(is_binary(Az)).
 
 %% ==========================================================================
 %% UTF-8 tests
