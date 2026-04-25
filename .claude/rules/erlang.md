@@ -26,7 +26,7 @@ Templates are plain maps: `#{s => [binary()], d => [dynamic()], f => binary()}`.
 ## Header files
 
 ```
-include/arizona_common.hrl      -- utility macros (?get, ?html, ?each, etc.) + arizona_js.hrl
+include/arizona_common.hrl      -- utility macros (?get, ?html, ?each, ?stateful, ?stateless, ?inner_content, ?connected)
 include/arizona_handler.hrl     -- shared base: parse_transform, send/subscribe macros, arizona_common.hrl
 include/arizona_view.hrl        -- -behaviour(arizona_view) + -behaviour(arizona_handler); pulls arizona_handler.hrl
 include/arizona_stateful.hrl    -- -behaviour(arizona_stateful) + -behaviour(arizona_handler); pulls arizona_handler.hrl
