@@ -620,7 +620,7 @@ live_navigate_round_trip(Config) when is_list(Config) ->
     %% Navigate back to page -- fresh mount, counter starts at 0
     %% Returns fingerprint payload; verify counter dynamics contain "0"
     {ok, _, PageContent} = arizona_live:navigate(
-        Pid, arizona_page, #{title => <<"Welcome">>}, undefined
+        Pid, arizona_page, #{title => <<"Welcome">>}, arizona_req_test_adapter:new()
     ),
     ?assert(is_binary(maps:get(<<"f">>, PageContent))),
     %% Counter child dynamics should show count 0
