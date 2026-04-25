@@ -1,82 +1,92 @@
 -module(arizona_sup).
--moduledoc false.
+-moduledoc """
+Top-level supervisor for the Arizona application.
+
+Always supervises `arizona_pubsub` (the `pg`-based pubsub scope). Also
+supervises one `arizona_watcher` per rule when the dev-mode reloader is
+enabled via the `reloader` application env. Live processes are not
+managed here -- they're started ad hoc by the transport layer
+(`arizona_socket:init/4`) and linked to the calling WebSocket process
+so they share its lifetime.
+
+## Reloader config
+
+```erlang
+{arizona, [
+    {reloader, #{
+        enabled => true,
+        rules => [
+            #{directory => "src",
+              patterns => [".*\\\\.erl$"],
+              callback => fun arizona_reloader:reload_erl/1}
+        ]
+    }}
+]}
+```
+
+Each rule map is passed to `arizona_watcher:start_link/2` with
+`directory` stripped out. Malformed config (missing `directory`,
+non-list `rules`) crashes the supervisor init so boot errors are
+obvious.
+""".
 -behaviour(supervisor).
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([start_link/1]).
+-export([start_link/0]).
 
 %% --------------------------------------------------------------------
-%% Types exports
-%% --------------------------------------------------------------------
-
--export_type([config/0]).
-
-%% --------------------------------------------------------------------
-%% Types definitions
-%% --------------------------------------------------------------------
-
--nominal config() :: #{
-    watcher_enabled => boolean()
-}.
-
-%% --------------------------------------------------------------------
-%% Behaviour (supervisor) exports
+%% supervisor callback exports
 %% --------------------------------------------------------------------
 
 -export([init/1]).
 
 %% --------------------------------------------------------------------
-%% API function definitions
+%% API Functions
 %% --------------------------------------------------------------------
 
--spec start_link(Config) -> supervisor:startlink_ret() when
-    Config :: config().
-start_link(Config) ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, Config).
+-doc """
+Starts the supervisor under the well-known name `arizona_sup`.
+""".
+-spec start_link() -> supervisor:startlink_ret().
+start_link() ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, #{}).
 
 %% --------------------------------------------------------------------
-%% Behaviour (supervisor) callbacks
+%% supervisor Callbacks
 %% --------------------------------------------------------------------
 
--spec init(Config) -> {ok, {SupFlags, [ChildSpec]}} when
-    Config :: config(),
+-spec init(Args) -> {ok, {SupFlags, [ChildSpec]}} when
+    Args :: map(),
     SupFlags :: supervisor:sup_flags(),
     ChildSpec :: supervisor:child_spec().
-init(Config) ->
-    SupFlags = #{
-        strategy => one_for_all,
-        intensity => 0,
-        period => 1
-    },
-    ChildSpecs = build_child_specs(Config),
-    {ok, {SupFlags, ChildSpecs}}.
+init(#{}) ->
+    Reloader = application:get_env(arizona, reloader, #{}),
+    Children = [pubsub_spec() | watcher_specs(Reloader)],
+    {ok, {#{strategy => one_for_one}, Children}}.
 
 %% --------------------------------------------------------------------
-%% Internal Functions
+%% Internal functions
 %% --------------------------------------------------------------------
 
-build_child_specs(Config) ->
-    BaseSpecs = [
-        #{
-            id => arizona_live,
-            start => {pg, start_link, [arizona_live]}
-        },
-        #{
-            id => arizona_pubsub,
-            start => {pg, start_link, [arizona_pubsub]}
-        }
-    ],
-    maybe_add_watcher_sup(Config, BaseSpecs).
+pubsub_spec() ->
+    #{
+        id => arizona_pubsub,
+        start => {arizona_pubsub, start_link, []},
+        type => worker
+    }.
 
-maybe_add_watcher_sup(#{watcher_enabled := true}, BaseSpecs) ->
-    WatcherSupSpec = #{
-        id => arizona_watcher_sup,
-        start => {arizona_watcher_sup, start_link, []},
-        type => supervisor
-    },
-    [WatcherSupSpec | BaseSpecs];
-maybe_add_watcher_sup(_Config, BaseSpecs) ->
-    BaseSpecs.
+watcher_specs(#{enabled := true, rules := Rules}) when is_list(Rules) ->
+    [watcher_spec(I, R) || {I, R} <- lists:enumerate(Rules)];
+watcher_specs(_) ->
+    [].
+
+watcher_spec(I, #{directory := Dir} = Rule) ->
+    Opts = maps:without([directory], Rule),
+    #{
+        id => {arizona_watcher, I},
+        start => {arizona_watcher, start_link, [Dir, Opts]},
+        type => worker
+    }.

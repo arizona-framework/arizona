@@ -1,289 +1,182 @@
 -module(arizona_pubsub_SUITE).
--behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
--compile([export_all, nowarn_export_all]).
-
-%% --------------------------------------------------------------------
-%% Behaviour (ct_suite) callbacks
-%% --------------------------------------------------------------------
+-export([
+    all/0,
+    groups/0,
+    init_per_suite/1,
+    end_per_suite/1,
+    end_per_testcase/2
+]).
+-export([
+    join_leave/1,
+    broadcast/1,
+    broadcast_from/1,
+    multiple_subscribers/1,
+    cross_group_isolation/1,
+    empty_group/1,
+    subscriber_cleanup/1,
+    message_ordering/1,
+    duplicate_join/1
+]).
 
 all() ->
-    [
-        {group, pubsub_tests}
-    ].
+    [{group, tests}].
 
 groups() ->
     [
-        {pubsub_tests, [parallel], [
-            join_leave_test,
-            broadcast_test,
-            broadcast_from_test,
-            multiple_subscribers_test,
-            cross_topic_isolation_test,
-            empty_topic_test,
-            subscriber_cleanup_test,
-            message_ordering_test
+        {tests, [sequence], [
+            join_leave,
+            broadcast,
+            broadcast_from,
+            multiple_subscribers,
+            cross_group_isolation,
+            empty_group,
+            subscriber_cleanup,
+            message_ordering,
+            duplicate_join
         ]}
     ].
 
 init_per_suite(Config) ->
-    % Start pg group for arizona_pubsub (ignore if already started)
-    PgPid =
-        case pg:start(arizona_pubsub) of
-            {ok, Pid} -> Pid;
-            {error, {already_started, Pid}} -> Pid
-        end,
-    [{pg_pid, PgPid} | Config].
+    case erlang:whereis(arizona_pubsub) of
+        undefined ->
+            {ok, Pid} = pg:start_link(arizona_pubsub),
+            unlink(Pid);
+        _ ->
+            ok
+    end,
+    Config.
 
-end_per_suite(Config) ->
-    {pg_pid, PgPid} = proplists:lookup(pg_pid, Config),
-    exit(PgPid, normal),
-
+end_per_suite(Config) when is_list(Config) ->
     ok.
 
-%% --------------------------------------------------------------------
-%% PubSub tests
-%% --------------------------------------------------------------------
-
-join_leave_test(_Config) ->
-    ct:comment("Test joining and leaving topics"),
-    Topic = atom_to_binary(?FUNCTION_NAME),
-
-    % Initially no members
-    ?assertEqual([], arizona_pubsub:get_members(Topic)),
-
-    % Join topic
-    ok = arizona_pubsub:join(Topic, self()),
-    ?assertEqual([self()], arizona_pubsub:get_members(Topic)),
-
-    % Leave topic
-    ok = arizona_pubsub:leave(Topic, self()),
-    ?assertEqual([], arizona_pubsub:get_members(Topic)),
-
-    % Leave again (should return not_joined since already left)
-    not_joined = arizona_pubsub:leave(Topic, self()).
-
-broadcast_test(_Config) ->
-    ct:comment("Test broadcasting messages to all subscribers"),
-    Topic = atom_to_binary(?FUNCTION_NAME),
-    Message = #{type => ~"test", data => ~"hello"},
-
-    ok = arizona_pubsub:join(Topic, self()),
-    ok = arizona_pubsub:broadcast(Topic, Message),
-    expect_message(Topic, Message),
-    ok = arizona_pubsub:leave(Topic, self()).
-
-broadcast_from_test(_Config) ->
-    ct:comment("Test broadcasting messages excluding sender"),
-    Topic = atom_to_binary(?FUNCTION_NAME),
-    Message = #{type => ~"test", data => ~"exclude_sender"},
-
-    ok = arizona_pubsub:join(Topic, self()),
-    ok = arizona_pubsub:broadcast_from(self(), Topic, Message),
-    expect_no_message(),
-    ok = arizona_pubsub:leave(Topic, self()).
-
-multiple_subscribers_test(_Config) ->
-    ct:comment("Test broadcasting to multiple subscribers"),
-    Topic = atom_to_binary(?FUNCTION_NAME),
-    Message = #{type => ~"multi", data => ~"broadcast"},
-
-    % Spawn helper processes
-    TestPids = spawn_subscribers(3, Topic),
-
-    % Wait for all spawned processes to join
-    wait_for_subscribers_joined(TestPids),
-
-    % Also join from test process
-    ok = arizona_pubsub:join(Topic, self()),
-
-    % Verify all subscribers are registered
-    Members = arizona_pubsub:get_members(Topic),
-    % 3 spawned + self
-    ?assertEqual(4, length(Members)),
-
-    % Broadcast message
-    ok = arizona_pubsub:broadcast(Topic, Message),
-
-    expect_message(Topic, Message),
-
-    % Verify all spawned processes received message
-    verify_subscribers_received(TestPids, Topic, Message),
-
-    % Clean up
-    cleanup_subscribers(TestPids, Topic),
-    ok = arizona_pubsub:leave(Topic, self()).
-
-cross_topic_isolation_test(_Config) ->
-    ct:comment("Test that topics are isolated from each other"),
-    Topic1 = <<(atom_to_binary(?FUNCTION_NAME))/binary, "_1">>,
-    Topic2 = <<(atom_to_binary(?FUNCTION_NAME))/binary, "_2">>,
-    Message1 = #{topic => Topic1},
-    Message2 = #{topic => Topic2},
-
-    % Join only topic1
-    ok = arizona_pubsub:join(Topic1, self()),
-
-    % Broadcast to both topics
-    ok = arizona_pubsub:broadcast(Topic1, Message1),
-    ok = arizona_pubsub:broadcast(Topic2, Message2),
-
-    expect_message(Topic1, Message1),
-    expect_no_message(),
-
-    % Clean up
-    ok = arizona_pubsub:leave(Topic1, self()).
-
-empty_topic_test(_Config) ->
-    ct:comment("Test broadcasting to empty topics"),
-    Topic = atom_to_binary(?FUNCTION_NAME),
-    Message = #{data => ~"nobody_listening"},
-
-    % Verify topic is empty
-    ?assertEqual([], arizona_pubsub:get_members(Topic)),
-
-    % Broadcasting to empty topic should work without error
-    ok = arizona_pubsub:broadcast(Topic, Message),
-    ok = arizona_pubsub:broadcast_from(self(), Topic, Message).
-
-subscriber_cleanup_test(_Config) ->
-    ct:comment("Test that dead processes are cleaned up from topics"),
-    Topic = atom_to_binary(?FUNCTION_NAME),
-
-    % Spawn a process that will die
-    DeadPid = spawn(fun() ->
-        arizona_pubsub:join(Topic, self()),
-        timer:sleep(10),
-        exit(normal)
-    end),
-
-    % Wait for process to join and die
-    timer:sleep(50),
-
-    % Dead process should eventually be removed from members
-    % Note: pg handles cleanup automatically when processes die
-    Members = arizona_pubsub:get_members(Topic),
-    ?assertNot(lists:member(DeadPid, Members)).
-
-message_ordering_test(_Config) ->
-    ct:comment("Test message ordering for single subscriber"),
-    Topic = atom_to_binary(?FUNCTION_NAME),
-    Messages = [#{seq => N} || N <- lists:seq(1, 5)],
-
-    % Join topic
-    ok = arizona_pubsub:join(Topic, self()),
-
-    % Send messages in order
+end_per_testcase(_TC, _Config) ->
+    %% Clean up: leave all groups this process may have joined.
     lists:foreach(
-        fun(Message) ->
-            arizona_pubsub:broadcast(Topic, Message)
+        fun(Group) ->
+            case lists:member(self(), arizona_pubsub:subscribers(Group)) of
+                true -> arizona_pubsub:unsubscribe(Group, self());
+                false -> ok
+            end
         end,
-        Messages
+        [test_group, group_a, group_b, order_group]
     ),
+    _ = flush(),
+    ok.
 
-    % Receive messages and verify order
-    ReceivedMessages = collect_messages(Topic, length(Messages), []),
-    ExpectedMessages = [{pubsub_message, Topic, Msg} || Msg <- Messages],
-    ?assertEqual(ExpectedMessages, ReceivedMessages),
+join_leave(Config) when is_list(Config) ->
+    ?assertEqual([], arizona_pubsub:subscribers(test_group)),
+    ok = arizona_pubsub:subscribe(test_group, self()),
+    ?assert(lists:member(self(), arizona_pubsub:subscribers(test_group))),
+    ok = arizona_pubsub:unsubscribe(test_group, self()),
+    ?assertNot(lists:member(self(), arizona_pubsub:subscribers(test_group))).
 
-    % Clean up
-    ok = arizona_pubsub:leave(Topic, self()).
-
-%% --------------------------------------------------------------------
-%% Helper functions
-%% --------------------------------------------------------------------
-
-% Expect to receive a specific pubsub message
-expect_message(Topic, Message) ->
-    expect_message(Topic, Message, 1000).
-
-expect_message(Topic, Message, Timeout) ->
+broadcast(Config) when is_list(Config) ->
+    ok = arizona_pubsub:subscribe(test_group, self()),
+    ok = arizona_pubsub:broadcast(test_group, hello),
     receive
-        {pubsub_message, ReceivedTopic, ReceivedMessage} ->
-            ?assertEqual(Topic, ReceivedTopic),
-            ?assertEqual(Message, ReceivedMessage)
-    after Timeout ->
-        ct:fail("Did not receive expected pubsub message")
+        hello -> ok
+    after 1000 -> ct:fail(timeout)
     end.
 
-% Expect NOT to receive any pubsub message
-expect_no_message() ->
-    expect_no_message(100).
+broadcast_from(Config) when is_list(Config) ->
+    ok = arizona_pubsub:subscribe(test_group, self()),
+    ok = arizona_pubsub:broadcast_from(self(), test_group, excluded),
+    timer:sleep(50),
+    ?assertEqual([], flush()).
 
-expect_no_message(Timeout) ->
-    receive
-        {pubsub_message, _, _} ->
-            ct:fail("Should not have received any pubsub message")
-    after Timeout ->
-        ok
-    end.
-
-spawn_subscribers(Count, Topic) ->
-    TestPid = self(),
-    [
+multiple_subscribers(Config) when is_list(Config) ->
+    Self = self(),
+    Pids = [
         spawn_link(fun() ->
-            ok = arizona_pubsub:join(Topic, self()),
-            TestPid ! {subscriber_joined, self()},
-            subscriber_loop(TestPid)
+            ok = arizona_pubsub:subscribe(test_group, self()),
+            Self ! {joined, self()},
+            receive
+                msg -> Self ! {got, self()}
+            after 5000 -> exit(timeout)
+            end
         end)
-     || _ <- lists:seq(1, Count)
-    ].
+     || _ <- [1, 2, 3]
+    ],
+    [
+        receive
+            {joined, P} -> ok
+        after 1000 -> ct:fail({join_timeout, P})
+        end
+     || P <- Pids
+    ],
+    ok = arizona_pubsub:broadcast(test_group, msg),
+    Received = [
+        receive
+            {got, P} -> P
+        after 1000 -> ct:fail({timeout, P})
+        end
+     || P <- Pids
+    ],
+    ?assertEqual(lists:sort(Pids), lists:sort(Received)).
 
-subscriber_loop(TestPid) ->
+cross_group_isolation(Config) when is_list(Config) ->
+    ok = arizona_pubsub:subscribe(group_a, self()),
+    ok = arizona_pubsub:broadcast(group_b, leaked),
+    timer:sleep(50),
+    ?assertEqual([], flush()).
+
+empty_group(Config) when is_list(Config) ->
+    ?assertEqual(ok, arizona_pubsub:broadcast(test_group, nobody_here)).
+
+subscriber_cleanup(Config) when is_list(Config) ->
+    Pid = spawn(fun() ->
+        receive
+            stop -> ok
+        after 5000 -> exit(timeout)
+        end
+    end),
+    ok = arizona_pubsub:subscribe(test_group, Pid),
+    ?assert(lists:member(Pid, arizona_pubsub:subscribers(test_group))),
+    exit(Pid, kill),
+    timer:sleep(50),
+    ?assertNot(lists:member(Pid, arizona_pubsub:subscribers(test_group))).
+
+message_ordering(Config) when is_list(Config) ->
+    ok = arizona_pubsub:subscribe(order_group, self()),
+    ok = arizona_pubsub:broadcast(order_group, 1),
+    ok = arizona_pubsub:broadcast(order_group, 2),
+    ok = arizona_pubsub:broadcast(order_group, 3),
     receive
-        {pubsub_message, Topic, Message} ->
-            % Send confirmation back to test process
-            TestPid ! {subscriber_received, self(), Topic, Message},
-            subscriber_loop(TestPid);
-        stop ->
-            ok
-    after 5000 ->
-        % Timeout - this indicates a test problem
-        ct:fail("Subscriber process timed out waiting for message or stop signal")
+        1 -> ok
+    after 1000 -> ct:fail(timeout)
+    end,
+    receive
+        2 -> ok
+    after 1000 -> ct:fail(timeout)
+    end,
+    receive
+        3 -> ok
+    after 1000 -> ct:fail(timeout)
     end.
 
-verify_subscribers_received(Pids, ExpectedTopic, ExpectedMessage) ->
-    lists:foreach(
-        fun(Pid) ->
-            receive
-                {subscriber_received, Pid, ReceivedTopic, ReceivedMessage} ->
-                    ?assertEqual(ExpectedTopic, ReceivedTopic),
-                    ?assertEqual(ExpectedMessage, ReceivedMessage)
-            after 1000 ->
-                ct:fail(io_lib:format("Subscriber ~p did not receive message", [Pid]))
-            end
-        end,
-        Pids
-    ).
-
-cleanup_subscribers(Pids, Topic) ->
-    lists:foreach(
-        fun(Pid) ->
-            arizona_pubsub:leave(Topic, Pid),
-            Pid ! stop
-        end,
-        Pids
-    ).
-
-collect_messages(_Topic, 0, Acc) ->
-    lists:reverse(Acc);
-collect_messages(Topic, Count, Acc) ->
+duplicate_join(Config) when is_list(Config) ->
+    ok = arizona_pubsub:subscribe(test_group, self()),
+    {error, already_joined} = arizona_pubsub:subscribe(test_group, self()),
+    Count = length([
+        P
+     || P <- arizona_pubsub:subscribers(test_group),
+        P =:= self()
+    ]),
+    ?assertEqual(1, Count),
+    ok = arizona_pubsub:broadcast(test_group, dup_msg),
     receive
-        {pubsub_message, Topic, _Message} = Msg ->
-            collect_messages(Topic, Count - 1, [Msg | Acc])
-    after 1000 ->
-        ct:fail(io_lib:format("Expected ~p more messages", [Count]))
-    end.
+        dup_msg -> ok
+    after 1000 -> ct:fail(timeout)
+    end,
+    timer:sleep(50),
+    %% Should have received exactly one copy.
+    ?assertEqual([], flush()).
 
-wait_for_subscribers_joined(Pids) ->
-    lists:foreach(
-        fun(Pid) ->
-            receive
-                {subscriber_joined, Pid} ->
-                    ok
-            after 1000 ->
-                ct:fail(io_lib:format("Subscriber ~p did not join in time", [Pid]))
-            end
-        end,
-        Pids
-    ).
+%% Helpers
+
+flush() ->
+    receive
+        Msg -> [Msg | flush()]
+    after 0 -> []
+    end.

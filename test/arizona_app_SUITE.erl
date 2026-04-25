@@ -1,83 +1,137 @@
 -module(arizona_app_SUITE).
--behaviour(ct_suite).
 -include_lib("stdlib/include/assert.hrl").
--compile([export_all, nowarn_export_all]).
 
-%% --------------------------------------------------------------------
-%% Behaviour (ct_suite) callbacks
-%% --------------------------------------------------------------------
+-export([
+    all/0,
+    groups/0,
+    init_per_testcase/2,
+    end_per_testcase/2
+]).
+
+-export([
+    boot_with_server_and_reloader/1,
+    boot_without_config/1,
+    boot_with_only_server/1,
+    boot_with_only_reloader/1
+]).
+
+-define(WATCH_DIR, "/tmp/arizona_app_suite_watch").
 
 all() ->
-    [
-        {group, application_callbacks},
-        {group, application_lifecycle}
-    ].
+    [{group, tests}].
 
 groups() ->
     [
-        {application_callbacks, [parallel], [
-            test_start_function,
-            test_stop_function
-        ]},
-        {application_lifecycle, [parallel], [
-            test_application_start_stop
+        {tests, [sequence], [
+            boot_with_server_and_reloader,
+            boot_without_config,
+            boot_with_only_server,
+            boot_with_only_reloader
         ]}
     ].
 
-init_per_suite(Config) ->
+init_per_testcase(boot_with_server_and_reloader, Config) ->
+    ok = ensure_dir(?WATCH_DIR),
+    ok = application:set_env(arizona, server, server_opts()),
+    ok = application:set_env(arizona, reloader, #{
+        enabled => true,
+        rules => [
+            #{directory => ?WATCH_DIR, patterns => [".*"], callback => fun(_) -> ok end}
+        ]
+    }),
+    {ok, _} = application:ensure_all_started(cowboy),
+    {ok, _} = application:ensure_all_started(arizona),
+    Config;
+init_per_testcase(boot_without_config, Config) ->
+    {ok, _} = application:ensure_all_started(arizona),
+    Config;
+init_per_testcase(boot_with_only_server, Config) ->
+    ok = application:set_env(arizona, server, server_opts()),
+    {ok, _} = application:ensure_all_started(cowboy),
+    {ok, _} = application:ensure_all_started(arizona),
+    Config;
+init_per_testcase(boot_with_only_reloader, Config) ->
+    ok = ensure_dir(?WATCH_DIR),
+    ok = application:set_env(arizona, reloader, #{
+        enabled => true,
+        rules => [
+            #{directory => ?WATCH_DIR, patterns => [".*"], callback => fun(_) -> ok end}
+        ]
+    }),
+    {ok, _} = application:ensure_all_started(arizona),
     Config.
 
-end_per_suite(Config) ->
-    % Clean up after tests
-    _ = application:stop(arizona),
+end_per_testcase(_TC, Config) ->
+    ok = application:stop(arizona),
+    ok = unset_env(server),
+    ok = unset_env(reloader),
+    ok = remove_dir(?WATCH_DIR),
     Config.
 
-%% --------------------------------------------------------------------
-%% Application callbacks tests
-%% --------------------------------------------------------------------
+%% ============================================================================
+%% Tests
+%% ============================================================================
 
-test_start_function(Config) when is_list(Config) ->
-    ct:comment("Test the start/2 function directly"),
-    {ok, Pid} = arizona_app:start(normal, []),
+boot_with_server_and_reloader(Config) when is_list(Config) ->
+    ?assert(is_pid(erlang:whereis(arizona_sup))),
+    ?assert(is_listener_up(arizona_http)),
+    ?assert(has_watcher_child()).
 
-    % Verify a supervisor process was started
-    ?assert(is_pid(Pid)),
-    ?assert(is_process_alive(Pid)),
+boot_without_config(Config) when is_list(Config) ->
+    ?assert(is_pid(erlang:whereis(arizona_sup))),
+    ?assertNot(is_listener_up(arizona_http)),
+    ?assertNot(has_watcher_child()).
 
-    % Clean up
-    exit(Pid, normal).
+boot_with_only_server(Config) when is_list(Config) ->
+    ?assert(is_listener_up(arizona_http)),
+    ?assertNot(has_watcher_child()).
 
-test_stop_function(Config) when is_list(Config) ->
-    ct:comment("Test the stop/1 function directly"),
-    Result = arizona_app:stop(some_state),
+boot_with_only_reloader(Config) when is_list(Config) ->
+    ?assertNot(is_listener_up(arizona_http)),
+    ?assert(has_watcher_child()).
 
-    % stop/1 should always return ok
-    ?assertEqual(ok, Result).
+%% ============================================================================
+%% Helpers
+%% ============================================================================
 
-%% --------------------------------------------------------------------
-%% Application lifecycle tests
-%% --------------------------------------------------------------------
+server_opts() ->
+    #{
+        scheme => http,
+        transport_opts => [{port, pick_port()}],
+        routes => [{asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}]
+    }.
 
-test_application_start_stop(Config) when is_list(Config) ->
-    ct:comment("Test application start/stop cycle using application:ensure_all_started"),
-    {ok, StartedApps} = application:ensure_all_started(arizona),
+pick_port() ->
+    4040 + erlang:unique_integer([positive, monotonic]) rem 1000.
 
-    % Expected apps that should be started (arizona and its dependencies)
-    ExpectedApps = [arizona, cowboy, cowlib, ranch, syntax_tools],
+unset_env(Key) ->
+    application:unset_env(arizona, Key).
 
-    % Verify all expected apps were started
-    lists:foreach(
-        fun(App) ->
-            ?assert(lists:member(App, StartedApps))
-        end,
-        ExpectedApps
-    ),
+ensure_dir(Dir) ->
+    case file:make_dir(Dir) of
+        ok -> ok;
+        {error, eexist} -> ok
+    end.
 
-    % Verify application is running
-    ?assert(lists:keymember(arizona, 1, application:which_applications())),
+remove_dir(Dir) ->
+    case file:del_dir_r(Dir) of
+        ok -> ok;
+        {error, enoent} -> ok
+    end.
 
-    % Test stopping the application
-    ?assertEqual(ok, application:stop(arizona)),
+is_listener_up(Name) ->
+    maps:is_key(Name, ranch:info()).
 
-    % Verify application is stopped
-    ?assertNot(lists:keymember(arizona, 1, application:which_applications())).
+has_watcher_child() ->
+    case erlang:whereis(arizona_sup) of
+        undefined ->
+            false;
+        _ ->
+            lists:any(
+                fun
+                    ({{arizona_watcher, _}, Pid, _, _}) when is_pid(Pid) -> true;
+                    (_) -> false
+                end,
+                supervisor:which_children(arizona_sup)
+            )
+    end.

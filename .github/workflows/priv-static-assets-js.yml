@@ -61,6 +61,7 @@ jobs:
 
       - run: |
           npm ci
+          make build-js
           if ! git diff --exit-code >/dev/null; then
               # there's stuff to push
               git config user.name "arizona[bot]"

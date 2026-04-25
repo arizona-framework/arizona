@@ -1,167 +1,120 @@
 -module(arizona_pubsub).
--moduledoc ~"""
-Simple publish-subscribe messaging system using Erlang's process groups.
+-moduledoc """
+Thin wrapper over `pg` for channel-based pub/sub.
 
-Provides topic-based message broadcasting to subscribed processes using
-Erlang's built-in `pg` module. Enables decoupled communication between
-processes through named topics with automatic process monitoring.
+Subscribers join a channel (any term) by pid and receive whatever is
+broadcast to that channel as a plain mailbox message. There's no
+serialization or queueing -- it's just `pg:join/3` plus a fan-out send.
 
-## Message Protocol
+Used by `arizona_watcher` (file change events), `arizona_reloader`
+(dev hot reload), and any handler that wants cross-process messaging
+(e.g. multi-tab chat in `arizona_chat`).
 
-Subscribers receive messages in the format:
-```erlang
-{pubsub_message, Topic, Data}
-```
-
-## Usage Pattern
-
-1. **Subscribe**: Processes join topics to receive messages
-2. **Publish**: Send data to all subscribers of a topic
-3. **Receive**: Handle `pubsub_message` in process message loop
-4. **Unsubscribe**: Leave topics when no longer interested
-
-## Example Usage
+## Example
 
 ```erlang
-%% Subscriber process
-init() ->
-    ok = arizona_pubsub:join(~"live_reload", self()),
-    {ok, State}.
-
-handle_info({pubsub_message, ~"live_reload", Data}, State) ->
-    handle_reload(Data),
-    {noreply, State}.
-
-%% Publisher process
-notify_reload() ->
-    arizona_pubsub:broadcast(~"live_reload", {file_changed, reload}).
+1> arizona_pubsub:start_link().
+2> arizona_pubsub:subscribe(my_topic, self()).
+ok
+3> arizona_pubsub:broadcast(my_topic, {hello, world}).
+ok
+4> receive Msg -> Msg end.
+{hello, world}
 ```
-
-## Common Topics
-
-- `~"live_reload"` - Development-time file change notifications
-- Custom application topics for real-time features
-
-## Process Management
-
-Built on Erlang's `pg` module which automatically handles:
-- Process monitoring and cleanup
-- Node distribution (if needed)
-- Efficient group membership management
 """.
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([start_link/0]).
+-export([subscribe/2]).
+-export([unsubscribe/2]).
 -export([broadcast/2]).
 -export([broadcast_from/3]).
--export([join/2]).
--export([leave/2]).
--export([get_members/1]).
+-export([subscribers/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([broadcast/2]).
--ignore_xref([broadcast_from/3]).
--ignore_xref([join/2]).
--ignore_xref([leave/2]).
--ignore_xref([get_members/1]).
+-ignore_xref([start_link/0, unsubscribe/2, broadcast_from/3, subscribers/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 
--export_type([topic/0]).
+-export_type([channel/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
--nominal topic() :: binary().
+-nominal channel() :: term().
 
 %% --------------------------------------------------------------------
-%% API function definitions
+%% API Functions
 %% --------------------------------------------------------------------
 
--doc ~"""
-Broadcasts a message to all subscribers of a topic.
-
-Sends `{pubsub_message, Topic, Data}` to every process subscribed
-to the specified topic, including the sender if subscribed.
+-doc """
+Starts the pubsub `pg` scope. Called from the application supervisor.
 """.
--spec broadcast(Topic, Data) -> ok when
-    Topic :: topic(),
-    Data :: dynamic().
-broadcast(Topic, Data) when is_binary(Topic) ->
-    lists:foreach(
-        fun(Pid) ->
-            send_message(Pid, Topic, Data)
-        end,
-        get_members(Topic)
-    ).
+-spec start_link() -> gen_server:start_ret().
+start_link() ->
+    pg:start_link(?MODULE).
 
--doc ~"""
-Broadcasts a message to all subscribers except the sender.
-
-Sends `{pubsub_message, Topic, Data}` to every process subscribed
-to the topic except the specified sender process.
+-doc """
+Subscribes `Pid` to `Channel`. Returns `{error, already_joined}` if
+the pid is already subscribed (idempotent at the API level).
 """.
--spec broadcast_from(From, Topic, Data) -> ok when
+-spec subscribe(Channel, Pid) -> ok | {error, already_joined} when
+    Channel :: channel(),
+    Pid :: pid().
+subscribe(Channel, Pid) ->
+    case lists:member(Pid, subscribers(Channel)) of
+        true -> {error, already_joined};
+        false -> pg:join(?MODULE, Channel, [Pid])
+    end.
+
+-doc """
+Unsubscribes `Pid` from `Channel`. Returns `{error, not_joined}` if
+the pid was not a subscriber.
+""".
+-spec unsubscribe(Channel, Pid) -> ok | {error, not_joined} when
+    Channel :: channel(),
+    Pid :: pid().
+unsubscribe(Channel, Pid) ->
+    case pg:leave(?MODULE, Channel, [Pid]) of
+        ok -> ok;
+        not_joined -> {error, not_joined}
+    end.
+
+-doc """
+Sends `Data` as a mailbox message to every subscriber of `Channel`.
+""".
+-spec broadcast(Channel, Data) -> ok when
+    Channel :: channel(),
+    Data :: term().
+broadcast(Channel, Data) ->
+    _ = [Pid ! Data || Pid <- subscribers(Channel)],
+    ok.
+
+-doc """
+Like `broadcast/2` but skips `From` -- useful when the publisher is
+also a subscriber and shouldn't echo to itself.
+""".
+-spec broadcast_from(From, Channel, Data) -> ok when
     From :: pid(),
-    Topic :: topic(),
-    Data :: dynamic().
-broadcast_from(From, Topic, Data) when is_binary(Topic) ->
-    lists:foreach(
-        fun
-            (Pid) when Pid =:= From ->
-                ok;
-            (Pid) ->
-                send_message(Pid, Topic, Data)
-        end,
-        get_members(Topic)
-    ).
+    Channel :: channel(),
+    Data :: term().
+broadcast_from(From, Channel, Data) ->
+    _ = [Pid ! Data || Pid <- subscribers(Channel), Pid =/= From],
+    ok.
 
--doc ~"""
-Subscribes a process to a topic.
-
-Adds the process to the topic's subscriber list. The process will
-receive all future broadcasts to this topic until it leaves or terminates.
+-doc """
+Returns the list of pids currently subscribed to `Channel`.
 """.
--spec join(Topic, Pid) -> ok when
-    Topic :: topic(),
-    Pid :: pid().
-join(Topic, Pid) when is_binary(Topic), is_pid(Pid) ->
-    pg:join(?MODULE, Topic, Pid).
-
--doc ~"""
-Unsubscribes a process from a topic.
-
-Removes the process from the topic's subscriber list. Returns `ok`
-if successfully removed, `not_joined` if the process wasn't subscribed.
-""".
--spec leave(Topic, Pid) -> ok | not_joined when
-    Topic :: topic(),
-    Pid :: pid().
-leave(Topic, Pid) when is_binary(Topic), is_pid(Pid) ->
-    pg:leave(?MODULE, Topic, Pid).
-
--doc ~"""
-Returns all processes subscribed to a topic.
-
-Gets the current list of subscriber processes for the specified topic.
-Useful for debugging or metrics collection.
-""".
--spec get_members(Topic) -> [pid()] when
-    Topic :: topic().
-get_members(Topic) when is_binary(Topic) ->
-    pg:get_members(?MODULE, Topic).
-
-%% --------------------------------------------------------------------
-%% Internal functions
-%% --------------------------------------------------------------------
-
-send_message(Pid, Topic, Data) ->
-    Pid ! {pubsub_message, Topic, Data}.
+-spec subscribers(Channel) -> [pid()] when
+    Channel :: channel().
+subscribers(Channel) ->
+    pg:get_members(?MODULE, Channel).

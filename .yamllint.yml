@@ -1,5 +1,10 @@
 ---
 extends: default
+ignore: |
+  node_modules/
+  _build/
+  _checkouts/
+  doc/
 rules:
   line-length:
     max: 100

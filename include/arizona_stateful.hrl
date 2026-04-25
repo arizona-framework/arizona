@@ -1,0 +1,2 @@
+-behaviour(arizona_stateful).
+-include("arizona_handler.hrl").

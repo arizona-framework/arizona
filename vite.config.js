@@ -1,116 +1,94 @@
-import { defineConfig } from 'vite';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { visualizer } from 'rollup-plugin-visualizer';
-import dts from 'vite-plugin-dts';
-import tsconfigPaths from 'vite-tsconfig-paths';
-import license from 'rollup-plugin-license';
-import eslint from 'vite-plugin-eslint';
 import filesize from 'rollup-plugin-filesize';
-import banner from 'rollup-plugin-banner2';
+import license from 'rollup-plugin-license';
+import { visualizer } from 'rollup-plugin-visualizer';
+import { createLogger, defineConfig } from 'vite';
 
-export default defineConfig(({ mode }) => {
-  const isDev = mode === 'development';
-  const isAnalyze = process.env.ANALYZE === 'true';
+const require = createRequire(import.meta.url);
+const pkg = require('./package.json');
 
-  return {
+const logger = createLogger();
+for (const method of ['warn', 'warnOnce']) {
+    const original = logger[method].bind(logger);
+    logger[method] = (msg, options) => {
+        original(msg, options);
+        process.exitCode = 1;
+    };
+}
+
+export default defineConfig(({ mode }) => ({
+    customLogger: logger,
     plugins: [
-      // ESLint integration
-      eslint({
-        include: ['assets/**/*.js'],
-        exclude: ['node_modules/**'],
-      }),
-
-      tsconfigPaths(),
-
-      // TypeScript declarations from JSDoc
-      dts({
-        include: [
-          'assets/js/client/index.js',
-          'assets/js/client/arizona.js',
-          'assets/js/client/logger/index.js',
-          'assets/js/client/logger/arizona-logger.js',
-          'assets/js/client/logger/arizona-console-logger.js',
-        ],
-        outDir: 'priv/static/assets/types',
-        rollupTypes: false,
-      }),
-    ],
-
-    worker: {
-      rollupOptions: {
-        output: {
-          entryFileNames: '[name].min.js',
-          chunkFileNames: 'chunks/[name].min.js',
-          assetFileNames: 'assets/[name].min.js',
-        },
-      },
-    },
-
-    build: {
-      lib: {
-        entry: {
-          index: 'assets/js/client/index.js',
-          arizona: 'assets/js/client/arizona.js',
-          'logger/index': 'assets/js/client/logger/index.js',
-          'logger/arizona-logger': 'assets/js/client/logger/arizona-logger.js',
-          'logger/arizona-console-logger': 'assets/js/client/logger/arizona-console-logger.js',
-        },
-        formats: ['es'],
-      },
-      outDir: 'priv/static/assets/js',
-      minify: !isDev,
-      sourcemap: true,
-      reportCompressedSize: !isDev,
-      emptyOutDir: false,
-      rollupOptions: {
-        output: {
-          format: 'es',
-          entryFileNames: '[name].min.js',
-          chunkFileNames: 'chunks/[name].min.js',
-          assetFileNames: 'assets/[name].min.js',
-        },
-        plugins: [
-          // License management
-          license({
-            sourcemap: true,
-            banner: {
-              commentStyle: 'regular',
-              content: {
-                file: resolve('LICENSE.md'),
-                encoding: 'utf-8',
-              },
-            },
+        license({
             thirdParty: {
-              output: resolve('priv/static/assets/js/LICENSES.txt'),
-              includePrivate: false,
+                output: {
+                    file: resolve(import.meta.dirname, 'priv/static/assets/js/LICENSES.txt'),
+                },
             },
-          }),
-
-          // Banner with version info
-          banner(() => {
-            const pkg = require('./package.json');
-            return `/*! Arizona Framework Client v${pkg.version} | ${pkg.license} License */`;
-          }),
-
-          // File size monitoring
-          filesize({
-            showMinifiedSize: false,
-            showGzippedSize: true,
-          }),
-
-          // Bundle analysis (only when ANALYZE=true)
-          ...(isAnalyze
+        }),
+        filesize({ showBrotliSize: true }),
+        ...(process.env.ANALYZE === 'true'
             ? [
-                visualizer({
-                  filename: 'build-analysis.html',
-                  open: true,
-                  gzipSize: true,
-                  brotliSize: true,
-                }),
+                  visualizer({
+                      filename: resolve(import.meta.dirname, 'build-analysis.html'),
+                      open: true,
+                      gzipSize: true,
+                      brotliSize: true,
+                  }),
               ]
             : []),
-        ],
-      },
+    ],
+    build: {
+        rollupOptions: {
+            onwarn(warning) {
+                throw new Error(warning.message);
+            },
+        },
+        target: 'es2020',
+        outDir: resolve(import.meta.dirname, 'priv/static/assets/js'),
+        emptyOutDir: true,
+        sourcemap: mode === 'development',
+        minify: 'terser',
+        terserOptions: {
+            compress: {
+                passes: 2,
+                pure_getters: true,
+                unsafe_methods: true,
+            },
+            mangle: {
+                properties: {
+                    regex: /^__/,
+                },
+            },
+            format: {
+                preamble: `/*! Arizona v${pkg.version} | Apache-2.0 */`,
+            },
+        },
+        lib: {
+            entry: {
+                arizona: resolve(import.meta.dirname, 'assets/js/arizona.js'),
+                'arizona-worker': resolve(import.meta.dirname, 'assets/js/arizona-worker.js'),
+                'arizona-reloader': resolve(import.meta.dirname, 'assets/js/arizona-reloader.js'),
+            },
+            formats: ['es'],
+            fileName: (_format, entryName) => `${entryName}.min.js`,
+        },
     },
-  };
-});
+    test: {
+        environment: 'jsdom',
+        include: ['assets/**/*.test.js'],
+        coverage: {
+            provider: 'v8',
+            include: ['assets/**/*.js'],
+            exclude: ['assets/**/*.test.js'],
+            thresholds: {
+                perFile: true,
+                statements: 80,
+                branches: 80,
+                functions: 80,
+                lines: 80,
+            },
+        },
+    },
+}));

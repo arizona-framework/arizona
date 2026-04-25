@@ -1,987 +1,372 @@
 -module(arizona_template).
--moduledoc ~""""
-Core template record and rendering abstraction.
+-moduledoc """
+Runtime template API: bindings, descriptors, value rendering, and snapshots.
 
-Defines the template data structure and provides high-level rendering
-interface that abstracts over different rendering modes. Templates can
-be created at compile-time via parse transforms or at runtime.
+Most of this module's surface is exposed through the macros in
+`include/arizona_common.hrl` (`?get`, `?html`, `?each`, `?stateful`,
+`?stateless`). Templates themselves are produced by `arizona_parse_transform`
+at compile time -- `html/1` is only a runtime stub that errors if the parse
+transform was not applied.
 
-## Template Structure
+## Concepts
 
-- `static` - List of static HTML text parts
-- `dynamic` - Tuple of callback functions for dynamic expressions
-- `dynamic_sequence` - Sequence numbers for dynamic parts
-- `dynamic_anno` - Line number annotations for debugging
-- `fingerprint` - Hash for template identity and caching
-
-## API vs Template DSL Functions
-
-**Regular API functions:**
-- Template creation: `new/5`, `from_html/1`, `from_html/4`, `from_markdown/1`, `from_markdown/4`
-- Type checking: `is_template/1`
-- Accessors: `get_static/1`, `get_dynamic/1`, etc.
-- Collection rendering: `render_list_template/2`, `render_map_template/2`
-
-**Template DSL functions (only for use inside template strings):**
-- Variable access: `get_binding/2`, `get_binding/3`, `find_binding/2`
-- Components: `render_stateful/2`, `render_stateless/3`, `render_slot/1`
-- Collections: `render_list/2`, `render_map/2`
+- **Bindings** -- the map passed to `render/1`. `get/2` and `get/3` access
+  bindings while tracking which keys were read, so the differ knows which
+  dynamics depend on which bindings.
+- **Templates** -- compile-time maps `#{s := Statics, d := Dynamics, f := Fp}`
+  emitted by the parse transform.
+- **Descriptors** -- lightweight tuples returned by `stateful/2` and
+  `stateless/2,3` that tell the renderer how to mount a child component.
+- **Snapshots** -- cached `#{s, d, deps, ...}` maps used by the differ to
+  detect what changed between renders.
 
 ## Example
 
 ```erlang
-1> Template = arizona_template:from_html(~"""
-.. <h1>{arizona_template:get_binding(title, Bindings)}</h1>
-.. """).
-#template{...}
-2> {Html, View1} = arizona_renderer:render_template(Template, ParentId, View).
-{[~\"<h1>\", ~\"Hello\", ~\"</h1>\"], UpdatedView}
+render(Bindings) ->
+    ?html({'div', [{class, ?get(theme)}], [?get(name)]}).
 ```
-"""".
--compile({nowarn_redefined_builtin_type, [dynamic/0]}).
+""".
 
-%% --------------------------------------------------------------------
-%% Ignore elvis warnings
-%% --------------------------------------------------------------------
+-compile({nowarn_redefined_builtin_type, [{dynamic, 0}]}).
 
--elvis([{elvis_style, god_modules, disable}]).
--elvis([{elvis_style, max_module_length, disable}]).
+-include("arizona.hrl").
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([new/5]).
--export([from_erl/1]).
--export([from_html/1]).
--export([is_template/1]).
--export([from_html/5]).
--export([from_markdown/1]).
--export([from_markdown/5]).
--export([get_static/1]).
--export([get_dynamic/1]).
--export([get_dynamic_sequence/1]).
--export([get_dynamic_anno/1]).
--export([get_fingerprint/1]).
--export([get_binding/2]).
--export([get_binding/3]).
--export([get_binding_lazy/3]).
--export([find_binding/2]).
--export([render_stateful/2]).
--export([render_stateful/3]).
--export([render_stateless/3]).
--export([render_stateless/4]).
--export([render_slot/1]).
--export([render_slot/2]).
--export([render_list/2]).
--export([render_list/3]).
--export([render_list_template/2]).
--export([render_list_template/3]).
--export([render_map/2]).
--export([render_map/3]).
--export([render_map_template/2]).
--export([render_map_template/3]).
+-export([get/2]).
+-export([get/3]).
+-export([get_lazy/3]).
+-export([track/1]).
+-export([html/1]).
+-export([stateful/2]).
+-export([stateless/2]).
+-export([stateless/3]).
+-export([each/2]).
+-export([to_bin/1]).
+-export([dyn_az/1]).
+-export([format_error/1]).
+-export([unwrap_val/1]).
+-export([render_attr/2]).
+-export([maybe_propagate/2]).
+-export([maybe_put_fingerprint/2]).
+-export([make_child_snap/4]).
+-export([unzip_triples/1]).
+-export([split_triples/1]).
+-export([visible_keys/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([new/5]).
--ignore_xref([from_erl/1]).
--ignore_xref([from_html/1]).
--ignore_xref([from_html/5]).
--ignore_xref([from_markdown/1]).
--ignore_xref([from_markdown/5]).
--ignore_xref([get_dynamic_anno/1]).
--ignore_xref([get_fingerprint/1]).
--ignore_xref([get_binding/2]).
--ignore_xref([get_binding/3]).
--ignore_xref([get_binding_lazy/3]).
--ignore_xref([find_binding/2]).
--ignore_xref([render_stateful/2]).
--ignore_xref([render_stateful/3]).
--ignore_xref([render_stateless/3]).
--ignore_xref([render_stateless/4]).
--ignore_xref([render_slot/1]).
--ignore_xref([render_slot/2]).
--ignore_xref([render_list/2]).
--ignore_xref([render_list/3]).
--ignore_xref([render_list_template/2]).
--ignore_xref([render_list_template/3]).
--ignore_xref([render_map/2]).
--ignore_xref([render_map/3]).
--ignore_xref([render_map_template/2]).
--ignore_xref([render_map_template/3]).
+-ignore_xref([format_error/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 
--export_type([template/0]).
--export_type([static/0]).
+-export_type([az/0]).
+-export_type([bindings/0]).
+-export_type([deps/0]).
+-export_type([loc/0]).
 -export_type([dynamic/0]).
--export_type([dynamic_tuple/0]).
--export_type([dynamic_tuple_callback/0]).
--export_type([dynamic_sequence/0]).
--export_type([dynamic_anno/0]).
--export_type([fingerprint/0]).
--export_type([slot/0]).
--export_type([render_callback/0]).
--export_type([render_mode/0]).
--export_type([render_options/0]).
+-export_type([template/0]).
+-export_type([each_template/0]).
+-export_type([each_container/0]).
+-export_type([snapshot/0]).
+-export_type([stateful_descriptor/0]).
+-export_type([stateless_descriptor/0]).
+-export_type([render_fun/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
--record(template, {
-    static :: static(),
-    dynamic :: dynamic(),
-    dynamic_sequence :: dynamic_sequence(),
-    dynamic_anno :: dynamic_anno(),
-    fingerprint :: fingerprint()
-}).
+-nominal az() :: binary() | undefined.
+-type bindings() :: map().
+-nominal deps() :: #{term() => true}.
+-nominal loc() :: {module(), pos_integer()}.
 
--opaque template() :: #template{}.
--nominal static() :: [binary()].
--nominal dynamic() :: dynamic_tuple() | dynamic_tuple_callback().
--nominal dynamic_tuple() :: tuple().
--nominal dynamic_tuple_callback() :: fun((CallbackArg :: term()) -> dynamic_tuple()).
--nominal dynamic_sequence() :: [pos_integer()].
--nominal dynamic_anno() :: tuple().
--nominal fingerprint() :: non_neg_integer().
--nominal slot() :: view | template() | arizona_html:value().
-% Using specific arizona types instead of erlang:dynamic() makes
-% dialyzer stuck in an infinite check.
--nominal render_callback() :: fun(
-    (
-        render_mode(),
-        arizona_stateful:id(),
-        arizona_tracker:element_index(),
-        arizona_view:view()
-    ) -> {erlang:dynamic(), arizona_view:view()}
-).
--nominal render_mode() :: render | diff | hierarchical.
--nominal render_options() :: #{
-    % false = skip diff updates for this component
-    update => boolean()
+-nominal dynamic() ::
+    {az(), fun(() -> term()), loc()}
+    | {az(), {attr, binary(), fun(() -> term())}, loc()}
+    | {az(), template(), loc()}
+    | {az(), term(), loc()}
+    | {az(), fun(() -> term())}
+    | {az(), {attr, binary(), fun(() -> term())}}
+    | {az(), template()}
+    | {az(), term()}.
+
+-nominal template() :: #{s := [binary()], d := [dynamic()], f := binary(), diff => false}.
+
+-nominal each_template() :: #{
+    t := 0,
+    s := [binary()],
+    d := fun((term()) -> [dynamic()]) | fun((term(), term()) -> [dynamic()]),
+    f := binary()
 }.
+
+-nominal each_container() :: #{
+    t := 0,
+    source := term(),
+    template := each_template()
+}.
+
+-nominal snapshot() :: #{
+    s := [binary()],
+    d := [{az(), term()}],
+    f => binary(),
+    deps => [deps()],
+    diff => false,
+    view_id => binary()
+}.
+
+-nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
+-nominal stateless_descriptor() :: #{callback := fun((map()) -> template()), props := map()}.
+
+-nominal render_fun() :: fun((bindings()) -> template()).
 
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
--doc ~"""
-Creates a new template record with all required components.
+-doc """
+Reads `Key` from `Bindings` and tracks the access for diff dependency analysis.
 
-Usually called by the parse transform at compile time. Contains static
-HTML parts, dynamic callback functions, and metadata for rendering.
+Errors with `{badkey, Key}` if not present. Use `get/3` for a default.
 """.
--spec new(Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint) -> Template when
-    Static :: static(),
-    Dynamic :: dynamic(),
-    DynamicSequence :: dynamic_sequence(),
-    DynamicAnno :: dynamic_anno(),
-    Fingerprint :: fingerprint(),
-    Template :: template().
-new(Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint) ->
-    #template{
-        static = Static,
-        dynamic = Dynamic,
-        dynamic_sequence = DynamicSequence,
-        dynamic_anno = DynamicAnno,
-        fingerprint = Fingerprint
-    }.
-
--spec from_erl(Term) -> no_return() when
-    Term :: arizona_erl:element() | [arizona_erl:element()].
-from_erl(Term) when is_tuple(Term); is_list(Term) ->
-    error(parse_transform_required).
-
--doc #{equiv => from_html(erlang, 0, String, #{}, [])}.
--spec from_html(Payload) -> Template when
-    Payload :: {file, Filename} | {priv_file, App, Filename} | HTML,
-    Filename :: file:filename_all(),
-    App :: atom(),
-    HTML :: arizona_html:html(),
-    Template :: template().
-from_html(Payload) ->
-    from_html(erlang, 0, Payload, #{}, []).
-
--doc ~"""""
-Compiles a template string into a template record at runtime.
-
-This function provides compile-time template creation with full context
-for debugging and bindings resolution. Used internally by the parse
-transform system to create templates with proper metadata.
-
-For best performance, use compile-time parse transforms instead.
-
-## Template Syntax
-
-Arizona templates embed Erlang expressions within HTML using curly braces:
-
-- `{}` - Contains Erlang expressions evaluated at render time
-- `\{` - Escaped opening brace (renders as literal `{`)
-- Everything else - Treated as literal HTML text
-
-## Expression Examples
-
-> The following examples use `from_html/1` for simplicity.
-
-### Simple variable access
-
-```erlang
-arizona_template:from_html(~"""
-<h1>{arizona_template:get_binding(title, Bindings)}</h1>
-""").
-```
-
-### Complex expressions with case statements
-
-```erlang
-arizona_template:from_html(~"""
-<div class="todo {case maps:get(completed, Todo) of
-      true -> ~"completed";
-      false -> ~""
-  end}">
-""").
-```
-
-### Variable assignment within expressions
-
-```erlang
-arizona_template:from_html(~""""
-{
-    Todos = arizona_template:get_binding(todos, Bindings),
-    Filter = arizona_template:get_binding(filter, Bindings),
-    arizona_template:render_list(fun(Todo) ->
-    arizona_template:from_html(~"""
-    <li>{maps:get(text, Todo)}</li>
-    """)
-    end, filter_todos(Todos, Filter))
-}
-"""").
-```
-
-### Conditional rendering
-
-```erlang
-arizona_template:from_html(~"""
-{
-    case length(TodoList) > 0 of
-        true -> arizona_template:render_stateless(Module, render_footer, #{});
-        false -> ~""
-    end
-}
-""").
-```
-
-### Escaped braces in CSS
-
-```erlang
-arizona_template:from_html(~"""
-<style>
-    .nav-container \{
-        display: flex;
-    }
-</style>
-""").
-```
-
-## Expression Context
-
-Within `{}` expressions, you have access to:
-- All standard Erlang functions, operators, and control structures
-- The `Bindings` variable containing template data
-- Template DSL functions like `get_binding/2`, `render_stateful/2`, `render_list/2`
-- Local variables assigned within the same expression block
-- Any functions from modules imported in the calling context
-
-## Processing Pipeline
-
-1. **Scanning** - Template string is tokenized into text and expression parts
-2. **Parsing** - Tokens are parsed into an Abstract Syntax Tree (AST)
-3. **Evaluation** - AST is evaluated to create the final template record
-""""".
--spec from_html(Module, Line, Payload, Bindings, CompileOpts) -> Template when
-    Module :: module(),
-    Line :: arizona_token:line(),
-    Payload :: {file, Filename} | {priv_file, App, Filename} | HTML,
-    Filename :: file:filename_all(),
-    App :: atom(),
-    HTML :: arizona_html:html(),
+-spec get(Key, Bindings) -> Value when
+    Key :: term(),
     Bindings :: map(),
-    CompileOpts :: [compile:option()],
-    Template :: template().
-from_html(Module, Line, Payload, Bindings, CompileOpts) when is_atom(Module), is_map(Bindings) ->
-    % Extract template content from file, priv_file, or direct content
-    HTML = extract_template_content(Payload),
-
-    % Scan template content into tokens
-    Tokens = arizona_scanner:scan_string(Line, HTML),
-
-    % Parse tokens into AST
-    AST = arizona_parser:parse_tokens(Tokens, [
-        {d, 'MODULE', Module}, {parse_transform, arizona_parse_transform} | CompileOpts
-    ]),
-
-    % Evaluate AST to get template record
-    erl_eval:expr(
-        erl_syntax:revert(AST),
-        #{'Bindings' => Bindings},
-        {value, fun(Function, Args) ->
-            apply(Module, Function, Args)
-        end},
-        none,
-        value
-    ).
-
--doc #{equiv => from_html(erlang, 0, Payload, #{}, [])}.
--spec from_markdown(Payload) -> Template when
-    Payload :: {file, Filename} | {priv_file, App, Filename} | Markdown,
-    Filename :: file:filename_all(),
-    App :: atom(),
-    Markdown :: arizona_markdown:markdown(),
-    Template :: template().
-from_markdown(Payload) ->
-    from_markdown(erlang, 0, Payload, #{}, []).
-
--doc ~"""""
-Compiles a markdown string with Arizona template syntax into a template record at runtime.
-
-This function processes markdown content through GitHub Flavored Markdown parser while
-preserving Arizona template expressions (`{...}`) and Erlang comments (`%`).
-The markdown is first converted to HTML, then processed as a regular template.
-
-For best performance, use compile-time parse transforms instead.
-
-## Markdown + Template Syntax
-
-Arizona markdown templates combine standard GitHub Flavored Markdown with embedded
-Erlang expressions:
-
-- Standard markdown syntax (headers, emphasis, lists, tables, etc.)
-- `{}` - Contains Erlang expressions evaluated at render time
-- `%` - Erlang comments (preserved in final template)
-- `\{` - Escaped opening brace (renders as literal `{`)
-
-## Expression Examples
-
-> The following examples use `from_markdown/1` for simplicity.
-
-### Markdown with dynamic content
-
-```erlang
-arizona_template:from_markdown(~"""
-# Welcome {arizona_template:get_binding(user, Bindings)}!
-
-You have **{length(arizona_template:get_binding(todos, Bindings))}** tasks.
-
-## Tasks
-{arizona_template:render_list(fun(Todo) ->
-    arizona_template:from_html(~"""
-    - {maps:get(text, Todo)}
-    """)
-end, arizona_template:get_binding(todos, Bindings))}
-""").
-```
-
-### Tables with dynamic data
-
-```erlang
-arizona_template:from_markdown(~""""
-| Name | Score | Status |
-|------|-------|--------|
-{arizona_template:render_list(fun(Player) ->
-    arizona_template:from_html(~"""
-    | {maps:get(name, Player)} | {maps:get(score, Player)} | {maps:get(status, Player)} |
-    """)
-end, arizona_template:get_binding(players, Bindings))}
-"""").
-```
-
-### Conditional markdown blocks
-
-```erlang
-arizona_template:from_markdown(~""""
-# Dashboard
-
-{case arizona_template:get_binding(user_type, Bindings) of
-    admin ->
-        ~"""
-        ## Admin Panel
-        - [Manage Users](/admin/users)
-        - [View Reports](/admin/reports)
-        """;
-    user ->
-        ~"""
-        ## User Dashboard
-        Welcome back! Check your recent activity below.
-        """
-end}
-"""").
-```
-
-## Expression Context
-
-Within `{}` expressions, you have access to:
-- All standard Erlang functions, operators, and control structures
-- The `Bindings` variable containing template data
-- Template DSL functions like `get_binding/2`, `render_stateful/2`, `render_list/2`
-- Local variables assigned within the same expression block
-- Any functions from modules imported in the calling context
-
-## Processing Pipeline
-
-1. **Scanning** - Markdown content is tokenized into text and expression parts
-2. **Protection** - Dynamic expressions and comments are protected from markdown processing
-3. **Markdown Conversion** - Protected content is processed through GitHub Flavored Markdown
-4. **Restoration** - Protected expressions are restored to original Arizona syntax
-5. **Template Creation** - Final HTML is processed as a regular Arizona template
-""""".
--spec from_markdown(Module, Line, Payload, Bindings, CompileOpts) -> Template when
-    Module :: module(),
-    Line :: arizona_token:line(),
-    Payload :: {file, Filename} | {priv_file, App, Filename} | Markdown,
-    Filename :: file:filename_all(),
-    App :: atom(),
-    Markdown :: arizona_markdown:markdown(),
-    Bindings :: map(),
-    CompileOpts :: [compile:option()],
-    Template :: template().
-from_markdown(Module, Line, Payload, Bindings, CompileOpts) when
-    is_atom(Module), is_map(Bindings)
-->
-    % Extract template content from file, priv_file, or direct content
-    Markdown = extract_template_content(Payload),
-
-    % Process markdown content with Arizona template syntax
-    HTML = arizona_markdown_processor:process_markdown_template(Markdown, Line),
-
-    % Process final HTML as template
-    from_html(Module, Line, HTML, Bindings, CompileOpts).
-
--doc ~"""
-Checks if the given value is a template record.
-
-Type guard function for template validation.
-""".
--spec is_template(dynamic()) -> boolean().
-is_template(#template{}) -> true;
-is_template(_) -> false.
-
--doc ~"""
-Extracts static HTML parts from a template record.
-
-Returns the list of static text segments used for template rendering.
-""".
--spec get_static(Template) -> StaticContent when
-    Template :: template(),
-    StaticContent :: static().
-get_static(#template{static = Static}) ->
-    Static.
-
--doc ~"""
-Extracts dynamic callback functions from a template record.
-
-Returns the tuple of callbacks used for dynamic content evaluation.
-""".
--spec get_dynamic(Template) -> DynamicContent when
-    Template :: template(),
-    DynamicContent :: dynamic().
-get_dynamic(#template{dynamic = Dynamic}) ->
-    Dynamic.
-
--doc ~"""
-Extracts dynamic element sequence from a template record.
-
-Returns the list of sequence numbers for processing dynamic elements.
-""".
--spec get_dynamic_sequence(Template) -> DynamicSequence when
-    Template :: template(),
-    DynamicSequence :: dynamic_sequence().
-get_dynamic_sequence(#template{dynamic_sequence = Sequence}) ->
-    Sequence.
-
--doc ~"""
-Extracts dynamic element annotations from a template record.
-
-Returns line number annotations for debugging dynamic elements.
-""".
--spec get_dynamic_anno(Template) -> DynamicAnno when
-    Template :: template(),
-    DynamicAnno :: dynamic_anno().
-get_dynamic_anno(#template{dynamic_anno = Anno}) ->
-    Anno.
-
--doc ~"""
-Extracts template fingerprint for identity comparison.
-
-Returns the hash used for template caching and diff comparisons.
-""".
--spec get_fingerprint(Template) -> Fingerprint when
-    Template :: template(),
-    Fingerprint :: fingerprint().
-get_fingerprint(#template{fingerprint = Fingerprint}) ->
-    Fingerprint.
-
--doc ~"""
-Retrieves a variable binding value with dependency tracking.
-
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-Records the variable dependency for differential updates and returns the bound value.
-""".
--spec get_binding(Key, Bindings) -> Value when
-    Key :: dynamic(),
-    Bindings :: map(),
-    Value :: dynamic().
-get_binding(Key, Bindings) ->
-    % Record variable dependency for runtime tracking
-    _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
+    Value :: term().
+get(Key, Bindings) ->
+    track(Key),
     maps:get(Key, Bindings).
 
--doc ~"""
-Retrieves a variable binding value with default and dependency tracking.
-
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-Returns the bound value or provided default value if key not found.
+-doc """
+Reads `Key` from `Bindings`, returning `Default` if absent. Tracks the access.
 """.
--spec get_binding(Key, Bindings, Default) -> Value when
-    Key :: dynamic(),
+-spec get(Key, Bindings, Default) -> Value when
+    Key :: term(),
     Bindings :: map(),
-    Default :: dynamic(),
-    Value :: dynamic().
-get_binding(Key, Bindings, Default) ->
-    % Record variable dependency for runtime tracking
-    _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
+    Default :: term(),
+    Value :: term().
+get(Key, Bindings, Default) ->
+    track(Key),
     maps:get(Key, Bindings, Default).
 
--doc ~"""
-Retrieves a variable binding value with lazy default function and dependency tracking.
-
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-Returns the bound value or calls default function if key not found. Useful for
-expensive computations that should only be performed when needed.
+-doc """
+Like `get/3` but the default is computed lazily by a 0-arity fun.
 """.
--spec get_binding_lazy(Key, Bindings, DefaultFun) -> Value when
-    Key :: dynamic(),
+-spec get_lazy(Key, Bindings, DefaultFun) -> Value when
+    Key :: term(),
     Bindings :: map(),
-    DefaultFun :: fun(() -> dynamic()),
-    Value :: dynamic().
-get_binding_lazy(Key, Bindings, DefaultFun) when is_map(Bindings), is_function(DefaultFun, 0) ->
-    % Record variable dependency for runtime tracking
-    _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
+    DefaultFun :: fun(() -> term()),
+    Value :: term().
+get_lazy(Key, Bindings, DefaultFun) when is_function(DefaultFun, 0) ->
+    track(Key),
     case Bindings of
-        #{Key := Value} ->
-            Value;
-        #{} ->
-            apply(DefaultFun, [])
+        #{Key := Val} -> Val;
+        #{} -> DefaultFun()
     end.
 
--doc ~"""
-Safely finds a variable binding value with dependency tracking.
+-doc """
+Records `Key` as a dependency of the dynamic element currently being rendered.
 
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-Returns `{ok, Value}` if found, `error` if not found.
+Called automatically by `get/2,3` and `get_lazy/3`. Public so render code
+can attribute dependencies that bypass binding access.
 """.
--spec find_binding(Key, Bindings) -> {ok, Value} | error when
-    Key :: dynamic(),
-    Bindings :: map(),
-    Value :: dynamic().
-find_binding(Key, Bindings) when is_map(Bindings) ->
-    % Record variable dependency for runtime tracking
-    _OldTracker = arizona_tracker_dict:record_variable_dependency(Key),
-    maps:find(Key, Bindings).
-
--doc ~"""
-Creates a stateful component rendering callback.
-
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-Returns a callback that handles all three rendering modes for the component.
-""".
--spec render_stateful(Module, Bindings) -> Callback when
-    Module :: module(),
-    Bindings :: map(),
-    Callback :: render_callback().
-render_stateful(Module, Bindings) ->
-    render_stateful(Module, Bindings, #{}).
-
--doc ~"""
-Creates a stateful component rendering callback with options.
-
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-Returns a callback that handles all three rendering modes for the component.
-
-See `t:render_options/0` for available options.
-""".
--spec render_stateful(Module, Bindings, Options) -> Callback when
-    Module :: module(),
-    Bindings :: map(),
-    Options :: render_options(),
-    Callback :: render_callback().
-render_stateful(Module, Bindings, Options) ->
-    fun
-        (render, _ParentId, _ElementIndex, View) ->
-            arizona_renderer:render_stateful(Module, Bindings, View);
-        (diff, ParentId, ElementIndex, View) ->
-            case Options of
-                #{update := false} ->
-                    {nodiff, View};
-                #{} ->
-                    arizona_differ:diff_stateful(Module, Bindings, ParentId, ElementIndex, View)
-            end;
-        (hierarchical, ParentId, ElementIndex, View) ->
-            arizona_hierarchical:hierarchical_stateful(
-                Module, Bindings, ParentId, ElementIndex, View
-            )
+-spec track(Key) -> ok when
+    Key :: term().
+track(Key) ->
+    case erlang:get('$arizona_deps') of
+        undefined -> ok;
+        Deps -> erlang:put('$arizona_deps', Deps#{Key => true})
     end.
 
--doc ~"""
-Creates a stateless component rendering callback.
-
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-Returns a callback that handles all three rendering modes for the component.
+-doc """
+Compile-time stub. The parse transform replaces every `?html(...)` (and
+`arizona_template:html/1`) call with a precomputed `t:template/0` map. If
+this function runs, the parse transform was not applied -- include
+`arizona_stateful.hrl` or `arizona_stateless.hrl`.
 """.
--spec render_stateless(Module, Function, Bindings) -> Callback when
-    Module :: module(),
-    Function :: atom(),
-    Bindings :: map(),
-    Callback :: render_callback().
-render_stateless(Module, Fun, Bindings) ->
-    render_stateless(Module, Fun, Bindings, #{}).
+-spec html(term()) -> no_return().
+html(_Elems) ->
+    erlang:error(parse_transform_not_applied).
 
--doc ~"""
-Creates a stateless component rendering callback with options.
-
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-Returns a callback that handles all three rendering modes for the component.
-
-See `t:render_options/0` for available options.
+-doc """
+Builds a stateful child descriptor. The renderer mounts `Handler` with `Props`.
 """.
--spec render_stateless(Module, Function, Bindings, Options) -> Callback when
-    Module :: module(),
-    Function :: atom(),
-    Bindings :: map(),
-    Options :: render_options(),
-    Callback :: render_callback().
-render_stateless(Module, Fun, Bindings, Options) ->
-    fun
-        (render, ParentId, _ElementIndex, View) ->
-            arizona_renderer:render_stateless(Module, Fun, Bindings, ParentId, View);
-        (diff, ParentId, ElementIndex, View) ->
-            case Options of
-                #{update := false} ->
-                    {nodiff, View};
-                #{} ->
-                    arizona_differ:diff_stateless(
-                        Module, Fun, Bindings, ParentId, ElementIndex, View
-                    )
-            end;
-        (hierarchical, ParentId, ElementIndex, View) ->
-            arizona_hierarchical:hierarchical_stateless(
-                Module, Fun, Bindings, ParentId, ElementIndex, View
-            )
-    end.
+-spec stateful(Handler, Props) -> stateful_descriptor() when
+    Handler :: module(),
+    Props :: map().
+stateful(Handler, Props) when is_atom(Handler), is_map(Props) ->
+    #{stateful => Handler, props => Props}.
 
--doc ~"""
-Renders a `t:slot` with view, template, or HTML content.
-
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-Handles different slot types: view (current view), template records, or HTML values.
+-doc """
+Builds a stateless child descriptor from a 1-arity render fun.
 """.
--spec render_slot(Slot) -> Callback when
-    Slot :: slot(),
-    Callback :: render_callback() | arizona_html:html().
-render_slot(Slot) ->
-    render_slot(Slot, #{}).
+-spec stateless(Callback, Props) -> stateless_descriptor() when
+    Callback :: fun((map()) -> template()),
+    Props :: map().
+stateless(Callback, Props) when is_function(Callback, 1), is_map(Props) ->
+    #{callback => Callback, props => Props}.
 
--doc ~"""
-Renders a `t:slot` with view, template, or HTML content with options.
-
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-Handles different slot types: view (current view), template records, or HTML values.
-
-See `t:render_options/0` for available options.
+-doc """
+Builds a stateless child descriptor from a `Handler:Fun/1` reference.
 """.
--spec render_slot(Slot, Options) -> Callback when
-    Slot :: slot(),
-    Options :: render_options(),
-    Callback :: render_callback() | arizona_html:html().
-render_slot(view, Options) ->
-    fun
-        (render, _ParentId, _ElementIndex, View) ->
-            arizona_renderer:render_view(View);
-        (diff, _ParentId, _ElementIndex, View) ->
-            case Options of
-                #{update := false} ->
-                    {nodiff, View};
-                #{} ->
-                    arizona_differ:diff_view(View)
-            end;
-        (hierarchical, _ParentId, _ElementIndex, View) ->
-            arizona_hierarchical:hierarchical_view(View)
-    end;
-render_slot(#template{} = Template, Options) ->
-    fun
-        (render, ParentId, _ElementIndex, View) ->
-            arizona_renderer:render_template(Template, ParentId, View);
-        (diff, ParentId, ElementIndex, View) ->
-            case Options of
-                #{update := false} ->
-                    {nodiff, View};
-                #{} ->
-                    arizona_differ:diff_template(Template, ParentId, ElementIndex, slot, View)
-            end;
-        (hierarchical, ParentId, ElementIndex, View) ->
-            arizona_hierarchical:hierarchical_template(Template, ParentId, ElementIndex, slot, View)
-    end;
-render_slot(Term, _Options) ->
-    arizona_html:to_html(Term).
+-spec stateless(Handler, Fun, Props) -> stateless_descriptor() when
+    Handler :: module(),
+    Fun :: atom(),
+    Props :: map().
+stateless(Handler, Fun, Props) when is_atom(Handler), is_atom(Fun), is_map(Props) ->
+    #{callback => fun Handler:Fun/1, props => Props}.
 
--doc ~"""
-Creates a list rendering callback from an item template function.
+-doc """
+Wraps a `t:template/0` produced by the parse transform with an `each` source.
 
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-At compile time, arizona_parse_transform converts this into an optimized
-`render_list_template/2` call for better performance.
-
-Requires `debug_info` when used at runtime without parse transform.
+Called by the parse transform to compile `?each(Fun, Source)` -- pairs
+the per-item template with its source list, stream, or map.
 """.
--spec render_list(ItemCallback, List) -> Callback when
-    ItemCallback :: fun((Item) -> arizona_template:template()),
-    List :: [Item],
-    Item :: dynamic(),
-    Callback :: render_callback().
-render_list(ItemCallback, List) ->
-    render_list(ItemCallback, List, #{}).
+-spec each(Source, Template) -> each_container() when
+    Source :: term(),
+    Template :: each_template().
+each(Source, #{t := ?EACH, d := DFun} = Tmpl) when is_function(DFun, 1); is_function(DFun, 2) ->
+    #{t => ?EACH, source => Source, template => Tmpl}.
 
--doc ~"""
-Creates a list rendering callback from an item template function with options.
+-doc """
+Converts a template value to its binary HTML representation.
 
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-At compile time, arizona_parse_transform converts this into an optimized
-`render_list_template/3` call for better performance.
-
-See `t:render_options/0` for available options.
-
-Requires `debug_info` when used at runtime without parse transform.
+Errors with `{bad_template_value, V}` for unsupported types.
 """.
--spec render_list(ItemCallback, List, Options) -> Callback when
-    ItemCallback :: fun((Item) -> arizona_template:template()),
-    List :: [Item],
-    Item :: dynamic(),
-    Options :: render_options(),
-    Callback :: render_callback().
-render_list(ItemCallback, List, Options) ->
-    render_callback_collection(
-        ItemCallback, List, Options, fun arizona_parse_transform:transform_render_list/6
-    ).
+-spec to_bin(Value) -> binary() when
+    Value :: term().
+to_bin(V) when is_binary(V) -> V;
+to_bin(V) when is_integer(V) -> integer_to_binary(V);
+to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
+to_bin(V) when is_atom(V) -> atom_to_binary(V);
+to_bin({arizona_js, _} = Cmd) -> arizona_js:encode(Cmd);
+to_bin([{arizona_js, _} | _] = Cmds) -> arizona_js:encode(Cmds);
+to_bin(V) when is_list(V) -> iolist_to_binary(V);
+to_bin(V) -> erlang:error({bad_template_value, V}).
 
--doc ~"""
-Creates a list rendering callback from a compiled template.
-
-Regular API function for rendering lists with pre-compiled templates.
-Used internally by the parse transform optimization.
+-doc """
+Extracts the `t:az/0` index from a 2- or 3-tuple `t:dynamic/0`.
 """.
--spec render_list_template(Template, List) -> Callback when
+-spec dyn_az(Dynamic) -> az() when
+    Dynamic :: dynamic().
+dyn_az({Az, _}) -> Az;
+dyn_az({Az, _, _}) -> Az.
+
+-doc """
+Formats compile/runtime error reasons emitted by this module.
+""".
+-spec format_error(Reason) -> string() when
+    Reason :: term().
+format_error(parse_transform_not_applied) ->
+    "parse transform not applied -- include arizona_stateful.hrl or arizona_stateless.hrl";
+format_error({bad_template_value, V}) ->
+    lists:flatten(io_lib:format("cannot convert ~0tp to binary in template", [V])).
+
+-doc """
+Materializes an attribute dynamic into its rendered binary, leaving plain
+values untouched.
+""".
+-spec unwrap_val(Value) -> term() when
+    Value :: term().
+unwrap_val({attr, Name, V}) -> render_attr(Name, V);
+unwrap_val(V) -> V.
+
+-doc """
+Renders one HTML attribute, handling boolean true/false specially.
+
+`false` strips the attribute, `true` emits a bare `name`, anything else
+becomes `name="value"`.
+""".
+-spec render_attr(Name, Value) -> binary() when
+    Name :: binary(),
+    Value :: term().
+render_attr(_Name, false) -> <<>>;
+render_attr(Name, true) -> <<" ", Name/binary>>;
+render_attr(Name, V) -> <<" ", Name/binary, "=\"", (to_bin(V))/binary, "\"">>.
+
+-doc """
+Propagates `f` (fingerprint) and the optional `diff => false` flag from a
+template into a snapshot.
+""".
+-spec maybe_propagate(Template, Snapshot) -> Snapshot1 when
     Template :: template(),
-    List :: [dynamic()],
-    Callback :: render_callback().
-render_list_template(#template{} = Template, List) ->
-    render_list_template(Template, List, #{}).
+    Snapshot :: snapshot(),
+    Snapshot1 :: snapshot().
+maybe_propagate(Tmpl, Snap) ->
+    Snap1 =
+        case Tmpl of
+            #{diff := false} -> Snap#{diff => false};
+            #{} -> Snap
+        end,
+    maybe_put_fingerprint(Tmpl, Snap1).
 
--doc ~"""
-Creates a list rendering callback from a compiled template with options.
-
-Regular API function for rendering lists with pre-compiled templates.
-Used internally by the parse transform optimization.
-
-See `t:render_options/0` for available options.
+-doc """
+Copies the `f` field from a template to a snapshot if present.
 """.
--spec render_list_template(Template, List, Options) -> Callback when
+-spec maybe_put_fingerprint(Template, Snapshot) -> Snapshot1 when
     Template :: template(),
-    List :: [dynamic()],
-    Options :: render_options(),
-    Callback :: render_callback().
-render_list_template(#template{} = Template, List, Options) ->
-    fun
-        (render, ParentId, _ElementIndex, View) ->
-            arizona_renderer:render_list(Template, List, ParentId, View);
-        (diff, ParentId, ElementIndex, View) ->
-            case Options of
-                #{update := false} ->
-                    {nodiff, View};
-                #{} ->
-                    arizona_differ:diff_list(Template, List, ParentId, ElementIndex, View)
-            end;
-        (hierarchical, ParentId, ElementIndex, View) ->
-            arizona_hierarchical:hierarchical_list(Template, List, ParentId, ElementIndex, View)
-    end.
+    Snapshot :: snapshot(),
+    Snapshot1 :: snapshot().
+maybe_put_fingerprint(#{f := F}, Snap) -> Snap#{f => F};
+maybe_put_fingerprint(#{}, Snap) -> Snap.
 
--spec render_map(ItemCallback, Map) -> Callback when
-    ItemCallback :: fun((Item) -> arizona_template:template()),
-    Map :: map(),
-    Item :: {Key, Value},
-    Key :: dynamic(),
-    Value :: dynamic(),
-    Callback :: render_callback().
-render_map(ItemCallback, Map) ->
-    render_map(ItemCallback, Map, #{}).
-
--doc ~"""
-Creates a map rendering callback from an item template function with options.
-
-Template DSL function - only use inside `arizona_template:from_html/1` strings.
-At compile time, arizona_parse_transform converts this into an optimized
-`render_map_template/3` call for better performance.
-
-See `t:render_options/0` for available options.
-
-Requires `debug_info` when used at runtime without parse transform.
+-doc """
+Builds a stateful child snapshot, propagating `diff => false` from the template.
 """.
--spec render_map(ItemCallback, Map, Options) -> Callback when
-    ItemCallback :: fun((Item) -> arizona_template:template()),
-    Map :: map(),
-    Item :: {Key, Value},
-    Key :: dynamic(),
-    Value :: dynamic(),
-    Options :: render_options(),
-    Callback :: render_callback().
-render_map(ItemCallback, Map, Options) ->
-    render_callback_collection(
-        ItemCallback, Map, Options, fun arizona_parse_transform:transform_render_map/6
-    ).
-
--spec render_map_template(Template, Map) -> Callback when
+-spec make_child_snap(Template, ChildD, ChildDeps, Id) -> snapshot() when
     Template :: template(),
-    Map :: map(),
-    Callback :: render_callback().
-render_map_template(#template{} = Template, Map) ->
-    render_map_template(Template, Map, #{}).
+    ChildD :: [{az(), term()}],
+    ChildDeps :: [deps()],
+    Id :: binary().
+make_child_snap(Tmpl, ChildD, ChildDeps, Id) ->
+    #{s := S} = Tmpl,
+    Snap = #{s => S, d => ChildD, deps => ChildDeps, view_id => Id},
+    maybe_propagate(Tmpl, Snap).
 
--doc ~"""
-Creates a map rendering callback from a compiled template with options.
-
-Regular API function for rendering maps with pre-compiled templates.
-Used internally by the parse transform optimization.
-
-See `t:render_options/0` for available options.
+-doc """
+Splits a list of `{Az, Val, Deps}` triples into the snapshot d-list, deps list,
+and rendered values list.
 """.
--spec render_map_template(Template, Map, Options) -> Callback when
-    Template :: template(),
-    Map :: map(),
-    Options :: render_options(),
-    Callback :: render_callback().
-render_map_template(#template{} = Template, Map, Options) ->
-    fun
-        (render, ParentId, _ElementIndex, View) ->
-            arizona_renderer:render_map(Template, Map, ParentId, View);
-        (diff, ParentId, ElementIndex, View) ->
-            case Options of
-                #{update := false} ->
-                    {nodiff, View};
-                #{} ->
-                    arizona_differ:diff_map(Template, Map, ParentId, ElementIndex, View)
-            end;
-        (hierarchical, ParentId, ElementIndex, View) ->
-            arizona_hierarchical:hierarchical_map(Template, Map, ParentId, ElementIndex, View)
-    end.
+-spec unzip_triples(Triples) -> {DList, DepsList, Vals} when
+    Triples :: [{az(), term(), deps()}],
+    DList :: [{az(), term()}],
+    DepsList :: [deps()],
+    Vals :: [term()].
+unzip_triples([]) ->
+    {[], [], []};
+unzip_triples([{Az, Val, Deps} | Rest]) ->
+    {RestD, RestDeps, RestVals} = unzip_triples(Rest),
+    {[{Az, Val} | RestD], [Deps | RestDeps], [unwrap_val(Val) | RestVals]}.
 
-%% --------------------------------------------------------------------
-%% Internal helper functions
-%% --------------------------------------------------------------------
+-doc """
+Like `unzip_triples/1` but discards the rendered values list.
+""".
+-spec split_triples(Triples) -> {DList, DepsList} when
+    Triples :: [{az(), term(), deps()}],
+    DList :: [{az(), term()}],
+    DepsList :: [deps()].
+split_triples([]) ->
+    {[], []};
+split_triples([{Az, Val, Deps} | Rest]) ->
+    {RestD, RestDeps} = split_triples(Rest),
+    {[{Az, Val} | RestD], [Deps | RestDeps]}.
 
-%% Extract template content from various sources (string, file, priv_file)
--spec extract_template_content(Payload) -> Content when
-    Payload :: {file, Filename} | {priv_file, App, Filename} | Content,
-    Filename :: file:filename_all(),
-    App :: atom(),
-    Content :: arizona_html:html() | arizona_markdown:markdown().
-extract_template_content({file, Filename}) ->
-    read_file_content(Filename);
-extract_template_content({priv_file, App, Filename}) ->
-    case priv_filename(App, Filename) of
-        {ok, PrivFilename} ->
-            read_file_content(PrivFilename);
-        {error, Reason} ->
-            error({priv_dir_error, App, Reason})
-    end;
-extract_template_content(Content) when is_binary(Content); is_list(Content) ->
-    Content.
+-doc """
+Returns the visible portion of a stream order list given a `Limit`.
 
-%% Read file content and return as binary
--spec read_file_content(Filename) -> Content when
-    Filename :: file:filename_all(),
-    Content :: binary().
-read_file_content(Filename) ->
-    case file:read_file(Filename) of
-        {ok, Content} ->
-            Content;
-        {error, Reason} ->
-            error({file_read_error, Filename, Reason})
-    end.
-
-priv_filename(App, Filename) ->
-    case code:priv_dir(App) of
-        {error, Reason} ->
-            {error, Reason};
-        PrivDir ->
-            {ok, filename:join(PrivDir, Filename)}
-    end.
-
-%% Generic helper for render_list and render_map callbacks.
-%%
-%% Extracts function clauses from callback environment, converts to AST,
-%% applies the specified transformation function, and evaluates the result.
-%% Both render_list and render_map use this same pattern with different
-%% transformation functions.
--spec render_callback_collection(ItemCallback, Collection, Options, TransformFun) -> Callback when
-    ItemCallback :: fun((Item) -> arizona_template:template()),
-    Collection :: [Item] | map(),
-    Item :: dynamic(),
-    Options :: render_options(),
-    TransformFun :: fun(
-        (
-            module(),
-            arizona_token:line(),
-            erl_syntax:syntaxTree(),
-            erl_syntax:syntaxTree(),
-            render_options(),
-            [compile:option()]
-        ) -> erl_syntax:syntaxTree()
-    ),
-    Callback :: render_callback().
-render_callback_collection(ItemCallback, Collection, Options, TransformFun) ->
-    % Extract function clauses from the callback's environment
-    % This requires the function to be compiled with debug_info
-    case erlang:fun_info(ItemCallback, env) of
-        {env, [{_, _, _, _, _, FunClauses}]} ->
-            % Convert function clauses back to AST format
-            FunArg = erl_syntax:revert(erl_syntax:fun_expr(FunClauses)),
-            CollectionArg = merl:term(Collection),
-
-            % Use the provided transformation function with options
-            AST = TransformFun(erlang, 0, FunArg, CollectionArg, Options, []),
-
-            % Evaluate the transformed AST to get the final render callback
-            erl_eval:expr(
-                erl_syntax:revert(AST),
-                #{},
-                {value, fun(Function, Args) ->
-                    apply(erlang, Function, Args)
-                end},
-                none,
-                value
-            );
-        Other ->
-            error(
-                {function_info_failed,
-                    io_lib:format(
-                        "Unable to extract environment from function. "
-                        "This usually means the function was not compiled with debug_info or "
-                        "is not a local function. Got: ~p",
-                        [Other]
-                    )}
-            )
-    end.
+`infinity` returns the full order; an integer truncates with `lists:sublist/2`.
+""".
+-spec visible_keys(Order, Limit) -> Order1 when
+    Order :: [term()],
+    Limit :: pos_integer() | infinity,
+    Order1 :: [term()].
+visible_keys(Order, infinity) -> Order;
+visible_keys(Order, Limit) -> lists:sublist(Order, Limit).

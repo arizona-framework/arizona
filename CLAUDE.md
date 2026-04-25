@@ -1,145 +1,69 @@
-# CLAUDE.md
+# Arizona
 
-This file provides guidance to Claude Code (claude.ai/code) when working with
-code in this repository.
+Erlang/OTP template engine with server-side diffing. **This is a POC, not a LiveView clone.** As a POC, any code can be changed freely -- no backward compatibility concerns.
 
-## Project Overview
+Dependencies: `cowboy` (optional -- HTTP/WS server), `fs` (file system events for dev-mode watcher).
 
-Arizona is a real-time web framework for Erlang (OTP 28+). It uses compile-time
-parse transforms to optimize templates and a WebSocket-based differential
-rendering engine to push minimal updates to clients.
-
-## Build & Development Commands
+## Build & Test
 
 ```bash
-# Build
-rebar3 compile                  # Compile Erlang
-npm run build                   # Build JavaScript client
-
-# Run all checks + tests (CI equivalent)
-rebar3 ci
-
-# Code quality (runs fmt --check, lint, hank, xref, dialyzer)
-rebar3 check
-
-# Format code
-rebar3 fmt                      # Erlang
-npm run format                  # JavaScript/JSON/YAML
-
-# Lint (beyond rebar3 check)
-npm run lint:md                 # Markdown
-npm run lint:js                 # JavaScript (ESLint)
-npm run ci                      # Node.js CI (format:check + lint:check + test)
-
-# Tests
-rebar3 ct                       # Common Test suites
-rebar3 eunit --cover            # EUnit tests
-rebar3 ct --suite test/arizona_template_SUITE  # Single CT suite
-npm run test:unit               # JS unit tests (Vitest)
-npm run test:e2e                # E2E tests (Playwright)
-
-# Start test server at localhost:8080
-./scripts/start_test_server.sh
+rebar3 compile                            # compile Erlang
+rebar3 ct                                 # all CT suites
+rebar3 ct --suite=arizona_SUITE           # single suite
+rebar3 eunit --module=my_module           # inline EUnit tests (private fn testing)
+npx vitest run                            # JS unit tests (Vitest + jsdom)
 ```
 
-## Architecture
+**Always run `make precommit` before committing** if any `.erl` or `.js` files were touched -- it formats, runs fast checks (no dialyzer), and runs unit/JS tests.
 
-### Component Model
+### Makefile targets
 
-Three component types with distinct lifecycles:
+| Target | Description |
+|--------|-------------|
+| `make` / `make start` | Start the test server (default) |
+| `make ci` | Full CI: check + test + cover + E2E + doc |
+| `make precommit` | Fast pre-commit: fmt, check-fast, test-erl, test-js |
+| `make compile` | Compile Erlang sources |
+| `make fmt` | Format all (`fmt-erl` `fmt-js`) |
+| `make check` | All checks incl. dialyzer (`check-erl` `check-js`) |
+| `make check-fast` | Fast checks -- no dialyzer (`check-fmt` `check-lint` `check-hank` `check-xref` `check-js`) |
+| `make test` | All tests -- no coverage (`test-erl` `test-js` `test-e2e`) |
+| `make test-erl` | Common Test + EUnit |
+| `make test-ct` | Common Test only |
+| `make test-eunit` | EUnit only (inline private fn tests) |
+| `make test-js` | JS unit tests (Vitest) |
+| `make test-e2e` | Playwright E2E tests |
+| `make cover` | Coverage check (`cover-erl` `cover-js`) |
+| `make cover-erl` | Erlang coverage (min 80%) |
+| `make doc` | Generate docs (`doc-erl` `doc-js`) |
+| `make doc-erl` | Erlang docs (ex_doc) |
+| `make setup-e2e` | Install E2E deps |
+| `make clean` | Remove build artifacts |
 
-- **Views** (`arizona_view` behaviour) — top-level page components.
-  Required: `mount/2`, `render/1`.
-  Optional: `handle_event/3`, `handle_info/2`, `terminate/2`.
-- **Stateful components** (`arizona_stateful` behaviour) — nested components
-  with their own state.
-  Required: `mount/1`, `render/1`.
-  Optional: `handle_event/3`, `unmount/1`.
-- **Stateless components** — pure render functions (no behaviour):
-  `render(Bindings) -> Template`.
-  Executed via `arizona_stateless:call_render_callback/3`.
+## Architecture reference
 
-### Template System
+Full architecture documentation (modules, APIs, data flow, op codes, etc.) is in [docs/architecture.md](docs/architecture.md).
 
-Templates support three syntaxes via `arizona_template`:
+## Event attributes & effects -- `arizona_js`
 
-- HTML: `arizona_template:from_html(~"<h1>{Title}</h1>")`
-- Erlang terms:
-  `arizona_template:from_erl({'div', [{id, Id}], [Content]})`
-- Markdown:
-  `arizona_template:from_markdown(~"# Hello {Name}!")`
+Event attributes (`az-click`, `az-submit`, etc.) use `arizona_js` commands. Handler effects use the same module. All functions return `{arizona_js, [OpCode, ...Args]}`.
 
-A parse transform (`arizona_parse_transform`) compiles templates at build time
-into optimized records with static parts, dynamic callback tuples, and
-fingerprints for cache validation.
+```erlang
+%% Template: event attribute
+{'button', [{az_click, arizona_js:push_event(~"inc")}], [<<"+">>]}
 
-### Rendering Pipeline
+%% Template: multiple commands
+{'button', [{az_click, [arizona_js:push_event(~"inc"), arizona_js:toggle(~"#modal")]}], [<<"Both">>]}
 
-1. **Scanner** (`arizona_scanner`) tokenizes template strings
-2. **Parser** (`arizona_parser`) produces an AST from tokens
-3. **Renderer** (`arizona_renderer`) executes templates to HTML
-4. **Tracker** (`arizona_tracker`) records which bindings affect which
-   dynamic elements
-5. **Differ** (`arizona_differ`) generates minimal diffs by comparing
-   fingerprints and tracking changed bindings
+%% Handler: effects
+handle_event(~"inc", _P, B) ->
+    {B#{count => Count + 1}, #{}, [arizona_js:set_title(~"Updated")]}.
+```
 
-### Live Connections
+`push_event` auto-collects payload from inputs/forms. Explicit payload merges on top. Op codes in `include/arizona_js.hrl`.
 
-`arizona_live` is a GenServer per WebSocket connection. It renders the initial
-hierarchical structure, then on state changes produces diffs sent to the JS
-client. Events from the client are routed to the appropriate view or stateful
-component by ID.
+## What's missing
 
-### Server & Routing
+### Engine
 
-Built on Cowboy (`arizona_server`). Four route types (all include a trailing
-`Middlewares` list):
-
-- `{view, Path, ViewModule, MountArg, Middlewares}` — renders a view to HTML
-- `{websocket, Path, WebSocketOpts, Middlewares}` — live connection endpoint
-- `{controller, Path, Handler, State, Middlewares}` — custom Cowboy handler
-- `{asset, Path, AssetConfig, Middlewares}` — static file serving
-  (`cowboy_static` opts)
-
-Middleware (`arizona_middleware` behaviour) and plugins (`arizona_plugin`
-behaviour) extend request handling and configuration.
-
-### JavaScript Client
-
-JavaScript source in `assets/js/`. Handles WebSocket communication, DOM
-patching from server diffs (via morphdom), and event binding. Built with Vite;
-output goes to `priv/static/assets/`.
-
-### Key Supporting Modules
-
-- `arizona_pubsub` — topic-based pub/sub via Erlang `pg`
-- `arizona_action` — action types returned from callbacks
-  (dispatch, reply, redirect, reload)
-- `arizona_config` — application configuration loading
-- `arizona_watcher` / `arizona_reloader` — file watching and hot reload
-  in development
-
-## Compilation Order
-
-These files must compile first (parse transform dependencies):
-`arizona_token` → `arizona_scanner` → `arizona_markdown` →
-`arizona_markdown_processor` → `arizona_parser`
-
-## Code Conventions
-
-- All modules use the `arizona_` prefix. Test modules end with `_SUITE`.
-- Compiler flags: `debug_info`, `warnings_as_errors`, `warn_missing_spec`
-  — all exports require type specs.
-- Module layout: `-moduledoc`, behaviour, exports (grouped by section),
-  types, then implementations.
-- Types use `-nominal` for complex definitions; maps use `:=` for
-  required keys.
-- Macros are restricted in source code (elvis config). Use EUnit assertion
-  macros only in tests.
-- Tests use Common Test with EUnit assertions
-  (`-include_lib("stdlib/include/assert.hrl")`). Test groups run in parallel.
-- Formatting: `erlfmt` for Erlang, Prettier for JS. 4-space indentation,
-  no tabs, ≤100 character lines.
-- No trailing whitespace. Comment tricky or non-obvious decisions.
-- Minimum 80% code coverage enforced.
-- Commit messages: first line must be ≤72 characters.
+- **Upload support** -- file upload handling

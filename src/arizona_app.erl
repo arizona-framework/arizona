@@ -1,16 +1,48 @@
 -module(arizona_app).
--moduledoc false.
+-moduledoc """
+OTP application entry point.
+
+Boots `arizona_sup`, then -- if the `server` application env is set --
+starts a Cowboy listener named `arizona_http` via
+`arizona_cowboy_server:start/2`. On shutdown, stops that listener.
+
+## Server config
+
+```erlang
+{arizona, [
+    {server, #{
+        scheme => http,                          %% http | https
+        transport_opts => [{port, 4040}],        %% cowboy transport opts
+        proto_opts => #{stream_handlers => [cowboy_compress_h, cowboy_stream_h]},
+        routes => [
+            {live, <<"/">>, my_page, #{layouts => [{my_layout, render}]}},
+            {ws, <<"/ws">>, #{}},
+            {asset, <<"/priv">>, {priv_dir, my_app, "static"}}
+        ]
+    }}
+]}
+```
+
+The `server` key is optional: if absent, only the supervisor starts
+(useful for tests that launch listeners manually).
+""".
 -behaviour(application).
 
 %% --------------------------------------------------------------------
-%% Behaviour (application) exports
+%% Macros
+%% --------------------------------------------------------------------
+
+-define(LISTENER, arizona_http).
+
+%% --------------------------------------------------------------------
+%% application callback exports
 %% --------------------------------------------------------------------
 
 -export([start/2]).
 -export([stop/1]).
 
 %% --------------------------------------------------------------------
-%% Behaviour (application) callbacks
+%% application Callbacks
 %% --------------------------------------------------------------------
 
 -spec start(StartType, StartArgs) -> StartRet when
@@ -19,46 +51,32 @@
     StartRet :: {ok, Pid} | {error, ErrReason},
     Pid :: pid(),
     ErrReason :: term().
-start(_StartType, _StartArgs) ->
+start(_Type, _Args) ->
     maybe
-        Config = arizona_config:get(),
-        % Extract configs
-        ReloaderConfig = maps:get(reloader, Config),
-        ServerConfig = maps:get(server, Config),
-        % Start supervisor with processed config
-        SupConfig = create_sup_config(ReloaderConfig),
-        {ok, SupPid} ?= arizona_sup:start_link(SupConfig),
-        % Start reloader instances if enabled
-        ok ?= maybe_start_reloader(ReloaderConfig),
-        % Start server if enabled
-        ok ?= maybe_start_server(ServerConfig),
+        {ok, SupPid} ?= arizona_sup:start_link(),
+        ok ?= maybe_start_server(),
         {ok, SupPid}
     else
-        {error, Reason} ->
-            {error, Reason}
+        {error, _} = Err -> Err
     end.
 
 -spec stop(State) -> ok when
     State :: term().
 stop(_State) ->
+    _ = arizona_cowboy_server:stop(?LISTENER),
     ok.
 
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
-create_sup_config(ReloaderConfig) ->
-    ReloaderEnabled = maps:get(enabled, ReloaderConfig),
-    #{watcher_enabled => ReloaderEnabled}.
-
-maybe_start_reloader(ReloaderConfig) ->
-    case arizona_reloader:start(ReloaderConfig) of
-        ok -> ok;
-        {error, Reason} -> {error, {reloader_failed, Reason}}
-    end.
-
-maybe_start_server(ServerConfig) ->
-    case arizona_server:start(ServerConfig) of
-        ok -> ok;
-        {error, Reason} -> {error, {server_failed, Reason}}
+maybe_start_server() ->
+    case application:get_env(arizona, server) of
+        {ok, ServerOpts} ->
+            case arizona_cowboy_server:start(?LISTENER, ServerOpts) of
+                {ok, _} -> ok;
+                {error, _} = Err -> Err
+            end;
+        undefined ->
+            ok
     end.

@@ -1,430 +1,69 @@
 -module(arizona_view).
--moduledoc ~""""
-View behavior definition and state management for top-level page components.
+-moduledoc """
+Behaviour for route-mounted Arizona handlers (pages, not embedded
+components).
 
-Defines the behavior for views that represent complete pages or routes
-in the Arizona framework. Views manage their own state plus the states
-of nested stateful components, handle WebSocket events and Erlang process
-messages, and support optional layout wrapping.
+Adds a single mount callback over the shared `arizona_handler`
+contract: `mount/2` takes both the initial `Bindings` and an
+`arizona_req:request()`, giving a view access to URL path bindings,
+query params, cookies, headers, and body via the request accessors.
 
-## Behavior Callbacks
+The other lifecycle callbacks (`render/1`, `handle_event/3`,
+`handle_info/2`, `unmount/1`) come from `arizona_handler`. Views
+don't implement `handle_update/2` in practice -- they're
+route-level and never receive parent prop updates -- but the shared
+behaviour allows it for forward compatibility.
 
-### Required
+Handlers include `arizona_view.hrl`, which declares both behaviours
+(`arizona_handler` and `arizona_view`), enables the parse transform,
+and brings in the common macros.
 
-- `mount/2` - Initialize view from mount arg and HTTP request
-- `render/1` - Generate template from current bindings
+## Required callbacks
 
-### Optional
+- `mount/2` -- runs once on instance creation with
+  `(Bindings, Request)`; returns initial bindings plus any reset
+  values
+- `render/1` -- from `arizona_handler`
 
-- `handle_event/3` - Handle WebSocket events (raises if events triggered but not defined)
-- `handle_info/2` - Handle Erlang process messages
-- `terminate/2` - Cleanup when view process terminates
+## Optional callbacks
 
-## View Lifecycle
-
-1. **Mount**: View is initialized via `mount/2` callback
-2. **Render**: Initial HTML is generated with `render/1`
-3. **Events**: User interactions trigger `handle_event/3` callbacks
-4. **Messages**: External messages are handled by `handle_info/2`
-5. **Terminate**: View cleanup via `terminate/2` when WebSocket disconnects
-
-## View State Management
-
-View state includes:
-- Optional `layout/0` configuration
-- Main `arizona_stateful:state/0`
-- Nested stateful component states by ID
-- Template fingerprints for differential updates
-
-## Example Implementation
-
-```erlang
--module(home_view).
--compile({parse_transform, arizona_parse_transform}).
--behaviour(arizona_view).
--export([mount/2, render/1, terminate/2]).
-
-mount(_MountArg, _Request) ->
-    arizona_view:new(?MODULE, #{user => ~"Anonymous"}, none).
-
-render(Bindings) ->
-    arizona_template:from_html(~"""
-    <h1>Welcome {arizona_template:get_binding(user, Bindings)}!</h1>
-    """).
-
-terminate(_Reason, _View) ->
-    % Cleanup resources
-    ok.
-```
-"""".
+- `handle_event/3`, `handle_info/2`, `unmount/1` -- from
+  `arizona_handler`
+""".
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([call_mount_callback/3]).
--export([call_render_callback/1]).
--export([call_handle_event_callback/3]).
--export([call_handle_info_callback/2]).
--export([call_terminate_callback/2]).
--export([new/3]).
--export([get_layout/1]).
--export([get_state/1]).
--export([update_state/2]).
--export([get_stateful_state/2]).
--export([fingerprint_matches/4]).
--export([put_fingerprint/5]).
--export([remove_fingerprint/3]).
--export([find_stateful_state/2]).
--export([put_stateful_state/3]).
+-export([call_mount/3]).
 
 %% --------------------------------------------------------------------
-%% Ignore xref warnings
+%% Behaviour callbacks
 %% --------------------------------------------------------------------
 
--ignore_xref([new/3]).
+-doc """
+Initializes a view instance. Called once when the framework mounts
+the handler at the top of a route.
+
+`Bindings` carries the route's static `bindings` config (plus
+anything middleware layered on top). `Request` is the current
+`arizona_req:request()` -- use its accessors to reach URL path
+bindings, query params, cookies, headers, and body.
+""".
+-callback mount(Bindings, Request) -> arizona_stateful:mount_ret() when
+    Bindings :: arizona_stateful:bindings(),
+    Request :: az:request().
 
 %% --------------------------------------------------------------------
-%% Types exports
+%% API Functions
 %% --------------------------------------------------------------------
 
--export_type([view/0]).
--export_type([layout/0]).
--export_type([mount_arg/0]).
--export_type([handle_event_result/0]).
--export_type([handle_info_result/0]).
--export_type([component_type/0]).
-
-%% --------------------------------------------------------------------
-%% Types definitions
-%% --------------------------------------------------------------------
-
--record(view, {
-    layout :: layout() | none,
-    state :: arizona_stateful:state(),
-    stateful_states :: #{arizona_stateful:id() => arizona_stateful:state()},
-    fingerprints :: #{
-        arizona_stateful:id() => #{
-            arizona_tracker:element_index() => {arizona_template:fingerprint(), component_type()}
-        }
-    }
-}).
-
--opaque view() :: #view{}.
--nominal layout() :: {
-    Module :: module(),
-    RenderFun :: atom(),
-    SlotName :: atom(),
-    Bindings :: map()
-}.
--nominal mount_arg() :: dynamic().
--nominal handle_event_result() :: {Actions :: arizona_action:actions(), View :: view()}.
--nominal handle_info_result() :: {Actions :: arizona_action:actions(), View :: view()}.
--nominal component_type() :: {stateful, arizona_stateful:id()} | stateless | slot | list.
-
-%% --------------------------------------------------------------------
-%% Behavior callback definitions
-%% --------------------------------------------------------------------
-
--callback mount(MountArg, ArizonaRequest) -> View when
-    MountArg :: mount_arg(),
-    ArizonaRequest :: arizona_request:request(),
-    View :: view().
-
--callback render(Bindings) -> Template when
-    Bindings :: map(),
-    Template :: arizona_template:template().
-
--callback handle_event(Event, Payload, View) -> Result when
-    Event :: arizona_stateful:event_name(),
-    Payload :: arizona_stateful:event_payload(),
-    View :: view(),
-    Result :: handle_event_result().
-
--callback handle_info(Info, View) -> Result when
-    Info :: term(),
-    View :: view(),
-    Result :: handle_info_result().
-
--callback terminate(Reason, View) -> Result when
-    Reason :: arizona_websocket:terminate_reason(),
-    View :: view(),
-    Result :: term().
-
--optional_callbacks([handle_event/3, handle_info/2, terminate/2]).
-
-%% --------------------------------------------------------------------
-%% API function definitions
-%% --------------------------------------------------------------------
-
--doc ~"""
-Executes a view's mount callback.
-
-Calls the module's `mount/2` function with mount argument and HTTP request
-to initialize the view. Used during page navigation and initial load.
+-doc """
+Invokes the required `mount/2` callback on a view handler module.
 """.
--spec call_mount_callback(Module, MountArg, ArizonaRequest) -> View when
-    Module :: module(),
-    MountArg :: mount_arg(),
-    ArizonaRequest :: arizona_request:request(),
-    View :: view().
-call_mount_callback(Module, MountArg, ArizonaRequest) when is_atom(Module) ->
-    apply(Module, mount, [MountArg, ArizonaRequest]).
-
--doc ~"""
-Executes a view's render callback.
-
-Calls the module's `render/1` function with current bindings to
-generate the view template. Used during rendering pipeline.
-""".
--spec call_render_callback(View) -> Template when
-    View :: view(),
-    Template :: arizona_template:template().
-call_render_callback(#view{state = State}) ->
-    Module = arizona_stateful:get_module(State),
-    Bindings = arizona_stateful:get_bindings(State),
-    apply(Module, render, [Bindings]).
-
--doc ~"""
-Executes a view's event handler callback.
-
-Calls the module's `handle_event/3` function to process WebSocket events.
-Returns a list of actions to execute and the updated view.
-""".
--spec call_handle_event_callback(Event, Params, View) -> Result when
-    Event :: arizona_stateful:event_name(),
-    Params :: arizona_stateful:event_params(),
-    View :: view(),
-    Result :: handle_event_result().
-call_handle_event_callback(Event, Params, #view{state = State} = View) ->
-    Module = arizona_stateful:get_module(State),
-    apply(Module, handle_event, [Event, Params, View]).
-
--doc ~"""
-Executes a view's info handler callback.
-
-Calls the module's `handle_info/2` function to process Erlang process
-messages. Returns a list of actions to execute and the updated view.
-""".
--spec call_handle_info_callback(Info, View) -> Result when
-    Info :: term(),
-    View :: view(),
-    Result :: handle_info_result().
-call_handle_info_callback(Info, #view{state = State} = View) ->
-    Module = arizona_stateful:get_module(State),
-    apply(Module, handle_info, [Info, View]).
-
--doc ~"""
-Calls the view module's terminate callback if it exists.
-
-Invokes the optional `terminate/2` callback in the view module to perform
-cleanup operations when the live process is shutting down. The callback
-receives the termination reason and the current view state.
-
-The terminate callback is useful for:
-- Cleaning up external resources (database connections, file handles)
-- Removing user presence or session data
-- Logging termination events
-- Graceful shutdown operations
-
-If the view module doesn't implement the terminate/2 callback, this function
-does nothing and returns `ok`.
-
-## Examples
-
-In your view module:
-```erlang
-terminate({remote, 1001, _}, View) ->
-    % User closed browser tab - clean up presence
-    UserId = get_user_id_from_view(View),
-    presence_server:remove_user(UserId);
-terminate(normal, _View) ->
-    % Normal shutdown - no special cleanup needed
-    ok.
-```
-""".
--spec call_terminate_callback(Reason, View) -> Result when
-    Reason :: arizona_websocket:terminate_reason(),
-    View :: view(),
-    Result :: term().
-call_terminate_callback(Reason, #view{state = State} = View) ->
-    Module = arizona_stateful:get_module(State),
-    case erlang:function_exported(Module, terminate, 2) of
-        true ->
-            apply(Module, terminate, [Reason, View]);
-        false ->
-            ok
-    end.
-
--doc ~"""
-Creates a new view with optional layout configuration.
-
-Initializes view with module reference, bindings, and optional layout.
-Layout tuple specifies wrapper module, function, slot name, and bindings.
-""".
--spec new(Module, Bindings, Layout) -> View when
-    Module :: module(),
-    Bindings :: map(),
-    Layout :: layout() | none,
-    View :: view().
-new(Module, Bindings, Layout) when is_atom(Module), (is_tuple(Layout) orelse Layout =:= none) ->
-    State = arizona_stateful:new(Module, Bindings),
-    #view{
-        layout = Layout,
-        state = State,
-        stateful_states = #{},
-        fingerprints = #{}
-    }.
-
--doc ~"""
-Returns the view's layout configuration.
-
-Returns `layout/0` or `none` if no layout is configured.
-""".
--spec get_layout(View) -> Layout when
-    View :: view(),
-    Layout :: layout() | none.
-get_layout(#view{} = View) ->
-    View#view.layout.
-
--doc ~"""
-Returns the view's main stateful state.
-
-Provides access to the primary view state for binding operations.
-""".
--spec get_state(View) -> State when
-    View :: view(),
-    State :: arizona_stateful:state().
-get_state(#view{} = View) ->
-    View#view.state.
-
--doc ~"""
-Updates the view's main stateful state.
-
-Replaces the current main state with the provided state.
-""".
--spec update_state(State, View) -> View1 when
-    State :: arizona_stateful:state(),
-    View :: view(),
-    View1 :: view().
-update_state(State, #view{} = View) ->
-    View#view{state = State}.
-
--doc ~"""
-Gets a nested stateful component state by ID, throwing if not found.
-
-Returns the state for the specified component ID. Raises `{badkey, Id}`
-exception if the component is not found.
-""".
--spec get_stateful_state(Id, View) -> StatefulState when
-    Id :: arizona_stateful:id(),
-    View :: view(),
-    StatefulState :: arizona_stateful:state().
-get_stateful_state(Id, #view{} = View) when is_binary(Id) ->
-    maps:get(Id, View#view.stateful_states).
-
--doc ~"""
-Safely looks up a nested stateful component state by ID.
-
-Returns `{ok, State}` if the component exists, or `error` if not found.
-Provides exception-free lookup for optional components.
-""".
--spec find_stateful_state(Id, View) -> {ok, StatefulState} | error when
-    Id :: arizona_stateful:id(),
-    View :: view(),
-    StatefulState :: arizona_stateful:state().
-find_stateful_state(Id, #view{} = View) when is_binary(Id) ->
-    maps:find(Id, View#view.stateful_states).
-
--doc ~"""
-Stores a nested stateful component state by ID.
-
-Adds or updates the component state in the view's stateful states map.
-""".
--spec put_stateful_state(Id, State, View) -> View1 when
-    Id :: arizona_stateful:id(),
-    State :: arizona_stateful:state(),
-    View :: view(),
-    View1 :: view().
-put_stateful_state(Id, State, #view{} = View) ->
-    States = View#view.stateful_states,
-    View#view{stateful_states = States#{Id => State}}.
-
--doc ~"""
-Checks if a component element has a matching fingerprint.
-
-Returns:
-- `true` if the component and element have a matching fingerprint
-- `{false, ComponentType}` if fingerprint exists but doesn't match (component changed)
-- `none` if no fingerprint exists for this component/element (new component)
-
-The component type in the `{false, ComponentType}` case is used for proper component
-lifecycle management, particularly for calling unmount callbacks on stateful
-components that are being replaced.
-""".
--spec fingerprint_matches(Id, ElementIndex, Fingerprint, View) -> Result when
-    Id :: arizona_stateful:id(),
-    ElementIndex :: arizona_tracker:element_index(),
-    Fingerprint :: arizona_template:fingerprint(),
-    View :: view(),
-    Result :: true | {false, component_type()} | none.
-fingerprint_matches(Id, ElementIndex, Fingerprint, #view{} = View) ->
-    case View#view.fingerprints of
-        #{Id := #{ElementIndex := {Fingerprint, _ComponentType}}} ->
-            true;
-        #{Id := #{ElementIndex := {_OtherFingerprint, ComponentType}}} ->
-            {false, ComponentType};
-        #{} ->
-            none
-    end.
-
--doc ~"""
-Stores a template fingerprint with component type for a component element.
-
-Saves the fingerprint and component type for future differential update
-comparisons. The component type is used for proper component lifecycle management,
-particularly for calling unmount callbacks on stateful components.
-
-Component types:
-- `{stateful, StatefulId}` - For stateful components that may need cleanup
-- `stateless` - For stateless template components
-- `list` - For list and map rendering components
-- `slot` - For slot rendering components
-
-Creates nested maps as needed for new components.
-""".
--spec put_fingerprint(Id, ElementIndex, Fingerprint, ComponentType, View) -> View1 when
-    Id :: arizona_stateful:id(),
-    ElementIndex :: arizona_tracker:element_index(),
-    Fingerprint :: arizona_template:fingerprint(),
-    ComponentType :: component_type(),
-    View :: view(),
-    View1 :: view().
-put_fingerprint(
-    Id, ElementIndex, Fingerprint, ComponentType, #view{fingerprints = Fingerprints} = View
-) ->
-    StatefulFingerprints = maps:get(Id, Fingerprints, #{}),
-    UpdatedStatefulFingerprints = StatefulFingerprints#{
-        ElementIndex => {Fingerprint, ComponentType}
-    },
-    View#view{fingerprints = Fingerprints#{Id => UpdatedStatefulFingerprints}}.
-
--doc ~"""
-Removes a template fingerprint for a component element.
-
-Clears the stored fingerprint, typically when elements are removed
-or templates change significantly. No-op if fingerprint doesn't exist.
-""".
--spec remove_fingerprint(Id, ElementIndex, View) -> View1 when
-    Id :: arizona_stateful:id(),
-    ElementIndex :: arizona_tracker:element_index(),
-    View :: view(),
-    View1 :: view().
-remove_fingerprint(Id, ElementIndex, #view{} = View) ->
-    case View#view.fingerprints of
-        #{Id := StatefulFingerprints} = Fingerprints ->
-            UpdatedStatefulFingerprints = maps:remove(ElementIndex, StatefulFingerprints),
-            View#view{fingerprints = Fingerprints#{Id => UpdatedStatefulFingerprints}};
-        #{} ->
-            View
-    end.
+-spec call_mount(Handler, Bindings, Request) -> arizona_stateful:mount_ret() when
+    Handler :: module(),
+    Bindings :: arizona_stateful:bindings(),
+    Request :: az:request().
+call_mount(H, Bindings, Req) ->
+    H:mount(Bindings, Req).

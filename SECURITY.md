@@ -14,7 +14,7 @@ you to ensure that your findings get the appropriate handling.
 ## Reporting Security Issues
 
 If you believe you have found a security vulnerability in this repository,
-please report it to <williamthome@hotmail.com>.
+please report it to <contact@williamthome.dev>.
 
 Please do not report security vulnerabilities through public channels, like
 GitHub issues, discussions, or pull requests.

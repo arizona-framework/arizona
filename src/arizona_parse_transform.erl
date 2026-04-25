@@ -1,725 +1,934 @@
 -module(arizona_parse_transform).
--moduledoc ~""""
-Compile-time AST transformation for Arizona templates.
+-moduledoc """
+Compile-time parse transform that converts Erlang element tuples into
+optimized template maps with static/dynamic separation.
 
-Erlang parse transform that converts Arizona template function calls into
-optimized compile-time AST. Transforms `arizona_template:from_html/1`,
-`arizona_template:from_markdown/1`, and `arizona_template:render_list/2` calls
-for maximum runtime performance. Supports file-based template compilation.
+Intercepts calls to `arizona_template:html/1` (or `az:html/1`) and
+`arizona_template:each/2` (or `az:each/2`), compiling element tuples
+into `#{s => Statics, d => Dynamics, f => Fingerprint}` maps at compile
+time. For `arizona_stateful` modules, it additionally validates and
+transforms the `render/1` callback (single root element, `?get(id)` on
+root, auto-injection of `az-view`).
 
-## Transformations
+## Compilation Pipeline
 
-- `arizona_template:from_html/1` → Compiled template record
-- `arizona_template:from_markdown/1` → Compiled markdown template record
-- `arizona_template:render_list/2` → Optimized list rendering with callbacks
-- Prevents infinite recursion in nested template expressions
-- Evaluates template strings and files at compile time for validation
-- Supports file-based templates: `{file, "path.html"}`, `{priv_file, app, "template.html"}`
+1. Detect `arizona_stateful` behaviour to enable live-render mode
+2. Walk all function bodies, transforming `?html(...)` and `?each(...)` calls
+3. For stateful `render/1`, validate root element constraints and inject `az-view`
+4. Compile element tuples into statics (binaries) and dynamics (closures)
+5. Assign `az` indices to elements with dynamic content for diff targeting
+6. Generate a base-36 `phash2` fingerprint from statics for change detection
+7. Scope `az` values with the fingerprint prefix to avoid collisions
 
-## Usage
+## Element Forms
 
-Add to module compile options:
+| Form | Example | Description |
+|------|---------|-------------|
+| `{Tag, Attrs, Children}` | `{'div', [], [?get(x)]}` | Standard element |
+| `{Tag, Attrs, Expr}` | `{'span', [], ?get(x)}` | Single expression as children |
+| `{Tag, Attrs}` | `{'br', []}` | Void element shorthand |
+
+## Attribute Forms
+
+| Form | Example | Output |
+|------|---------|--------|
+| `{name, ~"value"}` | `{class, ~"box"}` | `class="box"` |
+| `{name, Expr}` | `{class, Theme}` | Dynamic attribute |
+| `name` (atom) | `disabled` | Boolean attribute |
+| `~"name"` (binary) | `~"hidden"` | Boolean attribute |
+| `{name, true}` | `{hidden, true}` | Emitted |
+| `{name, false}` | `{hidden, false}` | Stripped |
+| `'az-nodiff'` | Directive | Stripped; emits `diff => false` |
+
+## Dynamic Tuple Forms
 
 ```erlang
--compile([{parse_transform, arizona_parse_transform}]).
-
-render() ->
-    arizona_template:from_html(~"""
-    <h1>{Title}</h1>
-    """).
-    %% → Becomes compile-time optimized template record
-
-render_from_file() ->
-    arizona_template:from_html({file, "/path/to/template.html"}).
-    %% → File content compiled at build time
-
-render_from_priv() ->
-    arizona_template:from_html({priv_file, myapp, "templates/page.html"}).
-    %% → Priv file content compiled at build time
+{Az, fun(() -> term()), {Module, Line}}               %% text dynamic
+{Az, {attr, Name, fun(() -> term())}, {Module, Line}} %% attribute dynamic
+{undefined, fun(() -> term()), {Module, Line}}        %% nodiff dynamic
 ```
 
-## Debug
+## Example
 
-Use debug profile to output transformed modules to `/tmp/`:
+```erlang
+%% Input (in a module including arizona_stateless.hrl):
+render(Bindings) ->
+    ?html({'div', [{class, ~"box"}], [?get(name)]}).
 
-```bash
-$ rebar3 as debug compile
+%% Output (after parse transform):
+render(Bindings) ->
+    #{s => [~"<div class=\"box\" az=\"a1-0\"><!--az:a1-0-->", ~"<!--/az--></div>"],
+      d => [{~"a1-0", fun() -> arizona_template:get(name, Bindings) end, {?MODULE, 3}}],
+      f => ~"a1"}.
 ```
-"""".
+""".
+
+-compile({nowarn_redefined_builtin_type, [{dynamic, 0}]}).
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
 -export([parse_transform/2]).
--export([transform_render_list/6]).
--export([transform_render_map/6]).
--export([extract_callback_function_body/4]).
--export([format_error/2]).
+-export([format_error/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([parse_transform/2]).
--ignore_xref([extract_callback_function_body/4]).
--ignore_xref([format_error/2]).
-
-%% --------------------------------------------------------------------
-%% Ignore hank warnings
-%% --------------------------------------------------------------------
-
--hank([{unnecessary_function_arguments, [output_forms_to_tmp/2]}]).
+-ignore_xref([parse_transform/2, format_error/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
 %% --------------------------------------------------------------------
 
--elvis([{elvis_style, max_module_length, disable}]).
--elvis([{elvis_style, max_function_length, disable}]).
--elvis([{elvis_style, max_function_clause_length, disable}]).
+%% AST construction is inherently repetitive: each make_*_dynamic_ast and
+%% build_*_ast helper builds nested {tuple, ...} / {map_field_assoc, ...}
+%% literals that look structurally similar but represent different shapes.
+-elvis([{elvis_style, dont_repeat_yourself, disable}]).
 
 %% --------------------------------------------------------------------
-%% Parse Transform Implementation
+%% Types exports
 %% --------------------------------------------------------------------
 
--doc ~"""
-Main parse transform entry point called by the Erlang compiler.
+-export_type([static/0]).
+-export_type([dynamic/0]).
+-export_type([az/0]).
 
-Transforms all applicable Arizona template calls in the given forms,
-returning the modified AST for compilation.
+%% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
+
+-nominal static() :: binary().
+-nominal dynamic() :: erl_parse:abstract_form().
+-nominal az() :: non_neg_integer().
+
+%% Compile state threaded through element/attribute/child compilation.
+-record(state, {
+    buf = <<>> :: binary(),
+    statics = [] :: [static()],
+    dynamics = [] :: [dynamic()],
+    az = 0 :: az(),
+    nodiff = false :: boolean(),
+    module = undefined :: module() | undefined,
+    live_render = false :: boolean(),
+    root = false :: boolean()
+}).
+
+%% --------------------------------------------------------------------
+%% API Functions
+%% --------------------------------------------------------------------
+
+-doc """
+Entry point for the Erlang compiler parse transform.
+
+Walks all forms in the module, transforming `arizona_template:html/1`
+and `arizona_template:each/2` calls into compiled template maps. For
+modules with `-behaviour(arizona_stateful)`, the `render/1` callback
+receives additional validation and `az-view` injection.
 """.
--spec parse_transform(Forms, Options) -> Forms when
-    Forms :: compile:forms(),
-    Options :: [compile:option()].
-parse_transform(Forms, Options) ->
+-spec parse_transform(Forms, Options) -> Forms | {error, Errors, []} when
+    Forms :: [erl_parse:abstract_form()],
+    Options :: [compile:option()],
+    Errors :: [{file:filename(), [{erl_anno:line(), module(), term()}]}].
+parse_transform(Forms, _Options) ->
+    File = extract_file(Forms),
     Module = extract_module(Forms),
-    TransformedForms = [
-        transform_form(FormTree, Module, Options)
-     || FormTree <- Forms
-    ],
-    RevertedForms = erl_syntax:revert_forms(TransformedForms),
-
-    % Output forms to Erlang module in /tmp folder if DEBUG defined
-    ok = output_forms_to_tmp(Module, RevertedForms),
-
-    RevertedForms.
-
-%% Transform arizona_template:render_list/2 calls
--doc ~"""
-Transforms `arizona_template:render_list/3` calls into optimized AST.
-
-Extracts the template function body, compiles it into a template record,
-and creates a call to `arizona_template:render_list_template/3`.
-""".
--spec transform_render_list(Module, Line, FunArg, ListArg, OptionsArg, CompileOpts) -> AST when
-    Module :: module(),
-    Line :: arizona_token:line(),
-    FunArg :: erl_syntax:syntaxTree(),
-    ListArg :: erl_syntax:syntaxTree(),
-    OptionsArg :: erl_syntax:syntaxTree(),
-    CompileOpts :: [compile:option()],
-    AST :: erl_syntax:syntaxTree().
-transform_render_list(Module, Line, FunArg, ListArg, OptionsArg, CompileOpts) ->
+    IsLive =
+        has_behaviour(Forms, arizona_stateful) orelse
+            has_behaviour(Forms, arizona_view),
     try
-        % Extract the item parameter and template string from the function
-        TemplateAST = extract_callback_function_body(
-            Module, Line, FunArg, CompileOpts
-        ),
-
-        % Create application: arizona_template:render_list_template(Template, List, Options)
-        TemplateModule = erl_syntax:atom(arizona_template),
-        TemplateFunction = erl_syntax:atom(render_list_template),
-        erl_syntax:application(
-            erl_syntax:module_qualifier(TemplateModule, TemplateFunction), [
-                TemplateAST, ListArg, OptionsArg
-            ]
-        )
+        Transformed = [transform_form(Form, Module, IsLive) || Form <- Forms],
+        erl_syntax:revert_forms(Transformed)
     catch
-        Class:Reason:StackTrace ->
-            error(
-                arizona_render_list_transformation_failed,
-                none,
-                error_info({Module, Line, Class, Reason, StackTrace})
-            )
+        throw:{arizona_parse_error, Line, Reason} ->
+            {error, [{File, [{Line, ?MODULE, Reason}]}], []}
     end.
 
--doc ~"""
-Transforms render_map calls to optimized render_map_template calls.
+-doc """
+Formats parse transform error reasons into human-readable messages.
 
-Similar to render_list transformation but for map rendering.
-Extracts the callback function and converts it to a compiled template.
+Called by the compiler when `parse_transform/2` returns an error tuple.
 """.
--spec transform_render_map(Module, Line, FunArg, MapArg, OptionsArg, CompileOpts) -> AST when
-    Module :: module(),
-    Line :: arizona_token:line(),
-    FunArg :: erl_syntax:syntaxTree(),
-    MapArg :: erl_syntax:syntaxTree(),
-    OptionsArg :: erl_syntax:syntaxTree(),
-    CompileOpts :: [compile:option()],
-    AST :: erl_syntax:syntaxTree().
-transform_render_map(Module, Line, FunArg, MapArg, OptionsArg, CompileOpts) ->
-    try
-        % Extract the item parameter and template string from the function
-        % Reuse the same extraction logic as render_list since both use fun(Item) -> Template
-        TemplateAST = extract_callback_function_body(
-            Module, Line, FunArg, CompileOpts
-        ),
-
-        % Create application: arizona_template:render_map_template(Template, Map, Options)
-        TemplateModule = erl_syntax:atom(arizona_template),
-        TemplateFunction = erl_syntax:atom(render_map_template),
-        erl_syntax:application(
-            erl_syntax:module_qualifier(TemplateModule, TemplateFunction), [
-                TemplateAST, MapArg, OptionsArg
-            ]
+-spec format_error(Reason) -> string() when
+    Reason :: term().
+format_error(invalid_element) ->
+    "invalid element form, expected {Tag, Attrs, Children}, "
+    "{Tag, Attrs, Expr}, or {Tag, Attrs} where Tag is an atom";
+format_error({void_with_children, Tag}) ->
+    lists:flatten(
+        io_lib:format(
+            "void element '~s' cannot have children", [Tag]
         )
-    catch
-        Class:Reason:StackTrace ->
-            error(
-                arizona_render_map_transformation_failed,
-                none,
-                error_info({Module, Line, Class, Reason, StackTrace})
-            )
-    end.
-
-%% Extract item parameter and template string from callback function
--doc ~"""
-Extracts template content from render callback functions (render_list/render_map).
-
-Analyzes the function expression to find `arizona_template:from_html/1`
-calls, extracts the template string, and compiles it into optimized AST.
-Generic function that works for both render_list and render_map since both
-use the same callback pattern: fun(Item) -> Template.
-""".
--spec extract_callback_function_body(Module, Line, FunExpr, CompileOpts) -> TemplateAST when
-    Module :: module(),
-    Line :: arizona_token:line(),
-    FunExpr :: erl_syntax:syntaxTree(),
-    CompileOpts :: [compile:option()],
-    TemplateAST :: erl_syntax:syntaxTree().
-extract_callback_function_body(Module, Line, FunExpr, CompileOpts) ->
-    case erl_syntax:type(FunExpr) of
-        fun_expr ->
-            [Clause] = erl_syntax:fun_expr_clauses(FunExpr),
-            [CallbackArg] = erl_syntax:clause_patterns(Clause),
-            ClauseBody = erl_syntax:clause_body(Clause),
-            % Find the arizona_template:from_html call in the function body
-            % It might be the only statement or the last statement after variable bindings
-            [TemplateCall | RevClauseBody] = lists:reverse(ClauseBody),
-
-            % Extract template string from raw arizona_template:from_html call
-            case analyze_application(TemplateCall) of
-                {arizona_template, from_html, 1, [TemplateArg]} ->
-                    TemplateString = extract_template_content(Module, TemplateArg),
-
-                    % Scan template content into tokens
-                    Tokens = arizona_scanner:scan_string(Line + 1, TemplateString),
-
-                    % Clear in_dynamic_callback flag for render_list templates to allow
-                    % nested transforms
-                    ClearedOpts = proplists:delete(in_dynamic_callback, CompileOpts),
-                    TemplateAST = arizona_parser:parse_tokens(Tokens, ClearedOpts),
-
-                    % Wrap the dynamic tuple in fun(Item) -> ... end for render_list
-                    wrap_dynamic_tuple_in_function(TemplateAST, RevClauseBody, CallbackArg);
-                {arizona_template, new, 5, _Args} ->
-                    % Already transformed (from_erl/from_html was transformed during AST walk)
-                    % Just wrap the already-compiled template
-                    wrap_dynamic_tuple_in_function(TemplateCall, RevClauseBody, CallbackArg);
-                TemplateCall ->
-                    % analyze_application returned the Node itself, check if it's a template tuple
-                    maybe
-                        tuple ?= erl_syntax:type(TemplateCall),
-                        [FirstElement | _] ?= erl_syntax:tuple_elements(TemplateCall),
-                        atom ?= erl_syntax:type(FirstElement),
-                        template ?= erl_syntax:atom_value(FirstElement),
-                        TemplateCall
-                    else
-                        _ ->
-                            error({not_from_html_call, TemplateCall})
-                    end
-            end;
-        _ ->
-            error({invalid_function_expression, FunExpr})
-    end.
-
--doc ~"""
-Formats parse transform errors for compiler diagnostics.
-
-Converts internal transformation errors into human-readable messages
-with context about failed template extraction or render_list/render_map transformation.
-""".
--spec format_error(Reason, StackTrace) -> ErrorMap when
-    Reason ::
-        arizona_template_extraction_failed
-        | arizona_markdown_extraction_failed
-        | arizona_erl_extraction_failed
-        | arizona_render_list_transformation_failed
-        | arizona_render_map_transformation_failed,
-    StackTrace :: erlang:stacktrace(),
-    ErrorMap :: #{general => string(), reason => io_lib:chars()}.
-format_error(arizona_template_extraction_failed, [{_M, _F, _As, Info} | _]) ->
-    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
-    {Module, Line, Class, Reason, StackTrace} = maps:get(cause, ErrorInfo),
-    #{
-        general => "Arizona template parsing failed",
-        reason => io_lib:format("Failed to extract template in ~p at line ~p:\n~p:~p:~p", [
-            Module, Line, Class, Reason, StackTrace
-        ])
-    };
-format_error(arizona_markdown_extraction_failed, [{_M, _F, _As, Info} | _]) ->
-    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
-    {Module, Line, Class, Reason, StackTrace} = maps:get(cause, ErrorInfo),
-    #{
-        general => "Arizona markdown template parsing failed",
-        reason => io_lib:format("Failed to extract markdown template in ~p at line ~p:\n~p:~p:~p", [
-            Module, Line, Class, Reason, StackTrace
-        ])
-    };
-format_error(arizona_erl_extraction_failed, [{_M, _F, _As, Info} | _]) ->
-    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
-    {Module, Line, Class, Reason, StackTrace} = maps:get(cause, ErrorInfo),
-    #{
-        general => "Arizona Erlang term template parsing failed",
-        reason => io_lib:format(
-            "Failed to convert Erlang terms to template in ~p at line ~p:\n~p:~p:~p", [
-                Module, Line, Class, Reason, StackTrace
-            ]
+    );
+format_error(invalid_attribute) ->
+    "invalid attribute form, expected {Name, Value}, Name (atom), "
+    "<<\"Name\">> (binary), or {Name, true|false}";
+format_error(invalid_each_fun) ->
+    "each/2 expects a fun with a single clause and one or two parameters";
+format_error(live_render_not_single_element) ->
+    "arizona_stateful render/1 must return a single root element, not a list";
+format_error(live_render_missing_id) ->
+    "arizona_stateful render/1 root element must have an id attribute";
+format_error(live_render_id_must_be_get_id) ->
+    "arizona_stateful render/1 root element id must use "
+    "?get(id), arizona_template:get(id, Bindings), or az:get(id, Bindings)";
+format_error(az_view_not_allowed) ->
+    "az_view attribute is auto-injected by the parse transform in "
+    "arizona_stateful render/1 and must not be set manually";
+format_error({invalid_child, ValueStr}) ->
+    lists:flatten(
+        io_lib:format(
+            "invalid child: static tuple is not a valid template child "
+            "-- use a binary, element, or dynamic expression. "
+            "Got: ~s",
+            [ValueStr]
         )
-    };
-format_error(arizona_render_list_transformation_failed, [{_M, _F, _As, Info} | _]) ->
-    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
-    {Module, Line, Class, Reason, StackTrace} = maps:get(cause, ErrorInfo),
-    #{
-        general => "Arizona render_list transformation failed",
-        reason => io_lib:format("Failed to transform render_list in ~p at line ~p:\n~p:~p:~p", [
-            Module, Line, Class, Reason, StackTrace
-        ])
-    };
-format_error(arizona_render_map_transformation_failed, [{_M, _F, _As, Info} | _]) ->
-    {error_info, ErrorInfo} = proplists:lookup(error_info, Info),
-    {Module, Line, Class, Reason, StackTrace} = maps:get(cause, ErrorInfo),
-    #{
-        general => "Arizona render_map transformation failed",
-        reason => io_lib:format("Failed to transform render_map in ~p at line ~p:\n~p:~p:~p", [
-            Module, Line, Class, Reason, StackTrace
-        ])
-    }.
+    ).
 
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
-%% Output forms to /tmp folder as Erlang module
--spec output_forms_to_tmp(Module | undefined, Forms) -> ok when
-    Module :: module(),
-    Forms :: compile:forms().
--ifdef(DEBUG).
-output_forms_to_tmp(undefined, _Forms) ->
-    ok;
-output_forms_to_tmp(Module, Forms) ->
-    Filename = "/tmp/" ++ atom_to_list(Module) ++ ".erl",
-    Content = [erl_pp:form(Form, [{linewidth, 100}]) || Form <- Forms],
-    ok = file:write_file(Filename, unicode:characters_to_binary(Content)).
--else.
-output_forms_to_tmp(_Module, _Forms) ->
-    ok.
--endif.
+parse_error(Reason, Line) ->
+    throw({arizona_parse_error, Line, Reason}).
 
-%% Extract module name from forms
--spec extract_module(Forms) -> Module | undefined when
-    Forms :: compile:forms(),
-    Module :: module().
-extract_module([{attribute, _Line, module, Module} | _]) when is_atom(Module) ->
-    Module;
-extract_module([_ | Rest]) ->
-    extract_module(Rest);
-extract_module([]) ->
-    undefined.
+line(Node) when is_tuple(Node), tuple_size(Node) >= 2 ->
+    erl_anno:line(element(2, Node));
+line(_) ->
+    0.
 
-%% Transform a single form tree
-transform_form(FormTree, Module, CompileOpts) ->
-    erl_syntax_lib:map(
-        fun(Node) ->
-            transform_node(erl_syntax:revert(Node), Module, CompileOpts)
-        end,
-        FormTree
-    ).
+extract_file([{attribute, _, file, {File, _}} | _]) -> File;
+extract_file([_ | Rest]) -> extract_file(Rest);
+extract_file([]) -> "nofile".
 
-%% Transform individual AST nodes
-transform_node(Node, Module, CompileOpts) ->
-    case erl_syntax:type(Node) of
-        application ->
-            transform_application(Node, Module, CompileOpts);
-        case_expr ->
-            transform_case_expr(Node, Module, CompileOpts);
-        clause ->
-            transform_clause(Node, Module, CompileOpts);
+extract_module([{attribute, _, module, Mod} | _]) -> Mod;
+extract_module([_ | Rest]) -> extract_module(Rest);
+extract_module([]) -> undefined.
+
+has_behaviour([{attribute, _, behaviour, B} | _], B) -> true;
+has_behaviour([{attribute, _, behavior, B} | _], B) -> true;
+has_behaviour([_ | Rest], B) -> has_behaviour(Rest, B);
+has_behaviour([], _) -> false.
+
+transform_form({function, L, render, 1, Clauses}, Module, true) ->
+    {function, L, render, 1, [transform_live_render_clause(C, Module) || C <- Clauses]};
+transform_form({function, L, Name, Arity, Clauses}, Module, _IsLive) ->
+    {function, L, Name, Arity, [transform_clause(C, Module) || C <- Clauses]};
+transform_form(Form, _Module, _IsLive) ->
+    Form.
+
+transform_clause({clause, L, Patterns, Guards, Body}, Module) ->
+    {clause, L, Patterns, Guards, [transform_expr(Expr, Module) || Expr <- Body]}.
+
+transform_expr(Expr, Module) ->
+    erl_syntax_lib:map(fun(Node) -> transform_node(Node, Module) end, Expr).
+
+transform_node(Node, Module) ->
+    N = erl_syntax:revert(Node),
+    case N of
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, [Arg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            compile_template(Arg, L, Module);
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}}, [FunArg, SourceArg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            compile_each(FunArg, SourceArg, L, Module);
+        %% Sugar: `arizona_template:stateless(atom, Props)` with a literal atom
+        %% callback is rewritten to `arizona_template:stateless(fun atom/1, Props)`.
+        %% Fun references and other shapes pass through unchanged.
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, stateless}} = Callee, [
+            {atom, AL, Name}, PropsArg
+        ]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            FunRef = {'fun', AL, {function, Name, 1}},
+            {call, L, Callee, [FunRef, PropsArg]};
         _ ->
-            Node
+            N
     end.
 
-%% Transform function applications
-transform_application(Node, Module, CompileOpts) ->
-    case analyze_application(Node) of
-        {arizona_template, from_html, 1, [TemplateArg]} ->
-            transform_template_function(Node, Module, from_html, TemplateArg, CompileOpts);
-        {arizona_template, from_markdown, 1, [MarkdownArg]} ->
-            transform_template_function(Node, Module, from_markdown, MarkdownArg, CompileOpts);
-        {arizona_template, from_erl, 1, [ErlTermArg]} ->
-            transform_template_function(Node, Module, from_erl, ErlTermArg, CompileOpts);
-        {arizona_template, render_list, 2, [FunArg, ListArg]} ->
-            transform_render_collection(
-                Node, Module, render_list, FunArg, ListArg, #{}, CompileOpts
+transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module) ->
+    {Init, [Last]} = lists:split(length(Body) - 1, Body),
+    TransformedInit = [transform_expr(Expr, Module) || Expr <- Init],
+    TransformedLast = transform_live_render_last(Last, Module),
+    {clause, L, Patterns, Guards, TransformedInit ++ [TransformedLast]}.
+
+transform_live_render_last(Expr, Module) ->
+    N = erl_syntax:revert(Expr),
+    case N of
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, [Arg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            validate_live_root(Arg, L),
+            Arg1 = transform_expr(Arg, Module),
+            compile_template(Arg1, L, Module, true);
+        {'case', L, CaseExpr, Clauses} ->
+            {'case', L, transform_expr(CaseExpr, Module), [
+                transform_live_render_branch(C, Module)
+             || C <- Clauses
+            ]};
+        {'if', L, Clauses} ->
+            {'if', L, [transform_live_render_branch(C, Module) || C <- Clauses]};
+        {block, L, Body} ->
+            transform_live_render_block(L, Body, Module);
+        {'receive', L, Clauses} ->
+            {'receive', L, [transform_live_render_branch(C, Module) || C <- Clauses]};
+        {'receive', L, Clauses, AfterExpr, AfterBody} ->
+            {'receive', L, [transform_live_render_branch(C, Module) || C <- Clauses],
+                transform_expr(AfterExpr, Module),
+                transform_live_render_block_body(AfterBody, Module)};
+        {'try', L, Body, OfClauses, CatchClauses, AfterBody} ->
+            {'try', L, transform_live_render_block_body(Body, Module),
+                [transform_live_render_branch(C, Module) || C <- OfClauses],
+                [transform_live_render_branch(C, Module) || C <- CatchClauses], [
+                    transform_expr(E, Module)
+                 || E <- AfterBody
+                ]};
+        {'maybe', L, Body} ->
+            {'maybe', L, transform_live_render_block_body(Body, Module)};
+        {'maybe', L, Body, {'else', L2, ElseClauses}} ->
+            {'maybe', L, transform_live_render_block_body(Body, Module),
+                {'else', L2, [transform_live_render_branch(C, Module) || C <- ElseClauses]}};
+        _ ->
+            transform_expr(Expr, Module)
+    end.
+
+transform_live_render_block(L, Body, Module) ->
+    {block, L, transform_live_render_block_body(Body, Module)}.
+
+transform_live_render_block_body(Body, Module) ->
+    {Init, [Last]} = lists:split(length(Body) - 1, Body),
+    [transform_expr(E, Module) || E <- Init] ++ [transform_live_render_last(Last, Module)].
+
+transform_live_render_branch({clause, L, Patterns, Guards, Body}, Module) ->
+    {Init, [Last]} = lists:split(length(Body) - 1, Body),
+    TransInit = [transform_expr(E, Module) || E <- Init],
+    {clause, L, Patterns, Guards, TransInit ++ [transform_live_render_last(Last, Module)]}.
+
+validate_live_root({tuple, _, [_Tag, Attrs | _]}, L) ->
+    validate_id_expr(Attrs, L);
+validate_live_root(_, L) ->
+    parse_error(live_render_not_single_element, L).
+
+validate_id_expr({cons, _, {tuple, _, [{atom, _, id}, ValueAST]}, _}, L) ->
+    case is_get_id_call(ValueAST) of
+        true -> ok;
+        false -> parse_error(live_render_id_must_be_get_id, L)
+    end;
+validate_id_expr({cons, _, _, Rest}, L) ->
+    validate_id_expr(Rest, L);
+validate_id_expr(_, L) ->
+    parse_error(live_render_missing_id, L).
+
+is_get_id_call({call, _, {remote, _, {atom, _, Mod}, {atom, _, get}}, [{atom, _, id}, _]}) when
+    Mod =:= arizona_template; Mod =:= az
+->
+    true;
+is_get_id_call(_) ->
+    false.
+
+maybe_inject_or_raise_az_view(Attrs, Line, #state{live_render = true, root = true}) ->
+    case lists:any(fun is_az_view_attr/1, Attrs) of
+        true -> Attrs;
+        false -> [{atom, Line, az_view} | Attrs]
+    end;
+maybe_inject_or_raise_az_view(Attrs, Line, _State) ->
+    case lists:any(fun is_az_view_attr/1, Attrs) of
+        true -> parse_error(az_view_not_allowed, Line);
+        false -> Attrs
+    end.
+
+is_az_view_attr({atom, _, Name}) ->
+    Name =:= az_view orelse Name =:= 'az-view';
+is_az_view_attr({tuple, _, [{atom, _, Name} | _]}) ->
+    Name =:= az_view orelse Name =:= 'az-view';
+is_az_view_attr({bin, _, [{bin_element, _, {string, _, "az-view"}, _, _}]}) ->
+    true;
+is_az_view_attr(_) ->
+    false.
+
+compile_template(Arg, Line, Module) ->
+    compile_template(Arg, Line, Module, false).
+
+compile_template(Arg, Line, Module, LiveRender) ->
+    {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(Arg, Module, LiveRender),
+    {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
+    build_template_ast(Line, S1, D1, Fingerprint, Opts).
+
+compile_each(FunAST, SourceAST, Line, Module) ->
+    case FunAST of
+        {'fun', _, {clauses, [{clause, _, [ItemVar, KeyVar], Guards, Body}]}} ->
+            {Prefix, LastExpr} = split_fun_body(Body),
+            {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(LastExpr, Module),
+            {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
+            build_each_ast(
+                Line, SourceAST, [ItemVar, KeyVar], Guards, Prefix, S1, D1, Fingerprint, Opts
             );
-        {arizona_template, render_list, 3, [FunArg, ListArg, OptionsArg]} ->
-            transform_render_collection(
-                Node, Module, render_list, FunArg, ListArg, OptionsArg, CompileOpts
+        {'fun', _, {clauses, [{clause, _, [ItemVar], Guards, Body}]}} ->
+            {Prefix, LastExpr} = split_fun_body(Body),
+            {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(LastExpr, Module),
+            {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
+            build_each_ast(
+                Line, SourceAST, [ItemVar], Guards, Prefix, S1, D1, Fingerprint, Opts
             );
-        {arizona_template, render_map, 2, [FunArg, MapArg]} ->
-            transform_render_collection(Node, Module, render_map, FunArg, MapArg, #{}, CompileOpts);
-        {arizona_template, render_map, 3, [FunArg, MapArg, OptionsArg]} ->
-            transform_render_collection(
-                Node, Module, render_map, FunArg, MapArg, OptionsArg, CompileOpts
-            );
+        %% `fun name/arity` / `fun Mod:name/arity` -- synthesize an anonymous
+        %% wrapper clause that calls the referenced function with the item
+        %% (and optional key) var, then recurse into the clause path above.
+        {'fun', L, {function, Name, Arity}} when
+            is_atom(Name) andalso (Arity =:= 1 orelse Arity =:= 2)
+        ->
+            compile_each(wrap_fun_ref(L, Arity, {atom, L, Name}, none), SourceAST, Line, Module);
+        {'fun', L, {function, Mod, Name, {integer, _, Arity}}} when
+            Arity =:= 1 orelse Arity =:= 2
+        ->
+            compile_each(wrap_fun_ref(L, Arity, Name, Mod), SourceAST, Line, Module);
         _ ->
-            Node
+            parse_error(invalid_each_fun, Line)
     end.
 
-%% Transform template functions (from_html, from_markdown, from_erl)
-transform_template_function(Node, Module, FunctionName, TemplateArg, CompileOpts) ->
-    Line = get_node_line(Node),
-    case FunctionName of
-        from_html ->
-            transform_from_html(Module, Line, TemplateArg, CompileOpts);
-        from_markdown ->
-            transform_from_markdown(Module, Line, TemplateArg, CompileOpts);
-        from_erl ->
-            transform_from_erl(Module, Line, TemplateArg, CompileOpts)
-    end.
-
-%% Transform render collection functions (render_list, render_map)
-transform_render_collection(
-    Node, Module, FunctionName, FunArg, CollectionArg, OptionsArg, CompileOpts
-) ->
-    Line = get_node_line(Node),
-    % Convert options to AST if it's a literal map
-    OptionsAST =
-        case OptionsArg of
-            #{} -> erl_syntax:abstract(#{});
-            _ -> OptionsArg
+%% Build `fun(I) -> Callee(I) end` or `fun(I, K) -> Callee(I, K) end`,
+%% where Callee is either `Name(...)` or `Mod:Name(...)`.
+wrap_fun_ref(L, Arity, NameAST, ModAST) ->
+    VarNames = ['__I', '__K'],
+    Vars = [{var, L, V} || V <- lists:sublist(VarNames, Arity)],
+    Callee =
+        case ModAST of
+            none -> NameAST;
+            _ -> {remote, L, ModAST, NameAST}
         end,
-    case FunctionName of
-        render_list ->
-            transform_render_list(Module, Line, FunArg, CollectionArg, OptionsAST, CompileOpts);
-        render_map ->
-            transform_render_map(Module, Line, FunArg, CollectionArg, OptionsAST, CompileOpts)
+    Call = {call, L, Callee, Vars},
+    {'fun', L, {clauses, [{clause, L, Vars, [], [Call]}]}}.
+
+compile_body_parts(ExprAST, Module) ->
+    compile_body_parts(ExprAST, Module, false).
+
+compile_body_parts(ExprAST, Module, LiveRender) ->
+    compile_classified_body(classify_body(ExprAST), ExprAST, Module, LiveRender).
+
+classify_body(AST) ->
+    case is_static_binary(AST) of
+        true -> static_binary;
+        false -> classify_complex_body(AST)
     end.
 
-%% Transform case expressions
-transform_case_expr(Node, Module, CompileOpts) ->
-    Argument = erl_syntax:case_expr_argument(Node),
-    Clauses = erl_syntax:case_expr_clauses(Node),
-    TransformedArgument = apply_transformation(Argument, Module, CompileOpts),
-    TransformedClauses = [
-        apply_transformation(Clause, Module, CompileOpts)
-     || Clause <- Clauses
-    ],
-    erl_syntax:case_expr(TransformedArgument, TransformedClauses).
+classify_complex_body(AST) ->
+    case is_element_tuple(AST) of
+        true -> element_tuple;
+        false -> classify_list_body(AST)
+    end.
 
-%% Transform clauses
-transform_clause(Node, Module, CompileOpts) ->
-    Patterns = erl_syntax:clause_patterns(Node),
-    Guard = erl_syntax:clause_guard(Node),
-    Body = erl_syntax:clause_body(Node),
-    TransformedPatterns = [
-        apply_transformation(Pattern, Module, CompileOpts)
-     || Pattern <- Patterns
-    ],
-    TransformedGuard =
-        case Guard of
-            none -> none;
-            _ -> apply_transformation(Guard, Module, CompileOpts)
+classify_list_body(AST) ->
+    case is_element_list(AST) of
+        true -> element_list;
+        false -> classify_other_body(AST)
+    end.
+
+classify_other_body(AST) ->
+    case is_list_ast(AST) of
+        true -> list_ast;
+        false -> text_dynamic
+    end.
+
+compile_classified_body(static_binary, ExprAST, _Module, _LiveRender) ->
+    Bin = extract_binary_value(ExprAST),
+    Statics = [Bin],
+    {Statics, [], generate_fingerprint(Statics), #{}};
+compile_classified_body(element_tuple, ExprAST, Module, LiveRender) ->
+    compile_fragment_parts([ExprAST], Module, LiveRender);
+compile_classified_body(element_list, ExprAST, Module, LiveRender) ->
+    compile_fragment_parts(ast_list_to_list(ExprAST), Module, LiveRender);
+compile_classified_body(list_ast, ExprAST, Module, _LiveRender) ->
+    compile_mixed_items(ast_list_to_list(ExprAST), Module);
+compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender) ->
+    Statics = [<<>>, <<>>],
+    DynASTs = [make_text_dynamic_ast(<<"0">>, ExprAST, Module, line(ExprAST))],
+    {Statics, DynASTs, generate_fingerprint(Statics), #{}}.
+
+compile_fragment_parts(ElementASTs, Module, LiveRender) ->
+    Opts = prescan_directives(ElementASTs),
+    State0 = #state{
+        module = Module,
+        nodiff = maps:is_key(diff, Opts),
+        live_render = LiveRender,
+        root = LiveRender
+    },
+    State1 = lists:foldl(
+        fun(Elem, State) ->
+            {Tag, Attrs0, Children, ElemLine} = extract_element(Elem),
+            {Attrs, _ElemOpts} = extract_directives(Attrs0),
+            compile_element(Tag, Attrs, Children, ElemLine, State)
         end,
-    TransformedBody = [
-        apply_transformation(BodyExpr, Module, CompileOpts)
-     || BodyExpr <- Body
-    ],
-    erl_syntax:clause(TransformedPatterns, TransformedGuard, TransformedBody).
+        State0,
+        ElementASTs
+    ),
+    {Statics, DynASTs} = finalize(State1),
+    Fingerprint = generate_fingerprint(Statics),
+    {Statics, DynASTs, Fingerprint, Opts}.
 
-%% Generic transformation function - reusable for any AST node
-apply_transformation(Node, Module, CompileOpts) ->
-    erl_syntax_lib:map(
-        fun(ChildNode) ->
-            transform_node(erl_syntax:revert(ChildNode), Module, CompileOpts)
-        end,
-        Node
-    ).
+compile_mixed_items(Items, Module) ->
+    Opts = prescan_directives(Items),
+    State0 = #state{module = Module, nodiff = maps:is_key(diff, Opts)},
+    State1 = lists:foldl(
+        fun(Item, State) -> compile_mixed_item(Item, Module, State) end, State0, Items
+    ),
+    {Statics, DynASTs} = finalize(State1),
+    Fingerprint = generate_fingerprint(Statics),
+    {Statics, DynASTs, Fingerprint, Opts}.
 
-%% Analyze function application to extract module, function, arity, and args
--spec analyze_application(Node) -> {Module, Function, Arity, Args} | undefined | Node when
-    Node :: erl_syntax:syntaxTree(),
-    Module :: module(),
-    Function :: atom(),
-    Arity :: non_neg_integer(),
-    Args :: [erl_syntax:syntaxTree()].
-analyze_application(Node) ->
-    try
-        Operator = erl_syntax:application_operator(Node),
-        Arguments = erl_syntax:application_arguments(Node),
-
-        case erl_syntax:type(Operator) of
-            module_qualifier ->
-                Module = erl_syntax:module_qualifier_argument(Operator),
-                Function = erl_syntax:module_qualifier_body(Operator),
-                case {erl_syntax:type(Module), erl_syntax:type(Function)} of
-                    {atom, atom} ->
-                        ModuleName = erl_syntax:atom_value(Module),
-                        FunctionName = erl_syntax:atom_value(Function),
-                        Arity = length(Arguments),
-                        {ModuleName, FunctionName, Arity, Arguments};
-                    _ ->
-                        undefined
-                end;
-            _ ->
-                undefined
-        end
-    catch
-        _:_ ->
-            Node
+compile_mixed_item(Item, Module, State) ->
+    case is_static_binary(Item) of
+        true -> buf_append(State, extract_binary_value(Item));
+        false -> compile_mixed_non_static(Item, Module, State)
     end.
 
-%% Transform arizona_template:from_html/1 calls
-transform_from_html(Module, Line, TemplateArg, CompileOpts) ->
-    try
-        % Extract template content based on argument type
-        String = extract_template_content(Module, TemplateArg),
-        % Scan template content into tokens
-        % We do Line + 1 because we consider the use of triple-quoted string
-        Tokens = arizona_scanner:scan_string(Line + 1, String),
-        % Parse tokens into AST
-        arizona_parser:parse_tokens(Tokens, CompileOpts)
-    catch
-        Class:Reason:StackTrace ->
-            error(
-                arizona_template_extraction_failed,
-                none,
-                error_info({Module, Line, Class, Reason, StackTrace})
-            )
-    end.
-
-%% Transform arizona_template:from_markdown/1 calls
-transform_from_markdown(Module, Line, MarkdownArg, CompileOpts) ->
-    try
-        % Extract markdown content based on argument type
-        Markdown = extract_template_content(Module, MarkdownArg),
-
-        % Process markdown content with Arizona template syntax
-        % We do Line + 1 because we consider the use of triple-quoted string
-        HTML = arizona_markdown_processor:process_markdown_template(Markdown, Line + 1),
-
-        % Scan the final HTML into tokens
-        FinalTokens = arizona_scanner:scan_string(Line + 1, HTML),
-
-        % Parse tokens into AST
-        arizona_parser:parse_tokens(FinalTokens, CompileOpts)
-    catch
-        Class:Reason:StackTrace ->
-            error(
-                arizona_markdown_extraction_failed,
-                none,
-                error_info({Module, Line, Class, Reason, StackTrace})
-            )
-    end.
-
-%% Transform arizona_template:from_erl/1 calls
-transform_from_erl(Module, Line, ErlTermArg, CompileOpts) ->
-    try
-        % Convert Erlang term AST to HTML string
-        HTML = arizona_erl:ast_to_html(ErlTermArg),
-
-        % Scan the HTML into tokens
-        Tokens = arizona_scanner:scan_string(Line + 1, HTML),
-
-        % Parse tokens into AST
-        arizona_parser:parse_tokens(Tokens, CompileOpts)
-    catch
-        Class:Reason:StackTrace ->
-            error(
-                arizona_erl_extraction_failed,
-                none,
-                error_info({Module, Line, Class, Reason, StackTrace})
-            )
-    end.
-
-%% Wrap the dynamic tuple in a function for render_list templates
--spec wrap_dynamic_tuple_in_function(TemplateAST, RevClauseBody, CallbackArg) ->
-    WrappedTemplateAST
-when
-    TemplateAST :: erl_syntax:syntaxTree(),
-    RevClauseBody :: [erl_syntax:syntaxTree()],
-    CallbackArg :: erl_syntax:syntaxTree(),
-    WrappedTemplateAST :: erl_syntax:syntaxTree().
-wrap_dynamic_tuple_in_function(TemplateAST, RevClauseBody, CallbackArg) ->
-    case analyze_application(TemplateAST) of
-        {arizona_template, new, 5, [Static, Dynamic, DynamicSequence, DynamicAnno, Fingerprint]} ->
-            % Wrap the Dynamic tuple in fun(CallbackArg) -> ClauseBody end
-            ClauseBody = lists:reverse([Dynamic | RevClauseBody]),
-            FunClause = erl_syntax:clause([CallbackArg], none, ClauseBody),
-            WrappedDynamic = erl_syntax:fun_expr([FunClause]),
-
-            % Reconstruct the arizona_template:new/5 call with wrapped dynamic
-            erl_syntax:application(
-                erl_syntax:module_qualifier(
-                    erl_syntax:atom(arizona_template),
-                    erl_syntax:atom(new)
-                ),
-                [Static, WrappedDynamic, DynamicSequence, DynamicAnno, Fingerprint]
-            );
-        _ ->
-            % If not arizona_template:new/5, return as-is
-            TemplateAST
-    end.
-
-%% Extract template content from various sources (string, file, priv_file)
--spec extract_template_content(Module, TemplateArg) -> String when
-    Module :: module(),
-    TemplateArg :: erl_syntax:syntaxTree(),
-    String :: binary().
-extract_template_content(Module, TemplateArg) ->
-    case erl_syntax:type(TemplateArg) of
-        tuple ->
-            extract_from_tuple(Module, TemplateArg);
-        _ ->
-            % Direct string/binary content
-            eval_expr(Module, TemplateArg)
-    end.
-
-%% Extract template content from tuple expressions
--spec extract_from_tuple(Module, TupleArg) -> String when
-    Module :: module(),
-    TupleArg :: erl_syntax:syntaxTree(),
-    String :: binary().
-extract_from_tuple(Module, TupleArg) ->
-    Elements = erl_syntax:tuple_elements(TupleArg),
-    case Elements of
-        [FileAtom, FilenameArg] ->
-            extract_from_two_tuple(Module, FileAtom, FilenameArg, TupleArg);
-        [AppAtom, AppArg, FilenameArg] ->
-            extract_from_three_tuple(Module, AppAtom, AppArg, FilenameArg, TupleArg);
-        _ ->
-            % Not a recognized tuple format, treat as regular expression
-            eval_expr(Module, TupleArg)
-    end.
-
-%% Handle {file, Filename} tuples
--spec extract_from_two_tuple(Module, FileAtom, FilenameArg, TupleArg) -> String when
-    Module :: module(),
-    FileAtom :: erl_syntax:syntaxTree(),
-    FilenameArg :: erl_syntax:syntaxTree(),
-    TupleArg :: erl_syntax:syntaxTree(),
-    String :: binary().
-extract_from_two_tuple(Module, FileAtom, FilenameArg, TupleArg) ->
-    case {erl_syntax:type(FileAtom), erl_syntax:atom_value(FileAtom)} of
-        {atom, file} ->
-            % {file, Filename} - read from absolute path
-            Filename = eval_expr(Module, FilenameArg),
-            read_file_content(Filename);
-        _ ->
-            % Not a recognized file tuple, treat as regular expression
-            eval_expr(Module, TupleArg)
-    end.
-
-%% Handle {priv_file, App, Filename} tuples
--spec extract_from_three_tuple(Module, AppAtom, AppArg, FilenameArg, TupleArg) -> String when
-    Module :: module(),
-    AppAtom :: erl_syntax:syntaxTree(),
-    AppArg :: erl_syntax:syntaxTree(),
-    FilenameArg :: erl_syntax:syntaxTree(),
-    TupleArg :: erl_syntax:syntaxTree(),
-    String :: binary().
-extract_from_three_tuple(Module, AppAtom, AppArg, FilenameArg, TupleArg) ->
-    case {erl_syntax:type(AppAtom), erl_syntax:atom_value(AppAtom)} of
-        {atom, priv_file} ->
-            % {priv_file, App, Filename} - read from priv directory
-            App = eval_expr(Module, AppArg),
-            Filename = eval_expr(Module, FilenameArg),
-            PrivFilename = get_priv_filename(App, Filename),
-            read_file_content(PrivFilename);
-        _ ->
-            % Not a recognized priv_file tuple, treat as regular expression
-            eval_expr(Module, TupleArg)
-    end.
-
-%% Read file content and return as binary
--spec read_file_content(Filename) -> Content when
-    Filename :: file:filename_all(),
-    Content :: binary().
-read_file_content(Filename) ->
-    case file:read_file(Filename) of
-        {ok, Content} ->
-            Content;
-        {error, Reason} ->
-            error({file_read_error, Filename, Reason})
-    end.
-
-%% Get priv directory filename
--spec get_priv_filename(App, Filename) -> PrivFilename when
-    App :: atom(),
-    Filename :: file:filename_all(),
-    PrivFilename :: file:filename_all().
-get_priv_filename(App, Filename) ->
-    case code:priv_dir(App) of
-        {error, Reason} ->
-            error({priv_dir_error, App, Reason});
-        PrivDir ->
-            filename:join(PrivDir, Filename)
-    end.
-
-%% Utility Functions
-
-%% Get line number from syntax tree node
--spec get_node_line(Node) -> Line when
-    Node :: erl_syntax:syntaxTree(),
-    Line :: pos_integer().
-get_node_line(Node) ->
-    Pos = erl_syntax:get_pos(Node),
-    case erl_anno:is_anno(Pos) of
+compile_mixed_non_static(Item, Module, State) ->
+    case is_element_tuple(Item) of
         true ->
-            erl_anno:line(Pos);
+            {Tag, Attrs0, Children, ElemLine} = extract_element(Item),
+            {Attrs, _ElemOpts} = extract_directives(Attrs0),
+            compile_element(Tag, Attrs, Children, ElemLine, State);
         false ->
-            Pos
+            compile_mixed_dynamic(Item, Module, State)
     end.
 
-%% Evaluate expression
--spec eval_expr(Module, Form) -> Result when
-    Module :: module(),
-    Form :: erl_syntax:syntaxTree() | erl_parse:abstract_expr(),
-    Result :: dynamic().
-eval_expr(Module, Form) ->
-    % Convert erl_syntax tree to abstract form if needed
-    AbstractForm =
-        case erl_syntax:is_tree(Form) of
-            true -> erl_syntax:revert(Form);
-            false -> Form
+compile_mixed_dynamic(Item, Module, #state{nodiff = true} = State) ->
+    flush(State, make_nodiff_dynamic_ast(Item, Module, line(Item)));
+compile_mixed_dynamic(Item, Module, State) ->
+    flush(State, make_text_dynamic_ast(<<"0">>, Item, Module, line(Item))).
+
+extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node) ->
+    case is_list_ast(AttrsAST) of
+        true ->
+            {Tag, ast_list_to_list(AttrsAST), normalize_children(ChildrenAST), line(Node)};
+        false ->
+            parse_error(invalid_element, line(Node))
+    end;
+extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node) ->
+    case is_list_ast(AttrsAST) of
+        true ->
+            {Tag, ast_list_to_list(AttrsAST), [], line(Node)};
+        false ->
+            parse_error(invalid_element, line(Node))
+    end;
+extract_element(Node) ->
+    parse_error(invalid_element, line(Node)).
+
+compile_element(Tag, Attrs0, Children, Line, State0) ->
+    Attrs = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
+    State1 = State0#state{root = false},
+    HasDyn = has_dynamic_attr(Attrs) orelse has_dynamic_child(Children),
+    {ElemAz, State2} =
+        case HasDyn andalso (not State1#state.nodiff) of
+            true -> {State1#state.az, State1#state{az = State1#state.az + 1}};
+            false -> {none, State1}
         end,
-    erl_eval:expr(
-        AbstractForm,
+    TagBin = atom_to_html_binary(Tag),
+    State3 = buf_append(State2, <<"<", TagBin/binary>>),
+    State4 =
+        case ElemAz of
+            none ->
+                State3;
+            N ->
+                AzBin = integer_to_binary(N),
+                buf_append(State3, <<" az=\"", AzBin/binary, "\"">>)
+        end,
+    State5 = compile_attrs(Attrs, ElemAz, State4, Line),
+    case is_void(Tag) andalso Children =/= [] of
+        true -> parse_error({void_with_children, Tag}, Line);
+        false -> ok
+    end,
+    case is_void(Tag) of
+        true ->
+            buf_append(State5, <<" />">>);
+        false ->
+            State6 = buf_append(State5, <<">">>),
+            State7 = compile_children(Children, ElemAz, State6),
+            buf_append(State7, <<"</", TagBin/binary, ">">>)
+    end.
+
+compile_attrs([], _ElemAz, State, _ElemLine) ->
+    State;
+compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
+    State1 = compile_attr(Attr, ElemAz, State0, ElemLine),
+    compile_attrs(Rest, ElemAz, State1, ElemLine).
+
+compile_attr({bin, _, _} = Bin, _ElemAz, State0, _ElemLine) ->
+    NameBin = extract_binary_value(Bin),
+    buf_append(State0, <<" ", NameBin/binary>>);
+compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine) when
+    element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
+->
+    State0;
+compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, _ElemLine) when
+    element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
+->
+    NameBin = extract_attr_name(NameAST),
+    buf_append(State0, <<" ", NameBin/binary>>);
+compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, _ElemLine) when
+    element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
+->
+    NameBin = extract_attr_name(NameAST),
+    case is_static_binary(ValueAST) of
+        true ->
+            ValBin = extract_binary_value(ValueAST),
+            buf_append(State0, <<" ", NameBin/binary, "=\"", ValBin/binary, "\"">>);
+        false when State0#state.nodiff ->
+            Module = State0#state.module,
+            DynAST = make_nodiff_attr_dynamic_ast(NameBin, ValueAST, Module, line(ValueAST)),
+            flush(State0, DynAST);
+        false ->
+            Module = State0#state.module,
+            AzBin = integer_to_binary(ElemAz),
+            DynAST = make_attr_dynamic_ast(AzBin, NameBin, ValueAST, Module, line(ValueAST)),
+            flush(State0, DynAST)
+    end;
+compile_attr({atom, _, Name}, _ElemAz, State0, _ElemLine) ->
+    NameBin = atom_to_html_binary(Name),
+    buf_append(State0, <<" ", NameBin/binary>>);
+compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
+    AttrLine =
+        try
+            line(Attr)
+        catch
+            _:_ -> ElemLine
+        end,
+    parse_error(invalid_attribute, AttrLine).
+
+compile_children(Children, ElemAz, State) ->
+    compile_children(Children, ElemAz, State, 0).
+
+compile_children([], _ElemAz, State, _Slot) ->
+    State;
+compile_children([Child | Rest], ElemAz, State0, Slot) ->
+    {State1, NextSlot} = compile_child(Child, ElemAz, State0, Slot),
+    compile_children(Rest, ElemAz, State1, NextSlot).
+
+compile_child(Child, ElemAz, State0, Slot) ->
+    case is_static_binary(Child) of
+        true ->
+            {buf_append(State0, extract_binary_value(Child)), Slot};
+        false ->
+            compile_non_static_child(Child, ElemAz, State0, Slot)
+    end.
+
+compile_non_static_child(Child, ElemAz, State0, Slot) ->
+    case is_element_tuple(Child) of
+        true ->
+            {Tag, Attrs, Children, ElemLine} = extract_element(Child),
+            {compile_element(Tag, Attrs, Children, ElemLine, State0), Slot};
+        false ->
+            compile_dynamic_child(Child, ElemAz, State0, Slot)
+    end.
+
+compile_dynamic_child(Child, ElemAz, State0, Slot) ->
+    case is_invalid_static_child(Child) of
+        true ->
+            ValueStr = erl_pp:expr(Child),
+            parse_error({invalid_child, ValueStr}, line(Child));
+        false ->
+            emit_child_dynamic(Child, ElemAz, State0, Slot)
+    end.
+
+emit_child_dynamic(Child, _ElemAz, #state{nodiff = true, module = Module} = State0, Slot) ->
+    DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child)),
+    {flush(State0, DynAST), Slot};
+emit_child_dynamic(Child, ElemAz, #state{module = Module} = State0, Slot) ->
+    ElemAzBin = integer_to_binary(ElemAz),
+    MarkerAz = marker_az(ElemAzBin, Slot),
+    State1 = buf_append(State0, <<"<!--az:", MarkerAz/binary, "-->">>),
+    DynAST = make_text_dynamic_ast(MarkerAz, Child, Module, line(Child)),
+    State2 = flush(State1, DynAST),
+    {State2#state{buf = <<"<!--/az-->">>}, Slot + 1}.
+
+marker_az(ElemAzBin, 0) ->
+    ElemAzBin;
+marker_az(ElemAzBin, Slot) ->
+    <<ElemAzBin/binary, ":", (integer_to_binary(Slot))/binary>>.
+
+make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
+    LocAST = loc_ast(Module, ExprLine),
+    {tuple, 0, [
+        ast_binary(AzBin),
+        {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
+        LocAST
+    ]}.
+
+make_attr_dynamic_ast(AzBin, AttrNameBin, ExprAST, Module, ExprLine) ->
+    LocAST = loc_ast(Module, ExprLine),
+    {tuple, 0, [
+        ast_binary(AzBin),
+        {tuple, 0, [
+            {atom, 0, attr},
+            ast_binary(AttrNameBin),
+            {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}}
+        ]},
+        LocAST
+    ]}.
+
+make_nodiff_dynamic_ast(ExprAST, Module, ExprLine) ->
+    LocAST = loc_ast(Module, ExprLine),
+    {tuple, 0, [
+        {atom, 0, undefined},
+        {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
+        LocAST
+    ]}.
+
+make_nodiff_attr_dynamic_ast(AttrNameBin, ExprAST, Module, ExprLine) ->
+    LocAST = loc_ast(Module, ExprLine),
+    {tuple, 0, [
+        {atom, 0, undefined},
+        {tuple, 0, [
+            {atom, 0, attr},
+            ast_binary(AttrNameBin),
+            {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}}
+        ]},
+        LocAST
+    ]}.
+
+loc_ast(Module, Line) ->
+    {tuple, 0, [{atom, 0, Module}, {integer, 0, Line}]}.
+
+buf_append(State, Bin) ->
+    State#state{buf = <<(State#state.buf)/binary, Bin/binary>>}.
+
+flush(State, DynAST) ->
+    State#state{
+        statics = State#state.statics ++ [State#state.buf],
+        dynamics = State#state.dynamics ++ [DynAST],
+        buf = <<>>
+    }.
+
+finalize(State) ->
+    Statics = State#state.statics ++ [State#state.buf],
+    Dynamics = State#state.dynamics,
+    {Statics, Dynamics}.
+
+%% Prefix az values with the template fingerprint to prevent collisions
+%% when stateless children are inlined in a parent template.
+scope_az(_Fp, Statics, []) ->
+    {Statics, []};
+scope_az(Fp, Statics, DynASTs) ->
+    {[scope_static(Fp, S) || S <- Statics], [scope_dynamic_ast(Fp, D) || D <- DynASTs]}.
+
+scope_static(Fp, S0) ->
+    S1 = binary:replace(S0, <<" az=\"">>, <<" az=\"", Fp/binary, "-">>, [global]),
+    binary:replace(S1, <<"<!--az:">>, <<"<!--az:", Fp/binary, "-">>, [global]).
+
+scope_dynamic_ast(_Fp, {tuple, _, [{atom, _, undefined} | _]} = D) ->
+    D;
+scope_dynamic_ast(Fp, {tuple, L, [AzAST | Rest]}) ->
+    AzBin = extract_binary_value(AzAST),
+    {tuple, L, [ast_binary(<<Fp/binary, "-", AzBin/binary>>) | Rest]}.
+
+generate_fingerprint(Statics) ->
+    Hash = erlang:phash2(Statics),
+    integer_to_binary(Hash, 36).
+
+split_fun_body([Last]) ->
+    {[], Last};
+split_fun_body([H | T]) ->
+    {Rest, Last} = split_fun_body(T),
+    {[H | Rest], Last}.
+
+compile_parts_ast(Statics, DynASTs, Fingerprint) ->
+    {ast_list([ast_binary(S) || S <- Statics]), ast_list(DynASTs), ast_binary(Fingerprint)}.
+
+build_template_ast(Line, Statics, DynASTs, Fingerprint, Opts) ->
+    {StaticsAST, DynamicsAST, FpAST} = compile_parts_ast(Statics, DynASTs, Fingerprint),
+    BaseFields = [
+        {map_field_assoc, Line, {atom, Line, s}, StaticsAST},
+        {map_field_assoc, Line, {atom, Line, d}, DynamicsAST},
+        {map_field_assoc, Line, {atom, Line, f}, FpAST}
+    ],
+    {map, Line, BaseFields ++ opts_to_map_fields(Opts, Line)}.
+
+build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerprint, Opts) ->
+    {StaticsAST, DynamicsAST, FpAST} = compile_parts_ast(Statics, DynASTs, Fingerprint),
+    DFunAST =
+        {'fun', Line,
+            {clauses, [
+                {clause, Line, Vars, Guards, Prefix ++ [DynamicsAST]}
+            ]}},
+    BaseFields = [
+        {map_field_assoc, Line, {atom, Line, t}, {integer, Line, 0}},
+        {map_field_assoc, Line, {atom, Line, s}, StaticsAST},
+        {map_field_assoc, Line, {atom, Line, d}, DFunAST},
+        {map_field_assoc, Line, {atom, Line, f}, FpAST}
+    ],
+    TmplAST = {map, Line, BaseFields ++ opts_to_map_fields(Opts, Line)},
+    {call, Line, {remote, Line, {atom, Line, arizona_template}, {atom, Line, each}}, [
+        SourceAST, TmplAST
+    ]}.
+
+ast_binary(Bin) ->
+    {bin, 0, [{bin_element, 0, {string, 0, binary_to_list(Bin)}, default, default}]}.
+
+ast_list([]) ->
+    {nil, 0};
+ast_list([H | T]) ->
+    {cons, 0, H, ast_list(T)}.
+
+ast_list_to_list({nil, _}) -> [];
+ast_list_to_list({cons, _, Head, Tail}) -> [Head | ast_list_to_list(Tail)].
+
+normalize_children(AST) ->
+    case is_list_ast(AST) of
+        true -> ast_list_to_list(AST);
+        false -> [AST]
+    end.
+
+extract_attr_name({atom, _, Name}) -> atom_to_html_binary(Name);
+extract_attr_name(BinAST) -> extract_binary_value(BinAST).
+
+extract_binary_value({bin, _, Elements}) ->
+    iolist_to_binary([extract_bin_element(E) || E <- Elements]).
+
+extract_bin_element({bin_element, _, {string, _, Chars}, _, _}) ->
+    unicode:characters_to_binary(Chars);
+extract_bin_element({bin_element, _, {integer, _, N}, _, _}) ->
+    <<N/utf8>>.
+
+is_static_binary({bin, _, Elements}) ->
+    lists:all(
+        fun
+            ({bin_element, _, {string, _, _}, _, _}) -> true;
+            ({bin_element, _, {integer, _, _}, _, _}) -> true;
+            (_) -> false
+        end,
+        Elements
+    );
+is_static_binary(_) ->
+    false.
+
+is_element_tuple({tuple, _, [_, Second]}) ->
+    is_list_ast(Second);
+is_element_tuple({tuple, _, [_, Second, _Third]}) ->
+    is_list_ast(Second);
+is_element_tuple({tuple, _, [{atom, _, _} | _]}) ->
+    true;
+is_element_tuple(_) ->
+    false.
+
+is_element_list({cons, _, Head, Tail}) ->
+    is_element_tuple(Head) andalso is_element_list_tail(Tail);
+is_element_list(_) ->
+    false.
+
+is_element_list_tail({nil, _}) ->
+    true;
+is_element_list_tail({cons, _, Head, Tail}) ->
+    is_element_tuple(Head) andalso is_element_list_tail(Tail);
+is_element_list_tail(_) ->
+    false.
+
+is_list_ast({nil, _}) -> true;
+is_list_ast({cons, _, _, _}) -> true;
+is_list_ast(_) -> false.
+
+has_dynamic_attr([]) ->
+    false;
+has_dynamic_attr([{bin, _, _} | Rest]) ->
+    has_dynamic_attr(Rest);
+has_dynamic_attr([{tuple, _, [_, {atom, _, Val}]} | Rest]) when is_boolean(Val) ->
+    has_dynamic_attr(Rest);
+has_dynamic_attr([{tuple, _, [_NameAST, ValueAST]} | Rest]) ->
+    case is_static_binary(ValueAST) of
+        true -> has_dynamic_attr(Rest);
+        false -> true
+    end;
+has_dynamic_attr([{atom, _, _} | Rest]) ->
+    has_dynamic_attr(Rest);
+has_dynamic_attr(_) ->
+    false.
+
+has_dynamic_child([]) ->
+    false;
+has_dynamic_child([Child | Rest]) ->
+    case is_static_binary(Child) orelse is_element_tuple(Child) of
+        true -> has_dynamic_child(Rest);
+        false -> true
+    end.
+
+is_invalid_static_child({tuple, _, _}) -> true;
+is_invalid_static_child(_) -> false.
+
+%% Pre-scan items (elements or mixed) for directives before compilation.
+%% This ensures nodiff is known upfront so all items compile consistently.
+prescan_directives(Items) ->
+    lists:foldl(
+        fun(Item, Acc) ->
+            case is_element_tuple(Item) of
+                true ->
+                    {_Tag, Attrs0, _Children, _Line} = extract_element(Item),
+                    {_Attrs, ElemOpts} = extract_directives(Attrs0),
+                    maps:merge(Acc, ElemOpts);
+                false ->
+                    Acc
+            end
+        end,
         #{},
-        {value, fun(Function, Args) -> apply(Module, Function, Args) end},
-        none,
-        value
+        Items
     ).
 
-%% Create error_info for proper compiler diagnostics with enhanced details
--spec error_info(Cause) -> ErrorInfo when
-    Cause :: dynamic(),
-    ErrorInfo :: [{error_info, map()}].
-error_info(Cause) ->
-    [
-        {error_info, #{
-            cause => Cause,
-            module => ?MODULE
-        }}
-    ].
+directive_opts(<<"az-nodiff">>) -> {ok, #{diff => false}};
+directive_opts(_) -> false.
+
+bare_attr_name({atom, _, Name}) ->
+    {ok, atom_to_html_binary(Name)};
+bare_attr_name({bin, _, _} = Bin) ->
+    case is_static_binary(Bin) of
+        true -> {ok, extract_binary_value(Bin)};
+        false -> error
+    end;
+bare_attr_name(_) ->
+    error.
+
+extract_directives(Attrs) ->
+    extract_directives(Attrs, #{}).
+
+extract_directives([], Opts) ->
+    {[], Opts};
+extract_directives([Attr | Rest], Opts) ->
+    case bare_attr_name(Attr) of
+        {ok, Name} ->
+            case directive_opts(Name) of
+                {ok, NewOpts} ->
+                    extract_directives(Rest, maps:merge(Opts, NewOpts));
+                false ->
+                    {Tail, Opts1} = extract_directives(Rest, Opts),
+                    {[Attr | Tail], Opts1}
+            end;
+        error ->
+            {Tail, Opts1} = extract_directives(Rest, Opts),
+            {[Attr | Tail], Opts1}
+    end.
+
+opts_to_map_fields(Opts, Line) ->
+    maps:fold(
+        fun(K, V, Acc) ->
+            [{map_field_assoc, Line, {atom, Line, K}, {atom, Line, V}} | Acc]
+        end,
+        [],
+        Opts
+    ).
+
+atom_to_html_binary(Atom) ->
+    binary:replace(atom_to_binary(Atom), <<"_">>, <<"-">>, [global]).
+
+is_void(area) -> true;
+is_void(base) -> true;
+is_void(br) -> true;
+is_void(col) -> true;
+is_void(embed) -> true;
+is_void(hr) -> true;
+is_void(img) -> true;
+is_void(input) -> true;
+is_void(link) -> true;
+is_void(meta) -> true;
+is_void(param) -> true;
+is_void(source) -> true;
+is_void(track) -> true;
+is_void(wbr) -> true;
+is_void(_) -> false.

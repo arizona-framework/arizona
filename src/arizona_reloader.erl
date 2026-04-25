@@ -1,191 +1,271 @@
 -module(arizona_reloader).
--moduledoc ~"""
-File reloader coordination system for development workflow automation.
+-moduledoc """
+Dev-mode hot reloader for `.erl` and CSS files.
 
-Manages multiple reload handlers with individual file system watchers.
-Each rule defines a specialized handler module and its file watching configuration.
-Handlers implement domain-specific reload logic (compile, build, etc.).
+Subscribers (typically connected WebSocket clients) `join/1` the
+reloader's pubsub topic and receive `{arizona_reloader, reload}` (or
+`reload_css`) messages whenever files change. The watcher process
+(`arizona_watcher`) calls `reload_erl/1` or `reload_css/1` after a
+debounced burst of file events.
 
-## Configuration
+## Compilation flow
 
-```erlang
-Config = #{
-    enabled => true,
-    rules => [
-        #{
-            handler => {my_erl_reloader, #{profile => test}}, % {Module, Options}
-            watcher => #{                   % arizona_watcher:config()
-                directories => ["src"],
-                patterns => [".*\\.erl$"],
-                debounce_ms => 100
-            }
-        },
-        #{
-            handler => {my_assets_reloader, #{build_env => development}},
-            watcher => #{
-                directories => ["assets"],
-                patterns => [".*\\.js$"],
-                debounce_ms => 200
-            }
-        }
-    ]
-}.
-```
+`reload_erl/1` recompiles changed `.erl` files, then triggers a route
+recompile and broadcasts a reload message:
 
-## Handler Behavior
+1. If `rebar_agent` is registered (running under `rebar3 shell`), uses
+   `rebar_agent:do(compile)` so deps and compile options stay aligned
+   with the project.
+2. Otherwise falls back to `compile:file/2` with options recovered from
+   the existing module's `module_info(compile)`.
+3. On compile error, structured errors from the changed files are
+   stashed in a persistent term so the dev error page can render them
+   on the next request. Subsequent successful compiles clear the error.
 
-Reload handlers must implement the arizona_reloader behavior:
+## Public reload API
 
-```erlang
--module(my_erl_reloader).
--behaviour(arizona_reloader).
--export([reload/2]).
-
-reload(Files, Options) ->
-    % Custom reload logic for Erlang files with options
-    Profile = maps:get(profile, Options, default),
-    Cmd = io_lib:format("rebar3 as ~s compile", [Profile]),
-    os:cmd(Cmd),
-    lists:foreach(fun compile:file/1, Files),
-    ok.
-```
-
-## Integration
-
-The reloader coordinates with arizona_watcher_sup to manage individual
-watcher instances. Each rule creates a dedicated watcher process that
-monitors specific directories and delegates to the configured handler.
-
-## Usage Pattern
-
-1. **Configuration**: Define rules with handler modules and watcher configs
-2. **Startup**: Start reloader with rule set during application boot
-3. **Monitoring**: Individual watchers detect file changes
-4. **Delegation**: Changes are forwarded to appropriate handler modules
-5. **Execution**: Handlers perform domain-specific reload operations
+- `join/1` -- subscribe a pid to the reloader topic (idempotent)
+- `broadcast/0` -- emit a reload message manually
+- `reload_erl/1` -- compile + reload + broadcast (called by the watcher)
+- `reload_css/0,1` -- broadcast a CSS reload (no compile needed)
+- `get_error/0` / `clear_error/0` -- inspect/reset the last compile error
 """.
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([call_reload_callback/2]).
--export([start/1]).
--export([stop/0]).
+-export([join/1]).
+-export([broadcast/0]).
+-export([reload_erl/1]).
+-export([reload_css/1]).
+-export([reload_css/0]).
+-export([compile/1]).
+-export([get_error/0]).
+-export([clear_error/0]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([call_reload_callback/2]).
--ignore_xref([start/1]).
--ignore_xref([stop/0]).
+-ignore_xref([broadcast/0, reload_erl/1, reload_css/0, reload_css/1, compile/1, clear_error/0]).
+-ignore_xref({rebar_agent, do, 1}).
 
 %% --------------------------------------------------------------------
-%% Types exports
+%% Ignore elvis warnings
 %% --------------------------------------------------------------------
 
--export_type([config/0]).
--export_type([rule/0]).
--export_type([handler_options/0]).
--export_type([reload_files/0]).
--export_type([reload_result/0]).
+%% Module names from filenames are bounded by the project's source files;
+%% list_to_atom is the standard way to derive them in dev hot-reload code.
+-elvis([{elvis_style, no_common_caveats_call, disable}]).
 
 %% --------------------------------------------------------------------
-%% Types definitions
+%% Macros
 %% --------------------------------------------------------------------
 
--nominal config() :: #{
-    enabled := boolean(),
-    rules => [rule()]
-}.
--nominal rule() :: #{
-    handler := {module(), handler_options()},
-    watcher := arizona_watcher:config()
-}.
--nominal handler_options() :: dynamic().
--nominal reload_files() :: [arizona_watcher:filename()].
--nominal reload_result() :: arizona_watcher:watcher_callback_result().
+-define(COMPILE_ERROR_KEY, arizona_compile_error).
 
 %% --------------------------------------------------------------------
-%% Behavior definition
+%% API Functions
 %% --------------------------------------------------------------------
 
--doc ~"""
-Callback for handling file reload operations.
+-doc """
+Subscribes `Pid` to the reloader pubsub topic. Idempotent: re-joining
+returns `ok`.
 
-Invoked when files matching the watcher configuration are changed.
-Handlers receive a list of changed files and their configured options,
-then should perform their specific reload logic (compilation, building, etc.).
+Silently no-ops if `arizona_pubsub` is not running (production mode).
 """.
--callback reload(Files, HandlerOptions) -> Result when
-    Files :: reload_files(),
-    HandlerOptions :: handler_options(),
-    Result :: reload_result().
+-spec join(Pid) -> ok when
+    Pid :: pid().
+join(Pid) ->
+    case erlang:whereis(arizona_pubsub) of
+        undefined ->
+            ok;
+        _ ->
+            case arizona_pubsub:subscribe(?MODULE, Pid) of
+                ok -> ok;
+                {error, already_joined} -> ok
+            end
+    end.
 
-%% --------------------------------------------------------------------
-%% API function definitions
-%% --------------------------------------------------------------------
-
--doc ~"""
-Executes a reload handler callback.
-
-Calls the handler module's `reload/2` function with the list of changed files
-and handler options. Used by the watcher callback to delegate to appropriate
-reload handlers.
+-doc """
+Broadcasts an `{arizona_reloader, reload}` message on the reloader
+topic. Subscribed live processes typically reply by triggering a
+client reload.
 """.
--spec call_reload_callback(Handler, Files) -> Result when
-    Handler :: {module(), handler_options()},
-    Files :: reload_files(),
-    Result :: reload_result().
-call_reload_callback({HandlerModule, HandlerOptions}, Files) ->
-    apply(HandlerModule, reload, [Files, HandlerOptions]).
+-spec broadcast() -> ok.
+broadcast() ->
+    arizona_pubsub:broadcast(?MODULE, {?MODULE, reload}).
 
--doc ~"""
-Starts the reloader system with the given configuration.
-
-Creates individual file watchers for each rule, with each watcher
-configured to call the appropriate reload handler when files change.
-Returns `ok` on success or `{error, Reason}` on failure.
+-doc """
+Recompiles the changed `.erl` files, refreshes Cowboy routes, and
+broadcasts a reload message. Called by the file watcher.
 """.
--spec start(Config) -> Result when
-    Config :: config(),
-    Result :: ok | {error, Reason},
-    Reason :: dynamic().
-start(#{enabled := true} = Config) ->
-    Rules = maps:get(rules, Config, []),
-    start_reloader_instances(Rules);
-start(Config) when is_map(Config) ->
-    ok.
+-spec reload_erl(Files) -> ok when
+    Files :: [file:filename()].
+reload_erl(Files) ->
+    _ = compile(Files),
+    arizona_cowboy_server:recompile_routes(),
+    broadcast().
 
--doc ~"""
-Stops the reloader system.
-
-Note: Individual watcher processes are managed by arizona_watcher_sup
-and will be terminated when the supervisor shuts down.
+-doc """
+Triggers a CSS reload broadcast. Ignores the file list -- the client
+re-fetches its stylesheet on receipt.
 """.
--spec stop() -> ok.
-stop() ->
+-spec reload_css(Files) -> ok when
+    Files :: [file:filename()].
+reload_css(_Files) ->
+    reload_css().
+
+-doc """
+Compiles a list of source files. Filters to `.erl` files, then either
+delegates to `rebar_agent` (when running under `rebar3 shell`) or
+falls back to a direct `compile:file/2` per file.
+
+Returns `ok` on success or `{error, #{errors := [...]}}` on failure.
+The error is also stashed in a persistent term so the dev error page
+can read it via `get_error/0`.
+""".
+-spec compile(Files) -> ok | {error, map()} when
+    Files :: [file:filename()].
+compile(Files) ->
+    ErlFiles = [F || F <- Files, filename:extension(F) =:= ".erl"],
+    case ErlFiles of
+        [] ->
+            clear_error(),
+            ok;
+        _ ->
+            case compile_and_load(ErlFiles) of
+                ok ->
+                    clear_error(),
+                    ok;
+                {error, ErrorInfo} ->
+                    set_error(ErrorInfo),
+                    {error, ErrorInfo}
+            end
+    end.
+
+-doc """
+Broadcasts a CSS reload message. No-op when `arizona_pubsub` is not
+running (production).
+""".
+-spec reload_css() -> ok.
+reload_css() ->
+    case erlang:whereis(arizona_pubsub) of
+        undefined ->
+            ok;
+        _ ->
+            arizona_pubsub:broadcast(?MODULE, {?MODULE, reload_css}),
+            ok
+    end.
+
+-doc """
+Returns the last stashed compile error, or `undefined` if the most
+recent compile succeeded.
+""".
+-spec get_error() -> undefined | map().
+get_error() ->
+    persistent_term:get(?COMPILE_ERROR_KEY, undefined).
+
+-doc """
+Clears the stashed compile error. Called after a successful compile.
+""".
+-spec clear_error() -> ok.
+clear_error() ->
+    persistent_term:put(?COMPILE_ERROR_KEY, undefined),
     ok.
 
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
-start_reloader_instances([]) ->
-    ok;
-start_reloader_instances([Rule | Rules]) ->
-    case start_reloader_instance(Rule) of
-        {ok, _Pid} ->
-            start_reloader_instances(Rules);
-        {error, Reason} ->
-            {error, {reloader_instance_failed, Reason}}
+set_error(Error) ->
+    persistent_term:put(?COMPILE_ERROR_KEY, Error).
+
+%% Use rebar_agent when available (rebar3 shell), fall back to manual compile.
+compile_and_load(ErlFiles) ->
+    case erlang:whereis(rebar_agent) of
+        undefined ->
+            manual_compile(ErlFiles);
+        _ ->
+            rebar3_compile(ErlFiles)
     end.
 
-start_reloader_instance(#{handler := Handler, watcher := WatcherConfig}) ->
-    % Create callback that delegates to the handler module via call_reload_callback
-    ReloadCallback = fun(Files) -> call_reload_callback(Handler, Files) end,
-    % Update watcher config with our callback
-    FinalWatcherConfig = WatcherConfig#{callback => ReloadCallback},
-    % Start watcher instance
-    arizona_watcher_sup:start_child(FinalWatcherConfig).
+%% Let rebar3 handle compilation (correct opts, deps, reload).
+%% On failure, collect structured errors from the changed files for display.
+rebar3_compile(ErlFiles) ->
+    case erlang:apply(rebar_agent, do, [compile]) of
+        ok ->
+            ok;
+        {error, _} ->
+            collect_errors(ErlFiles)
+    end.
+
+%% Direct compile:file fallback when rebar3 is not available.
+manual_compile(Files) ->
+    manual_compile(Files, []).
+
+manual_compile([], []) ->
+    ok;
+manual_compile([], Errors) ->
+    {error, #{errors => lists:reverse(Errors)}};
+manual_compile([File | Rest], Errors) ->
+    Mod = list_to_atom(filename:basename(File, ".erl")),
+    Opts = get_compile_opts(Mod),
+    case compile:file(File, [binary, return_errors | Opts]) of
+        {ok, Mod, Binary} ->
+            reload_module(Mod, File, Binary),
+            manual_compile(Rest, Errors);
+        {ok, Mod, Binary, _Warnings} ->
+            reload_module(Mod, File, Binary),
+            manual_compile(Rest, Errors);
+        {error, FileErrors, _Warnings} ->
+            manual_compile(Rest, FileErrors ++ Errors)
+    end.
+
+%% Re-compile changed files with return_errors to get structured error info.
+collect_errors(Files) ->
+    Errors = lists:foldl(
+        fun(File, Acc) ->
+            Mod = list_to_atom(filename:basename(File, ".erl")),
+            Opts = get_compile_opts(Mod),
+            case compile:file(File, [binary, return_errors | Opts]) of
+                {ok, _, _} -> Acc;
+                {ok, _, _, _} -> Acc;
+                {error, FileErrors, _} -> FileErrors ++ Acc
+            end
+        end,
+        [],
+        Files
+    ),
+    case Errors of
+        [] ->
+            %% Error was in a dep or file not in the changed list.
+            {error, #{errors => []}};
+        _ ->
+            {error, #{errors => lists:reverse(Errors)}}
+    end.
+
+reload_module(Mod, File, Binary) ->
+    code:purge(Mod),
+    {module, Mod} = code:load_binary(Mod, File, Binary),
+    ok.
+
+get_compile_opts(Mod) ->
+    try
+        Info = Mod:module_info(compile),
+        RawOpts = proplists:get_value(options, Info, []),
+        filter_opts(RawOpts)
+    catch
+        _:_ -> [debug_info]
+    end.
+
+filter_opts(Opts) ->
+    [O || O <- Opts, keep_opt(O)].
+
+keep_opt({outdir, _}) -> false;
+keep_opt(binary) -> false;
+keep_opt(return_errors) -> false;
+keep_opt(report_errors) -> false;
+keep_opt(report_warnings) -> false;
+keep_opt(_) -> true.
