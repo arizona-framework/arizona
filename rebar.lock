@@ -1,11 +1,6 @@
 {"1.2.0",
 [{<<"cowboy">>,{pkg,<<"cowboy">>,<<"2.14.2">>},0},
  {<<"cowlib">>,{pkg,<<"cowlib">>,<<"2.16.0">>},1},
- {<<"eqwalizer_support">>,
-  {git_subdir,"https://github.com/whatsapp/eqwalizer.git",
-              {ref,"35275e300c5550f974fe0a75044188c8403254fa"},
-              "eqwalizer_support"},
-  0},
  {<<"fs">>,{pkg,<<"fs">>,<<"11.4.1">>},0},
  {<<"ranch">>,{pkg,<<"ranch">>,<<"2.2.0">>},1}]}.
 [
