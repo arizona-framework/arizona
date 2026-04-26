@@ -27,6 +27,7 @@ main(Args) ->
 
     Workloads = [
         {<<"render_view_small">>, fun bench_render_view_small/1},
+        {<<"render_view_with_layout">>, fun bench_render_view_with_layout/1},
         {<<"mount_only">>, fun bench_mount_only/1},
         {<<"diff_no_change">>, fun bench_diff_no_change/1},
         {<<"diff_simple_event">>, fun bench_diff_simple_event/1}
@@ -58,6 +59,27 @@ bench_render_view_small(Runs) ->
     %% returned tree and biased the measurement upward by ~10%.
     Fun = fun() ->
         arizona_render:render_view_to_iolist(arizona_root_counter, Req, #{})
+    end,
+    run_workload(Fun, Runs).
+
+bench_render_view_with_layout(Runs) ->
+    %% Same as render_view_small but wraps the page in arizona_layout
+    %% (DOCTYPE + html/head/body + nav + script tag). Every real HTTP
+    %% GET goes through layout application; this catches regressions in
+    %% `apply_layouts/3` and the layout's auto-detected `az_nodiff`
+    %% semantics that render_view_small bypasses.
+    Req = arizona_req_test_adapter:new(),
+    Opts = #{layouts => [{arizona_layout, render}]},
+    Sample = arizona_render:render_view_to_iolist(arizona_root_counter, Req, Opts),
+    case iolist_size(Sample) > 0 of
+        true ->
+            ok;
+        false ->
+            io:format("error: render_view_to_iolist with layout returned empty~n"),
+            halt(1)
+    end,
+    Fun = fun() ->
+        arizona_render:render_view_to_iolist(arizona_root_counter, Req, Opts)
     end,
     run_workload(Fun, Runs).
 
@@ -246,7 +268,7 @@ report(Label, #{
     ops_per_s := OpsPerSec
 }) ->
     io:format(
-        "~-22s N=~b ops=~b  mean=~s  stdev=~s  p50=~s  p99=~s  ops/s=~s~n",
+        "~-26s N=~b ops=~b  mean=~s  stdev=~s  p50=~s  p99=~s  ops/s=~s~n",
         [
             Label,
             N,
