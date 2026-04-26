@@ -28,6 +28,7 @@ main(Args) ->
     Workloads = [
         {<<"render_view_small">>, fun bench_render_view_small/1},
         {<<"render_view_with_layout">>, fun bench_render_view_with_layout/1},
+        {<<"render_view_page">>, fun bench_render_view_page/1},
         {<<"mount_only">>, fun bench_mount_only/1},
         {<<"diff_no_change">>, fun bench_diff_no_change/1},
         {<<"diff_simple_event">>, fun bench_diff_simple_event/1}
@@ -80,6 +81,29 @@ bench_render_view_with_layout(Runs) ->
     end,
     Fun = fun() ->
         arizona_render:render_view_to_iolist(arizona_root_counter, Req, Opts)
+    end,
+    run_workload(Fun, Runs).
+
+bench_render_view_page(Runs) ->
+    %% Renders arizona_page: a route-level view with three embedded
+    %% `arizona_counter` stateful children, plus an empty stream and a
+    %% conditional connected-status block. Exercises the multi-child
+    %% snapshot path -- each `?stateful(arizona_counter, ...)` allocates
+    %% a child view snapshot, runs the child template, and propagates
+    %% the result back. Catches regressions in `arizona_template:stateful/2`,
+    %% `arizona_render:make_ssr_child_snap/1`, and child-view fingerprint
+    %% propagation that the simpler render_view_* workloads bypass.
+    Req = arizona_req_test_adapter:new(),
+    Sample = arizona_render:render_view_to_iolist(arizona_page, Req, #{}),
+    case iolist_size(Sample) > 0 of
+        true ->
+            ok;
+        false ->
+            io:format("error: render_view_to_iolist arizona_page returned empty~n"),
+            halt(1)
+    end,
+    Fun = fun() ->
+        arizona_render:render_view_to_iolist(arizona_page, Req, #{})
     end,
     run_workload(Fun, Runs).
 
