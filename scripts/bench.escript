@@ -37,6 +37,7 @@ main(Args) ->
         {<<"mount_only">>, fun bench_mount_only/1},
         {<<"diff_no_change">>, fun bench_diff_no_change/1},
         {<<"diff_simple_event">>, fun bench_diff_simple_event/1},
+        {<<"diff_multi_key_change">>, fun bench_diff_multi_key_change/1},
         {<<"stream_insert_1k">>, fun bench_stream_insert_1k/1},
         {<<"stream_reorder_100">>, fun bench_stream_reorder_100/1},
         {<<"stream_update_field_100">>, fun bench_stream_update_field_100/1},
@@ -440,6 +441,21 @@ bench_diff_simple_event(Runs) ->
     %% on a single-binding change.
     arizona_bench_lib:run_socket_event_workload(
         arizona_root_counter, #{}, [~"counter", ~"inc", #{}], Runs
+    ).
+
+bench_diff_multi_key_change(Runs) ->
+    %% Mount arizona_bench_multi_key (10 dynamics, each tracking a
+    %% distinct binding key), then dispatch `bump_three` events that
+    %% mutate 3 of the 10 bindings at once. Exercises the diff fast
+    %% path with a multi-key Changed map: 3 dynamics re-evaluate,
+    %% 7 are skipped via `deps_changed`. Compared against
+    %% `diff_simple_event` (1 key), the delta isolates the per-key
+    %% cost of the intersection check.
+    arizona_bench_lib:run_socket_event_workload(
+        arizona_bench_multi_key,
+        #{},
+        [~"multi_key", ~"bump_three", #{~"value" => 1}],
+        Runs
     ).
 
 %% ---------------------------------------------------------------------------
