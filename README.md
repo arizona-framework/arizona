@@ -8,7 +8,7 @@ the template level, and pushes minimal updates to the browser over WebSocket.
 Templates are plain Erlang terms compiled via parse transform. The server owns the state; the client
 is a thin DOM patcher.
 
-## Status
+## Status ⚠️
 
 Arizona is in `0.x`. The core is functional and covered by tests, but the API may change between
 minor versions. Pin a commit SHA in your deps if you need stability.
