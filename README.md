@@ -151,7 +151,6 @@ Then declare routes in `config/sys.config`:
 ```erlang
 [{arizona, [
     {server, #{
-        transport_opts => [{port, 4040}],
         routes => [
             {live, ~"/", my_page, #{
                 layouts => [{my_layout, render}],
