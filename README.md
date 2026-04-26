@@ -34,7 +34,8 @@ across upgrades.
 - **Route middlewares** -- gate or rewrite requests before mount (auth, sessions, URL projection)
 - **On-mount hooks** -- per-route pipeline that runs before every mount, including navigate
 - **Element hooks** -- client-side `mounted`/`updated`/`destroyed` callbacks via `az_hook`
-- **Framework-agnostic transport** -- cowboy is the default adapter, but optional
+- **Dev-mode hot reload** -- `fs` watcher recompiles changed `.erl` files and pushes reload events
+- **Pluggable transport** -- cowboy adapter built-in; write your own to swap it out
 
 ## Requirements
 
