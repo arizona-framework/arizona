@@ -348,7 +348,10 @@ eval_val_v(#{t := ?EACH, source := #stream{} = Source, template := Tmpl}, Views)
 eval_val_v(#{t := ?EACH, source := Source, template := Tmpl}, Views) when is_map(Source) ->
     eval_each_map(Source, Tmpl, Views);
 eval_val_v(#{callback := Callback, props := Props}, Views) ->
-    eval_val_v(Callback(Props), Views);
+    %% Bracket the whole stateless recursion so eager ?get calls inside the
+    %% callback body (or any unwrapping that follows it) don't leak into the
+    %% outer dynamic's tracked deps.
+    with_saved_deps(fun() -> eval_val_v(Callback(Props), Views) end);
 eval_val_v(#{s := _, d := _} = Tmpl, Views) ->
     eval_template(Tmpl, Views);
 eval_val_v(Val, Views) ->
@@ -364,8 +367,11 @@ with_saved_deps(Fun) ->
 
 eval_stateful(H, Props, {Old, New}) ->
     Id = maps:get(id, Props),
-    {B1, Resets} = mount_or_update_stateful(H, Props, Id, Old),
+    %% Bracket the whole lifecycle. mount/1 and handle_update/2 callbacks
+    %% are user code; their ?get calls would otherwise land in the outer
+    %% dynamic's tracked deps.
     with_saved_deps(fun() ->
+        {B1, Resets} = mount_or_update_stateful(H, Props, Id, Old),
         Tmpl = arizona_handler:call_render(H, B1),
         {ChildTriples, {Old, New1}} = eval_dynamics_v(maps:get(d, Tmpl), {Old, New}),
         {ChildD, ChildDeps} = arizona_template:split_triples(ChildTriples),

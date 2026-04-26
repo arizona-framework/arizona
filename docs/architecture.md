@@ -78,6 +78,47 @@ Diff engine.
 - `diff/4` -- like `diff/3` but skips dynamics whose deps haven't changed (takes `Changed` map):
   `{Ops, NewSnapshot, Views}`
 
+## Dep tracking and per-dynamic isolation
+
+Each dynamic owns a private dep set: `#{key() => true}` of the binding keys
+read while it was evaluated. The diff engine compares each dep set against
+the `Changed` map and skips re-evaluation when they don't intersect.
+
+The mechanism is a single process-dictionary slot, `'$arizona_deps'`:
+
+- `arizona_eval:eval_one_v/2` brackets each dynamic with
+  `erlang:put('$arizona_deps', #{})` at entry and `erlang:erase` at exit.
+- `arizona_template:get/2,3`, `get_lazy/3`, and `track/1` write the read
+  key into the slot.
+- The dynamic's deps are read back at `erlang:erase` and stored on the
+  snapshot (parallel to `d`).
+
+**Per-dynamic isolation invariant:** every nested-template entry point
+runs inside `with_saved_deps/1` (`arizona_eval`), which snapshots the slot
+before entering and restores it after. Without this, an inner template's
+`?get` calls would land in the outer dynamic's slot and pollute its deps.
+Bracketed entry points and what each covers:
+
+- `eval_template` -- the inner template's per-dynamic eval loop
+- `eval_each` -- per-item rendering (list, stream, map sources)
+- `eval_stateful` -- the whole lifecycle: `mount/1` / `handle_update/2`,
+  `render/1`, and the inner per-dynamic eval loop
+- the stateless inline path -- the entire `eval_val_v` recursion for
+  `#{callback := _, props := _}` descriptors, including the callback
+  body and any subsequent unwrapping
+
+Inner *dynamics* re-bracket their own slot via `eval_one_v`, so
+per-inner-dynamic deps are independent of outer.
+
+**Usage convention:** outer-scope `?get` reads belong in the props
+expression of `?stateful`/`?stateless` -- the parse transform places them
+in the outer dynamic's closure, where they track correctly. Eager `?get`
+calls inside a `?stateless` callback body, or inside a stateful's
+`mount/1` / `handle_update/2`, are discarded by the wrap; this is
+intentional -- those reads belong to the inner scope. Idiomatic callbacks
+use a named fun reference (`?stateless(fun bar/1, Props)`), which cannot
+close over outer `Bindings` and therefore avoids the footgun entirely.
+
 ## API -- `arizona_js.erl`
 
 Unified client commands and server effects. All functions return `{arizona_js, [OpCode, ...Args]}`
