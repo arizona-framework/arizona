@@ -59,6 +59,19 @@ To track unreleased changes, swap the version for a git ref:
 {arizona, {git, "https://github.com/arizona-framework/arizona.git", {branch, "main"}}}
 ```
 
+The client JavaScript ships baked into the rebar3 build (`priv/static/assets/js/*.min.js`). If
+you need to bundle it yourself or consume it from a non-Erlang backend, install via npm:
+
+```bash
+npm install @arizona-framework/client
+```
+
+```js
+import { connect } from '@arizona-framework/client';
+
+connect('/ws');
+```
+
 ## Quick start
 
 A page with an embedded counter.
