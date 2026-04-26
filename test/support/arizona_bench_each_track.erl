@@ -24,7 +24,22 @@ render(Bindings) ->
                         {span, [], arizona_template:get(field_b, Item)},
                         {span, [], arizona_template:get(field_c, Item)},
                         {span, [], arizona_template:get(field_d, Item)},
-                        {span, [], arizona_template:get(field_e, Item)}
+                        {span, [], arizona_template:get(field_e, Item)},
+                        {span, [], arizona_template:get(field_f, Item)},
+                        {span, [], arizona_template:get(field_g, Item)},
+                        {span, [], arizona_template:get(field_h, Item)},
+                        {span, [], arizona_template:get(field_i, Item)},
+                        {span, [], arizona_template:get(field_j, Item)},
+                        {span, [], arizona_template:get(field_k, Item)},
+                        {span, [], arizona_template:get(field_l, Item)},
+                        {span, [], arizona_template:get(field_m, Item)},
+                        {span, [], arizona_template:get(field_n, Item)},
+                        {span, [], arizona_template:get(field_o, Item)},
+                        {span, [], arizona_template:get(field_p, Item)},
+                        {span, [], arizona_template:get(field_q, Item)},
+                        {span, [], arizona_template:get(field_r, Item)},
+                        {span, [], arizona_template:get(field_s, Item)},
+                        {span, [], arizona_template:get(field_t, Item)}
                     ]}
                 end,
                 ?get(items)
