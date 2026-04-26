@@ -48,12 +48,13 @@ minor versions. Pin a version in your deps.
 
 ## Installation
 
-Add `arizona` to your `rebar.config` dependencies:
+Arizona isn't on Hex yet -- pull it from GitHub's `main` branch. Add it to your `rebar.config`
+dependencies:
 
 ```erlang
 {deps, [
-    {arizona, "0.1.0"},
-    {cowboy, "2.14.2"}
+    {arizona, {git, "https://github.com/arizona-framework/arizona.git", {branch, "main"}}},
+    cowboy
 ]}.
 ```
 
