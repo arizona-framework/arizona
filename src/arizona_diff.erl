@@ -370,8 +370,8 @@ diff_stream_op(Az, {move, Key, AfterKey}, Rest, Source, Tmpl, SnapAcc, OldOrder,
     stream_move(Az, Key, AfterKey, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
 diff_stream_op(Az, reorder, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_reorder(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
-diff_stream_op(Az, reset, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
-    stream_reset(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views).
+diff_stream_op(Az, {reset, OldItems}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_reset(Az, OldItems, Rest, Source, Tmpl, SnapAcc, OldOrder, Views).
 
 stream_insert(Az, Key, Item, Pos, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     {ItemD, Views1} = arizona_eval:render_stream_item(Key, Item, Tmpl, Views0),
@@ -447,7 +447,7 @@ stream_reorder(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
         diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, VKeys, Views0),
     {MoveOps ++ RestOps, FinalSnap, Views1}.
 
-stream_reset(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+stream_reset(Az, OldItems, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
     VSet = maps:from_keys(VKeys, true),
     RemOps = [
@@ -456,7 +456,7 @@ stream_reset(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     ],
     Kept = maps:with(VKeys, SnapAcc),
     {DiffOps, NewSnaps, Views1} =
-        smart_reset_items(Az, VKeys, Kept, Source#stream.items, Tmpl, Views0, #{}),
+        smart_reset_items(Az, VKeys, Kept, OldItems, Source#stream.items, Tmpl, Views0, #{}),
     MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept),
     {RestOps, FinalSnap, Views2} =
         diff_stream_pending(Az, Rest, Source, Tmpl, NewSnaps, VKeys, Views1),
@@ -496,54 +496,52 @@ diff_list_zip(Az, [NewD | NR], [OldD | OR], Views0) ->
 diff_list_zip(_Az, NewTail, OldTail, Views) ->
     {[], NewTail, OldTail, Views}.
 
-smart_reset_items(_Az, [], _Kept, _ItemsMap, _Tmpl, Views, Snaps) ->
+smart_reset_items(_Az, [], _Kept, _OldItems, _ItemsMap, _Tmpl, Views, Snaps) ->
     {[], Snaps, Views};
-smart_reset_items(Az, [K | Rest], Kept, ItemsMap, Tmpl, Views0, Snaps) ->
-    Item = maps:get(K, ItemsMap),
-    {NewD, Views1} = arizona_eval:render_stream_item(K, Item, Tmpl, Views0),
-    NewSnaps = Snaps#{K => NewD},
+smart_reset_items(Az, [K | Rest], Kept, OldItems, ItemsMap, Tmpl, Views0, Snaps) ->
+    NewItem = maps:get(K, ItemsMap),
     case Kept of
         #{K := OldD} ->
+            {NewD, Views1} =
+                render_kept_with_skipping(K, NewItem, OldD, OldItems, Tmpl, Views0),
+            NewSnaps = Snaps#{K => NewD},
             {InnerOps, Views2} = diff_item_dynamics_v(NewD, OldD, Views1),
             case InnerOps of
                 [] ->
                     smart_reset_items(
-                        Az,
-                        Rest,
-                        Kept,
-                        ItemsMap,
-                        Tmpl,
-                        Views2,
-                        NewSnaps
+                        Az, Rest, Kept, OldItems, ItemsMap, Tmpl, Views2, NewSnaps
                     );
                 _ ->
                     PatchOp = [?OP_ITEM_PATCH, Az, arizona_template:to_bin(K), InnerOps],
                     {RestOps, FinalSnaps, Views3} =
                         smart_reset_items(
-                            Az,
-                            Rest,
-                            Kept,
-                            ItemsMap,
-                            Tmpl,
-                            Views2,
-                            NewSnaps
+                            Az, Rest, Kept, OldItems, ItemsMap, Tmpl, Views2, NewSnaps
                         ),
                     {[PatchOp | RestOps], FinalSnaps, Views3}
             end;
         #{} ->
+            {NewD, Views1} = arizona_eval:render_stream_item(K, NewItem, Tmpl, Views0),
+            NewSnaps = Snaps#{K => NewD},
             HTML = arizona_render:zip_item(Tmpl, NewD),
             InsOp = [?OP_INSERT, Az, arizona_template:to_bin(K), -1, HTML],
             {RestOps, FinalSnaps, Views2} =
                 smart_reset_items(
-                    Az,
-                    Rest,
-                    Kept,
-                    ItemsMap,
-                    Tmpl,
-                    Views1,
-                    NewSnaps
+                    Az, Rest, Kept, OldItems, ItemsMap, Tmpl, Views1, NewSnaps
                 ),
             {[InsOp | RestOps], FinalSnaps, Views2}
+    end.
+
+%% Render a kept item via the per-item skipping path when its old source
+%% is recoverable from the captured `OldItems`. Falls back to a full
+%% render if the key wasn't in the pre-reset items map (rare: limit-hidden
+%% then re-shown).
+render_kept_with_skipping(K, NewItem, OldD, OldItems, Tmpl, Views0) ->
+    case OldItems of
+        #{K := OldItem} ->
+            Changed = arizona_stream:compute_item_changed(OldItem, NewItem),
+            arizona_eval:render_stream_item_skipping(K, NewItem, OldD, Changed, Tmpl, Views0);
+        #{} ->
+            arizona_eval:render_stream_item(K, NewItem, Tmpl, Views0)
     end.
 
 apply_limit(

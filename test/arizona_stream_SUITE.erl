@@ -113,6 +113,7 @@
     stream_to_list_preserves_order/1,
     update_pending_op_carries_changed/1,
     update_on_missing_key_yields_empty_changed/1,
+    reset_pending_op_carries_old_items/1,
     stream_to_list/1,
     stream_update_no_change/1,
     stream_update_nonexistent_key/1
@@ -216,7 +217,8 @@ groups() ->
             stream_limit_ssr,
             stream_limit_reset,
             update_pending_op_carries_changed,
-            update_on_missing_key_yields_empty_changed
+            update_on_missing_key_yields_empty_changed,
+            reset_pending_op_carries_old_items
         ]},
         %% Edge case tests
         {stream_edge_cases, [parallel], [
@@ -1716,6 +1718,24 @@ update_on_missing_key_yields_empty_changed(Config) when is_list(Config) ->
         arizona_stream:update(S0, 999, #{id => 999, text => <<"new">>}),
     [{update, 999, _NewItem, Changed}] = queue:to_list(P1),
     ?assertEqual(#{}, Changed).
+
+%% --- reset/1,2 captures the pre-mutation items map in the pending op -------
+reset_pending_op_carries_old_items(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    OldItem1 = #{id => 1, text => <<"A">>},
+    OldItem2 = #{id => 2, text => <<"B">>},
+    S0 = arizona_stream:new(KeyFun, [OldItem1, OldItem2]),
+    %% reset/2 with a fresh set
+    #stream{pending = P1} = arizona_stream:reset(S0, [#{id => 1, text => <<"A2">>}]),
+    %% Pending starts with two inserts (initial population) and ends with reset.
+    Ops1 = queue:to_list(P1),
+    {reset, OldItems1} = lists:last(Ops1),
+    ?assertEqual(#{1 => OldItem1, 2 => OldItem2}, OldItems1),
+    %% reset/1 (full clear) also captures old items
+    #stream{pending = P2} = arizona_stream:reset(S0),
+    Ops2 = queue:to_list(P2),
+    {reset, OldItems2} = lists:last(Ops2),
+    ?assertEqual(#{1 => OldItem1, 2 => OldItem2}, OldItems2).
 
 %% =============================================================================
 %% Edge case tests
