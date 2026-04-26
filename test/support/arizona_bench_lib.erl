@@ -62,6 +62,21 @@ Constants:
 -define(OPS_PER_TRIAL, 1000).
 
 %% --------------------------------------------------------------------
+%% Ignore elvis warnings
+%% --------------------------------------------------------------------
+
+%% `io:format` is the bench's primary output mechanism (banner, column
+%% header, per-workload report rows, sanity-check error messages), not
+%% debug. Worker-loop receives (`go`/`stop` from coordinator) and the
+%% `DOWN` receive in `kill_live` are indefinite by design -- adding a
+%% finite timeout would either be arbitrary or flag spurious failures
+%% if the system is under load.
+-elvis([
+    {elvis_style, no_debug_call, disable},
+    {elvis_style, no_receive_without_timeout, disable}
+]).
+
+%% --------------------------------------------------------------------
 %% Measurement
 %% --------------------------------------------------------------------
 
@@ -519,10 +534,10 @@ http_get(Sock, Port) ->
         "\r\n"
     ],
     ok = gen_tcp:send(Sock, Req),
-    inet:setopts(Sock, [{packet, http_bin}]),
+    ok = inet:setopts(Sock, [{packet, http_bin}]),
     {ok, {http_response, _, Status, _}} = gen_tcp:recv(Sock, 0, 5000),
     Len = read_http_headers(Sock, 0),
-    inet:setopts(Sock, [{packet, raw}]),
+    ok = inet:setopts(Sock, [{packet, raw}]),
     Body =
         case Len of
             0 ->
@@ -600,17 +615,17 @@ with_http_socket(Port, Fun) ->
 -doc """
 Open a WS connection to `Host:Port` for view path `Path`. Sends the
 HTTP/1.1 Upgrade request with `_az_path=<Path>` query string,
-expects a 101 response, returns `{ok, Sock}` ready for `ws_send/2`
-and `ws_recv/2`.
+expects a 101 response, returns the socket ready for `ws_send/2`
+and `ws_recv/2`. Crashes on connect or handshake failure.
 """.
--spec ws_connect(string(), inet:port_number(), binary()) -> {ok, gen_tcp:socket()}.
+-spec ws_connect(string(), inet:port_number(), binary()) -> gen_tcp:socket().
 ws_connect(Host, Port, Path) ->
     {ok, Sock} = gen_tcp:connect(
         Host, Port, [binary, {active, false}, {packet, http_bin}]
     ),
     ok = ws_handshake(Sock, Port, Path),
     ok = inet:setopts(Sock, [{packet, raw}]),
-    {ok, Sock}.
+    Sock.
 
 ws_handshake(Sock, Port, Path) ->
     Key = base64:encode(crypto:strong_rand_bytes(16)),
@@ -695,7 +710,7 @@ then loops: `go` -> send N events from `Json` and recv N replies ->
 """.
 -spec ws_client_worker(pid(), inet:port_number(), binary(), pos_integer()) -> no_return().
 ws_client_worker(Coordinator, Port, Json, OpsPerCall) ->
-    {ok, Sock} = ws_connect("127.0.0.1", Port, <<"/">>),
+    Sock = ws_connect("127.0.0.1", Port, <<"/">>),
     Coordinator ! {ready, self()},
     ws_worker_loop(Coordinator, Sock, Json, OpsPerCall).
 
@@ -726,7 +741,7 @@ the workload crashes.
 when
     Result :: term().
 with_ws_socket(Port, Path, Fun) ->
-    {ok, Sock} = ws_connect("127.0.0.1", Port, Path),
+    Sock = ws_connect("127.0.0.1", Port, Path),
     try
         Fun(Sock)
     after
