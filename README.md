@@ -66,6 +66,7 @@ mount(Bindings) ->
 
 render(Bindings) ->
     ?html(
+        %% id must be on the root element -- if it changes, the component is remounted
         {'div', [{id, ?get(id)}], [
             {button, [{az_click, arizona_js:push_event(~"dec")}], [~"-"]},
             {span, [], [~" Count: ", ?get(count), ~" "]},
