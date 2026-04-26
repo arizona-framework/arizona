@@ -159,7 +159,7 @@ threading view state. Returns a `#{Key => ItemD}` map and updated views.
     ItemsMap :: #{term() => term()},
     Template :: map(),
     Views :: {map(), map()},
-    ItemSnaps :: #{term() => [{arizona_template:az(), term()}]},
+    ItemSnaps :: #{term() => [{arizona_template:az(), term(), map()}]},
     Views1 :: {map(), map()}.
 eval_stream_items(Keys, ItemsMap, Tmpl, Views) ->
     eval_stream_items(Keys, ItemsMap, Tmpl, Views, #{}).
@@ -234,7 +234,7 @@ Renders stream items without view tracking. Returns `#{Key => ItemD}`.
     Keys :: [term()],
     ItemsMap :: #{term() => term()},
     Template :: map(),
-    ItemSnaps :: #{term() => [{arizona_template:az(), term()}]}.
+    ItemSnaps :: #{term() => [{arizona_template:az(), term(), map()}]}.
 render_stream_items_simple(Keys, ItemsMap, Tmpl) ->
     render_stream_items_simple(Keys, ItemsMap, Tmpl, #{}).
 
@@ -245,7 +245,7 @@ Renders list items with view tracking. Returns `{[ItemD], Views1}`.
     Items :: [term()],
     Template :: map(),
     Views :: {map(), map()},
-    ItemDs :: [[{arizona_template:az(), term()}]],
+    ItemDs :: [[{arizona_template:az(), term(), map()}]],
     Views1 :: {map(), map()}.
 render_list_items(Items, #{d := DFun}, Views) ->
     render_list_items1(Items, DFun, Views).
@@ -256,7 +256,7 @@ Renders list items without view tracking. Returns `[ItemD]`.
 -spec render_list_items_simple(Items, Template) -> ItemDs when
     Items :: [term()],
     Template :: map(),
-    ItemDs :: [[{arizona_template:az(), term()}]].
+    ItemDs :: [[{arizona_template:az(), term(), map()}]].
 render_list_items_simple(Items, #{d := DFun}) ->
     [[{Az, Val, #{}} || {Az, Val} <- eval_dynamics(DFun(Item))] || Item <- Items].
 
@@ -266,7 +266,7 @@ Renders map entries without view tracking. Returns `[ItemD]`.
 -spec render_map_items_simple(Map, Template) -> ItemDs when
     Map :: map(),
     Template :: map(),
-    ItemDs :: [[{arizona_template:az(), term()}]].
+    ItemDs :: [[{arizona_template:az(), term(), map()}]].
 render_map_items_simple(Map, #{d := DFun}) ->
     maps:fold(
         fun(K, V, Acc) ->

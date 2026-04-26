@@ -305,6 +305,14 @@ carry_item_children(ChildViewIds, Old, New) ->
         ChildViewIds
     ).
 
+-doc """
+Returns `true` when any key in `Deps` also appears in `Changed`. Used by
+`diff/4` and the per-item skipping renderer to decide whether a dynamic
+needs re-evaluation.
+""".
+-spec deps_changed(Deps, Changed) -> boolean() when
+    Deps :: map(),
+    Changed :: map().
 deps_changed(Deps, Changed) ->
     map_size(maps:intersect(Deps, Changed)) > 0.
 

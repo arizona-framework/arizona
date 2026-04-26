@@ -89,13 +89,13 @@ op-code targets.
 
 -nominal each_list() :: #{
     t := 0,
-    items := [[{arizona_template:az(), term()}]],
+    items := [[{arizona_template:az(), term(), map()}]],
     template := arizona_template:template()
 }.
 
 -nominal each_stream() :: #{
     t := 0,
-    items := #{term() => [{arizona_template:az(), term()}]},
+    items := #{term() => [{arizona_template:az(), term(), map()}]},
     order := [term()],
     template := arizona_template:template()
 }.
