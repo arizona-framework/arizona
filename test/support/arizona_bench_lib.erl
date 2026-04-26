@@ -263,24 +263,30 @@ stats(Samples) ->
 %% Reporting
 %% --------------------------------------------------------------------
 
--doc "Pretty-print the bench header (one line)".
+-doc """
+Pretty-print the bench banner and column header. `n_trials` and
+`ops_per_trial` are constant across workloads under the standard
+harness, so they're shown once here rather than repeated per row.
+""".
 -spec print_header(pos_integer(), file:filename()) -> ok.
 print_header(Runs, ProjectDir) ->
     io:format(
-        "~narizona bench v1 | git: ~s | OTP ~s | runs=~b ops/trial=~b~n",
+        "~narizona bench v1 | git: ~s | OTP ~s | runs=~b ops/trial=~b~n~n",
         [
             git_short_sha(ProjectDir),
             erlang:system_info(otp_release),
             Runs,
             ?OPS_PER_TRIAL
         ]
+    ),
+    io:format(
+        "~-26s ~8s ~8s ~8s ~8s ~12s~n",
+        ["workload", "mean", "stdev", "p50", "p99", "ops/s"]
     ).
 
--doc "Pretty-print one workload's stats line".
+-doc "Pretty-print one workload's stats row aligned with the header.".
 -spec report(binary(), map()) -> ok.
 report(Label, #{
-    n_trials := N,
-    ops_per_trial := Ops,
     mean_ns := MeanNs,
     stdev_ns := StdevNs,
     p50_ns := P50Ns,
@@ -288,34 +294,45 @@ report(Label, #{
     ops_per_s := OpsPerSec
 }) ->
     io:format(
-        "~-26s N=~b ops=~b  mean=~s  stdev=~s  p50=~s  p99=~s  ops/s=~s~n",
+        "~-26s ~s ~s ~s ~s ~s~n",
         [
             Label,
-            N,
-            Ops,
-            fmt_time(MeanNs),
-            fmt_time(StdevNs),
-            fmt_time(P50Ns),
-            fmt_time(P99Ns),
-            fmt_int(OpsPerSec)
+            pad_left(fmt_time(MeanNs), 8),
+            pad_left(fmt_time(StdevNs), 8),
+            pad_left(fmt_time(P50Ns), 8),
+            pad_left(fmt_time(P99Ns), 8),
+            pad_left(fmt_int(OpsPerSec), 12)
         ]
     ).
 
 -doc """
-Format a duration: nanoseconds for sub-microsecond, microseconds with
-one decimal otherwise.
+Format a duration with a space between number and unit (`130 ns`,
+`9.2 µs`). One decimal for microseconds, integer for sub-microsecond.
 """.
 -spec fmt_time(number()) -> iolist().
 fmt_time(Ns) when Ns >= 1000 ->
-    io_lib:format("~.1fµs", [Ns / 1000]);
+    io_lib:format("~.1f µs", [Ns / 1000]);
 fmt_time(Ns) ->
-    io_lib:format("~bns", [trunc(Ns)]).
+    io_lib:format("~b ns", [trunc(Ns)]).
 
 -doc "Format an integer with comma thousand separators.".
 -spec fmt_int(integer()) -> string().
 fmt_int(N) ->
     Reversed = lists:reverse(integer_to_list(N)),
     lists:reverse(group_thousands(Reversed)).
+
+%% Right-align an iolist by padding with spaces to `Width` display
+%% characters. Counts via `string:length/1` so multi-byte UTF-8 chars
+%% (e.g. µ) consume one column, matching how a terminal renders them.
+%% `io:format`'s built-in `~Ns` pads by bytes, which would mis-align
+%% rows that include µs values vs ns-only ones.
+pad_left(IOData, Width) ->
+    Flat = unicode:characters_to_list(IOData),
+    Chars = string:length(Flat),
+    case Chars >= Width of
+        true -> Flat;
+        false -> [lists:duplicate(Width - Chars, $\s), Flat]
+    end.
 
 group_thousands([A, B, C, D | Rest]) ->
     [A, B, C, $, | group_thousands([D | Rest])];
