@@ -308,13 +308,28 @@ carry_item_children(ChildViewIds, Old, New) ->
 -doc """
 Returns `true` when any key in `Deps` also appears in `Changed`. Used by
 `diff/4` and the per-item skipping renderer to decide whether a dynamic
-needs re-evaluation.
+needs re-evaluation. Walks the smaller map and probes the larger via
+`is_map_key/2` -- avoids the allocation of `maps:intersect/2`.
 """.
 -spec deps_changed(Deps, Changed) -> boolean() when
     Deps :: map(),
     Changed :: map().
 deps_changed(Deps, Changed) ->
-    map_size(maps:intersect(Deps, Changed)) > 0.
+    case map_size(Deps) =< map_size(Changed) of
+        true -> any_key_in(Deps, Changed);
+        false -> any_key_in(Changed, Deps)
+    end.
+
+any_key_in(Small, Large) ->
+    any_key_in_iter(maps:next(maps:iterator(Small)), Large).
+
+any_key_in_iter(none, _Large) ->
+    false;
+any_key_in_iter({K, _V, Iter}, Large) ->
+    case is_map_key(K, Large) of
+        true -> true;
+        false -> any_key_in_iter(maps:next(Iter), Large)
+    end.
 
 diff_stream(
     Az,
