@@ -174,23 +174,6 @@ pushes minimal diffs over WebSocket as the count changes.
 For dev-mode file watchers, custom schemes/proto_opts, or starting the listener imperatively from
 your own `start/2` callback, see [docs/architecture.md](docs/architecture.md).
 
-## Navigation
-
-SPA-style client-side navigation is triggered by the `az-navigate` attribute on anchor elements or
-by the `arizona_js:navigate/1,2` effect returned from handlers.
-
-```erlang
-%% In a template
-{a, [{href, ~"/settings"}, az_navigate], [~"Settings"]}
-
-%% From a handler effect
-handle_event(~"go", _Payload, Bindings) ->
-    {Bindings, #{}, [arizona_js:navigate(~"/settings")]}.
-```
-
-Scroll behavior, `replace => true`, and `noscroll` opt-outs are covered in
-[docs/architecture.md](docs/architecture.md).
-
 ## Documentation
 
 See [docs/architecture.md](docs/architecture.md) for the full architecture reference.
