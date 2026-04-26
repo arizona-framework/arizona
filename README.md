@@ -2,6 +2,13 @@
 
 ![arizona_256x256](https://github.com/arizona-framework/arizona/assets/35941533/88b76a0c-0dfc-4f99-8608-b0ebd9c9fbd9)
 
+[![Erlang CI](https://github.com/arizona-framework/arizona/actions/workflows/erlang.yml/badge.svg?branch=main)](https://github.com/arizona-framework/arizona/actions/workflows/erlang.yml)
+[![Node.js CI](https://github.com/arizona-framework/arizona/actions/workflows/node-js.yml/badge.svg?branch=main)](https://github.com/arizona-framework/arizona/actions/workflows/node-js.yml)
+[![Hex.pm](https://img.shields.io/hexpm/v/arizona.svg)](https://hex.pm/packages/arizona)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-lightgreen.svg)](https://hexdocs.pm/arizona/)
+[![npm version](https://img.shields.io/npm/v/@arizona-framework/client.svg)](https://www.npmjs.com/package/@arizona-framework/client)
+[![License](https://img.shields.io/hexpm/l/arizona.svg)](https://github.com/arizona-framework/arizona/blob/main/LICENSE.md)
+
 Arizona is a real-time web framework for Erlang/OTP. It renders HTML on the server, diffs changes at
 the template level, and pushes minimal updates to the browser over WebSocket.
 
