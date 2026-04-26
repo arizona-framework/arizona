@@ -31,6 +31,8 @@ Constants:
     run_workload/2,
     run_workload_custom/3,
     run_concurrent_workload/4,
+    run_view_render_workload/3,
+    run_socket_event_workload/4,
     stats/1,
     %% Reporting
     print_header/2,
@@ -148,6 +150,68 @@ run_concurrent_workload(NClients, OpsPerClient, Runs, SpawnFn) ->
     after
         lists:foreach(fun(W) -> W ! stop end, Workers)
     end.
+
+-doc """
+Run a workload that times one SSR render of a view via
+`arizona_render:render_view_to_iolist/3`. Uses the canonical test
+request from `arizona_req_test_adapter:new/0`. Sanity-checks that
+the first render produces non-empty output before timing.
+""".
+-spec run_view_render_workload(Module, Opts, Runs) -> Stats when
+    Module :: module(),
+    Opts :: map(),
+    Runs :: pos_integer(),
+    Stats :: map().
+run_view_render_workload(Module, Opts, Runs) ->
+    Req = arizona_req_test_adapter:new(),
+    Sample = arizona_render:render_view_to_iolist(Module, Req, Opts),
+    case iolist_size(Sample) > 0 of
+        true ->
+            ok;
+        false ->
+            io:format("error: render_view_to_iolist ~p returned empty~n", [Module]),
+            halt(1)
+    end,
+    Fun = fun() ->
+        arizona_render:render_view_to_iolist(Module, Req, Opts)
+    end,
+    run_workload(Fun, Runs).
+
+-doc """
+Run a workload that mounts a view (via `arizona_socket:init/4`),
+then times one `arizona_socket:handle_in/2` per op with the given
+event term (JSON-encoded once outside the timed region). Reuses the
+same Socket across iterations -- valid for events whose handlers
+don't mutate the Socket record. The sanity check accepts either
+`{ok, _}` (no-change events) or `{reply, _, _}` (events emitting
+ops); the inner loop accepts either to keep the harness generic.
+""".
+-spec run_socket_event_workload(Module, Bindings, Event, Runs) -> Stats when
+    Module :: module(),
+    Bindings :: map(),
+    Event :: term(),
+    Runs :: pos_integer(),
+    Stats :: map().
+run_socket_event_workload(Module, Bindings, Event, Runs) ->
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(Module, Bindings, Req, #{}),
+    Json = iolist_to_binary(json:encode(Event)),
+    case arizona_socket:handle_in(Json, Socket) of
+        {ok, _} ->
+            ok;
+        {reply, _, _} ->
+            ok;
+        Other ->
+            io:format("error: handle_in returned unexpected ~p~n", [Other]),
+            halt(1)
+    end,
+    Fun = fun() ->
+        case arizona_socket:handle_in(Json, Socket) of
+            {ok, _} -> ok;
+            {reply, _, _} -> ok
+        end
+    end,
+    run_workload(Fun, Runs).
 
 trial(Fun) ->
     T0 = erlang:monotonic_time(nanosecond),

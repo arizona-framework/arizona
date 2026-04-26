@@ -52,25 +52,11 @@ main(Args) ->
 %% ---------------------------------------------------------------------------
 
 bench_render_view_small(Runs) ->
-    Req = arizona_req_test_adapter:new(),
-    %% Sanity-check before timing: render once outside the loop. Catches
-    %% a regression where the function silently returns [] (which would
-    %% otherwise look like an impossibly fast bench).
-    Sample = arizona_render:render_view_to_iolist(arizona_root_counter, Req, #{}),
-    case iolist_size(Sample) > 0 of
-        true ->
-            ok;
-        false ->
-            io:format("error: render_view_to_iolist returned empty output~n"),
-            halt(1)
-    end,
-    %% No iolist_size in the timed loop: BEAM does not DCE opaque module
-    %% calls, so the call always executes. Adding iolist_size walked the
-    %% returned tree and biased the measurement upward by ~10%.
-    Fun = fun() ->
-        arizona_render:render_view_to_iolist(arizona_root_counter, Req, #{})
-    end,
-    arizona_bench_lib:run_workload(Fun, Runs).
+    %% Trivial 2-dynamic view, no layout. Lower bound on render cost.
+    %% Note: BEAM does not DCE opaque module calls, so the bench loop
+    %% doesn't need iolist_size to force evaluation -- adding it walked
+    %% the returned tree and biased the measurement upward by ~10%.
+    arizona_bench_lib:run_view_render_workload(arizona_root_counter, #{}, Runs).
 
 bench_render_view_with_layout(Runs) ->
     %% Same as render_view_small but wraps the page in arizona_layout
@@ -78,20 +64,11 @@ bench_render_view_with_layout(Runs) ->
     %% GET goes through layout application; this catches regressions in
     %% `apply_layouts/3` and the layout's auto-detected `az_nodiff`
     %% semantics that render_view_small bypasses.
-    Req = arizona_req_test_adapter:new(),
-    Opts = #{layouts => [{arizona_layout, render}]},
-    Sample = arizona_render:render_view_to_iolist(arizona_root_counter, Req, Opts),
-    case iolist_size(Sample) > 0 of
-        true ->
-            ok;
-        false ->
-            io:format("error: render_view_to_iolist with layout returned empty~n"),
-            halt(1)
-    end,
-    Fun = fun() ->
-        arizona_render:render_view_to_iolist(arizona_root_counter, Req, Opts)
-    end,
-    arizona_bench_lib:run_workload(Fun, Runs).
+    arizona_bench_lib:run_view_render_workload(
+        arizona_root_counter,
+        #{layouts => [{arizona_layout, render}]},
+        Runs
+    ).
 
 bench_render_view_page(Runs) ->
     %% Renders arizona_page: a route-level view with three embedded
@@ -102,46 +79,20 @@ bench_render_view_page(Runs) ->
     %% the result back. Catches regressions in `arizona_template:stateful/2`,
     %% `arizona_render:make_ssr_child_snap/1`, and child-view fingerprint
     %% propagation that the simpler render_view_* workloads bypass.
-    Req = arizona_req_test_adapter:new(),
-    Sample = arizona_render:render_view_to_iolist(arizona_page, Req, #{}),
-    case iolist_size(Sample) > 0 of
-        true ->
-            ok;
-        false ->
-            io:format("error: render_view_to_iolist arizona_page returned empty~n"),
-            halt(1)
-    end,
-    Fun = fun() ->
-        arizona_render:render_view_to_iolist(arizona_page, Req, #{})
-    end,
-    arizona_bench_lib:run_workload(Fun, Runs).
+    arizona_bench_lib:run_view_render_workload(arizona_page, #{}, Runs).
 
 bench_render_each_100(Runs) ->
     %% Renders arizona_about with its `tags` binding overridden to a
     %% 100-element list. The view uses `?each` to render one `<li>` per
-    %% tag, so this exercises `arizona_eval:render_list_items/3` and
+    %% tag, exercising `arizona_eval:render_list_items/3` and
     %% `arizona_render:zip_list_fp/2` -- the per-item iteration path
     %% real apps rely on for any non-trivial list rendering.
-    %%
-    %% The Tags list is pre-built outside the timed region; each
-    %% iteration re-reads it but doesn't allocate it. The 100 `<li>`
-    %% tuples emitted by the each callback ARE allocated per iteration
-    %% (that's the work being measured).
-    Req = arizona_req_test_adapter:new(),
     Tags = [iolist_to_binary(io_lib:format("tag~b", [I])) || I <- lists:seq(1, 100)],
-    Opts = #{bindings => #{tags => Tags}},
-    Sample = arizona_render:render_view_to_iolist(arizona_about, Req, Opts),
-    case iolist_size(Sample) > 0 of
-        true ->
-            ok;
-        false ->
-            io:format("error: render_view_to_iolist arizona_about returned empty~n"),
-            halt(1)
-    end,
-    Fun = fun() ->
-        arizona_render:render_view_to_iolist(arizona_about, Req, Opts)
-    end,
-    arizona_bench_lib:run_workload(Fun, Runs).
+    arizona_bench_lib:run_view_render_workload(
+        arizona_about,
+        #{bindings => #{tags => Tags}},
+        Runs
+    ).
 
 bench_stream_insert_1k(Runs) ->
     %% Per trial: insert 1000 unique items into a fresh empty stream
@@ -184,32 +135,17 @@ bench_stream_reorder_100(Runs) ->
     %%
     %% Measures the full event roundtrip including the LIS reorder
     %% computation in `arizona_diff` and stream MOVE op emission.
-    Req = arizona_req_test_adapter:new(),
     Items = [
         #{id => I, name => iolist_to_binary(io_lib:format("name~b", [I])), age => 20 + I rem 50}
      || I <- lists:seq(1, 100)
     ],
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
-    {ok, Socket} = arizona_socket:init(arizona_datatable, #{rows => Stream}, Req, #{}),
-    Json = iolist_to_binary(json:encode([~"page", ~"sort", #{~"col" => ~"id"}])),
-    case arizona_socket:handle_in(Json, Socket) of
-        {reply, Data, _} ->
-            case iolist_size(Data) > 0 of
-                true ->
-                    ok;
-                false ->
-                    io:format("error: sort returned empty reply~n"),
-                    halt(1)
-            end;
-        Other ->
-            io:format("error: sort returned unexpected ~p~n", [Other]),
-            halt(1)
-    end,
-    Fun = fun() ->
-        {reply, _, _} = arizona_socket:handle_in(Json, Socket),
-        ok
-    end,
-    arizona_bench_lib:run_workload(Fun, Runs).
+    arizona_bench_lib:run_socket_event_workload(
+        arizona_datatable,
+        #{rows => Stream},
+        [~"page", ~"sort", #{~"col" => ~"id"}],
+        Runs
+    ).
 
 bench_http_get_e2e(Runs) ->
     %% End-to-end HTTP GET: cowboy + gen_tcp keep-alive, single client.
@@ -339,15 +275,9 @@ bench_diff_no_change(Runs) ->
     %% bindings, so `compute_changed/2` is empty and `arizona_diff:diff/4`
     %% short-circuits via the dep-skip fast path -- the cheapest event in
     %% the system.
-    Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
-    Json = iolist_to_binary(json:encode([~"counter", ~"noop", #{}])),
-    {ok, _} = arizona_socket:handle_in(Json, Socket),
-    Fun = fun() ->
-        {ok, _} = arizona_socket:handle_in(Json, Socket),
-        ok
-    end,
-    arizona_bench_lib:run_workload(Fun, Runs).
+    arizona_bench_lib:run_socket_event_workload(
+        arizona_root_counter, #{}, [~"counter", ~"noop", #{}], Runs
+    ).
 
 bench_diff_simple_event(Runs) ->
     %% Mount once, then dispatch N `inc` events. Each event changes the
@@ -355,27 +285,9 @@ bench_diff_simple_event(Runs) ->
     %% `arizona_diff:diff/4` emits one OP_TEXT op. Compared against
     %% `diff_no_change`, the delta is the cost of running the diff engine
     %% on a single-binding change.
-    Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
-    Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
-    case arizona_socket:handle_in(Json, Socket) of
-        {reply, Data, _} ->
-            case iolist_size(Data) > 0 of
-                true ->
-                    ok;
-                false ->
-                    io:format("error: inc returned empty reply~n"),
-                    halt(1)
-            end;
-        Other ->
-            io:format("error: inc returned unexpected ~p~n", [Other]),
-            halt(1)
-    end,
-    Fun = fun() ->
-        {reply, _, _} = arizona_socket:handle_in(Json, Socket),
-        ok
-    end,
-    arizona_bench_lib:run_workload(Fun, Runs).
+    arizona_bench_lib:run_socket_event_workload(
+        arizona_root_counter, #{}, [~"counter", ~"inc", #{}], Runs
+    ).
 
 %% ---------------------------------------------------------------------------
 %% Timetrap (optional CI gate)
