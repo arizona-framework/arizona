@@ -34,6 +34,7 @@ main(Args) ->
         {<<"render_view_with_layout">>, fun bench_render_view_with_layout/1},
         {<<"render_view_page">>, fun bench_render_view_page/1},
         {<<"render_each_100">>, fun bench_render_each_100/1},
+        {<<"render_view_many_dyn_50">>, fun bench_render_view_many_dyn_50/1},
         {<<"mount_only">>, fun bench_mount_only/1},
         {<<"diff_no_change">>, fun bench_diff_no_change/1},
         {<<"diff_simple_event">>, fun bench_diff_simple_event/1},
@@ -114,6 +115,16 @@ bench_render_each_100(Runs) ->
         arizona_about,
         #{bindings => #{tags => Tags}},
         Runs
+    ).
+
+bench_render_view_many_dyn_50(Runs) ->
+    %% Renders arizona_bench_many_dyn: a flat view with 50 top-level
+    %% dynamics, each tracking a distinct binding key. Catches linear
+    %% scaling regressions in dep tracking and the per-dynamic diff
+    %% loop. Complements `render_each_100` (high fan-out via `?each`)
+    %% by exercising the wide-flat shape instead.
+    arizona_bench_lib:run_view_render_workload(
+        arizona_bench_many_dyn, #{}, Runs
     ).
 
 bench_stream_insert_1k(Runs) ->
