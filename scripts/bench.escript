@@ -5,11 +5,13 @@
 %%% into `make ci` / `make precommit` -- numbers are noisy under
 %%% shared CI runners and need human comparison, not auto-thresholds.
 %%%
-%%% Usage: ./bench.escript [runs] [--timetrap-ns N]
+%%% Usage: ./bench.escript [runs] [--timetrap-ns N] [--only LABEL ...]
 %%%   runs           number of measured trials (default 100)
 %%%   --timetrap-ns  fail with exit 1 if mean per-op exceeds N nanoseconds
 %%%                  (off by default; intended for local pre-push hooks,
 %%%                  not CI -- shared runners have ~30% variance)
+%%%   --only LABEL   restrict to specific workload(s) by label; repeatable.
+%%%                  Unknown labels exit 1.
 %%%
 %%% Workload definitions live in this file (the WHAT). Harness primitives
 %%% (timing, stats, reporting, transport clients) live in
@@ -20,14 +22,14 @@
 -define(DEFAULT_RUNS, 100).
 
 main(Args) ->
-    {Runs, Timetrap} = parse_args(Args),
+    {Runs, Timetrap, Only} = parse_args(Args),
     ProjectDir = project_dir(),
     ok = setup_code_paths(ProjectDir),
     {ok, _} = application:ensure_all_started(arizona),
 
     arizona_bench_lib:print_header(Runs, ProjectDir),
 
-    Workloads = [
+    AllWorkloads = [
         {<<"render_view_small">>, fun bench_render_view_small/1},
         {<<"render_view_with_layout">>, fun bench_render_view_with_layout/1},
         {<<"render_view_page">>, fun bench_render_view_page/1},
@@ -43,10 +45,26 @@ main(Args) ->
         {<<"ws_event_e2e">>, fun bench_ws_event_e2e/1},
         {<<"ws_event_e2e_10c">>, fun bench_ws_event_e2e_10c/1}
     ],
+    Workloads = filter_workloads(AllWorkloads, Only),
     Results = [{Label, Fun(Runs)} || {Label, Fun} <- Workloads],
     [arizona_bench_lib:report(Label, Stats) || {Label, Stats} <- Results],
 
     check_timetrap_all(Results, Timetrap).
+
+filter_workloads(All, []) ->
+    All;
+filter_workloads(All, Labels) ->
+    Known = [L || {L, _} <- All],
+    Unknown = [L || L <- Labels, not lists:member(L, Known)],
+    case Unknown of
+        [] ->
+            ok;
+        _ ->
+            io:format("error: unknown workload(s): ~p~n", [Unknown]),
+            io:format("available: ~p~n", [Known]),
+            halt(1)
+    end,
+    [{L, F} || {L, F} <- All, lists:member(L, Labels)].
 
 %% ---------------------------------------------------------------------------
 %% Workloads
@@ -373,15 +391,17 @@ check_timetrap_all(Results, MaxNs) ->
 %% ---------------------------------------------------------------------------
 
 parse_args(Args) ->
-    %% Walk all args so the timetrap flag works regardless of position.
-    parse_args(Args, ?DEFAULT_RUNS, infinity).
+    %% Walk all args so flags work regardless of position.
+    parse_args(Args, ?DEFAULT_RUNS, infinity, []).
 
-parse_args([], Runs, Timetrap) ->
-    {Runs, Timetrap};
-parse_args(["--timetrap-ns", NsStr | Rest], Runs, _Timetrap) ->
-    parse_args(Rest, Runs, list_to_integer(NsStr));
-parse_args([RunsStr | Rest], _Runs, Timetrap) ->
-    parse_args(Rest, list_to_integer(RunsStr), Timetrap).
+parse_args([], Runs, Timetrap, Only) ->
+    {Runs, Timetrap, lists:reverse(Only)};
+parse_args(["--timetrap-ns", NsStr | Rest], Runs, _Timetrap, Only) ->
+    parse_args(Rest, Runs, list_to_integer(NsStr), Only);
+parse_args(["--only", Label | Rest], Runs, Timetrap, Only) ->
+    parse_args(Rest, Runs, Timetrap, [list_to_binary(Label) | Only]);
+parse_args([RunsStr | Rest], _Runs, Timetrap, Only) ->
+    parse_args(Rest, list_to_integer(RunsStr), Timetrap, Only).
 
 setup_code_paths(BaseDir) ->
     %% Prefer the test profile's lib dir so test/support/ modules
