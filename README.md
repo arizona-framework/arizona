@@ -1,6 +1,13 @@
 # Arizona
 
-![arizona_256x256](https://github.com/arizona-framework/arizona/assets/35941533/88b76a0c-0dfc-4f99-8608-b0ebd9c9fbd9)
+[![Erlang CI](https://github.com/arizona-framework/arizona/actions/workflows/erlang.yml/badge.svg?branch=main)](https://github.com/arizona-framework/arizona/actions/workflows/erlang.yml)
+[![Node.js CI](https://github.com/arizona-framework/arizona/actions/workflows/node-js.yml/badge.svg?branch=main)](https://github.com/arizona-framework/arizona/actions/workflows/node-js.yml)
+[![Hex.pm](https://img.shields.io/hexpm/v/arizona.svg)](https://hex.pm/packages/arizona)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-lightgreen.svg)](https://hexdocs.pm/arizona/)
+[![npm version](https://img.shields.io/npm/v/@arizona-framework/client.svg)](https://www.npmjs.com/package/@arizona-framework/client)
+[![License](https://img.shields.io/hexpm/l/arizona.svg)](https://github.com/arizona-framework/arizona/blob/main/LICENSE.md)
+
+![arizona logo](https://raw.githubusercontent.com/arizona-framework/arizona/main/assets/logo.jpg)
 
 Arizona is a real-time web framework for Erlang/OTP. It renders HTML on the server, diffs changes at
 the template level, and pushes minimal updates to the browser over WebSocket.
@@ -8,25 +15,27 @@ the template level, and pushes minimal updates to the browser over WebSocket.
 Templates are plain Erlang terms compiled via parse transform. The server owns the state; the client
 is a thin DOM patcher.
 
-## Status ⚠️
+## 🚧 Status
 
 Arizona is in `0.x`. The core is functional and covered by tests, but the API may change between
-minor versions. Pin a commit SHA in your deps if you need stability.
+minor versions. Pin an exact version in your deps (e.g. `{arizona, "0.1.0"}`) if you need stability
+across upgrades.
 
 ## Features
 
 - **SSR + live updates** -- HTML on first load, WebSocket diffs after
 - **Erlang-native templates** -- `{Tag, Attrs, Children}` tuples compiled by parse transform
-- **Compile-time diffing** -- statics sent once, only dynamics cross the wire
+- **Compile-time static/dynamic split** -- statics sent once, only dynamics cross the wire
 - **Three handler kinds** -- `arizona_view` (route pages), `arizona_stateful` (components),
   `arizona_stateless` (pure templates)
 - **Streams** -- keyed collections with insert/delete/update/move/sort/limit
-- **SPA navigation** -- `az-navigate` links, server renders the next page over WebSocket
-- **PubSub** -- `?subscribe`/`?unsubscribe` for cross-view, cross-tab messaging
+- **SPA navigation** -- `az_navigate` links, server renders the next page over WebSocket
+- **PubSub** -- cross-view, cross-tab messaging via `arizona_pubsub`
 - **Route middlewares** -- gate or rewrite requests before mount (auth, sessions, URL projection)
 - **On-mount hooks** -- per-route pipeline that runs before every mount, including navigate
-- **Element hooks** -- client-side `mounted`/`updated`/`destroyed` callbacks via `az-hook`
-- **Framework-agnostic transport** -- cowboy is the default adapter, but optional
+- **Element hooks** -- client-side `mounted`/`updated`/`destroyed` callbacks via `az_hook`
+- **Dev-mode hot reload** -- `fs` watcher recompiles changed `.erl` files and pushes reload events
+- **Pluggable transport** -- cowboy adapter built-in; write your own to swap it out
 
 ## Requirements
 
@@ -34,20 +43,21 @@ minor versions. Pin a commit SHA in your deps if you need stability.
 
 ## Installation
 
-Arizona isn't on Hex yet -- pull it from GitHub's `main` branch. Add it to your `rebar.config`
-dependencies:
+Add Arizona to your `rebar.config` dependencies. Cowboy is required for the built-in
+HTTP/WebSocket transport; skip it only if you write your own `arizona_req` adapter.
 
 ```erlang
 {deps, [
-    {arizona, {git, "https://github.com/arizona-framework/arizona.git", {branch, "main"}}},
+    {arizona, "~> 0.1"},
     cowboy
 ]}.
 ```
 
-For a stable build, swap `{branch, "main"}` for a commit SHA -- `{ref, "abc1234..."}`.
+To track unreleased changes, swap the version for a git ref:
 
-Cowboy is required for the built-in HTTP/WebSocket transport. If you write your own
-`arizona_req` adapter, you can skip it.
+```erlang
+{arizona, {git, "https://github.com/arizona-framework/arizona.git", {branch, "main"}}}
+```
 
 ## Quick start
 
@@ -186,10 +196,10 @@ breakdown, op codes, dev-mode file watchers, custom schemes/proto_opts, and impe
 
 ## Sponsors
 
-If you like this tool, please consider [sponsoring me](https://github.com/sponsors/williamthome).
-I'm thankful for your never-ending support :heart:
+If you like Arizona, please consider [sponsoring me](https://github.com/sponsors/williamthome).
+I'm thankful for your never-ending support ❤️
 
-I also accept coffees :coffee:
+I also accept coffees ☕
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/williamthome)
 
@@ -232,7 +242,7 @@ testing guidelines, and contribution workflow.
 
 Copyright (c) 2023-2026 [William Fank Thomé](https://github.com/williamthome)
 
-Arizona is 100% open-source and community-driven. All components are available under the Apache 2
-License on [GitHub](https://github.com/arizona-framework/arizona).
+Arizona is open-source under the Apache 2.0 License on
+[GitHub](https://github.com/arizona-framework/arizona).
 
 See [LICENSE.md](LICENSE.md) for more information.
