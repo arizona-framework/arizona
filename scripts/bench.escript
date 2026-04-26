@@ -48,7 +48,8 @@ main(Args) ->
         {<<"http_get_e2e_10c">>, fun bench_http_get_e2e_10c/1},
         {<<"http_get_e2e_each">>, fun bench_http_get_e2e_each/1},
         {<<"ws_event_e2e">>, fun bench_ws_event_e2e/1},
-        {<<"ws_event_e2e_10c">>, fun bench_ws_event_e2e_10c/1}
+        {<<"ws_event_e2e_10c">>, fun bench_ws_event_e2e_10c/1},
+        {<<"pubsub_broadcast_100">>, fun bench_pubsub_broadcast_100/1}
     ],
     Workloads = filter_workloads(AllWorkloads, Only),
     Results = [{Label, Fun(Runs)} || {Label, Fun} <- Workloads],
@@ -499,6 +500,53 @@ bench_diff_multi_key_change(Runs) ->
         [~"multi_key", ~"bump_three", #{~"value" => 1}],
         Runs
     ).
+
+bench_pubsub_broadcast_100(Runs) ->
+    %% 100 subscribers (plain procs, not live views) listening on one
+    %% topic. Per trial: one broadcast and a barrier waiting for all
+    %% 100 procs to ack receipt back to the bench process. Measures
+    %% the fan-out cost through `pg` plus mailbox delivery -- the
+    %% lower bound for any cross-view pubsub use case (chat, presence,
+    %% notifications).
+    Topic = bench_pubsub_topic,
+    Self = self(),
+    Subs = [
+        spawn_link(fun() -> pubsub_sub_loop(Topic, Self) end)
+     || _ <- lists:seq(1, 100)
+    ],
+    %% Wait for all subs to register before measuring.
+    _ = [receive {ready, P} -> ok end || P <- Subs],
+    Trial = fun() ->
+        T0 = erlang:monotonic_time(nanosecond),
+        arizona_pubsub:broadcast(Topic, ping),
+        ok = await_acks(100),
+        T1 = erlang:monotonic_time(nanosecond),
+        T1 - T0
+    end,
+    Stats = arizona_bench_lib:run_workload_custom(Trial, Runs, 100),
+    [exit(P, normal) || P <- Subs],
+    Stats.
+
+pubsub_sub_loop(Topic, Reporter) ->
+    ok = arizona_pubsub:subscribe(Topic, self()),
+    Reporter ! {ready, self()},
+    pubsub_sub_recv(Reporter).
+
+pubsub_sub_recv(Reporter) ->
+    receive
+        ping ->
+            Reporter ! ack,
+            pubsub_sub_recv(Reporter);
+        _ ->
+            pubsub_sub_recv(Reporter)
+    end.
+
+await_acks(0) ->
+    ok;
+await_acks(N) ->
+    receive
+        ack -> await_acks(N - 1)
+    end.
 
 %% ---------------------------------------------------------------------------
 %% Timetrap (optional CI gate)
