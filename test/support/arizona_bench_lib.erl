@@ -47,11 +47,13 @@ Constants:
     %% HTTP client
     http_get/2,
     http_client_worker/3,
+    with_http_socket/2,
     %% WebSocket client
     ws_connect/3,
     ws_send/2,
     ws_recv/2,
-    ws_client_worker/4
+    ws_client_worker/4,
+    with_ws_socket/3
 ]).
 
 -define(WARMUP, 2).
@@ -427,6 +429,23 @@ run_http_loop(Sock, Port, N) ->
     {200, _} = http_get(Sock, Port),
     run_http_loop(Sock, Port, N - 1).
 
+-doc """
+Open a keep-alive HTTP socket to localhost:Port, run `Fun(Sock)`, then
+close it -- with `try/after` so the socket is released even if the
+workload crashes.
+""".
+-spec with_http_socket(inet:port_number(), fun((gen_tcp:socket()) -> Result)) -> Result when
+    Result :: term().
+with_http_socket(Port, Fun) ->
+    {ok, Sock} = gen_tcp:connect(
+        "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
+    ),
+    try
+        Fun(Sock)
+    after
+        gen_tcp:close(Sock)
+    end.
+
 %% --------------------------------------------------------------------
 %% WebSocket client (gen_tcp, hand-rolled frame codec)
 %%
@@ -553,3 +572,20 @@ run_ws_loop(Sock, Json, N) ->
     ok = ws_send(Sock, Json),
     {text, _} = ws_recv(Sock, 5000),
     run_ws_loop(Sock, Json, N - 1).
+
+-doc """
+Open a WS connection to localhost:Port for view `Path`, run `Fun(Sock)`,
+then close it -- with `try/after` so the socket is released even if
+the workload crashes.
+""".
+-spec with_ws_socket(inet:port_number(), binary(), fun((gen_tcp:socket()) -> Result)) ->
+    Result
+when
+    Result :: term().
+with_ws_socket(Port, Path, Fun) ->
+    {ok, Sock} = ws_connect("127.0.0.1", Port, Path),
+    try
+        Fun(Sock)
+    after
+        gen_tcp:close(Sock)
+    end.

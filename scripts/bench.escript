@@ -219,25 +219,20 @@ bench_http_get_e2e(Runs) ->
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}}
     ],
     arizona_bench_lib:with_cowboy(bench_http_e2e, Routes, fun(Port) ->
-        {ok, Sock} = gen_tcp:connect(
-            "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
-        ),
-        case arizona_bench_lib:http_get(Sock, Port) of
-            {200, Body} when byte_size(Body) > 0 ->
-                ok;
-            Other ->
-                io:format("error: GET returned ~p~n", [Other]),
-                halt(1)
-        end,
-        Fun = fun() ->
-            {200, _} = arizona_bench_lib:http_get(Sock, Port),
-            ok
-        end,
-        try
+        arizona_bench_lib:with_http_socket(Port, fun(Sock) ->
+            case arizona_bench_lib:http_get(Sock, Port) of
+                {200, Body} when byte_size(Body) > 0 ->
+                    ok;
+                Other ->
+                    io:format("error: GET returned ~p~n", [Other]),
+                    halt(1)
+            end,
+            Fun = fun() ->
+                {200, _} = arizona_bench_lib:http_get(Sock, Port),
+                ok
+            end,
             arizona_bench_lib:run_workload(Fun, Runs)
-        after
-            gen_tcp:close(Sock)
-        end
+        end)
     end).
 
 bench_http_get_e2e_10c(Runs) ->
@@ -265,26 +260,23 @@ bench_ws_event_e2e(Runs) ->
         {ws, <<"/ws">>, #{}}
     ],
     arizona_bench_lib:with_cowboy(bench_ws_e2e, Routes, fun(Port) ->
-        {ok, Sock} = arizona_bench_lib:ws_connect("127.0.0.1", Port, <<"/">>),
-        Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
-        ok = arizona_bench_lib:ws_send(Sock, Json),
-        case arizona_bench_lib:ws_recv(Sock, 5000) of
-            {text, Reply} when byte_size(Reply) > 0 ->
-                ok;
-            Other ->
-                io:format("error: WS inc returned ~p~n", [Other]),
-                halt(1)
-        end,
-        Fun = fun() ->
+        arizona_bench_lib:with_ws_socket(Port, <<"/">>, fun(Sock) ->
+            Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
             ok = arizona_bench_lib:ws_send(Sock, Json),
-            {text, _} = arizona_bench_lib:ws_recv(Sock, 5000),
-            ok
-        end,
-        try
+            case arizona_bench_lib:ws_recv(Sock, 5000) of
+                {text, Reply} when byte_size(Reply) > 0 ->
+                    ok;
+                Other ->
+                    io:format("error: WS inc returned ~p~n", [Other]),
+                    halt(1)
+            end,
+            Fun = fun() ->
+                ok = arizona_bench_lib:ws_send(Sock, Json),
+                {text, _} = arizona_bench_lib:ws_recv(Sock, 5000),
+                ok
+            end,
             arizona_bench_lib:run_workload(Fun, Runs)
-        after
-            gen_tcp:close(Sock)
-        end
+        end)
     end).
 
 bench_ws_event_e2e_10c(Runs) ->
