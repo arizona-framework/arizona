@@ -25,8 +25,6 @@ minor versions. Pin a version in your deps.
 - **PubSub, middlewares, on-mount hooks, element hooks** -- the usual extension points
 - **Framework-agnostic transport** -- cowboy is the default adapter, but optional
 
-See [docs/architecture.md](docs/architecture.md) for the full feature surface.
-
 ## Requirements
 
 - Erlang/OTP 28 or later
@@ -172,12 +170,10 @@ rebar3 shell
 Open <http://localhost:4040> and click the buttons -- the server renders the initial HTML, then
 pushes minimal diffs over WebSocket as the count changes.
 
-For dev-mode file watchers, custom schemes/proto_opts, or starting the listener imperatively from
-your own `start/2` callback, see [docs/architecture.md](docs/architecture.md).
-
 ## Documentation
 
-See [docs/architecture.md](docs/architecture.md) for the full architecture reference.
+See [docs/architecture.md](docs/architecture.md) for the full architecture reference -- module
+breakdown, op codes, dev-mode file watchers, custom schemes/proto_opts, and imperative startup.
 
 ## Sponsors
 
