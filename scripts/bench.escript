@@ -27,6 +27,7 @@ main(Args) ->
 
     Workloads = [
         {<<"render_view_small">>, fun bench_render_view_small/1},
+        {<<"mount_only">>, fun bench_mount_only/1},
         {<<"diff_no_change">>, fun bench_diff_no_change/1},
         {<<"diff_simple_event">>, fun bench_diff_simple_event/1}
     ],
@@ -59,6 +60,53 @@ bench_render_view_small(Runs) ->
         arizona_render:render_view_to_iolist(arizona_root_counter, Req, #{})
     end,
     run_workload(Fun, Runs).
+
+bench_mount_only(Runs) ->
+    %% Each iteration spawns a fresh live process via arizona_socket:init/4
+    %% (start_link + mount/2). Measures the cold WS-connect cost: dep
+    %% tracking setup, handler mount/2 invocation, gen_server start.
+    %%
+    %% Cleanup strategy: synchronously kill + wait per iteration. This
+    %% keeps the system in steady state -- ~1 alive live process at any
+    %% instant during the trial -- which matches typical app conditions
+    %% (a few concurrent WS connections, not thousands).
+    %%
+    %% The measurement therefore includes ~1 µs of cleanup harness
+    %% overhead (monitor + DOWN receive). This is a CONSTANT that does
+    %% not change with mount-path optimizations, so regressions in mount
+    %% itself still surface as proportional changes.
+    %%
+    %% An alternative -- spawn a worker per trial and let link
+    %% propagation cascade-kill all live processes at trial exit -- was
+    %% tried and abandoned: it accumulated 1000 alive processes inside
+    %% the timed region, which inflated the mean (later iterations ran
+    %% against scheduler/GC load from earlier ones) and tripled the
+    %% stdev (~16% vs ~2%).
+    %%
+    %% The Socket is the record `{socket, Pid, ViewId, Req}` -- we use
+    %% element/2 instead of including the record header in this escript.
+    Req = arizona_req_test_adapter:new(),
+    case arizona_socket:init(arizona_root_counter, #{}, Req, #{}) of
+        {ok, TestSock} when is_pid(element(2, TestSock)) ->
+            kill_live(element(2, TestSock));
+        Other ->
+            io:format("error: init returned unexpected ~p~n", [Other]),
+            halt(1)
+    end,
+    Fun = fun() ->
+        {ok, Sock} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+        kill_live(element(2, Sock)),
+        ok
+    end,
+    run_workload(Fun, Runs).
+
+kill_live(Pid) ->
+    Mon = monitor(process, Pid),
+    unlink(Pid),
+    exit(Pid, kill),
+    receive
+        {'DOWN', Mon, process, Pid, _} -> ok
+    end.
 
 bench_diff_no_change(Runs) ->
     %% Mount once, then dispatch N `noop` events. `noop` returns the same
