@@ -36,6 +36,7 @@ main(Args) ->
         {<<"stream_insert_1k">>, fun bench_stream_insert_1k/1},
         {<<"stream_reorder_100">>, fun bench_stream_reorder_100/1},
         {<<"http_get_e2e">>, fun bench_http_get_e2e/1},
+        {<<"http_get_e2e_10c">>, fun bench_http_get_e2e_10c/1},
         {<<"ws_event_e2e">>, fun bench_ws_event_e2e/1}
     ],
     Results = [{Label, Fun(Runs)} || {Label, Fun} <- Workloads],
@@ -303,6 +304,98 @@ read_http_headers(Sock, Len) ->
             read_http_headers(Sock, Len);
         {ok, http_eoh} ->
             Len
+    end.
+
+bench_http_get_e2e_10c(Runs) ->
+    %% Same path as http_get_e2e but with 10 concurrent clients. Each
+    %% trial broadcasts `go` to 10 worker processes; each worker runs
+    %% 100 GETs on its own keep-alive socket then signals `done`.
+    %% The trial time is wall-clock for all 1000 ops to complete --
+    %% per-op time is wall_clock / 1000.
+    %%
+    %% Workers are spawned ONCE outside the timed region and persist
+    %% across trials, so connection setup is paid once at workload start
+    %% (matches http_get_e2e's reuse-the-connection pattern). On a system
+    %% with N schedulers and N >= 10, throughput should approach 10x the
+    %% single-client number until scheduler contention kicks in.
+    {ok, _} = application:ensure_all_started(cowboy),
+    Routes = [
+        {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}}
+    ],
+    {ok, _} = arizona_cowboy_server:start(bench_http_e2e_10c, #{
+        transport_opts => [{port, 0}],
+        proto_opts => #{max_keepalive => infinity},
+        routes => Routes
+    }),
+    Port = ranch:get_port(bench_http_e2e_10c),
+    NClients = 10,
+    OpsPerClient = 100,
+    OpsPerTrial = NClients * OpsPerClient,
+    Coordinator = self(),
+    Workers = [
+        spawn_link(fun() -> http_client_worker(Coordinator, Port, OpsPerClient) end)
+     || _ <- lists:seq(1, NClients)
+    ],
+    ok = await_ready(NClients),
+    Trial = fun() ->
+        T0 = erlang:monotonic_time(nanosecond),
+        lists:foreach(fun(W) -> W ! go end, Workers),
+        ok = await_done(NClients),
+        T1 = erlang:monotonic_time(nanosecond),
+        (T1 - T0) / OpsPerTrial
+    end,
+    lists:foreach(fun(_) -> Trial() end, lists:seq(1, ?WARMUP)),
+    PerOpNs = [
+        begin
+            erlang:garbage_collect(self()),
+            Trial()
+        end
+     || _ <- lists:seq(1, Runs)
+    ],
+    lists:foreach(fun(W) -> W ! stop end, Workers),
+    arizona_cowboy_server:stop(bench_http_e2e_10c),
+    Stats = stats(PerOpNs),
+    Stats#{ops_per_trial => OpsPerTrial}.
+
+http_client_worker(Coordinator, Port, OpsPerCall) ->
+    {ok, Sock} = gen_tcp:connect(
+        "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
+    ),
+    Coordinator ! {ready, self()},
+    http_worker_loop(Coordinator, Sock, Port, OpsPerCall).
+
+http_worker_loop(Coordinator, Sock, Port, OpsPerCall) ->
+    receive
+        go ->
+            run_http_loop(Sock, Port, OpsPerCall),
+            Coordinator ! {done, self()},
+            http_worker_loop(Coordinator, Sock, Port, OpsPerCall);
+        stop ->
+            gen_tcp:close(Sock)
+    end.
+
+run_http_loop(_Sock, _Port, 0) ->
+    ok;
+run_http_loop(Sock, Port, N) ->
+    {200, _} = http_get(Sock, Port),
+    run_http_loop(Sock, Port, N - 1).
+
+await_ready(0) ->
+    ok;
+await_ready(N) ->
+    receive
+        {ready, _} -> await_ready(N - 1)
+    after 10000 ->
+        error({ready_timeout, N})
+    end.
+
+await_done(0) ->
+    ok;
+await_done(N) ->
+    receive
+        {done, _} -> await_done(N - 1)
+    after 30000 ->
+        error({done_timeout, N})
     end.
 
 bench_ws_event_e2e(Runs) ->
