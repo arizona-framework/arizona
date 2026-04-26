@@ -30,6 +30,7 @@ Constants:
     %% Measurement
     run_workload/2,
     run_workload_custom/3,
+    run_concurrent_workload/4,
     stats/1,
     %% Reporting
     print_header/2,
@@ -41,6 +42,8 @@ Constants:
     kill_live/1,
     await_ready/1,
     await_done/1,
+    %% Cowboy server lifecycle
+    with_cowboy/3,
     %% HTTP client
     http_get/2,
     http_client_worker/3,
@@ -105,6 +108,44 @@ run_workload_custom(TrialFun, Runs, OpsPerTrial) ->
     ],
     Stats = stats(PerOpNs),
     Stats#{ops_per_trial => OpsPerTrial}.
+
+-doc """
+Run a concurrent workload with N persistent worker processes.
+
+`SpawnFn(Coordinator)` is called once per worker before the timed
+trials and must spawn a process that:
+  1. Sends `{ready, self()}` to `Coordinator` after setup completes.
+  2. Loops: on `go`, runs `OpsPerClient` ops then sends `{done, self()}`;
+     on `stop`, exits.
+
+Each trial broadcasts `go` to all workers and waits for all `done`
+messages. Per-op time is wall-clock / (NClients * OpsPerClient).
+The harness sends `stop` to each worker after measurement (or on
+crash via `try/after`) so connections/sockets are cleaned up.
+""".
+-spec run_concurrent_workload(NClients, OpsPerClient, Runs, SpawnFn) -> Stats when
+    NClients :: pos_integer(),
+    OpsPerClient :: pos_integer(),
+    Runs :: pos_integer(),
+    SpawnFn :: fun((pid()) -> pid()),
+    Stats :: map().
+run_concurrent_workload(NClients, OpsPerClient, Runs, SpawnFn) ->
+    OpsPerTrial = NClients * OpsPerClient,
+    Coordinator = self(),
+    Workers = [SpawnFn(Coordinator) || _ <- lists:seq(1, NClients)],
+    ok = await_ready(NClients),
+    Trial = fun() ->
+        T0 = erlang:monotonic_time(nanosecond),
+        lists:foreach(fun(W) -> W ! go end, Workers),
+        ok = await_done(NClients),
+        T1 = erlang:monotonic_time(nanosecond),
+        T1 - T0
+    end,
+    try
+        run_workload_custom(Trial, Runs, OpsPerTrial)
+    after
+        lists:foreach(fun(W) -> W ! stop end, Workers)
+    end.
 
 trial(Fun) ->
     T0 = erlang:monotonic_time(nanosecond),
@@ -280,6 +321,36 @@ await_done(N) ->
         {done, _} -> await_done(N - 1)
     after 30000 ->
         error({done_timeout, N})
+    end.
+
+%% --------------------------------------------------------------------
+%% Cowboy server lifecycle
+%% --------------------------------------------------------------------
+
+-doc """
+Start a cowboy listener with the given routes, run `Fun(Port)`, then
+stop the listener regardless of whether `Fun` returned normally or
+crashed. Returns `Fun`'s result.
+
+`Port` is the OS-assigned port (cowboy listens on 0; the actual port
+is looked up via `ranch:get_port/1`). `max_keepalive` is set to
+infinity because the bench loops easily exceed cowboy's default of
+100 requests per connection.
+""".
+-spec with_cowboy(atom(), list(), fun((inet:port_number()) -> Result)) -> Result when
+    Result :: term().
+with_cowboy(Name, Routes, Fun) ->
+    {ok, _} = application:ensure_all_started(cowboy),
+    {ok, _} = arizona_cowboy_server:start(Name, #{
+        transport_opts => [{port, 0}],
+        proto_opts => #{max_keepalive => infinity},
+        routes => Routes
+    }),
+    Port = ranch:get_port(Name),
+    try
+        Fun(Port)
+    after
+        arizona_cowboy_server:stop(Name)
     end.
 
 %% --------------------------------------------------------------------

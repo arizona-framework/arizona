@@ -212,160 +212,96 @@ bench_stream_reorder_100(Runs) ->
     arizona_bench_lib:run_workload(Fun, Runs).
 
 bench_http_get_e2e(Runs) ->
-    %% End-to-end HTTP GET bench: starts cowboy, opens a single keep-alive
-    %% connection, times GETs against `arizona_root_counter` wrapped in
-    %% `arizona_layout`. Measures the full request: gen_tcp + cowboy
-    %% parsing, Arizona's HTTP handler, view mount + render, response
-    %% writing.
-    %%
-    %% Connection is reused across iterations (HTTP keep-alive) so the
-    %% connect cost is paid once at the start, not per request.
-    {ok, _} = application:ensure_all_started(cowboy),
+    %% End-to-end HTTP GET: cowboy + gen_tcp keep-alive, single client.
+    %% Measures full request: cowboy parsing + Arizona HTTP handler +
+    %% view mount/render + response writing.
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}}
     ],
-    {ok, _} = arizona_cowboy_server:start(bench_http_e2e, #{
-        transport_opts => [{port, 0}],
-        %% Cowboy's default max_keepalive (100) closes the connection
-        %% well before the bench finishes (warmup + 100 trials *
-        %% 1000 ops = 102,000 reqs on one socket). Lift the cap.
-        proto_opts => #{max_keepalive => infinity},
-        routes => Routes
-    }),
-    Port = ranch:get_port(bench_http_e2e),
-    {ok, Sock} = gen_tcp:connect(
-        "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
-    ),
-    case arizona_bench_lib:http_get(Sock, Port) of
-        {200, Body} when byte_size(Body) > 0 ->
-            ok;
-        Other ->
-            io:format("error: GET returned ~p~n", [Other]),
-            halt(1)
-    end,
-    Fun = fun() ->
-        {200, _} = arizona_bench_lib:http_get(Sock, Port),
-        ok
-    end,
-    Stats = arizona_bench_lib:run_workload(Fun, Runs),
-    gen_tcp:close(Sock),
-    arizona_cowboy_server:stop(bench_http_e2e),
-    Stats.
+    arizona_bench_lib:with_cowboy(bench_http_e2e, Routes, fun(Port) ->
+        {ok, Sock} = gen_tcp:connect(
+            "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
+        ),
+        case arizona_bench_lib:http_get(Sock, Port) of
+            {200, Body} when byte_size(Body) > 0 ->
+                ok;
+            Other ->
+                io:format("error: GET returned ~p~n", [Other]),
+                halt(1)
+        end,
+        Fun = fun() ->
+            {200, _} = arizona_bench_lib:http_get(Sock, Port),
+            ok
+        end,
+        try
+            arizona_bench_lib:run_workload(Fun, Runs)
+        after
+            gen_tcp:close(Sock)
+        end
+    end).
 
 bench_http_get_e2e_10c(Runs) ->
-    %% Same path as http_get_e2e but with 10 concurrent clients. Each
-    %% trial broadcasts `go` to 10 worker processes; each worker runs
-    %% 100 GETs on its own keep-alive socket then signals `done`.
-    %% The trial time is wall-clock for all 1000 ops to complete --
-    %% per-op time is wall_clock / 1000.
-    {ok, _} = application:ensure_all_started(cowboy),
+    %% Same as http_get_e2e but with 10 concurrent clients. Each trial
+    %% broadcasts `go` to 10 worker procs; each runs 100 GETs on its own
+    %% keep-alive socket. Per-op time = wall_clock / 1000.
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}}
     ],
-    {ok, _} = arizona_cowboy_server:start(bench_http_e2e_10c, #{
-        transport_opts => [{port, 0}],
-        proto_opts => #{max_keepalive => infinity},
-        routes => Routes
-    }),
-    Port = ranch:get_port(bench_http_e2e_10c),
-    NClients = 10,
-    OpsPerClient = 100,
-    OpsPerTrial = NClients * OpsPerClient,
-    Coordinator = self(),
-    Workers = [
-        spawn_link(fun() ->
-            arizona_bench_lib:http_client_worker(Coordinator, Port, OpsPerClient)
+    arizona_bench_lib:with_cowboy(bench_http_e2e_10c, Routes, fun(Port) ->
+        arizona_bench_lib:run_concurrent_workload(10, 100, Runs, fun(Coordinator) ->
+            spawn_link(fun() ->
+                arizona_bench_lib:http_client_worker(Coordinator, Port, 100)
+            end)
         end)
-     || _ <- lists:seq(1, NClients)
-    ],
-    ok = arizona_bench_lib:await_ready(NClients),
-    Trial = fun() ->
-        T0 = erlang:monotonic_time(nanosecond),
-        lists:foreach(fun(W) -> W ! go end, Workers),
-        ok = arizona_bench_lib:await_done(NClients),
-        T1 = erlang:monotonic_time(nanosecond),
-        T1 - T0
-    end,
-    Stats = arizona_bench_lib:run_workload_custom(Trial, Runs, OpsPerTrial),
-    lists:foreach(fun(W) -> W ! stop end, Workers),
-    arizona_cowboy_server:stop(bench_http_e2e_10c),
-    Stats.
+    end).
 
 bench_ws_event_e2e(Runs) ->
-    %% End-to-end WS event bench: opens a single WS connection, times
-    %% `inc` event roundtrips. Each iteration sends one text frame and
-    %% reads one reply frame -- the full path: gen_tcp + cowboy ws +
-    %% arizona_socket:handle_in + arizona_live event dispatch + diff +
-    %% reply encode + gen_tcp recv.
-    {ok, _} = application:ensure_all_started(cowboy),
+    %% End-to-end WS event: cowboy + gen_tcp WS, single client. Each
+    %% iteration sends one `inc` text frame and reads one reply.
+    %% Path: cowboy ws + arizona_socket:handle_in + live dispatch +
+    %% diff + reply encode.
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
         {ws, <<"/ws">>, #{}}
     ],
-    {ok, _} = arizona_cowboy_server:start(bench_ws_e2e, #{
-        transport_opts => [{port, 0}],
-        proto_opts => #{max_keepalive => infinity},
-        routes => Routes
-    }),
-    Port = ranch:get_port(bench_ws_e2e),
-    {ok, Sock} = arizona_bench_lib:ws_connect("127.0.0.1", Port, <<"/">>),
-    Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
-    ok = arizona_bench_lib:ws_send(Sock, Json),
-    case arizona_bench_lib:ws_recv(Sock, 5000) of
-        {text, Reply} when byte_size(Reply) > 0 ->
-            ok;
-        Other ->
-            io:format("error: WS inc returned ~p~n", [Other]),
-            halt(1)
-    end,
-    Fun = fun() ->
+    arizona_bench_lib:with_cowboy(bench_ws_e2e, Routes, fun(Port) ->
+        {ok, Sock} = arizona_bench_lib:ws_connect("127.0.0.1", Port, <<"/">>),
+        Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
         ok = arizona_bench_lib:ws_send(Sock, Json),
-        {text, _} = arizona_bench_lib:ws_recv(Sock, 5000),
-        ok
-    end,
-    Stats = arizona_bench_lib:run_workload(Fun, Runs),
-    gen_tcp:close(Sock),
-    arizona_cowboy_server:stop(bench_ws_e2e),
-    Stats.
+        case arizona_bench_lib:ws_recv(Sock, 5000) of
+            {text, Reply} when byte_size(Reply) > 0 ->
+                ok;
+            Other ->
+                io:format("error: WS inc returned ~p~n", [Other]),
+                halt(1)
+        end,
+        Fun = fun() ->
+            ok = arizona_bench_lib:ws_send(Sock, Json),
+            {text, _} = arizona_bench_lib:ws_recv(Sock, 5000),
+            ok
+        end,
+        try
+            arizona_bench_lib:run_workload(Fun, Runs)
+        after
+            gen_tcp:close(Sock)
+        end
+    end).
 
 bench_ws_event_e2e_10c(Runs) ->
-    %% Same path as ws_event_e2e but with 10 concurrent clients. Each
-    %% trial broadcasts `go` to 10 worker processes; each worker sends
-    %% 100 `inc` events on its own WS connection then signals `done`.
-    {ok, _} = application:ensure_all_started(cowboy),
+    %% Same as ws_event_e2e but with 10 concurrent clients. Each trial
+    %% broadcasts `go` to 10 WS worker procs; each sends 100 `inc` events.
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
         {ws, <<"/ws">>, #{}}
     ],
-    {ok, _} = arizona_cowboy_server:start(bench_ws_e2e_10c, #{
-        transport_opts => [{port, 0}],
-        proto_opts => #{max_keepalive => infinity},
-        routes => Routes
-    }),
-    Port = ranch:get_port(bench_ws_e2e_10c),
-    NClients = 10,
-    OpsPerClient = 100,
-    OpsPerTrial = NClients * OpsPerClient,
     Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
-    Coordinator = self(),
-    Workers = [
-        spawn_link(fun() ->
-            arizona_bench_lib:ws_client_worker(Coordinator, Port, Json, OpsPerClient)
+    arizona_bench_lib:with_cowboy(bench_ws_e2e_10c, Routes, fun(Port) ->
+        arizona_bench_lib:run_concurrent_workload(10, 100, Runs, fun(Coordinator) ->
+            spawn_link(fun() ->
+                arizona_bench_lib:ws_client_worker(Coordinator, Port, Json, 100)
+            end)
         end)
-     || _ <- lists:seq(1, NClients)
-    ],
-    ok = arizona_bench_lib:await_ready(NClients),
-    Trial = fun() ->
-        T0 = erlang:monotonic_time(nanosecond),
-        lists:foreach(fun(W) -> W ! go end, Workers),
-        ok = arizona_bench_lib:await_done(NClients),
-        T1 = erlang:monotonic_time(nanosecond),
-        T1 - T0
-    end,
-    Stats = arizona_bench_lib:run_workload_custom(Trial, Runs, OpsPerTrial),
-    lists:foreach(fun(W) -> W ! stop end, Workers),
-    arizona_cowboy_server:stop(bench_ws_e2e_10c),
-    Stats.
+    end).
 
 bench_mount_only(Runs) ->
     %% Each iteration spawns a fresh live process via arizona_socket:init/4
