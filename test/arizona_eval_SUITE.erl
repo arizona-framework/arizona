@@ -14,17 +14,27 @@
     deeply_nested_stateless_no_leak_at_any_layer/1,
     stateless_inside_each_no_leak/1,
     stateless_callback_returning_fun_no_leak/1,
-    stateful_mount_eager_read_no_leak/1
+    stateful_mount_eager_read_no_leak/1,
+    render_stream_item_persists_deps/1,
+    render_stream_item_skipping_reuses_unchanged/1,
+    render_stream_item_skipping_full_eval_on_empty_deps/1,
+    render_stream_item_skipping_short_circuits_on_empty_changed/1
 ]).
 
 all() ->
-    [{group, eval_api}, {group, dep_isolation}].
+    [{group, eval_api}, {group, dep_isolation}, {group, per_item_optimization}].
 
 groups() ->
     [
         {eval_api, [parallel], [
             eval_each_def_3tuple,
             eval_val_stateless_descriptor
+        ]},
+        {per_item_optimization, [parallel], [
+            render_stream_item_persists_deps,
+            render_stream_item_skipping_reuses_unchanged,
+            render_stream_item_skipping_full_eval_on_empty_deps,
+            render_stream_item_skipping_short_circuits_on_empty_changed
         ]},
         {dep_isolation, [parallel], [
             stateless_callback_does_not_leak_deps,
@@ -213,6 +223,105 @@ stateful_mount_eager_read_no_leak(Config) when is_list(Config) ->
     {[{<<"0">>, _Val, OuterDeps}], _Views} =
         arizona_eval:eval_dynamics_v([Dyn], {#{}, #{}}),
     ?assertNot(maps:is_key(eager_mount_key, OuterDeps)).
+
+%% --- per-item optimization (?each Levels 1+2) ---
+
+%% Per-item rendering returns 3-tuples carrying deps captured during eval.
+render_stream_item_persists_deps(Config) when is_list(Config) ->
+    Tmpl = #{
+        t => 0,
+        s => [<<"<li>">>, <<"</li>">>],
+        d => fun(Item, _Key) ->
+            [{<<"0">>, fun() -> arizona_template:get(text, Item) end, {?MODULE, ?LINE}}]
+        end,
+        f => <<"x">>
+    },
+    Item = #{text => <<"hello">>},
+    {[{<<"0">>, <<"hello">>, Deps}], _Views} =
+        arizona_eval:render_stream_item(1, Item, Tmpl, {#{}, #{}}),
+    ?assert(maps:is_key(text, Deps)).
+
+%% A dynamic that explicitly tracks `text` is reused (not re-evaluated)
+%% when only an unrelated key changes.
+render_stream_item_skipping_reuses_unchanged(Config) when is_list(Config) ->
+    Counter = counters:new(1, []),
+    Tmpl = #{
+        t => 0,
+        s => [<<"<li>">>, <<"</li>">>],
+        d => fun(Item, _Key) ->
+            [
+                {<<"0">>,
+                    fun() ->
+                        ok = counters:add(Counter, 1, 1),
+                        arizona_template:get(text, Item)
+                    end,
+                    {?MODULE, ?LINE}}
+            ]
+        end,
+        f => <<"x">>
+    },
+    OldItem = #{text => <<"hello">>, other => 1},
+    NewItem = #{text => <<"hello">>, other => 2},
+    {OldD, _} = arizona_eval:render_stream_item(1, OldItem, Tmpl, {#{}, #{}}),
+    1 = counters:get(Counter, 1),
+    Changed = #{other => true},
+    {NewD, _} =
+        arizona_eval:render_stream_item_skipping(1, NewItem, OldD, Changed, Tmpl, {#{}, #{}}),
+    %% Counter still 1 -- the closure was NOT invoked the second time.
+    1 = counters:get(Counter, 1),
+    %% New triple is the exact same triple as before (reused as-is).
+    ?assertEqual(OldD, NewD).
+
+%% A dynamic without explicit ?get tracking (e.g. pattern destructure) has
+%% empty deps -- skipping is unsafe, so re-eval happens on any non-empty
+%% Changed.
+render_stream_item_skipping_full_eval_on_empty_deps(Config) when is_list(Config) ->
+    Tmpl = #{
+        t => 0,
+        s => [<<"<li>">>, <<"</li>">>],
+        d => fun(#{text := Text}, _Key) ->
+            [{<<"0">>, fun() -> Text end, {?MODULE, ?LINE}}]
+        end,
+        f => <<"x">>
+    },
+    OldItem = #{text => <<"old">>},
+    NewItem = #{text => <<"new">>},
+    {OldD, _} = arizona_eval:render_stream_item(1, OldItem, Tmpl, {#{}, #{}}),
+    [{<<"0">>, <<"old">>, EmptyDeps}] = OldD,
+    ?assertEqual(#{}, EmptyDeps),
+    Changed = #{text => true},
+    {NewD, _} =
+        arizona_eval:render_stream_item_skipping(1, NewItem, OldD, Changed, Tmpl, {#{}, #{}}),
+    %% Empty deps -> always re-eval, so we get the new value.
+    [{<<"0">>, <<"new">>, _}] = NewD.
+
+%% When Changed is empty, the whole item snapshot is reused without invoking
+%% any per-item closure.
+render_stream_item_skipping_short_circuits_on_empty_changed(Config) when is_list(Config) ->
+    Counter = counters:new(1, []),
+    Tmpl = #{
+        t => 0,
+        s => [<<"<li>">>, <<"</li>">>],
+        d => fun(Item, _Key) ->
+            [
+                {<<"0">>,
+                    fun() ->
+                        ok = counters:add(Counter, 1, 1),
+                        arizona_template:get(text, Item)
+                    end,
+                    {?MODULE, ?LINE}}
+            ]
+        end,
+        f => <<"x">>
+    },
+    OldItem = #{text => <<"hello">>},
+    {OldD, _} = arizona_eval:render_stream_item(1, OldItem, Tmpl, {#{}, #{}}),
+    1 = counters:get(Counter, 1),
+    {NewD, _} =
+        arizona_eval:render_stream_item_skipping(1, OldItem, OldD, #{}, Tmpl, {#{}, #{}}),
+    %% Empty Changed -> short-circuit, no closure invocation.
+    1 = counters:get(Counter, 1),
+    ?assertEqual(OldD, NewD).
 
 %% A callback that returns a 0-arity fun (which eval_val_v then unwraps via
 %% its is_function/0 clause) must not leak the fun-body's reads into the

@@ -43,6 +43,7 @@
     stream_dedup_strips_statics/1,
     stream_delete_nonexistent_key/1,
     stream_deps_skip/1,
+    stream_update_identical_emits_no_ops/1,
     stream_diff_insert/1,
     stream_diff_mixed/1,
     stream_diff_no_change/1,
@@ -110,6 +111,8 @@
     stream_ssr/1,
     stream_to_list_empty/1,
     stream_to_list_preserves_order/1,
+    update_pending_op_carries_changed/1,
+    update_on_missing_key_yields_empty_changed/1,
     stream_to_list/1,
     stream_update_no_change/1,
     stream_update_nonexistent_key/1
@@ -146,7 +149,8 @@ groups() ->
             stream_diff_update,
             stream_diff_reset,
             stream_diff_mixed,
-            stream_deps_skip
+            stream_deps_skip,
+            stream_update_identical_emits_no_ops
         ]},
         %% 12b. Stream edge case tests (unit-level)
         {stream_edge_unit, [parallel], [
@@ -210,7 +214,9 @@ groups() ->
             stream_limit_drop_insert,
             stream_move_op,
             stream_limit_ssr,
-            stream_limit_reset
+            stream_limit_reset,
+            update_pending_op_carries_changed,
+            update_on_missing_key_yields_empty_changed
         ]},
         %% Edge case tests
         {stream_edge_cases, [parallel], [
@@ -449,6 +455,23 @@ stream_deps_skip(Config) when is_list(Config) ->
     {Ops, _, _} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
     ?assertEqual([], Ops).
 
+%% Update with an item identical to the existing one -- Changed is empty,
+%% the per-item skipping renderer short-circuits, no closure runs, no ops.
+stream_update_identical_emits_no_ops(Config) when is_list(Config) ->
+    Items = [#{id => 1, text => <<"A">>}],
+    {B0, _} = arizona_todo:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
+    Tmpl0 = arizona_todo:render(B0),
+    {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
+    B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
+    %% Update with a value-equal item.
+    {B2, _, _} = arizona_todo:handle_event(
+        <<"update">>, #{<<"id">> => 1, <<"text">> => <<"A">>}, B1
+    ),
+    Tmpl1 = arizona_todo:render(B2),
+    Changed = arizona_live_compute_changed(B1, B2),
+    {Ops, _, _} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
+    ?assertEqual([], Ops).
+
 %% =============================================================================
 %% 12b. Stream edge case tests (unit-level)
 %% =============================================================================
@@ -651,7 +674,7 @@ stream_snapshot_after_multiple_cycles(Config) when is_list(Config) ->
     ],
     ?assertEqual([1], FinalOrder),
     #{1 := ItemD} = FinalItems,
-    [{_, {attr, <<"az-key">>, 1}}, {_, <<"A2">>}] = ItemD.
+    [{_, {attr, <<"az-key">>, 1}, _}, {_, <<"A2">>, _}] = ItemD.
 
 stream_empty_pending_deps_changed(Config) when is_list(Config) ->
     %% Mount with 1 item, clear pending, re-render with same stream but Changed = #{items => true}
@@ -1673,6 +1696,27 @@ stream_limit_reset(Config) when is_list(Config) ->
     InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
     ?assertEqual(2, length(InsOps)).
 
+%% --- update/3 captures Changed in pending op --------------------------------
+update_pending_op_carries_changed(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S0 = arizona_stream:new(KeyFun, [#{id => 1, text => <<"old">>, other => v}]),
+    #stream{pending = P1} =
+        arizona_stream:update(S0, 1, #{id => 1, text => <<"new">>, other => v}),
+    %% First op is the initial insert from new/2; the second is our update.
+    [_Insert, {update, 1, _NewItem, Changed}] = queue:to_list(P1),
+    ?assert(maps:is_key(text, Changed)),
+    ?assertNot(maps:is_key(other, Changed)),
+    ?assertNot(maps:is_key(id, Changed)).
+
+%% --- update/3 on a missing key emits empty Changed --------------------------
+update_on_missing_key_yields_empty_changed(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S0 = arizona_stream:new(KeyFun),
+    #stream{pending = P1} =
+        arizona_stream:update(S0, 999, #{id => 999, text => <<"new">>}),
+    [{update, 999, _NewItem, Changed}] = queue:to_list(P1),
+    ?assertEqual(#{}, Changed).
+
 %% =============================================================================
 %% Edge case tests
 %% =============================================================================
@@ -1921,8 +1965,8 @@ render_fp_val_stream_items(Config) when is_list(Config) ->
     Snap = #{
         t => 0,
         items => #{
-            1 => [{<<"0">>, <<"A">>}],
-            2 => [{<<"0">>, <<"B">>}]
+            1 => [{<<"0">>, <<"A">>, #{}}],
+            2 => [{<<"0">>, <<"B">>, #{}}]
         },
         template => #{
             t => 0,
@@ -1959,7 +2003,7 @@ render_fp_val_stream_items_no_fp(Config) when is_list(Config) ->
     Snap = #{
         t => 0,
         items => #{
-            1 => [{<<"0">>, <<"A">>}]
+            1 => [{<<"0">>, <<"A">>, #{}}]
         },
         template => #{
             t => 0,

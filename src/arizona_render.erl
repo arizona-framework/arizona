@@ -242,15 +242,15 @@ If the template has a fingerprint, returns a wire-format map keyed by
 """.
 -spec zip_item(Template, Dynamics) -> map() | binary() when
     Template :: map(),
-    Dynamics :: [{arizona_template:az(), term()}].
+    Dynamics :: [{arizona_template:az(), term(), map()}].
 zip_item(#{f := F, s := S}, D) ->
     #{
         ~"f" => F,
         ~"s" => S,
-        ~"d" => [render_fp_val(arizona_template:unwrap_val(V)) || {_Az, V} <:- D]
+        ~"d" => [render_fp_val(arizona_template:unwrap_val(V)) || {_Az, V, _Deps} <:- D]
     };
 zip_item(#{s := S}, D) ->
-    iolist_to_binary(zip(S, [arizona_template:unwrap_val(V) || {_Az, V} <:- D])).
+    iolist_to_binary(zip(S, [arizona_template:unwrap_val(V) || {_Az, V, _Deps} <:- D])).
 
 -doc """
 Renders a snapshot to a wire-format fingerprint payload (if `f` present)
@@ -269,14 +269,14 @@ fingerprinted wire payload (if the template has `f`) or a flat HTML binary.
 """.
 -spec zip_list_fp(Template, Items) -> map() | binary() when
     Template :: map(),
-    Items :: [[{arizona_template:az(), term()}]].
+    Items :: [[{arizona_template:az(), term(), map()}]].
 zip_list_fp(#{f := F, s := S, t := T}, ItemsList) ->
     #{
         ~"t" => T,
         ~"f" => F,
         ~"s" => S,
         ~"d" => [
-            [render_fp_val(arizona_template:unwrap_val(V)) || {_Az, V} <:- D]
+            [render_fp_val(arizona_template:unwrap_val(V)) || {_Az, V, _Deps} <:- D]
          || D <- ItemsList
         ]
     };
@@ -290,7 +290,7 @@ against a template, with the same fingerprint-vs-flat-HTML branching as
 """.
 -spec zip_stream_fp(Template, Items, Order) -> map() | binary() when
     Template :: map(),
-    Items :: #{term() => [{arizona_template:az(), term()}]},
+    Items :: #{term() => [{arizona_template:az(), term(), map()}]},
     Order :: [term()].
 zip_stream_fp(#{f := F, s := S, t := T}, Items, Order) ->
     #{
@@ -300,7 +300,7 @@ zip_stream_fp(#{f := F, s := S, t := T}, Items, Order) ->
         ~"d" => [
             [
                 render_fp_val(arizona_template:unwrap_val(V))
-             || {_Az, V} <:- maps:get(K, Items)
+             || {_Az, V, _Deps} <:- maps:get(K, Items)
             ]
          || K <- Order
         ]
@@ -346,7 +346,7 @@ apply_layouts([{Mod, Fun} | Rest], Inner, Bindings) ->
     render_to_iolist(Tmpl).
 
 zip_stream_item(Statics, ItemD) ->
-    zip(Statics, [arizona_template:unwrap_val(V) || {_Az, V} <:- ItemD]).
+    zip(Statics, [arizona_template:unwrap_val(V) || {_Az, V, _Deps} <:- ItemD]).
 
 %% Az is ignored during SSR (only used for diff targeting), so `undefined` Az
 %% from az-nodiff templates flows through harmlessly.
@@ -427,7 +427,7 @@ render_fp_val(#{t := ?EACH, items := Items, template := #{f := F, t := T, s := S
         ~"f" => F,
         ~"s" => S,
         ~"d" => [
-            [render_fp_val(arizona_template:unwrap_val(V)) || {_Az, V} <:- D]
+            [render_fp_val(arizona_template:unwrap_val(V)) || {_Az, V, _Deps} <:- D]
          || D <- Items
         ]
     };
@@ -435,7 +435,7 @@ render_fp_val(#{t := ?EACH, items := Items, template := #{s := S}}) when
     is_list(Items)
 ->
     [
-        iolist_to_binary(zip(S, [arizona_template:unwrap_val(V) || {_Az, V} <:- D]))
+        iolist_to_binary(zip(S, [arizona_template:unwrap_val(V) || {_Az, V, _Deps} <:- D]))
      || D <- Items
     ];
 render_fp_val(#{
@@ -451,7 +451,7 @@ render_fp_val(#{
         ~"d" => [
             [
                 render_fp_val(arizona_template:unwrap_val(V))
-             || {_Az, V} <:- maps:get(K, Items)
+             || {_Az, V, _Deps} <:- maps:get(K, Items)
             ]
          || K <- Order
         ]

@@ -25,7 +25,7 @@ the differ knows exactly which keys to insert, remove, update, or move.
 ```
 {insert, Key, Item, Pos}
 {delete, Key}
-{update, Key, NewItem}
+{update, Key, NewItem, Changed}  %% Changed :: #{key() => true}, captured at update/3 time
 {move, Key, AfterKey}    %% AfterKey is `null` for first position
 reorder                  %% from sort/2 when order changes
 reset                    %% from reset/1,2
@@ -257,10 +257,36 @@ Replaces the item at `Key` with `NewItem` and queues an update op.
     NewItem :: item(),
     Stream1 :: stream().
 update(#stream{items = Items, pending = Pending} = S, Key, NewItem) ->
+    Changed =
+        case Items of
+            #{Key := OldItem} -> compute_item_changed(OldItem, NewItem);
+            #{} -> #{}
+        end,
     S#stream{
         items = Items#{Key => NewItem},
-        pending = queue:in({update, Key, NewItem}, Pending)
+        pending = queue:in({update, Key, NewItem, Changed}, Pending)
     }.
+
+%% Set of keys that differ between Old and New: added, removed, or value
+%% changed. Items in Arizona are maps; non-map items crash here, which is
+%% correct -- per-item dep tracking only makes sense on maps.
+compute_item_changed(OldItem, NewItem) ->
+    All = maps:merge(OldItem, NewItem),
+    maps:fold(
+        fun(K, _, Acc) ->
+            case OldItem of
+                #{K := V} ->
+                    case NewItem of
+                        #{K := V} -> Acc;
+                        #{} -> Acc#{K => true}
+                    end;
+                #{} ->
+                    Acc#{K => true}
+            end
+        end,
+        #{},
+        All
+    ).
 
 -doc """
 Moves the item with `Key` to a new zero-based position and queues a

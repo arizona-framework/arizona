@@ -45,6 +45,7 @@ never reach op-code targets.
 -export([diff/2]).
 -export([diff/3]).
 -export([diff/4]).
+-export([deps_changed/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -284,7 +285,7 @@ deleted_item_children(Pending, OldItems) ->
 item_child_views(ItemD, Acc) ->
     lists:foldl(
         fun
-            ({_Az, #{view_id := VId}}, A) -> [VId | A];
+            ({_Az, #{view_id := VId}, _Deps}, A) -> [VId | A];
             (_, A) -> A
         end,
         Acc,
@@ -355,8 +356,8 @@ diff_stream_op(Az, {insert, Key, Item, Pos}, Rest, Source, Tmpl, SnapAcc, OldOrd
     stream_insert(Az, Key, Item, Pos, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
 diff_stream_op(Az, {delete, Key}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_delete(Az, Key, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
-diff_stream_op(Az, {update, Key, NewItem}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
-    stream_update(Az, Key, NewItem, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, {update, Key, NewItem, Changed}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_update(Az, Key, NewItem, Changed, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
 diff_stream_op(Az, {move, Key, AfterKey}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_move(Az, Key, AfterKey, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
 diff_stream_op(Az, reorder, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
@@ -380,14 +381,18 @@ stream_delete(Az, Key, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
         diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views0),
     {[DelOp | RestOps], FinalSnap, Views1}.
 
-stream_update(Az, Key, NewItem, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
-    {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
+stream_update(Az, Key, NewItem, Changed, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SnapAcc of
         #{Key := OldD} ->
+            {NewD, Views1} =
+                arizona_eval:render_stream_item_skipping(
+                    Key, NewItem, OldD, Changed, Tmpl, Views0
+                ),
             stream_update_existing(
                 Az, Key, NewD, OldD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views1
             );
         #{} ->
+            {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
             stream_update_missing(Az, Key, NewD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views1)
     end.
 
@@ -476,7 +481,7 @@ diff_list_zip(Az, [NewD | NR], [OldD | OR], Views0) ->
             [] ->
                 RestOps;
             _ ->
-                [{_, OldKey} | _] = OldD,
+                [{_, OldKey, _} | _] = OldD,
                 [[?OP_ITEM_PATCH, Az, arizona_template:to_bin(OldKey), InnerOps] | RestOps]
         end,
     {Ops, NewTail, OldTail, Views2};
@@ -735,11 +740,11 @@ make_op(Az, New, _Old) ->
 
 diff_item_dynamics_v([], [], Views) ->
     {[], Views};
-diff_item_dynamics_v([{Az, _} | NR], [{Az, #{diff := false}} | OR], Views0) ->
+diff_item_dynamics_v([{Az, _, _} | NR], [{Az, #{diff := false}, _} | OR], Views0) ->
     diff_item_dynamics_v(NR, OR, Views0);
-diff_item_dynamics_v([{Az, Same} | NR], [{Az, Same} | OR], Views0) ->
+diff_item_dynamics_v([{Az, Same, _} | NR], [{Az, Same, _} | OR], Views0) ->
     diff_item_dynamics_v(NR, OR, Views0);
-diff_item_dynamics_v([{Az, New} | NR], [{Az, Old} | OR], Views0) ->
+diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
     case {New, Old} of
         {#{t := ?EACH, source := Src, template := Tmpl}, #{t := ?EACH}} ->
             EachDesc = #{source => Src, template => Tmpl},
