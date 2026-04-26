@@ -25,7 +25,7 @@ across upgrades.
 
 - **SSR + live updates** -- HTML on first load, WebSocket diffs after
 - **Erlang-native templates** -- `{Tag, Attrs, Children}` tuples compiled by parse transform
-- **Compile-time diffing** -- statics sent once, only dynamics cross the wire
+- **Compile-time static/dynamic split** -- statics sent once, only dynamics cross the wire
 - **Three handler kinds** -- `arizona_view` (route pages), `arizona_stateful` (components),
   `arizona_stateless` (pure templates)
 - **Streams** -- keyed collections with insert/delete/update/move/sort/limit
@@ -195,10 +195,10 @@ breakdown, op codes, dev-mode file watchers, custom schemes/proto_opts, and impe
 
 ## Sponsors
 
-If you like this tool, please consider [sponsoring me](https://github.com/sponsors/williamthome).
-I'm thankful for your never-ending support :heart:
+If you like Arizona, please consider [sponsoring me](https://github.com/sponsors/williamthome).
+I'm thankful for your never-ending support ❤️
 
-I also accept coffees :coffee:
+I also accept coffees ☕
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/williamthome)
 
@@ -241,7 +241,7 @@ testing guidelines, and contribution workflow.
 
 Copyright (c) 2023-2026 [William Fank Thomé](https://github.com/williamthome)
 
-Arizona is 100% open-source and community-driven. All components are available under the Apache 2
-License on [GitHub](https://github.com/arizona-framework/arizona).
+Arizona is open-source under the Apache 2.0 License on
+[GitHub](https://github.com/arizona-framework/arizona).
 
 See [LICENSE.md](LICENSE.md) for more information.
