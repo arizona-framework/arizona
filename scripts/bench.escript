@@ -167,10 +167,10 @@ bench_stream_update_field_100(Runs) ->
     %% Per trial: dispatch `update_field_a` on row 1, varying the value so
     %% every event is a real change (not a no-op).
     %%
-    %% With per-item dep skipping (this branch): only the 1 dynamic whose
-    %% deps include `field_a` re-evaluates -- the other 19 reuse old triples.
-    %% Without skipping: all 20 dynamics re-evaluate every iteration.
-    %% The delta vs `feat/bench` baseline measures the optimization win.
+    %% Sensitive to per-item dep tracking: when the runtime can skip
+    %% per-item dynamics whose deps don't include `field_a`, only 1 of
+    %% the 20 closures runs per update; otherwise all 20 do. Useful for
+    %% comparing branches that touch the per-item eval/diff paths.
     FieldKeys = [list_to_atom("field_" ++ [K]) || K <- lists:seq($a, $t)],
     Items = [
         maps:from_list(
@@ -519,12 +519,14 @@ bench_pubsub_broadcast_100(Runs) ->
      || _ <- lists:seq(1, 100)
     ],
     %% Wait for all subs to register before measuring.
-    _ = [
-        receive
-            {ready, P} -> ok
-        end
-     || P <- Subs
-    ],
+    ok = lists:foreach(
+        fun(P) ->
+            receive
+                {ready, P} -> ok
+            end
+        end,
+        Subs
+    ),
     Trial = fun() ->
         T0 = erlang:monotonic_time(nanosecond),
         arizona_pubsub:broadcast(Topic, ping),
@@ -533,7 +535,13 @@ bench_pubsub_broadcast_100(Runs) ->
         T1 - T0
     end,
     Stats = arizona_bench_lib:run_workload_custom(Trial, Runs, 100),
-    [exit(P, normal) || P <- Subs],
+    ok = lists:foreach(
+        fun(P) ->
+            true = exit(P, normal),
+            ok
+        end,
+        Subs
+    ),
     Stats.
 
 pubsub_sub_loop(Topic, Reporter) ->
