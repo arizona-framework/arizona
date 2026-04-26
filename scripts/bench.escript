@@ -37,6 +37,7 @@ main(Args) ->
         {<<"diff_simple_event">>, fun bench_diff_simple_event/1},
         {<<"stream_insert_1k">>, fun bench_stream_insert_1k/1},
         {<<"stream_reorder_100">>, fun bench_stream_reorder_100/1},
+        {<<"stream_update_field_100">>, fun bench_stream_update_field_100/1},
         {<<"http_get_e2e">>, fun bench_http_get_e2e/1},
         {<<"http_get_e2e_10c">>, fun bench_http_get_e2e_10c/1},
         {<<"ws_event_e2e">>, fun bench_ws_event_e2e/1},
@@ -125,6 +126,58 @@ bench_stream_insert_1k(Runs) ->
         T1 - T0
     end,
     arizona_bench_lib:run_workload_custom(Trial, Runs, 1000).
+
+bench_stream_update_field_100(Runs) ->
+    %% Mount arizona_bench_each_track with 100 rows; each row has 5 fields
+    %% rendered via 5 separate `arizona_template:get(K, Item)` dynamics.
+    %% Per trial: dispatch `update_field_a` on row 1, varying the value so
+    %% every event is a real change (not a no-op).
+    %%
+    %% With per-item dep skipping (this branch): only the 1 dynamic whose
+    %% deps include `field_a` re-evaluates -- the other 4 reuse old triples.
+    %% Without skipping: all 5 dynamics re-evaluate every iteration.
+    %% The delta vs `feat/bench` baseline measures the optimization win.
+    Items = [
+        #{
+            id => I,
+            field_a => integer_to_binary(I),
+            field_b => ~"b",
+            field_c => ~"c",
+            field_d => ~"d",
+            field_e => ~"e"
+        }
+     || I <- lists:seq(1, 100)
+    ],
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(
+        arizona_bench_each_track, #{items => Items}, Req, #{}
+    ),
+    Counter = counters:new(1, []),
+    SanityJson = update_event_json(0),
+    case arizona_socket:handle_in(SanityJson, Socket) of
+        {ok, _} -> ok;
+        {reply, _, _} -> ok;
+        Other ->
+            io:format("error: handle_in returned unexpected ~p~n", [Other]),
+            halt(1)
+    end,
+    Fun = fun() ->
+        N = counters:get(Counter, 1),
+        ok = counters:add(Counter, 1, 1),
+        Json = update_event_json(N),
+        case arizona_socket:handle_in(Json, Socket) of
+            {ok, _} -> ok;
+            {reply, _, _} -> ok
+        end
+    end,
+    arizona_bench_lib:run_workload(Fun, Runs).
+
+update_event_json(N) ->
+    iolist_to_binary(
+        json:encode(
+            [~"bench_each", ~"update_field_a", #{~"id" => 1, ~"value" => integer_to_binary(N)}]
+        )
+    ).
 
 bench_stream_reorder_100(Runs) ->
     %% Mount arizona_datatable seeded with a 100-row stream, then dispatch
