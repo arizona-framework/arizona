@@ -33,7 +33,8 @@ main(Args) ->
         {<<"mount_only">>, fun bench_mount_only/1},
         {<<"diff_no_change">>, fun bench_diff_no_change/1},
         {<<"diff_simple_event">>, fun bench_diff_simple_event/1},
-        {<<"stream_insert_1k">>, fun bench_stream_insert_1k/1}
+        {<<"stream_insert_1k">>, fun bench_stream_insert_1k/1},
+        {<<"stream_reorder_100">>, fun bench_stream_reorder_100/1}
     ],
     Results = [{Label, Fun(Runs)} || {Label, Fun} <- Workloads],
     [report(Label, Stats) || {Label, Stats} <- Results],
@@ -184,6 +185,43 @@ bench_stream_insert_1k(Runs) ->
     ],
     Stats = stats(PerOpNs),
     Stats#{ops_per_trial => 1000}.
+
+bench_stream_reorder_100(Runs) ->
+    %% Mount arizona_datatable seeded with a 100-row stream, then dispatch
+    %% repeated `sort` events on the `id` column. The sort handler flips
+    %% asc<->desc each call, producing a full reverse of the row order.
+    %% A full reverse is the worst case for LIS reorder: only one item
+    %% stays put, the other 99 are emitted as MOVE ops.
+    %%
+    %% Measures the full event roundtrip including the LIS reorder
+    %% computation in `arizona_diff` and stream MOVE op emission.
+    %% Catches regressions in the LIS scan or the diff stream-op path.
+    Req = arizona_req_test_adapter:new(),
+    Items = [
+        #{id => I, name => iolist_to_binary(io_lib:format("name~b", [I])), age => 20 + I rem 50}
+     || I <- lists:seq(1, 100)
+    ],
+    Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
+    {ok, Socket} = arizona_socket:init(arizona_datatable, #{rows => Stream}, Req, #{}),
+    Json = iolist_to_binary(json:encode([~"page", ~"sort", #{~"col" => ~"id"}])),
+    case arizona_socket:handle_in(Json, Socket) of
+        {reply, Data, _} ->
+            case iolist_size(Data) > 0 of
+                true ->
+                    ok;
+                false ->
+                    io:format("error: sort returned empty reply~n"),
+                    halt(1)
+            end;
+        Other ->
+            io:format("error: sort returned unexpected ~p~n", [Other]),
+            halt(1)
+    end,
+    Fun = fun() ->
+        {reply, _, _} = arizona_socket:handle_in(Json, Socket),
+        ok
+    end,
+    run_workload(Fun, Runs).
 
 bench_mount_only(Runs) ->
     %% Each iteration spawns a fresh live process via arizona_socket:init/4
