@@ -54,4 +54,9 @@ handle_event(~"update_field_a", #{~"id" := Id, ~"value" := Value}, Bindings) ->
     OldItem = arizona_stream:get(Items0, Id),
     NewItem = OldItem#{field_a => Value},
     Items1 = arizona_stream:update(Items0, Id, NewItem),
+    {Bindings#{items => Items1}, #{}, []};
+handle_event(~"update_unchanged", #{~"id" := Id}, Bindings) ->
+    Items0 = maps:get(items, Bindings),
+    SameItem = arizona_stream:get(Items0, Id),
+    Items1 = arizona_stream:update(Items0, Id, SameItem),
     {Bindings#{items => Items1}, #{}, []}.

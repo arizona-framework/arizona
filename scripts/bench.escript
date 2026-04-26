@@ -40,6 +40,7 @@ main(Args) ->
         {<<"stream_insert_1k">>, fun bench_stream_insert_1k/1},
         {<<"stream_reorder_100">>, fun bench_stream_reorder_100/1},
         {<<"stream_update_field_100">>, fun bench_stream_update_field_100/1},
+        {<<"stream_update_unchanged_100">>, fun bench_stream_update_unchanged_100/1},
         {<<"http_get_e2e">>, fun bench_http_get_e2e/1},
         {<<"http_get_e2e_10c">>, fun bench_http_get_e2e_10c/1},
         {<<"ws_event_e2e">>, fun bench_ws_event_e2e/1},
@@ -194,6 +195,42 @@ update_event_json(N) ->
             [~"bench_each", ~"update_field_a", #{~"id" => 1, ~"value" => integer_to_binary(N)}]
         )
     ).
+
+bench_stream_update_unchanged_100(Runs) ->
+    %% Mount arizona_bench_each_track with 100 rows, then dispatch
+    %% `update_unchanged` events that re-write row 1 with its current
+    %% item (byte-equal). Each event still queues a pending op, but
+    %% `compute_item_changed` returns `#{}` -- the per-item skip path
+    %% short-circuits and reuses the entire ItemD without invoking any
+    %% closure. Measures the empty-Changed fast path.
+    FieldKeys = [list_to_atom("field_" ++ [K]) || K <- lists:seq($a, $t)],
+    Items = [
+        maps:from_list(
+            [{id, I} | [{Field, integer_to_binary(I)} || Field <- FieldKeys]]
+        )
+     || I <- lists:seq(1, 100)
+    ],
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(
+        arizona_bench_each_track, #{items => Items}, Req, #{}
+    ),
+    Json = iolist_to_binary(
+        json:encode([~"bench_each", ~"update_unchanged", #{~"id" => 1}])
+    ),
+    case arizona_socket:handle_in(Json, Socket) of
+        {ok, _} -> ok;
+        {reply, _, _} -> ok;
+        Other ->
+            io:format("error: handle_in returned unexpected ~p~n", [Other]),
+            halt(1)
+    end,
+    Fun = fun() ->
+        case arizona_socket:handle_in(Json, Socket) of
+            {ok, _} -> ok;
+            {reply, _, _} -> ok
+        end
+    end,
+    arizona_bench_lib:run_workload(Fun, Runs).
 
 bench_stream_reorder_100(Runs) ->
     %% Mount arizona_datatable seeded with a 100-row stream, then dispatch
