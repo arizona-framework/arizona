@@ -37,7 +37,8 @@ main(Args) ->
         {<<"stream_reorder_100">>, fun bench_stream_reorder_100/1},
         {<<"http_get_e2e">>, fun bench_http_get_e2e/1},
         {<<"http_get_e2e_10c">>, fun bench_http_get_e2e_10c/1},
-        {<<"ws_event_e2e">>, fun bench_ws_event_e2e/1}
+        {<<"ws_event_e2e">>, fun bench_ws_event_e2e/1},
+        {<<"ws_event_e2e_10c">>, fun bench_ws_event_e2e_10c/1}
     ],
     Results = [{Label, Fun(Runs)} || {Label, Fun} <- Workloads],
     [report(Label, Stats) || {Label, Stats} <- Results],
@@ -518,6 +519,77 @@ ws_decode(Data) ->
 ws_opcode_to_type(1) -> text;
 ws_opcode_to_type(2) -> binary;
 ws_opcode_to_type(_) -> unknown.
+
+bench_ws_event_e2e_10c(Runs) ->
+    %% Same path as ws_event_e2e but with 10 concurrent clients. Each
+    %% trial broadcasts `go` to 10 worker processes; each worker sends
+    %% 100 `inc` events on its own WS connection then signals `done`.
+    %% Per-op time = wall_clock / 1000.
+    %%
+    %% Workers persist across trials so handshake cost is paid once at
+    %% workload start.
+    {ok, _} = application:ensure_all_started(cowboy),
+    Routes = [
+        {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
+        {ws, <<"/ws">>, #{}}
+    ],
+    {ok, _} = arizona_cowboy_server:start(bench_ws_e2e_10c, #{
+        transport_opts => [{port, 0}],
+        proto_opts => #{max_keepalive => infinity},
+        routes => Routes
+    }),
+    Port = ranch:get_port(bench_ws_e2e_10c),
+    NClients = 10,
+    OpsPerClient = 100,
+    OpsPerTrial = NClients * OpsPerClient,
+    Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
+    Coordinator = self(),
+    Workers = [
+        spawn_link(fun() -> ws_client_worker(Coordinator, Port, Json, OpsPerClient) end)
+     || _ <- lists:seq(1, NClients)
+    ],
+    ok = await_ready(NClients),
+    Trial = fun() ->
+        T0 = erlang:monotonic_time(nanosecond),
+        lists:foreach(fun(W) -> W ! go end, Workers),
+        ok = await_done(NClients),
+        T1 = erlang:monotonic_time(nanosecond),
+        (T1 - T0) / OpsPerTrial
+    end,
+    lists:foreach(fun(_) -> Trial() end, lists:seq(1, ?WARMUP)),
+    PerOpNs = [
+        begin
+            erlang:garbage_collect(self()),
+            Trial()
+        end
+     || _ <- lists:seq(1, Runs)
+    ],
+    lists:foreach(fun(W) -> W ! stop end, Workers),
+    arizona_cowboy_server:stop(bench_ws_e2e_10c),
+    Stats = stats(PerOpNs),
+    Stats#{ops_per_trial => OpsPerTrial}.
+
+ws_client_worker(Coordinator, Port, Json, OpsPerCall) ->
+    {ok, Sock} = ws_connect("127.0.0.1", Port, <<"/">>),
+    Coordinator ! {ready, self()},
+    ws_worker_loop(Coordinator, Sock, Json, OpsPerCall).
+
+ws_worker_loop(Coordinator, Sock, Json, OpsPerCall) ->
+    receive
+        go ->
+            run_ws_loop(Sock, Json, OpsPerCall),
+            Coordinator ! {done, self()},
+            ws_worker_loop(Coordinator, Sock, Json, OpsPerCall);
+        stop ->
+            gen_tcp:close(Sock)
+    end.
+
+run_ws_loop(_Sock, _Json, 0) ->
+    ok;
+run_ws_loop(Sock, Json, N) ->
+    ok = ws_send(Sock, Json),
+    {text, _} = ws_recv(Sock, 5000),
+    run_ws_loop(Sock, Json, N - 1).
 
 bench_mount_only(Runs) ->
     %% Each iteration spawns a fresh live process via arizona_socket:init/4
