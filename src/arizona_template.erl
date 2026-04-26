@@ -182,8 +182,11 @@ can attribute dependencies that bypass binding access.
     Key :: term().
 track(Key) ->
     case erlang:get('$arizona_deps') of
-        undefined -> ok;
-        Deps -> erlang:put('$arizona_deps', Deps#{Key => true})
+        undefined ->
+            ok;
+        Deps ->
+            erlang:put('$arizona_deps', Deps#{Key => true}),
+            ok
     end.
 
 -doc """
