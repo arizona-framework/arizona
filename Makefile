@@ -124,8 +124,10 @@ test-e2e-sequential:
 # Performance bench. Intentionally NOT wired into ci/precommit:
 # numbers are noisy under shared CI runners and need human comparison.
 # Compile under the test profile so test/support/ fixtures are on the path.
+# Pass extra args via ARGS, e.g.:
+#   make bench ARGS="--only diff_no_change --only diff_simple_event"
 bench: compile-test
-	./scripts/bench.escript
+	./scripts/bench.escript $(ARGS)
 
 cover: cover-erl cover-js
 
