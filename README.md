@@ -1,6 +1,6 @@
 # Arizona
 
-![arizona_256x256](https://github.com/arizona-framework/arizona/assets/35941533/88b76a0c-0dfc-4f99-8608-b0ebd9c9fbd9)
+![arizona logo](https://raw.githubusercontent.com/arizona-framework/arizona/main/assets/logo.jpg)
 
 [![Erlang CI](https://github.com/arizona-framework/arizona/actions/workflows/erlang.yml/badge.svg?branch=main)](https://github.com/arizona-framework/arizona/actions/workflows/erlang.yml)
 [![Node.js CI](https://github.com/arizona-framework/arizona/actions/workflows/node-js.yml/badge.svg?branch=main)](https://github.com/arizona-framework/arizona/actions/workflows/node-js.yml)
