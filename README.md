@@ -100,6 +100,7 @@ render(Bindings) ->
     ?html(
         {main, [{id, ?get(id)}], [
             {h1, [], [~"Counter demo"]},
+            %% id is required -- it's how the diff engine routes patches to this component
             ?stateful(my_counter, #{id => ~"counter", count => 0})
         ]}
     ).
