@@ -22,7 +22,10 @@ minor versions. Pin a commit SHA in your deps if you need stability.
   `arizona_stateless` (pure templates)
 - **Streams** -- keyed collections with insert/delete/update/move/sort/limit
 - **SPA navigation** -- `az-navigate` links, server renders the next page over WebSocket
-- **PubSub, middlewares, on-mount hooks, element hooks** -- the usual extension points
+- **PubSub** -- `?subscribe`/`?unsubscribe` for cross-view, cross-tab messaging
+- **Route middlewares** -- gate or rewrite requests before mount (auth, sessions, URL projection)
+- **On-mount hooks** -- per-route pipeline that runs before every mount, including navigate
+- **Element hooks** -- client-side `mounted`/`updated`/`destroyed` callbacks via `az-hook`
 - **Framework-agnostic transport** -- cowboy is the default adapter, but optional
 
 ## Requirements
@@ -40,6 +43,8 @@ dependencies:
     cowboy
 ]}.
 ```
+
+For a stable build, swap `{branch, "main"}` for a commit SHA -- `{ref, "abc1234..."}`.
 
 Cowboy is required for the built-in HTTP/WebSocket transport. If you write your own
 `arizona_req` adapter, you can skip it.
