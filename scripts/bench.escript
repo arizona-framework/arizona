@@ -27,7 +27,8 @@ main(Args) ->
 
     Workloads = [
         {<<"render_view_small">>, fun bench_render_view_small/1},
-        {<<"diff_no_change">>, fun bench_diff_no_change/1}
+        {<<"diff_no_change">>, fun bench_diff_no_change/1},
+        {<<"diff_simple_event">>, fun bench_diff_simple_event/1}
     ],
     Results = [{Label, Fun(Runs)} || {Label, Fun} <- Workloads],
     [report(Label, Stats) || {Label, Stats} <- Results],
@@ -79,6 +80,37 @@ bench_diff_no_change(Runs) ->
     %% needed in the inner loop.
     Fun = fun() ->
         {ok, _} = arizona_socket:handle_in(Json, Socket),
+        ok
+    end,
+    run_workload(Fun, Runs).
+
+bench_diff_simple_event(Runs) ->
+    %% Mount once, then dispatch N `inc` events. Each event changes the
+    %% `count` binding, so `compute_changed/2` returns one key and
+    %% `arizona_diff:diff/4` emits one OP_TEXT op. Compared against
+    %% `diff_no_change`, the delta is the cost of actually running the
+    %% diff engine on a single-binding change -- the typical hot path
+    %% for stateful UIs reacting to user input.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
+    %% Sanity: inc must return {reply, Data, _} with non-empty Data
+    %% (encoded JSON, returned as an iolist by arizona_socket:encode_reply).
+    case arizona_socket:handle_in(Json, Socket) of
+        {reply, Data, _} ->
+            case iolist_size(Data) > 0 of
+                true ->
+                    ok;
+                false ->
+                    io:format("error: inc returned empty reply~n"),
+                    halt(1)
+            end;
+        Other ->
+            io:format("error: inc returned unexpected ~p~n", [Other]),
+            halt(1)
+    end,
+    Fun = fun() ->
+        {reply, _, _} = arizona_socket:handle_in(Json, Socket),
         ok
     end,
     run_workload(Fun, Runs).
