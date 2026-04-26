@@ -59,4 +59,14 @@ handle_event(~"update_unchanged", #{~"id" := Id}, Bindings) ->
     Items0 = maps:get(items, Bindings),
     SameItem = arizona_stream:get(Items0, Id),
     Items1 = arizona_stream:update(Items0, Id, SameItem),
+    {Bindings#{items => Items1}, #{}, []};
+handle_event(~"reset_with_overlap", #{~"value" := Value}, Bindings) ->
+    Items0 = maps:get(items, Bindings),
+    %% Replace every item, changing only field_a -- maximal overlap with
+    %% one differing field, exercising the per-item skip in smart_reset_items.
+    NewItems = [
+        Item#{field_a => Value}
+     || Item <- arizona_stream:to_list(Items0)
+    ],
+    Items1 = arizona_stream:reset(Items0, NewItems),
     {Bindings#{items => Items1}, #{}, []}.

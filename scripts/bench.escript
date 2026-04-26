@@ -41,6 +41,7 @@ main(Args) ->
         {<<"stream_reorder_100">>, fun bench_stream_reorder_100/1},
         {<<"stream_update_field_100">>, fun bench_stream_update_field_100/1},
         {<<"stream_update_unchanged_100">>, fun bench_stream_update_unchanged_100/1},
+        {<<"stream_reset_with_overlap_100">>, fun bench_stream_reset_with_overlap_100/1},
         {<<"http_get_e2e">>, fun bench_http_get_e2e/1},
         {<<"http_get_e2e_10c">>, fun bench_http_get_e2e_10c/1},
         {<<"ws_event_e2e">>, fun bench_ws_event_e2e/1},
@@ -231,6 +232,52 @@ bench_stream_update_unchanged_100(Runs) ->
         end
     end,
     arizona_bench_lib:run_workload(Fun, Runs).
+
+bench_stream_reset_with_overlap_100(Runs) ->
+    %% Mount arizona_bench_each_track with 100 rows, then dispatch
+    %% `reset_with_overlap` events that replace every row with a copy
+    %% differing only in `field_a` (varied per iteration to force a real
+    %% change). 100 rows × 20 dynamics each: with the reset fast path,
+    %% only the field_a-tracking dynamic re-evaluates per row -- 19/20
+    %% dynamics reuse old triples. Measures the smart_reset_items
+    %% per-item skip path.
+    FieldKeys = [list_to_atom("field_" ++ [K]) || K <- lists:seq($a, $t)],
+    Items = [
+        maps:from_list(
+            [{id, I} | [{Field, integer_to_binary(I)} || Field <- FieldKeys]]
+        )
+     || I <- lists:seq(1, 100)
+    ],
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(
+        arizona_bench_each_track, #{items => Items}, Req, #{}
+    ),
+    Counter = counters:new(1, []),
+    SanityJson = reset_event_json(0),
+    case arizona_socket:handle_in(SanityJson, Socket) of
+        {ok, _} -> ok;
+        {reply, _, _} -> ok;
+        Other ->
+            io:format("error: handle_in returned unexpected ~p~n", [Other]),
+            halt(1)
+    end,
+    Fun = fun() ->
+        N = counters:get(Counter, 1),
+        ok = counters:add(Counter, 1, 1),
+        Json = reset_event_json(N),
+        case arizona_socket:handle_in(Json, Socket) of
+            {ok, _} -> ok;
+            {reply, _, _} -> ok
+        end
+    end,
+    arizona_bench_lib:run_workload(Fun, Runs).
+
+reset_event_json(N) ->
+    iolist_to_binary(
+        json:encode(
+            [~"bench_each", ~"reset_with_overlap", #{~"value" => integer_to_binary(N)}]
+        )
+    ).
 
 bench_stream_reorder_100(Runs) ->
     %% Mount arizona_datatable seeded with a 100-row stream, then dispatch
