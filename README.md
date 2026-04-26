@@ -151,34 +151,30 @@ render(Bindings) ->
     ]).
 ```
 
-### 4. Wire up routes and start Cowboy
+### 4. Configure the server
 
-Start the listener from your application's `start/2` callback (or from a `rebar3 shell` one-liner
-for experimentation). The page's `id` is supplied here via the route's `bindings`:
+Add `arizona` to your app's `applications` list in `.app.src`:
 
 ```erlang
-%% src/my_app.erl
--module(my_app).
--behaviour(application).
--export([start/2, stop/1]).
+{applications, [kernel, stdlib, cowboy, arizona]}
+```
 
-start(_Type, _Args) ->
-    Routes = [
-        {live, ~"/", my_page, #{
-            layouts => [{my_layout, render}],
-            bindings => #{id => ~"page", title => ~"Counter demo"}
-        }},
-        {ws, ~"/ws", #{}},
-        {asset, ~"/assets", {priv_dir, arizona, "static/assets/js"}}
-    ],
-    {ok, _} = arizona_cowboy_server:start(http, #{
+Then declare routes in `config/sys.config`:
+
+```erlang
+[{arizona, [
+    {server, #{
         transport_opts => [{port, 4040}],
-        routes => Routes
-    }),
-    my_sup:start_link().
-
-stop(_State) ->
-    ok = arizona_cowboy_server:stop(http).
+        routes => [
+            {live, ~"/", my_page, #{
+                layouts => [{my_layout, render}],
+                bindings => #{id => ~"page", title => ~"Counter demo"}
+            }},
+            {ws, ~"/ws", #{}},
+            {asset, ~"/assets", {priv_dir, arizona, "static/assets/js"}}
+        ]
+    }}
+]}].
 ```
 
 ### 5. Run it
@@ -190,53 +186,8 @@ rebar3 shell
 Open <http://localhost:4040> and click the buttons -- the server renders the initial HTML, then
 pushes minimal diffs over WebSocket as the count changes.
 
-## Configuration
-
-As an alternative to starting the listener imperatively from your own `start/2` callback (step 4
-above), you can add `arizona` to your application's `applications` list and drive boot from
-`sys.config`.
-
-In your app's `.app.src`:
-
-```erlang
-{applications, [kernel, stdlib, cowboy, arizona]}
-```
-
-In `config/sys.config`:
-
-```erlang
-[{arizona, [
-    {server, #{
-        scheme => http,                               %% http | https
-        transport_opts => [{port, 4040}],
-        proto_opts => #{stream_handlers => [cowboy_compress_h, cowboy_stream_h]},
-        routes => [
-            {live, <<"/">>, my_page, #{
-                layouts => [{my_layout, render}],
-                bindings => #{id => <<"page">>, title => <<"Counter demo">>}
-            }},
-            {ws, <<"/ws">>, #{}},
-            {asset, <<"/assets">>, {priv_dir, arizona, "static/assets/js"}}
-        ]
-    }},
-    %% Dev-mode file watchers -- omit in production
-    {reloader, #{
-        enabled => true,
-        rules => [
-            #{directory => "src",
-              patterns => [".*\\.erl$"],
-              callback => fun arizona_reloader:reload_erl/1},
-            #{directory => "priv/static",
-              patterns => [".*\\.css$"],
-              callback => fun arizona_reloader:reload_css/1}
-        ]
-    }}
-]}].
-```
-
-On boot, arizona starts `arizona_pubsub`, spawns one watcher per reloader rule (if `enabled`), and
--- if `server` is set -- launches a Cowboy listener named `arizona_http`. Both `server` and
-`reloader` keys are optional: omit either to skip that subsystem.
+For dev-mode file watchers, custom schemes/proto_opts, or starting the listener imperatively from
+your own `start/2` callback, see [docs/architecture.md](docs/architecture.md).
 
 ## Navigation
 
