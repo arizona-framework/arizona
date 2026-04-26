@@ -34,7 +34,8 @@ main(Args) ->
         {<<"diff_no_change">>, fun bench_diff_no_change/1},
         {<<"diff_simple_event">>, fun bench_diff_simple_event/1},
         {<<"stream_insert_1k">>, fun bench_stream_insert_1k/1},
-        {<<"stream_reorder_100">>, fun bench_stream_reorder_100/1}
+        {<<"stream_reorder_100">>, fun bench_stream_reorder_100/1},
+        {<<"http_get_e2e">>, fun bench_http_get_e2e/1}
     ],
     Results = [{Label, Fun(Runs)} || {Label, Fun} <- Workloads],
     [report(Label, Stats) || {Label, Stats} <- Results],
@@ -222,6 +223,86 @@ bench_stream_reorder_100(Runs) ->
         ok
     end,
     run_workload(Fun, Runs).
+
+bench_http_get_e2e(Runs) ->
+    %% End-to-end HTTP GET bench: starts cowboy, opens a single keep-alive
+    %% connection, times GETs against `arizona_root_counter` wrapped in
+    %% `arizona_layout`. Measures the full request: gen_tcp + cowboy
+    %% parsing, Arizona's HTTP handler, view mount + render, response
+    %% writing.
+    %%
+    %% The TCP connection is reused across iterations (HTTP keep-alive)
+    %% so the connect cost is paid once at the start, not per request.
+    %% Cowboy listens on port 0 -- the OS assigns a free port and we
+    %% look it up via ranch:get_port/1, avoiding collisions with other
+    %% test processes.
+    {ok, _} = application:ensure_all_started(cowboy),
+    Routes = [
+        {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}}
+    ],
+    {ok, _} = arizona_cowboy_server:start(bench_http_e2e, #{
+        transport_opts => [{port, 0}],
+        %% Cowboy's default max_keepalive (100) closes the connection
+        %% well before the bench finishes (warmup + 100 trials *
+        %% 1000 ops = 102,000 reqs on one socket). Lift the cap.
+        proto_opts => #{max_keepalive => infinity},
+        routes => Routes
+    }),
+    Port = ranch:get_port(bench_http_e2e),
+    {ok, Sock} = gen_tcp:connect(
+        "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
+    ),
+    case http_get(Sock, Port) of
+        {200, Body} when byte_size(Body) > 0 ->
+            ok;
+        Other ->
+            io:format("error: GET returned ~p~n", [Other]),
+            halt(1)
+    end,
+    Fun = fun() ->
+        {200, _} = http_get(Sock, Port),
+        ok
+    end,
+    Stats = run_workload(Fun, Runs),
+    gen_tcp:close(Sock),
+    arizona_cowboy_server:stop(bench_http_e2e),
+    Stats.
+
+%% Send a single GET on an already-open keep-alive socket and read
+%% the response. Returns {Status, Body}.
+http_get(Sock, Port) ->
+    Req = [
+        "GET / HTTP/1.1\r\n",
+        "Host: 127.0.0.1:",
+        integer_to_list(Port),
+        "\r\n",
+        "Connection: keep-alive\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    inet:setopts(Sock, [{packet, http_bin}]),
+    {ok, {http_response, _, Status, _}} = gen_tcp:recv(Sock, 0, 5000),
+    Len = read_http_headers(Sock, 0),
+    inet:setopts(Sock, [{packet, raw}]),
+    Body =
+        case Len of
+            0 ->
+                <<>>;
+            _ ->
+                {ok, B} = gen_tcp:recv(Sock, Len, 5000),
+                B
+        end,
+    {Status, Body}.
+
+read_http_headers(Sock, Len) ->
+    case gen_tcp:recv(Sock, 0, 5000) of
+        {ok, {http_header, _, 'Content-Length', _, V}} ->
+            read_http_headers(Sock, binary_to_integer(V));
+        {ok, {http_header, _, _, _, _}} ->
+            read_http_headers(Sock, Len);
+        {ok, http_eoh} ->
+            Len
+    end.
 
 bench_mount_only(Runs) ->
     %% Each iteration spawns a fresh live process via arizona_socket:init/4
