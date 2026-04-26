@@ -1,6 +1,6 @@
 # Arizona
 
-Erlang/OTP template engine with server-side diffing. **This is a POC, not a LiveView clone.** As a POC, any code can be changed freely -- no backward compatibility concerns.
+Erlang/OTP real-time web framework with server-side diffing. The project is in the `0.x` series -- the API may change between minor versions, so changes don't need to preserve backward compatibility for now.
 
 Dependencies: `cowboy` (optional -- HTTP/WS server), `fs` (file system events for dev-mode watcher).
 

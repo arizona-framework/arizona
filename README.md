@@ -11,7 +11,8 @@ is a thin DOM patcher.
 ## Status ⚠️
 
 Arizona is in `0.x`. The core is functional and covered by tests, but the API may change between
-minor versions. Pin a commit SHA in your deps if you need stability.
+minor versions. Pin an exact version in your deps (e.g. `{arizona, "0.1.0"}`) if you need stability
+across upgrades.
 
 ## Features
 
@@ -34,20 +35,21 @@ minor versions. Pin a commit SHA in your deps if you need stability.
 
 ## Installation
 
-Arizona isn't on Hex yet -- pull it from GitHub's `main` branch. Add it to your `rebar.config`
-dependencies:
+Add Arizona to your `rebar.config` dependencies. Cowboy is required for the built-in
+HTTP/WebSocket transport; skip it only if you write your own `arizona_req` adapter.
 
 ```erlang
 {deps, [
-    {arizona, {git, "https://github.com/arizona-framework/arizona.git", {branch, "main"}}},
+    {arizona, "~> 0.1"},
     cowboy
 ]}.
 ```
 
-For a stable build, swap `{branch, "main"}` for a commit SHA -- `{ref, "abc1234..."}`.
+To track unreleased changes, swap the version for a git ref:
 
-Cowboy is required for the built-in HTTP/WebSocket transport. If you write your own
-`arizona_req` adapter, you can skip it.
+```erlang
+{arizona, {git, "https://github.com/arizona-framework/arizona.git", {branch, "main"}}}
+```
 
 ## Quick start
 
