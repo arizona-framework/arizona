@@ -1,6 +1,6 @@
 -module(arizona_leaky_mount).
 -include("arizona_stateful.hrl").
--export([mount/1, render/1, handle_event/3]).
+-export([mount/1, render/1]).
 
 %% Test fixture: mount/1 does an eager binding read against a synthetic map.
 %% Used to verify that eval_stateful brackets the mount lifecycle so the
@@ -13,8 +13,3 @@ mount(Bindings) ->
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html({'div', [{id, ?get(id)}], [~"leaky"]}).
-
--spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
-    az:handle_event_ret().
-handle_event(_E, _P, Bindings) ->
-    {Bindings, #{}, []}.
