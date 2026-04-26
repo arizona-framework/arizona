@@ -313,7 +313,7 @@ print_header(Runs, ProjectDir) ->
         ]
     ),
     io:format(
-        "~-26s ~8s ~8s ~8s ~8s ~12s~n",
+        "~-32s ~8s ~8s ~8s ~8s ~12s~n",
         ["workload", "mean", "stdev", "p50", "p99", "ops/s"]
     ).
 
@@ -327,7 +327,7 @@ report(Label, #{
     ops_per_s := OpsPerSec
 }) ->
     io:format(
-        "~-26s ~s ~s ~s ~s ~s~n",
+        "~-32s ~s ~s ~s ~s ~s~n",
         [
             Label,
             pad_left(fmt_time(MeanNs), 8),
