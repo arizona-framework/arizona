@@ -25,10 +25,14 @@ main(Args) ->
 
     print_header(Runs, ProjectDir),
 
-    Stats = bench_render_view_small(Runs),
-    report(<<"render_view_small">>, Stats),
+    Workloads = [
+        {<<"render_view_small">>, fun bench_render_view_small/1},
+        {<<"diff_no_change">>, fun bench_diff_no_change/1}
+    ],
+    Results = [{Label, Fun(Runs)} || {Label, Fun} <- Workloads],
+    [report(Label, Stats) || {Label, Stats} <- Results],
 
-    check_timetrap(Stats, Timetrap).
+    check_timetrap_all(Results, Timetrap).
 
 %% ---------------------------------------------------------------------------
 %% Workloads
@@ -52,6 +56,30 @@ bench_render_view_small(Runs) ->
     %% returned tree and biased the measurement upward by ~10%.
     Fun = fun() ->
         arizona_render:render_view_to_iolist(arizona_root_counter, Req, #{})
+    end,
+    run_workload(Fun, Runs).
+
+bench_diff_no_change(Runs) ->
+    %% Mount once, then dispatch N `noop` events. `noop` returns the same
+    %% bindings, so `compute_changed/2` is empty and `arizona_diff:diff/4`
+    %% short-circuits via the dep-skip fast path -- the cheapest event in
+    %% the system. If `compute_changed` or the dep-skip wiring regresses,
+    %% this workload spikes first.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    %% Pre-encode the JSON event payload outside the timed region so we're
+    %% only measuring handle_in + dispatch + diff, not term construction.
+    Json = iolist_to_binary(json:encode([~"counter", ~"noop", #{}])),
+    %% Sanity-check: noop returns {ok, _} (no ops, no effects). Fail loud
+    %% on a regression that would silently make the bench measure the
+    %% wrong path (e.g. if noop started returning {reply, ...}).
+    {ok, _} = arizona_socket:handle_in(Json, Socket),
+    %% The Socket record is invariant under noop dispatch (no field changes)
+    %% so we reuse the same Socket for every iteration -- no state threading
+    %% needed in the inner loop.
+    Fun = fun() ->
+        {ok, _} = arizona_socket:handle_in(Json, Socket),
+        ok
     end,
     run_workload(Fun, Runs).
 
@@ -179,14 +207,29 @@ git_short_sha(ProjectDir) ->
 %% Timetrap (optional CI gate)
 %% ---------------------------------------------------------------------------
 
-check_timetrap(_Stats, infinity) ->
+check_timetrap_all(_Results, infinity) ->
     ok;
-check_timetrap(#{mean_ns := MeanNs}, MaxNs) when MeanNs =< MaxNs ->
-    io:format("~ntimetrap: ~b ns <= ~b ns [PASS]~n", [trunc(MeanNs), MaxNs]),
-    ok;
-check_timetrap(#{mean_ns := MeanNs}, MaxNs) ->
-    io:format("~ntimetrap: ~b ns > ~b ns [FAIL]~n", [trunc(MeanNs), MaxNs]),
-    halt(1).
+check_timetrap_all(Results, MaxNs) ->
+    Failed = [
+        {Label, MeanNs}
+     || {Label, #{mean_ns := MeanNs}} <- Results, MeanNs > MaxNs
+    ],
+    case Failed of
+        [] ->
+            io:format("~ntimetrap: all workloads <= ~b ns [PASS]~n", [MaxNs]),
+            ok;
+        _ ->
+            lists:foreach(
+                fun({Label, MeanNs}) ->
+                    io:format(
+                        "~ntimetrap: ~s mean=~b ns > ~b ns [FAIL]~n",
+                        [Label, trunc(MeanNs), MaxNs]
+                    )
+                end,
+                Failed
+            ),
+            halt(1)
+    end.
 
 %% ---------------------------------------------------------------------------
 %% Args + paths
