@@ -29,11 +29,11 @@ across upgrades.
 - **Three handler kinds** -- `arizona_view` (route pages), `arizona_stateful` (components),
   `arizona_stateless` (pure templates)
 - **Streams** -- keyed collections with insert/delete/update/move/sort/limit
-- **SPA navigation** -- `az-navigate` links, server renders the next page over WebSocket
-- **PubSub** -- `?subscribe`/`?unsubscribe` for cross-view, cross-tab messaging
+- **SPA navigation** -- `az_navigate` links, server renders the next page over WebSocket
+- **PubSub** -- cross-view, cross-tab messaging via `arizona_pubsub`
 - **Route middlewares** -- gate or rewrite requests before mount (auth, sessions, URL projection)
 - **On-mount hooks** -- per-route pipeline that runs before every mount, including navigate
-- **Element hooks** -- client-side `mounted`/`updated`/`destroyed` callbacks via `az-hook`
+- **Element hooks** -- client-side `mounted`/`updated`/`destroyed` callbacks via `az_hook`
 - **Framework-agnostic transport** -- cowboy is the default adapter, but optional
 
 ## Requirements
