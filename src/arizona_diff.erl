@@ -45,6 +45,7 @@ never reach op-code targets.
 -export([diff/2]).
 -export([diff/3]).
 -export([diff/4]).
+-export([deps_changed/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -284,7 +285,7 @@ deleted_item_children(Pending, OldItems) ->
 item_child_views(ItemD, Acc) ->
     lists:foldl(
         fun
-            ({_Az, #{view_id := VId}}, A) -> [VId | A];
+            ({_Az, #{view_id := VId}, _Deps}, A) -> [VId | A];
             (_, A) -> A
         end,
         Acc,
@@ -304,8 +305,31 @@ carry_item_children(ChildViewIds, Old, New) ->
         ChildViewIds
     ).
 
+-doc """
+Returns `true` when any key in `Deps` also appears in `Changed`. Used by
+`diff/4` and the per-item skipping renderer to decide whether a dynamic
+needs re-evaluation. Walks the smaller map and probes the larger via
+`is_map_key/2` -- avoids the allocation of `maps:intersect/2`.
+""".
+-spec deps_changed(Deps, Changed) -> boolean() when
+    Deps :: map(),
+    Changed :: map().
 deps_changed(Deps, Changed) ->
-    map_size(maps:intersect(Deps, Changed)) > 0.
+    case map_size(Deps) =< map_size(Changed) of
+        true -> any_key_in(Deps, Changed);
+        false -> any_key_in(Changed, Deps)
+    end.
+
+any_key_in(Small, Large) ->
+    any_key_in_iter(maps:next(maps:iterator(Small)), Large).
+
+any_key_in_iter(none, _Large) ->
+    false;
+any_key_in_iter({K, _V, Iter}, Large) ->
+    case is_map_key(K, Large) of
+        true -> true;
+        false -> any_key_in_iter(maps:next(Iter), Large)
+    end.
 
 diff_stream(
     Az,
@@ -355,14 +379,14 @@ diff_stream_op(Az, {insert, Key, Item, Pos}, Rest, Source, Tmpl, SnapAcc, OldOrd
     stream_insert(Az, Key, Item, Pos, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
 diff_stream_op(Az, {delete, Key}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_delete(Az, Key, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
-diff_stream_op(Az, {update, Key, NewItem}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
-    stream_update(Az, Key, NewItem, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, {update, Key, NewItem, Changed}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_update(Az, Key, NewItem, Changed, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
 diff_stream_op(Az, {move, Key, AfterKey}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_move(Az, Key, AfterKey, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
 diff_stream_op(Az, reorder, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_reorder(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
-diff_stream_op(Az, reset, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
-    stream_reset(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views).
+diff_stream_op(Az, {reset, OldItems}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_reset(Az, OldItems, Rest, Source, Tmpl, SnapAcc, OldOrder, Views).
 
 stream_insert(Az, Key, Item, Pos, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     {ItemD, Views1} = arizona_eval:render_stream_item(Key, Item, Tmpl, Views0),
@@ -380,14 +404,18 @@ stream_delete(Az, Key, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
         diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views0),
     {[DelOp | RestOps], FinalSnap, Views1}.
 
-stream_update(Az, Key, NewItem, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
-    {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
+stream_update(Az, Key, NewItem, Changed, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SnapAcc of
         #{Key := OldD} ->
+            {NewD, Views1} =
+                arizona_eval:render_stream_item_skipping(
+                    Key, NewItem, OldD, Changed, Tmpl, Views0
+                ),
             stream_update_existing(
                 Az, Key, NewD, OldD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views1
             );
         #{} ->
+            {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
             stream_update_missing(Az, Key, NewD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views1)
     end.
 
@@ -434,7 +462,7 @@ stream_reorder(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
         diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, VKeys, Views0),
     {MoveOps ++ RestOps, FinalSnap, Views1}.
 
-stream_reset(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+stream_reset(Az, OldItems, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
     VSet = maps:from_keys(VKeys, true),
     RemOps = [
@@ -443,7 +471,7 @@ stream_reset(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     ],
     Kept = maps:with(VKeys, SnapAcc),
     {DiffOps, NewSnaps, Views1} =
-        smart_reset_items(Az, VKeys, Kept, Source#stream.items, Tmpl, Views0, #{}),
+        smart_reset_items(Az, VKeys, Kept, OldItems, Source#stream.items, Tmpl, Views0, #{}),
     MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept),
     {RestOps, FinalSnap, Views2} =
         diff_stream_pending(Az, Rest, Source, Tmpl, NewSnaps, VKeys, Views1),
@@ -476,61 +504,59 @@ diff_list_zip(Az, [NewD | NR], [OldD | OR], Views0) ->
             [] ->
                 RestOps;
             _ ->
-                [{_, OldKey} | _] = OldD,
+                [{_, OldKey, _} | _] = OldD,
                 [[?OP_ITEM_PATCH, Az, arizona_template:to_bin(OldKey), InnerOps] | RestOps]
         end,
     {Ops, NewTail, OldTail, Views2};
 diff_list_zip(_Az, NewTail, OldTail, Views) ->
     {[], NewTail, OldTail, Views}.
 
-smart_reset_items(_Az, [], _Kept, _ItemsMap, _Tmpl, Views, Snaps) ->
+smart_reset_items(_Az, [], _Kept, _OldItems, _ItemsMap, _Tmpl, Views, Snaps) ->
     {[], Snaps, Views};
-smart_reset_items(Az, [K | Rest], Kept, ItemsMap, Tmpl, Views0, Snaps) ->
-    Item = maps:get(K, ItemsMap),
-    {NewD, Views1} = arizona_eval:render_stream_item(K, Item, Tmpl, Views0),
-    NewSnaps = Snaps#{K => NewD},
+smart_reset_items(Az, [K | Rest], Kept, OldItems, ItemsMap, Tmpl, Views0, Snaps) ->
+    NewItem = maps:get(K, ItemsMap),
     case Kept of
         #{K := OldD} ->
+            {NewD, Views1} =
+                render_kept_with_skipping(K, NewItem, OldD, OldItems, Tmpl, Views0),
+            NewSnaps = Snaps#{K => NewD},
             {InnerOps, Views2} = diff_item_dynamics_v(NewD, OldD, Views1),
             case InnerOps of
                 [] ->
                     smart_reset_items(
-                        Az,
-                        Rest,
-                        Kept,
-                        ItemsMap,
-                        Tmpl,
-                        Views2,
-                        NewSnaps
+                        Az, Rest, Kept, OldItems, ItemsMap, Tmpl, Views2, NewSnaps
                     );
                 _ ->
                     PatchOp = [?OP_ITEM_PATCH, Az, arizona_template:to_bin(K), InnerOps],
                     {RestOps, FinalSnaps, Views3} =
                         smart_reset_items(
-                            Az,
-                            Rest,
-                            Kept,
-                            ItemsMap,
-                            Tmpl,
-                            Views2,
-                            NewSnaps
+                            Az, Rest, Kept, OldItems, ItemsMap, Tmpl, Views2, NewSnaps
                         ),
                     {[PatchOp | RestOps], FinalSnaps, Views3}
             end;
         #{} ->
+            {NewD, Views1} = arizona_eval:render_stream_item(K, NewItem, Tmpl, Views0),
+            NewSnaps = Snaps#{K => NewD},
             HTML = arizona_render:zip_item(Tmpl, NewD),
             InsOp = [?OP_INSERT, Az, arizona_template:to_bin(K), -1, HTML],
             {RestOps, FinalSnaps, Views2} =
                 smart_reset_items(
-                    Az,
-                    Rest,
-                    Kept,
-                    ItemsMap,
-                    Tmpl,
-                    Views1,
-                    NewSnaps
+                    Az, Rest, Kept, OldItems, ItemsMap, Tmpl, Views1, NewSnaps
                 ),
             {[InsOp | RestOps], FinalSnaps, Views2}
+    end.
+
+%% Render a kept item via the per-item skipping path when its old source
+%% is recoverable from the captured `OldItems`. Falls back to a full
+%% render if the key wasn't in the pre-reset items map (rare: limit-hidden
+%% then re-shown).
+render_kept_with_skipping(K, NewItem, OldD, OldItems, Tmpl, Views0) ->
+    case OldItems of
+        #{K := OldItem} ->
+            Changed = arizona_stream:compute_item_changed(OldItem, NewItem),
+            arizona_eval:render_stream_item_skipping(K, NewItem, OldD, Changed, Tmpl, Views0);
+        #{} ->
+            arizona_eval:render_stream_item(K, NewItem, Tmpl, Views0)
     end.
 
 apply_limit(
@@ -735,11 +761,11 @@ make_op(Az, New, _Old) ->
 
 diff_item_dynamics_v([], [], Views) ->
     {[], Views};
-diff_item_dynamics_v([{Az, _} | NR], [{Az, #{diff := false}} | OR], Views0) ->
+diff_item_dynamics_v([{Az, _, _} | NR], [{Az, #{diff := false}, _} | OR], Views0) ->
     diff_item_dynamics_v(NR, OR, Views0);
-diff_item_dynamics_v([{Az, Same} | NR], [{Az, Same} | OR], Views0) ->
+diff_item_dynamics_v([{Az, Same, _} | NR], [{Az, Same, _} | OR], Views0) ->
     diff_item_dynamics_v(NR, OR, Views0);
-diff_item_dynamics_v([{Az, New} | NR], [{Az, Old} | OR], Views0) ->
+diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
     case {New, Old} of
         {#{t := ?EACH, source := Src, template := Tmpl}, #{t := ?EACH}} ->
             EachDesc = #{source => Src, template => Tmpl},

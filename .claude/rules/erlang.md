@@ -120,3 +120,19 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?send(ViewId, Msg)` | `arizona_live:send(ViewId, Msg)` -- send to specific view (stateful only) |
 | `?send_after(Time, Msg)` | `arizona_live:send_after(?get(id), Time, Msg)` -- delayed send to current view (stateful only) |
 | `?send_after(ViewId, Time, Msg)` | `arizona_live:send_after(ViewId, Time, Msg)` -- delayed send to specific view (stateful only) |
+
+## Where to read bindings
+
+`?get` (and friends) record a dependency for diff tracking. The dependency is
+attributed to whichever dynamic's closure is currently being evaluated. Two
+consequences:
+
+- Read outer bindings in **props expressions**, not in callback or lifecycle
+  bodies. `?stateless(fun bar/1, #{x => ?get(x)})` and
+  `?stateful(handler, #{x => ?get(x)})` record `x` on the outer dynamic
+  correctly. Eager `?get` calls inside a `?stateless` callback body, or
+  inside a stateful handler's `mount/1` / `handle_update/2`, are isolated
+  by the eval wraps and will not record at the outer level.
+- Prefer named fun references (`?stateless(fun bar/1, Props)`,
+  `?stateless(Mod, Fn, Props)`). They cannot close over outer `Bindings`,
+  removing the footgun entirely.

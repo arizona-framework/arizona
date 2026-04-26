@@ -52,6 +52,7 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([eval_each_def/1]).
 -export([eval_stream_items/4]).
 -export([render_stream_item/4]).
+-export([render_stream_item_skipping/6]).
 -export([render_stream_items_simple/3]).
 -export([render_list_items/3]).
 -export([render_list_items_simple/2]).
@@ -158,27 +159,73 @@ threading view state. Returns a `#{Key => ItemD}` map and updated views.
     ItemsMap :: #{term() => term()},
     Template :: map(),
     Views :: {map(), map()},
-    ItemSnaps :: #{term() => [{arizona_template:az(), term()}]},
+    ItemSnaps :: #{term() => [{arizona_template:az(), term(), map()}]},
     Views1 :: {map(), map()}.
 eval_stream_items(Keys, ItemsMap, Tmpl, Views) ->
     eval_stream_items(Keys, ItemsMap, Tmpl, Views, #{}).
 
 -doc """
 Renders a single stream item by evaluating its dynamics with view tracking.
-Returns `{ItemD, Views1}` where `ItemD` is `[{Az, Value}]`.
+Returns `{ItemD, Views1}` where `ItemD` is `[{Az, Value, Deps}]`.
 """.
 -spec render_stream_item(Key, Item, Template, Views) -> {ItemD, Views1} when
     Key :: term(),
     Item :: term(),
     Template :: map(),
     Views :: {map(), map()},
-    ItemD :: [{arizona_template:az(), term()}],
+    ItemD :: [{arizona_template:az(), term(), map()}],
     Views1 :: {map(), map()}.
 render_stream_item(Key, Item, #{d := DFun}, Views0) ->
     Dynamics = DFun(Item, Key),
-    {Triples, Views1} = eval_dynamics_v(Dynamics, Views0),
-    D = [{Az, Val} || {Az, Val, _Deps} <:- Triples],
-    {D, Views1}.
+    eval_dynamics_v(Dynamics, Views0).
+
+-doc """
+Re-renders a stream item using `Changed` (set of fields differing between
+old and new item) and the previous `OldItemD` to skip per-item dynamics
+whose deps don't intersect with `Changed`. Reused dynamics carry their
+old `{Az, Val, Deps}` triple, so the downstream value comparison emits
+no op for them.
+""".
+-spec render_stream_item_skipping(Key, NewItem, OldItemD, Changed, Template, Views) ->
+    {ItemD, Views1}
+when
+    Key :: term(),
+    NewItem :: term(),
+    OldItemD :: [{arizona_template:az(), term(), map()}],
+    Changed :: map(),
+    Template :: map(),
+    Views :: {map(), map()},
+    ItemD :: [{arizona_template:az(), term(), map()}],
+    Views1 :: {map(), map()}.
+render_stream_item_skipping(Key, NewItem, OldItemD, Changed, #{d := DFun}, Views0) ->
+    case map_size(Changed) of
+        0 ->
+            %% No fields differ -- old item triples are reusable as-is.
+            {OldItemD, Views0};
+        _ ->
+            Dynamics = DFun(NewItem, Key),
+            eval_or_reuse_per_item(Dynamics, OldItemD, Changed, Views0)
+    end.
+
+%% Empty per-item deps mean either "static" or "uses pattern destructure"
+%% (e.g. `fun(#{text := T}, _) -> {li, [], T} end`). We can't tell, so we
+%% must re-evaluate to be safe. Skipping is only sound when deps are
+%% explicit and don't intersect Changed.
+eval_or_reuse_per_item([], [], _Changed, Views) ->
+    {[], Views};
+eval_or_reuse_per_item([Def | DR], [{Az, OldVal, OldDeps} | OR], Changed, Views0) ->
+    case can_reuse(OldDeps, Changed) of
+        true ->
+            {Rest, Views1} = eval_or_reuse_per_item(DR, OR, Changed, Views0),
+            {[{Az, OldVal, OldDeps} | Rest], Views1};
+        false ->
+            {NewAz, NewVal, NewDeps, Views1} = eval_one_v_flat(Def, Views0),
+            {Rest, Views2} = eval_or_reuse_per_item(DR, OR, Changed, Views1),
+            {[{NewAz, NewVal, NewDeps} | Rest], Views2}
+    end.
+
+can_reuse(OldDeps, Changed) ->
+    map_size(OldDeps) > 0 andalso not arizona_diff:deps_changed(OldDeps, Changed).
 
 -doc """
 Renders stream items without view tracking. Returns `#{Key => ItemD}`.
@@ -187,7 +234,7 @@ Renders stream items without view tracking. Returns `#{Key => ItemD}`.
     Keys :: [term()],
     ItemsMap :: #{term() => term()},
     Template :: map(),
-    ItemSnaps :: #{term() => [{arizona_template:az(), term()}]}.
+    ItemSnaps :: #{term() => [{arizona_template:az(), term(), map()}]}.
 render_stream_items_simple(Keys, ItemsMap, Tmpl) ->
     render_stream_items_simple(Keys, ItemsMap, Tmpl, #{}).
 
@@ -198,7 +245,7 @@ Renders list items with view tracking. Returns `{[ItemD], Views1}`.
     Items :: [term()],
     Template :: map(),
     Views :: {map(), map()},
-    ItemDs :: [[{arizona_template:az(), term()}]],
+    ItemDs :: [[{arizona_template:az(), term(), map()}]],
     Views1 :: {map(), map()}.
 render_list_items(Items, #{d := DFun}, Views) ->
     render_list_items1(Items, DFun, Views).
@@ -209,9 +256,9 @@ Renders list items without view tracking. Returns `[ItemD]`.
 -spec render_list_items_simple(Items, Template) -> ItemDs when
     Items :: [term()],
     Template :: map(),
-    ItemDs :: [[{arizona_template:az(), term()}]].
+    ItemDs :: [[{arizona_template:az(), term(), map()}]].
 render_list_items_simple(Items, #{d := DFun}) ->
-    [eval_dynamics(DFun(Item)) || Item <- Items].
+    [[{Az, Val, #{}} || {Az, Val} <- eval_dynamics(DFun(Item))] || Item <- Items].
 
 -doc """
 Renders map entries without view tracking. Returns `[ItemD]`.
@@ -219,10 +266,12 @@ Renders map entries without view tracking. Returns `[ItemD]`.
 -spec render_map_items_simple(Map, Template) -> ItemDs when
     Map :: map(),
     Template :: map(),
-    ItemDs :: [[{arizona_template:az(), term()}]].
+    ItemDs :: [[{arizona_template:az(), term(), map()}]].
 render_map_items_simple(Map, #{d := DFun}) ->
     maps:fold(
-        fun(K, V, Acc) -> [eval_dynamics(DFun(K, V)) | Acc] end,
+        fun(K, V, Acc) ->
+            [[{Az, Val, #{}} || {Az, Val} <- eval_dynamics(DFun(K, V))] | Acc]
+        end,
         [],
         Map
     ).
@@ -348,7 +397,10 @@ eval_val_v(#{t := ?EACH, source := #stream{} = Source, template := Tmpl}, Views)
 eval_val_v(#{t := ?EACH, source := Source, template := Tmpl}, Views) when is_map(Source) ->
     eval_each_map(Source, Tmpl, Views);
 eval_val_v(#{callback := Callback, props := Props}, Views) ->
-    eval_val_v(Callback(Props), Views);
+    %% Bracket the whole stateless recursion so eager ?get calls inside the
+    %% callback body (or any unwrapping that follows it) don't leak into the
+    %% outer dynamic's tracked deps.
+    with_saved_deps(fun() -> eval_val_v(Callback(Props), Views) end);
 eval_val_v(#{s := _, d := _} = Tmpl, Views) ->
     eval_template(Tmpl, Views);
 eval_val_v(Val, Views) ->
@@ -364,8 +416,11 @@ with_saved_deps(Fun) ->
 
 eval_stateful(H, Props, {Old, New}) ->
     Id = maps:get(id, Props),
-    {B1, Resets} = mount_or_update_stateful(H, Props, Id, Old),
+    %% Bracket the whole lifecycle. mount/1 and handle_update/2 callbacks
+    %% are user code; their ?get calls would otherwise land in the outer
+    %% dynamic's tracked deps.
     with_saved_deps(fun() ->
+        {B1, Resets} = mount_or_update_stateful(H, Props, Id, Old),
         Tmpl = arizona_handler:call_render(H, B1),
         {ChildTriples, {Old, New1}} = eval_dynamics_v(maps:get(d, Tmpl), {Old, New}),
         {ChildD, ChildDeps} = arizona_template:split_triples(ChildTriples),
@@ -415,8 +470,7 @@ render_map_items(Map, #{d := DFun}, Views) ->
         fun(K, V, {Acc, V0}) ->
             Dynamics = DFun(K, V),
             {Triples, V1} = eval_dynamics_v(Dynamics, V0),
-            D = [{Az, Val} || {Az, Val, _Deps} <:- Triples],
-            {[D | Acc], V1}
+            {[Triples | Acc], V1}
         end,
         {[], Views},
         Map
@@ -464,16 +518,15 @@ render_stream_items_simple([K | Rest], ItemsMap, Tmpl, Acc) ->
 
 render_stream_item_simple(Key, Item, #{d := DFun}) ->
     Dynamics = DFun(Item, Key),
-    eval_dynamics(Dynamics).
+    [{Az, Val, #{}} || {Az, Val} <- eval_dynamics(Dynamics)].
 
 render_list_items1([], _DFun, Views) ->
     {[], Views};
 render_list_items1([Item | Rest], DFun, Views0) ->
     Dynamics = DFun(Item),
     {Triples, Views1} = eval_dynamics_v(Dynamics, Views0),
-    D = [{Az, Val} || {Az, Val, _Deps} <:- Triples],
     {RestD, Views2} = render_list_items1(Rest, DFun, Views1),
-    {[D | RestD], Views2}.
+    {[Triples | RestD], Views2}.
 
 -ifdef(TEST).
 
@@ -514,7 +567,7 @@ eval_map_simple_test() ->
     %% Each item has key and value dynamics
     lists:foreach(
         fun(Item) ->
-            [{~"0", Key}, {~"1", Val}] = Item,
+            [{~"0", Key, _}, {~"1", Val, _}] = Item,
             ?assert(is_binary(Key)),
             ?assert(is_binary(Val))
         end,
@@ -537,7 +590,7 @@ eval_map_single_entry_test() ->
         d => fun(K, V) -> [{~"0", fun() -> K end}, {~"1", fun() -> V end}] end,
         f => ~"test"
     },
-    [[{~"0", ~"x"}, {~"1", ~"1"}]] = render_map_items_simple(#{~"x" => ~"1"}, Tmpl).
+    [[{~"0", ~"x", _}, {~"1", ~"1", _}]] = render_map_items_simple(#{~"x" => ~"1"}, Tmpl).
 
 eval_map_with_views_test() ->
     Map = #{~"a" => ~"1"},
