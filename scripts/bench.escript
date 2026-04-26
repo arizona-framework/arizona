@@ -233,8 +233,10 @@ bench_stream_update_unchanged_100(Runs) ->
         json:encode([~"bench_each", ~"update_unchanged", #{~"id" => 1}])
     ),
     case arizona_socket:handle_in(Json, Socket) of
-        {ok, _} -> ok;
-        {reply, _, _} -> ok;
+        {ok, _} ->
+            ok;
+        {reply, _, _} ->
+            ok;
         Other ->
             io:format("error: handle_in returned unexpected ~p~n", [Other]),
             halt(1)
@@ -269,8 +271,10 @@ bench_stream_reset_with_overlap_100(Runs) ->
     Counter = counters:new(1, []),
     SanityJson = reset_event_json(0),
     case arizona_socket:handle_in(SanityJson, Socket) of
-        {ok, _} -> ok;
-        {reply, _, _} -> ok;
+        {ok, _} ->
+            ok;
+        {reply, _, _} ->
+            ok;
         Other ->
             io:format("error: handle_in returned unexpected ~p~n", [Other]),
             halt(1)
@@ -515,7 +519,12 @@ bench_pubsub_broadcast_100(Runs) ->
      || _ <- lists:seq(1, 100)
     ],
     %% Wait for all subs to register before measuring.
-    _ = [receive {ready, P} -> ok end || P <- Subs],
+    _ = [
+        receive
+            {ready, P} -> ok
+        end
+     || P <- Subs
+    ],
     Trial = fun() ->
         T0 = erlang:monotonic_time(nanosecond),
         arizona_pubsub:broadcast(Topic, ping),
