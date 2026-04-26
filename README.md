@@ -11,7 +11,7 @@ is a thin DOM patcher.
 ## Status
 
 Arizona is in `0.x`. The core is functional and covered by tests, but the API may change between
-minor versions. Pin a version in your deps.
+minor versions. Pin a commit SHA in your deps if you need stability.
 
 ## Features
 
@@ -46,7 +46,7 @@ Cowboy is required for the built-in HTTP/WebSocket transport. If you write your 
 
 ## Quick start
 
-A page with an embedded counter -- five files.
+A page with an embedded counter.
 
 ### 1. The counter component
 
@@ -81,6 +81,10 @@ handle_event(~"dec", _Payload, Bindings) ->
 `?get(count)` registers `count` as a dependency of that template slot. When `handle_event` returns
 new bindings, only slots whose tracked keys changed re-render -- the `<span>` patches; the buttons
 don't.
+
+The tuples carry more than just bindings: `mount/1` returns `{Bindings, Resets}` (an explicit
+slot-reset map -- usually `#{}`), and `handle_event/3` returns `{Bindings, Resets, Effects}` where
+`Effects` is a list of `arizona_js` commands (`set_title`, `navigate`, …) executed on the client.
 
 ### 2. The parent page
 
