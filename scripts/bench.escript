@@ -46,6 +46,7 @@ main(Args) ->
         {<<"stream_reset_with_overlap_100">>, fun bench_stream_reset_with_overlap_100/1},
         {<<"http_get_e2e">>, fun bench_http_get_e2e/1},
         {<<"http_get_e2e_10c">>, fun bench_http_get_e2e_10c/1},
+        {<<"http_get_e2e_each">>, fun bench_http_get_e2e_each/1},
         {<<"ws_event_e2e">>, fun bench_ws_event_e2e/1},
         {<<"ws_event_e2e_10c">>, fun bench_ws_event_e2e_10c/1}
     ],
@@ -324,6 +325,36 @@ bench_http_get_e2e(Runs) ->
             case arizona_bench_lib:http_get(Sock, Port) of
                 {200, Body} when byte_size(Body) > 0 ->
                     ok;
+                Other ->
+                    io:format("error: GET returned ~p~n", [Other]),
+                    halt(1)
+            end,
+            Fun = fun() ->
+                {200, _} = arizona_bench_lib:http_get(Sock, Port),
+                ok
+            end,
+            arizona_bench_lib:run_workload(Fun, Runs)
+        end)
+    end).
+
+bench_http_get_e2e_each(Runs) ->
+    %% End-to-end HTTP GET against arizona_about with a 100-tag binding,
+    %% wrapped in arizona_layout. Exercises a real-world SSR path:
+    %% cowboy parsing + view mount/render + `?each` over 100 items +
+    %% layout wrapping + response writing. The trivial counter view in
+    %% `http_get_e2e` is too small to surface render-side regressions
+    %% on heavier pages.
+    Tags = [iolist_to_binary(io_lib:format("tag~b", [I])) || I <- lists:seq(1, 100)],
+    Routes = [
+        {live, <<"/">>, arizona_about, #{
+            layouts => [{arizona_layout, render}],
+            bindings => #{tags => Tags}
+        }}
+    ],
+    arizona_bench_lib:with_cowboy(bench_http_e2e_each, Routes, fun(Port) ->
+        arizona_bench_lib:with_http_socket(Port, fun(Sock) ->
+            case arizona_bench_lib:http_get(Sock, Port) of
+                {200, Body} when byte_size(Body) > 0 -> ok;
                 Other ->
                     io:format("error: GET returned ~p~n", [Other]),
                     halt(1)
