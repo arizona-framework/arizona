@@ -32,7 +32,8 @@ main(Args) ->
         {<<"render_each_100">>, fun bench_render_each_100/1},
         {<<"mount_only">>, fun bench_mount_only/1},
         {<<"diff_no_change">>, fun bench_diff_no_change/1},
-        {<<"diff_simple_event">>, fun bench_diff_simple_event/1}
+        {<<"diff_simple_event">>, fun bench_diff_simple_event/1},
+        {<<"stream_insert_1k">>, fun bench_stream_insert_1k/1}
     ],
     Results = [{Label, Fun(Runs)} || {Label, Fun} <- Workloads],
     [report(Label, Stats) || {Label, Stats} <- Results],
@@ -134,6 +135,55 @@ bench_render_each_100(Runs) ->
         arizona_render:render_view_to_iolist(arizona_about, Req, Opts)
     end,
     run_workload(Fun, Runs).
+
+bench_stream_insert_1k(Runs) ->
+    %% Per trial: insert 1000 unique items into a fresh empty stream
+    %% (direct calls to arizona_stream:insert/2 -- no view, no diff).
+    %% Reports the per-insert cost averaged across stream sizes 0..999.
+    %%
+    %% This is the workload designed to catch O(n) regressions in
+    %% insert/2 (every additional `Order ++ [Key]` walks the order list).
+    %% A fix that keeps insert at O(1) leaves per-op time roughly
+    %% constant; an O(n) regression makes per-op time scale with stream
+    %% size, so doubling the batch size doubles the reported per-op
+    %% mean. Watch for that ratio in future runs.
+    %%
+    %% Uses a custom trial loop instead of run_workload because the unit
+    %% of work here is "1000 inserts as a batch" -- the fresh stream
+    %% must be re-created at the start of every trial, not every op.
+    KeyFun = fun(#{id := Id}) -> Id end,
+    Items = [#{id => I, text => integer_to_binary(I)} || I <- lists:seq(1, 1000)],
+    %% Sanity: a full batch produces the expected number of items.
+    SampleStream = lists:foldl(
+        fun(I, S) -> arizona_stream:insert(S, I) end,
+        arizona_stream:new(KeyFun),
+        Items
+    ),
+    case length(arizona_stream:to_list(SampleStream)) of
+        1000 ->
+            ok;
+        Other ->
+            io:format("error: expected 1000 stream items, got ~p~n", [Other]),
+            halt(1)
+    end,
+    Trial = fun() ->
+        Stream0 = arizona_stream:new(KeyFun),
+        T0 = erlang:monotonic_time(nanosecond),
+        _ = lists:foldl(fun(I, S) -> arizona_stream:insert(S, I) end, Stream0, Items),
+        T1 = erlang:monotonic_time(nanosecond),
+        (T1 - T0) / 1000
+    end,
+    %% Warmup
+    lists:foreach(fun(_) -> Trial() end, lists:seq(1, ?WARMUP)),
+    PerOpNs = [
+        begin
+            erlang:garbage_collect(self()),
+            Trial()
+        end
+     || _ <- lists:seq(1, Runs)
+    ],
+    Stats = stats(PerOpNs),
+    Stats#{ops_per_trial => 1000}.
 
 bench_mount_only(Runs) ->
     %% Each iteration spawns a fresh live process via arizona_socket:init/4
