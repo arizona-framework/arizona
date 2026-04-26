@@ -35,7 +35,8 @@ main(Args) ->
         {<<"diff_simple_event">>, fun bench_diff_simple_event/1},
         {<<"stream_insert_1k">>, fun bench_stream_insert_1k/1},
         {<<"stream_reorder_100">>, fun bench_stream_reorder_100/1},
-        {<<"http_get_e2e">>, fun bench_http_get_e2e/1}
+        {<<"http_get_e2e">>, fun bench_http_get_e2e/1},
+        {<<"ws_event_e2e">>, fun bench_ws_event_e2e/1}
     ],
     Results = [{Label, Fun(Runs)} || {Label, Fun} <- Workloads],
     [report(Label, Stats) || {Label, Stats} <- Results],
@@ -303,6 +304,127 @@ read_http_headers(Sock, Len) ->
         {ok, http_eoh} ->
             Len
     end.
+
+bench_ws_event_e2e(Runs) ->
+    %% End-to-end WS event bench: starts cowboy with a WS route, opens a
+    %% single WS connection, times `inc` event roundtrips. Each iteration
+    %% sends one text frame and reads one reply frame -- the full path:
+    %% gen_tcp send + cowboy ws handler + arizona_socket:handle_in +
+    %% arizona_live event dispatch + diff + reply encode + gen_tcp recv.
+    %%
+    %% WS frame helpers (encode/decode) are inline lifts from
+    %% test/arizona_cowboy_ws_SUITE.erl:659-793. If a future bench
+    %% workload (or a refactor of the WS suite) needs them, lift to a
+    %% shared module then. For now, the duplication is contained.
+    {ok, _} = application:ensure_all_started(cowboy),
+    Routes = [
+        {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
+        {ws, <<"/ws">>, #{}}
+    ],
+    {ok, _} = arizona_cowboy_server:start(bench_ws_e2e, #{
+        transport_opts => [{port, 0}],
+        proto_opts => #{max_keepalive => infinity},
+        routes => Routes
+    }),
+    Port = ranch:get_port(bench_ws_e2e),
+    {ok, Sock} = ws_connect("127.0.0.1", Port, <<"/">>),
+    Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
+    ok = ws_send(Sock, Json),
+    case ws_recv(Sock, 5000) of
+        {text, Reply} when byte_size(Reply) > 0 ->
+            ok;
+        Other ->
+            io:format("error: WS inc returned ~p~n", [Other]),
+            halt(1)
+    end,
+    Fun = fun() ->
+        ok = ws_send(Sock, Json),
+        {text, _} = ws_recv(Sock, 5000),
+        ok
+    end,
+    Stats = run_workload(Fun, Runs),
+    gen_tcp:close(Sock),
+    arizona_cowboy_server:stop(bench_ws_e2e),
+    Stats.
+
+%% --- WS client helpers (inline lifts from arizona_cowboy_ws_SUITE) ---
+
+ws_connect(Host, Port, Path) ->
+    {ok, Sock} = gen_tcp:connect(
+        Host, Port, [binary, {active, false}, {packet, http_bin}]
+    ),
+    ok = ws_handshake(Sock, Port, Path),
+    ok = inet:setopts(Sock, [{packet, raw}]),
+    {ok, Sock}.
+
+ws_handshake(Sock, Port, Path) ->
+    Key = base64:encode(crypto:strong_rand_bytes(16)),
+    Req = [
+        "GET /ws?_az_path=",
+        uri_string:quote(Path),
+        " HTTP/1.1\r\n",
+        "Host: 127.0.0.1:",
+        integer_to_list(Port),
+        "\r\n",
+        "Upgrade: websocket\r\n",
+        "Connection: Upgrade\r\n",
+        "Sec-WebSocket-Key: ",
+        Key,
+        "\r\n",
+        "Sec-WebSocket-Version: 13\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, {http_response, _, 101, _}} = gen_tcp:recv(Sock, 0, 5000),
+    drain_ws_headers(Sock).
+
+drain_ws_headers(Sock) ->
+    case gen_tcp:recv(Sock, 0, 5000) of
+        {ok, http_eoh} -> ok;
+        {ok, {http_header, _, _, _, _}} -> drain_ws_headers(Sock)
+    end.
+
+ws_send(Sock, Payload) ->
+    Frame = ws_encode_text(iolist_to_binary(Payload)),
+    gen_tcp:send(Sock, Frame).
+
+ws_recv(Sock, Timeout) ->
+    case gen_tcp:recv(Sock, 0, Timeout) of
+        {ok, Data} -> ws_decode(Data);
+        {error, Reason} -> {error, Reason}
+    end.
+
+ws_encode_text(Payload) ->
+    Len = byte_size(Payload),
+    Mask = crypto:strong_rand_bytes(4),
+    Masked = ws_mask(Payload, Mask, 0, <<>>),
+    case Len of
+        L when L < 126 ->
+            <<1:1, 0:3, 1:4, 1:1, L:7, Mask/binary, Masked/binary>>;
+        L when L < 65536 ->
+            <<1:1, 0:3, 1:4, 1:1, 126:7, L:16, Mask/binary, Masked/binary>>;
+        L ->
+            <<1:1, 0:3, 1:4, 1:1, 127:7, L:64, Mask/binary, Masked/binary>>
+    end.
+
+ws_mask(<<>>, _Mask, _I, Acc) ->
+    Acc;
+ws_mask(<<B, Rest/binary>>, Mask, I, Acc) ->
+    <<_:I/binary, M, _/binary>> = <<Mask/binary, Mask/binary, Mask/binary, Mask/binary>>,
+    ws_mask(Rest, Mask, (I + 1) rem 4, <<Acc/binary, (B bxor M)>>).
+
+ws_decode(<<_Fin:1, _Rsv:3, Opcode:4, 0:1, Len:7, Rest/binary>>) when Len < 126 ->
+    Payload = binary:part(Rest, 0, Len),
+    {ws_opcode_to_type(Opcode), Payload};
+ws_decode(<<_Fin:1, _Rsv:3, Opcode:4, 0:1, 126:7, Len:16, Rest/binary>>) ->
+    Payload = binary:part(Rest, 0, Len),
+    {ws_opcode_to_type(Opcode), Payload};
+ws_decode(Data) ->
+    {raw, Data}.
+
+ws_opcode_to_type(1) -> text;
+ws_opcode_to_type(2) -> binary;
+ws_opcode_to_type(_) -> unknown.
 
 bench_mount_only(Runs) ->
     %% Each iteration spawns a fresh live process via arizona_socket:init/4
