@@ -86,18 +86,18 @@ the `Changed` map and skips re-evaluation when they don't intersect.
 
 The mechanism is a single process-dictionary slot, `'$arizona_deps'`:
 
-- `arizona_eval:eval_one_v/2` brackets each dynamic with
+- `eval_one_v` (in `arizona_eval`) brackets each dynamic with
   `erlang:put('$arizona_deps', #{})` at entry and `erlang:erase` at exit.
-- `arizona_template:get/2,3`, `get_lazy/3`, and `track/1` write the read
-  key into the slot.
+- `arizona_template:get/2,3`, `arizona_template:get_lazy/3`, and
+  `arizona_template:track/1` write the read key into the slot.
 - The dynamic's deps are read back at `erlang:erase` and stored on the
   snapshot (parallel to `d`).
 
 **Per-dynamic isolation invariant:** every nested-template entry point
-runs inside `with_saved_deps/1` (`arizona_eval`), which snapshots the slot
-before entering and restores it after. Without this, an inner template's
-`?get` calls would land in the outer dynamic's slot and pollute its deps.
-Bracketed entry points and what each covers:
+runs inside a `with_saved_deps` wrapper (in `arizona_eval`), which
+snapshots the slot before entering and restores it after. Without this,
+an inner template's `?get` calls would land in the outer dynamic's slot
+and pollute its deps. Bracketed entry points and what each covers:
 
 - `eval_template` -- the inner template's per-dynamic eval loop
 - `eval_each` -- per-item rendering (list, stream, map sources)
@@ -107,8 +107,8 @@ Bracketed entry points and what each covers:
   `#{callback := _, props := _}` descriptors, including the callback
   body and any subsequent unwrapping
 
-Inner *dynamics* re-bracket their own slot via `eval_one_v`, so
-per-inner-dynamic deps are independent of outer.
+Inner *dynamics* re-bracket their own slot, so per-inner-dynamic deps are
+independent of outer.
 
 **Usage convention:** outer-scope `?get` reads belong in the props
 expression of `?stateful`/`?stateless` -- the parse transform places them
