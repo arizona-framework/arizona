@@ -10,6 +10,7 @@ SHELL := /bin/bash
 	check check-dirty check-fast check-erl check-fmt check-lint check-hank check-xref check-dialyzer check-js \
 	build-js analyze-js \
 	test test-eunit test-ct test-erl test-js test-e2e \
+	bench \
 	cover cover-erl cover-js \
 	doc doc-erl doc-js \
 	setup-e2e clean
@@ -119,6 +120,14 @@ test-e2e-parallel:
 
 test-e2e-sequential:
 	npx playwright test --project sequential
+
+# Performance bench. Intentionally NOT wired into ci/precommit:
+# numbers are noisy under shared CI runners and need human comparison.
+# Compile under the test profile so test/support/ fixtures are on the path.
+# Pass extra args via ARGS, e.g.:
+#   make bench ARGS="--only diff_no_change --only diff_simple_event"
+bench: compile-test
+	./scripts/bench.escript $(ARGS)
 
 cover: cover-erl cover-js
 
