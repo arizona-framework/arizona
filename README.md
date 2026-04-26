@@ -15,32 +15,17 @@ minor versions. Pin a version in your deps.
 
 ## Features
 
-- **Server-side rendering + live updates**: SSR for the first page load, WebSocket for real-time
-  changes
-- **Erlang-native templates**: `{Tag, Attrs, Children}` tuples compiled at build time, no separate
-  template language
-- **Compile-time diffing**: fingerprinted statics sent once, only dynamic values cross the wire
-- **Handler taxonomy**: `arizona_view` for route-level pages (`mount/2` takes Bindings + Request),
-  `arizona_stateful` for embeddable components (`mount/1`), `arizona_stateless` for pure
-  templates. All three share `render/1`, `handle_event/3`, `handle_info/2`, `handle_update/2`,
-  `unmount/1` via `arizona_handler`
-- **Request abstraction**: `arizona_req` is an opaque, adapter-pluggable request with eager
-  `method`/`path` and lazy-cached `bindings`, `params`, `cookies`, `headers`, `body`
-- **Per-view messaging**: `?send`/`?send_after` route messages to any stateful handler (root or
-  child)
-- **Streams**: keyed collections with insert, delete, update, move, sort, and limit operations
-- **SPA navigation**: client-side routing with `az-navigate`, server renders the new page via
-  WebSocket
-- **Connection context**: `?connected` macro distinguishes SSR from live mount
-- **PubSub**: `?subscribe`/`?unsubscribe` for cross-view and cross-tab messaging
-- **Route middlewares**: `fun(Req, Bindings) -> {cont, Req, Bindings} | {halt, Req}` for auth,
-  sessions, and URL-to-Bindings projection
-- **On-mount hooks**: per-route `on_mount` pipeline (`fun((Bindings, Request) -> Bindings)`) runs
-  before every mount including navigate
-- **Connection params**: URL query params + connect-time JS params arrive as regular query keys,
-  reachable via `arizona_req:params/1` or a projection middleware
-- **Element hooks**: client-side `mounted`, `updated`, `destroyed` callbacks via `az-hook`
-- **Framework-agnostic transport**: `arizona_socket` + adapter behaviour, cowboy is optional
+- **SSR + live updates** -- HTML on first load, WebSocket diffs after
+- **Erlang-native templates** -- `{Tag, Attrs, Children}` tuples compiled by parse transform
+- **Compile-time diffing** -- statics sent once, only dynamics cross the wire
+- **Three handler kinds** -- `arizona_view` (route pages), `arizona_stateful` (components),
+  `arizona_stateless` (pure templates)
+- **Streams** -- keyed collections with insert/delete/update/move/sort/limit
+- **SPA navigation** -- `az-navigate` links, server renders the next page over WebSocket
+- **PubSub, middlewares, on-mount hooks, element hooks** -- the usual extension points
+- **Framework-agnostic transport** -- cowboy is the default adapter, but optional
+
+See [docs/architecture.md](docs/architecture.md) for the full feature surface.
 
 ## Requirements
 
@@ -63,13 +48,12 @@ Cowboy is required for the built-in HTTP/WebSocket transport. If you write your 
 
 ## Quick start
 
-This walks through a minimal page with an embedded counter: a parent page, a child stateful counter,
-a layout, and the Cowboy server wiring.
+A page with an embedded counter -- five files.
 
-### 1. Create the counter component
+### 1. The counter component
 
-The counter is a child component. Its `id` and initial `count` come from the parent via the
-`?stateful` macro (see step 2), so `mount/1` just passes them through:
+`id` and initial `count` come from the parent via `?stateful` (step 2), so `mount/1` just passes
+them through:
 
 ```erlang
 %% src/my_counter.erl
@@ -99,11 +83,9 @@ handle_event(~"dec", _Payload, Bindings) ->
 new bindings, only slots whose tracked keys changed re-render -- the `<span>` patches; the buttons
 don't.
 
-### 2. Create the parent page
+### 2. The parent page
 
-The page is the route's root handler -- a **view**. Views take the initial Bindings plus an
-`az:request()`, giving access to URL path bindings, query params, cookies, and headers via
-accessors on the Request:
+A **view** is the route's root handler. It receives initial bindings plus the request:
 
 ```erlang
 %% src/my_page.erl
@@ -123,10 +105,9 @@ render(Bindings) ->
     ).
 ```
 
-### 3. Create the layout
+### 3. The layout
 
-The layout wraps every page with the HTML shell and loads the client runtime that connects over
-WebSocket:
+The HTML shell. Loads the client runtime that connects over WebSocket:
 
 ```erlang
 %% src/my_layout.erl
@@ -207,41 +188,8 @@ handle_event(~"go", _Payload, Bindings) ->
     {Bindings, #{}, [arizona_js:navigate(~"/settings")]}.
 ```
 
-### Scroll behavior
-
-- **Push nav** (new entry): scrolls to the top, or to a `#hash` target if the URL has one.
-- **Back**: restores the scroll position the user had on the previous page.
-- **Forward after back**: scrolls to the top (restoring forward-nav position is a deliberate
-  non-goal for this release).
-- **Modifier clicks** (`ctrl`, `cmd`, `shift`, `alt`, middle-click) on `az-navigate` links fall
-  through to the browser's default so users can open in a new tab or window.
-- **Same-path hash** (only the fragment changes): URL is updated and the page scrolls to the hash
-  target without a server round-trip.
-
-### Replace semantics
-
-Use `arizona_js:navigate(Path, #{replace => true})` for in-place URL updates -- pagination query
-strings, sort state, canonical paths. Replace updates the URL without adding a history entry and
-**preserves scroll position** (it's an in-place swap, not a fresh nav).
-
-```erlang
-%% Update the URL to reflect filter state without pushing a history entry
-arizona_js:navigate(<<"/products?category=", Cat/binary>>, #{replace => true})
-```
-
-### Opt-outs
-
-Per-link: add `az-noscroll` to an anchor to skip the scroll reset on that navigation.
-
-```erlang
-{a, [{href, ~"/feed"}, az_navigate, az_noscroll], [~"Refresh feed"]}
-```
-
-Per-effect: pass `#{noscroll => true}` to `arizona_js:navigate/2`.
-
-```erlang
-arizona_js:navigate(~"/feed", #{noscroll => true})
-```
+Scroll behavior, `replace => true`, and `noscroll` opt-outs are covered in
+[docs/architecture.md](docs/architecture.md).
 
 ## Documentation
 
