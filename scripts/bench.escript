@@ -29,6 +29,7 @@ main(Args) ->
         {<<"render_view_small">>, fun bench_render_view_small/1},
         {<<"render_view_with_layout">>, fun bench_render_view_with_layout/1},
         {<<"render_view_page">>, fun bench_render_view_page/1},
+        {<<"render_each_100">>, fun bench_render_each_100/1},
         {<<"mount_only">>, fun bench_mount_only/1},
         {<<"diff_no_change">>, fun bench_diff_no_change/1},
         {<<"diff_simple_event">>, fun bench_diff_simple_event/1}
@@ -104,6 +105,33 @@ bench_render_view_page(Runs) ->
     end,
     Fun = fun() ->
         arizona_render:render_view_to_iolist(arizona_page, Req, #{})
+    end,
+    run_workload(Fun, Runs).
+
+bench_render_each_100(Runs) ->
+    %% Renders arizona_about with its `tags` binding overridden to a
+    %% 100-element list. The view uses `?each` to render one `<li>` per
+    %% tag, so this exercises `arizona_eval:render_list_items/3` and
+    %% `arizona_render:zip_list_fp/2` -- the per-item iteration path
+    %% real apps rely on for any non-trivial list rendering.
+    %%
+    %% The Tags list is pre-built outside the timed region; each
+    %% iteration re-reads it but doesn't allocate it. The 100 `<li>`
+    %% tuples emitted by the each callback ARE allocated per iteration
+    %% (that's the work being measured).
+    Req = arizona_req_test_adapter:new(),
+    Tags = [iolist_to_binary(io_lib:format("tag~b", [I])) || I <- lists:seq(1, 100)],
+    Opts = #{bindings => #{tags => Tags}},
+    Sample = arizona_render:render_view_to_iolist(arizona_about, Req, Opts),
+    case iolist_size(Sample) > 0 of
+        true ->
+            ok;
+        false ->
+            io:format("error: render_view_to_iolist arizona_about returned empty~n"),
+            halt(1)
+    end,
+    Fun = fun() ->
+        arizona_render:render_view_to_iolist(arizona_about, Req, Opts)
     end,
     run_workload(Fun, Runs).
 
