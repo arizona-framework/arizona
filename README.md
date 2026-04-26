@@ -95,6 +95,10 @@ handle_event(~"dec", _Payload, Bindings) ->
     {Bindings#{count => maps:get(count, Bindings) - 1}, #{}, []}.
 ```
 
+`?get(count)` registers `count` as a dependency of that template slot. When `handle_event` returns
+new bindings, only slots whose tracked keys changed re-render -- the `<span>` patches; the buttons
+don't.
+
 ### 2. Create the parent page
 
 The page is the route's root handler -- a **view**. Views take the initial Bindings plus an
