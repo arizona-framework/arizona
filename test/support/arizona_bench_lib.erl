@@ -264,19 +264,37 @@ stats(Samples) ->
 %% --------------------------------------------------------------------
 
 -doc """
-Pretty-print the bench banner and column header. `n_trials` and
-`ops_per_trial` are constant across workloads under the standard
-harness, so they're shown once here rather than repeated per row.
+Pretty-print the bench banner with system info plus the column
+header. `n_trials` and `ops_per_trial` are constant across workloads
+under the standard harness, so they're shown once here rather than
+repeated per row.
+
+Banner shape:
+- line 1: build/run info -- arizona bench version, git SHA, OTP,
+  trials, ops/trial
+- line 2: machine info -- OS + kernel + arch, CPU model with
+  logical/BEAM-scheduler counts
+
+Useful when comparing baseline numbers across machines.
 """.
 -spec print_header(pos_integer(), file:filename()) -> ok.
 print_header(Runs, ProjectDir) ->
     io:format(
-        "~narizona bench v1 | git: ~s | OTP ~s | runs=~b ops/trial=~b~n~n",
+        "~narizona bench v1 | git: ~s | otp: ~s | runs: ~b | ops/trial: ~b~n",
         [
             git_short_sha(ProjectDir),
             erlang:system_info(otp_release),
             Runs,
             ?OPS_PER_TRIAL
+        ]
+    ),
+    io:format(
+        "os: ~s | cpu: ~s (~bc/~bs)~n~n",
+        [
+            os_descr(),
+            cpu_descr(),
+            erlang:system_info(logical_processors),
+            erlang:system_info(schedulers_online)
         ]
     ),
     io:format(
@@ -350,6 +368,50 @@ git_short_sha(ProjectDir) ->
     case os:cmd(Cmd) of
         "" -> "unknown";
         Sha -> string:trim(Sha)
+    end.
+
+%% Machine info helpers -- best-effort, degrade to "unknown" rather than
+%% crash if the underlying probe (cmd, file) fails.
+
+os_descr() ->
+    {Family, Name} = os:type(),
+    Version = os_version_string(),
+    Arch = string:trim(os:cmd("uname -m 2>/dev/null")),
+    case Arch of
+        "" -> io_lib:format("~p/~p ~s", [Family, Name, Version]);
+        _ -> io_lib:format("~p/~p ~s ~s", [Family, Name, Version, Arch])
+    end.
+
+os_version_string() ->
+    case os:version() of
+        {Maj, Min, Pat} -> io_lib:format("~b.~b.~b", [Maj, Min, Pat]);
+        Str when is_list(Str) -> Str
+    end.
+
+cpu_descr() ->
+    case os:type() of
+        {unix, linux} -> linux_cpu_model();
+        {unix, darwin} -> darwin_cpu_model();
+        _ -> "unknown"
+    end.
+
+linux_cpu_model() ->
+    %% First "model name" line in /proc/cpuinfo. Skip the rest -- on a
+    %% multi-socket system every core lists the same model.
+    case os:cmd("grep -m1 'model name' /proc/cpuinfo 2>/dev/null") of
+        "" ->
+            "unknown";
+        Line ->
+            case string:split(Line, ":") of
+                [_, Rest] -> string:trim(Rest);
+                _ -> "unknown"
+            end
+    end.
+
+darwin_cpu_model() ->
+    case os:cmd("sysctl -n machdep.cpu.brand_string 2>/dev/null") of
+        "" -> "unknown";
+        Line -> string:trim(Line)
     end.
 
 %% --------------------------------------------------------------------
