@@ -10,11 +10,13 @@
 %%%   --timetrap-ns  fail with exit 1 if mean per-op exceeds N nanoseconds
 %%%                  (off by default; intended for local pre-push hooks,
 %%%                  not CI -- shared runners have ~30% variance)
+%%%
+%%% Workload definitions live in this file (the WHAT). Harness primitives
+%%% (timing, stats, reporting, transport clients) live in
+%%% `arizona_bench_lib` (the HOW), which is loaded from the test profile.
 
 -mode(compile).
 
--define(WARMUP, 2).
--define(OPS_PER_TRIAL, 1000).
 -define(DEFAULT_RUNS, 100).
 
 main(Args) ->
@@ -23,7 +25,7 @@ main(Args) ->
     ok = setup_code_paths(ProjectDir),
     {ok, _} = application:ensure_all_started(arizona),
 
-    print_header(Runs, ProjectDir),
+    arizona_bench_lib:print_header(Runs, ProjectDir),
 
     Workloads = [
         {<<"render_view_small">>, fun bench_render_view_small/1},
@@ -41,7 +43,7 @@ main(Args) ->
         {<<"ws_event_e2e_10c">>, fun bench_ws_event_e2e_10c/1}
     ],
     Results = [{Label, Fun(Runs)} || {Label, Fun} <- Workloads],
-    [report(Label, Stats) || {Label, Stats} <- Results],
+    [arizona_bench_lib:report(Label, Stats) || {Label, Stats} <- Results],
 
     check_timetrap_all(Results, Timetrap).
 
@@ -68,7 +70,7 @@ bench_render_view_small(Runs) ->
     Fun = fun() ->
         arizona_render:render_view_to_iolist(arizona_root_counter, Req, #{})
     end,
-    run_workload(Fun, Runs).
+    arizona_bench_lib:run_workload(Fun, Runs).
 
 bench_render_view_with_layout(Runs) ->
     %% Same as render_view_small but wraps the page in arizona_layout
@@ -89,7 +91,7 @@ bench_render_view_with_layout(Runs) ->
     Fun = fun() ->
         arizona_render:render_view_to_iolist(arizona_root_counter, Req, Opts)
     end,
-    run_workload(Fun, Runs).
+    arizona_bench_lib:run_workload(Fun, Runs).
 
 bench_render_view_page(Runs) ->
     %% Renders arizona_page: a route-level view with three embedded
@@ -112,7 +114,7 @@ bench_render_view_page(Runs) ->
     Fun = fun() ->
         arizona_render:render_view_to_iolist(arizona_page, Req, #{})
     end,
-    run_workload(Fun, Runs).
+    arizona_bench_lib:run_workload(Fun, Runs).
 
 bench_render_each_100(Runs) ->
     %% Renders arizona_about with its `tags` binding overridden to a
@@ -139,26 +141,19 @@ bench_render_each_100(Runs) ->
     Fun = fun() ->
         arizona_render:render_view_to_iolist(arizona_about, Req, Opts)
     end,
-    run_workload(Fun, Runs).
+    arizona_bench_lib:run_workload(Fun, Runs).
 
 bench_stream_insert_1k(Runs) ->
     %% Per trial: insert 1000 unique items into a fresh empty stream
     %% (direct calls to arizona_stream:insert/2 -- no view, no diff).
     %% Reports the per-insert cost averaged across stream sizes 0..999.
     %%
-    %% This is the workload designed to catch O(n) regressions in
-    %% insert/2 (every additional `Order ++ [Key]` walks the order list).
-    %% A fix that keeps insert at O(1) leaves per-op time roughly
-    %% constant; an O(n) regression makes per-op time scale with stream
-    %% size, so doubling the batch size doubles the reported per-op
-    %% mean. Watch for that ratio in future runs.
-    %%
-    %% Uses a custom trial loop instead of run_workload because the unit
-    %% of work here is "1000 inserts as a batch" -- the fresh stream
-    %% must be re-created at the start of every trial, not every op.
+    %% Designed to catch O(n) regressions in insert/2 (every additional
+    %% `Order ++ [Key]` walks the order list). A fix that keeps insert
+    %% at O(1) leaves per-op time roughly constant; an O(n) regression
+    %% makes per-op time scale with stream size.
     KeyFun = fun(#{id := Id}) -> Id end,
     Items = [#{id => I, text => integer_to_binary(I)} || I <- lists:seq(1, 1000)],
-    %% Sanity: a full batch produces the expected number of items.
     SampleStream = lists:foldl(
         fun(I, S) -> arizona_stream:insert(S, I) end,
         arizona_stream:new(KeyFun),
@@ -176,19 +171,9 @@ bench_stream_insert_1k(Runs) ->
         T0 = erlang:monotonic_time(nanosecond),
         _ = lists:foldl(fun(I, S) -> arizona_stream:insert(S, I) end, Stream0, Items),
         T1 = erlang:monotonic_time(nanosecond),
-        (T1 - T0) / 1000
+        T1 - T0
     end,
-    %% Warmup
-    lists:foreach(fun(_) -> Trial() end, lists:seq(1, ?WARMUP)),
-    PerOpNs = [
-        begin
-            erlang:garbage_collect(self()),
-            Trial()
-        end
-     || _ <- lists:seq(1, Runs)
-    ],
-    Stats = stats(PerOpNs),
-    Stats#{ops_per_trial => 1000}.
+    arizona_bench_lib:run_workload_custom(Trial, Runs, 1000).
 
 bench_stream_reorder_100(Runs) ->
     %% Mount arizona_datatable seeded with a 100-row stream, then dispatch
@@ -199,7 +184,6 @@ bench_stream_reorder_100(Runs) ->
     %%
     %% Measures the full event roundtrip including the LIS reorder
     %% computation in `arizona_diff` and stream MOVE op emission.
-    %% Catches regressions in the LIS scan or the diff stream-op path.
     Req = arizona_req_test_adapter:new(),
     Items = [
         #{id => I, name => iolist_to_binary(io_lib:format("name~b", [I])), age => 20 + I rem 50}
@@ -225,7 +209,7 @@ bench_stream_reorder_100(Runs) ->
         {reply, _, _} = arizona_socket:handle_in(Json, Socket),
         ok
     end,
-    run_workload(Fun, Runs).
+    arizona_bench_lib:run_workload(Fun, Runs).
 
 bench_http_get_e2e(Runs) ->
     %% End-to-end HTTP GET bench: starts cowboy, opens a single keep-alive
@@ -234,11 +218,8 @@ bench_http_get_e2e(Runs) ->
     %% parsing, Arizona's HTTP handler, view mount + render, response
     %% writing.
     %%
-    %% The TCP connection is reused across iterations (HTTP keep-alive)
-    %% so the connect cost is paid once at the start, not per request.
-    %% Cowboy listens on port 0 -- the OS assigns a free port and we
-    %% look it up via ranch:get_port/1, avoiding collisions with other
-    %% test processes.
+    %% Connection is reused across iterations (HTTP keep-alive) so the
+    %% connect cost is paid once at the start, not per request.
     {ok, _} = application:ensure_all_started(cowboy),
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}}
@@ -255,7 +236,7 @@ bench_http_get_e2e(Runs) ->
     {ok, Sock} = gen_tcp:connect(
         "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
     ),
-    case http_get(Sock, Port) of
+    case arizona_bench_lib:http_get(Sock, Port) of
         {200, Body} when byte_size(Body) > 0 ->
             ok;
         Other ->
@@ -263,49 +244,13 @@ bench_http_get_e2e(Runs) ->
             halt(1)
     end,
     Fun = fun() ->
-        {200, _} = http_get(Sock, Port),
+        {200, _} = arizona_bench_lib:http_get(Sock, Port),
         ok
     end,
-    Stats = run_workload(Fun, Runs),
+    Stats = arizona_bench_lib:run_workload(Fun, Runs),
     gen_tcp:close(Sock),
     arizona_cowboy_server:stop(bench_http_e2e),
     Stats.
-
-%% Send a single GET on an already-open keep-alive socket and read
-%% the response. Returns {Status, Body}.
-http_get(Sock, Port) ->
-    Req = [
-        "GET / HTTP/1.1\r\n",
-        "Host: 127.0.0.1:",
-        integer_to_list(Port),
-        "\r\n",
-        "Connection: keep-alive\r\n",
-        "\r\n"
-    ],
-    ok = gen_tcp:send(Sock, Req),
-    inet:setopts(Sock, [{packet, http_bin}]),
-    {ok, {http_response, _, Status, _}} = gen_tcp:recv(Sock, 0, 5000),
-    Len = read_http_headers(Sock, 0),
-    inet:setopts(Sock, [{packet, raw}]),
-    Body =
-        case Len of
-            0 ->
-                <<>>;
-            _ ->
-                {ok, B} = gen_tcp:recv(Sock, Len, 5000),
-                B
-        end,
-    {Status, Body}.
-
-read_http_headers(Sock, Len) ->
-    case gen_tcp:recv(Sock, 0, 5000) of
-        {ok, {http_header, _, 'Content-Length', _, V}} ->
-            read_http_headers(Sock, binary_to_integer(V));
-        {ok, {http_header, _, _, _, _}} ->
-            read_http_headers(Sock, Len);
-        {ok, http_eoh} ->
-            Len
-    end.
 
 bench_http_get_e2e_10c(Runs) ->
     %% Same path as http_get_e2e but with 10 concurrent clients. Each
@@ -313,12 +258,6 @@ bench_http_get_e2e_10c(Runs) ->
     %% 100 GETs on its own keep-alive socket then signals `done`.
     %% The trial time is wall-clock for all 1000 ops to complete --
     %% per-op time is wall_clock / 1000.
-    %%
-    %% Workers are spawned ONCE outside the timed region and persist
-    %% across trials, so connection setup is paid once at workload start
-    %% (matches http_get_e2e's reuse-the-connection pattern). On a system
-    %% with N schedulers and N >= 10, throughput should approach 10x the
-    %% single-client number until scheduler contention kicks in.
     {ok, _} = application:ensure_all_started(cowboy),
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}}
@@ -334,82 +273,30 @@ bench_http_get_e2e_10c(Runs) ->
     OpsPerTrial = NClients * OpsPerClient,
     Coordinator = self(),
     Workers = [
-        spawn_link(fun() -> http_client_worker(Coordinator, Port, OpsPerClient) end)
+        spawn_link(fun() ->
+            arizona_bench_lib:http_client_worker(Coordinator, Port, OpsPerClient)
+        end)
      || _ <- lists:seq(1, NClients)
     ],
-    ok = await_ready(NClients),
+    ok = arizona_bench_lib:await_ready(NClients),
     Trial = fun() ->
         T0 = erlang:monotonic_time(nanosecond),
         lists:foreach(fun(W) -> W ! go end, Workers),
-        ok = await_done(NClients),
+        ok = arizona_bench_lib:await_done(NClients),
         T1 = erlang:monotonic_time(nanosecond),
-        (T1 - T0) / OpsPerTrial
+        T1 - T0
     end,
-    lists:foreach(fun(_) -> Trial() end, lists:seq(1, ?WARMUP)),
-    PerOpNs = [
-        begin
-            erlang:garbage_collect(self()),
-            Trial()
-        end
-     || _ <- lists:seq(1, Runs)
-    ],
+    Stats = arizona_bench_lib:run_workload_custom(Trial, Runs, OpsPerTrial),
     lists:foreach(fun(W) -> W ! stop end, Workers),
     arizona_cowboy_server:stop(bench_http_e2e_10c),
-    Stats = stats(PerOpNs),
-    Stats#{ops_per_trial => OpsPerTrial}.
-
-http_client_worker(Coordinator, Port, OpsPerCall) ->
-    {ok, Sock} = gen_tcp:connect(
-        "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
-    ),
-    Coordinator ! {ready, self()},
-    http_worker_loop(Coordinator, Sock, Port, OpsPerCall).
-
-http_worker_loop(Coordinator, Sock, Port, OpsPerCall) ->
-    receive
-        go ->
-            run_http_loop(Sock, Port, OpsPerCall),
-            Coordinator ! {done, self()},
-            http_worker_loop(Coordinator, Sock, Port, OpsPerCall);
-        stop ->
-            gen_tcp:close(Sock)
-    end.
-
-run_http_loop(_Sock, _Port, 0) ->
-    ok;
-run_http_loop(Sock, Port, N) ->
-    {200, _} = http_get(Sock, Port),
-    run_http_loop(Sock, Port, N - 1).
-
-await_ready(0) ->
-    ok;
-await_ready(N) ->
-    receive
-        {ready, _} -> await_ready(N - 1)
-    after 10000 ->
-        error({ready_timeout, N})
-    end.
-
-await_done(0) ->
-    ok;
-await_done(N) ->
-    receive
-        {done, _} -> await_done(N - 1)
-    after 30000 ->
-        error({done_timeout, N})
-    end.
+    Stats.
 
 bench_ws_event_e2e(Runs) ->
-    %% End-to-end WS event bench: starts cowboy with a WS route, opens a
-    %% single WS connection, times `inc` event roundtrips. Each iteration
-    %% sends one text frame and reads one reply frame -- the full path:
-    %% gen_tcp send + cowboy ws handler + arizona_socket:handle_in +
-    %% arizona_live event dispatch + diff + reply encode + gen_tcp recv.
-    %%
-    %% WS frame helpers (encode/decode) are inline lifts from
-    %% test/arizona_cowboy_ws_SUITE.erl:659-793. If a future bench
-    %% workload (or a refactor of the WS suite) needs them, lift to a
-    %% shared module then. For now, the duplication is contained.
+    %% End-to-end WS event bench: opens a single WS connection, times
+    %% `inc` event roundtrips. Each iteration sends one text frame and
+    %% reads one reply frame -- the full path: gen_tcp + cowboy ws +
+    %% arizona_socket:handle_in + arizona_live event dispatch + diff +
+    %% reply encode + gen_tcp recv.
     {ok, _} = application:ensure_all_started(cowboy),
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
@@ -421,10 +308,10 @@ bench_ws_event_e2e(Runs) ->
         routes => Routes
     }),
     Port = ranch:get_port(bench_ws_e2e),
-    {ok, Sock} = ws_connect("127.0.0.1", Port, <<"/">>),
+    {ok, Sock} = arizona_bench_lib:ws_connect("127.0.0.1", Port, <<"/">>),
     Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
-    ok = ws_send(Sock, Json),
-    case ws_recv(Sock, 5000) of
+    ok = arizona_bench_lib:ws_send(Sock, Json),
+    case arizona_bench_lib:ws_recv(Sock, 5000) of
         {text, Reply} when byte_size(Reply) > 0 ->
             ok;
         Other ->
@@ -432,102 +319,19 @@ bench_ws_event_e2e(Runs) ->
             halt(1)
     end,
     Fun = fun() ->
-        ok = ws_send(Sock, Json),
-        {text, _} = ws_recv(Sock, 5000),
+        ok = arizona_bench_lib:ws_send(Sock, Json),
+        {text, _} = arizona_bench_lib:ws_recv(Sock, 5000),
         ok
     end,
-    Stats = run_workload(Fun, Runs),
+    Stats = arizona_bench_lib:run_workload(Fun, Runs),
     gen_tcp:close(Sock),
     arizona_cowboy_server:stop(bench_ws_e2e),
     Stats.
-
-%% --- WS client helpers (inline lifts from arizona_cowboy_ws_SUITE) ---
-
-ws_connect(Host, Port, Path) ->
-    {ok, Sock} = gen_tcp:connect(
-        Host, Port, [binary, {active, false}, {packet, http_bin}]
-    ),
-    ok = ws_handshake(Sock, Port, Path),
-    ok = inet:setopts(Sock, [{packet, raw}]),
-    {ok, Sock}.
-
-ws_handshake(Sock, Port, Path) ->
-    Key = base64:encode(crypto:strong_rand_bytes(16)),
-    Req = [
-        "GET /ws?_az_path=",
-        uri_string:quote(Path),
-        " HTTP/1.1\r\n",
-        "Host: 127.0.0.1:",
-        integer_to_list(Port),
-        "\r\n",
-        "Upgrade: websocket\r\n",
-        "Connection: Upgrade\r\n",
-        "Sec-WebSocket-Key: ",
-        Key,
-        "\r\n",
-        "Sec-WebSocket-Version: 13\r\n",
-        "\r\n"
-    ],
-    ok = gen_tcp:send(Sock, Req),
-    {ok, {http_response, _, 101, _}} = gen_tcp:recv(Sock, 0, 5000),
-    drain_ws_headers(Sock).
-
-drain_ws_headers(Sock) ->
-    case gen_tcp:recv(Sock, 0, 5000) of
-        {ok, http_eoh} -> ok;
-        {ok, {http_header, _, _, _, _}} -> drain_ws_headers(Sock)
-    end.
-
-ws_send(Sock, Payload) ->
-    Frame = ws_encode_text(iolist_to_binary(Payload)),
-    gen_tcp:send(Sock, Frame).
-
-ws_recv(Sock, Timeout) ->
-    case gen_tcp:recv(Sock, 0, Timeout) of
-        {ok, Data} -> ws_decode(Data);
-        {error, Reason} -> {error, Reason}
-    end.
-
-ws_encode_text(Payload) ->
-    Len = byte_size(Payload),
-    Mask = crypto:strong_rand_bytes(4),
-    Masked = ws_mask(Payload, Mask, 0, <<>>),
-    case Len of
-        L when L < 126 ->
-            <<1:1, 0:3, 1:4, 1:1, L:7, Mask/binary, Masked/binary>>;
-        L when L < 65536 ->
-            <<1:1, 0:3, 1:4, 1:1, 126:7, L:16, Mask/binary, Masked/binary>>;
-        L ->
-            <<1:1, 0:3, 1:4, 1:1, 127:7, L:64, Mask/binary, Masked/binary>>
-    end.
-
-ws_mask(<<>>, _Mask, _I, Acc) ->
-    Acc;
-ws_mask(<<B, Rest/binary>>, Mask, I, Acc) ->
-    <<_:I/binary, M, _/binary>> = <<Mask/binary, Mask/binary, Mask/binary, Mask/binary>>,
-    ws_mask(Rest, Mask, (I + 1) rem 4, <<Acc/binary, (B bxor M)>>).
-
-ws_decode(<<_Fin:1, _Rsv:3, Opcode:4, 0:1, Len:7, Rest/binary>>) when Len < 126 ->
-    Payload = binary:part(Rest, 0, Len),
-    {ws_opcode_to_type(Opcode), Payload};
-ws_decode(<<_Fin:1, _Rsv:3, Opcode:4, 0:1, 126:7, Len:16, Rest/binary>>) ->
-    Payload = binary:part(Rest, 0, Len),
-    {ws_opcode_to_type(Opcode), Payload};
-ws_decode(Data) ->
-    {raw, Data}.
-
-ws_opcode_to_type(1) -> text;
-ws_opcode_to_type(2) -> binary;
-ws_opcode_to_type(_) -> unknown.
 
 bench_ws_event_e2e_10c(Runs) ->
     %% Same path as ws_event_e2e but with 10 concurrent clients. Each
     %% trial broadcasts `go` to 10 worker processes; each worker sends
     %% 100 `inc` events on its own WS connection then signals `done`.
-    %% Per-op time = wall_clock / 1000.
-    %%
-    %% Workers persist across trials so handshake cost is paid once at
-    %% workload start.
     {ok, _} = application:ensure_all_started(cowboy),
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
@@ -545,51 +349,23 @@ bench_ws_event_e2e_10c(Runs) ->
     Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
     Coordinator = self(),
     Workers = [
-        spawn_link(fun() -> ws_client_worker(Coordinator, Port, Json, OpsPerClient) end)
+        spawn_link(fun() ->
+            arizona_bench_lib:ws_client_worker(Coordinator, Port, Json, OpsPerClient)
+        end)
      || _ <- lists:seq(1, NClients)
     ],
-    ok = await_ready(NClients),
+    ok = arizona_bench_lib:await_ready(NClients),
     Trial = fun() ->
         T0 = erlang:monotonic_time(nanosecond),
         lists:foreach(fun(W) -> W ! go end, Workers),
-        ok = await_done(NClients),
+        ok = arizona_bench_lib:await_done(NClients),
         T1 = erlang:monotonic_time(nanosecond),
-        (T1 - T0) / OpsPerTrial
+        T1 - T0
     end,
-    lists:foreach(fun(_) -> Trial() end, lists:seq(1, ?WARMUP)),
-    PerOpNs = [
-        begin
-            erlang:garbage_collect(self()),
-            Trial()
-        end
-     || _ <- lists:seq(1, Runs)
-    ],
+    Stats = arizona_bench_lib:run_workload_custom(Trial, Runs, OpsPerTrial),
     lists:foreach(fun(W) -> W ! stop end, Workers),
     arizona_cowboy_server:stop(bench_ws_e2e_10c),
-    Stats = stats(PerOpNs),
-    Stats#{ops_per_trial => OpsPerTrial}.
-
-ws_client_worker(Coordinator, Port, Json, OpsPerCall) ->
-    {ok, Sock} = ws_connect("127.0.0.1", Port, <<"/">>),
-    Coordinator ! {ready, self()},
-    ws_worker_loop(Coordinator, Sock, Json, OpsPerCall).
-
-ws_worker_loop(Coordinator, Sock, Json, OpsPerCall) ->
-    receive
-        go ->
-            run_ws_loop(Sock, Json, OpsPerCall),
-            Coordinator ! {done, self()},
-            ws_worker_loop(Coordinator, Sock, Json, OpsPerCall);
-        stop ->
-            gen_tcp:close(Sock)
-    end.
-
-run_ws_loop(_Sock, _Json, 0) ->
-    ok;
-run_ws_loop(Sock, Json, N) ->
-    ok = ws_send(Sock, Json),
-    {text, _} = ws_recv(Sock, 5000),
-    run_ws_loop(Sock, Json, N - 1).
+    Stats.
 
 bench_mount_only(Runs) ->
     %% Each iteration spawns a fresh live process via arizona_socket:init/4
@@ -618,62 +394,42 @@ bench_mount_only(Runs) ->
     Req = arizona_req_test_adapter:new(),
     case arizona_socket:init(arizona_root_counter, #{}, Req, #{}) of
         {ok, TestSock} when is_pid(element(2, TestSock)) ->
-            kill_live(element(2, TestSock));
+            arizona_bench_lib:kill_live(element(2, TestSock));
         Other ->
             io:format("error: init returned unexpected ~p~n", [Other]),
             halt(1)
     end,
     Fun = fun() ->
         {ok, Sock} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
-        kill_live(element(2, Sock)),
+        arizona_bench_lib:kill_live(element(2, Sock)),
         ok
     end,
-    run_workload(Fun, Runs).
-
-kill_live(Pid) ->
-    Mon = monitor(process, Pid),
-    unlink(Pid),
-    exit(Pid, kill),
-    receive
-        {'DOWN', Mon, process, Pid, _} -> ok
-    end.
+    arizona_bench_lib:run_workload(Fun, Runs).
 
 bench_diff_no_change(Runs) ->
     %% Mount once, then dispatch N `noop` events. `noop` returns the same
     %% bindings, so `compute_changed/2` is empty and `arizona_diff:diff/4`
     %% short-circuits via the dep-skip fast path -- the cheapest event in
-    %% the system. If `compute_changed` or the dep-skip wiring regresses,
-    %% this workload spikes first.
+    %% the system.
     Req = arizona_req_test_adapter:new(),
     {ok, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
-    %% Pre-encode the JSON event payload outside the timed region so we're
-    %% only measuring handle_in + dispatch + diff, not term construction.
     Json = iolist_to_binary(json:encode([~"counter", ~"noop", #{}])),
-    %% Sanity-check: noop returns {ok, _} (no ops, no effects). Fail loud
-    %% on a regression that would silently make the bench measure the
-    %% wrong path (e.g. if noop started returning {reply, ...}).
     {ok, _} = arizona_socket:handle_in(Json, Socket),
-    %% The Socket record is invariant under noop dispatch (no field changes)
-    %% so we reuse the same Socket for every iteration -- no state threading
-    %% needed in the inner loop.
     Fun = fun() ->
         {ok, _} = arizona_socket:handle_in(Json, Socket),
         ok
     end,
-    run_workload(Fun, Runs).
+    arizona_bench_lib:run_workload(Fun, Runs).
 
 bench_diff_simple_event(Runs) ->
     %% Mount once, then dispatch N `inc` events. Each event changes the
     %% `count` binding, so `compute_changed/2` returns one key and
     %% `arizona_diff:diff/4` emits one OP_TEXT op. Compared against
-    %% `diff_no_change`, the delta is the cost of actually running the
-    %% diff engine on a single-binding change -- the typical hot path
-    %% for stateful UIs reacting to user input.
+    %% `diff_no_change`, the delta is the cost of running the diff engine
+    %% on a single-binding change.
     Req = arizona_req_test_adapter:new(),
     {ok, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
-    %% Sanity: inc must return {reply, Data, _} with non-empty Data
-    %% (encoded JSON, returned as an iolist by arizona_socket:encode_reply).
     case arizona_socket:handle_in(Json, Socket) of
         {reply, Data, _} ->
             case iolist_size(Data) > 0 of
@@ -691,127 +447,7 @@ bench_diff_simple_event(Runs) ->
         {reply, _, _} = arizona_socket:handle_in(Json, Socket),
         ok
     end,
-    run_workload(Fun, Runs).
-
-%% ---------------------------------------------------------------------------
-%% Harness
-%% ---------------------------------------------------------------------------
-
-run_workload(Fun, Runs) ->
-    %% Warmup: prime the JIT, populate term/binary heap. Discard.
-    lists:foreach(fun(_) -> trial(Fun) end, lists:seq(1, ?WARMUP)),
-    %% Measured trials. Per-trial value is the mean per-op time in
-    %% nanoseconds (batch divided by op count).
-    PerOpNs = [
-        begin
-            erlang:garbage_collect(self()),
-            TrialNs = trial(Fun),
-            TrialNs / ?OPS_PER_TRIAL
-        end
-     || _ <- lists:seq(1, Runs)
-    ],
-    stats(PerOpNs).
-
-trial(Fun) ->
-    T0 = erlang:monotonic_time(nanosecond),
-    loop(Fun, ?OPS_PER_TRIAL),
-    T1 = erlang:monotonic_time(nanosecond),
-    T1 - T0.
-
-loop(_Fun, 0) ->
-    ok;
-loop(Fun, N) ->
-    Fun(),
-    loop(Fun, N - 1).
-
-%% ---------------------------------------------------------------------------
-%% Stats
-%%
-%% Sample variance (divides by N-1, not N). With N>=100, p50/p99 are
-%% real percentile picks; with smaller N, "p99" approximates max-of-N
-%% rather than a true tail latency. v1 default is N=100.
-%% ---------------------------------------------------------------------------
-
-stats(Samples) ->
-    Sorted = lists:sort(Samples),
-    Len = length(Sorted),
-    Sum = lists:sum(Sorted),
-    Mean = Sum / Len,
-    Variance =
-        case Len of
-            1 -> 0.0;
-            _ -> lists:sum([(X - Mean) * (X - Mean) || X <- Sorted]) / (Len - 1)
-        end,
-    Stdev = math:sqrt(Variance),
-    P50 = lists:nth(max(1, Len div 2), Sorted),
-    P99 = lists:nth(max(1, (Len * 99) div 100), Sorted),
-    OpsPerSec = round(1_000_000_000 / Mean),
-    #{
-        n_trials => Len,
-        ops_per_trial => ?OPS_PER_TRIAL,
-        mean_ns => Mean,
-        stdev_ns => Stdev,
-        p50_ns => P50,
-        p99_ns => P99,
-        ops_per_s => OpsPerSec
-    }.
-
-%% ---------------------------------------------------------------------------
-%% Reporting
-%% ---------------------------------------------------------------------------
-
-print_header(Runs, ProjectDir) ->
-    io:format(
-        "~narizona bench v1 | git: ~s | OTP ~s | runs=~b ops/trial=~b~n",
-        [git_short_sha(ProjectDir), erlang:system_info(otp_release), Runs, ?OPS_PER_TRIAL]
-    ).
-
-report(Label, #{
-    n_trials := N,
-    ops_per_trial := Ops,
-    mean_ns := MeanNs,
-    stdev_ns := StdevNs,
-    p50_ns := P50Ns,
-    p99_ns := P99Ns,
-    ops_per_s := OpsPerSec
-}) ->
-    io:format(
-        "~-26s N=~b ops=~b  mean=~s  stdev=~s  p50=~s  p99=~s  ops/s=~s~n",
-        [
-            Label,
-            N,
-            Ops,
-            fmt_time(MeanNs),
-            fmt_time(StdevNs),
-            fmt_time(P50Ns),
-            fmt_time(P99Ns),
-            fmt_int(OpsPerSec)
-        ]
-    ).
-
-fmt_time(Ns) when Ns >= 1000 ->
-    io_lib:format("~.1fµs", [Ns / 1000]);
-fmt_time(Ns) ->
-    io_lib:format("~bns", [trunc(Ns)]).
-
-fmt_int(N) ->
-    %% Group thousands with commas: 81300 -> "81,300".
-    Reversed = lists:reverse(integer_to_list(N)),
-    lists:reverse(group_thousands(Reversed)).
-
-group_thousands([A, B, C, D | Rest]) ->
-    [A, B, C, $, | group_thousands([D | Rest])];
-group_thousands(Rest) ->
-    Rest.
-
-git_short_sha(ProjectDir) ->
-    %% Use -C so the SHA reflects the project, not whatever cwd we were
-    %% invoked from. Best effort; benches still run if not in a git checkout.
-    Cmd = "git -C " ++ ProjectDir ++ " rev-parse --short HEAD 2>/dev/null",
-    case os:cmd(Cmd) of
-        "" -> "unknown";
-        Sha -> string:trim(Sha)
-    end.
+    arizona_bench_lib:run_workload(Fun, Runs).
 
 %% ---------------------------------------------------------------------------
 %% Timetrap (optional CI gate)
@@ -858,8 +494,8 @@ parse_args([RunsStr | Rest], _Runs, Timetrap) ->
 
 setup_code_paths(BaseDir) ->
     %% Prefer the test profile's lib dir so test/support/ modules
-    %% (e.g. arizona_req_test_adapter, arizona_root_counter) are available.
-    %% Fall back to default if test profile isn't compiled.
+    %% (e.g. arizona_bench_lib, arizona_req_test_adapter, fixtures) are
+    %% available. Fall back to default if test profile isn't compiled.
     Candidates = [
         filename:join([BaseDir, "_build", "test", "lib"]),
         filename:join([BaseDir, "_build", "default", "lib"])
@@ -875,15 +511,11 @@ setup_code_paths(BaseDir) ->
     {ok, Libs} = file:list_dir(LibDir),
     lists:foreach(
         fun(Lib) ->
-            %% Standard ebin/ output:
             EbinDir = filename:join([LibDir, Lib, "ebin"]),
             case filelib:is_dir(EbinDir) of
                 true -> code:add_pathz(EbinDir);
                 false -> ok
             end,
-            %% Test profile compiles test/support/ beams into a sibling
-            %% test/ directory (not ebin). Add it when present so fixtures
-            %% like arizona_req_test_adapter and arizona_root_counter resolve.
             TestDir = filename:join([LibDir, Lib, "test"]),
             case filelib:is_dir(TestDir) of
                 true -> code:add_pathz(TestDir);
