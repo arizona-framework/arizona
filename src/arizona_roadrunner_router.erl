@@ -34,6 +34,15 @@ persistent term so the dev error page can build the SSE connect URL.
 -export([routes/2]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+%% compile_routes/1 + routes/1 are public convenience wrappers; the
+%% in-tree callers all use the /2 form with build opts. Keep both shapes
+%% exported for downstream users.
+-ignore_xref([compile_routes/1, routes/1]).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 

@@ -64,16 +64,19 @@ routes from `Opts`.
     Name :: atom(),
     Opts :: map().
 start(Name, #{routes := Routes} = Opts) ->
-    Compress = maps:get(compress, Opts, true),
-    ok = arizona_roadrunner_router:compile_routes(Routes, #{compress => Compress}),
-    persistent_term:put({?ROUTES_KEY, Name}, Routes),
+    BuildOpts = #{compress => maps:get(compress, Opts, true)},
+    ok = arizona_roadrunner_router:compile_routes(Routes, BuildOpts),
+    %% Stash {Routes, BuildOpts} together so `recompile_routes/0` can
+    %% replay the user's original build-time choices (e.g.
+    %% `compress => false`) on hot reload.
+    persistent_term:put({?ROUTES_KEY, Name}, {Routes, BuildOpts}),
     ErrorPage = maps:get(error_page, Opts, {arizona_error_page, render}),
     persistent_term:put(arizona_error_page, ErrorPage),
     Port = port_from_opts(Opts),
     UserProtoOpts = maps:get(proto_opts, Opts, #{}),
     ListenerOpts = UserProtoOpts#{
         port => Port,
-        routes => arizona_roadrunner_router:routes(Routes, #{compress => Compress})
+        routes => arizona_roadrunner_router:routes(Routes, BuildOpts)
     },
     ListenerOpts1 = maybe_inject_tls(ListenerOpts, Opts),
     roadrunner:start_listener(Name, ListenerOpts1).
@@ -98,15 +101,8 @@ recompile_routes() ->
     Terms = persistent_term:get(),
     lists:foreach(
         fun
-            ({{?ROUTES_KEY, _}, Routes}) ->
-                %% Compression toggle is held only on the live listener
-                %% boot path; on recompile, default to enabled (matches
-                %% the boot-time default). Operators who disable it via
-                %% the `compress => false` opt would lose that on hot
-                %% reload — acceptable trade for keeping recompile
-                %% stateless. If this becomes a real footgun, stash the
-                %% boot-time compress flag alongside Routes.
-                arizona_roadrunner_router:compile_routes(Routes, #{compress => true});
+            ({{?ROUTES_KEY, _}, {Routes, BuildOpts}}) ->
+                arizona_roadrunner_router:compile_routes(Routes, BuildOpts);
             (_) ->
                 ok
         end,

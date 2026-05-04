@@ -540,7 +540,18 @@ recompile_routes_runs(Config) when is_list(Config) ->
     %% here we just run it against the suite's live listener and assert
     %% it succeeds.
     ServerMod = ?config(server_mod, Config),
-    ?assertEqual(ok, ServerMod:recompile_routes()).
+    ?assertEqual(ok, ServerMod:recompile_routes()),
+    %% Roadrunner adapter only: confirm the build-time opts (compress
+    %% flag) are stashed alongside Routes so recompile replays them
+    %% instead of silently re-defaulting. Cowboy adapter has no
+    %% equivalent.
+    case ?config(adapter, Config) of
+        roadrunner ->
+            Stashed = persistent_term:get({arizona_roadrunner_routes, ws_test}),
+            ?assertMatch({_Routes, #{compress := _}}, Stashed);
+        cowboy ->
+            ok
+    end.
 
 reload_endpoint_streams_event(Config) ->
     %% Connect to the dev reload SSE endpoint, broadcast a reload, and
