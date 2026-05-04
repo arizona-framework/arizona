@@ -139,7 +139,7 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 -nominal raw() :: dynamic().
 -nominal method() :: binary().
 -nominal path() :: binary().
--nominal bindings() :: #{atom() => dynamic()}.
+-nominal bindings() :: #{binary() => dynamic()}.
 -nominal params() :: [{binary(), binary() | true}].
 -nominal cookies() :: [{binary(), binary()}].
 -nominal headers() :: #{binary() => iodata()}.

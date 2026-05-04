@@ -55,12 +55,12 @@ handle(Req) ->
 reply(Status, Body) ->
     %% Match arizona_cowboy_http's bare `text/html` content-type (no
     %% charset suffix) so HTTP responses look identical between
-    %% adapters. roadrunner_resp:html/2 sets the charset suffix by
-    %% default — strip it via add_header (last-write-wins on lookup).
-    BodyBin = iolist_to_binary(Body),
+    %% adapters. roadrunner accepts iodata bodies all the way to
+    %% gen_tcp:send, so pass the iolist through unflattened — saves a
+    %% full copy of the rendered page per request.
     {Status,
         [
             {~"content-type", ~"text/html"},
-            {~"content-length", integer_to_binary(byte_size(BodyBin))}
+            {~"content-length", integer_to_binary(iolist_size(Body))}
         ],
-        BodyBin}.
+        Body}.

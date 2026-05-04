@@ -71,7 +71,8 @@ start(_Type, _Args) ->
 stop(_State) ->
     case application:get_env(arizona, server) of
         {ok, ServerOpts} ->
-            _ = adapter_module(ServerOpts):stop(?LISTENER);
+            ServerMod = adapter_module(ServerOpts),
+            _ = ServerMod:stop(?LISTENER);
         undefined ->
             ok
     end,

@@ -129,6 +129,7 @@ broadcast(Files) ->
     Opts :: map().
 init({Dir, Opts}) ->
     AbsDir = filename:absname(Dir),
+    proc_lib:set_label({arizona_watcher, AbsDir}),
     Patterns = maps:get(patterns, Opts, [".*"]),
     Compiled = [compile_pattern(P) || P <- Patterns],
     Callback = maps:get(callback, Opts, undefined),

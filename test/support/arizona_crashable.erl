@@ -27,7 +27,7 @@ render(Bindings) ->
         {'div', [{id, ?get(id)}], [
             {p, [], [~"Status: ", ?get(status, ~"ok")]},
             {p, [], [~"Locale: ", ?get(<<"locale">>, ~"none")]},
-            {p, [], [~"Item: ", ?get(item_id, ~"none")]}
+            {p, [], [~"Item: ", ?get(<<"item_id">>, ~"none")]}
         ]}
     ).
 

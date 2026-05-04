@@ -99,15 +99,7 @@ to_roadrunner({ok, Sock}, State) ->
 to_roadrunner({reply, Data, Sock}, State) ->
     {reply, [{text, Data}], State#{socket => Sock}};
 to_roadrunner({close, Code, Reason, Sock}, State) ->
-    %% Roadrunner's `{close, NewState}` return sends an empty close
-    %% frame (no code). The arizona JS client distinguishes server
-    %% crashes (4500) from clean exits (1000), so we emit the close
-    %% as a `{reply, [{close, <<Code:16, Reason>>}]}` instead — that
-    %% packs the status code into the close-frame payload per
-    %% RFC 6455 §5.5.1 and lets the peer's reciprocal close drive
-    %% the session shutdown.
-    Payload = <<Code:16, Reason/binary>>,
-    {reply, [{close, Payload}], State#{socket => Sock}}.
+    {close, Code, Reason, State#{socket => Sock}}.
 
 %% Middleware halted before the upgrade — emit a stashed redirect or a
 %% bare 400 if the middleware did not write its own response.

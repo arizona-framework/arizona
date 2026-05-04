@@ -70,17 +70,17 @@ new_accepts_prepopulated_fields(Config) when is_list(Config) ->
     %% must return the Opts value (pre-populated) not the Raw one
     %% (which would come back from the adapter).
     Raw = #{
-        bindings => #{id => ~"from_adapter"},
+        bindings => #{~"id" => ~"from_adapter"},
         params => [{~"x", ~"from_adapter"}]
     },
     Req = arizona_req:new(arizona_req_test_adapter, Raw, #{
         method => ~"GET",
         path => ~"/",
-        bindings => #{id => ~"from_opts"},
+        bindings => #{~"id" => ~"from_opts"},
         params => [{~"x", ~"from_opts"}]
     }),
     {Bindings, Req1} = arizona_req:bindings(Req),
-    ?assertEqual(#{id => ~"from_opts"}, Bindings),
+    ?assertEqual(#{~"id" => ~"from_opts"}, Bindings),
     {Params, _Req2} = arizona_req:params(Req1),
     ?assertEqual([{~"x", ~"from_opts"}], Params).
 
@@ -96,11 +96,11 @@ raw_returns_underlying(Config) when is_list(Config) ->
     ?assertEqual(Raw, arizona_req:raw(Req)).
 
 bindings_lazy_loads_and_caches(Config) when is_list(Config) ->
-    Raw = #{bindings => #{user_id => ~"42"}},
+    Raw = #{bindings => #{~"user_id" => ~"42"}},
     Req0 = arizona_req_test_adapter:new(Raw),
     %% First call dispatches to the adapter and returns a cached request.
     {Bindings, Req1} = arizona_req:bindings(Req0),
-    ?assertEqual(#{user_id => ~"42"}, Bindings),
+    ?assertEqual(#{~"user_id" => ~"42"}, Bindings),
     ?assertNotEqual(Req0, Req1),
     %% Second call short-circuits via the cache.
     ?assertEqual({Bindings, Req1}, arizona_req:bindings(Req1)).

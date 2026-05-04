@@ -23,6 +23,13 @@ routes take effect without restarting the listener.
 - `proto_opts` -- map of roadrunner listener opts merged on top of
   the dispatch (e.g. `max_clients`, `max_content_length`,
   `request_timeout`, `tls`, `slot_reconciliation`)
+- `compress` -- `true` (default) or `false`. When true,
+  `roadrunner_compress` is attached to `live` and `asset` routes so
+  HTML pages and static assets above the threshold are gzip/deflate
+  encoded per `Accept-Encoding`. The dev SSE reload stream and the
+  WebSocket upgrade response are intentionally **not** compressed.
+  Set to `false` if you have an upstream proxy doing compression
+  already.
 """.
 
 %% --------------------------------------------------------------------
@@ -57,7 +64,8 @@ routes from `Opts`.
     Name :: atom(),
     Opts :: map().
 start(Name, #{routes := Routes} = Opts) ->
-    ok = arizona_roadrunner_router:compile_routes(Routes),
+    Compress = maps:get(compress, Opts, true),
+    ok = arizona_roadrunner_router:compile_routes(Routes, #{compress => Compress}),
     persistent_term:put({?ROUTES_KEY, Name}, Routes),
     ErrorPage = maps:get(error_page, Opts, {arizona_error_page, render}),
     persistent_term:put(arizona_error_page, ErrorPage),
@@ -65,7 +73,7 @@ start(Name, #{routes := Routes} = Opts) ->
     UserProtoOpts = maps:get(proto_opts, Opts, #{}),
     ListenerOpts = UserProtoOpts#{
         port => Port,
-        routes => arizona_roadrunner_router:routes(Routes)
+        routes => arizona_roadrunner_router:routes(Routes, #{compress => Compress})
     },
     ListenerOpts1 = maybe_inject_tls(ListenerOpts, Opts),
     roadrunner:start_listener(Name, ListenerOpts1).
@@ -91,7 +99,14 @@ recompile_routes() ->
     lists:foreach(
         fun
             ({{?ROUTES_KEY, _}, Routes}) ->
-                arizona_roadrunner_router:compile_routes(Routes);
+                %% Compression toggle is held only on the live listener
+                %% boot path; on recompile, default to enabled (matches
+                %% the boot-time default). Operators who disable it via
+                %% the `compress => false` opt would lose that on hot
+                %% reload — acceptable trade for keeping recompile
+                %% stateless. If this becomes a real footgun, stash the
+                %% boot-time compress flag alongside Routes.
+                arizona_roadrunner_router:compile_routes(Routes, #{compress => true});
             (_) ->
                 ok
         end,

@@ -56,8 +56,9 @@ new(RoadrunnerReq) ->
 -spec parse_bindings(RoadrunnerReq) -> arizona_req:bindings() when
     RoadrunnerReq :: roadrunner_http1:request().
 parse_bindings(RoadrunnerReq) ->
-    Bindings = roadrunner_req:bindings(RoadrunnerReq),
-    maps:fold(fun(K, V, Acc) -> Acc#{binary_to_atom(K, utf8) => V} end, #{}, Bindings).
+    %% Roadrunner returns binary-keyed bindings already, matching the
+    %% "binary keys for wire-derived data" rule. Pass through unchanged.
+    roadrunner_req:bindings(RoadrunnerReq).
 
 -spec parse_params(RoadrunnerReq) -> arizona_req:params() when
     RoadrunnerReq :: roadrunner_http1:request().

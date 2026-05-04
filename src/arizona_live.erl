@@ -203,7 +203,16 @@ when
     OnMount :: on_mount(),
     Req :: az:request().
 start_link(Handler, InitBindings, TransportPid, OnMount, Req) ->
-    gen_server:start_link(?MODULE, {Handler, InitBindings, TransportPid, OnMount, Req}, []).
+    %% Capture caller-side logger metadata (typically set by roadrunner
+    %% with the per-conn request_id) so any ?LOG_* from inside the
+    %% view's mount/handle_event/handle_info gets correlated to the
+    %% originating HTTP/WS upgrade.
+    ParentMetadata = logger:get_process_metadata(),
+    gen_server:start_link(
+        ?MODULE,
+        {Handler, InitBindings, TransportPid, OnMount, Req, ParentMetadata},
+        []
+    ).
 
 -doc """
 Mounts the handler without rendering. Returns `{ok, ViewId}`.
@@ -301,13 +310,18 @@ apply_on_mount([Fun | Rest], Bindings, Req) ->
 %% gen_server Callbacks
 %% --------------------------------------------------------------------
 
--spec init({Handler, InitBindings, TransportPid, OnMount, Req}) -> {ok, state()} when
+-spec init({Handler, InitBindings, TransportPid, OnMount, Req, ParentMetadata}) ->
+    {ok, state()}
+when
     Handler :: module(),
     InitBindings :: map(),
     TransportPid :: pid() | undefined,
     OnMount :: on_mount(),
-    Req :: az:request().
-init({Handler, InitBindings, TransportPid, OnMount, Req}) ->
+    Req :: az:request(),
+    ParentMetadata :: logger:metadata() | undefined.
+init({Handler, InitBindings, TransportPid, OnMount, Req, ParentMetadata}) ->
+    proc_lib:set_label({arizona_live, Handler}),
+    inherit_logger_metadata(ParentMetadata),
     TransportPid =/= undefined andalso erlang:put('$arizona_connected', true),
     {ok, #state{
         handler = Handler,
@@ -318,6 +332,13 @@ init({Handler, InitBindings, TransportPid, OnMount, Req}) ->
         transport_pid = TransportPid,
         sent_fps = #{}
     }}.
+
+%% Mirror the parent process's logger metadata (request_id, peer, etc.)
+%% so view-side ?LOG_* calls correlate to the originating request.
+inherit_logger_metadata(undefined) ->
+    ok;
+inherit_logger_metadata(Metadata) when is_map(Metadata) ->
+    logger:set_process_metadata(Metadata).
 
 handle_call(
     mount,
