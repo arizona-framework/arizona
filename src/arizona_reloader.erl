@@ -98,14 +98,14 @@ broadcast() ->
     arizona_pubsub:broadcast(?MODULE, {?MODULE, reload}).
 
 -doc """
-Recompiles the changed `.erl` files, refreshes Cowboy routes, and
+Recompiles the changed `.erl` files, refreshes routes, and
 broadcasts a reload message. Called by the file watcher.
 """.
 -spec reload_erl(Files) -> ok when
     Files :: [file:filename()].
 reload_erl(Files) ->
     _ = compile(Files),
-    arizona_cowboy_server:recompile_routes(),
+    arizona_roadrunner_server:recompile_routes(),
     broadcast().
 
 -doc """

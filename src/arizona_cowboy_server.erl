@@ -34,7 +34,7 @@ routes take effect without restarting the listener.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([start/2, stop/1]).
+-ignore_xref([start/2, stop/1, recompile_routes/0]).
 
 %% --------------------------------------------------------------------
 %% Macros

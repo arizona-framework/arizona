@@ -1,9 +1,10 @@
--module(arizona_cowboy_ws_SUITE).
+-module(arizona_ws_SUITE).
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("common_test/include/ct.hrl").
 -include("arizona.hrl").
 -include_lib("arizona/include/arizona_js.hrl").
 
--export([all/0, groups/0, init_per_suite/1, end_per_suite/1]).
+-export([all/0, groups/0, init_per_group/2, end_per_group/2]).
 -export([
     ping_pong/1,
     event_dispatch/1,
@@ -41,54 +42,58 @@
 
 all() ->
     [
-        {group, basic},
-        {group, crash_recovery}
+        {group, roadrunner},
+        {group, cowboy}
     ].
 
 groups() ->
+    Basic = [
+        ping_pong,
+        event_dispatch,
+        event_with_effects,
+        event_no_change,
+        unknown_json,
+        unknown_frame,
+        reconnect_init,
+        connect_with_params,
+        http_query_params,
+        http_path_bindings,
+        ws_path_bindings,
+        middleware_cont_enriches_bindings,
+        middleware_cont_ws_connects,
+        middleware_halt_redirects,
+        middleware_halt_rejects_ws,
+        middleware_pipeline_runs_in_order,
+        middleware_halt_redirects_on_navigate,
+        middleware_cont_on_navigate,
+        http_halt_redirect_via_req,
+        http_render_crash_emits_error_page,
+        http_reads_cookies_headers_body,
+        static_asset_served,
+        static_asset_missing_returns_404,
+        reload_endpoint_streams_event,
+        recompile_routes_runs,
+        http_preserves_duplicate_qs_keys,
+        ws_navigate_preserves_duplicate_qs_keys,
+        ws_upgrade_preserves_duplicate_qs_keys
+    ],
+    Crash = [
+        crash_event_closes,
+        crash_info_closes,
+        crash_init_closes,
+        normal_exit_closes
+    ],
     [
-        {basic, [sequence], [
-            ping_pong,
-            event_dispatch,
-            event_with_effects,
-            event_no_change,
-            unknown_json,
-            unknown_frame,
-            reconnect_init,
-            connect_with_params,
-            http_query_params,
-            http_path_bindings,
-            ws_path_bindings,
-            middleware_cont_enriches_bindings,
-            middleware_cont_ws_connects,
-            middleware_halt_redirects,
-            middleware_halt_rejects_ws,
-            middleware_pipeline_runs_in_order,
-            middleware_halt_redirects_on_navigate,
-            middleware_cont_on_navigate,
-            http_halt_redirect_via_req,
-            http_render_crash_emits_error_page,
-            http_reads_cookies_headers_body,
-            static_asset_served,
-            static_asset_missing_returns_404,
-            reload_endpoint_streams_event,
-            recompile_routes_runs,
-            http_preserves_duplicate_qs_keys,
-            ws_navigate_preserves_duplicate_qs_keys,
-            ws_upgrade_preserves_duplicate_qs_keys
-        ]},
-        {crash_recovery, [sequence], [
-            crash_event_closes,
-            crash_info_closes,
-            crash_init_closes,
-            normal_exit_closes
-        ]}
+        {roadrunner, [sequence], [{group, basic}, {group, crash_recovery}]},
+        {cowboy, [sequence], [{group, basic}, {group, crash_recovery}]},
+        {basic, [sequence], Basic},
+        {crash_recovery, [sequence], Crash}
     ].
 
-init_per_suite(Config) ->
-    {ok, _} = application:ensure_all_started(cowboy),
+init_per_group(Adapter, Config) when Adapter =:= roadrunner; Adapter =:= cowboy ->
     {ok, _} = application:ensure_all_started(arizona),
-    Port = 14040,
+    {ok, _} = application:ensure_all_started(adapter_app(Adapter)),
+    Port = pick_port(),
     %% Test-only URL -> Bindings middleware. Tests that assert on URL
     %% data in rendered HTML opt into this on their routes; the
     %% framework itself no longer flat-merges URL data into bindings.
@@ -118,14 +123,13 @@ init_per_suite(Config) ->
         {live, <<"/with_middleware">>, arizona_crashable, #{
             middlewares => [fun(Req, B) -> {cont, Req, B#{session => <<"abc">>}} end]
         }},
+        %% Adapter-agnostic redirect halt — replaces the cowboy-specific
+        %% direct cowboy_req:reply pattern that used to live here. Both
+        %% adapters now translate the stashed redirect into a 302.
         {live, <<"/halt_middleware">>, arizona_crashable, #{
             middlewares => [
                 fun(Req, _B) ->
-                    RawReq = arizona_req:raw(Req),
-                    RawReq1 = cowboy_req:reply(
-                        302, #{<<"location">> => <<"/login">>}, RawReq
-                    ),
-                    {halt, arizona_req:set_raw(Req, RawReq1)}
+                    {halt, arizona_req:redirect(Req, <<"/login">>)}
                 end
             ]
         }},
@@ -181,16 +185,31 @@ init_per_suite(Config) ->
         {asset, <<"/assets">>, {priv_dir, arizona, "static/assets/js"}},
         {reload, <<"/reload">>, #{}}
     ],
-    {ok, _} = arizona_cowboy_server:start(ws_test, #{
+    ServerMod = server_module(Adapter),
+    {ok, _} = ServerMod:start(ws_test, #{
         transport_opts => [{port, Port}],
         routes => Routes
     }),
-    [{port, Port} | Config].
+    [{port, Port}, {adapter, Adapter}, {server_mod, ServerMod} | Config];
+init_per_group(_Group, Config) ->
+    Config.
 
-end_per_suite(_Config) ->
-    _ = arizona_cowboy_server:stop(ws_test),
+end_per_group(Adapter, Config) when Adapter =:= roadrunner; Adapter =:= cowboy ->
+    ServerMod = ?config(server_mod, Config),
+    _ = ServerMod:stop(ws_test),
     _ = application:stop(arizona),
+    ok;
+end_per_group(_Group, _Config) ->
     ok.
+
+server_module(roadrunner) -> arizona_roadrunner_server;
+server_module(cowboy) -> arizona_cowboy_server.
+
+adapter_app(roadrunner) -> roadrunner;
+adapter_app(cowboy) -> cowboy.
+
+pick_port() ->
+    14040 + erlang:unique_integer([positive, monotonic]) rem 1000.
 
 %% --------------------------------------------------------------------
 %% Basic tests
@@ -516,11 +535,12 @@ ws_upgrade_preserves_duplicate_qs_keys(Config) ->
     ws_close(Sock).
 
 recompile_routes_runs(Config) when is_list(Config) ->
-    %% Exercises `arizona_cowboy_server:recompile_routes/0` -- walks the
-    %% persistent_term dispatch registry and rebuilds each listener's
-    %% dispatch. Called by the dev hot reloader in production; here we
-    %% just run it against the suite's live listener and assert it succeeds.
-    ?assertEqual(ok, arizona_cowboy_server:recompile_routes()).
+    %% Walks the persistent_term dispatch registry and rebuilds each
+    %% listener's dispatch. Called by the dev hot reloader in production;
+    %% here we just run it against the suite's live listener and assert
+    %% it succeeds.
+    ServerMod = ?config(server_mod, Config),
+    ?assertEqual(ok, ServerMod:recompile_routes()).
 
 reload_endpoint_streams_event(Config) ->
     %% Connect to the dev reload SSE endpoint, broadcast a reload, and

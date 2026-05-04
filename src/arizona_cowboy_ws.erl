@@ -54,9 +54,22 @@ init(Req, Opts) ->
     QS = cowboy_req:parse_qs(Req),
     case arizona_ws:prepare(QS, arizona_cowboy_req, Req) of
         {halt, HaltReq} ->
-            {ok, arizona_req:raw(HaltReq), #{}};
+            handle_halt(HaltReq, Req);
         {cont, State} ->
             {cowboy_websocket, Req, State, Opts}
+    end.
+
+%% Translate a middleware halt into either a stashed redirect reply
+%% (the adapter-agnostic `arizona_req:redirect/2` path) or pass the
+%% raw cowboy req through unchanged (when the middleware wrote its
+%% own response via `cowboy_req:reply/4`).
+handle_halt(HaltReq, Req) ->
+    case arizona_req:halted_redirect(HaltReq) of
+        {Status, Location} ->
+            Req2 = cowboy_req:reply(Status, #{~"location" => Location}, Req),
+            {ok, Req2, #{}};
+        undefined ->
+            {ok, arizona_req:raw(HaltReq), #{}}
     end.
 
 -doc """
