@@ -349,7 +349,16 @@ handle_call(
 ) ->
     ok = cancel_pending_timers(),
     ok = arizona_handler:call_unmount(OldH, OldB),
-    {NewViewId, HTML, Snap, B2, V1} = do_mount(NewHandler, NewIB, NewReq, #{}, NewOnMount),
+    %% Carry the previous root handler's final bindings forward as the floor;
+    %% NewIB (route static config + middleware enrichments) overrides on
+    %% overlap. The new handler's `mount/2` receives `OldB ⊕ NewIB`, picks
+    %% what it cares about, and returns its own bindings — values it does
+    %% not include in the return are dropped. Handlers that want to keep
+    %% session-level state (current_user, theme, locale) just include those
+    %% keys in their mount return; everything else is page-local and
+    %% naturally evaporates on the next navigate.
+    Merged = maps:merge(OldB, NewIB),
+    {NewViewId, HTML, Snap, B2, V1} = do_mount(NewHandler, Merged, NewReq, #{}, NewOnMount),
     {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
     {reply, {ok, NewViewId, PageContent1}, #state{
         handler = NewHandler,
