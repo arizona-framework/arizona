@@ -19,7 +19,13 @@ WebSocket handler) with the render and diff pipeline.
 3. **Info messages** -- `handle_info/2` invokes the handler's optional
    `handle_info/2` callback, diffs, and pushes the resulting ops.
 4. **Navigate** -- `navigate/4,5` unmounts the old root, cancels pending
-   timers, mounts the new handler, and replies with fresh content.
+   timers, and mounts the new handler. The previous root's final
+   bindings are carried forward as the floor for the new mount's input
+   -- `InitBindings` (route static config + middleware enrichments)
+   overrides on key overlap. Keys the new handler omits from its mount
+   return are dropped on the next navigate, so handlers control what
+   persists by what they return. Stateful children's state (in `views`)
+   is wiped.
 
 ## Process dictionary keys
 
