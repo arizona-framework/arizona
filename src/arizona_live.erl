@@ -19,7 +19,13 @@ WebSocket handler) with the render and diff pipeline.
 3. **Info messages** -- `handle_info/2` invokes the handler's optional
    `handle_info/2` callback, diffs, and pushes the resulting ops.
 4. **Navigate** -- `navigate/4,5` unmounts the old root, cancels pending
-   timers, mounts the new handler, and replies with fresh content.
+   timers, and mounts the new handler. The previous root's final
+   bindings are carried forward as the floor for the new mount's input
+   -- `InitBindings` (route static config + middleware enrichments)
+   overrides on key overlap. Keys the new handler omits from its mount
+   return are dropped on the next navigate, so handlers control what
+   persists by what they return. Stateful children's state (in `views`)
+   is wiped.
 
 ## Process dictionary keys
 
@@ -349,7 +355,16 @@ handle_call(
 ) ->
     ok = cancel_pending_timers(),
     ok = arizona_handler:call_unmount(OldH, OldB),
-    {NewViewId, HTML, Snap, B2, V1} = do_mount(NewHandler, NewIB, NewReq, #{}, NewOnMount),
+    %% Carry the previous root handler's final bindings forward as the floor;
+    %% NewIB (route static config + middleware enrichments) overrides on
+    %% overlap. The new handler's `mount/2` receives `OldB ⊕ NewIB`, picks
+    %% what it cares about, and returns its own bindings — values it does
+    %% not include in the return are dropped. Handlers that want to keep
+    %% session-level state (current_user, theme, locale) just include those
+    %% keys in their mount return; everything else is page-local and
+    %% naturally evaporates on the next navigate.
+    Merged = maps:merge(OldB, NewIB),
+    {NewViewId, HTML, Snap, B2, V1} = do_mount(NewHandler, Merged, NewReq, #{}, NewOnMount),
     {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
     {reply, {ok, NewViewId, PageContent1}, #state{
         handler = NewHandler,

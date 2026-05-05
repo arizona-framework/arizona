@@ -267,8 +267,13 @@ Simplified gen_server wrapper:
   `handle_info/2` are silently dropped. Empty ops+effects are not pushed
 - `navigate/4,5` -- `navigate(Pid, NewHandler, InitBindings, NewReq [, OnMount])`. Mounts new
   handler (applying any `OnMount` hooks with the new `Request`), resets gen_server state
-  (handler, bindings, req, snapshot, views), preserves `transport_pid`, returns
-  `{ok, NewViewId, PageContent}`
+  (handler, req, snapshot, views), preserves `transport_pid` and `sent_fps`, returns
+  `{ok, NewViewId, PageContent}`. The previous root handler's final bindings are carried
+  forward as the floor for the new handler's mount input -- `InitBindings` (route static
+  config + middleware enrichments) overrides on key overlap. Keys the new handler omits
+  from its mount return value are dropped on the next navigate. Stateful children's state
+  (in `views`) is wiped: a child that was alive on the old page is gone unless the new
+  page re-embeds it
 - `apply_on_mount/3` -- folds the `on_mount` hook chain: `apply_on_mount(OnMount, Bindings, Req)`.
   Each hook is `fun((Bindings, az:request()) -> Bindings)` or `{Module, Function}`
 

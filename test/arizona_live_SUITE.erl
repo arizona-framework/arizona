@@ -44,6 +44,7 @@
     live_navigate_round_trip/1,
     live_navigate/1,
     live_navigate_then_event/1,
+    live_navigate_carries_root_bindings/1,
     live_page_child_mount/1,
     live_parent_change_child_stable/1,
     live_parent_event_updates_children/1,
@@ -126,7 +127,8 @@ groups() ->
             live_navigate,
             live_navigate_then_event,
             live_navigate_resets_views,
-            live_navigate_round_trip
+            live_navigate_round_trip,
+            live_navigate_carries_root_bindings
         ]},
         {handle_info, [parallel], [
             live_handle_info,
@@ -638,6 +640,38 @@ live_navigate_round_trip(Config) when is_list(Config) ->
         ],
         maps:get(<<"d">>, CounterPayload)
     ).
+
+live_navigate_carries_root_bindings(Config) when is_list(Config) ->
+    %% Navigate carries the previous root handler's final bindings as
+    %% the floor for the new handler's mount input. NewIB (route static
+    %% config + middleware enrichments) overrides on overlap; keys
+    %% present only in OldB pass through to the new mount. The new
+    %% handler picks what it cares about and returns its own bindings —
+    %% values it omits from the return are dropped on the next navigate.
+    %%
+    %% Setup: arizona_root_counter as the root view. It mounts with
+    %% `count => 0` (default) merged under incoming bindings, so any
+    %% incoming `count` value wins. Increment to 3 via a root event,
+    %% then navigate to the same handler — the merge surfaces count=3
+    %% as the new mount's input, the handler's `maps:merge` lets it
+    %% pass through, and the new state has count=3 (not the default 0).
+    {ok, Pid} = arizona_live:start_link(
+        arizona_root_counter, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
+    {ok, ViewId} = arizona_live:mount(Pid),
+    %% Tick the root counter to 3
+    {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"inc", #{}),
+    {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"inc", #{}),
+    {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"inc", #{}),
+    %% Navigate back to the same handler with no overriding NewIB.
+    {ok, _NewViewId, PageContent} = arizona_live:navigate(
+        Pid, arizona_root_counter, #{}, arizona_req_test_adapter:new()
+    ),
+    %% Dynamics: [id_attr, count]. After the merge `count` should be 3 —
+    %% if the merge weren't happening, the handler's default `count => 0`
+    %% would win and we'd see 0.
+    Dynamics = maps:get(<<"d">>, PageContent),
+    ?assertEqual([<<" id=\"counter\"">>, <<"3">>], Dynamics).
 
 %% =============================================================================
 %% handle_info tests
