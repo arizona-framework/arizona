@@ -176,6 +176,17 @@ Add `arizona` to your app's `applications` list in `.app.src`:
 {applications, [kernel, stdlib, cowboy, arizona]}
 ```
 
+Ensure that rebar shell, would consult the config/sys.config file
+
+``
+{shell, [
+    {config, "config/sys.config"},
+    {apps, [ yourapp ,cowboy]}
+]}.
+``
+
+
+
 Then declare routes in `config/sys.config`:
 
 ```erlang
