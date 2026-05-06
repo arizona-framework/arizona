@@ -176,6 +176,18 @@ Add `arizona` to your app's `applications` list in `.app.src`:
 {applications, [kernel, stdlib, cowboy, arizona]}
 ```
 
+Ensure `rebar3 shell` loads the config and starts your app by adding
+to `rebar.config`:
+
+```erlang
+{shell, [
+    {config, "config/sys.config"},
+    {apps, [yourapp]}
+]}.
+```
+
+Replace `yourapp` with your project's app name; `cowboy` and `arizona` are started
+transitively from the `applications` list in `.app.src`.
 Then declare routes in `config/sys.config`:
 
 ```erlang
