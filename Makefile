@@ -129,6 +129,13 @@ test-e2e-sequential:
 bench: compile-test
 	./scripts/bench.escript $(ARGS)
 
+# Performance profile (eprof/fprof). Same caveat as bench: developer
+# tool, not auto-gated. Pass extra args via ARGS, e.g.:
+#   make prof ARGS="--only diff_simple_event"
+#   make prof ARGS="--only render_view_page --tool fprof"
+prof: compile-test
+	./scripts/profile.escript $(ARGS)
+
 cover: cover-erl cover-js
 
 cover-erl:
