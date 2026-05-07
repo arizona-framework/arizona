@@ -374,12 +374,11 @@ stateful_bindings_sync(Config) when is_list(Config) ->
     CSnap = maps:get(snapshot, CView),
     %% Bindings count matches snapshot dynamic value
     ?assertEqual(5, maps:get(count, CBindings)),
-    %% Snapshot d: [{az0,{attr,id,val}}, {az1,{attr,az-click,cmd}},
-    %%              {az2,{attr,az-click,cmd}}, {az3,count_val}]
+    %% Snapshot d: [{az0,{attr,id,val}}, {az1,count_val}]
+    %% Static `arizona_js:push_event(~"inc"/~"dec")` calls fold to statics
+    %% at compile time, so they don't appear in dynamics.
     [
         {_, {attr, <<"id">>, _}},
-        {_, {attr, <<"az-click">>, _}},
-        {_, {attr, <<"az-click">>, _}},
         {_, CountVal}
     ] = maps:get(d, CSnap),
     ?assertEqual(5, CountVal).
@@ -448,19 +447,20 @@ stateless_diff(Config) when is_list(Config) ->
     ?assertMatch([[?OP_TEXT, <<"0">>, #{<<"f">> := _, <<"s">> := _, <<"d">> := _}]], Ops),
     [[_, _, Payload]] = Ops,
     ?assert(is_binary(maps:get(<<"f">>, Payload))),
-    %% Statics contain fingerprint-scoped az values, just check key fragments
+    %% Statics contain fingerprint-scoped az values, just check key fragments.
+    %% Static `arizona_js:push_event(~"inc"/~"dec")` attrs fold into the
+    %% counter's statics at compile time, so the s/d split has fewer
+    %% segments than it would if everything were dynamic.
     Statics = maps:get(<<"s">>, Payload),
-    ?assertEqual(5, length(Statics)),
+    ?assertEqual(3, length(Statics)),
     StaticsBin = iolist_to_binary(Statics),
-    %% Attr names are no longer baked into statics -- check az-view and Count:
     ?assertNotEqual(nomatch, binary:match(StaticsBin, <<"az-view">>)),
     ?assertNotEqual(nomatch, binary:match(StaticsBin, <<"Count: ">>)),
-    %% Dynamics now carry full attribute strings via unwrap_val
+    %% Dynamics now carry full attribute strings via unwrap_val. The two
+    %% `az-click` attributes folded to statics, so only id and count remain.
     ?assertEqual(
         [
             <<" id=\"sl\"">>,
-            <<" az-click=\"[0,&quot;inc&quot;]\"">>,
-            <<" az-click=\"[0,&quot;dec&quot;]\"">>,
             <<"5">>
         ],
         maps:get(<<"d">>, Payload)
@@ -526,8 +526,10 @@ deps_count_tracks_correctly(Config) when is_list(Config) ->
     {B, _} = arizona_counter:mount(#{}),
     Tmpl = arizona_counter:render(B),
     {_, Snap, _} = arizona_render:render(Tmpl, #{}),
-    %% Deps: #{id} for id attr, #{} for az-click inc/dec, #{count} for text
-    ?assertEqual([#{id => true}, #{}, #{}, #{count => true}], maps:get(deps, Snap)).
+    %% Deps: #{id} for id attr, #{count} for text. The two az-click attrs
+    %% with literal `arizona_js:push_event` are folded to statics at
+    %% compile time, so they don't produce dynamics or deps.
+    ?assertEqual([#{id => true}, #{count => true}], maps:get(deps, Snap)).
 
 deps_dedup_and_multi_key(Config) when is_list(Config) ->
     %% A dynamic that reads the same key twice should have one entry (dedup),
@@ -551,8 +553,11 @@ deps_dedup_and_multi_key(Config) when is_list(Config) ->
     ?assertEqual([#{a => true}, #{a => true, b => true}], maps:get(deps, Snap)).
 
 deps_page_tracks_correctly(Config) when is_list(Config) ->
-    %% Verify page deps: id, title, az-click (static), theme, count (counter1),
-    %% count (counter2), counter3 (static), connected (status), form statics, todos
+    %% Verify page deps. Static `arizona_js:push_event` calls (the page's
+    %% "add", "add_todo" form submit, "clear_todos", "reorder_todo" attrs)
+    %% fold to statics at compile time, so they don't produce dynamics.
+    %% Remaining dynamics: id, title, theme, counter1 (count), counter2
+    %% (count), counter3 (literal), connected (status), todos.
     {B, _} = arizona_page:mount(#{}, arizona_req_test_adapter:new(#{})),
     Tmpl = arizona_page:render(B),
     {_, Snap, _} = arizona_render:render(Tmpl, #{}),
@@ -560,15 +565,11 @@ deps_page_tracks_correctly(Config) when is_list(Config) ->
         [
             #{id => true},
             #{title => true},
-            #{},
             #{theme => true},
             #{count => true},
             #{count => true},
             #{},
             #{connected => true},
-            #{},
-            #{},
-            #{},
             #{todos => true}
         ],
         maps:get(deps, Snap)

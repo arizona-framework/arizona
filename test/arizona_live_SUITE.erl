@@ -625,17 +625,18 @@ live_navigate_round_trip(Config) when is_list(Config) ->
         Pid, arizona_page, #{title => <<"Welcome">>}, arizona_req_test_adapter:new()
     ),
     ?assert(is_binary(maps:get(<<"f">>, PageContent))),
-    %% Counter child dynamics should show count 0
+    %% Counter child dynamics should show count 0. Static
+    %% `arizona_js:push_event` attrs fold to statics at compile time on
+    %% both the page and the counter, so the index of counter1 in the
+    %% page's dynamics list is 4 (id, title, theme, counter1, ...) and
+    %% the counter's own dynamics shrink from [id, az_inc, az_dec, count]
+    %% to [id, count].
     Dynamics = maps:get(<<"d">>, PageContent),
-    %% First counter child is at index 5
-    %% (1=id, 2=title, 3=az-click add, 4=theme, 5=counter)
-    CounterPayload = lists:nth(5, Dynamics),
+    CounterPayload = lists:nth(4, Dynamics),
     ?assert(is_binary(maps:get(<<"f">>, CounterPayload))),
     ?assertEqual(
         [
             <<" id=\"counter\"">>,
-            <<" az-click=\"[0,&quot;inc&quot;]\"">>,
-            <<" az-click=\"[0,&quot;dec&quot;]\"">>,
             <<"0">>
         ],
         maps:get(<<"d">>, CounterPayload)
