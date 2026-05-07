@@ -398,12 +398,11 @@ render_ssr_val(#{callback := Callback, props := Props}) ->
     Tmpl = Callback(Props),
     render_ssr_val(Tmpl);
 render_ssr_val(#{s := Statics, d := Dynamics} = Tmpl) ->
-    Vals = render_ssr_dynamics(Dynamics),
     Snap0 = #{
         s => Statics,
         d => [
-            {arizona_template:dyn_az(D), Val}
-         || D <- Dynamics && Val <- Vals
+            {arizona_template:dyn_az(D), render_ssr_one(D)}
+         || D <- Dynamics
         ]
     },
     arizona_template:maybe_propagate(Tmpl, Snap0);
