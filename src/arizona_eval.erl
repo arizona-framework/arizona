@@ -268,7 +268,7 @@ Renders map entries without view tracking. Returns `[ItemD]`.
     Template :: map(),
     ItemDs :: [[{arizona_template:az(), term(), map()}]].
 render_map_items_simple(Map, #{d := DFun}) ->
-    [[eval_one_triple(D) || D <- DFun(K, V)] || K := V <:- Map].
+    [[eval_one_triple(D) || D <- DFun(K, V)] || K := V <- Map].
 
 -doc """
 Asserts that `Bindings` did not modify any framework-restricted keys

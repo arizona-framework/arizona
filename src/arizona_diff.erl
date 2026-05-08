@@ -467,7 +467,7 @@ stream_reset(Az, OldItems, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     VSet = maps:from_keys(VKeys, true),
     RemOps = [
         [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K := _ <:- SnapAcc, not is_map_key(K, VSet)
+     || K := _ <- SnapAcc, not is_map_key(K, VSet)
     ],
     Kept = maps:with(VKeys, SnapAcc),
     {DiffOps, NewSnaps, Views1} =
@@ -578,7 +578,7 @@ apply_limit(
     KeepOnly = maps:with(VKeys, SnapItems),
     DropOps = [
         [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K := _ <:- SnapItems, not is_map_key(K, KeepOnly)
+     || K := _ <- SnapItems, not is_map_key(K, KeepOnly)
     ],
     {DropOps, #{t => ?EACH, items => KeepOnly, order => VKeys, template => Tmpl}, Views};
 apply_limit(
@@ -597,9 +597,9 @@ apply_limit(
     VSet = maps:from_keys(VKeys, true),
     RemOps = [
         [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K := _ <:- SnapItems, not is_map_key(K, VSet)
+     || K := _ <- SnapItems, not is_map_key(K, VSet)
     ],
-    Pruned = #{K => V || K := V <:- SnapItems, is_map_key(K, VSet)},
+    Pruned = #{K => V || K := V <- SnapItems, is_map_key(K, VSet)},
     {InsOps, Final, Views1} = snap_add_missing(
         Az,
         VKeys,
