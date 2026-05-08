@@ -477,7 +477,7 @@ process_root_change(
     Tmpl = arizona_handler:call_render(H, B1),
     Changed = compute_changed(B0, B1),
     {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
-    RemovedViews = maps:without(maps:keys(V1), V0),
+    RemovedViews = #{K => V || K := V <- V0, not is_map_key(K, V1)},
     ok = unmount_removed_views(RemovedViews),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
@@ -523,15 +523,17 @@ flush_view_messages() ->
     end.
 
 compute_changed(OldBindings, NewBindings) ->
-    maps:filter(
-        fun(K, V) ->
-            case OldBindings of
-                #{K := V} -> false;
-                #{} -> true
-            end
-        end,
-        NewBindings
-    ).
+    #{K => V || K := V <- NewBindings, key_changed(K, V, OldBindings)}.
+
+%% True iff `K` is missing from `OldBindings`, or `OldBindings`
+%% holds a different value for it. Pattern-bind `V` from `NewBindings`
+%% and reuse it as the literal in the `OldBindings` match to confirm
+%% equality.
+key_changed(K, V, OldBindings) ->
+    case OldBindings of
+        #{K := V} -> false;
+        #{} -> true
+    end.
 
 push(undefined, _Ops, _Effects) ->
     ok;
