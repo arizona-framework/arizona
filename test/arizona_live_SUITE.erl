@@ -863,7 +863,20 @@ live_send_unknown_view(Config) when is_list(Config) ->
     Pid ! {arizona_view, <<"nonexistent">>, hello},
     receive
         {'DOWN', Ref, process, Pid, Reason} ->
-            ?assertMatch({{unknown_view, <<"nonexistent">>, hello}, _}, Reason)
+            ?assertMatch({{unknown_view, <<"nonexistent">>, hello}, _}, Reason),
+            %% The raise carries an error_info annotation so the dev
+            %% page can route the reason through arizona_live:format_error/2.
+            {{unknown_view, _, _}, Stack} = Reason,
+            [{arizona_live, _, _, Info} | _] = Stack,
+            ?assertEqual(
+                #{module => arizona_live},
+                proplists:get_value(error_info, Info)
+            ),
+            #{general := Msg} = arizona_live:format_error(
+                {unknown_view, <<"nonexistent">>, hello}, Stack
+            ),
+            Bin = unicode:characters_to_binary(Msg),
+            ?assertNotEqual(nomatch, binary:match(Bin, <<"no view matches id">>))
     after 1000 ->
         error(timeout)
     end.
