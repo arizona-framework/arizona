@@ -292,17 +292,23 @@ encode(#{?EFFECTS := Effects}) ->
 encode(Map) ->
     json:encode(Map).
 
-scope_ops(ViewId, Ops) ->
-    lists:append([scope_op(ViewId, Op) || Op <- Ops]).
-
-scope_op(_ParentViewId, [ChildViewId, ChildOps]) when is_binary(ChildViewId) ->
-    %% Recursive child diff -- flatten with child's own view id
-    scope_ops(ChildViewId, ChildOps);
-scope_op(ViewId, [?OP_ITEM_PATCH, Target, Key, InnerOps]) ->
-    %% ITEM_PATCH: scope the target, inner ops are item-relative (not scoped)
-    [[?OP_ITEM_PATCH, <<ViewId/binary, ":", Target/binary>>, Key, InnerOps]];
-scope_op(ViewId, [OpCode, Target | Rest]) when is_integer(OpCode) ->
-    [[OpCode, <<ViewId/binary, ":", Target/binary>> | Rest]].
+%% Direct recursion instead of `lists:append([scope_op(...) || ...])`:
+%% saves the per-op singleton list allocation and the trailing
+%% `lists:append/1` flatten pass. The simple OpCode and OP_ITEM_PATCH
+%% cases cons the new op directly onto the scoped tail. The child-diff
+%% case is the only one that still needs `++` (the recursive scope_ops
+%% can return many ops), but it's rare in practice.
+scope_ops(_ViewId, []) ->
+    [];
+scope_ops(_ParentViewId, [[ChildViewId, ChildOps] | Rest]) when is_binary(ChildViewId) ->
+    scope_ops(ChildViewId, ChildOps) ++ scope_ops(_ParentViewId, Rest);
+scope_ops(ViewId, [[?OP_ITEM_PATCH, Target, Key, InnerOps] | Rest]) ->
+    [
+        [?OP_ITEM_PATCH, <<ViewId/binary, ":", Target/binary>>, Key, InnerOps]
+        | scope_ops(ViewId, Rest)
+    ];
+scope_ops(ViewId, [[OpCode, Target | RestArgs] | Rest]) when is_integer(OpCode) ->
+    [[OpCode, <<ViewId/binary, ":", Target/binary>> | RestArgs] | scope_ops(ViewId, Rest)].
 
 -ifdef(TEST).
 
@@ -310,7 +316,7 @@ scope_op_replace_test() ->
     ReplOp = [8, ~"page", ~"<main>new</main>"],
     ?assertEqual(
         [[8, ~"root:page", ~"<main>new</main>"]],
-        scope_op(~"root", ReplOp)
+        scope_ops(~"root", [ReplOp])
     ).
 
 stream_scope_ops_test() ->
@@ -318,25 +324,25 @@ stream_scope_ops_test() ->
     InsOp = [5, ~"0", ~"1", -1, ~"<li>A</li>"],
     ?assertEqual(
         [[5, ~"page:0", ~"1", -1, ~"<li>A</li>"]],
-        scope_op(~"page", InsOp)
+        scope_ops(~"page", [InsOp])
     ),
     %% REMOVE
     RemOp = [6, ~"0", ~"1"],
     ?assertEqual(
         [[6, ~"page:0", ~"1"]],
-        scope_op(~"page", RemOp)
+        scope_ops(~"page", [RemOp])
     ),
     %% ITEM_PATCH
     PatchOp = [7, ~"0", ~"1", [[0, ~"0", ~"New"]]],
     ?assertEqual(
         [[7, ~"page:0", ~"1", [[0, ~"0", ~"New"]]]],
-        scope_op(~"page", PatchOp)
+        scope_ops(~"page", [PatchOp])
     ),
     %% MOVE
     MoveOp = [9, ~"0", ~"1", 0],
     ?assertEqual(
         [[9, ~"page:0", ~"1", 0]],
-        scope_op(~"page", MoveOp)
+        scope_ops(~"page", [MoveOp])
     ).
 
 -endif.
