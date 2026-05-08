@@ -54,7 +54,8 @@ profilers() ->
         {~"pubsub_broadcast_100", fun prof_pubsub_broadcast_100/2},
         {~"render_nested_each", fun prof_render_nested_each/2},
         {~"render_stateful_chain", fun prof_render_stateful_chain/2},
-        {~"render_view_page_dyn_js", fun prof_render_view_page_dyn_js/2}
+        {~"render_view_page_dyn_js", fun prof_render_view_page_dyn_js/2},
+        {~"mixed_todo_session", fun prof_mixed_todo_session/2}
     ].
 
 filter_workloads(All, []) ->
@@ -156,6 +157,58 @@ prof_stream_reorder_100(Label, Opts) ->
         end
     end,
     profile_loop(Label, Op, Opts).
+
+prof_mixed_todo_session(Label, Opts) ->
+    %% Real-world-ish session: arizona_page (3 counters + todos stream
+    %% + form), pre-mounted with 10 seed todos, then per op cycles
+    %% through 4 representative event types in round-robin order:
+    %%   1. counter `inc`   -- per-child text update + diff
+    %%   2. page `add_todo` -- stream insert + diff with new ITEM_PATCH
+    %%   3. page `update_todo` (id 1) -- stream update with per-item dep
+    %%      tracking
+    %%   4. page `add`      -- parent broadcast, all child counters
+    %%      receive handle_update
+    %%
+    %% Surfaces hot paths the synthetic single-event workloads miss:
+    %% mixed-mode dispatch, stream lifecycle interactions, multi-key
+    %% changed maps, and the handle_call -> diff -> encode -> reply
+    %% pipeline under varied input shapes.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(arizona_page, #{}, Req, #{}),
+    %% Pre-populate 10 todos so update_todo always hits an existing id.
+    Socket1 = lists:foldl(
+        fun(_I, S) ->
+            Json = iolist_to_binary(
+                json:encode([~"page", ~"add_todo", #{}])
+            ),
+            socket_handle_in(Json, S)
+        end,
+        Socket,
+        lists:seq(1, 10)
+    ),
+    Events = {
+        iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
+        iolist_to_binary(json:encode([~"page", ~"add_todo", #{}])),
+        iolist_to_binary(
+            json:encode([~"page", ~"update_todo", #{~"id" => 1, ~"value" => ~"updated"}])
+        ),
+        iolist_to_binary(json:encode([~"page", ~"add", #{}]))
+    },
+    Counter = counters:new(1, []),
+    Op = fun() ->
+        N = counters:get(Counter, 1),
+        ok = counters:add(Counter, 1, 1),
+        Json = element((N rem 4) + 1, Events),
+        socket_handle_in(Json, Socket1),
+        ok
+    end,
+    profile_loop(Label, Op, Opts).
+
+socket_handle_in(Json, Socket) ->
+    case arizona_socket:handle_in(Json, Socket) of
+        {ok, S} -> S;
+        {reply, _, S} -> S
+    end.
 
 prof_render_view_page_dyn_js(Label, Opts) ->
     %% Renders `arizona_page` with a pre-populated 100-item todos stream
