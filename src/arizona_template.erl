@@ -48,6 +48,7 @@ render(Bindings) ->
 -export([to_bin/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
+-export([format_error/2]).
 -export([unwrap_val/1]).
 -export([render_attr/2]).
 -export([maybe_propagate/2]).
@@ -62,6 +63,7 @@ render(Bindings) ->
 %% --------------------------------------------------------------------
 
 -ignore_xref([format_error/1]).
+-ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -135,7 +137,8 @@ render(Bindings) ->
 -doc """
 Reads `Key` from `Bindings` and tracks the access for diff dependency analysis.
 
-Errors with `{badkey, Key}` if not present. Use `get/3` for a default.
+Errors with `missing_binding` (carrying an `error_info` annotation that
+routes through `format_error/2`) if not present. Use `get/3` for a default.
 """.
 -spec get(Key, Bindings) -> Value when
     Key :: term(),
@@ -143,7 +146,14 @@ Errors with `{badkey, Key}` if not present. Use `get/3` for a default.
     Value :: term().
 get(Key, Bindings) ->
     track(Key),
-    maps:get(Key, Bindings).
+    case Bindings of
+        #{Key := Val} ->
+            Val;
+        #{} ->
+            erlang:error(missing_binding, [Key, Bindings], [
+                {error_info, #{module => ?MODULE}}
+            ])
+    end.
 
 -doc """
 Reads `Key` from `Bindings`, returning `Default` if absent. Tracks the access.
@@ -272,6 +282,24 @@ format_error(parse_transform_not_applied) ->
     "parse transform not applied -- include arizona_stateful.hrl or arizona_stateless.hrl";
 format_error({bad_template_value, V}) ->
     lists:flatten(io_lib:format("cannot convert ~0tp to binary in template", [V])).
+
+-doc """
+Formats runtime errors raised with an `error_info` annotation pointing at
+this module. Picked up by `erl_error:format_exception/3`.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error(missing_binding, [{_M, _F, [Key, Bindings], _Info} | _]) ->
+    #{
+        general => io_lib:format(
+            "binding ~0tp not found. Available bindings: ~0tp. "
+            "Use arizona_template:get/3 (or ?get/2) with a default "
+            "to make the binding optional.",
+            [Key, lists:sort(maps:keys(Bindings))]
+        )
+    }.
 
 -doc """
 Materializes an attribute dynamic into its rendered binary, leaving plain
