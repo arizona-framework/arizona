@@ -755,7 +755,7 @@ ws_encode_binary(Payload) ->
 ws_encode_frame(Opcode, Payload) ->
     Len = byte_size(Payload),
     Mask = crypto:strong_rand_bytes(4),
-    Masked = ws_mask(Payload, Mask, 0, <<>>),
+    Masked = ws_mask(Payload, Mask),
     case Len of
         L when L < 126 ->
             <<1:1, 0:3, Opcode:4, 1:1, L:7, Mask/binary, Masked/binary>>;
@@ -765,11 +765,16 @@ ws_encode_frame(Opcode, Payload) ->
             <<1:1, 0:3, Opcode:4, 1:1, 127:7, L:64, Mask/binary, Masked/binary>>
     end.
 
-ws_mask(<<>>, _Mask, _I, Acc) ->
+%% Rotate the 4 mask bytes through the recursive args -- O(N) instead
+%% of the previous O(N^2) version that rebuilt a 32-byte mask binary
+%% per input byte.
+ws_mask(Payload, <<M0, M1, M2, M3>>) ->
+    ws_mask(Payload, M0, M1, M2, M3, <<>>).
+
+ws_mask(<<>>, _, _, _, _, Acc) ->
     Acc;
-ws_mask(<<B, Rest/binary>>, Mask, I, Acc) ->
-    <<_:I/binary, M, _/binary>> = <<Mask/binary, Mask/binary, Mask/binary, Mask/binary>>,
-    ws_mask(Rest, Mask, (I + 1) rem 4, <<Acc/binary, (B bxor M)>>).
+ws_mask(<<B, Rest/binary>>, M0, M1, M2, M3, Acc) ->
+    ws_mask(Rest, M1, M2, M3, M0, <<Acc/binary, (B bxor M0)>>).
 
 %% Decode a server frame (unmasked)
 ws_decode(<<_Fin:1, _Rsv:3, 8:4, _M:1, Len:7, Rest/binary>>) when Len < 126 ->
