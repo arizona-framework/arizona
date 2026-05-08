@@ -4,18 +4,18 @@ Helpers for error reporting.
 
 Two utilities consumed across the framework:
 
-- `closest/2` -- did-you-mean suggestions for `format_error/2` clauses
-  that report a missing key. Used by `arizona_template:format_error/2`
-  and `arizona_stream:format_error/2`.
+- `did_you_mean/2` -- "did you mean?" suggestion for `format_error/2`
+  clauses that report a missing key. Used by
+  `arizona_template:format_error/2` and `arizona_stream:format_error/2`.
 - `raise_or_propagate/7` -- the catch-clause helper that lets a
   dispatcher re-tag a failure originating at the user's exact callback
   while propagating any other failure untouched. Used by every
   `arizona_handler:call_*` wrapper.
 """.
 
--export([closest/2]).
+-export([did_you_mean/2]).
 -export([raise_or_propagate/7]).
--ignore_xref([closest/2]).
+-ignore_xref([did_you_mean/2]).
 -ignore_xref([raise_or_propagate/7]).
 
 -doc """
@@ -23,13 +23,13 @@ Returns the candidate closest to `Target` by Levenshtein edit distance, or
 `undefined` when nothing is close enough. The threshold scales with the
 target length so very short keys must match almost exactly.
 """.
--spec closest(Target, Candidates) -> Match | undefined when
+-spec did_you_mean(Target, Candidates) -> Match | undefined when
     Target :: term(),
     Candidates :: [term()],
     Match :: term().
-closest(_Target, []) ->
+did_you_mean(_Target, []) ->
     undefined;
-closest(Target, Candidates) ->
+did_you_mean(Target, Candidates) ->
     TargetBin = to_bin(Target),
     Threshold = max(2, byte_size(TargetBin) div 4),
     Scored = [{distance(TargetBin, to_bin(C)), C} || C <- Candidates],
