@@ -1,6 +1,12 @@
 -module(arizona_template_SUITE).
 -include_lib("stdlib/include/assert.hrl").
 
+%% Dialyzer flags `arizona_template:to_bin(make_ref())` as "will never
+%% return" -- which is correct: the catch-all clause raises. Suppress
+%% per-function rather than fixing the spec, matching the precedent in
+%% arizona_parse_transform_SUITE.
+-dialyzer({nowarn_function, to_bin_bad_value_routes_through_format_error_2/1}).
+
 -export([all/0, groups/0]).
 -export([
     html_stub/1,
@@ -11,7 +17,9 @@
     to_bin_binary/1,
     to_bin_integer/1,
     get_missing_binding_raises_named_reason/1,
-    format_error_missing_binding_renders_message/1
+    format_error_missing_binding_renders_message/1,
+    to_bin_bad_value_routes_through_format_error_2/1,
+    parse_transform_not_applied_routes_through_format_error_2/1
 ]).
 
 all() ->
@@ -28,7 +36,9 @@ groups() ->
             to_bin_binary,
             to_bin_integer,
             get_missing_binding_raises_named_reason,
-            format_error_missing_binding_renders_message
+            format_error_missing_binding_renders_message,
+            to_bin_bad_value_routes_through_format_error_2,
+            parse_transform_not_applied_routes_through_format_error_2
         ]}
     ].
 
@@ -111,3 +121,43 @@ format_error_missing_binding_renders_message(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(Bin, <<"binding tilte not found">>)),
     %% Available keys are sorted and listed.
     ?assertNotEqual(nomatch, binary:match(Bin, <<"id,title">>)).
+
+%% --- to_bin/1 routes bad-value errors through format_error/2 ---
+
+to_bin_bad_value_routes_through_format_error_2(Config) when is_list(Config) ->
+    %% to_bin/1 raises {bad_template_value, V} with an error_info annotation
+    %% so erl_error:format_exception/3 dispatches to format_error/2, which
+    %% delegates to the existing format_error/1 message.
+    Stack =
+        try arizona_template:to_bin(make_ref()) of
+            _ -> ct:fail(expected_bad_template_value)
+        catch
+            error:{bad_template_value, _}:ST -> ST
+        end,
+    [{arizona_template, to_bin, [_], Info} | _] = Stack,
+    ?assertEqual(
+        #{module => arizona_template},
+        proplists:get_value(error_info, Info)
+    ),
+    Reason = {bad_template_value, make_ref()},
+    #{general := Msg} = arizona_template:format_error(Reason, Stack),
+    Bin = unicode:characters_to_binary(Msg),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"cannot convert">>)).
+
+%% --- html/1 routes parse_transform_not_applied through format_error/2 ---
+
+parse_transform_not_applied_routes_through_format_error_2(Config) when is_list(Config) ->
+    Stack =
+        try arizona_template:html(foo) of
+            _ -> ct:fail(expected_parse_transform_not_applied)
+        catch
+            error:parse_transform_not_applied:ST -> ST
+        end,
+    [{arizona_template, html, _, Info} | _] = Stack,
+    ?assertEqual(
+        #{module => arizona_template},
+        proplists:get_value(error_info, Info)
+    ),
+    #{general := Msg} = arizona_template:format_error(parse_transform_not_applied, Stack),
+    Bin = unicode:characters_to_binary(Msg),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"parse transform not applied">>)).

@@ -207,7 +207,9 @@ this function runs, the parse transform was not applied -- include
 """.
 -spec html(term()) -> no_return().
 html(_Elems) ->
-    erlang:error(parse_transform_not_applied).
+    erlang:error(parse_transform_not_applied, [], [
+        {error_info, #{module => ?MODULE}}
+    ]).
 
 -doc """
 Builds a stateful child descriptor. The renderer mounts `Handler` with `Props`.
@@ -260,10 +262,15 @@ to_bin(V) when is_binary(V) -> V;
 to_bin(V) when is_integer(V) -> integer_to_binary(V);
 to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
 to_bin(V) when is_atom(V) -> atom_to_binary(V);
-to_bin({arizona_js, _} = Cmd) -> arizona_js:encode(Cmd);
-to_bin([{arizona_js, _} | _] = Cmds) -> arizona_js:encode(Cmds);
+to_bin({arizona_js, _} = Cmd) ->
+    arizona_js:encode(Cmd);
+to_bin([{arizona_js, _} | _] = Cmds) ->
+    arizona_js:encode(Cmds);
 to_bin(V) when is_list(V) -> iolist_to_binary(V);
-to_bin(V) -> erlang:error({bad_template_value, V}).
+to_bin(V) ->
+    erlang:error({bad_template_value, V}, [V], [
+        {error_info, #{module => ?MODULE}}
+    ]).
 
 -doc """
 Extracts the `t:az/0` index from a 2- or 3-tuple `t:dynamic/0`.
@@ -299,7 +306,11 @@ format_error(missing_binding, [{_M, _F, [Key, Bindings], _Info} | _]) ->
             "to make the binding optional.",
             [Key, lists:sort(maps:keys(Bindings))]
         )
-    }.
+    };
+format_error({bad_template_value, _V} = Reason, _ST) ->
+    #{general => format_error(Reason)};
+format_error(parse_transform_not_applied = Reason, _ST) ->
+    #{general => format_error(Reason)}.
 
 -doc """
 Materializes an attribute dynamic into its rendered binary, leaving plain
