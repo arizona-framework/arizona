@@ -4,11 +4,14 @@
 -export([all/0, groups/0]).
 -export([
     missing_callback_render_tagged/1,
+    missing_callback_handle_event_tagged/1,
     unhandled_event_tagged/1,
     unhandled_info_tagged/1,
+    unhandled_update_tagged/1,
     unhandled_unmount_tagged/1,
     function_clause_inside_callback_propagates_untagged/1,
-    format_error_messages_include_view_id/1
+    format_error_messages_include_view_id/1,
+    format_error_renders_all_reasons/1
 ]).
 
 all() ->
@@ -18,11 +21,14 @@ groups() ->
     [
         {dispatcher_tagging, [parallel], [
             missing_callback_render_tagged,
+            missing_callback_handle_event_tagged,
             unhandled_event_tagged,
             unhandled_info_tagged,
+            unhandled_update_tagged,
             unhandled_unmount_tagged,
             function_clause_inside_callback_propagates_untagged,
-            format_error_messages_include_view_id
+            format_error_messages_include_view_id,
+            format_error_renders_all_reasons
         ]}
     ].
 
@@ -153,3 +159,70 @@ format_error_messages_include_view_id(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(Bin, <<"page">>)),
     ?assertNotEqual(nomatch, binary:match(Bin, <<"my_handler">>)),
     ?assertNotEqual(nomatch, binary:match(Bin, <<"foo">>)).
+
+missing_callback_handle_event_tagged(Config) when is_list(Config) ->
+    %% Module without a handle_event/3 export -- call_handle_event must
+    %% re-tag the resulting `undef` into `{missing_callback, _, handle_event, 3}`.
+    Mod = compile_module("-module(stub_no_he). -export([]).\n"),
+    try
+        arizona_handler:call_handle_event(
+            Mod, <<"foo">>, #{}, #{id => <<"v">>}
+        )
+    of
+        _ -> ct:fail(expected_missing_callback)
+    catch
+        error:{missing_callback, Mod, handle_event, 3} -> ok
+    end.
+
+unhandled_update_tagged(Config) when is_list(Config) ->
+    %% Module exports handle_update/2 but no clause matches the props --
+    %% call_handle_update must re-tag the function_clause into
+    %% `{unhandled_update, _, _, _}`.
+    Mod = compile_module(
+        "-module(stub_update). "
+        "-export([handle_update/2]). "
+        "handle_update(#{tag := keep} = P, B) -> {maps:merge(B, P), #{}}.\n"
+    ),
+    try
+        arizona_handler:call_handle_update(
+            Mod, #{other => 1}, #{id => <<"v">>}
+        )
+    of
+        _ -> ct:fail(expected_unhandled_update)
+    catch
+        error:{unhandled_update, Mod, #{other := 1}, _} -> ok
+    end.
+
+format_error_renders_all_reasons(Config) when is_list(Config) ->
+    %% Every tagged reason has a format_error/2 clause that returns an
+    %% iolist mentioning the offending module and (when relevant) the
+    %% offending key/event/info. The `missing_callback` clause pulls
+    %% Bindings from the stack frame's args (last position), so the
+    %% synthetic stack carries a realistic frame.
+    Bindings = #{id => <<"page">>},
+    %% Frame shape mirrors what call_render/2 raises: the dispatcher's
+    %% Args list has Bindings as its tail.
+    Stack = [{arizona_handler, call_render, [my_mod, Bindings], []}],
+    Cases = [
+        {{missing_callback, my_mod, render, 1}, [<<"page">>, <<"my_mod">>, <<"render">>, <<"1">>]},
+        {{unhandled_event, my_mod, <<"e">>, Bindings}, [<<"page">>, <<"my_mod">>, <<"e">>]},
+        {{unhandled_info, my_mod, hello, Bindings}, [<<"page">>, <<"my_mod">>, <<"hello">>]},
+        {{unhandled_update, my_mod, #{}, Bindings}, [<<"page">>, <<"my_mod">>]},
+        {{unhandled_unmount, my_mod, Bindings}, [<<"page">>, <<"my_mod">>]},
+        {{render_no_clause, my_mod, Bindings}, [<<"page">>, <<"my_mod">>]}
+    ],
+    [
+        begin
+            #{general := Msg} = arizona_handler:format_error(Reason, Stack),
+            Bin = unicode:characters_to_binary(Msg),
+            [
+                ?assertNotEqual(
+                    nomatch,
+                    binary:match(Bin, Token),
+                    {Reason, Token, Bin}
+                )
+             || Token <- Tokens
+            ]
+        end
+     || {Reason, Tokens} <- Cases
+    ].
