@@ -965,13 +965,7 @@ extract_directives([Attr | Rest], Opts) ->
     end.
 
 opts_to_map_fields(Opts, Line) ->
-    maps:fold(
-        fun(K, V, Acc) ->
-            [{map_field_assoc, Line, {atom, Line, K}, {atom, Line, V}} | Acc]
-        end,
-        [],
-        Opts
-    ).
+    [{map_field_assoc, Line, {atom, Line, K}, {atom, Line, V}} || K := V <- Opts].
 
 atom_to_html_binary(Atom) ->
     binary:replace(atom_to_binary(Atom), <<"_">>, <<"-">>, [global]).

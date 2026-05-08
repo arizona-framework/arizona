@@ -284,21 +284,21 @@ dynamic skipping. Items in Arizona are maps; non-map inputs crash here.
     Changed :: #{term() => true}.
 compute_item_changed(OldItem, NewItem) ->
     All = maps:merge(OldItem, NewItem),
-    maps:fold(
-        fun(K, _, Acc) ->
-            case OldItem of
-                #{K := V} ->
-                    case NewItem of
-                        #{K := V} -> Acc;
-                        #{} -> Acc#{K => true}
-                    end;
-                #{} ->
-                    Acc#{K => true}
-            end
-        end,
-        #{},
-        All
-    ).
+    #{K => true || K := _ <- All, key_changed(K, OldItem, NewItem)}.
+
+%% True iff `K` is missing from `OldItem` or `NewItem`, or both maps
+%% hold different values for it. Pattern-bind `V` from `OldItem` and
+%% reuse it as the literal in the `NewItem` match to confirm equality.
+key_changed(K, OldItem, NewItem) ->
+    case OldItem of
+        #{K := V} ->
+            case NewItem of
+                #{K := V} -> false;
+                #{} -> true
+            end;
+        #{} ->
+            true
+    end.
 
 -doc """
 Moves the item with `Key` to a new zero-based position and queues a
