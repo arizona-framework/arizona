@@ -704,7 +704,7 @@ lis_backtrack(Idx, Parent, Acc) ->
         end,
     lis_backtrack(Next, Parent, Acc#{Idx => true}).
 
-compute_reorder_ops(_Az, OldOrder, NewOrder, _Kept) when OldOrder =:= NewOrder ->
+compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept) ->
     [];
 compute_reorder_ops(Az, OldOrder, NewOrder, Kept) ->
     KeptOld = [K || K <- OldOrder, is_map_key(K, Kept)],
