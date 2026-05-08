@@ -270,6 +270,25 @@ encode_reply(Ops, Effects, Socket) ->
 unwrap_effects(Effects) ->
     [Cmd || {arizona_js, Cmd} <:- Effects].
 
+%% Fast path for the three reply shapes produced by encode_reply/3. Hand
+%% writes the outer `{"o":...}` / `{"e":...}` / both wrapper, skipping
+%% OTP json's per-key map walk and the per-call escape on the constant
+%% `<<"o">>`/`<<"e">>` keys. The inner Ops/Effects list still goes
+%% through one `json:encode/1` call so the json module's amortised list
+%% walk handles many-op replies (e.g. stream reorders) without the
+%% per-element call setup we'd pay if we hand-iterated.
+encode(#{?OPS := Ops, ?EFFECTS := Effects}) ->
+    [
+        <<"{\"o\":">>,
+        json:encode(Ops),
+        <<",\"e\":">>,
+        json:encode(Effects),
+        $}
+    ];
+encode(#{?OPS := Ops}) ->
+    [<<"{\"o\":">>, json:encode(Ops), $}];
+encode(#{?EFFECTS := Effects}) ->
+    [<<"{\"e\":">>, json:encode(Effects), $}];
 encode(Map) ->
     json:encode(Map).
 
