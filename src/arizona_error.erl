@@ -1,14 +1,22 @@
--module(arizona_error_hint).
+-module(arizona_error).
 -moduledoc """
-Helpers for error messages: did-you-mean suggestions.
+Helpers for error reporting.
 
-Used by `arizona_template:format_error/2` and `arizona_stream:format_error/2`
-to append `Did you mean 'X'?` when a missing key looks like a typo of an
-available key.
+Two utilities consumed across the framework:
+
+- `closest/2` -- did-you-mean suggestions for `format_error/2` clauses
+  that report a missing key. Used by `arizona_template:format_error/2`
+  and `arizona_stream:format_error/2`.
+- `raise_or_propagate/7` -- the catch-clause helper that lets a
+  dispatcher re-tag a failure originating at the user's exact callback
+  while propagating any other failure untouched. Used by every
+  `arizona_handler:call_*` wrapper.
 """.
 
 -export([closest/2]).
+-export([raise_or_propagate/7]).
 -ignore_xref([closest/2]).
+-ignore_xref([raise_or_propagate/7]).
 
 -doc """
 Returns the candidate closest to `Target` by Levenshtein edit distance, or
@@ -29,6 +37,36 @@ closest(Target, Candidates) ->
         [{D, Match} | _] when D =< Threshold, D > 0 -> Match;
         _ -> undefined
     end.
+
+-doc """
+Catch-clause helper for dispatchers that wrap a user callback.
+
+When the top stack frame is the user's exact callback (`Mod:Fn`), raises
+`Reason` with an `error_info` annotation pointing at `FormatErrorMod` --
+the module that exports the matching `format_error/2` clause. Otherwise
+propagates `error:OrigReason` with the original stacktrace untouched.
+
+The `FormatErrorMod` parameter exists because this helper lives in
+`arizona_error` but is called from various dispatcher modules; the
+`error_info` annotation must point at whichever module owns the format
+clauses for `Reason`.
+""".
+-spec raise_or_propagate(OrigReason, Stacktrace, Mod, Fn, Reason, ErrorArgs, FormatErrorMod) ->
+    no_return()
+when
+    OrigReason :: term(),
+    Stacktrace :: [tuple()],
+    Mod :: module(),
+    Fn :: atom(),
+    Reason :: term(),
+    ErrorArgs :: [term()],
+    FormatErrorMod :: module().
+raise_or_propagate(
+    _OrigReason, [{Mod, Fn, _, _} | _], Mod, Fn, Reason, ErrorArgs, FormatErrorMod
+) ->
+    erlang:error(Reason, ErrorArgs, [{error_info, #{module => FormatErrorMod}}]);
+raise_or_propagate(OrigReason, ST, _Mod, _Fn, _Reason, _ErrorArgs, _FormatErrorMod) ->
+    erlang:raise(error, OrigReason, ST).
 
 %% --------------------------------------------------------------------
 %% Internal functions

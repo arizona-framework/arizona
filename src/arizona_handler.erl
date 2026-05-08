@@ -120,12 +120,18 @@ call_render(H, Bindings) ->
         H:render(Bindings)
     catch
         error:undef:ST ->
-            raise_or_propagate(
-                undef, ST, H, render, {missing_callback, H, render, 1}, [H, Bindings]
+            arizona_error:raise_or_propagate(
+                undef, ST, H, render, {missing_callback, H, render, 1}, [H, Bindings], ?MODULE
             );
         error:function_clause:ST ->
-            raise_or_propagate(
-                function_clause, ST, H, render, {render_no_clause, H, Bindings}, [H, Bindings]
+            arizona_error:raise_or_propagate(
+                function_clause,
+                ST,
+                H,
+                render,
+                {render_no_clause, H, Bindings},
+                [H, Bindings],
+                ?MODULE
             )
     end.
 
@@ -150,22 +156,24 @@ call_handle_event(H, Event, Payload, Bindings) ->
         H:handle_event(Event, Payload, Bindings)
     catch
         error:undef:ST ->
-            raise_or_propagate(
+            arizona_error:raise_or_propagate(
                 undef,
                 ST,
                 H,
                 handle_event,
                 {missing_callback, H, handle_event, 3},
-                [H, Event, Payload, Bindings]
+                [H, Event, Payload, Bindings],
+                ?MODULE
             );
         error:function_clause:ST ->
-            raise_or_propagate(
+            arizona_error:raise_or_propagate(
                 function_clause,
                 ST,
                 H,
                 handle_event,
                 {unhandled_event, H, Event, Bindings},
-                [H, Event, Payload, Bindings]
+                [H, Event, Payload, Bindings],
+                ?MODULE
             )
     end.
 
@@ -191,13 +199,14 @@ call_handle_info(H, Info, Bindings) ->
                 H:handle_info(Info, Bindings)
             catch
                 error:function_clause:ST ->
-                    raise_or_propagate(
+                    arizona_error:raise_or_propagate(
                         function_clause,
                         ST,
                         H,
                         handle_info,
                         {unhandled_info, H, Info, Bindings},
-                        [H, Info, Bindings]
+                        [H, Info, Bindings],
+                        ?MODULE
                     )
             end;
         false ->
@@ -225,13 +234,14 @@ call_handle_update(H, Props, Bindings) ->
                 H:handle_update(Props, Bindings)
             catch
                 error:function_clause:ST ->
-                    raise_or_propagate(
+                    arizona_error:raise_or_propagate(
                         function_clause,
                         ST,
                         H,
                         handle_update,
                         {unhandled_update, H, Props, Bindings},
-                        [H, Props, Bindings]
+                        [H, Props, Bindings],
+                        ?MODULE
                     )
             end;
         false ->
@@ -255,13 +265,14 @@ call_unmount(H, Bindings) ->
                 H:unmount(Bindings)
             catch
                 error:function_clause:ST ->
-                    raise_or_propagate(
+                    arizona_error:raise_or_propagate(
                         function_clause,
                         ST,
                         H,
                         unmount,
                         {unhandled_unmount, H, Bindings},
-                        [H, Bindings]
+                        [H, Bindings],
+                        ?MODULE
                     )
             end;
         false ->
@@ -338,13 +349,3 @@ view_id(Bindings) ->
         #{id := ViewId} -> ViewId;
         _ -> undefined
     end.
-
-%% Used by every dispatcher catch clause. When the top stack frame is the
-%% user's exact callback, raises Reason with an error_info annotation
-%% pointing at this module. Otherwise propagates the original
-%% `error:OrigReason` untouched -- failures from inside the callback body
-%% are not the dispatcher's concern.
-raise_or_propagate(_OrigReason, [{H, Fn, _, _} | _], H, Fn, Reason, ErrorArgs) ->
-    erlang:error(Reason, ErrorArgs, [{error_info, #{module => ?MODULE}}]);
-raise_or_propagate(OrigReason, ST, _H, _Fn, _Reason, _ErrorArgs) ->
-    erlang:raise(error, OrigReason, ST).

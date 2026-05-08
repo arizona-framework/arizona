@@ -73,7 +73,10 @@ missing_callback_render_tagged(Config) when is_list(Config) ->
         catch
             error:{missing_callback, Mod, render, 1}:ST -> ST
         end,
-    [{arizona_handler, _, _, Info} | _] = Stack,
+    %% Top frame is the arizona_error helper that re-raised; the
+    %% error_info annotation points back at arizona_handler so
+    %% erl_error dispatches to the right format_error/2.
+    [{arizona_error, raise_or_propagate, _, Info} | _] = Stack,
     ?assertEqual(
         #{module => arizona_handler},
         proplists:get_value(error_info, Info)
@@ -98,7 +101,10 @@ unhandled_event_tagged(Config) when is_list(Config) ->
         catch
             error:{unhandled_event, Mod, <<"unknown">>, _}:ST -> ST
         end,
-    [{arizona_handler, _, _, Info} | _] = Stack,
+    %% Top frame is the arizona_error helper that re-raised; the
+    %% error_info annotation points back at arizona_handler so
+    %% erl_error dispatches to the right format_error/2.
+    [{arizona_error, raise_or_propagate, _, Info} | _] = Stack,
     ?assertEqual(
         #{module => arizona_handler},
         proplists:get_value(error_info, Info)

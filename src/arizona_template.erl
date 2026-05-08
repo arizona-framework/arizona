@@ -301,7 +301,7 @@ this module. Picked up by `erl_error:format_exception/3`.
 format_error(missing_binding, [{_M, _F, [Key, Bindings], _Info} | _]) ->
     Available = lists:sort(maps:keys(Bindings)),
     Suggestion =
-        case arizona_error_hint:closest(Key, Available) of
+        case arizona_error:closest(Key, Available) of
             undefined -> "";
             Match -> io_lib:format(" Did you mean ~0tp?", [Match])
         end,
