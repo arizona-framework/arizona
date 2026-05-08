@@ -333,8 +333,11 @@ format_error({render_no_clause, Mod, Bindings}, _ST) ->
         )
     }.
 
-view_id(Bindings) when is_map(Bindings) -> maps:get(id, Bindings, undefined);
-view_id(_) -> undefined.
+view_id(Bindings) ->
+    case Bindings of
+        #{id := ViewId} -> ViewId;
+        _ -> undefined
+    end.
 
 %% Used by every dispatcher catch clause. When the top stack frame is the
 %% user's exact callback, raises Reason with an error_info annotation
