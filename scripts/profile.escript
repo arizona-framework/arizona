@@ -55,7 +55,10 @@ profilers() ->
         {~"render_nested_each", fun prof_render_nested_each/2},
         {~"render_stateful_chain", fun prof_render_stateful_chain/2},
         {~"render_view_page_dyn_js", fun prof_render_view_page_dyn_js/2},
-        {~"mixed_todo_session", fun prof_mixed_todo_session/2}
+        {~"mixed_todo_session", fun prof_mixed_todo_session/2},
+        {~"stream_with_child_100", fun prof_stream_with_child_100/2},
+        {~"stream_insert_at_100", fun prof_stream_insert_at_100/2},
+        {~"navigate_e2e", fun prof_navigate_e2e/2}
     ].
 
 filter_workloads(All, []) ->
@@ -439,6 +442,116 @@ await_acks(N) ->
         ack -> await_acks(N - 1)
     end.
 
+prof_stream_with_child_100(Label, Opts) ->
+    %% Stream + nested stateful children. Pre-mounts arizona_stream_with_child
+    %% with 100 items; the fixture wraps each stream item in two
+    %% `?stateful(arizona_counter, ...)` children. Each
+    %% `arizona_live:mount_and_render/1` call performs a fresh mount +
+    %% render -- the live process replaces its bindings/snapshot/views
+    %% per call -- so per op we walk 100 stream-item triples through
+    %% `zip_stream_item/2` *and* invoke `render_ssr_val/1` for 200
+    %% stateful descriptors. Exercises the intersection of streams and
+    %% nested SSR that neither `render_each_100` (flat list, no
+    %% stateful) nor `render_stateful_chain` (3-level chain, no
+    %% stream) covers.
+    %%
+    %% `render_view_to_iolist/3` can't drive this -- inline stateful
+    %% descriptors inside `?each` aren't unfolded by the standalone
+    %% render path; only the live process's SSR snapshot path handles
+    %% them. So we route through `mount_and_render/1` and seed eprof
+    %% with the live pid (`server_pids/0` plus the bench infra would
+    %% pull in the wrong tree -- we just want this one process).
+    Items = [
+        #{id => I, label => integer_to_binary(I)}
+     || I <- lists:seq(1, 100)
+    ],
+    Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
+    Bindings = #{items => Stream},
+    Req = arizona_req_test_adapter:new(),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_stream_with_child, Bindings, self(), [], Req
+    ),
+    sanity_mount_and_render(Pid),
+    Op = fun() ->
+        {ok, _, _} = arizona_live:mount_and_render(Pid),
+        ok
+    end,
+    try
+        profile_loop_server(Label, Op, Opts, [Pid])
+    after
+        arizona_bench_lib:kill_live(Pid)
+    end.
+
+prof_stream_insert_at_100(Label, Opts) ->
+    %% Position-explicit stream insert. `stream_insert_1k` exercises
+    %% the bulk `arizona_stream:insert/2` path (O(1) back-buffer cons
+    %% + pending queue). `arizona_stream:insert/3` is the
+    %% position-aware variant: each call flattens the order list
+    %% (`flat_order/1`, Front++reverse(Back)) and walks it to the
+    %% insertion point (`order_insert_at/3`) -- both O(N). Maps to UI
+    %% flows like drag-drop reorder where the new index isn't always
+    %% the tail.
+    %%
+    %% Per op: start from an empty stream, do 100 `insert/3` calls at
+    %% rotating positions. The pre-seeded variant would dominate the
+    %% trace with `new/2`'s key/order/pending construction (each op
+    %% rebuilds the 100-item seed); doing 100 inserts per op puts the
+    %% work into the path we actually want to see.
+    KeyFun = fun(#{id := Id}) -> Id end,
+    Op = fun() ->
+        S0 = arizona_stream:new(KeyFun),
+        lists:foldl(
+            fun(I, S) -> arizona_stream:insert(S, #{id => I}, I rem 11) end,
+            S0,
+            lists:seq(1, 100)
+        ),
+        ok
+    end,
+    profile_loop(Label, Op, Opts).
+
+prof_navigate_e2e(Label, Opts) ->
+    %% Full SPA navigate roundtrip: WS frame -> arizona_socket:handle_in
+    %% -> handle_navigate/3 -> route resolve -> arizona_live:navigate/5
+    %% (unmount old view, mount new) -> diff producing OP_REPLACE ->
+    %% encode -> WS frame back. E2e specs cover navigation but no
+    %% workload profiles its cost. Both routes serve `arizona_root_counter`
+    %% (a tiny navigate-safe view -- no timers, mount preserves
+    %% Bindings0's `id` so the framework's restricted-key check
+    %% passes); the cowboy_router path differs between calls, so
+    %% route resolution + unmount/remount + OP_REPLACE encode all
+    %% run on each iteration.
+    Routes = [
+        {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
+        {live, <<"/two">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
+        {ws, <<"/ws">>, #{}}
+    ],
+    arizona_bench_lib:with_cowboy(prof_navigate_e2e, Routes, fun(Port) ->
+        arizona_bench_lib:with_ws_socket(Port, <<"/">>, fun(Sock) ->
+            JsonAway = iolist_to_binary(
+                json:encode([~"navigate", #{~"path" => ~"/two", ~"qs" => ~""}])
+            ),
+            JsonHome = iolist_to_binary(
+                json:encode([~"navigate", #{~"path" => ~"/", ~"qs" => ~""}])
+            ),
+            sanity_ws_send(Sock, JsonAway),
+            sanity_ws_send(Sock, JsonHome),
+            Counter = counters:new(1, []),
+            Op = fun() ->
+                N = counters:get(Counter, 1),
+                ok = counters:add(Counter, 1, 1),
+                Frame =
+                    case N band 1 of
+                        0 -> JsonAway;
+                        1 -> JsonHome
+                    end,
+                ok = arizona_bench_lib:ws_send(Sock, Frame),
+                {text, _} = arizona_bench_lib:ws_recv(Sock, 5000),
+                ok
+            end,
+            profile_loop_server(Label, Op, Opts, server_pids())
+        end)
+    end).
+
 sanity_http_get(Sock, Port) ->
     case arizona_bench_lib:http_get(Sock, Port) of
         {200, Body} when byte_size(Body) > 0 ->
@@ -478,6 +591,17 @@ sanity_stream_insert(KeyFun, Items) ->
             ok;
         Other ->
             io:format("error: expected 1000 stream items, got ~p~n", [Other]),
+            halt(1)
+    end.
+
+sanity_mount_and_render(Pid) ->
+    case arizona_live:mount_and_render(Pid) of
+        {ok, ViewId, PageContent} when
+            is_binary(ViewId), (is_binary(PageContent) orelse is_map(PageContent))
+        ->
+            ok;
+        Other ->
+            io:format("error: mount_and_render returned ~p~n", [Other]),
             halt(1)
     end.
 
