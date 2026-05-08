@@ -229,6 +229,8 @@ zip([S | Statics], [D | Dynamics]) ->
                 [zip_stream_item(ItemS, maps:get(K, Items)) || K <- Order];
             #{s := InnerS, d := InnerD} ->
                 zip(InnerS, [arizona_template:unwrap_val(V) || {_Az, V} <:- InnerD]);
+            V when is_binary(V) ->
+                V;
             V ->
                 arizona_template:to_bin(V)
         end,
