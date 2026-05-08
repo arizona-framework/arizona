@@ -15,6 +15,7 @@ profile isn't enough.
 """.
 
 -export([start/0]).
+-export([start/1]).
 -export([stop_and_dump/2]).
 -export([start_fprof/1]).
 -export([stop_fprof_and_dump/2]).
@@ -28,9 +29,20 @@ profile isn't enough.
 
 -spec start() -> ok.
 start() ->
+    start([self()]).
+
+%% Variant for e2e workloads that want to exclude the test-driver process
+%% (running in `self()`) from the profile. Pass server-side pids only --
+%% e.g. cowboy listener + `arizona_sup` descendants -- and `set_on_spawn`
+%% will still catch per-request connection processes spawned beneath
+%% them. The driver's `gen_tcp:send`/`recv` work in `self()` then runs
+%% un-traced, so `port_command`/`ws_mask`/`crypto:strong_rand_bytes_nif`
+%% no longer drown out the server-side rows.
+-spec start([pid()]) -> ok.
+start(SeedPids) ->
     {ok, _} = eprof:start(),
     profiling = eprof:start_profiling(
-        [self()], {'_', '_', '_'}, [{set_on_spawn, true}]
+        SeedPids, {'_', '_', '_'}, [{set_on_spawn, true}]
     ),
     ok.
 

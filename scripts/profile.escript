@@ -239,6 +239,9 @@ prof_http_get_e2e(Label, Opts) ->
     %% cowboy parse + arizona_http handler + view mount/render + reply
     %% writing. Maps to every e2e spec's initial `goto()` -- the cost
     %% the user pays before any WS event fires.
+    %%
+    %% Uses `profile_loop_server/4` so eprof traces only cowboy/arizona
+    %% pids; the `gen_tcp` send/recv work in `self()` runs un-traced.
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}}
     ],
@@ -249,15 +252,19 @@ prof_http_get_e2e(Label, Opts) ->
                 {200, _} = arizona_bench_lib:http_get(Sock, Port),
                 ok
             end,
-            profile_loop(Label, Op, Opts)
+            profile_loop_server(Label, Op, Opts, server_pids())
         end)
     end).
 
 prof_ws_event_e2e(Label, Opts) ->
     %% Mirrors bench_ws_event_e2e (bench.escript:390). Full WS roundtrip:
     %% one `inc` text frame -> arizona_socket:handle_in -> live dispatch
-    %> -> diff -> reply encode -> WS frame back. Maps to every counter/
+    %% -> diff -> reply encode -> WS frame back. Maps to every counter/
     %% form click in the e2e specs.
+    %%
+    %% Uses `profile_loop_server/4` so the harness's per-frame WS mask
+    %% (`ws_mask`/`crypto:strong_rand_bytes_nif`) and `port_command`
+    %% calls don't drown out the server-side rows.
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
         {ws, <<"/ws">>, #{}}
@@ -271,9 +278,32 @@ prof_ws_event_e2e(Label, Opts) ->
                 {text, _} = arizona_bench_lib:ws_recv(Sock, 5000),
                 ok
             end,
-            profile_loop(Label, Op, Opts)
+            profile_loop_server(Label, Op, Opts, server_pids())
         end)
     end).
+
+%% Snapshot of the running cowboy/ranch/arizona processes -- everything
+%% reachable through the supervisor tree by the time the listener is up.
+%% Excludes the test driver in `self()` (and its peers in the escript)
+%% so the per-op `gen_tcp:send`/`recv` in the bench harness is invisible
+%% to eprof. Connection processes spawned per-request are still caught
+%% via `set_on_spawn => true` because their parent listener is in this
+%% seed list.
+server_pids() ->
+    [
+        P
+     || P <- processes(),
+        is_server_initial_call(proc_lib:initial_call(P))
+    ].
+
+is_server_initial_call({Mod, _, _}) ->
+    ModStr = atom_to_list(Mod),
+    lists:any(
+        fun(Prefix) -> lists:prefix(Prefix, ModStr) end,
+        ["arizona_", "cowboy_", "ranch_"]
+    );
+is_server_initial_call(_) ->
+    false.
 
 prof_mount_only(Label, Opts) ->
     %% Mirrors bench_mount_only (bench.escript:435). Cold WS connect
@@ -423,6 +453,19 @@ sanity_handle_in(Json, Socket) ->
 %% ---------------------------------------------------------------------------
 
 profile_loop(Label, OpFun, Opts) ->
+    profile_loop_with(Label, OpFun, Opts, fun arizona_profiler:start/0).
+
+%% Like profile_loop/3 but seeds eprof with `SeedPids` instead of
+%% `[self()]`. Used by the e2e workloads (`prof_http_get_e2e/2`,
+%% `prof_ws_event_e2e/2`) that drive a real cowboy listener from the
+%% same BEAM -- seeding only server-side pids keeps the harness's
+%% gen_tcp work out of the trace. fprof falls back to default seeds
+%% (set_on_spawn from `self()`) -- explicit seeds aren't wired there
+%% yet, but eprof is the default and dominant tool.
+profile_loop_server(Label, OpFun, Opts, SeedPids) ->
+    profile_loop_with(Label, OpFun, Opts, fun() -> arizona_profiler:start(SeedPids) end).
+
+profile_loop_with(Label, OpFun, Opts, StartFun) ->
     Tool = maps:get(tool, Opts, eprof),
     Ops = maps:get(ops, Opts, ?DEFAULT_OPS),
     MinMs = maps:get(min_ms, Opts, ?DEFAULT_MIN_MS),
@@ -432,7 +475,7 @@ profile_loop(Label, OpFun, Opts) ->
     erlang:garbage_collect(self()),
     case Tool of
         eprof ->
-            ok = arizona_profiler:start(),
+            ok = StartFun(),
             run_n(OpFun, Ops),
             ok = arizona_profiler:stop_and_dump(LogPath, MinMs);
         fprof ->
