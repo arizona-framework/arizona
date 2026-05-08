@@ -62,7 +62,7 @@ single-print of the log file content with our own ordering.
 stop_and_dump(Path, MinMs) ->
     profiling_stopped = eprof:stop_profiling(),
     ok = eprof:log(Path),
-    MinUs = trunc(MinMs * 1000),
+    MinUs = float(trunc(MinMs * 1000)),
     EprofPid = whereis(eprof),
     {group_leader, OldGl} = erlang:process_info(EprofPid, group_leader),
     Sink = spawn(fun sink_loop/0),
