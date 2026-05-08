@@ -282,24 +282,23 @@ was changed by the handler's mount callback.
     Props :: map(),
     Handler :: module().
 check_restricted_keys(Bindings, Props, Handler) ->
-    lists:foreach(
-        fun(Key) ->
-            case Props of
+    [check_restricted_key(Key, Bindings, Props, Handler) || Key <- ?RESTRICTED_KEYS],
+    ok.
+
+check_restricted_key(Key, Bindings, Props, Handler) ->
+    case Props of
+        #{Key := Expected} ->
+            case Bindings of
                 #{Key := Expected} ->
-                    case Bindings of
-                        #{Key := Expected} ->
-                            ok;
-                        #{Key := _} ->
-                            error(restricted_key_modified, [Key, Handler], [
-                                {error_info, #{module => ?MODULE}}
-                            ])
-                    end;
-                #{} ->
-                    ok
-            end
-        end,
-        ?RESTRICTED_KEYS
-    ).
+                    ok;
+                #{Key := _} ->
+                    error(restricted_key_modified, [Key, Handler], [
+                        {error_info, #{module => ?MODULE}}
+                    ])
+            end;
+        #{} ->
+            ok
+    end.
 
 -doc """
 Formats `restricted_key_modified` errors into a human-readable message

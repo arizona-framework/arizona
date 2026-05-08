@@ -253,16 +253,7 @@ carry_skipped_view(#{view_id := VId}, {Old, New}) ->
         #{} -> {Old, New}
     end;
 carry_skipped_view(#{child_views := ChildIds}, {Old, New}) ->
-    lists:foldl(
-        fun(Id, {O, N}) ->
-            case O of
-                #{Id := View} -> {O, N#{Id => View}};
-                #{} -> {O, N}
-            end
-        end,
-        {Old, New},
-        ChildIds
-    );
+    {Old, maps:merge(New, maps:with(ChildIds, Old))};
 carry_skipped_view(_Old, Views) ->
     Views.
 
@@ -294,16 +285,7 @@ item_child_views(ItemD, Acc) ->
 
 %% Copy child views from OldViews to NewViews for children not already present.
 carry_item_children(ChildViewIds, Old, New) ->
-    lists:foldl(
-        fun(Id, Acc) ->
-            case Old of
-                #{Id := View} -> Acc#{Id => View};
-                #{} -> Acc
-            end
-        end,
-        New,
-        ChildViewIds
-    ).
+    maps:merge(New, maps:with(ChildViewIds, Old)).
 
 -doc """
 Returns `true` when any key in `Deps` also appears in `Changed`. Used by

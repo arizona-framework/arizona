@@ -86,12 +86,8 @@ terms. Called by the dev hot reloader after a successful recompile.
 -spec recompile_routes() -> ok.
 recompile_routes() ->
     Terms = persistent_term:get(),
-    lists:foreach(
-        fun
-            ({{?ROUTES_KEY, _}, Routes}) ->
-                arizona_cowboy_router:compile_routes(Routes);
-            (_) ->
-                ok
-        end,
-        Terms
-    ).
+    [
+        arizona_cowboy_router:compile_routes(Routes)
+     || {{?ROUTES_KEY, _}, Routes} <- Terms
+    ],
+    ok.
