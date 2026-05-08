@@ -510,11 +510,17 @@ format_error({stream_order_stale_key, K, Order, ItemKeys}, _ST) ->
         )
     };
 format_error(missing_stream_key, [{_M, _F, [#stream{items = Items}, Key], _Info} | _]) ->
+    Available = lists:sort(maps:keys(Items)),
+    Suggestion =
+        case arizona_error_hint:closest(Key, Available) of
+            undefined -> "";
+            Match -> io_lib:format(" Did you mean ~0tp?", [Match])
+        end,
     #{
         general => io_lib:format(
-            "stream key ~0tp not found. Available keys: ~0tp. "
+            "stream key ~0tp not found.~s Available keys: ~0tp. "
             "Use arizona_stream:get/3 with a default to make it optional.",
-            [Key, lists:sort(maps:keys(Items))]
+            [Key, Suggestion, Available]
         )
     }.
 

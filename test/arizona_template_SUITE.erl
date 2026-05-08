@@ -19,7 +19,9 @@
     get_missing_binding_raises_named_reason/1,
     format_error_missing_binding_renders_message/1,
     to_bin_bad_value_routes_through_format_error_2/1,
-    parse_transform_not_applied_routes_through_format_error_2/1
+    parse_transform_not_applied_routes_through_format_error_2/1,
+    format_error_missing_binding_suggests_close_match/1,
+    format_error_missing_binding_no_suggestion_for_far_match/1
 ]).
 
 all() ->
@@ -38,7 +40,9 @@ groups() ->
             get_missing_binding_raises_named_reason,
             format_error_missing_binding_renders_message,
             to_bin_bad_value_routes_through_format_error_2,
-            parse_transform_not_applied_routes_through_format_error_2
+            parse_transform_not_applied_routes_through_format_error_2,
+            format_error_missing_binding_suggests_close_match,
+            format_error_missing_binding_no_suggestion_for_far_match
         ]}
     ].
 
@@ -161,3 +165,29 @@ parse_transform_not_applied_routes_through_format_error_2(Config) when is_list(C
     #{general := Msg} = arizona_template:format_error(parse_transform_not_applied, Stack),
     Bin = unicode:characters_to_binary(Msg),
     ?assertNotEqual(nomatch, binary:match(Bin, <<"parse transform not applied">>)).
+
+%% --- did-you-mean hints in missing_binding messages ---
+
+format_error_missing_binding_suggests_close_match(Config) when is_list(Config) ->
+    %% A one-character typo against a binding name should produce a suggestion.
+    Stack =
+        try arizona_template:get(tilte, #{id => <<"p">>, title => <<"hi">>}) of
+            _ -> ct:fail(expected_missing_binding)
+        catch
+            error:missing_binding:ST -> ST
+        end,
+    #{general := Msg} = arizona_template:format_error(missing_binding, Stack),
+    Bin = unicode:characters_to_binary(Msg),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"Did you mean title">>)).
+
+format_error_missing_binding_no_suggestion_for_far_match(Config) when is_list(Config) ->
+    %% A key with no near match in the binding list should not produce a suggestion.
+    Stack =
+        try arizona_template:get(xyzzy, #{id => <<"p">>, title => <<"hi">>}) of
+            _ -> ct:fail(expected_missing_binding)
+        catch
+            error:missing_binding:ST -> ST
+        end,
+    #{general := Msg} = arizona_template:format_error(missing_binding, Stack),
+    Bin = unicode:characters_to_binary(Msg),
+    ?assertEqual(nomatch, binary:match(Bin, <<"Did you mean">>)).

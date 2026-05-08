@@ -125,7 +125,9 @@
     repro_insert_dup_then_delete_yields_stale_order/1,
     repro_to_list_crash_matches_production_stack/1,
     repro_shuffle_after_insert_dup_then_delete_crashes/1,
-    datatable_navigate_from_page_then_add_row_no_crash/1
+    datatable_navigate_from_page_then_add_row_no_crash/1,
+    format_error_missing_stream_key_suggests_close_match/1,
+    format_error_missing_stream_key_no_suggestion_for_far_match/1
 ]).
 
 all() ->
@@ -235,6 +237,8 @@ groups() ->
             stream_delete_nonexistent_key,
             stream_update_nonexistent_key,
             stream_duplicate_key_insert,
+            format_error_missing_stream_key_suggests_close_match,
+            format_error_missing_stream_key_no_suggestion_for_far_match,
             stream_limit_one,
             stream_move_to_same_position,
             stream_empty_stream_operations,
@@ -1295,6 +1299,42 @@ stream_get_missing_key_crashes(Config) when is_list(Config) ->
     Bin = unicode:characters_to_binary(Msg),
     ?assertNotEqual(nomatch, binary:match(Bin, <<"stream key 99 not found">>)),
     ?assertNotEqual(nomatch, binary:match(Bin, <<"1,2">>)).
+
+%% --- did-you-mean hints in missing_stream_key messages ---
+
+format_error_missing_stream_key_suggests_close_match(Config) when is_list(Config) ->
+    %% Binary keys that differ by one character should suggest the close match.
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S = arizona_stream:new(KeyFun, [
+        #{id => <<"alpha">>, n => 1},
+        #{id => <<"beta">>, n => 2}
+    ]),
+    Stack =
+        try arizona_stream:get(S, <<"alpah">>) of
+            _ -> ct:fail(expected_missing_stream_key)
+        catch
+            error:missing_stream_key:ST -> ST
+        end,
+    #{general := Msg} = arizona_stream:format_error(missing_stream_key, Stack),
+    Bin = unicode:characters_to_binary(Msg),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"Did you mean">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"alpha">>)).
+
+format_error_missing_stream_key_no_suggestion_for_far_match(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S = arizona_stream:new(KeyFun, [
+        #{id => <<"alpha">>, n => 1},
+        #{id => <<"beta">>, n => 2}
+    ]),
+    Stack =
+        try arizona_stream:get(S, <<"qwerty">>) of
+            _ -> ct:fail(expected_missing_stream_key)
+        catch
+            error:missing_stream_key:ST -> ST
+        end,
+    #{general := Msg} = arizona_stream:format_error(missing_stream_key, Stack),
+    Bin = unicode:characters_to_binary(Msg),
+    ?assertEqual(nomatch, binary:match(Bin, <<"Did you mean">>)).
 
 stream_get3_existing_key(Config) when is_list(Config) ->
     S = arizona_stream:new(

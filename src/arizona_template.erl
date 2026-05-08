@@ -299,12 +299,18 @@ this module. Picked up by `erl_error:format_exception/3`.
     Stacktrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
 format_error(missing_binding, [{_M, _F, [Key, Bindings], _Info} | _]) ->
+    Available = lists:sort(maps:keys(Bindings)),
+    Suggestion =
+        case arizona_error_hint:closest(Key, Available) of
+            undefined -> "";
+            Match -> io_lib:format(" Did you mean ~0tp?", [Match])
+        end,
     #{
         general => io_lib:format(
-            "binding ~0tp not found. Available bindings: ~0tp. "
+            "binding ~0tp not found.~s Available bindings: ~0tp. "
             "Use arizona_template:get/3 (or ?get/2) with a default "
             "to make the binding optional.",
-            [Key, lists:sort(maps:keys(Bindings))]
+            [Key, Suggestion, Available]
         )
     };
 format_error({bad_template_value, _V} = Reason, _ST) ->
