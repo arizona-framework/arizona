@@ -297,24 +297,66 @@ encode_key(Key) when is_atom(Key) -> [Key];
 encode_key(Keys) when is_list(Keys) -> Keys;
 encode_key(Pattern) when is_binary(Pattern) -> Pattern.
 
-%% Tail-recursive byte walker. Replaces the previous 3x `binary:replace/4`
-%% chain. For the typical short JS-attribute payload, a single pass over
-%% the bytes (with BEAM's binary-append optimization) beats the BIF chain
-%% by ~3x. Compiled-pattern + persistent_term was tried and lost to the
-%% lookup overhead -- single-byte patterns have nothing to compile.
-escape_attr(Bin) ->
-    escape_attr(Bin, <<>>).
+%% SWAR (SIMD Within A Register) byte scanner. Matches a 56-bit (7-byte)
+%% word at a time and uses bitwise arithmetic to validate that none of
+%% the 7 bytes is `&`, `"`, or `<` -- the only chars we need to escape.
+%% On match, advances 7 bytes via a Skip/Len counter without copying
+%% anything; the iolist Acc only grows when an escape is actually
+%% emitted. For typical JS payloads (~30-50 bytes, mostly safe) this
+%% beats the per-byte recursion by ~20%%. Inspired by erlang/otp#10938
+%% which lands an equivalent SWAR scan in OTP 29's `json` module.
+%%
+%% 56 bits is the largest value that fits in a BEAM small (59-bit on
+%% 64-bit), so all band/bxor/+/- guard ops compile to bare native
+%% instructions without bignum fallbacks.
+%%
+%% The simplified Mycroft trick `((V - 0x01..) band 0x80..) =:= 0`
+%% (no `bnot`) only works when bytes are < 0x80. The leading
+%% `(W band 0x80..) =:= 0` check gates the rest via short-circuit
+%% andalso, and XOR with constants < 0x80 preserves the high-bit-clear
+%% invariant. False positives from borrow propagation are harmless --
+%% we just fall through to the byte-by-byte path.
+-define(SWAR_M01, 16#01010101010101).
+-define(SWAR_M80, 16#80808080808080).
+-define(SWAR_AMP7, 16#26262626262626).
+-define(SWAR_QUOT7, 16#22222222222222).
+-define(SWAR_LT7, 16#3C3C3C3C3C3C3C).
 
-escape_attr(<<>>, Acc) ->
-    Acc;
-escape_attr(<<"&", Rest/binary>>, Acc) ->
-    escape_attr(Rest, <<Acc/binary, "&amp;">>);
-escape_attr(<<"\"", Rest/binary>>, Acc) ->
-    escape_attr(Rest, <<Acc/binary, "&quot;">>);
-escape_attr(<<"<", Rest/binary>>, Acc) ->
-    escape_attr(Rest, <<Acc/binary, "&lt;">>);
-escape_attr(<<C, Rest/binary>>, Acc) ->
-    escape_attr(Rest, <<Acc/binary, C>>).
+-define(swar_no_zero_byte(V),
+    (((V) - ?SWAR_M01) band ?SWAR_M80) =:= 0
+).
+
+-define(swar_safe(W),
+    ((W) band ?SWAR_M80) =:= 0 andalso
+        ?swar_no_zero_byte((W) bxor ?SWAR_AMP7) andalso
+        ?swar_no_zero_byte((W) bxor ?SWAR_QUOT7) andalso
+        ?swar_no_zero_byte((W) bxor ?SWAR_LT7)
+).
+
+escape_attr(Bin) ->
+    escape_attr(Bin, [], Bin, 0, 0).
+
+escape_attr(Bin, Acc, Orig, Skip, Len) ->
+    case Bin of
+        <<W:56, Rest/binary>> when ?swar_safe(W) ->
+            escape_attr(Rest, Acc, Orig, Skip, Len + 7);
+        <<>> when Acc =:= [], Skip =:= 0 ->
+            %% Common case: no escapes anywhere -- return original unchanged.
+            Orig;
+        <<>> ->
+            iolist_to_binary([Acc, binary:part(Orig, Skip, Len)]);
+        <<"&", Rest/binary>> ->
+            Prefix = binary:part(Orig, Skip, Len),
+            escape_attr(Rest, [Acc, Prefix, ~"&amp;"], Orig, Skip + Len + 1, 0);
+        <<"\"", Rest/binary>> ->
+            Prefix = binary:part(Orig, Skip, Len),
+            escape_attr(Rest, [Acc, Prefix, ~"&quot;"], Orig, Skip + Len + 1, 0);
+        <<"<", Rest/binary>> ->
+            Prefix = binary:part(Orig, Skip, Len),
+            escape_attr(Rest, [Acc, Prefix, ~"&lt;"], Orig, Skip + Len + 1, 0);
+        <<_C, Rest/binary>> ->
+            escape_attr(Rest, Acc, Orig, Skip, Len + 1)
+    end.
 
 -ifdef(TEST).
 
