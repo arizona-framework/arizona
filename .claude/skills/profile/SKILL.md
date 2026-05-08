@@ -19,6 +19,7 @@ itself dominates):
 | Workload | Suggested `--ops` |
 |----------|-------------------|
 | `render_view_page` | 1000 |
+| `render_view_page_dyn_js` | 200 |
 | `render_each_100` | 200 |
 | `render_nested_each` | 200 |
 | `render_stateful_chain` | 1000 |

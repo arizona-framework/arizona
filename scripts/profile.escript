@@ -53,7 +53,8 @@ profilers() ->
         {~"stream_insert_1k", fun prof_stream_insert_1k/2},
         {~"pubsub_broadcast_100", fun prof_pubsub_broadcast_100/2},
         {~"render_nested_each", fun prof_render_nested_each/2},
-        {~"render_stateful_chain", fun prof_render_stateful_chain/2}
+        {~"render_stateful_chain", fun prof_render_stateful_chain/2},
+        {~"render_view_page_dyn_js", fun prof_render_view_page_dyn_js/2}
     ].
 
 filter_workloads(All, []) ->
@@ -153,6 +154,31 @@ prof_stream_reorder_100(Label, Opts) ->
             {ok, _} -> ok;
             {reply, _, _} -> ok
         end
+    end,
+    profile_loop(Label, Op, Opts).
+
+prof_render_view_page_dyn_js(Label, Opts) ->
+    %% Renders `arizona_page` with a pre-populated 100-item todos stream
+    %% so the per-item dynamic `arizona_js:push_event(~"update_todo",
+    %% #{~"id" => Id})` etc. fire on every render. The static-JS fold
+    %% (commit 5fbe876) eliminates `escape_attr/1` for literal commands;
+    %% this workload exists so we still profile (and guard regressions
+    %% on) the dynamic-arg branch real apps with `?get`-driven JS
+    %% payloads will hit. Each render produces ~300 escape_attr calls
+    %% (100 todos x 3 dynamic JS attrs).
+    Todos = arizona_stream:new(
+        fun(#{id := Id}) -> Id end,
+        [
+            #{id => I, text => iolist_to_binary(io_lib:format("Todo ~b", [I]))}
+         || I <- lists:seq(1, 100)
+        ]
+    ),
+    RenderOpts = #{bindings => #{todos => Todos}},
+    Req = arizona_req_test_adapter:new(),
+    Sample = arizona_render:render_view_to_iolist(arizona_page, Req, RenderOpts),
+    sanity_render(arizona_page, Sample),
+    Op = fun() ->
+        arizona_render:render_view_to_iolist(arizona_page, Req, RenderOpts)
     end,
     profile_loop(Label, Op, Opts).
 
