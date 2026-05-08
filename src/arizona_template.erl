@@ -363,13 +363,19 @@ split_triples([{Az, Val, Deps} | Rest]) ->
     {[{Az, Val} | RestD], [Deps | RestDeps]}.
 
 -doc """
-Returns the visible portion of a stream order list given a `Limit`.
+Returns the visible portion of a stream order buffer given a `Limit`.
 
-`infinity` returns the full order; an integer truncates with `lists:sublist/2`.
+The order is the `arizona_stream` record's `{Front, BackRev}` 2-list
+buffer (Back holds recently-appended keys NEWEST-first). This function
+flushes the buffer to a flat oldest-first list and applies the limit.
+`infinity` returns the full order; an integer truncates via
+`lists:sublist/2`.
 """.
 -spec visible_keys(Order, Limit) -> Order1 when
-    Order :: [term()],
+    Order :: {[term()], [term()]},
     Limit :: pos_integer() | infinity,
     Order1 :: [term()].
-visible_keys(Order, infinity) -> Order;
-visible_keys(Order, Limit) -> lists:sublist(Order, Limit).
+visible_keys({Front, []}, infinity) -> Front;
+visible_keys({Front, Back}, infinity) -> Front ++ lists:reverse(Back);
+visible_keys({Front, []}, Limit) -> lists:sublist(Front, Limit);
+visible_keys({Front, Back}, Limit) -> lists:sublist(Front ++ lists:reverse(Back), Limit).

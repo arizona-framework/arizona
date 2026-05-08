@@ -566,7 +566,11 @@ apply_limit(
     SnapItems,
     Views
 ) ->
-    {[], #{t => ?EACH, items => SnapItems, order => Order, template => Tmpl}, Views};
+    %% Flush the {Front, BackRev} buffer to a flat list -- the snapshot's
+    %% `order` is consumed by `arizona_render:zip/2` as a list iterator,
+    %% not by `visible_keys/2`, so we need to materialise here.
+    FlatOrder = arizona_template:visible_keys(Order, infinity),
+    {[], #{t => ?EACH, items => SnapItems, order => FlatOrder, template => Tmpl}, Views};
 apply_limit(
     Az,
     #stream{limit = Limit, on_limit = halt, order = Order},

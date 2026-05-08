@@ -125,7 +125,7 @@ new(KeyFun) when is_function(KeyFun, 1) ->
     #stream{
         key = KeyFun,
         items = #{},
-        order = [],
+        order = {[], []},
         pending = queue:new(),
         limit = infinity,
         on_limit = halt,
@@ -161,7 +161,7 @@ new(KeyFun, Items, Opts) when is_function(KeyFun, 1), is_list(Items), is_map(Opt
     #stream{
         key = KeyFun,
         items = ItemsMap,
-        order = Order,
+        order = {Order, []},
         pending = Pending,
         limit = Limit,
         on_limit = OnLimit,
@@ -179,16 +179,19 @@ insert(
     #stream{
         key = KeyFun,
         items = Items,
-        order = Order,
+        order = {Front, Back},
         pending = Pending,
         size = Size
     } = S,
     Item
 ) ->
     Key = KeyFun(Item),
+    %% O(1): cons to BackRev instead of `Front ++ [Key]`. The buffer is
+    %% flushed by the next non-insert/2 operation (or by visible_keys
+    %% on read). For 1000 sequential inserts this turns O(N^2) into O(N).
     S#stream{
         items = Items#{Key => Item},
-        order = Order ++ [Key],
+        order = {Front, [Key | Back]},
         pending = queue:in({insert, Key, Item, -1}, Pending),
         size = Size + 1
     }.
@@ -213,9 +216,10 @@ insert(
     Pos
 ) ->
     Key = KeyFun(Item),
+    Flat = flat_order(Order),
     S#stream{
         items = Items#{Key => Item},
-        order = order_insert_at(Order, Key, Pos),
+        order = {order_insert_at(Flat, Key, Pos), []},
         pending = queue:in({insert, Key, Item, Pos}, Pending),
         size = Size + 1
     }.
@@ -239,9 +243,10 @@ delete(
 ) ->
     case maps:take(Key, Items) of
         {_, NewItems} ->
+            Flat = flat_order(Order),
             S#stream{
                 items = NewItems,
-                order = order_delete(Order, Key),
+                order = {order_delete(Flat, Key), []},
                 pending = queue:in({delete, Key}, Pending),
                 size = Size - 1
             };
@@ -317,11 +322,12 @@ move(
 ) ->
     case Items of
         #{Key := _} ->
-            Order1 = order_delete(Order, Key),
+            Flat = flat_order(Order),
+            Order1 = order_delete(Flat, Key),
             Order2 = order_insert_at(Order1, Key, min(NewPos, Size - 1)),
             AfterKey = key_before(Key, Order2),
             S#stream{
-                order = Order2,
+                order = {Order2, []},
                 pending = queue:in({move, Key, AfterKey}, Pending)
             };
         #{} ->
@@ -337,7 +343,7 @@ Empties the stream and queues a reset op.
 reset(#stream{items = OldItems} = S) ->
     S#stream{
         items = #{},
-        order = [],
+        order = {[], []},
         pending = queue:from_list([{reset, OldItems}]),
         size = 0
     }.
@@ -357,7 +363,7 @@ reset(#stream{key = KeyFun, items = OldItems} = S, NewItems) when is_list(NewIte
     Order = order_from_keyed(Keyed),
     S#stream{
         items = ItemsMap,
-        order = Order,
+        order = {Order, []},
         pending = queue:from_list([{reset, OldItems}]),
         size = map_size(ItemsMap)
     }.
@@ -374,18 +380,19 @@ sort(
     #stream{items = Items, order = Order, pending = Pending} = S,
     CompareFun
 ) ->
+    Flat = flat_order(Order),
     NewOrder = lists:sort(
         fun(K1, K2) ->
             CompareFun(maps:get(K1, Items), maps:get(K2, Items))
         end,
-        Order
+        Flat
     ),
-    case NewOrder =:= Order of
+    case NewOrder =:= Flat of
         true ->
-            S;
+            S#stream{order = {Flat, []}};
         false ->
             S#stream{
-                order = NewOrder,
+                order = {NewOrder, []},
                 pending = queue:in(reorder, Pending)
             }
     end.
@@ -396,7 +403,7 @@ Returns all items in display order as a list.
 -spec to_list(Stream) -> [item()] when
     Stream :: stream().
 to_list(#stream{items = Items, order = Order}) ->
-    [maps:get(K, Items) || K <- Order].
+    [maps:get(K, Items) || K <- flat_order(Order)].
 
 -doc """
 Returns the item at `Key`. Errors with `{badkey, Key}` if not present.
@@ -460,6 +467,12 @@ stream_keys(Bindings) when is_map(Bindings) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% Flush the {Front, BackRev} order buffer to a flat oldest-first list.
+%% Called by every operation that needs the full ordered keys; only
+%% `insert/2` (the bulk-append hot path) leaves the buffer non-empty.
+flat_order({Front, []}) -> Front;
+flat_order({Front, Back}) -> Front ++ lists:reverse(Back).
 
 key_items(_KeyFun, []) -> [];
 key_items(KeyFun, [I | Rest]) -> [{KeyFun(I), I} | key_items(KeyFun, Rest)].
