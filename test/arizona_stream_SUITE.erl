@@ -1275,8 +1275,26 @@ stream_get_existing_key(Config) when is_list(Config) ->
     ?assertEqual(#{id => 1, text => <<"A">>}, arizona_stream:get(S, 1)).
 
 stream_get_missing_key_crashes(Config) when is_list(Config) ->
-    S = arizona_stream:new(fun(#{id := Id}) -> Id end),
-    ?assertError({badkey, 99}, arizona_stream:get(S, 99)).
+    S = arizona_stream:new(
+        fun(#{id := Id}) -> Id end,
+        [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}]
+    ),
+    Stack =
+        try arizona_stream:get(S, 99) of
+            _ -> ct:fail(expected_missing_stream_key)
+        catch
+            error:missing_stream_key:ST -> ST
+        end,
+    [{arizona_stream, get, [S, 99], Info} | _] = Stack,
+    ?assertEqual(
+        #{module => arizona_stream},
+        proplists:get_value(error_info, Info)
+    ),
+    %% format_error/2 yields a sentence with the missing key + available keys.
+    #{general := Msg} = arizona_stream:format_error(missing_stream_key, Stack),
+    Bin = unicode:characters_to_binary(Msg),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"stream key 99 not found">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"1,2">>)).
 
 stream_get3_existing_key(Config) when is_list(Config) ->
     S = arizona_stream:new(

@@ -424,13 +424,22 @@ to_list(#stream{items = Items, order = Order} = S) ->
     end.
 
 -doc """
-Returns the item at `Key`. Errors with `{badkey, Key}` if not present.
+Returns the item at `Key`. Errors with `missing_stream_key` (carrying an
+`error_info` annotation that routes through `format_error/2`) if not present.
+Use `get/3` for a default.
 """.
 -spec get(Stream, Key) -> item() when
     Stream :: stream(),
     Key :: key().
-get(#stream{items = Items}, Key) ->
-    maps:get(Key, Items).
+get(#stream{items = Items} = S, Key) ->
+    case Items of
+        #{Key := Val} ->
+            Val;
+        #{} ->
+            erlang:error(missing_stream_key, [S, Key], [
+                {error_info, #{module => ?MODULE}}
+            ])
+    end.
 
 -doc """
 Returns the item at `Key`, or `Default` if not present.
@@ -498,6 +507,14 @@ format_error({stream_order_stale_key, K, Order, ItemKeys}, _ST) ->
             "(order=~0tp, items keys=~0tp). Every key in order must "
             "be present in items, with no duplicates.",
             [K, Order, ItemKeys]
+        )
+    };
+format_error(missing_stream_key, [{_M, _F, [#stream{items = Items}, Key], _Info} | _]) ->
+    #{
+        general => io_lib:format(
+            "stream key ~0tp not found. Available keys: ~0tp. "
+            "Use arizona_stream:get/3 with a default to make it optional.",
+            [Key, lists:sort(maps:keys(Items))]
         )
     }.
 
