@@ -173,7 +173,10 @@ call_handle_event(H, Event, Payload, Bindings) ->
 Invokes the optional `handle_info/2` callback.
 
 Returns `ok` if the handler does not export `handle_info/2`, letting
-the caller skip the subsequent diff + push cycle.
+the caller skip the subsequent diff + push cycle. Re-tags a
+no-matching-clause crash at the callback's head as
+`{unhandled_info, H, Info, Bindings}`; errors raised from inside
+the callback body propagate untagged.
 """.
 -spec call_handle_info(Handler, Info, Bindings) ->
     {arizona_stateful:bindings(), arizona_stateful:resets(), arizona_stateful:effects()} | ok
@@ -205,7 +208,9 @@ call_handle_info(H, Info, Bindings) ->
 Invokes the optional `handle_update/2` callback.
 
 Falls back to merging `Props` into `Bindings` if the callback is not
-exported.
+exported. Re-tags a no-matching-clause crash at the callback's
+head as `{unhandled_update, H, Props, Bindings}`; errors raised
+from inside the callback body propagate untagged.
 """.
 -spec call_handle_update(Handler, Props, Bindings) ->
     arizona_stateful:handle_update_ret()
@@ -236,7 +241,9 @@ call_handle_update(H, Props, Bindings) ->
 -doc """
 Invokes the optional `unmount/1` callback on a handler module.
 
-No-op if the callback is not exported.
+No-op if the callback is not exported. Re-tags a no-matching-clause
+crash at the callback's head as `{unhandled_unmount, H, Bindings}`;
+errors raised from inside the callback body propagate untagged.
 """.
 -spec call_unmount(Handler, Bindings) -> ok when
     Handler :: module(),
