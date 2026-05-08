@@ -10,7 +10,8 @@
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
 mount(Bindings, _Req) ->
     Defaults = maps:from_list([{key_for(I), I} || I <- lists:seq(0, 49)]),
-    {maps:merge(Defaults, Bindings#{id => ~"many_dyn"}), #{}}.
+    Vals = #{K => maps:get(K, Bindings, V) || K := V <- Defaults},
+    {Vals#{id => ~"many_dyn"}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

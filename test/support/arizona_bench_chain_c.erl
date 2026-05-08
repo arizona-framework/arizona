@@ -15,15 +15,20 @@ section/row components in real apps.
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
     %% Lazy default: only generate the 10 leaf items if no override was
-    %% passed. Eager maps:merge would re-run default_items()/0 on every
-    %% mount even when items were provided.
-    Bindings1 = maps:merge(#{id => ~"chain_c"}, Bindings),
-    Bindings2 =
-        case Bindings1 of
-            #{items := _} -> Bindings1;
-            _ -> Bindings1#{items => default_items()}
+    %% passed -- the stateful chain re-mounts on every SSR render and
+    %% any computation in the default would dominate the profile.
+    Items =
+        case Bindings of
+            #{items := V} -> V;
+            #{} -> default_items()
         end,
-    {Bindings2, #{}}.
+    {
+        #{
+            id => maps:get(id, Bindings, ~"chain_c"),
+            items => Items
+        },
+        #{}
+    }.
 
 -spec handle_update(az:bindings(), az:bindings()) -> az:handle_update_ret().
 handle_update(Props, Bindings) ->

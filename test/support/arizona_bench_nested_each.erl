@@ -12,18 +12,16 @@ through a tree shape rather than a flat 100-item list.
 -export([render/1]).
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings0, _Req) ->
-    %% Lazy default for `sections` -- the bench workload pre-generates
-    %% the 10x10 data once and passes it via bindings, so we never want
-    %% to recompute `default_sections()` on hot-path renders. Eager
-    %% maps:merge would evaluate it regardless.
-    Bindings1 = maps:merge(#{id => ~"page"}, Bindings0),
-    Bindings =
-        case Bindings1 of
-            #{sections := _} -> Bindings1;
-            _ -> Bindings1#{sections => default_sections()}
+mount(Bindings, _Req) ->
+    %% Lazy default for `sections` -- the bench workload pre-generates the
+    %% 10x10 data once and passes it via bindings, so we never want to
+    %% recompute `default_sections()` on hot-path renders.
+    Sections =
+        case Bindings of
+            #{sections := V} -> V;
+            #{} -> default_sections()
         end,
-    {Bindings, #{}}.
+    {#{id => ~"page", sections => Sections}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

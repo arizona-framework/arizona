@@ -4,7 +4,13 @@
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
-    {maps:merge(#{id => ~"nd_counter", count => 0}, Bindings), #{}}.
+    {
+        #{
+            id => maps:get(id, Bindings, ~"nd_counter"),
+            count => maps:get(count, Bindings, 0)
+        },
+        #{}
+    }.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

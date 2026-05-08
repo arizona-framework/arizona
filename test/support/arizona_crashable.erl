@@ -10,11 +10,15 @@ mount(Bindings, Req) ->
         false ->
             {Params, _Req1} = arizona_req:params(Req),
             Locale = proplists:get_value(~"locale", Params, ~"none"),
-            Merged = maps:merge(
-                #{id => ~"crashable", status => ~"ok", <<"locale">> => Locale},
-                Bindings
-            ),
-            {Merged, #{}}
+            {
+                #{
+                    id => ~"crashable",
+                    status => maps:get(status, Bindings, ~"ok"),
+                    <<"locale">> => maps:get(<<"locale">>, Bindings, Locale),
+                    item_id => maps:get(item_id, Bindings, ~"none")
+                },
+                #{}
+            }
     end.
 
 -spec render(az:bindings()) -> az:template().

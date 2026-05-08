@@ -3,7 +3,7 @@
 -export([mount/2, render/1, handle_event/3, handle_info/2]).
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings0, _Req) ->
+mount(Init, _Req) ->
     Items = [
         #{id => 1, name => ~"Alice", age => 30},
         #{id => 2, name => ~"Bob", age => 25},
@@ -12,18 +12,15 @@ mount(Bindings0, _Req) ->
         #{id => 5, name => ~"Eve", age => 32}
     ],
     Rows = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
-    Bindings = maps:merge(
-        #{
-            id => ~"page",
-            title => ~"DataTable",
-            rows => Rows,
-            next_id => 6,
-            sort_col => id,
-            sort_dir => asc,
-            connected => false
-        },
-        Bindings0
-    ),
+    Bindings = #{
+        id => ~"page",
+        title => maps:get(title, Init, ~"DataTable"),
+        rows => Rows,
+        next_id => 6,
+        sort_col => id,
+        sort_dir => asc,
+        connected => false
+    },
     ?connected andalso ?send(arizona_connected),
     {Bindings, #{}}.
 

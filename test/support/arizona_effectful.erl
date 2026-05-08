@@ -3,8 +3,8 @@
 -export([mount/2, render/1, handle_event/3]).
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
-    {maps:merge(#{id => ~"effectful", value => ~"initial"}, Bindings), #{}}.
+mount(_Bindings, _Req) ->
+    {#{id => ~"effectful", value => ~"initial"}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

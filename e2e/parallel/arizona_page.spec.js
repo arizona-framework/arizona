@@ -1035,32 +1035,28 @@ test.describe('SPA navigation', () => {
         await expect(page.locator('main h1')).toHaveText('Welcome');
     });
 
-    test('root binding survives navigate round-trip', async ({ page }) => {
-        // arizona_live carries the previous root handler's final bindings
-        // forward as the floor for the new mount's input -- session-level
-        // state set on one page is visible to the next handler's mount.
-        // The child counters on `/` mount with `count => ?get(count, 0)`
-        // from the root view, so a non-zero root `count` is observable
-        // in the child counter's <p> after a round-trip via /about.
+    test('root binding does not survive navigate round-trip without explicit forwarding', async ({
+        page,
+    }) => {
+        // arizona_live's navigate-carry feature still flows the previous
+        // root's final bindings into the next mount's input, but the
+        // example handlers (per the construct-don't-merge rule in
+        // .claude/rules/erlang.md) build a fresh map and only accept
+        // overrides they explicitly enumerate. arizona_about does not
+        // forward `count`, so a round-trip via /about resets it to the
+        // arizona_page default of 0.
         await page.goto('/');
         await page.waitForSelector('#status:has-text("Connected")');
-        // Sanity: counters start at 0
         await expect(countText(page, 'counter')).toHaveText('Count: 0');
-        // "Add +1 to both" increments root `count` (and pushes to children)
         await page.click('button[az-click*="add"]');
         await expect(countText(page, 'counter')).toHaveText('Count: 1');
-        // Navigate to about; arizona_about's mount uses the lazy
-        // `maps:merge(Defaults, Bindings0)` pattern, so it inherits
-        // root's `count` even though about itself doesn't render it.
         await page.click('a[href="/about"]');
         await expect(page.locator('main h1')).toHaveText('About');
-        // Navigate back to home. With carry-forward, root mounts with
-        // `count => 1` flowing through the merged input; without it,
-        // the handler default `count => 0` would win and the child
-        // counter would render 0.
         await page.click('a[href="/"]');
         await expect(page.locator('main h1')).toHaveText('Welcome');
-        await expect(countText(page, 'counter')).toHaveText('Count: 1');
+        // Count resets because neither arizona_about nor arizona_page
+        // explicitly forwards the carried `count` key in their mount.
+        await expect(countText(page, 'counter')).toHaveText('Count: 0');
     });
 
     test('back after navigate restores prior scroll position', async ({ page }) => {

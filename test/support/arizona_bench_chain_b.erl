@@ -13,7 +13,7 @@ snapshot allocation at this level.
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
-    {maps:merge(#{id => ~"chain_b"}, Bindings), #{}}.
+    {#{id => maps:get(id, Bindings, ~"chain_b")}, #{}}.
 
 -spec handle_update(az:bindings(), az:bindings()) -> az:handle_update_ret().
 handle_update(Props, Bindings) ->

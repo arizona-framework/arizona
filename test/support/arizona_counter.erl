@@ -4,7 +4,13 @@
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
-    {maps:merge(#{id => ~"counter", count => 0}, Bindings), #{}}.
+    {
+        #{
+            id => maps:get(id, Bindings, ~"counter"),
+            count => maps:get(count, Bindings, 0)
+        },
+        #{}
+    }.
 
 %% Only counter2 doubles the parent count; others merge normally.
 -spec handle_update(az:bindings(), az:bindings()) -> az:handle_update_ret().

@@ -12,8 +12,8 @@ nested stateful descriptors.
 -export([render/1]).
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings0, _Req) ->
-    {maps:merge(#{id => ~"chain_a"}, Bindings0), #{}}.
+mount(_Bindings, _Req) ->
+    {#{id => ~"chain_a"}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

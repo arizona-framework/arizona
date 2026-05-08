@@ -6,8 +6,7 @@
 mount(Bindings, _Req) ->
     Items = maps:get(items, Bindings, []),
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
-    B = maps:merge(#{id => ~"todo"}, Bindings),
-    {B#{items => Stream}, #{}}.
+    {#{id => ~"todo", items => Stream}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

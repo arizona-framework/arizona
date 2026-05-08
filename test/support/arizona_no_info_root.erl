@@ -6,8 +6,8 @@
 %% drops inbox messages when the handler doesn't export the callback.
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings0, _Req) ->
-    {Bindings0#{id => ~"noinfo"}, #{}}.
+mount(_Bindings, _Req) ->
+    {#{id => ~"noinfo"}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

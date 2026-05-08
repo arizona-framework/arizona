@@ -6,7 +6,14 @@
 mount(Bindings, _Req) ->
     ?connected andalso ?subscribe(chat),
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end),
-    {maps:merge(#{id => ~"page", messages => Stream}, Bindings), #{}}.
+    {
+        #{
+            id => ~"page",
+            title => maps:get(title, Bindings, ~"Chat"),
+            messages => Stream
+        },
+        #{}
+    }.
 
 -spec unmount(az:bindings()) -> ok.
 unmount(_Bindings) ->
