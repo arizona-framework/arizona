@@ -19,10 +19,16 @@ itself dominates):
 | Workload | Suggested `--ops` |
 |----------|-------------------|
 | `render_view_page` | 1000 |
-| `render_view_with_layout` | 1000 |
 | `render_each_100` | 200 |
-| `stream_reorder_100` | 200 |
+| `render_nested_each` | 200 |
+| `render_stateful_chain` | 1000 |
 | `diff_simple_event` | 5000 |
+| `stream_reorder_100` | 200 |
+| `stream_insert_1k` | 50 |
+| `http_get_e2e` | 1000 |
+| `ws_event_e2e` | 1000 |
+| `mount_only` | 500 |
+| `pubsub_broadcast_100` | 100 |
 
 ```bash
 make prof ARGS="--only $ARGUMENTS --ops 1000 --min-ms 0.5"

@@ -46,7 +46,14 @@ profilers() ->
         {~"render_view_page", fun prof_render_view_page/2},
         {~"render_each_100", fun prof_render_each_100/2},
         {~"diff_simple_event", fun prof_diff_simple_event/2},
-        {~"stream_reorder_100", fun prof_stream_reorder_100/2}
+        {~"stream_reorder_100", fun prof_stream_reorder_100/2},
+        {~"http_get_e2e", fun prof_http_get_e2e/2},
+        {~"ws_event_e2e", fun prof_ws_event_e2e/2},
+        {~"mount_only", fun prof_mount_only/2},
+        {~"stream_insert_1k", fun prof_stream_insert_1k/2},
+        {~"pubsub_broadcast_100", fun prof_pubsub_broadcast_100/2},
+        {~"render_nested_each", fun prof_render_nested_each/2},
+        {~"render_stateful_chain", fun prof_render_stateful_chain/2}
     ].
 
 filter_workloads(All, []) ->
@@ -148,6 +155,222 @@ prof_stream_reorder_100(Label, Opts) ->
         end
     end,
     profile_loop(Label, Op, Opts).
+
+prof_render_nested_each(Label, Opts) ->
+    %% View renders 10 sections, each with a 10-item `?each` of leaves
+    %% (`arizona_bench_nested_each`). Two levels of `?each` exercise the
+    %% recursive `arizona_render:zip/2` + `arizona_eval:render_list_items_simple/2`
+    %% path that real list-in-list shapes (categories x items, threads x replies)
+    %% hit. Complements `render_each_100`'s flat 100-item case.
+    %%
+    %% Pre-generate the 10x10 dataset once and pass via bindings -- the
+    %% fixture's lazy default would otherwise rebuild 100 binaries per
+    %% render, dominating the profile.
+    Sections = generate_nested_sections(),
+    RenderOpts = #{bindings => #{sections => Sections}},
+    Req = arizona_req_test_adapter:new(),
+    Sample = arizona_render:render_view_to_iolist(arizona_bench_nested_each, Req, RenderOpts),
+    sanity_render(arizona_bench_nested_each, Sample),
+    Op = fun() ->
+        arizona_render:render_view_to_iolist(arizona_bench_nested_each, Req, RenderOpts)
+    end,
+    profile_loop(Label, Op, Opts).
+
+generate_nested_sections() ->
+    [
+        #{
+            id => SectId,
+            title => iolist_to_binary(io_lib:format("Section ~b", [SectId])),
+            items => [
+                #{
+                    id => ItemId,
+                    text => iolist_to_binary(
+                        io_lib:format("Item ~b-~b", [SectId, ItemId])
+                    )
+                }
+             || ItemId <- lists:seq(1, 10)
+            ]
+        }
+     || SectId <- lists:seq(1, 10)
+    ].
+
+prof_render_stateful_chain(Label, Opts) ->
+    %% 3-level stateful chain: view (chain_a) -> stateful (chain_b) ->
+    %% stateful (chain_c) with a 10-item `?each` leaf. Exercises the
+    %% recursive `arizona_render:render_ssr_val/1` propagation through
+    %% nested `?stateful(...)` descriptors -- something the flat
+    %% `render_view_page` (single-level stateful children) can't show.
+    Req = arizona_req_test_adapter:new(),
+    Sample = arizona_render:render_view_to_iolist(arizona_bench_chain_a, Req, #{}),
+    sanity_render(arizona_bench_chain_a, Sample),
+    Op = fun() ->
+        arizona_render:render_view_to_iolist(arizona_bench_chain_a, Req, #{})
+    end,
+    profile_loop(Label, Op, Opts).
+
+prof_http_get_e2e(Label, Opts) ->
+    %% Mirrors bench_http_get_e2e (bench.escript:321). Full HTTP path:
+    %% cowboy parse + arizona_http handler + view mount/render + reply
+    %% writing. Maps to every e2e spec's initial `goto()` -- the cost
+    %% the user pays before any WS event fires.
+    Routes = [
+        {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}}
+    ],
+    arizona_bench_lib:with_cowboy(prof_http_e2e, Routes, fun(Port) ->
+        arizona_bench_lib:with_http_socket(Port, fun(Sock) ->
+            sanity_http_get(Sock, Port),
+            Op = fun() ->
+                {200, _} = arizona_bench_lib:http_get(Sock, Port),
+                ok
+            end,
+            profile_loop(Label, Op, Opts)
+        end)
+    end).
+
+prof_ws_event_e2e(Label, Opts) ->
+    %% Mirrors bench_ws_event_e2e (bench.escript:390). Full WS roundtrip:
+    %% one `inc` text frame -> arizona_socket:handle_in -> live dispatch
+    %> -> diff -> reply encode -> WS frame back. Maps to every counter/
+    %% form click in the e2e specs.
+    Routes = [
+        {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
+        {ws, <<"/ws">>, #{}}
+    ],
+    arizona_bench_lib:with_cowboy(prof_ws_e2e, Routes, fun(Port) ->
+        arizona_bench_lib:with_ws_socket(Port, <<"/">>, fun(Sock) ->
+            Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
+            sanity_ws_send(Sock, Json),
+            Op = fun() ->
+                ok = arizona_bench_lib:ws_send(Sock, Json),
+                {text, _} = arizona_bench_lib:ws_recv(Sock, 5000),
+                ok
+            end,
+            profile_loop(Label, Op, Opts)
+        end)
+    end).
+
+prof_mount_only(Label, Opts) ->
+    %% Mirrors bench_mount_only (bench.escript:435). Cold WS connect
+    %% cost: gen_server start + handler mount/2 + dep tracking setup.
+    %% Per iteration: spawn a live, kill it synchronously (DOWN wait)
+    %% so steady state is ~1 alive live process -- matches typical
+    %% real-world WS load instead of an artificial backlog.
+    Req = arizona_req_test_adapter:new(),
+    sanity_mount(Req),
+    Op = fun() ->
+        {ok, Sock} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+        arizona_bench_lib:kill_live(element(2, Sock)),
+        ok
+    end,
+    profile_loop(Label, Op, Opts).
+
+prof_stream_insert_1k(Label, Opts) ->
+    %% Mirrors bench_stream_insert_1k (bench.escript:132). Per --ops
+    %% iteration: insert 1000 unique items into a fresh empty stream.
+    %% Maps to the `add_todo` flow in arizona_page.spec.js (and bulk
+    %% data import scenarios more broadly). Catches O(n) regressions
+    %% in `arizona_stream:insert/2`.
+    KeyFun = fun(#{id := Id}) -> Id end,
+    Items = [#{id => I, text => integer_to_binary(I)} || I <- lists:seq(1, 1000)],
+    sanity_stream_insert(KeyFun, Items),
+    Op = fun() ->
+        Stream0 = arizona_stream:new(KeyFun),
+        lists:foldl(fun(I, S) -> arizona_stream:insert(S, I) end, Stream0, Items),
+        ok
+    end,
+    profile_loop(Label, Op, Opts).
+
+prof_pubsub_broadcast_100(Label, Opts) ->
+    %% Mirrors bench_pubsub_broadcast_100 (bench.escript:508). 100
+    %% subscriber procs on one topic; per iteration: one broadcast +
+    %% barrier waiting for all 100 acks. Maps to arizona_chat's
+    %% cross-tab message fan-out (each connected tab is a subscriber).
+    Topic = prof_pubsub_topic,
+    Self = self(),
+    Subs = [
+        spawn_link(fun() -> pubsub_sub_loop(Topic, Self) end)
+     || _ <- lists:seq(1, 100)
+    ],
+    ok = lists:foreach(
+        fun(P) ->
+            receive
+                {ready, P} -> ok
+            end
+        end,
+        Subs
+    ),
+    Op = fun() ->
+        arizona_pubsub:broadcast(Topic, ping),
+        await_acks(100)
+    end,
+    try
+        profile_loop(Label, Op, Opts)
+    after
+        lists:foreach(fun(P) -> exit(P, normal) end, Subs)
+    end.
+
+pubsub_sub_loop(Topic, Reporter) ->
+    ok = arizona_pubsub:subscribe(Topic, self()),
+    Reporter ! {ready, self()},
+    pubsub_sub_recv(Reporter).
+
+pubsub_sub_recv(Reporter) ->
+    receive
+        ping ->
+            Reporter ! ack,
+            pubsub_sub_recv(Reporter);
+        _ ->
+            pubsub_sub_recv(Reporter)
+    end.
+
+await_acks(0) ->
+    ok;
+await_acks(N) ->
+    receive
+        ack -> await_acks(N - 1)
+    end.
+
+sanity_http_get(Sock, Port) ->
+    case arizona_bench_lib:http_get(Sock, Port) of
+        {200, Body} when byte_size(Body) > 0 ->
+            ok;
+        Other ->
+            io:format("error: GET returned ~p~n", [Other]),
+            halt(1)
+    end.
+
+sanity_ws_send(Sock, Json) ->
+    ok = arizona_bench_lib:ws_send(Sock, Json),
+    case arizona_bench_lib:ws_recv(Sock, 5000) of
+        {text, Reply} when byte_size(Reply) > 0 ->
+            ok;
+        Other ->
+            io:format("error: WS send returned ~p~n", [Other]),
+            halt(1)
+    end.
+
+sanity_mount(Req) ->
+    case arizona_socket:init(arizona_root_counter, #{}, Req, #{}) of
+        {ok, Sock} when is_pid(element(2, Sock)) ->
+            arizona_bench_lib:kill_live(element(2, Sock));
+        Other ->
+            io:format("error: mount returned ~p~n", [Other]),
+            halt(1)
+    end.
+
+sanity_stream_insert(KeyFun, Items) ->
+    Stream = lists:foldl(
+        fun(I, S) -> arizona_stream:insert(S, I) end,
+        arizona_stream:new(KeyFun),
+        Items
+    ),
+    case length(arizona_stream:to_list(Stream)) of
+        1000 ->
+            ok;
+        Other ->
+            io:format("error: expected 1000 stream items, got ~p~n", [Other]),
+            halt(1)
+    end.
 
 sanity_render(Module, Sample) ->
     case iolist_size(Sample) > 0 of
