@@ -129,6 +129,22 @@ test-e2e-sequential:
 bench: compile-test
 	./scripts/bench.escript $(ARGS)
 
+# Performance profile (eprof/fprof). Same caveat as bench: developer
+# tool, not auto-gated. Pass extra args via ARGS, e.g.:
+#   make prof ARGS="--only diff_simple_event"
+#   make prof ARGS="--only render_view_page --tool fprof"
+prof: compile-test
+	./scripts/profile.escript $(ARGS)
+
+# Profile any commit-ish (branch, tag, SHA, HEAD~N) without touching
+# the working tree, via git worktree cached under _build/prof-at-<sha>/.
+# Use for A/B comparisons against an uncommitted change without manual
+# stash/pop. Examples:
+#   make prof-at REF=HEAD~1 ARGS="--only render_each_100 --ops 200"
+#   make prof-at REF=main   ARGS="--only render_view_page --ops 1000"
+prof-at:
+	./scripts/prof_at.sh $(REF) $(ARGS)
+
 cover: cover-erl cover-js
 
 cover-erl:

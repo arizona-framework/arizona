@@ -187,8 +187,7 @@ otherwise. The client reconnects on its own.
     Info :: term(),
     Socket :: socket().
 handle_info({arizona_push, Ops, Effects}, #socket{view_id = ViewId} = Socket) ->
-    ScopedOps = scope_ops(ViewId, Ops),
-    encode_reply(ScopedOps, Effects, Socket);
+    encode_reply(flatten_ops(ViewId, Ops), Effects, Socket);
 handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid} = Socket) when Reason =/= normal ->
     logger:error("Live process ~p crashed: ~p", [Pid, Reason]),
     close_crash(Socket);
@@ -256,7 +255,7 @@ replace_ops(ViewId, PageHTML) ->
 
 dispatch_event(Pid, ViewId, Event, Payload) ->
     {ok, Ops, Effects} = arizona_live:handle_event(Pid, ViewId, Event, Payload),
-    {scope_ops(ViewId, Ops), Effects}.
+    {flatten_ops(ViewId, Ops), Effects}.
 
 encode_reply([], [], Socket) ->
     {ok, Socket};
@@ -270,54 +269,116 @@ encode_reply(Ops, Effects, Socket) ->
 unwrap_effects(Effects) ->
     [Cmd || {arizona_js, Cmd} <:- Effects].
 
+%% Fast path for the three reply shapes produced by encode_reply/3. Hand
+%% writes the outer `{"o":...}` / `{"e":...}` / both wrapper, skipping
+%% OTP json's per-key map walk and the per-call escape on the constant
+%% `<<"o">>`/`<<"e">>` keys. The Ops list goes through `json:encode/2`
+%% with `op_encoder/2` -- the custom encoder emits `"<ViewId>:<Az>"`
+%% inline as iodata, skipping the per-op binary concat (and per-target
+%% `escape_binary/5` walk) that the previous `scope_ops` did. Effects
+%% keep the default encoder -- they're plain JSON values.
+encode(#{?OPS := Ops, ?EFFECTS := Effects}) ->
+    [
+        <<"{\"o\":">>,
+        json:encode(Ops, fun op_encoder/2),
+        <<",\"e\":">>,
+        json:encode(Effects),
+        $}
+    ];
+encode(#{?OPS := Ops}) ->
+    [<<"{\"o\":">>, json:encode(Ops, fun op_encoder/2), $}];
+encode(#{?EFFECTS := Effects}) ->
+    [<<"{\"e\":">>, json:encode(Effects), $}];
 encode(Map) ->
     json:encode(Map).
 
-scope_ops(ViewId, Ops) ->
-    lists:append([scope_op(ViewId, Op) || Op <- Ops]).
+%% Pre-flatten parent + child-view ops into tagged tuples ready for
+%% `op_encoder/2`. Each tuple's ViewId is the owning view; the encoder
+%% emits the scoped target inline at JSON write time -- no binary
+%% concat, no per-target escape_binary call. `replace_ops/2` produces
+%% UNTAGGED ops (the target IS the ViewId), so they bypass the encoder
+%% special case and go through default JSON encoding.
+flatten_ops(_ViewId, []) ->
+    [];
+flatten_ops(ParentViewId, [[ChildViewId, ChildOps] | Rest]) when is_binary(ChildViewId) ->
+    flatten_ops(ChildViewId, ChildOps) ++ flatten_ops(ParentViewId, Rest);
+flatten_ops(ViewId, [Op | Rest]) ->
+    [{ViewId, Op} | flatten_ops(ViewId, Rest)].
 
-scope_op(_ParentViewId, [ChildViewId, ChildOps]) when is_binary(ChildViewId) ->
-    %% Recursive child diff -- flatten with child's own view id
-    scope_ops(ChildViewId, ChildOps);
-scope_op(ViewId, [?OP_ITEM_PATCH, Target, Key, InnerOps]) ->
-    %% ITEM_PATCH: scope the target, inner ops are item-relative (not scoped)
-    [[?OP_ITEM_PATCH, <<ViewId/binary, ":", Target/binary>>, Key, InnerOps]];
-scope_op(ViewId, [OpCode, Target | Rest]) when is_integer(OpCode) ->
-    [[OpCode, <<ViewId/binary, ":", Target/binary>> | Rest]].
+%% Custom JSON encoder. Pattern-matches the `{ViewId, RawOp}` tag
+%% produced by `flatten_ops/2` and emits the JSON array with the scoped
+%% target inline as iodata. ViewId and Az are known safe (alphanumeric
+%% + dash + colon), so we can skip `json:escape_binary/5` on them.
+%% Op codes are bounded 0..9 (see `?OP_*` in `arizona.hrl`) so the
+%% binary form is just `OpCode + $0` -- skips an `integer_to_binary/1`
+%% BIF call per op. Falls back to `json:encode_value/2` for everything
+%% else (untagged replace ops, effects, payload values).
+op_encoder({ViewId, [OpCode, Target | RestArgs]}, E) when
+    is_integer(OpCode),
+    OpCode >= 0,
+    OpCode =< 9,
+    is_binary(ViewId),
+    is_binary(Target)
+->
+    [
+        $[,
+        OpCode + $0,
+        <<",\"">>,
+        ViewId,
+        $:,
+        Target,
+        <<"\"">>,
+        encode_rest(RestArgs, E),
+        $]
+    ];
+op_encoder(V, E) ->
+    json:encode_value(V, E).
+
+encode_rest([], _E) -> [];
+encode_rest([H | T], E) -> [$,, E(H, E) | encode_rest(T, E)].
 
 -ifdef(TEST).
 
-scope_op_replace_test() ->
-    ReplOp = [8, ~"page", ~"<main>new</main>"],
+flatten_ops_tags_test() ->
+    %% flatten_ops emits {ViewId, RawOp} tuples; the per-target scoping
+    %% happens in op_encoder/2 at JSON write time, not here.
+    Op = [5, ~"0", ~"1", -1, ~"<li>A</li>"],
+    ?assertEqual([{~"page", Op}], flatten_ops(~"page", [Op])).
+
+flatten_ops_child_diff_test() ->
+    %% Child-view diff: [ChildViewId, ChildOps] flattens with the child's
+    %% ViewId tag, parent ops keep the parent's tag.
+    ChildOp = [0, ~"f7-0", ~"99"],
+    ParentOp = [0, ~"f12-0", ~"42"],
     ?assertEqual(
-        [[8, ~"root:page", ~"<main>new</main>"]],
-        scope_op(~"root", ReplOp)
+        [{~"counter", ChildOp}, {~"page", ParentOp}],
+        flatten_ops(~"page", [[~"counter", [ChildOp]], ParentOp])
     ).
 
-stream_scope_ops_test() ->
+encode_replace_op_test() ->
+    %% Replace ops are UNTAGGED -- target IS the ViewId. Default JSON
+    %% encoding, no scoping.
+    Bytes = iolist_to_binary(encode(#{?OPS => [[8, ~"page", ~"<main>new</main>"]]})),
+    ?assertEqual(~"{\"o\":[[8,\"page\",\"<main>new</main>\"]]}", Bytes).
+
+encode_stream_ops_test() ->
+    %% Tagged ops go through op_encoder/2 -- inline `<ViewId>:<Az>` emit.
     %% INSERT
     InsOp = [5, ~"0", ~"1", -1, ~"<li>A</li>"],
-    ?assertEqual(
-        [[5, ~"page:0", ~"1", -1, ~"<li>A</li>"]],
-        scope_op(~"page", InsOp)
-    ),
+    InsBytes = iolist_to_binary(encode(#{?OPS => flatten_ops(~"page", [InsOp])})),
+    ?assertEqual(~"{\"o\":[[5,\"page:0\",\"1\",-1,\"<li>A</li>\"]]}", InsBytes),
     %% REMOVE
     RemOp = [6, ~"0", ~"1"],
-    ?assertEqual(
-        [[6, ~"page:0", ~"1"]],
-        scope_op(~"page", RemOp)
-    ),
-    %% ITEM_PATCH
+    RemBytes = iolist_to_binary(encode(#{?OPS => flatten_ops(~"page", [RemOp])})),
+    ?assertEqual(~"{\"o\":[[6,\"page:0\",\"1\"]]}", RemBytes),
+    %% ITEM_PATCH -- inner ops are item-relative (NOT scoped by op_encoder
+    %% because they're not tagged tuples).
     PatchOp = [7, ~"0", ~"1", [[0, ~"0", ~"New"]]],
-    ?assertEqual(
-        [[7, ~"page:0", ~"1", [[0, ~"0", ~"New"]]]],
-        scope_op(~"page", PatchOp)
-    ),
+    PatchBytes = iolist_to_binary(encode(#{?OPS => flatten_ops(~"page", [PatchOp])})),
+    ?assertEqual(~"{\"o\":[[7,\"page:0\",\"1\",[[0,\"0\",\"New\"]]]]}", PatchBytes),
     %% MOVE
     MoveOp = [9, ~"0", ~"1", 0],
-    ?assertEqual(
-        [[9, ~"page:0", ~"1", 0]],
-        scope_op(~"page", MoveOp)
-    ).
+    MoveBytes = iolist_to_binary(encode(#{?OPS => flatten_ops(~"page", [MoveOp])})),
+    ?assertEqual(~"{\"o\":[[9,\"page:0\",\"1\",0]]}", MoveBytes).
 
 -endif.

@@ -574,15 +574,26 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, _ElemLine) when
         true ->
             ValBin = extract_binary_value(ValueAST),
             buf_append(State0, <<" ", NameBin/binary, "=\"", ValBin/binary, "\"">>);
-        false when State0#state.nodiff ->
-            Module = State0#state.module,
-            DynAST = make_nodiff_attr_dynamic_ast(NameBin, ValueAST, Module, line(ValueAST)),
-            flush(State0, DynAST);
         false ->
-            Module = State0#state.module,
-            AzBin = integer_to_binary(ElemAz),
-            DynAST = make_attr_dynamic_ast(AzBin, NameBin, ValueAST, Module, line(ValueAST)),
-            flush(State0, DynAST)
+            case try_fold_arizona_js(ValueAST) of
+                {ok, FoldedBin} ->
+                    buf_append(
+                        State0, <<" ", NameBin/binary, "=\"", FoldedBin/binary, "\"">>
+                    );
+                error when State0#state.nodiff ->
+                    Module = State0#state.module,
+                    DynAST = make_nodiff_attr_dynamic_ast(
+                        NameBin, ValueAST, Module, line(ValueAST)
+                    ),
+                    flush(State0, DynAST);
+                error ->
+                    Module = State0#state.module,
+                    AzBin = integer_to_binary(ElemAz),
+                    DynAST = make_attr_dynamic_ast(
+                        AzBin, NameBin, ValueAST, Module, line(ValueAST)
+                    ),
+                    flush(State0, DynAST)
+            end
     end;
 compile_attr({atom, _, Name}, _ElemAz, State0, _ElemLine) ->
     NameBin = atom_to_html_binary(Name),
@@ -802,6 +813,33 @@ is_static_binary({bin, _, Elements}) ->
 is_static_binary(_) ->
     false.
 
+%% Try to fold an attribute value AST that is a literal `arizona_js`
+%% command (or literal list of commands) into the final
+%% HTML-attribute-safe encoded binary at compile time. Returns
+%% `{ok, Bin}` on success; `error` if the value isn't foldable (any
+%% non-literal sub-expression, unknown shape, or `arizona_js` not
+%% loaded). Falling through to the runtime dynamic path is always safe.
+try_fold_arizona_js(ExprAST) ->
+    try
+        Term = eval_arizona_js_expr(ExprAST),
+        {ok, arizona_js:encode(Term)}
+    catch
+        _:_ -> error
+    end.
+
+%% Evaluate an `arizona_js:Fn(literal-args)` call AST or a literal list
+%% of such calls into the runtime term it would yield. Throws on any
+%% non-literal sub-expression -- `try_fold_arizona_js/1` catches it.
+eval_arizona_js_expr(
+    {call, _, {remote, _, {atom, _, arizona_js}, {atom, _, Fn}}, ArgsAST}
+) ->
+    Args = [erl_syntax:concrete(A) || A <- ArgsAST],
+    apply(arizona_js, Fn, Args);
+eval_arizona_js_expr({nil, _}) ->
+    [];
+eval_arizona_js_expr({cons, _, H, T}) ->
+    [eval_arizona_js_expr(H) | eval_arizona_js_expr(T)].
+
 is_element_tuple({tuple, _, [_, Second]}) ->
     is_list_ast(Second);
 is_element_tuple({tuple, _, [_, Second, _Third]}) ->
@@ -927,13 +965,7 @@ extract_directives([Attr | Rest], Opts) ->
     end.
 
 opts_to_map_fields(Opts, Line) ->
-    maps:fold(
-        fun(K, V, Acc) ->
-            [{map_field_assoc, Line, {atom, Line, K}, {atom, Line, V}} | Acc]
-        end,
-        [],
-        Opts
-    ).
+    [{map_field_assoc, Line, {atom, Line, K}, {atom, Line, V}} || K := V <- Opts].
 
 atom_to_html_binary(Atom) ->
     binary:replace(atom_to_binary(Atom), <<"_">>, <<"-">>, [global]).

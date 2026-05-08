@@ -253,57 +253,27 @@ carry_skipped_view(#{view_id := VId}, {Old, New}) ->
         #{} -> {Old, New}
     end;
 carry_skipped_view(#{child_views := ChildIds}, {Old, New}) ->
-    lists:foldl(
-        fun(Id, {O, N}) ->
-            case O of
-                #{Id := View} -> {O, N#{Id => View}};
-                #{} -> {O, N}
-            end
-        end,
-        {Old, New},
-        ChildIds
-    );
+    {Old, maps:merge(New, maps:with(ChildIds, Old))};
 carry_skipped_view(_Old, Views) ->
     Views.
 
-%% Extract child view IDs from deleted stream items only.
+%% Extract child view IDs from deleted stream items only. The result is
+%% used in list subtraction (`OldChildViews -- Deleted`), so order doesn't
+%% matter -- safe to use a flat comp instead of a fold-with-prepend.
 deleted_item_children(Pending, OldItems) ->
-    lists:foldl(
-        fun
-            ({delete, Key}, Acc) ->
-                case OldItems of
-                    #{Key := ItemD} -> item_child_views(ItemD, Acc);
-                    #{} -> Acc
-                end;
-            (_, Acc) ->
-                Acc
-        end,
-        [],
-        queue:to_list(Pending)
-    ).
-
-item_child_views(ItemD, Acc) ->
-    lists:foldl(
-        fun
-            ({_Az, #{view_id := VId}, _Deps}, A) -> [VId | A];
-            (_, A) -> A
-        end,
-        Acc,
-        ItemD
-    ).
+    [
+        VId
+     || {delete, Key} <- queue:to_list(Pending),
+        {_Az, #{view_id := VId}, _Deps} <-
+            case OldItems of
+                #{Key := ItemD} -> ItemD;
+                #{} -> []
+            end
+    ].
 
 %% Copy child views from OldViews to NewViews for children not already present.
 carry_item_children(ChildViewIds, Old, New) ->
-    lists:foldl(
-        fun(Id, Acc) ->
-            case Old of
-                #{Id := View} -> Acc#{Id => View};
-                #{} -> Acc
-            end
-        end,
-        New,
-        ChildViewIds
-    ).
+    maps:merge(New, maps:with(ChildViewIds, Old)).
 
 -doc """
 Returns `true` when any key in `Deps` also appears in `Changed`. Used by
@@ -467,7 +437,7 @@ stream_reset(Az, OldItems, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     VSet = maps:from_keys(VKeys, true),
     RemOps = [
         [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K := _ <:- SnapAcc, not is_map_key(K, VSet)
+     || K := _ <- SnapAcc, not is_map_key(K, VSet)
     ],
     Kept = maps:with(VKeys, SnapAcc),
     {DiffOps, NewSnaps, Views1} =
@@ -566,7 +536,11 @@ apply_limit(
     SnapItems,
     Views
 ) ->
-    {[], #{t => ?EACH, items => SnapItems, order => Order, template => Tmpl}, Views};
+    %% Flush the {Front, BackRev} buffer to a flat list -- the snapshot's
+    %% `order` is consumed by `arizona_render:zip/2` as a list iterator,
+    %% not by `visible_keys/2`, so we need to materialise here.
+    FlatOrder = arizona_template:visible_keys(Order, infinity),
+    {[], #{t => ?EACH, items => SnapItems, order => FlatOrder, template => Tmpl}, Views};
 apply_limit(
     Az,
     #stream{limit = Limit, on_limit = halt, order = Order},
@@ -578,7 +552,7 @@ apply_limit(
     KeepOnly = maps:with(VKeys, SnapItems),
     DropOps = [
         [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K := _ <:- SnapItems, not is_map_key(K, KeepOnly)
+     || K := _ <- SnapItems, not is_map_key(K, KeepOnly)
     ],
     {DropOps, #{t => ?EACH, items => KeepOnly, order => VKeys, template => Tmpl}, Views};
 apply_limit(
@@ -597,9 +571,9 @@ apply_limit(
     VSet = maps:from_keys(VKeys, true),
     RemOps = [
         [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K := _ <:- SnapItems, not is_map_key(K, VSet)
+     || K := _ <- SnapItems, not is_map_key(K, VSet)
     ],
-    Pruned = #{K => V || K := V <:- SnapItems, is_map_key(K, VSet)},
+    Pruned = #{K => V || K := V <- SnapItems, is_map_key(K, VSet)},
     {InsOps, Final, Views1} = snap_add_missing(
         Az,
         VKeys,
@@ -700,7 +674,7 @@ lis_backtrack(Idx, Parent, Acc) ->
         end,
     lis_backtrack(Next, Parent, Acc#{Idx => true}).
 
-compute_reorder_ops(_Az, OldOrder, NewOrder, _Kept) when OldOrder =:= NewOrder ->
+compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept) ->
     [];
 compute_reorder_ops(Az, OldOrder, NewOrder, Kept) ->
     KeptOld = [K || K <- OldOrder, is_map_key(K, Kept)],

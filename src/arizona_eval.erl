@@ -258,7 +258,7 @@ Renders list items without view tracking. Returns `[ItemD]`.
     Template :: map(),
     ItemDs :: [[{arizona_template:az(), term(), map()}]].
 render_list_items_simple(Items, #{d := DFun}) ->
-    [[{Az, Val, #{}} || {Az, Val} <- eval_dynamics(DFun(Item))] || Item <- Items].
+    [[eval_one_triple(D) || D <- DFun(Item)] || Item <- Items].
 
 -doc """
 Renders map entries without view tracking. Returns `[ItemD]`.
@@ -268,13 +268,7 @@ Renders map entries without view tracking. Returns `[ItemD]`.
     Template :: map(),
     ItemDs :: [[{arizona_template:az(), term(), map()}]].
 render_map_items_simple(Map, #{d := DFun}) ->
-    maps:fold(
-        fun(K, V, Acc) ->
-            [[{Az, Val, #{}} || {Az, Val} <- eval_dynamics(DFun(K, V))] | Acc]
-        end,
-        [],
-        Map
-    ).
+    [[eval_one_triple(D) || D <- DFun(K, V)] || K := V <- Map].
 
 -doc """
 Asserts that `Bindings` did not modify any framework-restricted keys
@@ -288,24 +282,23 @@ was changed by the handler's mount callback.
     Props :: map(),
     Handler :: module().
 check_restricted_keys(Bindings, Props, Handler) ->
-    lists:foreach(
-        fun(Key) ->
-            case Props of
+    [check_restricted_key(Key, Bindings, Props, Handler) || Key <- ?RESTRICTED_KEYS],
+    ok.
+
+check_restricted_key(Key, Bindings, Props, Handler) ->
+    case Props of
+        #{Key := Expected} ->
+            case Bindings of
                 #{Key := Expected} ->
-                    case Bindings of
-                        #{Key := Expected} ->
-                            ok;
-                        #{Key := _} ->
-                            error(restricted_key_modified, [Key, Handler], [
-                                {error_info, #{module => ?MODULE}}
-                            ])
-                    end;
-                #{} ->
-                    ok
-            end
-        end,
-        ?RESTRICTED_KEYS
-    ).
+                    ok;
+                #{Key := _} ->
+                    error(restricted_key_modified, [Key, Handler], [
+                        {error_info, #{module => ?MODULE}}
+                    ])
+            end;
+        #{} ->
+            ok
+    end.
 
 -doc """
 Formats `restricted_key_modified` errors into a human-readable message
@@ -336,6 +329,21 @@ eval_one({Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
     {Az, {attr, Name, eval_val(Fun())}};
 eval_one({Az, Spec}) ->
     {Az, eval_val(Spec)}.
+
+%% Like eval_one/1 but builds the 3-tuple `{Az, Val, #{}}` directly,
+%% used by the per-item snapshot paths (render_list_items_simple,
+%% render_map_items_simple, render_stream_item_simple). They previously
+%% chained `[{Az, Val, #{}} || {Az, Val} <- eval_dynamics(...)]`, which
+%% allocated an intermediate 2-tuple list and re-walked it. The simple
+%% snapshot path doesn't track deps, so the empty map literal is shared.
+eval_one_triple({Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
+    {Az, {attr, Name, eval_val(Fun())}, #{}};
+eval_one_triple({Az, Spec, _Loc}) ->
+    {Az, eval_val(Spec), #{}};
+eval_one_triple({Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
+    {Az, {attr, Name, eval_val(Fun())}, #{}};
+eval_one_triple({Az, Spec}) ->
+    {Az, eval_val(Spec), #{}}.
 
 eval_val(Fun) when is_function(Fun, 0) ->
     eval_val(Fun());
@@ -517,8 +525,7 @@ render_stream_items_simple([K | Rest], ItemsMap, Tmpl, Acc) ->
     render_stream_items_simple(Rest, ItemsMap, Tmpl, Acc#{K => D}).
 
 render_stream_item_simple(Key, Item, #{d := DFun}) ->
-    Dynamics = DFun(Item, Key),
-    [{Az, Val, #{}} || {Az, Val} <- eval_dynamics(Dynamics)].
+    [eval_one_triple(D) || D <- DFun(Item, Key)].
 
 render_list_items1([], _DFun, Views) ->
     {[], Views};

@@ -96,8 +96,7 @@ Sends `Data` as a mailbox message to every subscriber of `Channel`.
     Channel :: channel(),
     Data :: term().
 broadcast(Channel, Data) ->
-    _ = [Pid ! Data || Pid <- subscribers(Channel)],
-    ok.
+    send_each(subscribers(Channel), Data).
 
 -doc """
 Like `broadcast/2` but skips `From` -- useful when the publisher is
@@ -108,8 +107,25 @@ also a subscriber and shouldn't echo to itself.
     Channel :: channel(),
     Data :: term().
 broadcast_from(From, Channel, Data) ->
-    _ = [Pid ! Data || Pid <- subscribers(Channel), Pid =/= From],
-    ok.
+    send_each_skip(subscribers(Channel), Data, From).
+
+%% Tail-recursive send loop -- the previous `[Pid ! Data || Pid <- Subs]`
+%% form allocated a result list (one cons cell per subscriber) just to
+%% discard it via `_ = ...`. For high-fanout broadcasts (chat, presence,
+%% etc.) that's pure heap pressure.
+send_each([], _Data) ->
+    ok;
+send_each([Pid | Rest], Data) ->
+    Pid ! Data,
+    send_each(Rest, Data).
+
+send_each_skip([], _Data, _From) ->
+    ok;
+send_each_skip([From | Rest], Data, From) ->
+    send_each_skip(Rest, Data, From);
+send_each_skip([Pid | Rest], Data, From) ->
+    Pid ! Data,
+    send_each_skip(Rest, Data, From).
 
 -doc """
 Returns the list of pids currently subscribed to `Channel`.
