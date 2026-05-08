@@ -231,7 +231,7 @@ render_dyn(#{t := ?EACH, items := Items, order := Order, template := Tmpl}) ->
     #{s := ItemS} = Tmpl,
     [zip_stream_item(ItemS, maps:get(K, Items)) || K <- Order];
 render_dyn(#{s := InnerS, d := InnerD}) ->
-    zip(InnerS, [arizona_template:unwrap_val(V) || {_Az, V} <:- InnerD]);
+    zip_d(InnerS, InnerD);
 render_dyn(V) when is_binary(V) ->
     V;
 render_dyn(V) ->
@@ -357,6 +357,15 @@ zip_stream_item([S], []) ->
     [S];
 zip_stream_item([S | Statics], [{_Az, V, _Deps} | DRest]) ->
     [S, render_v(V) | zip_stream_item(Statics, DRest)].
+
+%% Pair walker -- like zip_stream_item/2 but consumes `[{Az, V}]` 2-tuples
+%% (the snapshot d-list shape used by nested `?stateful`/`?stateless`
+%% templates). Used by render_dyn/1's `#{s, d}` clause to skip the LC
+%% walk that previously extracted values for zip/2.
+zip_d([S], []) ->
+    [S];
+zip_d([S | Statics], [{_Az, V} | DRest]) ->
+    [S, render_v(V) | zip_d(Statics, DRest)].
 
 render_v({attr, Name, V}) -> arizona_template:render_attr(Name, V);
 render_v(V) -> render_dyn(V).
