@@ -257,31 +257,19 @@ carry_skipped_view(#{child_views := ChildIds}, {Old, New}) ->
 carry_skipped_view(_Old, Views) ->
     Views.
 
-%% Extract child view IDs from deleted stream items only.
+%% Extract child view IDs from deleted stream items only. The result is
+%% used in list subtraction (`OldChildViews -- Deleted`), so order doesn't
+%% matter -- safe to use a flat comp instead of a fold-with-prepend.
 deleted_item_children(Pending, OldItems) ->
-    lists:foldl(
-        fun
-            ({delete, Key}, Acc) ->
-                case OldItems of
-                    #{Key := ItemD} -> item_child_views(ItemD, Acc);
-                    #{} -> Acc
-                end;
-            (_, Acc) ->
-                Acc
-        end,
-        [],
-        queue:to_list(Pending)
-    ).
-
-item_child_views(ItemD, Acc) ->
-    lists:foldl(
-        fun
-            ({_Az, #{view_id := VId}, _Deps}, A) -> [VId | A];
-            (_, A) -> A
-        end,
-        Acc,
-        ItemD
-    ).
+    [
+        VId
+     || {delete, Key} <- queue:to_list(Pending),
+        {_Az, #{view_id := VId}, _Deps} <-
+            case OldItems of
+                #{Key := ItemD} -> ItemD;
+                #{} -> []
+            end
+    ].
 
 %% Copy child views from OldViews to NewViews for children not already present.
 carry_item_children(ChildViewIds, Old, New) ->
