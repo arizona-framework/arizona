@@ -219,22 +219,23 @@ streams) recursively.
 zip([S], []) ->
     [S];
 zip([S | Statics], [D | Dynamics]) ->
-    Val =
-        case D of
-            #{t := ?EACH, items := Items, template := Tmpl} when is_list(Items) ->
-                #{s := ItemS} = Tmpl,
-                [zip_stream_item(ItemS, ItemD) || ItemD <- Items];
-            #{t := ?EACH, items := Items, order := Order, template := Tmpl} ->
-                #{s := ItemS} = Tmpl,
-                [zip_stream_item(ItemS, maps:get(K, Items)) || K <- Order];
-            #{s := InnerS, d := InnerD} ->
-                zip(InnerS, [arizona_template:unwrap_val(V) || {_Az, V} <:- InnerD]);
-            V when is_binary(V) ->
-                V;
-            V ->
-                arizona_template:to_bin(V)
-        end,
-    [S, Val | zip(Statics, Dynamics)].
+    [S, render_dyn(D) | zip(Statics, Dynamics)].
+
+%% Pre-unwrapped value path -- factored out of zip/2's body so zip_t/2
+%% (the triple-walking variant used by zip_stream_item/2) can share the
+%% same dispatch without duplicating the case clauses.
+render_dyn(#{t := ?EACH, items := Items, template := Tmpl}) when is_list(Items) ->
+    #{s := ItemS} = Tmpl,
+    [zip_stream_item(ItemS, ItemD) || ItemD <- Items];
+render_dyn(#{t := ?EACH, items := Items, order := Order, template := Tmpl}) ->
+    #{s := ItemS} = Tmpl,
+    [zip_stream_item(ItemS, maps:get(K, Items)) || K <- Order];
+render_dyn(#{s := InnerS, d := InnerD}) ->
+    zip(InnerS, [arizona_template:unwrap_val(V) || {_Az, V} <:- InnerD]);
+render_dyn(V) when is_binary(V) ->
+    V;
+render_dyn(V) ->
+    arizona_template:to_bin(V).
 
 -doc """
 Renders a single each-item snapshot.
@@ -347,8 +348,18 @@ apply_layouts([{Mod, Fun} | Rest], Inner, Bindings) ->
     Tmpl = Mod:Fun(Bindings#{inner_content => Wrapped}),
     render_to_iolist(Tmpl).
 
-zip_stream_item(Statics, ItemD) ->
-    zip(Statics, [arizona_template:unwrap_val(V) || {_Az, V, _Deps} <:- ItemD]).
+%% Triple walker -- like zip/2 but consumes `[{Az, V, Deps}]` directly
+%% (the snapshot shape `arizona_eval:render_list_items_simple/2` and
+%% friends produce). Inlines unwrap_val/1's `{attr, Name, V}` case via
+%% render_v/1, eliminating the per-item LC walk that previously
+%% preceded zip/2.
+zip_stream_item([S], []) ->
+    [S];
+zip_stream_item([S | Statics], [{_Az, V, _Deps} | DRest]) ->
+    [S, render_v(V) | zip_stream_item(Statics, DRest)].
+
+render_v({attr, Name, V}) -> arizona_template:render_attr(Name, V);
+render_v(V) -> render_dyn(V).
 
 %% Az is ignored during SSR (only used for diff targeting), so `undefined` Az
 %% from az-nodiff templates flows through harmlessly.
