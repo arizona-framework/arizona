@@ -309,14 +309,20 @@ flatten_ops(ViewId, [Op | Rest]) ->
 %% produced by `flatten_ops/2` and emits the JSON array with the scoped
 %% target inline as iodata. ViewId and Az are known safe (alphanumeric
 %% + dash + colon), so we can skip `json:escape_binary/5` on them.
-%% Falls back to `json:encode_value/2` for everything else (untagged
-%% replace ops, effects, payload values).
+%% Op codes are bounded 0..9 (see `?OP_*` in `arizona.hrl`) so the
+%% binary form is just `OpCode + $0` -- skips an `integer_to_binary/1`
+%% BIF call per op. Falls back to `json:encode_value/2` for everything
+%% else (untagged replace ops, effects, payload values).
 op_encoder({ViewId, [OpCode, Target | RestArgs]}, E) when
-    is_integer(OpCode), is_binary(ViewId), is_binary(Target)
+    is_integer(OpCode),
+    OpCode >= 0,
+    OpCode =< 9,
+    is_binary(ViewId),
+    is_binary(Target)
 ->
     [
         $[,
-        integer_to_binary(OpCode),
+        OpCode + $0,
         <<",\"">>,
         ViewId,
         $:,
