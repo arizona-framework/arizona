@@ -103,6 +103,25 @@ make prof ARGS="--only $ARGUMENTS --tool fprof --ops 200"
 fprof output is verbose. Read the `totals` block first, then sort by
 `OWN` time and trace upwards from the heaviest leaf MFAs.
 
+## 4b. Profile a different commit (A/B comparisons)
+
+To compare a candidate change against a baseline without stashing the
+working tree, profile any commit-ish via `git worktree`:
+
+```bash
+# Profile the parent commit (typical A/B baseline)
+make prof-at REF=HEAD~1 ARGS="--only render_each_100 --ops 200"
+
+# Profile a branch name, tag, or SHA -- all work
+make prof-at REF=main    ARGS="--only render_view_page --ops 1000"
+make prof-at REF=9fe7497 ARGS="--only stream_insert_1k --ops 50"
+```
+
+The worktree is cached under `_build/prof-at-<sha>/` (gitignored), so
+repeat runs of the same commit reuse the compiled artifacts. Cleanup:
+`git worktree remove _build/prof-at-<sha>` (or just `git worktree prune`
+to remove all stale entries).
+
 ## 5. Cross-check with the wall-clock bench
 
 Before claiming a win, confirm the profile-suggested change hits the
