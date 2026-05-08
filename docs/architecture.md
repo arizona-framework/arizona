@@ -552,6 +552,15 @@ value. Using `?get(id)` ensures the template renders the same value the parent p
 the server uses for tracking. `id` is a restricted key -- the handler's mount callback cannot
 override the value passed by the parent in Props.
 
+**Dispatcher error tagging.** Each `arizona_handler:call_*` wrapper catches `error:undef` and
+`error:function_clause` only when the failing stack frame is the user's exact callback, and
+re-raises with a structured reason carrying an `error_info` annotation: `{missing_callback, Mod,
+Name, Arity}`, `{unhandled_event, Mod, Event, Bindings}`, `{unhandled_info, Mod, Info, Bindings}`,
+`{unhandled_update, Mod, Props, Bindings}`, `{unhandled_unmount, Mod, Bindings}`, or
+`{render_no_clause, Mod, Bindings}`. `arizona_handler:format_error/2` turns each into a sentence
+that names the offending module/event and (when known) the view id. Errors raised from inside a
+callback's body propagate untagged.
+
 `handle_event/3` effects: a list of `arizona_js:cmd()` tuples, built using functions in
 `arizona_js.erl`. Same commands used in template attributes. Common effects:
 
