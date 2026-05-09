@@ -58,6 +58,7 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([render_list_items_simple/2]).
 -export([render_map_items_simple/2]).
 -export([check_restricted_keys/3]).
+-export([restricted_keys/0]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -65,6 +66,7 @@ cannot modify framework-owned bindings like `id`. Violations raise
 %% --------------------------------------------------------------------
 
 -ignore_xref([format_error/2]).
+-ignore_xref([restricted_keys/0]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -284,6 +286,16 @@ was changed by the handler's mount callback.
 check_restricted_keys(Bindings, Props, Handler) ->
     [check_restricted_key(Key, Bindings, Props, Handler) || Key <- ?RESTRICTED_KEYS],
     ok.
+
+-doc """
+Returns the framework-owned binding keys. Mounted handlers cannot
+change them (see `check_restricted_keys/3`); navigate-carry strips
+them from the previous-route bindings before the new mount sees them,
+since they're route-bound rather than session-level state.
+""".
+-spec restricted_keys() -> [atom()].
+restricted_keys() ->
+    ?RESTRICTED_KEYS.
 
 check_restricted_key(Key, Bindings, Props, Handler) ->
     case Props of
@@ -646,5 +658,11 @@ format_error_restricted_key_test() ->
     MsgBin = iolist_to_binary(Msg),
     ?assertNotEqual(nomatch, binary:match(MsgBin, ~"my_handler's mount callback")),
     ?assertNotEqual(nomatch, binary:match(MsgBin, ~"'id'")).
+
+restricted_keys_returns_id_test() ->
+    %% Pins the public contract so future macro changes are deliberate.
+    %% The list is consumed by `arizona_live`'s navigate handler to strip
+    %% route-bound keys from the carried bindings.
+    ?assertEqual([id], restricted_keys()).
 
 -endif.
