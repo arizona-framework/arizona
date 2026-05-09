@@ -3,8 +3,8 @@
 -export([mount/2, render/1]).
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(_Bindings, _Req) ->
-    {#{id => ~"login"}, #{}}.
+mount(Bindings, _Req) ->
+    {#{id => maps:get(id, Bindings, ~"login")}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

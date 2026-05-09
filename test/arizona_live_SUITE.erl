@@ -581,9 +581,9 @@ route_bindings_can_set_id_when_handler_accepts_it(Config) when is_list(Config) -
     %% The strip applies only to OldB, not NewIB. A route's static config
     %% can still set `id` and the new mount sees it -- the only thing the
     %% strip removes is the *previous route's* id leaking through the
-    %% carry. Here `arizona_login`'s mount does
-    %% `maps:merge(#{id => ~"login"}, Bindings)` -- Bindings (the merged
-    %% input) wins, so NewIB's id flows through to the output.
+    %% carry. Here `arizona_login`'s mount pulls `id` via
+    %% `maps:get(id, Bindings, ~"login")` -- explicit typed override --
+    %% so NewIB's id flows through to the output.
     {ok, Pid} = arizona_live:start_link(
         arizona_navigate_halt, #{}, undefined, [], arizona_req_test_adapter:new()
     ),
