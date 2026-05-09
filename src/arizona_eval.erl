@@ -659,4 +659,10 @@ format_error_restricted_key_test() ->
     ?assertNotEqual(nomatch, binary:match(MsgBin, ~"my_handler's mount callback")),
     ?assertNotEqual(nomatch, binary:match(MsgBin, ~"'id'")).
 
+restricted_keys_returns_id_test() ->
+    %% Pins the public contract so future macro changes are deliberate.
+    %% The list is consumed by `arizona_live`'s navigate handler to strip
+    %% route-bound keys from the carried bindings.
+    ?assertEqual([id], restricted_keys()).
+
 -endif.
