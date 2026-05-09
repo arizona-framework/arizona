@@ -363,7 +363,14 @@ handle_call(
     %% session-level state (current_user, theme, locale) just include those
     %% keys in their mount return; everything else is page-local and
     %% naturally evaporates on the next navigate.
-    Merged = maps:merge(OldB, NewIB),
+    %%
+    %% Framework-restricted keys (currently `id`) are stripped from the
+    %% carry: they're route-bound, and `do_mount` enforces that the new
+    %% handler's mount must keep `Props` restricted keys verbatim --
+    %% letting them carry would force the new route to pretend it's the
+    %% old one.
+    OldB1 = maps:without(arizona_eval:restricted_keys(), OldB),
+    Merged = maps:merge(OldB1, NewIB),
     {NewViewId, HTML, Snap, B2, V1} = do_mount(NewHandler, Merged, NewReq, #{}, NewOnMount),
     {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
     {reply, {ok, NewViewId, PageContent1}, #state{

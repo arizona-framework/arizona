@@ -43,6 +43,7 @@
     live_navigate_resets_views/1,
     live_navigate_round_trip/1,
     live_navigate/1,
+    live_navigate_between_different_ids/1,
     live_navigate_then_event/1,
     live_navigate_carries_root_bindings/1,
     live_page_child_mount/1,
@@ -125,6 +126,7 @@ groups() ->
         ]},
         {navigation, [parallel], [
             live_navigate,
+            live_navigate_between_different_ids,
             live_navigate_then_event,
             live_navigate_resets_views,
             live_navigate_round_trip,
@@ -555,6 +557,23 @@ live_navigate(Config) when is_list(Config) ->
     ?assertEqual(<<"page">>, NewViewId),
     ?assertMatch(#{<<"f">> := _, <<"s">> := _, <<"d">> := _}, PageContent),
     ?assert(lists:member(<<"About">>, maps:get(<<"d">>, PageContent))).
+
+live_navigate_between_different_ids(Config) when is_list(Config) ->
+    %% Regression: navigating between two route-level views that own
+    %% different `id` values must not crash on `restricted_key_modified`.
+    %% The check_restricted_keys contract is for stateful children where
+    %% the parent passes a Prop the child must keep; navigate-carry's
+    %% previous-route `id` is route-bound, not a Prop, so arizona_live
+    %% strips restricted keys from OldB before merging with NewIB.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_navigate_halt, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
+    {ok, <<"navigate-halt">>} = arizona_live:mount(Pid),
+    {ok, NewViewId, _PageContent} = arizona_live:navigate(
+        Pid, arizona_login, #{}, arizona_req_test_adapter:new()
+    ),
+    %% New route owns its own id -- not the carried `<<"navigate-halt">>`.
+    ?assertEqual(<<"login">>, NewViewId).
 
 live_navigate_then_event(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
