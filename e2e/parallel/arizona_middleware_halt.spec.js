@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { expectStaysConnected } from '../utils/connection-watcher.js';
+import { expectStaysConnected } from '../utils/helpers.js';
 
 const wsReady = (page) =>
     page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));

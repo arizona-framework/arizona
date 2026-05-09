@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { expectStaysConnected } from '../utils/connection-watcher.js';
+import { expectStaysConnected } from '../utils/helpers.js';
 
 // ---------------------------------------------------------------------------
 // Helpers -- shared
