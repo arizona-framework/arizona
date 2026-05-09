@@ -27,8 +27,8 @@
 %%   </div>
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
-    B = maps:merge(
+mount(_Bindings, _Req) ->
+    {
         #{
             id => ~"mixed",
             visible => false,
@@ -37,9 +37,8 @@ mount(Bindings, _Req) ->
             card_label => ~"Initial",
             message => ~"Hello"
         },
-        Bindings
-    ),
-    {B, #{}}.
+        #{}
+    }.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

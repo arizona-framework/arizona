@@ -66,6 +66,7 @@ reorder                  %% from sort/2 when order changes
 -export([clear_stream_pending/2]).
 -export([stream_keys/1]).
 -export([compute_item_changed/2]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -86,7 +87,8 @@ reorder                  %% from sort/2 when order changes
     to_list/1,
     get/2,
     get/3,
-    get_lazy/3
+    get_lazy/3,
+    format_error/2
 ]).
 
 %% --------------------------------------------------------------------
@@ -399,20 +401,45 @@ sort(
 
 -doc """
 Returns all items in display order as a list.
+
+Crashes with `{stream_order_stale_key, K, Order, ItemKeys}` carrying
+`error_info` when the items <-> order invariant is broken (a key in
+`order` is not in `items`). The named reason routes through
+`format_error/2`, so the dev error page renders a sentence instead
+of the raw `{badkey, _}`.
 """.
 -spec to_list(Stream) -> [item()] when
     Stream :: stream().
-to_list(#stream{items = Items, order = Order}) ->
-    [maps:get(K, Items) || K <- flat_order(Order)].
+to_list(#stream{items = Items, order = Order} = S) ->
+    Flat = flat_order(Order),
+    try
+        [maps:get(K, Items) || K <- Flat]
+    catch
+        error:{badkey, K} ->
+            error(
+                {stream_order_stale_key, K, Flat, maps:keys(Items)},
+                [S],
+                [{error_info, #{module => ?MODULE}}]
+            )
+    end.
 
 -doc """
-Returns the item at `Key`. Errors with `{badkey, Key}` if not present.
+Returns the item at `Key`. Errors with `missing_stream_key` (carrying an
+`error_info` annotation that routes through `format_error/2`) if not present.
+Use `get/3` for a default.
 """.
 -spec get(Stream, Key) -> item() when
     Stream :: stream(),
     Key :: key().
-get(#stream{items = Items}, Key) ->
-    maps:get(Key, Items).
+get(#stream{items = Items} = S, Key) ->
+    case Items of
+        #{Key := Val} ->
+            Val;
+        #{} ->
+            erlang:error(missing_stream_key, [S, Key], [
+                {error_info, #{module => ?MODULE}}
+            ])
+    end.
 
 -doc """
 Returns the item at `Key`, or `Default` if not present.
@@ -463,6 +490,39 @@ Returns the binding keys whose values are streams.
     Bindings :: map().
 stream_keys(Bindings) when is_map(Bindings) ->
     [K || K := #stream{} <- Bindings].
+
+-doc """
+Formats `arizona_stream` runtime errors into a human-readable message.
+Picked up by `erl_error:format_exception/3` via the `error_info`
+annotation attached at the raise site.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error({stream_order_stale_key, K, Order, ItemKeys}, _ST) ->
+    #{
+        general => io_lib:format(
+            "stream order references key ~0tp which is not in items "
+            "(order=~0tp, items keys=~0tp). Every key in order must "
+            "be present in items, with no duplicates.",
+            [K, Order, ItemKeys]
+        )
+    };
+format_error(missing_stream_key, [{_M, _F, [#stream{items = Items}, Key], _Info} | _]) ->
+    Available = lists:sort(maps:keys(Items)),
+    Suggestion =
+        case arizona_error:did_you_mean(Key, Available) of
+            undefined -> "";
+            Match -> io_lib:format(" Did you mean ~0tp?", [Match])
+        end,
+    #{
+        general => io_lib:format(
+            "stream key ~0tp not found.~s Available keys: ~0tp. "
+            "Use arizona_stream:get/3 with a default to make it optional.",
+            [Key, Suggestion, Available]
+        )
+    }.
 
 %% --------------------------------------------------------------------
 %% Internal functions

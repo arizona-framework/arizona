@@ -3,11 +3,8 @@
 -export([mount/2, render/1, handle_info/2]).
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings0, _Req) ->
-    %% Handler-identity keys (id, title) and per-page boot state
-    %% (connected) are written by the handler; previous-page values
-    %% carried via navigate must not pollute them.
-    Bindings = Bindings0#{
+mount(_Bindings, _Req) ->
+    Bindings = #{
         id => ~"page",
         title => ~"Scroll About",
         connected => false

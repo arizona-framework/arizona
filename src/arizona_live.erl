@@ -61,6 +61,7 @@ fingerprints already shipped in the initial HTML.
 -export([handle_event/4]).
 -export([seed_fps/2]).
 -export([apply_on_mount/3]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% gen_server callback exports
@@ -80,7 +81,8 @@ fingerprints already shipped in the initial HTML.
     connected/0,
     send/2,
     send_after/3,
-    navigate/4
+    navigate/4,
+    format_error/2
 ]).
 
 %% --------------------------------------------------------------------
@@ -401,7 +403,11 @@ handle_info({arizona_view, ViewId, Msg}, #state{bindings = B0, views = V0} = Sta
                 #{ViewId := _} ->
                     handle_child_info(ViewId, Msg, State);
                 #{} ->
-                    error({unknown_view, ViewId, Msg})
+                    erlang:error(
+                        {unknown_view, ViewId, Msg},
+                        [{arizona_view, ViewId, Msg}, B0, V0],
+                        [{error_info, #{module => ?MODULE}}]
+                    )
             end
     end;
 handle_info(Info, State) ->
@@ -411,6 +417,26 @@ terminate(_Reason, #state{handler = H, bindings = B}) ->
     ok = arizona_handler:call_unmount(H, B);
 terminate(_Reason, _State) ->
     ok.
+
+-doc """
+Formats `arizona_live` runtime errors raised with an `error_info`
+annotation pointing at this module. Picked up by
+`erl_error:format_exception/3`.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error({unknown_view, ViewId, Msg}, [{_M, _F, [_, _B, V0], _Info} | _]) ->
+    #{
+        general => io_lib:format(
+            "no view matches id ~0tp; the message ~0tp can't be routed. "
+            "Known child views in this live process: ~0tp. The id either "
+            "belongs to an unmounted view or was sent before the child "
+            "was embedded.",
+            [ViewId, Msg, lists:sort(maps:keys(V0))]
+        )
+    }.
 
 %% --------------------------------------------------------------------
 %% Internal functions

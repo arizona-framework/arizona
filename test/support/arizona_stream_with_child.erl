@@ -6,14 +6,17 @@
 %% Used to test that child views survive dep-skipping of the stream.
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings0, _Req) ->
+mount(Bindings, _Req) ->
     Items = [#{id => 1, label => ~"Item 1"}],
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
-    Bindings = maps:merge(
-        #{id => ~"swc", items => Stream, title => ~"Hello"},
-        Bindings0
-    ),
-    {Bindings, #{}}.
+    {
+        #{
+            id => ~"swc",
+            items => Stream,
+            title => maps:get(title, Bindings, ~"Hello")
+        },
+        #{}
+    }.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

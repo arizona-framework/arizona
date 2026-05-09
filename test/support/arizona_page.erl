@@ -3,20 +3,17 @@
 -export([mount/2, render/1, handle_event/3, handle_info/2]).
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings0, _Req) ->
+mount(Init, _Req) ->
     Todos = arizona_stream:new(fun(#{id := Id}) -> Id end),
-    Bindings = maps:merge(
-        #{
-            id => ~"page",
-            title => ~"Welcome",
-            theme => ~"light",
-            count => 0,
-            connected => false,
-            todos => Todos,
-            next_id => 1
-        },
-        Bindings0
-    ),
+    Bindings = #{
+        id => ~"page",
+        title => maps:get(title, Init, ~"Welcome"),
+        theme => ~"light",
+        count => 0,
+        connected => false,
+        todos => Todos,
+        next_id => 1
+    },
     ?connected andalso ?send(arizona_connected),
     {Bindings, #{}}.
 

@@ -4,7 +4,7 @@
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
 mount(Bindings, _Req) ->
-    {maps:merge(#{id => ~"login"}, Bindings), #{}}.
+    {#{id => maps:get(id, Bindings, ~"login")}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

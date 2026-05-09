@@ -581,9 +581,9 @@ route_bindings_can_set_id_when_handler_accepts_it(Config) when is_list(Config) -
     %% The strip applies only to OldB, not NewIB. A route's static config
     %% can still set `id` and the new mount sees it -- the only thing the
     %% strip removes is the *previous route's* id leaking through the
-    %% carry. Here `arizona_login`'s mount does
-    %% `maps:merge(#{id => ~"login"}, Bindings)` -- Bindings (the merged
-    %% input) wins, so NewIB's id flows through to the output.
+    %% carry. Here `arizona_login`'s mount pulls `id` via
+    %% `maps:get(id, Bindings, ~"login")` -- explicit typed override --
+    %% so NewIB's id flows through to the output.
     {ok, Pid} = arizona_live:start_link(
         arizona_navigate_halt, #{}, undefined, [], arizona_req_test_adapter:new()
     ),
@@ -863,7 +863,20 @@ live_send_unknown_view(Config) when is_list(Config) ->
     Pid ! {arizona_view, <<"nonexistent">>, hello},
     receive
         {'DOWN', Ref, process, Pid, Reason} ->
-            ?assertMatch({{unknown_view, <<"nonexistent">>, hello}, _}, Reason)
+            ?assertMatch({{unknown_view, <<"nonexistent">>, hello}, _}, Reason),
+            %% The raise carries an error_info annotation so the dev
+            %% page can route the reason through arizona_live:format_error/2.
+            {{unknown_view, _, _}, Stack} = Reason,
+            [{arizona_live, _, _, Info} | _] = Stack,
+            ?assertEqual(
+                #{module => arizona_live},
+                proplists:get_value(error_info, Info)
+            ),
+            #{general := Msg} = arizona_live:format_error(
+                {unknown_view, <<"nonexistent">>, hello}, Stack
+            ),
+            Bin = unicode:characters_to_binary(Msg),
+            ?assertNotEqual(nomatch, binary:match(Bin, <<"no view matches id">>))
     after 1000 ->
         error(timeout)
     end.

@@ -7,12 +7,14 @@
 %% arizona_live only spawns views.
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings0, _Req) ->
-    Bindings = maps:merge(
-        #{id => ~"counter", count => 0},
-        Bindings0
-    ),
-    {Bindings, #{}}.
+mount(Bindings, _Req) ->
+    {
+        #{
+            id => ~"counter",
+            count => maps:get(count, Bindings, 0)
+        },
+        #{}
+    }.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

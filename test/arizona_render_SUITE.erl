@@ -12,6 +12,9 @@
     error_page_error_summaries/1,
     error_page_escapes_unsafe_chars/1,
     error_page_format_reason_unwraps_loc/1,
+    error_page_title_is_user_frame_location/1,
+    error_page_format_error_sentence_in_body/1,
+    error_page_title_falls_back_to_arizona_loc/1,
     error_page_typical_crash/1,
     error_page_undef/1,
     fingerprint_absent_when_no_f/1,
@@ -107,6 +110,9 @@ groups() ->
             render_ssr_nested_3tuple_dyn_az,
             render_ssr_nested_failure_preserves_deepest_loc,
             error_page_format_reason_unwraps_loc,
+            error_page_title_is_user_frame_location,
+            error_page_format_error_sentence_in_body,
+            error_page_title_falls_back_to_arizona_loc,
             error_page_error_summaries
         ]},
         {nodiff, [parallel], [
@@ -466,17 +472,18 @@ error_page_escapes_unsafe_chars(Config) when is_list(Config) ->
     ?assertMatch({match, _}, re:run(Result, <<"&lt;script&gt;">>)).
 
 error_page_arizona_loc(Config) when is_list(Config) ->
+    %% Empty stack -> title falls back to arizona_loc's captured location.
+    %% (When the stack has a user frame, the frame wins; that's covered
+    %% in error_page_typical_crash and the format_error tests below.)
     Bindings = #{
         class => error,
         reason => {arizona_loc, {my_handler, 42}, {bad_template_value, {}}},
-        stacktrace => [
-            {arizona_template, to_bin, 1, [{file, "src/arizona_template.erl"}, {line, 74}]}
-        ]
+        stacktrace => []
     },
     Result = iolist_to_binary(
         arizona_render:render_to_iolist(arizona_error_page:render(#{error_info => Bindings}))
     ),
-    ?assertMatch({match, _}, re:run(Result, <<"my_handler:42:">>)),
+    ?assertMatch({match, _}, re:run(Result, <<"my_handler:42">>)),
     ?assertMatch({match, _}, re:run(Result, <<"bad_template_value">>)).
 
 render_nodiff_layout_location_wrapping(Config) when is_list(Config) ->
@@ -597,6 +604,8 @@ no_diff_ssr_nested(Config) when is_list(Config) ->
     [{<<"i">>, <<"frozen">>}] = maps:get(d, NestedSnap).
 
 error_page_format_reason_unwraps_loc(Config) when is_list(Config) ->
+    %% Top frame has no line -> title falls back to arizona_loc; body
+    %% still renders the unwrapped reason via erl_error ("bad argument").
     Bindings = #{
         class => error,
         reason => {arizona_loc, {handler_mod, 10}, badarg},
@@ -605,8 +614,98 @@ error_page_format_reason_unwraps_loc(Config) when is_list(Config) ->
     Result = iolist_to_binary(
         arizona_render:render_to_iolist(arizona_error_page:render(#{error_info => Bindings}))
     ),
-    ?assertMatch({match, _}, re:run(Result, <<"badarg">>)),
-    ?assertMatch({match, _}, re:run(Result, <<"handler_mod:10:">>)).
+    ?assertMatch({match, _}, re:run(Result, <<"bad argument">>)),
+    ?assertMatch({match, _}, re:run(Result, <<"handler_mod:10">>)).
+
+%% --- format_error/2 sentence surfaces in the dev page ---
+
+error_page_title_is_user_frame_location(Config) when is_list(Config) ->
+    %% Title surfaces the user's nearest call site -- the first stack
+    %% frame outside arizona_* and OTP. Here a user view's render fun
+    %% calls arizona_template:get/2 which raises; the user wants to see
+    %% their own line, not the framework frame.
+    Bindings = #{
+        class => error,
+        reason => missing_binding,
+        stacktrace => [
+            {arizona_template, get, [missing_key, #{a => 1, b => 2}], [
+                {file, "src/arizona_template.erl"},
+                {line, 153},
+                {error_info, #{module => arizona_template}}
+            ]},
+            {asobi_user_view, render, 1, [
+                {file, "src/asobi_user_view.erl"},
+                {line, 42}
+            ]}
+        ]
+    },
+    Result = iolist_to_binary(
+        arizona_render:render_to_iolist(arizona_error_page:render(#{error_info => Bindings}))
+    ),
+    Title = slice_between(Result, <<"<h1">>, <<"</h1>">>),
+    %% User frame wins: title shows asobi_user_view:42, not arizona_template:153.
+    ?assertNotEqual(nomatch, binary:match(Title, <<"asobi_user_view:42">>)),
+    ?assertEqual(nomatch, binary:match(Title, <<"arizona_template">>)),
+    %% format_error sentence stays out of the title (it's in the body).
+    ?assertEqual(nomatch, binary:match(Title, <<"binding missing_key not found">>)).
+
+error_page_format_error_sentence_in_body(Config) when is_list(Config) ->
+    %% Same setup; the reason `<pre>` carries the FULL format_error
+    %% sentence including the detail clauses the title trims out.
+    Bindings = error_info_for_missing_binding(),
+    Result = iolist_to_binary(
+        arizona_render:render_to_iolist(arizona_error_page:render(#{error_info => Bindings}))
+    ),
+    Body = slice_between(Result, <<"<pre">>, <<"</pre>">>),
+    ?assertNotEqual(nomatch, binary:match(Body, <<"binding missing_key not found">>)),
+    ?assertNotEqual(nomatch, binary:match(Body, <<"Available bindings:">>)),
+    ?assertNotEqual(nomatch, binary:match(Body, <<"Use arizona_template">>)).
+
+error_page_title_falls_back_to_arizona_loc(Config) when is_list(Config) ->
+    %% When the whole stack is framework/OTP and frames carry no line
+    %% the user can navigate to, the title falls back to arizona_loc's
+    %% captured location. The format_error sentence stays in the body.
+    Bindings = #{
+        class => error,
+        reason => {arizona_loc, {my_view, 17}, missing_binding},
+        stacktrace => [
+            {arizona_template, get, [missing_key, #{a => 1}], [
+                {error_info, #{module => arizona_template}}
+            ]}
+        ]
+    },
+    Result = iolist_to_binary(
+        arizona_render:render_to_iolist(arizona_error_page:render(#{error_info => Bindings}))
+    ),
+    Title = slice_between(Result, <<"<h1">>, <<"</h1>">>),
+    ?assertNotEqual(nomatch, binary:match(Title, <<"my_view:17">>)),
+    ?assertEqual(nomatch, binary:match(Title, <<"binding missing_key not found">>)),
+    Body = slice_between(Result, <<"<pre">>, <<"</pre>">>),
+    ?assertNotEqual(nomatch, binary:match(Body, <<"binding missing_key not found">>)).
+
+%% Builds an `error_info` map mirroring what arizona_template:get/2 raises
+%% when a binding is absent: reason = atom, top stack frame carries the
+%% args + an `error_info` annotation pointing at arizona_template (which
+%% has the format_error/2 clause).
+error_info_for_missing_binding() ->
+    Bindings = #{a => 1, b => 2},
+    Stack = [
+        {arizona_template, get, [missing_key, Bindings], [
+            {file, "src/arizona_template.erl"},
+            {line, 153},
+            {error_info, #{module => arizona_template}}
+        ]}
+    ],
+    #{class => error, reason => missing_binding, stacktrace => Stack}.
+
+%% Returns the substring between `Open` and the next `Close` after it.
+%% The opening tag itself plus any attributes are included up to the
+%% matching close. Used to scope assertions to a particular HTML element
+%% in test rendered output.
+slice_between(Bin, Open, Close) ->
+    [_, Tail] = binary:split(Bin, Open),
+    [Inner | _] = binary:split(Tail, Close),
+    Inner.
 
 error_page_error_summaries(Config) when is_list(Config) ->
     Base = #{stacktrace => [{m, f, 0, []}]},

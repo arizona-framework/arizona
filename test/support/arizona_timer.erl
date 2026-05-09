@@ -3,8 +3,8 @@
 -export([mount/2, render/1, handle_info/2]).
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
-    {maps:merge(#{id => ~"timer", message => ~"none"}, Bindings), #{}}.
+mount(_Bindings, _Req) ->
+    {#{id => ~"timer", message => ~"none"}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

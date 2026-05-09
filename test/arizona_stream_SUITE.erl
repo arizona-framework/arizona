@@ -116,7 +116,18 @@
     reset_pending_op_carries_old_items/1,
     stream_to_list/1,
     stream_update_no_change/1,
-    stream_update_nonexistent_key/1
+    stream_update_nonexistent_key/1,
+    %% --- shuffle crash reproducers ----------------------------------------
+    repro_insert_dup_breaks_invariant/1,
+    repro_insert_at_dup_breaks_invariant/1,
+    repro_reset_with_dup_keys_breaks_invariant/1,
+    repro_update_missing_key_breaks_invariant/1,
+    repro_insert_dup_then_delete_yields_stale_order/1,
+    repro_to_list_crash_matches_production_stack/1,
+    repro_shuffle_after_insert_dup_then_delete_crashes/1,
+    datatable_navigate_from_page_then_add_row_no_crash/1,
+    format_error_missing_stream_key_suggests_close_match/1,
+    format_error_missing_stream_key_no_suggestion_for_far_match/1
 ]).
 
 all() ->
@@ -134,7 +145,8 @@ all() ->
         {group, stream_move_after_key},
         {group, nested_stream},
         {group, datatable},
-        {group, list_type_switch}
+        {group, list_type_switch},
+        {group, shuffle_crash_repro}
     ].
 
 groups() ->
@@ -225,6 +237,8 @@ groups() ->
             stream_delete_nonexistent_key,
             stream_update_nonexistent_key,
             stream_duplicate_key_insert,
+            format_error_missing_stream_key_suggests_close_match,
+            format_error_missing_stream_key_no_suggestion_for_far_match,
             stream_limit_one,
             stream_move_to_same_position,
             stream_empty_stream_operations,
@@ -287,12 +301,25 @@ groups() ->
             datatable_live_reset_restores_next_id,
             datatable_live_shuffle,
             datatable_live_sort_dom_simulation,
-            datatable_live_delete_all_then_reset
+            datatable_live_delete_all_then_reset,
+            datatable_navigate_from_page_then_add_row_no_crash
         ]},
         %% List type switch tests
         {list_type_switch, [parallel], [
             list_type_switch_stream_to_list,
             list_type_switch_list_to_stream
+        ]},
+        %% Reproducers for the `arizona_datatable` shuffle crash.
+        %% Each case exercises a single public-API misuse and asserts the
+        %% items <-> order invariant that the production crash violated.
+        {shuffle_crash_repro, [parallel], [
+            repro_insert_dup_breaks_invariant,
+            repro_insert_at_dup_breaks_invariant,
+            repro_reset_with_dup_keys_breaks_invariant,
+            repro_update_missing_key_breaks_invariant,
+            repro_insert_dup_then_delete_yields_stale_order,
+            repro_to_list_crash_matches_production_stack,
+            repro_shuffle_after_insert_dup_then_delete_crashes
         ]}
     ].
 
@@ -1252,8 +1279,62 @@ stream_get_existing_key(Config) when is_list(Config) ->
     ?assertEqual(#{id => 1, text => <<"A">>}, arizona_stream:get(S, 1)).
 
 stream_get_missing_key_crashes(Config) when is_list(Config) ->
-    S = arizona_stream:new(fun(#{id := Id}) -> Id end),
-    ?assertError({badkey, 99}, arizona_stream:get(S, 99)).
+    S = arizona_stream:new(
+        fun(#{id := Id}) -> Id end,
+        [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}]
+    ),
+    Stack =
+        try arizona_stream:get(S, 99) of
+            _ -> ct:fail(expected_missing_stream_key)
+        catch
+            error:missing_stream_key:ST -> ST
+        end,
+    [{arizona_stream, get, [S, 99], Info} | _] = Stack,
+    ?assertEqual(
+        #{module => arizona_stream},
+        proplists:get_value(error_info, Info)
+    ),
+    %% format_error/2 yields a sentence with the missing key + available keys.
+    #{general := Msg} = arizona_stream:format_error(missing_stream_key, Stack),
+    Bin = unicode:characters_to_binary(Msg),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"stream key 99 not found">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"1,2">>)).
+
+%% --- did-you-mean hints in missing_stream_key messages ---
+
+format_error_missing_stream_key_suggests_close_match(Config) when is_list(Config) ->
+    %% Binary keys that differ by one character should suggest the close match.
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S = arizona_stream:new(KeyFun, [
+        #{id => <<"alpha">>, n => 1},
+        #{id => <<"beta">>, n => 2}
+    ]),
+    Stack =
+        try arizona_stream:get(S, <<"alpah">>) of
+            _ -> ct:fail(expected_missing_stream_key)
+        catch
+            error:missing_stream_key:ST -> ST
+        end,
+    #{general := Msg} = arizona_stream:format_error(missing_stream_key, Stack),
+    Bin = unicode:characters_to_binary(Msg),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"Did you mean">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"alpha">>)).
+
+format_error_missing_stream_key_no_suggestion_for_far_match(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S = arizona_stream:new(KeyFun, [
+        #{id => <<"alpha">>, n => 1},
+        #{id => <<"beta">>, n => 2}
+    ]),
+    Stack =
+        try arizona_stream:get(S, <<"qwerty">>) of
+            _ -> ct:fail(expected_missing_stream_key)
+        catch
+            error:missing_stream_key:ST -> ST
+        end,
+    #{general := Msg} = arizona_stream:format_error(missing_stream_key, Stack),
+    Bin = unicode:characters_to_binary(Msg),
+    ?assertEqual(nomatch, binary:match(Bin, <<"Did you mean">>)).
 
 stream_get3_existing_key(Config) when is_list(Config) ->
     S = arizona_stream:new(
@@ -2900,6 +2981,262 @@ datatable_live_delete_all_then_reset(Config) when is_list(Config) ->
     RemOps = [Op || [?OP_REMOVE | _] = Op <- Ops],
     ?assertEqual(5, length(InsOps)),
     ?assertEqual(0, length(RemOps)).
+
+%% --- datatable_navigate_from_page_then_add_row_no_crash -------------------
+%% End-to-end check that the example handlers' explicit-bindings mounts
+%% prevent the production shuffle crash trigger:
+%%   1. Mount /  (arizona_page) -- its own next_id=1.
+%%   2. add_todo 3x -- bumps page's next_id to 4.
+%%   3. Navigate to /datatable. Each handler's mount picks only the
+%%      keys it accepts (title), so the carried next_id=4 does not
+%%      override the datatable default of 6.
+%%   4. Click Add Row -- uses datatable's own next_id=6, no dup with
+%%      the existing rows {1..5} stream.
+%%   5. Click Shuffle -- works.
+%% This is the "test modules should not reproduce this error, keep
+%% them fixed" assertion: navigation + clicks stay clean.
+datatable_navigate_from_page_then_add_row_no_crash(Config) when is_list(Config) ->
+    {ok, Pid} = arizona_live:start_link(
+        arizona_page, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    ok = lists:foreach(
+        fun(_) ->
+            {ok, _, _} = arizona_live:handle_event(
+                Pid, <<"page">>, <<"add_todo">>, #{<<"text">> => <<"t">>}
+            ),
+            ok
+        end,
+        lists:seq(1, 3)
+    ),
+    {ok, _, _} = arizona_live:navigate(
+        Pid, arizona_datatable, #{title => <<"DataTable">>}, arizona_req_test_adapter:new()
+    ),
+    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
+    LiveState = sys:get_state(Pid),
+    [B] = [El || El <- tuple_to_list(LiveState), is_map(El), is_map_key(rows, El)],
+    Rows = maps:get(rows, B),
+    {Items, Flat, Size} = stream_invariant_components(Rows),
+    %% Initial 5 items + 1 just added = 6, no dups.
+    ?assertEqual(6, map_size(Items)),
+    ?assertEqual(6, length(Flat)),
+    ?assertEqual(6, Size),
+    ?assertEqual(lists:sort(maps:keys(Items)), lists:sort(lists:usort(Flat))),
+    %% Diana stayed at id=4 (was not overwritten by a dup-keyed New 4).
+    ?assertMatch(#{name := <<"Diana">>}, maps:get(4, Items)),
+    %% Shuffle path is clean.
+    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"shuffle">>, #{}).
+
+%% =============================================================================
+%% Shuffle crash reproducers
+%%
+%% The production crash:
+%%   {badkey,1},
+%%   [{erlang,map_get,[1, #{4=>...,5=>...,7=>...,8=>...}], ...},
+%%    {arizona_stream,'-to_list/1-lc$^0/1-0-',2,
+%%                    [{file,"src/arizona_stream.erl"},{line,406}]},
+%%    {arizona_datatable,handle_event,3,
+%%                       [{file,"test/support/arizona_datatable.erl"},{line,127}]}]
+%%
+%% State at crash:
+%%   items = #{4=>"New 4",5=>"New 5",7=>"New 7",8=>"New 8"}
+%%   order = {[7,4,5,1,2,3,4,5,8],[]}
+%%   size  = 9
+%%
+%% These cases isolate each public-API misuse that can break the
+%% items <-> order invariant. The invariant is:
+%%   set(flat_order(Order)) =:= maps:keys(Items)
+%%   length(flat_order(Order)) =:= map_size(Items)
+%%   Size =:= map_size(Items)
+%% Once any op breaks it, every later op compounds the damage; finally
+%% `to_list/1` (or any iterator that does `maps:get(K, Items)`) crashes.
+%% =============================================================================
+
+%% --- helpers ---------------------------------------------------------------
+
+%% Read the (private) #stream record fields. The record is in arizona.hrl
+%% (already included), so we can pattern-match without reaching into internals.
+stream_invariant_components(#stream{items = Items, order = Order, size = Size}) ->
+    {Front, Back} = Order,
+    Flat = Front ++ lists:reverse(Back),
+    {Items, Flat, Size}.
+
+%% --- repro_insert_dup_breaks_invariant -------------------------------------
+%% insert/2 with a key that's already in items: items dedups, order grows,
+%% size grows. Pure invariant violation, no crash yet.
+repro_insert_dup_breaks_invariant(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S0 = arizona_stream:new(KeyFun, [#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}]),
+    S1 = arizona_stream:insert(S0, #{id => 1, n => <<"dup">>}),
+    %% Demonstrate the corruption: items count != order length != size
+    {Items, Flat, Size} = stream_invariant_components(S1),
+    ?assertEqual(2, map_size(Items)),
+    ?assertEqual(3, length(Flat)),
+    ?assertEqual(3, Size),
+    ?assertEqual([1, 2, 1], Flat),
+    %% Items <-> order invariant is broken (length(Flat) > map_size(Items)).
+    ?assertNotEqual(map_size(Items), length(Flat)).
+
+%% --- repro_insert_at_dup_breaks_invariant ----------------------------------
+%% insert/3 has the same problem as insert/2 — order_insert_at/3 blindly
+%% adds, regardless of whether the key already lives in the order list.
+repro_insert_at_dup_breaks_invariant(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S0 = arizona_stream:new(KeyFun, [#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}]),
+    S1 = arizona_stream:insert(S0, #{id => 1, n => <<"dup">>}, 0),
+    {Items, Flat, Size} = stream_invariant_components(S1),
+    ?assertEqual(2, map_size(Items)),
+    ?assertEqual(3, length(Flat)),
+    ?assertEqual(3, Size),
+    ?assertEqual([1, 1, 2], Flat),
+    ?assertNotEqual(map_size(Items), length(Flat)).
+
+%% --- repro_reset_with_dup_keys_breaks_invariant ----------------------------
+%% reset/2's items map dedups via comprehension (last-wins) but
+%% order_from_keyed/1 keeps duplicates. So passing a list with dup keys
+%% directly produces an inconsistent state — no crash yet, but a delete
+%% afterwards turns it into the production crash shape.
+repro_reset_with_dup_keys_breaks_invariant(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S0 = arizona_stream:new(KeyFun, []),
+    DupItems = [
+        #{id => 1, n => <<"first">>},
+        #{id => 1, n => <<"second">>},
+        #{id => 2, n => <<"two">>}
+    ],
+    S1 = arizona_stream:reset(S0, DupItems),
+    {Items, Flat, Size} = stream_invariant_components(S1),
+    ?assertEqual(2, map_size(Items)),
+    ?assertEqual(3, length(Flat)),
+    %% Note: in this branch `size = map_size(ItemsMap)` (not length(Flat)),
+    %% so size matches items but disagrees with order length.
+    ?assertEqual(2, Size),
+    ?assertEqual([1, 1, 2], Flat),
+    ?assertNotEqual(map_size(Items), length(Flat)).
+
+%% --- repro_update_missing_key_breaks_invariant -----------------------------
+%% update/3 silently inserts the key into items if it wasn't there, but
+%% never touches order. The asymmetric mismatch (items has key, order
+%% doesn't) doesn't crash to_list but does break the invariant and will
+%% trip up sort/2 when its comparator is called on a key not in the
+%% order-iterated subset (and vice versa for any caller that walks items).
+repro_update_missing_key_breaks_invariant(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S0 = arizona_stream:new(KeyFun, [#{id => 1, n => <<"a">>}]),
+    S1 = arizona_stream:update(S0, 99, #{id => 99, n => <<"phantom">>}),
+    {Items, Flat, Size} = stream_invariant_components(S1),
+    ?assertEqual(2, map_size(Items)),
+    ?assertEqual(1, length(Flat)),
+    ?assertEqual(1, Size),
+    ?assertEqual([1], Flat),
+    %% Items <-> order invariant is broken (items has 99, order doesn't).
+    ?assertNotEqual(lists:sort(maps:keys(Items)), lists:sort(lists:usort(Flat))).
+
+%% --- repro_insert_dup_then_delete_yields_stale_order ----------------------
+%% This is the minimal sequence that produces the production crash shape:
+%% insert/2 dup → delete the dup'd key. delete/2 calls order_delete which
+%% strips only the FIRST match, but maps:take fully removes the items
+%% entry. Result: order keeps a stale key not in items.
+repro_insert_dup_then_delete_yields_stale_order(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S0 = arizona_stream:new(KeyFun, [#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}]),
+    S1 = arizona_stream:insert(S0, #{id => 1, n => <<"dup">>}),
+    S2 = arizona_stream:delete(S1, 1),
+    {Items, Flat, Size} = stream_invariant_components(S2),
+    %% items lost key 1 entirely; order kept a stale 1
+    ?assertEqual(1, map_size(Items)),
+    ?assert(is_map_key(2, Items)),
+    ?assertNot(is_map_key(1, Items)),
+    ?assertEqual([2, 1], Flat),
+    ?assertEqual(2, Size),
+    %% This is the same shape as production: items is a strict subset of
+    %% the keys in flat_order(Order).
+    ?assertNotEqual(lists:sort(maps:keys(Items)), lists:sort(lists:usort(Flat))).
+
+%% --- repro_to_list_crash_matches_production_stack -------------------------
+%% Same setup as the previous case, then call to_list/1 — this fires the
+%% production crash, now wrapped as a named reason carrying the
+%% `error_info` annotation that routes through `format_error/2`.
+repro_to_list_crash_matches_production_stack(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S0 = arizona_stream:new(KeyFun, [#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}]),
+    S1 = arizona_stream:insert(S0, #{id => 1, n => <<"dup">>}),
+    S2 = arizona_stream:delete(S1, 1),
+    {Reason, Stack} =
+        try arizona_stream:to_list(S2) of
+            _ -> ct:fail(expected_invariant_break)
+        catch
+            error:R:ST -> {R, ST}
+        end,
+    %% Reason is the semantic, named-tag form (not the raw {badkey,_}).
+    ?assertMatch({stream_order_stale_key, 1, [2, 1], [2]}, Reason),
+    %% The top stack frame is arizona_stream's `error/3` site, carrying
+    %% the {error_info, #{module => arizona_stream}} annotation.
+    [{arizona_stream, to_list, _Args, Info} | _] = Stack,
+    ?assertEqual(
+        #{module => arizona_stream},
+        proplists:get_value(error_info, Info)
+    ),
+    %% format_error/2 returns the human-readable sentence the dev page
+    %% will surface via erl_error:format_exception/3.
+    #{general := Msg} = arizona_stream:format_error(Reason, Stack),
+    Bin = unicode:characters_to_binary(Msg),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"stream order references key 1">>)).
+
+%% --- repro_shuffle_after_insert_dup_then_delete_crashes -------------------
+%% End-to-end demonstration: drive arizona_datatable through the live
+%% process. We can't trigger insert/2 with a dup via the public handlers
+%% (add_row uses next_id), so we splice a corrupted stream into the
+%% bindings and then send a `shuffle` event — same path the production
+%% crash took.
+repro_shuffle_after_insert_dup_then_delete_crashes(Config) when is_list(Config) ->
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    %% Reach into the live state, corrupt the rows stream the same way
+    %% insert(dup) + delete would, and put it back. This simulates whatever
+    %% production trigger we haven't pinned down — the crash is downstream
+    %% of the corruption, so the trigger doesn't change the crash shape.
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S0 = arizona_stream:new(KeyFun, [
+        #{id => 4, name => <<"New 4">>, age => 20},
+        #{id => 5, name => <<"New 5">>, age => 20},
+        #{id => 7, name => <<"New 7">>, age => 20},
+        #{id => 8, name => <<"New 8">>, age => 20}
+    ]),
+    %% Inject the same shape as the production state: stale 1,2,3 +
+    %% duplicates of 4,5 in order.
+    Corrupt = inject_bad_order(S0, [7, 4, 5, 1, 2, 3, 4, 5, 8]),
+    _NewState = sys:replace_state(Pid, fun(LiveState) ->
+        replace_rows_in_live_state(LiveState, Corrupt)
+    end),
+    %% Now click Shuffle. The gen_server crashes; arizona_live:handle_event
+    %% propagates the exception via gen_server:call. Trap exits so the
+    %% test process survives the linked live process going down.
+    process_flag(trap_exit, true),
+    ?assertExit(
+        {{{stream_order_stale_key, _, _, _}, _Stack}, _CallCtx},
+        arizona_live:handle_event(Pid, <<"page">>, <<"shuffle">>, #{})
+    ).
+
+%% Helpers for the live-state corruption injection above.
+inject_bad_order(#stream{} = S, Flat) ->
+    S#stream{order = {Flat, []}, size = length(Flat)}.
+
+replace_rows_in_live_state(LiveState, Stream) ->
+    %% arizona_live's #state{} record stores its handler bindings; the
+    %% datatable handler keeps its rows stream under `rows`. Tuple-update
+    %% rather than including the (private) #state{} record from arizona_live.
+    %% Layout: state record → bindings map at a fixed position. We find
+    %% the tuple element that's a map containing `rows` and update it.
+    list_to_tuple([
+        case El of
+            #{rows := _} = B -> B#{rows => Stream};
+            _ -> El
+        end
+     || El <- tuple_to_list(LiveState)
+    ]).
 
 %% Mirrors arizona_live:compute_changed/2 for unit tests
 arizona_live_compute_changed(OldBindings, NewBindings) ->

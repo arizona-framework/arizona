@@ -48,6 +48,7 @@ render(Bindings) ->
 -export([to_bin/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
+-export([format_error/2]).
 -export([unwrap_val/1]).
 -export([render_attr/2]).
 -export([maybe_propagate/2]).
@@ -62,6 +63,7 @@ render(Bindings) ->
 %% --------------------------------------------------------------------
 
 -ignore_xref([format_error/1]).
+-ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -135,7 +137,8 @@ render(Bindings) ->
 -doc """
 Reads `Key` from `Bindings` and tracks the access for diff dependency analysis.
 
-Errors with `{badkey, Key}` if not present. Use `get/3` for a default.
+Errors with `missing_binding` (carrying an `error_info` annotation that
+routes through `format_error/2`) if not present. Use `get/3` for a default.
 """.
 -spec get(Key, Bindings) -> Value when
     Key :: term(),
@@ -143,7 +146,14 @@ Errors with `{badkey, Key}` if not present. Use `get/3` for a default.
     Value :: term().
 get(Key, Bindings) ->
     track(Key),
-    maps:get(Key, Bindings).
+    case Bindings of
+        #{Key := Val} ->
+            Val;
+        #{} ->
+            erlang:error(missing_binding, [Key, Bindings], [
+                {error_info, #{module => ?MODULE}}
+            ])
+    end.
 
 -doc """
 Reads `Key` from `Bindings`, returning `Default` if absent. Tracks the access.
@@ -197,7 +207,9 @@ this function runs, the parse transform was not applied -- include
 """.
 -spec html(term()) -> no_return().
 html(_Elems) ->
-    erlang:error(parse_transform_not_applied).
+    erlang:error(parse_transform_not_applied, [], [
+        {error_info, #{module => ?MODULE}}
+    ]).
 
 -doc """
 Builds a stateful child descriptor. The renderer mounts `Handler` with `Props`.
@@ -250,10 +262,15 @@ to_bin(V) when is_binary(V) -> V;
 to_bin(V) when is_integer(V) -> integer_to_binary(V);
 to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
 to_bin(V) when is_atom(V) -> atom_to_binary(V);
-to_bin({arizona_js, _} = Cmd) -> arizona_js:encode(Cmd);
-to_bin([{arizona_js, _} | _] = Cmds) -> arizona_js:encode(Cmds);
+to_bin({arizona_js, _} = Cmd) ->
+    arizona_js:encode(Cmd);
+to_bin([{arizona_js, _} | _] = Cmds) ->
+    arizona_js:encode(Cmds);
 to_bin(V) when is_list(V) -> iolist_to_binary(V);
-to_bin(V) -> erlang:error({bad_template_value, V}).
+to_bin(V) ->
+    erlang:error({bad_template_value, V}, [V], [
+        {error_info, #{module => ?MODULE}}
+    ]).
 
 -doc """
 Extracts the `t:az/0` index from a 2- or 3-tuple `t:dynamic/0`.
@@ -272,6 +289,34 @@ format_error(parse_transform_not_applied) ->
     "parse transform not applied -- include arizona_stateful.hrl or arizona_stateless.hrl";
 format_error({bad_template_value, V}) ->
     lists:flatten(io_lib:format("cannot convert ~0tp to binary in template", [V])).
+
+-doc """
+Formats runtime errors raised with an `error_info` annotation pointing at
+this module. Picked up by `erl_error:format_exception/3`.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error(missing_binding, [{_M, _F, [Key, Bindings], _Info} | _]) ->
+    Available = lists:sort(maps:keys(Bindings)),
+    Suggestion =
+        case arizona_error:did_you_mean(Key, Available) of
+            undefined -> "";
+            Match -> io_lib:format(" Did you mean ~0tp?", [Match])
+        end,
+    #{
+        general => io_lib:format(
+            "binding ~0tp not found.~s Available bindings: ~0tp. "
+            "Use arizona_template:get/3 (or ?get/2) with a default "
+            "to make the binding optional.",
+            [Key, Suggestion, Available]
+        )
+    };
+format_error({bad_template_value, _V} = Reason, _ST) ->
+    #{general => format_error(Reason)};
+format_error(parse_transform_not_applied = Reason, _ST) ->
+    #{general => format_error(Reason)}.
 
 -doc """
 Materializes an attribute dynamic into its rendered binary, leaving plain

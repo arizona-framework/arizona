@@ -3,16 +3,13 @@
 -export([mount/2, render/1, handle_event/3, handle_info/2]).
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings0, _Req) ->
-    Bindings = maps:merge(
-        #{
-            id => ~"page",
-            title => ~"About",
-            tick => 0,
-            tags => [~"erlang", ~"otp", ~"arizona"]
-        },
-        Bindings0
-    ),
+mount(Init, _Req) ->
+    Bindings = #{
+        id => ~"page",
+        title => maps:get(title, Init, ~"About"),
+        tick => 0,
+        tags => [~"erlang", ~"otp", ~"arizona"]
+    },
     ?connected andalso ?send(arizona_connected),
     {Bindings, #{}}.
 

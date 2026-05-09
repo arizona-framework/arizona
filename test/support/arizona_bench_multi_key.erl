@@ -10,7 +10,8 @@
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
 mount(Bindings, _Req) ->
     Defaults = maps:from_list([{key_for(I), 0} || I <- lists:seq(0, 9)]),
-    {maps:merge(Defaults, Bindings#{id => ~"multi_key"}), #{}}.
+    Vals = #{K => maps:get(K, Bindings, V) || K := V <- Defaults},
+    {Vals#{id => ~"multi_key"}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

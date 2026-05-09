@@ -39,6 +39,29 @@ Rule of thumb:
 - Embeddable components → `arizona_stateful.hrl` (`mount/1`, instantiated via `?stateful(Handler, Props)`)
 - Pure template modules → `arizona_stateless.hrl`
 
+## Mount bindings -- construct, don't merge
+
+Every handler's `mount/1` (stateful) or `mount/2` (view) must build a fresh map
+literal rather than `maps:merge`-ing or `Bindings#{...}`-updating the input.
+With `arizona_live:navigate/4` the input may carry arbitrary keys from
+previously visited pages; merging passes them through and lets foreign keys
+collide with handler-owned defaults (e.g. one page's `next_id` overriding
+another's, dup-inserting on a stream). Pull each accepted override out
+explicitly via `maps:get/3`.
+
+```erlang
+%% Bad -- foreign keys carry through:
+mount(Bindings, _Req) ->
+    {maps:merge(#{id => ~"page", count => 0}, Bindings), #{}}.
+
+%% Good -- handler owns its keys, accepts a typed override:
+mount(Bindings, _Req) ->
+    {#{
+         id => ~"page",
+         count => maps:get(count, Bindings, 0)
+     }, #{}}.
+```
+
 ## Parse transform element forms
 
 | Form | Example | Description |

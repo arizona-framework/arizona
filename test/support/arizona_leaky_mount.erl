@@ -8,7 +8,13 @@
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
     eager_value = arizona_template:get(eager_mount_key, #{eager_mount_key => eager_value}),
-    {maps:merge(#{id => ~"leaky", count => 0}, Bindings), #{}}.
+    {
+        #{
+            id => maps:get(id, Bindings, ~"leaky"),
+            count => maps:get(count, Bindings, 0)
+        },
+        #{}
+    }.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

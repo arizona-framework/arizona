@@ -11,7 +11,7 @@
 mount(Bindings, _Req) ->
     Items = maps:get(items, Bindings, []),
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
-    {Bindings#{id => ~"bench_each", items => Stream}, #{}}.
+    {#{id => ~"bench_each", items => Stream}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->
