@@ -4,15 +4,18 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-include_lib("kernel/include/file.hrl").
+
 -moduledoc """
 Roadrunner handler that serves static files from a directory.
 
 Wired up by `arizona_roadrunner_router` for `{asset, Path, ...}`
-route specs. Reads the file from disk on every request, sets a
-long-lived `cache-control` header (immutable, 1 year), and infers a
-small set of content types from the extension. Falls back to
+route specs. Uses roadrunner's zero-copy `{sendfile, ...}` response
+shape so file bytes never traverse the BEAM heap. Sets a long-lived
+`cache-control` header (immutable, 1 year) and infers a small set of
+content types from the extension. Falls back to
 `application/octet-stream` for unknown types and `404` for missing
-files.
+or non-regular files.
 
 This is intentionally minimal -- production deployments should put a
 proper CDN or `roadrunner_static` (which adds ETag, Range, symlink
@@ -32,9 +35,11 @@ guards, etc.) in front of the asset path.
 %% --------------------------------------------------------------------
 
 -doc """
-Roadrunner `handle/1` callback. Reads `dir/<wildcard_path>` from
-disk and replies with the file body and an inferred content type.
-Replies with `404` if the file is missing.
+Roadrunner `handle/1` callback. Stats `dir/<wildcard_path>`, then
+returns a `{sendfile, ...}` reply so roadrunner streams the file
+straight from disk to the socket (zero-copy on plain TCP, chunked
+read-and-send fallback on TLS). Replies with `404` for missing or
+non-regular files.
 """.
 -spec handle(Req) -> {Response, Req} when
     Req :: roadrunner_req:request(),
@@ -43,20 +48,20 @@ handle(Req) ->
     #{arizona := #{dir := Dir}} = roadrunner_req:state(Req),
     PathSegments = path_segments(Req),
     FilePath = filename:join([Dir | PathSegments]),
-    case file:read_file(FilePath) of
-        {ok, Body} ->
+    case file:read_file_info(FilePath) of
+        {ok, #file_info{type = regular, size = Size}} ->
             ContentType = content_type(FilePath),
             {
-                {200,
+                {sendfile, 200,
                     [
                         {~"content-type", ContentType},
                         {~"cache-control", ~"public, max-age=31536000, immutable"},
-                        {~"content-length", integer_to_binary(byte_size(Body))}
+                        {~"content-length", integer_to_binary(Size)}
                     ],
-                    Body},
+                    {FilePath, 0, Size}},
                 Req
             };
-        {error, enoent} ->
+        _ ->
             {{404, [{~"content-length", ~"9"}], ~"Not Found"}, Req}
     end.
 

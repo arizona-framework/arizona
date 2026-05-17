@@ -28,6 +28,7 @@
     http_render_crash_emits_error_page/1,
     http_reads_cookies_headers_body/1,
     static_asset_served/1,
+    static_asset_body_matches_file/1,
     static_asset_missing_returns_404/1,
     reload_endpoint_streams_event/1,
     recompile_routes_runs/1,
@@ -72,6 +73,7 @@ groups() ->
         http_render_crash_emits_error_page,
         http_reads_cookies_headers_body,
         static_asset_served,
+        static_asset_body_matches_file,
         static_asset_missing_returns_404,
         reload_endpoint_streams_event,
         recompile_routes_runs,
@@ -472,6 +474,19 @@ static_asset_served(Config) ->
     ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"content-type: application/javascript">>)).
 
+static_asset_body_matches_file(Config) ->
+    %% End-to-end: the bytes coming back over the wire must equal the
+    %% bytes on disk. Roadrunner serves this via zero-copy sendfile, so
+    %% the test also guards against the sendfile path corrupting or
+    %% truncating the response body.
+    Port = proplists:get_value(port, Config),
+    FilePath = filename:join([
+        code:priv_dir(arizona), "static", "assets", "js", "arizona.min.js"
+    ]),
+    {ok, Expected} = file:read_file(FilePath),
+    Body = http_get_body(Port, <<"/assets/arizona.min.js">>),
+    ?assertEqual(Expected, Body).
+
 static_asset_missing_returns_404(Config) ->
     Port = proplists:get_value(port, Config),
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
@@ -600,6 +615,36 @@ http_status(Port, Path) ->
     case Resp of
         <<"HTTP/1.1 ", S1, S2, S3, _/binary>> -> list_to_integer([S1, S2, S3]);
         _ -> 0
+    end.
+
+%% Drains a full HTTP/1.1 response and returns just the body, honoring
+%% the Content-Length header. Sends `Connection: close` so the server
+%% closes after responding; the body-read loop then terminates on
+%% socket close in addition to length.
+http_get_body(Port, Path) ->
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET ",
+        Path,
+        " HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "Connection: close\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    Full = read_until_close(Sock, <<>>),
+    gen_tcp:close(Sock),
+    case binary:split(Full, <<"\r\n\r\n">>) of
+        [_Headers, Body] -> Body;
+        _ -> <<>>
+    end.
+
+read_until_close(Sock, Acc) ->
+    case gen_tcp:recv(Sock, 0, 5000) of
+        {ok, Chunk} -> read_until_close(Sock, <<Acc/binary, Chunk/binary>>);
+        {error, closed} -> Acc
     end.
 
 https_without_tls_errors(Config) when is_list(Config) ->
