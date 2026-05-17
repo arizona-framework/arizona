@@ -43,24 +43,7 @@ handle(Req) ->
         {redirect, Status, Location} ->
             {roadrunner_resp:redirect(Status, Location), Req};
         {ok, Status, Body} ->
-            {reply(Status, Body), Req};
+            {roadrunner_resp:html(Status, Body), Req};
         {error, Status, Body} ->
-            {reply(Status, Body), Req}
+            {roadrunner_resp:html(Status, Body), Req}
     end.
-
-%% --------------------------------------------------------------------
-%% Internal functions
-%% --------------------------------------------------------------------
-
-reply(Status, Body) ->
-    %% Match arizona_cowboy_http's bare `text/html` content-type (no
-    %% charset suffix) so HTTP responses look identical between
-    %% adapters. roadrunner accepts iodata bodies all the way to
-    %% gen_tcp:send, so pass the iolist through unflattened — saves a
-    %% full copy of the rendered page per request.
-    {Status,
-        [
-            {~"content-type", ~"text/html"},
-            {~"content-length", integer_to_binary(iolist_size(Body))}
-        ],
-        Body}.

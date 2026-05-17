@@ -56,7 +56,7 @@ init(Req, #{handler := H} = State) ->
 reply(Status, Body, Req, State) ->
     Req2 = cowboy_req:reply(
         Status,
-        #{~"content-type" => ~"text/html"},
+        #{~"content-type" => ~"text/html; charset=utf-8"},
         Body,
         Req
     ),
