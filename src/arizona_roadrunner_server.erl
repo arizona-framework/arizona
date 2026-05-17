@@ -30,6 +30,25 @@ routes take effect without restarting the listener.
   WebSocket upgrade response are intentionally **not** compressed.
   Set to `false` if you have an upstream proxy doing compression
   already.
+
+## Enabling HTTP/2
+
+Roadrunner ships with HTTP/2 support (RFC 9113, h2spec-compliant).
+Opt in via `proto_opts.protocols`. Browsers require TLS + ALPN for
+HTTP/2, so pair it with `scheme => https` and a `tls` config:
+
+```erlang
+arizona_roadrunner_server:start(arizona_http, #{
+    routes => Routes,
+    scheme => https,
+    tls => [{certfile, "priv/cert.pem"}, {keyfile, "priv/key.pem"}],
+    proto_opts => #{protocols => [http1, http2]}
+}).
+```
+
+Roadrunner negotiates the protocol per connection from the ALPN
+offer; HTTP/1.1 clients still work on the same listener. Default
+when `protocols` is omitted is `[http1]` (HTTP/1.1 only).
 """.
 
 %% --------------------------------------------------------------------
