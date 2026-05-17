@@ -35,6 +35,11 @@ start() ->
                 fun(Req, _B) -> {halt, arizona_req:redirect(Req, <<"/login">>)} end
             ]
         }},
+        {live, <<"/drainable">>, arizona_drainable, #{
+            bindings => #{drain_mode => stop},
+            layouts => Layouts
+        }},
+        {controller, <<"/_test/drain">>, arizona_drain_admin, #{}},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}
     ],
