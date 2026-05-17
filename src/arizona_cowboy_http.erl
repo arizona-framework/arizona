@@ -36,7 +36,8 @@ replies with HTML.
     State :: map(),
     Req1 :: cowboy_req:req().
 init(Req, #{handler := H} = State) ->
-    case arizona_http:render(H, Req, State) of
+    ArzReq = arizona_cowboy_req:new(Req),
+    case arizona_http:render(H, ArzReq, State) of
         {halt, RawReq} ->
             {ok, RawReq, State};
         {redirect, Status, Location} ->
@@ -55,7 +56,7 @@ init(Req, #{handler := H} = State) ->
 reply(Status, Body, Req, State) ->
     Req2 = cowboy_req:reply(
         Status,
-        #{~"content-type" => ~"text/html"},
+        #{~"content-type" => ~"text/html; charset=utf-8"},
         Body,
         Req
     ),

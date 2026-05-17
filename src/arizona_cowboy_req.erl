@@ -50,7 +50,14 @@ new(CowboyReq) ->
 -spec parse_bindings(CowboyReq) -> arizona_req:bindings() when
     CowboyReq :: cowboy_req:req().
 parse_bindings(CowboyReq) ->
-    cowboy_req:bindings(CowboyReq).
+    %% Cowboy parses `:param` segments into atom keys. Convert to binary
+    %% keys so both adapters expose the same wire-derived shape and the
+    %% "binary keys for wire-derived data" rule holds.
+    maps:fold(
+        fun(K, V, Acc) -> Acc#{atom_to_binary(K, utf8) => V} end,
+        #{},
+        cowboy_req:bindings(CowboyReq)
+    ).
 
 -spec parse_params(CowboyReq) -> arizona_req:params() when
     CowboyReq :: cowboy_req:req().

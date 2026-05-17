@@ -1,9 +1,10 @@
--module(arizona_cowboy_ws_SUITE).
+-module(arizona_ws_SUITE).
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("common_test/include/ct.hrl").
 -include("arizona.hrl").
 -include_lib("arizona/include/arizona_js.hrl").
 
--export([all/0, groups/0, init_per_suite/1, end_per_suite/1]).
+-export([all/0, groups/0, init_per_group/2, end_per_group/2]).
 -export([
     ping_pong/1,
     event_dispatch/1,
@@ -26,10 +27,14 @@
     http_halt_redirect_via_req/1,
     http_render_crash_emits_error_page/1,
     http_reads_cookies_headers_body/1,
+    http_exposes_roadrunner_request_id/1,
     static_asset_served/1,
+    static_asset_body_matches_file/1,
     static_asset_missing_returns_404/1,
     reload_endpoint_streams_event/1,
     recompile_routes_runs/1,
+    recompile_routes_syncs_listener/1,
+    https_without_tls_errors/1,
     http_preserves_duplicate_qs_keys/1,
     ws_navigate_preserves_duplicate_qs_keys/1,
     ws_upgrade_preserves_duplicate_qs_keys/1,
@@ -41,54 +46,62 @@
 
 all() ->
     [
-        {group, basic},
-        {group, crash_recovery}
+        {group, roadrunner},
+        {group, cowboy}
     ].
 
 groups() ->
+    Basic = [
+        ping_pong,
+        event_dispatch,
+        event_with_effects,
+        event_no_change,
+        unknown_json,
+        unknown_frame,
+        reconnect_init,
+        connect_with_params,
+        http_query_params,
+        http_path_bindings,
+        ws_path_bindings,
+        middleware_cont_enriches_bindings,
+        middleware_cont_ws_connects,
+        middleware_halt_redirects,
+        middleware_halt_rejects_ws,
+        middleware_pipeline_runs_in_order,
+        middleware_halt_redirects_on_navigate,
+        middleware_cont_on_navigate,
+        http_halt_redirect_via_req,
+        http_render_crash_emits_error_page,
+        http_reads_cookies_headers_body,
+        http_exposes_roadrunner_request_id,
+        static_asset_served,
+        static_asset_body_matches_file,
+        static_asset_missing_returns_404,
+        reload_endpoint_streams_event,
+        recompile_routes_runs,
+        recompile_routes_syncs_listener,
+        https_without_tls_errors,
+        http_preserves_duplicate_qs_keys,
+        ws_navigate_preserves_duplicate_qs_keys,
+        ws_upgrade_preserves_duplicate_qs_keys
+    ],
+    Crash = [
+        crash_event_closes,
+        crash_info_closes,
+        crash_init_closes,
+        normal_exit_closes
+    ],
     [
-        {basic, [sequence], [
-            ping_pong,
-            event_dispatch,
-            event_with_effects,
-            event_no_change,
-            unknown_json,
-            unknown_frame,
-            reconnect_init,
-            connect_with_params,
-            http_query_params,
-            http_path_bindings,
-            ws_path_bindings,
-            middleware_cont_enriches_bindings,
-            middleware_cont_ws_connects,
-            middleware_halt_redirects,
-            middleware_halt_rejects_ws,
-            middleware_pipeline_runs_in_order,
-            middleware_halt_redirects_on_navigate,
-            middleware_cont_on_navigate,
-            http_halt_redirect_via_req,
-            http_render_crash_emits_error_page,
-            http_reads_cookies_headers_body,
-            static_asset_served,
-            static_asset_missing_returns_404,
-            reload_endpoint_streams_event,
-            recompile_routes_runs,
-            http_preserves_duplicate_qs_keys,
-            ws_navigate_preserves_duplicate_qs_keys,
-            ws_upgrade_preserves_duplicate_qs_keys
-        ]},
-        {crash_recovery, [sequence], [
-            crash_event_closes,
-            crash_info_closes,
-            crash_init_closes,
-            normal_exit_closes
-        ]}
+        {roadrunner, [sequence], [{group, basic}, {group, crash_recovery}]},
+        {cowboy, [sequence], [{group, basic}, {group, crash_recovery}]},
+        {basic, [sequence], Basic},
+        {crash_recovery, [sequence], Crash}
     ].
 
-init_per_suite(Config) ->
-    {ok, _} = application:ensure_all_started(cowboy),
+init_per_group(Adapter, Config) when Adapter =:= roadrunner; Adapter =:= cowboy ->
     {ok, _} = application:ensure_all_started(arizona),
-    Port = 14040,
+    {ok, _} = application:ensure_all_started(adapter_app(Adapter)),
+    Port = pick_port(),
     %% Test-only URL -> Bindings middleware. Tests that assert on URL
     %% data in rendered HTML opt into this on their routes; the
     %% framework itself no longer flat-merges URL data into bindings.
@@ -118,14 +131,13 @@ init_per_suite(Config) ->
         {live, <<"/with_middleware">>, arizona_crashable, #{
             middlewares => [fun(Req, B) -> {cont, Req, B#{session => <<"abc">>}} end]
         }},
+        %% Adapter-agnostic redirect halt — replaces the cowboy-specific
+        %% direct cowboy_req:reply pattern that used to live here. Both
+        %% adapters now translate the stashed redirect into a 302.
         {live, <<"/halt_middleware">>, arizona_crashable, #{
             middlewares => [
                 fun(Req, _B) ->
-                    RawReq = arizona_req:raw(Req),
-                    RawReq1 = cowboy_req:reply(
-                        302, #{<<"location">> => <<"/login">>}, RawReq
-                    ),
-                    {halt, arizona_req:set_raw(Req, RawReq1)}
+                    {halt, arizona_req:redirect(Req, <<"/login">>)}
                 end
             ]
         }},
@@ -155,6 +167,18 @@ init_per_suite(Config) ->
         {live, <<"/crash_on_render_http">>, arizona_crashable, #{
             bindings => #{crash_on_mount => true}
         }},
+        {live, <<"/reads_request_id">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    Status =
+                        case arizona_req:request_id(Req) of
+                            undefined -> ~"id=none";
+                            Id -> <<"id=", Id/binary>>
+                        end,
+                    {cont, Req, B#{status => Status}}
+                end
+            ]
+        }},
         {live, <<"/reads_cookies_headers_body">>, arizona_crashable, #{
             middlewares => [
                 fun(Req, B) ->
@@ -181,16 +205,31 @@ init_per_suite(Config) ->
         {asset, <<"/assets">>, {priv_dir, arizona, "static/assets/js"}},
         {reload, <<"/reload">>, #{}}
     ],
-    {ok, _} = arizona_cowboy_server:start(ws_test, #{
+    ServerMod = server_module(Adapter),
+    {ok, _} = ServerMod:start(ws_test, #{
         transport_opts => [{port, Port}],
         routes => Routes
     }),
-    [{port, Port} | Config].
+    [{port, Port}, {adapter, Adapter}, {server_mod, ServerMod} | Config];
+init_per_group(_Group, Config) ->
+    Config.
 
-end_per_suite(_Config) ->
-    _ = arizona_cowboy_server:stop(ws_test),
+end_per_group(Adapter, Config) when Adapter =:= roadrunner; Adapter =:= cowboy ->
+    ServerMod = ?config(server_mod, Config),
+    _ = ServerMod:stop(ws_test),
     _ = application:stop(arizona),
+    ok;
+end_per_group(_Group, _Config) ->
     ok.
+
+server_module(roadrunner) -> arizona_roadrunner_server;
+server_module(cowboy) -> arizona_cowboy_server.
+
+adapter_app(roadrunner) -> roadrunner;
+adapter_app(cowboy) -> cowboy.
+
+pick_port() ->
+    14040 + erlang:unique_integer([positive, monotonic]) rem 1000.
 
 %% --------------------------------------------------------------------
 %% Basic tests
@@ -449,6 +488,19 @@ static_asset_served(Config) ->
     ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"content-type: application/javascript">>)).
 
+static_asset_body_matches_file(Config) ->
+    %% End-to-end: the bytes coming back over the wire must equal the
+    %% bytes on disk. Roadrunner serves this via zero-copy sendfile, so
+    %% the test also guards against the sendfile path corrupting or
+    %% truncating the response body.
+    Port = proplists:get_value(port, Config),
+    FilePath = filename:join([
+        code:priv_dir(arizona), "static", "assets", "js", "arizona.min.js"
+    ]),
+    {ok, Expected} = file:read_file(FilePath),
+    Body = http_get_body(Port, <<"/assets/arizona.min.js">>),
+    ?assertEqual(Expected, Body).
+
 static_asset_missing_returns_404(Config) ->
     Port = proplists:get_value(port, Config),
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
@@ -516,11 +568,135 @@ ws_upgrade_preserves_duplicate_qs_keys(Config) ->
     ws_close(Sock).
 
 recompile_routes_runs(Config) when is_list(Config) ->
-    %% Exercises `arizona_cowboy_server:recompile_routes/0` -- walks the
-    %% persistent_term dispatch registry and rebuilds each listener's
-    %% dispatch. Called by the dev hot reloader in production; here we
-    %% just run it against the suite's live listener and assert it succeeds.
-    ?assertEqual(ok, arizona_cowboy_server:recompile_routes()).
+    %% Walks the persistent_term dispatch registry and rebuilds each
+    %% listener's dispatch. Called by the dev hot reloader in production;
+    %% here we just run it against the suite's live listener and assert
+    %% it succeeds.
+    ServerMod = ?config(server_mod, Config),
+    ?assertEqual(ok, ServerMod:recompile_routes()),
+    %% Roadrunner adapter only: confirm the build-time opts (compress
+    %% flag) are stashed alongside Routes so recompile replays them
+    %% instead of silently re-defaulting. Cowboy adapter has no
+    %% equivalent.
+    case ?config(adapter, Config) of
+        roadrunner ->
+            Stashed = persistent_term:get({arizona_roadrunner_routes, ws_test}),
+            ?assertMatch({_Routes, #{compress := _}}, Stashed);
+        cowboy ->
+            ok
+    end.
+
+recompile_routes_syncs_listener(Config) when is_list(Config) ->
+    %% Roadrunner-only regression: recompile_routes/0 must refresh both
+    %% Arizona's dispatch term AND the listener's compiled route table.
+    %% Before the fix, the listener kept its boot-time table, so any
+    %% route added after a hot reload was reachable via WS navigate
+    %% (which reads Arizona's term) but not via direct HTTP (which goes
+    %% through the listener's table).
+    case ?config(adapter, Config) of
+        roadrunner -> sync_listener_check(Config);
+        cowboy -> {skip, "roadrunner-specific listener sync"}
+    end.
+
+sync_listener_check(Config) ->
+    Port = proplists:get_value(port, Config),
+    StashKey = {arizona_roadrunner_routes, ws_test},
+    {OriginalRoutes, BuildOpts} = persistent_term:get(StashKey),
+    NewRoute = {live, <<"/recompile_added">>, arizona_crashable, #{}},
+    try
+        persistent_term:put(StashKey, {[NewRoute | OriginalRoutes], BuildOpts}),
+        ok = arizona_roadrunner_server:recompile_routes(),
+        ?assertEqual(200, http_status(Port, <<"/recompile_added">>))
+    after
+        persistent_term:put(StashKey, {OriginalRoutes, BuildOpts}),
+        ok = arizona_roadrunner_server:recompile_routes()
+    end.
+
+http_status(Port, Path) ->
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET ",
+        Path,
+        " HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    case Resp of
+        <<"HTTP/1.1 ", S1, S2, S3, _/binary>> -> list_to_integer([S1, S2, S3]);
+        _ -> 0
+    end.
+
+%% Drains a full HTTP/1.1 response and returns just the body, honoring
+%% the Content-Length header. Sends `Connection: close` so the server
+%% closes after responding; the body-read loop then terminates on
+%% socket close in addition to length.
+http_get_body(Port, Path) ->
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET ",
+        Path,
+        " HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "Connection: close\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    Full = read_until_close(Sock, <<>>),
+    gen_tcp:close(Sock),
+    case binary:split(Full, <<"\r\n\r\n">>) of
+        [_Headers, Body] -> Body;
+        _ -> <<>>
+    end.
+
+read_until_close(Sock, Acc) ->
+    case gen_tcp:recv(Sock, 0, 5000) of
+        {ok, Chunk} -> read_until_close(Sock, <<Acc/binary, Chunk/binary>>);
+        {error, closed} -> Acc
+    end.
+
+https_without_tls_errors(Config) when is_list(Config) ->
+    %% Roadrunner-only: asking for `scheme => https` without supplying
+    %% any TLS opts used to silently downgrade to plain HTTP on the
+    %% same port. The fix raises `https_requires_tls` before any
+    %% persistent_term is written, so nothing leaks.
+    case ?config(adapter, Config) of
+        roadrunner -> https_without_tls_check();
+        cowboy -> {skip, "roadrunner-specific TLS validation"}
+    end.
+
+https_without_tls_check() ->
+    %% Snapshot the suite's dispatch term and the not-yet-existing
+    %% target listener's stash key so the failed start can't leave
+    %% anything weird behind even if a future regression slips past
+    %% the up-front validation.
+    DispatchBefore = persistent_term:get(arizona_roadrunner_dispatch),
+    Result =
+        try
+            arizona_roadrunner_server:start(arizona_https_no_tls_test, #{
+                routes => [],
+                scheme => https
+            })
+        catch
+            error:Reason -> {error_caught, Reason}
+        end,
+    ?assertEqual({error_caught, https_requires_tls}, Result),
+    ?assertEqual(
+        DispatchBefore,
+        persistent_term:get(arizona_roadrunner_dispatch),
+        "failed start must not overwrite the live dispatch table"
+    ),
+    ?assertEqual(
+        undefined,
+        persistent_term:get({arizona_roadrunner_routes, arizona_https_no_tls_test}, undefined),
+        "failed start must not stash routes for the dead listener"
+    ).
 
 reload_endpoint_streams_event(Config) ->
     %% Connect to the dev reload SSE endpoint, broadcast a reload, and
@@ -605,6 +781,25 @@ http_reads_cookies_headers_body(Config) ->
     %% status binding projects into the rendered page: c=2 h=N b=0
     ?assertNotEqual(nomatch, binary:match(Resp, <<"c=2">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"b=0">>)).
+
+http_exposes_roadrunner_request_id(Config) ->
+    %% Roadrunner-only: the adapter forwards roadrunner's per-request
+    %% 16-char hex id into arizona_req:request_id/1 so handlers/middlewares
+    %% can correlate with adapter access logs. Cowboy doesn't populate one.
+    case ?config(adapter, Config) of
+        roadrunner -> request_id_check(Config);
+        cowboy -> {skip, "cowboy adapter does not populate request_id"}
+    end.
+
+request_id_check(Config) ->
+    Port = proplists:get_value(port, Config),
+    Body = http_get_body(Port, <<"/reads_request_id">>),
+    %% Status binding renders as `id=<hex>` (16 chars, [0-9a-f]).
+    ?assertNotEqual(nomatch, binary:match(Body, <<"id=">>)),
+    ?assertEqual(nomatch, binary:match(Body, <<"id=none">>)),
+    {match, [{Start, Len}]} = re:run(Body, <<"id=([0-9a-f]{16})">>, [{capture, [1]}]),
+    Id = binary:part(Body, Start, Len),
+    ?assertEqual(16, byte_size(Id)).
 
 reconnect_init(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/">>, [{reconnect, true}]),

@@ -70,6 +70,7 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 -export([adapter/1]).
 -export([method/1]).
 -export([path/1]).
+-export([request_id/1]).
 -export([raw/1]).
 -export([set_raw/2]).
 -export([bindings/1]).
@@ -89,6 +90,7 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 
 -ignore_xref([method/1]).
 -ignore_xref([path/1]).
+-ignore_xref([request_id/1]).
 -ignore_xref([set_raw/2]).
 -ignore_xref([bindings/1]).
 -ignore_xref([params/1]).
@@ -127,6 +129,7 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
     raw := raw(),
     method := method(),
     path := path(),
+    request_id => binary(),
     bindings => bindings(),
     params => params(),
     cookies => cookies(),
@@ -139,7 +142,7 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 -nominal raw() :: dynamic().
 -nominal method() :: binary().
 -nominal path() :: binary().
--nominal bindings() :: #{atom() => dynamic()}.
+-nominal bindings() :: #{binary() => dynamic()}.
 -nominal params() :: [{binary(), binary() | true}].
 -nominal cookies() :: [{binary(), binary()}].
 -nominal headers() :: #{binary() => iodata()}.
@@ -195,6 +198,7 @@ skip their adapter callbacks on first access.
     Opts :: #{
         method := method(),
         path := path(),
+        request_id => binary(),
         bindings => bindings(),
         params => params(),
         cookies => cookies(),
@@ -216,6 +220,18 @@ method(#{method := Method}) -> Method.
 -doc "Returns the request path (no query string).".
 -spec path(request()) -> path().
 path(#{path := Path}) -> Path.
+
+-doc """
+Returns the adapter-supplied request ID (e.g. roadrunner's 16-char
+hex correlation token), or `undefined` if the adapter doesn't
+populate one.
+
+Useful for live-view handlers and crash-report glue that need to
+correlate Arizona-side events with the adapter's access logs.
+""".
+-spec request_id(request()) -> binary() | undefined.
+request_id(#{request_id := Id}) -> Id;
+request_id(_Req) -> undefined.
 
 -doc "Returns the raw, transport-native request value the adapter wraps.".
 -spec raw(request()) -> raw().

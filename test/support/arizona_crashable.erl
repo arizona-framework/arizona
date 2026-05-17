@@ -15,7 +15,7 @@ mount(Bindings, Req) ->
                     id => ~"crashable",
                     status => maps:get(status, Bindings, ~"ok"),
                     <<"locale">> => maps:get(<<"locale">>, Bindings, Locale),
-                    item_id => maps:get(item_id, Bindings, ~"none")
+                    <<"item_id">> => maps:get(<<"item_id">>, Bindings, ~"none")
                 },
                 #{}
             }
@@ -27,7 +27,7 @@ render(Bindings) ->
         {'div', [{id, ?get(id)}], [
             {p, [], [~"Status: ", ?get(status, ~"ok")]},
             {p, [], [~"Locale: ", ?get(<<"locale">>, ~"none")]},
-            {p, [], [~"Item: ", ?get(item_id, ~"none")]}
+            {p, [], [~"Item: ", ?get(<<"item_id">>, ~"none")]}
         ]}
     ).
 

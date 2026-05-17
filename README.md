@@ -35,23 +35,34 @@ across upgrades.
 - **On-mount hooks** -- per-route pipeline that runs before every mount, including navigate
 - **Element hooks** -- client-side `mounted`/`updated`/`destroyed` callbacks via `az_hook`
 - **Dev-mode hot reload** -- `fs` watcher recompiles changed `.erl` files and pushes reload events
-- **Pluggable transport** -- cowboy adapter built-in; write your own to swap it out
+- **Pluggable transport** -- roadrunner (default) and cowboy adapters built-in; pick one via the
+  `adapter` opt or write your own
 
 ## Requirements
 
-- Erlang/OTP 28 or later
+- Erlang/OTP 28+ (with the cowboy adapter) or OTP 29+ (with the roadrunner adapter, which
+  requires OTP 29)
 
 ## Installation
 
-Add Arizona to your `rebar.config` dependencies. Cowboy is required for the built-in
-HTTP/WebSocket transport; skip it only if you write your own `arizona_req` adapter.
+Add Arizona to your `rebar.config` dependencies along with an HTTP/WebSocket adapter.
+Roadrunner is the default; cowboy is the alternate.
 
 ```erlang
+%% Default: roadrunner (requires OTP 29)
+{deps, [
+    {arizona, "~> 0.1"},
+    {roadrunner, "~> 0.1"}
+]}.
+
+%% Alternate: cowboy
 {deps, [
     {arizona, "~> 0.1"},
     cowboy
 ]}.
 ```
+
+Pick one. You can omit both if you write your own `arizona_req` adapter.
 
 To track unreleased changes, swap the version for a git ref:
 
@@ -170,9 +181,13 @@ render(Bindings) ->
 
 ### 4. Configure the server
 
-Add `arizona` to your app's `applications` list in `.app.src`:
+Add `arizona` and your chosen adapter to your app's `applications` list in `.app.src`:
 
 ```erlang
+%% With roadrunner (default)
+{applications, [kernel, stdlib, roadrunner, arizona]}
+
+%% Or with cowboy
 {applications, [kernel, stdlib, cowboy, arizona]}
 ```
 
@@ -186,8 +201,8 @@ to `rebar.config`:
 ]}.
 ```
 
-Replace `yourapp` with your project's app name; `cowboy` and `arizona` are started
-transitively from the `applications` list in `.app.src`.
+Replace `yourapp` with your project's app name; the chosen adapter and `arizona`
+are started transitively from the `applications` list in `.app.src`.
 Then declare routes in `config/sys.config`:
 
 ```erlang

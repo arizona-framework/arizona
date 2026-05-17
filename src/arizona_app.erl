@@ -3,28 +3,34 @@
 OTP application entry point.
 
 Boots `arizona_sup`, then -- if the `server` application env is set --
-starts a Cowboy listener named `arizona_http` via
-`arizona_cowboy_server:start/2`. On shutdown, stops that listener.
+starts a roadrunner listener named `arizona_http` via
+`arizona_roadrunner_server:start/2`. On shutdown, stops that
+listener.
 
 ## Server config
 
 ```erlang
 {arizona, [
     {server, #{
-        scheme => http,                          %% http | https
-        transport_opts => [{port, 4040}],        %% cowboy transport opts
-        proto_opts => #{stream_handlers => [cowboy_compress_h, cowboy_stream_h]},
+        adapter => roadrunner,                          %% roadrunner (default) | cowboy
+        scheme => http,                                 %% http | https
+        transport_opts => [{port, 4040}],               %% port shorthand
+        proto_opts => #{                                %% adapter-specific opts
+            max_clients => 200,
+            max_content_length => 10485760
+        },
         routes => [
-            {live, <<"/">>, my_page, #{layouts => [{my_layout, render}]}},
-            {ws, <<"/ws">>, #{}},
-            {asset, <<"/priv">>, {priv_dir, my_app, "static"}}
+            {live, ~"/", my_page, #{layouts => [{my_layout, render}]}},
+            {ws, ~"/ws", #{}},
+            {asset, ~"/priv", {priv_dir, my_app, "static"}}
         ]
     }}
 ]}
 ```
 
 The `server` key is optional: if absent, only the supervisor starts
-(useful for tests that launch listeners manually).
+(useful for tests that launch listeners manually). When present and
+no `adapter` is specified, roadrunner is used.
 """.
 -behaviour(application).
 
@@ -63,7 +69,13 @@ start(_Type, _Args) ->
 -spec stop(State) -> ok when
     State :: term().
 stop(_State) ->
-    _ = arizona_cowboy_server:stop(?LISTENER),
+    case application:get_env(arizona, server) of
+        {ok, ServerOpts} ->
+            ServerMod = adapter_module(ServerOpts),
+            _ = ServerMod:stop(?LISTENER);
+        undefined ->
+            ok
+    end,
     ok.
 
 %% --------------------------------------------------------------------
@@ -73,10 +85,25 @@ stop(_State) ->
 maybe_start_server() ->
     case application:get_env(arizona, server) of
         {ok, ServerOpts} ->
-            case arizona_cowboy_server:start(?LISTENER, ServerOpts) of
+            ServerMod = adapter_module(ServerOpts),
+            ok = ensure_adapter_app(ServerMod),
+            case ServerMod:start(?LISTENER, maps:remove(adapter, ServerOpts)) of
                 {ok, _} -> ok;
                 {error, _} = Err -> Err
             end;
         undefined ->
             ok
     end.
+
+adapter_module(ServerOpts) ->
+    case maps:get(adapter, ServerOpts, roadrunner) of
+        roadrunner -> arizona_roadrunner_server;
+        cowboy -> arizona_cowboy_server
+    end.
+
+ensure_adapter_app(arizona_roadrunner_server) ->
+    {ok, _} = application:ensure_all_started(roadrunner),
+    ok;
+ensure_adapter_app(arizona_cowboy_server) ->
+    {ok, _} = application:ensure_all_started(cowboy),
+    ok.
