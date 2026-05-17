@@ -27,6 +27,7 @@
     http_halt_redirect_via_req/1,
     http_render_crash_emits_error_page/1,
     http_reads_cookies_headers_body/1,
+    http_exposes_roadrunner_request_id/1,
     static_asset_served/1,
     static_asset_body_matches_file/1,
     static_asset_missing_returns_404/1,
@@ -72,6 +73,7 @@ groups() ->
         http_halt_redirect_via_req,
         http_render_crash_emits_error_page,
         http_reads_cookies_headers_body,
+        http_exposes_roadrunner_request_id,
         static_asset_served,
         static_asset_body_matches_file,
         static_asset_missing_returns_404,
@@ -164,6 +166,18 @@ init_per_group(Adapter, Config) when Adapter =:= roadrunner; Adapter =:= cowboy 
         }},
         {live, <<"/crash_on_render_http">>, arizona_crashable, #{
             bindings => #{crash_on_mount => true}
+        }},
+        {live, <<"/reads_request_id">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    Status =
+                        case arizona_req:request_id(Req) of
+                            undefined -> ~"id=none";
+                            Id -> <<"id=", Id/binary>>
+                        end,
+                    {cont, Req, B#{status => Status}}
+                end
+            ]
         }},
         {live, <<"/reads_cookies_headers_body">>, arizona_crashable, #{
             middlewares => [
@@ -767,6 +781,25 @@ http_reads_cookies_headers_body(Config) ->
     %% status binding projects into the rendered page: c=2 h=N b=0
     ?assertNotEqual(nomatch, binary:match(Resp, <<"c=2">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"b=0">>)).
+
+http_exposes_roadrunner_request_id(Config) ->
+    %% Roadrunner-only: the adapter forwards roadrunner's per-request
+    %% 16-char hex id into arizona_req:request_id/1 so handlers/middlewares
+    %% can correlate with adapter access logs. Cowboy doesn't populate one.
+    case ?config(adapter, Config) of
+        roadrunner -> request_id_check(Config);
+        cowboy -> {skip, "cowboy adapter does not populate request_id"}
+    end.
+
+request_id_check(Config) ->
+    Port = proplists:get_value(port, Config),
+    Body = http_get_body(Port, <<"/reads_request_id">>),
+    %% Status binding renders as `id=<hex>` (16 chars, [0-9a-f]).
+    ?assertNotEqual(nomatch, binary:match(Body, <<"id=">>)),
+    ?assertEqual(nomatch, binary:match(Body, <<"id=none">>)),
+    {match, [{Start, Len}]} = re:run(Body, <<"id=([0-9a-f]{16})">>, [{capture, [1]}]),
+    Id = binary:part(Body, Start, Len),
+    ?assertEqual(16, byte_size(Id)).
 
 reconnect_init(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/">>, [{reconnect, true}]),

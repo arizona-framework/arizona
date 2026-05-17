@@ -38,15 +38,19 @@ and everything else lazy-loaded on first access.
 %% --------------------------------------------------------------------
 
 -doc """
-Wraps a roadrunner request in an `arizona_req:request()` with `method`
-and `path` eagerly populated.
+Wraps a roadrunner request in an `arizona_req:request()` with `method`,
+`path`, and roadrunner's `request_id` eagerly populated. The
+request_id is the same 16-char hex token roadrunner mirrors into its
+logger metadata, so Arizona-side handlers and crash reports can be
+correlated with the adapter's access logs.
 """.
 -spec new(RoadrunnerReq) -> arizona_req:request() when
     RoadrunnerReq :: roadrunner_req:request().
 new(RoadrunnerReq) ->
     arizona_req:new(?MODULE, RoadrunnerReq, #{
         method => roadrunner_req:method(RoadrunnerReq),
-        path => roadrunner_req:path(RoadrunnerReq)
+        path => roadrunner_req:path(RoadrunnerReq),
+        request_id => roadrunner_req:request_id(RoadrunnerReq)
     }).
 
 %% --------------------------------------------------------------------
