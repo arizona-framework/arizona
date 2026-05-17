@@ -32,6 +32,7 @@
     reload_endpoint_streams_event/1,
     recompile_routes_runs/1,
     recompile_routes_syncs_listener/1,
+    https_without_tls_errors/1,
     http_preserves_duplicate_qs_keys/1,
     ws_navigate_preserves_duplicate_qs_keys/1,
     ws_upgrade_preserves_duplicate_qs_keys/1,
@@ -75,6 +76,7 @@ groups() ->
         reload_endpoint_streams_event,
         recompile_routes_runs,
         recompile_routes_syncs_listener,
+        https_without_tls_errors,
         http_preserves_duplicate_qs_keys,
         ws_navigate_preserves_duplicate_qs_keys,
         ws_upgrade_preserves_duplicate_qs_keys
@@ -599,6 +601,43 @@ http_status(Port, Path) ->
         <<"HTTP/1.1 ", S1, S2, S3, _/binary>> -> list_to_integer([S1, S2, S3]);
         _ -> 0
     end.
+
+https_without_tls_errors(Config) when is_list(Config) ->
+    %% Roadrunner-only: asking for `scheme => https` without supplying
+    %% any TLS opts used to silently downgrade to plain HTTP on the
+    %% same port. The fix raises `https_requires_tls` before any
+    %% persistent_term is written, so nothing leaks.
+    case ?config(adapter, Config) of
+        roadrunner -> https_without_tls_check();
+        cowboy -> {skip, "roadrunner-specific TLS validation"}
+    end.
+
+https_without_tls_check() ->
+    %% Snapshot the suite's dispatch term and the not-yet-existing
+    %% target listener's stash key so the failed start can't leave
+    %% anything weird behind even if a future regression slips past
+    %% the up-front validation.
+    DispatchBefore = persistent_term:get(arizona_roadrunner_dispatch),
+    Result =
+        try
+            arizona_roadrunner_server:start(arizona_https_no_tls_test, #{
+                routes => [],
+                scheme => https
+            })
+        catch
+            error:Reason -> {error_caught, Reason}
+        end,
+    ?assertEqual({error_caught, https_requires_tls}, Result),
+    ?assertEqual(
+        DispatchBefore,
+        persistent_term:get(arizona_roadrunner_dispatch),
+        "failed start must not overwrite the live dispatch table"
+    ),
+    ?assertEqual(
+        undefined,
+        persistent_term:get({arizona_roadrunner_routes, arizona_https_no_tls_test}, undefined),
+        "failed start must not stash routes for the dead listener"
+    ).
 
 reload_endpoint_streams_event(Config) ->
     %% Connect to the dev reload SSE endpoint, broadcast a reload, and

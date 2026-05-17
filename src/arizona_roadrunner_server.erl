@@ -39,12 +39,14 @@ routes take effect without restarting the listener.
 -export([start/2]).
 -export([stop/1]).
 -export([recompile_routes/0]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
 -ignore_xref([start/2, stop/1]).
+-ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Macros
@@ -65,6 +67,16 @@ routes from `Opts`.
     Opts :: map().
 start(Name, #{routes := Routes} = Opts) ->
     BuildOpts = #{compress => maps:get(compress, Opts, true)},
+    Port = port_from_opts(Opts),
+    UserProtoOpts = maps:get(proto_opts, Opts, #{}),
+    ListenerOpts = UserProtoOpts#{
+        port => Port,
+        routes => arizona_roadrunner_router:routes(Routes, BuildOpts)
+    },
+    %% Validate (and inject) TLS before any persistent_term writes so an
+    %% https-without-tls misconfig crashes cleanly instead of leaving a
+    %% half-written dispatch behind.
+    ListenerOpts1 = maybe_inject_tls(ListenerOpts, Opts),
     ok = arizona_roadrunner_router:compile_routes(Routes, BuildOpts),
     %% Stash {Routes, BuildOpts} together so `recompile_routes/0` can
     %% replay the user's original build-time choices (e.g.
@@ -72,13 +84,6 @@ start(Name, #{routes := Routes} = Opts) ->
     persistent_term:put({?ROUTES_KEY, Name}, {Routes, BuildOpts}),
     ErrorPage = maps:get(error_page, Opts, {arizona_error_page, render}),
     persistent_term:put(arizona_error_page, ErrorPage),
-    Port = port_from_opts(Opts),
-    UserProtoOpts = maps:get(proto_opts, Opts, #{}),
-    ListenerOpts = UserProtoOpts#{
-        port => Port,
-        routes => arizona_roadrunner_router:routes(Routes, BuildOpts)
-    },
-    ListenerOpts1 = maybe_inject_tls(ListenerOpts, Opts),
     roadrunner:start_listener(Name, ListenerOpts1).
 
 -doc """
@@ -122,6 +127,17 @@ recompile_routes() ->
         Terms
     ).
 
+-doc """
+Formats runtime errors raised with an `error_info` annotation pointing at
+this module. Picked up by `erl_error:format_exception/3`.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error(https_requires_tls, [{_M, _F, _Args, _Info} | _]) ->
+    #{general => "scheme => https requires tls => [...] in opts or proto_opts.tls => [...]"}.
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
@@ -139,9 +155,16 @@ port_from_opts(Opts) ->
     end.
 
 %% Translate the cowboy-style `scheme => https` shorthand into
-%% roadrunner's `tls => [...]` listener opt. Users supplying TLS opts
-%% directly via `proto_opts.tls` get them passed through unchanged.
+%% roadrunner's `tls => [...]` listener opt. Top-level `tls` overrides
+%% `proto_opts.tls` (which has already flowed into `ListenerOpts`).
+%% Asking for `scheme => https` with no TLS config anywhere fails
+%% loudly — silently downgrading to plain HTTP on the same port is a
+%% security footgun.
 maybe_inject_tls(ListenerOpts, #{scheme := https, tls := Tls}) ->
     ListenerOpts#{tls => Tls};
+maybe_inject_tls(#{tls := _} = ListenerOpts, #{scheme := https}) ->
+    ListenerOpts;
+maybe_inject_tls(_ListenerOpts, #{scheme := https} = Opts) ->
+    erlang:error(https_requires_tls, [Opts], [{error_info, #{module => ?MODULE}}]);
 maybe_inject_tls(ListenerOpts, _Opts) ->
     ListenerOpts.
