@@ -38,15 +38,14 @@ start() ->
         {ws, <<"/ws">>, #{}},
         {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}
     ],
-    {ok, _} = arizona_cowboy_server:start(http, #{
+    {ok, _} = arizona_roadrunner_server:start(http, #{
         transport_opts => [{port, port()}],
-        proto_opts => #{stream_handlers => [cowboy_compress_h, cowboy_stream_h]},
         routes => Routes
     }),
     ok.
 
 stop() ->
-    arizona_cowboy_server:stop(http).
+    arizona_roadrunner_server:stop(http).
 
 port() ->
     case os:getenv("PORT") of
