@@ -31,6 +31,7 @@
     static_asset_missing_returns_404/1,
     reload_endpoint_streams_event/1,
     recompile_routes_runs/1,
+    recompile_routes_syncs_listener/1,
     http_preserves_duplicate_qs_keys/1,
     ws_navigate_preserves_duplicate_qs_keys/1,
     ws_upgrade_preserves_duplicate_qs_keys/1,
@@ -73,6 +74,7 @@ groups() ->
         static_asset_missing_returns_404,
         reload_endpoint_streams_event,
         recompile_routes_runs,
+        recompile_routes_syncs_listener,
         http_preserves_duplicate_qs_keys,
         ws_navigate_preserves_duplicate_qs_keys,
         ws_upgrade_preserves_duplicate_qs_keys
@@ -551,6 +553,51 @@ recompile_routes_runs(Config) when is_list(Config) ->
             ?assertMatch({_Routes, #{compress := _}}, Stashed);
         cowboy ->
             ok
+    end.
+
+recompile_routes_syncs_listener(Config) when is_list(Config) ->
+    %% Roadrunner-only regression: recompile_routes/0 must refresh both
+    %% Arizona's dispatch term AND the listener's compiled route table.
+    %% Before the fix, the listener kept its boot-time table, so any
+    %% route added after a hot reload was reachable via WS navigate
+    %% (which reads Arizona's term) but not via direct HTTP (which goes
+    %% through the listener's table).
+    case ?config(adapter, Config) of
+        roadrunner -> sync_listener_check(Config);
+        cowboy -> {skip, "roadrunner-specific listener sync"}
+    end.
+
+sync_listener_check(Config) ->
+    Port = proplists:get_value(port, Config),
+    StashKey = {arizona_roadrunner_routes, ws_test},
+    {OriginalRoutes, BuildOpts} = persistent_term:get(StashKey),
+    NewRoute = {live, <<"/recompile_added">>, arizona_crashable, #{}},
+    try
+        persistent_term:put(StashKey, {[NewRoute | OriginalRoutes], BuildOpts}),
+        ok = arizona_roadrunner_server:recompile_routes(),
+        ?assertEqual(200, http_status(Port, <<"/recompile_added">>))
+    after
+        persistent_term:put(StashKey, {OriginalRoutes, BuildOpts}),
+        ok = arizona_roadrunner_server:recompile_routes()
+    end.
+
+http_status(Port, Path) ->
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET ",
+        Path,
+        " HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    case Resp of
+        <<"HTTP/1.1 ", S1, S2, S3, _/binary>> -> list_to_integer([S1, S2, S3]);
+        _ -> 0
     end.
 
 reload_endpoint_streams_event(Config) ->

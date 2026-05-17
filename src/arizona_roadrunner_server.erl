@@ -95,14 +95,27 @@ stop(Name) ->
 -doc """
 Recompiles every Arizona-managed dispatch by walking persistent
 terms. Called by the dev hot reloader after a successful recompile.
+
+Refreshes two tables in lockstep:
+
+- `arizona_roadrunner_dispatch` (read by
+  `arizona_roadrunner_req:resolve_route/3` on WS navigate), and
+- the listener's own compiled route table (read by roadrunner on
+  every incoming HTTP request).
+
+Both must move together — otherwise WS navigate sees new routes
+while a fresh HTTP request still 404s against the listener's stale
+table.
 """.
 -spec recompile_routes() -> ok.
 recompile_routes() ->
     Terms = persistent_term:get(),
     lists:foreach(
         fun
-            ({{?ROUTES_KEY, _}, {Routes, BuildOpts}}) ->
-                arizona_roadrunner_router:compile_routes(Routes, BuildOpts);
+            ({{?ROUTES_KEY, Name}, {Routes, BuildOpts}}) ->
+                ok = arizona_roadrunner_router:compile_routes(Routes, BuildOpts),
+                ListenerRoutes = arizona_roadrunner_router:routes(Routes, BuildOpts),
+                ok = roadrunner_listener:reload_routes(Name, ListenerRoutes);
             (_) ->
                 ok
         end,
