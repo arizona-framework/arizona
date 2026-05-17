@@ -221,12 +221,19 @@ breakdown, op codes, dev-mode file watchers, custom schemes/proto_opts, and impe
 
 ## Sponsors
 
-If you like Arizona, please consider [sponsoring me](https://github.com/sponsors/williamthome).
-I'm thankful for your never-ending support ❤️
+Arizona is open source and maintained on personal time. If you or your company find it useful,
+consider [sponsoring](https://github.com/sponsors/williamthome).
 
 I also accept coffees ☕
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/williamthome)
+
+<a href="https://github.com/sponsors/williamthome">
+  <img
+    src="https://raw.githubusercontent.com/williamthome/williamthome/sponsorkit/sponsors.svg"
+    alt="Sponsors"
+  />
+</a>
 
 ## Contributing
 
