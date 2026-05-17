@@ -56,6 +56,7 @@ the diff is applied (e.g. focus a field, dispatch a custom event).
 -export_type([handle_event_ret/0]).
 -export_type([handle_info_ret/0]).
 -export_type([handle_update_ret/0]).
+-export_type([handle_drain_ret/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -73,6 +74,10 @@ the diff is applied (e.g. focus a field, dispatch a custom event).
 -type handle_event_ret() :: {bindings(), resets(), effects()}.
 -type handle_info_ret() :: {bindings(), resets(), effects()}.
 -type handle_update_ret() :: {bindings(), resets()}.
+-type handle_drain_ret() ::
+    ok
+    | {stop, bindings(), effects()}
+    | {bindings(), resets(), effects()}.
 
 %% --------------------------------------------------------------------
 %% Behaviour callbacks

@@ -28,6 +28,12 @@
     http_render_crash_emits_error_page/1,
     http_reads_cookies_headers_body/1,
     http_exposes_roadrunner_request_id/1,
+    drain_default_closes_ws_cleanly/1,
+    drain_user_callback_pushes_effect_then_stops/1,
+    drain_user_callback_keeps_alive/1,
+    drain_user_callback_noop_keeps_alive/1,
+    drain_emits_telemetry/1,
+    drain_then_navigate_closes_gracefully/1,
     static_asset_served/1,
     static_asset_body_matches_file/1,
     static_asset_missing_returns_404/1,
@@ -74,6 +80,12 @@ groups() ->
         http_render_crash_emits_error_page,
         http_reads_cookies_headers_body,
         http_exposes_roadrunner_request_id,
+        drain_default_closes_ws_cleanly,
+        drain_user_callback_pushes_effect_then_stops,
+        drain_user_callback_keeps_alive,
+        drain_user_callback_noop_keeps_alive,
+        drain_emits_telemetry,
+        drain_then_navigate_closes_gracefully,
         static_asset_served,
         static_asset_body_matches_file,
         static_asset_missing_returns_404,
@@ -201,6 +213,9 @@ init_per_group(Adapter, Config) when Adapter =:= roadrunner; Adapter =:= cowboy 
                 end
             ]
         }},
+        {live, <<"/drain_stop">>, arizona_drainable, #{bindings => #{drain_mode => stop}}},
+        {live, <<"/drain_keep">>, arizona_drainable, #{bindings => #{drain_mode => keep}}},
+        {live, <<"/drain_noop">>, arizona_drainable, #{bindings => #{drain_mode => noop}}},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/assets">>, {priv_dir, arizona, "static/assets/js"}},
         {reload, <<"/reload">>, #{}}
@@ -800,6 +815,176 @@ request_id_check(Config) ->
     {match, [{Start, Len}]} = re:run(Body, <<"id=([0-9a-f]{16})">>, [{capture, [1]}]),
     Id = binary:part(Body, Start, Len),
     ?assertEqual(16, byte_size(Id)).
+
+drain_default_closes_ws_cleanly(Config) ->
+    %% Handler without handle_drain/2 → dispatcher returns {stop, B, []} by
+    %% default → live process exits normal → WS closes with code 1000.
+    case ?config(adapter, Config) of
+        roadrunner -> drain_default_check(Config);
+        cowboy -> {skip, "roadrunner-specific drain"}
+    end.
+
+drain_default_check(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send(Sock, <<"0">>),
+    {text, <<"1">>} = ws_recv(Sock),
+    send_drain_to_session(),
+    expect_ws_close(Sock, 1001),
+    ok = gen_tcp:close(Sock).
+
+drain_user_callback_pushes_effect_then_stops(Config) ->
+    %% arizona_drainable with drain_mode => stop returns
+    %% {stop, B, [dispatch_event("draining")]}; the effect frame must arrive
+    %% before the going-away close (1001).
+    case ?config(adapter, Config) of
+        roadrunner -> drain_stop_check(Config);
+        cowboy -> {skip, "roadrunner-specific drain"}
+    end.
+
+drain_stop_check(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/drain_stop">>),
+    ok = ws_send(Sock, <<"0">>),
+    {text, <<"1">>} = ws_recv(Sock),
+    send_drain_to_session(),
+    {text, Resp} = ws_recv(Sock),
+    ?assertMatch(#{~"e" := _}, json:decode(Resp)),
+    expect_ws_close(Sock, 1001),
+    ok = gen_tcp:close(Sock).
+
+drain_user_callback_keeps_alive(Config) ->
+    %% arizona_drainable with drain_mode => keep returns {B, #{}, []} — no
+    %% diff, no effects, no exit. WS stays open and continues serving.
+    case ?config(adapter, Config) of
+        roadrunner -> drain_keep_check(Config);
+        cowboy -> {skip, "roadrunner-specific drain"}
+    end.
+
+drain_keep_check(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/drain_keep">>),
+    ok = ws_send(Sock, <<"0">>),
+    {text, <<"1">>} = ws_recv(Sock),
+    send_drain_to_session(),
+    %% Drain returned {B, #{}, []}: no resets, no effects → must produce no
+    %% wire frame. A regression that pushed a spurious diff op would slip
+    %% past the followup ping check below.
+    ?assertEqual(timeout, ws_recv(Sock, 100)),
+    %% Subsequent ping/pong proves the session and live process are still up.
+    ok = ws_send(Sock, <<"0">>),
+    ?assertMatch({text, <<"1">>}, ws_recv(Sock)),
+    ws_close(Sock).
+
+drain_user_callback_noop_keeps_alive(Config) ->
+    %% arizona_drainable with drain_mode => noop returns `ok` from
+    %% handle_drain — distinct path from `keep`: the live process's
+    %% handle_drain_info hits the `ok` branch, skips process_root_change,
+    %% and stays alive without any diff/push.
+    case ?config(adapter, Config) of
+        roadrunner -> drain_noop_check(Config);
+        cowboy -> {skip, "roadrunner-specific drain"}
+    end.
+
+drain_noop_check(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/drain_noop">>),
+    ok = ws_send(Sock, <<"0">>),
+    {text, <<"1">>} = ws_recv(Sock),
+    send_drain_to_session(),
+    %% `ok` return skips process_root_change entirely → no wire frame.
+    ?assertEqual(timeout, ws_recv(Sock, 100)),
+    %% Ping/pong proves the session and live process are still up.
+    ok = ws_send(Sock, <<"0">>),
+    ?assertMatch({text, <<"1">>}, ws_recv(Sock)),
+    ws_close(Sock).
+
+drain_emits_telemetry(Config) ->
+    %% acknowledge_drain/2 fires `[roadrunner, drain, acknowledged]` with
+    %% the deadline in metadata. Use the keep-alive route so the WS stays
+    %% open long enough for cleanup.
+    case ?config(adapter, Config) of
+        roadrunner -> drain_telemetry_check(Config);
+        cowboy -> {skip, "roadrunner-specific drain"}
+    end.
+
+drain_telemetry_check(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/drain_keep">>),
+    ok = ws_send(Sock, <<"0">>),
+    {text, <<"1">>} = ws_recv(Sock),
+    Self = self(),
+    Ref = make_ref(),
+    HandlerId = {drain_telemetry_test, Ref},
+    ok = telemetry:attach(
+        HandlerId,
+        [roadrunner, drain, acknowledged],
+        fun(_Event, _Measurements, Metadata, _Config) ->
+            Self ! {telemetry_fired, Ref, Metadata}
+        end,
+        []
+    ),
+    try
+        Deadline = erlang:monotonic_time(millisecond) + 30000,
+        broadcast_drain(Deadline),
+        receive
+            {telemetry_fired, Ref, Metadata} ->
+                ?assertMatch(#{deadline := Deadline}, Metadata)
+        after 5000 ->
+            error(telemetry_timeout)
+        end
+    after
+        telemetry:detach(HandlerId)
+    end,
+    ws_close(Sock).
+
+drain_then_navigate_closes_gracefully(Config) ->
+    %% Race coverage: drain causes live exit; if a navigate frame is
+    %% processed by the WS session BEFORE the {'EXIT', _, normal} signal
+    %% lands, arizona_socket:handle_navigate would do gen_server:call to
+    %% the dead live pid. The try/catch in handle_navigate translates the
+    %% resulting exit({noproc, _}) into a graceful close (1000) instead
+    %% of letting it propagate to a crash close (4500).
+    %%
+    %% Race outcome is non-deterministic (the local drain message usually
+    %% beats the TCP-delivered navigate frame), so this test asserts only
+    %% the OUTCOME — graceful close — not which code path produced it.
+    %% Without the catch, the navigate-wins path fails with close 4500.
+    case ?config(adapter, Config) of
+        roadrunner -> drain_then_navigate_check(Config);
+        cowboy -> {skip, "roadrunner-specific drain"}
+    end.
+
+drain_then_navigate_check(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/drain_stop">>),
+    ok = ws_send(Sock, <<"0">>),
+    {text, <<"1">>} = ws_recv(Sock),
+    send_drain_to_session(),
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/", ~"qs" => ~""}]),
+    %% drain_stop pushes a `dispatch_event("draining", #{})` effect before
+    %% exiting; consume it (or accept that it bundled with the close).
+    case ws_recv(Sock, 2000) of
+        {text, _} -> expect_ws_close(Sock, 1001);
+        {close, 1001, _} -> ok;
+        {error, closed} -> ok
+    end,
+    ok = gen_tcp:close(Sock).
+
+%% Drive a drain broadcast through the listener's pg group without
+%% stopping the listener — every WS session auto-joins at upgrade.
+%% In a sequential test suite only this test's session is in flight.
+send_drain_to_session() ->
+    broadcast_drain(erlang:monotonic_time(millisecond) + 30000).
+
+broadcast_drain(Deadline) ->
+    ok = roadrunner_listener:notify_drain(ws_test, Deadline).
+
+%% Accept either the explicit close frame OR a socket close. The server
+%% sometimes bundles the close frame in the same TCP packet as the
+%% preceding text frame; ws_recv decodes only the first frame and drops
+%% the rest, so the next recv returns {error, closed} instead of the
+%% close frame. Both outcomes prove the server closed the WS cleanly.
+expect_ws_close(Sock, ExpectedCode) ->
+    case ws_recv(Sock, 2000) of
+        {close, ExpectedCode, _} -> ok;
+        {error, closed} -> ok;
+        Other -> error({unexpected_recv, Other})
+    end.
 
 reconnect_init(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/">>, [{reconnect, true}]),

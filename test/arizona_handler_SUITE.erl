@@ -9,6 +9,7 @@
     unhandled_info_tagged/1,
     unhandled_update_tagged/1,
     unhandled_unmount_tagged/1,
+    unhandled_drain_tagged/1,
     function_clause_inside_callback_propagates_untagged/1,
     format_error_messages_include_view_id/1,
     format_error_renders_all_reasons/1
@@ -26,6 +27,7 @@ groups() ->
             unhandled_info_tagged,
             unhandled_update_tagged,
             unhandled_unmount_tagged,
+            unhandled_drain_tagged,
             function_clause_inside_callback_propagates_untagged,
             format_error_messages_include_view_id,
             format_error_renders_all_reasons
@@ -134,6 +136,21 @@ unhandled_unmount_tagged(Config) when is_list(Config) ->
         error:{unhandled_unmount, Mod, _} -> ok
     end.
 
+unhandled_drain_tagged(Config) when is_list(Config) ->
+    %% Module exports handle_drain/2 but no clause matches the dispatched
+    %% (deadline, bindings) pair -- call_handle_drain must re-tag the
+    %% function_clause into `{unhandled_drain, _, _, _}`.
+    Mod = compile_module(
+        "-module(stub_drain). "
+        "-export([handle_drain/2]). "
+        "handle_drain(_D, #{tag := keep} = B) -> {B, #{}, []}.\n"
+    ),
+    try arizona_handler:call_handle_drain(Mod, 12345, #{id => <<"v">>}) of
+        _ -> ct:fail(expected_unhandled_drain)
+    catch
+        error:{unhandled_drain, Mod, 12345, _} -> ok
+    end.
+
 function_clause_inside_callback_propagates_untagged(Config) when is_list(Config) ->
     %% function_clause raised from INSIDE the callback's body (a case with
     %% no matching pattern) must propagate as raw function_clause -- only
@@ -215,6 +232,7 @@ format_error_renders_all_reasons(Config) when is_list(Config) ->
         {{unhandled_info, my_mod, hello, Bindings}, [<<"page">>, <<"my_mod">>, <<"hello">>]},
         {{unhandled_update, my_mod, #{}, Bindings}, [<<"page">>, <<"my_mod">>]},
         {{unhandled_unmount, my_mod, Bindings}, [<<"page">>, <<"my_mod">>]},
+        {{unhandled_drain, my_mod, 12345, Bindings}, [<<"page">>, <<"my_mod">>, <<"12345">>]},
         {{render_no_clause, my_mod, Bindings}, [<<"page">>, <<"my_mod">>]}
     ],
     [

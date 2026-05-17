@@ -14,12 +14,11 @@ fi
 exec erl \
     -pa "_build/test/lib/arizona/ebin" \
     -pa "_build/test/lib/arizona/test" \
-    -pa "_build/test/lib/cowboy/ebin" \
-    -pa "_build/test/lib/cowlib/ebin" \
-    -pa "_build/test/lib/ranch/ebin" \
+    -pa "_build/test/lib/roadrunner/ebin" \
+    -pa "_build/test/lib/telemetry/ebin" \
     ${ERLANG_EXTRA_ARGS} \
     -eval "
-{ok, _} = application:ensure_all_started(cowboy),
+{ok, _} = application:ensure_all_started(roadrunner),
 {ok, _} = application:ensure_all_started(arizona),
 ok = arizona_test_server:start(),
 Port = os:getenv(\"PORT\", \"4040\"),
