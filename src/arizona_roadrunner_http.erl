@@ -28,7 +28,7 @@ Roadrunner `handle/1` callback. Renders the configured Arizona
 handler and replies with HTML.
 """.
 -spec handle(Req) -> {Response, Req} when
-    Req :: roadrunner_http1:request(),
+    Req :: roadrunner_req:request(),
     Response :: roadrunner_handler:response().
 handle(Req) ->
     #{arizona := State} = roadrunner_req:state(Req),

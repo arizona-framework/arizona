@@ -43,7 +43,7 @@ Roadrunner `handle/1` callback. Resolves the route, applies
 middlewares, and returns the websocket upgrade tuple.
 """.
 -spec handle(Req) -> {Response, Req} when
-    Req :: roadrunner_http1:request(),
+    Req :: roadrunner_req:request(),
     Response :: roadrunner_handler:response().
 handle(Req) ->
     QS = roadrunner_req:parse_qs(Req),

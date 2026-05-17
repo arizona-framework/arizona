@@ -37,7 +37,7 @@ disk and replies with the file body and an inferred content type.
 Replies with `404` if the file is missing.
 """.
 -spec handle(Req) -> {Response, Req} when
-    Req :: roadrunner_http1:request(),
+    Req :: roadrunner_req:request(),
     Response :: roadrunner_handler:response().
 handle(Req) ->
     #{arizona := #{dir := Dir}} = roadrunner_req:state(Req),

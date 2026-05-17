@@ -32,7 +32,7 @@ Roadrunner `handle/1` callback. Opens a streaming SSE response and
 joins the reloader pubsub topic.
 """.
 -spec handle(Req) -> {Response, Req} when
-    Req :: roadrunner_http1:request(),
+    Req :: roadrunner_req:request(),
     Response :: roadrunner_handler:response().
 handle(Req) ->
     %% per-route state is wrapped under `arizona` so roadrunner's
