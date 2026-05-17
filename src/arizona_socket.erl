@@ -43,6 +43,7 @@ the fresh handshake re-runs `init/4` with a new live process.
 -export([init/4]).
 -export([handle_in/2]).
 -export([handle_info/2]).
+-export([live_pid/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -174,6 +175,13 @@ handle_in(JSON, #socket{pid = Pid} = Socket) ->
         _ ->
             {ok, Socket}
     end.
+
+-doc """
+Returns the live process pid backing this socket, or `undefined` if
+the socket was constructed without one (test fixtures).
+""".
+-spec live_pid(socket()) -> pid() | undefined.
+live_pid(#socket{pid = Pid}) -> Pid.
 
 -doc """
 Handles inbox messages forwarded by the transport.
