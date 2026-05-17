@@ -529,9 +529,14 @@ handle_drain_info(Deadline, #state{handler = H, bindings = B0, transport_pid = T
         {stop, B1, Effects} ->
             %% Push effects (e.g. a "reconnecting" client indicator) before
             %% exiting so the WS session forwards them before it observes
-            %% the {'EXIT', _, normal} that closes the socket.
+            %% the {'EXIT', _, {shutdown, drain}} that closes the socket.
+            %% The `{shutdown, drain}` reason routes through
+            %% `arizona_socket`'s 1001 close path so the JS client
+            %% auto-reconnects (vs `normal` which closes 1000 and stays
+            %% disconnected). `terminate/2` still runs `unmount/1` as for
+            %% any other graceful exit.
             push(TPid, [], Effects),
-            {stop, normal, State#state{bindings = B1}};
+            {stop, {shutdown, drain}, State#state{bindings = B1}};
         {B1, Resets, Effects} ->
             {Ops1, Snap1, V1, B3, Fps1, NewState} = process_root_change(H, B1, Resets, State),
             push(TPid, Ops1, Effects),

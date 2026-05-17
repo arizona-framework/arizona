@@ -829,13 +829,13 @@ drain_default_check(Config) ->
     ok = ws_send(Sock, <<"0">>),
     {text, <<"1">>} = ws_recv(Sock),
     send_drain_to_session(),
-    expect_ws_close(Sock, 1000),
+    expect_ws_close(Sock, 1001),
     ok = gen_tcp:close(Sock).
 
 drain_user_callback_pushes_effect_then_stops(Config) ->
     %% arizona_drainable with drain_mode => stop returns
     %% {stop, B, [dispatch_event("draining")]}; the effect frame must arrive
-    %% before the close 1000.
+    %% before the going-away close (1001).
     case ?config(adapter, Config) of
         roadrunner -> drain_stop_check(Config);
         cowboy -> {skip, "roadrunner-specific drain"}
@@ -848,7 +848,7 @@ drain_stop_check(Config) ->
     send_drain_to_session(),
     {text, Resp} = ws_recv(Sock),
     ?assertMatch(#{~"e" := _}, json:decode(Resp)),
-    expect_ws_close(Sock, 1000),
+    expect_ws_close(Sock, 1001),
     ok = gen_tcp:close(Sock).
 
 drain_user_callback_keeps_alive(Config) ->
@@ -959,8 +959,8 @@ drain_then_navigate_check(Config) ->
     %% drain_stop pushes a `dispatch_event("draining", #{})` effect before
     %% exiting; consume it (or accept that it bundled with the close).
     case ws_recv(Sock, 2000) of
-        {text, _} -> expect_ws_close(Sock, 1000);
-        {close, 1000, _} -> ok;
+        {text, _} -> expect_ws_close(Sock, 1001);
+        {close, 1001, _} -> ok;
         {error, closed} -> ok
     end,
     ok = gen_tcp:close(Sock).

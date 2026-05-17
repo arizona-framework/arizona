@@ -22,12 +22,18 @@ Outbound text frames are JSON maps with keys `~"o"` (ops) and/or
 `~"e"` (effects). Both are arrays produced by `arizona_diff` and
 `arizona_js` respectively.
 
-## Crash handling
+## Exit handling
 
-The live process is linked. If it exits with a non-normal reason
-(or any handler in `handle_in/2` raises), the socket closes with
-code `4500` (server crash). The client reconnects on its own and
-the fresh handshake re-runs `init/4` with a new live process.
+The live process is linked. Exits map to WebSocket close codes:
+
+- `normal`, `shutdown`, `{shutdown, _other_}` -- graceful close
+  `1000`. Client does NOT auto-reconnect (treats it as a deliberate
+  end of session).
+- `{shutdown, drain}` -- graceful close `1001` ("going away"). Client
+  auto-reconnects via the form-state-preserving path; new live
+  process mounts against the new server version.
+- Anything else (including raises in `handle_in/2`) -- crash close
+  `4500`. Client triggers `location.reload()` for a fresh start.
 """.
 
 -include("arizona.hrl").
@@ -63,6 +69,7 @@ the fresh handshake re-runs `init/4` with a new live process.
 -define(EFFECTS, ~"e").
 -define(SYS_PING, ~"0").
 -define(SYS_PONG, ~"1").
+-define(CLOSE_GOING_AWAY, 1001).
 -define(CLOSE_CRASH, 4500).
 
 %% --------------------------------------------------------------------
@@ -187,20 +194,36 @@ live_pid(#socket{pid = Pid}) -> Pid.
 Handles inbox messages forwarded by the transport.
 
 Routes `{arizona_push, Ops, Effects}` from the live process into a
-reply frame. Handles `'EXIT'` from the linked live process by
-closing the socket: cleanly on normal exit, with `?CLOSE_CRASH`
-otherwise. The client reconnects on its own.
+reply frame. Handles `'EXIT'` from the linked live process per the
+mapping in this module's "Exit handling" section.
 """.
 -spec handle_info(Info, Socket) -> result() when
     Info :: term(),
     Socket :: socket().
 handle_info({arizona_push, Ops, Effects}, #socket{view_id = ViewId} = Socket) ->
     encode_reply(flatten_ops(ViewId, Ops), Effects, Socket);
-handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid} = Socket) when Reason =/= normal ->
-    logger:error("Live process ~p crashed: ~p", [Pid, Reason]),
-    close_crash(Socket);
+handle_info({'EXIT', Pid, {shutdown, drain}}, #socket{pid = Pid} = Socket) ->
+    %% Drain-initiated graceful exit. Close with 1001 (going away) so the
+    %% JS client's auto-reconnect path runs (Worker treats any non-1000
+    %% code as reconnectable; main thread preserves form state). Matches
+    %% RFC 6455 §7.4 semantics for "server going away".
+    {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
 handle_info({'EXIT', Pid, normal}, #socket{pid = Pid} = Socket) ->
     {close, 1000, <<>>, Socket};
+handle_info({'EXIT', Pid, shutdown}, #socket{pid = Pid} = Socket) ->
+    %% OTP graceful shutdown (atom form, e.g. supervisor-initiated).
+    %% Close 1000 — same as `normal`, no reconnect. User code that
+    %% wants reconnect on a custom shutdown should use the
+    %% `{shutdown, drain}` reason explicitly.
+    {close, 1000, <<>>, Socket};
+handle_info({'EXIT', Pid, {shutdown, _}}, #socket{pid = Pid} = Socket) ->
+    %% OTP graceful shutdown (tuple form, custom reason). Same
+    %% close-1000 semantics as `shutdown` atom; only `{shutdown, drain}`
+    %% (matched above) opts into the reconnect path.
+    {close, 1000, <<>>, Socket};
+handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid} = Socket) ->
+    logger:error("Live process ~p crashed: ~p", [Pid, Reason]),
+    close_crash(Socket);
 handle_info(_Info, Socket) ->
     {ok, Socket}.
 
@@ -245,10 +268,11 @@ handle_navigate(
                 %% Live process exited between the navigate frame arriving
                 %% and this gen_server:call landing — typical during a
                 %% drain where handle_drain returned `{stop, _, _}`.
-                %% Translate to a graceful close so the client reconnects
-                %% cleanly instead of seeing crash code 4500.
+                %% Translate to a going-away close so the client's
+                %% auto-reconnect path runs (1001 routes through the
+                %% reconnect-with-form-state flow, not the crash reload).
                 exit:{noproc, _} ->
-                    {close, 1000, ~"", Socket}
+                    {close, ?CLOSE_GOING_AWAY, ~"", Socket}
             end
     end.
 

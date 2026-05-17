@@ -35,10 +35,11 @@ and brings in the common macros.
 When the transport adapter receives a drain signal (e.g.
 `roadrunner_listener:notify_drain/2` during a rolling deploy, or
 `roadrunner_listener:drain/2` for a full listener shutdown), each
-live view's optional `handle_drain/2` runs. If a view doesn't export it,
-the framework defaults to exiting the live process cleanly so the
-WebSocket closes with code 1000 and the client reconnects to the
-new server version.
+live view's optional `handle_drain/2` runs. If a view doesn't export
+it, the framework defaults to exiting the live process with reason
+`{shutdown, drain}` so the WebSocket closes with code 1001 (going
+away). The JS client auto-reconnects (preserving any form state)
+and the new live process mounts against the new server version.
 
 To push a client-side indicator before closing:
 
@@ -81,10 +82,10 @@ Sequence on a deploy drain when both are implemented:
 2. Live process's `handle_drain/2` runs -- e.g. pushes a
    "reconnecting" indicator and returns `{stop, B, Effects}`.
 3. Push frame leaves the WS session toward the client.
-4. Live process exits normal; `terminate/2` calls `unmount/1` for
-   cleanup (unsub pubsub, release ETS, etc.).
-5. WS session observes the exit and sends close code 1000.
-6. Client reconnects to the new server version.
+4. Live process exits with reason `{shutdown, drain}`; `terminate/2`
+   calls `unmount/1` for cleanup (unsub pubsub, release ETS, etc.).
+5. WS session observes the exit and sends close code 1001.
+6. Client auto-reconnects to the new server version.
 
 Why `unmount/1` can't replace `handle_drain/2`: by the time
 `unmount/1` fires the process is exiting; messages sent from it
