@@ -33,6 +33,7 @@ User modules declare both behaviours via the headers:
 -export([call_handle_event/4]).
 -export([call_handle_info/3]).
 -export([call_handle_update/3]).
+-export([call_handle_drain/3]).
 -export([call_unmount/2]).
 -export([format_error/2]).
 
@@ -93,11 +94,47 @@ reconciliation hook.
     arizona_stateful:handle_update_ret().
 
 -doc """
+Reacts to a transport-level drain signal. Optional.
+
+Fires when the listener broadcasts a graceful-shutdown notice
+(typically during a deploy). The view can push a "reconnecting"
+indicator to the client, then return `{stop, ...}` to exit the live
+process cleanly so the WebSocket closes with code 1000 and the
+client reconnects to the new server version.
+
+`Deadline` is the millisecond timestamp by which the listener will
+stop waiting. Subtract `erlang:monotonic_time(millisecond)` to get
+the remaining grace window.
+
+Returns:
+- `ok` -- acknowledge but do nothing
+- `{stop, Bindings, Effects}` -- push `Effects`, then exit normal
+  (default when this callback is not exported, with empty effects)
+- `{Bindings, Resets, Effects}` -- push diff + effects, stay alive
+  (the view opts to keep serving past drain)
+
+Distinct from `unmount/1`: this runs **before** the exit decision and
+can push client effects reliably before the close frame. `unmount/1` runs
+**after**, during `terminate`, and is the right place for local
+cleanup. See the "Graceful drain" section in `arizona_view` for the
+full lifecycle ordering.
+""".
+-callback handle_drain(Deadline :: integer(), arizona_stateful:bindings()) ->
+    arizona_stateful:handle_drain_ret().
+
+-doc """
 Cleanup hook called when the instance is removed. Optional.
+
+Fires from `terminate/2` for any exit reason -- crash, normal,
+supervisor shutdown, or drain. Use for local cleanup that doesn't
+need to talk to the client (release ETS tables, unsubscribe pubsub
+topics, close ports, etc.). Messages sent from here race the WS
+close frame; for drain-time client coordination use `handle_drain/2`
+instead.
 """.
 -callback unmount(arizona_stateful:bindings()) -> term().
 
--optional_callbacks([handle_event/3, handle_info/2, handle_update/2, unmount/1]).
+-optional_callbacks([handle_event/3, handle_info/2, handle_update/2, handle_drain/2, unmount/1]).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -249,6 +286,44 @@ call_handle_update(H, Props, Bindings) ->
     end.
 
 -doc """
+Invokes the optional `handle_drain/2` callback.
+
+Defaults to `{stop, Bindings, []}` when the callback is not exported
+-- the framework's safe-default response to a transport drain is to
+exit the live process cleanly so the WebSocket closes with code 1000
+and the client reconnects to the new server version. Re-tags a
+no-matching-clause crash at the callback's head as `{unhandled_drain,
+H, Deadline, Bindings}`; errors raised from inside the callback body
+propagate untagged.
+""".
+-spec call_handle_drain(Handler, Deadline, Bindings) ->
+    arizona_stateful:handle_drain_ret()
+when
+    Handler :: module(),
+    Deadline :: integer(),
+    Bindings :: arizona_stateful:bindings().
+call_handle_drain(H, Deadline, Bindings) ->
+    case erlang:function_exported(H, handle_drain, 2) of
+        true ->
+            try
+                H:handle_drain(Deadline, Bindings)
+            catch
+                error:function_clause:ST ->
+                    arizona_error:raise_or_propagate(
+                        function_clause,
+                        ST,
+                        H,
+                        handle_drain,
+                        {unhandled_drain, H, Deadline, Bindings},
+                        [H, Deadline, Bindings],
+                        ?MODULE
+                    )
+            end;
+        false ->
+            {stop, Bindings, []}
+    end.
+
+-doc """
 Invokes the optional `unmount/1` callback on a handler module.
 
 No-op if the callback is not exported. Re-tags a no-matching-clause
@@ -333,6 +408,14 @@ format_error({unhandled_unmount, Mod, Bindings}, _ST) ->
             "while unmounting view ~0tp: no clause in ~s:unmount/1 "
             "matches.",
             [view_id(Bindings), Mod]
+        )
+    };
+format_error({unhandled_drain, Mod, Deadline, Bindings}, _ST) ->
+    #{
+        general => io_lib:format(
+            "while handling drain (deadline=~0tp) on view ~0tp: no clause "
+            "in ~s:handle_drain/2 matches.",
+            [Deadline, view_id(Bindings), Mod]
         )
     };
 format_error({render_no_clause, Mod, Bindings}, _ST) ->
