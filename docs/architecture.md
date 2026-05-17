@@ -2,38 +2,45 @@
 
 ## Source modules
 
-| Module                            | Purpose                                                                                                                                                                   |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/arizona.hrl`                 | Shared header -- op codes, `?EACH` constant, `#stream{}` record                                                                                                           |
-| `src/arizona_template.erl`        | Pure helpers -- binding access (`get/2,3`), dep tracking (`track/1`), descriptor constructors (`stateful/2`, `stateless/2,3`), `each/2`, `to_bin/1`, snapshot utilities   |
-| `src/arizona_eval.erl`            | Template evaluation -- dynamics to snapshots, stateful/stateless child eval, stream/each eval                                                                             |
-| `src/arizona_render.erl`          | HTML output -- `render/1,2`, SSR (`render_to_iolist/1,2`, `render_view_to_iolist/3`), `zip/2`, `fingerprint_payload/1`                                                    |
-| `src/arizona_diff.erl`            | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                           |
-| `src/arizona_cowboy_router.erl`   | Cowboy route compilation -- `compile_routes/1`                                                                                                                            |
-| `src/arizona_js.erl`              | Unified client commands and server effects -- `push_event/1,2`, `toggle/1`, `show/1`, `hide/1`, `dispatch_event/2`, `set_title/1`, `reload/0`, etc.                       |
-| `src/arizona_stream.erl`          | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`                                                |
-| `src/arizona_stateful.erl`        | Behaviour for embedded components -- `mount/1` callback + `call_mount/2` dispatcher; shared callbacks come from `arizona_handler`                                         |
-| `src/arizona_view.erl`            | Behaviour for route-level pages -- `mount/2` callback taking `(Bindings, Request)` + `call_mount/3` dispatcher; shared callbacks come from `arizona_handler`              |
-| `src/arizona_handler.erl`         | Shared behaviour hosting callbacks common to views and stateful components (`render/1`, `handle_event/3`, `handle_info/2`, `handle_update/2`, `unmount/1`) + dispatchers  |
-| `src/arizona_req.erl`             | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`, `apply_middlewares/3`, `redirect`/`halted_redirect`                         |
-| `src/arizona_http.erl`            | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|redirect\|ok\|error, ...}` tuples                               |
-| `src/arizona_ws.erl`              | Transport-agnostic WS upgrade bootstrap -- `prepare/3` parses framework keys, resolves the route, runs middlewares, returns state for `arizona_socket`                    |
-| `src/arizona_live.erl`            | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                              |
-| `src/arizona_parse_transform.erl` | Compile-time transform -- `?html`, `?each` (1-arg or 2-arg) DSL to `#{s, d, f}` maps, `az-view` auto-injection, directive extraction (`az-nodiff`), attribute compilation |
-| `src/arizona_socket.erl`          | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff    |
-| `src/arizona_cowboy_http.erl`     | Cowboy HTTP handler -- thin wrapper: delegates the pipeline to `arizona_http:render/3` and translates its result into Cowboy's reply shape                                |
-| `src/arizona_cowboy_ws.erl`       | Cowboy WebSocket handler -- thin wrapper: delegates the upgrade to `arizona_ws:prepare/3`, forwards frames to `arizona_socket`                                            |
-| `src/arizona_cowboy_static.erl`   | Cowboy static file handler -- serves files from a directory with content-type detection                                                                                   |
-| `src/arizona_cowboy_server.erl`   | Cowboy listener boot -- compiles routes, stashes them in persistent terms, starts a clear/TLS listener                                                                    |
-| `src/arizona_cowboy_req.erl`      | Cowboy `arizona_req` adapter -- parsing callbacks plus optional `resolve_route/3` for SPA navigate                                                                        |
-| `src/arizona_cowboy_reload.erl`   | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                     |
-| `src/arizona_error_page.erl`      | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                  |
-| `src/arizona_app.erl`             | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches a Cowboy listener via `arizona_cowboy_server:start/2`                            |
-| `src/arizona_watcher.erl`         | File watcher gen_server -- subscribes to `fs` events, debounces, calls callback, broadcasts via `arizona_pubsub`                                                          |
-| `src/arizona_reloader.erl`        | Dev-mode hot reloader -- recompiles changed `.erl` files, broadcasts reload messages on the `arizona_reloader` pubsub topic                                               |
-| `src/arizona_pubsub.erl`          | PubSub -- thin `pg` wrapper for cross-view communication                                                                                                                  |
-| `src/arizona_sup.erl`             | Supervisor -- always starts `arizona_pubsub`; additionally starts one `arizona_watcher` per configured reloader rule                                                      |
-| `src/az.erl`                      | User-facing facade -- shared type aliases and short-form helpers re-exported from internal modules                                                                        |
+| Module                              | Purpose                                                                                                                                                                   |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/arizona.hrl`                   | Shared header -- op codes, `?EACH` constant, `#stream{}` record                                                                                                           |
+| `src/arizona_template.erl`          | Pure helpers -- binding access (`get/2,3`), dep tracking (`track/1`), descriptor constructors (`stateful/2`, `stateless/2,3`), `each/2`, `to_bin/1`, snapshot utilities   |
+| `src/arizona_eval.erl`              | Template evaluation -- dynamics to snapshots, stateful/stateless child eval, stream/each eval                                                                             |
+| `src/arizona_render.erl`            | HTML output -- `render/1,2`, SSR (`render_to_iolist/1,2`, `render_view_to_iolist/3`), `zip/2`, `fingerprint_payload/1`                                                    |
+| `src/arizona_diff.erl`              | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                           |
+| `src/arizona_cowboy_router.erl`     | Cowboy route compilation -- `compile_routes/1`                                                                                                                            |
+| `src/arizona_roadrunner_router.erl` | Roadrunner route compilation -- `compile_routes/1,2`, `routes/1,2` (map-shape routes with state under `#{arizona => ...}` namespace)                                      |
+| `src/arizona_js.erl`                | Unified client commands and server effects -- `push_event/1,2`, `toggle/1`, `show/1`, `hide/1`, `dispatch_event/2`, `set_title/1`, `reload/0`, etc.                       |
+| `src/arizona_stream.erl`            | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`                                                |
+| `src/arizona_stateful.erl`          | Behaviour for embedded components -- `mount/1` callback + `call_mount/2` dispatcher; shared callbacks come from `arizona_handler`                                         |
+| `src/arizona_view.erl`              | Behaviour for route-level pages -- `mount/2` callback taking `(Bindings, Request)` + `call_mount/3` dispatcher; shared callbacks come from `arizona_handler`              |
+| `src/arizona_handler.erl`           | Shared behaviour hosting callbacks common to views and stateful components (`render/1`, `handle_event/3`, `handle_info/2`, `handle_update/2`, `unmount/1`) + dispatchers  |
+| `src/arizona_req.erl`               | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`, `apply_middlewares/3`, `redirect`/`halted_redirect`                         |
+| `src/arizona_http.erl`              | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|redirect\|ok\|error, ...}` tuples                               |
+| `src/arizona_ws.erl`                | Transport-agnostic WS upgrade bootstrap -- `prepare/3` parses framework keys, resolves the route, runs middlewares, returns state for `arizona_socket`                    |
+| `src/arizona_live.erl`              | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                              |
+| `src/arizona_parse_transform.erl`   | Compile-time transform -- `?html`, `?each` (1-arg or 2-arg) DSL to `#{s, d, f}` maps, `az-view` auto-injection, directive extraction (`az-nodiff`), attribute compilation |
+| `src/arizona_socket.erl`            | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff    |
+| `src/arizona_cowboy_http.erl`       | Cowboy HTTP handler -- thin wrapper: delegates the pipeline to `arizona_http:render/3` and translates its result into Cowboy's reply shape                                |
+| `src/arizona_cowboy_ws.erl`         | Cowboy WebSocket handler -- thin wrapper: delegates the upgrade to `arizona_ws:prepare/3`, forwards frames to `arizona_socket`                                            |
+| `src/arizona_cowboy_static.erl`     | Cowboy static file handler -- serves files from a directory with content-type detection                                                                                   |
+| `src/arizona_cowboy_server.erl`     | Cowboy listener boot -- compiles routes, stashes them in persistent terms, starts a clear/TLS listener                                                                    |
+| `src/arizona_cowboy_req.erl`        | Cowboy `arizona_req` adapter -- parsing callbacks plus optional `resolve_route/3` for SPA navigate                                                                        |
+| `src/arizona_cowboy_reload.erl`     | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                     |
+| `src/arizona_roadrunner_http.erl`   | Roadrunner HTTP handler -- mirrors `arizona_cowboy_http`; delegates to `arizona_http:render/3` and translates results into roadrunner's `{Response, Req}` reply shape     |
+| `src/arizona_roadrunner_ws.erl`     | Roadrunner WebSocket handler -- dual behaviour (`roadrunner_handler` for upgrade + `roadrunner_ws_handler` for session); delegates to `arizona_ws:prepare/3`              |
+| `src/arizona_roadrunner_static.erl` | Roadrunner static file handler -- returns `{sendfile, ...}` for zero-copy serving with `cache-control: immutable`                                                         |
+| `src/arizona_roadrunner_server.erl` | Roadrunner listener boot -- compiles routes, stashes them for hot reload, validates TLS opts, starts a clear/TLS listener                                                 |
+| `src/arizona_roadrunner_req.erl`    | Roadrunner `arizona_req` adapter -- parsing callbacks plus `resolve_route/3` for SPA navigate; populates `request_id` from roadrunner                                     |
+| `src/arizona_roadrunner_reload.erl` | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser (roadrunner equivalent of `arizona_cowboy_reload`)                                  |
+| `src/arizona_error_page.erl`        | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                  |
+| `src/arizona_app.erl`               | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches the configured listener (`adapter` opt picks roadrunner -- default -- or cowboy) |
+| `src/arizona_watcher.erl`           | File watcher gen_server -- subscribes to `fs` events, debounces, calls callback, broadcasts via `arizona_pubsub`                                                          |
+| `src/arizona_reloader.erl`          | Dev-mode hot reloader -- recompiles changed `.erl` files, broadcasts reload messages on the `arizona_reloader` pubsub topic                                               |
+| `src/arizona_pubsub.erl`            | PubSub -- thin `pg` wrapper for cross-view communication                                                                                                                  |
+| `src/arizona_sup.erl`               | Supervisor -- always starts `arizona_pubsub`; additionally starts one `arizona_watcher` per configured reloader rule                                                      |
+| `src/az.erl`                        | User-facing facade -- shared type aliases and short-form helpers re-exported from internal modules                                                                        |
 
 ## API -- `arizona_template.erl`
 
@@ -199,6 +206,27 @@ Cowboy route compilation.
 - `{asset, Path, {priv_dir, App, SubDir}}` -- static asset route from priv directory
 - `{asset, Path, {dir, Dir}}` -- static asset route from absolute directory
 - `{controller, Path, Handler, State}` -- generic Cowboy handler route
+
+## API -- `arizona_roadrunner_router.erl`
+
+Roadrunner route compilation. Same route types as the cowboy adapter plus a `{reload, ...}`
+entry for the dev-mode SSE endpoint, and a build-opts variant for hot-reload-safe rebuilds.
+
+- `compile_routes/1,2` -- build the map-shape roadrunner dispatch from route specs and store in
+  `persistent_term`; the `/2` form threads build-time opts (e.g. `compress => false`) for
+  replay across hot reloads
+- `routes/1,2` -- expand specs into roadrunner's map-shape route entries without compiling
+  (used by the listener boot path)
+
+**Route types** (same shapes as cowboy unless noted):
+
+- `{live, Path, Handler, Opts}` -- live route
+- `{ws, Path, Opts}` -- WebSocket endpoint
+- `{asset, Path, {priv_dir, App, SubDir}}` -- static asset from priv (served via zero-copy
+  sendfile by `arizona_roadrunner_static`)
+- `{asset, Path, {dir, Dir}}` -- static asset from absolute directory
+- `{controller, Path, Handler, State}` -- generic roadrunner handler route
+- `{reload, Path, Opts}` -- dev SSE reload endpoint (roadrunner-only convenience)
 
 ## API -- `arizona_stream.erl`
 
