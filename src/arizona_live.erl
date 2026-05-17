@@ -431,6 +431,10 @@ handle_info({arizona_view, ViewId, Msg}, #state{bindings = B0, views = V0} = Sta
                     )
             end
     end;
+handle_info({arizona_drain, Deadline}, #state{snapshot = Snap} = State) when
+    Snap =/= undefined
+->
+    handle_drain_info(Deadline, State);
 handle_info(Info, State) ->
     handle_root_info(Info, State).
 
@@ -516,6 +520,24 @@ handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State)
             {Ops1, V1, Fps1} = process_child_change(H, B1, Resets, ViewId, View, State),
             push(TPid, Ops1, Effects),
             {noreply, State#state{views = V1, sent_fps = Fps1}}
+    end.
+
+handle_drain_info(Deadline, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
+    case arizona_handler:call_handle_drain(H, Deadline, B0) of
+        ok ->
+            {noreply, State};
+        {stop, B1, Effects} ->
+            %% Push effects (e.g. a "reconnecting" client indicator) before
+            %% exiting so the WS session forwards them before it observes
+            %% the {'EXIT', _, normal} that closes the socket.
+            push(TPid, [], Effects),
+            {stop, normal, State#state{bindings = B1}};
+        {B1, Resets, Effects} ->
+            {Ops1, Snap1, V1, B3, Fps1, NewState} = process_root_change(H, B1, Resets, State),
+            push(TPid, Ops1, Effects),
+            {noreply, NewState#state{
+                bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
+            }}
     end.
 
 %% Render the new template, diff against the root snapshot, dedup fingerprints,
