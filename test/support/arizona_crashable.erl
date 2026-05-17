@@ -15,7 +15,7 @@ mount(Bindings, Req) ->
                     id => ~"crashable",
                     status => maps:get(status, Bindings, ~"ok"),
                     <<"locale">> => maps:get(<<"locale">>, Bindings, Locale),
-                    item_id => maps:get(item_id, Bindings, ~"none")
+                    <<"item_id">> => maps:get(<<"item_id">>, Bindings, ~"none")
                 },
                 #{}
             }
