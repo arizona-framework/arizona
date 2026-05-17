@@ -237,11 +237,19 @@ handle_navigate(
         {halt, HaltReq} ->
             halt_navigate(HaltReq, Socket);
         {cont, NewReq1, Bindings1} ->
-            {ok, NewVId, PageHTML} = arizona_live:navigate(
-                Pid, H, Bindings1, NewReq1, OnMount
-            ),
-            Ops = replace_ops(OldVId, PageHTML),
-            encode_reply(Ops, [], Socket#socket{view_id = NewVId})
+            try arizona_live:navigate(Pid, H, Bindings1, NewReq1, OnMount) of
+                {ok, NewVId, PageHTML} ->
+                    Ops = replace_ops(OldVId, PageHTML),
+                    encode_reply(Ops, [], Socket#socket{view_id = NewVId})
+            catch
+                %% Live process exited between the navigate frame arriving
+                %% and this gen_server:call landing — typical during a
+                %% drain where handle_drain returned `{stop, _, _}`.
+                %% Translate to a graceful close so the client reconnects
+                %% cleanly instead of seeing crash code 4500.
+                exit:{noproc, _} ->
+                    {close, 1000, ~"", Socket}
+            end
     end.
 
 %% Middleware halt during WS navigate -- there is no HTTP response channel

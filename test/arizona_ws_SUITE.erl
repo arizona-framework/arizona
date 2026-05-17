@@ -33,6 +33,7 @@
     drain_user_callback_keeps_alive/1,
     drain_user_callback_noop_keeps_alive/1,
     drain_emits_telemetry/1,
+    drain_then_navigate_closes_gracefully/1,
     static_asset_served/1,
     static_asset_body_matches_file/1,
     static_asset_missing_returns_404/1,
@@ -84,6 +85,7 @@ groups() ->
         drain_user_callback_keeps_alive,
         drain_user_callback_noop_keeps_alive,
         drain_emits_telemetry,
+        drain_then_navigate_closes_gracefully,
         static_asset_served,
         static_asset_body_matches_file,
         static_asset_missing_returns_404,
@@ -930,6 +932,38 @@ drain_telemetry_check(Config) ->
         telemetry:detach(HandlerId)
     end,
     ws_close(Sock).
+
+drain_then_navigate_closes_gracefully(Config) ->
+    %% Race coverage: drain causes live exit; if a navigate frame is
+    %% processed by the WS session BEFORE the {'EXIT', _, normal} signal
+    %% lands, arizona_socket:handle_navigate would do gen_server:call to
+    %% the dead live pid. The try/catch in handle_navigate translates the
+    %% resulting exit({noproc, _}) into a graceful close (1000) instead
+    %% of letting it propagate to a crash close (4500).
+    %%
+    %% Race outcome is non-deterministic (the local drain message usually
+    %% beats the TCP-delivered navigate frame), so this test asserts only
+    %% the OUTCOME — graceful close — not which code path produced it.
+    %% Without the catch, the navigate-wins path fails with close 4500.
+    case ?config(adapter, Config) of
+        roadrunner -> drain_then_navigate_check(Config);
+        cowboy -> {skip, "roadrunner-specific drain"}
+    end.
+
+drain_then_navigate_check(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/drain_stop">>),
+    ok = ws_send(Sock, <<"0">>),
+    {text, <<"1">>} = ws_recv(Sock),
+    send_drain_to_session(),
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/", ~"qs" => ~""}]),
+    %% drain_stop pushes a `dispatch_event("draining", #{})` effect before
+    %% exiting; consume it (or accept that it bundled with the close).
+    case ws_recv(Sock, 2000) of
+        {text, _} -> expect_ws_close(Sock, 1000);
+        {close, 1000, _} -> ok;
+        {error, closed} -> ok
+    end,
+    ok = gen_tcp:close(Sock).
 
 %% Drive a drain broadcast through the listener's pg group without
 %% stopping the listener — every WS session auto-joins at upgrade.
