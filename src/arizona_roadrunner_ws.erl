@@ -20,6 +20,11 @@ transport-agnostic `arizona_socket` API:
 - `handle_info/2` -- forwards mailbox messages (typically
   `{arizona_push, ...}` from the live process) to
   `arizona_socket:handle_info/2`.
+- `handle_drain/2` -- fires when the listener broadcasts a drain
+  signal (`roadrunner_listener:drain/2` or `notify_drain/2`). Emits
+  the telemetry ack and notifies the live process via
+  `{arizona_drain, Deadline}` so the view can wind down gracefully
+  (close the WS, push a reconnect indicator, etc.).
 """.
 
 -behaviour(roadrunner_handler).
@@ -33,6 +38,7 @@ transport-agnostic `arizona_socket` API:
 -export([init/1]).
 -export([handle_frame/2]).
 -export([handle_info/2]).
+-export([handle_drain/2]).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -81,7 +87,8 @@ handle_frame(_Frame, State) ->
 
 -doc """
 Roadrunner `handle_info/2` callback. Forwards mailbox messages
-(typically `{arizona_push, Ops, Effects}`) to the socket.
+(typically `{arizona_push, Ops, Effects}` from the live process) to
+`arizona_socket:handle_info/2`.
 """.
 -spec handle_info(Msg, State) -> Result when
     Msg :: term(),
@@ -89,6 +96,29 @@ Roadrunner `handle_info/2` callback. Forwards mailbox messages
     Result :: roadrunner_ws_handler:result().
 handle_info(Msg, #{socket := Sock} = State) ->
     to_roadrunner(arizona_socket:handle_info(Msg, Sock), State).
+
+-doc """
+Roadrunner `handle_drain/2` callback. Emits the telemetry ack and
+forwards an adapter-agnostic `{arizona_drain, Deadline}` to the live
+process so the view's optional `handle_drain/2` callback can run and
+choose to push a "reconnecting" indicator, close the WS, or stay
+alive past drain.
+""".
+-spec handle_drain(Deadline, State) -> Result when
+    Deadline :: integer(),
+    State :: map(),
+    Result :: roadrunner_ws_handler:result().
+handle_drain(Deadline, #{socket := Sock, req := Req} = State) ->
+    ok = roadrunner:acknowledge_drain(arizona_req:raw(Req), Deadline),
+    ok =
+        case arizona_socket:live_pid(Sock) of
+            undefined ->
+                ok;
+            Pid ->
+                Pid ! {arizona_drain, Deadline},
+                ok
+        end,
+    {ok, State}.
 
 %% --------------------------------------------------------------------
 %% Internal functions
