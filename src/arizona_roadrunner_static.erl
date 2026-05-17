@@ -40,7 +40,7 @@ Replies with `404` if the file is missing.
     Req :: roadrunner_http1:request(),
     Response :: roadrunner_handler:response().
 handle(Req) ->
-    #{arizona := #{dir := Dir}} = roadrunner_req:route_opts(Req),
+    #{arizona := #{dir := Dir}} = roadrunner_req:state(Req),
     PathSegments = path_segments(Req),
     FilePath = filename:join([Dir | PathSegments]),
     case file:read_file(FilePath) of

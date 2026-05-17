@@ -99,12 +99,12 @@ target, and matched bindings applied.
     RouteOpts :: arizona_live:route_opts(),
     ArzReq :: arizona_req:request().
 resolve_route(Path, Qs, Req) ->
+    %% Roadrunner exposes the matched route's user-attached state as
+    %% the 5th element of `match/2`'s return — that's where arizona
+    %% stashes its per-route metadata under the `arizona` namespace.
     Compiled = persistent_term:get(?DISPATCH_KEY),
-    {ok, _Handler, RawBindings, Opts} = roadrunner_router:match(Path, Compiled),
-    %% Arizona's per-route opts are namespaced under the `arizona` key
-    %% inside route_opts so roadrunner's pipeline does not interpret
-    %% arizona's middleware list as its own (incompatible signatures).
-    #{arizona := ArzOpts} = Opts,
+    {ok, _Handler, RawBindings, _Pipeline, #{arizona := ArzOpts}} =
+        roadrunner_router:match(Path, Compiled),
     Target =
         case Qs of
             <<>> -> Path;

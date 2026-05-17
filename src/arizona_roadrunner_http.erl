@@ -31,7 +31,7 @@ handler and replies with HTML.
     Req :: roadrunner_http1:request(),
     Response :: roadrunner_handler:response().
 handle(Req) ->
-    #{arizona := State} = roadrunner_req:route_opts(Req),
+    #{arizona := State} = roadrunner_req:state(Req),
     #{handler := H} = State,
     ArzReq = arizona_roadrunner_req:new(Req),
     case arizona_http:render(H, ArzReq, State) of

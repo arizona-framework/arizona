@@ -35,9 +35,10 @@ joins the reloader pubsub topic.
     Req :: roadrunner_http1:request(),
     Response :: roadrunner_handler:response().
 handle(Req) ->
-    %% route_opts are wrapped under `arizona` so roadrunner's pipeline
-    %% does not interpret arizona's opaque opts as its own middlewares.
-    _ = roadrunner_req:route_opts(Req),
+    %% per-route state is wrapped under `arizona` so roadrunner's
+    %% pipeline does not interpret arizona's opaque opts as its own
+    %% middlewares.
+    _ = roadrunner_req:state(Req),
     arizona_reloader:join(self()),
     Headers = [
         {~"content-type", ~"text/event-stream"},

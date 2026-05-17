@@ -70,7 +70,8 @@ compile(Config, Routes) ->
 %% Resolve a request path to `{Handler, Opts}` via the configured
 %% adapter's runtime lookup. For cowboy that's `cowboy_router:execute/2`;
 %% for roadrunner it's `roadrunner_router:match/2` against the persistent
-%% term key arizona_roadrunner_router writes.
+%% term key arizona writes — the per-route state (5th element)
+%% is what arizona stashes its metadata in.
 route_match(Config, Path) ->
     case ?config(adapter, Config) of
         cowboy ->
@@ -81,15 +82,17 @@ route_match(Config, Path) ->
             {maps:get(handler, Env), maps:get(handler_opts, Env)};
         roadrunner ->
             Compiled = persistent_term:get(arizona_roadrunner_dispatch),
-            {ok, Handler, _Bindings, Opts} = roadrunner_router:match(Path, Compiled),
-            %% arizona's per-route opts live under the `arizona` namespace
-            %% to keep route_opts opaque from roadrunner's pipeline. Unwrap
-            %% so the parameterized assertions can read handler/layouts/etc.
-            %% directly. asset/controller routes have no arizona wrap and
-            %% expose their opts at the top level.
-            case Opts of
+            {ok, Handler, _Bindings, _Pipeline, State} =
+                roadrunner_router:match(Path, Compiled),
+            %% arizona's per-route opts live under the `arizona`
+            %% namespace inside `state` to keep them opaque from
+            %% roadrunner's pipeline. Unwrap so the parameterized
+            %% assertions can read handler/layouts/etc. directly.
+            %% asset/controller routes have no arizona wrap and expose
+            %% their opts at the top level.
+            case State of
                 #{arizona := ArzOpts} -> {Handler, ArzOpts};
-                _ -> {Handler, Opts}
+                _ -> {Handler, State}
             end
     end.
 

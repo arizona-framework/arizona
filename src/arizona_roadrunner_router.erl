@@ -98,15 +98,16 @@ compile_routes(Routes, BuildOpts) when is_map(BuildOpts) ->
     RoadrunnerRoutes = lists:flatmap(
         fun(R) -> route_to_roadrunner(R, BuildOpts) end, Routes
     ),
-    Compiled = roadrunner_router:compile(RoadrunnerRoutes),
-    persistent_term:put(?DISPATCH_KEY, Compiled),
+    persistent_term:put(
+        ?DISPATCH_KEY,
+        roadrunner_router:compile(RoadrunnerRoutes, [])
+    ),
     ok.
 
 -doc """
-Translates a list of Arizona routes into roadrunner's
-`{Path, Handler, Opts}` 3-tuples without compiling. Used by the
-listener boot path so the live and recompile flows share the same
-expansion logic.
+Translates a list of Arizona routes into roadrunner's route entries
+(map shape) without compiling. Used by the listener boot path so the
+live and recompile flows share the same expansion logic.
 """.
 -spec routes(Routes) -> [roadrunner_router:route()] when
     Routes :: [route()].
@@ -124,53 +125,71 @@ routes(Routes, BuildOpts) when is_map(BuildOpts) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-%% Arizona route_opts are wrapped under the `arizona` key so roadrunner's
-%% own pipeline (which auto-runs anything keyed `middlewares` from
-%% `route_opts`) does not try to invoke arizona's middleware list with
-%% the wrong signature. Roadrunner-side per-route middlewares (e.g.
-%% `roadrunner_compress`) live at the top level under the `middlewares`
-%% key, where `roadrunner_conn:route_middlewares/1` reads them.
+%% Arizona's per-route data lives under the `arizona` key inside the
+%% route's `state` so roadrunner's pipeline does not interpret arizona's
+%% middleware list as its own (incompatible signatures). Roadrunner-side
+%% per-route middlewares (e.g. `roadrunner_compress`) sit at the
+%% top-level `middlewares` key of the map-shape route entry, where
+%% `roadrunner_router:compile/2` bakes them into the pipeline closure.
 route_to_roadrunner({live, Path, Handler, Opts}, BuildOpts) ->
     [
-        {Path, arizona_roadrunner_http,
-            with_compress(
-                #{
-                    arizona => #{
-                        handler => Handler,
-                        layouts => maps:get(layouts, Opts, []),
-                        bindings => maps:get(bindings, Opts, #{}),
-                        on_mount => maps:get(on_mount, Opts, []),
-                        middlewares => maps:get(middlewares, Opts, [])
-                    }
-                },
-                BuildOpts
-            )}
+        with_compress(
+            #{
+                path => Path,
+                handler => arizona_roadrunner_http,
+                state => #{arizona => build_live_meta(Handler, Opts)}
+            },
+            BuildOpts
+        )
     ];
 route_to_roadrunner({ws, Path, Opts}, _BuildOpts) ->
-    [{Path, arizona_roadrunner_ws, #{arizona => Opts}}];
+    [
+        #{
+            path => Path,
+            handler => arizona_roadrunner_ws,
+            state => #{arizona => Opts}
+        }
+    ];
 route_to_roadrunner({asset, Path, {dir, Dir}}, BuildOpts) ->
     asset_route(Path, Dir, BuildOpts);
 route_to_roadrunner({asset, Path, {priv_dir, App, SubDir}}, BuildOpts) ->
     asset_route(Path, filename:join(code:priv_dir(App), SubDir), BuildOpts);
 route_to_roadrunner({controller, Path, Handler, State}, _BuildOpts) ->
-    [{Path, Handler, State}];
+    [#{path => Path, handler => Handler, state => State}];
 route_to_roadrunner({reload, Path, Opts}, _BuildOpts) ->
     persistent_term:put(arizona_reload_url, Path),
-    [{Path, arizona_roadrunner_reload, #{arizona => Opts}}].
-
-asset_route(Path, Dir, BuildOpts) ->
     [
-        {
-            <<Path/binary, "/*path">>,
-            arizona_roadrunner_static,
-            with_compress(#{arizona => #{dir => Dir}}, BuildOpts)
+        #{
+            path => Path,
+            handler => arizona_roadrunner_reload,
+            state => #{arizona => Opts}
         }
     ].
 
-%% Attach roadrunner_compress as a per-route middleware when the build-time
-%% `compress` flag is on. Reads at request time via
-%% `roadrunner_conn:route_middlewares/1`.
-with_compress(RouteOpts, #{compress := false}) ->
-    RouteOpts;
-with_compress(RouteOpts, _BuildOpts) ->
-    RouteOpts#{middlewares => [roadrunner_compress]}.
+asset_route(Path, Dir, BuildOpts) ->
+    [
+        with_compress(
+            #{
+                path => <<Path/binary, "/*path">>,
+                handler => arizona_roadrunner_static,
+                state => #{arizona => #{dir => Dir}}
+            },
+            BuildOpts
+        )
+    ].
+
+build_live_meta(Handler, Opts) ->
+    #{
+        handler => Handler,
+        layouts => maps:get(layouts, Opts, []),
+        bindings => maps:get(bindings, Opts, #{}),
+        on_mount => maps:get(on_mount, Opts, []),
+        middlewares => maps:get(middlewares, Opts, [])
+    }.
+
+%% Attach roadrunner_compress as a per-route middleware on the
+%% map-shape route entry when the build-time `compress` flag is on.
+with_compress(Route, #{compress := false}) ->
+    Route;
+with_compress(Route, _BuildOpts) ->
+    Route#{middlewares => [roadrunner_compress]}.
