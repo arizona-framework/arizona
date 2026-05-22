@@ -17,6 +17,8 @@ identical to the previous inlined emission.
 -export([element_close/1]).
 -export([attr/2]).
 -export([attr_boolean/1]).
+-export([children_sep/0]).
+-export([text_child/1]).
 -export([text_slot_open/1]).
 -export([text_slot_close/0]).
 -export([is_void/1]).
@@ -53,6 +55,14 @@ attr(Name, Value) ->
 -spec attr_boolean(binary()) -> binary().
 attr_boolean(Name) ->
     <<" ", Name/binary>>.
+
+-spec children_sep() -> binary().
+children_sep() ->
+    <<>>.
+
+-spec text_child(binary()) -> binary().
+text_child(Text) ->
+    Text.
 
 -spec text_slot_open(binary()) -> binary().
 text_slot_open(Az) ->

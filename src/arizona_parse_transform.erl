@@ -232,6 +232,10 @@ transform_node(Node, Module) ->
             Mod =:= arizona_template; Mod =:= az
         ->
             compile_template(Arg, L, Module);
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, [Arg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            compile_template(Arg, L, Module, false, arizona_native);
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}}, [FunArg, SourceArg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
@@ -265,6 +269,12 @@ transform_live_render_last(Expr, Module) ->
             validate_live_root(Arg, L),
             Arg1 = transform_expr(Arg, Module),
             compile_template(Arg1, L, Module, true);
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, [Arg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            validate_live_root(Arg, L),
+            Arg1 = transform_expr(Arg, Module),
+            compile_template(Arg1, L, Module, true, arizona_native);
         {'case', L, CaseExpr, Clauses} ->
             {'case', L, transform_expr(CaseExpr, Module), [
                 transform_live_render_branch(C, Module)
@@ -354,8 +364,11 @@ compile_template(Arg, Line, Module) ->
     compile_template(Arg, Line, Module, false).
 
 compile_template(Arg, Line, Module, LiveRender) ->
-    {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(Arg, Module, LiveRender),
-    {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
+    compile_template(Arg, Line, Module, LiveRender, arizona_html).
+
+compile_template(Arg, Line, Module, LiveRender, Backend) ->
+    {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(Arg, Module, LiveRender, Backend),
+    {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
     build_template_ast(Line, S1, D1, Fingerprint, Opts).
 
 compile_each(FunAST, SourceAST, Line, Module) ->
@@ -363,14 +376,14 @@ compile_each(FunAST, SourceAST, Line, Module) ->
         {'fun', _, {clauses, [{clause, _, [ItemVar, KeyVar], Guards, Body}]}} ->
             {Prefix, LastExpr} = split_fun_body(Body),
             {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(LastExpr, Module),
-            {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
+            {S1, D1} = scope_az(arizona_html, Fingerprint, Statics, DynASTs),
             build_each_ast(
                 Line, SourceAST, [ItemVar, KeyVar], Guards, Prefix, S1, D1, Fingerprint, Opts
             );
         {'fun', _, {clauses, [{clause, _, [ItemVar], Guards, Body}]}} ->
             {Prefix, LastExpr} = split_fun_body(Body),
             {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(LastExpr, Module),
-            {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
+            {S1, D1} = scope_az(arizona_html, Fingerprint, Statics, DynASTs),
             build_each_ast(
                 Line, SourceAST, [ItemVar], Guards, Prefix, S1, D1, Fingerprint, Opts
             );
@@ -406,7 +419,10 @@ compile_body_parts(ExprAST, Module) ->
     compile_body_parts(ExprAST, Module, false).
 
 compile_body_parts(ExprAST, Module, LiveRender) ->
-    compile_classified_body(classify_body(ExprAST), ExprAST, Module, LiveRender).
+    compile_body_parts(ExprAST, Module, LiveRender, arizona_html).
+
+compile_body_parts(ExprAST, Module, LiveRender, Backend) ->
+    compile_classified_body(classify_body(ExprAST), ExprAST, Module, LiveRender, Backend).
 
 classify_body(AST) ->
     case is_static_binary(AST) of
@@ -432,28 +448,29 @@ classify_other_body(AST) ->
         false -> text_dynamic
     end.
 
-compile_classified_body(static_binary, ExprAST, _Module, _LiveRender) ->
+compile_classified_body(static_binary, ExprAST, _Module, _LiveRender, _Backend) ->
     Bin = extract_binary_value(ExprAST),
     Statics = [Bin],
     {Statics, [], generate_fingerprint(Statics), #{}};
-compile_classified_body(element_tuple, ExprAST, Module, LiveRender) ->
-    compile_fragment_parts([ExprAST], Module, LiveRender);
-compile_classified_body(element_list, ExprAST, Module, LiveRender) ->
-    compile_fragment_parts(ast_list_to_list(ExprAST), Module, LiveRender);
-compile_classified_body(list_ast, ExprAST, Module, _LiveRender) ->
-    compile_mixed_items(ast_list_to_list(ExprAST), Module);
-compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender) ->
+compile_classified_body(element_tuple, ExprAST, Module, LiveRender, Backend) ->
+    compile_fragment_parts([ExprAST], Module, LiveRender, Backend);
+compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend) ->
+    compile_fragment_parts(ast_list_to_list(ExprAST), Module, LiveRender, Backend);
+compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend) ->
+    compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend);
+compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, _Backend) ->
     Statics = [<<>>, <<>>],
     DynASTs = [make_text_dynamic_ast(<<"0">>, ExprAST, Module, line(ExprAST))],
     {Statics, DynASTs, generate_fingerprint(Statics), #{}}.
 
-compile_fragment_parts(ElementASTs, Module, LiveRender) ->
+compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->
     Opts = prescan_directives(ElementASTs),
     State0 = #state{
         module = Module,
         nodiff = maps:is_key(diff, Opts),
         live_render = LiveRender,
-        root = LiveRender
+        root = LiveRender,
+        backend = Backend
     },
     State1 = lists:foldl(
         fun(Elem, State) ->
@@ -468,9 +485,9 @@ compile_fragment_parts(ElementASTs, Module, LiveRender) ->
     Fingerprint = generate_fingerprint(Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
 
-compile_mixed_items(Items, Module) ->
+compile_mixed_items(Items, Module, Backend) ->
     Opts = prescan_directives(Items),
-    State0 = #state{module = Module, nodiff = maps:is_key(diff, Opts)},
+    State0 = #state{module = Module, nodiff = maps:is_key(diff, Opts), backend = Backend},
     State1 = lists:foldl(
         fun(Item, State) -> compile_mixed_item(Item, Module, State) end, State0, Items
     ),
@@ -480,7 +497,7 @@ compile_mixed_items(Items, Module) ->
 
 compile_mixed_item(Item, Module, State) ->
     case is_static_binary(Item) of
-        true -> buf_append(State, extract_binary_value(Item));
+        true -> buf_append(State, (State#state.backend):text_child(extract_binary_value(Item)));
         false -> compile_mixed_non_static(Item, Module, State)
     end.
 
@@ -611,18 +628,27 @@ compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     parse_error(invalid_attribute, AttrLine).
 
 compile_children(Children, ElemAz, State) ->
-    compile_children(Children, ElemAz, State, 0).
+    compile_children(Children, ElemAz, State, 0, 0).
 
-compile_children([], _ElemAz, State, _Slot) ->
+compile_children([], _ElemAz, State, _Slot, _Index) ->
     State;
-compile_children([Child | Rest], ElemAz, State0, Slot) ->
-    {State1, NextSlot} = compile_child(Child, ElemAz, State0, Slot),
-    compile_children(Rest, ElemAz, State1, NextSlot).
+compile_children([Child | Rest], ElemAz, State0, Slot, Index) ->
+    State1 = maybe_children_sep(State0, Index),
+    {State2, NextSlot} = compile_child(Child, ElemAz, State1, Slot),
+    compile_children(Rest, ElemAz, State2, NextSlot, Index + 1).
+
+%% Emit a separator before every child after the first. HTML uses an empty
+%% separator (no-op); native emits a comma between JSON array elements.
+maybe_children_sep(State, 0) ->
+    State;
+maybe_children_sep(State, _Index) ->
+    buf_append(State, (State#state.backend):children_sep()).
 
 compile_child(Child, ElemAz, State0, Slot) ->
     case is_static_binary(Child) of
         true ->
-            {buf_append(State0, extract_binary_value(Child)), Slot};
+            Bin = (State0#state.backend):text_child(extract_binary_value(Child)),
+            {buf_append(State0, Bin), Slot};
         false ->
             compile_non_static_child(Child, ElemAz, State0, Slot)
     end.
@@ -721,10 +747,10 @@ finalize(State) ->
 
 %% Prefix az values with the template fingerprint to prevent collisions
 %% when stateless children are inlined in a parent template.
-scope_az(_Fp, Statics, []) ->
+scope_az(_Backend, _Fp, Statics, []) ->
     {Statics, []};
-scope_az(Fp, Statics, DynASTs) ->
-    {[arizona_html:scope_static(Fp, S) || S <- Statics], [
+scope_az(Backend, Fp, Statics, DynASTs) ->
+    {[Backend:scope_static(Fp, S) || S <- Statics], [
         scope_dynamic_ast(Fp, D)
      || D <- DynASTs
     ]}.

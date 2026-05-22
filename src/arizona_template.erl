@@ -41,6 +41,7 @@ render(Bindings) ->
 -export([get_lazy/3]).
 -export([track/1]).
 -export([html/1]).
+-export([native/1]).
 -export([stateful/2]).
 -export([stateless/2]).
 -export([stateless/3]).
@@ -207,6 +208,18 @@ this function runs, the parse transform was not applied -- include
 """.
 -spec html(term()) -> no_return().
 html(_Elems) ->
+    erlang:error(parse_transform_not_applied, [], [
+        {error_info, #{module => ?MODULE}}
+    ]).
+
+-doc """
+Compile-time stub for the native (JSON) render target. The parse transform
+replaces every `?native(...)` (and `arizona_template:native/1`) call with a
+precomputed `t:template/0` map whose statics are JSON fragments. If this
+function runs, the parse transform was not applied.
+""".
+-spec native(term()) -> no_return().
+native(_Elems) ->
     erlang:error(parse_transform_not_applied, [], [
         {error_info, #{module => ?MODULE}}
     ]).

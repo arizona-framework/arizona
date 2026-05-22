@@ -26,6 +26,11 @@ other formats while reusing the same walker, diff engine, and transport.
 -callback attr(Name :: binary(), Value :: binary()) -> binary().
 %% A valueless (boolean) attribute.
 -callback attr_boolean(Name :: binary()) -> binary().
+%% Separator emitted before each child after the first (HTML needs none; JSON
+%% needs a comma between array elements).
+-callback children_sep() -> binary().
+%% A static text child (raw text for HTML; a JSON string for native).
+-callback text_child(Text :: binary()) -> binary().
 %% Open marker for a dynamic text slot with the given `az`.
 -callback text_slot_open(Az :: binary()) -> binary().
 %% Close marker for a dynamic text slot.
