@@ -19,6 +19,7 @@ identical to the previous inlined emission.
 -export([attr_boolean/1]).
 -export([children_sep/0]).
 -export([text_child/1]).
+-export([text_az/2]).
 -export([text_slot_open/1]).
 -export([text_slot_close/0]).
 -export([is_void/1]).
@@ -63,6 +64,12 @@ children_sep() ->
 -spec text_child(binary()) -> binary().
 text_child(Text) ->
     Text.
+
+-spec text_az(binary(), non_neg_integer()) -> binary().
+text_az(ElemAz, 0) ->
+    ElemAz;
+text_az(ElemAz, Slot) ->
+    <<ElemAz/binary, ":", (integer_to_binary(Slot))/binary>>.
 
 -spec text_slot_open(binary()) -> binary().
 text_slot_open(Az) ->

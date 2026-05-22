@@ -30,6 +30,7 @@ form valid JSON.
 -export([attr_boolean/1]).
 -export([children_sep/0]).
 -export([text_child/1]).
+-export([text_az/2]).
 -export([text_slot_open/1]).
 -export([text_slot_close/0]).
 -export([is_void/1]).
@@ -74,6 +75,13 @@ children_sep() ->
 -spec text_child(binary()) -> binary().
 text_child(Text) ->
     json_str(Text).
+
+-spec text_az(binary(), non_neg_integer()) -> binary().
+text_az(ElemAz, Slot) ->
+    %% Distinct from the element's own `az` (which shares `ElemAz`): native
+    %% nodes live in one flat registry, so a text node cannot reuse its
+    %% parent's id the way an HTML comment marker can.
+    <<ElemAz/binary, "t", (integer_to_binary(Slot))/binary>>.
 
 -spec text_slot_open(binary()) -> binary().
 text_slot_open(Az) ->

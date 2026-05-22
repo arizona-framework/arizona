@@ -31,6 +31,11 @@ other formats while reusing the same walker, diff engine, and transport.
 -callback children_sep() -> binary().
 %% A static text child (raw text for HTML; a JSON string for native).
 -callback text_child(Text :: binary()) -> binary().
+%% The `az` for a dynamic text slot, given the element's `az` and the child
+%% slot index. HTML reuses the element `az` for slot 0 (the comment marker and
+%% the element attribute coexist); native needs a distinct `az` because every
+%% node shares one flat registry.
+-callback text_az(ElemAz :: binary(), Slot :: non_neg_integer()) -> binary().
 %% Open marker for a dynamic text slot with the given `az`.
 -callback text_slot_open(Az :: binary()) -> binary().
 %% Close marker for a dynamic text slot.

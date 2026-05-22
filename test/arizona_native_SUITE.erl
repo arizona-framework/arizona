@@ -101,14 +101,22 @@ dynamic_text_uses_text_node(Config) when is_list(Config) ->
         "    az:native({'Text', [], [az:get(name, Bindings, <<\"world\">>)]}). "
     ),
     T = Mod:render(#{name => ~"Alice"}),
-    [{_Az, Fun, {nt_dyn, _}}] = maps:get(d, T),
-    ?assertEqual(~"Alice", Fun()),
-    %% Splice the JSON-encoded dynamic value into the statics and confirm the
-    %% result is valid JSON shaped as a #text node inside Text's children.
-    Decoded = decode_zipped(T, Fun()),
-    #{~"type" := ~"Text", ~"children" := [Child]} = Decoded,
+    {_Html, Snap} = arizona_render:render(T),
+    %% The wire payload is the structured, cacheable fingerprint form -- the
+    %% same `#{f, s, d}` shape arizona_live's (format-agnostic) dedup strips
+    %% statics from once the client has the fingerprint. Statics are JSON
+    %% fragments; `d` carries the raw value for the client to encode.
+    Payload = arizona_render:fingerprint_payload(Snap),
+    ?assert(is_binary(maps:get(~"f", Payload))),
+    ?assert(is_list(maps:get(~"s", Payload))),
+    ?assertEqual([~"Alice"], maps:get(~"d", Payload)),
+    %% A simulated client interleave (JSON-encode each value, mirroring the
+    %% browser worker's zipTemplate) must yield valid JSON.
+    #{~"type" := ~"Text", ~"az" := ElemAz, ~"children" := [Child]} =
+        simulate_interleave(Payload),
     ?assertMatch(#{~"type" := ~"#text", ~"value" := ~"Alice"}, Child),
-    ?assert(maps:is_key(~"az", Child)).
+    %% The #text node must carry an `az` distinct from its parent element's.
+    ?assertNotEqual(ElemAz, maps:get(~"az", Child)).
 
 %% --------------------------------------------------------------------
 %% Helpers
@@ -118,11 +126,22 @@ dynamic_text_uses_text_node(Config) when is_list(Config) ->
 decode_static(#{s := [Static], d := []}) ->
     json:decode(Static).
 
-%% Zip a single-dynamic native template's statics with the JSON-encoded value,
-%% then decode -- mirrors what the runtime renderer produces.
-decode_zipped(#{s := [S1, S2], d := [_]}, Value) ->
-    Json = iolist_to_binary([S1, json:encode(Value), S2]),
-    json:decode(Json).
+%% Mirror the browser worker's interleave for a fingerprint payload: stitch the
+%% JSON-fragment statics back together with the JSON-encoded dynamic values,
+%% then decode. This documents the native client contract and validates that
+%% the server output forms valid JSON.
+simulate_interleave(#{~"s" := Statics, ~"d" := Dynamics}) ->
+    json:decode(iolist_to_binary(interleave(Statics, Dynamics))).
+
+interleave([S], []) ->
+    [S];
+interleave([S | Statics], [V | Dynamics]) ->
+    [S, encode_value(V) | interleave(Statics, Dynamics)].
+
+encode_value(V) when is_binary(V); is_number(V); is_boolean(V) ->
+    json:encode(V);
+encode_value(#{~"s" := _} = Nested) ->
+    iolist_to_binary(interleave(maps:get(~"s", Nested), maps:get(~"d", Nested))).
 
 compile_module(Source) ->
     {ok, Tokens, _} = erl_scan:string(Source),

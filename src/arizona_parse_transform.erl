@@ -676,16 +676,11 @@ emit_child_dynamic(Child, _ElemAz, #state{nodiff = true, module = Module} = Stat
     {flush(State0, DynAST), Slot};
 emit_child_dynamic(Child, ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
     ElemAzBin = integer_to_binary(ElemAz),
-    MarkerAz = marker_az(ElemAzBin, Slot),
+    MarkerAz = Backend:text_az(ElemAzBin, Slot),
     State1 = buf_append(State0, Backend:text_slot_open(MarkerAz)),
     DynAST = make_text_dynamic_ast(MarkerAz, Child, Module, line(Child)),
     State2 = flush(State1, DynAST),
     {State2#state{buf = Backend:text_slot_close()}, Slot + 1}.
-
-marker_az(ElemAzBin, 0) ->
-    ElemAzBin;
-marker_az(ElemAzBin, Slot) ->
-    <<ElemAzBin/binary, ":", (integer_to_binary(Slot))/binary>>.
 
 make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
     LocAST = loc_ast(Module, ExprLine),
