@@ -112,7 +112,8 @@ render(Bindings) ->
     nodiff = false :: boolean(),
     module = undefined :: module() | undefined,
     live_render = false :: boolean(),
-    root = false :: boolean()
+    root = false :: boolean(),
+    backend = arizona_html :: module()
 }).
 
 %% --------------------------------------------------------------------
@@ -516,6 +517,7 @@ extract_element(Node) ->
     parse_error(invalid_element, line(Node)).
 
 compile_element(Tag, Attrs0, Children, Line, State0) ->
+    Backend = State0#state.backend,
     Attrs = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
     State1 = State0#state{root = false},
     HasDyn = has_dynamic_attr(Attrs) orelse has_dynamic_child(Children),
@@ -524,28 +526,28 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
             true -> {State1#state.az, State1#state{az = State1#state.az + 1}};
             false -> {none, State1}
         end,
-    TagBin = atom_to_html_binary(Tag),
-    State3 = buf_append(State2, <<"<", TagBin/binary>>),
+    TagBin = Backend:name(Tag),
+    State3 = buf_append(State2, Backend:element_open(TagBin)),
     State4 =
         case ElemAz of
             none ->
                 State3;
             N ->
                 AzBin = integer_to_binary(N),
-                buf_append(State3, <<" az=\"", AzBin/binary, "\"">>)
+                buf_append(State3, Backend:az_attr(AzBin))
         end,
     State5 = compile_attrs(Attrs, ElemAz, State4, Line),
-    case is_void(Tag) andalso Children =/= [] of
+    case Backend:is_void(Tag) andalso Children =/= [] of
         true -> parse_error({void_with_children, Tag}, Line);
         false -> ok
     end,
-    case is_void(Tag) of
+    case Backend:is_void(Tag) of
         true ->
-            buf_append(State5, <<" />">>);
+            buf_append(State5, Backend:element_void_close());
         false ->
-            State6 = buf_append(State5, <<">">>),
+            State6 = buf_append(State5, Backend:element_open_end()),
             State7 = compile_children(Children, ElemAz, State6),
-            buf_append(State7, <<"</", TagBin/binary, ">">>)
+            buf_append(State7, Backend:element_close(TagBin))
     end.
 
 compile_attrs([], _ElemAz, State, _ElemLine) ->
@@ -556,7 +558,7 @@ compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
 
 compile_attr({bin, _, _} = Bin, _ElemAz, State0, _ElemLine) ->
     NameBin = extract_binary_value(Bin),
-    buf_append(State0, <<" ", NameBin/binary>>);
+    buf_append(State0, (State0#state.backend):attr_boolean(NameBin));
 compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
@@ -564,22 +566,22 @@ compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine
 compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
-    NameBin = extract_attr_name(NameAST),
-    buf_append(State0, <<" ", NameBin/binary>>);
+    Backend = State0#state.backend,
+    NameBin = extract_attr_name(Backend, NameAST),
+    buf_append(State0, Backend:attr_boolean(NameBin));
 compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
-    NameBin = extract_attr_name(NameAST),
+    Backend = State0#state.backend,
+    NameBin = extract_attr_name(Backend, NameAST),
     case is_static_binary(ValueAST) of
         true ->
             ValBin = extract_binary_value(ValueAST),
-            buf_append(State0, <<" ", NameBin/binary, "=\"", ValBin/binary, "\"">>);
+            buf_append(State0, Backend:attr(NameBin, ValBin));
         false ->
             case try_fold_arizona_js(ValueAST) of
                 {ok, FoldedBin} ->
-                    buf_append(
-                        State0, <<" ", NameBin/binary, "=\"", FoldedBin/binary, "\"">>
-                    );
+                    buf_append(State0, Backend:attr(NameBin, FoldedBin));
                 error when State0#state.nodiff ->
                     Module = State0#state.module,
                     DynAST = make_nodiff_attr_dynamic_ast(
@@ -596,8 +598,9 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, _ElemLine) when
             end
     end;
 compile_attr({atom, _, Name}, _ElemAz, State0, _ElemLine) ->
-    NameBin = atom_to_html_binary(Name),
-    buf_append(State0, <<" ", NameBin/binary>>);
+    Backend = State0#state.backend,
+    NameBin = Backend:name(Name),
+    buf_append(State0, Backend:attr_boolean(NameBin));
 compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     AttrLine =
         try
@@ -645,13 +648,13 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
 emit_child_dynamic(Child, _ElemAz, #state{nodiff = true, module = Module} = State0, Slot) ->
     DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child)),
     {flush(State0, DynAST), Slot};
-emit_child_dynamic(Child, ElemAz, #state{module = Module} = State0, Slot) ->
+emit_child_dynamic(Child, ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
     ElemAzBin = integer_to_binary(ElemAz),
     MarkerAz = marker_az(ElemAzBin, Slot),
-    State1 = buf_append(State0, <<"<!--az:", MarkerAz/binary, "-->">>),
+    State1 = buf_append(State0, Backend:text_slot_open(MarkerAz)),
     DynAST = make_text_dynamic_ast(MarkerAz, Child, Module, line(Child)),
     State2 = flush(State1, DynAST),
-    {State2#state{buf = <<"<!--/az-->">>}, Slot + 1}.
+    {State2#state{buf = Backend:text_slot_close()}, Slot + 1}.
 
 marker_az(ElemAzBin, 0) ->
     ElemAzBin;
@@ -721,11 +724,10 @@ finalize(State) ->
 scope_az(_Fp, Statics, []) ->
     {Statics, []};
 scope_az(Fp, Statics, DynASTs) ->
-    {[scope_static(Fp, S) || S <- Statics], [scope_dynamic_ast(Fp, D) || D <- DynASTs]}.
-
-scope_static(Fp, S0) ->
-    S1 = binary:replace(S0, <<" az=\"">>, <<" az=\"", Fp/binary, "-">>, [global]),
-    binary:replace(S1, <<"<!--az:">>, <<"<!--az:", Fp/binary, "-">>, [global]).
+    {[arizona_html:scope_static(Fp, S) || S <- Statics], [
+        scope_dynamic_ast(Fp, D)
+     || D <- DynASTs
+    ]}.
 
 scope_dynamic_ast(_Fp, {tuple, _, [{atom, _, undefined} | _]} = D) ->
     D;
@@ -790,8 +792,8 @@ normalize_children(AST) ->
         false -> [AST]
     end.
 
-extract_attr_name({atom, _, Name}) -> atom_to_html_binary(Name);
-extract_attr_name(BinAST) -> extract_binary_value(BinAST).
+extract_attr_name(Backend, {atom, _, Name}) -> Backend:name(Name);
+extract_attr_name(_Backend, BinAST) -> extract_binary_value(BinAST).
 
 extract_binary_value({bin, _, Elements}) ->
     iolist_to_binary([extract_bin_element(E) || E <- Elements]).
@@ -935,7 +937,7 @@ directive_opts(<<"az-nodiff">>) -> {ok, #{diff => false}};
 directive_opts(_) -> false.
 
 bare_attr_name({atom, _, Name}) ->
-    {ok, atom_to_html_binary(Name)};
+    {ok, arizona_html:name(Name)};
 bare_attr_name({bin, _, _} = Bin) ->
     case is_static_binary(Bin) of
         true -> {ok, extract_binary_value(Bin)};
@@ -966,22 +968,3 @@ extract_directives([Attr | Rest], Opts) ->
 
 opts_to_map_fields(Opts, Line) ->
     [{map_field_assoc, Line, {atom, Line, K}, {atom, Line, V}} || K := V <- Opts].
-
-atom_to_html_binary(Atom) ->
-    binary:replace(atom_to_binary(Atom), <<"_">>, <<"-">>, [global]).
-
-is_void(area) -> true;
-is_void(base) -> true;
-is_void(br) -> true;
-is_void(col) -> true;
-is_void(embed) -> true;
-is_void(hr) -> true;
-is_void(img) -> true;
-is_void(input) -> true;
-is_void(link) -> true;
-is_void(meta) -> true;
-is_void(param) -> true;
-is_void(source) -> true;
-is_void(track) -> true;
-is_void(wbr) -> true;
-is_void(_) -> false.
