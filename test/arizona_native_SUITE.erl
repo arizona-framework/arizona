@@ -1,5 +1,6 @@
 -module(arizona_native_SUITE).
 -include_lib("stdlib/include/assert.hrl").
+-include("arizona.hrl").
 
 -export([all/0]).
 -export([static_single_element/1]).
@@ -12,6 +13,12 @@
 -export([native_each_renders_item_array/1]).
 -export([native_each_empty_is_valid_json/1]).
 -export([nested_native_stateless_component/1]).
+-export([nested_native_stateful_component/1]).
+-export([diff_dynamic_text_op/1]).
+-export([diff_dynamic_attr_op/1]).
+-export([diff_stream_insert_op/1]).
+-export([diff_stream_remove_op/1]).
+-export([diff_stream_move_op/1]).
 
 all() ->
     [
@@ -24,7 +31,13 @@ all() ->
         live_view_caches_statics,
         native_each_renders_item_array,
         native_each_empty_is_valid_json,
-        nested_native_stateless_component
+        nested_native_stateless_component,
+        nested_native_stateful_component,
+        diff_dynamic_text_op,
+        diff_dynamic_attr_op,
+        diff_stream_insert_op,
+        diff_stream_remove_op,
+        diff_stream_move_op
     ].
 
 %% --------------------------------------------------------------------
@@ -228,6 +241,83 @@ nested_native_stateless_component(Config) when is_list(Config) ->
         flatten(simulate_interleave(arizona_render:fingerprint_payload(Snap))),
     ?assertMatch([#{~"type" := ~"Text", ~"children" := [~"Hi"]}], Children).
 
+nested_native_stateful_component(Config) when is_list(Config) ->
+    %% A native view embeds a native *stateful* child. Through the live frame
+    %% path (mount_and_render), the child's own #{f,s,d} payload (carrying its
+    %% target=native statics and az_view marker) is inlined into the parent
+    %% frame and interleaves to a valid JSON widget tree. (arizona_render:render/3
+    %% instead decomposes the child into a separate diff-time view, so the live
+    %% path is the one that proves the first-frame inlining.)
+    Req = arizona_req_test_adapter:new(),
+    {ok, Pid} = arizona_live:start_link(arizona_native_parent, #{}, undefined, [], Req),
+    {ok, ~"native_parent", Frame} = arizona_live:mount_and_render(Pid),
+    #{~"type" := ~"Column", ~"children" := Children} = flatten(simulate_interleave(Frame)),
+    ?assertMatch([#{~"type" := ~"Badge", ~"children" := [~"5"]}], Children).
+
+diff_dynamic_text_op(Config) when is_list(Config) ->
+    %% A native dynamic text node diffs to OP_TEXT carrying the raw new value
+    %% (target-neutral; the client JSON-encodes it). The op targets the
+    %% text-node `az`, distinct from the element `az`.
+    Mod = compile_module(
+        "-module(nt_diff_text). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Text', [], [az:get(label, Bindings, <<\"\">>)]}). "
+    ),
+    {_, Snap0} = arizona_render:render(Mod:render(#{label => ~"a"})),
+    {Ops, _} = arizona_diff:diff(Mod:render(#{label => ~"b"}), Snap0),
+    ?assertMatch([[?OP_TEXT, _Az, ~"b"]], Ops).
+
+diff_dynamic_attr_op(Config) when is_list(Config) ->
+    %% A native dynamic prop diffs to OP_SET_ATTR with name and value separate
+    %% (format-neutral) -- the client sets the prop on the node.
+    Mod = compile_module(
+        "-module(nt_diff_attr). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Button', [{color, az:get(color, Bindings, "
+        "<<\"gray\">>)}], [<<\"OK\">>]}). "
+    ),
+    {_, Snap0} = arizona_render:render(Mod:render(#{color => ~"red"})),
+    {Ops, _} = arizona_diff:diff(Mod:render(#{color => ~"blue"}), Snap0),
+    ?assertMatch([[?OP_SET_ATTR, _Az, ~"color", ~"blue"]], Ops).
+
+diff_stream_insert_op(Config) when is_list(Config) ->
+    %% A native stream insert diffs to OP_INSERT whose item payload carries
+    %% native JSON statics that interleave to a valid JSON widget.
+    {B0, _} = arizona_native_list:mount(#{}, arizona_req_test_adapter:new(#{})),
+    {_, Snap0, V0} = arizona_render:render(arizona_native_list:render(B0), #{}),
+    B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
+    {B2, _, _} = arizona_native_list:handle_event(~"add", #{~"id" => 1, ~"text" => ~"First"}, B1),
+    Changed = compute_changed(B1, B2),
+    {Ops, _, _} = arizona_diff:diff(arizona_native_list:render(B2), Snap0, V0, Changed),
+    ?assertMatch([[?OP_INSERT, _Az, ~"1", -1, _Payload]], Ops),
+    [[_, _, _, _, Payload]] = Ops,
+    ?assertMatch(
+        #{~"type" := ~"Row", ~"children" := [~"First"]},
+        flatten(simulate_interleave(Payload))
+    ).
+
+diff_stream_remove_op(Config) when is_list(Config) ->
+    Items = [#{id => 1, text => ~"A"}, #{id => 2, text => ~"B"}],
+    {B0, _} = arizona_native_list:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
+    {_, Snap0, V0} = arizona_render:render(arizona_native_list:render(B0), #{}),
+    B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
+    {B2, _, _} = arizona_native_list:handle_event(~"remove", #{~"id" => 1}, B1),
+    Changed = compute_changed(B1, B2),
+    {Ops, _, _} = arizona_diff:diff(arizona_native_list:render(B2), Snap0, V0, Changed),
+    ?assertMatch([[?OP_REMOVE, _Az, ~"1"]], Ops).
+
+diff_stream_move_op(Config) when is_list(Config) ->
+    Items = [#{id => 1, text => ~"A"}, #{id => 2, text => ~"B"}],
+    {B0, _} = arizona_native_list:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
+    {_, Snap0, V0} = arizona_render:render(arizona_native_list:render(B0), #{}),
+    B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
+    {B2, _, _} = arizona_native_list:handle_event(~"move", #{~"id" => 2, ~"pos" => 0}, B1),
+    Changed = compute_changed(B1, B2),
+    {Ops, _, _} = arizona_diff:diff(arizona_native_list:render(B2), Snap0, V0, Changed),
+    ?assertMatch([[?OP_MOVE, _Az, ~"2", _Ref]], Ops).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
@@ -275,6 +365,18 @@ flatten_child(#{~"children" := _} = Node) ->
     [flatten(Node)];
 flatten_child(Other) ->
     [Other].
+
+%% Mirrors arizona_live:compute_changed/2: the bindings whose value changed.
+compute_changed(OldBindings, NewBindings) ->
+    maps:filter(
+        fun(K, V) ->
+            case OldBindings of
+                #{K := V} -> false;
+                #{} -> true
+            end
+        end,
+        NewBindings
+    ).
 
 compile_module(Source) ->
     {ok, Tokens, _} = erl_scan:string(Source),
