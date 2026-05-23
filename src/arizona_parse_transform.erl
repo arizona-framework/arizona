@@ -162,7 +162,7 @@ mark_native_eachs(Node) ->
     Node.
 
 native_eachs({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}) when
-    Mod =:= arizona_template; Mod =:= az
+    Mod =:= arizona_template orelse Mod =:= az
 ->
     {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native_each}}, [
         native_eachs(A)
@@ -649,25 +649,7 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, _ElemLine) when
             ValBin = extract_binary_value(ValueAST),
             buf_append(State0, Backend:attr(NameBin, ValBin));
         false ->
-            case try_fold_arizona_js(ValueAST) of
-                {ok, FoldedBin} ->
-                    buf_append(State0, Backend:attr(NameBin, FoldedBin));
-                error when State0#state.nodiff ->
-                    Module = State0#state.module,
-                    State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
-                    DynAST = make_nodiff_attr_dynamic_ast(
-                        NameBin, ValueAST, Module, line(ValueAST)
-                    ),
-                    flush(State1, DynAST);
-                error ->
-                    Module = State0#state.module,
-                    State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
-                    AzBin = integer_to_binary(ElemAz),
-                    DynAST = make_attr_dynamic_ast(
-                        AzBin, NameBin, ValueAST, Module, line(ValueAST)
-                    ),
-                    flush(State1, DynAST)
-            end
+            compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0)
     end;
 compile_attr({atom, _, Name}, _ElemAz, State0, _ElemLine) ->
     Backend = State0#state.backend,
@@ -681,6 +663,29 @@ compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
             _:_ -> ElemLine
         end,
     parse_error(invalid_attribute, AttrLine).
+
+%% Emit a dynamic attribute value: a folded arizona_js command becomes a static,
+%% otherwise the backend bakes the name and the value flushes as a dynamic.
+compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
+    case try_fold_arizona_js(ValueAST) of
+        {ok, FoldedBin} ->
+            buf_append(State0, Backend:attr(NameBin, FoldedBin));
+        error when State0#state.nodiff ->
+            Module = State0#state.module,
+            State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
+            DynAST = make_nodiff_attr_dynamic_ast(
+                NameBin, ValueAST, Module, line(ValueAST)
+            ),
+            flush(State1, DynAST);
+        error ->
+            Module = State0#state.module,
+            State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
+            AzBin = integer_to_binary(ElemAz),
+            DynAST = make_attr_dynamic_ast(
+                AzBin, NameBin, ValueAST, Module, line(ValueAST)
+            ),
+            flush(State1, DynAST)
+    end.
 
 compile_children(Children, ElemAz, State) ->
     compile_children(Children, ElemAz, State, 0, 0).

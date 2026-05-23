@@ -135,7 +135,8 @@ dynamic_attr_inlines_as_prop(Config) when is_list(Config) ->
         "-module(nt_dynattr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:native({'Button', [{color, az:get(color, Bindings, <<\"gray\">>)}], [<<\"OK\">>]}). "
+        "    az:native({'Button', [{color, az:get(color, Bindings, "
+        "<<\"gray\">>)}], [<<\"OK\">>]}). "
     ),
     T = Mod:render(#{color => ~"red"}),
     {_Html, Snap} = arizona_render:render(T),

@@ -53,6 +53,7 @@ binding, used by stateless layouts to render the wrapped page.
     inner_content/1,
     track/1,
     html/1,
+    native/1,
     stateful/2,
     stateless/2,
     stateless/3,

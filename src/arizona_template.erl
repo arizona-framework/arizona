@@ -32,6 +32,12 @@ render(Bindings) ->
 
 -include("arizona.hrl").
 
+%% The html/native/native_each stubs are intentionally identical: each raises
+%% parse_transform_not_applied inline so the raising stub is the top stack frame,
+%% pointing the user at the exact un-transformed call. A shared helper would move
+%% that frame and obscure which call was made, so dedup does not apply here.
+-elvis([{elvis_style, dont_repeat_yourself, disable}]).
+
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -66,6 +72,9 @@ render(Bindings) ->
 
 -ignore_xref([format_error/1]).
 -ignore_xref([format_error/2]).
+%% Internal native-each stub: emitted by the parse transform's native pre-pass,
+%% never called directly (no az:native_each alias, unlike each/2).
+-ignore_xref([native_each/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
