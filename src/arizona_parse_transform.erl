@@ -139,46 +139,57 @@ parse_transform(Forms, _Options) ->
         has_behaviour(Forms, arizona_stateful) orelse
             has_behaviour(Forms, arizona_view),
     try
-        Transformed = [transform_form(mark_native_eachs(Form), Module, IsLive) || Form <- Forms],
+        Transformed = [transform_form(mark_targets(Form, none), Module, IsLive) || Form <- Forms],
         erl_syntax:revert_forms(Transformed)
     catch
         throw:{arizona_parse_error, Line, Reason} ->
             {error, [{File, [{Line, ?MODULE, Reason}]}], []}
     end.
 
-%% Top-down pre-pass: a single `?each` serves both targets. Inside a
-%% `?native(...)` every nested `?each` is rewritten to the internal
-%% `native_each`, so the bottom-up transform compiles it with the native
-%% backend. `?each` under `?html` (or standalone) is left untouched.
-mark_native_eachs({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native}}, [Arg]}) when
-    Mod =:= arizona_template; Mod =:= az
+%% Top-down pre-pass threading the enclosing render target `Ctx` (`none` outside
+%% any template, else `html` | `native`). Two jobs:
+%%
+%%   1. A single `?each` serves both targets. Inside a `?native(...)` every
+%%      nested `?each` is rewritten to the internal `native_each` so the
+%%      bottom-up transform compiles it with the native backend. `?each` under
+%%      `?html` (or standalone) is left untouched.
+%%   2. Reject inline cross-target nesting: a `?html(...)` inside a `?native(...)`
+%%      (or vice-versa) would mix HTML and JSON statics in one tree. Caught here
+%%      as a compile error instead of corrupting the wire at runtime.
+%%
+%% Each `?html`/`?native` call resets `Ctx` for its own argument, so sibling
+%% targets (e.g. a dual-serve render with `?html` and `?native` in different
+%% clauses) are fine -- only one literally nested in the other errors. Cross-target
+%% nesting via a `?stateful`/`?stateless` child *module* is invisible at this AST
+%% level and stays a documented "one target per tree" rule.
+mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, _}, native) when
+    Mod =:= arizona_template orelse Mod =:= az
 ->
-    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native}}, [native_eachs(Arg)]};
-mark_native_eachs(Node) when is_tuple(Node) ->
-    list_to_tuple([mark_native_eachs(E) || E <- tuple_to_list(Node)]);
-mark_native_eachs(Nodes) when is_list(Nodes) ->
-    [mark_native_eachs(E) || E <- Nodes];
-mark_native_eachs(Node) ->
-    Node.
-
-native_eachs({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}) when
+    parse_error(cross_target_nesting, L);
+mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, _}, html) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    parse_error(cross_target_nesting, L);
+mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, html}}, [Arg]}, _Ctx) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, html}}, [mark_targets(Arg, html)]};
+mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native}}, [Arg]}, _Ctx) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native}}, [mark_targets(Arg, native)]};
+mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, native) when
     Mod =:= arizona_template orelse Mod =:= az
 ->
     {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native_each}}, [
-        native_eachs(A)
+        mark_targets(A, native)
      || A <- Args
     ]};
-native_eachs({call, _, {remote, _, {atom, _, Mod}, {atom, _, Fn}}, _} = Call) when
-    (Mod =:= arizona_template orelse Mod =:= az) andalso (Fn =:= html orelse Fn =:= native)
-->
-    %% A nested template boundary re-enters context tracking (so a nested
-    %% ?html under ?native keeps its own each untouched).
-    mark_native_eachs(Call);
-native_eachs(Node) when is_tuple(Node) ->
-    list_to_tuple([native_eachs(E) || E <- tuple_to_list(Node)]);
-native_eachs(Nodes) when is_list(Nodes) ->
-    [native_eachs(E) || E <- Nodes];
-native_eachs(Node) ->
+mark_targets(Node, Ctx) when is_tuple(Node) ->
+    list_to_tuple([mark_targets(E, Ctx) || E <- tuple_to_list(Node)]);
+mark_targets(Nodes, Ctx) when is_list(Nodes) ->
+    [mark_targets(E, Ctx) || E <- Nodes];
+mark_targets(Node, _Ctx) ->
     Node.
 
 -doc """
@@ -220,7 +231,11 @@ format_error({invalid_child, ValueStr}) ->
             "Got: ~s",
             [ValueStr]
         )
-    ).
+    );
+format_error(cross_target_nesting) ->
+    "cannot nest ?html and ?native in one template -- they produce "
+    "incompatible statics. Render cross-target content via a separate "
+    "stateful/stateless child of the matching target".
 
 %% --------------------------------------------------------------------
 %% Internal functions
