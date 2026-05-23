@@ -683,8 +683,8 @@ compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
 %% otherwise the backend bakes the name and the value flushes as a dynamic.
 compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
     case try_fold_arizona_js(ValueAST) of
-        {ok, FoldedBin} ->
-            buf_append(State0, Backend:attr(NameBin, FoldedBin));
+        {ok, Cmd} ->
+            buf_append(State0, Backend:attr_command(NameBin, Cmd));
         error when State0#state.nodiff ->
             Module = State0#state.module,
             State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
@@ -919,8 +919,7 @@ is_static_binary(_) ->
 %% loaded). Falling through to the runtime dynamic path is always safe.
 try_fold_arizona_js(ExprAST) ->
     try
-        Term = eval_arizona_js_expr(ExprAST),
-        {ok, arizona_js:encode(Term)}
+        {ok, eval_arizona_js_expr(ExprAST)}
     catch
         _:_ -> error
     end.

@@ -17,6 +17,7 @@ identical to the previous inlined emission.
 -export([element_close/1]).
 -export([attr/2]).
 -export([attr_boolean/1]).
+-export([attr_command/2]).
 -export([attr_dyn_name/1]).
 -export([children_sep/0]).
 -export([text_child/1]).
@@ -57,6 +58,12 @@ attr(Name, Value) ->
 -spec attr_boolean(binary()) -> binary().
 attr_boolean(Name) ->
     <<" ", Name/binary>>.
+
+-spec attr_command(binary(), term()) -> binary().
+attr_command(Name, Cmd) ->
+    %% A folded arizona_js command: its JSON, escaped for the HTML attribute
+    %% context, as a normal name="value" attribute.
+    attr(Name, arizona_js:encode(Cmd)).
 
 -spec attr_dyn_name(binary()) -> binary().
 attr_dyn_name(_Name) ->

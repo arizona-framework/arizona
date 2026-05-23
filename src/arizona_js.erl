@@ -64,6 +64,7 @@ inside an HTML attribute value.
 -export([reload/0]).
 -export([on_key/2]).
 -export([encode/1]).
+-export([encode_json/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -288,6 +289,18 @@ encode({?MODULE, Cmd}) ->
     escape_attr(iolist_to_binary(json:encode(Cmd)));
 encode([{?MODULE, _} | _] = Cmds) ->
     escape_attr(iolist_to_binary(json:encode([C || {?MODULE, C} <:- Cmds]))).
+
+-doc """
+Serializes a command (or list of commands) to raw JSON, without the HTML
+attribute escaping `encode/1` applies. Used by non-HTML render backends (native)
+that embed the command as a JSON value, not inside an HTML attribute.
+""".
+-spec encode_json(Cmds) -> binary() when
+    Cmds :: cmd() | [cmd()].
+encode_json({?MODULE, Cmd}) ->
+    iolist_to_binary(json:encode(Cmd));
+encode_json([{?MODULE, _} | _] = Cmds) ->
+    iolist_to_binary(json:encode([C || {?MODULE, C} <:- Cmds])).
 
 %% --------------------------------------------------------------------
 %% Internal functions

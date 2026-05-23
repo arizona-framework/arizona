@@ -9,6 +9,7 @@
 -export([void_shorthand_has_empty_children/1]).
 -export([dynamic_text_uses_text_node/1]).
 -export([dynamic_attr_inlines_as_prop/1]).
+-export([event_prop_is_raw_json_command/1]).
 -export([live_view_caches_statics/1]).
 -export([native_each_renders_item_array/1]).
 -export([native_each_empty_is_valid_json/1]).
@@ -28,6 +29,7 @@ all() ->
         void_shorthand_has_empty_children,
         dynamic_text_uses_text_node,
         dynamic_attr_inlines_as_prop,
+        event_prop_is_raw_json_command,
         live_view_caches_statics,
         native_each_renders_item_array,
         native_each_empty_is_valid_json,
@@ -159,6 +161,20 @@ dynamic_attr_inlines_as_prop(Config) when is_list(Config) ->
         #{~"type" := ~"Button", ~"color" := ~"red", ~"children" := [~"OK"]},
         simulate_interleave(Payload)
     ).
+
+event_prop_is_raw_json_command(Config) when is_list(Config) ->
+    %% A folded arizona_js command prop (on_tap) is emitted as a raw JSON array
+    %% the client interprets directly -- NOT an HTML-escaped string. This is what
+    %% makes a native widget tappable (the documented native event pattern).
+    Mod = compile_module(
+        "-module(nt_event). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Button', [{on_tap, arizona_js:push_event(<<\"inc\">>)}], [<<\"OK\">>]}). "
+    ),
+    Decoded = decode_static(Mod:render(#{})),
+    %% [0, "inc"] = [JS_PUSH_EVENT, EventName], a JSON array (not a quoted string).
+    ?assertEqual([0, ~"inc"], maps:get(~"on_tap", Decoded)).
 
 live_view_caches_statics(Config) when is_list(Config) ->
     %% Wire-efficiency proof: a native live view's first mount ships the full
