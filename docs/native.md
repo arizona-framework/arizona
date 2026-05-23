@@ -53,6 +53,42 @@ handle_event(~"inc", _Payload, Bindings) ->
   children also work; the embedded module must use the same target (see
   *Constraints*).
 
+## Serving HTML and native from one view
+
+The framework injects nothing and decides nothing. To serve browsers HTML and
+native apps a JSON tree from a single view, read the connecting client in
+`mount/2` and branch in `render/1`.
+
+`arizona_req:user_agent/1` returns the raw `User-Agent` header (no custom header
+needed — every client already sends one), or `<<>>` if absent. `arizona_user_agent`
+turns it into a coarse, best-effort classification through **pure, composable**
+helpers — call only the one(s) you need, no precomputed map:
+
+- `browser/1` — true when the UA carries `Mozilla` (browsers/webviews do; a
+  native app's HTTP stack typically does not).
+- `os/1` — `ios | android | windows | macos | linux | other`.
+- `mobile/1` — best-effort mobile-device guess.
+
+```erlang
+mount(_Bindings, Req) ->
+    {UA, _Req1} = arizona_req:user_agent(Req),
+    {#{id => ~"page", user_agent => UA}, #{}}.
+
+%% A browser/webview carries "Mozilla" -> HTML; a native app's HTTP stack
+%% typically does not -> native. Reach for arizona_user_agent:os/1 or mobile/1,
+%% or match the raw UA (e.g. your app's custom UA), only when you need to.
+render(#{user_agent := UA} = Bindings) ->
+    case arizona_user_agent:browser(UA) of
+        true -> ?html({'div', [{id, ?get(id)}], [...]});
+        false -> ?native({'Column', [{id, ?get(id)}], [...]})
+    end.
+```
+
+These helpers are heuristic and request-level; `user_agent/1` works at `mount/2`
+on both the HTTP and WS paths. You own the binding name and the branch — if you
+prefer an explicit signal, your client can send a query param and you read it
+with `arizona_req:params/1` instead.
+
 ## The JSON widget tree
 
 Each element compiles to a flat JSON object — `type`, `az`, and `children` are

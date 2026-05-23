@@ -77,6 +77,7 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 -export([params/1]).
 -export([cookies/1]).
 -export([headers/1]).
+-export([user_agent/1]).
 -export([body/1]).
 -export([apply_middlewares/3]).
 -export([call_resolve_route/4]).
@@ -96,6 +97,7 @@ parse_bindings(RawReq) -> my_server:route_params(RawReq).
 -ignore_xref([params/1]).
 -ignore_xref([cookies/1]).
 -ignore_xref([headers/1]).
+-ignore_xref([user_agent/1]).
 -ignore_xref([body/1]).
 -ignore_xref([redirect/2]).
 -ignore_xref([redirect/3]).
@@ -286,6 +288,21 @@ headers(#{headers := Headers} = Req) ->
 headers(#{adapter := Adapter, raw := Raw} = Req) ->
     Headers = Adapter:parse_headers(Raw),
     {Headers, Req#{headers => Headers}}.
+
+-doc """
+Returns the `User-Agent` request header (or `<<>>` if absent).
+
+A view that serves both browsers (HTML) and native apps (a native JSON tree)
+reads this in `mount/2` and branches in `render/1`. Match it directly (you know
+your own native client's UA), or classify it with the pure helpers in
+`arizona_user_agent` (`browser/1`, `os/1`, `mobile/1`). The framework decides and
+injects nothing -- you own the binding and the branch. For an explicit signal
+instead, send a query param and read it with `params/1`.
+""".
+-spec user_agent(request()) -> {binary(), request()}.
+user_agent(Req0) ->
+    {Headers, Req1} = headers(Req0),
+    {iolist_to_binary(maps:get(~"user-agent", Headers, <<>>)), Req1}.
 
 -doc """
 Consumes the request body. Lazy-loaded; the underlying raw request is

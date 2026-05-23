@@ -12,6 +12,8 @@
 -export([params_preserves_repeats/1]).
 -export([cookies_lazy_loads_and_caches/1]).
 -export([headers_lazy_loads_and_caches/1]).
+-export([user_agent_returns_header/1]).
+-export([user_agent_absent_is_empty/1]).
 -export([body_threads_updated_raw/1]).
 -export([apply_middlewares_empty_list/1]).
 -export([apply_middlewares_cont_fun/1]).
@@ -38,6 +40,8 @@ groups() ->
             params_preserves_repeats,
             cookies_lazy_loads_and_caches,
             headers_lazy_loads_and_caches,
+            user_agent_returns_header,
+            user_agent_absent_is_empty,
             body_threads_updated_raw
         ]},
         {middlewares, [parallel], [
@@ -124,6 +128,19 @@ headers_lazy_loads_and_caches(Config) when is_list(Config) ->
     {Headers, Req1} = arizona_req:headers(Req0),
     ?assertEqual(#{~"host" => ~"example.com"}, Headers),
     ?assertEqual({Headers, Req1}, arizona_req:headers(Req1)).
+
+user_agent_returns_header(Config) when is_list(Config) ->
+    UA = ~"Mozilla/5.0 (Windows NT 10.0; Win64) Chrome/120.0 Safari/537.36",
+    Req0 = arizona_req_test_adapter:new(#{headers => #{~"user-agent" => UA}}),
+    {Got, Req1} = arizona_req:user_agent(Req0),
+    ?assertEqual(UA, Got),
+    %% Built on headers/1, which caches; a second read short-circuits.
+    ?assertEqual({UA, Req1}, arizona_req:user_agent(Req1)).
+
+user_agent_absent_is_empty(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{headers => #{}}),
+    {Got, _Req1} = arizona_req:user_agent(Req),
+    ?assertEqual(<<>>, Got).
 
 body_threads_updated_raw(Config) when is_list(Config) ->
     %% read_body in the test adapter returns {Body, Raw#{body_read => true}}.
