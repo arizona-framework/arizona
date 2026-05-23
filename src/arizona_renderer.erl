@@ -10,42 +10,65 @@ implementing this behaviour. `arizona_html` emits HTML; other backends emit
 other formats while reusing the same walker, diff engine, and transport.
 """.
 
-%% Tag or attribute atom -> wire name.
+-doc "Tag or attribute atom -> wire name.".
 -callback name(atom()) -> binary().
-%% Start of an element's open tag for the given wire tag name.
+
+-doc "Start of an element's open tag for the given wire tag name.".
 -callback element_open(TagName :: binary()) -> binary().
-%% The framework-injected `az` diff-target marker for an element.
+
+-doc "The framework-injected `az` diff-target marker for an element.".
 -callback az_attr(Az :: binary()) -> binary().
-%% End of an element's open tag (after attributes), before children.
+
+-doc "End of an element's open tag (after attributes), before children.".
 -callback element_open_end() -> binary().
-%% Self-close for a void (childless) element.
+
+-doc "Self-close for a void (childless) element.".
 -callback element_void_close() -> binary().
-%% Close tag for the given wire tag name.
+
+-doc "Close tag for the given wire tag name.".
 -callback element_close(TagName :: binary()) -> binary().
-%% A name/value attribute.
+
+-doc "A name/value attribute.".
 -callback attr(Name :: binary(), Value :: binary()) -> binary().
-%% A valueless (boolean) attribute.
+
+-doc "A valueless (boolean) attribute.".
 -callback attr_boolean(Name :: binary()) -> binary().
-%% Static prefix emitted before a *dynamic* attribute's value. HTML keeps the
-%% name in the dynamic (so this is empty); native bakes the prop name into the
-%% static (`,"name":`) so the dynamic carries only the value to stringify.
+
+-doc """
+Static prefix emitted before a *dynamic* attribute's value. HTML keeps the name
+in the dynamic (so this is empty); native bakes the prop name into the static
+(`,"name":`) so the dynamic carries only the value to stringify.
+""".
 -callback attr_dyn_name(Name :: binary()) -> binary().
-%% Separator emitted before each child after the first (HTML needs none; JSON
-%% needs a comma between array elements).
+
+-doc """
+Separator emitted before each child after the first (HTML needs none; JSON
+needs a comma between array elements).
+""".
 -callback children_sep() -> binary().
-%% A static text child (raw text for HTML; a JSON string for native).
+
+-doc "A static text child (raw text for HTML; a JSON string for native).".
 -callback text_child(Text :: binary()) -> binary().
-%% The `az` for a dynamic text slot, given the element's `az` and the child
-%% slot index. HTML reuses the element `az` for slot 0 (the comment marker and
-%% the element attribute coexist); native needs a distinct `az` because every
-%% node shares one flat registry.
+
+-doc """
+The `az` for a dynamic text slot, given the element's `az` and the child slot
+index. HTML reuses the element `az` for slot 0 (the comment marker and the
+element attribute coexist); native needs a distinct `az` because every node
+shares one flat registry.
+""".
 -callback text_az(ElemAz :: binary(), Slot :: non_neg_integer()) -> binary().
-%% Open marker for a dynamic text slot with the given `az`.
+
+-doc "Open marker for a dynamic text slot with the given `az`.".
 -callback text_slot_open(Az :: binary()) -> binary().
-%% Close marker for a dynamic text slot.
+
+-doc "Close marker for a dynamic text slot.".
 -callback text_slot_close() -> binary().
-%% Whether the tag is a void element (no children / self-closing).
+
+-doc "Whether the tag is a void element (no children / self-closing).".
 -callback is_void(Tag :: atom()) -> boolean().
-%% Prefix a static's embedded `az` references with the fingerprint, so a child
-%% template inlined into a parent does not collide on `az` targets.
+
+-doc """
+Prefix a static's embedded `az` references with the fingerprint, so a child
+template inlined into a parent does not collide on `az` targets.
+""".
 -callback scope_static(Fingerprint :: binary(), Static :: binary()) -> binary().
