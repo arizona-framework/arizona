@@ -11,6 +11,7 @@
 -export([live_view_caches_statics/1]).
 -export([native_each_renders_item_array/1]).
 -export([native_each_empty_is_valid_json/1]).
+-export([nested_native_stateless_component/1]).
 
 all() ->
     [
@@ -22,7 +23,8 @@ all() ->
         dynamic_attr_inlines_as_prop,
         live_view_caches_statics,
         native_each_renders_item_array,
-        native_each_empty_is_valid_json
+        native_each_empty_is_valid_json,
+        nested_native_stateless_component
     ].
 
 %% --------------------------------------------------------------------
@@ -206,6 +208,24 @@ native_each_empty_is_valid_json(Config) when is_list(Config) ->
     #{~"type" := ~"Column", ~"children" := Children} =
         flatten(simulate_interleave(arizona_render:fingerprint_payload(Snap))),
     ?assertMatch([#{~"type" := ~"Text", ~"children" := [~"Header"]}], Children).
+
+nested_native_stateless_component(Config) when is_list(Config) ->
+    %% A native view embeds a native stateless child. The child renders to its
+    %% own JSON tree (carrying target=native), which the parent splices into the
+    %% #slot -- no special handling beyond the existing nested-template path.
+    Mod = compile_module(
+        "-module(nt_nested_comp). "
+        "-export([render/1, child/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Column', [], [az:stateless(fun child/1, #{label => <<\"Hi\">>})]}). "
+        "child(Bindings) -> "
+        "    az:native({'Text', [], [az:get(label, Bindings, <<\"\">>)]}). "
+    ),
+    T = Mod:render(#{}),
+    {_Html, Snap, _Views} = arizona_render:render(T, #{}),
+    #{~"type" := ~"Column", ~"children" := Children} =
+        flatten(simulate_interleave(arizona_render:fingerprint_payload(Snap))),
+    ?assertMatch([#{~"type" := ~"Text", ~"children" := [~"Hi"]}], Children).
 
 %% --------------------------------------------------------------------
 %% Helpers
