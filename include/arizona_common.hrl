@@ -13,7 +13,6 @@
 -define(html(Elems), arizona_template:html(Elems)).
 -define(native(Elems), arizona_template:native(Elems)).
 -define(each(Fun, Source), arizona_template:each(Fun, Source)).
--define(native_each(Fun, Source), arizona_template:native_each(Fun, Source)).
 
 %% Descriptor constructors
 -define(stateful(Handler, Props), arizona_template:stateful(Handler, Props)).

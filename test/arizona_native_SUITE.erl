@@ -166,15 +166,15 @@ live_view_caches_statics(Config) when is_list(Config) ->
     ?assertNot(maps:is_key(~"s", Frame2)).
 
 native_each_renders_item_array(Config) when is_list(Config) ->
-    %% ?native_each compiles the per-item fragment with the native backend; the
-    %% each payload reuses the #{t,f,s,d} fingerprint form, and the client
-    %% splices the items into the parent's children.
+    %% A plain ?each inside ?native is rewritten to compile the per-item fragment
+    %% with the native backend; the each payload reuses the #{t,f,s,d} fingerprint
+    %% form, and the client splices the items into the parent's children.
     Mod = compile_module(
         "-module(nt_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    az:native({'Column', [], ["
-        "        az:native_each(fun(I) -> {'Text', [], [I]} end, az:get(items, Bindings, []))"
+        "        az:each(fun(I) -> {'Text', [], [I]} end, az:get(items, Bindings, []))"
         "    ]}). "
     ),
     T = Mod:render(#{items => [~"a", ~"b"]}),
@@ -198,7 +198,7 @@ native_each_empty_is_valid_json(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    az:native({'Column', [], ["
         "        {'Text', [], [<<\"Header\">>]},"
-        "        az:native_each(fun(I) -> {'Text', [], [I]} end, az:get(items, Bindings, []))"
+        "        az:each(fun(I) -> {'Text', [], [I]} end, az:get(items, Bindings, []))"
         "    ]}). "
     ),
     T = Mod:render(#{items => []}),

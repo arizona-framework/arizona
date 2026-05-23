@@ -139,12 +139,47 @@ parse_transform(Forms, _Options) ->
         has_behaviour(Forms, arizona_stateful) orelse
             has_behaviour(Forms, arizona_view),
     try
-        Transformed = [transform_form(Form, Module, IsLive) || Form <- Forms],
+        Transformed = [transform_form(mark_native_eachs(Form), Module, IsLive) || Form <- Forms],
         erl_syntax:revert_forms(Transformed)
     catch
         throw:{arizona_parse_error, Line, Reason} ->
             {error, [{File, [{Line, ?MODULE, Reason}]}], []}
     end.
+
+%% Top-down pre-pass: a single `?each` serves both targets. Inside a
+%% `?native(...)` every nested `?each` is rewritten to the internal
+%% `native_each`, so the bottom-up transform compiles it with the native
+%% backend. `?each` under `?html` (or standalone) is left untouched.
+mark_native_eachs({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native}}, [Arg]}) when
+    Mod =:= arizona_template; Mod =:= az
+->
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native}}, [native_eachs(Arg)]};
+mark_native_eachs(Node) when is_tuple(Node) ->
+    list_to_tuple([mark_native_eachs(E) || E <- tuple_to_list(Node)]);
+mark_native_eachs(Nodes) when is_list(Nodes) ->
+    [mark_native_eachs(E) || E <- Nodes];
+mark_native_eachs(Node) ->
+    Node.
+
+native_eachs({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}) when
+    Mod =:= arizona_template; Mod =:= az
+->
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native_each}}, [
+        native_eachs(A)
+     || A <- Args
+    ]};
+native_eachs({call, _, {remote, _, {atom, _, Mod}, {atom, _, Fn}}, _} = Call) when
+    (Mod =:= arizona_template orelse Mod =:= az) andalso (Fn =:= html orelse Fn =:= native)
+->
+    %% A nested template boundary re-enters context tracking (so a nested
+    %% ?html under ?native keeps its own each untouched).
+    mark_native_eachs(Call);
+native_eachs(Node) when is_tuple(Node) ->
+    list_to_tuple([native_eachs(E) || E <- tuple_to_list(Node)]);
+native_eachs(Nodes) when is_list(Nodes) ->
+    [native_eachs(E) || E <- Nodes];
+native_eachs(Node) ->
+    Node.
 
 -doc """
 Formats parse transform error reasons into human-readable messages.
