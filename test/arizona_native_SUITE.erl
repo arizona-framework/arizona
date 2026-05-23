@@ -8,6 +8,7 @@
 -export([void_shorthand_has_empty_children/1]).
 -export([dynamic_text_uses_text_node/1]).
 -export([dynamic_attr_inlines_as_prop/1]).
+-export([live_view_caches_statics/1]).
 
 all() ->
     [
@@ -16,7 +17,8 @@ all() ->
         static_empty_children,
         void_shorthand_has_empty_children,
         dynamic_text_uses_text_node,
-        dynamic_attr_inlines_as_prop
+        dynamic_attr_inlines_as_prop,
+        live_view_caches_statics
     ].
 
 %% --------------------------------------------------------------------
@@ -138,6 +140,27 @@ dynamic_attr_inlines_as_prop(Config) when is_list(Config) ->
         #{~"type" := ~"Button", ~"color" := ~"red", ~"children" := [~"OK"]},
         simulate_interleave(Payload)
     ).
+
+live_view_caches_statics(Config) when is_list(Config) ->
+    %% Wire-efficiency proof: a native live view's first mount ships the full
+    %% widget tree (statics present); a fresh instance whose client already
+    %% cached the fingerprint gets the statics stripped (`#{f,d}` only). Native
+    %% reuses the exact same fingerprint cache as the browser -- statics are
+    %% sent once, never re-sent.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Pid1} = arizona_live:start_link(arizona_native_counter, #{}, undefined, [], Req),
+    {ok, ViewId, Frame1} = arizona_live:mount_and_render(Pid1),
+    ?assertEqual(~"native_counter", ViewId),
+    ?assert(maps:is_key(~"s", Frame1)),
+    ?assertMatch(#{~"type" := ~"Column", ~"id" := ~"native_counter"}, simulate_interleave(Frame1)),
+    Fp = maps:get(~"f", Frame1),
+    %% Fresh instance, fingerprint pre-seeded (as the client would report).
+    {ok, Pid2} = arizona_live:start_link(arizona_native_counter, #{}, undefined, [], Req),
+    arizona_live:seed_fps(Pid2, [Fp]),
+    sys:get_state(Pid2),
+    {ok, _ViewId, Frame2} = arizona_live:mount_and_render(Pid2),
+    ?assertEqual(Fp, maps:get(~"f", Frame2)),
+    ?assertNot(maps:is_key(~"s", Frame2)).
 
 %% --------------------------------------------------------------------
 %% Helpers
