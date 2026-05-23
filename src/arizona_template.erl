@@ -102,13 +102,20 @@ render(Bindings) ->
     | {az(), template()}
     | {az(), term()}.
 
--nominal template() :: #{s := [binary()], d := [dynamic()], f := binary(), diff => false}.
+-nominal template() :: #{
+    s := [binary()],
+    d := [dynamic()],
+    f := binary(),
+    diff => false,
+    target => html | native
+}.
 
 -nominal each_template() :: #{
     t := 0,
     s := [binary()],
     d := fun((term()) -> [dynamic()]) | fun((term(), term()) -> [dynamic()]),
-    f := binary()
+    f := binary(),
+    target => html | native
 }.
 
 -nominal each_container() :: #{
@@ -123,7 +130,8 @@ render(Bindings) ->
     f => binary(),
     deps => [deps()],
     diff => false,
-    view_id => binary()
+    view_id => binary(),
+    target => html | native
 }.
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
@@ -367,7 +375,11 @@ maybe_propagate(Tmpl, Snap) ->
             #{diff := false} -> Snap#{diff => false};
             #{} -> Snap
         end,
-    maybe_put_fingerprint(Tmpl, Snap1).
+    Snap2 = maybe_put_fingerprint(Tmpl, Snap1),
+    case Tmpl of
+        #{target := Target} -> Snap2#{target => Target};
+        #{} -> Snap2
+    end.
 
 -doc """
 Copies the `f` field from a template to a snapshot if present.

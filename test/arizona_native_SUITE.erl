@@ -7,6 +7,7 @@
 -export([static_empty_children/1]).
 -export([void_shorthand_has_empty_children/1]).
 -export([dynamic_text_uses_text_node/1]).
+-export([dynamic_attr_inlines_as_prop/1]).
 
 all() ->
     [
@@ -14,7 +15,8 @@ all() ->
         static_nested_elements,
         static_empty_children,
         void_shorthand_has_empty_children,
-        dynamic_text_uses_text_node
+        dynamic_text_uses_text_node,
+        dynamic_attr_inlines_as_prop
     ].
 
 %% --------------------------------------------------------------------
@@ -117,6 +119,25 @@ dynamic_text_uses_text_node(Config) when is_list(Config) ->
     ?assertMatch(#{~"type" := ~"#text", ~"value" := ~"Alice"}, Child),
     %% The #text node must carry an `az` distinct from its parent element's.
     ?assertNotEqual(ElemAz, maps:get(~"az", Child)).
+
+dynamic_attr_inlines_as_prop(Config) when is_list(Config) ->
+    %% A dynamic prop: the name is baked into the static, the value rides in
+    %% `d` as a bare value the client JSON-encodes (uniform with text values).
+    %% Diff updates still use OP_SET_ATTR (name + value separate), unchanged.
+    Mod = compile_module(
+        "-module(nt_dynattr). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Button', [{color, az:get(color, Bindings, <<\"gray\">>)}], [<<\"OK\">>]}). "
+    ),
+    T = Mod:render(#{color => ~"red"}),
+    {_Html, Snap} = arizona_render:render(T),
+    Payload = arizona_render:fingerprint_payload(Snap),
+    ?assertEqual([~"red"], maps:get(~"d", Payload)),
+    ?assertMatch(
+        #{~"type" := ~"Button", ~"color" := ~"red", ~"children" := [~"OK"]},
+        simulate_interleave(Payload)
+    ).
 
 %% --------------------------------------------------------------------
 %% Helpers

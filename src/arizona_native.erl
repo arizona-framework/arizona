@@ -28,6 +28,7 @@ form valid JSON.
 -export([element_close/1]).
 -export([attr/2]).
 -export([attr_boolean/1]).
+-export([attr_dyn_name/1]).
 -export([children_sep/0]).
 -export([text_child/1]).
 -export([text_az/2]).
@@ -67,6 +68,12 @@ attr(Name, Value) ->
 -spec attr_boolean(binary()) -> binary().
 attr_boolean(Name) ->
     <<",", (json_str(Name))/binary, ":true">>.
+
+-spec attr_dyn_name(binary()) -> binary().
+attr_dyn_name(Name) ->
+    %% Bake the prop name into the static; the dynamic supplies just the value
+    %% (the client JSON-encodes it like any other dynamic value).
+    <<",", (json_str(Name))/binary, ":">>.
 
 -spec children_sep() -> binary().
 children_sep() ->

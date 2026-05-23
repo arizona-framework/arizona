@@ -367,9 +367,18 @@ compile_template(Arg, Line, Module, LiveRender) ->
     compile_template(Arg, Line, Module, LiveRender, arizona_html).
 
 compile_template(Arg, Line, Module, LiveRender, Backend) ->
-    {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(Arg, Module, LiveRender, Backend),
+    {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(Arg, Module, LiveRender, Backend),
+    Opts = maybe_target_opt(Backend, Opts0),
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
     build_template_ast(Line, S1, D1, Fingerprint, Opts).
+
+%% Native templates carry `target => native` so the runtime (render_fp_val)
+%% knows to inline dynamic attribute values as JSON. HTML templates carry no
+%% target key (the default).
+maybe_target_opt(arizona_native, Opts) ->
+    Opts#{target => native};
+maybe_target_opt(_Backend, Opts) ->
+    Opts.
 
 compile_each(FunAST, SourceAST, Line, Module) ->
     case FunAST of
@@ -601,17 +610,19 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, _ElemLine) when
                     buf_append(State0, Backend:attr(NameBin, FoldedBin));
                 error when State0#state.nodiff ->
                     Module = State0#state.module,
+                    State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
                     DynAST = make_nodiff_attr_dynamic_ast(
                         NameBin, ValueAST, Module, line(ValueAST)
                     ),
-                    flush(State0, DynAST);
+                    flush(State1, DynAST);
                 error ->
                     Module = State0#state.module,
+                    State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
                     AzBin = integer_to_binary(ElemAz),
                     DynAST = make_attr_dynamic_ast(
                         AzBin, NameBin, ValueAST, Module, line(ValueAST)
                     ),
-                    flush(State0, DynAST)
+                    flush(State1, DynAST)
             end
     end;
 compile_attr({atom, _, Name}, _ElemAz, State0, _ElemLine) ->

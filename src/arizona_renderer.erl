@@ -26,6 +26,10 @@ other formats while reusing the same walker, diff engine, and transport.
 -callback attr(Name :: binary(), Value :: binary()) -> binary().
 %% A valueless (boolean) attribute.
 -callback attr_boolean(Name :: binary()) -> binary().
+%% Static prefix emitted before a *dynamic* attribute's value. HTML keeps the
+%% name in the dynamic (so this is empty); native bakes the prop name into the
+%% static (`,"name":`) so the dynamic carries only the value to stringify.
+-callback attr_dyn_name(Name :: binary()) -> binary().
 %% Separator emitted before each child after the first (HTML needs none; JSON
 %% needs a comma between array elements).
 -callback children_sep() -> binary().

@@ -17,6 +17,7 @@ identical to the previous inlined emission.
 -export([element_close/1]).
 -export([attr/2]).
 -export([attr_boolean/1]).
+-export([attr_dyn_name/1]).
 -export([children_sep/0]).
 -export([text_child/1]).
 -export([text_az/2]).
@@ -56,6 +57,12 @@ attr(Name, Value) ->
 -spec attr_boolean(binary()) -> binary().
 attr_boolean(Name) ->
     <<" ", Name/binary>>.
+
+-spec attr_dyn_name(binary()) -> binary().
+attr_dyn_name(_Name) ->
+    %% HTML keeps the name in the dynamic (rendered by render_attr); nothing
+    %% is baked into the static.
+    <<>>.
 
 -spec children_sep() -> binary().
 children_sep() ->
