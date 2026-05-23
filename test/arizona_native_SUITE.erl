@@ -9,6 +9,8 @@
 -export([dynamic_text_uses_text_node/1]).
 -export([dynamic_attr_inlines_as_prop/1]).
 -export([live_view_caches_statics/1]).
+-export([native_each_renders_item_array/1]).
+-export([native_each_empty_is_valid_json/1]).
 
 all() ->
     [
@@ -18,7 +20,9 @@ all() ->
         void_shorthand_has_empty_children,
         dynamic_text_uses_text_node,
         dynamic_attr_inlines_as_prop,
-        live_view_caches_statics
+        live_view_caches_statics,
+        native_each_renders_item_array,
+        native_each_empty_is_valid_json
     ].
 
 %% --------------------------------------------------------------------
@@ -95,9 +99,8 @@ void_shorthand_has_empty_children(Config) when is_list(Config) ->
     ).
 
 dynamic_text_uses_text_node(Config) when is_list(Config) ->
-    %% A dynamic text child compiles to an addressable `#text` node so OP_TEXT
-    %% can target it by `az`. The dynamic value, JSON-encoded at render time,
-    %% slots into "value".
+    %% A dynamic child compiles to an addressable, transparent `#slot` whose
+    %% children hold the rendered value, so OP_TEXT can target it by `az`.
     Mod = compile_module(
         "-module(nt_dyn). "
         "-export([render/1]). "
@@ -116,11 +119,11 @@ dynamic_text_uses_text_node(Config) when is_list(Config) ->
     ?assertEqual([~"Alice"], maps:get(~"d", Payload)),
     %% A simulated client interleave (JSON-encode each value, mirroring the
     %% browser worker's zipTemplate) must yield valid JSON.
-    #{~"type" := ~"Text", ~"az" := ElemAz, ~"children" := [Child]} =
+    #{~"type" := ~"Text", ~"az" := ElemAz, ~"children" := [Slot]} =
         simulate_interleave(Payload),
-    ?assertMatch(#{~"type" := ~"#text", ~"value" := ~"Alice"}, Child),
-    %% The #text node must carry an `az` distinct from its parent element's.
-    ?assertNotEqual(ElemAz, maps:get(~"az", Child)).
+    ?assertMatch(#{~"type" := ~"#slot", ~"children" := [~"Alice"]}, Slot),
+    %% The slot's `az` must be distinct from its parent element's.
+    ?assertNotEqual(ElemAz, maps:get(~"az", Slot)).
 
 dynamic_attr_inlines_as_prop(Config) when is_list(Config) ->
     %% A dynamic prop: the name is baked into the static, the value rides in
@@ -162,6 +165,48 @@ live_view_caches_statics(Config) when is_list(Config) ->
     ?assertEqual(Fp, maps:get(~"f", Frame2)),
     ?assertNot(maps:is_key(~"s", Frame2)).
 
+native_each_renders_item_array(Config) when is_list(Config) ->
+    %% ?native_each compiles the per-item fragment with the native backend; the
+    %% each payload reuses the #{t,f,s,d} fingerprint form, and the client
+    %% splices the items into the parent's children.
+    Mod = compile_module(
+        "-module(nt_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Column', [], ["
+        "        az:native_each(fun(I) -> {'Text', [], [I]} end, az:get(items, Bindings, []))"
+        "    ]}). "
+    ),
+    T = Mod:render(#{items => [~"a", ~"b"]}),
+    {_Html, Snap} = arizona_render:render(T),
+    #{~"type" := ~"Column", ~"children" := Items} =
+        flatten(simulate_interleave(arizona_render:fingerprint_payload(Snap))),
+    ?assertMatch(
+        [
+            #{~"type" := ~"Text", ~"children" := [~"a"]},
+            #{~"type" := ~"Text", ~"children" := [~"b"]}
+        ],
+        Items
+    ).
+
+native_each_empty_is_valid_json(Config) when is_list(Config) ->
+    %% An empty each renders to `[]` -- valid JSON, no dangling comma even with a
+    %% preceding sibling.
+    Mod = compile_module(
+        "-module(nt_each_empty). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Column', [], ["
+        "        {'Text', [], [<<\"Header\">>]},"
+        "        az:native_each(fun(I) -> {'Text', [], [I]} end, az:get(items, Bindings, []))"
+        "    ]}). "
+    ),
+    T = Mod:render(#{items => []}),
+    {_Html, Snap} = arizona_render:render(T),
+    #{~"type" := ~"Column", ~"children" := Children} =
+        flatten(simulate_interleave(arizona_render:fingerprint_payload(Snap))),
+    ?assertMatch([#{~"type" := ~"Text", ~"children" := [~"Header"]}], Children).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
@@ -182,10 +227,33 @@ interleave([S], []) ->
 interleave([S | Statics], [V | Dynamics]) ->
     [S, encode_value(V) | interleave(Statics, Dynamics)].
 
+encode_value(#{~"t" := _, ~"s" := S, ~"d" := ItemsList}) ->
+    %% Native each -> a JSON array of item objects the client splices (flattens)
+    %% into the parent's children. Valid JSON even when empty (`[]`), so the
+    %% parent's compile-time child commas never dangle.
+    Items = [iolist_to_binary(interleave(S, ItemD)) || ItemD <- ItemsList],
+    iolist_to_binary([$[, lists:join($,, Items), $]]);
 encode_value(V) when is_binary(V); is_number(V); is_boolean(V) ->
     json:encode(V);
 encode_value(#{~"s" := _} = Nested) ->
     iolist_to_binary(interleave(maps:get(~"s", Nested), maps:get(~"d", Nested))).
+
+%% Mirror the client's fragment handling: a `#slot` is transparent (its children
+%% splice into the parent) and a nested array (an each expansion) flattens one
+%% level. Produces the rendered widget tree for assertions.
+flatten(#{~"children" := Children} = Node) ->
+    Node#{~"children" => lists:flatmap(fun flatten_child/1, Children)};
+flatten(Other) ->
+    Other.
+
+flatten_child(#{~"type" := ~"#slot", ~"children" := SlotChildren}) ->
+    lists:flatmap(fun flatten_child/1, SlotChildren);
+flatten_child(List) when is_list(List) ->
+    lists:flatmap(fun flatten_child/1, List);
+flatten_child(#{~"children" := _} = Node) ->
+    [flatten(Node)];
+flatten_child(Other) ->
+    [Other].
 
 compile_module(Source) ->
     {ok, Tokens, _} = erl_scan:string(Source),

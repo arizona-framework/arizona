@@ -86,17 +86,22 @@ text_child(Text) ->
 -spec text_az(binary(), non_neg_integer()) -> binary().
 text_az(ElemAz, Slot) ->
     %% Distinct from the element's own `az` (which shares `ElemAz`): native
-    %% nodes live in one flat registry, so a text node cannot reuse its
+    %% nodes live in one flat registry, so a slot node cannot reuse its
     %% parent's id the way an HTML comment marker can.
     <<ElemAz/binary, "t", (integer_to_binary(Slot))/binary>>.
 
 -spec text_slot_open(binary()) -> binary().
 text_slot_open(Az) ->
-    <<"{\"type\":\"#text\",\"az\":", (json_str(Az))/binary, ",\"value\":">>.
+    %% A `#slot` is the addressable, transparent (fragment) wrapper for any
+    %% dynamic child: its `children` hold the rendered value -- a string for
+    %% text, the item widgets for an each, a component object for a child view.
+    %% The client renders a `#slot` by splicing its children into the parent
+    %% (flattening nested arrays). One node per dynamic, like the HTML markers.
+    <<"{\"type\":\"#slot\",\"az\":", (json_str(Az))/binary, ",\"children\":[">>.
 
 -spec text_slot_close() -> binary().
 text_slot_close() ->
-    ~"}".
+    ~"]}".
 
 -spec is_void(atom()) -> boolean().
 is_void(_Tag) ->

@@ -240,6 +240,10 @@ transform_node(Node, Module) ->
             Mod =:= arizona_template; Mod =:= az
         ->
             compile_each(FunArg, SourceArg, L, Module);
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, native_each}}, [FunArg, SourceArg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            compile_each(FunArg, SourceArg, L, Module, arizona_native);
         %% Sugar: `arizona_template:stateless(atom, Props)` with a literal atom
         %% callback is rewritten to `arizona_template:stateless(fun atom/1, Props)`.
         %% Fun references and other shapes pass through unchanged.
@@ -381,18 +385,27 @@ maybe_target_opt(_Backend, Opts) ->
     Opts.
 
 compile_each(FunAST, SourceAST, Line, Module) ->
+    compile_each(FunAST, SourceAST, Line, Module, arizona_html).
+
+compile_each(FunAST, SourceAST, Line, Module, Backend) ->
     case FunAST of
         {'fun', _, {clauses, [{clause, _, [ItemVar, KeyVar], Guards, Body}]}} ->
             {Prefix, LastExpr} = split_fun_body(Body),
-            {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(LastExpr, Module),
-            {S1, D1} = scope_az(arizona_html, Fingerprint, Statics, DynASTs),
+            {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
+                LastExpr, Module, false, Backend
+            ),
+            Opts = maybe_target_opt(Backend, Opts0),
+            {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(
                 Line, SourceAST, [ItemVar, KeyVar], Guards, Prefix, S1, D1, Fingerprint, Opts
             );
         {'fun', _, {clauses, [{clause, _, [ItemVar], Guards, Body}]}} ->
             {Prefix, LastExpr} = split_fun_body(Body),
-            {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(LastExpr, Module),
-            {S1, D1} = scope_az(arizona_html, Fingerprint, Statics, DynASTs),
+            {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
+                LastExpr, Module, false, Backend
+            ),
+            Opts = maybe_target_opt(Backend, Opts0),
+            {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(
                 Line, SourceAST, [ItemVar], Guards, Prefix, S1, D1, Fingerprint, Opts
             );
@@ -402,11 +415,13 @@ compile_each(FunAST, SourceAST, Line, Module) ->
         {'fun', L, {function, Name, Arity}} when
             is_atom(Name) andalso (Arity =:= 1 orelse Arity =:= 2)
         ->
-            compile_each(wrap_fun_ref(L, Arity, {atom, L, Name}, none), SourceAST, Line, Module);
+            compile_each(
+                wrap_fun_ref(L, Arity, {atom, L, Name}, none), SourceAST, Line, Module, Backend
+            );
         {'fun', L, {function, Mod, Name, {integer, _, Arity}}} when
             Arity =:= 1 orelse Arity =:= 2
         ->
-            compile_each(wrap_fun_ref(L, Arity, Name, Mod), SourceAST, Line, Module);
+            compile_each(wrap_fun_ref(L, Arity, Name, Mod), SourceAST, Line, Module, Backend);
         _ ->
             parse_error(invalid_each_fun, Line)
     end.
@@ -423,12 +438,6 @@ wrap_fun_ref(L, Arity, NameAST, ModAST) ->
         end,
     Call = {call, L, Callee, Vars},
     {'fun', L, {clauses, [{clause, L, Vars, [], [Call]}]}}.
-
-compile_body_parts(ExprAST, Module) ->
-    compile_body_parts(ExprAST, Module, false).
-
-compile_body_parts(ExprAST, Module, LiveRender) ->
-    compile_body_parts(ExprAST, Module, LiveRender, arizona_html).
 
 compile_body_parts(ExprAST, Module, LiveRender, Backend) ->
     compile_classified_body(classify_body(ExprAST), ExprAST, Module, LiveRender, Backend).

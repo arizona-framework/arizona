@@ -46,6 +46,7 @@ render(Bindings) ->
 -export([stateless/2]).
 -export([stateless/3]).
 -export([each/2]).
+-export([native_each/2]).
 -export([to_bin/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
@@ -271,6 +272,18 @@ the per-item template with its source list, stream, or map.
     Template :: each_template().
 each(Source, #{t := ?EACH, d := DFun} = Tmpl) when is_function(DFun, 1); is_function(DFun, 2) ->
     #{t => ?EACH, source => Source, template => Tmpl}.
+
+-doc """
+Compile-time stub for the native each. The parse transform replaces every
+`?native_each(Fun, Source)` call with a compiled each-container whose per-item
+template carries JSON statics. If this function runs, the parse transform was
+not applied.
+""".
+-spec native_each(term(), term()) -> no_return().
+native_each(_Fun, _Source) ->
+    erlang:error(parse_transform_not_applied, [], [
+        {error_info, #{module => ?MODULE}}
+    ]).
 
 -doc """
 Converts a template value to its binary HTML representation.
