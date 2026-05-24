@@ -23,8 +23,8 @@ render(Bindings) ->
 
 -spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
 handle_info(arizona_connected, Bindings) ->
-    ?send_after(200, tick),
+    ?send_after(1000, tick),
     {Bindings, #{}, []};
 handle_info(tick, Bindings) ->
-    ?send_after(200, tick),
+    ?send_after(1000, tick),
     {Bindings#{count => maps:get(count, Bindings) + 1}, #{}, []}.
