@@ -19,14 +19,15 @@ import dev.arizona.client.AzClient
 import dev.arizona.client.WidgetRegistry
 
 /**
- * Demo app: connects to the Arizona server's /native/counter view and renders
- * its JSON widget tree with Compose. The app supplies the widget *vocabulary*
- * (Column/Row/Text/Button); the library supplies the transport, diff, and
- * dispatch. Tapping a Button fires its on_tap push_event back to the server,
- * which diffs and pushes an OP_TEXT that updates the count.
+ * Multi-example launcher: opens the server-driven `/native/menu` view, whose
+ * buttons navigate to each example on the same socket; the chrome "Menu" button
+ * navigates back. The app supplies the widget vocabulary (Column/Row/Text/Button);
+ * the library supplies transport, diff, dispatch, and navigation. Launch a
+ * specific view directly with the `az_path` intent extra (e.g. for instrumented
+ * tests or `adb shell am start ... --es az_path /native/tabs`).
  */
 class MainActivity : ComponentActivity() {
-    private val client by lazy { AzClient(SERVER, "/native/counter") }
+    private lateinit var client: AzClient
 
     private val registry = WidgetRegistry()
         .register("Column") { node -> Column(Modifier.padding(16.dp)) { Children(node) } }
@@ -36,13 +37,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val path = intent.getStringExtra("az_path") ?: "/native/menu"
+        client = AzClient(SERVER, path)
         setContent {
             MaterialTheme {
                 Surface {
-                    // targetSdk 35 forces edge-to-edge; inset the tree below the
-                    // status bar / above the nav bar so content isn't occluded.
+                    // targetSdk 35 forces edge-to-edge; inset below the status bar.
                     Box(Modifier.safeDrawingPadding()) {
-                        ArizonaView(client, registry)
+                        Column {
+                            Button(onClick = { client.navigate("/native/menu") }) { Text("☰ Menu") }
+                            ArizonaView(client, registry)
+                        }
                     }
                 }
             }
