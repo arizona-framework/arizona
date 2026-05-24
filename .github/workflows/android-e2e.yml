@@ -30,11 +30,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+      # Single source of truth: Java + Gradle come straight from .tool-versions
+      # (mise's native format, including the exact Gradle release), the same file
+      # setup-beam/setup-node read for OTP/Node. Scoped to java+gradle so erlang
+      # stays on setup-beam's fast precompiled OTP (mise builds it from source).
+      # mise puts both on PATH (shims) for the build/test steps below.
+      - name: Set up Java + Gradle from .tool-versions
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
         with:
-          distribution: temurin
-          java-version: '17'
+          install_args: java gradle
+          cache: true
 
       - name: Set up Erlang/OTP + rebar3
         uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
@@ -68,11 +73,6 @@ jobs:
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@50e97c2cd7a37755bbfafc9c5b7cafaece252f6e # v6.1.0
-        with:
-          gradle-version: '8.13'
 
       - name: Run emulator e2e
         # v2.37.0
