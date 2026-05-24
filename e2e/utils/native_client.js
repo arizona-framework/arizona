@@ -124,7 +124,10 @@ export class NativeClient {
                 break;
             }
             case OP_TEXT:
-                resolve(op[1]).children = [op[2]];
+                // The value is usually a scalar, but a dynamic that is a nested
+                // template (e.g. a conditional subtree) ships a {f,s,d} payload;
+                // _decode handles both (the browser runs OP_TEXT through resolveHtml).
+                resolve(op[1]).children = [this._decode(op[2])];
                 break;
             case OP_UPDATE:
                 // Re-render a node's content (e.g. a stream reset rebuilds the

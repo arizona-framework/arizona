@@ -17,6 +17,7 @@
 -export([nested_native_stateful_component/1]).
 -export([diff_dynamic_text_op/1]).
 -export([diff_dynamic_attr_op/1]).
+-export([diff_conditional_subtree_op/1]).
 -export([diff_stream_insert_op/1]).
 -export([diff_stream_remove_op/1]).
 -export([diff_stream_move_op/1]).
@@ -37,6 +38,7 @@ all() ->
         nested_native_stateful_component,
         diff_dynamic_text_op,
         diff_dynamic_attr_op,
+        diff_conditional_subtree_op,
         diff_stream_insert_op,
         diff_stream_remove_op,
         diff_stream_move_op
@@ -298,6 +300,24 @@ diff_dynamic_attr_op(Config) when is_list(Config) ->
     {_, Snap0} = arizona_render:render(Mod:render(#{color => ~"red"})),
     {Ops, _} = arizona_diff:diff(Mod:render(#{color => ~"blue"}), Snap0),
     ?assertMatch([[?OP_SET_ATTR, _Az, ~"color", ~"blue"]], Ops).
+
+diff_conditional_subtree_op(Config) when is_list(Config) ->
+    %% A native dynamic that is a nested template (a conditional/tab subtree)
+    %% diffs to OP_TEXT whose value is the re-rendered subtree payload (a
+    %% {s, d} map), not a scalar -- the client decodes it like the first render.
+    Mod = compile_module(
+        "-module(nt_diff_cond). "
+        "-export([render/1, content/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Column', [], [az:stateless(fun content/1, "
+        "#{sel => az:get(sel, Bindings)})]}). "
+        "content(#{sel := <<\"about\">>}) -> "
+        "    az:native({'Column', [], [{'Text', [], [<<\"About\">>]}]}); "
+        "content(#{sel := _}) -> az:native({'Text', [], [<<\"Home\">>]}). "
+    ),
+    {_, Snap0} = arizona_render:render(Mod:render(#{sel => ~"home"})),
+    {Ops, _} = arizona_diff:diff(Mod:render(#{sel => ~"about"}), Snap0),
+    ?assertMatch([[?OP_TEXT, _Az, #{<<"s">> := _, <<"d">> := _}]], Ops).
 
 diff_stream_insert_op(Config) when is_list(Config) ->
     %% A native stream insert diffs to OP_INSERT whose item payload carries

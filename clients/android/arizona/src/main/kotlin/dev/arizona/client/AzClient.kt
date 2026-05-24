@@ -101,9 +101,11 @@ class AzClient(baseUrl: String, path: String) {
                 root.value = node
             }
             Op.TEXT -> {
+                // Usually a scalar, but a nested-template dynamic (e.g. a
+                // conditional subtree) ships a {f,s,d} payload; decode handles both.
                 val node = resolveNode(a[1].jsonPrimitive.content)
                 node.children.clear()
-                node.children.add(a[2].jsonPrimitive.content)
+                addChild(node, Json.parseToJsonElement(interleaver.decode(a[2])))
             }
             Op.UPDATE -> {
                 // Re-render a node's content (e.g. a stream reset rebuilds the
