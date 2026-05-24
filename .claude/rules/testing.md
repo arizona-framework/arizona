@@ -13,9 +13,10 @@ All unit tests use plain `_test()` functions (no generators/fixtures). Parse tra
 
 ## E2E tests
 
-Playwright, split into two directories:
+Playwright, split into projects/directories:
 - `e2e/parallel/` -- `arizona_page.spec.js`, `arizona_datatable.spec.js`, `arizona_mixed_children.spec.js` (run in parallel)
 - `e2e/sequential/` -- `arizona_chat.spec.js` (runs with `workers: 1` to avoid pg channel leaks between tests)
+- `e2e/native/` -- the `?native` (JSON) wire e2e: a real WebSocket client (no browser, `e2e/utils/native_client.js`) drives the `/native/counter` view over the live server
 
 ## Common Test suites
 
