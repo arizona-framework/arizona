@@ -45,6 +45,7 @@ dependencies {
 
     // Instrumented (emulator) e2e: ./gradlew :sample:connectedCheck
     androidTestImplementation(composeBom)
+    androidTestImplementation(libs.kotlinx.serialization.json) // build event payloads
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.ui.test.junit4)

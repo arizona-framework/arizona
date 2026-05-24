@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
@@ -162,12 +163,15 @@ class AzClient(baseUrl: String, path: String) {
         ws?.send(frame.toString())
     }
 
-    fun pushEvent(event: String, payload: Map<String, String> = emptyMap()) {
+    // Send an event frame [ViewId, Event, Payload]. The payload is arbitrary JSON
+    // (matching the wire and the JS reference client) -- handlers may expect
+    // numbers or arrays, not just strings (e.g. a stream move's numeric pos).
+    fun pushEvent(event: String, payload: JsonObject = JsonObject(emptyMap())) {
         val vid = viewId ?: return
         val frame = buildJsonArray {
             add(vid)
             add(event)
-            addJsonObject { payload.forEach { (k, v) -> put(k, kotlinx.serialization.json.JsonPrimitive(v)) } }
+            add(payload)
         }
         ws?.send(frame.toString())
     }

@@ -13,3 +13,10 @@ fun ComposeTestRule.waitForText(text: String, timeoutMillis: Long = 10_000) {
         onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
     }
 }
+
+/** Wait until no node showing [text] is present -- e.g. after a stream remove. */
+fun ComposeTestRule.waitForNoText(text: String, timeoutMillis: Long = 10_000) {
+    waitUntil(timeoutMillis) {
+        onAllNodesWithText(text).fetchSemanticsNodes().isEmpty()
+    }
+}
