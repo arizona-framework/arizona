@@ -157,8 +157,20 @@ Both are near-copies of the browser worker (`assets/js/arizona-worker.js` + `ari
    a prop, and the stream ops manage a container's keyed children — items keyed
    by `az_key`, with `OP_INSERT`/`OP_REMOVE`/`OP_MOVE` reordering the list,
    `OP_ITEM_PATCH` applying inner ops scoped to one item, and `OP_UPDATE`
-   re-rendering the whole list. The `native` e2e drives both a counter
-   (`/native/counter`) and a keyed list (`/native/list`).
+   re-rendering the whole list.
+5. **Run effects and navigate.** A tap fires its node's command prop; the
+   server's `"e"` (effects) array is dispatched after the ops. The portable
+   commands are handled — `push_event`, and `navigate` (which sends
+   `["navigate", {path, qs}]` on the same socket; the server's `handle_navigate`
+   re-mounts the target view and replies with `OP_REPLACE`). Web-only effects
+   (`set_title`, `dispatch_event`, …) are skipped on native.
+
+The `native` e2e exercises each example over the real socket: a counter
+(`/native/counter`), a keyed list (`/native/list`), conditional tab switching
+(`/native/tabs`), server-pushed ticks (`/native/ticker`), independent counters
+(`/native/multi`), and navigation (`/native/menu`). The in-repo Android sample
+(`clients/android`) is a launcher that opens `/native/menu` and navigates to each
+on a device.
 
 An iOS/SwiftUI client would follow the same contract (e.g. `mob`'s SwiftUI renderer is a
 natural starting point — point it at an Arizona WebSocket instead of an on-device NIF).
@@ -181,12 +193,22 @@ Only `push_event`/`navigate` are portable enough to exist on both — they're pu
 client→server actions. The DOM/selector/keyboard commands (`toggle`, `focus`,
 `scroll_to`, `on_key`, …) are web-only by nature and live only in `arizona_js`.
 
+The reference native clients implement both portable commands: `push_event`
+(from a tap or the `"e"` array) and `navigate` (a same-socket view transition).
+Web-only effects appearing in the `"e"` array are skipped, so a handler that
+returns them won't crash a native client.
+
 ## Constraints
 
 - **One target per view tree.** A `?native` view's `?stateful`/`?stateless`/
   `?each` children must also be `?native` (and vice-versa for `?html`). Mixing
   targets in one tree mismatches the statics format. This is a documented rule,
   not a checked one.
+- **Events route to the view root.** A native client sends events to the
+  `OP_REPLACE` ViewId; routing to a nested `?stateful` child (which needs the
+  child's own view id) isn't supported yet — the multi-counter example uses
+  per-region events on a single view. Stateful children still *render*; only
+  event routing to them is the gap.
 - **No server-side widget validation** (let-it-crash / the client's concern).
 - **Props are string-encoded**; the client coerces. Typed props, opt-in
   per-platform compile-time validators, and a portable cross-platform
