@@ -106,4 +106,23 @@ class InterleaverTest {
         val slot = item.getValue("children").jsonArray[0].jsonObject
         assertEquals("Nine", slot.getValue("children").jsonArray[0].jsonPrimitive.content)
     }
+
+    @Test
+    fun decodesNavigateCommandProp() {
+        // A folded navigate command prop is a raw [10, path] array in the statics
+        // (EFFECT_NAVIGATE); it survives interleaving as a JSON array the client
+        // dispatches on tap.
+        val frame =
+            """
+            {"d":[],"f":"MENU1","s":[
+            "{\"type\":\"Button\",\"on_tap\":[10,\"/native/counter\"],\"children\":[\"Counter\"]}"]}
+            """.trimIndent()
+        val node = Json.parseToJsonElement(
+            Interleaver(FingerprintCache()).interleave(Json.parseToJsonElement(frame).jsonObject),
+        ).jsonObject
+        assertEquals("Button", node.getValue("type").jsonPrimitive.content)
+        val cmd = node.getValue("on_tap").jsonArray
+        assertEquals(10, cmd[0].jsonPrimitive.int)
+        assertEquals("/native/counter", cmd[1].jsonPrimitive.content)
+    }
 }

@@ -34,6 +34,7 @@ object Op {
 /** Effect command op codes (mirror include/arizona_effect.hrl). */
 object Effect {
     const val PUSH_EVENT = 0
+    const val NAVIGATE = 10
 }
 
 /**

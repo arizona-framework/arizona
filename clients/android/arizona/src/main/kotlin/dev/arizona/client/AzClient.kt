@@ -55,6 +55,11 @@ class AzClient(baseUrl: String, path: String) {
                     if (text == "1") return // pong
                     val msg = Json.parseToJsonElement(text).jsonObject
                     msg["o"]?.jsonArray?.let { ops -> main.post { applyOps(ops) } }
+                    // Handler-returned effects: dispatch the portable ones, skip
+                    // web-only effects (set_title, dispatch_event, ...).
+                    msg["e"]?.jsonArray?.let { effects ->
+                        main.post { for (eff in effects) runEffect(eff.jsonArray, strict = false) }
+                    }
                 }
             },
         )
@@ -64,12 +69,37 @@ class AzClient(baseUrl: String, path: String) {
         ws?.close(1000, null)
     }
 
-    /** Fire a push_event command read from a node's tap prop (e.g. `on_tap`). */
+    /** Fire the command read from a node's tap prop (e.g. `on_tap`). */
     fun tap(node: Node, prop: String = "on_tap") {
-        val cmd = node.props[prop]?.jsonArray ?: return
-        if (cmd[0].jsonPrimitive.int == Effect.PUSH_EVENT) {
-            pushEvent(cmd[1].jsonPrimitive.content)
+        node.props[prop]?.jsonArray?.let { runEffect(it, strict = true) }
+    }
+
+    // Run one effect command (a tap prop or a server "e" entry). `strict` errors
+    // on an unsupported command (taps); non-strict skips it (web-only effects in
+    // the "e" stream don't apply to native).
+    private fun runEffect(cmd: JsonArray, strict: Boolean) {
+        when (cmd[0].jsonPrimitive.int) {
+            Effect.PUSH_EVENT -> pushEvent(cmd[1].jsonPrimitive.content)
+            Effect.NAVIGATE -> navigate(cmd[1].jsonPrimitive.content)
+            else -> if (strict) error("unsupported command: $cmd")
         }
+    }
+
+    /**
+     * SPA navigate: transition to a new view on the same socket (the server's
+     * handle_navigate re-mounts and replies with OP_REPLACE). Mirrors the browser
+     * sending ['navigate', {path, qs}].
+     */
+    fun navigate(path: String) {
+        val parts = path.split("?", limit = 2)
+        val frame = buildJsonArray {
+            add("navigate")
+            addJsonObject {
+                put("path", kotlinx.serialization.json.JsonPrimitive(parts[0]))
+                put("qs", kotlinx.serialization.json.JsonPrimitive(parts.getOrElse(1) { "" }))
+            }
+        }
+        ws?.send(frame.toString())
     }
 
     fun pushEvent(event: String, payload: Map<String, String> = emptyMap()) {

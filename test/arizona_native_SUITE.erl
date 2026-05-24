@@ -10,6 +10,7 @@
 -export([dynamic_text_uses_text_node/1]).
 -export([dynamic_attr_inlines_as_prop/1]).
 -export([event_prop_is_raw_json_command/1]).
+-export([event_prop_navigate_command/1]).
 -export([live_view_caches_statics/1]).
 -export([native_each_renders_item_array/1]).
 -export([native_each_empty_is_valid_json/1]).
@@ -32,6 +33,7 @@ all() ->
         dynamic_text_uses_text_node,
         dynamic_attr_inlines_as_prop,
         event_prop_is_raw_json_command,
+        event_prop_navigate_command,
         live_view_caches_statics,
         native_each_renders_item_array,
         native_each_empty_is_valid_json,
@@ -180,6 +182,19 @@ event_prop_is_raw_json_command(Config) when is_list(Config) ->
     Decoded = decode_static(Mod:render(#{})),
     %% [0, "inc"] = [EFFECT_PUSH_EVENT, EventName], a JSON array (not a quoted string).
     ?assertEqual([0, ~"inc"], maps:get(~"on_tap", Decoded)).
+
+event_prop_navigate_command(Config) when is_list(Config) ->
+    %% A folded navigate command prop encodes as the raw array [10, Path]
+    %% (EFFECT_NAVIGATE), so a native client can transition to another view on tap.
+    Mod = compile_module(
+        "-module(nt_nav). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Button', [{on_tap, arizona_android:navigate(<<\"/native/counter\">>)}], "
+        "[<<\"Go\">>]}). "
+    ),
+    Decoded = decode_static(Mod:render(#{})),
+    ?assertEqual([10, ~"/native/counter"], maps:get(~"on_tap", Decoded)).
 
 live_view_caches_statics(Config) when is_list(Config) ->
     %% Wire-efficiency proof: a native live view's first mount ships the full

@@ -28,6 +28,7 @@ const OP_REPLACE = 8;
 const OP_MOVE = 9;
 // arizona_effect op codes (mirror include/arizona_effect.hrl).
 const EFFECT_PUSH_EVENT = 0;
+const EFFECT_NAVIGATE = 10;
 
 export class NativeClient {
     constructor(baseUrl, path) {
@@ -53,6 +54,9 @@ export class NativeClient {
                 if (e.data === '1') return; // pong
                 const msg = JSON.parse(e.data);
                 if (msg.o) this._applyOps(msg.o);
+                // Handler-returned effects (the "e" array): dispatch the portable
+                // ones, skip web-only effects (set_title, dispatch_event, ...).
+                if (msg.e) for (const cmd of msg.e) this._runEffect(cmd, false);
                 if (this.root) resolve(this); // first frame applied
                 this._flushWaiters();
             };
@@ -90,15 +94,28 @@ export class NativeClient {
         this.ws.send(JSON.stringify([this.viewId, event, payload]));
     }
 
+    // SPA navigate: transition to a new view on the same socket (the server's
+    // handle_navigate re-mounts and replies with OP_REPLACE). Mirrors the browser
+    // sending ['navigate', {path, qs}].
+    navigate(path) {
+        const [p, qs = ''] = path.split('?');
+        this.ws.send(JSON.stringify(['navigate', { path: p, qs }]));
+    }
+
     // Interpret a node's tap command prop (an arizona_effect command array) and
-    // fire it, like the browser delegating an az-click.
+    // fire it, like the browser delegating an az-click. Strict: an unexpected
+    // command throws.
     tap(node, prop = 'on_tap') {
-        const cmd = node[prop];
-        if (Array.isArray(cmd) && cmd[0] === EFFECT_PUSH_EVENT) {
-            this.pushEvent(cmd[1]);
-        } else {
-            throw new Error(`unsupported tap command: ${JSON.stringify(cmd)}`);
-        }
+        this._runEffect(node[prop], true);
+    }
+
+    // Run one effect command (from a tap prop or the server's "e" array). `strict`
+    // throws on an unsupported command (taps); non-strict skips it (web-only
+    // effects in the "e" stream don't apply to native).
+    _runEffect(cmd, strict) {
+        if (Array.isArray(cmd) && cmd[0] === EFFECT_PUSH_EVENT) this.pushEvent(cmd[1]);
+        else if (Array.isArray(cmd) && cmd[0] === EFFECT_NAVIGATE) this.navigate(cmd[1]);
+        else if (strict) throw new Error(`unsupported command: ${JSON.stringify(cmd)}`);
     }
 
     _flushWaiters() {
