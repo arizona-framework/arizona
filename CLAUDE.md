@@ -33,7 +33,8 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make test-ct` | Common Test only |
 | `make test-eunit` | EUnit only (inline private fn tests) |
 | `make test-js` | JS unit tests (Vitest) |
-| `make test-e2e` | Playwright E2E tests |
+| `make test-e2e` | Playwright E2E tests (incl. the `native` JSON-wire project) |
+| `make test-android` | Android client e2e (opt-in; needs Android SDK + emulator; **not** in `ci`) |
 | `make cover` | Coverage check (`cover-erl` `cover-js`) |
 | `make cover-erl` | Erlang coverage (min 80%) |
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
@@ -44,6 +45,13 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 ## Architecture reference
 
 Full architecture documentation (modules, APIs, data flow, op codes, etc.) is in [docs/architecture.md](docs/architecture.md).
+
+## Clients
+
+Client runtimes that consume the wire protocol live in-repo so they evolve atomically with it:
+the **web** client (browser) is `assets/js/` (built into `priv/static` by Vite); the **Android**
+client for the `?native` target is `clients/android/` (Kotlin/Compose, its own Gradle build --
+**not** part of `make ci`; see `make test-android`).
 
 ## Event attributes & effects -- `arizona_js`
 

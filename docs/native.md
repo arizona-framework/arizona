@@ -136,10 +136,11 @@ browser, so statics are sent once and never re-sent:
 - There is no SSR/HTTP page for native: the first frame is the live process's
   `mount_and_render` output wrapped as `OP_REPLACE` over the WebSocket.
 
-## Native client contract (out of scope to build here)
+## Native client contract
 
-A native client is a near-copy of the browser worker
-(`assets/js/arizona-worker.js` + `arizona-core.js`):
+Reference implementations live in-repo: `e2e/utils/native_client.js` (a JS client used
+by the `native` e2e project) and `clients/android/` (the Kotlin/Compose Android client).
+Both are near-copies of the browser worker (`assets/js/arizona-worker.js` + `arizona-core.js`):
 
 1. **Cache statics by fingerprint** in platform storage (browser uses
    IndexedDB); send `["cached_fps", [...]]` on connect.
@@ -155,8 +156,8 @@ A native client is a near-copy of the browser worker
    DOM): `OP_TEXT` sets a `#slot`'s content, `OP_SET_ATTR` sets a prop,
    `OP_INSERT`/`OP_MOVE`/`OP_REMOVE` manage a keyed list, etc.
 
-`mob`'s SwiftUI/Compose renderers are a natural starting point — point them at
-an Arizona WebSocket instead of an on-device NIF.
+An iOS/SwiftUI client would follow the same contract (e.g. `mob`'s SwiftUI renderer is a
+natural starting point — point it at an Arizona WebSocket instead of an on-device NIF).
 
 ## Effect commands
 

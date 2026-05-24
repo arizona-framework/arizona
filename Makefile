@@ -9,7 +9,7 @@ SHELL := /bin/bash
 	lint \
 	check check-dirty check-fast check-erl check-fmt check-lint check-hank check-xref check-dialyzer check-js \
 	build-js analyze-js \
-	test test-eunit test-ct test-erl test-js test-e2e \
+	test test-eunit test-ct test-erl test-js test-e2e test-android \
 	bench \
 	cover cover-erl cover-js \
 	doc doc-erl doc-js \
@@ -114,6 +114,11 @@ test-js:
 
 test-e2e:
 	npx playwright test
+
+# Android client (clients/android) -- opt-in; needs the Android SDK + a running
+# emulator and the Arizona server reachable at 10.0.2.2:4040. NOT part of `ci`/`test`.
+test-android:
+	cd clients/android && ./gradlew :arizona:testDebugUnitTest :sample:connectedCheck
 
 test-e2e-parallel:
 	npx playwright test --project parallel
