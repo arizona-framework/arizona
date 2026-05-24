@@ -8,8 +8,12 @@ name: android-e2e
 
 on:
   push:
+    branches:
+      - main
   pull_request:
-  workflow_dispatch:
+    branches:
+      - main
+  workflow_dispatch: {}
 
 concurrency:
   group: ${{github.workflow}}-${{github.ref}}
@@ -73,7 +77,7 @@ jobs:
         # v2.37.0
         uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a
         with:
-          api-level: 34
+          api-level: 35
           arch: x86_64
           working-directory: clients/android
           script: gradle :sample:connectedCheck
