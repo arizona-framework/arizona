@@ -1,6 +1,7 @@
 ---
-# On-device e2e: start the Arizona server, then run the Compose UI test on an
-# Android emulator that drives /native/counter over a real WebSocket.
+# On-device e2e: start the Arizona server, then run the Compose UI tests on an
+# Android emulator that drives the /native examples over a real WebSocket. The
+# app connects to localhost:4040, tunnelled to the host server via `adb reverse`.
 #
 # The Android client lives in-repo at clients/android, so the server and client
 # are checked out together. Adjust OTP/Node versions and API level for your setup.
@@ -51,7 +52,7 @@ jobs:
       - name: Install Node.js dependencies
         run: npm ci
 
-      - name: Start Arizona server (port 4040, reachable from emulator at 10.0.2.2)
+      - name: Start Arizona server (port 4040; the emulator reaches it via adb reverse)
         run: |
           export PORT=4040 ERLANG_EXTRA_ARGS=-noshell
           ./scripts/start_test_server.sh > /tmp/arizona-server.log 2>&1 &
@@ -80,4 +81,6 @@ jobs:
           api-level: 35
           arch: x86_64
           working-directory: clients/android
-          script: gradle :sample:connectedCheck
+          # Tunnel the emulator's localhost:4040 to the host server, then run the
+          # Compose UI tests (the app connects to http://localhost:4040).
+          script: adb reverse tcp:4040 tcp:4040 && gradle :sample:connectedCheck

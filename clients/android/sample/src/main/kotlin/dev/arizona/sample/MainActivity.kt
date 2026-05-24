@@ -61,8 +61,9 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        // The Android emulator reaches the host machine at 10.0.2.2. For a real
-        // device, point this at the host's LAN IP (host + phone on the same network).
-        private const val SERVER = "http://10.0.2.2:4040"
+        // `adb reverse tcp:4040 tcp:4040` tunnels the device's localhost:4040 to the
+        // host server over USB -- the same address for the emulator and a real
+        // device, with no LAN IP to configure (and lower latency than wifi).
+        private const val SERVER = "http://localhost:4040"
     }
 }

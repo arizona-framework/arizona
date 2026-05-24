@@ -45,24 +45,29 @@ the CLI commands below assume `gradle` on `PATH`. CI provisions Gradle with
 gradle :arizona:testDebugUnitTest
 ```
 
-**Run the demo on an emulator** — start the Arizona server from the repo root,
-then launch the app:
+**Run the demo on an emulator or device** — start the server, tunnel the device's
+`localhost:4040` to it with `adb reverse` (works for the emulator and a real
+device alike, over USB; no LAN IP), then launch the app:
 
 ```bash
-# From the repo root (server on the host; emulator reaches it at 10.0.2.2):
+# From the repo root (server binds 0.0.0.0:4040):
 PORT=4040 ERLANG_EXTRA_ARGS=-noshell ./scripts/start_test_server.sh
 
-# From clients/android, on a running emulator/device (or just hit Run in Studio):
+# With a running emulator/device (re-run after replugging the cable):
+adb reverse tcp:4040 tcp:4040
+
+# From clients/android (or just hit Run in Studio):
 gradle :sample:installDebug   # then open the app
 ```
 
-The counter renders `Count: 0`; tapping **+**/**−** round-trips through the server.
+The app opens a **menu**; tap a button to navigate to each example
+(counter, list, tabs, ticker, multi), and **☰ Menu** to go back. The app connects
+to `http://localhost:4040` (the `adb reverse` tunnel).
 
-**On-device e2e** (the Playwright analogue) — the Arizona server must be running
-and reachable at `10.0.2.2:4040`:
+**On-device e2e** (the Playwright analogue) — with the server running:
 
 ```bash
-gradle :sample:connectedCheck
+adb reverse tcp:4040 tcp:4040 && gradle :sample:connectedCheck
 ```
 
 CI that wires the server + emulator together lives in
