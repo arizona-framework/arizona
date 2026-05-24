@@ -164,11 +164,21 @@ Both are near-copies of the browser worker (`assets/js/arizona-worker.js` + `ari
    `["navigate", {path, qs}]` on the same socket; the server's `handle_navigate`
    re-mounts the target view and replies with `OP_REPLACE`). Web-only effects
    (`set_title`, `dispatch_event`, …) are skipped on native.
+6. **Reconnect with backoff.** On a dropped socket — any close other than a
+   normal `1000`, or an abrupt failure — reopen with exponential backoff
+   (`[1, 2, 5, 10]`s steps, capped at 10s, ±20% jitter), resetting the attempt
+   counter once a frame arrives. Because the native URL carries `_az_reconnect=1`,
+   each reopen re-mounts and replies with a fresh `OP_REPLACE` (native has no
+   form state to preserve — that path is browser-only), so a server restart
+   self-heals. An intentional `close()` (code `1000`) does not reconnect. The
+   browser's 30s heartbeat ping/pong (`'0'`/`'1'`) for silent half-open detection
+   is a follow-up; a TCP-level drop already surfaces via the socket's failure
+   callback.
 
 The `native` e2e exercises each example over the real socket: a counter
 (`/native/counter`), a keyed list (`/native/list`), conditional tab switching
 (`/native/tabs`), server-pushed ticks (`/native/ticker`), independent counters
-(`/native/multi`), and navigation (`/native/menu`). The in-repo Android sample
+(`/native/multi`), navigation (`/native/menu`), and reconnect-after-drop. The in-repo Android sample
 (`clients/android`) is a launcher that opens `/native/menu` and navigates to each
 on a device.
 
