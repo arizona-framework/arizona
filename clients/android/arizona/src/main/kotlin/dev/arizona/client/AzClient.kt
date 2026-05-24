@@ -2,6 +2,7 @@ package dev.arizona.client
 
 import android.os.Handler
 import android.os.Looper
+import androidx.annotation.VisibleForTesting
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import kotlinx.serialization.json.Json
@@ -22,6 +23,17 @@ import okhttp3.WebSocketListener
 
 /** Connection state, surfaced as Compose state so the UI can show a placeholder. */
 enum class ConnStatus { CONNECTING, CONNECTED, DISCONNECTED }
+
+/**
+ * Reconnect backoff: step delays (ms) by attempt, capped at 10s, with ±20%
+ * jitter. Mirrors assets/js/arizona-core.js (and e2e/utils/native_client.js).
+ * Pure -> JVM-testable without an emulator.
+ */
+fun backoffDelayMs(attempt: Int): Long {
+    val delays = longArrayOf(1000, 2000, 5000, 10000)
+    val base = if (attempt < delays.size) delays[attempt] else 10000L
+    return Math.round(base * (0.8 + Math.random() * 0.4))
+}
 
 /**
  * Connects to an Arizona server's WebSocket and renders its `?native` view.
@@ -49,6 +61,13 @@ class AzClient(baseUrl: String, path: String) {
     private var ws: WebSocket? = null
     private var viewId: String? = null
 
+    // Reconnect bookkeeping. `closing` (set on an intentional close) suppresses
+    // reconnect; `reconnectAttempt` indexes the backoff and is touched only on
+    // the main thread (reset on a healthy frame, bumped when scheduling).
+    @Volatile
+    private var closing = false
+    private var reconnectAttempt = 0
+
     fun connect() {
         status.value = ConnStatus.CONNECTING
         ws = http.newWebSocket(
@@ -65,6 +84,7 @@ class AzClient(baseUrl: String, path: String) {
                         main.post {
                             applyOps(ops)
                             status.value = ConnStatus.CONNECTED
+                            reconnectAttempt = 0 // healthy frame -> reset backoff
                         }
                     }
                     // Handler-returned effects: dispatch the portable ones, skip
@@ -75,18 +95,38 @@ class AzClient(baseUrl: String, path: String) {
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    main.post { status.value = ConnStatus.DISCONNECTED }
+                    // A failure is an abrupt drop (no close code): treat as non-1000.
+                    scheduleReconnect(1006)
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    main.post { status.value = ConnStatus.DISCONNECTED }
+                    scheduleReconnect(code)
                 }
             },
         )
     }
 
+    // Flip to DISCONNECTED and, unless we closed on purpose (`closing`) or it was
+    // a normal close (1000), reopen with backoff -- re-mounting via _az_reconnect=1.
+    // All on the main thread, so reconnectAttempt is touched from one thread only.
+    // Mirrors the JS reference client's onclose.
+    private fun scheduleReconnect(code: Int) {
+        main.post {
+            status.value = ConnStatus.DISCONNECTED
+            if (closing || code == 1000) return@post
+            main.postDelayed({ if (!closing) connect() }, backoffDelayMs(reconnectAttempt++))
+        }
+    }
+
     fun close() {
+        closing = true
         ws?.close(1000, null)
+    }
+
+    /** Abruptly drop the socket (like a network failure) to exercise reconnect. */
+    @VisibleForTesting
+    fun forceDrop() {
+        ws?.cancel()
     }
 
     /** Fire the command read from a node's tap prop (e.g. `on_tap`). */

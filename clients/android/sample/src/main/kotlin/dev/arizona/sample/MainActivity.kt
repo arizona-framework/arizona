@@ -28,7 +28,8 @@ import dev.arizona.client.WidgetRegistry
  * tests or `adb shell am start ... --es az_path /native/tabs`).
  */
 class MainActivity : ComponentActivity() {
-    private lateinit var client: AzClient
+    // internal (not private) so the androidTest reconnect case can force a drop.
+    internal lateinit var client: AzClient
 
     private val registry = WidgetRegistry()
         .register("Column") { node -> Column(Modifier.padding(16.dp)) { Children(node) } }
