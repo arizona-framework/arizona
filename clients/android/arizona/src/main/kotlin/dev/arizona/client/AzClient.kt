@@ -20,6 +20,9 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
+/** Connection state, surfaced as Compose state so the UI can show a placeholder. */
+enum class ConnStatus { CONNECTING, CONNECTED, DISCONNECTED }
+
 /**
  * Connects to an Arizona server's WebSocket and renders its `?native` view.
  *
@@ -35,6 +38,9 @@ class AzClient(baseUrl: String, path: String) {
     /** The current root widget node; `null` until the first frame arrives. */
     val root: MutableState<Node?> = mutableStateOf(null)
 
+    /** Connection state, for a "connecting"/"no connection" UI placeholder. */
+    val status: MutableState<ConnStatus> = mutableStateOf(ConnStatus.CONNECTING)
+
     private val cache = FingerprintCache()
     private val interleaver = Interleaver(cache)
     private val registry = HashMap<String, Node>()
@@ -44,6 +50,7 @@ class AzClient(baseUrl: String, path: String) {
     private var viewId: String? = null
 
     fun connect() {
+        status.value = ConnStatus.CONNECTING
         ws = http.newWebSocket(
             Request.Builder().url(wsUrl).build(),
             object : WebSocketListener() {
@@ -54,12 +61,25 @@ class AzClient(baseUrl: String, path: String) {
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     if (text == "1") return // pong
                     val msg = Json.parseToJsonElement(text).jsonObject
-                    msg["o"]?.jsonArray?.let { ops -> main.post { applyOps(ops) } }
+                    msg["o"]?.jsonArray?.let { ops ->
+                        main.post {
+                            applyOps(ops)
+                            status.value = ConnStatus.CONNECTED
+                        }
+                    }
                     // Handler-returned effects: dispatch the portable ones, skip
                     // web-only effects (set_title, dispatch_event, ...).
                     msg["e"]?.jsonArray?.let { effects ->
                         main.post { for (eff in effects) runEffect(eff.jsonArray, strict = false) }
                     }
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    main.post { status.value = ConnStatus.DISCONNECTED }
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    main.post { status.value = ConnStatus.DISCONNECTED }
                 }
             },
         )

@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.arizona.client.ArizonaView
 import dev.arizona.client.AzClient
+import dev.arizona.client.ConnStatus
 import dev.arizona.client.WidgetRegistry
 
 /**
@@ -46,7 +47,12 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.safeDrawingPadding()) {
                         Column {
                             Button(onClick = { client.navigate("/native/menu") }) { Text("☰ Menu") }
-                            ArizonaView(client, registry)
+                            when {
+                                client.status.value == ConnStatus.DISCONNECTED ->
+                                    Text("⚠ No server connection — is it running on :4040?")
+                                client.root.value == null -> Text("Connecting…")
+                                else -> ArizonaView(client, registry)
+                            }
                         }
                     }
                 }
