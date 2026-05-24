@@ -153,8 +153,12 @@ Both are near-copies of the browser worker (`assets/js/arizona-worker.js` + `ari
    `["#slot children"]` and `[[item, item]]` both flatten into the parent's
    children.
 4. **Apply the op codes** against an `az` → node registry (the browser uses the
-   DOM): `OP_TEXT` sets a `#slot`'s content, `OP_SET_ATTR` sets a prop,
-   `OP_INSERT`/`OP_MOVE`/`OP_REMOVE` manage a keyed list, etc.
+   DOM): `OP_TEXT` sets a `#slot`'s content, `OP_SET_ATTR`/`OP_REM_ATTR` set/drop
+   a prop, and the stream ops manage a container's keyed children — items keyed
+   by `az_key`, with `OP_INSERT`/`OP_REMOVE`/`OP_MOVE` reordering the list,
+   `OP_ITEM_PATCH` applying inner ops scoped to one item, and `OP_UPDATE`
+   re-rendering the whole list. The `native` e2e drives both a counter
+   (`/native/counter`) and a keyed list (`/native/list`).
 
 An iOS/SwiftUI client would follow the same contract (e.g. `mob`'s SwiftUI renderer is a
 natural starting point — point it at an Arizona WebSocket instead of an on-device NIF).
