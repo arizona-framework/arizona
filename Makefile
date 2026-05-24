@@ -115,10 +115,12 @@ test-js:
 test-e2e:
 	npx playwright test
 
-# Android client (clients/android) -- opt-in; needs the Android SDK + a running
-# emulator and the Arizona server reachable at 10.0.2.2:4040. NOT part of `ci`/`test`.
+# Android client (clients/android) -- opt-in; needs the Android SDK, a running
+# emulator, the Arizona server reachable at 10.0.2.2:4040, and a `gradle` install
+# (no wrapper is committed; Android Studio's Gradle tool window works too). NOT
+# part of `ci`/`test`; CI uses gradle/actions/setup-gradle instead.
 test-android:
-	cd clients/android && ./gradlew :arizona:testDebugUnitTest :sample:connectedCheck
+	cd clients/android && gradle :arizona:testDebugUnitTest :sample:connectedCheck
 
 test-e2e-parallel:
 	npx playwright test --project parallel

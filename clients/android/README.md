@@ -32,16 +32,17 @@ Arizona repo): connect → cache statics by fingerprint → interleave statics+d
 
 Authored against a known-good late-2024/early-2025 toolchain (see `gradle/libs.versions.toml`);
 **align versions with your installed Android SDK/AGP/Kotlin**. The package names
-(`dev.arizona.*`) are placeholders — rename freely. The Gradle wrapper jar isn't
-committed: open the project in Android Studio (it provisions Gradle), or run
-`gradle wrapper` once to generate `./gradlew`.
+(`dev.arizona.*`) are placeholders — rename freely. No Gradle wrapper is committed:
+build via Android Studio (it bundles its own Gradle) or a system `gradle` install —
+the CLI commands below assume `gradle` on `PATH`. CI provisions Gradle with
+`gradle/actions/setup-gradle`.
 
 ## Verify
 
 **Pure logic (no emulator)** — validates the interleaver against the real captured frame:
 
 ```bash
-./gradlew :arizona:testDebugUnitTest
+gradle :arizona:testDebugUnitTest
 ```
 
 **Run the demo on an emulator** — start the Arizona server from the repo root,
@@ -51,8 +52,8 @@ then launch the app:
 # From the repo root (server on the host; emulator reaches it at 10.0.2.2):
 PORT=4040 ERLANG_EXTRA_ARGS=-noshell ./scripts/start_test_server.sh
 
-# From clients/android, on a running emulator/device:
-./gradlew :sample:installDebug   # then open the app
+# From clients/android, on a running emulator/device (or just hit Run in Studio):
+gradle :sample:installDebug   # then open the app
 ```
 
 The counter renders `Count: 0`; tapping **+**/**−** round-trips through the server.
@@ -61,7 +62,7 @@ The counter renders `Count: 0`; tapping **+**/**−** round-trips through the se
 and reachable at `10.0.2.2:4040`:
 
 ```bash
-./gradlew :sample:connectedCheck
+gradle :sample:connectedCheck
 ```
 
 CI that wires the server + emulator together lives in
