@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -50,4 +52,22 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.test.manifest)
+}
+
+// Tunnel the device's localhost:4040 to the host's Arizona server after every
+// install, so you never run `adb reverse` by hand -- Android Studio's Run
+// installs, so its run loop is covered too. (adb reverse resets on reconnect/
+// reboot/adb restart; re-running it on each install keeps it set.) Harmless if
+// there's no device or the tunnel already exists.
+val adbReverse by tasks.registering(Exec::class) {
+    val sdkDir = System.getenv("ANDROID_HOME")
+        ?: System.getenv("ANDROID_SDK_ROOT")
+        ?: rootProject.file("local.properties").takeIf { it.exists() }?.let { f ->
+            Properties().apply { f.inputStream().use { load(it) } }.getProperty("sdk.dir")
+        }
+    commandLine(sdkDir?.let { "$it/platform-tools/adb" } ?: "adb", "reverse", "tcp:4040", "tcp:4040")
+    isIgnoreExitValue = true
+}
+tasks.matching { it.name.startsWith("install") }.configureEach {
+    finalizedBy(adbReverse)
 }
