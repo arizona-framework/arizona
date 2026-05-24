@@ -16,10 +16,16 @@
 // Native has no SSR page, so the client connects with `_az_reconnect=1` to make
 // the live process send its `mount_and_render` output as the first OP_REPLACE.
 
-// Op codes (mirror include/arizona.hrl).
+// Op codes (mirror src/arizona.hrl).
 const OP_TEXT = 0;
 const OP_SET_ATTR = 1;
+const OP_REM_ATTR = 2;
+const OP_UPDATE = 3;
+const OP_INSERT = 5;
+const OP_REMOVE = 6;
+const OP_ITEM_PATCH = 7;
 const OP_REPLACE = 8;
+const OP_MOVE = 9;
 // arizona_effect op codes (mirror include/arizona_effect.hrl).
 const EFFECT_PUSH_EVENT = 0;
 
@@ -100,29 +106,74 @@ export class NativeClient {
     }
 
     _applyOps(ops) {
-        for (const op of ops) {
-            switch (op[0]) {
-                case OP_REPLACE: {
-                    const [, viewId, payload] = op;
-                    this.viewId = viewId;
-                    this.root = JSON.parse(this._interleave(payload));
-                    this.registry = new Map();
-                    indexByAz(this.root, this.registry);
-                    break;
-                }
-                case OP_TEXT: {
-                    const node = this._resolve(op[1]);
-                    node.children = [op[2]];
-                    break;
-                }
-                case OP_SET_ATTR: {
-                    const node = this._resolve(op[1]);
-                    node[op[2]] = op[3];
-                    break;
-                }
-                default:
-                    throw new Error(`unhandled op code: ${op[0]}`);
+        // Top-level ops address nodes as "ViewId:az" via the global registry.
+        for (const op of ops) this._dispatch(op, (target) => this._resolve(target));
+    }
+
+    // Apply one op, resolving its target node via `resolve`. Top-level ops pass
+    // "ViewId:az"; an OP_ITEM_PATCH's inner ops pass a bare az resolved within
+    // the patched item (mirrors the browser worker's applyItemOps).
+    _dispatch(op, resolve) {
+        switch (op[0]) {
+            case OP_REPLACE: {
+                const [, viewId, payload] = op;
+                this.viewId = viewId;
+                this.root = JSON.parse(this._interleave(payload));
+                this.registry = new Map();
+                indexByAz(this.root, this.registry);
+                break;
             }
+            case OP_TEXT:
+                resolve(op[1]).children = [op[2]];
+                break;
+            case OP_UPDATE:
+                // Re-render a node's content (e.g. a stream reset rebuilds the
+                // whole each-list).
+                resolve(op[1]).children = [this._decode(op[2])];
+                break;
+            case OP_SET_ATTR:
+                resolve(op[1])[op[2]] = op[3];
+                break;
+            case OP_REM_ATTR:
+                delete resolve(op[1])[op[2]];
+                break;
+            case OP_INSERT: {
+                const items = itemList(resolve(op[1]));
+                const pos = op[3];
+                const item = this._decode(op[4]);
+                if (pos === -1 || pos >= items.length) items.push(item);
+                else items.splice(pos, 0, item);
+                break;
+            }
+            case OP_REMOVE: {
+                const items = itemList(resolve(op[1]));
+                const i = items.findIndex((it) => it.az_key === op[2]);
+                if (i !== -1) items.splice(i, 1);
+                break;
+            }
+            case OP_MOVE: {
+                const items = itemList(resolve(op[1]));
+                const i = items.findIndex((it) => it.az_key === op[2]);
+                if (i === -1) break;
+                const [item] = items.splice(i, 1);
+                const afterKey = op[3];
+                if (afterKey === null) {
+                    items.unshift(item);
+                } else {
+                    const r = items.findIndex((it) => it.az_key === afterKey);
+                    if (r === -1) items.push(item);
+                    else items.splice(r + 1, 0, item);
+                }
+                break;
+            }
+            case OP_ITEM_PATCH: {
+                const items = itemList(resolve(op[1]));
+                const item = items.find((it) => it.az_key === op[2]);
+                if (item) this._applyInner(item, op[3]);
+                break;
+            }
+            default:
+                throw new Error(`unhandled op code: ${op[0]}`);
         }
     }
 
@@ -132,6 +183,20 @@ export class NativeClient {
         const node = this.registry.get(az);
         if (!node) throw new Error(`unknown az target: ${target}`);
         return node;
+    }
+
+    // Apply an OP_ITEM_PATCH's inner ops, scoped to one keyed item: inner ops
+    // carry bare az indices resolved within the item's own subtree.
+    _applyInner(item, innerOps) {
+        const reg = new Map();
+        indexByAz(item, reg);
+        for (const op of innerOps) this._dispatch(op, (az) => reg.get(az) || item);
+    }
+
+    // Decode an op payload: a {t:0} each-list -> array, a {f,s,d} template ->
+    // node, a scalar -> itself.
+    _decode(payload) {
+        return JSON.parse(this._encodeValue(payload));
     }
 
     // Stitch statics + dynamics into a JSON string (the browser's zipTemplate,
@@ -188,6 +253,14 @@ function indexByAz(node, reg) {
     if (node.children) {
         for (const c of node.children) indexByAz(c, reg);
     }
+}
+
+// A stream container (#slot) holds its keyed items as the single each-array
+// among its children; the keyed-list ops (insert/remove/move/patch) address it.
+function itemList(container) {
+    const items = container.children.find(Array.isArray);
+    if (!items) throw new Error(`container ${container.az} has no item list`);
+    return items;
 }
 
 // Splice every #slot's children into its parent, and flatten nested arrays

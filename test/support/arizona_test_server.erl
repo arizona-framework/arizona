@@ -43,6 +43,15 @@ start() ->
         %% Native (JSON) view -- no layouts (native has no HTTP page); the first
         %% frame is mount_and_render over the WebSocket.
         {live, <<"/native/counter">>, arizona_native_counter_demo, #{}},
+        {live, <<"/native/list">>, arizona_native_list, #{
+            bindings => #{
+                items => [
+                    #{id => ~"1", text => ~"One"},
+                    #{id => ~"2", text => ~"Two"},
+                    #{id => ~"3", text => ~"Three"}
+                ]
+            }
+        }},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}
     ],
