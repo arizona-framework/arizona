@@ -10,7 +10,7 @@ test.describe('native (JSON) wire -- stream list', () => {
     test('applies insert/remove/move/patch/update over the real socket', async ({ baseURL }) => {
         const client = new NativeClient(baseURL, '/native/list');
         await client.connect();
-        // [key, text] of each rendered Row (its inner #slot text spliced in).
+        // [key, text] of each rendered item (its inner #slot text spliced in).
         const rows = (t) => t.children.map((r) => [r.az_key, r.children[0]]);
         try {
             const root = client.tree();

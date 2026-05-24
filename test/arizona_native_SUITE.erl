@@ -366,7 +366,7 @@ diff_stream_insert_op(Config) when is_list(Config) ->
     ?assertMatch([[?OP_INSERT, _Az, ~"1", -1, _Payload]], Ops),
     [[_, _, _, _, Payload]] = Ops,
     ?assertMatch(
-        #{~"type" := ~"Row", ~"children" := [~"First"]},
+        #{~"type" := ~"Text", ~"children" := [~"First"]},
         flatten(simulate_interleave(Payload))
     ).
 

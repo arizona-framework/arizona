@@ -19,7 +19,7 @@ render(Bindings) ->
         {'Column', [{id, ?get(id)}], [
             ?each(
                 fun(#{text := Text}, Key) ->
-                    {'Row', [{az_key, Key}], [Text]}
+                    {'Text', [{az_key, Key}], [Text]}
                 end,
                 ?get(items)
             )
