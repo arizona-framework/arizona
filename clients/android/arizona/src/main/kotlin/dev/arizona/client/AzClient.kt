@@ -6,6 +6,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
@@ -82,30 +83,88 @@ class AzClient(baseUrl: String, path: String) {
     }
 
     private fun applyOps(ops: JsonArray) {
-        for (op in ops) {
-            val a = op.jsonArray
-            when (a[0].jsonPrimitive.int) {
-                Op.REPLACE -> {
-                    viewId = a[1].jsonPrimitive.content
-                    val json = Json.parseToJsonElement(interleaver.interleave(a[2].jsonObject))
-                    registry.clear()
-                    val node = buildTree(json)
-                    indexByAz(node, registry)
-                    root.value = node
-                }
-                Op.TEXT -> {
-                    val node = resolve(a[1].jsonPrimitive.content)
-                    node.children.clear()
-                    node.children.add(a[2].jsonPrimitive.content)
-                }
-                Op.SET_ATTR -> {
-                    val node = resolve(a[1].jsonPrimitive.content)
-                    node.props[a[2].jsonPrimitive.content] = a[3]
-                }
-                else -> error("unhandled op code: ${a[0]}")
+        // Top-level ops address nodes as "ViewId:az" via the global registry.
+        for (op in ops) dispatch(op.jsonArray) { target -> resolve(target) }
+    }
+
+    // Apply one op, resolving its target via [resolveNode]. Top-level ops pass
+    // "ViewId:az"; an OP_ITEM_PATCH's inner ops pass a bare az resolved within
+    // the patched item (mirrors the browser worker's applyItemOps).
+    private fun dispatch(a: JsonArray, resolveNode: (String) -> Node) {
+        when (a[0].jsonPrimitive.int) {
+            Op.REPLACE -> {
+                viewId = a[1].jsonPrimitive.content
+                val json = Json.parseToJsonElement(interleaver.interleave(a[2].jsonObject))
+                registry.clear()
+                val node = buildTree(json)
+                indexByAz(node, registry)
+                root.value = node
             }
+            Op.TEXT -> {
+                val node = resolveNode(a[1].jsonPrimitive.content)
+                node.children.clear()
+                node.children.add(a[2].jsonPrimitive.content)
+            }
+            Op.UPDATE -> {
+                // Re-render a node's content (e.g. a stream reset rebuilds the
+                // whole each-list).
+                val node = resolveNode(a[1].jsonPrimitive.content)
+                node.children.clear()
+                addChild(node, Json.parseToJsonElement(interleaver.decode(a[2])))
+            }
+            Op.SET_ATTR -> {
+                resolveNode(a[1].jsonPrimitive.content).props[a[2].jsonPrimitive.content] = a[3]
+            }
+            Op.REM_ATTR -> {
+                resolveNode(a[1].jsonPrimitive.content).props.remove(a[2].jsonPrimitive.content)
+            }
+            Op.INSERT -> {
+                val container = resolveNode(a[1].jsonPrimitive.content)
+                val pos = a[3].jsonPrimitive.int
+                val item = buildTree(Json.parseToJsonElement(interleaver.decode(a[4])))
+                if (pos == -1 || pos >= container.children.size) container.children.add(item)
+                else container.children.add(pos, item)
+            }
+            Op.REMOVE -> {
+                val container = resolveNode(a[1].jsonPrimitive.content)
+                val i = indexOfKey(container, a[2].jsonPrimitive.content)
+                if (i != -1) container.children.removeAt(i)
+            }
+            Op.MOVE -> {
+                val container = resolveNode(a[1].jsonPrimitive.content)
+                val i = indexOfKey(container, a[2].jsonPrimitive.content)
+                if (i == -1) return
+                val item = container.children.removeAt(i)
+                val afterKey = a[3]
+                if (afterKey is JsonNull) {
+                    container.children.add(0, item)
+                } else {
+                    val r = indexOfKey(container, afterKey.jsonPrimitive.content)
+                    if (r == -1) container.children.add(item) else container.children.add(r + 1, item)
+                }
+            }
+            Op.ITEM_PATCH -> {
+                val container = resolveNode(a[1].jsonPrimitive.content)
+                val i = indexOfKey(container, a[2].jsonPrimitive.content)
+                if (i != -1) applyInner(container.children[i] as Node, a[3].jsonArray)
+            }
+            else -> error("unhandled op code: ${a[0]}")
         }
     }
+
+    // Apply an OP_ITEM_PATCH's inner ops, scoped to one keyed item: inner ops
+    // carry bare az indices resolved within the item's own subtree.
+    private fun applyInner(item: Node, innerOps: JsonArray) {
+        val local = HashMap<String, Node>()
+        indexByAz(item, local)
+        for (op in innerOps) dispatch(op.jsonArray) { az -> local[az] ?: item }
+    }
+
+    // Index of the keyed child (by its `az_key` prop) in a stream container, or -1.
+    private fun indexOfKey(container: Node, key: String): Int =
+        container.children.indexOfFirst {
+            it is Node && it.props["az_key"]?.jsonPrimitive?.content == key
+        }
 
     // target is "ViewId:az"; resolve by the az suffix.
     private fun resolve(target: String): Node {

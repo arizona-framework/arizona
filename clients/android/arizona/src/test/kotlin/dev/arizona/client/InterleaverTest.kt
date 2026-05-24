@@ -24,6 +24,19 @@ class InterleaverTest {
         ]}
     """.trimIndent()
 
+    // The {f, s, d} payload from the real /native/list OP_REPLACE first frame: a
+    // Column whose #slot wraps an each-array of keyed Row items (captured live).
+    private val listFrame0 = """
+        {"d":["native_list",{"d":[["1","One"],["2","Two"],["3","Three"]],
+        "f":"O1M0B","s":[
+        "{\"type\":\"Row\",\"az\":\"O1M0B-0\",\"az_key\":",
+        ",\"children\":[{\"type\":\"#slot\",\"az\":\"O1M0B-0t0\",\"children\":[",
+        "]}]}"],"t":0}],"f":"JW7VZ","s":[
+        "{\"type\":\"Column\",\"az\":\"JW7VZ-0\",\"az_view\":true,\"id\":",
+        ",\"children\":[{\"type\":\"#slot\",\"az\":\"JW7VZ-0t0\",\"children\":[",
+        "]}]}"]}
+    """.trimIndent()
+
     @Test
     fun interleavesCounterFrameIntoValidWidgetTree() {
         val payload = Json.parseToJsonElement(frame0).jsonObject
@@ -58,5 +71,39 @@ class InterleaverTest {
         val slot = tree.getValue("children").jsonArray[0].jsonObject
             .getValue("children").jsonArray[1].jsonObject
         assertEquals("5", slot.getValue("children").jsonArray[0].jsonPrimitive.content)
+    }
+
+    @Test
+    fun interleavesStreamFrameIntoKeyedRows() {
+        val tree = Json.parseToJsonElement(
+            Interleaver(FingerprintCache()).interleave(Json.parseToJsonElement(listFrame0).jsonObject),
+        ).jsonObject
+        assertEquals("Column", tree.getValue("type").jsonPrimitive.content)
+        // The container #slot wraps the each-array of keyed Row items.
+        val container = tree.getValue("children").jsonArray[0].jsonObject
+        assertEquals("#slot", container.getValue("type").jsonPrimitive.content)
+        val rows = container.getValue("children").jsonArray[0].jsonArray
+        assertEquals(3, rows.size)
+        assertEquals("1", rows[0].jsonObject.getValue("az_key").jsonPrimitive.content)
+        assertEquals(
+            "Three",
+            rows[2].jsonObject.getValue("children").jsonArray[0].jsonObject
+                .getValue("children").jsonArray[0].jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun decodesStreamInsertItemFromCachedStatics() {
+        val interleaver = Interleaver(FingerprintCache())
+        // The first frame caches the item statics (f=O1M0B).
+        interleaver.interleave(Json.parseToJsonElement(listFrame0).jsonObject)
+        // OP_INSERT ships only {f, d} for the new item; decode rebuilds the Row.
+        val item = Json.parseToJsonElement(
+            interleaver.decode(Json.parseToJsonElement("""{"f":"O1M0B","d":["9","Nine"]}""")),
+        ).jsonObject
+        assertEquals("Row", item.getValue("type").jsonPrimitive.content)
+        assertEquals("9", item.getValue("az_key").jsonPrimitive.content)
+        val slot = item.getValue("children").jsonArray[0].jsonObject
+        assertEquals("Nine", slot.getValue("children").jsonArray[0].jsonPrimitive.content)
     }
 }

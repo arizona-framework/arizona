@@ -43,9 +43,9 @@ fun buildTree(json: JsonElement): Node {
     return node
 }
 
-// Append a child, splicing each-expansion arrays into the parent (their items
-// have no node-level identity here). #slot objects are kept as Nodes.
-private fun addChild(parent: Node, child: JsonElement) {
+// Append a child, splicing each-expansion arrays into the parent. #slot objects
+// are kept as Nodes; stream items (each-array entries) become keyed child Nodes.
+internal fun addChild(parent: Node, child: JsonElement) {
     when (child) {
         is JsonArray -> child.forEach { addChild(parent, it) }
         is JsonObject -> parent.children.add(buildTree(child))

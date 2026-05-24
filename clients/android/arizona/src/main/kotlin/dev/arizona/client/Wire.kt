@@ -18,11 +18,17 @@ import kotlinx.serialization.json.jsonPrimitive
  * stitches statics and dynamics into a JSON string.
  */
 
-/** Diff op codes (mirror include/arizona.hrl). */
+/** Diff op codes (mirror src/arizona.hrl). */
 object Op {
     const val TEXT = 0
     const val SET_ATTR = 1
+    const val REM_ATTR = 2
+    const val UPDATE = 3
+    const val INSERT = 5
+    const val REMOVE = 6
+    const val ITEM_PATCH = 7
     const val REPLACE = 8
+    const val MOVE = 9
 }
 
 /** Effect command op codes (mirror include/arizona_effect.hrl). */
@@ -61,6 +67,13 @@ class FingerprintCache {
 class Interleaver(private val cache: FingerprintCache) {
 
     fun interleave(payload: JsonObject): String = interleaveWith(cache.statics(payload), payload.getValue("d").jsonArray)
+
+    /**
+     * Decode an op payload to its JSON form: a `{t:0}` each-list -> a JSON array,
+     * a `{f, s, d}` template -> a JSON object, a scalar -> itself. Used to
+     * materialize OP_INSERT items and OP_UPDATE content.
+     */
+    fun decode(payload: JsonElement): String = encodeValue(payload)
 
     private fun interleaveWith(statics: List<String>, dynamics: JsonArray): String {
         val sb = StringBuilder(statics[0])
