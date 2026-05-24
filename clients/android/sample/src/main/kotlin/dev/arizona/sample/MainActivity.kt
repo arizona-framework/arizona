@@ -3,9 +3,11 @@ package dev.arizona.sample
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -37,7 +39,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface {
-                    ArizonaView(client, registry)
+                    // targetSdk 35 forces edge-to-edge; inset the tree below the
+                    // status bar / above the nav bar so content isn't occluded.
+                    Box(Modifier.safeDrawingPadding()) {
+                        ArizonaView(client, registry)
+                    }
                 }
             }
         }
@@ -50,7 +56,8 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        // The Android emulator reaches the host machine at 10.0.2.2.
+        // The Android emulator reaches the host machine at 10.0.2.2. For a real
+        // device, point this at the host's LAN IP (host + phone on the same network).
         private const val SERVER = "http://10.0.2.2:4040"
     }
 }
