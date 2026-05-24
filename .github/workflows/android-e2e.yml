@@ -81,6 +81,7 @@ jobs:
           api-level: 35
           arch: x86_64
           working-directory: clients/android
-          # Tunnel the emulator's localhost:4040 to the host server, then run the
+          # The :sample build's adbReverse task tunnels the emulator's
+          # localhost:4040 to the host server before connectedCheck runs the
           # Compose UI tests (the app connects to http://localhost:4040).
-          script: adb reverse tcp:4040 tcp:4040 && gradle :sample:connectedCheck
+          script: gradle :sample:connectedCheck

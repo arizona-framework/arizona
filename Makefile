@@ -123,11 +123,10 @@ build-android:
 
 # Android client tests (clients/android) -- opt-in; needs the Android SDK, a
 # running emulator/device, the Arizona server on :4040, and a `gradle` install.
-# `adb reverse` tunnels the device's localhost:4040 to the server. NOT part of
-# `ci`/`test`; CI uses gradle/actions/setup-gradle instead.
+# The :sample build's adbReverse task tunnels the device's localhost:4040 to the
+# server (it runs before connectedCheck). NOT part of `ci`/`test`.
 test-android:
-	cd clients/android && adb reverse tcp:4040 tcp:4040 && \
-		gradle :arizona:testDebugUnitTest :sample:connectedCheck
+	cd clients/android && gradle :arizona:testDebugUnitTest :sample:connectedCheck
 
 test-e2e-parallel:
 	npx playwright test --project parallel

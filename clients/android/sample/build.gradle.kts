@@ -54,11 +54,10 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
 }
 
-// Tunnel the device's localhost:4040 to the host's Arizona server after every
-// install, so you never run `adb reverse` by hand -- Android Studio's Run
-// installs, so its run loop is covered too. (adb reverse resets on reconnect/
-// reboot/adb restart; re-running it on each install keeps it set.) Harmless if
-// there's no device or the tunnel already exists.
+// Tunnel the device's localhost:4040 to the host's Arizona server, so neither
+// the dev loop nor CI runs `adb reverse` by hand (it's the single source of
+// truth for the tunnel; adb reverse resets on reconnect/reboot/adb restart).
+// Harmless if there's no device or the tunnel already exists.
 val adbReverse by tasks.registering(Exec::class) {
     val sdkDir = System.getenv("ANDROID_HOME")
         ?: System.getenv("ANDROID_SDK_ROOT")
@@ -68,6 +67,14 @@ val adbReverse by tasks.registering(Exec::class) {
     commandLine(sdkDir?.let { "$it/platform-tools/adb" } ?: "adb", "reverse", "tcp:4040", "tcp:4040")
     isIgnoreExitValue = true
 }
+// After every install -> covers Android Studio's Run loop (the app launches once
+// Gradle returns, so the tunnel is already up).
 tasks.matching { it.name.startsWith("install") }.configureEach {
     finalizedBy(adbReverse)
+}
+// Before connected (instrumented) tests -> a dependency, so the tunnel is
+// deterministically up before the tests launch the app (used by CI and
+// `make test-android`, which therefore no longer call adb reverse themselves).
+tasks.matching { it.name.startsWith("connected") }.configureEach {
+    dependsOn(adbReverse)
 }
