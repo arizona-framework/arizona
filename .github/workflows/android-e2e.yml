@@ -41,6 +41,21 @@ jobs:
           install_args: java gradle
           cache: true
 
+      # mise caches the Gradle/JDK binaries; this caches the downloaded
+      # dependencies (~/.gradle/caches), keyed on the build + version-catalog
+      # files so it invalidates when they change.
+      - name: Cache Gradle dependencies
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.gradle/caches
+          key: >-
+            gradle-${{ runner.os }}-${{ hashFiles(
+              'clients/android/**/*.gradle.kts',
+              'clients/android/gradle/libs.versions.toml',
+              'clients/android/gradle.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - name: Set up Erlang/OTP + rebar3
         uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
         with:
