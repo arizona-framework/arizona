@@ -53,7 +53,7 @@ the **web** client (browser) is `assets/js/` (built into `priv/static` by Vite);
 client for the `?native` target is `clients/android/` (Kotlin/Compose, its own Gradle build --
 **not** part of `make ci`; see `make test-android`).
 
-## Event attributes & effects -- `arizona_js`
+## Event attributes & effects -- `arizona_js` / `arizona_android`
 
 Web event attributes (`az-click`, `az-submit`, etc.) use `arizona_js` commands; `?native` views use `arizona_android`. Both build the same neutral effect tuple `{arizona_effect, [OpCode, ...Args]}` (encoded by `arizona_effect`). Handler effects use the same builders.
 

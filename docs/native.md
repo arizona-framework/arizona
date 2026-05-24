@@ -60,7 +60,7 @@ native apps a JSON tree from a single view, read the connecting client in
 `mount/2` and branch in `render/1`.
 
 `arizona_req:user_agent/1` returns the raw `User-Agent` header (no custom header
-needed — every client already sends one), or `<<>>` if absent. `arizona_user_agent`
+needed — most clients send one), or `<<>>` if absent. `arizona_user_agent`
 turns it into a coarse, best-effort classification through **pure, composable**
 helpers — call only the one(s) you need, no precomputed map:
 
