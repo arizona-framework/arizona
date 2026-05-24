@@ -54,6 +54,7 @@ start() ->
         }},
         {live, <<"/native/tabs">>, arizona_native_tabs, #{}},
         {live, <<"/native/ticker">>, arizona_native_ticker, #{}},
+        {live, <<"/native/multi">>, arizona_native_multi, #{}},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}
     ],

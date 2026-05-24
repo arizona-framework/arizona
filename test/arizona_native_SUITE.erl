@@ -18,6 +18,7 @@
 -export([diff_dynamic_text_op/1]).
 -export([diff_dynamic_attr_op/1]).
 -export([diff_conditional_subtree_op/1]).
+-export([diff_independent_regions_op/1]).
 -export([diff_stream_insert_op/1]).
 -export([diff_stream_remove_op/1]).
 -export([diff_stream_move_op/1]).
@@ -39,6 +40,7 @@ all() ->
         diff_dynamic_text_op,
         diff_dynamic_attr_op,
         diff_conditional_subtree_op,
+        diff_independent_regions_op,
         diff_stream_insert_op,
         diff_stream_remove_op,
         diff_stream_move_op
@@ -318,6 +320,24 @@ diff_conditional_subtree_op(Config) when is_list(Config) ->
     {_, Snap0} = arizona_render:render(Mod:render(#{sel => ~"home"})),
     {Ops, _} = arizona_diff:diff(Mod:render(#{sel => ~"about"}), Snap0),
     ?assertMatch([[?OP_TEXT, _Az, #{<<"s">> := _, <<"d">> := _}]], Ops).
+
+diff_independent_regions_op(Config) when is_list(Config) ->
+    %% Three independent native text regions: changing only the middle one diffs
+    %% to a single OP_TEXT targeting its own az -- the others are untouched
+    %% (distinct az slots, the multi-counter guarantee).
+    Mod = compile_module(
+        "-module(nt_diff_multi). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Column', [], ["
+        "        {'Text', [], [az:get(a, Bindings)]}, "
+        "        {'Text', [], [az:get(b, Bindings)]}, "
+        "        {'Text', [], [az:get(c, Bindings)]}]}). "
+    ),
+    Old = #{a => ~"0", b => ~"0", c => ~"0"},
+    {_, Snap0} = arizona_render:render(Mod:render(Old)),
+    {Ops, _} = arizona_diff:diff(Mod:render(Old#{b => ~"1"}), Snap0),
+    ?assertMatch([[?OP_TEXT, _Az, ~"1"]], Ops).
 
 diff_stream_insert_op(Config) when is_list(Config) ->
     %% A native stream insert diffs to OP_INSERT whose item payload carries
