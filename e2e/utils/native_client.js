@@ -30,6 +30,13 @@ const OP_MOVE = 9;
 const EFFECT_PUSH_EVENT = 0;
 const EFFECT_NAVIGATE = 10;
 
+// Heartbeat (mirror assets/js/arizona-worker.js): the client pings '0' every 30s
+// and the server pongs '1'; a missed pong before the next tick means the socket
+// is silently dead, so we close it and let the reconnect path re-open.
+const SYS_PING = '0';
+const SYS_PONG = '1';
+const HEARTBEAT_MS = 30000;
+
 // Reconnect backoff: step delays (ms) capped at 10s, with ±20% jitter (mirrors
 // assets/js/arizona-core.js).
 function backoff(attempt) {
@@ -54,6 +61,8 @@ export class NativeClient {
         this._closing = false;
         this._reconnectAttempt = 0;
         this._reconnectTimer = null;
+        this._heartbeatTimer = null;
+        this._heartbeatPending = false;
     }
 
     connect() {
@@ -72,6 +81,7 @@ export class NativeClient {
         this.ws.onopen = () => {
             this._reconnectAttempt = 0;
             this.ws.send(JSON.stringify(['cached_fps', []]));
+            this._startHeartbeat();
         };
         this.ws.onerror = (e) => {
             // Reject only the initial connect; once rendered, drops are handled
@@ -79,7 +89,8 @@ export class NativeClient {
             if (!this.root) this._rejectConnect(new Error(`ws error: ${e.message || e}`));
         };
         this.ws.onmessage = (e) => {
-            if (e.data === '1') return; // pong
+            this._heartbeatPending = false; // any frame proves the socket is live
+            if (e.data === SYS_PONG) return; // pong
             const msg = JSON.parse(e.data);
             if (msg.o) this._applyOps(msg.o);
             // Handler-returned effects (the "e" array): dispatch the portable
@@ -89,6 +100,7 @@ export class NativeClient {
             this._flushWaiters();
         };
         this.ws.onclose = (e) => {
+            this._stopHeartbeat();
             // No reconnect on an intentional close (1000) or a never-connected
             // initial failure; any other drop reconnects with backoff.
             if (this._closing || e.code === 1000 || !this.root) return;
@@ -99,8 +111,29 @@ export class NativeClient {
         };
     }
 
+    // Ping every 30s; if the previous ping's pong never arrived, the socket is
+    // silently dead -- close it so onclose triggers the reconnect path.
+    _startHeartbeat() {
+        this._heartbeatPending = false;
+        this._heartbeatTimer = setInterval(() => {
+            if (this._heartbeatPending) {
+                this.ws.close();
+                return;
+            }
+            this._heartbeatPending = true;
+            this.ws.send(SYS_PING);
+        }, HEARTBEAT_MS);
+    }
+
+    _stopHeartbeat() {
+        if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
+        this._heartbeatTimer = null;
+        this._heartbeatPending = false;
+    }
+
     close() {
         this._closing = true;
+        this._stopHeartbeat();
         if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
         if (this.ws) this.ws.close(1000);
     }

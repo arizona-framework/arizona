@@ -36,6 +36,12 @@ fun backoffDelayMs(attempt: Int): Long {
     return Math.round(base * (0.8 + Math.random() * 0.4))
 }
 
+// Heartbeat (mirror assets/js/arizona-worker.js): ping "0" every 30s, pong "1";
+// a pong still pending at the next tick means the socket is silently dead.
+private const val SYS_PING = "0"
+private const val SYS_PONG = "1"
+private const val HEARTBEAT_MS = 30_000L
+
 /**
  * Connects to an Arizona server's WebSocket and renders its `?native` view.
  *
@@ -69,6 +75,22 @@ class AzClient(baseUrl: String, path: String) {
     private var closing = false
     private var reconnectAttempt = 0
 
+    // Heartbeat state, touched only on the main thread (like reconnectAttempt).
+    // A self-rescheduling Runnable is the Handler equivalent of setInterval.
+    private var heartbeatPending = false
+    private val heartbeat = object : Runnable {
+        override fun run() {
+            val sock = ws ?: return
+            if (heartbeatPending) {
+                sock.cancel() // missed pong -> drop -> reconnect via onFailure
+                return
+            }
+            heartbeatPending = true
+            sock.send(SYS_PING)
+            main.postDelayed(this, HEARTBEAT_MS)
+        }
+    }
+
     fun connect() {
         status.value = ConnStatus.CONNECTING
         ws = http.newWebSocket(
@@ -76,10 +98,12 @@ class AzClient(baseUrl: String, path: String) {
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     webSocket.send("""["cached_fps",[]]""")
+                    main.post { startHeartbeat() }
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    if (text == "1") return // pong
+                    main.post { heartbeatPending = false } // any frame -> socket live
+                    if (text == SYS_PONG) return // pong
                     val msg = Json.parseToJsonElement(text).jsonObject
                     msg["o"]?.jsonArray?.let { ops ->
                         main.post {
@@ -113,14 +137,29 @@ class AzClient(baseUrl: String, path: String) {
     // Mirrors the JS reference client's onclose.
     private fun scheduleReconnect(code: Int) {
         main.post {
+            stopHeartbeat() // the old socket is dead; the new one restarts it
             status.value = ConnStatus.DISCONNECTED
             if (closing || code == 1000) return@post
             main.postDelayed({ if (!closing) connect() }, backoffDelayMs(reconnectAttempt++))
         }
     }
 
+    // Ping every 30s; a pong still pending at the next tick means the socket is
+    // silently dead. Idempotent -- drops any prior loop before starting one.
+    private fun startHeartbeat() {
+        main.removeCallbacks(heartbeat)
+        heartbeatPending = false
+        main.postDelayed(heartbeat, HEARTBEAT_MS)
+    }
+
+    private fun stopHeartbeat() {
+        main.removeCallbacks(heartbeat)
+        heartbeatPending = false
+    }
+
     fun close() {
         closing = true
+        stopHeartbeat()
         ws?.close(1000, null)
     }
 

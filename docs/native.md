@@ -170,10 +170,10 @@ Both are near-copies of the browser worker (`assets/js/arizona-worker.js` + `ari
    counter once a frame arrives. Because the native URL carries `_az_reconnect=1`,
    each reopen re-mounts and replies with a fresh `OP_REPLACE` (native has no
    form state to preserve — that path is browser-only), so a server restart
-   self-heals. An intentional `close()` (code `1000`) does not reconnect. The
-   browser's 30s heartbeat ping/pong (`'0'`/`'1'`) for silent half-open detection
-   is a follow-up; a TCP-level drop already surfaces via the socket's failure
-   callback.
+   self-heals. An intentional `close()` (code `1000`) does not reconnect. To catch
+   a silently half-open socket (no TCP error), the clients also send a 30s
+   heartbeat ping (`'0'`; the server pongs `'1'`); a pong still pending at the next
+   tick means the socket is dead, so they drop it and reconnect via the same path.
 
 The `native` e2e exercises each example over the real socket: a counter
 (`/native/counter`), a keyed list (`/native/list`), conditional tab switching
