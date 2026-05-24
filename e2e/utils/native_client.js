@@ -30,6 +30,14 @@ const OP_MOVE = 9;
 const EFFECT_PUSH_EVENT = 0;
 const EFFECT_NAVIGATE = 10;
 
+// Reconnect backoff: step delays (ms) capped at 10s, with ±20% jitter (mirrors
+// assets/js/arizona-core.js).
+function backoff(attempt) {
+    const delays = [1000, 2000, 5000, 10000];
+    const base = attempt < delays.length ? delays[attempt] : 10000;
+    return Math.round(base * (0.8 + Math.random() * 0.4));
+}
+
 export class NativeClient {
     constructor(baseUrl, path) {
         // baseUrl like http://localhost:4041 -> ws://localhost:4041/ws
@@ -43,28 +51,58 @@ export class NativeClient {
         this.root = null; // raw root node
         this.viewId = null;
         this._waiters = [];
+        this._closing = false;
+        this._reconnectAttempt = 0;
+        this._reconnectTimer = null;
     }
 
     connect() {
         return new Promise((resolve, reject) => {
-            this.ws = new WebSocket(this.wsUrl);
-            this.ws.onopen = () => this.ws.send(JSON.stringify(['cached_fps', []]));
-            this.ws.onerror = (e) => reject(new Error(`ws error: ${e.message || e}`));
-            this.ws.onmessage = (e) => {
-                if (e.data === '1') return; // pong
-                const msg = JSON.parse(e.data);
-                if (msg.o) this._applyOps(msg.o);
-                // Handler-returned effects (the "e" array): dispatch the portable
-                // ones, skip web-only effects (set_title, dispatch_event, ...).
-                if (msg.e) for (const cmd of msg.e) this._runEffect(cmd, false);
-                if (this.root) resolve(this); // first frame applied
-                this._flushWaiters();
-            };
+            this._resolveConnect = resolve;
+            this._rejectConnect = reject;
+            this._open();
         });
     }
 
+    // Open (or reopen) the socket -- reused for the initial connect and each
+    // reconnect. The reconnect path re-mounts via _az_reconnect=1 and re-applies
+    // the OP_REPLACE the server sends.
+    _open() {
+        this.ws = new WebSocket(this.wsUrl);
+        this.ws.onopen = () => {
+            this._reconnectAttempt = 0;
+            this.ws.send(JSON.stringify(['cached_fps', []]));
+        };
+        this.ws.onerror = (e) => {
+            // Reject only the initial connect; once rendered, drops are handled
+            // by onclose -> reconnect.
+            if (!this.root) this._rejectConnect(new Error(`ws error: ${e.message || e}`));
+        };
+        this.ws.onmessage = (e) => {
+            if (e.data === '1') return; // pong
+            const msg = JSON.parse(e.data);
+            if (msg.o) this._applyOps(msg.o);
+            // Handler-returned effects (the "e" array): dispatch the portable
+            // ones, skip web-only effects (set_title, dispatch_event, ...).
+            if (msg.e) for (const cmd of msg.e) this._runEffect(cmd, false);
+            if (this.root) this._resolveConnect(this); // first frame applied (no-op after)
+            this._flushWaiters();
+        };
+        this.ws.onclose = (e) => {
+            // No reconnect on an intentional close (1000) or a never-connected
+            // initial failure; any other drop reconnects with backoff.
+            if (this._closing || e.code === 1000 || !this.root) return;
+            this._reconnectTimer = setTimeout(
+                () => this._open(),
+                backoff(this._reconnectAttempt++),
+            );
+        };
+    }
+
     close() {
-        if (this.ws) this.ws.close();
+        this._closing = true;
+        if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+        if (this.ws) this.ws.close(1000);
     }
 
     // The user-visible widget tree: the raw tree with every #slot spliced away.
