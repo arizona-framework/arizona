@@ -126,10 +126,11 @@ intentional -- those reads belong to the inner scope. Idiomatic callbacks
 use a named fun reference (`?stateless(fun bar/1, Props)`), which cannot
 close over outer `Bindings` and therefore avoids the footgun entirely.
 
-## API -- `arizona_js.erl`
+## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_effect`)
 
-Unified client commands and server effects. All functions return `{arizona_js, [OpCode, ...Args]}`
-(nominal type `cmd()`). Used in two contexts:
+Client effect commands, built per platform -- `arizona_js` (web), `arizona_android` (native) --
+all returning the neutral tuple `{arizona_effect, [OpCode, ...Args]}` (type `arizona_effect:cmd()`,
+encoded by `arizona_effect`). Used in two contexts:
 
 **Template attributes** -- commands embedded in `az-click`, `az-submit`, etc.:
 
@@ -177,7 +178,7 @@ top:
 This means `az-keydown` or `az-focusout` on an input automatically includes `{value: "typed text"}`,
 and `az-drop` automatically includes `{data_transfer, drop_index}`. No special attributes needed.
 
-**Op codes** defined in `include/arizona_js.hrl` -- integer constants shared with the client JS
+**Op codes** defined in `include/arizona_effect.hrl` -- integer constants shared with the client JS
 runtime. Same codes for both template commands and server effects.
 
 **Key filtering** via `on_key/2` -- wraps a command so it only executes when the pressed key

@@ -61,9 +61,9 @@ attr_boolean(Name) ->
 
 -spec attr_command(binary(), term()) -> binary().
 attr_command(Name, Cmd) ->
-    %% A folded arizona_js command: its JSON, escaped for the HTML attribute
+    %% A folded effect command: its JSON, escaped for the HTML attribute
     %% context, as a normal name="value" attribute.
-    attr(Name, arizona_js:encode(Cmd)).
+    attr(Name, arizona_effect:encode(Cmd)).
 
 -spec attr_dyn_name(binary()) -> binary().
 attr_dyn_name(_Name) ->

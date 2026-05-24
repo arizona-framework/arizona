@@ -1,0 +1,18 @@
+%% Effect command op codes -- shared by the command builders (arizona_js, arizona_android, ...) and the client runtimes
+-define(EFFECT_PUSH_EVENT, 0).
+-define(EFFECT_TOGGLE, 1).
+-define(EFFECT_SHOW, 2).
+-define(EFFECT_HIDE, 3).
+-define(EFFECT_ADD_CLASS, 4).
+-define(EFFECT_REMOVE_CLASS, 5).
+-define(EFFECT_TOGGLE_CLASS, 6).
+-define(EFFECT_SET_ATTR, 7).
+-define(EFFECT_REMOVE_ATTR, 8).
+-define(EFFECT_DISPATCH_EVENT, 9).
+-define(EFFECT_NAVIGATE, 10).
+-define(EFFECT_FOCUS, 11).
+-define(EFFECT_BLUR, 12).
+-define(EFFECT_SCROLL_TO, 13).
+-define(EFFECT_SET_TITLE, 14).
+-define(EFFECT_RELOAD, 15).
+-define(EFFECT_ON_KEY, 16).

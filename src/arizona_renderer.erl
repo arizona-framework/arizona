@@ -35,11 +35,12 @@ other formats while reusing the same walker, diff engine, and transport.
 -callback attr_boolean(Name :: binary()) -> binary().
 
 -doc """
-An attribute whose value is a compile-time-folded `arizona_js` command (e.g.
-`{az_click | on_tap, arizona_js:push_event(...)}`). HTML escapes it into the
-attribute (`name="[0,&quot;inc&quot;]"`); native embeds it as a raw JSON value
-(`,"name":[0,"inc"]`). `Cmd` is an `arizona_js` command term -- `{arizona_js,
-list()}` or a list of them.
+An attribute whose value is a compile-time-folded effect command (e.g.
+`{az_click, arizona_js:push_event(...)}` on the web, `{on_tap,
+arizona_android:push_event(...)}` on native). HTML escapes it into the attribute
+(`name="[0,&quot;inc&quot;]"`); native embeds it as a raw JSON value
+(`,"name":[0,"inc"]`). `Cmd` is an `t:arizona_effect:cmd/0` term --
+`{arizona_effect, list()}` or a list of them.
 """.
 -callback attr_command(Name :: binary(), Cmd :: term()) -> binary().
 

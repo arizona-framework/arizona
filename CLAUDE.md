@@ -47,7 +47,7 @@ Full architecture documentation (modules, APIs, data flow, op codes, etc.) is in
 
 ## Event attributes & effects -- `arizona_js`
 
-Event attributes (`az-click`, `az-submit`, etc.) use `arizona_js` commands. Handler effects use the same module. All functions return `{arizona_js, [OpCode, ...Args]}`.
+Web event attributes (`az-click`, `az-submit`, etc.) use `arizona_js` commands; `?native` views use `arizona_android`. Both build the same neutral effect tuple `{arizona_effect, [OpCode, ...Args]}` (encoded by `arizona_effect`). Handler effects use the same builders.
 
 ```erlang
 %% Template: event attribute
@@ -61,7 +61,7 @@ handle_event(~"inc", _P, B) ->
     {B#{count => Count + 1}, #{}, [arizona_js:set_title(~"Updated")]}.
 ```
 
-`push_event` auto-collects payload from inputs/forms. Explicit payload merges on top. Op codes in `include/arizona_js.hrl`.
+`push_event` auto-collects payload from inputs/forms. Explicit payload merges on top. Op codes in `include/arizona_effect.hrl`.
 
 ## What's missing
 

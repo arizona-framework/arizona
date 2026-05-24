@@ -305,10 +305,10 @@ to_bin(V) when is_binary(V) -> V;
 to_bin(V) when is_integer(V) -> integer_to_binary(V);
 to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
 to_bin(V) when is_atom(V) -> atom_to_binary(V);
-to_bin({arizona_js, _} = Cmd) ->
-    arizona_js:encode(Cmd);
-to_bin([{arizona_js, _} | _] = Cmds) ->
-    arizona_js:encode(Cmds);
+to_bin({arizona_effect, _} = Cmd) ->
+    arizona_effect:encode(Cmd);
+to_bin([{arizona_effect, _} | _] = Cmds) ->
+    arizona_effect:encode(Cmds);
 to_bin(V) when is_list(V) -> iolist_to_binary(V);
 to_bin(V) ->
     erlang:error({bad_template_value, V}, [V], [

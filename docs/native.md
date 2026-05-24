@@ -24,7 +24,7 @@ mount(Bindings, _Req) ->
 render(Bindings) ->
     ?native({'Column', [{id, ?get(id)}, {padding, ~"16"}], [
         {'Text', [], [?get(count)]},
-        {'Button', [{on_tap, arizona_js:push_event(~"inc")}], [~"+"]},
+        {'Button', [{on_tap, arizona_android:push_event(~"inc")}], [~"+"]},
         {'List', [], [
             ?each(fun item/1, ?get(items))
         ]}
@@ -45,9 +45,9 @@ handle_event(~"inc", _Payload, Bindings) ->
 - **Attributes are widget props.** Static and dynamic both supported. Values are
   string-encoded on the wire; the client coerces (typed props are a future
   addition).
-- **Event handlers are props** whose value is an `arizona_js` command:
-  `{on_tap, arizona_js:push_event(~"inc")}`. Events flow back exactly as on the
-  web (`[ViewId, Event, Payload]` → `handle_event/3`).
+- **Event handlers are props** whose value is an effect command built with the
+  platform module: `{on_tap, arizona_android:push_event(~"inc")}`. Events flow
+  back exactly as on the web (`[ViewId, Event, Payload]` → `handle_event/3`).
 - **`?each` works uniformly.** A `?each` inside `?native` is compiled for the
   native target automatically — no separate macro. `?stateful`/`?stateless`
   children also work; the embedded module must use the same target (see
@@ -158,15 +158,23 @@ A native client is a near-copy of the browser worker
 `mob`'s SwiftUI/Compose renderers are a natural starting point — point them at
 an Arizona WebSocket instead of an on-device NIF.
 
-## `arizona_js` effects
+## Effect commands
 
-Handler effects use the same `arizona_js` module. Some are universal; some are
-browser-only (a native client ignores what it doesn't implement):
+Event-attribute values and `handle_event/3` effects are built **per platform**,
+all producing the same neutral wire format (`{arizona_effect, [OpCode | Args]}`,
+op codes in `include/arizona_effect.hrl`, encoded by `arizona_effect`):
 
-- **Universal:** `push_event/1,2`, `navigate/1,2`, `focus/1`, `blur/1`,
-  `scroll_to/1,2`, `on_key/2`.
-- **Browser-only:** `toggle`/`show`/`hide`, the class ops, `set_attr`/
-  `remove_attr` (use props), `dispatch_event`, `set_title`, `reload`.
+- **`arizona_js`** — web/browser builders. `push_event`, `navigate`, plus
+  DOM-specific ones: `toggle`/`show`/`hide`, the class ops, `set_attr`/
+  `remove_attr`, `dispatch_event`, `focus`/`blur`/`scroll_to` (CSS selectors),
+  `on_key` (keyboard), `set_title`, `reload`.
+- **`arizona_android`** — native builders for `?native` views. `push_event` and
+  `navigate` (duplicated; same wire as the web ones), and the home for
+  Android-specific commands as they're added.
+
+Only `push_event`/`navigate` are portable enough to exist on both — they're pure
+client→server actions. The DOM/selector/keyboard commands (`toggle`, `focus`,
+`scroll_to`, `on_key`, …) are web-only by nature and live only in `arizona_js`.
 
 ## Constraints
 

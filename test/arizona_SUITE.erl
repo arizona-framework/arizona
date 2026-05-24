@@ -633,7 +633,7 @@ counter_handle_event_reset(Config) when is_list(Config) ->
     {B0, _} = arizona_counter:mount(#{id => <<"c1">>, count => 5}),
     {B1, _, Effects} = arizona_counter:handle_event(<<"reset">>, #{}, B0),
     ?assertEqual(0, maps:get(count, B1)),
-    ?assertEqual([{arizona_js, [9, <<"counter_reset">>, #{<<"id">> => <<"c1">>}]}], Effects).
+    ?assertEqual([{arizona_effect, [9, <<"counter_reset">>, #{<<"id">> => <<"c1">>}]}], Effects).
 
 %% Test page handle_event
 page_handle_event_title_change(Config) when is_list(Config) ->
@@ -651,7 +651,7 @@ page_handle_event_connected(Config) when is_list(Config) ->
     ?assertEqual(false, maps:get(connected, B0)),
     {B1, _, Effects} = arizona_page:handle_info(arizona_connected, B0),
     ?assertEqual(true, maps:get(connected, B1)),
-    ?assertEqual([{arizona_js, [14, <<"Welcome">>]}], Effects).
+    ?assertEqual([{arizona_effect, [14, <<"Welcome">>]}], Effects).
 
 %% Test diff/3 returns empty views when no stateful children
 diff_with_views_no_children(Config) when is_list(Config) ->
@@ -693,7 +693,7 @@ about_connected_event(Config) when is_list(Config) ->
     {B, _} = arizona_about:mount(#{}, arizona_req_test_adapter:new(#{})),
     {B2, _, Effects} = arizona_about:handle_info(arizona_connected, B),
     ?assertEqual(B, B2),
-    ?assertEqual([{arizona_js, [14, <<"About">>]}], Effects).
+    ?assertEqual([{arizona_effect, [14, <<"About">>]}], Effects).
 
 about_handle_info_tick(Config) when is_list(Config) ->
     {B, _} = arizona_about:mount(#{}, arizona_req_test_adapter:new(#{})),
@@ -708,7 +708,7 @@ about_tick_started_event(Config) when is_list(Config) ->
     {B, _} = arizona_about:mount(#{}, arizona_req_test_adapter:new(#{})),
     {B2, _, Effects} = arizona_about:handle_event(<<"tick_started">>, #{}, B),
     ?assertEqual(B, B2),
-    ?assertEqual([{arizona_js, [9, <<"tick_ack">>, #{<<"status">> => <<"ok">>}]}], Effects).
+    ?assertEqual([{arizona_effect, [9, <<"tick_ack">>, #{<<"status">> => <<"ok">>}]}], Effects).
 
 %% =============================================================================
 %% List comprehension tests

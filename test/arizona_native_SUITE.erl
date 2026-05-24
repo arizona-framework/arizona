@@ -163,17 +163,18 @@ dynamic_attr_inlines_as_prop(Config) when is_list(Config) ->
     ).
 
 event_prop_is_raw_json_command(Config) when is_list(Config) ->
-    %% A folded arizona_js command prop (on_tap) is emitted as a raw JSON array
-    %% the client interprets directly -- NOT an HTML-escaped string. This is what
-    %% makes a native widget tappable (the documented native event pattern).
+    %% A folded effect command prop (on_tap), built with the native platform
+    %% module, is emitted as a raw JSON array the client interprets directly --
+    %% NOT an HTML-escaped string. This is what makes a native widget tappable.
     Mod = compile_module(
         "-module(nt_event). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:native({'Button', [{on_tap, arizona_js:push_event(<<\"inc\">>)}], [<<\"OK\">>]}). "
+        "    az:native({'Button', [{on_tap, arizona_android:push_event(<<\"inc\">>)}], "
+        "[<<\"OK\">>]}). "
     ),
     Decoded = decode_static(Mod:render(#{})),
-    %% [0, "inc"] = [JS_PUSH_EVENT, EventName], a JSON array (not a quoted string).
+    %% [0, "inc"] = [EFFECT_PUSH_EVENT, EventName], a JSON array (not a quoted string).
     ?assertEqual([0, ~"inc"], maps:get(~"on_tap", Decoded)).
 
 live_view_caches_statics(Config) when is_list(Config) ->

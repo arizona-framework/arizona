@@ -72,9 +72,9 @@ attr_boolean(Name) ->
 
 -spec attr_command(binary(), term()) -> binary().
 attr_command(Name, Cmd) ->
-    %% A folded arizona_js command embedded as a raw JSON value (an array like
+    %% A folded effect command embedded as a raw JSON value (an array like
     %% `[0,"inc"]`), not a string -- the client interprets it directly.
-    <<",", (json_str(Name))/binary, ":", (arizona_js:encode_json(Cmd))/binary>>.
+    <<",", (json_str(Name))/binary, ":", (arizona_effect:encode_json(Cmd))/binary>>.
 
 -spec attr_dyn_name(binary()) -> binary().
 attr_dyn_name(Name) ->

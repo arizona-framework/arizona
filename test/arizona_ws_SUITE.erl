@@ -2,7 +2,7 @@
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("common_test/include/ct.hrl").
 -include("arizona.hrl").
--include_lib("arizona/include/arizona_js.hrl").
+-include_lib("arizona/include/arizona_effect.hrl").
 
 -export([all/0, groups/0, init_per_group/2, end_per_group/2]).
 -export([
@@ -439,7 +439,7 @@ middleware_halt_redirects_on_navigate(Config) ->
     ?assertMatch(#{~"e" := [_ | _]}, Decoded),
     ?assertNot(maps:is_key(~"o", Decoded)),
     [[OpCode | Rest] | _] = maps:get(~"e", Decoded),
-    ?assertEqual(?JS_NAVIGATE, OpCode),
+    ?assertEqual(?EFFECT_NAVIGATE, OpCode),
     ?assertEqual(~"/login", hd(Rest)),
     ws_close(Sock).
 

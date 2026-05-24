@@ -924,14 +924,15 @@ try_fold_arizona_js(ExprAST) ->
         _:_ -> error
     end.
 
-%% Evaluate an `arizona_js:Fn(literal-args)` call AST or a literal list
-%% of such calls into the runtime term it would yield. Throws on any
-%% non-literal sub-expression -- `try_fold_arizona_js/1` catches it.
+%% Evaluate a command-builder call AST (`arizona_js:Fn(...)` /
+%% `arizona_android:Fn(...)`) or a literal list of such calls into the runtime
+%% term it would yield. Throws on any non-literal sub-expression --
+%% `try_fold_arizona_js/1` catches it. Add new platform builder modules here.
 eval_arizona_js_expr(
-    {call, _, {remote, _, {atom, _, arizona_js}, {atom, _, Fn}}, ArgsAST}
-) ->
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, Fn}}, ArgsAST}
+) when Mod =:= arizona_js orelse Mod =:= arizona_android ->
     Args = [erl_syntax:concrete(A) || A <- ArgsAST],
-    apply(arizona_js, Fn, Args);
+    apply(Mod, Fn, Args);
 eval_arizona_js_expr({nil, _}) ->
     [];
 eval_arizona_js_expr({cons, _, H, T}) ->

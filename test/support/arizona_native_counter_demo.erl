@@ -15,8 +15,8 @@ render(Bindings) ->
     ?native(
         {'Column', [{id, ?get(id)}], [
             {'Text', [], [~"Count: ", ?get(count)]},
-            {'Button', [{on_tap, arizona_js:push_event(~"inc")}], [~"+"]},
-            {'Button', [{on_tap, arizona_js:push_event(~"dec")}], [~"-"]}
+            {'Button', [{on_tap, arizona_android:push_event(~"inc")}], [~"+"]},
+            {'Button', [{on_tap, arizona_android:push_event(~"dec")}], [~"-"]}
         ]}
     ).
 

@@ -314,7 +314,7 @@ encode_reply(Ops, Effects, Socket) ->
     {reply, encode(#{?OPS => Ops, ?EFFECTS => unwrap_effects(Effects)}), Socket}.
 
 unwrap_effects(Effects) ->
-    [Cmd || {arizona_js, Cmd} <:- Effects].
+    [Cmd || {arizona_effect, Cmd} <:- Effects].
 
 %% Fast path for the three reply shapes produced by encode_reply/3. Hand
 %% writes the outer `{"o":...}` / `{"e":...}` / both wrapper, skipping
