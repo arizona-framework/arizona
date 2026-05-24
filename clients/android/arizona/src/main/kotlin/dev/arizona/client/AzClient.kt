@@ -62,7 +62,10 @@ class AzClient(baseUrl: String, path: String) {
 
     private val cache = FingerprintCache()
     private val interleaver = Interleaver(cache)
-    private val registry = HashMap<String, Node>()
+
+    // viewId -> (az -> node). Per-view so two instances of the same stateful
+    // child (which share a fingerprint's az values) don't collide.
+    private val views = HashMap<String, MutableMap<String, Node>>()
     private val main = Handler(Looper.getMainLooper())
     private val http = OkHttpClient()
     private var ws: WebSocket? = null
@@ -169,17 +172,19 @@ class AzClient(baseUrl: String, path: String) {
         ws?.cancel()
     }
 
-    /** Fire the command read from a node's tap prop (e.g. `on_tap`). */
+    /** Fire the command read from a node's tap prop (e.g. `on_tap`), routing the
+     *  event to the node's enclosing view (the root, or a stateful child). */
     fun tap(node: Node, prop: String = "on_tap") {
-        node.props[prop]?.jsonArray?.let { runEffect(it, strict = true) }
+        node.props[prop]?.jsonArray?.let { runEffect(it, strict = true, target = node.viewId) }
     }
 
     // Run one effect command (a tap prop or a server "e" entry). `strict` errors
     // on an unsupported command (taps); non-strict skips it (web-only effects in
-    // the "e" stream don't apply to native).
-    private fun runEffect(cmd: JsonArray, strict: Boolean) {
+    // the "e" stream don't apply to native). `target` (a tap's enclosing view id)
+    // routes the event; the server's "e" effects pass none -> root.
+    private fun runEffect(cmd: JsonArray, strict: Boolean, target: String? = null) {
         when (cmd[0].jsonPrimitive.int) {
-            Effect.PUSH_EVENT -> pushEvent(cmd[1].jsonPrimitive.content)
+            Effect.PUSH_EVENT -> pushEvent(cmd[1].jsonPrimitive.content, target = target)
             Effect.NAVIGATE -> navigate(cmd[1].jsonPrimitive.content)
             else -> if (strict) error("unsupported command: $cmd")
         }
@@ -202,11 +207,17 @@ class AzClient(baseUrl: String, path: String) {
         ws?.send(frame.toString())
     }
 
-    // Send an event frame [ViewId, Event, Payload]. The payload is arbitrary JSON
-    // (matching the wire and the JS reference client) -- handlers may expect
-    // numbers or arrays, not just strings (e.g. a stream move's numeric pos).
-    fun pushEvent(event: String, payload: JsonObject = JsonObject(emptyMap())) {
-        val vid = viewId ?: return
+    // Send an event frame [ViewId, Event, Payload]. ViewId defaults to the root
+    // view; a tap routes to the tapped node's enclosing view (so events reach a
+    // stateful child). The payload is arbitrary JSON (matching the wire and the
+    // JS reference client) -- handlers may expect numbers or arrays, not just
+    // strings (e.g. a stream move's numeric pos).
+    fun pushEvent(
+        event: String,
+        payload: JsonObject = JsonObject(emptyMap()),
+        target: String? = null,
+    ) {
+        val vid = target ?: viewId ?: return
         val frame = buildJsonArray {
             add(vid)
             add(event)
@@ -216,7 +227,7 @@ class AzClient(baseUrl: String, path: String) {
     }
 
     private fun applyOps(ops: JsonArray) {
-        // Top-level ops address nodes as "ViewId:az" via the global registry.
+        // Top-level ops address nodes as "ViewId:az" via the per-view registry.
         for (op in ops) dispatch(op.jsonArray) { target -> resolve(target) }
     }
 
@@ -228,9 +239,9 @@ class AzClient(baseUrl: String, path: String) {
             Op.REPLACE -> {
                 viewId = a[1].jsonPrimitive.content
                 val json = Json.parseToJsonElement(interleaver.interleave(a[2].jsonObject))
-                registry.clear()
+                views.clear()
                 val node = buildTree(json)
-                indexByAz(node, registry)
+                indexByViews(node, views)
                 root.value = node
             }
             Op.TEXT -> {
@@ -238,14 +249,14 @@ class AzClient(baseUrl: String, path: String) {
                 // conditional subtree) ships a {f,s,d} payload; decode handles both.
                 val node = resolveNode(a[1].jsonPrimitive.content)
                 node.children.clear()
-                addChild(node, Json.parseToJsonElement(interleaver.decode(a[2])))
+                addChild(node, Json.parseToJsonElement(interleaver.decode(a[2])), node.viewId)
             }
             Op.UPDATE -> {
                 // Re-render a node's content (e.g. a stream reset rebuilds the
                 // whole each-list).
                 val node = resolveNode(a[1].jsonPrimitive.content)
                 node.children.clear()
-                addChild(node, Json.parseToJsonElement(interleaver.decode(a[2])))
+                addChild(node, Json.parseToJsonElement(interleaver.decode(a[2])), node.viewId)
             }
             Op.SET_ATTR -> {
                 resolveNode(a[1].jsonPrimitive.content).props[a[2].jsonPrimitive.content] = a[3]
@@ -256,7 +267,7 @@ class AzClient(baseUrl: String, path: String) {
             Op.INSERT -> {
                 val container = resolveNode(a[1].jsonPrimitive.content)
                 val pos = a[3].jsonPrimitive.int
-                val item = buildTree(Json.parseToJsonElement(interleaver.decode(a[4])))
+                val item = buildTree(Json.parseToJsonElement(interleaver.decode(a[4])), container.viewId)
                 if (pos == -1 || pos >= container.children.size) container.children.add(item)
                 else container.children.add(pos, item)
             }
@@ -301,9 +312,12 @@ class AzClient(baseUrl: String, path: String) {
             it is Node && it.props["az_key"]?.jsonPrimitive?.content == key
         }
 
-    // target is "ViewId:az"; resolve by the az suffix.
+    // Resolve a top-level op's "ViewId:az" target within that view's own registry,
+    // so two instances of the same stateful child (sharing a fingerprint's az
+    // values) don't collide. Mirrors the browser scoping az to getElementById.
     private fun resolve(target: String): Node {
+        val viewId = target.substringBefore(':')
         val az = target.substringAfter(':')
-        return registry[az] ?: error("unknown az target: $target")
+        return views[viewId]?.get(az) ?: error("unknown target: $target")
     }
 }

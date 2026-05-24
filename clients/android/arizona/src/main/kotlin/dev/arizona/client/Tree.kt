@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -24,13 +25,20 @@ class Node(val type: String, val az: String?) {
     val props: SnapshotStateMap<String, JsonElement> = mutableStateMapOf()
     val children: SnapshotStateList<Any> = mutableStateListOf()
 
+    /** The enclosing view's id (nearest `az_view` ancestor, or the root), so a
+     *  tap routes its event to the owning view -- the root or a stateful child. */
+    var viewId: String? = null
+
     companion object {
         const val SLOT = "#slot"
     }
 }
 
-/** Parse an interleaved JSON tree (the root element) into a [Node] tree. */
-fun buildTree(json: JsonElement): Node {
+/**
+ * Parse an interleaved JSON tree into a [Node] tree, stamping each node with its
+ * enclosing view id ([view], or this node's own id if it is a view root).
+ */
+fun buildTree(json: JsonElement, view: String? = null): Node {
     val obj = json.jsonObject
     val node = Node(
         type = obj.getValue("type").jsonPrimitive.content,
@@ -39,16 +47,22 @@ fun buildTree(json: JsonElement): Node {
     for ((k, v) in obj) {
         if (k != "type" && k != "az" && k != "children") node.props[k] = v
     }
-    obj["children"]?.jsonArray?.forEach { addChild(node, it) }
+    node.viewId =
+        if (node.props["az_view"]?.jsonPrimitive?.booleanOrNull == true) {
+            node.props["id"]?.jsonPrimitive?.content ?: view
+        } else {
+            view
+        }
+    obj["children"]?.jsonArray?.forEach { addChild(node, it, node.viewId) }
     return node
 }
 
 // Append a child, splicing each-expansion arrays into the parent. #slot objects
 // are kept as Nodes; stream items (each-array entries) become keyed child Nodes.
-internal fun addChild(parent: Node, child: JsonElement) {
+internal fun addChild(parent: Node, child: JsonElement, view: String? = null) {
     when (child) {
-        is JsonArray -> child.forEach { addChild(parent, it) }
-        is JsonObject -> parent.children.add(buildTree(child))
+        is JsonArray -> child.forEach { addChild(parent, it, view) }
+        is JsonObject -> parent.children.add(buildTree(child, view))
         is JsonPrimitive -> parent.children.add(child.content)
     }
 }
@@ -57,4 +71,15 @@ internal fun addChild(parent: Node, child: JsonElement) {
 fun indexByAz(node: Node, registry: MutableMap<String, Node>) {
     node.az?.let { registry[it] = node }
     for (child in node.children) if (child is Node) indexByAz(child, registry)
+}
+
+/**
+ * Index nodes per enclosing view (`viewId` -> `az` -> node), so a "ViewId:az" op
+ * target resolves within the right view -- two instances of the same stateful
+ * child share az values (from a shared fingerprint), but live in distinct views.
+ */
+fun indexByViews(node: Node, views: MutableMap<String, MutableMap<String, Node>>) {
+    val v = node.viewId
+    if (v != null) node.az?.let { views.getOrPut(v) { HashMap() }[it] = node }
+    for (child in node.children) if (child is Node) indexByViews(child, views)
 }

@@ -16,6 +16,7 @@
 -export([native_each_empty_is_valid_json/1]).
 -export([nested_native_stateless_component/1]).
 -export([nested_native_stateful_component/1]).
+-export([nested_native_stateful_child_event_routes/1]).
 -export([diff_dynamic_text_op/1]).
 -export([diff_dynamic_attr_op/1]).
 -export([diff_conditional_subtree_op/1]).
@@ -39,6 +40,7 @@ all() ->
         native_each_empty_is_valid_json,
         nested_native_stateless_component,
         nested_native_stateful_component,
+        nested_native_stateful_child_event_routes,
         diff_dynamic_text_op,
         diff_dynamic_attr_op,
         diff_conditional_subtree_op,
@@ -289,6 +291,21 @@ nested_native_stateful_component(Config) when is_list(Config) ->
     {ok, ~"native_parent", Frame} = arizona_live:mount_and_render(Pid),
     #{~"type" := ~"Column", ~"children" := Children} = flatten(simulate_interleave(Frame)),
     ?assertMatch([#{~"type" := ~"Badge", ~"children" := [~"5"]}], Children).
+
+nested_native_stateful_child_event_routes(Config) when is_list(Config) ->
+    %% A native view embeds two stateful child counters. Each is registered in the
+    %% live process's views map by its own id (target-agnostic, like HTML), so an
+    %% event addressed to a child's id routes to THAT child's handle_event -- the
+    %% parent view has none, so a misroute to the root would crash. Only the
+    %% addressed child's count diffs (one OP_TEXT). The `az_view`+`id` marker the
+    %% client targets is covered end-to-end by e2e/native/nested.spec.js.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Pid} = arizona_live:start_link(arizona_native_nested, #{}, undefined, [], Req),
+    {ok, ~"native_nested", _Frame} = arizona_live:mount_and_render(Pid),
+    {ok, OpsA, _} = arizona_live:handle_event(Pid, ~"child_a", ~"inc", #{}),
+    ?assertMatch([[?OP_TEXT, _Az, ~"1"]], OpsA),
+    {ok, OpsB, _} = arizona_live:handle_event(Pid, ~"child_b", ~"inc", #{}),
+    ?assertMatch([[?OP_TEXT, _Az, ~"1"]], OpsB).
 
 diff_dynamic_text_op(Config) when is_list(Config) ->
     %% A native dynamic text node diffs to OP_TEXT carrying the raw new value

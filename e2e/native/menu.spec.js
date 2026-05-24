@@ -32,7 +32,7 @@ test.describe('native (JSON) wire -- menu navigation', () => {
         try {
             // The last button push_events; the server handler returns a navigate
             // effect, which the client applies from the "e" array.
-            const effectBtn = client.tree().children[5];
+            const effectBtn = client.tree().children[6];
             expect(effectBtn.on_tap).toEqual([0, 'open_counter']);
             client.tap(effectBtn);
             await client.waitFor((t) => t.id === 'native_counter');

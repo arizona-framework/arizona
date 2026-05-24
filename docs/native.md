@@ -152,18 +152,22 @@ Both are near-copies of the browser worker (`assets/js/arizona-worker.js` + `ari
    parent, and splice a nested array (an `?each` expansion) one level up. So
    `["#slot children"]` and `[[item, item]]` both flatten into the parent's
    children.
-4. **Apply the op codes** against an `az` → node registry (the browser uses the
-   DOM): `OP_TEXT` sets a `#slot`'s content, `OP_SET_ATTR`/`OP_REM_ATTR` set/drop
-   a prop, and the stream ops manage a container's keyed children — items keyed
-   by `az_key`, with `OP_INSERT`/`OP_REMOVE`/`OP_MOVE` reordering the list,
-   `OP_ITEM_PATCH` applying inner ops scoped to one item, and `OP_UPDATE`
-   re-rendering the whole list.
-5. **Run effects and navigate.** A tap fires its node's command prop; the
-   server's `"e"` (effects) array is dispatched after the ops. The portable
-   commands are handled — `push_event`, and `navigate` (which sends
-   `["navigate", {path, qs}]` on the same socket; the server's `handle_navigate`
-   re-mounts the target view and replies with `OP_REPLACE`). Web-only effects
-   (`set_title`, `dispatch_event`, …) are skipped on native.
+4. **Apply the op codes** against a per-view `az` → node registry (the browser
+   uses the DOM): an op's `"ViewId:az"` target resolves within that view, so
+   sibling instances of the same stateful child — which share a fingerprint's `az`
+   values — don't collide. `OP_TEXT` sets a `#slot`'s content,
+   `OP_SET_ATTR`/`OP_REM_ATTR` set/drop a prop, and the stream ops manage a
+   container's keyed children — items keyed by `az_key`, with
+   `OP_INSERT`/`OP_REMOVE`/`OP_MOVE` reordering the list, `OP_ITEM_PATCH` applying
+   inner ops scoped to one item, and `OP_UPDATE` re-rendering the whole list.
+5. **Run effects and navigate.** A tap fires its node's command prop, routed to
+   the node's nearest enclosing `az_view` (the root, or a nested `?stateful`
+   child) — so events reach stateful children, not just the root. The server's
+   `"e"` (effects) array is dispatched after the ops. The portable commands are
+   handled — `push_event`, and `navigate` (which sends `["navigate", {path, qs}]`
+   on the same socket; the server's `handle_navigate` re-mounts the target view
+   and replies with `OP_REPLACE`). Web-only effects (`set_title`,
+   `dispatch_event`, …) are skipped on native.
 6. **Reconnect with backoff.** On a dropped socket — any close other than a
    normal `1000`, or an abrupt failure — reopen with exponential backoff
    (`[1, 2, 5, 10]`s steps, capped at 10s, ±20% jitter), resetting the attempt
@@ -178,7 +182,8 @@ Both are near-copies of the browser worker (`assets/js/arizona-worker.js` + `ari
 The `native` e2e exercises each example over the real socket: a counter
 (`/native/counter`), a keyed list (`/native/list`), conditional tab switching
 (`/native/tabs`), server-pushed ticks (`/native/ticker`), independent counters
-(`/native/multi`), navigation (`/native/menu`), and reconnect-after-drop. The in-repo Android sample
+(`/native/multi`), nested stateful children with per-child event routing
+(`/native/nested`), navigation (`/native/menu`), and reconnect-after-drop. The in-repo Android sample
 (`clients/android`) is a launcher that opens `/native/menu` and navigates to each
 on a device.
 
@@ -214,11 +219,6 @@ returns them won't crash a native client.
   `?each` children must also be `?native` (and vice-versa for `?html`). Mixing
   targets in one tree mismatches the statics format. This is a documented rule,
   not a checked one.
-- **Events route to the view root.** A native client sends events to the
-  `OP_REPLACE` ViewId; routing to a nested `?stateful` child (which needs the
-  child's own view id) isn't supported yet — the multi-counter example uses
-  per-region events on a single view. Stateful children still *render*; only
-  event routing to them is the gap.
 - **No server-side widget validation** (let-it-crash / the client's concern).
 - **Props are string-encoded**; the client coerces. Typed props, opt-in
   per-platform compile-time validators, and a portable cross-platform

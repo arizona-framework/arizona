@@ -54,7 +54,9 @@ export class NativeClient {
             encodeURIComponent(path) +
             '&_az_reconnect=1';
         this.fpCache = new Map(); // fingerprint -> { s, t }
-        this.registry = new Map(); // az -> raw node (with #slot wrappers)
+        // viewId -> (az -> raw node). Per-view so two instances of the same
+        // stateful child (which share a fingerprint's az values) don't collide.
+        this.views = new Map();
         this.root = null; // raw root node
         this.viewId = null;
         this._waiters = [];
@@ -138,9 +140,13 @@ export class NativeClient {
         if (this.ws) this.ws.close(1000);
     }
 
-    // The user-visible widget tree: the raw tree with every #slot spliced away.
+    // The user-visible widget tree: the raw tree with every #slot spliced away,
+    // each node stamped with its enclosing view id so a tap routes to the owning
+    // view (the root, or a stateful child).
     tree() {
-        return flatten(structuredClone(this.root));
+        const t = flatten(structuredClone(this.root));
+        stampViews(t, this.viewId);
+        return t;
     }
 
     // Resolve when `predicate(tree)` holds (checked after each applied frame).
@@ -160,9 +166,11 @@ export class NativeClient {
         });
     }
 
-    // Send an event frame [ViewId, Event, Payload], as the browser's pushEvent does.
-    pushEvent(event, payload = {}) {
-        this.ws.send(JSON.stringify([this.viewId, event, payload]));
+    // Send an event frame [ViewId, Event, Payload], as the browser's pushEvent
+    // does. ViewId defaults to the root view; a tap routes to the tapped node's
+    // enclosing view (so events reach a stateful child, not just the root).
+    pushEvent(event, payload = {}, viewId = this.viewId) {
+        this.ws.send(JSON.stringify([viewId, event, payload]));
     }
 
     // SPA navigate: transition to a new view on the same socket (the server's
@@ -177,14 +185,15 @@ export class NativeClient {
     // fire it, like the browser delegating an az-click. Strict: an unexpected
     // command throws.
     tap(node, prop = 'on_tap') {
-        this._runEffect(node[prop], true);
+        this._runEffect(node[prop], true, node.__view);
     }
 
     // Run one effect command (from a tap prop or the server's "e" array). `strict`
     // throws on an unsupported command (taps); non-strict skips it (web-only
-    // effects in the "e" stream don't apply to native).
-    _runEffect(cmd, strict) {
-        if (Array.isArray(cmd) && cmd[0] === EFFECT_PUSH_EVENT) this.pushEvent(cmd[1]);
+    // effects in the "e" stream don't apply to native). `view` (a tap's enclosing
+    // view id) routes the event; the server's "e" effects pass none -> root.
+    _runEffect(cmd, strict, view) {
+        if (Array.isArray(cmd) && cmd[0] === EFFECT_PUSH_EVENT) this.pushEvent(cmd[1], {}, view);
         else if (Array.isArray(cmd) && cmd[0] === EFFECT_NAVIGATE) this.navigate(cmd[1]);
         else if (strict) throw new Error(`unsupported command: ${JSON.stringify(cmd)}`);
     }
@@ -207,8 +216,8 @@ export class NativeClient {
                 const [, viewId, payload] = op;
                 this.viewId = viewId;
                 this.root = JSON.parse(this._interleave(payload));
-                this.registry = new Map();
-                indexByAz(this.root, this.registry);
+                this.views = new Map();
+                indexByViews(this.root, this.viewId, this.views);
                 break;
             }
             case OP_TEXT:
@@ -268,11 +277,16 @@ export class NativeClient {
         }
     }
 
-    // target is "ViewId:az"; resolve the raw node by its az.
+    // Resolve a top-level op's "ViewId:az" target within that view's own
+    // registry, so two instances of the same stateful child (sharing a
+    // fingerprint's az values) don't collide. Mirrors the browser scoping the az
+    // lookup to getElementById(ViewId).
     _resolve(target) {
-        const az = target.slice(target.indexOf(':') + 1);
-        const node = this.registry.get(az);
-        if (!node) throw new Error(`unknown az target: ${target}`);
+        const i = target.indexOf(':');
+        const viewId = target.slice(0, i);
+        const az = target.slice(i + 1);
+        const node = this.views.get(viewId)?.get(az);
+        if (!node) throw new Error(`unknown target: ${target}`);
         return node;
     }
 
@@ -333,7 +347,7 @@ export class NativeClient {
 }
 
 // Build an az -> node index over the raw tree (includes #slot nodes, which carry
-// the az that OP_TEXT targets).
+// the az that OP_TEXT targets). Used for an OP_ITEM_PATCH's item-scoped lookups.
 function indexByAz(node, reg) {
     if (node === null || typeof node !== 'object') return;
     if (Array.isArray(node)) {
@@ -344,6 +358,28 @@ function indexByAz(node, reg) {
     if (node.children) {
         for (const c of node.children) indexByAz(c, reg);
     }
+}
+
+// Build per-view az -> node indices over the raw tree: each node is indexed
+// under its enclosing view (the nearest az_view ancestor's id, else the root),
+// so a "ViewId:az" target resolves within the right view even when sibling
+// stateful-child instances share az values from a shared fingerprint.
+function indexByViews(node, viewId, views) {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+        for (const c of node) indexByViews(c, viewId, views);
+        return;
+    }
+    const v = node.az_view === true && node.id ? node.id : viewId;
+    if (node.az) {
+        let reg = views.get(v);
+        if (!reg) {
+            reg = new Map();
+            views.set(v, reg);
+        }
+        reg.set(node.az, node);
+    }
+    if (node.children) for (const c of node.children) indexByViews(c, v, views);
 }
 
 // A stream container (#slot) holds its keyed items as the single each-array
@@ -369,4 +405,14 @@ function flattenChild(child) {
     if (Array.isArray(child)) return child.flatMap(flattenChild);
     if (child !== null && typeof child === 'object' && child.children) return [flatten(child)];
     return [child];
+}
+
+// Stamp each node with its enclosing view id: the nearest ancestor (or itself)
+// carrying `az_view: true`, else the inherited (root) view. Mirrors the browser
+// resolving an event target via el.closest('[az-view]').id.
+function stampViews(node, view) {
+    if (node === null || typeof node !== 'object') return;
+    const v = node.az_view === true && node.id ? node.id : view;
+    node.__view = v;
+    if (node.children) for (const child of node.children) stampViews(child, v);
 }
