@@ -11,9 +11,11 @@ let package = Package(
     platforms: [.iOS(.v16), .macOS(.v13)],
     products: [
         .library(name: "AzWire", targets: ["AzWire"]),
+        .library(name: "AzClientUI", targets: ["AzClientUI"]),
     ],
     targets: [
         .target(name: "AzWire"),
+        .target(name: "AzClientUI", dependencies: ["AzWire"]),
         .testTarget(name: "AzWireTests", dependencies: ["AzWire"]),
     ]
 )
