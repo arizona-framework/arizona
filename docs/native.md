@@ -66,7 +66,11 @@ helpers — call only the one(s) you need, no precomputed map:
 
 - `browser/1` — true when the UA carries `Mozilla` (browsers/webviews do; a
   native app's HTTP stack typically does not).
-- `os/1` — `ios | android | windows | macos | linux | other`.
+- `os/1` — `watchos | tvos | webos | tizen | ios | android | windows | macos |
+  linux | other`. The smart-TV ones (`tvos`/`webos`/`tizen`) come from real
+  TV-browser UAs; `watchos` and native apps need a descriptive UA (a generic one
+  → `other`), so for native clients you control an explicit platform signal is
+  more reliable than UA sniffing.
 - `mobile/1` — best-effort mobile-device guess.
 
 ```erlang

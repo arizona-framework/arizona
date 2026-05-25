@@ -54,13 +54,27 @@ browser(UserAgent) ->
 Coarse operating-system guess from a `User-Agent`, or `other` when nothing
 matches.
 
-Order matters where UAs overlap: Android UAs also carry `Linux` and iOS UAs also
-carry `Mac OS X`, so the more specific substrings are checked first.
+Order matters where UAs overlap, so the more specific substrings are checked
+first: Apple TV / Apple Watch UAs also carry `Mac OS X`; webOS / Tizen / Android
+UAs carry `Linux`; iOS UAs carry `Mac OS X`. The smart-TV ones (`tvos`/`webos`/
+`tizen`) come from real TV-browser UAs and are reliable. `watchos` and native
+apps rely on a descriptive UA -- most native HTTP stacks send a generic UA that
+names no platform (→ `other`), so when you control the client prefer an explicit
+signal (a query param/header) over this heuristic.
 """.
--spec os(UserAgent) -> ios | android | windows | macos | linux | other when
+-spec os(UserAgent) ->
+    watchos | tvos | webos | tizen | ios | android | windows | macos | linux | other
+when
     UserAgent :: binary().
 os(UserAgent) ->
     Rules = [
+        {~"Apple Watch", watchos},
+        {~"watchOS", watchos},
+        {~"Apple TV", tvos},
+        {~"tvOS", tvos},
+        {~"Web0S", webos},
+        {~"webOS", webos},
+        {~"Tizen", tizen},
         {~"Android", android},
         {~"iPhone", ios},
         {~"iPad", ios},
