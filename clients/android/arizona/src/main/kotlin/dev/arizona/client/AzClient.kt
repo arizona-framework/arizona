@@ -51,8 +51,12 @@ private const val HEARTBEAT_MS = 30_000L
  * driving recomposition. Mirrors e2e/utils/native_client.js.
  */
 class AzClient(baseUrl: String, path: String) {
-    private val wsUrl = baseUrl.replaceFirst("http", "ws") +
-        "/ws?_az_path=" + java.net.URLEncoder.encode(path, "UTF-8") + "&_az_reconnect=1"
+    private val wsBase = baseUrl.replaceFirst("http", "ws") + "/ws?_az_path="
+
+    // The reconnect URL. Updated in navigate() to the navigated path, so a dropped
+    // socket re-mounts where the user is, not the launch path (mirrors the browser
+    // worker updating _wsUrl on navigate).
+    private var wsUrl = wsBase + java.net.URLEncoder.encode(path, "UTF-8") + "&_az_reconnect=1"
 
     /** The current root widget node; `null` until the first frame arrives. */
     val root: MutableState<Node?> = mutableStateOf(null)
@@ -205,6 +209,10 @@ class AzClient(baseUrl: String, path: String) {
             }
         }
         ws?.send(frame.toString())
+        // Keep the reconnect URL in sync with the navigated route, so a drop
+        // re-mounts here, not the launch path. Reconnect is a fresh mount, so only
+        // _az_path (the route) matters.
+        wsUrl = wsBase + java.net.URLEncoder.encode(parts[0], "UTF-8") + "&_az_reconnect=1"
     }
 
     // Send an event frame [ViewId, Event, Payload]. ViewId defaults to the root

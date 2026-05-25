@@ -179,6 +179,12 @@ export class NativeClient {
     navigate(path) {
         const [p, qs = ''] = path.split('?');
         this.ws.send(JSON.stringify(['navigate', { path: p, qs }]));
+        // Keep the reconnect URL in sync so a drop re-mounts the navigated path,
+        // not the launch path (mirrors the browser worker updating _wsUrl on a
+        // navigate). Reconnect = a fresh mount, so only the route (_az_path) matters.
+        const u = new URL(this.wsUrl);
+        u.searchParams.set('_az_path', p);
+        this.wsUrl = u.toString();
     }
 
     // Interpret a node's tap command prop (an arizona_effect command array) and
