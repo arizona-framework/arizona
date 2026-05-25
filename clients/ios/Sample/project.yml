@@ -1,8 +1,7 @@
-# XcodeGen spec for the sample app. Generate the Xcode project with
-# `xcodegen generate` (run from this directory) -- the .xcodeproj is not committed
-# (mirrors the Android client carrying declarative Gradle files, not an IDE
-# project blob). The Makefile's build-ios/test-ios run it for you. The UI-test
-# target is added alongside the XCUITest sources.
+# XcodeGen spec for the sample app + UI-test bundle. Generate the Xcode project
+# with `xcodegen generate` (run from this directory) -- the .xcodeproj is not
+# committed (mirrors the Android client carrying declarative Gradle files, not an
+# IDE project blob). The Makefile's build-ios/test-ios run it for you.
 name: Sample
 options:
   bundleIdPrefix: dev.arizona
@@ -31,3 +30,25 @@ targets:
     dependencies:
       - package: Arizona
         product: AzClientUI
+  SampleUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.arizona.sample.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.9"
+        TEST_TARGET_NAME: Sample
+    dependencies:
+      - target: Sample
+schemes:
+  Sample:
+    build:
+      targets:
+        Sample: all
+        SampleUITests: [test]
+    test:
+      targets:
+        - SampleUITests
