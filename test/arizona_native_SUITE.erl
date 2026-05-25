@@ -24,6 +24,7 @@
 -export([diff_stream_insert_op/1]).
 -export([diff_stream_remove_op/1]).
 -export([diff_stream_move_op/1]).
+-export([diff_remove_node_op/1]).
 
 all() ->
     [
@@ -47,7 +48,8 @@ all() ->
         diff_independent_regions_op,
         diff_stream_insert_op,
         diff_stream_remove_op,
-        diff_stream_move_op
+        diff_stream_move_op,
+        diff_remove_node_op
     ].
 
 %% --------------------------------------------------------------------
@@ -406,6 +408,21 @@ diff_stream_move_op(Config) when is_list(Config) ->
     Changed = compute_changed(B1, B2),
     {Ops, _, _} = arizona_diff:diff(arizona_native_list:render(B2), Snap0, V0, Changed),
     ?assertMatch([[?OP_MOVE, _Az, ~"2", _Ref]], Ops).
+
+diff_remove_node_op(Config) when is_list(Config) ->
+    %% A native dynamic returning the `remove` sentinel (element present, then
+    %% gone) diffs to OP_REMOVE_NODE targeting that element's az -- the same
+    %% target-agnostic path HTML uses (arizona_diff:make_op/3). Proves native emits
+    %% op 4, which the native clients must handle (remove the node) rather than crash.
+    Mod = compile_module(
+        "-module(nt_remove). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Text', [], [az:get(label, Bindings, <<\"x\">>)]}). "
+    ),
+    {_, Snap0} = arizona_render:render(Mod:render(#{label => ~"Banner"})),
+    {Ops, _} = arizona_diff:diff(Mod:render(#{label => remove}), Snap0),
+    ?assertMatch([[?OP_REMOVE_NODE, _Az]], Ops).
 
 %% --------------------------------------------------------------------
 %% Helpers

@@ -156,10 +156,12 @@ Both are near-copies of the browser worker (`assets/js/arizona-worker.js` + `ari
    uses the DOM): an op's `"ViewId:az"` target resolves within that view, so
    sibling instances of the same stateful child — which share a fingerprint's `az`
    values — don't collide. `OP_TEXT` sets a `#slot`'s content,
-   `OP_SET_ATTR`/`OP_REM_ATTR` set/drop a prop, and the stream ops manage a
-   container's keyed children — items keyed by `az_key`, with
-   `OP_INSERT`/`OP_REMOVE`/`OP_MOVE` reordering the list, `OP_ITEM_PATCH` applying
-   inner ops scoped to one item, and `OP_UPDATE` re-rendering the whole list.
+   `OP_SET_ATTR`/`OP_REM_ATTR` set/drop a prop, `OP_REMOVE_NODE` drops a node from
+   its parent (a dynamic that returned the `remove` sentinel; one-way — re-adding
+   needs a parent re-render), and the stream ops manage a container's keyed
+   children — items keyed by `az_key`, with `OP_INSERT`/`OP_REMOVE`/`OP_MOVE`
+   reordering the list, `OP_ITEM_PATCH` applying inner ops scoped to one item, and
+   `OP_UPDATE` re-rendering the whole list.
 5. **Run effects and navigate.** A tap fires its node's command prop, routed to
    the node's nearest enclosing `az_view` (the root, or a nested `?stateful`
    child) — so events reach stateful children, not just the root. The server's

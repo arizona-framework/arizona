@@ -24,7 +24,8 @@ render(Bindings) ->
             {'Button', [{on_tap, arizona_android:navigate(~"/native/nested")}], [~"Nested"]},
             {'Button', [{on_tap, arizona_android:push_event(~"open_counter")}], [
                 ~"Counter (effect)"
-            ]}
+            ]},
+            {'Button', [{on_tap, arizona_android:navigate(~"/native/removable")}], [~"Removable"]}
         ]}
     ).
 

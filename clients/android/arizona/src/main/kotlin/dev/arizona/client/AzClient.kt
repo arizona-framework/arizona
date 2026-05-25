@@ -235,14 +235,16 @@ class AzClient(baseUrl: String, path: String) {
     }
 
     private fun applyOps(ops: JsonArray) {
-        // Top-level ops address nodes as "ViewId:az" via the per-view registry.
-        for (op in ops) dispatch(op.jsonArray) { target -> resolve(target) }
+        // Top-level ops address nodes as "ViewId:az" via the per-view registry;
+        // OP_REMOVE_NODE searches the whole tree to splice the node out.
+        for (op in ops) dispatch(op.jsonArray, root.value) { target -> resolve(target) }
     }
 
     // Apply one op, resolving its target via [resolveNode]. Top-level ops pass
     // "ViewId:az"; an OP_ITEM_PATCH's inner ops pass a bare az resolved within
-    // the patched item (mirrors the browser worker's applyItemOps).
-    private fun dispatch(a: JsonArray, resolveNode: (String) -> Node) {
+    // the patched item (mirrors the browser worker's applyItemOps). [scopeRoot]
+    // bounds OP_REMOVE_NODE's parent search (the whole tree, or one patched item).
+    private fun dispatch(a: JsonArray, scopeRoot: Node?, resolveNode: (String) -> Node) {
         when (a[0].jsonPrimitive.int) {
             Op.REPLACE -> {
                 val json = Json.parseToJsonElement(interleaver.interleave(a[2].jsonObject))
@@ -269,6 +271,11 @@ class AzClient(baseUrl: String, path: String) {
                 val node = resolveNode(a[1].jsonPrimitive.content)
                 node.children.clear()
                 addChild(node, Json.parseToJsonElement(interleaver.decode(a[2])), node.viewId)
+            }
+            Op.REMOVE_NODE -> {
+                // A dynamic returned the `remove` sentinel: drop the node from its
+                // parent. One-way -- bringing it back needs a parent re-render.
+                removeFromParent(scopeRoot, resolveNode(a[1].jsonPrimitive.content))
             }
             Op.SET_ATTR -> {
                 resolveNode(a[1].jsonPrimitive.content).props[a[2].jsonPrimitive.content] = a[3]
@@ -315,7 +322,20 @@ class AzClient(baseUrl: String, path: String) {
     private fun applyInner(item: Node, innerOps: JsonArray) {
         val local = HashMap<String, Node>()
         indexByAz(item, local)
-        for (op in innerOps) dispatch(op.jsonArray) { az -> local[az] ?: item }
+        for (op in innerOps) dispatch(op.jsonArray, item) { az -> local[az] ?: item }
+    }
+
+    // Find [target] within [parent]'s subtree and remove it from its parent's
+    // children. Used by OP_REMOVE_NODE (the `remove` sentinel).
+    private fun removeFromParent(parent: Node?, target: Node): Boolean {
+        if (parent == null) return false
+        val i = parent.children.indexOf(target)
+        if (i != -1) {
+            parent.children.removeAt(i)
+            return true
+        }
+        for (c in parent.children) if (c is Node && removeFromParent(c, target)) return true
+        return false
     }
 
     // Index of the keyed child (by its `az_key` prop) in a stream container, or -1.

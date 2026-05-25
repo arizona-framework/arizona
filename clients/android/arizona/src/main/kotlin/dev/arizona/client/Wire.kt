@@ -24,6 +24,7 @@ object Op {
     const val SET_ATTR = 1
     const val REM_ATTR = 2
     const val UPDATE = 3
+    const val REMOVE_NODE = 4
     const val INSERT = 5
     const val REMOVE = 6
     const val ITEM_PATCH = 7

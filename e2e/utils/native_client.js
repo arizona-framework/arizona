@@ -21,6 +21,7 @@ const OP_TEXT = 0;
 const OP_SET_ATTR = 1;
 const OP_REM_ATTR = 2;
 const OP_UPDATE = 3;
+const OP_REMOVE_NODE = 4;
 const OP_INSERT = 5;
 const OP_REMOVE = 6;
 const OP_ITEM_PATCH = 7;
@@ -209,14 +210,16 @@ export class NativeClient {
     }
 
     _applyOps(ops) {
-        // Top-level ops address nodes as "ViewId:az" via the global registry.
-        for (const op of ops) this._dispatch(op, (target) => this._resolve(target));
+        // Top-level ops address nodes as "ViewId:az" via the per-view registry;
+        // OP_REMOVE_NODE searches within the whole tree to splice the node out.
+        for (const op of ops) this._dispatch(op, (target) => this._resolve(target), this.root);
     }
 
     // Apply one op, resolving its target node via `resolve`. Top-level ops pass
     // "ViewId:az"; an OP_ITEM_PATCH's inner ops pass a bare az resolved within
-    // the patched item (mirrors the browser worker's applyItemOps).
-    _dispatch(op, resolve) {
+    // the patched item (mirrors the browser worker's applyItemOps). `scopeRoot`
+    // bounds OP_REMOVE_NODE's parent search (the whole tree, or one patched item).
+    _dispatch(op, resolve, scopeRoot) {
         switch (op[0]) {
             case OP_REPLACE: {
                 this.root = JSON.parse(this._interleave(op[2]));
@@ -239,6 +242,12 @@ export class NativeClient {
                 // Re-render a node's content (e.g. a stream reset rebuilds the
                 // whole each-list).
                 resolve(op[1]).children = [this._decode(op[2])];
+                break;
+            case OP_REMOVE_NODE:
+                // A dynamic returned the `remove` sentinel: drop the node from its
+                // parent (the browser does el.remove()). One-way -- bringing it back
+                // needs a parent re-render, not an op on the removed az.
+                removeFromParent(scopeRoot, resolve(op[1]));
                 break;
             case OP_SET_ATTR:
                 resolve(op[1])[op[2]] = op[3];
@@ -304,7 +313,7 @@ export class NativeClient {
     _applyInner(item, innerOps) {
         const reg = new Map();
         indexByAz(item, reg);
-        for (const op of innerOps) this._dispatch(op, (az) => reg.get(az) || item);
+        for (const op of innerOps) this._dispatch(op, (az) => reg.get(az) || item, item);
     }
 
     // Decode an op payload: a {t:0} each-list -> array, a {f,s,d} template ->
@@ -407,6 +416,29 @@ function itemList(container) {
     const items = container.children.find(Array.isArray);
     if (!items) throw new Error(`container ${container.az} has no item list`);
     return items;
+}
+
+// Find `target` within `root`'s subtree (descending into child nodes and each-
+// arrays) and splice it out of its parent's children. Used by OP_REMOVE_NODE.
+function removeFromParent(root, target) {
+    if (root === null || typeof root !== 'object' || !root.children) return false;
+    const i = root.children.indexOf(target);
+    if (i !== -1) {
+        root.children.splice(i, 1);
+        return true;
+    }
+    for (const c of root.children) {
+        if (Array.isArray(c)) {
+            if (c.indexOf(target) !== -1) {
+                c.splice(c.indexOf(target), 1);
+                return true;
+            }
+            if (c.some((e) => removeFromParent(e, target))) return true;
+        } else if (removeFromParent(c, target)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Splice every #slot's children into its parent, and flatten nested arrays
