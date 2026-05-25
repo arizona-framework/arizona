@@ -161,9 +161,8 @@ format_error(https_requires_tls, [{_M, _F, _Args, _Info} | _]) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-%% Pull the port out of either the cowboy-style `transport_opts`
-%% proplist (kept for config-shape parity) or directly from
-%% `proto_opts.port`. Default 4040.
+%% Pull the port out of either the `transport_opts` proplist or
+%% directly from `proto_opts.port`. Default 4040.
 port_from_opts(Opts) ->
     case maps:get(transport_opts, Opts, undefined) of
         undefined ->
@@ -173,8 +172,8 @@ port_from_opts(Opts) ->
             proplists:get_value(port, TransportOpts, 4040)
     end.
 
-%% Translate the cowboy-style `scheme => https` shorthand into
-%% roadrunner's `tls => [...]` listener opt. Top-level `tls` overrides
+%% Translate the `scheme => https` shorthand into roadrunner's
+%% `tls => [...]` listener opt. Top-level `tls` overrides
 %% `proto_opts.tls` (which has already flowed into `ListenerOpts`).
 %% Asking for `scheme => https` with no TLS config anywhere fails
 %% loudly — silently downgrading to plain HTTP on the same port is a

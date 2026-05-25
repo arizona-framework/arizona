@@ -319,13 +319,13 @@ bench_stream_reorder_100(Runs) ->
     ).
 
 bench_http_get_e2e(Runs) ->
-    %% End-to-end HTTP GET: cowboy + gen_tcp keep-alive, single client.
-    %% Measures full request: cowboy parsing + Arizona HTTP handler +
+    %% End-to-end HTTP GET: roadrunner + gen_tcp keep-alive, single client.
+    %% Measures full request: roadrunner parsing + Arizona HTTP handler +
     %% view mount/render + response writing.
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}}
     ],
-    arizona_bench_lib:with_cowboy(bench_http_e2e, Routes, fun(Port) ->
+    arizona_bench_lib:with_roadrunner(bench_http_e2e, Routes, fun(Port) ->
         arizona_bench_lib:with_http_socket(Port, fun(Sock) ->
             case arizona_bench_lib:http_get(Sock, Port) of
                 {200, Body} when byte_size(Body) > 0 ->
@@ -345,7 +345,7 @@ bench_http_get_e2e(Runs) ->
 bench_http_get_e2e_each(Runs) ->
     %% End-to-end HTTP GET against arizona_about with a 100-tag binding,
     %% wrapped in arizona_layout. Exercises a real-world SSR path:
-    %% cowboy parsing + view mount/render + `?each` over 100 items +
+    %% roadrunner parsing + view mount/render + `?each` over 100 items +
     %% layout wrapping + response writing. The trivial counter view in
     %% `http_get_e2e` is too small to surface render-side regressions
     %% on heavier pages.
@@ -356,7 +356,7 @@ bench_http_get_e2e_each(Runs) ->
             bindings => #{tags => Tags}
         }}
     ],
-    arizona_bench_lib:with_cowboy(bench_http_e2e_each, Routes, fun(Port) ->
+    arizona_bench_lib:with_roadrunner(bench_http_e2e_each, Routes, fun(Port) ->
         arizona_bench_lib:with_http_socket(Port, fun(Sock) ->
             case arizona_bench_lib:http_get(Sock, Port) of
                 {200, Body} when byte_size(Body) > 0 -> ok;
@@ -379,7 +379,7 @@ bench_http_get_e2e_10c(Runs) ->
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}}
     ],
-    arizona_bench_lib:with_cowboy(bench_http_e2e_10c, Routes, fun(Port) ->
+    arizona_bench_lib:with_roadrunner(bench_http_e2e_10c, Routes, fun(Port) ->
         arizona_bench_lib:run_concurrent_workload(10, 100, Runs, fun(Coordinator) ->
             spawn_link(fun() ->
                 arizona_bench_lib:http_client_worker(Coordinator, Port, 100)
@@ -388,15 +388,15 @@ bench_http_get_e2e_10c(Runs) ->
     end).
 
 bench_ws_event_e2e(Runs) ->
-    %% End-to-end WS event: cowboy + gen_tcp WS, single client. Each
+    %% End-to-end WS event: roadrunner + gen_tcp WS, single client. Each
     %% iteration sends one `inc` text frame and reads one reply.
-    %% Path: cowboy ws + arizona_socket:handle_in + live dispatch +
+    %% Path: roadrunner ws + arizona_socket:handle_in + live dispatch +
     %% diff + reply encode.
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
         {ws, <<"/ws">>, #{}}
     ],
-    arizona_bench_lib:with_cowboy(bench_ws_e2e, Routes, fun(Port) ->
+    arizona_bench_lib:with_roadrunner(bench_ws_e2e, Routes, fun(Port) ->
         arizona_bench_lib:with_ws_socket(Port, <<"/">>, fun(Sock) ->
             Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
             ok = arizona_bench_lib:ws_send(Sock, Json),
@@ -424,7 +424,7 @@ bench_ws_event_e2e_10c(Runs) ->
         {ws, <<"/ws">>, #{}}
     ],
     Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
-    arizona_bench_lib:with_cowboy(bench_ws_e2e_10c, Routes, fun(Port) ->
+    arizona_bench_lib:with_roadrunner(bench_ws_e2e_10c, Routes, fun(Port) ->
         arizona_bench_lib:run_concurrent_workload(10, 100, Runs, fun(Coordinator) ->
             spawn_link(fun() ->
                 arizona_bench_lib:ws_client_worker(Coordinator, Port, Json, 100)

@@ -52,8 +52,7 @@
 
 all() ->
     [
-        {group, roadrunner},
-        {group, cowboy}
+        {group, roadrunner}
     ].
 
 groups() ->
@@ -105,14 +104,13 @@ groups() ->
     ],
     [
         {roadrunner, [sequence], [{group, basic}, {group, crash_recovery}]},
-        {cowboy, [sequence], [{group, basic}, {group, crash_recovery}]},
         {basic, [sequence], Basic},
         {crash_recovery, [sequence], Crash}
     ].
 
-init_per_group(Adapter, Config) when Adapter =:= roadrunner; Adapter =:= cowboy ->
+init_per_group(roadrunner, Config) ->
     {ok, _} = application:ensure_all_started(arizona),
-    {ok, _} = application:ensure_all_started(adapter_app(Adapter)),
+    {ok, _} = application:ensure_all_started(roadrunner),
     Port = pick_port(),
     %% Test-only URL -> Bindings middleware. Tests that assert on URL
     %% data in rendered HTML opt into this on their routes; the
@@ -143,9 +141,8 @@ init_per_group(Adapter, Config) when Adapter =:= roadrunner; Adapter =:= cowboy 
         {live, <<"/with_middleware">>, arizona_crashable, #{
             middlewares => [fun(Req, B) -> {cont, Req, B#{session => <<"abc">>}} end]
         }},
-        %% Adapter-agnostic redirect halt — replaces the cowboy-specific
-        %% direct cowboy_req:reply pattern that used to live here. Both
-        %% adapters now translate the stashed redirect into a 302.
+        %% Redirect halt: roadrunner translates the stashed redirect
+        %% into a 302.
         {live, <<"/halt_middleware">>, arizona_crashable, #{
             middlewares => [
                 fun(Req, _B) ->
@@ -220,28 +217,22 @@ init_per_group(Adapter, Config) when Adapter =:= roadrunner; Adapter =:= cowboy 
         {asset, <<"/assets">>, {priv_dir, arizona, "static/assets/js"}},
         {reload, <<"/reload">>, #{}}
     ],
-    ServerMod = server_module(Adapter),
+    ServerMod = arizona_roadrunner_server,
     {ok, _} = ServerMod:start(ws_test, #{
         transport_opts => [{port, Port}],
         routes => Routes
     }),
-    [{port, Port}, {adapter, Adapter}, {server_mod, ServerMod} | Config];
+    [{port, Port}, {server_mod, ServerMod} | Config];
 init_per_group(_Group, Config) ->
     Config.
 
-end_per_group(Adapter, Config) when Adapter =:= roadrunner; Adapter =:= cowboy ->
+end_per_group(roadrunner, Config) ->
     ServerMod = ?config(server_mod, Config),
     _ = ServerMod:stop(ws_test),
     _ = application:stop(arizona),
     ok;
 end_per_group(_Group, _Config) ->
     ok.
-
-server_module(roadrunner) -> arizona_roadrunner_server;
-server_module(cowboy) -> arizona_cowboy_server.
-
-adapter_app(roadrunner) -> roadrunner;
-adapter_app(cowboy) -> cowboy.
 
 pick_port() ->
     14040 + erlang:unique_integer([positive, monotonic]) rem 1000.
@@ -455,7 +446,7 @@ middleware_cont_on_navigate(Config) ->
 
 http_halt_redirect_via_req(Config) ->
     %% HTTP: middleware halts via `arizona_req:redirect/2`; transport emits
-    %% 302 with Location header (instead of middleware calling cowboy_req:reply).
+    %% 302 with Location header instead of writing the reply in middleware.
     Port = proplists:get_value(port, Config),
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
     Req = [
@@ -488,7 +479,7 @@ http_render_crash_emits_error_page(Config) ->
 
 static_asset_served(Config) ->
     %% HTTP GET for an `{asset, ...}` route serves the file with an inferred
-    %% content-type. Exercises `arizona_cowboy_static`.
+    %% content-type. Exercises `arizona_roadrunner_static`.
     Port = proplists:get_value(port, Config),
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
     Req = [
@@ -531,7 +522,7 @@ static_asset_missing_returns_404(Config) ->
     ?assertNotEqual(nomatch, binary:match(Resp, <<"404">>)).
 
 http_preserves_duplicate_qs_keys(Config) ->
-    %% HTTP: cowboy_req:parse_qs preserves duplicate keys in order; the
+    %% HTTP: query-string parsing preserves duplicate keys in order; the
     %% middleware reads every `foo=` value via `arizona_req:params/1`
     %% and projects them into the rendered page.
     Port = proplists:get_value(port, Config),
@@ -550,10 +541,9 @@ http_preserves_duplicate_qs_keys(Config) ->
 
 ws_navigate_preserves_duplicate_qs_keys(Config) ->
     %% WS navigate: the frame's `qs` binary flows through
-    %% arizona_socket:handle_navigate -> adapter -> cowboy_router, which
+    %% arizona_socket:handle_navigate -> adapter -> roadrunner_router, which
     %% writes it onto the synthesized Req's `qs` field. The handler's
-    %% `arizona_req:params/1` parses it with `cowboy_req:parse_qs`,
-    %% preserving duplicates.
+    %% `arizona_req:params/1` parses it, preserving duplicates.
     {ok, Sock} = ws_connect(Config, <<"/">>),
     ok = ws_send_json(Sock, [
         ~"navigate",
@@ -570,7 +560,7 @@ ws_navigate_preserves_duplicate_qs_keys(Config) ->
 ws_upgrade_preserves_duplicate_qs_keys(Config) ->
     %% WS upgrade: user qs (including duplicate keys) sits alongside the
     %% `_az_path`/`_az_reconnect` framework keys on the upgrade URL.
-    %% `arizona_cowboy_ws:user_qs/1` strips only the framework keys, so
+    %% `arizona_roadrunner_ws` strips only the framework keys, so
     %% duplicates flow through to the adapter and reach the handler via
     %% `arizona_req:params/1`. `reconnect` mode forces an immediate
     %% mount-and-render so we can read the rendered HTML off the wire.
@@ -589,29 +579,19 @@ recompile_routes_runs(Config) when is_list(Config) ->
     %% it succeeds.
     ServerMod = ?config(server_mod, Config),
     ?assertEqual(ok, ServerMod:recompile_routes()),
-    %% Roadrunner adapter only: confirm the build-time opts (compress
-    %% flag) are stashed alongside Routes so recompile replays them
-    %% instead of silently re-defaulting. Cowboy adapter has no
-    %% equivalent.
-    case ?config(adapter, Config) of
-        roadrunner ->
-            Stashed = persistent_term:get({arizona_roadrunner_routes, ws_test}),
-            ?assertMatch({_Routes, #{compress := _}}, Stashed);
-        cowboy ->
-            ok
-    end.
+    %% Confirm the build-time opts (compress flag) are stashed alongside
+    %% Routes so recompile replays them instead of silently re-defaulting.
+    Stashed = persistent_term:get({arizona_roadrunner_routes, ws_test}),
+    ?assertMatch({_Routes, #{compress := _}}, Stashed).
 
 recompile_routes_syncs_listener(Config) when is_list(Config) ->
-    %% Roadrunner-only regression: recompile_routes/0 must refresh both
-    %% Arizona's dispatch term AND the listener's compiled route table.
-    %% Before the fix, the listener kept its boot-time table, so any
-    %% route added after a hot reload was reachable via WS navigate
-    %% (which reads Arizona's term) but not via direct HTTP (which goes
-    %% through the listener's table).
-    case ?config(adapter, Config) of
-        roadrunner -> sync_listener_check(Config);
-        cowboy -> {skip, "roadrunner-specific listener sync"}
-    end.
+    %% Regression: recompile_routes/0 must refresh both Arizona's
+    %% dispatch term AND the listener's compiled route table. Before the
+    %% fix, the listener kept its boot-time table, so any route added
+    %% after a hot reload was reachable via WS navigate (which reads
+    %% Arizona's term) but not via direct HTTP (which goes through the
+    %% listener's table).
+    sync_listener_check(Config).
 
 sync_listener_check(Config) ->
     Port = proplists:get_value(port, Config),
@@ -677,14 +657,11 @@ read_until_close(Sock, Acc) ->
     end.
 
 https_without_tls_errors(Config) when is_list(Config) ->
-    %% Roadrunner-only: asking for `scheme => https` without supplying
-    %% any TLS opts used to silently downgrade to plain HTTP on the
-    %% same port. The fix raises `https_requires_tls` before any
-    %% persistent_term is written, so nothing leaks.
-    case ?config(adapter, Config) of
-        roadrunner -> https_without_tls_check();
-        cowboy -> {skip, "roadrunner-specific TLS validation"}
-    end.
+    %% Asking for `scheme => https` without supplying any TLS opts used
+    %% to silently downgrade to plain HTTP on the same port. The fix
+    %% raises `https_requires_tls` before any persistent_term is written,
+    %% so nothing leaks.
+    https_without_tls_check().
 
 https_without_tls_check() ->
     %% Snapshot the suite's dispatch term and the not-yet-existing
@@ -716,7 +693,7 @@ https_without_tls_check() ->
 reload_endpoint_streams_event(Config) ->
     %% Connect to the dev reload SSE endpoint, broadcast a reload, and
     %% verify the event is written to the stream. Exercises
-    %% `arizona_cowboy_reload:init/2` and `info/3`.
+    %% `arizona_roadrunner_reload`.
     Port = proplists:get_value(port, Config),
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
     Req = [
@@ -798,13 +775,10 @@ http_reads_cookies_headers_body(Config) ->
     ?assertNotEqual(nomatch, binary:match(Resp, <<"b=0">>)).
 
 http_exposes_roadrunner_request_id(Config) ->
-    %% Roadrunner-only: the adapter forwards roadrunner's per-request
-    %% 16-char hex id into arizona_req:request_id/1 so handlers/middlewares
-    %% can correlate with adapter access logs. Cowboy doesn't populate one.
-    case ?config(adapter, Config) of
-        roadrunner -> request_id_check(Config);
-        cowboy -> {skip, "cowboy adapter does not populate request_id"}
-    end.
+    %% The adapter forwards roadrunner's per-request 16-char hex id into
+    %% arizona_req:request_id/1 so handlers/middlewares can correlate with
+    %% adapter access logs.
+    request_id_check(Config).
 
 request_id_check(Config) ->
     Port = proplists:get_value(port, Config),
@@ -819,10 +793,7 @@ request_id_check(Config) ->
 drain_default_closes_ws_cleanly(Config) ->
     %% Handler without handle_drain/2 → dispatcher returns {stop, B, []} by
     %% default → live process exits normal → WS closes with code 1000.
-    case ?config(adapter, Config) of
-        roadrunner -> drain_default_check(Config);
-        cowboy -> {skip, "roadrunner-specific drain"}
-    end.
+    drain_default_check(Config).
 
 drain_default_check(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/">>),
@@ -836,10 +807,7 @@ drain_user_callback_pushes_effect_then_stops(Config) ->
     %% arizona_drainable with drain_mode => stop returns
     %% {stop, B, [dispatch_event("draining")]}; the effect frame must arrive
     %% before the going-away close (1001).
-    case ?config(adapter, Config) of
-        roadrunner -> drain_stop_check(Config);
-        cowboy -> {skip, "roadrunner-specific drain"}
-    end.
+    drain_stop_check(Config).
 
 drain_stop_check(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/drain_stop">>),
@@ -854,10 +822,7 @@ drain_stop_check(Config) ->
 drain_user_callback_keeps_alive(Config) ->
     %% arizona_drainable with drain_mode => keep returns {B, #{}, []} — no
     %% diff, no effects, no exit. WS stays open and continues serving.
-    case ?config(adapter, Config) of
-        roadrunner -> drain_keep_check(Config);
-        cowboy -> {skip, "roadrunner-specific drain"}
-    end.
+    drain_keep_check(Config).
 
 drain_keep_check(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/drain_keep">>),
@@ -878,10 +843,7 @@ drain_user_callback_noop_keeps_alive(Config) ->
     %% handle_drain — distinct path from `keep`: the live process's
     %% handle_drain_info hits the `ok` branch, skips process_root_change,
     %% and stays alive without any diff/push.
-    case ?config(adapter, Config) of
-        roadrunner -> drain_noop_check(Config);
-        cowboy -> {skip, "roadrunner-specific drain"}
-    end.
+    drain_noop_check(Config).
 
 drain_noop_check(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/drain_noop">>),
@@ -899,10 +861,7 @@ drain_emits_telemetry(Config) ->
     %% acknowledge_drain/2 fires `[roadrunner, drain, acknowledged]` with
     %% the deadline in metadata. Use the keep-alive route so the WS stays
     %% open long enough for cleanup.
-    case ?config(adapter, Config) of
-        roadrunner -> drain_telemetry_check(Config);
-        cowboy -> {skip, "roadrunner-specific drain"}
-    end.
+    drain_telemetry_check(Config).
 
 drain_telemetry_check(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/drain_keep">>),
@@ -945,10 +904,7 @@ drain_then_navigate_closes_gracefully(Config) ->
     %% beats the TCP-delivered navigate frame), so this test asserts only
     %% the OUTCOME — graceful close — not which code path produced it.
     %% Without the catch, the navigate-wins path fails with close 4500.
-    case ?config(adapter, Config) of
-        roadrunner -> drain_then_navigate_check(Config);
-        cowboy -> {skip, "roadrunner-specific drain"}
-    end.
+    drain_then_navigate_check(Config).
 
 drain_then_navigate_check(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/drain_stop">>),

@@ -10,7 +10,7 @@ the raw map so tests can assert the updated raw is threaded through.
 `resolve_route/3` looks up a `routes` map on the raw value
 (`#{Path => {Handler, RouteOpts}}`); useful for exercising the optional
 `arizona_req` callback wiring at the unit-test layer without spinning
-up a cowboy router.
+up a real listener.
 """.
 -behaviour(arizona_req).
 

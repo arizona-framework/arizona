@@ -36,8 +36,7 @@ across upgrades.
 - **On-mount hooks** -- per-route pipeline that runs before every mount, including navigate
 - **Element hooks** -- client-side `mounted`/`updated`/`destroyed` callbacks via `az_hook`
 - **Dev-mode hot reload** -- `fs` watcher recompiles changed `.erl` files and pushes reload events
-- **Pluggable transport** -- roadrunner (default) and cowboy adapters built-in; pick one via the
-  `adapter` opt or write your own
+- **HTTP/WebSocket transport** -- built on the roadrunner server (HTTP/1.1, HTTP/2, WebSocket)
 - **Native (JSON) render target** -- the same templates and diff engine also emit a JSON widget tree
   via `?native` for non-browser clients; an in-repo Android (Compose) client and a JS reference client
   consume the same wire, and `arizona_user_agent` lets one view dual-serve HTML or native by
@@ -45,29 +44,18 @@ across upgrades.
 
 ## Requirements
 
-- Erlang/OTP 28+ (with the cowboy adapter) or OTP 29+ (with the roadrunner adapter, which
-  requires OTP 29)
+- Erlang/OTP 29+ (required by the roadrunner server)
 
 ## Installation
 
-Add Arizona to your `rebar.config` dependencies along with an HTTP/WebSocket adapter.
-Roadrunner is the default; cowboy is the alternate.
+Add Arizona and the roadrunner server to your `rebar.config` dependencies:
 
 ```erlang
-%% Default: roadrunner (requires OTP 29)
 {deps, [
     {arizona, "~> 0.1"},
     {roadrunner, "~> 0.1"}
 ]}.
-
-%% Alternate: cowboy
-{deps, [
-    {arizona, "~> 0.1"},
-    cowboy
-]}.
 ```
-
-Pick one. You can omit both if you write your own `arizona_req` adapter.
 
 To track unreleased changes, swap the version for a git ref:
 
@@ -186,14 +174,10 @@ render(Bindings) ->
 
 ### 4. Configure the server
 
-Add `arizona` and your chosen adapter to your app's `applications` list in `.app.src`:
+Add `arizona` and `roadrunner` to your app's `applications` list in `.app.src`:
 
 ```erlang
-%% With roadrunner (default)
 {applications, [kernel, stdlib, roadrunner, arizona]}
-
-%% Or with cowboy
-{applications, [kernel, stdlib, cowboy, arizona]}
 ```
 
 Ensure `rebar3 shell` loads the config and starts your app by adding
@@ -206,7 +190,7 @@ to `rebar.config`:
 ]}.
 ```
 
-Replace `yourapp` with your project's app name; the chosen adapter and `arizona`
+Replace `yourapp` with your project's app name; `roadrunner` and `arizona`
 are started transitively from the `applications` list in `.app.src`.
 Then declare routes in `config/sys.config`:
 

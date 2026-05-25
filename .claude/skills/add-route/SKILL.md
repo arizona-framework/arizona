@@ -19,7 +19,7 @@ Choose the appropriate route type based on the user's intent:
 ```erlang
 {live, Path, Handler, Opts}
 ```
-- `Path` -- Cowboy route pattern, e.g. `<<"/">>`  or `<<"/users/:id">>`
+- `Path` -- route pattern, e.g. `<<"/">>`  or `<<"/users/:id">>`
 - `Handler` -- a view module that includes `arizona_view.hrl` and exports `mount/2`, `render/1`
 - `Opts` -- map with optional keys:
   - `bindings => map()` -- initial bindings passed to `mount/2` (default `#{}`)
@@ -38,7 +38,7 @@ Choose the appropriate route type based on the user's intent:
 {asset, Path, {dir, AbsoluteDir}}
 ```
 
-**Generic Cowboy handler:**
+**Generic roadrunner handler:**
 ```erlang
 {controller, Path, Handler, State}
 ```

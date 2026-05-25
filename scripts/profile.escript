@@ -292,16 +292,16 @@ prof_render_stateful_chain(Label, Opts) ->
 
 prof_http_get_e2e(Label, Opts) ->
     %% Mirrors bench_http_get_e2e (bench.escript:321). Full HTTP path:
-    %% cowboy parse + arizona_http handler + view mount/render + reply
+    %% roadrunner parse + arizona_http handler + view mount/render + reply
     %% writing. Maps to every e2e spec's initial `goto()` -- the cost
     %% the user pays before any WS event fires.
     %%
-    %% Uses `profile_loop_server/4` so eprof traces only cowboy/arizona
+    %% Uses `profile_loop_server/4` so eprof traces only roadrunner/arizona
     %% pids; the `gen_tcp` send/recv work in `self()` runs un-traced.
     Routes = [
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}}
     ],
-    arizona_bench_lib:with_cowboy(prof_http_e2e, Routes, fun(Port) ->
+    arizona_bench_lib:with_roadrunner(prof_http_e2e, Routes, fun(Port) ->
         arizona_bench_lib:with_http_socket(Port, fun(Sock) ->
             sanity_http_get(Sock, Port),
             Op = fun() ->
@@ -325,7 +325,7 @@ prof_ws_event_e2e(Label, Opts) ->
         {live, <<"/">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
         {ws, <<"/ws">>, #{}}
     ],
-    arizona_bench_lib:with_cowboy(prof_ws_e2e, Routes, fun(Port) ->
+    arizona_bench_lib:with_roadrunner(prof_ws_e2e, Routes, fun(Port) ->
         arizona_bench_lib:with_ws_socket(Port, <<"/">>, fun(Sock) ->
             Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
             sanity_ws_send(Sock, Json),
@@ -338,7 +338,7 @@ prof_ws_event_e2e(Label, Opts) ->
         end)
     end).
 
-%% Snapshot of the running cowboy/ranch/arizona processes -- everything
+%% Snapshot of the running roadrunner/arizona processes -- everything
 %% reachable through the supervisor tree by the time the listener is up.
 %% Excludes the test driver in `self()` (and its peers in the escript)
 %% so the per-op `gen_tcp:send`/`recv` in the bench harness is invisible
@@ -356,7 +356,7 @@ is_server_initial_call({Mod, _, _}) ->
     ModStr = atom_to_list(Mod),
     lists:any(
         fun(Prefix) -> lists:prefix(Prefix, ModStr) end,
-        ["arizona_", "cowboy_", "ranch_"]
+        ["arizona_", "roadrunner_"]
     );
 is_server_initial_call(_) ->
     false.
@@ -517,7 +517,7 @@ prof_navigate_e2e(Label, Opts) ->
     %% workload profiles its cost. Both routes serve `arizona_root_counter`
     %% (a tiny navigate-safe view -- no timers, mount preserves
     %% Bindings0's `id` so the framework's restricted-key check
-    %% passes); the cowboy_router path differs between calls, so
+    %% passes); the roadrunner_router path differs between calls, so
     %% route resolution + unmount/remount + OP_REPLACE encode all
     %% run on each iteration.
     Routes = [
@@ -525,7 +525,7 @@ prof_navigate_e2e(Label, Opts) ->
         {live, <<"/two">>, arizona_root_counter, #{layouts => [{arizona_layout, render}]}},
         {ws, <<"/ws">>, #{}}
     ],
-    arizona_bench_lib:with_cowboy(prof_navigate_e2e, Routes, fun(Port) ->
+    arizona_bench_lib:with_roadrunner(prof_navigate_e2e, Routes, fun(Port) ->
         arizona_bench_lib:with_ws_socket(Port, <<"/">>, fun(Sock) ->
             JsonAway = iolist_to_binary(
                 json:encode([~"navigate", #{~"path" => ~"/two", ~"qs" => ~""}])
@@ -634,7 +634,7 @@ profile_loop(Label, OpFun, Opts) ->
 
 %% Like profile_loop/3 but seeds eprof with `SeedPids` instead of
 %% `[self()]`. Used by the e2e workloads (`prof_http_get_e2e/2`,
-%% `prof_ws_event_e2e/2`) that drive a real cowboy listener from the
+%% `prof_ws_event_e2e/2`) that drive a real roadrunner listener from the
 %% same BEAM -- seeding only server-side pids keeps the harness's
 %% gen_tcp work out of the trace. fprof falls back to default seeds
 %% (set_on_spawn from `self()`) -- explicit seeds aren't wired there

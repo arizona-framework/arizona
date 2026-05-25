@@ -16,8 +16,8 @@ How the event is triggered in `assets/js/arizona.js`:
 
 ## 2. WebSocket handler
 
-How `src/arizona_cowboy_ws.erl` receives and `src/arizona_socket.erl` routes:
-- `websocket_handle` forwards the text frame to `arizona_socket:handle_in/2`
+How `src/arizona_roadrunner_ws.erl` receives and `src/arizona_socket.erl` routes:
+- `handle_frame/2` forwards the text frame to `arizona_socket:handle_in/2`
 - `handle_in` decodes the JSON array and calls `arizona_live:handle_event/4` with
   `(Pid, ViewId, Event, Payload)`
 

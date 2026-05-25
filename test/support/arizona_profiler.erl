@@ -5,8 +5,8 @@ eprof/fprof wrapper for `scripts/profile.escript`.
 Profile workloads run in-process: the escript is both the load driver
 and the system under load. Seeds profiling with `[self()]` plus
 `set_on_spawn => true`, so processes spawned during the workload
-(the live `gen_server` from `arizona_socket:init/4`, cowboy connection
-processes, pubsub subscribers) get auto-traced.
+(the live `gen_server` from `arizona_socket:init/4`, roadrunner
+connection processes, pubsub subscribers) get auto-traced.
 
 eprof is the default tool — fast, gives total time per MFA. fprof is
 opt-in via `start_fprof/1` + `stop_fprof_and_dump/2` for the richer
@@ -33,7 +33,7 @@ start() ->
 
 %% Variant for e2e workloads that want to exclude the test-driver process
 %% (running in `self()`) from the profile. Pass server-side pids only --
-%% e.g. cowboy listener + `arizona_sup` descendants -- and `set_on_spawn`
+%% e.g. roadrunner listener + `arizona_sup` descendants -- and `set_on_spawn`
 %% will still catch per-request connection processes spawned beneath
 %% them. The driver's `gen_tcp:send`/`recv` work in `self()` then runs
 %% un-traced, so `port_command`/`ws_mask`/`crypto:strong_rand_bytes_nif`
