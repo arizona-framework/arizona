@@ -40,4 +40,25 @@ test.describe('native (JSON) wire -- menu navigation', () => {
             client.close();
         }
     });
+
+    test('applies ops after navigating (server keeps the process view id)', async ({ baseURL }) => {
+        const client = new NativeClient(baseURL, '/native/menu');
+        await client.connect();
+        // List item texts (each keyed Text node's spliced content).
+        const rows = (t) => t.children.map((r) => r.children[0]);
+        try {
+            // Navigate menu -> list. The OP_REPLACE ViewId stays the process id
+            // (native_menu), not the rendered root's id (native_list).
+            client.tap(client.tree().children[1]); // "List"
+            await client.waitFor((t) => t.id === 'native_list');
+            expect(rows(client.tree())).toEqual(['One', 'Two', 'Three']);
+
+            // A stream op now arrives prefixed with the process view id; it must
+            // still resolve against the (re-mounted) list and render the new item.
+            client.pushEvent('add', { id: '9', text: 'Nine' });
+            await client.waitFor((t) => rows(t).includes('Nine'));
+        } finally {
+            client.close();
+        }
+    });
 });

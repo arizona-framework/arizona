@@ -360,26 +360,36 @@ function indexByAz(node, reg) {
     }
 }
 
-// Build per-view az -> node indices over the raw tree: each node is indexed
-// under its enclosing view (the nearest az_view ancestor's id, else the root),
-// so a "ViewId:az" target resolves within the right view even when sibling
-// stateful-child instances share az values from a shared fingerprint.
+// The view a node belongs to: a nested `az_view` child owns its subtree; anything
+// else stays in the parent's view. The top-level (root) view is always the live
+// process's id (the OP_REPLACE ViewId, what the server prefixes ops with) -- after
+// a navigate that differs from the rendered root's `id` attr, so the root must use
+// the passed process id, not its own `id`.
+function enclosingView(node, parentView) {
+    return node !== null && typeof node === 'object' && node.az_view === true && node.id
+        ? node.id
+        : parentView;
+}
+
+// Build per-view az -> node indices over the raw tree: each node is indexed under
+// its enclosing view, so a "ViewId:az" target resolves within the right view even
+// when sibling stateful-child instances share az values from a shared fingerprint.
 function indexByViews(node, viewId, views) {
     if (node === null || typeof node !== 'object') return;
     if (Array.isArray(node)) {
         for (const c of node) indexByViews(c, viewId, views);
         return;
     }
-    const v = node.az_view === true && node.id ? node.id : viewId;
     if (node.az) {
-        let reg = views.get(v);
+        let reg = views.get(viewId);
         if (!reg) {
             reg = new Map();
-            views.set(v, reg);
+            views.set(viewId, reg);
         }
         reg.set(node.az, node);
     }
-    if (node.children) for (const c of node.children) indexByViews(c, v, views);
+    if (node.children)
+        for (const c of node.children) indexByViews(c, enclosingView(c, viewId), views);
 }
 
 // A stream container (#slot) holds its keyed items as the single each-array
@@ -407,12 +417,12 @@ function flattenChild(child) {
     return [child];
 }
 
-// Stamp each node with its enclosing view id: the nearest ancestor (or itself)
-// carrying `az_view: true`, else the inherited (root) view. Mirrors the browser
-// resolving an event target via el.closest('[az-view]').id.
+// Stamp each node with its enclosing view id (see enclosingView): the root view
+// is the live process id, a nested az_view child switches to its own id. Mirrors
+// the browser resolving an event target via el.closest('[az-view]').id.
 function stampViews(node, view) {
     if (node === null || typeof node !== 'object') return;
-    const v = node.az_view === true && node.id ? node.id : view;
-    node.__view = v;
-    if (node.children) for (const child of node.children) stampViews(child, v);
+    node.__view = view;
+    if (node.children)
+        for (const child of node.children) stampViews(child, enclosingView(child, view));
 }

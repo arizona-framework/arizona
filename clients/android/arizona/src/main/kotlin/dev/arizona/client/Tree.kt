@@ -36,7 +36,10 @@ class Node(val type: String, val az: String?) {
 
 /**
  * Parse an interleaved JSON tree into a [Node] tree, stamping each node with its
- * enclosing view id ([view], or this node's own id if it is a view root).
+ * enclosing view ([view]). The root view is the live process id (the OP_REPLACE
+ * ViewId) -- after a navigate that differs from the rendered root's `id` attr, so
+ * the root uses the passed [view], not its own `id`; a nested `az_view` child
+ * switches to its own id (see [addChild]).
  */
 fun buildTree(json: JsonElement, view: String? = null): Node {
     val obj = json.jsonObject
@@ -47,22 +50,27 @@ fun buildTree(json: JsonElement, view: String? = null): Node {
     for ((k, v) in obj) {
         if (k != "type" && k != "az" && k != "children") node.props[k] = v
     }
-    node.viewId =
-        if (node.props["az_view"]?.jsonPrimitive?.booleanOrNull == true) {
-            node.props["id"]?.jsonPrimitive?.content ?: view
-        } else {
-            view
-        }
-    obj["children"]?.jsonArray?.forEach { addChild(node, it, node.viewId) }
+    node.viewId = view
+    obj["children"]?.jsonArray?.forEach { addChild(node, it, view) }
     return node
 }
 
 // Append a child, splicing each-expansion arrays into the parent. #slot objects
 // are kept as Nodes; stream items (each-array entries) become keyed child Nodes.
+// A child that is itself a view root (az_view) owns its subtree; otherwise it
+// stays in the parent's [view].
 internal fun addChild(parent: Node, child: JsonElement, view: String? = null) {
     when (child) {
         is JsonArray -> child.forEach { addChild(parent, it, view) }
-        is JsonObject -> parent.children.add(buildTree(child, view))
+        is JsonObject -> {
+            val childView =
+                if (child["az_view"]?.jsonPrimitive?.booleanOrNull == true) {
+                    child["id"]?.jsonPrimitive?.content ?: view
+                } else {
+                    view
+                }
+            parent.children.add(buildTree(child, childView))
+        }
         is JsonPrimitive -> parent.children.add(child.content)
     }
 }

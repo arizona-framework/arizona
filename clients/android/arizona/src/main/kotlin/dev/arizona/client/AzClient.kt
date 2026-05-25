@@ -240,7 +240,10 @@ class AzClient(baseUrl: String, path: String) {
                 viewId = a[1].jsonPrimitive.content
                 val json = Json.parseToJsonElement(interleaver.interleave(a[2].jsonObject))
                 views.clear()
-                val node = buildTree(json)
+                // The root view is the process id (a[1]); after a navigate it
+                // differs from the rendered root's `id` attr, and the server
+                // prefixes ops with the process id.
+                val node = buildTree(json, viewId)
                 indexByViews(node, views)
                 root.value = node
             }
