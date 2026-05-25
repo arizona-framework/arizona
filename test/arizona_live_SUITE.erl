@@ -266,7 +266,7 @@ live_connected_event(Config) when is_list(Config) ->
     receive
         {arizona_push, Ops, Effects} ->
             ?assertMatch([[?OP_TEXT, _, <<"Connected">>]], Ops),
-            ?assertEqual([{arizona_js, [14, <<"Welcome">>]}], Effects)
+            ?assertEqual([{arizona_effect, [14, <<"Welcome">>]}], Effects)
     after 1000 ->
         ct:fail(timeout_waiting_for_connected_push)
     end.
@@ -463,7 +463,7 @@ effect_push_event(Config) when is_list(Config) ->
     ),
     ?assertMatch([[?OP_TEXT, _, <<"hello">>]], Ops),
     ?assertEqual(
-        [{arizona_js, [9, <<"notification">>, #{<<"message">> => <<"hello">>}]}],
+        [{arizona_effect, [9, <<"notification">>, #{<<"message">> => <<"hello">>}]}],
         Effects
     ).
 
@@ -477,8 +477,8 @@ effect_multiple_push_events(Config) when is_list(Config) ->
     ?assertMatch([[?OP_TEXT, _, <<"multi">>]], Ops),
     ?assertEqual(
         [
-            {arizona_js, [9, <<"event1">>, #{<<"a">> => 1}]},
-            {arizona_js, [9, <<"event2">>, #{<<"b">> => 2}]}
+            {arizona_effect, [9, <<"event1">>, #{<<"a">> => 1}]},
+            {arizona_effect, [9, <<"event2">>, #{<<"b">> => 2}]}
         ],
         Effects
     ).
@@ -499,7 +499,7 @@ effect_only_no_ops(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, Effects} = arizona_live:handle_event(Pid, <<"effectful">>, <<"notify_only">>, #{}),
     ?assertEqual([], Ops),
-    ?assertEqual([{arizona_js, [9, <<"ping">>, #{}]}], Effects).
+    ?assertEqual([{arizona_effect, [9, <<"ping">>, #{}]}], Effects).
 
 effect_child_only_no_ops(Config) when is_list(Config) ->
     %% Child event: effects but no DOM changes (reset at count=0)
@@ -511,7 +511,7 @@ effect_child_only_no_ops(Config) when is_list(Config) ->
     {ok, Ops, Effects} = arizona_live:handle_event(Pid, <<"counter">>, <<"reset">>, #{}),
     ?assertEqual([], Ops),
     ?assertEqual(
-        [{arizona_js, [9, <<"counter_reset">>, #{<<"id">> => <<"counter">>}]}],
+        [{arizona_effect, [9, <<"counter_reset">>, #{<<"id">> => <<"counter">>}]}],
         Effects
     ).
 
@@ -529,7 +529,7 @@ effect_child_event_with_effects(Config) when is_list(Config) ->
     {ok, Ops, Effects} = arizona_live:handle_event(Pid, <<"counter">>, <<"reset">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"0">>]], Ops),
     ?assertEqual(
-        [{arizona_js, [9, <<"counter_reset">>, #{<<"id">> => <<"counter">>}]}],
+        [{arizona_effect, [9, <<"counter_reset">>, #{<<"id">> => <<"counter">>}]}],
         Effects
     ).
 
@@ -613,7 +613,7 @@ live_navigate_then_event(Config) when is_list(Config) ->
             %% About's connected doesn't change bindings, so no ops
             ?assertEqual([], Ops),
             %% But produces set_title effect
-            ?assertEqual([{arizona_js, [14, <<"About">>]}], Effects)
+            ?assertEqual([{arizona_effect, [14, <<"About">>]}], Effects)
     after 1000 ->
         ct:fail(timeout_waiting_for_about_connected_push)
     end.
@@ -739,7 +739,7 @@ live_handle_info_with_effects(Config) when is_list(Config) ->
             ?assertMatch([[?OP_TEXT, _, <<"hi">>]], Ops),
             ?assertEqual(
                 [
-                    {arizona_js, [9, <<"message_changed">>, #{<<"msg">> => <<"hi">>}]}
+                    {arizona_effect, [9, <<"message_changed">>, #{<<"msg">> => <<"hi">>}]}
                 ],
                 Effects
             )

@@ -112,7 +112,8 @@ render(Bindings) ->
     nodiff = false :: boolean(),
     module = undefined :: module() | undefined,
     live_render = false :: boolean(),
-    root = false :: boolean()
+    root = false :: boolean(),
+    backend = arizona_html :: module()
 }).
 
 %% --------------------------------------------------------------------
@@ -138,12 +139,58 @@ parse_transform(Forms, _Options) ->
         has_behaviour(Forms, arizona_stateful) orelse
             has_behaviour(Forms, arizona_view),
     try
-        Transformed = [transform_form(Form, Module, IsLive) || Form <- Forms],
+        Transformed = [transform_form(mark_targets(Form, none), Module, IsLive) || Form <- Forms],
         erl_syntax:revert_forms(Transformed)
     catch
         throw:{arizona_parse_error, Line, Reason} ->
             {error, [{File, [{Line, ?MODULE, Reason}]}], []}
     end.
+
+%% Top-down pre-pass threading the enclosing render target `Ctx` (`none` outside
+%% any template, else `html` | `native`). Two jobs:
+%%
+%%   1. A single `?each` serves both targets. Inside a `?native(...)` every
+%%      nested `?each` is rewritten to the internal `native_each` so the
+%%      bottom-up transform compiles it with the native backend. `?each` under
+%%      `?html` (or standalone) is left untouched.
+%%   2. Reject inline cross-target nesting: a `?html(...)` inside a `?native(...)`
+%%      (or vice-versa) would mix HTML and JSON statics in one tree. Caught here
+%%      as a compile error instead of corrupting the wire at runtime.
+%%
+%% Each `?html`/`?native` call resets `Ctx` for its own argument, so sibling
+%% targets (e.g. a dual-serve render with `?html` and `?native` in different
+%% clauses) are fine -- only one literally nested in the other errors. Cross-target
+%% nesting via a `?stateful`/`?stateless` child *module* is invisible at this AST
+%% level and stays a documented "one target per tree" rule.
+mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, _}, native) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    parse_error(cross_target_nesting, L);
+mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, _}, html) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    parse_error(cross_target_nesting, L);
+mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, html}}, [Arg]}, _Ctx) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, html}}, [mark_targets(Arg, html)]};
+mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native}}, [Arg]}, _Ctx) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native}}, [mark_targets(Arg, native)]};
+mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, native) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native_each}}, [
+        mark_targets(A, native)
+     || A <- Args
+    ]};
+mark_targets(Node, Ctx) when is_tuple(Node) ->
+    list_to_tuple([mark_targets(E, Ctx) || E <- tuple_to_list(Node)]);
+mark_targets(Nodes, Ctx) when is_list(Nodes) ->
+    [mark_targets(E, Ctx) || E <- Nodes];
+mark_targets(Node, _Ctx) ->
+    Node.
 
 -doc """
 Formats parse transform error reasons into human-readable messages.
@@ -184,7 +231,11 @@ format_error({invalid_child, ValueStr}) ->
             "Got: ~s",
             [ValueStr]
         )
-    ).
+    );
+format_error(cross_target_nesting) ->
+    "cannot nest ?html and ?native in one template -- they produce "
+    "incompatible statics. Render cross-target content via a separate "
+    "stateful/stateless child of the matching target".
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -231,10 +282,18 @@ transform_node(Node, Module) ->
             Mod =:= arizona_template; Mod =:= az
         ->
             compile_template(Arg, L, Module);
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, [Arg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            compile_template(Arg, L, Module, false, arizona_native);
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}}, [FunArg, SourceArg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
             compile_each(FunArg, SourceArg, L, Module);
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, native_each}}, [FunArg, SourceArg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            compile_each(FunArg, SourceArg, L, Module, arizona_native);
         %% Sugar: `arizona_template:stateless(atom, Props)` with a literal atom
         %% callback is rewritten to `arizona_template:stateless(fun atom/1, Props)`.
         %% Fun references and other shapes pass through unchanged.
@@ -264,6 +323,12 @@ transform_live_render_last(Expr, Module) ->
             validate_live_root(Arg, L),
             Arg1 = transform_expr(Arg, Module),
             compile_template(Arg1, L, Module, true);
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, [Arg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            validate_live_root(Arg, L),
+            Arg1 = transform_expr(Arg, Module),
+            compile_template(Arg1, L, Module, true, arizona_native);
         {'case', L, CaseExpr, Clauses} ->
             {'case', L, transform_expr(CaseExpr, Module), [
                 transform_live_render_branch(C, Module)
@@ -353,23 +418,44 @@ compile_template(Arg, Line, Module) ->
     compile_template(Arg, Line, Module, false).
 
 compile_template(Arg, Line, Module, LiveRender) ->
-    {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(Arg, Module, LiveRender),
-    {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
+    compile_template(Arg, Line, Module, LiveRender, arizona_html).
+
+compile_template(Arg, Line, Module, LiveRender, Backend) ->
+    {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(Arg, Module, LiveRender, Backend),
+    Opts = maybe_target_opt(Backend, Opts0),
+    {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
     build_template_ast(Line, S1, D1, Fingerprint, Opts).
 
+%% Native templates carry `target => native` so the runtime (render_fp_val)
+%% knows to inline dynamic attribute values as JSON. HTML templates carry no
+%% target key (the default).
+maybe_target_opt(arizona_native, Opts) ->
+    Opts#{target => native};
+maybe_target_opt(_Backend, Opts) ->
+    Opts.
+
 compile_each(FunAST, SourceAST, Line, Module) ->
+    compile_each(FunAST, SourceAST, Line, Module, arizona_html).
+
+compile_each(FunAST, SourceAST, Line, Module, Backend) ->
     case FunAST of
         {'fun', _, {clauses, [{clause, _, [ItemVar, KeyVar], Guards, Body}]}} ->
             {Prefix, LastExpr} = split_fun_body(Body),
-            {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(LastExpr, Module),
-            {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
+            {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
+                LastExpr, Module, false, Backend
+            ),
+            Opts = maybe_target_opt(Backend, Opts0),
+            {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(
                 Line, SourceAST, [ItemVar, KeyVar], Guards, Prefix, S1, D1, Fingerprint, Opts
             );
         {'fun', _, {clauses, [{clause, _, [ItemVar], Guards, Body}]}} ->
             {Prefix, LastExpr} = split_fun_body(Body),
-            {Statics, DynASTs, Fingerprint, Opts} = compile_body_parts(LastExpr, Module),
-            {S1, D1} = scope_az(Fingerprint, Statics, DynASTs),
+            {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
+                LastExpr, Module, false, Backend
+            ),
+            Opts = maybe_target_opt(Backend, Opts0),
+            {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(
                 Line, SourceAST, [ItemVar], Guards, Prefix, S1, D1, Fingerprint, Opts
             );
@@ -379,11 +465,13 @@ compile_each(FunAST, SourceAST, Line, Module) ->
         {'fun', L, {function, Name, Arity}} when
             is_atom(Name) andalso (Arity =:= 1 orelse Arity =:= 2)
         ->
-            compile_each(wrap_fun_ref(L, Arity, {atom, L, Name}, none), SourceAST, Line, Module);
+            compile_each(
+                wrap_fun_ref(L, Arity, {atom, L, Name}, none), SourceAST, Line, Module, Backend
+            );
         {'fun', L, {function, Mod, Name, {integer, _, Arity}}} when
             Arity =:= 1 orelse Arity =:= 2
         ->
-            compile_each(wrap_fun_ref(L, Arity, Name, Mod), SourceAST, Line, Module);
+            compile_each(wrap_fun_ref(L, Arity, Name, Mod), SourceAST, Line, Module, Backend);
         _ ->
             parse_error(invalid_each_fun, Line)
     end.
@@ -401,11 +489,8 @@ wrap_fun_ref(L, Arity, NameAST, ModAST) ->
     Call = {call, L, Callee, Vars},
     {'fun', L, {clauses, [{clause, L, Vars, [], [Call]}]}}.
 
-compile_body_parts(ExprAST, Module) ->
-    compile_body_parts(ExprAST, Module, false).
-
-compile_body_parts(ExprAST, Module, LiveRender) ->
-    compile_classified_body(classify_body(ExprAST), ExprAST, Module, LiveRender).
+compile_body_parts(ExprAST, Module, LiveRender, Backend) ->
+    compile_classified_body(classify_body(ExprAST), ExprAST, Module, LiveRender, Backend).
 
 classify_body(AST) ->
     case is_static_binary(AST) of
@@ -431,28 +516,29 @@ classify_other_body(AST) ->
         false -> text_dynamic
     end.
 
-compile_classified_body(static_binary, ExprAST, _Module, _LiveRender) ->
+compile_classified_body(static_binary, ExprAST, _Module, _LiveRender, _Backend) ->
     Bin = extract_binary_value(ExprAST),
     Statics = [Bin],
     {Statics, [], generate_fingerprint(Statics), #{}};
-compile_classified_body(element_tuple, ExprAST, Module, LiveRender) ->
-    compile_fragment_parts([ExprAST], Module, LiveRender);
-compile_classified_body(element_list, ExprAST, Module, LiveRender) ->
-    compile_fragment_parts(ast_list_to_list(ExprAST), Module, LiveRender);
-compile_classified_body(list_ast, ExprAST, Module, _LiveRender) ->
-    compile_mixed_items(ast_list_to_list(ExprAST), Module);
-compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender) ->
+compile_classified_body(element_tuple, ExprAST, Module, LiveRender, Backend) ->
+    compile_fragment_parts([ExprAST], Module, LiveRender, Backend);
+compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend) ->
+    compile_fragment_parts(ast_list_to_list(ExprAST), Module, LiveRender, Backend);
+compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend) ->
+    compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend);
+compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, _Backend) ->
     Statics = [<<>>, <<>>],
     DynASTs = [make_text_dynamic_ast(<<"0">>, ExprAST, Module, line(ExprAST))],
     {Statics, DynASTs, generate_fingerprint(Statics), #{}}.
 
-compile_fragment_parts(ElementASTs, Module, LiveRender) ->
+compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->
     Opts = prescan_directives(ElementASTs),
     State0 = #state{
         module = Module,
         nodiff = maps:is_key(diff, Opts),
         live_render = LiveRender,
-        root = LiveRender
+        root = LiveRender,
+        backend = Backend
     },
     State1 = lists:foldl(
         fun(Elem, State) ->
@@ -467,9 +553,9 @@ compile_fragment_parts(ElementASTs, Module, LiveRender) ->
     Fingerprint = generate_fingerprint(Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
 
-compile_mixed_items(Items, Module) ->
+compile_mixed_items(Items, Module, Backend) ->
     Opts = prescan_directives(Items),
-    State0 = #state{module = Module, nodiff = maps:is_key(diff, Opts)},
+    State0 = #state{module = Module, nodiff = maps:is_key(diff, Opts), backend = Backend},
     State1 = lists:foldl(
         fun(Item, State) -> compile_mixed_item(Item, Module, State) end, State0, Items
     ),
@@ -479,7 +565,7 @@ compile_mixed_items(Items, Module) ->
 
 compile_mixed_item(Item, Module, State) ->
     case is_static_binary(Item) of
-        true -> buf_append(State, extract_binary_value(Item));
+        true -> buf_append(State, (State#state.backend):text_child(extract_binary_value(Item)));
         false -> compile_mixed_non_static(Item, Module, State)
     end.
 
@@ -516,6 +602,7 @@ extract_element(Node) ->
     parse_error(invalid_element, line(Node)).
 
 compile_element(Tag, Attrs0, Children, Line, State0) ->
+    Backend = State0#state.backend,
     Attrs = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
     State1 = State0#state{root = false},
     HasDyn = has_dynamic_attr(Attrs) orelse has_dynamic_child(Children),
@@ -524,28 +611,28 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
             true -> {State1#state.az, State1#state{az = State1#state.az + 1}};
             false -> {none, State1}
         end,
-    TagBin = atom_to_html_binary(Tag),
-    State3 = buf_append(State2, <<"<", TagBin/binary>>),
+    TagBin = Backend:name(Tag),
+    State3 = buf_append(State2, Backend:element_open(TagBin)),
     State4 =
         case ElemAz of
             none ->
                 State3;
             N ->
                 AzBin = integer_to_binary(N),
-                buf_append(State3, <<" az=\"", AzBin/binary, "\"">>)
+                buf_append(State3, Backend:az_attr(AzBin))
         end,
     State5 = compile_attrs(Attrs, ElemAz, State4, Line),
-    case is_void(Tag) andalso Children =/= [] of
+    case Backend:is_void(Tag) andalso Children =/= [] of
         true -> parse_error({void_with_children, Tag}, Line);
         false -> ok
     end,
-    case is_void(Tag) of
+    case Backend:is_void(Tag) of
         true ->
-            buf_append(State5, <<" />">>);
+            buf_append(State5, Backend:element_void_close());
         false ->
-            State6 = buf_append(State5, <<">">>),
+            State6 = buf_append(State5, Backend:element_open_end()),
             State7 = compile_children(Children, ElemAz, State6),
-            buf_append(State7, <<"</", TagBin/binary, ">">>)
+            buf_append(State7, Backend:element_close(TagBin))
     end.
 
 compile_attrs([], _ElemAz, State, _ElemLine) ->
@@ -556,7 +643,7 @@ compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
 
 compile_attr({bin, _, _} = Bin, _ElemAz, State0, _ElemLine) ->
     NameBin = extract_binary_value(Bin),
-    buf_append(State0, <<" ", NameBin/binary>>);
+    buf_append(State0, (State0#state.backend):attr_boolean(NameBin));
 compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
@@ -564,40 +651,25 @@ compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine
 compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
-    NameBin = extract_attr_name(NameAST),
-    buf_append(State0, <<" ", NameBin/binary>>);
+    Backend = State0#state.backend,
+    NameBin = extract_attr_name(Backend, NameAST),
+    buf_append(State0, Backend:attr_boolean(NameBin));
 compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
-    NameBin = extract_attr_name(NameAST),
+    Backend = State0#state.backend,
+    NameBin = extract_attr_name(Backend, NameAST),
     case is_static_binary(ValueAST) of
         true ->
             ValBin = extract_binary_value(ValueAST),
-            buf_append(State0, <<" ", NameBin/binary, "=\"", ValBin/binary, "\"">>);
+            buf_append(State0, Backend:attr(NameBin, ValBin));
         false ->
-            case try_fold_arizona_js(ValueAST) of
-                {ok, FoldedBin} ->
-                    buf_append(
-                        State0, <<" ", NameBin/binary, "=\"", FoldedBin/binary, "\"">>
-                    );
-                error when State0#state.nodiff ->
-                    Module = State0#state.module,
-                    DynAST = make_nodiff_attr_dynamic_ast(
-                        NameBin, ValueAST, Module, line(ValueAST)
-                    ),
-                    flush(State0, DynAST);
-                error ->
-                    Module = State0#state.module,
-                    AzBin = integer_to_binary(ElemAz),
-                    DynAST = make_attr_dynamic_ast(
-                        AzBin, NameBin, ValueAST, Module, line(ValueAST)
-                    ),
-                    flush(State0, DynAST)
-            end
+            compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0)
     end;
 compile_attr({atom, _, Name}, _ElemAz, State0, _ElemLine) ->
-    NameBin = atom_to_html_binary(Name),
-    buf_append(State0, <<" ", NameBin/binary>>);
+    Backend = State0#state.backend,
+    NameBin = Backend:name(Name),
+    buf_append(State0, Backend:attr_boolean(NameBin));
 compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     AttrLine =
         try
@@ -607,19 +679,51 @@ compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
         end,
     parse_error(invalid_attribute, AttrLine).
 
-compile_children(Children, ElemAz, State) ->
-    compile_children(Children, ElemAz, State, 0).
+%% Emit a dynamic attribute value: a folded arizona_js command becomes a static,
+%% otherwise the backend bakes the name and the value flushes as a dynamic.
+compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
+    case try_fold_arizona_js(ValueAST) of
+        {ok, Cmd} ->
+            buf_append(State0, Backend:attr_command(NameBin, Cmd));
+        error when State0#state.nodiff ->
+            Module = State0#state.module,
+            State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
+            DynAST = make_nodiff_attr_dynamic_ast(
+                NameBin, ValueAST, Module, line(ValueAST)
+            ),
+            flush(State1, DynAST);
+        error ->
+            Module = State0#state.module,
+            State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
+            AzBin = integer_to_binary(ElemAz),
+            DynAST = make_attr_dynamic_ast(
+                AzBin, NameBin, ValueAST, Module, line(ValueAST)
+            ),
+            flush(State1, DynAST)
+    end.
 
-compile_children([], _ElemAz, State, _Slot) ->
+compile_children(Children, ElemAz, State) ->
+    compile_children(Children, ElemAz, State, 0, 0).
+
+compile_children([], _ElemAz, State, _Slot, _Index) ->
     State;
-compile_children([Child | Rest], ElemAz, State0, Slot) ->
-    {State1, NextSlot} = compile_child(Child, ElemAz, State0, Slot),
-    compile_children(Rest, ElemAz, State1, NextSlot).
+compile_children([Child | Rest], ElemAz, State0, Slot, Index) ->
+    State1 = maybe_children_sep(State0, Index),
+    {State2, NextSlot} = compile_child(Child, ElemAz, State1, Slot),
+    compile_children(Rest, ElemAz, State2, NextSlot, Index + 1).
+
+%% Emit a separator before every child after the first. HTML uses an empty
+%% separator (no-op); native emits a comma between JSON array elements.
+maybe_children_sep(State, 0) ->
+    State;
+maybe_children_sep(State, _Index) ->
+    buf_append(State, (State#state.backend):children_sep()).
 
 compile_child(Child, ElemAz, State0, Slot) ->
     case is_static_binary(Child) of
         true ->
-            {buf_append(State0, extract_binary_value(Child)), Slot};
+            Bin = (State0#state.backend):text_child(extract_binary_value(Child)),
+            {buf_append(State0, Bin), Slot};
         false ->
             compile_non_static_child(Child, ElemAz, State0, Slot)
     end.
@@ -645,18 +749,13 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
 emit_child_dynamic(Child, _ElemAz, #state{nodiff = true, module = Module} = State0, Slot) ->
     DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child)),
     {flush(State0, DynAST), Slot};
-emit_child_dynamic(Child, ElemAz, #state{module = Module} = State0, Slot) ->
+emit_child_dynamic(Child, ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
     ElemAzBin = integer_to_binary(ElemAz),
-    MarkerAz = marker_az(ElemAzBin, Slot),
-    State1 = buf_append(State0, <<"<!--az:", MarkerAz/binary, "-->">>),
+    MarkerAz = Backend:text_az(ElemAzBin, Slot),
+    State1 = buf_append(State0, Backend:text_slot_open(MarkerAz)),
     DynAST = make_text_dynamic_ast(MarkerAz, Child, Module, line(Child)),
     State2 = flush(State1, DynAST),
-    {State2#state{buf = <<"<!--/az-->">>}, Slot + 1}.
-
-marker_az(ElemAzBin, 0) ->
-    ElemAzBin;
-marker_az(ElemAzBin, Slot) ->
-    <<ElemAzBin/binary, ":", (integer_to_binary(Slot))/binary>>.
+    {State2#state{buf = Backend:text_slot_close()}, Slot + 1}.
 
 make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
     LocAST = loc_ast(Module, ExprLine),
@@ -718,14 +817,13 @@ finalize(State) ->
 
 %% Prefix az values with the template fingerprint to prevent collisions
 %% when stateless children are inlined in a parent template.
-scope_az(_Fp, Statics, []) ->
+scope_az(_Backend, _Fp, Statics, []) ->
     {Statics, []};
-scope_az(Fp, Statics, DynASTs) ->
-    {[scope_static(Fp, S) || S <- Statics], [scope_dynamic_ast(Fp, D) || D <- DynASTs]}.
-
-scope_static(Fp, S0) ->
-    S1 = binary:replace(S0, <<" az=\"">>, <<" az=\"", Fp/binary, "-">>, [global]),
-    binary:replace(S1, <<"<!--az:">>, <<"<!--az:", Fp/binary, "-">>, [global]).
+scope_az(Backend, Fp, Statics, DynASTs) ->
+    {[Backend:scope_static(Fp, S) || S <- Statics], [
+        scope_dynamic_ast(Fp, D)
+     || D <- DynASTs
+    ]}.
 
 scope_dynamic_ast(_Fp, {tuple, _, [{atom, _, undefined} | _]} = D) ->
     D;
@@ -790,8 +888,8 @@ normalize_children(AST) ->
         false -> [AST]
     end.
 
-extract_attr_name({atom, _, Name}) -> atom_to_html_binary(Name);
-extract_attr_name(BinAST) -> extract_binary_value(BinAST).
+extract_attr_name(Backend, {atom, _, Name}) -> Backend:name(Name);
+extract_attr_name(_Backend, BinAST) -> extract_binary_value(BinAST).
 
 extract_binary_value({bin, _, Elements}) ->
     iolist_to_binary([extract_bin_element(E) || E <- Elements]).
@@ -821,20 +919,20 @@ is_static_binary(_) ->
 %% loaded). Falling through to the runtime dynamic path is always safe.
 try_fold_arizona_js(ExprAST) ->
     try
-        Term = eval_arizona_js_expr(ExprAST),
-        {ok, arizona_js:encode(Term)}
+        {ok, eval_arizona_js_expr(ExprAST)}
     catch
         _:_ -> error
     end.
 
-%% Evaluate an `arizona_js:Fn(literal-args)` call AST or a literal list
-%% of such calls into the runtime term it would yield. Throws on any
-%% non-literal sub-expression -- `try_fold_arizona_js/1` catches it.
+%% Evaluate a command-builder call AST (`arizona_js:Fn(...)` /
+%% `arizona_android:Fn(...)`) or a literal list of such calls into the runtime
+%% term it would yield. Throws on any non-literal sub-expression --
+%% `try_fold_arizona_js/1` catches it. Add new platform builder modules here.
 eval_arizona_js_expr(
-    {call, _, {remote, _, {atom, _, arizona_js}, {atom, _, Fn}}, ArgsAST}
-) ->
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, Fn}}, ArgsAST}
+) when Mod =:= arizona_js orelse Mod =:= arizona_android ->
     Args = [erl_syntax:concrete(A) || A <- ArgsAST],
-    apply(arizona_js, Fn, Args);
+    apply(Mod, Fn, Args);
 eval_arizona_js_expr({nil, _}) ->
     [];
 eval_arizona_js_expr({cons, _, H, T}) ->
@@ -935,7 +1033,7 @@ directive_opts(<<"az-nodiff">>) -> {ok, #{diff => false}};
 directive_opts(_) -> false.
 
 bare_attr_name({atom, _, Name}) ->
-    {ok, atom_to_html_binary(Name)};
+    {ok, arizona_html:name(Name)};
 bare_attr_name({bin, _, _} = Bin) ->
     case is_static_binary(Bin) of
         true -> {ok, extract_binary_value(Bin)};
@@ -966,22 +1064,3 @@ extract_directives([Attr | Rest], Opts) ->
 
 opts_to_map_fields(Opts, Line) ->
     [{map_field_assoc, Line, {atom, Line, K}, {atom, Line, V}} || K := V <- Opts].
-
-atom_to_html_binary(Atom) ->
-    binary:replace(atom_to_binary(Atom), <<"_">>, <<"-">>, [global]).
-
-is_void(area) -> true;
-is_void(base) -> true;
-is_void(br) -> true;
-is_void(col) -> true;
-is_void(embed) -> true;
-is_void(hr) -> true;
-is_void(img) -> true;
-is_void(input) -> true;
-is_void(link) -> true;
-is_void(meta) -> true;
-is_void(param) -> true;
-is_void(source) -> true;
-is_void(track) -> true;
-is_void(wbr) -> true;
-is_void(_) -> false.

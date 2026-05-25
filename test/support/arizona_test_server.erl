@@ -40,6 +40,24 @@ start() ->
             layouts => Layouts
         }},
         {controller, <<"/_test/drain">>, arizona_drain_admin, #{}},
+        %% Native (JSON) view -- no layouts (native has no HTTP page); the first
+        %% frame is mount_and_render over the WebSocket.
+        {live, <<"/native/counter">>, arizona_native_counter_demo, #{}},
+        {live, <<"/native/list">>, arizona_native_list, #{
+            bindings => #{
+                items => [
+                    #{id => ~"1", text => ~"One"},
+                    #{id => ~"2", text => ~"Two"},
+                    #{id => ~"3", text => ~"Three"}
+                ]
+            }
+        }},
+        {live, <<"/native/tabs">>, arizona_native_tabs, #{}},
+        {live, <<"/native/ticker">>, arizona_native_ticker, #{}},
+        {live, <<"/native/multi">>, arizona_native_multi, #{}},
+        {live, <<"/native/nested">>, arizona_native_nested, #{}},
+        {live, <<"/native/removable">>, arizona_native_removable, #{}},
+        {live, <<"/native/menu">>, arizona_native_menu, #{}},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}
     ],

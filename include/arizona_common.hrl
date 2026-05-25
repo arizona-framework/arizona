@@ -11,6 +11,7 @@
 
 %% Template construction (parse transform intercepts the expanded calls)
 -define(html(Elems), arizona_template:html(Elems)).
+-define(native(Elems), arizona_template:native(Elems)).
 -define(each(Fun, Source), arizona_template:each(Fun, Source)).
 
 %% Descriptor constructors

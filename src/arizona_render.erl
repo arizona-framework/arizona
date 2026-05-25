@@ -246,11 +246,12 @@ If the template has a fingerprint, returns a wire-format map keyed by
 -spec zip_item(Template, Dynamics) -> map() | binary() when
     Template :: map(),
     Dynamics :: [{arizona_template:az(), term(), map()}].
-zip_item(#{f := F, s := S}, D) ->
+zip_item(#{f := F, s := S} = Tmpl, D) ->
+    Target = maps:get(target, Tmpl, html),
     #{
         ~"f" => F,
         ~"s" => S,
-        ~"d" => [render_fp_val(arizona_template:unwrap_val(V)) || {_Az, V, _Deps} <:- D]
+        ~"d" => [render_fp_val(Target, V) || {_Az, V, _Deps} <:- D]
     };
 zip_item(#{s := S}, D) ->
     iolist_to_binary(zip(S, [arizona_template:unwrap_val(V) || {_Az, V, _Deps} <:- D])).
@@ -273,13 +274,14 @@ fingerprinted wire payload (if the template has `f`) or a flat HTML binary.
 -spec zip_list_fp(Template, Items) -> map() | binary() when
     Template :: map(),
     Items :: [[{arizona_template:az(), term(), map()}]].
-zip_list_fp(#{f := F, s := S, t := T}, ItemsList) ->
+zip_list_fp(#{f := F, s := S, t := T} = Tmpl, ItemsList) ->
+    Target = maps:get(target, Tmpl, html),
     #{
         ~"t" => T,
         ~"f" => F,
         ~"s" => S,
         ~"d" => [
-            [render_fp_val(arizona_template:unwrap_val(V)) || {_Az, V, _Deps} <:- D]
+            [render_fp_val(Target, V) || {_Az, V, _Deps} <:- D]
          || D <- ItemsList
         ]
     };
@@ -295,14 +297,15 @@ against a template, with the same fingerprint-vs-flat-HTML branching as
     Template :: map(),
     Items :: #{term() => [{arizona_template:az(), term(), map()}]},
     Order :: [term()].
-zip_stream_fp(#{f := F, s := S, t := T}, Items, Order) ->
+zip_stream_fp(#{f := F, s := S, t := T} = Tmpl, Items, Order) ->
+    Target = maps:get(target, Tmpl, html),
     #{
         ~"t" => T,
         ~"f" => F,
         ~"s" => S,
         ~"d" => [
             [
-                render_fp_val(arizona_template:unwrap_val(V))
+                render_fp_val(Target, V)
              || {_Az, V, _Deps} <:- maps:get(K, Items)
             ]
          || K <- Order
@@ -319,11 +322,12 @@ plain snapshots fall back to a HTML binary.
 """.
 -spec fingerprint_payload(Snapshot) -> map() | binary() when
     Snapshot :: map().
-fingerprint_payload(#{f := F, s := S, d := D}) ->
+fingerprint_payload(#{f := F, s := S, d := D} = Snap) ->
+    Target = maps:get(target, Snap, html),
     #{
         ~"f" => F,
         ~"s" => S,
-        ~"d" => [render_fp_val(arizona_template:unwrap_val(V)) || {_Az, V} <:- D]
+        ~"d" => [render_fp_val(Target, V) || {_Az, V} <:- D]
     };
 fingerprint_payload(#{s := S, d := D}) ->
     iolist_to_binary(zip(S, [arizona_template:unwrap_val(V) || {_Az, V} <:- D])).
@@ -434,13 +438,17 @@ render_ssr_val(Val) ->
 render_ssr_attr(Name, Val) ->
     arizona_template:render_attr(Name, Val).
 
-render_fp_val({attr, Name, V}) ->
+render_fp_val(native, {attr, _Name, V}) ->
+    %% Native bakes the prop name into the static, so the dynamic carries only
+    %% the value -- encoded client-side like any other dynamic value.
+    arizona_template:to_bin(V);
+render_fp_val(_Target, {attr, Name, V}) ->
     arizona_template:render_attr(Name, V);
-render_fp_val(#{f := _} = Nested) ->
+render_fp_val(_Target, #{f := _} = Nested) ->
     fingerprint_payload(Nested);
-render_fp_val(#{s := S, d := D}) ->
+render_fp_val(_Target, #{s := S, d := D}) ->
     iolist_to_binary(zip(S, [arizona_template:unwrap_val(V) || {_Az, V} <:- D]));
-render_fp_val(#{t := ?EACH, items := Items, template := #{f := F, t := T, s := S}}) when
+render_fp_val(Target, #{t := ?EACH, items := Items, template := #{f := F, t := T, s := S}}) when
     is_list(Items)
 ->
     #{
@@ -448,18 +456,18 @@ render_fp_val(#{t := ?EACH, items := Items, template := #{f := F, t := T, s := S
         ~"f" => F,
         ~"s" => S,
         ~"d" => [
-            [render_fp_val(arizona_template:unwrap_val(V)) || {_Az, V, _Deps} <:- D]
+            [render_fp_val(Target, V) || {_Az, V, _Deps} <:- D]
          || D <- Items
         ]
     };
-render_fp_val(#{t := ?EACH, items := Items, template := #{s := S}}) when
+render_fp_val(_Target, #{t := ?EACH, items := Items, template := #{s := S}}) when
     is_list(Items)
 ->
     [
         iolist_to_binary(zip(S, [arizona_template:unwrap_val(V) || {_Az, V, _Deps} <:- D]))
      || D <- Items
     ];
-render_fp_val(#{
+render_fp_val(Target, #{
     t := ?EACH,
     items := Items,
     order := Order,
@@ -471,22 +479,22 @@ render_fp_val(#{
         ~"s" => S,
         ~"d" => [
             [
-                render_fp_val(arizona_template:unwrap_val(V))
+                render_fp_val(Target, V)
              || {_Az, V, _Deps} <:- maps:get(K, Items)
             ]
          || K <- Order
         ]
     };
-render_fp_val(#{
+render_fp_val(_Target, #{
     t := ?EACH,
     items := Items,
     order := Order,
     template := #{s := S}
 }) ->
     [iolist_to_binary(zip_stream_item(S, maps:get(K, Items))) || K <- Order];
-render_fp_val(V) when is_list(V) ->
+render_fp_val(_Target, V) when is_list(V) ->
     iolist_to_binary(V);
-render_fp_val(V) ->
+render_fp_val(_Target, V) ->
     arizona_template:to_bin(V).
 
 -ifdef(TEST).

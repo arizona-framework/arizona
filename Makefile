@@ -8,8 +8,8 @@ SHELL := /bin/bash
 	fmt fmt-erl fmt-js \
 	lint \
 	check check-dirty check-fast check-erl check-fmt check-lint check-hank check-xref check-dialyzer check-js \
-	build-js analyze-js \
-	test test-eunit test-ct test-erl test-js test-e2e \
+	build-js analyze-js build-android \
+	test test-eunit test-ct test-erl test-js test-e2e test-android \
 	bench \
 	cover cover-erl cover-js \
 	doc doc-erl doc-js \
@@ -114,6 +114,19 @@ test-js:
 
 test-e2e:
 	npx playwright test
+
+# Build the Android client debug APK (clients/android) -- opt-in; needs the
+# Android SDK + a `gradle` install (no wrapper is committed; Android Studio's
+# Gradle tool window works too). No device required. NOT part of `ci`.
+build-android:
+	cd clients/android && gradle :sample:assembleDebug
+
+# Android client tests (clients/android) -- opt-in; needs the Android SDK, a
+# running emulator/device, the Arizona server on :4040, and a `gradle` install.
+# The :sample build's adbReverse task tunnels the device's localhost:4040 to the
+# server (it runs before connectedCheck). NOT part of `ci`/`test`.
+test-android:
+	cd clients/android && gradle :arizona:testDebugUnitTest :sample:connectedCheck
 
 test-e2e-parallel:
 	npx playwright test --project parallel

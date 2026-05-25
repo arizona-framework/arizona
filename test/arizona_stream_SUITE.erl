@@ -2700,7 +2700,7 @@ datatable_live_connected(Config) when is_list(Config) ->
     receive
         {arizona_push, Ops, Effects} ->
             ?assertEqual([], Ops),
-            ?assertEqual([{arizona_js, [14, <<"DataTable">>]}], Effects)
+            ?assertEqual([{arizona_effect, [14, <<"DataTable">>]}], Effects)
     after 1000 ->
         ct:fail(timeout_waiting_for_connected_push)
     end.

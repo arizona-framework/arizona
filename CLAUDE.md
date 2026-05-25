@@ -33,7 +33,8 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make test-ct` | Common Test only |
 | `make test-eunit` | EUnit only (inline private fn tests) |
 | `make test-js` | JS unit tests (Vitest) |
-| `make test-e2e` | Playwright E2E tests |
+| `make test-e2e` | Playwright E2E tests (incl. the `native` JSON-wire project) |
+| `make test-android` | Android client e2e (opt-in; needs Android SDK + emulator; **not** in `ci`) |
 | `make cover` | Coverage check (`cover-erl` `cover-js`) |
 | `make cover-erl` | Erlang coverage (min 80%) |
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
@@ -45,9 +46,16 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 
 Full architecture documentation (modules, APIs, data flow, op codes, etc.) is in [docs/architecture.md](docs/architecture.md).
 
-## Event attributes & effects -- `arizona_js`
+## Clients
 
-Event attributes (`az-click`, `az-submit`, etc.) use `arizona_js` commands. Handler effects use the same module. All functions return `{arizona_js, [OpCode, ...Args]}`.
+Client runtimes that consume the wire protocol live in-repo so they evolve atomically with it:
+the **web** client (browser) is `assets/js/` (built into `priv/static` by Vite); the **Android**
+client for the `?native` target is `clients/android/` (Kotlin/Compose, its own Gradle build --
+**not** part of `make ci`; see `make test-android`).
+
+## Event attributes & effects -- `arizona_js` / `arizona_android`
+
+Web event attributes (`az-click`, `az-submit`, etc.) use `arizona_js` commands; `?native` views use `arizona_android`. Both build the same neutral effect tuple `{arizona_effect, [OpCode, ...Args]}` (encoded by `arizona_effect`). Handler effects use the same builders.
 
 ```erlang
 %% Template: event attribute
@@ -61,7 +69,7 @@ handle_event(~"inc", _P, B) ->
     {B#{count => Count + 1}, #{}, [arizona_js:set_title(~"Updated")]}.
 ```
 
-`push_event` auto-collects payload from inputs/forms. Explicit payload merges on top. Op codes in `include/arizona_js.hrl`.
+`push_event` auto-collects payload from inputs/forms. Explicit payload merges on top. Op codes in `include/arizona_effect.hrl`.
 
 ## What's missing
 

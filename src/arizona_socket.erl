@@ -265,13 +265,20 @@ handle_navigate(
                     Ops = replace_ops(OldVId, PageHTML),
                     encode_reply(Ops, [], Socket#socket{view_id = NewVId})
             catch
-                %% Live process exited between the navigate frame arriving
-                %% and this gen_server:call landing — typical during a
-                %% drain where handle_drain returned `{stop, _, _}`.
-                %% Translate to a going-away close so the client's
-                %% auto-reconnect path runs (1001 routes through the
-                %% reconnect-with-form-state flow, not the crash reload).
+                %% Live process exited between the navigate frame arriving and
+                %% this gen_server:call landing — typical during a drain where
+                %% handle_drain returned `{stop, _, _}`. Two sub-cases of the
+                %% same race: the call finds the process already gone
+                %% (`{noproc, _}`), or the process exits with `{shutdown, drain}`
+                %% while the call is in flight (gen_server:call re-raises the
+                %% server's exit reason as `{{shutdown, drain}, _}`). Both
+                %% translate to a going-away close so the client's auto-reconnect
+                %% path runs (1001 routes through the reconnect-with-form-state
+                %% flow, not the crash reload). A genuine navigate crash exits
+                %% with a different reason and still propagates to a 4500 close.
                 exit:{noproc, _} ->
+                    {close, ?CLOSE_GOING_AWAY, ~"", Socket};
+                exit:{{shutdown, drain}, _} ->
                     {close, ?CLOSE_GOING_AWAY, ~"", Socket}
             end
     end.
@@ -307,7 +314,7 @@ encode_reply(Ops, Effects, Socket) ->
     {reply, encode(#{?OPS => Ops, ?EFFECTS => unwrap_effects(Effects)}), Socket}.
 
 unwrap_effects(Effects) ->
-    [Cmd || {arizona_js, Cmd} <:- Effects].
+    [Cmd || {arizona_effect, Cmd} <:- Effects].
 
 %% Fast path for the three reply shapes produced by encode_reply/3. Hand
 %% writes the outer `{"o":...}` / `{"e":...}` / both wrapper, skipping

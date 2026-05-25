@@ -36,6 +36,7 @@ binding, used by stateless layouts to render the wrapped page.
 -export([inner_content/1]).
 -export([track/1]).
 -export([html/1]).
+-export([native/1]).
 -export([stateful/2]).
 -export([stateless/2]).
 -export([stateless/3]).
@@ -52,6 +53,7 @@ binding, used by stateless layouts to render the wrapped page.
     inner_content/1,
     track/1,
     html/1,
+    native/1,
     stateful/2,
     stateless/2,
     stateless/3,
@@ -156,6 +158,15 @@ calls with compiled template maps before code generation.
 -spec html(term()) -> no_return().
 html(Elems) ->
     arizona_template:html(Elems).
+
+-doc """
+Parse transform stub. The parse transform replaces `az:native(...)` (or
+`arizona_template:native(...)`) calls with compiled JSON template maps before
+code generation.
+""".
+-spec native(term()) -> no_return().
+native(Elems) ->
+    arizona_template:native(Elems).
 
 -doc """
 Alias for `arizona_template:stateful/2`.

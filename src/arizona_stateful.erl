@@ -32,7 +32,7 @@ enables the parse transform that compiles `?html(...)` calls in
 of any modifications made by the handler -- typically used to clear
 form fields or transient flags after they've been processed.
 
-`Effects` is a list of `t:arizona_js:cmd/0` to run client-side after
+`Effects` is a list of `t:arizona_effect:cmd/0` to run client-side after
 the diff is applied (e.g. focus a field, dispatch a custom event).
 """.
 
@@ -64,7 +64,7 @@ the diff is applied (e.g. focus a field, dispatch a custom event).
 
 -type bindings() :: arizona_template:bindings().
 -type resets() :: map().
--nominal effect() :: arizona_js:cmd().
+-nominal effect() :: arizona_effect:cmd().
 -nominal effects() :: [effect()].
 
 -type event_name() :: binary().

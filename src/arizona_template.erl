@@ -32,6 +32,12 @@ render(Bindings) ->
 
 -include("arizona.hrl").
 
+%% The html/native/native_each stubs are intentionally identical: each raises
+%% parse_transform_not_applied inline so the raising stub is the top stack frame,
+%% pointing the user at the exact un-transformed call. A shared helper would move
+%% that frame and obscure which call was made, so dedup does not apply here.
+-elvis([{elvis_style, dont_repeat_yourself, disable}]).
+
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -41,10 +47,12 @@ render(Bindings) ->
 -export([get_lazy/3]).
 -export([track/1]).
 -export([html/1]).
+-export([native/1]).
 -export([stateful/2]).
 -export([stateless/2]).
 -export([stateless/3]).
 -export([each/2]).
+-export([native_each/2]).
 -export([to_bin/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
@@ -64,6 +72,9 @@ render(Bindings) ->
 
 -ignore_xref([format_error/1]).
 -ignore_xref([format_error/2]).
+%% Internal native-each stub: emitted by the parse transform's native pre-pass,
+%% never called directly (no az:native_each alias, unlike each/2).
+-ignore_xref([native_each/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -101,13 +112,20 @@ render(Bindings) ->
     | {az(), template()}
     | {az(), term()}.
 
--nominal template() :: #{s := [binary()], d := [dynamic()], f := binary(), diff => false}.
+-nominal template() :: #{
+    s := [binary()],
+    d := [dynamic()],
+    f := binary(),
+    diff => false,
+    target => html | native
+}.
 
 -nominal each_template() :: #{
     t := 0,
     s := [binary()],
     d := fun((term()) -> [dynamic()]) | fun((term(), term()) -> [dynamic()]),
-    f := binary()
+    f := binary(),
+    target => html | native
 }.
 
 -nominal each_container() :: #{
@@ -122,7 +140,8 @@ render(Bindings) ->
     f => binary(),
     deps => [deps()],
     diff => false,
-    view_id => binary()
+    view_id => binary(),
+    target => html | native
 }.
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
@@ -212,6 +231,18 @@ html(_Elems) ->
     ]).
 
 -doc """
+Compile-time stub for the native (JSON) render target. The parse transform
+replaces every `?native(...)` (and `arizona_template:native/1`) call with a
+precomputed `t:template/0` map whose statics are JSON fragments. If this
+function runs, the parse transform was not applied.
+""".
+-spec native(term()) -> no_return().
+native(_Elems) ->
+    erlang:error(parse_transform_not_applied, [], [
+        {error_info, #{module => ?MODULE}}
+    ]).
+
+-doc """
 Builds a stateful child descriptor. The renderer mounts `Handler` with `Props`.
 """.
 -spec stateful(Handler, Props) -> stateful_descriptor() when
@@ -252,6 +283,18 @@ each(Source, #{t := ?EACH, d := DFun} = Tmpl) when is_function(DFun, 1); is_func
     #{t => ?EACH, source => Source, template => Tmpl}.
 
 -doc """
+Compile-time stub for the native each. The parse transform replaces every
+`?native_each(Fun, Source)` call with a compiled each-container whose per-item
+template carries JSON statics. If this function runs, the parse transform was
+not applied.
+""".
+-spec native_each(term(), term()) -> no_return().
+native_each(_Fun, _Source) ->
+    erlang:error(parse_transform_not_applied, [], [
+        {error_info, #{module => ?MODULE}}
+    ]).
+
+-doc """
 Converts a template value to its binary HTML representation.
 
 Errors with `{bad_template_value, V}` for unsupported types.
@@ -262,10 +305,10 @@ to_bin(V) when is_binary(V) -> V;
 to_bin(V) when is_integer(V) -> integer_to_binary(V);
 to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
 to_bin(V) when is_atom(V) -> atom_to_binary(V);
-to_bin({arizona_js, _} = Cmd) ->
-    arizona_js:encode(Cmd);
-to_bin([{arizona_js, _} | _] = Cmds) ->
-    arizona_js:encode(Cmds);
+to_bin({arizona_effect, _} = Cmd) ->
+    arizona_effect:encode(Cmd);
+to_bin([{arizona_effect, _} | _] = Cmds) ->
+    arizona_effect:encode(Cmds);
 to_bin(V) when is_list(V) -> iolist_to_binary(V);
 to_bin(V) ->
     erlang:error({bad_template_value, V}, [V], [
@@ -354,7 +397,11 @@ maybe_propagate(Tmpl, Snap) ->
             #{diff := false} -> Snap#{diff => false};
             #{} -> Snap
         end,
-    maybe_put_fingerprint(Tmpl, Snap1).
+    Snap2 = maybe_put_fingerprint(Tmpl, Snap1),
+    case Tmpl of
+        #{target := Target} -> Snap2#{target => Target};
+        #{} -> Snap2
+    end.
 
 -doc """
 Copies the `f` field from a template to a snapshot if present.

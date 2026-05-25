@@ -192,7 +192,6 @@ function openSocket() {
 
     ws.onopen = () => {
         if (_ws !== ws) return;
-        _attempt = 0;
         _heartbeatPending = false;
         _heartbeatInterval = setInterval(() => {
             if (_heartbeatPending) {
@@ -212,6 +211,12 @@ function openSocket() {
         if (_ws !== ws) return;
         _heartbeatPending = false;
         if (e.data === SYS_PONG) return;
+
+        // Reset the backoff only once a real frame arrives -- a working session,
+        // not a bare WS handshake. A server that accepts the socket but drops it
+        // before framing (crashing mount, dead backend) thus keeps backing off
+        // instead of being hammered at backoff[0].
+        _attempt = 0;
 
         const msg = JSON.parse(e.data);
         const ops = msg.o || null;

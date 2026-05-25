@@ -36,6 +36,12 @@ For everything else (single-suite runs, coverage reports, individual
 check stages, doc generation, etc.) see the targets in the project's
 `Makefile`.
 
+The native (`?native`) Android client lives in-repo at `clients/android/`
+(Kotlin/Compose, its own Gradle build). It is **not** part of `make ci`; build
+it with `make build-android` and run its tests with `make test-android` (needs
+the Android SDK + an emulator/device). Its CI runs separately via the
+`android-e2e` workflow. See [docs/native.md](docs/native.md).
+
 ## License
 
 Arizona is licensed under the [Apache License Version 2.0](LICENSE.md), for all code.

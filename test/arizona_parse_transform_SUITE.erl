@@ -27,6 +27,9 @@
     boolean_attr/1,
     case_expression_dynamic/1,
     counter_pattern/1,
+    cross_target_html_in_native/1,
+    cross_target_native_in_html/1,
+    cross_target_siblings_compile/1,
     deeply_nested/1,
     diff_integration/1,
     dynamic_only_child/1,
@@ -160,6 +163,7 @@ all() ->
         {group, layout},
         {group, utf8},
         {group, errors},
+        {group, cross_target},
         {group, az_macros},
         {group, az_view}
     ].
@@ -305,6 +309,12 @@ groups() ->
             invalid_child_empty_tuple,
             invalid_child_tuple_literal,
             invalid_child_mixed
+        ]},
+        %% Inline cross-target nesting guard (?html in ?native and vice-versa)
+        {cross_target, [parallel], [
+            cross_target_html_in_native,
+            cross_target_native_in_html,
+            cross_target_siblings_compile
         ]},
         %% Tests 108-115: az:html and az:each equivalence tests
         {az_macros, [parallel], [
@@ -2922,6 +2932,47 @@ invalid_each_fun_arity(Config) when is_list(Config) ->
             (_) -> false
         end
     ).
+
+cross_target_html_in_native(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_html_in_native). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:native({'Column', [], ["
+        "        arizona_template:html({'div', [], [arizona_template:get(x, Bindings)]})"
+        "    ]}). ",
+        fun
+            (cross_target_nesting) -> true;
+            (_) -> false
+        end
+    ).
+
+cross_target_native_in_html(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_native_in_html). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        arizona_template:native({'Text', [], [arizona_template:get(x, Bindings)]})"
+        "    ]}). ",
+        fun
+            (cross_target_nesting) -> true;
+            (_) -> false
+        end
+    ).
+
+cross_target_siblings_compile(Config) when is_list(Config) ->
+    %% A dual-serve render with ?html and ?native in sibling clauses (not nested
+    %% in one another) must compile -- the guard rejects only inline nesting.
+    Mod = compile_module(
+        "-module(pt_dual_serve). "
+        "-export([render/1]). "
+        "render(#{target := html} = Bindings) -> "
+        "    arizona_template:html({'div', [], [arizona_template:get(x, Bindings)]}); "
+        "render(#{target := native} = Bindings) -> "
+        "    arizona_template:native({'Text', [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    ?assertEqual(pt_dual_serve, Mod).
 
 %% Test 98: each/2 with non-fun raises compile-time error.
 invalid_each_not_fun(Config) when is_list(Config) ->

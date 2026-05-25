@@ -7,20 +7,26 @@
 | `src/arizona.hrl`                   | Shared header -- op codes, `?EACH` constant, `#stream{}` record                                                                                                           |
 | `src/arizona_template.erl`          | Pure helpers -- binding access (`get/2,3`), dep tracking (`track/1`), descriptor constructors (`stateful/2`, `stateless/2,3`), `each/2`, `to_bin/1`, snapshot utilities   |
 | `src/arizona_eval.erl`              | Template evaluation -- dynamics to snapshots, stateful/stateless child eval, stream/each eval                                                                             |
-| `src/arizona_render.erl`            | HTML output -- `render/1,2`, SSR (`render_to_iolist/1,2`, `render_view_to_iolist/3`), `zip/2`, `fingerprint_payload/1`                                                    |
+| `src/arizona_render.erl`            | Render orchestration (target-aware) -- `render/1,2`, SSR (`render_to_iolist/1,2`, `render_view_to_iolist/3`), `zip/2`, `fingerprint_payload/1`                            |
+| `src/arizona_renderer.erl`          | Render-target backend behaviour -- byte emission + `attr_command/2`; HTML and native JSON backends below                                                                  |
+| `src/arizona_html.erl`              | HTML render backend -- emits HTML statics/attrs (the `?html` target)                                                                                                      |
+| `src/arizona_native.erl`            | Native render backend -- emits a JSON widget tree (the `?native` target); see docs/native.md                                                                              |
 | `src/arizona_diff.erl`              | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                           |
 | `src/arizona_cowboy_router.erl`     | Cowboy route compilation -- `compile_routes/1`                                                                                                                            |
 | `src/arizona_roadrunner_router.erl` | Roadrunner route compilation -- `compile_routes/1,2`, `routes/1,2` (map-shape routes with state under `#{arizona => ...}` namespace)                                      |
-| `src/arizona_js.erl`                | Unified client commands and server effects -- `push_event/1,2`, `toggle/1`, `show/1`, `hide/1`, `dispatch_event/2`, `set_title/1`, `reload/0`, etc.                       |
+| `src/arizona_effect.erl`            | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                  |
+| `src/arizona_js.erl`                | Web/browser command + effect builders -- `push_event`, `navigate`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`  |
+| `src/arizona_android.erl`           | Native (`?native`) command builders -- the portable `push_event/1,2` and `navigate/1,2`                                                                                   |
 | `src/arizona_stream.erl`            | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`                                                |
 | `src/arizona_stateful.erl`          | Behaviour for embedded components -- `mount/1` callback + `call_mount/2` dispatcher; shared callbacks come from `arizona_handler`                                         |
 | `src/arizona_view.erl`              | Behaviour for route-level pages -- `mount/2` callback taking `(Bindings, Request)` + `call_mount/3` dispatcher; shared callbacks come from `arizona_handler`              |
 | `src/arizona_handler.erl`           | Shared behaviour hosting callbacks common to views and stateful components (`render/1`, `handle_event/3`, `handle_info/2`, `handle_update/2`, `unmount/1`) + dispatchers  |
-| `src/arizona_req.erl`               | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`, `apply_middlewares/3`, `redirect`/`halted_redirect`                         |
+| `src/arizona_req.erl`               | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`/`user_agent`, `apply_middlewares/3`, `redirect`/`halted_redirect`            |
+| `src/arizona_user_agent.erl`        | User-Agent classification for dual-serve views -- `browser/1`, `os/1`, `mobile/1` (best-effort); pairs with `arizona_req:user_agent/1`                                    |
 | `src/arizona_http.erl`              | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|redirect\|ok\|error, ...}` tuples                               |
 | `src/arizona_ws.erl`                | Transport-agnostic WS upgrade bootstrap -- `prepare/3` parses framework keys, resolves the route, runs middlewares, returns state for `arizona_socket`                    |
 | `src/arizona_live.erl`              | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                              |
-| `src/arizona_parse_transform.erl`   | Compile-time transform -- `?html`, `?each` (1-arg or 2-arg) DSL to `#{s, d, f}` maps, `az-view` auto-injection, directive extraction (`az-nodiff`), attribute compilation |
+| `src/arizona_parse_transform.erl`   | Compile-time transform -- `?html`/`?native`, `?each` DSL to `#{s, d, f}` maps, `az-view` auto-injection, `az-nodiff`, attribute compilation, cross-target nesting guard   |
 | `src/arizona_socket.erl`            | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff    |
 | `src/arizona_cowboy_http.erl`       | Cowboy HTTP handler -- thin wrapper: delegates the pipeline to `arizona_http:render/3` and translates its result into Cowboy's reply shape                                |
 | `src/arizona_cowboy_ws.erl`         | Cowboy WebSocket handler -- thin wrapper: delegates the upgrade to `arizona_ws:prepare/3`, forwards frames to `arizona_socket`                                            |
@@ -126,10 +132,11 @@ intentional -- those reads belong to the inner scope. Idiomatic callbacks
 use a named fun reference (`?stateless(fun bar/1, Props)`), which cannot
 close over outer `Bindings` and therefore avoids the footgun entirely.
 
-## API -- `arizona_js.erl`
+## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_effect`)
 
-Unified client commands and server effects. All functions return `{arizona_js, [OpCode, ...Args]}`
-(nominal type `cmd()`). Used in two contexts:
+Client effect commands, built per platform -- `arizona_js` (web), `arizona_android` (native) --
+all returning the neutral tuple `{arizona_effect, [OpCode, ...Args]}` (type `arizona_effect:cmd()`,
+encoded by `arizona_effect`). Used in two contexts:
 
 **Template attributes** -- commands embedded in `az-click`, `az-submit`, etc.:
 
@@ -177,7 +184,7 @@ top:
 This means `az-keydown` or `az-focusout` on an input automatically includes `{value: "typed text"}`,
 and `az-drop` automatically includes `{data_transfer, drop_index}`. No special attributes needed.
 
-**Op codes** defined in `include/arizona_js.hrl` -- integer constants shared with the client JS
+**Op codes** defined in `include/arizona_effect.hrl` -- integer constants shared with the client JS
 runtime. Same codes for both template commands and server effects.
 
 **Key filtering** via `on_key/2` -- wraps a command so it only executes when the pressed key
