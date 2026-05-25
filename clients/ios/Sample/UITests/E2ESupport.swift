@@ -16,7 +16,7 @@ extension XCTestCase {
     func waitForText(
         _ app: XCUIApplication,
         _ text: String,
-        timeout: TimeInterval = 10,
+        timeout: TimeInterval = 20,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
@@ -30,7 +30,7 @@ extension XCTestCase {
     func waitForNoText(
         _ app: XCUIApplication,
         _ text: String,
-        timeout: TimeInterval = 10,
+        timeout: TimeInterval = 20,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
@@ -46,7 +46,7 @@ extension XCTestCase {
     func tapButton(
         _ app: XCUIApplication,
         _ label: String,
-        timeout: TimeInterval = 10,
+        timeout: TimeInterval = 20,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {

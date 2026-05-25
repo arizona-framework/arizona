@@ -65,6 +65,15 @@ jobs:
       - name: Install Node.js dependencies
         run: npm ci
 
+      # Cache the compiled deps so the server step only recompiles arizona itself.
+      - name: Cache rebar3 _build
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: _build
+          key: ios-rebar3-${{ runner.os }}-${{ hashFiles('rebar.lock') }}
+          restore-keys: |
+            ios-rebar3-${{ runner.os }}-
+
       - name: Start Arizona server (port 4040; the Simulator reaches it on localhost)
         run: |
           export PORT=4040 ERLANG_EXTRA_ARGS=-noshell
@@ -86,6 +95,9 @@ jobs:
           # Pick whatever recent iPhone simulator the runner image provides.
           DEVICE=$(xcrun simctl list devices available | grep -oE 'iPhone [0-9]+( Pro)?' | head -1)
           echo "Using simulator: $DEVICE"
+          # Boot it up front so the first test doesn't pay the cold-boot cost
+          # (the launch + connect latency that flaked the first test before).
+          xcrun simctl boot "$DEVICE" || true
           cd clients/ios/Sample
           xcodebuild test \
             -scheme Sample \
