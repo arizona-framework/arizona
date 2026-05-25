@@ -8,8 +8,8 @@ SHELL := /bin/bash
 	fmt fmt-erl fmt-js \
 	lint \
 	check check-dirty check-fast check-erl check-fmt check-lint check-hank check-xref check-dialyzer check-js \
-	build-js analyze-js build-android \
-	test test-eunit test-ct test-erl test-js test-e2e test-android \
+	build-js analyze-js build-android build-ios \
+	test test-eunit test-ct test-erl test-js test-e2e test-android test-ios \
 	bench \
 	cover cover-erl cover-js \
 	doc doc-erl doc-js \
@@ -127,6 +127,21 @@ build-android:
 # server (it runs before connectedCheck). NOT part of `ci`/`test`.
 test-android:
 	cd clients/android && gradle :arizona:testDebugUnitTest :sample:connectedCheck
+
+# Build the sample iOS app (clients/ios) -- opt-in; needs macOS + Xcode and
+# xcodegen (`brew install xcodegen`) to generate the project from project.yml.
+# No device required. NOT part of `ci`. Adjust the simulator name to one your
+# Xcode provides (`xcrun simctl list devices`).
+build-ios:
+	cd clients/ios/Sample && xcodegen generate && xcodebuild build -scheme Sample -destination 'platform=iOS Simulator,name=iPhone 16'
+
+# iOS client tests (clients/ios) -- opt-in. The AzWire logic tests run anywhere
+# via `swift test` (no Mac needed); the XCUITest e2e needs macOS + Xcode +
+# xcodegen and the Arizona server on :4040 (the Simulator shares the host's
+# localhost, so no tunnel). NOT part of `ci`/`test`.
+test-ios:
+	cd clients/ios && swift test
+	cd clients/ios/Sample && xcodegen generate && xcodebuild test -scheme Sample -destination 'platform=iOS Simulator,name=iPhone 16'
 
 test-e2e-parallel:
 	npx playwright test --project parallel

@@ -41,9 +41,9 @@ across upgrades.
 - **Dev-mode hot reload** -- `fs` watcher recompiles changed `.erl` files and pushes reload events
 - **HTTP/WebSocket transport** -- HTTP/1.1, HTTP/2, HTTP/3 (experimental), and WebSocket built in
 - **Native (JSON) render target** -- the same templates and diff engine also emit a JSON widget tree
-  via `?native` for non-browser clients; an in-repo Android (Compose) client and a JS reference client
-  consume the same wire, and `arizona_user_agent` lets one view dual-serve HTML or native by
-  `User-Agent`. See [docs/native.md](docs/native.md)
+  via `?native` for non-browser clients. In-repo Android (Compose), iOS (SwiftUI), and JS
+  reference clients consume the same wire, and `arizona_user_agent` lets one view dual-serve HTML
+  or native by `User-Agent`. See [docs/native.md](docs/native.md)
 
 ## Requirements
 

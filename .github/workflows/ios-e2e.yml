@@ -1,0 +1,93 @@
+---
+# iOS client CI. Two jobs:
+#   - logic: the AzWire protocol tests, run on Linux in the official Swift image
+#     (no Mac needed) -- fast, free feedback for the bulk of the client.
+#   - simulator-e2e: the SwiftUI render + XCUITest e2e, which need macOS. Starts
+#     the Arizona server on :4040 and drives the /native examples on an iOS
+#     Simulator. The Simulator shares the runner's localhost, so it reaches the
+#     server directly -- no tunnel (unlike android-e2e's adb reverse).
+#
+# The server is the pure-Erlang `roadrunner` adapter, so it builds on macOS with
+# OTP alone; the one thing to watch is setup-beam providing the .tool-versions
+# OTP on macOS. Xcode is the runner's default; pin it via maxim-lobanov/setup-xcode
+# if a specific version is needed.
+name: ios-e2e
+
+"on":
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{github.workflow}}-${{github.ref}}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  logic:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Run swift test in the official Swift image -- the same way it is verified
+      # locally on non-Mac machines. The SwiftUI renderer (AzClientUI) compiles to
+      # an empty module here (canImport(SwiftUI) is false) and is exercised by the
+      # simulator-e2e job below.
+      - name: Run AzWire logic tests
+        run: docker run --rm -v "$PWD/clients/ios":/pkg -w /pkg swift:6.1 swift test
+
+  simulator-e2e:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Erlang/OTP + rebar3
+        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
+        with:
+          version-type: strict
+          version-file: .tool-versions
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .tool-versions
+          cache: "npm"
+          cache-dependency-path: "package-lock.json"
+
+      - name: Install Node.js dependencies
+        run: npm ci
+
+      - name: Start Arizona server (port 4040; the Simulator reaches it on localhost)
+        run: |
+          export PORT=4040 ERLANG_EXTRA_ARGS=-noshell
+          ./scripts/start_test_server.sh > /tmp/arizona-server.log 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -sf http://localhost:4040/ > /dev/null; then echo "server up"; exit 0; fi
+            sleep 1
+          done
+          echo "server failed to start"; cat /tmp/arizona-server.log; exit 1
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        run: cd clients/ios/Sample && xcodegen generate
+
+      - name: Run the iOS Simulator e2e
+        run: |
+          # Pick whatever recent iPhone simulator the runner image provides.
+          DEVICE=$(xcrun simctl list devices available | grep -oE 'iPhone [0-9]+( Pro)?' | head -1)
+          echo "Using simulator: $DEVICE"
+          cd clients/ios/Sample
+          xcodebuild test \
+            -scheme Sample \
+            -destination "platform=iOS Simulator,name=$DEVICE" \
+            -resultBundlePath /tmp/ios-e2e.xcresult
