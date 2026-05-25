@@ -1,0 +1,12 @@
+# Swift Package Manager build output
+.build/
+Package.resolved
+
+# Xcode / SwiftPM local state
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+.DS_Store
