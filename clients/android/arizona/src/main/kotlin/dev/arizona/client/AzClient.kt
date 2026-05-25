@@ -237,12 +237,13 @@ class AzClient(baseUrl: String, path: String) {
     private fun dispatch(a: JsonArray, resolveNode: (String) -> Node) {
         when (a[0].jsonPrimitive.int) {
             Op.REPLACE -> {
-                viewId = a[1].jsonPrimitive.content
                 val json = Json.parseToJsonElement(interleaver.interleave(a[2].jsonObject))
+                // The live view id is the rendered root's `id` (== the server's
+                // socket.view_id, what it prefixes pushed ops with), NOT a[1] --
+                // after a navigate a[1] is the OLD id (the replace target). Mirrors
+                // the browser reading the new root's az-view id from the DOM.
+                viewId = json.jsonObject["id"]?.jsonPrimitive?.content
                 views.clear()
-                // The root view is the process id (a[1]); after a navigate it
-                // differs from the rendered root's `id` attr, and the server
-                // prefixes ops with the process id.
                 val node = buildTree(json, viewId)
                 indexByViews(node, views)
                 root.value = node

@@ -213,9 +213,12 @@ export class NativeClient {
     _dispatch(op, resolve) {
         switch (op[0]) {
             case OP_REPLACE: {
-                const [, viewId, payload] = op;
-                this.viewId = viewId;
-                this.root = JSON.parse(this._interleave(payload));
+                this.root = JSON.parse(this._interleave(op[2]));
+                // The live view id is the rendered root's `id` (== the server's
+                // socket.view_id, what it prefixes pushed ops with), NOT op[1] --
+                // after a navigate op[1] is the OLD id (the replace target). Mirrors
+                // the browser reading the new root's az-view id from the DOM.
+                this.viewId = this.root.id;
                 this.views = new Map();
                 indexByViews(this.root, this.viewId, this.views);
                 break;

@@ -41,22 +41,38 @@ test.describe('native (JSON) wire -- menu navigation', () => {
         }
     });
 
-    test('applies ops after navigating (server keeps the process view id)', async ({ baseURL }) => {
+    test('applies a client-event op after navigating', async ({ baseURL }) => {
         const client = new NativeClient(baseURL, '/native/menu');
         await client.connect();
         // List item texts (each keyed Text node's spliced content).
         const rows = (t) => t.children.map((r) => r.children[0]);
         try {
-            // Navigate menu -> list. The OP_REPLACE ViewId stays the process id
-            // (native_menu), not the rendered root's id (native_list).
+            // Navigate menu -> list. The client adopts the rendered root's id
+            // (native_list) as its view id, so events route to / resolve under it.
             client.tap(client.tree().children[1]); // "List"
             await client.waitFor((t) => t.id === 'native_list');
             expect(rows(client.tree())).toEqual(['One', 'Two', 'Three']);
 
-            // A stream op now arrives prefixed with the process view id; it must
-            // still resolve against the (re-mounted) list and render the new item.
             client.pushEvent('add', { id: '9', text: 'Nine' });
             await client.waitFor((t) => rows(t).includes('Nine'));
+        } finally {
+            client.close();
+        }
+    });
+
+    test('applies server pushes after navigating', async ({ baseURL }) => {
+        const client = new NativeClient(baseURL, '/native/menu');
+        await client.connect();
+        const count = (t) => Number(t.children[0].children[1]); // ["Tick: ", "<n>"]
+        try {
+            // Navigate menu -> ticker. The server pushes timer ops prefixed with the
+            // ticker's id (socket.view_id), NOT the menu id -- so the client must use
+            // the rendered root's id as its view id, or the pushes don't resolve
+            // (this is what crashed TickerE2ETest after the per-view change).
+            client.tap(client.tree().children[3]); // "Ticker"
+            await client.waitFor((t) => t.id === 'native_ticker');
+            // No client event -- the server timer drives these.
+            await client.waitFor((t) => count(t) >= 2, 5000);
         } finally {
             client.close();
         }
