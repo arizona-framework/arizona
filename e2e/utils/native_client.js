@@ -82,7 +82,6 @@ export class NativeClient {
     _open() {
         this.ws = new WebSocket(this.wsUrl);
         this.ws.onopen = () => {
-            this._reconnectAttempt = 0;
             this.ws.send(JSON.stringify(['cached_fps', []]));
             this._startHeartbeat();
         };
@@ -94,6 +93,9 @@ export class NativeClient {
         this.ws.onmessage = (e) => {
             this._heartbeatPending = false; // any frame proves the socket is live
             if (e.data === SYS_PONG) return; // pong
+            // Reset the backoff only once a real frame arrives (a working session,
+            // not a bare WS handshake) -- mirrors the worker + AzClient.
+            this._reconnectAttempt = 0;
             const msg = JSON.parse(e.data);
             if (msg.o) this._applyOps(msg.o);
             // Handler-returned effects (the "e" array): dispatch the portable

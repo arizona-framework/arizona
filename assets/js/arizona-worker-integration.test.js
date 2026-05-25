@@ -213,6 +213,38 @@ describe('arizona-worker', () => {
         expect(ws.latest().url).toContain('_az_reconnect=1');
     });
 
+    it('does not reset the backoff on socket open without a frame', () => {
+        // backoff(0) in [800,1200), backoff(1) in [1600,2400) -- disjoint, so the
+        // fire time distinguishes the attempt index. A socket that opens but never
+        // frames must NOT reset the counter, so the second drop backs off further.
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        ws.latest().close(1006); // attempt 0 -> backoff(0)
+        vi.advanceTimersByTime(1200);
+        expect(ws.instances).toHaveLength(2); // reconnected
+
+        ws.latest().simulateOpen(); // open again, still no frame
+        ws.latest().close(1006); // attempt 1 (NOT reset on open) -> backoff(1)
+        vi.advanceTimersByTime(1300); // < 1600: too soon for backoff(1)
+        expect(ws.instances).toHaveLength(2);
+        vi.advanceTimersByTime(1200); // now past backoff(1)
+        expect(ws.instances).toHaveLength(3);
+    });
+
+    it('resets the backoff once a real frame arrives', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        ws.latest().close(1006); // attempt 0 -> backoff(0)
+        vi.advanceTimersByTime(1200);
+        expect(ws.instances).toHaveLength(2);
+
+        ws.latest().simulateOpen();
+        ws.latest().simulateMessage(JSON.stringify({ o: [] })); // a real frame resets the counter
+        ws.latest().close(1006); // attempt back to 0 -> backoff(0)
+        vi.advanceTimersByTime(1200); // backoff(0) < 1200 fires
+        expect(ws.instances).toHaveLength(3);
+    });
+
     it('update-path message [3, path] rewrites the cached URL', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2Fold']);
         slf.send([3, '/new']);
