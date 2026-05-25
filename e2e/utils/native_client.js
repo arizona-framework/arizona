@@ -261,6 +261,10 @@ export class NativeClient {
                 const item = this._decode(op[4]);
                 if (pos === -1 || pos >= items.length) items.push(item);
                 else items.splice(pos, 0, item);
+                // Note: the inserted item's `az`s are NOT added to the per-view
+                // registry. Safe only because stream items are diffed via
+                // OP_ITEM_PATCH (resolved item-locally below), never targeted by a
+                // top-level "ViewId:az" op.
                 break;
             }
             case OP_REMOVE: {
@@ -309,7 +313,9 @@ export class NativeClient {
     }
 
     // Apply an OP_ITEM_PATCH's inner ops, scoped to one keyed item: inner ops
-    // carry bare az indices resolved within the item's own subtree.
+    // carry bare az indices resolved within the item's own subtree. The flat
+    // `az -> node` map assumes no nested `az_view` (a stateful child) inside a
+    // stream item — its azs would collide here. No current fixture nests one.
     _applyInner(item, innerOps) {
         const reg = new Map();
         indexByAz(item, reg);

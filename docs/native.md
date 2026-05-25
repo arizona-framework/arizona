@@ -225,3 +225,8 @@ returns them won't crash a native client.
 - **Props are string-encoded**; the client coerces. Typed props, opt-in
   per-platform compile-time validators, and a portable cross-platform
   vocabulary helper are possible future additions.
+- **Stateful children inside a stream item aren't supported.** A stream item's
+  ops are applied via `OP_ITEM_PATCH` against a flat item-local `az` map and its
+  inserted nodes aren't added to the per-view registry — both safe today because
+  no fixture nests an `az_view` (stateful child) inside an `?each` item. Doing so
+  would need the per-view scoping extended into item-local resolution.

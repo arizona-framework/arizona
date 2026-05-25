@@ -289,6 +289,9 @@ class AzClient(baseUrl: String, path: String) {
                 val item = buildTree(Json.parseToJsonElement(interleaver.decode(a[4])), container.viewId)
                 if (pos == -1 || pos >= container.children.size) container.children.add(item)
                 else container.children.add(pos, item)
+                // Note: the inserted item's `az`s are NOT added to the per-view
+                // registry. Safe only because stream items are diffed via
+                // OP_ITEM_PATCH (resolved item-locally), never by a top-level op.
             }
             Op.REMOVE -> {
                 val container = resolveNode(a[1].jsonPrimitive.content)
@@ -318,7 +321,9 @@ class AzClient(baseUrl: String, path: String) {
     }
 
     // Apply an OP_ITEM_PATCH's inner ops, scoped to one keyed item: inner ops
-    // carry bare az indices resolved within the item's own subtree.
+    // carry bare az indices resolved within the item's own subtree. The flat
+    // `az -> node` map assumes no nested `az_view` (a stateful child) inside a
+    // stream item -- its azs would collide here. No current fixture nests one.
     private fun applyInner(item: Node, innerOps: JsonArray) {
         val local = HashMap<String, Node>()
         indexByAz(item, local)
