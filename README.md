@@ -13,7 +13,8 @@ Arizona is a real-time web framework for Erlang/OTP. It renders HTML on the serv
 the template level, and pushes minimal updates to the browser over WebSocket.
 
 Templates are plain Erlang terms compiled via parse transform. The server owns the state; the client
-is a thin DOM patcher.
+is thin -- a DOM patcher in the browser, and the same diff stream drives a JSON widget tree on native
+app clients (see the native target below).
 
 ## 🚧 Status
 
@@ -37,6 +38,10 @@ across upgrades.
 - **Dev-mode hot reload** -- `fs` watcher recompiles changed `.erl` files and pushes reload events
 - **Pluggable transport** -- roadrunner (default) and cowboy adapters built-in; pick one via the
   `adapter` opt or write your own
+- **Native (JSON) render target** -- the same templates and diff engine also emit a JSON widget tree
+  via `?native` for non-browser clients; an in-repo Android (Compose) client and a JS reference client
+  consume the same wire, and `arizona_user_agent` lets one view dual-serve HTML or native by
+  `User-Agent`. See [docs/native.md](docs/native.md)
 
 ## Requirements
 
@@ -233,6 +238,10 @@ pushes minimal diffs over WebSocket as the count changes.
 
 See [docs/architecture.md](docs/architecture.md) for the full architecture reference -- module
 breakdown, op codes, dev-mode file watchers, custom schemes/proto_opts, and imperative startup.
+
+See [docs/native.md](docs/native.md) for the native (JSON widget-tree) render target -- authoring
+`?native` views, serving HTML and native from one view, the client wire contract, and the in-repo
+Android client.
 
 ## Sponsors
 
