@@ -16,6 +16,9 @@ Templates are plain Erlang terms compiled via parse transform. The server owns t
 is thin -- a DOM patcher in the browser, and the same diff stream drives a JSON widget tree on native
 app clients (see the native target below).
 
+Arizona is powered by [Roadrunner](https://github.com/arizona-framework/roadrunner), a pure-Erlang
+HTTP and WebSocket server. Beep beep.
+
 ## 🚧 Status
 
 Arizona is in `0.x`. The core is functional and covered by tests, but the API may change between
@@ -36,7 +39,7 @@ across upgrades.
 - **On-mount hooks** -- per-route pipeline that runs before every mount, including navigate
 - **Element hooks** -- client-side `mounted`/`updated`/`destroyed` callbacks via `az_hook`
 - **Dev-mode hot reload** -- `fs` watcher recompiles changed `.erl` files and pushes reload events
-- **HTTP/WebSocket transport** -- built on the roadrunner server (HTTP/1.1, HTTP/2, WebSocket)
+- **HTTP/WebSocket transport** -- HTTP/1.1, HTTP/2, HTTP/3 (experimental), and WebSocket built in
 - **Native (JSON) render target** -- the same templates and diff engine also emit a JSON widget tree
   via `?native` for non-browser clients; an in-repo Android (Compose) client and a JS reference client
   consume the same wire, and `arizona_user_agent` lets one view dual-serve HTML or native by
@@ -44,16 +47,15 @@ across upgrades.
 
 ## Requirements
 
-- Erlang/OTP 29+ (required by the roadrunner server)
+- Erlang/OTP 29+
 
 ## Installation
 
-Add Arizona and the roadrunner server to your `rebar.config` dependencies:
+Add Arizona to your `rebar.config` dependencies:
 
 ```erlang
 {deps, [
-    {arizona, "~> 0.1"},
-    {roadrunner, "~> 0.2"}
+    {arizona, "~> 0.1"}
 ]}.
 ```
 
@@ -174,10 +176,10 @@ render(Bindings) ->
 
 ### 4. Configure the server
 
-Add `arizona` and `roadrunner` to your app's `applications` list in `.app.src`:
+Add `arizona` to your app's `applications` list in `.app.src`:
 
 ```erlang
-{applications, [kernel, stdlib, roadrunner, arizona]}
+{applications, [kernel, stdlib, arizona]}
 ```
 
 Ensure `rebar3 shell` loads the config and starts your app by adding
@@ -190,9 +192,7 @@ to `rebar.config`:
 ]}.
 ```
 
-Replace `yourapp` with your project's app name; `roadrunner` and `arizona`
-are started transitively from the `applications` list in `.app.src`.
-Then declare routes in `config/sys.config`:
+Replace `yourapp` with your project's app name. Then declare routes in `config/sys.config`:
 
 ```erlang
 [{arizona, [
