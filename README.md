@@ -53,7 +53,7 @@ Add Arizona and the roadrunner server to your `rebar.config` dependencies:
 ```erlang
 {deps, [
     {arizona, "~> 0.1"},
-    {roadrunner, "~> 0.1"}
+    {roadrunner, "~> 0.2"}
 ]}.
 ```
 
