@@ -14,9 +14,8 @@ Used by `scripts/bench.escript`. Holds three groups of helpers:
 - **Transport clients**: HTTP keep-alive (`http_get/2`,
   `http_client_worker/3`) and WebSocket (`ws_connect/3`, `ws_send/2`,
   `ws_recv/2`, `ws_client_worker/4`). Both are hand-rolled gen_tcp
-  clients; the WS frame encoder is lifted from
-  `arizona_cowboy_ws_SUITE.erl:659-793`. Avoids pulling `gun` (or any
-  HTTP client) into the test deps.
+  clients with a self-contained WS frame codec. Avoids pulling `gun`
+  (or any HTTP client) into the test deps.
 - **Concurrency**: `await_ready/1`, `await_done/1` -- spawn-and-signal
   barrier used by the multi-client workloads.
 
@@ -44,8 +43,8 @@ Constants:
     kill_live/1,
     await_ready/1,
     await_done/1,
-    %% Cowboy server lifecycle
-    with_cowboy/3,
+    %% Roadrunner server lifecycle
+    with_roadrunner/3,
     %% HTTP client
     http_get/2,
     http_client_worker/3,
@@ -484,33 +483,33 @@ await_done(N) ->
     end.
 
 %% --------------------------------------------------------------------
-%% Cowboy server lifecycle
+%% Roadrunner server lifecycle
 %% --------------------------------------------------------------------
 
 -doc """
-Start a cowboy listener with the given routes, run `Fun(Port)`, then
-stop the listener regardless of whether `Fun` returned normally or
-crashed. Returns `Fun`'s result.
+Start a roadrunner listener with the given routes, run `Fun(Port)`,
+then stop the listener regardless of whether `Fun` returned normally
+or crashed. Returns `Fun`'s result.
 
-`Port` is the OS-assigned port (cowboy listens on 0; the actual port
-is looked up via `ranch:get_port/1`). `max_keepalive` is set to
-infinity because the bench loops easily exceed cowboy's default of
-100 requests per connection.
+`Port` is picked from a high range so the bench listener does not
+collide with a dev server on the default port. `max_keep_alive_requests`
+is raised well above the per-trial op count because the bench loops
+hammer a single keep-alive connection past roadrunner's default of 1000.
 """.
--spec with_cowboy(atom(), list(), fun((inet:port_number()) -> Result)) -> Result when
+-spec with_roadrunner(atom(), list(), fun((inet:port_number()) -> Result)) -> Result when
     Result :: term().
-with_cowboy(Name, Routes, Fun) ->
-    {ok, _} = application:ensure_all_started(cowboy),
-    {ok, _} = arizona_cowboy_server:start(Name, #{
-        transport_opts => [{port, 0}],
-        proto_opts => #{max_keepalive => infinity},
+with_roadrunner(Name, Routes, Fun) ->
+    {ok, _} = application:ensure_all_started(roadrunner),
+    Port = 24040 + erlang:unique_integer([positive, monotonic]) rem 1000,
+    {ok, _} = arizona_roadrunner_server:start(Name, #{
+        transport_opts => [{port, Port}],
+        proto_opts => #{max_keep_alive_requests => 100_000_000},
         routes => Routes
     }),
-    Port = ranch:get_port(Name),
     try
         Fun(Port)
     after
-        arizona_cowboy_server:stop(Name)
+        arizona_roadrunner_server:stop(Name)
     end.
 
 %% --------------------------------------------------------------------
@@ -607,9 +606,8 @@ with_http_socket(Port, Fun) ->
 %% --------------------------------------------------------------------
 %% WebSocket client (gen_tcp, hand-rolled frame codec)
 %%
-%% Lifted from arizona_cowboy_ws_SUITE.erl:659-793. If the WS suite
-%% needs the same helpers, lift them to a shared spot then; for now
-%% we accept the duplication.
+%% A self-contained gen_tcp WS client so the bench harness needs no
+%% external HTTP/WS client dependency.
 %% --------------------------------------------------------------------
 
 -doc """

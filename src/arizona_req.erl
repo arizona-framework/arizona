@@ -2,9 +2,9 @@
 -moduledoc """
 HTTP request abstraction with adapter pattern for different web servers.
 
-Provides a unified interface for HTTP requests across transport adapters
-(Cowboy today; others pluggable via the behaviour). Features lazy loading
-of request data with caching to avoid re-parsing across accesses.
+Provides a unified interface for HTTP requests behind a transport
+behaviour (roadrunner is the built-in implementation). Features lazy
+loading of request data with caching to avoid re-parsing across accesses.
 
 ## Adapter pattern
 
@@ -42,24 +42,6 @@ Method = arizona_req:method(Req).          %% eager, no thread
 `apply_middlewares/3` threads a request and bindings map through a list
 of middleware steps. Each step returns either `{cont, Request, Bindings}`
 or `{halt, Request}`. The runner stops on the first halt.
-
-## Example adapter implementation
-
-```erlang
--module(my_server_req).
--behaviour(arizona_req).
--export([new/1, parse_bindings/1, parse_params/1, parse_cookies/1,
-         parse_headers/1, read_body/1]).
-
-new(RawReq) ->
-    arizona_req:new(?MODULE, RawReq, #{
-        method => my_server:method(RawReq),
-        path => my_server:path(RawReq)
-    }).
-
-parse_bindings(RawReq) -> my_server:route_params(RawReq).
-%% ... etc.
-```
 """.
 
 %% --------------------------------------------------------------------
@@ -242,9 +224,9 @@ raw(#{raw := Raw}) -> Raw.
 -doc """
 Replaces the raw value inside `Request` and clears all lazy caches.
 
-Useful after a transport-specific mutation (e.g. a
-`cowboy_req:reply/4` on halt) that returns an updated raw. Cached
-fields are dropped because they may no longer reflect the new raw.
+Useful after a transport-specific mutation (e.g. writing a reply on
+halt) that returns an updated raw. Cached fields are dropped because
+they may no longer reflect the new raw.
 """.
 -spec set_raw(request(), raw()) -> request().
 set_raw(Req, Raw) ->

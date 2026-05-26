@@ -15,10 +15,9 @@ transport adapter:
    transport should feed into `arizona_socket:init/4`.
 
 The helper is transport-agnostic: callers pre-parse the query string
-into the standard `[{binary(), binary() | true}]` shape (cowboy's
-`parse_qs/1` output, which non-cowboy transports are expected to
-produce from their own APIs). On halt, callers unwrap the native
-transport request via `arizona_req:raw/1`.
+into the standard `[{binary(), binary() | true}]` shape from their own
+transport APIs. On halt, callers unwrap the native transport request
+via `arizona_req:raw/1`.
 """.
 
 %% --------------------------------------------------------------------

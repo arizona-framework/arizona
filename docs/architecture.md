@@ -12,7 +12,6 @@
 | `src/arizona_html.erl`              | HTML render backend -- emits HTML statics/attrs (the `?html` target)                                                                                                      |
 | `src/arizona_native.erl`            | Native render backend -- emits a JSON widget tree (the `?native` target); see docs/native.md                                                                              |
 | `src/arizona_diff.erl`              | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                           |
-| `src/arizona_cowboy_router.erl`     | Cowboy route compilation -- `compile_routes/1`                                                                                                                            |
 | `src/arizona_roadrunner_router.erl` | Roadrunner route compilation -- `compile_routes/1,2`, `routes/1,2` (map-shape routes with state under `#{arizona => ...}` namespace)                                      |
 | `src/arizona_effect.erl`            | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                  |
 | `src/arizona_js.erl`                | Web/browser command + effect builders -- `push_event`, `navigate`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`  |
@@ -28,20 +27,14 @@
 | `src/arizona_live.erl`              | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                              |
 | `src/arizona_parse_transform.erl`   | Compile-time transform -- `?html`/`?native`, `?each` DSL to `#{s, d, f}` maps, `az-view` auto-injection, `az-nodiff`, attribute compilation, cross-target nesting guard   |
 | `src/arizona_socket.erl`            | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff    |
-| `src/arizona_cowboy_http.erl`       | Cowboy HTTP handler -- thin wrapper: delegates the pipeline to `arizona_http:render/3` and translates its result into Cowboy's reply shape                                |
-| `src/arizona_cowboy_ws.erl`         | Cowboy WebSocket handler -- thin wrapper: delegates the upgrade to `arizona_ws:prepare/3`, forwards frames to `arizona_socket`                                            |
-| `src/arizona_cowboy_static.erl`     | Cowboy static file handler -- serves files from a directory with content-type detection                                                                                   |
-| `src/arizona_cowboy_server.erl`     | Cowboy listener boot -- compiles routes, stashes them in persistent terms, starts a clear/TLS listener                                                                    |
-| `src/arizona_cowboy_req.erl`        | Cowboy `arizona_req` adapter -- parsing callbacks plus optional `resolve_route/3` for SPA navigate                                                                        |
-| `src/arizona_cowboy_reload.erl`     | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                     |
-| `src/arizona_roadrunner_http.erl`   | Roadrunner HTTP handler -- mirrors `arizona_cowboy_http`; delegates to `arizona_http:render/3` and translates results into roadrunner's `{Response, Req}` reply shape     |
+| `src/arizona_roadrunner_http.erl`   | Roadrunner HTTP handler -- thin wrapper: delegates to `arizona_http:render/3` and translates results into roadrunner's `{Response, Req}` reply shape                      |
 | `src/arizona_roadrunner_ws.erl`     | Roadrunner WebSocket handler -- dual behaviour (`roadrunner_handler` for upgrade + `roadrunner_ws_handler` for session); delegates to `arizona_ws:prepare/3`              |
 | `src/arizona_roadrunner_static.erl` | Roadrunner static file handler -- returns `{sendfile, ...}` for zero-copy serving with `cache-control: immutable`                                                         |
 | `src/arizona_roadrunner_server.erl` | Roadrunner listener boot -- compiles routes, stashes them for hot reload, validates TLS opts, starts a clear/TLS listener                                                 |
 | `src/arizona_roadrunner_req.erl`    | Roadrunner `arizona_req` adapter -- parsing callbacks plus `resolve_route/3` for SPA navigate; populates `request_id` from roadrunner                                     |
-| `src/arizona_roadrunner_reload.erl` | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser (roadrunner equivalent of `arizona_cowboy_reload`)                                  |
+| `src/arizona_roadrunner_reload.erl` | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                     |
 | `src/arizona_error_page.erl`        | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                  |
-| `src/arizona_app.erl`               | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches the configured listener (`adapter` opt picks roadrunner -- default -- or cowboy) |
+| `src/arizona_app.erl`               | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches the roadrunner listener                                                          |
 | `src/arizona_watcher.erl`           | File watcher gen_server -- subscribes to `fs` events, debounces, calls callback, broadcasts via `arizona_pubsub`                                                          |
 | `src/arizona_reloader.erl`          | Dev-mode hot reloader -- recompiles changed `.erl` files, broadcasts reload messages on the `arizona_reloader` pubsub topic                                               |
 | `src/arizona_pubsub.erl`            | PubSub -- thin `pg` wrapper for cross-view communication                                                                                                                  |
@@ -199,25 +192,10 @@ matches:
 {az_keydown, arizona_js:on_key(~"^[a-z0-9]$", arizona_js:push_event(~"type"))}
 ```
 
-## API -- `arizona_cowboy_router.erl`
-
-Cowboy route compilation.
-
-- `compile_routes/1` -- build Cowboy dispatch from route specs and store in `persistent_term`
-
-**Route types** (via `compile_routes/1`):
-
-- `{live, Path, Handler, Opts}` -- live route (`Opts` may contain `layouts => [{Mod, Fun}]` and
-  `bindings => map()`)
-- `{ws, Path, Opts}` -- WebSocket endpoint
-- `{asset, Path, {priv_dir, App, SubDir}}` -- static asset route from priv directory
-- `{asset, Path, {dir, Dir}}` -- static asset route from absolute directory
-- `{controller, Path, Handler, State}` -- generic Cowboy handler route
-
 ## API -- `arizona_roadrunner_router.erl`
 
-Roadrunner route compilation. Same route types as the cowboy adapter plus a `{reload, ...}`
-entry for the dev-mode SSE endpoint, and a build-opts variant for hot-reload-safe rebuilds.
+Roadrunner route compilation. A `{reload, ...}` entry adds the dev-mode SSE endpoint, and a
+build-opts variant supports hot-reload-safe rebuilds.
 
 - `compile_routes/1,2` -- build the map-shape roadrunner dispatch from route specs and store in
   `persistent_term`; the `/2` form threads build-time opts (e.g. `compress => false`) for
@@ -225,9 +203,10 @@ entry for the dev-mode SSE endpoint, and a build-opts variant for hot-reload-saf
 - `routes/1,2` -- expand specs into roadrunner's map-shape route entries without compiling
   (used by the listener boot path)
 
-**Route types** (same shapes as cowboy unless noted):
+**Route types**:
 
-- `{live, Path, Handler, Opts}` -- live route
+- `{live, Path, Handler, Opts}` -- live route (`Opts` may contain `layouts => [{Mod, Fun}]` and
+  `bindings => map()`)
 - `{ws, Path, Opts}` -- WebSocket endpoint
 - `{asset, Path, {priv_dir, App, SubDir}}` -- static asset from priv (served via zero-copy
   sendfile by `arizona_roadrunner_static`)
@@ -292,7 +271,7 @@ Simplified gen_server wrapper:
   `Handler:mount(Bindings, Request)` for views. Extracts `ViewId = maps:get(id, Bindings)`, calls
   `Handler:render(B1)` via `arizona_handler:call_render/2`, builds a snapshot via
   `arizona_render:render/2`. Returns `{ok, ViewId}` (no HTML -- SSR is handled separately by
-  `arizona_cowboy_http`)
+  `arizona_roadrunner_http`)
 - `handle_event/4` -- unified event dispatch: `handle_event(Pid, ViewId, Event, Payload)`. Checks
   views map -- if `ViewId` is a known child, dispatches to child handler; otherwise dispatches to
   root handler. Returns `{ok, Ops, Effects}`
@@ -324,9 +303,9 @@ or ops and effects are both empty.
 
 ## API -- `arizona_socket.erl`
 
-Framework-agnostic WebSocket protocol state machine. Extracted from `arizona_cowboy_ws` so any
-framework can integrate Arizona without reimplementing the wire protocol. Cowboy is an optional
-dependency -- the core engine works without it.
+Framework-agnostic WebSocket protocol state machine. The transport handler
+(`arizona_roadrunner_ws`) feeds frames in and ships return tuples out, so the wire protocol
+lives here independent of the server.
 
 - `init/4` -- `init(Handler, Bindings, Req, Opts)`. Traps exits, starts
   `arizona_live:start_link/5` (passing `self()` as transport PID, `Req`, and any `on_mount`
@@ -369,13 +348,13 @@ navigate-scoped `arizona_req` carrying the new URL. Cookies/headers on the retur
 inherited from the original upgrade Req; `path`, `bindings` (path bindings from the router), and
 `params` reflect the new path/qs.
 
-**Shipped implementation:** `arizona_cowboy_req` exports the optional `resolve_route/3` and runs
-`cowboy_router:execute/2` against the compiled dispatch stored by `arizona_cowboy_router`.
-HTTP-only adapters (no live process) can omit the callback entirely.
+**Shipped implementation:** `arizona_roadrunner_req` exports the optional `resolve_route/3` and
+runs `roadrunner_router:match/2` against the compiled dispatch stored by
+`arizona_roadrunner_router`.
 
 ## API -- `arizona_req.erl`
 
-Opaque, adapter-pluggable request abstraction. Constructed by transport adapters via
+Opaque request abstraction backed by the transport adapter. Constructed via
 `new/3(Adapter, Raw, #{method := ..., path := ...})`; other fields are lazy-loaded via the
 adapter's behaviour callbacks on first access and cached in the returned request.
 
@@ -409,19 +388,19 @@ The behaviour expects adapters to implement `parse_bindings/1`, `parse_params/1`
 
 ## API -- `arizona_http.erl`
 
-Shared HTTP render pipeline reused by every transport integration that serves an Arizona view as
-the initial page response. Wraps the native cowboy request in an `arizona_req:request()`, runs
-any route middlewares, and calls `arizona_render:render_view_to_iolist/3`. Callers translate the
-returned result into their transport-native reply shape.
+Shared HTTP render pipeline that serves an Arizona view as the initial page response. Wraps the
+native request in an `arizona_req:request()`, runs any route middlewares, and calls
+`arizona_render:render_view_to_iolist/3`. The transport handler translates the returned result
+into its native reply shape.
 
 - `render/3(Handler, Req, Opts)` -- returns one of:
-  - `{halt, cowboy_req:req()}` -- middleware halted; raw req already has a response written
+  - `{halt, Raw}` -- middleware halted; the native raw req already has a response written
   - `{redirect, redirect_status(), Location}` -- middleware halted via `arizona_req:redirect/2,3`
   - `{ok, 200, iolist()}` -- rendered page body
   - `{error, 500, iolist()}` -- rendered error page body (crash or stashed hot-reload error)
 
-Cowboy (`arizona_cowboy_http`) and Nova (`arizona_nova_live`) consume this helper and each maps
-the four result shapes into their framework's reply tuple.
+`arizona_roadrunner_http` consumes this helper and maps the four result shapes into roadrunner's
+reply tuple.
 
 ## API -- `arizona_ws.erl`
 
@@ -436,21 +415,21 @@ Transport-agnostic upgrade bootstrap for WebSocket handlers.
   - `{cont, State}` -- `State` is a map carrying `handler`, `bindings`, `on_mount`, `req`,
     `reconnect` that the caller threads into `arizona_socket:init/4`
 
-Both `arizona_cowboy_ws` and `arizona_nova_ws` collapse to a few lines that call `parse_qs`,
-invoke `arizona_ws:prepare/3`, and wire the result into their framework's callback contract.
+`arizona_roadrunner_ws` collapses to a few lines that call `parse_qs`, invoke
+`arizona_ws:prepare/3`, and wire the result into roadrunner's callback contract.
 
-## Cowboy handlers
+## Roadrunner handlers
 
-- `arizona_cowboy_http.erl` -- thin Cowboy HTTP handler. Delegates the pipeline to
-  `arizona_http:render/3` and translates its result into Cowboy's `{ok, Req, State}` reply shape
-- `arizona_cowboy_ws.erl` -- thin Cowboy WebSocket handler. Delegates the upgrade to
+- `arizona_roadrunner_http.erl` -- thin HTTP handler. Delegates the pipeline to
+  `arizona_http:render/3` and translates its result into roadrunner's `{Response, Req}` reply shape
+- `arizona_roadrunner_ws.erl` -- thin WebSocket handler. Delegates the upgrade to
   `arizona_ws:prepare/3` and forwards frames to `arizona_socket`. Translates
-  `arizona_socket:result()` to Cowboy return tuples
+  `arizona_socket:result()` to roadrunner return tuples
 
 ## Data flow
 
-**SSR (HTTP):** `arizona_cowboy_http:init/2` delegates to `arizona_http:render/3`, which wraps
-the cowboy req in an `arizona_req:request()`, runs any route middlewares
+**SSR (HTTP):** `arizona_roadrunner_http:handle/1` delegates to `arizona_http:render/3`, which wraps
+the native req in an `arizona_req:request()`, runs any route middlewares
 (`arizona_req:apply_middlewares/3`), then calls
 `arizona_render:render_view_to_iolist(Handler, Req, Opts)` where Opts may contain
 `layouts => [{Mod, Fun}]`, `bindings => map()`, and `on_mount => [...]`. `render_view_to_iolist/3`
@@ -465,7 +444,7 @@ query params) does NOT flat-merge into Bindings -- handlers reach it via `arizon
 `arizona_req:redirect/2,3` surface as a `{redirect, Status, Location}` result that the transport
 emits as a 3xx reply.
 
-**WebSocket mount:** `arizona_cowboy_ws:init/2` delegates to `arizona_ws:prepare/3`, which
+**WebSocket mount:** `arizona_roadrunner_ws:handle/1` delegates to `arizona_ws:prepare/3`, which
 reads `_az_path`/`_az_reconnect`, resolves the route, runs middlewares, and returns the state
 for the transport to hand to `arizona_socket:init/4`. The socket calls
 `arizona_live:start_link/5` (passing `self()` as transport PID, the Req, and route `on_mount`
@@ -486,7 +465,7 @@ backward compatibility. Delayed sends use `?send_after(Time, Msg)` /
 `?unsubscribe(Topic)`. After `handle_info/2` returns, the template is re-rendered and diffed, and
 ops+effects are sent as `{arizona_push, Ops, Effects}` to the transport PID.
 
-**Events:** Client sends `[target, eventName, payload]` over WebSocket. `arizona_cowboy_ws`
+**Events:** Client sends `[target, eventName, payload]` over WebSocket. `arizona_roadrunner_ws`
 dispatches to `arizona_live:handle_event/4`. The gen_server checks the views map -- if target is a
 known child view, dispatches to child; otherwise dispatches to root handler. Returns
 `{ok, Ops, Effects}`. Ops are scoped with `"viewId:target"` format. The response is sent as a JSON
@@ -671,117 +650,22 @@ via internal scoping. Child view ops use `[ChildViewId, ChildOps]` nesting and r
 Bare targets (no `:`) resolve to the view root via `document.getElementById(target)` -- used by
 `OP_REPLACE` during navigate.
 
-## Framework integration
+## Server integration
 
-Arizona is designed as a reusable library. Cowboy is an optional dependency -- the core engine
-(`arizona_template`, `arizona_render`, `arizona_diff`, `arizona_live`, `arizona_stream`,
-`arizona_pubsub`, `arizona_js`, parse transform) works without it.
+The core engine (`arizona_template`, `arizona_render`, `arizona_diff`, `arizona_live`,
+`arizona_stream`, `arizona_pubsub`, `arizona_js`, parse transform) is transport-agnostic. The
+roadrunner server is wired in through a thin layer of `arizona_*` modules that translate between
+roadrunner's callbacks and Arizona's shared pipeline:
 
-To integrate Arizona into any Erlang web framework:
+- `arizona_roadrunner_server` -- boots the listener and compiles routes
+- `arizona_roadrunner_router` -- compiles route specs into roadrunner's dispatch
+- `arizona_roadrunner_http` -- HTTP handler; delegates to `arizona_http:render/3`
+- `arizona_roadrunner_ws` -- WebSocket handler; delegates the upgrade to `arizona_ws:prepare/3`
+  and forwards frames to `arizona_socket`
+- `arizona_roadrunner_static` -- static file serving
+- `arizona_roadrunner_reload` -- dev-mode SSE reload endpoint
+- `arizona_roadrunner_req` -- implements the `arizona_req` behaviour (the request abstraction
+  consumed by handlers), including the optional `resolve_route/3` for SPA navigate
 
-**1. Add `arizona` as a dependency.** Ensure `cowboy` is NOT required (unless your framework already
-uses it).
-
-**2. Implement the `arizona_req` behaviour** to adapt your framework's native request to
-Arizona's abstraction. The adapter exposes eager `method`/`path` plus lazy `bindings`, `params`,
-`cookies`, `headers`, `body` to handlers.
-
-```erlang
--module(my_framework_req).
--behaviour(arizona_req).
--export([new/1]).
--export([parse_bindings/1, parse_params/1, parse_cookies/1, parse_headers/1, read_body/1]).
-
-new(NativeReq) ->
-    arizona_req:new(?MODULE, NativeReq, #{
-        method => my_framework:method(NativeReq),
-        path => my_framework:path(NativeReq)
-    }).
-
-parse_bindings(Req) -> my_framework:bindings(Req).
-parse_params(Req)   -> my_framework:qs(Req).
-%% ... etc
-```
-
-**3. Implement the optional `resolve_route/3` callback** on the same `arizona_req` adapter
-module for route resolution during SPA navigation. HTTP-only adapters can skip this:
-
-```erlang
-%% Adds to the same -module/-behaviour declared above.
--export([resolve_route/3]).
-
-resolve_route(Path, Qs, State) ->
-    %% Use your framework's routing to resolve Path -> {Handler, RouteOpts}
-    case my_framework_router:match(Path) of
-        {ok, Handler, RouteOpts} ->
-            NativeReq = my_framework:synthesize_navigate(State, Path, Qs),
-            ArzReq = my_framework_req:new(NativeReq),
-            {Handler, RouteOpts, ArzReq};
-        error ->
-            error({no_route, Path})
-    end.
-```
-
-**4. Handle HTTP requests** -- delegate to `arizona_http:render/3`; it wraps the native req, runs
-route middlewares, and renders the view. Translate the returned result into your framework's
-reply shape:
-
-```erlang
-handle_http_request(NativeReq) ->
-    Handler = my_page_handler,
-    Opts = #{
-        bindings => #{title => <<"Home">>},
-        layouts => [{my_layout, render}],
-        on_mount => [],
-        middlewares => []
-    },
-    case arizona_http:render(Handler, NativeReq, Opts) of
-        {halt, RawReq} ->
-            %% Middleware already wrote a reply to the native req.
-            my_framework:send_raw(RawReq);
-        {redirect, Status, Location} ->
-            {Status, #{<<"location">> => Location}, <<>>};
-        {ok, Status, Body} ->
-            {Status, #{<<"content-type">> => <<"text/html">>}, Body};
-        {error, Status, Body} ->
-            {Status, #{<<"content-type">> => <<"text/html">>}, Body}
-    end.
-```
-
-**5. Handle WebSocket connections** -- delegate the upgrade to `arizona_ws:prepare/3` and forward
-frames to `arizona_socket`:
-
-```erlang
--module(my_framework_ws).
-
-ws_init(NativeReq) ->
-    QS = my_framework:parse_qs(NativeReq),
-    case arizona_ws:prepare(QS, my_framework_adapter, NativeReq) of
-        {halt, HaltReq} ->
-            my_framework:send_raw(arizona_req:raw(HaltReq));
-        {cont, #{handler := H, bindings := IB, on_mount := OM,
-                 req := ArzReq, reconnect := R}} ->
-            Opts = #{reconnect => R, on_mount => OM},
-            handle_result(arizona_socket:init(H, IB, ArzReq, Opts), NativeReq)
-    end.
-
-ws_receive(Data, #{socket := Socket} = State) ->
-    handle_result(arizona_socket:handle_in(Data, Socket), State).
-
-ws_info(Msg, #{socket := Socket} = State) ->
-    handle_result(arizona_socket:handle_info(Msg, Socket), State).
-
-handle_result({ok, Socket}, State) ->
-    {ok, State#{socket => Socket}};
-handle_result({reply, Data, Socket}, State) ->
-    {reply, Data, State#{socket => Socket}};
-handle_result({close, Code, Reason, _Socket}, State) ->
-    {close, Code, Reason, State}.
-```
-
-**6. Serve Arizona's client JS** from `priv/static/assets/js/arizona.min.js` through your
-framework's static file handler.
-
-The shipped Cowboy integration (`arizona_cowboy_ws`, `arizona_cowboy_http`,
-`arizona_cowboy_req`, `arizona_cowboy_router`, `arizona_cowboy_server`) serves as a reference
-implementation.
+The `arizona_req` behaviour is the boundary between the server and the engine: handlers and the
+shared pipeline only ever see an `arizona_req:request()`, never roadrunner's native request type.

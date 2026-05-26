@@ -3,7 +3,7 @@
 The live process: one `gen_server` per connected client.
 
 Holds the root handler's bindings and snapshot, plus a `views` map of
-nested stateful children. Bridges the transport (typically a Cowboy
+nested stateful children. Bridges the transport (the roadrunner
 WebSocket handler) with the render and diff pipeline.
 
 ## Lifecycle

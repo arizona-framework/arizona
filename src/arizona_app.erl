@@ -12,10 +12,9 @@ listener.
 ```erlang
 {arizona, [
     {server, #{
-        adapter => roadrunner,                          %% roadrunner (default) | cowboy
         scheme => http,                                 %% http | https
         transport_opts => [{port, 4040}],               %% port shorthand
-        proto_opts => #{                                %% adapter-specific opts
+        proto_opts => #{                                %% roadrunner protocol opts
             max_clients => 200,
             max_content_length => 10485760
         },
@@ -29,8 +28,7 @@ listener.
 ```
 
 The `server` key is optional: if absent, only the supervisor starts
-(useful for tests that launch listeners manually). When present and
-no `adapter` is specified, roadrunner is used.
+(useful for tests that launch listeners manually).
 """.
 -behaviour(application).
 
@@ -70,13 +68,14 @@ start(_Type, _Args) ->
     State :: term().
 stop(_State) ->
     case application:get_env(arizona, server) of
-        {ok, ServerOpts} ->
-            ServerMod = adapter_module(ServerOpts),
-            _ = ServerMod:stop(?LISTENER);
+        {ok, _ServerOpts} ->
+            case arizona_roadrunner_server:stop(?LISTENER) of
+                ok -> ok;
+                {error, not_found} -> ok
+            end;
         undefined ->
             ok
-    end,
-    ok.
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -85,25 +84,11 @@ stop(_State) ->
 maybe_start_server() ->
     case application:get_env(arizona, server) of
         {ok, ServerOpts} ->
-            ServerMod = adapter_module(ServerOpts),
-            ok = ensure_adapter_app(ServerMod),
-            case ServerMod:start(?LISTENER, maps:remove(adapter, ServerOpts)) of
+            {ok, _} = application:ensure_all_started(roadrunner),
+            case arizona_roadrunner_server:start(?LISTENER, ServerOpts) of
                 {ok, _} -> ok;
                 {error, _} = Err -> Err
             end;
         undefined ->
             ok
     end.
-
-adapter_module(ServerOpts) ->
-    case maps:get(adapter, ServerOpts, roadrunner) of
-        roadrunner -> arizona_roadrunner_server;
-        cowboy -> arizona_cowboy_server
-    end.
-
-ensure_adapter_app(arizona_roadrunner_server) ->
-    {ok, _} = application:ensure_all_started(roadrunner),
-    ok;
-ensure_adapter_app(arizona_cowboy_server) ->
-    {ok, _} = application:ensure_all_started(cowboy),
-    ok.

@@ -2,7 +2,7 @@
 -moduledoc """
 Bridges a WebSocket frame stream with the live process.
 
-The transport layer (typically `arizona_cowboy_ws`) creates a socket
+The transport layer (`arizona_roadrunner_ws`) creates a socket
 via `init/4`, then forwards inbound text frames to `handle_in/2` and
 inbox messages to `handle_info/2`. Each call returns a result tuple
 that the transport translates into WebSocket frames or close codes.

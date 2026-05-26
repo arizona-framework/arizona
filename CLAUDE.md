@@ -2,8 +2,7 @@
 
 Erlang/OTP real-time web framework with server-side diffing. The project is in the `0.x` series -- the API may change between minor versions, so changes don't need to preserve backward compatibility for now.
 
-Dependencies: `roadrunner` (default HTTP/WS server) and `cowboy` (alternate) -- pick one via
-the `adapter` opt; `fs` (file system events for dev-mode watcher).
+Dependencies: `roadrunner` (HTTP/WS server); `fs` (file system events for dev-mode watcher).
 
 ## Build & Test
 
