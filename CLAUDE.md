@@ -70,6 +70,25 @@ handle_event(~"inc", _P, B) ->
 
 `push_event` auto-collects payload from inputs/forms. Explicit payload merges on top. Op codes in `include/arizona_effect.hrl`.
 
+## Client-owned slots -- `?local`
+
+`?local(Key, Init)` declares a slot the server renders **once** at SSR and then **never diffs** -- the browser owns the value (keyed by `Key`) and updates it locally with **no WebSocket round-trip**. For UI-only state (dialog open/close, tabs, toggles). It binds either content (must be the element's sole child) or an attribute value:
+
+```erlang
+{'span', [], [?local(~"title", ~"Hello")]}            %% content
+{'dialog', [{open, ?local(~"modal_open", false)}], [...]} %% attribute
+```
+
+Update it from an event attribute (or handler effect) -- never reaches the server:
+
+- `arizona_js:set(Key, Value)` -- closest view of the trigger
+- `arizona_js:set(ViewId, Key, Value)` -- a named view
+- `arizona_js:set_all(Key, Value)` -- every view
+
+Client JS: `arizona.set(viewId, key, value)`, `arizona.setAll(key, value)`, `arizona.get(key)` / `arizona.get(viewId, key)`.
+
+**Caveat:** a `?local` value survives normal per-slot diffs, but resets to its SSR initial if an enclosing region is re-rendered wholesale (`OP_UPDATE`/`OP_REPLACE`/`?each` swap) or on a forced reconnect. The server never reads it back -- to use it server-side, send it in a `push_event` payload. See [docs/architecture.md](docs/architecture.md).
+
 ## What's missing
 
 ### Engine

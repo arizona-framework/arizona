@@ -55,6 +55,7 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 -export([on_key/2]).
 -export([set/2]).
 -export([set/3]).
+-export([set_all/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -82,7 +83,8 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     reload/0,
     on_key/2,
     set/2,
-    set/3
+    set/3,
+    set_all/2
 ]).
 
 %% --------------------------------------------------------------------
@@ -226,23 +228,31 @@ on_key(Key, [_ | _] = Cmds) ->
     {arizona_effect, [?EFFECT_ON_KEY, encode_key(Key), [C || {arizona_effect, C} <:- Cmds]]}.
 
 -doc """
-Sets a client-owned binding (`?bind`) to `Value` in the closest view of the
-triggering element, updating every slot bound to `Key` locally with no server
+Sets a client-owned slot (`?local`) to `Value` in the **closest view** of the
+triggering element, updating every slot with `Key` locally with no server
 round-trip. Use inside web event attributes like `az-click`.
 """.
 -spec set(Key, Value) -> arizona_effect:cmd() when
     Key :: binary(),
-    Value :: binary() | boolean().
-set(Key, Value) -> {arizona_effect, [?EFFECT_SET_BINDING, Key, Value]}.
+    Value :: binary() | boolean() | number().
+set(Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value]}.
 
 -doc """
-Like `set/2` but targets the binding in the view identified by `ViewId`.
+Like `set/2` but targets the slot in the view identified by `ViewId`.
 """.
 -spec set(ViewId, Key, Value) -> arizona_effect:cmd() when
     ViewId :: binary(),
     Key :: binary(),
-    Value :: binary() | boolean().
-set(ViewId, Key, Value) -> {arizona_effect, [?EFFECT_SET_BINDING, Key, Value, ViewId]}.
+    Value :: binary() | boolean() | number().
+set(ViewId, Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value, ViewId]}.
+
+-doc """
+Like `set/2` but updates the slot in **every** view on the page (document-wide).
+""".
+-spec set_all(Key, Value) -> arizona_effect:cmd() when
+    Key :: binary(),
+    Value :: binary() | boolean() | number().
+set_all(Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value, true]}.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -275,10 +285,13 @@ reload_test() ->
     {arizona_effect, [?EFFECT_RELOAD]} = reload().
 
 set_test() ->
-    {arizona_effect, [?EFFECT_SET_BINDING, ~"k", ~"v"]} = set(~"k", ~"v").
+    {arizona_effect, [?EFFECT_SET_LOCAL, ~"k", ~"v"]} = set(~"k", ~"v").
 
 set_view_test() ->
-    {arizona_effect, [?EFFECT_SET_BINDING, ~"k", true, ~"view1"]} = set(~"view1", ~"k", true).
+    {arizona_effect, [?EFFECT_SET_LOCAL, ~"k", true, ~"view1"]} = set(~"view1", ~"k", true).
+
+set_all_test() ->
+    {arizona_effect, [?EFFECT_SET_LOCAL, ~"k", ~"v", true]} = set_all(~"k", ~"v").
 
 builders_test() ->
     ?assertEqual({arizona_effect, [?EFFECT_SHOW, ~"#m"]}, show(~"#m")),

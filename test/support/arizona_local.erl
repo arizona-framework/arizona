@@ -1,16 +1,16 @@
--module(arizona_bind).
+-module(arizona_local).
 -include("arizona_view.hrl").
 -export([mount/2, render/1]).
 
 -spec mount(az:bindings(), az:request()) -> az:mount_ret().
 mount(Bindings, _Req) ->
-    {#{id => maps:get(id, Bindings, ~"bind_demo")}, #{}}.
+    {#{id => maps:get(id, Bindings, ~"local_demo")}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html(
         {main, [{id, ?get(id)}], [
-            {h1, [], [~"Client-owned slots (?bind)"]},
+            {h1, [], [~"Client-owned slots (?local)"]},
             {p, [],
                 ~"Every control below updates the DOM with no WebSocket frame (watch the WS tab)."},
 
@@ -26,8 +26,8 @@ render(Bindings) ->
                         ]}
                     ],
                     [~"Open dialog"]},
-                {dialog, [{open, ?bind(~"dialog_open", false)}], [
-                    {h3, [], [{span, [], [?bind(~"dialog_title", ~"")]}]},
+                {dialog, [{open, ?local(~"dialog_open", false)}], [
+                    {h3, [], [{span, [], [?local(~"dialog_title", ~"")]}]},
                     {p, [], [~"Opened and closed with zero server round-trips."]},
                     {button, [{az_click, arizona_js:set(~"dialog_open", false)}], [~"Close"]}
                 ]}
@@ -45,7 +45,7 @@ render(Bindings) ->
                     .tabs[data-active=home] .tab-home,
                     .tabs[data-active=settings] .tab-settings { font-weight: bold; }
                     """},
-                {'div', [{class, ~"tabs"}, {'data-active', ?bind(~"tab", ~"home")}], [
+                {'div', [{class, ~"tabs"}, {'data-active', ?local(~"tab", ~"home")}], [
                     {button,
                         [{class, ~"tab tab-home"}, {az_click, arizona_js:set(~"tab", ~"home")}], [
                             ~"Home"

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { expectStaysConnected } from '../utils/helpers.js';
 
 // ---------------------------------------------------------------------------
-// Client-owned slots (?bind): the browser owns these slots and updates them
+// Client-owned slots (?local): the browser owns these slots and updates them
 // locally -- no WebSocket round-trip. The server renders the initial value
 // once and never diffs them.
 // ---------------------------------------------------------------------------
@@ -10,13 +10,13 @@ import { expectStaysConnected } from '../utils/helpers.js';
 const wsReady = (page) =>
     page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
 
-const dialog = (page) => page.locator('#bind_demo dialog');
-const dialogTitle = (page) => page.locator('#bind_demo dialog h3 span');
+const dialog = (page) => page.locator('#local_demo dialog');
+const dialogTitle = (page) => page.locator('#local_demo dialog h3 span');
 const openBtn = (page) => page.getByRole('button', { name: 'Open dialog' });
 const closeBtn = (page) => page.getByRole('button', { name: 'Close' });
-const tabs = (page) => page.locator('#bind_demo .tabs');
-const homePanel = (page) => page.locator('#bind_demo .panel-home');
-const settingsPanel = (page) => page.locator('#bind_demo .panel-settings');
+const tabs = (page) => page.locator('#local_demo .tabs');
+const homePanel = (page) => page.locator('#local_demo .panel-home');
+const settingsPanel = (page) => page.locator('#local_demo .panel-settings');
 const homeTab = (page) => page.getByRole('button', { name: 'Home' });
 const settingsTab = (page) => page.getByRole('button', { name: 'Settings' });
 
@@ -24,15 +24,15 @@ const settingsTab = (page) => page.getByRole('button', { name: 'Settings' });
 // SSR -- initial render
 // ---------------------------------------------------------------------------
 
-test.describe('?bind -- SSR', () => {
+test.describe('?local -- SSR', () => {
     test('dialog starts closed (open attribute absent)', async ({ page }) => {
-        await page.goto('/bind');
+        await page.goto('/local');
         await expect(dialog(page)).not.toHaveAttribute('open');
         await expect(dialog(page)).toBeHidden();
     });
 
     test('tabs default to home: home panel visible, settings hidden', async ({ page }) => {
-        await page.goto('/bind');
+        await page.goto('/local');
         await expect(tabs(page)).toHaveAttribute('data-active', 'home');
         await expect(homePanel(page)).toBeVisible();
         await expect(settingsPanel(page)).toBeHidden();
@@ -43,9 +43,9 @@ test.describe('?bind -- SSR', () => {
 // Dialog -- bound attribute (open) + bound content (title)
 // ---------------------------------------------------------------------------
 
-test.describe('?bind -- dialog', () => {
+test.describe('?local -- dialog', () => {
     test('opening sets the open attribute and the title content', async ({ page }) => {
-        await page.goto('/bind');
+        await page.goto('/local');
         await wsReady(page);
         await openBtn(page).click();
         await expect(dialog(page)).toHaveAttribute('open', '');
@@ -54,7 +54,7 @@ test.describe('?bind -- dialog', () => {
     });
 
     test('closing removes the open attribute', async ({ page }) => {
-        await page.goto('/bind');
+        await page.goto('/local');
         await wsReady(page);
         await openBtn(page).click();
         await expect(dialog(page)).toBeVisible();
@@ -68,9 +68,9 @@ test.describe('?bind -- dialog', () => {
 // Tabs -- one bound container attribute drives CSS
 // ---------------------------------------------------------------------------
 
-test.describe('?bind -- tabs', () => {
+test.describe('?local -- tabs', () => {
     test('switching tabs flips data-active and panel visibility', async ({ page }) => {
-        await page.goto('/bind');
+        await page.goto('/local');
         await wsReady(page);
 
         await settingsTab(page).click();
@@ -89,9 +89,9 @@ test.describe('?bind -- tabs', () => {
 // No server round-trip
 // ---------------------------------------------------------------------------
 
-test.describe('?bind -- client-only', () => {
-    test('updating a binding sends no server message and stays connected', async ({ page }) => {
-        await page.goto('/bind');
+test.describe('?local -- client-only', () => {
+    test('updating a slot sends no server message and stays connected', async ({ page }) => {
+        await page.goto('/local');
         await wsReady(page);
 
         // Count any server -> client message that arrives after the click.
@@ -113,6 +113,23 @@ test.describe('?bind -- client-only', () => {
         });
 
         const msgs = await page.evaluate(() => /** @type {any} */ (window).__msgs);
-        expect(msgs, 'no server round-trip for ?bind updates').toBe(0);
+        expect(msgs, 'no server round-trip for ?local updates').toBe(0);
+    });
+
+    test('a forced reconnect resets slots to their SSR initial', async ({ page }) => {
+        await page.goto('/local');
+        await wsReady(page);
+
+        // Open the dialog locally (no round-trip).
+        await openBtn(page).click();
+        await expect(dialog(page)).toBeVisible();
+
+        // close(4000) is neither 1000 (normal, no reconnect) nor 4500 (crash):
+        // the client auto-reconnects and the server fresh-mounts the view (the
+        // old live process died -- drain is server-initiated only), so client-owned
+        // slots reset to their SSR initial (dialog closed).
+        await page.evaluate(() => window._ws.close(4000));
+        await wsReady(page);
+        await expect(dialog(page)).toBeHidden();
     });
 });

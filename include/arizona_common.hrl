@@ -20,5 +20,5 @@
 -define(stateless(Module, Fun, Props), arizona_template:stateless(Module, Fun, Props)).
 
 %% Client-owned slot -- server renders Init once and never diffs it; the browser
-%% owns the value via the bind Key (parse transform intercepts the expanded call)
--define(bind(Key, Init), arizona_template:bind(Key, Init)).
+%% owns the value via the local Key (parse transform intercepts the expanded call)
+-define(local(Key, Init), arizona_template:local(Key, Init)).

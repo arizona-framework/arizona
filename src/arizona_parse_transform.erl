@@ -232,16 +232,18 @@ format_error({invalid_child, ValueStr}) ->
             [ValueStr]
         )
     );
-format_error(bind_key_not_literal) ->
-    "?bind/2 key must be a literal binary";
-format_error(bind_content_not_sole_child) ->
-    "a content ?bind must be the sole child of its element -- wrap it in "
-    "its own element to bind alongside other content";
-format_error(bind_in_nodiff) ->
-    "?bind cannot be used in an az-nodiff template -- the element has no "
+format_error(local_key_not_literal) ->
+    "?local/2 key must be a literal binary";
+format_error(local_content_not_sole_child) ->
+    "a content ?local must be the sole child of its element -- wrap it in "
+    "its own element to combine it with other content";
+format_error(local_in_nodiff) ->
+    "?local cannot be used in an az-nodiff template -- the element has no "
     "diff target for the client to address";
-format_error(bind_html_only) ->
-    "?bind is only supported in ?html templates";
+format_error(local_html_only) ->
+    "?local is only supported in ?html templates";
+format_error(local_key_reused) ->
+    "a ?local key cannot bind both content and an attribute on the same element";
 format_error(cross_target_nesting) ->
     "cannot nest ?html and ?native in one template -- they produce "
     "incompatible statics. Render cross-target content via a separate "
@@ -614,7 +616,7 @@ extract_element(Node) ->
 compile_element(Tag, Attrs0, Children, Line, State0) ->
     Backend = State0#state.backend,
     Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
-    Attrs = maybe_inject_bind_descriptor(Backend, Attrs1, Children, Line, State0),
+    Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, Line, State0),
     State1 = State0#state{root = false},
     HasDyn = has_dynamic_attr(Attrs) orelse has_dynamic_child(Children),
     {ElemAz, State2} =
@@ -693,9 +695,9 @@ compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
 %% Emit a dynamic attribute value: a folded arizona_js command becomes a static,
 %% otherwise the backend bakes the name and the value flushes as a dynamic.
 compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
-    case is_bind_marker(ValueAST) of
+    case is_local_marker(ValueAST) of
         true ->
-            compile_bound_attr(Backend, NameBin, ValueAST, ElemAz, State0);
+            compile_local_attr(Backend, NameBin, ValueAST, ElemAz, State0);
         false ->
             compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0)
     end.
@@ -721,86 +723,99 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
             flush(State1, DynAST)
     end.
 
-%% Emit a bound attribute (`?bind` in attribute-value position): a dynamic whose
-%% evaluated value is the bind-map (with target = {attr, Name}). It is never the
-%% normal `{attr, Name, Fun}` shape -- that would store `{attr, Name, Map}` and
-%% the per-dynamic `#{diff := false}` skip in arizona_diff would not match it.
-compile_bound_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
+%% Emit a client-owned attribute slot (`?local` in attribute-value position): a
+%% dynamic whose evaluated value is the local-map (with target = {attr, Name}).
+%% It is never the normal `{attr, Name, Fun}` shape -- that would store
+%% `{attr, Name, Map}` and the per-dynamic `#{diff := false}` skip in arizona_diff
+%% would not match it.
+compile_local_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
     Module = State0#state.module,
     State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
     AzBin = integer_to_binary(ElemAz),
-    Expr = bound_attr_expr_ast(NameBin, ValueAST),
+    Expr = local_attr_expr_ast(NameBin, ValueAST),
     DynAST = make_text_dynamic_ast(AzBin, Expr, Module, line(ValueAST)),
     flush(State1, DynAST).
 
-%% AST for `(arizona_template:bind(Key, Init))#{target => {attr, Name}}` -- stamps
-%% the attribute name/target onto the bind-map the macro call produces.
-bound_attr_expr_ast(NameBin, BindCallAST) ->
+%% AST for `(arizona_template:local(Key, Init))#{target => {attr, Name}}` -- stamps
+%% the attribute name/target onto the local-map the macro call produces.
+local_attr_expr_ast(NameBin, LocalCallAST) ->
     TargetAST = {tuple, 0, [{atom, 0, attr}, ast_binary(NameBin)]},
-    {map, 0, BindCallAST, [{map_field_assoc, 0, {atom, 0, target}, TargetAST}]}.
+    {map, 0, LocalCallAST, [{map_field_assoc, 0, {atom, 0, target}, TargetAST}]}.
 
-is_bind_marker(
-    {call, _, {remote, _, {atom, _, arizona_template}, {atom, _, bind}}, [_Key, _Init]}
-) ->
+%% `?local` expands to `arizona_template:local/2`; `az:local/2` is the facade.
+%% Recognize both so the macro and a direct facade call both work in templates.
+is_local_marker(
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, local}}, [_Key, _Init]}
+) when Mod =:= arizona_template; Mod =:= az ->
     true;
-is_bind_marker(_) ->
+is_local_marker(_) ->
     false.
 
-bind_key({call, _, _, [KeyAST, _Init]}, Line) ->
+local_key({call, _, _, [KeyAST, _Init]}, Line) ->
     case is_static_binary(KeyAST) of
         true -> extract_binary_value(KeyAST);
-        false -> parse_error(bind_key_not_literal, Line)
+        false -> parse_error(local_key_not_literal, Line)
     end.
 
-%% Scan an element's attrs + direct children for ?bind markers and, if any,
-%% inject a static `az-bind` descriptor attribute the client scans on the DOM.
+%% Scan an element's attrs + direct children for ?local markers and, if any,
+%% inject a static `az-local` descriptor attribute the client scans on the DOM.
 %% The descriptor JSON (`#{a => #{AttrName => Key}, c => ContentKey}`) is built
 %% and HTML-attribute-escaped at compile time (reusing arizona_effect:escape_attr/1).
-maybe_inject_bind_descriptor(Backend, Attrs, Children, Line, State) ->
-    AttrBinds = collect_attr_binds(Backend, Attrs, Line),
-    ContentKey = collect_content_bind(Children, Line),
-    case map_size(AttrBinds) > 0 orelse ContentKey =/= none of
+maybe_inject_local_descriptor(Backend, Attrs, Children, Line, State) ->
+    AttrLocals = collect_attr_locals(Backend, Attrs, Line),
+    ContentKey = collect_content_local(Children, Line),
+    case map_size(AttrLocals) > 0 orelse ContentKey =/= none of
         false ->
             Attrs;
         true ->
-            assert_bind_supported(Backend, State, Line),
-            Desc = build_bind_descriptor(AttrBinds, ContentKey),
+            assert_local_supported(Backend, State, Line),
+            assert_no_key_reuse(AttrLocals, ContentKey, Line),
+            Desc = build_local_descriptor(AttrLocals, ContentKey),
             Escaped = arizona_effect:escape_attr(iolist_to_binary(json:encode(Desc))),
-            [{tuple, 0, [ast_binary(~"az-bind"), ast_binary(Escaped)]} | Attrs]
+            [{tuple, 0, [ast_binary(~"az-local"), ast_binary(Escaped)]} | Attrs]
     end.
 
-assert_bind_supported(Backend, State, Line) ->
+assert_local_supported(Backend, State, Line) ->
     case Backend of
         arizona_html -> ok;
-        _ -> parse_error(bind_html_only, Line)
+        _ -> parse_error(local_html_only, Line)
     end,
     case State#state.nodiff of
         false -> ok;
-        true -> parse_error(bind_in_nodiff, Line)
+        true -> parse_error(local_in_nodiff, Line)
     end.
 
-build_bind_descriptor(AttrBinds, ContentKey) ->
+%% A key must not bind both content and an attribute on one element: a single
+%% `set` would write the value into the content AND the attribute, almost always
+%% a mistake.
+assert_no_key_reuse(AttrLocals, ContentKey, Line) ->
+    case ContentKey =/= none andalso lists:member(ContentKey, maps:values(AttrLocals)) of
+        true -> parse_error(local_key_reused, Line);
+        false -> ok
+    end.
+
+build_local_descriptor(AttrLocals, ContentKey) ->
     Desc0 =
-        case map_size(AttrBinds) of
+        case map_size(AttrLocals) of
             0 -> #{};
-            _ -> #{~"a" => AttrBinds}
+            _ -> #{~"a" => AttrLocals}
         end,
     case ContentKey of
         none -> Desc0;
         _ -> Desc0#{~"c" => ContentKey}
     end.
 
-collect_attr_binds(Backend, Attrs, Line) ->
+collect_attr_locals(Backend, Attrs, Line) ->
     #{
-        extract_attr_name(Backend, NameAST) => bind_key(ValueAST, Line)
-     || {tuple, _, [NameAST, ValueAST]} <- Attrs, is_bind_marker(ValueAST)
+        extract_attr_name(Backend, NameAST) => local_key(ValueAST, Line)
+     || {tuple, _, [NameAST, ValueAST]} <- Attrs, is_local_marker(ValueAST)
     }.
 
-collect_content_bind(Children, Line) ->
-    case [C || C <- Children, is_bind_marker(C)] of
+collect_content_local(Children, Line) ->
+    case [C || C <- Children, is_local_marker(C)] of
         [] -> none;
-        [Marker] when Children =:= [Marker] -> bind_key(Marker, Line);
-        _ -> parse_error(bind_content_not_sole_child, Line)
+        [Marker] when Children =:= [Marker] -> local_key(Marker, Line);
+        _ -> parse_error(local_content_not_sole_child, Line)
     end.
 
 compile_children(Children, ElemAz, State) ->

@@ -192,6 +192,57 @@ matches:
 {az_keydown, arizona_js:on_key(~"^[a-z0-9]$", arizona_js:push_event(~"type"))}
 ```
 
+## Client-owned slots -- `?local`
+
+A `?local(Key, Init)` slot is **static to the server, dynamic to the client**: the server
+renders `Init` once at SSR and marks the slot `diff => false` so it is never patched; the
+browser owns the value (keyed by `Key`) and mutates it locally with **no WebSocket
+round-trip**. For UI-only state (dialog open/close, tabs, toggles) the server doesn't need.
+
+Authoring (`?local` = `arizona_template:local/2`, also `az:local/2`):
+
+```erlang
+{'span', [], [?local(~"title", ~"Hello")]}                 %% content (sole child)
+{'dialog', [{open, ?local(~"modal_open", false)}], [...]}  %% boolean attribute
+{'div', [{'data-active', ?local(~"tab", ~"home")}], [...]} %% valued attribute (CSS-driven tabs)
+```
+
+Compile-time constraints: `Key` must be a literal binary; a content `?local` must be the
+element's **sole child**; a key can't bind both content and an attribute on one element;
+not allowed under `az-nodiff` or in `?native` templates.
+
+Mechanism: `arizona_template:local/2` returns `#{diff => false, az_local => Key, v => Init}`
+(attributes add `target => {attr, Name}`). `eval` preserves it; `arizona_diff` skips it via
+the existing per-dynamic `#{diff := false}` clause; `arizona_render` unwraps it. The parse
+transform bakes a self-describing `az-local` descriptor attribute (escaped JSON
+`{c: contentKey, a: {attrName: key}}`) onto the element; the client scans `[az-local]` live
+(no persistent index) to resolve `Key` to DOM slots.
+
+Updating (event attributes / handler effects via `arizona_js`; never sent to the server --
+op `?EFFECT_SET_LOCAL`):
+
+| Builder | Scope |
+| --- | --- |
+| `arizona_js:set(Key, Value)` | closest view of the trigger (markup-only) |
+| `arizona_js:set(ViewId, Key, Value)` | a named view |
+| `arizona_js:set_all(Key, Value)` | every view (document-wide) |
+
+Client JS API: `arizona.set(viewId, key, value)`, `arizona.setAll(key, value)`,
+`arizona.get(key)` / `arizona.get(viewId, key)`. Content writes are **text-only** (a `<` in
+a value renders as text, never HTML -- no injection); attribute writes reuse
+`setAttribute`/`removeAttribute` (with `value`/`checked` property sync): boolean `true` =>
+present, `false` => absent.
+
+Caveats (by design):
+
+- **Wholesale re-render resets it.** A `?local` value survives normal per-slot diffs, but
+  an enclosing region re-rendered as a unit (`OP_UPDATE` innerHTML, `OP_REPLACE`, an `?each`
+  item swap, a conditional template switch) recreates the slot at its SSR initial.
+- **Forced reconnect resets it.** A non-1000 socket close fresh-mounts the view.
+- **Server never reads the value.** To use it server-side, read it client-side
+  (`arizona.get`) and include it in a `push_event` payload -- auto-collection ignores `[az-local]`.
+- **No JS = frozen at initial**; `get` returns strings (no type preservation).
+
 ## API -- `arizona_roadrunner_router.erl`
 
 Roadrunner route compilation. A `{reload, ...}` entry adds the dev-mode SSE endpoint, and a

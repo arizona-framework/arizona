@@ -24,8 +24,8 @@ start() ->
             bindings => #{title => <<"Chat">>},
             layouts => Layouts
         }},
-        {live, <<"/bind">>, arizona_bind, #{
-            bindings => #{title => <<"Bind">>},
+        {live, <<"/local">>, arizona_local, #{
+            bindings => #{title => <<"Local">>},
             layouts => Layouts
         }},
         {live, <<"/crashable">>, arizona_crashable, #{layouts => Layouts}},

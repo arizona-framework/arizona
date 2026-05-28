@@ -477,8 +477,8 @@ function updateMarkerContent(startMarker, value) {
 }
 
 // ---------------------------------------------------------------------------
-// Client-owned slots (?bind): the browser owns a slot the server renders once
-// and never diffs. Discovery is self-describing -- elements carry an `az-bind`
+// Client-owned slots (?local): the browser owns a slot the server renders once
+// and never diffs. Discovery is self-describing -- elements carry an `az-local`
 // descriptor (JSON: {c: contentKey, a: {attrName: key}}) -- so set/get query
 // the live DOM directly; no persistent index, nothing to sync across renders.
 // ---------------------------------------------------------------------------
@@ -486,7 +486,7 @@ function updateMarkerContent(startMarker, value) {
 /**
  * Replace the content between <!--az:X--> and <!--/az--> with a TEXT node.
  * Unlike updateMarkerContent it never interprets the value as HTML, so a
- * client-set binding containing `<` can't inject markup.
+ * client-set value containing `<` can't inject markup.
  * @param {Comment} startMarker
  * @param {*} value
  */
@@ -506,7 +506,7 @@ function setMarkerText(startMarker, value) {
  * @param {'content'|string[]} target -- 'content' or ['attr', name]
  * @param {*} value
  */
-function writeBoundValue(el, target, value) {
+function writeLocalValue(el, target, value) {
     if (target === 'content') {
         const marker = findMarker(el, el.getAttribute('az') || '');
         if (marker) setMarkerText(marker, value);
@@ -528,7 +528,7 @@ function writeBoundValue(el, target, value) {
  * @param {'content'|string[]} target
  * @returns {*}
  */
-function readBoundValue(el, target) {
+function readLocalValue(el, target) {
     if (target === 'content') {
         const marker = findMarker(el, el.getAttribute('az') || '');
         if (!marker) return el.textContent;
@@ -554,10 +554,10 @@ function readBoundValue(el, target) {
  * @param {string|null} viewId
  * @param {(el: Element, target: 'content'|string[]) => void} fn
  */
-function forEachBound(root, key, viewId, fn) {
+function forEachLocal(root, key, viewId, fn) {
     /** @param {Element} el */
     const visit = (el) => {
-        const desc = el.getAttribute('az-bind');
+        const desc = el.getAttribute('az-local');
         if (!desc) return;
         if (viewId !== null && resolveTarget(el) !== viewId) return;
         // The descriptor is always framework-generated valid JSON.
@@ -569,31 +569,35 @@ function forEachBound(root, key, viewId, fn) {
             }
         }
     };
-    if (root instanceof Element && root.hasAttribute('az-bind')) visit(root);
-    root.querySelectorAll('[az-bind]').forEach(visit);
+    if (root instanceof Element && root.hasAttribute('az-local')) visit(root);
+    root.querySelectorAll('[az-local]').forEach(visit);
 }
 
 /**
- * Set a client-owned binding locally (no server round-trip).
- *   set(key, value)          -- all views
- *   set(viewId, key, value)  -- one view
- * @param {string} a
- * @param {*} b
- * @param {*} [c]
+ * Set a client-owned slot (`?local`) in one view, locally -- no server
+ * round-trip. Use setAll for document-wide.
+ * @param {string} viewId
+ * @param {string} key
+ * @param {*} value
  */
-function set(a, b, c) {
-    const scoped = c !== undefined;
-    const viewId = scoped ? a : null;
-    const key = scoped ? b : a;
-    const value = scoped ? c : b;
-    const root = viewId ? document.getElementById(viewId) : document;
+function set(viewId, key, value) {
+    const root = document.getElementById(viewId);
     if (!root) return;
-    forEachBound(root, key, viewId, (el, target) => writeBoundValue(el, target, value));
+    forEachLocal(root, key, viewId, (el, target) => writeLocalValue(el, target, value));
 }
 
 /**
- * Read a client-owned binding from the DOM.
- *   get(key) | get(viewId, key)
+ * Set a client-owned slot (`?local`) in every view on the page (document-wide).
+ * @param {string} key
+ * @param {*} value
+ */
+function setAll(key, value) {
+    forEachLocal(document, key, null, (el, target) => writeLocalValue(el, target, value));
+}
+
+/**
+ * Read a client-owned slot (`?local`) from the DOM.
+ *   get(key) -- first match anywhere | get(viewId, key) -- one view
  * @param {string} a
  * @param {string} [b]
  * @returns {*}
@@ -606,8 +610,8 @@ function get(a, b) {
     if (!root) return undefined;
     /** @type {*} */
     let result;
-    forEachBound(root, key, viewId, (el, target) => {
-        if (result === undefined) result = readBoundValue(el, target);
+    forEachLocal(root, key, viewId, (el, target) => {
+        if (result === undefined) result = readLocalValue(el, target);
     });
     return result;
 }
@@ -908,7 +912,7 @@ const JS_PUSH_EVENT = 0,
     JS_SET_TITLE = 14,
     JS_RELOAD = 15,
     JS_ON_KEY = 16,
-    JS_SET_BINDING = 17;
+    JS_SET_LOCAL = 17;
 
 /**
  * If `sel` matches an element, call `fn` with it cast to `HTMLElement`.
@@ -1011,11 +1015,17 @@ function executeJS(el, event, cmds) {
                     executeJS(el, event, cmd[2]);
                 break;
             }
-            case JS_SET_BINDING: {
-                // Client-owned slot update -- resolve the closest view of the
-                // trigger (or the explicit viewId in cmd[3]); never sent to the server.
-                const viewId = cmd.length > 3 ? cmd[3] : resolveTarget(el);
-                if (viewId) set(viewId, cmd[1], cmd[2]);
+            case JS_SET_LOCAL: {
+                // Client-owned slot update -- never sent to the server. cmd[3]:
+                // absent => closest view (the trigger); a viewId string => that
+                // view; true => all views.
+                const scope = cmd[3];
+                if (scope === true) {
+                    setAll(cmd[1], cmd[2]);
+                } else {
+                    const viewId = scope ?? resolveTarget(el);
+                    if (viewId) set(viewId, cmd[1], cmd[2]);
+                }
                 break;
             }
         }
@@ -1504,4 +1514,5 @@ export {
     restoreFormState,
     saveFormState,
     set,
+    setAll,
 };
