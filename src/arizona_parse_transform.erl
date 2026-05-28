@@ -234,9 +234,6 @@ format_error({invalid_child, ValueStr}) ->
     );
 format_error(local_key_not_literal) ->
     "?local/2 key must be a literal binary";
-format_error(local_content_not_sole_child) ->
-    "a content ?local must be the sole child of its element -- wrap it in "
-    "its own element to combine it with other content";
 format_error(local_in_nodiff) ->
     "?local cannot be used in an az-nodiff template -- the element has no "
     "diff target for the client to address";
@@ -763,14 +760,14 @@ local_key({call, _, _, [KeyAST, _Init]}, Line) ->
 %% and HTML-attribute-escaped at compile time (reusing arizona_effect:escape_attr/1).
 maybe_inject_local_descriptor(Backend, Attrs, Children, Line, State) ->
     AttrLocals = collect_attr_locals(Backend, Attrs, Line),
-    ContentKey = collect_content_local(Children, Line),
-    case map_size(AttrLocals) > 0 orelse ContentKey =/= none of
+    ContentLocals = collect_content_locals(Children, Line),
+    case map_size(AttrLocals) > 0 orelse map_size(ContentLocals) > 0 of
         false ->
             Attrs;
         true ->
             assert_local_supported(Backend, State, Line),
-            assert_no_key_reuse(AttrLocals, ContentKey, Line),
-            Desc = build_local_descriptor(AttrLocals, ContentKey),
+            assert_no_key_reuse(AttrLocals, ContentLocals, Line),
+            Desc = build_local_descriptor(AttrLocals, ContentLocals),
             Escaped = arizona_effect:escape_attr(iolist_to_binary(json:encode(Desc))),
             [{tuple, 0, [ast_binary(~"az-local"), ast_binary(Escaped)]} | Attrs]
     end.
@@ -788,21 +785,22 @@ assert_local_supported(Backend, State, Line) ->
 %% A key must not bind both content and an attribute on one element: a single
 %% `set` would write the value into the content AND the attribute, almost always
 %% a mistake.
-assert_no_key_reuse(AttrLocals, ContentKey, Line) ->
-    case ContentKey =/= none andalso lists:member(ContentKey, maps:values(AttrLocals)) of
-        true -> parse_error(local_key_reused, Line);
-        false -> ok
+assert_no_key_reuse(AttrLocals, ContentLocals, Line) ->
+    AttrKeys = maps:values(AttrLocals),
+    case [K || K <- maps:values(ContentLocals), lists:member(K, AttrKeys)] of
+        [] -> ok;
+        _ -> parse_error(local_key_reused, Line)
     end.
 
-build_local_descriptor(AttrLocals, ContentKey) ->
+build_local_descriptor(AttrLocals, ContentLocals) ->
     Desc0 =
         case map_size(AttrLocals) of
             0 -> #{};
             _ -> #{~"a" => AttrLocals}
         end,
-    case ContentKey of
-        none -> Desc0;
-        _ -> Desc0#{~"c" => ContentKey}
+    case map_size(ContentLocals) of
+        0 -> Desc0;
+        _ -> Desc0#{~"c" => ContentLocals}
     end.
 
 collect_attr_locals(Backend, Attrs, Line) ->
@@ -811,12 +809,35 @@ collect_attr_locals(Backend, Attrs, Line) ->
      || {tuple, _, [NameAST, ValueAST]} <- Attrs, is_local_marker(ValueAST)
     }.
 
-collect_content_local(Children, Line) ->
-    case [C || C <- Children, is_local_marker(C)] of
-        [] -> none;
-        [Marker] when Children =:= [Marker] -> local_key(Marker, Line);
-        _ -> parse_error(local_content_not_sole_child, Line)
+%% Collect each content `?local` keyed by its dynamic-text slot index -- the
+%% suffix the client needs to reconstruct the slot's comment-marker az (see
+%% arizona_html:text_az/2). The slot counter advances on every dynamic text
+%% child (the same classification compile_child/4 uses), so static text and
+%% nested elements don't consume a slot. No sole-child restriction: multiple
+%% content locals, and locals mixed with other children, each get their own
+%% marked slot.
+collect_content_locals(Children, Line) ->
+    collect_content_locals(Children, Line, 0, #{}).
+
+collect_content_locals([], _Line, _Slot, Acc) ->
+    Acc;
+collect_content_locals([Child | Rest], Line, Slot, Acc) ->
+    case is_dynamic_text_child(Child) of
+        false ->
+            collect_content_locals(Rest, Line, Slot, Acc);
+        true ->
+            Acc1 =
+                case is_local_marker(Child) of
+                    true -> Acc#{integer_to_binary(Slot) => local_key(Child, Line)};
+                    false -> Acc
+                end,
+            collect_content_locals(Rest, Line, Slot + 1, Acc1)
     end.
+
+%% A child gets its own text marker (and bumps the slot counter) iff it is
+%% neither static text nor a nested element -- mirrors compile_child/4.
+is_dynamic_text_child(Child) ->
+    not is_static_binary(Child) andalso not is_element_tuple(Child).
 
 compile_children(Children, ElemAz, State) ->
     compile_children(Children, ElemAz, State, 0, 0).

@@ -157,11 +157,12 @@
     local_attr_render/1,
     local_diff_skipped/1,
     local_key_not_literal_error/1,
-    local_content_not_sole_child_error/1,
+    local_content_multi_slot/1,
     local_in_nodiff_error/1,
     local_descriptor_merge/1,
     local_attr_coexists_dynamic/1,
-    local_key_reused_error/1
+    local_key_reused_error/1,
+    local_az_facade_render/1
 ]).
 
 all() ->
@@ -214,11 +215,12 @@ groups() ->
             local_attr_render,
             local_diff_skipped,
             local_key_not_literal_error,
-            local_content_not_sole_child_error,
+            local_content_multi_slot,
             local_in_nodiff_error,
             local_descriptor_merge,
             local_attr_coexists_dynamic,
-            local_key_reused_error
+            local_key_reused_error,
+            local_az_facade_render
         ]},
         %% Tests 26-39: template/2 (each) tests
         {each, [parallel], [
@@ -506,17 +508,33 @@ local_key_not_literal_error(Config) when is_list(Config) ->
         fun(R) -> R =:= local_key_not_literal end
     ).
 
-%% ?local: a content bind must be the sole child of its element.
-local_content_not_sole_child_error(Config) when is_list(Config) ->
-    assert_parse_error(
-        "-module(pt_local_notsole). "
+%% ?local: multiple content slots in one element, mixed with static text and a
+%% normal dynamic child. Each content local is keyed by its dynamic-slot index;
+%% the ?get consumes slot 1, so the second local lands at slot 2. Each renders
+%% its own comment-marked slot.
+local_content_multi_slot(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html("
-        "        {'span', [], [<<\"a\">>, arizona_template:local(<<\"k\">>, <<\"b\">>)]}"
-        "    ). ",
-        fun(R) -> R =:= local_content_not_sole_child end
-    ).
+        "        {'p', [], [arizona_template:local(<<\"a\">>, <<\"A\">>), "
+        "                   <<\"foo\">>, "
+        "                   arizona_template:get(x, Bindings, <<\"X\">>), "
+        "                   arizona_template:local(<<\"b\">>, <<\"B\">>)]}"
+        "    ). "
+    ),
+    Tmpl = Mod:render(#{}),
+    {HTML0, _Snap} = arizona_render:render(Tmpl),
+    HTML = iolist_to_binary(HTML0),
+    [_, Rest] = binary:split(HTML, <<"az-local=\"">>),
+    [DescEsc | _] = binary:split(Rest, <<"\"">>),
+    Desc = binary:replace(DescEsc, <<"&quot;">>, <<"\"">>, [global]),
+    ?assertEqual(#{~"c" => #{~"0" => ~"a", ~"2" => ~"b"}}, json:decode(Desc)),
+    %% Three comment-marked dynamic slots: local a, the ?get, local b.
+    ?assertEqual(3, length(binary:matches(HTML, ~"<!--az:"))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"A")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"B")).
 
 %% ?local: cannot be used in an az-nodiff template (no diff target to address).
 local_in_nodiff_error(Config) when is_list(Config) ->
@@ -551,7 +569,7 @@ local_descriptor_merge(Config) when is_list(Config) ->
     [DescEsc | _] = binary:split(Rest, <<"\"">>),
     Desc = binary:replace(DescEsc, <<"&quot;">>, <<"\"">>, [global]),
     ?assertEqual(
-        #{~"a" => #{~"title" => ~"t", ~"lang" => ~"l"}, ~"c" => ~"c"},
+        #{~"a" => #{~"title" => ~"t", ~"lang" => ~"l"}, ~"c" => #{~"0" => ~"c"}},
         json:decode(Desc)
     ).
 
@@ -588,6 +606,31 @@ local_key_reused_error(Config) when is_list(Config) ->
         "    ). ",
         fun(R) -> R =:= local_key_reused end
     ).
+
+%% ?local: the az:local/2 facade is recognized by the parse transform exactly
+%% like arizona_template:local/2 -- in both attribute and content positions.
+local_az_facade_render(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_az_facade). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'span', [{title, az:local(<<\"t\">>, <<\"hi\">>)}], "
+        "            [az:local(<<\"c\">>, <<\"body\">>)]}"
+        "    ). "
+    ),
+    Tmpl = Mod:render(#{}),
+    Results = [F() || {_Az, F, _Loc} <:- maps:get(d, Tmpl)],
+    ?assert(
+        lists:member(
+            #{diff => false, az_local => ~"t", target => {attr, ~"title"}, v => ~"hi"}, Results
+        )
+    ),
+    ?assert(lists:member(#{diff => false, az_local => ~"c", v => ~"body"}, Results)),
+    {HTML0, _Snap} = arizona_render:render(Tmpl),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"az-local=")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"body")).
 
 %% Test 1: Static-only element -- no dynamics, single static binary.
 static_only(Config) when is_list(Config) ->

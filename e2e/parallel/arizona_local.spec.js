@@ -133,3 +133,36 @@ test.describe('?local -- client-only', () => {
         await expect(dialog(page)).toBeHidden();
     });
 });
+
+// ---------------------------------------------------------------------------
+// Multiple content slots in one element (no wrapper elements)
+// ---------------------------------------------------------------------------
+
+test.describe('?local -- multiple content slots', () => {
+    test('one button updates two slots in one <p>, no round-trip', async ({ page }) => {
+        await page.goto('/local');
+        await wsReady(page);
+
+        const name = page.locator('#local_demo p.name');
+        await expect(name).toHaveText('Name: Ada Lovelace');
+
+        // Count any server -> client message that arrives after the click.
+        await page.evaluate(() => {
+            /** @type {any} */ (window).__msgs = 0;
+            const orig = window._ws.onmessage;
+            window._ws.onmessage = (e) => {
+                /** @type {any} */ (window).__msgs += 1;
+                if (orig) orig(e);
+            };
+        });
+
+        await expectStaysConnected(page, async () => {
+            await page.getByRole('button', { name: 'Rename' }).click();
+            await expect(name).toHaveText('Name: Grace Hopper');
+            await page.waitForTimeout(200);
+        });
+
+        const msgs = await page.evaluate(() => /** @type {any} */ (window).__msgs);
+        expect(msgs, 'no server round-trip for multi-slot ?local updates').toBe(0);
+    });
+});

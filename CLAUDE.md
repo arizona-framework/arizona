@@ -72,16 +72,17 @@ handle_event(~"inc", _P, B) ->
 
 ## Client-owned slots -- `?local`
 
-`?local(Key, Init)` declares a slot the server renders **once** at SSR and then **never diffs** -- the browser owns the value (keyed by `Key`) and updates it locally with **no WebSocket round-trip**. For UI-only state (dialog open/close, tabs, toggles). It binds either content (must be the element's sole child) or an attribute value:
+`?local(Key, Init)` declares a slot the server renders **once** at SSR and then **never diffs** -- the browser owns the value (keyed by `Key`) and updates it locally with **no WebSocket round-trip**. For UI-only state (dialog open/close, tabs, toggles). It binds either content or an attribute value. A content `?local` is **not** restricted to being the sole child -- an element can hold several content slots, freely mixed with static text and other dynamic children:
 
 ```erlang
 {'span', [], [?local(~"title", ~"Hello")]}            %% content
 {'dialog', [{open, ?local(~"modal_open", false)}], [...]} %% attribute
+{'p', [], [~"Name: ", ?local(~"first", ~"Ada"), ~" ", ?local(~"last", ~"Lovelace")]} %% many content slots
 ```
 
 Update it from an event attribute (or handler effect) -- never reaches the server:
 
-- `arizona_js:set(Key, Value)` -- closest view of the trigger
+- `arizona_js:set(Key, Value)` -- closest view of the trigger (event attributes only; a no-op as a handler effect -- no trigger element, so handlers use `set/3` or `set_all/2`)
 - `arizona_js:set(ViewId, Key, Value)` -- a named view
 - `arizona_js:set_all(Key, Value)` -- every view
 

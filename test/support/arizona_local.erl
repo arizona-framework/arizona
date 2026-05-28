@@ -59,6 +59,27 @@ render(Bindings) ->
                     {'div', [{class, ~"panel panel-home"}], [~"Home panel content"]},
                     {'div', [{class, ~"panel panel-settings"}], [~"Settings panel content"]}
                 ]}
+            ]},
+
+            %% Multiple content slots in one element: two ?local slots plus
+            %% static text in a single <p> (no wrapper elements). One button
+            %% updates both, client-side, with no round-trip.
+            {section, [], [
+                {h2, [], [~"Multiple slots"]},
+                {p, [{class, ~"name"}], [
+                    ~"Name: ",
+                    ?local(~"first", ~"Ada"),
+                    ~" ",
+                    ?local(~"last", ~"Lovelace")
+                ]},
+                {button,
+                    [
+                        {az_click, [
+                            arizona_js:set(~"first", ~"Grace"),
+                            arizona_js:set(~"last", ~"Hopper")
+                        ]}
+                    ],
+                    [~"Rename"]}
             ]}
         ]}
     ).

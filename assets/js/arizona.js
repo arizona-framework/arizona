@@ -501,14 +501,27 @@ function setMarkerText(startMarker, value) {
 }
 
 /**
+ * Reconstruct a content slot's comment-marker az from the element's runtime az
+ * and the slot index. Mirrors arizona_html:text_az/2 (slot 0 reuses the element
+ * az; slot N appends ":N") -- a cross-language wire contract.
+ * @param {Element} el
+ * @param {string} slot
+ * @returns {string}
+ */
+function localMarkerAz(el, slot) {
+    const elAz = el.getAttribute('az') || '';
+    return slot === '0' ? elAz : `${elAz}:${slot}`;
+}
+
+/**
  * Write a value to one bound slot.
  * @param {Element} el
- * @param {'content'|string[]} target -- 'content' or ['attr', name]
+ * @param {string[]} target -- ['content', slot] or ['attr', name]
  * @param {*} value
  */
 function writeLocalValue(el, target, value) {
-    if (target === 'content') {
-        const marker = findMarker(el, el.getAttribute('az') || '');
+    if (target[0] === 'content') {
+        const marker = findMarker(el, localMarkerAz(el, target[1]));
         if (marker) setMarkerText(marker, value);
         else el.textContent = value == null ? '' : String(value);
         notifyUpdated(el);
@@ -525,12 +538,12 @@ function writeLocalValue(el, target, value) {
 /**
  * Read the current value of one bound slot from the DOM.
  * @param {Element} el
- * @param {'content'|string[]} target
+ * @param {string[]} target -- ['content', slot] or ['attr', name]
  * @returns {*}
  */
 function readLocalValue(el, target) {
-    if (target === 'content') {
-        const marker = findMarker(el, el.getAttribute('az') || '');
+    if (target[0] === 'content') {
+        const marker = findMarker(el, localMarkerAz(el, target[1]));
         if (!marker) return el.textContent;
         let text = '';
         let node = marker.nextSibling;
@@ -552,7 +565,7 @@ function readLocalValue(el, target) {
  * @param {Element|Document} root
  * @param {string} key
  * @param {string|null} viewId
- * @param {(el: Element, target: 'content'|string[]) => void} fn
+ * @param {(el: Element, target: string[]) => void} fn
  */
 function forEachLocal(root, key, viewId, fn) {
     /** @param {Element} el */
@@ -562,7 +575,12 @@ function forEachLocal(root, key, viewId, fn) {
         if (viewId !== null && resolveTarget(el) !== viewId) return;
         // The descriptor is always framework-generated valid JSON.
         const parsed = JSON.parse(desc);
-        if (parsed.c === key) fn(el, 'content');
+        // c maps each content slot index -> key; a maps each attr name -> key.
+        if (parsed.c) {
+            for (const [slot, k] of Object.entries(parsed.c)) {
+                if (k === key) fn(el, ['content', slot]);
+            }
+        }
         if (parsed.a) {
             for (const [attr, k] of Object.entries(parsed.a)) {
                 if (k === key) fn(el, ['attr', attr]);

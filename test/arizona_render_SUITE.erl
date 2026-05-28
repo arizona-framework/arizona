@@ -20,6 +20,7 @@
     fingerprint_absent_when_no_f/1,
     fingerprint_payload_with_f/1,
     fingerprint_payload_without_f/1,
+    fingerprint_payload_local_slots/1,
     fingerprint_propagated_in_diff/1,
     fingerprint_propagated_in_render2/1,
     fingerprint_propagated_in_render/1,
@@ -94,6 +95,7 @@ groups() ->
         {fingerprint, [parallel], [
             fingerprint_payload_with_f,
             fingerprint_payload_without_f,
+            fingerprint_payload_local_slots,
             fingerprint_propagated_in_render,
             fingerprint_propagated_in_render2,
             fingerprint_propagated_in_diff,
@@ -376,6 +378,31 @@ fingerprint_payload_without_f(Config) when is_list(Config) ->
     Snap = #{s => [<<"a">>, <<"b">>], d => [{<<"0">>, <<"val">>}]},
     Result = arizona_render:fingerprint_payload(Snap),
     ?assertEqual(<<"avalb">>, Result).
+
+%% A ?local slot inside a fingerprinted snapshot (e.g. a nested stateless/stateful
+%% child) is unwrapped by render_fp_val's az_local clauses: an attribute target
+%% becomes the rendered attribute, a boolean false vanishes, content renders its
+%% value. The slot is wire-rendered once and never diffed thereafter.
+fingerprint_payload_local_slots(Config) when is_list(Config) ->
+    Snap = #{
+        s => [<<"<div">>, <<"><dialog">>, <<"><span>">>, <<"</span></dialog></div>">>],
+        d => [
+            {<<"0">>, #{
+                diff => false, az_local => ~"tab", target => {attr, ~"data-active"}, v => ~"home"
+            }},
+            {<<"1">>, #{diff => false, az_local => ~"open", target => {attr, ~"open"}, v => false}},
+            {<<"2">>, #{diff => false, az_local => ~"title", v => ~"hi"}}
+        ],
+        f => <<"fp_local">>
+    },
+    ?assertEqual(
+        #{
+            <<"f">> => <<"fp_local">>,
+            <<"s">> => [<<"<div">>, <<"><dialog">>, <<"><span>">>, <<"</span></dialog></div>">>],
+            <<"d">> => [<<" data-active=\"home\"">>, <<>>, <<"hi">>]
+        },
+        arizona_render:fingerprint_payload(Snap)
+    ).
 
 fingerprint_propagated_in_render(Config) when is_list(Config) ->
     Tmpl = #{

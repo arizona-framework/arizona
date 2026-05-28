@@ -1647,7 +1647,7 @@ describe('?local -- set/get content', () => {
     function contentView(viewId, key, initial) {
         setupView(
             viewId,
-            `<span az="0" az-local='{"c":"${key}"}'><!--az:0-->${initial}<!--/az--></span>`,
+            `<span az="0" az-local='{"c":{"0":"${key}"}}'><!--az:0-->${initial}<!--/az--></span>`,
         );
     }
 
@@ -1705,8 +1705,8 @@ describe('?local -- set/get attribute', () => {
 describe('?local -- per-view isolation', () => {
     const twoViews = () => {
         document.body.innerHTML =
-            `<div id="a" az-view><span az="0" az-local='{"c":"msg"}'><!--az:0-->A<!--/az--></span></div>` +
-            `<div id="b" az-view><span az="0" az-local='{"c":"msg"}'><!--az:0-->B<!--/az--></span></div>`;
+            `<div id="a" az-view><span az="0" az-local='{"c":{"0":"msg"}}'><!--az:0-->A<!--/az--></span></div>` +
+            `<div id="b" az-view><span az="0" az-local='{"c":{"0":"msg"}}'><!--az:0-->B<!--/az--></span></div>`;
     };
 
     it('a set in one view does not touch another view with the same key', () => {
@@ -1728,7 +1728,7 @@ describe('?local -- set command', () => {
     it('executeJS resolves the trigger view and updates the slot', () => {
         setupView(
             'v',
-            `<span az="0" az-local='{"c":"title"}'><!--az:0-->old<!--/az--></span>` +
+            `<span az="0" az-local='{"c":{"0":"title"}}'><!--az:0-->old<!--/az--></span>` +
                 `<button az="1">go</button>`,
         );
         executeJS(document.querySelector('button'), null, [17, 'title', 'clicked']);
@@ -1737,7 +1737,7 @@ describe('?local -- set command', () => {
 
     it('an explicit viewId targets that view, not the trigger view', () => {
         document.body.innerHTML =
-            `<div id="a" az-view><span az="0" az-local='{"c":"k"}'><!--az:0-->A<!--/az--></span></div>` +
+            `<div id="a" az-view><span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->A<!--/az--></span></div>` +
             `<div id="b" az-view><button>go</button></div>`;
         executeJS(document.querySelector('#b button'), null, [17, 'k', 'x', 'a']);
         expect(document.querySelector('#a [az="0"]').textContent).toBe('x');
@@ -1748,8 +1748,8 @@ describe('?local -- edge cases', () => {
     it('nested views are isolated: a set in the outer view skips the inner view', () => {
         document.body.innerHTML =
             `<div id="outer" az-view>` +
-            `<span az="0" az-local='{"c":"k"}'><!--az:0-->O<!--/az--></span>` +
-            `<div id="inner" az-view><span az="0" az-local='{"c":"k"}'><!--az:0-->I<!--/az--></span></div>` +
+            `<span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->O<!--/az--></span>` +
+            `<div id="inner" az-view><span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->I<!--/az--></span></div>` +
             `</div>`;
         set('outer', 'k', 'X');
         expect(document.querySelector('#outer > [az="0"]').textContent).toBe('X');
@@ -1759,8 +1759,8 @@ describe('?local -- edge cases', () => {
     it('a key bound on multiple slots in one view updates all of them', () => {
         setupView(
             'v',
-            `<span az="0" az-local='{"c":"n"}'><!--az:0-->-<!--/az--></span>` +
-                `<b az="1" az-local='{"c":"n"}'><!--az:1-->-<!--/az--></b>`,
+            `<span az="0" az-local='{"c":{"0":"n"}}'><!--az:0-->-<!--/az--></span>` +
+                `<b az="1" az-local='{"c":{"0":"n"}}'><!--az:1-->-<!--/az--></b>`,
         );
         set('v', 'n', '7');
         expect(document.querySelector('[az="0"]').textContent).toBe('7');
@@ -1768,13 +1768,13 @@ describe('?local -- edge cases', () => {
     });
 
     it('set for a key with no matching slot is a no-op', () => {
-        setupView('v', `<span az="0" az-local='{"c":"a"}'><!--az:0-->x<!--/az--></span>`);
+        setupView('v', `<span az="0" az-local='{"c":{"0":"a"}}'><!--az:0-->x<!--/az--></span>`);
         expect(() => set('v', 'missing', 'y')).not.toThrow();
         expect(document.querySelector('[az="0"]').textContent).toBe('x');
     });
 
     it('get for a missing key returns undefined', () => {
-        setupView('v', `<span az="0" az-local='{"c":"a"}'><!--az:0-->x<!--/az--></span>`);
+        setupView('v', `<span az="0" az-local='{"c":{"0":"a"}}'><!--az:0-->x<!--/az--></span>`);
         expect(get('v', 'missing')).toBeUndefined();
     });
 
@@ -1783,6 +1783,32 @@ describe('?local -- edge cases', () => {
         expect(get('v', 'o')).toBe(false);
         set('v', 'o', true);
         expect(get('v', 'o')).toBe(true);
+    });
+});
+
+describe('?local -- multiple content slots in one element', () => {
+    it('writes each slot independently, leaving static text and siblings intact', () => {
+        // Element az "0"; slot 0 marker is "0", slot 1 marker is "0:1".
+        setupView(
+            'v',
+            `<p az="0" az-local='{"c":{"0":"a","1":"b"}}'>` +
+                `<!--az:0-->A<!--/az-->foo<!--az:0:1-->B<!--/az--></p>`,
+        );
+        set('v', 'a', 'X');
+        set('v', 'b', 'Y');
+        expect(document.querySelector('[az="0"]').textContent).toBe('XfooY');
+        expect(get('v', 'a')).toBe('X');
+        expect(get('v', 'b')).toBe('Y');
+    });
+
+    it('a key shared by two slots in one element updates both', () => {
+        setupView(
+            'v',
+            `<p az="0" az-local='{"c":{"0":"n","1":"n"}}'>` +
+                `<!--az:0-->-<!--/az--><!--az:0:1-->-<!--/az--></p>`,
+        );
+        set('v', 'n', '7');
+        expect(document.querySelector('[az="0"]').textContent).toBe('77');
     });
 });
 
@@ -1797,7 +1823,7 @@ describe('?local -- no server round-trip', () => {
         const mod = await import('./arizona.js');
         document.body.innerHTML =
             `<div id="v" az-view>` +
-            `<span az="0" az-local='{"c":"title"}'><!--az:0-->old<!--/az--></span>` +
+            `<span az="0" az-local='{"c":{"0":"title"}}'><!--az:0-->old<!--/az--></span>` +
             `<button az="1" az-click='[17,"title","new"]'>go</button>` +
             `</div>`;
         mock = setupMockWorker(mod);
