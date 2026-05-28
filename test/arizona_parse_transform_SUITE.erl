@@ -167,7 +167,9 @@
     local_attr_interp_affix/1,
     local_attr_multiple_error/1,
     local_attr_mixed_error/1,
-    local_attr_interp_boolean/1
+    local_attr_interp_boolean/1,
+    local_attr_interp_numeric/1,
+    local_attr_interp_multi_static/1
 ]).
 
 all() ->
@@ -230,7 +232,9 @@ groups() ->
             local_attr_interp_affix,
             local_attr_multiple_error,
             local_attr_mixed_error,
-            local_attr_interp_boolean
+            local_attr_interp_boolean,
+            local_attr_interp_numeric,
+            local_attr_interp_multi_static
         ]},
         %% Tests 26-39: template/2 (each) tests
         {each, [parallel], [
@@ -729,6 +733,48 @@ local_attr_interp_boolean(Config) when is_list(Config) ->
     {HTML0, _Snap} = arizona_render:render(Tmpl),
     HTML = iolist_to_binary(HTML0),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"disabled=\"false\"")).
+
+%% A non-binary init (here an integer) composes as its text, not a raw iolist
+%% byte -- exercises the to_bin/1 wrap in the interpolated bind-map's v.
+local_attr_interp_numeric(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_num). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'li', [{style, [<<\"width: \">>, arizona_template:local(<<\"w\">>, 100), "
+        "            <<\"%\">>]}], [<<\"x\">>]}"
+        "    ). "
+    ),
+    Tmpl = Mod:render(#{}),
+    {HTML0, _Snap} = arizona_render:render(Tmpl),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"style=\"width: 100%\"")),
+    ?assertEqual(
+        #{~"a" => #{~"style" => ~"w"}, ~"ap" => #{~"style" => [~"width: ", ~"%"]}},
+        decode_local_descriptor(HTML)
+    ).
+
+%% Several static segments around the local concatenate into one prefix/suffix.
+local_attr_interp_multi_static(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_multistatic). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [{class, [<<\"a \">>, <<\"b \">>, "
+        "            arizona_template:local(<<\"c\">>, <<\"x\">>), <<\" y\">>, <<\" z\">>]}], "
+        "            [<<\"t\">>]}"
+        "    ). "
+    ),
+    Tmpl = Mod:render(#{}),
+    {HTML0, _Snap} = arizona_render:render(Tmpl),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"class=\"a b x y z\"")),
+    ?assertEqual(
+        #{~"a" => #{~"class" => ~"c"}, ~"ap" => #{~"class" => [~"a b ", ~" y z"]}},
+        decode_local_descriptor(HTML)
+    ).
 
 %% Test 1: Static-only element -- no dynamics, single static binary.
 static_only(Config) when is_list(Config) ->

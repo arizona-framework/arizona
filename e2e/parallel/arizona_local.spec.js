@@ -189,12 +189,56 @@ test.describe('?local -- interpolated attribute', () => {
         });
 
         await expectStaysConnected(page, async () => {
-            await page.getByRole('button', { name: 'Warn' }).click();
+            await page.getByRole('button', { name: 'Warn', exact: true }).click();
             await expect(badge).toHaveAttribute('class', 'badge badge-warn');
             await page.waitForTimeout(200);
         });
 
         const msgs = await page.evaluate(() => /** @type {any} */ (window).__msgs);
         expect(msgs, 'no server round-trip for interpolated-attribute ?local').toBe(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// One key, three slots: an interpolated class + interpolated title + a content
+// label, all driven by a single ?local across two elements -- client-only.
+// ---------------------------------------------------------------------------
+
+test.describe('?local -- status card (one key, three slots)', () => {
+    test('one click recomposes interp class, interp title, and content label', async ({ page }) => {
+        await page.goto('/local');
+        await wsReady(page);
+
+        const card = page.locator('#status_card');
+        const label = page.locator('#status_card .status-label');
+        await expect(card).toHaveAttribute('class', 'card status-ok');
+        await expect(card).toHaveAttribute('title', 'Current status: ok');
+        await expect(label).toHaveText('Status: ok');
+
+        await page.evaluate(() => {
+            /** @type {any} */ (window).__msgs = 0;
+            const orig = window._ws.onmessage;
+            window._ws.onmessage = (e) => {
+                /** @type {any} */ (window).__msgs += 1;
+                if (orig) orig(e);
+            };
+        });
+
+        await expectStaysConnected(page, async () => {
+            await page.getByRole('button', { name: 'Warning' }).click();
+            await expect(card).toHaveAttribute('class', 'card status-warning');
+            await expect(card).toHaveAttribute('title', 'Current status: warning');
+            await expect(label).toHaveText('Status: warning');
+            await page.waitForTimeout(200);
+        });
+
+        // A second value, to show repeated client-only recomposition of all slots.
+        await page.getByRole('button', { name: 'Error' }).click();
+        await expect(card).toHaveAttribute('class', 'card status-error');
+        await expect(card).toHaveAttribute('title', 'Current status: error');
+        await expect(label).toHaveText('Status: error');
+
+        const msgs = await page.evaluate(() => /** @type {any} */ (window).__msgs);
+        expect(msgs, 'no server round-trip for status-card ?local updates').toBe(0);
     });
 });

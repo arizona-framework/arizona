@@ -1724,6 +1724,50 @@ describe('?local -- interpolated attribute', () => {
         expect(document.querySelector('[az="0"]').getAttribute('href')).toBe('/u/42/edit');
         expect(get('v', 'id')).toBe('42');
     });
+
+    it('coerces a non-string value via String() and reads it back', () => {
+        setupView(
+            'v',
+            `<li az="0" az-local='{"a":{"style":"w"},"ap":{"style":["width: ","%"]}}' style="width: 25%">x</li>`,
+        );
+        set('v', 'w', 50);
+        expect(document.querySelector('[az="0"]').getAttribute('style')).toBe('width: 50%');
+        expect(get('v', 'w')).toBe('50');
+    });
+
+    it('syncs the live value property for an interpolated value attribute', () => {
+        setupView(
+            'v',
+            `<input az="0" az-local='{"a":{"value":"amt"},"ap":{"value":["$",""]}}' value="$0" />`,
+        );
+        set('v', 'amt', '50');
+        const input = document.querySelector('input');
+        expect(input.getAttribute('value')).toBe('$50');
+        expect(input.value).toBe('$50');
+    });
+
+    it('sets the recomposed value literally -- no markup injection', () => {
+        setupView(
+            'v',
+            `<span az="0" az-local='{"a":{"data-x":"d"},"ap":{"data-x":["p-",""]}}' data-x="p-ok">x</span>`,
+        );
+        set('v', 'd', '"><img src=x onerror=alert(1)>');
+        const span = document.querySelector('[az="0"]');
+        expect(span.querySelector('img')).toBeNull();
+        expect(span.getAttribute('data-x')).toBe('p-"><img src=x onerror=alert(1)>');
+    });
+
+    it('is per-view isolated and setAll spans every view', () => {
+        document.body.innerHTML =
+            `<div id="a" az-view><i az="0" az-local='{"a":{"class":"k"},"ap":{"class":["t-",""]}}' class="t-1">x</i></div>` +
+            `<div id="b" az-view><i az="0" az-local='{"a":{"class":"k"},"ap":{"class":["t-",""]}}' class="t-1">y</i></div>`;
+        set('a', 'k', '2');
+        expect(document.querySelector('#a i').getAttribute('class')).toBe('t-2');
+        expect(document.querySelector('#b i').getAttribute('class')).toBe('t-1');
+        setAll('k', '9');
+        expect(document.querySelector('#a i').getAttribute('class')).toBe('t-9');
+        expect(document.querySelector('#b i').getAttribute('class')).toBe('t-9');
+    });
 });
 
 describe('?local -- per-view isolation', () => {

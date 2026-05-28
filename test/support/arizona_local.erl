@@ -92,6 +92,25 @@ render(Bindings) ->
                         ~"Status"
                     ]},
                 {button, [{az_click, arizona_js:set(~"status", ~"warn")}], [~"Warn"]}
+            ]},
+
+            %% One key, three slots: a single ?local("state") drives an interpolated
+            %% class, an interpolated title (tooltip), and a content label across two
+            %% elements. One client-only set recomposes all three -- no round-trip.
+            {section, [], [
+                {h2, [], [~"Status card (one key, three slots)"]},
+                {'div',
+                    [
+                        {id, ~"status_card"},
+                        {class, [~"card status-", ?local(~"state", ~"ok")]},
+                        {title, [~"Current status: ", ?local(~"state", ~"ok")]}
+                    ],
+                    [
+                        {p, [{class, ~"status-label"}], [~"Status: ", ?local(~"state", ~"ok")]}
+                    ]},
+                {button, [{az_click, arizona_js:set(~"state", ~"ok")}], [~"OK"]},
+                {button, [{az_click, arizona_js:set(~"state", ~"warning")}], [~"Warning"]},
+                {button, [{az_click, arizona_js:set(~"state", ~"error")}], [~"Error"]}
             ]}
         ]}
     ).
