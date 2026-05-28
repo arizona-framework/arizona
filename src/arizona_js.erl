@@ -53,6 +53,8 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 -export([set_title/1]).
 -export([reload/0]).
 -export([on_key/2]).
+-export([set/2]).
+-export([set/3]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -78,7 +80,9 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     scroll_to/2,
     set_title/1,
     reload/0,
-    on_key/2
+    on_key/2,
+    set/2,
+    set/3
 ]).
 
 %% --------------------------------------------------------------------
@@ -221,6 +225,25 @@ on_key(Key, {arizona_effect, Inner}) ->
 on_key(Key, [_ | _] = Cmds) ->
     {arizona_effect, [?EFFECT_ON_KEY, encode_key(Key), [C || {arizona_effect, C} <:- Cmds]]}.
 
+-doc """
+Sets a client-owned binding (`?bind`) to `Value` in the closest view of the
+triggering element, updating every slot bound to `Key` locally with no server
+round-trip. Use inside web event attributes like `az-click`.
+""".
+-spec set(Key, Value) -> arizona_effect:cmd() when
+    Key :: binary(),
+    Value :: binary() | boolean().
+set(Key, Value) -> {arizona_effect, [?EFFECT_SET_BINDING, Key, Value]}.
+
+-doc """
+Like `set/2` but targets the binding in the view identified by `ViewId`.
+""".
+-spec set(ViewId, Key, Value) -> arizona_effect:cmd() when
+    ViewId :: binary(),
+    Key :: binary(),
+    Value :: binary() | boolean().
+set(ViewId, Key, Value) -> {arizona_effect, [?EFFECT_SET_BINDING, Key, Value, ViewId]}.
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
@@ -250,6 +273,12 @@ set_title_test() ->
 
 reload_test() ->
     {arizona_effect, [?EFFECT_RELOAD]} = reload().
+
+set_test() ->
+    {arizona_effect, [?EFFECT_SET_BINDING, ~"k", ~"v"]} = set(~"k", ~"v").
+
+set_view_test() ->
+    {arizona_effect, [?EFFECT_SET_BINDING, ~"k", true, ~"view1"]} = set(~"view1", ~"k", true).
 
 builders_test() ->
     ?assertEqual({arizona_effect, [?EFFECT_SHOW, ~"#m"]}, show(~"#m")),

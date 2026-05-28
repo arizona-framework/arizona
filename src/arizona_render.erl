@@ -230,6 +230,10 @@ render_dyn(#{t := ?EACH, items := Items, template := Tmpl}) when is_list(Items) 
 render_dyn(#{t := ?EACH, items := Items, order := Order, template := Tmpl}) ->
     #{s := ItemS} = Tmpl,
     [zip_stream_item(ItemS, maps:get(K, Items)) || K <- Order];
+render_dyn(#{az_bind := _, target := {attr, Name}, v := V}) ->
+    arizona_template:render_attr(Name, V);
+render_dyn(#{az_bind := _, v := V}) ->
+    render_dyn(V);
 render_dyn(#{s := InnerS, d := InnerD}) ->
     zip_d(InnerS, InnerD);
 render_dyn(V) when is_binary(V) ->
@@ -423,6 +427,10 @@ render_ssr_val(#{stateful := H, props := Props}) ->
 render_ssr_val(#{callback := Callback, props := Props}) ->
     Tmpl = Callback(Props),
     render_ssr_val(Tmpl);
+render_ssr_val(#{az_bind := _, target := {attr, Name}, v := V}) ->
+    render_ssr_attr(Name, V);
+render_ssr_val(#{az_bind := _, v := V}) ->
+    render_ssr_val(V);
 render_ssr_val(#{s := Statics, d := Dynamics} = Tmpl) ->
     Snap0 = #{
         s => Statics,
@@ -444,6 +452,10 @@ render_fp_val(native, {attr, _Name, V}) ->
     arizona_template:to_bin(V);
 render_fp_val(_Target, {attr, Name, V}) ->
     arizona_template:render_attr(Name, V);
+render_fp_val(_Target, #{az_bind := _, target := {attr, Name}, v := V}) ->
+    arizona_template:render_attr(Name, V);
+render_fp_val(Target, #{az_bind := _, v := V}) ->
+    render_fp_val(Target, V);
 render_fp_val(_Target, #{f := _} = Nested) ->
     fingerprint_payload(Nested);
 render_fp_val(_Target, #{s := S, d := D}) ->

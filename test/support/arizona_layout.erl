@@ -21,7 +21,9 @@ render(Bindings) ->
                     ~" | ",
                     {a, [{href, ~"/mixed"}, az_navigate], [~"Mixed"]},
                     ~" | ",
-                    {a, [{href, ~"/chat"}, az_navigate], [~"Chat"]}
+                    {a, [{href, ~"/chat"}, az_navigate], [~"Chat"]},
+                    ~" | ",
+                    {a, [{href, ~"/bind"}, az_navigate], [~"Bind"]}
                 ]},
                 ?inner_content,
                 {script, [{type, ~"module"}], [

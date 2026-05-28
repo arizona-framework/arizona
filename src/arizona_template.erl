@@ -51,6 +51,7 @@ render(Bindings) ->
 -export([stateful/2]).
 -export([stateless/2]).
 -export([stateless/3]).
+-export([bind/2]).
 -export([each/2]).
 -export([native_each/2]).
 -export([to_bin/1]).
@@ -75,6 +76,9 @@ render(Bindings) ->
 %% Internal native-each stub: emitted by the parse transform's native pre-pass,
 %% never called directly (no az:native_each alias, unlike each/2).
 -ignore_xref([native_each/2]).
+%% Public via the ?bind macro (parse transform recognizes arizona_template:bind);
+%% no direct src caller and no az:bind alias, like native_each.
+-ignore_xref([bind/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -269,6 +273,18 @@ Builds a stateless child descriptor from a `Handler:Fun/1` reference.
     Props :: map().
 stateless(Handler, Fun, Props) when is_atom(Handler), is_atom(Fun), is_map(Props) ->
     #{callback => fun Handler:Fun/1, props => Props}.
+
+-doc """
+Builds a client-owned slot value. The server renders `Init` once and never
+diffs the slot (`diff => false`); the browser owns the value via `Key`,
+updating it client-side with no round-trip. Used via the `?bind` macro in
+content (sole child of an element) or attribute-value position.
+""".
+-spec bind(Key, Init) -> map() when
+    Key :: binary(),
+    Init :: term().
+bind(Key, Init) when is_binary(Key) ->
+    #{diff => false, az_bind => Key, v => Init}.
 
 -doc """
 Wraps a `t:template/0` produced by the parse transform with an `each` source.

@@ -24,6 +24,10 @@ start() ->
             bindings => #{title => <<"Chat">>},
             layouts => Layouts
         }},
+        {live, <<"/bind">>, arizona_bind, #{
+            bindings => #{title => <<"Bind">>},
+            layouts => Layouts
+        }},
         {live, <<"/crashable">>, arizona_crashable, #{layouts => Layouts}},
         {live, <<"/scroll-home">>, arizona_scroll_home, #{layouts => Layouts}},
         {live, <<"/scroll-about">>, arizona_scroll_about, #{layouts => Layouts}},

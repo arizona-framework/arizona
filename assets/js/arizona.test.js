@@ -3,12 +3,14 @@ import {
     applyEffects,
     applyOps,
     executeJS,
+    get,
     hooks,
     mountHooks,
     OP,
     resolveEl,
     restoreFormState,
     saveFormState,
+    set,
 } from './arizona.js';
 
 // ---------------------------------------------------------------------------
@@ -1634,6 +1636,176 @@ describe('OP.ITEM_PATCH with pre-resolved inner ops', () => {
 // onmessage handles partial envelopes (omitted "o" or "e")
 // Worker sends [0, ops|null, effects|null, firstAfterReconnect] to main.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Client-owned slots (?bind): set/get query the live DOM (az-bind descriptors);
+// no persistent index. Updates are local -- no server round-trip.
+// ---------------------------------------------------------------------------
+
+describe('?bind -- set/get content', () => {
+    function contentView(viewId, key, initial) {
+        setupView(
+            viewId,
+            `<span az="0" az-bind='{"c":"${key}"}'><!--az:0-->${initial}<!--/az--></span>`,
+        );
+    }
+
+    it('set updates the content and get reads it back', () => {
+        contentView('v', 'title', 'old');
+        set('v', 'title', 'new');
+        expect(document.querySelector('[az="0"]').textContent).toBe('new');
+        expect(get('v', 'title')).toBe('new');
+    });
+
+    it('get returns the SSR initial before any set', () => {
+        contentView('v', 'title', 'hello');
+        expect(get('v', 'title')).toBe('hello');
+    });
+
+    it('writes the value as text, never HTML (no injection)', () => {
+        contentView('v', 'title', '');
+        set('v', 'title', '<img src=x onerror=alert(1)>');
+        const span = document.querySelector('[az="0"]');
+        expect(span.querySelector('img')).toBeNull();
+        expect(span.textContent).toBe('<img src=x onerror=alert(1)>');
+    });
+});
+
+describe('?bind -- set/get attribute', () => {
+    function attrView(viewId, attr, key, extra = '') {
+        setupView(viewId, `<div az="0" az-bind='{"a":{"${attr}":"${key}"}}' ${extra}>x</div>`);
+    }
+
+    it('true sets a bare boolean attribute; false removes it', () => {
+        attrView('v', 'open', 'modal_open');
+        const el = document.querySelector('[az="0"]');
+        set('v', 'modal_open', true);
+        expect(el.getAttribute('open')).toBe('');
+        set('v', 'modal_open', false);
+        expect(el.hasAttribute('open')).toBe(false);
+    });
+
+    it('a string sets the attribute value', () => {
+        attrView('v', 'data-active', 'tab');
+        set('v', 'tab', 'settings');
+        expect(document.querySelector('[az="0"]').getAttribute('data-active')).toBe('settings');
+        expect(get('v', 'tab')).toBe('settings');
+    });
+
+    it('value binding syncs the live input value property', () => {
+        setupView('v', `<input az="0" az-bind='{"a":{"value":"field"}}' value="" />`);
+        set('v', 'field', 'typed');
+        const input = document.querySelector('input');
+        expect(input.getAttribute('value')).toBe('typed');
+        expect(input.value).toBe('typed');
+    });
+});
+
+describe('?bind -- per-view isolation', () => {
+    const twoViews = () => {
+        document.body.innerHTML =
+            `<div id="a" az-view><span az="0" az-bind='{"c":"msg"}'><!--az:0-->A<!--/az--></span></div>` +
+            `<div id="b" az-view><span az="0" az-bind='{"c":"msg"}'><!--az:0-->B<!--/az--></span></div>`;
+    };
+
+    it('a set in one view does not touch another view with the same key', () => {
+        twoViews();
+        set('a', 'msg', 'changed');
+        expect(document.querySelector('#a [az="0"]').textContent).toBe('changed');
+        expect(document.querySelector('#b [az="0"]').textContent).toBe('B');
+    });
+
+    it('document-wide set (no viewId) updates every view', () => {
+        twoViews();
+        set('msg', 'all');
+        expect(document.querySelector('#a [az="0"]').textContent).toBe('all');
+        expect(document.querySelector('#b [az="0"]').textContent).toBe('all');
+    });
+});
+
+describe('?bind -- JS_SET_BINDING command', () => {
+    it('executeJS resolves the trigger view and updates the slot', () => {
+        setupView(
+            'v',
+            `<span az="0" az-bind='{"c":"title"}'><!--az:0-->old<!--/az--></span>` +
+                `<button az="1">go</button>`,
+        );
+        executeJS(document.querySelector('button'), null, [17, 'title', 'clicked']);
+        expect(document.querySelector('[az="0"]').textContent).toBe('clicked');
+    });
+
+    it('an explicit viewId targets that view, not the trigger view', () => {
+        document.body.innerHTML =
+            `<div id="a" az-view><span az="0" az-bind='{"c":"k"}'><!--az:0-->A<!--/az--></span></div>` +
+            `<div id="b" az-view><button>go</button></div>`;
+        executeJS(document.querySelector('#b button'), null, [17, 'k', 'x', 'a']);
+        expect(document.querySelector('#a [az="0"]').textContent).toBe('x');
+    });
+});
+
+describe('?bind -- edge cases', () => {
+    it('nested views are isolated: a set in the outer view skips the inner view', () => {
+        document.body.innerHTML =
+            `<div id="outer" az-view>` +
+            `<span az="0" az-bind='{"c":"k"}'><!--az:0-->O<!--/az--></span>` +
+            `<div id="inner" az-view><span az="0" az-bind='{"c":"k"}'><!--az:0-->I<!--/az--></span></div>` +
+            `</div>`;
+        set('outer', 'k', 'X');
+        expect(document.querySelector('#outer > [az="0"]').textContent).toBe('X');
+        expect(document.querySelector('#inner [az="0"]').textContent).toBe('I');
+    });
+
+    it('a key bound on multiple slots in one view updates all of them', () => {
+        setupView(
+            'v',
+            `<span az="0" az-bind='{"c":"n"}'><!--az:0-->-<!--/az--></span>` +
+                `<b az="1" az-bind='{"c":"n"}'><!--az:1-->-<!--/az--></b>`,
+        );
+        set('v', 'n', '7');
+        expect(document.querySelector('[az="0"]').textContent).toBe('7');
+        expect(document.querySelector('[az="1"]').textContent).toBe('7');
+    });
+
+    it('set for a key with no matching slot is a no-op', () => {
+        setupView('v', `<span az="0" az-bind='{"c":"a"}'><!--az:0-->x<!--/az--></span>`);
+        expect(() => set('v', 'missing', 'y')).not.toThrow();
+        expect(document.querySelector('[az="0"]').textContent).toBe('x');
+    });
+
+    it('get for a missing key returns undefined', () => {
+        setupView('v', `<span az="0" az-bind='{"c":"a"}'><!--az:0-->x<!--/az--></span>`);
+        expect(get('v', 'missing')).toBeUndefined();
+    });
+
+    it('get on an absent boolean attribute returns false', () => {
+        setupView('v', `<div az="0" az-bind='{"a":{"open":"o"}}'>x</div>`);
+        expect(get('v', 'o')).toBe(false);
+        set('v', 'o', true);
+        expect(get('v', 'o')).toBe(true);
+    });
+});
+
+describe('?bind -- no server round-trip', () => {
+    let mock;
+    afterEach(() => {
+        if (mock) mock.restore();
+    });
+
+    it('a set-command click updates the DOM and sends no worker message', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        document.body.innerHTML =
+            `<div id="v" az-view>` +
+            `<span az="0" az-bind='{"c":"title"}'><!--az:0-->old<!--/az--></span>` +
+            `<button az="1" az-click='[17,"title","new"]'>go</button>` +
+            `</div>`;
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        document.querySelector('button').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        expect(document.querySelector('[az="0"]').textContent).toBe('new');
+        expect(mock.getSentMessages()).toEqual([]);
+    });
+});
 
 describe('onmessage partial envelopes', () => {
     let mock;

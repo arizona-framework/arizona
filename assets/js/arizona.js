@@ -476,6 +476,142 @@ function updateMarkerContent(startMarker, value) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Client-owned slots (?bind): the browser owns a slot the server renders once
+// and never diffs. Discovery is self-describing -- elements carry an `az-bind`
+// descriptor (JSON: {c: contentKey, a: {attrName: key}}) -- so set/get query
+// the live DOM directly; no persistent index, nothing to sync across renders.
+// ---------------------------------------------------------------------------
+
+/**
+ * Replace the content between <!--az:X--> and <!--/az--> with a TEXT node.
+ * Unlike updateMarkerContent it never interprets the value as HTML, so a
+ * client-set binding containing `<` can't inject markup.
+ * @param {Comment} startMarker
+ * @param {*} value
+ */
+function setMarkerText(startMarker, value) {
+    let node = startMarker.nextSibling;
+    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
+        const next = node.nextSibling;
+        node.remove();
+        node = next;
+    }
+    startMarker.after(document.createTextNode(value == null ? '' : String(value)));
+}
+
+/**
+ * Write a value to one bound slot.
+ * @param {Element} el
+ * @param {'content'|string[]} target -- 'content' or ['attr', name]
+ * @param {*} value
+ */
+function writeBoundValue(el, target, value) {
+    if (target === 'content') {
+        const marker = findMarker(el, el.getAttribute('az') || '');
+        if (marker) setMarkerText(marker, value);
+        else el.textContent = value == null ? '' : String(value);
+        notifyUpdated(el);
+    } else if (value === false || value == null) {
+        el.removeAttribute(target[1]);
+        notifyUpdated(el);
+    } else if (value === true) {
+        applySetAttrOp(el, target[1], '');
+    } else {
+        applySetAttrOp(el, target[1], String(value));
+    }
+}
+
+/**
+ * Read the current value of one bound slot from the DOM.
+ * @param {Element} el
+ * @param {'content'|string[]} target
+ * @returns {*}
+ */
+function readBoundValue(el, target) {
+    if (target === 'content') {
+        const marker = findMarker(el, el.getAttribute('az') || '');
+        if (!marker) return el.textContent;
+        let text = '';
+        let node = marker.nextSibling;
+        while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
+            text += node.textContent ?? '';
+            node = node.nextSibling;
+        }
+        return text;
+    }
+    const name = target[1];
+    if (!el.hasAttribute(name)) return false;
+    const v = el.getAttribute(name);
+    return v === '' ? true : v;
+}
+
+/**
+ * Visit each bound slot for `key` under `root`. When `viewId` is non-null only
+ * slots whose nearest view is `viewId` are visited (per-view isolation).
+ * @param {Element|Document} root
+ * @param {string} key
+ * @param {string|null} viewId
+ * @param {(el: Element, target: 'content'|string[]) => void} fn
+ */
+function forEachBound(root, key, viewId, fn) {
+    /** @param {Element} el */
+    const visit = (el) => {
+        const desc = el.getAttribute('az-bind');
+        if (!desc) return;
+        if (viewId !== null && resolveTarget(el) !== viewId) return;
+        // The descriptor is always framework-generated valid JSON.
+        const parsed = JSON.parse(desc);
+        if (parsed.c === key) fn(el, 'content');
+        if (parsed.a) {
+            for (const [attr, k] of Object.entries(parsed.a)) {
+                if (k === key) fn(el, ['attr', attr]);
+            }
+        }
+    };
+    if (root instanceof Element && root.hasAttribute('az-bind')) visit(root);
+    root.querySelectorAll('[az-bind]').forEach(visit);
+}
+
+/**
+ * Set a client-owned binding locally (no server round-trip).
+ *   set(key, value)          -- all views
+ *   set(viewId, key, value)  -- one view
+ * @param {string} a
+ * @param {*} b
+ * @param {*} [c]
+ */
+function set(a, b, c) {
+    const scoped = c !== undefined;
+    const viewId = scoped ? a : null;
+    const key = scoped ? b : a;
+    const value = scoped ? c : b;
+    const root = viewId ? document.getElementById(viewId) : document;
+    if (!root) return;
+    forEachBound(root, key, viewId, (el, target) => writeBoundValue(el, target, value));
+}
+
+/**
+ * Read a client-owned binding from the DOM.
+ *   get(key) | get(viewId, key)
+ * @param {string} a
+ * @param {string} [b]
+ * @returns {*}
+ */
+function get(a, b) {
+    const scoped = b !== undefined;
+    const viewId = scoped ? a : null;
+    const key = scoped ? /** @type {string} */ (b) : a;
+    const root = viewId ? document.getElementById(viewId) : document;
+    if (!root) return undefined;
+    /** @type {*} */
+    let result;
+    forEachBound(root, key, viewId, (el, target) => {
+        if (result === undefined) result = readBoundValue(el, target);
+    });
+    return result;
+}
+
 /**
  * Insert a keyed child into a container element.
  * @param {Element} el -- container element
@@ -754,7 +890,7 @@ function autoPayload(el, event) {
     return {};
 }
 
-// JS command op codes -- must match include/arizona_js.hrl
+// JS command op codes -- must match include/arizona_effect.hrl
 const JS_PUSH_EVENT = 0,
     JS_TOGGLE = 1,
     JS_SHOW = 2,
@@ -771,7 +907,8 @@ const JS_PUSH_EVENT = 0,
     JS_SCROLL_TO = 13,
     JS_SET_TITLE = 14,
     JS_RELOAD = 15,
-    JS_ON_KEY = 16;
+    JS_ON_KEY = 16,
+    JS_SET_BINDING = 17;
 
 /**
  * If `sel` matches an element, call `fn` with it cast to `HTMLElement`.
@@ -872,6 +1009,13 @@ function executeJS(el, event, cmds) {
                         : '';
                 if (Array.isArray(f) ? f.includes(lk) : new RegExp(f).test(lk))
                     executeJS(el, event, cmd[2]);
+                break;
+            }
+            case JS_SET_BINDING: {
+                // Client-owned slot update -- resolve the closest view of the
+                // trigger (or the explicit viewId in cmd[3]); never sent to the server.
+                const viewId = cmd.length > 3 ? cmd[3] : resolveTarget(el);
+                if (viewId) set(viewId, cmd[1], cmd[2]);
                 break;
             }
         }
@@ -1350,6 +1494,7 @@ export {
     applyOps,
     connect,
     executeJS,
+    get,
     hooks,
     mountHooks,
     OP,
@@ -1358,4 +1503,5 @@ export {
     resolveEl,
     restoreFormState,
     saveFormState,
+    set,
 };

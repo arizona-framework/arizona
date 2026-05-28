@@ -152,12 +152,21 @@
     az_view_multi_clause_render/1,
     az_view_no_html_in_render/1,
     az_view_static_id_raises/1,
-    az_view_composed_id_raises/1
+    az_view_composed_id_raises/1,
+    bind_content_render/1,
+    bind_attr_render/1,
+    bind_diff_skipped/1,
+    bind_key_not_literal_error/1,
+    bind_content_not_sole_child_error/1,
+    bind_in_nodiff_error/1,
+    bind_descriptor_merge/1,
+    bind_attr_coexists_dynamic/1
 ]).
 
 all() ->
     [
         {group, elements},
+        {group, bind},
         {group, each},
         {group, integration},
         {group, layout},
@@ -197,6 +206,17 @@ groups() ->
             no_change_diff,
             void_no_attrs,
             static_after_dynamic_attr
+        ]},
+        %% Client-owned slots (?bind)
+        {bind, [parallel], [
+            bind_content_render,
+            bind_attr_render,
+            bind_diff_skipped,
+            bind_key_not_literal_error,
+            bind_content_not_sole_child_error,
+            bind_in_nodiff_error,
+            bind_descriptor_merge,
+            bind_attr_coexists_dynamic
         ]},
         %% Tests 26-39: template/2 (each) tests
         {each, [parallel], [
@@ -407,6 +427,152 @@ scope_static(Fp, S) ->
 %% ============================================================================
 %% Tests
 %% ============================================================================
+
+%% ?bind: content slot renders the initial value, keeps az, carries the
+%% az-bind descriptor, and the dynamic evaluates to the bind-map.
+bind_content_render(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_bind_content). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'span', [], [arizona_template:bind(<<\"title\">>, <<\"Hello\">>)]}"
+        "    ). "
+    ),
+    Tmpl = Mod:render(#{}),
+    Fp = maps:get(f, Tmpl),
+    [{Az0, Fun, _Loc}] = maps:get(d, Tmpl),
+    ?assertEqual(<<Fp/binary, "-0">>, Az0),
+    ?assertEqual(#{diff => false, az_bind => ~"title", v => ~"Hello"}, Fun()),
+    {HTML0, _Snap} = arizona_render:render(Tmpl),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<Fp/binary, "-0">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"az-bind=")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"Hello")).
+
+%% ?bind: attribute slot renders the initial value and the dynamic evaluates to
+%% a bind-map carrying target = {attr, Name}.
+bind_attr_render(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_bind_attr). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [{'data-active', arizona_template:bind(<<\"tab\">>, <<\"home\">>)}], "
+        "            [<<\"x\">>]}"
+        "    ). "
+    ),
+    Tmpl = Mod:render(#{}),
+    [{_Az, Fun, _Loc}] = maps:get(d, Tmpl),
+    ?assertEqual(
+        #{diff => false, az_bind => ~"tab", target => {attr, ~"data-active"}, v => ~"home"},
+        Fun()
+    ),
+    {HTML0, _Snap} = arizona_render:render(Tmpl),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"data-active=")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"home")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"az-bind=")).
+
+%% ?bind: the slot is never diffed -- even when the init's binding source
+%% changes between renders, no op is emitted (the bind-map is #{diff := false}).
+bind_diff_skipped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_bind_skip). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'span', [], [arizona_template:bind(<<\"n\">>, "
+        "            arizona_template:get(count, Bindings, 0))]}"
+        "    ). "
+    ),
+    T1 = Mod:render(#{count => 1}),
+    {_HTML, Snap} = arizona_render:render(T1),
+    T2 = Mod:render(#{count => 2}),
+    {Ops, _Snap2} = arizona_diff:diff(T2, Snap),
+    ?assertEqual([], Ops).
+
+%% ?bind: a non-literal key is a compile-time error.
+bind_key_not_literal_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_bind_badkey). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'span', [], [arizona_template:bind(Bindings, <<\"x\">>)]}"
+        "    ). ",
+        fun(R) -> R =:= bind_key_not_literal end
+    ).
+
+%% ?bind: a content bind must be the sole child of its element.
+bind_content_not_sole_child_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_bind_notsole). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'span', [], [<<\"a\">>, arizona_template:bind(<<\"k\">>, <<\"b\">>)]}"
+        "    ). ",
+        fun(R) -> R =:= bind_content_not_sole_child end
+    ).
+
+%% ?bind: cannot be used in an az-nodiff template (no diff target to address).
+bind_in_nodiff_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_bind_nodiff). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ['az-nodiff'], [arizona_template:bind(<<\"k\">>, <<\"x\">>)]}"
+        "    ). ",
+        fun(R) -> R =:= bind_in_nodiff end
+    ).
+
+%% ?bind: multiple attribute binds AND a content bind on one element merge into
+%% a single az-bind descriptor.
+bind_descriptor_merge(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_bind_merge). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'span', "
+        "            [{title, arizona_template:bind(<<\"t\">>, <<\"\">>)}, "
+        "             {lang, arizona_template:bind(<<\"l\">>, <<\"en\">>)}], "
+        "            [arizona_template:bind(<<\"c\">>, <<\"hi\">>)]}"
+        "    ). "
+    ),
+    Tmpl = Mod:render(#{}),
+    {HTML0, _Snap} = arizona_render:render(Tmpl),
+    HTML = iolist_to_binary(HTML0),
+    [_, Rest] = binary:split(HTML, <<"az-bind=\"">>),
+    [DescEsc | _] = binary:split(Rest, <<"\"">>),
+    Desc = binary:replace(DescEsc, <<"&quot;">>, <<"\"">>, [global]),
+    ?assertEqual(
+        #{~"a" => #{~"title" => ~"t", ~"lang" => ~"l"}, ~"c" => ~"c"},
+        json:decode(Desc)
+    ).
+
+%% ?bind: a bound attribute and a normal dynamic attribute coexist on one
+%% element -- the normal attr still diffs, the bound attr is skipped.
+bind_attr_coexists_dynamic(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_bind_coexist). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', "
+        "            [{open, arizona_template:bind(<<\"o\">>, false)}, "
+        "             {class, arizona_template:get(cls, Bindings, <<\"a\">>)}], "
+        "            [<<\"x\">>]}"
+        "    ). "
+    ),
+    T1 = Mod:render(#{cls => <<"a">>}),
+    {_HTML, Snap} = arizona_render:render(T1),
+    T2 = Mod:render(#{cls => <<"b">>}),
+    {Ops, _Snap2} = arizona_diff:diff(T2, Snap),
+    %% Only the dynamic class produces an op (OP_SET_ATTR = 1); open is skipped.
+    ?assertMatch([[1, _, <<"class">>, <<"b">>]], Ops).
 
 %% Test 1: Static-only element -- no dynamics, single static binary.
 static_only(Config) when is_list(Config) ->
