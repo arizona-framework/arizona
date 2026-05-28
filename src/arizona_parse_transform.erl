@@ -241,6 +241,12 @@ format_error(local_html_only) ->
     "?local is only supported in ?html templates";
 format_error(local_key_reused) ->
     "a ?local key cannot bind both content and an attribute on the same element";
+format_error(local_attr_multiple) ->
+    "an attribute value can interpolate at most one ?local -- multiple ?local in "
+    "one attribute can't be recomposed client-side";
+format_error(local_attr_mixed) ->
+    "a ?local in an attribute value can only be combined with static text, not "
+    "another dynamic expression";
 format_error(cross_target_nesting) ->
     "cannot nest ?html and ?native in one template -- they produce "
     "incompatible statics. Render cross-target content via a separate "
@@ -692,10 +698,14 @@ compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
 %% Emit a dynamic attribute value: a folded arizona_js command becomes a static,
 %% otherwise the backend bakes the name and the value flushes as a dynamic.
 compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
-    case is_local_marker(ValueAST) of
-        true ->
+    case attr_local_spec(ValueAST, line(ValueAST)) of
+        {whole, _LocalCall} ->
             compile_local_attr(Backend, NameBin, ValueAST, ElemAz, State0);
-        false ->
+        {interp, LocalCall, Prefix, Suffix} ->
+            compile_interp_local_attr(
+                Backend, NameBin, LocalCall, Prefix, Suffix, ElemAz, State0
+            );
+        none ->
             compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0)
     end.
 
@@ -739,6 +749,36 @@ local_attr_expr_ast(NameBin, LocalCallAST) ->
     TargetAST = {tuple, 0, [{atom, 0, attr}, ast_binary(NameBin)]},
     {map, 0, LocalCallAST, [{map_field_assoc, 0, {atom, 0, target}, TargetAST}]}.
 
+%% Emit a client-owned attribute slot interpolated with static text, e.g.
+%% `{class, [~"foo ", ?local(K, Init)]}`. Same bind-map shape as compile_local_attr,
+%% but `v` is the composed value so SSR renders the full attribute; the client
+%% stores the affixes (descriptor `ap`) to recompose on set / strip on read.
+compile_interp_local_attr(Backend, NameBin, LocalCall, Prefix, Suffix, ElemAz, State0) ->
+    Module = State0#state.module,
+    State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
+    AzBin = integer_to_binary(ElemAz),
+    Expr = local_attr_interp_expr_ast(NameBin, LocalCall, Prefix, Suffix),
+    DynAST = make_text_dynamic_ast(AzBin, Expr, Module, line(LocalCall)),
+    flush(State1, DynAST).
+
+%% AST for `(arizona_template:local(Key, Init))#{target => {attr, Name},
+%% v => [Prefix, arizona_template:to_bin(Init), Suffix]}`. to_bin wraps Init so a
+%% non-binary init (number/atom) composes as its text -- a bare integer in an
+%% iolist would otherwise be emitted as a byte, not its decimal digits.
+local_attr_interp_expr_ast(NameBin, LocalCall, Prefix, Suffix) ->
+    TargetAST = {tuple, 0, [{atom, 0, attr}, ast_binary(NameBin)]},
+    InitBinAST =
+        {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, to_bin}}, [
+            local_init(LocalCall)
+        ]},
+    VAST = ast_list([ast_binary(Prefix), InitBinAST, ast_binary(Suffix)]),
+    {map, 0, LocalCall, [
+        {map_field_assoc, 0, {atom, 0, target}, TargetAST},
+        {map_field_assoc, 0, {atom, 0, v}, VAST}
+    ]}.
+
+local_init({call, _, _, [_KeyAST, InitAST]}) -> InitAST.
+
 %% `?local` expands to `arizona_template:local/2`; `az:local/2` is the facade.
 %% Recognize both so the macro and a direct facade call both work in templates.
 is_local_marker(
@@ -747,6 +787,44 @@ is_local_marker(
     true;
 is_local_marker(_) ->
     false.
+
+%% Classify an attribute value for `?local`: a bare local call is whole-value;
+%% a list mixing static binaries and exactly one local call is interpolated (the
+%% statics before/after the local become the prefix/suffix). A list with multiple
+%% locals, or a local mixed with a non-static (server-owned dynamic or nested
+%% element), is a compile error.
+attr_local_spec(ValueAST, Line) ->
+    case is_local_marker(ValueAST) of
+        true ->
+            {whole, ValueAST};
+        false ->
+            case is_list_ast(ValueAST) of
+                false ->
+                    none;
+                true ->
+                    Elems = ast_list_to_list(ValueAST),
+                    case [E || E <- Elems, is_local_marker(E)] of
+                        [] -> none;
+                        [_] -> attr_interp_spec(Elems, Line);
+                        _ -> parse_error(local_attr_multiple, Line)
+                    end
+            end
+    end.
+
+attr_interp_spec(Elems, Line) ->
+    {Before, [LocalCall | After]} = lists:splitwith(
+        fun(E) -> not is_local_marker(E) end, Elems
+    ),
+    assert_all_static(Before ++ After, Line),
+    Prefix = iolist_to_binary([extract_binary_value(E) || E <- Before]),
+    Suffix = iolist_to_binary([extract_binary_value(E) || E <- After]),
+    {interp, LocalCall, Prefix, Suffix}.
+
+assert_all_static(Elems, Line) ->
+    case lists:all(fun is_static_binary/1, Elems) of
+        true -> ok;
+        false -> parse_error(local_attr_mixed, Line)
+    end.
 
 local_key({call, _, _, [KeyAST, _Init]}, Line) ->
     case is_static_binary(KeyAST) of
@@ -760,6 +838,7 @@ local_key({call, _, _, [KeyAST, _Init]}, Line) ->
 %% and HTML-attribute-escaped at compile time (reusing arizona_effect:escape_attr/1).
 maybe_inject_local_descriptor(Backend, Attrs, Children, Line, State) ->
     AttrLocals = collect_attr_locals(Backend, Attrs, Line),
+    AttrAffixes = collect_attr_affixes(Backend, Attrs, Line),
     ContentLocals = collect_content_locals(Children, Line),
     case map_size(AttrLocals) > 0 orelse map_size(ContentLocals) > 0 of
         false ->
@@ -767,7 +846,7 @@ maybe_inject_local_descriptor(Backend, Attrs, Children, Line, State) ->
         true ->
             assert_local_supported(Backend, State, Line),
             assert_no_key_reuse(AttrLocals, ContentLocals, Line),
-            Desc = build_local_descriptor(AttrLocals, ContentLocals),
+            Desc = build_local_descriptor(AttrLocals, AttrAffixes, ContentLocals),
             Escaped = arizona_effect:escape_attr(iolist_to_binary(json:encode(Desc))),
             [{tuple, 0, [ast_binary(~"az-local"), ast_binary(Escaped)]} | Attrs]
     end.
@@ -792,22 +871,44 @@ assert_no_key_reuse(AttrLocals, ContentLocals, Line) ->
         _ -> parse_error(local_key_reused, Line)
     end.
 
-build_local_descriptor(AttrLocals, ContentLocals) ->
+build_local_descriptor(AttrLocals, AttrAffixes, ContentLocals) ->
     Desc0 =
         case map_size(AttrLocals) of
             0 -> #{};
             _ -> #{~"a" => AttrLocals}
         end,
+    Desc1 =
+        case map_size(AttrAffixes) of
+            0 -> Desc0;
+            _ -> Desc0#{~"ap" => AttrAffixes}
+        end,
     case map_size(ContentLocals) of
-        0 -> Desc0;
-        _ -> Desc0#{~"c" => ContentLocals}
+        0 -> Desc1;
+        _ -> Desc1#{~"c" => ContentLocals}
     end.
 
+%% Both whole-value and interpolated attribute locals contribute `attrName => Key`
+%% (homogeneous, so the key-reuse check stays simple); interpolated ones also add
+%% their affixes via collect_attr_affixes/3.
 collect_attr_locals(Backend, Attrs, Line) ->
-    #{
-        extract_attr_name(Backend, NameAST) => local_key(ValueAST, Line)
-     || {tuple, _, [NameAST, ValueAST]} <- Attrs, is_local_marker(ValueAST)
-    }.
+    maps:from_list([
+        {extract_attr_name(Backend, NameAST), local_key(local_call(Spec), Line)}
+     || {tuple, _, [NameAST, ValueAST]} <- Attrs,
+        Spec <- [attr_local_spec(ValueAST, Line)],
+        Spec =/= none
+    ]).
+
+%% The static prefix/suffix around an interpolated attribute local, keyed by
+%% attribute name -- the client recomposes `prefix ++ value ++ suffix` on set.
+collect_attr_affixes(Backend, Attrs, Line) ->
+    maps:from_list([
+        {extract_attr_name(Backend, NameAST), [Prefix, Suffix]}
+     || {tuple, _, [NameAST, ValueAST]} <- Attrs,
+        {interp, _LC, Prefix, Suffix} <- [attr_local_spec(ValueAST, Line)]
+    ]).
+
+local_call({whole, LocalCall}) -> LocalCall;
+local_call({interp, LocalCall, _Prefix, _Suffix}) -> LocalCall.
 
 %% Collect each content `?local` keyed by its dynamic-text slot index -- the
 %% suffix the client needs to reconstruct the slot's comment-marker az (see

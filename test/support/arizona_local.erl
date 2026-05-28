@@ -80,6 +80,18 @@ render(Bindings) ->
                         ]}
                     ],
                     [~"Rename"]}
+            ]},
+
+            %% Interpolated attribute: a ?local is one part of a composite value
+            %% (static prefix + client-owned slot). The button recomposes the
+            %% whole `class` client-side, with no round-trip.
+            {section, [], [
+                {h2, [], [~"Interpolated attribute"]},
+                {span,
+                    [{id, ~"status_badge"}, {class, [~"badge badge-", ?local(~"status", ~"ok")]}], [
+                        ~"Status"
+                    ]},
+                {button, [{az_click, arizona_js:set(~"status", ~"warn")}], [~"Warn"]}
             ]}
         ]}
     ).

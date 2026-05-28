@@ -516,7 +516,8 @@ function localMarkerAz(el, slot) {
 /**
  * Write a value to one bound slot.
  * @param {Element} el
- * @param {string[]} target -- ['content', slot] or ['attr', name]
+ * @param {string[]} target -- ['content', slot], ['attr', name], or
+ *   ['attr', name, prefix, suffix] (interpolated attribute)
  * @param {*} value
  */
 function writeLocalValue(el, target, value) {
@@ -525,20 +526,27 @@ function writeLocalValue(el, target, value) {
         if (marker) setMarkerText(marker, value);
         else el.textContent = value == null ? '' : String(value);
         notifyUpdated(el);
+        return;
+    }
+    const name = target[1];
+    if (target.length === 4) {
+        // Interpolated: recompose prefix + value + suffix (always a string attr).
+        applySetAttrOp(el, name, target[2] + String(value) + target[3]);
     } else if (value === false || value == null) {
-        el.removeAttribute(target[1]);
+        el.removeAttribute(name);
         notifyUpdated(el);
     } else if (value === true) {
-        applySetAttrOp(el, target[1], '');
+        applySetAttrOp(el, name, '');
     } else {
-        applySetAttrOp(el, target[1], String(value));
+        applySetAttrOp(el, name, String(value));
     }
 }
 
 /**
  * Read the current value of one bound slot from the DOM.
  * @param {Element} el
- * @param {string[]} target -- ['content', slot] or ['attr', name]
+ * @param {string[]} target -- ['content', slot], ['attr', name], or
+ *   ['attr', name, prefix, suffix] (interpolated attribute)
  * @returns {*}
  */
 function readLocalValue(el, target) {
@@ -554,6 +562,11 @@ function readLocalValue(el, target) {
         return text;
     }
     const name = target[1];
+    if (target.length === 4) {
+        // Interpolated: strip the known prefix/suffix to recover the local value.
+        const v = el.getAttribute(name) ?? '';
+        return v.slice(target[2].length, v.length - target[3].length);
+    }
     if (!el.hasAttribute(name)) return false;
     const v = el.getAttribute(name);
     return v === '' ? true : v;
@@ -575,7 +588,8 @@ function forEachLocal(root, key, viewId, fn) {
         if (viewId !== null && resolveTarget(el) !== viewId) return;
         // The descriptor is always framework-generated valid JSON.
         const parsed = JSON.parse(desc);
-        // c maps each content slot index -> key; a maps each attr name -> key.
+        // c maps each content slot index -> key; a maps each attr name -> key;
+        // ap (optional) carries [prefix, suffix] for interpolated attributes.
         if (parsed.c) {
             for (const [slot, k] of Object.entries(parsed.c)) {
                 if (k === key) fn(el, ['content', slot]);
@@ -583,7 +597,10 @@ function forEachLocal(root, key, viewId, fn) {
         }
         if (parsed.a) {
             for (const [attr, k] of Object.entries(parsed.a)) {
-                if (k === key) fn(el, ['attr', attr]);
+                if (k === key) {
+                    const aff = parsed.ap && parsed.ap[attr];
+                    fn(el, aff ? ['attr', attr, aff[0], aff[1]] : ['attr', attr]);
+                }
             }
         }
     };

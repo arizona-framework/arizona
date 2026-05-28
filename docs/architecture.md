@@ -206,23 +206,35 @@ Authoring (`?local` = `arizona_template:local/2`, also `az:local/2`):
 {'dialog', [{open, ?local(~"modal_open", false)}], [...]}  %% boolean attribute
 {'div', [{'data-active', ?local(~"tab", ~"home")}], [...]} %% valued attribute (CSS-driven tabs)
 {'p', [], [~"Name: ", ?local(~"first", ~"Ada"), ~" ", ?local(~"last", ~"Lovelace")]} %% many content slots + static text
+{'a', [{href, [~"/u/", ?local(~"id", ~"1"), ~"/edit"]}], [...]} %% interpolated attribute (static + one local)
 ```
 
 Compile-time constraints: `Key` must be a literal binary; a key can't bind both content and
 an attribute on one element; not allowed under `az-nodiff` or in `?native` templates.
 A content `?local` does **not** have to be the sole child -- an element can hold several
-content slots, freely mixed with static text and other dynamic children.
+content slots, freely mixed with static text and other dynamic children. An attribute value
+may also **interpolate** one `?local` with static text around it (the statics become a
+prefix/suffix); two `?local` in one attribute, or a `?local` mixed with a server-owned
+dynamic there, are compile errors (`local_attr_multiple` / `local_attr_mixed`). Interpolation
+is for **string-valued** attributes (`class`, `style`, `href`, `data-*`, `value`); a boolean
+attribute must use a **whole-value** `?local` (`{disabled, ?local(~"d", false)}`, which
+renders `false` → absent / `true` → bare) -- an interpolated value always renders
+`name="value"`, so an interpolated boolean would be `disabled="false"`, i.e. still present.
 
 Mechanism: `arizona_template:local/2` returns `#{diff => false, az_local => Key, v => Init}`
 (attributes add `target => {attr, Name}`). `eval` preserves it; `arizona_diff` skips it via
 the existing per-dynamic `#{diff := false}` clause; `arizona_render` unwraps it. Each content
 slot is an individually comment-marked text node (`<!--az:X-->Init<!--/az-->`), exactly like
 any dynamic text child. The parse transform bakes a self-describing `az-local` descriptor
-attribute (escaped JSON `{c: {slotIdx: key}, a: {attrName: key}}`) onto the element -- `c`
-maps each content slot's dynamic-slot index to its key, `a` maps each attribute name to its
-key. The client scans `[az-local]` live (no persistent index), and for a content slot
-reconstructs the marker `az` from the element's runtime `az` + the slot index (mirroring
-`arizona_html:text_az/2`) to address the right marker.
+attribute (escaped JSON `{c: {slotIdx: key}, a: {attrName: key}, ap: {attrName: [prefix, suffix]}}`)
+onto the element -- `c` maps each content slot's dynamic-slot index to its key, `a` maps each
+attribute name to its key, and `ap` (present only for interpolated attributes) carries the
+static prefix/suffix. The client scans `[az-local]` live (no persistent index): for a content
+slot it reconstructs the marker `az` from the element's runtime `az` + the slot index
+(mirroring `arizona_html:text_az/2`); for an interpolated attribute it recomposes
+`prefix ++ value ++ suffix` on set and strips them on read. An interpolated attribute's
+composed initial value is baked into the bind-map's `v` (`[Prefix, to_bin(Init), Suffix]`), so
+SSR render and diff-skip reuse the whole-value attribute path unchanged.
 
 Updating (event attributes / handler effects via `arizona_js`; never sent to the server --
 op `?EFFECT_SET_LOCAL`):

@@ -1702,6 +1702,30 @@ describe('?local -- set/get attribute', () => {
     });
 });
 
+describe('?local -- interpolated attribute', () => {
+    it('set recomposes prefix + value + suffix; get strips them', () => {
+        setupView(
+            'v',
+            `<button az="0" az-local='{"a":{"class":"variant"},"ap":{"class":["btn btn-",""]}}' class="btn btn-primary">x</button>`,
+        );
+        set('v', 'variant', 'secondary');
+        const btn = document.querySelector('[az="0"]');
+        expect(btn.getAttribute('class')).toBe('btn btn-secondary');
+        expect(get('v', 'variant')).toBe('secondary');
+    });
+
+    it('strips both a prefix and a suffix on read', () => {
+        setupView(
+            'v',
+            `<a az="0" az-local='{"a":{"href":"id"},"ap":{"href":["/u/","/edit"]}}' href="/u/1/edit">e</a>`,
+        );
+        expect(get('v', 'id')).toBe('1');
+        set('v', 'id', '42');
+        expect(document.querySelector('[az="0"]').getAttribute('href')).toBe('/u/42/edit');
+        expect(get('v', 'id')).toBe('42');
+    });
+});
+
 describe('?local -- per-view isolation', () => {
     const twoViews = () => {
         document.body.innerHTML =

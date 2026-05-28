@@ -166,3 +166,35 @@ test.describe('?local -- multiple content slots', () => {
         expect(msgs, 'no server round-trip for multi-slot ?local updates').toBe(0);
     });
 });
+
+// ---------------------------------------------------------------------------
+// Interpolated attribute (static prefix + client-owned slot)
+// ---------------------------------------------------------------------------
+
+test.describe('?local -- interpolated attribute', () => {
+    test('a button recomposes a bound attribute client-side, no round-trip', async ({ page }) => {
+        await page.goto('/local');
+        await wsReady(page);
+
+        const badge = page.locator('#status_badge');
+        await expect(badge).toHaveAttribute('class', 'badge badge-ok');
+
+        await page.evaluate(() => {
+            /** @type {any} */ (window).__msgs = 0;
+            const orig = window._ws.onmessage;
+            window._ws.onmessage = (e) => {
+                /** @type {any} */ (window).__msgs += 1;
+                if (orig) orig(e);
+            };
+        });
+
+        await expectStaysConnected(page, async () => {
+            await page.getByRole('button', { name: 'Warn' }).click();
+            await expect(badge).toHaveAttribute('class', 'badge badge-warn');
+            await page.waitForTimeout(200);
+        });
+
+        const msgs = await page.evaluate(() => /** @type {any} */ (window).__msgs);
+        expect(msgs, 'no server round-trip for interpolated-attribute ?local').toBe(0);
+    });
+});
