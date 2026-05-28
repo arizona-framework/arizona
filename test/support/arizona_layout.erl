@@ -23,7 +23,11 @@ render(Bindings) ->
                     ~" | ",
                     {a, [{href, ~"/chat"}, az_navigate], [~"Chat"]},
                     ~" | ",
-                    {a, [{href, ~"/local"}, az_navigate], [~"Local"]}
+                    {a, [{href, ~"/local"}, az_navigate], [~"Local"]},
+                    ~" | ",
+                    {a, [{href, ~"/local-nested"}, az_navigate], [~"Nested"]},
+                    ~" | ",
+                    {a, [{href, ~"/local-app"}, az_navigate], [~"App"]}
                 ]},
                 ?inner_content,
                 {script, [{type, ~"module"}], [

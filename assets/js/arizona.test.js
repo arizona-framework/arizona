@@ -1880,6 +1880,54 @@ describe('?local -- multiple content slots in one element', () => {
     });
 });
 
+describe('?local -- reset / isolation on server ops', () => {
+    it('OP_UPDATE of an enclosing element resets a contained ?local to its SSR initial', () => {
+        setupView(
+            'v',
+            `<div az="0"><span az="1" az-local='{"c":{"0":"k"}}'><!--az:1-->init<!--/az--></span></div>`,
+        );
+        set('v', 'k', 'edited');
+        expect(document.querySelector('[az-local]').textContent).toBe('edited');
+        // Server re-renders the whole region (innerHTML) carrying the SSR-initial slot.
+        applyOps([
+            [
+                OP.UPDATE,
+                'v:0',
+                `<span az="1" az-local='{"c":{"0":"k"}}'><!--az:1-->init<!--/az--></span>`,
+            ],
+        ]);
+        expect(document.querySelector('[az-local]').textContent).toBe('init');
+        expect(get('v', 'k')).toBe('init');
+    });
+
+    it('OP_REPLACE of the slot element resets the ?local to its SSR initial', () => {
+        setupView('v', `<span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->init<!--/az--></span>`);
+        set('v', 'k', 'edited');
+        expect(document.querySelector('[az-local]').textContent).toBe('edited');
+        applyOps([
+            [
+                OP.REPLACE,
+                'v:0',
+                `<span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->init<!--/az--></span>`,
+            ],
+        ]);
+        expect(document.querySelector('[az-local]').textContent).toBe('init');
+    });
+
+    it('a targeted OP_TEXT on a sibling marker leaves an adjacent ?local untouched', () => {
+        setupView(
+            'v',
+            `<div az="0"><!--az:0-->server<!--/az-->` +
+                `<span az="1" az-local='{"c":{"0":"k"}}'><!--az:1-->localinit<!--/az--></span></div>`,
+        );
+        set('v', 'k', 'edited');
+        applyOps([[OP.TEXT, 'v:0', 'server-changed']]);
+        const div = document.querySelector('[az="0"]');
+        expect(div.querySelector('[az-local]').textContent).toBe('edited');
+        expect(get('v', 'k')).toBe('edited');
+    });
+});
+
 describe('?local -- no server round-trip', () => {
     let mock;
     afterEach(() => {

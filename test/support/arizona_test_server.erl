@@ -28,6 +28,14 @@ start() ->
             bindings => #{title => <<"Local">>},
             layouts => Layouts
         }},
+        {live, <<"/local-nested">>, arizona_local_nested, #{
+            bindings => #{title => <<"Nested">>},
+            layouts => Layouts
+        }},
+        {live, <<"/local-app">>, arizona_local_app, #{
+            bindings => #{title => <<"App">>},
+            layouts => Layouts
+        }},
         {live, <<"/crashable">>, arizona_crashable, #{layouts => Layouts}},
         {live, <<"/scroll-home">>, arizona_scroll_home, #{layouts => Layouts}},
         {live, <<"/scroll-about">>, arizona_scroll_about, #{layouts => Layouts}},

@@ -60,6 +60,7 @@
     seed_fps_skips_statics/1,
     seed_fps_unknown_fp_still_sends/1,
     stateful_child_independent_state/1,
+    nested_local_diff_skipped/1,
     unmount_on_navigate/1,
     unmount_timer_cancelled_on_navigate/1,
     unmount_on_terminate/1,
@@ -92,6 +93,7 @@ groups() ->
     [
         {gen_server, [parallel], [
             stateful_child_independent_state,
+            nested_local_diff_skipped,
             live_mount,
             live_event,
             live_multiple_events,
@@ -210,6 +212,28 @@ stateful_child_independent_state(Config) when is_list(Config) ->
         ],
         AddOps
     ).
+
+%% A ?local inside a stateful child is diff-skipped both when the child handles
+%% its own event AND when a parent update propagates new props down -- only the
+%% changed server-owned parts produce ops, never the client-owned slot.
+nested_local_diff_skipped(Config) when is_list(Config) ->
+    {ok, Pid} = arizona_live:start_link(
+        arizona_local_nested, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    %% (a) Parent-propagated update (on fresh state): each child patches only its
+    %% label; neither child's note ?local produces an op (single op per child).
+    {ok, RelabelOps, _} = arizona_live:handle_event(Pid, <<"local_nested">>, <<"relabel">>, #{}),
+    ?assertMatch(
+        [
+            [<<"child_a">>, [[?OP_TEXT, _, <<"v2">>]]],
+            [<<"child_b">>, [[?OP_TEXT, _, <<"v2">>]]]
+        ],
+        RelabelOps
+    ),
+    %% (b) Child's own event: only the count OP_TEXT, no op for the note ?local.
+    {ok, IncOps, _} = arizona_live:handle_event(Pid, <<"child_a">>, <<"inc">>, #{}),
+    ?assertMatch([[?OP_TEXT, _, <<"1">>]], IncOps).
 
 live_mount(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(

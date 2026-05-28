@@ -50,6 +50,8 @@
     ssr_layouts_empty_list/1,
     ssr_layouts_nest_outer_first/1,
     ssr_page_with_child/1,
+    ssr_nested_local/1,
+    ssr_local_app/1,
     zip_nested_element/1,
     zip_nested_sd/1,
     zip_static_only/1,
@@ -85,6 +87,8 @@ groups() ->
             ssr_counter_with_bindings,
             ssr_counter_custom_id,
             ssr_page_with_child,
+            ssr_nested_local,
+            ssr_local_app,
             ssr_about_page,
             ssr_each_map,
             ssr_layouts_nest_outer_first,
@@ -271,6 +275,51 @@ ssr_page_with_child(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, <<"az-navigate">>)),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"connect('/ws')">>)),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"</html>">>)).
+
+%% A ?local inside nested stateful children renders end to end: each child gets
+%% its own az-view + id (so its ?local is scoped to the child), and both the
+%% children's and the parent's ?local slots render their SSR initial + descriptor.
+ssr_nested_local(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{}),
+    HTML = iolist_to_binary(
+        arizona_render:render_view_to_iolist(
+            arizona_local_nested,
+            Req,
+            #{bindings => #{title => <<"Nested">>}, layouts => [{arizona_layout, render}]}
+        )
+    ),
+    %% Both stateful children render with their own az-view + id.
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"az-view id=\"child_a\"">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"az-view id=\"child_b\"">>)),
+    %% Each child's ?local("note") renders its SSR initial inside an az-local element.
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"untouched<!--/az-->">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"az-local=">>)),
+    %% The parent's ?local("pnote") renders too.
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"parent<!--/az-->">>)),
+    %% Children show the parent-propagated initial label.
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"v1<!--/az-->">>)).
+
+%% The fully client-only app renders: nested stateful widgets (own az-view + id),
+%% a stateless tab bar, and interpolated/content ?local slots, all with their SSR
+%% initials -- the page is interactive purely via client-owned slots.
+ssr_local_app(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{}),
+    HTML = iolist_to_binary(
+        arizona_render:render_view_to_iolist(
+            arizona_local_app,
+            Req,
+            #{bindings => #{title => <<"App">>}, layouts => [{arizona_layout, render}]}
+        )
+    ),
+    %% Nested stateful widgets each render with their own az-view + id.
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"az-view id=\"widget_a\"">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"az-view id=\"widget_b\"">>)),
+    %% Stateless tab bar + the theme wrapper render their initial ?local values.
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"data-active=\"home\"">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"class=\"app theme-light\"">>)),
+    %% Each widget's status ?local renders its initial (interpolated class).
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"status status-idle">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"az-local=">>)).
 
 ssr_layouts_nest_outer_first(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(#{}),
