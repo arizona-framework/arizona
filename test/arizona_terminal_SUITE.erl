@@ -244,17 +244,16 @@ input_broadcasts_message(Config) when is_list(Config) ->
 
 client_count_reflects_subscribers(Config) when is_list(Config) ->
     %% Relative assertions -- the demo channel is shared across the suite, so
-    %% don't assume an absolute base count.
-    {Pid, ViewId} = start_demo(),
+    %% don't assume an absolute base count. The view monitors demo membership, so
+    %% join/leave drive the count (the notification is async -> poll with wait_until).
+    {Pid, _ViewId} = start_demo(),
     Before = client_count(frame(Pid)),
-    %% A new subscriber bumps the count on the next tick.
+    %% A new subscriber bumps the count.
     ok = arizona_pubsub:subscribe(demo, self()),
-    Pid ! {arizona_view, ViewId, tick},
-    ?assertEqual(Before + 1, client_count(frame(Pid))),
+    ok = wait_until(fun() -> client_count(frame(Pid)) =:= Before + 1 end),
     %% Leaving drops it again.
     ok = arizona_pubsub:unsubscribe(demo, self()),
-    Pid ! {arizona_view, ViewId, tick},
-    ?assertEqual(Before, client_count(frame(Pid))).
+    ok = wait_until(fun() -> client_count(frame(Pid)) =:= Before end).
 
 %% --------------------------------------------------------------------
 %% Helpers
@@ -287,3 +286,21 @@ client_count(Frame) ->
     [_, Rest] = binary:split(Frame, ~"Clients: "),
     [Digits, _] = binary:split(Rest, ~"\e"),
     binary_to_integer(Digits).
+
+%% Poll Pred until it returns true or a 3s deadline passes.
+wait_until(Pred) ->
+    wait_until(Pred, erlang:monotonic_time(millisecond) + 3000).
+
+wait_until(Pred, Deadline) ->
+    case Pred() of
+        true ->
+            ok;
+        false ->
+            case erlang:monotonic_time(millisecond) < Deadline of
+                true ->
+                    timer:sleep(50),
+                    wait_until(Pred, Deadline);
+                false ->
+                    ct:fail(wait_until_timeout)
+            end
+    end.

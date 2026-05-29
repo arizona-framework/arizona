@@ -8,9 +8,10 @@
 %%     (`j`/`k` move the menu selection, `+`/`-` change a counter);
 %%   * timer ticks -- a self-scheduled `?send_after` advances a server clock with
 %%     no user input (the first tick is armed from `handle_info(arizona_connected)`
-%%     so it only runs in a connected live process); each tick also refreshes the
-%%     connected-client count (the number of terminals subscribed to `demo`), so a
-%%     connect or disconnect shows on every screen within a tick;
+%%     so it only runs in a connected live process);
+%%   * presence -- `arizona_pubsub:monitor/1` notifies the view the instant a
+%%     terminal joins or leaves the `demo` channel, so the connected-client count
+%%     updates live (event-driven, no polling);
 %%   * pubsub broadcasts -- each message delivered on the `demo` channel is emitted
 %%     as an `arizona_tty:log/1` effect, which the runtime streams into the
 %%     terminal's scrolling log (above the pinned status block). The "Send message"
@@ -25,8 +26,10 @@
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Init) ->
-    %% Subscribe before counting so this client is included in the tally.
+    %% Subscribe, then monitor membership for a live client count. Subscribe first
+    %% so this client is in the monitor's initial member snapshot.
     ok = arizona_pubsub:subscribe(demo, self()),
+    {_Ref, Members} = arizona_pubsub:monitor(demo),
     Bindings = #{
         id => ~"term_demo",
         selected => 0,
@@ -36,7 +39,7 @@ mount(Init) ->
         draft => <<>>,
         count => maps:get(count, Init, 0),
         clock => 0,
-        clients => count_clients(),
+        clients => length(Members),
         %% Terminal size: a network transport (SSH) supplies it via pty-req /
         %% window-change; a local TTY can't read it, so it stays 0.
         cols => maps:get(term_cols, Init, 0),
@@ -92,14 +95,16 @@ handle_info(arizona_connected, Bindings) ->
     {Bindings, #{}, []};
 handle_info(tick, Bindings) ->
     ?send_after(?TICK_MS, tick),
-    %% Refresh the connected-client tally each tick so connects/disconnects show.
-    {Bindings#{clock => maps:get(clock, Bindings) + 1, clients => count_clients()}, #{}, []};
+    {Bindings#{clock => maps:get(clock, Bindings) + 1}, #{}, []};
 handle_info({chat, Msg}, Bindings) ->
     %% Append-only: stream the message into the scrolling log, no status change.
     {Bindings, #{}, [arizona_tty:log(Msg)]};
 handle_info({term_resize, Rows, Cols}, Bindings) ->
     %% A network transport reported a terminal resize; reflect the new size.
-    {Bindings#{rows => Rows, cols => Cols}, #{}, []}.
+    {Bindings#{rows => Rows, cols => Cols}, #{}, []};
+handle_info({_Ref, Verb, demo, _Pids}, Bindings) when Verb =:= join; Verb =:= leave ->
+    %% A pg membership change on the demo channel -- refresh the live client count.
+    {Bindings#{clients => count_clients()}, #{}, []}.
 
 %% --------------------------------------------------------------------
 %% Internal functions
