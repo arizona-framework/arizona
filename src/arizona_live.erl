@@ -57,6 +57,7 @@ fingerprints already shipped in the initial HTML.
 -export([mount/1]).
 -export([mount_and_render/1]).
 -export([render_current/1]).
+-export([stop/1]).
 -export([navigate/4]).
 -export([navigate/5]).
 -export([handle_event/4]).
@@ -249,6 +250,19 @@ snapshot/views are discarded (read-only render).
     Pid :: pid().
 render_current(Pid) ->
     gen_server:call(Pid, render_current, infinity).
+
+-doc """
+Stops a live process, running its `terminate/2` (and thus `unmount/1`) cleanup.
+
+For transports that manage view lifecycles directly -- e.g. an SSH channel
+closing one terminal session among many in a long-running daemon. The live
+process is linked to its transport, but a transport that stops with reason
+`normal` would not bring the view down via the link, so the transport stops it
+explicitly.
+""".
+-spec stop(Pid) -> ok when Pid :: pid().
+stop(Pid) ->
+    gen_server:stop(Pid).
 
 -doc """
 Dispatches a client event to a view. If `ViewId` matches a nested

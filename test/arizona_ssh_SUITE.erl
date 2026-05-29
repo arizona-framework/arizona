@@ -10,6 +10,7 @@
 -export([window_change_resizes/1]).
 -export([restores_cursor_on_quit/1]).
 -export([chat_broadcasts_to_all_terminals/1]).
+-export([disconnect_removes_subscriber/1]).
 
 %% End-to-end: arizona_ssh serves the ?terminal demo view over a real SSH daemon,
 %% driven by the OTP ssh client. A throwaway host key + accept-all password auth
@@ -25,7 +26,8 @@ all() ->
         key_moves_selection,
         window_change_resizes,
         restores_cursor_on_quit,
-        chat_broadcasts_to_all_terminals
+        chat_broadcasts_to_all_terminals,
+        disconnect_removes_subscriber
     ].
 
 init_per_suite(Config) ->
@@ -117,9 +119,39 @@ chat_broadcasts_to_all_terminals(Config) when is_list(Config) ->
     ok = ssh:close(ConnA),
     ok = ssh:close(ConnB).
 
+disconnect_removes_subscriber(Config) when is_list(Config) ->
+    %% A connected terminal subscribes to demo; closing it must drop the
+    %% subscription, otherwise the connected-client count never decreases. The
+    %% live view is linked to its channel, but a normal channel stop doesn't kill
+    %% it via the link -- the channel stops it explicitly in terminate/2.
+    Port = ?config(port, Config),
+    Before = length(arizona_pubsub:subscribers(demo)),
+    {Conn, _Ch} = connect(Port),
+    ok = wait_until(fun() -> length(arizona_pubsub:subscribers(demo)) =:= Before + 1 end),
+    ok = ssh:close(Conn),
+    ok = wait_until(fun() -> length(arizona_pubsub:subscribers(demo)) =:= Before end).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
+
+%% Poll Pred until it returns true or a 3s deadline passes.
+wait_until(Pred) ->
+    wait_until(Pred, erlang:monotonic_time(millisecond) + 3000).
+
+wait_until(Pred, Deadline) ->
+    case Pred() of
+        true ->
+            ok;
+        false ->
+            case erlang:monotonic_time(millisecond) < Deadline of
+                true ->
+                    timer:sleep(50),
+                    wait_until(Pred, Deadline);
+                false ->
+                    ct:fail(wait_until_timeout)
+            end
+    end.
 
 %% A throwaway RSA host key so the daemon has a system_dir key without shelling
 %% out to ssh-keygen.

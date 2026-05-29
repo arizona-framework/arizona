@@ -19,6 +19,7 @@ pubsub), which the owner must forward to `handle_push/2`. Key input is fed to
 -export([handle_key/2]).
 -export([handle_push/2]).
 -export([resize/3]).
+-export([stop/1]).
 -export([normalize_key/1]).
 -export([to_crlf/1]).
 -export([count_lines/1]).
@@ -100,6 +101,16 @@ targets the live process's *own* mailbox).
 resize(#session{pid = Pid, view_id = ViewId}, Rows, Cols) ->
     Pid ! {arizona_view, ViewId, {term_resize, Rows, Cols}},
     ok.
+
+-doc """
+Stops the live process backing the session. A transport calls this when its
+connection ends, so the view doesn't outlive the transport -- without it a view
+whose transport stopped with reason `normal` survives the broken link and stays
+subscribed to any pubsub channels (e.g. inflating a connected-client count).
+""".
+-spec stop(session()) -> ok.
+stop(#session{pid = Pid}) ->
+    arizona_live:stop(Pid).
 
 %% --------------------------------------------------------------------
 %% Internal functions

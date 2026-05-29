@@ -149,6 +149,10 @@ handle_ssh_msg({ssh_cm, _Conn, _Msg}, State) ->
     {ok, State}.
 
 -spec terminate(term(), state()) -> ok.
+terminate(_Reason, #state{session = Session}) when Session =/= undefined ->
+    %% Stop the live view so it doesn't outlive the channel and linger as a
+    %% pubsub subscriber -- the start_link link doesn't fire on a normal stop.
+    arizona_terminal_session:stop(Session);
 terminate(_Reason, _State) ->
     ok.
 
