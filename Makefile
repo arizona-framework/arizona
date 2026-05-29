@@ -10,7 +10,7 @@ SHELL := /bin/bash
 	check check-dirty check-fast check-erl check-fmt check-lint check-hank check-xref check-dialyzer check-js \
 	build-js analyze-js build-android build-ios \
 	test test-eunit test-ct test-erl test-js test-e2e test-android test-ios \
-	bench \
+	bench term-demo \
 	cover cover-erl cover-js \
 	doc doc-erl doc-js \
 	setup-e2e clean
@@ -156,6 +156,12 @@ test-e2e-sequential:
 #   make bench ARGS="--only diff_no_change --only diff_simple_event"
 bench: compile-test
 	./scripts/bench.escript $(ARGS)
+
+# Interactive terminal demo: a live Arizona view rendered in an ANSI terminal
+# with no HTTP server. Needs a real TTY; not wired into ci. Press q to quit.
+# Compile under the test profile so the demo view fixture is on the path.
+term-demo: compile-test
+	./scripts/term_demo.escript
 
 # Performance profile (eprof/fprof). Same caveat as bench: developer
 # tool, not auto-gated. Pass extra args via ARGS, e.g.:

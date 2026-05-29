@@ -9,6 +9,8 @@
 -export([key_changes_count/1]).
 -export([tick_advances_clock/1]).
 -export([broadcast_appends_message/1]).
+-export([normalize_key_mapping/1]).
+-export([req_adapter_blank/1]).
 
 %% Drives the ?terminal demo view through arizona_live with NO transport and no
 %% HTTP server -- exactly how the terminal runtime drives it, minus the TTY.
@@ -20,7 +22,9 @@ all() ->
         key_moves_selection,
         key_changes_count,
         tick_advances_clock,
-        broadcast_appends_message
+        broadcast_appends_message,
+        normalize_key_mapping,
+        req_adapter_blank
     ].
 
 init_per_suite(Config) ->
@@ -77,6 +81,28 @@ broadcast_appends_message(Config) when is_list(Config) ->
     %% from any process repaints it.
     ok = arizona_pubsub:broadcast(demo, {chat, ~"hello there"}),
     ?assert(contains(frame(Pid), ~"hello there")).
+
+normalize_key_mapping(Config) when is_list(Config) ->
+    %% The driver turns raw key reads into quit / a ~"key" payload / ignore.
+    ?assertEqual(quit, arizona_terminal_app:normalize_key("q")),
+    ?assertEqual(quit, arizona_terminal_app:normalize_key([3])),
+    ?assertEqual(quit, arizona_terminal_app:normalize_key([4])),
+    ?assertEqual(~"up", arizona_terminal_app:normalize_key("\e[A")),
+    ?assertEqual(~"down", arizona_terminal_app:normalize_key("\e[B")),
+    ?assertEqual(~"j", arizona_terminal_app:normalize_key("j")),
+    ?assertEqual(~"+", arizona_terminal_app:normalize_key("+")),
+    %% an unrecognized escape sequence and a bare ESC are dropped
+    ?assertEqual(ignore, arizona_terminal_app:normalize_key("\e[Z")),
+    ?assertEqual(ignore, arizona_terminal_app:normalize_key([27])).
+
+req_adapter_blank(Config) when is_list(Config) ->
+    %% The synthetic request mounts a view with no HTTP server.
+    Req = arizona_terminal_req:new(),
+    ?assertEqual(arizona_terminal_req, arizona_req:adapter(Req)),
+    ?assertEqual(~"GET", arizona_req:method(Req)),
+    ?assertEqual(~"/", arizona_req:path(Req)),
+    {Bindings, _Req1} = arizona_req:bindings(Req),
+    ?assertEqual(#{}, Bindings).
 
 %% --------------------------------------------------------------------
 %% Helpers
