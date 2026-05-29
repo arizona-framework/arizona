@@ -20,6 +20,7 @@
 -export([crlf_conversion/1]).
 -export([session_drives_frames/1]).
 -export([input_broadcasts_message/1]).
+-export([client_count_reflects_subscribers/1]).
 
 %% Drives the ?terminal demo view through arizona_live with no transport and no
 %% HTTP server -- the path the terminal runtime drives, minus the TTY.
@@ -43,7 +44,8 @@ all() ->
         normalize_key_mapping,
         crlf_conversion,
         session_drives_frames,
-        input_broadcasts_message
+        input_broadcasts_message,
+        client_count_reflects_subscribers
     ].
 
 init_per_suite(Config) ->
@@ -72,6 +74,7 @@ renders_status_block(Config) when is_list(Config) ->
     ?assert(contains(Frame, ~"  Quit")),
     ?assert(contains(Frame, ~"Count: 0")),
     ?assert(contains(Frame, ~"Server ticks: 0")),
+    ?assert(contains(Frame, ~"Clients: ")),
     ?assert(contains(Frame, ~"[j/k] move")),
     %% the title carries a green SGR escape
     ?assert(contains(Frame, ~"\e[32m")).
@@ -239,6 +242,20 @@ input_broadcasts_message(Config) when is_list(Config) ->
         ct:fail(no_broadcast)
     end.
 
+client_count_reflects_subscribers(Config) when is_list(Config) ->
+    %% Relative assertions -- the demo channel is shared across the suite, so
+    %% don't assume an absolute base count.
+    {Pid, ViewId} = start_demo(),
+    Before = client_count(frame(Pid)),
+    %% A new subscriber bumps the count on the next tick.
+    ok = arizona_pubsub:subscribe(demo, self()),
+    Pid ! {arizona_view, ViewId, tick},
+    ?assertEqual(Before + 1, client_count(frame(Pid))),
+    %% Leaving drops it again.
+    ok = arizona_pubsub:unsubscribe(demo, self()),
+    Pid ! {arizona_view, ViewId, tick},
+    ?assertEqual(Before, client_count(frame(Pid))).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
@@ -263,3 +280,10 @@ frame(Pid) ->
 
 contains(Frame, Sub) ->
     binary:match(Frame, Sub) =/= nomatch.
+
+%% Parse the integer after "Clients: " in a rendered frame (the count line ends
+%% the number with the line's SGR reset, so split on the leading ESC).
+client_count(Frame) ->
+    [_, Rest] = binary:split(Frame, ~"Clients: "),
+    [Digits, _] = binary:split(Rest, ~"\e"),
+    binary_to_integer(Digits).

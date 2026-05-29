@@ -8,7 +8,9 @@
 %%     (`j`/`k` move the menu selection, `+`/`-` change a counter);
 %%   * timer ticks -- a self-scheduled `?send_after` advances a server clock with
 %%     no user input (the first tick is armed from `handle_info(arizona_connected)`
-%%     so it only runs in a connected live process);
+%%     so it only runs in a connected live process); each tick also refreshes the
+%%     connected-client count (the number of terminals subscribed to `demo`), so a
+%%     connect or disconnect shows on every screen within a tick;
 %%   * pubsub broadcasts -- each message delivered on the `demo` channel is emitted
 %%     as an `arizona_tty:log/1` effect, which the runtime streams into the
 %%     terminal's scrolling log (above the pinned status block). The "Send message"
@@ -23,6 +25,8 @@
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Init) ->
+    %% Subscribe before counting so this client is included in the tally.
+    ok = arizona_pubsub:subscribe(demo, self()),
     Bindings = #{
         id => ~"term_demo",
         selected => 0,
@@ -32,12 +36,12 @@ mount(Init) ->
         draft => <<>>,
         count => maps:get(count, Init, 0),
         clock => 0,
+        clients => count_clients(),
         %% Terminal size: a network transport (SSH) supplies it via pty-req /
         %% window-change; a local TTY can't read it, so it stays 0.
         cols => maps:get(term_cols, Init, 0),
         rows => maps:get(term_rows, Init, 0)
     },
-    ok = arizona_pubsub:subscribe(demo, self()),
     ?connected andalso ?send(arizona_connected),
     {Bindings, #{}}.
 
@@ -50,7 +54,14 @@ render(Bindings) ->
                 fun({Marker, Label}) -> {line, [], [Marker, Label]} end,
                 marked_items(?get(selected), ?get(items))
             ),
-            {line, [], [~"Count: ", ?get(count), ~"   Server ticks: ", ?get(clock)]},
+            {line, [], [
+                ~"Count: ",
+                ?get(count),
+                ~"   Server ticks: ",
+                ?get(clock),
+                ~"   Clients: ",
+                ?get(clients)
+            ]},
             {line, [dim], [~"Terminal: ", ?get(cols), ~"x", ?get(rows)]},
             %% The message input line, shown only while typing. ?each over a
             %% 0-or-1 element list -- a bare element tuple returned from a case
@@ -81,7 +92,8 @@ handle_info(arizona_connected, Bindings) ->
     {Bindings, #{}, []};
 handle_info(tick, Bindings) ->
     ?send_after(?TICK_MS, tick),
-    {Bindings#{clock => maps:get(clock, Bindings) + 1}, #{}, []};
+    %% Refresh the connected-client tally each tick so connects/disconnects show.
+    {Bindings#{clock => maps:get(clock, Bindings) + 1, clients => count_clients()}, #{}, []};
 handle_info({chat, Msg}, Bindings) ->
     %% Append-only: stream the message into the scrolling log, no status change.
     {Bindings, #{}, [arizona_tty:log(Msg)]};
@@ -168,6 +180,11 @@ footer_keys(input) ->
 %% (with the draft) only in input mode.
 input_rows(input, Draft) -> [Draft];
 input_rows(menu, _Draft) -> [].
+
+%% How many terminals are connected: every connected view subscribes to `demo`,
+%% so the subscriber count is the live client count.
+count_clients() ->
+    length(arizona_pubsub:subscribers(demo)).
 
 move(Bindings, Delta) ->
     Selected = maps:get(selected, Bindings),
