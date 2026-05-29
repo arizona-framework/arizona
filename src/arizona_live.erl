@@ -56,6 +56,7 @@ fingerprints already shipped in the initial HTML.
 -export([send_after/3]).
 -export([mount/1]).
 -export([mount_and_render/1]).
+-export([render_current/1]).
 -export([navigate/4]).
 -export([navigate/5]).
 -export([handle_event/4]).
@@ -233,6 +234,23 @@ mount_and_render(Pid) ->
     gen_server:call(Pid, mount_and_render, infinity).
 
 -doc """
+Re-renders the current view tree to a complete output binary from the
+live process's current bindings and child views.
+
+Unlike `mount_and_render/1` (which returns a fingerprint payload meant for
+client-side diff application), this always materializes the full output --
+intended for transports that repaint the whole view each frame (e.g. a
+terminal renderer) instead of applying diff ops. Because it re-renders
+through `arizona_render:render/2`, it threads the live `views` map and so
+reflects current root *and* nested child state; the freshly produced
+snapshot/views are discarded (read-only render).
+""".
+-spec render_current(Pid) -> {ok, binary()} when
+    Pid :: pid().
+render_current(Pid) ->
+    gen_server:call(Pid, render_current, infinity).
+
+-doc """
 Dispatches a client event to a view. If `ViewId` matches a nested
 child, the event goes to that view; otherwise it goes to the root
 handler. Returns `{ok, Ops, Effects}`.
@@ -364,6 +382,10 @@ handle_call(
     {reply, {ok, ViewId, PageContent1}, State#state{
         bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1
     }};
+handle_call(render_current, _From, #state{handler = H, bindings = B, views = V} = State) ->
+    Tmpl = arizona_handler:call_render(H, B),
+    {HTML, _Snap, _Views1} = arizona_render:render(Tmpl, V),
+    {reply, {ok, iolist_to_binary(HTML)}, State};
 handle_call({event, ViewId, Event, Payload}, _From, #state{views = V0} = State) ->
     case V0 of
         #{ViewId := _} ->
