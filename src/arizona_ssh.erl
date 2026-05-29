@@ -157,25 +157,32 @@ terminate(_Reason, _State) ->
 %% --------------------------------------------------------------------
 
 %% Turn a session step (`handle_key`/`handle_push`) into a channel callback reply:
-%% a `quit` stops the channel, a `{cont, _}` stores the advanced session.
-apply_session_result(quit, ChannelId, State) ->
+%% a `quit` restores the cursor and stops the channel, a `{cont, _}` stores the
+%% advanced session. The cursor is restored here, not in terminate/2 -- a send
+%% from terminate races the channel close and never reaches the client.
+apply_session_result(quit, ChannelId, #state{conn = Conn} = State) ->
+    ok = send(Conn, ChannelId, io_ansi:cursor_show()),
     {stop, ChannelId, State};
 apply_session_result({cont, Session}, _ChannelId, State) ->
     {ok, State#state{session = Session}}.
 
 %% Mount the live view with the channel as its transport. The output function
-%% writes frames to the SSH channel; a send failure (closing channel) is
-%% swallowed -- the matching `closed` event stops the session.
+%% writes frames to the SSH channel. The cursor is hidden for the duration of the
+%% session (the local TTY driver does the same) and restored in terminate/2.
 start_session(Conn, ChannelId, #state{handler = Handler, rows = Rows, cols = Cols} = State) ->
-    Out = fun(Iodata) ->
-        case ssh_connection:send(Conn, ChannelId, Iodata) of
-            ok -> ok;
-            {error, _Reason} -> ok
-        end
-    end,
+    Out = fun(Iodata) -> send(Conn, ChannelId, Iodata) end,
+    ok = Out(io_ansi:cursor_hide()),
     Bindings = #{term_rows => Rows, term_cols => Cols},
     {ok, Session} = arizona_terminal_session:start(Handler, Bindings, Out),
     State#state{session = Session}.
+
+%% Write to the SSH channel, swallowing a send error on an already-closing
+%% channel -- the matching `closed` event stops the session.
+send(Conn, ChannelId, Iodata) ->
+    case ssh_connection:send(Conn, ChannelId, Iodata) of
+        ok -> ok;
+        {error, _Reason} -> ok
+    end.
 
 reply(_Conn, _ChannelId, false) ->
     ok;
