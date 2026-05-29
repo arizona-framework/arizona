@@ -149,11 +149,11 @@ parse_transform(Forms, _Options) ->
 %% Top-down pre-pass threading the enclosing render target `Ctx` (`none` outside
 %% any template, else `html` | `native` | `terminal`). Two jobs:
 %%
-%%   1. A single `?each` serves html and native. Inside a `?native(...)` every
-%%      nested `?each` is rewritten to the internal `native_each` so the
-%%      bottom-up transform compiles it with the native backend. `?each` under
-%%      `?html` (or standalone) is left untouched; `?each` under `?terminal` is
-%%      rejected (the terminal backend has no `?each` wiring yet).
+%%   1. A single `?each` serves every target. Inside a `?native(...)` each nested
+%%      `?each` is rewritten to the internal `native_each`, and inside a
+%%      `?terminal(...)` to `terminal_each`, so the bottom-up transform compiles it
+%%      with the matching backend. `?each` under `?html` (or standalone) is left
+%%      untouched.
 %%   2. Reject inline cross-target nesting: any target macro literally inside a
 %%      different one (e.g. `?html(...)` in `?native(...)`) would mix incompatible
 %%      statics in one tree. Caught here as a compile error instead of corrupting
@@ -198,10 +198,13 @@ mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, n
         mark_targets(A, native)
      || A <- Args
     ]};
-mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, each}}, _}, terminal) when
+mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, terminal) when
     Mod =:= arizona_template orelse Mod =:= az
 ->
-    parse_error(each_in_terminal, L);
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, terminal_each}}, [
+        mark_targets(A, terminal)
+     || A <- Args
+    ]};
 mark_targets(Node, Ctx) when is_tuple(Node) ->
     list_to_tuple([mark_targets(E, Ctx) || E <- tuple_to_list(Node)]);
 mark_targets(Nodes, Ctx) when is_list(Nodes) ->
@@ -218,9 +221,6 @@ Called by the compiler when `parse_transform/2` returns an error tuple.
     Reason :: term().
 format_error({render_reject, Message}) ->
     unicode:characters_to_list(Message);
-format_error(each_in_terminal) ->
-    "?each is not supported inside ?terminal -- pre-format list content into a "
-    "binary in the handler and render it as a dynamic child";
 format_error(invalid_element) ->
     "invalid element form, expected {Tag, Attrs, Children}, "
     "{Tag, Attrs, Expr}, or {Tag, Attrs} where Tag is an atom";
@@ -340,6 +340,10 @@ transform_node(Node, Module) ->
             Mod =:= arizona_template; Mod =:= az
         ->
             compile_each(FunArg, SourceArg, L, Module, arizona_native);
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, terminal_each}}, [FunArg, SourceArg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            compile_each(FunArg, SourceArg, L, Module, arizona_terminal);
         %% Sugar: `arizona_template:stateless(atom, Props)` with a literal atom
         %% callback is rewritten to `arizona_template:stateless(fun atom/1, Props)`.
         %% Fun references and other shapes pass through unchanged.

@@ -40,7 +40,7 @@
     terminal_unknown_attr_rejected/1,
     terminal_event_command_rejected/1,
     terminal_dynamic_attr_rejected/1,
-    terminal_each_rejected/1,
+    terminal_each_renders/1,
     deeply_nested/1,
     diff_integration/1,
     dynamic_only_child/1,
@@ -386,7 +386,7 @@ groups() ->
             terminal_unknown_attr_rejected,
             terminal_event_command_rejected,
             terminal_dynamic_attr_rejected,
-            terminal_each_rejected
+            terminal_each_renders
         ]},
         %% Tests 108-115: az:html and az:each equivalence tests
         {az_macros, [parallel], [
@@ -4197,18 +4197,21 @@ terminal_dynamic_attr_rejected(Config) when is_list(Config) ->
         end
     ).
 
-terminal_each_rejected(Config) when is_list(Config) ->
-    assert_parse_error(
+terminal_each_renders(Config) when is_list(Config) ->
+    %% ?each inside ?terminal compiles each item with the terminal backend and
+    %% renders one ANSI line per list element.
+    Mod = compile_module(
         "-module(pt_term_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:terminal({col, [], ["
         "        arizona_template:each("
-        "            fun(I) -> arizona_template:terminal({line, [], [I]}) end,"
+        "            fun(Item) -> {line, [], [Item]} end,"
         "            arizona_template:get(items, Bindings))"
-        "    ]}). ",
-        fun
-            (each_in_terminal) -> true;
-            (_) -> false
-        end
-    ).
+        "    ]}). "
+    ),
+    T = Mod:render(#{items => [~"a", ~"b"]}),
+    {Output, _Snap} = arizona_render:render(T),
+    Bin = iolist_to_binary(Output),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"a\e[0m\n")),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"b\e[0m\n")).

@@ -63,9 +63,10 @@ renders_status_block(Config) when is_list(Config) ->
     {Pid, _ViewId} = start_demo(),
     Frame = frame(Pid),
     ?assert(contains(Frame, ~"== Arizona Terminal Demo ==")),
-    %% selection marker on the first item, plain markers on the rest
+    %% all three menu rows render (via ?each), the first marked as selected
     ?assert(contains(Frame, ~"> New Game")),
     ?assert(contains(Frame, ~"  Options")),
+    ?assert(contains(Frame, ~"  Quit")),
     ?assert(contains(Frame, ~"Count: 0")),
     ?assert(contains(Frame, ~"Server ticks: 0")),
     ?assert(contains(Frame, ~"[j/k] move")),

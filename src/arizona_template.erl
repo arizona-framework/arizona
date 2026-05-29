@@ -32,11 +32,17 @@ render(Bindings) ->
 
 -include("arizona.hrl").
 
-%% The html/native/native_each stubs are intentionally identical: each raises
-%% parse_transform_not_applied inline so the raising stub is the top stack frame,
-%% pointing the user at the exact un-transformed call. A shared helper would move
-%% that frame and obscure which call was made, so dedup does not apply here.
--elvis([{elvis_style, dont_repeat_yourself, disable}]).
+%% The html/native/terminal (+ _each) stubs are intentionally identical: each
+%% raises parse_transform_not_applied inline so the raising stub is the top stack
+%% frame, pointing the user at the exact un-transformed call. A shared helper would
+%% move that frame and obscure which call was made, so dedup does not apply here.
+%% This module is the template API surface (construction stubs for every target
+%% plus binding/descriptor helpers), so it legitimately exceeds the god-module
+%% function count.
+-elvis([
+    {elvis_style, dont_repeat_yourself, disable},
+    {elvis_style, no_god_modules, disable}
+]).
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -55,6 +61,7 @@ render(Bindings) ->
 -export([local/2]).
 -export([each/2]).
 -export([native_each/2]).
+-export([terminal_each/2]).
 -export([to_bin/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
@@ -74,9 +81,10 @@ render(Bindings) ->
 
 -ignore_xref([format_error/1]).
 -ignore_xref([format_error/2]).
-%% Internal native-each stub: emitted by the parse transform's native pre-pass,
-%% never called directly (no az:native_each alias, unlike each/2).
+%% Internal each stubs: emitted by the parse transform's native/terminal pre-pass,
+%% never called directly (no az alias, unlike each/2).
 -ignore_xref([native_each/2]).
+-ignore_xref([terminal_each/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -319,6 +327,18 @@ not applied.
 """.
 -spec native_each(term(), term()) -> no_return().
 native_each(_Fun, _Source) ->
+    erlang:error(parse_transform_not_applied, [], [
+        {error_info, #{module => ?MODULE}}
+    ]).
+
+-doc """
+Compile-time stub for the terminal each. The parse transform replaces every
+`?terminal_each(Fun, Source)` call with a compiled each-container whose per-item
+template carries ANSI statics. If this function runs, the parse transform was
+not applied.
+""".
+-spec terminal_each(term(), term()) -> no_return().
+terminal_each(_Fun, _Source) ->
     erlang:error(parse_transform_not_applied, [], [
         {error_info, #{module => ?MODULE}}
     ]).

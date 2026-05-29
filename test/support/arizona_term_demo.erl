@@ -25,6 +25,12 @@ mount(Init, _Req) ->
         id => ~"term_demo",
         selected => 0,
         items => [~"New Game", ~"Options", ~"Quit"],
+        keybindings => [
+            {~"j/k", ~"move", ~"  "},
+            {~"enter", ~"select", ~"  "},
+            {~"+/-", ~"count", ~"  "},
+            {~"q", ~"quit", ~""}
+        ],
         count => maps:get(count, Init, 0),
         clock => 0
     },
@@ -37,9 +43,19 @@ render(Bindings) ->
     ?terminal(
         {col, [], [
             {line, [bold, green], [~"== Arizona Terminal Demo =="]},
-            {text, [], [format_menu(?get(selected), ?get(items))]},
+            ?each(
+                fun({Marker, Label}) -> {line, [], [Marker, Label]} end,
+                marked_items(?get(selected), ?get(items))
+            ),
             {line, [], [~"Count: ", ?get(count), ~"   Server ticks: ", ?get(clock)]},
-            {line, [dim], [~"[j/k] move  [enter] select  [+/-] count  [q] quit"]}
+            {line, [dim], [
+                ?each(
+                    fun({Keys, Label, Sep}) ->
+                        <<"[", Keys/binary, "] ", Label/binary, Sep/binary>>
+                    end,
+                    ?get(keybindings)
+                )
+            ]}
         ]}
     ).
 
@@ -90,8 +106,11 @@ move(Bindings, Delta) ->
     Max = length(maps:get(items, Bindings)) - 1,
     Bindings#{selected => max(0, min(Max, Selected + Delta))}.
 
-format_menu(Selected, Items) ->
-    iolist_to_binary([menu_line(I, Selected, Item) || {I, Item} <- lists:enumerate(0, Items)]).
+%% One {Marker, Label} per item, the selected row marked with "> ". Rendered with
+%% ?each in the template; the marker is computed here (not inside the each fun) so
+%% the fun does not read bindings.
+marked_items(Selected, Items) ->
+    [{marker(I, Selected), Item} || {I, Item} <- lists:enumerate(0, Items)].
 
-menu_line(Idx, Idx, Item) -> [~"> ", Item, ~"\n"];
-menu_line(_Idx, _Selected, Item) -> [~"  ", Item, ~"\n"].
+marker(Idx, Idx) -> ~"> ";
+marker(_Idx, _Selected) -> ~"  ".
