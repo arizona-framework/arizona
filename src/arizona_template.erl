@@ -48,6 +48,7 @@ render(Bindings) ->
 -export([track/1]).
 -export([html/1]).
 -export([native/1]).
+-export([terminal/1]).
 -export([stateful/2]).
 -export([stateless/2]).
 -export([stateless/3]).
@@ -118,7 +119,7 @@ render(Bindings) ->
     d := [dynamic()],
     f := binary(),
     diff => false,
-    target => html | native
+    target => html | native | terminal
 }.
 
 -nominal each_template() :: #{
@@ -126,7 +127,7 @@ render(Bindings) ->
     s := [binary()],
     d := fun((term()) -> [dynamic()]) | fun((term(), term()) -> [dynamic()]),
     f := binary(),
-    target => html | native
+    target => html | native | terminal
 }.
 
 -nominal each_container() :: #{
@@ -142,7 +143,7 @@ render(Bindings) ->
     deps => [deps()],
     diff => false,
     view_id => binary(),
-    target => html | native
+    target => html | native | terminal
 }.
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
@@ -239,6 +240,18 @@ function runs, the parse transform was not applied.
 """.
 -spec native(term()) -> no_return().
 native(_Elems) ->
+    erlang:error(parse_transform_not_applied, [], [
+        {error_info, #{module => ?MODULE}}
+    ]).
+
+-doc """
+Compile-time stub for the terminal (ANSI) render target. The parse transform
+replaces every `?terminal(...)` (and `arizona_template:terminal/1`) call with a
+precomputed `t:template/0` map whose statics are ANSI-decorated text. If this
+function runs, the parse transform was not applied.
+""".
+-spec terminal(term()) -> no_return().
+terminal(_Elems) ->
     erlang:error(parse_transform_not_applied, [], [
         {error_info, #{module => ?MODULE}}
     ]).

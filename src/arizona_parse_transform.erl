@@ -147,27 +147,36 @@ parse_transform(Forms, _Options) ->
     end.
 
 %% Top-down pre-pass threading the enclosing render target `Ctx` (`none` outside
-%% any template, else `html` | `native`). Two jobs:
+%% any template, else `html` | `native` | `terminal`). Two jobs:
 %%
-%%   1. A single `?each` serves both targets. Inside a `?native(...)` every
+%%   1. A single `?each` serves html and native. Inside a `?native(...)` every
 %%      nested `?each` is rewritten to the internal `native_each` so the
 %%      bottom-up transform compiles it with the native backend. `?each` under
-%%      `?html` (or standalone) is left untouched.
-%%   2. Reject inline cross-target nesting: a `?html(...)` inside a `?native(...)`
-%%      (or vice-versa) would mix HTML and JSON statics in one tree. Caught here
-%%      as a compile error instead of corrupting the wire at runtime.
+%%      `?html` (or standalone) is left untouched; `?each` under `?terminal` is
+%%      rejected (the terminal backend has no `?each` wiring yet).
+%%   2. Reject inline cross-target nesting: any target macro literally inside a
+%%      different one (e.g. `?html(...)` in `?native(...)`) would mix incompatible
+%%      statics in one tree. Caught here as a compile error instead of corrupting
+%%      the output at runtime.
 %%
-%% Each `?html`/`?native` call resets `Ctx` for its own argument, so sibling
-%% targets (e.g. a dual-serve render with `?html` and `?native` in different
-%% clauses) are fine -- only one literally nested in the other errors. Cross-target
-%% nesting via a `?stateful`/`?stateless` child *module* is invisible at this AST
-%% level and stays a documented "one target per tree" rule.
-mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, _}, native) when
-    Mod =:= arizona_template orelse Mod =:= az
+%% Each target call resets `Ctx` for its own argument, so sibling targets (e.g. a
+%% dual-serve render with `?html` and `?native` in different clauses) are fine --
+%% only one literally nested in the other errors. Cross-target nesting via a
+%% `?stateful`/`?stateless` child *module* is invisible at this AST level and
+%% stays a documented "one target per tree" rule.
+mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, _}, Ctx) when
+    (Mod =:= arizona_template orelse Mod =:= az) andalso
+        (Ctx =:= native orelse Ctx =:= terminal)
 ->
     parse_error(cross_target_nesting, L);
-mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, _}, html) when
-    Mod =:= arizona_template orelse Mod =:= az
+mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, _}, Ctx) when
+    (Mod =:= arizona_template orelse Mod =:= az) andalso
+        (Ctx =:= html orelse Ctx =:= terminal)
+->
+    parse_error(cross_target_nesting, L);
+mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, terminal}}, _}, Ctx) when
+    (Mod =:= arizona_template orelse Mod =:= az) andalso
+        (Ctx =:= html orelse Ctx =:= native)
 ->
     parse_error(cross_target_nesting, L);
 mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, html}}, [Arg]}, _Ctx) when
@@ -178,6 +187,10 @@ mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native}}, [Arg]}
     Mod =:= arizona_template orelse Mod =:= az
 ->
     {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native}}, [mark_targets(Arg, native)]};
+mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, terminal}}, [Arg]}, _Ctx) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, terminal}}, [mark_targets(Arg, terminal)]};
 mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, native) when
     Mod =:= arizona_template orelse Mod =:= az
 ->
@@ -185,6 +198,10 @@ mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, n
         mark_targets(A, native)
      || A <- Args
     ]};
+mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, each}}, _}, terminal) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    parse_error(each_in_terminal, L);
 mark_targets(Node, Ctx) when is_tuple(Node) ->
     list_to_tuple([mark_targets(E, Ctx) || E <- tuple_to_list(Node)]);
 mark_targets(Nodes, Ctx) when is_list(Nodes) ->
@@ -199,6 +216,11 @@ Called by the compiler when `parse_transform/2` returns an error tuple.
 """.
 -spec format_error(Reason) -> string() when
     Reason :: term().
+format_error({render_reject, Message}) ->
+    unicode:characters_to_list(Message);
+format_error(each_in_terminal) ->
+    "?each is not supported inside ?terminal -- pre-format list content into a "
+    "binary in the handler and render it as a dynamic child";
 format_error(invalid_element) ->
     "invalid element form, expected {Tag, Attrs, Children}, "
     "{Tag, Attrs, Expr}, or {Tag, Attrs} where Tag is an atom";
@@ -248,7 +270,7 @@ format_error(local_attr_mixed) ->
     "a ?local in an attribute value can only be combined with static text, not "
     "another dynamic expression";
 format_error(cross_target_nesting) ->
-    "cannot nest ?html and ?native in one template -- they produce "
+    "cannot nest ?html, ?native and ?terminal in one template -- they produce "
     "incompatible statics. Render cross-target content via a separate "
     "stateful/stateless child of the matching target".
 
@@ -301,6 +323,15 @@ transform_node(Node, Module) ->
             Mod =:= arizona_template; Mod =:= az
         ->
             compile_template(Arg, L, Module, false, arizona_native);
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, terminal}}, [Arg]} when
+            Mod =:= arizona_template; Mod =:= az
+        ->
+            %% Terminal templates compile as non-live (no client root id / az_view
+            %% injection): the live process derives the view id from bindings, and
+            %% the terminal transport repaints whole frames rather than addressing
+            %% the root node. So the live-render last-expr path falls through to
+            %% here for `?terminal(...)`.
+            compile_template(Arg, L, Module, false, arizona_terminal);
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}}, [FunArg, SourceArg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
@@ -442,10 +473,14 @@ compile_template(Arg, Line, Module, LiveRender, Backend) ->
     build_template_ast(Line, S1, D1, Fingerprint, Opts).
 
 %% Native templates carry `target => native` so the runtime (render_fp_val)
-%% knows to inline dynamic attribute values as JSON. HTML templates carry no
-%% target key (the default).
+%% knows to inline dynamic attribute values as JSON. Terminal templates carry
+%% `target => terminal` for honesty in the snapshot (the wire path treats it like
+%% the default html, which terminal never uses). HTML templates carry no target
+%% key (the default).
 maybe_target_opt(arizona_native, Opts) ->
     Opts#{target => native};
+maybe_target_opt(arizona_terminal, Opts) ->
+    Opts#{target => terminal};
 maybe_target_opt(_Backend, Opts) ->
     Opts.
 
@@ -657,20 +692,21 @@ compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
     State1 = compile_attr(Attr, ElemAz, State0, ElemLine),
     compile_attrs(Rest, ElemAz, State1, ElemLine).
 
-compile_attr({bin, _, _} = Bin, _ElemAz, State0, _ElemLine) ->
+compile_attr({bin, _, _} = Bin, _ElemAz, State0, ElemLine) ->
+    Backend = State0#state.backend,
     NameBin = extract_binary_value(Bin),
-    buf_append(State0, (State0#state.backend):attr_boolean(NameBin));
+    buf_append(State0, emit_attr(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
     State0;
-compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, _ElemLine) when
+compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
     Backend = State0#state.backend,
     NameBin = extract_attr_name(Backend, NameAST),
-    buf_append(State0, Backend:attr_boolean(NameBin));
-compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, _ElemLine) when
+    buf_append(State0, emit_attr(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
+compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
     Backend = State0#state.backend,
@@ -678,14 +714,14 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, _ElemLine) when
     case is_static_binary(ValueAST) of
         true ->
             ValBin = extract_binary_value(ValueAST),
-            buf_append(State0, Backend:attr(NameBin, ValBin));
+            buf_append(State0, emit_attr(fun() -> Backend:attr(NameBin, ValBin) end, ElemLine));
         false ->
             compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0)
     end;
-compile_attr({atom, _, Name}, _ElemAz, State0, _ElemLine) ->
+compile_attr({atom, _, Name}, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
     NameBin = Backend:name(Name),
-    buf_append(State0, Backend:attr_boolean(NameBin));
+    buf_append(State0, emit_attr(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     AttrLine =
         try
@@ -694,6 +730,19 @@ compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
             _:_ -> ElemLine
         end,
     parse_error(invalid_attribute, AttrLine).
+
+%% Run a backend attribute-emitting callback, turning a backend's attribute
+%% rejection -- `error({arizona_render_reject, Message})` -- into a line-accurate
+%% parse error carrying the backend's message. Lets a render backend cleanly
+%% refuse attributes it cannot express (e.g. the terminal target rejecting an
+%% unknown style atom) instead of silently dropping them.
+emit_attr(Fun, Line) ->
+    try
+        Fun()
+    catch
+        error:{arizona_render_reject, Message} ->
+            parse_error({render_reject, Message}, Line)
+    end.
 
 %% Emit a dynamic attribute value: a folded arizona_js command becomes a static,
 %% otherwise the backend bakes the name and the value flushes as a dynamic.
@@ -710,19 +759,24 @@ compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
     end.
 
 compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
+    ValLine = line(ValueAST),
     case try_fold_arizona_js(ValueAST) of
         {ok, Cmd} ->
-            buf_append(State0, Backend:attr_command(NameBin, Cmd));
+            buf_append(State0, emit_attr(fun() -> Backend:attr_command(NameBin, Cmd) end, ValLine));
         error when State0#state.nodiff ->
             Module = State0#state.module,
-            State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
+            State1 = buf_append(
+                State0, emit_attr(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
+            ),
             DynAST = make_nodiff_attr_dynamic_ast(
                 NameBin, ValueAST, Module, line(ValueAST)
             ),
             flush(State1, DynAST);
         error ->
             Module = State0#state.module,
-            State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
+            State1 = buf_append(
+                State0, emit_attr(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
+            ),
             AzBin = integer_to_binary(ElemAz),
             DynAST = make_attr_dynamic_ast(
                 AzBin, NameBin, ValueAST, Module, line(ValueAST)
