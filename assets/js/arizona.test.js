@@ -1928,6 +1928,26 @@ describe('?local -- reset / isolation on server ops', () => {
     });
 });
 
+describe('?local -- set as a handler effect (applyEffects)', () => {
+    // op 17 = JS_SET_LOCAL. applyEffects is the server->client handler-effect entry
+    // point (dispatched against <html>): a 4th elem of a viewId string scopes to
+    // that view; `true` is set_all.
+    it('a viewId-scoped set_local effect updates that view slot', () => {
+        document.body.innerHTML = `<div id="v" az-view><span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->init<!--/az--></span></div>`;
+        applyEffects([[17, 'k', 'from-effect', 'v']]);
+        expect(document.querySelector('#v [az-local]').textContent).toBe('from-effect');
+    });
+
+    it('a set_all effect updates every view', () => {
+        document.body.innerHTML =
+            `<div id="a" az-view><span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->A<!--/az--></span></div>` +
+            `<div id="b" az-view><span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->B<!--/az--></span></div>`;
+        applyEffects([[17, 'k', 'all', true]]);
+        expect(document.querySelector('#a [az-local]').textContent).toBe('all');
+        expect(document.querySelector('#b [az-local]').textContent).toBe('all');
+    });
+});
+
 describe('?local -- no server round-trip', () => {
     let mock;
     afterEach(() => {

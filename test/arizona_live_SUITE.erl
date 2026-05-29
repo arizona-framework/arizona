@@ -61,6 +61,7 @@
     seed_fps_unknown_fp_still_sends/1,
     stateful_child_independent_state/1,
     nested_local_diff_skipped/1,
+    nested_local_set_effect/1,
     unmount_on_navigate/1,
     unmount_timer_cancelled_on_navigate/1,
     unmount_on_terminate/1,
@@ -94,6 +95,7 @@ groups() ->
         {gen_server, [parallel], [
             stateful_child_independent_state,
             nested_local_diff_skipped,
+            nested_local_set_effect,
             live_mount,
             live_event,
             live_multiple_events,
@@ -234,6 +236,21 @@ nested_local_diff_skipped(Config) when is_list(Config) ->
     %% (b) Child's own event: only the count OP_TEXT, no op for the note ?local.
     {ok, IncOps, _} = arizona_live:handle_event(Pid, <<"child_a">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], IncOps).
+
+%% A handler can drive a ?local via a returned EFFECT (set_all): the server
+%% emits the ?EFFECT_SET_LOCAL effect (op 17) for the client to apply -- it is
+%% never a diff op, so the client-owned slot is updated without the server
+%% diffing it.
+nested_local_set_effect(Config) when is_list(Config) ->
+    {ok, Pid} = arizona_live:start_link(
+        arizona_local_nested, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects} = arizona_live:handle_event(
+        Pid, <<"local_nested">>, <<"reset_notes">>, #{}
+    ),
+    %% op 17 = ?EFFECT_SET_LOCAL (literal, matching this suite's effect assertions).
+    ?assertEqual([{arizona_effect, [17, <<"note">>, <<"reset">>, true]}], Effects).
 
 live_mount(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(

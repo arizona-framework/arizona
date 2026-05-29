@@ -98,3 +98,22 @@ test.describe('?local in nested children -- survives server updates', () => {
         await expect(note(page, 'child_b')).toHaveText('untouched');
     });
 });
+
+test.describe('?local in nested children -- server-driven set (handler effect)', () => {
+    test('a set_all handler effect resets both children notes from the server', async ({
+        page,
+    }) => {
+        await page.goto('/local-nested');
+        await wsReady(page);
+
+        // Edit child_a's note client-side first.
+        await page.locator('#child_a .edit').click();
+        await expect(note(page, 'child_a')).toHaveText('edited');
+
+        // Server event whose handler returns [arizona_js:set_all("note", "reset")] --
+        // the ?local is updated via an EFFECT, applied client-side to every view.
+        await page.getByRole('button', { name: 'Reset notes' }).click();
+        await expect(note(page, 'child_a')).toHaveText('reset');
+        await expect(note(page, 'child_b')).toHaveText('reset');
+    });
+});

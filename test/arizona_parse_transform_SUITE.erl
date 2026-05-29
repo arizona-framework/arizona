@@ -169,7 +169,9 @@
     local_attr_mixed_error/1,
     local_attr_interp_boolean/1,
     local_attr_interp_numeric/1,
-    local_attr_interp_multi_static/1
+    local_attr_interp_multi_static/1,
+    local_in_native_error/1,
+    local_in_each_renders/1
 ]).
 
 all() ->
@@ -234,7 +236,9 @@ groups() ->
             local_attr_mixed_error,
             local_attr_interp_boolean,
             local_attr_interp_numeric,
-            local_attr_interp_multi_static
+            local_attr_interp_multi_static,
+            local_in_native_error,
+            local_in_each_renders
         ]},
         %% Tests 26-39: template/2 (each) tests
         {each, [parallel], [
@@ -775,6 +779,44 @@ local_attr_interp_multi_static(Config) when is_list(Config) ->
         #{~"a" => #{~"class" => ~"c"}, ~"ap" => #{~"class" => [~"a b ", ~" y z"]}},
         decode_local_descriptor(HTML)
     ).
+
+%% ?local is HTML-only: in a ?native template it is a compile error (the client
+%% slot mechanism -- comment markers + DOM set -- has no native equivalent).
+local_in_native_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_local_native). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:native("
+        "        {'Text', [], [arizona_template:local(<<\"k\">>, <<\"x\">>)]}"
+        "    ). ",
+        fun(R) -> R =:= local_html_only end
+    ).
+
+%% ?local renders inside an ?each item. Keys are compile-time literals, so every
+%% item carries the SAME slot key (shared) -- this pins that `?local` works in a
+%% comprehension and each item gets its own descriptor + initial value.
+local_in_each_renders(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'ul', [], [arizona_template:each(fun(Item) -> "
+        "            arizona_template:html({'li', [], ["
+        "                arizona_template:local(<<\"m\">>, <<\"-\">>), "
+        "                arizona_template:get(label, Item)]}) "
+        "        end, arizona_template:get(items, Bindings))]}"
+        "    ). "
+    ),
+    Tmpl = Mod:render(#{items => [#{label => ~"a"}, #{label => ~"b"}]}),
+    {HTML0, _Snap} = arizona_render:render(Tmpl),
+    HTML = iolist_to_binary(HTML0),
+    %% Both items render the (shared-key) az-local descriptor + the initial "-".
+    ?assertEqual(2, length(binary:matches(HTML, ~"az-local="))),
+    ?assertEqual(2, length(binary:matches(HTML, ~"-<!--/az-->"))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"a")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"b")).
 
 %% Test 1: Static-only element -- no dynamics, single static binary.
 static_only(Config) when is_list(Config) ->

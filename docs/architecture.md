@@ -260,6 +260,12 @@ Caveats (by design):
 - **Wholesale re-render resets it.** A `?local` value survives normal per-slot diffs, but
   an enclosing region re-rendered as a unit (`OP_UPDATE` innerHTML, `OP_REPLACE`, an `?each`
   item swap, a conditional template switch) recreates the slot at its SSR initial.
+- **Inside `?each`, items share the slot key.** `?local` keys are compile-time literals (you
+  can't build `?local(<<"open_", Id/binary>>, ...)` -- that errors `local_key_not_literal`), so
+  every item rendered from the same template carries the **same** key and `set`/`set_all`
+  updates all of them at once. `?local` therefore can't hold per-item independent client state
+  in a list/stream -- use server state for that. (An item reorder/remove is also a wholesale
+  re-render that resets that item's slot.)
 - **Forced reconnect resets it.** A non-1000 socket close fresh-mounts the view.
 - **Server never reads the value.** To use it server-side, read it client-side
   (`arizona.get`) and include it in a `push_event` payload -- auto-collection ignores `[az-local]`.

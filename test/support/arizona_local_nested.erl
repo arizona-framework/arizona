@@ -30,6 +30,12 @@ render(Bindings) ->
                 ~"Relabel children"
             ]},
 
+            %% A server event that returns a ?local update as a HANDLER EFFECT
+            %% (set_all), resetting both children's client-owned notes server-side.
+            {button, [{class, ~"reset-notes"}, {az_click, arizona_js:push_event(~"reset_notes")}], [
+                    ~"Reset notes"
+                ]},
+
             %% Two stateful children, each with its own client-owned `note` slot.
             ?stateful(arizona_counter_local, #{id => ~"child_a", label => ?get(label)}),
             ?stateful(arizona_counter_local, #{id => ~"child_b", label => ?get(label)})
@@ -39,4 +45,6 @@ render(Bindings) ->
 -spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
     az:handle_event_ret().
 handle_event(~"relabel", _Payload, Bindings) ->
-    {Bindings#{label => ~"v2"}, #{}, []}.
+    {Bindings#{label => ~"v2"}, #{}, []};
+handle_event(~"reset_notes", _Payload, Bindings) ->
+    {Bindings, #{}, [arizona_js:set_all(~"note", ~"reset")]}.

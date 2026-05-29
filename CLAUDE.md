@@ -87,9 +87,9 @@ Update it from an event attribute (or handler effect) -- never reaches the serve
 - `arizona_js:set(ViewId, Key, Value)` -- a named view
 - `arizona_js:set_all(Key, Value)` -- every view
 
-Client JS: `arizona.set(viewId, key, value)`, `arizona.setAll(key, value)`, `arizona.get(key)` / `arizona.get(viewId, key)`.
+Client JS: `arizona.set(viewId, key, value)` (always 3-arg -- the 2-arg `arizona_js:set/2` is template-only), `arizona.setAll(key, value)`, `arizona.get(key)` / `arizona.get(viewId, key)`. `get` returns DOM strings (no type preservation; absent/bare boolean attrs read back as `false`/`true`).
 
-**Caveat:** a `?local` value survives normal per-slot diffs, but resets to its SSR initial if an enclosing region is re-rendered wholesale (`OP_UPDATE`/`OP_REPLACE`/`?each` swap) or on a forced reconnect. The server never reads it back -- to use it server-side, send it in a `push_event` payload. See [docs/architecture.md](docs/architecture.md).
+**Caveat:** a `?local` value survives normal per-slot diffs, but resets to its SSR initial if an enclosing region is re-rendered wholesale (`OP_UPDATE`/`OP_REPLACE`/`?each` swap) or on a forced reconnect. Inside `?each`, every item shares the slot **key** -- keys are compile-time literals (no `?local(<<"open_", Id/binary>>, ...)`), so `set`/`set_all` updates **all** items at once; `?local` can't hold per-item independent client state in a list/stream (use server state for that). The server never reads it back -- to use it server-side, send it in a `push_event` payload. See [docs/architecture.md](docs/architecture.md).
 
 ## What's missing
 
