@@ -21,7 +21,8 @@
     no_diff_nested/1,
     no_diff_ops/1,
     no_diff_skips_eval/1,
-    no_diff_stateful_child/1
+    no_diff_stateful_child/1,
+    local_dep_aware_skip/1
 ]).
 
 all() ->
@@ -49,7 +50,8 @@ groups() ->
             no_diff_stateful_child,
             no_diff_diff3,
             no_diff_diff4_top_level,
-            diff_no_diff_stateful_child_diff4
+            diff_no_diff_stateful_child_diff4,
+            local_dep_aware_skip
         ]}
     ].
 
@@ -489,6 +491,32 @@ diff_no_diff_stateful_child_diff4(Config) when is_list(Config) ->
     %% Child snapshot preserved with diff => false
     [{<<"0">>, _}, {<<"1">>, ChildSnap}] = maps:get(d, Snap1),
     ?assertEqual(false, maps:get(diff, ChildSnap)).
+
+%% A ?local whose init reads a server binding (?get) is seeded once: even in the
+%% dep-aware diff with that binding in the Changed set, the slot is skipped. The
+%% `#{diff := false}` clause precedes the deps-changed check, so a server-side
+%% change to the init's dependency never re-renders the client-owned slot.
+local_dep_aware_skip(Config) when is_list(Config) ->
+    B0 = #{foo => <<"a">>},
+    T0 = #{
+        s => [<<"<span>">>, <<"</span>">>],
+        d => [
+            {<<"0">>, fun() -> arizona_template:local(<<"k">>, arizona_template:get(foo, B0)) end}
+        ],
+        f => <<"test">>
+    },
+    {_HTML, Snap0, V0} = arizona_render:render(T0, #{}),
+    B1 = #{foo => <<"b">>},
+    T1 = #{
+        s => [<<"<span>">>, <<"</span>">>],
+        d => [
+            {<<"0">>, fun() -> arizona_template:local(<<"k">>, arizona_template:get(foo, B1)) end}
+        ],
+        f => <<"test">>
+    },
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(T1, Snap0, V0, Changed),
+    ?assertEqual([], Ops).
 
 %% =============================================================================
 %% Helpers

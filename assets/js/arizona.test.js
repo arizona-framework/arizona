@@ -3,12 +3,15 @@ import {
     applyEffects,
     applyOps,
     executeJS,
+    get,
     hooks,
     mountHooks,
     OP,
     resolveEl,
     restoreFormState,
     saveFormState,
+    set,
+    setAll,
 } from './arizona.js';
 
 // ---------------------------------------------------------------------------
@@ -1634,6 +1637,338 @@ describe('OP.ITEM_PATCH with pre-resolved inner ops', () => {
 // onmessage handles partial envelopes (omitted "o" or "e")
 // Worker sends [0, ops|null, effects|null, firstAfterReconnect] to main.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Client-owned slots (?local): set/get query the live DOM (az-local descriptors);
+// no persistent index. Updates are local -- no server round-trip.
+// ---------------------------------------------------------------------------
+
+describe('?local -- set/get content', () => {
+    function contentView(viewId, key, initial) {
+        setupView(
+            viewId,
+            `<span az="0" az-local='{"c":{"0":"${key}"}}'><!--az:0-->${initial}<!--/az--></span>`,
+        );
+    }
+
+    it('set updates the content and get reads it back', () => {
+        contentView('v', 'title', 'old');
+        set('v', 'title', 'new');
+        expect(document.querySelector('[az="0"]').textContent).toBe('new');
+        expect(get('v', 'title')).toBe('new');
+    });
+
+    it('get returns the SSR initial before any set', () => {
+        contentView('v', 'title', 'hello');
+        expect(get('v', 'title')).toBe('hello');
+    });
+
+    it('writes the value as text, never HTML (no injection)', () => {
+        contentView('v', 'title', '');
+        set('v', 'title', '<img src=x onerror=alert(1)>');
+        const span = document.querySelector('[az="0"]');
+        expect(span.querySelector('img')).toBeNull();
+        expect(span.textContent).toBe('<img src=x onerror=alert(1)>');
+    });
+});
+
+describe('?local -- set/get attribute', () => {
+    function attrView(viewId, attr, key, extra = '') {
+        setupView(viewId, `<div az="0" az-local='{"a":{"${attr}":"${key}"}}' ${extra}>x</div>`);
+    }
+
+    it('true sets a bare boolean attribute; false removes it', () => {
+        attrView('v', 'open', 'modal_open');
+        const el = document.querySelector('[az="0"]');
+        set('v', 'modal_open', true);
+        expect(el.getAttribute('open')).toBe('');
+        set('v', 'modal_open', false);
+        expect(el.hasAttribute('open')).toBe(false);
+    });
+
+    it('a string sets the attribute value', () => {
+        attrView('v', 'data-active', 'tab');
+        set('v', 'tab', 'settings');
+        expect(document.querySelector('[az="0"]').getAttribute('data-active')).toBe('settings');
+        expect(get('v', 'tab')).toBe('settings');
+    });
+
+    it('value binding syncs the live input value property', () => {
+        setupView('v', `<input az="0" az-local='{"a":{"value":"field"}}' value="" />`);
+        set('v', 'field', 'typed');
+        const input = document.querySelector('input');
+        expect(input.getAttribute('value')).toBe('typed');
+        expect(input.value).toBe('typed');
+    });
+});
+
+describe('?local -- interpolated attribute', () => {
+    it('set recomposes prefix + value + suffix; get strips them', () => {
+        setupView(
+            'v',
+            `<button az="0" az-local='{"a":{"class":"variant"},"ap":{"class":["btn btn-",""]}}' class="btn btn-primary">x</button>`,
+        );
+        set('v', 'variant', 'secondary');
+        const btn = document.querySelector('[az="0"]');
+        expect(btn.getAttribute('class')).toBe('btn btn-secondary');
+        expect(get('v', 'variant')).toBe('secondary');
+    });
+
+    it('strips both a prefix and a suffix on read', () => {
+        setupView(
+            'v',
+            `<a az="0" az-local='{"a":{"href":"id"},"ap":{"href":["/u/","/edit"]}}' href="/u/1/edit">e</a>`,
+        );
+        expect(get('v', 'id')).toBe('1');
+        set('v', 'id', '42');
+        expect(document.querySelector('[az="0"]').getAttribute('href')).toBe('/u/42/edit');
+        expect(get('v', 'id')).toBe('42');
+    });
+
+    it('coerces a non-string value via String() and reads it back', () => {
+        setupView(
+            'v',
+            `<li az="0" az-local='{"a":{"style":"w"},"ap":{"style":["width: ","%"]}}' style="width: 25%">x</li>`,
+        );
+        set('v', 'w', 50);
+        expect(document.querySelector('[az="0"]').getAttribute('style')).toBe('width: 50%');
+        expect(get('v', 'w')).toBe('50');
+    });
+
+    it('syncs the live value property for an interpolated value attribute', () => {
+        setupView(
+            'v',
+            `<input az="0" az-local='{"a":{"value":"amt"},"ap":{"value":["$",""]}}' value="$0" />`,
+        );
+        set('v', 'amt', '50');
+        const input = document.querySelector('input');
+        expect(input.getAttribute('value')).toBe('$50');
+        expect(input.value).toBe('$50');
+    });
+
+    it('sets the recomposed value literally -- no markup injection', () => {
+        setupView(
+            'v',
+            `<span az="0" az-local='{"a":{"data-x":"d"},"ap":{"data-x":["p-",""]}}' data-x="p-ok">x</span>`,
+        );
+        set('v', 'd', '"><img src=x onerror=alert(1)>');
+        const span = document.querySelector('[az="0"]');
+        expect(span.querySelector('img')).toBeNull();
+        expect(span.getAttribute('data-x')).toBe('p-"><img src=x onerror=alert(1)>');
+    });
+
+    it('is per-view isolated and setAll spans every view', () => {
+        document.body.innerHTML =
+            `<div id="a" az-view><i az="0" az-local='{"a":{"class":"k"},"ap":{"class":["t-",""]}}' class="t-1">x</i></div>` +
+            `<div id="b" az-view><i az="0" az-local='{"a":{"class":"k"},"ap":{"class":["t-",""]}}' class="t-1">y</i></div>`;
+        set('a', 'k', '2');
+        expect(document.querySelector('#a i').getAttribute('class')).toBe('t-2');
+        expect(document.querySelector('#b i').getAttribute('class')).toBe('t-1');
+        setAll('k', '9');
+        expect(document.querySelector('#a i').getAttribute('class')).toBe('t-9');
+        expect(document.querySelector('#b i').getAttribute('class')).toBe('t-9');
+    });
+});
+
+describe('?local -- per-view isolation', () => {
+    const twoViews = () => {
+        document.body.innerHTML =
+            `<div id="a" az-view><span az="0" az-local='{"c":{"0":"msg"}}'><!--az:0-->A<!--/az--></span></div>` +
+            `<div id="b" az-view><span az="0" az-local='{"c":{"0":"msg"}}'><!--az:0-->B<!--/az--></span></div>`;
+    };
+
+    it('a set in one view does not touch another view with the same key', () => {
+        twoViews();
+        set('a', 'msg', 'changed');
+        expect(document.querySelector('#a [az="0"]').textContent).toBe('changed');
+        expect(document.querySelector('#b [az="0"]').textContent).toBe('B');
+    });
+
+    it('setAll updates every view', () => {
+        twoViews();
+        setAll('msg', 'all');
+        expect(document.querySelector('#a [az="0"]').textContent).toBe('all');
+        expect(document.querySelector('#b [az="0"]').textContent).toBe('all');
+    });
+});
+
+describe('?local -- set command', () => {
+    it('executeJS resolves the trigger view and updates the slot', () => {
+        setupView(
+            'v',
+            `<span az="0" az-local='{"c":{"0":"title"}}'><!--az:0-->old<!--/az--></span>` +
+                `<button az="1">go</button>`,
+        );
+        executeJS(document.querySelector('button'), null, [17, 'title', 'clicked']);
+        expect(document.querySelector('[az="0"]').textContent).toBe('clicked');
+    });
+
+    it('an explicit viewId targets that view, not the trigger view', () => {
+        document.body.innerHTML =
+            `<div id="a" az-view><span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->A<!--/az--></span></div>` +
+            `<div id="b" az-view><button>go</button></div>`;
+        executeJS(document.querySelector('#b button'), null, [17, 'k', 'x', 'a']);
+        expect(document.querySelector('#a [az="0"]').textContent).toBe('x');
+    });
+});
+
+describe('?local -- edge cases', () => {
+    it('nested views are isolated: a set in the outer view skips the inner view', () => {
+        document.body.innerHTML =
+            `<div id="outer" az-view>` +
+            `<span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->O<!--/az--></span>` +
+            `<div id="inner" az-view><span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->I<!--/az--></span></div>` +
+            `</div>`;
+        set('outer', 'k', 'X');
+        expect(document.querySelector('#outer > [az="0"]').textContent).toBe('X');
+        expect(document.querySelector('#inner [az="0"]').textContent).toBe('I');
+    });
+
+    it('a key bound on multiple slots in one view updates all of them', () => {
+        setupView(
+            'v',
+            `<span az="0" az-local='{"c":{"0":"n"}}'><!--az:0-->-<!--/az--></span>` +
+                `<b az="1" az-local='{"c":{"0":"n"}}'><!--az:1-->-<!--/az--></b>`,
+        );
+        set('v', 'n', '7');
+        expect(document.querySelector('[az="0"]').textContent).toBe('7');
+        expect(document.querySelector('[az="1"]').textContent).toBe('7');
+    });
+
+    it('set for a key with no matching slot is a no-op', () => {
+        setupView('v', `<span az="0" az-local='{"c":{"0":"a"}}'><!--az:0-->x<!--/az--></span>`);
+        expect(() => set('v', 'missing', 'y')).not.toThrow();
+        expect(document.querySelector('[az="0"]').textContent).toBe('x');
+    });
+
+    it('get for a missing key returns undefined', () => {
+        setupView('v', `<span az="0" az-local='{"c":{"0":"a"}}'><!--az:0-->x<!--/az--></span>`);
+        expect(get('v', 'missing')).toBeUndefined();
+    });
+
+    it('get on an absent boolean attribute returns false', () => {
+        setupView('v', `<div az="0" az-local='{"a":{"open":"o"}}'>x</div>`);
+        expect(get('v', 'o')).toBe(false);
+        set('v', 'o', true);
+        expect(get('v', 'o')).toBe(true);
+    });
+});
+
+describe('?local -- multiple content slots in one element', () => {
+    it('writes each slot independently, leaving static text and siblings intact', () => {
+        // Element az "0"; slot 0 marker is "0", slot 1 marker is "0:1".
+        setupView(
+            'v',
+            `<p az="0" az-local='{"c":{"0":"a","1":"b"}}'>` +
+                `<!--az:0-->A<!--/az-->foo<!--az:0:1-->B<!--/az--></p>`,
+        );
+        set('v', 'a', 'X');
+        set('v', 'b', 'Y');
+        expect(document.querySelector('[az="0"]').textContent).toBe('XfooY');
+        expect(get('v', 'a')).toBe('X');
+        expect(get('v', 'b')).toBe('Y');
+    });
+
+    it('a key shared by two slots in one element updates both', () => {
+        setupView(
+            'v',
+            `<p az="0" az-local='{"c":{"0":"n","1":"n"}}'>` +
+                `<!--az:0-->-<!--/az--><!--az:0:1-->-<!--/az--></p>`,
+        );
+        set('v', 'n', '7');
+        expect(document.querySelector('[az="0"]').textContent).toBe('77');
+    });
+});
+
+describe('?local -- reset / isolation on server ops', () => {
+    it('OP_UPDATE of an enclosing element resets a contained ?local to its SSR initial', () => {
+        setupView(
+            'v',
+            `<div az="0"><span az="1" az-local='{"c":{"0":"k"}}'><!--az:1-->init<!--/az--></span></div>`,
+        );
+        set('v', 'k', 'edited');
+        expect(document.querySelector('[az-local]').textContent).toBe('edited');
+        // Server re-renders the whole region (innerHTML) carrying the SSR-initial slot.
+        applyOps([
+            [
+                OP.UPDATE,
+                'v:0',
+                `<span az="1" az-local='{"c":{"0":"k"}}'><!--az:1-->init<!--/az--></span>`,
+            ],
+        ]);
+        expect(document.querySelector('[az-local]').textContent).toBe('init');
+        expect(get('v', 'k')).toBe('init');
+    });
+
+    it('OP_REPLACE of the slot element resets the ?local to its SSR initial', () => {
+        setupView('v', `<span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->init<!--/az--></span>`);
+        set('v', 'k', 'edited');
+        expect(document.querySelector('[az-local]').textContent).toBe('edited');
+        applyOps([
+            [
+                OP.REPLACE,
+                'v:0',
+                `<span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->init<!--/az--></span>`,
+            ],
+        ]);
+        expect(document.querySelector('[az-local]').textContent).toBe('init');
+    });
+
+    it('a targeted OP_TEXT on a sibling marker leaves an adjacent ?local untouched', () => {
+        setupView(
+            'v',
+            `<div az="0"><!--az:0-->server<!--/az-->` +
+                `<span az="1" az-local='{"c":{"0":"k"}}'><!--az:1-->localinit<!--/az--></span></div>`,
+        );
+        set('v', 'k', 'edited');
+        applyOps([[OP.TEXT, 'v:0', 'server-changed']]);
+        const div = document.querySelector('[az="0"]');
+        expect(div.querySelector('[az-local]').textContent).toBe('edited');
+        expect(get('v', 'k')).toBe('edited');
+    });
+});
+
+describe('?local -- set as a handler effect (applyEffects)', () => {
+    // op 17 = JS_SET_LOCAL. applyEffects is the server->client handler-effect entry
+    // point (dispatched against <html>): a 4th elem of a viewId string scopes to
+    // that view; `true` is set_all.
+    it('a viewId-scoped set_local effect updates that view slot', () => {
+        document.body.innerHTML = `<div id="v" az-view><span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->init<!--/az--></span></div>`;
+        applyEffects([[17, 'k', 'from-effect', 'v']]);
+        expect(document.querySelector('#v [az-local]').textContent).toBe('from-effect');
+    });
+
+    it('a set_all effect updates every view', () => {
+        document.body.innerHTML =
+            `<div id="a" az-view><span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->A<!--/az--></span></div>` +
+            `<div id="b" az-view><span az="0" az-local='{"c":{"0":"k"}}'><!--az:0-->B<!--/az--></span></div>`;
+        applyEffects([[17, 'k', 'all', true]]);
+        expect(document.querySelector('#a [az-local]').textContent).toBe('all');
+        expect(document.querySelector('#b [az-local]').textContent).toBe('all');
+    });
+});
+
+describe('?local -- no server round-trip', () => {
+    let mock;
+    afterEach(() => {
+        if (mock) mock.restore();
+    });
+
+    it('a set-command click updates the DOM and sends no worker message', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        document.body.innerHTML =
+            `<div id="v" az-view>` +
+            `<span az="0" az-local='{"c":{"0":"title"}}'><!--az:0-->old<!--/az--></span>` +
+            `<button az="1" az-click='[17,"title","new"]'>go</button>` +
+            `</div>`;
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        document.querySelector('button').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        expect(document.querySelector('[az="0"]').textContent).toBe('new');
+        expect(mock.getSentMessages()).toEqual([]);
+    });
+});
 
 describe('onmessage partial envelopes', () => {
     let mock;

@@ -41,6 +41,7 @@ binding, used by stateless layouts to render the wrapped page.
 -export([stateless/2]).
 -export([stateless/3]).
 -export([each/2]).
+-export([local/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -57,7 +58,8 @@ binding, used by stateless layouts to render the wrapped page.
     stateful/2,
     stateless/2,
     stateless/3,
-    each/2
+    each/2,
+    local/2
 ]).
 
 %% --------------------------------------------------------------------
@@ -206,3 +208,12 @@ parse transform did not run, in which case the call will fail.
     Source :: term().
 each(Fun, Source) ->
     arizona_template:each(Fun, Source).
+
+-doc """
+Alias for `arizona_template:local/2`.
+""".
+-spec local(Key, Init) -> map() when
+    Key :: binary() | atom(),
+    Init :: term().
+local(Key, Init) ->
+    arizona_template:local(Key, Init).

@@ -53,6 +53,9 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 -export([set_title/1]).
 -export([reload/0]).
 -export([on_key/2]).
+-export([set/2]).
+-export([set/3]).
+-export([set_all/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -78,7 +81,10 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     scroll_to/2,
     set_title/1,
     reload/0,
-    on_key/2
+    on_key/2,
+    set/2,
+    set/3,
+    set_all/2
 ]).
 
 %% --------------------------------------------------------------------
@@ -221,6 +227,33 @@ on_key(Key, {arizona_effect, Inner}) ->
 on_key(Key, [_ | _] = Cmds) ->
     {arizona_effect, [?EFFECT_ON_KEY, encode_key(Key), [C || {arizona_effect, C} <:- Cmds]]}.
 
+-doc """
+Sets a client-owned slot (`?local`) to `Value` in the **closest view** of the
+triggering element, updating every slot with `Key` locally with no server
+round-trip. Use inside web event attributes like `az-click`.
+""".
+-spec set(Key, Value) -> arizona_effect:cmd() when
+    Key :: binary() | atom(),
+    Value :: binary() | boolean() | number().
+set(Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value]}.
+
+-doc """
+Like `set/2` but targets the slot in the view identified by `ViewId`.
+""".
+-spec set(ViewId, Key, Value) -> arizona_effect:cmd() when
+    ViewId :: binary(),
+    Key :: binary() | atom(),
+    Value :: binary() | boolean() | number().
+set(ViewId, Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value, ViewId]}.
+
+-doc """
+Like `set/2` but updates the slot in **every** view on the page (document-wide).
+""".
+-spec set_all(Key, Value) -> arizona_effect:cmd() when
+    Key :: binary() | atom(),
+    Value :: binary() | boolean() | number().
+set_all(Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value, true]}.
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
@@ -250,6 +283,17 @@ set_title_test() ->
 
 reload_test() ->
     {arizona_effect, [?EFFECT_RELOAD]} = reload().
+
+set_test() ->
+    {arizona_effect, [?EFFECT_SET_LOCAL, ~"k", ~"v"]} = set(~"k", ~"v"),
+    %% An atom key is accepted and passed through (json stringifies it on the wire).
+    {arizona_effect, [?EFFECT_SET_LOCAL, foo, ~"v"]} = set(foo, ~"v").
+
+set_view_test() ->
+    {arizona_effect, [?EFFECT_SET_LOCAL, ~"k", true, ~"view1"]} = set(~"view1", ~"k", true).
+
+set_all_test() ->
+    {arizona_effect, [?EFFECT_SET_LOCAL, ~"k", ~"v", true]} = set_all(~"k", ~"v").
 
 builders_test() ->
     ?assertEqual({arizona_effect, [?EFFECT_SHOW, ~"#m"]}, show(~"#m")),

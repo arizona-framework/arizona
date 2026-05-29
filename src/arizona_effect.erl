@@ -24,6 +24,7 @@ that embed the command as a JSON value (the native path).
 
 -export([encode/1]).
 -export([encode_json/1]).
+-export([escape_attr/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings

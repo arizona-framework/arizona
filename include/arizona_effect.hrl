@@ -16,3 +16,4 @@
 -define(EFFECT_SET_TITLE, 14).
 -define(EFFECT_RELOAD, 15).
 -define(EFFECT_ON_KEY, 16).
+-define(EFFECT_SET_LOCAL, 17).

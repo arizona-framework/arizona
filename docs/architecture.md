@@ -192,6 +192,97 @@ matches:
 {az_keydown, arizona_js:on_key(~"^[a-z0-9]$", arizona_js:push_event(~"type"))}
 ```
 
+## Client-owned slots -- `?local`
+
+A `?local(Key, Init)` slot is **static to the server, dynamic to the client**: the server
+renders `Init` once at SSR and marks the slot `diff => false` so it is never patched; the
+browser owns the value (keyed by `Key`) and mutates it locally with **no WebSocket
+round-trip**. For UI-only state (dialog open/close, tabs, toggles) the server doesn't need.
+
+Authoring (`?local` = `arizona_template:local/2`, also `az:local/2`):
+
+```erlang
+{'span', [], [?local(~"title", ~"Hello")]}                 %% content
+{'dialog', [{open, ?local(~"modal_open", false)}], [...]}  %% boolean attribute
+{'div', [{'data-active', ?local(~"tab", ~"home")}], [...]} %% valued attribute (CSS-driven tabs)
+{'p', [], [~"Name: ", ?local(~"first", ~"Ada"), ~" ", ?local(~"last", ~"Lovelace")]} %% many content slots + static text
+{'a', [{href, [~"/u/", ?local(~"id", ~"1"), ~"/edit"]}], [...]} %% interpolated attribute (static + one local)
+```
+
+Compile-time constraints: `Key` must be a literal binary or atom (an atom normalizes to a
+binary); a key can't bind both content and an attribute on one element; not allowed under
+`az-nodiff` or in `?native` templates.
+A content `?local` does **not** have to be the sole child -- an element can hold several
+content slots, freely mixed with static text and other dynamic children. An attribute value
+may also **interpolate** one `?local` with static text around it (the statics become a
+prefix/suffix); two `?local` in one attribute, or a `?local` mixed with a server-owned
+dynamic there, are compile errors (`local_attr_multiple` / `local_attr_mixed`). Interpolation
+is for **string-valued** attributes (`class`, `style`, `href`, `data-*`, `value`); a boolean
+attribute must use a **whole-value** `?local` (`{disabled, ?local(~"d", false)}`, which
+renders `false` → absent / `true` → bare) -- an interpolated value always renders
+`name="value"`, so an interpolated boolean would be `disabled="false"`, i.e. still present.
+
+Mechanism: `arizona_template:local/2` returns `#{diff => false, az_local => Key, v => Init}`
+(attributes add `target => {attr, Name}`). `eval` preserves it; `arizona_diff` skips it via
+the existing per-dynamic `#{diff := false}` clause; `arizona_render` unwraps it. Each content
+slot is an individually comment-marked text node (`<!--az:X-->Init<!--/az-->`), exactly like
+any dynamic text child. The parse transform bakes a self-describing `az-local` descriptor
+attribute (escaped JSON `{c: {slotIdx: key}, a: {attrName: key}, ap: {attrName: [prefix, suffix]}}`)
+onto the element -- `c` maps each content slot's dynamic-slot index to its key, `a` maps each
+attribute name to its key, and `ap` (present only for interpolated attributes) carries the
+static prefix/suffix. The client scans `[az-local]` live (no persistent index): for a content
+slot it reconstructs the marker `az` from the element's runtime `az` + the slot index
+(mirroring `arizona_html:text_az/2`); for an interpolated attribute it recomposes
+`prefix ++ value ++ suffix` on set and strips them on read. An interpolated attribute's
+composed initial value is baked into the bind-map's `v` (`[Prefix, to_bin(Init), Suffix]`), so
+SSR render and diff-skip reuse the whole-value attribute path unchanged.
+
+Updating (event attributes / handler effects via `arizona_js`; never sent to the server --
+op `?EFFECT_SET_LOCAL`):
+
+| Builder | Scope |
+| --- | --- |
+| `arizona_js:set(Key, Value)` | closest view of the trigger (markup-only) |
+| `arizona_js:set(ViewId, Key, Value)` | a named view |
+| `arizona_js:set_all(Key, Value)` | every view (document-wide) |
+
+As a **handler effect** (returned from `handle_event`/`handle_info`), use `set/3` or
+`set_all/2`: the closest-view `set/2` resolves against the trigger element, which a handler
+effect runs without (`applyEffects` dispatches against `<html>`), so it is a no-op there.
+
+Client JS API: `arizona.set(viewId, key, value)`, `arizona.setAll(key, value)`,
+`arizona.get(key)` / `arizona.get(viewId, key)`. Content writes are **text-only** (a `<` in
+a value renders as text, never HTML -- no injection); attribute writes reuse
+`setAttribute`/`removeAttribute` (with `value`/`checked` property sync): boolean `true` =>
+present, `false` => absent.
+
+Caveats (by design):
+
+- **Wholesale re-render resets it.** A `?local` value survives normal per-slot diffs, but
+  an enclosing region re-rendered as a unit (`OP_UPDATE` innerHTML, `OP_REPLACE`, an `?each`
+  item swap, a conditional template switch) recreates the slot at its SSR initial.
+- **Inside `?each`, items share the slot key.** `?local` keys are compile-time literals (you
+  can't build `?local(<<"open_", Id/binary>>, ...)` -- that errors `local_key_not_literal`), so
+  every item rendered from the same template carries the **same** key and `set`/`set_all`
+  updates all of them at once. `?local` therefore can't hold per-item independent client state
+  in a list/stream -- use server state for that. (An item reorder/remove is also a wholesale
+  re-render that resets that item's slot.)
+- **Forced reconnect resets it.** A non-1000 socket close fresh-mounts the view.
+- **Server never reads the value.** To use it server-side, read it client-side
+  (`arizona.get`) and include it in a `push_event` payload -- auto-collection ignores `[az-local]`.
+- **No JS = frozen at initial**; `get` returns strings (no type preservation).
+- **`az-hook` `updated()` fires on a client `set`.** A bound element carrying an `az-hook`
+  sees `updated()` for changes the server never observed -- treat that hook's state as
+  client-local too.
+- **Accessibility is the author's job.** Driving a presentational attribute (`open`,
+  `data-active`) does not touch ARIA. A native `<dialog open>` is announced for free, but the
+  CSS-tabs pattern above sets no `aria-selected` -- and since `?local` writes a literal value
+  (no expressions), per-element ARIA that depends on the slot needs one boolean slot per
+  element or server-tracked state.
+- **Dangerous attributes are the author's responsibility.** Content writes are always text
+  (never HTML), but binding `href`/`style`/an `on*` handler to author-supplied data is on you
+  -- only the attribute *name* is fixed at compile time, the value is not escaped.
+
 ## API -- `arizona_roadrunner_router.erl`
 
 Roadrunner route compilation. A `{reload, ...}` entry adds the dev-mode SSE endpoint, and a

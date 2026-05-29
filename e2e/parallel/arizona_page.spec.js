@@ -1560,25 +1560,38 @@ test('about page timer restarts after reconnect', async ({ page }) => {
     await page.goto('/about');
     await wsReady(page);
 
-    const tickSpan = page.locator('main#page[az-view] span[az-hook="Tick"]');
+    const tickSel = 'main#page span[az-hook="Tick"]';
 
-    // Wait for tick to reach at least 1
-    await expect(tickSpan).toHaveText('1', { timeout: 3000 });
+    // Timer is running before the reconnect (tick climbs to at least 1).
+    await page.waitForFunction(
+        (sel) => {
+            const el = document.querySelector(sel);
+            return el && parseInt(el.textContent, 10) >= 1;
+        },
+        tickSel,
+        { timeout: 6000 },
+    );
 
-    // Close WS to trigger reconnect
+    // Close WS to trigger reconnect. The old live process dies (drain is
+    // server-initiated only), so reconnect fresh-mounts the view: tick resets
+    // to 0 and re-renders via OP_REPLACE.
     await page.evaluate(() => window._ws.close(4000));
     await wsReady(page);
 
-    // After reconnect, fresh mount means tick restarts from 0
-    // Wait for the first tick after reconnect
-    await expect(tickSpan).toHaveText('1', { timeout: 5000 });
+    // Reset is observable as tick === '0' -- pre-close it was always >= 1, so
+    // '0' can only come from the post-reconnect fresh mount (no transient-value
+    // race, unlike matching '1').
+    await page.waitForFunction((sel) => document.querySelector(sel)?.textContent === '0', tickSel, {
+        timeout: 8000,
+    });
 
-    // Verify timer is still running -- tick increments beyond 1
+    // The restarted timer keeps running -- the tick climbs to at least 2.
     await page.waitForFunction(
-        () => {
-            const el = document.querySelector('main#page span[az-hook="Tick"]');
+        (sel) => {
+            const el = document.querySelector(sel);
             return el && parseInt(el.textContent, 10) >= 2;
         },
-        { timeout: 5000 },
+        tickSel,
+        { timeout: 8000 },
     );
 });

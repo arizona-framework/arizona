@@ -10,7 +10,8 @@
     stateful/1,
     stateless_2/1,
     stateless_3/1,
-    track/1
+    track/1,
+    local/1
 ]).
 
 all() ->
@@ -26,7 +27,8 @@ groups() ->
             stateful,
             stateless_2,
             stateless_3,
-            track
+            track,
+            local
         ]}
     ].
 
@@ -56,3 +58,14 @@ stateless_3(Config) when is_list(Config) ->
 
 html_stub(Config) when is_list(Config) ->
     ?assertError(parse_transform_not_applied, az:html(foo)).
+
+local(Config) when is_list(Config) ->
+    ?assertEqual(
+        #{diff => false, az_local => ~"k", v => ~"v"},
+        az:local(~"k", ~"v")
+    ),
+    %% An atom key is normalized to its binary form.
+    ?assertEqual(
+        #{diff => false, az_local => ~"open", v => ~"v"},
+        az:local(open, ~"v")
+    ).

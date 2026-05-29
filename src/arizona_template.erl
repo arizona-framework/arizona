@@ -51,6 +51,7 @@ render(Bindings) ->
 -export([stateful/2]).
 -export([stateless/2]).
 -export([stateless/3]).
+-export([local/2]).
 -export([each/2]).
 -export([native_each/2]).
 -export([to_bin/1]).
@@ -269,6 +270,21 @@ Builds a stateless child descriptor from a `Handler:Fun/1` reference.
     Props :: map().
 stateless(Handler, Fun, Props) when is_atom(Handler), is_atom(Fun), is_map(Props) ->
     #{callback => fun Handler:Fun/1, props => Props}.
+
+-doc """
+Builds a client-owned slot value. The server renders `Init` once and never
+diffs the slot (`diff => false`); the browser owns the value via `Key`,
+updating it client-side with no round-trip. Used via the `?local` macro in
+content or attribute-value position. `Key` may be a binary or an atom (an atom
+is normalized to a binary, so it reaches the client as the same string).
+""".
+-spec local(Key, Init) -> map() when
+    Key :: binary() | atom(),
+    Init :: term().
+local(Key, Init) when is_atom(Key) ->
+    local(atom_to_binary(Key), Init);
+local(Key, Init) when is_binary(Key) ->
+    #{diff => false, az_local => Key, v => Init}.
 
 -doc """
 Wraps a `t:template/0` produced by the parse transform with an `each` source.

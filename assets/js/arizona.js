@@ -476,6 +476,181 @@ function updateMarkerContent(startMarker, value) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Client-owned slots (?local): the browser owns a slot the server renders once
+// and never diffs. Discovery is self-describing -- elements carry an `az-local`
+// descriptor (JSON: {c: contentKey, a: {attrName: key}}) -- so set/get query
+// the live DOM directly; no persistent index, nothing to sync across renders.
+// ---------------------------------------------------------------------------
+
+/**
+ * Replace the content between <!--az:X--> and <!--/az--> with a TEXT node.
+ * Unlike updateMarkerContent it never interprets the value as HTML, so a
+ * client-set value containing `<` can't inject markup.
+ * @param {Comment} startMarker
+ * @param {*} value
+ */
+function setMarkerText(startMarker, value) {
+    let node = startMarker.nextSibling;
+    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
+        const next = node.nextSibling;
+        node.remove();
+        node = next;
+    }
+    startMarker.after(document.createTextNode(value == null ? '' : String(value)));
+}
+
+/**
+ * Reconstruct a content slot's comment-marker az from the element's runtime az
+ * and the slot index. Mirrors arizona_html:text_az/2 (slot 0 reuses the element
+ * az; slot N appends ":N") -- a cross-language wire contract.
+ * @param {Element} el
+ * @param {string} slot
+ * @returns {string}
+ */
+function localMarkerAz(el, slot) {
+    const elAz = el.getAttribute('az') || '';
+    return slot === '0' ? elAz : `${elAz}:${slot}`;
+}
+
+/**
+ * Write a value to one bound slot.
+ * @param {Element} el
+ * @param {string[]} target -- ['content', slot], ['attr', name], or
+ *   ['attr', name, prefix, suffix] (interpolated attribute)
+ * @param {*} value
+ */
+function writeLocalValue(el, target, value) {
+    if (target[0] === 'content') {
+        const marker = findMarker(el, localMarkerAz(el, target[1]));
+        if (marker) setMarkerText(marker, value);
+        else el.textContent = value == null ? '' : String(value);
+        notifyUpdated(el);
+        return;
+    }
+    const name = target[1];
+    if (target.length === 4) {
+        // Interpolated: recompose prefix + value + suffix (always a string attr).
+        applySetAttrOp(el, name, target[2] + String(value) + target[3]);
+    } else if (value === false || value == null) {
+        el.removeAttribute(name);
+        notifyUpdated(el);
+    } else if (value === true) {
+        applySetAttrOp(el, name, '');
+    } else {
+        applySetAttrOp(el, name, String(value));
+    }
+}
+
+/**
+ * Read the current value of one bound slot from the DOM.
+ * @param {Element} el
+ * @param {string[]} target -- ['content', slot], ['attr', name], or
+ *   ['attr', name, prefix, suffix] (interpolated attribute)
+ * @returns {*}
+ */
+function readLocalValue(el, target) {
+    if (target[0] === 'content') {
+        const marker = findMarker(el, localMarkerAz(el, target[1]));
+        if (!marker) return el.textContent;
+        let text = '';
+        let node = marker.nextSibling;
+        while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
+            text += node.textContent ?? '';
+            node = node.nextSibling;
+        }
+        return text;
+    }
+    const name = target[1];
+    if (target.length === 4) {
+        // Interpolated: strip the known prefix/suffix to recover the local value.
+        const v = el.getAttribute(name) ?? '';
+        return v.slice(target[2].length, v.length - target[3].length);
+    }
+    if (!el.hasAttribute(name)) return false;
+    const v = el.getAttribute(name);
+    return v === '' ? true : v;
+}
+
+/**
+ * Visit each bound slot for `key` under `root`. When `viewId` is non-null only
+ * slots whose nearest view is `viewId` are visited (per-view isolation).
+ * @param {Element|Document} root
+ * @param {string} key
+ * @param {string|null} viewId
+ * @param {(el: Element, target: string[]) => void} fn
+ */
+function forEachLocal(root, key, viewId, fn) {
+    /** @param {Element} el */
+    const visit = (el) => {
+        const desc = el.getAttribute('az-local');
+        if (!desc) return;
+        if (viewId !== null && resolveTarget(el) !== viewId) return;
+        // The descriptor is always framework-generated valid JSON.
+        const parsed = JSON.parse(desc);
+        // c maps each content slot index -> key; a maps each attr name -> key;
+        // ap (optional) carries [prefix, suffix] for interpolated attributes.
+        if (parsed.c) {
+            for (const [slot, k] of Object.entries(parsed.c)) {
+                if (k === key) fn(el, ['content', slot]);
+            }
+        }
+        if (parsed.a) {
+            for (const [attr, k] of Object.entries(parsed.a)) {
+                if (k === key) {
+                    const aff = parsed.ap && parsed.ap[attr];
+                    fn(el, aff ? ['attr', attr, aff[0], aff[1]] : ['attr', attr]);
+                }
+            }
+        }
+    };
+    if (root instanceof Element && root.hasAttribute('az-local')) visit(root);
+    root.querySelectorAll('[az-local]').forEach(visit);
+}
+
+/**
+ * Set a client-owned slot (`?local`) in one view, locally -- no server
+ * round-trip. Use setAll for document-wide.
+ * @param {string} viewId
+ * @param {string} key
+ * @param {*} value
+ */
+function set(viewId, key, value) {
+    const root = document.getElementById(viewId);
+    if (!root) return;
+    forEachLocal(root, key, viewId, (el, target) => writeLocalValue(el, target, value));
+}
+
+/**
+ * Set a client-owned slot (`?local`) in every view on the page (document-wide).
+ * @param {string} key
+ * @param {*} value
+ */
+function setAll(key, value) {
+    forEachLocal(document, key, null, (el, target) => writeLocalValue(el, target, value));
+}
+
+/**
+ * Read a client-owned slot (`?local`) from the DOM.
+ *   get(key) -- first match anywhere | get(viewId, key) -- one view
+ * @param {string} a
+ * @param {string} [b]
+ * @returns {*}
+ */
+function get(a, b) {
+    const scoped = b !== undefined;
+    const viewId = scoped ? a : null;
+    const key = scoped ? /** @type {string} */ (b) : a;
+    const root = viewId ? document.getElementById(viewId) : document;
+    if (!root) return undefined;
+    /** @type {*} */
+    let result;
+    forEachLocal(root, key, viewId, (el, target) => {
+        if (result === undefined) result = readLocalValue(el, target);
+    });
+    return result;
+}
+
 /**
  * Insert a keyed child into a container element.
  * @param {Element} el -- container element
@@ -754,7 +929,7 @@ function autoPayload(el, event) {
     return {};
 }
 
-// JS command op codes -- must match include/arizona_js.hrl
+// JS command op codes -- must match include/arizona_effect.hrl
 const JS_PUSH_EVENT = 0,
     JS_TOGGLE = 1,
     JS_SHOW = 2,
@@ -771,7 +946,8 @@ const JS_PUSH_EVENT = 0,
     JS_SCROLL_TO = 13,
     JS_SET_TITLE = 14,
     JS_RELOAD = 15,
-    JS_ON_KEY = 16;
+    JS_ON_KEY = 16,
+    JS_SET_LOCAL = 17;
 
 /**
  * If `sel` matches an element, call `fn` with it cast to `HTMLElement`.
@@ -872,6 +1048,19 @@ function executeJS(el, event, cmds) {
                         : '';
                 if (Array.isArray(f) ? f.includes(lk) : new RegExp(f).test(lk))
                     executeJS(el, event, cmd[2]);
+                break;
+            }
+            case JS_SET_LOCAL: {
+                // Client-owned slot update -- never sent to the server. cmd[3]:
+                // absent => closest view (the trigger); a viewId string => that
+                // view; true => all views.
+                const scope = cmd[3];
+                if (scope === true) {
+                    setAll(cmd[1], cmd[2]);
+                } else {
+                    const viewId = scope ?? resolveTarget(el);
+                    if (viewId) set(viewId, cmd[1], cmd[2]);
+                }
                 break;
             }
         }
@@ -1350,6 +1539,7 @@ export {
     applyOps,
     connect,
     executeJS,
+    get,
     hooks,
     mountHooks,
     OP,
@@ -1358,4 +1548,6 @@ export {
     resolveEl,
     restoreFormState,
     saveFormState,
+    set,
+    setAll,
 };
