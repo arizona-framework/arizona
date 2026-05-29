@@ -108,7 +108,7 @@ fingerprints already shipped in the initial HTML.
 %% --------------------------------------------------------------------
 
 -nominal on_mount_hook() ::
-    fun((map(), az:request()) -> map()) | {module(), atom()}.
+    fun((map(), az:request() | undefined) -> map()) | {module(), atom()}.
 -nominal on_mount() :: [on_mount_hook()].
 
 %% Route's static config: the map a router associates with each route
@@ -130,7 +130,7 @@ fingerprints already shipped in the initial HTML.
 -record(state, {
     handler :: module(),
     bindings :: map(),
-    req :: az:request(),
+    req :: az:request() | undefined,
     snapshot :: map() | undefined,
     %% #{ViewId => #{handler, bindings, snapshot}}
     views :: map(),
@@ -202,7 +202,7 @@ when
     InitBindings :: map(),
     TransportPid :: pid() | undefined,
     OnMount :: on_mount(),
-    Req :: az:request().
+    Req :: az:request() | undefined.
 start_link(Handler, InitBindings, TransportPid, OnMount, Req) ->
     %% Capture caller-side logger metadata (typically set by roadrunner
     %% with the per-conn request_id) so any ?LOG_* from inside the
@@ -315,7 +315,7 @@ paths in `arizona_render`.
 -spec apply_on_mount(OnMount, Bindings, Req) -> Bindings1 when
     OnMount :: on_mount(),
     Bindings :: map(),
-    Req :: az:request(),
+    Req :: az:request() | undefined,
     Bindings1 :: map().
 apply_on_mount([], Bindings, _Req) ->
     Bindings;
@@ -335,7 +335,7 @@ when
     InitBindings :: map(),
     TransportPid :: pid() | undefined,
     OnMount :: on_mount(),
-    Req :: az:request(),
+    Req :: az:request() | undefined,
     ParentMetadata :: logger:metadata() | undefined.
 init({Handler, InitBindings, TransportPid, OnMount, Req, ParentMetadata}) ->
     proc_lib:set_label({arizona_live, Handler}),

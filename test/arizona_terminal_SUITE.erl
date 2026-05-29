@@ -17,7 +17,6 @@
 -export([log_lines_filters_effects/1]).
 -export([has_quit_detects_quit/1]).
 -export([normalize_key_mapping/1]).
--export([req_adapter_blank/1]).
 -export([crlf_conversion/1]).
 
 %% Drives the ?terminal demo view through arizona_live with no transport and no
@@ -40,7 +39,6 @@ all() ->
         log_lines_filters_effects,
         has_quit_detects_quit,
         normalize_key_mapping,
-        req_adapter_blank,
         crlf_conversion
     ].
 
@@ -98,7 +96,7 @@ broadcast_pushes_log_effect(Config) when is_list(Config) ->
     %% A pubsub broadcast reaches the subscribed view, which emits a log effect;
     %% the live process pushes it to the transport (here, the test process).
     {ok, Pid} = arizona_live:start_link(
-        arizona_term_demo, #{}, self(), [], arizona_terminal_req:new()
+        arizona_term_demo, #{}, self(), [], undefined
     ),
     {ok, _ViewId} = arizona_live:mount(Pid),
     ok = arizona_pubsub:broadcast(demo, {chat, ~"hello there"}),
@@ -165,15 +163,6 @@ normalize_key_mapping(Config) when is_list(Config) ->
     ?assertEqual(ignore, arizona_terminal_app:normalize_key("\e[Z")),
     ?assertEqual(ignore, arizona_terminal_app:normalize_key([27])).
 
-req_adapter_blank(Config) when is_list(Config) ->
-    %% The synthetic request mounts a view with no HTTP server.
-    Req = arizona_terminal_req:new(),
-    ?assertEqual(arizona_terminal_req, arizona_req:adapter(Req)),
-    ?assertEqual(~"GET", arizona_req:method(Req)),
-    ?assertEqual(~"/", arizona_req:path(Req)),
-    {Bindings, _Req1} = arizona_req:bindings(Req),
-    ?assertEqual(#{}, Bindings).
-
 crlf_conversion(Config) when is_list(Config) ->
     %% Raw mode needs CRLF; the driver adds the \r to the target's logical \n.
     ?assertEqual(~"a\r\nb\r\n", arizona_terminal_app:to_crlf(~"a\nb\n")),
@@ -185,7 +174,7 @@ crlf_conversion(Config) when is_list(Config) ->
 
 start_demo() ->
     {ok, Pid} = arizona_live:start_link(
-        arizona_term_demo, #{}, undefined, [], arizona_terminal_req:new()
+        arizona_term_demo, #{}, undefined, [], undefined
     ),
     {ok, ViewId} = arizona_live:mount(Pid),
     {Pid, ViewId}.

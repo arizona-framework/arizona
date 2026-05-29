@@ -100,9 +100,9 @@ run(Handler, Bindings) ->
     %% Trap exits so a dying live/reader process becomes a message the loop
     %% handles (and the cursor is restored), not a signal that kills us mid-frame.
     process_flag(trap_exit, true),
-    {ok, Pid} = arizona_live:start_link(
-        Handler, Bindings, self(), [], arizona_terminal_req:new()
-    ),
+    %% Serverless transport: no HTTP request, so mount with `undefined`
+    %% (the demo view uses the request-free mount/1).
+    {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), [], undefined),
     {ok, ViewId} = arizona_live:mount(Pid),
     {ok, Status} = arizona_live:render_current(Pid),
     ok = io:put_chars(to_crlf(Status)),

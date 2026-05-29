@@ -1,6 +1,6 @@
 -module(arizona_term_demo).
 -include("arizona_view.hrl").
--export([mount/2, render/1, handle_event/3, handle_info/2]).
+-export([mount/1, render/1, handle_event/3, handle_info/2]).
 
 %% A terminal (?terminal) demo view exercising the three real-time paths:
 %%
@@ -19,8 +19,8 @@
 
 -define(TICK_MS, 1000).
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Init, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(Init) ->
     Bindings = #{
         id => ~"term_demo",
         selected => 0,
