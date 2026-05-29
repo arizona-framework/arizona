@@ -1,0 +1,138 @@
+-module(arizona_ssh_SUITE).
+-include_lib("stdlib/include/assert.hrl").
+-include_lib("common_test/include/ct.hrl").
+
+-export([all/0]).
+-export([init_per_suite/1]).
+-export([end_per_suite/1]).
+-export([serves_initial_frame/1]).
+-export([key_moves_selection/1]).
+-export([window_change_resizes/1]).
+
+%% End-to-end: arizona_ssh serves the ?terminal demo view over a real SSH daemon,
+%% driven by the OTP ssh client. A throwaway host key + accept-all password auth
+%% make the daemon self-contained; the demo view is the same one the local TTY
+%% runtime uses, proving the render target + live core are transport-agnostic.
+
+-define(USER, "arizona").
+-define(PASSWORD, "secret").
+
+all() ->
+    [
+        serves_initial_frame,
+        key_moves_selection,
+        window_change_resizes
+    ].
+
+init_per_suite(Config) ->
+    %% The demo view subscribes to a pubsub channel at mount, so the pg scope
+    %% must be running (the arizona app is not started in this suite).
+    case erlang:whereis(arizona_pubsub) of
+        undefined ->
+            {ok, Pid} = pg:start_link(arizona_pubsub),
+            unlink(Pid);
+        _ ->
+            ok
+    end,
+    {ok, _Started} = application:ensure_all_started(ssh),
+    SystemDir = filename:join(proplists:get_value(priv_dir, Config), "host_keys"),
+    ok = filelib:ensure_path(SystemDir),
+    ok = write_host_key(SystemDir),
+    {ok, Daemon} = arizona_ssh:start(#{
+        port => 0,
+        handler => arizona_term_demo,
+        system_dir => SystemDir,
+        daemon_opts => [
+            {auth_methods, "password"},
+            {user_passwords, [{?USER, ?PASSWORD}]}
+        ]
+    }),
+    {ok, Info} = ssh:daemon_info(Daemon),
+    Port = proplists:get_value(port, Info),
+    [{daemon, Daemon}, {port, Port} | Config].
+
+end_per_suite(Config) ->
+    ok = ssh:stop_daemon(proplists:get_value(daemon, Config)),
+    Config.
+
+serves_initial_frame(Config) when is_list(Config) ->
+    {Conn, _Ch} = connect(?config(port, Config)),
+    Frame = recv_until(Conn, ~"== Arizona Terminal Demo ==", 3000),
+    ?assert(contains(Frame, ~"> New Game")),
+    ?assert(contains(Frame, ~"  Quit")),
+    ?assert(contains(Frame, ~"[j/k] move")),
+    ok = ssh:close(Conn).
+
+key_moves_selection(Config) when is_list(Config) ->
+    {Conn, Ch} = connect(?config(port, Config)),
+    _ = recv_until(Conn, ~"> New Game", 3000),
+    ok = ssh_connection:send(Conn, Ch, ~"j"),
+    Frame = recv_until(Conn, ~"> Options", 3000),
+    ?assert(contains(Frame, ~"  New Game")),
+    ok = ssh:close(Conn).
+
+window_change_resizes(Config) when is_list(Config) ->
+    {Conn, Ch} = connect(?config(port, Config)),
+    %% The pty-req allocated 80x24; the view reflects it.
+    _ = recv_until(Conn, ~"Terminal: 80x24", 3000),
+    %% A window resize reaches the view's handle_info and updates the size.
+    ok = ssh_connection:window_change(Conn, Ch, 100, 40),
+    _ = recv_until(Conn, ~"Terminal: 100x40", 3000),
+    ok = ssh:close(Conn).
+
+%% --------------------------------------------------------------------
+%% Helpers
+%% --------------------------------------------------------------------
+
+%% A throwaway RSA host key so the daemon has a system_dir key without shelling
+%% out to ssh-keygen.
+write_host_key(Dir) ->
+    Key = public_key:generate_key({rsa, 2048, 65537}),
+    Pem = public_key:pem_encode([public_key:pem_entry_encode('RSAPrivateKey', Key)]),
+    file:write_file(filename:join(Dir, "ssh_host_rsa_key"), Pem).
+
+%% Connect as the OTP ssh client, allocate an 80x24 pty, and request a shell --
+%% the same sequence `ssh -t` performs.
+connect(Port) ->
+    {ok, Conn} = ssh:connect("localhost", Port, [
+        {user, ?USER},
+        {password, ?PASSWORD},
+        {silently_accept_hosts, true},
+        {user_interaction, false}
+    ]),
+    {ok, Ch} = ssh_connection:session_channel(Conn, 5000),
+    success = ssh_connection:ptty_alloc(Conn, Ch, [
+        {term, "xterm"}, {width, 80}, {height, 24}
+    ]),
+    ok = ssh_connection:shell(Conn, Ch),
+    {Conn, Ch}.
+
+%% Accumulate channel data until `Pattern` appears or the deadline passes. The
+%% demo ticks every second, so frames keep arriving -- match on content, not idle.
+recv_until(Conn, Pattern, Timeout) ->
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
+    recv_until(Conn, Pattern, Deadline, <<>>).
+
+recv_until(Conn, Pattern, Deadline, Acc) ->
+    case binary:match(Acc, Pattern) of
+        nomatch ->
+            Remaining = Deadline - erlang:monotonic_time(millisecond),
+            case Remaining =< 0 of
+                true ->
+                    ct:fail({not_received, Pattern, Acc});
+                false ->
+                    receive
+                        {ssh_cm, Conn, {data, _Ch, 0, Bin}} ->
+                            recv_until(Conn, Pattern, Deadline, <<Acc/binary, Bin/binary>>);
+                        {ssh_cm, Conn, _Other} ->
+                            recv_until(Conn, Pattern, Deadline, Acc)
+                    after Remaining ->
+                        ct:fail({not_received, Pattern, Acc})
+                    end
+            end;
+        _Found ->
+            Acc
+    end.
+
+contains(Frame, Sub) ->
+    binary:match(Frame, Sub) =/= nomatch.

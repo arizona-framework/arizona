@@ -6,7 +6,7 @@
         kernel,
         stdlib
     ]},
-    {optional_applications, [roadrunner, fs]},
+    {optional_applications, [roadrunner, fs, ssh]},
     {mod, {arizona_app, []}},
     {env, []},
     {modules, []},

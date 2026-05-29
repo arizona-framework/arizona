@@ -32,7 +32,11 @@ mount(Init) ->
             {~"q", ~"quit", ~""}
         ],
         count => maps:get(count, Init, 0),
-        clock => 0
+        clock => 0,
+        %% Terminal size: a network transport (SSH) supplies it via pty-req /
+        %% window-change; a local TTY can't read it, so it stays 0.
+        cols => maps:get(term_cols, Init, 0),
+        rows => maps:get(term_rows, Init, 0)
     },
     ok = arizona_pubsub:subscribe(demo, self()),
     ?connected andalso ?send(arizona_connected),
@@ -48,6 +52,7 @@ render(Bindings) ->
                 marked_items(?get(selected), ?get(items))
             ),
             {line, [], [~"Count: ", ?get(count), ~"   Server ticks: ", ?get(clock)]},
+            {line, [dim], [~"Terminal: ", ?get(cols), ~"x", ?get(rows)]},
             {line, [dim], [
                 ?each(
                     fun({Keys, Label, Sep}) ->
@@ -75,7 +80,10 @@ handle_info(tick, Bindings) ->
     {Bindings#{clock => maps:get(clock, Bindings) + 1}, #{}, []};
 handle_info({chat, Msg}, Bindings) ->
     %% Append-only: stream the message into the scrolling log, no status change.
-    {Bindings, #{}, [arizona_tty:log(Msg)]}.
+    {Bindings, #{}, [arizona_tty:log(Msg)]};
+handle_info({term_resize, Rows, Cols}, Bindings) ->
+    %% A network transport reported a terminal resize; reflect the new size.
+    {Bindings#{rows => Rows, cols => Cols}, #{}, []}.
 
 %% --------------------------------------------------------------------
 %% Internal functions
