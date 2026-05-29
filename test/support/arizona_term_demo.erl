@@ -11,7 +11,9 @@
 %%     so it only runs in a connected live process);
 %%   * pubsub broadcasts -- each message delivered on the `demo` channel is emitted
 %%     as an `arizona_tty:log/1` effect, which the runtime streams into the
-%%     terminal's scrolling log (above the pinned status block).
+%%     terminal's scrolling log (above the pinned status block). The "Send message"
+%%     menu item opens a text input that broadcasts on `demo`, so a message typed in
+%%     one terminal appears in every connected terminal's log (the sender's too).
 %%
 %% `render/1` is the *status block* that the runtime redraws in place. Broadcasts
 %% are append-only log output (the user scrolls back through them), so they are
@@ -24,13 +26,10 @@ mount(Init) ->
     Bindings = #{
         id => ~"term_demo",
         selected => 0,
-        items => [~"New Game", ~"Options", ~"Quit"],
-        keybindings => [
-            {~"j/k", ~"move", ~"  "},
-            {~"enter", ~"select", ~"  "},
-            {~"+/-", ~"count", ~"  "},
-            {~"q", ~"quit", ~""}
-        ],
+        items => [~"New Game", ~"Options", ~"Send message", ~"Quit"],
+        %% menu = navigate the list; input = typing a message to broadcast.
+        mode => menu,
+        draft => <<>>,
         count => maps:get(count, Init, 0),
         clock => 0,
         %% Terminal size: a network transport (SSH) supplies it via pty-req /
@@ -53,12 +52,19 @@ render(Bindings) ->
             ),
             {line, [], [~"Count: ", ?get(count), ~"   Server ticks: ", ?get(clock)]},
             {line, [dim], [~"Terminal: ", ?get(cols), ~"x", ?get(rows)]},
+            %% The message input line, shown only while typing. ?each over a
+            %% 0-or-1 element list -- a bare element tuple returned from a case
+            %% would reach the diff as a dynamic value and crash to_bin/1.
+            ?each(
+                fun(Draft) -> {line, [yellow], [~"Message: ", Draft]} end,
+                input_rows(?get(mode), ?get(draft))
+            ),
             {line, [dim], [
                 ?each(
                     fun({Keys, Label, Sep}) ->
                         <<"[", Keys/binary, "] ", Label/binary, Sep/binary>>
                     end,
-                    ?get(keybindings)
+                    footer_keys(?get(mode))
                 )
             ]}
         ]}
@@ -66,10 +72,8 @@ render(Bindings) ->
 
 -spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
     az:handle_event_ret().
-handle_event(~"key", #{~"key" := ~"enter"}, Bindings) ->
-    activate(Bindings);
 handle_event(~"key", #{~"key" := Key}, Bindings) ->
-    {apply_key(Key, Bindings), #{}, []}.
+    on_key(maps:get(mode, Bindings), Key, Bindings).
 
 -spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
 handle_info(arizona_connected, Bindings) ->
@@ -89,6 +93,26 @@ handle_info({term_resize, Rows, Cols}, Bindings) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
+%% Menu mode navigates the list and acts on the selection; `q` quits (the session
+%% no longer intercepts it). Input mode builds a draft message: a printable key
+%% appends, backspace deletes, enter broadcasts, esc cancels.
+on_key(menu, ~"enter", Bindings) ->
+    activate(Bindings);
+on_key(menu, ~"q", Bindings) ->
+    {Bindings, #{}, [arizona_tty:quit()]};
+on_key(menu, Key, Bindings) ->
+    {apply_key(Key, Bindings), #{}, []};
+on_key(input, ~"enter", Bindings) ->
+    send_message(Bindings);
+on_key(input, ~"esc", Bindings) ->
+    {Bindings#{mode => menu, draft => <<>>}, #{}, []};
+on_key(input, ~"backspace", Bindings) ->
+    {Bindings#{draft => drop_last(maps:get(draft, Bindings))}, #{}, []};
+on_key(input, <<Char>>, Bindings) ->
+    {Bindings#{draft => <<(maps:get(draft, Bindings))/binary, Char>>}, #{}, []};
+on_key(input, _Key, Bindings) ->
+    {Bindings, #{}, []}.
+
 apply_key(~"j", Bindings) -> move(Bindings, 1);
 apply_key(~"down", Bindings) -> move(Bindings, 1);
 apply_key(~"k", Bindings) -> move(Bindings, -1);
@@ -104,10 +128,46 @@ activate(Bindings) ->
     Selected = maps:get(selected, Bindings),
     activate_item(lists:nth(Selected + 1, Items), Bindings).
 
+activate_item(~"Send message", Bindings) ->
+    {Bindings#{mode => input, draft => <<>>}, #{}, []};
 activate_item(~"Quit", Bindings) ->
     {Bindings, #{}, [arizona_tty:quit()]};
 activate_item(Item, Bindings) ->
     {Bindings, #{}, [arizona_tty:log(<<"selected ", Item/binary>>)]}.
+
+%% Broadcast the typed message to every terminal subscribed to `demo` (including
+%% this one, which receives it back via handle_info/2 and logs it), then return
+%% to the menu. An empty draft is a no-op.
+send_message(Bindings) ->
+    ok = broadcast_draft(maps:get(draft, Bindings)),
+    {Bindings#{mode => menu, draft => <<>>}, #{}, []}.
+
+broadcast_draft(<<>>) ->
+    ok;
+broadcast_draft(Draft) ->
+    arizona_pubsub:broadcast(demo, {chat, Draft}).
+
+drop_last(<<>>) -> <<>>;
+drop_last(Bin) -> binary:part(Bin, 0, byte_size(Bin) - 1).
+
+%% Footer keybinding hints per mode (rendered via ?each, the data-driven footer).
+footer_keys(menu) ->
+    [
+        {~"j/k", ~"move", ~"  "},
+        {~"enter", ~"select", ~"  "},
+        {~"+/-", ~"count", ~"  "},
+        {~"q", ~"quit", ~""}
+    ];
+footer_keys(input) ->
+    [
+        {~"enter", ~"send", ~"  "},
+        {~"esc", ~"cancel", ~""}
+    ].
+
+%% A 0-or-1 element list driving the ?each that renders the input line: present
+%% (with the draft) only in input mode.
+input_rows(input, Draft) -> [Draft];
+input_rows(menu, _Draft) -> [].
 
 move(Bindings, Delta) ->
     Selected = maps:get(selected, Bindings),

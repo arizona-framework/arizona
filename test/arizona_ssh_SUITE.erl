@@ -9,6 +9,7 @@
 -export([key_moves_selection/1]).
 -export([window_change_resizes/1]).
 -export([restores_cursor_on_quit/1]).
+-export([chat_broadcasts_to_all_terminals/1]).
 
 %% End-to-end: arizona_ssh serves the ?terminal demo view over a real SSH daemon,
 %% driven by the OTP ssh client. A throwaway host key + accept-all password auth
@@ -23,7 +24,8 @@ all() ->
         serves_initial_frame,
         key_moves_selection,
         window_change_resizes,
-        restores_cursor_on_quit
+        restores_cursor_on_quit,
+        chat_broadcasts_to_all_terminals
     ].
 
 init_per_suite(Config) ->
@@ -92,6 +94,28 @@ window_change_resizes(Config) when is_list(Config) ->
     ok = ssh_connection:window_change(Conn, Ch, 100, 40),
     _ = recv_until(Conn, ~"Terminal: 100x40", 3000),
     ok = ssh:close(Conn).
+
+chat_broadcasts_to_all_terminals(Config) when is_list(Config) ->
+    %% A message typed in one terminal appears in every connected terminal's log.
+    Port = ?config(port, Config),
+    {ConnA, ChA} = connect(Port),
+    {ConnB, _ChB} = connect(Port),
+    _ = recv_until(ConnA, ~"== Arizona Terminal Demo ==", 3000),
+    _ = recv_until(ConnB, ~"== Arizona Terminal Demo ==", 3000),
+    %% A: navigate to "Send message" (index 2), open the input, type, send.
+    ok = ssh_connection:send(ConnA, ChA, ~"j"),
+    ok = ssh_connection:send(ConnA, ChA, ~"j"),
+    ok = ssh_connection:send(ConnA, ChA, ~"\r"),
+    %% The input line renders (exercises the conditional ?each over SSH).
+    _ = recv_until(ConnA, ~"Message: ", 3000),
+    %% One byte per send so each keystroke is its own key event.
+    lists:foreach(fun(Char) -> ok = ssh_connection:send(ConnA, ChA, <<Char>>) end, "hello"),
+    ok = ssh_connection:send(ConnA, ChA, ~"\r"),
+    %% Both terminals' scrolling logs show the broadcast.
+    _ = recv_until(ConnA, ~"hello", 3000),
+    _ = recv_until(ConnB, ~"hello", 3000),
+    ok = ssh:close(ConnA),
+    ok = ssh:close(ConnB).
 
 %% --------------------------------------------------------------------
 %% Helpers

@@ -19,6 +19,7 @@
 -export([normalize_key_mapping/1]).
 -export([crlf_conversion/1]).
 -export([session_drives_frames/1]).
+-export([input_broadcasts_message/1]).
 
 %% Drives the ?terminal demo view through arizona_live with no transport and no
 %% HTTP server -- the path the terminal runtime drives, minus the TTY.
@@ -41,7 +42,8 @@ all() ->
         has_quit_detects_quit,
         normalize_key_mapping,
         crlf_conversion,
-        session_drives_frames
+        session_drives_frames,
+        input_broadcasts_message
     ].
 
 init_per_suite(Config) ->
@@ -63,9 +65,10 @@ renders_status_block(Config) when is_list(Config) ->
     {Pid, _ViewId} = start_demo(),
     Frame = frame(Pid),
     ?assert(contains(Frame, ~"== Arizona Terminal Demo ==")),
-    %% all three menu rows render (via ?each), the first marked as selected
+    %% all four menu rows render (via ?each), the first marked as selected
     ?assert(contains(Frame, ~"> New Game")),
     ?assert(contains(Frame, ~"  Options")),
+    ?assert(contains(Frame, ~"  Send message")),
     ?assert(contains(Frame, ~"  Quit")),
     ?assert(contains(Frame, ~"Count: 0")),
     ?assert(contains(Frame, ~"Server ticks: 0")),
@@ -110,8 +113,9 @@ broadcast_pushes_log_effect(Config) when is_list(Config) ->
     end.
 
 enter_quits_on_quit_item(Config) when is_list(Config) ->
-    %% Move the selection to "Quit" (index 2) and press enter -> a quit effect.
+    %% Move the selection to "Quit" (index 3) and press enter -> a quit effect.
     {Pid, ViewId} = start_demo(),
+    {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
     {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
     {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
     {ok, _Ops, Effects} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"enter"}),
@@ -152,18 +156,22 @@ has_quit_detects_quit(Config) when is_list(Config) ->
 
 normalize_key_mapping(Config) when is_list(Config) ->
     %% The driver turns raw key reads into quit / a ~"key" payload / ignore.
-    ?assertEqual(quit, arizona_terminal_session:normalize_key("q")),
+    %% `q` is an ordinary character now; only Ctrl-C/Ctrl-D are hard quits.
+    ?assertEqual(~"q", arizona_terminal_session:normalize_key("q")),
     ?assertEqual(quit, arizona_terminal_session:normalize_key([3])),
     ?assertEqual(quit, arizona_terminal_session:normalize_key([4])),
     ?assertEqual(~"up", arizona_terminal_session:normalize_key("\e[A")),
     ?assertEqual(~"down", arizona_terminal_session:normalize_key("\e[B")),
     ?assertEqual(~"enter", arizona_terminal_session:normalize_key("\r")),
     ?assertEqual(~"enter", arizona_terminal_session:normalize_key("\n")),
+    %% backspace (DEL and BS) and bare ESC reach the view for text editing
+    ?assertEqual(~"backspace", arizona_terminal_session:normalize_key([127])),
+    ?assertEqual(~"backspace", arizona_terminal_session:normalize_key([8])),
+    ?assertEqual(~"esc", arizona_terminal_session:normalize_key([27])),
     ?assertEqual(~"j", arizona_terminal_session:normalize_key("j")),
     ?assertEqual(~"+", arizona_terminal_session:normalize_key("+")),
-    %% an unrecognized escape sequence and a bare ESC are dropped
-    ?assertEqual(ignore, arizona_terminal_session:normalize_key("\e[Z")),
-    ?assertEqual(ignore, arizona_terminal_session:normalize_key([27])).
+    %% an unrecognized escape sequence is dropped
+    ?assertEqual(ignore, arizona_terminal_session:normalize_key("\e[Z")).
 
 crlf_conversion(Config) when is_list(Config) ->
     %% Raw mode needs CRLF; the driver adds the \r to the target's logical \n.
@@ -189,7 +197,7 @@ session_drives_frames(Config) when is_list(Config) ->
     {cont, Session1} = arizona_terminal_session:handle_key(Session, "j"),
     ?assert(contains(next_out(), ~"> Options")),
     {cont, Session2} = arizona_terminal_session:handle_key(Session1, ~"j"),
-    ?assert(contains(next_out(), ~"> Quit")),
+    ?assert(contains(next_out(), ~"> Send message")),
     %% A push carrying a log effect streams the line above the block and repaints.
     {cont, Session3} = arizona_terminal_session:handle_push(
         Session2, [arizona_tty:log(~"streamed")]
@@ -198,6 +206,38 @@ session_drives_frames(Config) when is_list(Config) ->
     %% A quit effect (or the quit key) stops the session.
     ?assertEqual(quit, arizona_terminal_session:handle_push(Session3, [arizona_tty:quit()])),
     ?assertEqual(quit, arizona_terminal_session:handle_key(Session3, "q")).
+
+input_broadcasts_message(Config) when is_list(Config) ->
+    %% Subscribe a second pid (this process) as a stand-in for another terminal.
+    ok = arizona_pubsub:subscribe(demo, self()),
+    Self = self(),
+    Out = fun(Io) ->
+        Self ! {out, iolist_to_binary(Io)},
+        ok
+    end,
+    {ok, S0} = arizona_terminal_session:start(arizona_term_demo, #{}, Out),
+    _ = next_out(),
+    %% Navigate to "Send message" (index 2) and open the input.
+    {cont, S1} = arizona_terminal_session:handle_key(S0, ~"j"),
+    _ = next_out(),
+    {cont, S2} = arizona_terminal_session:handle_key(S1, ~"j"),
+    _ = next_out(),
+    {cont, S3} = arizona_terminal_session:handle_key(S2, ~"\r"),
+    InputFrame = next_out(),
+    ?assert(contains(InputFrame, ~"Message: ")),
+    ?assert(contains(InputFrame, ~"[enter] send")),
+    %% Type "hi" -- the input line reflects the draft.
+    {cont, S4} = arizona_terminal_session:handle_key(S3, ~"h"),
+    _ = next_out(),
+    {cont, S5} = arizona_terminal_session:handle_key(S4, ~"i"),
+    ?assert(contains(next_out(), ~"Message: hi")),
+    %% Enter broadcasts to every subscriber on the demo channel.
+    {cont, _S6} = arizona_terminal_session:handle_key(S5, ~"\r"),
+    receive
+        {chat, Msg} -> ?assertEqual(~"hi", Msg)
+    after 2000 ->
+        ct:fail(no_broadcast)
+    end.
 
 %% --------------------------------------------------------------------
 %% Helpers

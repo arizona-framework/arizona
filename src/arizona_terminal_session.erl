@@ -167,9 +167,13 @@ to_crlf(Frame) ->
 -doc """
 Maps a raw key read into a quit request, a `~"key"` event payload value, or
 `ignore` for sequences the loop should drop without repainting.
+
+Only the hard interrupts Ctrl-C (`[3]`) and Ctrl-D (`[4]`) map to `quit`. `q` is
+delivered as an ordinary `~"q"` character so views can accept it as text input;
+a view that wants `q` to quit (e.g. in a menu mode) emits an `arizona_tty:quit/0`
+effect itself.
 """.
 -spec normalize_key(string()) -> binary() | quit | ignore.
-normalize_key("q") -> quit;
 normalize_key([3]) -> quit;
 normalize_key([4]) -> quit;
 normalize_key("\e[A") -> ~"up";
@@ -178,5 +182,8 @@ normalize_key("\e[C") -> ~"right";
 normalize_key("\e[D") -> ~"left";
 normalize_key("\r") -> ~"enter";
 normalize_key("\n") -> ~"enter";
+normalize_key([127]) -> ~"backspace";
+normalize_key([8]) -> ~"backspace";
+normalize_key([27]) -> ~"esc";
 normalize_key([Char]) when Char >= 32, Char < 127 -> <<Char>>;
 normalize_key(_Other) -> ignore.
