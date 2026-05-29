@@ -63,4 +63,9 @@ local(Config) when is_list(Config) ->
     ?assertEqual(
         #{diff => false, az_local => ~"k", v => ~"v"},
         az:local(~"k", ~"v")
+    ),
+    %% An atom key is normalized to its binary form.
+    ?assertEqual(
+        #{diff => false, az_local => ~"open", v => ~"v"},
+        az:local(open, ~"v")
     ).

@@ -209,8 +209,9 @@ Authoring (`?local` = `arizona_template:local/2`, also `az:local/2`):
 {'a', [{href, [~"/u/", ?local(~"id", ~"1"), ~"/edit"]}], [...]} %% interpolated attribute (static + one local)
 ```
 
-Compile-time constraints: `Key` must be a literal binary; a key can't bind both content and
-an attribute on one element; not allowed under `az-nodiff` or in `?native` templates.
+Compile-time constraints: `Key` must be a literal binary or atom (an atom normalizes to a
+binary); a key can't bind both content and an attribute on one element; not allowed under
+`az-nodiff` or in `?native` templates.
 A content `?local` does **not** have to be the sole child -- an element can hold several
 content slots, freely mixed with static text and other dynamic children. An attribute value
 may also **interpolate** one `?local` with static text around it (the statics become a

@@ -233,7 +233,7 @@ format_error({invalid_child, ValueStr}) ->
         )
     );
 format_error(local_key_not_literal) ->
-    "?local/2 key must be a literal binary";
+    "?local/2 key must be a literal binary or atom";
 format_error(local_in_nodiff) ->
     "?local cannot be used in an az-nodiff template -- the element has no "
     "diff target for the client to address";
@@ -826,6 +826,8 @@ assert_all_static(Elems, Line) ->
         false -> parse_error(local_attr_mixed, Line)
     end.
 
+local_key({call, _, _, [{atom, _, Atom}, _Init]}, _Line) ->
+    atom_to_binary(Atom);
 local_key({call, _, _, [KeyAST, _Init]}, Line) ->
     case is_static_binary(KeyAST) of
         true -> extract_binary_value(KeyAST);

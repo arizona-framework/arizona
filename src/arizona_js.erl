@@ -233,7 +233,7 @@ triggering element, updating every slot with `Key` locally with no server
 round-trip. Use inside web event attributes like `az-click`.
 """.
 -spec set(Key, Value) -> arizona_effect:cmd() when
-    Key :: binary(),
+    Key :: binary() | atom(),
     Value :: binary() | boolean() | number().
 set(Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value]}.
 
@@ -242,7 +242,7 @@ Like `set/2` but targets the slot in the view identified by `ViewId`.
 """.
 -spec set(ViewId, Key, Value) -> arizona_effect:cmd() when
     ViewId :: binary(),
-    Key :: binary(),
+    Key :: binary() | atom(),
     Value :: binary() | boolean() | number().
 set(ViewId, Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value, ViewId]}.
 
@@ -250,7 +250,7 @@ set(ViewId, Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value, View
 Like `set/2` but updates the slot in **every** view on the page (document-wide).
 """.
 -spec set_all(Key, Value) -> arizona_effect:cmd() when
-    Key :: binary(),
+    Key :: binary() | atom(),
     Value :: binary() | boolean() | number().
 set_all(Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value, true]}.
 
@@ -285,7 +285,9 @@ reload_test() ->
     {arizona_effect, [?EFFECT_RELOAD]} = reload().
 
 set_test() ->
-    {arizona_effect, [?EFFECT_SET_LOCAL, ~"k", ~"v"]} = set(~"k", ~"v").
+    {arizona_effect, [?EFFECT_SET_LOCAL, ~"k", ~"v"]} = set(~"k", ~"v"),
+    %% An atom key is accepted and passed through (json stringifies it on the wire).
+    {arizona_effect, [?EFFECT_SET_LOCAL, foo, ~"v"]} = set(foo, ~"v").
 
 set_view_test() ->
     {arizona_effect, [?EFFECT_SET_LOCAL, ~"k", true, ~"view1"]} = set(~"view1", ~"k", true).

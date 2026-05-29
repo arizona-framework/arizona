@@ -213,7 +213,7 @@ each(Fun, Source) ->
 Alias for `arizona_template:local/2`.
 """.
 -spec local(Key, Init) -> map() when
-    Key :: binary(),
+    Key :: binary() | atom(),
     Init :: term().
 local(Key, Init) ->
     arizona_template:local(Key, Init).

@@ -171,7 +171,9 @@
     local_attr_interp_numeric/1,
     local_attr_interp_multi_static/1,
     local_in_native_error/1,
-    local_in_each_renders/1
+    local_in_each_renders/1,
+    local_atom_key/1,
+    local_atom_binary_reuse_error/1
 ]).
 
 all() ->
@@ -238,7 +240,9 @@ groups() ->
             local_attr_interp_numeric,
             local_attr_interp_multi_static,
             local_in_native_error,
-            local_in_each_renders
+            local_in_each_renders,
+            local_atom_key,
+            local_atom_binary_reuse_error
         ]},
         %% Tests 26-39: template/2 (each) tests
         {each, [parallel], [
@@ -817,6 +821,38 @@ local_in_each_renders(Config) when is_list(Config) ->
     ?assertEqual(2, length(binary:matches(HTML, ~"-<!--/az-->"))),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"a")),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"b")).
+
+%% An atom key is accepted and normalized to its binary form, both in the
+%% rendered descriptor and the runtime bind-map.
+local_atom_key(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_atom). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'span', [], [arizona_template:local(open, <<\"x\">>)]}"
+        "    ). "
+    ),
+    Tmpl = Mod:render(#{}),
+    [{_Az, Fun, _Loc}] = maps:get(d, Tmpl),
+    ?assertEqual(#{diff => false, az_local => ~"open", v => ~"x"}, Fun()),
+    {HTML0, _Snap} = arizona_render:render(Tmpl),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(#{~"c" => #{~"0" => ~"open"}}, decode_local_descriptor(HTML)).
+
+%% Normalization feeds the key-reuse guard: an atom key on an attribute and the
+%% same key as a binary in content on one element still collide.
+local_atom_binary_reuse_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_local_atom_reuse). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'span', [{title, arizona_template:local(x, <<\"\">>)}], "
+        "            [arizona_template:local(<<\"x\">>, <<\"y\">>)]}"
+        "    ). ",
+        fun(R) -> R =:= local_key_reused end
+    ).
 
 %% Test 1: Static-only element -- no dynamics, single static binary.
 static_only(Config) when is_list(Config) ->
