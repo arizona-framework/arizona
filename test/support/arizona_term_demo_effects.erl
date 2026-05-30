@@ -1,11 +1,12 @@
--module(arizona_tty).
+-module(arizona_term_demo_effects).
 -moduledoc """
-Terminal effect builders for `?terminal` views -- the terminal analog of
+Terminal effect builders for the `?terminal` demo views -- the demo's analog of
 `arizona_js` (web) and `arizona_android` (native).
 
-Effects are returned from a view's `handle_event/3` / `handle_info/2` and
-interpreted by the terminal runtime (`arizona_terminal_app`). They build the
-same neutral `t:arizona_effect:cmd/0` tuple the other targets use.
+A demo-scoped module (not framework API): the `log`/`quit` vocabulary is the
+demo's own, interpreted by the demo's terminal runtime. Effects are returned
+from a view's `handle_event/3` / `handle_info/2` and build the same neutral
+`t:arizona_effect:cmd/0` tuple the other targets use.
 """.
 
 -export([log/1]).

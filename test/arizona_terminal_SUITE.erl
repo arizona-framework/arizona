@@ -25,7 +25,7 @@
 %% Drives the ?terminal demo view through arizona_live with no transport and no
 %% HTTP server -- the path the terminal runtime drives, minus the TTY.
 %% render_current/1 returns the status block; broadcasts surface as
-%% arizona_tty:log/1 effects.
+%% arizona_term_demo_effects:log/1 effects.
 
 all() ->
     [
@@ -132,12 +132,12 @@ enter_logs_selection(Config) when is_list(Config) ->
     ?assertNot(arizona_terminal_session:has_quit(Effects)).
 
 tty_log_effect(Config) when is_list(Config) ->
-    ?assertEqual({arizona_effect, [log, ~"hi"]}, arizona_tty:log(~"hi")),
+    ?assertEqual({arizona_effect, [log, ~"hi"]}, arizona_term_demo_effects:log(~"hi")),
     %% iodata is normalized to a binary
-    ?assertEqual({arizona_effect, [log, ~"ab"]}, arizona_tty:log([~"a", ~"b"])).
+    ?assertEqual({arizona_effect, [log, ~"ab"]}, arizona_term_demo_effects:log([~"a", ~"b"])).
 
 tty_quit_effect(Config) when is_list(Config) ->
-    ?assertEqual({arizona_effect, [quit]}, arizona_tty:quit()).
+    ?assertEqual({arizona_effect, [quit]}, arizona_term_demo_effects:quit()).
 
 count_lines_counts_rows(Config) when is_list(Config) ->
     ?assertEqual(3, arizona_terminal_session:count_lines(~"a\nb\nc\n")),
@@ -152,9 +152,13 @@ log_lines_filters_effects(Config) when is_list(Config) ->
     ?assertEqual([~"one", ~"two"], arizona_terminal_session:log_lines(Effects)).
 
 has_quit_detects_quit(Config) when is_list(Config) ->
-    ?assert(arizona_terminal_session:has_quit([arizona_tty:quit()])),
-    ?assert(arizona_terminal_session:has_quit([arizona_tty:log(~"x"), arizona_tty:quit()])),
-    ?assertNot(arizona_terminal_session:has_quit([arizona_tty:log(~"x")])),
+    ?assert(arizona_terminal_session:has_quit([arizona_term_demo_effects:quit()])),
+    ?assert(
+        arizona_terminal_session:has_quit([
+            arizona_term_demo_effects:log(~"x"), arizona_term_demo_effects:quit()
+        ])
+    ),
+    ?assertNot(arizona_terminal_session:has_quit([arizona_term_demo_effects:log(~"x")])),
     ?assertNot(arizona_terminal_session:has_quit([])).
 
 normalize_key_mapping(Config) when is_list(Config) ->
@@ -203,11 +207,13 @@ session_drives_frames(Config) when is_list(Config) ->
     ?assert(contains(next_out(), ~"> Send message")),
     %% A push carrying a log effect streams the line above the block and repaints.
     {cont, Session3} = arizona_terminal_session:handle_push(
-        Session2, [arizona_tty:log(~"streamed")]
+        Session2, [arizona_term_demo_effects:log(~"streamed")]
     ),
     ?assert(contains(next_out(), ~"streamed")),
     %% A quit effect (or the quit key) stops the session.
-    ?assertEqual(quit, arizona_terminal_session:handle_push(Session3, [arizona_tty:quit()])),
+    ?assertEqual(
+        quit, arizona_terminal_session:handle_push(Session3, [arizona_term_demo_effects:quit()])
+    ),
     ?assertEqual(quit, arizona_terminal_session:handle_key(Session3, "q")).
 
 input_broadcasts_message(Config) when is_list(Config) ->

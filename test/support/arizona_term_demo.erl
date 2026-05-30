@@ -13,7 +13,7 @@
 %%     terminal joins or leaves the `demo` channel, so the connected-client count
 %%     updates live (event-driven, no polling);
 %%   * pubsub broadcasts -- each message delivered on the `demo` channel is emitted
-%%     as an `arizona_tty:log/1` effect, which the runtime streams into the
+%%     as an `arizona_term_demo_effects:log/1` effect, which the runtime streams into the
 %%     terminal's scrolling log (above the pinned status block). The "Send message"
 %%     menu item opens a text input that broadcasts on `demo`, so a message typed in
 %%     one terminal appears in every connected terminal's log (the sender's too).
@@ -98,7 +98,7 @@ handle_info(tick, Bindings) ->
     {Bindings#{clock => maps:get(clock, Bindings) + 1}, #{}, []};
 handle_info({chat, Msg}, Bindings) ->
     %% Append-only: stream the message into the scrolling log, no status change.
-    {Bindings, #{}, [arizona_tty:log(Msg)]};
+    {Bindings, #{}, [arizona_term_demo_effects:log(Msg)]};
 handle_info({term_resize, Rows, Cols}, Bindings) ->
     %% A network transport reported a terminal resize; reflect the new size.
     {Bindings#{rows => Rows, cols => Cols}, #{}, []};
@@ -116,7 +116,7 @@ handle_info({_Ref, Verb, demo, _Pids}, Bindings) when Verb =:= join; Verb =:= le
 on_key(menu, ~"enter", Bindings) ->
     activate(Bindings);
 on_key(menu, ~"q", Bindings) ->
-    {Bindings, #{}, [arizona_tty:quit()]};
+    {Bindings, #{}, [arizona_term_demo_effects:quit()]};
 on_key(menu, Key, Bindings) ->
     {apply_key(Key, Bindings), #{}, []};
 on_key(input, ~"enter", Bindings) ->
@@ -148,9 +148,9 @@ activate(Bindings) ->
 activate_item(~"Send message", Bindings) ->
     {Bindings#{mode => input, draft => <<>>}, #{}, []};
 activate_item(~"Quit", Bindings) ->
-    {Bindings, #{}, [arizona_tty:quit()]};
+    {Bindings, #{}, [arizona_term_demo_effects:quit()]};
 activate_item(Item, Bindings) ->
-    {Bindings, #{}, [arizona_tty:log(<<"selected ", Item/binary>>)]}.
+    {Bindings, #{}, [arizona_term_demo_effects:log(<<"selected ", Item/binary>>)]}.
 
 %% Broadcast the typed message to every terminal subscribed to `demo` (including
 %% this one, which receives it back via handle_info/2 and logs it), then return

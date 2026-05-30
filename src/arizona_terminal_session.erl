@@ -3,7 +3,7 @@
 Transport-agnostic driver for `?terminal` live views.
 
 Mounts a `?terminal` view, renders it as a **scrolling log above a pinned status
-block**, turns key input into `~"key"` events, and interprets `arizona_tty`
+block**, turns key input into `~"key"` events, and interprets `arizona_term_demo_effects`
 effects (`log` / `quit`). It is parameterized by an output function
 `t:out/0` (`fun((iodata()) -> ok)`), so it serves both the local TTY driver
 (`arizona_terminal_app`, `Out = fun io:put_chars/1`) and a network transport
@@ -65,7 +65,7 @@ start(Handler, Bindings, Out) ->
 -doc """
 Handles a raw key read -- a character list (local TTY) or a byte binary (a
 network transport's `{data, ...}`). Returns `quit` when the key (`q`, Ctrl-C/D)
-or a resulting `arizona_tty:quit/0` effect asks to stop, otherwise `{cont,
+or a resulting `arizona_term_demo_effects:quit/0` effect asks to stop, otherwise `{cont,
 Session}` after dispatching a `~"key"` event and repainting.
 """.
 -spec handle_key(session(), string() | binary()) -> {cont, session()} | quit.
@@ -84,7 +84,7 @@ handle_key(#session{pid = Pid, view_id = ViewId} = Session, Input) ->
 
 -doc """
 Handles a live-process push (the `Effects` from an `{arizona_push, _, Effects}`
-the owning process received): `quit` on an `arizona_tty:quit/0` effect, else
+the owning process received): `quit` on an `arizona_term_demo_effects:quit/0` effect, else
 streams any `log` lines above the status block and repaints.
 """.
 -spec handle_push(session(), [arizona_effect:cmd()]) -> {cont, session()} | quit.
@@ -151,7 +151,7 @@ count_lines(Frame) ->
     length(binary:matches(Frame, ~"\n")).
 
 -doc """
-Extracts the lines carried by `arizona_tty:log/1` effects, dropping any other
+Extracts the lines carried by `arizona_term_demo_effects:log/1` effects, dropping any other
 effects.
 """.
 -spec log_lines([arizona_effect:cmd()]) -> [binary()].
@@ -159,7 +159,7 @@ log_lines(Effects) ->
     [Line || {arizona_effect, [log, Line]} <- Effects].
 
 -doc """
-Whether the effects include an `arizona_tty:quit/0` request, signalling the
+Whether the effects include an `arizona_term_demo_effects:quit/0` request, signalling the
 runtime to stop.
 """.
 -spec has_quit([arizona_effect:cmd()]) -> boolean().
@@ -181,7 +181,7 @@ Maps a raw key read into a quit request, a `~"key"` event payload value, or
 
 Only the hard interrupts Ctrl-C (`[3]`) and Ctrl-D (`[4]`) map to `quit`. `q` is
 delivered as an ordinary `~"q"` character so views can accept it as text input;
-a view that wants `q` to quit (e.g. in a menu mode) emits an `arizona_tty:quit/0`
+a view that wants `q` to quit (e.g. in a menu mode) emits an `arizona_term_demo_effects:quit/0`
 effect itself.
 """.
 -spec normalize_key(string()) -> binary() | quit | ignore.

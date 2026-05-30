@@ -4,12 +4,12 @@ Local TTY driver for `?terminal` views -- no HTTP server.
 
 A thin transport over `arizona_terminal_session`: it owns the parts specific to a
 real local terminal (raw mode, cursor hide/show, an `io:get_chars/2` reader) and
-delegates the rendering, key handling, and `arizona_tty` effect interpretation to
+delegates the rendering, key handling, and `arizona_term_demo_effects` effect interpretation to
 the shared session, supplying `fun io:put_chars/1` as the session's output.
 
 The view renders as a **scrolling log above a pinned status block**: the session
 redraws the status block in place (cursor up + erase) on every update, while
-`arizona_tty:log/1` output scrolls into the terminal's native scrollback. There is
+`arizona_term_demo_effects:log/1` output scrolls into the terminal's native scrollback. There is
 no alternate screen, so the session stays in the shell after quit.
 
 A linked **input reader** process blocks on `io:get_chars/2` and forwards each
