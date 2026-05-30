@@ -6,7 +6,10 @@ Mounts a `?terminal` view (the calling process is its transport), then delegates
 the terminal *policy* -- key mapping, paint model, screen setup/teardown -- to an
 `m:arizona_terminal_driver` module. It holds no UX opinion of its own, so it serves
 the local TTY driver (`arizona_terminal_app`) and the SSH transport (`arizona_ssh`)
-unchanged, with whatever terminal style the driver implements.
+unchanged, with whatever terminal style the driver implements. Each callback
+dispatches to the given driver if it exports it, otherwise to
+`m:arizona_terminal_default_driver`'s default -- so a driver overrides only what it
+changes.
 
 It is parameterized by a driver module and an output function `t:out/0`
 (`fun((iodata()) -> ok)`). The owning process becomes the live view's transport: it
@@ -53,12 +56,14 @@ connection context (e.g. `term_rows`/`term_cols`).
     DriverArg :: term(),
     Out :: out().
 start(Handler, Bindings, Driver, DriverArg, Out) ->
+    %% Load the driver once so the function_exported/3 fallbacks below are accurate.
+    {module, Driver} = code:ensure_loaded(Driver),
     {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), [], undefined),
     {ok, ViewId} = arizona_live:mount(Pid),
-    DState0 = Driver:init(DriverArg),
+    DState0 = call_init(Driver, DriverArg),
     {Setup, DState1} = call_setup(Driver, DState0),
     {ok, Frame} = arizona_live:render_current(Pid),
-    {Paint, _Next, DState2} = Driver:paint(Frame, [], DState1),
+    {Paint, _Next, DState2} = call_paint(Driver, Frame, [], DState1),
     ok = Out([Setup, Paint]),
     {ok, #session{pid = Pid, view_id = ViewId, driver = Driver, dstate = DState2, out = Out}}.
 
@@ -70,7 +75,7 @@ repainted. A read that maps to nothing returns `{cont, Session}` without repaint
 """.
 -spec handle_key(session(), string() | binary()) -> {cont, session()} | quit.
 handle_key(#session{driver = Driver, dstate = DState} = Session, Input) ->
-    {Commands, DState1} = Driver:keys(iolist_to_binary(Input), DState),
+    {Commands, DState1} = call_keys(Driver, iolist_to_binary(Input), DState),
     Session1 = Session#session{dstate = DState1},
     case lists:member(stop, Commands) of
         true ->
@@ -130,7 +135,7 @@ dispatch_events(#session{pid = Pid, view_id = ViewId}, Events) ->
 
 repaint(#session{pid = Pid, driver = Driver, dstate = DState, out = Out} = Session, Effects) ->
     {ok, Frame} = arizona_live:render_current(Pid),
-    {Output, Next, DState1} = Driver:paint(Frame, Effects, DState),
+    {Output, Next, DState1} = call_paint(Driver, Frame, Effects, DState),
     ok = Out(Output),
     Session1 = Session#session{dstate = DState1},
     case Next of
@@ -144,16 +149,35 @@ repaint(#session{pid = Pid, driver = Driver, dstate = DState, out = Out} = Sessi
 do_teardown(#session{driver = Driver, dstate = DState, out = Out}) ->
     ok = Out(call_teardown(Driver, DState)).
 
-%% Optional callbacks default to no output if the driver doesn't export them.
+%% Dispatch each driver callback to the driver if it implements it, else to
+%% arizona_terminal_default_driver's default. The driver is loaded once in start/5,
+%% so function_exported/3 is accurate here.
+call_init(Driver, Arg) ->
+    case erlang:function_exported(Driver, init, 1) of
+        true -> Driver:init(Arg);
+        false -> arizona_terminal_default_driver:init(Arg)
+    end.
+
+call_keys(Driver, Bytes, DState) ->
+    case erlang:function_exported(Driver, keys, 2) of
+        true -> Driver:keys(Bytes, DState);
+        false -> arizona_terminal_default_driver:keys(Bytes, DState)
+    end.
+
+call_paint(Driver, Frame, Effects, DState) ->
+    case erlang:function_exported(Driver, paint, 3) of
+        true -> Driver:paint(Frame, Effects, DState);
+        false -> arizona_terminal_default_driver:paint(Frame, Effects, DState)
+    end.
+
 call_setup(Driver, DState) ->
-    {module, Driver} = code:ensure_loaded(Driver),
     case erlang:function_exported(Driver, setup, 1) of
         true -> Driver:setup(DState);
-        false -> {<<>>, DState}
+        false -> arizona_terminal_default_driver:setup(DState)
     end.
 
 call_teardown(Driver, DState) ->
     case erlang:function_exported(Driver, teardown, 1) of
         true -> Driver:teardown(DState);
-        false -> <<>>
+        false -> arizona_terminal_default_driver:teardown(DState)
     end.

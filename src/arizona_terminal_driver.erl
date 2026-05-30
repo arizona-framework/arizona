@@ -1,33 +1,26 @@
 -module(arizona_terminal_driver).
 -moduledoc """
-Behaviour for a terminal UI driver -- the app-supplied policy that turns a
-`?terminal` live view into a concrete terminal experience.
+Behaviour for a terminal UI driver -- the policy that turns a `?terminal` live view
+into a concrete terminal experience.
 
 `arizona_terminal_session` is generic: it mounts the view, dispatches events, and
-re-renders, but it holds no opinion about *how* the terminal looks or which keys
-mean what. A driver supplies that policy:
+re-renders, but holds no opinion about *how* the terminal looks or which keys mean
+what. A driver supplies that policy:
 
-- `keys/2` maps raw input bytes to view events (or a stop request) -- the key map.
+- `keys/2` maps raw input bytes to view events (or a `stop` request) -- the key map.
 - `paint/3` turns a freshly rendered ANSI frame plus the view's effects into the
-  bytes to write, and decides whether to keep going or stop -- the paint model
-  (full repaint, a scrolling log above a pinned block, an alternate-screen TUI,
-  ...).
-- the optional `setup/1` / `teardown/1` emit one-shot bytes at start and on quit
-  (e.g. hide/show the cursor, enter/leave the alternate screen).
+  bytes to write, and decides whether to keep going or stop -- the paint model.
+- `setup/1` / `teardown/1` emit one-shot bytes at start and on quit (e.g. hide /
+  show the cursor, enter / leave the alternate screen).
+- `init/1` creates the driver state threaded through the calls above.
 
-The driver carries its own state across these calls. Different terminal styles are
-different drivers; the framework ships none -- see the demo's
-`arizona_term_demo_driver` (a scrolling-log driver) for an example.
-
-A transport (`arizona_terminal_app`, `arizona_ssh`) selects a driver and passes it
-to `arizona_terminal_session:start/5`.
+Every callback is optional: `m:arizona_terminal_default_driver` ships a sensible
+default for each, and the session uses a driver's callback when it exports one, else
+that default. So a driver implements only the callbacks it changes, and passing
+`arizona_terminal_default_driver` itself uses all the defaults.
 """.
 
 -export_type([command/0]).
-
-%% --------------------------------------------------------------------
-%% Behaviour callbacks
-%% --------------------------------------------------------------------
 
 -doc "An action a key read produces: dispatch a view event, or stop the session.".
 -nominal command() :: {event, Name :: binary(), Payload :: map()} | stop.
@@ -55,4 +48,6 @@ write, whether to `continue` or `stop`, and the next state.
 -doc "One-shot output emitted on quit, before stopping (e.g. show the cursor).".
 -callback teardown(State :: term()) -> iodata().
 
--optional_callbacks([setup/1, teardown/1]).
+%% Every callback has a default in arizona_terminal_default_driver, which the
+%% session falls back to, so all are optional.
+-optional_callbacks([init/1, keys/2, paint/3, setup/1, teardown/1]).
