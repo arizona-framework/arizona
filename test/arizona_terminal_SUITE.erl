@@ -110,7 +110,7 @@ broadcast_pushes_log_effect(Config) when is_list(Config) ->
     ok = arizona_pubsub:broadcast(demo, {chat, ~"hello there"}),
     receive
         {arizona_push, _Ops, Effects} ->
-            ?assertEqual([~"hello there"], arizona_terminal_session:log_lines(Effects))
+            ?assertEqual([~"hello there"], arizona_term_demo_driver:log_lines(Effects))
     after 2000 ->
         ct:fail(no_push_received)
     end.
@@ -122,14 +122,14 @@ enter_quits_on_quit_item(Config) when is_list(Config) ->
     {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
     {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
     {ok, _Ops, Effects} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"enter"}),
-    ?assert(arizona_terminal_session:has_quit(Effects)).
+    ?assert(arizona_term_demo_driver:has_quit(Effects)).
 
 enter_logs_selection(Config) when is_list(Config) ->
     %% Enter on a non-quit item ("New Game", index 0) logs the selection.
     {Pid, ViewId} = start_demo(),
     {ok, _Ops, Effects} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"enter"}),
-    ?assertEqual([~"selected New Game"], arizona_terminal_session:log_lines(Effects)),
-    ?assertNot(arizona_terminal_session:has_quit(Effects)).
+    ?assertEqual([~"selected New Game"], arizona_term_demo_driver:log_lines(Effects)),
+    ?assertNot(arizona_term_demo_driver:has_quit(Effects)).
 
 tty_log_effect(Config) when is_list(Config) ->
     ?assertEqual({arizona_effect, [log, ~"hi"]}, arizona_term_demo_effects:log(~"hi")),
@@ -140,8 +140,8 @@ tty_quit_effect(Config) when is_list(Config) ->
     ?assertEqual({arizona_effect, [quit]}, arizona_term_demo_effects:quit()).
 
 count_lines_counts_rows(Config) when is_list(Config) ->
-    ?assertEqual(3, arizona_terminal_session:count_lines(~"a\nb\nc\n")),
-    ?assertEqual(0, arizona_terminal_session:count_lines(~"no newline")).
+    ?assertEqual(3, arizona_term_demo_driver:count_lines(~"a\nb\nc\n")),
+    ?assertEqual(0, arizona_term_demo_driver:count_lines(~"no newline")).
 
 log_lines_filters_effects(Config) when is_list(Config) ->
     Effects = [
@@ -149,41 +149,42 @@ log_lines_filters_effects(Config) when is_list(Config) ->
         {arizona_effect, [9, ~"some-event"]},
         {arizona_effect, [log, ~"two"]}
     ],
-    ?assertEqual([~"one", ~"two"], arizona_terminal_session:log_lines(Effects)).
+    ?assertEqual([~"one", ~"two"], arizona_term_demo_driver:log_lines(Effects)).
 
 has_quit_detects_quit(Config) when is_list(Config) ->
-    ?assert(arizona_terminal_session:has_quit([arizona_term_demo_effects:quit()])),
+    ?assert(arizona_term_demo_driver:has_quit([arizona_term_demo_effects:quit()])),
     ?assert(
-        arizona_terminal_session:has_quit([
+        arizona_term_demo_driver:has_quit([
             arizona_term_demo_effects:log(~"x"), arizona_term_demo_effects:quit()
         ])
     ),
-    ?assertNot(arizona_terminal_session:has_quit([arizona_term_demo_effects:log(~"x")])),
-    ?assertNot(arizona_terminal_session:has_quit([])).
+    ?assertNot(arizona_term_demo_driver:has_quit([arizona_term_demo_effects:log(~"x")])),
+    ?assertNot(arizona_term_demo_driver:has_quit([])).
 
 normalize_key_mapping(Config) when is_list(Config) ->
-    %% The driver turns raw key reads into quit / a ~"key" payload / ignore.
-    %% `q` is an ordinary character now; only Ctrl-C/Ctrl-D are hard quits.
-    ?assertEqual(~"q", arizona_terminal_session:normalize_key("q")),
-    ?assertEqual(quit, arizona_terminal_session:normalize_key([3])),
-    ?assertEqual(quit, arizona_terminal_session:normalize_key([4])),
-    ?assertEqual(~"up", arizona_terminal_session:normalize_key("\e[A")),
-    ?assertEqual(~"down", arizona_terminal_session:normalize_key("\e[B")),
-    ?assertEqual(~"enter", arizona_terminal_session:normalize_key("\r")),
-    ?assertEqual(~"enter", arizona_terminal_session:normalize_key("\n")),
+    %% The demo driver maps raw key reads to commands: [stop] for the hard
+    %% interrupts Ctrl-C/Ctrl-D, a ~"key" event for the rest, [] for ignored.
+    %% `q` is an ordinary character (the view decides whether it quits).
+    ?assertEqual([key(~"q")], cmds(~"q")),
+    ?assertEqual([stop], cmds(<<3>>)),
+    ?assertEqual([stop], cmds(<<4>>)),
+    ?assertEqual([key(~"up")], cmds(~"\e[A")),
+    ?assertEqual([key(~"down")], cmds(~"\e[B")),
+    ?assertEqual([key(~"enter")], cmds(~"\r")),
+    ?assertEqual([key(~"enter")], cmds(~"\n")),
     %% backspace (DEL and BS) and bare ESC reach the view for text editing
-    ?assertEqual(~"backspace", arizona_terminal_session:normalize_key([127])),
-    ?assertEqual(~"backspace", arizona_terminal_session:normalize_key([8])),
-    ?assertEqual(~"esc", arizona_terminal_session:normalize_key([27])),
-    ?assertEqual(~"j", arizona_terminal_session:normalize_key("j")),
-    ?assertEqual(~"+", arizona_terminal_session:normalize_key("+")),
+    ?assertEqual([key(~"backspace")], cmds(<<127>>)),
+    ?assertEqual([key(~"backspace")], cmds(<<8>>)),
+    ?assertEqual([key(~"esc")], cmds(<<27>>)),
+    ?assertEqual([key(~"j")], cmds(~"j")),
+    ?assertEqual([key(~"+")], cmds(~"+")),
     %% an unrecognized escape sequence is dropped
-    ?assertEqual(ignore, arizona_terminal_session:normalize_key("\e[Z")).
+    ?assertEqual([], cmds(~"\e[Z")).
 
 crlf_conversion(Config) when is_list(Config) ->
     %% Raw mode needs CRLF; the driver adds the \r to the target's logical \n.
-    ?assertEqual(~"a\r\nb\r\n", arizona_terminal_session:to_crlf(~"a\nb\n")),
-    ?assertEqual(~"no breaks", arizona_terminal_session:to_crlf(~"no breaks")).
+    ?assertEqual(~"a\r\nb\r\n", arizona_term_demo_driver:to_crlf(~"a\nb\n")),
+    ?assertEqual(~"no breaks", arizona_term_demo_driver:to_crlf(~"no breaks")).
 
 session_drives_frames(Config) when is_list(Config) ->
     %% Drive the transport-agnostic session over a capturing Out fun: the same
@@ -193,7 +194,9 @@ session_drives_frames(Config) when is_list(Config) ->
         Self ! {out, iolist_to_binary(Io)},
         ok
     end,
-    {ok, Session} = arizona_terminal_session:start(arizona_term_demo, #{}, Out),
+    {ok, Session} = arizona_terminal_session:start(
+        arizona_term_demo, #{}, arizona_term_demo_driver, [], Out
+    ),
     %% start/3 paints the initial status block.
     Frame0 = next_out(),
     ?assert(contains(Frame0, ~"== Arizona Terminal Demo ==")),
@@ -224,7 +227,9 @@ input_broadcasts_message(Config) when is_list(Config) ->
         Self ! {out, iolist_to_binary(Io)},
         ok
     end,
-    {ok, S0} = arizona_terminal_session:start(arizona_term_demo, #{}, Out),
+    {ok, S0} = arizona_terminal_session:start(
+        arizona_term_demo, #{}, arizona_term_demo_driver, [], Out
+    ),
     _ = next_out(),
     %% Navigate to "Send message" (index 2) and open the input.
     {cont, S1} = arizona_terminal_session:handle_key(S0, ~"j"),
@@ -285,6 +290,15 @@ frame(Pid) ->
 
 contains(Frame, Sub) ->
     binary:match(Frame, Sub) =/= nomatch.
+
+%% Commands the demo driver maps a raw key read to.
+cmds(Bytes) ->
+    {Commands, _State} = arizona_term_demo_driver:keys(Bytes, #{}),
+    Commands.
+
+%% The command for a ~"key" event with payload key Value.
+key(Value) ->
+    {event, ~"key", #{~"key" => Value}}.
 
 %% Parse the integer after "Clients: " in a rendered frame (the count line ends
 %% the number with the line's SGR reset, so split on the leading ESC).

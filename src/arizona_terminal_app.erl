@@ -1,31 +1,24 @@
 -module(arizona_terminal_app).
 -moduledoc """
-Local TTY driver for `?terminal` views -- no HTTP server.
+Local TTY transport for `?terminal` live views -- no HTTP server.
 
 A thin transport over `arizona_terminal_session`: it owns the parts specific to a
-real local terminal (raw mode, cursor hide/show, an `io:get_chars/2` reader) and
-delegates the rendering, key handling, and `arizona_term_demo_effects` effect interpretation to
-the shared session, supplying `fun io:put_chars/1` as the session's output.
-
-The view renders as a **scrolling log above a pinned status block**: the session
-redraws the status block in place (cursor up + erase) on every update, while
-`arizona_term_demo_effects:log/1` output scrolls into the terminal's native scrollback. There is
-no alternate screen, so the session stays in the shell after quit.
+real local terminal (raw mode, an `io:get_chars/2` reader, `fun io:put_chars/1` as
+the output) and leaves the terminal UX -- the key map, paint model, and cursor
+handling -- to the `arizona_terminal_driver` it is given.
 
 A linked **input reader** process blocks on `io:get_chars/2` and forwards each
 read as `{term_input, Chars}`, so a blocking read never starves the live process's
 asynchronous `{arizona_push, _, _}` updates (timer ticks, pubsub broadcasts).
 
 ```erlang
-arizona_terminal_app:start(my_terminal_view, #{}).
+arizona_terminal_app:start(my_terminal_view, #{}, my_terminal_driver).
 ```
 """.
 
--export([start/1]).
--export([start/2]).
+-export([start/3]).
 
--ignore_xref([start/1]).
--ignore_xref([start/2]).
+-ignore_xref([start/3]).
 
 %% Terminal IO and a blocking event loop are this module's whole job, not stray
 %% debug leftovers: it writes frames with io:put_chars / io:format, and its loop
@@ -38,24 +31,20 @@ arizona_terminal_app:start(my_terminal_view, #{}).
 %% shell:start_interactive/1's success typing omits {error, enotsup} (returned
 %% with no controlling TTY), so dialyzer thinks start/2's bail clause is dead.
 %% It is reachable at runtime, so keep it and silence the false no_match.
--dialyzer({no_match, [start/2]}).
-
--doc "Equivalent to `start(Handler, #{})`.".
--spec start(module()) -> ok.
-start(Handler) ->
-    start(Handler, #{}).
+-dialyzer({no_match, [start/3]}).
 
 -doc """
-Mounts `Handler` and runs the terminal event loop until the user quits,
-restoring the cursor on exit.
+Mounts `Handler` as a `?terminal` live view driven by `Driver`
+(an `arizona_terminal_driver`) and runs the local terminal event loop until the
+user quits.
 """.
--spec start(module(), arizona_template:bindings()) -> ok.
-start(Handler, Bindings) ->
+-spec start(module(), arizona_template:bindings(), module()) -> ok.
+start(Handler, Bindings, Driver) ->
     case enter_raw_mode() of
         ok ->
-            run_terminal(Handler, Bindings);
+            run_terminal(Handler, Bindings, Driver);
         {error, already_started} ->
-            run_terminal(Handler, Bindings);
+            run_terminal(Handler, Bindings, Driver);
         {error, Reason} ->
             %% No controlling TTY (e.g. output is piped) -- raw mode is required.
             io:format(
@@ -76,23 +65,25 @@ start(Handler, Bindings) ->
 enter_raw_mode() ->
     shell:start_interactive({noshell, raw}).
 
-run_terminal(Handler, Bindings) ->
-    ok = io:put_chars(io_ansi:cursor_hide()),
+run_terminal(Handler, Bindings, Driver) ->
     try
-        run(Handler, Bindings)
+        run(Handler, Bindings, Driver)
     after
-        %% No alternate screen: leave the log + final status block in the shell;
-        %% just restore the cursor and move below the block for the next prompt.
+        %% No alternate screen: leave the log + final status block in the shell.
+        %% Restore the cursor (a crash-safety net beyond the driver's teardown) and
+        %% move below the block for the next prompt.
         io:put_chars([io_ansi:cursor_show(), ~"\r\n"])
     end.
 
-run(Handler, Bindings) ->
+run(Handler, Bindings, Driver) ->
     %% Trap exits so a dying live/reader process becomes a message the loop
     %% handles (and the cursor is restored), not a signal that kills us mid-frame.
     process_flag(trap_exit, true),
-    {ok, Session} = arizona_terminal_session:start(Handler, Bindings, fun io:put_chars/1),
-    Driver = self(),
-    _Reader = spawn_link(fun() -> read_loop(Driver) end),
+    {ok, Session} = arizona_terminal_session:start(
+        Handler, Bindings, Driver, [], fun io:put_chars/1
+    ),
+    Owner = self(),
+    _Reader = spawn_link(fun() -> read_loop(Owner) end),
     loop(Session).
 
 loop(Session) ->
@@ -115,14 +106,14 @@ loop(Session) ->
             ok
     end.
 
-read_loop(Driver) ->
+read_loop(Owner) ->
     case io:get_chars("", 8) of
         eof ->
-            Driver ! {term_input, eof};
+            Owner ! {term_input, eof};
         {error, _Reason} ->
-            Driver ! {term_input, eof};
+            Owner ! {term_input, eof};
         Chars when is_list(Chars) ->
-            %% Raw mode delivers keys as a character list; the session normalizes.
-            Driver ! {term_input, Chars},
-            read_loop(Driver)
+            %% Raw mode delivers keys as a character list; the driver normalizes.
+            Owner ! {term_input, Chars},
+            read_loop(Owner)
     end.

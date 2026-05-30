@@ -27,6 +27,7 @@ main(_Args) ->
     {ok, _Daemon} = arizona_ssh:start(#{
         port => ?PORT,
         handler => arizona_term_demo,
+        driver => arizona_term_demo_driver,
         system_dir => SystemDir,
         daemon_opts => [
             {auth_methods, "password"},

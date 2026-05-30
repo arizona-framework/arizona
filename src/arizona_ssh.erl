@@ -21,6 +21,7 @@ session.
 {ok, _Daemon} = arizona_ssh:start(#{
     port => 2222,
     handler => my_terminal_view,
+    driver => my_terminal_driver,
     system_dir => "/path/to/host/keys",
     daemon_opts => [{auth_methods, "password"}, {pwdfun, fun(_, _) -> true end}]
 }).
@@ -55,6 +56,7 @@ production passes real keys and real auth.
 
 -record(state, {
     handler :: module(),
+    driver :: module(),
     conn :: ssh:connection_ref() | undefined,
     channel :: ssh:channel_id() | undefined,
     rows :: pos_integer(),
@@ -68,6 +70,7 @@ production passes real keys and real auth.
 -type opts() :: #{
     port := inet:port_number(),
     handler := module(),
+    driver := module(),
     system_dir := file:filename(),
     daemon_opts => [term()]
 }.
@@ -88,10 +91,10 @@ interactive shell. Returns the daemon reference (stop it with
 `m:ssh` daemon options (typically authentication).
 """.
 -spec start(opts()) -> {ok, ssh:daemon_ref()} | {error, term()}.
-start(#{port := Port, handler := Handler, system_dir := SystemDir} = Opts) ->
+start(#{port := Port, handler := Handler, driver := Driver, system_dir := SystemDir} = Opts) ->
     {ok, _Started} = application:ensure_all_started(ssh),
     DaemonOpts = [
-        {ssh_cli, {?MODULE, [#{handler => Handler}]}},
+        {ssh_cli, {?MODULE, [#{handler => Handler, driver => Driver}]}},
         {system_dir, SystemDir}
         | maps:get(daemon_opts, Opts, [])
     ],
@@ -101,9 +104,9 @@ start(#{port := Port, handler := Handler, system_dir := SystemDir} = Opts) ->
 %% ssh_server_channel Callbacks
 %% --------------------------------------------------------------------
 
--spec init([#{handler := module()}]) -> {ok, state()}.
-init([#{handler := Handler}]) ->
-    {ok, #state{handler = Handler, rows = ?DEFAULT_ROWS, cols = ?DEFAULT_COLS}}.
+-spec init([#{handler := module(), driver := module()}]) -> {ok, state()}.
+init([#{handler := Handler, driver := Driver}]) ->
+    {ok, #state{handler = Handler, driver = Driver, rows = ?DEFAULT_ROWS, cols = ?DEFAULT_COLS}}.
 
 -doc """
 Handles non-SSH messages: the one-shot `ssh_channel_up` (records the connection
@@ -161,23 +164,22 @@ terminate(_Reason, _State) ->
 %% --------------------------------------------------------------------
 
 %% Turn a session step (`handle_key`/`handle_push`) into a channel callback reply:
-%% a `quit` restores the cursor and stops the channel, a `{cont, _}` stores the
-%% advanced session. The cursor is restored here, not in terminate/2 -- a send
-%% from terminate races the channel close and never reaches the client.
-apply_session_result(quit, ChannelId, #state{conn = Conn} = State) ->
-    ok = send(Conn, ChannelId, io_ansi:cursor_show()),
+%% a `quit` stops the channel (the session already wrote the driver's teardown --
+%% e.g. the cursor restore -- via the output fun before returning quit, while the
+%% channel was still open), a `{cont, _}` stores the advanced session.
+apply_session_result(quit, ChannelId, State) ->
     {stop, ChannelId, State};
 apply_session_result({cont, Session}, _ChannelId, State) ->
     {ok, State#state{session = Session}}.
 
 %% Mount the live view with the channel as its transport. The output function
-%% writes frames to the SSH channel. The cursor is hidden for the duration of the
-%% session (the local TTY driver does the same) and restored in terminate/2.
-start_session(Conn, ChannelId, #state{handler = Handler, rows = Rows, cols = Cols} = State) ->
+%% writes frames to the SSH channel; the driver owns cursor/screen setup+teardown.
+start_session(
+    Conn, ChannelId, #state{handler = Handler, driver = Driver, rows = Rows, cols = Cols} = State
+) ->
     Out = fun(Iodata) -> send(Conn, ChannelId, Iodata) end,
-    ok = Out(io_ansi:cursor_hide()),
     Bindings = #{term_rows => Rows, term_cols => Cols},
-    {ok, Session} = arizona_terminal_session:start(Handler, Bindings, Out),
+    {ok, Session} = arizona_terminal_session:start(Handler, Bindings, Driver, [], Out),
     State#state{session = Session}.
 
 %% Write to the SSH channel, swallowing a send error on an already-closing

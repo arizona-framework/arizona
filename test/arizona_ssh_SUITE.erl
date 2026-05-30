@@ -47,6 +47,7 @@ init_per_suite(Config) ->
     {ok, Daemon} = arizona_ssh:start(#{
         port => 0,
         handler => arizona_term_demo,
+        driver => arizona_term_demo_driver,
         system_dir => SystemDir,
         daemon_opts => [
             {auth_methods, "password"},
