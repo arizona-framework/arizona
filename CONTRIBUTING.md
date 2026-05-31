@@ -42,6 +42,13 @@ it with `make build-android` and run its tests with `make test-android` (needs
 the Android SDK + an emulator/device). Its CI runs separately via the
 `android-e2e` workflow. See [docs/native.md](docs/native.md).
 
+The native iOS client lives in-repo at `clients/ios/` (Swift/SwiftUI). Its
+protocol logic is a Swift package you can test on any platform with `swift test`
+(no Mac needed); the SwiftUI render + XCUITest e2e need macOS + Xcode +
+`xcodegen` (`brew install xcodegen`). Build with `make build-ios` and test with
+`make test-ios`; like the Android client it is **not** part of `make ci` and has
+its own `ios-e2e` workflow.
+
 ## License
 
 Arizona is licensed under the [Apache License Version 2.0](LICENSE.md), for all code.
