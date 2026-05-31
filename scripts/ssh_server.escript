@@ -12,7 +12,7 @@
 %%%
 %%% Host key + auth are throwaway dev values (a generated RSA host key, and a
 %%% pwdfun that accepts any password); production supplies real ones via
-%%% arizona_ssh:start/1.
+%%% arizona_terminal_ssh:start/1.
 
 -mode(compile).
 
@@ -24,7 +24,7 @@ main(_Args) ->
     ok = setup_code_paths(ProjectDir),
     {ok, _Started} = application:ensure_all_started(arizona),
     SystemDir = ensure_host_key(ProjectDir),
-    {ok, _Daemon} = arizona_ssh:start(#{
+    {ok, _Daemon} = arizona_terminal_ssh:start(#{
         port => ?PORT,
         handler => arizona_term_demo,
         driver => arizona_term_demo_driver,

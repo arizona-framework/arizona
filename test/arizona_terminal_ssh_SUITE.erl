@@ -1,4 +1,4 @@
--module(arizona_ssh_SUITE).
+-module(arizona_terminal_ssh_SUITE).
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("common_test/include/ct.hrl").
 
@@ -12,7 +12,7 @@
 -export([chat_broadcasts_to_all_terminals/1]).
 -export([disconnect_removes_subscriber/1]).
 
-%% End-to-end: arizona_ssh serves the ?terminal demo view over a real SSH daemon,
+%% End-to-end: arizona_terminal_ssh serves the ?terminal demo view over a real SSH daemon,
 %% driven by the OTP ssh client. A throwaway host key + accept-all password auth
 %% make the daemon self-contained; the demo view is the same one the local TTY
 %% runtime uses, proving the render target + live core are transport-agnostic.
@@ -44,7 +44,7 @@ init_per_suite(Config) ->
     SystemDir = filename:join(proplists:get_value(priv_dir, Config), "host_keys"),
     ok = filelib:ensure_path(SystemDir),
     ok = write_host_key(SystemDir),
-    {ok, Daemon} = arizona_ssh:start(#{
+    {ok, Daemon} = arizona_terminal_ssh:start(#{
         port => 0,
         handler => arizona_term_demo,
         driver => arizona_term_demo_driver,

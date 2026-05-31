@@ -18,7 +18,7 @@ main(_Args) ->
     ok = setup_code_paths(ProjectDir),
     {ok, _Started} = application:ensure_all_started(arizona),
     _Emitter = spawn(fun() -> emit_loop(1) end),
-    ok = arizona_terminal_app:start(arizona_term_demo, #{}, arizona_term_demo_driver).
+    ok = arizona_terminal_tty:start(arizona_term_demo, #{}, arizona_term_demo_driver).
 
 emit_loop(N) ->
     timer:sleep(3000),

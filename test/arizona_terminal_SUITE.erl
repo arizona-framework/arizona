@@ -188,7 +188,7 @@ crlf_conversion(Config) when is_list(Config) ->
 
 session_drives_frames(Config) when is_list(Config) ->
     %% Drive the transport-agnostic session over a capturing Out fun: the same
-    %% path arizona_terminal_app and arizona_ssh take, minus any real terminal.
+    %% path arizona_terminal_tty and arizona_terminal_ssh take, minus any real terminal.
     Self = self(),
     Out = fun(Io) ->
         Self ! {out, iolist_to_binary(Io)},

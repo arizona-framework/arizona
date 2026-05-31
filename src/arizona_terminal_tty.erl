@@ -1,4 +1,4 @@
--module(arizona_terminal_app).
+-module(arizona_terminal_tty).
 -moduledoc """
 Local TTY transport for `?terminal` live views -- no HTTP server.
 
@@ -12,7 +12,7 @@ read as `{term_input, Chars}`, so a blocking read never starves the live process
 asynchronous `{arizona_push, _, _}` updates (timer ticks, pubsub broadcasts).
 
 ```erlang
-arizona_terminal_app:start(my_terminal_view, #{}, my_terminal_driver).
+arizona_terminal_tty:start(my_terminal_view, #{}, my_terminal_driver).
 ```
 """.
 

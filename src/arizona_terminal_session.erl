@@ -5,7 +5,7 @@ Transport-agnostic orchestrator for `?terminal` live views.
 Mounts a `?terminal` view (the calling process is its transport), then delegates
 the terminal *policy* -- key mapping, paint model, screen setup/teardown -- to an
 `m:arizona_terminal_driver` module. It holds no UX opinion of its own, so it serves
-the local TTY driver (`arizona_terminal_app`) and the SSH transport (`arizona_ssh`)
+the local TTY driver (`arizona_terminal_tty`) and the SSH transport (`arizona_terminal_ssh`)
 unchanged, with whatever terminal style the driver implements. Each callback
 dispatches to the given driver if it exports it, otherwise to
 `m:arizona_terminal_default_driver`'s default -- so a driver overrides only what it

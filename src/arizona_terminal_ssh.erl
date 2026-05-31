@@ -1,4 +1,4 @@
--module(arizona_ssh).
+-module(arizona_terminal_ssh).
 -moduledoc """
 Serves `?terminal` live views over SSH -- a network transport for the terminal
 render target.
@@ -18,7 +18,7 @@ resizes, and the live process's `{arizona_push, _, _}` updates are fed to the
 session.
 
 ```erlang
-{ok, _Daemon} = arizona_ssh:start(#{
+{ok, _Daemon} = arizona_terminal_ssh:start(#{
     port => 2222,
     handler => my_terminal_view,
     driver => my_terminal_driver,
