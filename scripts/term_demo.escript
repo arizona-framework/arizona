@@ -9,7 +9,7 @@
 %%%   * the "server ticks" counter -> timer-driven repaints (?send_after);
 %%%   * a background emitter broadcasting to the `demo` channel every few
 %%%     seconds -> pubsub-driven repaints.
-%%% Press q (or Ctrl-C) to quit.
+%%% Press q twice to quit (the first press asks to confirm), or Ctrl-C / Ctrl-D.
 
 -mode(compile).
 
