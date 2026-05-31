@@ -17,9 +17,10 @@ The defaults:
   etc. An app decides what Ctrl-C does (cancel, confirm-quit, ...) by handling that
   event; nothing happens by default.
 - `setup/1` hides the cursor for the session; `teardown/1` restores it on quit.
-- `paint/3` (**draft**) clears the screen and repaints the frame (CRLF for raw
-  mode). Effects are not interpreted yet -- a smarter, non-flickering paint and
-  effect handling are next.
+- `paint/3` repaints the frame in place (cursor home, clear-to-end-of-line per line,
+  then clear below) so it does not flicker, and interprets the framework terminal
+  effects (`m:arizona_terminal_effect`): `quit` stops the session, `set_title` sets
+  the terminal title, `bell` rings it. Unknown effects are ignored.
 """.
 
 -behaviour(arizona_terminal_driver).
@@ -34,7 +35,7 @@ The defaults:
 %% Callbacks
 %% --------------------------------------------------------------------
 
--doc "No paint state yet (grows when the default paint is refined).".
+-doc "The default driver is stateless; its state is an empty map.".
 -spec init(term()) -> map().
 init(_Arg) ->
     #{}.
@@ -44,10 +45,21 @@ init(_Arg) ->
 keys(Bytes, State) ->
     {[to_command(Key) || Key <- arizona_terminal_io:keys(Bytes)], State}.
 
--doc "Clear the screen and repaint the frame (CRLF for raw mode).".
--spec paint(binary(), [arizona_effect:cmd()], State) -> {iodata(), continue, State}.
-paint(Frame, _Effects, State) ->
-    {[~"\e[2J", ~"\e[H", crlf(Frame)], continue, State}.
+-doc """
+Repaint the frame in place and interpret framework terminal effects: a `quit`
+effect stops the session; `set_title` / `bell` emit their escape sequences; unknown
+effects are ignored. Repaints with home + per-line clear-to-EOL + clear-below rather
+than a `\\e[2J` full clear, so the screen does not flicker.
+""".
+-spec paint(binary(), [arizona_effect:cmd()], State) -> {iodata(), continue | stop, State}.
+paint(Frame, Effects, State) ->
+    Output = [repaint(Frame), [effect_bytes(Effect) || Effect <- Effects]],
+    Next =
+        case lists:member(arizona_terminal_effect:quit(), Effects) of
+            true -> stop;
+            false -> continue
+        end,
+    {Output, Next, State}.
 
 -doc "Hide the cursor for the session.".
 -spec setup(State) -> {iodata(), State}.
@@ -68,6 +80,14 @@ teardown(_State) ->
 to_command({ctrl, $d}) -> stop;
 to_command(Key) -> {event, ~"key", #{key => Key}}.
 
-%% Raw mode does not map \n to \r\n; add the \r so lines don't stair-step.
-crlf(Frame) ->
-    binary:replace(Frame, ~"\n", ~"\r\n", [global]).
+%% Repaint in place: home, write each line clearing to end-of-line (so a now-shorter
+%% line erases its old tail) then CRLF, and finally clear everything below (leftover
+%% from a previously longer frame). Avoids the full-screen flash of \e[2J.
+repaint(Frame) ->
+    [~"\e[H", binary:replace(Frame, ~"\n", ~"\e[K\r\n", [global]), ~"\e[J"].
+
+%% Frame-orthogonal effects -> escape sequences emitted with the repaint. quit is
+%% handled by the stop result in paint/3; unknown effects produce no output.
+effect_bytes({arizona_effect, [set_title, Title]}) -> [~"\e]0;", Title, ~"\a"];
+effect_bytes({arizona_effect, [bell]}) -> ~"\a";
+effect_bytes(_Effect) -> [].

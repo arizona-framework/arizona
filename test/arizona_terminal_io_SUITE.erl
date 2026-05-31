@@ -12,9 +12,15 @@
 -export([drops_unknown_input/1]).
 -export([driver_quits_on_ctrl_d/1]).
 -export([driver_emits_key_events/1]).
+-export([effect_builders/1]).
+-export([default_driver_setup_teardown/1]).
+-export([default_paint_repaints_in_place/1]).
+-export([default_paint_quit_stops/1]).
+-export([default_paint_title_bell_and_unknown/1]).
 
 %% arizona_terminal_io:keys/1 decodes raw terminal reads into idiomatic keys;
-%% arizona_terminal_default_driver turns those into events, quitting on Ctrl-D (EOF).
+%% arizona_terminal_default_driver turns those into events (quitting on Ctrl-D),
+%% repaints frames in place, and interprets arizona_terminal_effect (quit/title/bell).
 
 all() ->
     [
@@ -27,7 +33,12 @@ all() ->
         tokenises_multiple_keys,
         drops_unknown_input,
         driver_quits_on_ctrl_d,
-        driver_emits_key_events
+        driver_emits_key_events,
+        effect_builders,
+        default_driver_setup_teardown,
+        default_paint_repaints_in_place,
+        default_paint_quit_stops,
+        default_paint_title_bell_and_unknown
     ].
 
 printable_to_char_code(Config) when is_list(Config) ->
@@ -99,6 +110,47 @@ driver_emits_key_events(Config) when is_list(Config) ->
     ?assertEqual([{event, ~"key", #{key => up}}], driver_keys(~"\e[A")),
     ?assertEqual([{event, ~"key", #{key => enter}}], driver_keys(~"\r")).
 
+effect_builders(Config) when is_list(Config) ->
+    ?assertEqual({arizona_effect, [quit]}, arizona_terminal_effect:quit()),
+    ?assertEqual(
+        {arizona_effect, [set_title, ~"Title"]}, arizona_terminal_effect:set_title(~"Title")
+    ),
+    %% iodata title is normalized to a binary
+    ?assertEqual(
+        {arizona_effect, [set_title, ~"ab"]}, arizona_terminal_effect:set_title([~"a", ~"b"])
+    ),
+    ?assertEqual({arizona_effect, [bell]}, arizona_terminal_effect:bell()).
+
+default_driver_setup_teardown(Config) when is_list(Config) ->
+    ?assertEqual(#{}, arizona_terminal_default_driver:init(undefined)),
+    %% setup hides the cursor and threads state; teardown restores it.
+    ?assertEqual({io_ansi:cursor_hide(), #{}}, arizona_terminal_default_driver:setup(#{})),
+    ?assertEqual(io_ansi:cursor_show(), arizona_terminal_default_driver:teardown(#{})).
+
+default_paint_repaints_in_place(Config) when is_list(Config) ->
+    {Out, Next} = paint_result(~"a\nb\n", []),
+    ?assertEqual(continue, Next),
+    %% home + per-line clear-to-EOL + clear-below, and NOT a full-screen \e[2J clear
+    ?assert(contains(Out, ~"\e[H")),
+    ?assert(contains(Out, ~"a\e[K\r\n")),
+    ?assert(contains(Out, ~"\e[J")),
+    ?assertNot(contains(Out, ~"\e[2J")).
+
+default_paint_quit_stops(Config) when is_list(Config) ->
+    {_Out, Next} = paint_result(~"frame\n", [arizona_terminal_effect:quit()]),
+    ?assertEqual(stop, Next).
+
+default_paint_title_bell_and_unknown(Config) when is_list(Config) ->
+    {TitleOut, _} = paint_result(~"x\n", [arizona_terminal_effect:set_title(~"Hi")]),
+    ?assert(contains(TitleOut, ~"\e]0;Hi\a")),
+    {BellOut, _} = paint_result(~"x\n", [arizona_terminal_effect:bell()]),
+    ?assert(contains(BellOut, ~"\a")),
+    %% an unknown effect is ignored: no stop, no output beyond the plain repaint
+    {PlainOut, _} = paint_result(~"x\n", []),
+    {UnknownOut, UnknownNext} = paint_result(~"x\n", [{arizona_effect, [something_else]}]),
+    ?assertEqual(continue, UnknownNext),
+    ?assertEqual(PlainOut, UnknownOut).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
@@ -106,3 +158,10 @@ driver_emits_key_events(Config) when is_list(Config) ->
 driver_keys(Bytes) ->
     {Commands, _State} = arizona_terminal_default_driver:keys(Bytes, #{}),
     Commands.
+
+paint_result(Frame, Effects) ->
+    {Out, Next, _State} = arizona_terminal_default_driver:paint(Frame, Effects, #{}),
+    {iolist_to_binary(Out), Next}.
+
+contains(Bin, Sub) ->
+    binary:match(Bin, Sub) =/= nomatch.
