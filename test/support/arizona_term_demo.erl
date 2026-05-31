@@ -37,8 +37,6 @@ mount(Init) ->
         %% menu = navigate the list; input = typing a message to broadcast.
         mode => menu,
         draft => <<>>,
-        %% `q` quits via a double-press confirmation; this arms it.
-        quit_pending => false,
         count => maps:get(count, Init, 0),
         clock => 0,
         clients => length(Members),
@@ -74,11 +72,6 @@ render(Bindings) ->
             ?each(
                 fun(Draft) -> {line, [yellow], [~"Message: ", Draft]} end,
                 input_rows(?get(mode), ?get(draft))
-            ),
-            %% The quit-confirm prompt, shown only while a `q` press awaits a second.
-            ?each(
-                fun(Prompt) -> {line, [yellow], [Prompt]} end,
-                quit_prompt(?get(quit_pending))
             ),
             {line, [dim], [
                 ?each(
@@ -117,17 +110,15 @@ handle_info({_Ref, Verb, demo, _Pids}, Bindings) when Verb =:= join; Verb =:= le
 %% Internal functions
 %% --------------------------------------------------------------------
 
-%% Menu mode navigates the list and acts on the selection. `q` quits as a
-%% double-press confirmation: the first press arms it, a second confirms, and any
-%% other key cancels; the "Quit" menu item stays an immediate, deliberate quit.
-%% Input mode builds a draft message: a printable key appends, backspace deletes,
-%% enter broadcasts, esc cancels.
+%% Menu mode navigates the list and acts on the selection; `q` quits (the session
+%% no longer intercepts it). Input mode builds a draft message: a printable key
+%% appends, backspace deletes, enter broadcasts, esc cancels.
 on_key(menu, ~"enter", Bindings) ->
-    activate(cancel_quit(Bindings));
+    activate(Bindings);
 on_key(menu, ~"q", Bindings) ->
-    request_quit(Bindings);
+    {Bindings, #{}, [arizona_term_demo_effects:quit()]};
 on_key(menu, Key, Bindings) ->
-    {apply_key(Key, cancel_quit(Bindings)), #{}, []};
+    {apply_key(Key, Bindings), #{}, []};
 on_key(input, ~"enter", Bindings) ->
     send_message(Bindings);
 on_key(input, ~"esc", Bindings) ->
@@ -138,17 +129,6 @@ on_key(input, <<Char>>, Bindings) ->
     {Bindings#{draft => <<(maps:get(draft, Bindings))/binary, Char>>}, #{}, []};
 on_key(input, _Key, Bindings) ->
     {Bindings, #{}, []}.
-
-%% The `q` quit confirmation: the first press arms it (the prompt renders, nothing
-%% stops); a second `q` confirms and emits the quit effect. cancel_quit/1 disarms,
-%% called on any other menu key.
-request_quit(#{quit_pending := true} = Bindings) ->
-    {Bindings, #{}, [arizona_term_demo_effects:quit()]};
-request_quit(Bindings) ->
-    {Bindings#{quit_pending => true}, #{}, []}.
-
-cancel_quit(Bindings) ->
-    Bindings#{quit_pending => false}.
 
 apply_key(~"j", Bindings) -> move(Bindings, 1);
 apply_key(~"down", Bindings) -> move(Bindings, 1);
@@ -205,11 +185,6 @@ footer_keys(input) ->
 %% (with the draft) only in input mode.
 input_rows(input, Draft) -> [Draft];
 input_rows(menu, _Draft) -> [].
-
-%% A 0-or-1 element list driving the ?each that renders the quit-confirm prompt:
-%% present only while a `q` press awaits confirmation.
-quit_prompt(true) -> [~"Press q again to quit (any other key cancels)"];
-quit_prompt(false) -> [].
 
 %% How many terminals are connected: every connected view subscribes to `demo`,
 %% so the subscriber count is the live client count.

@@ -77,9 +77,6 @@ restores_cursor_on_quit(Config) when is_list(Config) ->
     %% client's terminal is left with an invisible cursor after the session ends.
     {Conn, Ch} = connect(?config(port, Config)),
     _ = recv_until(Conn, ~"== Arizona Terminal Demo ==", 3000),
-    %% `q` quits via a double-press: the first arms the confirmation prompt.
-    ok = ssh_connection:send(Conn, Ch, ~"q"),
-    _ = recv_until(Conn, ~"Press q again", 3000),
     ok = ssh_connection:send(Conn, Ch, ~"q"),
     _ = recv_until(Conn, iolist_to_binary(io_ansi:cursor_show()), 3000),
     ok = ssh:close(Conn).

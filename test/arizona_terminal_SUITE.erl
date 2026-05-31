@@ -213,19 +213,11 @@ session_drives_frames(Config) when is_list(Config) ->
         Session2, [arizona_term_demo_effects:log(~"streamed")]
     ),
     ?assert(contains(next_out(), ~"streamed")),
-    %% `q` quits via a double-press confirmation: the first arms a prompt, any
-    %% other key cancels, and a second `q` confirms.
-    {cont, Session4} = arizona_terminal_session:handle_key(Session3, "q"),
-    ?assert(contains(next_out(), ~"Press q again")),
-    {cont, Session5} = arizona_terminal_session:handle_key(Session4, "j"),
-    ?assertNot(contains(next_out(), ~"Press q again")),
-    {cont, Session6} = arizona_terminal_session:handle_key(Session5, "q"),
-    ?assert(contains(next_out(), ~"Press q again")),
-    ?assertEqual(quit, arizona_terminal_session:handle_key(Session6, "q")),
-    %% A quit effect stops the session immediately (the "Quit" menu item's path).
+    %% A quit effect (or the quit key) stops the session.
     ?assertEqual(
         quit, arizona_terminal_session:handle_push(Session3, [arizona_term_demo_effects:quit()])
-    ).
+    ),
+    ?assertEqual(quit, arizona_terminal_session:handle_key(Session3, "q")).
 
 input_broadcasts_message(Config) when is_list(Config) ->
     %% Subscribe a second pid (this process) as a stand-in for another terminal.
