@@ -50,6 +50,11 @@ production passes real keys and real auth.
 
 -ignore_xref([start/1]).
 
+%% init/1 is the ssh_server_channel callback and must return {ok, State}; elvis's
+%% consistent_ok_error_spec doesn't know this behaviour, so it misreads the
+%% required wrap as unnecessary.
+-elvis([{elvis_style, consistent_ok_error_spec, disable}]).
+
 %% --------------------------------------------------------------------
 %% Types
 %% --------------------------------------------------------------------
