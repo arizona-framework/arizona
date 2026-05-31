@@ -30,6 +30,17 @@
     cross_target_html_in_native/1,
     cross_target_native_in_html/1,
     cross_target_siblings_compile/1,
+    cross_target_html_in_terminal/1,
+    cross_target_terminal_in_html/1,
+    terminal_target_marked/1,
+    terminal_renders_styled_ansi/1,
+    terminal_custom_sgr_attr/1,
+    terminal_fg_attr/1,
+    terminal_unknown_style_rejected/1,
+    terminal_unknown_attr_rejected/1,
+    terminal_event_command_rejected/1,
+    terminal_dynamic_attr_rejected/1,
+    terminal_each_renders/1,
     deeply_nested/1,
     diff_integration/1,
     dynamic_only_child/1,
@@ -186,6 +197,7 @@ all() ->
         {group, utf8},
         {group, errors},
         {group, cross_target},
+        {group, terminal},
         {group, az_macros},
         {group, az_view}
     ].
@@ -360,7 +372,21 @@ groups() ->
         {cross_target, [parallel], [
             cross_target_html_in_native,
             cross_target_native_in_html,
-            cross_target_siblings_compile
+            cross_target_siblings_compile,
+            cross_target_html_in_terminal,
+            cross_target_terminal_in_html
+        ]},
+        %% Terminal (ANSI) render target
+        {terminal, [parallel], [
+            terminal_target_marked,
+            terminal_renders_styled_ansi,
+            terminal_custom_sgr_attr,
+            terminal_fg_attr,
+            terminal_unknown_style_rejected,
+            terminal_unknown_attr_rejected,
+            terminal_event_command_rejected,
+            terminal_dynamic_attr_rejected,
+            terminal_each_renders
         ]},
         %% Tests 108-115: az:html and az:each equivalence tests
         {az_macros, [parallel], [
@@ -4022,3 +4048,170 @@ az_view_composed_id_raises(Config) when is_list(Config) ->
             (_) -> false
         end
     ).
+
+%% ============================================================================
+%% Terminal (ANSI) render target
+%% ============================================================================
+
+cross_target_html_in_terminal(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_html_in_terminal). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal({col, [], ["
+        "        arizona_template:html({'div', [], [arizona_template:get(x, Bindings)]})"
+        "    ]}). ",
+        fun
+            (cross_target_nesting) -> true;
+            (_) -> false
+        end
+    ).
+
+cross_target_terminal_in_html(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_terminal_in_html). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        arizona_template:terminal({line, [], [arizona_template:get(x, Bindings)]})"
+        "    ]}). ",
+        fun
+            (cross_target_nesting) -> true;
+            (_) -> false
+        end
+    ).
+
+terminal_target_marked(Config) when is_list(Config) ->
+    %% A ?terminal template carries `target => terminal`.
+    Mod = compile_module(
+        "-module(pt_term_marked). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal("
+        "        {line, [green], [arizona_template:get(msg, Bindings)]}"
+        "    ). "
+    ),
+    T = Mod:render(#{msg => ~"hi"}),
+    ?assertEqual(terminal, maps:get(target, T)).
+
+terminal_renders_styled_ansi(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_term_styled). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal("
+        "        {col, [], ["
+        "            {line, [green], [arizona_template:get(msg, Bindings)]}"
+        "        ]}"
+        "    ). "
+    ),
+    T = Mod:render(#{msg => ~"hi"}),
+    {Output, _Snap} = arizona_render:render(T),
+    %% green SGR (\e[32m), the dynamic text, then the line's reset+newline
+    %% (\e[0m\n) followed by the col's reset (\e[0m).
+    ?assertEqual(~"\e[32mhi\e[0m\n\e[0m", iolist_to_binary(Output)).
+
+terminal_custom_sgr_attr(Config) when is_list(Config) ->
+    %% {sgr, Escape} emits a raw escape verbatim (escape hatch for custom codes).
+    Mod = compile_module(
+        "-module(pt_term_sgr). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal("
+        "        {text, [{sgr, <<\"\\e[1m\">>}], [arizona_template:get(msg, Bindings)]}"
+        "    ). "
+    ),
+    T = Mod:render(#{msg => ~"x"}),
+    {Output, _Snap} = arizona_render:render(T),
+    ?assertEqual(~"\e[1mx\e[0m", iolist_to_binary(Output)).
+
+terminal_fg_attr(Config) when is_list(Config) ->
+    %% {fg, Index} selects a 256-colour palette entry.
+    Mod = compile_module(
+        "-module(pt_term_fg). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal("
+        "        {text, [{fg, <<\"208\">>}], [arizona_template:get(msg, Bindings)]}"
+        "    ). "
+    ),
+    T = Mod:render(#{msg => ~"x"}),
+    {Output, _Snap} = arizona_render:render(T),
+    ?assertEqual(~"\e[38;5;208mx\e[0m", iolist_to_binary(Output)).
+
+terminal_unknown_style_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_term_bad_style). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal("
+        "        {text, [grween], [arizona_template:get(x, Bindings)]}"
+        "    ). ",
+        fun
+            ({render_reject, _}) -> true;
+            (_) -> false
+        end
+    ).
+
+terminal_unknown_attr_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_term_bad_attr). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal("
+        "        {text, [{class, <<\"box\">>}], [arizona_template:get(x, Bindings)]}"
+        "    ). ",
+        fun
+            ({render_reject, _}) -> true;
+            (_) -> false
+        end
+    ).
+
+terminal_event_command_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_term_bad_cmd). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal("
+        "        {text, [{az_click, arizona_js:push_event(<<\"go\">>)}], "
+        "               [arizona_template:get(x, Bindings)]}"
+        "    ). ",
+        fun
+            ({render_reject, _}) -> true;
+            (_) -> false
+        end
+    ).
+
+terminal_dynamic_attr_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_term_dyn_attr). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal("
+        "        {text, [{fg, arizona_template:get(color, Bindings)}], "
+        "               [arizona_template:get(x, Bindings)]}"
+        "    ). ",
+        fun
+            ({render_reject, _}) -> true;
+            (_) -> false
+        end
+    ).
+
+terminal_each_renders(Config) when is_list(Config) ->
+    %% ?each inside ?terminal compiles each item with the terminal backend and
+    %% renders one ANSI line per list element.
+    Mod = compile_module(
+        "-module(pt_term_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal({col, [], ["
+        "        arizona_template:each("
+        "            fun(Item) -> {line, [], [Item]} end,"
+        "            arizona_template:get(items, Bindings))"
+        "    ]}). "
+    ),
+    T = Mod:render(#{items => [~"a", ~"b"]}),
+    {Output, _Snap} = arizona_render:render(T),
+    Bin = iolist_to_binary(Output),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"a\e[0m\n")),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"b\e[0m\n")).

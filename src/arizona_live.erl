@@ -56,6 +56,8 @@ fingerprints already shipped in the initial HTML.
 -export([send_after/3]).
 -export([mount/1]).
 -export([mount_and_render/1]).
+-export([render_current/1]).
+-export([stop/1]).
 -export([navigate/4]).
 -export([navigate/5]).
 -export([handle_event/4]).
@@ -107,7 +109,7 @@ fingerprints already shipped in the initial HTML.
 %% --------------------------------------------------------------------
 
 -nominal on_mount_hook() ::
-    fun((map(), az:request()) -> map()) | {module(), atom()}.
+    fun((map(), az:request() | undefined) -> map()) | {module(), atom()}.
 -nominal on_mount() :: [on_mount_hook()].
 
 %% Route's static config: the map a router associates with each route
@@ -129,7 +131,7 @@ fingerprints already shipped in the initial HTML.
 -record(state, {
     handler :: module(),
     bindings :: map(),
-    req :: az:request(),
+    req :: az:request() | undefined,
     snapshot :: map() | undefined,
     %% #{ViewId => #{handler, bindings, snapshot}}
     views :: map(),
@@ -201,7 +203,7 @@ when
     InitBindings :: map(),
     TransportPid :: pid() | undefined,
     OnMount :: on_mount(),
-    Req :: az:request().
+    Req :: az:request() | undefined.
 start_link(Handler, InitBindings, TransportPid, OnMount, Req) ->
     %% Capture caller-side logger metadata (typically set by roadrunner
     %% with the per-conn request_id) so any ?LOG_* from inside the
@@ -231,6 +233,36 @@ has `f`) or an HTML binary.
     Pid :: pid().
 mount_and_render(Pid) ->
     gen_server:call(Pid, mount_and_render, infinity).
+
+-doc """
+Re-renders the current view tree to a complete output binary from the
+live process's current bindings and child views.
+
+Unlike `mount_and_render/1` (which returns a fingerprint payload meant for
+client-side diff application), this always materializes the full output --
+intended for transports that repaint the whole view each frame (e.g. a
+terminal renderer) instead of applying diff ops. Because it re-renders
+through `arizona_render:render/2`, it threads the live `views` map and so
+reflects current root *and* nested child state; the freshly produced
+snapshot/views are discarded (read-only render).
+""".
+-spec render_current(Pid) -> {ok, binary()} when
+    Pid :: pid().
+render_current(Pid) ->
+    gen_server:call(Pid, render_current, infinity).
+
+-doc """
+Stops a live process, running its `terminate/2` (and thus `unmount/1`) cleanup.
+
+For transports that manage view lifecycles directly -- e.g. an SSH channel
+closing one terminal session among many in a long-running daemon. The live
+process is linked to its transport, but a transport that stops with reason
+`normal` would not bring the view down via the link, so the transport stops it
+explicitly.
+""".
+-spec stop(Pid) -> ok when Pid :: pid().
+stop(Pid) ->
+    gen_server:stop(Pid).
 
 -doc """
 Dispatches a client event to a view. If `ViewId` matches a nested
@@ -297,7 +329,7 @@ paths in `arizona_render`.
 -spec apply_on_mount(OnMount, Bindings, Req) -> Bindings1 when
     OnMount :: on_mount(),
     Bindings :: map(),
-    Req :: az:request(),
+    Req :: az:request() | undefined,
     Bindings1 :: map().
 apply_on_mount([], Bindings, _Req) ->
     Bindings;
@@ -317,7 +349,7 @@ when
     InitBindings :: map(),
     TransportPid :: pid() | undefined,
     OnMount :: on_mount(),
-    Req :: az:request(),
+    Req :: az:request() | undefined,
     ParentMetadata :: logger:metadata() | undefined.
 init({Handler, InitBindings, TransportPid, OnMount, Req, ParentMetadata}) ->
     proc_lib:set_label({arizona_live, Handler}),
@@ -364,6 +396,10 @@ handle_call(
     {reply, {ok, ViewId, PageContent1}, State#state{
         bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1
     }};
+handle_call(render_current, _From, #state{handler = H, bindings = B, views = V} = State) ->
+    Tmpl = arizona_handler:call_render(H, B),
+    {HTML, _Snap, _Views1} = arizona_render:render(Tmpl, V),
+    {reply, {ok, iolist_to_binary(HTML)}, State};
 handle_call({event, ViewId, Event, Payload}, _From, #state{views = V0} = State) ->
     case V0 of
         #{ViewId := _} ->

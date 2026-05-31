@@ -44,6 +44,9 @@ across upgrades.
   via `?native` for non-browser clients. In-repo Android (Compose), iOS (SwiftUI), and JS
   reference clients consume the same wire, and `arizona_user_agent` lets one view dual-serve HTML
   or native by `User-Agent`. See [docs/native.md](docs/native.md)
+- **Terminal (ANSI) render target** -- the same templates and diff engine also render to an ANSI
+  terminal via `?terminal`, served over a local TTY or SSH; a transport-agnostic session and a
+  pluggable driver model the key map and paint. See [docs/architecture.md](docs/architecture.md)
 
 ## Requirements
 

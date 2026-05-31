@@ -37,6 +37,7 @@
     live_send_to_root/1,
     live_send_unknown_view/1,
     live_inc_then_dec/1,
+    render_current_full_frame/1,
     live_init_bindings/1,
     live_mount/1,
     live_multiple_events/1,
@@ -109,7 +110,8 @@ groups() ->
             live_parent_change_child_stable,
             live_child_then_parent_sync,
             live_counter2_child_event,
-            live_inc_then_dec
+            live_inc_then_dec,
+            render_current_full_frame
         ]},
         {mount_and_render, [parallel], [
             mount_and_render_basic,
@@ -406,6 +408,23 @@ live_inc_then_dec(Config) when is_list(Config) ->
     %% Back to 0, then dec again to -1
     {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"dec">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"-1">>]], Ops).
+
+render_current_full_frame(Config) when is_list(Config) ->
+    %% render_current/1 materializes the whole view from current state with no
+    %% transport and no HTTP -- the foundation a full-repaint renderer drives.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_root_counter, #{}, undefined, [], arizona_req_test_adapter:new()
+    ),
+    {ok, ~"counter"} = arizona_live:mount(Pid),
+    {ok, Frame0} = arizona_live:render_current(Pid),
+    ?assert(is_binary(Frame0)),
+    ?assertNotEqual(nomatch, binary:match(Frame0, ~"<span")),
+    ?assertNotEqual(nomatch, binary:match(Frame0, ~"0")),
+    %% An event updates bindings; a fresh render_current reflects the new frame.
+    {ok, _Ops, _Effects} = arizona_live:handle_event(Pid, ~"counter", ~"inc", #{}),
+    {ok, Frame1} = arizona_live:render_current(Pid),
+    ?assertNotEqual(nomatch, binary:match(Frame1, ~"1")),
+    ?assertNotEqual(Frame0, Frame1).
 
 %% =============================================================================
 %% mount_and_render tests

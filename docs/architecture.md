@@ -2,44 +2,52 @@
 
 ## Source modules
 
-| Module                              | Purpose                                                                                                                                                                   |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/arizona.hrl`                   | Shared header -- op codes, `?EACH` constant, `#stream{}` record                                                                                                           |
-| `src/arizona_template.erl`          | Pure helpers -- binding access (`get/2,3`), dep tracking (`track/1`), descriptor constructors (`stateful/2`, `stateless/2,3`), `each/2`, `to_bin/1`, snapshot utilities   |
-| `src/arizona_eval.erl`              | Template evaluation -- dynamics to snapshots, stateful/stateless child eval, stream/each eval                                                                             |
-| `src/arizona_render.erl`            | Render orchestration (target-aware) -- `render/1,2`, SSR (`render_to_iolist/1,2`, `render_view_to_iolist/3`), `zip/2`, `fingerprint_payload/1`                            |
-| `src/arizona_renderer.erl`          | Render-target backend behaviour -- byte emission + `attr_command/2`; HTML and native JSON backends below                                                                  |
-| `src/arizona_html.erl`              | HTML render backend -- emits HTML statics/attrs (the `?html` target)                                                                                                      |
-| `src/arizona_native.erl`            | Native render backend -- emits a JSON widget tree (the `?native` target); see docs/native.md                                                                              |
-| `src/arizona_diff.erl`              | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                           |
-| `src/arizona_roadrunner_router.erl` | Roadrunner route compilation -- `compile_routes/1,2`, `routes/1,2` (map-shape routes with state under `#{arizona => ...}` namespace)                                      |
-| `src/arizona_effect.erl`            | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                  |
-| `src/arizona_js.erl`                | Web/browser command + effect builders -- `push_event`, `navigate`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`  |
-| `src/arizona_android.erl`           | Native (`?native`) command builders -- the portable `push_event/1,2` and `navigate/1,2`                                                                                   |
-| `src/arizona_stream.erl`            | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`                                                |
-| `src/arizona_stateful.erl`          | Behaviour for embedded components -- `mount/1` callback + `call_mount/2` dispatcher; shared callbacks come from `arizona_handler`                                         |
-| `src/arizona_view.erl`              | Behaviour for route-level pages -- `mount/2` callback taking `(Bindings, Request)` + `call_mount/3` dispatcher; shared callbacks come from `arizona_handler`              |
-| `src/arizona_handler.erl`           | Shared behaviour hosting callbacks common to views and stateful components (`render/1`, `handle_event/3`, `handle_info/2`, `handle_update/2`, `unmount/1`) + dispatchers  |
-| `src/arizona_req.erl`               | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`/`user_agent`, `apply_middlewares/3`, `redirect`/`halted_redirect`            |
-| `src/arizona_user_agent.erl`        | User-Agent classification for dual-serve views -- `browser/1`, `os/1`, `mobile/1` (best-effort); pairs with `arizona_req:user_agent/1`                                    |
-| `src/arizona_http.erl`              | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|redirect\|ok\|error, ...}` tuples                               |
-| `src/arizona_ws.erl`                | Transport-agnostic WS upgrade bootstrap -- `prepare/3` parses framework keys, resolves the route, runs middlewares, returns state for `arizona_socket`                    |
-| `src/arizona_live.erl`              | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                              |
-| `src/arizona_parse_transform.erl`   | Compile-time transform -- `?html`/`?native`, `?each` DSL to `#{s, d, f}` maps, `az-view` auto-injection, `az-nodiff`, attribute compilation, cross-target nesting guard   |
-| `src/arizona_socket.erl`            | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff    |
-| `src/arizona_roadrunner_http.erl`   | Roadrunner HTTP handler -- thin wrapper: delegates to `arizona_http:render/3` and translates results into roadrunner's `{Response, Req}` reply shape                      |
-| `src/arizona_roadrunner_ws.erl`     | Roadrunner WebSocket handler -- dual behaviour (`roadrunner_handler` for upgrade + `roadrunner_ws_handler` for session); delegates to `arizona_ws:prepare/3`              |
-| `src/arizona_roadrunner_static.erl` | Roadrunner static file handler -- returns `{sendfile, ...}` for zero-copy serving with `cache-control: immutable`                                                         |
-| `src/arizona_roadrunner_server.erl` | Roadrunner listener boot -- compiles routes, stashes them for hot reload, validates TLS opts, starts a clear/TLS listener                                                 |
-| `src/arizona_roadrunner_req.erl`    | Roadrunner `arizona_req` adapter -- parsing callbacks plus `resolve_route/3` for SPA navigate; populates `request_id` from roadrunner                                     |
-| `src/arizona_roadrunner_reload.erl` | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                     |
-| `src/arizona_error_page.erl`        | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                  |
-| `src/arizona_app.erl`               | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches the roadrunner listener                                                          |
-| `src/arizona_watcher.erl`           | File watcher gen_server -- subscribes to `fs` events, debounces, calls callback, broadcasts via `arizona_pubsub`                                                          |
-| `src/arizona_reloader.erl`          | Dev-mode hot reloader -- recompiles changed `.erl` files, broadcasts reload messages on the `arizona_reloader` pubsub topic                                               |
-| `src/arizona_pubsub.erl`            | PubSub -- thin `pg` wrapper for cross-view communication                                                                                                                  |
-| `src/arizona_sup.erl`               | Supervisor -- always starts `arizona_pubsub`; additionally starts one `arizona_watcher` per configured reloader rule                                                      |
-| `src/az.erl`                        | User-facing facade -- shared type aliases and short-form helpers re-exported from internal modules                                                                        |
+| Module                                    | Purpose                                                                                                                                                                                   |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/arizona.hrl`                         | Shared header -- op codes, `?EACH` constant, `#stream{}` record                                                                                                                           |
+| `src/arizona_template.erl`                | Pure helpers -- binding access (`get/2,3`), dep tracking (`track/1`), descriptor constructors (`stateful/2`, `stateless/2,3`), `each/2`, `to_bin/1`, snapshot utilities                   |
+| `src/arizona_eval.erl`                    | Template evaluation -- dynamics to snapshots, stateful/stateless child eval, stream/each eval                                                                                             |
+| `src/arizona_render.erl`                  | Render orchestration (target-aware) -- `render/1,2`, SSR (`render_to_iolist/1,2`, `render_view_to_iolist/3`), `zip/2`, `fingerprint_payload/1`                                            |
+| `src/arizona_renderer.erl`                | Render-target backend behaviour -- byte emission + `attr_command/2`; HTML and native JSON backends below                                                                                  |
+| `src/arizona_html.erl`                    | HTML render backend -- emits HTML statics/attrs (the `?html` target)                                                                                                                      |
+| `src/arizona_native.erl`                  | Native render backend -- emits a JSON widget tree (the `?native` target); see docs/native.md                                                                                              |
+| `src/arizona_terminal.erl`                | Terminal render backend -- emits text + ANSI escapes (the `?terminal` target); vocabulary in "Terminal render target" below                                                               |
+| `src/arizona_terminal_session.erl`        | Transport-agnostic orchestrator for `?terminal` views -- mounts, dispatches key/push events, repaints; parameterized by a driver module + an output fun                                   |
+| `src/arizona_terminal_driver.erl`         | Terminal UX-policy behaviour -- `init/1`, `keys/2`, `paint/3`, `setup/1`, `teardown/1` (all optional; defaults in `arizona_terminal_default_driver`)                                      |
+| `src/arizona_terminal_default_driver.erl` | Default `arizona_terminal_driver` -- idiomatic key events, Ctrl-D quits, cursor hide/show, non-flickering repaint, quit/set_title/bell effects; the session falls back to it per callback |
+| `src/arizona_terminal_io.erl`             | Low-level terminal byte helpers -- `keys/1` decodes a raw input read into idiomatic keys (the input complement to OTP's output-only `io_ansi`)                                            |
+| `src/arizona_terminal_effect.erl`         | Framework terminal effect builders -- `quit/0`, `set_title/1`, `bell/0` (the `?terminal` analog of `arizona_js` / `arizona_android`)                                                      |
+| `src/arizona_terminal_tty.erl`            | Local TTY transport -- raw-mode `shell:start_interactive`, a blocking input reader, `io:put_chars` as the output                                                                          |
+| `src/arizona_terminal_ssh.erl`            | SSH transport -- serves a `?terminal` view over an `ssh_server_channel` (pty-req, window-change), one live view per connection                                                            |
+| `src/arizona_diff.erl`                    | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                                           |
+| `src/arizona_roadrunner_router.erl`       | Roadrunner route compilation -- `compile_routes/1,2`, `routes/1,2` (map-shape routes with state under `#{arizona => ...}` namespace)                                                      |
+| `src/arizona_effect.erl`                  | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                                  |
+| `src/arizona_js.erl`                      | Web/browser command + effect builders -- `push_event`, `navigate`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`                  |
+| `src/arizona_android.erl`                 | Native (`?native`) command builders -- the portable `push_event/1,2` and `navigate/1,2`                                                                                                   |
+| `src/arizona_stream.erl`                  | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`                                                                |
+| `src/arizona_stateful.erl`                | Behaviour for embedded components -- `mount/1` callback + `call_mount/2` dispatcher; shared callbacks come from `arizona_handler`                                                         |
+| `src/arizona_view.erl`                    | Behaviour for route-level pages -- `mount/2` callback taking `(Bindings, Request)` + `call_mount/3` dispatcher; shared callbacks come from `arizona_handler`                              |
+| `src/arizona_handler.erl`                 | Shared behaviour hosting callbacks common to views and stateful components (`render/1`, `handle_event/3`, `handle_info/2`, `handle_update/2`, `unmount/1`) + dispatchers                  |
+| `src/arizona_req.erl`                     | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`/`user_agent`, `apply_middlewares/3`, `redirect`/`halted_redirect`                            |
+| `src/arizona_user_agent.erl`              | User-Agent classification for dual-serve views -- `browser/1`, `os/1`, `mobile/1` (best-effort); pairs with `arizona_req:user_agent/1`                                                    |
+| `src/arizona_http.erl`                    | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|redirect\|ok\|error, ...}` tuples                                               |
+| `src/arizona_ws.erl`                      | Transport-agnostic WS upgrade bootstrap -- `prepare/3` parses framework keys, resolves the route, runs middlewares, returns state for `arizona_socket`                                    |
+| `src/arizona_live.erl`                    | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                                              |
+| `src/arizona_parse_transform.erl`         | Compile-time transform -- `?html`/`?native`, `?each` DSL to `#{s, d, f}` maps, `az-view` auto-injection, `az-nodiff`, attribute compilation, cross-target nesting guard                   |
+| `src/arizona_socket.erl`                  | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff                    |
+| `src/arizona_roadrunner_http.erl`         | Roadrunner HTTP handler -- thin wrapper: delegates to `arizona_http:render/3` and translates results into roadrunner's `{Response, Req}` reply shape                                      |
+| `src/arizona_roadrunner_ws.erl`           | Roadrunner WebSocket handler -- dual behaviour (`roadrunner_handler` for upgrade + `roadrunner_ws_handler` for session); delegates to `arizona_ws:prepare/3`                              |
+| `src/arizona_roadrunner_static.erl`       | Roadrunner static file handler -- returns `{sendfile, ...}` for zero-copy serving with `cache-control: immutable`                                                                         |
+| `src/arizona_roadrunner_server.erl`       | Roadrunner listener boot -- compiles routes, stashes them for hot reload, validates TLS opts, starts a clear/TLS listener                                                                 |
+| `src/arizona_roadrunner_req.erl`          | Roadrunner `arizona_req` adapter -- parsing callbacks plus `resolve_route/3` for SPA navigate; populates `request_id` from roadrunner                                                     |
+| `src/arizona_roadrunner_reload.erl`       | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                                     |
+| `src/arizona_error_page.erl`              | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                                  |
+| `src/arizona_app.erl`                     | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches the roadrunner listener                                                                          |
+| `src/arizona_watcher.erl`                 | File watcher gen_server -- subscribes to `fs` events, debounces, calls callback, broadcasts via `arizona_pubsub`                                                                          |
+| `src/arizona_reloader.erl`                | Dev-mode hot reloader -- recompiles changed `.erl` files, broadcasts reload messages on the `arizona_reloader` pubsub topic                                                               |
+| `src/arizona_pubsub.erl`                  | PubSub -- thin `pg` wrapper for cross-view communication                                                                                                                                  |
+| `src/arizona_sup.erl`                     | Supervisor -- always starts `arizona_pubsub`; additionally starts one `arizona_watcher` per configured reloader rule                                                                      |
+| `src/az.erl`                              | User-facing facade -- shared type aliases and short-form helpers re-exported from internal modules                                                                                        |
 
 ## API -- `arizona_template.erl`
 
@@ -74,6 +82,78 @@ HTML output and rendering.
 - `resolve_id/1` -- resolves a binary id (passthrough) or a `#{s, d}` template (renders to binary)
 - `zip/2` -- interleave statics and evaluated dynamics into iolist
 - `fingerprint_payload/1` -- convert a snapshot to fingerprint wire format
+
+## Terminal render target -- `?terminal`
+
+`?terminal(Elems)` renders a view to ANSI text instead of HTML or JSON. The backend
+is `arizona_terminal` (an `arizona_renderer`), the sibling of `arizona_html` and
+`arizona_native`. Its transport **repaints the whole frame** on every update
+(`arizona_live:render_current/1`) rather than applying diff ops, so the backend
+writes **no `az`/slot markers** -- the diff engine's ops are computed but ignored.
+
+### Elements
+
+| Tag             | Emits                                                          |
+| --------------- | -------------------------------------------------------------- |
+| `line`          | its content, a style reset, then a newline -- one terminal row |
+| `col` / `row`   | its content, then a style reset -- a transparent container     |
+| `text` / `span` | its content, then a style reset -- inline, no newline          |
+| `br`            | a void element emitting a newline                              |
+
+Only `line` (newline) and `br` (void newline) affect layout; `col`, `row`, `text`,
+and `span` are behaviorally identical (open emits nothing, close emits a style
+reset) -- the names are documentary. So **vertical layout is a `col` of `line`s**,
+and horizontal is several `text`/`span` inside one `line`.
+
+### Styling
+
+Set styles with **bare-atom boolean attributes** mapped to `io_ansi` escapes:
+`bold`, `dim`, `italic`, `underline`, `inverse`, and the colours
+`black`/`red`/`green`/`yellow`/`blue`/`magenta`/`cyan`/`white` plus their `light_*`
+variants. For anything the atoms don't cover, use a valued attribute: `{sgr, Escape}`
+(a raw escape, verbatim), `{fg, Index}` / `{bg, Index}` (256-colour palette by
+index). Styles **do not inherit** across containers (every element resets on close),
+so put the style on the `line`/`text` that needs it. An unknown style atom, an
+unknown valued attribute, a dynamic attribute value, or an event-command attribute
+is **rejected at compile time**, not silently dropped.
+
+```erlang
+render(Bindings) ->
+    ?terminal(
+        {col, [], [
+            {line, [bold, green], [~"== Title =="]},
+            {line, [], [~"plain ", {span, [yellow], [~"highlighted"]}, ~" tail"]},
+            {line, [{fg, ~"208"}], [~"256-colour orange"]}
+        ]}
+    ).
+```
+
+**Conditional rows:** a `case` returning a bare element tuple reaches the diff as a
+dynamic value and crashes `arizona_template:to_bin/1`. Render a 0-or-1 element with
+`?each` over a list instead:
+
+```erlang
+?each(fun(Msg) -> {line, [yellow], [Msg]} end, status_rows(?get(mode)))
+```
+
+### Running a `?terminal` view
+
+`arizona_terminal_session` is the transport-agnostic core: it mounts the view, turns
+input into `arizona_live:handle_event/4` calls, and repaints. It is parameterized by
+a **driver** (`arizona_terminal_driver` -- the key map, paint model, and screen
+setup/teardown, with defaults in `arizona_terminal_default_driver` that the session
+falls back to per callback) and an output fun. Two transports drive it:
+`arizona_terminal_tty` (a local raw-mode TTY) and `arizona_terminal_ssh` (a view served over
+SSH). `arizona_terminal_io:keys/1` decodes a raw input read into idiomatic keys
+(char codes, atoms like `up`/`enter`, `{ctrl, _}` / `{alt, _}`) for drivers to match
+on.
+
+A view drives the terminal back with **effects** from `arizona_terminal_effect` (the
+`?terminal` analog of `arizona_js` / `arizona_android`): `quit/0` stops the session,
+`set_title/1` sets the terminal title, `bell/0` rings it. The default driver's
+`paint/3` interprets these and repaints in place (no full-screen clear, so no
+flicker). Effects tied to a specific paint model (e.g. a scrolling log above a pinned
+block) stay the concern of a custom driver, like the demo's.
 
 ## API -- `arizona_diff.erl`
 
@@ -240,11 +320,11 @@ SSR render and diff-skip reuse the whole-value attribute path unchanged.
 Updating (event attributes / handler effects via `arizona_js`; never sent to the server --
 op `?EFFECT_SET_LOCAL`):
 
-| Builder | Scope |
-| --- | --- |
-| `arizona_js:set(Key, Value)` | closest view of the trigger (markup-only) |
-| `arizona_js:set(ViewId, Key, Value)` | a named view |
-| `arizona_js:set_all(Key, Value)` | every view (document-wide) |
+| Builder                              | Scope                                     |
+| ------------------------------------ | ----------------------------------------- |
+| `arizona_js:set(Key, Value)`         | closest view of the trigger (markup-only) |
+| `arizona_js:set(ViewId, Key, Value)` | a named view                              |
+| `arizona_js:set_all(Key, Value)`     | every view (document-wide)                |
 
 As a **handler effect** (returned from `handle_event`/`handle_info`), use `set/3` or
 `set_all/2`: the closest-view `set/2` resolves against the trigger element, which a handler

@@ -16,7 +16,8 @@
     empty_group/1,
     subscriber_cleanup/1,
     message_ordering/1,
-    duplicate_join/1
+    duplicate_join/1,
+    monitor_reports_join_and_leave/1
 ]).
 
 all() ->
@@ -33,7 +34,8 @@ groups() ->
             empty_group,
             subscriber_cleanup,
             message_ordering,
-            duplicate_join
+            duplicate_join,
+            monitor_reports_join_and_leave
         ]}
     ].
 
@@ -172,6 +174,34 @@ duplicate_join(Config) when is_list(Config) ->
     timer:sleep(50),
     %% Should have received exactly one copy.
     ?assertEqual([], flush()).
+
+monitor_reports_join_and_leave(Config) when is_list(Config) ->
+    Channel = monitor_test_channel,
+    {Ref, _Members} = arizona_pubsub:monitor(Channel),
+    Self = self(),
+    Helper = spawn(fun() ->
+        ok = arizona_pubsub:subscribe(Channel, self()),
+        Self ! ready,
+        receive
+            stop -> ok
+        after 5000 -> exit(timeout)
+        end
+    end),
+    receive
+        ready -> ok
+    after 1000 -> ct:fail(helper_not_ready)
+    end,
+    %% A subscriber joining fires a join with its pid.
+    receive
+        {Ref, join, Channel, [Helper]} -> ok
+    after 1000 -> ct:fail(no_join)
+    end,
+    %% The subscriber leaving (here, its process exiting) fires a leave.
+    Helper ! stop,
+    receive
+        {Ref, leave, Channel, [Helper]} -> ok
+    after 1000 -> ct:fail(no_leave)
+    end.
 
 %% Helpers
 

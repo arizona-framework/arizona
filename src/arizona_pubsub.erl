@@ -33,12 +33,13 @@ ok
 -export([broadcast/2]).
 -export([broadcast_from/3]).
 -export([subscribers/1]).
+-export([monitor/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([start_link/0, unsubscribe/2, broadcast_from/3, subscribers/1]).
+-ignore_xref([start_link/0, unsubscribe/2, broadcast_from/3, subscribers/1, monitor/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -134,3 +135,17 @@ Returns the list of pids currently subscribed to `Channel`.
     Channel :: channel().
 subscribers(Channel) ->
     pg:get_members(?MODULE, Channel).
+
+-doc """
+Subscribes the caller to membership changes on `Channel`. It begins receiving
+`{Ref, join, Channel, Pids}` and `{Ref, leave, Channel, Pids}` messages as pids
+join or leave -- a leave fires on a subscriber's process death too -- and returns
+the monitor reference plus the current members. The monitor is removed
+automatically when the caller exits.
+
+Useful for presence, e.g. a view that shows a live count of connected peers.
+""".
+-spec monitor(Channel) -> {reference(), [pid()]} when
+    Channel :: channel().
+monitor(Channel) ->
+    pg:monitor(?MODULE, Channel).
