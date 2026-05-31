@@ -11,6 +11,13 @@
 | `src/arizona_renderer.erl`          | Render-target backend behaviour -- byte emission + `attr_command/2`; HTML and native JSON backends below                                                                  |
 | `src/arizona_html.erl`              | HTML render backend -- emits HTML statics/attrs (the `?html` target)                                                                                                      |
 | `src/arizona_native.erl`            | Native render backend -- emits a JSON widget tree (the `?native` target); see docs/native.md                                                                              |
+| `src/arizona_terminal.erl`          | Terminal render backend -- emits text + ANSI escapes (the `?terminal` target); vocabulary in "Terminal render target" below                                               |
+| `src/arizona_terminal_session.erl`  | Transport-agnostic orchestrator for `?terminal` views -- mounts, dispatches key/push events, repaints; parameterized by a driver module + an output fun                   |
+| `src/arizona_terminal_driver.erl`   | Terminal UX-policy behaviour -- `init/1`, `keys/2`, `paint/3`, `setup/1`, `teardown/1` (all optional; defaults in `arizona_terminal_default_driver`)                       |
+| `src/arizona_terminal_default_driver.erl` | Default `arizona_terminal_driver` -- idiomatic key events, Ctrl-D quits, cursor hide/show, clear-and-repaint paint; the session falls back to it per callback        |
+| `src/arizona_terminal_io.erl`       | Low-level terminal byte helpers -- `keys/1` decodes a raw input read into idiomatic keys (the input complement to OTP's output-only `io_ansi`)                             |
+| `src/arizona_terminal_app.erl`      | Local TTY transport -- raw-mode `shell:start_interactive`, a blocking input reader, `io:put_chars` as the output                                                           |
+| `src/arizona_ssh.erl`               | SSH transport -- serves a `?terminal` view over an `ssh_server_channel` (pty-req, window-change), one live view per connection                                            |
 | `src/arizona_diff.erl`              | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                           |
 | `src/arizona_roadrunner_router.erl` | Roadrunner route compilation -- `compile_routes/1,2`, `routes/1,2` (map-shape routes with state under `#{arizona => ...}` namespace)                                      |
 | `src/arizona_effect.erl`            | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                  |
@@ -74,6 +81,71 @@ HTML output and rendering.
 - `resolve_id/1` -- resolves a binary id (passthrough) or a `#{s, d}` template (renders to binary)
 - `zip/2` -- interleave statics and evaluated dynamics into iolist
 - `fingerprint_payload/1` -- convert a snapshot to fingerprint wire format
+
+## Terminal render target -- `?terminal`
+
+`?terminal(Elems)` renders a view to ANSI text instead of HTML or JSON. The backend
+is `arizona_terminal` (an `arizona_renderer`), the sibling of `arizona_html` and
+`arizona_native`. Its transport **repaints the whole frame** on every update
+(`arizona_live:render_current/1`) rather than applying diff ops, so the backend
+writes **no `az`/slot markers** -- the diff engine's ops are computed but ignored.
+
+### Elements
+
+| Tag | Emits |
+|-----|-------|
+| `line` | its content, a style reset, then a newline -- one terminal row |
+| `col` / `row` | its content, then a style reset -- a transparent container |
+| `text` / `span` | its content, then a style reset -- inline, no newline |
+| `br` | a void element emitting a newline |
+
+Only `line` (newline) and `br` (void newline) affect layout; `col`, `row`, `text`,
+and `span` are behaviorally identical (open emits nothing, close emits a style
+reset) -- the names are documentary. So **vertical layout is a `col` of `line`s**,
+and horizontal is several `text`/`span` inside one `line`.
+
+### Styling
+
+Set styles with **bare-atom boolean attributes** mapped to `io_ansi` escapes:
+`bold`, `dim`, `italic`, `underline`, `inverse`, and the colours
+`black`/`red`/`green`/`yellow`/`blue`/`magenta`/`cyan`/`white` plus their `light_*`
+variants. For anything the atoms don't cover, use a valued attribute: `{sgr, Escape}`
+(a raw escape, verbatim), `{fg, Index}` / `{bg, Index}` (256-colour palette by
+index). Styles **do not inherit** across containers (every element resets on close),
+so put the style on the `line`/`text` that needs it. An unknown style atom, an
+unknown valued attribute, a dynamic attribute value, or an event-command attribute
+is **rejected at compile time**, not silently dropped.
+
+```erlang
+render(Bindings) ->
+    ?terminal(
+        {col, [], [
+            {line, [bold, green], [~"== Title =="]},
+            {line, [], [~"plain ", {span, [yellow], [~"highlighted"]}, ~" tail"]},
+            {line, [{fg, ~"208"}], [~"256-colour orange"]}
+        ]}
+    ).
+```
+
+**Conditional rows:** a `case` returning a bare element tuple reaches the diff as a
+dynamic value and crashes `arizona_template:to_bin/1`. Render a 0-or-1 element with
+`?each` over a list instead:
+
+```erlang
+?each(fun(Msg) -> {line, [yellow], [Msg]} end, status_rows(?get(mode)))
+```
+
+### Running a `?terminal` view
+
+`arizona_terminal_session` is the transport-agnostic core: it mounts the view, turns
+input into `arizona_live:handle_event/4` calls, and repaints. It is parameterized by
+a **driver** (`arizona_terminal_driver` -- the key map, paint model, and screen
+setup/teardown, with defaults in `arizona_terminal_default_driver` that the session
+falls back to per callback) and an output fun. Two transports drive it:
+`arizona_terminal_app` (a local raw-mode TTY) and `arizona_ssh` (a view served over
+SSH). `arizona_terminal_io:keys/1` decodes a raw input read into idiomatic keys
+(char codes, atoms like `up`/`enter`, `{ctrl, _}` / `{alt, _}`) for drivers to match
+on.
 
 ## API -- `arizona_diff.erl`
 

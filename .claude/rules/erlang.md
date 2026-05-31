@@ -134,6 +134,7 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?get(Key, Default)` | `arizona_template:get(Key, Bindings, Default)` |
 | `?get_lazy(Key, Fun)` | `arizona_template:get_lazy(Key, Bindings, Fun)` |
 | `?html(Elems)` | `arizona_template:html(Elems)` |
+| `?terminal(Elems)` | `arizona_template:terminal(Elems)` -- ANSI render target; tags `line`/`col`/`row`/`text`/`span`/`br` + bare-atom style attrs (see docs/architecture.md "Terminal render target") |
 | `?each(Fun, Source)` | `arizona_template:each(Fun, Source)` -- 1-arg for lists, 2-arg for streams/maps |
 | `?stateful(Handler, Props)` | `arizona_template:stateful(Handler, Props)` |
 | `?stateless(Fun, Props)` | `arizona_template:stateless(fun Fun/1, Props)` |
