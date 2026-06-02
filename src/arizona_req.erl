@@ -62,6 +62,8 @@ or `{halt, Request}`. The runner stops on the first halt.
 -export([user_agent/1]).
 -export([body/1]).
 -export([apply_middlewares/3]).
+-export([extract/1]).
+-export([put_request/2]).
 -export([call_resolve_route/4]).
 -export([redirect/2]).
 -export([redirect/3]).
@@ -84,6 +86,8 @@ or `{halt, Request}`. The runner stops on the first halt.
 -ignore_xref([redirect/2]).
 -ignore_xref([redirect/3]).
 -ignore_xref([halted_redirect/1]).
+-ignore_xref([extract/1]).
+-ignore_xref([put_request/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -101,6 +105,7 @@ or `{halt, Request}`. The runner stops on the first halt.
 -export_type([body/0]).
 -export_type([middleware/0]).
 -export_type([middleware_result/0]).
+-export_type([extract_key/0]).
 -export_type([redirect_status/0]).
 -export_type([qs/0]).
 
@@ -135,6 +140,11 @@ or `{halt, Request}`. The runner stops on the first halt.
 -nominal middleware() ::
     fun((request(), az:bindings()) -> middleware_result()) | {module(), atom()}.
 -nominal middleware_result() :: {cont, request(), az:bindings()} | {halt, request()}.
+
+%% Keys accepted by `extract/1`; each copies one piece of the request into
+%% bindings (see the function doc).
+-nominal extract_key() ::
+    path_bindings | params | headers | cookies | body | method | user_agent.
 
 %% HTTP redirect status codes (RFC 9110 §15.4). The most common are
 %% 301 (moved permanently), 302 (found), 303 (see other), 307
@@ -313,6 +323,43 @@ apply_middlewares([Mw | Rest], Req, Bindings) ->
         {halt, _Req1} = Halt -> Halt
     end.
 
+-doc """
+Builds a middleware that copies selected request data into bindings, so a
+`mount/1` handler can read it with `?get(Key)` without touching the request.
+
+Each key targets a binding:
+
+- `path_bindings` -- route path bindings merged into the bindings map (so
+  `/users/:id` is read as `?get(<<"id">>)`)
+- `params` / `headers` / `cookies` / `body` / `method` / `user_agent` --
+  stored under the same-named key
+
+```erlang
+#{middlewares => [arizona_req:extract([path_bindings, params])]}
+```
+""".
+-spec extract(Keys) -> middleware() when Keys :: [extract_key()].
+extract(Keys) ->
+    fun(Req, Bindings) ->
+        {Req1, Bindings1} = lists:foldl(fun extract_into/2, {Req, Bindings}, Keys),
+        {cont, Req1, Bindings1}
+    end.
+
+-doc """
+Middleware that exposes the whole request to a handler under the `request`
+binding (read with `?get(request)`).
+
+The escape hatch for a handler that needs lazy access to many request fields;
+it couples that handler to HTTP. Prefer `extract/1` for specific data.
+
+```erlang
+#{middlewares => [{arizona_req, put_request}]}
+```
+""".
+-spec put_request(request(), az:bindings()) -> middleware_result().
+put_request(Req, Bindings) ->
+    {cont, Req, Bindings#{request => Req}}.
+
 %% Internal use only -- invoked by `arizona_socket:handle_navigate/3`
 %% and `arizona_ws:prepare/3`. Crashes with `undef` if `Adapter` did
 %% not implement the optional `resolve_route/3` callback.
@@ -370,3 +417,27 @@ halted_redirect(_) -> undefined.
 
 call({Mod, Fun}, Req, Bindings) -> Mod:Fun(Req, Bindings);
 call(Fun, Req, Bindings) -> Fun(Req, Bindings).
+
+%% One step of `extract/1`'s fold: copy the keyed request datum into bindings,
+%% threading the lazy request forward. `path_bindings` spreads the path-binding
+%% map; the rest land under their key; `method` is eager (no request update).
+extract_into(path_bindings, {Req, Bindings}) ->
+    {PathBindings, Req1} = bindings(Req),
+    {Req1, maps:merge(Bindings, PathBindings)};
+extract_into(params, {Req, Bindings}) ->
+    {Params, Req1} = params(Req),
+    {Req1, Bindings#{params => Params}};
+extract_into(headers, {Req, Bindings}) ->
+    {Headers, Req1} = headers(Req),
+    {Req1, Bindings#{headers => Headers}};
+extract_into(cookies, {Req, Bindings}) ->
+    {Cookies, Req1} = cookies(Req),
+    {Req1, Bindings#{cookies => Cookies}};
+extract_into(body, {Req, Bindings}) ->
+    {Body, Req1} = body(Req),
+    {Req1, Bindings#{body => Body}};
+extract_into(user_agent, {Req, Bindings}) ->
+    {UserAgent, Req1} = user_agent(Req),
+    {Req1, Bindings#{user_agent => UserAgent}};
+extract_into(method, {Req, Bindings}) ->
+    {Req, Bindings#{method => method(Req)}}.

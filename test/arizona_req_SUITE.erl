@@ -21,6 +21,10 @@
 -export([apply_middlewares_cont_mf/1]).
 -export([apply_middlewares_halt_stops_pipeline/1]).
 -export([apply_middlewares_threads_bindings/1]).
+-export([extract_path_bindings_merges_into_bindings/1]).
+-export([extract_named_keys/1]).
+-export([extract_is_usable_as_middleware/1]).
+-export([put_request_exposes_request_binding/1]).
 -export([call_resolve_route_dispatches_to_adapter/1]).
 
 %% Exported for use via {?MODULE, Fun} in apply_middlewares_cont_mf.
@@ -50,7 +54,11 @@ groups() ->
             apply_middlewares_halt_fun,
             apply_middlewares_cont_mf,
             apply_middlewares_halt_stops_pipeline,
-            apply_middlewares_threads_bindings
+            apply_middlewares_threads_bindings,
+            extract_path_bindings_merges_into_bindings,
+            extract_named_keys,
+            extract_is_usable_as_middleware,
+            put_request_exposes_request_binding
         ]},
         {resolve_route, [parallel], [
             call_resolve_route_dispatches_to_adapter
@@ -194,6 +202,48 @@ apply_middlewares_threads_bindings(Config) when is_list(Config) ->
     ?assertEqual(
         {cont, Req, #{a => 1, b => 2}},
         arizona_req:apply_middlewares(Mw, Req, #{})
+    ).
+
+%% --------------------------------------------------------------------
+%% extract/1 and put_request/2 -- request data into bindings
+%% --------------------------------------------------------------------
+
+extract_path_bindings_merges_into_bindings(Config) when is_list(Config) ->
+    %% path_bindings spreads the route's path bindings into the bindings map
+    %% (so a handler reads `?get(<<"item_id">>)`), leaving existing keys intact.
+    Req = arizona_req_test_adapter:new(#{bindings => #{~"item_id" => ~"42"}}),
+    Mw = arizona_req:extract([path_bindings]),
+    {cont, _Req1, Bindings} = Mw(Req, #{kept => yes}),
+    ?assertEqual(~"42", maps:get(~"item_id", Bindings)),
+    ?assertEqual(yes, maps:get(kept, Bindings)).
+
+extract_named_keys(Config) when is_list(Config) ->
+    %% Non-path keys land under their own name; `method` is eager.
+    Req = arizona_req_test_adapter:new(#{
+        params => [{~"locale", ~"pt"}],
+        headers => #{~"host" => ~"example.com"}
+    }),
+    Mw = arizona_req:extract([params, headers, method]),
+    {cont, _Req1, Bindings} = Mw(Req, #{}),
+    ?assertEqual([{~"locale", ~"pt"}], maps:get(params, Bindings)),
+    ?assertEqual(#{~"host" => ~"example.com"}, maps:get(headers, Bindings)),
+    ?assertEqual(~"GET", maps:get(method, Bindings)).
+
+extract_is_usable_as_middleware(Config) when is_list(Config) ->
+    %% The closure extract/1 returns drops straight into a middleware list.
+    Req = arizona_req_test_adapter:new(#{params => [{~"q", ~"1"}]}),
+    {cont, _Req1, Bindings} = arizona_req:apply_middlewares(
+        [arizona_req:extract([params])], Req, #{}
+    ),
+    ?assertEqual([{~"q", ~"1"}], maps:get(params, Bindings)).
+
+put_request_exposes_request_binding(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{}),
+    ?assertEqual({cont, Req, #{request => Req}}, arizona_req:put_request(Req, #{})),
+    %% Usable as a {Module, Function} middleware.
+    ?assertEqual(
+        {cont, Req, #{request => Req}},
+        arizona_req:apply_middlewares([{arizona_req, put_request}], Req, #{})
     ).
 
 %% --------------------------------------------------------------------
