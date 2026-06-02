@@ -36,7 +36,10 @@ start() ->
             bindings => #{title => <<"App">>},
             layouts => Layouts
         }},
-        {live, <<"/crashable">>, arizona_crashable, #{layouts => Layouts}},
+        {live, <<"/crashable">>, arizona_crashable, #{
+            layouts => Layouts,
+            middlewares => [arizona_req:extract([params])]
+        }},
         {live, <<"/scroll-home">>, arizona_scroll_home, #{layouts => Layouts}},
         {live, <<"/scroll-about">>, arizona_scroll_about, #{layouts => Layouts}},
         {live, <<"/navigate-halt">>, arizona_navigate_halt, #{layouts => Layouts}},
