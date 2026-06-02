@@ -112,16 +112,9 @@ init_per_group(roadrunner, Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     {ok, _} = application:ensure_all_started(roadrunner),
     Port = pick_port(),
-    %% Test-only URL -> Bindings middleware. Tests that assert on URL
-    %% data in rendered HTML opt into this on their routes; the
-    %% framework itself no longer flat-merges URL data into bindings.
-    UrlToBindings =
-        fun(Req, B) ->
-            {PathBs, Req1} = arizona_req:bindings(Req),
-            {Params, Req2} = arizona_req:params(Req1),
-            ParamsMap = maps:from_list(Params),
-            {cont, Req2, maps:merge(maps:merge(B, PathBs), ParamsMap)}
-        end,
+    %% Tests that assert on URL data in rendered HTML opt into the framework's
+    %% `arizona_req:extract/1` middleware on their routes; the framework itself
+    %% never flat-merges URL data into bindings.
     %% Projects every `foo=X` occurrence -- preserving duplicates and
     %% insertion order -- into the `status` binding so assertions can
     %% read them off the rendered HTML. Used to verify that the full qs
@@ -134,7 +127,9 @@ init_per_group(roadrunner, Config) ->
             {cont, Req1, B#{status => <<"foo=[", Joined/binary, "]">>}}
         end,
     Routes = [
-        {live, <<"/">>, arizona_crashable, #{middlewares => [UrlToBindings]}},
+        {live, <<"/">>, arizona_crashable, #{
+            middlewares => [arizona_req:extract([path_bindings, params])]
+        }},
         {live, <<"/crash_on_mount">>, arizona_crashable, #{
             bindings => #{crash_on_mount => true}
         }},
@@ -166,7 +161,9 @@ init_per_group(roadrunner, Config) ->
                 fun(Req, B) -> {cont, Req, B#{session => <<"from_navigate">>}} end
             ]
         }},
-        {live, <<"/items/:item_id">>, arizona_crashable, #{middlewares => [UrlToBindings]}},
+        {live, <<"/items/:item_id">>, arizona_crashable, #{
+            middlewares => [arizona_req:extract([path_bindings, params])]
+        }},
         {live, <<"/preserves_dupes">>, arizona_crashable, #{middlewares => [DupePreserving]}},
         {live, <<"/halt_redirect_req">>, arizona_crashable, #{
             middlewares => [
