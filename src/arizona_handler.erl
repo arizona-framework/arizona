@@ -6,11 +6,10 @@ Shared behaviour for callbacks common to `arizona_stateful` and
 Declares the lifecycle callbacks that both a stateful component and
 a route-level view implement identically: `render/1` (required) plus
 the optional `handle_event/3`, `handle_info/2`, and `unmount/1`.
-Mount-specific callbacks live in the specialized behaviour modules
-because their signatures differ (`mount/1` for stateful,
-`mount/2` for view). Parent-update interception
-(`handle_update/2`) lives in `arizona_stateful` because views don't
-receive it.
+Mount-specific callbacks live in the specialized behaviour modules:
+both `arizona_stateful` and `arizona_view` declare `mount/1`.
+Parent-update interception (`handle_update/2`) lives in
+`arizona_stateful` because views don't receive it.
 
 User modules declare both behaviours via the headers:
 
