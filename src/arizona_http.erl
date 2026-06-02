@@ -73,8 +73,8 @@ render(Handler, ArzReq, Opts) ->
                 {Status, Location} -> {redirect, Status, Location};
                 undefined -> {halt, arizona_req:raw(HaltReq)}
             end;
-        {cont, ArzReq1, Bindings1} ->
-            do_render(Handler, ArzReq1, Bindings1, Opts)
+        {cont, _ArzReq1, Bindings1} ->
+            do_render(Handler, Bindings1, Opts)
     end.
 
 %% --------------------------------------------------------------------
@@ -86,7 +86,7 @@ render(Handler, ArzReq, Opts) ->
 reload_url() ->
     persistent_term:get(arizona_reload_url, undefined).
 
-do_render(H, ArzReq, Bindings, Opts) ->
+do_render(H, Bindings, Opts) ->
     case arizona_reloader:get_error() of
         undefined ->
             try
@@ -95,7 +95,7 @@ do_render(H, ArzReq, Bindings, Opts) ->
                     layouts => maps:get(layouts, Opts, []),
                     on_mount => maps:get(on_mount, Opts, [])
                 },
-                Page = arizona_render:render_view_to_iolist(H, ArzReq, RenderOpts),
+                Page = arizona_render:render_view_to_iolist(H, RenderOpts),
                 {ok, 200, Page}
             catch
                 Class:Reason:Stacktrace ->

@@ -177,8 +177,7 @@ the first render produces non-empty output before timing.
     Runs :: pos_integer(),
     Stats :: map().
 run_view_render_workload(Module, Opts, Runs) ->
-    Req = arizona_req_test_adapter:new(),
-    Sample = arizona_render:render_view_to_iolist(Module, Req, Opts),
+    Sample = arizona_render:render_view_to_iolist(Module, Opts),
     case iolist_size(Sample) > 0 of
         true ->
             ok;
@@ -187,7 +186,7 @@ run_view_render_workload(Module, Opts, Runs) ->
             halt(1)
     end,
     Fun = fun() ->
-        arizona_render:render_view_to_iolist(Module, Req, Opts)
+        arizona_render:render_view_to_iolist(Module, Opts)
     end,
     run_workload(Fun, Runs).
 

@@ -255,11 +255,9 @@ ssr_counter_custom_id(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, <<"99<!--/az-->">>)).
 
 ssr_page_with_child(Config) when is_list(Config) ->
-    Req = arizona_req_test_adapter:new(#{}),
     HTML = iolist_to_binary(
         arizona_render:render_view_to_iolist(
             arizona_page,
-            Req,
             #{bindings => #{title => <<"Welcome">>}, layouts => [{arizona_layout, render}]}
         )
     ),
@@ -280,11 +278,9 @@ ssr_page_with_child(Config) when is_list(Config) ->
 %% its own az-view + id (so its ?local is scoped to the child), and both the
 %% children's and the parent's ?local slots render their SSR initial + descriptor.
 ssr_nested_local(Config) when is_list(Config) ->
-    Req = arizona_req_test_adapter:new(#{}),
     HTML = iolist_to_binary(
         arizona_render:render_view_to_iolist(
             arizona_local_nested,
-            Req,
             #{bindings => #{title => <<"Nested">>}, layouts => [{arizona_layout, render}]}
         )
     ),
@@ -303,11 +299,9 @@ ssr_nested_local(Config) when is_list(Config) ->
 %% a stateless tab bar, and interpolated/content ?local slots, all with their SSR
 %% initials -- the page is interactive purely via client-owned slots.
 ssr_local_app(Config) when is_list(Config) ->
-    Req = arizona_req_test_adapter:new(#{}),
     HTML = iolist_to_binary(
         arizona_render:render_view_to_iolist(
             arizona_local_app,
-            Req,
             #{bindings => #{title => <<"App">>}, layouts => [{arizona_layout, render}]}
         )
     ),
@@ -322,11 +316,9 @@ ssr_local_app(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, <<"az-local=">>)).
 
 ssr_layouts_nest_outer_first(Config) when is_list(Config) ->
-    Req = arizona_req_test_adapter:new(#{}),
     HTML = iolist_to_binary(
         arizona_render:render_view_to_iolist(
             arizona_about,
-            Req,
             #{
                 bindings => #{title => <<"Nested">>},
                 layouts => [{arizona_outer_layout, render}, {arizona_inner_layout, render}]
@@ -342,11 +334,9 @@ ssr_layouts_nest_outer_first(Config) when is_list(Config) ->
     ?assert(InnerOpenAt < InnerCloseAt).
 
 ssr_layouts_empty_list(Config) when is_list(Config) ->
-    Req = arizona_req_test_adapter:new(#{}),
     HTML = iolist_to_binary(
         arizona_render:render_view_to_iolist(
             arizona_about,
-            Req,
             #{bindings => #{title => <<"Bare">>}, layouts => []}
         )
     ),
@@ -393,11 +383,9 @@ render_with_views_no_children(Config) when is_list(Config) ->
 %% =============================================================================
 
 ssr_about_page(Config) when is_list(Config) ->
-    Req = arizona_req_test_adapter:new(#{}),
     HTML = iolist_to_binary(
         arizona_render:render_view_to_iolist(
             arizona_about,
-            Req,
             #{bindings => #{title => <<"About">>}, layouts => [{arizona_layout, render}]}
         )
     ),

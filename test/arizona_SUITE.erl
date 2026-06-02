@@ -1320,7 +1320,7 @@ list_diff3(Config) when is_list(Config) ->
 
 mixed_children_initial_render(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
-        arizona_mixed_children, #{}, undefined, [], arizona_req_test_adapter:new()
+        arizona_mixed_children, #{}, undefined, []
     ),
     {ok, _ViewId, HTML} = arizona_live:mount_and_render(Pid),
     HTMLBin = iolist_to_binary(mixed_render_html(HTML)),
@@ -1334,7 +1334,7 @@ mixed_children_show_event(Config) when is_list(Config) ->
     %% update. The ops must target the correct az slots -- not the stateless
     %% child's inner slots.
     {ok, Pid} = arizona_live:start_link(
-        arizona_mixed_children, #{}, undefined, [], arizona_req_test_adapter:new()
+        arizona_mixed_children, #{}, undefined, []
     ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(
@@ -1371,7 +1371,7 @@ mixed_children_show_event(Config) when is_list(Config) ->
 
 mixed_children_card_update(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
-        arizona_mixed_children, #{}, undefined, [], arizona_req_test_adapter:new()
+        arizona_mixed_children, #{}, undefined, []
     ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(
@@ -1384,7 +1384,7 @@ mixed_children_card_update(Config) when is_list(Config) ->
 
 mixed_children_roundtrip(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
-        arizona_mixed_children, #{}, undefined, [], arizona_req_test_adapter:new()
+        arizona_mixed_children, #{}, undefined, []
     ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _, _} = arizona_live:handle_event(

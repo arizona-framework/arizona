@@ -127,7 +127,7 @@ init(Handler, Bindings, Req, Opts) ->
     OnMount = maps:get(on_mount, Opts, []),
     Socket = #socket{req = Req},
     safe_init(Handler, Socket, fun() ->
-        {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount, Req),
+        {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount),
         case Reconnect of
             true ->
                 {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
@@ -259,8 +259,8 @@ handle_navigate(
     case arizona_req:apply_middlewares(Middlewares, NewReq, IB) of
         {halt, HaltReq} ->
             halt_navigate(HaltReq, Socket);
-        {cont, NewReq1, Bindings1} ->
-            try arizona_live:navigate(Pid, H, Bindings1, NewReq1, OnMount) of
+        {cont, _NewReq1, Bindings1} ->
+            try arizona_live:navigate(Pid, H, Bindings1, OnMount) of
                 {ok, NewVId, PageHTML} ->
                     Ops = replace_ops(OldVId, PageHTML),
                     encode_reply(Ops, [], Socket#socket{view_id = NewVId})

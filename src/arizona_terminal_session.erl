@@ -58,7 +58,7 @@ connection context (e.g. `term_rows`/`term_cols`).
 start(Handler, Bindings, Driver, DriverArg, Out) ->
     %% Load the driver once so the function_exported/3 fallbacks below are accurate.
     {module, Driver} = code:ensure_loaded(Driver),
-    {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), [], undefined),
+    {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), []),
     {ok, ViewId} = arizona_live:mount(Pid),
     DState0 = call_init(Driver, DriverArg),
     {Setup, DState1} = call_setup(Driver, DState0),
