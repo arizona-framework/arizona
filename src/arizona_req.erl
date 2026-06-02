@@ -285,11 +285,12 @@ headers(#{adapter := Adapter, raw := Raw} = Req) ->
 Returns the `User-Agent` request header (or `<<>>` if absent).
 
 A view that serves both browsers (HTML) and native apps (a native JSON tree)
-reads this in `mount/2` and branches in `render/1`. Match it directly (you know
-your own native client's UA), or classify it with the pure helpers in
-`arizona_user_agent` (`browser/1`, `os/1`, `mobile/1`). The framework decides and
-injects nothing -- you own the binding and the branch. For an explicit signal
-instead, send a query param and read it with `params/1`.
+reads this via an `extract([user_agent])` middleware and branches in
+`render/1`. Match it directly (you know your own native client's UA), or
+classify it with the pure helpers in `arizona_user_agent` (`browser/1`,
+`os/1`, `mobile/1`). The framework decides and injects nothing -- you own the
+binding and the branch. For an explicit signal instead, send a query param and
+extract it with `extract([params])`.
 """.
 -spec user_agent(request()) -> {binary(), request()}.
 user_agent(Req0) ->
@@ -351,6 +352,10 @@ binding (read with `?get(request)`).
 
 The escape hatch for a handler that needs lazy access to many request fields;
 it couples that handler to HTTP. Prefer `extract/1` for specific data.
+
+The `request` binding is mount-scoped: it is read during `mount/1`, and because
+mount returns a fresh bindings map (construct, don't merge) it does not persist
+into the live process or carry across an SPA navigate.
 
 ```erlang
 #{middlewares => [{arizona_req, put_request}]}

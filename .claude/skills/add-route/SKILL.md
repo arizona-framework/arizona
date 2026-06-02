@@ -20,11 +20,11 @@ Choose the appropriate route type based on the user's intent:
 {live, Path, Handler, Opts}
 ```
 - `Path` -- route pattern, e.g. `<<"/">>`  or `<<"/users/:id">>`
-- `Handler` -- a view module that includes `arizona_view.hrl` and exports `mount/2`, `render/1`
+- `Handler` -- a view module that includes `arizona_view.hrl` and exports `mount/1`, `render/1`
 - `Opts` -- map with optional keys:
-  - `bindings => map()` -- initial bindings passed to `mount/2` (default `#{}`)
+  - `bindings => map()` -- initial bindings passed to `mount/1` (default `#{}`)
   - `layout => {LayoutMod, LayoutFun}` -- layout to wrap the page (optional)
-  - `on_mount => [Hook]` -- `on_mount` hooks run before the handler's `mount/2`
+  - `on_mount => [Hook]` -- `on_mount` hooks run before the handler's `mount/1`
   - `middlewares => [fun((az:request(), map()) -> {cont, az:request(), map()} | {halt, az:request()})]`
 
 **WebSocket endpoint:**
@@ -47,7 +47,8 @@ Choose the appropriate route type based on the user's intent:
 
 Also scaffold the view module using the `/new-handler` skill pattern (choose "route-level view"):
 - Include `arizona_view.hrl`
-- `mount/2` takes `(Bindings, az:request())` and must set `id => <<"page">>` (or appropriate view id)
+- `mount/1` takes `(Bindings)` and must set `id => <<"page">>` (or appropriate view id); request
+  data (path bindings, query params) arrives via `middlewares => [arizona_req:extract([...])]`
 - `render/1` with `?html(...)`
 - `handle_event/3` if interactive
 

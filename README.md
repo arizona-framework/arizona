@@ -125,15 +125,15 @@ slot-reset map -- usually `#{}`), and `handle_event/3` returns `{Bindings, Reset
 
 ### 2. The parent page
 
-A **view** is the route's root handler. It receives initial bindings plus the request:
+A **view** is the route's root handler. It receives initial bindings:
 
 ```erlang
 %% src/my_page.erl
 -module(my_page).
 -include_lib("arizona/include/arizona_view.hrl").
--export([mount/2, render/1]).
+-export([mount/1, render/1]).
 
-mount(Bindings, _Req) ->
+mount(Bindings) ->
     {Bindings, #{}}.
 
 render(Bindings) ->
