@@ -1,6 +1,6 @@
 -module(arizona_native_removable).
 -include("arizona_view.hrl").
--export([mount/2]).
+-export([mount/1]).
 -export([render/1]).
 -export([handle_event/3]).
 
@@ -9,8 +9,8 @@
 %% native clients must handle (drop the node) rather than crash on. Removal is
 %% one-way here (no toggle back); bringing it back would need a parent re-render.
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(_Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(_Bindings) ->
     {#{id => ~"native_removable", banner => ~"Banner!"}, #{}}.
 
 -spec render(az:bindings()) -> az:template().

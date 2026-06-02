@@ -1,14 +1,14 @@
 -module(arizona_native_ticker).
 -include("arizona_view.hrl").
--export([mount/2, render/1, handle_info/2]).
+-export([mount/1, render/1, handle_info/2]).
 
 %% Native (JSON) server-push example: a handle_info timer pushes count updates
 %% unsolicited (no client event). Proves handle_info/pubsub-driven OP_TEXT
 %% reaches the native client, which applies any incoming ops regardless of what
 %% triggered them.
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(_Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(_Bindings) ->
     Bindings = #{id => ~"native_ticker", count => 0},
     ?connected andalso ?send(arizona_connected),
     {Bindings, #{}}.

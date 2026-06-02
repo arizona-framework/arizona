@@ -8,11 +8,11 @@ through a tree shape rather than a flat 100-item list.
 """.
 -include("arizona_view.hrl").
 
--export([mount/2]).
+-export([mount/1]).
 -export([render/1]).
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(Bindings) ->
     %% Lazy default for `sections` -- the bench workload pre-generates the
     %% 10x10 data once and passes it via bindings, so we never want to
     %% recompute `default_sections()` on hot-path renders.

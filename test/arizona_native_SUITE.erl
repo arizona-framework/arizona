@@ -376,7 +376,7 @@ diff_independent_regions_op(Config) when is_list(Config) ->
 diff_stream_insert_op(Config) when is_list(Config) ->
     %% A native stream insert diffs to OP_INSERT whose item payload carries
     %% native JSON statics that interleave to a valid JSON widget.
-    {B0, _} = arizona_native_list:mount(#{}, arizona_req_test_adapter:new(#{})),
+    {B0, _} = arizona_native_list:mount(#{}),
     {_, Snap0, V0} = arizona_render:render(arizona_native_list:render(B0), #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
     {B2, _, _} = arizona_native_list:handle_event(~"add", #{~"id" => 1, ~"text" => ~"First"}, B1),
@@ -391,7 +391,7 @@ diff_stream_insert_op(Config) when is_list(Config) ->
 
 diff_stream_remove_op(Config) when is_list(Config) ->
     Items = [#{id => 1, text => ~"A"}, #{id => 2, text => ~"B"}],
-    {B0, _} = arizona_native_list:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
+    {B0, _} = arizona_native_list:mount(#{items => Items}),
     {_, Snap0, V0} = arizona_render:render(arizona_native_list:render(B0), #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
     {B2, _, _} = arizona_native_list:handle_event(~"remove", #{~"id" => 1}, B1),
@@ -401,7 +401,7 @@ diff_stream_remove_op(Config) when is_list(Config) ->
 
 diff_stream_move_op(Config) when is_list(Config) ->
     Items = [#{id => 1, text => ~"A"}, #{id => 2, text => ~"B"}],
-    {B0, _} = arizona_native_list:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
+    {B0, _} = arizona_native_list:mount(#{items => Items}),
     {_, Snap0, V0} = arizona_render:render(arizona_native_list:render(B0), #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
     {B2, _, _} = arizona_native_list:handle_event(~"move", #{~"id" => 2, ~"pos" => 0}, B1),

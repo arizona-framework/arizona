@@ -1,13 +1,13 @@
 -module(arizona_root_counter).
 -include("arizona_view.hrl").
--export([mount/2, render/1, handle_event/3]).
+-export([mount/1, render/1, handle_event/3]).
 
 %% Minimal view counter for arizona_live machinery tests. Mirrors
 %% arizona_counter's mount/event shape but as a route-level view, since
 %% arizona_live only spawns views.
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(Bindings) ->
     {
         #{
             id => ~"counter",

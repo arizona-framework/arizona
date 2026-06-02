@@ -1,6 +1,6 @@
 -module(arizona_native_tabs).
 -include("arizona_view.hrl").
--export([mount/2, render/1, handle_event/3]).
+-export([mount/1, render/1, handle_event/3]).
 -export([content/1]).
 
 %% Native (JSON) tabs view: a Row of Buttons whose push_event switches the
@@ -9,8 +9,8 @@
 %% conditional/subtree-rendering path the counter (text) and list (stream) don't
 %% exercise.
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(Bindings) ->
     {#{id => ~"native_tabs", selected => maps:get(selected, Bindings, ~"home")}, #{}}.
 
 -spec render(az:bindings()) -> az:template().

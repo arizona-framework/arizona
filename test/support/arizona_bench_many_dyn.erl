@@ -1,14 +1,14 @@
 -module(arizona_bench_many_dyn).
 -include("arizona_view.hrl").
--export([mount/2, render/1]).
+-export([mount/1, render/1]).
 
 %% Bench fixture: a flat view with 50 top-level dynamics, each tracking
 %% a distinct binding key (`b00`..`b49`). Measures how dep tracking and
 %% the diff fast-path scale linearly with the dynamic count of a single
 %% template (vs `?each` fan-out which `render_each_100` already covers).
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(Bindings) ->
     Defaults = maps:from_list([{key_for(I), I} || I <- lists:seq(0, 49)]),
     Vals = #{K => maps:get(K, Bindings, V) || K := V <- Defaults},
     {Vals#{id => ~"many_dyn"}, #{}}.

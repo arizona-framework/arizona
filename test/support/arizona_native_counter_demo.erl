@@ -1,13 +1,13 @@
 -module(arizona_native_counter_demo).
 -include("arizona_view.hrl").
--export([mount/2, render/1, handle_event/3]).
+-export([mount/1, render/1, handle_event/3]).
 
 %% Drivable native (JSON) counter view for the device/protocol e2e: a Text
 %% showing the count plus +/- Buttons whose `on_tap` carries a push_event
 %% command, so a native client tap drives handle_event over the WebSocket.
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(Bindings) ->
     {#{id => ~"native_counter", count => maps:get(count, Bindings, 0)}, #{}}.
 
 -spec render(az:bindings()) -> az:template().

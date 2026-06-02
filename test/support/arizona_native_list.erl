@@ -1,14 +1,14 @@
 -module(arizona_native_list).
 -include("arizona_view.hrl").
--export([mount/2, render/1, handle_event/3]).
+-export([mount/1, render/1, handle_event/3]).
 
 %% Native (JSON) stream view for diff-op tests. Mirrors arizona_todo but renders
 %% via ?native, so stream insert/remove/move/update produce
 %% OP_INSERT/OP_REMOVE/OP_MOVE/OP_ITEM_PATCH whose item payloads carry native
 %% JSON statics.
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(Bindings) ->
     Items = maps:get(items, Bindings, []),
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
     {#{id => ~"native_list", items => Stream}, #{}}.

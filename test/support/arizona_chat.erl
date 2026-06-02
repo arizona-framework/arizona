@@ -1,9 +1,9 @@
 -module(arizona_chat).
 -include("arizona_view.hrl").
--export([mount/2, unmount/1, render/1, handle_event/3, handle_info/2]).
+-export([mount/1, unmount/1, render/1, handle_event/3, handle_info/2]).
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(Bindings) ->
     ?connected andalso ?subscribe(chat),
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end),
     {

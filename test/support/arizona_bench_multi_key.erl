@@ -1,14 +1,14 @@
 -module(arizona_bench_multi_key).
 -include("arizona_view.hrl").
--export([mount/2, render/1, handle_event/3]).
+-export([mount/1, render/1, handle_event/3]).
 
 %% Bench fixture: a flat view with 10 dynamics, each tracking a different
 %% binding key. The `bump_three` event mutates 3 of the 10 bindings at
 %% once -- exercises `arizona_live:compute_changed/2` and the per-dynamic
 %% `deps_changed` intersection over a multi-key Changed map.
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(Bindings) ->
     Defaults = maps:from_list([{key_for(I), 0} || I <- lists:seq(0, 9)]),
     Vals = #{K => maps:get(K, Bindings, V) || K := V <- Defaults},
     {Vals#{id => ~"multi_key"}, #{}}.

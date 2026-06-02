@@ -1,6 +1,6 @@
 -module(arizona_native_menu).
 -include("arizona_view.hrl").
--export([mount/2, render/1, handle_event/3]).
+-export([mount/1, render/1, handle_event/3]).
 
 %% Native (JSON) menu: each Button navigates to another example on the SAME
 %% socket (arizona_android:navigate -> the server's handle_navigate re-mounts and
@@ -8,8 +8,8 @@
 %% and handle_event returns a navigate effect -- exercising the handler-returned
 %% effect ("e" array) path.
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(_Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(_Bindings) ->
     {#{id => ~"native_menu"}, #{}}.
 
 -spec render(az:bindings()) -> az:template().

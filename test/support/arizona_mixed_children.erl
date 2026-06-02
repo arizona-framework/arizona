@@ -1,6 +1,6 @@
 -module(arizona_mixed_children).
 -include("arizona_view.hrl").
--export([mount/2, render/1, handle_event/3]).
+-export([mount/1, render/1, handle_event/3]).
 -export([render_card/1]).
 
 %% Reproduces a bug where a parent template mixes stateless children
@@ -26,8 +26,8 @@
 %%     </div>
 %%   </div>
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(_Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(_Bindings) ->
     {
         #{
             id => ~"mixed",
