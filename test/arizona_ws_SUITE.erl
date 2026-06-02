@@ -17,6 +17,8 @@
     http_query_params/1,
     http_path_bindings/1,
     ws_path_bindings/1,
+    ws_navigate_to_parametrized_route/1,
+    http_put_request_reads_request/1,
     middleware_cont_enriches_bindings/1,
     middleware_cont_ws_connects/1,
     middleware_halt_redirects/1,
@@ -68,6 +70,8 @@ groups() ->
         http_query_params,
         http_path_bindings,
         ws_path_bindings,
+        ws_navigate_to_parametrized_route,
+        http_put_request_reads_request,
         middleware_cont_enriches_bindings,
         middleware_cont_ws_connects,
         middleware_halt_redirects,
@@ -172,6 +176,9 @@ init_per_group(roadrunner, Config) ->
         }},
         {live, <<"/crash_on_render_http">>, arizona_crashable, #{
             bindings => #{crash_on_mount => true}
+        }},
+        {live, <<"/reqreader">>, arizona_request_reader, #{
+            middlewares => [{arizona_req, put_request}]
         }},
         {live, <<"/reads_request_id">>, arizona_crashable, #{
             middlewares => [
@@ -331,6 +338,35 @@ ws_path_bindings(Config) ->
     ok = ws_send(Sock, <<"0">>),
     {text, <<"1">>} = ws_recv(Sock),
     ws_close(Sock).
+
+ws_navigate_to_parametrized_route(Config) ->
+    %% SPA navigate INTO a `:param` route: arizona_socket:handle_navigate runs the
+    %% new route's extract([path_bindings, ...]) middleware, so the handler's mount
+    %% receives item_id even though arizona_live never sees a request.
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [
+        ~"navigate",
+        #{~"path" => ~"/items/navtest", ~"qs" => ~""}
+    ]),
+    {text, Resp} = ws_recv(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"navtest">>)),
+    ws_close(Sock).
+
+http_put_request_reads_request(Config) ->
+    %% put_request escape hatch: the handler reads ?get(request) then params/1.
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /reqreader?locale=putreq HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"putreq">>)).
 
 middleware_cont_enriches_bindings(Config) ->
     %% HTTP: middleware adds session to bindings, rendered in page

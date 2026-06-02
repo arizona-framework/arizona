@@ -218,16 +218,24 @@ extract_path_bindings_merges_into_bindings(Config) when is_list(Config) ->
     ?assertEqual(yes, maps:get(kept, Bindings)).
 
 extract_named_keys(Config) when is_list(Config) ->
-    %% Non-path keys land under their own name; `method` is eager.
+    %% Non-path keys land under their own name; `method` is eager, the rest lazy.
     Req = arizona_req_test_adapter:new(#{
         params => [{~"locale", ~"pt"}],
-        headers => #{~"host" => ~"example.com"}
+        headers => #{~"host" => ~"example.com", ~"user-agent" => ~"Mozilla/5.0"},
+        cookies => [{~"session", ~"abc"}],
+        body => ~"payload"
     }),
-    Mw = arizona_req:extract([params, headers, method]),
+    Mw = arizona_req:extract([params, headers, method, cookies, body, user_agent]),
     {cont, _Req1, Bindings} = Mw(Req, #{}),
     ?assertEqual([{~"locale", ~"pt"}], maps:get(params, Bindings)),
-    ?assertEqual(#{~"host" => ~"example.com"}, maps:get(headers, Bindings)),
-    ?assertEqual(~"GET", maps:get(method, Bindings)).
+    ?assertEqual(
+        #{~"host" => ~"example.com", ~"user-agent" => ~"Mozilla/5.0"},
+        maps:get(headers, Bindings)
+    ),
+    ?assertEqual(~"GET", maps:get(method, Bindings)),
+    ?assertEqual([{~"session", ~"abc"}], maps:get(cookies, Bindings)),
+    ?assertEqual(~"payload", maps:get(body, Bindings)),
+    ?assertEqual(~"Mozilla/5.0", maps:get(user_agent, Bindings)).
 
 extract_is_usable_as_middleware(Config) when is_list(Config) ->
     %% The closure extract/1 returns drops straight into a middleware list.
