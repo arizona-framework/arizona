@@ -5,7 +5,7 @@ Arizona view as the page response.
 
 Runs route middlewares against an already-wrapped
 `arizona_req:request()`, then dispatches to
-`arizona_render:render_view_to_iolist/3` and returns either a halt
+`arizona_render:render_view_to_iolist/2` and returns either a halt
 signal (middleware emitted its own reply), the rendered page body,
 or a crash/error page body. The caller is responsible for wrapping
 the native request beforehand and translating the result into its
@@ -17,7 +17,7 @@ transport's native reply shape.
 2. On `{halt, HaltReq}` -- return `{halt, RawReq}`; the caller ships
    the reply the middleware already wrote.
 3. On `{cont, Req1, Bindings1}` -- call
-   `arizona_render:render_view_to_iolist/3` with the route's
+   `arizona_render:render_view_to_iolist/2` with the route's
    `layout`/`on_mount`. Return `{ok, 200, Page}` or, on crash or a
    stashed hot-reload error, `{error, 500, ErrorPage}`.
 """.

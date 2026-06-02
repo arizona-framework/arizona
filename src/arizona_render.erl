@@ -162,7 +162,7 @@ SSR render for a stateful handler (embedded-component style).
 
 Mounts via `mount/1`, renders, optionally wraps in a layout. Used
 by tests that SSR stateful components in isolation; production
-HTTP SSR goes through `render_view_to_iolist/3`. `on_mount` is a
+HTTP SSR goes through `render_view_to_iolist/2`. `on_mount` is a
 route-level concept and is intentionally not honored here.
 """.
 -spec render_to_iolist(Handler, Opts) -> iolist() when
