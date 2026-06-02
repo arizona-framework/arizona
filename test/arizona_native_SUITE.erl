@@ -206,15 +206,14 @@ live_view_caches_statics(Config) when is_list(Config) ->
     %% cached the fingerprint gets the statics stripped (`#{f,d}` only). Native
     %% reuses the exact same fingerprint cache as the browser -- statics are
     %% sent once, never re-sent.
-    Req = arizona_req_test_adapter:new(),
-    {ok, Pid1} = arizona_live:start_link(arizona_native_counter, #{}, undefined, [], Req),
+    {ok, Pid1} = arizona_live:start_link(arizona_native_counter, #{}, undefined, []),
     {ok, ViewId, Frame1} = arizona_live:mount_and_render(Pid1),
     ?assertEqual(~"native_counter", ViewId),
     ?assert(maps:is_key(~"s", Frame1)),
     ?assertMatch(#{~"type" := ~"Column", ~"id" := ~"native_counter"}, simulate_interleave(Frame1)),
     Fp = maps:get(~"f", Frame1),
     %% Fresh instance, fingerprint pre-seeded (as the client would report).
-    {ok, Pid2} = arizona_live:start_link(arizona_native_counter, #{}, undefined, [], Req),
+    {ok, Pid2} = arizona_live:start_link(arizona_native_counter, #{}, undefined, []),
     arizona_live:seed_fps(Pid2, [Fp]),
     sys:get_state(Pid2),
     {ok, _ViewId, Frame2} = arizona_live:mount_and_render(Pid2),
@@ -288,8 +287,7 @@ nested_native_stateful_component(Config) when is_list(Config) ->
     %% frame and interleaves to a valid JSON widget tree. (arizona_render:render/3
     %% instead decomposes the child into a separate diff-time view, so the live
     %% path is the one that proves the first-frame inlining.)
-    Req = arizona_req_test_adapter:new(),
-    {ok, Pid} = arizona_live:start_link(arizona_native_parent, #{}, undefined, [], Req),
+    {ok, Pid} = arizona_live:start_link(arizona_native_parent, #{}, undefined, []),
     {ok, ~"native_parent", Frame} = arizona_live:mount_and_render(Pid),
     #{~"type" := ~"Column", ~"children" := Children} = flatten(simulate_interleave(Frame)),
     ?assertMatch([#{~"type" := ~"Badge", ~"children" := [~"5"]}], Children).
@@ -301,8 +299,7 @@ nested_native_stateful_child_event_routes(Config) when is_list(Config) ->
     %% parent view has none, so a misroute to the root would crash. Only the
     %% addressed child's count diffs (one OP_TEXT). The `az_view`+`id` marker the
     %% client targets is covered end-to-end by e2e/native/nested.spec.js.
-    Req = arizona_req_test_adapter:new(),
-    {ok, Pid} = arizona_live:start_link(arizona_native_nested, #{}, undefined, [], Req),
+    {ok, Pid} = arizona_live:start_link(arizona_native_nested, #{}, undefined, []),
     {ok, ~"native_nested", _Frame} = arizona_live:mount_and_render(Pid),
     {ok, OpsA, _} = arizona_live:handle_event(Pid, ~"child_a", ~"inc", #{}),
     ?assertMatch([[?OP_TEXT, _Az, ~"1"]], OpsA),
@@ -376,7 +373,7 @@ diff_independent_regions_op(Config) when is_list(Config) ->
 diff_stream_insert_op(Config) when is_list(Config) ->
     %% A native stream insert diffs to OP_INSERT whose item payload carries
     %% native JSON statics that interleave to a valid JSON widget.
-    {B0, _} = arizona_native_list:mount(#{}, arizona_req_test_adapter:new(#{})),
+    {B0, _} = arizona_native_list:mount(#{}),
     {_, Snap0, V0} = arizona_render:render(arizona_native_list:render(B0), #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
     {B2, _, _} = arizona_native_list:handle_event(~"add", #{~"id" => 1, ~"text" => ~"First"}, B1),
@@ -391,7 +388,7 @@ diff_stream_insert_op(Config) when is_list(Config) ->
 
 diff_stream_remove_op(Config) when is_list(Config) ->
     Items = [#{id => 1, text => ~"A"}, #{id => 2, text => ~"B"}],
-    {B0, _} = arizona_native_list:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
+    {B0, _} = arizona_native_list:mount(#{items => Items}),
     {_, Snap0, V0} = arizona_render:render(arizona_native_list:render(B0), #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
     {B2, _, _} = arizona_native_list:handle_event(~"remove", #{~"id" => 1}, B1),
@@ -401,7 +398,7 @@ diff_stream_remove_op(Config) when is_list(Config) ->
 
 diff_stream_move_op(Config) when is_list(Config) ->
     Items = [#{id => 1, text => ~"A"}, #{id => 2, text => ~"B"}],
-    {B0, _} = arizona_native_list:mount(#{items => Items}, arizona_req_test_adapter:new(#{})),
+    {B0, _} = arizona_native_list:mount(#{items => Items}),
     {_, Snap0, V0} = arizona_render:render(arizona_native_list:render(B0), #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
     {B2, _, _} = arizona_native_list:handle_event(~"move", #{~"id" => 2, ~"pos" => 0}, B1),

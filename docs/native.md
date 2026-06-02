@@ -18,7 +18,7 @@ handlers are identical:
 ```erlang
 -include_lib("arizona/include/arizona_view.hrl").
 
-mount(Bindings, _Req) ->
+mount(Bindings) ->
     {#{id => ~"counter", count => maps:get(count, Bindings, 0)}, #{}}.
 
 render(Bindings) ->
@@ -56,8 +56,9 @@ handle_event(~"inc", _Payload, Bindings) ->
 ## Serving HTML and native from one view
 
 The framework injects nothing and decides nothing. To serve browsers HTML and
-native apps a JSON tree from a single view, read the connecting client in
-`mount/2` and branch in `render/1`.
+native apps a JSON tree from a single view, read the connecting client (its
+`User-Agent`, supplied as a binding by `arizona_middleware:extract([user_agent])`) and
+branch in `render/1`.
 
 `arizona_req:user_agent/1` returns the raw `User-Agent` header (no custom header
 needed — most clients send one), or `<<>>` if absent. `arizona_user_agent`
@@ -74,9 +75,9 @@ helpers — call only the one(s) you need, no precomputed map:
 - `mobile/1` — best-effort mobile-device guess.
 
 ```erlang
-mount(_Bindings, Req) ->
-    {UA, _Req1} = arizona_req:user_agent(Req),
-    {#{id => ~"page", user_agent => UA}, #{}}.
+%% Route opts: middlewares => [arizona_middleware:extract([user_agent])]
+mount(Bindings) ->
+    {#{id => ~"page", user_agent => ?get(user_agent)}, #{}}.
 
 %% A browser/webview carries "Mozilla" -> HTML; a native app's HTTP stack
 %% typically does not -> native. Reach for arizona_user_agent:os/1 or mobile/1,
@@ -88,10 +89,10 @@ render(#{user_agent := UA} = Bindings) ->
     end.
 ```
 
-These helpers are heuristic and request-level; `user_agent/1` works at `mount/2`
-on both the HTTP and WS paths. You own the binding name and the branch — if you
-prefer an explicit signal, your client can send a query param and you read it
-with `arizona_req:params/1` instead.
+These helpers are heuristic and request-level; the `extract([user_agent])`
+middleware runs on both the HTTP and WS paths. You own the binding name and the
+branch -- if you prefer an explicit signal, your client can send a query param
+and you extract it with `arizona_middleware:extract([params])` instead.
 
 ## The JSON widget tree
 

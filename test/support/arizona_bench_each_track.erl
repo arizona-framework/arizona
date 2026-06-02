@@ -1,14 +1,14 @@
 -module(arizona_bench_each_track).
 -include("arizona_view.hrl").
--export([mount/2, render/1, handle_event/3]).
+-export([mount/1, render/1, handle_event/3]).
 
 %% Bench fixture: a `?each` stream where every per-item dynamic uses
 %% `arizona_template:get(K, Item)` for tracked reads. Five fields per
 %% row, five dynamics per row -- so a single-field update lets the
 %% per-item skip path elide four of the five closure invocations.
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(Bindings) ->
     Items = maps:get(items, Bindings, []),
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
     {#{id => ~"bench_each", items => Stream}, #{}}.

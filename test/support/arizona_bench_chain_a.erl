@@ -8,11 +8,11 @@ nested stateful descriptors.
 """.
 -include("arizona_view.hrl").
 
--export([mount/2]).
+-export([mount/1]).
 -export([render/1]).
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(_Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(_Bindings) ->
     {#{id => ~"chain_a"}, #{}}.
 
 -spec render(az:bindings()) -> az:template().

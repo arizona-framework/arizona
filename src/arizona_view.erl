@@ -3,17 +3,12 @@
 Behaviour for route-mounted Arizona handlers (pages, not embedded
 components).
 
-Adds a mount callback over the shared `arizona_handler` contract.
-A view implements one of two arities:
-
-- `mount/2` takes the initial `Bindings` and an `arizona_req:request()`,
-  giving HTTP-originated views access to URL path bindings, query params,
-  cookies, headers, and body via the request accessors.
-- `mount/1` takes only `Bindings` -- for serverless transports (e.g. the
-  terminal runtime) that have no request; any connection context they do
-  have arrives as bindings.
-
-`call_mount/3` prefers `mount/2` when exported, else calls `mount/1`.
+Adds a `mount/1` callback over the shared `arizona_handler` contract.
+`mount/1` takes the initial `Bindings` and runs once on instance
+creation. The view is transport-agnostic: any request data it needs
+(URL path bindings, query params, cookies, headers, body) is supplied
+as bindings by the transport layer -- typically via
+`arizona_middleware:extract/1` middlewares on the route.
 
 The other lifecycle callbacks (`render/1`, `handle_event/3`,
 `handle_info/2`, `unmount/1`) come from `arizona_handler`. Views
@@ -27,9 +22,8 @@ and brings in the common macros.
 
 ## Required callbacks
 
-- `mount/2` **or** `mount/1` -- runs once on instance creation;
-  `mount/2` receives `(Bindings, Request)`, `mount/1` receives just
-  `(Bindings)`; returns initial bindings plus any reset values
+- `mount/1` -- runs once on instance creation; receives `Bindings`,
+  returns initial bindings plus any reset values
 - `render/1` -- from `arizona_handler`
 
 ## Optional callbacks
@@ -132,7 +126,7 @@ view's template churns often.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([call_mount/3]).
+-export([call_mount/2]).
 
 %% --------------------------------------------------------------------
 %% Behaviour callbacks
@@ -142,43 +136,22 @@ view's template churns often.
 Initializes a view instance. Called once when the framework mounts
 the handler at the top of a route.
 
-`Bindings` carries the route's static `bindings` config (plus
-anything middleware layered on top). `Request` is the current
-`arizona_req:request()` -- use its accessors to reach URL path
-bindings, query params, cookies, headers, and body.
+`Bindings` carries the route's static `bindings` config plus anything
+middleware layered on top (e.g. request data injected via
+`arizona_middleware:extract/1`).
 """.
 -callback mount(Bindings) -> arizona_stateful:mount_ret() when
     Bindings :: arizona_stateful:bindings().
-
--callback mount(Bindings, Request) -> arizona_stateful:mount_ret() when
-    Bindings :: arizona_stateful:bindings(),
-    Request :: az:request().
-
-%% A view implements exactly one: `mount/2` (HTTP-originated transports, with a
-%% request) or the request-free `mount/1` (serverless transports such as the
-%% terminal). Both are optional at the behaviour level; `call_mount/3` enforces
-%% one at runtime by dispatching on which is exported.
--optional_callbacks([mount/1, mount/2]).
 
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
 -doc """
-Invokes a view's mount callback. Prefers `mount/2` (receiving the `Request`) when
-the handler exports it, otherwise the request-free `mount/1`. `Request` is
-`undefined` for serverless transports, which pair with `mount/1`.
+Invokes a view's required `mount/1` callback.
 """.
--spec call_mount(Handler, Bindings, Request) -> arizona_stateful:mount_ret() when
+-spec call_mount(Handler, Bindings) -> arizona_stateful:mount_ret() when
     Handler :: module(),
-    Bindings :: arizona_stateful:bindings(),
-    Request :: az:request() | undefined.
-call_mount(H, Bindings, Req) ->
-    %% `function_exported/3` reports false for a not-yet-loaded module, and the
-    %% handler may not be loaded on a cold first mount -- ensure it first so the
-    %% arity dispatch is accurate.
-    {module, H} = code:ensure_loaded(H),
-    case erlang:function_exported(H, mount, 2) of
-        true -> H:mount(Bindings, Req);
-        false -> H:mount(Bindings)
-    end.
+    Bindings :: arizona_stateful:bindings().
+call_mount(H, Bindings) ->
+    H:mount(Bindings).

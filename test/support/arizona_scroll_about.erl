@@ -1,9 +1,9 @@
 -module(arizona_scroll_about).
 -include("arizona_view.hrl").
--export([mount/2, render/1, handle_info/2]).
+-export([mount/1, render/1, handle_info/2]).
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(_Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(_Bindings) ->
     Bindings = #{
         id => ~"page",
         title => ~"Scroll About",

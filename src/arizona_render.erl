@@ -51,7 +51,7 @@ op-code targets.
 -export([render/2]).
 -export([render_to_iolist/1]).
 -export([render_to_iolist/2]).
--export([render_view_to_iolist/3]).
+-export([render_view_to_iolist/2]).
 -export([resolve_id/1]).
 -export([zip/2]).
 -export([zip_item/2]).
@@ -162,7 +162,7 @@ SSR render for a stateful handler (embedded-component style).
 
 Mounts via `mount/1`, renders, optionally wraps in a layout. Used
 by tests that SSR stateful components in isolation; production
-HTTP SSR goes through `render_view_to_iolist/3`. `on_mount` is a
+HTTP SSR goes through `render_view_to_iolist/2`. `on_mount` is a
 route-level concept and is intentionally not honored here.
 """.
 -spec render_to_iolist(Handler, Opts) -> iolist() when
@@ -176,21 +176,19 @@ render_to_iolist(Handler, Opts) ->
 -doc """
 SSR render for a route-level view.
 
-Mounts the view with the provided `az:request()`, applies the
-`on_mount` chain (threading the Request into each hook), renders,
-and optionally wraps the page output in a layout module.
+Applies the `on_mount` chain, mounts the view, renders, and optionally
+wraps the page output in a layout module. Request data is supplied as
+bindings by the caller (via `arizona_middleware:extract/1` middlewares).
 """.
--spec render_view_to_iolist(Handler, Req, Opts) -> iolist() when
+-spec render_view_to_iolist(Handler, Opts) -> iolist() when
     Handler :: module(),
-    Req :: az:request(),
     Opts :: arizona_live:route_opts().
-render_view_to_iolist(Handler, Req, Opts) ->
+render_view_to_iolist(Handler, Opts) ->
     Bindings0 = arizona_live:apply_on_mount(
         maps:get(on_mount, Opts, []),
-        maps:get(bindings, Opts, #{}),
-        Req
+        maps:get(bindings, Opts, #{})
     ),
-    {Bindings, _Resets} = arizona_view:call_mount(Handler, Bindings0, Req),
+    {Bindings, _Resets} = arizona_view:call_mount(Handler, Bindings0),
     finish_ssr(Handler, Bindings, Opts).
 
 -doc """

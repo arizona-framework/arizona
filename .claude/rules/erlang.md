@@ -35,15 +35,15 @@ include/arizona_stateless.hrl   -- parse_transform, includes arizona_common.hrl
 
 Rule of thumb:
 
-- Route-level pages → `arizona_view.hrl` (`mount/2` takes Bindings + `az:request()`)
+- Route-level pages → `arizona_view.hrl` (`mount/1`; request data arrives as bindings via `arizona_middleware:extract/1` middlewares)
 - Embeddable components → `arizona_stateful.hrl` (`mount/1`, instantiated via `?stateful(Handler, Props)`)
 - Pure template modules → `arizona_stateless.hrl`
 
 ## Mount bindings -- construct, don't merge
 
-Every handler's `mount/1` (stateful) or `mount/2` (view) must build a fresh map
+Every handler's `mount/1` must build a fresh map
 literal rather than `maps:merge`-ing or `Bindings#{...}`-updating the input.
-With `arizona_live:navigate/4` the input may carry arbitrary keys from
+With `arizona_live:navigate/3` the input may carry arbitrary keys from
 previously visited pages; merging passes them through and lets foreign keys
 collide with handler-owned defaults (e.g. one page's `next_id` overriding
 another's, dup-inserting on a stream). Pull each accepted override out
@@ -51,11 +51,11 @@ explicitly via `maps:get/3`.
 
 ```erlang
 %% Bad -- foreign keys carry through:
-mount(Bindings, _Req) ->
+mount(Bindings) ->
     {maps:merge(#{id => ~"page", count => 0}, Bindings), #{}}.
 
 %% Good -- handler owns its keys, accepts a typed override:
-mount(Bindings, _Req) ->
+mount(Bindings) ->
     {#{
          id => ~"page",
          count => maps:get(count, Bindings, 0)
@@ -93,12 +93,12 @@ A route's static config is the single canonical type `arizona_live:route_opts/0`
     bindings => arizona_template:bindings(),
     on_mount => on_mount(),
     layouts => [arizona_render:layout()],
-    middlewares => [arizona_req:middleware()],
+    middlewares => [arizona_middleware:middleware()],
     _ => term()
 }.
 ```
 
-Used in route declarations, `arizona_render:render_view_to_iolist/3`, `arizona_http:render/3`, and the optional `arizona_req:resolve_route/3` callback's return tuple. All keys are optional; consumers default at use-site (`maps:get(K, M, Default)`).
+Used in route declarations, `arizona_render:render_view_to_iolist/2`, `arizona_http:render/3`, and the optional `arizona_req:resolve_route/3` callback's return tuple. All keys are optional; consumers default at use-site (`maps:get(K, M, Default)`).
 
 `layouts` is always a list, applied outermost-first: `[Root, Section]` produces `Root(Section(Page))`. Empty list = no wrap.
 

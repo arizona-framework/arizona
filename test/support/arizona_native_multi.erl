@@ -1,6 +1,6 @@
 -module(arizona_native_multi).
 -include("arizona_view.hrl").
--export([mount/2, render/1, handle_event/3]).
+-export([mount/1, render/1, handle_event/3]).
 
 %% Native (JSON) multi-counter: three independent counter regions in one view.
 %% Per-counter events route to the root handler and update distinct bindings, so
@@ -8,8 +8,8 @@
 %% multi-counter analogue, proving independent az slots. (For per-child event
 %% routing to embedded stateful components, see arizona_native_nested.)
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(_Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(_Bindings) ->
     {#{id => ~"native_multi", count_a => 0, count_b => 0, count_c => 0}, #{}}.
 
 -spec render(az:bindings()) -> az:template().

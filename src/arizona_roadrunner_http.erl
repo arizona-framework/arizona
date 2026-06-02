@@ -6,7 +6,7 @@ server-side render.
 Wired up by `arizona_roadrunner_router` for every Arizona route. The
 handler delegates the full render pipeline (wrap roadrunner req in an
 `arizona_req:request()`, run middlewares, call
-`arizona_render:render_view_to_iolist/3`, handle crashes + stashed
+`arizona_render:render_view_to_iolist/2`, handle crashes + stashed
 hot-reload compile errors) to `arizona_http:render/3`, and translates
 its result into roadrunner's `{Response, Req}` reply shape.
 """.

@@ -1,6 +1,6 @@
 -module(arizona_native_nested).
 -include("arizona_view.hrl").
--export([mount/2]).
+-export([mount/1]).
 -export([render/1]).
 
 %% Native (JSON) view embedding TWO stateful child counters. Each child has its
@@ -8,8 +8,8 @@
 %% -- proving true native nested event routing. (The multi example, by contrast,
 %% routes per-region events to a single view.)
 
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(_Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(_Bindings) ->
     {#{id => ~"native_nested"}, #{}}.
 
 -spec render(az:bindings()) -> az:template().

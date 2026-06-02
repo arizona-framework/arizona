@@ -104,7 +104,7 @@ broadcast_pushes_log_effect(Config) when is_list(Config) ->
     %% A pubsub broadcast reaches the subscribed view, which emits a log effect;
     %% the live process pushes it to the transport (here, the test process).
     {ok, Pid} = arizona_live:start_link(
-        arizona_term_demo, #{}, self(), [], undefined
+        arizona_term_demo, #{}, self(), []
     ),
     {ok, _ViewId} = arizona_live:mount(Pid),
     ok = arizona_pubsub:broadcast(demo, {chat, ~"hello there"}),
@@ -279,7 +279,7 @@ next_out() ->
 
 start_demo() ->
     {ok, Pid} = arizona_live:start_link(
-        arizona_term_demo, #{}, undefined, [], undefined
+        arizona_term_demo, #{}, undefined, []
     ),
     {ok, ViewId} = arizona_live:mount(Pid),
     {Pid, ViewId}.

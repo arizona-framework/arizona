@@ -15,19 +15,10 @@
 -export([user_agent_returns_header/1]).
 -export([user_agent_absent_is_empty/1]).
 -export([body_threads_updated_raw/1]).
--export([apply_middlewares_empty_list/1]).
--export([apply_middlewares_cont_fun/1]).
--export([apply_middlewares_halt_fun/1]).
--export([apply_middlewares_cont_mf/1]).
--export([apply_middlewares_halt_stops_pipeline/1]).
--export([apply_middlewares_threads_bindings/1]).
 -export([call_resolve_route_dispatches_to_adapter/1]).
 
-%% Exported for use via {?MODULE, Fun} in apply_middlewares_cont_mf.
--export([sample_cont_middleware/2]).
-
 all() ->
-    [{group, accessors}, {group, middlewares}, {group, resolve_route}].
+    [{group, accessors}, {group, resolve_route}].
 
 groups() ->
     [
@@ -43,14 +34,6 @@ groups() ->
             user_agent_returns_header,
             user_agent_absent_is_empty,
             body_threads_updated_raw
-        ]},
-        {middlewares, [parallel], [
-            apply_middlewares_empty_list,
-            apply_middlewares_cont_fun,
-            apply_middlewares_halt_fun,
-            apply_middlewares_cont_mf,
-            apply_middlewares_halt_stops_pipeline,
-            apply_middlewares_threads_bindings
         ]},
         {resolve_route, [parallel], [
             call_resolve_route_dispatches_to_adapter
@@ -152,51 +135,6 @@ body_threads_updated_raw(Config) when is_list(Config) ->
     ?assertEqual(#{body => ~"hello", body_read => true}, arizona_req:raw(Req1)).
 
 %% --------------------------------------------------------------------
-%% Middleware cases
-%% --------------------------------------------------------------------
-
-apply_middlewares_empty_list(Config) when is_list(Config) ->
-    Req = arizona_req_test_adapter:new(#{}),
-    ?assertEqual({cont, Req, #{}}, arizona_req:apply_middlewares([], Req, #{})).
-
-apply_middlewares_cont_fun(Config) when is_list(Config) ->
-    Req = arizona_req_test_adapter:new(#{}),
-    Mw = [fun(R, B) -> {cont, R, B#{step => 1}} end],
-    ?assertEqual({cont, Req, #{step => 1}}, arizona_req:apply_middlewares(Mw, Req, #{})).
-
-apply_middlewares_halt_fun(Config) when is_list(Config) ->
-    Req = arizona_req_test_adapter:new(#{}),
-    Mw = [fun(R, _B) -> {halt, R} end],
-    ?assertEqual({halt, Req}, arizona_req:apply_middlewares(Mw, Req, #{})).
-
-apply_middlewares_cont_mf(Config) when is_list(Config) ->
-    Req = arizona_req_test_adapter:new(#{}),
-    Mw = [{?MODULE, sample_cont_middleware}],
-    ?assertEqual(
-        {cont, Req, #{from_mf => true}},
-        arizona_req:apply_middlewares(Mw, Req, #{})
-    ).
-
-apply_middlewares_halt_stops_pipeline(Config) when is_list(Config) ->
-    Req = arizona_req_test_adapter:new(#{}),
-    Mw = [
-        fun(R, _B) -> {halt, R} end,
-        fun(_R, _B) -> error(should_not_reach) end
-    ],
-    ?assertEqual({halt, Req}, arizona_req:apply_middlewares(Mw, Req, #{})).
-
-apply_middlewares_threads_bindings(Config) when is_list(Config) ->
-    Req = arizona_req_test_adapter:new(#{}),
-    Mw = [
-        fun(R, B) -> {cont, R, B#{a => 1}} end,
-        fun(R, B) -> {cont, R, B#{b => 2}} end
-    ],
-    ?assertEqual(
-        {cont, Req, #{a => 1, b => 2}},
-        arizona_req:apply_middlewares(Mw, Req, #{})
-    ).
-
-%% --------------------------------------------------------------------
 %% resolve_route -- exercises the optional callback wiring
 %% --------------------------------------------------------------------
 
@@ -210,10 +148,3 @@ call_resolve_route_dispatches_to_adapter(Config) when is_list(Config) ->
     ?assertEqual(#{bindings => #{kind => ~"item"}}, RouteOpts),
     ?assertEqual(~"/items", arizona_req:path(NavReq)),
     ?assertEqual(arizona_req_test_adapter, arizona_req:adapter(NavReq)).
-
-%% --------------------------------------------------------------------
-%% Module-function middleware helper
-%% --------------------------------------------------------------------
-
-sample_cont_middleware(Req, Bindings) ->
-    {cont, Req, Bindings#{from_mf => true}}.

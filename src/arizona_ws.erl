@@ -81,7 +81,7 @@ prepare(QS, Adapter, AdapterState) ->
     IB = maps:get(bindings, RouteOpts, #{}),
     OnMount = maps:get(on_mount, RouteOpts, []),
     Middlewares = maps:get(middlewares, RouteOpts, []),
-    case arizona_req:apply_middlewares(Middlewares, ArzReq, IB) of
+    case arizona_middleware:apply_middlewares(Middlewares, ArzReq, IB) of
         {halt, HaltReq} ->
             {halt, HaltReq};
         {cont, ArzReq1, Bindings1} ->

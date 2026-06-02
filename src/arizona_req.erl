@@ -36,12 +36,6 @@ Method = arizona_req:method(Req).          %% eager, no thread
 {Bs,     Req1} = arizona_req:bindings(Req).
 {Params, Req2} = arizona_req:params(Req1).
 ```
-
-## Middleware runner
-
-`apply_middlewares/3` threads a request and bindings map through a list
-of middleware steps. Each step returns either `{cont, Request, Bindings}`
-or `{halt, Request}`. The runner stops on the first halt.
 """.
 
 %% --------------------------------------------------------------------
@@ -61,7 +55,6 @@ or `{halt, Request}`. The runner stops on the first halt.
 -export([headers/1]).
 -export([user_agent/1]).
 -export([body/1]).
--export([apply_middlewares/3]).
 -export([call_resolve_route/4]).
 -export([redirect/2]).
 -export([redirect/3]).
@@ -99,8 +92,6 @@ or `{halt, Request}`. The runner stops on the first halt.
 -export_type([cookies/0]).
 -export_type([headers/0]).
 -export_type([body/0]).
--export_type([middleware/0]).
--export_type([middleware_result/0]).
 -export_type([redirect_status/0]).
 -export_type([qs/0]).
 
@@ -131,10 +122,6 @@ or `{halt, Request}`. The runner stops on the first halt.
 -nominal cookies() :: [{binary(), binary()}].
 -nominal headers() :: #{binary() => iodata()}.
 -nominal body() :: binary().
-
--nominal middleware() ::
-    fun((request(), az:bindings()) -> middleware_result()) | {module(), atom()}.
--nominal middleware_result() :: {cont, request(), az:bindings()} | {halt, request()}.
 
 %% HTTP redirect status codes (RFC 9110 §15.4). The most common are
 %% 301 (moved permanently), 302 (found), 303 (see other), 307
@@ -275,11 +262,12 @@ headers(#{adapter := Adapter, raw := Raw} = Req) ->
 Returns the `User-Agent` request header (or `<<>>` if absent).
 
 A view that serves both browsers (HTML) and native apps (a native JSON tree)
-reads this in `mount/2` and branches in `render/1`. Match it directly (you know
-your own native client's UA), or classify it with the pure helpers in
-`arizona_user_agent` (`browser/1`, `os/1`, `mobile/1`). The framework decides and
-injects nothing -- you own the binding and the branch. For an explicit signal
-instead, send a query param and read it with `params/1`.
+reads this via an `arizona_middleware:extract([user_agent])` middleware and
+branches in `render/1`. Match it directly (you know your own native client's
+UA), or classify it with the pure helpers in `arizona_user_agent` (`browser/1`,
+`os/1`, `mobile/1`). The framework decides and injects nothing -- you own the
+binding and the branch. For an explicit signal instead, send a query param and
+extract it with `arizona_middleware:extract([params])`.
 """.
 -spec user_agent(request()) -> {binary(), request()}.
 user_agent(Req0) ->
@@ -296,22 +284,6 @@ body(#{body := Body} = Req) ->
 body(#{adapter := Adapter, raw := Raw} = Req) ->
     {Body, Raw1} = Adapter:read_body(Raw),
     {Body, Req#{raw => Raw1, body => Body}}.
-
--doc """
-Runs `Middlewares` left-to-right, threading `Request` and `Bindings`
-through each step. Stops on the first `{halt, Request}` and returns it.
-""".
--spec apply_middlewares(Middlewares, Request, Bindings) -> middleware_result() when
-    Middlewares :: [middleware()],
-    Request :: request(),
-    Bindings :: az:bindings().
-apply_middlewares([], Req, Bindings) ->
-    {cont, Req, Bindings};
-apply_middlewares([Mw | Rest], Req, Bindings) ->
-    case call(Mw, Req, Bindings) of
-        {cont, Req1, Bindings1} -> apply_middlewares(Rest, Req1, Bindings1);
-        {halt, _Req1} = Halt -> Halt
-    end.
 
 %% Internal use only -- invoked by `arizona_socket:handle_navigate/3`
 %% and `arizona_ws:prepare/3`. Crashes with `undef` if `Adapter` did
@@ -363,10 +335,3 @@ client-visible response.
     Request :: request().
 halted_redirect(#{redirect := Redirect}) -> Redirect;
 halted_redirect(_) -> undefined.
-
-%% --------------------------------------------------------------------
-%% Internal functions
-%% --------------------------------------------------------------------
-
-call({Mod, Fun}, Req, Bindings) -> Mod:Fun(Req, Bindings);
-call(Fun, Req, Bindings) -> Fun(Req, Bindings).

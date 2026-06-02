@@ -1,12 +1,12 @@
 -module(arizona_local_app).
 -include("arizona_view.hrl").
--export([mount/2, render/1]).
+-export([mount/1, render/1]).
 
 %% A fully client-only "app": nested stateless (the tab bar) and stateful (two
 %% widgets) elements, every interaction driven by client-owned ?local slots
 %% (`arizona_js:set`) -- zero server round-trips after the initial render.
--spec mount(az:bindings(), az:request()) -> az:mount_ret().
-mount(Bindings, _Req) ->
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(Bindings) ->
     {#{id => maps:get(id, Bindings, ~"local_app")}, #{}}.
 
 -spec render(az:bindings()) -> az:template().

@@ -17,6 +17,8 @@
     http_query_params/1,
     http_path_bindings/1,
     ws_path_bindings/1,
+    ws_navigate_to_parametrized_route/1,
+    http_put_request_reads_request/1,
     middleware_cont_enriches_bindings/1,
     middleware_cont_ws_connects/1,
     middleware_halt_redirects/1,
@@ -68,6 +70,8 @@ groups() ->
         http_query_params,
         http_path_bindings,
         ws_path_bindings,
+        ws_navigate_to_parametrized_route,
+        http_put_request_reads_request,
         middleware_cont_enriches_bindings,
         middleware_cont_ws_connects,
         middleware_halt_redirects,
@@ -112,16 +116,9 @@ init_per_group(roadrunner, Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     {ok, _} = application:ensure_all_started(roadrunner),
     Port = pick_port(),
-    %% Test-only URL -> Bindings middleware. Tests that assert on URL
-    %% data in rendered HTML opt into this on their routes; the
-    %% framework itself no longer flat-merges URL data into bindings.
-    UrlToBindings =
-        fun(Req, B) ->
-            {PathBs, Req1} = arizona_req:bindings(Req),
-            {Params, Req2} = arizona_req:params(Req1),
-            ParamsMap = maps:from_list(Params),
-            {cont, Req2, maps:merge(maps:merge(B, PathBs), ParamsMap)}
-        end,
+    %% Tests that assert on URL data in rendered HTML opt into the framework's
+    %% `arizona_middleware:extract/1` middleware on their routes; the framework itself
+    %% never flat-merges URL data into bindings.
     %% Projects every `foo=X` occurrence -- preserving duplicates and
     %% insertion order -- into the `status` binding so assertions can
     %% read them off the rendered HTML. Used to verify that the full qs
@@ -134,7 +131,9 @@ init_per_group(roadrunner, Config) ->
             {cont, Req1, B#{status => <<"foo=[", Joined/binary, "]">>}}
         end,
     Routes = [
-        {live, <<"/">>, arizona_crashable, #{middlewares => [UrlToBindings]}},
+        {live, <<"/">>, arizona_crashable, #{
+            middlewares => [arizona_middleware:extract([path_bindings, params])]
+        }},
         {live, <<"/crash_on_mount">>, arizona_crashable, #{
             bindings => #{crash_on_mount => true}
         }},
@@ -166,7 +165,9 @@ init_per_group(roadrunner, Config) ->
                 fun(Req, B) -> {cont, Req, B#{session => <<"from_navigate">>}} end
             ]
         }},
-        {live, <<"/items/:item_id">>, arizona_crashable, #{middlewares => [UrlToBindings]}},
+        {live, <<"/items/:item_id">>, arizona_crashable, #{
+            middlewares => [arizona_middleware:extract([path_bindings, params])]
+        }},
         {live, <<"/preserves_dupes">>, arizona_crashable, #{middlewares => [DupePreserving]}},
         {live, <<"/halt_redirect_req">>, arizona_crashable, #{
             middlewares => [
@@ -175,6 +176,9 @@ init_per_group(roadrunner, Config) ->
         }},
         {live, <<"/crash_on_render_http">>, arizona_crashable, #{
             bindings => #{crash_on_mount => true}
+        }},
+        {live, <<"/reqreader">>, arizona_request_reader, #{
+            middlewares => [{arizona_middleware, put_request}]
         }},
         {live, <<"/reads_request_id">>, arizona_crashable, #{
             middlewares => [
@@ -334,6 +338,35 @@ ws_path_bindings(Config) ->
     ok = ws_send(Sock, <<"0">>),
     {text, <<"1">>} = ws_recv(Sock),
     ws_close(Sock).
+
+ws_navigate_to_parametrized_route(Config) ->
+    %% SPA navigate INTO a `:param` route: arizona_socket:handle_navigate runs the
+    %% new route's extract([path_bindings, ...]) middleware, so the handler's mount
+    %% receives item_id even though arizona_live never sees a request.
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [
+        ~"navigate",
+        #{~"path" => ~"/items/navtest", ~"qs" => ~""}
+    ]),
+    {text, Resp} = ws_recv(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"navtest">>)),
+    ws_close(Sock).
+
+http_put_request_reads_request(Config) ->
+    %% put_request escape hatch: the handler reads ?get(request) then params/1.
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /reqreader?locale=putreq HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"putreq">>)).
 
 middleware_cont_enriches_bindings(Config) ->
     %% HTTP: middleware adds session to bindings, rendered in page
