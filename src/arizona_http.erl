@@ -13,7 +13,7 @@ transport's native reply shape.
 
 ## Flow
 
-1. Run `arizona_req:apply_middlewares/3` with the route's `bindings`.
+1. Run `arizona_middleware:apply_middlewares/3` with the route's `bindings`.
 2. On `{halt, HaltReq}` -- return `{halt, RawReq}`; the caller ships
    the reply the middleware already wrote.
 3. On `{cont, Req1, Bindings1}` -- call
@@ -67,7 +67,7 @@ Runs the full render pipeline for `Handler` against an already-wrapped
 render(Handler, ArzReq, Opts) ->
     Bindings = maps:get(bindings, Opts, #{}),
     Middlewares = maps:get(middlewares, Opts, []),
-    case arizona_req:apply_middlewares(Middlewares, ArzReq, Bindings) of
+    case arizona_middleware:apply_middlewares(Middlewares, ArzReq, Bindings) of
         {halt, HaltReq} ->
             case arizona_req:halted_redirect(HaltReq) of
                 {Status, Location} -> {redirect, Status, Location};

@@ -35,7 +35,7 @@ include/arizona_stateless.hrl   -- parse_transform, includes arizona_common.hrl
 
 Rule of thumb:
 
-- Route-level pages → `arizona_view.hrl` (`mount/1`; request data arrives as bindings via `arizona_req:extract/1` middlewares)
+- Route-level pages → `arizona_view.hrl` (`mount/1`; request data arrives as bindings via `arizona_middleware:extract/1` middlewares)
 - Embeddable components → `arizona_stateful.hrl` (`mount/1`, instantiated via `?stateful(Handler, Props)`)
 - Pure template modules → `arizona_stateless.hrl`
 
@@ -93,7 +93,7 @@ A route's static config is the single canonical type `arizona_live:route_opts/0`
     bindings => arizona_template:bindings(),
     on_mount => on_mount(),
     layouts => [arizona_render:layout()],
-    middlewares => [arizona_req:middleware()],
+    middlewares => [arizona_middleware:middleware()],
     _ => term()
 }.
 ```

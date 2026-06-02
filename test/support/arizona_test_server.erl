@@ -38,7 +38,7 @@ start() ->
         }},
         {live, <<"/crashable">>, arizona_crashable, #{
             layouts => Layouts,
-            middlewares => [arizona_req:extract([params])]
+            middlewares => [arizona_middleware:extract([params])]
         }},
         {live, <<"/scroll-home">>, arizona_scroll_home, #{layouts => Layouts}},
         {live, <<"/scroll-about">>, arizona_scroll_about, #{layouts => Layouts}},

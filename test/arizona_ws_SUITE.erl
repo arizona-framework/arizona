@@ -117,7 +117,7 @@ init_per_group(roadrunner, Config) ->
     {ok, _} = application:ensure_all_started(roadrunner),
     Port = pick_port(),
     %% Tests that assert on URL data in rendered HTML opt into the framework's
-    %% `arizona_req:extract/1` middleware on their routes; the framework itself
+    %% `arizona_middleware:extract/1` middleware on their routes; the framework itself
     %% never flat-merges URL data into bindings.
     %% Projects every `foo=X` occurrence -- preserving duplicates and
     %% insertion order -- into the `status` binding so assertions can
@@ -132,7 +132,7 @@ init_per_group(roadrunner, Config) ->
         end,
     Routes = [
         {live, <<"/">>, arizona_crashable, #{
-            middlewares => [arizona_req:extract([path_bindings, params])]
+            middlewares => [arizona_middleware:extract([path_bindings, params])]
         }},
         {live, <<"/crash_on_mount">>, arizona_crashable, #{
             bindings => #{crash_on_mount => true}
@@ -166,7 +166,7 @@ init_per_group(roadrunner, Config) ->
             ]
         }},
         {live, <<"/items/:item_id">>, arizona_crashable, #{
-            middlewares => [arizona_req:extract([path_bindings, params])]
+            middlewares => [arizona_middleware:extract([path_bindings, params])]
         }},
         {live, <<"/preserves_dupes">>, arizona_crashable, #{middlewares => [DupePreserving]}},
         {live, <<"/halt_redirect_req">>, arizona_crashable, #{
@@ -178,7 +178,7 @@ init_per_group(roadrunner, Config) ->
             bindings => #{crash_on_mount => true}
         }},
         {live, <<"/reqreader">>, arizona_request_reader, #{
-            middlewares => [{arizona_req, put_request}]
+            middlewares => [{arizona_middleware, put_request}]
         }},
         {live, <<"/reads_request_id">>, arizona_crashable, #{
             middlewares => [

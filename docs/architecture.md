@@ -28,7 +28,8 @@
 | `src/arizona_stateful.erl`                | Behaviour for embedded components -- `mount/1` callback + `call_mount/2` dispatcher; shared callbacks come from `arizona_handler`                                                         |
 | `src/arizona_view.erl`                    | Behaviour for route-level pages -- `mount/1` callback + `call_mount/2` dispatcher; shared callbacks come from `arizona_handler`                                                           |
 | `src/arizona_handler.erl`                 | Shared behaviour hosting callbacks common to views and stateful components (`render/1`, `handle_event/3`, `handle_info/2`, `handle_update/2`, `unmount/1`) + dispatchers                  |
-| `src/arizona_req.erl`                     | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`/`user_agent`, `apply_middlewares/3`, `redirect`/`halted_redirect`                            |
+| `src/arizona_req.erl`                     | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`/`user_agent`, `redirect`/`halted_redirect`                                                   |
+| `src/arizona_middleware.erl`              | Request-to-bindings middleware pipeline -- `apply_middlewares/3` runner (run by the HTTP/WS transports) + built-in `extract/1`/`put_request/2` steps                                      |
 | `src/arizona_user_agent.erl`              | User-Agent classification for dual-serve views -- `browser/1`, `os/1`, `mobile/1` (best-effort); pairs with `arizona_req:user_agent/1`                                                    |
 | `src/arizona_http.erl`                    | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|redirect\|ok\|error, ...}` tuples                                               |
 | `src/arizona_ws.erl`                      | Transport-agnostic WS upgrade bootstrap -- `prepare/3` parses framework keys, resolves the route, runs middlewares, returns state for `arizona_socket`                                    |
@@ -543,8 +544,6 @@ adapter's behaviour callbacks on first access and cached in the returned request
 **Other:**
 
 - `set_raw/2` -- swap the native raw value, clear all lazy caches
-- `apply_middlewares/3(Middlewares, Req, Bindings)` -- threads a request and bindings map through
-  a list of `middleware()`, returning `{cont, Req1, Bindings1}` or `{halt, HaltReq}`
 - `redirect/2(Req, Location)` / `redirect/3(Req, Status, Location)` -- stash a 3xx redirect
   intent in the request. Transports pick it up on halt and translate uniformly (HTTP 3xx
   reply, or `arizona_js:navigate` effect on WS navigate)
@@ -553,6 +552,21 @@ adapter's behaviour callbacks on first access and cached in the returned request
 
 The behaviour expects adapters to implement `parse_bindings/1`, `parse_params/1`,
 `parse_cookies/1`, `parse_headers/1`, `read_body/1` against their native request type.
+
+## API -- `arizona_middleware.erl`
+
+The request-to-bindings middleware pipeline. A middleware reduces a request into the plain
+bindings a `mount/1` handler consumes, keeping the live process and handlers free of any
+request/transport coupling.
+
+- `apply_middlewares/3(Middlewares, Req, Bindings)` -- threads a request and bindings map through
+  a list of `middleware()` left-to-right, returning `{cont, Req1, Bindings1}` or `{halt, HaltReq}`;
+  stops on the first halt. Run by the HTTP and WS transports before mounting a view.
+- `extract/1(Keys)` -- builds a middleware copying selected request data into bindings so a
+  handler reads it with `?get(Key)`. Keys: `path_bindings`, `params`, `headers`, `cookies`,
+  `body`, `method`, `user_agent`.
+- `put_request/2` -- escape-hatch middleware exposing the whole request under the `request`
+  binding for lazy access; prefer `extract/1` for specific data.
 
 ## API -- `arizona_http.erl`
 
@@ -598,7 +612,7 @@ Transport-agnostic upgrade bootstrap for WebSocket handlers.
 
 **SSR (HTTP):** `arizona_roadrunner_http:handle/1` delegates to `arizona_http:render/3`, which wraps
 the native req in an `arizona_req:request()`, runs any route middlewares
-(`arizona_req:apply_middlewares/3`), then calls
+(`arizona_middleware:apply_middlewares/3`), then calls
 `arizona_render:render_view_to_iolist(Handler, Opts)` where Opts may contain
 `layouts => [{Mod, Fun}]`, `bindings => map()`, and `on_mount => [...]`. `render_view_to_iolist/2`
 mounts the page via `arizona_view:call_mount/2`, applies `on_mount` hooks,
@@ -607,8 +621,9 @@ and passes the bindings to the layout's `render/1`. The layout uses `?html` with
 the root element -- a stateless HTML shell (DOCTYPE, head, body, scripts) with no markers or `az`
 attributes. When layout is absent, the page is rendered directly without a wrapper. Route config
 provides `handler`, `layout`, `bindings`, `on_mount`, and `middlewares`. URL data (path bindings,
-query params) does NOT flat-merge into Bindings -- a route opts into `arizona_req:extract/1`
-middlewares (or `put_request/2`) to project what its handler needs. Middleware halts that call
+query params) does NOT flat-merge into Bindings -- a route opts into
+`arizona_middleware:extract/1` middlewares (or `arizona_middleware:put_request/2`) to project
+what its handler needs. Middleware halts that call
 `arizona_req:redirect/2,3` surface as a `{redirect, Status, Location}` result that the transport
 emits as a 3xx reply.
 
@@ -679,7 +694,7 @@ Three roles, each with its own header:
 
 - **Route-level pages** include `arizona_view.hrl` (sets `-behaviour(arizona_view)` +
   `-behaviour(arizona_handler)`, parse transform, template macros). Mount is `mount/1`; request
-  data arrives as bindings via `arizona_req:extract/1` middlewares on the route.
+  data arrives as bindings via `arizona_middleware:extract/1` middlewares on the route.
 - **Embeddable stateful components** include `arizona_stateful.hrl` (sets
   `-behaviour(arizona_stateful)` + `-behaviour(arizona_handler)`). Mount is `mount/1`;
   instantiated from a parent template via `?stateful(Handler, Props)`.

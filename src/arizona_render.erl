@@ -178,7 +178,7 @@ SSR render for a route-level view.
 
 Applies the `on_mount` chain, mounts the view, renders, and optionally
 wraps the page output in a layout module. Request data is supplied as
-bindings by the caller (via `arizona_req:extract/1` middlewares).
+bindings by the caller (via `arizona_middleware:extract/1` middlewares).
 """.
 -spec render_view_to_iolist(Handler, Opts) -> iolist() when
     Handler :: module(),

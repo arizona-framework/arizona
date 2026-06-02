@@ -256,7 +256,7 @@ handle_navigate(
     IB = maps:get(bindings, RouteOpts, #{}),
     OnMount = maps:get(on_mount, RouteOpts, []),
     Middlewares = maps:get(middlewares, RouteOpts, []),
-    case arizona_req:apply_middlewares(Middlewares, NewReq, IB) of
+    case arizona_middleware:apply_middlewares(Middlewares, NewReq, IB) of
         {halt, HaltReq} ->
             halt_navigate(HaltReq, Socket);
         {cont, _NewReq1, Bindings1} ->

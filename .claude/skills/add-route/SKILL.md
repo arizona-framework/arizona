@@ -48,7 +48,7 @@ Choose the appropriate route type based on the user's intent:
 Also scaffold the view module using the `/new-handler` skill pattern (choose "route-level view"):
 - Include `arizona_view.hrl`
 - `mount/1` takes `(Bindings)` and must set `id => <<"page">>` (or appropriate view id); request
-  data (path bindings, query params) arrives via `middlewares => [arizona_req:extract([...])]`
+  data (path bindings, query params) arrives via `middlewares => [arizona_middleware:extract([...])]`
 - `render/1` with `?html(...)`
 - `handle_event/3` if interactive
 

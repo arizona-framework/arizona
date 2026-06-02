@@ -8,7 +8,7 @@ Adds a `mount/1` callback over the shared `arizona_handler` contract.
 creation. The view is transport-agnostic: any request data it needs
 (URL path bindings, query params, cookies, headers, body) is supplied
 as bindings by the transport layer -- typically via
-`arizona_req:extract/1` middlewares on the route.
+`arizona_middleware:extract/1` middlewares on the route.
 
 The other lifecycle callbacks (`render/1`, `handle_event/3`,
 `handle_info/2`, `unmount/1`) come from `arizona_handler`. Views
@@ -138,7 +138,7 @@ the handler at the top of a route.
 
 `Bindings` carries the route's static `bindings` config plus anything
 middleware layered on top (e.g. request data injected via
-`arizona_req:extract/1`).
+`arizona_middleware:extract/1`).
 """.
 -callback mount(Bindings) -> arizona_stateful:mount_ret() when
     Bindings :: arizona_stateful:bindings().

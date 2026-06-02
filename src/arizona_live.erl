@@ -119,7 +119,7 @@ fingerprints already shipped in the initial HTML.
     bindings => arizona_template:bindings(),
     on_mount => on_mount(),
     layouts => [arizona_render:layout()],
-    middlewares => [arizona_req:middleware()],
+    middlewares => [arizona_middleware:middleware()],
     _ => term()
 }.
 
@@ -191,7 +191,7 @@ Starts a live process for a route-level view `Handler`.
 The transport pid receives `{arizona_push, Ops, Effects}` messages when
 the live process diffs and emits updates. `OnMount` is the route's hook
 chain. Any request data the view needs is supplied as bindings by the
-transport layer (e.g. via `arizona_req:extract/1` middlewares); the live
+transport layer (e.g. via `arizona_middleware:extract/1` middlewares); the live
 process is transport-agnostic and never sees a request.
 """.
 -spec start_link(Handler, InitBindings, TransportPid, OnMount) ->

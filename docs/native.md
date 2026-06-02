@@ -57,7 +57,7 @@ handle_event(~"inc", _Payload, Bindings) ->
 
 The framework injects nothing and decides nothing. To serve browsers HTML and
 native apps a JSON tree from a single view, read the connecting client (its
-`User-Agent`, supplied as a binding by `arizona_req:extract([user_agent])`) and
+`User-Agent`, supplied as a binding by `arizona_middleware:extract([user_agent])`) and
 branch in `render/1`.
 
 `arizona_req:user_agent/1` returns the raw `User-Agent` header (no custom header
@@ -75,7 +75,7 @@ helpers — call only the one(s) you need, no precomputed map:
 - `mobile/1` — best-effort mobile-device guess.
 
 ```erlang
-%% Route opts: middlewares => [arizona_req:extract([user_agent])]
+%% Route opts: middlewares => [arizona_middleware:extract([user_agent])]
 mount(Bindings) ->
     {#{id => ~"page", user_agent => ?get(user_agent)}, #{}}.
 
@@ -92,7 +92,7 @@ render(#{user_agent := UA} = Bindings) ->
 These helpers are heuristic and request-level; the `extract([user_agent])`
 middleware runs on both the HTTP and WS paths. You own the binding name and the
 branch -- if you prefer an explicit signal, your client can send a query param
-and you extract it with `arizona_req:extract([params])` instead.
+and you extract it with `arizona_middleware:extract([params])` instead.
 
 ## The JSON widget tree
 

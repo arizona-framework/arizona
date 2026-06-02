@@ -8,7 +8,7 @@ allowed-tools: Write, Glob
 Scaffold a new handler module named `$ARGUMENTS` in `src/`. First ask the user which kind it is:
 
 - **Route-level view** (included in routes, rendered at the top of a URL) → `arizona_view.hrl`,
-  `mount/1` (request data arrives as bindings via `arizona_req:extract/1` middlewares)
+  `mount/1` (request data arrives as bindings via `arizona_middleware:extract/1` middlewares)
 - **Embeddable stateful component** (instantiated from a parent template via
   `?stateful(Handler, Props)`) → `arizona_stateful.hrl`, `mount/1`
 
