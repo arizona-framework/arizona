@@ -6,7 +6,7 @@ levels of `?each`. Exercises nested list-comprehension rendering --
 then again at each section's item level. Total: 100 leaf renders, but
 through a tree shape rather than a flat 100-item list.
 """.
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 
 -export([mount/1]).
 -export([render/1]).

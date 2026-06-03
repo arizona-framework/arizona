@@ -135,9 +135,7 @@ receives additional validation and `az-view` injection.
 parse_transform(Forms, _Options) ->
     File = extract_file(Forms),
     Module = extract_module(Forms),
-    IsLive =
-        has_behaviour(Forms, arizona_stateful) orelse
-            has_behaviour(Forms, arizona_view),
+    IsLive = has_behaviour(Forms, arizona_stateful),
     try
         Transformed = [transform_form(mark_targets(Form, none), Module, IsLive) || Form <- Forms],
         erl_syntax:revert_forms(Transformed)

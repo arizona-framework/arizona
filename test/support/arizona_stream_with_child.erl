@@ -1,5 +1,5 @@
 -module(arizona_stream_with_child).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
 
 %% A view with a stateful child (arizona_counter) inside stream items.

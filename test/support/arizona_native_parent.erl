@@ -1,5 +1,5 @@
 -module(arizona_native_parent).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1]).
 
 %% Native (JSON) parent view embedding a native stateful child, for testing

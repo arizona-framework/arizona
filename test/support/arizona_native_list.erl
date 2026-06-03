@@ -1,5 +1,5 @@
 -module(arizona_native_list).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
 
 %% Native (JSON) stream view for diff-op tests. Mirrors arizona_todo but renders

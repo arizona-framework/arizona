@@ -188,7 +188,7 @@ render_view_to_iolist(Handler, Opts) ->
         maps:get(on_mount, Opts, []),
         maps:get(bindings, Opts, #{})
     ),
-    {Bindings, _Resets} = arizona_view:call_mount(Handler, Bindings0),
+    {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
     finish_ssr(Handler, Bindings, Opts).
 
 -doc """
@@ -339,7 +339,7 @@ fingerprint_payload(#{s := S, d := D}) ->
 %% --------------------------------------------------------------------
 
 finish_ssr(Handler, Bindings, Opts) ->
-    PageTmpl = arizona_handler:call_render(Handler, Bindings),
+    PageTmpl = arizona_stateful:call_render(Handler, Bindings),
     PageHTML = zip(maps:get(s, PageTmpl), render_ssr_dynamics(maps:get(d, PageTmpl))),
     Layouts = maps:get(layouts, Opts, []),
     apply_layouts(Layouts, PageHTML, Bindings).
@@ -421,7 +421,7 @@ render_ssr_val(#{t := ?EACH, source := Source, template := Tmpl}) when is_map(So
     #{t => ?EACH, items => ItemSnaps, template => Tmpl};
 render_ssr_val(#{stateful := H, props := Props}) ->
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
-    render_ssr_val(arizona_handler:call_render(H, B1));
+    render_ssr_val(arizona_stateful:call_render(H, B1));
 render_ssr_val(#{callback := Callback, props := Props}) ->
     Tmpl = Callback(Props),
     render_ssr_val(Tmpl);

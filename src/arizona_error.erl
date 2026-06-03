@@ -10,7 +10,7 @@ Two utilities consumed across the framework:
 - `raise_or_propagate/7` -- the catch-clause helper that lets a
   dispatcher re-tag a failure originating at the user's exact callback
   while propagating any other failure untouched. Used by every
-  `arizona_handler:call_*` wrapper.
+  `arizona_stateful:call_*` wrapper.
 """.
 
 -export([did_you_mean/2]).

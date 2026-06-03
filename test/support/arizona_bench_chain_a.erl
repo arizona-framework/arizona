@@ -6,7 +6,7 @@ stateful child. First link in a 3-level stateful chain
 recursive `arizona_render:render_ssr_val/1` propagation through
 nested stateful descriptors.
 """.
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 
 -export([mount/1]).
 -export([render/1]).

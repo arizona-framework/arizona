@@ -1,5 +1,5 @@
 -module(arizona_bench_multi_key).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
 
 %% Bench fixture: a flat view with 10 dynamics, each tracking a different

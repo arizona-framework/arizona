@@ -1,5 +1,5 @@
 -module(arizona_local_app).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1]).
 
 %% A fully client-only "app": nested stateless (the tab bar) and stateful (two

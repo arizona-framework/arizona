@@ -387,7 +387,7 @@ handle_call(
         bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1
     }};
 handle_call(render_current, _From, #state{handler = H, bindings = B, views = V} = State) ->
-    Tmpl = arizona_handler:call_render(H, B),
+    Tmpl = arizona_stateful:call_render(H, B),
     {HTML, _Snap, _Views1} = arizona_render:render(Tmpl, V),
     {reply, {ok, iolist_to_binary(HTML)}, State};
 handle_call({event, ViewId, Event, Payload}, _From, #state{views = V0} = State) ->
@@ -403,7 +403,7 @@ handle_call(
     #state{handler = OldH, bindings = OldB, transport_pid = TPid, sent_fps = Fps0} = _State
 ) ->
     ok = cancel_pending_timers(),
-    ok = arizona_handler:call_unmount(OldH, OldB),
+    ok = arizona_stateful:call_unmount(OldH, OldB),
     %% Carry the previous root handler's final bindings forward as the floor;
     %% NewIB (route static config + middleware enrichments) overrides on
     %% overlap. The new handler's `mount/1` receives `OldB ⊕ NewIB`, picks
@@ -464,7 +464,7 @@ handle_info(Info, State) ->
     handle_root_info(Info, State).
 
 terminate(_Reason, #state{handler = H, bindings = B}) ->
-    ok = arizona_handler:call_unmount(H, B);
+    ok = arizona_stateful:call_unmount(H, B);
 terminate(_Reason, _State) ->
     ok.
 
@@ -502,17 +502,17 @@ do_mount(H, B0, V0, OnMount) ->
     {B2, Resets} = call_mount(H, B1),
     ok = arizona_eval:check_restricted_keys(B2, B1, H),
     ViewId = maps:get(id, B2),
-    Tmpl = arizona_handler:call_render(H, B2),
+    Tmpl = arizona_stateful:call_render(H, B2),
     {HTML, Snap, V1} = arizona_render:render(Tmpl, V0),
     B3 = arizona_stream:clear_stream_pending(B2, arizona_stream:stream_keys(B2)),
     B4 = maps:merge(B3, Resets),
     {ViewId, HTML, Snap, B4, V1}.
 
 call_mount(H, Bindings) ->
-    arizona_view:call_mount(H, Bindings).
+    arizona_stateful:call_mount(H, Bindings).
 
 handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
-    {B1, Resets, Effects} = arizona_handler:call_handle_event(H, Event, Payload, B0),
+    {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
     {Ops1, Snap1, V1, B3, Fps1, NewState} = process_root_change(H, B1, Resets, State),
     {reply, {ok, Ops1, Effects}, NewState#state{
         bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
@@ -520,12 +520,12 @@ handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
 
 handle_child_event(ViewId, Event, Payload, #state{views = V0} = State) ->
     #{ViewId := #{handler := H, bindings := B0} = View} = V0,
-    {B1, Resets, Effects} = arizona_handler:call_handle_event(H, Event, Payload, B0),
+    {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
     {Ops1, V1, Fps1} = process_child_change(H, B1, Resets, ViewId, View, State),
     {reply, {ok, Ops1, Effects}, State#state{views = V1, sent_fps = Fps1}}.
 
 handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
-    case arizona_handler:call_handle_info(H, Info, B0) of
+    case arizona_stateful:call_handle_info(H, Info, B0) of
         ok ->
             {noreply, State};
         {B1, Resets, Effects} ->
@@ -538,7 +538,7 @@ handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} 
 
 handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State) ->
     #{ViewId := #{handler := H, bindings := B0} = View} = V0,
-    case arizona_handler:call_handle_info(H, Msg, B0) of
+    case arizona_stateful:call_handle_info(H, Msg, B0) of
         ok ->
             {noreply, State};
         {B1, Resets, Effects} ->
@@ -548,7 +548,7 @@ handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State)
     end.
 
 handle_drain_info(Deadline, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
-    case arizona_handler:call_handle_drain(H, Deadline, B0) of
+    case arizona_stateful:call_handle_drain(H, Deadline, B0) of
         ok ->
             {noreply, State};
         {stop, B1, Effects} ->
@@ -580,7 +580,7 @@ process_root_change(
         bindings = B0, snapshot = Snap0, views = V0, sent_fps = Fps0
     } = State
 ) ->
-    Tmpl = arizona_handler:call_render(H, B1),
+    Tmpl = arizona_stateful:call_render(H, B1),
     Changed = compute_changed(B0, B1),
     {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
     RemovedViews = #{K => V || K := V <- V0, not is_map_key(K, V1)},
@@ -593,7 +593,7 @@ process_root_change(
 process_child_change(H, B1, Resets, ViewId, #{snapshot := Snap0} = View, #state{
     views = V0, sent_fps = Fps0
 }) ->
-    Tmpl = arizona_handler:call_render(H, B1),
+    Tmpl = arizona_stateful:call_render(H, B1),
     {Ops, Snap1} = arizona_diff:diff(Tmpl, Snap0),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
@@ -607,7 +607,7 @@ clear_streams_and_apply_resets(B1, Resets) ->
 unmount_removed_views(RemovedViews) ->
     maps:foreach(
         fun(_Id, #{handler := H, bindings := B}) ->
-            ok = arizona_handler:call_unmount(H, B)
+            ok = arizona_stateful:call_unmount(H, B)
         end,
         RemovedViews
     ).

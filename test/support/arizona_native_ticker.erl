@@ -1,5 +1,5 @@
 -module(arizona_native_ticker).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_info/2]).
 
 %% Native (JSON) server-push example: a handle_info timer pushes count updates

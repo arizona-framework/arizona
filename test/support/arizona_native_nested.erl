@@ -1,5 +1,5 @@
 -module(arizona_native_nested).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1]).
 -export([render/1]).
 

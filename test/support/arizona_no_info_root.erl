@@ -1,5 +1,5 @@
 -module(arizona_no_info_root).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1]).
 
 %% View without handle_info/2 -- used to assert arizona_live silently

@@ -1,5 +1,5 @@
 -module(arizona_bench_each_track).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
 
 %% Bench fixture: a `?each` stream where every per-item dynamic uses
