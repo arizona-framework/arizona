@@ -16,7 +16,7 @@ Use `?native(...)` instead of `?html(...)`. The element-tuple form, macros, and
 handlers are identical:
 
 ```erlang
--include_lib("arizona/include/arizona_view.hrl").
+-include_lib("arizona/include/arizona_stateful.hrl").
 
 mount(Bindings) ->
     {#{id => ~"counter", count => maps:get(count, Bindings, 0)}, #{}}.

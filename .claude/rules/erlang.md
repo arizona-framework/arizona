@@ -27,16 +27,13 @@ Templates are plain maps: `#{s => [binary()], d => [dynamic()], f => binary()}`.
 
 ```
 include/arizona_common.hrl      -- utility macros (?get, ?html, ?each, ?stateful, ?stateless, ?inner_content, ?connected)
-include/arizona_handler.hrl     -- shared base: parse_transform, send/subscribe macros, arizona_common.hrl
-include/arizona_view.hrl        -- -behaviour(arizona_view) + -behaviour(arizona_handler); pulls arizona_handler.hrl
-include/arizona_stateful.hrl    -- -behaviour(arizona_stateful) + -behaviour(arizona_handler); pulls arizona_handler.hrl
+include/arizona_stateful.hrl    -- -behaviour(arizona_stateful); parse_transform, send/subscribe macros, arizona_common.hrl
 include/arizona_stateless.hrl   -- parse_transform, includes arizona_common.hrl
 ```
 
 Rule of thumb:
 
-- Route-level pages → `arizona_view.hrl` (`mount/1`; request data arrives as bindings via `arizona_middleware:extract/1` middlewares)
-- Embeddable components → `arizona_stateful.hrl` (`mount/1`, instantiated via `?stateful(Handler, Props)`)
+- Live handlers → `arizona_stateful.hrl` (`mount/1`). Route pages get request data as bindings via `arizona_middleware:extract/1` middlewares; embeddable components are instantiated via `?stateful(Handler, Props)`
 - Pure template modules → `arizona_stateless.hrl`
 
 ## Mount bindings -- construct, don't merge

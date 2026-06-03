@@ -7,16 +7,16 @@ allowed-tools: Write, Glob
 
 Scaffold a new handler module named `$ARGUMENTS` in `src/`. First ask the user which kind it is:
 
-- **Route-level view** (included in routes, rendered at the top of a URL) → `arizona_view.hrl`,
+- **Route-level page** (included in routes, rendered at the top of a URL) → `arizona_stateful.hrl`,
   `mount/1` (request data arrives as bindings via `arizona_middleware:extract/1` middlewares)
 - **Embeddable stateful component** (instantiated from a parent template via
   `?stateful(Handler, Props)`) → `arizona_stateful.hrl`, `mount/1`
 
-### View template
+### Route-level page template
 
 ```erlang
 -module($ARGUMENTS).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
 
 mount(Bindings) ->

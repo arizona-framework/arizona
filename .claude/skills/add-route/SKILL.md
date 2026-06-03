@@ -20,7 +20,7 @@ Choose the appropriate route type based on the user's intent:
 {live, Path, Handler, Opts}
 ```
 - `Path` -- route pattern, e.g. `<<"/">>`  or `<<"/users/:id">>`
-- `Handler` -- a view module that includes `arizona_view.hrl` and exports `mount/1`, `render/1`
+- `Handler` -- a handler module that includes `arizona_stateful.hrl` and exports `mount/1`, `render/1`
 - `Opts` -- map with optional keys:
   - `bindings => map()` -- initial bindings passed to `mount/1` (default `#{}`)
   - `layout => {LayoutMod, LayoutFun}` -- layout to wrap the page (optional)
@@ -45,8 +45,8 @@ Choose the appropriate route type based on the user's intent:
 
 ## 3. If creating a new live page
 
-Also scaffold the view module using the `/new-handler` skill pattern (choose "route-level view"):
-- Include `arizona_view.hrl`
+Also scaffold the handler module using the `/new-handler` skill pattern (choose "route-level page"):
+- Include `arizona_stateful.hrl`
 - `mount/1` takes `(Bindings)` and must set `id => <<"page">>` (or appropriate view id); request
   data (path bindings, query params) arrives via `middlewares => [arizona_middleware:extract([...])]`
 - `render/1` with `?html(...)`

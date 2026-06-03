@@ -30,7 +30,7 @@ across upgrades.
 - **SSR + live updates** -- HTML on first load, WebSocket diffs after
 - **Erlang-native templates** -- `{Tag, Attrs, Children}` tuples compiled by parse transform
 - **Compile-time static/dynamic split** -- statics sent once, only dynamics cross the wire
-- **Three handler kinds** -- `arizona_view` (route pages), `arizona_stateful` (components),
+- **Two handler kinds** -- `arizona_stateful` (live: route pages and components),
   `arizona_stateless` (pure templates)
 - **Streams** -- keyed collections with insert/delete/update/move/sort/limit
 - **SPA navigation** -- `az_navigate` links, server renders the next page over WebSocket
@@ -125,12 +125,12 @@ slot-reset map -- usually `#{}`), and `handle_event/3` returns `{Bindings, Reset
 
 ### 2. The parent page
 
-A **view** is the route's root handler. It receives initial bindings:
+A route's **root handler** is a stateful handler. It receives initial bindings:
 
 ```erlang
 %% src/my_page.erl
 -module(my_page).
--include_lib("arizona/include/arizona_view.hrl").
+-include_lib("arizona/include/arizona_stateful.hrl").
 -export([mount/1, render/1]).
 
 mount(Bindings) ->

@@ -25,11 +25,11 @@ How `src/arizona_roadrunner_ws.erl` receives and `src/arizona_socket.erl` routes
 
 How `src/arizona_live.erl` dispatches:
 - Root vs child view routing (checks `views` map for `ViewId`)
-- Calls `arizona_handler:call_handle_event(H, Event, Payload, Bindings)` which invokes the
+- Calls `arizona_stateful:call_handle_event(H, Event, Payload, Bindings)` which invokes the
   handler's `handle_event/3`
 - Gets back `{NewBindings, Resets, Effects}`
 - Computes changed keys via `compute_changed/2`
-- Re-renders via `arizona_handler:call_render/2`
+- Re-renders via `arizona_stateful:call_render/2`
 - Diffs: `arizona_diff:diff/4(NewTmpl, OldSnap, Views, Changed)`
 
 ## 4. Diff & ops

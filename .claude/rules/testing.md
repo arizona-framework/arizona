@@ -27,15 +27,14 @@ Playwright, split into projects/directories:
 
 ## Test handler modules (in `test/support/`)
 
-Handlers pick one of the three header forms:
+Handlers pick one of the two header forms:
 
-- `arizona_view.hrl` -- route-level pages (`mount/1`; request data arrives as bindings)
-- `arizona_stateful.hrl` -- embeddable components (`mount/1`, instantiated via `?stateful(...)` in a parent template)
+- `arizona_stateful.hrl` -- live handlers: route-level pages and embeddable components (`mount/1`; pages get request data as bindings, components are instantiated via `?stateful(...)` in a parent template)
 - `arizona_stateless.hrl` -- pure template modules
 
-**Spawn rule:** `arizona_live:start_link/4` only accepts views. Stateful handlers are embedded children inside a parent view's render tree -- never spawned as their own live processes. Tests of stateful handler behaviour must drive them either via direct calls (`arizona_stateful:call_mount/2`, `arizona_render:render_to_iolist/2`) or via a parent view that embeds the stateful handler and dispatches events to it.
+**Spawn rule:** `arizona_live:start_link/4` spawns a handler as a route root. A stateful handler embedded as a child (via `?stateful`) is never spawned as its own live process -- drive embedded-handler behaviour either via direct calls (`arizona_stateful:call_mount/2`, `arizona_render:render_to_iolist/2`) or via a parent that embeds it and dispatches events to it.
 
-### Route-level views (`arizona_view.hrl`)
+### Route-level pages (`arizona_stateful.hrl`)
 - `arizona_page.erl` -- page with 3 stateful counter children, connected status
 - `arizona_about.erl` -- about page with `handle_info/2` tick timer, `az-hook="Tick"`, SPA navigation
 - `arizona_crashable.erl` -- crash fixtures: `mount`, `handle_event`, and `handle_info` crash paths
