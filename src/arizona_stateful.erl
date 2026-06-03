@@ -251,8 +251,8 @@ Reacts to a transport-level drain signal. Optional.
 Fires when the listener broadcasts a graceful-shutdown notice
 (typically during a deploy). The handler can push a "reconnecting"
 indicator to the client, then return `{stop, ...}` to exit the live
-process cleanly so the WebSocket closes with code 1000 and the
-client reconnects to the new server version.
+process cleanly so the WebSocket closes with code 1001 ("going away")
+and the client reconnects to the new server version.
 
 `Deadline` is the millisecond timestamp by which the listener will
 stop waiting. Subtract `erlang:monotonic_time(millisecond)` to get
@@ -451,8 +451,8 @@ Invokes the optional `handle_drain/2` callback.
 
 Defaults to `{stop, Bindings, []}` when the callback is not exported
 -- the framework's safe-default response to a transport drain is to
-exit the live process cleanly so the WebSocket closes with code 1000
-and the client reconnects to the new server version. Re-tags a
+exit the live process cleanly so the WebSocket closes with code 1001
+("going away") and the client reconnects to the new server version. Re-tags a
 no-matching-clause crash at the callback's head as `{unhandled_drain,
 H, Deadline, Bindings}`; errors raised from inside the callback body
 propagate untagged.

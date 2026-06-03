@@ -499,7 +499,7 @@ page_content(_Snap, HTML) ->
 
 do_mount(H, B0, V0, OnMount) ->
     B1 = apply_on_mount(OnMount, B0),
-    {B2, Resets} = call_mount(H, B1),
+    {B2, Resets} = arizona_stateful:call_mount(H, B1),
     ok = arizona_eval:check_restricted_keys(B2, B1, H),
     ViewId = maps:get(id, B2),
     Tmpl = arizona_stateful:call_render(H, B2),
@@ -507,9 +507,6 @@ do_mount(H, B0, V0, OnMount) ->
     B3 = arizona_stream:clear_stream_pending(B2, arizona_stream:stream_keys(B2)),
     B4 = maps:merge(B3, Resets),
     {ViewId, HTML, Snap, B4, V1}.
-
-call_mount(H, Bindings) ->
-    arizona_stateful:call_mount(H, Bindings).
 
 handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
     {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),

@@ -174,11 +174,12 @@ render_to_iolist(Handler, Opts) ->
     finish_ssr(Handler, Bindings, Opts).
 
 -doc """
-SSR render for a route-level view.
+SSR render for a route-level page (the production HTTP path).
 
-Applies the `on_mount` chain, mounts the view, renders, and optionally
+Applies the `on_mount` chain, mounts the handler, renders, and optionally
 wraps the page output in a layout module. Request data is supplied as
 bindings by the caller (via `arizona_middleware:extract/1` middlewares).
+Use `render_to_iolist/2` for embedded-component SSR (no `on_mount`).
 """.
 -spec render_view_to_iolist(Handler, Opts) -> iolist() when
     Handler :: module(),
