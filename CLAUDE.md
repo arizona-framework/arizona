@@ -94,6 +94,20 @@ Client JS: `arizona.set(viewId, key, value)` (always 3-arg -- the 2-arg `arizona
 
 **Caveat:** a `?local` value survives normal per-slot diffs, but resets to its SSR initial if an enclosing region is re-rendered wholesale (`OP_UPDATE`/`OP_REPLACE`/`?each` swap) or on a forced reconnect. Inside `?each`, every item shares the slot **key** -- keys are compile-time literals (no `?local(<<"open_", Id/binary>>, ...)`), so `set`/`set_all` updates **all** items at once; `?local` can't hold per-item independent client state in a list/stream (use server state for that). The server never reads it back -- to use it server-side, send it in a `push_event` payload. See [docs/architecture.md](docs/architecture.md).
 
+## Static generation
+
+`arizona_static:generate/2,3` renders route handlers to HTML files offline (no server/WS), building
+on the request-free SSR path, and returns `{Written, Failed}` (paths plus per-spec failures). A spec is `{Handler, Outfile}` or
+`{Handler, Outfile, Opts}` (`Outfile` relative to `OutDir`; `Opts` = `bindings`/`on_mount`/`layouts`).
+`generate/3` takes a `DefaultOpts` map each spec's `Opts` override (e.g. a shared layout).
+
+```erlang
+arizona_static:generate(~"_site", [
+    {home_page, ~"index.html"},
+    {about_page, ~"about/index.html", #{bindings => #{title => ~"About"}}}
+], #{layouts => [{site_layout, render}]}).
+```
+
 ## What's missing
 
 ### Engine
