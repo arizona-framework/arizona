@@ -2,7 +2,7 @@
 # below are a known-good late-2024/early-2025 set.
 [versions]
 agp = "8.13.2"
-kotlin = "2.1.0"
+kotlin = "2.3.21"
 coreKtx = "1.15.0"
 lifecycle = "2.8.7"
 activityCompose = "1.9.3"
