@@ -1,2 +1,0 @@
--behaviour(arizona_view).
--include("arizona_handler.hrl").

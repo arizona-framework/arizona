@@ -1,5 +1,5 @@
 -module(arizona_bench_many_dyn).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1]).
 
 %% Bench fixture: a flat view with 50 top-level dynamics, each tracking

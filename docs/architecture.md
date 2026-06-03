@@ -25,9 +25,7 @@
 | `src/arizona_js.erl`                      | Web/browser command + effect builders -- `push_event`, `navigate`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`                  |
 | `src/arizona_android.erl`                 | Native (`?native`) command builders -- the portable `push_event/1,2` and `navigate/1,2`                                                                                                   |
 | `src/arizona_stream.erl`                  | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`                                                                |
-| `src/arizona_stateful.erl`                | Behaviour for embedded components -- `mount/1` callback + `call_mount/2` dispatcher; shared callbacks come from `arizona_handler`                                                         |
-| `src/arizona_view.erl`                    | Behaviour for route-level pages -- `mount/1` callback + `call_mount/2` dispatcher; shared callbacks come from `arizona_handler`                                                           |
-| `src/arizona_handler.erl`                 | Shared behaviour hosting callbacks common to views and stateful components (`render/1`, `handle_event/3`, `handle_info/2`, `handle_update/2`, `unmount/1`) + dispatchers                  |
+| `src/arizona_stateful.erl`                | Behaviour for all live handlers (route-page roots + embedded `?stateful`) -- `mount`/`render`/`handle_*`/`unmount` callbacks, the `call_*` dispatchers, and `format_error/2`              |
 | `src/arizona_req.erl`                     | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`/`user_agent`, `redirect`/`halted_redirect`                                                   |
 | `src/arizona_middleware.erl`              | Request-to-bindings middleware pipeline -- `apply_middlewares/3` runner (run by the HTTP/WS transports) + built-in `extract/1`/`put_request/2` steps                                      |
 | `src/arizona_user_agent.erl`              | User-Agent classification for dual-serve views -- `browser/1`, `os/1`, `mobile/1` (best-effort); pairs with `arizona_req:user_agent/1`                                                    |
@@ -78,7 +76,7 @@ HTML output and rendering.
   where Opts may contain `layouts => [{Mod, Fun}]` and `bindings => map()`. `on_mount` is not
   honored -- it's a route-level concept
 - `render_view_to_iolist/2` -- production HTTP SSR for views: `render_view_to_iolist(Handler, Opts)`.
-  Mounts via `arizona_view:call_mount/2`, applies `on_mount` hooks, optionally
+  Mounts via `arizona_stateful:call_mount/2`, applies `on_mount` hooks, optionally
   wraps in a layout
 - `resolve_id/1` -- resolves a binary id (passthrough) or a `#{s, d}` template (renders to binary)
 - `zip/2` -- interleave statics and evaluated dynamics into iolist
@@ -439,7 +437,7 @@ Simplified gen_server wrapper:
   hook list. The transport PID receives `{arizona_push, ...}` updates; pass `undefined` for a
   standalone (non-pushing) process. The live process is transport-agnostic and takes no request
 - `mount/1` -- calls `Handler:mount(Bindings)`. Extracts `ViewId = maps:get(id, Bindings)`, calls
-  `Handler:render(B1)` via `arizona_handler:call_render/2`, builds a snapshot via
+  `Handler:render(B1)` via `arizona_stateful:call_render/2`, builds a snapshot via
   `arizona_render:render/2`. Returns `{ok, ViewId}` (no HTML -- SSR is handled separately by
   `arizona_roadrunner_http`)
 - `handle_event/4` -- unified event dispatch: `handle_event(Pid, ViewId, Event, Payload)`. Checks
@@ -615,7 +613,7 @@ the native req in an `arizona_req:request()`, runs any route middlewares
 (`arizona_middleware:apply_middlewares/3`), then calls
 `arizona_render:render_view_to_iolist(Handler, Opts)` where Opts may contain
 `layouts => [{Mod, Fun}]`, `bindings => map()`, and `on_mount => [...]`. `render_view_to_iolist/2`
-mounts the page via `arizona_view:call_mount/2`, applies `on_mount` hooks,
+mounts the page via `arizona_stateful:call_mount/2`, applies `on_mount` hooks,
 renders to page HTML, then optionally injects the page HTML into mount bindings as `inner_content`
 and passes the bindings to the layout's `render/1`. The layout uses `?html` with `az_nodiff` on
 the root element -- a stateless HTML shell (DOCTYPE, head, body, scripts) with no markers or `az`
@@ -690,21 +688,20 @@ render(Bindings) ->
 
 ## Handler callbacks
 
-Three roles, each with its own header:
+Two handler kinds, each with its own header:
 
-- **Route-level pages** include `arizona_view.hrl` (sets `-behaviour(arizona_view)` +
-  `-behaviour(arizona_handler)`, parse transform, template macros). Mount is `mount/1`; request
-  data arrives as bindings via `arizona_middleware:extract/1` middlewares on the route.
-- **Embeddable stateful components** include `arizona_stateful.hrl` (sets
-  `-behaviour(arizona_stateful)` + `-behaviour(arizona_handler)`). Mount is `mount/1`;
-  instantiated from a parent template via `?stateful(Handler, Props)`.
+- **Live handlers** (`arizona_stateful`) include `arizona_stateful.hrl` (sets
+  `-behaviour(arizona_stateful)`, parse transform, template macros). Mount is `mount/1`. The same
+  behaviour serves **route-level pages** -- spawned as a live-process root, with request data
+  arriving as bindings via `arizona_middleware:extract/1` middlewares on the route -- and
+  **embedded components**, instantiated from a parent template via `?stateful(Handler, Props)`.
 - **Pure stateless templates** include `arizona_stateless.hrl` (parse transform only, no
   behaviour). Invoked via `?stateless(Callback, Props)` or `?stateless(Mod, Fun, Props)`.
 
 ```erlang
 %% Route-level page
 -module(my_page).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
 
 mount(Bindings) ->
@@ -717,16 +714,16 @@ handle_event(~"inc", _Payload, Bindings) ->
     {Bindings#{count => maps:get(count, Bindings, 0) + 1}, #{}, []}.
 ```
 
-**Callback signatures** (see `src/arizona_view.erl`, `src/arizona_stateful.erl`, and
-`src/arizona_handler.erl` for authoritative types):
+**Callback signatures** (see `src/arizona_stateful.erl` for authoritative types):
 
 ```erlang
-mount(Bindings) -> {NewBindings, Resets}.                                      %% Required (view + stateful)
-render(Bindings) -> #{s => [...], d => [...]}.                                 %% Required (arizona_handler)
-handle_event(Event, Payload, Bindings) -> {NewBindings, Resets, Effects}.      %% Optional (arizona_handler)
-handle_info(Info, Bindings) -> {NewBindings, Resets, Effects}.                 %% Optional (arizona_handler)
-handle_update(Props, Bindings) -> {NewBindings, Resets}.                       %% Optional (arizona_handler; stateful only in practice)
-unmount(Bindings) -> term().                                                   %% Optional (arizona_handler)
+mount(Bindings) -> {NewBindings, Resets}.                                      %% Required
+render(Bindings) -> #{s => [...], d => [...]}.                                 %% Required
+handle_event(Event, Payload, Bindings) -> {NewBindings, Resets, Effects}.      %% Optional
+handle_info(Info, Bindings) -> {NewBindings, Resets, Effects}.                 %% Optional
+handle_update(Props, Bindings) -> {NewBindings, Resets}.                       %% Optional (embedded only)
+handle_drain(Deadline, Bindings) -> ok | {stop, Bindings, Effects}.           %% Optional
+unmount(Bindings) -> term().                                                   %% Optional
 ```
 
 `Resets` is a map of binding values reapplied on top of `NewBindings` after the callback returns --
@@ -735,8 +732,8 @@ list of `arizona_js:cmd()` values to run client-side after the diff is applied.
 
 Mount must produce `Bindings` containing an `id` key -- this becomes the ViewId used for event
 routing and navigate targeting. The parse transform auto-injects `az-view` as a boolean attribute
-on the root element of `render/1` when the module declares either `arizona_view` or
-`arizona_stateful` behaviour. Using `az_view` manually outside this context raises a compile error.
+on the root element of `render/1` when the module declares the `arizona_stateful` behaviour. Using
+`az_view` manually outside this context raises a compile error.
 
 **`id` attribute restriction:** The root element's `id` MUST use `{id, ?get(id)}` (or the equivalent
 `arizona_template:get(id, Bindings)` / `az:get(id, Bindings)`). Static binaries and composed values
@@ -748,12 +745,12 @@ value. Using `?get(id)` ensures the template renders the same value the parent p
 the server uses for tracking. `id` is a restricted key -- the handler's mount callback cannot
 override the value passed by the parent in Props.
 
-**Dispatcher error tagging.** Each `arizona_handler:call_*` wrapper catches `error:undef` and
+**Dispatcher error tagging.** Each `arizona_stateful:call_*` wrapper catches `error:undef` and
 `error:function_clause` only when the failing stack frame is the user's exact callback, and
 re-raises with a structured reason carrying an `error_info` annotation: `{missing_callback, Mod,
 Name, Arity}`, `{unhandled_event, Mod, Event, Bindings}`, `{unhandled_info, Mod, Info, Bindings}`,
 `{unhandled_update, Mod, Props, Bindings}`, `{unhandled_unmount, Mod, Bindings}`, or
-`{render_no_clause, Mod, Bindings}`. `arizona_handler:format_error/2` turns each into a sentence
+`{render_no_clause, Mod, Bindings}`. `arizona_stateful:format_error/2` turns each into a sentence
 that names the offending module/event and (when known) the view id. Errors raised from inside a
 callback's body propagate untagged.
 

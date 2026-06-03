@@ -174,11 +174,12 @@ render_to_iolist(Handler, Opts) ->
     finish_ssr(Handler, Bindings, Opts).
 
 -doc """
-SSR render for a route-level view.
+SSR render for a route-level page (the production HTTP path).
 
-Applies the `on_mount` chain, mounts the view, renders, and optionally
+Applies the `on_mount` chain, mounts the handler, renders, and optionally
 wraps the page output in a layout module. Request data is supplied as
 bindings by the caller (via `arizona_middleware:extract/1` middlewares).
+Use `render_to_iolist/2` for embedded-component SSR (no `on_mount`).
 """.
 -spec render_view_to_iolist(Handler, Opts) -> iolist() when
     Handler :: module(),
@@ -188,7 +189,7 @@ render_view_to_iolist(Handler, Opts) ->
         maps:get(on_mount, Opts, []),
         maps:get(bindings, Opts, #{})
     ),
-    {Bindings, _Resets} = arizona_view:call_mount(Handler, Bindings0),
+    {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
     finish_ssr(Handler, Bindings, Opts).
 
 -doc """
@@ -339,7 +340,7 @@ fingerprint_payload(#{s := S, d := D}) ->
 %% --------------------------------------------------------------------
 
 finish_ssr(Handler, Bindings, Opts) ->
-    PageTmpl = arizona_handler:call_render(Handler, Bindings),
+    PageTmpl = arizona_stateful:call_render(Handler, Bindings),
     PageHTML = zip(maps:get(s, PageTmpl), render_ssr_dynamics(maps:get(d, PageTmpl))),
     Layouts = maps:get(layouts, Opts, []),
     apply_layouts(Layouts, PageHTML, Bindings).
@@ -421,7 +422,7 @@ render_ssr_val(#{t := ?EACH, source := Source, template := Tmpl}) when is_map(So
     #{t => ?EACH, items => ItemSnaps, template => Tmpl};
 render_ssr_val(#{stateful := H, props := Props}) ->
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
-    render_ssr_val(arizona_handler:call_render(H, B1));
+    render_ssr_val(arizona_stateful:call_render(H, B1));
 render_ssr_val(#{callback := Callback, props := Props}) ->
     Tmpl = Callback(Props),
     render_ssr_val(Tmpl);

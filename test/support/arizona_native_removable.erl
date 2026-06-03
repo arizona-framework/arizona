@@ -1,5 +1,5 @@
 -module(arizona_native_removable).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1]).
 -export([render/1]).
 -export([handle_event/3]).

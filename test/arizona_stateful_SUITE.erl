@@ -1,4 +1,4 @@
--module(arizona_handler_SUITE).
+-module(arizona_stateful_SUITE).
 -include_lib("stdlib/include/assert.hrl").
 
 -export([all/0, groups/0]).
@@ -70,17 +70,17 @@ missing_callback_render_tagged(Config) when is_list(Config) ->
     %% an error_info annotation.
     Mod = compile_module("-module(stub_no_render). -export([]).\n"),
     Stack =
-        try arizona_handler:call_render(Mod, #{id => <<"v">>}) of
+        try arizona_stateful:call_render(Mod, #{id => <<"v">>}) of
             _ -> ct:fail(expected_missing_callback)
         catch
             error:{missing_callback, Mod, render, 1}:ST -> ST
         end,
     %% Top frame is the arizona_error helper that re-raised; the
-    %% error_info annotation points back at arizona_handler so
+    %% error_info annotation points back at arizona_stateful so
     %% erl_error dispatches to the right format_error/2.
     [{arizona_error, raise_or_propagate, _, Info} | _] = Stack,
     ?assertEqual(
-        #{module => arizona_handler},
+        #{module => arizona_stateful},
         proplists:get_value(error_info, Info)
     ).
 
@@ -95,7 +95,7 @@ unhandled_event_tagged(Config) when is_list(Config) ->
     ),
     Stack =
         try
-            arizona_handler:call_handle_event(
+            arizona_stateful:call_handle_event(
                 Mod, <<"unknown">>, #{}, #{id => <<"v">>}
             )
         of
@@ -104,11 +104,11 @@ unhandled_event_tagged(Config) when is_list(Config) ->
             error:{unhandled_event, Mod, <<"unknown">>, _}:ST -> ST
         end,
     %% Top frame is the arizona_error helper that re-raised; the
-    %% error_info annotation points back at arizona_handler so
+    %% error_info annotation points back at arizona_stateful so
     %% erl_error dispatches to the right format_error/2.
     [{arizona_error, raise_or_propagate, _, Info} | _] = Stack,
     ?assertEqual(
-        #{module => arizona_handler},
+        #{module => arizona_stateful},
         proplists:get_value(error_info, Info)
     ).
 
@@ -118,7 +118,7 @@ unhandled_info_tagged(Config) when is_list(Config) ->
         "-export([handle_info/2]). "
         "handle_info(known, B) -> {B, #{}, []}.\n"
     ),
-    try arizona_handler:call_handle_info(Mod, unknown, #{id => <<"v">>}) of
+    try arizona_stateful:call_handle_info(Mod, unknown, #{id => <<"v">>}) of
         _ -> ct:fail(expected_unhandled_info)
     catch
         error:{unhandled_info, Mod, unknown, _} -> ok
@@ -130,7 +130,7 @@ unhandled_unmount_tagged(Config) when is_list(Config) ->
         "-export([unmount/1]). "
         "unmount(#{tag := keep}) -> ok.\n"
     ),
-    try arizona_handler:call_unmount(Mod, #{id => <<"v">>}) of
+    try arizona_stateful:call_unmount(Mod, #{id => <<"v">>}) of
         _ -> ct:fail(expected_unhandled_unmount)
     catch
         error:{unhandled_unmount, Mod, _} -> ok
@@ -145,7 +145,7 @@ unhandled_drain_tagged(Config) when is_list(Config) ->
         "-export([handle_drain/2]). "
         "handle_drain(_D, #{tag := keep} = B) -> {B, #{}, []}.\n"
     ),
-    try arizona_handler:call_handle_drain(Mod, 12345, #{id => <<"v">>}) of
+    try arizona_stateful:call_handle_drain(Mod, 12345, #{id => <<"v">>}) of
         _ -> ct:fail(expected_unhandled_drain)
     catch
         error:{unhandled_drain, Mod, 12345, _} -> ok
@@ -162,7 +162,7 @@ function_clause_inside_callback_propagates_untagged(Config) when is_list(Config)
         "    case B of #{required := V} -> V end.\n"
     ),
     try
-        arizona_handler:call_handle_event(
+        arizona_stateful:call_handle_event(
             Mod, <<"any">>, #{}, #{id => <<"v">>}
         )
     of
@@ -177,7 +177,7 @@ function_clause_inside_callback_propagates_untagged(Config) when is_list(Config)
 format_error_messages_include_view_id(Config) when is_list(Config) ->
     %% format_error/2 must include the view id pulled from Bindings.
     Reason = {unhandled_event, my_handler, <<"foo">>, #{id => <<"page">>}},
-    #{general := Msg} = arizona_handler:format_error(Reason, []),
+    #{general := Msg} = arizona_stateful:format_error(Reason, []),
     Bin = unicode:characters_to_binary(Msg),
     ?assertNotEqual(nomatch, binary:match(Bin, <<"page">>)),
     ?assertNotEqual(nomatch, binary:match(Bin, <<"my_handler">>)),
@@ -188,7 +188,7 @@ missing_callback_handle_event_tagged(Config) when is_list(Config) ->
     %% re-tag the resulting `undef` into `{missing_callback, _, handle_event, 3}`.
     Mod = compile_module("-module(stub_no_he). -export([]).\n"),
     try
-        arizona_handler:call_handle_event(
+        arizona_stateful:call_handle_event(
             Mod, <<"foo">>, #{}, #{id => <<"v">>}
         )
     of
@@ -207,7 +207,7 @@ unhandled_update_tagged(Config) when is_list(Config) ->
         "handle_update(#{tag := keep} = P, B) -> {maps:merge(B, P), #{}}.\n"
     ),
     try
-        arizona_handler:call_handle_update(
+        arizona_stateful:call_handle_update(
             Mod, #{other => 1}, #{id => <<"v">>}
         )
     of
@@ -225,7 +225,7 @@ format_error_renders_all_reasons(Config) when is_list(Config) ->
     Bindings = #{id => <<"page">>},
     %% Frame shape mirrors what call_render/2 raises: the dispatcher's
     %% Args list has Bindings as its tail.
-    Stack = [{arizona_handler, call_render, [my_mod, Bindings], []}],
+    Stack = [{arizona_stateful, call_render, [my_mod, Bindings], []}],
     Cases = [
         {{missing_callback, my_mod, render, 1}, [<<"page">>, <<"my_mod">>, <<"render">>, <<"1">>]},
         {{unhandled_event, my_mod, <<"e">>, Bindings}, [<<"page">>, <<"my_mod">>, <<"e">>]},
@@ -237,7 +237,7 @@ format_error_renders_all_reasons(Config) when is_list(Config) ->
     ],
     [
         begin
-            #{general := Msg} = arizona_handler:format_error(Reason, Stack),
+            #{general := Msg} = arizona_stateful:format_error(Reason, Stack),
             Bin = unicode:characters_to_binary(Msg),
             [
                 ?assertNotEqual(

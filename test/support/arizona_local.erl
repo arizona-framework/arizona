@@ -1,5 +1,5 @@
 -module(arizona_local).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1]).
 
 -spec mount(az:bindings()) -> az:mount_ret().

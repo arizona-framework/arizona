@@ -1,5 +1,5 @@
 -module(arizona_root_counter).
--include("arizona_view.hrl").
+-include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
 
 %% Minimal view counter for arizona_live machinery tests. Mirrors

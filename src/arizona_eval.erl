@@ -441,7 +441,7 @@ eval_stateful(H, Props, {Old, New}) ->
     %% dynamic's tracked deps.
     with_saved_deps(fun() ->
         {B1, Resets} = mount_or_update_stateful(H, Props, Id, Old),
-        Tmpl = arizona_handler:call_render(H, B1),
+        Tmpl = arizona_stateful:call_render(H, B1),
         {ChildTriples, {Old, New1}} = eval_dynamics_v(maps:get(d, Tmpl), {Old, New}),
         {ChildD, ChildDeps} = arizona_template:split_triples(ChildTriples),
         Snap = arizona_template:make_child_snap(Tmpl, ChildD, ChildDeps, Id),
@@ -453,11 +453,11 @@ eval_stateful(H, Props, {Old, New}) ->
 mount_or_update_stateful(H, Props, Id, Old) ->
     case Old of
         #{Id := #{handler := H, bindings := B}} ->
-            arizona_handler:call_handle_update(H, Props, B);
+            arizona_stateful:call_handle_update(H, Props, B);
         #{Id := #{handler := OldH, bindings := OldB}} ->
             %% Same id, different handler: unmount the old instance before
             %% mounting the new one so it can release resources.
-            ok = arizona_handler:call_unmount(OldH, OldB),
+            ok = arizona_stateful:call_unmount(OldH, OldB),
             fresh_mount_stateful(H, Props);
         #{} ->
             fresh_mount_stateful(H, Props)
