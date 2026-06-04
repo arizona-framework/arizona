@@ -30,6 +30,7 @@
 | `src/arizona_middleware.erl`              | Request-to-bindings middleware pipeline -- `apply_middlewares/3` runner (run by the HTTP/WS transports) + built-in `extract/1`/`put_request/2` steps                                      |
 | `src/arizona_user_agent.erl`              | User-Agent classification for dual-serve views -- `browser/1`, `os/1`, `mobile/1` (best-effort); pairs with `arizona_req:user_agent/1`                                                    |
 | `src/arizona_http.erl`                    | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|redirect\|ok\|error, ...}` tuples                                               |
+| `src/arizona_static.erl`                  | Offline static-site generation -- `generate/2,3` renders route handlers to HTML files under an out-dir; returns `{Written, Failed}`                                                       |
 | `src/arizona_ws.erl`                      | Transport-agnostic WS upgrade bootstrap -- `prepare/3` parses framework keys, resolves the route, runs middlewares, returns state for `arizona_socket`                                    |
 | `src/arizona_live.erl`                    | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                                              |
 | `src/arizona_parse_transform.erl`         | Compile-time transform -- `?html`/`?native`, `?each` DSL to `#{s, d, f}` maps, `az-view` auto-injection, `az-nodiff`, attribute compilation, cross-target nesting guard                   |
@@ -597,6 +598,19 @@ Transport-agnostic upgrade bootstrap for WebSocket handlers.
 
 `arizona_roadrunner_ws` collapses to a few lines that call `parse_qs`, invoke
 `arizona_ws:prepare/3`, and wire the result into roadrunner's callback contract.
+
+## API -- `arizona_static.erl`
+
+Offline static-site generation -- renders route handlers to HTML files with no server, live
+process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
+
+- `generate/2,3(OutDir, Specs[, DefaultOpts])` -- renders each spec under `OutDir`, writes the
+  HTML files, and returns `{Written, Failed}` (the paths plus `{Spec, Reason}` for any spec that
+  failed -- a `mount`/`render` crash or a write error; one failure does not stop the batch). A
+  spec is `{Handler, Outfile}` or `{Handler, Outfile, Opts}`; `Outfile` is joined onto `OutDir`.
+  `Opts` (and the optional `DefaultOpts`, which each spec's `Opts` override) is the offline subset
+  of `t:arizona_live:route_opts/0` (`bindings`/`on_mount`/`layouts`; no `middlewares`). The client
+  `<script>` / `connect('/ws')` lives in the layout, so a pure-static page omits the WS connect.
 
 ## Roadrunner handlers
 
