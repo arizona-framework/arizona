@@ -163,6 +163,7 @@
     inline_non_bindings_var_name/1,
     inline_destructuring_not_inlined/1,
     inline_guard_get_stays_captured/1,
+    inline_comprehension_source/1,
     void_element/1,
     void_in_each_with_children/1,
     void_nested_child_with_children/1,
@@ -363,7 +364,8 @@ groups() ->
             inline_same_var_two_slots,
             inline_non_bindings_var_name,
             inline_destructuring_not_inlined,
-            inline_guard_get_stays_captured
+            inline_guard_get_stays_captured,
+            inline_comprehension_source
         ]},
         %% Tests 68-77c: layout tests
         {layout, [parallel], [
@@ -4677,6 +4679,23 @@ inline_guard_get_stays_captured(Config) when is_list(Config) ->
     [{_Az, Fun, _Loc}] = maps:get(d, T),
     ?assertEqual(big, Fun()),
     ?assertEqual(#{}, slot_deps(Fun)).
+
+%% A hoisted read used as a comprehension generator SOURCE is inlined (the
+%% collapsed lc/bc/mc clause of iv/2 must preserve the comprehension tag -- this
+%% uses a *binary* comprehension so a tag-hardcoding bug would be caught). The
+%% slot tracks the source key; the generator variable stays local (untracked).
+inline_comprehension_source(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_comp). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Names = arizona_template:get(names, Bindings), "
+        "    arizona_template:html({'p', [], [<< <<N/binary>> || N <- Names >>]}). "
+    ),
+    T = Mod:render(#{names => [~"a", ~"b"]}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"ab", Fun()),
+    ?assertEqual(#{names => true}, slot_deps(Fun)).
 
 %% Like compile_module/1 but compiles with warnings_as_errors, matching the
 %% project's real erl_opts. Needed because unused-variable / match_underscore_var
