@@ -164,6 +164,14 @@
     inline_destructuring_not_inlined/1,
     inline_guard_get_stays_captured/1,
     inline_comprehension_source/1,
+    tracked_get_submap_errors/1,
+    tracked_get_submap_az_errors/1,
+    tracked_get_lazy_submap_errors/1,
+    tracked_get_maps_get_ok/1,
+    tracked_get_each_item_ok/1,
+    tracked_get_alias_ok/1,
+    tracked_get_literal_map_ok/1,
+    tracked_get_renamed_param_ok/1,
     void_element/1,
     void_in_each_with_children/1,
     void_nested_child_with_children/1,
@@ -219,6 +227,7 @@ all() ->
         {group, each},
         {group, integration},
         {group, inline},
+        {group, tracked_get},
         {group, layout},
         {group, utf8},
         {group, errors},
@@ -366,6 +375,17 @@ groups() ->
             inline_destructuring_not_inlined,
             inline_guard_get_stays_captured,
             inline_comprehension_source
+        ]},
+        %% Reject the tracked accessor reading a non-bindings (sub-)map
+        {tracked_get, [parallel], [
+            tracked_get_submap_errors,
+            tracked_get_submap_az_errors,
+            tracked_get_lazy_submap_errors,
+            tracked_get_maps_get_ok,
+            tracked_get_each_item_ok,
+            tracked_get_alias_ok,
+            tracked_get_literal_map_ok,
+            tracked_get_renamed_param_ok
         ]},
         %% Tests 68-77c: layout tests
         {layout, [parallel], [
@@ -3271,7 +3291,10 @@ format_error(Config) when is_list(Config) ->
     Msg3 = arizona_parse_transform:format_error(invalid_element),
     ?assert(lists:prefix("invalid element form", Msg3)),
     Msg4 = arizona_parse_transform:format_error(invalid_each_fun),
-    ?assert(lists:prefix("each/2 expects", Msg4)).
+    ?assert(lists:prefix("each/2 expects", Msg4)),
+    Msg5 = arizona_parse_transform:format_error(tracked_get_on_non_bindings_map),
+    ?assert(lists:prefix("arizona_template:get/get_lazy", Msg5)),
+    ?assertNotEqual(nomatch, string:find(Msg5, "maps:get/2")).
 
 %% Test 92: Void element with single-expression child form.
 void_with_single_expr_child(Config) when is_list(Config) ->
@@ -4696,6 +4719,104 @@ inline_comprehension_source(Config) when is_list(Config) ->
     [{_Az, Fun, _Loc}] = maps:get(d, T),
     ?assertEqual(~"ab", Fun()),
     ?assertEqual(#{names => true}, slot_deps(Fun)).
+
+%% ============================================================================
+%% Tracked get/get_lazy on a non-bindings map
+%% ============================================================================
+
+%% Reading a sub-map with the tracked accessor wrongly records the inner key as a
+%% top-level dependency, so it is a compile error.
+tracked_get_submap_errors(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_tg_submap). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Foo = arizona_template:get(foo, Bindings), "
+        "    arizona_template:html({'p', [], [arizona_template:get(bar, Foo)]}). ",
+        fun(R) -> R =:= tracked_get_on_non_bindings_map end
+    ).
+
+%% The az: alias form is flagged too.
+tracked_get_submap_az_errors(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_tg_az). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Foo = az:get(foo, Bindings), "
+        "    arizona_template:html({'p', [], [az:get(bar, Foo)]}). ",
+        fun(R) -> R =:= tracked_get_on_non_bindings_map end
+    ).
+
+%% get_lazy on a sub-map is flagged.
+tracked_get_lazy_submap_errors(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_tg_lazy). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Foo = arizona_template:get(foo, Bindings), "
+        "    arizona_template:html({'p', [], "
+        "        [arizona_template:get_lazy(bar, Foo, fun() -> <<>> end)]}). ",
+        fun(R) -> R =:= tracked_get_on_non_bindings_map end
+    ).
+
+%% maps:get for the sub-field is the correct pattern and compiles clean.
+tracked_get_maps_get_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_tg_mapsget). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Foo = arizona_template:get(foo, Bindings), "
+        "    Bar = maps:get(bar, Foo), "
+        "    arizona_template:html({'p', [], [Bar]}). "
+    ),
+    ?assert(is_map(Mod:render(#{foo => #{bar => ~"x"}}))).
+
+%% An ?each item read uses the item fun parameter (the per-item bindings), so it
+%% is not flagged.
+tracked_get_each_item_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_tg_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(Item) -> "
+        "        arizona_template:html({'li', [], [arizona_template:get(name, Item)]}) "
+        "    end, arizona_template:get(items, Bindings))]}). "
+    ),
+    ?assert(is_map(Mod:render(#{items => [#{name => ~"a"}]}))).
+
+%% An alias chain of the bindings is not flagged.
+tracked_get_alias_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_tg_alias). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    B = Bindings, "
+        "    C = B, "
+        "    arizona_template:html({'p', [], [arizona_template:get(x, C)]}). "
+    ),
+    ?assert(is_map(Mod:render(#{x => ~"y"}))).
+
+%% A literal-map second argument (a non-variable) is never flagged.
+tracked_get_literal_map_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_tg_litmap). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Real = arizona_template:get(real, Bindings), "
+        "    V = arizona_template:get(k, #{k => v}), "
+        "    arizona_template:html({'p', [], [Real, <<\" \">>, V]}). "
+    ),
+    ?assert(is_map(Mod:render(#{real => ~"R"}))).
+
+%% A renamed bindings parameter (not literally `Bindings`) is in scope and passes.
+tracked_get_renamed_param_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_tg_ctx). "
+        "-export([render/1]). "
+        "render(Ctx) -> "
+        "    arizona_template:html({'p', [], [arizona_template:get(name, Ctx)]}). "
+    ),
+    ?assert(is_map(Mod:render(#{name => ~"Ada"}))).
 
 %% Like compile_module/1 but compiles with warnings_as_errors, matching the
 %% project's real erl_opts. Needed because unused-variable / match_underscore_var

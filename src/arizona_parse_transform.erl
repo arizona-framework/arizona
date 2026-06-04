@@ -270,7 +270,12 @@ format_error(local_attr_mixed) ->
 format_error(cross_target_nesting) ->
     "cannot nest ?html, ?native and ?terminal in one template -- they produce "
     "incompatible statics. Render cross-target content via a separate "
-    "stateful/stateless child of the matching target".
+    "stateful/stateless child of the matching target";
+format_error(tracked_get_on_non_bindings_map) ->
+    "arizona_template:get/get_lazy (and the az: aliases) are the dependency-tracking "
+    "accessors for the view bindings, not for nested maps. Read sub-structures with "
+    "maps:get/2, e.g. `User = arizona_template:get(user, Bindings), "
+    "Name = maps:get(name, User)`".
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -278,6 +283,90 @@ format_error(cross_target_nesting) ->
 
 parse_error(Reason, Line) ->
     throw({arizona_parse_error, Line, Reason}).
+
+%% `arizona_template:get`/`get_lazy` (and the `az:` aliases) call `track/1`
+%% regardless of which map they read, so reading a sub-map records the inner key
+%% as a top-level slot dependency. Reject a tracked read whose map argument is a
+%% variable that is not in scope as a bindings-like value: a clause/fun parameter
+%% (so `?each` item/key vars pass) or an alias of one. A non-variable map argument
+%% (a literal map, a `maps:get` call, any expression) is never flagged.
+check_tracked_get_targets(Patterns, Body) ->
+    Params = collect_fun_param_vars(Body, collect_pattern_vars(Patterns, #{})),
+    walk_tracked_gets(Body, alias_closure(Body, Params)).
+
+%% Every fun/named_fun parameter anywhere in Body. Flat across nesting depth:
+%% over-inclusion only drops a flag (false negative), never adds one.
+collect_fun_param_vars({'fun', _, {clauses, Cs}}, Acc) ->
+    collect_clause_param_vars(Cs, Acc);
+collect_fun_param_vars({named_fun, _, _Name, Cs}, Acc) ->
+    collect_clause_param_vars(Cs, Acc);
+collect_fun_param_vars(T, Acc) when is_tuple(T) ->
+    collect_fun_param_vars(tuple_to_list(T), Acc);
+collect_fun_param_vars([H | T], Acc) ->
+    collect_fun_param_vars(T, collect_fun_param_vars(H, Acc));
+collect_fun_param_vars(_, Acc) ->
+    Acc.
+
+collect_clause_param_vars(Clauses, Acc) ->
+    lists:foldl(
+        fun({clause, _, Params, _Guards, ClauseBody}, A) ->
+            collect_fun_param_vars(ClauseBody, collect_pattern_vars(Params, A))
+        end,
+        Acc,
+        Clauses
+    ).
+
+%% Grow the scope with every `V = W` (var = var) where W is already in scope, to a
+%% fixpoint (handles `B = Bindings, C = B`).
+alias_closure(Body, Scope) ->
+    Aliases = [{V, W} || {match, _, {var, _, V}, {var, _, W}} <- collect_matches(Body, [])],
+    alias_fixpoint(Aliases, Scope).
+
+alias_fixpoint(Aliases, Scope) ->
+    Scope1 = lists:foldl(
+        fun
+            ({V, W}, A) when is_map_key(W, A) -> A#{V => true};
+            (_Pair, A) -> A
+        end,
+        Scope,
+        Aliases
+    ),
+    case map_size(Scope1) =:= map_size(Scope) of
+        true -> Scope1;
+        false -> alias_fixpoint(Aliases, Scope1)
+    end.
+
+collect_matches(T, Acc) when is_tuple(T) ->
+    Acc1 =
+        case T of
+            {match, _, _, _} -> [T | Acc];
+            _ -> Acc
+        end,
+    collect_matches(tuple_to_list(T), Acc1);
+collect_matches([H | T], Acc) ->
+    collect_matches(T, collect_matches(H, Acc));
+collect_matches(_, Acc) ->
+    Acc.
+
+walk_tracked_gets(AST, Scope) when is_tuple(AST) ->
+    flag_tracked_get(AST, Scope),
+    walk_tracked_gets(tuple_to_list(AST), Scope);
+walk_tracked_gets([H | T], Scope) ->
+    walk_tracked_gets(H, Scope),
+    walk_tracked_gets(T, Scope);
+walk_tracked_gets(_, _Scope) ->
+    ok.
+
+flag_tracked_get(
+    {call, L, {remote, _, {atom, _, Mod}, {atom, _, F}}, [_Key, {var, _, V} | _]}, Scope
+) when
+    (Mod =:= arizona_template orelse Mod =:= az) andalso
+        (F =:= get orelse F =:= get_lazy) andalso
+        not is_map_key(V, Scope)
+->
+    parse_error(tracked_get_on_non_bindings_map, L);
+flag_tracked_get(_Node, _Scope) ->
+    ok.
 
 line(Node) when is_tuple(Node), tuple_size(Node) >= 2 ->
     erl_anno:line(element(2, Node));
@@ -305,6 +394,7 @@ transform_form(Form, _Module, _IsLive) ->
     Form.
 
 transform_clause({clause, L, Patterns, Guards, Body0}, Module) ->
+    check_tracked_get_targets(Patterns, Body0),
     Body = normalize_tail_binds(Body0),
     Inline = collect_inline(Body),
     Body1 = [transform_expr(Expr, Module, Inline) || Expr <- Body],
@@ -372,6 +462,7 @@ transform_node(Node, Module, Inline) ->
     end.
 
 transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module) ->
+    check_tracked_get_targets(Patterns, Body),
     {Init0, [Last]} = lists:split(length(Body) - 1, Body),
     %% Only the init statements are normalized: the last expr carries the live root
     %% template and is handled by transform_live_render_last/3.
