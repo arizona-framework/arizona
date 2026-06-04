@@ -690,15 +690,9 @@ iv({'try', L, B, OfCs, CatchCs, Aft}, Inline) ->
         iv_body(Aft, Inline)};
 iv({'catch', L, E}, Inline) ->
     {'catch', L, iv(E, Inline)};
-iv({lc, L, T, Qs}, Inline) ->
+iv({Comp, L, T, Qs}, Inline) when Comp =:= lc; Comp =:= bc; Comp =:= mc ->
     {Qs1, Inline1} = iv_quals(Qs, Inline),
-    {lc, L, iv(T, Inline1), Qs1};
-iv({bc, L, T, Qs}, Inline) ->
-    {Qs1, Inline1} = iv_quals(Qs, Inline),
-    {bc, L, iv(T, Inline1), Qs1};
-iv({mc, L, T, Qs}, Inline) ->
-    {Qs1, Inline1} = iv_quals(Qs, Inline),
-    {mc, L, iv(T, Inline1), Qs1};
+    {Comp, L, iv(T, Inline1), Qs1};
 iv({block, L, B}, Inline) ->
     {block, L, iv_body(B, Inline)};
 iv({match, L, P, E}, Inline) ->
@@ -780,23 +774,16 @@ suppress_unused_inline_matches(Body, Inline) when map_size(Inline) =:= 0 ->
 suppress_unused_inline_matches(Body, Inline) ->
     [maybe_underscore_match(E, Inline, Body) || E <- Body].
 
+%% Rename the now-unused match LHS to the anonymous `_`: it never collides with a
+%% pre-existing `_Foo` binding (which would otherwise trip erl_lint's
+%% match_underscore_var) and never warns.
 maybe_underscore_match({match, L, {var, VL, V}, RHS} = M, Inline, Body) ->
     case is_map_key(V, Inline) andalso count_var(V, Body) =:= 1 of
-        true -> {match, L, {var, VL, underscore_var(V, Body)}, RHS};
+        true -> {match, L, {var, VL, '_'}, RHS};
         false -> M
     end;
 maybe_underscore_match(E, _Inline, _Body) ->
     E.
-
-%% `_Foo` is readable, but if the clause already binds `_Foo` (e.g. a discarded
-%% side-effect match), a second `_Foo` would trip erl_lint's match_underscore_var.
-%% Fall back to the anonymous `_`, which never collides or warns.
-underscore_var(V, Body) ->
-    U = binary_to_atom(<<"_", (atom_to_binary(V))/binary>>),
-    case count_var(U, Body) of
-        0 -> U;
-        _ -> '_'
-    end.
 
 count_var(V, AST) ->
     count_var(V, AST, 0).
