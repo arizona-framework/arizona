@@ -304,7 +304,8 @@ transform_form({function, L, Name, Arity, Clauses}, Module, _IsLive) ->
 transform_form(Form, _Module, _IsLive) ->
     Form.
 
-transform_clause({clause, L, Patterns, Guards, Body}, Module) ->
+transform_clause({clause, L, Patterns, Guards, Body0}, Module) ->
+    Body = normalize_tail_binds(Body0),
     Inline = collect_inline(Body),
     Body1 = [transform_expr(Expr, Module, Inline) || Expr <- Body],
     {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
@@ -371,8 +372,11 @@ transform_node(Node, Module, Inline) ->
     end.
 
 transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module) ->
-    Inline = collect_inline(Body),
-    {Init, [Last]} = lists:split(length(Body) - 1, Body),
+    {Init0, [Last]} = lists:split(length(Body) - 1, Body),
+    %% Only the init statements are normalized: the last expr carries the live root
+    %% template and is handled by transform_live_render_last/3.
+    Init = normalize_tail_binds(Init0),
+    Inline = collect_inline(Init ++ [Last]),
     TransformedInit = [transform_expr(Expr, Module, Inline) || Expr <- Init],
     TransformedLast = transform_live_render_last(Last, Module, Inline),
     Body1 = TransformedInit ++ [TransformedLast],
@@ -566,6 +570,71 @@ rhs_reaches_any([], _Reaching) ->
     false;
 rhs_reaches_any([H | T], Reaching) ->
     rhs_reaches(H, Reaching) orelse rhs_reaches_any(T, Reaching).
+
+%% Lift a statement-form `case` that binds one variable as the whole body of every
+%% branch --
+%%
+%%     case ?get(mode) of dark -> X = ?get(a); _ -> X = ?get(b) end,
+%%
+%% -- into value form --
+%%
+%%     X = case ?get(mode) of dark -> ?get(a); _ -> ?get(b) end,
+%%
+%% so the existing top-level-match machinery can inline it. Restricted to clauses
+%% whose body is exactly a single `Var = E` match (no other bindings to strip out of
+%% scope), and only when the lifted expression actually reaches a read.
+%%
+%% `if`/`receive` are deliberately excluded: their conditions are guards, which
+%% cannot hold a read, so a binding-derived condition would stay captured and the
+%% slot would track only the branch bodies -- partial tracking that looks correct.
+%% A `case` scrutinee is an expression and inlines fully, so it is always sound.
+normalize_tail_binds(Body) ->
+    [normalize_tail_bind(Stmt) || Stmt <- Body].
+
+normalize_tail_bind({'case', L, Scrutinee, Clauses} = Stmt) ->
+    lift_tail_bind(Stmt, L, Clauses, fun(Stripped) -> {'case', L, Scrutinee, Stripped} end);
+normalize_tail_bind(Stmt) ->
+    Stmt.
+
+%% `strip_tail_binds/1` is only safe once `tail_bind_var/1` has confirmed every
+%% clause body is a single `Var = E` match, so it is computed lazily here.
+lift_tail_bind(Stmt, L, Clauses, Rebuild) ->
+    case tail_bind_var(Clauses) of
+        {ok, V} ->
+            Lifted = Rebuild(strip_tail_binds(Clauses)),
+            case rhs_reaches(Lifted, #{}) of
+                true -> {match, L, {var, L, V}, Lifted};
+                false -> Stmt
+            end;
+        error ->
+            Stmt
+    end.
+
+%% `{ok, V}` when every clause's body is exactly `[{match, {var, V}, _}]` for the
+%% same `V`; `error` otherwise.
+tail_bind_var([First | _] = Clauses) ->
+    case clause_bind_var(First) of
+        {ok, V} ->
+            case lists:all(fun(C) -> clause_bind_var(C) =:= {ok, V} end, Clauses) of
+                true -> {ok, V};
+                false -> error
+            end;
+        error ->
+            error
+    end;
+tail_bind_var([]) ->
+    error.
+
+clause_bind_var({clause, _, _Patterns, _Guards, [{match, _, {var, _, V}, _E}]}) ->
+    {ok, V};
+clause_bind_var(_) ->
+    error.
+
+strip_tail_binds(Clauses) ->
+    [strip_tail_bind(C) || C <- Clauses].
+
+strip_tail_bind({clause, L, Patterns, Guards, [{match, _, {var, _, _V}, E}]}) ->
+    {clause, L, Patterns, Guards, [E]}.
 
 %% Recursively substitute interpolated variables with their inlined defining
 %% expression. Scope-aware: variables shadowed by fun parameters or comprehension

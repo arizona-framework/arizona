@@ -149,6 +149,7 @@
     inline_diff_updates/1,
     inline_unrelated_key_skipped/1,
     inline_hoisted_root_id/1,
+    inline_branch_bound_var/1,
     void_element/1,
     void_in_each_with_children/1,
     void_nested_child_with_children/1,
@@ -335,7 +336,8 @@ groups() ->
             inline_side_effect_not_inlined,
             inline_diff_updates,
             inline_unrelated_key_skipped,
-            inline_hoisted_root_id
+            inline_hoisted_root_id,
+            inline_branch_bound_var
         ]},
         %% Tests 68-77c: layout tests
         {layout, [parallel], [
@@ -4404,6 +4406,24 @@ inline_hoisted_root_id(Config) when is_list(Config) ->
     [IdFun] = [F || {_Az, {attr, ~"id", F}, _Loc} <- maps:get(d, T)],
     ?assertEqual(~"v1", IdFun()),
     ?assertEqual(#{id => true}, slot_deps(IdFun)).
+
+%% A variable bound as the whole body of every branch of a statement-form case is
+%% lifted to value form and inlined, so it tracks the scrutinee and branch reads.
+inline_branch_bound_var(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_branchbound). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    case arizona_template:get(mode, Bindings) of "
+        "        dark -> X = arizona_template:get(a, Bindings); "
+        "        _ -> X = arizona_template:get(b, Bindings) "
+        "    end, "
+        "    arizona_template:html({'p', [], [X]}). "
+    ),
+    T = Mod:render(#{mode => dark, a => ~"A"}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"A", Fun()),
+    ?assertEqual(#{mode => true, a => true}, slot_deps(Fun)).
 
 %% Evaluate a slot closure under a dependency bracket (mirrors arizona_eval) and
 %% return the captured deps.
