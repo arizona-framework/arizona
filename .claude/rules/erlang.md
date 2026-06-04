@@ -158,3 +158,22 @@ consequences:
 - Prefer named fun references (`?stateless(fun bar/1, Props)`,
   `?stateless(Mod, Fn, Props)`). They cannot close over outer `Bindings`,
   removing the footgun entirely.
+
+Reads **hoisted into the render function body** do track: the parse transform
+inlines each interpolated variable back into its slot closure, so the `?get`
+re-runs inside the dependency bracket.
+
+```erlang
+%% all of these track per-slot (compile-time inlining):
+Name = ?get(name),                 ?html({p, [], [Name]}).
+User = ?get(user), N = maps:get(name, User), ?html({p, [], [N]}).  %% tracks `user`
+Label = case ?get(mode) of dark -> ?get(a); _ -> ?get(b) end, ?html({p, [], [Label]}).
+case ?get(mode) of dark -> X = ?get(a); _ -> X = ?get(b) end, ?html({p, [], [X]}).
+```
+
+Exceptions that stay un-tracked (slot frozen after SSR): a binding destructured
+in the head (`render(#{foo := Foo})`) or through any non-bare-var pattern
+(`{ok, V} = ?get(...)` -- use `?get(foo)` then plain destructuring), a read
+reachable only through a guard, a variable bound inside an `if` or a `case`
+branch whose clause head binds a variable, and a rebound variable. `?get` is for
+top-level bindings; read sub-structures with plain `maps:get/2`.

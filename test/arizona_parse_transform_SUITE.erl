@@ -139,6 +139,31 @@
     utf8_static_attr/1,
     utf8_static_child_emoji/1,
     variable_dynamic/1,
+    inline_hoisted_text_read/1,
+    inline_hoisted_attr_read/1,
+    inline_maps_get_chain/1,
+    inline_case_value/1,
+    inline_case_of_case/1,
+    inline_opaque_call/1,
+    inline_side_effect_not_inlined/1,
+    inline_diff_updates/1,
+    inline_unrelated_key_skipped/1,
+    inline_hoisted_root_id/1,
+    inline_branch_bound_var/1,
+    inline_underscore_collision/1,
+    inline_lifted_pattern_var/1,
+    inline_lifted_nested_match/1,
+    inline_hoisted_attr_list_read/1,
+    inline_each_hoisted_source/1,
+    inline_distinct_slots_key_isolation/1,
+    inline_multi_clause_render/1,
+    inline_get_lazy_hoisted/1,
+    inline_nested_html_shared_var/1,
+    inline_same_var_two_slots/1,
+    inline_non_bindings_var_name/1,
+    inline_destructuring_not_inlined/1,
+    inline_guard_get_stays_captured/1,
+    inline_comprehension_source/1,
     void_element/1,
     void_in_each_with_children/1,
     void_nested_child_with_children/1,
@@ -193,6 +218,7 @@ all() ->
         {group, local},
         {group, each},
         {group, integration},
+        {group, inline},
         {group, layout},
         {group, utf8},
         {group, errors},
@@ -312,6 +338,34 @@ groups() ->
             nodiff_with_other_attrs,
             nodiff_each,
             mixed_attr_forms
+        ]},
+        %% Binding-read inlining: reads hoisted out of ?html still track per-slot
+        {inline, [parallel], [
+            inline_hoisted_text_read,
+            inline_hoisted_attr_read,
+            inline_maps_get_chain,
+            inline_case_value,
+            inline_case_of_case,
+            inline_opaque_call,
+            inline_side_effect_not_inlined,
+            inline_diff_updates,
+            inline_unrelated_key_skipped,
+            inline_hoisted_root_id,
+            inline_branch_bound_var,
+            inline_underscore_collision,
+            inline_lifted_pattern_var,
+            inline_lifted_nested_match,
+            inline_hoisted_attr_list_read,
+            inline_each_hoisted_source,
+            inline_distinct_slots_key_isolation,
+            inline_multi_clause_render,
+            inline_get_lazy_hoisted,
+            inline_nested_html_shared_var,
+            inline_same_var_two_slots,
+            inline_non_bindings_var_name,
+            inline_destructuring_not_inlined,
+            inline_guard_get_stays_captured,
+            inline_comprehension_source
         ]},
         %% Tests 68-77c: layout tests
         {layout, [parallel], [
@@ -4215,3 +4269,467 @@ terminal_each_renders(Config) when is_list(Config) ->
     Bin = iolist_to_binary(Output),
     ?assertNotEqual(nomatch, binary:match(Bin, ~"a\e[0m\n")),
     ?assertNotEqual(nomatch, binary:match(Bin, ~"b\e[0m\n")).
+
+%% ============================================================================
+%% Binding-read inlining
+%% ============================================================================
+
+%% A read hoisted into the function body still tracks per-slot: the slot closure
+%% re-runs the `get` inside the dependency bracket instead of capturing a value.
+inline_hoisted_text_read(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_text). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Name = arizona_template:get(name, Bindings), "
+        "    arizona_template:html({'p', [], [Name]}). "
+    ),
+    T = Mod:render(#{name => ~"Ada"}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"Ada", Fun()),
+    ?assertEqual(#{name => true}, slot_deps(Fun)).
+
+inline_hoisted_attr_read(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_attr). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Cls = arizona_template:get(cls, Bindings), "
+        "    arizona_template:html({'div', [{class, Cls}], [<<\"x\">>]}). "
+    ),
+    T = Mod:render(#{cls => ~"box"}),
+    [{_Az, {attr, ~"class", Fun}, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"box", Fun()),
+    ?assertEqual(#{cls => true}, slot_deps(Fun)).
+
+%% A pure derivation over a single read (maps:get on a sub-map) tracks only the
+%% top-level binding key, not the sub-key.
+inline_maps_get_chain(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_chain). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    User = arizona_template:get(user, Bindings), "
+        "    Name = maps:get(name, User), "
+        "    arizona_template:html({'p', [], [Name]}). "
+    ),
+    T = Mod:render(#{user => #{name => ~"Ada"}}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"Ada", Fun()),
+    ?assertEqual(#{user => true}, slot_deps(Fun)).
+
+%% A case assigned to a variable inlines whole; runtime tracking records whichever
+%% branch's reads fire.
+inline_case_value(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_case). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Mode = arizona_template:get(mode, Bindings), "
+        "    Label = case Mode of "
+        "                dark -> arizona_template:get(dark, Bindings); "
+        "                _ -> <<\"L\">> "
+        "            end, "
+        "    arizona_template:html({'p', [], [Label]}). "
+    ),
+    T = Mod:render(#{mode => dark, dark => ~"D"}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"D", Fun()),
+    ?assertEqual(#{mode => true, dark => true}, slot_deps(Fun)).
+
+%% The interpolated expression *uses* a hoisted var (case-of-case): inlining walks
+%% the whole slot expression, substituting the var in the scrutinee.
+inline_case_of_case(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_caseofcase). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Label = case arizona_template:get(mode, Bindings) of "
+        "                dark -> arizona_template:get(dark, Bindings); "
+        "                _ -> <<\"L\">> "
+        "            end, "
+        "    arizona_template:html("
+        "        {'p', [], [case Label of foo -> foo; _ -> bar end]}). "
+    ),
+    T = Mod:render(#{mode => light}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(bar, Fun()),
+    ?assertEqual(#{mode => true}, slot_deps(Fun)).
+
+%% An opaque call that reads bindings inlines whole; the inner get fires in-bracket.
+inline_opaque_call(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_opaque). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Name = string:uppercase(arizona_template:get(raw, Bindings)), "
+        "    arizona_template:html({'p', [], [Name]}). "
+    ),
+    T = Mod:render(#{raw => ~"ada"}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"ADA", Fun()),
+    ?assertEqual(#{raw => true}, slot_deps(Fun)).
+
+%% A derivation that does NOT reach a get is left captured (not inlined), so a
+%% side effect is evaluated once -- repeated calls return the same value.
+inline_side_effect_not_inlined(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_noinline). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Ref = erlang:unique_integer([monotonic]), "
+        "    arizona_template:html({'p', [], [Ref]}). "
+    ),
+    T = Mod:render(#{}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(Fun(), Fun()),
+    ?assertEqual(#{}, slot_deps(Fun)).
+
+%% End-to-end regression: a hoisted read now produces an op on diff (before the
+%% fix the slot was frozen and diff returned []).
+inline_diff_updates(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_diff). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Name = arizona_template:get(name, Bindings), "
+        "    arizona_template:html({'p', [], [Name]}). "
+    ),
+    B0 = #{name => ~"Ada"},
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = #{name => ~"Grace"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% The inlined dep is scoped: a change to an unrelated key skips the slot.
+inline_unrelated_key_skipped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_scoped). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Name = arizona_template:get(name, Bindings), "
+        "    arizona_template:html({'p', [], [Name]}). "
+    ),
+    B0 = #{name => ~"Ada", other => 1},
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = #{name => ~"Ada", other => 2},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertEqual([], Ops).
+
+%% A live view may hoist the root id; validate_live_root resolves it through the
+%% inline map, and the id slot tracks `id`.
+inline_hoisted_root_id(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_rootid). "
+        "-behaviour(arizona_stateful). "
+        "-export([mount/1, render/1]). "
+        "mount(B) -> {B, #{}}. "
+        "render(Bindings) -> "
+        "    Id = arizona_template:get(id, Bindings), "
+        "    arizona_template:html({'div', [{id, Id}], [<<\"x\">>]}). "
+    ),
+    T = Mod:render(#{id => ~"v1"}),
+    [IdFun] = [F || {_Az, {attr, ~"id", F}, _Loc} <- maps:get(d, T)],
+    ?assertEqual(~"v1", IdFun()),
+    ?assertEqual(#{id => true}, slot_deps(IdFun)).
+
+%% A variable bound as the whole body of every branch of a statement-form case is
+%% lifted to value form and inlined, so it tracks the scrutinee and branch reads.
+inline_branch_bound_var(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_branchbound). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    case arizona_template:get(mode, Bindings) of "
+        "        dark -> X = arizona_template:get(a, Bindings); "
+        "        _ -> X = arizona_template:get(b, Bindings) "
+        "    end, "
+        "    arizona_template:html({'p', [], [X]}). "
+    ),
+    T = Mod:render(#{mode => dark, a => ~"A"}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"A", Fun()),
+    ?assertEqual(#{mode => true, a => true}, slot_deps(Fun)).
+
+%% Regression: an inlined match underscored to `_Foo` must not collide with an
+%% existing `_Foo` (a discarded side-effect bind) -- that would trip erl_lint's
+%% match_underscore_var and fail the warnings_as_errors build. The read still tracks.
+inline_underscore_collision(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_ucoll). "
+        "-export([render/1]). "
+        "side() -> ok. "
+        "render(Bindings) -> "
+        "    _Foo = side(), "
+        "    Foo = arizona_template:get(foo, Bindings), "
+        "    arizona_template:html({'p', [], [Foo]}). "
+    ),
+    T = Mod:render(#{foo => ~"Ada"}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"Ada", Fun()),
+    ?assertEqual(#{foo => true}, slot_deps(Fun)).
+
+%% Regression: a tail-bind case whose clause head binds a variable
+%% (`{admin, Name} ->`) must NOT be lifted (the lifted+inlined copies would
+%% double-bind Name -> unsafe_var). It stays statement-form: compiles, frozen slot.
+inline_lifted_pattern_var(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_patvar). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    case arizona_template:get(user, Bindings) of "
+        "        {admin, Name} -> Label = Name; "
+        "        _ -> Label = arizona_template:get(guest, Bindings) "
+        "    end, "
+        "    arizona_template:html({'p', [], [Label]}). "
+    ),
+    T = Mod:render(#{user => {admin, ~"Ada"}}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"Ada", Fun()),
+    %% Not lifted -> captured -> frozen (residue).
+    ?assertEqual(#{}, slot_deps(Fun)).
+
+%% Regression: a tail-bind case whose branch RHS contains a nested match
+%% (`X = (Z = E)`) must NOT be lifted (the inlined copy would re-export Z ->
+%% exported_var). It stays statement-form and compiles.
+inline_lifted_nested_match(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_nestmatch). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    case arizona_template:get(mode, Bindings) of "
+        "        dark -> X = (Z = arizona_template:get(a, Bindings)); "
+        "        _ -> X = (Z = arizona_template:get(b, Bindings)) "
+        "    end, "
+        "    arizona_template:html({'p', [], [X, <<\" \">>, Z]}). "
+    ),
+    T = Mod:render(#{mode => dark, a => ~"A"}),
+    [{_Az, FunX, _Loc} | _] = maps:get(d, T),
+    ?assertEqual(~"A", FunX()).
+
+%% A hoisted read interpolated into an attribute *list* ({class, [<<"a ">>, Cls]}):
+%% inline_vars descends into the attr-value cons; the fused dynamic composes the
+%% static prefix with the read value, and tracks the key.
+inline_hoisted_attr_list_read(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_attrlist). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Cls = arizona_template:get(cls, Bindings), "
+        "    arizona_template:html({'div', [{class, [<<\"a \">>, Cls]}], [<<\"x\">>]}). "
+    ),
+    T = Mod:render(#{cls => ~"box"}),
+    [{_Az, {attr, ~"class", Fun}, _Loc}] = maps:get(d, T),
+    ?assertEqual([~"a ", ~"box"], Fun()),
+    ?assertEqual(#{cls => true}, slot_deps(Fun)).
+
+%% End-to-end: a hoisted ?each *source* re-tracks on diff. The each container is a
+%% per-slot closure; the source get must inline back so it re-runs in the bracket.
+inline_each_hoisted_source(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_eachsrc). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Items = arizona_template:get(items, Bindings), "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(I) -> "
+        "        arizona_template:html({'li', [], [I]}) end, Items)]}). "
+    ),
+    B0 = #{items => [~"a"]},
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = #{items => [~"a", ~"b"]},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% Two distinct hoisted reads in sibling slots each track ONLY their own key --
+%% per-slot inlining must not spill one slot's binding into the other's closure.
+inline_distinct_slots_key_isolation(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_isolation). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    A = arizona_template:get(a, Bindings), "
+        "    B = arizona_template:get(b, Bindings), "
+        "    arizona_template:html({'div', [], [{'span', [], [A]}, {'span', [], [B]}]}). "
+    ),
+    T = Mod:render(#{a => ~"AA", b => ~"BB"}),
+    [{_Az0, FunA, _L0}, {_Az1, FunB, _L1}] = maps:get(d, T),
+    ?assertEqual(~"AA", FunA()),
+    ?assertEqual(~"BB", FunB()),
+    ?assertEqual(#{a => true}, slot_deps(FunA)),
+    ?assertEqual(#{b => true}, slot_deps(FunB)).
+
+%% A multi-clause render hoists per clause; each clause's inline map is independent.
+inline_multi_clause_render(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_multiclause). "
+        "-export([render/1]). "
+        "render(#{mode := a} = Bindings) -> "
+        "    X = arizona_template:get(x, Bindings), "
+        "    arizona_template:html({'p', [], [X]}); "
+        "render(#{mode := b} = Bindings) -> "
+        "    Y = arizona_template:get(y, Bindings), "
+        "    arizona_template:html({'span', [], [Y]}). "
+    ),
+    TA = Mod:render(#{mode => a, x => ~"X"}),
+    [{_AzA, FunA, _LocA}] = maps:get(d, TA),
+    ?assertEqual(~"X", FunA()),
+    ?assertEqual(#{x => true}, slot_deps(FunA)),
+    TB = Mod:render(#{mode => b, y => ~"Y"}),
+    [{_AzB, FunB, _LocB}] = maps:get(d, TB),
+    ?assertEqual(~"Y", FunB()),
+    ?assertEqual(#{y => true}, slot_deps(FunB)).
+
+%% A hoisted get_lazy/3 read inlines whole (default fun included); the dep is
+%% tracked even when the key is absent and the default branch fires.
+inline_get_lazy_hoisted(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_getlazy). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Name = arizona_template:get_lazy(name, Bindings, fun() -> <<\"def\">> end), "
+        "    arizona_template:html({'p', [], [Name]}). "
+    ),
+    T = Mod:render(#{}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"def", Fun()),
+    ?assertEqual(#{name => true}, slot_deps(Fun)).
+
+%% A hoisted read inlined into BOTH an outer slot and a nested ?html template --
+%% the post-order transform must rewrite the var at both compile sites.
+inline_nested_html_shared_var(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_nested). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Outer = arizona_template:get(outer, Bindings), "
+        "    arizona_template:html({'div', [], [Outer, "
+        "        arizona_template:html({'span', [], [Outer]})]}). "
+    ),
+    T = Mod:render(#{outer => ~"O"}),
+    [{_Az0, Fun1, _Loc1}, {_Az1, Fun2, _Loc2}] = maps:get(d, T),
+    ?assertEqual(~"O", Fun1()),
+    ?assertEqual(#{outer => true}, slot_deps(Fun1)),
+    Inner = Fun2(),
+    [{_IAz, InnerFun, _ILoc}] = maps:get(d, Inner),
+    ?assertEqual(~"O", InnerFun()),
+    ?assertEqual(#{outer => true}, slot_deps(InnerFun)).
+
+%% One hoisted var in two slots: every occurrence is rewritten, each slot tracks.
+inline_same_var_two_slots(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_samevar). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Name = arizona_template:get(name, Bindings), "
+        "    arizona_template:html({'div', [], [Name, <<\" / \">>, Name]}). "
+    ),
+    T = Mod:render(#{name => ~"Ada"}),
+    [{_Az0, Fun0, _Loc0}, {_Az1, Fun1, _Loc1}] = maps:get(d, T),
+    ?assertEqual(~"Ada", Fun0()),
+    ?assertEqual(~"Ada", Fun1()),
+    ?assertEqual(#{name => true}, slot_deps(Fun0)),
+    ?assertEqual(#{name => true}, slot_deps(Fun1)).
+
+%% Inlining keys off the get CALL, not the bindings-arg name, so a render param
+%% named anything other than `Bindings` still inlines and tracks.
+inline_non_bindings_var_name(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_ctx). "
+        "-export([render/1]). "
+        "render(Ctx) -> "
+        "    Name = arizona_template:get(name, Ctx), "
+        "    arizona_template:html({'p', [], [Name]}). "
+    ),
+    T = Mod:render(#{name => ~"Ada"}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"Ada", Fun()),
+    ?assertEqual(#{name => true}, slot_deps(Fun)).
+
+%% Residue: a read bound through a non-bare-var (destructuring) pattern is NOT
+%% inlined (scan_top_matches only picks bare-var matches). It compiles and renders
+%% the first value, but the slot stays static (frozen). Documents the boundary.
+inline_destructuring_not_inlined(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_destr). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    {ok, Name} = {ok, arizona_template:get(name, Bindings)}, "
+        "    arizona_template:html({'p', [], [Name]}). "
+    ),
+    T = Mod:render(#{name => ~"Ada"}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"Ada", Fun()),
+    ?assertEqual(#{}, slot_deps(Fun)).
+
+%% Residue: a read reachable only through a clause GUARD stays captured (a guard
+%% cannot hold a get), so the slot records no dep and freezes. Documents the limit.
+inline_guard_get_stays_captured(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_guardget). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    N = arizona_template:get(n, Bindings), "
+        "    Label = case x of _ when N > 5 -> big; _ -> small end, "
+        "    arizona_template:html({'p', [], [Label]}). "
+    ),
+    T = Mod:render(#{n => 10}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(big, Fun()),
+    ?assertEqual(#{}, slot_deps(Fun)).
+
+%% A hoisted read used as a comprehension generator SOURCE is inlined (the
+%% collapsed lc/bc/mc clause of iv/2 must preserve the comprehension tag -- this
+%% uses a *binary* comprehension so a tag-hardcoding bug would be caught). The
+%% slot tracks the source key; the generator variable stays local (untracked).
+inline_comprehension_source(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_comp). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Names = arizona_template:get(names, Bindings), "
+        "    arizona_template:html({'p', [], [<< <<N/binary>> || N <- Names >>]}). "
+    ),
+    T = Mod:render(#{names => [~"a", ~"b"]}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"ab", Fun()),
+    ?assertEqual(#{names => true}, slot_deps(Fun)).
+
+%% Like compile_module/1 but compiles with warnings_as_errors, matching the
+%% project's real erl_opts. Needed because unused-variable / match_underscore_var
+%% regressions surface only as warnings, which the plain [return_errors] path drops.
+compile_module_strict(Source) ->
+    {ok, Tokens, _} = erl_scan:string(Source),
+    Forms = split_forms(Tokens),
+    ParsedForms = [
+        begin
+            {ok, F} = erl_parse:parse_form(Toks),
+            F
+        end
+     || Toks <- Forms
+    ],
+    TransformedForms = arizona_parse_transform:parse_transform(ParsedForms, []),
+    {ok, Mod, Bin} = compile:forms(TransformedForms, [return_errors, warnings_as_errors]),
+    {module, Mod} = code:load_binary(Mod, "", Bin),
+    Mod.
+
+%% Evaluate a slot closure under a dependency bracket (mirrors arizona_eval) and
+%% return the captured deps.
+slot_deps(Fun) ->
+    erlang:put('$arizona_deps', #{}),
+    Fun(),
+    erlang:erase('$arizona_deps').
+
+%% Mirrors arizona_live:compute_changed/2 for unit tests.
+compute_changed(OldBindings, NewBindings) ->
+    maps:filter(
+        fun(K, V) ->
+            case OldBindings of
+                #{K := V} -> false;
+                #{} -> true
+            end
+        end,
+        NewBindings
+    ).

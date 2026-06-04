@@ -304,23 +304,26 @@ transform_form({function, L, Name, Arity, Clauses}, Module, _IsLive) ->
 transform_form(Form, _Module, _IsLive) ->
     Form.
 
-transform_clause({clause, L, Patterns, Guards, Body}, Module) ->
-    {clause, L, Patterns, Guards, [transform_expr(Expr, Module) || Expr <- Body]}.
+transform_clause({clause, L, Patterns, Guards, Body0}, Module) ->
+    Body = normalize_tail_binds(Body0),
+    Inline = collect_inline(Body),
+    Body1 = [transform_expr(Expr, Module, Inline) || Expr <- Body],
+    {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
 
-transform_expr(Expr, Module) ->
-    erl_syntax_lib:map(fun(Node) -> transform_node(Node, Module) end, Expr).
+transform_expr(Expr, Module, Inline) ->
+    erl_syntax_lib:map(fun(Node) -> transform_node(Node, Module, Inline) end, Expr).
 
-transform_node(Node, Module) ->
+transform_node(Node, Module, Inline) ->
     N = erl_syntax:revert(Node),
     case N of
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, [Arg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
-            compile_template(Arg, L, Module);
+            compile_template(inline_vars(Arg, Inline), L, Module);
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, [Arg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
-            compile_template(Arg, L, Module, false, arizona_native);
+            compile_template(inline_vars(Arg, Inline), L, Module, false, arizona_native);
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, terminal}}, [Arg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
@@ -329,19 +332,31 @@ transform_node(Node, Module) ->
             %% the terminal transport repaints whole frames rather than addressing
             %% the root node. So the live-render last-expr path falls through to
             %% here for `?terminal(...)`.
-            compile_template(Arg, L, Module, false, arizona_terminal);
+            compile_template(inline_vars(Arg, Inline), L, Module, false, arizona_terminal);
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}}, [FunArg, SourceArg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
-            compile_each(FunArg, SourceArg, L, Module);
+            compile_each(inline_vars(FunArg, Inline), inline_vars(SourceArg, Inline), L, Module);
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, native_each}}, [FunArg, SourceArg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
-            compile_each(FunArg, SourceArg, L, Module, arizona_native);
+            compile_each(
+                inline_vars(FunArg, Inline),
+                inline_vars(SourceArg, Inline),
+                L,
+                Module,
+                arizona_native
+            );
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, terminal_each}}, [FunArg, SourceArg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
-            compile_each(FunArg, SourceArg, L, Module, arizona_terminal);
+            compile_each(
+                inline_vars(FunArg, Inline),
+                inline_vars(SourceArg, Inline),
+                L,
+                Module,
+                arizona_terminal
+            );
         %% Sugar: `arizona_template:stateless(atom, Props)` with a literal atom
         %% callback is rewritten to `arizona_template:stateless(fun atom/1, Props)`.
         %% Fun references and other shapes pass through unchanged.
@@ -357,89 +372,107 @@ transform_node(Node, Module) ->
     end.
 
 transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module) ->
-    {Init, [Last]} = lists:split(length(Body) - 1, Body),
-    TransformedInit = [transform_expr(Expr, Module) || Expr <- Init],
-    TransformedLast = transform_live_render_last(Last, Module),
-    {clause, L, Patterns, Guards, TransformedInit ++ [TransformedLast]}.
+    {Init0, [Last]} = lists:split(length(Body) - 1, Body),
+    %% Only the init statements are normalized: the last expr carries the live root
+    %% template and is handled by transform_live_render_last/3.
+    Init = normalize_tail_binds(Init0),
+    Inline = collect_inline(Init ++ [Last]),
+    TransformedInit = [transform_expr(Expr, Module, Inline) || Expr <- Init],
+    TransformedLast = transform_live_render_last(Last, Module, Inline),
+    Body1 = TransformedInit ++ [TransformedLast],
+    {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
 
-transform_live_render_last(Expr, Module) ->
+transform_live_render_last(Expr, Module, Inline) ->
     N = erl_syntax:revert(Expr),
     case N of
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, [Arg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
-            validate_live_root(Arg, L),
-            Arg1 = transform_expr(Arg, Module),
-            compile_template(Arg1, L, Module, true);
+            validate_live_root(Arg, L, Inline),
+            Arg1 = transform_expr(Arg, Module, Inline),
+            compile_template(inline_vars(Arg1, Inline), L, Module, true);
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, [Arg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
-            validate_live_root(Arg, L),
-            Arg1 = transform_expr(Arg, Module),
-            compile_template(Arg1, L, Module, true, arizona_native);
+            validate_live_root(Arg, L, Inline),
+            Arg1 = transform_expr(Arg, Module, Inline),
+            compile_template(inline_vars(Arg1, Inline), L, Module, true, arizona_native);
         {'case', L, CaseExpr, Clauses} ->
-            {'case', L, transform_expr(CaseExpr, Module), [
-                transform_live_render_branch(C, Module)
+            {'case', L, transform_expr(CaseExpr, Module, Inline), [
+                transform_live_render_branch(C, Module, Inline)
              || C <- Clauses
             ]};
         {'if', L, Clauses} ->
-            {'if', L, [transform_live_render_branch(C, Module) || C <- Clauses]};
+            {'if', L, [transform_live_render_branch(C, Module, Inline) || C <- Clauses]};
         {block, L, Body} ->
-            transform_live_render_block(L, Body, Module);
+            transform_live_render_block(L, Body, Module, Inline);
         {'receive', L, Clauses} ->
-            {'receive', L, [transform_live_render_branch(C, Module) || C <- Clauses]};
+            {'receive', L, [transform_live_render_branch(C, Module, Inline) || C <- Clauses]};
         {'receive', L, Clauses, AfterExpr, AfterBody} ->
-            {'receive', L, [transform_live_render_branch(C, Module) || C <- Clauses],
-                transform_expr(AfterExpr, Module),
-                transform_live_render_block_body(AfterBody, Module)};
+            {'receive', L, [transform_live_render_branch(C, Module, Inline) || C <- Clauses],
+                transform_expr(AfterExpr, Module, Inline),
+                transform_live_render_block_body(AfterBody, Module, Inline)};
         {'try', L, Body, OfClauses, CatchClauses, AfterBody} ->
-            {'try', L, transform_live_render_block_body(Body, Module),
-                [transform_live_render_branch(C, Module) || C <- OfClauses],
-                [transform_live_render_branch(C, Module) || C <- CatchClauses], [
-                    transform_expr(E, Module)
+            {'try', L, transform_live_render_block_body(Body, Module, Inline),
+                [transform_live_render_branch(C, Module, Inline) || C <- OfClauses],
+                [transform_live_render_branch(C, Module, Inline) || C <- CatchClauses], [
+                    transform_expr(E, Module, Inline)
                  || E <- AfterBody
                 ]};
         {'maybe', L, Body} ->
-            {'maybe', L, transform_live_render_block_body(Body, Module)};
+            {'maybe', L, transform_live_render_block_body(Body, Module, Inline)};
         {'maybe', L, Body, {'else', L2, ElseClauses}} ->
-            {'maybe', L, transform_live_render_block_body(Body, Module),
-                {'else', L2, [transform_live_render_branch(C, Module) || C <- ElseClauses]}};
+            {'maybe', L, transform_live_render_block_body(Body, Module, Inline),
+                {'else', L2, [
+                    transform_live_render_branch(C, Module, Inline)
+                 || C <- ElseClauses
+                ]}};
         _ ->
-            transform_expr(Expr, Module)
+            transform_expr(Expr, Module, Inline)
     end.
 
-transform_live_render_block(L, Body, Module) ->
-    {block, L, transform_live_render_block_body(Body, Module)}.
+transform_live_render_block(L, Body, Module, Inline) ->
+    {block, L, transform_live_render_block_body(Body, Module, Inline)}.
 
-transform_live_render_block_body(Body, Module) ->
+transform_live_render_block_body(Body, Module, Inline) ->
     {Init, [Last]} = lists:split(length(Body) - 1, Body),
-    [transform_expr(E, Module) || E <- Init] ++ [transform_live_render_last(Last, Module)].
+    [transform_expr(E, Module, Inline) || E <- Init] ++
+        [transform_live_render_last(Last, Module, Inline)].
 
-transform_live_render_branch({clause, L, Patterns, Guards, Body}, Module) ->
+transform_live_render_branch({clause, L, Patterns, Guards, Body}, Module, Inline) ->
     {Init, [Last]} = lists:split(length(Body) - 1, Body),
-    TransInit = [transform_expr(E, Module) || E <- Init],
-    {clause, L, Patterns, Guards, TransInit ++ [transform_live_render_last(Last, Module)]}.
+    TransInit = [transform_expr(E, Module, Inline) || E <- Init],
+    {clause, L, Patterns, Guards, TransInit ++ [transform_live_render_last(Last, Module, Inline)]}.
 
-validate_live_root({tuple, _, [_Tag, Attrs | _]}, L) ->
-    validate_id_expr(Attrs, L);
-validate_live_root(_, L) ->
+validate_live_root({tuple, _, [_Tag, Attrs | _]}, L, Inline) ->
+    validate_id_expr(Attrs, L, Inline);
+validate_live_root(_, L, _Inline) ->
     parse_error(live_render_not_single_element, L).
 
-validate_id_expr({cons, _, {tuple, _, [{atom, _, id}, ValueAST]}, _}, L) ->
-    case is_get_id_call(ValueAST) of
+validate_id_expr({cons, _, {tuple, _, [{atom, _, id}, ValueAST]}, _}, L, Inline) ->
+    case is_get_id_call(ValueAST, Inline) of
         true -> ok;
         false -> parse_error(live_render_id_must_be_get_id, L)
     end;
-validate_id_expr({cons, _, _, Rest}, L) ->
-    validate_id_expr(Rest, L);
-validate_id_expr(_, L) ->
+validate_id_expr({cons, _, _, Rest}, L, Inline) ->
+    validate_id_expr(Rest, L, Inline);
+validate_id_expr(_, L, _Inline) ->
     parse_error(live_render_missing_id, L).
 
-is_get_id_call({call, _, {remote, _, {atom, _, Mod}, {atom, _, get}}, [{atom, _, id}, _]}) when
+%% A bare `?get(id)` at the root, or a variable hoisted into the body whose
+%% definition resolves (through the inline map) to `get(id, _)`.
+is_get_id_call(
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, get}}, [{atom, _, id}, _]}, _Inline
+) when
     Mod =:= arizona_template; Mod =:= az
 ->
     true;
-is_get_id_call(_) ->
+is_get_id_call({var, _, V}, Inline) ->
+    case Inline of
+        #{V := RHS} -> is_get_id_call(RHS, Inline);
+        #{} -> false
+    end;
+is_get_id_call(_, _Inline) ->
     false.
 
 maybe_inject_or_raise_az_view(Attrs, Line, #state{live_render = true, root = true}) ->
@@ -461,6 +494,310 @@ is_az_view_attr({bin, _, [{bin_element, _, {string, _, "az-view"}, _, _}]}) ->
     true;
 is_az_view_attr(_) ->
     false.
+
+%% --------------------------------------------------------------------
+%% Binding-read inlining
+%% --------------------------------------------------------------------
+%%
+%% A read hoisted into the function body --
+%%
+%%     Name = arizona_template:get(name, Bindings),
+%%     ?html({p, [], [Name]}).
+%%
+%% -- would otherwise compile the slot to `fun() -> Name end`: a closure that
+%% captures a plain value and runs no `get`, so it records no dependency and the
+%% slot freezes after the first render. We rewrite each interpolated variable back
+%% into its defining expression, so the `get` re-executes inside the per-slot
+%% dependency bracket -- exactly as if it had been written inline in the template.
+
+%% Build the inline map for a clause body: top-level `Var = RHS` matches whose RHS
+%% transitively reaches an `arizona_template`/`az` `get`/`get_lazy`/`track` call.
+%% Variables bound more than once are dropped (ambiguous to inline); a binding-derived
+%% expression with no read (e.g. `Id = make_uuid()`) is left captured so a pure
+%% side effect is never re-run per slot.
+collect_inline(Body) ->
+    {Raw, Poisoned} = scan_top_matches(Body, #{}, #{}),
+    keep_reaching(maps:without(maps:keys(Poisoned), Raw)).
+
+scan_top_matches([], Raw, Poisoned) ->
+    {Raw, Poisoned};
+scan_top_matches([{match, _, {var, _, V}, RHS} | Rest], Raw, Poisoned) ->
+    case Raw of
+        #{V := _} -> scan_top_matches(Rest, Raw, Poisoned#{V => true});
+        #{} -> scan_top_matches(Rest, Raw#{V => RHS}, Poisoned)
+    end;
+scan_top_matches([_ | Rest], Raw, Poisoned) ->
+    scan_top_matches(Rest, Raw, Poisoned).
+
+keep_reaching(Candidates) ->
+    maps:with(maps:keys(reaching_fixpoint(Candidates, #{})), Candidates).
+
+reaching_fixpoint(Candidates, Acc) ->
+    Acc1 = maps:fold(
+        fun
+            (V, _RHS, A) when is_map_key(V, A) -> A;
+            (V, RHS, A) ->
+                case rhs_reaches(RHS, A) of
+                    true -> A#{V => true};
+                    false -> A
+                end
+        end,
+        Acc,
+        Candidates
+    ),
+    case map_size(Acc1) =:= map_size(Acc) of
+        true -> Acc1;
+        false -> reaching_fixpoint(Candidates, Acc1)
+    end.
+
+%% True when an AST subtree contains a get/get_lazy/track call, or references a
+%% variable already known to reach one.
+rhs_reaches({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}, _Reaching) when
+    (Mod =:= arizona_template orelse Mod =:= az) andalso
+        (F =:= get orelse F =:= get_lazy orelse F =:= track)
+->
+    true;
+rhs_reaches({var, _, V}, Reaching) ->
+    is_map_key(V, Reaching);
+rhs_reaches(T, Reaching) when is_tuple(T) ->
+    rhs_reaches_any(tuple_to_list(T), Reaching);
+rhs_reaches(L, Reaching) when is_list(L) ->
+    rhs_reaches_any(L, Reaching);
+rhs_reaches(_, _Reaching) ->
+    false.
+
+rhs_reaches_any([], _Reaching) ->
+    false;
+rhs_reaches_any([H | T], Reaching) ->
+    rhs_reaches(H, Reaching) orelse rhs_reaches_any(T, Reaching).
+
+%% Lift a statement-form `case` that binds one variable as the whole body of every
+%% branch --
+%%
+%%     case ?get(mode) of dark -> X = ?get(a); _ -> X = ?get(b) end,
+%%
+%% -- into value form --
+%%
+%%     X = case ?get(mode) of dark -> ?get(a); _ -> ?get(b) end,
+%%
+%% so the existing top-level-match machinery can inline it. Restricted to clauses
+%% whose body is exactly a single `Var = E` match (no other bindings to strip out of
+%% scope), and only when the lifted expression actually reaches a read.
+%%
+%% `if`/`receive` are deliberately excluded: their conditions are guards, which
+%% cannot hold a read, so a binding-derived condition would stay captured and the
+%% slot would track only the branch bodies -- partial tracking that looks correct.
+%% A `case` scrutinee is an expression and inlines fully, so it is always sound.
+normalize_tail_binds(Body) ->
+    [normalize_tail_bind(Stmt) || Stmt <- Body].
+
+normalize_tail_bind({'case', L, Scrutinee, Clauses} = Stmt) ->
+    lift_tail_bind(Stmt, L, Clauses, fun(Stripped) -> {'case', L, Scrutinee, Stripped} end);
+normalize_tail_bind(Stmt) ->
+    Stmt.
+
+%% `strip_tail_binds/1` is only safe once `tail_bind_var/1` has confirmed every
+%% clause body is a single `Var = E` match, so it is computed lazily here.
+lift_tail_bind(Stmt, L, Clauses, Rebuild) ->
+    case tail_bind_var(Clauses) of
+        {ok, V} ->
+            Lifted = Rebuild(strip_tail_binds(Clauses)),
+            case rhs_reaches(Lifted, #{}) of
+                true -> {match, L, {var, L, V}, Lifted};
+                false -> Stmt
+            end;
+        error ->
+            Stmt
+    end.
+
+%% `{ok, V}` when every clause's body is exactly `[{match, {var, V}, _}]` for the
+%% same `V`; `error` otherwise.
+tail_bind_var([First | _] = Clauses) ->
+    case clause_bind_var(First) of
+        {ok, V} ->
+            case lists:all(fun(C) -> clause_bind_var(C) =:= {ok, V} end, Clauses) of
+                true -> {ok, V};
+                false -> error
+            end;
+        error ->
+            error
+    end;
+tail_bind_var([]) ->
+    error.
+
+%% A clause qualifies only when lifting cannot move a binding out of scope. The
+%% lifted value-form case is ALSO substituted into the slot closure, so any variable
+%% a clause introduces would be bound twice. Refuse if the clause pattern binds a
+%% variable (e.g. `{admin, Name} ->` -- would become an unsafe_var) or the branch
+%% RHS contains a nested match (e.g. `X = (Z = E)` -- would export `Z` from both
+%% copies). Such cases are left in statement form (captured, not fine-grained).
+clause_bind_var({clause, _, Patterns, _Guards, [{match, _, {var, _, V}, E}]}) ->
+    case pattern_vars(Patterns) =:= [] andalso not contains_match(E) of
+        true -> {ok, V};
+        false -> error
+    end;
+clause_bind_var(_) ->
+    error.
+
+contains_match({match, _, _, _}) ->
+    true;
+contains_match(T) when is_tuple(T) ->
+    contains_match(tuple_to_list(T));
+contains_match([H | T]) ->
+    contains_match(H) orelse contains_match(T);
+contains_match(_) ->
+    false.
+
+strip_tail_binds(Clauses) ->
+    [strip_tail_bind(C) || C <- Clauses].
+
+strip_tail_bind({clause, L, Patterns, Guards, [{match, _, {var, _, _V}, E}]}) ->
+    {clause, L, Patterns, Guards, [E]}.
+
+%% Recursively substitute interpolated variables with their inlined defining
+%% expression. Scope-aware: variables shadowed by fun parameters or comprehension
+%% generators are not substituted, and patterns/guards are left untouched so a
+%% substitution can never produce an illegal pattern.
+inline_vars(Expr, Inline) when map_size(Inline) =:= 0 ->
+    Expr;
+inline_vars(Expr, Inline) ->
+    iv(Expr, Inline).
+
+iv({var, _, V} = Var, Inline) ->
+    case Inline of
+        #{V := RHS} -> iv(RHS, Inline);
+        #{} -> Var
+    end;
+iv({'fun', L, {clauses, Cs}}, Inline) ->
+    {'fun', L, {clauses, [iv_fun_clause(C, Inline) || C <- Cs]}};
+iv({named_fun, L, Name, Cs}, Inline) ->
+    Inline1 = maps:remove(Name, Inline),
+    {named_fun, L, Name, [iv_fun_clause(C, Inline1) || C <- Cs]};
+iv({'case', L, E, Cs}, Inline) ->
+    {'case', L, iv(E, Inline), [iv_clause(C, Inline) || C <- Cs]};
+iv({'if', L, Cs}, Inline) ->
+    {'if', L, [iv_clause(C, Inline) || C <- Cs]};
+iv({'receive', L, Cs}, Inline) ->
+    {'receive', L, [iv_clause(C, Inline) || C <- Cs]};
+iv({'receive', L, Cs, AE, AB}, Inline) ->
+    {'receive', L, [iv_clause(C, Inline) || C <- Cs], iv(AE, Inline), iv_body(AB, Inline)};
+iv({'try', L, B, OfCs, CatchCs, Aft}, Inline) ->
+    {'try', L, iv_body(B, Inline), [iv_clause(C, Inline) || C <- OfCs],
+        [
+            iv_clause(C, Inline)
+         || C <- CatchCs
+        ],
+        iv_body(Aft, Inline)};
+iv({'catch', L, E}, Inline) ->
+    {'catch', L, iv(E, Inline)};
+iv({Comp, L, T, Qs}, Inline) when Comp =:= lc; Comp =:= bc; Comp =:= mc ->
+    {Qs1, Inline1} = iv_quals(Qs, Inline),
+    {Comp, L, iv(T, Inline1), Qs1};
+iv({block, L, B}, Inline) ->
+    {block, L, iv_body(B, Inline)};
+iv({match, L, P, E}, Inline) ->
+    {match, L, P, iv(E, Inline)};
+iv({'maybe', L, B}, Inline) ->
+    {'maybe', L, iv_body(B, Inline)};
+iv({'maybe', L, B, {'else', L2, Cs}}, Inline) ->
+    {'maybe', L, iv_body(B, Inline), {'else', L2, [iv_clause(C, Inline) || C <- Cs]}};
+iv({maybe_match, L, P, E}, Inline) ->
+    {maybe_match, L, P, iv(E, Inline)};
+iv(T, Inline) when is_tuple(T) ->
+    list_to_tuple([iv(E, Inline) || E <- tuple_to_list(T)]);
+iv(L, Inline) when is_list(L) ->
+    [iv(E, Inline) || E <- L];
+iv(Other, _Inline) ->
+    Other.
+
+%% Fun clause: parameters bind and shadow; drop them from the map for the body.
+iv_fun_clause({clause, L, Params, Guards, Body}, Inline) ->
+    Inline1 = maps:without(pattern_vars(Params), Inline),
+    {clause, L, Params, Guards, iv_body(Body, Inline1)}.
+
+%% case/receive/try-of/catch clause: patterns match the (already inlined) scrutinee,
+%% so patterns and guards are left untouched. Any name a pattern binds is dropped from
+%% the map for the body as a conservative shadow guard.
+iv_clause({clause, L, Patterns, Guards, Body}, Inline) ->
+    Inline1 = maps:without(pattern_vars(Patterns), Inline),
+    {clause, L, Patterns, Guards, iv_body(Body, Inline1)}.
+
+%% A body is a sequence; a `Var = RHS` match binds Var (shadowing) for later exprs.
+iv_body(Exprs, Inline) ->
+    {Rev, _} = lists:foldl(
+        fun(E, {Acc, Inl}) ->
+            Inl1 =
+                case E of
+                    {match, _, P, _} -> maps:without(pattern_vars(P), Inl);
+                    _ -> Inl
+                end,
+            {[iv(E, Inl) | Acc], Inl1}
+        end,
+        {[], Inline},
+        Exprs
+    ),
+    lists:reverse(Rev).
+
+%% Comprehension qualifiers, left to right: generator patterns bind for subsequent
+%% qualifiers and the template; filters are plain expressions.
+iv_quals(Qs, Inline) ->
+    lists:mapfoldl(fun iv_qual/2, Inline, Qs).
+
+iv_qual({generate, L, P, E}, Inline) ->
+    {{generate, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
+iv_qual({b_generate, L, P, E}, Inline) ->
+    {{b_generate, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
+iv_qual({m_generate, L, P, E}, Inline) ->
+    {{m_generate, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
+iv_qual(Filter, Inline) ->
+    {iv(Filter, Inline), Inline}.
+
+pattern_vars(Pattern) ->
+    maps:keys(collect_pattern_vars(Pattern, #{})).
+
+collect_pattern_vars({var, _, '_'}, Acc) ->
+    Acc;
+collect_pattern_vars({var, _, V}, Acc) ->
+    Acc#{V => true};
+collect_pattern_vars(T, Acc) when is_tuple(T) ->
+    collect_pattern_vars(tuple_to_list(T), Acc);
+collect_pattern_vars([H | T], Acc) ->
+    collect_pattern_vars(T, collect_pattern_vars(H, Acc));
+collect_pattern_vars(_, Acc) ->
+    Acc.
+
+%% After inlining, a variable used only inside the template no longer appears outside
+%% its own binding. Underscore-prefix such matches so `warnings_as_errors` (unused
+%% variable) doesn't reject the module; matches still referenced elsewhere are kept.
+suppress_unused_inline_matches(Body, Inline) when map_size(Inline) =:= 0 ->
+    Body;
+suppress_unused_inline_matches(Body, Inline) ->
+    [maybe_underscore_match(E, Inline, Body) || E <- Body].
+
+%% Rename the now-unused match LHS to the anonymous `_`: it never collides with a
+%% pre-existing `_Foo` binding (which would otherwise trip erl_lint's
+%% match_underscore_var) and never warns.
+maybe_underscore_match({match, L, {var, VL, V}, RHS} = M, Inline, Body) ->
+    case is_map_key(V, Inline) andalso count_var(V, Body) =:= 1 of
+        true -> {match, L, {var, VL, '_'}, RHS};
+        false -> M
+    end;
+maybe_underscore_match(E, _Inline, _Body) ->
+    E.
+
+count_var(V, AST) ->
+    count_var(V, AST, 0).
+
+count_var(V, {var, _, V}, N) ->
+    N + 1;
+count_var(_V, {var, _, _}, N) ->
+    N;
+count_var(V, T, N) when is_tuple(T) ->
+    count_var(V, tuple_to_list(T), N);
+count_var(V, [H | T], N) ->
+    count_var(V, T, count_var(V, H, N));
+count_var(_V, _Other, N) ->
+    N.
 
 compile_template(Arg, Line, Module) ->
     compile_template(Arg, Line, Module, false).
