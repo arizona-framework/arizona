@@ -71,8 +71,9 @@ test.describe('native (JSON) wire -- menu navigation', () => {
             // (this is what crashed TickerE2ETest after the per-view change).
             client.tap(client.tree().children[3]); // "Ticker"
             await client.waitFor((t) => t.id === 'native_ticker');
-            // No client event -- the server timer drives these.
-            await client.waitFor((t) => count(t) >= 2, 5000);
+            // No client event -- the server's 1s timer drives these. Generous budget:
+            // parallel CI load slips the BEAM timers (see ticker.spec.js).
+            await client.waitFor((t) => count(t) >= 2, 10000);
         } finally {
             client.close();
         }

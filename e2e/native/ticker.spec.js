@@ -14,8 +14,10 @@ test.describe('native (JSON) wire -- ticker (server push)', () => {
         try {
             expect(client.tree().type).toBe('Column');
             expect(count(client.tree())).toBe(0);
-            // No pushEvent -- the server's timer drives the updates.
-            await client.waitFor((t) => count(t) >= 2, 5000);
+            // No pushEvent -- the server's 1s timer drives the updates. Budget is
+            // generous (>= 2 is ~2s nominal): under parallel CI load the BEAM timers
+            // slip, and a tight bound flaked. Stays under the 15s per-test timeout.
+            await client.waitFor((t) => count(t) >= 2, 10000);
             expect(count(client.tree())).toBeGreaterThanOrEqual(2);
         } finally {
             client.close();
