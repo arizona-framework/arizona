@@ -175,5 +175,44 @@ Exceptions that stay un-tracked (slot frozen after SSR): a binding destructured
 in the head (`render(#{foo := Foo})`) or through any non-bare-var pattern
 (`{ok, V} = ?get(...)` -- use `?get(foo)` then plain destructuring), a read
 reachable only through a guard, a variable bound inside an `if` or a `case`
-branch whose clause head binds a variable, and a rebound variable. `?get` is for
-top-level bindings; read sub-structures with plain `maps:get/2`.
+branch whose clause head binds a variable, and a rebound variable.
+
+`?get`/`get_lazy`/`with` are for the **view bindings**, not sub-maps: they call
+`track/1` regardless of which map they read, so reading a nested map records the
+inner key as a spurious top-level dep. The parse transform rejects a tracked read
+whose map argument is a local that is not the bindings (or an alias/`with`
+projection of it) with `tracked_get_on_non_bindings_map`. Read sub-structures with
+plain `maps:get/2`: `User = ?get(user), Name = maps:get(name, User)`.
+
+### Handing a bindings subset to a sub-context -- `az:with`
+
+A child template embedded via a **raw function call** (or an explicit nested
+`?html(...)` call returning a template) freezes: the outer slot is
+`fun() -> child(Bindings) end`, building `child` fires no `?get` at the outer level
+(its reads sit in `child`'s own closures), so the outer slot captures empty deps and
+the diff engine skips it forever. Idiomatic composition is `?stateful`/`?stateless`
+(props reads track on the parent slot); an inline nested *element* is also fine (it
+flattens into the parent template).
+
+When you must hand a bindings subset to a sub-context (a helper, a passed-through
+map), declare the dependency with `az:with([keys], Bindings)` -- it tracks each key
+on the enclosing slot (fixing the freeze) and projects to only those keys via
+`maps:with/2`, so the sub-context can't silently read an untracked key (an omitted
+key fails loudly with `missing_binding` instead of freezing).
+
+```erlang
+%% Frozen: outer slot has empty deps, never re-renders.
+?html({p, [], [row(Bindings)]}).
+%% Tracked: `id`/`name` recorded on the outer slot; projection hides the rest.
+?html({p, [], [row(az:with([id, name], Bindings))]}).
+```
+
+There is deliberately no `with_all` -- tracking every key makes the slot depend on
+everything, defeating fine-grained diffing.
+
+### Eager `get/3` defaults over-track
+
+`?get(a, ?get(b))` (i.e. `get(a, B, get(b, B))`) records `b` even when `a` is
+present, because Erlang evaluates the default argument eagerly. Use
+`?get_lazy(a, fun() -> ?get(b) end)` when the default itself reads a binding, so the
+fallback key is tracked only when actually taken.

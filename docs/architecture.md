@@ -56,6 +56,8 @@ Pure helpers for binding access, descriptor construction, and template compositi
 - `get/2,3`, `get_lazy/3` -- binding access with dep tracking via process dictionary
   (`$arizona_deps`)
 - `track/1` -- manually track a binding key as a dependency
+- `with/2` -- tracked projection: `track/1`s each key then `maps:with(Keys, Bindings)`;
+  hands a bindings subset to a sub-context while declaring its deps
 - `stateful/2` -- returns `#{stateful => Handler, props => Props}` descriptor for child views
 - `stateless/2` -- returns `#{callback => Callback, props => Props}` descriptor (Callback is a
   fun/1)
@@ -225,7 +227,9 @@ written inline. This is purely compile-time; the runtime/diff path is unchanged
 and idiomatic templates (reads written inside `?html`) are unaffected.
 
 - **`collect_inline/1`** builds a per-clause map of top-level `Var = RHS`
-  matches whose RHS transitively reaches a `get`/`get_lazy`/`track` call.
+  matches whose RHS transitively reaches a `get`/`get_lazy`/`track`/`with` call
+  (`with` tracks too, so a hoisted `Sub = with(Keys, Bindings)` must inline back
+  into the slot bracket or its tracking runs outside any bracket and freezes).
   Rebound vars are dropped; a derivation with no read (e.g. `Id = make_uuid()`)
   is left captured, so a pure side effect is never re-run per slot.
 - **`inline_vars/2`** substitutes those variables wherever they appear in a
@@ -251,6 +255,50 @@ itself binds a variable, and a rebound variable. Use `?get` for the top-level
 binding and plain `maps:get/2` for sub-structures (only the `?get` records a dep,
 which is the correct grain). In all these cases the read is left captured and the
 slot keeps its SSR value; the transform never makes valid code uncompilable.
+
+## Tracked accessors, the sub-map diagnostic, and `with/2`
+
+`get/2,3`, `get_lazy/3`, and `with/2` (and their `az:` aliases) are the
+dependency-tracking accessors: each calls `track/1` regardless of which map it
+reads. That makes reading a *nested* map a footgun -- `Foo = ?get(foo), ?get(bar,
+Foo)` records `bar` (a key of `Foo`) as a top-level slot dep, which both
+over-tracks and frantically misfires. The parse transform rejects it at compile
+time (`tracked_get_on_non_bindings_map`): a tracked read whose map argument is a
+local that is not the bindings parameter -- nor an alias of it (`B = Bindings`),
+nor a `with/2` projection of it -- is an error. Read sub-structures with plain
+`maps:get/2`. Non-variable map arguments (a literal map, a `maps:get` result) are
+never flagged.
+
+**Nested-template / passed-bindings freeze.** A child template embedded via a raw
+function call (or an explicit nested `?html(...)` returning a template) renders at
+SSR but never updates: the outer slot is `fun() -> child(Bindings) end`, and
+building `child` fires no `?get` at the outer level (the reads live in `child`'s own
+closures, isolated by `with_saved_deps`), so the outer slot captures empty deps and
+the diff engine skips it forever. Idiomatic composition is `?stateful`/`?stateless`,
+whose props expressions read on the parent slot; an inline nested *element* is also
+fine (it flattens into the parent template). When you must hand a bindings subset to
+a sub-context, `arizona_template:with([keys], Bindings)` is the explicit fix: it
+`track/1`s each key (so the outer slot re-renders when any listed key changes) and
+returns `maps:with(Keys, Bindings)` (so the sub-context cannot silently depend on an
+untracked key -- an omitted key raises `missing_binding` rather than freezing). No
+`with_all`: tracking every key makes the slot depend on everything, defeating
+fine-grained diffing.
+
+**Eager `get/3` defaults over-track.** `?get(a, ?get(b))` records `b` even when `a`
+is present, because Erlang evaluates the default argument eagerly and `?get(b)`
+tracks unconditionally. `?get_lazy(a, fun() -> ?get(b) end)` tracks the fallback key
+only when the default is actually taken.
+
+**Stream items re-evaluate empty deps on purpose.** The main per-dynamic diff path
+skips a slot whose deps are empty (the documented frozen residue above). The `?each`
+item path does the opposite: its reuse predicate in `arizona_eval` (`can_reuse/2`) is
+`map_size(OldDeps) > 0 andalso not deps_changed`, so an empty-deps item is always
+re-evaluated. This is a
+deliberate safety net for item callbacks that head-destructure fields
+(`fun(#{text := T}, _) -> ...`): those reads are untracked, so the item would have
+empty deps and freeze, except the item path re-evaluates it. The asymmetry is the
+boundary: head-destructured *render* reads freeze in top-level slots but stay current
+inside `?each` items.
 
 ## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_effect`)
 

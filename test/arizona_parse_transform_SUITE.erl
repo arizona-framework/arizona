@@ -172,6 +172,12 @@
     tracked_get_alias_ok/1,
     tracked_get_literal_map_ok/1,
     tracked_get_renamed_param_ok/1,
+    tracked_get_with_projection_ok/1,
+    tracked_get_with_submap_errors/1,
+    tracked_get_case_aliased_bindings_flagged/1,
+    with_handoff_freezes_without_tracking/1,
+    with_handoff_tracks_outer_slot/1,
+    with_handoff_hoisted_tracks_outer_slot/1,
     void_element/1,
     void_in_each_with_children/1,
     void_nested_child_with_children/1,
@@ -385,7 +391,13 @@ groups() ->
             tracked_get_each_item_ok,
             tracked_get_alias_ok,
             tracked_get_literal_map_ok,
-            tracked_get_renamed_param_ok
+            tracked_get_renamed_param_ok,
+            tracked_get_with_projection_ok,
+            tracked_get_with_submap_errors,
+            tracked_get_case_aliased_bindings_flagged,
+            with_handoff_freezes_without_tracking,
+            with_handoff_tracks_outer_slot,
+            with_handoff_hoisted_tracks_outer_slot
         ]},
         %% Tests 68-77c: layout tests
         {layout, [parallel], [
@@ -4817,6 +4829,117 @@ tracked_get_renamed_param_ok(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [arizona_template:get(name, Ctx)]}). "
     ),
     ?assert(is_map(Mod:render(#{name => ~"Ada"}))).
+
+%% A var bound by a with/2 projection is bindings-like: reading it with get/2 is not
+%% flagged (the projection already tracked the key on the enclosing slot). The slot
+%% tracks `x` (not just compiles): the hoisted `Sub` is inlined back into the bracket.
+tracked_get_with_projection_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_tg_withproj). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Sub = arizona_template:with([x], Bindings), "
+        "    arizona_template:html({'p', [], [arizona_template:get(x, Sub)]}). "
+    ),
+    T = Mod:render(#{x => ~"y"}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"y", Fun()),
+    ?assertEqual(#{x => true}, slot_deps(Fun)).
+
+%% with/2 is itself a tracking accessor, so projecting a non-bindings sub-map is the
+%% same footgun as get/get_lazy and is flagged.
+tracked_get_with_submap_errors(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_tg_withsub). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Foo = arizona_template:get(foo, Bindings), "
+        "    Sub = arizona_template:with([bar], Foo), "
+        "    arizona_template:html({'p', [], [arizona_template:get(bar, Sub)]}). ",
+        fun(R) -> R =:= tracked_get_on_non_bindings_map end
+    ).
+
+%% A binding reached through a non-bare-var alias (a `case`, `begin`, `maps:merge`, ...)
+%% is intentionally flagged: alias_closure only proves bindings-likeness through `V = W`
+%% and `V = with(_, W)`, so a `case`-aliased binding is indistinguishable from a sub-map.
+%% This documents the limitation and the escape hatch (alias directly with `B = Bindings`,
+%% per the format_error message). The value still renders correctly via that escape.
+tracked_get_case_aliased_bindings_flagged(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_tg_casealias). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    B = case Bindings of #{} -> Bindings end, "
+        "    arizona_template:html({'p', [], [arizona_template:get(x, B)]}). ",
+        fun(R) -> R =:= tracked_get_on_non_bindings_map end
+    ).
+
+%% Finding A, baseline: a child template handed off via a raw function call freezes.
+%% The outer slot is `fun() -> inner(Bindings) end`; building `inner` fires no tracked
+%% read at the outer level (its reads sit in inner's own closures), so the outer slot
+%% captures empty deps (proven directly via slot_deps) and the diff engine skips it.
+with_handoff_freezes_without_tracking(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_with_freeze). "
+        "-export([render/1, inner/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], [inner(Bindings)]}). "
+        "inner(B) -> "
+        "    arizona_template:html({'span', [], [arizona_template:get(x, B)]}). "
+    ),
+    B0 = #{x => ~"Ada"},
+    [{_Az, OuterFun, _Loc}] = maps:get(d, Mod:render(B0)),
+    ?assertEqual(#{}, slot_deps(OuterFun)),
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = #{x => ~"Grace"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertEqual([], Ops).
+
+%% Finding A, fix (inline form): handing off `with([x], Bindings)` declares the outer
+%% slot's dependency on `x` (proven via slot_deps), so it re-renders when `x` changes
+%% (the frozen baseline above emits no op for the same change).
+with_handoff_tracks_outer_slot(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_with_track). "
+        "-export([render/1, inner/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], [inner(arizona_template:with([x], Bindings))]}). "
+        "inner(B) -> "
+        "    arizona_template:html({'span', [], [arizona_template:get(x, B)]}). "
+    ),
+    B0 = #{x => ~"Ada"},
+    [{_Az, OuterFun, _Loc}] = maps:get(d, Mod:render(B0)),
+    ?assertEqual(#{x => true}, slot_deps(OuterFun)),
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = #{x => ~"Grace"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% Finding A, fix (HOISTED form): the same handoff with `with` bound to a local first.
+%% This is the regression guard for the rhs_reaches/2 inlining gate: without `with` in
+%% that gate the hoisted `Sub` is not inlined, its tracking runs outside the slot bracket
+%% (a no-op), and the outer slot freezes (slot_deps `#{}`, Ops `[]`). With the fix the
+%% slot tracks `x` exactly like the inline form above.
+with_handoff_hoisted_tracks_outer_slot(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_with_hoist). "
+        "-export([render/1, inner/1]). "
+        "render(Bindings) -> "
+        "    Sub = arizona_template:with([x], Bindings), "
+        "    arizona_template:html({'p', [], [inner(Sub)]}). "
+        "inner(B) -> "
+        "    arizona_template:html({'span', [], [arizona_template:get(x, B)]}). "
+    ),
+    B0 = #{x => ~"Ada"},
+    [{_Az, OuterFun, _Loc}] = maps:get(d, Mod:render(B0)),
+    ?assertEqual(#{x => true}, slot_deps(OuterFun)),
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = #{x => ~"Grace"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
 
 %% Like compile_module/1 but compiles with warnings_as_errors, matching the
 %% project's real erl_opts. Needed because unused-variable / match_underscore_var

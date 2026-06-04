@@ -6,6 +6,7 @@
     get_default/1,
     get_lazy/1,
     get/1,
+    with/1,
     html_stub/1,
     stateful/1,
     stateless_2/1,
@@ -23,6 +24,7 @@ groups() ->
             get_default,
             get_lazy,
             get,
+            with,
             html_stub,
             stateful,
             stateless_2,
@@ -40,6 +42,9 @@ get_default(Config) when is_list(Config) ->
 
 get_lazy(Config) when is_list(Config) ->
     ?assertEqual(3, az:get_lazy(z, #{}, fun() -> 3 end)).
+
+with(Config) when is_list(Config) ->
+    ?assertEqual(#{x => 1, y => 2}, az:with([x, y], #{x => 1, y => 2, z => 3})).
 
 track(Config) when is_list(Config) ->
     ?assertEqual(ok, az:track(some_key)).

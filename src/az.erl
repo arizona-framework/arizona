@@ -33,6 +33,7 @@ binding, used by stateless layouts to render the wrapped page.
 -export([get/2]).
 -export([get/3]).
 -export([get_lazy/3]).
+-export([with/2]).
 -export([inner_content/1]).
 -export([track/1]).
 -export([html/1]).
@@ -52,6 +53,7 @@ binding, used by stateless layouts to render the wrapped page.
     get/2,
     get/3,
     get_lazy/3,
+    with/2,
     inner_content/1,
     track/1,
     html/1,
@@ -134,6 +136,15 @@ Alias for `arizona_template:get_lazy/3`.
     DefaultFun :: fun(() -> term()).
 get_lazy(Key, Bindings, DefaultFun) ->
     arizona_template:get_lazy(Key, Bindings, DefaultFun).
+
+-doc """
+Alias for `arizona_template:with/2`.
+""".
+-spec with(Keys, Bindings) -> map() when
+    Keys :: [term()],
+    Bindings :: map().
+with(Keys, Bindings) ->
+    arizona_template:with(Keys, Bindings).
 
 -doc """
 Returns the `inner_content` binding from a layout's bindings map.

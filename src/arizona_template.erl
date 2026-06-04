@@ -51,6 +51,7 @@ render(Bindings) ->
 -export([get/2]).
 -export([get/3]).
 -export([get_lazy/3]).
+-export([with/2]).
 -export([track/1]).
 -export([html/1]).
 -export([native/1]).
@@ -210,6 +211,26 @@ get_lazy(Key, Bindings, DefaultFun) when is_function(DefaultFun, 0) ->
         #{Key := Val} -> Val;
         #{} -> DefaultFun()
     end.
+
+-doc """
+Projects `Bindings` to a sub-map of only `Keys`, tracking each key as a
+dependency.
+
+Use it to hand a bindings subset to a sub-context (a helper, a child, a
+passed-through map) while declaring exactly which keys it depends on: the
+projection means the sub-context cannot silently read an untracked key (an
+omitted key fails loudly with `missing_binding` rather than freezing), and the
+tracking makes the enclosing slot re-render when any listed key changes.
+
+Equivalent to `track/1` on each key followed by `maps:with(Keys, Bindings)`.
+""".
+-spec with(Keys, Bindings) -> Bindings1 when
+    Keys :: [term()],
+    Bindings :: map(),
+    Bindings1 :: map().
+with(Keys, Bindings) ->
+    ok = lists:foreach(fun track/1, Keys),
+    maps:with(Keys, Bindings).
 
 -doc """
 Records `Key` as a dependency of the dynamic element currently being rendered.
