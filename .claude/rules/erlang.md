@@ -132,7 +132,7 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?get_lazy(Key, Fun)` | `arizona_template:get_lazy(Key, Bindings, Fun)` |
 | `?html(Elems)` | `arizona_template:html(Elems)` |
 | `?terminal(Elems)` | `arizona_template:terminal(Elems)` -- ANSI render target; tags `line`/`col`/`row`/`text`/`span`/`br` + bare-atom style attrs (see docs/architecture.md "Terminal render target") |
-| `?each(Fun, Source)` | `arizona_template:each(Fun, Source)` -- 1-arg for lists, 2-arg for streams/maps |
+| `?each(Fun, Source)` | `arizona_template:each(Fun, Source)` -- 1-arg for lists, 2-arg for streams/maps. The callback must return an element (see "?each body must return an element") |
 | `?stateful(Handler, Props)` | `arizona_template:stateful(Handler, Props)` |
 | `?stateless(Fun, Props)` | `arizona_template:stateless(fun Fun/1, Props)` |
 | `?stateless(Mod, Fun, Props)` | `arizona_template:stateless(Mod, Fun, Props)` |
@@ -142,6 +142,41 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?send(ViewId, Msg)` | `arizona_live:send(ViewId, Msg)` -- send to specific view (stateful only) |
 | `?send_after(Time, Msg)` | `arizona_live:send_after(?get(id), Time, Msg)` -- delayed send to current view (stateful only) |
 | `?send_after(ViewId, Time, Msg)` | `arizona_live:send_after(ViewId, Time, Msg)` -- delayed send to specific view (stateful only) |
+
+## `?each` body must return an element
+
+`?each` compiles each item into a per-item template (`#{s, d, f}`) for fine-grained diffing
+(insert/move/update). So the callback's body must be an **element** (`{Tag, Attrs, Children}`),
+a list of elements, or a static/mixed fragment. A bare value, a runtime binary, an `?html(...)`
+call, a `?stateful`/`?stateless` descriptor, a `case`/`if`, or a `fun name/arity` reference
+compiles to one opaque value slot. A scalar value renders and diffs (keyed by content) but
+gets no per-item diffing -- a comprehension is the right tool; a template or descriptor value
+goes further and **crashes on the first diff** (`bad_template_value`, when `to_bin/1` hits the
+stored template/descriptor). A template or descriptor wrapped in a bare list (`[?stateless(...)]`)
+is the same trap. The parse transform rejects all of these at compile time
+(`each_body_not_element` / `each_fun_ref_not_allowed`). A 2-arg (stream/map) callback is
+rejected the same way but with `each_stream_body_not_element`: a stream/map keys each item for
+per-item diffing and has **no comprehension fallback**, so the body must be an element (wrap the
+value: `fun(Item, Key) -> {li, [], [Item]} end`).
+
+- Plain values: use a list comprehension or `lists:map/2` (no per-item diffing, fine for
+  small or static lists).
+- A conditional: put it **inside** an element as a text/value child.
+
+```erlang
+%% rejected (would crash on diff): a case / ?html body
+?each(fun(U) -> case U of #{name := N} -> ?html({li,[],N}); _ -> ~"-" end end, ?get(users))
+%% ok: the conditional is a child of a stable element
+?each(fun(U) -> {li, [], [case U of #{name := N} -> N; _ -> ~"-" end]} end, ?get(users))
+%% plain values: a comprehension, not ?each
+{ul, [], [[<<"#", Tag/binary>> || Tag <- ?get(tags)]]}
+```
+
+**Known limitation:** embedding a component (a `?stateless`/`?stateful` descriptor) as an
+`?each` item child compiles and renders at SSR but **crashes on the first diff** -- the
+per-item diff keys a list item by `to_bin` of its first dynamic, which fails on a nested
+template/descriptor. So a per-item component is not usable yet. The exception is a
+`?stateful` child in a **stream** `?each` (it is its own self-diffing view process).
 
 ## Where to read bindings
 

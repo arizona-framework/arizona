@@ -300,6 +300,34 @@ empty deps and freeze, except the item path re-evaluates it. The asymmetry is th
 boundary: head-destructured *render* reads freeze in top-level slots but stay current
 inside `?each` items.
 
+**`?each` item bodies must be elements.** Because each item compiles into a per-item
+template (`#{s, d, f}`), the callback body must be an element (`{Tag, Attrs, Children}`),
+a list of elements, or a static/mixed fragment. `classify_body/1` in
+`arizona_parse_transform` buckets the body; the only non-template bucket, `text_dynamic`
+(a bare value, a runtime binary, an `?html(...)` template, a `?stateful`/`?stateless`
+descriptor, or a `case`/`if`), compiles to one opaque value slot. A scalar value renders at
+SSR and diffs (the per-item key is `arizona_template:to_bin/1` of its value), but gets no
+per-item template diffing -- pointless where a comprehension is the right tool; a template or
+descriptor value goes further and crashes on the first diff, when `to_bin/1` hits the stored
+template/descriptor and raises `bad_template_value`. So `compile_each` rejects a
+`text_dynamic` body (`each_body_not_element` for a 1-arg/list callback,
+`each_stream_body_not_element` for a 2-arg/stream-or-map callback -- the two differ only in fix
+advice, since a list has a comprehension fallback and a stream/map, keyed per item, does not)
+and a fun reference (`each_fun_ref_not_allowed`, its return can't be inspected) at compile
+time. It also rejects a bare list whose item is a
+template or descriptor (`[?html(...)]`, `[?stateless(...)]`) -- the item lands in the same
+fragile value slot -- while keeping a list of elements or a static/dynamic-text fragment.
+Map plain values with a list comprehension / `lists:map` (no per-item diffing); put a
+conditional inside an element child (`{li, [], [case ... end]}`).
+
+A per-item **component** (`{li, [], [?stateless(...)]}`) compiles and renders but currently
+**crashes on the first diff**: the list-each diff in `arizona_diff` (`diff_list_zip/4`) keys a
+list item by `to_bin` of its first dynamic, which fails on a nested template/descriptor. So a
+component as an `?each`
+item child is not usable yet (the exception is a `?stateful` child in a **stream** `?each` --
+it is its own self-diffing view process). Fixing it means keying list items by position
+instead of by their first dynamic's value (server plus the client's `az-key` lookup).
+
 ## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_effect`)
 
 Client effect commands, built per platform -- `arizona_js` (web), `arizona_android` (native) --

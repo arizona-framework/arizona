@@ -73,13 +73,13 @@ render(Bindings) ->
                 fun(Draft) -> {line, [yellow], [~"Message: ", Draft]} end,
                 input_rows(?get(mode), ?get(draft))
             ),
+            %% Footer keys are plain text concatenated into one dim line, so a list
+            %% comprehension is the right tool -- ?each is for per-item element diffing.
             {line, [dim], [
-                ?each(
-                    fun({Keys, Label, Sep}) ->
-                        <<"[", Keys/binary, "] ", Label/binary, Sep/binary>>
-                    end,
-                    footer_keys(?get(mode))
-                )
+                [
+                    <<"[", Keys/binary, "] ", Label/binary, Sep/binary>>
+                 || {Keys, Label, Sep} <- footer_keys(?get(mode))
+                ]
             ]}
         ]}
     ).
