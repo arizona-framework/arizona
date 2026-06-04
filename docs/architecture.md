@@ -242,11 +242,15 @@ and idiomatic templates (reads written inside `?html`) are unaffected.
   (unused variable) stays satisfied.
 
 **Reads that do not inline** (left captured, slot stays static): a binding
-destructured in the function head (`render(#{foo := Foo})` -- a pattern match
-is an untracked read; read it with `?get(foo)` instead), a variable bound
-inside an `if` or only on some `case` branches, and a rebound variable. Use
-`?get` for the top-level binding and plain `maps:get/2` for sub-structures
-(only the `?get` records a dep, which is the correct grain).
+destructured in the function head (`render(#{foo := Foo})`) or through any
+non-bare-var pattern (`{ok, V} = ?get(...)`) -- a pattern match is an untracked
+read; read the whole value with `?get(foo)` and destructure with plain Erlang.
+Also: a read reachable only through a guard (`when N > 5` -- a guard cannot hold
+a `get`), a variable bound inside an `if` or a `case` branch whose clause head
+itself binds a variable, and a rebound variable. Use `?get` for the top-level
+binding and plain `maps:get/2` for sub-structures (only the `?get` records a dep,
+which is the correct grain). In all these cases the read is left captured and the
+slot keeps its SSR value; the transform never makes valid code uncompilable.
 
 ## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_effect`)
 

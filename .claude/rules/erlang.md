@@ -171,8 +171,9 @@ Label = case ?get(mode) of dark -> ?get(a); _ -> ?get(b) end, ?html({p, [], [Lab
 case ?get(mode) of dark -> X = ?get(a); _ -> X = ?get(b) end, ?html({p, [], [X]}).
 ```
 
-Exceptions that stay un-tracked (slot frozen after SSR): a binding
-destructured in the function head (`render(#{foo := Foo})` -- use `?get(foo)`),
-a variable bound inside an `if` or only on some `case` branches, and a rebound
-variable. `?get` is for top-level bindings; read sub-structures with plain
-`maps:get/2`.
+Exceptions that stay un-tracked (slot frozen after SSR): a binding destructured
+in the head (`render(#{foo := Foo})`) or through any non-bare-var pattern
+(`{ok, V} = ?get(...)` -- use `?get(foo)` then plain destructuring), a read
+reachable only through a guard, a variable bound inside an `if` or a `case`
+branch whose clause head binds a variable, and a rebound variable. `?get` is for
+top-level bindings; read sub-structures with plain `maps:get/2`.

@@ -625,10 +625,28 @@ tail_bind_var([First | _] = Clauses) ->
 tail_bind_var([]) ->
     error.
 
-clause_bind_var({clause, _, _Patterns, _Guards, [{match, _, {var, _, V}, _E}]}) ->
-    {ok, V};
+%% A clause qualifies only when lifting cannot move a binding out of scope. The
+%% lifted value-form case is ALSO substituted into the slot closure, so any variable
+%% a clause introduces would be bound twice. Refuse if the clause pattern binds a
+%% variable (e.g. `{admin, Name} ->` -- would become an unsafe_var) or the branch
+%% RHS contains a nested match (e.g. `X = (Z = E)` -- would export `Z` from both
+%% copies). Such cases are left in statement form (captured, not fine-grained).
+clause_bind_var({clause, _, Patterns, _Guards, [{match, _, {var, _, V}, E}]}) ->
+    case pattern_vars(Patterns) =:= [] andalso not contains_match(E) of
+        true -> {ok, V};
+        false -> error
+    end;
 clause_bind_var(_) ->
     error.
+
+contains_match({match, _, _, _}) ->
+    true;
+contains_match(T) when is_tuple(T) ->
+    contains_match(tuple_to_list(T));
+contains_match([H | T]) ->
+    contains_match(H) orelse contains_match(T);
+contains_match(_) ->
+    false.
 
 strip_tail_binds(Clauses) ->
     [strip_tail_bind(C) || C <- Clauses].
@@ -764,14 +782,21 @@ suppress_unused_inline_matches(Body, Inline) ->
 
 maybe_underscore_match({match, L, {var, VL, V}, RHS} = M, Inline, Body) ->
     case is_map_key(V, Inline) andalso count_var(V, Body) =:= 1 of
-        true -> {match, L, {var, VL, underscore_var(V)}, RHS};
+        true -> {match, L, {var, VL, underscore_var(V, Body)}, RHS};
         false -> M
     end;
 maybe_underscore_match(E, _Inline, _Body) ->
     E.
 
-underscore_var(V) ->
-    binary_to_atom(<<"_", (atom_to_binary(V))/binary>>).
+%% `_Foo` is readable, but if the clause already binds `_Foo` (e.g. a discarded
+%% side-effect match), a second `_Foo` would trip erl_lint's match_underscore_var.
+%% Fall back to the anonymous `_`, which never collides or warns.
+underscore_var(V, Body) ->
+    U = binary_to_atom(<<"_", (atom_to_binary(V))/binary>>),
+    case count_var(U, Body) of
+        0 -> U;
+        _ -> '_'
+    end.
 
 count_var(V, AST) ->
     count_var(V, AST, 0).
