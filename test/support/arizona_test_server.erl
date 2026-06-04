@@ -20,6 +20,10 @@ start() ->
             bindings => #{title => <<"Mixed">>},
             layouts => Layouts
         }},
+        {live, <<"/inline">>, arizona_inline, #{
+            bindings => #{title => <<"Inline">>},
+            layouts => Layouts
+        }},
         {live, <<"/chat">>, arizona_chat, #{
             bindings => #{title => <<"Chat">>},
             layouts => Layouts
