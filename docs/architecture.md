@@ -205,6 +205,49 @@ intentional -- those reads belong to the inner scope. Idiomatic callbacks
 use a named fun reference (`?stateless(fun bar/1, Props)`), which cannot
 close over outer `Bindings` and therefore avoids the footgun entirely.
 
+## Binding-read inlining
+
+Dep tracking requires a `?get` to run *inside* its slot's `'$arizona_deps'`
+bracket. A read hoisted into the render function body --
+
+```erlang
+render(Bindings) ->
+    Name = arizona_template:get(name, Bindings),
+    ?html({p, [], [Name]}).
+```
+
+-- would otherwise compile the slot to `fun() -> Name end`: a captured value
+with no `?get`, so it records empty deps and the slot freezes after the first
+render. The parse transform (`arizona_parse_transform`) closes the gap by
+rewriting each interpolated variable back into its defining expression, so the
+`?get` re-executes inside the per-slot bracket -- exactly as if it had been
+written inline. This is purely compile-time; the runtime/diff path is unchanged
+and idiomatic templates (reads written inside `?html`) are unaffected.
+
+- **`collect_inline/1`** builds a per-clause map of top-level `Var = RHS`
+  matches whose RHS transitively reaches a `get`/`get_lazy`/`track` call.
+  Rebound vars are dropped; a derivation with no read (e.g. `Id = make_uuid()`)
+  is left captured, so a pure side effect is never re-run per slot.
+- **`inline_vars/2`** substitutes those variables wherever they appear in a
+  `?html`/`?each` argument -- including inside a `case` scrutinee or an opaque
+  call -- recursively and scope-aware (fun parameters and comprehension
+  generators shadow; patterns and guards are never substituted, so a
+  substitution can never form an illegal pattern or a guard `?get`).
+- **`normalize_tail_binds/1`** lifts a statement-form `case` that binds one
+  variable as the whole body of every branch
+  (`case ?get(m) of a -> X = ?get(p); _ -> X = ?get(q) end`) into value form
+  (`X = case ?get(m) of a -> ?get(p); _ -> ?get(q) end`) so the same machinery
+  inlines it.
+- A now-template-only match is underscore-prefixed so `warnings_as_errors`
+  (unused variable) stays satisfied.
+
+**Reads that do not inline** (left captured, slot stays static): a binding
+destructured in the function head (`render(#{foo := Foo})` -- a pattern match
+is an untracked read; read it with `?get(foo)` instead), a variable bound
+inside an `if` or only on some `case` branches, and a rebound variable. Use
+`?get` for the top-level binding and plain `maps:get/2` for sub-structures
+(only the `?get` records a dep, which is the correct grain).
+
 ## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_effect`)
 
 Client effect commands, built per platform -- `arizona_js` (web), `arizona_android` (native) --
