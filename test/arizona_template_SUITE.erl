@@ -21,7 +21,10 @@
     to_bin_bad_value_routes_through_format_error_2/1,
     parse_transform_not_applied_routes_through_format_error_2/1,
     format_error_missing_binding_suggests_close_match/1,
-    format_error_missing_binding_no_suggestion_for_far_match/1
+    format_error_missing_binding_no_suggestion_for_far_match/1,
+    with_projects_and_tracks_each_key/1,
+    with_absent_key_omitted_but_tracked/1,
+    with_empty_keys_tracks_nothing/1
 ]).
 
 all() ->
@@ -42,7 +45,10 @@ groups() ->
             to_bin_bad_value_routes_through_format_error_2,
             parse_transform_not_applied_routes_through_format_error_2,
             format_error_missing_binding_suggests_close_match,
-            format_error_missing_binding_no_suggestion_for_far_match
+            format_error_missing_binding_no_suggestion_for_far_match,
+            with_projects_and_tracks_each_key,
+            with_absent_key_omitted_but_tracked,
+            with_empty_keys_tracks_nothing
         ]}
     ].
 
@@ -191,3 +197,38 @@ format_error_missing_binding_no_suggestion_for_far_match(Config) when is_list(Co
     #{general := Msg} = arizona_template:format_error(missing_binding, Stack),
     Bin = unicode:characters_to_binary(Msg),
     ?assertEqual(nomatch, binary:match(Bin, <<"Did you mean">>)).
+
+%% --- with/2 tracked projection ---
+
+with_projects_and_tracks_each_key(Config) when is_list(Config) ->
+    %% Under an active deps bracket, with/2 records every listed key as a
+    %% dependency and returns only those keys (maps:with projection).
+    Deps = with_deps_bracket(fun() ->
+        ?assertEqual(
+            #{x => 1, y => 2},
+            arizona_template:with([x, y], #{x => 1, y => 2, z => 3})
+        )
+    end),
+    ?assertEqual(#{x => true, y => true}, Deps).
+
+with_absent_key_omitted_but_tracked(Config) when is_list(Config) ->
+    %% A key not present in Bindings is omitted from the projection (maps:with
+    %% semantics) but is still tracked, so the slot re-renders when it appears.
+    Deps = with_deps_bracket(fun() ->
+        ?assertEqual(#{x => 1}, arizona_template:with([x, absent], #{x => 1}))
+    end),
+    ?assertEqual(#{x => true, absent => true}, Deps).
+
+with_empty_keys_tracks_nothing(Config) when is_list(Config) ->
+    %% Empty Keys tracks nothing and returns the empty projection.
+    Deps = with_deps_bracket(fun() ->
+        ?assertEqual(#{}, arizona_template:with([], #{x => 1}))
+    end),
+    ?assertEqual(#{}, Deps).
+
+%% Runs Fun inside a fresh `$arizona_deps` bracket (mirroring arizona_eval's
+%% per-slot tracking) and returns the deps map that accumulated during the call.
+with_deps_bracket(Fun) ->
+    undefined = erlang:put('$arizona_deps', #{}),
+    ok = Fun(),
+    erlang:erase('$arizona_deps').

@@ -272,10 +272,12 @@ format_error(cross_target_nesting) ->
     "incompatible statics. Render cross-target content via a separate "
     "stateful/stateless child of the matching target";
 format_error(tracked_get_on_non_bindings_map) ->
-    "arizona_template:get/get_lazy (and the az: aliases) are the dependency-tracking "
-    "accessors for the view bindings, not for nested maps. Read sub-structures with "
-    "maps:get/2, e.g. `User = arizona_template:get(user, Bindings), "
-    "Name = maps:get(name, User)`".
+    "arizona_template:get/get_lazy/with (and the az: aliases) track every read against "
+    "the view bindings, so their map argument must be the bindings -- a parameter or a "
+    "direct alias (`B = Bindings`). This local is not provably the bindings. If it is a "
+    "nested map, read it with maps:get/2 (`User = arizona_template:get(user, Bindings), "
+    "Name = maps:get(name, User)`); if it is a bindings value reached through a "
+    "case/merge the transform cannot see into, alias it directly with `B = Bindings` first".
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -284,12 +286,13 @@ format_error(tracked_get_on_non_bindings_map) ->
 parse_error(Reason, Line) ->
     throw({arizona_parse_error, Line, Reason}).
 
-%% `arizona_template:get`/`get_lazy` (and the `az:` aliases) call `track/1`
+%% `arizona_template:get`/`get_lazy`/`with` (and the `az:` aliases) call `track/1`
 %% regardless of which map they read, so reading a sub-map records the inner key
 %% as a top-level slot dependency. Reject a tracked read whose map argument is a
 %% variable that is not in scope as a bindings-like value: a clause/fun parameter
-%% (so `?each` item/key vars pass) or an alias of one. A non-variable map argument
-%% (a literal map, a `maps:get` call, any expression) is never flagged.
+%% (so `?each` item/key vars pass) or an alias of one (including a var bound by a
+%% `with/2` projection). A non-variable map argument (a literal map, a `maps:get`
+%% call, any expression) is never flagged.
 check_tracked_get_targets(Patterns, Body) ->
     Params = collect_fun_param_vars(Body, collect_pattern_vars(Patterns, #{})),
     walk_tracked_gets(Body, alias_closure(Body, Params)).
@@ -316,11 +319,20 @@ collect_clause_param_vars(Clauses, Acc) ->
         Clauses
     ).
 
-%% Grow the scope with every `V = W` (var = var) where W is already in scope, to a
-%% fixpoint (handles `B = Bindings, C = B`).
+%% Grow the scope with every `V = W` (var = var) where W is already in scope, plus
+%% every `V = arizona_template:with(_, W)` / `az:with(_, W)` (a tracked projection of W
+%% is bindings-like), to a fixpoint (handles `B = Bindings, C = B`).
 alias_closure(Body, Scope) ->
-    Aliases = [{V, W} || {match, _, {var, _, V}, {var, _, W}} <- collect_matches(Body, [])],
-    alias_fixpoint(Aliases, Scope).
+    Matches = collect_matches(Body, []),
+    VarAliases = [{V, W} || {match, _, {var, _, V}, {var, _, W}} <- Matches],
+    WithAliases = [
+        {V, W}
+     || {match, _, {var, _, V},
+            {call, _, {remote, _, {atom, _, Mod}, {atom, _, with}}, [_Keys, {var, _, W} | _]}} <-
+            Matches,
+        Mod =:= arizona_template orelse Mod =:= az
+    ],
+    alias_fixpoint(VarAliases ++ WithAliases, Scope).
 
 alias_fixpoint(Aliases, Scope) ->
     Scope1 = lists:foldl(
@@ -336,6 +348,10 @@ alias_fixpoint(Aliases, Scope) ->
         false -> alias_fixpoint(Aliases, Scope1)
     end.
 
+%% Flat across nesting depth and scope-unaware: a `with`/var alias bound inside an inner
+%% fun/case registers its name as bindings-like globally. Like the param collection above,
+%% the only consequence is a dropped flag (a benign over-track if an outer same-named
+%% sub-map read is masked), never a wrong rejection.
 collect_matches(T, Acc) when is_tuple(T) ->
     Acc1 =
         case T of
@@ -361,7 +377,7 @@ flag_tracked_get(
     {call, L, {remote, _, {atom, _, Mod}, {atom, _, F}}, [_Key, {var, _, V} | _]}, Scope
 ) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (F =:= get orelse F =:= get_lazy) andalso
+        (F =:= get orelse F =:= get_lazy orelse F =:= with) andalso
         not is_map_key(V, Scope)
 ->
     parse_error(tracked_get_on_non_bindings_map, L);
@@ -602,7 +618,7 @@ is_az_view_attr(_) ->
 %% dependency bracket -- exactly as if it had been written inline in the template.
 
 %% Build the inline map for a clause body: top-level `Var = RHS` matches whose RHS
-%% transitively reaches an `arizona_template`/`az` `get`/`get_lazy`/`track` call.
+%% transitively reaches an `arizona_template`/`az` `get`/`get_lazy`/`track`/`with` call.
 %% Variables bound more than once are dropped (ambiguous to inline); a binding-derived
 %% expression with no read (e.g. `Id = make_uuid()`) is left captured so a pure
 %% side effect is never re-run per slot.
@@ -641,11 +657,13 @@ reaching_fixpoint(Candidates, Acc) ->
         false -> reaching_fixpoint(Candidates, Acc1)
     end.
 
-%% True when an AST subtree contains a get/get_lazy/track call, or references a
-%% variable already known to reach one.
+%% True when an AST subtree contains a get/get_lazy/track/with call, or references a
+%% variable already known to reach one. `with` counts: like `get`, it calls `track/1`,
+%% so a hoisted `Sub = with(Keys, Bindings)` must be inlined back into the slot bracket
+%% or its tracking runs outside any bracket (a no-op) and the slot freezes.
 rhs_reaches({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}, _Reaching) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (F =:= get orelse F =:= get_lazy orelse F =:= track)
+        (F =:= get orelse F =:= get_lazy orelse F =:= track orelse F =:= with)
 ->
     true;
 rhs_reaches({var, _, V}, Reaching) ->
