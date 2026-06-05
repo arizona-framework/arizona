@@ -61,6 +61,7 @@ fingerprints already shipped in the initial HTML.
 -export([navigate/4]).
 -export([handle_event/4]).
 -export([seed_fps/2]).
+-export([dedup_fps/2]).
 -export([apply_on_mount/2]).
 -export([format_error/2]).
 
@@ -83,6 +84,7 @@ fingerprints already shipped in the initial HTML.
     send/2,
     send_after/3,
     navigate/3,
+    dedup_fps/2,
     format_error/2
 ]).
 

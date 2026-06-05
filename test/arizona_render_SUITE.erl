@@ -47,6 +47,7 @@
     ssr_counter/1,
     ssr_counter_with_bindings/1,
     ssr_each_map/1,
+    nested_each_render/1,
     ssr_layouts_empty_list/1,
     ssr_layouts_nest_outer_first/1,
     ssr_page_with_child/1,
@@ -91,6 +92,7 @@ groups() ->
             ssr_local_app,
             ssr_about_page,
             ssr_each_map,
+            nested_each_render,
             ssr_layouts_nest_outer_first,
             ssr_layouts_empty_list,
             resolve_id_binary,
@@ -351,6 +353,22 @@ ssr_each_map(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, <<"b<!--/az-->">>)),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"1<!--/az-->">>)),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"2<!--/az-->">>)).
+
+%% each-in-each (arizona_bench_nested_each): an outer ?each over sections, each section
+%% wrapping an inner ?each over its items. Grounds the synthetic nested-fingerprint tests
+%% in a real two-level nested render.
+nested_each_render(Config) when is_list(Config) ->
+    %% Uses the fixture's default 10x10 sections (mount-provided).
+    HTML = iolist_to_binary(
+        arizona_render:render_to_iolist(arizona_bench_nested_each, #{})
+    ),
+    %% Outer each renders section titles; inner each renders each section's items.
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"Section 1")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"Section 10")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"Item 1-1")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"Item 10-10")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"class=\"section\"")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<ul")).
 
 %% =============================================================================
 %% 4. resolve_id tests

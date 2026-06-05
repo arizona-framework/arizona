@@ -233,6 +233,23 @@ format_error(invalid_attribute) ->
     "<<\"Name\">> (binary), or {Name, true|false}";
 format_error(invalid_each_fun) ->
     "each/2 expects a fun with a single clause and one or two parameters";
+format_error(each_body_not_element) ->
+    "an ?each callback over a list must return an element ({Tag, Attrs, Children}) or a "
+    "list of elements -- ?each builds a per-item template for fine-grained diffing, so a "
+    "single-value body defeats its purpose (and a template or descriptor value crashes on "
+    "the first diff, keyed by to_bin of the first dynamic). For a list of plain values use a "
+    "list comprehension or lists:map/2. For a conditional, put it inside an element as a "
+    "text/value child: {li, [], [case ... of ... end]}";
+format_error(each_stream_body_not_element) ->
+    "an ?each callback over a stream or map (a 2-arg fun) must return an element ({Tag, "
+    "Attrs, Children}) or a list of elements -- a stream/map keys each item for per-item "
+    "diffing, which a single-value body throws away. Unlike a list there is no comprehension "
+    "fallback (a comprehension has no stream/keyed semantics): wrap the value in an element, "
+    "e.g. fun(Item, Key) -> {li, [], [Item]} end";
+format_error(each_fun_ref_not_allowed) ->
+    "an ?each callback must be an inline fun returning an element; a fun reference can't "
+    "be checked to return one (and a reference returning a template breaks diffing). Inline "
+    "it (fun(I) -> {li, [], [...]} end)";
 format_error(live_render_not_single_element) ->
     "arizona_stateful render/1 must return a single root element, not a list";
 format_error(live_render_missing_id) ->
@@ -939,6 +956,7 @@ compile_each(FunAST, SourceAST, Line, Module, Backend) ->
     case FunAST of
         {'fun', _, {clauses, [{clause, _, [ItemVar, KeyVar], Guards, Body}]}} ->
             {Prefix, LastExpr} = split_fun_body(Body),
+            ok = validate_each_body(stream, classify_body(LastExpr), LastExpr),
             {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
                 LastExpr, Module, false, Backend
             ),
@@ -949,6 +967,7 @@ compile_each(FunAST, SourceAST, Line, Module, Backend) ->
             );
         {'fun', _, {clauses, [{clause, _, [ItemVar], Guards, Body}]}} ->
             {Prefix, LastExpr} = split_fun_body(Body),
+            ok = validate_each_body(list, classify_body(LastExpr), LastExpr),
             {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
                 LastExpr, Module, false, Backend
             ),
@@ -957,35 +976,55 @@ compile_each(FunAST, SourceAST, Line, Module, Backend) ->
             build_each_ast(
                 Line, SourceAST, [ItemVar], Guards, Prefix, S1, D1, Fingerprint, Opts
             );
-        %% `fun name/arity` / `fun Mod:name/arity` -- synthesize an anonymous
-        %% wrapper clause that calls the referenced function with the item
-        %% (and optional key) var, then recurse into the clause path above.
-        {'fun', L, {function, Name, Arity}} when
-            is_atom(Name) andalso (Arity =:= 1 orelse Arity =:= 2)
-        ->
-            compile_each(
-                wrap_fun_ref(L, Arity, {atom, L, Name}, none), SourceAST, Line, Module, Backend
-            );
-        {'fun', L, {function, Mod, Name, {integer, _, Arity}}} when
-            Arity =:= 1 orelse Arity =:= 2
-        ->
-            compile_each(wrap_fun_ref(L, Arity, Name, Mod), SourceAST, Line, Module, Backend);
+        %% `fun name/arity` / `fun Mod:name/arity` -- a reference can't be checked to
+        %% return an element, and a reference returning a template breaks diffing.
+        {'fun', L, {function, _Name, _Arity}} ->
+            parse_error(each_fun_ref_not_allowed, L);
+        {'fun', L, {function, _Mod, _Name, _Arity}} ->
+            parse_error(each_fun_ref_not_allowed, L);
         _ ->
             parse_error(invalid_each_fun, Line)
     end.
 
-%% Build `fun(I) -> Callee(I) end` or `fun(I, K) -> Callee(I, K) end`,
-%% where Callee is either `Name(...)` or `Mod:Name(...)`.
-wrap_fun_ref(L, Arity, NameAST, ModAST) ->
-    VarNames = ['__I', '__K'],
-    Vars = [{var, L, V} || V <- lists:sublist(VarNames, Arity)],
-    Callee =
-        case ModAST of
-            none -> NameAST;
-            _ -> {remote, L, ModAST, NameAST}
-        end,
-    Call = {call, L, Callee, Vars},
-    {'fun', L, {clauses, [{clause, L, Vars, [], [Call]}]}}.
+%% An ?each callback must build a per-item template: its body must be an element, a list
+%% of elements, or a static/mixed fragment. A `text_dynamic` body (a bare value, a runtime
+%% binary, an ?html(...) template, a ?stateful/?stateless descriptor, or a case/if) compiles
+%% to one opaque value slot that renders at SSR but loses per-item diffing (and a template/
+%% descriptor value crashes on diff). Reject it at compile time. `Kind` (list | stream) is the
+%% source shape, inferred from the callback arity (1-arg = list, 2-arg = stream/map): the error
+%% it raises tailors the fix advice, since a list has a comprehension fallback and a stream
+%% does not.
+validate_each_body(Kind, text_dynamic, LastExpr) ->
+    parse_error(each_body_error(Kind), line(LastExpr));
+validate_each_body(Kind, list_ast, LastExpr) ->
+    %% A mixed-list fragment is fine UNLESS an item is a nested template (a transformed
+    %% ?html/?native/?terminal map literal) or a ?stateful/?stateless descriptor: those land
+    %% in a per-item value slot and crash on diff exactly like a bare body. (A component as
+    %% an ?each item child is a known limitation -- it crashes on the per-item diff for now.)
+    walk_each_list_items(Kind, LastExpr);
+validate_each_body(_Kind, _Classification, _LastExpr) ->
+    ok.
+
+each_body_error(list) -> each_body_not_element;
+each_body_error(stream) -> each_stream_body_not_element.
+
+walk_each_list_items(Kind, {cons, _, Item, Tail}) ->
+    case is_fragile_each_item(Item) of
+        true -> parse_error(each_body_error(Kind), line(Item));
+        false -> walk_each_list_items(Kind, Tail)
+    end;
+walk_each_list_items(_Kind, _Nil) ->
+    ok.
+
+%% A list item that compiles to a fragile per-item value slot (renders at SSR, crashes on
+%% diff): a nested template (a transformed ?html/?native/?terminal map literal) or a
+%% ?stateful/?stateless descriptor call.
+is_fragile_each_item({map, _, _}) ->
+    true;
+is_fragile_each_item({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}) ->
+    (Mod =:= arizona_template orelse Mod =:= az) andalso (F =:= stateful orelse F =:= stateless);
+is_fragile_each_item(_Item) ->
+    false.
 
 compile_body_parts(ExprAST, Module, LiveRender, Backend) ->
     compile_classified_body(classify_body(ExprAST), ExprAST, Module, LiveRender, Backend).

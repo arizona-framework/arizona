@@ -10,6 +10,11 @@
     dedup_navigate_nested_dynamics/1,
     dedup_nested_dynamics_first_time/1,
     dedup_nested_dynamics/1,
+    dedup_each_list_of_lists/1,
+    dedup_each_repeated_item_fp/1,
+    dedup_nested_each/1,
+    dedup_component_in_each_item/1,
+    dedup_deep_nesting/1,
     effect_child_event_no_effects/1,
     effect_child_event_with_effects/1,
     effect_child_only_no_ops/1,
@@ -176,7 +181,12 @@ groups() ->
             dedup_item_patch_no_prior_fp,
             dedup_nested_dynamics,
             dedup_nested_dynamics_first_time,
-            dedup_navigate_nested_dynamics
+            dedup_navigate_nested_dynamics,
+            dedup_each_list_of_lists,
+            dedup_each_repeated_item_fp,
+            dedup_nested_each,
+            dedup_component_in_each_item,
+            dedup_deep_nesting
         ]},
         {seed_fps, [parallel], [
             seed_fps_skips_statics,
@@ -1379,6 +1389,106 @@ dedup_nested_dynamics_first_time(Config) when is_list(Config) ->
     ?assert(maps:is_key(<<"p2_fp">>, Fps)),
     ?assert(maps:is_key(<<"c2_fp">>, Fps)).
 
+%% An each wire payload has a list-of-lists `d` (one inner list per item), unlike a flat
+%% template. The dedup walk must record the each's fingerprint and strip its statics on a
+%% second encounter while leaving the per-item dynamics untouched.
+dedup_each_list_of_lists(Config) when is_list(Config) ->
+    Each = #{
+        <<"t">> => 0,
+        <<"f">> => <<"each_fp">>,
+        <<"s">> => [<<"<li>">>, <<"</li>">>],
+        <<"d">> => [[<<"a">>], [<<"b">>]]
+    },
+    Ops = [[?OP_TEXT, <<"0">>, Each]],
+    {[[?OP_TEXT, <<"0">>, P1]], Fps1} = dedup_fps(Ops, #{}),
+    ?assert(maps:is_key(<<"s">>, P1)),
+    ?assert(maps:is_key(<<"each_fp">>, Fps1)),
+    ?assertEqual([[<<"a">>], [<<"b">>]], maps:get(<<"d">>, P1)),
+    {[[?OP_TEXT, <<"0">>, P2]], _} = dedup_fps(Ops, Fps1),
+    ?assertNot(maps:is_key(<<"s">>, P2)),
+    ?assertEqual([[<<"a">>], [<<"b">>]], maps:get(<<"d">>, P2)).
+
+%% Within a SINGLE each payload, items sharing an item-template fingerprint (a list of the
+%% same component) send statics once: the first occurrence keeps them, later ones are
+%% stripped using the fingerprint just recorded.
+dedup_each_repeated_item_fp(Config) when is_list(Config) ->
+    Comp = #{<<"f">> => <<"comp_fp">>, <<"s">> => [<<"<b>">>, <<"</b>">>], <<"d">> => [<<"v">>]},
+    Each = #{
+        <<"t">> => 0,
+        <<"f">> => <<"each_fp2">>,
+        <<"s">> => [<<"<li>">>, <<"</li>">>],
+        <<"d">> => [[Comp], [Comp]]
+    },
+    {[[?OP_TEXT, <<"0">>, P]], _} = dedup_fps([[?OP_TEXT, <<"0">>, Each]], #{}),
+    [[C0], [C1]] = maps:get(<<"d">>, P),
+    ?assert(maps:is_key(<<"s">>, C0)),
+    ?assertNot(maps:is_key(<<"s">>, C1)),
+    ?assertEqual(<<"comp_fp">>, maps:get(<<"f">>, C1)).
+
+%% Each-in-each: an outer each item whose only dynamic is an inner each payload. A
+%% previously-seen inner-each fingerprint is stripped at depth.
+dedup_nested_each(Config) when is_list(Config) ->
+    Inner = #{
+        <<"t">> => 0,
+        <<"f">> => <<"inner_fp">>,
+        <<"s">> => [<<"<span>">>, <<"</span>">>],
+        <<"d">> => [[<<"x">>], [<<"y">>]]
+    },
+    Outer = #{
+        <<"t">> => 0,
+        <<"f">> => <<"outer_fp">>,
+        <<"s">> => [<<"<div>">>, <<"</div>">>],
+        <<"d">> => [[Inner]]
+    },
+    Fps0 = #{<<"inner_fp">> => true},
+    {[[?OP_TEXT, <<"0">>, P]], _} = dedup_fps([[?OP_TEXT, <<"0">>, Outer]], Fps0),
+    ?assert(maps:is_key(<<"s">>, P)),
+    [[InnerP]] = maps:get(<<"d">>, P),
+    ?assertNot(maps:is_key(<<"s">>, InnerP)),
+    ?assertEqual(<<"inner_fp">>, maps:get(<<"f">>, InnerP)),
+    ?assertEqual([[<<"x">>], [<<"y">>]], maps:get(<<"d">>, InnerP)).
+
+%% A component (a plain fingerprinted template, no `t`) embedded inside an each item is
+%% deduped just like any other nested template.
+dedup_component_in_each_item(Config) when is_list(Config) ->
+    Comp = #{<<"f">> => <<"c_fp">>, <<"s">> => [<<"<em>">>, <<"</em>">>], <<"d">> => [<<"w">>]},
+    Each = #{
+        <<"t">> => 0,
+        <<"f">> => <<"e_fp">>,
+        <<"s">> => [<<"<li>">>, <<"</li>">>],
+        <<"d">> => [[Comp]]
+    },
+    Fps0 = #{<<"c_fp">> => true},
+    {[[?OP_TEXT, <<"0">>, P]], _} = dedup_fps([[?OP_TEXT, <<"0">>, Each]], Fps0),
+    [[CompP]] = maps:get(<<"d">>, P),
+    ?assertNot(maps:is_key(<<"s">>, CompP)),
+    ?assertEqual([<<"w">>], maps:get(<<"d">>, CompP)).
+
+%% Three levels (each > each > component), all first-time: every fingerprint is recorded
+%% and statics are kept all the way down -- the recursion must reach arbitrary depth.
+dedup_deep_nesting(Config) when is_list(Config) ->
+    L3 = #{<<"f">> => <<"l3">>, <<"s">> => [<<"<i>">>, <<"</i>">>], <<"d">> => [<<"z">>]},
+    L2 = #{
+        <<"t">> => 0,
+        <<"f">> => <<"l2">>,
+        <<"s">> => [<<"<span>">>, <<"</span>">>],
+        <<"d">> => [[L3]]
+    },
+    L1 = #{
+        <<"t">> => 0,
+        <<"f">> => <<"l1">>,
+        <<"s">> => [<<"<div>">>, <<"</div>">>],
+        <<"d">> => [[L2]]
+    },
+    {[[?OP_TEXT, <<"0">>, P1]], Fps} = dedup_fps([[?OP_TEXT, <<"0">>, L1]], #{}),
+    ?assert(maps:is_key(<<"l1">>, Fps)),
+    ?assert(maps:is_key(<<"l2">>, Fps)),
+    ?assert(maps:is_key(<<"l3">>, Fps)),
+    [[P2]] = maps:get(<<"d">>, P1),
+    [[P3]] = maps:get(<<"d">>, P2),
+    ?assert(maps:is_key(<<"s">>, P2)),
+    ?assert(maps:is_key(<<"s">>, P3)).
+
 dedup_navigate_nested_dynamics(Config) when is_list(Config) ->
     %% Navigate returns fingerprinted payload whose dynamics contain
     %% nested fingerprinted child components. Within a single dedup pass,
@@ -1543,51 +1653,7 @@ seed_fps_idempotent(Config) when is_list(Config) ->
 %% Helpers
 %% =============================================================================
 
-%% Wrapper to call arizona_live's internal dedup_fps for unit testing
+%% Delegate to arizona_live's real (internal) dedup so these unit tests exercise the
+%% production walk directly, not a copy that could silently drift from it.
 dedup_fps(Ops, Fps) ->
-    lists:mapfoldl(fun dedup_fp_op/2, Fps, Ops).
-
-dedup_fp_op([BinId, ChildOps], Fps0) when is_binary(BinId), is_list(ChildOps) ->
-    {ChildOps1, Fps1} = dedup_fps(ChildOps, Fps0),
-    {[BinId, ChildOps1], Fps1};
-dedup_fp_op([OpCode, Target | Rest], Fps0) when is_integer(OpCode) ->
-    {Rest1, Fps1} = dedup_fp_rest(Rest, Fps0),
-    {[OpCode, Target | Rest1], Fps1};
-dedup_fp_op(Op, Fps) ->
-    {Op, Fps}.
-
-dedup_fp_rest([], Fps) ->
-    {[], Fps};
-dedup_fp_rest([H | T], Fps0) ->
-    {H1, Fps1} = dedup_fp_val(H, Fps0),
-    {T1, Fps2} = dedup_fp_rest(T, Fps1),
-    {[H1 | T1], Fps2}.
-
-dedup_fp_val(#{<<"f">> := F, <<"s">> := _, <<"d">> := D} = Val, Fps) ->
-    case Fps of
-        #{F := _} ->
-            {D1, Fps1} = dedup_fp_dlist(D, Fps),
-            {maps:without([<<"s">>], Val#{<<"d">> => D1}), Fps1};
-        #{} ->
-            {D1, Fps1} = dedup_fp_dlist(D, Fps#{F => true}),
-            {Val#{<<"d">> => D1}, Fps1}
-    end;
-dedup_fp_val(#{<<"f">> := F, <<"d">> := D} = Val, Fps) ->
-    {D1, Fps1} = dedup_fp_dlist(D, Fps),
-    Fps2 =
-        case Fps1 of
-            #{F := _} -> Fps1;
-            #{} -> Fps1#{F => true}
-        end,
-    {Val#{<<"d">> => D1}, Fps2};
-dedup_fp_val(Items, Fps) when is_list(Items) ->
-    dedup_fp_dlist(Items, Fps);
-dedup_fp_val(Val, Fps) ->
-    {Val, Fps}.
-
-dedup_fp_dlist([], Fps) ->
-    {[], Fps};
-dedup_fp_dlist([H | T], Fps0) ->
-    {H1, Fps1} = dedup_fp_val(H, Fps0),
-    {T1, Fps2} = dedup_fp_dlist(T, Fps1),
-    {[H1 | T1], Fps2}.
+    arizona_live:dedup_fps(Ops, Fps).

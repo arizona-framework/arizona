@@ -111,6 +111,53 @@ describe('resolveHtml -- stream type', () => {
 });
 
 // ---------------------------------------------------------------------------
+// resolveHtml -- complex inner templates (each-in-each, component-in-item, deep)
+// ---------------------------------------------------------------------------
+
+describe('resolveHtml -- nested each / components', () => {
+    it('resolves each-in-each (an item dynamic is itself an each payload)', () => {
+        const inner = { t: 0, f: 'ne_inner', s: ['<li>', '</li>'], d: [['x'], ['y']] };
+        const outer = {
+            t: 0,
+            f: 'ne_outer',
+            s: ['<div><h2>', '</h2><ul>', '</ul></div>'],
+            d: [['Sec1', inner]],
+        };
+        expect(resolveHtml(outer)).toBe('<div><h2>Sec1</h2><ul><li>x</li><li>y</li></ul></div>');
+    });
+
+    it('resolves a component embedded inside each item', () => {
+        const comp = { f: 'ci_comp', s: ['<b>', '</b>'], d: ['hi'] };
+        const each = { t: 0, f: 'ci_each', s: ['<li>', '</li>'], d: [[comp], [comp]] };
+        expect(resolveHtml(each)).toBe('<li><b>hi</b></li><li><b>hi</b></li>');
+    });
+
+    it('resolves three levels deep (each > each > component)', () => {
+        const l3 = { f: 'dn_l3', s: ['<i>', '</i>'], d: ['z'] };
+        const l2 = { t: 0, f: 'dn_l2', s: ['<span>', '</span>'], d: [[l3]] };
+        const l1 = { t: 0, f: 'dn_l1', s: ['<div>', '</div>'], d: [[l2]] };
+        expect(resolveHtml(l1)).toBe('<div><span><i>z</i></span></div>');
+    });
+
+    it('resolves nested each when statics were stripped (deduped round-trip)', () => {
+        // First send primes both outer and inner statics into the cache.
+        resolveHtml({
+            t: 0,
+            f: 'rt_outer',
+            s: ['<ul>', '</ul>'],
+            d: [[{ t: 0, f: 'rt_inner', s: ['<li>', '</li>'], d: [['a']] }]],
+        });
+        // Second send omits statics for both fingerprints (as dedup_fps would strip them).
+        const stripped = {
+            t: 0,
+            f: 'rt_outer',
+            d: [[{ t: 0, f: 'rt_inner', d: [['b'], ['c']] }]],
+        };
+        expect(resolveHtml(stripped)).toBe('<ul><li>b</li><li>c</li></ul>');
+    });
+});
+
+// ---------------------------------------------------------------------------
 // zipTemplate
 // ---------------------------------------------------------------------------
 

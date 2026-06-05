@@ -9,6 +9,16 @@
     each_with_named_fun_ref/1,
     each_with_named_fun_ref_arity_2/1,
     each_with_remote_fun_ref/1,
+    each_body_html_wrapped_rejected/1,
+    each_body_descriptor_rejected/1,
+    each_body_case_rejected/1,
+    each_body_if_rejected/1,
+    each_body_runtime_binary_rejected/1,
+    each_body_two_arg_value_rejected/1,
+    each_body_two_arg_html_rejected/1,
+    each_body_list_with_descriptor_rejected/1,
+    each_body_mixed_fragment_ok/1,
+    each_body_conditional_child_diffs/1,
     stateless_with_atom_callback/1,
     stateless_with_fun_ref_callback/1,
     stateless_with_remote_fun_ref_callback/1,
@@ -316,6 +326,16 @@ groups() ->
             each_with_named_fun_ref,
             each_with_named_fun_ref_arity_2,
             each_with_remote_fun_ref,
+            each_body_html_wrapped_rejected,
+            each_body_descriptor_rejected,
+            each_body_case_rejected,
+            each_body_if_rejected,
+            each_body_runtime_binary_rejected,
+            each_body_two_arg_value_rejected,
+            each_body_two_arg_html_rejected,
+            each_body_list_with_descriptor_rejected,
+            each_body_mixed_fragment_ok,
+            each_body_conditional_child_diffs,
             stateless_with_atom_callback,
             stateless_with_fun_ref_callback,
             stateless_with_remote_fun_ref_callback
@@ -919,9 +939,9 @@ local_in_each_renders(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:html("
         "        {'ul', [], [arizona_template:each(fun(Item) -> "
-        "            arizona_template:html({'li', [], ["
+        "            {'li', [], ["
         "                arizona_template:local(<<\"m\">>, <<\"-\">>), "
-        "                arizona_template:get(label, Item)]}) "
+        "                arizona_template:get(label, Item)]} "
         "        end, arizona_template:get(items, Bindings))]}"
         "    ). "
     ),
@@ -2193,28 +2213,22 @@ template1_fragment_render(Config) when is_list(Config) ->
     ),
     ?assertEqual(Expected, iolist_to_binary(HTML)).
 
-%% Test 43: template/2 with non-element expression -- dynamic fallback.
+%% Test 43: a bare-value (non-element) ?each body is rejected -- ?each needs a per-item
+%% element; for plain values use a comprehension.
 template2_non_element_expr(Config) when is_list(Config) ->
-    Mod = compile_module(
+    assert_parse_error(
         "-module(pt_each_non_elem). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:each(fun(Item) -> "
         "        maps:get(name, Item) "
-        "    end, arizona_template:get(items, Bindings, [])). "
-    ),
-    Result = Mod:render(#{items => []}),
-    Tmpl = maps:get(template, Result),
-    Fp = maps:get(f, Tmpl),
-    ?assertEqual([<<>>, <<>>], maps:get(s, Tmpl)),
-    DFun = maps:get(d, Tmpl),
-    Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_each_non_elem, 1}}] = DFun(#{name => <<"Alice">>}),
-    ?assertEqual(<<"Alice">>, Fun()).
+        "    end, arizona_template:get(items, Bindings, [])). ",
+        fun(R) -> R =:= each_body_not_element end
+    ).
 
-%% Test 44: template/2 non-element items render to correct HTML.
+%% Test 44: the rejection fires even when the ?each is nested inside an ?html element.
 template2_non_element_render(Config) when is_list(Config) ->
-    Mod = compile_module(
+    assert_parse_error(
         "-module(pt_each_non_elem_render). "
         "-export([render/1]). "
         "render(Bindings) -> "
@@ -2224,18 +2238,9 @@ template2_non_element_render(Config) when is_list(Config) ->
         "                maps:get(name, Item) "
         "            end, arizona_template:get(items, Bindings, []))"
         "        ]}"
-        "    ). "
-    ),
-    Tmpl = Mod:render(#{items => [#{name => <<"Alice">>}, #{name => <<"Bob">>}]}),
-    Fp = maps:get(f, Tmpl),
-    {HTML, _Snap} = arizona_render:render(Tmpl),
-    Expected = iolist_to_binary(
-        scope_s(
-            Fp,
-            [<<"<ul az=\"0\"><!--az:0-->AliceBob<!--/az--></ul>">>]
-        )
-    ),
-    ?assertEqual(Expected, iolist_to_binary(HTML)).
+        "    ). ",
+        fun(R) -> R =:= each_body_not_element end
+    ).
 
 %% Test 45: template/2 with static binary body -- no dynamics.
 template2_static_binary_body(Config) when is_list(Config) ->
@@ -2253,25 +2258,18 @@ template2_static_binary_body(Config) when is_list(Config) ->
     DFun = maps:get(d, Tmpl),
     ?assertEqual([], DFun(anything)).
 
-%% Test 46: template/2 multi-expression body with non-element last expr.
+%% Test 46: a prefix does not exempt -- a non-element last expr is still rejected.
 template2_non_element_multi_expr(Config) when is_list(Config) ->
-    Mod = compile_module(
+    assert_parse_error(
         "-module(pt_each_non_elem_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:each(fun(Item) -> "
         "        Name = maps:get(name, Item), "
         "        string:uppercase(Name) "
-        "    end, arizona_template:get(items, Bindings, [])). "
-    ),
-    Result = Mod:render(#{items => []}),
-    Tmpl = maps:get(template, Result),
-    Fp = maps:get(f, Tmpl),
-    ?assertEqual([<<>>, <<>>], maps:get(s, Tmpl)),
-    DFun = maps:get(d, Tmpl),
-    Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_each_non_elem_multi, 1}}] = DFun(#{name => <<"alice">>}),
-    ?assertEqual(<<"ALICE">>, Fun()).
+        "    end, arizona_template:get(items, Bindings, [])). ",
+        fun(R) -> R =:= each_body_not_element end
+    ).
 
 %% Test 47: template/1 with static binary -- no element, no dynamics.
 template1_static_binary(Config) when is_list(Config) ->
@@ -2471,24 +2469,17 @@ template2_map_pattern(Config) when is_list(Config) ->
     ?assertEqual(<<"Alice">>, NameFun()),
     ?assertEqual(30, AgeFun()).
 
-%% Test 55: template/2 with map pattern -- non-element expression body.
+%% Test 55: a map-pattern head does not exempt -- a non-element body is still rejected.
 template2_map_pattern_non_element(Config) when is_list(Config) ->
-    Mod = compile_module(
+    assert_parse_error(
         "-module(pt_each_map_pat_ne). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:each(fun(#{name := Name}) -> "
         "        Name "
-        "    end, arizona_template:get(items, Bindings, [])). "
-    ),
-    Result = Mod:render(#{items => []}),
-    Tmpl = maps:get(template, Result),
-    Fp = maps:get(f, Tmpl),
-    ?assertEqual([<<>>, <<>>], maps:get(s, Tmpl)),
-    DFun = maps:get(d, Tmpl),
-    Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_each_map_pat_ne, 1}}] = DFun(#{name => <<"Bob">>}),
-    ?assertEqual(<<"Bob">>, Fun()).
+        "    end, arizona_template:get(items, Bindings, [])). ",
+        fun(R) -> R =:= each_body_not_element end
+    ).
 
 %% Test 56: template/2 prefix with static body -- prefix runs, no dynamics.
 template2_prefix_static_body(Config) when is_list(Config) ->
@@ -3382,54 +3373,176 @@ invalid_element_binary_tag(Config) when is_list(Config) ->
         end
     ).
 
-%% each/2 accepts `fun name/arity` references by synthesizing a wrapper clause.
+%% each/2 rejects `fun name/arity` references -- a reference can't be checked to return
+%% an element, so it must be inlined (or use ?stateless inside an element).
 each_with_named_fun_ref(Config) when is_list(Config) ->
-    Mod = compile_module(
+    assert_parse_error(
         "-module(pt_each_named_ref). "
         "-export([render/1, row/1]). "
         "row(Name) -> <<\"row:\", Name/binary>>. "
         "render(Bindings) -> "
         "    arizona_template:each(fun row/1, "
-        "        arizona_template:get(items, Bindings, [])). "
-    ),
-    Result = Mod:render(#{items => [<<"a">>, <<"b">>]}),
-    ?assertEqual(0, maps:get(t, Result)),
-    Tmpl = maps:get(template, Result),
-    DFun = maps:get(d, Tmpl),
-    ?assert(is_function(DFun, 1)),
-    [{_, Fun, _}] = DFun(<<"a">>),
-    ?assertEqual(<<"row:a">>, Fun()).
+        "        arizona_template:get(items, Bindings, [])). ",
+        fun(R) -> R =:= each_fun_ref_not_allowed end
+    ).
 
-%% each/2 accepts 2-arity fun references for stream/map sources.
+%% each/2 rejects 2-arity fun references too.
 each_with_named_fun_ref_arity_2(Config) when is_list(Config) ->
-    Mod = compile_module(
+    assert_parse_error(
         "-module(pt_each_named_ref_2). "
         "-export([render/1, row/2]). "
         "row(Item, Key) -> <<Key/binary, \"=\", Item/binary>>. "
         "render(Bindings) -> "
         "    arizona_template:each(fun row/2, "
-        "        arizona_template:get(items, Bindings, [])). "
-    ),
-    Tmpl = maps:get(template, Mod:render(#{items => []})),
-    DFun = maps:get(d, Tmpl),
-    ?assert(is_function(DFun, 2)),
-    [{_, Fun, _}] = DFun(<<"v">>, <<"k">>),
-    ?assertEqual(<<"k=v">>, Fun()).
+        "        arizona_template:get(items, Bindings, [])). ",
+        fun(R) -> R =:= each_fun_ref_not_allowed end
+    ).
 
-%% each/2 accepts `fun Mod:Name/Arity` remote references too.
+%% each/2 rejects `fun Mod:Name/Arity` remote references too.
 each_with_remote_fun_ref(Config) when is_list(Config) ->
-    Mod = compile_module(
+    assert_parse_error(
         "-module(pt_each_remote_ref). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:each(fun erlang:integer_to_binary/1, "
-        "        arizona_template:get(items, Bindings, [])). "
+        "        arizona_template:get(items, Bindings, [])). ",
+        fun(R) -> R =:= each_fun_ref_not_allowed end
+    ).
+
+%% Wrapping the element in ?html(...) yields a template value (a text_dynamic slot that
+%% crashes on diff) -- rejected; return the element literal directly.
+each_body_html_wrapped_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_html_wrapped). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(X) -> "
+        "        arizona_template:html({'li', [], [X]}) "
+        "    end, arizona_template:get(xs, Bindings))]}). ",
+        fun(R) -> R =:= each_body_not_element end
+    ).
+
+%% A bare ?stateful/?stateless descriptor body is rejected -- wrap it in an element.
+each_body_descriptor_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_descriptor). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(X) -> "
+        "        arizona_template:stateful(some_component, #{id => X}) "
+        "    end, arizona_template:get(xs, Bindings))]}). ",
+        fun(R) -> R =:= each_body_not_element end
+    ).
+
+%% A case (or any control-flow) body is rejected: put the conditional inside an element.
+each_body_case_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_case). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(U) -> "
+        "        case U of "
+        "            #{name := N} -> arizona_template:html({'li', [], [N]}); "
+        "            _ -> ~\"-\" "
+        "        end "
+        "    end, arizona_template:get(users, Bindings))]}). ",
+        fun(R) -> R =:= each_body_not_element end
+    ).
+
+%% An `if` (like any branching control flow) is rejected: branches may select different
+%% per-item structures, which is exactly the fragile case -- put it inside an element.
+each_body_if_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_if). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(X) -> "
+        "        if is_binary(X) -> {'li', [], [X]}; true -> {'span', [], [X]} end "
+        "    end, arizona_template:get(xs, Bindings))]}). ",
+        fun(R) -> R =:= each_body_not_element end
+    ).
+
+%% A runtime binary construction is a plain value -- rejected; use a comprehension.
+each_body_runtime_binary_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_runtime_bin). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:each(fun(X) -> "
+        "        <<\"row \", X/binary>> "
+        "    end, arizona_template:get(xs, Bindings, [])). ",
+        fun(R) -> R =:= each_body_not_element end
+    ).
+
+%% The 2-arg (stream/map) callback is validated like the 1-arg one, but raises the
+%% stream-specific error (the fix advice differs: no comprehension fallback for a stream).
+each_body_two_arg_value_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_two_arg). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(Item, _Key) -> "
+        "        Item "
+        "    end, arizona_template:get(xs, Bindings))]}). ",
+        fun(R) -> R =:= each_stream_body_not_element end
+    ).
+
+%% A 2-arg callback returning an ?html template is rejected with the stream error too.
+each_body_two_arg_html_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_two_arg_html). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(Item, _Key) -> "
+        "        arizona_template:html({'li', [], [Item]}) "
+        "    end, arizona_template:get(xs, Bindings))]}). ",
+        fun(R) -> R =:= each_stream_body_not_element end
+    ).
+
+%% A bare list whose item is a descriptor (or template) is rejected: the item lands in a
+%% per-item value slot and crashes on diff. Wrap it in an element instead of a bare list.
+each_body_list_with_descriptor_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_list_desc). "
+        "-export([render/1, row/1]). "
+        "row(P) -> arizona_template:html({'span', [], [arizona_template:get(t, P)]}). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(X) -> "
+        "        [arizona_template:stateless(fun row/1, #{t => X})] "
+        "    end, arizona_template:get(xs, Bindings))]}). ",
+        fun(R) -> R =:= each_body_not_element end
+    ).
+
+%% A mixed static/dynamic list fragment compiles to a per-item template (accepted).
+each_body_mixed_fragment_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_mixed). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(X) -> "
+        "        [~\"* \", X] "
+        "    end, arizona_template:get(xs, Bindings))]}). "
     ),
-    Result = Mod:render(#{items => [1, 2]}),
-    Tmpl = maps:get(template, Result),
-    DFun = maps:get(d, Tmpl),
-    [{_, Fun, _}] = DFun(42),
-    ?assertEqual(<<"42">>, Fun()).
+    ?assert(is_map(Mod:render(#{xs => [~"a", ~"b"]}))).
+
+%% The diff-safe rewrite of a conditional item: the case is a CHILD of an element literal,
+%% so the item stays a stable per-item template and diffs cleanly (the rejected case-body
+%% above would have crashed on this same diff).
+each_body_conditional_child_diffs(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_cond_child). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(U) -> "
+        "        {'li', [], [case U of #{name := N} -> N; _ -> ~\"-\" end]} "
+        "    end, arizona_template:get(users, Bindings))]}). "
+    ),
+    B0 = #{users => [#{name => ~"Ada"}]},
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = #{users => [#{name => ~"Grace"}]},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
 
 %% The parse transform rewrites `arizona_template:stateless(atom, Props)` into
 %% `arizona_template:stateless(fun atom/1, Props)` so bare atoms and fun
@@ -4569,7 +4682,7 @@ inline_each_hoisted_source(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Items = arizona_template:get(items, Bindings), "
         "    arizona_template:html({'ul', [], [arizona_template:each(fun(I) -> "
-        "        arizona_template:html({'li', [], [I]}) end, Items)]}). "
+        "        {'li', [], [I]} end, Items)]}). "
     ),
     B0 = #{items => [~"a"]},
     {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -4791,7 +4904,7 @@ tracked_get_each_item_ok(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'ul', [], [arizona_template:each(fun(Item) -> "
-        "        arizona_template:html({'li', [], [arizona_template:get(name, Item)]}) "
+        "        {'li', [], [arizona_template:get(name, Item)]} "
         "    end, arizona_template:get(items, Bindings))]}). "
     ),
     ?assert(is_map(Mod:render(#{items => [#{name => ~"a"}]}))).
