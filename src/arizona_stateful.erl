@@ -162,10 +162,12 @@ handler's template churns often.
 -export_type([event_name/0]).
 -export_type([event_payload/0]).
 -export_type([mount_ret/0]).
+-export_type([render_ret/0]).
 -export_type([handle_event_ret/0]).
 -export_type([handle_info_ret/0]).
 -export_type([handle_update_ret/0]).
 -export_type([handle_drain_ret/0]).
+-export_type([unmount_ret/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -180,6 +182,7 @@ handler's template churns often.
 -type event_payload() :: map().
 
 -type mount_ret() :: {bindings(), resets()}.
+-type render_ret() :: arizona_template:template().
 -type handle_event_ret() :: {bindings(), resets(), effects()}.
 -type handle_info_ret() :: {bindings(), resets(), effects()}.
 -type handle_update_ret() :: {bindings(), resets()}.
@@ -187,6 +190,7 @@ handler's template churns often.
     ok
     | {stop, bindings(), effects()}
     | {bindings(), resets(), effects()}.
+-type unmount_ret() :: term().
 
 %% --------------------------------------------------------------------
 %% Behaviour callbacks
@@ -210,7 +214,7 @@ Must use `?html(...)` so the parse transform can compile it into a
 template map.
 """.
 -callback render(Bindings :: bindings()) ->
-    arizona_template:template().
+    render_ret().
 
 -doc """
 Handles a client UI event. Optional.
@@ -284,7 +288,7 @@ topics, close ports, etc.). Messages sent from here race the WS
 close frame; for drain-time client coordination use `handle_drain/2`
 instead.
 """.
--callback unmount(bindings()) -> term().
+-callback unmount(bindings()) -> unmount_ret().
 
 -optional_callbacks([handle_event/3, handle_info/2, handle_update/2, handle_drain/2, unmount/1]).
 

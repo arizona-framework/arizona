@@ -80,9 +80,12 @@ binding, used by stateless layouts to render the wrapped page.
 -export_type([event_name/0]).
 -export_type([event_payload/0]).
 -export_type([mount_ret/0]).
+-export_type([render_ret/0]).
 -export_type([handle_event_ret/0]).
 -export_type([handle_info_ret/0]).
 -export_type([handle_update_ret/0]).
+-export_type([handle_drain_ret/0]).
+-export_type([unmount_ret/0]).
 -export_type([error_info/0]).
 
 %% --------------------------------------------------------------------
@@ -99,9 +102,12 @@ binding, used by stateless layouts to render the wrapped page.
 -type event_name() :: arizona_stateful:event_name().
 -type event_payload() :: arizona_stateful:event_payload().
 -type mount_ret() :: arizona_stateful:mount_ret().
+-type render_ret() :: arizona_stateful:render_ret().
 -type handle_event_ret() :: arizona_stateful:handle_event_ret().
 -type handle_info_ret() :: arizona_stateful:handle_info_ret().
 -type handle_update_ret() :: arizona_stateful:handle_update_ret().
+-type handle_drain_ret() :: arizona_stateful:handle_drain_ret().
+-type unmount_ret() :: arizona_stateful:unmount_ret().
 -type error_info() :: arizona_http:error_info().
 
 %% --------------------------------------------------------------------
