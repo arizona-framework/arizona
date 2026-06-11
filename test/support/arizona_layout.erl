@@ -27,7 +27,9 @@ render(Bindings) ->
                     ~" | ",
                     {a, [{href, ~"/local-nested"}, az_navigate], [~"Nested"]},
                     ~" | ",
-                    {a, [{href, ~"/local-app"}, az_navigate], [~"App"]}
+                    {a, [{href, ~"/local-app"}, az_navigate], [~"App"]},
+                    ~" | ",
+                    {a, [{href, ~"/pip"}, az_navigate], [~"PiP"]}
                 ]},
                 ?inner_content,
                 {script, [{type, ~"module"}], [

@@ -17,3 +17,5 @@
 -define(EFFECT_RELOAD, 15).
 -define(EFFECT_ON_KEY, 16).
 -define(EFFECT_SET_LOCAL, 17).
+-define(EFFECT_REQUEST_PIP, 18).
+-define(EFFECT_EXIT_PIP, 19).

@@ -56,6 +56,8 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 -export([set/2]).
 -export([set/3]).
 -export([set_all/2]).
+-export([request_pip/1]).
+-export([exit_pip/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -84,7 +86,9 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     on_key/2,
     set/2,
     set/3,
-    set_all/2
+    set_all/2,
+    request_pip/1,
+    exit_pip/1
 ]).
 
 %% --------------------------------------------------------------------
@@ -254,6 +258,24 @@ Like `set/2` but updates the slot in **every** view on the page (document-wide).
     Value :: binary() | boolean() | number().
 set_all(Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value, true]}.
 
+-doc """
+Moves the view identified by `ViewId` into a floating Document Picture-in-Picture
+window, kept live by the server diff stream. Use inside a web event attribute
+(e.g. `az-click`) -- Document PiP requires a user gesture, so it won't open from
+a server-pushed handler effect.
+""".
+-spec request_pip(ViewId) -> arizona_effect:cmd() when
+    ViewId :: binary().
+request_pip(ViewId) -> {arizona_effect, [?EFFECT_REQUEST_PIP, ViewId]}.
+
+-doc """
+Closes the floating Picture-in-Picture window for `ViewId`, moving the view back
+inline. No-op if the view isn't popped out.
+""".
+-spec exit_pip(ViewId) -> arizona_effect:cmd() when
+    ViewId :: binary().
+exit_pip(ViewId) -> {arizona_effect, [?EFFECT_EXIT_PIP, ViewId]}.
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
@@ -294,6 +316,12 @@ set_view_test() ->
 
 set_all_test() ->
     {arizona_effect, [?EFFECT_SET_LOCAL, ~"k", ~"v", true]} = set_all(~"k", ~"v").
+
+request_pip_test() ->
+    {arizona_effect, [?EFFECT_REQUEST_PIP, ~"v"]} = request_pip(~"v").
+
+exit_pip_test() ->
+    {arizona_effect, [?EFFECT_EXIT_PIP, ~"v"]} = exit_pip(~"v").
 
 builders_test() ->
     ?assertEqual({arizona_effect, [?EFFECT_SHOW, ~"#m"]}, show(~"#m")),
