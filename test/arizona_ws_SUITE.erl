@@ -38,6 +38,7 @@
     drain_then_navigate_closes_gracefully/1,
     static_asset_served/1,
     static_asset_body_matches_file/1,
+    static_asset_gzip_served/1,
     static_asset_missing_returns_404/1,
     reload_endpoint_streams_event/1,
     recompile_routes_runs/1,
@@ -91,6 +92,7 @@ groups() ->
         drain_then_navigate_closes_gracefully,
         static_asset_served,
         static_asset_body_matches_file,
+        static_asset_gzip_served,
         static_asset_missing_returns_404,
         reload_endpoint_streams_event,
         recompile_routes_runs,
@@ -512,7 +514,7 @@ http_render_crash_emits_error_page(Config) ->
 
 static_asset_served(Config) ->
     %% HTTP GET for an `{asset, ...}` route serves the file with an inferred
-    %% content-type. Exercises `arizona_roadrunner_static`.
+    %% content-type. Exercises `roadrunner_static`.
     Port = proplists:get_value(port, Config),
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
     Req = [
@@ -539,6 +541,34 @@ static_asset_body_matches_file(Config) ->
     {ok, Expected} = file:read_file(FilePath),
     Body = http_get_body(Port, <<"/assets/arizona.min.js">>),
     ?assertEqual(Expected, Body).
+
+static_asset_gzip_served(Config) ->
+    %% With `Accept-Encoding: gzip`, roadrunner_static serves the precompressed
+    %% `<file>.gz` sibling verbatim (nginx `gzip_static` style). The response
+    %% must carry `content-encoding: gzip` and its body must gunzip back to the
+    %% on-disk file -- guards the asset pipeline's gzip step, the committed
+    %% siblings, and the route wiring to `roadrunner_static`.
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /assets/arizona.min.js HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "Accept-Encoding: gzip\r\n",
+        "Connection: close\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    Full = read_until_close(Sock, <<>>),
+    gen_tcp:close(Sock),
+    [Headers, Body] = binary:split(Full, <<"\r\n\r\n">>),
+    ?assertNotEqual(nomatch, binary:match(Headers, <<"content-encoding: gzip">>)),
+    FilePath = filename:join([
+        code:priv_dir(arizona), "static", "assets", "js", "arizona.min.js"
+    ]),
+    {ok, Expected} = file:read_file(FilePath),
+    ?assertEqual(Expected, zlib:gunzip(Body)).
 
 static_asset_missing_returns_404(Config) ->
     Port = proplists:get_value(port, Config),

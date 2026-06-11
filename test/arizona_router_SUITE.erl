@@ -37,7 +37,7 @@ init_per_group(roadrunner, Config) ->
         {router, arizona_roadrunner_router},
         {http_handler, arizona_roadrunner_http},
         {ws_handler, arizona_roadrunner_ws},
-        {static_handler, arizona_roadrunner_static}
+        {static_handler, roadrunner_static}
         | Config
     ].
 
