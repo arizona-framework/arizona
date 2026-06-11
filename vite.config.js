@@ -4,6 +4,7 @@ import filesize from 'rollup-plugin-filesize';
 import license from 'rollup-plugin-license';
 import { visualizer } from 'rollup-plugin-visualizer';
 import { createLogger, defineConfig } from 'vite';
+import { compression, defineAlgorithm } from 'vite-plugin-compression2';
 
 const require = createRequire(import.meta.url);
 const pkg = require('./package.json');
@@ -28,6 +29,17 @@ export default defineConfig(({ mode }) => ({
             },
         }),
         filesize({ showBrotliSize: true }),
+        // Emit precompressed `.gz` siblings so `roadrunner_static` can serve
+        // them (nginx `gzip_static` style) over the zero-copy sendfile path.
+        // Level 9 (build-time, immutable assets); originals are kept as the
+        // fallback for clients that don't accept gzip. Node's zlib gzip is
+        // reproducible (no embedded mtime/filename), keeping `check-dirty` stable.
+        compression({
+            include: /\.min\.js$/,
+            threshold: 0,
+            deleteOriginalAssets: false,
+            algorithms: [defineAlgorithm('gzip', { level: 9 })],
+        }),
         ...(process.env.ANALYZE === 'true'
             ? [
                   visualizer({

@@ -15,8 +15,8 @@ routes after a hot reload without restarting the listener.
 |-----|-------------|--------------------|
 | `{live, Path, Handler, Opts}` | Arizona stateful page | `arizona_roadrunner_http` |
 | `{ws, Path, Opts}` | WebSocket endpoint | `arizona_roadrunner_ws` |
-| `{asset, Path, {dir, Dir}}` | Static files from directory | `arizona_roadrunner_static` |
-| `{asset, Path, {priv_dir, App, Sub}}` | Static files from app priv | `arizona_roadrunner_static` |
+| `{asset, Path, {dir, Dir}}` | Static files from directory | `roadrunner_static` |
+| `{asset, Path, {priv_dir, App, Sub}}` | Static files from app priv | `roadrunner_static` |
 | `{controller, Path, Handler, State}` | Plain roadrunner handler | `Handler` |
 | `{reload, Path, Opts}` | Dev SSE reload endpoint | `arizona_roadrunner_reload` |
 
@@ -166,13 +166,19 @@ route_to_roadrunner({reload, Path, Opts}, _BuildOpts) ->
         }
     ].
 
+%% Assets are served by roadrunner's built-in `roadrunner_static`: zero-copy
+%% sendfile plus ETag/`If-None-Match` (304), `Range`, gzip-sibling serving
+%% (nginx `gzip_static` style -- a `<file>.gz` built by the asset pipeline is
+%% sent verbatim when the client accepts gzip), and path-traversal/symlink
+%% guards. Its state is a plain `#{dir => Dir}` (not arizona-namespaced) and it
+%% reads the `*path` wildcard binding, which arizona's route already provides.
 asset_route(Path, Dir, BuildOpts) ->
     [
         with_compress(
             #{
                 path => <<Path/binary, "/*path">>,
-                handler => arizona_roadrunner_static,
-                state => #{arizona => #{dir => Dir}}
+                handler => roadrunner_static,
+                state => #{dir => Dir}
             },
             BuildOpts
         )
