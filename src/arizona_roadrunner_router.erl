@@ -18,6 +18,7 @@ routes after a hot reload without restarting the listener.
 | `{asset, Path, {dir, Dir}}` | Static files from directory | `roadrunner_static` |
 | `{asset, Path, {priv_dir, App, Sub}}` | Static files from app priv | `roadrunner_static` |
 | `{controller, Path, Handler, State}` | Plain roadrunner handler | `Handler` |
+| `{mcp, Path, Handler, Opts}` | MCP (Model Context Protocol) server | `arizona_mcp_handler` |
 | `{reload, Path, Opts}` | Dev SSE reload endpoint | `arizona_roadrunner_reload` |
 
 `{reload, ...}` also stashes the path in the `arizona_reload_url`
@@ -67,7 +68,13 @@ persistent term so the dev error page can build the SSE connect URL.
     | {asset, path(), {dir, file:filename_all()}}
     | {asset, path(), {priv_dir, atom(), file:filename_all()}}
     | {controller, path(), module(), term()}
+    | {mcp, path(), module(), arizona_mcp_route_opts()}
     | {reload, path(), map()}.
+
+-nominal arizona_mcp_route_opts() :: #{
+    origins => [binary()],
+    _ => term()
+}.
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -156,6 +163,18 @@ route_to_roadrunner({asset, Path, {priv_dir, App, SubDir}}, BuildOpts) ->
     asset_route(Path, filename:join(code:priv_dir(App), SubDir), BuildOpts);
 route_to_roadrunner({controller, Path, Handler, State}, _BuildOpts) ->
     [#{path => Path, handler => Handler, state => State}];
+route_to_roadrunner({mcp, Path, Handler, Opts}, _BuildOpts) ->
+    %% The handler module is folded into the opts so `arizona_mcp_handler`
+    %% reads it from the per-route `arizona` state at request time, the
+    %% same wrapping convention `live`/`reload` use. No compression
+    %% middleware -- MCP replies must stay unbuffered for the later SSE path.
+    [
+        #{
+            path => Path,
+            handler => arizona_mcp_handler,
+            state => #{arizona => Opts#{handler => Handler}}
+        }
+    ];
 route_to_roadrunner({reload, Path, Opts}, _BuildOpts) ->
     persistent_term:put(arizona_reload_url, Path),
     [

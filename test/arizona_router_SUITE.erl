@@ -7,6 +7,7 @@
     compile_routes_asset_dir/1,
     compile_routes_asset_priv_dir/1,
     compile_routes_controller/1,
+    compile_routes_mcp/1,
     compile_routes_live/1,
     compile_routes_live_no_layout/1,
     compile_routes_live_multiple_pages/1,
@@ -26,6 +27,7 @@ groups() ->
         compile_routes_asset_dir,
         compile_routes_asset_priv_dir,
         compile_routes_controller,
+        compile_routes_mcp,
         compile_routes_mixed
     ],
     [
@@ -147,6 +149,17 @@ compile_routes_controller(Config) ->
     {Handler, Opts} = route_match(<<"/api/health">>),
     ?assertEqual(my_controller, Handler),
     ?assertEqual(#{key => val}, Opts).
+
+compile_routes_mcp(Config) ->
+    compile(Config, [
+        {mcp, <<"/mcp">>, my_mcp, #{origins => [<<"http://localhost:3000">>]}}
+    ]),
+    {Handler, Opts} = route_match(<<"/mcp">>),
+    ?assertEqual(arizona_mcp_handler, Handler),
+    %% The app handler module is folded into the per-route opts so the
+    %% transport reads it at request time.
+    ?assertEqual(my_mcp, maps:get(handler, Opts)),
+    ?assertEqual([<<"http://localhost:3000">>], maps:get(origins, Opts)).
 
 compile_routes_mixed(Config) ->
     compile(Config, [
