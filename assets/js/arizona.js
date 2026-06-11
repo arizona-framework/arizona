@@ -124,6 +124,36 @@ let _currentQs = '';
 const _savedForms = new Map();
 
 // --------------------------------------------------------------------------
+// Multi-document support (Document Picture-in-Picture)
+// --------------------------------------------------------------------------
+// A view's root element normally lives in the main `document`, but `requestPip`
+// can move it into a floating PiP window with its own `document`. Patches are
+// applied by resolving the view root in its OWNING document, so server diffs
+// keep flowing after the move. Maps a viewId -> the Document that owns it.
+/** @type {Map<string, Document>} */
+const _viewDocs = new Map();
+
+/**
+ * The Document that owns a view's root element (the main document by default).
+ * @param {string} viewId
+ * @returns {Document}
+ */
+function docFor(viewId) {
+    return _viewDocs.get(viewId) || document;
+}
+
+/**
+ * Every document currently hosting Arizona views: the main document plus any
+ * popped-out PiP documents. Used by document-wide local-slot ops.
+ * @returns {Set<Document>}
+ */
+function allDocs() {
+    const docs = new Set([document]);
+    for (const d of _viewDocs.values()) docs.add(d);
+    return docs;
+}
+
+// --------------------------------------------------------------------------
 // Scroll on SPA navigation
 // --------------------------------------------------------------------------
 // Semantics:
@@ -433,10 +463,10 @@ function applyOps(ops) {
  */
 function resolveEl(target) {
     const i = target.indexOf(':');
-    if (i === -1) return document.getElementById(target);
+    if (i === -1) return docFor(target).getElementById(target);
     const viewId = target.substring(0, i);
     const az = target.substring(i + 1);
-    const view = document.getElementById(viewId);
+    const view = docFor(viewId).getElementById(viewId);
     if (!view) return null;
     if (view.getAttribute('az') === az) return view;
     let el = view.querySelector(`[az="${az}"]`);
@@ -471,6 +501,7 @@ function findMarker(el, az) {
  * @param {string} value
  */
 function updateMarkerContent(startMarker, value) {
+    const doc = startMarker.ownerDocument;
     let node = startMarker.nextSibling;
     while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
         const next = node.nextSibling;
@@ -479,11 +510,11 @@ function updateMarkerContent(startMarker, value) {
     }
     // Insert new content before the closing marker
     if (value.includes('<')) {
-        const tpl = document.createElement('template');
+        const tpl = doc.createElement('template');
         tpl.innerHTML = value;
         startMarker.after(tpl.content);
     } else {
-        startMarker.after(document.createTextNode(value));
+        startMarker.after(doc.createTextNode(value));
     }
 }
 
@@ -508,7 +539,7 @@ function setMarkerText(startMarker, value) {
         node.remove();
         node = next;
     }
-    startMarker.after(document.createTextNode(value == null ? '' : String(value)));
+    startMarker.after(startMarker.ownerDocument.createTextNode(value == null ? '' : String(value)));
 }
 
 /**
@@ -627,7 +658,7 @@ function forEachLocal(root, key, viewId, fn) {
  * @param {*} value
  */
 function set(viewId, key, value) {
-    const root = document.getElementById(viewId);
+    const root = docFor(viewId).getElementById(viewId);
     if (!root) return;
     forEachLocal(root, key, viewId, (el, target) => writeLocalValue(el, target, value));
 }
@@ -638,7 +669,8 @@ function set(viewId, key, value) {
  * @param {*} value
  */
 function setAll(key, value) {
-    forEachLocal(document, key, null, (el, target) => writeLocalValue(el, target, value));
+    for (const doc of allDocs())
+        forEachLocal(doc, key, null, (el, target) => writeLocalValue(el, target, value));
 }
 
 /**
@@ -652,13 +684,19 @@ function get(a, b) {
     const scoped = b !== undefined;
     const viewId = scoped ? a : null;
     const key = scoped ? /** @type {string} */ (b) : a;
-    const root = viewId ? document.getElementById(viewId) : document;
-    if (!root) return undefined;
     /** @type {*} */
     let result;
-    forEachLocal(root, key, viewId, (el, target) => {
-        if (result === undefined) result = readLocalValue(el, target);
-    });
+    /** @param {Element|Document} root */
+    const scan = (root) =>
+        forEachLocal(root, key, viewId, (el, target) => {
+            if (result === undefined) result = readLocalValue(el, target);
+        });
+    if (viewId) {
+        const root = docFor(viewId).getElementById(viewId);
+        if (root) scan(root);
+    } else {
+        for (const doc of allDocs()) scan(doc);
+    }
     return result;
 }
 
@@ -670,7 +708,7 @@ function get(a, b) {
  * @param {string} html
  */
 function insertItemEl(el, key, pos, html) {
-    const tpl = document.createElement('template');
+    const tpl = el.ownerDocument.createElement('template');
     tpl.innerHTML = html;
     const fragment = tpl.content;
     if (pos === -1) {
@@ -958,7 +996,9 @@ const JS_PUSH_EVENT = 0,
     JS_SET_TITLE = 14,
     JS_RELOAD = 15,
     JS_ON_KEY = 16,
-    JS_SET_LOCAL = 17;
+    JS_SET_LOCAL = 17,
+    JS_REQUEST_PIP = 18,
+    JS_EXIT_PIP = 19;
 
 /**
  * If `sel` matches an element, call `fn` with it cast to `HTMLElement`.
@@ -968,8 +1008,13 @@ const JS_PUSH_EVENT = 0,
  * @param {(el: HTMLElement) => void} fn
  */
 function withQuery(sel, fn) {
-    const t = /** @type {HTMLElement|null} */ (document.querySelector(sel));
-    if (t) fn(t);
+    for (const doc of allDocs()) {
+        const t = /** @type {HTMLElement|null} */ (doc.querySelector(sel));
+        if (t) {
+            fn(t);
+            return;
+        }
+    }
 }
 
 /**
@@ -1074,6 +1119,12 @@ function executeJS(el, event, cmds) {
                 }
                 break;
             }
+            case JS_REQUEST_PIP:
+                requestPip(cmd[1]);
+                break;
+            case JS_EXIT_PIP:
+                exitPip(cmd[1]);
+                break;
         }
     }
 }
@@ -1254,15 +1305,16 @@ function restoreFormState() {
 }
 
 /**
- * Delegate a DOM event type via document-level listener. Bound to the supplied
- * AbortSignal so all delegated listeners can be torn down together.
- * Key filtering is handled by the JS_ON_KEY command inside executeJS,
+ * Delegate a DOM event type on `target` (a Document) via a delegated listener.
+ * Bound to the supplied AbortSignal so all delegated listeners can be torn down
+ * together. Key filtering is handled by the JS_ON_KEY command inside executeJS,
  * not by attribute name suffixes.
+ * @param {Document} target
  * @param {string} eventType
  * @param {AbortSignal} signal
  */
-function handleEvent(eventType, signal) {
-    document.addEventListener(
+function handleEvent(target, eventType, signal) {
+    target.addEventListener(
         eventType,
         (e) => {
             const el = /** @type {Element} */ (e.target).closest(`[az-${eventType}]`);
@@ -1271,6 +1323,72 @@ function handleEvent(eventType, signal) {
             const raw = el.getAttribute(`az-${eventType}`);
             if (!raw) return;
             executeJS(el, e, JSON.parse(raw));
+        },
+        { signal },
+    );
+}
+
+/** The az-* DOM events Arizona delegates per document (main + any PiP window). */
+const DELEGATED_EVENTS = ['click', 'change', 'input', 'keydown', 'keyup', 'focusin', 'focusout'];
+
+/**
+ * Bind every delegated DOM event on `target` (a Document): the az-* event types
+ * plus form submit and drag-and-drop. Called for the main document on connect,
+ * and for a PiP document when a view is popped out. Page-level concerns
+ * (az-navigate, popstate, scroll) are wired only for the main document.
+ * @param {Document} target
+ * @param {AbortSignal} signal
+ */
+function bindDocumentEvents(target, signal) {
+    for (const type of DELEGATED_EVENTS) handleEvent(target, type, signal);
+
+    // Form submission: flush any pending debounced/throttled inputs first so
+    // the server sees final values, then execute JS commands from az-submit.
+    // az-form-reset opts in to clearing the form after submit.
+    target.addEventListener(
+        'submit',
+        (e) => {
+            const form = /** @type {Element} */ (e.target).closest('[az-submit]');
+            if (!form || !_connected) return;
+            e.preventDefault();
+            form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
+            const raw = form.getAttribute('az-submit');
+            if (raw) executeJS(form, e, JSON.parse(raw));
+            if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
+        },
+        { signal },
+    );
+
+    // Drag-and-drop: uses az-key on draggable items and az-drop on the
+    // container. dragstart stores the item's key; drop executes the az-drop
+    // command with auto-collected {data_transfer, drop_index} payload.
+    target.addEventListener(
+        'dragstart',
+        (e) => {
+            const keyEl = /** @type {Element} */ (e.target).closest('[az-key]');
+            if (keyEl && e.dataTransfer)
+                e.dataTransfer.setData('text/plain', keyEl.getAttribute('az-key') || '');
+        },
+        { signal },
+    );
+    target.addEventListener(
+        'dragover',
+        (e) => {
+            if (/** @type {Element} */ (e.target).closest('[az-key]')) e.preventDefault();
+        },
+        { signal },
+    );
+    target.addEventListener(
+        'drop',
+        (e) => {
+            const dropTarget = /** @type {Element} */ (e.target).closest('[az-key]');
+            if (!dropTarget) return;
+            e.preventDefault();
+            const container = dropTarget.closest('[az-drop]');
+            if (!container || !_connected) return;
+            const raw = container.getAttribute('az-drop');
+            if (!raw) return;
+            executeJS(container, e, JSON.parse(raw));
         },
         { signal },
     );
@@ -1294,32 +1412,9 @@ function connect(endpoint, params = {}) {
     const signal = controller.signal;
     const prevScrollRestoration = /** @type {any} */ (history).scrollRestoration;
 
-    // Event delegation -- one document listener per event type, attributes on
-    // elements opt them in (e.g. az-click="increment", az-keydown-enter="submit").
-    handleEvent('click', signal);
-    handleEvent('change', signal);
-    handleEvent('input', signal);
-    handleEvent('keydown', signal);
-    handleEvent('keyup', signal);
-    handleEvent('focusin', signal);
-    handleEvent('focusout', signal);
-
-    // Form submission: flush any pending debounced/throttled inputs first so
-    // the server sees final values, then execute JS commands from az-submit.
-    // az-form-reset opts in to clearing the form after submit.
-    document.addEventListener(
-        'submit',
-        (e) => {
-            const form = /** @type {Element} */ (e.target).closest('[az-submit]');
-            if (!form || !_connected) return;
-            e.preventDefault();
-            form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
-            const raw = form.getAttribute('az-submit');
-            if (raw) executeJS(form, e, JSON.parse(raw));
-            if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
-        },
-        { signal },
-    );
+    // Event delegation on the main document: az-* events, form submit, and
+    // drag-and-drop. (requestPip binds the same set on a PiP window's document.)
+    bindDocumentEvents(document, signal);
 
     // Take over scroll restoration so the browser doesn't scroll to a stale
     // position before OP_REPLACE swaps in the new content. See the block
@@ -1402,40 +1497,6 @@ function connect(endpoint, params = {}) {
             workerPost(W_UPDATE_PATH, path);
             _currentPath = path;
             _currentQs = qs;
-        },
-        { signal },
-    );
-
-    // Drag-and-drop: uses az-key on draggable items and az-drop on the
-    // container. dragstart stores the item's key; drop executes the az-drop
-    // command with auto-collected {data_transfer, drop_index} payload.
-    document.addEventListener(
-        'dragstart',
-        (e) => {
-            const keyEl = /** @type {Element} */ (e.target).closest('[az-key]');
-            if (keyEl && e.dataTransfer)
-                e.dataTransfer.setData('text/plain', keyEl.getAttribute('az-key') || '');
-        },
-        { signal },
-    );
-    document.addEventListener(
-        'dragover',
-        (e) => {
-            if (/** @type {Element} */ (e.target).closest('[az-key]')) e.preventDefault();
-        },
-        { signal },
-    );
-    document.addEventListener(
-        'drop',
-        (e) => {
-            const dropTarget = /** @type {Element} */ (e.target).closest('[az-key]');
-            if (!dropTarget) return;
-            e.preventDefault();
-            const container = dropTarget.closest('[az-drop]');
-            if (!container || !_connected) return;
-            const raw = container.getAttribute('az-drop');
-            if (!raw) return;
-            executeJS(container, e, JSON.parse(raw));
         },
         { signal },
     );
@@ -1541,6 +1602,16 @@ function connect(endpoint, params = {}) {
         _connected = false;
         _pendingScroll = null;
         _savedForms.clear();
+        // Close any floating (PiP) view windows; each window's pagehide handler
+        // moves its view back inline and unregisters it.
+        for (const d of [..._viewDocs.values()]) {
+            try {
+                d.defaultView?.close();
+            } catch {
+                /* window already gone */
+            }
+        }
+        _viewDocs.clear();
         // Run destroyed() on every tracked hook and clear the map. Without
         // this, hook instances leak when host code removes the DOM by means
         // arizona didn't observe (third-party libs, test teardown via
@@ -1561,17 +1632,104 @@ function connect(endpoint, params = {}) {
     };
 }
 
+/**
+ * Copy <style> and <link rel="stylesheet"> from `src` into `dst`'s <head> so a
+ * Picture-in-Picture document (which starts empty) renders with the page styles.
+ * @param {Document} src
+ * @param {Document} dst
+ */
+function copyStyles(src, dst) {
+    for (const sheet of src.styleSheets) {
+        try {
+            const css = Array.from(sheet.cssRules, (r) => r.cssText).join('');
+            const style = dst.createElement('style');
+            style.textContent = css;
+            dst.head.appendChild(style);
+        } catch {
+            // Cross-origin sheet: rules aren't readable -- re-link it by href.
+            const href = /** @type {any} */ (sheet).href;
+            if (!href) continue;
+            const link = dst.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = href;
+            dst.head.appendChild(link);
+        }
+    }
+}
+
+/**
+ * Move a view's root element into a floating Document Picture-in-Picture window,
+ * keeping it live: server diffs keep patching it (resolved in the PiP document)
+ * and az-* / form / drag events fired inside it are delegated there too. Page
+ * styles are copied in. Must be called from a user gesture. Resolves to the PiP
+ * `Window`, or `null` if the browser lacks Document PiP, the view isn't found,
+ * or it's already popped out.
+ * @param {string} viewId
+ * @param {{width?: number, height?: number, onClose?: () => void}} [opts]
+ * @returns {Promise<Window|null>}
+ */
+async function requestPip(viewId, opts = {}) {
+    const pipApi = /** @type {any} */ (window).documentPictureInPicture;
+    if (!pipApi) return null;
+    if (_viewDocs.has(viewId)) return null;
+    const view = document.getElementById(viewId);
+    if (!view) return null;
+
+    // Remember where the view sat so it can be restored in place on close.
+    const placeholder = document.createComment(`az-pip:${viewId}`);
+    view.before(placeholder);
+
+    const pip = await pipApi.requestWindow({
+        width: opts.width || 360,
+        height: opts.height || 240,
+    });
+
+    copyStyles(document, pip.document);
+    pip.document.body.append(view);
+    _viewDocs.set(viewId, pip.document);
+
+    // Delegate events fired inside the floating window; torn down on close.
+    const controller = new AbortController();
+    bindDocumentEvents(pip.document, controller.signal);
+
+    pip.addEventListener(
+        'pagehide',
+        () => {
+            controller.abort();
+            _viewDocs.delete(viewId);
+            if (placeholder.parentNode) placeholder.replaceWith(view);
+            else document.body.append(view);
+            if (opts.onClose) opts.onClose();
+        },
+        { once: true },
+    );
+
+    return pip;
+}
+
+/**
+ * Close a view's floating window (if open); its pagehide handler moves the view
+ * back inline. No-op when the view isn't popped out.
+ * @param {string} viewId
+ */
+function exitPip(viewId) {
+    const doc = _viewDocs.get(viewId);
+    doc?.defaultView?.close();
+}
+
 export {
     applyEffects,
     applyOps,
     connect,
     executeJS,
+    exitPip,
     get,
     hooks,
     mountHooks,
     OP,
     pushEvent,
     pushEventTo,
+    requestPip,
     resolveEl,
     restoreFormState,
     saveFormState,
