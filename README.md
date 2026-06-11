@@ -58,7 +58,7 @@ Add Arizona to your `rebar.config` dependencies:
 
 ```erlang
 {deps, [
-    {arizona, "~> 0.1"}
+    arizona
 ]}.
 ```
 
