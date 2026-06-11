@@ -111,6 +111,15 @@ let _worker = null;
 /** @type {boolean} */
 let _connected = false;
 
+// Path + query the server last rendered. Tracked so the popstate handler can
+// tell a real cross-page back/forward (which needs a server navigate) from a
+// same-page fragment change (hash only -- scroll, no round-trip). Mirrors the
+// same-page fast path in the az-navigate click handler.
+/** @type {string} */
+let _currentPath = '';
+/** @type {string} */
+let _currentQs = '';
+
 /** @type {Map<string, {fields: Object<string, string|string[]>, azChange: string|null}>} */
 const _savedForms = new Map();
 
@@ -200,6 +209,8 @@ function navigateTo(path, qs, hash, opts) {
     }
     workerPost(W_SEND, JSON.stringify(['navigate', { path, qs }]));
     workerPost(W_UPDATE_PATH, path);
+    _currentPath = path;
+    _currentQs = qs;
 }
 
 /**
@@ -1315,6 +1326,12 @@ function connect(endpoint, params = {}) {
     // comment above applyScroll for the full model.
     if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 
+    // Seed the rendered path/qs so the popstate handler can distinguish a
+    // fragment-only change (scroll, no server round-trip) from a real
+    // cross-page navigation.
+    _currentPath = location.pathname;
+    _currentQs = location.search ? location.search.slice(1) : '';
+
     // On initial load with a URL hash, honor it -- with scrollRestoration set
     // to 'manual', the browser may have skipped or raced its native anchor
     // jump, so we take care of it ourselves.
@@ -1372,9 +1389,19 @@ function connect(endpoint, params = {}) {
             const qs = location.search ? location.search.slice(1) : '';
             const hash = location.hash ? location.hash.slice(1) : '';
             const saved = e.state?._azScroll || null;
+            // Fragment-only change (path + query unchanged): a same-page hash
+            // jump fires popstate in some browsers, but it needs no server
+            // round-trip -- just scroll. Mirrors the click handler's same-page
+            // fast path so in-page anchors don't trigger a full OP_REPLACE.
+            if (path === _currentPath && qs === _currentQs) {
+                applyScroll({ kind: 'pop', hash, saved });
+                return;
+            }
             _pendingScroll = { kind: 'pop', hash, saved };
             workerPost(W_SEND, JSON.stringify(['navigate', { path, qs }]));
             workerPost(W_UPDATE_PATH, path);
+            _currentPath = path;
+            _currentQs = qs;
         },
         { signal },
     );
