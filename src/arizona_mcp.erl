@@ -85,6 +85,13 @@ returns holds its session and its connection until it does (a request waits
 on the tool indefinitely). The optional `terminate/2` callback runs when a
 session ends (DELETE, idle TTL, or shutdown); it does **not** run in
 stateless mode, which has no session to end.
+
+Clients that use `fetch` (browsers and the official MCP SDK) refuse to
+connect to ports on the WHATWG Fetch "bad ports" blocklist, so mount the
+listener on a normal HTTP port (not, e.g., 4045 / 6000 / 6666). The SSE
+channel rides roadrunner's version-parity `{loop, ...}` path, so it works
+over HTTP/1.1, h2, and h3 (h2/h3 over TLS). The endpoint is verified against
+the official MCP SDK client.
 """.
 
 %% --------------------------------------------------------------------
