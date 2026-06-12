@@ -14,8 +14,9 @@ transport's native reply shape.
 ## Flow
 
 1. Run `arizona_middleware:apply_middlewares/3` with the route's `bindings`.
-2. On `{halt, HaltReq}` -- return `{halt, RawReq}`; the caller ships
-   the reply the middleware already wrote.
+2. On `{halt, HaltReq}` -- return `{halt, HaltReq}` unchanged; the
+   caller decodes the stashed redirect (`arizona_req:halted_redirect/1`)
+   and ships the reply (or a 204/400 when the middleware wrote its own).
 3. On `{cont, Req1, Bindings1}` -- call
    `arizona_render:render_view_to_iolist/2` with the route's
    `layout`/`on_mount`. Return `{ok, 200, Page}` or, on crash or a
@@ -47,8 +48,7 @@ transport's native reply shape.
 }.
 
 -nominal result() ::
-    {halt, arizona_req:raw()}
-    | {redirect, arizona_req:redirect_status(), binary()}
+    {halt, arizona_req:request()}
     | {ok, 200, iolist()}
     | {error, 500, iolist()}.
 
@@ -69,10 +69,9 @@ render(Handler, ArzReq, Opts) ->
     Middlewares = maps:get(middlewares, Opts, []),
     case arizona_middleware:apply_middlewares(Middlewares, ArzReq, Bindings) of
         {halt, HaltReq} ->
-            case arizona_req:halted_redirect(HaltReq) of
-                {Status, Location} -> {redirect, Status, Location};
-                undefined -> {halt, arizona_req:raw(HaltReq)}
-            end;
+            %% Leave the halt intact -- the transport decodes the stashed
+            %% redirect (and any response headers/cookies) off the req.
+            {halt, HaltReq};
         {cont, _ArzReq1, Bindings1} ->
             do_render(Handler, Bindings1, Opts)
     end.

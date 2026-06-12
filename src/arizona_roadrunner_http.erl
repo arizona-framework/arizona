@@ -35,15 +35,22 @@ handle(Req) ->
     #{handler := H} = State,
     ArzReq = arizona_roadrunner_req:new(Req),
     case arizona_http:render(H, ArzReq, State) of
-        {halt, RawReq} ->
-            %% Middleware emitted its own response via direct roadrunner
-            %% calls (rare). Pass through as a 204 to satisfy the result
-            %% shape; the middleware should have already shipped bytes.
-            {roadrunner_resp:no_content(), RawReq};
-        {redirect, Status, Location} ->
-            {roadrunner_resp:redirect(Status, Location), Req};
+        {halt, HaltReq} ->
+            {halt_response(HaltReq), arizona_req:raw(HaltReq)};
         {ok, Status, Body} ->
             {roadrunner_resp:html(Status, Body), Req};
         {error, Status, Body} ->
             {roadrunner_resp:html(Status, Body), Req}
+    end.
+
+%% --------------------------------------------------------------------
+%% Internal functions
+%% --------------------------------------------------------------------
+
+%% Middleware halted before render. Ship a stashed redirect, or a 204 when
+%% the middleware emitted its own response via direct roadrunner calls.
+halt_response(HaltReq) ->
+    case arizona_req:halted_redirect(HaltReq) of
+        {Status, Location} -> roadrunner_resp:redirect(Status, Location);
+        undefined -> roadrunner_resp:no_content()
     end.
