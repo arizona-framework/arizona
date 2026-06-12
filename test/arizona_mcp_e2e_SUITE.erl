@@ -22,7 +22,9 @@
     session_channel_receives_push/1,
     session_second_channel_409/1,
     session_survives_channel_disconnect/1,
-    session_resumes_with_last_event_id/1
+    session_resumes_with_last_event_id/1,
+    auth_missing_token_401/1,
+    auth_valid_token_ok/1
 ]).
 
 -define(LISTENER, arizona_mcp_e2e).
@@ -48,18 +50,30 @@ all() ->
         session_channel_receives_push,
         session_second_channel_409,
         session_survives_channel_disconnect,
-        session_resumes_with_last_event_id
+        session_resumes_with_last_event_id,
+        auth_missing_token_401,
+        auth_valid_token_ok
     ].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     {ok, _} = application:ensure_all_started(roadrunner),
     Port = 15050 + erlang:unique_integer([positive, monotonic]) rem 1000,
+    Auth = fun(Req) ->
+        case roadrunner_req:header(~"authorization", Req) of
+            ~"Bearer let-me-in" -> ok;
+            _ -> {reject, 401}
+        end
+    end,
     Routes = [
         {mcp, ~"/mcp", arizona_mcp_test_server, #{origins => [?ALLOWED_ORIGIN]}},
         {mcp, ~"/mcp-session", arizona_mcp_test_server, #{
             origins => [?ALLOWED_ORIGIN],
             sessions => true
+        }},
+        {mcp, ~"/mcp-auth", arizona_mcp_test_server, #{
+            origins => [?ALLOWED_ORIGIN],
+            auth => Auth
         }}
     ],
     {ok, _} = arizona_roadrunner_server:start(?LISTENER, #{
@@ -277,6 +291,19 @@ session_resumes_with_last_event_id(Config) ->
     Data = recv_until(Sock, ~"\"seq\":2", 5000),
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Data, ~"\"seq\":2")).
+
+%% --------------------------------------------------------------------
+%% Auth-gated tests (/mcp-auth, auth => bearer hook)
+%% --------------------------------------------------------------------
+
+auth_missing_token_401(Config) ->
+    Resp = post(Config, "/mcp-auth", [], initialize_body()),
+    ?assertEqual(401, status_code(Resp)).
+
+auth_valid_token_ok(Config) ->
+    Headers = ["Authorization: Bearer let-me-in\r\n"],
+    Resp = post(Config, "/mcp-auth", Headers, initialize_body()),
+    ?assertEqual(200, status_code(Resp)).
 
 %% --------------------------------------------------------------------
 %% Helpers

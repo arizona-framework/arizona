@@ -33,8 +33,14 @@
     handle_origin_allowed_ok/1,
     handle_origin_disallowed_403/1,
     handle_origin_empty_allowlist_403/1,
+    handle_auth_rejects/1,
+    handle_auth_reads_header/1,
+    handle_auth_mfa/1,
     handle_tool_crash_internal_error/1
 ]).
+
+%% An `{Module, Function}` auth hook target (see handle_auth_mfa/1).
+-export([reject_auth/1]).
 
 -define(SERVER, arizona_mcp_test_server).
 
@@ -70,6 +76,9 @@ all() ->
         handle_origin_allowed_ok,
         handle_origin_disallowed_403,
         handle_origin_empty_allowlist_403,
+        handle_auth_rejects,
+        handle_auth_reads_header,
+        handle_auth_mfa,
         handle_tool_crash_internal_error
     ].
 
@@ -275,6 +284,32 @@ handle_origin_empty_allowlist_403(_Config) ->
     Headers = [{~"origin", ~"http://localhost:3000"}],
     Resp = handle(~"POST", Headers, ping_body(), #{handler => ?SERVER, origins => []}),
     ?assertEqual(403, status(Resp)).
+
+handle_auth_rejects(_Config) ->
+    Auth = fun(_Req) -> {reject, 401} end,
+    Resp = handle(~"POST", [], ping_body(), #{handler => ?SERVER, auth => Auth}),
+    ?assertEqual(401, status(Resp)).
+
+handle_auth_reads_header(_Config) ->
+    Auth = fun(Req) ->
+        case roadrunner_req:header(~"authorization", Req) of
+            ~"Bearer ok" -> ok;
+            _ -> {reject, 401}
+        end
+    end,
+    Opts = #{handler => ?SERVER, auth => Auth},
+    Allowed = handle(~"POST", [{~"authorization", ~"Bearer ok"}], ping_body(), Opts),
+    ?assertEqual(200, status(Allowed)),
+    Denied = handle(~"POST", [], ping_body(), Opts),
+    ?assertEqual(401, status(Denied)).
+
+handle_auth_mfa(_Config) ->
+    %% The `{Module, Function}` hook form.
+    Resp = handle(~"POST", [], ping_body(), #{handler => ?SERVER, auth => {?MODULE, reject_auth}}),
+    ?assertEqual(403, status(Resp)).
+
+reject_auth(_Req) ->
+    {reject, 403}.
 
 handle_tool_crash_internal_error(_Config) ->
     Body =

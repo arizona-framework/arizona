@@ -4,9 +4,10 @@ Roadrunner handler for an MCP (Model Context Protocol) route.
 
 Implements MCP's Streamable HTTP transport for a tools server: a client
 POSTs a single JSON-RPC 2.0 message and receives a buffered
-`application/json` reply. `GET`/`DELETE` return `405` (no server-to-client
-stream in this phase). Before any dispatch the request's `Origin` is
-checked against the route's allowlist (DNS-rebinding defense).
+`application/json` reply; with sessions enabled, `GET` opens the SSE
+channel and `DELETE` tears a session down. Before any dispatch the request
+passes the security gate: the `Origin` allowlist (DNS-rebinding defense)
+and the route's optional `auth` hook.
 
 The MCP method dispatch (`dispatch/3`) is a pure function over a decoded
 request and the app's `arizona_mcp` module -- it is exported so it can be
@@ -32,6 +33,8 @@ protocol contract holds even when a tool raises.
 %% --------------------------------------------------------------------
 
 -export_type([session/0]).
+-export_type([auth_hook/0]).
+-export_type([auth_result/0]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -53,6 +56,11 @@ protocol contract holds even when a tool raises.
     state := arizona_mcp:state(),
     caps := arizona_mcp:capabilities()
 }.
+
+%% An optional per-route auth hook, run after the Origin check and before any
+%% dispatch. `{reject, Status}` short-circuits with that HTTP status.
+-type auth_hook() :: fun((roadrunner_req:request()) -> auth_result()) | {module(), atom()}.
+-type auth_result() :: ok | {reject, roadrunner_http:status()}.
 
 %% --------------------------------------------------------------------
 %% Macros
@@ -91,7 +99,7 @@ handle(Req) ->
 %% enabled. Everything else is method-not-allowed (the server-to-client GET
 %% stream is a later phase).
 serve(~"POST", Req, Opts) ->
-    with_origin(Req, Opts, fun() -> handle_post(Req, Opts) end);
+    with_gate(Req, Opts, fun() -> handle_post(Req, Opts) end);
 serve(~"GET", Req, Opts) ->
     session_verb(Req, Opts, fun() -> handle_get(Req) end);
 serve(~"DELETE", Req, Opts) ->
@@ -103,17 +111,33 @@ sessions_enabled(Opts) ->
     maps:get(sessions, Opts, false).
 
 %% GET (the SSE channel) and DELETE (teardown) exist only in session mode;
-%% like POST they are origin-checked first.
+%% like POST they pass the security gate first.
 session_verb(Req, Opts, Fun) ->
     case sessions_enabled(Opts) of
-        true -> with_origin(Req, Opts, Fun);
+        true -> with_gate(Req, Opts, Fun);
         false -> method_not_allowed(Opts)
     end.
 
-with_origin(Req, Opts, Fun) ->
+%% The security gate every verb passes: the DNS-rebinding `Origin` check,
+%% then the optional auth hook. Either may short-circuit the request.
+with_gate(Req, Opts, Fun) ->
     case check_origin(Req, Opts) of
-        ok -> Fun();
-        forbidden -> roadrunner_resp:forbidden()
+        forbidden ->
+            roadrunner_resp:forbidden();
+        ok ->
+            case check_auth(Req, Opts) of
+                ok -> Fun();
+                {reject, Status} -> roadrunner_resp:status(Status)
+            end
+    end.
+
+%% Run the route's optional `auth` hook (a `fun/1` or `{Module, Function}`)
+%% against the request. Absent => allow.
+check_auth(Req, Opts) ->
+    case maps:get(auth, Opts, undefined) of
+        undefined -> ok;
+        Hook when is_function(Hook, 1) -> Hook(Req);
+        {Mod, Fun} -> Mod:Fun(Req)
     end.
 
 method_not_allowed(Opts) ->
