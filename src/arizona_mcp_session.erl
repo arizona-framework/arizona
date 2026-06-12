@@ -24,7 +24,7 @@ sends `DELETE`) does not leak; every served request resets it.
 
 -export([start_link/3]).
 -export([dispatch/4]).
--export([attach_channel/2]).
+-export([attach_channel/3]).
 -export([detach_channel/2]).
 -export([notify/3]).
 -export([stop/1]).
@@ -60,26 +60,35 @@ sends `DELETE`) does not leak; every served request resets it.
     channel :: pid() | undefined,
     channel_mon :: reference() | undefined,
     %% Pubsub channels subscribed for server-initiated notifications.
-    channels :: [arizona_mcp:channel()]
+    channels :: [arizona_mcp:channel()],
+    %% Resumability: a monotonic event id (never resets) and a bounded buffer
+    %% of recent framed events, replayed past a client's Last-Event-ID.
+    next_event_id :: pos_integer(),
+    buffer :: queue:queue({pos_integer(), iodata()}),
+    buffer_len :: non_neg_integer(),
+    buffer_max :: pos_integer()
 }).
 
 -type state() :: #state{}.
+-type session_opts() :: #{ttl_ms := pos_integer(), buffer_max := pos_integer()}.
+
+-export_type([session_opts/0]).
 
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
 -doc """
-Start a session process holding `Session`, registered under `SessionId`,
-and tearing itself down after `TtlMs` of inactivity. Called by
-`arizona_mcp_sup:start_session/3`.
+Start a session process holding `Session`, registered under `SessionId`.
+`SessionOpts` carries the idle `ttl_ms` and the resumability `buffer_max`.
+Called by `arizona_mcp_sup:start_session/3`.
 """.
--spec start_link(SessionId, Session, TtlMs) -> gen_server:start_ret() when
+-spec start_link(SessionId, Session, SessionOpts) -> gen_server:start_ret() when
     SessionId :: binary(),
     Session :: arizona_mcp_handler:session(),
-    TtlMs :: pos_integer().
-start_link(SessionId, Session, TtlMs) ->
-    gen_server:start_link(?MODULE, {SessionId, Session, TtlMs}, []).
+    SessionOpts :: session_opts().
+start_link(SessionId, Session, SessionOpts) ->
+    gen_server:start_link(?MODULE, {SessionId, Session, SessionOpts}, []).
 
 -doc """
 Run one non-initialize MCP method against the session, returning the
@@ -99,14 +108,17 @@ dispatch(Pid, Method, Params, Id) ->
 
 -doc """
 Attach a server-to-client SSE channel (a roadrunner loop process) to the
-session. Returns `{error, already_attached}` if one is already attached --
-the spec allows only one such stream per session.
+session. Buffered events newer than `LastEventId` (a `Last-Event-ID` header
+value, or `undefined` for a fresh stream) are replayed to the channel.
+Returns `{error, already_attached}` if one is already attached -- the spec
+allows only one such stream per session.
 """.
--spec attach_channel(Pid, ChannelPid) -> ok | {error, already_attached} when
+-spec attach_channel(Pid, ChannelPid, LastEventId) -> ok | {error, already_attached} when
     Pid :: pid(),
-    ChannelPid :: pid().
-attach_channel(Pid, ChannelPid) ->
-    gen_server:call(Pid, {attach_channel, ChannelPid}, 5000).
+    ChannelPid :: pid(),
+    LastEventId :: binary() | undefined.
+attach_channel(Pid, ChannelPid, LastEventId) ->
+    gen_server:call(Pid, {attach_channel, ChannelPid, LastEventId}, 5000).
 
 -doc "Detach the SSE channel (on client disconnect). Fire-and-forget.".
 -spec detach_channel(Pid, ChannelPid) -> ok when
@@ -136,27 +148,42 @@ stop(Pid) ->
 %% gen_server Callbacks
 %% --------------------------------------------------------------------
 
--spec init({SessionId, Session, TtlMs}) -> {ok, state()} when
+-spec init({SessionId, Session, SessionOpts}) -> {ok, state()} when
     SessionId :: binary(),
     Session :: arizona_mcp_handler:session(),
-    TtlMs :: pos_integer().
-init({SessionId, Session, TtlMs}) ->
+    SessionOpts :: session_opts().
+init({SessionId, Session, #{ttl_ms := TtlMs, buffer_max := BufferMax}}) ->
     proc_lib:set_label({arizona_mcp_session, SessionId}),
     ok = arizona_mcp_session_registry:add(SessionId, self()),
     Channels = subscribe_channels(Session),
-    State = #state{id = SessionId, session = Session, ttl_ms = TtlMs, channels = Channels},
+    State = #state{
+        id = SessionId,
+        session = Session,
+        ttl_ms = TtlMs,
+        channels = Channels,
+        next_event_id = 1,
+        buffer = queue:new(),
+        buffer_len = 0,
+        buffer_max = BufferMax
+    },
     {ok, refresh_ttl(State)}.
 
 -spec handle_call(Request, gen_server:from(), state()) -> {reply, Reply, state()} when
-    Request :: {dispatch, binary(), map(), arizona_jsonrpc:id()} | {attach_channel, pid()},
+    Request ::
+        {dispatch, binary(), map(), arizona_jsonrpc:id()}
+        | {attach_channel, pid(), binary() | undefined},
     Reply :: {reply, map()} | {error, map()} | ok | {error, already_attached}.
 handle_call({dispatch, Method, Params, Id}, _From, #state{session = Session} = State) ->
     Outcome = safe_handle_method(Method, Params, Id, Session),
     {reply, Outcome, refresh_ttl(State)};
-handle_call({attach_channel, ChannelPid}, _From, #state{channel = undefined} = State) ->
+handle_call(
+    {attach_channel, ChannelPid, LastEventId}, _From, #state{channel = undefined} = State
+) ->
     Mon = erlang:monitor(process, ChannelPid),
-    {reply, ok, refresh_ttl(State#state{channel = ChannelPid, channel_mon = Mon})};
-handle_call({attach_channel, _ChannelPid}, _From, State) ->
+    Attached = State#state{channel = ChannelPid, channel_mon = Mon},
+    Replayed = replay(parse_last_event_id(LastEventId), Attached),
+    {reply, ok, refresh_ttl(Replayed)};
+handle_call({attach_channel, _ChannelPid, _LastEventId}, _From, State) ->
     {reply, {error, already_attached}, State}.
 
 -spec handle_cast(term(), state()) -> {noreply, state()}.
@@ -223,16 +250,50 @@ ensure_subscribed(Channel) ->
         {error, already_joined} -> ok
     end.
 
-%% Frame a server-initiated notification and forward it to the attached SSE
-%% channel. Without a channel it is dropped (buffering for resume is a later
-%% phase).
-emit(_Method, _Params, #state{channel = undefined} = State) ->
-    State;
-emit(Method, Params, #state{channel = ChannelPid} = State) ->
+%% Frame a server-initiated notification with a monotonic event id, buffer it
+%% for possible replay, and forward it to the channel if one is attached.
+emit(Method, Params, #state{next_event_id = EventId} = State) ->
     Notification = arizona_jsonrpc:notification(Method, Params),
-    Frame = roadrunner_sse:event(iolist_to_binary(json:encode(Notification))),
+    Data = iolist_to_binary(json:encode(Notification)),
+    Frame = roadrunner_sse:event(~"message", Data, integer_to_binary(EventId)),
+    push_frame(Frame, State),
+    buffer_event(EventId, Frame, State#state{next_event_id = EventId + 1}).
+
+push_frame(_Frame, #state{channel = undefined}) ->
+    ok;
+push_frame(Frame, #state{channel = ChannelPid}) ->
     ChannelPid ! {mcp_event, Frame},
+    ok.
+
+%% Append a framed event to the replay buffer, evicting the oldest when the
+%% bound is reached. An evicted event is no longer resumable.
+buffer_event(EventId, Frame, #state{buffer = Q, buffer_len = Len, buffer_max = Max} = State) ->
+    Q1 = queue:in({EventId, Frame}, Q),
+    case Len + 1 > Max of
+        true ->
+            {_Dropped, Q2} = queue:out(Q1),
+            State#state{buffer = Q2, buffer_len = Max};
+        false ->
+            State#state{buffer = Q1, buffer_len = Len + 1}
+    end.
+
+%% Replay buffered events newer than `LastEventId` to the freshly attached
+%% channel, in order. `undefined` (a fresh stream) replays nothing.
+replay(undefined, State) ->
+    State;
+replay(LastEventId, #state{buffer = Q, channel = ChannelPid} = State) ->
+    Frames = [Frame || {EventId, Frame} <:- queue:to_list(Q), EventId > LastEventId],
+    lists:foreach(fun(Frame) -> ChannelPid ! {mcp_event, Frame} end, Frames),
     State.
+
+parse_last_event_id(undefined) ->
+    undefined;
+parse_last_event_id(Bin) ->
+    try binary_to_integer(Bin) of
+        EventId -> EventId
+    catch
+        error:badarg -> undefined
+    end.
 
 %% Detach the channel: stop monitoring it, forget it, and re-arm the idle
 %% timer (the session is connectionless again and may be abandoned).

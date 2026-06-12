@@ -67,6 +67,10 @@ protocol contract holds even when a tool raises.
 %% `session_ttl_ms` opt. Five minutes is generous for an interactive agent.
 -define(DEFAULT_TTL_MS, 300000).
 
+%% Resumability buffer depth per session, overridable via the route's
+%% `session_buffer_max` opt.
+-define(DEFAULT_BUFFER_MAX, 256).
+
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
@@ -256,8 +260,11 @@ session_initialize(Params, Id, #{handler := Mod} = Opts) ->
     %% with the client's binary-keyed JSON params.
     InitParams = Params#{mcp_session_id => SessionId},
     {ServerInfo, #{caps := Caps} = Session} = open_session(Mod, InitParams),
-    TtlMs = maps:get(session_ttl_ms, Opts, ?DEFAULT_TTL_MS),
-    {ok, _Pid} = arizona_mcp_sup:start_session(SessionId, Session, TtlMs),
+    SessionOpts = #{
+        ttl_ms => maps:get(session_ttl_ms, Opts, ?DEFAULT_TTL_MS),
+        buffer_max => maps:get(session_buffer_max, Opts, ?DEFAULT_BUFFER_MAX)
+    },
+    {ok, _Pid} = arizona_mcp_sup:start_session(SessionId, Session, SessionOpts),
     Result = arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params)),
     roadrunner_resp:add_header(json(Result), ~"mcp-session-id", SessionId).
 
@@ -300,15 +307,16 @@ handle_get(Req) ->
             roadrunner_resp:bad_request();
         SessionId ->
             case arizona_mcp_session_registry:lookup(SessionId) of
-                {ok, Pid} -> attach_or_reject(Pid);
+                {ok, Pid} -> attach_or_reject(Pid, roadrunner_req:header(~"last-event-id", Req));
                 error -> roadrunner_resp:not_found()
             end
     end.
 
-%% Become the session's SSE channel, or `409` if one is already attached
-%% (the spec allows a single server-to-client stream per session).
-attach_or_reject(Pid) ->
-    case arizona_mcp_session:attach_channel(Pid, self()) of
+%% Become the session's SSE channel (replaying any events newer than
+%% `Last-Event-ID`), or `409` if one is already attached -- the spec allows a
+%% single server-to-client stream per session.
+attach_or_reject(Pid, LastEventId) ->
+    case arizona_mcp_session:attach_channel(Pid, self(), LastEventId) of
         ok ->
             Headers = [
                 {~"content-type", ~"text/event-stream"},

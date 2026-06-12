@@ -76,6 +76,7 @@ persistent term so the dev error page can build the SSE connect URL.
     origins => [binary()],
     sessions => boolean(),
     session_ttl_ms => pos_integer(),
+    session_buffer_max => pos_integer(),
     _ => term()
 }.
 

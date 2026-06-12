@@ -21,7 +21,8 @@
     session_get_without_id_400/1,
     session_channel_receives_push/1,
     session_second_channel_409/1,
-    session_survives_channel_disconnect/1
+    session_survives_channel_disconnect/1,
+    session_resumes_with_last_event_id/1
 ]).
 
 -define(LISTENER, arizona_mcp_e2e).
@@ -46,7 +47,8 @@ all() ->
         session_get_without_id_400,
         session_channel_receives_push,
         session_second_channel_409,
-        session_survives_channel_disconnect
+        session_survives_channel_disconnect,
+        session_resumes_with_last_event_id
     ].
 
 init_per_suite(Config) ->
@@ -264,6 +266,18 @@ session_survives_channel_disconnect(Config) ->
     ?assertEqual(200, status_code(Resp)),
     ?assertMatch(#{~"result" := #{}}, body_json(Resp)).
 
+session_resumes_with_last_event_id(Config) ->
+    SessionId = open_session(Config),
+    %% Two events emitted while no channel is attached: they buffer.
+    ok = arizona_mcp:notify(SessionId, ~"notifications/message", #{~"seq" => 1}),
+    ok = arizona_mcp:notify(SessionId, ~"notifications/message", #{~"seq" => 2}),
+    %% Reconnect resuming from event 1: event 2 replays over the new stream.
+    %% Read the whole response (the replay can arrive bundled with the head).
+    Sock = send_channel_get(Config, SessionId, ["Last-Event-ID: 1\r\n"]),
+    Data = recv_until(Sock, ~"\"seq\":2", 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"\"seq\":2")).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
@@ -272,9 +286,22 @@ open_session(Config) ->
     Resp = post(Config, "/mcp-session", [], initialize_body()),
     header_value(Resp, ~"mcp-session-id").
 
+open_channel(Config, SessionId) ->
+    open_channel(Config, SessionId, []).
+
 %% Open the server-to-client SSE channel and confirm the loop response opened
 %% (a 200 header block means the channel attached). The socket stays open.
-open_channel(Config, SessionId) ->
+%% (Reads only the header block; reply data follows on later recvs.)
+open_channel(Config, SessionId, ExtraHeaders) ->
+    Sock = send_channel_get(Config, SessionId, ExtraHeaders),
+    Head = recv_until(Sock, ~"\r\n\r\n", 5000),
+    ?assertNotEqual(nomatch, binary:match(Head, ~"200 OK")),
+    {ok, Sock}.
+
+%% Connect and send the channel GET without reading the response -- the
+%% caller reads the whole stream (used when replay events may arrive bundled
+%% with the header block).
+send_channel_get(Config, SessionId, ExtraHeaders) ->
     Port = ?config(port, Config),
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
     Req = [
@@ -286,12 +313,11 @@ open_channel(Config, SessionId) ->
         SessionId,
         "\r\n",
         "Accept: text/event-stream\r\n",
+        ExtraHeaders,
         "\r\n"
     ],
     ok = gen_tcp:send(Sock, Req),
-    Head = recv_until(Sock, ~"\r\n\r\n", 5000),
-    ?assertNotEqual(nomatch, binary:match(Head, ~"200 OK")),
-    {ok, Sock}.
+    Sock.
 
 %% Accumulate socket data until `Needle` appears or time runs out.
 recv_until(Sock, Needle, Timeout) ->

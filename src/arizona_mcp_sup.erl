@@ -45,15 +45,15 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, #{}).
 
 -doc """
-Start a session process holding `Session`, registered under `SessionId`,
-with an `TtlMs` idle teardown.
+Start a session process holding `Session`, registered under `SessionId`.
+`SessionOpts` carries the idle `ttl_ms` and the resumability `buffer_max`.
 """.
--spec start_session(SessionId, Session, TtlMs) -> supervisor:startchild_ret() when
+-spec start_session(SessionId, Session, SessionOpts) -> supervisor:startchild_ret() when
     SessionId :: binary(),
     Session :: arizona_mcp_handler:session(),
-    TtlMs :: pos_integer().
-start_session(SessionId, Session, TtlMs) ->
-    supervisor:start_child(?MODULE, [SessionId, Session, TtlMs]).
+    SessionOpts :: arizona_mcp_session:session_opts().
+start_session(SessionId, Session, SessionOpts) ->
+    supervisor:start_child(?MODULE, [SessionId, Session, SessionOpts]).
 
 %% --------------------------------------------------------------------
 %% supervisor Callbacks
