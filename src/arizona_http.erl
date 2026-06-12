@@ -19,8 +19,9 @@ transport's native reply shape.
    and ships the reply (or a 204/400 when the middleware wrote its own).
 3. On `{cont, Req1, Bindings1}` -- call
    `arizona_render:render_view_to_iolist/2` with the route's
-   `layout`/`on_mount`. Return `{ok, 200, Page}` or, on crash or a
-   stashed hot-reload error, `{error, 500, ErrorPage}`.
+   `layout`/`on_mount`. Return `{ok, 200, Page, Req1}` or, on crash or a
+   stashed hot-reload error, `{error, 500, ErrorPage, Req1}` (the threaded
+   req carries any response headers/cookies for the transport to flush).
 """.
 
 %% --------------------------------------------------------------------
@@ -49,8 +50,8 @@ transport's native reply shape.
 
 -nominal result() ::
     {halt, arizona_req:request()}
-    | {ok, 200, iolist()}
-    | {error, 500, iolist()}.
+    | {ok, 200, iolist(), arizona_req:request()}
+    | {error, 500, iolist(), arizona_req:request()}.
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -72,8 +73,10 @@ render(Handler, ArzReq, Opts) ->
             %% Leave the halt intact -- the transport decodes the stashed
             %% redirect (and any response headers/cookies) off the req.
             {halt, HaltReq};
-        {cont, _ArzReq1, Bindings1} ->
-            do_render(Handler, Bindings1, Opts)
+        {cont, ArzReq1, Bindings1} ->
+            %% Thread the req so the transport can flush response headers/cookies
+            %% a middleware stashed before rendering.
+            do_render(Handler, ArzReq1, Bindings1, Opts)
     end.
 
 %% --------------------------------------------------------------------
@@ -85,7 +88,7 @@ render(Handler, ArzReq, Opts) ->
 reload_url() ->
     persistent_term:get(arizona_reload_url, undefined).
 
-do_render(H, Bindings, Opts) ->
+do_render(H, ArzReq, Bindings, Opts) ->
     case arizona_reloader:get_error() of
         undefined ->
             try
@@ -95,7 +98,7 @@ do_render(H, Bindings, Opts) ->
                     on_mount => maps:get(on_mount, Opts, [])
                 },
                 Page = arizona_render:render_view_to_iolist(H, RenderOpts),
-                {ok, 200, Page}
+                {ok, 200, Page, ArzReq}
             catch
                 Class:Reason:Stacktrace ->
                     ErrorInfo = #{
@@ -104,7 +107,7 @@ do_render(H, Bindings, Opts) ->
                         stacktrace => Stacktrace,
                         reload_url => reload_url()
                     },
-                    {error, 500, render_error_body(Bindings, ErrorInfo)}
+                    {error, 500, render_error_body(Bindings, ErrorInfo), ArzReq}
             end;
         #{errors := Errors} ->
             ErrorInfo = #{
@@ -113,7 +116,7 @@ do_render(H, Bindings, Opts) ->
                 stacktrace => [],
                 reload_url => reload_url()
             },
-            {error, 500, render_error_body(Bindings, ErrorInfo)}
+            {error, 500, render_error_body(Bindings, ErrorInfo), ArzReq}
     end.
 
 render_error_body(Bindings, ErrorInfo) ->

@@ -15,6 +15,9 @@
 -export([user_agent_returns_header/1]).
 -export([user_agent_absent_is_empty/1]).
 -export([body_threads_updated_raw/1]).
+-export([put_resp_header_accumulates/1]).
+-export([put_resp_cookie_accumulates/1]).
+-export([resp_stash_defaults_empty/1]).
 -export([call_resolve_route_dispatches_to_adapter/1]).
 
 all() ->
@@ -33,7 +36,10 @@ groups() ->
             headers_lazy_loads_and_caches,
             user_agent_returns_header,
             user_agent_absent_is_empty,
-            body_threads_updated_raw
+            body_threads_updated_raw,
+            put_resp_header_accumulates,
+            put_resp_cookie_accumulates,
+            resp_stash_defaults_empty
         ]},
         {resolve_route, [parallel], [
             call_resolve_route_dispatches_to_adapter
@@ -133,6 +139,34 @@ body_threads_updated_raw(Config) when is_list(Config) ->
     {Body, Req1} = arizona_req:body(Req0),
     ?assertEqual(~"hello", Body),
     ?assertEqual(#{body => ~"hello", body_read => true}, arizona_req:raw(Req1)).
+
+%% --------------------------------------------------------------------
+%% Response stash -- put_resp_header/3, put_resp_cookie/4
+%% --------------------------------------------------------------------
+
+put_resp_header_accumulates(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{}),
+    ?assertEqual([], arizona_req:resp_headers(Req0)),
+    Req1 = arizona_req:put_resp_header(Req0, ~"x-a", ~"1"),
+    Req2 = arizona_req:put_resp_header(Req1, ~"x-b", ~"2"),
+    %% Newest first.
+    ?assertEqual([{~"x-b", ~"2"}, {~"x-a", ~"1"}], arizona_req:resp_headers(Req2)).
+
+put_resp_cookie_accumulates(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{}),
+    ?assertEqual([], arizona_req:resp_cookies(Req0)),
+    Opts = #{path => ~"/", http_only => true},
+    Req1 = arizona_req:put_resp_cookie(Req0, ~"session", ~"abc", Opts),
+    Req2 = arizona_req:put_resp_cookie(Req1, ~"theme", ~"dark", #{}),
+    ?assertEqual(
+        [{~"theme", ~"dark", #{}}, {~"session", ~"abc", Opts}],
+        arizona_req:resp_cookies(Req2)
+    ).
+
+resp_stash_defaults_empty(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{}),
+    ?assertEqual([], arizona_req:resp_headers(Req)),
+    ?assertEqual([], arizona_req:resp_cookies(Req)).
 
 %% --------------------------------------------------------------------
 %% resolve_route -- exercises the optional callback wiring

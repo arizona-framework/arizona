@@ -59,6 +59,10 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([redirect/2]).
 -export([redirect/3]).
 -export([halted_redirect/1]).
+-export([put_resp_header/3]).
+-export([put_resp_cookie/4]).
+-export([resp_headers/1]).
+-export([resp_cookies/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -77,6 +81,10 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -ignore_xref([redirect/2]).
 -ignore_xref([redirect/3]).
 -ignore_xref([halted_redirect/1]).
+-ignore_xref([put_resp_header/3]).
+-ignore_xref([put_resp_cookie/4]).
+-ignore_xref([resp_headers/1]).
+-ignore_xref([resp_cookies/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -93,6 +101,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export_type([headers/0]).
 -export_type([body/0]).
 -export_type([redirect_status/0]).
+-export_type([resp_cookie_opts/0]).
 -export_type([qs/0]).
 
 %% --------------------------------------------------------------------
@@ -110,7 +119,9 @@ Method = arizona_req:method(Req).          %% eager, no thread
     cookies => cookies(),
     headers => headers(),
     body => body(),
-    redirect => {redirect_status(), binary()}
+    redirect => {redirect_status(), binary()},
+    resp_headers => [{binary(), iodata()}],
+    resp_cookies => [{binary(), binary(), resp_cookie_opts()}]
 }.
 
 -nominal adapter() :: module().
@@ -129,6 +140,18 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %% is allowed so rarer codes (300 multiple choices, 304 not modified,
 %% etc.) remain expressible -- callers pick the semantics they want.
 -nominal redirect_status() :: 300..399.
+
+%% Response cookie options stashed by `put_resp_cookie/4` and serialized by
+%% the transport. Mirrors the transport cookie serializer's options.
+-nominal resp_cookie_opts() :: #{
+    domain => binary(),
+    path => binary(),
+    max_age => non_neg_integer(),
+    expires => binary(),
+    secure => boolean(),
+    http_only => boolean(),
+    same_site => strict | lax | none
+}.
 
 %% Query string passed to `resolve_route/3` for SPA navigate.
 -nominal qs() :: binary().
@@ -335,3 +358,44 @@ client-visible response.
     Request :: request().
 halted_redirect(#{redirect := Redirect}) -> Redirect;
 halted_redirect(_) -> undefined.
+
+-doc """
+Stashes a response header on `Request`. Transports flush stashed headers
+onto the outgoing response (redirect, rendered page, or halt). Repeated
+calls accumulate (newest first).
+""".
+-spec put_resp_header(Request, Name, Value) -> Request when
+    Request :: request(),
+    Name :: binary(),
+    Value :: iodata().
+put_resp_header(Req, Name, Value) when is_binary(Name) ->
+    Headers = maps:get(resp_headers, Req, []),
+    Req#{resp_headers => [{Name, Value} | Headers]}.
+
+-doc """
+Stashes a response cookie on `Request`, serialized by the transport when the
+response is built. Lets a middleware set a cookie alongside a `redirect/2,3`
+or a rendered page. `Opts` follows `resp_cookie_opts()`.
+""".
+-spec put_resp_cookie(Request, Name, Value, Opts) -> Request when
+    Request :: request(),
+    Name :: binary(),
+    Value :: binary(),
+    Opts :: resp_cookie_opts().
+put_resp_cookie(Req, Name, Value, Opts) when
+    is_binary(Name), is_binary(Value), is_map(Opts)
+->
+    Cookies = maps:get(resp_cookies, Req, []),
+    Req#{resp_cookies => [{Name, Value, Opts} | Cookies]}.
+
+-doc "Returns the stashed response headers (newest first), or `[]`.".
+-spec resp_headers(Request) -> [{binary(), iodata()}] when
+    Request :: request().
+resp_headers(#{resp_headers := Headers}) -> Headers;
+resp_headers(_) -> [].
+
+-doc "Returns the stashed response cookies (newest first), or `[]`.".
+-spec resp_cookies(Request) -> [{binary(), binary(), resp_cookie_opts()}] when
+    Request :: request().
+resp_cookies(#{resp_cookies := Cookies}) -> Cookies;
+resp_cookies(_) -> [].
