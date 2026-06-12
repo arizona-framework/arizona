@@ -74,6 +74,17 @@ session has no channel attached:
   The id is handed to the handler at `initialize` under the `mcp_session_id`
   key of the init params, so a handler can keep it and address its own
   session later.
+
+## Operational notes
+
+Session mode starts one process per `initialize`, and the count is
+unbounded -- a public deployment should gate the endpoint with the `auth`
+hook and a reverse-proxy rate limit. An abandoned session is reaped after
+its idle TTL (`session_ttl_ms`, default 5 minutes). A tool that never
+returns holds its session and its connection until it does (a request waits
+on the tool indefinitely). The optional `terminate/2` callback runs when a
+session ends (DELETE, idle TTL, or shutdown); it does **not** run in
+stateless mode, which has no session to end.
 """.
 
 %% --------------------------------------------------------------------
@@ -195,7 +206,11 @@ Build the server identity, advertised capabilities, and handler state.
 `InitParams` carries the client's `initialize` params (its protocol
 version, capabilities, and `clientInfo`) when invoked from `initialize`,
 or the empty map when the transport reconstructs state for a later
-request.
+request. In session mode it also carries the atom key `mcp_session_id`.
+
+`Capabilities` must be an **atom-keyed** map (e.g. `#{tools => #{}}`): the
+transport gates `resources/*` and `prompts/*` by matching the atom
+capability name, so a binary-keyed capability would never be served.
 """.
 -callback init(InitParams :: init_params()) ->
     {ok, ServerInfo :: server_info(), Capabilities :: capabilities(), State :: state()}.

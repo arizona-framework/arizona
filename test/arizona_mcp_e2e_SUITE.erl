@@ -24,7 +24,8 @@
     session_survives_channel_disconnect/1,
     session_resumes_with_last_event_id/1,
     auth_missing_token_401/1,
-    auth_valid_token_ok/1
+    auth_valid_token_ok/1,
+    session_init_crash_internal_error/1
 ]).
 
 -define(LISTENER, arizona_mcp_e2e).
@@ -52,7 +53,8 @@ all() ->
         session_survives_channel_disconnect,
         session_resumes_with_last_event_id,
         auth_missing_token_401,
-        auth_valid_token_ok
+        auth_valid_token_ok,
+        session_init_crash_internal_error
     ].
 
 init_per_suite(Config) ->
@@ -74,6 +76,10 @@ init_per_suite(Config) ->
         {mcp, ~"/mcp-auth", arizona_mcp_test_server, #{
             origins => [?ALLOWED_ORIGIN],
             auth => Auth
+        }},
+        {mcp, ~"/mcp-session-crash", arizona_mcp_crashing_server, #{
+            origins => [?ALLOWED_ORIGIN],
+            sessions => true
         }}
     ],
     {ok, _} = arizona_roadrunner_server:start(?LISTENER, #{
@@ -304,6 +310,12 @@ auth_valid_token_ok(Config) ->
     Headers = ["Authorization: Bearer let-me-in\r\n"],
     Resp = post(Config, "/mcp-auth", Headers, initialize_body()),
     ?assertEqual(200, status_code(Resp)).
+
+%% A crashing init/1 on the session path is guarded: -32603, not a dead conn.
+session_init_crash_internal_error(Config) ->
+    Resp = post(Config, "/mcp-session-crash", [], initialize_body()),
+    ?assertEqual(200, status_code(Resp)),
+    ?assertMatch(#{~"error" := #{~"code" := -32603}}, body_json(Resp)).
 
 %% --------------------------------------------------------------------
 %% Helpers

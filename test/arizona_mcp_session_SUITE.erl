@@ -19,7 +19,8 @@
     detach_re_arms_ttl/1,
     replay_after_last_event_id/1,
     replay_buffer_evicts_oldest/1,
-    fresh_attach_no_replay/1
+    fresh_attach_no_replay/1,
+    terminate_calls_app/1
 ]).
 
 all() ->
@@ -40,7 +41,8 @@ all() ->
         detach_re_arms_ttl,
         replay_after_last_event_id,
         replay_buffer_evicts_oldest,
-        fresh_attach_no_replay
+        fresh_attach_no_replay,
+        terminate_calls_app
     ].
 
 init_per_suite(Config) ->
@@ -201,6 +203,22 @@ fresh_attach_no_replay(_Config) ->
     %% A fresh attach (no Last-Event-ID) replays nothing.
     ok = arizona_mcp_session:attach_channel(Pid, self(), undefined),
     no_more_events().
+
+terminate_calls_app(_Config) ->
+    Id = integer_to_binary(erlang:unique_integer([positive])),
+    %% Thread a watcher pid through the handler state; the fixture's
+    %% terminate/2 signals it on teardown.
+    Session = #{
+        mod => arizona_mcp_test_server,
+        state => #{terminate_pid => self()},
+        caps => #{tools => #{}}
+    },
+    {ok, Pid} = arizona_mcp_sup:start_session(Id, Session, #{ttl_ms => 60000, buffer_max => 256}),
+    ok = arizona_mcp_session:stop(Pid),
+    receive
+        {mcp_terminated, _Reason} -> ok
+    after 5000 -> ct:fail(terminate_not_called)
+    end.
 
 %% --------------------------------------------------------------------
 %% Helpers

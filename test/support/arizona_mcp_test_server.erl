@@ -10,6 +10,7 @@
 -export([prompts/1]).
 -export([get_prompt/3]).
 -export([channels/1]).
+-export([terminate/2]).
 
 init(_InitParams) ->
     {ok, #{name => ~"arizona_test", version => ~"0.1.0"},
@@ -107,3 +108,10 @@ get_prompt(~"deny", _Args, State) ->
 
 channels(_State) ->
     [mcp_test_channel].
+
+%% Signals teardown to a watcher pid when one was threaded through the state.
+terminate(Reason, #{terminate_pid := Pid}) ->
+    Pid ! {mcp_terminated, Reason},
+    ok;
+terminate(_Reason, _State) ->
+    ok.

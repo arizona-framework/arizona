@@ -279,34 +279,45 @@ reply_session(Body, Req, Opts) ->
 
 session_initialize(Params, Id, #{handler := Mod} = Opts) ->
     SessionId = generate_session_id(),
-    %% The session id is handed to the handler so it can address its own
-    %% session later via `arizona_mcp:notify/3`. An atom key can't collide
-    %% with the client's binary-keyed JSON params.
-    InitParams = Params#{mcp_session_id => SessionId},
-    {ServerInfo, #{caps := Caps} = Session} = open_session(Mod, InitParams),
-    SessionOpts = #{
-        ttl_ms => maps:get(session_ttl_ms, Opts, ?DEFAULT_TTL_MS),
-        buffer_max => maps:get(session_buffer_max, Opts, ?DEFAULT_BUFFER_MAX)
-    },
-    {ok, _Pid} = arizona_mcp_sup:start_session(SessionId, Session, SessionOpts),
-    Result = arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params)),
-    roadrunner_resp:add_header(json(Result), ~"mcp-session-id", SessionId).
+    %% A crashing `init/1` is guarded the same way the stateless path guards
+    %% dispatch: answer `-32603` rather than killing the connection.
+    try
+        %% The session id is handed to the handler so it can address its own
+        %% session later via `arizona_mcp:notify/3`. An atom key can't collide
+        %% with the client's binary-keyed JSON params.
+        InitParams = Params#{mcp_session_id => SessionId},
+        {ServerInfo, #{caps := Caps} = Session} = open_session(Mod, InitParams),
+        SessionOpts = #{
+            ttl_ms => maps:get(session_ttl_ms, Opts, ?DEFAULT_TTL_MS),
+            buffer_max => maps:get(session_buffer_max, Opts, ?DEFAULT_BUFFER_MAX)
+        },
+        {ok, _Pid} = arizona_mcp_sup:start_session(SessionId, Session, SessionOpts),
+        Result = arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params)),
+        roadrunner_resp:add_header(json(Result), ~"mcp-session-id", SessionId)
+    catch
+        Class:Reason:Stacktrace ->
+            logger:error("MCP initialize crashed: ~ts:~tp~n~tp", [Class, Reason, Stacktrace]),
+            json(arizona_jsonrpc:error(Id, -32603, ~"Internal error"))
+    end.
 
 session_request(Method, Params, Id, Request, Req) ->
     case roadrunner_req:header(~"mcp-session-id", Req) of
         undefined ->
             json(arizona_jsonrpc:error(reply_id(Request), -32600, ~"Missing Mcp-Session-Id"));
         SessionId ->
-            case arizona_mcp_session_registry:lookup(SessionId) of
-                {ok, Pid} ->
+            with_session(
+                SessionId,
+                fun(Pid) ->
                     {_Tag, Object} = arizona_mcp_session:dispatch(Pid, Method, Params, Id),
-                    json(Object);
-                error ->
-                    %% Unknown or expired session: the client should re-initialize.
+                    json(Object)
+                end,
+                %% Unknown or expired session: the client should re-initialize.
+                fun() ->
                     roadrunner_resp:json(
                         404, arizona_jsonrpc:error(Id, -32600, ~"Unknown or expired session")
                     )
-            end
+                end
+            )
     end.
 
 handle_delete(Req) ->
@@ -314,13 +325,14 @@ handle_delete(Req) ->
         undefined ->
             roadrunner_resp:bad_request();
         SessionId ->
-            case arizona_mcp_session_registry:lookup(SessionId) of
-                {ok, Pid} ->
+            with_session(
+                SessionId,
+                fun(Pid) ->
                     ok = arizona_mcp_session:stop(Pid),
-                    roadrunner_resp:no_content();
-                error ->
-                    roadrunner_resp:not_found()
-            end
+                    roadrunner_resp:no_content()
+                end,
+                fun roadrunner_resp:not_found/0
+            )
     end.
 
 %% GET opens the server-to-client SSE channel: attach this loop process to
@@ -330,10 +342,28 @@ handle_get(Req) ->
         undefined ->
             roadrunner_resp:bad_request();
         SessionId ->
-            case arizona_mcp_session_registry:lookup(SessionId) of
-                {ok, Pid} -> attach_or_reject(Pid, roadrunner_req:header(~"last-event-id", Req));
-                error -> roadrunner_resp:not_found()
-            end
+            with_session(
+                SessionId,
+                fun(Pid) -> attach_or_reject(Pid, roadrunner_req:header(~"last-event-id", Req)) end,
+                fun roadrunner_resp:not_found/0
+            )
+    end.
+
+%% Resolve a session id and call into it. The registry lookup and the
+%% subsequent gen_server call are not atomic, so a session that dies in the
+%% gap surfaces as a `noproc`/`normal` exit -- treat that, like an unknown id,
+%% as not-found rather than crashing the connection.
+with_session(SessionId, Found, NotFound) ->
+    case arizona_mcp_session_registry:lookup(SessionId) of
+        {ok, Pid} ->
+            try
+                Found(Pid)
+            catch
+                exit:{noproc, _} -> NotFound();
+                exit:{normal, _} -> NotFound()
+            end;
+        error ->
+            NotFound()
     end.
 
 %% Become the session's SSE channel (replaying any events newer than

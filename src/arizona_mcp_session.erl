@@ -176,15 +176,20 @@ init({SessionId, Session, #{ttl_ms := TtlMs, buffer_max := BufferMax}}) ->
 handle_call({dispatch, Method, Params, Id}, _From, #state{session = Session} = State) ->
     Outcome = safe_handle_method(Method, Params, Id, Session),
     {reply, Outcome, refresh_ttl(State)};
-handle_call(
-    {attach_channel, ChannelPid, LastEventId}, _From, #state{channel = undefined} = State
-) ->
-    Mon = erlang:monitor(process, ChannelPid),
-    Attached = State#state{channel = ChannelPid, channel_mon = Mon},
-    Replayed = replay(parse_last_event_id(LastEventId), Attached),
-    {reply, ok, refresh_ttl(Replayed)};
-handle_call({attach_channel, _ChannelPid, _LastEventId}, _From, State) ->
-    {reply, {error, already_attached}, State}.
+handle_call({attach_channel, ChannelPid, LastEventId}, _From, State) ->
+    case channel_alive(State) of
+        true ->
+            {reply, {error, already_attached}, State};
+        false ->
+            %% No channel, or the old one is dead -- a fast reconnect can beat
+            %% the disconnect cleanup, so replace a dead channel rather than
+            %% rejecting the resume with a spurious 409.
+            Cleared = clear_channel(State),
+            Mon = erlang:monitor(process, ChannelPid),
+            Attached = Cleared#state{channel = ChannelPid, channel_mon = Mon},
+            Replayed = replay(parse_last_event_id(LastEventId), Attached),
+            {reply, ok, refresh_ttl(Replayed)}
+    end.
 
 -spec handle_cast(term(), state()) -> {noreply, state()}.
 handle_cast({detach_channel, ChannelPid}, #state{channel = ChannelPid} = State) ->
@@ -209,9 +214,10 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 -spec terminate(term(), state()) -> ok.
-terminate(_Reason, #state{id = SessionId}) ->
-    %% pg auto-removes the session from its subscribed channels on exit, so
-    %% only the registry row needs explicit cleanup.
+terminate(Reason, #state{id = SessionId, session = #{mod := Mod, state := HandlerState}}) ->
+    %% Run the app's optional cleanup hook, then drop the registry row. (pg
+    %% auto-removes the session from its subscribed channels on exit.)
+    erlang:function_exported(Mod, terminate, 2) andalso Mod:terminate(Reason, HandlerState),
     ok = arizona_mcp_session_registry:remove(SessionId),
     ok.
 
@@ -295,11 +301,23 @@ parse_last_event_id(Bin) ->
         error:badarg -> undefined
     end.
 
+channel_alive(#state{channel = undefined}) ->
+    false;
+channel_alive(#state{channel = Pid}) ->
+    is_process_alive(Pid).
+
+%% Forget the current channel, demonitoring it (and flushing any pending DOWN)
+%% so a stale signal can't detach a freshly attached replacement.
+clear_channel(#state{channel = undefined} = State) ->
+    State;
+clear_channel(#state{channel_mon = Mon} = State) ->
+    demonitor_channel(Mon),
+    State#state{channel = undefined, channel_mon = undefined}.
+
 %% Detach the channel: stop monitoring it, forget it, and re-arm the idle
 %% timer (the session is connectionless again and may be abandoned).
-do_detach(#state{channel_mon = Mon} = State) ->
-    demonitor_channel(Mon),
-    refresh_ttl(State#state{channel = undefined, channel_mon = undefined}).
+do_detach(State) ->
+    refresh_ttl(clear_channel(State)).
 
 demonitor_channel(undefined) ->
     ok;
