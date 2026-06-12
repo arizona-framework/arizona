@@ -45,6 +45,11 @@ tools(_State) ->
             title => ~"Echo",
             description => ~"Returns the map-form result with structured content",
             input_schema => #{type => ~"object", properties => #{}}
+        },
+        #{
+            name => ~"count",
+            description => ~"Increments and returns a per-session counter",
+            input_schema => #{type => ~"object", properties => #{}}
         }
     ].
 
@@ -60,7 +65,18 @@ handle_tool(~"echo", Args, State) ->
             content => [#{type => ~"text", text => ~"echo"}],
             structured_content => Args
         },
-        State}.
+        State};
+handle_tool(~"count", Args, State) ->
+    %% Stateful: each call increments the session-held counter, proving the
+    %% returned state threads back. `fail => true` returns the in-band error
+    %% outcome (still advancing the counter), proving the error path threads
+    %% state too.
+    Count = maps:get(count, State, 0) + 1,
+    State1 = State#{count => Count},
+    case Args of
+        #{~"fail" := true} -> {error, integer_to_binary(Count), State1};
+        _ -> {reply, integer_to_binary(Count), State1}
+    end.
 
 resources(_State) ->
     [
@@ -71,7 +87,8 @@ resources(_State) ->
             mime_type => ~"text/plain"
         },
         #{uri => ~"mem://locked", name => ~"locked"},
-        #{uri => ~"mem://structured", name => ~"structured"}
+        #{uri => ~"mem://structured", name => ~"structured"},
+        #{uri => ~"mem://counter", name => ~"counter"}
     ].
 
 read_resource(~"mem://greeting", State) ->
@@ -81,7 +98,12 @@ read_resource(~"mem://locked", State) ->
 read_resource(~"mem://structured", State) ->
     %% Map form: the app supplies its own content entries verbatim.
     Contents = [#{uri => ~"mem://structured", mime_type => ~"text/plain", text => ~"raw"}],
-    {reply, #{contents => Contents}, State}.
+    {reply, #{contents => Contents}, State};
+read_resource(~"mem://counter", State) ->
+    %% Stateful read: increments and returns the session counter, proving a
+    %% resource read threads its returned state back too.
+    Count = maps:get(count, State, 0) + 1,
+    {reply, integer_to_binary(Count), State#{count => Count}}.
 
 prompts(_State) ->
     [
@@ -90,7 +112,8 @@ prompts(_State) ->
             description => ~"Greet someone by name",
             arguments => [#{name => ~"who", description => ~"who to greet", required => true}]
         },
-        #{name => ~"deny", description => ~"Always fails"}
+        #{name => ~"deny", description => ~"Always fails"},
+        #{name => ~"count", description => ~"Increments and returns a per-session counter"}
     ].
 
 get_prompt(~"greet", Args, State) ->
@@ -104,7 +127,13 @@ get_prompt(~"greet", Args, State) ->
         },
         State};
 get_prompt(~"deny", _Args, State) ->
-    {error, ~"prompt denied", State}.
+    {error, ~"prompt denied", State};
+get_prompt(~"count", _Args, State) ->
+    %% Stateful get: increments and returns the session counter, proving a
+    %% prompt get threads its returned state back too.
+    Count = maps:get(count, State, 0) + 1,
+    Message = #{role => ~"user", content => #{type => ~"text", text => integer_to_binary(Count)}},
+    {reply, #{messages => [Message]}, State#{count => Count}}.
 
 channels(_State) ->
     [mcp_test_channel].

@@ -10,6 +10,7 @@
     dispatch_tools_call_success/1,
     dispatch_tools_call_structured/1,
     dispatch_tools_call_tool_error/1,
+    dispatch_tools_call_stateless_no_accumulate/1,
     dispatch_tools_call_unknown_tool/1,
     dispatch_tools_call_missing_name/1,
     dispatch_unknown_method/1,
@@ -53,6 +54,7 @@ all() ->
         dispatch_tools_call_success,
         dispatch_tools_call_structured,
         dispatch_tools_call_tool_error,
+        dispatch_tools_call_stateless_no_accumulate,
         dispatch_tools_call_unknown_tool,
         dispatch_tools_call_missing_name,
         dispatch_unknown_method,
@@ -112,13 +114,15 @@ dispatch_ping(_Config) ->
 
 dispatch_tools_list(_Config) ->
     {reply, #{~"result" := #{~"tools" := Tools}}} = dispatch(~"tools/list", #{}, 3),
-    ?assertEqual([~"add", ~"boom", ~"crash", ~"echo"], [maps:get(~"name", T) || T <- Tools]),
+    ?assertEqual(
+        [~"add", ~"boom", ~"crash", ~"echo", ~"count"], [maps:get(~"name", T) || T <- Tools]
+    ),
     [Add | _] = Tools,
     %% input_schema is renamed to the wire's inputSchema.
     ?assertMatch(#{~"inputSchema" := #{type := ~"object"}}, Add),
     ?assertNot(maps:is_key(~"input_schema", Add)),
     %% A tool's optional title passes through to the wire.
-    Echo = lists:last(Tools),
+    [Echo] = [T || T <- Tools, maps:get(~"name", T) =:= ~"echo"],
     ?assertEqual(~"Echo", maps:get(~"title", Echo)).
 
 dispatch_tools_call_success(_Config) ->
@@ -149,6 +153,13 @@ dispatch_tools_call_tool_error(_Config) ->
         Result
     ).
 
+dispatch_tools_call_stateless_no_accumulate(_Config) ->
+    %% Stateless mode rebuilds state from init/1 each request, so a stateful
+    %% tool never accumulates -- both calls see a fresh counter at 1.
+    Params = #{~"name" => ~"count", ~"arguments" => #{}},
+    ?assertEqual(~"1", stateless_count(Params, 40)),
+    ?assertEqual(~"1", stateless_count(Params, 41)).
+
 dispatch_tools_call_unknown_tool(_Config) ->
     Params = #{~"name" => ~"nope", ~"arguments" => #{}},
     {error, #{~"error" := #{~"code" := Code}}} = dispatch(~"tools/call", Params, 6),
@@ -171,7 +182,7 @@ dispatch_notifications_initialized(_Config) ->
 dispatch_resources_list(_Config) ->
     {reply, #{~"result" := #{~"resources" := Resources}}} = dispatch(~"resources/list", #{}, 20),
     ?assertEqual(
-        [~"mem://greeting", ~"mem://locked", ~"mem://structured"],
+        [~"mem://greeting", ~"mem://locked", ~"mem://structured", ~"mem://counter"],
         [maps:get(~"uri", R) || R <- Resources]
     ),
     [Greeting | _] = Resources,
@@ -220,7 +231,7 @@ dispatch_resources_unsupported(_Config) ->
 
 dispatch_prompts_list(_Config) ->
     {reply, #{~"result" := #{~"prompts" := Prompts}}} = dispatch(~"prompts/list", #{}, 30),
-    ?assertEqual([~"greet", ~"deny"], [maps:get(~"name", P) || P <- Prompts]),
+    ?assertEqual([~"greet", ~"deny", ~"count"], [maps:get(~"name", P) || P <- Prompts]),
     [Greet | _] = Prompts,
     %% Prompt argument metadata passes through (atom keys until JSON encode).
     ?assertMatch([#{name := ~"who", required := true}], maps:get(~"arguments", Greet)).
@@ -326,6 +337,12 @@ handle_tool_crash_internal_error(_Config) ->
 
 dispatch(Method, Params, Id) ->
     dispatch_on(?SERVER, Method, Params, Id).
+
+%% Dispatch a `tools/call` statelessly and return the reply's counter text.
+stateless_count(Params, Id) ->
+    {reply, #{~"result" := #{~"content" := [#{~"text" := Text}]}}} =
+        dispatch(~"tools/call", Params, Id),
+    Text.
 
 dispatch_on(Mod, Method, Params, Id) ->
     Request = #{method => Method, params => Params, id => Id},

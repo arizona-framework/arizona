@@ -50,13 +50,21 @@ never reaching `handle_tool/3`.
 
 ## State
 
-`init/1` is the state constructor. In **stateless** mode the transport
-calls it per request and discards the returned state. In **session** mode
-(a route with `sessions => true`) it runs once on `initialize` and the
-state lives in the session process, read by that session's later requests.
-The state is not yet mutated by method calls -- threading a stateful
-callback's returned state back into the session is a later refinement, and
-the callback contract here does not change when it lands.
+`init/1` is the state constructor; `handle_tool/3`, `read_resource/2`, and
+`get_prompt/3` each return a new state alongside their result.
+
+In **session** mode (a route with `sessions => true`) `init/1` runs once on
+`initialize` and the state lives in the session process. Each callback's
+returned state threads back into the session, so a `tools/call` that
+increments a counter is visible to the session's next request -- the session
+is genuinely stateful. The new state carries back whether the callback
+succeeded (`{reply, ...}`) or failed in-band (`{error, ...}`), since a
+ran-but-failed callback may have mutated state legitimately; only a *crash*
+(a `-32603`) discards it, leaving the prior state intact.
+
+In **stateless** mode the transport calls `init/1` per request and discards
+the returned state, so the threaded-back state does not persist across
+requests -- every request starts from a fresh `init/1`.
 
 ## Server-initiated notifications
 

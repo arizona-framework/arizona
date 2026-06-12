@@ -174,8 +174,10 @@ init({SessionId, Session, #{ttl_ms := TtlMs, buffer_max := BufferMax}}) ->
         | {attach_channel, pid(), binary() | undefined},
     Reply :: {reply, map()} | {error, map()} | ok | {error, already_attached}.
 handle_call({dispatch, Method, Params, Id}, _From, #state{session = Session} = State) ->
-    Outcome = safe_handle_method(Method, Params, Id, Session),
-    {reply, Outcome, refresh_ttl(State)};
+    %% A stateful callback's returned state threads back here: store the
+    %% updated session so this session's later requests see it.
+    {Outcome, Session1} = safe_handle_method(Method, Params, Id, Session),
+    {reply, Outcome, refresh_ttl(State#state{session = Session1})};
 handle_call({attach_channel, ChannelPid, LastEventId}, _From, State) ->
     case channel_alive(State) of
         true ->
@@ -227,14 +229,15 @@ terminate(Reason, #state{id = SessionId, session = #{mod := Mod, state := Handle
 
 %% Guard a method against a crashing tool/resource/prompt: the session must
 %% survive a bad request, answering with a JSON-RPC `-32603` rather than
-%% dying (which would silently drop the whole session).
+%% dying (which would silently drop the whole session). A crash discards any
+%% partial state, so the unchanged session is threaded back.
 safe_handle_method(Method, Params, Id, Session) ->
     try
         arizona_mcp_handler:handle_method(Method, Params, Id, Session)
     catch
         Class:Reason:Stacktrace ->
             logger:error("MCP session dispatch crashed: ~ts:~tp~n~tp", [Class, Reason, Stacktrace]),
-            {error, arizona_jsonrpc:error(Id, -32603, ~"Internal error")}
+            {{error, arizona_jsonrpc:error(Id, -32603, ~"Internal error")}, Session}
     end.
 
 %% Subscribe to the handler's declared pubsub channels (if it exports

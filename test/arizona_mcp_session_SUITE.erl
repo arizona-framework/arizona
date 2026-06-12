@@ -6,6 +6,11 @@
     lookup_after_start/1,
     lookup_unknown/1,
     dispatch_runs_method/1,
+    state_accumulates_across_calls/1,
+    error_outcome_threads_state/1,
+    crash_preserves_prior_state/1,
+    resource_read_threads_state/1,
+    prompt_get_threads_state/1,
     stop_removes_registration/1,
     stale_pid_is_swept/1,
     idle_ttl_terminates/1,
@@ -28,6 +33,11 @@ all() ->
         lookup_after_start,
         lookup_unknown,
         dispatch_runs_method,
+        state_accumulates_across_calls,
+        error_outcome_threads_state,
+        crash_preserves_prior_state,
+        resource_read_threads_state,
+        prompt_get_threads_state,
         stop_removes_registration,
         stale_pid_is_swept,
         idle_ttl_terminates,
@@ -72,6 +82,47 @@ dispatch_runs_method(_Config) ->
         arizona_mcp_session:dispatch(Pid, ~"tools/list", #{}, 1),
     ?assert(lists:member(~"add", [maps:get(~"name", T) || T <- Tools])),
     ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 2)).
+
+state_accumulates_across_calls(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% The fixture's `count` tool increments a session-held counter and returns
+    %% it; across calls on the same session the value accumulates, proving the
+    %% callback's returned state threads back into the session.
+    ?assertEqual({false, ~"1"}, count_call(Pid, 1, #{})),
+    ?assertEqual({false, ~"2"}, count_call(Pid, 2, #{})),
+    ?assertEqual({false, ~"3"}, count_call(Pid, 3, #{})).
+
+error_outcome_threads_state(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% A `count` call that fails in-band (isError true) still advances the
+    %% session counter, so the next call continues from it -- the error path
+    %% threads state, not just the success path.
+    ?assertEqual({false, ~"1"}, count_call(Pid, 1, #{})),
+    ?assertEqual({true, ~"2"}, count_call(Pid, 2, #{~"fail" => true})),
+    ?assertEqual({false, ~"3"}, count_call(Pid, 3, #{})).
+
+crash_preserves_prior_state(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% A crashing call answers -32603 but must leave the session's prior state
+    %% intact: the next call continues the counter rather than resetting it.
+    ?assertEqual({false, ~"1"}, count_call(Pid, 1, #{})),
+    ?assertMatch(
+        {error, #{~"error" := #{~"code" := -32603}}},
+        arizona_mcp_session:dispatch(Pid, ~"tools/call", #{~"name" => ~"crash"}, 2)
+    ),
+    ?assertEqual({false, ~"2"}, count_call(Pid, 3, #{})).
+
+resource_read_threads_state(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% A stateful resource read threads its returned state back too.
+    ?assertEqual(~"1", read_counter(Pid, 1)),
+    ?assertEqual(~"2", read_counter(Pid, 2)).
+
+prompt_get_threads_state(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% A stateful prompt get threads its returned state back too.
+    ?assertEqual(~"1", get_counter(Pid, 1)),
+    ?assertEqual(~"2", get_counter(Pid, 2)).
 
 stop_removes_registration(_Config) ->
     {Id, Pid} = start(60000),
@@ -229,6 +280,27 @@ no_more_events() ->
         {mcp_event, _} -> ct:fail(unexpected_event)
     after 100 -> ok
     end.
+
+%% Dispatch the `count` tool with Args; return {IsError, CounterText} from the
+%% reply so a test can assert both the in-band error flag and the value.
+count_call(Pid, Id, Args) ->
+    Params = #{~"name" => ~"count", ~"arguments" => Args},
+    {reply, #{~"result" := #{~"content" := [#{~"text" := Text}], ~"isError" := IsError}}} =
+        arizona_mcp_session:dispatch(Pid, ~"tools/call", Params, Id),
+    {IsError, Text}.
+
+%% Read the stateful `mem://counter` resource and return its counter text.
+read_counter(Pid, Id) ->
+    {reply, #{~"result" := #{~"contents" := [#{~"text" := Text}]}}} =
+        arizona_mcp_session:dispatch(Pid, ~"resources/read", #{~"uri" => ~"mem://counter"}, Id),
+    Text.
+
+%% Get the stateful `count` prompt and return its message counter text. The
+%% message keeps atom keys until the JSON encode at the transport boundary.
+get_counter(Pid, Id) ->
+    {reply, #{~"result" := #{~"messages" := [#{content := #{text := Text}}]}}} =
+        arizona_mcp_session:dispatch(Pid, ~"prompts/get", #{~"name" => ~"count"}, Id),
+    Text.
 
 start(TtlMs) ->
     start(TtlMs, 256).

@@ -192,8 +192,11 @@ dispatch(Mod, #{method := Method, params := Params, id := Id}, _Ctx) ->
             {reply, arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params))};
         _ ->
             %% Stateless: a fresh per-request session sourced from `init/1`.
+            %% Nothing outlives the request, so the threaded-back session is
+            %% discarded -- the next request rebuilds from `init/1`.
             {_ServerInfo, Session} = open_session(Mod, #{}),
-            handle_method(Method, Params, Id, Session)
+            {Outcome, _Session1} = handle_method(Method, Params, Id, Session),
+            Outcome
     end.
 
 %% Build a session from the handler's `init/1`: the server identity plus the
@@ -412,103 +415,127 @@ json(Object) ->
 
 -doc """
 Run one non-initialize MCP method against a session, returning the JSON-RPC
-outcome. `arizona_mcp_session` calls this with its held session;
-`dispatch/3` calls it with an ephemeral one. Session state is read-only
-here -- the new state the stateful callbacks return is not threaded back
-this phase.
+outcome paired with the (possibly updated) session. `arizona_mcp_session`
+calls this with its held session and stores the returned session back, so a
+stateful callback's new state (`handle_tool` / `read_resource` /
+`get_prompt`) carries into the session's later requests; `dispatch/3`
+(stateless) discards the returned session. Methods that run no stateful
+callback (`ping`, the `*/list` reads, an unknown or capability-gated-off
+method) return the session unchanged.
 """.
--spec handle_method(Method, Params, Id, Session) -> {reply, map()} | {error, map()} when
+-spec handle_method(Method, Params, Id, Session) -> {Outcome, Session} when
     Method :: binary(),
     Params :: map(),
     Id :: arizona_jsonrpc:id(),
-    Session :: session().
-handle_method(~"ping", _Params, Id, _Session) ->
-    {reply, arizona_jsonrpc:result(Id, #{})};
-handle_method(~"tools/list", _Params, Id, #{mod := Mod, state := State}) ->
+    Session :: session(),
+    Outcome :: {reply, map()} | {error, map()}.
+handle_method(~"ping", _Params, Id, Session) ->
+    {{reply, arizona_jsonrpc:result(Id, #{})}, Session};
+handle_method(~"tools/list", _Params, Id, #{mod := Mod, state := State} = Session) ->
     Tools = [tool_json(Tool) || Tool <- Mod:tools(State)],
-    {reply, arizona_jsonrpc:result(Id, #{~"tools" => Tools})};
+    {{reply, arizona_jsonrpc:result(Id, #{~"tools" => Tools})}, Session};
 handle_method(~"tools/call", Params, Id, Session) ->
     call_tool(Params, Id, Session);
 handle_method(~"resources/list", _Params, Id, Session) ->
-    capability(resources, Id, Session, fun(#{mod := Mod, state := State}) ->
+    capability(resources, Id, Session, fun(#{mod := Mod, state := State} = S) ->
         Resources = [resource_json(Resource) || Resource <- Mod:resources(State)],
-        {reply, arizona_jsonrpc:result(Id, #{~"resources" => Resources})}
+        {{reply, arizona_jsonrpc:result(Id, #{~"resources" => Resources})}, S}
     end);
 handle_method(~"resources/read", Params, Id, Session) ->
     capability(resources, Id, Session, fun(S) -> read_resource(Params, Id, S) end);
 handle_method(~"prompts/list", _Params, Id, Session) ->
-    capability(prompts, Id, Session, fun(#{mod := Mod, state := State}) ->
+    capability(prompts, Id, Session, fun(#{mod := Mod, state := State} = S) ->
         Prompts = [prompt_json(Prompt) || Prompt <- Mod:prompts(State)],
-        {reply, arizona_jsonrpc:result(Id, #{~"prompts" => Prompts})}
+        {{reply, arizona_jsonrpc:result(Id, #{~"prompts" => Prompts})}, S}
     end);
 handle_method(~"prompts/get", Params, Id, Session) ->
     capability(prompts, Id, Session, fun(S) -> get_prompt(Params, Id, S) end);
-handle_method(_Method, _Params, Id, _Session) ->
-    {error, arizona_jsonrpc:error(Id, -32601, ~"Method not found")}.
+handle_method(_Method, _Params, Id, Session) ->
+    method_not_found(Id, Session).
 
 %% An optional capability (resources/prompts) is served only when the server
-%% advertised it at initialize; otherwise the method does not exist.
+%% advertised it at initialize; otherwise the method does not exist. The gated
+%% path runs no callback, so it returns the session unchanged.
 capability(Capability, Id, #{caps := Caps} = Session, Fun) ->
     case Caps of
         #{Capability := _} -> Fun(Session);
-        _ -> {error, arizona_jsonrpc:error(Id, -32601, ~"Method not found")}
+        _ -> method_not_found(Id, Session)
     end.
 
+%% The shared "method not found" outcome: an unknown method, or a method
+%% gated behind an unadvertised capability. No callback ran, so the session
+%% threads back unchanged.
+method_not_found(Id, Session) ->
+    {{error, arizona_jsonrpc:error(Id, -32601, ~"Method not found")}, Session}.
+
 %% Resolve a required string param against the list of declared names, then
-%% dispatch. A missing or non-binary param runs `Missing` (a `-32602` error
-%% producer); a value absent from `Declared` runs `NotFound`; a declared
-%% value runs `Found`. Shared by tools/call, resources/read, prompts/get.
-with_member(Params, Key, Declared, Missing, NotFound, Found) ->
+%% dispatch, threading the session through. Only the `Found` branch can mutate
+%% state -- a missing param (`Missing`, a `-32602` producer) or an undeclared
+%% value (`NotFound`) ran no callback, so they pair their error with the
+%% unchanged `Session`. Shared by tools/call, resources/read, prompts/get.
+with_member(Params, Key, Declared, Session, Missing, NotFound, Found) ->
     case Params of
         #{Key := Value} when is_binary(Value) ->
             case lists:member(Value, Declared) of
                 true -> Found(Value);
-                false -> {error, NotFound(Value)}
+                false -> {{error, NotFound(Value)}, Session}
             end;
         _ ->
-            {error, Missing()}
+            {{error, Missing()}, Session}
     end.
 
-call_tool(Params, Id, #{mod := Mod, state := State}) ->
+call_tool(Params, Id, #{mod := Mod, state := State} = Session) ->
     with_member(
         Params,
         ~"name",
         [N || #{name := N} <- Mod:tools(State)],
+        Session,
         fun() -> arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing tool name") end,
         fun(Name) -> arizona_jsonrpc:error(Id, -32602, <<"Unknown tool: ", Name/binary>>) end,
         fun(Name) ->
             Args = maps:get(~"arguments", Params, #{}),
-            tool_reply(Mod:handle_tool(Name, Args, State), Id)
+            tool_reply(Mod:handle_tool(Name, Args, State), Id, Session)
         end
     ).
 
-read_resource(Params, Id, #{mod := Mod, state := State}) ->
+read_resource(Params, Id, #{mod := Mod, state := State} = Session) ->
     with_member(
         Params,
         ~"uri",
         [U || #{uri := U} <- Mod:resources(State)],
+        Session,
         fun() -> arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing resource uri") end,
         fun(Uri) -> arizona_jsonrpc:error(Id, -32002, <<"Resource not found: ", Uri/binary>>) end,
-        fun(Uri) -> resource_contents(Mod:read_resource(Uri, State), Uri, Id) end
+        fun(Uri) -> resource_contents(Mod:read_resource(Uri, State), Uri, Id, Session) end
     ).
 
-get_prompt(Params, Id, #{mod := Mod, state := State}) ->
+get_prompt(Params, Id, #{mod := Mod, state := State} = Session) ->
     with_member(
         Params,
         ~"name",
         [N || #{name := N} <- Mod:prompts(State)],
+        Session,
         fun() -> arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing prompt name") end,
         fun(Name) -> arizona_jsonrpc:error(Id, -32602, <<"Unknown prompt: ", Name/binary>>) end,
         fun(Name) ->
             Args = maps:get(~"arguments", Params, #{}),
-            prompt_messages(Mod:get_prompt(Name, Args, State), Id)
+            prompt_messages(Mod:get_prompt(Name, Args, State), Id, Session)
         end
     ).
 
-tool_reply({reply, Result, _State}, Id) ->
-    {reply, arizona_jsonrpc:result(Id, tool_content(Result, false))};
-tool_reply({error, ToolError, _State}, Id) ->
-    {reply, arizona_jsonrpc:result(Id, tool_content(ToolError, true))}.
+%% The callback ran -- thread its returned state back into the session whether
+%% it succeeded or failed in-band, since a failed-but-ran tool may have
+%% legitimately mutated state. Both kinds become a `tools/call` result; the
+%% MCP `isError` flag inside distinguishes them.
+tool_reply({reply, Result, NewState}, Id, Session) ->
+    reply_with_state(tool_content(Result, false), Id, Session, NewState);
+tool_reply({error, ToolError, NewState}, Id, Session) ->
+    reply_with_state(tool_content(ToolError, true), Id, Session, NewState).
+
+%% Wrap a result object as a `{reply, _}` outcome paired with the session
+%% carrying the callback's returned state.
+reply_with_state(ResultObject, Id, Session, NewState) ->
+    {{reply, arizona_jsonrpc:result(Id, ResultObject)}, Session#{state := NewState}}.
 
 %% --------------------------------------------------------------------
 %% Internal functions - wire shaping
@@ -553,23 +580,24 @@ resource_json(#{uri := Uri, name := Name} = Resource) ->
     maybe_put(~"mimeType", mime_type, Resource, WithDescription).
 
 %% A bare binary becomes one text entry keyed by the requested uri; a map
-%% supplies its content entries verbatim. An `{error, _}` is a -32002.
-resource_contents({reply, Text, _State}, Uri, Id) when is_binary(Text) ->
+%% supplies its content entries verbatim. An `{error, _}` is a -32002. Either
+%% way the callback ran, so its returned state threads back into the session.
+resource_contents({reply, Text, NewState}, Uri, Id, Session) when is_binary(Text) ->
     Contents = [#{~"uri" => Uri, ~"text" => Text}],
-    {reply, arizona_jsonrpc:result(Id, #{~"contents" => Contents})};
-resource_contents({reply, #{contents := Contents}, _State}, _Uri, Id) ->
-    {reply, arizona_jsonrpc:result(Id, #{~"contents" => Contents})};
-resource_contents({error, Message, _State}, _Uri, Id) when is_binary(Message) ->
-    {error, arizona_jsonrpc:error(Id, -32002, Message)}.
+    reply_with_state(#{~"contents" => Contents}, Id, Session, NewState);
+resource_contents({reply, #{contents := Contents}, NewState}, _Uri, Id, Session) ->
+    reply_with_state(#{~"contents" => Contents}, Id, Session, NewState);
+resource_contents({error, Message, NewState}, _Uri, Id, Session) when is_binary(Message) ->
+    {{error, arizona_jsonrpc:error(Id, -32002, Message)}, Session#{state := NewState}}.
 
 prompt_json(#{name := Name} = Prompt) ->
     Base = #{~"name" => Name},
     WithDescription = maybe_put(~"description", description, Prompt, Base),
     maybe_put(~"arguments", arguments, Prompt, WithDescription).
 
-prompt_messages({reply, #{messages := Messages} = Result, _State}, Id) ->
+prompt_messages({reply, #{messages := Messages} = Result, NewState}, Id, Session) ->
     Base = #{~"messages" => Messages},
     Object = maybe_put(~"description", description, Result, Base),
-    {reply, arizona_jsonrpc:result(Id, Object)};
-prompt_messages({error, Message, _State}, Id) when is_binary(Message) ->
-    {error, arizona_jsonrpc:error(Id, -32602, Message)}.
+    reply_with_state(Object, Id, Session, NewState);
+prompt_messages({error, Message, NewState}, Id, Session) when is_binary(Message) ->
+    {{error, arizona_jsonrpc:error(Id, -32602, Message)}, Session#{state := NewState}}.
