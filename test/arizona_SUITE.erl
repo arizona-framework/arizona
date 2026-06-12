@@ -798,7 +798,7 @@ list_render_v(Config) when is_list(Config) ->
     ).
 
 list_diff_same_length(Config) when is_list(Config) ->
-    %% Same count, changed values → OP_ITEM_PATCH ops
+    %% Same count, changed values → single OP_UPDATE (plain lists re-render whole)
     Items1 = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
     Items2 = [#{id => 1, text => <<"X">>}, #{id => 2, text => <<"B">>}],
     Bindings0 = #{id => <<"test">>, items => Items1},
@@ -839,11 +839,11 @@ list_diff_same_length(Config) when is_list(Config) ->
         f => <<"test">>
     },
     {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
-    %% Only item 1 changed text from A→X, item 2 unchanged
+    %% Plain lists are unkeyed and re-render whole on any change (keyed
+    %% incremental per-item updates are arizona_stream's job), so a same-length
+    %% content change is a single OP_UPDATE.
     ?assertEqual(1, length(Ops)),
-    [[7, <<"0">>, <<"1">>, InnerOps]] = Ops,
-    %% Inner op should update text of the changed dynamic
-    ?assertEqual(1, length(InnerOps)).
+    [[3, <<"0">>, _HTML]] = Ops.
 
 list_diff_same_length_no_change(Config) when is_list(Config) ->
     %% Same count, same values → no ops

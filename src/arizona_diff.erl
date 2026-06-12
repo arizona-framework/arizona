@@ -20,6 +20,18 @@ op codes:
 ?OP_INSERT, ?OP_REMOVE, ?OP_ITEM_PATCH, ?OP_REPLACE, ?OP_MOVE
 ```
 
+## `?each` list vs. stream diffing
+
+A `?each` over a **plain list** is unkeyed: its items render as bare HTML
+with no `az-key`, so there is no per-item DOM address to patch. Any change
+(item content or list length) therefore re-renders the whole list with a
+single `?OP_UPDATE`; an unchanged list emits nothing.
+
+Use an `arizona_stream` when you need **keyed, incremental** updates --
+per-item `?OP_ITEM_PATCH`/`?OP_INSERT`/`?OP_REMOVE`/`?OP_MOVE` and stable
+item identity (e.g. to preserve a stateful child's state across updates). A
+plain list's full re-render re-mounts any such children.
+
 ## Stream diffing
 
 Streams ship with a queue of pending mutations (`insert`, `delete`,
@@ -452,34 +464,42 @@ diff_list(Az, #{source := Items, template := Tmpl}, #{items := OldItemsList}, Vi
     NewSnap = #{t => ?EACH, items => NewItemsList, template => Tmpl},
     case is_list(OldItemsList) of
         false ->
-            HTML = arizona_render:zip_list_fp(Tmpl, NewItemsList),
-            {[[?OP_UPDATE, Az, HTML]], NewSnap, Views1};
+            full_update(Az, Tmpl, NewItemsList, NewSnap, Views1);
         true ->
-            {Ops, NewTail, OldTail, Views2} =
-                diff_list_zip(Az, NewItemsList, OldItemsList, Views1),
-            case {NewTail, OldTail} of
-                {[], []} ->
-                    {Ops, NewSnap, Views2};
+            {Changed, NewTail, OldTail, Views2} =
+                diff_list_zip(NewItemsList, OldItemsList, Views1),
+            %% Empty tails + nothing changed = an identical list -> no op. Any
+            %% content or length change re-renders the whole list: a plain list
+            %% is unkeyed (no per-item `az-key` to address -- that is what
+            %% `arizona_stream` is for), so the only correct patch is a single
+            %% `?OP_UPDATE` of the container's content.
+            case {Changed, NewTail, OldTail} of
+                {false, [], []} ->
+                    {[], NewSnap, Views2};
                 _ ->
-                    HTML = arizona_render:zip_list_fp(Tmpl, NewItemsList),
-                    {[[?OP_UPDATE, Az, HTML]], NewSnap, Views2}
+                    full_update(Az, Tmpl, NewItemsList, NewSnap, Views2)
             end
     end.
 
-diff_list_zip(Az, [NewD | NR], [OldD | OR], Views0) ->
+full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
+    HTML = arizona_render:zip_list_fp(Tmpl, NewItemsList),
+    {[[?OP_UPDATE, Az, HTML]], NewSnap, Views}.
+
+%% Walk new/old item dynamics in lockstep to detect whether any item changed and
+%% to thread child views through. Returns `Changed` plus the leftover tails, so
+%% the caller can also see a length change (a non-empty tail). No per-item ops
+%% are produced -- plain-list updates are a full re-render (see `diff_list/4`).
+diff_list_zip([NewD | NR], [OldD | OR], Views0) ->
     {InnerOps, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
-    {RestOps, NewTail, OldTail, Views2} = diff_list_zip(Az, NR, OR, Views1),
-    Ops =
+    {RestChanged, NewTail, OldTail, Views2} = diff_list_zip(NR, OR, Views1),
+    Changed =
         case InnerOps of
-            [] ->
-                RestOps;
-            _ ->
-                [{_, OldKey, _} | _] = OldD,
-                [[?OP_ITEM_PATCH, Az, arizona_template:to_bin(OldKey), InnerOps] | RestOps]
+            [] -> RestChanged;
+            _ -> true
         end,
-    {Ops, NewTail, OldTail, Views2};
-diff_list_zip(_Az, NewTail, OldTail, Views) ->
-    {[], NewTail, OldTail, Views}.
+    {Changed, NewTail, OldTail, Views2};
+diff_list_zip(NewTail, OldTail, Views) ->
+    {false, NewTail, OldTail, Views}.
 
 smart_reset_items(_Az, [], _Kept, _OldItems, _ItemsMap, _Tmpl, Views, Snaps) ->
     {[], Snaps, Views};
