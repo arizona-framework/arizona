@@ -24,6 +24,13 @@ protocol contract holds even when a tool raises.
 
 -export([handle/1]).
 -export([dispatch/3]).
+-export([handle_method/4]).
+
+%% --------------------------------------------------------------------
+%% Types exports
+%% --------------------------------------------------------------------
+
+-export_type([session/0]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -34,6 +41,19 @@ protocol contract holds even when a tool raises.
 -ignore_xref([dispatch/3]).
 
 %% --------------------------------------------------------------------
+%% Types definitions
+%% --------------------------------------------------------------------
+
+%% The dispatch context: the handler module, its state, and the capabilities
+%% negotiated at initialize. `arizona_mcp_session` holds one across a
+%% stateful connection; `dispatch/3` builds an ephemeral one per request.
+-type session() :: #{
+    mod := module(),
+    state := arizona_mcp:state(),
+    caps := arizona_mcp:capabilities()
+}.
+
+%% --------------------------------------------------------------------
 %% Macros
 %% --------------------------------------------------------------------
 
@@ -42,25 +62,49 @@ protocol contract holds even when a tool raises.
 -define(PREFERRED_VERSION, ~"2025-11-25").
 -define(SUPPORTED_VERSIONS, [~"2025-11-25", ~"2025-06-18", ~"2025-03-26"]).
 
+%% Idle teardown for a stateful session, overridable via the route's
+%% `session_ttl_ms` opt. Five minutes is generous for an interactive agent.
+-define(DEFAULT_TTL_MS, 300000).
+
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
 -doc """
 Roadrunner `handle/1` callback. Serves the MCP endpoint: a JSON-RPC POST
-returns a buffered `application/json` reply; other methods return `405`.
+returns a buffered `application/json` reply. When sessions are enabled,
+`DELETE` tears a session down; otherwise non-POST methods return `405`.
 """.
 -spec handle(Req) -> {Response, Req} when
     Req :: roadrunner_req:request(),
     Response :: roadrunner_handler:response().
 handle(Req) ->
     #{arizona := Opts} = roadrunner_req:state(Req),
-    case roadrunner_req:method(Req) of
-        ~"POST" ->
-            {handle_post(Req, Opts), Req};
-        _ ->
-            {roadrunner_resp:add_header(roadrunner_resp:status(405), ~"allow", ~"POST"), Req}
-    end.
+    {serve(roadrunner_req:method(Req), Req, Opts), Req}.
+
+%% POST is always served. DELETE tears a session down when sessions are
+%% enabled. Everything else is method-not-allowed (the server-to-client GET
+%% stream is a later phase).
+serve(~"POST", Req, Opts) ->
+    handle_post(Req, Opts);
+serve(~"DELETE", Req, Opts) ->
+    case sessions_enabled(Opts) of
+        true -> handle_delete(Req);
+        false -> method_not_allowed(Opts)
+    end;
+serve(_Method, _Req, Opts) ->
+    method_not_allowed(Opts).
+
+sessions_enabled(Opts) ->
+    maps:get(sessions, Opts, false).
+
+method_not_allowed(Opts) ->
+    Allow =
+        case sessions_enabled(Opts) of
+            true -> ~"POST, DELETE";
+            false -> ~"POST"
+        end,
+    roadrunner_resp:add_header(roadrunner_resp:status(405), ~"allow", Allow).
 
 -doc """
 Pure MCP method dispatch. Maps a decoded JSON-RPC request and the app's
@@ -80,9 +124,42 @@ dispatch(Mod, #{method := Method, params := Params, id := Id}, _Ctx) ->
     case Id of
         %% A JSON-RPC notification (no id) is accepted and never answered,
         %% whatever its method -- `notifications/initialized` included.
-        undefined -> notification;
-        _ -> request(Method, Params, Id, Mod)
+        undefined ->
+            notification;
+        _ when Method =:= ~"initialize" ->
+            {ServerInfo, #{caps := Caps}} = open_session(Mod, Params),
+            {reply, arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params))};
+        _ ->
+            %% Stateless: a fresh per-request session sourced from `init/1`.
+            {_ServerInfo, Session} = open_session(Mod, #{}),
+            handle_method(Method, Params, Id, Session)
     end.
+
+%% Build a session from the handler's `init/1`: the server identity plus the
+%% state and negotiated capabilities the methods run against. The session map
+%% is what `arizona_mcp_session` holds for a stateful (`Mcp-Session-Id`)
+%% connection; `dispatch/3` builds an ephemeral one per request.
+-spec open_session(Mod, InitParams) -> {ServerInfo, Session} when
+    Mod :: module(),
+    InitParams :: arizona_mcp:init_params(),
+    ServerInfo :: arizona_mcp:server_info(),
+    Session :: session().
+open_session(Mod, InitParams) ->
+    {ok, ServerInfo, Caps, State} = Mod:init(InitParams),
+    {ServerInfo, #{mod => Mod, state => State, caps => Caps}}.
+
+%% Build the `initialize` result: negotiated protocol version, advertised
+%% capabilities, and the server identity.
+-spec initialize_result(ServerInfo, Caps, Params) -> map() when
+    ServerInfo :: arizona_mcp:server_info(),
+    Caps :: arizona_mcp:capabilities(),
+    Params :: map().
+initialize_result(ServerInfo, Caps, Params) ->
+    #{
+        ~"protocolVersion" => negotiate_version(Params),
+        ~"capabilities" => Caps,
+        ~"serverInfo" => server_info_json(ServerInfo)
+    }.
 
 %% --------------------------------------------------------------------
 %% Internal functions - transport
@@ -92,7 +169,10 @@ handle_post(Req, Opts) ->
     case check_origin(Req, Opts) of
         ok ->
             Body = iolist_to_binary(roadrunner_req:body(Req)),
-            reply(Body, Opts);
+            case sessions_enabled(Opts) of
+                false -> reply_stateless(Body, Opts);
+                true -> reply_session(Body, Req, Opts)
+            end;
         forbidden ->
             roadrunner_resp:forbidden()
     end.
@@ -112,7 +192,9 @@ check_origin(Req, Opts) ->
             end
     end.
 
-reply(Body, Opts) ->
+%% Stateless mode: every request is self-contained -- decode, dispatch
+%% against a fresh per-request session, encode. No `Mcp-Session-Id`.
+reply_stateless(Body, Opts) ->
     case arizona_jsonrpc:decode(Body) of
         {error, parse_error} ->
             json(arizona_jsonrpc:error(null, -32700, ~"Parse error"));
@@ -122,6 +204,65 @@ reply(Body, Opts) ->
             #{handler := Mod} = Opts,
             reply_dispatch(Mod, Request)
     end.
+
+%% Session mode: `initialize` opens a session and returns its id; every
+%% other request is routed to the session named by `Mcp-Session-Id`.
+reply_session(Body, Req, Opts) ->
+    case arizona_jsonrpc:decode(Body) of
+        {error, parse_error} ->
+            json(arizona_jsonrpc:error(null, -32700, ~"Parse error"));
+        {error, invalid_request} ->
+            json(arizona_jsonrpc:error(null, -32600, ~"Invalid Request"));
+        {ok, #{method := Method, params := Params, id := Id} = Request} ->
+            case Id of
+                undefined -> roadrunner_resp:status(202);
+                _ when Method =:= ~"initialize" -> session_initialize(Params, Id, Opts);
+                _ -> session_request(Method, Params, Id, Request, Req)
+            end
+    end.
+
+session_initialize(Params, Id, #{handler := Mod} = Opts) ->
+    {ServerInfo, #{caps := Caps} = Session} = open_session(Mod, Params),
+    SessionId = generate_session_id(),
+    TtlMs = maps:get(session_ttl_ms, Opts, ?DEFAULT_TTL_MS),
+    {ok, _Pid} = arizona_mcp_sup:start_session(SessionId, Session, TtlMs),
+    Result = arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params)),
+    roadrunner_resp:add_header(json(Result), ~"mcp-session-id", SessionId).
+
+session_request(Method, Params, Id, Request, Req) ->
+    case roadrunner_req:header(~"mcp-session-id", Req) of
+        undefined ->
+            json(arizona_jsonrpc:error(reply_id(Request), -32600, ~"Missing Mcp-Session-Id"));
+        SessionId ->
+            case arizona_mcp_session_registry:lookup(SessionId) of
+                {ok, Pid} ->
+                    {_Tag, Object} = arizona_mcp_session:dispatch(Pid, Method, Params, Id),
+                    json(Object);
+                error ->
+                    %% Unknown or expired session: the client should re-initialize.
+                    roadrunner_resp:json(
+                        404, arizona_jsonrpc:error(Id, -32600, ~"Unknown or expired session")
+                    )
+            end
+    end.
+
+handle_delete(Req) ->
+    case roadrunner_req:header(~"mcp-session-id", Req) of
+        undefined ->
+            roadrunner_resp:bad_request();
+        SessionId ->
+            case arizona_mcp_session_registry:lookup(SessionId) of
+                {ok, Pid} ->
+                    ok = arizona_mcp_session:stop(Pid),
+                    roadrunner_resp:no_content();
+                error ->
+                    roadrunner_resp:not_found()
+            end
+    end.
+
+%% A URL-safe, unguessable session id: 128 bits of CSPRNG output as hex.
+generate_session_id() ->
+    binary:encode_hex(crypto:strong_rand_bytes(16), lowercase).
 
 reply_dispatch(Mod, Request) ->
     try dispatch(Mod, Request, #{}) of
@@ -148,45 +289,47 @@ json(Object) ->
 %% Internal functions - MCP methods
 %% --------------------------------------------------------------------
 
-request(~"initialize", Params, Id, Mod) ->
-    {ok, ServerInfo, Capabilities, _State} = Mod:init(Params),
-    Result = #{
-        ~"protocolVersion" => negotiate_version(Params),
-        ~"capabilities" => Capabilities,
-        ~"serverInfo" => server_info_json(ServerInfo)
-    },
-    {reply, arizona_jsonrpc:result(Id, Result)};
-request(~"ping", _Params, Id, _Mod) ->
+-doc """
+Run one non-initialize MCP method against a session, returning the JSON-RPC
+outcome. `arizona_mcp_session` calls this with its held session;
+`dispatch/3` calls it with an ephemeral one. Session state is read-only
+here -- the new state the stateful callbacks return is not threaded back
+this phase.
+""".
+-spec handle_method(Method, Params, Id, Session) -> {reply, map()} | {error, map()} when
+    Method :: binary(),
+    Params :: map(),
+    Id :: arizona_jsonrpc:id(),
+    Session :: session().
+handle_method(~"ping", _Params, Id, _Session) ->
     {reply, arizona_jsonrpc:result(Id, #{})};
-request(~"tools/list", _Params, Id, Mod) ->
-    {ok, _ServerInfo, _Capabilities, State} = Mod:init(#{}),
+handle_method(~"tools/list", _Params, Id, #{mod := Mod, state := State}) ->
     Tools = [tool_json(Tool) || Tool <- Mod:tools(State)],
     {reply, arizona_jsonrpc:result(Id, #{~"tools" => Tools})};
-request(~"tools/call", Params, Id, Mod) ->
-    call_tool(Params, Id, Mod);
-request(~"resources/list", _Params, Id, Mod) ->
-    with_capability(resources, Mod, Id, fun(State) ->
+handle_method(~"tools/call", Params, Id, Session) ->
+    call_tool(Params, Id, Session);
+handle_method(~"resources/list", _Params, Id, Session) ->
+    capability(resources, Id, Session, fun(#{mod := Mod, state := State}) ->
         Resources = [resource_json(Resource) || Resource <- Mod:resources(State)],
         {reply, arizona_jsonrpc:result(Id, #{~"resources" => Resources})}
     end);
-request(~"resources/read", Params, Id, Mod) ->
-    with_capability(resources, Mod, Id, fun(State) -> read_resource(Params, Id, Mod, State) end);
-request(~"prompts/list", _Params, Id, Mod) ->
-    with_capability(prompts, Mod, Id, fun(State) ->
+handle_method(~"resources/read", Params, Id, Session) ->
+    capability(resources, Id, Session, fun(S) -> read_resource(Params, Id, S) end);
+handle_method(~"prompts/list", _Params, Id, Session) ->
+    capability(prompts, Id, Session, fun(#{mod := Mod, state := State}) ->
         Prompts = [prompt_json(Prompt) || Prompt <- Mod:prompts(State)],
         {reply, arizona_jsonrpc:result(Id, #{~"prompts" => Prompts})}
     end);
-request(~"prompts/get", Params, Id, Mod) ->
-    with_capability(prompts, Mod, Id, fun(State) -> get_prompt(Params, Id, Mod, State) end);
-request(_Method, _Params, Id, _Mod) ->
+handle_method(~"prompts/get", Params, Id, Session) ->
+    capability(prompts, Id, Session, fun(S) -> get_prompt(Params, Id, S) end);
+handle_method(_Method, _Params, Id, _Session) ->
     {error, arizona_jsonrpc:error(Id, -32601, ~"Method not found")}.
 
-%% An optional capability (resources/prompts) is served only when the
-%% server advertised it in `init/1`; otherwise the method does not exist.
-with_capability(Capability, Mod, Id, Fun) ->
-    {ok, _ServerInfo, Capabilities, State} = Mod:init(#{}),
-    case Capabilities of
-        #{Capability := _} -> Fun(State);
+%% An optional capability (resources/prompts) is served only when the server
+%% advertised it at initialize; otherwise the method does not exist.
+capability(Capability, Id, #{caps := Caps} = Session, Fun) ->
+    case Caps of
+        #{Capability := _} -> Fun(Session);
         _ -> {error, arizona_jsonrpc:error(Id, -32601, ~"Method not found")}
     end.
 
@@ -205,8 +348,7 @@ with_member(Params, Key, Declared, Missing, NotFound, Found) ->
             {error, Missing()}
     end.
 
-call_tool(Params, Id, Mod) ->
-    {ok, _ServerInfo, _Capabilities, State} = Mod:init(#{}),
+call_tool(Params, Id, #{mod := Mod, state := State}) ->
     with_member(
         Params,
         ~"name",
@@ -219,7 +361,7 @@ call_tool(Params, Id, Mod) ->
         end
     ).
 
-read_resource(Params, Id, Mod, State) ->
+read_resource(Params, Id, #{mod := Mod, state := State}) ->
     with_member(
         Params,
         ~"uri",
@@ -229,7 +371,7 @@ read_resource(Params, Id, Mod, State) ->
         fun(Uri) -> resource_contents(Mod:read_resource(Uri, State), Uri, Id) end
     ).
 
-get_prompt(Params, Id, Mod, State) ->
+get_prompt(Params, Id, #{mod := Mod, state := State}) ->
     with_member(
         Params,
         ~"name",

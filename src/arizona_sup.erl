@@ -2,12 +2,13 @@
 -moduledoc """
 Top-level supervisor for the Arizona application.
 
-Always supervises `arizona_pubsub` (the `pg`-based pubsub scope). Also
-supervises one `arizona_watcher` per rule when the dev-mode reloader is
-enabled via the `reloader` application env. Live processes are not
-managed here -- they're started ad hoc by the transport layer
-(`arizona_socket:init/4`) and linked to the calling WebSocket process
-so they share its lifetime.
+Always supervises `arizona_pubsub` (the `pg`-based pubsub scope) and
+`arizona_mcp_sup` (the MCP session supervisor, which owns the session
+registry and starts per-session processes on demand). Also supervises one
+`arizona_watcher` per rule when the dev-mode reloader is enabled via the
+`reloader` application env. Live processes are not managed here -- they're
+started ad hoc by the transport layer (`arizona_socket:init/4`) and linked
+to the calling WebSocket process so they share its lifetime.
 
 ## Reloader config
 
@@ -64,7 +65,7 @@ start_link() ->
     ChildSpec :: supervisor:child_spec().
 init(#{}) ->
     Reloader = application:get_env(arizona, reloader, #{}),
-    Children = [pubsub_spec() | watcher_specs(Reloader)],
+    Children = [pubsub_spec(), mcp_sup_spec() | watcher_specs(Reloader)],
     {ok, {#{strategy => one_for_one}, Children}}.
 
 %% --------------------------------------------------------------------
@@ -76,6 +77,16 @@ pubsub_spec() ->
         id => arizona_pubsub,
         start => {arizona_pubsub, start_link, []},
         type => worker
+    }.
+
+%% Always supervised: the MCP session supervisor owns the session registry
+%% (ETS) and starts per-session processes on demand. An idle supervisor with
+%% an empty table costs nothing when no MCP route is configured.
+mcp_sup_spec() ->
+    #{
+        id => arizona_mcp_sup,
+        start => {arizona_mcp_sup, start_link, []},
+        type => supervisor
     }.
 
 watcher_specs(#{enabled := true, rules := Rules}) when is_list(Rules) ->

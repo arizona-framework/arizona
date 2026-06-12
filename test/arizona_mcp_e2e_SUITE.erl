@@ -10,7 +10,15 @@
     post_resources_read/1,
     post_prompts_get/1,
     get_returns_405/1,
-    post_disallowed_origin_403/1
+    post_disallowed_origin_403/1,
+    session_initialize_returns_id/1,
+    session_request_uses_session/1,
+    session_delete/1,
+    session_unknown_id_404/1,
+    session_missing_id/1,
+    session_delete_without_id/1,
+    session_tool_crash_survives/1,
+    session_get_405/1
 ]).
 
 -define(LISTENER, arizona_mcp_e2e).
@@ -24,7 +32,15 @@ all() ->
         post_resources_read,
         post_prompts_get,
         get_returns_405,
-        post_disallowed_origin_403
+        post_disallowed_origin_403,
+        session_initialize_returns_id,
+        session_request_uses_session,
+        session_delete,
+        session_unknown_id_404,
+        session_missing_id,
+        session_delete_without_id,
+        session_tool_crash_survives,
+        session_get_405
     ].
 
 init_per_suite(Config) ->
@@ -32,7 +48,11 @@ init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(roadrunner),
     Port = 15050 + erlang:unique_integer([positive, monotonic]) rem 1000,
     Routes = [
-        {mcp, ~"/mcp", arizona_mcp_test_server, #{origins => [?ALLOWED_ORIGIN]}}
+        {mcp, ~"/mcp", arizona_mcp_test_server, #{origins => [?ALLOWED_ORIGIN]}},
+        {mcp, ~"/mcp-session", arizona_mcp_test_server, #{
+            origins => [?ALLOWED_ORIGIN],
+            sessions => true
+        }}
     ],
     {ok, _} = arizona_roadrunner_server:start(?LISTENER, #{
         transport_opts => [{port, Port}],
@@ -132,8 +152,104 @@ post_disallowed_origin_403(Config) ->
     ?assertEqual(403, status_code(Resp)).
 
 %% --------------------------------------------------------------------
+%% Session-mode tests (/mcp-session, sessions => true)
+%% --------------------------------------------------------------------
+
+session_initialize_returns_id(Config) ->
+    Resp = post(Config, "/mcp-session", [], initialize_body()),
+    ?assertEqual(200, status_code(Resp)),
+    ?assert(byte_size(header_value(Resp, ~"mcp-session-id")) > 0).
+
+session_request_uses_session(Config) ->
+    SessionId = open_session(Config),
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+    """,
+    Resp = post(Config, "/mcp-session", session_header(SessionId), Body),
+    ?assertEqual(200, status_code(Resp)),
+    #{~"result" := #{~"tools" := Tools}} = body_json(Resp),
+    ?assert(lists:member(~"add", [maps:get(~"name", T) || T <- Tools])).
+
+session_delete(Config) ->
+    SessionId = open_session(Config),
+    Deleted = request(Config, "DELETE", "/mcp-session", session_header(SessionId), <<>>),
+    ?assertEqual(204, status_code(Deleted)),
+    %% After teardown the session is gone -> 404.
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":3,"method":"ping"}
+    """,
+    Resp = post(Config, "/mcp-session", session_header(SessionId), Body),
+    ?assertEqual(404, status_code(Resp)).
+
+session_unknown_id_404(Config) ->
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":4,"method":"ping"}
+    """,
+    Resp = post(Config, "/mcp-session", session_header(~"deadbeef"), Body),
+    ?assertEqual(404, status_code(Resp)).
+
+session_missing_id(Config) ->
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+    """,
+    Resp = post(Config, "/mcp-session", [], Body),
+    ?assertEqual(200, status_code(Resp)),
+    ?assertMatch(#{~"error" := #{~"code" := -32600}}, body_json(Resp)).
+
+session_delete_without_id(Config) ->
+    Resp = request(Config, "DELETE", "/mcp-session", [], <<>>),
+    ?assertEqual(400, status_code(Resp)).
+
+session_tool_crash_survives(Config) ->
+    SessionId = open_session(Config),
+    Crash =
+        ~"""
+    {"jsonrpc":"2.0","id":2,"method":"tools/call",
+     "params":{"name":"crash","arguments":{}}}
+    """,
+    Crashed = post(Config, "/mcp-session", session_header(SessionId), Crash),
+    ?assertEqual(200, status_code(Crashed)),
+    ?assertMatch(#{~"error" := #{~"code" := -32603}}, body_json(Crashed)),
+    %% The session survived the crashing tool and still serves.
+    Ping =
+        ~"""
+    {"jsonrpc":"2.0","id":3,"method":"ping"}
+    """,
+    Resp = post(Config, "/mcp-session", session_header(SessionId), Ping),
+    ?assertEqual(200, status_code(Resp)),
+    ?assertMatch(#{~"result" := #{}}, body_json(Resp)).
+
+session_get_405(Config) ->
+    Resp = request(Config, "GET", "/mcp-session", [], <<>>),
+    ?assertEqual(405, status_code(Resp)),
+    ?assertNotEqual(nomatch, binary:match(string:lowercase(headers(Resp)), ~"allow: post, delete")).
+
+%% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
+
+open_session(Config) ->
+    Resp = post(Config, "/mcp-session", [], initialize_body()),
+    header_value(Resp, ~"mcp-session-id").
+
+session_header(SessionId) ->
+    [<<"Mcp-Session-Id: ">>, SessionId, <<"\r\n">>].
+
+initialize_body() ->
+    ~"""
+    {"jsonrpc":"2.0","id":1,"method":"initialize",
+     "params":{"protocolVersion":"2025-06-18","capabilities":{}}}
+    """.
+
+%% Extract a response header value (case-insensitive on the name).
+header_value(Resp, Name) ->
+    Pattern = <<"(?i)", Name/binary, ":\\s*([^\r\n]+)">>,
+    {match, [Value]} = re:run(headers(Resp), Pattern, [{capture, [1], binary}]),
+    Value.
 
 post(Config, Path, ExtraHeaders, Body) ->
     request(Config, "POST", Path, ExtraHeaders, Body).

@@ -49,6 +49,7 @@ persistent term so the dev error page can build the SSE connect URL.
 
 -export_type([path/0]).
 -export_type([route/0]).
+-export_type([arizona_mcp_route_opts/0]).
 
 %% --------------------------------------------------------------------
 %% Macros
@@ -73,6 +74,8 @@ persistent term so the dev error page can build the SSE connect URL.
 
 -nominal arizona_mcp_route_opts() :: #{
     origins => [binary()],
+    sessions => boolean(),
+    session_ttl_ms => pos_integer(),
     _ => term()
 }.
 

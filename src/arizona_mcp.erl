@@ -20,7 +20,7 @@ calls back into this module to negotiate the connection and run tools.
   state for `tools/list` / `tools/call`.
 - `tools/1` -- returns the tool metadata advertised by `tools/list`.
 - `handle_tool/3` -- runs one `tools/call`, dispatched by name (the MCP
-  analogue of `arizona_stateful:handle_event/3`).
+  analogue of how `arizona_stateful` dispatches an event by name).
 - `resources/1` + `read_resource/2` -- optional; list and read resources.
 - `prompts/1` + `get_prompt/3` -- optional; list and render prompts.
 - `terminate/2` -- optional cleanup hook.
@@ -46,13 +46,15 @@ A protocol-level fault (unknown method, unknown tool name, malformed
 params) is the transport's concern and surfaces as a JSON-RPC error,
 never reaching `handle_tool/3`.
 
-## State, per phase
+## State
 
-`init/1` is the state constructor. Today the transport is stateless --
-it calls `init/1` per request and discards the returned state after the
-response. When per-session servers land, `init/1` will run once on
-`initialize` and the state will live in the session process across the
-session's requests; the callback contract here does not change.
+`init/1` is the state constructor. In **stateless** mode the transport
+calls it per request and discards the returned state. In **session** mode
+(a route with `sessions => true`) it runs once on `initialize` and the
+state lives in the session process, read by that session's later requests.
+The state is not yet mutated by method calls -- threading a stateful
+callback's returned state back into the session is a later refinement, and
+the callback contract here does not change when it lands.
 """.
 
 %% --------------------------------------------------------------------
