@@ -5,7 +5,7 @@
 
 -export([init/1]).
 -export([tools/1]).
--export([handle_tool/3]).
+-export([handle_tool/4]).
 
 init(_InitParams) ->
     error(intentional_init_crash).
@@ -13,5 +13,5 @@ init(_InitParams) ->
 tools(_State) ->
     [].
 
-handle_tool(_Name, _Args, State) ->
+handle_tool(_Name, _Args, _Ctx, State) ->
     {reply, ~"", State}.

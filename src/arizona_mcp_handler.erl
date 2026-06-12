@@ -27,6 +27,7 @@ protocol contract holds even when a tool raises.
 -export([handle_info/3]).
 -export([dispatch/3]).
 -export([handle_method/4]).
+-export([run_streaming_tool/6]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -149,23 +150,41 @@ method_not_allowed(Opts) ->
     roadrunner_resp:add_header(roadrunner_resp:status(405), ~"allow", Allow).
 
 -doc """
-Roadrunner loop `handle_info/3` callback for the GET SSE channel. Forwards
-server-initiated events from the session to the wire; on client disconnect
-it detaches the channel from the session (which keeps the session alive) and
-stops the loop.
+Roadrunner loop `handle_info/3` callback for the two SSE loops:
+
+- the **GET channel** (`#{session := Pid}`) -- forwards server-initiated events
+  from the session; on client disconnect it detaches from the session (which
+  keeps the session alive) and stops.
+- the **streaming POST** (`#{mcp_post_stream := true}`) -- pushes the running
+  tool's `notifications/progress` as they arrive, then the final result, then
+  stops; a client disconnect just stops the loop.
 """.
 -spec handle_info(Info, Push, State) -> {ok, State} | {stop, State} when
     Info :: term(),
     Push :: roadrunner_handler:push_fun(),
-    State :: #{session := pid()}.
+    State :: #{session := pid()} | #{mcp_post_stream := true}.
 handle_info({mcp_event, Frame}, Push, State) ->
     _ = Push(Frame),
     {ok, State};
+handle_info({mcp_progress, Notification}, Push, State) ->
+    _ = Push(message_frame(Notification)),
+    {ok, State};
+handle_info({mcp_result, Object}, Push, State) ->
+    _ = Push(message_frame(Object)),
+    {stop, State};
 handle_info({roadrunner_disconnect, _Reason}, _Push, #{session := SessionPid} = State) ->
     ok = arizona_mcp_session:detach_channel(SessionPid, self()),
     {stop, State};
+handle_info({roadrunner_disconnect, _Reason}, _Push, #{mcp_post_stream := true} = State) ->
+    {stop, State};
 handle_info(_Info, _Push, State) ->
     {ok, State}.
+
+%% A JSON-RPC message (a progress notification or the final result) framed as a
+%% single SSE `message` event. The streaming POST is request-scoped, so -- unlike
+%% the resumable GET channel -- the events carry no id.
+message_frame(Object) ->
+    roadrunner_sse:event(~"message", iolist_to_binary(json:encode(Object))).
 
 -doc """
 Pure MCP method dispatch. Maps a decoded JSON-RPC request and the app's
@@ -231,9 +250,62 @@ initialize_result(ServerInfo, Caps, Params) ->
 
 handle_post(Req, Opts) ->
     Body = iolist_to_binary(roadrunner_req:body(Req)),
+    case arizona_jsonrpc:decode(Body) of
+        {error, parse_error} ->
+            json(arizona_jsonrpc:error(null, -32700, ~"Parse error"));
+        {error, invalid_request} ->
+            json(arizona_jsonrpc:error(null, -32600, ~"Invalid Request"));
+        {ok, Request} ->
+            serve_request(Request, Req, Opts)
+    end.
+
+%% A `tools/call` carrying a `_meta.progressToken` streams its POST as SSE (the
+%% progress notifications, then the result, then close) -- but only when the
+%% client accepts `text/event-stream`, the Streamable HTTP precondition for an
+%% SSE response. Everything else (and a token-bearing call from a client that
+%% does not accept SSE) is a buffered JSON reply. The streaming decision owns the
+%% response *shape*, so it is made here before the buffered dispatch.
+serve_request(Request, Req, Opts) ->
+    case streaming_progress(Request) of
+        {stream, Call} ->
+            case accepts_sse(Req) of
+                true -> serve_streaming(Call, Req, Opts);
+                false -> serve_buffered(Request, Req, Opts)
+            end;
+        none ->
+            serve_buffered(Request, Req, Opts)
+    end.
+
+%% The client opts into a streamed response by listing `text/event-stream` in
+%% its `Accept`. Absent it, the server must answer with a buffered body.
+accepts_sse(Req) ->
+    case roadrunner_req:header(~"accept", Req) of
+        undefined -> false;
+        Accept -> binary:match(Accept, ~"text/event-stream") =/= nomatch
+    end.
+
+%% Recognise a well-formed token-bearing `tools/call`. A missing/non-binary
+%% name or absent token falls through to the buffered path (which produces the
+%% matching error); declared-ness is checked later, where the handler module is
+%% in hand.
+streaming_progress(#{method := ~"tools/call", id := Id, params := Params}) when
+    Id =/= undefined
+->
+    case Params of
+        #{~"name" := Name, ~"_meta" := #{~"progressToken" := Token}} when is_binary(Name) ->
+            {stream, #{
+                name => Name, args => maps:get(~"arguments", Params, #{}), token => Token, id => Id
+            }};
+        _ ->
+            none
+    end;
+streaming_progress(_Request) ->
+    none.
+
+serve_buffered(Request, Req, Opts) ->
     case sessions_enabled(Opts) of
-        false -> reply_stateless(Body, Opts);
-        true -> reply_session(Body, Req, Opts)
+        false -> reply_stateless(Request, Opts);
+        true -> reply_session(Request, Req, Opts)
     end.
 
 %% A present `Origin` must be in the allowlist; an absent one is allowed
@@ -251,33 +323,18 @@ check_origin(Req, Opts) ->
             end
     end.
 
-%% Stateless mode: every request is self-contained -- decode, dispatch
-%% against a fresh per-request session, encode. No `Mcp-Session-Id`.
-reply_stateless(Body, Opts) ->
-    case arizona_jsonrpc:decode(Body) of
-        {error, parse_error} ->
-            json(arizona_jsonrpc:error(null, -32700, ~"Parse error"));
-        {error, invalid_request} ->
-            json(arizona_jsonrpc:error(null, -32600, ~"Invalid Request"));
-        {ok, Request} ->
-            #{handler := Mod} = Opts,
-            reply_dispatch(Mod, Request)
-    end.
+%% Stateless mode: every request is self-contained -- dispatch against a fresh
+%% per-request session, encode. No `Mcp-Session-Id`.
+reply_stateless(Request, #{handler := Mod}) ->
+    reply_dispatch(Mod, Request).
 
 %% Session mode: `initialize` opens a session and returns its id; every
 %% other request is routed to the session named by `Mcp-Session-Id`.
-reply_session(Body, Req, Opts) ->
-    case arizona_jsonrpc:decode(Body) of
-        {error, parse_error} ->
-            json(arizona_jsonrpc:error(null, -32700, ~"Parse error"));
-        {error, invalid_request} ->
-            json(arizona_jsonrpc:error(null, -32600, ~"Invalid Request"));
-        {ok, #{method := Method, params := Params, id := Id} = Request} ->
-            case Id of
-                undefined -> roadrunner_resp:status(202);
-                _ when Method =:= ~"initialize" -> session_initialize(Params, Id, Opts);
-                _ -> session_request(Method, Params, Id, Request, Req)
-            end
+reply_session(#{method := Method, params := Params, id := Id} = Request, Req, Opts) ->
+    case Id of
+        undefined -> roadrunner_resp:status(202);
+        _ when Method =:= ~"initialize" -> session_initialize(Params, Id, Opts);
+        _ -> session_request(Method, Params, Id, Request, Req)
     end.
 
 session_initialize(Params, Id, #{handler := Mod} = Opts) ->
@@ -314,14 +371,14 @@ session_request(Method, Params, Id, Request, Req) ->
                     {_Tag, Object} = arizona_mcp_session:dispatch(Pid, Method, Params, Id),
                     json(Object)
                 end,
-                %% Unknown or expired session: the client should re-initialize.
-                fun() ->
-                    roadrunner_resp:json(
-                        404, arizona_jsonrpc:error(Id, -32600, ~"Unknown or expired session")
-                    )
-                end
+                fun() -> unknown_session(Id) end
             )
     end.
+
+%% The 404 a session-scoped request gets when its `Mcp-Session-Id` names no live
+%% session -- the client should re-initialize.
+unknown_session(Id) ->
+    roadrunner_resp:json(404, arizona_jsonrpc:error(Id, -32600, ~"Unknown or expired session")).
 
 handle_delete(Req) ->
     case roadrunner_req:header(~"mcp-session-id", Req) of
@@ -375,14 +432,103 @@ with_session(SessionId, Found, NotFound) ->
 attach_or_reject(Pid, LastEventId) ->
     case arizona_mcp_session:attach_channel(Pid, self(), LastEventId) of
         ok ->
-            Headers = [
-                {~"content-type", ~"text/event-stream"},
-                {~"cache-control", ~"no-cache"}
-            ],
-            {loop, 200, Headers, #{session => Pid}};
+            {loop, 200, sse_headers(), #{session => Pid}};
         {error, already_attached} ->
             roadrunner_resp:status(409)
     end.
+
+sse_headers() ->
+    [
+        {~"content-type", ~"text/event-stream"},
+        {~"cache-control", ~"no-cache"}
+    ].
+
+%% Stream a token-bearing `tools/call` over its POST as SSE. The tool runs off
+%% this connection process (a worker in stateless mode, the session process in
+%% session mode); it relays `notifications/progress` and the final result back
+%% as messages, which the loop's `handle_info/3` pushes -- progress events
+%% first, then the result, then stop.
+serve_streaming(#{name := Name, args := Args, token := Token, id := Id}, Req, Opts) ->
+    ConnPid = self(),
+    case sessions_enabled(Opts) of
+        false ->
+            #{handler := Mod} = Opts,
+            %% Stateless: a fresh per-request session; its threaded-back state
+            %% is per-request and discarded. The worker frees the loop to push.
+            {_ServerInfo, Session} = open_session(Mod, #{}),
+            Ctx = #{token => Token, to => ConnPid},
+            _Worker = spawn(fun() ->
+                _Session1 = run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid)
+            end),
+            stream_loop();
+        true ->
+            case roadrunner_req:header(~"mcp-session-id", Req) of
+                undefined ->
+                    json(arizona_jsonrpc:error(Id, -32600, ~"Missing Mcp-Session-Id"));
+                SessionId ->
+                    with_session(
+                        SessionId,
+                        fun(Pid) ->
+                            ok = arizona_mcp_session:run_streaming_tool(
+                                Pid, Name, Args, Id, Token, ConnPid
+                            ),
+                            stream_loop()
+                        end,
+                        fun() -> unknown_session(Id) end
+                    )
+            end
+    end.
+
+%% The streaming-POST loop: a request-scoped stream (no resumability), tagged so
+%% `handle_info/3` distinguishes it from the GET channel.
+stream_loop() ->
+    {loop, 200, sse_headers(), #{mcp_post_stream => true}}.
+
+-doc """
+Run a streaming `tools/call` against `Session`, relaying the result (and, via
+`Ctx`, any `notifications/progress`) to `ConnPid`, and return the session
+carrying the tool's threaded-back state. Shared by the stateless worker and the
+session process; exported for the latter's cross-module call.
+""".
+-spec run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid) -> Session when
+    Session :: session(),
+    Name :: binary(),
+    Args :: map(),
+    Id :: arizona_jsonrpc:id(),
+    Ctx :: arizona_mcp:progress_ctx(),
+    ConnPid :: pid().
+run_streaming_tool(#{state := State} = Session, Name, Args, Id, Ctx, ConnPid) ->
+    %% Guard the whole run (the `tools/1` read included), since the session
+    %% process calls this in `handle_cast`: a crash must answer -32603 and leave
+    %% the prior state intact, never kill the session.
+    {Object, NewState} =
+        try
+            run_tool(Session, Name, Args, Id, Ctx)
+        catch
+            Class:Reason:Stacktrace ->
+                logger:error(
+                    "MCP streaming tool crashed: ~ts:~tp~n~tp", [Class, Reason, Stacktrace]
+                ),
+                {arizona_jsonrpc:error(Id, -32603, ~"Internal error"), State}
+        end,
+    ConnPid ! {mcp_result, Object},
+    Session#{state := NewState}.
+
+%% Validate the tool name, run it, and shape the outcome into a
+%% `{ResultObject, NewState}` pair. Unknown name -> a -32602 result with the
+%% prior state; a declared tool -> its result and threaded-back state.
+run_tool(#{mod := Mod, state := State}, Name, Args, Id, Ctx) ->
+    case lists:member(Name, [N || #{name := N} <- Mod:tools(State)]) of
+        false ->
+            {arizona_jsonrpc:error(Id, -32602, <<"Unknown tool: ", Name/binary>>), State};
+        true ->
+            stream_tool_outcome(Mod:handle_tool(Name, Args, Ctx, State), Id)
+    end.
+
+stream_tool_outcome({reply, Result, NewState}, Id) ->
+    {arizona_jsonrpc:result(Id, tool_content(Result, false)), NewState};
+stream_tool_outcome({error, ToolError, NewState}, Id) ->
+    {arizona_jsonrpc:result(Id, tool_content(ToolError, true)), NewState}.
 
 %% A URL-safe, unguessable session id: 128 bits of CSPRNG output as hex.
 generate_session_id() ->
@@ -494,9 +640,15 @@ call_tool(Params, Id, #{mod := Mod, state := State} = Session) ->
         fun(Name) -> arizona_jsonrpc:error(Id, -32602, <<"Unknown tool: ", Name/binary>>) end,
         fun(Name) ->
             Args = maps:get(~"arguments", Params, #{}),
-            tool_reply(Mod:handle_tool(Name, Args, State), Id, Session)
+            tool_reply(Mod:handle_tool(Name, Args, inert_ctx(), State), Id, Session)
         end
     ).
+
+%% The progress context for a buffered (non-streaming) `tools/call`: inert, so
+%% `arizona_mcp:progress/2,3` is a no-op. Streaming calls build a live context
+%% in `serve_streaming/3` instead.
+inert_ctx() ->
+    #{token => undefined, to => undefined}.
 
 read_resource(Params, Id, #{mod := Mod, state := State} = Session) ->
     with_member(

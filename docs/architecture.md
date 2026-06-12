@@ -1009,8 +1009,10 @@ the tool/resource/prompt registry, the session lifecycle, and the Origin/auth po
 
 MCP's Streamable HTTP maps onto roadrunner response shapes with no new transport feature:
 
-- **POST** -- the client sends one JSON-RPC message; the handler decodes, dispatches, and returns a
-  buffered `application/json` reply.
+- **POST** -- the client sends one JSON-RPC message. The handler decodes and dispatches; it returns
+  a buffered `application/json` reply, or -- for a `tools/call` carrying a `_meta.progressToken` from
+  a client that accepts `text/event-stream` -- answers as an SSE stream (the tool's
+  `notifications/progress`, then the result, then close).
 - **GET** (session mode) -- opens the long-lived server-to-client SSE channel as
   `{loop, 200, [event-stream headers], State}`; `handle_info/3` forwards server-initiated
   notifications and stops the loop on `{roadrunner_disconnect, _}`.
@@ -1019,6 +1021,16 @@ MCP's Streamable HTTP maps onto roadrunner response shapes with no new transport
 The `{loop, ...}` SSE shape is wired on h1, h2, and h3, so the channel works on all three (h2/h3
 multiplex many sessions over one connection with no head-of-line blocking). Every `Push` flushes one
 frame to the wire with no coalescing, so a `notifications/*` message reaches the agent at emit time.
+
+### Progress streaming
+
+When a token-bearing `tools/call` streams (the client accepted SSE), the tool runs off the connection
+process so the loop is free to push its progress as it arrives. In **stateless** mode a worker
+process runs the tool; in **session** mode the session process runs it (state still threads back).
+Either way the tool emits via the `Ctx`
+handed to `handle_tool/4` -- `arizona_mcp:progress/2,3` relays each `notifications/progress` to the
+POST's loop, which frames and pushes it; the final result is the last frame, then the loop stops.
+The context is inert (a no-op) for a non-streaming call, so a tool can always call `progress/2,3`.
 
 ### Stateless vs session mode
 
