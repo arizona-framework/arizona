@@ -24,6 +24,9 @@ sends `DELETE`) does not leak; every served request resets it.
 
 -export([start_link/3]).
 -export([dispatch/4]).
+-export([attach_channel/2]).
+-export([detach_channel/2]).
+-export([notify/3]).
 -export([stop/1]).
 
 %% --------------------------------------------------------------------
@@ -51,7 +54,13 @@ sends `DELETE`) does not leak; every served request resets it.
     id :: binary(),
     session :: arizona_mcp_handler:session(),
     ttl_ms :: pos_integer(),
-    ttl_timer :: reference() | undefined
+    ttl_timer :: reference() | undefined,
+    %% The attached server-to-client SSE channel (a roadrunner loop process),
+    %% monitored so a racing conn death still detaches.
+    channel :: pid() | undefined,
+    channel_mon :: reference() | undefined,
+    %% Pubsub channels subscribed for server-initiated notifications.
+    channels :: [arizona_mcp:channel()]
 }).
 
 -type state() :: #state{}.
@@ -88,6 +97,35 @@ dispatch(Pid, Method, Params, Id) ->
     %% cancelling on client disconnect is a later-phase hardening.)
     gen_server:call(Pid, {dispatch, Method, Params, Id}, infinity).
 
+-doc """
+Attach a server-to-client SSE channel (a roadrunner loop process) to the
+session. Returns `{error, already_attached}` if one is already attached --
+the spec allows only one such stream per session.
+""".
+-spec attach_channel(Pid, ChannelPid) -> ok | {error, already_attached} when
+    Pid :: pid(),
+    ChannelPid :: pid().
+attach_channel(Pid, ChannelPid) ->
+    gen_server:call(Pid, {attach_channel, ChannelPid}, 5000).
+
+-doc "Detach the SSE channel (on client disconnect). Fire-and-forget.".
+-spec detach_channel(Pid, ChannelPid) -> ok when
+    Pid :: pid(),
+    ChannelPid :: pid().
+detach_channel(Pid, ChannelPid) ->
+    gen_server:cast(Pid, {detach_channel, ChannelPid}).
+
+-doc """
+Push a server-initiated `notifications/<Method>` with `Params` to the
+session's SSE channel. A no-op if no channel is attached. Fire-and-forget.
+""".
+-spec notify(Pid, Method, Params) -> ok when
+    Pid :: pid(),
+    Method :: binary(),
+    Params :: map().
+notify(Pid, Method, Params) ->
+    gen_server:cast(Pid, {notify, Method, Params}).
+
 -doc "Terminate the session (the `DELETE` teardown).".
 -spec stop(Pid) -> ok when
     Pid :: pid().
@@ -105,21 +143,39 @@ stop(Pid) ->
 init({SessionId, Session, TtlMs}) ->
     proc_lib:set_label({arizona_mcp_session, SessionId}),
     ok = arizona_mcp_session_registry:add(SessionId, self()),
-    State = #state{id = SessionId, session = Session, ttl_ms = TtlMs},
-    {ok, arm_ttl(State)}.
+    Channels = subscribe_channels(Session),
+    State = #state{id = SessionId, session = Session, ttl_ms = TtlMs, channels = Channels},
+    {ok, refresh_ttl(State)}.
 
 -spec handle_call(Request, gen_server:from(), state()) -> {reply, Reply, state()} when
-    Request :: {dispatch, binary(), map(), arizona_jsonrpc:id()},
-    Reply :: {reply, map()} | {error, map()}.
+    Request :: {dispatch, binary(), map(), arizona_jsonrpc:id()} | {attach_channel, pid()},
+    Reply :: {reply, map()} | {error, map()} | ok | {error, already_attached}.
 handle_call({dispatch, Method, Params, Id}, _From, #state{session = Session} = State) ->
     Outcome = safe_handle_method(Method, Params, Id, Session),
-    {reply, Outcome, arm_ttl(State)}.
+    {reply, Outcome, refresh_ttl(State)};
+handle_call({attach_channel, ChannelPid}, _From, #state{channel = undefined} = State) ->
+    Mon = erlang:monitor(process, ChannelPid),
+    {reply, ok, refresh_ttl(State#state{channel = ChannelPid, channel_mon = Mon})};
+handle_call({attach_channel, _ChannelPid}, _From, State) ->
+    {reply, {error, already_attached}, State}.
 
 -spec handle_cast(term(), state()) -> {noreply, state()}.
+handle_cast({detach_channel, ChannelPid}, #state{channel = ChannelPid} = State) ->
+    {noreply, do_detach(State)};
+handle_cast({notify, Method, Params}, State) ->
+    {noreply, emit(Method, Params, State)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
 -spec handle_info(term(), state()) -> {noreply, state()} | {stop, normal, state()}.
+handle_info({arizona_mcp_notification, Method, Params}, State) ->
+    {noreply, emit(Method, Params, State)};
+handle_info(
+    {'DOWN', Mon, process, ChannelPid, _Reason},
+    #state{channel_mon = Mon, channel = ChannelPid} = State
+) ->
+    %% The channel's connection died without a clean detach.
+    {noreply, do_detach(State)};
 handle_info(session_ttl_expired, State) ->
     {stop, normal, State};
 handle_info(_Info, State) ->
@@ -127,6 +183,8 @@ handle_info(_Info, State) ->
 
 -spec terminate(term(), state()) -> ok.
 terminate(_Reason, #state{id = SessionId}) ->
+    %% pg auto-removes the session from its subscribed channels on exit, so
+    %% only the registry row needs explicit cleanup.
     ok = arizona_mcp_session_registry:remove(SessionId),
     ok.
 
@@ -146,12 +204,60 @@ safe_handle_method(Method, Params, Id, Session) ->
             {error, arizona_jsonrpc:error(Id, -32603, ~"Internal error")}
     end.
 
-%% (Re)arm the idle timer: cancel the previous one and schedule a fresh
-%% teardown TtlMs from now. Called on start and after every served request.
-arm_ttl(#state{ttl_timer = Old, ttl_ms = TtlMs} = State) ->
+%% Subscribe to the handler's declared pubsub channels (if it exports
+%% channels/1) so broadcasts reach this session. pg auto-removes the session
+%% from them when it exits, so terminate needs no explicit unsubscribe.
+subscribe_channels(#{mod := Mod, state := HandlerState}) ->
+    case erlang:function_exported(Mod, channels, 1) of
+        true ->
+            Channels = Mod:channels(HandlerState),
+            lists:foreach(fun ensure_subscribed/1, Channels),
+            Channels;
+        false ->
+            []
+    end.
+
+ensure_subscribed(Channel) ->
+    case arizona_pubsub:subscribe(Channel, self()) of
+        ok -> ok;
+        {error, already_joined} -> ok
+    end.
+
+%% Frame a server-initiated notification and forward it to the attached SSE
+%% channel. Without a channel it is dropped (buffering for resume is a later
+%% phase).
+emit(_Method, _Params, #state{channel = undefined} = State) ->
+    State;
+emit(Method, Params, #state{channel = ChannelPid} = State) ->
+    Notification = arizona_jsonrpc:notification(Method, Params),
+    Frame = roadrunner_sse:event(iolist_to_binary(json:encode(Notification))),
+    ChannelPid ! {mcp_event, Frame},
+    State.
+
+%% Detach the channel: stop monitoring it, forget it, and re-arm the idle
+%% timer (the session is connectionless again and may be abandoned).
+do_detach(#state{channel_mon = Mon} = State) ->
+    demonitor_channel(Mon),
+    refresh_ttl(State#state{channel = undefined, channel_mon = undefined}).
+
+demonitor_channel(undefined) ->
+    ok;
+demonitor_channel(Mon) ->
+    true = erlang:demonitor(Mon, [flush]),
+    ok.
+
+%% A session with a live SSE channel is kept alive by it; a connectionless
+%% session counts down to teardown. Cancel any pending timer, then arm a
+%% fresh one only when no channel is attached.
+refresh_ttl(#state{ttl_timer = Old, ttl_ms = TtlMs, channel = Channel} = State) ->
     cancel_ttl(Old),
-    Ref = erlang:send_after(TtlMs, self(), session_ttl_expired),
-    State#state{ttl_timer = Ref}.
+    case Channel of
+        undefined ->
+            Ref = erlang:send_after(TtlMs, self(), session_ttl_expired),
+            State#state{ttl_timer = Ref};
+        _ ->
+            State#state{ttl_timer = undefined}
+    end.
 
 cancel_ttl(undefined) ->
     ok;

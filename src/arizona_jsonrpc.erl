@@ -36,6 +36,7 @@ Error codes follow the JSON-RPC 2.0 spec:
 -export([decode/1]).
 -export([result/2]).
 -export([error/3]).
+-export([notification/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -84,6 +85,16 @@ decode(Body) ->
     Result :: term().
 result(Id, Result) ->
     #{~"jsonrpc" => ~"2.0", ~"id" => Id, ~"result" => Result}.
+
+-doc """
+Build a JSON-RPC notification object -- a request with no `id`, which the
+peer never answers. Used for server-initiated `notifications/*` messages.
+""".
+-spec notification(Method, Params) -> map() when
+    Method :: binary(),
+    Params :: map().
+notification(Method, Params) ->
+    #{~"jsonrpc" => ~"2.0", ~"method" => Method, ~"params" => Params}.
 
 -doc "Build a JSON-RPC error response object (no `data` member).".
 -spec error(id(), Code, Message) -> map() when

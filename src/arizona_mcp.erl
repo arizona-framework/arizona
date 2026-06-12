@@ -23,6 +23,8 @@ calls back into this module to negotiate the connection and run tools.
   analogue of how `arizona_stateful` dispatches an event by name).
 - `resources/1` + `read_resource/2` -- optional; list and read resources.
 - `prompts/1` + `get_prompt/3` -- optional; list and render prompts.
+- `channels/1` -- optional; pubsub channels a session subscribes to for
+  server-initiated notifications (see below).
 - `terminate/2` -- optional cleanup hook.
 
 Resources and prompts are gated on the advertised capability map: the
@@ -55,13 +57,45 @@ state lives in the session process, read by that session's later requests.
 The state is not yet mutated by method calls -- threading a stateful
 callback's returned state back into the session is a later refinement, and
 the callback contract here does not change when it lands.
+
+## Server-initiated notifications
+
+A session (a route with `sessions => true`) can stream `notifications/*`
+messages to a client that has opened the server-to-client SSE channel
+(`GET` on the route). Two ways to push, both no-ops when the addressed
+session has no channel attached:
+
+- **Broadcast** -- `broadcast/3` publishes to a pubsub channel; every
+  session subscribed to it (via the optional `channels/1` callback)
+  forwards the notification. Natural for `notifications/*/list_changed`
+  and resource-updated fan-out, and decoupled (the caller holds no session
+  reference).
+- **Targeted** -- `notify/3` pushes to one session by its `Mcp-Session-Id`.
+  The id is handed to the handler at `initialize` under the `mcp_session_id`
+  key of the init params, so a handler can keep it and address its own
+  session later.
 """.
+
+%% --------------------------------------------------------------------
+%% API function exports
+%% --------------------------------------------------------------------
+
+-export([broadcast/3]).
+-export([notify/3]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+%% The server-push API is called by applications, not from within arizona.
+-ignore_xref([broadcast/3, notify/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 
 -export_type([init_params/0]).
+-export_type([channel/0]).
 -export_type([server_info/0]).
 -export_type([capabilities/0]).
 -export_type([state/0]).
@@ -83,6 +117,8 @@ the callback contract here does not change when it lands.
 %% --------------------------------------------------------------------
 
 -nominal init_params() :: map().
+
+-nominal channel() :: arizona_pubsub:channel().
 
 -nominal server_info() :: #{
     name := binary(),
@@ -209,6 +245,13 @@ decoded `arguments` object. Return `{reply, Result, State}` on success or
     {reply, prompt_result(), state()}
     | {error, prompt_error(), state()}.
 
+-doc """
+Return the pubsub channels this session subscribes to for server-initiated
+notifications. Anything published to one of these channels via `broadcast/3`
+is forwarded to the session's SSE channel. Optional; defaults to none.
+""".
+-callback channels(State :: state()) -> [channel()].
+
 -doc "Optional cleanup hook.".
 -callback terminate(Reason :: term(), State :: state()) -> term().
 
@@ -217,5 +260,39 @@ decoded `arguments` object. Return `{reply, Result, State}` on success or
     read_resource/2,
     prompts/1,
     get_prompt/3,
+    channels/1,
     terminate/2
 ]).
+
+%% --------------------------------------------------------------------
+%% API Functions
+%% --------------------------------------------------------------------
+
+-doc """
+Broadcast a server-initiated notification to every session subscribed to
+`Channel` (via its `channels/1` callback). Each subscribed session with an
+attached SSE channel forwards `notifications/<Method>` with `Params` to its
+client; sessions without an attached channel ignore it.
+""".
+-spec broadcast(Channel, Method, Params) -> ok when
+    Channel :: channel(),
+    Method :: binary(),
+    Params :: map().
+broadcast(Channel, Method, Params) ->
+    arizona_pubsub:broadcast(Channel, {arizona_mcp_notification, Method, Params}).
+
+-doc """
+Push a server-initiated notification to one session by its `Mcp-Session-Id`.
+A no-op if the session is unknown/expired or has no SSE channel attached.
+The id is supplied to the handler at `initialize` (the `mcp_session_id` key
+of the init params).
+""".
+-spec notify(SessionId, Method, Params) -> ok when
+    SessionId :: binary(),
+    Method :: binary(),
+    Params :: map().
+notify(SessionId, Method, Params) ->
+    case arizona_mcp_session_registry:lookup(SessionId) of
+        {ok, Pid} -> arizona_mcp_session:notify(Pid, Method, Params);
+        error -> ok
+    end.

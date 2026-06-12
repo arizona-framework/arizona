@@ -9,6 +9,7 @@
 -export([read_resource/2]).
 -export([prompts/1]).
 -export([get_prompt/3]).
+-export([channels/1]).
 
 init(_InitParams) ->
     {ok, #{name => ~"arizona_test", version => ~"0.1.0"},
@@ -103,3 +104,6 @@ get_prompt(~"greet", Args, State) ->
         State};
 get_prompt(~"deny", _Args, State) ->
     {error, ~"prompt denied", State}.
+
+channels(_State) ->
+    [mcp_test_channel].

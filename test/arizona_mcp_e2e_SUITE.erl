@@ -18,7 +18,10 @@
     session_missing_id/1,
     session_delete_without_id/1,
     session_tool_crash_survives/1,
-    session_get_405/1
+    session_get_without_id_400/1,
+    session_channel_receives_push/1,
+    session_second_channel_409/1,
+    session_survives_channel_disconnect/1
 ]).
 
 -define(LISTENER, arizona_mcp_e2e).
@@ -40,7 +43,10 @@ all() ->
         session_missing_id,
         session_delete_without_id,
         session_tool_crash_survives,
-        session_get_405
+        session_get_without_id_400,
+        session_channel_receives_push,
+        session_second_channel_409,
+        session_survives_channel_disconnect
     ].
 
 init_per_suite(Config) ->
@@ -223,10 +229,40 @@ session_tool_crash_survives(Config) ->
     ?assertEqual(200, status_code(Resp)),
     ?assertMatch(#{~"result" := #{}}, body_json(Resp)).
 
-session_get_405(Config) ->
+session_get_without_id_400(Config) ->
     Resp = request(Config, "GET", "/mcp-session", [], <<>>),
-    ?assertEqual(405, status_code(Resp)),
-    ?assertNotEqual(nomatch, binary:match(string:lowercase(headers(Resp)), ~"allow: post, delete")).
+    ?assertEqual(400, status_code(Resp)).
+
+session_channel_receives_push(Config) ->
+    SessionId = open_session(Config),
+    {ok, Sock} = open_channel(Config, SessionId),
+    %% Push from the server side (in-node) and read it off the SSE stream.
+    ok = arizona_mcp:notify(SessionId, ~"notifications/message", #{~"text" => ~"hello-sse"}),
+    Data = recv_until(Sock, ~"hello-sse", 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"notifications/message")),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"hello-sse")).
+
+session_second_channel_409(Config) ->
+    SessionId = open_session(Config),
+    {ok, Sock} = open_channel(Config, SessionId),
+    %% A second GET for the same session is rejected: one stream per session.
+    Resp = request(Config, "GET", "/mcp-session", session_header(SessionId), <<>>),
+    gen_tcp:close(Sock),
+    ?assertEqual(409, status_code(Resp)).
+
+session_survives_channel_disconnect(Config) ->
+    SessionId = open_session(Config),
+    {ok, Sock} = open_channel(Config, SessionId),
+    gen_tcp:close(Sock),
+    %% The session outlives the dropped channel and still serves requests.
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":7,"method":"ping"}
+    """,
+    Resp = post(Config, "/mcp-session", session_header(SessionId), Body),
+    ?assertEqual(200, status_code(Resp)),
+    ?assertMatch(#{~"result" := #{}}, body_json(Resp)).
 
 %% --------------------------------------------------------------------
 %% Helpers
@@ -235,6 +271,49 @@ session_get_405(Config) ->
 open_session(Config) ->
     Resp = post(Config, "/mcp-session", [], initialize_body()),
     header_value(Resp, ~"mcp-session-id").
+
+%% Open the server-to-client SSE channel and confirm the loop response opened
+%% (a 200 header block means the channel attached). The socket stays open.
+open_channel(Config, SessionId) ->
+    Port = ?config(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /mcp-session HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "Mcp-Session-Id: ",
+        SessionId,
+        "\r\n",
+        "Accept: text/event-stream\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    Head = recv_until(Sock, ~"\r\n\r\n", 5000),
+    ?assertNotEqual(nomatch, binary:match(Head, ~"200 OK")),
+    {ok, Sock}.
+
+%% Accumulate socket data until `Needle` appears or time runs out.
+recv_until(Sock, Needle, Timeout) ->
+    recv_until(Sock, Needle, Timeout, <<>>).
+
+recv_until(_Sock, _Needle, Timeout, Acc) when Timeout =< 0 ->
+    Acc;
+recv_until(Sock, Needle, Timeout, Acc) ->
+    T0 = erlang:monotonic_time(millisecond),
+    case gen_tcp:recv(Sock, 0, min(Timeout, 500)) of
+        {ok, Chunk} ->
+            Acc1 = <<Acc/binary, Chunk/binary>>,
+            case binary:match(Acc1, Needle) of
+                nomatch ->
+                    Elapsed = erlang:monotonic_time(millisecond) - T0,
+                    recv_until(Sock, Needle, Timeout - Elapsed, Acc1);
+                _ ->
+                    Acc1
+            end;
+        {error, timeout} ->
+            Acc
+    end.
 
 session_header(SessionId) ->
     [<<"Mcp-Session-Id: ">>, SessionId, <<"\r\n">>].

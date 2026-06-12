@@ -9,7 +9,14 @@
     stop_removes_registration/1,
     stale_pid_is_swept/1,
     idle_ttl_terminates/1,
-    ignores_unknown_messages/1
+    ignores_unknown_messages/1,
+    notify_pushes_to_channel/1,
+    broadcast_reaches_subscribed_session/1,
+    notify_without_channel_is_noop/1,
+    notify_unknown_session_is_noop/1,
+    detach_re_enables_attach/1,
+    channel_cancels_idle_ttl/1,
+    detach_re_arms_ttl/1
 ]).
 
 all() ->
@@ -20,7 +27,14 @@ all() ->
         stop_removes_registration,
         stale_pid_is_swept,
         idle_ttl_terminates,
-        ignores_unknown_messages
+        ignores_unknown_messages,
+        notify_pushes_to_channel,
+        broadcast_reaches_subscribed_session,
+        notify_without_channel_is_noop,
+        notify_unknown_session_is_noop,
+        detach_re_enables_attach,
+        channel_cancels_idle_ttl,
+        detach_re_arms_ttl
     ].
 
 init_per_suite(Config) ->
@@ -84,6 +98,69 @@ ignores_unknown_messages(_Config) ->
     %% The session shrugs off stray cast/info and keeps serving.
     ?assertEqual({ok, Pid}, arizona_mcp_session_registry:lookup(Id)),
     ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 1)).
+
+notify_pushes_to_channel(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% This test process plays the SSE channel and receives framed events.
+    ok = arizona_mcp_session:attach_channel(Pid, self()),
+    ok = arizona_mcp_session:notify(Pid, ~"notifications/message", #{~"text" => ~"hi"}),
+    receive
+        {mcp_event, Frame} ->
+            Bin = iolist_to_binary(Frame),
+            ?assertNotEqual(nomatch, binary:match(Bin, ~"notifications/message")),
+            ?assertNotEqual(nomatch, binary:match(Bin, ~"hi"))
+    after 5000 -> ct:fail(no_event)
+    end.
+
+broadcast_reaches_subscribed_session(_Config) ->
+    {_Id, Pid} = start(60000),
+    ok = arizona_mcp_session:attach_channel(Pid, self()),
+    %% The fixture's channels/1 subscribed the session to mcp_test_channel.
+    ok = arizona_mcp:broadcast(mcp_test_channel, ~"notifications/tools/list_changed", #{}),
+    receive
+        {mcp_event, Frame} ->
+            ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Frame), ~"list_changed"))
+    after 5000 -> ct:fail(no_broadcast)
+    end.
+
+notify_without_channel_is_noop(_Config) ->
+    {_Id, Pid} = start(60000),
+    ok = arizona_mcp_session:notify(Pid, ~"notifications/message", #{}),
+    receive
+        {mcp_event, _} -> ct:fail(unexpected_event)
+    after 100 -> ok
+    end,
+    ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 1)).
+
+notify_unknown_session_is_noop(_Config) ->
+    %% arizona_mcp:notify/3 to an unknown session id is a silent no-op.
+    ?assertEqual(ok, arizona_mcp:notify(~"no-such-session", ~"notifications/message", #{})).
+
+detach_re_enables_attach(_Config) ->
+    {_Id, Pid} = start(60000),
+    ok = arizona_mcp_session:attach_channel(Pid, self()),
+    ?assertEqual({error, already_attached}, arizona_mcp_session:attach_channel(Pid, self())),
+    ok = arizona_mcp_session:detach_channel(Pid, self()),
+    %% detach is a cast; a synchronous dispatch flushes it before we re-attach.
+    ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 1)),
+    ?assertEqual(ok, arizona_mcp_session:attach_channel(Pid, self())).
+
+channel_cancels_idle_ttl(_Config) ->
+    {_Id, Pid} = start(100),
+    ok = arizona_mcp_session:attach_channel(Pid, self()),
+    %% A live channel keeps the session up past what the idle TTL would allow.
+    timer:sleep(250),
+    ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 1)).
+
+detach_re_arms_ttl(_Config) ->
+    {_Id, Pid} = start(100),
+    ok = arizona_mcp_session:attach_channel(Pid, self()),
+    ok = arizona_mcp_session:detach_channel(Pid, self()),
+    Ref = erlang:monitor(process, Pid),
+    receive
+        {'DOWN', Ref, process, Pid, normal} -> ok
+    after 5000 -> ct:fail(ttl_did_not_rearm)
+    end.
 
 %% --------------------------------------------------------------------
 %% Helpers

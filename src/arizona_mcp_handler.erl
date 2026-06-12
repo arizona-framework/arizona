@@ -23,6 +23,7 @@ protocol contract holds even when a tool raises.
 %% --------------------------------------------------------------------
 
 -export([handle/1]).
+-export([handle_info/3]).
 -export([dispatch/3]).
 -export([handle_method/4]).
 
@@ -86,25 +87,57 @@ handle(Req) ->
 %% enabled. Everything else is method-not-allowed (the server-to-client GET
 %% stream is a later phase).
 serve(~"POST", Req, Opts) ->
-    handle_post(Req, Opts);
+    with_origin(Req, Opts, fun() -> handle_post(Req, Opts) end);
+serve(~"GET", Req, Opts) ->
+    session_verb(Req, Opts, fun() -> handle_get(Req) end);
 serve(~"DELETE", Req, Opts) ->
-    case sessions_enabled(Opts) of
-        true -> handle_delete(Req);
-        false -> method_not_allowed(Opts)
-    end;
+    session_verb(Req, Opts, fun() -> handle_delete(Req) end);
 serve(_Method, _Req, Opts) ->
     method_not_allowed(Opts).
 
 sessions_enabled(Opts) ->
     maps:get(sessions, Opts, false).
 
+%% GET (the SSE channel) and DELETE (teardown) exist only in session mode;
+%% like POST they are origin-checked first.
+session_verb(Req, Opts, Fun) ->
+    case sessions_enabled(Opts) of
+        true -> with_origin(Req, Opts, Fun);
+        false -> method_not_allowed(Opts)
+    end.
+
+with_origin(Req, Opts, Fun) ->
+    case check_origin(Req, Opts) of
+        ok -> Fun();
+        forbidden -> roadrunner_resp:forbidden()
+    end.
+
 method_not_allowed(Opts) ->
     Allow =
         case sessions_enabled(Opts) of
-            true -> ~"POST, DELETE";
+            true -> ~"POST, GET, DELETE";
             false -> ~"POST"
         end,
     roadrunner_resp:add_header(roadrunner_resp:status(405), ~"allow", Allow).
+
+-doc """
+Roadrunner loop `handle_info/3` callback for the GET SSE channel. Forwards
+server-initiated events from the session to the wire; on client disconnect
+it detaches the channel from the session (which keeps the session alive) and
+stops the loop.
+""".
+-spec handle_info(Info, Push, State) -> {ok, State} | {stop, State} when
+    Info :: term(),
+    Push :: roadrunner_handler:push_fun(),
+    State :: #{session := pid()}.
+handle_info({mcp_event, Frame}, Push, State) ->
+    _ = Push(Frame),
+    {ok, State};
+handle_info({roadrunner_disconnect, _Reason}, _Push, #{session := SessionPid} = State) ->
+    ok = arizona_mcp_session:detach_channel(SessionPid, self()),
+    {stop, State};
+handle_info(_Info, _Push, State) ->
+    {ok, State}.
 
 -doc """
 Pure MCP method dispatch. Maps a decoded JSON-RPC request and the app's
@@ -166,15 +199,10 @@ initialize_result(ServerInfo, Caps, Params) ->
 %% --------------------------------------------------------------------
 
 handle_post(Req, Opts) ->
-    case check_origin(Req, Opts) of
-        ok ->
-            Body = iolist_to_binary(roadrunner_req:body(Req)),
-            case sessions_enabled(Opts) of
-                false -> reply_stateless(Body, Opts);
-                true -> reply_session(Body, Req, Opts)
-            end;
-        forbidden ->
-            roadrunner_resp:forbidden()
+    Body = iolist_to_binary(roadrunner_req:body(Req)),
+    case sessions_enabled(Opts) of
+        false -> reply_stateless(Body, Opts);
+        true -> reply_session(Body, Req, Opts)
     end.
 
 %% A present `Origin` must be in the allowlist; an absent one is allowed
@@ -222,8 +250,12 @@ reply_session(Body, Req, Opts) ->
     end.
 
 session_initialize(Params, Id, #{handler := Mod} = Opts) ->
-    {ServerInfo, #{caps := Caps} = Session} = open_session(Mod, Params),
     SessionId = generate_session_id(),
+    %% The session id is handed to the handler so it can address its own
+    %% session later via `arizona_mcp:notify/3`. An atom key can't collide
+    %% with the client's binary-keyed JSON params.
+    InitParams = Params#{mcp_session_id => SessionId},
+    {ServerInfo, #{caps := Caps} = Session} = open_session(Mod, InitParams),
     TtlMs = maps:get(session_ttl_ms, Opts, ?DEFAULT_TTL_MS),
     {ok, _Pid} = arizona_mcp_sup:start_session(SessionId, Session, TtlMs),
     Result = arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params)),
@@ -258,6 +290,33 @@ handle_delete(Req) ->
                 error ->
                     roadrunner_resp:not_found()
             end
+    end.
+
+%% GET opens the server-to-client SSE channel: attach this loop process to
+%% the named session, then stream events from it.
+handle_get(Req) ->
+    case roadrunner_req:header(~"mcp-session-id", Req) of
+        undefined ->
+            roadrunner_resp:bad_request();
+        SessionId ->
+            case arizona_mcp_session_registry:lookup(SessionId) of
+                {ok, Pid} -> attach_or_reject(Pid);
+                error -> roadrunner_resp:not_found()
+            end
+    end.
+
+%% Become the session's SSE channel, or `409` if one is already attached
+%% (the spec allows a single server-to-client stream per session).
+attach_or_reject(Pid) ->
+    case arizona_mcp_session:attach_channel(Pid, self()) of
+        ok ->
+            Headers = [
+                {~"content-type", ~"text/event-stream"},
+                {~"cache-control", ~"no-cache"}
+            ],
+            {loop, 200, Headers, #{session => Pid}};
+        {error, already_attached} ->
+            roadrunner_resp:status(409)
     end.
 
 %% A URL-safe, unguessable session id: 128 bits of CSPRNG output as hex.
