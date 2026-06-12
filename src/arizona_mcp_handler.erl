@@ -164,32 +164,88 @@ request(~"tools/list", _Params, Id, Mod) ->
     {reply, arizona_jsonrpc:result(Id, #{~"tools" => Tools})};
 request(~"tools/call", Params, Id, Mod) ->
     call_tool(Params, Id, Mod);
+request(~"resources/list", _Params, Id, Mod) ->
+    with_capability(resources, Mod, Id, fun(State) ->
+        Resources = [resource_json(Resource) || Resource <- Mod:resources(State)],
+        {reply, arizona_jsonrpc:result(Id, #{~"resources" => Resources})}
+    end);
+request(~"resources/read", Params, Id, Mod) ->
+    with_capability(resources, Mod, Id, fun(State) -> read_resource(Params, Id, Mod, State) end);
+request(~"prompts/list", _Params, Id, Mod) ->
+    with_capability(prompts, Mod, Id, fun(State) ->
+        Prompts = [prompt_json(Prompt) || Prompt <- Mod:prompts(State)],
+        {reply, arizona_jsonrpc:result(Id, #{~"prompts" => Prompts})}
+    end);
+request(~"prompts/get", Params, Id, Mod) ->
+    with_capability(prompts, Mod, Id, fun(State) -> get_prompt(Params, Id, Mod, State) end);
 request(_Method, _Params, Id, _Mod) ->
     {error, arizona_jsonrpc:error(Id, -32601, ~"Method not found")}.
 
-call_tool(Params, Id, Mod) ->
-    case Params of
-        #{~"name" := Name} when is_binary(Name) ->
-            {ok, _ServerInfo, _Capabilities, State} = Mod:init(#{}),
-            Args = maps:get(~"arguments", Params, #{}),
-            run_tool(Mod, Name, Args, State, Id);
-        _ ->
-            {error, arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing tool name")}
+%% An optional capability (resources/prompts) is served only when the
+%% server advertised it in `init/1`; otherwise the method does not exist.
+with_capability(Capability, Mod, Id, Fun) ->
+    {ok, _ServerInfo, Capabilities, State} = Mod:init(#{}),
+    case Capabilities of
+        #{Capability := _} -> Fun(State);
+        _ -> {error, arizona_jsonrpc:error(Id, -32601, ~"Method not found")}
     end.
 
-run_tool(Mod, Name, Args, State, Id) ->
-    Declared = [N || #{name := N} <- Mod:tools(State)],
-    case lists:member(Name, Declared) of
-        false ->
-            {error, arizona_jsonrpc:error(Id, -32602, <<"Unknown tool: ", Name/binary>>)};
-        true ->
-            case Mod:handle_tool(Name, Args, State) of
-                {reply, Result, _State1} ->
-                    {reply, arizona_jsonrpc:result(Id, tool_content(Result, false))};
-                {error, ToolError, _State1} ->
-                    {reply, arizona_jsonrpc:result(Id, tool_content(ToolError, true))}
-            end
+%% Resolve a required string param against the list of declared names, then
+%% dispatch. A missing or non-binary param runs `Missing` (a `-32602` error
+%% producer); a value absent from `Declared` runs `NotFound`; a declared
+%% value runs `Found`. Shared by tools/call, resources/read, prompts/get.
+with_member(Params, Key, Declared, Missing, NotFound, Found) ->
+    case Params of
+        #{Key := Value} when is_binary(Value) ->
+            case lists:member(Value, Declared) of
+                true -> Found(Value);
+                false -> {error, NotFound(Value)}
+            end;
+        _ ->
+            {error, Missing()}
     end.
+
+call_tool(Params, Id, Mod) ->
+    {ok, _ServerInfo, _Capabilities, State} = Mod:init(#{}),
+    with_member(
+        Params,
+        ~"name",
+        [N || #{name := N} <- Mod:tools(State)],
+        fun() -> arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing tool name") end,
+        fun(Name) -> arizona_jsonrpc:error(Id, -32602, <<"Unknown tool: ", Name/binary>>) end,
+        fun(Name) ->
+            Args = maps:get(~"arguments", Params, #{}),
+            tool_reply(Mod:handle_tool(Name, Args, State), Id)
+        end
+    ).
+
+read_resource(Params, Id, Mod, State) ->
+    with_member(
+        Params,
+        ~"uri",
+        [U || #{uri := U} <- Mod:resources(State)],
+        fun() -> arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing resource uri") end,
+        fun(Uri) -> arizona_jsonrpc:error(Id, -32002, <<"Resource not found: ", Uri/binary>>) end,
+        fun(Uri) -> resource_contents(Mod:read_resource(Uri, State), Uri, Id) end
+    ).
+
+get_prompt(Params, Id, Mod, State) ->
+    with_member(
+        Params,
+        ~"name",
+        [N || #{name := N} <- Mod:prompts(State)],
+        fun() -> arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing prompt name") end,
+        fun(Name) -> arizona_jsonrpc:error(Id, -32602, <<"Unknown prompt: ", Name/binary>>) end,
+        fun(Name) ->
+            Args = maps:get(~"arguments", Params, #{}),
+            prompt_messages(Mod:get_prompt(Name, Args, State), Id)
+        end
+    ).
+
+tool_reply({reply, Result, _State}, Id) ->
+    {reply, arizona_jsonrpc:result(Id, tool_content(Result, false))};
+tool_reply({error, ToolError, _State}, Id) ->
+    {reply, arizona_jsonrpc:result(Id, tool_content(ToolError, true))}.
 
 %% --------------------------------------------------------------------
 %% Internal functions - wire shaping
@@ -203,19 +259,21 @@ negotiate_version(#{~"protocolVersion" := Version}) when is_binary(Version) ->
 negotiate_version(_) ->
     ?PREFERRED_VERSION.
 
+%% Copy an optional key from a source map onto the wire map under its wire
+%% name, or leave the wire map unchanged when the source key is absent.
+maybe_put(WireKey, SourceKey, Source, Map) ->
+    case Source of
+        #{SourceKey := Value} -> Map#{WireKey => Value};
+        _ -> Map
+    end.
+
 server_info_json(#{name := Name, version := Version} = ServerInfo) ->
     Base = #{~"name" => Name, ~"version" => Version},
-    case ServerInfo of
-        #{title := Title} -> Base#{~"title" => Title};
-        _ -> Base
-    end.
+    maybe_put(~"title", title, ServerInfo, Base).
 
 tool_json(#{name := Name, description := Description, input_schema := Schema} = Tool) ->
     Base = #{~"name" => Name, ~"description" => Description, ~"inputSchema" => Schema},
-    case Tool of
-        #{title := Title} -> Base#{~"title" => Title};
-        _ -> Base
-    end.
+    maybe_put(~"title", title, Tool, Base).
 
 %% A bare binary is one text content block. A map provides its own content
 %% blocks (encoded verbatim) and may carry structured content. Either way
@@ -224,7 +282,31 @@ tool_content(Bin, IsError) when is_binary(Bin) ->
     #{~"content" => [#{~"type" => ~"text", ~"text" => Bin}], ~"isError" => IsError};
 tool_content(#{content := Content} = Result, IsError) ->
     Base = #{~"content" => Content, ~"isError" => IsError},
-    case Result of
-        #{structured_content := Structured} -> Base#{~"structuredContent" => Structured};
-        _ -> Base
-    end.
+    maybe_put(~"structuredContent", structured_content, Result, Base).
+
+resource_json(#{uri := Uri, name := Name} = Resource) ->
+    Base = #{~"uri" => Uri, ~"name" => Name},
+    WithDescription = maybe_put(~"description", description, Resource, Base),
+    maybe_put(~"mimeType", mime_type, Resource, WithDescription).
+
+%% A bare binary becomes one text entry keyed by the requested uri; a map
+%% supplies its content entries verbatim. An `{error, _}` is a -32002.
+resource_contents({reply, Text, _State}, Uri, Id) when is_binary(Text) ->
+    Contents = [#{~"uri" => Uri, ~"text" => Text}],
+    {reply, arizona_jsonrpc:result(Id, #{~"contents" => Contents})};
+resource_contents({reply, #{contents := Contents}, _State}, _Uri, Id) ->
+    {reply, arizona_jsonrpc:result(Id, #{~"contents" => Contents})};
+resource_contents({error, Message, _State}, _Uri, Id) when is_binary(Message) ->
+    {error, arizona_jsonrpc:error(Id, -32002, Message)}.
+
+prompt_json(#{name := Name} = Prompt) ->
+    Base = #{~"name" => Name},
+    WithDescription = maybe_put(~"description", description, Prompt, Base),
+    maybe_put(~"arguments", arguments, Prompt, WithDescription).
+
+prompt_messages({reply, #{messages := Messages} = Result, _State}, Id) ->
+    Base = #{~"messages" => Messages},
+    Object = maybe_put(~"description", description, Result, Base),
+    {reply, arizona_jsonrpc:result(Id, Object)};
+prompt_messages({error, Message, _State}, Id) when is_binary(Message) ->
+    {error, arizona_jsonrpc:error(Id, -32602, Message)}.

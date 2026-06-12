@@ -21,7 +21,15 @@ calls back into this module to negotiate the connection and run tools.
 - `tools/1` -- returns the tool metadata advertised by `tools/list`.
 - `handle_tool/3` -- runs one `tools/call`, dispatched by name (the MCP
   analogue of `arizona_stateful:handle_event/3`).
+- `resources/1` + `read_resource/2` -- optional; list and read resources.
+- `prompts/1` + `get_prompt/3` -- optional; list and render prompts.
 - `terminate/2` -- optional cleanup hook.
+
+Resources and prompts are gated on the advertised capability map: the
+transport routes `resources/*` / `prompts/*` only when `init/1` advertised
+the matching `resources` / `prompts` capability, returning `method not
+found` otherwise. A server advertising a capability must implement its
+callbacks. Tools are always available (their callbacks are required).
 
 ## Tool results vs protocol errors
 
@@ -59,6 +67,14 @@ session's requests; the callback contract here does not change.
 -export_type([content_block/0]).
 -export_type([tool_result/0]).
 -export_type([tool_error/0]).
+-export_type([resource/0]).
+-export_type([resource_contents/0]).
+-export_type([resource_error/0]).
+-export_type([prompt/0]).
+-export_type([prompt_argument/0]).
+-export_type([prompt_message/0]).
+-export_type([prompt_result/0]).
+-export_type([prompt_error/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -95,6 +111,42 @@ session's requests; the callback contract here does not change.
     binary()
     | #{content := [content_block()]}.
 
+-nominal resource() :: #{
+    uri := binary(),
+    name := binary(),
+    description => binary(),
+    mime_type => binary()
+}.
+
+%% A bare binary is shorthand for a single text content entry keyed by the
+%% requested uri. The map form supplies its own content entries verbatim.
+-nominal resource_contents() ::
+    binary()
+    | #{contents := [map()]}.
+
+-nominal resource_error() :: binary().
+
+-nominal prompt() :: #{
+    name := binary(),
+    description => binary(),
+    arguments => [prompt_argument()]
+}.
+
+-nominal prompt_argument() :: #{
+    name := binary(),
+    description => binary(),
+    required => boolean()
+}.
+
+-nominal prompt_message() :: #{role := binary(), content := map()}.
+
+-nominal prompt_result() :: #{
+    messages := [prompt_message()],
+    description => binary()
+}.
+
+-nominal prompt_error() :: binary().
+
 %% --------------------------------------------------------------------
 %% Behaviour callbacks
 %% --------------------------------------------------------------------
@@ -122,7 +174,46 @@ Run one `tools/call`, dispatched by tool name. `Args` is the decoded
     {reply, tool_result(), state()}
     | {error, tool_error(), state()}.
 
+-doc """
+Return the resource metadata advertised by `resources/list`. Optional;
+implement it (with `read_resource/2`) when advertising the `resources`
+capability.
+""".
+-callback resources(State :: state()) -> [resource()].
+
+-doc """
+Read one resource by uri, dispatched from `resources/read`. The uri is
+guaranteed to be one returned by `resources/1`. Return
+`{reply, Contents, State}` on success or `{error, Message, State}` for a
+resource-level failure (surfaced as a `-32002` error).
+""".
+-callback read_resource(Uri :: binary(), State :: state()) ->
+    {reply, resource_contents(), state()}
+    | {error, resource_error(), state()}.
+
+-doc """
+Return the prompt metadata advertised by `prompts/list`. Optional;
+implement it (with `get_prompt/3`) when advertising the `prompts`
+capability.
+""".
+-callback prompts(State :: state()) -> [prompt()].
+
+-doc """
+Render one prompt by name, dispatched from `prompts/get`. `Args` is the
+decoded `arguments` object. Return `{reply, Result, State}` on success or
+`{error, Message, State}` for a prompt-level failure.
+""".
+-callback get_prompt(Name :: binary(), Args :: map(), State :: state()) ->
+    {reply, prompt_result(), state()}
+    | {error, prompt_error(), state()}.
+
 -doc "Optional cleanup hook.".
 -callback terminate(Reason :: term(), State :: state()) -> term().
 
--optional_callbacks([terminate/2]).
+-optional_callbacks([
+    resources/1,
+    read_resource/2,
+    prompts/1,
+    get_prompt/3,
+    terminate/2
+]).

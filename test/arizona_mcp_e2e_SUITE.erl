@@ -7,6 +7,8 @@
     post_initialize/1,
     post_tools_list/1,
     post_tools_call/1,
+    post_resources_read/1,
+    post_prompts_get/1,
     get_returns_405/1,
     post_disallowed_origin_403/1
 ]).
@@ -19,6 +21,8 @@ all() ->
         post_initialize,
         post_tools_list,
         post_tools_call,
+        post_resources_read,
+        post_prompts_get,
         get_returns_405,
         post_disallowed_origin_403
     ].
@@ -88,6 +92,31 @@ post_tools_call(Config) ->
         #{~"content" => [#{~"type" => ~"text", ~"text" => ~"5"}], ~"isError" => false},
         Result
     ).
+
+post_resources_read(Config) ->
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":5,"method":"resources/read",
+     "params":{"uri":"mem://greeting"}}
+    """,
+    Resp = post(Config, "/mcp", [], Body),
+    ?assertEqual(200, status_code(Resp)),
+    #{~"result" := #{~"contents" := [Content]}} = body_json(Resp),
+    ?assertEqual(~"mem://greeting", maps:get(~"uri", Content)),
+    ?assertEqual(~"hello", maps:get(~"text", Content)).
+
+post_prompts_get(Config) ->
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":6,"method":"prompts/get",
+     "params":{"name":"greet","arguments":{"who":"Ada"}}}
+    """,
+    Resp = post(Config, "/mcp", [], Body),
+    ?assertEqual(200, status_code(Resp)),
+    #{~"result" := #{~"messages" := [Message]}} = body_json(Resp),
+    ?assertEqual(~"user", maps:get(~"role", Message)),
+    #{~"content" := #{~"text" := Text}} = Message,
+    ?assertEqual(~"Hello, Ada", Text).
 
 get_returns_405(Config) ->
     Resp = request(Config, "GET", "/mcp", [], <<>>),

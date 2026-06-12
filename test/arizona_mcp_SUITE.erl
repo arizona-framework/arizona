@@ -15,6 +15,19 @@
     dispatch_unknown_method/1,
     dispatch_unknown_notification/1,
     dispatch_notifications_initialized/1,
+    dispatch_resources_list/1,
+    dispatch_resources_read/1,
+    dispatch_resources_read_structured/1,
+    dispatch_resources_read_error/1,
+    dispatch_resources_read_unknown/1,
+    dispatch_resources_read_missing_uri/1,
+    dispatch_resources_unsupported/1,
+    dispatch_prompts_list/1,
+    dispatch_prompts_get/1,
+    dispatch_prompts_get_error/1,
+    dispatch_prompts_get_unknown/1,
+    dispatch_prompts_get_missing_name/1,
+    dispatch_prompts_unsupported/1,
     handle_get_405/1,
     handle_origin_absent_ok/1,
     handle_origin_allowed_ok/1,
@@ -39,6 +52,19 @@ all() ->
         dispatch_unknown_method,
         dispatch_unknown_notification,
         dispatch_notifications_initialized,
+        dispatch_resources_list,
+        dispatch_resources_read,
+        dispatch_resources_read_structured,
+        dispatch_resources_read_error,
+        dispatch_resources_read_unknown,
+        dispatch_resources_read_missing_uri,
+        dispatch_resources_unsupported,
+        dispatch_prompts_list,
+        dispatch_prompts_get,
+        dispatch_prompts_get_error,
+        dispatch_prompts_get_unknown,
+        dispatch_prompts_get_missing_name,
+        dispatch_prompts_unsupported,
         handle_get_405,
         handle_origin_absent_ok,
         handle_origin_allowed_ok,
@@ -55,7 +81,10 @@ dispatch_initialize(_Config) ->
     Params = #{~"protocolVersion" => ~"2025-06-18", ~"capabilities" => #{}},
     {reply, #{~"result" := Result}} = dispatch(~"initialize", Params, 1),
     ?assertEqual(~"2025-06-18", maps:get(~"protocolVersion", Result)),
-    ?assertEqual(#{tools => #{}}, maps:get(~"capabilities", Result)),
+    ?assertEqual(
+        #{tools => #{}, resources => #{}, prompts => #{}},
+        maps:get(~"capabilities", Result)
+    ),
     ?assertEqual(
         #{~"name" => ~"arizona_test", ~"version" => ~"0.1.0"},
         maps:get(~"serverInfo", Result)
@@ -130,6 +159,92 @@ dispatch_unknown_notification(_Config) ->
 dispatch_notifications_initialized(_Config) ->
     ?assertEqual(notification, dispatch(~"notifications/initialized", #{}, undefined)).
 
+dispatch_resources_list(_Config) ->
+    {reply, #{~"result" := #{~"resources" := Resources}}} = dispatch(~"resources/list", #{}, 20),
+    ?assertEqual(
+        [~"mem://greeting", ~"mem://locked", ~"mem://structured"],
+        [maps:get(~"uri", R) || R <- Resources]
+    ),
+    [Greeting | _] = Resources,
+    ?assertEqual(~"text/plain", maps:get(~"mimeType", Greeting)),
+    ?assertEqual(~"A greeting", maps:get(~"description", Greeting)).
+
+dispatch_resources_read(_Config) ->
+    {reply, #{~"result" := Result}} = dispatch(
+        ~"resources/read", #{~"uri" => ~"mem://greeting"}, 21
+    ),
+    ?assertEqual(
+        #{~"contents" => [#{~"uri" => ~"mem://greeting", ~"text" => ~"hello"}]},
+        Result
+    ).
+
+dispatch_resources_read_structured(_Config) ->
+    {reply, #{~"result" := Result}} = dispatch(
+        ~"resources/read", #{~"uri" => ~"mem://structured"}, 26
+    ),
+    %% The app-supplied content entries pass through verbatim (atom keys
+    %% until JSON encode).
+    ?assertMatch(
+        #{~"contents" := [#{uri := ~"mem://structured", text := ~"raw"}]},
+        Result
+    ).
+
+dispatch_resources_read_error(_Config) ->
+    {error, #{~"error" := #{~"code" := Code, ~"message" := Message}}} =
+        dispatch(~"resources/read", #{~"uri" => ~"mem://locked"}, 22),
+    ?assertEqual(-32002, Code),
+    ?assertEqual(~"resource is locked", Message).
+
+dispatch_resources_read_unknown(_Config) ->
+    {error, #{~"error" := #{~"code" := Code}}} =
+        dispatch(~"resources/read", #{~"uri" => ~"mem://nope"}, 23),
+    ?assertEqual(-32002, Code).
+
+dispatch_resources_read_missing_uri(_Config) ->
+    {error, #{~"error" := #{~"code" := Code}}} = dispatch(~"resources/read", #{}, 24),
+    ?assertEqual(-32602, Code).
+
+dispatch_resources_unsupported(_Config) ->
+    {error, #{~"error" := #{~"code" := Code}}} =
+        dispatch_on(arizona_mcp_minimal_server, ~"resources/list", #{}, 25),
+    ?assertEqual(-32601, Code).
+
+dispatch_prompts_list(_Config) ->
+    {reply, #{~"result" := #{~"prompts" := Prompts}}} = dispatch(~"prompts/list", #{}, 30),
+    ?assertEqual([~"greet", ~"deny"], [maps:get(~"name", P) || P <- Prompts]),
+    [Greet | _] = Prompts,
+    %% Prompt argument metadata passes through (atom keys until JSON encode).
+    ?assertMatch([#{name := ~"who", required := true}], maps:get(~"arguments", Greet)).
+
+dispatch_prompts_get(_Config) ->
+    Params = #{~"name" => ~"greet", ~"arguments" => #{~"who" => ~"Ada"}},
+    {reply, #{~"result" := Result}} = dispatch(~"prompts/get", Params, 31),
+    ?assertEqual(~"A greeting", maps:get(~"description", Result)),
+    ?assertEqual(
+        [#{role => ~"user", content => #{type => ~"text", text => ~"Hello, Ada"}}],
+        maps:get(~"messages", Result)
+    ).
+
+dispatch_prompts_get_error(_Config) ->
+    {error, #{~"error" := #{~"code" := Code, ~"message" := Message}}} =
+        dispatch(~"prompts/get", #{~"name" => ~"deny"}, 32),
+    ?assertEqual(-32602, Code),
+    ?assertEqual(~"prompt denied", Message).
+
+dispatch_prompts_get_unknown(_Config) ->
+    {error, #{~"error" := #{~"code" := Code}}} =
+        dispatch(~"prompts/get", #{~"name" => ~"nope"}, 33),
+    ?assertEqual(-32602, Code).
+
+dispatch_prompts_get_missing_name(_Config) ->
+    {error, #{~"error" := #{~"code" := Code}}} = dispatch(~"prompts/get", #{}, 34),
+    ?assertEqual(-32602, Code).
+
+dispatch_prompts_unsupported(_Config) ->
+    {error, #{~"error" := #{~"code" := Code}}} =
+        dispatch_on(arizona_mcp_minimal_server, ~"prompts/list", #{}, 35),
+    ?assertEqual(-32601, Code).
+
 %% --------------------------------------------------------------------
 %% handle/1 (transport: method gate + origin + crash mapping)
 %% --------------------------------------------------------------------
@@ -175,8 +290,11 @@ handle_tool_crash_internal_error(_Config) ->
 %% --------------------------------------------------------------------
 
 dispatch(Method, Params, Id) ->
+    dispatch_on(?SERVER, Method, Params, Id).
+
+dispatch_on(Mod, Method, Params, Id) ->
     Request = #{method => Method, params => Params, id => Id},
-    arizona_mcp_handler:dispatch(?SERVER, Request, #{}).
+    arizona_mcp_handler:dispatch(Mod, Request, #{}).
 
 handle(Method, Headers, Body, Opts) ->
     %% A complete `roadrunner_req:request()` (method/target/version/headers

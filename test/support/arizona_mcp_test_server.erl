@@ -5,9 +5,14 @@
 -export([init/1]).
 -export([tools/1]).
 -export([handle_tool/3]).
+-export([resources/1]).
+-export([read_resource/2]).
+-export([prompts/1]).
+-export([get_prompt/3]).
 
 init(_InitParams) ->
-    {ok, #{name => ~"arizona_test", version => ~"0.1.0"}, #{tools => #{}}, #{}}.
+    {ok, #{name => ~"arizona_test", version => ~"0.1.0"},
+        #{tools => #{}, resources => #{}, prompts => #{}}, #{}}.
 
 tools(_State) ->
     [
@@ -54,3 +59,47 @@ handle_tool(~"echo", Args, State) ->
             structured_content => Args
         },
         State}.
+
+resources(_State) ->
+    [
+        #{
+            uri => ~"mem://greeting",
+            name => ~"greeting",
+            description => ~"A greeting",
+            mime_type => ~"text/plain"
+        },
+        #{uri => ~"mem://locked", name => ~"locked"},
+        #{uri => ~"mem://structured", name => ~"structured"}
+    ].
+
+read_resource(~"mem://greeting", State) ->
+    {reply, ~"hello", State};
+read_resource(~"mem://locked", State) ->
+    {error, ~"resource is locked", State};
+read_resource(~"mem://structured", State) ->
+    %% Map form: the app supplies its own content entries verbatim.
+    Contents = [#{uri => ~"mem://structured", mime_type => ~"text/plain", text => ~"raw"}],
+    {reply, #{contents => Contents}, State}.
+
+prompts(_State) ->
+    [
+        #{
+            name => ~"greet",
+            description => ~"Greet someone by name",
+            arguments => [#{name => ~"who", description => ~"who to greet", required => true}]
+        },
+        #{name => ~"deny", description => ~"Always fails"}
+    ].
+
+get_prompt(~"greet", Args, State) ->
+    Who = maps:get(~"who", Args, ~"world"),
+    {reply,
+        #{
+            description => ~"A greeting",
+            messages => [
+                #{role => ~"user", content => #{type => ~"text", text => <<"Hello, ", Who/binary>>}}
+            ]
+        },
+        State};
+get_prompt(~"deny", _Args, State) ->
+    {error, ~"prompt denied", State}.
