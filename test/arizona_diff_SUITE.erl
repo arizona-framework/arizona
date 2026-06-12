@@ -15,6 +15,11 @@
     diff_only_changed_emits_ops/1,
     diff_remove_node_op/1,
     diff_replace_with_template_op/1,
+    diff_list_content_change_full_update/1,
+    diff_list_first_item_change_full_update/1,
+    diff_list_grew_full_update/1,
+    diff_list_shrank_full_update/1,
+    diff_list_no_change_no_ops/1,
     diff_text_op/1,
     no_diff_diff3/1,
     no_diff_diff4_top_level/1,
@@ -38,6 +43,11 @@ groups() ->
             diff_mixed_op,
             diff_remove_node_op,
             diff_replace_with_template_op,
+            diff_list_content_change_full_update,
+            diff_list_first_item_change_full_update,
+            diff_list_grew_full_update,
+            diff_list_shrank_full_update,
+            diff_list_no_change_no_ops,
             diff_only_changed_emits_ops,
             diff_bool_attr_add,
             diff_bool_attr_remove,
@@ -235,6 +245,76 @@ diff_replace_with_template_op(Config) when is_list(Config) ->
         ],
         Ops
     ).
+
+%% Plain-list `?each` diffing: any change re-renders the whole list with a
+%% single OP_UPDATE -- never a per-item OP_ITEM_PATCH (plain lists are unkeyed,
+%% so there is no `az-key` to patch). Regression for the "stream item az-key=...
+%% not found for patch" bug. These cover every boolean branch of the diff:
+%%   diff_list_zip:  InnerOps =/= [] (head)  |  RestChanged (tail)  |  neither
+%%   diff_list:      Changed  |  NewTail =/= [] (grew)  |  OldTail =/= [] (shrank)
+
+%% Diff a plain-list `?each` of `Old` vs `New` (items are #{name => Bin}); the
+%% each dynamic depends on `names`, which is marked changed so it isn't skipped.
+each_list_diff(Old, New) ->
+    ItemTmpl = #{
+        t => ?EACH,
+        s => [<<"<li az=\"0\">">>, <<"</li>">>],
+        d => fun(I) -> [{<<"0">>, maps:get(name, I)}] end,
+        f => <<"item">>
+    },
+    {OldItems, _} = arizona_eval:render_list_items(Old, ItemTmpl, {#{}, #{}}),
+    OldSnap = #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [{<<"0">>, #{t => ?EACH, items => OldItems, template => ItemTmpl}}],
+        deps => [#{names => true}],
+        f => <<"parent">>
+    },
+    NewTmpl = #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [{<<"0">>, fun() -> arizona_template:each(New, ItemTmpl) end, {m, 1}}],
+        f => <<"parent">>
+    },
+    {Ops, _Snap, _Views} = arizona_diff:diff(NewTmpl, OldSnap, #{}, #{names => true}),
+    Ops.
+
+%% Assert exactly one OP_UPDATE (full re-render), no per-item OP_ITEM_PATCH, and
+%% return the rendered item-dynamics list from the (fingerprinted) payload.
+assert_full_update(Ops) ->
+    ?assertMatch([[?OP_UPDATE, <<"0">>, #{<<"t">> := ?EACH}]], Ops),
+    ?assertEqual([], [Op || Op <- Ops, hd(Op) =:= ?OP_ITEM_PATCH]),
+    [[?OP_UPDATE, <<"0">>, #{<<"d">> := ItemDs}]] = Ops,
+    ItemDs.
+
+%% Last item's content changes: head item unchanged (InnerOps == []) so the
+%% change is detected via RestChanged from the tail.
+diff_list_content_change_full_update(Config) when is_list(Config) ->
+    Ops = each_list_diff([#{name => <<"a">>}, #{name => <<"b">>}], [
+        #{name => <<"a">>}, #{name => <<"B">>}
+    ]),
+    ItemDs = assert_full_update(Ops),
+    ?assertEqual([[<<"a">>], [<<"B">>]], ItemDs).
+
+%% First item's content changes: detected via InnerOps =/= [] on the head.
+diff_list_first_item_change_full_update(Config) when is_list(Config) ->
+    Ops = each_list_diff([#{name => <<"a">>}, #{name => <<"b">>}], [
+        #{name => <<"A">>}, #{name => <<"b">>}
+    ]),
+    ?assertEqual([[<<"A">>], [<<"b">>]], assert_full_update(Ops)).
+
+%% List grew: NewTail =/= [] drives the full update.
+diff_list_grew_full_update(Config) when is_list(Config) ->
+    Ops = each_list_diff([#{name => <<"a">>}], [#{name => <<"a">>}, #{name => <<"b">>}]),
+    ?assertEqual([[<<"a">>], [<<"b">>]], assert_full_update(Ops)).
+
+%% List shrank: OldTail =/= [] drives the full update.
+diff_list_shrank_full_update(Config) when is_list(Config) ->
+    Ops = each_list_diff([#{name => <<"a">>}, #{name => <<"b">>}], [#{name => <<"a">>}]),
+    ?assertEqual([[<<"a">>]], assert_full_update(Ops)).
+
+%% No item changed and same length -> no ops (every boolean false).
+diff_list_no_change_no_ops(Config) when is_list(Config) ->
+    Items = [#{name => <<"a">>}, #{name => <<"b">>}],
+    ?assertEqual([], each_list_diff(Items, Items)).
 
 diff_only_changed_emits_ops(Config) when is_list(Config) ->
     OldSnap = #{
