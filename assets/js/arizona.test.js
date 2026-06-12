@@ -2439,12 +2439,14 @@ describe('connection params', () => {
                 get onmessage() {
                     return null;
                 },
+                terminate() {},
             };
         };
-        mod.connect('/ws');
+        const disconnect = mod.connect('/ws');
         globalThis.Worker = OrigWorker;
         const wsUrl = posted[0][1];
         expect(wsUrl).not.toContain('params=');
+        disconnect();
     });
 
     it('sends WS URL with connect params as regular query keys', async () => {
@@ -2459,14 +2461,16 @@ describe('connection params', () => {
                 get onmessage() {
                     return null;
                 },
+                terminate() {},
             };
         };
-        mod.connect('/ws', { locale: 'en' });
+        const disconnect = mod.connect('/ws', { locale: 'en' });
         globalThis.Worker = OrigWorker;
         const wsUrl = posted[0][1];
         const qs = new URL(wsUrl.replace(/^ws/, 'http')).searchParams;
         expect(qs.get('_az_path')).toBe('/');
         expect(qs.get('locale')).toBe('en');
+        disconnect();
     });
 });
 
@@ -3151,5 +3155,53 @@ describe('disconnect -- scrollRestoration restore', () => {
         expect(/** @type {any} */ (history).scrollRestoration).toBe('manual');
         mock.restore();
         expect(/** @type {any} */ (history).scrollRestoration).toBe('auto');
+    });
+});
+
+describe('page lifecycle -- bfcache', () => {
+    it('terminates the worker on pagehide so the page can enter bfcache', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        expect(mock.worker.terminate).not.toHaveBeenCalled();
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+        expect(mock.worker.terminate).toHaveBeenCalledOnce();
+
+        mock.restore();
+    });
+
+    it('respawns and reconnects when restored from bfcache (pageshow persisted)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // W_CONNECT === 0; one connect from the initial spawn.
+        const connects = () => mock.posted.filter((d) => d[0] === 0).length;
+        expect(connects()).toBe(1);
+
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+
+        // A second W_CONNECT proves the worker was respawned and reconnected.
+        expect(connects()).toBe(2);
+
+        mock.restore();
+    });
+
+    it('ignores a pageshow that is not a bfcache restore (persisted false)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false }));
+
+        expect(mock.posted.filter((d) => d[0] === 0).length).toBe(1);
+        expect(mock.worker.terminate).not.toHaveBeenCalled();
+
+        mock.restore();
     });
 });

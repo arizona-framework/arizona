@@ -1516,58 +1516,66 @@ function connect(endpoint, params = {}) {
     const qs = userQs ? `_az_path=${pagePath}&${userQs}` : `_az_path=${pagePath}`;
     const wsUrl = `${protocol}//${location.host}${endpoint}?${qs}`;
 
-    // Spawn the Worker -- co-located with this script
+    // Worker is co-located with this script.
     const baseUrl = new URL(/* @vite-ignore */ '.', import.meta.url).href;
-    _worker = new Worker(`${baseUrl}arizona-worker.min.js`, { type: 'module' });
 
     /** @type {Function|null} */
     let _onmessageHook = null;
 
-    _worker.onmessage = (e) => {
-        const msg = e.data;
-        switch (msg[0]) {
-            case 0: {
-                // [0, ops|null, effects|null, firstAfterReconnect]
-                if (msg[1]) applyOps(msg[1]);
-                if (msg[2]) applyEffects(msg[2]);
-                if (msg[3]) restoreFormState();
-                if (_onmessageHook) {
-                    _onmessageHook({
-                        data: JSON.stringify({
-                            ...(msg[1] ? { o: msg[1] } : {}),
-                            ...(msg[2] ? { e: msg[2] } : {}),
-                        }),
-                    });
+    // Spawn the Worker, wire its message handler, and open the socket. Extracted
+    // so a bfcache restore (`pageshow`) can re-establish the connection that
+    // `pagehide` tore down.
+    const spawnWorker = () => {
+        _worker = new Worker(`${baseUrl}arizona-worker.min.js`, { type: 'module' });
+
+        _worker.onmessage = (e) => {
+            const msg = e.data;
+            switch (msg[0]) {
+                case 0: {
+                    // [0, ops|null, effects|null, firstAfterReconnect]
+                    if (msg[1]) applyOps(msg[1]);
+                    if (msg[2]) applyEffects(msg[2]);
+                    if (msg[3]) restoreFormState();
+                    if (_onmessageHook) {
+                        _onmessageHook({
+                            data: JSON.stringify({
+                                ...(msg[1] ? { o: msg[1] } : {}),
+                                ...(msg[2] ? { e: msg[2] } : {}),
+                            }),
+                        });
+                    }
+                    break;
                 }
-                break;
-            }
-            case 1: {
-                // [1, isReconnect]
-                _connected = true;
-                document.documentElement.classList.add('az-connected');
-                document.documentElement.classList.remove('az-disconnected');
-                if (!msg[1]) {
-                    mountHooks(document);
+                case 1: {
+                    // [1, isReconnect]
+                    _connected = true;
+                    document.documentElement.classList.add('az-connected');
+                    document.documentElement.classList.remove('az-disconnected');
+                    if (!msg[1]) {
+                        mountHooks(document);
+                    }
+                    break;
                 }
-                break;
-            }
-            case 2: {
-                // [2, closeCode]
-                _connected = false;
-                document.documentElement.classList.add('az-disconnected');
-                document.documentElement.classList.remove('az-connected');
-                if (msg[1] === WS_CLOSE_CRASH) {
-                    location.reload();
-                    return;
+                case 2: {
+                    // [2, closeCode]
+                    _connected = false;
+                    document.documentElement.classList.add('az-disconnected');
+                    document.documentElement.classList.remove('az-connected');
+                    if (msg[1] === WS_CLOSE_CRASH) {
+                        location.reload();
+                        return;
+                    }
+                    if (msg[1] !== WS_CLOSE_NORMAL) saveFormState();
+                    break;
                 }
-                if (msg[1] !== WS_CLOSE_NORMAL) saveFormState();
-                break;
             }
-        }
+        };
+
+        // Send connect message to Worker
+        workerPost(W_CONNECT, wsUrl);
     };
 
-    // Send connect message to Worker
-    workerPost(W_CONNECT, wsUrl);
+    spawnWorker();
 
     // window._ws proxy for E2E test compatibility
     if (typeof window !== 'undefined') {
@@ -1589,6 +1597,37 @@ function connect(endpoint, params = {}) {
             },
         };
     }
+
+    // Back/forward cache: a live WebSocket makes the page ineligible for the
+    // bfcache, so tear the worker (and its socket) down when the page is hidden,
+    // then re-establish it if the page is later restored from the cache. The
+    // close must be synchronous -- by the time `pagehide` fires the socket is
+    // still open (precisely why the page would otherwise be excluded), and an
+    // async `workerPost(W_CLOSE)` may not run before the page is frozen.
+    window.addEventListener(
+        'pagehide',
+        () => {
+            if (_worker) {
+                _worker.terminate();
+                _worker = null;
+                _connected = false;
+                // Reflect the dropped connection so a bfcache-restored snapshot
+                // shows disconnected until `pageshow` reconnects (the worker is
+                // killed abruptly, so no [2, closeCode] arrives to do this).
+                document.documentElement.classList.remove('az-connected');
+                document.documentElement.classList.add('az-disconnected');
+            }
+        },
+        { signal },
+    );
+    window.addEventListener(
+        'pageshow',
+        (e) => {
+            // Only on a real bfcache restore; a normal load already has a worker.
+            if (e.persisted && !_worker) spawnWorker();
+        },
+        { signal },
+    );
 
     let disconnected = false;
     return function disconnect() {
