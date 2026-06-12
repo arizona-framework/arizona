@@ -35,7 +35,7 @@ callbacks. Tools are always available (their callbacks are required).
 
 ## Tool results vs protocol errors
 
-`handle_tool/3` distinguishes two failure kinds, matching the MCP spec:
+`handle_tool/4` distinguishes two failure kinds, matching the MCP spec:
 
 - `{reply, Result, State}` -- the tool succeeded; `Result` becomes a
   `tools/call` result with `isError: false`.
@@ -46,11 +46,26 @@ callbacks. Tools are always available (their callbacks are required).
 
 A protocol-level fault (unknown method, unknown tool name, malformed
 params) is the transport's concern and surfaces as a JSON-RPC error,
-never reaching `handle_tool/3`.
+never reaching `handle_tool/4`.
+
+## Progress
+
+A `tools/call` may carry a `_meta.progressToken`; when it does, the tool can
+stream `notifications/progress` to the client while it runs, before the final
+result. `handle_tool/4`'s third argument is a progress context: call
+`progress/2,3` with it to emit a progress update. When the client sent no
+token (or in any non-streaming call) the context is inert and `progress/2,3`
+is a no-op, so a tool can always call it unconditionally.
+
+Streaming is automatic and transport-owned: a token-bearing `tools/call` from a
+client that accepts `text/event-stream` answers its POST as an SSE stream (the
+progress notifications, then the result, then close) instead of a buffered JSON
+body. A client that does not accept SSE gets the buffered reply and the progress
+is dropped. The tool just emits; it does not choose the transport.
 
 ## State
 
-`init/1` is the state constructor; `handle_tool/3`, `read_resource/2`, and
+`init/1` is the state constructor; `handle_tool/4`, `read_resource/2`, and
 `get_prompt/3` each return a new state alongside their result.
 
 In **session** mode (a route with `sessions => true`) `init/1` runs once on
@@ -108,13 +123,17 @@ the official MCP SDK client.
 
 -export([broadcast/3]).
 -export([notify/3]).
+-export([progress/2]).
+-export([progress/3]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
-%% The server-push API is called by applications, not from within arizona.
+%% The server-push and progress APIs are called by applications, not from
+%% within arizona.
 -ignore_xref([broadcast/3, notify/3]).
+-ignore_xref([progress/2, progress/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -125,6 +144,8 @@ the official MCP SDK client.
 -export_type([server_info/0]).
 -export_type([capabilities/0]).
 -export_type([state/0]).
+-export_type([progress_ctx/0]).
+-export_type([progress_opts/0]).
 -export_type([tool/0]).
 -export_type([content_block/0]).
 -export_type([tool_result/0]).
@@ -155,6 +176,19 @@ the official MCP SDK client.
 -nominal capabilities() :: map().
 
 -nominal state() :: term().
+
+%% Opaque to the app: a streaming `tools/call`'s context carries the client's
+%% progress token and the connection to emit on; an inert context (`token` is
+%% `undefined`) makes `progress/2,3` a no-op for non-streaming calls.
+-nominal progress_ctx() :: #{
+    token := binary() | integer() | undefined,
+    to := pid() | undefined
+}.
+
+-nominal progress_opts() :: #{
+    total => number(),
+    message => binary()
+}.
 
 -nominal tool() :: #{
     name := binary(),
@@ -235,10 +269,14 @@ capability name, so a binary-keyed capability would never be served.
 
 -doc """
 Run one `tools/call`, dispatched by tool name. `Args` is the decoded
-`arguments` object. Return `{reply, Result, State}` on success or
-`{error, ToolError, State}` for an in-band tool failure.
+`arguments` object. `Ctx` is the progress context: pass it to `progress/2,3`
+to stream `notifications/progress` while the tool runs (a no-op when the
+client sent no `_meta.progressToken`). Return `{reply, Result, State}` on
+success or `{error, ToolError, State}` for an in-band tool failure.
 """.
--callback handle_tool(Name :: binary(), Args :: map(), State :: state()) ->
+-callback handle_tool(
+    Name :: binary(), Args :: map(), Ctx :: progress_ctx(), State :: state()
+) ->
     {reply, tool_result(), state()}
     | {error, tool_error(), state()}.
 
@@ -325,4 +363,41 @@ notify(SessionId, Method, Params) ->
     case arizona_mcp_session_registry:lookup(SessionId) of
         {ok, Pid} -> arizona_mcp_session:notify(Pid, Method, Params);
         error -> ok
+    end.
+
+-doc """
+Emit a `notifications/progress` update from a running `tools/call`, using the
+`Ctx` handed to `handle_tool/4`. `Progress` is the amount done so far. A no-op
+when the client sent no `_meta.progressToken` (the context is inert), so a tool
+can call it unconditionally.
+""".
+-spec progress(Ctx, Progress) -> ok when
+    Ctx :: progress_ctx(),
+    Progress :: number().
+progress(Ctx, Progress) ->
+    progress(Ctx, Progress, #{}).
+
+-doc """
+Emit a `notifications/progress` update with extras. `Opts` may carry `total`
+(the expected final amount) and `message` (a human-readable status). A no-op
+when the context is inert.
+""".
+-spec progress(Ctx, Progress, Opts) -> ok when
+    Ctx :: progress_ctx(),
+    Progress :: number(),
+    Opts :: progress_opts().
+progress(#{token := undefined}, _Progress, _Opts) ->
+    ok;
+progress(#{token := Token, to := To}, Progress, Opts) ->
+    Params0 = #{~"progressToken" => Token, ~"progress" => Progress},
+    Params1 = maybe_put_opt(~"total", total, Opts, Params0),
+    Params = maybe_put_opt(~"message", message, Opts, Params1),
+    To ! {mcp_progress, arizona_jsonrpc:notification(~"notifications/progress", Params)},
+    ok.
+
+%% Copy an optional progress field onto the params under its wire name.
+maybe_put_opt(WireKey, OptKey, Opts, Params) ->
+    case Opts of
+        #{OptKey := Value} -> Params#{WireKey => Value};
+        _ -> Params
     end.

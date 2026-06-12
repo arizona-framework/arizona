@@ -6,7 +6,7 @@
 
 -export([init/1]).
 -export([tools/1]).
--export([handle_tool/3]).
+-export([handle_tool/4]).
 
 init(_InitParams) ->
     {ok, #{name => ~"minimal", version => ~"1.0.0"}, #{tools => #{}}, #{}}.
@@ -14,5 +14,5 @@ init(_InitParams) ->
 tools(_State) ->
     [].
 
-handle_tool(Name, _Args, State) ->
+handle_tool(Name, _Args, _Ctx, State) ->
     {error, <<"no such tool: ", Name/binary>>, State}.

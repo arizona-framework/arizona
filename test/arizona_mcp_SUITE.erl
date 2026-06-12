@@ -11,6 +11,12 @@
     dispatch_tools_call_structured/1,
     dispatch_tools_call_tool_error/1,
     dispatch_tools_call_stateless_no_accumulate/1,
+    streaming_tool_relays_progress/1,
+    streaming_tool_unknown/1,
+    streaming_tool_crash/1,
+    progress_no_opts/1,
+    progress_with_opts/1,
+    progress_inert_noop/1,
     dispatch_tools_call_unknown_tool/1,
     dispatch_tools_call_missing_name/1,
     dispatch_unknown_method/1,
@@ -55,6 +61,12 @@ all() ->
         dispatch_tools_call_structured,
         dispatch_tools_call_tool_error,
         dispatch_tools_call_stateless_no_accumulate,
+        streaming_tool_relays_progress,
+        streaming_tool_unknown,
+        streaming_tool_crash,
+        progress_no_opts,
+        progress_with_opts,
+        progress_inert_noop,
         dispatch_tools_call_unknown_tool,
         dispatch_tools_call_missing_name,
         dispatch_unknown_method,
@@ -115,7 +127,8 @@ dispatch_ping(_Config) ->
 dispatch_tools_list(_Config) ->
     {reply, #{~"result" := #{~"tools" := Tools}}} = dispatch(~"tools/list", #{}, 3),
     ?assertEqual(
-        [~"add", ~"boom", ~"crash", ~"echo", ~"count"], [maps:get(~"name", T) || T <- Tools]
+        [~"add", ~"boom", ~"crash", ~"echo", ~"count", ~"progress"],
+        [maps:get(~"name", T) || T <- Tools]
     ),
     [Add | _] = Tools,
     %% input_schema is renamed to the wire's inputSchema.
@@ -159,6 +172,54 @@ dispatch_tools_call_stateless_no_accumulate(_Config) ->
     Params = #{~"name" => ~"count", ~"arguments" => #{}},
     ?assertEqual(~"1", stateless_count(Params, 40)),
     ?assertEqual(~"1", stateless_count(Params, 41)).
+
+%% run_streaming_tool/6 relays each progress notification, then the final
+%% result, to the conn pid (here, the test process).
+streaming_tool_relays_progress(_Config) ->
+    Ctx = #{token => ~"t", to => self()},
+    _Session1 = arizona_mcp_handler:run_streaming_tool(session(), ~"progress", #{}, 1, Ctx, self()),
+    ?assertEqual(1, recv_progress()),
+    ?assertEqual(2, recv_progress()),
+    ?assertMatch(
+        #{~"result" := #{~"content" := [#{~"text" := ~"done"}], ~"isError" := false}},
+        recv_result()
+    ).
+
+%% An unknown tool name in a streaming call relays a -32602 result, no crash.
+streaming_tool_unknown(_Config) ->
+    Ctx = #{token => ~"t", to => self()},
+    _Session1 = arizona_mcp_handler:run_streaming_tool(session(), ~"nope", #{}, 1, Ctx, self()),
+    ?assertMatch(#{~"error" := #{~"code" := -32602}}, recv_result()).
+
+%% A crashing tool in a streaming call relays a -32603 result, no crash.
+streaming_tool_crash(_Config) ->
+    Ctx = #{token => ~"t", to => self()},
+    _Session1 = arizona_mcp_handler:run_streaming_tool(session(), ~"crash", #{}, 1, Ctx, self()),
+    ?assertMatch(#{~"error" := #{~"code" := -32603}}, recv_result()).
+
+%% progress/2 (no opts): just the token + amount, no total/message.
+progress_no_opts(_Config) ->
+    ok = arizona_mcp:progress(#{token => ~"t", to => self()}, 7),
+    #{~"method" := ~"notifications/progress", ~"params" := Params} = recv_progress_notification(),
+    ?assertEqual(#{~"progressToken" => ~"t", ~"progress" => 7}, Params).
+
+%% progress/3 with opts: total + message ride along; an integer token is fine.
+progress_with_opts(_Config) ->
+    ok = arizona_mcp:progress(#{token => 9, to => self()}, 3, #{total => 5, message => ~"go"}),
+    #{~"params" := Params} = recv_progress_notification(),
+    ?assertEqual(
+        #{~"progressToken" => 9, ~"progress" => 3, ~"total" => 5, ~"message" => ~"go"}, Params
+    ).
+
+%% An inert context (no client token) makes both arities a no-op: nothing sent.
+progress_inert_noop(_Config) ->
+    Inert = #{token => undefined, to => undefined},
+    ok = arizona_mcp:progress(Inert, 1),
+    ok = arizona_mcp:progress(Inert, 1, #{total => 2}),
+    receive
+        {mcp_progress, _} -> ct:fail(unexpected_progress)
+    after 50 -> ok
+    end.
 
 dispatch_tools_call_unknown_tool(_Config) ->
     Params = #{~"name" => ~"nope", ~"arguments" => #{}},
@@ -343,6 +404,31 @@ stateless_count(Params, Id) ->
     {reply, #{~"result" := #{~"content" := [#{~"text" := Text}]}}} =
         dispatch(~"tools/call", Params, Id),
     Text.
+
+%% A session map for the test server, as the transport builds at initialize.
+session() ->
+    #{mod => ?SERVER, state => #{}, caps => #{tools => #{}, resources => #{}, prompts => #{}}}.
+
+%% Receive one relayed progress notification, returning its `progress` amount.
+recv_progress() ->
+    receive
+        {mcp_progress, #{~"params" := #{~"progress" := Progress}}} -> Progress
+    after 5000 -> ct:fail(no_progress)
+    end.
+
+%% Receive the relayed final result object.
+recv_result() ->
+    receive
+        {mcp_result, Object} -> Object
+    after 5000 -> ct:fail(no_result)
+    end.
+
+%% Receive one relayed progress notification (the whole JSON-RPC object).
+recv_progress_notification() ->
+    receive
+        {mcp_progress, Notification} -> Notification
+    after 5000 -> ct:fail(no_progress)
+    end.
 
 dispatch_on(Mod, Method, Params, Id) ->
     Request = #{method => Method, params => Params, id => Id},

@@ -24,6 +24,7 @@ sends `DELETE`) does not leak; every served request resets it.
 
 -export([start_link/3]).
 -export([dispatch/4]).
+-export([run_streaming_tool/6]).
 -export([attach_channel/3]).
 -export([detach_channel/2]).
 -export([notify/3]).
@@ -105,6 +106,22 @@ dispatch(Pid, Method, Params, Id) ->
     %% connection is already dedicated to this one request. (Bounding this and
     %% cancelling on client disconnect is a later-phase hardening.)
     gen_server:call(Pid, {dispatch, Method, Params, Id}, infinity).
+
+-doc """
+Run a streaming `tools/call` against the session's state, relaying the result
+and any `notifications/progress` to `ConnPid` (the POST's loop process). Async
+(a cast) so `ConnPid` is free to push the relayed frames while the tool runs;
+the tool's returned state threads back into the session.
+""".
+-spec run_streaming_tool(Pid, Name, Args, Id, Token, ConnPid) -> ok when
+    Pid :: pid(),
+    Name :: binary(),
+    Args :: map(),
+    Id :: arizona_jsonrpc:id(),
+    Token :: binary() | integer(),
+    ConnPid :: pid().
+run_streaming_tool(Pid, Name, Args, Id, Token, ConnPid) ->
+    gen_server:cast(Pid, {run_streaming_tool, Name, Args, Id, Token, ConnPid}).
 
 -doc """
 Attach a server-to-client SSE channel (a roadrunner loop process) to the
@@ -198,6 +215,16 @@ handle_cast({detach_channel, ChannelPid}, #state{channel = ChannelPid} = State) 
     {noreply, do_detach(State)};
 handle_cast({notify, Method, Params}, State) ->
     {noreply, emit(Method, Params, State)};
+handle_cast(
+    {run_streaming_tool, Name, Args, Id, Token, ConnPid}, #state{session = Session} = State
+) ->
+    %% Run the tool here (serialized, state threads back) while `ConnPid` pushes
+    %% the relayed progress + result. The context's `to` is the POST loop, so
+    %% `arizona_mcp:progress/2,3` reaches the client's stream, not this session's
+    %% channel.
+    Ctx = #{token => Token, to => ConnPid},
+    Session1 = arizona_mcp_handler:run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid),
+    {noreply, refresh_ttl(State#state{session = Session1})};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 

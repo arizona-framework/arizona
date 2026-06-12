@@ -47,6 +47,18 @@ try {
   check("tools/call add => '5'", call.content?.[0]?.text === '5');
   check('tools/call isError false', call.isError === false);
 
+  // A token-bearing tools/call streams notifications/progress before the
+  // result. Passing onProgress makes the SDK attach a progressToken and the
+  // server answer over SSE; the callback fires per progress notification.
+  const seen = [];
+  const streamed = await client.callTool(
+    { name: 'progress', arguments: {} },
+    undefined,
+    { onprogress: (p) => seen.push(p.progress) },
+  );
+  check('tools/call progress streamed', seen.length >= 1);
+  check("tools/call streamed result => 'done'", streamed.content?.[0]?.text === 'done');
+
   const resources = await client.listResources();
   check(
     'resources/list has mem://greeting',

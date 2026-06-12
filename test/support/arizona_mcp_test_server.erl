@@ -4,7 +4,7 @@
 
 -export([init/1]).
 -export([tools/1]).
--export([handle_tool/3]).
+-export([handle_tool/4]).
 -export([resources/1]).
 -export([read_resource/2]).
 -export([prompts/1]).
@@ -50,23 +50,28 @@ tools(_State) ->
             name => ~"count",
             description => ~"Increments and returns a per-session counter",
             input_schema => #{type => ~"object", properties => #{}}
+        },
+        #{
+            name => ~"progress",
+            description => ~"Emits two progress notifications then returns",
+            input_schema => #{type => ~"object", properties => #{}}
         }
     ].
 
-handle_tool(~"add", #{~"a" := A, ~"b" := B}, State) ->
+handle_tool(~"add", #{~"a" := A, ~"b" := B}, _Ctx, State) ->
     {reply, integer_to_binary(A + B), State};
-handle_tool(~"boom", _Args, State) ->
+handle_tool(~"boom", _Args, _Ctx, State) ->
     {error, ~"kaboom", State};
-handle_tool(~"crash", _Args, _State) ->
+handle_tool(~"crash", _Args, _Ctx, _State) ->
     error(intentional_crash);
-handle_tool(~"echo", Args, State) ->
+handle_tool(~"echo", Args, _Ctx, State) ->
     {reply,
         #{
             content => [#{type => ~"text", text => ~"echo"}],
             structured_content => Args
         },
         State};
-handle_tool(~"count", Args, State) ->
+handle_tool(~"count", Args, _Ctx, State) ->
     %% Stateful: each call increments the session-held counter, proving the
     %% returned state threads back. `fail => true` returns the in-band error
     %% outcome (still advancing the counter), proving the error path threads
@@ -76,7 +81,13 @@ handle_tool(~"count", Args, State) ->
     case Args of
         #{~"fail" := true} -> {error, integer_to_binary(Count), State1};
         _ -> {reply, integer_to_binary(Count), State1}
-    end.
+    end;
+handle_tool(~"progress", _Args, Ctx, State) ->
+    %% Emits progress while it runs, proving the streaming-POST path. The Ctx is
+    %% inert for a non-streaming (no progressToken) call, so these are no-ops.
+    ok = arizona_mcp:progress(Ctx, 1, #{total => 2, message => ~"step 1"}),
+    ok = arizona_mcp:progress(Ctx, 2, #{total => 2, message => ~"step 2"}),
+    {reply, ~"done", State}.
 
 resources(_State) ->
     [

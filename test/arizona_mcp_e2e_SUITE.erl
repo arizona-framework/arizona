@@ -7,6 +7,8 @@
     post_initialize/1,
     post_tools_list/1,
     post_tools_call/1,
+    post_streaming_progress/1,
+    post_progress_without_accept_buffered/1,
     post_resources_read/1,
     post_prompts_get/1,
     get_returns_405/1,
@@ -23,6 +25,7 @@
     session_second_channel_409/1,
     session_survives_channel_disconnect/1,
     session_resumes_with_last_event_id/1,
+    session_streaming_progress/1,
     auth_missing_token_401/1,
     auth_valid_token_ok/1,
     session_init_crash_internal_error/1
@@ -36,6 +39,8 @@ all() ->
         post_initialize,
         post_tools_list,
         post_tools_call,
+        post_streaming_progress,
+        post_progress_without_accept_buffered,
         post_resources_read,
         post_prompts_get,
         get_returns_405,
@@ -52,6 +57,7 @@ all() ->
         session_second_channel_409,
         session_survives_channel_disconnect,
         session_resumes_with_last_event_id,
+        session_streaming_progress,
         auth_missing_token_401,
         auth_valid_token_ok,
         session_init_crash_internal_error
@@ -138,6 +144,44 @@ post_tools_call(Config) ->
     #{~"result" := Result} = body_json(Resp),
     ?assertEqual(
         #{~"content" => [#{~"type" => ~"text", ~"text" => ~"5"}], ~"isError" => false},
+        Result
+    ).
+
+post_streaming_progress(Config) ->
+    %% A token-bearing tools/call answers its POST as an SSE stream: the
+    %% progress notifications (carrying the client's token) arrive before the
+    %% result. Stateless mode runs the tool in a conn-side worker.
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":8,"method":"tools/call",
+     "params":{"name":"progress","arguments":{},"_meta":{"progressToken":"tok-1"}}}
+    """,
+    Data = post_stream_until(Config, "/mcp", [], Body, ~"\"done\""),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"text/event-stream")),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"notifications/progress")),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"\"progressToken\":\"tok-1\"")),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"step 1")),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"step 2")),
+    %% The progress events precede the final result on the wire.
+    {Step1, _} = binary:match(Data, ~"step 1"),
+    {Done, _} = binary:match(Data, ~"\"done\""),
+    ?assert(Step1 < Done).
+
+post_progress_without_accept_buffered(Config) ->
+    %% A token-bearing tools/call from a client that does NOT accept SSE (no
+    %% `Accept: text/event-stream`) falls back to a buffered JSON reply: the tool
+    %% still runs, the progress notifications are simply dropped.
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":10,"method":"tools/call",
+     "params":{"name":"progress","arguments":{},"_meta":{"progressToken":"tok-2"}}}
+    """,
+    Resp = post(Config, "/mcp", [], Body),
+    ?assertEqual(200, status_code(Resp)),
+    ?assertNotEqual(nomatch, binary:match(headers(Resp), ~"application/json")),
+    #{~"result" := Result} = body_json(Resp),
+    ?assertEqual(
+        #{~"content" => [#{~"type" => ~"text", ~"text" => ~"done"}], ~"isError" => false},
         Result
     ).
 
@@ -298,6 +342,21 @@ session_resumes_with_last_event_id(Config) ->
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Data, ~"\"seq\":2")).
 
+session_streaming_progress(Config) ->
+    %% Same streaming contract in session mode -- the session runs the tool and
+    %% relays progress + result to the POST's stream. Uses an integer token.
+    SessionId = open_session(Config),
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":9,"method":"tools/call",
+     "params":{"name":"progress","arguments":{},"_meta":{"progressToken":42}}}
+    """,
+    Data = post_stream_until(Config, "/mcp-session", session_header(SessionId), Body, ~"\"done\""),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"text/event-stream")),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"notifications/progress")),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"\"progressToken\":42")),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"\"done\"")).
+
 %% --------------------------------------------------------------------
 %% Auth-gated tests (/mcp-auth, auth => bearer hook)
 %% --------------------------------------------------------------------
@@ -357,6 +416,34 @@ send_channel_get(Config, SessionId, ExtraHeaders) ->
     ],
     ok = gen_tcp:send(Sock, Req),
     Sock.
+
+%% Send a POST and read its streamed (SSE) response until `Needle` appears. The
+%% response has no Content-Length (it is chunked), so the buffered `recv_response`
+%% does not apply.
+post_stream_until(Config, Path, ExtraHeaders, Body, Needle) ->
+    Port = ?config(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "POST ",
+        Path,
+        " HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "Content-Type: application/json\r\n",
+        %% The Streamable HTTP precondition for an SSE response.
+        "Accept: application/json, text/event-stream\r\n",
+        "Content-Length: ",
+        integer_to_list(byte_size(Body)),
+        "\r\n",
+        ExtraHeaders,
+        "\r\n",
+        Body
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    Data = recv_until(Sock, Needle, 5000),
+    gen_tcp:close(Sock),
+    Data.
 
 %% Accumulate socket data until `Needle` appears or time runs out.
 recv_until(Sock, Needle, Timeout) ->
