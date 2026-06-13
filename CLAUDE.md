@@ -73,6 +73,10 @@ handle_event(~"inc", _P, B) ->
 
 `push_event` auto-collects payload from inputs/forms. Explicit payload merges on top. Op codes in `include/arizona_effect.hrl`.
 
+### View transitions
+
+A view transition wraps **any** DOM change in `document.startViewTransition` (not tied to navigation). Request one per-trigger (no global switch) with `arizona_js:transition(Cmd[, Opts])` -- wraps the command (or list) whose change should animate, like `on_key/2` -- or the `az_transition` attribute on any triggering element (bare = cross-fade, `{az_transition, ~"slide back"}` = space-separated `types`). A sync effect animates in place; `navigate`/`push_event` animate the resulting server diff. Guarded by feature-detect + `prefers-reduced-motion`; back/forward replays via history state. Real `<a href>` navigations transition through user CSS (`@view-transition { navigation: auto }`). All styling is user-owned CSS. See [.claude/rules/js.md](.claude/rules/js.md).
+
 ## Client-owned slots -- `?local`
 
 `?local(Key, Init)` declares a slot the server renders **once** at SSR and then **never diffs** -- the browser owns the value (keyed by `Key`, a binary or atom literal) and updates it locally with **no WebSocket round-trip**. For UI-only state (dialog open/close, tabs, toggles). It binds either content or an attribute value. A content `?local` is **not** restricted to being the sole child -- an element can hold several content slots, freely mixed with static text and other dynamic children. An attribute value may also interpolate **one** `?local` with static prefix/suffix (two locals, or a local mixed with a server-owned dynamic, in one attribute are compile errors). Interpolation is for **string-valued** attributes only; boolean attributes must use a whole-value `?local` (an interpolated value always renders `name="value"`, so an interpolated boolean stays present):

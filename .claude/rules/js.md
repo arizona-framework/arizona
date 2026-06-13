@@ -25,6 +25,35 @@ Exports: `connect`, `applyOps`, `applyEffects`, `resolveEl`, `pushEvent`, `pushE
 - Forward-after-back: destination entry has null state -> scroll to top. Documented non-goal; future restore would need a state-ID-keyed map backed by sessionStorage, not `replaceState`-on-scroll.
 - Modifier clicks (ctrl/cmd/shift/alt, non-primary button) on `az-navigate` links fall through to the browser.
 
+## View transitions
+
+A view transition wraps **any** DOM change in `document.startViewTransition` -- it is not tied to navigation. The API is mostly CSS; the framework only *starts* the transition for changes the browser can't see on its own. Two ways to request one (opt-in per-trigger, no global switch):
+
+- **`arizona_js:transition(Cmd)` / `transition(Cmd, Opts)`** -- wraps the command (or list of commands) whose DOM change should animate, exactly like `on_key/2` wraps a command. `Opts` is `#{types => [binary()]}`.
+
+  ```erlang
+  {az_click, arizona_js:transition(arizona_js:toggle(~"#panel"))}                      %% sync client effect
+  {az_click, arizona_js:transition(arizona_js:navigate(~"/x"), #{types => [~"slide"]})} %% navigation
+  {az_click, arizona_js:transition(arizona_js:push_event(~"load_more"))}                %% server diff
+  ```
+
+- **`az_transition` attribute** on any element with a trigger (an `az-navigate` link **or** an `az_click`/`az_submit`/... element) -- bare (`az_transition`) = default cross-fade; `{az_transition, ~"slide back"}` = a space-separated list of view-transition `types` (tokens trimmed, empties dropped). It wraps whatever the element's trigger does.
+
+The client picks sync vs async from the wrapped command:
+- **Sync effect** (`toggle`/`add_class`/...): wrapped in place immediately.
+- **`navigate`**: the page swap arrives a round-trip later; the worker message handler wraps the `OP_REPLACE` batch (a stray text/attr tick in between is ignored).
+- **`push_event`**: the resulting server diff arrives later; the handler wraps the first response batch (then drops the intent, so a no-diff event can't bleed onto a later one). Caveat: on a page with frequent concurrent server pushes -- e.g. a timer -- an interleaving diff could be the one animated; navigation and sync effects are race-free.
+
+Wrapping a **mix** of sync and async commands (`transition([toggle(...), push_event(...)])`) animates the async result; sync siblings apply immediately, unwrapped. Wrap one kind per call.
+
+The wrap is applied at the **worker message handler**, so a message's ops **and** effects animate together, in order.
+
+Behaviour:
+- **Guards:** no-ops (instant swap) when `document.startViewTransition` is absent or `prefers-reduced-motion: reduce` matches. `types` use the object form `startViewTransition({update, types})` only when `CSS.supports('selector(:active-view-transition-type(x))')`; otherwise the bare-callback form (older engines still cross-fade, ignore types).
+- **Back/forward:** a transitioned nav stamps `_azTransition` onto both the outgoing and new history entries; popstate replays `e.state._azTransition`, so traversing the edge animates symmetrically. (Direction-aware type reversal is not done yet -- the same opts are reused both ways.)
+- **Cross-document** (real `<a href>` navigations, full reloads): pure CSS -- add `@view-transition { navigation: auto; }` to the page. No framework code.
+- **Styling** is user CSS. By default the whole root cross-fades; to scope or morph a single element, give it a `view-transition-name` (it then animates independently across the change). `::view-transition-*` and `:active-view-transition-type(<type>)` customize the animation. A `view-transition-name` must be unique among rendered elements during a transition, or the browser skips it.
+
 ## Connection detection
 
 Server-side: handlers use `?connected` macro (delegates to `arizona_live:connected()`) in `mount/1` to detect WS vs SSR context. For effects, use `self() ! arizona_connected` and handle in `handle_info/2`. No `az-connect` HTML attribute -- connection is fully server-driven.

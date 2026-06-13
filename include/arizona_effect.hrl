@@ -19,3 +19,4 @@
 -define(EFFECT_SET_LOCAL, 17).
 -define(EFFECT_REQUEST_PIP, 18).
 -define(EFFECT_EXIT_PIP, 19).
+-define(EFFECT_TRANSITION, 20).

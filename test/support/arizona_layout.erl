@@ -29,7 +29,9 @@ render(Bindings) ->
                     ~" | ",
                     {a, [{href, ~"/local-app"}, az_navigate], [~"App"]},
                     ~" | ",
-                    {a, [{href, ~"/pip"}, az_navigate], [~"PiP"]}
+                    {a, [{href, ~"/pip"}, az_navigate], [~"PiP"]},
+                    ~" | ",
+                    {a, [{href, ~"/transitions"}, az_navigate], [~"Transitions"]}
                 ]},
                 ?inner_content,
                 {script, [{type, ~"module"}], [

@@ -58,6 +58,8 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 -export([set_all/2]).
 -export([request_pip/1]).
 -export([exit_pip/1]).
+-export([transition/1]).
+-export([transition/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -88,7 +90,9 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     set/3,
     set_all/2,
     request_pip/1,
-    exit_pip/1
+    exit_pip/1,
+    transition/1,
+    transition/2
 ]).
 
 %% --------------------------------------------------------------------
@@ -276,6 +280,31 @@ inline. No-op if the view isn't popped out.
     ViewId :: binary().
 exit_pip(ViewId) -> {arizona_effect, [?EFFECT_EXIT_PIP, ViewId]}.
 
+-doc """
+Wraps a command (or list of commands) so the DOM change it causes plays inside a
+view transition (`document.startViewTransition`). Works for a client-side effect
+(e.g. `toggle/1`, animated immediately), a `navigate/1,2` (the page swap
+animates), or a `push_event` (the resulting server diff animates). A view
+transition is not tied to navigation -- it wraps any DOM change. Equivalent to
+`transition/2` with no options.
+""".
+-spec transition(Cmd) -> arizona_effect:cmd() when
+    Cmd :: arizona_effect:cmd() | [arizona_effect:cmd()].
+transition(Cmd) -> transition(Cmd, #{}).
+
+-doc """
+Like `transition/1` but with options. `types` is a list of view-transition type
+names activated for the transition (matched by `:active-view-transition-type(...)`
+CSS), letting one stylesheet pick a different animation per call.
+""".
+-spec transition(Cmd, Opts) -> arizona_effect:cmd() when
+    Cmd :: arizona_effect:cmd() | [arizona_effect:cmd()],
+    Opts :: #{types => [binary()]}.
+transition({arizona_effect, Inner}, Opts) ->
+    {arizona_effect, [?EFFECT_TRANSITION, Opts, Inner]};
+transition([_ | _] = Cmds, Opts) ->
+    {arizona_effect, [?EFFECT_TRANSITION, Opts, [C || {arizona_effect, C} <:- Cmds]]}.
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
@@ -322,6 +351,20 @@ request_pip_test() ->
 
 exit_pip_test() ->
     {arizona_effect, [?EFFECT_EXIT_PIP, ~"v"]} = exit_pip(~"v").
+
+transition_test() ->
+    {arizona_effect, [?EFFECT_TRANSITION, #{}, [?EFFECT_TOGGLE, ~"#m"]]} =
+        transition(toggle(~"#m")).
+
+transition_with_opts_test() ->
+    {arizona_effect, [?EFFECT_TRANSITION, #{types := [~"slide"]}, [?EFFECT_NAVIGATE, ~"/p"]]} =
+        transition(navigate(~"/p"), #{types => [~"slide"]}).
+
+transition_list_test() ->
+    {arizona_effect, [
+        ?EFFECT_TRANSITION, #{}, [[?EFFECT_ADD_CLASS, ~"#m", ~"on"], [?EFFECT_TOGGLE, ~"#n"]]
+    ]} =
+        transition([add_class(~"#m", ~"on"), toggle(~"#n")]).
 
 builders_test() ->
     ?assertEqual({arizona_effect, [?EFFECT_SHOW, ~"#m"]}, show(~"#m")),

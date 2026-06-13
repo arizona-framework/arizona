@@ -211,6 +211,127 @@ function saveCurrentScroll() {
     );
 }
 
+// --------------------------------------------------------------------------
+// View transitions
+// --------------------------------------------------------------------------
+// A view transition wraps a DOM change in document.startViewTransition so the
+// browser cross-fades (or, with user CSS, morphs) old -> new. Transitions are
+// not tied to navigation -- they wrap any DOM change the framework drives:
+//   - a synchronous client effect (toggle/add_class/...) -- wrapped immediately
+//   - an az-navigate round-trip -- the OP_REPLACE arrives a message later
+//   - a push_event -- the resulting server diff arrives a message later
+// Real <a href> navigations animate via the user's `@view-transition` CSS, no
+// code here.
+//
+// For the async cases (navigate/push_event) `_pendingTransition` holds the
+// intent until the server response lands; the worker message handler then wraps
+// that message's ops+effects together. `kind` says which batch to wait for:
+// 'replace' (a navigation's page swap -- a stray text/attr tick is ignored) or
+// 'any' (the next non-empty diff from a push_event). Set by the az-transition
+// attribute, an arizona_js:transition command, or replayed from history state
+// on back/forward. Synchronous effects never set it -- they wrap in place.
+
+/** @type {{types?: string[], kind: 'replace'|'any'}|null} */
+let _pendingTransition = null;
+
+/**
+ * Whether a view transition should run now: the API exists and the user has
+ * not asked to reduce motion. Guarded for jsdom, which lacks matchMedia.
+ * @returns {boolean}
+ */
+function canTransition() {
+    if (typeof document.startViewTransition !== 'function') return false;
+    if (!window.matchMedia) return true;
+    return !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/**
+ * Whether the browser supports the view-transition `types` option (the
+ * object-form startViewTransition + :active-view-transition-type selector).
+ * Older View-Transition browsers still cross-fade; they just ignore types.
+ * @returns {boolean}
+ */
+function supportsVTTypes() {
+    return (
+        typeof CSS !== 'undefined' &&
+        !!CSS.supports &&
+        CSS.supports('selector(:active-view-transition-type(x))')
+    );
+}
+
+/**
+ * Run `fn` (a DOM mutation) inside a view transition when possible, else run
+ * it directly. Uses the object form to pass `types` when supported.
+ * @param {{types?: string[]}|null} opts
+ * @param {() => void} fn
+ */
+function runTransition(opts, fn) {
+    if (!canTransition()) {
+        fn();
+        return;
+    }
+    const types = opts?.types;
+    const vt =
+        types?.length && supportsVTTypes()
+            ? document.startViewTransition({ update: fn, types })
+            : document.startViewTransition(fn);
+    // `ready` rejects when the transition is skipped -- a duplicate
+    // view-transition-name, or interruption by a newer transition (rapid nav).
+    // The DOM still updates; swallow it so it isn't an unhandled rejection.
+    vt?.ready?.catch(() => {});
+}
+
+/**
+ * Whether this op batch is the one a pending transition is waiting for. 'replace'
+ * matches only a page-swap OP_REPLACE (so a concurrent text/attr tick does not
+ * consume the intent); 'any' matches any non-empty batch (a push_event result).
+ * @param {Array<Array<*>>} ops
+ * @param {'replace'|'any'} kind
+ * @returns {boolean}
+ */
+function opsMatchTransition(ops, kind) {
+    if (!ops?.length) return false;
+    return kind === 'replace' ? ops.some((op) => op[0] === OP.REPLACE) : true;
+}
+
+/**
+ * Read the `az-transition` attribute into a transition opts object, or null if
+ * absent. The value is a space-separated list of view-transition type names
+ * (like `class`); tokens are trimmed and empties dropped, so a bare attribute
+ * or stray whitespace yields an empty `types` list (plain cross-fade).
+ * @param {Element} el
+ * @returns {{types: string[]}|null}
+ */
+function parseTransitionAttr(el) {
+    if (!el.hasAttribute('az-transition')) return null;
+    const raw = el.getAttribute('az-transition') || '';
+    return { types: raw.split(/\s+/).filter(Boolean) };
+}
+
+/**
+ * Wrap an element's parsed event commands in a synthetic transition command when
+ * the element carries `az-transition`, so the attribute animates whatever those
+ * commands do (a client effect, a navigate, or a push_event) -- not just links.
+ * A no-op without the attribute.
+ * @param {Element} el
+ * @param {Array<*>} cmds
+ * @returns {Array<*>}
+ */
+function withTransitionAttr(el, cmds) {
+    const t = parseTransitionAttr(el);
+    return t ? [JS_TRANSITION, t, cmds] : cmds;
+}
+
+/**
+ * Stamp the pending transition opts onto the current (outgoing) history entry,
+ * preserving existing state (e.g. _azScroll), so back/forward across this edge
+ * replays the transition.
+ */
+function stampOutgoingTransition() {
+    const st = history.state || {};
+    history.replaceState({ ...st, _azTransition: _pendingTransition }, '', location.href);
+}
+
 /**
  * Perform an SPA navigation. Shared code path for `az-navigate` clicks and
  * `arizona_js:navigate/1,2` effects.
@@ -226,15 +347,21 @@ function saveCurrentScroll() {
  *   - fullUrl  Exact URL to write to history (defaults to
  *              `path + '?' + qs + '#' + hash`). Lets the click handler
  *              preserve the original href verbatim.
+ *
+ * Reads `_pendingTransition` (set by the caller from the az-transition attribute
+ * or a transition command): when set, it is stamped onto both the outgoing and
+ * the new history entry so popstate can replay the transition across this edge.
  */
 function navigateTo(path, qs, hash, opts) {
     const pathAndQs = qs ? `${path}?${qs}` : path;
     const fullUrl = opts.fullUrl || (hash ? `${pathAndQs}#${hash}` : pathAndQs);
+    const navState = _pendingTransition ? { _azTransition: _pendingTransition } : null;
     if (opts.replace) {
-        history.replaceState(null, '', fullUrl);
+        history.replaceState(navState, '', fullUrl);
     } else {
         saveCurrentScroll();
-        history.pushState(null, '', fullUrl);
+        if (_pendingTransition) stampOutgoingTransition();
+        history.pushState(navState, '', fullUrl);
         if (!opts.noscroll) _pendingScroll = { kind: 'push', hash };
     }
     workerPost(W_SEND, JSON.stringify(['navigate', { path, qs }]));
@@ -399,7 +526,9 @@ function applyUpdateOp(el, html) {
 
 /**
  * Apply a batch of ops to the DOM. Ops arrive pre-resolved from the Worker --
- * all template payloads are already HTML strings.
+ * all template payloads are already HTML strings. A view transition, when one is
+ * pending, wraps this call (plus the message's effects) at the message handler,
+ * not here -- so `applyOps` itself is synchronous.
  * @param {Array<Array<*>>} ops
  */
 function applyOps(ops) {
@@ -998,7 +1127,8 @@ const JS_PUSH_EVENT = 0,
     JS_ON_KEY = 16,
     JS_SET_LOCAL = 17,
     JS_REQUEST_PIP = 18,
-    JS_EXIT_PIP = 19;
+    JS_EXIT_PIP = 19,
+    JS_TRANSITION = 20;
 
 /**
  * If `sel` matches an element, call `fn` with it cast to `HTMLElement`.
@@ -1027,105 +1157,134 @@ function withQuery(sel, fn) {
  */
 function executeJS(el, event, cmds) {
     const commands = Array.isArray(cmds[0]) ? cmds : [cmds];
-    for (const cmd of commands) {
-        const op = cmd[0];
-        switch (op) {
-            case JS_PUSH_EVENT: {
-                const evt = cmd[1];
-                const payload =
-                    cmd.length > 2
-                        ? { ...autoPayload(el, event), ...cmd[2] }
-                        : autoPayload(el, event);
-                const msg = JSON.stringify([resolveTarget(el), evt, payload]);
-                if (event) {
-                    scheduleSend(el, event, () => {
-                        workerPost(W_SEND, msg);
-                    });
-                } else {
-                    workerPost(W_SEND, msg);
-                }
-                break;
+    for (const cmd of commands) execOne(el, event, cmd);
+}
+
+/**
+ * Execute a single JS command (the per-command body extracted from executeJS).
+ * @param {Element} el
+ * @param {Event|null} event
+ * @param {Array<*>} cmd
+ */
+function execOne(el, event, cmd) {
+    const op = cmd[0];
+    switch (op) {
+        case JS_TRANSITION: {
+            // Wrap the inner command(s)' DOM change in a view transition. A sync
+            // effect (toggle/add_class/...) wraps in place; navigate/push_event
+            // produce a future server diff, so stash the intent and let the
+            // worker message handler wrap the matching batch.
+            const opts = cmd[1] || {};
+            const inner = cmd[2];
+            const innerCmds = /** @type {Array<Array<*>>} */ (
+                Array.isArray(inner[0]) ? inner : [inner]
+            );
+            const kind = innerCmds.some((c) => c[0] === JS_NAVIGATE)
+                ? 'replace'
+                : innerCmds.some((c) => c[0] === JS_PUSH_EVENT)
+                  ? 'any'
+                  : null;
+            if (kind) {
+                _pendingTransition = { types: opts.types, kind };
+                executeJS(el, event, inner);
+            } else {
+                runTransition(opts, () => executeJS(el, event, inner));
             }
-            case JS_TOGGLE:
-                withQuery(cmd[1], (t) => (t.hidden = !t.hidden));
-                break;
-            case JS_SHOW:
-                withQuery(cmd[1], (t) => (t.hidden = false));
-                break;
-            case JS_HIDE:
-                withQuery(cmd[1], (t) => (t.hidden = true));
-                break;
-            case JS_ADD_CLASS:
-                withQuery(cmd[1], (t) => t.classList.add(cmd[2]));
-                break;
-            case JS_REMOVE_CLASS:
-                withQuery(cmd[1], (t) => t.classList.remove(cmd[2]));
-                break;
-            case JS_TOGGLE_CLASS:
-                withQuery(cmd[1], (t) => t.classList.toggle(cmd[2]));
-                break;
-            case JS_SET_ATTR:
-                withQuery(cmd[1], (t) => t.setAttribute(cmd[2], cmd[3]));
-                break;
-            case JS_REMOVE_ATTR:
-                withQuery(cmd[1], (t) => t.removeAttribute(cmd[2]));
-                break;
-            case JS_DISPATCH_EVENT:
-                document.dispatchEvent(new CustomEvent(cmd[1], { detail: cmd[2] || {} }));
-                break;
-            case JS_NAVIGATE: {
-                const full = cmd[1];
-                const u = new URL(full, location.origin);
-                const hash = u.hash ? u.hash.slice(1) : '';
-                const qs = u.search ? u.search.slice(1) : '';
-                navigateTo(u.pathname, qs, hash, { ...(cmd[2] || {}), fullUrl: full });
-                break;
-            }
-            case JS_FOCUS:
-                withQuery(cmd[1], (t) => t.focus());
-                break;
-            case JS_BLUR:
-                withQuery(cmd[1], (t) => t.blur());
-                break;
-            case JS_SCROLL_TO:
-                withQuery(cmd[1], (t) => t.scrollIntoView(cmd[2] || { behavior: 'smooth' }));
-                break;
-            case JS_SET_TITLE:
-                document.title = cmd[1];
-                break;
-            case JS_RELOAD:
-                location.reload();
-                break;
-            case JS_ON_KEY: {
-                const f = cmd[1];
-                const lk =
-                    event && /** @type {any} */ (event).key
-                        ? /** @type {any} */ (event).key.toLowerCase()
-                        : '';
-                if (Array.isArray(f) ? f.includes(lk) : new RegExp(f).test(lk))
-                    executeJS(el, event, cmd[2]);
-                break;
-            }
-            case JS_SET_LOCAL: {
-                // Client-owned slot update -- never sent to the server. cmd[3]:
-                // absent => closest view (the trigger); a viewId string => that
-                // view; true => all views.
-                const scope = cmd[3];
-                if (scope === true) {
-                    setAll(cmd[1], cmd[2]);
-                } else {
-                    const viewId = scope ?? resolveTarget(el);
-                    if (viewId) set(viewId, cmd[1], cmd[2]);
-                }
-                break;
-            }
-            case JS_REQUEST_PIP:
-                requestPip(cmd[1]);
-                break;
-            case JS_EXIT_PIP:
-                exitPip(cmd[1]);
-                break;
+            break;
         }
+        case JS_PUSH_EVENT: {
+            const evt = cmd[1];
+            const payload =
+                cmd.length > 2 ? { ...autoPayload(el, event), ...cmd[2] } : autoPayload(el, event);
+            const msg = JSON.stringify([resolveTarget(el), evt, payload]);
+            if (event) {
+                scheduleSend(el, event, () => {
+                    workerPost(W_SEND, msg);
+                });
+            } else {
+                workerPost(W_SEND, msg);
+            }
+            break;
+        }
+        case JS_TOGGLE:
+            withQuery(cmd[1], (t) => (t.hidden = !t.hidden));
+            break;
+        case JS_SHOW:
+            withQuery(cmd[1], (t) => (t.hidden = false));
+            break;
+        case JS_HIDE:
+            withQuery(cmd[1], (t) => (t.hidden = true));
+            break;
+        case JS_ADD_CLASS:
+            withQuery(cmd[1], (t) => t.classList.add(cmd[2]));
+            break;
+        case JS_REMOVE_CLASS:
+            withQuery(cmd[1], (t) => t.classList.remove(cmd[2]));
+            break;
+        case JS_TOGGLE_CLASS:
+            withQuery(cmd[1], (t) => t.classList.toggle(cmd[2]));
+            break;
+        case JS_SET_ATTR:
+            withQuery(cmd[1], (t) => t.setAttribute(cmd[2], cmd[3]));
+            break;
+        case JS_REMOVE_ATTR:
+            withQuery(cmd[1], (t) => t.removeAttribute(cmd[2]));
+            break;
+        case JS_DISPATCH_EVENT:
+            document.dispatchEvent(new CustomEvent(cmd[1], { detail: cmd[2] || {} }));
+            break;
+        case JS_NAVIGATE: {
+            const full = cmd[1];
+            const u = new URL(full, location.origin);
+            const hash = u.hash ? u.hash.slice(1) : '';
+            const qs = u.search ? u.search.slice(1) : '';
+            navigateTo(u.pathname, qs, hash, { ...(cmd[2] || {}), fullUrl: full });
+            break;
+        }
+        case JS_FOCUS:
+            withQuery(cmd[1], (t) => t.focus());
+            break;
+        case JS_BLUR:
+            withQuery(cmd[1], (t) => t.blur());
+            break;
+        case JS_SCROLL_TO:
+            withQuery(cmd[1], (t) => t.scrollIntoView(cmd[2] || { behavior: 'smooth' }));
+            break;
+        case JS_SET_TITLE:
+            document.title = cmd[1];
+            break;
+        case JS_RELOAD:
+            location.reload();
+            break;
+        case JS_ON_KEY: {
+            const f = cmd[1];
+            const lk =
+                event && /** @type {any} */ (event).key
+                    ? /** @type {any} */ (event).key.toLowerCase()
+                    : '';
+            if (Array.isArray(f) ? f.includes(lk) : new RegExp(f).test(lk))
+                executeJS(el, event, cmd[2]);
+            break;
+        }
+        case JS_SET_LOCAL: {
+            // Client-owned slot update -- never sent to the server. cmd[3]:
+            // absent => closest view (the trigger); a viewId string => that
+            // view; true => all views.
+            const scope = cmd[3];
+            if (scope === true) {
+                setAll(cmd[1], cmd[2]);
+            } else {
+                const viewId = scope ?? resolveTarget(el);
+                if (viewId) set(viewId, cmd[1], cmd[2]);
+            }
+            break;
+        }
+        case JS_REQUEST_PIP:
+            requestPip(cmd[1]);
+            break;
+        case JS_EXIT_PIP:
+            exitPip(cmd[1]);
+            break;
     }
 }
 
@@ -1322,7 +1481,7 @@ function handleEvent(target, eventType, signal) {
             if (el.hasAttribute('az-prevent-default')) e.preventDefault();
             const raw = el.getAttribute(`az-${eventType}`);
             if (!raw) return;
-            executeJS(el, e, JSON.parse(raw));
+            executeJS(el, e, withTransitionAttr(el, JSON.parse(raw)));
         },
         { signal },
     );
@@ -1353,7 +1512,7 @@ function bindDocumentEvents(target, signal) {
             e.preventDefault();
             form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
             const raw = form.getAttribute('az-submit');
-            if (raw) executeJS(form, e, JSON.parse(raw));
+            if (raw) executeJS(form, e, withTransitionAttr(form, JSON.parse(raw)));
             if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
         },
         { signal },
@@ -1388,7 +1547,7 @@ function bindDocumentEvents(target, signal) {
             if (!container || !_connected) return;
             const raw = container.getAttribute('az-drop');
             if (!raw) return;
-            executeJS(container, e, JSON.parse(raw));
+            executeJS(container, e, withTransitionAttr(container, JSON.parse(raw)));
         },
         { signal },
     );
@@ -1468,6 +1627,10 @@ function connect(endpoint, params = {}) {
                 return;
             }
 
+            // az-transition opts this navigation into a view transition; the
+            // intent is consumed when the navigation's OP_REPLACE lands.
+            const t = parseTransitionAttr(el);
+            _pendingTransition = t ? { types: t.types, kind: 'replace' } : null;
             navigateTo(path, qs, hash, { noscroll, fullUrl: href });
         },
         { signal },
@@ -1493,6 +1656,9 @@ function connect(endpoint, params = {}) {
                 return;
             }
             _pendingScroll = { kind: 'pop', hash, saved };
+            // Replay the transition stamped onto this entry when the edge was
+            // navigated with a transition, so back/forward animate symmetrically.
+            _pendingTransition = e.state?._azTransition || null;
             workerPost(W_SEND, JSON.stringify(['navigate', { path, qs }]));
             workerPost(W_UPDATE_PATH, path);
             _currentPath = path;
@@ -1533,9 +1699,25 @@ function connect(endpoint, params = {}) {
             switch (msg[0]) {
                 case 0: {
                     // [0, ops|null, effects|null, firstAfterReconnect]
-                    if (msg[1]) applyOps(msg[1]);
-                    if (msg[2]) applyEffects(msg[2]);
-                    if (msg[3]) restoreFormState();
+                    const apply = () => {
+                        if (msg[1]) applyOps(msg[1]);
+                        if (msg[2]) applyEffects(msg[2]);
+                        if (msg[3]) restoreFormState();
+                    };
+                    // A pending transition wraps its batch -- ops and effects
+                    // together, in order, so the swap and any effect fall inside
+                    // one snapshot. 'replace' (navigate) waits for the page-swap
+                    // batch, ignoring stray ticks; 'any' (push_event) takes its
+                    // first response message and is then consumed either way, so a
+                    // no-diff event can't leave the intent dangling onto a later one.
+                    const pt = _pendingTransition;
+                    const wrap = pt && opsMatchTransition(msg[1], pt.kind);
+                    if (pt && (wrap || pt.kind === 'any')) _pendingTransition = null;
+                    if (wrap) {
+                        runTransition({ types: pt.types }, apply);
+                    } else {
+                        apply();
+                    }
                     if (_onmessageHook) {
                         _onmessageHook({
                             data: JSON.stringify({
@@ -1640,6 +1822,7 @@ function connect(endpoint, params = {}) {
         }
         _connected = false;
         _pendingScroll = null;
+        _pendingTransition = null;
         _savedForms.clear();
         // Close any floating (PiP) view windows; each window's pagehide handler
         // moves its view back inline and unregisters it.

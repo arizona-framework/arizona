@@ -377,6 +377,8 @@ handle_event(~"inc", _P, B) ->
 - `set_attr/3`, `remove_attr/2` -- attribute manipulation
 - `dispatch_event/2` -- dispatch CustomEvent on document
 - `navigate/1,2` -- SPA navigation (opts: `#{replace => true}`)
+- `transition/1,2` -- wrap a command (or list) so its DOM change animates in a view
+  transition (opts: `#{types => [binary()]}`); see "View transitions" below
 - `focus/1`, `blur/1` -- focus management
 - `scroll_to/1,2` -- scroll element into view (opts: `#{behavior => <<"smooth">>}`)
 - `set_title/1` -- set document title
@@ -411,6 +413,40 @@ matches:
 %% Binary -- regex pattern
 {az_keydown, arizona_js:on_key(~"^[a-z0-9]$", arizona_js:push_event(~"type"))}
 ```
+
+## View transitions
+
+A view transition wraps **any** DOM change in `document.startViewTransition`; it is not tied to
+navigation. The API is mostly CSS -- the framework only *starts* the transition. Requested
+per-trigger (no global switch) by `arizona_js:transition(Cmd[, Opts])` (wraps the command whose
+DOM change should animate, like `on_key/2`; `Cmd` is one command or a list) or the `az_transition`
+attribute on any triggering element (link or `az_click`/...; bare = cross-fade,
+`{az_transition, ~"slide back"}` = space-separated `types`).
+
+The client picks sync vs async from the wrapped command:
+
+- **Sync effect** (`toggle`/`add_class`/...): wrapped in place immediately.
+- **`navigate`**: the page swap is a future `OP_REPLACE` (op 8); the intent is held in
+  `_pendingTransition` (`kind: 'replace'`) and the worker message handler wraps that batch (a stray
+  text/attr tick is ignored).
+- **`push_event`**: the resulting diff is a future message; `_pendingTransition` (`kind: 'any'`)
+  wraps the first response batch and is then consumed either way (a no-diff event can't dangle onto
+  a later one). A concurrent server push (e.g. a timer) could race; navigation and sync effects are
+  race-free. (Same-message server diffs still can't be wrapped -- the client applies ops before
+  effects -- so a handler-returned `transition` pairs with `navigate`/`push_event`.)
+
+Wrapping a mix of sync and async commands animates the async result; sync siblings apply
+immediately. The wrap is applied at the **worker message handler**, so a message's ops and effects
+animate together, in order. By default the whole root cross-fades; a `view-transition-name` on an
+element scopes/morphs just it (and must be unique among rendered elements or the browser skips it).
+
+Guards: no-op (instant swap) when `startViewTransition` is absent or
+`prefers-reduced-motion`; `types` use the object-form call only when `:active-view-transition-type()`
+is supported. Back/forward is symmetric: a transitioned nav stamps `_azTransition` onto both history
+entries and popstate replays it. Cross-document (real `<a href>`) navigations animate via the user's
+`@view-transition { navigation: auto; }` CSS with no framework code. All styling
+(`view-transition-name`, `::view-transition-*`, `:active-view-transition-type`) is user CSS. See
+`.claude/rules/js.md` for the client surface.
 
 ## Client-owned slots -- `?local`
 
