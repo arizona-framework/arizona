@@ -17,6 +17,7 @@
 -export([body_threads_updated_raw/1]).
 -export([put_resp_header_accumulates/1]).
 -export([put_resp_cookie_accumulates/1]).
+-export([put_resp_status_stashes/1]).
 -export([resp_stash_defaults_empty/1]).
 -export([call_resolve_route_dispatches_to_adapter/1]).
 
@@ -39,6 +40,7 @@ groups() ->
             body_threads_updated_raw,
             put_resp_header_accumulates,
             put_resp_cookie_accumulates,
+            put_resp_status_stashes,
             resp_stash_defaults_empty
         ]},
         {resolve_route, [parallel], [
@@ -141,7 +143,7 @@ body_threads_updated_raw(Config) when is_list(Config) ->
     ?assertEqual(#{body => ~"hello", body_read => true}, arizona_req:raw(Req1)).
 
 %% --------------------------------------------------------------------
-%% Response stash -- put_resp_header/3, put_resp_cookie/4
+%% Response stash -- put_resp_header/3, put_resp_cookie/4, put_resp_status/2
 %% --------------------------------------------------------------------
 
 put_resp_header_accumulates(Config) when is_list(Config) ->
@@ -163,10 +165,20 @@ put_resp_cookie_accumulates(Config) when is_list(Config) ->
         arizona_req:resp_cookies(Req2)
     ).
 
+put_resp_status_stashes(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{}),
+    ?assertEqual(undefined, arizona_req:resp_status(Req0)),
+    Req1 = arizona_req:put_resp_status(Req0, 401),
+    ?assertEqual(401, arizona_req:resp_status(Req1)),
+    %% Last write wins.
+    Req2 = arizona_req:put_resp_status(Req1, 404),
+    ?assertEqual(404, arizona_req:resp_status(Req2)).
+
 resp_stash_defaults_empty(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(#{}),
     ?assertEqual([], arizona_req:resp_headers(Req)),
-    ?assertEqual([], arizona_req:resp_cookies(Req)).
+    ?assertEqual([], arizona_req:resp_cookies(Req)),
+    ?assertEqual(undefined, arizona_req:resp_status(Req)).
 
 %% --------------------------------------------------------------------
 %% resolve_route -- exercises the optional callback wiring
