@@ -89,6 +89,8 @@ render(Bindings) ->
 %% never called directly (no az alias, unlike each/2).
 -ignore_xref([native_each/2]).
 -ignore_xref([terminal_each/2]).
+%% Public escape opt-out for template authors; no internal callers by design.
+-ignore_xref([raw/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
