@@ -58,6 +58,8 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 -export([set_all/2]).
 -export([request_pip/1]).
 -export([exit_pip/1]).
+-export([transition/0]).
+-export([transition/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -276,6 +278,24 @@ inline. No-op if the view isn't popped out.
     ViewId :: binary().
 exit_pip(ViewId) -> {arizona_effect, [?EFFECT_EXIT_PIP, ViewId]}.
 
+-doc """
+Starts a view transition (`document.startViewTransition`) for the next DOM change
+in this interaction. Compose it before a `navigate/1,2` to animate an SPA
+navigation, or before a client-side effect (e.g. `toggle/1`) in an `az-click`
+list to animate that change. Equivalent to `transition/1` with no types.
+""".
+-spec transition() -> arizona_effect:cmd().
+transition() -> {arizona_effect, [?EFFECT_TRANSITION]}.
+
+-doc """
+Like `transition/0` but with options. `types` is a list of view-transition type
+names activated for the transition (matched by `:active-view-transition-type(...)`
+CSS), letting one stylesheet pick different animations per navigation.
+""".
+-spec transition(Opts) -> arizona_effect:cmd() when
+    Opts :: #{types => [binary()]}.
+transition(Opts) -> {arizona_effect, [?EFFECT_TRANSITION, Opts]}.
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
@@ -322,6 +342,13 @@ request_pip_test() ->
 
 exit_pip_test() ->
     {arizona_effect, [?EFFECT_EXIT_PIP, ~"v"]} = exit_pip(~"v").
+
+transition_test() ->
+    {arizona_effect, [?EFFECT_TRANSITION]} = transition().
+
+transition_with_opts_test() ->
+    {arizona_effect, [?EFFECT_TRANSITION, #{types := [~"slide"]}]} =
+        transition(#{types => [~"slide"]}).
 
 builders_test() ->
     ?assertEqual({arizona_effect, [?EFFECT_SHOW, ~"#m"]}, show(~"#m")),

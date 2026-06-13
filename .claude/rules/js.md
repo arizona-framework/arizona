@@ -25,6 +25,24 @@ Exports: `connect`, `applyOps`, `applyEffects`, `resolveEl`, `pushEvent`, `pushE
 - Forward-after-back: destination entry has null state -> scroll to top. Documented non-goal; future restore would need a state-ID-keyed map backed by sessionStorage, not `replaceState`-on-scroll.
 - Modifier clicks (ctrl/cmd/shift/alt, non-primary button) on `az-navigate` links fall through to the browser.
 
+## View transitions
+
+The View Transitions API is mostly CSS; the framework only *starts* a transition for the DOM changes the browser can't see on its own. Three independent pieces:
+
+- **Cross-document** (real `<a href>` navigations, full reloads): pure CSS -- add `@view-transition { navigation: auto; }` to the page. No framework code; works today.
+- **SPA navigation** (`az-navigate`): the page swap arrives a round-trip later as an `OP_REPLACE`, so `applyOps` wraps it in `document.startViewTransition` when a transition was requested.
+- **Client-side effects** (`toggle`/`add_class`/... in one `az_click` list): `runCommands` wraps the synchronous mutation.
+
+Opt-in is **per-trigger** (no global switch). A transition is requested by:
+
+- **`az_transition` attribute** on an `az-navigate` link -- bare (`az_transition`) = default cross-fade; `{az_transition, ~"slide back"}` = a space-separated list of view-transition `types` (tokens are trimmed, empties dropped). Read by the click handler.
+- **`arizona_js:transition/0,1` command** -- `transition()` or `transition(#{types => [~"slide"]})`. Compose it **before** a `navigate` (SPA nav, async -- consumed by the next `OP_REPLACE`) or **before** a client-side effect in an `az_click` list (sync wrap). As a handler effect it pairs with `navigate` only (effects dispatch one-per-`executeJS`, so sync client-effect wrapping needs a single `az_click` list).
+
+Behaviour:
+- **Guards:** no-ops (instant swap) when `document.startViewTransition` is absent or `prefers-reduced-motion: reduce` matches. `types` use the object form `startViewTransition({update, types})` only when `CSS.supports('selector(:active-view-transition-type(x))')`; otherwise the bare-callback form (older engines still cross-fade, ignore types).
+- **Back/forward:** a transitioned nav stamps `_azTransition` onto both the outgoing and new history entries; popstate replays `e.state._azTransition`, so traversing the edge animates symmetrically. (Direction-aware type reversal is not done yet -- the same opts are reused both ways.)
+- **Styling** is user CSS: `view-transition-name` on a shared element morphs it across the navigation; `::view-transition-*` and `:active-view-transition-type(<type>)` customize the animation.
+
 ## Connection detection
 
 Server-side: handlers use `?connected` macro (delegates to `arizona_live:connected()`) in `mount/1` to detect WS vs SSR context. For effects, use `self() ! arizona_connected` and handle in `handle_info/2`. No `az-connect` HTML attribute -- connection is fully server-driven.

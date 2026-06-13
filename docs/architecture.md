@@ -377,6 +377,8 @@ handle_event(~"inc", _P, B) ->
 - `set_attr/3`, `remove_attr/2` -- attribute manipulation
 - `dispatch_event/2` -- dispatch CustomEvent on document
 - `navigate/1,2` -- SPA navigation (opts: `#{replace => true}`)
+- `transition/0,1` -- request a view transition for the next DOM change (opts:
+  `#{types => [binary()]}`); see "View transitions" below
 - `focus/1`, `blur/1` -- focus management
 - `scroll_to/1,2` -- scroll element into view (opts: `#{behavior => <<"smooth">>}`)
 - `set_title/1` -- set document title
@@ -411,6 +413,32 @@ matches:
 %% Binary -- regex pattern
 {az_keydown, arizona_js:on_key(~"^[a-z0-9]$", arizona_js:push_event(~"type"))}
 ```
+
+## View transitions
+
+The View Transitions API is mostly CSS; the framework only *starts* a transition for changes
+the browser can't see itself. Three independent pieces:
+
+- **Cross-document** (real `<a href>` navigations): pure CSS
+  (`@view-transition { navigation: auto; }`) -- the browser handles it, no framework code.
+- **SPA navigation** (`az-navigate`): the page swap arrives a round-trip later as an `OP_REPLACE`
+  (op 8), so the client wraps that batch in `document.startViewTransition`.
+- **Client-side effects** (`toggle`/`add_class`/... composed in one `az_click` list): the client
+  wraps the synchronous mutation.
+
+Opt-in is **per-trigger** (no global switch): the `az_transition` link attribute (bare =
+cross-fade, `{az_transition, ~"slide back"}` = space-separated `types`) or the
+`arizona_js:transition/0,1` command (`#{types => [...]}`), composed before a `navigate` (async --
+the intent is held in `_pendingTransition` and consumed by the next `OP_REPLACE`) or before a
+client-side effect (sync wrap). Handler effects dispatch one-per-`executeJS`, so a handler-returned
+`transition` pairs with `navigate` only; same-message server diffs can't be wrapped (the client
+applies ops before effects).
+
+Guards: no-op (instant swap) when `startViewTransition` is absent or `prefers-reduced-motion`;
+`types` use the object-form call only when `:active-view-transition-type()` is supported. Back/forward
+is symmetric: a transitioned nav stamps `_azTransition` onto both history entries and popstate
+replays it. All styling (`view-transition-name`, `::view-transition-*`,
+`:active-view-transition-type`) is user CSS. See `.claude/rules/js.md` for the client surface.
 
 ## Client-owned slots -- `?local`
 

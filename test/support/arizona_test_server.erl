@@ -44,6 +44,14 @@ start() ->
             bindings => #{id => ~"pip_demo", title => <<"PiP">>},
             layouts => Layouts
         }},
+        {live, <<"/transitions">>, arizona_transitions, #{
+            bindings => #{title => <<"Transitions">>},
+            layouts => Layouts
+        }},
+        {live, <<"/transitions/detail">>, arizona_transitions_detail, #{
+            bindings => #{title => <<"Transition detail">>},
+            layouts => Layouts
+        }},
         {live, <<"/crashable">>, arizona_crashable, #{
             layouts => Layouts,
             middlewares => [arizona_middleware:extract([params])]
