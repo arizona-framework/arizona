@@ -135,9 +135,21 @@ render(Bindings) ->
     ).
 ```
 
-**Conditional rows:** a `case` returning a bare element tuple reaches the diff as a
-dynamic value and crashes `arizona_template:to_bin/1`. Render a 0-or-1 element with
-`?each` over a list instead:
+**Conditional rows:** a control-flow expression (`case`/`if`/`begin`/`receive`/`try`/
+`maybe`) returning a bare element tuple from a tail in a content slot is compiled into a
+nested template (inheriting the enclosing target), just as a literal `?html`/`?terminal`
+there would be -- no wrap needed:
+
+```erlang
+{col, [], [
+    case ?get(mode) of
+        warn -> {line, [yellow], [~"check your input"]};
+        _ -> <<>>
+    end
+]}
+```
+
+For 0-or-N rows, `?each` over a list still applies:
 
 ```erlang
 ?each(fun(Msg) -> {line, [yellow], [Msg]} end, status_rows(?get(mode)))

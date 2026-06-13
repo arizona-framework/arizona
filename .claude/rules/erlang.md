@@ -161,7 +161,9 @@ value: `fun(Item, Key) -> {li, [], [Item]} end`).
 
 - Plain values: use a list comprehension or `lists:map/2` (no per-item diffing, fine for
   small or static lists).
-- A conditional: put it **inside** an element as a text/value child.
+- A conditional: put it **inside** an element as a text/value child. Only the `?each`
+  **body** must be a direct element -- a conditional sitting in a content slot may itself
+  return a bare element tuple (see "Bare element tuples in conditional tails" below).
 
 ```erlang
 %% rejected (would crash on diff): a case / ?html body
@@ -171,6 +173,35 @@ value: `fun(Item, Key) -> {li, [], [Item]} end`).
 %% plain values: a comprehension, not ?each
 {ul, [], [[<<"#", Tag/binary>> || Tag <- ?get(tags)]]}
 ```
+
+## Bare element tuples in conditional tails
+
+A control-flow expression in a **content slot** -- `case`, `if`, `begin`, `receive`,
+`try`, or `maybe` -- may return a bare element tuple, an element list, or a mixed fragment
+(static text/values interleaved with elements) directly from a tail position. The parse
+transform compiles each tail into a nested template, exactly as a literal
+`?html`/`?native`/`?terminal` there would, inheriting the enclosing render target. No
+`?html` wrap is needed:
+
+```erlang
+%% both branches accepted: <<>> renders empty, the tuple becomes a nested template
+{main, [], [
+    case ?get(error) of
+        undefined -> <<>>;
+        Message -> {p, [{class, ~"login-error"}], Message}
+    end
+]}
+```
+
+The walked tail positions are the value-producing ones: clause bodies (`case`/`if`/`try`
+`of`+`catch`/`maybe` `else`/`receive`), block last expressions, a `receive` `after` body,
+and a `try` body. A `try`/`receive` timeout and a `try` `after` body are **not** tails
+(their values are discarded). A branch returning a plain value (binary, integer, variable,
+or a pure value list) still renders as a scalar, unchanged; nested control flow is walked
+recursively. The set of forms and tail positions is defined once in `map_tail_exprs/3`,
+shared with the live-render-root transform. (This mirrors `?each`, whose callback body
+already accepts bare elements; the difference is that `?each` keys items for per-item
+diffing while a conditional is a single slot.)
 
 **Known limitation:** embedding a component (a `?stateless`/`?stateful` descriptor) as an
 `?each` item child compiles and renders at SSR but **crashes on the first diff** -- the

@@ -506,9 +506,20 @@ transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module) ->
     Body1 = TransformedInit ++ [TransformedLast],
     {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
 
+%% The render clause's last expression carries the live-root template -- a direct
+%% ?html/?native call, or a control-flow expression whose every tail carries a
+%% root. Walk each tail position (shared with content-slot expansion via
+%% map_tail_exprs/3), compiling the root at each leaf; non-tail sub-expressions
+%% are transformed normally.
 transform_live_render_last(Expr, Module, Inline) ->
-    N = erl_syntax:revert(Expr),
-    case N of
+    map_tail_exprs(
+        Expr,
+        fun(Leaf) -> transform_live_render_leaf(Leaf, Module, Inline) end,
+        fun(NonTail) -> transform_expr(NonTail, Module, Inline) end
+    ).
+
+transform_live_render_leaf(Expr, Module, Inline) ->
+    case erl_syntax:revert(Expr) of
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, [Arg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
@@ -521,52 +532,61 @@ transform_live_render_last(Expr, Module, Inline) ->
             validate_live_root(Arg, L, Inline),
             Arg1 = transform_expr(Arg, Module, Inline),
             compile_template(inline_vars(Arg1, Inline), L, Module, true, arizona_native);
-        {'case', L, CaseExpr, Clauses} ->
-            {'case', L, transform_expr(CaseExpr, Module, Inline), [
-                transform_live_render_branch(C, Module, Inline)
-             || C <- Clauses
-            ]};
-        {'if', L, Clauses} ->
-            {'if', L, [transform_live_render_branch(C, Module, Inline) || C <- Clauses]};
-        {block, L, Body} ->
-            transform_live_render_block(L, Body, Module, Inline);
-        {'receive', L, Clauses} ->
-            {'receive', L, [transform_live_render_branch(C, Module, Inline) || C <- Clauses]};
-        {'receive', L, Clauses, AfterExpr, AfterBody} ->
-            {'receive', L, [transform_live_render_branch(C, Module, Inline) || C <- Clauses],
-                transform_expr(AfterExpr, Module, Inline),
-                transform_live_render_block_body(AfterBody, Module, Inline)};
-        {'try', L, Body, OfClauses, CatchClauses, AfterBody} ->
-            {'try', L, transform_live_render_block_body(Body, Module, Inline),
-                [transform_live_render_branch(C, Module, Inline) || C <- OfClauses],
-                [transform_live_render_branch(C, Module, Inline) || C <- CatchClauses], [
-                    transform_expr(E, Module, Inline)
-                 || E <- AfterBody
-                ]};
-        {'maybe', L, Body} ->
-            {'maybe', L, transform_live_render_block_body(Body, Module, Inline)};
-        {'maybe', L, Body, {'else', L2, ElseClauses}} ->
-            {'maybe', L, transform_live_render_block_body(Body, Module, Inline),
-                {'else', L2, [
-                    transform_live_render_branch(C, Module, Inline)
-                 || C <- ElseClauses
-                ]}};
         _ ->
             transform_expr(Expr, Module, Inline)
     end.
 
-transform_live_render_block(L, Body, Module, Inline) ->
-    {block, L, transform_live_render_block_body(Body, Module, Inline)}.
+%% Walk the tail (value-producing) positions of a control-flow expression,
+%% applying `TailFun` at each tail leaf (a tail that is not itself control-flow)
+%% and `NonTailFun` at every non-tail sub-expression: a `case` scrutinee, the
+%% init statements before a body's last expression, a `receive` timeout, a `try`
+%% `after` body. Tails that are themselves control-flow recurse; a
+%% non-control-flow `Expr` is itself a tail leaf. This is the single definition
+%% of "tail position" shared by the live-render-root transform
+%% (transform_live_render_last/3) and the content-slot element expansion
+%% (expand_block_element_tails/3). `try` body last is treated as a tail even with
+%% `of` clauses (its value is then matched by `of`, but this mirrors the original
+%% live-render behaviour and never matters for real templates).
+map_tail_exprs(Expr, TailFun, NonTailFun) ->
+    case erl_syntax:revert(Expr) of
+        {'case', L, Scrutinee, Clauses} ->
+            {'case', L, NonTailFun(Scrutinee), [
+                map_tail_clause(C, TailFun, NonTailFun)
+             || C <- Clauses
+            ]};
+        {'if', L, Clauses} ->
+            {'if', L, [map_tail_clause(C, TailFun, NonTailFun) || C <- Clauses]};
+        {block, L, Body} ->
+            {block, L, map_tail_body(Body, TailFun, NonTailFun)};
+        {'receive', L, Clauses} ->
+            {'receive', L, [map_tail_clause(C, TailFun, NonTailFun) || C <- Clauses]};
+        {'receive', L, Clauses, AfterExpr, AfterBody} ->
+            {'receive', L, [map_tail_clause(C, TailFun, NonTailFun) || C <- Clauses],
+                NonTailFun(AfterExpr), map_tail_body(AfterBody, TailFun, NonTailFun)};
+        {'try', L, Body, OfClauses, CatchClauses, AfterBody} ->
+            {'try', L, map_tail_body(Body, TailFun, NonTailFun),
+                [map_tail_clause(C, TailFun, NonTailFun) || C <- OfClauses],
+                [map_tail_clause(C, TailFun, NonTailFun) || C <- CatchClauses], [
+                    NonTailFun(E)
+                 || E <- AfterBody
+                ]};
+        {'maybe', L, Body} ->
+            {'maybe', L, map_tail_body(Body, TailFun, NonTailFun)};
+        {'maybe', L, Body, {'else', L2, ElseClauses}} ->
+            {'maybe', L, map_tail_body(Body, TailFun, NonTailFun),
+                {'else', L2, [map_tail_clause(C, TailFun, NonTailFun) || C <- ElseClauses]}};
+        _ ->
+            TailFun(Expr)
+    end.
 
-transform_live_render_block_body(Body, Module, Inline) ->
-    {Init, [Last]} = lists:split(length(Body) - 1, Body),
-    [transform_expr(E, Module, Inline) || E <- Init] ++
-        [transform_live_render_last(Last, Module, Inline)].
+map_tail_clause({clause, L, Patterns, Guards, Body}, TailFun, NonTailFun) ->
+    {clause, L, Patterns, Guards, map_tail_body(Body, TailFun, NonTailFun)}.
 
-transform_live_render_branch({clause, L, Patterns, Guards, Body}, Module, Inline) ->
+%% Only a body's last expression is a tail (recursing through map_tail_exprs/3 so
+%% a control-flow last is walked too); the init statements are non-tail.
+map_tail_body(Body, TailFun, NonTailFun) ->
     {Init, [Last]} = lists:split(length(Body) - 1, Body),
-    TransInit = [transform_expr(E, Module, Inline) || E <- Init],
-    {clause, L, Patterns, Guards, TransInit ++ [transform_live_render_last(Last, Module, Inline)]}.
+    [NonTailFun(E) || E <- Init] ++ [map_tail_exprs(Last, TailFun, NonTailFun)].
 
 validate_live_root({tuple, _, [_Tag, Attrs | _]}, L, Inline) ->
     validate_id_expr(Attrs, L, Inline);
@@ -1553,10 +1573,49 @@ make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
 %% template, ?each, ?inner_content, ?stateful/?stateless, a map, or raw/1 -- is
 %% left untagged and rendered structurally (escaping is decided at compile time
 %% so the runtime can never confuse user scalars with spliced framework HTML).
-make_esc_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine, Backend) ->
+make_esc_text_dynamic_ast(AzBin, ExprAST0, Module, ExprLine, Backend) ->
+    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend),
     LocAST = loc_ast(Module, ExprLine),
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
     {tuple, 0, [ast_binary(AzBin), esc_spec(Backend, ExprAST, FunAST), LocAST]}.
+
+%% A content slot's value can be the result of a control-flow expression
+%% (`case`/`if`/`begin`/`receive`/`try`/`maybe`). Those tail positions are
+%% themselves content positions: an element tuple (or element list, or mixed
+%% fragment) sitting in a tail is compiled into a nested template -- exactly as a
+%% literal ?html(...) there would be -- so branches don't need an explicit ?html
+%% wrap. The current Backend is threaded through, so a bare element under
+%% ?native/?terminal inherits that target (mirroring how ?each does). Non-tail
+%% sub-expressions and non-element tails are left untouched (a non-element tail
+%% renders as an escaped scalar, as before). The set of walked forms is shared
+%% with the live-render-root transform via map_tail_exprs/3.
+expand_block_element_tails(Expr, Module, Backend) ->
+    map_tail_exprs(
+        Expr,
+        fun(Leaf) -> expand_element_leaf(Leaf, Module, Backend) end,
+        fun(NonTail) -> NonTail end
+    ).
+
+%% At a tail leaf, compile a bare element tuple / element list (or a mixed list
+%% that contains an element tuple) into a nested template, as a literal ?html
+%% there would; leave plain values (and pure value lists) untouched.
+expand_element_leaf(Expr, Module, Backend) ->
+    case classify_body(Expr) of
+        Class when Class =:= element_tuple; Class =:= element_list ->
+            compile_template(Expr, line(Expr), Module, false, Backend);
+        list_ast ->
+            case list_has_element_tuple(Expr) of
+                true -> compile_template(Expr, line(Expr), Module, false, Backend);
+                false -> Expr
+            end;
+        _ ->
+            Expr
+    end.
+
+list_has_element_tuple({cons, _, Head, Tail}) ->
+    is_element_tuple(Head) orelse list_has_element_tuple(Tail);
+list_has_element_tuple(_) ->
+    false.
 
 %% Tag a value interpolation `{esc, Fun}` (escaped at the HTML boundary) or leave
 %% it bare. Only the HTML backend escapes -- native/terminal output is plain text,
@@ -1609,7 +1668,8 @@ make_attr_dynamic_ast(AzBin, AttrNameBin, ExprAST, Module, ExprLine) ->
 %% nodiff (layout) path: a value interpolation (e.g. a layout `title`) is tagged
 %% `{esc, Fun}` so SSR HTML-escapes it; a block (?inner_content, nested template)
 %% is left untagged and spliced raw.
-make_nodiff_dynamic_ast(ExprAST, Module, ExprLine, Backend) ->
+make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
+    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend),
     LocAST = loc_ast(Module, ExprLine),
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
     {tuple, 0, [{atom, 0, undefined}, esc_spec(Backend, ExprAST, FunAST), LocAST]}.

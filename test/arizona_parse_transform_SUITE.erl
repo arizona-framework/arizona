@@ -245,6 +245,20 @@
     fingerprint_escapes_value/1,
     native_backend_not_escaped/1
 ]).
+-export([
+    cond_case_bare_element_renders/1,
+    cond_case_bare_matches_html/1,
+    cond_if_bare_element/1,
+    cond_nested_case_bare_element/1,
+    cond_case_terminal_inherits_target/1,
+    cond_case_diff_transition/1,
+    cond_case_element_list_tail/1,
+    cond_case_mixed_fragment_tail/1,
+    cond_begin_block_tail/1,
+    cond_try_bare_element/1,
+    cond_maybe_bare_element/1,
+    cond_receive_bare_element/1
+]).
 
 all() ->
     [
@@ -253,6 +267,7 @@ all() ->
         {group, each},
         {group, integration},
         {group, escaping},
+        {group, conditional_elements},
         {group, inline},
         {group, tracked_get},
         {group, layout},
@@ -398,6 +413,22 @@ groups() ->
             diff_value_stays_raw,
             fingerprint_escapes_value,
             native_backend_not_escaped
+        ]},
+        %% Bare element tuples as case/if/begin branch results -- compiled into
+        %% nested templates (no ?html wrap), inheriting the enclosing target.
+        {conditional_elements, [parallel], [
+            cond_case_bare_element_renders,
+            cond_case_bare_matches_html,
+            cond_if_bare_element,
+            cond_nested_case_bare_element,
+            cond_case_terminal_inherits_target,
+            cond_case_diff_transition,
+            cond_case_element_list_tail,
+            cond_case_mixed_fragment_tail,
+            cond_begin_block_tail,
+            cond_try_bare_element,
+            cond_maybe_bare_element,
+            cond_receive_bare_element
         ]},
         %% Binding-read inlining: reads hoisted out of ?html still track per-slot
         {inline, [parallel], [
@@ -1496,6 +1527,262 @@ native_backend_not_escaped(Config) when is_list(Config) ->
     [{_Az, Fun, _Loc}] = maps:get(d, T),
     ?assert(is_function(Fun, 0)),
     ?assertEqual(<<"<not-escaped>">>, Fun()).
+
+%% A bare element tuple as a `case` branch result is compiled into a nested
+%% template (no ?html wrap needed): the block renders structurally, a value
+%% interpolated inside is still escaped, and the empty branch renders nothing.
+cond_case_bare_element_renders(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_case_bare). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(msg, Bindings) of "
+        "            undefined -> <<\"\">>; "
+        "            Msg -> {'p', [{class, <<\"err\">>}], [Msg]} "
+        "        end "
+        "    ]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{msg => <<"<script>">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"<p">>)),
+    ?assertEqual(nomatch, binary:match(HTML, <<"<script>">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"&lt;script&gt;">>)),
+    {Empty0, _} = arizona_render:render(Mod:render(#{msg => undefined})),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(Empty0), <<"<p">>)).
+
+%% The bare form is byte-for-byte equivalent to the explicit ?html form: both
+%% branch tails compile to the same nested template.
+cond_case_bare_matches_html(Config) when is_list(Config) ->
+    Bare = compile_module(
+        "-module(pt_cond_bare_eq). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(msg, Bindings) of "
+        "            undefined -> <<\"\">>; "
+        "            Msg -> {'p', [{class, <<\"err\">>}], [Msg]} "
+        "        end "
+        "    ]}). "
+    ),
+    Wrap = compile_module(
+        "-module(pt_cond_html_eq). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(msg, Bindings) of "
+        "            undefined -> <<\"\">>; "
+        "            Msg -> arizona_template:html({'p', [{class, <<\"err\">>}], [Msg]}) "
+        "        end "
+        "    ]}). "
+    ),
+    B = #{msg => <<"boom">>},
+    {BareHTML, _} = arizona_render:render(Bare:render(B)),
+    {WrapHTML, _} = arizona_render:render(Wrap:render(B)),
+    ?assertEqual(iolist_to_binary(WrapHTML), iolist_to_binary(BareHTML)).
+
+%% An `if` branch returning a bare element is expanded the same way.
+cond_if_bare_element(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_if_bare). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Show = arizona_template:get(show, Bindings), "
+        "    arizona_template:html({'div', [], ["
+        "        if "
+        "            Show -> {'p', [], [<<\"yes\">>]}; "
+        "            true -> <<\"\">> "
+        "        end "
+        "    ]}). "
+    ),
+    {Shown, _} = arizona_render:render(Mod:render(#{show => true})),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Shown), <<"<p>yes</p>">>)),
+    {Hidden, _} = arizona_render:render(Mod:render(#{show => false})),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(Hidden), <<"<p">>)).
+
+%% A bare element in the tail of a nested `case`-of-`case` is reached by the
+%% recursive tail walk.
+cond_nested_case_bare_element(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_nested). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(a, Bindings) of "
+        "            1 -> "
+        "                case arizona_template:get(b, Bindings) of "
+        "                    2 -> {'p', [], [<<\"both\">>]}; "
+        "                    _ -> <<\"\">> "
+        "                end; "
+        "            _ -> <<\"\">> "
+        "        end "
+        "    ]}). "
+    ),
+    {Hit, _} = arizona_render:render(Mod:render(#{a => 1, b => 2})),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Hit), <<"<p>both</p>">>)),
+    {Miss, _} = arizona_render:render(Mod:render(#{a => 1, b => 9})),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(Miss), <<"<p">>)).
+
+%% Under ?terminal the branch element inherits the terminal backend (ANSI, not
+%% HTML): proving the render target threads through the tail walk.
+cond_case_terminal_inherits_target(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_term). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal({col, [], ["
+        "        case arizona_template:get(warn, Bindings) of "
+        "            true -> {line, [green], [arizona_template:get(msg, Bindings)]}; "
+        "            false -> <<\"\">> "
+        "        end "
+        "    ]}). "
+    ),
+    {Output, _Snap} = arizona_render:render(Mod:render(#{warn => true, msg => ~"hi"})),
+    Bin = iolist_to_binary(Output),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"\e[32m")),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"hi")),
+    ?assertEqual(nomatch, binary:match(Bin, ~"<line")).
+
+%% Live diff: the conditional slot transitions empty (scalar) <-> element branch
+%% across renders -- the real login-error appear/disappear behaviour. make_op
+%% must handle scalar->template (OP_UPDATE) and template->scalar (OP_TEXT).
+cond_case_diff_transition(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_diff). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(error, Bindings) of "
+        "            undefined -> <<\"\">>; "
+        "            Message -> {'p', [{class, <<\"login-error\">>}], [Message]} "
+        "        end "
+        "    ]}). "
+    ),
+    %% undefined -> message: the <p> appears (statics + dynamic in the payload)
+    {_H0, Snap0} = arizona_render:render(Mod:render(#{error => undefined})),
+    {AppearOps, Snap1} = arizona_diff:diff(Mod:render(#{error => <<"boom">>}), Snap0),
+    AppearStr = iolist_to_binary(io_lib:format("~p", [AppearOps])),
+    ?assertNotEqual([], AppearOps),
+    ?assertNotEqual(nomatch, binary:match(AppearStr, <<"login-error">>)),
+    ?assertNotEqual(nomatch, binary:match(AppearStr, <<"boom">>)),
+    %% message -> undefined: a clearing op is emitted, the old content is gone
+    {ClearOps, _Snap2} = arizona_diff:diff(Mod:render(#{error => undefined}), Snap1),
+    ClearStr = iolist_to_binary(io_lib:format("~p", [ClearOps])),
+    ?assertNotEqual([], ClearOps),
+    ?assertEqual(nomatch, binary:match(ClearStr, <<"login-error">>)).
+
+%% A pure element-list tail is compiled as a fragment (every item an element).
+cond_case_element_list_tail(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_list). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], ["
+        "        case arizona_template:get(show, Bindings) of "
+        "            true -> [{'li', [], [<<\"a\">>]}, {'li', [], [<<\"b\">>]}]; "
+        "            false -> <<\"\">> "
+        "        end "
+        "    ]}). "
+    ),
+    {HTML, _} = arizona_render:render(Mod:render(#{show => true})),
+    Bin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"<li>a</li>">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"<li>b</li>">>)).
+
+%% A mixed-fragment tail (static text interleaved with an element) is compiled
+%% as a fragment -- matching what an explicit ?html([...]) there would do.
+cond_case_mixed_fragment_tail(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_mixed). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(show, Bindings) of "
+        "            true -> [<<\"label: \">>, {'b', [], [arizona_template:get(v, Bindings)]}]; "
+        "            false -> <<\"\">> "
+        "        end "
+        "    ]}). "
+    ),
+    {HTML, _} = arizona_render:render(Mod:render(#{show => true, v => <<"x">>})),
+    Bin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"label: ">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"<b ">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"x">>)).
+
+%% A `begin ... end` block whose last expression is a bare element.
+cond_begin_block_tail(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_begin). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        begin "
+        "            Msg = arizona_template:get(msg, Bindings), "
+        "            {'p', [], [Msg]} "
+        "        end "
+        "    ]}). "
+    ),
+    {HTML, _} = arizona_render:render(Mod:render(#{msg => <<"hi">>})),
+    Bin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"<p ">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"hi">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"</p>">>)).
+
+%% A `try` body (no `of` clauses) is a tail -- a bare element there is expanded.
+cond_try_bare_element(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_try). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        try {'p', [], [arizona_template:get(msg, Bindings)]} "
+        "        catch _:_ -> <<\"\">> "
+        "        end "
+        "    ]}). "
+    ),
+    {HTML, _} = arizona_render:render(Mod:render(#{msg => <<"ok">>})),
+    Bin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"<p ">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"ok">>)).
+
+%% A `maybe ... else ... end`: the body's last expression and the else-clause
+%% bodies are tails.
+cond_maybe_bare_element(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_maybe). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        maybe "
+        "            {ok, M} ?= arizona_template:get(result, Bindings), "
+        "            {'p', [], [M]} "
+        "        else _ -> <<\"\">> "
+        "        end "
+        "    ]}). "
+    ),
+    {HTML, _} = arizona_render:render(Mod:render(#{result => {ok, <<"hi">>}})),
+    Bin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"<p ">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"hi">>)),
+    {Empty, _} = arizona_render:render(Mod:render(#{result => error})),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(Empty), <<"<p ">>)).
+
+%% A `receive ... after ... end`: the `after` body is a tail (the receive
+%% clauses are too); `after 0` fires immediately so SSR never blocks.
+cond_receive_bare_element(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_receive). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        receive "
+        "            never -> <<\"\">> "
+        "        after 0 -> {'p', [], [<<\"timeout\">>]} "
+        "        end "
+        "    ]}). "
+    ),
+    {HTML, _} = arizona_render:render(Mod:render(#{})),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), <<"<p>timeout</p>">>)).
 
 %% Test 14: Two dynamic attributes -- both share az, statics split between both.
 two_dynamic_attrs(Config) when is_list(Config) ->
