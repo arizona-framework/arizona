@@ -75,7 +75,7 @@ handle_event(~"inc", _P, B) ->
 
 ### View transitions
 
-Opt a navigation or client effect into `document.startViewTransition` per-trigger (no global switch): the `az_transition` link attribute (bare = cross-fade, `{az_transition, ~"slide back"}` = space-separated `types`) or `arizona_js:transition/0,1` composed before a `navigate` or a client effect. Guarded by feature-detect + `prefers-reduced-motion`; back/forward replays via history state. Real `<a href>` navigations transition through user CSS (`@view-transition { navigation: auto }`) with no framework code. All styling is user-owned CSS. See [.claude/rules/js.md](.claude/rules/js.md).
+A view transition wraps **any** DOM change in `document.startViewTransition` (not tied to navigation). Request one per-trigger (no global switch) with `arizona_js:transition(Cmd[, Opts])` -- wraps the command (or list) whose change should animate, like `on_key/2` -- or the `az_transition` attribute on any triggering element (bare = cross-fade, `{az_transition, ~"slide back"}` = space-separated `types`). A sync effect animates in place; `navigate`/`push_event` animate the resulting server diff. Guarded by feature-detect + `prefers-reduced-motion`; back/forward replays via history state. Real `<a href>` navigations transition through user CSS (`@view-transition { navigation: auto }`). All styling is user-owned CSS. See [.claude/rules/js.md](.claude/rules/js.md).
 
 ## Client-owned slots -- `?local`
 

@@ -212,22 +212,26 @@ function saveCurrentScroll() {
 }
 
 // --------------------------------------------------------------------------
-// View transitions on SPA navigation
+// View transitions
 // --------------------------------------------------------------------------
 // A view transition wraps a DOM change in document.startViewTransition so the
-// browser cross-fades (or, with user CSS, morphs) old -> new. The framework
-// only needs to *start* the transition for changes the browser can't see on
-// its own: an az-navigate round-trip (the OP_REPLACE arrives a message later)
-// and client-side az_click effects. Real <a href> navigations are handled by
-// the browser via the user's `@view-transition` CSS -- no code here.
+// browser cross-fades (or, with user CSS, morphs) old -> new. Transitions are
+// not tied to navigation -- they wrap any DOM change the framework drives:
+//   - a synchronous client effect (toggle/add_class/...) -- wrapped immediately
+//   - an az-navigate round-trip -- the OP_REPLACE arrives a message later
+//   - a push_event -- the resulting server diff arrives a message later
+// Real <a href> navigations animate via the user's `@view-transition` CSS, no
+// code here.
 //
-// `_pendingTransition` is the intent for the next structural op-batch: an opts
-// object ({types:[...]} or {}) or null. It is set by the az-transition link
-// attribute, the arizona_js:transition command, or replayed from history state
-// on back/forward, and consumed by applyOps when an OP_REPLACE lands. Mirrors
-// the _pendingScroll intent above.
+// For the async cases (navigate/push_event) `_pendingTransition` holds the
+// intent until the server response lands; the worker message handler then wraps
+// that message's ops+effects together. `kind` says which batch to wait for:
+// 'replace' (a navigation's page swap -- a stray text/attr tick is ignored) or
+// 'any' (the next non-empty diff from a push_event). Set by the az-transition
+// attribute, an arizona_js:transition command, or replayed from history state
+// on back/forward. Synchronous effects never set it -- they wrap in place.
 
-/** @type {{types?: string[]}|null} */
+/** @type {{types?: string[], kind: 'replace'|'any'}|null} */
 let _pendingTransition = null;
 
 /**
@@ -275,6 +279,19 @@ function runTransition(opts, fn) {
 }
 
 /**
+ * Whether this op batch is the one a pending transition is waiting for. 'replace'
+ * matches only a page-swap OP_REPLACE (so a concurrent text/attr tick does not
+ * consume the intent); 'any' matches any non-empty batch (a push_event result).
+ * @param {Array<Array<*>>} ops
+ * @param {'replace'|'any'} kind
+ * @returns {boolean}
+ */
+function opsMatchTransition(ops, kind) {
+    if (!ops?.length) return false;
+    return kind === 'replace' ? ops.some((op) => op[0] === OP.REPLACE) : true;
+}
+
+/**
  * Read the `az-transition` attribute into a transition opts object, or null if
  * absent. The value is a space-separated list of view-transition type names
  * (like `class`); tokens are trimmed and empties dropped, so a bare attribute
@@ -286,6 +303,20 @@ function parseTransitionAttr(el) {
     if (!el.hasAttribute('az-transition')) return null;
     const raw = el.getAttribute('az-transition') || '';
     return { types: raw.split(/\s+/).filter(Boolean) };
+}
+
+/**
+ * Wrap an element's parsed event commands in a synthetic transition command when
+ * the element carries `az-transition`, so the attribute animates whatever those
+ * commands do (a client effect, a navigate, or a push_event) -- not just links.
+ * A no-op without the attribute.
+ * @param {Element} el
+ * @param {Array<*>} cmds
+ * @returns {Array<*>}
+ */
+function withTransitionAttr(el, cmds) {
+    const t = parseTransitionAttr(el);
+    return t ? [JS_TRANSITION, t, cmds] : cmds;
 }
 
 /**
@@ -491,31 +522,13 @@ function applyUpdateOp(el, html) {
 }
 
 /**
- * Apply a batch of ops to the DOM, wrapping the apply in a view transition when
- * a navigation set `_pendingTransition` and this batch carries the page swap
- * (an OP_REPLACE). The intent is consumed only on the REPLACE batch; a flag set
- * with no REPLACE yet is kept so a stray diff landing mid-round-trip does not
- * consume it. Ops arrive pre-resolved from the Worker -- all template payloads
- * are already HTML strings.
+ * Apply a batch of ops to the DOM. Ops arrive pre-resolved from the Worker --
+ * all template payloads are already HTML strings. A view transition, when one is
+ * pending, wraps this call (plus the message's effects) at the message handler,
+ * not here -- so `applyOps` itself is synchronous.
  * @param {Array<Array<*>>} ops
  */
 function applyOps(ops) {
-    const hasReplace = ops.some((op) => op[0] === OP.REPLACE);
-    if (_pendingTransition && hasReplace) {
-        const opts = _pendingTransition;
-        _pendingTransition = null;
-        runTransition(opts, () => applyOpsNow(ops));
-        return;
-    }
-    applyOpsNow(ops);
-}
-
-/**
- * Apply a batch of ops to the DOM (no transition wrap). Split from `applyOps` so
- * the loop can run inside a `startViewTransition` callback.
- * @param {Array<Array<*>>} ops
- */
-function applyOpsNow(ops) {
     let didReplace = false;
     for (const op of ops) {
         const el = resolveEl(op[1]);
@@ -1141,35 +1154,7 @@ function withQuery(sel, fn) {
  */
 function executeJS(el, event, cmds) {
     const commands = Array.isArray(cmds[0]) ? cmds : [cmds];
-    runCommands(el, event, commands);
-}
-
-/**
- * Run a list of JS commands. A JS_TRANSITION command wraps what follows it: if
- * a navigation (or nothing) follows, it stashes the transition intent for the
- * navigation's OP_REPLACE batch (async -- the DOM change is a future message);
- * otherwise it wraps the remaining synchronous client-side effects in a view
- * transition. All other commands run through `execOne`.
- * @param {Element} el
- * @param {Event|null} event
- * @param {Array<*>} commands
- */
-function runCommands(el, event, commands) {
-    for (let i = 0; i < commands.length; i++) {
-        const cmd = commands[i];
-        if (cmd[0] === JS_TRANSITION) {
-            const opts = cmd[1] || {};
-            const rest = commands.slice(i + 1);
-            if (rest.length === 0 || rest.some((c) => c[0] === JS_NAVIGATE)) {
-                _pendingTransition = opts;
-                runCommands(el, event, rest);
-            } else {
-                runTransition(opts, () => runCommands(el, event, rest));
-            }
-            return;
-        }
-        execOne(el, event, cmd);
-    }
+    for (const cmd of commands) execOne(el, event, cmd);
 }
 
 /**
@@ -1181,6 +1166,29 @@ function runCommands(el, event, commands) {
 function execOne(el, event, cmd) {
     const op = cmd[0];
     switch (op) {
+        case JS_TRANSITION: {
+            // Wrap the inner command(s)' DOM change in a view transition. A sync
+            // effect (toggle/add_class/...) wraps in place; navigate/push_event
+            // produce a future server diff, so stash the intent and let the
+            // worker message handler wrap the matching batch.
+            const opts = cmd[1] || {};
+            const inner = cmd[2];
+            const innerCmds = /** @type {Array<Array<*>>} */ (
+                Array.isArray(inner[0]) ? inner : [inner]
+            );
+            const kind = innerCmds.some((c) => c[0] === JS_NAVIGATE)
+                ? 'replace'
+                : innerCmds.some((c) => c[0] === JS_PUSH_EVENT)
+                  ? 'any'
+                  : null;
+            if (kind) {
+                _pendingTransition = { types: opts.types, kind };
+                executeJS(el, event, inner);
+            } else {
+                runTransition(opts, () => executeJS(el, event, inner));
+            }
+            break;
+        }
         case JS_PUSH_EVENT: {
             const evt = cmd[1];
             const payload =
@@ -1470,7 +1478,7 @@ function handleEvent(target, eventType, signal) {
             if (el.hasAttribute('az-prevent-default')) e.preventDefault();
             const raw = el.getAttribute(`az-${eventType}`);
             if (!raw) return;
-            executeJS(el, e, JSON.parse(raw));
+            executeJS(el, e, withTransitionAttr(el, JSON.parse(raw)));
         },
         { signal },
     );
@@ -1501,7 +1509,7 @@ function bindDocumentEvents(target, signal) {
             e.preventDefault();
             form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
             const raw = form.getAttribute('az-submit');
-            if (raw) executeJS(form, e, JSON.parse(raw));
+            if (raw) executeJS(form, e, withTransitionAttr(form, JSON.parse(raw)));
             if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
         },
         { signal },
@@ -1536,7 +1544,7 @@ function bindDocumentEvents(target, signal) {
             if (!container || !_connected) return;
             const raw = container.getAttribute('az-drop');
             if (!raw) return;
-            executeJS(container, e, JSON.parse(raw));
+            executeJS(container, e, withTransitionAttr(container, JSON.parse(raw)));
         },
         { signal },
     );
@@ -1617,8 +1625,9 @@ function connect(endpoint, params = {}) {
             }
 
             // az-transition opts this navigation into a view transition; the
-            // intent is consumed by applyOps when the OP_REPLACE lands.
-            _pendingTransition = parseTransitionAttr(el);
+            // intent is consumed when the navigation's OP_REPLACE lands.
+            const t = parseTransitionAttr(el);
+            _pendingTransition = t ? { types: t.types, kind: 'replace' } : null;
             navigateTo(path, qs, hash, { noscroll, fullUrl: href });
         },
         { signal },
@@ -1687,9 +1696,21 @@ function connect(endpoint, params = {}) {
             switch (msg[0]) {
                 case 0: {
                     // [0, ops|null, effects|null, firstAfterReconnect]
-                    if (msg[1]) applyOps(msg[1]);
-                    if (msg[2]) applyEffects(msg[2]);
-                    if (msg[3]) restoreFormState();
+                    const apply = () => {
+                        if (msg[1]) applyOps(msg[1]);
+                        if (msg[2]) applyEffects(msg[2]);
+                        if (msg[3]) restoreFormState();
+                    };
+                    // A pending transition (from a navigate/push_event) wraps the
+                    // matching batch -- ops and effects together, in order, so the
+                    // page swap and any effect both fall inside the snapshot.
+                    if (_pendingTransition && opsMatchTransition(msg[1], _pendingTransition.kind)) {
+                        const pt = _pendingTransition;
+                        _pendingTransition = null;
+                        runTransition({ types: pt.types }, apply);
+                    } else {
+                        apply();
+                    }
                     if (_onmessageHook) {
                         _onmessageHook({
                             data: JSON.stringify({

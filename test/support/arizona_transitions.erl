@@ -1,12 +1,13 @@
 -module(arizona_transitions).
 -include("arizona_stateful.hrl").
--export([mount/1, render/1]).
+-export([mount/1, render/1, handle_event/3]).
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Init) ->
     Bindings = #{
         id => ~"page",
-        title => maps:get(title, Init, ~"Transitions")
+        title => maps:get(title, Init, ~"Transitions"),
+        count => 0
     },
     {Bindings, #{}}.
 
@@ -52,11 +53,22 @@ render(Bindings) ->
                 {a, [{href, ~"/transitions/detail"}], [~"Open (full reload)"]}
             ]},
             %% C: client-side effect wrapped in a transition (no server round-trip)
-            {button, [{az_click, [arizona_js:transition(), arizona_js:toggle(~"#panel")]}], [
+            {button, [{az_click, arizona_js:transition(arizona_js:toggle(~"#panel"))}], [
                 ~"Toggle panel"
             ]},
             {'div', [{id, ~"panel"}, {class, ~"vt-panel"}, hidden], [
                 ~"Client-side toggle, wrapped in a transition"
-            ]}
+            ]},
+            %% push_event wrapped in a transition: the server diff (the new count)
+            %% animates -- a transition is not tied to navigation.
+            {button, [{az_click, arizona_js:transition(arizona_js:push_event(~"bump"))}], [
+                ~"Bump (animated server diff)"
+            ]},
+            {p, [{id, ~"count"}], [~"Count: ", ?get(count)]}
         ]}
     ).
+
+-spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
+    az:handle_event_ret().
+handle_event(~"bump", _Payload, Bindings) ->
+    {Bindings#{count => maps:get(count, Bindings) + 1}, #{}, []}.

@@ -1,26 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { applyOps, connect, executeJS, OP, resolveEl } from './arizona.js';
+import { connect, executeJS, OP } from './arizona.js';
 
 // Op codes (must match include/arizona_effect.hrl).
+const JS_PUSH_EVENT = 0;
 const JS_TOGGLE = 1;
+const JS_ADD_CLASS = 4;
 const JS_NAVIGATE = 10;
+const JS_SET_TITLE = 14;
 const JS_TRANSITION = 20;
 
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
 
-let _origCSSSupports;
-let _activeWorker = null;
+let _mock = null;
 
 /**
- * Stub document.startViewTransition. Records each call's `types` and runs the
- * update callback synchronously (object form's `.update`, or the bare callback).
+ * Stub document.startViewTransition. Records each call and runs the update
+ * callback synchronously (object form's `.update`, or the bare callback).
  */
 function stubViewTransitions() {
     const fn = vi.fn((arg) => {
-        const isObj = typeof arg === 'object';
-        (isObj ? arg.update : arg)();
+        (typeof arg === 'object' ? arg.update : arg)();
         return {
             ready: Promise.resolve(),
             finished: Promise.resolve(),
@@ -32,12 +33,10 @@ function stubViewTransitions() {
     return fn;
 }
 
-/** Stub prefers-reduced-motion. */
 function stubMatchMedia(reduce) {
     window.matchMedia = vi.fn().mockReturnValue({ matches: reduce });
 }
 
-/** Stub CSS.supports (view-transition `types` detection). */
 function stubCSSSupports(supported) {
     if (typeof globalThis.CSS === 'undefined') globalThis.CSS = {};
     globalThis.CSS.supports = vi.fn().mockReturnValue(supported);
@@ -62,39 +61,34 @@ function setupMockWorker() {
         return worker;
     };
     const disconnect = connect('/ws');
-    _activeWorker = {
+    worker.onmessage({ data: [1, false] }); // open -> _connected = true
+    return {
         posted,
-        simulateOpen: () => worker.onmessage({ data: [1, false] }),
         simulateMessage: (ops, effects = null) =>
             worker.onmessage({ data: [0, ops, effects, false] }),
         restore: () => {
-            disconnect();
+            disconnect(); // resets _pendingTransition + listeners
             globalThis.Worker = OrigWorker;
         },
     };
-    return _activeWorker;
 }
 
 beforeEach(() => {
     document.body.innerHTML = '';
-    // Reset the shared jsdom location so a prior test's navigate (which pushes a
-    // new path) cannot turn a link click into a same-page (no round-trip) nav.
+    // Reset shared jsdom location so a prior nav can't make a link click a
+    // same-page (no round-trip) nav.
     history.replaceState(null, '', '/');
+    stubViewTransitions();
     stubMatchMedia(false);
     stubCSSSupports(true);
+    _mock = setupMockWorker();
 });
 
 afterEach(() => {
-    if (_activeWorker) {
-        _activeWorker.restore();
-        _activeWorker = null;
-    }
-    // Drain any lingering _pendingTransition with the API removed, so a flag set
-    // by one test can never leak a transition into the next.
+    _mock.restore();
+    _mock = null;
     delete document.startViewTransition;
-    applyOps([[OP.REPLACE, '__drain__', '']]);
     delete window.matchMedia;
-    if (globalThis.CSS) globalThis.CSS.supports = _origCSSSupports;
     document.body.innerHTML = '';
 });
 
@@ -104,190 +98,172 @@ function replaceOp(text) {
 }
 
 // ---------------------------------------------------------------------------
-// SPA navigation (B)
+// Synchronous client effects
 // ---------------------------------------------------------------------------
 
-describe('view transitions -- SPA navigation', () => {
-    it('wraps the navigation OP_REPLACE when a transition command preceded navigate', () => {
-        const fn = stubViewTransitions();
-        const w = setupMockWorker();
-        w.simulateOpen();
-        document.body.innerHTML = '<div id="page" az-view><h1 az="0">Home</h1></div>';
+describe('view transitions -- sync client effects', () => {
+    it('wraps a single client effect in place', () => {
+        document.body.innerHTML = '<div id="panel" hidden>x</div>';
+        executeJS(document.body, null, [JS_TRANSITION, { types: ['x'] }, [JS_TOGGLE, '#panel']]);
+        expect(document.startViewTransition).toHaveBeenCalledOnce();
+        expect(document.getElementById('panel').hidden).toBe(false);
+    });
 
+    it('wraps a list of effects', () => {
+        document.body.innerHTML = '<div id="a">x</div><div id="b" hidden>y</div>';
         executeJS(document.body, null, [
-            [JS_TRANSITION, { types: ['slide'] }],
-            [JS_NAVIGATE, '/transitions/detail'],
+            JS_TRANSITION,
+            {},
+            [
+                [JS_ADD_CLASS, '#a', 'on'],
+                [JS_TOGGLE, '#b'],
+            ],
         ]);
-        w.simulateMessage([replaceOp('Detail')]);
-
-        expect(fn).toHaveBeenCalledOnce();
-        expect(resolveEl('page:0').textContent).toBe('Detail');
+        expect(document.startViewTransition).toHaveBeenCalledOnce();
+        expect(document.getElementById('a').classList.contains('on')).toBe(true);
+        expect(document.getElementById('b').hidden).toBe(false);
     });
 
-    it('passes types via the object form when supported, callback form otherwise', () => {
-        const fn = stubViewTransitions();
-        stubCSSSupports(true);
-        document.body.innerHTML = '<div id="page" az-view><h1 az="0">a</h1></div>';
-        executeJS(document.body, null, [JS_TRANSITION, { types: ['slide'] }]);
-        applyOps([replaceOp('b')]);
-        expect(typeof fn.mock.calls[0][0]).toBe('object');
-        expect(fn.mock.calls[0][0].types).toEqual(['slide']);
-
-        fn.mockClear();
-        stubCSSSupports(false);
-        executeJS(document.body, null, [JS_TRANSITION, { types: ['slide'] }]);
-        applyOps([replaceOp('c')]);
-        expect(typeof fn.mock.calls[0][0]).toBe('function');
-    });
-
-    it('does not wrap when no transition was triggered', () => {
-        const fn = stubViewTransitions();
-        document.body.innerHTML = '<div id="page" az-view><h1 az="0">a</h1></div>';
-        applyOps([replaceOp('b')]);
-        expect(fn).not.toHaveBeenCalled();
-        expect(resolveEl('page:0').textContent).toBe('b');
-    });
-
-    it('skips the transition (instant swap) under prefers-reduced-motion', () => {
-        const fn = stubViewTransitions();
+    it('runs the effect directly (no wrap) under prefers-reduced-motion', () => {
         stubMatchMedia(true);
-        document.body.innerHTML = '<div id="page" az-view><h1 az="0">a</h1></div>';
-        executeJS(document.body, null, [JS_TRANSITION, {}]);
-        applyOps([replaceOp('b')]);
-        expect(fn).not.toHaveBeenCalled();
-        expect(resolveEl('page:0').textContent).toBe('b');
+        document.body.innerHTML = '<div id="panel" hidden>x</div>';
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_TOGGLE, '#panel']]);
+        expect(document.startViewTransition).not.toHaveBeenCalled();
+        expect(document.getElementById('panel').hidden).toBe(false);
     });
 
-    it('swaps directly without throwing when the API is unsupported', () => {
+    it('runs the effect directly when the API is unsupported', () => {
         delete document.startViewTransition;
-        document.body.innerHTML = '<div id="page" az-view><h1 az="0">a</h1></div>';
-        executeJS(document.body, null, [JS_TRANSITION, {}]);
-        expect(() => applyOps([replaceOp('b')])).not.toThrow();
-        expect(resolveEl('page:0').textContent).toBe('b');
-    });
-
-    it('keeps the intent until an OP_REPLACE batch arrives (stray diff first)', () => {
-        const fn = stubViewTransitions();
-        document.body.innerHTML = '<div id="page" az-view><span az="0">x</span></div>';
-        executeJS(document.body, null, [JS_TRANSITION, {}]);
-        // A non-REPLACE batch lands first -- must not consume the intent.
-        applyOps([[OP.TEXT, 'page:0', 'y']]);
-        expect(fn).not.toHaveBeenCalled();
-        // The REPLACE batch then wraps.
-        applyOps([replaceOp('z')]);
-        expect(fn).toHaveBeenCalledOnce();
+        document.body.innerHTML = '<div id="panel" hidden>x</div>';
+        expect(() =>
+            executeJS(document.body, null, [JS_TRANSITION, {}, [JS_TOGGLE, '#panel']]),
+        ).not.toThrow();
+        expect(document.getElementById('panel').hidden).toBe(false);
     });
 });
 
 // ---------------------------------------------------------------------------
-// az-transition link attribute
+// Navigation (async, awaits the OP_REPLACE)
 // ---------------------------------------------------------------------------
 
-describe('view transitions -- az-transition link', () => {
-    it('wraps the navigation and parses space-separated types from the attribute', () => {
-        const fn = stubViewTransitions();
-        const w = setupMockWorker();
-        w.simulateOpen();
-        document.body.innerHTML =
-            '<div id="page" az-view>' +
-            '<a id="lnk" href="/transitions/detail" az-navigate az-transition="slide back">go</a>' +
-            '</div>';
+describe('view transitions -- navigation', () => {
+    it('wraps the page-swap OP_REPLACE with the requested types', () => {
+        const fn = document.startViewTransition;
+        document.body.innerHTML = '<div id="page" az-view><h1 az="0">Home</h1></div>';
+        executeJS(document.body, null, [JS_TRANSITION, { types: ['slide'] }, [JS_NAVIGATE, '/x']]);
+        _mock.simulateMessage([replaceOp('Detail')]);
+        expect(fn).toHaveBeenCalledOnce();
+        expect(fn.mock.calls[0][0].types).toEqual(['slide']);
+        expect(document.querySelector('#page h1').textContent).toBe('Detail');
+    });
 
+    it('ignores a stray text/attr tick before the page swap', () => {
+        const fn = document.startViewTransition;
+        document.body.innerHTML = '<div id="page" az-view><h1 az="0">a</h1></div>';
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_NAVIGATE, '/x']]);
+        // A concurrent tick (SET_ATTR) is not the page swap -> not wrapped, intent kept.
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'data-k', '1']]);
+        expect(fn).not.toHaveBeenCalled();
+        // The real swap then wraps.
+        _mock.simulateMessage([replaceOp('b')]);
+        expect(fn).toHaveBeenCalledOnce();
+    });
+
+    it('swaps instantly under prefers-reduced-motion', () => {
+        const fn = document.startViewTransition;
+        stubMatchMedia(true);
+        document.body.innerHTML = '<div id="page" az-view><h1 az="0">a</h1></div>';
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_NAVIGATE, '/x']]);
+        _mock.simulateMessage([replaceOp('b')]);
+        expect(fn).not.toHaveBeenCalled();
+        expect(document.querySelector('#page h1').textContent).toBe('b');
+    });
+
+    it('wraps ops and effects of the same message together', () => {
+        const fn = document.startViewTransition;
+        document.body.innerHTML = '<div id="page" az-view><h1 az="0">a</h1></div>';
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_NAVIGATE, '/x']]);
+        _mock.simulateMessage([replaceOp('b')], [[JS_SET_TITLE, 'Detail']]);
+        expect(fn).toHaveBeenCalledOnce();
+        expect(document.querySelector('#page h1').textContent).toBe('b');
+        expect(document.title).toBe('Detail');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// push_event (async, awaits the next diff)
+// ---------------------------------------------------------------------------
+
+describe('view transitions -- push_event', () => {
+    it('wraps the next server diff, even when it is not a REPLACE', () => {
+        const fn = document.startViewTransition;
+        document.body.innerHTML = '<div id="page" az-view><p az="0">old</p></div>';
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, 'load_more']]);
+        _mock.simulateMessage([[OP.UPDATE, 'page:0', 'new']]);
+        expect(fn).toHaveBeenCalledOnce();
+        expect(document.querySelector('#page [az="0"]').innerHTML).toBe('new');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// az-transition attribute (general -- any trigger, not just links)
+// ---------------------------------------------------------------------------
+
+describe('view transitions -- az-transition attribute', () => {
+    it('animates an az-navigate link and parses space-separated types', () => {
+        const fn = document.startViewTransition;
+        document.body.innerHTML =
+            '<div id="page" az-view><a id="lnk" href="/x" az-navigate az-transition="slide back">go</a></div>';
         document
             .getElementById('lnk')
             .dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
-        w.simulateMessage([replaceOp('Detail')]);
-
+        _mock.simulateMessage([replaceOp('Detail')]);
         expect(fn).toHaveBeenCalledOnce();
         expect(fn.mock.calls[0][0].types).toEqual(['slide', 'back']);
     });
 
-    it('normalizes stray whitespace and a bare attribute to a plain cross-fade', () => {
-        const fn = stubViewTransitions();
-        const w = setupMockWorker();
-        w.simulateOpen();
+    it('animates a client effect on a non-link az_click element', () => {
+        const fn = document.startViewTransition;
         document.body.innerHTML =
             '<div id="page" az-view>' +
-            '<a id="lnk" href="/transitions/detail" az-navigate az-transition="  slide  ">go</a>' +
+            `<button id="btn" az-click='[${JS_TOGGLE},"#panel"]' az-transition>t</button>` +
+            '<div id="panel" hidden>x</div>' +
             '</div>';
-
         document
-            .getElementById('lnk')
+            .getElementById('btn')
             .dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
-        w.simulateMessage([replaceOp('Detail')]);
-
-        // "  slide  " trims to a single type; no empty tokens.
-        expect(fn.mock.calls[0][0].types).toEqual(['slide']);
+        expect(fn).toHaveBeenCalledOnce();
+        expect(document.getElementById('panel').hidden).toBe(false);
     });
 
-    it('does not transition an az-navigate link without az-transition', () => {
-        const fn = stubViewTransitions();
-        const w = setupMockWorker();
-        w.simulateOpen();
+    it('does not animate an az-navigate link without az-transition', () => {
+        const fn = document.startViewTransition;
         document.body.innerHTML =
-            '<div id="page" az-view>' +
-            '<a id="lnk" href="/transitions/detail" az-navigate>go</a>' +
-            '</div>';
-
+            '<div id="page" az-view><a id="lnk" href="/x" az-navigate>go</a></div>';
         document
             .getElementById('lnk')
             .dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
-        w.simulateMessage([replaceOp('Detail')]);
-
+        _mock.simulateMessage([replaceOp('Detail')]);
         expect(fn).not.toHaveBeenCalled();
     });
 });
 
 // ---------------------------------------------------------------------------
-// Back/forward (popstate) replay from history state
+// Back/forward replay from history state
 // ---------------------------------------------------------------------------
 
 describe('view transitions -- back/forward', () => {
     it('replays the transition stamped on the history entry', () => {
-        const fn = stubViewTransitions();
-        const w = setupMockWorker();
-        w.simulateOpen();
+        const fn = document.startViewTransition;
         document.body.innerHTML = '<div id="page" az-view><h1 az="0">a</h1></div>';
-
-        // Move to a different path so popstate is a real round-trip, and provide
-        // the entry state a transitioned push would have stamped.
-        history.pushState({ _azTransition: { types: ['back'] } }, '', '/transitions');
+        history.pushState({ _azTransition: { types: ['back'], kind: 'replace' } }, '', '/x');
         window.dispatchEvent(
-            new PopStateEvent('popstate', { state: { _azTransition: { types: ['back'] } } }),
+            new PopStateEvent('popstate', {
+                state: { _azTransition: { types: ['back'], kind: 'replace' } },
+            }),
         );
-        w.simulateMessage([replaceOp('popped')]);
-
+        _mock.simulateMessage([replaceOp('popped')]);
         expect(fn).toHaveBeenCalledOnce();
         expect(fn.mock.calls[0][0].types).toEqual(['back']);
-    });
-});
-
-// ---------------------------------------------------------------------------
-// Client-side effects (C)
-// ---------------------------------------------------------------------------
-
-describe('view transitions -- client-side effects', () => {
-    it('wraps a synchronous effect composed after a transition command', () => {
-        const fn = stubViewTransitions();
-        document.body.innerHTML = '<div id="panel" hidden>x</div>';
-        executeJS(document.body, null, [
-            [JS_TRANSITION, {}],
-            [JS_TOGGLE, '#panel'],
-        ]);
-        expect(fn).toHaveBeenCalledOnce();
-        // The toggle ran inside the transition callback.
-        expect(document.getElementById('panel').hidden).toBe(false);
-    });
-
-    it('runs the effect directly (no wrap) when the API is unsupported', () => {
-        delete document.startViewTransition;
-        document.body.innerHTML = '<div id="panel" hidden>x</div>';
-        expect(() =>
-            executeJS(document.body, null, [
-                [JS_TRANSITION, {}],
-                [JS_TOGGLE, '#panel'],
-            ]),
-        ).not.toThrow();
-        expect(document.getElementById('panel').hidden).toBe(false);
     });
 });

@@ -27,21 +27,30 @@ Exports: `connect`, `applyOps`, `applyEffects`, `resolveEl`, `pushEvent`, `pushE
 
 ## View transitions
 
-The View Transitions API is mostly CSS; the framework only *starts* a transition for the DOM changes the browser can't see on its own. Three independent pieces:
+A view transition wraps **any** DOM change in `document.startViewTransition` -- it is not tied to navigation. The API is mostly CSS; the framework only *starts* the transition for changes the browser can't see on its own. Two ways to request one (opt-in per-trigger, no global switch):
 
-- **Cross-document** (real `<a href>` navigations, full reloads): pure CSS -- add `@view-transition { navigation: auto; }` to the page. No framework code; works today.
-- **SPA navigation** (`az-navigate`): the page swap arrives a round-trip later as an `OP_REPLACE`, so `applyOps` wraps it in `document.startViewTransition` when a transition was requested.
-- **Client-side effects** (`toggle`/`add_class`/... in one `az_click` list): `runCommands` wraps the synchronous mutation.
+- **`arizona_js:transition(Cmd)` / `transition(Cmd, Opts)`** -- wraps the command (or list of commands) whose DOM change should animate, exactly like `on_key/2` wraps a command. `Opts` is `#{types => [binary()]}`.
 
-Opt-in is **per-trigger** (no global switch). A transition is requested by:
+  ```erlang
+  {az_click, arizona_js:transition(arizona_js:toggle(~"#panel"))}                      %% sync client effect
+  {az_click, arizona_js:transition(arizona_js:navigate(~"/x"), #{types => [~"slide"]})} %% navigation
+  {az_click, arizona_js:transition(arizona_js:push_event(~"load_more"))}                %% server diff
+  ```
 
-- **`az_transition` attribute** on an `az-navigate` link -- bare (`az_transition`) = default cross-fade; `{az_transition, ~"slide back"}` = a space-separated list of view-transition `types` (tokens are trimmed, empties dropped). Read by the click handler.
-- **`arizona_js:transition/0,1` command** -- `transition()` or `transition(#{types => [~"slide"]})`. Compose it **before** a `navigate` (SPA nav, async -- consumed by the next `OP_REPLACE`) or **before** a client-side effect in an `az_click` list (sync wrap). As a handler effect it pairs with `navigate` only (effects dispatch one-per-`executeJS`, so sync client-effect wrapping needs a single `az_click` list).
+- **`az_transition` attribute** on any element with a trigger (an `az-navigate` link **or** an `az_click`/`az_submit`/... element) -- bare (`az_transition`) = default cross-fade; `{az_transition, ~"slide back"}` = a space-separated list of view-transition `types` (tokens trimmed, empties dropped). It wraps whatever the element's trigger does.
+
+The client picks sync vs async from the wrapped command:
+- **Sync effect** (`toggle`/`add_class`/...): wrapped in place immediately.
+- **`navigate`**: the page swap arrives a round-trip later; the worker message handler wraps the `OP_REPLACE` batch (a stray text/attr tick in between is ignored).
+- **`push_event`**: the resulting server diff arrives later; the handler wraps the next non-empty diff batch. (Caveat: on a page with frequent concurrent server pushes -- e.g. a timer -- an interleaving diff could be the one animated; navigation and sync effects are race-free.)
+
+The wrap is applied at the **worker message handler**, so a message's ops **and** effects animate together, in order.
 
 Behaviour:
 - **Guards:** no-ops (instant swap) when `document.startViewTransition` is absent or `prefers-reduced-motion: reduce` matches. `types` use the object form `startViewTransition({update, types})` only when `CSS.supports('selector(:active-view-transition-type(x))')`; otherwise the bare-callback form (older engines still cross-fade, ignore types).
 - **Back/forward:** a transitioned nav stamps `_azTransition` onto both the outgoing and new history entries; popstate replays `e.state._azTransition`, so traversing the edge animates symmetrically. (Direction-aware type reversal is not done yet -- the same opts are reused both ways.)
-- **Styling** is user CSS: `view-transition-name` on a shared element morphs it across the navigation; `::view-transition-*` and `:active-view-transition-type(<type>)` customize the animation.
+- **Cross-document** (real `<a href>` navigations, full reloads): pure CSS -- add `@view-transition { navigation: auto; }` to the page. No framework code.
+- **Styling** is user CSS: `view-transition-name` on a shared element morphs it across the change; `::view-transition-*` and `:active-view-transition-type(<type>)` customize the animation.
 
 ## Connection detection
 

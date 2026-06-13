@@ -75,4 +75,14 @@ test.describe('view transitions', () => {
         await page.getByRole('button', { name: 'Toggle panel' }).click();
         await expect(panel).toBeVisible();
     });
+
+    test('push_event wrapped in a transition animates the server diff', async ({ page }) => {
+        await page.goto('/transitions');
+        await wsReady(page);
+        await expect(page.locator('#count')).toHaveText('Count: 0');
+        await expectStaysConnected(page, async () => {
+            await page.getByRole('button', { name: 'Bump (animated server diff)' }).click();
+            await expect(page.locator('#count')).toHaveText('Count: 1');
+        });
+    });
 });
