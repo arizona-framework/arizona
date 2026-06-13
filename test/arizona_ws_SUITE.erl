@@ -29,6 +29,7 @@
     http_halt_redirect_via_req/1,
     http_halt_sets_cookie/1,
     http_render_sets_cookie/1,
+    http_render_sets_status/1,
     http_render_crash_emits_error_page/1,
     http_reads_cookies_headers_body/1,
     http_exposes_roadrunner_request_id/1,
@@ -85,6 +86,7 @@ groups() ->
         http_halt_redirect_via_req,
         http_halt_sets_cookie,
         http_render_sets_cookie,
+        http_render_sets_status,
         http_render_crash_emits_error_page,
         http_reads_cookies_headers_body,
         http_exposes_roadrunner_request_id,
@@ -201,6 +203,15 @@ init_per_group(roadrunner, Config) ->
                         path => <<"/">>
                     }),
                     {cont, Req1, B}
+                end
+            ]
+        }},
+        %% Stash a non-200 status then continue: the rendered page response
+        %% carries that status (e.g. an auth gate returning 401 with a body).
+        {live, <<"/render_set_status">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    {cont, arizona_req:put_resp_status(Req, 401), B}
                 end
             ]
         }},
@@ -475,6 +486,23 @@ http_render_sets_cookie(Config) ->
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"200">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"theme=dark">>)).
+
+http_render_sets_status(Config) ->
+    %% HTTP: middleware stashes a 401 then continues; the rendered page
+    %% response carries the 401 status (with a body).
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /render_set_status HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"HTTP/1.1 401">>)).
 
 middleware_halt_rejects_ws(Config) ->
     %% WS: middleware halts -- upgrade never happens, HTTP response returned

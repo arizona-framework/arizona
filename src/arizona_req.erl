@@ -61,8 +61,10 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([halted_redirect/1]).
 -export([put_resp_header/3]).
 -export([put_resp_cookie/4]).
+-export([put_resp_status/2]).
 -export([resp_headers/1]).
 -export([resp_cookies/1]).
+-export([resp_status/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -83,8 +85,10 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -ignore_xref([halted_redirect/1]).
 -ignore_xref([put_resp_header/3]).
 -ignore_xref([put_resp_cookie/4]).
+-ignore_xref([put_resp_status/2]).
 -ignore_xref([resp_headers/1]).
 -ignore_xref([resp_cookies/1]).
+-ignore_xref([resp_status/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -101,6 +105,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export_type([headers/0]).
 -export_type([body/0]).
 -export_type([redirect_status/0]).
+-export_type([resp_status/0]).
 -export_type([resp_cookie_opts/0]).
 -export_type([qs/0]).
 
@@ -121,7 +126,8 @@ Method = arizona_req:method(Req).          %% eager, no thread
     body => body(),
     redirect => {redirect_status(), binary()},
     resp_headers => [{binary(), iodata()}],
-    resp_cookies => [{binary(), binary(), resp_cookie_opts()}]
+    resp_cookies => [{binary(), binary(), resp_cookie_opts()}],
+    resp_status => resp_status()
 }.
 
 -nominal adapter() :: module().
@@ -140,6 +146,10 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %% is allowed so rarer codes (300 multiple choices, 304 not modified,
 %% etc.) remain expressible -- callers pick the semantics they want.
 -nominal redirect_status() :: 300..399.
+
+%% Any HTTP response status. Stashed by `put_resp_status/2` and used as the OK
+%% status of a rendered page (default 200) -- e.g. a 401 from an auth gate.
+-nominal resp_status() :: 100..599.
 
 %% Response cookie options stashed by `put_resp_cookie/4` and serialized by
 %% the transport. Mirrors the transport cookie serializer's options.
@@ -399,3 +409,21 @@ resp_headers(_) -> [].
     Request :: request().
 resp_cookies(#{resp_cookies := Cookies}) -> Cookies;
 resp_cookies(_) -> [].
+
+-doc """
+Stashes the HTTP status for a rendered page. Lets a view or middleware return
+a non-200 status (e.g. `401` from an auth gate, `404` from a not-found page)
+while still rendering a body. Ignored for redirects and halts, which carry
+their own status.
+""".
+-spec put_resp_status(Request, Status) -> Request when
+    Request :: request(),
+    Status :: resp_status().
+put_resp_status(Req, Status) when is_integer(Status), Status >= 100, Status =< 599 ->
+    Req#{resp_status => Status}.
+
+-doc "Returns the stashed response status, or `undefined`.".
+-spec resp_status(Request) -> resp_status() | undefined when
+    Request :: request().
+resp_status(#{resp_status := Status}) -> Status;
+resp_status(_) -> undefined.

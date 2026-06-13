@@ -50,7 +50,7 @@ transport's native reply shape.
 
 -nominal result() ::
     {halt, arizona_req:request()}
-    | {ok, 200, iolist(), arizona_req:request()}
+    | {ok, arizona_req:resp_status(), iolist(), arizona_req:request()}
     | {error, 500, iolist(), arizona_req:request()}.
 
 %% --------------------------------------------------------------------
@@ -98,7 +98,14 @@ do_render(H, ArzReq, Bindings, Opts) ->
                     on_mount => maps:get(on_mount, Opts, [])
                 },
                 Page = arizona_render:render_view_to_iolist(H, RenderOpts),
-                {ok, 200, Page, ArzReq}
+                %% A view or middleware may stash a non-200 status (e.g. 401)
+                %% while still rendering a body; default to 200.
+                OkStatus =
+                    case arizona_req:resp_status(ArzReq) of
+                        undefined -> 200;
+                        Status -> Status
+                    end,
+                {ok, OkStatus, Page, ArzReq}
             catch
                 Class:Reason:Stacktrace ->
                     ErrorInfo = #{
