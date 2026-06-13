@@ -430,12 +430,17 @@ The client picks sync vs async from the wrapped command:
   `_pendingTransition` (`kind: 'replace'`) and the worker message handler wraps that batch (a stray
   text/attr tick is ignored).
 - **`push_event`**: the resulting diff is a future message; `_pendingTransition` (`kind: 'any'`)
-  wraps the next non-empty diff. A concurrent server push (e.g. a timer) could race; navigation and
-  sync effects are race-free. (Same-message server diffs still can't be wrapped -- the client applies
-  ops before effects -- so a handler-returned `transition` pairs with `navigate`/`push_event`.)
+  wraps the first response batch and is then consumed either way (a no-diff event can't dangle onto
+  a later one). A concurrent server push (e.g. a timer) could race; navigation and sync effects are
+  race-free. (Same-message server diffs still can't be wrapped -- the client applies ops before
+  effects -- so a handler-returned `transition` pairs with `navigate`/`push_event`.)
 
-The wrap is applied at the **worker message handler**, so a message's ops and effects animate
-together, in order. Guards: no-op (instant swap) when `startViewTransition` is absent or
+Wrapping a mix of sync and async commands animates the async result; sync siblings apply
+immediately. The wrap is applied at the **worker message handler**, so a message's ops and effects
+animate together, in order. By default the whole root cross-fades; a `view-transition-name` on an
+element scopes/morphs just it (and must be unique among rendered elements or the browser skips it).
+
+Guards: no-op (instant swap) when `startViewTransition` is absent or
 `prefers-reduced-motion`; `types` use the object-form call only when `:active-view-transition-type()`
 is supported. Back/forward is symmetric: a transitioned nav stamps `_azTransition` onto both history
 entries and popstate replays it. Cross-document (real `<a href>`) navigations animate via the user's

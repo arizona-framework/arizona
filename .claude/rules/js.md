@@ -42,7 +42,9 @@ A view transition wraps **any** DOM change in `document.startViewTransition` -- 
 The client picks sync vs async from the wrapped command:
 - **Sync effect** (`toggle`/`add_class`/...): wrapped in place immediately.
 - **`navigate`**: the page swap arrives a round-trip later; the worker message handler wraps the `OP_REPLACE` batch (a stray text/attr tick in between is ignored).
-- **`push_event`**: the resulting server diff arrives later; the handler wraps the next non-empty diff batch. (Caveat: on a page with frequent concurrent server pushes -- e.g. a timer -- an interleaving diff could be the one animated; navigation and sync effects are race-free.)
+- **`push_event`**: the resulting server diff arrives later; the handler wraps the first response batch (then drops the intent, so a no-diff event can't bleed onto a later one). Caveat: on a page with frequent concurrent server pushes -- e.g. a timer -- an interleaving diff could be the one animated; navigation and sync effects are race-free.
+
+Wrapping a **mix** of sync and async commands (`transition([toggle(...), push_event(...)])`) animates the async result; sync siblings apply immediately, unwrapped. Wrap one kind per call.
 
 The wrap is applied at the **worker message handler**, so a message's ops **and** effects animate together, in order.
 
@@ -50,7 +52,7 @@ Behaviour:
 - **Guards:** no-ops (instant swap) when `document.startViewTransition` is absent or `prefers-reduced-motion: reduce` matches. `types` use the object form `startViewTransition({update, types})` only when `CSS.supports('selector(:active-view-transition-type(x))')`; otherwise the bare-callback form (older engines still cross-fade, ignore types).
 - **Back/forward:** a transitioned nav stamps `_azTransition` onto both the outgoing and new history entries; popstate replays `e.state._azTransition`, so traversing the edge animates symmetrically. (Direction-aware type reversal is not done yet -- the same opts are reused both ways.)
 - **Cross-document** (real `<a href>` navigations, full reloads): pure CSS -- add `@view-transition { navigation: auto; }` to the page. No framework code.
-- **Styling** is user CSS: `view-transition-name` on a shared element morphs it across the change; `::view-transition-*` and `:active-view-transition-type(<type>)` customize the animation.
+- **Styling** is user CSS. By default the whole root cross-fades; to scope or morph a single element, give it a `view-transition-name` (it then animates independently across the change). `::view-transition-*` and `:active-view-transition-type(<type>)` customize the animation. A `view-transition-name` must be unique among rendered elements during a transition, or the browser skips it.
 
 ## Connection detection
 

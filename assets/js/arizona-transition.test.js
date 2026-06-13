@@ -203,6 +203,19 @@ describe('view transitions -- push_event', () => {
         expect(fn).toHaveBeenCalledOnce();
         expect(document.querySelector('#page [az="0"]').innerHTML).toBe('new');
     });
+
+    it('does not let a no-diff push_event linger onto a later diff', () => {
+        const fn = document.startViewTransition;
+        document.body.innerHTML = '<div id="page" az-view><p az="0">old</p></div>';
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, 'noop']]);
+        // The event produced no diff (effects-only response) -- the intent is
+        // consumed, not held.
+        _mock.simulateMessage(null, [[JS_SET_TITLE, 'x']]);
+        expect(fn).not.toHaveBeenCalled();
+        // A later, unrelated diff must NOT inherit the stale intent.
+        _mock.simulateMessage([[OP.UPDATE, 'page:0', 'new']]);
+        expect(fn).not.toHaveBeenCalled();
+    });
 });
 
 // ---------------------------------------------------------------------------

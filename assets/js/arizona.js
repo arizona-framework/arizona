@@ -271,11 +271,14 @@ function runTransition(opts, fn) {
         return;
     }
     const types = opts?.types;
-    if (types?.length && supportsVTTypes()) {
-        document.startViewTransition({ update: fn, types });
-    } else {
-        document.startViewTransition(fn);
-    }
+    const vt =
+        types?.length && supportsVTTypes()
+            ? document.startViewTransition({ update: fn, types })
+            : document.startViewTransition(fn);
+    // `ready` rejects when the transition is skipped -- a duplicate
+    // view-transition-name, or interruption by a newer transition (rapid nav).
+    // The DOM still updates; swallow it so it isn't an unhandled rejection.
+    vt?.ready?.catch(() => {});
 }
 
 /**
@@ -1701,12 +1704,16 @@ function connect(endpoint, params = {}) {
                         if (msg[2]) applyEffects(msg[2]);
                         if (msg[3]) restoreFormState();
                     };
-                    // A pending transition (from a navigate/push_event) wraps the
-                    // matching batch -- ops and effects together, in order, so the
-                    // page swap and any effect both fall inside the snapshot.
-                    if (_pendingTransition && opsMatchTransition(msg[1], _pendingTransition.kind)) {
-                        const pt = _pendingTransition;
-                        _pendingTransition = null;
+                    // A pending transition wraps its batch -- ops and effects
+                    // together, in order, so the swap and any effect fall inside
+                    // one snapshot. 'replace' (navigate) waits for the page-swap
+                    // batch, ignoring stray ticks; 'any' (push_event) takes its
+                    // first response message and is then consumed either way, so a
+                    // no-diff event can't leave the intent dangling onto a later one.
+                    const pt = _pendingTransition;
+                    const wrap = pt && opsMatchTransition(msg[1], pt.kind);
+                    if (pt && (wrap || pt.kind === 'any')) _pendingTransition = null;
+                    if (wrap) {
                         runTransition({ types: pt.types }, apply);
                     } else {
                         apply();
