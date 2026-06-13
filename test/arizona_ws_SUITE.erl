@@ -27,6 +27,8 @@
     middleware_halt_redirects_on_navigate/1,
     middleware_cont_on_navigate/1,
     http_halt_redirect_via_req/1,
+    http_halt_sets_cookie/1,
+    http_render_sets_cookie/1,
     http_render_crash_emits_error_page/1,
     http_reads_cookies_headers_body/1,
     http_exposes_roadrunner_request_id/1,
@@ -81,6 +83,8 @@ groups() ->
         middleware_halt_redirects_on_navigate,
         middleware_cont_on_navigate,
         http_halt_redirect_via_req,
+        http_halt_sets_cookie,
+        http_render_sets_cookie,
         http_render_crash_emits_error_page,
         http_reads_cookies_headers_body,
         http_exposes_roadrunner_request_id,
@@ -174,6 +178,30 @@ init_per_group(roadrunner, Config) ->
         {live, <<"/halt_redirect_req">>, arizona_crashable, #{
             middlewares => [
                 fun(Req, _B) -> {halt, arizona_req:redirect(Req, <<"/login">>)} end
+            ]
+        }},
+        %% Stash a cookie then halt with a redirect: the transport flushes
+        %% Set-Cookie onto the 303 response.
+        {live, <<"/halt_set_cookie">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, _B) ->
+                    Req1 = arizona_req:put_resp_cookie(Req, <<"session">>, <<"abc">>, #{
+                        path => <<"/">>, http_only => true
+                    }),
+                    {halt, arizona_req:redirect(Req1, 303, <<"/">>)}
+                end
+            ]
+        }},
+        %% Stash a cookie then continue: the rendered page response carries
+        %% Set-Cookie.
+        {live, <<"/render_set_cookie">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    Req1 = arizona_req:put_resp_cookie(Req, <<"theme">>, <<"dark">>, #{
+                        path => <<"/">>
+                    }),
+                    {cont, Req1, B}
+                end
             ]
         }},
         {live, <<"/crash_on_render_http">>, arizona_crashable, #{
@@ -410,6 +438,43 @@ middleware_halt_redirects(Config) ->
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"302">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"/login">>)).
+
+http_halt_sets_cookie(Config) ->
+    %% HTTP: middleware stashes a cookie then halts with a redirect; the
+    %% transport flushes Set-Cookie onto the 303. The cookie value only
+    %% appears in a Set-Cookie header (the redirect body is empty).
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /halt_set_cookie HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"303">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"session=abc">>)).
+
+http_render_sets_cookie(Config) ->
+    %% HTTP: middleware stashes a cookie then continues; the rendered page
+    %% response carries Set-Cookie (the cookie value is not in the body).
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /render_set_cookie HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"200">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"theme=dark">>)).
 
 middleware_halt_rejects_ws(Config) ->
     %% WS: middleware halts -- upgrade never happens, HTTP response returned

@@ -37,10 +37,10 @@ handle(Req) ->
     case arizona_http:render(H, ArzReq, State) of
         {halt, HaltReq} ->
             {halt_response(HaltReq), arizona_req:raw(HaltReq)};
-        {ok, Status, Body} ->
-            {roadrunner_resp:html(Status, Body), Req};
-        {error, Status, Body} ->
-            {roadrunner_resp:html(Status, Body), Req}
+        {ok, Status, Body, ArzReq1} ->
+            {flush_resp(ArzReq1, roadrunner_resp:html(Status, Body)), Req};
+        {error, Status, Body, ArzReq1} ->
+            {flush_resp(ArzReq1, roadrunner_resp:html(Status, Body)), Req}
     end.
 
 %% --------------------------------------------------------------------
@@ -48,9 +48,25 @@ handle(Req) ->
 %% --------------------------------------------------------------------
 
 %% Middleware halted before render. Ship a stashed redirect, or a 204 when
-%% the middleware emitted its own response via direct roadrunner calls.
+%% the middleware emitted its own response via direct roadrunner calls, then
+%% flush any stashed response headers/cookies (put_resp_header/put_resp_cookie).
 halt_response(HaltReq) ->
-    case arizona_req:halted_redirect(HaltReq) of
-        {Status, Location} -> roadrunner_resp:redirect(Status, Location);
-        undefined -> roadrunner_resp:no_content()
-    end.
+    Resp =
+        case arizona_req:halted_redirect(HaltReq) of
+            {Status, Location} -> roadrunner_resp:redirect(Status, Location);
+            undefined -> roadrunner_resp:no_content()
+        end,
+    flush_resp(HaltReq, Resp).
+
+%% Fold stashed response headers and cookies onto Resp.
+flush_resp(ArzReq, Resp0) ->
+    Resp1 = lists:foldl(
+        fun({Name, Value}, R) -> roadrunner_resp:add_header(R, Name, Value) end,
+        Resp0,
+        arizona_req:resp_headers(ArzReq)
+    ),
+    lists:foldl(
+        fun({Name, Value, Opts}, R) -> roadrunner_resp:set_cookie(R, Name, Value, Opts) end,
+        Resp1,
+        arizona_req:resp_cookies(ArzReq)
+    ).
