@@ -379,7 +379,7 @@ stateful_bindings_sync(Config) when is_list(Config) ->
     %% at compile time, so they don't appear in dynamics.
     [
         {_, {attr, <<"id">>, _}},
-        {_, CountVal}
+        {_, {arizona_esc, CountVal}}
     ] = maps:get(d, CSnap),
     ?assertEqual(5, CountVal).
 

@@ -1063,9 +1063,9 @@ compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend) ->
     compile_fragment_parts(ast_list_to_list(ExprAST), Module, LiveRender, Backend);
 compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend) ->
     compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend);
-compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, _Backend) ->
+compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend) ->
     Statics = [<<>>, <<>>],
-    DynASTs = [make_text_dynamic_ast(<<"0">>, ExprAST, Module, line(ExprAST))],
+    DynASTs = [make_esc_text_dynamic_ast(<<"0">>, ExprAST, Module, line(ExprAST), Backend)],
     {Statics, DynASTs, generate_fingerprint(Statics), #{}}.
 
 compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->
@@ -1116,10 +1116,10 @@ compile_mixed_non_static(Item, Module, State) ->
             compile_mixed_dynamic(Item, Module, State)
     end.
 
-compile_mixed_dynamic(Item, Module, #state{nodiff = true} = State) ->
-    flush(State, make_nodiff_dynamic_ast(Item, Module, line(Item)));
-compile_mixed_dynamic(Item, Module, State) ->
-    flush(State, make_text_dynamic_ast(<<"0">>, Item, Module, line(Item))).
+compile_mixed_dynamic(Item, Module, #state{nodiff = true, backend = Backend} = State) ->
+    flush(State, make_nodiff_dynamic_ast(Item, Module, line(Item), Backend));
+compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State) ->
+    flush(State, make_esc_text_dynamic_ast(<<"0">>, Item, Module, line(Item), Backend)).
 
 extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node) ->
     case is_list_ast(AttrsAST) of
@@ -1527,14 +1527,16 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
             emit_child_dynamic(Child, ElemAz, State0, Slot)
     end.
 
-emit_child_dynamic(Child, _ElemAz, #state{nodiff = true, module = Module} = State0, Slot) ->
-    DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child)),
+emit_child_dynamic(
+    Child, _ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
+) ->
+    DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
     {flush(State0, DynAST), Slot};
 emit_child_dynamic(Child, ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
     ElemAzBin = integer_to_binary(ElemAz),
     MarkerAz = Backend:text_az(ElemAzBin, Slot),
     State1 = buf_append(State0, Backend:text_slot_open(MarkerAz)),
-    DynAST = make_text_dynamic_ast(MarkerAz, Child, Module, line(Child)),
+    DynAST = make_esc_text_dynamic_ast(MarkerAz, Child, Module, line(Child), Backend),
     State2 = flush(State1, DynAST),
     {State2#state{buf = Backend:text_slot_close()}, Slot + 1}.
 
@@ -1545,6 +1547,51 @@ make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
         {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
         LocAST
     ]}.
+
+%% Like make_text_dynamic_ast/4 but tags a *value* element-content interpolation
+%% as `{esc, Fun}` so the renderer HTML-escapes it. A *block* -- a nested
+%% template, ?each, ?inner_content, ?stateful/?stateless, a map, or raw/1 -- is
+%% left untagged and rendered structurally (escaping is decided at compile time
+%% so the runtime can never confuse user scalars with spliced framework HTML).
+make_esc_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine, Backend) ->
+    LocAST = loc_ast(Module, ExprLine),
+    FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
+    {tuple, 0, [ast_binary(AzBin), esc_spec(Backend, ExprAST, FunAST), LocAST]}.
+
+%% Tag a value interpolation `{esc, Fun}` (escaped at the HTML boundary) or leave
+%% it bare. Only the HTML backend escapes -- native/terminal output is plain text,
+%% not HTML, so escaping there would corrupt it (`>` -> `&gt;`). Blocks are always
+%% left bare and spliced raw.
+esc_spec(arizona_html, ExprAST, FunAST) ->
+    case is_block_content_expr(ExprAST) of
+        true -> FunAST;
+        false -> {tuple, 0, [{atom, 0, esc}, FunAST]}
+    end;
+esc_spec(_Backend, _ExprAST, FunAST) ->
+    FunAST.
+
+is_block_content_expr({map, _, _}) ->
+    true;
+is_block_content_expr({map, _, _, _}) ->
+    true;
+is_block_content_expr({call, _, {remote, _, {atom, _, M}, {atom, _, F}}, _Args}) ->
+    (M =:= arizona_template orelse M =:= az) andalso
+        lists:member(F, [
+            html,
+            native,
+            terminal,
+            each,
+            native_each,
+            terminal_each,
+            stateful,
+            stateless,
+            inner_content,
+            local,
+            slot,
+            raw
+        ]);
+is_block_content_expr(_) ->
+    false.
 
 make_attr_dynamic_ast(AzBin, AttrNameBin, ExprAST, Module, ExprLine) ->
     LocAST = loc_ast(Module, ExprLine),
@@ -1558,13 +1605,14 @@ make_attr_dynamic_ast(AzBin, AttrNameBin, ExprAST, Module, ExprLine) ->
         LocAST
     ]}.
 
-make_nodiff_dynamic_ast(ExprAST, Module, ExprLine) ->
+%% Same value/block classification as make_esc_text_dynamic_ast/5, but for the
+%% nodiff (layout) path: a value interpolation (e.g. a layout `title`) is tagged
+%% `{esc, Fun}` so SSR HTML-escapes it; a block (?inner_content, nested template)
+%% is left untagged and spliced raw.
+make_nodiff_dynamic_ast(ExprAST, Module, ExprLine, Backend) ->
     LocAST = loc_ast(Module, ExprLine),
-    {tuple, 0, [
-        {atom, 0, undefined},
-        {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
-        LocAST
-    ]}.
+    FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
+    {tuple, 0, [{atom, 0, undefined}, esc_spec(Backend, ExprAST, FunAST), LocAST]}.
 
 make_nodiff_attr_dynamic_ast(AttrNameBin, ExprAST, Module, ExprLine) ->
     LocAST = loc_ast(Module, ExprLine),

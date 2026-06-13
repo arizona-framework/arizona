@@ -223,6 +223,8 @@ zip([S | Statics], [D | Dynamics]) ->
 %% Pre-unwrapped value path -- factored out of zip/2's body so zip_t/2
 %% (the triple-walking variant used by zip_stream_item/2) can share the
 %% same dispatch without duplicating the case clauses.
+render_dyn({arizona_esc, V}) ->
+    arizona_template:escape_value(V);
 render_dyn(#{t := ?EACH, items := Items, template := Tmpl}) when is_list(Items) ->
     #{s := ItemS} = Tmpl,
     [zip_stream_item(ItemS, ItemD) || ItemD <- Items];
@@ -400,6 +402,14 @@ render_ssr_one({_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
 render_ssr_one({_Az, Spec}) ->
     render_ssr_val(Spec).
 
+render_ssr_val({esc, Fun}) when is_function(Fun, 0) ->
+    %% A value interpolation: escape the rendered scalar bytes; nested
+    %% templates/descriptors come back as snapshots (their inner dynamics carry
+    %% their own marks), so pass those through untouched.
+    case render_ssr_val(Fun()) of
+        Bin when is_binary(Bin) -> arizona_template:escape_value(Bin);
+        Other -> Other
+    end;
 render_ssr_val(Fun) when is_function(Fun, 0) ->
     render_ssr_val(Fun());
 render_ssr_val(#{t := ?EACH, source := Items, template := Tmpl}) when is_list(Items) ->
@@ -445,6 +455,11 @@ render_ssr_val(Val) ->
 render_ssr_attr(Name, Val) ->
     arizona_template:render_attr(Name, Val).
 
+render_fp_val(native, {arizona_esc, V}) ->
+    %% Native targets are not HTML, so the escape marker is just unwrapped raw.
+    arizona_template:to_bin(V);
+render_fp_val(_Target, {arizona_esc, V}) ->
+    arizona_template:escape_value(V);
 render_fp_val(native, {attr, _Name, V}) ->
     %% Native bakes the prop name into the static, so the dynamic carries only
     %% the value -- encoded client-side like any other dynamic value.

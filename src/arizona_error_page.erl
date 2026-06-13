@@ -60,7 +60,7 @@ render(Bindings) ->
     Reason = maps:get(reason, ErrorInfo),
     Stacktrace = maps:get(stacktrace, ErrorInfo),
     ReloadUrl = maps:get(reload_url, ErrorInfo, undefined),
-    Title = escape(format_title(Class, Reason, Stacktrace)),
+    Title = format_title(Class, Reason, Stacktrace),
     ReasonStr = format_reason(Class, Reason, Stacktrace),
     ?html(
         {html, [], [
@@ -87,9 +87,9 @@ render(Bindings) ->
                         fun({M, F, A, Info}) ->
                             Loc = format_loc(Info),
                             {'div', [{class, ~"frame"}], [
-                                {span, [{class, ~"mod"}], [escape(atom_to_binary(M))]},
+                                {span, [{class, ~"mod"}], [atom_to_binary(M)]},
                                 ~":",
-                                {span, [{class, ~"fun"}], [escape(format_fun_name(F, A))]},
+                                {span, [{class, ~"fun"}], [format_fun_name(F, A)]},
                                 {span, [{class, ~"loc"}], [~" ", Loc]}
                             ]}
                         end,
@@ -282,10 +282,8 @@ skip_spaces([$\s | Rest]) -> skip_spaces(Rest);
 skip_spaces(Other) -> Other.
 
 format_reason(_Class, {compile_error, Errors}, _Stacktrace) ->
-    escape(
-        unicode:characters_to_binary(
-            lists:join("\n\n", [format_file_errors(F, Es) || {F, Es} <:- Errors])
-        )
+    unicode:characters_to_binary(
+        lists:join("\n\n", [format_file_errors(F, Es) || {F, Es} <:- Errors])
     );
 format_reason(Class, {arizona_loc, _Loc, Reason}, Stacktrace) ->
     format_reason(Class, Reason, Stacktrace);
@@ -294,8 +292,8 @@ format_reason(Class, Reason, Stacktrace) ->
     %% there's no repetition. Falls back to `~0tp` for plain reasons
     %% without any erl_error-format output.
     case error_summary(Class, Reason, Stacktrace) of
-        [] -> escape(unicode:characters_to_binary(io_lib:format("~0tp", [Reason])));
-        Summary -> escape(unicode:characters_to_binary(Summary))
+        [] -> unicode:characters_to_binary(io_lib:format("~0tp", [Reason]));
+        Summary -> unicode:characters_to_binary(Summary)
     end.
 
 format_file_errors(File, Errors) ->
@@ -328,22 +326,6 @@ relative_path(File) ->
         _ ->
             File
     end.
-
-escape(Bin) when is_binary(Bin) ->
-    escape(Bin, <<>>).
-
-escape(<<>>, Acc) ->
-    Acc;
-escape(<<"&", Rest/binary>>, Acc) ->
-    escape(Rest, <<Acc/binary, "&amp;">>);
-escape(<<"<", Rest/binary>>, Acc) ->
-    escape(Rest, <<Acc/binary, "&lt;">>);
-escape(<<">", Rest/binary>>, Acc) ->
-    escape(Rest, <<Acc/binary, "&gt;">>);
-escape(<<"\"", Rest/binary>>, Acc) ->
-    escape(Rest, <<Acc/binary, "&quot;">>);
-escape(<<C, Rest/binary>>, Acc) ->
-    escape(Rest, <<Acc/binary, C>>).
 
 reload_script(undefined) ->
     <<>>;

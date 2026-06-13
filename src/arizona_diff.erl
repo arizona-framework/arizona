@@ -728,6 +728,16 @@ emit_move_ops(Az, LIS, [Key | Rest], I, Prev) ->
             ]
     end.
 
+%% Escape markers don't take part in structural diffing -- unwrap them so the
+%% value-shape clauses below match (sentinels like `remove`, nested templates,
+%% each containers). The op value stays raw (`to_bin` unwraps too); the client
+%% escapes via textContent/setAttribute.
+make_op(Az, {arizona_esc, New}, {arizona_esc, Old}) ->
+    make_op(Az, New, Old);
+make_op(Az, {arizona_esc, New}, Old) ->
+    make_op(Az, New, Old);
+make_op(Az, New, {arizona_esc, Old}) ->
+    make_op(Az, New, Old);
 make_op(Az, {attr, Attr, false}, _Old) ->
     [?OP_REM_ATTR, Az, Attr];
 make_op(Az, {attr, Attr, true}, _Old) ->

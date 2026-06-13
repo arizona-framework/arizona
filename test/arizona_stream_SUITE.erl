@@ -700,7 +700,7 @@ stream_snapshot_after_multiple_cycles(Config) when is_list(Config) ->
     ],
     ?assertEqual([1], FinalOrder),
     #{1 := ItemD} = FinalItems,
-    [{_, {attr, <<"az-key">>, 1}, _}, {_, <<"A2">>, _}] = ItemD.
+    [{_, {attr, <<"az-key">>, 1}, _}, {_, {arizona_esc, <<"A2">>}, _}] = ItemD.
 
 stream_empty_pending_deps_changed(Config) when is_list(Config) ->
     %% Mount with 1 item, clear pending, re-render with same stream but Changed = #{items => true}

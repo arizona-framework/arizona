@@ -233,7 +233,16 @@
     local_in_native_error/1,
     local_in_each_renders/1,
     local_atom_key/1,
-    local_atom_binary_reuse_error/1
+    local_atom_binary_reuse_error/1,
+    ssr_escapes_content_value/1,
+    ssr_escapes_attr_value/1,
+    ssr_escape_all_unsafe_chars/1,
+    raw_opt_out_not_escaped/1,
+    block_value_not_escaped/1,
+    value_template_inner_escaped/1,
+    diff_value_stays_raw/1,
+    fingerprint_escapes_value/1,
+    native_backend_not_escaped/1
 ]).
 
 all() ->
@@ -242,6 +251,7 @@ all() ->
         {group, local},
         {group, each},
         {group, integration},
+        {group, escaping},
         {group, inline},
         {group, tracked_get},
         {group, layout},
@@ -373,6 +383,19 @@ groups() ->
             nodiff_with_other_attrs,
             nodiff_each,
             mixed_attr_forms
+        ]},
+        %% HTML auto-escaping: value interpolations are escaped at the HTML
+        %% boundary; blocks/raw/native are not; the live-diff path stays raw.
+        {escaping, [parallel], [
+            ssr_escapes_content_value,
+            ssr_escapes_attr_value,
+            ssr_escape_all_unsafe_chars,
+            raw_opt_out_not_escaped,
+            block_value_not_escaped,
+            value_template_inner_escaped,
+            diff_value_stays_raw,
+            fingerprint_escapes_value,
+            native_backend_not_escaped
         ]},
         %% Binding-read inlining: reads hoisted out of ?html still track per-slot
         {inline, [parallel], [
@@ -1022,7 +1045,7 @@ single_dynamic_text(Config) when is_list(Config) ->
         maps:get(s, T)
     ),
     Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_dyn_text, 1}}] = maps:get(d, T),
+    [{Az0, {esc, Fun}, {pt_dyn_text, 1}}] = maps:get(d, T),
     ?assertEqual(<<"Alice">>, Fun()).
 
 %% Test 3: Single dynamic attribute -- statics split at attr value.
@@ -1088,7 +1111,7 @@ counter_pattern(Config) when is_list(Config) ->
     Az1 = <<Fp/binary, "-1">>,
     [
         {Az0, {attr, <<"id">>, IdFun}, {pt_counter, 1}},
-        {Az1, CountFun, {pt_counter, 1}}
+        {Az1, {esc, CountFun}, {pt_counter, 1}}
     ] = maps:get(d, T),
     ?assertEqual(<<"test">>, IdFun()),
     ?assertEqual(42, CountFun()).
@@ -1130,7 +1153,7 @@ nested_elements(Config) when is_list(Config) ->
     ),
     Az0 = <<Fp/binary, "-0">>,
     Az1 = <<Fp/binary, "-1">>,
-    [{Az0, FunA, {pt_nested, 1}}, {Az1, FunB, {pt_nested, 1}}] = maps:get(d, T),
+    [{Az0, {esc, FunA}, {pt_nested, 1}}, {Az1, {esc, FunB}, {pt_nested, 1}}] = maps:get(d, T),
     ?assertEqual(<<"hello">>, FunA()),
     ?assertEqual(<<"world">>, FunB()).
 
@@ -1203,7 +1226,7 @@ shared_az(Config) when is_list(Config) ->
     Az0 = <<Fp/binary, "-0">>,
     [
         {Az0, {attr, <<"class">>, ThemeFun}, {pt_shared, 1}},
-        {Az0, ContentFun, {pt_shared, 1}}
+        {Az0, {esc, ContentFun}, {pt_shared, 1}}
     ] = maps:get(d, T),
     ?assertEqual(<<"dark">>, ThemeFun()),
     ?assertEqual(<<"hello">>, ContentFun()).
@@ -1311,6 +1334,153 @@ diff_integration(Config) when is_list(Config) ->
         )
     ).
 
+%% =============================================================================
+%% HTML auto-escaping
+%% =============================================================================
+
+%% A value interpolation in element content is HTML-escaped at SSR.
+ssr_escapes_content_value(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_esc_content). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{x => <<"<script>alert(1)</script>">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(nomatch, binary:match(HTML, <<"<script>">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"&lt;script&gt;">>)).
+
+%% A value interpolation in an attribute is HTML-escaped (no quote breakout).
+ssr_escapes_attr_value(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_esc_attr). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [{title, arizona_template:get(t, Bindings)}], [<<\"x\">>]}"
+        "    ). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{t => <<"\"><script>">>})),
+    HTML = iolist_to_binary(HTML0),
+    %% The closing-quote breakout must not survive verbatim.
+    ?assertEqual(nomatch, binary:match(HTML, <<"\"><script>">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"&quot;">>)).
+
+%% All five HTML-significant characters map to entities.
+ssr_escape_all_unsafe_chars(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_esc_all). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{x => <<"<>&\"'">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"&lt;&gt;&amp;&quot;&#39;">>)).
+
+%% raw/1 opts a value out of escaping -- emitted verbatim.
+raw_opt_out_not_escaped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_esc_raw). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        arizona_template:raw(arizona_template:get(x, Bindings))"
+        "    ]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{x => <<"<b>raw</b>">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"<b>raw</b>">>)),
+    ?assertEqual(nomatch, binary:match(HTML, <<"&lt;b&gt;">>)).
+
+%% A nested ?html block is spliced structurally (its tags stay raw, not escaped).
+block_value_not_escaped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_esc_block). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        arizona_template:html({'span', [], [arizona_template:get(x, Bindings)]})"
+        "    ]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{x => <<"hi">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"<span">>)),
+    ?assertEqual(nomatch, binary:match(HTML, <<"&lt;span">>)).
+
+%% A value expression that returns a nested ?html (the login error pattern):
+%% the block renders structurally, yet a value interpolated inside is escaped.
+value_template_inner_escaped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_esc_case_html). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(msg, Bindings) of "
+        "            undefined -> <<\"\">>; "
+        "            Msg -> arizona_template:html({'p', [], [Msg]}) "
+        "        end "
+        "    ]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{msg => <<"<script>">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"<p">>)),
+    ?assertEqual(nomatch, binary:match(HTML, <<"<script>">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"&lt;script&gt;">>)).
+
+%% The live-diff path stays RAW: the OP_TEXT op carries the unescaped value
+%% (the JS client sets textContent, which self-escapes -- escaping here would
+%% double-display as &lt;b&gt;).
+diff_value_stays_raw(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_esc_diff). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    T1 = Mod:render(#{x => <<"a">>}),
+    {_HTML, Snap} = arizona_render:render(T1),
+    T2 = Mod:render(#{x => <<"<b>">>}),
+    {Ops, _NewSnap} = arizona_diff:diff(T2, Snap),
+    ?assert(
+        lists:any(
+            fun
+                ([0, _Target, V]) -> V =:= <<"<b>">>;
+                (_) -> false
+            end,
+            Ops
+        )
+    ).
+
+%% The fingerprint (initial hydration) wire payload escapes value dynamics.
+fingerprint_escapes_value(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_esc_fp). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    {_HTML, Snap} = arizona_render:render(Mod:render(#{x => <<"<i>">>})),
+    Payload = arizona_render:fingerprint_payload(Snap),
+    DBin = iolist_to_binary(maps:get(~"d", Payload)),
+    ?assertEqual(nomatch, binary:match(DBin, <<"<i>">>)),
+    ?assertNotEqual(nomatch, binary:match(DBin, <<"&lt;i&gt;">>)).
+
+%% The native (terminal) backend produces plain text, not HTML, so value
+%% interpolations are left bare -- escaping there would corrupt the output.
+native_backend_not_escaped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_esc_native). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:native({'Text', [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    T = Mod:render(#{x => <<"<not-escaped>">>}),
+    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    ?assert(is_function(Fun, 0)),
+    ?assertEqual(<<"<not-escaped>">>, Fun()).
+
 %% Test 14: Two dynamic attributes -- both share az, statics split between both.
 two_dynamic_attrs(Config) when is_list(Config) ->
     Mod = compile_module(
@@ -1370,7 +1540,9 @@ two_dynamic_texts(Config) when is_list(Config) ->
     ),
     Az0 = <<Fp/binary, "-0">>,
     Az01 = <<Fp/binary, "-0:1">>,
-    [{Az0, FunA, {pt_two_texts, 1}}, {Az01, FunB, {pt_two_texts, 1}}] = maps:get(d, T),
+    [{Az0, {esc, FunA}, {pt_two_texts, 1}}, {Az01, {esc, FunB}, {pt_two_texts, 1}}] = maps:get(
+        d, T
+    ),
     ?assertEqual(<<"hello">>, FunA()),
     ?assertEqual(<<"world">>, FunB()),
     %% Integration: diff produces independent ops for each dynamic
@@ -1431,7 +1603,7 @@ static_between_dynamics(Config) when is_list(Config) ->
     ),
     Az0 = <<Fp/binary, "-0">>,
     Az01 = <<Fp/binary, "-0:1">>,
-    [{Az0, FunA, {pt_between, 1}}, {Az01, FunB, {pt_between, 1}}] = maps:get(d, T),
+    [{Az0, {esc, FunA}, {pt_between, 1}}, {Az01, {esc, FunB}, {pt_between, 1}}] = maps:get(d, T),
     ?assertEqual(<<"hello">>, FunA()),
     ?assertEqual(<<"world">>, FunB()).
 
@@ -1461,7 +1633,7 @@ case_expression_dynamic(Config) when is_list(Config) ->
         maps:get(s, T)
     ),
     Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_case, 1}}] = maps:get(d, T),
+    [{Az0, {esc, Fun}, {pt_case, 1}}] = maps:get(d, T),
     ?assertEqual(<<"yes">>, Fun()).
 
 %% Test 18: Variable reference as dynamic child.
@@ -1488,7 +1660,7 @@ variable_dynamic(Config) when is_list(Config) ->
         maps:get(s, T)
     ),
     Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_var, 1}}] = maps:get(d, T),
+    [{Az0, {esc, Fun}, {pt_var, 1}}] = maps:get(d, T),
     ?assertEqual(<<"hello">>, Fun()).
 
 %% Test 19: arizona:stateful/2 inside template stays as dynamic (not compile-time transformed).
@@ -1591,7 +1763,7 @@ deeply_nested(Config) when is_list(Config) ->
     ),
     Az0 = <<Fp/binary, "-0">>,
     Az1 = <<Fp/binary, "-1">>,
-    [{Az0, FunA, {pt_deep, 1}}, {Az1, FunB, {pt_deep, 1}}] = maps:get(d, T),
+    [{Az0, {esc, FunA}, {pt_deep, 1}}, {Az1, {esc, FunB}, {pt_deep, 1}}] = maps:get(d, T),
     ?assertEqual(<<"deep">>, FunA()),
     ?assertEqual(<<"shallow">>, FunB()).
 
@@ -1618,7 +1790,7 @@ dynamic_only_child(Config) when is_list(Config) ->
         maps:get(s, T)
     ),
     Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_dyn_only, 1}}] = maps:get(d, T),
+    [{Az0, {esc, Fun}, {pt_dyn_only, 1}}] = maps:get(d, T),
     ?assertEqual(<<"test">>, Fun()).
 
 %% Test 23: Same bindings produce no diff ops.
@@ -1708,7 +1880,7 @@ template2_basic(Config) when is_list(Config) ->
     ?assert(is_function(DFun, 1)),
     Dynamics = DFun(#{name => <<"Alice">>}),
     Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_each_basic, 1}}] = Dynamics,
+    [{Az0, {esc, Fun}, {pt_each_basic, 1}}] = Dynamics,
     ?assertEqual(<<"Alice">>, Fun()).
 
 %% Test 27: template/2 with az-key and other dynamic attrs.
@@ -1744,7 +1916,7 @@ template2_dynamic_attr(Config) when is_list(Config) ->
     [
         {Az0, {attr, <<"az-key">>, KeyFun}, {pt_each_attr, 1}},
         {Az0, {attr, <<"class">>, ClsFun}, {pt_each_attr, 1}},
-        {Az0, TextFun, {pt_each_attr, 1}}
+        {Az0, {esc, TextFun}, {pt_each_attr, 1}}
     ] = Dynamics,
     ?assertEqual(<<"r1">>, KeyFun()),
     ?assertEqual(<<"active">>, ClsFun()),
@@ -1794,8 +1966,8 @@ template2_multiple_children(Config) when is_list(Config) ->
     Az2 = <<Fp/binary, "-2">>,
     [
         {Az0, {attr, <<"az-key">>, KeyFun}, {pt_each_multi, 1}},
-        {Az1, NameFun, {pt_each_multi, 1}},
-        {Az2, AgeFun, {pt_each_multi, 1}}
+        {Az1, {esc, NameFun}, {pt_each_multi, 1}},
+        {Az2, {esc, AgeFun}, {pt_each_multi, 1}}
     ] = Dynamics,
     ?assertEqual(<<"1">>, KeyFun()),
     ?assertEqual(<<"Bob">>, NameFun()),
@@ -1842,7 +2014,7 @@ template2_nested_in_template(Config) when is_list(Config) ->
     DFun = maps:get(d, Tmpl),
     InnerFp = maps:get(f, Tmpl),
     InnerAz0 = <<InnerFp/binary, "-0">>,
-    [{InnerAz0, ItemFun, {pt_each_nested, 1}}] = DFun(#{text => <<"hi">>}),
+    [{InnerAz0, {esc, ItemFun}, {pt_each_nested, 1}}] = DFun(#{text => <<"hi">>}),
     ?assertEqual(<<"hi">>, ItemFun()).
 
 %% Test 30: template/2 with mix of static text and dynamic children.
@@ -1870,7 +2042,7 @@ template2_static_and_dynamic(Config) when is_list(Config) ->
     ),
     DFun = maps:get(d, Tmpl),
     Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_each_mixed, 1}}] = DFun(#{name => <<"Eve">>}),
+    [{Az0, {esc, Fun}, {pt_each_mixed, 1}}] = DFun(#{name => <<"Eve">>}),
     ?assertEqual(<<"Eve">>, Fun()).
 
 %% Test 31: template/2 render integration -- arizona:render/1 produces correct HTML.
@@ -1940,7 +2112,8 @@ template2_compound_markers(Config) when is_list(Config) ->
     Dynamics = DFun(#{first => <<"John">>, last => <<"Doe">>}),
     Az0 = <<Fp/binary, "-0">>,
     Az01 = <<Fp/binary, "-0:1">>,
-    [{Az0, FirstFun, {pt_each_compound, 1}}, {Az01, LastFun, {pt_each_compound, 1}}] = Dynamics,
+    [{Az0, {esc, FirstFun}, {pt_each_compound, 1}}, {Az01, {esc, LastFun}, {pt_each_compound, 1}}] =
+        Dynamics,
     ?assertEqual(<<"John">>, FirstFun()),
     ?assertEqual(<<"Doe">>, LastFun()).
 
@@ -1971,7 +2144,7 @@ template2_multi_expr_body(Config) when is_list(Config) ->
     ),
     DFun = maps:get(d, Tmpl),
     Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_each_multi_expr, 1}}] = DFun(#{name => <<"alice">>}),
+    [{Az0, {esc, Fun}, {pt_each_multi_expr, 1}}] = DFun(#{name => <<"alice">>}),
     ?assertEqual(<<"ALICE">>, Fun()).
 
 %% Test 34: template/2 with multi-expression body and dynamic attr.
@@ -1993,7 +2166,7 @@ template2_multi_expr_attr(Config) when is_list(Config) ->
     Az0 = <<Fp/binary, "-0">>,
     [
         {Az0, {attr, <<"class">>, ClsFun}, {pt_each_multi_attr, 1}},
-        {Az0, TextFun, {pt_each_multi_attr, 1}}
+        {Az0, {esc, TextFun}, {pt_each_multi_attr, 1}}
     ] = Dynamics,
     ?assertEqual(<<"x">>, ClsFun()),
     ?assertEqual(<<"hi">>, TextFun()).
@@ -2013,7 +2186,7 @@ template2_guard(Config) when is_list(Config) ->
     Fp = maps:get(f, Tmpl),
     DFun = maps:get(d, Tmpl),
     Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_each_guard, 1}}] = DFun(#{name => <<"Bob">>}),
+    [{Az0, {esc, Fun}, {pt_each_guard, 1}}] = DFun(#{name => <<"Bob">>}),
     ?assertEqual(<<"Bob">>, Fun()).
 
 %% Test 36: template/2 with static-only item -- no dynamics in item.
@@ -2103,7 +2276,7 @@ template2_inner_template1(Config) when is_list(Config) ->
         maps:get(s, InnerTmpl)
     ),
     InnerAz0 = <<InnerFp/binary, "-0">>,
-    [{InnerAz0, InnerFun, {pt_each_inner_t1, 1}}] = maps:get(d, InnerTmpl),
+    [{InnerAz0, {esc, InnerFun}, {pt_each_inner_t1, 1}}] = maps:get(d, InnerTmpl),
     ?assertEqual(<<"hello">>, InnerFun()).
 
 %% Test 39: template/2 render integration with empty source list.
@@ -2189,7 +2362,7 @@ template1_fragment(Config) when is_list(Config) ->
     ),
     Az0 = <<Fp/binary, "-0">>,
     Az1 = <<Fp/binary, "-1">>,
-    [{Az0, FunA, {pt_fragment, 1}}, {Az1, FunB, {pt_fragment, 1}}] = maps:get(d, T),
+    [{Az0, {esc, FunA}, {pt_fragment, 1}}, {Az1, {esc, FunB}, {pt_fragment, 1}}] = maps:get(d, T),
     ?assertEqual(<<"A">>, FunA()),
     ?assertEqual(<<"B">>, FunB()).
 
@@ -2296,7 +2469,7 @@ template1_dynamic_expr(Config) when is_list(Config) ->
     Fp = maps:get(f, T),
     ?assertEqual([<<>>, <<>>], maps:get(s, T)),
     Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_dyn_expr, 1}}] = maps:get(d, T),
+    [{Az0, {esc, Fun}, {pt_dyn_expr, 1}}] = maps:get(d, T),
     ?assertEqual(<<"hello">>, Fun()).
 
 %% Test 49: template/1 with dynamic expression -- render integration.
@@ -2360,7 +2533,7 @@ template2_fragment_body(Config) when is_list(Config) ->
     DFun = maps:get(d, Tmpl),
     Az0 = <<Fp/binary, "-0">>,
     Az1 = <<Fp/binary, "-1">>,
-    [{Az0, NameFun, {pt_each_frag, 1}}, {Az1, AgeFun, {pt_each_frag, 1}}] = DFun(#{
+    [{Az0, {esc, NameFun}, {pt_each_frag, 1}}, {Az1, {esc, AgeFun}, {pt_each_frag, 1}}] = DFun(#{
         name => <<"Alice">>, age => 30
     }),
     ?assertEqual(<<"Alice">>, NameFun()),
@@ -2418,9 +2591,11 @@ template2_fragment_multi_expr(Config) when is_list(Config) ->
     DFun = maps:get(d, Tmpl),
     Az0 = <<Fp/binary, "-0">>,
     Az1 = <<Fp/binary, "-1">>,
-    [{Az0, NameFun, {pt_each_frag_multi, 1}}, {Az1, AgeFun, {pt_each_frag_multi, 1}}] = DFun(#{
-        name => <<"alice">>, age => 25
-    }),
+    [{Az0, {esc, NameFun}, {pt_each_frag_multi, 1}}, {Az1, {esc, AgeFun}, {pt_each_frag_multi, 1}}] = DFun(
+        #{
+            name => <<"alice">>, age => 25
+        }
+    ),
     ?assertEqual(<<"ALICE">>, NameFun()),
     ?assertEqual(25, AgeFun()).
 
@@ -2463,9 +2638,11 @@ template2_map_pattern(Config) when is_list(Config) ->
     DFun = maps:get(d, Tmpl),
     Az0 = <<Fp/binary, "-0">>,
     Az1 = <<Fp/binary, "-1">>,
-    [{Az0, NameFun, {pt_each_map_pat, 1}}, {Az1, AgeFun, {pt_each_map_pat, 1}}] = DFun(#{
-        name => <<"Alice">>, age => 30
-    }),
+    [{Az0, {esc, NameFun}, {pt_each_map_pat, 1}}, {Az1, {esc, AgeFun}, {pt_each_map_pat, 1}}] = DFun(
+        #{
+            name => <<"Alice">>, age => 30
+        }
+    ),
     ?assertEqual(<<"Alice">>, NameFun()),
     ?assertEqual(30, AgeFun()).
 
@@ -2524,9 +2701,9 @@ template2_prefix_partial_use(Config) when is_list(Config) ->
     Az3 = <<Fp/binary, "-3">>,
     [
         {Az0, {attr, <<"az-key">>, KeyFun}, {pt_each_prefix_partial, 1}},
-        {Az1, IdFun, {pt_each_prefix_partial, 1}},
-        {Az2, NameFun, {pt_each_prefix_partial, 1}},
-        {Az3, AgeFun, {pt_each_prefix_partial, 1}}
+        {Az1, {esc, IdFun}, {pt_each_prefix_partial, 1}},
+        {Az2, {esc, NameFun}, {pt_each_prefix_partial, 1}},
+        {Az3, {esc, AgeFun}, {pt_each_prefix_partial, 1}}
     ] = Dynamics,
     ?assertEqual(<<"1">>, KeyFun()),
     ?assertEqual(<<"1">>, IdFun()),
@@ -2747,7 +2924,7 @@ layout_single_element(Config) when is_list(Config) ->
     ?assertEqual([<<"<p>">>, <<"</p>">>], maps:get(s, T)),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, Fun, {pt_layout_elem, 1}}] = maps:get(d, T),
+    [{undefined, {esc, Fun}, {pt_layout_elem, 1}}] = maps:get(d, T),
     ?assert(is_function(Fun, 0)),
     ?assertEqual(<<"hello">>, Fun()).
 
@@ -2769,7 +2946,7 @@ layout_mixed_list(Config) when is_list(Config) ->
     ?assertEqual([<<"<!DOCTYPE html><html><head><title>">>, <<"</title></head></html>">>], Statics),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, Fun, {pt_layout_mixed, 1}}] = maps:get(d, T),
+    [{undefined, {esc, Fun}, {pt_layout_mixed, 1}}] = maps:get(d, T),
     ?assertEqual(<<"Hello">>, Fun()).
 
 %% Test 70: Layout with dynamic attribute -- plain fun, no az attr.
@@ -2847,8 +3024,8 @@ layout_multiple_dynamic_children(Config) when is_list(Config) ->
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
     [
-        {undefined, FunA, {pt_layout_multi_dyn, 1}},
-        {undefined, FunB, {pt_layout_multi_dyn, 1}}
+        {undefined, {esc, FunA}, {pt_layout_multi_dyn, 1}},
+        {undefined, {esc, FunB}, {pt_layout_multi_dyn, 1}}
     ] = maps:get(d, T),
     ?assert(is_function(FunA, 0)),
     ?assert(is_function(FunB, 0)),
@@ -2889,7 +3066,7 @@ layout_bare_dynamic(Config) when is_list(Config) ->
     T = Mod:render(#{content => <<"hi">>}),
     ?assertEqual([<<>>, <<>>], maps:get(s, T)),
     ?assert(maps:is_key(f, T)),
-    [{_Az, Fun, {pt_layout_bare_dyn, 1}}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, {pt_layout_bare_dyn, 1}}] = maps:get(d, T),
     ?assertEqual(<<"hi">>, Fun()).
 
 %% Test 76: html with mixed list including a dynamic at top level (no nodiff).
@@ -2907,7 +3084,7 @@ layout_mixed_dynamic_item(Config) when is_list(Config) ->
     T = Mod:render(#{x => <<"middle">>}),
     ?assertEqual([<<"prefix">>, <<"suffix">>], maps:get(s, T)),
     ?assert(maps:is_key(f, T)),
-    [{_Az, Fun, {pt_layout_mixed_dyn, 1}}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, {pt_layout_mixed_dyn, 1}}] = maps:get(d, T),
     ?assertEqual(<<"middle">>, Fun()),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(T)),
     ?assertEqual(<<"prefixmiddlesuffix">>, HTML).
@@ -2952,8 +3129,8 @@ layout_mixed_with_bare_dynamic(Config) when is_list(Config) ->
     ?assert(maps:is_key(f, T)),
     %% Both dynamics get undefined Az -- directives pre-scanned.
     [
-        {undefined, FunX, {pt_layout_mixed_bare, 1}},
-        {undefined, FunY, {pt_layout_mixed_bare, 1}}
+        {undefined, {esc, FunX}, {pt_layout_mixed_bare, 1}},
+        {undefined, {esc, FunY}, {pt_layout_mixed_bare, 1}}
     ] = maps:get(d, T),
     ?assertEqual(<<"mid">>, FunX()),
     ?assertEqual(<<"end">>, FunY()),
@@ -2979,7 +3156,7 @@ mixed_list_no_nodiff(Config) when is_list(Config) ->
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:is_key(diff, T)),
     %% Dynamic inside element gets a proper binary Az (scoped)
-    [{Az, Fun, {pt_mixed_no_nodiff, 1}}] = maps:get(d, T),
+    [{Az, {esc, Fun}, {pt_mixed_no_nodiff, 1}}] = maps:get(d, T),
     ?assert(is_binary(Az)),
     ?assertEqual(<<"hello">>, Fun()),
     %% Element has az attr and markers
@@ -3831,7 +4008,7 @@ az_html_dynamic(Config) when is_list(Config) ->
         maps:get(s, T)
     ),
     Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_az_dyn_text, 1}}] = maps:get(d, T),
+    [{Az0, {esc, Fun}, {pt_az_dyn_text, 1}}] = maps:get(d, T),
     ?assertEqual(<<"Alice">>, Fun()).
 
 %% Test 110: az:html dynamic attr -- same structure as single_dynamic_attr_test.
@@ -3888,7 +4065,7 @@ az_each_basic(Config) when is_list(Config) ->
     DFun = maps:get(d, Tmpl),
     ?assert(is_function(DFun, 1)),
     Az0 = <<Fp/binary, "-0">>,
-    [{Az0, Fun, {pt_az_each_basic, 1}}] = DFun(#{name => <<"Alice">>}),
+    [{Az0, {esc, Fun}, {pt_az_each_basic, 1}}] = DFun(#{name => <<"Alice">>}),
     ?assertEqual(<<"Alice">>, Fun()).
 
 %% Test 112: az:each nested inside az:html.
@@ -3930,7 +4107,7 @@ az_each_inside_html(Config) when is_list(Config) ->
     DFun = maps:get(d, Tmpl),
     InnerFp = maps:get(f, Tmpl),
     InnerAz0 = <<InnerFp/binary, "-0">>,
-    [{InnerAz0, ItemFun, {pt_az_each_nested, 1}}] = DFun(#{text => <<"hi">>}),
+    [{InnerAz0, {esc, ItemFun}, {pt_az_each_nested, 1}}] = DFun(#{text => <<"hi">>}),
     ?assertEqual(<<"hi">>, ItemFun()).
 
 %% Test 113: az:html single element with az-nodiff -- no markers, no az attrs.
@@ -3947,7 +4124,7 @@ az_layout(Config) when is_list(Config) ->
     ?assertEqual([<<"<p>">>, <<"</p>">>], maps:get(s, T)),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, Fun, {pt_az_layout, 1}}] = maps:get(d, T),
+    [{undefined, {esc, Fun}, {pt_az_layout, 1}}] = maps:get(d, T),
     ?assert(is_function(Fun, 0)),
     ?assertEqual(<<"hello">>, Fun()).
 
@@ -3969,7 +4146,7 @@ az_layout_mixed(Config) when is_list(Config) ->
     ?assertEqual([<<"<!DOCTYPE html><html><head><title>">>, <<"</title></head></html>">>], Statics),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, Fun, {pt_az_layout_mixed, 1}}] = maps:get(d, T),
+    [{undefined, {esc, Fun}, {pt_az_layout_mixed, 1}}] = maps:get(d, T),
     ?assertEqual(<<"Hello">>, Fun()).
 
 %% Test 115: az:html nested elements -- az counter threading at depth.
@@ -3991,7 +4168,7 @@ az_html_nested(Config) when is_list(Config) ->
     %% Should have two dynamics for the two get calls
     Dynamics = maps:get(d, T),
     ?assertEqual(2, length(Dynamics)),
-    [{_, FunA, {pt_az_nested, 1}}, {_, FunB, {pt_az_nested, 1}}] = Dynamics,
+    [{_, {esc, FunA}, {pt_az_nested, 1}}, {_, {esc, FunB}, {pt_az_nested, 1}}] = Dynamics,
     ?assertEqual(<<"hello">>, FunA()),
     ?assertEqual(<<"world">>, FunB()).
 
@@ -4433,7 +4610,7 @@ inline_hoisted_text_read(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [Name]}). "
     ),
     T = Mod:render(#{name => ~"Ada"}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"Ada", Fun()),
     ?assertEqual(#{name => true}, slot_deps(Fun)).
 
@@ -4462,7 +4639,7 @@ inline_maps_get_chain(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [Name]}). "
     ),
     T = Mod:render(#{user => #{name => ~"Ada"}}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"Ada", Fun()),
     ?assertEqual(#{user => true}, slot_deps(Fun)).
 
@@ -4481,7 +4658,7 @@ inline_case_value(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [Label]}). "
     ),
     T = Mod:render(#{mode => dark, dark => ~"D"}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"D", Fun()),
     ?assertEqual(#{mode => true, dark => true}, slot_deps(Fun)).
 
@@ -4500,7 +4677,7 @@ inline_case_of_case(Config) when is_list(Config) ->
         "        {'p', [], [case Label of foo -> foo; _ -> bar end]}). "
     ),
     T = Mod:render(#{mode => light}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(bar, Fun()),
     ?assertEqual(#{mode => true}, slot_deps(Fun)).
 
@@ -4514,7 +4691,7 @@ inline_opaque_call(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [Name]}). "
     ),
     T = Mod:render(#{raw => ~"ada"}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"ADA", Fun()),
     ?assertEqual(#{raw => true}, slot_deps(Fun)).
 
@@ -4529,7 +4706,7 @@ inline_side_effect_not_inlined(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [Ref]}). "
     ),
     T = Mod:render(#{}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(Fun(), Fun()),
     ?assertEqual(#{}, slot_deps(Fun)).
 
@@ -4597,7 +4774,7 @@ inline_branch_bound_var(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [X]}). "
     ),
     T = Mod:render(#{mode => dark, a => ~"A"}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"A", Fun()),
     ?assertEqual(#{mode => true, a => true}, slot_deps(Fun)).
 
@@ -4615,7 +4792,7 @@ inline_underscore_collision(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [Foo]}). "
     ),
     T = Mod:render(#{foo => ~"Ada"}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"Ada", Fun()),
     ?assertEqual(#{foo => true}, slot_deps(Fun)).
 
@@ -4634,7 +4811,7 @@ inline_lifted_pattern_var(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [Label]}). "
     ),
     T = Mod:render(#{user => {admin, ~"Ada"}}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"Ada", Fun()),
     %% Not lifted -> captured -> frozen (residue).
     ?assertEqual(#{}, slot_deps(Fun)).
@@ -4654,7 +4831,7 @@ inline_lifted_nested_match(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [X, <<\" \">>, Z]}). "
     ),
     T = Mod:render(#{mode => dark, a => ~"A"}),
-    [{_Az, FunX, _Loc} | _] = maps:get(d, T),
+    [{_Az, {esc, FunX}, _Loc} | _] = maps:get(d, T),
     ?assertEqual(~"A", FunX()).
 
 %% A hoisted read interpolated into an attribute *list* ({class, [<<"a ">>, Cls]}):
@@ -4703,7 +4880,7 @@ inline_distinct_slots_key_isolation(Config) when is_list(Config) ->
         "    arizona_template:html({'div', [], [{'span', [], [A]}, {'span', [], [B]}]}). "
     ),
     T = Mod:render(#{a => ~"AA", b => ~"BB"}),
-    [{_Az0, FunA, _L0}, {_Az1, FunB, _L1}] = maps:get(d, T),
+    [{_Az0, {esc, FunA}, _L0}, {_Az1, {esc, FunB}, _L1}] = maps:get(d, T),
     ?assertEqual(~"AA", FunA()),
     ?assertEqual(~"BB", FunB()),
     ?assertEqual(#{a => true}, slot_deps(FunA)),
@@ -4722,11 +4899,11 @@ inline_multi_clause_render(Config) when is_list(Config) ->
         "    arizona_template:html({'span', [], [Y]}). "
     ),
     TA = Mod:render(#{mode => a, x => ~"X"}),
-    [{_AzA, FunA, _LocA}] = maps:get(d, TA),
+    [{_AzA, {esc, FunA}, _LocA}] = maps:get(d, TA),
     ?assertEqual(~"X", FunA()),
     ?assertEqual(#{x => true}, slot_deps(FunA)),
     TB = Mod:render(#{mode => b, y => ~"Y"}),
-    [{_AzB, FunB, _LocB}] = maps:get(d, TB),
+    [{_AzB, {esc, FunB}, _LocB}] = maps:get(d, TB),
     ?assertEqual(~"Y", FunB()),
     ?assertEqual(#{y => true}, slot_deps(FunB)).
 
@@ -4741,7 +4918,7 @@ inline_get_lazy_hoisted(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [Name]}). "
     ),
     T = Mod:render(#{}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"def", Fun()),
     ?assertEqual(#{name => true}, slot_deps(Fun)).
 
@@ -4757,11 +4934,11 @@ inline_nested_html_shared_var(Config) when is_list(Config) ->
         "        arizona_template:html({'span', [], [Outer]})]}). "
     ),
     T = Mod:render(#{outer => ~"O"}),
-    [{_Az0, Fun1, _Loc1}, {_Az1, Fun2, _Loc2}] = maps:get(d, T),
+    [{_Az0, {esc, Fun1}, _Loc1}, {_Az1, Fun2, _Loc2}] = maps:get(d, T),
     ?assertEqual(~"O", Fun1()),
     ?assertEqual(#{outer => true}, slot_deps(Fun1)),
     Inner = Fun2(),
-    [{_IAz, InnerFun, _ILoc}] = maps:get(d, Inner),
+    [{_IAz, {esc, InnerFun}, _ILoc}] = maps:get(d, Inner),
     ?assertEqual(~"O", InnerFun()),
     ?assertEqual(#{outer => true}, slot_deps(InnerFun)).
 
@@ -4775,7 +4952,7 @@ inline_same_var_two_slots(Config) when is_list(Config) ->
         "    arizona_template:html({'div', [], [Name, <<\" / \">>, Name]}). "
     ),
     T = Mod:render(#{name => ~"Ada"}),
-    [{_Az0, Fun0, _Loc0}, {_Az1, Fun1, _Loc1}] = maps:get(d, T),
+    [{_Az0, {esc, Fun0}, _Loc0}, {_Az1, {esc, Fun1}, _Loc1}] = maps:get(d, T),
     ?assertEqual(~"Ada", Fun0()),
     ?assertEqual(~"Ada", Fun1()),
     ?assertEqual(#{name => true}, slot_deps(Fun0)),
@@ -4792,7 +4969,7 @@ inline_non_bindings_var_name(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [Name]}). "
     ),
     T = Mod:render(#{name => ~"Ada"}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"Ada", Fun()),
     ?assertEqual(#{name => true}, slot_deps(Fun)).
 
@@ -4808,7 +4985,7 @@ inline_destructuring_not_inlined(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [Name]}). "
     ),
     T = Mod:render(#{name => ~"Ada"}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"Ada", Fun()),
     ?assertEqual(#{}, slot_deps(Fun)).
 
@@ -4824,7 +5001,7 @@ inline_guard_get_stays_captured(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [Label]}). "
     ),
     T = Mod:render(#{n => 10}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(big, Fun()),
     ?assertEqual(#{}, slot_deps(Fun)).
 
@@ -4841,7 +5018,7 @@ inline_comprehension_source(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [<< <<N/binary>> || N <- Names >>]}). "
     ),
     T = Mod:render(#{names => [~"a", ~"b"]}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"ab", Fun()),
     ?assertEqual(#{names => true}, slot_deps(Fun)).
 
@@ -4955,7 +5132,7 @@ tracked_get_with_projection_ok(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [arizona_template:get(x, Sub)]}). "
     ),
     T = Mod:render(#{x => ~"y"}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"y", Fun()),
     ?assertEqual(#{x => true}, slot_deps(Fun)).
 
@@ -5001,7 +5178,7 @@ with_handoff_freezes_without_tracking(Config) when is_list(Config) ->
         "    arizona_template:html({'span', [], [arizona_template:get(x, B)]}). "
     ),
     B0 = #{x => ~"Ada"},
-    [{_Az, OuterFun, _Loc}] = maps:get(d, Mod:render(B0)),
+    [{_Az, {esc, OuterFun}, _Loc}] = maps:get(d, Mod:render(B0)),
     ?assertEqual(#{}, slot_deps(OuterFun)),
     {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
     B1 = #{x => ~"Grace"},
@@ -5022,7 +5199,7 @@ with_handoff_tracks_outer_slot(Config) when is_list(Config) ->
         "    arizona_template:html({'span', [], [arizona_template:get(x, B)]}). "
     ),
     B0 = #{x => ~"Ada"},
-    [{_Az, OuterFun, _Loc}] = maps:get(d, Mod:render(B0)),
+    [{_Az, {esc, OuterFun}, _Loc}] = maps:get(d, Mod:render(B0)),
     ?assertEqual(#{x => true}, slot_deps(OuterFun)),
     {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
     B1 = #{x => ~"Grace"},
@@ -5046,7 +5223,7 @@ with_handoff_hoisted_tracks_outer_slot(Config) when is_list(Config) ->
         "    arizona_template:html({'span', [], [arizona_template:get(x, B)]}). "
     ),
     B0 = #{x => ~"Ada"},
-    [{_Az, OuterFun, _Loc}] = maps:get(d, Mod:render(B0)),
+    [{_Az, {esc, OuterFun}, _Loc}] = maps:get(d, Mod:render(B0)),
     ?assertEqual(#{x => true}, slot_deps(OuterFun)),
     {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
     B1 = #{x => ~"Grace"},
