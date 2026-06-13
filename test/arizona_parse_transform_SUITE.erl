@@ -254,7 +254,10 @@
     cond_case_diff_transition/1,
     cond_case_element_list_tail/1,
     cond_case_mixed_fragment_tail/1,
-    cond_begin_block_tail/1
+    cond_begin_block_tail/1,
+    cond_try_bare_element/1,
+    cond_maybe_bare_element/1,
+    cond_receive_bare_element/1
 ]).
 
 all() ->
@@ -422,7 +425,10 @@ groups() ->
             cond_case_diff_transition,
             cond_case_element_list_tail,
             cond_case_mixed_fragment_tail,
-            cond_begin_block_tail
+            cond_begin_block_tail,
+            cond_try_bare_element,
+            cond_maybe_bare_element,
+            cond_receive_bare_element
         ]},
         %% Binding-read inlining: reads hoisted out of ?html still track per-slot
         {inline, [parallel], [
@@ -1721,6 +1727,62 @@ cond_begin_block_tail(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(Bin, <<"<p ">>)),
     ?assertNotEqual(nomatch, binary:match(Bin, <<"hi">>)),
     ?assertNotEqual(nomatch, binary:match(Bin, <<"</p>">>)).
+
+%% A `try` body (no `of` clauses) is a tail -- a bare element there is expanded.
+cond_try_bare_element(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_try). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        try {'p', [], [arizona_template:get(msg, Bindings)]} "
+        "        catch _:_ -> <<\"\">> "
+        "        end "
+        "    ]}). "
+    ),
+    {HTML, _} = arizona_render:render(Mod:render(#{msg => <<"ok">>})),
+    Bin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"<p ">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"ok">>)).
+
+%% A `maybe ... else ... end`: the body's last expression and the else-clause
+%% bodies are tails.
+cond_maybe_bare_element(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_maybe). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        maybe "
+        "            {ok, M} ?= arizona_template:get(result, Bindings), "
+        "            {'p', [], [M]} "
+        "        else _ -> <<\"\">> "
+        "        end "
+        "    ]}). "
+    ),
+    {HTML, _} = arizona_render:render(Mod:render(#{result => {ok, <<"hi">>}})),
+    Bin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"<p ">>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"hi">>)),
+    {Empty, _} = arizona_render:render(Mod:render(#{result => error})),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(Empty), <<"<p ">>)).
+
+%% A `receive ... after ... end`: the `after` body is a tail (the receive
+%% clauses are too); `after 0` fires immediately so SSR never blocks.
+cond_receive_bare_element(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_cond_receive). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        receive "
+        "            never -> <<\"\">> "
+        "        after 0 -> {'p', [], [<<\"timeout\">>]} "
+        "        end "
+        "    ]}). "
+    ),
+    {HTML, _} = arizona_render:render(Mod:render(#{})),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), <<"<p>timeout</p>">>)).
 
 %% Test 14: Two dynamic attributes -- both share az, statics split between both.
 two_dynamic_attrs(Config) when is_list(Config) ->

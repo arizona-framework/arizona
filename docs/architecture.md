@@ -135,9 +135,10 @@ render(Bindings) ->
     ).
 ```
 
-**Conditional rows:** a `case`/`if`/`begin` returning a bare element tuple in a
-content slot is compiled into a nested template (inheriting the enclosing target),
-just as a literal `?html`/`?terminal` there would be -- no wrap needed:
+**Conditional rows:** a control-flow expression (`case`/`if`/`begin`/`receive`/`try`/
+`maybe`) returning a bare element tuple from a tail in a content slot is compiled into a
+nested template (inheriting the enclosing target), just as a literal `?html`/`?terminal`
+there would be -- no wrap needed:
 
 ```erlang
 {col, [], [

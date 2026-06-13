@@ -176,11 +176,12 @@ value: `fun(Item, Key) -> {li, [], [Item]} end`).
 
 ## Bare element tuples in conditional tails
 
-A `case`, `if`, or `begin` in a **content slot** may return a bare element tuple, an
-element list, or a mixed fragment (static text/values interleaved with elements)
-directly from a branch -- the parse transform compiles each branch tail into a nested
-template, exactly as a literal `?html`/`?native`/`?terminal` there would, inheriting the
-enclosing render target. No `?html` wrap is needed:
+A control-flow expression in a **content slot** -- `case`, `if`, `begin`, `receive`,
+`try`, or `maybe` -- may return a bare element tuple, an element list, or a mixed fragment
+(static text/values interleaved with elements) directly from a tail position. The parse
+transform compiles each tail into a nested template, exactly as a literal
+`?html`/`?native`/`?terminal` there would, inheriting the enclosing render target. No
+`?html` wrap is needed:
 
 ```erlang
 %% both branches accepted: <<>> renders empty, the tuple becomes a nested template
@@ -192,11 +193,15 @@ enclosing render target. No `?html` wrap is needed:
 ]}
 ```
 
-A branch returning a plain value (binary, integer, variable, or a pure value list) still
-renders as a scalar, unchanged. Nested conditionals are walked recursively. `try`/`receive`
-tails are **not** descended into -- a bare element there still needs an explicit `?html`. (This
-mirrors `?each`, whose callback body already accepts bare elements; the difference is
-that `?each` keys items for per-item diffing while a conditional is a single slot.)
+The walked tail positions are the value-producing ones: clause bodies (`case`/`if`/`try`
+`of`+`catch`/`maybe` `else`/`receive`), block last expressions, a `receive` `after` body,
+and a `try` body. A `try`/`receive` timeout and a `try` `after` body are **not** tails
+(their values are discarded). A branch returning a plain value (binary, integer, variable,
+or a pure value list) still renders as a scalar, unchanged; nested control flow is walked
+recursively. The set of forms and tail positions is defined once in `map_tail_exprs/3`,
+shared with the live-render-root transform. (This mirrors `?each`, whose callback body
+already accepts bare elements; the difference is that `?each` keys items for per-item
+diffing while a conditional is a single slot.)
 
 **Known limitation:** embedding a component (a `?stateless`/`?stateful` descriptor) as an
 `?each` item child compiles and renders at SSR but **crashes on the first diff** -- the
