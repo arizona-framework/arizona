@@ -44,6 +44,7 @@ binding, used by stateless layouts to render the wrapped page.
 -export([stateless/3]).
 -export([each/2]).
 -export([local/2]).
+-export([raw/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -63,7 +64,8 @@ binding, used by stateless layouts to render the wrapped page.
     stateless/2,
     stateless/3,
     each/2,
-    local/2
+    local/2,
+    raw/1
 ]).
 
 %% --------------------------------------------------------------------
@@ -245,3 +247,11 @@ Alias for `arizona_template:local/2`.
     Init :: term().
 local(Key, Init) ->
     arizona_template:local(Key, Init).
+
+-doc """
+Alias for `arizona_template:raw/1`.
+""".
+-spec raw(Value) -> {arizona_raw, term()} when
+    Value :: term().
+raw(Value) ->
+    arizona_template:raw(Value).

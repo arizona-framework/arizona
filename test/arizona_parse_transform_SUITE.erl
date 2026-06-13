@@ -238,6 +238,7 @@
     ssr_escapes_attr_value/1,
     ssr_escape_all_unsafe_chars/1,
     raw_opt_out_not_escaped/1,
+    az_raw_opt_out_not_escaped/1,
     block_value_not_escaped/1,
     value_template_inner_escaped/1,
     diff_value_stays_raw/1,
@@ -391,6 +392,7 @@ groups() ->
             ssr_escapes_attr_value,
             ssr_escape_all_unsafe_chars,
             raw_opt_out_not_escaped,
+            az_raw_opt_out_not_escaped,
             block_value_not_escaped,
             value_template_inner_escaped,
             diff_value_stays_raw,
@@ -1388,6 +1390,20 @@ raw_opt_out_not_escaped(Config) when is_list(Config) ->
         "    arizona_template:html({'div', [], ["
         "        arizona_template:raw(arizona_template:get(x, Bindings))"
         "    ]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{x => <<"<b>raw</b>">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"<b>raw</b>">>)),
+    ?assertEqual(nomatch, binary:match(HTML, <<"&lt;b&gt;">>)).
+
+%% The az facade's raw/1 behaves identically (the parse transform classifies
+%% az:raw as a block, so the az:raw/1 runtime alias must exist and opt out).
+az_raw_opt_out_not_escaped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_esc_az_raw). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:html({'div', [], [az:raw(az:get(x, Bindings))]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{x => <<"<b>raw</b>">>})),
     HTML = iolist_to_binary(HTML0),
@@ -2591,11 +2607,10 @@ template2_fragment_multi_expr(Config) when is_list(Config) ->
     DFun = maps:get(d, Tmpl),
     Az0 = <<Fp/binary, "-0">>,
     Az1 = <<Fp/binary, "-1">>,
-    [{Az0, {esc, NameFun}, {pt_each_frag_multi, 1}}, {Az1, {esc, AgeFun}, {pt_each_frag_multi, 1}}] = DFun(
-        #{
-            name => <<"alice">>, age => 25
-        }
-    ),
+    [
+        {Az0, {esc, NameFun}, {pt_each_frag_multi, 1}},
+        {Az1, {esc, AgeFun}, {pt_each_frag_multi, 1}}
+    ] = DFun(#{name => <<"alice">>, age => 25}),
     ?assertEqual(<<"ALICE">>, NameFun()),
     ?assertEqual(25, AgeFun()).
 
@@ -2638,11 +2653,10 @@ template2_map_pattern(Config) when is_list(Config) ->
     DFun = maps:get(d, Tmpl),
     Az0 = <<Fp/binary, "-0">>,
     Az1 = <<Fp/binary, "-1">>,
-    [{Az0, {esc, NameFun}, {pt_each_map_pat, 1}}, {Az1, {esc, AgeFun}, {pt_each_map_pat, 1}}] = DFun(
-        #{
-            name => <<"Alice">>, age => 30
-        }
-    ),
+    [
+        {Az0, {esc, NameFun}, {pt_each_map_pat, 1}},
+        {Az1, {esc, AgeFun}, {pt_each_map_pat, 1}}
+    ] = DFun(#{name => <<"Alice">>, age => 30}),
     ?assertEqual(<<"Alice">>, NameFun()),
     ?assertEqual(30, AgeFun()).
 
