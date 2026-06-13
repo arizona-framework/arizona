@@ -357,6 +357,8 @@ eval_one_triple({Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
 eval_one_triple({Az, Spec}) ->
     {Az, eval_val(Spec), #{}}.
 
+eval_val({esc, Fun}) when is_function(Fun, 0) ->
+    arizona_template:mark_esc(eval_val(Fun()));
 eval_val(Fun) when is_function(Fun, 0) ->
     eval_val(Fun());
 eval_val(#{t := ?EACH, source := Items, template := Tmpl}) when is_list(Items) ->
@@ -406,6 +408,9 @@ eval_one_v({Az, Spec}, Views0) ->
     Deps = erlang:erase('$arizona_deps'),
     {{Az, Val, Deps}, Views1}.
 
+eval_val_v({esc, Fun}, Views0) when is_function(Fun, 0) ->
+    {V, Views1} = eval_val_v(Fun(), Views0),
+    {arizona_template:mark_esc(V), Views1};
 eval_val_v(Fun, Views0) when is_function(Fun, 0) ->
     eval_val_v(Fun(), Views0);
 eval_val_v(#{stateful := H, props := Props}, Views) ->

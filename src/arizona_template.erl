@@ -64,6 +64,9 @@ render(Bindings) ->
 -export([native_each/2]).
 -export([terminal_each/2]).
 -export([to_bin/1]).
+-export([raw/1]).
+-export([escape_value/1]).
+-export([mark_esc/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
 -export([format_error/2]).
@@ -375,6 +378,12 @@ to_bin(V) when is_binary(V) -> V;
 to_bin(V) when is_integer(V) -> integer_to_binary(V);
 to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
 to_bin(V) when is_atom(V) -> atom_to_binary(V);
+%% Escape markers are unwrapped to their raw bytes here. to_bin never escapes;
+%% escaping happens at the HTML-output boundary (so the diff path stays raw).
+to_bin({arizona_esc, V}) ->
+    to_bin(V);
+to_bin({arizona_raw, V}) ->
+    to_bin(V);
 to_bin({arizona_effect, _} = Cmd) ->
     arizona_effect:encode(Cmd);
 to_bin([{arizona_effect, _} | _] = Cmds) ->
@@ -451,7 +460,54 @@ becomes `name="value"`.
     Value :: term().
 render_attr(_Name, false) -> <<>>;
 render_attr(Name, true) -> <<" ", Name/binary>>;
-render_attr(Name, V) -> <<" ", Name/binary, "=\"", (to_bin(V))/binary, "\"">>.
+render_attr(Name, V) -> <<" ", Name/binary, "=\"", (escape_value(V))/binary, "\"">>.
+
+-doc """
+Wraps a value to opt out of HTML auto-escaping. Use only for trusted,
+already-safe HTML fragments -- never for user-controlled data.
+""".
+-spec raw(Value) -> {arizona_raw, term()} when
+    Value :: term().
+raw(Value) -> {arizona_raw, Value}.
+
+-doc """
+Renders a value to its HTML binary, HTML-escaping metacharacters. `raw/1`-wrapped
+values and already-encoded `arizona_effect` commands pass through unescaped. Used
+for attribute values and for the already-unwrapped content escape marker.
+""".
+-spec escape_value(Value) -> binary() when
+    Value :: term().
+escape_value({arizona_raw, V}) -> to_bin(V);
+escape_value({arizona_effect, _} = C) -> to_bin(C);
+escape_value([{arizona_effect, _} | _] = C) -> to_bin(C);
+escape_value(V) -> escape_html(to_bin(V)).
+
+-doc """
+Marks an evaluated value for HTML escaping at output. Only scalars are marked --
+nested templates/descriptors (maps), `raw/1`, and effects pass through untouched
+so they render structurally (their own inner dynamics carry their own marks).
+""".
+-spec mark_esc(Value) -> term() when
+    Value :: term().
+mark_esc(V) when is_map(V) -> V;
+mark_esc({arizona_raw, _} = R) -> R;
+mark_esc({arizona_effect, _} = E) -> E;
+mark_esc([{arizona_effect, _} | _] = E) -> E;
+mark_esc(V) -> {arizona_esc, V}.
+
+%% HTML-escape the five metacharacters; safe for element content and
+%% double/single-quoted attribute values. Byte-at-a-time over the tail is
+%% UTF-8 safe (continuation bytes are all > 127, never a metacharacter).
+escape_html(Bin) when is_binary(Bin) ->
+    escape_html(Bin, <<>>).
+
+escape_html(<<>>, Acc) -> Acc;
+escape_html(<<"&", R/binary>>, Acc) -> escape_html(R, <<Acc/binary, "&amp;">>);
+escape_html(<<"<", R/binary>>, Acc) -> escape_html(R, <<Acc/binary, "&lt;">>);
+escape_html(<<">", R/binary>>, Acc) -> escape_html(R, <<Acc/binary, "&gt;">>);
+escape_html(<<"\"", R/binary>>, Acc) -> escape_html(R, <<Acc/binary, "&quot;">>);
+escape_html(<<"'", R/binary>>, Acc) -> escape_html(R, <<Acc/binary, "&#39;">>);
+escape_html(<<C, R/binary>>, Acc) -> escape_html(R, <<Acc/binary, C>>).
 
 -doc """
 Propagates `f` (fingerprint) and the optional `diff => false` flag from a
