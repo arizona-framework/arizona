@@ -22,6 +22,8 @@ view; a route lists its steps under the `middlewares` key of
   headers, ...) into bindings so a handler reads it with `?get(Key)`.
 - `put_request/2` -- the escape hatch: expose the whole request under the
   `request` binding for lazy access.
+- `fetch_flash/2` -- read the incoming flash (set on the prior request via
+  `arizona_req:put_flash/3`) into the `flash` binding, consuming it.
 
 ```erlang
 #{middlewares => [arizona_middleware:extract([path_bindings, params])]}
@@ -35,6 +37,7 @@ view; a route lists its steps under the `middlewares` key of
 -export([apply_middlewares/3]).
 -export([extract/1]).
 -export([put_request/2]).
+-export([fetch_flash/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -42,6 +45,7 @@ view; a route lists its steps under the `middlewares` key of
 
 -ignore_xref([extract/1]).
 -ignore_xref([put_request/2]).
+-ignore_xref([fetch_flash/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -125,6 +129,23 @@ into the live process or carry across an SPA navigate.
 -spec put_request(arizona_req:request(), az:bindings()) -> middleware_result().
 put_request(Req, Bindings) ->
     {cont, Req, Bindings#{request => Req}}.
+
+-doc """
+Middleware that reads the incoming flash into the `flash` binding (read with
+`?get(flash)`, a map; `#{}` when there is none).
+
+Opt in on routes that display flash messages. Reading consumes the flash: the
+response clears its cookie, so a refresh shows nothing. Pair it with
+`arizona_req:put_flash/3` before a redirect (the Post/Redirect/Get pattern).
+
+```erlang
+#{middlewares => [{arizona_middleware, fetch_flash}]}
+```
+""".
+-spec fetch_flash(arizona_req:request(), az:bindings()) -> middleware_result().
+fetch_flash(Req, Bindings) ->
+    {Flash, Req1} = arizona_req:read_flash(Req),
+    {cont, Req1, Bindings#{flash => Flash}}.
 
 %% --------------------------------------------------------------------
 %% Internal functions

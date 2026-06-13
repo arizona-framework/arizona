@@ -30,6 +30,7 @@
     http_halt_sets_cookie/1,
     http_render_sets_cookie/1,
     http_render_sets_status/1,
+    http_flash_round_trip/1,
     http_render_crash_emits_error_page/1,
     http_reads_cookies_headers_body/1,
     http_exposes_roadrunner_request_id/1,
@@ -87,6 +88,7 @@ groups() ->
         http_halt_sets_cookie,
         http_render_sets_cookie,
         http_render_sets_status,
+        http_flash_round_trip,
         http_render_crash_emits_error_page,
         http_reads_cookies_headers_body,
         http_exposes_roadrunner_request_id,
@@ -123,6 +125,8 @@ groups() ->
 init_per_group(roadrunner, Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     {ok, _} = application:ensure_all_started(roadrunner),
+    %% Signing key for the flash cookie (see the set_flash/show_flash routes).
+    application:set_env(arizona, secret_key, ~"ws-suite-secret-key-0123456789ab"),
     Port = pick_port(),
     %% Tests that assert on URL data in rendered HTML opt into the framework's
     %% `arizona_middleware:extract/1` middleware on their routes; the framework itself
@@ -215,6 +219,26 @@ init_per_group(roadrunner, Config) ->
                 end
             ]
         }},
+        %% PRG flash: set a flash then redirect (the 303 carries Set-Cookie
+        %% az_flash). /show_flash reads it via the fetch_flash middleware, projects
+        %% it into `status` for the rendered body, and the response clears it.
+        {live, <<"/set_flash">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, _B) ->
+                    Req1 = arizona_req:put_flash(Req, error, <<"flashed">>),
+                    {halt, arizona_req:redirect(Req1, 303, <<"/show_flash">>)}
+                end
+            ]
+        }},
+        {live, <<"/show_flash">>, arizona_crashable, #{
+            middlewares => [
+                {arizona_middleware, fetch_flash},
+                fun(Req, B) ->
+                    Flash = maps:get(flash, B, #{}),
+                    {cont, Req, B#{status => maps:get(<<"error">>, Flash, <<"none">>)}}
+                end
+            ]
+        }},
         {live, <<"/crash_on_render_http">>, arizona_crashable, #{
             bindings => #{crash_on_mount => true}
         }},
@@ -274,6 +298,7 @@ init_per_group(_Group, Config) ->
 end_per_group(roadrunner, Config) ->
     ServerMod = ?config(server_mod, Config),
     _ = ServerMod:stop(ws_test),
+    _ = application:unset_env(arizona, secret_key),
     _ = application:stop(arizona),
     ok;
 end_per_group(_Group, _Config) ->
@@ -503,6 +528,40 @@ http_render_sets_status(Config) ->
     {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"HTTP/1.1 401">>)).
+
+http_flash_round_trip(Config) ->
+    %% PRG flash end-to-end: /set_flash redirects (303) with Set-Cookie az_flash;
+    %% /show_flash reads it via fetch_flash (body shows the message) and clears it.
+    Port = proplists:get_value(port, Config),
+    Resp1 = flash_http_get(Port, "/set_flash", []),
+    ?assertNotEqual(nomatch, binary:match(Resp1, <<"303">>)),
+    {match, [Cookie]} = re:run(
+        Resp1, "set-cookie: (az_flash=[^;\r\n]*)", [caseless, {capture, [1], binary}]
+    ),
+    ?assertNotEqual(<<"az_flash=">>, Cookie),
+    Resp2 = flash_http_get(Port, "/show_flash", [Cookie]),
+    %% The flash message reached the view, and the response clears the cookie.
+    ?assertNotEqual(nomatch, binary:match(Resp2, <<"flashed">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp2, <<"az_flash=;">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp2, <<"Max-Age=0">>)).
+
+flash_http_get(Port, Path, CookieHeaders) ->
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Cookies = [["Cookie: ", C, "\r\n"] || C <- CookieHeaders],
+    Req = [
+        "GET ",
+        Path,
+        " HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        Cookies,
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    Resp.
 
 middleware_halt_rejects_ws(Config) ->
     %% WS: middleware halts -- upgrade never happens, HTTP response returned
