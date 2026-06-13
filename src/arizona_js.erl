@@ -90,7 +90,9 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     set/3,
     set_all/2,
     request_pip/1,
-    exit_pip/1
+    exit_pip/1,
+    transition/1,
+    transition/2
 ]).
 
 %% --------------------------------------------------------------------
