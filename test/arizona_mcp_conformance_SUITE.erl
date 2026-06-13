@@ -28,7 +28,11 @@ init_per_suite(Config) ->
             {ok, _} = application:ensure_all_started(roadrunner),
             %% 15050+ is well clear of the WHATWG "bad ports" the SDK refuses.
             Port = 15050 + erlang:unique_integer([positive, monotonic]) rem 1000,
-            Routes = [{mcp, ~"/mcp", arizona_mcp_test_server, #{sessions => true}}],
+            %% page_size 2 forces multi-page lists, so the SDK driver exercises
+            %% the cursor protocol end-to-end.
+            Routes = [
+                {mcp, ~"/mcp", arizona_mcp_test_server, #{sessions => true, page_size => 2}}
+            ],
             {ok, _} = arizona_roadrunner_server:start(?LISTENER, #{
                 transport_opts => [{port, Port}],
                 routes => Routes

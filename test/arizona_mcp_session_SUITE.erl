@@ -262,7 +262,8 @@ terminate_calls_app(_Config) ->
     Session = #{
         mod => arizona_mcp_test_server,
         state => #{terminate_pid => self()},
-        caps => #{tools => #{}}
+        caps => #{tools => #{}},
+        page_size => 50
     },
     {ok, Pid} = arizona_mcp_sup:start_session(Id, Session, #{ttl_ms => 60000, buffer_max => 256}),
     ok = arizona_mcp_session:stop(Pid),
@@ -321,5 +322,6 @@ session() ->
     #{
         mod => arizona_mcp_test_server,
         state => #{},
-        caps => #{tools => #{}, resources => #{}, prompts => #{}}
+        caps => #{tools => #{}, resources => #{}, prompts => #{}},
+        page_size => 50
     }.

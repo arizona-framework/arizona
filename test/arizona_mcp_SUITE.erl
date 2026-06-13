@@ -35,6 +35,12 @@
     dispatch_prompts_get_unknown/1,
     dispatch_prompts_get_missing_name/1,
     dispatch_prompts_unsupported/1,
+    pagination_tools_walk/1,
+    pagination_resources_walk/1,
+    pagination_no_cursor_when_list_fits/1,
+    pagination_past_end_cursor/1,
+    pagination_invalid_cursor/1,
+    pagination_non_binary_cursor/1,
     handle_get_405/1,
     handle_origin_absent_ok/1,
     handle_origin_allowed_ok/1,
@@ -85,6 +91,12 @@ all() ->
         dispatch_prompts_get_unknown,
         dispatch_prompts_get_missing_name,
         dispatch_prompts_unsupported,
+        pagination_tools_walk,
+        pagination_resources_walk,
+        pagination_no_cursor_when_list_fits,
+        pagination_past_end_cursor,
+        pagination_invalid_cursor,
+        pagination_non_binary_cursor,
         handle_get_405,
         handle_origin_absent_ok,
         handle_origin_allowed_ok,
@@ -327,6 +339,50 @@ dispatch_prompts_unsupported(_Config) ->
     ?assertEqual(-32601, Code).
 
 %% --------------------------------------------------------------------
+%% Pagination (framework-side opaque cursors over the */list methods)
+%% --------------------------------------------------------------------
+
+pagination_tools_walk(_Config) ->
+    %% 6 tools at page size 2 -> 3 pages; following the cursor chain yields all
+    %% 6 names in order. The page count proves it actually paginated.
+    {Names, Pages} = walk(~"tools/list", ~"tools", 2),
+    ?assertEqual([~"add", ~"boom", ~"crash", ~"echo", ~"count", ~"progress"], Names),
+    ?assertEqual(3, Pages).
+
+pagination_resources_walk(_Config) ->
+    %% The capability-gated list path paginates identically.
+    {Names, Pages} = walk(~"resources/list", ~"resources", 2),
+    ?assertEqual([~"greeting", ~"locked", ~"structured", ~"counter"], Names),
+    ?assertEqual(2, Pages).
+
+pagination_no_cursor_when_list_fits(_Config) ->
+    %% A page larger than the list returns everything and omits nextCursor.
+    {reply, #{~"result" := Result}} = dispatch_paged(~"tools/list", #{}, 1, 100),
+    ?assertEqual(6, length(maps:get(~"tools", Result))),
+    ?assertNot(maps:is_key(~"nextCursor", Result)).
+
+pagination_past_end_cursor(_Config) ->
+    %% A valid cursor whose offset is past the end (stale/tampered) returns an
+    %% empty final page with no cursor -- not a -32603 crash.
+    PastEnd = base64:encode(integer_to_binary(1000)),
+    {reply, #{~"result" := Result}} = dispatch_paged(~"tools/list", #{~"cursor" => PastEnd}, 1, 2),
+    ?assertEqual([], maps:get(~"tools", Result)),
+    ?assertNot(maps:is_key(~"nextCursor", Result)).
+
+pagination_invalid_cursor(_Config) ->
+    %% A cursor that does not decode to a non-negative integer is a -32602.
+    Garbage = base64:encode(~"not-a-number"),
+    {error, #{~"error" := #{~"code" := Code}}} =
+        dispatch_paged(~"tools/list", #{~"cursor" => Garbage}, 1, 2),
+    ?assertEqual(-32602, Code).
+
+pagination_non_binary_cursor(_Config) ->
+    %% A non-binary cursor (a misbehaving client) is rejected, not crashed.
+    {error, #{~"error" := #{~"code" := Code}}} =
+        dispatch_paged(~"tools/list", #{~"cursor" => 7}, 1, 2),
+    ?assertEqual(-32602, Code).
+
+%% --------------------------------------------------------------------
 %% handle/1 (transport: method gate + origin + crash mapping)
 %% --------------------------------------------------------------------
 
@@ -399,6 +455,30 @@ handle_tool_crash_internal_error(_Config) ->
 dispatch(Method, Params, Id) ->
     dispatch_on(?SERVER, Method, Params, Id).
 
+%% Dispatch statelessly with a configured list page size (via the dispatch Ctx).
+dispatch_paged(Method, Params, Id, PageSize) ->
+    Request = #{method => Method, params => Params, id => Id},
+    arizona_mcp_handler:dispatch(?SERVER, Request, #{page_size => PageSize}).
+
+%% Follow the cursor chain of a `*/list` method to exhaustion, returning all
+%% item names (every item -- tool/resource/prompt -- carries `name`) and the
+%% number of pages it took.
+walk(Method, Key, PageSize) ->
+    walk(Method, Key, PageSize, undefined, [], 0).
+
+walk(Method, Key, PageSize, Cursor, Acc, Pages) ->
+    Params =
+        case Cursor of
+            undefined -> #{};
+            _ -> #{~"cursor" => Cursor}
+        end,
+    {reply, #{~"result" := Result}} = dispatch_paged(Method, Params, 1, PageSize),
+    Names = Acc ++ [maps:get(~"name", Item) || Item <- maps:get(Key, Result)],
+    case Result of
+        #{~"nextCursor" := Next} -> walk(Method, Key, PageSize, Next, Names, Pages + 1);
+        _ -> {Names, Pages + 1}
+    end.
+
 %% Dispatch a `tools/call` statelessly and return the reply's counter text.
 stateless_count(Params, Id) ->
     {reply, #{~"result" := #{~"content" := [#{~"text" := Text}]}}} =
@@ -407,7 +487,12 @@ stateless_count(Params, Id) ->
 
 %% A session map for the test server, as the transport builds at initialize.
 session() ->
-    #{mod => ?SERVER, state => #{}, caps => #{tools => #{}, resources => #{}, prompts => #{}}}.
+    #{
+        mod => ?SERVER,
+        state => #{},
+        caps => #{tools => #{}, resources => #{}, prompts => #{}},
+        page_size => 50
+    }.
 
 %% Receive one relayed progress notification, returning its `progress` amount.
 recv_progress() ->

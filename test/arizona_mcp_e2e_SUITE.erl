@@ -9,6 +9,7 @@
     post_tools_call/1,
     post_streaming_progress/1,
     post_progress_without_accept_buffered/1,
+    post_tools_list_paginates/1,
     post_resources_read/1,
     post_prompts_get/1,
     get_returns_405/1,
@@ -41,6 +42,7 @@ all() ->
         post_tools_call,
         post_streaming_progress,
         post_progress_without_accept_buffered,
+        post_tools_list_paginates,
         post_resources_read,
         post_prompts_get,
         get_returns_405,
@@ -86,6 +88,10 @@ init_per_suite(Config) ->
         {mcp, ~"/mcp-session-crash", arizona_mcp_crashing_server, #{
             origins => [?ALLOWED_ORIGIN],
             sessions => true
+        }},
+        {mcp, ~"/mcp-paged", arizona_mcp_test_server, #{
+            origins => [?ALLOWED_ORIGIN],
+            page_size => 2
         }}
     ],
     {ok, _} = arizona_roadrunner_server:start(?LISTENER, #{
@@ -184,6 +190,32 @@ post_progress_without_accept_buffered(Config) ->
         #{~"content" => [#{~"type" => ~"text", ~"text" => ~"done"}], ~"isError" => false},
         Result
     ).
+
+post_tools_list_paginates(Config) ->
+    %% On the page_size=2 route, the first tools/list page carries 2 tools and a
+    %% nextCursor; following the cursor returns the next, different, page.
+    Page1 =
+        ~"""
+    {"jsonrpc":"2.0","id":11,"method":"tools/list","params":{}}
+    """,
+    Resp1 = post(Config, "/mcp-paged", [], Page1),
+    ?assertEqual(200, status_code(Resp1)),
+    #{~"result" := #{~"tools" := Tools1, ~"nextCursor" := Cursor}} = body_json(Resp1),
+    ?assertEqual(2, length(Tools1)),
+    %% Follow the cursor for page 2.
+    Page2 = json:encode(#{
+        jsonrpc => ~"2.0",
+        id => 12,
+        method => ~"tools/list",
+        params => #{cursor => Cursor}
+    }),
+    Resp2 = post(Config, "/mcp-paged", [], iolist_to_binary(Page2)),
+    ?assertEqual(200, status_code(Resp2)),
+    #{~"result" := #{~"tools" := Tools2}} = body_json(Resp2),
+    ?assertEqual(2, length(Tools2)),
+    Names1 = [maps:get(~"name", T) || T <- Tools1],
+    Names2 = [maps:get(~"name", T) || T <- Tools2],
+    ?assertNotEqual(Names1, Names2).
 
 post_resources_read(Config) ->
     Body =
