@@ -38,6 +38,12 @@ Method = arizona_req:method(Req).          %% eager, no thread
 ```
 """.
 
+%% This module is the HTTP request API surface: one lazy accessor per request
+%% field plus the response stash (headers, cookies, status, flash). That is a
+%% cohesive set of small accessors, so it legitimately exceeds the god-module
+%% function count.
+-elvis([{elvis_style, no_god_modules, disable}]).
+
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -65,6 +71,9 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([resp_headers/1]).
 -export([resp_cookies/1]).
 -export([resp_status/1]).
+-export([put_flash/3]).
+-export([flash/1]).
+-export([read_flash/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -89,6 +98,8 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -ignore_xref([resp_headers/1]).
 -ignore_xref([resp_cookies/1]).
 -ignore_xref([resp_status/1]).
+-ignore_xref([put_flash/3]).
+-ignore_xref([flash/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -106,6 +117,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export_type([body/0]).
 -export_type([redirect_status/0]).
 -export_type([resp_status/0]).
+-export_type([flash/0]).
 -export_type([resp_cookie_opts/0]).
 -export_type([qs/0]).
 
@@ -127,7 +139,10 @@ Method = arizona_req:method(Req).          %% eager, no thread
     redirect => {redirect_status(), binary()},
     resp_headers => [{binary(), iodata()}],
     resp_cookies => [{binary(), binary(), resp_cookie_opts()}],
-    resp_status => resp_status()
+    resp_status => resp_status(),
+    flash_out => flash(),
+    flash_in => flash(),
+    flash_consumed => boolean()
 }.
 
 -nominal adapter() :: module().
@@ -150,6 +165,11 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %% Any HTTP response status. Stashed by `put_resp_status/2` and used as the OK
 %% status of a rendered page (default 200) -- e.g. a 401 from an auth gate.
 -nominal resp_status() :: 100..599.
+
+%% A flash payload: short-lived display messages carried across one redirect.
+%% Keys are binaries (an atom key passed to `put_flash/3` is normalized); values
+%% are anything `json:encode/1` accepts (typically display strings).
+-nominal flash() :: #{binary() => term()}.
 
 %% Response cookie options stashed by `put_resp_cookie/4` and serialized by
 %% the transport. Mirrors the transport cookie serializer's options.
@@ -404,11 +424,22 @@ put_resp_cookie(Req, Name, Value, Opts) when
 resp_headers(#{resp_headers := Headers}) -> Headers;
 resp_headers(_) -> [].
 
--doc "Returns the stashed response cookies (newest first), or `[]`.".
+-doc """
+Returns the stashed response cookies (newest first), or `[]`, plus the flash
+cookie when one is warranted: a freshly `put_flash/3`-set flash serializes to a
+signed `Set-Cookie`, and a consumed incoming flash (no new one set) serializes to
+a clearing cookie. Transports flush this list verbatim.
+""".
 -spec resp_cookies(Request) -> [{binary(), binary(), resp_cookie_opts()}] when
     Request :: request().
-resp_cookies(#{resp_cookies := Cookies}) -> Cookies;
-resp_cookies(_) -> [].
+resp_cookies(Req) ->
+    Stashed = maps:get(resp_cookies, Req, []),
+    FlashOut = maps:get(flash_out, Req, #{}),
+    Consumed = maps:get(flash_consumed, Req, false),
+    case arizona_flash:resp_cookie(FlashOut, Consumed) of
+        none -> Stashed;
+        Cookie -> Stashed ++ [Cookie]
+    end.
 
 -doc """
 Stashes the HTTP status for a rendered page. Lets a view or middleware return
@@ -427,3 +458,57 @@ put_resp_status(Req, Status) when is_integer(Status), Status >= 100, Status =< 5
     Request :: request().
 resp_status(#{resp_status := Status}) -> Status;
 resp_status(_) -> undefined.
+
+-doc """
+Stashes a flash message to carry across one redirect (the Post/Redirect/Get
+pattern). On the response it serializes to a signed, short-lived `Set-Cookie`;
+the next request reads it once via `flash/1` (or the auto-injected `flash`
+binding) and it is then cleared. `Key` may be an atom or binary (normalized to a
+binary); repeated calls accumulate, last write wins per key.
+
+Requires `secret_key` in the `arizona` application env (used to sign the cookie);
+errors if it is unset.
+""".
+-spec put_flash(Request, Key, Value) -> Request when
+    Request :: request(),
+    Key :: atom() | binary(),
+    Value :: term().
+put_flash(Req, Key, Value) ->
+    %% Fail fast at the call site if signing is unconfigured, rather than later
+    %% when the response serializes the cookie.
+    _ = arizona_flash:secret(),
+    FlashOut = maps:get(flash_out, Req, #{}),
+    Req#{flash_out => FlashOut#{arizona_flash:key(Key) => Value}}.
+
+-doc """
+Returns the incoming flash read from the request, or `#{}`. Populated by
+`read_flash/1` (which the HTTP render pipeline runs before the view), so views
+can also read it through the auto-injected `flash` binding.
+""".
+-spec flash(Request) -> flash() when
+    Request :: request().
+flash(#{flash_in := Flash}) -> Flash;
+flash(_) -> #{}.
+
+-doc """
+Reads, verifies, and decodes the incoming flash cookie into the request, marking
+it consumed so the response clears it (read-once). Returns the flash map (`#{}`
+when absent, unsigned-mismatch, or malformed) and the updated request. Idempotent:
+a second call returns the cached value without re-marking.
+
+Run by the HTTP render pipeline; apps normally use `flash/1` or the `flash`
+binding rather than calling this directly.
+""".
+-spec read_flash(Request) -> {flash(), Request} when
+    Request :: request().
+read_flash(#{flash_in := Flash} = Req) ->
+    {Flash, Req};
+read_flash(Req0) ->
+    {Cookies, Req} = cookies(Req0),
+    case lists:keyfind(arizona_flash:cookie_name(), 1, Cookies) of
+        {_, Value} ->
+            Flash = arizona_flash:decode(Value),
+            {Flash, Req#{flash_in => Flash, flash_consumed => true}};
+        false ->
+            {#{}, Req#{flash_in => #{}}}
+    end.

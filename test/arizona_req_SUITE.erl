@@ -3,6 +3,8 @@
 
 -export([all/0]).
 -export([groups/0]).
+-export([init_per_suite/1]).
+-export([end_per_suite/1]).
 
 -export([new_stores_adapter_method_and_path/1]).
 -export([new_accepts_prepopulated_fields/1]).
@@ -19,6 +21,9 @@
 -export([put_resp_cookie_accumulates/1]).
 -export([put_resp_status_stashes/1]).
 -export([resp_stash_defaults_empty/1]).
+-export([put_flash_serializes_into_resp_cookies/1]).
+-export([read_flash_round_trips_and_clears/1]).
+-export([read_flash_absent_is_empty/1]).
 -export([call_resolve_route_dispatches_to_adapter/1]).
 
 all() ->
@@ -41,12 +46,23 @@ groups() ->
             put_resp_header_accumulates,
             put_resp_cookie_accumulates,
             put_resp_status_stashes,
-            resp_stash_defaults_empty
+            resp_stash_defaults_empty,
+            put_flash_serializes_into_resp_cookies,
+            read_flash_round_trips_and_clears,
+            read_flash_absent_is_empty
         ]},
         {resolve_route, [parallel], [
             call_resolve_route_dispatches_to_adapter
         ]}
     ].
+
+init_per_suite(Config) ->
+    application:set_env(arizona, secret_key, ~"test-secret-key-0123456789abcdef"),
+    Config.
+
+end_per_suite(_Config) ->
+    application:unset_env(arizona, secret_key),
+    ok.
 
 %% --------------------------------------------------------------------
 %% Accessor cases
@@ -179,6 +195,33 @@ resp_stash_defaults_empty(Config) when is_list(Config) ->
     ?assertEqual([], arizona_req:resp_headers(Req)),
     ?assertEqual([], arizona_req:resp_cookies(Req)),
     ?assertEqual(undefined, arizona_req:resp_status(Req)).
+
+put_flash_serializes_into_resp_cookies(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{}),
+    Req1 = arizona_req:put_flash(Req0, error, ~"Invalid email or password."),
+    %% resp_cookies includes the signed flash cookie, which round-trips back.
+    [{Name, Value, Opts}] = arizona_req:resp_cookies(Req1),
+    ?assertEqual(~"az_flash", Name),
+    ?assert(maps:get(max_age, Opts) > 0),
+    ?assertEqual(#{~"error" => ~"Invalid email or password."}, arizona_flash:decode(Value)).
+
+read_flash_round_trips_and_clears(Config) when is_list(Config) ->
+    %% A request carrying a valid flash cookie reads it, and the response clears
+    %% it (read-once).
+    Encoded = arizona_flash:encode(#{~"error" => ~"nope"}),
+    Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_flash", Encoded}]}),
+    {Flash, Req1} = arizona_req:read_flash(Req0),
+    ?assertEqual(#{~"error" => ~"nope"}, Flash),
+    ?assertEqual(Flash, arizona_req:flash(Req1)),
+    [{~"az_flash", <<>>, Opts}] = arizona_req:resp_cookies(Req1),
+    ?assertEqual(0, maps:get(max_age, Opts)).
+
+read_flash_absent_is_empty(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+    {Flash, Req1} = arizona_req:read_flash(Req0),
+    ?assertEqual(#{}, Flash),
+    %% Nothing consumed and nothing set -> no flash cookie on the response.
+    ?assertEqual([], arizona_req:resp_cookies(Req1)).
 
 %% --------------------------------------------------------------------
 %% resolve_route -- exercises the optional callback wiring
