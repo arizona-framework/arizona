@@ -32,6 +32,19 @@ const check = (label, ok) => {
   if (!ok) failures.push(label);
 };
 
+// Follow nextCursor to aggregate every page of a list method. Exercises the
+// cursor protocol and makes the list assertions independent of page order.
+const listAll = async (listFn, key) => {
+  const all = [];
+  let cursor;
+  do {
+    const page = await listFn(cursor ? { cursor } : {});
+    all.push(...page[key]);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return all;
+};
+
 const client = new Client({ name: 'arizona-conformance', version: '1.0.0' });
 const transport = new StreamableHTTPClientTransport(new URL(url));
 
@@ -40,8 +53,12 @@ try {
   check('session id assigned', Boolean(transport.sessionId));
   check('advertises tools capability', 'tools' in (client.getServerCapabilities() ?? {}));
 
-  const tools = await client.listTools();
-  check("tools/list has 'add'", tools.tools.some((t) => t.name === 'add'));
+  // The server uses a small page_size, so each list spans several pages.
+  // Aggregating across pages keeps these checks order-independent and proves
+  // the cursor protocol round-trips (reaching the last-page tool, 'progress').
+  const tools = await listAll((p) => client.listTools(p), 'tools');
+  check("tools/list has 'add'", tools.some((t) => t.name === 'add'));
+  check('tools/list pagination reaches last page', tools.some((t) => t.name === 'progress'));
 
   const call = await client.callTool({ name: 'add', arguments: { a: 2, b: 3 } });
   check("tools/call add => '5'", call.content?.[0]?.text === '5');
@@ -59,17 +76,14 @@ try {
   check('tools/call progress streamed', seen.length >= 1);
   check("tools/call streamed result => 'done'", streamed.content?.[0]?.text === 'done');
 
-  const resources = await client.listResources();
-  check(
-    'resources/list has mem://greeting',
-    resources.resources.some((r) => r.uri === 'mem://greeting'),
-  );
+  const resources = await listAll((p) => client.listResources(p), 'resources');
+  check('resources/list has mem://greeting', resources.some((r) => r.uri === 'mem://greeting'));
 
   const read = await client.readResource({ uri: 'mem://greeting' });
   check("resources/read => 'hello'", read.contents?.[0]?.text === 'hello');
 
-  const prompts = await client.listPrompts();
-  check("prompts/list has 'greet'", prompts.prompts.some((p) => p.name === 'greet'));
+  const prompts = await listAll((p) => client.listPrompts(p), 'prompts');
+  check("prompts/list has 'greet'", prompts.some((p) => p.name === 'greet'));
 
   const prompt = await client.getPrompt({ name: 'greet', arguments: { who: 'Ada' } });
   check("prompts/get => 'Hello, Ada'", JSON.stringify(prompt).includes('Hello, Ada'));

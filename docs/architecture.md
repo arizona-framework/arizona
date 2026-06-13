@@ -1104,6 +1104,17 @@ replayed. Two ways to push a `notifications/*` message:
 
 Both are no-ops for a session with no attached SSE channel.
 
+### Pagination
+
+The `*/list` methods paginate with opaque cursors, framework-side: the `tools/1` / `resources/1` /
+`prompts/1` callbacks keep returning their full list, and the transport slices it by an offset cursor
+(base64 of the offset), emitting `nextCursor` when more remain. The page size is the route's
+`page_size` opt (default 50), so a list that fits returns in one page with no cursor. A malformed
+cursor is a `-32602`; an offset past the end returns an empty final page. The callbacks never see a
+cursor. Because the cursor is an offset, it assumes a stable list across pages -- a list mutated
+mid-pagination can skip or repeat an item (acceptable for the near-static MCP lists, and a
+`list_changed` notification has the client re-list anyway).
+
 ### Capability gating and security
 
 `init/1` returns an atom-keyed capability map; the transport serves `resources/*` and `prompts/*`

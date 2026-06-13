@@ -19,7 +19,7 @@ calls back into this module to negotiate the connection and run tools.
   tool callbacks. Called once on `initialize`, and again to source the
   state for `tools/list` / `tools/call`.
 - `tools/1` -- returns the tool metadata advertised by `tools/list`.
-- `handle_tool/3` -- runs one `tools/call`, dispatched by name (the MCP
+- `handle_tool/4` -- runs one `tools/call`, dispatched by name (the MCP
   analogue of how `arizona_stateful` dispatches an event by name).
 - `resources/1` + `read_resource/2` -- optional; list and read resources.
 - `prompts/1` + `get_prompt/3` -- optional; list and render prompts.
@@ -32,6 +32,22 @@ transport routes `resources/*` / `prompts/*` only when `init/1` advertised
 the matching `resources` / `prompts` capability, returning `method not
 found` otherwise. A server advertising a capability must implement its
 callbacks. Tools are always available (their callbacks are required).
+
+## Pagination
+
+`tools/1` / `resources/1` / `prompts/1` always return their **full** list;
+the transport paginates the `*/list` results with opaque cursors. A list at or
+under the route's `page_size` opt (default 50) returns in one page with no
+cursor; a larger one returns a page plus a `nextCursor` the client echoes to
+fetch the next. The callbacks never see a cursor -- pagination is entirely the
+transport's concern.
+
+The cursor is an offset into the list the callback returns, so it assumes the
+list is **stable across pages**: if the callback returns a different list
+mid-pagination (an item added or removed between page requests), the client may
+skip or repeat an item. This is fine for the near-static lists tools/resources/
+prompts usually are -- and a client that receives a `list_changed` notification
+re-lists from the start anyway.
 
 ## Tool results vs protocol errors
 

@@ -49,13 +49,15 @@ protocol contract holds even when a tool raises.
 %% Types definitions
 %% --------------------------------------------------------------------
 
-%% The dispatch context: the handler module, its state, and the capabilities
-%% negotiated at initialize. `arizona_mcp_session` holds one across a
-%% stateful connection; `dispatch/3` builds an ephemeral one per request.
+%% The dispatch context: the handler module, its state, the capabilities
+%% negotiated at initialize, and the list page size. `arizona_mcp_session` holds
+%% one across a stateful connection; `dispatch/3` builds an ephemeral one per
+%% request.
 -type session() :: #{
     mod := module(),
     state := arizona_mcp:state(),
-    caps := arizona_mcp:capabilities()
+    caps := arizona_mcp:capabilities(),
+    page_size := pos_integer()
 }.
 
 %% An optional per-route auth hook, run after the Origin check and before any
@@ -79,6 +81,10 @@ protocol contract holds even when a tool raises.
 %% Resumability buffer depth per session, overridable via the route's
 %% `session_buffer_max` opt.
 -define(DEFAULT_BUFFER_MAX, 256).
+
+%% Page size for the `*/list` methods, overridable via the route's `page_size`
+%% opt. A list at or under this size returns no cursor; a larger one paginates.
+-define(DEFAULT_PAGE_SIZE, 50).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -200,36 +206,39 @@ Exported for unit testing; `handle/1` calls it inside a crash guard.
     Mod :: module(),
     Request :: arizona_jsonrpc:request(),
     Ctx :: map().
-dispatch(Mod, #{method := Method, params := Params, id := Id}, _Ctx) ->
+dispatch(Mod, #{method := Method, params := Params, id := Id}, Ctx) ->
+    PageSize = maps:get(page_size, Ctx, ?DEFAULT_PAGE_SIZE),
     case Id of
         %% A JSON-RPC notification (no id) is accepted and never answered,
         %% whatever its method -- `notifications/initialized` included.
         undefined ->
             notification;
         _ when Method =:= ~"initialize" ->
-            {ServerInfo, #{caps := Caps}} = open_session(Mod, Params),
+            {ServerInfo, #{caps := Caps}} = open_session(Mod, Params, PageSize),
             {reply, arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params))};
         _ ->
             %% Stateless: a fresh per-request session sourced from `init/1`.
             %% Nothing outlives the request, so the threaded-back session is
             %% discarded -- the next request rebuilds from `init/1`.
-            {_ServerInfo, Session} = open_session(Mod, #{}),
+            {_ServerInfo, Session} = open_session(Mod, #{}, PageSize),
             {Outcome, _Session1} = handle_method(Method, Params, Id, Session),
             Outcome
     end.
 
 %% Build a session from the handler's `init/1`: the server identity plus the
-%% state and negotiated capabilities the methods run against. The session map
-%% is what `arizona_mcp_session` holds for a stateful (`Mcp-Session-Id`)
-%% connection; `dispatch/3` builds an ephemeral one per request.
--spec open_session(Mod, InitParams) -> {ServerInfo, Session} when
+%% state, negotiated capabilities, and list page size the methods run against.
+%% The session map is what `arizona_mcp_session` holds for a stateful
+%% (`Mcp-Session-Id`) connection; `dispatch/3` builds an ephemeral one per
+%% request.
+-spec open_session(Mod, InitParams, PageSize) -> {ServerInfo, Session} when
     Mod :: module(),
     InitParams :: arizona_mcp:init_params(),
+    PageSize :: pos_integer(),
     ServerInfo :: arizona_mcp:server_info(),
     Session :: session().
-open_session(Mod, InitParams) ->
+open_session(Mod, InitParams, PageSize) ->
     {ok, ServerInfo, Caps, State} = Mod:init(InitParams),
-    {ServerInfo, #{mod => Mod, state => State, caps => Caps}}.
+    {ServerInfo, #{mod => Mod, state => State, caps => Caps, page_size => PageSize}}.
 
 %% Build the `initialize` result: negotiated protocol version, advertised
 %% capabilities, and the server identity.
@@ -325,8 +334,18 @@ check_origin(Req, Opts) ->
 
 %% Stateless mode: every request is self-contained -- dispatch against a fresh
 %% per-request session, encode. No `Mcp-Session-Id`.
-reply_stateless(Request, #{handler := Mod}) ->
-    reply_dispatch(Mod, Request).
+reply_stateless(Request, #{handler := Mod} = Opts) ->
+    reply_dispatch(Mod, Request, page_size(Opts)).
+
+%% The configured list page size, defaulting when the route does not set it. A
+%% `page_size` of zero/negative would make the cursor never advance (an empty
+%% page that always re-issues the same cursor -- an infinite client loop), so a
+%% misconfigured route fails loudly (a `function_clause`) rather than looping.
+page_size(Opts) ->
+    valid_page_size(maps:get(page_size, Opts, ?DEFAULT_PAGE_SIZE)).
+
+valid_page_size(N) when is_integer(N), N >= 1 ->
+    N.
 
 %% Session mode: `initialize` opens a session and returns its id; every
 %% other request is routed to the session named by `Mcp-Session-Id`.
@@ -346,7 +365,7 @@ session_initialize(Params, Id, #{handler := Mod} = Opts) ->
         %% session later via `arizona_mcp:notify/3`. An atom key can't collide
         %% with the client's binary-keyed JSON params.
         InitParams = Params#{mcp_session_id => SessionId},
-        {ServerInfo, #{caps := Caps} = Session} = open_session(Mod, InitParams),
+        {ServerInfo, #{caps := Caps} = Session} = open_session(Mod, InitParams, page_size(Opts)),
         SessionOpts = #{
             ttl_ms => maps:get(session_ttl_ms, Opts, ?DEFAULT_TTL_MS),
             buffer_max => maps:get(session_buffer_max, Opts, ?DEFAULT_BUFFER_MAX)
@@ -455,7 +474,8 @@ serve_streaming(#{name := Name, args := Args, token := Token, id := Id}, Req, Op
             #{handler := Mod} = Opts,
             %% Stateless: a fresh per-request session; its threaded-back state
             %% is per-request and discarded. The worker frees the loop to push.
-            {_ServerInfo, Session} = open_session(Mod, #{}),
+            %% page_size is irrelevant to a tools/call -- the default suffices.
+            {_ServerInfo, Session} = open_session(Mod, #{}, ?DEFAULT_PAGE_SIZE),
             Ctx = #{token => Token, to => ConnPid},
             _Worker = spawn(fun() ->
                 _Session1 = run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid)
@@ -534,8 +554,8 @@ stream_tool_outcome({error, ToolError, NewState}, Id) ->
 generate_session_id() ->
     binary:encode_hex(crypto:strong_rand_bytes(16), lowercase).
 
-reply_dispatch(Mod, Request) ->
-    try dispatch(Mod, Request, #{}) of
+reply_dispatch(Mod, Request, PageSize) ->
+    try dispatch(Mod, Request, #{page_size => PageSize}) of
         {reply, Object} -> json(Object);
         {error, Object} -> json(Object);
         notification -> roadrunner_resp:status(202)
@@ -577,27 +597,85 @@ method) return the session unchanged.
     Outcome :: {reply, map()} | {error, map()}.
 handle_method(~"ping", _Params, Id, Session) ->
     {{reply, arizona_jsonrpc:result(Id, #{})}, Session};
-handle_method(~"tools/list", _Params, Id, #{mod := Mod, state := State} = Session) ->
-    Tools = [tool_json(Tool) || Tool <- Mod:tools(State)],
-    {{reply, arizona_jsonrpc:result(Id, #{~"tools" => Tools})}, Session};
+handle_method(~"tools/list", Params, Id, #{mod := Mod, state := State} = Session) ->
+    list_reply(Mod:tools(State), fun tool_json/1, ~"tools", Params, Id, Session);
 handle_method(~"tools/call", Params, Id, Session) ->
     call_tool(Params, Id, Session);
-handle_method(~"resources/list", _Params, Id, Session) ->
+handle_method(~"resources/list", Params, Id, Session) ->
     capability(resources, Id, Session, fun(#{mod := Mod, state := State} = S) ->
-        Resources = [resource_json(Resource) || Resource <- Mod:resources(State)],
-        {{reply, arizona_jsonrpc:result(Id, #{~"resources" => Resources})}, S}
+        list_reply(Mod:resources(State), fun resource_json/1, ~"resources", Params, Id, S)
     end);
 handle_method(~"resources/read", Params, Id, Session) ->
     capability(resources, Id, Session, fun(S) -> read_resource(Params, Id, S) end);
-handle_method(~"prompts/list", _Params, Id, Session) ->
+handle_method(~"prompts/list", Params, Id, Session) ->
     capability(prompts, Id, Session, fun(#{mod := Mod, state := State} = S) ->
-        Prompts = [prompt_json(Prompt) || Prompt <- Mod:prompts(State)],
-        {{reply, arizona_jsonrpc:result(Id, #{~"prompts" => Prompts})}, S}
+        list_reply(Mod:prompts(State), fun prompt_json/1, ~"prompts", Params, Id, S)
     end);
 handle_method(~"prompts/get", Params, Id, Session) ->
     capability(prompts, Id, Session, fun(S) -> get_prompt(Params, Id, S) end);
 handle_method(_Method, _Params, Id, Session) ->
     method_not_found(Id, Session).
+
+%% Paginate a full list by the request's opaque `cursor`, map the page to wire
+%% JSON under `Key`, and add `nextCursor` when more remain. A malformed cursor
+%% is a -32602. The app's list callback is unchanged -- it returns the full
+%% list and the transport owns the slicing.
+list_reply(Full, ItemFun, Key, Params, Id, #{page_size := PageSize} = Session) ->
+    case paginate(Full, Params, PageSize) of
+        {ok, Page, Next} ->
+            Items = [ItemFun(Item) || Item <- Page],
+            Result = maybe_next_cursor(Next, #{Key => Items}),
+            {{reply, arizona_jsonrpc:result(Id, Result)}, Session};
+        error ->
+            {{error, arizona_jsonrpc:error(Id, -32602, ~"Invalid cursor")}, Session}
+    end.
+
+%% Slice `Full` at the cursor's offset for `PageSize` items, returning the page
+%% and the next cursor (`undefined` once exhausted). A bad cursor -> `error`. An
+%% offset past the end (a stale or tampered cursor) yields an empty final page
+%% rather than crashing `lists:sublist/3`.
+paginate(Full, Params, PageSize) ->
+    case cursor_offset(Params) of
+        {ok, Offset} ->
+            Len = length(Full),
+            Page =
+                case Offset < Len of
+                    true -> lists:sublist(Full, Offset + 1, PageSize);
+                    false -> []
+                end,
+            Next =
+                case Offset + PageSize < Len of
+                    true -> encode_cursor(Offset + PageSize);
+                    false -> undefined
+                end,
+            {ok, Page, Next};
+        error ->
+            error
+    end.
+
+%% Absent cursor -> page from the start; present -> decode it (a non-binary or
+%% malformed cursor is rejected).
+cursor_offset(#{~"cursor" := Cursor}) when is_binary(Cursor) ->
+    decode_cursor(Cursor);
+cursor_offset(#{~"cursor" := _}) ->
+    error;
+cursor_offset(_Params) ->
+    {ok, 0}.
+
+maybe_next_cursor(undefined, Result) -> Result;
+maybe_next_cursor(Next, Result) -> Result#{~"nextCursor" => Next}.
+
+%% Cursors are opaque to the client: a base64 of the integer offset.
+encode_cursor(Offset) ->
+    base64:encode(integer_to_binary(Offset)).
+
+decode_cursor(Cursor) ->
+    try binary_to_integer(base64:decode(Cursor)) of
+        Offset when Offset >= 0 -> {ok, Offset};
+        _ -> error
+    catch
+        _:_ -> error
+    end.
 
 %% An optional capability (resources/prompts) is served only when the server
 %% advertised it at initialize; otherwise the method does not exist. The gated
