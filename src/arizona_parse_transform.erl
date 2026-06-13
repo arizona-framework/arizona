@@ -1553,10 +1553,63 @@ make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
 %% template, ?each, ?inner_content, ?stateful/?stateless, a map, or raw/1 -- is
 %% left untagged and rendered structurally (escaping is decided at compile time
 %% so the runtime can never confuse user scalars with spliced framework HTML).
-make_esc_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine, Backend) ->
+make_esc_text_dynamic_ast(AzBin, ExprAST0, Module, ExprLine, Backend) ->
+    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend),
     LocAST = loc_ast(Module, ExprLine),
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
     {tuple, 0, [ast_binary(AzBin), esc_spec(Backend, ExprAST, FunAST), LocAST]}.
+
+%% A content slot's value can be the result of a control-flow expression
+%% (`case`/`if`/`begin`). Those result positions are themselves content
+%% positions: an element tuple (or element list) sitting in a clause/block tail
+%% is compiled into a nested template -- exactly as a literal ?html(...) there
+%% would be -- so conditional branches don't need an explicit ?html wrap. The
+%% current Backend is threaded through, so a bare element in a branch under
+%% ?native/?terminal inherits that target (mirroring how ?each does). Non-element
+%% tails and plain values are left untouched (they render as escaped scalars, as
+%% before). `try`/`receive` tails are intentionally not descended into -- a bare
+%% element there still requires an explicit ?html.
+expand_block_element_tails({'case', L, Expr, Clauses}, Module, Backend) ->
+    {'case', L, Expr, [expand_clause_tail(C, Module, Backend) || C <- Clauses]};
+expand_block_element_tails({'if', L, Clauses}, Module, Backend) ->
+    {'if', L, [expand_clause_tail(C, Module, Backend) || C <- Clauses]};
+expand_block_element_tails({block, L, Exprs}, Module, Backend) ->
+    {block, L, expand_last_expr(Exprs, Module, Backend)};
+expand_block_element_tails(Other, _Module, _Backend) ->
+    Other.
+
+expand_clause_tail({clause, L, Patterns, Guards, Body}, Module, Backend) ->
+    {clause, L, Patterns, Guards, expand_last_expr(Body, Module, Backend)}.
+
+%% Rewrite only the last (result) expression of a clause/block body.
+expand_last_expr([], _Module, _Backend) ->
+    [];
+expand_last_expr([Last], Module, Backend) ->
+    [expand_tail_expr(Last, Module, Backend)];
+expand_last_expr([Expr | Rest], Module, Backend) ->
+    [Expr | expand_last_expr(Rest, Module, Backend)].
+
+expand_tail_expr(Expr, Module, Backend) ->
+    case classify_body(Expr) of
+        Class when Class =:= element_tuple; Class =:= element_list ->
+            compile_template(Expr, line(Expr), Module, false, Backend);
+        list_ast ->
+            %% A mixed list (static text / values interleaved with element
+            %% tuples) is compiled as a fragment only when it actually contains
+            %% an element tuple -- a pure value list keeps its scalar/iolist
+            %% semantics (a single value slot), unchanged.
+            case list_has_element_tuple(Expr) of
+                true -> compile_template(Expr, line(Expr), Module, false, Backend);
+                false -> Expr
+            end;
+        _ ->
+            expand_block_element_tails(Expr, Module, Backend)
+    end.
+
+list_has_element_tuple({cons, _, Head, Tail}) ->
+    is_element_tuple(Head) orelse list_has_element_tuple(Tail);
+list_has_element_tuple(_) ->
+    false.
 
 %% Tag a value interpolation `{esc, Fun}` (escaped at the HTML boundary) or leave
 %% it bare. Only the HTML backend escapes -- native/terminal output is plain text,
@@ -1609,7 +1662,8 @@ make_attr_dynamic_ast(AzBin, AttrNameBin, ExprAST, Module, ExprLine) ->
 %% nodiff (layout) path: a value interpolation (e.g. a layout `title`) is tagged
 %% `{esc, Fun}` so SSR HTML-escapes it; a block (?inner_content, nested template)
 %% is left untagged and spliced raw.
-make_nodiff_dynamic_ast(ExprAST, Module, ExprLine, Backend) ->
+make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
+    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend),
     LocAST = loc_ast(Module, ExprLine),
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
     {tuple, 0, [{atom, 0, undefined}, esc_spec(Backend, ExprAST, FunAST), LocAST]}.

@@ -161,7 +161,9 @@ value: `fun(Item, Key) -> {li, [], [Item]} end`).
 
 - Plain values: use a list comprehension or `lists:map/2` (no per-item diffing, fine for
   small or static lists).
-- A conditional: put it **inside** an element as a text/value child.
+- A conditional: put it **inside** an element as a text/value child. Only the `?each`
+  **body** must be a direct element -- a conditional sitting in a content slot may itself
+  return a bare element tuple (see "Bare element tuples in conditional tails" below).
 
 ```erlang
 %% rejected (would crash on diff): a case / ?html body
@@ -171,6 +173,30 @@ value: `fun(Item, Key) -> {li, [], [Item]} end`).
 %% plain values: a comprehension, not ?each
 {ul, [], [[<<"#", Tag/binary>> || Tag <- ?get(tags)]]}
 ```
+
+## Bare element tuples in conditional tails
+
+A `case`, `if`, or `begin` in a **content slot** may return a bare element tuple, an
+element list, or a mixed fragment (static text/values interleaved with elements)
+directly from a branch -- the parse transform compiles each branch tail into a nested
+template, exactly as a literal `?html`/`?native`/`?terminal` there would, inheriting the
+enclosing render target. No `?html` wrap is needed:
+
+```erlang
+%% both branches accepted: <<>> renders empty, the tuple becomes a nested template
+{main, [], [
+    case ?get(error) of
+        undefined -> <<>>;
+        Message -> {p, [{class, ~"login-error"}], Message}
+    end
+]}
+```
+
+A branch returning a plain value (binary, integer, variable, or a pure value list) still
+renders as a scalar, unchanged. Nested conditionals are walked recursively. `try`/`receive`
+tails are **not** descended into -- a bare element there still needs an explicit `?html`. (This
+mirrors `?each`, whose callback body already accepts bare elements; the difference is
+that `?each` keys items for per-item diffing while a conditional is a single slot.)
 
 **Known limitation:** embedding a component (a `?stateless`/`?stateful` descriptor) as an
 `?each` item child compiles and renders at SSR but **crashes on the first diff** -- the
