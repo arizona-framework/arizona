@@ -15,10 +15,18 @@ Two shapes fall out of the same engine:
   runtime. Untrusted and concurrent, so the session, auth, and resource-limit features earn their
   keep.
 
-The rest of this guide builds the dev tool. The full worked example is
-[`arizona_demo_mcp`][demo], mounted at `/mcp` in the dev server.
+Arizona ships a batteries-included dev tool, [`arizona_dev_mcp`][dev]. Add it to your **dev**
+server's routes and point a coding agent at it:
 
-[demo]: https://github.com/arizona-framework/arizona/blob/main/test/support/arizona_demo_mcp.erl
+```erlang
+arizona_dev_mcp:route(~"/mcp")
+```
+
+`route/1` defaults to `sessions => true` (so `eval` is a persistent REPL); `route/2` merges extra
+opts. You can mount it as-is (jump to [Introspection tools](#introspection-tools)) or write your own
+-- this guide covers both.
+
+[dev]: https://github.com/arizona-framework/arizona/blob/main/src/arizona_dev_mcp.erl
 
 ## The behaviour
 
@@ -55,19 +63,18 @@ threads back into the session, so state mutated by one call is visible to the ne
 
 ## Mounting it
 
-Add an `mcp` route. For a dev tool, run it in **session mode** (so per-session state, like a REPL's
-bindings, persists across calls) and gate it with the `Origin` allowlist:
+Add an `mcp` route. For a dev tool, run it in **session mode** so per-session state (like a REPL's
+bindings) persists across calls:
 
 ```erlang
-{mcp, ~"/mcp", my_mcp, #{
-    sessions => true,
-    origins => [~"http://localhost:4040"]
-}}
+{mcp, ~"/mcp", my_mcp, #{sessions => true}}
 ```
 
-The `Origin` check is a DNS-rebinding defense: a request with no `Origin` (a CLI agent) is allowed;
-a browser `Origin` must be in the allowlist. That alone is the reason to keep the gate on even on
-localhost -- it stops a malicious web page from driving your dev MCP server.
+The `Origin` check is a DNS-rebinding defense: a request with no `Origin` (a CLI agent, or the
+Inspector's proxy) is allowed; a browser `Origin` must be in the `origins` allowlist, which defaults
+to empty. So a CLI agent needs no `origins` at all -- omitting it blocks every browser origin, the
+safest posture. Add `origins => [~"http://localhost:PORT"]` only to allow a direct browser-based
+client.
 
 ### Connecting an agent
 
@@ -79,17 +86,22 @@ npx @modelcontextprotocol/inspector
 
 ## Introspection tools
 
-The demo exposes a handful, each a thin wrapper over data the running node already has:
+The built-in `arizona_dev_mcp` ships these, each a thin wrapper over data the running node already
+has. Mount it with `arizona_dev_mcp:route(~"/mcp")` and point your agent at `/mcp`:
 
-- `list_routes` -- `arizona_test_server:routes()` (point this at wherever your app declares routes).
+- `list_routes` -- the app's routes, read from the `arizona` `server` app env.
+- `describe_component` -- a component's kind (stateful/stateless), its exports, and its moduledoc.
 - `get_docs` -- a module's or function's documentation via `code:get_doc/1` (EEP-48).
-- `app_info` -- `application:get_key/2`, `erlang:system_info/1`.
+- `get_source_location` -- where a module (or function) is defined.
 - `reloader_status` -- the dev reloader's current compile error via `arizona_reloader:get_error/0`.
+- `app_info` -- `application:get_key/2`, `erlang:system_info/1`.
+- `render_component` -- render a view/component module to HTML with given bindings.
+- `eval` -- run Erlang in the live node (see below).
 
 ## `eval`: powerful, and a footgun
 
-The demo's `eval` tool runs Erlang in the live node and keeps its bindings across calls (a REPL the
-agent drives), by scanning/parsing/evaluating against the session's `erl_eval` bindings:
+`arizona_dev_mcp`'s `eval` tool runs Erlang in the live node and keeps its bindings across calls (a
+REPL the agent drives), by scanning/parsing/evaluating against the session's `erl_eval` bindings:
 
 ```erlang
 handle_tool(~"eval", #{~"code" := Code}, _Ctx, #{bindings := Bindings} = State) ->

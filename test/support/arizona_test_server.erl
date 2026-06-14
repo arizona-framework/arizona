@@ -6,10 +6,14 @@ start() ->
         transport_opts => [{port, port()}],
         routes => routes()
     }),
+    %% Set the server app env *after* the listener is up (arizona_app has already
+    %% booted, so this won't double-start a server) so the dev MCP server's
+    %% `list_routes` tool can read the live routes.
+    ok = application:set_env(arizona, server, #{routes => routes()}),
     ok.
 
-%% The dev server's routes. Exposed so the demo MCP server's `list_routes` tool
-%% can introspect them (see arizona_demo_mcp).
+%% The dev server's routes. Exposed so the dev MCP server's `list_routes` tool
+%% can introspect them (see arizona_dev_mcp).
 routes() ->
     Layouts = [{arizona_layout, render}],
     [
@@ -100,13 +104,10 @@ routes() ->
         {live, <<"/native/menu">>, arizona_native_menu, #{}},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}},
-        %% Dev-introspection MCP server (see arizona_demo_mcp). Session mode so
-        %% the agent's eval bindings persist across calls; CLI agents send no
-        %% Origin (allowed), and the localhost browser origin is allowed too.
-        {mcp, <<"/mcp">>, arizona_demo_mcp, #{
-            sessions => true,
-            origins => [iolist_to_binary([<<"http://localhost:">>, integer_to_binary(port())])]
-        }}
+        %% Dev-introspection MCP server (see arizona_dev_mcp); the helper defaults
+        %% to session mode so eval is a persistent REPL. A CLI agent connects with
+        %% no Origin; origins stays opt-in.
+        arizona_dev_mcp:route(<<"/mcp">>)
     ].
 
 stop() ->
