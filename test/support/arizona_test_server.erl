@@ -1,9 +1,18 @@
 -module(arizona_test_server).
--export([start/0, stop/0, port/0]).
+-export([start/0, stop/0, port/0, routes/0]).
 
 start() ->
+    {ok, _} = arizona_roadrunner_server:start(http, #{
+        transport_opts => [{port, port()}],
+        routes => routes()
+    }),
+    ok.
+
+%% The dev server's routes. Exposed so the demo MCP server's `list_routes` tool
+%% can introspect them (see arizona_demo_mcp).
+routes() ->
     Layouts = [{arizona_layout, render}],
-    Routes = [
+    [
         {live, <<"/">>, arizona_page, #{
             bindings => #{title => <<"Welcome">>},
             layouts => Layouts
@@ -90,13 +99,15 @@ start() ->
         {live, <<"/native/removable">>, arizona_native_removable, #{}},
         {live, <<"/native/menu">>, arizona_native_menu, #{}},
         {ws, <<"/ws">>, #{}},
-        {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}
-    ],
-    {ok, _} = arizona_roadrunner_server:start(http, #{
-        transport_opts => [{port, port()}],
-        routes => Routes
-    }),
-    ok.
+        {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}},
+        %% Dev-introspection MCP server (see arizona_demo_mcp). Session mode so
+        %% the agent's eval bindings persist across calls; CLI agents send no
+        %% Origin (allowed), and the localhost browser origin is allowed too.
+        {mcp, <<"/mcp">>, arizona_demo_mcp, #{
+            sessions => true,
+            origins => [iolist_to_binary([<<"http://localhost:">>, integer_to_binary(port())])]
+        }}
+    ].
 
 stop() ->
     arizona_roadrunner_server:stop(http).
