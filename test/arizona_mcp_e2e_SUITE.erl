@@ -11,6 +11,7 @@
     post_progress_without_accept_buffered/1,
     post_tools_list_paginates/1,
     post_resources_read/1,
+    post_resources_templates_list/1,
     post_prompts_get/1,
     get_returns_405/1,
     post_disallowed_origin_403/1,
@@ -23,6 +24,7 @@
     session_tool_crash_survives/1,
     session_get_without_id_400/1,
     session_channel_receives_push/1,
+    session_resource_subscribe_pushes_update/1,
     session_second_channel_409/1,
     session_survives_channel_disconnect/1,
     session_resumes_with_last_event_id/1,
@@ -44,6 +46,7 @@ all() ->
         post_progress_without_accept_buffered,
         post_tools_list_paginates,
         post_resources_read,
+        post_resources_templates_list,
         post_prompts_get,
         get_returns_405,
         post_disallowed_origin_403,
@@ -56,6 +59,7 @@ all() ->
         session_tool_crash_survives,
         session_get_without_id_400,
         session_channel_receives_push,
+        session_resource_subscribe_pushes_update,
         session_second_channel_409,
         session_survives_channel_disconnect,
         session_resumes_with_last_event_id,
@@ -229,6 +233,17 @@ post_resources_read(Config) ->
     ?assertEqual(~"mem://greeting", maps:get(~"uri", Content)),
     ?assertEqual(~"hello", maps:get(~"text", Content)).
 
+post_resources_templates_list(Config) ->
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":13,"method":"resources/templates/list","params":{}}
+    """,
+    Resp = post(Config, "/mcp", [], Body),
+    ?assertEqual(200, status_code(Resp)),
+    #{~"result" := #{~"resourceTemplates" := [Template]}} = body_json(Resp),
+    ?assertEqual(~"mem://user/{id}", maps:get(~"uriTemplate", Template)),
+    ?assertEqual(~"user", maps:get(~"name", Template)).
+
 post_prompts_get(Config) ->
     Body =
         ~"""
@@ -340,6 +355,24 @@ session_channel_receives_push(Config) ->
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Data, ~"notifications/message")),
     ?assertNotEqual(nomatch, binary:match(Data, ~"hello-sse")).
+
+session_resource_subscribe_pushes_update(Config) ->
+    SessionId = open_session(Config),
+    {ok, Sock} = open_channel(Config, SessionId),
+    %% Subscribe (the POST is served by the session process, which joins the
+    %% per-uri channel), then announce the change server-side (in-node).
+    SubBody =
+        ~"""
+    {"jsonrpc":"2.0","id":14,"method":"resources/subscribe",
+     "params":{"uri":"mem://greeting"}}
+    """,
+    SubResp = post(Config, "/mcp-session", session_header(SessionId), SubBody),
+    ?assertEqual(200, status_code(SubResp)),
+    ok = arizona_mcp:resource_updated(~"mem://greeting"),
+    Data = recv_until(Sock, ~"resources/updated", 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"notifications/resources/updated")),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"mem://greeting")).
 
 session_second_channel_409(Config) ->
     SessionId = open_session(Config),

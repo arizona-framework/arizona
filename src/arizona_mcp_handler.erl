@@ -607,6 +607,15 @@ handle_method(~"resources/list", Params, Id, Session) ->
     end);
 handle_method(~"resources/read", Params, Id, Session) ->
     capability(resources, Id, Session, fun(S) -> read_resource(Params, Id, S) end);
+handle_method(~"resources/templates/list", Params, Id, Session) ->
+    capability(resources, Id, Session, fun(#{mod := Mod, state := State} = S) ->
+        Templates = resource_templates(Mod, State),
+        list_reply(Templates, fun resource_template_json/1, ~"resourceTemplates", Params, Id, S)
+    end);
+handle_method(~"resources/subscribe", Params, Id, Session) ->
+    capability(resources, Id, Session, fun(S) -> subscribe_resource(Params, Id, S) end);
+handle_method(~"resources/unsubscribe", Params, Id, Session) ->
+    capability(resources, Id, Session, fun(S) -> unsubscribe_resource(Params, Id, S) end);
 handle_method(~"prompts/list", Params, Id, Session) ->
     capability(prompts, Id, Session, fun(#{mod := Mod, state := State} = S) ->
         list_reply(Mod:prompts(State), fun prompt_json/1, ~"prompts", Params, Id, S)
@@ -739,6 +748,44 @@ read_resource(Params, Id, #{mod := Mod, state := State} = Session) ->
         fun(Uri) -> resource_contents(Mod:read_resource(Uri, State), Uri, Id, Session) end
     ).
 
+%% The optional `resource_templates/1` callback; absent means no parameterized
+%% resources, so the transport advertises an empty template list.
+resource_templates(Mod, State) ->
+    case erlang:function_exported(Mod, resource_templates, 1) of
+        true -> Mod:resource_templates(State);
+        false -> []
+    end.
+
+%% `resources/subscribe` / `unsubscribe` join/leave the per-uri pubsub channel as
+%% the calling process. In session mode that is the session process, so the
+%% subscription persists and `arizona_mcp:resource_updated/1` broadcasts reach it
+%% (forwarded as `notifications/resources/updated`); in stateless mode the request
+%% process dies after the reply -- a harmless no-op, since stateless has no SSE
+%% channel to deliver on. Both answer the MCP empty result.
+subscribe_resource(Params, Id, Session) ->
+    resource_subscription(Params, Id, Session, fun join_resource/1).
+
+unsubscribe_resource(Params, Id, Session) ->
+    resource_subscription(Params, Id, Session, fun leave_resource/1).
+
+resource_subscription(#{~"uri" := Uri}, Id, Session, Fun) when is_binary(Uri) ->
+    ok = Fun({mcp_resource, Uri}),
+    {{reply, arizona_jsonrpc:result(Id, #{})}, Session};
+resource_subscription(_Params, Id, Session, _Fun) ->
+    {{error, arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing resource uri")}, Session}.
+
+join_resource(Channel) ->
+    case arizona_pubsub:subscribe(Channel, self()) of
+        ok -> ok;
+        {error, already_joined} -> ok
+    end.
+
+leave_resource(Channel) ->
+    case arizona_pubsub:unsubscribe(Channel, self()) of
+        ok -> ok;
+        {error, not_joined} -> ok
+    end.
+
 get_prompt(Params, Id, #{mod := Mod, state := State} = Session) ->
     with_member(
         Params,
@@ -808,6 +855,11 @@ resource_json(#{uri := Uri, name := Name} = Resource) ->
     Base = #{~"uri" => Uri, ~"name" => Name},
     WithDescription = maybe_put(~"description", description, Resource, Base),
     maybe_put(~"mimeType", mime_type, Resource, WithDescription).
+
+resource_template_json(#{uri_template := UriTemplate, name := Name} = Template) ->
+    Base = #{~"uriTemplate" => UriTemplate, ~"name" => Name},
+    WithDescription = maybe_put(~"description", description, Template, Base),
+    maybe_put(~"mimeType", mime_type, Template, WithDescription).
 
 %% A bare binary becomes one text entry keyed by the requested uri; a map
 %% supplies its content entries verbatim. An `{error, _}` is a -32002. Either

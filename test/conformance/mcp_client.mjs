@@ -82,6 +82,18 @@ try {
   const read = await client.readResource({ uri: 'mem://greeting' });
   check("resources/read => 'hello'", read.contents?.[0]?.text === 'hello');
 
+  const templates = await client.listResourceTemplates();
+  check(
+    'resources/templates/list has user',
+    templates.resourceTemplates?.some((t) => t.uriTemplate === 'mem://user/{id}'),
+  );
+
+  // subscribe/unsubscribe round-trip (delivery itself is covered by the Erlang
+  // suites, where the server can publish an update mid-test); a throw here fails.
+  await client.subscribeResource({ uri: 'mem://greeting' });
+  await client.unsubscribeResource({ uri: 'mem://greeting' });
+  check('resources subscribe/unsubscribe round-trip', true);
+
   const prompts = await listAll((p) => client.listPrompts(p), 'prompts');
   check("prompts/list has 'greet'", prompts.some((p) => p.name === 'greet'));
 
