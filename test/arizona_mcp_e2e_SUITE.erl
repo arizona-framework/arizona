@@ -34,6 +34,7 @@
     session_streaming_progress/1,
     session_cancel_stops_stream/1,
     session_disconnect_cancels_stream/1,
+    session_buffered_cancel_frees_request/1,
     auth_missing_token_401/1,
     auth_valid_token_ok/1,
     session_init_crash_internal_error/1
@@ -74,6 +75,7 @@ all() ->
         session_streaming_progress,
         session_cancel_stops_stream,
         session_disconnect_cancels_stream,
+        session_buffered_cancel_frees_request,
         auth_missing_token_401,
         auth_valid_token_ok,
         session_init_crash_internal_error
@@ -523,6 +525,27 @@ session_disconnect_cancels_stream(Config) ->
     Resp = post(Config, "/mcp-session", session_header(SessionId), Ping),
     ?assertEqual(200, status_code(Resp)),
     ?assertMatch(#{~"result" := #{}}, body_json(Resp)).
+
+session_buffered_cancel_frees_request(Config) ->
+    SessionId = open_session(Config),
+    %% A buffered (no progressToken) blocking tool holds its HTTP POST open. The
+    %% session stays responsive: a notifications/cancelled on another connection
+    %% frees the held request with a -32603 (proving it wasn't blocking the
+    %% session process).
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"block","arguments":{}}}
+    """,
+    Sock = stream_post(Config, "/mcp-session", session_header(SessionId), Body),
+    Cancel =
+        ~"""
+    {"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":31}}
+    """,
+    CancelResp = post(Config, "/mcp-session", session_header(SessionId), Cancel),
+    ?assertEqual(202, status_code(CancelResp)),
+    Data = recv_until(Sock, ~"-32603", 5000),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"-32603")),
+    gen_tcp:close(Sock).
 
 %% --------------------------------------------------------------------
 %% Auth-gated tests (/mcp-auth, auth => bearer hook)
