@@ -29,6 +29,9 @@
     dispatch_resources_read_unknown/1,
     dispatch_resources_read_missing_uri/1,
     dispatch_resources_unsupported/1,
+    dispatch_resources_templates_list/1,
+    dispatch_resources_templates_unsupported/1,
+    dispatch_resources_subscribe_missing_uri/1,
     dispatch_prompts_list/1,
     dispatch_prompts_get/1,
     dispatch_prompts_get_error/1,
@@ -85,6 +88,9 @@ all() ->
         dispatch_resources_read_unknown,
         dispatch_resources_read_missing_uri,
         dispatch_resources_unsupported,
+        dispatch_resources_templates_list,
+        dispatch_resources_templates_unsupported,
+        dispatch_resources_subscribe_missing_uri,
         dispatch_prompts_list,
         dispatch_prompts_get,
         dispatch_prompts_get_error,
@@ -117,7 +123,7 @@ dispatch_initialize(_Config) ->
     {reply, #{~"result" := Result}} = dispatch(~"initialize", Params, 1),
     ?assertEqual(~"2025-06-18", maps:get(~"protocolVersion", Result)),
     ?assertEqual(
-        #{tools => #{}, resources => #{}, prompts => #{}},
+        #{tools => #{}, resources => #{subscribe => true}, prompts => #{}},
         maps:get(~"capabilities", Result)
     ),
     ?assertEqual(
@@ -301,6 +307,26 @@ dispatch_resources_unsupported(_Config) ->
     {error, #{~"error" := #{~"code" := Code}}} =
         dispatch_on(arizona_mcp_minimal_server, ~"resources/list", #{}, 25),
     ?assertEqual(-32601, Code).
+
+dispatch_resources_templates_list(_Config) ->
+    {reply, #{~"result" := #{~"resourceTemplates" := [Template]}}} =
+        dispatch(~"resources/templates/list", #{}, 26),
+    ?assertEqual(~"mem://user/{id}", maps:get(~"uriTemplate", Template)),
+    ?assertEqual(~"user", maps:get(~"name", Template)),
+    %% uri_template is renamed to the wire's uriTemplate.
+    ?assertNot(maps:is_key(~"uri_template", Template)).
+
+dispatch_resources_templates_unsupported(_Config) ->
+    %% A server without the resources capability has no templates endpoint.
+    {error, #{~"error" := #{~"code" := Code}}} =
+        dispatch_on(arizona_mcp_minimal_server, ~"resources/templates/list", #{}, 27),
+    ?assertEqual(-32601, Code).
+
+dispatch_resources_subscribe_missing_uri(_Config) ->
+    %% The missing-uri rejection happens before any pubsub join (no app needed).
+    {error, #{~"error" := #{~"code" := Code}}} =
+        dispatch(~"resources/subscribe", #{}, 28),
+    ?assertEqual(-32602, Code).
 
 dispatch_prompts_list(_Config) ->
     {reply, #{~"result" := #{~"prompts" := Prompts}}} = dispatch(~"prompts/list", #{}, 30),

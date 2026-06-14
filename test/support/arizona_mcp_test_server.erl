@@ -7,6 +7,7 @@
 -export([handle_tool/4]).
 -export([resources/1]).
 -export([read_resource/2]).
+-export([resource_templates/1]).
 -export([prompts/1]).
 -export([get_prompt/3]).
 -export([channels/1]).
@@ -14,7 +15,7 @@
 
 init(_InitParams) ->
     {ok, #{name => ~"arizona_test", version => ~"0.1.0"},
-        #{tools => #{}, resources => #{}, prompts => #{}}, #{}}.
+        #{tools => #{}, resources => #{subscribe => true}, prompts => #{}}, #{}}.
 
 tools(_State) ->
     [
@@ -115,6 +116,16 @@ read_resource(~"mem://counter", State) ->
     %% resource read threads its returned state back too.
     Count = maps:get(count, State, 0) + 1,
     {reply, integer_to_binary(Count), State#{count => Count}}.
+
+resource_templates(_State) ->
+    [
+        #{
+            uri_template => ~"mem://user/{id}",
+            name => ~"user",
+            description => ~"A user by id",
+            mime_type => ~"application/json"
+        }
+    ].
 
 prompts(_State) ->
     [

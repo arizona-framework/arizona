@@ -114,6 +114,20 @@ session has no channel attached:
   key of the init params, so a handler can keep it and address its own
   session later.
 
+## Resource subscriptions and templates
+
+A client subscribes to a resource with `resources/subscribe` (advertise
+`resources => #{subscribe => true}` from `init/1`); the server announces a
+change with `resource_updated/1`, which fans `notifications/resources/updated`
+out to every subscribed session. It is built on the same pubsub path as
+`broadcast/3`: subscribe joins a per-uri channel, `resource_updated/1`
+broadcasts to it, and `resources/unsubscribe` (or session exit) leaves. Like
+the other pushes it needs a session with an attached SSE channel.
+
+The optional `resource_templates/1` callback advertises URI templates
+(`mem://user/{id}`) through `resources/templates/list`. Omit it for a server
+with no parameterized resources.
+
 ## Operational notes
 
 Session mode starts one process per `initialize`, and the count is
@@ -139,6 +153,7 @@ the official MCP SDK client.
 
 -export([broadcast/3]).
 -export([notify/3]).
+-export([resource_updated/1]).
 -export([progress/2]).
 -export([progress/3]).
 
@@ -149,6 +164,7 @@ the official MCP SDK client.
 %% The server-push and progress APIs are called by applications, not from
 %% within arizona.
 -ignore_xref([broadcast/3, notify/3]).
+-ignore_xref([resource_updated/1]).
 -ignore_xref([progress/2, progress/3]).
 
 %% --------------------------------------------------------------------
@@ -167,6 +183,7 @@ the official MCP SDK client.
 -export_type([tool_result/0]).
 -export_type([tool_error/0]).
 -export_type([resource/0]).
+-export_type([resource_template/0]).
 -export_type([resource_contents/0]).
 -export_type([resource_error/0]).
 -export_type([prompt/0]).
@@ -227,6 +244,13 @@ the official MCP SDK client.
 
 -nominal resource() :: #{
     uri := binary(),
+    name := binary(),
+    description => binary(),
+    mime_type => binary()
+}.
+
+-nominal resource_template() :: #{
+    uri_template := binary(),
     name := binary(),
     description => binary(),
     mime_type => binary()
@@ -314,6 +338,13 @@ resource-level failure (surfaced as a `-32002` error).
     | {error, resource_error(), state()}.
 
 -doc """
+Return the URI-template metadata advertised by `resources/templates/list`.
+Optional; a server with no parameterized resources omits it (the transport
+then returns an empty template list).
+""".
+-callback resource_templates(State :: state()) -> [resource_template()].
+
+-doc """
 Return the prompt metadata advertised by `prompts/list`. Optional;
 implement it (with `get_prompt/3`) when advertising the `prompts`
 capability.
@@ -342,6 +373,7 @@ is forwarded to the session's SSE channel. Optional; defaults to none.
 -optional_callbacks([
     resources/1,
     read_resource/2,
+    resource_templates/1,
     prompts/1,
     get_prompt/3,
     channels/1,
@@ -380,6 +412,18 @@ notify(SessionId, Method, Params) ->
         {ok, Pid} -> arizona_mcp_session:notify(Pid, Method, Params);
         error -> ok
     end.
+
+-doc """
+Announce that a resource changed to every session subscribed to its `Uri` (via
+`resources/subscribe`). Each subscribed session forwards
+`notifications/resources/updated` to its client; sessions that did not subscribe
+(or have no SSE channel) ignore it. Decoupled -- the caller holds no session
+reference.
+""".
+-spec resource_updated(Uri) -> ok when
+    Uri :: binary().
+resource_updated(Uri) ->
+    broadcast({mcp_resource, Uri}, ~"notifications/resources/updated", #{~"uri" => Uri}).
 
 -doc """
 Emit a `notifications/progress` update from a running `tools/call`, using the

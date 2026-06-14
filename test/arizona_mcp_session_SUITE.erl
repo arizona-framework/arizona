@@ -17,6 +17,10 @@
     ignores_unknown_messages/1,
     notify_pushes_to_channel/1,
     broadcast_reaches_subscribed_session/1,
+    resource_subscribe_receives_update/1,
+    resource_unsubscribe_stops_updates/1,
+    resource_subscribe_idempotent/1,
+    resource_unsubscribe_without_subscribe/1,
     notify_without_channel_is_noop/1,
     notify_unknown_session_is_noop/1,
     detach_re_enables_attach/1,
@@ -44,6 +48,10 @@ all() ->
         ignores_unknown_messages,
         notify_pushes_to_channel,
         broadcast_reaches_subscribed_session,
+        resource_subscribe_receives_update,
+        resource_unsubscribe_stops_updates,
+        resource_subscribe_idempotent,
+        resource_unsubscribe_without_subscribe,
         notify_without_channel_is_noop,
         notify_unknown_session_is_noop,
         detach_re_enables_attach,
@@ -181,6 +189,56 @@ broadcast_reaches_subscribed_session(_Config) ->
             ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Frame), ~"list_changed"))
     after 5000 -> ct:fail(no_broadcast)
     end.
+
+resource_subscribe_receives_update(_Config) ->
+    {_Id, Pid} = start(60000),
+    ok = arizona_mcp_session:attach_channel(Pid, self(), undefined),
+    Uri = ~"mem://greeting",
+    %% Dispatched in the session process, so the session joins the per-uri
+    %% channel; a resource_updated/1 broadcast then reaches it. subscribe answers
+    %% the MCP empty result.
+    {reply, #{~"result" := #{}}} =
+        arizona_mcp_session:dispatch(Pid, ~"resources/subscribe", #{~"uri" => Uri}, 1),
+    ok = arizona_mcp:resource_updated(Uri),
+    receive
+        {mcp_event, Frame} ->
+            Bin = iolist_to_binary(Frame),
+            ?assertNotEqual(nomatch, binary:match(Bin, ~"notifications/resources/updated")),
+            ?assertNotEqual(nomatch, binary:match(Bin, Uri))
+    after 5000 -> ct:fail(no_update)
+    end.
+
+resource_unsubscribe_stops_updates(_Config) ->
+    {_Id, Pid} = start(60000),
+    ok = arizona_mcp_session:attach_channel(Pid, self(), undefined),
+    Uri = ~"mem://greeting",
+    {reply, _} = arizona_mcp_session:dispatch(Pid, ~"resources/subscribe", #{~"uri" => Uri}, 1),
+    {reply, _} = arizona_mcp_session:dispatch(Pid, ~"resources/unsubscribe", #{~"uri" => Uri}, 2),
+    %% The synchronous unsubscribe has left the channel before we publish.
+    ok = arizona_mcp:resource_updated(Uri),
+    receive
+        {mcp_event, _} -> ct:fail(unexpected_update)
+    after 200 -> ok
+    end.
+
+resource_subscribe_idempotent(_Config) ->
+    {_Id, Pid} = start(60000),
+    Uri = ~"mem://greeting",
+    %% A second subscribe to the same uri is idempotent (already_joined -> ok).
+    {reply, #{~"result" := #{}}} =
+        arizona_mcp_session:dispatch(Pid, ~"resources/subscribe", #{~"uri" => Uri}, 1),
+    ?assertMatch(
+        {reply, #{~"result" := #{}}},
+        arizona_mcp_session:dispatch(Pid, ~"resources/subscribe", #{~"uri" => Uri}, 2)
+    ).
+
+resource_unsubscribe_without_subscribe(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% Unsubscribing a uri that was never subscribed is a no-op (not_joined -> ok).
+    ?assertMatch(
+        {reply, #{~"result" := #{}}},
+        arizona_mcp_session:dispatch(Pid, ~"resources/unsubscribe", #{~"uri" => ~"mem://never"}, 1)
+    ).
 
 notify_without_channel_is_noop(_Config) ->
     {_Id, Pid} = start(60000),

@@ -1104,6 +1104,16 @@ replayed. Two ways to push a `notifications/*` message:
 
 Both are no-ops for a session with no attached SSE channel.
 
+### Resource subscriptions and templates
+
+`resources/subscribe` joins the session to a per-uri `arizona_pubsub` channel
+(`{mcp_resource, Uri}`); `arizona_mcp:resource_updated/1` broadcasts to it, so every subscribed
+session forwards `notifications/resources/updated`. `resources/unsubscribe` leaves the channel, and
+`pg` auto-removes a session on exit, so there is no per-session subscription bookkeeping. It is the
+same fan-out path as `broadcast/3` + `channels/1`, just keyed per uri and joined at runtime. The
+optional `resource_templates/1` callback backs `resources/templates/list` (URI templates like
+`mem://user/{id}`), paginated through the same `list_reply`.
+
 ### Pagination
 
 The `*/list` methods paginate with opaque cursors, framework-side: the `tools/1` / `resources/1` /
