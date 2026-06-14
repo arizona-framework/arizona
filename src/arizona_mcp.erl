@@ -145,21 +145,26 @@ them at 100.
 
 ## Operational notes
 
-Session mode starts one process per `initialize`, and the count is
-unbounded -- a public deployment should gate the endpoint with the `auth`
-hook and a reverse-proxy rate limit. An abandoned session is reaped after
-its idle TTL (`session_ttl_ms`, default 5 minutes). Every request runs in a
-worker, so app code never blocks the session process: it stays responsive to
-cancels, idle-reap, and server pushes even while a tool runs. Buffered requests
-are served one at a time (so their state threading stays serialized) and bounded
-by `request_timeout_ms` (default 60s): a slower tool frees the client with a
--32603 while the session keeps running it. Any request is cancellable by a
+Session mode starts one process per `initialize`. The per-route session count
+is bounded by `max_sessions` (an `initialize` past the cap gets a `503`);
+unset, it is unbounded, so a public deployment should also gate the endpoint
+with the `auth` hook and a reverse-proxy rate limit. An abandoned session is
+reaped after its idle TTL (`session_ttl_ms`, default 5 minutes). Every request
+runs in a worker, so app code never blocks the session process: it stays
+responsive to cancels, idle-reap, and server pushes even while a tool runs.
+Buffered requests are served one at a time (so their state threading stays
+serialized) and bounded by `request_timeout_ms` (default 60s): a slower tool
+frees the client with a -32603 while the session keeps running it; queued
+buffered requests are capped at `session_max_pending` (default 100), past which
+a dispatch is rejected. Any request is cancellable by a
 `notifications/cancelled {requestId}` or a client disconnect, which frees the
 caller and kills the worker. An in-flight streaming worker holds its session
 alive (it is not idle-reaped mid-run); every worker is killed if the session is
-torn down. The optional `terminate/2` callback runs when a session ends (DELETE,
-idle TTL, or shutdown); it does **not** run in stateless mode, which has no
-session to end.
+torn down. An attached SSE channel gets a periodic keep-alive comment
+(`session_keepalive_ms`, default 30s; `infinity` disables) so idle proxies
+don't drop it. The optional `terminate/2` callback runs when a session ends
+(DELETE, idle TTL, or shutdown); it does **not** run in stateless mode, which
+has no session to end.
 
 Clients that use `fetch` (browsers and the official MCP SDK) refuse to
 connect to ports on the WHATWG Fetch "bad ports" blocklist, so mount the

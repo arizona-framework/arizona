@@ -81,11 +81,25 @@ sends `DELETE`) does not leak; every served request resets it.
     %% never blocks on app code. One worker at a time keeps the state threading
     %% serialized; the rest wait their turn in `dispatch_q`.
     dispatch_active :: active_dispatch() | undefined,
-    dispatch_q :: queue:queue(pending_dispatch())
+    dispatch_q :: queue:queue(pending_dispatch()),
+    %% Cap on queued (not-yet-running) buffered requests; a dispatch arriving
+    %% with the queue already full is rejected rather than enqueued.
+    max_pending :: pos_integer(),
+    %% Periodic SSE keep-alive comment over an attached channel, so idle proxies
+    %% don't close the stream. `infinity` disables it.
+    keepalive_ms :: pos_integer() | infinity,
+    keepalive_timer :: reference() | undefined
 }).
 
 -type state() :: #state{}.
--type session_opts() :: #{ttl_ms := pos_integer(), buffer_max := pos_integer()}.
+-type session_opts() :: #{
+    ttl_ms := pos_integer(),
+    buffer_max := pos_integer(),
+    max_pending := pos_integer(),
+    keepalive_ms := pos_integer() | infinity,
+    %% The request path the session was opened on, for the per-route session cap.
+    route_key := binary()
+}.
 %% A queued buffered request awaiting its turn: the caller to reply to, its
 %% request id, and the method/params to run.
 -type pending_dispatch() :: {gen_server:from(), arizona_jsonrpc:id(), binary(), map()}.
@@ -234,9 +248,16 @@ stop(Pid) ->
     SessionId :: binary(),
     Session :: arizona_mcp_handler:session(),
     SessionOpts :: session_opts().
-init({SessionId, Session, #{ttl_ms := TtlMs, buffer_max := BufferMax}}) ->
+init({SessionId, Session, SessionOpts}) ->
+    #{
+        ttl_ms := TtlMs,
+        buffer_max := BufferMax,
+        max_pending := MaxPending,
+        keepalive_ms := KeepaliveMs,
+        route_key := RouteKey
+    } = SessionOpts,
     proc_lib:set_label({arizona_mcp_session, SessionId}),
-    ok = arizona_mcp_session_registry:add(SessionId, self()),
+    ok = arizona_mcp_session_registry:add(SessionId, self(), RouteKey),
     Channels = subscribe_channels(Session),
     State = #state{
         id = SessionId,
@@ -249,7 +270,10 @@ init({SessionId, Session, #{ttl_ms := TtlMs, buffer_max := BufferMax}}) ->
         buffer_max = BufferMax,
         streams = #{},
         dispatch_active = undefined,
-        dispatch_q = queue:new()
+        dispatch_q = queue:new(),
+        max_pending = MaxPending,
+        keepalive_ms = KeepaliveMs,
+        keepalive_timer = undefined
     },
     {ok, refresh_ttl(State)}.
 
@@ -273,9 +297,17 @@ handle_call({dispatch, Method, Params, Id}, From, State) ->
             %% Everything else runs in a worker, replied to asynchronously, so a
             %% slow tool never blocks the session process (it stays responsive to
             %% cancels, idle-reap, and channel pushes). One worker at a time keeps
-            %% the state threading serialized; the rest wait in the queue.
-            Q1 = queue:in({From, Id, Method, Params}, State#state.dispatch_q),
-            {noreply, refresh_ttl(start_next_dispatch(State#state{dispatch_q = Q1}))}
+            %% the state threading serialized; the rest wait in the queue, up to
+            %% `max_pending` -- past that the session is overloaded and rejects.
+            #state{dispatch_q = Q, max_pending = MaxPending} = State,
+            case queue:len(Q) >= MaxPending of
+                true ->
+                    Error = arizona_jsonrpc:error(Id, -32603, ~"Session overloaded"),
+                    {reply, {error, Error}, State};
+                false ->
+                    Q1 = queue:in({From, Id, Method, Params}, Q),
+                    {noreply, refresh_ttl(start_next_dispatch(State#state{dispatch_q = Q1}))}
+            end
     end;
 handle_call({attach_channel, ChannelPid, LastEventId}, _From, State) ->
     case channel_alive(State) of
@@ -289,7 +321,7 @@ handle_call({attach_channel, ChannelPid, LastEventId}, _From, State) ->
             Mon = erlang:monitor(process, ChannelPid),
             Attached = Cleared#state{channel = ChannelPid, channel_mon = Mon},
             Replayed = replay(parse_last_event_id(LastEventId), Attached),
-            {reply, ok, refresh_ttl(Replayed)}
+            {reply, ok, arm_keepalive(refresh_ttl(Replayed))}
     end.
 
 -spec handle_cast(term(), state()) -> {noreply, state()}.
@@ -380,6 +412,14 @@ handle_info({'DOWN', MonRef, process, _WorkerPid, _Reason}, #state{streams = Str
         error ->
             {noreply, State}
     end;
+handle_info(mcp_keepalive, #state{channel = undefined} = State) ->
+    %% The channel detached before this tick; nothing to keep alive.
+    {noreply, State};
+handle_info(mcp_keepalive, #state{channel = ChannelPid} = State) ->
+    %% A comment line keeps idle proxies from closing the SSE stream. It carries
+    %% no event id, so it is never buffered for resumption.
+    ChannelPid ! {mcp_event, roadrunner_sse:comment(~"keepalive")},
+    {noreply, arm_keepalive(State)};
 handle_info(session_ttl_expired, State) ->
     {stop, normal, State};
 handle_info(_Info, State) ->
@@ -580,7 +620,8 @@ clear_channel(#state{channel = undefined} = State) ->
     State;
 clear_channel(#state{channel_mon = Mon} = State) ->
     demonitor_channel(Mon),
-    State#state{channel = undefined, channel_mon = undefined}.
+    %% No channel left to keep alive.
+    cancel_keepalive(State#state{channel = undefined, channel_mon = undefined}).
 
 %% Detach the channel: stop monitoring it, forget it, and re-arm the idle
 %% timer (the session is connectionless again and may be abandoned).
@@ -598,7 +639,7 @@ demonitor_channel(Mon) ->
 %% Cancel any pending timer, then arm a fresh one only when nothing holds it
 %% (so a streaming tool is never idle-reaped mid-run).
 refresh_ttl(#state{ttl_timer = Old, ttl_ms = TtlMs} = State) ->
-    cancel_ttl(Old),
+    cancel_timer(Old),
     case held_open(State) of
         true ->
             State#state{ttl_timer = undefined};
@@ -611,8 +652,23 @@ refresh_ttl(#state{ttl_timer = Old, ttl_ms = TtlMs} = State) ->
 held_open(#state{channel = Channel, streams = Streams}) ->
     Channel =/= undefined orelse Streams =/= #{}.
 
-cancel_ttl(undefined) ->
+%% Arm the periodic keep-alive timer, but only when enabled and a channel is
+%% attached (there is nothing to keep alive otherwise).
+arm_keepalive(#state{keepalive_ms = infinity} = State) ->
+    State;
+arm_keepalive(#state{channel = undefined} = State) ->
+    State;
+arm_keepalive(#state{keepalive_ms = Ms, keepalive_timer = Old} = State) ->
+    cancel_timer(Old),
+    Ref = erlang:send_after(Ms, self(), mcp_keepalive),
+    State#state{keepalive_timer = Ref}.
+
+cancel_keepalive(#state{keepalive_timer = Old} = State) ->
+    cancel_timer(Old),
+    State#state{keepalive_timer = undefined}.
+
+cancel_timer(undefined) ->
     ok;
-cancel_ttl(Ref) ->
+cancel_timer(Ref) ->
     _ = erlang:cancel_timer(Ref),
     ok.

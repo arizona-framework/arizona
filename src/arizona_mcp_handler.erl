@@ -97,6 +97,16 @@ protocol contract holds even when a tool raises.
 %% `request_timeout_ms` opt. Generous, since a tool may legitimately run a while.
 -define(DEFAULT_REQUEST_TIMEOUT_MS, 60000).
 
+%% Cap on queued (not-yet-running) buffered requests per session, overridable via
+%% the route's `session_max_pending` opt. Generous -- a well-behaved client has
+%% at most a handful in flight.
+-define(DEFAULT_MAX_PENDING, 100).
+
+%% Interval between SSE keep-alive comments over an attached channel, overridable
+%% via the route's `session_keepalive_ms` opt (`infinity` disables it). Shorter
+%% than common 60s proxy idle timeouts.
+-define(DEFAULT_KEEPALIVE_MS, 30000).
+
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
@@ -389,7 +399,7 @@ reply_session(#{method := Method, params := Params, id := Id} = Request, Req, Op
             session_notification(Method, Params, Req),
             roadrunner_resp:status(202);
         _ when Method =:= ~"initialize" ->
-            session_initialize(Params, Id, Opts);
+            session_initialize(Params, Id, Req, Opts);
         _ ->
             session_request(Method, Params, Id, Request, Req, request_timeout(Opts))
     end.
@@ -414,7 +424,29 @@ session_notification(_Method, _Params, _Req) ->
 request_timeout(Opts) ->
     maps:get(request_timeout_ms, Opts, ?DEFAULT_REQUEST_TIMEOUT_MS).
 
-session_initialize(Params, Id, #{handler := Mod} = Opts) ->
+session_initialize(Params, Id, Req, Opts) ->
+    %% The route key is the request path, so the `max_sessions` cap is per route
+    %% (two routes sharing a handler module still cap independently).
+    RouteKey = roadrunner_req:path(Req),
+    case at_capacity(RouteKey, Opts) of
+        true ->
+            roadrunner_resp:json(503, arizona_jsonrpc:error(Id, -32603, ~"Server at capacity"));
+        false ->
+            start_initialized_session(Params, Id, RouteKey, Opts)
+    end.
+
+%% Reject a new session once this route is at its `max_sessions` cap. The count
+%% is read just before starting, so a burst of concurrent initializes can admit
+%% a few over the cap -- fine for a soft limit.
+at_capacity(RouteKey, Opts) ->
+    case maps:get(max_sessions, Opts, infinity) of
+        infinity ->
+            false;
+        Max ->
+            arizona_mcp_session_registry:count(RouteKey) >= Max
+    end.
+
+start_initialized_session(Params, Id, RouteKey, #{handler := Mod} = Opts) ->
     SessionId = generate_session_id(),
     %% A crashing `init/1` is guarded the same way the stateless path guards
     %% dispatch: answer `-32603` rather than killing the connection.
@@ -426,7 +458,10 @@ session_initialize(Params, Id, #{handler := Mod} = Opts) ->
         {ServerInfo, #{caps := Caps} = Session} = open_session(Mod, InitParams, page_size(Opts)),
         SessionOpts = #{
             ttl_ms => maps:get(session_ttl_ms, Opts, ?DEFAULT_TTL_MS),
-            buffer_max => maps:get(session_buffer_max, Opts, ?DEFAULT_BUFFER_MAX)
+            buffer_max => maps:get(session_buffer_max, Opts, ?DEFAULT_BUFFER_MAX),
+            max_pending => maps:get(session_max_pending, Opts, ?DEFAULT_MAX_PENDING),
+            keepalive_ms => maps:get(session_keepalive_ms, Opts, ?DEFAULT_KEEPALIVE_MS),
+            route_key => RouteKey
         },
         {ok, _Pid} = arizona_mcp_sup:start_session(SessionId, Session, SessionOpts),
         Result = arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params)),
