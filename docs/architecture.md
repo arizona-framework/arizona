@@ -1114,6 +1114,15 @@ same fan-out path as `broadcast/3` + `channels/1`, just keyed per uri and joined
 optional `resource_templates/1` callback backs `resources/templates/list` (URI templates like
 `mem://user/{id}`), paginated through the same `list_reply`.
 
+### Logging and completion
+
+`logging/setLevel` stores a minimum severity in the session map (`log_min_severity`, default `info`),
+threaded back like any other state; `arizona_mcp:log/3` resolves the level severity caller-side and
+casts to the session, which emits a `notifications/message` only when the message is at or above the
+stored minimum. `completion/complete` decodes the ref (`{prompt, Name}` | `{resource, Uri}`) and the
+partial argument, calls the optional `complete/3` callback, and caps the returned values at 100,
+setting `hasMore`. Both are capability-gated (`logging` / `completions`).
+
 ### Pagination
 
 The `*/list` methods paginate with opaque cursors, framework-side: the `tools/1` / `resources/1` /

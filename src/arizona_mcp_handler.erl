@@ -50,14 +50,16 @@ protocol contract holds even when a tool raises.
 %% --------------------------------------------------------------------
 
 %% The dispatch context: the handler module, its state, the capabilities
-%% negotiated at initialize, and the list page size. `arizona_mcp_session` holds
-%% one across a stateful connection; `dispatch/3` builds an ephemeral one per
+%% negotiated at initialize, the list page size, and the minimum log severity
+%% the client set (via `logging/setLevel`). `arizona_mcp_session` holds one
+%% across a stateful connection; `dispatch/3` builds an ephemeral one per
 %% request.
 -type session() :: #{
     mod := module(),
     state := arizona_mcp:state(),
     caps := arizona_mcp:capabilities(),
-    page_size := pos_integer()
+    page_size := pos_integer(),
+    log_min_severity := 0..7
 }.
 
 %% An optional per-route auth hook, run after the Origin check and before any
@@ -85,6 +87,10 @@ protocol contract holds even when a tool raises.
 %% Page size for the `*/list` methods, overridable via the route's `page_size`
 %% opt. A list at or under this size returns no cursor; a larger one paginates.
 -define(DEFAULT_PAGE_SIZE, 50).
+
+%% The minimum log level before the client sends `logging/setLevel`: `info`, so
+%% operational logs flow but `debug` is suppressed until requested.
+-define(DEFAULT_LOG_LEVEL, info).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -238,7 +244,14 @@ dispatch(Mod, #{method := Method, params := Params, id := Id}, Ctx) ->
     Session :: session().
 open_session(Mod, InitParams, PageSize) ->
     {ok, ServerInfo, Caps, State} = Mod:init(InitParams),
-    {ServerInfo, #{mod => Mod, state => State, caps => Caps, page_size => PageSize}}.
+    Session = #{
+        mod => Mod,
+        state => State,
+        caps => Caps,
+        page_size => PageSize,
+        log_min_severity => arizona_mcp:level_severity(?DEFAULT_LOG_LEVEL)
+    },
+    {ServerInfo, Session}.
 
 %% Build the `initialize` result: negotiated protocol version, advertised
 %% capabilities, and the server identity.
@@ -622,6 +635,10 @@ handle_method(~"prompts/list", Params, Id, Session) ->
     end);
 handle_method(~"prompts/get", Params, Id, Session) ->
     capability(prompts, Id, Session, fun(S) -> get_prompt(Params, Id, S) end);
+handle_method(~"logging/setLevel", Params, Id, Session) ->
+    capability(logging, Id, Session, fun(S) -> set_level(Params, Id, S) end);
+handle_method(~"completion/complete", Params, Id, Session) ->
+    capability(completions, Id, Session, fun(S) -> complete(Params, Id, S) end);
 handle_method(_Method, _Params, Id, Session) ->
     method_not_found(Id, Session).
 
@@ -799,6 +816,60 @@ get_prompt(Params, Id, #{mod := Mod, state := State} = Session) ->
             prompt_messages(Mod:get_prompt(Name, Args, State), Id, Session)
         end
     ).
+
+%% `logging/setLevel` stores the client's minimum severity in the session, so a
+%% later `log/3` below it is dropped. A bad or missing level is a -32602.
+set_level(#{~"level" := LevelBin}, Id, Session) when is_binary(LevelBin) ->
+    case arizona_mcp:parse_level(LevelBin) of
+        {ok, Level} ->
+            Session1 = Session#{log_min_severity := arizona_mcp:level_severity(Level)},
+            {{reply, arizona_jsonrpc:result(Id, #{})}, Session1};
+        error ->
+            {
+                {error,
+                    arizona_jsonrpc:error(Id, -32602, <<"Invalid log level: ", LevelBin/binary>>)},
+                Session
+            }
+    end;
+set_level(_Params, Id, Session) ->
+    {{error, arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing level")}, Session}.
+
+%% `completion/complete` decodes the ref + argument, runs the app's `complete/3`,
+%% caps the values at the MCP limit of 100, and reports `hasMore`. A malformed
+%% ref or argument is a -32602.
+complete(#{~"ref" := Ref, ~"argument" := Arg}, Id, #{mod := Mod, state := State} = Session) ->
+    case {decode_ref(Ref), decode_arg(Arg)} of
+        {{ok, DecRef}, {ok, DecArg}} ->
+            {reply, Values, NewState} = Mod:complete(DecRef, DecArg, State),
+            Result = completion_result(Values),
+            {{reply, arizona_jsonrpc:result(Id, Result)}, Session#{state := NewState}};
+        _ ->
+            {
+                {error, arizona_jsonrpc:error(Id, -32602, ~"Invalid completion ref or argument")},
+                Session
+            }
+    end;
+complete(_Params, Id, Session) ->
+    {
+        {error, arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing ref or argument")},
+        Session
+    }.
+
+decode_ref(#{~"type" := ~"ref/prompt", ~"name" := Name}) when is_binary(Name) ->
+    {ok, {prompt, Name}};
+decode_ref(#{~"type" := ~"ref/resource", ~"uri" := Uri}) when is_binary(Uri) ->
+    {ok, {resource, Uri}};
+decode_ref(_Ref) ->
+    error.
+
+decode_arg(#{~"name" := Name, ~"value" := Value}) when is_binary(Name), is_binary(Value) ->
+    {ok, {Name, Value}};
+decode_arg(_Arg) ->
+    error.
+
+completion_result(Values) ->
+    Capped = lists:sublist(Values, 100),
+    #{~"completion" => #{~"values" => Capped, ~"hasMore" => length(Values) > 100}}.
 
 %% The callback ran -- thread its returned state back into the session whether
 %% it succeeded or failed in-band, since a failed-but-ran tool may have

@@ -10,12 +10,20 @@
 -export([resource_templates/1]).
 -export([prompts/1]).
 -export([get_prompt/3]).
+-export([complete/3]).
 -export([channels/1]).
 -export([terminate/2]).
 
 init(_InitParams) ->
     {ok, #{name => ~"arizona_test", version => ~"0.1.0"},
-        #{tools => #{}, resources => #{subscribe => true}, prompts => #{}}, #{}}.
+        #{
+            tools => #{},
+            resources => #{subscribe => true},
+            prompts => #{},
+            logging => #{},
+            completions => #{}
+        },
+        #{}}.
 
 tools(_State) ->
     [
@@ -156,6 +164,20 @@ get_prompt(~"count", _Args, State) ->
     Count = maps:get(count, State, 0) + 1,
     Message = #{role => ~"user", content => #{type => ~"text", text => integer_to_binary(Count)}},
     {reply, #{messages => [Message]}, State#{count => Count}}.
+
+complete({prompt, ~"greet"}, {~"who", Value}, State) ->
+    %% Prefix-complete the `who` argument of the greet prompt.
+    Candidates = [~"Ada", ~"Adam", ~"Alan"],
+    {reply, [Name || Name <- Candidates, is_prefix(Value, Name)], State};
+complete(_Ref, _Arg, State) ->
+    {reply, [], State}.
+
+is_prefix(Prefix, Bin) ->
+    Size = byte_size(Prefix),
+    case Bin of
+        <<Prefix:Size/binary, _/binary>> -> true;
+        _ -> false
+    end.
 
 channels(_State) ->
     [mcp_test_channel].
