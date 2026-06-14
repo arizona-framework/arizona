@@ -100,6 +100,17 @@ try {
   const prompt = await client.getPrompt({ name: 'greet', arguments: { who: 'Ada' } });
   check("prompts/get => 'Hello, Ada'", JSON.stringify(prompt).includes('Hello, Ada'));
 
+  // logging/setLevel round-trips (delivery + filtering is covered by the Erlang
+  // suites, where the server can emit a log mid-test); a throw here fails.
+  await client.setLoggingLevel('warning');
+  check('logging/setLevel round-trip', true);
+
+  const completion = await client.complete({
+    ref: { type: 'ref/prompt', name: 'greet' },
+    argument: { name: 'who', value: 'Ad' },
+  });
+  check('completion/complete has Ada', completion.completion?.values?.includes('Ada'));
+
   await client.close();
 } catch (e) {
   console.log(`  ERROR  ${e?.message ?? e}`);

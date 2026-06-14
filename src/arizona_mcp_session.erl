@@ -28,6 +28,7 @@ sends `DELETE`) does not leak; every served request resets it.
 -export([attach_channel/3]).
 -export([detach_channel/2]).
 -export([notify/3]).
+-export([log/4]).
 -export([stop/1]).
 
 %% --------------------------------------------------------------------
@@ -155,6 +156,19 @@ session's SSE channel. A no-op if no channel is attached. Fire-and-forget.
 notify(Pid, Method, Params) ->
     gen_server:cast(Pid, {notify, Method, Params}).
 
+-doc """
+Send a `notifications/message` log to the session, dropped if `Severity` is
+below the session's set minimum (`logging/setLevel`). `Level` is the wire level
+atom and `Data` the message body. Fire-and-forget.
+""".
+-spec log(Pid, Severity, Level, Data) -> ok when
+    Pid :: pid(),
+    Severity :: 0..7,
+    Level :: arizona_mcp:log_level(),
+    Data :: term().
+log(Pid, Severity, Level, Data) ->
+    gen_server:cast(Pid, {log, Severity, Level, Data}).
+
 -doc "Terminate the session (the `DELETE` teardown).".
 -spec stop(Pid) -> ok when
     Pid :: pid().
@@ -215,6 +229,15 @@ handle_cast({detach_channel, ChannelPid}, #state{channel = ChannelPid} = State) 
     {noreply, do_detach(State)};
 handle_cast({notify, Method, Params}, State) ->
     {noreply, emit(Method, Params, State)};
+handle_cast({log, Severity, Level, Data}, #state{session = Session} = State) ->
+    %% Deliver only when at or above the level the client set via setLevel.
+    case Severity >= maps:get(log_min_severity, Session) of
+        true ->
+            Params = #{~"level" => atom_to_binary(Level), ~"data" => Data},
+            {noreply, emit(~"notifications/message", Params, State)};
+        false ->
+            {noreply, State}
+    end;
 handle_cast(
     {run_streaming_tool, Name, Args, Id, Token, ConnPid}, #state{session = Session} = State
 ) ->

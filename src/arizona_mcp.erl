@@ -128,6 +128,16 @@ The optional `resource_templates/1` callback advertises URI templates
 (`mem://user/{id}`) through `resources/templates/list`. Omit it for a server
 with no parameterized resources.
 
+## Logging and completion
+
+With `logging => #{}` advertised, the client sets a minimum severity via
+`logging/setLevel` and the server pushes logs with `log/3` (a
+`notifications/message`); a message below the session's level is dropped (the
+default is `info`). With `completions => #{}` advertised, the optional
+`complete/3` callback autocompletes a prompt or resource argument from
+`completion/complete` -- it returns the matching strings and the transport caps
+them at 100.
+
 ## Operational notes
 
 Session mode starts one process per `initialize`, and the count is
@@ -154,6 +164,9 @@ the official MCP SDK client.
 -export([broadcast/3]).
 -export([notify/3]).
 -export([resource_updated/1]).
+-export([log/3]).
+-export([level_severity/1]).
+-export([parse_level/1]).
 -export([progress/2]).
 -export([progress/3]).
 
@@ -165,6 +178,7 @@ the official MCP SDK client.
 %% within arizona.
 -ignore_xref([broadcast/3, notify/3]).
 -ignore_xref([resource_updated/1]).
+-ignore_xref([log/3]).
 -ignore_xref([progress/2, progress/3]).
 
 %% --------------------------------------------------------------------
@@ -191,6 +205,9 @@ the official MCP SDK client.
 -export_type([prompt_message/0]).
 -export_type([prompt_result/0]).
 -export_type([prompt_error/0]).
+-export_type([log_level/0]).
+-export_type([complete_ref/0]).
+-export_type([complete_argument/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -285,6 +302,24 @@ the official MCP SDK client.
 
 -nominal prompt_error() :: binary().
 
+%% The RFC 5424 / syslog severities MCP uses, ascending. `logging/setLevel` sets
+%% the minimum; a message at or above it is delivered.
+-nominal log_level() ::
+    debug
+    | info
+    | notice
+    | warning
+    | error
+    | critical
+    | alert
+    | emergency.
+
+%% What `completion/complete` is completing: a prompt or a resource argument.
+-nominal complete_ref() :: {prompt, binary()} | {resource, binary()}.
+
+%% The argument being completed: its name and the partial value typed so far.
+-nominal complete_argument() :: {binary(), binary()}.
+
 %% --------------------------------------------------------------------
 %% Behaviour callbacks
 %% --------------------------------------------------------------------
@@ -361,6 +396,16 @@ decoded `arguments` object. Return `{reply, Result, State}` on success or
     | {error, prompt_error(), state()}.
 
 -doc """
+Autocomplete a prompt or resource argument, dispatched from
+`completion/complete`. `Ref` is `{prompt, Name}` or `{resource, Uri}`; `Arg` is
+`{ArgName, PartialValue}`. Return `{reply, Values, State}` with the matching
+completion strings (the transport caps them at 100 and sets `hasMore`).
+Optional; implement it when advertising the `completions` capability.
+""".
+-callback complete(Ref :: complete_ref(), Arg :: complete_argument(), State :: state()) ->
+    {reply, [binary()], state()}.
+
+-doc """
 Return the pubsub channels this session subscribes to for server-initiated
 notifications. Anything published to one of these channels via `broadcast/3`
 is forwarded to the session's SSE channel. Optional; defaults to none.
@@ -376,6 +421,7 @@ is forwarded to the session's SSE channel. Optional; defaults to none.
     resource_templates/1,
     prompts/1,
     get_prompt/3,
+    complete/3,
     channels/1,
     terminate/2
 ]).
@@ -424,6 +470,54 @@ reference.
     Uri :: binary().
 resource_updated(Uri) ->
     broadcast({mcp_resource, Uri}, ~"notifications/resources/updated", #{~"uri" => Uri}).
+
+-doc """
+Send a log message (a `notifications/message`) to one session by its
+`Mcp-Session-Id`. Dropped if `Level` is below the level the client set via
+`logging/setLevel` (default `info`), or if the session is unknown/expired or has
+no SSE channel. `Data` is any JSON-encodable term. Like `notify/3`, the id comes
+from the handler's `initialize` params.
+""".
+-spec log(SessionId, Level, Data) -> ok when
+    SessionId :: binary(),
+    Level :: log_level(),
+    Data :: term().
+log(SessionId, Level, Data) ->
+    %% Severity is resolved caller-side, so a bad level crashes the caller
+    %% rather than the session.
+    Severity = level_severity(Level),
+    case arizona_mcp_session_registry:lookup(SessionId) of
+        {ok, Pid} -> arizona_mcp_session:log(Pid, Severity, Level, Data);
+        error -> ok
+    end.
+
+-doc false.
+%% The numeric severity of a level, ascending (debug lowest). The transport
+%% delivers a message only when its severity is at or above the session's set
+%% minimum. Framework-internal; shared by the handler and `log/3`.
+-spec level_severity(log_level()) -> 0..7.
+level_severity(debug) -> 0;
+level_severity(info) -> 1;
+level_severity(notice) -> 2;
+level_severity(warning) -> 3;
+level_severity(error) -> 4;
+level_severity(critical) -> 5;
+level_severity(alert) -> 6;
+level_severity(emergency) -> 7.
+
+-doc false.
+%% Parse a wire log level string into its atom, or `error` for an unknown one
+%% (`logging/setLevel` answers a -32602). Framework-internal.
+-spec parse_level(binary()) -> {ok, log_level()} | error.
+parse_level(~"debug") -> {ok, debug};
+parse_level(~"info") -> {ok, info};
+parse_level(~"notice") -> {ok, notice};
+parse_level(~"warning") -> {ok, warning};
+parse_level(~"error") -> {ok, error};
+parse_level(~"critical") -> {ok, critical};
+parse_level(~"alert") -> {ok, alert};
+parse_level(~"emergency") -> {ok, emergency};
+parse_level(_Other) -> error.
 
 -doc """
 Emit a `notifications/progress` update from a running `tools/call`, using the

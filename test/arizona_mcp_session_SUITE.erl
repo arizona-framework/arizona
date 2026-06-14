@@ -21,8 +21,11 @@
     resource_unsubscribe_stops_updates/1,
     resource_subscribe_idempotent/1,
     resource_unsubscribe_without_subscribe/1,
+    log_filtered_by_default_level/1,
+    log_respects_set_level/1,
     notify_without_channel_is_noop/1,
     notify_unknown_session_is_noop/1,
+    log_unknown_session_is_noop/1,
     detach_re_enables_attach/1,
     channel_cancels_idle_ttl/1,
     detach_re_arms_ttl/1,
@@ -52,8 +55,11 @@ all() ->
         resource_unsubscribe_stops_updates,
         resource_subscribe_idempotent,
         resource_unsubscribe_without_subscribe,
+        log_filtered_by_default_level,
+        log_respects_set_level,
         notify_without_channel_is_noop,
         notify_unknown_session_is_noop,
+        log_unknown_session_is_noop,
         detach_re_enables_attach,
         channel_cancels_idle_ttl,
         detach_re_arms_ttl,
@@ -240,6 +246,39 @@ resource_unsubscribe_without_subscribe(_Config) ->
         arizona_mcp_session:dispatch(Pid, ~"resources/unsubscribe", #{~"uri" => ~"mem://never"}, 1)
     ).
 
+log_filtered_by_default_level(_Config) ->
+    {Id, Pid} = start(60000),
+    ok = arizona_mcp_session:attach_channel(Pid, self(), undefined),
+    %% Default level is info: debug drops, info delivers. Casts are ordered, so
+    %% the only event that arrives is the info one.
+    ok = arizona_mcp:log(Id, debug, ~"should-drop"),
+    ok = arizona_mcp:log(Id, info, ~"should-send"),
+    receive
+        {mcp_event, Frame} ->
+            Bin = iolist_to_binary(Frame),
+            ?assertNotEqual(nomatch, binary:match(Bin, ~"notifications/message")),
+            ?assertNotEqual(nomatch, binary:match(Bin, ~"should-send")),
+            ?assertEqual(nomatch, binary:match(Bin, ~"should-drop"))
+    after 5000 -> ct:fail(no_log)
+    end,
+    no_more_events().
+
+log_respects_set_level(_Config) ->
+    {Id, Pid} = start(60000),
+    ok = arizona_mcp_session:attach_channel(Pid, self(), undefined),
+    %% Raise the threshold to warning: info now drops, error delivers.
+    {reply, #{~"result" := #{}}} =
+        arizona_mcp_session:dispatch(Pid, ~"logging/setLevel", #{~"level" => ~"warning"}, 1),
+    ok = arizona_mcp:log(Id, info, ~"info-drop"),
+    ok = arizona_mcp:log(Id, error, ~"error-send"),
+    receive
+        {mcp_event, Frame} ->
+            Bin = iolist_to_binary(Frame),
+            ?assertNotEqual(nomatch, binary:match(Bin, ~"error-send")),
+            ?assertEqual(nomatch, binary:match(Bin, ~"info-drop"))
+    after 5000 -> ct:fail(no_log)
+    end.
+
 notify_without_channel_is_noop(_Config) ->
     {_Id, Pid} = start(60000),
     ok = arizona_mcp_session:notify(Pid, ~"notifications/message", #{}),
@@ -252,6 +291,10 @@ notify_without_channel_is_noop(_Config) ->
 notify_unknown_session_is_noop(_Config) ->
     %% arizona_mcp:notify/3 to an unknown session id is a silent no-op.
     ?assertEqual(ok, arizona_mcp:notify(~"no-such-session", ~"notifications/message", #{})).
+
+log_unknown_session_is_noop(_Config) ->
+    %% arizona_mcp:log/3 to an unknown session id is a silent no-op.
+    ?assertEqual(ok, arizona_mcp:log(~"no-such-session", info, ~"x")).
 
 detach_re_enables_attach(_Config) ->
     {_Id, Pid} = start(60000),
@@ -321,7 +364,8 @@ terminate_calls_app(_Config) ->
         mod => arizona_mcp_test_server,
         state => #{terminate_pid => self()},
         caps => #{tools => #{}},
-        page_size => 50
+        page_size => 50,
+        log_min_severity => 1
     },
     {ok, Pid} = arizona_mcp_sup:start_session(Id, Session, #{ttl_ms => 60000, buffer_max => 256}),
     ok = arizona_mcp_session:stop(Pid),
@@ -380,6 +424,9 @@ session() ->
     #{
         mod => arizona_mcp_test_server,
         state => #{},
-        caps => #{tools => #{}, resources => #{}, prompts => #{}},
-        page_size => 50
+        caps => #{
+            tools => #{}, resources => #{}, prompts => #{}, logging => #{}, completions => #{}
+        },
+        page_size => 50,
+        log_min_severity => 1
     }.

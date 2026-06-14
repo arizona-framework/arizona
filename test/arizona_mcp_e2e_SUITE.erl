@@ -12,6 +12,7 @@
     post_tools_list_paginates/1,
     post_resources_read/1,
     post_resources_templates_list/1,
+    post_completion_complete/1,
     post_prompts_get/1,
     get_returns_405/1,
     post_disallowed_origin_403/1,
@@ -25,6 +26,7 @@
     session_get_without_id_400/1,
     session_channel_receives_push/1,
     session_resource_subscribe_pushes_update/1,
+    session_set_level_filters_log/1,
     session_second_channel_409/1,
     session_survives_channel_disconnect/1,
     session_resumes_with_last_event_id/1,
@@ -47,6 +49,7 @@ all() ->
         post_tools_list_paginates,
         post_resources_read,
         post_resources_templates_list,
+        post_completion_complete,
         post_prompts_get,
         get_returns_405,
         post_disallowed_origin_403,
@@ -60,6 +63,7 @@ all() ->
         session_get_without_id_400,
         session_channel_receives_push,
         session_resource_subscribe_pushes_update,
+        session_set_level_filters_log,
         session_second_channel_409,
         session_survives_channel_disconnect,
         session_resumes_with_last_event_id,
@@ -244,6 +248,18 @@ post_resources_templates_list(Config) ->
     ?assertEqual(~"mem://user/{id}", maps:get(~"uriTemplate", Template)),
     ?assertEqual(~"user", maps:get(~"name", Template)).
 
+post_completion_complete(Config) ->
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":16,"method":"completion/complete",
+     "params":{"ref":{"type":"ref/prompt","name":"greet"},
+               "argument":{"name":"who","value":"Ad"}}}
+    """,
+    Resp = post(Config, "/mcp", [], Body),
+    ?assertEqual(200, status_code(Resp)),
+    #{~"result" := #{~"completion" := #{~"values" := Values}}} = body_json(Resp),
+    ?assertEqual([~"Ada", ~"Adam"], Values).
+
 post_prompts_get(Config) ->
     Body =
         ~"""
@@ -373,6 +389,25 @@ session_resource_subscribe_pushes_update(Config) ->
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Data, ~"notifications/resources/updated")),
     ?assertNotEqual(nomatch, binary:match(Data, ~"mem://greeting")).
+
+session_set_level_filters_log(Config) ->
+    SessionId = open_session(Config),
+    {ok, Sock} = open_channel(Config, SessionId),
+    %% Raise the threshold to warning via the wire, then log info (dropped) and
+    %% error (delivered) in-node.
+    SetBody =
+        ~"""
+    {"jsonrpc":"2.0","id":17,"method":"logging/setLevel","params":{"level":"warning"}}
+    """,
+    SetResp = post(Config, "/mcp-session", session_header(SessionId), SetBody),
+    ?assertEqual(200, status_code(SetResp)),
+    ok = arizona_mcp:log(SessionId, info, ~"info-drop"),
+    ok = arizona_mcp:log(SessionId, error, ~"error-send"),
+    Data = recv_until(Sock, ~"error-send", 5000),
+    gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"notifications/message")),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"error-send")),
+    ?assertEqual(nomatch, binary:match(Data, ~"info-drop")).
 
 session_second_channel_409(Config) ->
     SessionId = open_session(Config),

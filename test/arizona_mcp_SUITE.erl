@@ -38,6 +38,15 @@
     dispatch_prompts_get_unknown/1,
     dispatch_prompts_get_missing_name/1,
     dispatch_prompts_unsupported/1,
+    dispatch_set_level/1,
+    dispatch_set_level_invalid/1,
+    dispatch_set_level_missing/1,
+    dispatch_logging_unsupported/1,
+    dispatch_complete/1,
+    dispatch_complete_invalid_ref/1,
+    dispatch_complete_unsupported/1,
+    log_level_severities/1,
+    parse_log_levels/1,
     pagination_tools_walk/1,
     pagination_resources_walk/1,
     pagination_no_cursor_when_list_fits/1,
@@ -97,6 +106,15 @@ all() ->
         dispatch_prompts_get_unknown,
         dispatch_prompts_get_missing_name,
         dispatch_prompts_unsupported,
+        dispatch_set_level,
+        dispatch_set_level_invalid,
+        dispatch_set_level_missing,
+        dispatch_logging_unsupported,
+        dispatch_complete,
+        dispatch_complete_invalid_ref,
+        dispatch_complete_unsupported,
+        log_level_severities,
+        parse_log_levels,
         pagination_tools_walk,
         pagination_resources_walk,
         pagination_no_cursor_when_list_fits,
@@ -123,7 +141,13 @@ dispatch_initialize(_Config) ->
     {reply, #{~"result" := Result}} = dispatch(~"initialize", Params, 1),
     ?assertEqual(~"2025-06-18", maps:get(~"protocolVersion", Result)),
     ?assertEqual(
-        #{tools => #{}, resources => #{subscribe => true}, prompts => #{}},
+        #{
+            tools => #{},
+            resources => #{subscribe => true},
+            prompts => #{},
+            logging => #{},
+            completions => #{}
+        },
         maps:get(~"capabilities", Result)
     ),
     ?assertEqual(
@@ -365,6 +389,70 @@ dispatch_prompts_unsupported(_Config) ->
     ?assertEqual(-32601, Code).
 
 %% --------------------------------------------------------------------
+%% Logging (logging/setLevel) and completion (completion/complete)
+%% --------------------------------------------------------------------
+
+dispatch_set_level(_Config) ->
+    %% setLevel answers the MCP empty result.
+    {reply, #{~"result" := Result}} = dispatch(~"logging/setLevel", #{~"level" => ~"warning"}, 40),
+    ?assertEqual(#{}, Result).
+
+dispatch_set_level_invalid(_Config) ->
+    {error, #{~"error" := #{~"code" := Code}}} =
+        dispatch(~"logging/setLevel", #{~"level" => ~"loud"}, 41),
+    ?assertEqual(-32602, Code).
+
+dispatch_set_level_missing(_Config) ->
+    {error, #{~"error" := #{~"code" := Code}}} = dispatch(~"logging/setLevel", #{}, 42),
+    ?assertEqual(-32602, Code).
+
+dispatch_logging_unsupported(_Config) ->
+    {error, #{~"error" := #{~"code" := Code}}} =
+        dispatch_on(arizona_mcp_minimal_server, ~"logging/setLevel", #{~"level" => ~"info"}, 43),
+    ?assertEqual(-32601, Code).
+
+dispatch_complete(_Config) ->
+    Params = #{
+        ~"ref" => #{~"type" => ~"ref/prompt", ~"name" => ~"greet"},
+        ~"argument" => #{~"name" => ~"who", ~"value" => ~"Ad"}
+    },
+    {reply, #{~"result" := #{~"completion" := Completion}}} =
+        dispatch(~"completion/complete", Params, 44),
+    ?assertEqual([~"Ada", ~"Adam"], maps:get(~"values", Completion)),
+    ?assertEqual(false, maps:get(~"hasMore", Completion)).
+
+dispatch_complete_invalid_ref(_Config) ->
+    Params = #{
+        ~"ref" => #{~"type" => ~"ref/bogus"},
+        ~"argument" => #{~"name" => ~"who", ~"value" => ~"Ad"}
+    },
+    {error, #{~"error" := #{~"code" := Code}}} = dispatch(~"completion/complete", Params, 45),
+    ?assertEqual(-32602, Code).
+
+dispatch_complete_unsupported(_Config) ->
+    Params = #{
+        ~"ref" => #{~"type" => ~"ref/prompt", ~"name" => ~"greet"},
+        ~"argument" => #{~"name" => ~"who", ~"value" => ~"Ad"}
+    },
+    {error, #{~"error" := #{~"code" := Code}}} =
+        dispatch_on(arizona_mcp_minimal_server, ~"completion/complete", Params, 46),
+    ?assertEqual(-32601, Code).
+
+log_level_severities(_Config) ->
+    %% Every level maps to a strictly ascending severity.
+    Levels = [debug, info, notice, warning, error, critical, alert, emergency],
+    ?assertEqual([0, 1, 2, 3, 4, 5, 6, 7], [arizona_mcp:level_severity(L) || L <- Levels]).
+
+parse_log_levels(_Config) ->
+    %% Every level round-trips from its wire string; an unknown one is `error`.
+    Levels = [debug, info, notice, warning, error, critical, alert, emergency],
+    lists:foreach(
+        fun(L) -> ?assertEqual({ok, L}, arizona_mcp:parse_level(atom_to_binary(L))) end,
+        Levels
+    ),
+    ?assertEqual(error, arizona_mcp:parse_level(~"nope")).
+
+%% --------------------------------------------------------------------
 %% Pagination (framework-side opaque cursors over the */list methods)
 %% --------------------------------------------------------------------
 
@@ -517,7 +605,8 @@ session() ->
         mod => ?SERVER,
         state => #{},
         caps => #{tools => #{}, resources => #{}, prompts => #{}},
-        page_size => 50
+        page_size => 50,
+        log_min_severity => 1
     }.
 
 %% Receive one relayed progress notification, returning its `progress` amount.
