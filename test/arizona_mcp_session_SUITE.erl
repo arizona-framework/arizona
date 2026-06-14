@@ -29,6 +29,12 @@
     dispatch_bounded_timeout/1,
     streaming_tool_holds_session/1,
     terminate_kills_streaming_worker/1,
+    buffered_dispatch_runs_in_worker/1,
+    buffered_cancel_frees_caller/1,
+    buffered_worker_crash_frees_caller/1,
+    buffered_block_does_not_wedge_session/1,
+    buffered_requests_serialize/1,
+    cancel_queued_buffered_request/1,
     notify_without_channel_is_noop/1,
     notify_unknown_session_is_noop/1,
     log_unknown_session_is_noop/1,
@@ -69,6 +75,12 @@ all() ->
         dispatch_bounded_timeout,
         streaming_tool_holds_session,
         terminate_kills_streaming_worker,
+        buffered_dispatch_runs_in_worker,
+        buffered_cancel_frees_caller,
+        buffered_worker_crash_frees_caller,
+        buffered_block_does_not_wedge_session,
+        buffered_requests_serialize,
+        cancel_queued_buffered_request,
         notify_without_channel_is_noop,
         notify_unknown_session_is_noop,
         log_unknown_session_is_noop,
@@ -366,6 +378,144 @@ terminate_kills_streaming_worker(_Config) ->
     receive
         {'DOWN', WRef, process, Worker, killed} -> ok
     after 5000 -> ct:fail(worker_not_killed)
+    end.
+
+buffered_dispatch_runs_in_worker(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% A buffered tool runs in a worker, not the session process: the tool's
+    %% pid is reported and differs from the session pid.
+    Params = #{~"name" => ~"block", ~"arguments" => #{watch => self()}},
+    Caller = spawn(fun() -> arizona_mcp_session:dispatch(Pid, ~"tools/call", Params, 7) end),
+    Worker =
+        receive
+            {block_started, W} -> W
+        after 5000 -> ct:fail(worker_did_not_start)
+        end,
+    ?assertNotEqual(Pid, Worker),
+    ?assertNotEqual(Caller, Worker),
+    %% The session stays responsive while the buffered tool blocks: a cancel is
+    %% served and frees the caller with a -32603.
+    ok = arizona_mcp_session:cancel(Pid, 7),
+    ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 8)).
+
+buffered_cancel_frees_caller(_Config) ->
+    {_Id, Pid} = start(60000),
+    Self = self(),
+    %% A blocking buffered tool from another process; cancelling it by id frees
+    %% that caller with a -32603 and leaves the session serving.
+    Params = #{~"name" => ~"block", ~"arguments" => #{watch => Self}},
+    _Caller = spawn(fun() ->
+        Result = arizona_mcp_session:dispatch(Pid, ~"tools/call", Params, 7),
+        Self ! {caller_result, Result}
+    end),
+    receive
+        {block_started, _W} -> ok
+    after 5000 -> ct:fail(block_did_not_start)
+    end,
+    ok = arizona_mcp_session:cancel(Pid, 7),
+    receive
+        {caller_result, R} -> ?assertMatch({error, #{~"error" := #{~"code" := -32603}}}, R)
+    after 5000 -> ct:fail(caller_not_freed)
+    end,
+    ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 8)).
+
+buffered_worker_crash_frees_caller(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% An untrappable worker death (the tool kills itself, bypassing the crash
+    %% guard) frees the caller with a -32603 rather than hanging it.
+    R = arizona_mcp_session:dispatch(Pid, ~"tools/call", #{~"name" => ~"selfkill"}, 7),
+    ?assertMatch({error, #{~"error" := #{~"code" := -32603}}}, R),
+    ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 8)).
+
+buffered_block_does_not_wedge_session(_Config) ->
+    {_Id, Pid} = start(100),
+    Self = self(),
+    %% A never-returning buffered tool no longer wedges the session: with a 100ms
+    %% idle TTL the session is still reaped, and teardown kills the stuck worker.
+    Params = #{~"name" => ~"block", ~"arguments" => #{watch => Self}},
+    _Caller = spawn(fun() ->
+        Result = arizona_mcp_session:dispatch(Pid, ~"tools/call", Params, 7),
+        Self ! {caller_result, Result}
+    end),
+    Worker =
+        receive
+            {block_started, W} -> W
+        after 5000 -> ct:fail(block_did_not_start)
+        end,
+    SRef = erlang:monitor(process, Pid),
+    WRef = erlang:monitor(process, Worker),
+    receive
+        {'DOWN', SRef, process, Pid, normal} -> ok
+    after 5000 -> ct:fail(session_wedged)
+    end,
+    receive
+        {'DOWN', WRef, process, Worker, killed} -> ok
+    after 5000 -> ct:fail(worker_not_killed)
+    end.
+
+buffered_requests_serialize(_Config) ->
+    {_Id, Pid} = start(60000),
+    Self = self(),
+    %% A first buffered tool blocks, holding the single worker slot.
+    P1 = #{~"name" => ~"block", ~"arguments" => #{watch => Self}},
+    _C1 = spawn(fun() ->
+        R1 = arizona_mcp_session:dispatch(Pid, ~"tools/call", P1, 7),
+        Self ! {r1, R1}
+    end),
+    receive
+        {block_started, _} -> ok
+    after 5000 -> ct:fail(block_did_not_start)
+    end,
+    %% A second request queues behind it -- one worker at a time, so it must not
+    %% run while the first blocks.
+    _C2 = spawn(fun() ->
+        R2 = arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 8),
+        Self ! {r2, R2}
+    end),
+    receive
+        {r2, _} -> ct:fail(ran_out_of_order)
+    after 300 -> ok
+    end,
+    %% Cancelling the first frees the slot, so the queued request then runs.
+    ok = arizona_mcp_session:cancel(Pid, 7),
+    receive
+        {r1, R1} -> ?assertMatch({error, #{~"error" := #{~"code" := -32603}}}, R1)
+    after 5000 -> ct:fail(first_not_freed)
+    end,
+    receive
+        {r2, R2} -> ?assertMatch({reply, _}, R2)
+    after 5000 -> ct:fail(queued_not_run)
+    end.
+
+cancel_queued_buffered_request(_Config) ->
+    {_Id, Pid} = start(60000),
+    Self = self(),
+    P1 = #{~"name" => ~"block", ~"arguments" => #{watch => Self}},
+    _C1 = spawn(fun() ->
+        R1 = arizona_mcp_session:dispatch(Pid, ~"tools/call", P1, 7),
+        Self ! {r1, R1}
+    end),
+    receive
+        {block_started, _} -> ok
+    after 5000 -> ct:fail(block_did_not_start)
+    end,
+    _C2 = spawn(fun() ->
+        R2 = arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 8),
+        Self ! {r2, R2}
+    end),
+    %% Let the second request enqueue, then cancel it while it is still queued
+    %% (not the active one); its caller is freed with a -32603.
+    timer:sleep(50),
+    ok = arizona_mcp_session:cancel(Pid, 8),
+    receive
+        {r2, R2} -> ?assertMatch({error, #{~"error" := #{~"code" := -32603}}}, R2)
+    after 5000 -> ct:fail(queued_not_cancelled)
+    end,
+    %% The active (blocking) request is untouched; cancel it to clean up.
+    ok = arizona_mcp_session:cancel(Pid, 7),
+    receive
+        {r1, _} -> ok
+    after 5000 -> ct:fail(active_not_freed)
     end.
 
 notify_without_channel_is_noop(_Config) ->

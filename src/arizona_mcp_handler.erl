@@ -530,13 +530,13 @@ serve_streaming(#{name := Name, args := Args, token := Token, id := Id}, Req, Op
     case sessions_enabled(Opts) of
         false ->
             #{handler := Mod} = Opts,
-            %% Stateless: a fresh per-request session; its threaded-back state
-            %% is per-request and discarded. The worker frees the loop to push.
+            %% Stateless: a fresh per-request session; the worker frees the loop
+            %% to push, and any state it mutates is per-request and discarded.
             %% page_size is irrelevant to a tools/call -- the default suffices.
             {_ServerInfo, Session} = open_session(Mod, #{}, ?DEFAULT_PAGE_SIZE),
             Ctx = #{token => Token, to => ConnPid},
             Worker = spawn(fun() ->
-                _Session1 = run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid)
+                ok = run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid)
             end),
             %% Track the worker so a client disconnect kills it.
             stream_loop(#{mcp_post_stream => true, worker => Worker});
@@ -568,38 +568,40 @@ stream_loop(LoopState) ->
     {loop, 200, sse_headers(), LoopState}.
 
 -doc """
-Run a streaming `tools/call` against `Session`, relaying the result (and, via
-`Ctx`, any `notifications/progress`) to `ConnPid`, and return the session
-carrying the tool's threaded-back state. Shared by the stateless worker and the
-session process; exported for the latter's cross-module call.
+Run a streaming `tools/call` against a snapshot of `Session`, relaying the
+result (and, via `Ctx`, any `notifications/progress`) to `ConnPid`. Threads no
+state back -- streaming runs on a snapshot, and only the serialized buffered
+queue mutates session state. Shared by the stateless worker and the session
+process; exported for the latter's cross-module call.
 """.
--spec run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid) -> Session when
+-spec run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid) -> ok when
     Session :: session(),
     Name :: binary(),
     Args :: map(),
     Id :: arizona_jsonrpc:id(),
     Ctx :: arizona_mcp:progress_ctx(),
     ConnPid :: pid().
-run_streaming_tool(#{state := State} = Session, Name, Args, Id, Ctx, ConnPid) ->
-    %% Guard the whole run (the `tools/1` read included), since the session
-    %% process calls this in `handle_cast`: a crash must answer -32603 and leave
-    %% the prior state intact, never kill the session.
-    {Object, NewState} =
+run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid) ->
+    %% Guard the whole run (the `tools/1` read included): a crash must answer
+    %% -32603 rather than leave the POST loop hanging. The tool's returned state
+    %% is discarded (snapshot semantics).
+    Object =
         try
-            run_tool(Session, Name, Args, Id, Ctx)
+            {Obj, _NewState} = run_tool(Session, Name, Args, Id, Ctx),
+            Obj
         catch
             Class:Reason:Stacktrace ->
                 logger:error(
                     "MCP streaming tool crashed: ~ts:~tp~n~tp", [Class, Reason, Stacktrace]
                 ),
-                {arizona_jsonrpc:error(Id, -32603, ~"Internal error"), State}
+                arizona_jsonrpc:error(Id, -32603, ~"Internal error")
         end,
     ConnPid ! {mcp_result, Object},
-    Session#{state := NewState}.
+    ok.
 
 %% Validate the tool name, run it, and shape the outcome into a
-%% `{ResultObject, NewState}` pair. Unknown name -> a -32602 result with the
-%% prior state; a declared tool -> its result and threaded-back state.
+%% `{ResultObject, NewState}` pair (the streaming caller keeps only the result
+%% -- it runs on a snapshot). Unknown name -> a -32602 result.
 run_tool(#{mod := Mod, state := State}, Name, Args, Id, Ctx) ->
     case lists:member(Name, [N || #{name := N} <- Mod:tools(State)]) of
         false ->

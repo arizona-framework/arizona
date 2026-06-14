@@ -93,6 +93,11 @@ succeeded (`{reply, ...}`) or failed in-band (`{error, ...}`), since a
 ran-but-failed callback may have mutated state legitimately; only a *crash*
 (a `-32603`) discards it, leaving the prior state intact.
 
+One exception: a **streaming** `tools/call` (one carrying a progress
+token) runs on a state *snapshot* and does **not** thread state back, so
+concurrent streams never race on the session's state. Persist anything it
+computes via a follow-up buffered call.
+
 In **stateless** mode the transport calls `init/1` per request and discards
 the returned state, so the threaded-back state does not persist across
 requests -- every request starts from a fresh `init/1`.
@@ -143,12 +148,15 @@ them at 100.
 Session mode starts one process per `initialize`, and the count is
 unbounded -- a public deployment should gate the endpoint with the `auth`
 hook and a reverse-proxy rate limit. An abandoned session is reaped after
-its idle TTL (`session_ttl_ms`, default 5 minutes). A **buffered** request is
-bounded by `request_timeout_ms` (default 60s): a slower tool frees the client
-with a -32603, though the session keeps running it. A **streaming** `tools/call`
-runs in a worker, so it is cancellable: a `notifications/cancelled {requestId}`
-or a client disconnect kills the tool. An in-flight streaming worker holds its
-session alive (it is not idle-reaped mid-run) and is killed if the session is
+its idle TTL (`session_ttl_ms`, default 5 minutes). Every request runs in a
+worker, so app code never blocks the session process: it stays responsive to
+cancels, idle-reap, and server pushes even while a tool runs. Buffered requests
+are served one at a time (so their state threading stays serialized) and bounded
+by `request_timeout_ms` (default 60s): a slower tool frees the client with a
+-32603 while the session keeps running it. Any request is cancellable by a
+`notifications/cancelled {requestId}` or a client disconnect, which frees the
+caller and kills the worker. An in-flight streaming worker holds its session
+alive (it is not idle-reaped mid-run); every worker is killed if the session is
 torn down. The optional `terminate/2` callback runs when a session ends (DELETE,
 idle TTL, or shutdown); it does **not** run in stateless mode, which has no
 session to end.

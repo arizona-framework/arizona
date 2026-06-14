@@ -6,9 +6,9 @@ Started by `arizona_mcp_sup` when an `initialize` request opens a session,
 and **not** linked to the connection process that created it -- it is owned
 by the supervisor so it outlives any single HTTP request, which is the
 point of an MCP session. It holds the session record `arizona_mcp_handler` builds at initialize (the
-handler module, its state, and the negotiated capabilities) and serves one
-method at a time via `dispatch/4`, so a session's requests never race on its
-state.
+handler module, its state, and the negotiated capabilities) and serves its
+requests one at a time in a worker, so app code never blocks the session
+process and a session's requests never race on its state.
 
 The session registers itself in `arizona_mcp_session_registry` on start and
 removes itself on terminate. An idle timer tears the session down after a
@@ -76,11 +76,21 @@ sends `DELETE`) does not leak; every served request resets it.
     buffer_max :: pos_integer(),
     %% In-flight streaming `tools/call` workers, by their request id, so a
     %% `notifications/cancelled` (or a client disconnect) can kill one.
-    streams :: #{arizona_jsonrpc:id() => {pid(), reference(), pid()}}
+    streams :: #{arizona_jsonrpc:id() => {pid(), reference(), pid()}},
+    %% Buffered (non-streaming) dispatch runs in a worker so the session process
+    %% never blocks on app code. One worker at a time keeps the state threading
+    %% serialized; the rest wait their turn in `dispatch_q`.
+    dispatch_active :: active_dispatch() | undefined,
+    dispatch_q :: queue:queue(pending_dispatch())
 }).
 
 -type state() :: #state{}.
 -type session_opts() :: #{ttl_ms := pos_integer(), buffer_max := pos_integer()}.
+%% A queued buffered request awaiting its turn: the caller to reply to, its
+%% request id, and the method/params to run.
+-type pending_dispatch() :: {gen_server:from(), arizona_jsonrpc:id(), binary(), map()}.
+%% The running buffered worker: its pid, monitor, caller to reply, request id.
+-type active_dispatch() :: {pid(), reference(), gen_server:from(), arizona_jsonrpc:id()}.
 
 -export_type([session_opts/0]).
 
@@ -102,8 +112,10 @@ start_link(SessionId, Session, SessionOpts) ->
 
 -doc """
 Run one non-initialize MCP method against the session, returning the
-JSON-RPC outcome (`{reply, Object}` | `{error, Object}`). Serialized
-through the session process and resets the idle timer.
+JSON-RPC outcome (`{reply, Object}` | `{error, Object}`). The method runs
+in a worker (replied to asynchronously), so a slow tool never blocks the
+session process; requests are still served one at a time, so they never
+race on the session's state. Resets the idle timer.
 """.
 -spec dispatch(Pid, Method, Params, Id) -> {reply, map()} | {error, map()} when
     Pid :: pid(),
@@ -121,20 +133,24 @@ dispatch(Pid, Method, Params, Id) ->
     Timeout :: timeout().
 dispatch(Pid, Method, Params, Id, Timeout) ->
     %% Bounded by the route's `request_timeout_ms`: a buffered tool that runs
-    %% past it frees the client with a -32603 (the session may still be finishing
-    %% the call -- a tool that never returns still holds its session).
+    %% past it frees the client with a -32603 (the session stays responsive and
+    %% keeps running the call in its worker). A session that ends mid-wait (idle
+    %% reap / DELETE) frees the caller the same way rather than crashing it.
     try
         gen_server:call(Pid, {dispatch, Method, Params, Id}, Timeout)
     catch
         exit:{timeout, _} ->
-            {error, arizona_jsonrpc:error(Id, -32603, ~"Request timed out")}
+            {error, arizona_jsonrpc:error(Id, -32603, ~"Request timed out")};
+        exit:_ ->
+            {error, arizona_jsonrpc:error(Id, -32603, ~"Session ended")}
     end.
 
 -doc """
 Start a streaming `tools/call` in a worker process tracked by `Id`, relaying the
 result and any `notifications/progress` to `ConnPid` (the POST's loop process).
-The worker frees the session to handle a `cancel/2` for the same `Id`; the
-tool's returned state threads back when it completes.
+The worker reads a snapshot of the session state and does **not** thread state
+back -- only the serialized buffered queue mutates session state, so nothing
+races on it. It frees the session to handle a `cancel/2` for the same `Id`.
 """.
 -spec start_streaming_tool(Pid, Name, Args, Id, Token, ConnPid) -> ok when
     Pid :: pid(),
@@ -147,9 +163,11 @@ start_streaming_tool(Pid, Name, Args, Id, Token, ConnPid) ->
     gen_server:cast(Pid, {start_streaming_tool, Name, Args, Id, Token, ConnPid}).
 
 -doc """
-Cancel an in-flight streaming `tools/call` by its request `Id` (a
-`notifications/cancelled`, or a client disconnect): kills the worker and tells
-its POST loop to stop. A no-op for an unknown or already-finished id.
+Cancel an in-flight request by its `Id` (a `notifications/cancelled`, or a
+client disconnect). A streaming `tools/call` has its worker killed and its POST
+loop told to stop; a buffered request has its worker killed (or is dropped from
+the queue) and its caller freed with a -32603. A no-op for an unknown or
+already-finished id.
 """.
 -spec cancel(Pid, Id) -> ok when
     Pid :: pid(),
@@ -229,20 +247,36 @@ init({SessionId, Session, #{ttl_ms := TtlMs, buffer_max := BufferMax}}) ->
         buffer = queue:new(),
         buffer_len = 0,
         buffer_max = BufferMax,
-        streams = #{}
+        streams = #{},
+        dispatch_active = undefined,
+        dispatch_q = queue:new()
     },
     {ok, refresh_ttl(State)}.
 
--spec handle_call(Request, gen_server:from(), state()) -> {reply, Reply, state()} when
+-spec handle_call(Request, gen_server:from(), state()) -> Return when
     Request ::
         {dispatch, binary(), map(), arizona_jsonrpc:id()}
         | {attach_channel, pid(), binary() | undefined},
+    Return :: {noreply, state()} | {reply, Reply, state()},
     Reply :: {reply, map()} | {error, map()} | ok | {error, already_attached}.
-handle_call({dispatch, Method, Params, Id}, _From, #state{session = Session} = State) ->
-    %% A stateful callback's returned state threads back here: store the
-    %% updated session so this session's later requests see it.
-    {Outcome, Session1} = safe_handle_method(Method, Params, Id, Session),
-    {reply, Outcome, refresh_ttl(State#state{session = Session1})};
+handle_call({dispatch, Method, Params, Id}, From, State) ->
+    case session_coupled(Method) of
+        true ->
+            %% `resources/subscribe`/`unsubscribe` own a pubsub subscription
+            %% keyed to THIS process, so they must run in the session process,
+            %% not a worker. They run no app code (a pg join/leave), so running
+            %% them inline never blocks.
+            #state{session = Session} = State,
+            {Outcome, Session1} = safe_handle_method(Method, Params, Id, Session),
+            {reply, Outcome, refresh_ttl(State#state{session = Session1})};
+        false ->
+            %% Everything else runs in a worker, replied to asynchronously, so a
+            %% slow tool never blocks the session process (it stays responsive to
+            %% cancels, idle-reap, and channel pushes). One worker at a time keeps
+            %% the state threading serialized; the rest wait in the queue.
+            Q1 = queue:in({From, Id, Method, Params}, State#state.dispatch_q),
+            {noreply, refresh_ttl(start_next_dispatch(State#state{dispatch_q = Q1}))}
+    end;
 handle_call({attach_channel, ChannelPid, LastEventId}, _From, State) ->
     case channel_alive(State) of
         true ->
@@ -277,31 +311,20 @@ handle_cast(
     #state{session = Session, streams = Streams} = State
 ) ->
     %% Run the tool in a monitored worker so the session stays free to handle a
-    %% cancel. The worker relays progress + result to `ConnPid` directly and
-    %% reports its threaded-back session to us on completion.
+    %% cancel. The worker reads a snapshot of `Session`, relays progress + result
+    %% to `ConnPid`, and threads no state back (only the buffered queue mutates
+    %% session state). It signals completion so we can drop the tracking.
     SessionPid = self(),
     Ctx = #{token => Token, to => ConnPid},
     WorkerPid = spawn(fun() ->
-        Session1 = arizona_mcp_handler:run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid),
-        SessionPid ! {streaming_done, Id, Session1}
+        ok = arizona_mcp_handler:run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid),
+        SessionPid ! {streaming_done, Id}
     end),
     MonRef = erlang:monitor(process, WorkerPid),
     Streams1 = Streams#{Id => {WorkerPid, MonRef, ConnPid}},
     {noreply, refresh_ttl(State#state{streams = Streams1})};
-handle_cast({cancel, Id}, #state{streams = Streams} = State) ->
-    case Streams of
-        #{Id := {WorkerPid, MonRef, ConnPid}} ->
-            true = erlang:demonitor(MonRef, [flush]),
-            true = exit(WorkerPid, kill),
-            %% Tell the POST loop to stop -- the spec says a cancelled request
-            %% gets no response.
-            ConnPid ! mcp_cancelled,
-            %% Dropping the last stream re-arms the idle timer (the stream was
-            %% holding the session alive).
-            {noreply, refresh_ttl(State#state{streams = maps:remove(Id, Streams)})};
-        _ ->
-            {noreply, State}
-    end;
+handle_cast({cancel, Id}, State) ->
+    {noreply, cancel_request(Id, State)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -309,20 +332,41 @@ handle_cast(_Msg, State) ->
 handle_info({arizona_mcp_notification, Method, Params}, State) ->
     {noreply, emit(Method, Params, State)};
 handle_info(
+    {dispatch_done, WorkerPid, Outcome, Session1}, #state{dispatch_active = Active} = State
+) ->
+    %% The active buffered worker finished: reply to its caller, store the
+    %% threaded-back session, and start the next queued request. A stale message
+    %% (the worker was cancelled just before completion) is ignored.
+    case Active of
+        {WorkerPid, MonRef, From, _Id} ->
+            true = erlang:demonitor(MonRef, [flush]),
+            gen_server:reply(From, Outcome),
+            State1 = State#state{session = Session1, dispatch_active = undefined},
+            {noreply, refresh_ttl(start_next_dispatch(State1))};
+        _ ->
+            {noreply, State}
+    end;
+handle_info(
     {'DOWN', Mon, process, ChannelPid, _Reason},
     #state{channel_mon = Mon, channel = ChannelPid} = State
 ) ->
     %% The channel's connection died without a clean detach.
     {noreply, do_detach(State)};
-handle_info({streaming_done, Id, Session1}, #state{streams = Streams} = State) ->
-    %% The worker finished (it already sent the result to the POST loop). Store
-    %% its threaded-back session and drop the tracking. Ignored if the request
-    %% was cancelled just before completion.
+handle_info(
+    {'DOWN', Mon, process, _Pid, _Reason}, #state{dispatch_active = {_W, Mon, From, Id}} = State
+) ->
+    %% The active buffered worker died without reporting done (an untrappable
+    %% kill -- safe_handle_method catches everything else). Free its caller.
+    gen_server:reply(From, {error, arizona_jsonrpc:error(Id, -32603, ~"Internal error")}),
+    {noreply, refresh_ttl(start_next_dispatch(State#state{dispatch_active = undefined}))};
+handle_info({streaming_done, Id}, #state{streams = Streams} = State) ->
+    %% The streaming worker finished (it already sent the result to the POST
+    %% loop). Drop the tracking; its state snapshot is discarded. Ignored if the
+    %% request was cancelled just before completion.
     case Streams of
         #{Id := {_WorkerPid, MonRef, _ConnPid}} ->
             true = erlang:demonitor(MonRef, [flush]),
-            State1 = State#state{session = Session1, streams = maps:remove(Id, Streams)},
-            {noreply, refresh_ttl(State1)};
+            {noreply, refresh_ttl(State#state{streams = maps:remove(Id, Streams)})};
         _ ->
             {noreply, State}
     end;
@@ -344,11 +388,17 @@ handle_info(_Info, State) ->
 -spec terminate(term(), state()) -> ok.
 terminate(
     Reason,
-    #state{id = SessionId, session = #{mod := Mod, state := HandlerState}, streams = Streams}
+    #state{
+        id = SessionId,
+        session = #{mod := Mod, state := HandlerState},
+        streams = Streams,
+        dispatch_active = Active
+    }
 ) ->
-    %% Kill any in-flight streaming workers so none outlive the session (a
-    %% blocking tool would otherwise run forever, orphaned).
+    %% Kill any in-flight workers (streaming + the active buffered one) so none
+    %% outlive the session (a blocking tool would otherwise run forever, orphaned).
     maps:foreach(fun(_Id, {WorkerPid, _MonRef, _ConnPid}) -> exit(WorkerPid, kill) end, Streams),
+    kill_active_dispatch(Active),
     %% Run the app's optional cleanup hook, then drop the registry row. (pg
     %% auto-removes the session from its subscribed channels on exit.)
     erlang:function_exported(Mod, terminate, 2) andalso Mod:terminate(Reason, HandlerState),
@@ -378,6 +428,82 @@ stream_by_mon(MonRef, Streams) ->
         [{Id, Conn} | _] -> {Id, Conn};
         [] -> error
     end.
+
+%% Methods that own a pubsub subscription keyed to the session process, so they
+%% must run there rather than in a worker (they run no app code, so they don't
+%% block). Everything else is offloaded.
+session_coupled(~"resources/subscribe") -> true;
+session_coupled(~"resources/unsubscribe") -> true;
+session_coupled(_Method) -> false.
+
+%% Spawn a monitored worker for the head of the dispatch queue if none is
+%% active. The worker runs the method against the current session snapshot and
+%% reports `{dispatch_done, ...}`; one-at-a-time keeps the state threading
+%% serialized (the next starts only once this one completes or is cancelled).
+start_next_dispatch(#state{dispatch_active = Active} = State) when Active =/= undefined ->
+    State;
+start_next_dispatch(#state{dispatch_q = Q, session = Session} = State) ->
+    case queue:out(Q) of
+        {empty, _} ->
+            State;
+        {{value, {From, Id, Method, Params}}, Q1} ->
+            SessionPid = self(),
+            WorkerPid = spawn(fun() ->
+                {Outcome, Session1} = safe_handle_method(Method, Params, Id, Session),
+                SessionPid ! {dispatch_done, self(), Outcome, Session1}
+            end),
+            MonRef = erlang:monitor(process, WorkerPid),
+            State#state{dispatch_active = {WorkerPid, MonRef, From, Id}, dispatch_q = Q1}
+    end.
+
+%% Cancel by request id: a streaming worker, the active buffered worker, or a
+%% still-queued buffered request -- whichever holds the id (at most one). A no-op
+%% if none does.
+cancel_request(Id, #state{streams = Streams} = State) ->
+    case Streams of
+        #{Id := {WorkerPid, MonRef, ConnPid}} ->
+            true = erlang:demonitor(MonRef, [flush]),
+            true = exit(WorkerPid, kill),
+            %% Tell the POST loop to stop -- the spec says a cancelled request
+            %% gets no response. Dropping the last stream re-arms the idle timer.
+            ConnPid ! mcp_cancelled,
+            refresh_ttl(State#state{streams = maps:remove(Id, Streams)});
+        _ ->
+            cancel_buffered(Id, State)
+    end.
+
+%% Cancel a buffered request: kill the active worker (replying a -32603 to its
+%% caller so the held HTTP POST closes), or drop a still-queued one.
+cancel_buffered(Id, #state{dispatch_active = {WorkerPid, MonRef, From, Id}} = State) ->
+    true = erlang:demonitor(MonRef, [flush]),
+    true = exit(WorkerPid, kill),
+    gen_server:reply(From, dispatch_cancelled(Id)),
+    refresh_ttl(start_next_dispatch(State#state{dispatch_active = undefined}));
+cancel_buffered(Id, #state{dispatch_q = Q} = State) ->
+    case drop_queued(Id, Q) of
+        {From, Q1} ->
+            gen_server:reply(From, dispatch_cancelled(Id)),
+            refresh_ttl(State#state{dispatch_q = Q1});
+        error ->
+            State
+    end.
+
+%% Remove the queued request with the given id, returning its caller. Queues are
+%% short, so a list round-trip is fine.
+drop_queued(Id, Q) ->
+    case lists:partition(fun({_From, QId, _M, _P}) -> QId =:= Id end, queue:to_list(Q)) of
+        {[], _} -> error;
+        {[{From, _, _, _} | _], Rest} -> {From, queue:from_list(Rest)}
+    end.
+
+dispatch_cancelled(Id) ->
+    {error, arizona_jsonrpc:error(Id, -32603, ~"Request cancelled")}.
+
+kill_active_dispatch({WorkerPid, _MonRef, _From, _Id}) ->
+    true = exit(WorkerPid, kill),
+    ok;
+kill_active_dispatch(undefined) ->
+    ok.
 
 %% Subscribe to the handler's declared pubsub channels (if it exports
 %% channels/1) so broadcasts reach this session. pg auto-removes the session

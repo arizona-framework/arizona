@@ -1081,19 +1081,29 @@ to the POST's loop, which frames and pushes it; the final result is the last fra
 stops. The context is inert (a no-op) for a non-streaming call, so a tool can always call
 `progress/2,3`.
 
-### Cancellation and timeouts
+### Dispatch, cancellation, and timeouts
 
-A buffered request waits on its session for `request_timeout_ms` (default 60s); past it the client
-gets a -32603 (the session may still be finishing the call). A streaming `tools/call` is cancellable
-because it runs in a tracked worker: a `notifications/cancelled {requestId}` (routed to the session,
-which kills the worker and tells the POST loop to stop) or a client disconnect (the loop kills the
-stateless worker, or asks the session to cancel) stops it. The session monitors each worker, so an
-unexpected worker death answers the loop with -32603 rather than hanging it.
+Requests run in a worker process (the only exceptions are `resources/subscribe`/`unsubscribe`, which
+own a session-keyed pubsub subscription and run no app code), so the session process never blocks on
+app code -- it stays responsive to cancels, idle-reap, and server pushes even while a tool runs.
+**Buffered** (non-streaming) requests are served through a one-at-a-time queue (so their state
+threading stays serialized) and replied to asynchronously; a request that outlives
+`request_timeout_ms` (default 60s) frees the client with a -32603 while the session keeps running it.
+A **streaming** `tools/call` runs concurrently in its own worker, reading a state snapshot and
+threading nothing back -- so the serialized buffered queue is the only path that mutates session
+state, and nothing races on it.
+
+Any in-flight request is cancellable: a `notifications/cancelled {requestId}` (routed to the
+session) or a client disconnect kills the worker and frees the caller -- a buffered caller with a
+-32603, a streaming POST loop told to stop. The session monitors each worker, so an unexpected
+worker death frees the caller with a -32603 rather than hanging it.
 
 An in-flight streaming request holds its session alive the way an attached channel does -- the idle
-TTL is suspended while any worker runs, so a long stream is never reaped mid-run, and re-arms once
-the last one finishes or is cancelled. Conversely, tearing the session down (DELETE, idle TTL, or
-shutdown) kills any still-running worker, so a blocking tool cannot orphan and run forever.
+TTL is suspended while a stream runs, so a long stream is never reaped mid-run, and re-arms once it
+finishes or is cancelled. A buffered worker deliberately does *not* hold the session: the idle TTL
+stays the safety net that reaps, and so kills, a stuck buffered tool. Tearing the session down
+(DELETE, idle TTL, or shutdown) kills any still-running worker, so a blocking tool cannot orphan and
+run forever.
 
 ### Stateless vs session mode
 
@@ -1101,10 +1111,11 @@ Without `sessions => true` every request is self-contained: the handler runs `in
 dispatches, and discards the state. With `sessions => true`, `initialize` mints an `Mcp-Session-Id`
 and starts an `arizona_mcp_session` process (owned by `arizona_mcp_sup`, not linked to the
 connection, so it outlives any single request); later requests carrying that id route to the
-process via `arizona_mcp_session_registry`, which runs them one at a time against its held state. A
-stateful callback's returned state threads back into the session, so the session is genuinely
-stateful across requests; a crash answers `-32603` and leaves the prior state intact. An idle
-session is reaped after `session_ttl_ms` (default 5 minutes).
+process via `arizona_mcp_session_registry`, which runs them one at a time (each in a worker, so a
+slow tool never blocks the session) against its held state. A stateful callback's returned state
+threads back into the session, so the session is genuinely stateful across requests; a crash answers
+`-32603` and leaves the prior state intact. An idle session is reaped after `session_ttl_ms` (default
+5 minutes).
 
 ### Resumability and server push
 
