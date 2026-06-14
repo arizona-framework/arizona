@@ -64,6 +64,21 @@ tools(_State) ->
             name => ~"progress",
             description => ~"Emits two progress notifications then returns",
             input_schema => #{type => ~"object", properties => #{}}
+        },
+        #{
+            name => ~"block",
+            description => ~"Blocks forever (exercises cancellation)",
+            input_schema => #{type => ~"object", properties => #{}}
+        },
+        #{
+            name => ~"sleep",
+            description => ~"Sleeps a while (exercises the bounded timeout)",
+            input_schema => #{type => ~"object", properties => #{}}
+        },
+        #{
+            name => ~"selfkill",
+            description => ~"Kills its own process (exercises worker-death cleanup)",
+            input_schema => #{type => ~"object", properties => #{}}
         }
     ].
 
@@ -96,7 +111,28 @@ handle_tool(~"progress", _Args, Ctx, State) ->
     %% inert for a non-streaming (no progressToken) call, so these are no-ops.
     ok = arizona_mcp:progress(Ctx, 1, #{total => 2, message => ~"step 1"}),
     ok = arizona_mcp:progress(Ctx, 2, #{total => 2, message => ~"step 2"}),
-    {reply, ~"done", State}.
+    {reply, ~"done", State};
+handle_tool(~"block", Args, _Ctx, State) ->
+    %% Never returns: a streaming `block` holds its worker until cancelled. When
+    %% Args carries a `watch` pid (tests pass one directly), report the worker
+    %% pid first so the test can assert it is killed on teardown.
+    ok =
+        case Args of
+            #{watch := Watcher} ->
+                Watcher ! {block_started, self()},
+                ok;
+            _ ->
+                ok
+        end,
+    receive
+    after infinity -> {reply, ~"unreachable", State}
+    end;
+handle_tool(~"sleep", _Args, _Ctx, State) ->
+    timer:sleep(300),
+    {reply, ~"slept", State};
+handle_tool(~"selfkill", _Args, _Ctx, _State) ->
+    %% Kill the worker untrappably, so the session's worker-death cleanup runs.
+    exit(self(), kill).
 
 resources(_State) ->
     [

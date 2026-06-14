@@ -24,7 +24,9 @@ sends `DELETE`) does not leak; every served request resets it.
 
 -export([start_link/3]).
 -export([dispatch/4]).
--export([run_streaming_tool/6]).
+-export([dispatch/5]).
+-export([start_streaming_tool/6]).
+-export([cancel/2]).
 -export([attach_channel/3]).
 -export([detach_channel/2]).
 -export([notify/3]).
@@ -37,6 +39,9 @@ sends `DELETE`) does not leak; every served request resets it.
 
 %% Referenced only by `arizona_mcp_sup`'s child spec (an MFA tuple, not a call).
 -ignore_xref([start_link/3]).
+
+%% A test-only convenience wrapper (the release dispatches via `dispatch/5`).
+-ignore_xref([dispatch/4]).
 
 %% --------------------------------------------------------------------
 %% gen_server callback exports
@@ -68,7 +73,10 @@ sends `DELETE`) does not leak; every served request resets it.
     next_event_id :: pos_integer(),
     buffer :: queue:queue({pos_integer(), iodata()}),
     buffer_len :: non_neg_integer(),
-    buffer_max :: pos_integer()
+    buffer_max :: pos_integer(),
+    %% In-flight streaming `tools/call` workers, by their request id, so a
+    %% `notifications/cancelled` (or a client disconnect) can kill one.
+    streams :: #{arizona_jsonrpc:id() => {pid(), reference(), pid()}}
 }).
 
 -type state() :: #state{}.
@@ -103,26 +111,51 @@ through the session process and resets the idle timer.
     Params :: map(),
     Id :: arizona_jsonrpc:id().
 dispatch(Pid, Method, Params, Id) ->
-    %% `infinity`: a tool may legitimately run long, and the calling roadrunner
-    %% connection is already dedicated to this one request. (Bounding this and
-    %% cancelling on client disconnect is a later-phase hardening.)
-    gen_server:call(Pid, {dispatch, Method, Params, Id}, infinity).
+    dispatch(Pid, Method, Params, Id, infinity).
+
+-spec dispatch(Pid, Method, Params, Id, Timeout) -> {reply, map()} | {error, map()} when
+    Pid :: pid(),
+    Method :: binary(),
+    Params :: map(),
+    Id :: arizona_jsonrpc:id(),
+    Timeout :: timeout().
+dispatch(Pid, Method, Params, Id, Timeout) ->
+    %% Bounded by the route's `request_timeout_ms`: a buffered tool that runs
+    %% past it frees the client with a -32603 (the session may still be finishing
+    %% the call -- a tool that never returns still holds its session).
+    try
+        gen_server:call(Pid, {dispatch, Method, Params, Id}, Timeout)
+    catch
+        exit:{timeout, _} ->
+            {error, arizona_jsonrpc:error(Id, -32603, ~"Request timed out")}
+    end.
 
 -doc """
-Run a streaming `tools/call` against the session's state, relaying the result
-and any `notifications/progress` to `ConnPid` (the POST's loop process). Async
-(a cast) so `ConnPid` is free to push the relayed frames while the tool runs;
-the tool's returned state threads back into the session.
+Start a streaming `tools/call` in a worker process tracked by `Id`, relaying the
+result and any `notifications/progress` to `ConnPid` (the POST's loop process).
+The worker frees the session to handle a `cancel/2` for the same `Id`; the
+tool's returned state threads back when it completes.
 """.
--spec run_streaming_tool(Pid, Name, Args, Id, Token, ConnPid) -> ok when
+-spec start_streaming_tool(Pid, Name, Args, Id, Token, ConnPid) -> ok when
     Pid :: pid(),
     Name :: binary(),
     Args :: map(),
     Id :: arizona_jsonrpc:id(),
     Token :: binary() | integer(),
     ConnPid :: pid().
-run_streaming_tool(Pid, Name, Args, Id, Token, ConnPid) ->
-    gen_server:cast(Pid, {run_streaming_tool, Name, Args, Id, Token, ConnPid}).
+start_streaming_tool(Pid, Name, Args, Id, Token, ConnPid) ->
+    gen_server:cast(Pid, {start_streaming_tool, Name, Args, Id, Token, ConnPid}).
+
+-doc """
+Cancel an in-flight streaming `tools/call` by its request `Id` (a
+`notifications/cancelled`, or a client disconnect): kills the worker and tells
+its POST loop to stop. A no-op for an unknown or already-finished id.
+""".
+-spec cancel(Pid, Id) -> ok when
+    Pid :: pid(),
+    Id :: arizona_jsonrpc:id().
+cancel(Pid, Id) ->
+    gen_server:cast(Pid, {cancel, Id}).
 
 -doc """
 Attach a server-to-client SSE channel (a roadrunner loop process) to the
@@ -195,7 +228,8 @@ init({SessionId, Session, #{ttl_ms := TtlMs, buffer_max := BufferMax}}) ->
         next_event_id = 1,
         buffer = queue:new(),
         buffer_len = 0,
-        buffer_max = BufferMax
+        buffer_max = BufferMax,
+        streams = #{}
     },
     {ok, refresh_ttl(State)}.
 
@@ -239,15 +273,35 @@ handle_cast({log, Severity, Level, Data}, #state{session = Session} = State) ->
             {noreply, State}
     end;
 handle_cast(
-    {run_streaming_tool, Name, Args, Id, Token, ConnPid}, #state{session = Session} = State
+    {start_streaming_tool, Name, Args, Id, Token, ConnPid},
+    #state{session = Session, streams = Streams} = State
 ) ->
-    %% Run the tool here (serialized, state threads back) while `ConnPid` pushes
-    %% the relayed progress + result. The context's `to` is the POST loop, so
-    %% `arizona_mcp:progress/2,3` reaches the client's stream, not this session's
-    %% channel.
+    %% Run the tool in a monitored worker so the session stays free to handle a
+    %% cancel. The worker relays progress + result to `ConnPid` directly and
+    %% reports its threaded-back session to us on completion.
+    SessionPid = self(),
     Ctx = #{token => Token, to => ConnPid},
-    Session1 = arizona_mcp_handler:run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid),
-    {noreply, refresh_ttl(State#state{session = Session1})};
+    WorkerPid = spawn(fun() ->
+        Session1 = arizona_mcp_handler:run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid),
+        SessionPid ! {streaming_done, Id, Session1}
+    end),
+    MonRef = erlang:monitor(process, WorkerPid),
+    Streams1 = Streams#{Id => {WorkerPid, MonRef, ConnPid}},
+    {noreply, refresh_ttl(State#state{streams = Streams1})};
+handle_cast({cancel, Id}, #state{streams = Streams} = State) ->
+    case Streams of
+        #{Id := {WorkerPid, MonRef, ConnPid}} ->
+            true = erlang:demonitor(MonRef, [flush]),
+            true = exit(WorkerPid, kill),
+            %% Tell the POST loop to stop -- the spec says a cancelled request
+            %% gets no response.
+            ConnPid ! mcp_cancelled,
+            %% Dropping the last stream re-arms the idle timer (the stream was
+            %% holding the session alive).
+            {noreply, refresh_ttl(State#state{streams = maps:remove(Id, Streams)})};
+        _ ->
+            {noreply, State}
+    end;
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -260,13 +314,41 @@ handle_info(
 ) ->
     %% The channel's connection died without a clean detach.
     {noreply, do_detach(State)};
+handle_info({streaming_done, Id, Session1}, #state{streams = Streams} = State) ->
+    %% The worker finished (it already sent the result to the POST loop). Store
+    %% its threaded-back session and drop the tracking. Ignored if the request
+    %% was cancelled just before completion.
+    case Streams of
+        #{Id := {_WorkerPid, MonRef, _ConnPid}} ->
+            true = erlang:demonitor(MonRef, [flush]),
+            State1 = State#state{session = Session1, streams = maps:remove(Id, Streams)},
+            {noreply, refresh_ttl(State1)};
+        _ ->
+            {noreply, State}
+    end;
+handle_info({'DOWN', MonRef, process, _WorkerPid, _Reason}, #state{streams = Streams} = State) ->
+    %% A streaming worker died without reporting done -- a crash. Answer the POST
+    %% loop with -32603 and drop the tracking.
+    case stream_by_mon(MonRef, Streams) of
+        {Id, ConnPid} ->
+            ConnPid ! {mcp_result, arizona_jsonrpc:error(Id, -32603, ~"Internal error")},
+            {noreply, refresh_ttl(State#state{streams = maps:remove(Id, Streams)})};
+        error ->
+            {noreply, State}
+    end;
 handle_info(session_ttl_expired, State) ->
     {stop, normal, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
 -spec terminate(term(), state()) -> ok.
-terminate(Reason, #state{id = SessionId, session = #{mod := Mod, state := HandlerState}}) ->
+terminate(
+    Reason,
+    #state{id = SessionId, session = #{mod := Mod, state := HandlerState}, streams = Streams}
+) ->
+    %% Kill any in-flight streaming workers so none outlive the session (a
+    %% blocking tool would otherwise run forever, orphaned).
+    maps:foreach(fun(_Id, {WorkerPid, _MonRef, _ConnPid}) -> exit(WorkerPid, kill) end, Streams),
     %% Run the app's optional cleanup hook, then drop the registry row. (pg
     %% auto-removes the session from its subscribed channels on exit.)
     erlang:function_exported(Mod, terminate, 2) andalso Mod:terminate(Reason, HandlerState),
@@ -288,6 +370,13 @@ safe_handle_method(Method, Params, Id, Session) ->
         Class:Reason:Stacktrace ->
             logger:error("MCP session dispatch crashed: ~ts:~tp~n~tp", [Class, Reason, Stacktrace]),
             {{error, arizona_jsonrpc:error(Id, -32603, ~"Internal error")}, Session}
+    end.
+
+%% Find the streaming request (its id and POST loop) whose worker monitor died.
+stream_by_mon(MonRef, Streams) ->
+    case [{Id, Conn} || {Id, {_W, Mon, Conn}} <:- maps:to_list(Streams), Mon =:= MonRef] of
+        [{Id, Conn} | _] -> {Id, Conn};
+        [] -> error
     end.
 
 %% Subscribe to the handler's declared pubsub channels (if it exports
@@ -378,18 +467,23 @@ demonitor_channel(Mon) ->
     true = erlang:demonitor(Mon, [flush]),
     ok.
 
-%% A session with a live SSE channel is kept alive by it; a connectionless
-%% session counts down to teardown. Cancel any pending timer, then arm a
-%% fresh one only when no channel is attached.
-refresh_ttl(#state{ttl_timer = Old, ttl_ms = TtlMs, channel = Channel} = State) ->
+%% A session with a live SSE channel or an in-flight streaming request is kept
+%% alive by it; an otherwise connectionless session counts down to teardown.
+%% Cancel any pending timer, then arm a fresh one only when nothing holds it
+%% (so a streaming tool is never idle-reaped mid-run).
+refresh_ttl(#state{ttl_timer = Old, ttl_ms = TtlMs} = State) ->
     cancel_ttl(Old),
-    case Channel of
-        undefined ->
+    case held_open(State) of
+        true ->
+            State#state{ttl_timer = undefined};
+        false ->
             Ref = erlang:send_after(TtlMs, self(), session_ttl_expired),
-            State#state{ttl_timer = Ref};
-        _ ->
-            State#state{ttl_timer = undefined}
+            State#state{ttl_timer = Ref}
     end.
+
+%% An attached channel or any in-flight streaming worker holds the session open.
+held_open(#state{channel = Channel, streams = Streams}) ->
+    Channel =/= undefined orelse Streams =/= #{}.
 
 cancel_ttl(undefined) ->
     ok;

@@ -9,6 +9,7 @@
     post_tools_call/1,
     post_streaming_progress/1,
     post_progress_without_accept_buffered/1,
+    stateless_disconnect_kills_worker/1,
     post_tools_list_paginates/1,
     post_resources_read/1,
     post_resources_templates_list/1,
@@ -31,6 +32,8 @@
     session_survives_channel_disconnect/1,
     session_resumes_with_last_event_id/1,
     session_streaming_progress/1,
+    session_cancel_stops_stream/1,
+    session_disconnect_cancels_stream/1,
     auth_missing_token_401/1,
     auth_valid_token_ok/1,
     session_init_crash_internal_error/1
@@ -46,6 +49,7 @@ all() ->
         post_tools_call,
         post_streaming_progress,
         post_progress_without_accept_buffered,
+        stateless_disconnect_kills_worker,
         post_tools_list_paginates,
         post_resources_read,
         post_resources_templates_list,
@@ -68,6 +72,8 @@ all() ->
         session_survives_channel_disconnect,
         session_resumes_with_last_event_id,
         session_streaming_progress,
+        session_cancel_stops_stream,
+        session_disconnect_cancels_stream,
         auth_missing_token_401,
         auth_valid_token_ok,
         session_init_crash_internal_error
@@ -198,6 +204,26 @@ post_progress_without_accept_buffered(Config) ->
         #{~"content" => [#{~"type" => ~"text", ~"text" => ~"done"}], ~"isError" => false},
         Result
     ).
+
+stateless_disconnect_kills_worker(Config) ->
+    %% A stateless streaming tool that blocks; dropping the connection kills its
+    %% worker. The server stays up to serve the next request.
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":20,"method":"tools/call",
+     "params":{"name":"block","arguments":{},"_meta":{"progressToken":"t"}}}
+    """,
+    Sock = stream_post(Config, "/mcp", [], Body),
+    _Head = recv_until(Sock, ~"\r\n\r\n", 5000),
+    gen_tcp:close(Sock),
+    %% The server survived; a fresh request still works.
+    Ping =
+        ~"""
+    {"jsonrpc":"2.0","id":21,"method":"ping"}
+    """,
+    Resp = post(Config, "/mcp", [], Ping),
+    ?assertEqual(200, status_code(Resp)),
+    ?assertMatch(#{~"result" := #{}}, body_json(Resp)).
 
 post_tools_list_paginates(Config) ->
     %% On the page_size=2 route, the first tools/list page carries 2 tools and a
@@ -457,6 +483,47 @@ session_streaming_progress(Config) ->
     ?assertNotEqual(nomatch, binary:match(Data, ~"\"progressToken\":42")),
     ?assertNotEqual(nomatch, binary:match(Data, ~"\"done\"")).
 
+session_cancel_stops_stream(Config) ->
+    SessionId = open_session(Config),
+    %% Open a blocking streaming tool, then cancel it by request id on another
+    %% connection. The streaming connection then closes (the loop stopped).
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":18,"method":"tools/call",
+     "params":{"name":"block","arguments":{},"_meta":{"progressToken":"t"}}}
+    """,
+    Sock = stream_post(Config, "/mcp-session", session_header(SessionId), Body),
+    Head = recv_until(Sock, ~"\r\n\r\n", 5000),
+    ?assertNotEqual(nomatch, binary:match(Head, ~"200 OK")),
+    Cancel =
+        ~"""
+    {"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":18}}
+    """,
+    CancelResp = post(Config, "/mcp-session", session_header(SessionId), Cancel),
+    ?assertEqual(202, status_code(CancelResp)),
+    ?assertEqual(closed, wait_closed(Sock, 5000)),
+    gen_tcp:close(Sock).
+
+session_disconnect_cancels_stream(Config) ->
+    SessionId = open_session(Config),
+    %% Dropping a session's streaming connection cancels the worker; the session
+    %% itself survives and keeps serving.
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":19,"method":"tools/call",
+     "params":{"name":"block","arguments":{},"_meta":{"progressToken":"t"}}}
+    """,
+    Sock = stream_post(Config, "/mcp-session", session_header(SessionId), Body),
+    _Head = recv_until(Sock, ~"\r\n\r\n", 5000),
+    gen_tcp:close(Sock),
+    Ping =
+        ~"""
+    {"jsonrpc":"2.0","id":22,"method":"ping"}
+    """,
+    Resp = post(Config, "/mcp-session", session_header(SessionId), Ping),
+    ?assertEqual(200, status_code(Resp)),
+    ?assertMatch(#{~"result" := #{}}, body_json(Resp)).
+
 %% --------------------------------------------------------------------
 %% Auth-gated tests (/mcp-auth, auth => bearer hook)
 %% --------------------------------------------------------------------
@@ -520,7 +587,8 @@ send_channel_get(Config, SessionId, ExtraHeaders) ->
 %% Send a POST and read its streamed (SSE) response until `Needle` appears. The
 %% response has no Content-Length (it is chunked), so the buffered `recv_response`
 %% does not apply.
-post_stream_until(Config, Path, ExtraHeaders, Body, Needle) ->
+%% Send a streaming POST (with the SSE Accept header) and return the open socket.
+stream_post(Config, Path, ExtraHeaders, Body) ->
     Port = ?config(port, Config),
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
     Req = [
@@ -541,6 +609,18 @@ post_stream_until(Config, Path, ExtraHeaders, Body, Needle) ->
         Body
     ],
     ok = gen_tcp:send(Sock, Req),
+    Sock.
+
+%% Read until the peer closes the connection (or `open` if it stays up).
+wait_closed(Sock, Timeout) ->
+    case gen_tcp:recv(Sock, 0, Timeout) of
+        {error, closed} -> closed;
+        {error, timeout} -> open;
+        {ok, _Chunk} -> wait_closed(Sock, Timeout)
+    end.
+
+post_stream_until(Config, Path, ExtraHeaders, Body, Needle) ->
+    Sock = stream_post(Config, Path, ExtraHeaders, Body),
     Data = recv_until(Sock, Needle, 5000),
     gen_tcp:close(Sock),
     Data.

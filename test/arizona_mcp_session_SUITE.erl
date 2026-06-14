@@ -23,6 +23,12 @@
     resource_unsubscribe_without_subscribe/1,
     log_filtered_by_default_level/1,
     log_respects_set_level/1,
+    cancel_stops_streaming_tool/1,
+    cancel_unknown_id_is_noop/1,
+    streaming_worker_crash_errors_conn/1,
+    dispatch_bounded_timeout/1,
+    streaming_tool_holds_session/1,
+    terminate_kills_streaming_worker/1,
     notify_without_channel_is_noop/1,
     notify_unknown_session_is_noop/1,
     log_unknown_session_is_noop/1,
@@ -57,6 +63,12 @@ all() ->
         resource_unsubscribe_without_subscribe,
         log_filtered_by_default_level,
         log_respects_set_level,
+        cancel_stops_streaming_tool,
+        cancel_unknown_id_is_noop,
+        streaming_worker_crash_errors_conn,
+        dispatch_bounded_timeout,
+        streaming_tool_holds_session,
+        terminate_kills_streaming_worker,
         notify_without_channel_is_noop,
         notify_unknown_session_is_noop,
         log_unknown_session_is_noop,
@@ -279,6 +291,83 @@ log_respects_set_level(_Config) ->
     after 5000 -> ct:fail(no_log)
     end.
 
+cancel_stops_streaming_tool(_Config) ->
+    {_Id, Pid} = start(60000),
+    ConnPid = self(),
+    %% Start a blocking streaming tool in a worker, then cancel it by id. The
+    %% casts are ordered, so the worker is registered before the cancel.
+    ok = arizona_mcp_session:start_streaming_tool(Pid, ~"block", #{}, 7, ~"tok", ConnPid),
+    ok = arizona_mcp_session:cancel(Pid, 7),
+    %% The POST loop (us) is told to stop and gets no result.
+    receive
+        mcp_cancelled -> ok
+    after 5000 -> ct:fail(no_cancel)
+    end,
+    no_result(),
+    %% The session survived the cancel and still serves.
+    ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 8)).
+
+cancel_unknown_id_is_noop(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% A cancel that races past a request's completion (no in-flight stream for
+    %% that id) is a silent no-op; the session keeps serving.
+    ok = arizona_mcp_session:cancel(Pid, 999),
+    ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 1)).
+
+streaming_worker_crash_errors_conn(_Config) ->
+    {_Id, Pid} = start(60000),
+    ConnPid = self(),
+    %% A streaming worker that dies without reporting done makes the session
+    %% answer the POST loop with -32603, rather than leaving it hanging.
+    ok = arizona_mcp_session:start_streaming_tool(Pid, ~"selfkill", #{}, 7, ~"tok", ConnPid),
+    receive
+        {mcp_result, Object} ->
+            ?assertMatch(#{~"error" := #{~"code" := -32603}}, Object)
+    after 5000 -> ct:fail(no_error_result)
+    end.
+
+dispatch_bounded_timeout(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% A buffered tool slower than the timeout frees the client with -32603 (the
+    %% session keeps running it; the sleep tool finishes, so nothing leaks).
+    Result = arizona_mcp_session:dispatch(Pid, ~"tools/call", #{~"name" => ~"sleep"}, 9, 50),
+    ?assertMatch({error, #{~"error" := #{~"code" := -32603}}}, Result).
+
+streaming_tool_holds_session(_Config) ->
+    {_Id, Pid} = start(100),
+    ConnPid = self(),
+    %% A blocking streaming tool holds the session up past what the 100ms idle
+    %% TTL would otherwise allow -- an in-flight stream is not idle-reaped.
+    ok = arizona_mcp_session:start_streaming_tool(Pid, ~"block", #{}, 7, ~"tok", ConnPid),
+    timer:sleep(250),
+    ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 8)),
+    %% Cancelling the last stream re-arms the idle timer, so the session is reaped.
+    Ref = erlang:monitor(process, Pid),
+    ok = arizona_mcp_session:cancel(Pid, 7),
+    receive
+        {'DOWN', Ref, process, Pid, normal} -> ok
+    after 5000 -> ct:fail(ttl_did_not_rearm)
+    end.
+
+terminate_kills_streaming_worker(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% Stopping a session with an in-flight streaming worker kills the worker, so
+    %% a blocking tool does not orphan and run forever.
+    ok = arizona_mcp_session:start_streaming_tool(
+        Pid, ~"block", #{watch => self()}, 7, ~"tok", self()
+    ),
+    Worker =
+        receive
+            {block_started, W} -> W
+        after 5000 -> ct:fail(worker_did_not_start)
+        end,
+    WRef = erlang:monitor(process, Worker),
+    ok = arizona_mcp_session:stop(Pid),
+    receive
+        {'DOWN', WRef, process, Worker, killed} -> ok
+    after 5000 -> ct:fail(worker_not_killed)
+    end.
+
 notify_without_channel_is_noop(_Config) ->
     {_Id, Pid} = start(60000),
     ok = arizona_mcp_session:notify(Pid, ~"notifications/message", #{}),
@@ -381,6 +470,13 @@ terminate_calls_app(_Config) ->
 no_more_events() ->
     receive
         {mcp_event, _} -> ct:fail(unexpected_event)
+    after 100 -> ok
+    end.
+
+%% Assert no streaming result frame follows (a cancelled request gets none).
+no_result() ->
+    receive
+        {mcp_result, _} -> ct:fail(unexpected_result)
     after 100 -> ok
     end.
 

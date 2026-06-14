@@ -92,6 +92,11 @@ protocol contract holds even when a tool raises.
 %% operational logs flow but `debug` is suppressed until requested.
 -define(DEFAULT_LOG_LEVEL, info).
 
+%% How long a buffered (non-streaming) request waits on its session before the
+%% client is freed with a timeout, overridable via the route's
+%% `request_timeout_ms` opt. Generous, since a tool may legitimately run a while.
+-define(DEFAULT_REQUEST_TIMEOUT_MS, 60000).
+
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
@@ -174,7 +179,7 @@ Roadrunner loop `handle_info/3` callback for the two SSE loops:
 -spec handle_info(Info, Push, State) -> {ok, State} | {stop, State} when
     Info :: term(),
     Push :: roadrunner_handler:push_fun(),
-    State :: #{session := pid()} | #{mcp_post_stream := true}.
+    State :: #{session := pid()} | #{mcp_post_stream := true, _ => term()}.
 handle_info({mcp_event, Frame}, Push, State) ->
     _ = Push(Frame),
     {ok, State};
@@ -184,13 +189,29 @@ handle_info({mcp_progress, Notification}, Push, State) ->
 handle_info({mcp_result, Object}, Push, State) ->
     _ = Push(message_frame(Object)),
     {stop, State};
+handle_info(mcp_cancelled, _Push, State) ->
+    %% The session cancelled this streaming request; close the stream, no result.
+    {stop, State};
+%% The streaming-POST disconnect is checked first: its state may also carry
+%% `session`, which would otherwise match the GET-channel clause below.
+handle_info({roadrunner_disconnect, _Reason}, _Push, #{mcp_post_stream := true} = State) ->
+    cancel_stream(State),
+    {stop, State};
 handle_info({roadrunner_disconnect, _Reason}, _Push, #{session := SessionPid} = State) ->
     ok = arizona_mcp_session:detach_channel(SessionPid, self()),
     {stop, State};
-handle_info({roadrunner_disconnect, _Reason}, _Push, #{mcp_post_stream := true} = State) ->
-    {stop, State};
 handle_info(_Info, _Push, State) ->
     {ok, State}.
+
+%% On client disconnect, stop the running streaming tool: kill the stateless
+%% worker, or ask the session to cancel the request it tracks.
+cancel_stream(#{worker := Worker}) ->
+    true = exit(Worker, kill),
+    ok;
+cancel_stream(#{session := SessionPid, id := Id}) ->
+    arizona_mcp_session:cancel(SessionPid, Id);
+cancel_stream(_State) ->
+    ok.
 
 %% A JSON-RPC message (a progress notification or the final result) framed as a
 %% single SSE `message` event. The streaming POST is request-scoped, so -- unlike
@@ -364,10 +385,34 @@ valid_page_size(N) when is_integer(N), N >= 1 ->
 %% other request is routed to the session named by `Mcp-Session-Id`.
 reply_session(#{method := Method, params := Params, id := Id} = Request, Req, Opts) ->
     case Id of
-        undefined -> roadrunner_resp:status(202);
-        _ when Method =:= ~"initialize" -> session_initialize(Params, Id, Opts);
-        _ -> session_request(Method, Params, Id, Request, Req)
+        undefined ->
+            session_notification(Method, Params, Req),
+            roadrunner_resp:status(202);
+        _ when Method =:= ~"initialize" ->
+            session_initialize(Params, Id, Opts);
+        _ ->
+            session_request(Method, Params, Id, Request, Req, request_timeout(Opts))
     end.
+
+%% A `notifications/cancelled {requestId}` cancels the in-flight streaming
+%% request on the addressed session; any other notification is accepted with no
+%% action. (Stateless mode has no session to route a cancel to.)
+session_notification(~"notifications/cancelled", #{~"requestId" := RequestId}, Req) ->
+    case roadrunner_req:header(~"mcp-session-id", Req) of
+        undefined ->
+            ok;
+        SessionId ->
+            case arizona_mcp_session_registry:lookup(SessionId) of
+                {ok, Pid} -> arizona_mcp_session:cancel(Pid, RequestId);
+                error -> ok
+            end
+    end;
+session_notification(_Method, _Params, _Req) ->
+    ok.
+
+%% The configured buffered-request timeout.
+request_timeout(Opts) ->
+    maps:get(request_timeout_ms, Opts, ?DEFAULT_REQUEST_TIMEOUT_MS).
 
 session_initialize(Params, Id, #{handler := Mod} = Opts) ->
     SessionId = generate_session_id(),
@@ -392,7 +437,7 @@ session_initialize(Params, Id, #{handler := Mod} = Opts) ->
             json(arizona_jsonrpc:error(Id, -32603, ~"Internal error"))
     end.
 
-session_request(Method, Params, Id, Request, Req) ->
+session_request(Method, Params, Id, Request, Req, Timeout) ->
     case roadrunner_req:header(~"mcp-session-id", Req) of
         undefined ->
             json(arizona_jsonrpc:error(reply_id(Request), -32600, ~"Missing Mcp-Session-Id"));
@@ -400,7 +445,7 @@ session_request(Method, Params, Id, Request, Req) ->
             with_session(
                 SessionId,
                 fun(Pid) ->
-                    {_Tag, Object} = arizona_mcp_session:dispatch(Pid, Method, Params, Id),
+                    {_Tag, Object} = arizona_mcp_session:dispatch(Pid, Method, Params, Id, Timeout),
                     json(Object)
                 end,
                 fun() -> unknown_session(Id) end
@@ -490,10 +535,11 @@ serve_streaming(#{name := Name, args := Args, token := Token, id := Id}, Req, Op
             %% page_size is irrelevant to a tools/call -- the default suffices.
             {_ServerInfo, Session} = open_session(Mod, #{}, ?DEFAULT_PAGE_SIZE),
             Ctx = #{token => Token, to => ConnPid},
-            _Worker = spawn(fun() ->
+            Worker = spawn(fun() ->
                 _Session1 = run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid)
             end),
-            stream_loop();
+            %% Track the worker so a client disconnect kills it.
+            stream_loop(#{mcp_post_stream => true, worker => Worker});
         true ->
             case roadrunner_req:header(~"mcp-session-id", Req) of
                 undefined ->
@@ -502,10 +548,13 @@ serve_streaming(#{name := Name, args := Args, token := Token, id := Id}, Req, Op
                     with_session(
                         SessionId,
                         fun(Pid) ->
-                            ok = arizona_mcp_session:run_streaming_tool(
+                            ok = arizona_mcp_session:start_streaming_tool(
                                 Pid, Name, Args, Id, Token, ConnPid
                             ),
-                            stream_loop()
+                            %% Track the session + request id so a disconnect
+                            %% cancels it (a `notifications/cancelled` arrives on
+                            %% its own POST instead).
+                            stream_loop(#{mcp_post_stream => true, session => Pid, id => Id})
                         end,
                         fun() -> unknown_session(Id) end
                     )
@@ -513,9 +562,10 @@ serve_streaming(#{name := Name, args := Args, token := Token, id := Id}, Req, Op
     end.
 
 %% The streaming-POST loop: a request-scoped stream (no resumability), tagged so
-%% `handle_info/3` distinguishes it from the GET channel.
-stream_loop() ->
-    {loop, 200, sse_headers(), #{mcp_post_stream => true}}.
+%% `handle_info/3` distinguishes it from the GET channel. The state also carries
+%% what to cancel on disconnect.
+stream_loop(LoopState) ->
+    {loop, 200, sse_headers(), LoopState}.
 
 -doc """
 Run a streaming `tools/call` against `Session`, relaying the result (and, via

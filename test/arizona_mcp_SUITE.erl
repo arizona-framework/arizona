@@ -169,7 +169,17 @@ dispatch_ping(_Config) ->
 dispatch_tools_list(_Config) ->
     {reply, #{~"result" := #{~"tools" := Tools}}} = dispatch(~"tools/list", #{}, 3),
     ?assertEqual(
-        [~"add", ~"boom", ~"crash", ~"echo", ~"count", ~"progress"],
+        [
+            ~"add",
+            ~"boom",
+            ~"crash",
+            ~"echo",
+            ~"count",
+            ~"progress",
+            ~"block",
+            ~"sleep",
+            ~"selfkill"
+        ],
         [maps:get(~"name", T) || T <- Tools]
     ),
     [Add | _] = Tools,
@@ -457,11 +467,24 @@ parse_log_levels(_Config) ->
 %% --------------------------------------------------------------------
 
 pagination_tools_walk(_Config) ->
-    %% 6 tools at page size 2 -> 3 pages; following the cursor chain yields all
-    %% 6 names in order. The page count proves it actually paginated.
+    %% 9 tools at page size 2 -> 5 pages; following the cursor chain yields all
+    %% 9 names in order. The page count proves it actually paginated.
     {Names, Pages} = walk(~"tools/list", ~"tools", 2),
-    ?assertEqual([~"add", ~"boom", ~"crash", ~"echo", ~"count", ~"progress"], Names),
-    ?assertEqual(3, Pages).
+    ?assertEqual(
+        [
+            ~"add",
+            ~"boom",
+            ~"crash",
+            ~"echo",
+            ~"count",
+            ~"progress",
+            ~"block",
+            ~"sleep",
+            ~"selfkill"
+        ],
+        Names
+    ),
+    ?assertEqual(5, Pages).
 
 pagination_resources_walk(_Config) ->
     %% The capability-gated list path paginates identically.
@@ -472,7 +495,7 @@ pagination_resources_walk(_Config) ->
 pagination_no_cursor_when_list_fits(_Config) ->
     %% A page larger than the list returns everything and omits nextCursor.
     {reply, #{~"result" := Result}} = dispatch_paged(~"tools/list", #{}, 1, 100),
-    ?assertEqual(6, length(maps:get(~"tools", Result))),
+    ?assertEqual(9, length(maps:get(~"tools", Result))),
     ?assertNot(maps:is_key(~"nextCursor", Result)).
 
 pagination_past_end_cursor(_Config) ->

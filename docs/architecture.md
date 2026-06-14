@@ -1072,13 +1072,28 @@ frame to the wire with no coalescing, so a `notifications/*` message reaches the
 
 ### Progress streaming
 
-When a token-bearing `tools/call` streams (the client accepted SSE), the tool runs off the connection
-process so the loop is free to push its progress as it arrives. In **stateless** mode a worker
-process runs the tool; in **session** mode the session process runs it (state still threads back).
-Either way the tool emits via the `Ctx`
-handed to `handle_tool/4` -- `arizona_mcp:progress/2,3` relays each `notifications/progress` to the
-POST's loop, which frames and pushes it; the final result is the last frame, then the loop stops.
-The context is inert (a no-op) for a non-streaming call, so a tool can always call `progress/2,3`.
+When a token-bearing `tools/call` streams (the client accepted SSE), the tool runs in a worker
+process so the connection loop is free to push its progress as it arrives. In **stateless** mode the
+loop spawns the worker; in **session** mode the session spawns it (so the session stays responsive to
+a cancel) and the worker reports its threaded-back state on completion. Either way the tool emits via
+the `Ctx` handed to `handle_tool/4` -- `arizona_mcp:progress/2,3` relays each `notifications/progress`
+to the POST's loop, which frames and pushes it; the final result is the last frame, then the loop
+stops. The context is inert (a no-op) for a non-streaming call, so a tool can always call
+`progress/2,3`.
+
+### Cancellation and timeouts
+
+A buffered request waits on its session for `request_timeout_ms` (default 60s); past it the client
+gets a -32603 (the session may still be finishing the call). A streaming `tools/call` is cancellable
+because it runs in a tracked worker: a `notifications/cancelled {requestId}` (routed to the session,
+which kills the worker and tells the POST loop to stop) or a client disconnect (the loop kills the
+stateless worker, or asks the session to cancel) stops it. The session monitors each worker, so an
+unexpected worker death answers the loop with -32603 rather than hanging it.
+
+An in-flight streaming request holds its session alive the way an attached channel does -- the idle
+TTL is suspended while any worker runs, so a long stream is never reaped mid-run, and re-arms once
+the last one finishes or is cancelled. Conversely, tearing the session down (DELETE, idle TTL, or
+shutdown) kills any still-running worker, so a blocking tool cannot orphan and run forever.
 
 ### Stateless vs session mode
 
