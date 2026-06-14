@@ -35,6 +35,10 @@
     buffered_block_does_not_wedge_session/1,
     buffered_requests_serialize/1,
     cancel_queued_buffered_request/1,
+    buffered_queue_cap_rejects/1,
+    keepalive_pings_channel/1,
+    keepalive_off_when_infinity/1,
+    keepalive_stops_on_detach/1,
     notify_without_channel_is_noop/1,
     notify_unknown_session_is_noop/1,
     log_unknown_session_is_noop/1,
@@ -81,6 +85,10 @@ all() ->
         buffered_block_does_not_wedge_session,
         buffered_requests_serialize,
         cancel_queued_buffered_request,
+        buffered_queue_cap_rejects,
+        keepalive_pings_channel,
+        keepalive_off_when_infinity,
+        keepalive_stops_on_detach,
         notify_without_channel_is_noop,
         notify_unknown_session_is_noop,
         log_unknown_session_is_noop,
@@ -518,6 +526,71 @@ cancel_queued_buffered_request(_Config) ->
     after 5000 -> ct:fail(active_not_freed)
     end.
 
+buffered_queue_cap_rejects(_Config) ->
+    {_Id, Pid} = start_opts(#{max_pending => 1}),
+    Self = self(),
+    %% Occupy the single worker slot with a blocking tool.
+    P1 = #{~"name" => ~"block", ~"arguments" => #{watch => Self}},
+    _C1 = spawn(fun() ->
+        R1 = arizona_mcp_session:dispatch(Pid, ~"tools/call", P1, 7),
+        Self ! {r1, R1}
+    end),
+    receive
+        {block_started, _} -> ok
+    after 5000 -> ct:fail(block_did_not_start)
+    end,
+    %% One queued request fills the cap (max_pending = 1).
+    _C2 = spawn(fun() ->
+        R2 = arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 8),
+        Self ! {r2, R2}
+    end),
+    timer:sleep(50),
+    %% A further buffered request is rejected: the queue is full.
+    R3 = arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 9),
+    ?assertMatch({error, #{~"error" := #{~"code" := -32603}}}, R3),
+    %% Cancelling the blocker drains the queued (not rejected) request.
+    ok = arizona_mcp_session:cancel(Pid, 7),
+    receive
+        {r2, R2} -> ?assertMatch({reply, _}, R2)
+    after 5000 -> ct:fail(queued_not_run)
+    end.
+
+keepalive_pings_channel(_Config) ->
+    {_Id, Pid} = start_opts(#{keepalive_ms => 50}),
+    ok = arizona_mcp_session:attach_channel(Pid, self(), undefined),
+    %% With keep-alive enabled, the attached channel receives a periodic comment.
+    receive
+        {mcp_event, Frame} ->
+            ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Frame), ~"keepalive"))
+    after 5000 -> ct:fail(no_keepalive)
+    end.
+
+keepalive_off_when_infinity(_Config) ->
+    {_Id, Pid} = start(60000),
+    ok = arizona_mcp_session:attach_channel(Pid, self(), undefined),
+    %% keepalive_ms = infinity (the helper default) disables it: no comment.
+    receive
+        {mcp_event, _} -> ct:fail(unexpected_keepalive)
+    after 200 -> ok
+    end.
+
+keepalive_stops_on_detach(_Config) ->
+    {_Id, Pid} = start_opts(#{keepalive_ms => 50}),
+    ok = arizona_mcp_session:attach_channel(Pid, self(), undefined),
+    receive
+        {mcp_event, _} -> ok
+    after 5000 -> ct:fail(no_keepalive)
+    end,
+    ok = arizona_mcp_session:detach_channel(Pid, self()),
+    %% A sync dispatch flushes the detach cast; after it, the timer is cancelled,
+    %% so no further comments arrive.
+    ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 1)),
+    flush_events(),
+    receive
+        {mcp_event, _} -> ct:fail(keepalive_after_detach)
+    after 200 -> ok
+    end.
+
 notify_without_channel_is_noop(_Config) ->
     {_Id, Pid} = start(60000),
     ok = arizona_mcp_session:notify(Pid, ~"notifications/message", #{}),
@@ -606,7 +679,14 @@ terminate_calls_app(_Config) ->
         page_size => 50,
         log_min_severity => 1
     },
-    {ok, Pid} = arizona_mcp_sup:start_session(Id, Session, #{ttl_ms => 60000, buffer_max => 256}),
+    SessionOpts = #{
+        ttl_ms => 60000,
+        buffer_max => 256,
+        max_pending => 100,
+        keepalive_ms => infinity,
+        route_key => ~"/test"
+    },
+    {ok, Pid} = arizona_mcp_sup:start_session(Id, Session, SessionOpts),
     ok = arizona_mcp_session:stop(Pid),
     receive
         {mcp_terminated, _Reason} -> ok
@@ -655,15 +735,32 @@ start(TtlMs) ->
     start(TtlMs, 256).
 
 start(TtlMs, BufferMax) ->
+    start_opts(#{ttl_ms => TtlMs, buffer_max => BufferMax}).
+
+%% Start a session with `Overrides` merged over the default opts, so a test can
+%% set just the knob it exercises (e.g. `max_pending`, `keepalive_ms`).
+start_opts(Overrides) ->
     Id = integer_to_binary(erlang:unique_integer([positive])),
-    Opts = #{ttl_ms => TtlMs, buffer_max => BufferMax},
-    {ok, Pid} = arizona_mcp_sup:start_session(Id, session(), Opts),
+    Base = #{
+        ttl_ms => 60000,
+        buffer_max => 256,
+        max_pending => 100,
+        keepalive_ms => infinity,
+        route_key => ~"/test"
+    },
+    {ok, Pid} = arizona_mcp_sup:start_session(Id, session(), maps:merge(Base, Overrides)),
     {Id, Pid}.
 
 recv_event() ->
     receive
         {mcp_event, Frame} -> iolist_to_binary(Frame)
     after 5000 -> ct:fail(no_event)
+    end.
+
+flush_events() ->
+    receive
+        {mcp_event, _} -> flush_events()
+    after 0 -> ok
     end.
 
 session() ->

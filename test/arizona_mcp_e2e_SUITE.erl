@@ -35,6 +35,7 @@
     session_cancel_stops_stream/1,
     session_disconnect_cancels_stream/1,
     session_buffered_cancel_frees_request/1,
+    session_max_sessions_503/1,
     auth_missing_token_401/1,
     auth_valid_token_ok/1,
     session_init_crash_internal_error/1
@@ -76,6 +77,7 @@ all() ->
         session_cancel_stops_stream,
         session_disconnect_cancels_stream,
         session_buffered_cancel_frees_request,
+        session_max_sessions_503,
         auth_missing_token_401,
         auth_valid_token_ok,
         session_init_crash_internal_error
@@ -108,6 +110,11 @@ init_per_suite(Config) ->
         {mcp, ~"/mcp-paged", arizona_mcp_test_server, #{
             origins => [?ALLOWED_ORIGIN],
             page_size => 2
+        }},
+        {mcp, ~"/mcp-capped", arizona_mcp_test_server, #{
+            origins => [?ALLOWED_ORIGIN],
+            sessions => true,
+            max_sessions => 1
         }}
     ],
     {ok, _} = arizona_roadrunner_server:start(?LISTENER, #{
@@ -546,6 +553,14 @@ session_buffered_cancel_frees_request(Config) ->
     Data = recv_until(Sock, ~"-32603", 5000),
     ?assertNotEqual(nomatch, binary:match(Data, ~"-32603")),
     gen_tcp:close(Sock).
+
+session_max_sessions_503(Config) ->
+    %% A route capped at one session: the first initialize opens it, the second
+    %% is rejected with a 503 (the route is at capacity).
+    R1 = post(Config, "/mcp-capped", [], initialize_body()),
+    ?assertEqual(200, status_code(R1)),
+    R2 = post(Config, "/mcp-capped", [], initialize_body()),
+    ?assertEqual(503, status_code(R2)).
 
 %% --------------------------------------------------------------------
 %% Auth-gated tests (/mcp-auth, auth => bearer hook)

@@ -1160,6 +1160,19 @@ cursor. Because the cursor is an offset, it assumes a stable list across pages -
 mid-pagination can skip or repeat an item (acceptable for the near-static MCP lists, and a
 `list_changed` notification has the client re-list anyway).
 
+### Resource limits and keep-alive
+
+Three opt-in knobs bound a session-mode route. `max_sessions` caps the live sessions **per route**
+(the registry tags each session with the request path it opened on and counts by it, so two routes
+sharing a handler module still cap independently); an `initialize` past the cap is answered with a
+`503` plus a JSON-RPC error body. The count is read just before starting, so a burst of concurrent
+initializes can admit a few over the cap -- fine for a soft limit. `session_max_pending` (default
+100) bounds the per-session buffered-dispatch queue; a dispatch arriving with the queue full is
+rejected with a -32603 rather than enqueued. `session_keepalive_ms` (default 30s, `infinity`
+disables) makes the session emit a periodic `roadrunner_sse:comment/1` over an attached channel so
+idle proxies don't close the stream; the comment carries no event id, so it is never buffered for
+resumption, and the timer runs only while a channel is attached.
+
 ### Capability gating and security
 
 `init/1` returns an atom-keyed capability map; the transport serves `resources/*` and `prompts/*`

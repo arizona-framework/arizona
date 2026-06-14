@@ -18,9 +18,10 @@ Sessions add themselves on start and remove themselves on terminate; a
 %% --------------------------------------------------------------------
 
 -export([create_table/0]).
--export([add/2]).
+-export([add/3]).
 -export([remove/1]).
 -export([lookup/1]).
+-export([count/1]).
 
 %% --------------------------------------------------------------------
 %% Macros
@@ -41,12 +42,17 @@ create_table() ->
     _ = ets:new(?TABLE, [named_table, public, {read_concurrency, true}]),
     ok.
 
--doc "Record a session id -> pid mapping. Called from the session's `init/1`.".
--spec add(SessionId, Pid) -> ok when
+-doc """
+Record a session id -> pid mapping, tagged with its route key (the request
+path it was opened on) so `count/1` can enforce a per-route `max_sessions`
+cap. Called from the session's `init/1`.
+""".
+-spec add(SessionId, Pid, RouteKey) -> ok when
     SessionId :: binary(),
-    Pid :: pid().
-add(SessionId, Pid) ->
-    true = ets:insert(?TABLE, {SessionId, Pid}),
+    Pid :: pid(),
+    RouteKey :: binary().
+add(SessionId, Pid, RouteKey) ->
+    true = ets:insert(?TABLE, {SessionId, Pid, RouteKey}),
     ok.
 
 -doc "Drop a session id mapping. Called from the session's `terminate/2`.".
@@ -64,7 +70,7 @@ id, or for a stale row whose process has died (sweeping the row).
     SessionId :: binary().
 lookup(SessionId) ->
     case ets:lookup(?TABLE, SessionId) of
-        [{_, Pid}] ->
+        [{_, Pid, _Mod}] ->
             case is_process_alive(Pid) of
                 true ->
                     {ok, Pid};
@@ -75,3 +81,14 @@ lookup(SessionId) ->
         [] ->
             error
     end.
+
+-doc """
+Count the live sessions opened on route `RouteKey`, for the per-route
+`max_sessions` cap. Counts table rows directly (a stale row of a crashed
+session is swept on its next `lookup/1`), so the count is approximate under a
+burst of concurrent `initialize`s -- acceptable for a soft capacity limit.
+""".
+-spec count(RouteKey) -> non_neg_integer() when
+    RouteKey :: binary().
+count(RouteKey) ->
+    ets:select_count(?TABLE, [{{'_', '_', RouteKey}, [], [true]}]).
