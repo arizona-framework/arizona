@@ -148,16 +148,28 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 `?each` compiles each item into a per-item template (`#{s, d, f}`) for fine-grained diffing
 (insert/move/update). So the callback's body must be an **element** (`{Tag, Attrs, Children}`),
 a list of elements, or a static/mixed fragment. A bare value, a runtime binary, an `?html(...)`
-call, a `?stateful`/`?stateless` descriptor, a `case`/`if`, or a `fun name/arity` reference
-compiles to one opaque value slot. A scalar value renders and diffs (keyed by content) but
-gets no per-item diffing -- a comprehension is the right tool; a template or descriptor value
-goes further and **crashes on the first diff** (`bad_template_value`, when `to_bin/1` hits the
-stored template/descriptor). A template or descriptor wrapped in a bare list (`[?stateless(...)]`)
-is the same trap. The parse transform rejects all of these at compile time
-(`each_body_not_element` / `each_fun_ref_not_allowed`). A 2-arg (stream/map) callback is
-rejected the same way but with `each_stream_body_not_element`: a stream/map keys each item for
-per-item diffing and has **no comprehension fallback**, so the body must be an element (wrap the
-value: `fun(Item, Key) -> {li, [], [Item]} end`).
+call, a `?stateful`/`?stateless` descriptor, or a `case`/`if` compiles to one opaque value
+slot. A scalar value renders and diffs (keyed by content) but gets no per-item diffing -- a
+comprehension is the right tool; a template or descriptor value goes further and **crashes on
+the first diff** (`bad_template_value`, when `to_bin/1` hits the stored template/descriptor). A
+template or descriptor wrapped in a bare list (`[?stateless(...)]`) is the same trap. The parse
+transform rejects all of these at compile time (`each_body_not_element`). A 2-arg (stream/map)
+callback is rejected the same way but with `each_stream_body_not_element`: a stream/map keys
+each item for per-item diffing and has **no comprehension fallback**, so the body must be an
+element (wrap the value: `fun(Item, Key) -> {li, [], [Item]} end`).
+
+The callback may be an inline fun **or a local single-clause function reference** (`fun row/1`,
+or `fun row/2` for a stream/map): the parse transform resolves the reference to the function's
+body and inlines it exactly like an anonymous fun, so the **same** element-body rules apply (a
+non-element body still raises `each_body_not_element`/`each_stream_body_not_element`). The named
+function's now-orphaned definition is covered by auto-injected `nowarn_unused_function` /
+`-ignore_xref`, so it needn't be exported or otherwise used. A **same-module** explicit ref
+(`fun ?MODULE:row/1`) resolves to the local body just like `fun row/1`. Rejected: a
+**genuinely remote** reference (`fun other_mod:row/1`, or a variable module `fun M:row/1` --
+body not visible to inline, `each_remote_fun_ref`), an **imported** function used as a bare
+`fun row/1` (its body lives in another module, so it isn't found -- `each_named_fun_undefined`),
+and a **multi-clause** function (can't map to one shared per-item template,
+`each_named_fun_multi_clause`; collapse the clauses into a `case` inside the returned element).
 
 - Plain values: use a list comprehension or `lists:map/2` (no per-item diffing, fine for
   small or static lists).
@@ -170,6 +182,9 @@ value: `fun(Item, Key) -> {li, [], [Item]} end`).
 ?each(fun(U) -> case U of #{name := N} -> ?html({li,[],N}); _ -> ~"-" end end, ?get(users))
 %% ok: the conditional is a child of a stable element
 ?each(fun(U) -> {li, [], [case U of #{name := N} -> N; _ -> ~"-" end]} end, ?get(users))
+%% ok: a local single-clause named fun, resolved and inlined (same element-body rules)
+row(U) -> {li, [], [case U of #{name := N} -> N; _ -> ~"-" end]}.
+?each(fun row/1, ?get(users))
 %% plain values: a comprehension, not ?each
 {ul, [], [[<<"#", Tag/binary>> || Tag <- ?get(tags)]]}
 ```

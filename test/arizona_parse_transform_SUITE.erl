@@ -8,7 +8,22 @@
     az_each_inside_html/1,
     each_with_named_fun_ref/1,
     each_with_named_fun_ref_arity_2/1,
+    each_named_fun_ref_non_element_rejected/1,
+    each_named_fun_ref_arity_2_non_element_rejected/1,
     each_with_remote_fun_ref/1,
+    each_named_fun_ref_diffs/1,
+    each_named_fun_ref_pattern_param/1,
+    each_named_fun_ref_guard/1,
+    each_named_fun_ref_prefix_body/1,
+    each_named_fun_ref_nested_each/1,
+    each_named_fun_multi_clause_rejected/1,
+    each_named_fun_wrong_arity_rejected/1,
+    each_named_fun_undefined_rejected/1,
+    each_named_fun_ref_private_local_strict/1,
+    each_named_fun_same_module_ref/1,
+    each_named_fun_imported_rejected/1,
+    each_named_fun_variable_module_rejected/1,
+    each_named_fun_ref_native/1,
     each_body_html_wrapped_rejected/1,
     each_body_descriptor_rejected/1,
     each_body_case_rejected/1,
@@ -351,7 +366,22 @@ groups() ->
             template2_empty_list_render,
             each_with_named_fun_ref,
             each_with_named_fun_ref_arity_2,
+            each_named_fun_ref_non_element_rejected,
+            each_named_fun_ref_arity_2_non_element_rejected,
             each_with_remote_fun_ref,
+            each_named_fun_ref_diffs,
+            each_named_fun_ref_pattern_param,
+            each_named_fun_ref_guard,
+            each_named_fun_ref_prefix_body,
+            each_named_fun_ref_nested_each,
+            each_named_fun_multi_clause_rejected,
+            each_named_fun_wrong_arity_rejected,
+            each_named_fun_undefined_rejected,
+            each_named_fun_ref_private_local_strict,
+            each_named_fun_same_module_ref,
+            each_named_fun_imported_rejected,
+            each_named_fun_variable_module_rejected,
+            each_named_fun_ref_native,
             each_body_html_wrapped_rejected,
             each_body_descriptor_rejected,
             each_body_case_rejected,
@@ -3853,30 +3883,57 @@ invalid_element_binary_tag(Config) when is_list(Config) ->
 
 %% each/2 rejects `fun name/arity` references -- a reference can't be checked to return
 %% an element, so it must be inlined (or use ?stateless inside an element).
+%% A local single-clause `fun Name/1` ref is resolved and inlined: when its body is a
+%% valid element, the each compiles like an inline fun.
 each_with_named_fun_ref(Config) when is_list(Config) ->
-    assert_parse_error(
+    Mod = compile_module(
         "-module(pt_each_named_ref). "
+        "-export([render/1, row/1]). "
+        "row(Name) -> {'li', [], [Name]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "        arizona_template:get(items, Bindings, []))]}). "
+    ),
+    ?assert(is_map(Mod:render(#{items => [~"a", ~"b"]}))).
+
+%% A local single-clause `fun Name/2` ref over a stream/map is resolved and inlined too.
+each_with_named_fun_ref_arity_2(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_named_ref_2). "
+        "-export([render/1, row/2]). "
+        "row(Item, _Key) -> {'li', [], [Item]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/2, "
+        "        arizona_template:get(items, Bindings))]}). "
+    ),
+    ?assert(is_map(Mod:render(#{items => #{1 => ~"a"}}))).
+
+%% The named-ref path runs the SAME body validation as an inline fun: a non-element body
+%% (here a bare binary) is rejected with each_body_not_element.
+each_named_fun_ref_non_element_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_named_non_element). "
         "-export([render/1, row/1]). "
         "row(Name) -> <<\"row:\", Name/binary>>. "
         "render(Bindings) -> "
         "    arizona_template:each(fun row/1, "
         "        arizona_template:get(items, Bindings, [])). ",
-        fun(R) -> R =:= each_fun_ref_not_allowed end
+        fun(R) -> R =:= each_body_not_element end
     ).
 
-%% each/2 rejects 2-arity fun references too.
-each_with_named_fun_ref_arity_2(Config) when is_list(Config) ->
+%% Likewise for a 2-arg named ref: a non-element body yields the stream error.
+each_named_fun_ref_arity_2_non_element_rejected(Config) when is_list(Config) ->
     assert_parse_error(
-        "-module(pt_each_named_ref_2). "
+        "-module(pt_each_named_non_element_2). "
         "-export([render/1, row/2]). "
         "row(Item, Key) -> <<Key/binary, \"=\", Item/binary>>. "
         "render(Bindings) -> "
         "    arizona_template:each(fun row/2, "
         "        arizona_template:get(items, Bindings, [])). ",
-        fun(R) -> R =:= each_fun_ref_not_allowed end
+        fun(R) -> R =:= each_stream_body_not_element end
     ).
 
-%% each/2 rejects `fun Mod:Name/Arity` remote references too.
+%% each/2 rejects `fun Mod:Name/Arity` remote references: the body isn't visible to inline.
 each_with_remote_fun_ref(Config) when is_list(Config) ->
     assert_parse_error(
         "-module(pt_each_remote_ref). "
@@ -3884,8 +3941,183 @@ each_with_remote_fun_ref(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:each(fun erlang:integer_to_binary/1, "
         "        arizona_template:get(items, Bindings, [])). ",
-        fun(R) -> R =:= each_fun_ref_not_allowed end
+        fun(R) -> R =:= each_remote_fun_ref end
     ).
+
+%% A named-ref callback whose element holds a conditional child diffs per-item, exactly
+%% like the inline-fun equivalent (each_body_conditional_child_diffs).
+each_named_fun_ref_diffs(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_named_diffs). "
+        "-export([render/1, row/1]). "
+        "row(U) -> {'li', [], [case U of #{name := N} -> N; _ -> ~\"-\" end]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "        arizona_template:get(users, Bindings))]}). "
+    ),
+    B0 = #{users => [#{name => ~"Ada"}]},
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = #{users => [#{name => ~"Grace"}]},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% A named-ref callback with a map-pattern parameter head: the pattern becomes the per-item
+%% `d` fun parameter and resolves correctly.
+each_named_fun_ref_pattern_param(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_named_pattern). "
+        "-export([render/1, row/1]). "
+        "row(#{name := N}) -> {'li', [], [N]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "        arizona_template:get(users, Bindings))]}). "
+    ),
+    ?assert(is_map(Mod:render(#{users => [#{name => ~"Ada"}]}))).
+
+%% A named-ref callback with a guard: the guard is carried onto the per-item `d` fun clause.
+each_named_fun_ref_guard(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_named_guard). "
+        "-export([render/1, row/1]). "
+        "row(X) when is_map(X) -> {'li', [], [maps:get(n, X)]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "        arizona_template:get(users, Bindings))]}). "
+    ),
+    ?assert(is_map(Mod:render(#{users => [#{n => ~"Ada"}]}))).
+
+%% A named-ref callback with statements before the element (a prefix body): the prefix runs
+%% per item inside the generated `d` fun.
+each_named_fun_ref_prefix_body(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_named_prefix). "
+        "-export([render/1, row/1]). "
+        "row(I) -> N = integer_to_binary(I), {'li', [], [N]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "        arizona_template:get(ns, Bindings))]}). "
+    ),
+    ?assert(is_map(Mod:render(#{ns => [1, 2]}))).
+
+%% A named-ref callback whose body itself contains a nested ?each (with its own named ref):
+%% both resolve via the module-global lookup and the recursive compile path.
+each_named_fun_ref_nested_each(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_named_nested). "
+        "-export([render/1, section/1, item/1]). "
+        "item(I) -> {'li', [], [I]}. "
+        "section(S) -> {'ul', [], [arizona_template:each(fun item/1, "
+        "    arizona_template:get(items, S))]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [arizona_template:each(fun section/1, "
+        "        arizona_template:get(sections, Bindings))]}). "
+    ),
+    ?assert(is_map(Mod:render(#{sections => [#{items => [~"a"]}]}))).
+
+%% A multi-clause local ref can't map to one shared per-item template -- rejected.
+each_named_fun_multi_clause_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_named_multi). "
+        "-export([render/1, row/1]). "
+        "row(a) -> {'li', [], [~\"a\"]}; "
+        "row(X) -> {'li', [], [X]}. "
+        "render(Bindings) -> "
+        "    arizona_template:each(fun row/1, "
+        "        arizona_template:get(items, Bindings, [])). ",
+        fun(R) -> R =:= each_named_fun_multi_clause end
+    ).
+
+%% A local ref of an arity other than 1 or 2 isn't a valid callback -- rejected as
+%% invalid_each_fun (1 = list item, 2 = stream/map item+key).
+each_named_fun_wrong_arity_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_named_arity3). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:each(fun row/3, "
+        "        arizona_template:get(items, Bindings, [])). ",
+        fun(R) -> R =:= invalid_each_fun end
+    ).
+
+%% A local ref to a function not defined in this module -- rejected with a clear message.
+each_named_fun_undefined_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_named_undef). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:each(fun missing_row/1, "
+        "        arizona_template:get(items, Bindings, [])). ",
+        fun(R) -> R =:= each_named_fun_undefined end
+    ).
+
+%% Load-bearing: a PRIVATE (non-exported) callback used only by ?each is inlined, orphaning
+%% it. The injected nowarn_unused_function attribute must let this compile under
+%% warnings_as_errors (compile_module_strict). Without the injection, the unused `row/1`
+%% would fail the build.
+each_named_fun_ref_private_local_strict(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_each_named_private). "
+        "-export([render/1]). "
+        "row(N) -> {'li', [], [N]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "        arizona_template:get(items, Bindings, []))]}). "
+    ),
+    ?assert(is_map(Mod:render(#{items => [~"a", ~"b"]}))).
+
+%% A same-module explicit ref `fun ?MODULE:row/1` (here the literal module name) resolves to
+%% the local body exactly like `fun row/1`. With a PRIVATE callback, compile_module_strict
+%% also proves the suppression covers the same-module form under warnings_as_errors.
+each_named_fun_same_module_ref(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_each_same_mod). "
+        "-export([render/1]). "
+        "row(N) -> {'li', [], [N]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun pt_each_same_mod:row/1, "
+        "        arizona_template:get(items, Bindings, []))]}). "
+    ),
+    ?assert(is_map(Mod:render(#{items => [~"a", ~"b"]}))).
+
+%% An imported function referenced as a bare `fun row/1` looks local but its body lives in
+%% another module, so it isn't in this module's FunDefs -- rejected as undefined.
+each_named_fun_imported_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_imported). "
+        "-export([render/1]). "
+        "-import(other_mod, [row/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:each(fun row/1, "
+        "        arizona_template:get(items, Bindings, [])). ",
+        fun(R) -> R =:= each_named_fun_undefined end
+    ).
+
+%% A remote ref whose module is a variable (`fun M:row/1`) can't be resolved -- rejected.
+each_named_fun_variable_module_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_var_mod). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    M = other_mod, "
+        "    arizona_template:each(fun M:row/1, "
+        "        arizona_template:get(items, Bindings, [])). ",
+        fun(R) -> R =:= each_remote_fun_ref end
+    ).
+
+%% A named-fun ?each inside ?native goes through the native_each rewrite: the callback is
+%% resolved/inlined with the native backend, and a PRIVATE callback is suppressed the same
+%% way (compile_module_strict -> warnings_as_errors).
+each_named_fun_ref_native(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_each_named_native). "
+        "-export([render/1]). "
+        "row(#{text := T}, Key) -> {'Text', [{az_key, Key}], [T]}. "
+        "render(Bindings) -> "
+        "    arizona_template:native({'Column', [{id, arizona_template:get(id, Bindings)}], "
+        "        [arizona_template:each(fun row/2, arizona_template:get(items, Bindings))]}). "
+    ),
+    ?assert(is_map(Mod:render(#{id => ~"c", items => #{1 => #{text => ~"a"}}}))).
 
 %% Wrapping the element in ?html(...) yields a template value (a text_dynamic slot that
 %% crashes on diff) -- rejected; return the element literal directly.

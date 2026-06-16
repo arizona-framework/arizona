@@ -330,12 +330,26 @@ template/descriptor and raises `bad_template_value`. So `compile_each` rejects a
 `text_dynamic` body (`each_body_not_element` for a 1-arg/list callback,
 `each_stream_body_not_element` for a 2-arg/stream-or-map callback -- the two differ only in fix
 advice, since a list has a comprehension fallback and a stream/map, keyed per item, does not)
-and a fun reference (`each_fun_ref_not_allowed`, its return can't be inspected) at compile
-time. It also rejects a bare list whose item is a
+at compile time. It also rejects a bare list whose item is a
 template or descriptor (`[?html(...)]`, `[?stateless(...)]`) -- the item lands in the same
 fragile value slot -- while keeping a list of elements or a static/dynamic-text fragment.
 Map plain values with a list comprehension / `lists:map` (no per-item diffing); put a
 conditional inside an element child (`{li, [], [case ... end]}`).
+
+The callback may be an inline fun **or a local single-clause function reference** (`fun row/1`,
+or `fun row/2` for a stream/map). `compile_each` looks the function up in the module's forms
+(`collect_fun_defs/1`) and inlines its clause through the same path, so the identical body rules
+apply (a non-element body still raises `each_body_not_element`/`each_stream_body_not_element`).
+Inlining orphans the named function, so `parse_transform/2` injects
+`-compile({nowarn_unused_function, ...})` and `-ignore_xref(...)` for the consumed pairs --
+the function needn't be exported or otherwise used. A **same-module** explicit ref
+(`fun ?MODULE:row/1`, module literal = the current module) is rewritten to the bare local form
+and resolved identically. Rejected: a **genuinely remote** reference (`each_remote_fun_ref` --
+another module's, or a variable module, body isn't visible to inline; an `-import`ed function
+referenced as a bare `fun row/1` falls through to `each_named_fun_undefined` since it isn't in
+`FunDefs`) and a **multi-clause** function (`each_named_fun_multi_clause` -- clauses would select
+different per-item structures, but there is only one shared per-item template); collapse
+multiple clauses into a `case` inside the returned element.
 
 A per-item **component** (`{li, [], [?stateless(...)]}`) compiles and renders but currently
 **crashes on the first diff**: the list-each diff in `arizona_diff` (`diff_list_zip/4`) keys a

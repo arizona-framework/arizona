@@ -136,13 +136,85 @@ parse_transform(Forms, _Options) ->
     File = extract_file(Forms),
     Module = extract_module(Forms),
     IsLive = has_behaviour(Forms, arizona_stateful),
+    FunDefs = collect_fun_defs(Forms),
     try
-        Transformed = [transform_form(mark_targets(Form, none), Module, IsLive) || Form <- Forms],
-        erl_syntax:revert_forms(Transformed)
+        Transformed = [
+            transform_form(mark_targets(Form, none), Module, IsLive, FunDefs)
+         || Form <- Forms
+        ],
+        WithSuppressions = inject_each_callback_suppressions(Transformed, Forms, FunDefs, Module),
+        erl_syntax:revert_forms(WithSuppressions)
     catch
         throw:{arizona_parse_error, Line, Reason} ->
             {error, [{File, [{Line, ?MODULE, Reason}]}], []}
     end.
+
+%% Map every `{Name, Arity}` to its clause list, so a `?each(fun Name/Arity, _)`
+%% callback can be resolved to its body and inlined like an anonymous fun.
+collect_fun_defs(Forms) ->
+    #{{Name, Arity} => Clauses || {function, _, Name, Arity, Clauses} <- Forms}.
+
+%% A local `fun Name/Arity` ?each callback is inlined into the per-item template, so
+%% the function loses its only reference. Suppress the resulting unused-function
+%% warning (compiler, under warnings_as_errors) and xref finding (locals_not_used /
+%% exports_not_used) by injecting -compile(nowarn_unused_function) and -ignore_xref
+%% attributes for the consumed pairs. A no-op when the function is also used elsewhere.
+inject_each_callback_suppressions(Forms, OrigForms, FunDefs, Module) ->
+    case collect_each_callback_pairs(OrigForms, FunDefs, Module) of
+        [] ->
+            Forms;
+        Pairs ->
+            insert_suppression_attrs(Forms, Pairs)
+    end.
+
+%% Scan the original forms (pre-mark_targets, so every ?each is still spelled `each`
+%% -- mark_targets only renames nested each to native_each/terminal_each and never
+%% touches the fun argument) for local `fun Name/Arity` (and same-module
+%% `fun ?MODULE:Name/Arity`) callbacks. Returns the deduped pairs defined in this module.
+collect_each_callback_pairs(Forms, FunDefs, Module) ->
+    Pairs = each_callback_pairs(Forms, #{}, Module),
+    [Pair || Pair := _ <- Pairs, is_map_key(Pair, FunDefs)].
+
+each_callback_pairs(
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, each}}, [Callback | _]} = Node, Acc, Module
+) when
+    Mod =:= arizona_template; Mod =:= az
+->
+    Acc1 =
+        case each_callback_pair(Callback, Module) of
+            {ok, Pair} -> Acc#{Pair => true};
+            none -> Acc
+        end,
+    each_callback_pairs(tuple_to_list(Node), Acc1, Module);
+each_callback_pairs(Node, Acc, Module) when is_tuple(Node) ->
+    each_callback_pairs(tuple_to_list(Node), Acc, Module);
+each_callback_pairs(Nodes, Acc, Module) when is_list(Nodes) ->
+    lists:foldl(fun(N, A) -> each_callback_pairs(N, A, Module) end, Acc, Nodes);
+each_callback_pairs(_Node, Acc, _Module) ->
+    Acc.
+
+%% A local `fun Name/Arity` or same-module `fun ?MODULE:Name/Arity` callback -- the pair to
+%% suppress. An inline fun or a genuinely remote ref contributes nothing.
+each_callback_pair({'fun', _, {function, Name, Arity}}, _Module) ->
+    {ok, {Name, Arity}};
+each_callback_pair(
+    {'fun', _, {function, {atom, _, Module}, {atom, _, Name}, {integer, _, Arity}}}, Module
+) ->
+    {ok, {Name, Arity}};
+each_callback_pair(_Callback, _Module) ->
+    none.
+
+insert_suppression_attrs(Forms, Pairs) ->
+    {Before, [ModAttr | After]} = lists:splitwith(
+        fun(Form) -> not is_module_attr(Form) end, Forms
+    ),
+    Anno = element(2, ModAttr),
+    NowarnAttr = {attribute, Anno, compile, {nowarn_unused_function, Pairs}},
+    IgnoreXrefAttr = {attribute, Anno, ignore_xref, Pairs},
+    Before ++ [ModAttr, NowarnAttr, IgnoreXrefAttr | After].
+
+is_module_attr({attribute, _, module, _}) -> true;
+is_module_attr(_) -> false.
 
 %% Top-down pre-pass threading the enclosing render target `Ctx` (`none` outside
 %% any template, else `html` | `native` | `terminal`). Two jobs:
@@ -246,10 +318,21 @@ format_error(each_stream_body_not_element) ->
     "diffing, which a single-value body throws away. Unlike a list there is no comprehension "
     "fallback (a comprehension has no stream/keyed semantics): wrap the value in an element, "
     "e.g. fun(Item, Key) -> {li, [], [Item]} end";
-format_error(each_fun_ref_not_allowed) ->
-    "an ?each callback must be an inline fun returning an element; a fun reference can't "
-    "be checked to return one (and a reference returning a template breaks diffing). Inline "
-    "it (fun(I) -> {li, [], [...]} end)";
+format_error(each_named_fun_multi_clause) ->
+    "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have a "
+    "single clause -- ?each inlines the function's body into one shared per-item template, so "
+    "multiple clauses (which would select different per-item structures) can't be compiled to "
+    "a single template. Collapse them into one clause with a case inside the returned element: "
+    "name(I) -> {li, [], [case I of ... end]}";
+format_error(each_named_fun_undefined) ->
+    "the ?each callback references a local fun (fun name/1 or fun name/2) that is not defined "
+    "in this module. Define it as a single-clause function returning an element, or inline the "
+    "callback (fun(I) -> {li, [], [...]} end)";
+format_error(each_remote_fun_ref) ->
+    "an ?each callback cannot be a remote fun reference (fun mod:name/arity) -- ?each inlines "
+    "the callback body to build a per-item template, which is impossible across a module "
+    "boundary. Inline it (fun(I) -> {li, [], [...]} end), or move the body into a single-clause "
+    "local function and pass fun name/1";
 format_error(live_render_not_single_element) ->
     "arizona_stateful render/1 must return a single root element, not a list";
 format_error(live_render_missing_id) ->
@@ -419,24 +502,24 @@ has_behaviour([{attribute, _, behavior, B} | _], B) -> true;
 has_behaviour([_ | Rest], B) -> has_behaviour(Rest, B);
 has_behaviour([], _) -> false.
 
-transform_form({function, L, render, 1, Clauses}, Module, true) ->
-    {function, L, render, 1, [transform_live_render_clause(C, Module) || C <- Clauses]};
-transform_form({function, L, Name, Arity, Clauses}, Module, _IsLive) ->
-    {function, L, Name, Arity, [transform_clause(C, Module) || C <- Clauses]};
-transform_form(Form, _Module, _IsLive) ->
+transform_form({function, L, render, 1, Clauses}, Module, true, FunDefs) ->
+    {function, L, render, 1, [transform_live_render_clause(C, Module, FunDefs) || C <- Clauses]};
+transform_form({function, L, Name, Arity, Clauses}, Module, _IsLive, FunDefs) ->
+    {function, L, Name, Arity, [transform_clause(C, Module, FunDefs) || C <- Clauses]};
+transform_form(Form, _Module, _IsLive, _FunDefs) ->
     Form.
 
-transform_clause({clause, L, Patterns, Guards, Body0}, Module) ->
+transform_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs) ->
     check_tracked_get_targets(Patterns, Body0),
     Body = normalize_tail_binds(Body0),
     Inline = collect_inline(Body),
-    Body1 = [transform_expr(Expr, Module, Inline) || Expr <- Body],
+    Body1 = [transform_expr(Expr, Module, Inline, FunDefs) || Expr <- Body],
     {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
 
-transform_expr(Expr, Module, Inline) ->
-    erl_syntax_lib:map(fun(Node) -> transform_node(Node, Module, Inline) end, Expr).
+transform_expr(Expr, Module, Inline, FunDefs) ->
+    erl_syntax_lib:map(fun(Node) -> transform_node(Node, Module, Inline, FunDefs) end, Expr).
 
-transform_node(Node, Module, Inline) ->
+transform_node(Node, Module, Inline, FunDefs) ->
     N = erl_syntax:revert(Node),
     case N of
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, [Arg]} when
@@ -459,7 +542,14 @@ transform_node(Node, Module, Inline) ->
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}}, [FunArg, SourceArg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
-            compile_each(inline_vars(FunArg, Inline), inline_vars(SourceArg, Inline), L, Module);
+            compile_each(
+                inline_vars(FunArg, Inline),
+                inline_vars(SourceArg, Inline),
+                L,
+                Module,
+                arizona_html,
+                FunDefs
+            );
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, native_each}}, [FunArg, SourceArg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
@@ -468,7 +558,8 @@ transform_node(Node, Module, Inline) ->
                 inline_vars(SourceArg, Inline),
                 L,
                 Module,
-                arizona_native
+                arizona_native,
+                FunDefs
             );
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, terminal_each}}, [FunArg, SourceArg]} when
             Mod =:= arizona_template; Mod =:= az
@@ -478,7 +569,8 @@ transform_node(Node, Module, Inline) ->
                 inline_vars(SourceArg, Inline),
                 L,
                 Module,
-                arizona_terminal
+                arizona_terminal,
+                FunDefs
             );
         %% Sugar: `arizona_template:stateless(atom, Props)` with a literal atom
         %% callback is rewritten to `arizona_template:stateless(fun atom/1, Props)`.
@@ -494,15 +586,15 @@ transform_node(Node, Module, Inline) ->
             N
     end.
 
-transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module) ->
+transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module, FunDefs) ->
     check_tracked_get_targets(Patterns, Body),
     {Init0, [Last]} = lists:split(length(Body) - 1, Body),
     %% Only the init statements are normalized: the last expr carries the live root
-    %% template and is handled by transform_live_render_last/3.
+    %% template and is handled by transform_live_render_last/4.
     Init = normalize_tail_binds(Init0),
     Inline = collect_inline(Init ++ [Last]),
-    TransformedInit = [transform_expr(Expr, Module, Inline) || Expr <- Init],
-    TransformedLast = transform_live_render_last(Last, Module, Inline),
+    TransformedInit = [transform_expr(Expr, Module, Inline, FunDefs) || Expr <- Init],
+    TransformedLast = transform_live_render_last(Last, Module, Inline, FunDefs),
     Body1 = TransformedInit ++ [TransformedLast],
     {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
 
@@ -511,29 +603,29 @@ transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module) ->
 %% root. Walk each tail position (shared with content-slot expansion via
 %% map_tail_exprs/3), compiling the root at each leaf; non-tail sub-expressions
 %% are transformed normally.
-transform_live_render_last(Expr, Module, Inline) ->
+transform_live_render_last(Expr, Module, Inline, FunDefs) ->
     map_tail_exprs(
         Expr,
-        fun(Leaf) -> transform_live_render_leaf(Leaf, Module, Inline) end,
-        fun(NonTail) -> transform_expr(NonTail, Module, Inline) end
+        fun(Leaf) -> transform_live_render_leaf(Leaf, Module, Inline, FunDefs) end,
+        fun(NonTail) -> transform_expr(NonTail, Module, Inline, FunDefs) end
     ).
 
-transform_live_render_leaf(Expr, Module, Inline) ->
+transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
     case erl_syntax:revert(Expr) of
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, [Arg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
             validate_live_root(Arg, L, Inline),
-            Arg1 = transform_expr(Arg, Module, Inline),
+            Arg1 = transform_expr(Arg, Module, Inline, FunDefs),
             compile_template(inline_vars(Arg1, Inline), L, Module, true);
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, [Arg]} when
             Mod =:= arizona_template; Mod =:= az
         ->
             validate_live_root(Arg, L, Inline),
-            Arg1 = transform_expr(Arg, Module, Inline),
+            Arg1 = transform_expr(Arg, Module, Inline, FunDefs),
             compile_template(inline_vars(Arg1, Inline), L, Module, true, arizona_native);
         _ ->
-            transform_expr(Expr, Module, Inline)
+            transform_expr(Expr, Module, Inline, FunDefs)
     end.
 
 %% Walk the tail (value-producing) positions of a control-flow expression,
@@ -969,10 +1061,7 @@ maybe_target_opt(arizona_terminal, Opts) ->
 maybe_target_opt(_Backend, Opts) ->
     Opts.
 
-compile_each(FunAST, SourceAST, Line, Module) ->
-    compile_each(FunAST, SourceAST, Line, Module, arizona_html).
-
-compile_each(FunAST, SourceAST, Line, Module, Backend) ->
+compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs) ->
     case FunAST of
         {'fun', _, {clauses, [{clause, _, [ItemVar, KeyVar], Guards, Body}]}} ->
             {Prefix, LastExpr} = split_fun_body(Body),
@@ -996,14 +1085,45 @@ compile_each(FunAST, SourceAST, Line, Module, Backend) ->
             build_each_ast(
                 Line, SourceAST, [ItemVar], Guards, Prefix, S1, D1, Fingerprint, Opts
             );
-        %% `fun name/arity` / `fun Mod:name/arity` -- a reference can't be checked to
-        %% return an element, and a reference returning a template breaks diffing.
+        %% Local `fun Name/1` or `fun Name/2` ref: resolve its single clause and compile
+        %% it exactly like an inline fun, so the same element-body validation runs. The
+        %% looked-up clause is the original untransformed body, which is what the inline
+        %% path expects. (Its now-orphaned definition is covered by the injected
+        %% nowarn_unused_function / ignore_xref attributes.)
+        {'fun', L, {function, Name, Arity}} when Arity =:= 1; Arity =:= 2 ->
+            compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, FunDefs);
+        %% A local ref of any other arity isn't a valid callback (1 = list, 2 = stream/map).
         {'fun', L, {function, _Name, _Arity}} ->
-            parse_error(each_fun_ref_not_allowed, L);
+            parse_error(invalid_each_fun, L);
+        %% Same-module explicit ref `fun ?MODULE:Name/Arity` (literal module = this module):
+        %% the body is visible here, so rewrite to the bare local form and re-dispatch -- it
+        %% then behaves exactly like `fun Name/Arity` (resolve + inline, or the same
+        %% arity/multi-clause/undefined errors).
+        {'fun', L, {function, {atom, _, Module}, {atom, _, Name}, {integer, _, Arity}}} ->
+            compile_each(
+                {'fun', L, {function, Name, Arity}}, SourceAST, Line, Module, Backend, FunDefs
+            );
+        %% A remote `fun Mod:Name/Arity` ref to another module: its body isn't visible at
+        %% compile time, so it can't be inlined into the per-item template.
         {'fun', L, {function, _Mod, _Name, _Arity}} ->
-            parse_error(each_fun_ref_not_allowed, L);
+            parse_error(each_remote_fun_ref, L);
         _ ->
             parse_error(invalid_each_fun, Line)
+    end.
+
+%% Resolve a local `Name/Arity` callback (from a bare `fun Name/Arity` or a same-module
+%% `fun ?MODULE:Name/Arity`) to its single clause and compile it via the inline-fun path.
+%% `L` is the fun-ref location (for the error/synthesized clause); `Line` the each call site.
+compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, FunDefs) ->
+    case FunDefs of
+        #{{Name, Arity} := [Clause]} ->
+            compile_each(
+                {'fun', L, {clauses, [Clause]}}, SourceAST, Line, Module, Backend, FunDefs
+            );
+        #{{Name, Arity} := [_ | _]} ->
+            parse_error(each_named_fun_multi_clause, L);
+        #{} ->
+            parse_error(each_named_fun_undefined, L)
     end.
 
 %% An ?each callback must build a per-item template: its body must be an element, a list
