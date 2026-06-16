@@ -15,11 +15,14 @@
     diff_only_changed_emits_ops/1,
     diff_remove_node_op/1,
     diff_replace_with_template_op/1,
+    diff_empty_to_template_uses_text_op/1,
     diff_list_content_change_full_update/1,
     diff_list_first_item_change_full_update/1,
     diff_list_grew_full_update/1,
     diff_list_shrank_full_update/1,
     diff_list_no_change_no_ops/1,
+    diff_each_among_siblings_uses_text_op/1,
+    diff_each_among_siblings_to_empty_uses_text_op/1,
     diff_text_op/1,
     no_diff_diff3/1,
     no_diff_diff4_top_level/1,
@@ -43,11 +46,14 @@ groups() ->
             diff_mixed_op,
             diff_remove_node_op,
             diff_replace_with_template_op,
+            diff_empty_to_template_uses_text_op,
             diff_list_content_change_full_update,
             diff_list_first_item_change_full_update,
             diff_list_grew_full_update,
             diff_list_shrank_full_update,
             diff_list_no_change_no_ops,
+            diff_each_among_siblings_uses_text_op,
+            diff_each_among_siblings_to_empty_uses_text_op,
             diff_only_changed_emits_ops,
             diff_bool_attr_add,
             diff_bool_attr_remove,
@@ -216,13 +222,18 @@ diff_remove_node_op(Config) when is_list(Config) ->
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
     ?assertEqual([[?OP_REMOVE_NODE, <<"0">>]], Ops).
 
+%% A content slot whose value changes from a plain binary to a nested template
+%% patches the slot's marker content with ?OP_TEXT -- never ?OP_UPDATE
+%% (innerHTML), which would clobber the enclosing element when the slot's az is
+%% the element's own az. See diff_empty_to_template_uses_text_op for the
+%% empty(~"") -> ?stateful descriptor case this protects.
 diff_replace_with_template_op(Config) when is_list(Config) ->
     OldSnap = #{
-        s => [<<"<div az=\"0\">">>, <<"</div>">>],
+        s => [<<"<div az=\"0\"><!--az:0-->">>, <<"<!--/az--></div>">>],
         d => [{<<"0">>, <<"plain">>}]
     },
     NewTmpl = #{
-        s => [<<"<div az=\"0\">">>, <<"</div>">>],
+        s => [<<"<div az=\"0\"><!--az:0-->">>, <<"<!--/az--></div>">>],
         d => [
             {<<"0">>, fun() ->
                 #{s => [<<"<b>">>, <<"</b>">>], d => [{<<"i">>, <<"bold">>}], f => <<"test">>}
@@ -234,7 +245,7 @@ diff_replace_with_template_op(Config) when is_list(Config) ->
     ?assertEqual(
         [
             [
-                ?OP_UPDATE,
+                ?OP_TEXT,
                 <<"0">>,
                 #{
                     <<"f">> => <<"test">>,
@@ -246,10 +257,49 @@ diff_replace_with_template_op(Config) when is_list(Config) ->
         Ops
     ).
 
+%% Regression: a content slot transitioning from the empty string (`~""`) to a
+%% nested template -- the shape `case ?get(flag) of true -> ?stateful(...);
+%% false -> ~"" end` produces -- must patch the slot's marker content via
+%% ?OP_TEXT, leaving its siblings (and the enclosing element) intact. The bug
+%% was emitting ?OP_UPDATE here, whose innerHTML write clobbered the whole
+%% enclosing element when the slot's az equalled the element's own az (a
+%% conditional ?stateful child directly under the view root).
+diff_empty_to_template_uses_text_op(Config) when is_list(Config) ->
+    %% Statics model: <main az="X-0" id="app"><h1>..</h1><!--az:X-0-->SLOT
+    %% <!--/az--><footer>..</footer></main> -- the slot's az (X-0) is the same
+    %% as the enclosing <main>'s az, exactly as a view root + conditional child.
+    Statics = [
+        <<"<main az=\"X-0\" id=\"app\"><h1 az=\"X-1\">t</h1><!--az:X-0-->">>,
+        <<"<!--/az--><footer az=\"X-2\">f</footer></main>">>
+    ],
+    OldSnap = #{
+        s => Statics,
+        d => [{<<"X-1">>, <<"t">>}, {<<"X-0">>, <<>>}, {<<"X-2">>, <<"f">>}]
+    },
+    NewTmpl = #{
+        s => Statics,
+        d => [
+            {<<"X-1">>, fun() -> <<"t">> end},
+            {<<"X-0">>, fun() ->
+                #{s => [<<"<div>child</div>">>], d => [], f => <<"child_fp">>}
+            end},
+            {<<"X-2">>, fun() -> <<"f">> end}
+        ],
+        f => <<"X">>
+    },
+    {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
+    %% Exactly one op, an ?OP_TEXT on the slot -- not an ?OP_UPDATE on X-0
+    %% (which the client resolves to the <main> root and would innerHTML-wipe).
+    ?assertMatch([[?OP_TEXT, <<"X-0">>, #{<<"f">> := <<"child_fp">>}]], Ops),
+    ?assertNotMatch([[?OP_UPDATE, <<"X-0">>, _]], Ops).
+
 %% Plain-list `?each` diffing: any change re-renders the whole list with a
-%% single OP_UPDATE -- never a per-item OP_ITEM_PATCH (plain lists are unkeyed,
-%% so there is no `az-key` to patch). Regression for the "stream item az-key=...
-%% not found for patch" bug. These cover every boolean branch of the diff:
+%% single OP_TEXT (the marker-aware container patch) -- never a per-item
+%% OP_ITEM_PATCH (plain lists are unkeyed, so there is no `az-key` to patch).
+%% Regression for the "stream item az-key=... not found for patch" bug. OP_TEXT
+%% (not OP_UPDATE) because a plain-list each is anchored by content-slot comment
+%% markers; see diff_each_among_siblings_uses_text_op. These cover every boolean
+%% branch of the diff:
 %%   diff_list_zip:  InnerOps =/= [] (head)  |  RestChanged (tail)  |  neither
 %%   diff_list:      Changed  |  NewTail =/= [] (grew)  |  OldTail =/= [] (shrank)
 
@@ -277,12 +327,13 @@ each_list_diff(Old, New) ->
     {Ops, _Snap, _Views} = arizona_diff:diff(NewTmpl, OldSnap, #{}, #{names => true}),
     Ops.
 
-%% Assert exactly one OP_UPDATE (full re-render), no per-item OP_ITEM_PATCH, and
-%% return the rendered item-dynamics list from the (fingerprinted) payload.
+%% Assert exactly one OP_TEXT (full marker-aware re-render), no per-item
+%% OP_ITEM_PATCH, and return the rendered item-dynamics list from the
+%% (fingerprinted) payload.
 assert_full_update(Ops) ->
-    ?assertMatch([[?OP_UPDATE, <<"0">>, #{<<"t">> := ?EACH}]], Ops),
+    ?assertMatch([[?OP_TEXT, <<"0">>, #{<<"t">> := ?EACH}]], Ops),
     ?assertEqual([], [Op || Op <- Ops, hd(Op) =:= ?OP_ITEM_PATCH]),
-    [[?OP_UPDATE, <<"0">>, #{<<"d">> := ItemDs}]] = Ops,
+    [[?OP_TEXT, <<"0">>, #{<<"d">> := ItemDs}]] = Ops,
     ItemDs.
 
 %% Last item's content changes: head item unchanged (InnerOps == []) so the
@@ -315,6 +366,89 @@ diff_list_shrank_full_update(Config) when is_list(Config) ->
 diff_list_no_change_no_ops(Config) when is_list(Config) ->
     Items = [#{name => <<"a">>}, #{name => <<"b">>}],
     ?assertEqual([], each_list_diff(Items, Items)).
+
+%% Regression: a plain-list `?each` sitting *among static sibling content* in the
+%% same content slot. SSR anchors the each by its `<!--az:X-->...<!--/az-->`
+%% comment markers (like every dynamic-text child) -- there is NO wrapper element
+%% carrying `az="X"`. So the container op must be the marker-aware ?OP_TEXT: the
+%% client's resolveEl can't find an element for the each's marker az and falls
+%% back to the *enclosing* element, where ?OP_UPDATE's innerHTML would wipe the
+%% static sibling content. The mixed-siblings shape is what breaks; a sole-child
+%% each only "works" with ?OP_UPDATE by coincidence (the fallback element is the
+%% right one). diff_each_among_siblings_to_empty_uses_text_op covers the reverse
+%% (non-empty -> []) toggle. Build the snapshot/template with sibling dynamics
+%% before the each so the each's az is a marker slot distinct from the parent.
+
+%% Diff a plain-list `?each` placed after two static sibling dynamics (the
+%% sibling dynamics are unchanged, so only the each should emit an op). The each
+%% transitions `Old` -> `New`. Returns the full op list.
+each_among_siblings_diff(Old, New) ->
+    ItemTmpl = #{
+        t => ?EACH,
+        s => [<<"<div class=\"item\" az=\"strip:2:0\"><span>">>, <<"</span></div>">>],
+        d => fun(I) -> [{<<"strip:2:0">>, maps:get(name, I)}] end,
+        f => <<"item">>
+    },
+    {OldItems, _} = arizona_eval:render_list_items(Old, ItemTmpl, {#{}, #{}}),
+    %% Statics model:
+    %%   <div class="strip" az="strip">
+    %%     <div class="item" az="strip:0"><!--az:strip:0-->A<!--/az--></div>
+    %%     <div class="item" az="strip:1"><!--az:strip:1-->B<!--/az--></div>
+    %%     <!--az:strip:2-->EACH<!--/az-->
+    %%   </div>
+    %% The each's az (strip:2) is a marker slot, NOT any element's own az.
+    Statics = [
+        <<"<div class=\"strip\" az=\"strip\">",
+            "<div class=\"item\" az=\"strip:0\"><!--az:strip:0-->">>,
+        <<"<!--/az--></div><div class=\"item\" az=\"strip:1\"><!--az:strip:1-->">>,
+        <<"<!--/az--></div><!--az:strip:2-->">>,
+        <<"<!--/az--></div>">>
+    ],
+    OldSnap = #{
+        s => Statics,
+        d => [
+            {<<"strip:0">>, <<"A">>},
+            {<<"strip:1">>, <<"B">>},
+            {<<"strip:2">>, #{t => ?EACH, items => OldItems, template => ItemTmpl}}
+        ],
+        deps => [#{a => true}, #{b => true}, #{rows => true}],
+        f => <<"strip">>
+    },
+    NewTmpl = #{
+        s => Statics,
+        d => [
+            {<<"strip:0">>, fun() -> <<"A">> end},
+            {<<"strip:1">>, fun() -> <<"B">> end},
+            {<<"strip:2">>, fun() -> arizona_template:each(New, ItemTmpl) end, {m, 1}}
+        ],
+        f => <<"strip">>
+    },
+    {Ops, _Snap, _Views} = arizona_diff:diff(NewTmpl, OldSnap, #{}, #{rows => true}),
+    Ops.
+
+%% `[]` -> non-empty: the each must patch its marker slot via ?OP_TEXT, never
+%% ?OP_UPDATE (which would innerHTML-wipe the static sibling .item divs). The
+%% unchanged sibling dynamics (strip:0/strip:1) must emit no ops.
+diff_each_among_siblings_uses_text_op(Config) when is_list(Config) ->
+    Ops = each_among_siblings_diff([], [#{name => <<"k">>}]),
+    ?assertMatch([[?OP_TEXT, <<"strip:2">>, #{<<"t">> := ?EACH}]], Ops),
+    ?assertNotMatch([[?OP_UPDATE, <<"strip:2">>, _]], Ops),
+    %% Siblings untouched: no op targets strip:0 or strip:1.
+    ?assertEqual(
+        [],
+        [Op || Op <- Ops, lists:member(lists:nth(2, Op), [<<"strip:0">>, <<"strip:1">>])]
+    ),
+    [[?OP_TEXT, <<"strip:2">>, #{<<"d">> := ItemDs}]] = Ops,
+    ?assertEqual([[<<"k">>]], ItemDs).
+
+%% non-empty -> `[]`: the reverse toggle must also use ?OP_TEXT (clearing only
+%% the marker content), leaving the static siblings intact.
+diff_each_among_siblings_to_empty_uses_text_op(Config) when is_list(Config) ->
+    Ops = each_among_siblings_diff([#{name => <<"k">>}], []),
+    ?assertMatch([[?OP_TEXT, <<"strip:2">>, #{<<"t">> := ?EACH}]], Ops),
+    ?assertNotMatch([[?OP_UPDATE, <<"strip:2">>, _]], Ops),
+    [[?OP_TEXT, <<"strip:2">>, #{<<"d">> := ItemDs}]] = Ops,
+    ?assertEqual([], ItemDs).
 
 diff_only_changed_emits_ops(Config) when is_list(Config) ->
     OldSnap = #{

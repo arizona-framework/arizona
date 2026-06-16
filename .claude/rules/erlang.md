@@ -203,6 +203,28 @@ shared with the live-render-root transform. (This mirrors `?each`, whose callbac
 already accepts bare elements; the difference is that `?each` keys items for per-item
 diffing while a conditional is a single slot.)
 
+A conditional may also return a `?stateful`/`?stateless` descriptor from a branch -- the
+idiomatic `case ?get(flag) of true -> ?stateful(child, #{id => ~"c"}); false -> ~"" end`.
+A content slot is anchored by its `<!--az:X-->...<!--/az-->` comment markers in SSR, so
+any branch value (the empty string, a binary, a nested template, or a child descriptor)
+patches **in place** via `?OP_TEXT`, preserving the slot's siblings and the enclosing
+element. (`arizona_diff:make_op/3` always emits `?OP_TEXT`, never `?OP_UPDATE`, for a
+nested-template value -- an `?OP_UPDATE` would `innerHTML`-overwrite the enclosing element,
+which is catastrophic when the slot's `az` is that element's own `az`, e.g. a conditional
+child rendered directly under the view root.)
+
+The same rule applies to a **plain-list `?each` in a content slot**: it is marker-anchored
+exactly like any other dynamic-text child (no wrapper element carries the slot `az`), so its
+container patch is the marker-aware `?OP_TEXT` -- `make_op/3` (the `?EACH` list clause) and
+`arizona_diff:full_update/5` emit `?OP_TEXT`, never `?OP_UPDATE`. This is what lets a
+plain-list `?each` sit **among static sibling content** in one slot: re-rendering the list
+replaces only the each's marker span, leaving the siblings intact. An `?OP_UPDATE` here would
+`innerHTML`-wipe the enclosing element's static siblings (the client's `resolveEl` finds no
+element for the slot `az` and falls back to that enclosing element); a sole-child `?each` only
+appeared to work with `?OP_UPDATE` by coincidence. (Stream `?each` -- the `order`-keyed clause
+-- still uses `?OP_UPDATE` for its container full-render and `az-key`-addressed incremental
+ops; the unkeyed plain-list marker rule does not apply to it.)
+
 **Known limitation:** embedding a component (a `?stateless`/`?stateful` descriptor) as an
 `?each` item child compiles and renders at SSR but **crashes on the first diff** -- the
 per-item diff keys a list item by `to_bin` of its first dynamic, which fails on a nested

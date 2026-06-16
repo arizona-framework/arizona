@@ -55,6 +55,7 @@
     live_navigate_carries_root_bindings/1,
     live_page_child_mount/1,
     live_parent_change_child_stable/1,
+    live_conditional_child_toggle_patches_slot/1,
     live_parent_event_updates_children/1,
     mount_and_render_basic/1,
     mount_and_render_custom_bindings/1,
@@ -113,6 +114,7 @@ groups() ->
             live_child_multiple_events,
             live_parent_event_updates_children,
             live_parent_change_child_stable,
+            live_conditional_child_toggle_patches_slot,
             live_child_then_parent_sync,
             live_counter2_child_event,
             live_inc_then_dec,
@@ -372,6 +374,43 @@ live_parent_change_child_stable(Config) when is_list(Config) ->
     %% Change parent title -- counter deps (count) unchanged, no counter ops
     {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"title_change">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"Changed">>]], Ops).
+
+%% Regression: a conditional `?stateful` in a content slot, toggled from the
+%% empty string to the child descriptor, must patch only the slot via ?OP_TEXT
+%% -- never ?OP_UPDATE on the slot's az, which the client resolves to the
+%% enclosing element (when the slot's az is that element's own az, as for a
+%% conditional child directly under the view root) and innerHTML-wipes, taking
+%% every sibling with it. This is the `case ?get(flag) of true ->
+%% ?stateful(...); false -> ~"" end` pattern.
+live_conditional_child_toggle_patches_slot(Config) when is_list(Config) ->
+    {ok, Pid} = arizona_live:start_link(
+        arizona_conditional_child, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    %% Toggle false -> true: the child appears. Exactly one ?OP_TEXT on the
+    %% slot, carrying the child template -- not an ?OP_UPDATE (which would
+    %% clobber the <main> root and drop <header>/<footer>).
+    {ok, ShowOps, []} = arizona_live:handle_event(Pid, <<"app">>, <<"toggle">>, #{}),
+    ?assertMatch([[?OP_TEXT, _, #{<<"s">> := _, <<"d">> := _}]], ShowOps),
+    [[_Op, SlotAz, _Payload]] = ShowOps,
+    %% No op may be an ?OP_UPDATE -- that is the bug's signature.
+    ?assertEqual(
+        [], [Op || [Op | _] <- ShowOps, Op =:= ?OP_UPDATE]
+    ),
+    %% Toggle true -> false: the child is removed via an empty ?OP_TEXT on the
+    %% same slot, leaving the siblings in place.
+    {ok, HideOps, []} = arizona_live:handle_event(Pid, <<"app">>, <<"toggle">>, #{}),
+    ?assertMatch([[?OP_TEXT, SlotAz, <<>>]], HideOps),
+    %% Toggle on again: the child re-mounts via the same single ?OP_TEXT slot
+    %% patch. The payload is fingerprint-deduped (statics omitted, the client
+    %% has them cached from the first show), so only `f`/`d` are present.
+    {ok, ReshowOps, []} = arizona_live:handle_event(Pid, <<"app">>, <<"toggle">>, #{}),
+    ?assertMatch([[?OP_TEXT, SlotAz, #{<<"f">> := _, <<"d">> := _}]], ReshowOps),
+    %% The re-mounted child is a live view again: its own event drives a diff on
+    %% the child, proving the Views accounting survives the off/on cycle (no
+    %% leaked or dropped child view).
+    {ok, ChildOps, []} = arizona_live:handle_event(Pid, <<"child">>, <<"inc">>, #{}),
+    ?assertMatch([[?OP_TEXT, _, <<"1">>]], ChildOps).
 
 live_child_then_parent_sync(Config) when is_list(Config) ->
     %% KEY EDGE CASE: child increments to 2, then parent adds +1.

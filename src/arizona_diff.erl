@@ -25,7 +25,10 @@ op codes:
 A `?each` over a **plain list** is unkeyed: its items render as bare HTML
 with no `az-key`, so there is no per-item DOM address to patch. Any change
 (item content or list length) therefore re-renders the whole list with a
-single `?OP_UPDATE`; an unchanged list emits nothing.
+single `?OP_TEXT` patching the slot's `<!--az:X-->...<!--/az-->` marker
+content; an unchanged list emits nothing. (`?OP_TEXT`, not `?OP_UPDATE`: a
+plain-list each is marker-anchored in a content slot, so innerHTML on the
+fallback enclosing element would clobber the slot's static siblings.)
 
 Use an `arizona_stream` when you need **keyed, incremental** updates --
 per-item `?OP_ITEM_PATCH`/`?OP_INSERT`/`?OP_REMOVE`/`?OP_MOVE` and stable
@@ -472,7 +475,7 @@ diff_list(Az, #{source := Items, template := Tmpl}, #{items := OldItemsList}, Vi
             %% content or length change re-renders the whole list: a plain list
             %% is unkeyed (no per-item `az-key` to address -- that is what
             %% `arizona_stream` is for), so the only correct patch is a single
-            %% `?OP_UPDATE` of the container's content.
+            %% full render of the container's marker content.
             case {Changed, NewTail, OldTail} of
                 {false, [], []} ->
                     {[], NewSnap, Views2};
@@ -481,9 +484,14 @@ diff_list(Az, #{source := Items, template := Tmpl}, #{items := OldItemsList}, Vi
             end
     end.
 
+%% A plain-list `?each` is marker-anchored in a content slot (no wrapper element
+%% carries the slot az), so the full re-render patches the marker content via
+%% `?OP_TEXT` -- never `?OP_UPDATE` (innerHTML), which clobbers the slot's static
+%% siblings when resolveEl falls back to the enclosing element. Mirrors the
+%% `make_op/3` plain-list each clause and the nested-template content-slot fix.
 full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
     HTML = arizona_render:zip_list_fp(Tmpl, NewItemsList),
-    {[[?OP_UPDATE, Az, HTML]], NewSnap, Views}.
+    {[[?OP_TEXT, Az, HTML]], NewSnap, Views}.
 
 %% Walk new/old item dynamics in lockstep to detect whether any item changed and
 %% to thread child views through. Returns `Changed` plus the leftover tails, so
@@ -746,14 +754,37 @@ make_op(Az, {attr, Attr, Val}, _Old) ->
     [?OP_SET_ATTR, Az, Attr, arizona_template:to_bin(Val)];
 make_op(_Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := OldD}) ->
     [VId, diff_child_dynamics(NewD, OldD)];
-make_op(Az, #{s := _, d := _} = NewNested, #{s := _, d := _}) ->
+%% A nested template/snapshot in a content slot is always anchored by the
+%% slot's `<!--az:X-->...<!--/az-->` comment markers, whatever the slot held
+%% before (a binary, the empty string, or another template). `?OP_TEXT`
+%% replaces only the marker content, leaving the slot's siblings -- and the
+%% enclosing element -- intact. `?OP_UPDATE` (innerHTML) would be wrong: when
+%% the slot's `Az` is the enclosing element's own `az` (a conditional
+%% `?stateful` child rendered directly under the view root), it overwrites the
+%% whole element and drops every sibling. That is the empty(`~""`) ->
+%% descriptor transition the idiomatic
+%% `case ?get(flag) of true -> ?stateful(...); false -> ~"" end` produces.
+make_op(Az, #{s := _, d := _} = NewNested, _Old) ->
     [?OP_TEXT, Az, arizona_render:zip_or_fp(NewNested)];
-make_op(Az, #{s := _, d := _} = Tmpl, _Old) ->
-    [?OP_UPDATE, Az, arizona_render:zip_or_fp(Tmpl)];
+%% A plain-list `?each` in a content slot is anchored by the slot's
+%% `<!--az:X-->...<!--/az-->` comment markers, exactly like the nested-template
+%% case above (every dynamic-text child is marker-wrapped in SSR -- see
+%% arizona_html:text_slot_open/1). There is no wrapper element carrying
+%% `az="X"`, so `?OP_TEXT` (replace marker content) is correct and `?OP_UPDATE`
+%% (innerHTML) is wrong: when the each sits among static siblings, the client's
+%% resolveEl finds no element for the slot az and falls back to the enclosing
+%% element, where innerHTML wipes every sibling. The marker is present whether
+%% or not the each is the sole child, so `?OP_TEXT` is uniformly correct (the
+%% old sole-child each only "worked" with `?OP_UPDATE` by coincidence).
 make_op(Az, #{t := ?EACH, items := Items, template := Tmpl}, _Old) when
     is_list(Items)
 ->
-    [?OP_UPDATE, Az, arizona_render:zip_list_fp(Tmpl, Items)];
+    [?OP_TEXT, Az, arizona_render:zip_list_fp(Tmpl, Items)];
+%% Stream (`order`-keyed) each: kept on `?OP_UPDATE` for the container-level
+%% full render. Streams address items by `az-key` for incremental ops and are
+%% used as a list container's content -- the unkeyed plain-list marker fix does
+%% not apply; an analogous mixed-siblings concern for streams is tracked
+%% separately (see docs/architecture.md).
 make_op(Az, #{t := ?EACH, items := Items, order := Order, template := Tmpl}, _Old) ->
     [?OP_UPDATE, Az, arizona_render:zip_stream_fp(Tmpl, Items, Order)];
 make_op(Az, remove, {attr, Attr, _}) ->

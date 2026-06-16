@@ -798,7 +798,7 @@ list_render_v(Config) when is_list(Config) ->
     ).
 
 list_diff_same_length(Config) when is_list(Config) ->
-    %% Same count, changed values → single OP_UPDATE (plain lists re-render whole)
+    %% Same count, changed values → single OP_TEXT (plain lists re-render whole)
     Items1 = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
     Items2 = [#{id => 1, text => <<"X">>}, #{id => 2, text => <<"B">>}],
     Bindings0 = #{id => <<"test">>, items => Items1},
@@ -841,9 +841,10 @@ list_diff_same_length(Config) when is_list(Config) ->
     {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
     %% Plain lists are unkeyed and re-render whole on any change (keyed
     %% incremental per-item updates are arizona_stream's job), so a same-length
-    %% content change is a single OP_UPDATE.
+    %% content change is a single marker-aware OP_TEXT (opcode 0) -- not
+    %% OP_UPDATE, which would innerHTML-clobber the slot's static siblings.
     ?assertEqual(1, length(Ops)),
-    [[3, <<"0">>, _HTML]] = Ops.
+    [[0, <<"0">>, _HTML]] = Ops.
 
 list_diff_same_length_no_change(Config) when is_list(Config) ->
     %% Same count, same values → no ops
@@ -889,7 +890,7 @@ list_diff_same_length_no_change(Config) when is_list(Config) ->
     ?assertEqual([], Ops).
 
 list_diff_different_length(Config) when is_list(Config) ->
-    %% Different count → single OP_UPDATE
+    %% Different count → single OP_TEXT
     Items1 = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
     Items2 = [
         #{id => 1, text => <<"A">>},
@@ -934,9 +935,9 @@ list_diff_different_length(Config) when is_list(Config) ->
         f => <<"test">>
     },
     {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
-    %% Length mismatch → single OP_UPDATE (opcode 3)
+    %% Length mismatch → single OP_TEXT (opcode 0)
     ?assertEqual(1, length(Ops)),
-    [[3, <<"0">>, _HTML]] = Ops.
+    [[0, <<"0">>, _HTML]] = Ops.
 
 list_ssr(Config) when is_list(Config) ->
     %% SSR with list comprehension
@@ -1042,7 +1043,7 @@ list_empty(Config) when is_list(Config) ->
     ?assertEqual(<<"<ul az=\"0\"></ul>">>, iolist_to_binary(HTML)).
 
 list_diff_empty_to_populated(Config) when is_list(Config) ->
-    %% [] → [a, b] -- length mismatch → OP_UPDATE
+    %% [] → [a, b] -- length mismatch → OP_TEXT
     ListTmpl = #{
         t => 0,
         s => [
@@ -1083,10 +1084,10 @@ list_diff_empty_to_populated(Config) when is_list(Config) ->
     },
     {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
     ?assertEqual(1, length(Ops)),
-    [[3, <<"0">>, _HTML]] = Ops.
+    [[0, <<"0">>, _HTML]] = Ops.
 
 list_diff_populated_to_empty(Config) when is_list(Config) ->
-    %% [a, b] → [] -- length mismatch → OP_UPDATE
+    %% [a, b] → [] -- length mismatch → OP_TEXT
     Items1 = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
     ListTmpl = #{
         t => 0,
@@ -1127,10 +1128,10 @@ list_diff_populated_to_empty(Config) when is_list(Config) ->
     },
     {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
     ?assertEqual(1, length(Ops)),
-    [[3, <<"0">>, _HTML]] = Ops.
+    [[0, <<"0">>, _HTML]] = Ops.
 
 list_diff_shorter(Config) when is_list(Config) ->
-    %% [a, b, c] → [a, b] -- length decrease → OP_UPDATE
+    %% [a, b, c] → [a, b] -- length decrease → OP_TEXT
     Items1 = [
         #{id => 1, text => <<"A">>},
         #{id => 2, text => <<"B">>},
@@ -1176,7 +1177,7 @@ list_diff_shorter(Config) when is_list(Config) ->
     },
     {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
     ?assertEqual(1, length(Ops)),
-    [[3, <<"0">>, _HTML]] = Ops.
+    [[0, <<"0">>, _HTML]] = Ops.
 
 list_diff_deps_skip(Config) when is_list(Config) ->
     %% diff/4 with unchanged deps skips list eval entirely
@@ -1223,7 +1224,7 @@ list_diff_deps_skip(Config) when is_list(Config) ->
 
 list_diff2(Config) when is_list(Config) ->
     %% diff/2 path -- tests make_op fix for EACH snapshots
-    %% diff/2 has no EACH-aware path, so make_op emits OP_UPDATE
+    %% diff/2 has no EACH-aware path, so make_op emits the marker-aware OP_TEXT
     Items1 = [#{id => 1, text => <<"A">>}],
     Items2 = [#{id => 1, text => <<"X">>}],
     ListTmpl = #{
@@ -1261,13 +1262,13 @@ list_diff2(Config) when is_list(Config) ->
         f => <<"test">>
     },
     {Ops, _Snap1} = arizona_diff:diff(Tmpl1, Snap0),
-    %% diff/2 falls through to make_op → OP_UPDATE (opcode 3)
+    %% diff/2 falls through to make_op → OP_TEXT (opcode 0)
     ?assertEqual(1, length(Ops)),
-    [[3, <<"0">>, _HTML]] = Ops.
+    [[0, <<"0">>, _HTML]] = Ops.
 
 list_diff3(Config) when is_list(Config) ->
     %% diff/3 path -- tests make_op fix via views path
-    %% diff/3 has no EACH-aware path, so make_op emits OP_UPDATE
+    %% diff/3 has no EACH-aware path, so make_op emits the marker-aware OP_TEXT
     Items1 = [#{id => 1, text => <<"A">>}],
     Items2 = [#{id => 1, text => <<"X">>}],
     ListTmpl = #{
@@ -1305,9 +1306,9 @@ list_diff3(Config) when is_list(Config) ->
         f => <<"test">>
     },
     {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, #{}),
-    %% diff/3 falls through to make_op → OP_UPDATE (opcode 3)
+    %% diff/3 falls through to make_op → OP_TEXT (opcode 0)
     ?assertEqual(1, length(Ops)),
-    [[3, <<"0">>, _HTML]] = Ops.
+    [[0, <<"0">>, _HTML]] = Ops.
 
 %% =============================================================================
 %% Mixed stateless + dynamic children
@@ -1413,6 +1414,10 @@ mixed_children_roundtrip(Config) when is_list(Config) ->
         )
     ).
 
+%% An each payload (`t` => EACH): `d` is a list of per-item dynamics-lists, each
+%% zipped against the shared item statics `s`.
+mixed_render_html(#{<<"t">> := 0, <<"s">> := S, <<"d">> := Items}) ->
+    [arizona_render:zip(S, [mixed_render_html(X) || X <- ItemD]) || ItemD <- Items];
 mixed_render_html(#{<<"f">> := _, <<"s">> := S, <<"d">> := D}) ->
     arizona_render:zip(S, [mixed_render_html(X) || X <- D]);
 mixed_render_html(#{<<"f">> := _, <<"d">> := D}) ->
