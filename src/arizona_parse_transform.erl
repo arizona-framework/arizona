@@ -1064,26 +1064,12 @@ maybe_target_opt(_Backend, Opts) ->
 compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs) ->
     case FunAST of
         {'fun', _, {clauses, [{clause, _, [ItemVar, KeyVar], Guards, Body}]}} ->
-            {Prefix, LastExpr} = split_fun_body(Body),
-            ok = validate_each_body(stream, classify_body(LastExpr), LastExpr),
-            {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
-                LastExpr, Module, false, Backend
-            ),
-            Opts = maybe_target_opt(Backend, Opts0),
-            {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
-            build_each_ast(
-                Line, SourceAST, [ItemVar, KeyVar], Guards, Prefix, S1, D1, Fingerprint, Opts
+            compile_each_clause(
+                stream, [ItemVar, KeyVar], Guards, Body, SourceAST, Line, Module, Backend
             );
         {'fun', _, {clauses, [{clause, _, [ItemVar], Guards, Body}]}} ->
-            {Prefix, LastExpr} = split_fun_body(Body),
-            ok = validate_each_body(list, classify_body(LastExpr), LastExpr),
-            {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
-                LastExpr, Module, false, Backend
-            ),
-            Opts = maybe_target_opt(Backend, Opts0),
-            {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
-            build_each_ast(
-                Line, SourceAST, [ItemVar], Guards, Prefix, S1, D1, Fingerprint, Opts
+            compile_each_clause(
+                list, [ItemVar], Guards, Body, SourceAST, Line, Module, Backend
             );
         %% Local `fun Name/1` or `fun Name/2` ref: resolve its single clause and compile
         %% it exactly like an inline fun, so the same element-body validation runs. The
@@ -1126,14 +1112,97 @@ compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, FunDefs) ->
             parse_error(each_named_fun_undefined, L)
     end.
 
+%% Compile one inline `?each` callback clause (`Kind` = list | stream, from the arity) into
+%% the iteration AST. The body's last expr may be a bare element/fragment (the common case),
+%% or a whole-body backend wrapper (`?html`/`?native`/`?terminal`): raw (a named-fun ref
+%% resolves to its untransformed clause) or already compiled to a template map (an inline fun,
+%% compiled bottom-up before the enclosing each). Both wrapper forms reduce to the same
+%% per-item template the bare element would build -- `?html` and `?each` share
+%% `compile_body_parts`/`scope_az` with the same fingerprint. Anything else falls through to
+%% `validate_each_body` (element path or reject).
+compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend) ->
+    {Prefix, LastExpr} = split_fun_body(Body),
+    case each_body_unwrap(LastExpr, Backend) of
+        {compiled, Map} ->
+            build_each_from_compiled(Line, SourceAST, Vars, Guards, Prefix, Map);
+        {element, ElemAST} ->
+            ok = validate_each_body(Kind, classify_body(ElemAST), ElemAST),
+            {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
+                ElemAST, Module, false, Backend
+            ),
+            Opts = maybe_target_opt(Backend, Opts0),
+            {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
+            build_each_ast(Line, SourceAST, Vars, Guards, Prefix, S1, D1, Fingerprint, Opts)
+    end.
+
+%% Classify an ?each callback's last expr. A whole-body backend wrapper call
+%% (`?html`/`?native`/`?terminal` matching this each's `Backend`) unwraps to the element it
+%% wraps, so the normal element path builds the per-item template. An already-compiled
+%% template map literal (an inline wrapper, compiled bottom-up) is taken as the per-item
+%% template directly. Anything else (a non-matching wrapper, a user map, a bare value) is
+%% handed back as-is for the normal validation, which compiles a bare element or rejects.
+each_body_unwrap(
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, Fn}}, [Inner]} = Call, Backend
+) when
+    Mod =:= arizona_template; Mod =:= az
+->
+    Wrapper = backend_template_fn(Backend),
+    case Fn of
+        Wrapper -> {element, Inner};
+        _ -> {element, Call}
+    end;
+each_body_unwrap({map, _, Fields} = Map, _Backend) ->
+    case is_compiled_template_map(Fields) of
+        true -> {compiled, Map};
+        false -> {element, Map}
+    end;
+each_body_unwrap(LastExpr, _Backend) ->
+    {element, LastExpr}.
+
+backend_template_fn(arizona_html) -> html;
+backend_template_fn(arizona_native) -> native;
+backend_template_fn(arizona_terminal) -> terminal.
+
+%% A compiled template map literal carries all three of the `s`/`d`/`f` assoc keys (from
+%% build_template_ast). A user map or a ?stateful/?stateless descriptor (a runtime call, not
+%% a map literal) does not, so they fall through to the normal reject.
+is_compiled_template_map(Fields) ->
+    Keys = [K || {map_field_assoc, _, {atom, _, K}, _} <:- Fields],
+    lists:all(fun(Key) -> lists:member(Key, Keys) end, [s, d, f]).
+
+%% Build the ?each iteration AST from an already-compiled template map (an inline
+%% `?html`/`?native`/`?terminal` body). Mirror build_each_ast but reuse the map's prebuilt
+%% assocs: keep `s`/`f`/opts verbatim, wrap the existing `d`-list (nullary closures capturing
+%% the item vars) in the per-item fun, and add `t => 0`. Scoping/fingerprint were already
+%% computed by compile_template from the same body the element path would use, so the result
+%% matches the bare-element form.
+build_each_from_compiled(Line, SourceAST, Vars, Guards, Prefix, {map, MapLine, Fields}) ->
+    DListAST = template_map_field(d, Fields),
+    DFunAST =
+        {'fun', Line, {clauses, [{clause, Line, Vars, Guards, Prefix ++ [DListAST]}]}},
+    TField = {map_field_assoc, MapLine, {atom, MapLine, t}, {integer, MapLine, 0}},
+    NewFields = [TField | [set_template_map_d_field(Field, DFunAST) || Field <- Fields]],
+    {call, Line, {remote, Line, {atom, Line, arizona_template}, {atom, Line, each}}, [
+        SourceAST, {map, MapLine, NewFields}
+    ]}.
+
+template_map_field(Key, Fields) ->
+    [Val] = [V || {map_field_assoc, _, {atom, _, K}, V} <:- Fields, K =:= Key],
+    Val.
+
+set_template_map_d_field({map_field_assoc, FL, {atom, AL, d}, _}, DFunAST) ->
+    {map_field_assoc, FL, {atom, AL, d}, DFunAST};
+set_template_map_d_field(Field, _DFunAST) ->
+    Field.
+
 %% An ?each callback must build a per-item template: its body must be an element, a list
-%% of elements, or a static/mixed fragment. A `text_dynamic` body (a bare value, a runtime
-%% binary, an ?html(...) template, a ?stateful/?stateless descriptor, or a case/if) compiles
-%% to one opaque value slot that renders at SSR but loses per-item diffing (and a template/
-%% descriptor value crashes on diff). Reject it at compile time. `Kind` (list | stream) is the
-%% source shape, inferred from the callback arity (1-arg = list, 2-arg = stream/map): the error
-%% it raises tailors the fix advice, since a list has a comprehension fallback and a stream
-%% does not.
+%% of elements, a static/mixed fragment, or a whole-body `?html`/`?native`/`?terminal`
+%% wrapper (unwrapped to its element before this check). A `text_dynamic` body (a bare value,
+%% a runtime binary, a ?stateful/?stateless descriptor, or a case/if) compiles to one opaque
+%% value slot that renders at SSR but loses per-item diffing (and a descriptor value crashes
+%% on diff). Reject it at compile time. `Kind` (list | stream) is the source shape, inferred
+%% from the callback arity (1-arg = list, 2-arg = stream/map): the error it raises tailors the
+%% fix advice, since a list has a comprehension fallback and a stream does not.
 validate_each_body(Kind, text_dynamic, LastExpr) ->
     parse_error(each_body_error(Kind), line(LastExpr));
 validate_each_body(Kind, list_ast, LastExpr) ->

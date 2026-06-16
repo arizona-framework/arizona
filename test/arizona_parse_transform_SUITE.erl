@@ -24,13 +24,16 @@
     each_named_fun_imported_rejected/1,
     each_named_fun_variable_module_rejected/1,
     each_named_fun_ref_native/1,
-    each_body_html_wrapped_rejected/1,
+    each_named_fun_ref_html_body_diffs/1,
+    each_named_fun_ref_native_html/1,
+    each_body_html_wrapped_diffs/1,
+    each_body_two_arg_html_diffs/1,
+    each_body_list_with_html_rejected/1,
     each_body_descriptor_rejected/1,
     each_body_case_rejected/1,
     each_body_if_rejected/1,
     each_body_runtime_binary_rejected/1,
     each_body_two_arg_value_rejected/1,
-    each_body_two_arg_html_rejected/1,
     each_body_list_with_descriptor_rejected/1,
     each_body_mixed_fragment_ok/1,
     each_body_conditional_child_diffs/1,
@@ -382,13 +385,16 @@ groups() ->
             each_named_fun_imported_rejected,
             each_named_fun_variable_module_rejected,
             each_named_fun_ref_native,
-            each_body_html_wrapped_rejected,
+            each_named_fun_ref_html_body_diffs,
+            each_named_fun_ref_native_html,
+            each_body_html_wrapped_diffs,
+            each_body_two_arg_html_diffs,
+            each_body_list_with_html_rejected,
             each_body_descriptor_rejected,
             each_body_case_rejected,
             each_body_if_rejected,
             each_body_runtime_binary_rejected,
             each_body_two_arg_value_rejected,
-            each_body_two_arg_html_rejected,
             each_body_list_with_descriptor_rejected,
             each_body_mixed_fragment_ok,
             each_body_conditional_child_diffs,
@@ -4119,18 +4125,67 @@ each_named_fun_ref_native(Config) when is_list(Config) ->
     ),
     ?assert(is_map(Mod:render(#{id => ~"c", items => #{1 => #{text => ~"a"}}}))).
 
-%% Wrapping the element in ?html(...) yields a template value (a text_dynamic slot that
-%% crashes on diff) -- rejected; return the element literal directly.
-each_body_html_wrapped_rejected(Config) when is_list(Config) ->
-    assert_parse_error(
+%% A named-ref callback whose body is ?html(...) is unwrapped and diffs per-item, exactly
+%% like the bare-element named-ref form (each_named_fun_ref_diffs).
+each_named_fun_ref_html_body_diffs(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_named_html). "
+        "-export([render/1, row/1]). "
+        "row(U) -> arizona_template:html({'li', [], "
+        "    [case U of #{name := N} -> N; _ -> ~\"-\" end]}). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "        arizona_template:get(users, Bindings))]}). "
+    ),
+    B0 = #{users => [#{name => ~"Ada"}]},
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = #{users => [#{name => ~"Grace"}]},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% A named-ref callback whose body is ?native(...) inside a ?native(...) view unwraps too
+%% (the private row/2 is covered by the injected nowarn_unused_function / ignore_xref).
+each_named_fun_ref_native_html(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_each_named_native_html). "
+        "-export([render/1]). "
+        "row(#{text := T}, Key) -> arizona_template:native({'Text', [{az_key, Key}], [T]}). "
+        "render(Bindings) -> "
+        "    arizona_template:native({'Column', [{id, arizona_template:get(id, Bindings)}], "
+        "        [arizona_template:each(fun row/2, arizona_template:get(items, Bindings))]}). "
+    ),
+    ?assert(is_map(Mod:render(#{id => ~"c", items => #{1 => #{text => ~"a"}}}))).
+
+%% A whole-body ?html(...) callback is unwrapped to its element and builds the SAME per-item
+%% template as returning the element bare -- it compiles, renders, and diffs per item (no
+%% crash on diff). The diff ops are byte-identical to the bare-element form.
+each_body_html_wrapped_diffs(Config) when is_list(Config) ->
+    Wrapped = compile_module(
         "-module(pt_each_html_wrapped). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(X) -> "
-        "        arizona_template:html({'li', [], [X]}) "
-        "    end, arizona_template:get(xs, Bindings))]}). ",
-        fun(R) -> R =:= each_body_not_element end
-    ).
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(U) -> "
+        "        arizona_template:html({'li', [], [case U of #{name := N} -> N; _ -> ~\"-\" end]}) "
+        "    end, arizona_template:get(users, Bindings))]}). "
+    ),
+    Bare = compile_module(
+        "-module(pt_each_html_bare). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(U) -> "
+        "        {'li', [], [case U of #{name := N} -> N; _ -> ~\"-\" end]} "
+        "    end, arizona_template:get(users, Bindings))]}). "
+    ),
+    B0 = #{users => [#{name => ~"Ada"}]},
+    B1 = #{users => [#{name => ~"Grace"}]},
+    Changed = compute_changed(B0, B1),
+    {_HW, WSnap0, WV0} = arizona_render:render(Wrapped:render(B0), #{}),
+    {WOps, _, _} = arizona_diff:diff(Wrapped:render(B1), WSnap0, WV0, Changed),
+    {_HB, BSnap0, BV0} = arizona_render:render(Bare:render(B0), #{}),
+    {BOps, _, _} = arizona_diff:diff(Bare:render(B1), BSnap0, BV0, Changed),
+    ?assertNotEqual([], WOps),
+    ?assertEqual(BOps, WOps).
 
 %% A bare ?stateful/?stateless descriptor body is rejected -- wrap it in an element.
 each_body_descriptor_rejected(Config) when is_list(Config) ->
@@ -4197,16 +4252,30 @@ each_body_two_arg_value_rejected(Config) when is_list(Config) ->
         fun(R) -> R =:= each_stream_body_not_element end
     ).
 
-%% A 2-arg callback returning an ?html template is rejected with the stream error too.
-each_body_two_arg_html_rejected(Config) when is_list(Config) ->
-    assert_parse_error(
+%% A 2-arg (stream/map) callback whose whole body is ?html(...) is unwrapped the same way
+%% as the 1-arg form, building a per-item template that renders.
+each_body_two_arg_html_diffs(Config) when is_list(Config) ->
+    Mod = compile_module(
         "-module(pt_each_two_arg_html). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(Item, _Key) -> "
-        "        arizona_template:html({'li', [], [Item]}) "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(V, K) -> "
+        "        arizona_template:html({'li', [], [K, ~\": \", V]}) "
+        "    end, arizona_template:get(items, Bindings))]}). "
+    ),
+    ?assert(is_map(Mod:render(#{items => #{~"a" => ~"1"}}))).
+
+%% A ?html template as a *list item* ([?html(...)]) is still rejected -- only a WHOLE-body
+%% wrapper is unwrapped; a one-template list lands in the fragile per-item value slot.
+each_body_list_with_html_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_list_html). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(X) -> "
+        "        [arizona_template:html({'li', [], [X]})] "
         "    end, arizona_template:get(xs, Bindings))]}). ",
-        fun(R) -> R =:= each_stream_body_not_element end
+        fun(R) -> R =:= each_body_not_element end
     ).
 
 %% A bare list whose item is a descriptor (or template) is rejected: the item lands in a

@@ -321,8 +321,8 @@ inside `?each` items.
 template (`#{s, d, f}`), the callback body must be an element (`{Tag, Attrs, Children}`),
 a list of elements, or a static/mixed fragment. `classify_body/1` in
 `arizona_parse_transform` buckets the body; the only non-template bucket, `text_dynamic`
-(a bare value, a runtime binary, an `?html(...)` template, a `?stateful`/`?stateless`
-descriptor, or a `case`/`if`), compiles to one opaque value slot. A scalar value renders at
+(a bare value, a runtime binary, a `?stateful`/`?stateless` descriptor, or a `case`/`if`),
+compiles to one opaque value slot. A scalar value renders at
 SSR and diffs (the per-item key is `arizona_template:to_bin/1` of its value), but gets no
 per-item template diffing -- pointless where a comprehension is the right tool; a template or
 descriptor value goes further and crashes on the first diff, when `to_bin/1` hits the stored
@@ -350,6 +350,17 @@ referenced as a bare `fun row/1` falls through to `each_named_fun_undefined` sin
 `FunDefs`) and a **multi-clause** function (`each_named_fun_multi_clause` -- clauses would select
 different per-item structures, but there is only one shared per-item template); collapse
 multiple clauses into a `case` inside the returned element.
+
+A whole-body backend wrapper -- `?html(...)` (or `?native`/`?terminal` matching the each's
+target) -- is **accepted**: `compile_each` unwraps it to the element it wraps and builds the
+same per-item template as the bare element (both go through `compile_body_parts/4` +
+`scope_az/4` with the same fingerprint, so the result is byte-identical). The two callback
+forms reach `compile_each` as different AST: a **named** ref resolves to its untransformed
+clause, so its body is a raw `arizona_template:html(...)` call, unwrapped to its argument; an
+**inline** fun's `?html` was already compiled bottom-up into a template-map literal, taken
+directly (re-wrapping its `d`-list into the per-item `fun`). A wrapper as a **list item**
+(`[?html(...)]`) is **not** unwrapped -- only a whole-body wrapper -- so it stays rejected like
+a wrapped descriptor.
 
 A per-item **component** (`{li, [], [?stateless(...)]}`) compiles and renders but currently
 **crashes on the first diff**: the list-each diff in `arizona_diff` (`diff_list_zip/4`) keys a
