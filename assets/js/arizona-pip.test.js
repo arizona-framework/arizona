@@ -86,13 +86,29 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         expect(resolveEl('v3:0')?.ownerDocument).toBe(document);
     });
 
-    it('JS_REQUEST_PIP effect triggers a pop-out', async () => {
+    it('JS_REQUEST_PIP effect triggers a pop-out at the browser default size', async () => {
         document.body.innerHTML = '<div id="v4" az-view az="0"></div>';
         const pip = makePipWindow();
         const requestWindow = stubPip(pip);
 
         executeJS(document.documentElement, null, [18, 'v4']); // JS_REQUEST_PIP
         expect(requestWindow).toHaveBeenCalledOnce();
+        // No framework default leaks: with no options the user agent picks the size.
+        expect(requestWindow).toHaveBeenCalledWith({});
+
+        await Promise.resolve();
+        await Promise.resolve();
+        pip.fire('pagehide'); // cleanup
+    });
+
+    it('passes width/height options through to requestWindow', async () => {
+        document.body.innerHTML = '<div id="v5" az-view az="0"></div>';
+        const pip = makePipWindow();
+        const requestWindow = stubPip(pip);
+
+        // JS_REQUEST_PIP with an options map in cmd[2].
+        executeJS(document.documentElement, null, [18, 'v5', { width: 440, height: 940 }]);
+        expect(requestWindow).toHaveBeenCalledWith({ width: 440, height: 940 });
 
         await Promise.resolve();
         await Promise.resolve();
