@@ -1280,7 +1280,7 @@ function execOne(el, event, cmd) {
             break;
         }
         case JS_REQUEST_PIP:
-            requestPip(cmd[1]);
+            requestPip(cmd[1], cmd[2] || {});
             break;
         case JS_EXIT_PIP:
             exitPip(cmd[1]);
@@ -1901,10 +1901,9 @@ async function requestPip(viewId, opts = {}) {
     const placeholder = document.createComment(`az-pip:${viewId}`);
     view.before(placeholder);
 
-    const pip = await pipApi.requestWindow({
-        width: opts.width || 360,
-        height: opts.height || 240,
-    });
+    // Forward the caller's options straight to the browser (no framework defaults);
+    // requestWindow ignores dictionary members it doesn't know (e.g. onClose).
+    const pip = await pipApi.requestWindow(opts);
 
     copyStyles(document, pip.document);
     pip.document.body.append(view);

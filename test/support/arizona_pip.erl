@@ -39,6 +39,9 @@ render(Bindings) ->
             {p, [{class, ~"pip-count"}], [~"Tick: ", ?get(count)]},
             {'div', [{class, ~"pip-actions"}], [
                 {button, [{az_click, arizona_js:request_pip(Id)}], [~"Pop out"]},
+                {button, [{az_click, arizona_js:request_pip(Id, #{width => 440, height => 940})}], [
+                        ~"Pop out (sized)"
+                    ]},
                 {button, [{az_click, arizona_js:exit_pip(Id)}], [~"Pop in"]}
             ]},
             {p, [], [

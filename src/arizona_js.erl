@@ -57,6 +57,7 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 -export([set/3]).
 -export([set_all/2]).
 -export([request_pip/1]).
+-export([request_pip/2]).
 -export([exit_pip/1]).
 -export([transition/1]).
 -export([transition/2]).
@@ -90,6 +91,7 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     set/3,
     set_all/2,
     request_pip/1,
+    request_pip/2,
     exit_pip/1,
     transition/1,
     transition/2
@@ -266,11 +268,21 @@ set_all(Key, Value) -> {arizona_effect, [?EFFECT_SET_LOCAL, Key, Value, true]}.
 Moves the view identified by `ViewId` into a floating Document Picture-in-Picture
 window, kept live by the server diff stream. Use inside a web event attribute
 (e.g. `az-click`) -- Document PiP requires a user gesture, so it won't open from
-a server-pushed handler effect.
+a server-pushed handler effect. The window opens at the browser's default size;
+use `request_pip/2` to choose a size.
 """.
 -spec request_pip(ViewId) -> arizona_effect:cmd() when
     ViewId :: binary().
 request_pip(ViewId) -> {arizona_effect, [?EFFECT_REQUEST_PIP, ViewId]}.
+
+-doc """
+Like `request_pip/1` but with window options. `width`/`height` set the floating
+window's initial size in pixels; when omitted the browser picks a default size.
+""".
+-spec request_pip(ViewId, Opts) -> arizona_effect:cmd() when
+    ViewId :: binary(),
+    Opts :: #{width => pos_integer(), height => pos_integer()}.
+request_pip(ViewId, Opts) -> {arizona_effect, [?EFFECT_REQUEST_PIP, ViewId, Opts]}.
 
 -doc """
 Closes the floating Picture-in-Picture window for `ViewId`, moving the view back
@@ -347,7 +359,9 @@ set_all_test() ->
     {arizona_effect, [?EFFECT_SET_LOCAL, ~"k", ~"v", true]} = set_all(~"k", ~"v").
 
 request_pip_test() ->
-    {arizona_effect, [?EFFECT_REQUEST_PIP, ~"v"]} = request_pip(~"v").
+    {arizona_effect, [?EFFECT_REQUEST_PIP, ~"v"]} = request_pip(~"v"),
+    {arizona_effect, [?EFFECT_REQUEST_PIP, ~"v", #{width := 440, height := 940}]} =
+        request_pip(~"v", #{width => 440, height => 940}).
 
 exit_pip_test() ->
     {arizona_effect, [?EFFECT_EXIT_PIP, ~"v"]} = exit_pip(~"v").
