@@ -7,9 +7,6 @@ import { expect, test } from '@playwright/test';
 const wsReady = (page) =>
     page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
 
-/** The parent view root. */
-const _view = (page) => page.locator('#mixed[az-view]');
-
 /** The stateless card child (inside section.left). */
 const card = (page) => page.locator('#mixed section.left > div');
 
@@ -27,6 +24,20 @@ const showBtn = (page) => page.locator(`#mixed button[az-click*='"show"']`);
 const hideBtn = (page) => page.locator(`#mixed button[az-click*='"hide"']`);
 
 const updateCardBtn = (page) => page.locator(`#mixed button[az-click*='"update_card"']`);
+
+const toggleRowsBtn = (page) => page.locator(`#mixed button[az-click*='"toggle_rows"']`);
+
+/** The strip holding two static .item siblings + a plain-list each. */
+const strip = (page) => page.locator('#mixed .strip');
+
+const stripStaticA = (page) => page.locator('#mixed .strip .static-a');
+
+const stripStaticB = (page) => page.locator('#mixed .strip .static-b');
+
+const stripEachItems = (page) => page.locator('#mixed .strip .each-item');
+
+/** The sole-child each control. */
+const refsItems = (page) => page.locator('#mixed .refs .ref-item');
 
 // ---------------------------------------------------------------------------
 // SSR -- initial render
@@ -217,5 +228,85 @@ test.describe('Mixed children -- combined operations', () => {
         await showBtn(page).click();
         await expect(rackSection(page)).toHaveClass('rack present');
         await expect(messagePara(page)).toHaveText('Showing: World');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Plain-list each among static siblings -- the OP_TEXT regression scenario
+//
+// .strip holds two static .item siblings (static-a, static-b) sharing the
+// content slot with a plain-list ?each(rows). Toggling rows on/off must patch
+// only the each's marker span; the two static .item siblings must survive every
+// toggle. The pre-fix OP_UPDATE wrote innerHTML on the resolved-by-fallback
+// .strip element and wiped the static siblings.
+// ---------------------------------------------------------------------------
+
+test.describe('Mixed children -- plain-list each among static siblings', () => {
+    test('SSR: static siblings present, each empty', async ({ page }) => {
+        await page.goto('/mixed');
+        await expect(stripStaticA(page)).toHaveText('A');
+        await expect(stripStaticB(page)).toHaveText('B');
+        await expect(stripEachItems(page)).toHaveCount(0);
+    });
+
+    test('toggle on: each items appear, static siblings survive', async ({ page }) => {
+        await page.goto('/mixed');
+        await wsReady(page);
+        await toggleRowsBtn(page).click();
+        await expect(stripEachItems(page)).toHaveCount(2);
+        // The two static siblings must still be present and unchanged.
+        await expect(stripStaticA(page)).toHaveText('A');
+        await expect(stripStaticB(page)).toHaveText('B');
+        await expect(strip(page).locator('.item')).toHaveCount(4);
+    });
+
+    test('toggle on->off->on: static siblings survive every cycle', async ({ page }) => {
+        await page.goto('/mixed');
+        await wsReady(page);
+        // on
+        await toggleRowsBtn(page).click();
+        await expect(stripEachItems(page)).toHaveCount(2);
+        await expect(stripStaticA(page)).toHaveText('A');
+        await expect(stripStaticB(page)).toHaveText('B');
+        // off
+        await toggleRowsBtn(page).click();
+        await expect(stripEachItems(page)).toHaveCount(0);
+        await expect(stripStaticA(page)).toHaveText('A');
+        await expect(stripStaticB(page)).toHaveText('B');
+        // on again
+        await toggleRowsBtn(page).click();
+        await expect(stripEachItems(page)).toHaveCount(2);
+        await expect(stripStaticA(page)).toHaveText('A');
+        await expect(stripStaticB(page)).toHaveText('B');
+    });
+
+    test('each item content renders correctly', async ({ page }) => {
+        await page.goto('/mixed');
+        await wsReady(page);
+        await toggleRowsBtn(page).click();
+        await expect(stripEachItems(page).first().locator('.k')).toHaveText('k1');
+        await expect(stripEachItems(page).first().locator('.v')).toHaveText('v1');
+        await expect(stripEachItems(page).nth(1).locator('.k')).toHaveText('k2');
+        await expect(stripEachItems(page).nth(1).locator('.v')).toHaveText('v2');
+    });
+
+    test('control: sole-child each (.refs) toggles correctly', async ({ page }) => {
+        await page.goto('/mixed');
+        await wsReady(page);
+        await expect(refsItems(page)).toHaveCount(0);
+        await toggleRowsBtn(page).click();
+        await expect(refsItems(page)).toHaveCount(2);
+        await toggleRowsBtn(page).click();
+        await expect(refsItems(page)).toHaveCount(0);
+    });
+
+    test('toggling rows does not affect the card, rack, or message', async ({ page }) => {
+        await page.goto('/mixed');
+        await wsReady(page);
+        await toggleRowsBtn(page).click();
+        await expect(card(page)).toHaveClass('card');
+        await expect(cardSpan(page)).toHaveText('Initial');
+        await expect(rackSection(page)).toHaveClass('rack absent');
+        await expect(messagePara(page)).toHaveText('Hello');
     });
 });

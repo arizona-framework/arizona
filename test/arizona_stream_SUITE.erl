@@ -3266,7 +3266,9 @@ insert_after(Key, Ref, [Ref | T]) -> [Ref, Key | T];
 insert_after(Key, Ref, [H | T]) -> [H | insert_after(Key, Ref, T)].
 
 list_type_switch_stream_to_list(Config) when is_list(Config) ->
-    %% Old was a stream, new is a plain list → OP_UPDATE
+    %% Old was a stream, new is a plain list → marker-aware OP_TEXT (a plain-list
+    %% each is anchored by content-slot comment markers, so the container patch
+    %% is OP_TEXT, not OP_UPDATE).
     KeyFun = fun(#{id := Id}) -> Id end,
     Stream0 = arizona_stream:new(KeyFun, [#{id => 1, text => <<"A">>}]),
     StreamTmpl = #{
@@ -3311,7 +3313,7 @@ list_type_switch_stream_to_list(Config) when is_list(Config) ->
     },
     {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
     ?assertEqual(1, length(Ops)),
-    [[3, <<"0">>, _HTML]] = Ops.
+    [[0, <<"0">>, _HTML]] = Ops.
 
 list_type_switch_list_to_stream(Config) when is_list(Config) ->
     %% Old was a plain list, new is a stream → OP_UPDATE

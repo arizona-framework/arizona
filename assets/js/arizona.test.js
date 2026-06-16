@@ -273,6 +273,209 @@ describe('applyOps -- OP.UPDATE', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 6b. Regression: a plain-list ?each among static siblings in one content slot.
+//
+// SSR anchors the each by `<!--az:strip:2-->...<!--/az-->` comment markers
+// between sibling element children -- there is NO element carrying az="strip:2".
+// resolveEl('v:strip:2') therefore finds no element, strips the trailing
+// ":<slot>" and falls back to the enclosing element az="strip". The container
+// op MUST be the marker-aware OP.TEXT (replace marker content); OP.UPDATE writes
+// innerHTML on the fallback element and wipes the static sibling .item divs.
+// Mirrors arizona_diff_SUITE:diff_each_among_siblings_uses_text_op.
+// ---------------------------------------------------------------------------
+
+describe('applyOps -- plain-list each among static siblings', () => {
+    // SSR shape: two static .item divs, then a marker-delimited each slot, all
+    // direct children of <div class="strip" az="strip">.
+    const stripHtml = (eachContent) =>
+        '<div class="strip" az="strip">' +
+        '<div class="item" az="strip:0"><!--az:strip:0-->A<!--/az--></div>' +
+        '<div class="item" az="strip:1"><!--az:strip:1-->B<!--/az--></div>' +
+        `<!--az:strip:2-->${eachContent}<!--/az-->` +
+        '</div>';
+
+    it('OP.TEXT preserves static siblings across toggle on->off->on', () => {
+        setupView('v', stripHtml(''));
+        const strip = document.querySelector('.strip');
+        const itemHtml = (k) => `<div class="item" az="strip:2:0"><span>${k}</span></div>`;
+
+        // toggle ON: [] -> [k1]
+        applyOps([[OP.TEXT, 'v:strip:2', itemHtml('k1')]]);
+        // static siblings survive
+        expect(strip.querySelectorAll('.item').length).toBe(3);
+        expect(strip.children[0].textContent).toBe('A');
+        expect(strip.children[1].textContent).toBe('B');
+        expect(strip.querySelector('[az="strip:2:0"]').textContent).toBe('k1');
+
+        // toggle OFF: [k1] -> []
+        applyOps([[OP.TEXT, 'v:strip:2', '']]);
+        expect(strip.querySelectorAll('.item').length).toBe(2);
+        expect(strip.children[0].textContent).toBe('A');
+        expect(strip.children[1].textContent).toBe('B');
+
+        // toggle ON again: [] -> [k2]
+        applyOps([[OP.TEXT, 'v:strip:2', itemHtml('k2')]]);
+        expect(strip.querySelectorAll('.item').length).toBe(3);
+        expect(strip.children[0].textContent).toBe('A');
+        expect(strip.children[1].textContent).toBe('B');
+        expect(strip.querySelector('[az="strip:2:0"]').textContent).toBe('k2');
+    });
+
+    it('OP.UPDATE (the old buggy op) clobbers the static siblings', () => {
+        // Documents the failure mode the diff fix avoids: with no element
+        // carrying az="strip:2", resolveEl falls back to the .strip element and
+        // innerHTML wipes the static .item siblings.
+        setupView('v', stripHtml(''));
+        const strip = document.querySelector('.strip');
+        applyOps([
+            [OP.UPDATE, 'v:strip:2', '<div class="item" az="strip:2:0"><span>k1</span></div>'],
+        ]);
+        // Only the each item remains; the two static siblings are gone.
+        expect(strip.querySelectorAll('.item').length).toBe(1);
+        expect(strip.textContent).toBe('k1');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// 6c. Type switch: an `arizona_stream` binding becomes a plain list (and back).
+//
+// The only path where the plain-list OP_TEXT change touches streams. SSR anchors
+// BOTH a stream each and a plain-list each by the same `<!--az:X-->...<!--/az-->`
+// content-slot markers (arizona_html:text_slot_open/1; verified against real
+// arizona_render output). A stream addresses its visible items by `az-key`
+// ELEMENT children; the comment markers are never the target of a stream op
+// (insert/remove/move/patch all query `:scope > [az-key]`), so the marker
+// survives every incremental mutation.
+//
+// When the binding switches stream -> list, arizona_diff routes
+// diff_list/4 -> full_update/5 -> OP_TEXT (op code 0). OP_TEXT's handler
+// (applyTextOp -> updateMarkerContent) finds the surviving `<!--az:X-->` marker
+// and replaces ONLY the span between the markers: the list renders as real
+// elements (NOT escaped text) and any static siblings of the slot survive.
+//
+// The reverse (list -> stream) stays on OP_UPDATE (innerHTML on the resolved
+// container), which is correct when the stream each is the addressable element
+// (sole child of its container). Mirrors arizona_stream_SUITE:
+// list_type_switch_stream_to_list / list_type_switch_list_to_stream.
+// ---------------------------------------------------------------------------
+
+describe('applyOps -- stream <-> plain-list type switch', () => {
+    // Real SSR shape for a stream each that is the SOLE child of <ul az="0">:
+    // the slot az ("0") coincides with the <ul>'s az, so resolveEl('v:0')
+    // returns the <ul> and the keyed <li>s live between its markers.
+    const ssrStreamSole = (items) =>
+        '<ul az="0"><!--az:0-->' +
+        items.map((t) => `<li az="i" az-key="${t}"><!--az:i-->${t}<!--/az--></li>`).join('') +
+        '<!--/az--></ul>';
+
+    // Real SSR shape for a stream each among static siblings: the static <span>
+    // carries az="strip:0", the each slot is the marker pair az="strip:1" with
+    // NO element carrying that az (resolveEl falls back to the .strip element).
+    const ssrStreamAmongSiblings = (items) =>
+        '<div class="strip" az="strip">' +
+        '<span az="strip:0"><!--az:strip:0-->S<!--/az--></span>' +
+        '<!--az:strip:1-->' +
+        items.map((t) => `<li az="i" az-key="${t}"><!--az:i-->${t}<!--/az--></li>`).join('') +
+        '<!--/az--></div>';
+
+    const listItem = (t) => `<li az="L"><!--az:L-->${t}<!--/az--></li>`;
+
+    /** True if `el` has a direct-child comment marker `az:<az>` (the slot anchor). */
+    const hasMarker = (el, az) =>
+        Array.from(el.childNodes).some((n) => n.nodeType === 8 && n.data === `az:${az}`);
+
+    it('SSR anchors a stream each by the same content-slot marker as a list', () => {
+        setupView('v', ssrStreamSole(['1']));
+        const ul = document.querySelector('ul');
+        // The marker is a direct child of the container after SSR (Q1).
+        expect(hasMarker(ul, '0')).toBe(true);
+        // The keyed item is a real element between the markers.
+        expect(ul.querySelector('[az-key="1"]').textContent).toBe('1');
+    });
+
+    it('stream insert/remove/move never delete the slot marker (Q2)', () => {
+        setupView('v', ssrStreamSole(['1']));
+        const ul = document.querySelector('ul');
+        applyOps([
+            [OP.INSERT, 'v:0', '2', -1, '<li az="i" az-key="2"><!--az:i-->2<!--/az--></li>'],
+        ]);
+        expect(hasMarker(ul, '0')).toBe(true);
+        applyOps([[OP.MOVE, 'v:0', '2', null]]);
+        expect(hasMarker(ul, '0')).toBe(true);
+        applyOps([[OP.REMOVE, 'v:0', '1']]);
+        // Marker still present after the full mutation sequence.
+        expect(hasMarker(ul, '0')).toBe(true);
+    });
+
+    it('stream -> list (no runtime mutation) renders real HTML, not escaped text', () => {
+        setupView('v', ssrStreamSole(['1', '2']));
+        const ul = document.querySelector('ul');
+        // Switch the binding stream -> list: diff emits OP_TEXT on the slot.
+        applyOps([[OP.TEXT, 'v:0', listItem('X') + listItem('Y')]]);
+        // Rendered as REAL <li> elements (escaped text would be 0 elements).
+        const lis = ul.querySelectorAll('li');
+        expect(lis.length).toBe(2);
+        expect(lis[0].textContent).toBe('X');
+        expect(lis[1].textContent).toBe('Y');
+        // Crucially NOT escaped: the raw "<li" markup must not survive as text.
+        expect(ul.textContent).not.toContain('<li');
+        // Marker preserved for subsequent diffs.
+        expect(hasMarker(ul, '0')).toBe(true);
+    });
+
+    it('stream -> list switch keeps static siblings of the slot (Q3)', () => {
+        setupView('v', ssrStreamAmongSiblings(['1']));
+        const strip = document.querySelector('.strip');
+        // Switch stream -> list via the marker-aware OP_TEXT.
+        applyOps([[OP.TEXT, 'v:strip:1', listItem('X')]]);
+        // The static <span> sibling survives (the OP_UPDATE fallback would wipe it).
+        expect(strip.querySelector('[az="strip:0"]')).not.toBeNull();
+        expect(strip.querySelector('[az="strip:0"]').textContent).toBe('S');
+        // The list item rendered as a real element inside the marker.
+        const li = strip.querySelector('[az="L"]');
+        expect(li).not.toBeNull();
+        expect(li.textContent).toBe('X');
+    });
+
+    it('stream -> list after a runtime insert still renders the list as real HTML', () => {
+        // A runtime-inserted keyed item lands after <!--/az--> (insertItemEl
+        // appends to the container). The subsequent stream->list OP_TEXT replaces
+        // the marker span correctly -- the NEW list is real HTML inside the
+        // markers and the static sibling survives -- even though the prior
+        // runtime-inserted item is left as an orphan after the closing marker.
+        // This orphan is the separate "stream among siblings" concern tracked in
+        // docs/architecture.md, not an OP_TEXT regression.
+        setupView('v', ssrStreamAmongSiblings(['1']));
+        const strip = document.querySelector('.strip');
+        applyOps([
+            [OP.INSERT, 'v:strip:1', '2', -1, '<li az="i" az-key="2"><!--az:i-->2<!--/az--></li>'],
+        ]);
+        applyOps([[OP.TEXT, 'v:strip:1', listItem('X')]]);
+        // Static sibling intact and the list slot holds the real list element.
+        expect(strip.querySelector('[az="strip:0"]').textContent).toBe('S');
+        const slotLi = strip.querySelector('[az="L"]');
+        expect(slotLi).not.toBeNull();
+        expect(slotLi.textContent).toBe('X');
+        // Real elements, not escaped text.
+        expect(strip.innerHTML).toContain('<li az="L"');
+    });
+
+    it('reverse list -> stream stays correct for a sole-child each (OP_UPDATE)', () => {
+        // SSR plain-list each, sole child of <ul az="0"> (resolveEl returns the
+        // <ul>, which IS the slot element). list -> stream emits OP_UPDATE.
+        setupView('v', '<ul az="0"><!--az:0-->' + listItem('A') + '<!--/az--></ul>');
+        const ul = document.querySelector('ul');
+        applyOps([[OP.UPDATE, 'v:0', '<li az="i" az-key="1"><!--az:i-->X<!--/az--></li>']]);
+        // Now keyed-by az-key, addressable by stream ops; renders real HTML.
+        expect(ul.querySelector('[az-key="1"]').textContent).toBe('X');
+        applyOps([
+            [OP.INSERT, 'v:0', '2', -1, '<li az="i" az-key="2"><!--az:i-->Y<!--/az--></li>'],
+        ]);
+        expect(ul.querySelectorAll('[az-key]').length).toBe(2);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 7. applyOps -- OP.REMOVE_NODE
 // ---------------------------------------------------------------------------
 

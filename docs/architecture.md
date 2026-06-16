@@ -998,18 +998,52 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 
 ## Op codes
 
-| Code | Name             | Args                       | Description                                       |
-| ---- | ---------------- | -------------------------- | ------------------------------------------------- |
-| 0    | `OP_TEXT`        | `[target, value]`          | Update text node                                  |
-| 1    | `OP_SET_ATTR`    | `[target, attr, value]`    | Set attribute                                     |
-| 2    | `OP_REM_ATTR`    | `[target, attr]`           | Remove attribute                                  |
-| 3    | `OP_UPDATE`      | `[target, html]`           | innerHTML replacement (diff engine)               |
-| 4    | `OP_REMOVE_NODE` | `[target]`                 | Remove element                                    |
-| 5    | `OP_INSERT`      | `[target, key, pos, html]` | Stream insert (pos=-1 -> append, otherwise index) |
-| 6    | `OP_REMOVE`      | `[target, key]`            | Stream remove                                     |
-| 7    | `OP_ITEM_PATCH`  | `[target, key, innerOps]`  | Stream item patch                                 |
-| 8    | `OP_REPLACE`     | `[target, html]`           | outerHTML replacement (navigate)                  |
-| 9    | `OP_MOVE`        | `[target, key, afterKey]`  | Stream move (afterKey=null -> prepend)            |
+| Code | Name             | Args                       | Description                                            |
+| ---- | ---------------- | -------------------------- | ------------------------------------------------------ |
+| 0    | `OP_TEXT`        | `[target, value]`          | Replace marker content (text, nested tmpl, plain each) |
+| 1    | `OP_SET_ATTR`    | `[target, attr, value]`    | Set attribute                                          |
+| 2    | `OP_REM_ATTR`    | `[target, attr]`           | Remove attribute                                       |
+| 3    | `OP_UPDATE`      | `[target, html]`           | innerHTML replacement (stream container full render)   |
+| 4    | `OP_REMOVE_NODE` | `[target]`                 | Remove element                                         |
+| 5    | `OP_INSERT`      | `[target, key, pos, html]` | Stream insert (pos=-1 -> append, otherwise index)      |
+| 6    | `OP_REMOVE`      | `[target, key]`            | Stream remove                                          |
+| 7    | `OP_ITEM_PATCH`  | `[target, key, innerOps]`  | Stream item patch                                      |
+| 8    | `OP_REPLACE`     | `[target, html]`           | outerHTML replacement (navigate)                       |
+| 9    | `OP_MOVE`        | `[target, key, afterKey]`  | Stream move (afterKey=null -> prepend)                 |
+
+A content-slot dynamic -- a value, a nested template, *or a plain-list `?each`* -- is anchored
+by `<!--az:X-->...<!--/az-->` comment markers in SSR (no wrapper element carries the slot `az`),
+so its diff patch is the marker-aware `OP_TEXT`: it replaces only the span between the markers,
+leaving the slot's static siblings and the enclosing element intact. `OP_UPDATE` (innerHTML on
+the resolved element) is reserved for the **stream** `?each` container full render, where the
+container is the addressable element and items carry `az-key` for incremental ops. Emitting
+`OP_UPDATE` for a marker-anchored slot is a bug: the client's `resolveEl` finds no element for
+the slot `az`, falls back to the enclosing element, and innerHTML clobbers its siblings. See
+`arizona_diff`'s `make_op/3` (the `?EACH` list clause vs. the `order`-keyed stream clause) and
+`full_update/5`.
+
+The **stream -> list** type switch is consistent with this: a binding that was an
+`arizona_stream` and becomes a plain list routes through `diff_list/4 -> full_update/5 -> OP_TEXT`,
+which replaces only the surviving marker span -- so the list renders as real HTML and the slot's
+siblings survive. The stream's keyed `az-key` items are element children, and stream ops
+(insert/remove/move/patch query `:scope > [az-key]`) never delete the comment markers, so the
+marker is still present at switch time.
+
+**Known limitation -- the stream `?each` container is not yet marker-anchored for incremental
+ops.** Two consequences, both independent of the `OP_TEXT` content-slot fix:
+
+- **list -> stream among static siblings:** the reverse switch stays on `OP_UPDATE`, which is
+  correct only when the stream each is the addressable element (its slot `az` is the enclosing
+  element, i.e. the each is the sole child of its container). When a stream each shares a content
+  slot with static siblings, `OP_UPDATE` falls back to the enclosing element and clobbers them --
+  the same class of bug the plain-list `OP_TEXT` change fixed for lists.
+- **runtime-inserted item orphaned on stream -> list:** `insertItemEl` appends keyed children to
+  the container element, which places a runtime-inserted item *after* the closing `<!--/az-->`
+  marker. A subsequent stream -> list `OP_TEXT` correctly re-renders the marker span but leaves
+  that orphan behind.
+
+The fix for both is to anchor stream items between the slot markers (and make stream
+insert/move marker-relative), tracked as a follow-up.
 
 ## Target scoping
 
