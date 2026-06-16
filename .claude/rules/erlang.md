@@ -147,8 +147,8 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 
 `?each` compiles each item into a per-item template (`#{s, d, f}`) for fine-grained diffing
 (insert/move/update). So the callback's body must be an **element** (`{Tag, Attrs, Children}`),
-a list of elements, or a static/mixed fragment. A bare value, a runtime binary, an `?html(...)`
-call, a `?stateful`/`?stateless` descriptor, or a `case`/`if` compiles to one opaque value
+a list of elements, or a static/mixed fragment. A bare value, a runtime binary, a
+`?stateful`/`?stateless` descriptor, or a `case`/`if` compiles to one opaque value
 slot. A scalar value renders and diffs (keyed by content) but gets no per-item diffing -- a
 comprehension is the right tool; a template or descriptor value goes further and **crashes on
 the first diff** (`bad_template_value`, when `to_bin/1` hits the stored template/descriptor). A
@@ -157,6 +157,12 @@ transform rejects all of these at compile time (`each_body_not_element`). A 2-ar
 callback is rejected the same way but with `each_stream_body_not_element`: a stream/map keys
 each item for per-item diffing and has **no comprehension fallback**, so the body must be an
 element (wrap the value: `fun(Item, Key) -> {li, [], [Item]} end`).
+
+A whole-body `?html(...)` (or `?native`/`?terminal`) **is** accepted: it's unwrapped to the
+element it wraps and compiled identically to returning that element bare -- so a helper that
+returns `?html(...)` can be reused as an `?each` callback. Only a **whole-body** wrapper
+unwraps; a wrapper as a **list item** (`[?html(...)]`) stays rejected (it lands in the same
+fragile per-item value slot as a wrapped descriptor).
 
 The callback may be an inline fun **or a local single-clause function reference** (`fun row/1`,
 or `fun row/2` for a stream/map): the parse transform resolves the reference to the function's
@@ -178,12 +184,15 @@ and a **multi-clause** function (can't map to one shared per-item template,
   return a bare element tuple (see "Bare element tuples in conditional tails" below).
 
 ```erlang
-%% rejected (would crash on diff): a case / ?html body
+%% rejected (would crash on diff): a bare case body -- branches select different structures
 ?each(fun(U) -> case U of #{name := N} -> ?html({li,[],N}); _ -> ~"-" end end, ?get(users))
 %% ok: the conditional is a child of a stable element
 ?each(fun(U) -> {li, [], [case U of #{name := N} -> N; _ -> ~"-" end]} end, ?get(users))
 %% ok: a local single-clause named fun, resolved and inlined (same element-body rules)
 row(U) -> {li, [], [case U of #{name := N} -> N; _ -> ~"-" end]}.
+?each(fun row/1, ?get(users))
+%% ok: a whole-body ?html(...) is unwrapped to its element (inline or named single-clause)
+row(U) -> ?html({li, [], [case U of #{name := N} -> N; _ -> ~"-" end]}).
 ?each(fun row/1, ?get(users))
 %% plain values: a comprehension, not ?each
 {ul, [], [[<<"#", Tag/binary>> || Tag <- ?get(tags)]]}
