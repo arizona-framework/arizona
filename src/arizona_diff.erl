@@ -746,10 +746,18 @@ make_op(Az, {attr, Attr, Val}, _Old) ->
     [?OP_SET_ATTR, Az, Attr, arizona_template:to_bin(Val)];
 make_op(_Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := OldD}) ->
     [VId, diff_child_dynamics(NewD, OldD)];
-make_op(Az, #{s := _, d := _} = NewNested, #{s := _, d := _}) ->
+%% A nested template/snapshot in a content slot is always anchored by the
+%% slot's `<!--az:X-->...<!--/az-->` comment markers, whatever the slot held
+%% before (a binary, the empty string, or another template). `?OP_TEXT`
+%% replaces only the marker content, leaving the slot's siblings -- and the
+%% enclosing element -- intact. `?OP_UPDATE` (innerHTML) would be wrong: when
+%% the slot's `Az` is the enclosing element's own `az` (a conditional
+%% `?stateful` child rendered directly under the view root), it overwrites the
+%% whole element and drops every sibling. That is the empty(`~""`) ->
+%% descriptor transition the idiomatic
+%% `case ?get(flag) of true -> ?stateful(...); false -> ~"" end` produces.
+make_op(Az, #{s := _, d := _} = NewNested, _Old) ->
     [?OP_TEXT, Az, arizona_render:zip_or_fp(NewNested)];
-make_op(Az, #{s := _, d := _} = Tmpl, _Old) ->
-    [?OP_UPDATE, Az, arizona_render:zip_or_fp(Tmpl)];
 make_op(Az, #{t := ?EACH, items := Items, template := Tmpl}, _Old) when
     is_list(Items)
 ->

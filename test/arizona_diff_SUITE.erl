@@ -15,6 +15,7 @@
     diff_only_changed_emits_ops/1,
     diff_remove_node_op/1,
     diff_replace_with_template_op/1,
+    diff_empty_to_template_uses_text_op/1,
     diff_list_content_change_full_update/1,
     diff_list_first_item_change_full_update/1,
     diff_list_grew_full_update/1,
@@ -43,6 +44,7 @@ groups() ->
             diff_mixed_op,
             diff_remove_node_op,
             diff_replace_with_template_op,
+            diff_empty_to_template_uses_text_op,
             diff_list_content_change_full_update,
             diff_list_first_item_change_full_update,
             diff_list_grew_full_update,
@@ -216,13 +218,18 @@ diff_remove_node_op(Config) when is_list(Config) ->
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
     ?assertEqual([[?OP_REMOVE_NODE, <<"0">>]], Ops).
 
+%% A content slot whose value changes from a plain binary to a nested template
+%% patches the slot's marker content with ?OP_TEXT -- never ?OP_UPDATE
+%% (innerHTML), which would clobber the enclosing element when the slot's az is
+%% the element's own az. See diff_empty_to_template_uses_text_op for the
+%% empty(~"") -> ?stateful descriptor case this protects.
 diff_replace_with_template_op(Config) when is_list(Config) ->
     OldSnap = #{
-        s => [<<"<div az=\"0\">">>, <<"</div>">>],
+        s => [<<"<div az=\"0\"><!--az:0-->">>, <<"<!--/az--></div>">>],
         d => [{<<"0">>, <<"plain">>}]
     },
     NewTmpl = #{
-        s => [<<"<div az=\"0\">">>, <<"</div>">>],
+        s => [<<"<div az=\"0\"><!--az:0-->">>, <<"<!--/az--></div>">>],
         d => [
             {<<"0">>, fun() ->
                 #{s => [<<"<b>">>, <<"</b>">>], d => [{<<"i">>, <<"bold">>}], f => <<"test">>}
@@ -234,7 +241,7 @@ diff_replace_with_template_op(Config) when is_list(Config) ->
     ?assertEqual(
         [
             [
-                ?OP_UPDATE,
+                ?OP_TEXT,
                 <<"0">>,
                 #{
                     <<"f">> => <<"test">>,
@@ -245,6 +252,42 @@ diff_replace_with_template_op(Config) when is_list(Config) ->
         ],
         Ops
     ).
+
+%% Regression: a content slot transitioning from the empty string (`~""`) to a
+%% nested template -- the shape `case ?get(flag) of true -> ?stateful(...);
+%% false -> ~"" end` produces -- must patch the slot's marker content via
+%% ?OP_TEXT, leaving its siblings (and the enclosing element) intact. The bug
+%% was emitting ?OP_UPDATE here, whose innerHTML write clobbered the whole
+%% enclosing element when the slot's az equalled the element's own az (a
+%% conditional ?stateful child directly under the view root).
+diff_empty_to_template_uses_text_op(Config) when is_list(Config) ->
+    %% Statics model: <main az="X-0" id="app"><h1>..</h1><!--az:X-0-->SLOT
+    %% <!--/az--><footer>..</footer></main> -- the slot's az (X-0) is the same
+    %% as the enclosing <main>'s az, exactly as a view root + conditional child.
+    Statics = [
+        <<"<main az=\"X-0\" id=\"app\"><h1 az=\"X-1\">t</h1><!--az:X-0-->">>,
+        <<"<!--/az--><footer az=\"X-2\">f</footer></main>">>
+    ],
+    OldSnap = #{
+        s => Statics,
+        d => [{<<"X-1">>, <<"t">>}, {<<"X-0">>, <<>>}, {<<"X-2">>, <<"f">>}]
+    },
+    NewTmpl = #{
+        s => Statics,
+        d => [
+            {<<"X-1">>, fun() -> <<"t">> end},
+            {<<"X-0">>, fun() ->
+                #{s => [<<"<div>child</div>">>], d => [], f => <<"child_fp">>}
+            end},
+            {<<"X-2">>, fun() -> <<"f">> end}
+        ],
+        f => <<"X">>
+    },
+    {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
+    %% Exactly one op, an ?OP_TEXT on the slot -- not an ?OP_UPDATE on X-0
+    %% (which the client resolves to the <main> root and would innerHTML-wipe).
+    ?assertMatch([[?OP_TEXT, <<"X-0">>, #{<<"f">> := <<"child_fp">>}]], Ops),
+    ?assertNotMatch([[?OP_UPDATE, <<"X-0">>, _]], Ops).
 
 %% Plain-list `?each` diffing: any change re-renders the whole list with a
 %% single OP_UPDATE -- never a per-item OP_ITEM_PATCH (plain lists are unkeyed,

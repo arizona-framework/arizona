@@ -203,6 +203,16 @@ shared with the live-render-root transform. (This mirrors `?each`, whose callbac
 already accepts bare elements; the difference is that `?each` keys items for per-item
 diffing while a conditional is a single slot.)
 
+A conditional may also return a `?stateful`/`?stateless` descriptor from a branch -- the
+idiomatic `case ?get(flag) of true -> ?stateful(child, #{id => ~"c"}); false -> ~"" end`.
+A content slot is anchored by its `<!--az:X-->...<!--/az-->` comment markers in SSR, so
+any branch value (the empty string, a binary, a nested template, or a child descriptor)
+patches **in place** via `?OP_TEXT`, preserving the slot's siblings and the enclosing
+element. (`arizona_diff:make_op/3` always emits `?OP_TEXT`, never `?OP_UPDATE`, for a
+nested-template value -- an `?OP_UPDATE` would `innerHTML`-overwrite the enclosing element,
+which is catastrophic when the slot's `az` is that element's own `az`, e.g. a conditional
+child rendered directly under the view root.)
+
 **Known limitation:** embedding a component (a `?stateless`/`?stateful` descriptor) as an
 `?each` item child compiles and renders at SSR but **crashes on the first diff** -- the
 per-item diff keys a list item by `to_bin` of its first dynamic, which fails on a nested
