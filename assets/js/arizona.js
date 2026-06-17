@@ -1315,44 +1315,55 @@ function execOne(el, event, cmd) {
             const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
             const method = (opts.method || form?.getAttribute('method') || 'post').toUpperCase();
             const headers = { accept: 'application/json', ...(opts.headers || {}) };
+            let target = url;
             let body;
-            if (method !== 'GET' && method !== 'HEAD') {
-                if (opts.body !== undefined) {
-                    body = JSON.stringify(opts.body);
-                    headers['content-type'] = 'application/json';
-                } else if (form) {
-                    // Mirror a normal form POST: application/x-www-form-urlencoded.
-                    // (multipart / file uploads are a documented non-goal.)
-                    body = new URLSearchParams(/** @type {any} */ (new FormData(form)));
+            if (method === 'GET' || method === 'HEAD') {
+                // No request body for GET/HEAD -- carry a form's fields in the query
+                // string instead (fetch is otherwise POST-oriented: it sets cookies).
+                if (form) {
+                    const fd = /** @type {any} */ (new FormData(form));
+                    const qs = new URLSearchParams(fd).toString();
+                    if (qs) target += (url.includes('?') ? '&' : '?') + qs;
                 }
+            } else if (opts.body !== undefined) {
+                body = JSON.stringify(opts.body);
+                headers['content-type'] = 'application/json';
+            } else if (form) {
+                // Mirror a normal form POST: application/x-www-form-urlencoded.
+                // (multipart / file uploads are a documented non-goal.)
+                body = new URLSearchParams(/** @type {any} */ (new FormData(form)));
             }
-            // Animate the response effects only when the trigger opts in via
-            // az-transition (runTransition would otherwise transition unconditionally).
-            const tOpts = parseTransitionAttr(el);
             const onError = (/** @type {object} */ detail) => {
                 if (opts.on_error) executeJS(el, event, opts.on_error);
                 document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
             };
-            fetch(url, {
+            fetch(target, {
                 method,
                 body,
                 credentials: CREDENTIALS[opts.credentials] || 'same-origin',
                 headers,
             })
-                .then((resp) => {
-                    if (!resp.ok) {
-                        onError({ url, status: resp.status });
-                        return;
-                    }
-                    // Tolerate an empty body (e.g. a 204 when the controller only set
-                    // a cookie and re-syncs the view via arizona_pubsub) -- no effects.
-                    return resp.text().then((text) => {
-                        const effects = text ? JSON.parse(text).e || [] : [];
-                        const apply = () => applyEffects(effects);
-                        if (tOpts) runTransition(tOpts, apply);
-                        else apply();
-                    });
-                })
+                .then((resp) =>
+                    resp.text().then((text) => {
+                        // Apply the effects body whenever it parses -- even on a 4xx, so
+                        // the server can drive inline validation with a real status code.
+                        // An empty 2xx body (a 204 cookie-only response that re-syncs via
+                        // arizona_pubsub) applies nothing. on_error runs only when there
+                        // is no usable effects body: a non-JSON page or an empty non-2xx.
+                        let effects = null;
+                        if (text) {
+                            try {
+                                effects = JSON.parse(text).e || [];
+                            } catch {
+                                effects = null;
+                            }
+                        } else if (resp.ok) {
+                            effects = [];
+                        }
+                        if (effects !== null) applyEffects(effects);
+                        else onError({ url, status: resp.status });
+                    }),
+                )
                 .catch((error) => onError({ url, error }));
             break;
         }

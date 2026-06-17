@@ -3718,10 +3718,31 @@ describe('executeJS -- fetch', () => {
         expect(globalThis.fetch.mock.calls[0][1].credentials).toBe('include');
     });
 
-    it('runs on_error and dispatches arizona:fetch-error on a non-2xx response', async () => {
+    it('applies a non-2xx effects body (inline validation) without firing on_error', async () => {
         document.title = 'Old';
         globalThis.fetch = vi.fn(() =>
-            Promise.resolve({ ok: false, status: 422, json: () => Promise.resolve({}) }),
+            Promise.resolve({
+                ok: false,
+                status: 422,
+                text: () => Promise.resolve(JSON.stringify({ e: [[14, 'Invalid']] })),
+            }),
+        );
+        const onErr = vi.fn();
+        document.addEventListener('arizona:fetch-error', onErr);
+
+        executeJS(document.body, null, [22, '/account', { on_error: [14, 'Failed'] }]);
+
+        // The server's effects win (title 'Invalid'); on_error ('Failed') does not run.
+        await vi.waitFor(() => expect(document.title).toBe('Invalid'));
+        expect(onErr).not.toHaveBeenCalled();
+
+        document.removeEventListener('arizona:fetch-error', onErr);
+    });
+
+    it('runs on_error and dispatches arizona:fetch-error on a non-2xx with no effects body', async () => {
+        document.title = 'Old';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({ ok: false, status: 500, text: () => Promise.resolve('') }),
         );
         const onErr = vi.fn();
         document.addEventListener('arizona:fetch-error', onErr);
@@ -3731,9 +3752,22 @@ describe('executeJS -- fetch', () => {
 
         await vi.waitFor(() => expect(document.title).toBe('Failed'));
         expect(onErr).toHaveBeenCalled();
-        expect(onErr.mock.calls[0][0].detail.status).toBe(422);
+        expect(onErr.mock.calls[0][0].detail.status).toBe(500);
 
         document.removeEventListener('arizona:fetch-error', onErr);
+    });
+
+    it('carries a form’s fields in the query string for a GET request', async () => {
+        document.body.innerHTML = '<form method="get"><input name="q" value="erlang" /></form>';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.querySelector('form'), null, [22, '/search', {}]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        const [target, init] = globalThis.fetch.mock.calls[0];
+        expect(target).toBe('/search?q=erlang');
+        expect(init.method).toBe('GET');
+        expect(init.body).toBeUndefined();
     });
 
     it('runs on_error on a network failure (rejected fetch)', async () => {
