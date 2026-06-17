@@ -66,7 +66,7 @@ Register hooks in `hooks` object before `connect()`. Elements with `az-hook="Hoo
 
 **Lifecycle:**
 - `mounted()` -- on `ws.onopen`, after `OP_INSERT`/`OP_UPDATE`/`OP_REPLACE`/`OP_TEXT` marker path. Guarded -- never double-fires.
-- `updated()` -- after `OP_SET_ATTR`/`OP_REM_ATTR`/`OP_UPDATE`/`OP_TEXT` textContent. Only for persisting elements.
+- `updated()` -- after `OP_SET_ATTR`/`OP_REM_ATTR`/`OP_UPDATE`/`OP_TEXT` textContent. Only for persisting elements. Every DOM-mutating `arizona_js` effect also fires `updated()` on the element it touches, so a client-driven change is observable to a hook exactly like the server-driven diff: the attribute effects (`set_attr`/`remove_attr`/`toggle_attr`) go through the canonical writers `applySetAttrOp`/`applyRemAttrOp` (which also sync the form-control `value` property like `OP_SET_ATTR`/`OP_REM_ATTR`), and the class/visibility effects (`add_class`/`remove_class`/`toggle_class`/`toggle`/`show`/`hide`) call `notifyUpdated` after mutating `classList`/`hidden`.
 - `destroyed()` -- before `OP_REMOVE_NODE`/`OP_REMOVE`/`OP_REPLACE`/`OP_UPDATE`/`OP_TEXT`. Called BEFORE DOM mutation.
 
 **Key distinction:** `OP_UPDATE`/`OP_TEXT` use `destroyChildHooks` (descendants only) -- target stays, gets `updated()`. `OP_REPLACE`/`OP_REMOVE_NODE` use `destroyHooks` (root + descendants).

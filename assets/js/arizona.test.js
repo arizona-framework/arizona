@@ -859,6 +859,143 @@ describe('applyEffects -- set_title', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 14d. applyEffects -- toggle_attr (op 21)
+// ---------------------------------------------------------------------------
+
+describe('applyEffects -- toggle_attr', () => {
+    const field = () => document.querySelector('#f');
+
+    it('presence: sets the bare attribute when absent', () => {
+        document.body.innerHTML = '<input id="f" type="text" />';
+        applyEffects([[21, '#f', 'disabled']]);
+        expect(field().getAttribute('disabled')).toBe('');
+    });
+
+    it('presence: removes the attribute when present', () => {
+        document.body.innerHTML = '<input id="f" type="text" disabled />';
+        applyEffects([[21, '#f', 'disabled']]);
+        expect(field().hasAttribute('disabled')).toBe(false);
+    });
+
+    it('value: flips from A to B and back', () => {
+        document.body.innerHTML = '<input id="f" type="password" />';
+        applyEffects([[21, '#f', 'type', 'password', 'text']]);
+        expect(field().getAttribute('type')).toBe('text');
+        applyEffects([[21, '#f', 'type', 'password', 'text']]);
+        expect(field().getAttribute('type')).toBe('password');
+    });
+
+    it('value: a current value matching neither resolves to A', () => {
+        document.body.innerHTML = '<input id="f" type="email" />';
+        applyEffects([[21, '#f', 'type', 'password', 'text']]);
+        expect(field().getAttribute('type')).toBe('password');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// 14e. applyEffects -- attribute effects share the canonical writers
+// (value-property sync + hook updated(), same as the OP_SET_ATTR/OP_REM_ATTR diff)
+// ---------------------------------------------------------------------------
+
+describe('applyEffects -- attribute effects (canonical writer)', () => {
+    it('set_attr syncs the live value property of a dirtied input', () => {
+        document.body.innerHTML = '<input id="i" value="orig" />';
+        const input = document.querySelector('#i');
+        input.value = 'typed'; // dirty the live property so it diverges from the attribute
+        applyEffects([[7, '#i', 'value', 'fromserver']]); // op 7 = set_attr
+        expect(input.value).toBe('fromserver');
+        expect(input.getAttribute('value')).toBe('fromserver');
+    });
+
+    it('toggle_attr value sync reaches the live value property', () => {
+        document.body.innerHTML = '<input id="i" value="a" />';
+        const input = document.querySelector('#i');
+        input.value = 'a';
+        applyEffects([[21, '#i', 'value', 'a', 'b']]);
+        expect(input.value).toBe('b');
+    });
+
+    it('set_attr fires updated() on a hooked element', () => {
+        const updated = vi.fn();
+        hooks.Chart = { mounted() {}, updated };
+        setupView('v', '<div az="0" az-hook="Chart">content</div>');
+        mountHooks(document);
+        applyEffects([[7, '[az-hook="Chart"]', 'class', 'active']]);
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('remove_attr fires updated() on a hooked element', () => {
+        const updated = vi.fn();
+        hooks.Chart = { mounted() {}, updated };
+        setupView('v', '<div az="0" az-hook="Chart" class="active">content</div>');
+        mountHooks(document);
+        applyEffects([[8, '[az-hook="Chart"]', 'class']]); // op 8 = remove_attr
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('toggle_attr fires updated() on a hooked element', () => {
+        const updated = vi.fn();
+        hooks.Chart = { mounted() {}, updated };
+        setupView('v', '<div az="0" az-hook="Chart">content</div>');
+        mountHooks(document);
+        applyEffects([[21, '[az-hook="Chart"]', 'data-open']]);
+        expect(updated).toHaveBeenCalledOnce();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// 14f. applyEffects -- class/visibility effects also fire updated()
+// (so a client-driven class/hidden change is observable like an attribute diff)
+// ---------------------------------------------------------------------------
+
+describe('applyEffects -- class/visibility effects fire updated()', () => {
+    /** Mount a hooked element and return its updated() spy. */
+    function hookedUpdated(extraAttrs = '') {
+        const updated = vi.fn();
+        hooks.Chart = { mounted() {}, updated };
+        setupView('v', `<div az="0" az-hook="Chart"${extraAttrs}>content</div>`);
+        mountHooks(document);
+        return updated;
+    }
+
+    it('add_class fires updated()', () => {
+        const updated = hookedUpdated();
+        applyEffects([[4, '[az-hook="Chart"]', 'active']]); // op 4 = add_class
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('remove_class fires updated()', () => {
+        const updated = hookedUpdated(' class="active"');
+        applyEffects([[5, '[az-hook="Chart"]', 'active']]); // op 5 = remove_class
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('toggle_class fires updated()', () => {
+        const updated = hookedUpdated();
+        applyEffects([[6, '[az-hook="Chart"]', 'active']]); // op 6 = toggle_class
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('toggle (visibility) fires updated()', () => {
+        const updated = hookedUpdated();
+        applyEffects([[1, '[az-hook="Chart"]']]); // op 1 = toggle
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('show fires updated()', () => {
+        const updated = hookedUpdated(' hidden');
+        applyEffects([[2, '[az-hook="Chart"]']]); // op 2 = show
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('hide fires updated()', () => {
+        const updated = hookedUpdated();
+        applyEffects([[3, '[az-hook="Chart"]']]); // op 3 = hide
+        expect(updated).toHaveBeenCalledOnce();
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 14c. applyOps -- OP.REPLACE edge cases
 // ---------------------------------------------------------------------------
 

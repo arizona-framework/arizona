@@ -513,6 +513,18 @@ function applySetAttrOp(el, name, val) {
 }
 
 /**
+ * Apply a REM_ATTR op: removeAttribute and run the hook `updated` phase. The
+ * canonical attribute-removal write shared by diff ops, item patches, and the
+ * `arizona_js` attribute effects, so a removal behaves the same whatever drove it.
+ * @param {Element} el
+ * @param {string} name
+ */
+function applyRemAttrOp(el, name) {
+    el.removeAttribute(name);
+    notifyUpdated(el);
+}
+
+/**
  * Apply an UPDATE op: replace innerHTML, walking hook lifecycle.
  * @param {Element} el
  * @param {string} html
@@ -545,8 +557,7 @@ function applyOps(ops) {
                 applySetAttrOp(el, op[2], op[3]);
                 break;
             case OP.REM_ATTR:
-                el.removeAttribute(op[2]);
-                notifyUpdated(el);
+                applyRemAttrOp(el, op[2]);
                 break;
             case OP.UPDATE:
                 applyUpdateOp(el, op[2]);
@@ -1008,12 +1019,9 @@ function applyItemOps(item, innerOps) {
             case OP.SET_ATTR:
                 applySetAttrOp(resolveInnerEl(item, az), op[2], op[3]);
                 break;
-            case OP.REM_ATTR: {
-                const innerEl = resolveInnerEl(item, az);
-                innerEl.removeAttribute(op[2]);
-                notifyUpdated(innerEl);
+            case OP.REM_ATTR:
+                applyRemAttrOp(resolveInnerEl(item, az), op[2]);
                 break;
-            }
             case OP.UPDATE:
                 applyUpdateOp(resolveInnerEl(item, az), op[2]);
                 break;
@@ -1128,12 +1136,19 @@ const JS_PUSH_EVENT = 0,
     JS_SET_LOCAL = 17,
     JS_REQUEST_PIP = 18,
     JS_EXIT_PIP = 19,
-    JS_TRANSITION = 20;
+    JS_TRANSITION = 20,
+    JS_TOGGLE_ATTR = 21;
 
 /**
  * If `sel` matches an element, call `fn` with it cast to `HTMLElement`.
  * Used by the executeJS targeted commands; some need HTMLElement-only
  * properties (`hidden`, `focus`, `blur`).
+ *
+ * NOTE: first-match only -- `querySelector`, not `querySelectorAll`. Every
+ * selector-based effect (`toggle`/`show`/`hide`/`*_class`/`*_attr`) therefore
+ * acts on a single element, even when the selector matches several. Open
+ * follow-up: decide whether the whole family should target all matches; if so,
+ * change it here once so the commands stay consistent.
  * @param {string} sel
  * @param {(el: HTMLElement) => void} fn
  */
@@ -1207,28 +1222,58 @@ function execOne(el, event, cmd) {
             break;
         }
         case JS_TOGGLE:
-            withQuery(cmd[1], (t) => (t.hidden = !t.hidden));
+            withQuery(cmd[1], (t) => {
+                t.hidden = !t.hidden;
+                notifyUpdated(t);
+            });
             break;
         case JS_SHOW:
-            withQuery(cmd[1], (t) => (t.hidden = false));
+            withQuery(cmd[1], (t) => {
+                t.hidden = false;
+                notifyUpdated(t);
+            });
             break;
         case JS_HIDE:
-            withQuery(cmd[1], (t) => (t.hidden = true));
+            withQuery(cmd[1], (t) => {
+                t.hidden = true;
+                notifyUpdated(t);
+            });
             break;
         case JS_ADD_CLASS:
-            withQuery(cmd[1], (t) => t.classList.add(cmd[2]));
+            withQuery(cmd[1], (t) => {
+                t.classList.add(cmd[2]);
+                notifyUpdated(t);
+            });
             break;
         case JS_REMOVE_CLASS:
-            withQuery(cmd[1], (t) => t.classList.remove(cmd[2]));
+            withQuery(cmd[1], (t) => {
+                t.classList.remove(cmd[2]);
+                notifyUpdated(t);
+            });
             break;
         case JS_TOGGLE_CLASS:
-            withQuery(cmd[1], (t) => t.classList.toggle(cmd[2]));
+            withQuery(cmd[1], (t) => {
+                t.classList.toggle(cmd[2]);
+                notifyUpdated(t);
+            });
             break;
         case JS_SET_ATTR:
-            withQuery(cmd[1], (t) => t.setAttribute(cmd[2], cmd[3]));
+            withQuery(cmd[1], (t) => applySetAttrOp(t, cmd[2], cmd[3]));
             break;
         case JS_REMOVE_ATTR:
-            withQuery(cmd[1], (t) => t.removeAttribute(cmd[2]));
+            withQuery(cmd[1], (t) => applyRemAttrOp(t, cmd[2]));
+            break;
+        case JS_TOGGLE_ATTR:
+            // 3 args: presence toggle (remove if present, else set bare). 5 args:
+            // value toggle (cmd[3] <-> cmd[4]; any other current value -> cmd[3]).
+            withQuery(cmd[1], (t) => {
+                if (cmd.length === 3) {
+                    if (t.hasAttribute(cmd[2])) applyRemAttrOp(t, cmd[2]);
+                    else applySetAttrOp(t, cmd[2], '');
+                } else {
+                    applySetAttrOp(t, cmd[2], t.getAttribute(cmd[2]) === cmd[3] ? cmd[4] : cmd[3]);
+                }
+            });
             break;
         case JS_DISPATCH_EVENT:
             document.dispatchEvent(new CustomEvent(cmd[1], { detail: cmd[2] || {} }));

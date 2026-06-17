@@ -399,7 +399,8 @@ handle_event(~"inc", _P, B) ->
   wins).
 - `toggle/1`, `show/1`, `hide/1` -- element visibility via `hidden` attribute
 - `add_class/2`, `remove_class/2`, `toggle_class/2` -- CSS class manipulation
-- `set_attr/3`, `remove_attr/2` -- attribute manipulation
+- `set_attr/3`, `remove_attr/2`, `toggle_attr/2,4` -- attribute manipulation (`toggle_attr/2`
+  presence toggle: add if absent, remove if present; `toggle_attr/4` flips between two values)
 - `dispatch_event/2` -- dispatch CustomEvent on document
 - `navigate/1,2` -- SPA navigation (opts: `#{replace => true}`)
 - `transition/1,2` -- wrap a command (or list) so its DOM change animates in a view
