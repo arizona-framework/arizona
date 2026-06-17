@@ -3781,4 +3781,84 @@ describe('executeJS -- fetch', () => {
 
         document.removeEventListener('arizona:fetch-error', onErr);
     });
+
+    it('honors az-form-reset on a 2xx success', async () => {
+        document.body.innerHTML = '<form az-form-reset><input id="note" name="note" /></form>';
+        const input = document.querySelector('#note');
+        input.value = 'typed';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.querySelector('form'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => expect(input.value).toBe(''));
+    });
+
+    it('keeps the form on a non-2xx even with az-form-reset', async () => {
+        document.title = 'Old';
+        document.body.innerHTML = '<form az-form-reset><input id="note" name="note" /></form>';
+        const input = document.querySelector('#note');
+        input.value = 'typed';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: false,
+                status: 422,
+                text: () => Promise.resolve(JSON.stringify({ e: [[14, 'Err']] })),
+            }),
+        );
+
+        executeJS(document.querySelector('form'), null, [22, '/account', {}]);
+
+        // The effects ran (title set), proving the chain completed; the field survived.
+        await vi.waitFor(() => expect(document.title).toBe('Err'));
+        expect(input.value).toBe('typed');
+    });
+});
+
+describe('fetch + az-form-reset via the submit listener', () => {
+    /** @type {any} */
+    let originalFetch;
+
+    beforeEach(() => {
+        originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    it('defers az-form-reset to the 2xx response (no synchronous reset)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<form id="f" az-submit=\'[22,"/x",{}]\' az-form-reset>' +
+            '<input id="n" name="n" /><button type="submit">Go</button></form>';
+        const input = document.querySelector('#n');
+        input.value = 'typed';
+
+        let resolveFetch;
+        globalThis.fetch = vi.fn(
+            () =>
+                new Promise((res) => {
+                    resolveFetch = () =>
+                        res({ ok: true, status: 200, text: () => Promise.resolve('') });
+                }),
+        );
+
+        document
+            .querySelector('#f')
+            .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+        // The fetch was dispatched but has not resolved -> the field must survive.
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+        expect(input.value).toBe('typed');
+
+        // Resolve the 2xx -> now az-form-reset applies.
+        resolveFetch();
+        await vi.waitFor(() => expect(input.value).toBe(''));
+
+        mock.restore();
+    });
 });

@@ -1145,6 +1145,27 @@ const JS_PUSH_EVENT = 0,
 const CREDENTIALS = { same_origin: 'same-origin', include: 'include', omit: 'omit' };
 
 /**
+ * Reset a form after a successful az-submit, when it opted in with `az-form-reset`.
+ * Shared by the submit listener (synchronous, for push_event-style commands) and the
+ * `fetch` command (deferred to a 2xx response, so the fields survive a validation error).
+ * @param {Element} form
+ */
+function maybeResetForm(form) {
+    if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
+}
+
+/**
+ * True when a parsed az-submit command (single or list) is/contains a `fetch`, so the
+ * submit listener can defer `az-form-reset` to the fetch response instead of resetting
+ * synchronously on submit.
+ * @param {Array<*>} cmds
+ */
+function commandsIncludeFetch(cmds) {
+    const list = Array.isArray(cmds[0]) ? cmds : [cmds];
+    return list.some((c) => c[0] === JS_FETCH);
+}
+
+/**
  * Call `fn` with the FIRST element matching `sel` (cast to `HTMLElement`),
  * searched across the main document and any PiP documents. First-match only --
  * the single-target effects `focus`/`blur`/`scroll_to` use this, since those act
@@ -1362,6 +1383,9 @@ function execOne(el, event, cmd) {
                         }
                         if (effects !== null) applyEffects(effects);
                         else onError({ url, status: resp.status });
+                        // Honor az-form-reset only on a 2xx success, so a validation
+                        // error (a non-2xx) keeps the typed fields.
+                        if (resp.ok && form) maybeResetForm(form);
                     }),
                 )
                 .catch((error) => onError({ url, error }));
@@ -1638,8 +1662,11 @@ function bindDocumentEvents(target, signal) {
             e.preventDefault();
             form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
             const raw = form.getAttribute('az-submit');
-            if (raw) executeJS(form, e, withTransitionAttr(form, JSON.parse(raw)));
-            if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
+            const cmds = raw ? JSON.parse(raw) : null;
+            if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
+            // A fetch command resets on its own 2xx response (so a validation error
+            // keeps the typed fields); everything else resets synchronously here.
+            if (!(cmds && commandsIncludeFetch(cmds))) maybeResetForm(form);
         },
         { signal },
     );
