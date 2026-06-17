@@ -101,7 +101,9 @@ Used in route declarations, `arizona_render:render_view_to_iolist/2`, `arizona_h
 
 ### CSRF Origin check
 
-`check_origin` is a built-in middleware step (`{arizona_middleware, check_origin}`) the router **prepends by default** to `{live, ...}` and `{controller, ...}` routes -- it rejects a cross-origin request/upgrade with `403` (`arizona_origin:check/2`: same-origin or `csrf_origins` allowlist; a missing `Origin` is allowed). Off by exception: `check_origin => false` in a route's `Opts`, or the global `check_origin` app env. It covers the WS upgrade too (`arizona_ws:prepare/3` runs the route's middlewares).
+`check_origin` is a built-in middleware step (`{arizona_middleware, check_origin}`) the router **prepends by default** to `{live, ...}` and `{controller, ...}` routes -- it rejects a cross-origin request/upgrade with `403` (`arizona_origin:check/2`: same-origin or `csrf_origins` allowlist; a missing `Origin` is allowed). Off by exception: `check_origin => false` in a route's `Opts`, or the global `check_origin` app env (which logs a warning once when disabled). It covers the WS upgrade too (`arizona_ws:prepare/3` runs the route's middlewares).
+
+**It protects state-changing POST/PUT/DELETE + the WS upgrade only -- never a state-changing GET.** A cross-site top-level GET navigation sends no `Origin` (so the check allows it) but still carries a `SameSite=Lax` cookie, so a cookie-only `GET /logout`-style mutation is CSRF-able regardless -- the inherent limit of Origin-checking, not framework-closable. So **controllers must gate mutations on the method** (act only on non-GET; GET/HEAD must be side-effect-free), and apps should set `SameSite=Lax`/`Strict` on auth cookies. A signed double-submit token (closing the missing-Origin gap) is a documented follow-up.
 
 ### Controller routes
 

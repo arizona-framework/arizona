@@ -606,7 +606,9 @@ build-opts variant supports hot-reload-safe rebuilds.
 - `{asset, Path, {dir, Dir}}` -- static asset from absolute directory
 - `{controller, Path, Handler, Opts}` -- plain `roadrunner_handler` behind the Arizona
   middleware pipeline (CSRF `check_origin` on by default); `Opts` carries `state`/`middlewares`/
-  `check_origin`. Dispatches through `arizona_roadrunner_controller`.
+  `check_origin`. Dispatches through `arizona_roadrunner_controller`. (Gate state changes on
+  non-GET: `check_origin` covers POST/PUT/DELETE + the WS upgrade, but a state-changing GET is
+  CSRF-able regardless -- a cross-site GET nav carries a `SameSite=Lax` cookie but no `Origin`.)
 - `{reload, Path, Opts}` -- dev SSE reload endpoint (roadrunner-only convenience)
 
 ## API -- `arizona_stream.erl`

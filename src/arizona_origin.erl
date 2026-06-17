@@ -37,13 +37,30 @@ origin is trusted (same-origin, allowlisted, missing, or checking disabled) and
     Host :: binary() | undefined.
 check(Origin, Host) ->
     case application:get_env(arizona, check_origin, true) of
-        false -> ok;
-        _Enabled -> do_check(Origin, Host)
+        false ->
+            warn_disabled(),
+            ok;
+        _Enabled ->
+            do_check(Origin, Host)
     end.
 
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% Warn once per node when Origin checking is globally disabled, so an operator never
+%% runs with CSRF protection off without a trace in the logs.
+warn_disabled() ->
+    case persistent_term:get({?MODULE, disabled_warned}, false) of
+        true ->
+            ok;
+        false ->
+            persistent_term:put({?MODULE, disabled_warned}, true),
+            logger:warning(
+                "arizona CSRF Origin checking is globally disabled "
+                "(application env check_origin=false)"
+            )
+    end.
 
 do_check(undefined, _Host) ->
     ok;
