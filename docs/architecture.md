@@ -412,6 +412,10 @@ handle_event(~"inc", _P, B) ->
 - `encode/1` -- encode single cmd or list of cmds to HTML-safe JSON binary (called automatically by
   `to_bin`)
 
+**Selector targeting:** the broadcast commands (`toggle`/`show`/`hide`, the `*_class` and
+`*_attr` ops) act on **all** elements matching the selector; `focus`/`blur`/`scroll_to` act on
+the **first** match.
+
 **Payload auto-collection** (`push_event`): When `push_event` fires on an element, the client
 auto-collects a base payload from the element and event context, then merges explicit payload on
 top:

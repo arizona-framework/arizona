@@ -132,54 +132,54 @@ auto-collected form data.
     Payload :: map().
 push_event(Event, Payload) -> {arizona_effect, [?EFFECT_PUSH_EVENT, Event, Payload]}.
 
--doc "Toggles the visibility of elements matching the CSS selector.".
+-doc "Toggles the visibility of all elements matching the CSS selector.".
 -spec toggle(Selector) -> arizona_effect:cmd() when
     Selector :: binary().
 toggle(Sel) -> {arizona_effect, [?EFFECT_TOGGLE, Sel]}.
 
--doc "Shows elements matching the CSS selector.".
+-doc "Shows all elements matching the CSS selector.".
 -spec show(Selector) -> arizona_effect:cmd() when
     Selector :: binary().
 show(Sel) -> {arizona_effect, [?EFFECT_SHOW, Sel]}.
 
--doc "Hides elements matching the CSS selector.".
+-doc "Hides all elements matching the CSS selector.".
 -spec hide(Selector) -> arizona_effect:cmd() when
     Selector :: binary().
 hide(Sel) -> {arizona_effect, [?EFFECT_HIDE, Sel]}.
 
--doc "Adds a CSS class to elements matching the selector.".
+-doc "Adds a CSS class to all elements matching the selector.".
 -spec add_class(Selector, Class) -> arizona_effect:cmd() when
     Selector :: binary(),
     Class :: binary().
 add_class(Sel, Cls) -> {arizona_effect, [?EFFECT_ADD_CLASS, Sel, Cls]}.
 
--doc "Removes a CSS class from elements matching the selector.".
+-doc "Removes a CSS class from all elements matching the selector.".
 -spec remove_class(Selector, Class) -> arizona_effect:cmd() when
     Selector :: binary(),
     Class :: binary().
 remove_class(Sel, Cls) -> {arizona_effect, [?EFFECT_REMOVE_CLASS, Sel, Cls]}.
 
--doc "Toggles a CSS class on elements matching the selector.".
+-doc "Toggles a CSS class on all elements matching the selector.".
 -spec toggle_class(Selector, Class) -> arizona_effect:cmd() when
     Selector :: binary(),
     Class :: binary().
 toggle_class(Sel, Cls) -> {arizona_effect, [?EFFECT_TOGGLE_CLASS, Sel, Cls]}.
 
--doc "Sets an attribute on elements matching the selector.".
+-doc "Sets an attribute on all elements matching the selector.".
 -spec set_attr(Selector, Attr, Value) -> arizona_effect:cmd() when
     Selector :: binary(),
     Attr :: binary(),
     Value :: binary().
 set_attr(Sel, Attr, Val) -> {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, Val]}.
 
--doc "Removes an attribute from elements matching the selector.".
+-doc "Removes an attribute from all elements matching the selector.".
 -spec remove_attr(Selector, Attr) -> arizona_effect:cmd() when
     Selector :: binary(),
     Attr :: binary().
 remove_attr(Sel, Attr) -> {arizona_effect, [?EFFECT_REMOVE_ATTR, Sel, Attr]}.
 
 -doc """
-Toggles the presence of a bare boolean attribute on elements matching the
+Toggles the presence of a bare boolean attribute on all elements matching the
 selector: removes it if present, otherwise sets it (e.g. `disabled`, `readonly`,
 `hidden`, `open`). For toggling between two values, use `toggle_attr/4`.
 """.
@@ -189,7 +189,7 @@ selector: removes it if present, otherwise sets it (e.g. `disabled`, `readonly`,
 toggle_attr(Sel, Attr) -> {arizona_effect, [?EFFECT_TOGGLE_ATTR, Sel, Attr]}.
 
 -doc """
-Toggles an attribute between two values on elements matching the selector: sets
+Toggles an attribute between two values on all elements matching the selector: sets
 `ValueB` when the current value is `ValueA`, otherwise sets `ValueA` (so any
 other current value resolves to `ValueA`). Useful for one-button toggles like a
 password field's `type` between `password` and `text`.
