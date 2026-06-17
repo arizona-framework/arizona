@@ -84,6 +84,20 @@ routes() ->
             layouts => Layouts
         }},
         {controller, <<"/_test/drain">>, arizona_drain_admin, #{}},
+        %% arizona_js:fetch e2e -- a form posts to the controller (sets an HttpOnly
+        %% cookie, broadcasts to the live view via pubsub, returns an effect); no reload.
+        {live, <<"/fetch-account">>, arizona_fetch_account, #{
+            bindings => #{title => <<"Account">>},
+            layouts => Layouts
+        }},
+        {controller, <<"/fetch-account/submit">>, arizona_fetch_account_controller, #{}},
+        %% arizona_js:fetch + push_event -- the controller's response push_event re-renders
+        %% the submitting view via handle_event (no pubsub); for refreshing only that view.
+        {live, <<"/fetch-push">>, arizona_fetch_push, #{
+            bindings => #{title => <<"Push">>},
+            layouts => Layouts
+        }},
+        {controller, <<"/fetch-push/submit">>, arizona_fetch_push_controller, #{}},
         %% Native (JSON) view -- no layouts (native has no HTTP page); the first
         %% frame is mount_and_render over the WebSocket.
         {live, <<"/native/counter">>, arizona_native_counter_demo, #{}},

@@ -54,6 +54,25 @@ Behaviour:
 - **Cross-document** (real `<a href>` navigations, full reloads): pure CSS -- add `@view-transition { navigation: auto; }` to the page. No framework code.
 - **Styling** is user CSS. By default the whole root cross-fades; to scope or morph a single element, give it a `view-transition-name` (it then animates independently across the change). `::view-transition-*` and `:active-view-transition-type(<type>)` customize the animation. A `view-transition-name` must be unique among rendered elements during a transition, or the browser skips it.
 
+## HTTP fetch (`arizona_js:fetch`)
+
+`arizona_js:fetch(Url, Opts)` (op `JS_FETCH = 22`) issues a `fetch()` request with **no page reload** -- the only command that can set a real `Set-Cookie` (HttpOnly honored) without navigating. The `case JS_FETCH:` handler in `execOne`:
+
+- **Body.** For a POST/PUT/... when the trigger is/contains a `<form>` (the `az-submit` listener passes the form as the trigger element), the body is `new URLSearchParams(new FormData(form))` -- `application/x-www-form-urlencoded`, mirroring a normal form POST (multipart / file uploads are a non-goal). Otherwise `Opts.body` is JSON-encoded. Explicit `Opts.body` wins over the form.
+- **GET/HEAD.** No request body; a form's fields are appended to the URL query string instead (`fetch` is otherwise POST-oriented -- it exists to set cookies).
+- **Request.** `method` = `Opts.method` -> the form's `method` -> `POST`. `credentials` maps the atom (`same_origin` -> `'same-origin'`, default) to the fetch mode. Headers default to `accept: application/json` plus `Opts.headers`.
+- **Effects body.** Whenever the response body parses as `{ e: effects }`, `applyEffects(effects)` runs -- **regardless of status**, so a controller can return a real `4xx` (e.g. `422`). An empty `2xx` body (a `204` cookie-only response) applies nothing. `Set-Cookie` is applied natively by the browser. (No response-effect view-transition wrapping -- a follow-up; server-driven re-renders animate through the normal WS path.)
+- **Form reset.** `az-form-reset` is honored via the shared `maybeResetForm` helper. The submit listener resets synchronously for non-fetch commands; for a fetch command it defers (the listener skips the sync reset via `commandsIncludeFetch`) and the fetch handler resets **only on a 2xx success** -- so a validation error (a non-2xx) keeps the typed fields.
+- **Redirect.** There is **no HTTP-3xx handling** -- `fetch`'s `redirect: 'manual'` yields an opaque-redirect whose `Location` is unreadable. A redirect is delivered as an `arizona_js:navigate` effect in a 2xx body (`arizona_controller:reply_redirect/1`).
+- **Failure.** `Opts.on_error` runs (via `executeJS`) and an `arizona:fetch-error` `CustomEvent` is dispatched on `document` only when there is **no usable effects body**: a non-JSON error page, an empty non-2xx, or a network failure.
+
+The server endpoint is a `{controller, ...}` route building the response with `arizona_controller:reply_effects/1`. **Showing content is server-authoritative, not a response effect** -- there is deliberately no `set_text`/`set_html` (it would fight the diff engine) and the response is effects-only (a stateless controller has no diff snapshot for ops, hence `accept: application/json`). Two ways to update the rendered page, both server-authoritative (the view renders from state, the WS diff patches):
+
+- **`push_event` in the response (default, the submitting view).** Return `arizona_js:push_event(~"...")`; the fetch handler runs response effects against the **enclosing view element** (not the form), so `resolveTarget` finds the form's view (root **or** a child view) and the client relays the event over its WS -> `handle_event/3` re-renders -- **without** scraping the form's fields into the payload (the view element isn't a form, so sensitive inputs aren't echoed). Pass the controller's result as an explicit payload. Success leg: `reply_effects/1` (200, the form auto-resets). Error leg: `reply_effects(Status, Effects)` with a non-2xx (e.g. `422`) so the typed fields survive while the effects still apply. No subscription, works for anonymous forms. Fixture: `arizona_fetch_push`.
+- **`arizona_pubsub` (broadcast, other views/users).** The view subscribes to a topic (scoped by user/session) in `mount/1`; the controller broadcasts to it. Use when the change must reach views beyond the submitter. Fixture: `arizona_fetch_account`.
+
+The response effects themselves are for request-local imperative UI only. **No CSRF** mechanism yet -- same-origin only (so an anonymous form like login can't yet scope a pubsub topic to its submitter, though push_event still reaches it); a signed token modeled on `arizona_flash` is the next follow-up.
+
 ## Connection detection
 
 Server-side: handlers use `?connected` macro (delegates to `arizona_live:connected()`) in `mount/1` to detect WS vs SSR context. For effects, use `self() ! arizona_connected` and handle in `handle_info/2`. No `az-connect` HTML attribute -- connection is fully server-driven.

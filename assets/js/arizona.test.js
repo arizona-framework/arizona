@@ -3629,3 +3629,266 @@ describe('page lifecycle -- bfcache', () => {
         mock.restore();
     });
 });
+
+// ---------------------------------------------------------------------------
+// executeJS -- fetch (JS_FETCH = 22): HTTP request, no reload, applies effects
+// ---------------------------------------------------------------------------
+
+describe('executeJS -- fetch', () => {
+    /** @type {any} */
+    let originalFetch;
+
+    beforeEach(() => {
+        originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    /** A fake 2xx Response whose body is the {e:[...]} effects wire payload. */
+    function okResponse(effects) {
+        return {
+            ok: true,
+            status: 200,
+            text: () => Promise.resolve(JSON.stringify({ e: effects })),
+        };
+    }
+
+    it('submits the trigger form as urlencoded with same-origin credentials', async () => {
+        document.body.innerHTML =
+            '<form method="post"><input name="username" value="ada" /></form>';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.querySelector('form'), null, [22, '/account', {}]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        const [url, init] = globalThis.fetch.mock.calls[0];
+        expect(url).toBe('/account');
+        expect(init.method).toBe('POST');
+        expect(init.credentials).toBe('same-origin');
+        expect(init.headers.accept).toBe('application/json');
+        expect(init.body).toBeInstanceOf(URLSearchParams);
+        expect(init.body.get('username')).toBe('ada');
+    });
+
+    it('applies the effects returned by a 2xx response', async () => {
+        document.title = 'Old';
+        document.body.innerHTML = '<form method="post"></form>';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([[14, 'Saved']])));
+
+        executeJS(document.querySelector('form'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => expect(document.title).toBe('Saved'));
+    });
+
+    it('treats an empty 2xx body (204, cookie-only) as success with no effects', async () => {
+        const onErr = vi.fn();
+        document.addEventListener('arizona:fetch-error', onErr);
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({ ok: true, status: 204, text: () => Promise.resolve('') }),
+        );
+
+        executeJS(document.body, null, [22, '/account', {}]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+        // Flush the resolved-promise chain, then confirm no error fired.
+        await Promise.resolve();
+        expect(onErr).not.toHaveBeenCalled();
+
+        document.removeEventListener('arizona:fetch-error', onErr);
+    });
+
+    it('JSON-encodes opts.body for a non-form trigger', async () => {
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.body, null, [22, '/api', { body: { a: 1 } }]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        const [, init] = globalThis.fetch.mock.calls[0];
+        expect(init.body).toBe('{"a":1}');
+        expect(init.headers['content-type']).toBe('application/json');
+    });
+
+    it('maps the credentials atom to the fetch mode', async () => {
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.body, null, [22, '/api', { credentials: 'include' }]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        expect(globalThis.fetch.mock.calls[0][1].credentials).toBe('include');
+    });
+
+    it('applies a non-2xx effects body (inline validation) without firing on_error', async () => {
+        document.title = 'Old';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: false,
+                status: 422,
+                text: () => Promise.resolve(JSON.stringify({ e: [[14, 'Invalid']] })),
+            }),
+        );
+        const onErr = vi.fn();
+        document.addEventListener('arizona:fetch-error', onErr);
+
+        executeJS(document.body, null, [22, '/account', { on_error: [14, 'Failed'] }]);
+
+        // The server's effects win (title 'Invalid'); on_error ('Failed') does not run.
+        await vi.waitFor(() => expect(document.title).toBe('Invalid'));
+        expect(onErr).not.toHaveBeenCalled();
+
+        document.removeEventListener('arizona:fetch-error', onErr);
+    });
+
+    it('runs on_error and dispatches arizona:fetch-error on a non-2xx with no effects body', async () => {
+        document.title = 'Old';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({ ok: false, status: 500, text: () => Promise.resolve('') }),
+        );
+        const onErr = vi.fn();
+        document.addEventListener('arizona:fetch-error', onErr);
+
+        // on_error effect: set the title to 'Failed' (set_title = 14).
+        executeJS(document.body, null, [22, '/api', { on_error: [14, 'Failed'] }]);
+
+        await vi.waitFor(() => expect(document.title).toBe('Failed'));
+        expect(onErr).toHaveBeenCalled();
+        expect(onErr.mock.calls[0][0].detail.status).toBe(500);
+
+        document.removeEventListener('arizona:fetch-error', onErr);
+    });
+
+    it('carries a form’s fields in the query string for a GET request', async () => {
+        document.body.innerHTML = '<form method="get"><input name="q" value="erlang" /></form>';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.querySelector('form'), null, [22, '/search', {}]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        const [target, init] = globalThis.fetch.mock.calls[0];
+        expect(target).toBe('/search?q=erlang');
+        expect(init.method).toBe('GET');
+        expect(init.body).toBeUndefined();
+    });
+
+    it('runs on_error on a network failure (rejected fetch)', async () => {
+        globalThis.fetch = vi.fn(() => Promise.reject(new Error('offline')));
+        const onErr = vi.fn();
+        document.addEventListener('arizona:fetch-error', onErr);
+
+        executeJS(document.body, null, [22, '/api', { on_error: [14, 'Failed'] }]);
+
+        await vi.waitFor(() => expect(onErr).toHaveBeenCalled());
+
+        document.removeEventListener('arizona:fetch-error', onErr);
+    });
+
+    it('honors az-form-reset on a 2xx success', async () => {
+        document.body.innerHTML = '<form az-form-reset><input id="note" name="note" /></form>';
+        const input = document.querySelector('#note');
+        input.value = 'typed';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.querySelector('form'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => expect(input.value).toBe(''));
+    });
+
+    it('keeps the form on a non-2xx even with az-form-reset', async () => {
+        document.title = 'Old';
+        document.body.innerHTML = '<form az-form-reset><input id="note" name="note" /></form>';
+        const input = document.querySelector('#note');
+        input.value = 'typed';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: false,
+                status: 422,
+                text: () => Promise.resolve(JSON.stringify({ e: [[14, 'Err']] })),
+            }),
+        );
+
+        executeJS(document.querySelector('form'), null, [22, '/account', {}]);
+
+        // The effects ran (title set), proving the chain completed; the field survived.
+        await vi.waitFor(() => expect(document.title).toBe('Err'));
+        expect(input.value).toBe('typed');
+    });
+});
+
+describe('fetch + az-form-reset via the submit listener', () => {
+    /** @type {any} */
+    let originalFetch;
+
+    beforeEach(() => {
+        originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    it('defers az-form-reset to the 2xx response (no synchronous reset)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<form id="f" az-submit=\'[22,"/x",{}]\' az-form-reset>' +
+            '<input id="n" name="n" /><button type="submit">Go</button></form>';
+        const input = document.querySelector('#n');
+        input.value = 'typed';
+
+        let resolveFetch;
+        globalThis.fetch = vi.fn(
+            () =>
+                new Promise((res) => {
+                    resolveFetch = () =>
+                        res({ ok: true, status: 200, text: () => Promise.resolve('') });
+                }),
+        );
+
+        document
+            .querySelector('#f')
+            .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+        // The fetch was dispatched but has not resolved -> the field must survive.
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+        expect(input.value).toBe('typed');
+
+        // Resolve the 2xx -> now az-form-reset applies.
+        resolveFetch();
+        await vi.waitFor(() => expect(input.value).toBe(''));
+
+        mock.restore();
+    });
+
+    it('relays a push_event from the response to the submitting view over the WS', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<div id="v" az-view><form id="f"><input name="secret" value="x" />' +
+            '<button type="submit">Go</button></form></div>';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'saved']] })),
+            }),
+        );
+
+        // push_event (op 0) in the response -> relayed over the WS to the view #v.
+        mod.executeJS(document.querySelector('#f'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => {
+            const ev = mock.getSentMessages().find((m) => m[0] === 'v' && m[1] === 'saved');
+            expect(ev).toBeDefined();
+            // Effects run against the view element, not the form -> no field echo.
+            expect(ev[2]).not.toHaveProperty('secret');
+        });
+
+        mock.restore();
+    });
+});

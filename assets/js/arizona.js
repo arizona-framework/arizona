@@ -1137,7 +1137,33 @@ const JS_PUSH_EVENT = 0,
     JS_REQUEST_PIP = 18,
     JS_EXIT_PIP = 19,
     JS_TRANSITION = 20,
-    JS_TOGGLE_ATTR = 21;
+    JS_TOGGLE_ATTR = 21,
+    JS_FETCH = 22;
+
+// arizona_js credentials atoms -> fetch() credentials mode
+/** @type {Record<string, RequestCredentials>} */
+const CREDENTIALS = { same_origin: 'same-origin', include: 'include', omit: 'omit' };
+
+/**
+ * Reset a form after a successful az-submit, when it opted in with `az-form-reset`.
+ * Shared by the submit listener (synchronous, for push_event-style commands) and the
+ * `fetch` command (deferred to a 2xx response, so the fields survive a validation error).
+ * @param {Element} form
+ */
+function maybeResetForm(form) {
+    if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
+}
+
+/**
+ * True when a parsed az-submit command (single or list) is/contains a `fetch`, so the
+ * submit listener can defer `az-form-reset` to the fetch response instead of resetting
+ * synchronously on submit.
+ * @param {Array<*>} cmds
+ */
+function commandsIncludeFetch(cmds) {
+    const list = Array.isArray(cmds[0]) ? cmds : [cmds];
+    return list.some((c) => c[0] === JS_FETCH);
+}
 
 /**
  * Call `fn` with the FIRST element matching `sel` (cast to `HTMLElement`),
@@ -1296,6 +1322,79 @@ function execOne(el, event, cmd) {
             const hash = u.hash ? u.hash.slice(1) : '';
             const qs = u.search ? u.search.slice(1) : '';
             navigateTo(u.pathname, qs, hash, { ...(cmd[2] || {}), fullUrl: full });
+            break;
+        }
+        case JS_FETCH: {
+            // HTTP request via fetch() with no page reload. Unlike push_event (WS,
+            // can't set cookies), the response can carry a real Set-Cookie, applied
+            // natively by the browser. The controller returns the {e:[...]} effects
+            // wire payload; we apply it against the enclosing view element below, so a
+            // push_event in the response resolves to (and re-renders) the submitting
+            // view without scraping the form -- pubsub is for broadcasting to other views.
+            const url = cmd[1];
+            const opts = cmd[2] || {};
+            const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
+            const method = (opts.method || form?.getAttribute('method') || 'post').toUpperCase();
+            const headers = { accept: 'application/json', ...(opts.headers || {}) };
+            let target = url;
+            let body;
+            if (method === 'GET' || method === 'HEAD') {
+                // No request body for GET/HEAD -- carry a form's fields in the query
+                // string instead (fetch is otherwise POST-oriented: it sets cookies).
+                if (form) {
+                    const fd = /** @type {any} */ (new FormData(form));
+                    const qs = new URLSearchParams(fd).toString();
+                    if (qs) target += (url.includes('?') ? '&' : '?') + qs;
+                }
+            } else if (opts.body !== undefined) {
+                body = JSON.stringify(opts.body);
+                headers['content-type'] = 'application/json';
+            } else if (form) {
+                // Mirror a normal form POST: application/x-www-form-urlencoded.
+                // (multipart / file uploads are a documented non-goal.)
+                body = new URLSearchParams(/** @type {any} */ (new FormData(form)));
+            }
+            const onError = (/** @type {object} */ detail) => {
+                if (opts.on_error) executeJS(el, event, opts.on_error);
+                document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
+            };
+            fetch(target, {
+                method,
+                body,
+                credentials: CREDENTIALS[opts.credentials] || 'same-origin',
+                headers,
+            })
+                .then((resp) =>
+                    resp.text().then((text) => {
+                        // Apply the effects body whenever it parses -- even on a 4xx, so
+                        // the server can drive inline validation with a real status. The
+                        // effects run against the enclosing view element (not the form, not
+                        // document), so a `push_event` in the response resolves to the
+                        // submitting view and re-renders it via handle_event (no pubsub) --
+                        // without scraping the form's fields into the event payload (the
+                        // view element isn't a form, so autoPayload is empty; the controller
+                        // passes any result explicitly). An empty 2xx body (a cookie-only
+                        // response) applies nothing. on_error runs only when there is no
+                        // usable effects body: a non-JSON page or an empty non-2xx.
+                        let effects = null;
+                        if (text) {
+                            try {
+                                effects = JSON.parse(text).e || [];
+                            } catch {
+                                effects = null;
+                            }
+                        } else if (resp.ok) {
+                            effects = [];
+                        }
+                        if (effects !== null)
+                            executeJS(el?.closest?.('[az-view]') ?? el, null, effects);
+                        else onError({ url, status: resp.status });
+                        // Honor az-form-reset only on a 2xx success, so a validation
+                        // error (a non-2xx) keeps the typed fields.
+                        if (resp.ok && form) maybeResetForm(form);
+                    }),
+                )
+                .catch((error) => onError({ url, error }));
             break;
         }
         case JS_FOCUS:
@@ -1569,8 +1668,11 @@ function bindDocumentEvents(target, signal) {
             e.preventDefault();
             form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
             const raw = form.getAttribute('az-submit');
-            if (raw) executeJS(form, e, withTransitionAttr(form, JSON.parse(raw)));
-            if (form.hasAttribute('az-form-reset')) /** @type {HTMLFormElement} */ (form).reset();
+            const cmds = raw ? JSON.parse(raw) : null;
+            if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
+            // A fetch command resets on its own 2xx response (so a validation error
+            // keeps the typed fields); everything else resets synchronously here.
+            if (!(cmds && commandsIncludeFetch(cmds))) maybeResetForm(form);
         },
         { signal },
     );
