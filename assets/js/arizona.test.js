@@ -944,6 +944,58 @@ describe('applyEffects -- attribute effects (canonical writer)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 14f. applyEffects -- class/visibility effects also fire updated()
+// (so a client-driven class/hidden change is observable like an attribute diff)
+// ---------------------------------------------------------------------------
+
+describe('applyEffects -- class/visibility effects fire updated()', () => {
+    /** Mount a hooked element and return its updated() spy. */
+    function hookedUpdated(extraAttrs = '') {
+        const updated = vi.fn();
+        hooks.Chart = { mounted() {}, updated };
+        setupView('v', `<div az="0" az-hook="Chart"${extraAttrs}>content</div>`);
+        mountHooks(document);
+        return updated;
+    }
+
+    it('add_class fires updated()', () => {
+        const updated = hookedUpdated();
+        applyEffects([[4, '[az-hook="Chart"]', 'active']]); // op 4 = add_class
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('remove_class fires updated()', () => {
+        const updated = hookedUpdated(' class="active"');
+        applyEffects([[5, '[az-hook="Chart"]', 'active']]); // op 5 = remove_class
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('toggle_class fires updated()', () => {
+        const updated = hookedUpdated();
+        applyEffects([[6, '[az-hook="Chart"]', 'active']]); // op 6 = toggle_class
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('toggle (visibility) fires updated()', () => {
+        const updated = hookedUpdated();
+        applyEffects([[1, '[az-hook="Chart"]']]); // op 1 = toggle
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('show fires updated()', () => {
+        const updated = hookedUpdated(' hidden');
+        applyEffects([[2, '[az-hook="Chart"]']]); // op 2 = show
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('hide fires updated()', () => {
+        const updated = hookedUpdated();
+        applyEffects([[3, '[az-hook="Chart"]']]); // op 3 = hide
+        expect(updated).toHaveBeenCalledOnce();
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 14c. applyOps -- OP.REPLACE edge cases
 // ---------------------------------------------------------------------------
 
