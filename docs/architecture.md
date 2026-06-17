@@ -22,7 +22,7 @@
 | `src/arizona_diff.erl`                    | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                                           |
 | `src/arizona_roadrunner_router.erl`       | Roadrunner route compilation -- `compile_routes/1,2`, `routes/1,2` (map-shape routes with state under `#{arizona => ...}` namespace)                                                      |
 | `src/arizona_effect.erl`                  | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                                  |
-| `src/arizona_js.erl`                      | Web/browser command + effect builders -- `push_event`, `navigate`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`                  |
+| `src/arizona_js.erl`                      | Web/browser command + effect builders -- `push_event`, `navigate`, `fetch`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`         |
 | `src/arizona_android.erl`                 | Native (`?native`) command builders -- the portable `push_event/1,2` and `navigate/1,2`                                                                                                   |
 | `src/arizona_stream.erl`                  | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`                                                                |
 | `src/arizona_stateful.erl`                | Behaviour for all live handlers (route-page roots + embedded `?stateful`) -- `mount`/`render`/`handle_*`/`unmount` callbacks, the `call_*` dispatchers, and `format_error/2`              |
@@ -30,6 +30,7 @@
 | `src/arizona_middleware.erl`              | Request-to-bindings middleware pipeline -- `apply_middlewares/3` runner (run by the HTTP/WS transports) + built-in `extract/1`/`put_request/2` steps                                      |
 | `src/arizona_user_agent.erl`              | User-Agent classification for dual-serve views -- `browser/1`, `os/1`, `mobile/1` (best-effort); pairs with `arizona_req:user_agent/1`                                                    |
 | `src/arizona_http.erl`                    | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|redirect\|ok\|error, ...}` tuples                                               |
+| `src/arizona_controller.erl`              | Reply helpers for `{controller, ...}` routes consumed by `arizona_js:fetch/2` -- `reply_effects/1` (the `{"e": [...]}` wire body), `reply_redirect/1` (a `navigate` effect)               |
 | `src/arizona_static.erl`                  | Offline static-site generation -- `generate/2,3` renders route handlers to HTML files under an out-dir; returns `{Written, Failed}`                                                       |
 | `src/arizona_ws.erl`                      | Transport-agnostic WS upgrade bootstrap -- `prepare/3` parses framework keys, resolves the route, runs middlewares, returns state for `arizona_socket`                                    |
 | `src/arizona_live.erl`                    | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                                              |
@@ -403,6 +404,15 @@ handle_event(~"inc", _P, B) ->
   presence toggle: add if absent, remove if present; `toggle_attr/4` flips between two values)
 - `dispatch_event/2` -- dispatch CustomEvent on document
 - `navigate/1,2` -- SPA navigation (opts: `#{replace => true}`)
+- `fetch/2` -- HTTP request via the browser `fetch()`, **no page reload** (opts: `method`,
+  `body`, `headers`, `credentials`, `on_error`). The only mode that can set a real `Set-Cookie`
+  (HttpOnly honored) without navigating, so it suits flows that rotate a session cookie while
+  keeping form fields and showing inline validation. Hits a `{controller, ...}` route that
+  returns the `{"e": [...]}` effects payload via `arizona_controller:reply_effects/1`; those
+  effects are applied on the page. Re-render the live view itself by broadcasting over
+  `arizona_pubsub` (the connected view repaints through the WebSocket). A non-2xx / network
+  failure runs `on_error` and dispatches an `arizona:fetch-error` DOM event. A redirect is an
+  `arizona_js:navigate` effect (`arizona_controller:reply_redirect/1`), not an HTTP 3xx.
 - `transition/1,2` -- wrap a command (or list) so its DOM change animates in a view
   transition (opts: `#{types => [binary()]}`); see "View transitions" below
 - `focus/1`, `blur/1` -- focus management

@@ -48,6 +48,7 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 -export([dispatch_event/2]).
 -export([navigate/1]).
 -export([navigate/2]).
+-export([fetch/2]).
 -export([focus/1]).
 -export([blur/1]).
 -export([scroll_to/1]).
@@ -84,6 +85,7 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     dispatch_event/2,
     navigate/1,
     navigate/2,
+    fetch/2,
     focus/1,
     blur/1,
     scroll_to/1,
@@ -217,6 +219,49 @@ navigate(Path) -> {arizona_effect, [?EFFECT_NAVIGATE, Path]}.
     Path :: binary(),
     Opts :: map().
 navigate(Path, Opts) -> {arizona_effect, [?EFFECT_NAVIGATE, Path, Opts]}.
+
+-doc """
+Issues an HTTP request to `Url` via the browser `fetch()` API, **without** a page
+reload, and applies the response. Unlike `push_event` (WebSocket, can't set
+cookies) and a plain form POST (full reload), a `fetch` response can carry a real
+`Set-Cookie` -- HttpOnly honored, applied natively by the browser -- while the
+page stays put. Use it for flows that must rotate a session cookie yet keep the
+typed form fields and show inline validation (password change, login, logout).
+
+Composes as a command: as an `az_submit` command the trigger form's fields are the
+request body; as an `az_click` command on a non-form element, `body` is sent
+instead.
+
+The endpoint is a normal `{controller, ...}` route. On a 2xx it returns the wire
+payload `{"e": [...]}` of effects (build it with `arizona_controller:reply_effects/1`);
+those effects are applied to the page. To re-render the live view itself, the
+controller broadcasts over `arizona_pubsub` -- the connected view re-renders and
+patches through the WebSocket as usual. A non-2xx status or a network failure runs
+`on_error` (if given) and dispatches an `arizona:fetch-error` DOM event.
+
+`Opts`:
+
+- `method` -- HTTP method. Default: the trigger form's `method`, else `post`.
+- `body` -- request body for a non-form trigger (JSON-encoded). Default: the
+  trigger form's fields as `application/x-www-form-urlencoded`.
+- `headers` -- extra request headers, merged on top.
+- `credentials` -- cookie/credential mode. Default `same_origin`.
+- `on_error` -- a command (or list) run on a non-2xx response or network error.
+
+To send the user elsewhere, return an `arizona_js:navigate/1` effect from the
+controller (e.g. via `arizona_controller:reply_redirect/1`) rather than an HTTP
+3xx -- a fetch-followed redirect can't drive a SPA navigation.
+""".
+-spec fetch(Url, Opts) -> arizona_effect:cmd() when
+    Url :: binary(),
+    Opts :: #{
+        method => get | post | put | patch | delete,
+        body => term(),
+        headers => #{binary() => binary()},
+        credentials => same_origin | include | omit,
+        on_error => arizona_effect:cmd() | [arizona_effect:cmd()]
+    }.
+fetch(Url, Opts) -> {arizona_effect, [?EFFECT_FETCH, Url, Opts]}.
 
 -doc "Focuses the first element matching the selector.".
 -spec focus(Selector) -> arizona_effect:cmd() when
@@ -406,6 +451,18 @@ transition_list_test() ->
         ?EFFECT_TRANSITION, #{}, [[?EFFECT_ADD_CLASS, ~"#m", ~"on"], [?EFFECT_TOGGLE, ~"#n"]]
     ]} =
         transition([add_class(~"#m", ~"on"), toggle(~"#n")]).
+
+fetch_test() ->
+    {arizona_effect, [?EFFECT_FETCH, ~"/x", #{method := post}]} =
+        fetch(~"/x", #{method => post}).
+
+fetch_encode_test() ->
+    %% The Opts map rides through json:encode/1 like navigate/2's opts -- no
+    %% special encoding in arizona_effect.
+    Bin = arizona_effect:encode(fetch(~"/account", #{method => post})),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"[22")),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"/account")),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"method")).
 
 builders_test() ->
     ?assertEqual({arizona_effect, [?EFFECT_SHOW, ~"#m"]}, show(~"#m")),

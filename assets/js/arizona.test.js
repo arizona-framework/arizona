@@ -3629,3 +3629,122 @@ describe('page lifecycle -- bfcache', () => {
         mock.restore();
     });
 });
+
+// ---------------------------------------------------------------------------
+// executeJS -- fetch (JS_FETCH = 22): HTTP request, no reload, applies effects
+// ---------------------------------------------------------------------------
+
+describe('executeJS -- fetch', () => {
+    /** @type {any} */
+    let originalFetch;
+
+    beforeEach(() => {
+        originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    /** A fake 2xx Response whose body is the {e:[...]} effects wire payload. */
+    function okResponse(effects) {
+        return {
+            ok: true,
+            status: 200,
+            text: () => Promise.resolve(JSON.stringify({ e: effects })),
+        };
+    }
+
+    it('submits the trigger form as urlencoded with same-origin credentials', async () => {
+        document.body.innerHTML =
+            '<form method="post"><input name="username" value="ada" /></form>';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.querySelector('form'), null, [22, '/account', {}]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        const [url, init] = globalThis.fetch.mock.calls[0];
+        expect(url).toBe('/account');
+        expect(init.method).toBe('POST');
+        expect(init.credentials).toBe('same-origin');
+        expect(init.headers.accept).toBe('application/json');
+        expect(init.body).toBeInstanceOf(URLSearchParams);
+        expect(init.body.get('username')).toBe('ada');
+    });
+
+    it('applies the effects returned by a 2xx response', async () => {
+        document.title = 'Old';
+        document.body.innerHTML = '<form method="post"></form>';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([[14, 'Saved']])));
+
+        executeJS(document.querySelector('form'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => expect(document.title).toBe('Saved'));
+    });
+
+    it('treats an empty 2xx body (204, cookie-only) as success with no effects', async () => {
+        const onErr = vi.fn();
+        document.addEventListener('arizona:fetch-error', onErr);
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({ ok: true, status: 204, text: () => Promise.resolve('') }),
+        );
+
+        executeJS(document.body, null, [22, '/account', {}]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+        // Flush the resolved-promise chain, then confirm no error fired.
+        await Promise.resolve();
+        expect(onErr).not.toHaveBeenCalled();
+
+        document.removeEventListener('arizona:fetch-error', onErr);
+    });
+
+    it('JSON-encodes opts.body for a non-form trigger', async () => {
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.body, null, [22, '/api', { body: { a: 1 } }]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        const [, init] = globalThis.fetch.mock.calls[0];
+        expect(init.body).toBe('{"a":1}');
+        expect(init.headers['content-type']).toBe('application/json');
+    });
+
+    it('maps the credentials atom to the fetch mode', async () => {
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.body, null, [22, '/api', { credentials: 'include' }]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        expect(globalThis.fetch.mock.calls[0][1].credentials).toBe('include');
+    });
+
+    it('runs on_error and dispatches arizona:fetch-error on a non-2xx response', async () => {
+        document.title = 'Old';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({ ok: false, status: 422, json: () => Promise.resolve({}) }),
+        );
+        const onErr = vi.fn();
+        document.addEventListener('arizona:fetch-error', onErr);
+
+        // on_error effect: set the title to 'Failed' (set_title = 14).
+        executeJS(document.body, null, [22, '/api', { on_error: [14, 'Failed'] }]);
+
+        await vi.waitFor(() => expect(document.title).toBe('Failed'));
+        expect(onErr).toHaveBeenCalled();
+        expect(onErr.mock.calls[0][0].detail.status).toBe(422);
+
+        document.removeEventListener('arizona:fetch-error', onErr);
+    });
+
+    it('runs on_error on a network failure (rejected fetch)', async () => {
+        globalThis.fetch = vi.fn(() => Promise.reject(new Error('offline')));
+        const onErr = vi.fn();
+        document.addEventListener('arizona:fetch-error', onErr);
+
+        executeJS(document.body, null, [22, '/api', { on_error: [14, 'Failed'] }]);
+
+        await vi.waitFor(() => expect(onErr).toHaveBeenCalled());
+
+        document.removeEventListener('arizona:fetch-error', onErr);
+    });
+});

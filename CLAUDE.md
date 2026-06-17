@@ -73,6 +73,17 @@ handle_event(~"inc", _P, B) ->
 
 `push_event` auto-collects payload from inputs/forms. Explicit payload merges on top. Op codes in `include/arizona_effect.hrl`.
 
+### HTTP fetch -- `arizona_js:fetch/2`
+
+Three form-submission modes, by what each can do: a plain `{method, post}` form does a native POST (can `Set-Cookie`, but full reload); `az_submit` sends a WebSocket event (no reload, but WS can't set cookies); `arizona_js:fetch/2` issues a `fetch()` request (no reload **and** a real `Set-Cookie`, HttpOnly honored). `fetch` is the only mode that gives cookies without a reload, so it suits password-change / login / logout flows that rotate the session cookie while keeping the typed fields and showing inline validation.
+
+```erlang
+%% az_submit command: submit the form via fetch, no reload, fields preserved
+{'form', [{az_submit, arizona_js:fetch(~"/account", #{method => post})}], [...]}
+```
+
+It hits a `{controller, ...}` route -- a plain `roadrunner_handler` that may `roadrunner_resp:set_cookie/4` and returns the effects wire payload via `arizona_controller:reply_effects/1` (or `reply_redirect/1`, which delivers a `navigate` effect -- a fetch-followed HTTP 3xx can't drive a SPA nav). Those effects apply on the page; the browser applies `Set-Cookie` natively. **Re-render the live view** itself by broadcasting over `arizona_pubsub` from the controller -- the connected view repaints through the WebSocket -- not via the fetch response. A non-2xx / network error runs `on_error` and dispatches an `arizona:fetch-error` DOM event. `Opts`: `method` (default form's, else `post`), `body` (default the form, urlencoded), `headers`, `credentials` (default `same_origin`), `on_error`. **No CSRF** yet (same-origin only); a signed token modeled on `arizona_flash` is a follow-up.
+
 ### View transitions
 
 A view transition wraps **any** DOM change in `document.startViewTransition` (not tied to navigation). Request one per-trigger (no global switch) with `arizona_js:transition(Cmd[, Opts])` -- wraps the command (or list) whose change should animate, like `on_key/2` -- or the `az_transition` attribute on any triggering element (bare = cross-fade, `{az_transition, ~"slide back"}` = space-separated `types`). A sync effect animates in place; `navigate`/`push_event` animate the resulting server diff. Guarded by feature-detect + `prefers-reduced-motion`; back/forward replays via history state. Real `<a href>` navigations transition through user CSS (`@view-transition { navigation: auto }`). All styling is user-owned CSS. See [.claude/rules/js.md](.claude/rules/js.md).

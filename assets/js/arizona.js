@@ -1137,7 +1137,12 @@ const JS_PUSH_EVENT = 0,
     JS_REQUEST_PIP = 18,
     JS_EXIT_PIP = 19,
     JS_TRANSITION = 20,
-    JS_TOGGLE_ATTR = 21;
+    JS_TOGGLE_ATTR = 21,
+    JS_FETCH = 22;
+
+// arizona_js credentials atoms -> fetch() credentials mode
+/** @type {Record<string, RequestCredentials>} */
+const CREDENTIALS = { same_origin: 'same-origin', include: 'include', omit: 'omit' };
 
 /**
  * Call `fn` with the FIRST element matching `sel` (cast to `HTMLElement`),
@@ -1296,6 +1301,59 @@ function execOne(el, event, cmd) {
             const hash = u.hash ? u.hash.slice(1) : '';
             const qs = u.search ? u.search.slice(1) : '';
             navigateTo(u.pathname, qs, hash, { ...(cmd[2] || {}), fullUrl: full });
+            break;
+        }
+        case JS_FETCH: {
+            // HTTP request via fetch() with no page reload. Unlike push_event (WS,
+            // can't set cookies), the response can carry a real Set-Cookie, applied
+            // natively by the browser. The controller returns the {e:[...]} effects
+            // wire payload (arizona_controller:reply_effects/1); we apply it here.
+            // Screen re-sync (re-rendering the live view) is the app's job via
+            // arizona_pubsub -> WebSocket, not this response.
+            const url = cmd[1];
+            const opts = cmd[2] || {};
+            const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
+            const method = (opts.method || form?.getAttribute('method') || 'post').toUpperCase();
+            const headers = { accept: 'application/json', ...(opts.headers || {}) };
+            let body;
+            if (method !== 'GET' && method !== 'HEAD') {
+                if (opts.body !== undefined) {
+                    body = JSON.stringify(opts.body);
+                    headers['content-type'] = 'application/json';
+                } else if (form) {
+                    // Mirror a normal form POST: application/x-www-form-urlencoded.
+                    // (multipart / file uploads are a documented non-goal.)
+                    body = new URLSearchParams(/** @type {any} */ (new FormData(form)));
+                }
+            }
+            // Animate the response effects only when the trigger opts in via
+            // az-transition (runTransition would otherwise transition unconditionally).
+            const tOpts = parseTransitionAttr(el);
+            const onError = (/** @type {object} */ detail) => {
+                if (opts.on_error) executeJS(el, event, opts.on_error);
+                document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
+            };
+            fetch(url, {
+                method,
+                body,
+                credentials: CREDENTIALS[opts.credentials] || 'same-origin',
+                headers,
+            })
+                .then((resp) => {
+                    if (!resp.ok) {
+                        onError({ url, status: resp.status });
+                        return;
+                    }
+                    // Tolerate an empty body (e.g. a 204 when the controller only set
+                    // a cookie and re-syncs the view via arizona_pubsub) -- no effects.
+                    return resp.text().then((text) => {
+                        const effects = text ? JSON.parse(text).e || [] : [];
+                        const apply = () => applyEffects(effects);
+                        if (tOpts) runTransition(tOpts, apply);
+                        else apply();
+                    });
+                })
+                .catch((error) => onError({ url, error }));
             break;
         }
         case JS_FOCUS:

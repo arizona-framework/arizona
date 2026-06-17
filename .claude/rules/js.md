@@ -54,6 +54,18 @@ Behaviour:
 - **Cross-document** (real `<a href>` navigations, full reloads): pure CSS -- add `@view-transition { navigation: auto; }` to the page. No framework code.
 - **Styling** is user CSS. By default the whole root cross-fades; to scope or morph a single element, give it a `view-transition-name` (it then animates independently across the change). `::view-transition-*` and `:active-view-transition-type(<type>)` customize the animation. A `view-transition-name` must be unique among rendered elements during a transition, or the browser skips it.
 
+## HTTP fetch (`arizona_js:fetch`)
+
+`arizona_js:fetch(Url, Opts)` (op `JS_FETCH = 22`) issues a `fetch()` request with **no page reload** -- the only command that can set a real `Set-Cookie` (HttpOnly honored) without navigating. The `case JS_FETCH:` handler in `execOne`:
+
+- **Body.** When the trigger is/contains a `<form>` (the `az-submit` listener passes the form as the trigger element), the body is `new URLSearchParams(new FormData(form))` -- `application/x-www-form-urlencoded`, mirroring a normal form POST (multipart / file uploads are a non-goal). Otherwise `Opts.body` is JSON-encoded. Explicit `Opts.body` wins over the form.
+- **Request.** `method` = `Opts.method` -> the form's `method` -> `POST`. `credentials` maps the atom (`same_origin` -> `'same-origin'`, default) to the fetch mode. Headers default to `accept: application/json` plus `Opts.headers`.
+- **2xx.** Parses the JSON body `{ e: effects }` and runs `applyEffects(effects)`. `Set-Cookie` is applied natively by the browser. If the trigger carries `az-transition`, the apply is wrapped in `runTransition` (so the response effects animate); otherwise it applies directly.
+- **Redirect.** There is **no HTTP-3xx handling** -- `fetch`'s `redirect: 'manual'` yields an opaque-redirect whose `Location` is unreadable. A redirect is delivered as an `arizona_js:navigate` effect in a 2xx body (`arizona_controller:reply_redirect/1`).
+- **Failure.** A non-2xx response or a rejected fetch runs `Opts.on_error` (via `executeJS`) and dispatches an `arizona:fetch-error` `CustomEvent` on `document`.
+
+The server endpoint is a `{controller, ...}` route building the response with `arizona_controller:reply_effects/1`. The fetch response drives only request-local UI; re-rendering the live view itself is done by broadcasting over `arizona_pubsub` (the connected view repaints through the WebSocket diff path). **No CSRF** mechanism yet -- same-origin only; a signed token modeled on `arizona_flash` is a follow-up.
+
 ## Connection detection
 
 Server-side: handlers use `?connected` macro (delegates to `arizona_live:connected()`) in `mount/1` to detect WS vs SSR context. For effects, use `self() ! arizona_connected` and handle in `handle_info/2`. No `az-connect` HTML attribute -- connection is fully server-driven.
