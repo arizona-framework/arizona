@@ -3861,4 +3861,31 @@ describe('fetch + az-form-reset via the submit listener', () => {
 
         mock.restore();
     });
+
+    it('relays a push_event from the response to the submitting view over the WS', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<div id="v" az-view><form id="f"><button type="submit">Go</button></form></div>';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'saved']] })),
+            }),
+        );
+
+        // push_event (op 0) in the response -> relayed over the WS to the view #v.
+        mod.executeJS(document.querySelector('#f'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => {
+            const sent = mock.getSentMessages();
+            expect(sent.some((m) => m[0] === 'v' && m[1] === 'saved')).toBe(true);
+        });
+
+        mock.restore();
+    });
 });
