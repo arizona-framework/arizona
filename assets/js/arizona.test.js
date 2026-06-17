@@ -996,6 +996,90 @@ describe('applyEffects -- class/visibility effects fire updated()', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 14g. applyEffects -- broadcast effects target ALL matching elements,
+// single-target effects (focus/blur/scroll_to) only the first
+// ---------------------------------------------------------------------------
+
+describe('applyEffects -- broadcast effects target all matching elements', () => {
+    /** Render `html` n times and return the elements as an array. */
+    function many(html, n = 3) {
+        document.body.innerHTML = html.repeat(n);
+        return Array.from(document.body.children);
+    }
+
+    it('add_class adds the class to every match', () => {
+        const els = many('<div class="item"></div>');
+        applyEffects([[4, '.item', 'on']]);
+        expect(els.every((el) => el.classList.contains('on'))).toBe(true);
+    });
+
+    it('remove_class removes the class from every match', () => {
+        const els = many('<div class="item on"></div>');
+        applyEffects([[5, '.item', 'on']]);
+        expect(els.some((el) => el.classList.contains('on'))).toBe(false);
+    });
+
+    it('toggle_class toggles every match', () => {
+        const els = many('<div class="item"></div>');
+        applyEffects([[6, '.item', 'on']]);
+        expect(els.every((el) => el.classList.contains('on'))).toBe(true);
+    });
+
+    it('toggle (visibility) flips every match', () => {
+        const els = many('<div class="item"></div>');
+        applyEffects([[1, '.item']]);
+        expect(els.every((el) => el.hidden)).toBe(true);
+    });
+
+    it('show clears hidden on every match', () => {
+        const els = many('<div class="item" hidden></div>');
+        applyEffects([[2, '.item']]);
+        expect(els.some((el) => el.hidden)).toBe(false);
+    });
+
+    it('hide sets hidden on every match', () => {
+        const els = many('<div class="item"></div>');
+        applyEffects([[3, '.item']]);
+        expect(els.every((el) => el.hidden)).toBe(true);
+    });
+
+    it('set_attr sets the attribute on every match', () => {
+        const els = many('<div class="item"></div>');
+        applyEffects([[7, '.item', 'data-x', 'y']]);
+        expect(els.every((el) => el.getAttribute('data-x') === 'y')).toBe(true);
+    });
+
+    it('remove_attr removes the attribute from every match', () => {
+        const els = many('<div class="item" data-x="y"></div>');
+        applyEffects([[8, '.item', 'data-x']]);
+        expect(els.some((el) => el.hasAttribute('data-x'))).toBe(false);
+    });
+
+    it('toggle_attr (presence) toggles every match', () => {
+        const els = many('<div class="item"></div>');
+        applyEffects([[21, '.item', 'data-open']]);
+        expect(els.every((el) => el.getAttribute('data-open') === '')).toBe(true);
+    });
+
+    it('toggle_attr (value) flips every match, each on its own current value', () => {
+        document.body.innerHTML =
+            '<input class="item" type="password" /><input class="item" type="text" />';
+        const [a, b] = document.querySelectorAll('.item');
+        applyEffects([[21, '.item', 'type', 'password', 'text']]);
+        expect(a.getAttribute('type')).toBe('text'); // password -> text
+        expect(b.getAttribute('type')).toBe('password'); // text -> password (independent)
+    });
+
+    it('focus targets only the first match (single-target keeps withQuery)', () => {
+        document.body.innerHTML = '<input class="item" /><input class="item" />';
+        const [first, second] = document.querySelectorAll('.item');
+        applyEffects([[11, '.item']]); // op 11 = focus
+        expect(document.activeElement).toBe(first);
+        expect(document.activeElement).not.toBe(second);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 14c. applyOps -- OP.REPLACE edge cases
 // ---------------------------------------------------------------------------
 

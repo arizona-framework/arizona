@@ -1140,15 +1140,10 @@ const JS_PUSH_EVENT = 0,
     JS_TOGGLE_ATTR = 21;
 
 /**
- * If `sel` matches an element, call `fn` with it cast to `HTMLElement`.
- * Used by the executeJS targeted commands; some need HTMLElement-only
- * properties (`hidden`, `focus`, `blur`).
- *
- * NOTE: first-match only -- `querySelector`, not `querySelectorAll`. Every
- * selector-based effect (`toggle`/`show`/`hide`/`*_class`/`*_attr`) therefore
- * acts on a single element, even when the selector matches several. Open
- * follow-up: decide whether the whole family should target all matches; if so,
- * change it here once so the commands stay consistent.
+ * Call `fn` with the FIRST element matching `sel` (cast to `HTMLElement`),
+ * searched across the main document and any PiP documents. First-match only --
+ * the single-target effects `focus`/`blur`/`scroll_to` use this, since those act
+ * on one element by definition. The broadcast effects use `withQueryAll`.
  * @param {string} sel
  * @param {(el: HTMLElement) => void} fn
  */
@@ -1158,6 +1153,22 @@ function withQuery(sel, fn) {
         if (t) {
             fn(t);
             return;
+        }
+    }
+}
+
+/**
+ * Call `fn` for EVERY element matching `sel`, across the main document and any
+ * PiP documents. Used by the broadcast effects (`toggle`/`show`/`hide`/
+ * `*_class`/`*_attr`), so a selector matching several elements affects them all
+ * -- honoring the builders' "all elements matching the selector" contract.
+ * @param {string} sel
+ * @param {(el: HTMLElement) => void} fn
+ */
+function withQueryAll(sel, fn) {
+    for (const doc of allDocs()) {
+        for (const t of doc.querySelectorAll(sel)) {
+            fn(/** @type {HTMLElement} */ (t));
         }
     }
 }
@@ -1222,51 +1233,52 @@ function execOne(el, event, cmd) {
             break;
         }
         case JS_TOGGLE:
-            withQuery(cmd[1], (t) => {
+            withQueryAll(cmd[1], (t) => {
                 t.hidden = !t.hidden;
                 notifyUpdated(t);
             });
             break;
         case JS_SHOW:
-            withQuery(cmd[1], (t) => {
+            withQueryAll(cmd[1], (t) => {
                 t.hidden = false;
                 notifyUpdated(t);
             });
             break;
         case JS_HIDE:
-            withQuery(cmd[1], (t) => {
+            withQueryAll(cmd[1], (t) => {
                 t.hidden = true;
                 notifyUpdated(t);
             });
             break;
         case JS_ADD_CLASS:
-            withQuery(cmd[1], (t) => {
+            withQueryAll(cmd[1], (t) => {
                 t.classList.add(cmd[2]);
                 notifyUpdated(t);
             });
             break;
         case JS_REMOVE_CLASS:
-            withQuery(cmd[1], (t) => {
+            withQueryAll(cmd[1], (t) => {
                 t.classList.remove(cmd[2]);
                 notifyUpdated(t);
             });
             break;
         case JS_TOGGLE_CLASS:
-            withQuery(cmd[1], (t) => {
+            withQueryAll(cmd[1], (t) => {
                 t.classList.toggle(cmd[2]);
                 notifyUpdated(t);
             });
             break;
         case JS_SET_ATTR:
-            withQuery(cmd[1], (t) => applySetAttrOp(t, cmd[2], cmd[3]));
+            withQueryAll(cmd[1], (t) => applySetAttrOp(t, cmd[2], cmd[3]));
             break;
         case JS_REMOVE_ATTR:
-            withQuery(cmd[1], (t) => applyRemAttrOp(t, cmd[2]));
+            withQueryAll(cmd[1], (t) => applyRemAttrOp(t, cmd[2]));
             break;
         case JS_TOGGLE_ATTR:
             // 3 args: presence toggle (remove if present, else set bare). 5 args:
             // value toggle (cmd[3] <-> cmd[4]; any other current value -> cmd[3]).
-            withQuery(cmd[1], (t) => {
+            // Each match is toggled on its own current state.
+            withQueryAll(cmd[1], (t) => {
                 if (cmd.length === 3) {
                     if (t.hasAttribute(cmd[2])) applyRemAttrOp(t, cmd[2]);
                     else applySetAttrOp(t, cmd[2], '');
