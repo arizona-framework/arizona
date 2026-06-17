@@ -6,6 +6,7 @@
 
 -export([reply_effects_builds_effects_payload/1]).
 -export([reply_effects_status_and_content_type/1]).
+-export([reply_effects_with_status_for_error_leg/1]).
 -export([reply_redirect_emits_navigate_effect/1]).
 -export([set_cookie_layers_onto_reply/1]).
 
@@ -17,6 +18,7 @@ groups() ->
         {reply, [parallel], [
             reply_effects_builds_effects_payload,
             reply_effects_status_and_content_type,
+            reply_effects_with_status_for_error_leg,
             reply_redirect_emits_navigate_effect,
             set_cookie_layers_onto_reply
         ]}
@@ -43,6 +45,15 @@ reply_effects_status_and_content_type(Config) when is_list(Config) ->
     ]),
     ?assertEqual(200, Status),
     ?assertEqual(~"application/json", proplists:get_value(~"content-type", Headers)).
+
+%% The error leg: a non-2xx (so a fetch form keeps its fields) that still carries
+%% effects (push_event = op 0), via reply_effects/2.
+reply_effects_with_status_for_error_leg(Config) when is_list(Config) ->
+    {Status, _Headers, Body} = arizona_controller:reply_effects(422, [
+        arizona_js:push_event(~"invalid")
+    ]),
+    ?assertEqual(422, Status),
+    ?assertEqual(#{~"e" => [[0, ~"invalid"]]}, json:decode(iolist_to_binary(Body))).
 
 %% --------------------------------------------------------------------
 %% reply_redirect/1

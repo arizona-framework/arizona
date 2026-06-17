@@ -49,6 +49,7 @@ rather than the streaming `read_body/1` so a controller stays unit-testable.
 %% --------------------------------------------------------------------
 
 -export([reply_effects/1]).
+-export([reply_effects/2]).
 -export([reply_redirect/1]).
 
 %% --------------------------------------------------------------------
@@ -56,6 +57,7 @@ rather than the streaming `read_body/1` so a controller stays unit-testable.
 %% --------------------------------------------------------------------
 
 -ignore_xref([reply_effects/1]).
+-ignore_xref([reply_effects/2]).
 -ignore_xref([reply_redirect/1]).
 
 %% --------------------------------------------------------------------
@@ -64,17 +66,28 @@ rather than the streaming `read_body/1` so a controller stays unit-testable.
 
 -doc """
 Builds a `200 application/json` response whose body is the `{"e": [...]}` effects wire
-payload the `arizona_js:fetch/2` command applies on the page. `Effects` is a list of
-`t:arizona_effect:cmd/0` -- the same effects `handle_event/3` returns.
-
-The status is always 200: the `fetch` command applies the effects only on a 2xx
-response and reserves non-2xx for its `on_error` path. To show inline validation,
-return the error-rendering effects with 200 rather than a 4xx.
+payload the `arizona_js:fetch/2` command applies on the page (the same effects
+`handle_event/3` returns). 200 is the **success** leg -- a fetch form with `az-form-reset`
+clears only on a 2xx. For an error leg that keeps the typed fields, use `reply_effects/2`
+with a non-2xx status (the effects still apply).
 """.
 -spec reply_effects(Effects) -> roadrunner_resp:buffered_response() when
     Effects :: [arizona_effect:cmd()].
 reply_effects(Effects) ->
-    roadrunner_resp:json(200, #{~"e" => [Cmd || {arizona_effect, Cmd} <:- Effects]}).
+    reply_effects(200, Effects).
+
+-doc """
+Like `reply_effects/1` but with an explicit HTTP status. The `fetch` command applies the
+effects on **any** status, so a controller can return a real `422` for a validation error
+-- keeping the form's typed fields (a fetch form only resets on a 2xx) while still
+rendering the error, e.g.
+`reply_effects(422, [arizona_js:push_event(~"invalid", #{~"field" => ~"password"})])`.
+""".
+-spec reply_effects(Status, Effects) -> roadrunner_resp:buffered_response() when
+    Status :: roadrunner_http:status(),
+    Effects :: [arizona_effect:cmd()].
+reply_effects(Status, Effects) ->
+    roadrunner_resp:json(Status, #{~"e" => [Cmd || {arizona_effect, Cmd} <:- Effects]}).
 
 -doc """
 Builds a response that sends the client to `Location` via a SPA navigation. Sugar for
