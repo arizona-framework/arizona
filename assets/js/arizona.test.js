@@ -859,6 +859,40 @@ describe('applyEffects -- set_title', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 14d. applyEffects -- toggle_attr (op 21)
+// ---------------------------------------------------------------------------
+
+describe('applyEffects -- toggle_attr', () => {
+    const field = () => document.querySelector('#f');
+
+    it('presence: sets the bare attribute when absent', () => {
+        document.body.innerHTML = '<input id="f" type="text" />';
+        applyEffects([[21, '#f', 'disabled']]);
+        expect(field().getAttribute('disabled')).toBe('');
+    });
+
+    it('presence: removes the attribute when present', () => {
+        document.body.innerHTML = '<input id="f" type="text" disabled />';
+        applyEffects([[21, '#f', 'disabled']]);
+        expect(field().hasAttribute('disabled')).toBe(false);
+    });
+
+    it('value: flips from A to B and back', () => {
+        document.body.innerHTML = '<input id="f" type="password" />';
+        applyEffects([[21, '#f', 'type', 'password', 'text']]);
+        expect(field().getAttribute('type')).toBe('text');
+        applyEffects([[21, '#f', 'type', 'password', 'text']]);
+        expect(field().getAttribute('type')).toBe('password');
+    });
+
+    it('value: a current value matching neither resolves to A', () => {
+        document.body.innerHTML = '<input id="f" type="email" />';
+        applyEffects([[21, '#f', 'type', 'password', 'text']]);
+        expect(field().getAttribute('type')).toBe('password');
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 14c. applyOps -- OP.REPLACE edge cases
 // ---------------------------------------------------------------------------
 

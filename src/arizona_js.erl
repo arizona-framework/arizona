@@ -43,6 +43,8 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 -export([toggle_class/2]).
 -export([set_attr/3]).
 -export([remove_attr/2]).
+-export([toggle_attr/2]).
+-export([toggle_attr/4]).
 -export([dispatch_event/2]).
 -export([navigate/1]).
 -export([navigate/2]).
@@ -77,6 +79,8 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     toggle_class/2,
     set_attr/3,
     remove_attr/2,
+    toggle_attr/2,
+    toggle_attr/4,
     dispatch_event/2,
     navigate/1,
     navigate/2,
@@ -173,6 +177,29 @@ set_attr(Sel, Attr, Val) -> {arizona_effect, [?EFFECT_SET_ATTR, Sel, Attr, Val]}
     Selector :: binary(),
     Attr :: binary().
 remove_attr(Sel, Attr) -> {arizona_effect, [?EFFECT_REMOVE_ATTR, Sel, Attr]}.
+
+-doc """
+Toggles the presence of a bare boolean attribute on elements matching the
+selector: removes it if present, otherwise sets it (e.g. `disabled`, `readonly`,
+`hidden`, `open`). For toggling between two values, use `toggle_attr/4`.
+""".
+-spec toggle_attr(Selector, Attr) -> arizona_effect:cmd() when
+    Selector :: binary(),
+    Attr :: binary().
+toggle_attr(Sel, Attr) -> {arizona_effect, [?EFFECT_TOGGLE_ATTR, Sel, Attr]}.
+
+-doc """
+Toggles an attribute between two values on elements matching the selector: sets
+`ValueB` when the current value is `ValueA`, otherwise sets `ValueA` (so any
+other current value resolves to `ValueA`). Useful for one-button toggles like a
+password field's `type` between `password` and `text`.
+""".
+-spec toggle_attr(Selector, Attr, ValueA, ValueB) -> arizona_effect:cmd() when
+    Selector :: binary(),
+    Attr :: binary(),
+    ValueA :: binary(),
+    ValueB :: binary().
+toggle_attr(Sel, Attr, A, B) -> {arizona_effect, [?EFFECT_TOGGLE_ATTR, Sel, Attr, A, B]}.
 
 -doc "Dispatches a custom DOM event with a payload.".
 -spec dispatch_event(Name, Payload) -> arizona_effect:cmd() when
@@ -390,6 +417,13 @@ builders_test() ->
         {arizona_effect, [?EFFECT_SET_ATTR, ~"#m", ~"a", ~"v"]}, set_attr(~"#m", ~"a", ~"v")
     ),
     ?assertEqual({arizona_effect, [?EFFECT_REMOVE_ATTR, ~"#m", ~"a"]}, remove_attr(~"#m", ~"a")),
+    ?assertEqual(
+        {arizona_effect, [?EFFECT_TOGGLE_ATTR, ~"#m", ~"disabled"]}, toggle_attr(~"#m", ~"disabled")
+    ),
+    ?assertEqual(
+        {arizona_effect, [?EFFECT_TOGGLE_ATTR, ~"#m", ~"type", ~"password", ~"text"]},
+        toggle_attr(~"#m", ~"type", ~"password", ~"text")
+    ),
     ?assertEqual({arizona_effect, [?EFFECT_NAVIGATE, ~"/p"]}, navigate(~"/p")),
     ?assertEqual(
         {arizona_effect, [?EFFECT_NAVIGATE, ~"/p", #{replace => true}]},

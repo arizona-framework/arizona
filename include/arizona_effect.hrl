@@ -20,3 +20,4 @@
 -define(EFFECT_REQUEST_PIP, 18).
 -define(EFFECT_EXIT_PIP, 19).
 -define(EFFECT_TRANSITION, 20).
+-define(EFFECT_TOGGLE_ATTR, 21).
