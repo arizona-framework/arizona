@@ -94,6 +94,10 @@ Builds a response that sends the client to `Location` via a SPA navigation. Suga
 `reply_effects([arizona_js:navigate(Location)])`: a fetch-followed HTTP 3xx can't drive
 a SPA navigation (its `Location` is unreadable), so a redirect is delivered as a
 `navigate` effect instead.
+
+This is a SPA navigation over the existing WebSocket, so it suits same-identity
+redirects. After an **identity change** (login/logout) use `arizona_js:reload/0`
+instead, so the socket re-handshakes with the new session.
 """.
 -spec reply_redirect(Location) -> roadrunner_resp:buffered_response() when
     Location :: binary().

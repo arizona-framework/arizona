@@ -232,21 +232,38 @@ Composes as a command: as an `az_submit` command the trigger form's fields are t
 request body; as an `az_click` command on a non-form element, `body` is sent
 instead.
 
-The endpoint is a normal `{controller, ...}` route. On a 2xx it returns the wire
-payload `{"e": [...]}` of effects (build it with `arizona_controller:reply_effects/1`);
-those effects are applied to the page. To re-render the live view itself, the
-controller broadcasts over `arizona_pubsub` -- the connected view re-renders and
-patches through the WebSocket as usual. A non-2xx status or a network failure runs
-`on_error` (if given) and dispatches an `arizona:fetch-error` DOM event.
+The endpoint is a normal `{controller, ...}` route returning the `{"e": [...]}`
+effects wire payload -- `arizona_controller:reply_effects/1` for the success leg
+(200; a form with `az-form-reset` clears) or `reply_effects/2` with a non-2xx
+(e.g. `422`) for a validation error (the typed fields survive). The effects are
+applied on **any** status, against the submitting view's element. `on_error` (and
+an `arizona:fetch-error` DOM event) runs only when there is no usable effects body
+-- a non-JSON page, an empty non-2xx, or a network failure.
+
+To re-render the live view, return an `arizona_js:push_event` in the response: the
+client relays it over the existing WebSocket and the view re-renders through its
+normal `handle_event/3` (no subscription; it targets the submitting view and does
+not echo the form fields). Use `arizona_pubsub` from the controller instead to reach
+*other* views (broadcast). To send the user elsewhere, return `arizona_js:navigate/1`
+(e.g. via `reply_redirect/1`), not an HTTP 3xx -- a fetch-followed redirect can't
+drive a SPA navigation.
+
+**Identity changes need a reload.** The WebSocket is not re-handshaked when the
+cookie changes, so a fetch that changes *who* the user is (login/logout) must
+`arizona_js:reload/0` (or do a real navigation) for the socket to pick up the new
+session -- `push_event`/`navigate` would re-render over the stale one. Rotating the
+cookie for the *same* identity (e.g. password change) needs no reload.
 
 `Opts`:
 
 - `method` -- HTTP method. Default: the trigger form's `method`, else `post`.
 - `body` -- request body for a non-form trigger (JSON-encoded). Default: the
-  trigger form's fields as `application/x-www-form-urlencoded`.
+  trigger form's fields as `application/x-www-form-urlencoded` (a GET carries them
+  in the query string instead).
 - `headers` -- extra request headers, merged on top.
 - `credentials` -- cookie/credential mode. Default `same_origin`.
-- `on_error` -- a command (or list) run on a non-2xx response or network error.
+- `on_error` -- a command (or list) run on a non-2xx with no effects body, or a
+  network error.
 
 To send the user elsewhere, return an `arizona_js:navigate/1` effect from the
 controller (e.g. via `arizona_controller:reply_redirect/1`) rather than an HTTP
