@@ -3869,7 +3869,8 @@ describe('fetch + az-form-reset via the submit listener', () => {
         mock.simulateOpen();
 
         document.body.innerHTML =
-            '<div id="v" az-view><form id="f"><button type="submit">Go</button></form></div>';
+            '<div id="v" az-view><form id="f"><input name="secret" value="x" />' +
+            '<button type="submit">Go</button></form></div>';
         globalThis.fetch = vi.fn(() =>
             Promise.resolve({
                 ok: true,
@@ -3882,8 +3883,10 @@ describe('fetch + az-form-reset via the submit listener', () => {
         mod.executeJS(document.querySelector('#f'), null, [22, '/account', {}]);
 
         await vi.waitFor(() => {
-            const sent = mock.getSentMessages();
-            expect(sent.some((m) => m[0] === 'v' && m[1] === 'saved')).toBe(true);
+            const ev = mock.getSentMessages().find((m) => m[0] === 'v' && m[1] === 'saved');
+            expect(ev).toBeDefined();
+            // Effects run against the view element, not the form -> no field echo.
+            expect(ev[2]).not.toHaveProperty('secret');
         });
 
         mock.restore();

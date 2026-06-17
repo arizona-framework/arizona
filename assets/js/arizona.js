@@ -1328,9 +1328,9 @@ function execOne(el, event, cmd) {
             // HTTP request via fetch() with no page reload. Unlike push_event (WS,
             // can't set cookies), the response can carry a real Set-Cookie, applied
             // natively by the browser. The controller returns the {e:[...]} effects
-            // wire payload; we apply it against the trigger element below, so a
+            // wire payload; we apply it against the enclosing view element below, so a
             // push_event in the response resolves to (and re-renders) the submitting
-            // view -- pubsub is for broadcasting to other views.
+            // view without scraping the form -- pubsub is for broadcasting to other views.
             const url = cmd[1];
             const opts = cmd[2] || {};
             const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
@@ -1368,12 +1368,14 @@ function execOne(el, event, cmd) {
                     resp.text().then((text) => {
                         // Apply the effects body whenever it parses -- even on a 4xx, so
                         // the server can drive inline validation with a real status. The
-                        // effects run against the trigger element (not document), so a
-                        // `push_event` in the response resolves to the submitting view and
-                        // re-renders it via handle_event (no pubsub needed). An empty 2xx
-                        // body (a cookie-only response) applies nothing. on_error runs only
-                        // when there is no usable effects body: a non-JSON page or an
-                        // empty non-2xx.
+                        // effects run against the enclosing view element (not the form, not
+                        // document), so a `push_event` in the response resolves to the
+                        // submitting view and re-renders it via handle_event (no pubsub) --
+                        // without scraping the form's fields into the event payload (the
+                        // view element isn't a form, so autoPayload is empty; the controller
+                        // passes any result explicitly). An empty 2xx body (a cookie-only
+                        // response) applies nothing. on_error runs only when there is no
+                        // usable effects body: a non-JSON page or an empty non-2xx.
                         let effects = null;
                         if (text) {
                             try {
@@ -1384,7 +1386,8 @@ function execOne(el, event, cmd) {
                         } else if (resp.ok) {
                             effects = [];
                         }
-                        if (effects !== null) executeJS(el, null, effects);
+                        if (effects !== null)
+                            executeJS(el?.closest?.('[az-view]') ?? el, null, effects);
                         else onError({ url, status: resp.status });
                         // Honor az-form-reset only on a 2xx success, so a validation
                         // error (a non-2xx) keeps the typed fields.
