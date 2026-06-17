@@ -409,12 +409,14 @@ handle_event(~"inc", _P, B) ->
   (HttpOnly honored) without navigating, so it suits flows that rotate a session cookie while
   keeping form fields and showing inline validation. Hits a `{controller, ...}` route that
   returns the `{"e": [...]}` effects payload via `arizona_controller:reply_effects/1`; those
-  effects are applied on the page **whenever the body parses, even on a `4xx`** (so the
-  controller can use a real status and still drive inline validation). Re-render the live view
-  itself by broadcasting over `arizona_pubsub` (the connected view repaints through the
-  WebSocket). `on_error` (plus an `arizona:fetch-error` DOM event) runs only when there is no
-  usable effects body -- a non-JSON page, an empty non-2xx, or a network failure. A redirect is
-  an `arizona_js:navigate` effect (`arizona_controller:reply_redirect/1`), not an HTTP 3xx.
+  effects are applied (against the trigger element) **whenever the body parses, even on a
+  `4xx`** (so the controller can use a real status and still drive inline validation). To
+  re-render the **submitting** view, return an `arizona_js:push_event` in the response -- the
+  client relays it over the existing WebSocket and the view re-renders via `handle_event` (no
+  pubsub); broadcast over `arizona_pubsub` only to reach **other** views. `on_error` (plus an
+  `arizona:fetch-error` DOM event) runs only when there is no usable effects body -- a non-JSON
+  page, an empty non-2xx, or a network failure. A redirect is an `arizona_js:navigate` effect
+  (`arizona_controller:reply_redirect/1`), not an HTTP 3xx.
 - `transition/1,2` -- wrap a command (or list) so its DOM change animates in a view
   transition (opts: `#{types => [binary()]}`); see "View transitions" below
 - `focus/1`, `blur/1` -- focus management
