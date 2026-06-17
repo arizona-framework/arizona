@@ -14,9 +14,9 @@ effect -- all without a page reload. Drives `e2e/sequential/arizona_fetch_accoun
     Req :: roadrunner_req:request(),
     Response :: roadrunner_handler:response().
 handle(Req) ->
-    {ok, _Body, Req1} = roadrunner_req:read_body(Req),
-    %% Re-render the live view via pubsub (the connected view repaints over the WS).
-    arizona_pubsub:broadcast(fetch_account, saved),
+    %% Re-render the live view via pubsub: server-computed content (the message)
+    %% reaches the connected view and is rendered server-authoritatively over the WS.
+    arizona_pubsub:broadcast(fetch_account, {saved, ~"Account updated"}),
     %% Request-local effect applied on the page by the fetch command.
     Resp0 = arizona_controller:reply_effects([
         arizona_js:set_attr(~"#status", ~"data-saved", ~"yes")
@@ -25,4 +25,4 @@ handle(Req) ->
     Resp1 = roadrunner_resp:set_cookie(Resp0, ~"sid", ~"rotated", #{
         http_only => true, path => ~"/", same_site => strict
     }),
-    {Resp1, Req1}.
+    {Resp1, Req}.

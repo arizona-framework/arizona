@@ -19,7 +19,8 @@ mount(Bindings) ->
         #{
             id => ~"page",
             title => maps:get(title, Bindings, ~"Account"),
-            saved_count => 0
+            saved_count => 0,
+            message => ~""
         },
         #{}
     }.
@@ -35,6 +36,10 @@ render(Bindings) ->
         {main, [{id, ?get(id)}], [
             {h1, [], [?get(title)]},
             {span, [{id, ~"status"}, {'data-saved', ~"no"}], [~"idle"]},
+            %% Server-computed content (set via the pubsub broadcast below) rendered
+            %% server-authoritatively -- the idiomatic way to show fetch-driven content,
+            %% rather than an imperative DOM effect.
+            {p, [{id, ~"message"}], [?get(message)]},
             {p, [{id, ~"saved-count"}], [~"Saved: ", ?get(saved_count)]},
             {form,
                 [
@@ -49,5 +54,6 @@ render(Bindings) ->
     ).
 
 -spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
-handle_info(saved, Bindings) ->
-    {Bindings#{saved_count => maps:get(saved_count, Bindings) + 1}, #{}, []}.
+handle_info({saved, Msg}, Bindings) ->
+    Count = maps:get(saved_count, Bindings) + 1,
+    {Bindings#{saved_count => Count, message => Msg}, #{}, []}.

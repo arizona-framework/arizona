@@ -24,17 +24,24 @@ returned here are for request-local UI (inline error/success) or a `navigate`.
 -export([handle/1]).
 
 handle(Req) ->
-    {ok, _Body, Req1} = roadrunner_req:read_body(Req),
-    %% ...validate, rotate the session, derive NewSid + UserId...
-    arizona_pubsub:broadcast({account, UserId}, account_updated),
+    Body = roadrunner_req:body(Req),
+    %% ...parse Body, validate, rotate the session, derive NewSid + UserId...
+    %% Show server-computed content (a validation message, success state) by
+    %% broadcasting it to a topic the view subscribed to in mount/1 -- the view
+    %% renders it from its own state. Scope the topic by user/session so it reaches
+    %% the right view; the response effects are for request-local imperative UI only.
+    arizona_pubsub:broadcast({account, UserId}, {account_updated, Body}),
     Resp0 = arizona_controller:reply_effects([
         arizona_js:set_attr(~"#error", ~"hidden", ~"")
     ]),
     Resp1 = roadrunner_resp:set_cookie(Resp0, ~"sid", NewSid, #{
         http_only => true, secure => true, same_site => strict, path => ~"/"
     }),
-    {Resp1, Req1}.
+    {Resp1, Req}.
 ```
+
+`roadrunner_req:body/1` is the buffered body (testable from a plain request map); use it
+rather than the streaming `read_body/1` so a controller stays unit-testable.
 """.
 
 %% --------------------------------------------------------------------

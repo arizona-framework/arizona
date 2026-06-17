@@ -33,8 +33,11 @@ test.describe
             // (1) The request-local effect from the fetch response applied.
             await expect(page.locator('#status')).toHaveAttribute('data-saved', 'yes');
 
-            // (2) The live view repainted via pubsub -> WebSocket.
+            // (2) The live view repainted via pubsub -> WebSocket: server-computed
+            //     content (the message) is rendered server-authoritatively, not by an
+            //     imperative DOM effect.
             await expect(page.locator('#saved-count')).toHaveText('Saved: 1');
+            await expect(page.locator('#message')).toHaveText('Account updated');
 
             // (3) The controller's HttpOnly cookie was applied by the browser.
             const sid = await sidCookie(context);
