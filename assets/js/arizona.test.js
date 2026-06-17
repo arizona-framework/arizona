@@ -893,6 +893,57 @@ describe('applyEffects -- toggle_attr', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 14e. applyEffects -- attribute effects share the canonical writers
+// (value-property sync + hook updated(), same as the OP_SET_ATTR/OP_REM_ATTR diff)
+// ---------------------------------------------------------------------------
+
+describe('applyEffects -- attribute effects (canonical writer)', () => {
+    it('set_attr syncs the live value property of a dirtied input', () => {
+        document.body.innerHTML = '<input id="i" value="orig" />';
+        const input = document.querySelector('#i');
+        input.value = 'typed'; // dirty the live property so it diverges from the attribute
+        applyEffects([[7, '#i', 'value', 'fromserver']]); // op 7 = set_attr
+        expect(input.value).toBe('fromserver');
+        expect(input.getAttribute('value')).toBe('fromserver');
+    });
+
+    it('toggle_attr value sync reaches the live value property', () => {
+        document.body.innerHTML = '<input id="i" value="a" />';
+        const input = document.querySelector('#i');
+        input.value = 'a';
+        applyEffects([[21, '#i', 'value', 'a', 'b']]);
+        expect(input.value).toBe('b');
+    });
+
+    it('set_attr fires updated() on a hooked element', () => {
+        const updated = vi.fn();
+        hooks.Chart = { mounted() {}, updated };
+        setupView('v', '<div az="0" az-hook="Chart">content</div>');
+        mountHooks(document);
+        applyEffects([[7, '[az-hook="Chart"]', 'class', 'active']]);
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('remove_attr fires updated() on a hooked element', () => {
+        const updated = vi.fn();
+        hooks.Chart = { mounted() {}, updated };
+        setupView('v', '<div az="0" az-hook="Chart" class="active">content</div>');
+        mountHooks(document);
+        applyEffects([[8, '[az-hook="Chart"]', 'class']]); // op 8 = remove_attr
+        expect(updated).toHaveBeenCalledOnce();
+    });
+
+    it('toggle_attr fires updated() on a hooked element', () => {
+        const updated = vi.fn();
+        hooks.Chart = { mounted() {}, updated };
+        setupView('v', '<div az="0" az-hook="Chart">content</div>');
+        mountHooks(document);
+        applyEffects([[21, '[az-hook="Chart"]', 'data-open']]);
+        expect(updated).toHaveBeenCalledOnce();
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 14c. applyOps -- OP.REPLACE edge cases
 // ---------------------------------------------------------------------------
 

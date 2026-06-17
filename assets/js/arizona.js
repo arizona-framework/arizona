@@ -513,6 +513,18 @@ function applySetAttrOp(el, name, val) {
 }
 
 /**
+ * Apply a REM_ATTR op: removeAttribute and run the hook `updated` phase. The
+ * canonical attribute-removal write shared by diff ops, item patches, and the
+ * `arizona_js` attribute effects, so a removal behaves the same whatever drove it.
+ * @param {Element} el
+ * @param {string} name
+ */
+function applyRemAttrOp(el, name) {
+    el.removeAttribute(name);
+    notifyUpdated(el);
+}
+
+/**
  * Apply an UPDATE op: replace innerHTML, walking hook lifecycle.
  * @param {Element} el
  * @param {string} html
@@ -545,8 +557,7 @@ function applyOps(ops) {
                 applySetAttrOp(el, op[2], op[3]);
                 break;
             case OP.REM_ATTR:
-                el.removeAttribute(op[2]);
-                notifyUpdated(el);
+                applyRemAttrOp(el, op[2]);
                 break;
             case OP.UPDATE:
                 applyUpdateOp(el, op[2]);
@@ -1008,12 +1019,9 @@ function applyItemOps(item, innerOps) {
             case OP.SET_ATTR:
                 applySetAttrOp(resolveInnerEl(item, az), op[2], op[3]);
                 break;
-            case OP.REM_ATTR: {
-                const innerEl = resolveInnerEl(item, az);
-                innerEl.removeAttribute(op[2]);
-                notifyUpdated(innerEl);
+            case OP.REM_ATTR:
+                applyRemAttrOp(resolveInnerEl(item, az), op[2]);
                 break;
-            }
             case OP.UPDATE:
                 applyUpdateOp(resolveInnerEl(item, az), op[2]);
                 break;
@@ -1226,20 +1234,20 @@ function execOne(el, event, cmd) {
             withQuery(cmd[1], (t) => t.classList.toggle(cmd[2]));
             break;
         case JS_SET_ATTR:
-            withQuery(cmd[1], (t) => t.setAttribute(cmd[2], cmd[3]));
+            withQuery(cmd[1], (t) => applySetAttrOp(t, cmd[2], cmd[3]));
             break;
         case JS_REMOVE_ATTR:
-            withQuery(cmd[1], (t) => t.removeAttribute(cmd[2]));
+            withQuery(cmd[1], (t) => applyRemAttrOp(t, cmd[2]));
             break;
         case JS_TOGGLE_ATTR:
             // 3 args: presence toggle (remove if present, else set bare). 5 args:
             // value toggle (cmd[3] <-> cmd[4]; any other current value -> cmd[3]).
             withQuery(cmd[1], (t) => {
                 if (cmd.length === 3) {
-                    if (t.hasAttribute(cmd[2])) t.removeAttribute(cmd[2]);
-                    else t.setAttribute(cmd[2], '');
+                    if (t.hasAttribute(cmd[2])) applyRemAttrOp(t, cmd[2]);
+                    else applySetAttrOp(t, cmd[2], '');
                 } else {
-                    t.setAttribute(cmd[2], t.getAttribute(cmd[2]) === cmd[3] ? cmd[4] : cmd[3]);
+                    applySetAttrOp(t, cmd[2], t.getAttribute(cmd[2]) === cmd[3] ? cmd[4] : cmd[3]);
                 }
             });
             break;
