@@ -1328,9 +1328,9 @@ function execOne(el, event, cmd) {
             // HTTP request via fetch() with no page reload. Unlike push_event (WS,
             // can't set cookies), the response can carry a real Set-Cookie, applied
             // natively by the browser. The controller returns the {e:[...]} effects
-            // wire payload (arizona_controller:reply_effects/1); we apply it here.
-            // Screen re-sync (re-rendering the live view) is the app's job via
-            // arizona_pubsub -> WebSocket, not this response.
+            // wire payload; we apply it against the trigger element below, so a
+            // push_event in the response resolves to (and re-renders) the submitting
+            // view -- pubsub is for broadcasting to other views.
             const url = cmd[1];
             const opts = cmd[2] || {};
             const form = /** @type {HTMLFormElement|null} */ (el?.closest?.('form') ?? null);
