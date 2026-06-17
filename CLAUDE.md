@@ -102,7 +102,7 @@ It's the `arizona_middleware:check_origin/2` middleware step, and the router **a
 - `csrf_origins` app env (`[binary()]`, default `[]`) -- extra trusted origins (proxy/multi-origin).
 - `check_origin => false` in a route's `Opts` -- opt a single route out (a deliberately cross-origin endpoint).
 
-This closes the WS-CSRF vector (a cross-origin page opening a WS as the victim). It is **not** CORS: CORS gates response-reading + preflight and lets simple cross-site requests through; the Origin check rejects the request outright. (Extending the same default to `{controller, ...}` routes -- giving them a middleware pipeline -- is the next step.)
+This closes the WS-CSRF vector (a cross-origin page opening a WS as the victim). It is **not** CORS: CORS gates response-reading + preflight and lets simple cross-site requests through; the Origin check rejects the request outright. `{controller, ...}` routes get the same default: they dispatch through `arizona_roadrunner_controller`, which runs the middleware pipeline (check_origin first) before the handler -- so a cross-origin POST to a fetch endpoint is also refused with `403`.
 
 ## Client-owned slots -- `?local`
 

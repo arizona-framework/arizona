@@ -53,6 +53,8 @@
     ws_upgrade_preserves_duplicate_qs_keys/1,
     ws_upgrade_rejects_cross_origin/1,
     ws_upgrade_allows_same_origin/1,
+    controller_runs_handler_with_state/1,
+    controller_rejects_cross_origin/1,
     crash_event_closes/1,
     crash_info_closes/1,
     crash_init_closes/1,
@@ -112,7 +114,9 @@ groups() ->
         ws_navigate_preserves_duplicate_qs_keys,
         ws_upgrade_preserves_duplicate_qs_keys,
         ws_upgrade_rejects_cross_origin,
-        ws_upgrade_allows_same_origin
+        ws_upgrade_allows_same_origin,
+        controller_runs_handler_with_state,
+        controller_rejects_cross_origin
     ],
     Crash = [
         crash_event_closes,
@@ -286,6 +290,9 @@ init_per_group(roadrunner, Config) ->
         {live, <<"/drain_stop">>, arizona_drainable, #{bindings => #{drain_mode => stop}}},
         {live, <<"/drain_keep">>, arizona_drainable, #{bindings => #{drain_mode => keep}}},
         {live, <<"/drain_noop">>, arizona_drainable, #{bindings => #{drain_mode => noop}}},
+        {controller, <<"/_test/state-echo">>, arizona_state_echo_controller, #{
+            state => #{marker => ~"STATE_OK"}
+        }},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/assets">>, {priv_dir, arizona, "static/assets/js"}},
         {reload, <<"/reload">>, #{}}
@@ -473,6 +480,40 @@ ws_upgrade_allows_same_origin(Config) ->
     Port = proplists:get_value(port, Config),
     Origin = ["Origin: http://localhost:", integer_to_list(Port), "\r\n"],
     ?assertEqual(101, ws_upgrade_status(Port, Origin)).
+
+controller_runs_handler_with_state(Config) ->
+    %% A {controller,...} route dispatches through arizona_roadrunner_controller: with no
+    %% Origin the pipeline conts, the handler runs, and its route `state` is restored
+    %% (the echo controller returns its marker).
+    Resp = http_get(Config, "/_test/state-echo", []),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"STATE_OK">>)).
+
+controller_rejects_cross_origin(Config) ->
+    %% The default check_origin middleware runs on controllers too: a cross-origin
+    %% request is refused with 403 before the handler is reached.
+    Resp = http_get(Config, "/_test/state-echo", ["Origin: https://evil.example\r\n"]),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"403">>)),
+    ?assertEqual(nomatch, binary:match(Resp, <<"STATE_OK">>)).
+
+%% Raw HTTP GET to Path with extra header lines; returns the full response binary.
+http_get(Config, Path, ExtraHeaders) ->
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET ",
+        Path,
+        " HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        ExtraHeaders,
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    Resp.
 
 %% Send a raw WS upgrade for `/` with the given extra header lines; return the response
 %% status code (101 on upgrade, 403 when check_origin rejects).
