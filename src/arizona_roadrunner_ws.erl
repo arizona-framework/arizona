@@ -137,8 +137,14 @@ to_roadrunner({close, Code, Reason, Sock}, State) ->
 halt_response(HaltReq) ->
     Resp =
         case arizona_req:halted_redirect(HaltReq) of
-            {Status, Location} -> roadrunner_resp:redirect(Status, Location);
-            undefined -> roadrunner_resp:bad_request()
+            {Status, Location} ->
+                roadrunner_resp:redirect(Status, Location);
+            undefined ->
+                %% A middleware (e.g. check_origin) may stash a status; honor it.
+                case arizona_req:resp_status(HaltReq) of
+                    undefined -> roadrunner_resp:bad_request();
+                    Status -> roadrunner_resp:status(Status)
+                end
         end,
     flush_resp(HaltReq, Resp).
 

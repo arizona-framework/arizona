@@ -14,6 +14,9 @@
 -export([extract_named_keys/1]).
 -export([extract_is_usable_as_middleware/1]).
 -export([put_request_exposes_request_binding/1]).
+-export([check_origin_conts_same_origin/1]).
+-export([check_origin_conts_missing_origin/1]).
+-export([check_origin_halts_cross_origin_with_403/1]).
 
 %% Exported for use via {?MODULE, Fun} in apply_middlewares_cont_mf.
 -export([sample_cont_middleware/2]).
@@ -33,7 +36,10 @@ groups() ->
             extract_path_bindings_merges_into_bindings,
             extract_named_keys,
             extract_is_usable_as_middleware,
-            put_request_exposes_request_binding
+            put_request_exposes_request_binding,
+            check_origin_conts_same_origin,
+            check_origin_conts_missing_origin,
+            check_origin_halts_cross_origin_with_403
         ]}
     ].
 
@@ -131,6 +137,27 @@ put_request_exposes_request_binding(Config) when is_list(Config) ->
         {cont, Req, #{request => Req}},
         arizona_middleware:apply_middlewares([{arizona_middleware, put_request}], Req, #{})
     ).
+
+%% --------------------------------------------------------------------
+%% check_origin/2 -- CSRF Origin gate (default app env: enabled, no allowlist)
+%% --------------------------------------------------------------------
+
+check_origin_conts_same_origin(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{
+        headers => #{~"origin" => ~"https://app.example", ~"host" => ~"app.example"}
+    }),
+    ?assertMatch({cont, _Req1, #{}}, arizona_middleware:check_origin(Req, #{})).
+
+check_origin_conts_missing_origin(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{headers => #{~"host" => ~"app.example"}}),
+    ?assertMatch({cont, _Req1, #{}}, arizona_middleware:check_origin(Req, #{})).
+
+check_origin_halts_cross_origin_with_403(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{
+        headers => #{~"origin" => ~"https://evil.example", ~"host" => ~"app.example"}
+    }),
+    {halt, Req1} = arizona_middleware:check_origin(Req, #{}),
+    ?assertEqual(403, arizona_req:resp_status(Req1)).
 
 %% --------------------------------------------------------------------
 %% Module-function middleware helper

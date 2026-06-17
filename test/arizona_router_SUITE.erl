@@ -7,10 +7,14 @@
     compile_routes_asset_dir/1,
     compile_routes_asset_priv_dir/1,
     compile_routes_controller/1,
+    compile_routes_controller_default_origin_check/1,
+    compile_routes_controller_opts_out_origin_check/1,
     compile_routes_mcp/1,
     compile_routes_live/1,
     compile_routes_live_no_layout/1,
     compile_routes_live_multiple_pages/1,
+    compile_routes_live_default_origin_check/1,
+    compile_routes_live_opts_out_origin_check/1,
     compile_routes_mixed/1,
     compile_routes_ws/1
 ]).
@@ -23,10 +27,14 @@ groups() ->
         compile_routes_live,
         compile_routes_live_no_layout,
         compile_routes_live_multiple_pages,
+        compile_routes_live_default_origin_check,
+        compile_routes_live_opts_out_origin_check,
         compile_routes_ws,
         compile_routes_asset_dir,
         compile_routes_asset_priv_dir,
         compile_routes_controller,
+        compile_routes_controller_default_origin_check,
+        compile_routes_controller_opts_out_origin_check,
         compile_routes_mcp,
         compile_routes_mixed
     ],
@@ -117,6 +125,18 @@ compile_routes_live_multiple_pages(Config) ->
     ?assertEqual(#{id => <<"p1">>}, maps:get(bindings, Opts1)),
     ?assertEqual(#{id => <<"p2">>}, maps:get(bindings, Opts2)).
 
+compile_routes_live_default_origin_check(Config) ->
+    %% CSRF defense is on by default: the compiled live route carries check_origin.
+    compile(Config, [{live, <<"/foo">>, my_handler, #{}}]),
+    {_Handler, Opts} = route_match(<<"/foo">>),
+    ?assert(lists:member({arizona_middleware, check_origin}, maps:get(middlewares, Opts))).
+
+compile_routes_live_opts_out_origin_check(Config) ->
+    %% `check_origin => false` opts a route out of the default Origin check.
+    compile(Config, [{live, <<"/foo">>, my_handler, #{check_origin => false}}]),
+    {_Handler, Opts} = route_match(<<"/foo">>),
+    ?assertNot(lists:member({arizona_middleware, check_origin}, maps:get(middlewares, Opts))).
+
 compile_routes_ws(Config) ->
     compile(Config, [
         {ws, <<"/ws">>, #{idle_timeout => 60000}}
@@ -143,12 +163,25 @@ compile_routes_asset_priv_dir(Config) ->
     ?assertEqual(#{dir => ExpectedDir}, Opts).
 
 compile_routes_controller(Config) ->
+    %% Controllers dispatch through arizona_roadrunner_controller; the app handler and
+    %% its state live in the arizona meta.
     compile(Config, [
-        {controller, <<"/api/health">>, my_controller, #{key => val}}
+        {controller, <<"/api/health">>, my_controller, #{state => #{key => val}}}
     ]),
     {Handler, Opts} = route_match(<<"/api/health">>),
-    ?assertEqual(my_controller, Handler),
-    ?assertEqual(#{key => val}, Opts).
+    ?assertEqual(arizona_roadrunner_controller, Handler),
+    ?assertEqual(my_controller, maps:get(handler, Opts)),
+    ?assertEqual(#{key => val}, maps:get(state, Opts)).
+
+compile_routes_controller_default_origin_check(Config) ->
+    compile(Config, [{controller, <<"/c">>, my_controller, #{}}]),
+    {_Handler, Opts} = route_match(<<"/c">>),
+    ?assert(lists:member({arizona_middleware, check_origin}, maps:get(middlewares, Opts))).
+
+compile_routes_controller_opts_out_origin_check(Config) ->
+    compile(Config, [{controller, <<"/c">>, my_controller, #{check_origin => false}}]),
+    {_Handler, Opts} = route_match(<<"/c">>),
+    ?assertNot(lists:member({arizona_middleware, check_origin}, maps:get(middlewares, Opts))).
 
 compile_routes_mcp(Config) ->
     compile(Config, [
@@ -166,7 +199,7 @@ compile_routes_mixed(Config) ->
         {live, <<"/">>, page_h, #{layouts => [{lay, render}]}},
         {ws, <<"/ws">>, #{timeout => 30}},
         {asset, <<"/assets">>, {dir, "/var/www"}},
-        {controller, <<"/health">>, health_h, #{status => ok}}
+        {controller, <<"/health">>, health_h, #{state => #{status => ok}}}
     ]),
     {H1, _} = route_match(<<"/">>),
     ?assertEqual(?config(http_handler, Config), H1),
@@ -177,5 +210,6 @@ compile_routes_mixed(Config) ->
     ?assertEqual(?config(static_handler, Config), H3),
     ?assertEqual(#{dir => "/var/www"}, Opts3),
     {H4, Opts4} = route_match(<<"/health">>),
-    ?assertEqual(health_h, H4),
-    ?assertEqual(#{status => ok}, Opts4).
+    ?assertEqual(arizona_roadrunner_controller, H4),
+    ?assertEqual(health_h, maps:get(handler, Opts4)),
+    ?assertEqual(#{status => ok}, maps:get(state, Opts4)).

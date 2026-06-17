@@ -27,7 +27,8 @@
 | `src/arizona_stream.erl`                  | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`                                                                |
 | `src/arizona_stateful.erl`                | Behaviour for all live handlers (route-page roots + embedded `?stateful`) -- `mount`/`render`/`handle_*`/`unmount` callbacks, the `call_*` dispatchers, and `format_error/2`              |
 | `src/arizona_req.erl`                     | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`/`user_agent`, `redirect`/`halted_redirect`                                                   |
-| `src/arizona_middleware.erl`              | Request-to-bindings middleware pipeline -- `apply_middlewares/3` runner (run by the HTTP/WS transports) + built-in `extract/1`/`put_request/2` steps                                      |
+| `src/arizona_middleware.erl`              | Request-to-bindings middleware pipeline -- `apply_middlewares/3` runner (run by the HTTP/WS transports) + built-in `extract/1`/`put_request/2`/`fetch_flash/2`/`check_origin/2` steps     |
+| `src/arizona_origin.erl`                  | CSRF Origin check -- `check/2` (same-origin or `csrf_origins` allowlist; missing Origin allowed); behind the default-on `check_origin/2` middleware                                       |
 | `src/arizona_user_agent.erl`              | User-Agent classification for dual-serve views -- `browser/1`, `os/1`, `mobile/1` (best-effort); pairs with `arizona_req:user_agent/1`                                                    |
 | `src/arizona_http.erl`                    | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|redirect\|ok\|error, ...}` tuples                                               |
 | `src/arizona_controller.erl`              | Reply helpers for `{controller, ...}` routes consumed by `arizona_js:fetch/2` -- `reply_effects/1` (the `{"e": [...]}` wire body), `reply_redirect/1` (a `navigate` effect)               |
@@ -38,6 +39,7 @@
 | `src/arizona_socket.erl`                  | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff                    |
 | `src/arizona_roadrunner_http.erl`         | Roadrunner HTTP handler -- thin wrapper: delegates to `arizona_http:render/3` and translates results into roadrunner's `{Response, Req}` reply shape                                      |
 | `src/arizona_roadrunner_ws.erl`           | Roadrunner WebSocket handler -- dual behaviour (`roadrunner_handler` for upgrade + `roadrunner_ws_handler` for session); delegates to `arizona_ws:prepare/3`                              |
+| `src/arizona_roadrunner_controller.erl`   | Roadrunner handler for `{controller, ...}` routes -- runs the Arizona middleware pipeline (CSRF default-on), restores the app `state`, then calls the app `Handler:handle/1`              |
 | `src/arizona_roadrunner_server.erl`       | Roadrunner listener boot -- compiles routes, stashes them for hot reload, validates TLS opts, starts a clear/TLS listener                                                                 |
 | `src/arizona_roadrunner_req.erl`          | Roadrunner `arizona_req` adapter -- parsing callbacks plus `resolve_route/3` for SPA navigate; populates `request_id` from roadrunner                                                     |
 | `src/arizona_roadrunner_reload.erl`       | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                                     |
@@ -602,7 +604,11 @@ build-opts variant supports hot-reload-safe rebuilds.
 - `{asset, Path, {priv_dir, App, SubDir}}` -- static asset from priv (served via zero-copy
   sendfile by roadrunner's built-in `roadrunner_static`)
 - `{asset, Path, {dir, Dir}}` -- static asset from absolute directory
-- `{controller, Path, Handler, State}` -- generic roadrunner handler route
+- `{controller, Path, Handler, Opts}` -- plain `roadrunner_handler` behind the Arizona
+  middleware pipeline (CSRF `check_origin` on by default); `Opts` carries `state`/`middlewares`/
+  `check_origin`. Dispatches through `arizona_roadrunner_controller`. (Gate state changes on
+  non-GET: `check_origin` covers POST/PUT/DELETE + the WS upgrade, but a state-changing GET is
+  CSRF-able regardless -- a cross-site GET nav carries a `SameSite=Lax` cookie but no `Origin`.)
 - `{reload, Path, Opts}` -- dev SSE reload endpoint (roadrunner-only convenience)
 
 ## API -- `arizona_stream.erl`

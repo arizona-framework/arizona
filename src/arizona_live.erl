@@ -122,6 +122,8 @@ fingerprints already shipped in the initial HTML.
     on_mount => on_mount(),
     layouts => [arizona_render:layout()],
     middlewares => [arizona_middleware:middleware()],
+    %% CSRF Origin check is on by default; set false to opt this route out.
+    check_origin => boolean(),
     _ => term()
 }.
 

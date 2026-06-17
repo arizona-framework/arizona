@@ -24,6 +24,9 @@ view; a route lists its steps under the `middlewares` key of
   `request` binding for lazy access.
 - `fetch_flash/2` -- read the incoming flash (set on the prior request via
   `arizona_req:put_flash/3`) into the `flash` binding, consuming it.
+- `check_origin/2` -- CSRF defense: halt with `403` when the request `Origin` is not
+  trusted (see `arizona_origin`). The router applies it to `live`/`controller` routes by
+  default, so you rarely list it by hand.
 
 ```erlang
 #{middlewares => [arizona_middleware:extract([path_bindings, params])]}
@@ -38,6 +41,7 @@ view; a route lists its steps under the `middlewares` key of
 -export([extract/1]).
 -export([put_request/2]).
 -export([fetch_flash/2]).
+-export([check_origin/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -46,6 +50,7 @@ view; a route lists its steps under the `middlewares` key of
 -ignore_xref([extract/1]).
 -ignore_xref([put_request/2]).
 -ignore_xref([fetch_flash/2]).
+-ignore_xref([check_origin/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -146,6 +151,28 @@ response clears its cookie, so a refresh shows nothing. Pair it with
 fetch_flash(Req, Bindings) ->
     {Flash, Req1} = arizona_req:read_flash(Req),
     {cont, Req1, Bindings#{flash => Flash}}.
+
+-doc """
+CSRF defense: halt with `403` when the request `Origin` is not trusted (same-origin or
+allowlisted -- see `arizona_origin`), continue otherwise. A missing `Origin` (native
+clients, CLI tools, top-level GET navigations) continues.
+
+The router prepends this to `live` and `controller` routes by default; opt a route out
+with `check_origin => false`, or disable globally with the `check_origin` app env.
+
+```erlang
+#{middlewares => [{arizona_middleware, check_origin}]}
+```
+""".
+-spec check_origin(arizona_req:request(), az:bindings()) -> middleware_result().
+check_origin(Req0, Bindings) ->
+    {Headers, Req} = arizona_req:headers(Req0),
+    Origin = maps:get(~"origin", Headers, undefined),
+    Host = maps:get(~"host", Headers, undefined),
+    case arizona_origin:check(Origin, Host) of
+        ok -> {cont, Req, Bindings};
+        forbidden -> {halt, arizona_req:put_resp_status(Req, 403)}
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal functions

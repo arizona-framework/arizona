@@ -17,7 +17,7 @@ routes after a hot reload without restarting the listener.
 | `{ws, Path, Opts}` | WebSocket endpoint | `arizona_roadrunner_ws` |
 | `{asset, Path, {dir, Dir}}` | Static files from directory | `roadrunner_static` |
 | `{asset, Path, {priv_dir, App, Sub}}` | Static files from app priv | `roadrunner_static` |
-| `{controller, Path, Handler, State}` | Plain roadrunner handler | `Handler` |
+| `{controller, Path, Handler, Opts}` | Middleware-gated handler | `arizona_roadrunner_controller` |
 | `{mcp, Path, Handler, Opts}` | MCP (Model Context Protocol) server | `arizona_mcp_handler` |
 | `{reload, Path, Opts}` | Dev SSE reload endpoint | `arizona_roadrunner_reload` |
 
@@ -49,6 +49,7 @@ persistent term so the dev error page can build the SSE connect URL.
 
 -export_type([path/0]).
 -export_type([route/0]).
+-export_type([controller_opts/0]).
 -export_type([arizona_mcp_route_opts/0]).
 
 %% --------------------------------------------------------------------
@@ -68,9 +69,18 @@ persistent term so the dev error page can build the SSE connect URL.
     | {ws, path(), map()}
     | {asset, path(), {dir, file:filename_all()}}
     | {asset, path(), {priv_dir, atom(), file:filename_all()}}
-    | {controller, path(), module(), term()}
+    | {controller, path(), module(), controller_opts()}
     | {mcp, path(), module(), arizona_mcp_route_opts()}
     | {reload, path(), map()}.
+
+-nominal controller_opts() :: #{
+    %% State passed to the controller's handle/1 (read via roadrunner_req:state/1).
+    state => term(),
+    middlewares => [arizona_middleware:middleware()],
+    %% CSRF Origin check is on by default; set false to opt this route out.
+    check_origin => boolean(),
+    _ => term()
+}.
 
 -nominal arizona_mcp_route_opts() :: #{
     origins => [binary()],
@@ -166,8 +176,23 @@ route_to_roadrunner({asset, Path, {dir, Dir}}, BuildOpts) ->
     asset_route(Path, Dir, BuildOpts);
 route_to_roadrunner({asset, Path, {priv_dir, App, SubDir}}, BuildOpts) ->
     asset_route(Path, filename:join(code:priv_dir(App), SubDir), BuildOpts);
-route_to_roadrunner({controller, Path, Handler, State}, _BuildOpts) ->
-    [#{path => Path, handler => Handler, state => State}];
+route_to_roadrunner({controller, Path, Handler, Opts}, _BuildOpts) ->
+    %% Controllers run the Arizona middleware pipeline (CSRF check_origin on by
+    %% default) via arizona_roadrunner_controller, which restores the app `state`
+    %% before calling Handler:handle/1.
+    [
+        #{
+            path => Path,
+            handler => arizona_roadrunner_controller,
+            state => #{
+                arizona => #{
+                    handler => Handler,
+                    state => maps:get(state, Opts, #{}),
+                    middlewares => with_origin_check(Opts, maps:get(middlewares, Opts, []))
+                }
+            }
+        }
+    ];
 route_to_roadrunner({mcp, Path, Handler, Opts}, _BuildOpts) ->
     %% The handler module is folded into the opts so `arizona_mcp_handler`
     %% reads it from the per-route `arizona` state at request time, the
@@ -214,8 +239,16 @@ build_live_meta(Handler, Opts) ->
         layouts => maps:get(layouts, Opts, []),
         bindings => maps:get(bindings, Opts, #{}),
         on_mount => maps:get(on_mount, Opts, []),
-        middlewares => maps:get(middlewares, Opts, [])
+        middlewares => with_origin_check(Opts, maps:get(middlewares, Opts, []))
     }.
+
+%% CSRF defense is on by default: prepend the check_origin step (covers the page
+%% render and -- since arizona_ws:prepare runs the resolved route's middlewares -- the
+%% WebSocket upgrade). Opt a route out with `check_origin => false`.
+with_origin_check(#{check_origin := false}, Middlewares) ->
+    Middlewares;
+with_origin_check(_Opts, Middlewares) ->
+    [{arizona_middleware, check_origin} | Middlewares].
 
 %% Attach roadrunner_compress as a per-route middleware on the
 %% map-shape route entry when the build-time `compress` flag is on.
