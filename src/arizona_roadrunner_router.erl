@@ -17,7 +17,7 @@ routes after a hot reload without restarting the listener.
 | `{ws, Path, Opts}` | WebSocket endpoint | `arizona_roadrunner_ws` |
 | `{asset, Path, {dir, Dir}}` | Static files from directory | `roadrunner_static` |
 | `{asset, Path, {priv_dir, App, Sub}}` | Static files from app priv | `roadrunner_static` |
-| `{controller, Path, Handler, Opts}` | Plain handler behind the middleware pipeline | `arizona_roadrunner_controller` |
+| `{controller, Path, Handler, Opts}` | Middleware-gated handler | `arizona_roadrunner_controller` |
 | `{mcp, Path, Handler, Opts}` | MCP (Model Context Protocol) server | `arizona_mcp_handler` |
 | `{reload, Path, Opts}` | Dev SSE reload endpoint | `arizona_roadrunner_reload` |
 
