@@ -11,6 +11,8 @@
     compile_routes_live/1,
     compile_routes_live_no_layout/1,
     compile_routes_live_multiple_pages/1,
+    compile_routes_live_default_origin_check/1,
+    compile_routes_live_opts_out_origin_check/1,
     compile_routes_mixed/1,
     compile_routes_ws/1
 ]).
@@ -23,6 +25,8 @@ groups() ->
         compile_routes_live,
         compile_routes_live_no_layout,
         compile_routes_live_multiple_pages,
+        compile_routes_live_default_origin_check,
+        compile_routes_live_opts_out_origin_check,
         compile_routes_ws,
         compile_routes_asset_dir,
         compile_routes_asset_priv_dir,
@@ -116,6 +120,18 @@ compile_routes_live_multiple_pages(Config) ->
     ?assertEqual(handler2, maps:get(handler, Opts2)),
     ?assertEqual(#{id => <<"p1">>}, maps:get(bindings, Opts1)),
     ?assertEqual(#{id => <<"p2">>}, maps:get(bindings, Opts2)).
+
+compile_routes_live_default_origin_check(Config) ->
+    %% CSRF defense is on by default: the compiled live route carries check_origin.
+    compile(Config, [{live, <<"/foo">>, my_handler, #{}}]),
+    {_Handler, Opts} = route_match(<<"/foo">>),
+    ?assert(lists:member({arizona_middleware, check_origin}, maps:get(middlewares, Opts))).
+
+compile_routes_live_opts_out_origin_check(Config) ->
+    %% `check_origin => false` opts a route out of the default Origin check.
+    compile(Config, [{live, <<"/foo">>, my_handler, #{check_origin => false}}]),
+    {_Handler, Opts} = route_match(<<"/foo">>),
+    ?assertNot(lists:member({arizona_middleware, check_origin}, maps:get(middlewares, Opts))).
 
 compile_routes_ws(Config) ->
     compile(Config, [

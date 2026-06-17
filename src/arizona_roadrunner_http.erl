@@ -47,14 +47,19 @@ handle(Req) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-%% Middleware halted before render. Ship a stashed redirect, or a 204 when
-%% the middleware emitted its own response via direct roadrunner calls, then
-%% flush any stashed response headers/cookies (put_resp_header/put_resp_cookie).
+%% Middleware halted before render. Ship a stashed redirect, a stashed status (e.g.
+%% check_origin's 403), or a 204 when the middleware emitted its own response via direct
+%% roadrunner calls, then flush any stashed response headers/cookies.
 halt_response(HaltReq) ->
     Resp =
         case arizona_req:halted_redirect(HaltReq) of
-            {Status, Location} -> roadrunner_resp:redirect(Status, Location);
-            undefined -> roadrunner_resp:no_content()
+            {Status, Location} ->
+                roadrunner_resp:redirect(Status, Location);
+            undefined ->
+                case arizona_req:resp_status(HaltReq) of
+                    undefined -> roadrunner_resp:no_content();
+                    Status -> roadrunner_resp:status(Status)
+                end
         end,
     flush_resp(HaltReq, Resp).
 

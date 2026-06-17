@@ -92,6 +92,18 @@ Response effects apply whenever the body parses **even on a `4xx`** (so the cont
 
 A view transition wraps **any** DOM change in `document.startViewTransition` (not tied to navigation). Request one per-trigger (no global switch) with `arizona_js:transition(Cmd[, Opts])` -- wraps the command (or list) whose change should animate, like `on_key/2` -- or the `az_transition` attribute on any triggering element (bare = cross-fade, `{az_transition, ~"slide back"}` = space-separated `types`). A sync effect animates in place; `navigate`/`push_event` animate the resulting server diff. Guarded by feature-detect + `prefers-reduced-motion`; back/forward replays via history state. Real `<a href>` navigations transition through user CSS (`@view-transition { navigation: auto }`). All styling is user-owned CSS. See [.claude/rules/js.md](.claude/rules/js.md).
 
+## CSRF / Origin checking
+
+CSRF defense is an **Origin check**, not a token: `arizona_origin:check(Origin, Host)` rejects a request whose `Origin` header is neither same-origin (its authority equals the `Host`) nor in an allowlist. A missing `Origin` (native `?native` clients, CLI tools, top-level GET navigations) is allowed.
+
+It's the `arizona_middleware:check_origin/2` middleware step, and the router **applies it by default** to `{live, ...}` routes -- so it runs on both the page render (GET, usually no `Origin`) and the **WebSocket upgrade** (`arizona_ws:prepare/3` runs the resolved route's middlewares; a cross-origin upgrade gets `403`). Off by exception, not omission:
+
+- `check_origin` app env (`boolean()`, default `true`) -- global switch.
+- `csrf_origins` app env (`[binary()]`, default `[]`) -- extra trusted origins (proxy/multi-origin).
+- `check_origin => false` in a route's `Opts` -- opt a single route out (a deliberately cross-origin endpoint).
+
+This closes the WS-CSRF vector (a cross-origin page opening a WS as the victim). It is **not** CORS: CORS gates response-reading + preflight and lets simple cross-site requests through; the Origin check rejects the request outright. (Extending the same default to `{controller, ...}` routes -- giving them a middleware pipeline -- is the next step.)
+
 ## Client-owned slots -- `?local`
 
 `?local(Key, Init)` declares a slot the server renders **once** at SSR and then **never diffs** -- the browser owns the value (keyed by `Key`, a binary or atom literal) and updates it locally with **no WebSocket round-trip**. For UI-only state (dialog open/close, tabs, toggles). It binds either content or an attribute value. A content `?local` is **not** restricted to being the sole child -- an element can hold several content slots, freely mixed with static text and other dynamic children. An attribute value may also interpolate **one** `?local` with static prefix/suffix (two locals, or a local mixed with a server-owned dynamic, in one attribute are compile errors). Interpolation is for **string-valued** attributes only; boolean attributes must use a whole-value `?local` (an interpolated value always renders `name="value"`, so an interpolated boolean stays present):

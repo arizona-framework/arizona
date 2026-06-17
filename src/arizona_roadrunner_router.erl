@@ -214,8 +214,16 @@ build_live_meta(Handler, Opts) ->
         layouts => maps:get(layouts, Opts, []),
         bindings => maps:get(bindings, Opts, #{}),
         on_mount => maps:get(on_mount, Opts, []),
-        middlewares => maps:get(middlewares, Opts, [])
+        middlewares => with_origin_check(Opts, maps:get(middlewares, Opts, []))
     }.
+
+%% CSRF defense is on by default: prepend the check_origin step (covers the page
+%% render and -- since arizona_ws:prepare runs the resolved route's middlewares -- the
+%% WebSocket upgrade). Opt a route out with `check_origin => false`.
+with_origin_check(#{check_origin := false}, Middlewares) ->
+    Middlewares;
+with_origin_check(_Opts, Middlewares) ->
+    [{arizona_middleware, check_origin} | Middlewares].
 
 %% Attach roadrunner_compress as a per-route middleware on the
 %% map-shape route entry when the build-time `compress` flag is on.

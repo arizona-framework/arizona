@@ -51,6 +51,8 @@
     http_preserves_duplicate_qs_keys/1,
     ws_navigate_preserves_duplicate_qs_keys/1,
     ws_upgrade_preserves_duplicate_qs_keys/1,
+    ws_upgrade_rejects_cross_origin/1,
+    ws_upgrade_allows_same_origin/1,
     crash_event_closes/1,
     crash_info_closes/1,
     crash_init_closes/1,
@@ -108,7 +110,9 @@ groups() ->
         https_without_tls_errors,
         http_preserves_duplicate_qs_keys,
         ws_navigate_preserves_duplicate_qs_keys,
-        ws_upgrade_preserves_duplicate_qs_keys
+        ws_upgrade_preserves_duplicate_qs_keys,
+        ws_upgrade_rejects_cross_origin,
+        ws_upgrade_allows_same_origin
     ],
     Crash = [
         crash_event_closes,
@@ -457,6 +461,42 @@ middleware_cont_ws_connects(Config) ->
     ok = ws_send(Sock, <<"0">>),
     {text, <<"1">>} = ws_recv(Sock),
     ws_close(Sock).
+
+ws_upgrade_rejects_cross_origin(Config) ->
+    %% CSRF: the default check_origin middleware (auto-applied to live routes, run by
+    %% arizona_ws:prepare) refuses a cross-origin WS upgrade with 403.
+    Port = proplists:get_value(port, Config),
+    ?assertEqual(403, ws_upgrade_status(Port, ["Origin: https://evil.example\r\n"])).
+
+ws_upgrade_allows_same_origin(Config) ->
+    %% A same-origin Origin (authority == Host) upgrades normally (101).
+    Port = proplists:get_value(port, Config),
+    Origin = ["Origin: http://localhost:", integer_to_list(Port), "\r\n"],
+    ?assertEqual(101, ws_upgrade_status(Port, Origin)).
+
+%% Send a raw WS upgrade for `/` with the given extra header lines; return the response
+%% status code (101 on upgrade, 403 when check_origin rejects).
+ws_upgrade_status(Port, ExtraHeaders) ->
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, http_bin}]),
+    Key = base64:encode(crypto:strong_rand_bytes(16)),
+    Req = [
+        "GET /ws?_az_path=/ HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        ExtraHeaders,
+        "Upgrade: websocket\r\n",
+        "Connection: Upgrade\r\n",
+        "Sec-WebSocket-Key: ",
+        Key,
+        "\r\n",
+        "Sec-WebSocket-Version: 13\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, {http_response, _Version, Status, _Reason}} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    Status.
 
 middleware_halt_redirects(Config) ->
     %% HTTP: middleware halts with 302 redirect
