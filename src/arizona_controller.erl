@@ -1,12 +1,14 @@
 -module(arizona_controller).
 -moduledoc """
-Reply helpers for `{controller, ...}` routes -- plain HTTP handlers that drive the
+Reply helpers for controller routes -- plain HTTP handlers that drive the
 page without a full reload.
 
-A controller is a `roadrunner_handler` (`handle/1` returning `{Response, Req}`) that
-the browser reaches via `arizona_js:fetch/2`. Because it is a real HTTP request, the
-response may carry a `Set-Cookie` (HttpOnly honored) the WebSocket transport can't --
-so it suits flows that rotate a session cookie while the page stays put.
+A controller route (a verb tag like `{post, ...}`, or `{match, ...}`) dispatches to an
+action function (`Handler:Action/1`, the `action` option defaulting to `handle`,
+returning `{Response, Req}`) that the browser reaches via `arizona_js:fetch/2`. Because
+it is a real HTTP request, the response may carry a `Set-Cookie` (HttpOnly honored) the
+WebSocket transport can't -- so it suits flows that rotate a session cookie while the
+page stays put.
 
 These helpers build the response body the `fetch` command expects: the same
 `{"e": [...]}` effects wire payload the WebSocket sends. Layer cookies/headers/status

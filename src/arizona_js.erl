@@ -232,7 +232,7 @@ Composes as a command: as an `az_submit` command the trigger form's fields are t
 request body; as an `az_click` command on a non-form element, `body` is sent
 instead.
 
-The endpoint is a normal `{controller, ...}` route returning the `{"e": [...]}`
+The endpoint is a controller route (e.g. `{post, ...}`) returning the `{"e": [...]}`
 effects wire payload -- `arizona_controller:reply_effects/1` for the success leg
 (200; a form with `az-form-reset` clears) or `reply_effects/2` with a non-2xx
 (e.g. `422`) for a validation error (the typed fields survive). The effects are
