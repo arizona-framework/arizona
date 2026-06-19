@@ -56,6 +56,8 @@
     controller_runs_handler_with_state/1,
     controller_rejects_cross_origin/1,
     controller_rejects_disallowed_method/1,
+    controller_dispatches_action_by_verb/1,
+    controller_missing_action_errors/1,
     crash_event_closes/1,
     crash_info_closes/1,
     crash_init_closes/1,
@@ -118,7 +120,9 @@ groups() ->
         ws_upgrade_allows_same_origin,
         controller_runs_handler_with_state,
         controller_rejects_cross_origin,
-        controller_rejects_disallowed_method
+        controller_rejects_disallowed_method,
+        controller_dispatches_action_by_verb,
+        controller_missing_action_errors
     ],
     Crash = [
         crash_event_closes,
@@ -295,6 +299,11 @@ init_per_group(roadrunner, Config) ->
         {get, <<"/_test/state-echo">>, arizona_state_echo_controller, #{
             state => #{marker => ~"STATE_OK"}
         }},
+        %% Resource-style controller: same path, verb selects the action.
+        {get, <<"/_test/users">>, arizona_users_controller, #{action => index}},
+        {post, <<"/_test/users">>, arizona_users_controller, #{action => create}},
+        %% Route naming an action the controller does not export (error path).
+        {get, <<"/_test/bad-action">>, arizona_users_controller, #{action => nope}},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/assets">>, {priv_dir, arizona, "static/assets/js"}},
         {reload, <<"/reload">>, #{}}
@@ -505,6 +514,21 @@ controller_rejects_disallowed_method(Config) ->
     ?assertNotEqual(nomatch, binary:match(Resp, <<"405">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"GET, HEAD">>)),
     ?assertEqual(nomatch, binary:match(Resp, <<"STATE_OK">>)).
+
+controller_dispatches_action_by_verb(Config) ->
+    %% Two routes share /_test/users; the verb selects the controller action
+    %% (GET -> index, POST -> create), both on the one arizona_users_controller.
+    GetResp = http_req(Config, "GET", "/_test/users", []),
+    ?assertNotEqual(nomatch, binary:match(GetResp, <<"users#index">>)),
+    PostResp = http_req(Config, "POST", "/_test/users", []),
+    ?assertNotEqual(nomatch, binary:match(PostResp, <<"users#create">>)).
+
+controller_missing_action_errors(Config) ->
+    %% A route naming an action the controller does not export crashes the
+    %% request (500) rather than dispatching; the dispatcher re-tags it as a
+    %% clear missing_action error.
+    Resp = http_req(Config, "GET", "/_test/bad-action", []),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"500">>)).
 
 %% Raw HTTP GET to Path with extra header lines; returns the full response binary.
 http_get(Config, Path, ExtraHeaders) ->
