@@ -55,6 +55,7 @@
     ws_upgrade_allows_same_origin/1,
     controller_runs_handler_with_state/1,
     controller_rejects_cross_origin/1,
+    controller_rejects_disallowed_method/1,
     crash_event_closes/1,
     crash_info_closes/1,
     crash_init_closes/1,
@@ -116,7 +117,8 @@ groups() ->
         ws_upgrade_rejects_cross_origin,
         ws_upgrade_allows_same_origin,
         controller_runs_handler_with_state,
-        controller_rejects_cross_origin
+        controller_rejects_cross_origin,
+        controller_rejects_disallowed_method
     ],
     Crash = [
         crash_event_closes,
@@ -290,7 +292,7 @@ init_per_group(roadrunner, Config) ->
         {live, <<"/drain_stop">>, arizona_drainable, #{bindings => #{drain_mode => stop}}},
         {live, <<"/drain_keep">>, arizona_drainable, #{bindings => #{drain_mode => keep}}},
         {live, <<"/drain_noop">>, arizona_drainable, #{bindings => #{drain_mode => noop}}},
-        {controller, <<"/_test/state-echo">>, arizona_state_echo_controller, #{
+        {get, <<"/_test/state-echo">>, arizona_state_echo_controller, #{
             state => #{marker => ~"STATE_OK"}
         }},
         {ws, <<"/ws">>, #{}},
@@ -482,9 +484,9 @@ ws_upgrade_allows_same_origin(Config) ->
     ?assertEqual(101, ws_upgrade_status(Port, Origin)).
 
 controller_runs_handler_with_state(Config) ->
-    %% A {controller,...} route dispatches through arizona_roadrunner_controller: with no
-    %% Origin the pipeline conts, the handler runs, and its route `state` is restored
-    %% (the echo controller returns its marker).
+    %% A controller (verb-tag) route dispatches through arizona_roadrunner_controller:
+    %% with no Origin the pipeline conts, the handler runs, and its route `state` is
+    %% restored (the echo controller returns its marker).
     Resp = http_get(Config, "/_test/state-echo", []),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"STATE_OK">>)).
@@ -496,12 +498,25 @@ controller_rejects_cross_origin(Config) ->
     ?assertNotEqual(nomatch, binary:match(Resp, <<"403">>)),
     ?assertEqual(nomatch, binary:match(Resp, <<"STATE_OK">>)).
 
+controller_rejects_disallowed_method(Config) ->
+    %% The state-echo route is GET-only; a POST gets 405 with an Allow header
+    %% (GET implies HEAD), decided by roadrunner's match before any middleware runs.
+    Resp = http_req(Config, "POST", "/_test/state-echo", []),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"405">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"GET, HEAD">>)),
+    ?assertEqual(nomatch, binary:match(Resp, <<"STATE_OK">>)).
+
 %% Raw HTTP GET to Path with extra header lines; returns the full response binary.
 http_get(Config, Path, ExtraHeaders) ->
+    http_req(Config, "GET", Path, ExtraHeaders).
+
+%% Raw HTTP request with the given method to Path; returns the full response binary.
+http_req(Config, Method, Path, ExtraHeaders) ->
     Port = proplists:get_value(port, Config),
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
     Req = [
-        "GET ",
+        Method,
+        " ",
         Path,
         " HTTP/1.1\r\n",
         "Host: localhost:",

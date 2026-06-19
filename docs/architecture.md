@@ -743,7 +743,7 @@ inherited from the original upgrade Req; `path`, `bindings` (path bindings from 
 `params` reflect the new path/qs.
 
 **Shipped implementation:** `arizona_roadrunner_req` exports the optional `resolve_route/3` and
-runs `roadrunner_router:match/2` against the compiled dispatch stored by
+runs `roadrunner_router:match/3` against the compiled dispatch stored by
 `arizona_roadrunner_router`.
 
 ## API -- `arizona_req.erl`

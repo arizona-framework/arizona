@@ -9,6 +9,9 @@
     compile_routes_controller/1,
     compile_routes_controller_default_origin_check/1,
     compile_routes_controller_opts_out_origin_check/1,
+    compile_routes_method_gating/1,
+    compile_routes_match_any_and_list/1,
+    compile_routes_same_path_dispatch/1,
     compile_routes_mcp/1,
     compile_routes_live/1,
     compile_routes_live_no_layout/1,
@@ -35,6 +38,9 @@ groups() ->
         compile_routes_controller,
         compile_routes_controller_default_origin_check,
         compile_routes_controller_opts_out_origin_check,
+        compile_routes_method_gating,
+        compile_routes_match_any_and_list,
+        compile_routes_same_path_dispatch,
         compile_routes_mcp,
         compile_routes_mixed
     ],
@@ -63,22 +69,28 @@ compile(Config, Routes) ->
     ok = Router:compile_routes(Routes).
 
 %% Resolve a request path to `{Handler, Opts}` via roadrunner's runtime
-%% lookup: `roadrunner_router:match/2` against the persistent term key
+%% lookup: `roadrunner_router:match/3` against the persistent term key
 %% arizona writes — the per-route state (5th element) is what arizona
-%% stashes its metadata in.
+%% stashes its metadata in. Defaults the method to GET; pass a method
+%% with `route_match/2` for verb-restricted routes.
 route_match(Path) ->
-    Compiled = persistent_term:get(arizona_roadrunner_dispatch),
-    {ok, Handler, _Bindings, _Pipeline, State} =
-        roadrunner_router:match(Path, Compiled),
+    route_match(~"GET", Path).
+
+route_match(Method, Path) ->
+    {ok, Handler, _Bindings, _Pipeline, State} = match_result(Method, Path),
     %% arizona's per-route opts live under the `arizona` namespace
     %% inside `state` to keep them opaque from roadrunner's pipeline.
     %% Unwrap so the assertions can read handler/layouts/etc. directly.
-    %% asset/controller routes have no arizona wrap and expose their
-    %% opts at the top level.
+    %% asset routes have no arizona wrap and expose their opts at the top level.
     case State of
         #{arizona := ArzOpts} -> {Handler, ArzOpts};
         _ -> {Handler, State}
     end.
+
+%% The raw `match/3` result (incl. `{method_not_allowed, Allow}` and `not_found`).
+match_result(Method, Path) ->
+    Compiled = persistent_term:get(arizona_roadrunner_dispatch),
+    roadrunner_router:match(Method, Path, Compiled).
 
 %% --------------------------------------------------------------------
 %% Tests
@@ -163,25 +175,58 @@ compile_routes_asset_priv_dir(Config) ->
     ?assertEqual(#{dir => ExpectedDir}, Opts).
 
 compile_routes_controller(Config) ->
-    %% Controllers dispatch through arizona_roadrunner_controller; the app handler and
-    %% its state live in the arizona meta.
+    %% Verb-tag controllers dispatch through arizona_roadrunner_controller; the app
+    %% handler, action (default `handle`), and state live in the arizona meta.
     compile(Config, [
-        {controller, <<"/api/health">>, my_controller, #{state => #{key => val}}}
+        {post, <<"/api/health">>, my_controller, #{state => #{key => val}}}
     ]),
-    {Handler, Opts} = route_match(<<"/api/health">>),
+    {Handler, Opts} = route_match(~"POST", <<"/api/health">>),
     ?assertEqual(arizona_roadrunner_controller, Handler),
     ?assertEqual(my_controller, maps:get(handler, Opts)),
+    ?assertEqual(handle, maps:get(action, Opts)),
     ?assertEqual(#{key => val}, maps:get(state, Opts)).
 
 compile_routes_controller_default_origin_check(Config) ->
-    compile(Config, [{controller, <<"/c">>, my_controller, #{}}]),
-    {_Handler, Opts} = route_match(<<"/c">>),
+    compile(Config, [{post, <<"/c">>, my_controller, #{}}]),
+    {_Handler, Opts} = route_match(~"POST", <<"/c">>),
     ?assert(lists:member({arizona_middleware, check_origin}, maps:get(middlewares, Opts))).
 
 compile_routes_controller_opts_out_origin_check(Config) ->
-    compile(Config, [{controller, <<"/c">>, my_controller, #{check_origin => false}}]),
-    {_Handler, Opts} = route_match(<<"/c">>),
+    compile(Config, [{post, <<"/c">>, my_controller, #{check_origin => false}}]),
+    {_Handler, Opts} = route_match(~"POST", <<"/c">>),
     ?assertNot(lists:member({arizona_middleware, check_origin}, maps:get(middlewares, Opts))).
+
+compile_routes_method_gating(Config) ->
+    %% A verb route only answers its verb; another method on the same path is 405,
+    %% and the Allow set is exactly the route's methods.
+    compile(Config, [{post, <<"/only-post">>, my_controller, #{}}]),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"POST", <<"/only-post">>)),
+    ?assertEqual({method_not_allowed, [~"POST"]}, match_result(~"GET", <<"/only-post">>)).
+
+compile_routes_match_any_and_list(Config) ->
+    %% `match` with `'*'` answers every method; with a list it gates to that set
+    %% (and a GET allowlist implicitly answers HEAD).
+    compile(Config, [
+        {match, '*', <<"/any">>, my_controller, #{}},
+        {match, [get, post], <<"/multi">>, my_controller, #{}}
+    ]),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"DELETE", <<"/any">>)),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"GET", <<"/multi">>)),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"HEAD", <<"/multi">>)),
+    ?assertEqual(
+        {method_not_allowed, [~"GET", ~"HEAD", ~"POST"]}, match_result(~"PUT", <<"/multi">>)
+    ).
+
+compile_routes_same_path_dispatch(Config) ->
+    %% Two verb routes share a path: the method selects the handler.
+    compile(Config, [
+        {get, <<"/u">>, index_controller, #{}},
+        {post, <<"/u">>, create_controller, #{}}
+    ]),
+    {_, GetOpts} = route_match(~"GET", <<"/u">>),
+    {_, PostOpts} = route_match(~"POST", <<"/u">>),
+    ?assertEqual(index_controller, maps:get(handler, GetOpts)),
+    ?assertEqual(create_controller, maps:get(handler, PostOpts)).
 
 compile_routes_mcp(Config) ->
     compile(Config, [
@@ -199,7 +244,7 @@ compile_routes_mixed(Config) ->
         {live, <<"/">>, page_h, #{layouts => [{lay, render}]}},
         {ws, <<"/ws">>, #{timeout => 30}},
         {asset, <<"/assets">>, {dir, "/var/www"}},
-        {controller, <<"/health">>, health_h, #{state => #{status => ok}}}
+        {post, <<"/health">>, health_h, #{state => #{status => ok}}}
     ]),
     {H1, _} = route_match(<<"/">>),
     ?assertEqual(?config(http_handler, Config), H1),
@@ -209,7 +254,7 @@ compile_routes_mixed(Config) ->
     {H3, Opts3} = route_match(<<"/assets/style.css">>),
     ?assertEqual(?config(static_handler, Config), H3),
     ?assertEqual(#{dir => "/var/www"}, Opts3),
-    {H4, Opts4} = route_match(<<"/health">>),
+    {H4, Opts4} = route_match(~"POST", <<"/health">>),
     ?assertEqual(arizona_roadrunner_controller, H4),
     ?assertEqual(health_h, maps:get(handler, Opts4)),
     ?assertEqual(#{status => ok}, maps:get(state, Opts4)).
