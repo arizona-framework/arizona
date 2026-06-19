@@ -17,9 +17,13 @@ routes after a hot reload without restarting the listener.
 | `{ws, Path, Opts}` | WebSocket endpoint | `arizona_roadrunner_ws` |
 | `{asset, Path, {dir, Dir}}` | Static files from directory | `roadrunner_static` |
 | `{asset, Path, {priv_dir, App, Sub}}` | Static files from app priv | `roadrunner_static` |
-| `{controller, Path, Handler, Opts}` | Middleware-gated handler | `arizona_roadrunner_controller` |
+| `{Verb, Path, Handler, Opts}` | Single-verb controller | `arizona_roadrunner_controller` |
+| `{match, Spec, Path, Handler, Opts}` | Multi/custom methods | `arizona_roadrunner_controller` |
 | `{mcp, Path, Handler, Opts}` | MCP (Model Context Protocol) server | `arizona_mcp_handler` |
 | `{reload, Path, Opts}` | Dev SSE reload endpoint | `arizona_roadrunner_reload` |
+
+`Verb` is `get`/`post`/`put`/`patch`/`delete`/`head`/`options`; `match`'s `Spec` is a
+single verb, a list of verbs, a custom uppercase method binary, or `'*'` (any method).
 
 `{reload, ...}` also stashes the path in the `arizona_reload_url`
 persistent term so the dev error page can build the SSE connect URL.
@@ -49,6 +53,8 @@ persistent term so the dev error page can build the SSE connect URL.
 
 -export_type([path/0]).
 -export_type([route/0]).
+-export_type([method/0]).
+-export_type([method_spec/0]).
 -export_type([controller_opts/0]).
 -export_type([arizona_mcp_route_opts/0]).
 
@@ -69,13 +75,27 @@ persistent term so the dev error page can build the SSE connect URL.
     | {ws, path(), map()}
     | {asset, path(), {dir, file:filename_all()}}
     | {asset, path(), {priv_dir, atom(), file:filename_all()}}
-    | {controller, path(), module(), controller_opts()}
+    | {method(), path(), module(), controller_opts()}
+    | {match, method_spec(), path(), module(), controller_opts()}
     | {mcp, path(), module(), arizona_mcp_route_opts()}
     | {reload, path(), map()}.
 
+%% The verb-tag atoms a controller route may use as its first element
+%% (sugar for a single-method allowlist). Custom or multi-method routes go
+%% through `{match, MethodSpec, ...}`.
+-nominal method() :: get | post | put | patch | delete | head | options.
+
+%% The method argument of a `{match, ...}` route: a single verb, a list of
+%% verbs, or the atom `'*'` for any method. A verb is an atom (upper-cased at
+%% compile time -- the common ones are `method()`, but any atom works, e.g.
+%% `move` -> `~"MOVE"`) or a custom uppercase method binary (`~"PROPFIND"`).
+-nominal method_spec() :: atom() | binary() | [atom() | binary()].
+
 -nominal controller_opts() :: #{
-    %% State passed to the controller's handle/1 (read via roadrunner_req:state/1).
+    %% State passed to the controller action (read via roadrunner_req:state/1).
     state => term(),
+    %% Controller action function: dispatched as Handler:Action/1 (default `handle`).
+    action => atom(),
     middlewares => [arizona_middleware:middleware()],
     %% CSRF Origin check is on by default; set false to opt this route out.
     check_origin => boolean(),
@@ -111,7 +131,7 @@ to per-route expansion. Recognized opts:
 
 - `compress` — when `true` (default), `roadrunner_compress` is
   attached as a per-route middleware on `live` and `asset` routes.
-  WS, dev SSE reload, and controller routes are not compressed.
+  WS, dev SSE reload, and controller (verb/`match`) routes are not compressed.
 """.
 -spec compile_routes(Routes, BuildOpts) -> ok when
     Routes :: [route()],
@@ -154,11 +174,14 @@ routes(Routes, BuildOpts) when is_map(BuildOpts) ->
 %% top-level `middlewares` key of the map-shape route entry, where
 %% `roadrunner_router:compile/2` bakes them into the pipeline closure.
 route_to_roadrunner({live, Path, Handler, Opts}, BuildOpts) ->
+    %% A live route is GET-only (the page render) plus HEAD; the WebSocket
+    %% upgrade rides its own `{ws, ...}` route. A non-GET to a live path gets 405.
     [
         with_compress(
             #{
                 path => Path,
                 handler => arizona_roadrunner_http,
+                methods => [~"GET", ~"HEAD"],
                 state => #{arizona => build_live_meta(Handler, Opts)}
             },
             BuildOpts
@@ -176,23 +199,23 @@ route_to_roadrunner({asset, Path, {dir, Dir}}, BuildOpts) ->
     asset_route(Path, Dir, BuildOpts);
 route_to_roadrunner({asset, Path, {priv_dir, App, SubDir}}, BuildOpts) ->
     asset_route(Path, filename:join(code:priv_dir(App), SubDir), BuildOpts);
-route_to_roadrunner({controller, Path, Handler, Opts}, _BuildOpts) ->
-    %% Controllers run the Arizona middleware pipeline (CSRF check_origin on by
-    %% default) via arizona_roadrunner_controller, which restores the app `state`
-    %% before calling Handler:handle/1.
-    [
-        #{
-            path => Path,
-            handler => arizona_roadrunner_controller,
-            state => #{
-                arizona => #{
-                    handler => Handler,
-                    state => maps:get(state, Opts, #{}),
-                    middlewares => with_origin_check(Opts, maps:get(middlewares, Opts, []))
-                }
-            }
-        }
-    ];
+route_to_roadrunner({match, Spec, Path, Handler, Opts}, _BuildOpts) ->
+    %% General controller route: a multi-verb list, a custom method binary,
+    %% or `'*'` (any method) -- all normalized to roadrunner's allowlist.
+    controller_route(normalize_methods(Spec), Path, Handler, Opts);
+route_to_roadrunner({Verb, Path, Handler, Opts}, _BuildOpts) when
+    Verb =:= get;
+    Verb =:= post;
+    Verb =:= put;
+    Verb =:= patch;
+    Verb =:= delete;
+    Verb =:= head;
+    Verb =:= options
+->
+    %% Single-verb controller sugar (`{post, ...}` etc.). The kind-tag clauses
+    %% above match first, so `Verb` here is always an HTTP method atom; the
+    %% explicit guard also makes an unknown verb tag fail loudly (no clause).
+    controller_route(normalize_methods(Verb), Path, Handler, Opts);
 route_to_roadrunner({mcp, Path, Handler, Opts}, _BuildOpts) ->
     %% The handler module is folded into the opts so `arizona_mcp_handler`
     %% reads it from the per-route `arizona` state at request time, the
@@ -241,6 +264,51 @@ build_live_meta(Handler, Opts) ->
         on_mount => maps:get(on_mount, Opts, []),
         middlewares => with_origin_check(Opts, maps:get(middlewares, Opts, []))
     }.
+
+%% Build the roadrunner route entry shared by every controller shape (verb tags
+%% and `match`). `arizona_roadrunner_controller` runs the Arizona middleware
+%% pipeline (CSRF check_origin on by default), restores the app `state`, then
+%% dispatches Handler:Action/1 (default `handle`). `Methods` is roadrunner's
+%% method allowlist (`undefined` = any method).
+controller_route(Methods, Path, Handler, Opts) ->
+    [
+        #{
+            path => Path,
+            handler => arizona_roadrunner_controller,
+            methods => Methods,
+            state => #{
+                arizona => #{
+                    handler => Handler,
+                    action => maps:get(action, Opts, handle),
+                    state => maps:get(state, Opts, #{}),
+                    middlewares => with_origin_check(Opts, maps:get(middlewares, Opts, []))
+                }
+            }
+        }
+    ].
+
+%% Normalize a verb tag or `{match, ...}` spec into roadrunner's uppercase
+%% method-binary allowlist, or `undefined` (any method) for `'*'`.
+normalize_methods('*') ->
+    undefined;
+normalize_methods(Methods) when is_list(Methods) ->
+    with_head([method_bin(M) || M <- Methods]);
+normalize_methods(Method) ->
+    with_head([method_bin(Method)]).
+
+method_bin(M) when is_atom(M) -> upper(atom_to_binary(M, utf8));
+method_bin(M) when is_binary(M) -> upper(M).
+
+%% HTTP methods are case-sensitive, conventionally uppercase, and roadrunner
+%% compares byte-exact -- so normalize every declared method to uppercase.
+upper(Bin) -> iolist_to_binary(string:uppercase(Bin)).
+
+%% HEAD is a bodyless GET, so a GET allowlist answers HEAD too.
+with_head(Methods) ->
+    case lists:member(~"GET", Methods) andalso not lists:member(~"HEAD", Methods) of
+        true -> Methods ++ [~"HEAD"];
+        false -> Methods
+    end.
 
 %% CSRF defense is on by default: prepend the check_origin step (covers the page
 %% render and -- since arizona_ws:prepare runs the resolved route's middlewares -- the

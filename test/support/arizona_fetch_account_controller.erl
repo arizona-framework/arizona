@@ -1,6 +1,6 @@
 -module(arizona_fetch_account_controller).
 -moduledoc """
-**TEST FIXTURE.** The `{controller, ...}` endpoint `arizona_fetch_account` posts to via
+**TEST FIXTURE.** The `{post, ...}` controller endpoint `arizona_fetch_account` posts to via
 `arizona_js:fetch/2`. It sets an HttpOnly cookie (the thing the WebSocket can't do),
 broadcasts over `arizona_pubsub` so the live view re-renders, and returns a request-local
 effect -- all without a page reload. Drives `e2e/sequential/arizona_fetch_account.spec.js`.

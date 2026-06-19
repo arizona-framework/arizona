@@ -38,10 +38,13 @@ Choose the appropriate route type based on the user's intent:
 {asset, Path, {dir, AbsoluteDir}}
 ```
 
-**Generic roadrunner handler:**
+**Controller (HTTP, method-gated; reached via `arizona_js:fetch/2`):**
 ```erlang
-{controller, Path, Handler, State}
+{post, Path, Handler, Opts}            %% also get/put/patch/delete/head/options
+{match, Spec, Path, Handler, Opts}     %% multi/custom/any-method (Spec: verb | [verbs] | binary | '*')
 ```
+`Opts` is `controller_opts()`: `#{state, action, middlewares, check_origin}` (`action`
+defaults to `handle`). A wrong-verb request gets `405` + `Allow`.
 
 ## 3. If creating a new live page
 

@@ -104,11 +104,13 @@ target, and matched bindings applied.
     ArzReq :: arizona_req:request().
 resolve_route(Path, Qs, Req) ->
     %% Roadrunner exposes the matched route's user-attached state as
-    %% the 5th element of `match/2`'s return — that's where arizona
+    %% the 5th element of `match/3`'s return — that's where arizona
     %% stashes its per-route metadata under the `arizona` namespace.
+    %% The resolved `_az_path` is always a live (GET) page route and the
+    %% WS upgrade / navigation request is a GET, so match on its method.
     Compiled = persistent_term:get(?DISPATCH_KEY),
     {ok, _Handler, RawBindings, _Pipeline, #{arizona := ArzOpts}} =
-        roadrunner_router:match(Path, Compiled),
+        roadrunner_router:match(roadrunner_req:method(Req), Path, Compiled),
     Target =
         case Qs of
             <<>> -> Path;
