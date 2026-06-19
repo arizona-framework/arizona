@@ -81,13 +81,15 @@ persistent term so the dev error page can build the SSE connect URL.
     | {reload, path(), map()}.
 
 %% The verb-tag atoms a controller route may use as its first element
-%% (sugar for a single-method allowlist). HTTP methods outside this set
-%% (custom verbs) go through `{match, MethodSpec, ...}` as binaries.
+%% (sugar for a single-method allowlist). Custom or multi-method routes go
+%% through `{match, MethodSpec, ...}`.
 -nominal method() :: get | post | put | patch | delete | head | options.
 
-%% The method argument of a `{match, ...}` route: a single verb (atom or
-%% uppercase binary token), a list of verbs, or `'*'` for any method.
--nominal method_spec() :: method() | binary() | '*' | [method() | binary()].
+%% The method argument of a `{match, ...}` route: a single verb, a list of
+%% verbs, or the atom `'*'` for any method. A verb is an atom (upper-cased at
+%% compile time -- the common ones are `method()`, but any atom works, e.g.
+%% `move` -> `~"MOVE"`) or a custom uppercase method binary (`~"PROPFIND"`).
+-nominal method_spec() :: atom() | binary() | [atom() | binary()].
 
 -nominal controller_opts() :: #{
     %% State passed to the controller action (read via roadrunner_req:state/1).

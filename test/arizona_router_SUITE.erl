@@ -11,6 +11,7 @@
     compile_routes_controller_opts_out_origin_check/1,
     compile_routes_method_gating/1,
     compile_routes_match_any_and_list/1,
+    compile_routes_match_custom_verb/1,
     compile_routes_same_path_dispatch/1,
     compile_routes_mcp/1,
     compile_routes_live/1,
@@ -40,6 +41,7 @@ groups() ->
         compile_routes_controller_opts_out_origin_check,
         compile_routes_method_gating,
         compile_routes_match_any_and_list,
+        compile_routes_match_custom_verb,
         compile_routes_same_path_dispatch,
         compile_routes_mcp,
         compile_routes_mixed
@@ -216,6 +218,18 @@ compile_routes_match_any_and_list(Config) ->
     ?assertEqual(
         {method_not_allowed, [~"GET", ~"HEAD", ~"POST"]}, match_result(~"PUT", <<"/multi">>)
     ).
+
+compile_routes_match_custom_verb(Config) ->
+    %% `match` accepts an arbitrary atom verb (upper-cased) or a custom method
+    %% binary -- both compile to the same single-method allowlist.
+    compile(Config, [
+        {match, move, <<"/dav-a">>, my_controller, #{}},
+        {match, ~"PROPFIND", <<"/dav-b">>, my_controller, #{}}
+    ]),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"MOVE", <<"/dav-a">>)),
+    ?assertEqual({method_not_allowed, [~"MOVE"]}, match_result(~"GET", <<"/dav-a">>)),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"PROPFIND", <<"/dav-b">>)),
+    ?assertEqual({method_not_allowed, [~"PROPFIND"]}, match_result(~"GET", <<"/dav-b">>)).
 
 compile_routes_same_path_dispatch(Config) ->
     %% Two verb routes share a path: the method selects the handler.
