@@ -648,7 +648,9 @@ callback, broadcasts changed files via `arizona_pubsub`.
 - `start_link(Dir, Opts)` -- starts a linked gen_server that subscribes to `fs` events for `Dir`.
   Options: `patterns` (list of regex strings, default `[".*"]`), `callback` (fun receiving list of
   changed file paths), `debounce` (ms, default 100). On debounce fire: calls callback, then
-  `broadcast/1`
+  `broadcast/1`. Relevant file events are `created`, `modified`, `deleted`, and `renamed`
+  (MOVED_TO) -- the last covers atomic-rename saves (vim, `sed -i`, agent file-writers); directory
+  renames (`isdir`) and files moved out of the dir (`removed`) are ignored
 - `broadcast(Files)` -- broadcasts `{arizona_watcher, Files}` via `arizona_pubsub` on channel
   `arizona_watcher`
 
