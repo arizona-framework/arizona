@@ -23,12 +23,15 @@ test('session write loop: fetch rotates the encrypted cookie, view updates live,
         window.__noReload = true;
     });
 
-    await page.locator('#name-input').fill('Ada');
+    // A name with a space: the base64url cookie alphabet has no space, so the plaintext
+    // can never appear verbatim in the cookie value -- the confidentiality assertion below
+    // still catches a raw-plaintext leak but can't flake on a coincidental base64 substring.
+    await page.locator('#name-input').fill('Ada Lovelace');
     await page.locator('#session-form button[type="submit"]').click();
 
     // (1) The view repainted live via push_event, and the request-local effect applied --
     //     no full-page reload.
-    await expect(page.locator('#current-name')).toHaveText('Name: Ada');
+    await expect(page.locator('#current-name')).toHaveText('Name: Ada Lovelace');
     await expect(page.locator('#status')).toHaveAttribute('data-saved', 'yes');
     expect(await page.evaluate(() => window.__noReload)).toBe(true);
 
@@ -38,11 +41,11 @@ test('session write loop: fetch rotates the encrypted cookie, view updates live,
     expect(cookie).toBeDefined();
     expect(cookie.httpOnly).toBe(true);
     expect(cookie.value.length).toBeGreaterThan(0);
-    expect(cookie.value).not.toContain('Ada');
+    expect(cookie.value).not.toContain('Ada Lovelace');
 
     // (3) The round-trip: reload -> the server decrypts the cookie via fetch_session and
     //     re-renders the persisted name. Proves encrypt -> cookie -> decrypt end to end.
     await page.reload();
     await wsReady(page);
-    await expect(page.locator('#current-name')).toHaveText('Name: Ada');
+    await expect(page.locator('#current-name')).toHaveText('Name: Ada Lovelace');
 });
