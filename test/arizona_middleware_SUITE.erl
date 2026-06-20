@@ -17,6 +17,7 @@
 -export([check_origin_conts_same_origin/1]).
 -export([check_origin_conts_missing_origin/1]).
 -export([check_origin_halts_cross_origin_with_403/1]).
+-export([fetch_session_reads_session_into_binding/1]).
 
 %% Exported for use via {?MODULE, Fun} in apply_middlewares_cont_mf.
 -export([sample_cont_middleware/2]).
@@ -39,7 +40,8 @@ groups() ->
             put_request_exposes_request_binding,
             check_origin_conts_same_origin,
             check_origin_conts_missing_origin,
-            check_origin_halts_cross_origin_with_403
+            check_origin_halts_cross_origin_with_403,
+            fetch_session_reads_session_into_binding
         ]}
     ].
 
@@ -158,6 +160,17 @@ check_origin_halts_cross_origin_with_403(Config) when is_list(Config) ->
     }),
     {halt, Req1} = arizona_middleware:check_origin(Req, #{}),
     ?assertEqual(403, arizona_req:resp_status(Req1)).
+
+fetch_session_reads_session_into_binding(Config) when is_list(Config) ->
+    application:set_env(arizona, secret_key, ~"test-secret-key-0123456789abcdef"),
+    try
+        Encoded = arizona_session:encode(#{~"user_id" => ~"7"}),
+        Req = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Encoded}]}),
+        {cont, _Req1, Bindings} = arizona_middleware:fetch_session(Req, #{}),
+        ?assertEqual(#{~"user_id" => ~"7"}, maps:get(session, Bindings))
+    after
+        application:unset_env(arizona, secret_key)
+    end.
 
 %% --------------------------------------------------------------------
 %% Module-function middleware helper

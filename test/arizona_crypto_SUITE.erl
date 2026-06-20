@@ -14,9 +14,17 @@
 -export([verify_rejects_malformed_no_dot/1]).
 -export([verify_rejects_extra_dots/1]).
 -export([verify_rejects_wrong_secret/1]).
+-export([encrypt_decrypt_round_trips/1]).
+-export([encrypt_decrypt_round_trips_empty/1]).
+-export([encrypt_is_confidential/1]).
+-export([decrypt_rejects_tampered_ciphertext/1]).
+-export([decrypt_rejects_truncated/1]).
+-export([decrypt_rejects_wrong_secret/1]).
+-export([encrypt_ttl_verifies_before_expiry/1]).
 -export([secret_returns_configured/1]).
 -export([secret_errors_when_unset/1]).
 -export([sign_errors_when_secret_unset/1]).
+-export([encrypt_errors_when_secret_unset/1]).
 -export([format_error_renders_secret_message/1]).
 
 -define(SECRET, ~"test-secret-key-0123456789abcdef").
@@ -34,9 +42,17 @@ all() ->
         verify_rejects_malformed_no_dot,
         verify_rejects_extra_dots,
         verify_rejects_wrong_secret,
+        encrypt_decrypt_round_trips,
+        encrypt_decrypt_round_trips_empty,
+        encrypt_is_confidential,
+        decrypt_rejects_tampered_ciphertext,
+        decrypt_rejects_truncated,
+        decrypt_rejects_wrong_secret,
+        encrypt_ttl_verifies_before_expiry,
         secret_returns_configured,
         secret_errors_when_unset,
         sign_errors_when_secret_unset,
+        encrypt_errors_when_secret_unset,
         format_error_renders_secret_message
     ].
 
@@ -98,6 +114,49 @@ verify_rejects_wrong_secret(Config) when is_list(Config) ->
         application:set_env(arizona, secret_key, ?SECRET)
     end.
 
+encrypt_decrypt_round_trips(Config) when is_list(Config) ->
+    Payload = ~"hello, world",
+    ?assertMatch({ok, Payload}, arizona_crypto:decrypt(arizona_crypto:encrypt(Payload))).
+
+encrypt_decrypt_round_trips_empty(Config) when is_list(Config) ->
+    ?assertMatch({ok, <<>>}, arizona_crypto:decrypt(arizona_crypto:encrypt(<<>>))).
+
+encrypt_is_confidential(Config) when is_list(Config) ->
+    Payload = ~"super-secret-value",
+    Blob1 = arizona_crypto:encrypt(Payload),
+    Blob2 = arizona_crypto:encrypt(Payload),
+    %% The ciphertext does not leak the plaintext, and a random IV makes two
+    %% encryptions of the same payload differ.
+    ?assertEqual(nomatch, binary:match(Blob1, Payload)),
+    ?assertNotEqual(Blob1, Blob2).
+
+decrypt_rejects_tampered_ciphertext(Config) when is_list(Config) ->
+    Blob = arizona_crypto:encrypt(~"boom"),
+    %% Corrupt the trailing byte; the GCM tag must fail closed.
+    ?assertEqual(error, arizona_crypto:decrypt(<<Blob/binary, "x">>)).
+
+decrypt_rejects_truncated(Config) when is_list(Config) ->
+    %% Too short to hold an IV + tag -> error, not a crash.
+    ?assertEqual(error, arizona_crypto:decrypt(~"short")),
+    ?assertEqual(error, arizona_crypto:decrypt(<<>>)).
+
+decrypt_rejects_wrong_secret(Config) when is_list(Config) ->
+    Blob = arizona_crypto:encrypt(~"secret-data"),
+    application:set_env(arizona, secret_key, ~"a-totally-different-secret-key-99"),
+    try
+        ?assertEqual(error, arizona_crypto:decrypt(Blob))
+    after
+        application:set_env(arizona, secret_key, ?SECRET)
+    end.
+
+encrypt_ttl_verifies_before_expiry(Config) when is_list(Config) ->
+    %% A far-future TTL decrypts now without sleeping; the expiry boundary itself
+    %% is covered deterministically by the inline EUnit tests in arizona_crypto.
+    Payload = ~"fresh",
+    ?assertMatch(
+        {ok, Payload}, arizona_crypto:decrypt(arizona_crypto:encrypt(Payload, #{ttl => 3600}))
+    ).
+
 secret_returns_configured(Config) when is_list(Config) ->
     ?assertEqual(?SECRET, arizona_crypto:secret()).
 
@@ -113,6 +172,14 @@ sign_errors_when_secret_unset(Config) when is_list(Config) ->
     application:unset_env(arizona, secret_key),
     try
         ?assertError(secret_key_not_configured, arizona_crypto:sign(~"x"))
+    after
+        application:set_env(arizona, secret_key, ?SECRET)
+    end.
+
+encrypt_errors_when_secret_unset(Config) when is_list(Config) ->
+    application:unset_env(arizona, secret_key),
+    try
+        ?assertError(secret_key_not_configured, arizona_crypto:encrypt(~"x"))
     after
         application:set_env(arizona, secret_key, ?SECRET)
     end.

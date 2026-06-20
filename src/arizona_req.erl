@@ -74,6 +74,13 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([put_flash/3]).
 -export([flash/1]).
 -export([read_flash/1]).
+-export([put_session/3]).
+-export([delete_session/2]).
+-export([clear_session/1]).
+-export([session/1]).
+-export([get_session/2]).
+-export([get_session/3]).
+-export([read_session/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -100,6 +107,12 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -ignore_xref([resp_status/1]).
 -ignore_xref([put_flash/3]).
 -ignore_xref([flash/1]).
+-ignore_xref([put_session/3]).
+-ignore_xref([delete_session/2]).
+-ignore_xref([clear_session/1]).
+-ignore_xref([session/1]).
+-ignore_xref([get_session/2]).
+-ignore_xref([get_session/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -118,6 +131,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export_type([redirect_status/0]).
 -export_type([resp_status/0]).
 -export_type([flash/0]).
+-export_type([session/0]).
 -export_type([resp_cookie_opts/0]).
 -export_type([qs/0]).
 
@@ -142,7 +156,10 @@ Method = arizona_req:method(Req).          %% eager, no thread
     resp_status => resp_status(),
     flash_out => flash(),
     flash_in => flash(),
-    flash_consumed => boolean()
+    flash_consumed => boolean(),
+    session_in => session(),
+    session_out => session(),
+    session_dirty => boolean()
 }.
 
 -nominal adapter() :: module().
@@ -170,6 +187,12 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %% Keys are binaries (an atom key passed to `put_flash/3` is normalized); values
 %% are anything `json:encode/1` accepts (typically display strings).
 -nominal flash() :: #{binary() => term()}.
+
+%% A session payload: durable state carried across requests in an encrypted cookie.
+%% Keys are binaries (an atom key passed to `put_session/3` is normalized); values
+%% are anything `json:encode/1` accepts. Encrypted (confidential), but a cookie store
+%% cannot be revoked before expiry -- keep sessions small (an id, light state).
+-nominal session() :: #{binary() => term()}.
 
 %% Response cookie options stashed by `put_resp_cookie/4` and serialized by
 %% the transport. Mirrors the transport cookie serializer's options.
@@ -425,10 +448,12 @@ resp_headers(#{resp_headers := Headers}) -> Headers;
 resp_headers(_) -> [].
 
 -doc """
-Returns the stashed response cookies (newest first), or `[]`, plus the flash
-cookie when one is warranted: a freshly `put_flash/3`-set flash serializes to a
-signed `Set-Cookie`, and a consumed incoming flash (no new one set) serializes to
-a clearing cookie. Transports flush this list verbatim.
+Returns the stashed response cookies (newest first), or `[]`, plus the flash and
+session cookies when warranted: a freshly `put_flash/3`-set flash serializes to a
+signed `Set-Cookie` (a consumed incoming flash with no new one serializes to a
+clearing cookie); a written session (`put_session/3`/`delete_session/2`) serializes
+to an encrypted `Set-Cookie`, a cleared one (`clear_session/1`) to a clearing
+cookie, and an untouched session to nothing. Transports flush this list verbatim.
 """.
 -spec resp_cookies(Request) -> [{binary(), binary(), resp_cookie_opts()}] when
     Request :: request().
@@ -436,9 +461,16 @@ resp_cookies(Req) ->
     Stashed = maps:get(resp_cookies, Req, []),
     FlashOut = maps:get(flash_out, Req, #{}),
     Consumed = maps:get(flash_consumed, Req, false),
-    case arizona_flash:resp_cookie(FlashOut, Consumed) of
-        none -> Stashed;
-        Cookie -> Stashed ++ [Cookie]
+    WithFlash =
+        case arizona_flash:resp_cookie(FlashOut, Consumed) of
+            none -> Stashed;
+            FlashCookie -> Stashed ++ [FlashCookie]
+        end,
+    SessionOut = maps:get(session_out, Req, #{}),
+    Dirty = maps:get(session_dirty, Req, false),
+    case arizona_session:resp_cookie(SessionOut, Dirty) of
+        none -> WithFlash;
+        SessionCookie -> WithFlash ++ [SessionCookie]
     end.
 
 -doc """
@@ -512,3 +544,124 @@ read_flash(Req0) ->
         false ->
             {#{}, Req#{flash_in => #{}}}
     end.
+
+-doc """
+Writes `Key => Value` into the session. On the response the session serializes to a
+freshly encrypted `Set-Cookie` (durable -- it persists until overwritten or
+cleared). `Key` may be an atom or binary (normalized to a binary); repeated calls
+accumulate, last write wins per key.
+
+The first write seeds the pending session from the **incoming** session (reading the
+cookie if not already read), so a write merges onto existing state even without the
+`fetch_session` middleware. Requires `secret_key` in the `arizona` application env
+(used to encrypt the cookie); errors if it is unset.
+""".
+-spec put_session(Request, Key, Value) -> Request when
+    Request :: request(),
+    Key :: atom() | binary(),
+    Value :: term().
+put_session(Req0, Key, Value) ->
+    %% Fail fast at the call site if encryption is unconfigured, rather than later
+    %% when the response serializes the cookie.
+    _ = arizona_crypto:secret(),
+    {Current, Req} = ensure_session_out(Req0),
+    Req#{
+        session_out => Current#{arizona_session:key(Key) => Value},
+        session_dirty => true
+    }.
+
+-doc """
+Removes `Key` from the session and marks it written. On the response the session
+serializes to the re-encrypted (still non-empty) cookie, or a clearing cookie if
+this removed the last key.
+""".
+-spec delete_session(Request, Key) -> Request when
+    Request :: request(),
+    Key :: atom() | binary().
+delete_session(Req0, Key) ->
+    _ = arizona_crypto:secret(),
+    {Current, Req} = ensure_session_out(Req0),
+    Req#{
+        session_out => maps:remove(arizona_session:key(Key), Current),
+        session_dirty => true
+    }.
+
+-doc """
+Clears the entire session (logout). On the response a clearing `Set-Cookie` is sent
+regardless of the incoming session. Unlike `put_session/3` it does not require
+`secret_key` -- clearing encrypts nothing, so logout always works.
+""".
+-spec clear_session(Request) -> Request when
+    Request :: request().
+clear_session(Req) ->
+    Req#{session_out => #{}, session_dirty => true}.
+
+-doc """
+Returns the effective session for this request: the pending written state
+(`session_out`) when it has been written this request, otherwise the incoming
+session (`session_in`, `#{}` if not yet read). A view or controller sees the session
+including its own writes.
+""".
+-spec session(Request) -> session() when
+    Request :: request().
+session(#{session_dirty := true, session_out := Session}) -> Session;
+session(#{session_in := Session}) -> Session;
+session(_) -> #{}.
+
+-doc """
+Looks up `Key` in the effective session, returning `{ok, Value}` or `error`. `Key`
+may be an atom or binary (normalized). Reads the post-write state when the session
+was written earlier this request.
+""".
+-spec get_session(Request, Key) -> {ok, term()} | error when
+    Request :: request(),
+    Key :: atom() | binary().
+get_session(Req, Key) ->
+    BinKey = arizona_session:key(Key),
+    case session(Req) of
+        #{BinKey := Value} -> {ok, Value};
+        #{} -> error
+    end.
+
+-doc "Like `get_session/2` but returns `Default` instead of `error` when absent.".
+-spec get_session(Request, Key, Default) -> term() when
+    Request :: request(),
+    Key :: atom() | binary(),
+    Default :: term().
+get_session(Req, Key, Default) ->
+    case get_session(Req, Key) of
+        {ok, Value} -> Value;
+        error -> Default
+    end.
+
+-doc """
+Reads, authenticates, and decodes the incoming session cookie into the request.
+Returns the session map (`#{}` when absent, tampered, malformed, or expired) and the
+updated request. Idempotent and **non-consuming**: unlike `read_flash/1` it does not
+mark the session for clearing -- a durable session survives a read untouched.
+
+Run by the `fetch_session` middleware (opt-in); apps normally use `session/1`,
+`get_session/2,3`, or the `session` binding rather than calling this directly.
+""".
+-spec read_session(Request) -> {session(), Request} when
+    Request :: request().
+read_session(#{session_in := Session} = Req) ->
+    {Session, Req};
+read_session(Req0) ->
+    {Cookies, Req} = cookies(Req0),
+    case lists:keyfind(arizona_session:cookie_name(), 1, Cookies) of
+        {_, Value} ->
+            Session = arizona_session:decode(Value),
+            {Session, Req#{session_in => Session}};
+        false ->
+            {#{}, Req#{session_in => #{}}}
+    end.
+
+%% Returns the pending session (session_out), seeded from the incoming session on
+%% first write, plus the (possibly cookie-read) request. Idempotent: once written,
+%% session_out is authoritative and read_session is not re-run.
+ensure_session_out(#{session_out := Out} = Req) ->
+    {Out, Req};
+ensure_session_out(Req0) ->
+    {In, Req} = read_session(Req0),
+    {In, Req#{session_out => In}}.
