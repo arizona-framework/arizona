@@ -118,6 +118,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export_type([redirect_status/0]).
 -export_type([resp_status/0]).
 -export_type([flash/0]).
+-export_type([session/0]).
 -export_type([resp_cookie_opts/0]).
 -export_type([qs/0]).
 
@@ -170,6 +171,12 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %% Keys are binaries (an atom key passed to `put_flash/3` is normalized); values
 %% are anything `json:encode/1` accepts (typically display strings).
 -nominal flash() :: #{binary() => term()}.
+
+%% A session payload: durable state carried across requests in an encrypted cookie.
+%% Keys are binaries (an atom key passed to `put_session/3` is normalized); values
+%% are anything `json:encode/1` accepts. Encrypted (confidential), but a cookie store
+%% cannot be revoked before expiry -- keep sessions small (an id, light state).
+-nominal session() :: #{binary() => term()}.
 
 %% Response cookie options stashed by `put_resp_cookie/4` and serialized by
 %% the transport. Mirrors the transport cookie serializer's options.
