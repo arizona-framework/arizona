@@ -21,6 +21,14 @@ The key is the `arizona` `secret_key` application env (a non-empty binary);
 domain-separated from the raw secret used for HMAC, so the two uses never share key
 material. This module owns no domain shape: callers layer their own encoding (e.g.
 both `arizona_flash` and `arizona_session` carry JSON).
+
+**Key rotation.** `sign`/`encrypt` always use the primary `secret_key`, but
+`verify`/`decrypt` also accept any key listed in the optional `secret_key_previous`
+application env (`[binary()]`, default `[]`). Rotate with zero downtime and no forced
+re-issue: move the old `secret_key` into `secret_key_previous`, set a fresh
+`secret_key`, then drop the old key once the grace window (your longest cookie TTL)
+has passed. There is no key-version byte in the wire format -- verify/decrypt simply
+try each candidate key in turn.
 """.
 
 %% --------------------------------------------------------------------
@@ -182,7 +190,7 @@ sign_envelope(Tagged) ->
 encrypt_envelope(Plaintext) ->
     IV = crypto:strong_rand_bytes(?IV_SIZE),
     {Cipher, Tag} = crypto:crypto_one_time_aead(
-        aes_256_gcm, aead_key(), IV, Plaintext, <<>>, true
+        aes_256_gcm, aead_key(secret()), IV, Plaintext, <<>>, true
     ),
     b64(<<IV/binary, Tag/binary, Cipher/binary>>).
 
@@ -190,29 +198,59 @@ encrypt_envelope(Plaintext) ->
 do_decrypt(Encrypted, Now) ->
     try
         <<IV:?IV_SIZE/binary, Tag:?TAG_SIZE/binary, Cipher/binary>> = unb64(Encrypted),
-        case crypto:crypto_one_time_aead(aes_256_gcm, aead_key(), IV, Cipher, <<>>, Tag, false) of
+        case decrypt_candidates(candidate_keys(), IV, Cipher, Tag) of
             error -> error;
-            Plaintext when is_binary(Plaintext) -> unwrap(Plaintext, Now)
+            Plaintext -> unwrap(Plaintext, Now)
         end
     catch
         _:_ -> error
     end.
 
-%% Derive a 32-byte AES-256 key from secret_key, domain-separated from the raw
-%% secret used for HMAC signing so the encrypt and sign uses never share key material.
-aead_key() ->
-    crypto:hash(sha256, <<"arizona.aead.v1:", (secret())/binary>>).
+%% Try each candidate key (primary first, then rotated-out previous keys) until one
+%% authenticates the ciphertext; `error` when none do.
+decrypt_candidates([], _IV, _Cipher, _Tag) ->
+    error;
+decrypt_candidates([Key | Rest], IV, Cipher, Tag) ->
+    case crypto:crypto_one_time_aead(aes_256_gcm, aead_key(Key), IV, Cipher, <<>>, Tag, false) of
+        error -> decrypt_candidates(Rest, IV, Cipher, Tag);
+        Plaintext when is_binary(Plaintext) -> Plaintext
+    end.
+
+%% Derive a 32-byte AES-256 key from a signing key, domain-separated from its raw
+%% form (used for HMAC) so the encrypt and sign uses never share key material.
+aead_key(Key) ->
+    crypto:hash(sha256, <<"arizona.aead.v1:", Key/binary>>).
+
+%% The keys to try when verifying/decrypting: the primary (`secret_key`) first, then
+%% any `secret_key_previous` rotated-out keys. Signing/encryption always use the
+%% primary. Rotate by moving the old primary into `secret_key_previous` and setting a
+%% new `secret_key`: existing values keep verifying under the old key for the grace
+%% window -- no forced re-issue, no wire-format change.
+candidate_keys() ->
+    [secret() | application:get_env(arizona, secret_key_previous, [])].
 
 %% The clock is injected so the expiry boundary is deterministically testable.
 do_verify(Signed, Now) ->
     try
         [B64Tagged, B64Sig] = binary:split(Signed, ~"."),
         Tagged = unb64(B64Tagged),
-        Expected = crypto:mac(hmac, sha256, secret(), Tagged),
-        true = crypto:hash_equals(unb64(B64Sig), Expected),
-        unwrap(Tagged, Now)
+        Sig = unb64(B64Sig),
+        case verify_candidates(candidate_keys(), Tagged, Sig) of
+            true -> unwrap(Tagged, Now);
+            false -> error
+        end
     catch
         _:_ -> error
+    end.
+
+%% Constant-time HMAC compare against each candidate key (primary first, then
+%% rotated-out previous keys); `true` when any matches.
+verify_candidates([], _Tagged, _Sig) ->
+    false;
+verify_candidates([Key | Rest], Tagged, Sig) ->
+    case crypto:hash_equals(Sig, crypto:mac(hmac, sha256, Key, Tagged)) of
+        true -> true;
+        false -> verify_candidates(Rest, Tagged, Sig)
     end.
 
 unwrap(<<?TAG_RAW, Payload/binary>>, _Now) ->
