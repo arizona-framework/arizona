@@ -2,6 +2,10 @@
 -export([start/0, stop/0, port/0, routes/0]).
 
 start() ->
+    %% The session fixtures (arizona_session_view/controller) encrypt the az_session
+    %% cookie via arizona_crypto, which needs a signing key. The other fetch fixtures
+    %% set plain cookies and don't read it.
+    ok = application:set_env(arizona, secret_key, <<"e2e-test-secret-key-0123456789ab">>),
     {ok, _} = arizona_roadrunner_server:start(http, #{
         transport_opts => [{port, port()}],
         routes => routes()
@@ -98,6 +102,15 @@ routes() ->
             layouts => Layouts
         }},
         {post, <<"/fetch-push/submit">>, arizona_fetch_push_controller, #{}},
+        %% arizona_session write loop -- a fetch posts to the controller, which rotates
+        %% the encrypted az_session cookie and push_events the new name; fetch_session on
+        %% the page route reads the persisted name back from the cookie on the next load.
+        {live, <<"/session">>, arizona_session_view, #{
+            bindings => #{title => <<"Session">>},
+            layouts => Layouts,
+            middlewares => [{arizona_middleware, fetch_session}]
+        }},
+        {post, <<"/session/save">>, arizona_session_controller, #{}},
         %% Native (JSON) view -- no layouts (native has no HTTP page); the first
         %% frame is mount_and_render over the WebSocket.
         {live, <<"/native/counter">>, arizona_native_counter_demo, #{}},
