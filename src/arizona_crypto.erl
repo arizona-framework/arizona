@@ -1,17 +1,26 @@
 -module(arizona_crypto).
 -moduledoc """
-Signed-value primitive: HMAC-SHA256 over arbitrary binaries.
+Signed- and encrypted-value primitives over arbitrary binaries.
 
-`sign/1` wraps a binary into a tamper-evident, URL-safe wire value
-`b64(tagged) "." b64(hmac)`; `sign/2` additionally bakes a signed expiry
-(`#{ttl => Seconds}`) so the value rejects after a deadline. `verify/1`
-constant-time-checks the HMAC, enforces any expiry, and returns the original
-payload as `{ok, Payload}` (or `error` on a tampered, malformed, or expired
-value -- the caller layers its own failure policy on top).
+**Signing (HMAC-SHA256)** -- `sign/1` wraps a binary into a tamper-evident,
+URL-safe wire value `b64(tagged) "." b64(hmac)`; `sign/2` additionally bakes a
+signed expiry (`#{ttl => Seconds}`) so the value rejects after a deadline.
+`verify/1` constant-time-checks the HMAC, enforces any expiry, and returns the
+original payload as `{ok, Payload}` (or `error` on a tampered, malformed, or
+expired value). Use when the value may be read by the client but must not be
+forged (e.g. `arizona_flash`).
 
-The signing key is the `arizona` `secret_key` application env (a non-empty
-binary); `secret/0` reads it and errors loudly if unset. This module owns no
-domain shape: callers layer their own encoding (e.g. `arizona_flash` signs JSON).
+**Encryption (AES-256-GCM)** -- `encrypt/1,2` wrap a binary into an authenticated,
+URL-safe ciphertext (confidential *and* tamper-evident, with the same optional
+`#{ttl => Seconds}` expiry); `decrypt/1` authenticates and returns `{ok, Payload}`
+or `error`. Use when the value must also be unreadable by the client (e.g.
+`arizona_session`).
+
+The key is the `arizona` `secret_key` application env (a non-empty binary);
+`secret/0` reads it and errors loudly if unset. The AES key is derived from it,
+domain-separated from the raw secret used for HMAC, so the two uses never share key
+material. This module owns no domain shape: callers layer their own encoding (e.g.
+both `arizona_flash` and `arizona_session` carry JSON).
 """.
 
 %% --------------------------------------------------------------------
@@ -21,6 +30,9 @@ domain shape: callers layer their own encoding (e.g. `arizona_flash` signs JSON)
 -export([sign/1]).
 -export([sign/2]).
 -export([verify/1]).
+-export([encrypt/1]).
+-export([encrypt/2]).
+-export([decrypt/1]).
 -export([secret/0]).
 -export([format_error/2]).
 
@@ -33,6 +45,9 @@ domain shape: callers layer their own encoding (e.g. `arizona_flash` signs JSON)
 -ignore_xref([sign/1]).
 -ignore_xref([sign/2]).
 -ignore_xref([verify/1]).
+-ignore_xref([encrypt/1]).
+-ignore_xref([encrypt/2]).
+-ignore_xref([decrypt/1]).
 -ignore_xref([secret/0]).
 -ignore_xref([format_error/2]).
 
@@ -48,9 +63,14 @@ domain shape: callers layer their own encoding (e.g. `arizona_flash` signs JSON)
 
 -nominal sign_opts() :: #{ttl := non_neg_integer()}.
 
-%% Envelope tag bytes -- signed alongside the payload so a flipped tag breaks the MAC.
+%% Envelope tag bytes -- signed/authenticated alongside the payload so a flipped tag
+%% breaks the MAC (sign) or the GCM tag (encrypt).
 -define(TAG_RAW, 0).
 -define(TAG_TTL, 1).
+
+%% AES-256-GCM nonce (96-bit, the standard GCM IV size) and authentication tag sizes.
+-define(IV_SIZE, 12).
+-define(TAG_SIZE, 16).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -84,6 +104,37 @@ HMAC compare is constant-time. Errors if `secret_key` is unset.
     Signed :: binary().
 verify(Signed) when is_binary(Signed) ->
     do_verify(Signed, erlang:system_time(second)).
+
+-doc """
+Encrypts `Payload` into a URL-safe, authenticated (AES-256-GCM) wire value that
+never expires. The result is confidential (the client cannot read it) and
+tamper-evident. Errors if `secret_key` is unset (see `secret/0`).
+""".
+-spec encrypt(Payload) -> binary() when Payload :: binary().
+encrypt(Payload) when is_binary(Payload) ->
+    encrypt_envelope(<<?TAG_RAW, Payload/binary>>).
+
+-doc """
+Like `encrypt/1` but bakes an expiry (`#{ttl => Seconds}`) into the authenticated
+plaintext; `decrypt/1` rejects the value after the deadline. Errors if `secret_key`
+is unset.
+""".
+-spec encrypt(Payload, Opts) -> binary() when
+    Payload :: binary(),
+    Opts :: sign_opts().
+encrypt(Payload, #{ttl := Secs}) when is_binary(Payload), is_integer(Secs), Secs >= 0 ->
+    ExpiresAt = erlang:system_time(second) + Secs,
+    encrypt_envelope(<<?TAG_TTL, ExpiresAt:64, Payload/binary>>).
+
+-doc """
+Decrypts and authenticates a value produced by `encrypt/1,2`, returning
+`{ok, Payload}` when it is intact and unexpired, and `error` when it is malformed,
+tampered, or expired. Errors if `secret_key` is unset.
+""".
+-spec decrypt(Encrypted) -> {ok, binary()} | error when
+    Encrypted :: binary().
+decrypt(Encrypted) when is_binary(Encrypted) ->
+    do_decrypt(Encrypted, erlang:system_time(second)).
 
 -doc """
 Returns the configured signing secret from the `arizona` `secret_key` application
@@ -127,6 +178,30 @@ format_error(secret_key_not_configured, _ST) ->
 sign_envelope(Tagged) ->
     Sig = crypto:mac(hmac, sha256, secret(), Tagged),
     <<(b64(Tagged))/binary, ".", (b64(Sig))/binary>>.
+
+encrypt_envelope(Plaintext) ->
+    IV = crypto:strong_rand_bytes(?IV_SIZE),
+    {Cipher, Tag} = crypto:crypto_one_time_aead(
+        aes_256_gcm, aead_key(), IV, Plaintext, <<>>, true
+    ),
+    b64(<<IV/binary, Tag/binary, Cipher/binary>>).
+
+%% The clock is injected so the expiry boundary is deterministically testable.
+do_decrypt(Encrypted, Now) ->
+    try
+        <<IV:?IV_SIZE/binary, Tag:?TAG_SIZE/binary, Cipher/binary>> = unb64(Encrypted),
+        case crypto:crypto_one_time_aead(aes_256_gcm, aead_key(), IV, Cipher, <<>>, Tag, false) of
+            error -> error;
+            Plaintext when is_binary(Plaintext) -> unwrap(Plaintext, Now)
+        end
+    catch
+        _:_ -> error
+    end.
+
+%% Derive a 32-byte AES-256 key from secret_key, domain-separated from the raw
+%% secret used for HMAC signing so the encrypt and sign uses never share key material.
+aead_key() ->
+    crypto:hash(sha256, <<"arizona.aead.v1:", (secret())/binary>>).
 
 %% The clock is injected so the expiry boundary is deterministically testable.
 do_verify(Signed, Now) ->
@@ -174,6 +249,16 @@ raw_ignores_clock_test() ->
     application:set_env(arizona, secret_key, ~"eunit-secret-key"),
     Signed = sign(~"payload"),
     ?assertEqual({ok, ~"payload"}, do_verify(Signed, 1 bsl 40)),
+    application:unset_env(arizona, secret_key).
+
+encrypt_ttl_expiry_boundary_test() ->
+    application:set_env(arizona, secret_key, ~"eunit-secret-key"),
+    %% An encrypted envelope with a fixed absolute expiry, authenticated against an
+    %% injected clock -- no wall-clock, no sleep.
+    Blob = encrypt_envelope(<<?TAG_TTL, 1000:64, "payload">>),
+    ?assertEqual({ok, ~"payload"}, do_decrypt(Blob, 999)),
+    ?assertEqual({ok, ~"payload"}, do_decrypt(Blob, 1000)),
+    ?assertEqual(error, do_decrypt(Blob, 1001)),
     application:unset_env(arizona, secret_key).
 
 -endif.
