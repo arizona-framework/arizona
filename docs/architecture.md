@@ -27,8 +27,11 @@
 | `src/arizona_stream.erl`                  | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`                                                                |
 | `src/arizona_stateful.erl`                | Behaviour for all live handlers (route-page roots + embedded `?stateful`) -- `mount`/`render`/`handle_*`/`unmount` callbacks, the `call_*` dispatchers, and `format_error/2`              |
 | `src/arizona_req.erl`                     | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`/`user_agent`, `redirect`/`halted_redirect`                                                   |
-| `src/arizona_middleware.erl`              | Request-to-bindings middleware pipeline -- `apply_middlewares/3` runner (run by the HTTP/WS transports) + built-in `extract/1`/`put_request/2`/`fetch_flash/2`/`check_origin/2` steps     |
+| `src/arizona_middleware.erl`              | Request-to-bindings middleware pipeline -- `apply_middlewares/3` runner + built-in `extract/1`/`put_request/2`/`fetch_flash/2`/`fetch_session/2`/`check_origin/2` steps                   |
 | `src/arizona_origin.erl`                  | CSRF Origin check -- `check/2` (same-origin or `csrf_origins` allowlist; missing Origin allowed); behind the default-on `check_origin/2` middleware                                       |
+| `src/arizona_crypto.erl`                  | Signed/encrypted value primitives -- `sign/1,2`+`verify/1` (HMAC-SHA256) and `encrypt/1,2`+`decrypt/1` (AES-256-GCM), with optional `#{ttl}` expiry; keyed off `secret_key`               |
+| `src/arizona_flash.erl`                   | Signed, one-time flash cookie codec -- `encode/1`/`decode/1` (signed JSON via `arizona_crypto`), `resp_cookie/2`; consumed on the next request                                            |
+| `src/arizona_session.erl`                 | Encrypted, durable session cookie codec -- `encode/1`/`decode/1` (AES-256-GCM via `arizona_crypto`, TTL = max-age), durable `resp_cookie/2`; a read does not consume                      |
 | `src/arizona_user_agent.erl`              | User-Agent classification for dual-serve views -- `browser/1`, `os/1`, `mobile/1` (best-effort); pairs with `arizona_req:user_agent/1`                                                    |
 | `src/arizona_http.erl`                    | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|redirect\|ok\|error, ...}` tuples                                               |
 | `src/arizona_controller.erl`              | Reply helpers for controller routes consumed by `arizona_js:fetch/2` -- `reply_effects/1` (the `{"e": [...]}` wire body), `reply_redirect/1` (a `navigate` effect)                        |
@@ -779,6 +782,10 @@ adapter's behaviour callbacks on first access and cached in the returned request
   reply, or `arizona_js:navigate` effect on WS navigate)
 - `halted_redirect/1` -- returns `{Status, Location}` if `redirect/2,3` was called, else
   `undefined`
+- flash (one-request): `put_flash/3`, `flash/1`, `read_flash/1` -- signed messages cleared on read
+- session (durable): `put_session/3`, `delete_session/2`, `clear_session/1`, `session/1`,
+  `get_session/2,3`, `read_session/1` -- encrypted state; a read does not consume, the response
+  re-emits the cookie only on a write
 
 The behaviour expects adapters to implement `parse_bindings/1`, `parse_params/1`,
 `parse_cookies/1`, `parse_headers/1`, `read_body/1` against their native request type.
@@ -797,6 +804,11 @@ request/transport coupling.
   `body`, `method`, `user_agent`.
 - `put_request/2` -- escape-hatch middleware exposing the whole request under the `request`
   binding for lazy access; prefer `extract/1` for specific data.
+- `fetch_flash/2` / `fetch_session/2` -- read the flash (consuming) / session (non-consuming)
+  cookie into the `flash` / `session` binding. Opt-in; both run on the GET render and the WS
+  upgrade, so a live view is seeded at mount.
+- `check_origin/2` -- CSRF Origin check (see `arizona_origin`); the router prepends it to
+  `live`/controller routes by default.
 
 ## API -- `arizona_http.erl`
 
