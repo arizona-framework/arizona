@@ -13,6 +13,7 @@
 -export([resp_cookie_sets_when_flash_present/1]).
 -export([resp_cookie_clears_when_consumed/1]).
 -export([resp_cookie_none_when_idle/1]).
+-export([cookie_secure_follows_env/1]).
 -export([secret_errors_when_unset/1]).
 
 %% Sequential (not parallel): the cases share the `secret_key` application env,
@@ -27,6 +28,7 @@ all() ->
         resp_cookie_sets_when_flash_present,
         resp_cookie_clears_when_consumed,
         resp_cookie_none_when_idle,
+        cookie_secure_follows_env,
         secret_errors_when_unset
     ].
 
@@ -73,6 +75,19 @@ resp_cookie_clears_when_consumed(Config) when is_list(Config) ->
 
 resp_cookie_none_when_idle(Config) when is_list(Config) ->
     ?assertEqual(none, arizona_flash:resp_cookie(#{}, false)).
+
+cookie_secure_follows_env(Config) when is_list(Config) ->
+    %% Defaults to false (a Secure cookie is dropped over plain HTTP); honors
+    %% flash_secure when set (apps enable it in production).
+    {_, _, Default} = arizona_flash:resp_cookie(#{~"error" => ~"x"}, false),
+    ?assertEqual(false, maps:get(secure, Default)),
+    application:set_env(arizona, flash_secure, true),
+    try
+        {_, _, Secure} = arizona_flash:resp_cookie(#{~"error" => ~"x"}, false),
+        ?assertEqual(true, maps:get(secure, Secure))
+    after
+        application:unset_env(arizona, flash_secure)
+    end.
 
 secret_errors_when_unset(Config) when is_list(Config) ->
     application:unset_env(arizona, secret_key),

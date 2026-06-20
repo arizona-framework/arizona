@@ -16,6 +16,10 @@ step reads it into the `flash` binding.
 The cookie value is the flash JSON signed by `arizona_crypto:sign/1`
 (`b64(payload) "." b64(signature)`, URL-safe base64 without padding);
 `decode/1` returns `#{}` when the signature does not verify.
+
+The `flash_secure` app env sets the `Secure` cookie flag (default `false`). **Set it to
+`true` in production** (HTTPS); it defaults `false` because a `Secure` cookie is silently
+dropped over plain HTTP, breaking local dev. (Mirrors `session_secure`.)
 """.
 
 %% --------------------------------------------------------------------
