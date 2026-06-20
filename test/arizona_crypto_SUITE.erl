@@ -21,6 +21,10 @@
 -export([decrypt_rejects_truncated/1]).
 -export([decrypt_rejects_wrong_secret/1]).
 -export([encrypt_ttl_verifies_before_expiry/1]).
+-export([verify_accepts_previous_key/1]).
+-export([decrypt_accepts_previous_key/1]).
+-export([verify_rejects_fully_rotated_key/1]).
+-export([decrypt_rejects_fully_rotated_key/1]).
 -export([secret_returns_configured/1]).
 -export([secret_errors_when_unset/1]).
 -export([sign_errors_when_secret_unset/1]).
@@ -49,6 +53,10 @@ all() ->
         decrypt_rejects_truncated,
         decrypt_rejects_wrong_secret,
         encrypt_ttl_verifies_before_expiry,
+        verify_accepts_previous_key,
+        decrypt_accepts_previous_key,
+        verify_rejects_fully_rotated_key,
+        decrypt_rejects_fully_rotated_key,
         secret_returns_configured,
         secret_errors_when_unset,
         sign_errors_when_secret_unset,
@@ -156,6 +164,49 @@ encrypt_ttl_verifies_before_expiry(Config) when is_list(Config) ->
     ?assertMatch(
         {ok, Payload}, arizona_crypto:decrypt(arizona_crypto:encrypt(Payload, #{ttl => 3600}))
     ).
+
+verify_accepts_previous_key(Config) when is_list(Config) ->
+    %% Sign under the current key, then rotate it into secret_key_previous behind a
+    %% fresh primary -- the old value still verifies during the grace window.
+    Signed = arizona_crypto:sign(~"payload"),
+    application:set_env(arizona, secret_key, ~"a-fresh-primary-key-after-rotation"),
+    application:set_env(arizona, secret_key_previous, [?SECRET]),
+    try
+        ?assertMatch({ok, ~"payload"}, arizona_crypto:verify(Signed))
+    after
+        application:set_env(arizona, secret_key, ?SECRET),
+        application:unset_env(arizona, secret_key_previous)
+    end.
+
+decrypt_accepts_previous_key(Config) when is_list(Config) ->
+    Blob = arizona_crypto:encrypt(~"payload"),
+    application:set_env(arizona, secret_key, ~"a-fresh-primary-key-after-rotation"),
+    application:set_env(arizona, secret_key_previous, [?SECRET]),
+    try
+        ?assertMatch({ok, ~"payload"}, arizona_crypto:decrypt(Blob))
+    after
+        application:set_env(arizona, secret_key, ?SECRET),
+        application:unset_env(arizona, secret_key_previous)
+    end.
+
+verify_rejects_fully_rotated_key(Config) when is_list(Config) ->
+    %% Once the old key is dropped from secret_key_previous, its values stop verifying.
+    Signed = arizona_crypto:sign(~"payload"),
+    application:set_env(arizona, secret_key, ~"a-fresh-primary-key-after-rotation"),
+    try
+        ?assertEqual(error, arizona_crypto:verify(Signed))
+    after
+        application:set_env(arizona, secret_key, ?SECRET)
+    end.
+
+decrypt_rejects_fully_rotated_key(Config) when is_list(Config) ->
+    Blob = arizona_crypto:encrypt(~"payload"),
+    application:set_env(arizona, secret_key, ~"a-fresh-primary-key-after-rotation"),
+    try
+        ?assertEqual(error, arizona_crypto:decrypt(Blob))
+    after
+        application:set_env(arizona, secret_key, ?SECRET)
+    end.
 
 secret_returns_configured(Config) when is_list(Config) ->
     ?assertEqual(?SECRET, arizona_crypto:secret()).
