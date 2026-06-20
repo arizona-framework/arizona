@@ -29,6 +29,11 @@ topic named `arizona_watcher`.
 - `debounce` -- milliseconds to wait after the last event before flushing
   (default `100`); coalesces editor-save bursts into a single event
 
+Both in-place saves (`modified`) and atomic-rename saves (`renamed`, the
+write-temp-then-`rename()` pattern used by vim, `sed -i`, and most editors and
+agent file-writers) trigger a reload. Directory renames (`isdir`) and files
+moved out of the watched directory (`removed`) do not.
+
 ## Lifecycle and shutdown
 
 The `fs` library spawns an OS process (`sh` + `inotifywait`) with the
@@ -217,7 +222,21 @@ watcher_name(AbsDir) ->
 is_relevant_event(Events) ->
     lists:member(created, Events) orelse
         lists:member(modified, Events) orelse
-        lists:member(deleted, Events).
+        lists:member(deleted, Events) orelse
+        is_file_rename(Events).
+
+%% Atomic-rename saves -- write to a temp file then rename() over the target --
+%% are what vim (default), `sed -i`, and most editors/agent file-writers do.
+%% The `fs` inotify backend maps the resulting MOVED_TO to `renamed`, so treat
+%% it as a real edit or those saves would silently skip hot reload.
+%%
+%% Two deliberate exclusions:
+%%   - `isdir`: a directory being renamed is not a source-file edit; skip it.
+%%   - `removed` (MOVED_FROM): a file moving *out* of the watched dir is
+%%     delete-like; the path is now absent, so forcing a recompile of a
+%%     vanished path is pointless. Real deletes already emit `deleted`.
+is_file_rename(Events) ->
+    lists:member(renamed, Events) andalso not lists:member(isdir, Events).
 
 file_matches(FilePath, #state{abs_dir = AbsDir, compiled = Compiled}) ->
     in_directory(FilePath, AbsDir) andalso matches_pattern(FilePath, Compiled).

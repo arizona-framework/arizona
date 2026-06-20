@@ -18,6 +18,8 @@
     event_irrelevant/1,
     event_created/1,
     event_deleted/1,
+    event_renamed/1,
+    event_removed/1,
     debounce_accumulates/1,
     debounce_resets_timer/1,
     debounce_deduplicates/1,
@@ -46,6 +48,8 @@ groups() ->
             event_irrelevant,
             event_created,
             event_deleted,
+            event_renamed,
+            event_removed,
             debounce_accumulates,
             debounce_resets_timer,
             debounce_deduplicates,
@@ -132,6 +136,9 @@ event_outside_dir(Config) when is_list(Config) ->
 event_irrelevant(Config) when is_list(Config) ->
     W = proplists:get_value(watcher, Config),
     Dir = proplists:get_value(tmp_dir, Config),
+    %% A directory rename (`isdir` + `renamed`) is not a source-file edit, so
+    %% it must not reload -- distinct from a plain file `renamed` (see
+    %% event_renamed), which is an atomic-rename save and does reload.
     send_fs_event(W, Dir ++ "/file.erl", [isdir, renamed]),
     timer:sleep(100),
     assert_no_messages().
@@ -153,6 +160,29 @@ event_deleted(Config) when is_list(Config) ->
         {cb, _} -> ok
     after 500 -> ct:fail(no_callback)
     end.
+
+%% Atomic-rename saves (vim, `sed -i`, agent file-writers) write a temp file
+%% then rename() over the target; the `fs` inotify backend reports MOVED_TO as
+%% `renamed`. This must reload like an in-place save.
+event_renamed(Config) when is_list(Config) ->
+    W = proplists:get_value(watcher, Config),
+    Dir = proplists:get_value(tmp_dir, Config),
+    File = Dir ++ "/atomic.erl",
+    send_fs_event(W, File, [renamed]),
+    receive
+        {cb, Files} -> ?assert(lists:member(File, Files))
+    after 500 -> ct:fail(no_callback)
+    end.
+
+%% A file moved *out* of the watched dir reports MOVED_FROM as `removed`. The
+%% path is now absent, so it is delete-like and must not force a reload (real
+%% deletes already emit `deleted`).
+event_removed(Config) when is_list(Config) ->
+    W = proplists:get_value(watcher, Config),
+    Dir = proplists:get_value(tmp_dir, Config),
+    send_fs_event(W, Dir ++ "/gone.erl", [removed]),
+    timer:sleep(100),
+    assert_no_messages().
 
 debounce_accumulates(Config) when is_list(Config) ->
     W = proplists:get_value(watcher, Config),
