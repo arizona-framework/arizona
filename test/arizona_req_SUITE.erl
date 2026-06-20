@@ -24,6 +24,15 @@
 -export([put_flash_serializes_into_resp_cookies/1]).
 -export([read_flash_round_trips_and_clears/1]).
 -export([read_flash_absent_is_empty/1]).
+-export([put_session_serializes_into_resp_cookies/1]).
+-export([put_session_merges_onto_incoming/1]).
+-export([get_session_reads_effective_state/1]).
+-export([delete_session_removes_key/1]).
+-export([delete_session_emptying_clears/1]).
+-export([clear_session_clears_cookie/1]).
+-export([read_session_round_trips_and_does_not_clear/1]).
+-export([read_session_caches/1]).
+-export([read_session_absent_is_empty/1]).
 -export([call_resolve_route_dispatches_to_adapter/1]).
 
 all() ->
@@ -49,7 +58,16 @@ groups() ->
             resp_stash_defaults_empty,
             put_flash_serializes_into_resp_cookies,
             read_flash_round_trips_and_clears,
-            read_flash_absent_is_empty
+            read_flash_absent_is_empty,
+            put_session_serializes_into_resp_cookies,
+            put_session_merges_onto_incoming,
+            get_session_reads_effective_state,
+            delete_session_removes_key,
+            delete_session_emptying_clears,
+            clear_session_clears_cookie,
+            read_session_round_trips_and_does_not_clear,
+            read_session_caches,
+            read_session_absent_is_empty
         ]},
         {resolve_route, [parallel], [
             call_resolve_route_dispatches_to_adapter
@@ -221,6 +239,79 @@ read_flash_absent_is_empty(Config) when is_list(Config) ->
     {Flash, Req1} = arizona_req:read_flash(Req0),
     ?assertEqual(#{}, Flash),
     %% Nothing consumed and nothing set -> no flash cookie on the response.
+    ?assertEqual([], arizona_req:resp_cookies(Req1)).
+
+put_session_serializes_into_resp_cookies(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+    Req1 = arizona_req:put_session(Req0, user_id, ~"42"),
+    %% resp_cookies includes the encrypted session cookie, which round-trips back.
+    [{Name, Value, Opts}] = arizona_req:resp_cookies(Req1),
+    ?assertEqual(~"az_session", Name),
+    ?assert(maps:get(max_age, Opts) > 0),
+    ?assertEqual(#{~"user_id" => ~"42"}, arizona_session:decode(Value)).
+
+put_session_merges_onto_incoming(Config) when is_list(Config) ->
+    %% A write merges onto the existing session even without the fetch_session
+    %% middleware: the first write seeds session_out from the incoming cookie.
+    Encoded = arizona_session:encode(#{~"a" => 1}),
+    Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Encoded}]}),
+    Req1 = arizona_req:put_session(Req0, b, 2),
+    [{~"az_session", Value, _Opts}] = arizona_req:resp_cookies(Req1),
+    ?assertEqual(#{~"a" => 1, ~"b" => 2}, arizona_session:decode(Value)).
+
+get_session_reads_effective_state(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+    Req1 = arizona_req:put_session(Req0, x, 9),
+    ?assertEqual({ok, 9}, arizona_req:get_session(Req1, x)),
+    ?assertEqual(error, arizona_req:get_session(Req1, missing)),
+    ?assertEqual(default, arizona_req:get_session(Req1, missing, default)),
+    ?assertEqual(#{~"x" => 9}, arizona_req:session(Req1)).
+
+delete_session_removes_key(Config) when is_list(Config) ->
+    Encoded = arizona_session:encode(#{~"a" => 1, ~"b" => 2}),
+    Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Encoded}]}),
+    Req1 = arizona_req:delete_session(Req0, a),
+    ?assertEqual(#{~"b" => 2}, arizona_req:session(Req1)),
+    [{~"az_session", Value, _Opts}] = arizona_req:resp_cookies(Req1),
+    ?assertEqual(#{~"b" => 2}, arizona_session:decode(Value)).
+
+delete_session_emptying_clears(Config) when is_list(Config) ->
+    %% Deleting the last key empties the session, so the response clears the cookie.
+    Encoded = arizona_session:encode(#{~"only" => 1}),
+    Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Encoded}]}),
+    Req1 = arizona_req:delete_session(Req0, only),
+    [{~"az_session", <<>>, Opts}] = arizona_req:resp_cookies(Req1),
+    ?assertEqual(0, maps:get(max_age, Opts)).
+
+clear_session_clears_cookie(Config) when is_list(Config) ->
+    Encoded = arizona_session:encode(#{~"user_id" => ~"42"}),
+    Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Encoded}]}),
+    Req1 = arizona_req:clear_session(Req0),
+    ?assertEqual(#{}, arizona_req:session(Req1)),
+    [{~"az_session", <<>>, Opts}] = arizona_req:resp_cookies(Req1),
+    ?assertEqual(0, maps:get(max_age, Opts)).
+
+read_session_round_trips_and_does_not_clear(Config) when is_list(Config) ->
+    %% The durable counterpart to read_flash: a read returns the session but, unlike
+    %% flash, does NOT mark it for clearing -- the response emits no cookie.
+    Encoded = arizona_session:encode(#{~"user_id" => ~"42"}),
+    Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Encoded}]}),
+    {Session, Req1} = arizona_req:read_session(Req0),
+    ?assertEqual(#{~"user_id" => ~"42"}, Session),
+    ?assertEqual(Session, arizona_req:session(Req1)),
+    ?assertEqual([], arizona_req:resp_cookies(Req1)).
+
+read_session_caches(Config) when is_list(Config) ->
+    Encoded = arizona_session:encode(#{~"a" => 1}),
+    Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Encoded}]}),
+    {Session, Req1} = arizona_req:read_session(Req0),
+    %% Idempotent: a second read returns the cached value and the same request.
+    ?assertEqual({Session, Req1}, arizona_req:read_session(Req1)).
+
+read_session_absent_is_empty(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+    {Session, Req1} = arizona_req:read_session(Req0),
+    ?assertEqual(#{}, Session),
     ?assertEqual([], arizona_req:resp_cookies(Req1)).
 
 %% --------------------------------------------------------------------
