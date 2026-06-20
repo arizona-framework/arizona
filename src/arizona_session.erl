@@ -19,6 +19,18 @@ The cookie is encrypted, so its contents are hidden from the client -- but it st
 lives on the client and a cookie store cannot be revoked before its expiry. Keep
 sessions small (an id plus light state, well under the ~4KB cookie limit); a
 server-side store is the place for large, long-lived, or instantly-revocable state.
+
+## Configuration (`arizona` app env)
+
+- `secret_key` -- required (see `arizona_crypto`); the encryption key.
+- `session_max_age` -- cookie lifetime in seconds (default 7 days).
+- `session_secure` -- `Secure` cookie flag (default `false`). **Set this to `true` in
+  production** so the session cookie is only sent over HTTPS. It defaults to `false`
+  because a `Secure` cookie is *silently dropped* over plain HTTP -- breaking local dev
+  with no error -- and a deployment behind a TLS-terminating proxy can't be auto-detected.
+  Treat enabling it as a deploy-checklist item (mirroring `flash_secure`).
+- `session_max_bytes` -- max encoded-cookie size (default 4096); `encode/1` errors with
+  `{session_too_large, Size, Limit}` past it rather than letting the browser drop it.
 """.
 
 %% --------------------------------------------------------------------
@@ -32,6 +44,7 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
 -export([clear_cookie/0]).
 -export([resp_cookie/2]).
 -export([key/1]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -45,6 +58,7 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
 -ignore_xref([clear_cookie/0]).
 -ignore_xref([resp_cookie/2]).
 -ignore_xref([key/1]).
+-ignore_xref([format_error/2]).
 
 %% Session cookie name and default lifetime (7 days, in seconds). The session is
 %% durable across requests, so the lifetime is the real expiry, not a safety net
@@ -52,6 +66,10 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
 %% server rejects an expired cookie even if the browser replays it.
 -define(COOKIE, ~"az_session").
 -define(DEFAULT_MAX_AGE, 604800).
+%% Browsers cap a single cookie at ~4KB (name + value + attributes); an oversized
+%% `Set-Cookie` is silently dropped, losing the session with no error. Guard the
+%% encoded value against that so the failure is loud at write time instead.
+-define(DEFAULT_MAX_BYTES, 4096).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -64,13 +82,25 @@ cookie_name() ->
 
 -doc """
 Encodes a session map into an encrypted cookie value with a baked-in absolute
-expiry (`max_age/0` seconds from now). Errors if `secret_key` is unset.
+expiry (`max_age/0` seconds from now). Errors if `secret_key` is unset, or with
+`{session_too_large, Size, Limit}` if the encoded value exceeds `session_max_bytes`
+(default 4096) -- a loud failure at write time instead of a cookie the browser
+silently drops.
 """.
 -spec encode(Session) -> binary() when
     Session :: arizona_req:session().
 encode(Session) ->
     Payload = iolist_to_binary(json:encode(Session)),
-    arizona_crypto:encrypt(Payload, #{ttl => max_age()}).
+    Cookie = arizona_crypto:encrypt(Payload, #{ttl => max_age()}),
+    Limit = max_bytes(),
+    case byte_size(Cookie) of
+        Size when Size > Limit ->
+            erlang:error({session_too_large, Size, Limit}, [Session], [
+                {error_info, #{module => ?MODULE}}
+            ]);
+        _ ->
+            Cookie
+    end.
 
 -doc """
 Decodes and authenticates a cookie value into a session map, returning `#{}` when
@@ -125,6 +155,29 @@ key(Key) when is_atom(Key) -> atom_to_binary(Key, utf8);
 key(Key) when is_binary(Key) -> Key.
 
 %% --------------------------------------------------------------------
+%% Format error
+%% --------------------------------------------------------------------
+
+-doc """
+Formats `arizona_session` runtime errors into a human-readable message. Picked up
+by `erl_error:format_exception/3` via the `error_info` annotation at the raise site.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error({session_too_large, Size, Limit}, _ST) ->
+    #{
+        general =>
+            io_lib:format(
+                "session cookie is ~b bytes, over the ~b-byte limit; browsers "
+                "silently drop oversized cookies. Store less in the session (an id, "
+                "not a blob), or raise the `session_max_bytes` application env.",
+                [Size, Limit]
+            )
+    }.
+
+%% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
@@ -133,6 +186,10 @@ key(Key) when is_binary(Key) -> Key.
 %% expiry agree.
 max_age() ->
     application:get_env(arizona, session_max_age, ?DEFAULT_MAX_AGE).
+
+%% Maximum encoded-cookie size in bytes (default 4096, the ~4KB browser cap).
+max_bytes() ->
+    application:get_env(arizona, session_max_bytes, ?DEFAULT_MAX_BYTES).
 
 cookie_opts(MaxAge) ->
     #{

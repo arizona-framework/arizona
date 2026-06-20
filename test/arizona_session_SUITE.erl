@@ -13,6 +13,9 @@
 -export([resp_cookie_sets_when_dirty_and_present/1]).
 -export([resp_cookie_clears_when_dirty_and_empty/1]).
 -export([resp_cookie_none_when_clean/1]).
+-export([cookie_secure_follows_env/1]).
+-export([encode_errors_when_too_large/1]).
+-export([format_error_renders_too_large_message/1]).
 
 %% Sequential (not parallel): the cases share the `secret_key` application env.
 all() ->
@@ -24,7 +27,10 @@ all() ->
         key_normalizes_atom,
         resp_cookie_sets_when_dirty_and_present,
         resp_cookie_clears_when_dirty_and_empty,
-        resp_cookie_none_when_clean
+        resp_cookie_none_when_clean,
+        cookie_secure_follows_env,
+        encode_errors_when_too_large,
+        format_error_renders_too_large_message
     ].
 
 init_per_suite(Config) ->
@@ -73,3 +79,32 @@ resp_cookie_none_when_clean(Config) when is_list(Config) ->
     %% The durable invariant: a clean (unwritten) request emits nothing, even when
     %% the effective session is non-empty -- a read never re-emits the cookie.
     ?assertEqual(none, arizona_session:resp_cookie(#{~"user_id" => ~"42"}, false)).
+
+cookie_secure_follows_env(Config) when is_list(Config) ->
+    %% Defaults to false (dev-safe; a Secure cookie is dropped over plain HTTP), and
+    %% honors session_secure when set (apps enable it in production).
+    {_, _, Default} = arizona_session:resp_cookie(#{~"k" => ~"v"}, true),
+    ?assertEqual(false, maps:get(secure, Default)),
+    application:set_env(arizona, session_secure, true),
+    try
+        {_, _, Secure} = arizona_session:resp_cookie(#{~"k" => ~"v"}, true),
+        ?assertEqual(true, maps:get(secure, Secure))
+    after
+        application:unset_env(arizona, session_secure)
+    end.
+
+encode_errors_when_too_large(Config) when is_list(Config) ->
+    %% A tiny limit forces the guard; the encoded (encrypted) value exceeds 8 bytes.
+    application:set_env(arizona, session_max_bytes, 8),
+    try
+        ?assertError(
+            {session_too_large, _, 8},
+            arizona_session:encode(#{~"k" => ~"a value well over eight bytes"})
+        )
+    after
+        application:unset_env(arizona, session_max_bytes)
+    end.
+
+format_error_renders_too_large_message(Config) when is_list(Config) ->
+    #{general := Msg} = arizona_session:format_error({session_too_large, 5000, 4096}, []),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Msg), ~"session")).
