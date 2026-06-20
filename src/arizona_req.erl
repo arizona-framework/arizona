@@ -81,6 +81,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([get_session/2]).
 -export([get_session/3]).
 -export([read_session/1]).
+-export([session_id/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -113,6 +114,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -ignore_xref([session/1]).
 -ignore_xref([get_session/2]).
 -ignore_xref([get_session/3]).
+-ignore_xref([session_id/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -159,7 +161,8 @@ Method = arizona_req:method(Req).          %% eager, no thread
     flash_consumed => boolean(),
     session_in => session(),
     session_out => session(),
-    session_dirty => boolean()
+    session_dirty => boolean(),
+    session_id => binary()
 }.
 
 -nominal adapter() :: module().
@@ -466,12 +469,39 @@ resp_cookies(Req) ->
             none -> Stashed;
             FlashCookie -> Stashed ++ [FlashCookie]
         end,
-    SessionOut = maps:get(session_out, Req, #{}),
-    Dirty = maps:get(session_dirty, Req, false),
-    case arizona_session:resp_cookie(SessionOut, Dirty) of
+    case session_resp_cookie(Req) of
         none -> WithFlash;
         SessionCookie -> WithFlash ++ [SessionCookie]
     end.
+
+%% The session `Set-Cookie` for this response. In store mode this also commits the write
+%% (the response is where a written session is persisted): a non-empty dirty session is
+%% put under its id and the signed id is emitted; a cleared one (logout) is deleted and
+%% the cookie cleared; an untouched session emits nothing. Cookie mode encrypts the map
+%% into the cookie as before.
+session_resp_cookie(Req) ->
+    SessionOut = maps:get(session_out, Req, #{}),
+    Dirty = maps:get(session_dirty, Req, false),
+    case session_store() of
+        undefined ->
+            arizona_session:resp_cookie(SessionOut, Dirty);
+        Store ->
+            store_resp_cookie(Store, Req, SessionOut, Dirty)
+    end.
+
+store_resp_cookie(_Store, _Req, _SessionOut, false) ->
+    none;
+store_resp_cookie(Store, Req, SessionOut, true) when map_size(SessionOut) > 0 ->
+    Id = maps:get(session_id, Req),
+    ok = Store:put(Id, SessionOut, arizona_session:max_age()),
+    arizona_session:set_cookie_id(Id);
+store_resp_cookie(Store, Req, _SessionOut, true) ->
+    %% Cleared (logout): drop the store entry if we know the id, and clear the cookie.
+    ok = maybe_delete_stored(Store, maps:get(session_id, Req, undefined)),
+    arizona_session:clear_cookie().
+
+maybe_delete_stored(_Store, undefined) -> ok;
+maybe_delete_stored(Store, Id) -> Store:delete(Id).
 
 -doc """
 Stashes the HTTP status for a rendered page. Lets a view or middleware return
@@ -609,6 +639,16 @@ session(#{session_in := Session}) -> Session;
 session(_) -> #{}.
 
 -doc """
+Returns the opaque session id for this request in store mode (`session_store`
+configured), or `undefined` in cookie mode or when there is no session yet. Apps can
+record it to revoke the session later via the store's `delete/1`.
+""".
+-spec session_id(Request) -> binary() | undefined when
+    Request :: request().
+session_id(#{session_id := Id}) -> Id;
+session_id(_) -> undefined.
+
+-doc """
 Looks up `Key` in the effective session, returning `{ok, Value}` or `error`. `Key`
 may be an atom or binary (normalized). Reads the post-write state when the session
 was written earlier this request.
@@ -651,11 +691,38 @@ read_session(Req0) ->
     {Cookies, Req} = cookies(Req0),
     case lists:keyfind(arizona_session:cookie_name(), 1, Cookies) of
         {_, Value} ->
-            Session = arizona_session:decode(Value),
-            {Session, Req#{session_in => Session}};
+            read_session_value(Value, Req);
         false ->
             {#{}, Req#{session_in => #{}}}
     end.
+
+%% Decode the cookie per mode: cookie mode is the encrypted session map; store mode is a
+%% signed opaque id resolved through the store. A missing/revoked/expired store entry
+%% reads as an empty session with no id, so a later write mints a fresh one rather than
+%% resurrecting a revoked id.
+read_session_value(Value, Req) ->
+    case session_store() of
+        undefined ->
+            Session = arizona_session:decode(Value),
+            {Session, Req#{session_in => Session}};
+        Store ->
+            case arizona_session:decode_id(Value) of
+                {ok, Id} ->
+                    case Store:get(Id) of
+                        {ok, Session} ->
+                            {Session, Req#{session_in => Session, session_id => Id}};
+                        error ->
+                            {#{}, Req#{session_in => #{}}}
+                    end;
+                error ->
+                    {#{}, Req#{session_in => #{}}}
+            end
+    end.
+
+%% The configured server-side session store module, or `undefined` for the default
+%% cookie store (the session map encrypted into the cookie).
+session_store() ->
+    application:get_env(arizona, session_store, undefined).
 
 %% Returns the pending session (session_out), seeded from the incoming session on
 %% first write, plus the (possibly cookie-read) request. Idempotent: once written,
@@ -664,4 +731,14 @@ ensure_session_out(#{session_out := Out} = Req) ->
     {Out, Req};
 ensure_session_out(Req0) ->
     {In, Req} = read_session(Req0),
-    {In, Req#{session_out => In}}.
+    {In, ensure_session_id(Req#{session_out => In})}.
+
+%% In store mode a write needs an id: reuse the one `read_session` resolved, else mint a
+%% fresh one (a new session). No-op in cookie mode or when an id is already present.
+ensure_session_id(#{session_id := _} = Req) ->
+    Req;
+ensure_session_id(Req) ->
+    case session_store() of
+        undefined -> Req;
+        _ -> Req#{session_id => arizona_session:new_id()}
+    end.

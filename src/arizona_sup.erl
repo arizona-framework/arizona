@@ -6,7 +6,9 @@ Always supervises `arizona_pubsub` (the `pg`-based pubsub scope) and
 `arizona_mcp_sup` (the MCP session supervisor, which owns the session
 registry and starts per-session processes on demand). Also supervises one
 `arizona_watcher` per rule when the dev-mode reloader is enabled via the
-`reloader` application env. Live processes are not managed here -- they're
+`reloader` application env, and the configured server-side session store when
+the `session_store` env names a backend that exports `child_spec/0` (e.g.
+`arizona_session_store_ets`). Live processes are not managed here -- they're
 started ad hoc by the transport layer (`arizona_socket:init/4`) and linked
 to the calling WebSocket process so they share its lifetime.
 
@@ -65,7 +67,8 @@ start_link() ->
     ChildSpec :: supervisor:child_spec().
 init(#{}) ->
     Reloader = application:get_env(arizona, reloader, #{}),
-    Children = [pubsub_spec(), mcp_sup_spec() | watcher_specs(Reloader)],
+    Children =
+        [pubsub_spec(), mcp_sup_spec()] ++ store_specs() ++ watcher_specs(Reloader),
     {ok, {#{strategy => one_for_one}, Children}}.
 
 %% --------------------------------------------------------------------
@@ -88,6 +91,21 @@ mcp_sup_spec() ->
         start => {arizona_mcp_sup, start_link, []},
         type => supervisor
     }.
+
+%% When a server-side session store is configured (`session_store` app env), supervise
+%% it if the backend declares a `child_spec/0` (the ETS store owns its table; a backend
+%% that runs its own process can omit the callback).
+store_specs() ->
+    case application:get_env(arizona, session_store, undefined) of
+        undefined ->
+            [];
+        Mod ->
+            _ = code:ensure_loaded(Mod),
+            case erlang:function_exported(Mod, child_spec, 0) of
+                true -> [Mod:child_spec()];
+                false -> []
+            end
+    end.
 
 watcher_specs(#{enabled := true, rules := Rules}) when is_list(Rules) ->
     [watcher_spec(I, R) || {I, R} <- lists:enumerate(Rules)];
