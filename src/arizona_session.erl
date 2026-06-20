@@ -31,6 +31,11 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
   Treat enabling it as a deploy-checklist item (mirroring `flash_secure`).
 - `session_max_bytes` -- max encoded-cookie size (default 4096); `encode/1` errors with
   `{session_too_large, Size, Limit}` past it rather than letting the browser drop it.
+- `session_store` -- opt into a server-side store (an `arizona_session_store` module, e.g.
+  `arizona_session_store_ets`); the cookie then carries only a signed opaque id (`encode_id/1`,
+  `decode_id/1`, `set_cookie_id/1`) and the map lives in the store, enabling revocation and
+  large state. Unset (the default) keeps the encrypted cookie store. The mode switch is in
+  `arizona_req`.
 """.
 
 %% --------------------------------------------------------------------
@@ -44,6 +49,11 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
 -export([clear_cookie/0]).
 -export([resp_cookie/2]).
 -export([key/1]).
+-export([max_age/0]).
+-export([new_id/0]).
+-export([encode_id/1]).
+-export([decode_id/1]).
+-export([set_cookie_id/1]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -58,6 +68,11 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
 -ignore_xref([clear_cookie/0]).
 -ignore_xref([resp_cookie/2]).
 -ignore_xref([key/1]).
+-ignore_xref([max_age/0]).
+-ignore_xref([new_id/0]).
+-ignore_xref([encode_id/1]).
+-ignore_xref([decode_id/1]).
+-ignore_xref([set_cookie_id/1]).
 -ignore_xref([format_error/2]).
 
 %% Session cookie name and default lifetime (7 days, in seconds). The session is
@@ -154,6 +169,38 @@ resp_cookie(_SessionOut, true) ->
 key(Key) when is_atom(Key) -> atom_to_binary(Key, utf8);
 key(Key) when is_binary(Key) -> Key.
 
+-doc """
+The configured session lifetime in seconds (`session_max_age`, default 7 days). The
+cookie max-age, the encrypted-payload TTL, and a server-side store entry's TTL are all
+this value, so browser and server expiry agree.
+""".
+-spec max_age() -> non_neg_integer().
+max_age() ->
+    application:get_env(arizona, session_max_age, ?DEFAULT_MAX_AGE).
+
+%% --- Store mode: the cookie carries a signed opaque id, the data lives in a store ---
+
+-doc "A fresh opaque session id (128 random bits, lowercase hex).".
+-spec new_id() -> binary().
+new_id() ->
+    binary:encode_hex(crypto:strong_rand_bytes(16), lowercase).
+
+-doc "Signs a session id into the cookie value (the id is not secret, just unforgeable).".
+-spec encode_id(Id) -> binary() when Id :: binary().
+encode_id(Id) ->
+    arizona_crypto:sign(Id).
+
+-doc "Recovers a session id from a cookie value, returning `error` if tampered or malformed.".
+-spec decode_id(Value) -> {ok, binary()} | error when Value :: binary().
+decode_id(Value) ->
+    arizona_crypto:verify(Value).
+
+-doc "The `Set-Cookie` tuple carrying the signed session `Id` (store mode).".
+-spec set_cookie_id(Id) -> {binary(), binary(), arizona_req:resp_cookie_opts()} when
+    Id :: binary().
+set_cookie_id(Id) ->
+    {?COOKIE, encode_id(Id), cookie_opts(max_age())}.
+
 %% --------------------------------------------------------------------
 %% Format error
 %% --------------------------------------------------------------------
@@ -180,12 +227,6 @@ format_error({session_too_large, Size, Limit}, _ST) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
-
-%% Configured session lifetime in seconds (default 7 days). The cookie max-age and
-%% the encrypted payload TTL are both this value, so browser expiry and server-side
-%% expiry agree.
-max_age() ->
-    application:get_env(arizona, session_max_age, ?DEFAULT_MAX_AGE).
 
 %% Maximum encoded-cookie size in bytes (default 4096, the ~4KB browser cap).
 max_bytes() ->
