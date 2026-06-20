@@ -3,17 +3,19 @@
 Signed, one-time flash cookie codec.
 
 A flash is a small map of short-lived display messages carried across a single
-redirect (the Post/Redirect/Get pattern). It rides a dedicated cookie that is
-signed (HMAC-SHA256) with the `arizona` `secret_key` application env, so a client
-cannot forge one, and is consumed on the next request that reads it.
+redirect (the Post/Redirect/Get pattern). It rides a dedicated cookie whose JSON
+payload is signed by `arizona_crypto` (HMAC-SHA256 with the `arizona` `secret_key`
+application env), so a client cannot forge one, and is consumed on the next
+request that reads it.
 
-This module owns the wire format: encode/decode the payload and build the
+This module owns the flash domain: JSON-encode/decode the payload and build the
 `Set-Cookie` tuples. `arizona_req` integrates it into the request/response stash
 (`put_flash/3`, `flash/1`, `read_flash/1`), and the `arizona_middleware:fetch_flash/2`
 step reads it into the `flash` binding.
 
-The cookie value is `payload "." signature`, both URL-safe base64 without padding;
-`payload` is the JSON of the flash map and `signature` is its HMAC.
+The cookie value is the flash JSON signed by `arizona_crypto:sign/1`
+(`b64(payload) "." b64(signature)`, URL-safe base64 without padding);
+`decode/1` returns `#{}` when the signature does not verify.
 """.
 
 %% --------------------------------------------------------------------
@@ -63,9 +65,7 @@ Encodes a flash map into a signed cookie value. Errors if `secret_key` is unset.
 -spec encode(Flash) -> binary() when
     Flash :: arizona_req:flash().
 encode(Flash) ->
-    Payload = iolist_to_binary(json:encode(Flash)),
-    Sig = crypto:mac(hmac, sha256, secret(), Payload),
-    <<(b64(Payload))/binary, ".", (b64(Sig))/binary>>.
+    arizona_crypto:sign(iolist_to_binary(json:encode(Flash))).
 
 -doc """
 Decodes and verifies a cookie value into a flash map, returning `#{}` when the
@@ -74,17 +74,21 @@ signature does not match or the value is malformed.
 -spec decode(Value) -> arizona_req:flash() when
     Value :: binary().
 decode(Value) ->
-    try
-        [B64Payload, B64Sig] = binary:split(Value, ~"."),
-        Payload = unb64(B64Payload),
-        Expected = crypto:mac(hmac, sha256, secret(), Payload),
-        true = crypto:hash_equals(unb64(B64Sig), Expected),
-        case json:decode(Payload) of
-            Flash when is_map(Flash) -> Flash;
-            _ -> #{}
-        end
-    catch
-        _:_ -> #{}
+    case arizona_crypto:verify(Value) of
+        {ok, Payload} ->
+            %% `verify` owns the tamper check; the remaining failure is a
+            %% verified-but-non-JSON payload (possible now that arizona_crypto
+            %% is shared -- another consumer could sign non-JSON under the same
+            %% secret), which `decode/1`'s total `#{}`-on-anything contract
+            %% must still swallow rather than crash on.
+            try json:decode(Payload) of
+                Flash when is_map(Flash) -> Flash;
+                _ -> #{}
+            catch
+                _:_ -> #{}
+            end;
+        error ->
+            #{}
     end.
 
 -doc "The `Set-Cookie` tuple that carries `Flash` to the next request.".
@@ -121,29 +125,12 @@ key(Key) when is_atom(Key) -> atom_to_binary(Key, utf8);
 key(Key) when is_binary(Key) -> Key.
 
 -doc """
-Returns the configured flash signing secret from the `arizona` `secret_key`
-application env, erroring if it is unset or empty.
+Returns the configured flash signing secret. Delegates to `arizona_crypto:secret/0`
+(the flash cookie is signed by `arizona_crypto`); erroring if it is unset or empty.
 """.
 -spec secret() -> binary().
 secret() ->
-    case application:get_env(arizona, secret_key) of
-        {ok, Secret} when is_binary(Secret), Secret =/= <<>> ->
-            Secret;
-        _ ->
-            error(
-                {arizona_flash, secret_key_not_configured},
-                none,
-                [
-                    {error_info, #{
-                        cause =>
-                            <<
-                                "flash requires a signing key: set the arizona "
-                                "`secret_key` application env to a random binary"
-                            >>
-                    }}
-                ]
-            )
-    end.
+    arizona_crypto:secret().
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -157,9 +144,3 @@ cookie_opts(MaxAge) ->
         max_age => MaxAge,
         secure => application:get_env(arizona, flash_secure, false)
     }.
-
-b64(Bin) ->
-    base64:encode(Bin, #{mode => urlsafe, padding => false}).
-
-unb64(Bin) ->
-    base64:decode(Bin, #{mode => urlsafe, padding => false}).

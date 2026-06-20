@@ -77,7 +77,7 @@ resp_cookie_none_when_idle(Config) when is_list(Config) ->
 secret_errors_when_unset(Config) when is_list(Config) ->
     application:unset_env(arizona, secret_key),
     try
-        ?assertError({arizona_flash, secret_key_not_configured}, arizona_flash:secret())
+        ?assertError(secret_key_not_configured, arizona_flash:secret())
     after
         application:set_env(arizona, secret_key, ~"test-secret-key-0123456789abcdef")
     end.
