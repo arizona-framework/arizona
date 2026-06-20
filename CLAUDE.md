@@ -154,3 +154,13 @@ arizona_static:generate(~"_site", [
 ### Engine
 
 - **Upload support** -- file upload handling
+
+### Sessions & security (follow-ups to `arizona_session`)
+
+- **CSRF double-submit token** -- now unblocked: a signed token (from `arizona_crypto`) can bind to the session, closing the missing-Origin gap the Origin check leaves open.
+- **Server-side session store** -- a pluggable `get/put/delete` store behaviour (ETS/Redis/DB) behind an opaque session-id cookie, for instant revocation and large/secret state the cookie store can't hold.
+- **Key rotation grace** -- the encrypt/sign wire format carries no key version, so rotating `secret_key` invalidates every existing cookie (logs everyone out). Add a multi-key decrypt path (accept the previous key) for zero-downtime rotation.
+- **`Secure` cookie default** -- `session_secure`/`flash_secure` default `false` (dev-friendly); apps must enable them in prod. Consider defaulting to `true` or auto-enabling under HTTPS.
+- **Cookie size guard** -- an oversized session (> ~4KB) is silently dropped by the browser; optionally have `arizona_session:encode/1` error on overflow instead.
+- **Sliding-window expiry** -- the session TTL is fixed per write; optionally renew it on read.
+- **Auth / `current_user` helpers** -- a login/identity layer built on top of `get_session`.
