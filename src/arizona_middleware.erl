@@ -24,6 +24,8 @@ view; a route lists its steps under the `middlewares` key of
   `request` binding for lazy access.
 - `fetch_flash/2` -- read the incoming flash (set on the prior request via
   `arizona_req:put_flash/3`) into the `flash` binding, consuming it.
+- `fetch_session/2` -- read the durable session into the `session` binding, without
+  consuming it.
 - `check_origin/2` -- CSRF defense: halt with `403` when the request `Origin` is not
   trusted (see `arizona_origin`). The router applies it to `live`/`controller` routes by
   default, so you rarely list it by hand.
@@ -41,6 +43,7 @@ view; a route lists its steps under the `middlewares` key of
 -export([extract/1]).
 -export([put_request/2]).
 -export([fetch_flash/2]).
+-export([fetch_session/2]).
 -export([check_origin/2]).
 
 %% --------------------------------------------------------------------
@@ -50,6 +53,7 @@ view; a route lists its steps under the `middlewares` key of
 -ignore_xref([extract/1]).
 -ignore_xref([put_request/2]).
 -ignore_xref([fetch_flash/2]).
+-ignore_xref([fetch_session/2]).
 -ignore_xref([check_origin/2]).
 
 %% --------------------------------------------------------------------
@@ -151,6 +155,25 @@ response clears its cookie, so a refresh shows nothing. Pair it with
 fetch_flash(Req, Bindings) ->
     {Flash, Req1} = arizona_req:read_flash(Req),
     {cont, Req1, Bindings#{flash => Flash}}.
+
+-doc """
+Middleware that reads the durable session into the `session` binding (read with
+`?get(session)`, a map; `#{}` when there is none).
+
+Opt in on routes that need the session. Unlike `fetch_flash/2`, reading does **not**
+consume it: the session survives untouched, and the response re-emits the cookie
+only when the app writes it (`arizona_req:put_session/3`) or clears it
+(`clear_session/1`). It runs on both the GET render and the WS upgrade, so a live
+view is seeded with the session at mount.
+
+```erlang
+#{middlewares => [{arizona_middleware, fetch_session}]}
+```
+""".
+-spec fetch_session(arizona_req:request(), az:bindings()) -> middleware_result().
+fetch_session(Req, Bindings) ->
+    {Session, Req1} = arizona_req:read_session(Req),
+    {cont, Req1, Bindings#{session => Session}}.
 
 -doc """
 CSRF defense: halt with `403` when the request `Origin` is not trusted (same-origin or
