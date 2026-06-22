@@ -377,7 +377,22 @@ format_error(tracked_get_on_non_bindings_map) ->
     "direct alias (`B = Bindings`). This local is not provably the bindings. If it is a "
     "nested map, read it with maps:get/2 (`User = arizona_template:get(user, Bindings), "
     "Name = maps:get(name, User)`); if it is a bindings value reached through a "
-    "case/merge the transform cannot see into, alias it directly with `B = Bindings` first".
+    "case/merge the transform cannot see into, alias it directly with `B = Bindings` first";
+format_error({tracked_read_in_guard, Var}) ->
+    lists:flatten(
+        io_lib:format(
+            "'~s' holds a value read from the view bindings "
+            "(arizona_template:get/get_lazy/with) and is then used in a guard inside a template. "
+            "A guard cannot re-run that read -- Erlang rejects a function call in a guard -- so it "
+            "never executes inside the slot's dependency bracket: the slot records no dependency "
+            "on that binding and freezes at its SSR value, no longer updating when the binding "
+            "changes. Move the test out of the guard so the read is tracked -- read it in the case "
+            "scrutinee or the clause body, e.g. `case {arizona_template:get(status, Bindings), "
+            "arizona_template:get(confirming, Bindings)} of {active, true} -> ... end`, or replace "
+            "the guard with a pattern match.",
+            [Var]
+        )
+    ).
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -951,6 +966,7 @@ iv(Other, _Inline) ->
 %% Fun clause: parameters bind and shadow; drop them from the map for the body.
 iv_fun_clause({clause, L, Params, Guards, Body}, Inline) ->
     Inline1 = maps:without(pattern_vars(Params), Inline),
+    reject_tracked_guard(Guards, Inline1),
     {clause, L, Params, Guards, iv_body(Body, Inline1)}.
 
 %% case/receive/try-of/catch clause: patterns match the (already inlined) scrutinee,
@@ -958,7 +974,44 @@ iv_fun_clause({clause, L, Params, Guards, Body}, Inline) ->
 %% the map for the body as a conservative shadow guard.
 iv_clause({clause, L, Patterns, Guards, Body}, Inline) ->
     Inline1 = maps:without(pattern_vars(Patterns), Inline),
+    reject_tracked_guard(Guards, Inline1),
     {clause, L, Patterns, Guards, iv_body(Body, Inline1)}.
+
+%% A tracked (`?get`/`get_lazy`/`with`-derived) variable used in a guard inside a
+%% template freezes the slot silently. inline_vars leaves guards untouched -- it has
+%% to, since Erlang forbids the get/2 call in a guard -- so the read never re-runs
+%% inside the slot's dependency bracket: the dependency is dropped and the slot stops
+%% updating when that binding changes. Erlang accepts the guard (a bound variable is
+%% legal), so nothing complains. The only path a tracked read can reach a guard is a
+%% pre-bound variable (a literal `?get` there is already an "illegal guard expression"),
+%% so scanning the guards for an inline-map variable is the whole detection. Reject it
+%% so the freeze is a loud compile error instead.
+reject_tracked_guard(_Guards, Inline) when map_size(Inline) =:= 0 ->
+    ok;
+reject_tracked_guard(Guards, Inline) ->
+    case tracked_guard_var(Guards, Inline) of
+        none -> ok;
+        {V, L} -> parse_error({tracked_read_in_guard, V}, L)
+    end.
+
+%% First reference, depth-first, to an inline-map variable anywhere in the guards
+%% (it may be nested in `andalso`/`is_binary(...)`/comparisons); `none` if there is
+%% none. The `{var, _, _}` clause is matched ahead of the generic tuple walk so a var
+%% node is never decomposed.
+tracked_guard_var({var, L, V}, Inline) ->
+    case is_map_key(V, Inline) of
+        true -> {V, L};
+        false -> none
+    end;
+tracked_guard_var(T, Inline) when is_tuple(T) ->
+    tracked_guard_var(tuple_to_list(T), Inline);
+tracked_guard_var([H | T], Inline) ->
+    case tracked_guard_var(H, Inline) of
+        none -> tracked_guard_var(T, Inline);
+        Found -> Found
+    end;
+tracked_guard_var(_Other, _Inline) ->
+    none.
 
 %% A body is a sequence; a `Var = RHS` match binds Var (shadowing) for later exprs.
 iv_body(Exprs, Inline) ->

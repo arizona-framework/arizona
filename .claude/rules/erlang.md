@@ -301,9 +301,20 @@ case ?get(mode) of dark -> X = ?get(a); _ -> X = ?get(b) end, ?html({p, [], [X]}
 
 Exceptions that stay un-tracked (slot frozen after SSR): a binding destructured
 in the head (`render(#{foo := Foo})`) or through any non-bare-var pattern
-(`{ok, V} = ?get(...)` -- use `?get(foo)` then plain destructuring), a read
-reachable only through a guard, a variable bound inside an `if` or a `case`
-branch whose clause head binds a variable, and a rebound variable.
+(`{ok, V} = ?get(...)` -- use `?get(foo)` then plain destructuring), a variable
+bound inside a `case` branch whose clause head binds a variable, and a rebound
+variable.
+
+A tracked read used in a **guard** inside a template (`case Status of active when
+Confirming -> ...`, an `if`, a fun-clause guard) is a compile error
+(`tracked_read_in_guard`), not a silent freeze. A guard cannot hold the `get/2`
+call (Erlang rejects it as an illegal guard expression), so the read can never
+re-run inside the slot's dependency bracket -- the dependency would be dropped and
+the slot would stop updating when that binding changes. The transform rejects it:
+move the test into the `case` scrutinee or clause body so the read is tracked
+(`case {?get(status), ?get(confirming)} of {active, true} -> ...`), or replace the
+guard with a pattern match. Only a tracked read reaches this -- a non-tracked local
+or a pattern-bound variable in a guard is fine.
 
 `?get`/`get_lazy`/`with` are for the **view bindings**, not sub-maps: they call
 `track/1` regardless of which map they read, so reading a nested map records the

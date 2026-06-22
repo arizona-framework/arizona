@@ -274,12 +274,26 @@ and idiomatic templates (reads written inside `?html`) are unaffected.
 destructured in the function head (`render(#{foo := Foo})`) or through any
 non-bare-var pattern (`{ok, V} = ?get(...)`) -- a pattern match is an untracked
 read; read the whole value with `?get(foo)` and destructure with plain Erlang.
-Also: a read reachable only through a guard (`when N > 5` -- a guard cannot hold
-a `get`), a variable bound inside an `if` or a `case` branch whose clause head
-itself binds a variable, and a rebound variable. Use `?get` for the top-level
-binding and plain `maps:get/2` for sub-structures (only the `?get` records a dep,
-which is the correct grain). In all these cases the read is left captured and the
-slot keeps its SSR value; the transform never makes valid code uncompilable.
+Also: a variable bound inside a `case` branch whose clause head itself binds a
+variable, and a rebound variable. Use `?get` for the top-level binding and plain
+`maps:get/2` for sub-structures (only the `?get` records a dep, which is the
+correct grain). In these cases the read is left captured and the slot keeps its
+SSR value.
+
+**The one read that is rejected, not frozen:** a tracked read used in a **guard**
+(`case Status of active when Confirming -> ...`, an `if`, a fun-clause guard) is a
+compile error (`tracked_read_in_guard`). A guard cannot hold the `get/2` call
+(Erlang itself rejects that as an illegal guard expression), so `inline_vars`
+leaves guards untouched -- the read then never re-runs inside the slot's dependency
+bracket, the dep is dropped, and the slot would silently stop updating when that
+binding changes. Because the only way a tracked read reaches a guard is a pre-bound
+variable, scanning each clause's guards for an inline-map variable is the whole
+check (`iv_clause` / `iv_fun_clause`). This is the one place the transform makes
+otherwise-compilable code fail to compile, deliberately: the alternative is a silent
+freeze. The fix is to move the test into the `case` scrutinee or clause body
+(`case {?get(status), ?get(confirming)} of {active, true} -> ...`) so the read is
+tracked, or to pattern-match instead of guarding. A non-tracked local or a
+pattern-bound variable in a guard is unaffected.
 
 ## Tracked accessors, the sub-map diagnostic, and `with/2`
 

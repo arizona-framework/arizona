@@ -190,7 +190,6 @@
     inline_same_var_two_slots/1,
     inline_non_bindings_var_name/1,
     inline_destructuring_not_inlined/1,
-    inline_guard_get_stays_captured/1,
     inline_comprehension_source/1,
     tracked_get_submap_errors/1,
     tracked_get_submap_az_errors/1,
@@ -206,6 +205,14 @@
     with_handoff_freezes_without_tracking/1,
     with_handoff_tracks_outer_slot/1,
     with_handoff_hoisted_tracks_outer_slot/1,
+    guard_case_tracked_read_rejected/1,
+    guard_if_tracked_read_rejected/1,
+    guard_buried_tracked_read_rejected/1,
+    guard_hoisted_case_result_rejected/1,
+    guard_fun_clause_tracked_read_rejected/1,
+    guard_pattern_var_ok/1,
+    guard_untracked_local_ok/1,
+    guard_tracked_read_in_scrutinee_ok/1,
     void_element/1,
     void_in_each_with_children/1,
     void_nested_child_with_children/1,
@@ -288,6 +295,7 @@ all() ->
         {group, conditional_elements},
         {group, inline},
         {group, tracked_get},
+        {group, tracked_guard},
         {group, layout},
         {group, utf8},
         {group, errors},
@@ -491,7 +499,6 @@ groups() ->
             inline_same_var_two_slots,
             inline_non_bindings_var_name,
             inline_destructuring_not_inlined,
-            inline_guard_get_stays_captured,
             inline_comprehension_source
         ]},
         %% Reject the tracked accessor reading a non-bindings (sub-)map
@@ -510,6 +517,17 @@ groups() ->
             with_handoff_freezes_without_tracking,
             with_handoff_tracks_outer_slot,
             with_handoff_hoisted_tracks_outer_slot
+        ]},
+        %% Reject a tracked read used in a template guard (it silently freezes the slot)
+        {tracked_guard, [parallel], [
+            guard_case_tracked_read_rejected,
+            guard_if_tracked_read_rejected,
+            guard_buried_tracked_read_rejected,
+            guard_hoisted_case_result_rejected,
+            guard_fun_clause_tracked_read_rejected,
+            guard_pattern_var_ok,
+            guard_untracked_local_ok,
+            guard_tracked_read_in_scrutinee_ok
         ]},
         %% Tests 68-77c: layout tests
         {layout, [parallel], [
@@ -1617,13 +1635,18 @@ cond_case_bare_matches_html(Config) when is_list(Config) ->
     {WrapHTML, _} = arizona_render:render(Wrap:render(B)),
     ?assertEqual(iolist_to_binary(WrapHTML), iolist_to_binary(BareHTML)).
 
-%% An `if` branch returning a bare element is expanded the same way.
+%% An `if` branch returning a bare element is expanded the same way (this guards
+%% the `if` clause of map_tail_exprs). An `if` condition is a guard, so it cannot
+%% react to a binding: a tracked `?get` there is rejected (tracked_read_in_guard),
+%% and an untracked read freezes the slot. `Show` is destructured in the head (an
+%% untracked read), so the slot renders correctly at SSR but records NO dependency
+%% -- it never updates when `show` changes. To react to a binding, use `case` with
+%% a tracked scrutinee, not `if`. This test asserts both halves honestly.
 cond_if_bare_element(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_cond_if_bare). "
         "-export([render/1]). "
-        "render(Bindings) -> "
-        "    Show = arizona_template:get(show, Bindings), "
+        "render(#{show := Show}) -> "
         "    arizona_template:html({'div', [], ["
         "        if "
         "            Show -> {'p', [], [<<\"yes\">>]}; "
@@ -1631,10 +1654,16 @@ cond_if_bare_element(Config) when is_list(Config) ->
         "        end "
         "    ]}). "
     ),
+    %% Bare element in the `if` tail compiles to a nested template; both branches
+    %% render at SSR.
     {Shown, _} = arizona_render:render(Mod:render(#{show => true})),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Shown), <<"<p>yes</p>">>)),
     {Hidden, _} = arizona_render:render(Mod:render(#{show => false})),
-    ?assertEqual(nomatch, binary:match(iolist_to_binary(Hidden), <<"<p">>)).
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(Hidden), <<"<p">>)),
+    %% But the slot is frozen: the if-condition is a guard over an untracked read,
+    %% so it records no dependency and a `show` change would emit no diff.
+    {_HTML, Snap, _Views} = arizona_render:render(Mod:render(#{show => true}), #{}),
+    ?assertEqual([#{}], maps:get(deps, Snap)).
 
 %% A bare element in the tail of a nested `case`-of-`case` is reached by the
 %% recursive tail walk.
@@ -5591,22 +5620,6 @@ inline_destructuring_not_inlined(Config) when is_list(Config) ->
     ?assertEqual(~"Ada", Fun()),
     ?assertEqual(#{}, slot_deps(Fun)).
 
-%% Residue: a read reachable only through a clause GUARD stays captured (a guard
-%% cannot hold a get), so the slot records no dep and freezes. Documents the limit.
-inline_guard_get_stays_captured(Config) when is_list(Config) ->
-    Mod = compile_module_strict(
-        "-module(pt_inline_guardget). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    N = arizona_template:get(n, Bindings), "
-        "    Label = case x of _ when N > 5 -> big; _ -> small end, "
-        "    arizona_template:html({'p', [], [Label]}). "
-    ),
-    T = Mod:render(#{n => 10}),
-    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
-    ?assertEqual(big, Fun()),
-    ?assertEqual(#{}, slot_deps(Fun)).
-
 %% A hoisted read used as a comprehension generator SOURCE is inlined (the
 %% collapsed lc/bc/mc clause of iv/2 must preserve the comprehension tag -- this
 %% uses a *binary* comprehension so a tag-hardcoding bug would be caught). The
@@ -5832,6 +5845,132 @@ with_handoff_hoisted_tracks_outer_slot(Config) when is_list(Config) ->
     Changed = compute_changed(B0, B1),
     {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
     ?assertNotEqual([], Ops).
+
+%% A tracked read used in a `case` clause guard freezes the slot silently (the
+%% read can't re-run in the guard, so the dep is dropped); reject it instead.
+guard_case_tracked_read_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_guard_case). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Status = arizona_template:get(status, Bindings), "
+        "    Confirming = arizona_template:get(confirming, Bindings), "
+        "    arizona_template:html({'p', [], ["
+        "        case Status of "
+        "            active when Confirming -> <<\"y\">>; "
+        "            _ -> <<>> "
+        "        end]}). ",
+        fun(R) -> R =:= {tracked_read_in_guard, 'Confirming'} end
+    ).
+
+%% Same freeze through an `if` (its condition is a guard); rejected too.
+guard_if_tracked_read_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_guard_if). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Confirming = arizona_template:get(confirming, Bindings), "
+        "    arizona_template:html({'p', [], ["
+        "        if Confirming -> <<\"y\">>; true -> <<>> end]}). ",
+        fun(R) -> R =:= {tracked_read_in_guard, 'Confirming'} end
+    ).
+
+%% The tracked var can be buried inside a guard BIF / boolean combination and is
+%% still detected (the scan finds the variable node wherever it sits).
+guard_buried_tracked_read_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_guard_buried). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    N = arizona_template:get(n, Bindings), "
+        "    arizona_template:html({'p', [], ["
+        "        case ok of "
+        "            _ when is_integer(N) andalso N > 5 -> <<\"y\">>; "
+        "            _ -> <<>> "
+        "        end]}). ",
+        fun(R) -> R =:= {tracked_read_in_guard, 'N'} end
+    ).
+
+%% A guarded `case` whose result is hoisted into a slot is inlined into that slot
+%% (its result reaches a tracked read), so its guard lands in the slot and is
+%% rejected -- the case `inline_guard_get_stays_captured` used to document as a
+%% silent freeze.
+guard_hoisted_case_result_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_guard_hoist). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    N = arizona_template:get(n, Bindings), "
+        "    Label = case x of _ when N > 5 -> big; _ -> small end, "
+        "    arizona_template:html({'p', [], [Label]}). ",
+        fun(R) -> R =:= {tracked_read_in_guard, 'N'} end
+    ).
+
+%% A fun clause guard inside a slot is scanned the same way (iv_fun_clause path):
+%% the fun parameter is shadowed, but an outer tracked var in the guard is rejected.
+guard_fun_clause_tracked_read_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_guard_fun). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    N = arizona_template:get(n, Bindings), "
+        "    arizona_template:html({'p', [], ["
+        "        (fun (X) when N > 5 -> X; (_) -> <<>> end)(<<\"y\">>)]}). ",
+        fun(R) -> R =:= {tracked_read_in_guard, 'N'} end
+    ).
+
+%% Negative: a variable bound by the clause PATTERN (not a tracked outer read) is
+%% not flagged. The slot compiles and tracks the scrutinee read.
+guard_pattern_var_ok(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_guard_patvar). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], ["
+        "        case arizona_template:get(count, Bindings) of "
+        "            V when V > 0 -> <<\"some\">>; "
+        "            _ -> <<\"none\">> "
+        "        end]}). "
+    ),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, Mod:render(#{count => 3})),
+    ?assertEqual(<<"some">>, Fun()),
+    ?assertEqual(#{count => true}, slot_deps(Fun)).
+
+%% Negative: a non-tracked local (no ?get behind it) in a guard is fine -- there is
+%% no dependency to lose. Compiles and tracks only the scrutinee read.
+guard_untracked_local_ok(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_guard_local). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Limit = 10, "
+        "    arizona_template:html({'p', [], ["
+        "        case arizona_template:get(count, Bindings) of "
+        "            V when V > Limit -> <<\"over\">>; "
+        "            _ -> <<\"ok\">> "
+        "        end]}). "
+    ),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, Mod:render(#{count => 5})),
+    ?assertEqual(<<"ok">>, Fun()),
+    ?assertEqual(#{count => true}, slot_deps(Fun)).
+
+%% Negative + idiomatic fix: moving both reads into the case scrutinee (pattern
+%% match instead of guard) compiles and tracks BOTH dependencies.
+guard_tracked_read_in_scrutinee_ok(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_guard_scrut). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], ["
+        "        case {arizona_template:get(status, Bindings), "
+        "              arizona_template:get(confirming, Bindings)} of "
+        "            {active, true} -> <<\"Confirm\">>; "
+        "            _ -> <<>> "
+        "        end]}). "
+    ),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, Mod:render(#{status => active, confirming => true})),
+    ?assertEqual(<<"Confirm">>, Fun()),
+    ?assertEqual(#{status => true, confirming => true}, slot_deps(Fun)).
 
 %% Like compile_module/1 but compiles with warnings_as_errors, matching the
 %% project's real erl_opts. Needed because unused-variable / match_underscore_var
