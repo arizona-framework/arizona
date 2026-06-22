@@ -915,33 +915,19 @@ iv({var, _, V} = Var, Inline) ->
         #{} -> Var
     end;
 iv({'fun', L, {clauses, Cs}}, Inline) ->
-    Node = {'fun', L, {clauses, [iv_fun_clause(C, Inline) || C <- Cs]}},
-    wrap_guard_touches(Node, L, Cs, Inline);
+    iv_fun(L, Cs, Inline);
 iv({named_fun, L, Name, Cs}, Inline) ->
-    Inline1 = maps:remove(Name, Inline),
-    Node = {named_fun, L, Name, [iv_fun_clause(C, Inline1) || C <- Cs]},
-    wrap_guard_touches(Node, L, Cs, Inline1);
+    iv_named_fun(L, Name, Cs, Inline);
 iv({'case', L, E, Cs}, Inline) ->
-    Node = {'case', L, iv(E, Inline), [iv_clause(C, Inline) || C <- Cs]},
-    wrap_guard_touches(Node, L, Cs, Inline);
+    iv_case(L, E, Cs, Inline);
 iv({'if', L, Cs}, Inline) ->
-    Node = {'if', L, [iv_clause(C, Inline) || C <- Cs]},
-    wrap_guard_touches(Node, L, Cs, Inline);
+    iv_if(L, Cs, Inline);
 iv({'receive', L, Cs}, Inline) ->
-    Node = {'receive', L, [iv_clause(C, Inline) || C <- Cs]},
-    wrap_guard_touches(Node, L, Cs, Inline);
+    iv_receive(L, Cs, Inline);
 iv({'receive', L, Cs, AE, AB}, Inline) ->
-    Node = {'receive', L, [iv_clause(C, Inline) || C <- Cs], iv(AE, Inline), iv_body(AB, Inline)},
-    wrap_guard_touches(Node, L, Cs, Inline);
+    iv_receive(L, Cs, AE, AB, Inline);
 iv({'try', L, B, OfCs, CatchCs, Aft}, Inline) ->
-    Node =
-        {'try', L, iv_body(B, Inline), [iv_clause(C, Inline) || C <- OfCs],
-            [
-                iv_clause(C, Inline)
-             || C <- CatchCs
-            ],
-            iv_body(Aft, Inline)},
-    wrap_guard_touches(Node, L, OfCs ++ CatchCs, Inline);
+    iv_try(L, B, OfCs, CatchCs, Aft, Inline);
 iv({'catch', L, E}, Inline) ->
     {'catch', L, iv(E, Inline)};
 iv({Comp, L, T, Qs}, Inline) when Comp =:= lc; Comp =:= bc; Comp =:= mc ->
@@ -954,8 +940,7 @@ iv({match, L, P, E}, Inline) ->
 iv({'maybe', L, B}, Inline) ->
     {'maybe', L, iv_body(B, Inline)};
 iv({'maybe', L, B, {'else', L2, Cs}}, Inline) ->
-    Node = {'maybe', L, iv_body(B, Inline), {'else', L2, [iv_clause(C, Inline) || C <- Cs]}},
-    wrap_guard_touches(Node, L, Cs, Inline);
+    iv_maybe_else(L, B, L2, Cs, Inline);
 iv({maybe_match, L, P, E}, Inline) ->
     {maybe_match, L, P, iv(E, Inline)};
 iv(T, Inline) when is_tuple(T) ->
@@ -964,6 +949,45 @@ iv(L, Inline) when is_list(L) ->
     [iv(E, Inline) || E <- L];
 iv(Other, _Inline) ->
     Other.
+
+iv_clauses(Cs, Inline) ->
+    [iv_clause(C, Inline) || C <- Cs].
+
+iv_fun_clauses(Cs, Inline) ->
+    [iv_fun_clause(C, Inline) || C <- Cs].
+
+%% Guard-bearing forms build their node and wrap it (wrap_guard_touches/4) so a tracked
+%% binding read in a clause guard is recorded as a slot dependency. Kept as separate
+%% helpers so iv/2 stays a thin dispatcher.
+iv_fun(L, Cs, Inline) ->
+    wrap_guard_touches({'fun', L, {clauses, iv_fun_clauses(Cs, Inline)}}, L, Cs, Inline).
+
+iv_named_fun(L, Name, Cs, Inline) ->
+    Inline1 = maps:remove(Name, Inline),
+    wrap_guard_touches({named_fun, L, Name, iv_fun_clauses(Cs, Inline1)}, L, Cs, Inline1).
+
+iv_case(L, E, Cs, Inline) ->
+    wrap_guard_touches({'case', L, iv(E, Inline), iv_clauses(Cs, Inline)}, L, Cs, Inline).
+
+iv_if(L, Cs, Inline) ->
+    wrap_guard_touches({'if', L, iv_clauses(Cs, Inline)}, L, Cs, Inline).
+
+iv_receive(L, Cs, Inline) ->
+    wrap_guard_touches({'receive', L, iv_clauses(Cs, Inline)}, L, Cs, Inline).
+
+iv_receive(L, Cs, AE, AB, Inline) ->
+    Node = {'receive', L, iv_clauses(Cs, Inline), iv(AE, Inline), iv_body(AB, Inline)},
+    wrap_guard_touches(Node, L, Cs, Inline).
+
+iv_try(L, B, OfCs, CatchCs, Aft, Inline) ->
+    Node =
+        {'try', L, iv_body(B, Inline), iv_clauses(OfCs, Inline), iv_clauses(CatchCs, Inline),
+            iv_body(Aft, Inline)},
+    wrap_guard_touches(Node, L, OfCs ++ CatchCs, Inline).
+
+iv_maybe_else(L, B, L2, Cs, Inline) ->
+    Node = {'maybe', L, iv_body(B, Inline), {'else', L2, iv_clauses(Cs, Inline)}},
+    wrap_guard_touches(Node, L, Cs, Inline).
 
 %% Fun clause: parameters bind and shadow; drop them from the map for the body. Guards
 %% stay untouched (a binding read can't live in a guard); a tracked binding read in a

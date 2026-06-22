@@ -5978,8 +5978,9 @@ guard_attr_value_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Dark = arizona_template:get(dark, Bindings), "
-        "    arizona_template:html({'div', "
-        "        [{class, case x of _ when Dark -> <<\"d\">>; _ -> <<\"l\">> end}], [<<\"hi\">>]}). "
+        "    arizona_template:html({'div', [{class, "
+        "        case x of _ when Dark -> <<\"d\">>; _ -> <<\"l\">> end"
+        "    }], [<<\"hi\">>]}). "
     ),
     {HTML, Snap, _Views} = arizona_render:render(Mod:render(#{dark => true}), #{}),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), <<"class=\"d\"">>)),
