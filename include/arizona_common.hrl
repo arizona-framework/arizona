@@ -15,6 +15,12 @@
 -define(terminal(Elems), arizona_template:terminal(Elems)).
 -define(each(Fun, Source), arizona_template:each(Fun, Source)).
 
+%% Escape opt-out -- splices a trusted, already-safe HTML fragment verbatim into a
+%% content slot or attribute value instead of HTML-escaping it. The parse transform
+%% only recognizes the opt-out when the `raw` call is literal at the template site,
+%% so wrap values here, never inside a helper. Never use for user-controlled data.
+-define(raw(Value), arizona_template:raw(Value)).
+
 %% Descriptor constructors
 -define(stateful(Handler, Props), arizona_template:stateful(Handler, Props)).
 -define(stateless(Fun, Props), arizona_template:stateless(Fun, Props)).
