@@ -306,15 +306,14 @@ bound inside a `case` branch whose clause head binds a variable, and a rebound
 variable.
 
 A tracked read used in a **guard** inside a template (`case Status of active when
-Confirming -> ...`, an `if`, a fun-clause guard) is a compile error
-(`tracked_read_in_guard`), not a silent freeze. A guard cannot hold the `get/2`
-call (Erlang rejects it as an illegal guard expression), so the read can never
-re-run inside the slot's dependency bracket -- the dependency would be dropped and
-the slot would stop updating when that binding changes. The transform rejects it:
-move the test into the `case` scrutinee or clause body so the read is tracked
-(`case {?get(status), ?get(confirming)} of {active, true} -> ...`), or replace the
-guard with a pattern match. Only a tracked read reaches this -- a non-tracked local
-or a pattern-bound variable in a guard is fine.
+Confirming -> ...`, an `if`, a nested fun) is **auto-tracked**, so the slot stays
+reactive. A guard cannot hold the `get/2` call (Erlang rejects it as an illegal guard
+expression), so the read can't run inside the slot's dependency bracket on its own; the
+transform wraps the guard-bearing expression so it first reads (for the `track/1` side
+effect) each binding the guards reference, recording them as slot dependencies. The guard
+keeps using the captured value, which each diff cycle rebuilds from current bindings, so a
+change to a guard binding re-renders the slot. A non-tracked local or a pattern-bound
+variable in a guard needs nothing -- there is no binding dependency to record.
 
 `?get`/`get_lazy`/`with` are for the **view bindings**, not sub-maps: they call
 `track/1` regardless of which map they read, so reading a nested map records the
