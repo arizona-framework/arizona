@@ -152,6 +152,7 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?stateless(Fun, Props)` | `arizona_template:stateless(fun Fun/1, Props)` |
 | `?stateless(Mod, Fun, Props)` | `arizona_template:stateless(Mod, Fun, Props)` |
 | `?local(Key, Init)` | `arizona_template:local(Key, Init)` -- client-owned slot: server renders `Init` once and never diffs it; the browser owns/updates the value via `Key` (a binary or atom literal; content -- one or many per element, mixed with static text -- or an attribute value, whole or interpolated with one local + static prefix/suffix) |
+| `?raw(Value)` | `arizona_template:raw(Value)` -- escape opt-out: splices a trusted, already-safe HTML fragment verbatim into a content slot or attribute value instead of HTML-escaping it. The parse transform only recognizes the opt-out when the `raw` call is **literal at the template site**, so wrap values here, never inside a helper. Never for user-controlled data |
 | `?connected` | `arizona_live:connected()` -- true inside a connected live process, false during SSR |
 | `?send(Msg)` | `arizona_live:send(?get(id), Msg)` -- send to current view (stateful only) |
 | `?send(ViewId, Msg)` | `arizona_live:send(ViewId, Msg)` -- send to specific view (stateful only) |
