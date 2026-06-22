@@ -96,7 +96,7 @@ render(Bindings) ->
                         Stacktrace
                     )
                 ]},
-                reload_script(ReloadUrl)
+                ?raw(reload_script(ReloadUrl))
             ]}
         ]}
     ).
@@ -327,6 +327,10 @@ relative_path(File) ->
             File
     end.
 
+%% Trusted, framework-built markup -- the caller wraps it in `?raw` so the
+%% content slot splices it verbatim and the browser sees a real <script> tag
+%% rather than escaped text (`?raw` must be the literal call at the template
+%% site for the parse transform to recognize the escape opt-out).
 reload_script(undefined) ->
     <<>>;
 reload_script(Url) ->
@@ -367,7 +371,9 @@ render_with_reload_url_test() ->
     },
     Tmpl = render(#{error_info => ErrorInfo}),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Tmpl)),
-    ?assertNotEqual(nomatch, binary:match(HTML, <<"EventSource">>)),
-    ?assertNotEqual(nomatch, binary:match(HTML, <<"/reload">>)).
+    %% Must be a real <script> tag, not escaped text -- assert the literal
+    %% opening tag is present and that no escaped form (&lt;script&gt;) leaked.
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"<script>new EventSource('/reload')">>)),
+    ?assertEqual(nomatch, binary:match(HTML, <<"&lt;script&gt;">>)).
 
 -endif.
