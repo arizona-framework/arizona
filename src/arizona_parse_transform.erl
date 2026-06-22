@@ -898,6 +898,14 @@ strip_tail_bind({clause, L, Patterns, Guards, [{match, _, {var, _, _V}, E}]}) ->
 %% substitution can never produce an illegal pattern.
 inline_vars(Expr, Inline) when map_size(Inline) =:= 0 ->
     Expr;
+%% A bare top-level fun is an ?each callback (compile_each is the only caller that passes a
+%% fun straight to inline_vars); inline its clauses but DON'T wrap it -- compile_each needs a
+%% fun literal, not a block. A fun NESTED in a content slot is wrapped by iv/2 below.
+inline_vars({'fun', L, {clauses, Cs}}, Inline) ->
+    {'fun', L, {clauses, [iv_fun_clause(C, Inline) || C <- Cs]}};
+inline_vars({named_fun, L, Name, Cs}, Inline) ->
+    Inline1 = maps:remove(Name, Inline),
+    {named_fun, L, Name, [iv_fun_clause(C, Inline1) || C <- Cs]};
 inline_vars(Expr, Inline) ->
     iv(Expr, Inline).
 
@@ -907,25 +915,19 @@ iv({var, _, V} = Var, Inline) ->
         #{} -> Var
     end;
 iv({'fun', L, {clauses, Cs}}, Inline) ->
-    {'fun', L, {clauses, [iv_fun_clause(C, Inline) || C <- Cs]}};
+    iv_fun(L, Cs, Inline);
 iv({named_fun, L, Name, Cs}, Inline) ->
-    Inline1 = maps:remove(Name, Inline),
-    {named_fun, L, Name, [iv_fun_clause(C, Inline1) || C <- Cs]};
+    iv_named_fun(L, Name, Cs, Inline);
 iv({'case', L, E, Cs}, Inline) ->
-    {'case', L, iv(E, Inline), [iv_clause(C, Inline) || C <- Cs]};
+    iv_case(L, E, Cs, Inline);
 iv({'if', L, Cs}, Inline) ->
-    {'if', L, [iv_clause(C, Inline) || C <- Cs]};
+    iv_if(L, Cs, Inline);
 iv({'receive', L, Cs}, Inline) ->
-    {'receive', L, [iv_clause(C, Inline) || C <- Cs]};
+    iv_receive(L, Cs, Inline);
 iv({'receive', L, Cs, AE, AB}, Inline) ->
-    {'receive', L, [iv_clause(C, Inline) || C <- Cs], iv(AE, Inline), iv_body(AB, Inline)};
+    iv_receive(L, Cs, AE, AB, Inline);
 iv({'try', L, B, OfCs, CatchCs, Aft}, Inline) ->
-    {'try', L, iv_body(B, Inline), [iv_clause(C, Inline) || C <- OfCs],
-        [
-            iv_clause(C, Inline)
-         || C <- CatchCs
-        ],
-        iv_body(Aft, Inline)};
+    iv_try(L, B, OfCs, CatchCs, Aft, Inline);
 iv({'catch', L, E}, Inline) ->
     {'catch', L, iv(E, Inline)};
 iv({Comp, L, T, Qs}, Inline) when Comp =:= lc; Comp =:= bc; Comp =:= mc ->
@@ -938,7 +940,7 @@ iv({match, L, P, E}, Inline) ->
 iv({'maybe', L, B}, Inline) ->
     {'maybe', L, iv_body(B, Inline)};
 iv({'maybe', L, B, {'else', L2, Cs}}, Inline) ->
-    {'maybe', L, iv_body(B, Inline), {'else', L2, [iv_clause(C, Inline) || C <- Cs]}};
+    iv_maybe_else(L, B, L2, Cs, Inline);
 iv({maybe_match, L, P, E}, Inline) ->
     {maybe_match, L, P, iv(E, Inline)};
 iv(T, Inline) when is_tuple(T) ->
@@ -948,17 +950,112 @@ iv(L, Inline) when is_list(L) ->
 iv(Other, _Inline) ->
     Other.
 
-%% Fun clause: parameters bind and shadow; drop them from the map for the body.
+iv_clauses(Cs, Inline) ->
+    [iv_clause(C, Inline) || C <- Cs].
+
+iv_fun_clauses(Cs, Inline) ->
+    [iv_fun_clause(C, Inline) || C <- Cs].
+
+%% Guard-bearing forms build their node and wrap it (wrap_guard_touches/4) so a tracked
+%% binding read in a clause guard is recorded as a slot dependency. Kept as separate
+%% helpers so iv/2 stays a thin dispatcher.
+iv_fun(L, Cs, Inline) ->
+    wrap_guard_touches({'fun', L, {clauses, iv_fun_clauses(Cs, Inline)}}, L, Cs, Inline).
+
+iv_named_fun(L, Name, Cs, Inline) ->
+    Inline1 = maps:remove(Name, Inline),
+    wrap_guard_touches({named_fun, L, Name, iv_fun_clauses(Cs, Inline1)}, L, Cs, Inline1).
+
+iv_case(L, E, Cs, Inline) ->
+    wrap_guard_touches({'case', L, iv(E, Inline), iv_clauses(Cs, Inline)}, L, Cs, Inline).
+
+iv_if(L, Cs, Inline) ->
+    wrap_guard_touches({'if', L, iv_clauses(Cs, Inline)}, L, Cs, Inline).
+
+iv_receive(L, Cs, Inline) ->
+    wrap_guard_touches({'receive', L, iv_clauses(Cs, Inline)}, L, Cs, Inline).
+
+iv_receive(L, Cs, AE, AB, Inline) ->
+    Node = {'receive', L, iv_clauses(Cs, Inline), iv(AE, Inline), iv_body(AB, Inline)},
+    wrap_guard_touches(Node, L, Cs, Inline).
+
+iv_try(L, B, OfCs, CatchCs, Aft, Inline) ->
+    Node =
+        {'try', L, iv_body(B, Inline), iv_clauses(OfCs, Inline), iv_clauses(CatchCs, Inline),
+            iv_body(Aft, Inline)},
+    wrap_guard_touches(Node, L, OfCs ++ CatchCs, Inline).
+
+iv_maybe_else(L, B, L2, Cs, Inline) ->
+    Node = {'maybe', L, iv_body(B, Inline), {'else', L2, iv_clauses(Cs, Inline)}},
+    wrap_guard_touches(Node, L, Cs, Inline).
+
+%% Fun clause: parameters bind and shadow; drop them from the map for the body. Guards
+%% stay untouched (a binding read can't live in a guard); a tracked binding read in a
+%% nested fun's guard is auto-tracked by the enclosing fun node (wrap_guard_touches/4 in
+%% iv/2). A top-level ?each callback fun is inlined through here too but not wrapped (see
+%% inline_vars/2: compile_each needs a single-clause fun, whose guards are over the item
+%% param, not outer tracked vars).
 iv_fun_clause({clause, L, Params, Guards, Body}, Inline) ->
     Inline1 = maps:without(pattern_vars(Params), Inline),
     {clause, L, Params, Guards, iv_body(Body, Inline1)}.
 
 %% case/receive/try-of/catch clause: patterns match the (already inlined) scrutinee,
 %% so patterns and guards are left untouched. Any name a pattern binds is dropped from
-%% the map for the body as a conservative shadow guard.
+%% the map for the body as a conservative shadow guard. A tracked binding read in a guard
+%% is handled by the enclosing node via wrap_guard_touches/4, not here.
 iv_clause({clause, L, Patterns, Guards, Body}, Inline) ->
     Inline1 = maps:without(pattern_vars(Patterns), Inline),
     {clause, L, Patterns, Guards, iv_body(Body, Inline1)}.
+
+%% A binding read (`?get`/`get_lazy`/`with`-derived, hence in the inline map) cannot live
+%% in a guard -- Erlang forbids a function call there -- so guards are left as bound
+%% variables. The read then never re-runs inside the slot's dependency bracket, and the
+%% slot would silently freeze on that binding. To keep the slot reactive, wrap the
+%% guard-bearing expression in a block that first reads (for the `track/1` side effect)
+%% each tracked binding its guards reference, recording them as slot dependencies. The
+%% guard keeps using the captured value, which each diff cycle rebuilds from the current
+%% bindings, so a change to a guard binding re-renders the slot. No tracked guard var ->
+%% node returned unchanged.
+wrap_guard_touches(Node, L, Clauses, Inline) ->
+    case guard_tracked_vars(Clauses, Inline) of
+        [] -> Node;
+        Vars -> {block, L, [guard_touch(V, L, Inline) || V <- Vars] ++ [Node]}
+    end.
+
+%% Read V's inlined definition (its get/get_lazy/with call) for the track side effect,
+%% discarding the value. Reusing the inline expansion handles get/get_lazy/with and
+%% transitively-derived vars uniformly without extracting the binding key.
+guard_touch(V, L, Inline) ->
+    {match, L, {var, L, '_'}, iv({var, L, V}, Inline)}.
+
+%% Union (first-seen order) of inline-map variables referenced in any clause guard,
+%% respecting each clause's own pattern/parameter shadowing.
+guard_tracked_vars(Clauses, Inline) ->
+    lists:reverse(
+        lists:foldl(
+            fun({clause, _, Patterns, Guards, _}, Acc) ->
+                ClauseInline = maps:without(pattern_vars(Patterns), Inline),
+                collect_guard_vars(Guards, ClauseInline, Acc)
+            end,
+            [],
+            Clauses
+        )
+    ).
+
+%% Depth-first collect of inline-map variable names in a guard AST (they may be nested in
+%% `andalso`/`is_binary(...)`/comparisons). The `{var, _, _}` clause is matched ahead of
+%% the generic tuple walk so a var node is never decomposed.
+collect_guard_vars({var, _, V}, Inline, Acc) ->
+    case is_map_key(V, Inline) andalso not lists:member(V, Acc) of
+        true -> [V | Acc];
+        false -> Acc
+    end;
+collect_guard_vars(T, Inline, Acc) when is_tuple(T) ->
+    collect_guard_vars(tuple_to_list(T), Inline, Acc);
+collect_guard_vars([H | T], Inline, Acc) ->
+    collect_guard_vars(T, Inline, collect_guard_vars(H, Inline, Acc));
+collect_guard_vars(_Other, _Inline, Acc) ->
+    Acc.
 
 %% A body is a sequence; a `Var = RHS` match binds Var (shadowing) for later exprs.
 iv_body(Exprs, Inline) ->

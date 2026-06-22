@@ -274,12 +274,30 @@ and idiomatic templates (reads written inside `?html`) are unaffected.
 destructured in the function head (`render(#{foo := Foo})`) or through any
 non-bare-var pattern (`{ok, V} = ?get(...)`) -- a pattern match is an untracked
 read; read the whole value with `?get(foo)` and destructure with plain Erlang.
-Also: a read reachable only through a guard (`when N > 5` -- a guard cannot hold
-a `get`), a variable bound inside an `if` or a `case` branch whose clause head
-itself binds a variable, and a rebound variable. Use `?get` for the top-level
-binding and plain `maps:get/2` for sub-structures (only the `?get` records a dep,
-which is the correct grain). In all these cases the read is left captured and the
-slot keeps its SSR value; the transform never makes valid code uncompilable.
+Also: a variable bound inside a `case` branch whose clause head itself binds a
+variable, and a rebound variable. Use `?get` for the top-level binding and plain
+`maps:get/2` for sub-structures (only the `?get` records a dep, which is the
+correct grain). In these cases the read is left captured and the slot keeps its
+SSR value.
+
+**A tracked read used in a guard is auto-tracked, not frozen:** a binding read in a
+**guard** (`case Status of active when Confirming -> ...`, an `if`) can't run inside the
+slot's dependency bracket on its own -- a guard cannot hold the `get/2` call (Erlang
+rejects that as an illegal guard expression), so `inline_vars` leaves guards as bound
+variables. Left alone the read would run once in the function body, outside the bracket,
+and the slot would silently freeze on that binding. Instead, the guard-bearing `iv` node
+(`{'case',...}` / `{'if',...}` / `{'receive',...}` / `{'try',...}` / `{'maybe',...}`, and
+a nested `fun`) wraps itself in a block that first reads each tracked binding its clause
+guards reference -- `begin _ = arizona_template:get(K, Bindings), ..., <expr> end` -- for
+the `track/1` side effect, recording those bindings as slot dependencies
+(`wrap_guard_touches/4`, collecting via `guard_tracked_vars/2` with per-clause shadow
+handling). The guard keeps using the captured value, which each diff cycle rebuilds from
+current bindings, so a change to a guard binding re-renders the slot. Reusing the inline
+expansion as the touch (`iv({var,L,V}, Inline)`) handles `get`/`get_lazy`/`with` and
+transitively-derived vars uniformly. A non-tracked local or a pattern-bound variable in a
+guard needs no touch (no binding dependency). The one fun NOT wrapped is a top-level
+`?each` callback (handled in `inline_vars/2`): `compile_each` needs a single-clause fun,
+and its guards are over the item param, not outer tracked vars.
 
 ## Tracked accessors, the sub-map diagnostic, and `with/2`
 
