@@ -269,6 +269,46 @@ describe('applyOps -- OP.TEXT', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 3b. applyOps -- OP.TEXT round-trip: applied DOM === fresh SSR of the new state
+// ---------------------------------------------------------------------------
+
+// The strongest wire invariant: SSR(state0) + diff(state0 -> state1) must yield exactly
+// SSR(state1). Each case captures a fresh SSR render of the new state, then applies the
+// diff op to an SSR render of the old state and asserts byte-equal innerHTML (markers and
+// escaping included). Complements the property-based injection/display/fragment tests.
+describe('applyOps -- OP.TEXT round-trip (applied DOM === fresh SSR)', () => {
+    it('?get scalar (with markup): escaping matches SSR', () => {
+        // SSR escapes a ?get value; the parser decodes the entities back to a literal
+        // text node, so the new-state render holds `<b>x</b>` as text.
+        setupView('v', '<span az="0"><!--az:0-->&lt;b&gt;x&lt;/b&gt;<!--/az--></span>');
+        const freshSsr = resolveEl('v:0').innerHTML;
+        // Old-state SSR, then the diff op (value sent RAW, no isHtml -> text node).
+        setupView('v', '<span az="0"><!--az:0-->old<!--/az--></span>');
+        applyOps([[OP.TEXT, 'v:0', '<b>x</b>']]);
+        expect(resolveEl('v:0').innerHTML).toBe(freshSsr);
+    });
+
+    it('?raw value: trusted HTML matches SSR verbatim', () => {
+        setupView('v', '<div az="0"><!--az:0--><b>z</b><!--/az--></div>');
+        const freshSsr = resolveEl('v:0').innerHTML;
+        setupView('v', '<div az="0"><!--az:0--><b>a</b><!--/az--></div>');
+        // A ?raw value is wire-tagged `{raw}`; the worker flattens it to HTML + isHtml.
+        applyOps([[OP.TEXT, 'v:0', '<b>z</b>', true]]);
+        expect(resolveEl('v:0').innerHTML).toBe(freshSsr);
+    });
+
+    it('nested template (wholesale): resolved HTML matches SSR', () => {
+        // A nested-template zip-map is resolved to HTML by the worker; at the main thread
+        // it arrives as an HTML string with isHtml=true.
+        setupView('v', '<div az="0"><!--az:0--><p az="0:0">Hi</p><!--/az--></div>');
+        const freshSsr = resolveEl('v:0').innerHTML;
+        setupView('v', '<div az="0"><!--az:0--><p az="0:0">Old</p><!--/az--></div>');
+        applyOps([[OP.TEXT, 'v:0', '<p az="0:0">Hi</p>', true]]);
+        expect(resolveEl('v:0').innerHTML).toBe(freshSsr);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 4. applyOps -- OP.SET_ATTR
 // ---------------------------------------------------------------------------
 
