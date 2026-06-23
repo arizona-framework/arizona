@@ -29,6 +29,7 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([receive_branch/1]).
 -export([get_lazy_branch/1]).
 -export([with_branch/1]).
+-export([computed_key/1]).
 -export([two_slot/1]).
 -export([nested_element/1]).
 -export([top_text/1]).
@@ -288,6 +289,22 @@ with_branch(Bindings) ->
         {'div', [{id, ~"x"}], [
             case ?get(flag) of
                 true -> {p, [], [maps:get(val, az:with([val], Bindings))]};
+                false -> <<>>
+            end
+        ]}
+    ).
+
+%% A branch read whose key is a *computed* variable (`?get(Key)`, Key bound at runtime) is
+%% NOT auto-tracked: add_literal_key only injects a track for a literal atom/binary key. So
+%% a change to the binding the computed key names freezes the branch -- the documented
+%% limitation. (`which`, a literal read, still tracks; only the computed read is missed.)
+-spec computed_key(az:bindings()) -> az:template().
+computed_key(Bindings) ->
+    Key = ?get(which),
+    ?html(
+        {'div', [{id, ~"x"}], [
+            case ?get(flag) of
+                true -> {p, [], [?get(Key)]};
                 false -> <<>>
             end
         ]}
