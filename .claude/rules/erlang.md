@@ -270,7 +270,7 @@ which is catastrophic when the slot's `az` is that element's own `az`, e.g. a co
 child rendered directly under the view root.)
 
 When the **same branch** re-renders (its statics are unchanged -- only an inner binding
-changed), the diff does **not** re-render the whole branch: `make_ops/3` diffs the nested
+changed), the diff does **not** re-render the whole branch: `make_ops/4` diffs the nested
 template's inner dynamics and patches only the changed inner slot(s), each addressed by its
 own `az` (an inner attribute change is a precise `?OP_SET_ATTR`). It recurses through
 nested-nested templates to the deepest changed slot. The wholesale `?OP_TEXT` re-render is

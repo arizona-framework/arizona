@@ -235,7 +235,7 @@ key without reading the binding, so an absent non-taken-branch key is safe; valu
 (scalar) branches are left alone (their reads already track when taken). See the
 "Bare element tuples in conditional tails" rule in `.claude/rules/erlang.md`.
 
-On re-render the diff then fine-grains: `arizona_diff:make_ops/3` diffs a
+On re-render the diff then fine-grains: `make_ops/4` diffs a
 same-statics nested template's inner dynamics (each globally `Az`-addressed and
 marker-anchored) and patches only the changed inner slot(s) -- the same
 per-inner-dynamic diff the `view_id` child-view path uses (`diff_child_dynamics/2`),
