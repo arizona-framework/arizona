@@ -25,6 +25,8 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([deep/1]).
 -export([attr_in_branch/1]).
 -export([try_branch/1]).
+-export([block_branch/1]).
+-export([receive_branch/1]).
 -export([two_slot/1]).
 -export([nested_element/1]).
 -export([top_text/1]).
@@ -231,6 +233,32 @@ try_branch(Bindings) ->
                 false -> <<>>
             catch
                 _:_ -> <<>>
+            end
+        ]}
+    ).
+
+%% A `begin ... end` block is a walked tail position (map_tail_exprs/3): the block's
+%% last expression is the tail element, whose `val` read must be tracked.
+-spec block_branch(az:bindings()) -> az:template().
+block_branch(Bindings) ->
+    ?html(
+        {'div', [{id, ~"x"}], [
+            begin
+                Class = ?get(cls),
+                {p, [{class, Class}], [?get(val)]}
+            end
+        ]}
+    ).
+
+%% A `receive ... after` body is a walked tail position: the `after 0` element branch's
+%% `val` read must be tracked. `after 0` fires immediately on the empty mailbox, so the
+%% render never blocks.
+-spec receive_branch(az:bindings()) -> az:template().
+receive_branch(Bindings) ->
+    ?html(
+        {'div', [{id, ~"x"}], [
+            receive
+            after 0 -> {p, [], [?get(val)]}
             end
         ]}
     ).

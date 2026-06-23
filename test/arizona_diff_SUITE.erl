@@ -40,6 +40,8 @@
     conditional_deep_nesting_tracks/1,
     conditional_attr_in_branch_tracks/1,
     conditional_try_branch_tracks/1,
+    conditional_block_branch_tracks/1,
+    conditional_receive_branch_tracks/1,
     conditional_two_slot_fine_grained/1,
     conditional_nested_element_recurses/1,
     wire_get_value_raw/1,
@@ -92,6 +94,8 @@ groups() ->
             conditional_deep_nesting_tracks,
             conditional_attr_in_branch_tracks,
             conditional_try_branch_tracks,
+            conditional_block_branch_tracks,
+            conditional_receive_branch_tracks,
             conditional_two_slot_fine_grained,
             conditional_nested_element_recurses
         ]},
@@ -853,6 +857,22 @@ conditional_try_branch_tracks(Config) when is_list(Config) ->
     Ops = cond_diff(try_branch, B0, B1, #{val => true}),
     ?assertMatch([[?OP_TEXT, _, _]], Ops),
     ?assert(cond_payload_has(Ops, <<"B">>)).
+
+%% A `begin ... end` block is a walked tail position: the block's last-expression element
+%% branch reads `val`, which must be tracked so a `val` change re-renders the slot.
+conditional_block_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{cls => <<"c">>, val => <<"A">>},
+    B1 = #{cls => <<"c">>, val => <<"B">>},
+    Ops = cond_diff(block_branch, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
+
+%% A `receive ... after` body is a walked tail position: the `after 0` element branch
+%% reads `val`, which must be tracked. `after 0` never blocks the render.
+conditional_receive_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{val => <<"A">>},
+    B1 = #{val => <<"B">>},
+    Ops = cond_diff(receive_branch, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
 
 %% Phase 2 payoff: a branch with two text slots, changing one emits exactly one inner
 %% op at that slot's az (the sibling slot is left untouched -- no whole-branch
