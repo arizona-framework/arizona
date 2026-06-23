@@ -27,6 +27,8 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([try_branch/1]).
 -export([block_branch/1]).
 -export([receive_branch/1]).
+-export([get_lazy_branch/1]).
+-export([with_branch/1]).
 -export([two_slot/1]).
 -export([nested_element/1]).
 -export([top_text/1]).
@@ -259,6 +261,34 @@ receive_branch(Bindings) ->
         {'div', [{id, ~"x"}], [
             receive
             after 0 -> {p, [], [?get(val)]}
+            end
+        ]}
+    ).
+
+%% A branch element reading via `?get_lazy` instead of `?get`: collect_call_keys must
+%% extract the key from a `get_lazy` call too, so a change to `val` re-renders the slot.
+-spec get_lazy_branch(az:bindings()) -> az:template().
+get_lazy_branch(Bindings) ->
+    ?html(
+        {'div', [{id, ~"x"}], [
+            case ?get(flag) of
+                true -> {p, [], [?get_lazy(val, fun() -> ~"def" end)]};
+                false -> <<>>
+            end
+        ]}
+    ).
+
+%% A branch element handing a bindings subset to a sub-context via `az:with`:
+%% collect_call_keys must extract each key from the `with` list, so a change to `val`
+%% re-renders the slot. Without the injected track the projection's read is isolated in
+%% the branch's nested template and the slot would freeze.
+-spec with_branch(az:bindings()) -> az:template().
+with_branch(Bindings) ->
+    ?html(
+        {'div', [{id, ~"x"}], [
+            case ?get(flag) of
+                true -> {p, [], [maps:get(val, az:with([val], Bindings))]};
+                false -> <<>>
             end
         ]}
     ).

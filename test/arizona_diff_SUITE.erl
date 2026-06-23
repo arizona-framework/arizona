@@ -42,6 +42,8 @@
     conditional_try_branch_tracks/1,
     conditional_block_branch_tracks/1,
     conditional_receive_branch_tracks/1,
+    conditional_get_lazy_branch_tracks/1,
+    conditional_with_branch_tracks/1,
     conditional_two_slot_fine_grained/1,
     conditional_nested_element_recurses/1,
     wire_get_value_raw/1,
@@ -96,6 +98,8 @@ groups() ->
             conditional_try_branch_tracks,
             conditional_block_branch_tracks,
             conditional_receive_branch_tracks,
+            conditional_get_lazy_branch_tracks,
+            conditional_with_branch_tracks,
             conditional_two_slot_fine_grained,
             conditional_nested_element_recurses
         ]},
@@ -872,6 +876,22 @@ conditional_receive_branch_tracks(Config) when is_list(Config) ->
     B0 = #{val => <<"A">>},
     B1 = #{val => <<"B">>},
     Ops = cond_diff(receive_branch, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
+
+%% A branch reading via `?get_lazy` (not `?get`): collect_call_keys extracts the key from
+%% a get_lazy call, so a `val` change re-renders the slot.
+conditional_get_lazy_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{flag => true, val => <<"A">>},
+    B1 = #{flag => true, val => <<"B">>},
+    Ops = cond_diff(get_lazy_branch, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
+
+%% A branch projecting a bindings subset via `az:with`: collect_call_keys extracts each
+%% key from the `with` list, so a `val` change re-renders the slot.
+conditional_with_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{flag => true, val => <<"A">>},
+    B1 = #{flag => true, val => <<"B">>},
+    Ops = cond_diff(with_branch, B0, B1, #{val => true}),
     ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
 
 %% Phase 2 payoff: a branch with two text slots, changing one emits exactly one inner
