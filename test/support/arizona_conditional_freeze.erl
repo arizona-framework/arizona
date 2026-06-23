@@ -27,6 +27,8 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([try_branch/1]).
 -export([two_slot/1]).
 -export([nested_element/1]).
+-export([top_text/1]).
+-export([raw_text/1]).
 
 %% Constant scrutinee (`flag`), branch reads `val`: a change to `val` must
 %% re-render the `<p>` even though `flag` is unchanged.
@@ -266,3 +268,14 @@ nested_element(Bindings) ->
             end
         ]}
     ).
+
+%% Top-level (non-nested) text dynamic: a `?get` value is sent RAW on the diff wire
+%% (the client text-nodes it -- safe, matches SSR).
+-spec top_text(az:bindings()) -> az:template().
+top_text(Bindings) ->
+    ?html({'div', [{id, ~"x"}], [?get(name)]}).
+
+%% A `?raw` trusted-HTML value: tagged on the diff wire so the client innerHTMLs it.
+-spec raw_text(az:bindings()) -> az:template().
+raw_text(Bindings) ->
+    ?html({'div', [{id, ~"x"}], [?raw(?get(html))]}).

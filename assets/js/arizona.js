@@ -481,20 +481,23 @@ function forEachElementBetweenMarkers(startMarker, fn) {
 
 /**
  * Apply a TEXT op: replace marker content (or el.textContent if no marker)
- * and walk hook lifecycle.
+ * and walk hook lifecycle. `isHtml` distinguishes an HTML fragment (innerHTML) from a
+ * scalar value (text node / textContent) -- see updateMarkerContent.
  * @param {Element} el
  * @param {string} az
  * @param {string} val
+ * @param {boolean} [isHtml]
  */
-function applyTextOp(el, az, val) {
+function applyTextOp(el, az, val, isHtml) {
     const marker = findMarker(el, az);
     if (marker) {
         forEachElementBetweenMarkers(marker, destroyHooks);
-        updateMarkerContent(marker, val);
+        updateMarkerContent(marker, val, isHtml);
         forEachElementBetweenMarkers(marker, mountHooks);
     } else {
         destroyChildHooks(el);
-        el.textContent = val;
+        if (isHtml) el.innerHTML = val;
+        else el.textContent = val;
     }
     notifyUpdated(el);
 }
@@ -551,7 +554,7 @@ function applyOps(ops) {
         const az = op[1].substring(op[1].indexOf(':') + 1);
         switch (op[0]) {
             case OP.TEXT:
-                applyTextOp(el, az, op[2]);
+                applyTextOp(el, az, op[2], op[3]);
                 break;
             case OP.SET_ATTR:
                 applySetAttrOp(el, op[2], op[3]);
@@ -636,11 +639,16 @@ function findMarker(el, az) {
 
 /**
  * Replace everything between <!--az:X--> and <!--/az--> with new content.
- * Uses a <template> for HTML strings (to parse tags) or a text node for plain text.
+ * `isHtml` (carried on the op by the worker) selects the renderer: a <template> that
+ * parses tags for an HTML fragment (nested template, plain-list `?each`, or a `?raw`
+ * value), or a text node for a scalar value. A scalar is ALWAYS a text node -- never
+ * sniffed for `<` -- so a `?get` value containing markup is shown as literal text and
+ * cannot inject (matching SSR, which escapes the same value).
  * @param {Comment} startMarker
  * @param {string} value
+ * @param {boolean} [isHtml]
  */
-function updateMarkerContent(startMarker, value) {
+function updateMarkerContent(startMarker, value, isHtml) {
     const doc = startMarker.ownerDocument;
     let node = startMarker.nextSibling;
     while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
@@ -649,7 +657,7 @@ function updateMarkerContent(startMarker, value) {
         node = next;
     }
     // Insert new content before the closing marker
-    if (value.includes('<')) {
+    if (isHtml) {
         const tpl = doc.createElement('template');
         tpl.innerHTML = value;
         startMarker.after(tpl.content);
@@ -1014,7 +1022,7 @@ function applyItemOps(item, innerOps) {
         const az = op[1];
         switch (op[0]) {
             case OP.TEXT:
-                applyTextOp(resolveInnerEl(item, az), az, op[2]);
+                applyTextOp(resolveInnerEl(item, az), az, op[2], op[3]);
                 break;
             case OP.SET_ATTR:
                 applySetAttrOp(resolveInnerEl(item, az), op[2], op[3]);

@@ -141,7 +141,19 @@ setOnPersist(
 function resolveOps(ops) {
     for (const op of ops) {
         switch (op[0]) {
-            case OP_TEXT:
+            case OP_TEXT: {
+                // A scalar text value arrives as a bare string; an HTML fragment (a
+                // nested-template / plain-list-each zip-map, or a `?raw` `{raw}` tag)
+                // arrives as an object. Record which BEFORE resolveHtml flattens both to
+                // a string, so the main thread renders text via a text node (safe) and
+                // HTML via innerHTML. (Nothing extra rides the WS wire: text is a string,
+                // HTML an object -- the type itself is the discriminator; op[3] is only
+                // for the worker -> main-thread message.)
+                const isHtml = typeof op[2] !== 'string';
+                op[2] = resolveHtml(op[2]);
+                op[3] = isHtml;
+                break;
+            }
             case OP_UPDATE:
             case OP_REPLACE:
                 op[2] = resolveHtml(op[2]);

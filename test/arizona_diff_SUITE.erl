@@ -41,11 +41,13 @@
     conditional_attr_in_branch_tracks/1,
     conditional_try_branch_tracks/1,
     conditional_two_slot_fine_grained/1,
-    conditional_nested_element_recurses/1
+    conditional_nested_element_recurses/1,
+    wire_get_value_raw/1,
+    wire_raw_value_tagged_html/1
 ]).
 
 all() ->
-    [{group, basic_ops}, {group, no_diff}, {group, conditional_dep}].
+    [{group, basic_ops}, {group, no_diff}, {group, conditional_dep}, {group, wire_payload}].
 
 groups() ->
     [
@@ -92,6 +94,10 @@ groups() ->
             conditional_try_branch_tracks,
             conditional_two_slot_fine_grained,
             conditional_nested_element_recurses
+        ]},
+        {wire_payload, [parallel], [
+            wire_get_value_raw,
+            wire_raw_value_tagged_html
         ]}
     ].
 
@@ -870,6 +876,24 @@ conditional_nested_element_recurses(Config) when is_list(Config) ->
     B1 = B0#{val => <<"B">>},
     Ops = cond_diff(nested_element, B0, B1, #{val => true}),
     ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
+
+%% A scalar `?get` value is sent RAW on the diff wire (a bare binary) -- escaping happens
+%% client-side (a text node shows `<` literally, matching SSR). It is NOT HTML-tagged, so
+%% the client text-nodes it and a value containing markup cannot inject.
+wire_get_value_raw(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    {_HTML, S0, V0} = arizona_render:render(M:top_text(#{name => <<"<b>a</b>">>}), #{}),
+    {Ops, _, _} = arizona_diff:diff(M:top_text(#{name => <<"<b>z</b>">>}), S0, V0, #{name => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"<b>z</b>">>]], Ops).
+
+%% A `?raw` trusted-HTML value is tagged `#{~"raw" => Html}` (a map, not a bare string) so
+%% the wire marks it HTML; the client unwraps and innerHTMLs it, keeping the escape opt-out
+%% across the live diff.
+wire_raw_value_tagged_html(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    {_HTML, S0, V0} = arizona_render:render(M:raw_text(#{html => <<"<b>a</b>">>}), #{}),
+    {Ops, _, _} = arizona_diff:diff(M:raw_text(#{html => <<"<b>z</b>">>}), S0, V0, #{html => true}),
+    ?assertMatch([[?OP_TEXT, _, #{~"raw" := <<"<b>z</b>">>}]], Ops).
 
 %% =============================================================================
 %% Helpers

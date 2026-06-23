@@ -227,21 +227,44 @@ describe('applyOps -- OP.TEXT', () => {
         expect(comments).toContain('/az');
     });
 
-    it('handles HTML content in comment markers', () => {
+    // An HTML fragment (nested template / `?each` / `?raw`) carries the isHtml flag
+    // (op[3]=true) the worker sets for an object payload; the client innerHTMLs it.
+    it('handles HTML content in comment markers (isHtml fragment)', () => {
         setupView('v', '<div az="0"><!--az:0-->old<!--/az--></div>');
-        applyOps([[OP.TEXT, 'v:0', '<b>bold</b>']]);
+        applyOps([[OP.TEXT, 'v:0', '<b>bold</b>', true]]);
         const el = resolveEl('v:0');
         expect(el.querySelector('b')).not.toBeNull();
         expect(el.querySelector('b').textContent).toBe('bold');
     });
 
-    it('updates content when az target is the view root element', () => {
+    it('updates content when az target is the view root element (isHtml fragment)', () => {
         document.body.innerHTML = '<div id="v" az-view az="0"><!--az:0-->old<!--/az--></div>';
-        applyOps([[OP.TEXT, 'v:0', '<b>new</b>']]);
+        applyOps([[OP.TEXT, 'v:0', '<b>new</b>', true]]);
         const el = resolveEl('v:0');
         expect(el).not.toBeNull();
         expect(el.querySelector('b')).not.toBeNull();
         expect(el.querySelector('b').textContent).toBe('new');
+    });
+
+    // A scalar `?get` value containing markup is sent RAW and carries NO isHtml flag;
+    // the client text-nodes it -> shown as literal text, never parsed (no injection),
+    // matching SSR (which escapes the same value).
+    it('renders a scalar value containing markup as literal text (no injection)', () => {
+        setupView('v', '<div az="0"><!--az:0-->old<!--/az--></div>');
+        applyOps([[OP.TEXT, 'v:0', '<img src=x onerror="window.__xss=1">']]);
+        const el = resolveEl('v:0');
+        expect(el.querySelector('img')).toBeNull();
+        expect(el.textContent).toBe('<img src=x onerror="window.__xss=1">');
+        expect(window.__xss).toBeUndefined();
+    });
+
+    it('a scalar value with HTML matches SSR display (literal angle brackets)', () => {
+        setupView('v', '<div az="0"><!--az:0-->old<!--/az--></div>');
+        applyOps([[OP.TEXT, 'v:0', '<b>x</b>']]);
+        // SSR escapes to &lt;b&gt;x&lt;/b&gt; which the HTML parser decodes to the literal
+        // text `<b>x</b>`; a raw text node shows the same literal text. Both agree.
+        expect(resolveEl('v:0').textContent).toBe('<b>x</b>');
+        expect(resolveEl('v:0').querySelector('b')).toBeNull();
     });
 });
 
@@ -317,22 +340,22 @@ describe('applyOps -- plain-list each among static siblings', () => {
         const strip = document.querySelector('.strip');
         const itemHtml = (k) => `<div class="item" az="strip:2:0"><span>${k}</span></div>`;
 
-        // toggle ON: [] -> [k1]
-        applyOps([[OP.TEXT, 'v:strip:2', itemHtml('k1')]]);
+        // toggle ON: [] -> [k1]  (a plain-list `?each` is an HTML fragment -> isHtml)
+        applyOps([[OP.TEXT, 'v:strip:2', itemHtml('k1'), true]]);
         // static siblings survive
         expect(strip.querySelectorAll('.item').length).toBe(3);
         expect(strip.children[0].textContent).toBe('A');
         expect(strip.children[1].textContent).toBe('B');
         expect(strip.querySelector('[az="strip:2:0"]').textContent).toBe('k1');
 
-        // toggle OFF: [k1] -> []
-        applyOps([[OP.TEXT, 'v:strip:2', '']]);
+        // toggle OFF: [k1] -> []  (empty each is still an HTML fragment)
+        applyOps([[OP.TEXT, 'v:strip:2', '', true]]);
         expect(strip.querySelectorAll('.item').length).toBe(2);
         expect(strip.children[0].textContent).toBe('A');
         expect(strip.children[1].textContent).toBe('B');
 
         // toggle ON again: [] -> [k2]
-        applyOps([[OP.TEXT, 'v:strip:2', itemHtml('k2')]]);
+        applyOps([[OP.TEXT, 'v:strip:2', itemHtml('k2'), true]]);
         expect(strip.querySelectorAll('.item').length).toBe(3);
         expect(strip.children[0].textContent).toBe('A');
         expect(strip.children[1].textContent).toBe('B');
@@ -428,8 +451,9 @@ describe('applyOps -- stream <-> plain-list type switch', () => {
     it('stream -> list (no runtime mutation) renders real HTML, not escaped text', () => {
         setupView('v', ssrStreamSole(['1', '2']));
         const ul = document.querySelector('ul');
-        // Switch the binding stream -> list: diff emits OP_TEXT on the slot.
-        applyOps([[OP.TEXT, 'v:0', listItem('X') + listItem('Y')]]);
+        // Switch the binding stream -> list: diff emits OP_TEXT on the slot (a list is
+        // an HTML fragment -> isHtml).
+        applyOps([[OP.TEXT, 'v:0', listItem('X') + listItem('Y'), true]]);
         // Rendered as REAL <li> elements (escaped text would be 0 elements).
         const lis = ul.querySelectorAll('li');
         expect(lis.length).toBe(2);
@@ -445,7 +469,7 @@ describe('applyOps -- stream <-> plain-list type switch', () => {
         setupView('v', ssrStreamAmongSiblings(['1']));
         const strip = document.querySelector('.strip');
         // Switch stream -> list via the marker-aware OP_TEXT.
-        applyOps([[OP.TEXT, 'v:strip:1', listItem('X')]]);
+        applyOps([[OP.TEXT, 'v:strip:1', listItem('X'), true]]);
         // The static <span> sibling survives (the OP_UPDATE fallback would wipe it).
         expect(strip.querySelector('[az="strip:0"]')).not.toBeNull();
         expect(strip.querySelector('[az="strip:0"]').textContent).toBe('S');
@@ -468,7 +492,7 @@ describe('applyOps -- stream <-> plain-list type switch', () => {
         applyOps([
             [OP.INSERT, 'v:strip:1', '2', -1, '<li az="i" az-key="2"><!--az:i-->2<!--/az--></li>'],
         ]);
-        applyOps([[OP.TEXT, 'v:strip:1', listItem('X')]]);
+        applyOps([[OP.TEXT, 'v:strip:1', listItem('X'), true]]);
         // Static sibling intact and the list slot holds the real list element.
         expect(strip.querySelector('[az="strip:0"]').textContent).toBe('S');
         const slotLi = strip.querySelector('[az="L"]');
@@ -1655,7 +1679,7 @@ describe('hooks -- mounted', () => {
         const mounted = vi.fn();
         hooks.Inline = { mounted };
         setupView('v', '<div az="0"><!--az:0-->old<!--/az--></div>');
-        applyOps([[OP.TEXT, 'v:0', '<span az-hook="Inline">new</span>']]);
+        applyOps([[OP.TEXT, 'v:0', '<span az-hook="Inline">new</span>', true]]);
         expect(mounted).toHaveBeenCalledOnce();
     });
 
@@ -1909,7 +1933,7 @@ describe('hooks -- edge cases', () => {
         );
         mountHooks(document);
         applyOps([
-            [OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', '<span az-hook="New">new</span>']]],
+            [OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', '<span az-hook="New">new</span>', true]]],
         ]);
         expect(destroyed).toHaveBeenCalledOnce();
         expect(mounted).toHaveBeenCalledOnce();
@@ -2015,7 +2039,7 @@ describe('pre-resolved ops', () => {
 
     it('OP_TEXT with pre-resolved HTML updates marker content', () => {
         setupView('v', '<p az="0"><!--az:0-->old<!--/az--></p>');
-        applyOps([[OP.TEXT, 'v:0', '<em>hi</em>']]);
+        applyOps([[OP.TEXT, 'v:0', '<em>hi</em>', true]]);
         const p = document.querySelector('[az="0"]');
         expect(p.innerHTML).toContain('<em>hi</em>');
     });
@@ -2031,7 +2055,7 @@ describe('OP.ITEM_PATCH with pre-resolved inner ops', () => {
             'v',
             '<div az="0"><div az-key="k1"><span az="1"><!--az:1-->old<!--/az--></span></div></div>',
         );
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', '<em>new</em>']]]]);
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', '<em>new</em>', true]]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="1"]').innerHTML).toContain('<em>new</em>');
     });
@@ -2041,7 +2065,7 @@ describe('OP.ITEM_PATCH with pre-resolved inner ops', () => {
             'v',
             '<div az="0"><div az-key="k1"><span az="1"><!--az:1-->old<!--/az--></span></div></div>',
         );
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', '<b>marked</b>']]]]);
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', '<b>marked</b>', true]]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="1"]').innerHTML).toContain('<b>marked</b>');
     });
@@ -2064,7 +2088,7 @@ describe('OP.ITEM_PATCH with pre-resolved inner ops', () => {
                 'v:0',
                 'k1',
                 [
-                    [OP.TEXT, '1', '<i>fancy</i>'],
+                    [OP.TEXT, '1', '<i>fancy</i>', true],
                     [OP.SET_ATTR, '2', 'class', 'highlight'],
                 ],
             ],

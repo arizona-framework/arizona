@@ -244,6 +244,21 @@ parent view. It recurses through nested-nested templates to the deepest slot; an
 inner attribute change is a precise `?OP_SET_ATTR`. A wholesale `?OP_TEXT` re-render
 is the fallback only when the statics differ (a different branch / structure change).
 
+**`?OP_TEXT` escaping -- text vs HTML.** SSR escapes a dynamic value
+(`render_dyn/1` -> `escape_value/1`); the live diff sends it **raw** (`make_op/3` ->
+`to_bin/1`), with escaping completed at the *client's* output boundary -- the wire
+carries text as a bare string and HTML as an object, so the client knows which to do.
+A scalar `?get` value is a bare binary; the JS client renders it with a **text node**,
+so a `<` is literal text (never parsed -- can't inject, matches SSR). An HTML fragment
+(a nested-template / plain-list-`?each` zip-map, whose inner values `zip_or_fp` already
+escaped) is a map; the client `innerHTML`s it. The escape opt-out `?raw` is the one
+scalar that must `innerHTML`, so `make_op/3` tags it `#{~"raw" => Html}` (a map, not a
+bare string) -- the only thing distinguishing trusted markup from a `?get` value that
+merely contains `<`. The worker sets `op[3] = true` for the HTML cases. Attribute values
+are escaped by the client's `setAttribute`. (`?raw` is an HTML-target feature; the
+`?native`/`?terminal` backends don't HTML-escape, so `?raw` there is unsupported -- a
+target-aware tag would be the follow-up if it ever needs to behave like a plain value.)
+
 **Usage convention:** outer-scope `?get` reads belong in the props
 expression of `?stateful`/`?stateless` -- the parse transform places them
 in the outer dynamic's closure, where they track correctly. Eager `?get`

@@ -738,8 +738,12 @@ emit_move_ops(Az, LIS, [Key | Rest], I, Prev) ->
 
 %% Escape markers don't take part in structural diffing -- unwrap them so the
 %% value-shape clauses below match (sentinels like `remove`, nested templates,
-%% each containers). The op value stays raw (`to_bin` unwraps too); the client
-%% escapes via textContent/setAttribute.
+%% each containers). The op value stays raw (`to_bin` unwraps too): a scalar `?get`
+%% value is sent as a bare binary and the client renders it with a text node (so `<`
+%% shows as literal text -- safe, and matching SSR), while an attribute value goes
+%% through the client's `setAttribute`. The escape opt-out `?raw` is the exception: it
+%% is tagged `#{~"raw" => _}` below so the client can tell trusted markup (innerHTML)
+%% from a scalar that merely contains `<` (text node).
 make_op(Az, {arizona_esc, New}, {arizona_esc, Old}) ->
     make_op(Az, New, Old);
 make_op(Az, {arizona_esc, New}, Old) ->
@@ -791,6 +795,16 @@ make_op(Az, remove, {attr, Attr, _}) ->
     [?OP_REM_ATTR, Az, Attr];
 make_op(Az, remove, _Old) ->
     [?OP_REMOVE_NODE, Az];
+%% A `?raw` trusted-HTML content value: tag it `#{raw => Html}` so the wire marks it as
+%% HTML (an object, not a bare string). The client unwraps and `innerHTML`s it, keeping
+%% the escape opt-out across the live diff. A plain (`?get`) value below stays a raw bare
+%% string -- the wire is unescaped (the client text-nodes it, which is safe and matches
+%% SSR); only `?raw` needs the tag because the client cannot otherwise tell trusted markup
+%% from a scalar that merely contains `<`. `?raw` is an HTML-target feature (the JS client
+%% applies this tag); `?native`/`?terminal` don't HTML-escape, so `?raw` there is
+%% unsupported (see `arizona_template:raw/1`).
+make_op(Az, {arizona_raw, V}, _Old) ->
+    [?OP_TEXT, Az, #{~"raw" => arizona_template:to_bin(V)}];
 make_op(Az, New, _Old) ->
     [?OP_TEXT, Az, arizona_template:to_bin(New)].
 

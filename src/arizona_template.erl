@@ -381,7 +381,10 @@ to_bin(V) when is_integer(V) -> integer_to_binary(V);
 to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
 to_bin(V) when is_atom(V) -> atom_to_binary(V);
 %% Escape markers are unwrapped to their raw bytes here. to_bin never escapes;
-%% escaping happens at the HTML-output boundary (so the diff path stays raw).
+%% escaping happens at the HTML-output boundary. At SSR that boundary is
+%% `arizona_render:render_dyn/1` (it calls `escape_value/1`); on the live diff the
+%% boundary is the JS client, which text-nodes a scalar `?OP_TEXT` value (so `<` is
+%% literal text, never parsed) -- so the diff path stays raw end to end.
 to_bin({arizona_esc, V}) ->
     to_bin(V);
 to_bin({arizona_raw, V}) ->
@@ -467,6 +470,11 @@ render_attr(Name, V) -> <<" ", Name/binary, "=\"", (escape_value(V))/binary, "\"
 -doc """
 Wraps a value to opt out of HTML auto-escaping. Use only for trusted,
 already-safe HTML fragments -- never for user-controlled data.
+
+This is an **HTML-target** feature: on the live diff a `?raw` value is tagged so the
+client `innerHTML`s it (vs text-noding a plain `?get` value -- the escaping boundary).
+The `?native` and `?terminal` targets do not HTML-escape, so `?raw` there is a no-op
+with no defined meaning; using it in a `?native`/`?terminal` template is unsupported.
 """.
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().

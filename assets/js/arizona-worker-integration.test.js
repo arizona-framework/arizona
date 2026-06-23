@@ -171,9 +171,22 @@ describe('arizona-worker', () => {
         ws.latest().simulateMessage(JSON.stringify({ o: [[0, 'v:0', 'hi']], e: [['reload']] }));
         const resolved = slf.posted.find((m) => m[0] === 0);
         expect(resolved).toBeDefined();
-        expect(resolved[1]).toEqual([[0, 'v:0', 'hi']]);
+        // The worker tags each OP_TEXT with its isHtml flag (op[3]); a bare-string value
+        // is text, so the flag is false -- the client text-nodes it (safe, no injection).
+        expect(resolved[1]).toEqual([[0, 'v:0', 'hi', false]]);
         expect(resolved[2]).toEqual([['reload']]);
         expect(resolved[3]).toBe(false);
+    });
+
+    it('an HTML-fragment OP_TEXT payload (object) is resolved and flagged isHtml', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // A `?raw` value arrives as a `{raw}` object (an HTML fragment); the worker
+        // unwraps it to a string AND marks op[3]=true so the main thread innerHTMLs it.
+        ws.latest().simulateMessage(JSON.stringify({ o: [[0, 'v:0', { raw: '<b>x</b>' }]] }));
+        const resolved = slf.posted.find((m) => m[0] === 0);
+        expect(resolved[1]).toEqual([[0, 'v:0', '<b>x</b>', true]]);
     });
 
     it('send message [1, json] forwards to WebSocket when ready', () => {
