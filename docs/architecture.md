@@ -223,6 +223,18 @@ and pollute its deps. Bracketed entry points and what each covers:
 Inner *dynamics* re-bracket their own slot, so per-inner-dynamic deps are
 independent of outer.
 
+**Content-slot conditional branches:** a `case`/`if`/`maybe` in a content slot
+compiles each *element* branch into a nested template, so by this invariant the
+branch's `?get` reads land in the nested template's slot, not the enclosing
+conditional dynamic's -- which freezes the branch when only a branch-read binding
+changes (the conditional's deps would otherwise hold just the scrutinee). The parse
+transform (`branch_track_touches/1` in `arizona_parse_transform`) compensates by
+injecting `arizona_template:track/1` for each literal key read in an element branch
+tail, recording them as deps of the conditional dynamic itself. `track/1` records the
+key without reading the binding, so an absent non-taken-branch key is safe; value
+(scalar) branches are left alone (their reads already track when taken). See the
+"Bare element tuples in conditional tails" rule in `.claude/rules/erlang.md`.
+
 **Usage convention:** outer-scope `?get` reads belong in the props
 expression of `?stateful`/`?stateless` -- the parse transform places them
 in the outer dynamic's closure, where they track correctly. Eager `?get`

@@ -243,6 +243,22 @@ shared with the live-render-root transform. (This mirrors `?each`, whose callbac
 already accepts bare elements; the difference is that `?each` keys items for per-item
 diffing while a conditional is a single slot.)
 
+**Branch reads are tracked.** A binding read inside such a branch element (`?get(val)`
+in `{p, [], [?get(val)]}`) compiles into the branch's nested template, whose reads are
+otherwise isolated from the conditional slot's own dependency bracket -- so a change to
+a binding read *only* in a branch would skip the slot and freeze the branch. The parse
+transform closes this by unioning each **element** branch's reads into the conditional
+slot's deps (an injected `arizona_template:track/1` per literal key, mirroring the guard
+auto-tracking below), so the element form behaves like the value form
+(`X = case ?get(flag) of true -> ?get(val); false -> ~"" end`). `track/1` records the
+key without reading it, so a key present only in a non-taken (and possibly absent)
+branch never raises `missing_binding`. A **value** branch (one returning a scalar, not
+an element) is unaffected -- its read already fires when that branch is taken, and a
+non-taken value branch's read is genuinely not a dependency. A change to a binding read
+only in a non-taken element branch re-evaluates the slot but emits no op (the re-rendered
+branch is structurally unchanged). Limitation: a branch read whose **key is computed**
+(`?get(SomeVar)`, not a literal) is not auto-tracked; use the value form for that.
+
 A conditional may also return a `?stateful`/`?stateless` descriptor from a branch -- the
 idiomatic `case ?get(flag) of true -> ?stateful(child, #{id => ~"c"}); false -> ~"" end`.
 A content slot is anchored by its `<!--az:X-->...<!--/az-->` comment markers in SSR, so
