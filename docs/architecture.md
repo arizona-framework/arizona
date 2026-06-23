@@ -235,6 +235,15 @@ key without reading the binding, so an absent non-taken-branch key is safe; valu
 (scalar) branches are left alone (their reads already track when taken). See the
 "Bare element tuples in conditional tails" rule in `.claude/rules/erlang.md`.
 
+On re-render the diff then fine-grains: `arizona_diff:make_ops/3` diffs a
+same-statics nested template's inner dynamics (each globally `Az`-addressed and
+marker-anchored) and patches only the changed inner slot(s) -- the same
+per-inner-dynamic diff the `view_id` child-view path uses (`diff_child_dynamics/2`),
+minus the `[VId, ChildOps]` wrapper, since a plain nested template is inline in the
+parent view. It recurses through nested-nested templates to the deepest slot; an
+inner attribute change is a precise `?OP_SET_ATTR`. A wholesale `?OP_TEXT` re-render
+is the fallback only when the statics differ (a different branch / structure change).
+
 **Usage convention:** outer-scope `?get` reads belong in the props
 expression of `?stateful`/`?stateless` -- the parse transform places them
 in the outer dynamic's closure, where they track correctly. Eager `?get`

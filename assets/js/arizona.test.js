@@ -181,6 +181,24 @@ describe('applyOps -- OP.TEXT with compound markers', () => {
         const el = resolveEl('v:0');
         expect(el.textContent).toBe('first and updated');
     });
+
+    // Round-trip against REAL arizona_render/arizona_diff output (captured): a
+    // content-slot conditional branch `{p, [], [?get(a), " ", ?get(b)]}` whose `a`
+    // changed A -> A2. The parent slot marker (130FA4-0) wraps the <p>, whose two
+    // text slots are E5X9J-0 and E5X9J-0:1. Phase 2 emits the fine-grained inner op
+    // [OP_TEXT, E5X9J-0, "A2"]; applying it to the old SSR DOM must yield exactly the
+    // new SSR DOM -- only the first slot patched, the sibling and structure intact.
+    it('fine-grained conditional branch op yields the new SSR subtree (Phase 2)', () => {
+        document.body.innerHTML =
+            '<div id="x" az-view az="130FA4-0">' +
+            '<!--az:130FA4-0-->' +
+            '<p az="E5X9J-0"><!--az:E5X9J-0-->A<!--/az--> <!--az:E5X9J-0:1-->B<!--/az--></p>' +
+            '<!--/az--></div>';
+        applyOps([[OP.TEXT, 'x:E5X9J-0', 'A2']]);
+        expect(resolveEl('x:E5X9J-0').outerHTML).toBe(
+            '<p az="E5X9J-0"><!--az:E5X9J-0-->A2<!--/az--> <!--az:E5X9J-0:1-->B<!--/az--></p>',
+        );
+    });
 });
 
 // ---------------------------------------------------------------------------

@@ -269,6 +269,14 @@ nested-template value -- an `?OP_UPDATE` would `innerHTML`-overwrite the enclosi
 which is catastrophic when the slot's `az` is that element's own `az`, e.g. a conditional
 child rendered directly under the view root.)
 
+When the **same branch** re-renders (its statics are unchanged -- only an inner binding
+changed), the diff does **not** re-render the whole branch: `make_ops/3` diffs the nested
+template's inner dynamics and patches only the changed inner slot(s), each addressed by its
+own `az` (an inner attribute change is a precise `?OP_SET_ATTR`). It recurses through
+nested-nested templates to the deepest changed slot. The wholesale `?OP_TEXT` re-render is
+the fallback only when the statics differ -- a different branch, an empty<->template
+transition, or any structure change.
+
 The same rule applies to a **plain-list `?each` in a content slot**: it is marker-anchored
 exactly like any other dynamic-text child (no wrapper element carries the slot `az`), so its
 container patch is the marker-aware `?OP_TEXT` -- `make_op/3` (the `?EACH` list clause) and

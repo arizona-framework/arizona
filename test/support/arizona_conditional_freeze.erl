@@ -25,6 +25,8 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([deep/1]).
 -export([attr_in_branch/1]).
 -export([try_branch/1]).
+-export([two_slot/1]).
+-export([nested_element/1]).
 
 %% Constant scrutinee (`flag`), branch reads `val`: a change to `val` must
 %% re-render the `<p>` even though `flag` is unchanged.
@@ -227,6 +229,40 @@ try_branch(Bindings) ->
                 false -> <<>>
             catch
                 _:_ -> <<>>
+            end
+        ]}
+    ).
+
+%% The branch element holds two text slots. Changing one must patch only that slot
+%% (fine-grained inner diff), leaving the sibling slot untouched.
+-spec two_slot(az:bindings()) -> az:template().
+two_slot(Bindings) ->
+    ?html(
+        {'div', [{id, ~"x"}], [
+            case ?get(flag) of
+                true -> {p, [], [?get(a), ~" ", ?get(b)]};
+                false -> <<>>
+            end
+        ]}
+    ).
+
+%% A genuinely nested-nested template: the outer branch is a `<section>` element that
+%% itself contains a conditional whose branch is a `<p>` element. Fine-graining must
+%% recurse (make_ops -> diff_dynamics -> make_ops) to patch only the deepest slot.
+-spec nested_element(az:bindings()) -> az:template().
+nested_element(Bindings) ->
+    ?html(
+        {'div', [{id, ~"x"}], [
+            case ?get(flag) of
+                true ->
+                    {section, [], [
+                        case ?get(inner) of
+                            true -> {p, [], [?get(val)]};
+                            false -> <<>>
+                        end
+                    ]};
+                false ->
+                    <<>>
             end
         ]}
     ).

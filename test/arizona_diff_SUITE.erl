@@ -39,7 +39,9 @@
     conditional_missing_binding_safe/1,
     conditional_deep_nesting_tracks/1,
     conditional_attr_in_branch_tracks/1,
-    conditional_try_branch_tracks/1
+    conditional_try_branch_tracks/1,
+    conditional_two_slot_fine_grained/1,
+    conditional_nested_element_recurses/1
 ]).
 
 all() ->
@@ -87,7 +89,9 @@ groups() ->
             conditional_missing_binding_safe,
             conditional_deep_nesting_tracks,
             conditional_attr_in_branch_tracks,
-            conditional_try_branch_tracks
+            conditional_try_branch_tracks,
+            conditional_two_slot_fine_grained,
+            conditional_nested_element_recurses
         ]}
     ].
 
@@ -175,6 +179,9 @@ diff_no_change_op(Config) when is_list(Config) ->
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
     ?assertEqual([], Ops).
 
+%% A nested template re-rendered to the same statics diffs its inner dynamics: only
+%% the changed inner slot (`i`) patches, addressed by its own az -- not a wholesale
+%% re-render of the whole nested template at the outer slot az.
 diff_nested_text_op(Config) when is_list(Config) ->
     OldSnap = #{
         s => [<<"<p az=\"0\">">>, <<"</p>">>],
@@ -192,20 +199,7 @@ diff_nested_text_op(Config) when is_list(Config) ->
         f => <<"test">>
     },
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
-    ?assertEqual(
-        [
-            [
-                ?OP_TEXT,
-                <<"0">>,
-                #{
-                    <<"f">> => <<"test">>,
-                    <<"s">> => [<<"Hello, ">>, <<"!">>],
-                    <<"d">> => [<<"Alice">>]
-                }
-            ]
-        ],
-        Ops
-    ).
+    ?assertEqual([[?OP_TEXT, <<"i">>, <<"Alice">>]], Ops).
 
 diff_mixed_op(Config) when is_list(Config) ->
     OldSnap = #{
@@ -837,13 +831,13 @@ conditional_deep_nesting_tracks(Config) when is_list(Config) ->
     ?assert(cond_payload_has(Ops, <<"B">>)).
 
 %% A read in a branch element's attribute (not its content) is tracked: the whole
-%% element subtree is walked, attributes included.
+%% element subtree is walked, attributes included. The fine-grained inner diff emits a
+%% precise ?OP_SET_ATTR on the inner element, not a whole-branch ?OP_TEXT.
 conditional_attr_in_branch_tracks(Config) when is_list(Config) ->
     B0 = #{flag => true, cls => <<"c1">>},
     B1 = #{flag => true, cls => <<"c2">>},
     Ops = cond_diff(attr_in_branch, B0, B1, #{cls => true}),
-    ?assertMatch([[?OP_TEXT, _, _]], Ops),
-    ?assert(cond_payload_has(Ops, <<"c2">>)).
+    ?assertMatch([[?OP_SET_ATTR, _, <<"class">>, <<"c2">>]], Ops).
 
 %% A `try ... of` body is a walked tail position: the `of` element branch's read is
 %% tracked.
@@ -853,6 +847,29 @@ conditional_try_branch_tracks(Config) when is_list(Config) ->
     Ops = cond_diff(try_branch, B0, B1, #{val => true}),
     ?assertMatch([[?OP_TEXT, _, _]], Ops),
     ?assert(cond_payload_has(Ops, <<"B">>)).
+
+%% Phase 2 payoff: a branch with two text slots, changing one emits exactly one inner
+%% op at that slot's az (the sibling slot is left untouched -- no whole-branch
+%% re-render). Changing the other slot targets a different az.
+conditional_two_slot_fine_grained(Config) when is_list(Config) ->
+    Base = #{flag => true, a => <<"A">>, b => <<"B">>},
+    OpsA = cond_diff(two_slot, Base, Base#{a => <<"A2">>}, #{a => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"A2">>]], OpsA),
+    OpsB = cond_diff(two_slot, Base, Base#{b => <<"B2">>}, #{b => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B2">>]], OpsB),
+    [[?OP_TEXT, AzA, _]] = OpsA,
+    [[?OP_TEXT, AzB, _]] = OpsB,
+    ?assertNotEqual(AzA, AzB).
+
+%% Nested-nested templates (an element branch wrapping another conditional whose branch
+%% is an element): fine-graining recurses (make_ops -> diff_dynamics -> make_ops) to
+%% emit a single op at the deepest changed slot, not a wholesale re-render at any wrapper
+%% level.
+conditional_nested_element_recurses(Config) when is_list(Config) ->
+    B0 = #{flag => true, inner => true, val => <<"A">>},
+    B1 = B0#{val => <<"B">>},
+    Ops = cond_diff(nested_element, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
 
 %% =============================================================================
 %% Helpers
