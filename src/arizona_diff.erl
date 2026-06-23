@@ -826,6 +826,13 @@ make_op(Az, New, _Old) ->
 %% resolve directly. Statics that differ (a different branch, empty<->template, a
 %% structure change) fall back to the single wholesale make_op/3 op, as do ?each
 %% containers, attrs, scalars, and child views.
+%%
+%% The guard checks only New's `view_id`, not Old's: the pattern binds both to the
+%% same statics S, and a child-view snapshot's statics can never equal a plain nested
+%% template's -- a child-view root's statics carry an `az-view` boundary attribute and
+%% an az prefix from the child's own fingerprint, neither of which a plain branch has.
+%% So a same-S Old is necessarily a plain inline template too; a child New is excluded
+%% here and handled by make_op/3's child-view clause (which requires `view_id` on both).
 make_ops(_Az, #{s := S, d := NewD} = New, #{s := S, d := OldD}, Tail) when
     not is_map_key(view_id, New)
 ->
