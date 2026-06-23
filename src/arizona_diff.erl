@@ -176,14 +176,21 @@ preserve_view_id(#{}, Snap) -> Snap.
 %% Internal functions
 %% --------------------------------------------------------------------
 
-diff_dynamics([], []) ->
-    [];
-diff_dynamics([{Az, _} | NR], [{Az, #{diff := false}} | OR]) ->
-    diff_dynamics(NR, OR);
-diff_dynamics([{Az, Same} | NR], [{Az, Same} | OR]) ->
-    diff_dynamics(NR, OR);
-diff_dynamics([{Az, New} | NR], [{Az, Old} | OR]) ->
-    make_ops(Az, New, Old) ++ diff_dynamics(NR, OR).
+diff_dynamics(NewEvals, OldEvals) ->
+    diff_dynamics(NewEvals, OldEvals, []).
+
+%% Tail-accumulator (difference-list) form: each op is consed straight onto `Tail`,
+%% so there is no `++` copying. This matters for the fine-grained nested-template path
+%% (`make_ops/4` recurses back here), where a `++` would re-copy the inner ops at every
+%% nesting level. `Tail` is the ops that follow these dynamics; order is preserved.
+diff_dynamics([], [], Tail) ->
+    Tail;
+diff_dynamics([{Az, _} | NR], [{Az, #{diff := false}} | OR], Tail) ->
+    diff_dynamics(NR, OR, Tail);
+diff_dynamics([{Az, Same} | NR], [{Az, Same} | OR], Tail) ->
+    diff_dynamics(NR, OR, Tail);
+diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail) ->
+    make_ops(Az, New, Old, diff_dynamics(NR, OR, Tail)).
 
 diff_dynamics_v([], [], [], _Changed, Views) ->
     {[], [], [], Views};
@@ -224,7 +231,7 @@ diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, Changed, Views0) ->
     Ops =
         case New of
             Old -> OpsRest;
-            _ -> make_ops(Az, New, Old) ++ OpsRest
+            _ -> make_ops(Az, New, Old, OpsRest)
         end,
     {Ops, [{Az, New} | DRest], [NewDeps | DepsRest], Views2}.
 
@@ -808,23 +815,23 @@ make_op(Az, {arizona_raw, V}, _Old) ->
 make_op(Az, New, _Old) ->
     [?OP_TEXT, Az, arizona_template:to_bin(New)].
 
-%% Like make_op/3 but returns a *list* of ops. A nested template re-rendered to the
-%% **same statics** diffs its inner dynamics instead of re-rendering the whole branch
-%% with one wholesale ?OP_TEXT: each inner dynamic is globally Az-addressed and
-%% marker-anchored (`<!--az:X-->...<!--/az-->`), so only the changed inner slots patch
-%% (and an inner attribute change becomes a precise ?OP_SET_ATTR). This is the same
-%% per-inner-dynamic diff the `view_id` child-view path uses (diff_child_dynamics/2),
-%% minus the `[VId, ChildOps]` wrapper -- a plain nested template is inline in the parent
-%% view, so its inner ops carry the parent view's id and resolve directly. Statics that
-%% differ (a different branch, empty<->template, a structure change) fall back to the
-%% single wholesale make_op/3 op, as do ?each containers, attrs, scalars, and child
-%% views.
-make_ops(_Az, #{s := S, d := NewD} = New, #{s := S, d := OldD}) when
+%% Like make_op/3 but conses its op(s) onto `Tail` (a difference list -- no `++`). A
+%% nested template re-rendered to the **same statics** diffs its inner dynamics instead
+%% of re-rendering the whole branch with one wholesale ?OP_TEXT: each inner dynamic is
+%% globally Az-addressed and marker-anchored (`<!--az:X-->...<!--/az-->`), so only the
+%% changed inner slots patch (and an inner attribute change becomes a precise
+%% ?OP_SET_ATTR). This is the same per-inner-dynamic diff the `view_id` child-view path
+%% uses (diff_child_dynamics/2), minus the `[VId, ChildOps]` wrapper -- a plain nested
+%% template is inline in the parent view, so its inner ops carry the parent view's id and
+%% resolve directly. Statics that differ (a different branch, empty<->template, a
+%% structure change) fall back to the single wholesale make_op/3 op, as do ?each
+%% containers, attrs, scalars, and child views.
+make_ops(_Az, #{s := S, d := NewD} = New, #{s := S, d := OldD}, Tail) when
     not is_map_key(view_id, New)
 ->
-    diff_dynamics(NewD, OldD);
-make_ops(Az, New, Old) ->
-    [make_op(Az, New, Old)].
+    diff_dynamics(NewD, OldD, Tail);
+make_ops(Az, New, Old, Tail) ->
+    [make_op(Az, New, Old) | Tail].
 
 diff_item_dynamics_v([], [], Views) ->
     {[], Views};
@@ -847,14 +854,17 @@ diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
             {EachOps ++ RestOps, Views2};
         _ ->
             {RestOps, Views1} = diff_item_dynamics_v(NR, OR, Views0),
-            {make_ops(Az, New, Old) ++ RestOps, Views1}
+            {make_ops(Az, New, Old, RestOps), Views1}
     end.
 
-diff_child_dynamics([], []) ->
-    [];
-diff_child_dynamics([{Az, _New} | NR], [{Az, #{diff := false}} | OR]) ->
-    diff_child_dynamics(NR, OR);
-diff_child_dynamics([{Az, Same} | NR], [{Az, Same} | OR]) ->
-    diff_child_dynamics(NR, OR);
-diff_child_dynamics([{Az, New} | NR], [{Az, Old} | OR]) ->
-    make_ops(Az, New, Old) ++ diff_child_dynamics(NR, OR).
+diff_child_dynamics(NewD, OldD) ->
+    diff_child_dynamics(NewD, OldD, []).
+
+diff_child_dynamics([], [], Tail) ->
+    Tail;
+diff_child_dynamics([{Az, _New} | NR], [{Az, #{diff := false}} | OR], Tail) ->
+    diff_child_dynamics(NR, OR, Tail);
+diff_child_dynamics([{Az, Same} | NR], [{Az, Same} | OR], Tail) ->
+    diff_child_dynamics(NR, OR, Tail);
+diff_child_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail) ->
+    make_ops(Az, New, Old, diff_child_dynamics(NR, OR, Tail)).
