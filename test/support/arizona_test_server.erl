@@ -102,6 +102,13 @@ routes() ->
             layouts => Layouts
         }},
         {post, <<"/fetch-push/submit">>, arizona_fetch_push_controller, #{}},
+        %% arizona_js:fetch on_error -- the controller replies 500 with no effects body, so
+        %% the client runs the fetch's on_error commands and fires arizona:fetch-error.
+        {live, <<"/fetch-error">>, arizona_fetch_error, #{
+            bindings => #{title => <<"Error">>},
+            layouts => Layouts
+        }},
+        {post, <<"/fetch-error/submit">>, arizona_fetch_error_controller, #{}},
         %% arizona_session write loop -- a fetch posts to the controller, which rotates
         %% the encrypted az_session cookie and push_events the new name; fetch_session on
         %% the page route reads the persisted name back from the cookie on the next load.
