@@ -9,6 +9,7 @@
 -export([encode_decode_round_trips/1]).
 -export([decode_rejects_tampered/1]).
 -export([decode_rejects_malformed/1]).
+-export([decode_swallows_decrypted_non_json/1]).
 -export([key_normalizes_atom/1]).
 -export([resp_cookie_sets_when_dirty_and_present/1]).
 -export([resp_cookie_clears_when_dirty_and_empty/1]).
@@ -24,6 +25,7 @@ all() ->
         encode_decode_round_trips,
         decode_rejects_tampered,
         decode_rejects_malformed,
+        decode_swallows_decrypted_non_json,
         key_normalizes_atom,
         resp_cookie_sets_when_dirty_and_present,
         resp_cookie_clears_when_dirty_and_empty,
@@ -56,6 +58,16 @@ decode_rejects_tampered(Config) when is_list(Config) ->
 decode_rejects_malformed(Config) when is_list(Config) ->
     ?assertEqual(#{}, arizona_session:decode(~"not-a-session")),
     ?assertEqual(#{}, arizona_session:decode(~"")).
+
+decode_swallows_decrypted_non_json(Config) when is_list(Config) ->
+    Ttl = arizona_session:max_age(),
+    %% A payload that decrypts cleanly (encrypted under the same secret, e.g. by
+    %% another arizona_crypto consumer) but is not JSON -- json:decode raises.
+    NonJson = arizona_crypto:encrypt(~"not json {{{", #{ttl => Ttl}),
+    ?assertEqual(#{}, arizona_session:decode(NonJson)),
+    %% Decrypts to valid JSON that is not a map -- the non-map clause.
+    NotMap = arizona_crypto:encrypt(iolist_to_binary(json:encode(42)), #{ttl => Ttl}),
+    ?assertEqual(#{}, arizona_session:decode(NotMap)).
 
 key_normalizes_atom(Config) when is_list(Config) ->
     ?assertEqual(~"user_id", arizona_session:key(user_id)),
