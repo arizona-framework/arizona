@@ -30,11 +30,29 @@
     no_diff_ops/1,
     no_diff_skips_eval/1,
     no_diff_stateful_child/1,
-    local_dep_aware_skip/1
+    local_dep_aware_skip/1,
+    conditional_case_branch_tracks/1,
+    conditional_if_branch_tracks/1,
+    conditional_maybe_branch_tracks/1,
+    conditional_nested_tracks/1,
+    conditional_over_track_op_free/1,
+    conditional_missing_binding_safe/1,
+    conditional_deep_nesting_tracks/1,
+    conditional_attr_in_branch_tracks/1,
+    conditional_try_branch_tracks/1,
+    conditional_block_branch_tracks/1,
+    conditional_receive_branch_tracks/1,
+    conditional_get_lazy_branch_tracks/1,
+    conditional_with_branch_tracks/1,
+    conditional_computed_key_not_tracked/1,
+    conditional_two_slot_fine_grained/1,
+    conditional_nested_element_recurses/1,
+    wire_get_value_raw/1,
+    wire_raw_value_tagged_html/1
 ]).
 
 all() ->
-    [{group, basic_ops}, {group, no_diff}].
+    [{group, basic_ops}, {group, no_diff}, {group, conditional_dep}, {group, wire_payload}].
 
 groups() ->
     [
@@ -68,6 +86,28 @@ groups() ->
             no_diff_diff4_top_level,
             diff_no_diff_stateful_child_diff4,
             local_dep_aware_skip
+        ]},
+        {conditional_dep, [parallel], [
+            conditional_case_branch_tracks,
+            conditional_if_branch_tracks,
+            conditional_maybe_branch_tracks,
+            conditional_nested_tracks,
+            conditional_over_track_op_free,
+            conditional_missing_binding_safe,
+            conditional_deep_nesting_tracks,
+            conditional_attr_in_branch_tracks,
+            conditional_try_branch_tracks,
+            conditional_block_branch_tracks,
+            conditional_receive_branch_tracks,
+            conditional_get_lazy_branch_tracks,
+            conditional_with_branch_tracks,
+            conditional_computed_key_not_tracked,
+            conditional_two_slot_fine_grained,
+            conditional_nested_element_recurses
+        ]},
+        {wire_payload, [parallel], [
+            wire_get_value_raw,
+            wire_raw_value_tagged_html
         ]}
     ].
 
@@ -155,6 +195,9 @@ diff_no_change_op(Config) when is_list(Config) ->
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
     ?assertEqual([], Ops).
 
+%% A nested template re-rendered to the same statics diffs its inner dynamics: only
+%% the changed inner slot (`i`) patches, addressed by its own az -- not a wholesale
+%% re-render of the whole nested template at the outer slot az.
 diff_nested_text_op(Config) when is_list(Config) ->
     OldSnap = #{
         s => [<<"<p az=\"0\">">>, <<"</p>">>],
@@ -172,20 +215,7 @@ diff_nested_text_op(Config) when is_list(Config) ->
         f => <<"test">>
     },
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
-    ?assertEqual(
-        [
-            [
-                ?OP_TEXT,
-                <<"0">>,
-                #{
-                    <<"f">> => <<"test">>,
-                    <<"s">> => [<<"Hello, ">>, <<"!">>],
-                    <<"d">> => [<<"Alice">>]
-                }
-            ]
-        ],
-        Ops
-    ).
+    ?assertEqual([[?OP_TEXT, <<"i">>, <<"Alice">>]], Ops).
 
 diff_mixed_op(Config) when is_list(Config) ->
     OldSnap = #{
@@ -732,9 +762,217 @@ local_dep_aware_skip(Config) when is_list(Config) ->
     {Ops, _Snap1, _V1} = arizona_diff:diff(T1, Snap0, V0, Changed),
     ?assertEqual([], Ops).
 
+%% --- content-slot conditional dependency tracking ---
+
+%% A `case` in a content slot with a constant scrutinee (`flag`) and a branch that
+%% reads `val`: changing `val` must re-render the branch (was frozen -- `[]`). The
+%% hoisted-variable form (`case_var`, inlined back into the slot) produces the same
+%% diff.
+conditional_case_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{flag => true, val => <<"A">>},
+    B1 = #{flag => true, val => <<"B">>},
+    Changed = #{val => true},
+    OpsInline = cond_diff(case_branch, B0, B1, Changed),
+    OpsVar = cond_diff(case_var, B0, B1, Changed),
+    ?assertMatch([[?OP_TEXT, _, _]], OpsInline),
+    ?assert(cond_payload_has(OpsInline, <<"B">>)),
+    ?assertEqual(OpsInline, OpsVar).
+
+conditional_if_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{flag => true, val => <<"A">>},
+    B1 = #{flag => true, val => <<"B">>},
+    Changed = #{val => true},
+    OpsInline = cond_diff(if_branch, B0, B1, Changed),
+    OpsVar = cond_diff(if_var, B0, B1, Changed),
+    ?assertMatch([[?OP_TEXT, _, _]], OpsInline),
+    ?assert(cond_payload_has(OpsInline, <<"B">>)),
+    ?assertEqual(OpsInline, OpsVar).
+
+conditional_maybe_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{flag => true, val => <<"A">>},
+    B1 = #{flag => true, val => <<"B">>},
+    Changed = #{val => true},
+    OpsInline = cond_diff(maybe_branch, B0, B1, Changed),
+    OpsVar = cond_diff(maybe_var, B0, B1, Changed),
+    ?assertMatch([[?OP_TEXT, _, _]], OpsInline),
+    ?assert(cond_payload_has(OpsInline, <<"B">>)),
+    ?assertEqual(OpsInline, OpsVar).
+
+%% A read in an inner branch of a nested conditional, both scrutinees constant.
+conditional_nested_tracks(Config) when is_list(Config) ->
+    B0 = #{outer => true, inner => true, val => <<"A">>},
+    B1 = #{outer => true, inner => true, val => <<"B">>},
+    Changed = #{val => true},
+    OpsInline = cond_diff(nested, B0, B1, Changed),
+    OpsVar = cond_diff(nested_var, B0, B1, Changed),
+    ?assertMatch([[?OP_TEXT, _, _]], OpsInline),
+    ?assert(cond_payload_has(OpsInline, <<"B">>)),
+    ?assertEqual(OpsInline, OpsVar).
+
+%% Over-tracking is op-free: changing a key read only in the non-taken branch
+%% re-evaluates the slot but the equal snapshot emits no op. Changing the taken
+%% branch's key emits one op.
+conditional_over_track_op_free(Config) when is_list(Config) ->
+    Base = #{flag => true, a => <<"A">>, b => <<"B">>},
+    NonTaken = cond_diff(over_track, Base, Base#{b => <<"B2">>}, #{b => true}),
+    ?assertEqual([], NonTaken),
+    ?assertEqual([], cond_diff(over_track_var, Base, Base#{b => <<"B2">>}, #{b => true})),
+    Taken = cond_diff(over_track, Base, Base#{a => <<"A2">>}, #{a => true}),
+    ?assertMatch([[?OP_TEXT, _, _]], Taken),
+    ?assert(cond_payload_has(Taken, <<"A2">>)).
+
+%% The injected touch records the key via track/1 (no read), so rendering the taken
+%% branch never raises missing_binding when the other branch's binding is absent.
+%% Switching to the branch that reads it (now present) re-renders.
+conditional_missing_binding_safe(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    %% A plain match is the assertion: rendering the taken (`_`) branch must not raise
+    %% missing_binding even though the admin branch reads the absent `secret`. A crash
+    %% would fail the test here.
+    {_H1, _S1, _V1} = arizona_render:render(M:optional_key(#{mode => user}), #{}),
+    {_H2, _S2, _V2} = arizona_render:render(M:optional_key_var(#{mode => user}), #{}),
+    B0 = #{mode => user},
+    B1 = #{mode => admin, secret => <<"S">>},
+    Ops = cond_diff(optional_key, B0, B1, #{mode => true}),
+    ?assertMatch([[?OP_TEXT, _, _]], Ops),
+    ?assert(cond_payload_has(Ops, <<"S">>)).
+
+%% A read three scrutinees deep must still re-render (recursion through nested
+%% control flow in collect_branch_keys/2).
+conditional_deep_nesting_tracks(Config) when is_list(Config) ->
+    B0 = #{a => true, b => true, c => true, val => <<"A">>},
+    B1 = B0#{val => <<"B">>},
+    Ops = cond_diff(deep, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, _]], Ops),
+    ?assert(cond_payload_has(Ops, <<"B">>)).
+
+%% A read in a branch element's attribute (not its content) is tracked: the whole
+%% element subtree is walked, attributes included. The fine-grained inner diff emits a
+%% precise ?OP_SET_ATTR on the inner element, not a whole-branch ?OP_TEXT.
+conditional_attr_in_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{flag => true, cls => <<"c1">>},
+    B1 = #{flag => true, cls => <<"c2">>},
+    Ops = cond_diff(attr_in_branch, B0, B1, #{cls => true}),
+    ?assertMatch([[?OP_SET_ATTR, _, <<"class">>, <<"c2">>]], Ops).
+
+%% A `try ... of` body is a walked tail position: the `of` element branch's read is
+%% tracked.
+conditional_try_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{flag => true, val => <<"A">>},
+    B1 = #{flag => true, val => <<"B">>},
+    Ops = cond_diff(try_branch, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, _]], Ops),
+    ?assert(cond_payload_has(Ops, <<"B">>)).
+
+%% A `begin ... end` block is a walked tail position: the block's last-expression element
+%% branch reads `val`, which must be tracked so a `val` change re-renders the slot.
+conditional_block_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{cls => <<"c">>, val => <<"A">>},
+    B1 = #{cls => <<"c">>, val => <<"B">>},
+    Ops = cond_diff(block_branch, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
+
+%% A `receive ... after` body is a walked tail position: the `after 0` element branch
+%% reads `val`, which must be tracked. `after 0` never blocks the render.
+conditional_receive_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{val => <<"A">>},
+    B1 = #{val => <<"B">>},
+    Ops = cond_diff(receive_branch, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
+
+%% A branch reading via `?get_lazy` (not `?get`): collect_call_keys extracts the key from
+%% a get_lazy call, so a `val` change re-renders the slot.
+conditional_get_lazy_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{flag => true, val => <<"A">>},
+    B1 = #{flag => true, val => <<"B">>},
+    Ops = cond_diff(get_lazy_branch, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
+
+%% A branch projecting a bindings subset via `az:with`: collect_call_keys extracts each
+%% key from the `with` list, so a `val` change re-renders the slot.
+conditional_with_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{flag => true, val => <<"A">>},
+    B1 = #{flag => true, val => <<"B">>},
+    Ops = cond_diff(with_branch, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
+
+%% Documents the known limitation: a computed-key branch read (`?get(Key)`, Key a variable)
+%% is not auto-tracked, so changing the binding it names freezes the slot (no op). The
+%% literal `which` read still tracks; only the computed read is missed. The value-form
+%% workaround remains for authors who need reactivity here.
+conditional_computed_key_not_tracked(Config) when is_list(Config) ->
+    B0 = #{flag => true, which => val, val => <<"A">>},
+    B1 = #{flag => true, which => val, val => <<"B">>},
+    Ops = cond_diff(computed_key, B0, B1, #{val => true}),
+    ?assertEqual([], Ops).
+
+%% Phase 2 payoff: a branch with two text slots, changing one emits exactly one inner
+%% op at that slot's az (the sibling slot is left untouched -- no whole-branch
+%% re-render). Changing the other slot targets a different az.
+conditional_two_slot_fine_grained(Config) when is_list(Config) ->
+    Base = #{flag => true, a => <<"A">>, b => <<"B">>},
+    OpsA = cond_diff(two_slot, Base, Base#{a => <<"A2">>}, #{a => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"A2">>]], OpsA),
+    OpsB = cond_diff(two_slot, Base, Base#{b => <<"B2">>}, #{b => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B2">>]], OpsB),
+    [[?OP_TEXT, AzA, _]] = OpsA,
+    [[?OP_TEXT, AzB, _]] = OpsB,
+    ?assertNotEqual(AzA, AzB).
+
+%% Nested-nested templates (an element branch wrapping another conditional whose branch
+%% is an element): fine-graining recurses (make_ops -> diff_dynamics -> make_ops) to
+%% emit a single op at the deepest changed slot, not a wholesale re-render at any wrapper
+%% level.
+conditional_nested_element_recurses(Config) when is_list(Config) ->
+    B0 = #{flag => true, inner => true, val => <<"A">>},
+    B1 = B0#{val => <<"B">>},
+    Ops = cond_diff(nested_element, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
+
+%% A scalar `?get` value is sent RAW on the diff wire (a bare binary) -- escaping happens
+%% client-side (a text node shows `<` literally, matching SSR). It is NOT HTML-tagged, so
+%% the client text-nodes it and a value containing markup cannot inject.
+wire_get_value_raw(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    {_HTML, S0, V0} = arizona_render:render(M:top_text(#{name => <<"<b>a</b>">>}), #{}),
+    {Ops, _, _} = arizona_diff:diff(M:top_text(#{name => <<"<b>z</b>">>}), S0, V0, #{name => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"<b>z</b>">>]], Ops).
+
+%% A `?raw` trusted-HTML value is tagged `#{~"raw" => Html}` (a map, not a bare string) so
+%% the wire marks it HTML; the client unwraps and innerHTMLs it, keeping the escape opt-out
+%% across the live diff.
+wire_raw_value_tagged_html(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    {_HTML, S0, V0} = arizona_render:render(M:raw_text(#{html => <<"<b>a</b>">>}), #{}),
+    {Ops, _, _} = arizona_diff:diff(M:raw_text(#{html => <<"<b>z</b>">>}), S0, V0, #{html => true}),
+    ?assertMatch([[?OP_TEXT, _, #{~"raw" := <<"<b>z</b>">>}]], Ops).
+
 %% =============================================================================
 %% Helpers
 %% =============================================================================
+
+%% Render arizona_conditional_freeze:Fn(B0), then diff against Fn(B1) with Changed.
+cond_diff(Fn, B0, B1, Changed) ->
+    M = arizona_conditional_freeze,
+    {_HTML, Snap0, V0} = arizona_render:render(M:Fn(B0), #{}),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(M:Fn(B1), Snap0, V0, Changed),
+    Ops.
+
+%% The OP_TEXT payload re-rendering a nested template is a zip map
+%% (#{<<"s">> => Statics, <<"d">> => DynValues, <<"f">> => Fp}); the changed value
+%% lives in <<"d">>. Search the whole term for the needle (statics are lowercase
+%% base-36 fingerprints + markup, so an uppercase value needle can't false-match).
+cond_payload_has([[?OP_TEXT, _Az, Payload]], Needle) ->
+    cond_term_has(Payload, Needle).
+
+cond_term_has(Bin, Needle) when is_binary(Bin) ->
+    binary:match(Bin, Needle) =/= nomatch;
+cond_term_has(List, Needle) when is_list(List) ->
+    lists:any(fun(E) -> cond_term_has(E, Needle) end, List);
+cond_term_has(Map, Needle) when is_map(Map) ->
+    cond_term_has(maps:values(Map), Needle);
+cond_term_has(_Other, _Needle) ->
+    false.
 
 %% Mirrors arizona_live:compute_changed/2 for unit tests
 compute_changed(OldBindings, NewBindings) ->

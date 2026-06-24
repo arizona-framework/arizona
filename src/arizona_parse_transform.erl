@@ -1862,8 +1862,154 @@ make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
 make_esc_text_dynamic_ast(AzBin, ExprAST0, Module, ExprLine, Backend) ->
     ExprAST = expand_block_element_tails(ExprAST0, Module, Backend),
     LocAST = loc_ast(Module, ExprLine),
-    FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
+    Body = branch_track_touches(ExprAST0) ++ [ExprAST],
+    FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], Body}]}},
     {tuple, 0, [ast_binary(AzBin), esc_spec(Backend, ExprAST, FunAST), LocAST]}.
+
+%% A content-slot control-flow expression (`case`/`if`/`maybe`/...) compiles each
+%% branch *element* into a nested template (expand_block_element_tails/3) whose `?get`
+%% reads are isolated from the conditional dynamic's own dependency bracket -- see
+%% eval_template/2's with_saved_deps. Left alone, the conditional slot records only
+%% its scrutinee's reads, so a change to a binding read solely in such a branch is
+%% skipped and the branch freezes. (A *value* branch does not freeze: its read fires
+%% eagerly in the slot closure when that branch is taken, and a non-taken value
+%% branch's read is genuinely not a dependency.) Mirror the guard auto-tracking
+%% (wrap_guard_touches/4): prepend a `track/1` for each binding key read in a branch
+%% tail that becomes a nested template, so those keys become deps of the conditional
+%% dynamic itself. `track/1` records the key without reading the binding, so a key
+%% present only in a non-taken (and possibly absent) branch never raises
+%% missing_binding. The residual over-tracking (two element branches both
+%% contribute their reads) is op-free: a change to a non-taken-branch read
+%% re-evaluates the slot but the structurally equal snapshot emits no op
+%% (diff_changed_dynamic/8's `case New of Old`). Computed (non-literal) keys are
+%% skipped: the key expression may reference a clause-bound variable not in scope.
+branch_track_touches(ExprAST0) ->
+    Expr = erl_syntax:revert(ExprAST0),
+    case is_control_flow_ast(Expr) of
+        false ->
+            [];
+        true ->
+            Keys = dedup_keys(collect_branch_keys(Expr, [])),
+            [track_call_ast(K) || K <- Keys]
+    end.
+
+is_control_flow_ast({'case', _, _, _}) -> true;
+is_control_flow_ast({'if', _, _}) -> true;
+is_control_flow_ast({block, _, _}) -> true;
+is_control_flow_ast({'receive', _, _}) -> true;
+is_control_flow_ast({'receive', _, _, _, _}) -> true;
+is_control_flow_ast({'try', _, _, _, _, _}) -> true;
+is_control_flow_ast({'maybe', _, _}) -> true;
+is_control_flow_ast({'maybe', _, _, _}) -> true;
+is_control_flow_ast(_) -> false.
+
+%% Walk only the value-producing tail leaves of a control-flow expression (the same
+%% positions map_tail_exprs/3 compiles), collecting binding-read keys from each leaf
+%% that expand_element_leaf/3 turns into a nested template. Those are the isolated
+%% reads; a scalar leaf or the scrutinee already tracks when it runs, so they are
+%% skipped (tracking them would spuriously widen a value-form conditional's deps).
+collect_branch_keys(Expr, Acc) ->
+    case erl_syntax:revert(Expr) of
+        {'case', _, _Scrutinee, Clauses} ->
+            collect_clauses_keys(Clauses, Acc);
+        {'if', _, Clauses} ->
+            collect_clauses_keys(Clauses, Acc);
+        {block, _, Body} ->
+            collect_tail_keys(Body, Acc);
+        {'receive', _, Clauses} ->
+            collect_clauses_keys(Clauses, Acc);
+        {'receive', _, Clauses, _AfterExpr, AfterBody} ->
+            collect_tail_keys(AfterBody, collect_clauses_keys(Clauses, Acc));
+        {'try', _, Body, OfClauses, CatchClauses, _AfterBody} ->
+            collect_clauses_keys(
+                CatchClauses, collect_clauses_keys(OfClauses, collect_tail_keys(Body, Acc))
+            );
+        {'maybe', _, Body} ->
+            collect_tail_keys(Body, Acc);
+        {'maybe', _, Body, {'else', _, ElseClauses}} ->
+            collect_clauses_keys(ElseClauses, collect_tail_keys(Body, Acc));
+        Leaf ->
+            collect_leaf_keys(Leaf, Acc)
+    end.
+
+collect_clauses_keys(Clauses, Acc) ->
+    lists:foldl(
+        fun({clause, _, _Patterns, _Guards, Body}, A) -> collect_tail_keys(Body, A) end,
+        Acc,
+        Clauses
+    ).
+
+%% Only a body's last expression is a value-producing tail.
+collect_tail_keys(Body, Acc) ->
+    collect_branch_keys(lists:last(Body), Acc).
+
+%% A tail leaf contributes its reads only when expand_element_leaf/3 would compile it
+%% into a nested template; otherwise its reads track eagerly when the branch runs.
+collect_leaf_keys(Leaf, Acc) ->
+    case is_nested_template_leaf(Leaf) of
+        true -> collect_read_keys(Leaf, Acc);
+        false -> Acc
+    end.
+
+is_nested_template_leaf(Leaf) ->
+    case classify_body(Leaf) of
+        element_tuple -> true;
+        element_list -> true;
+        list_ast -> list_has_element_tuple(Leaf);
+        _ -> false
+    end.
+
+%% Collect (prepended) the literal key ASTs read via `arizona_template`/`az`
+%% get/get_lazy/with/track anywhere in Expr. A matched read call still recurses into
+%% its args (a default that itself reads, `get(a, B, get(b, B))`).
+collect_read_keys({call, _, {remote, _, {atom, _, Mod}, {atom, _, Fun}}, Args}, Acc) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    collect_read_keys(Args, collect_call_keys(Fun, Args, Acc));
+collect_read_keys(T, Acc) when is_tuple(T) ->
+    collect_read_keys(tuple_to_list(T), Acc);
+collect_read_keys([H | T], Acc) ->
+    collect_read_keys(T, collect_read_keys(H, Acc));
+collect_read_keys(_, Acc) ->
+    Acc.
+
+collect_call_keys(get, [Key | _], Acc) -> add_literal_key(Key, Acc);
+collect_call_keys(get_lazy, [Key | _], Acc) -> add_literal_key(Key, Acc);
+collect_call_keys(track, [Key | _], Acc) -> add_literal_key(Key, Acc);
+collect_call_keys(with, [Keys | _], Acc) -> add_literal_keys(Keys, Acc);
+collect_call_keys(_, _, Acc) -> Acc.
+
+add_literal_key({atom, _, _} = Key, Acc) -> [Key | Acc];
+add_literal_key({bin, _, _} = Key, Acc) -> [Key | Acc];
+add_literal_key(_NonLiteral, Acc) -> Acc.
+
+add_literal_keys({cons, _, Head, Tail}, Acc) ->
+    add_literal_keys(Tail, add_literal_key(Head, Acc));
+add_literal_keys(_NilOrNonLiteral, Acc) ->
+    Acc.
+
+%% Reverse the prepend order back to source order, dropping duplicates by key value.
+dedup_keys(KeysRev) ->
+    {Keys, _Seen} = lists:foldl(
+        fun(Key, {Acc, Seen}) ->
+            Value = key_value(Key),
+            case is_map_key(Value, Seen) of
+                true -> {Acc, Seen};
+                false -> {[Key | Acc], Seen#{Value => true}}
+            end
+        end,
+        {[], #{}},
+        lists:reverse(KeysRev)
+    ),
+    lists:reverse(Keys).
+
+key_value({atom, _, Atom}) -> {atom, Atom};
+key_value({bin, _, [{bin_element, _, {string, _, Str}, default, default}]}) -> {bin, Str};
+key_value({bin, _, _} = Bin) -> {raw, Bin}.
+
+track_call_ast(KeyAST) ->
+    {match, 0, {atom, 0, ok},
+        {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, track}}, [KeyAST]}}.
 
 %% A content slot's value can be the result of a control-flow expression
 %% (`case`/`if`/`begin`/`receive`/`try`/`maybe`). Those tail positions are

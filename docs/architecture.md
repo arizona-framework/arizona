@@ -223,6 +223,42 @@ and pollute its deps. Bracketed entry points and what each covers:
 Inner *dynamics* re-bracket their own slot, so per-inner-dynamic deps are
 independent of outer.
 
+**Content-slot conditional branches:** a `case`/`if`/`maybe` in a content slot
+compiles each *element* branch into a nested template, so by this invariant the
+branch's `?get` reads land in the nested template's slot, not the enclosing
+conditional dynamic's -- which freezes the branch when only a branch-read binding
+changes (the conditional's deps would otherwise hold just the scrutinee). The parse
+transform (`branch_track_touches/1` in `arizona_parse_transform`) compensates by
+injecting `arizona_template:track/1` for each literal key read in an element branch
+tail, recording them as deps of the conditional dynamic itself. `track/1` records the
+key without reading the binding, so an absent non-taken-branch key is safe; value
+(scalar) branches are left alone (their reads already track when taken). See the
+"Bare element tuples in conditional tails" rule in `.claude/rules/erlang.md`.
+
+On re-render the diff then fine-grains: `make_ops/4` diffs a
+same-statics nested template's inner dynamics (each globally `Az`-addressed and
+marker-anchored) and patches only the changed inner slot(s) -- the same
+per-inner-dynamic diff the `view_id` child-view path uses (`diff_child_dynamics/2`),
+minus the `[VId, ChildOps]` wrapper, since a plain nested template is inline in the
+parent view. It recurses through nested-nested templates to the deepest slot; an
+inner attribute change is a precise `?OP_SET_ATTR`. A wholesale `?OP_TEXT` re-render
+is the fallback only when the statics differ (a different branch / structure change).
+
+**`?OP_TEXT` escaping -- text vs HTML.** SSR escapes a dynamic value
+(`render_dyn/1` -> `escape_value/1`); the live diff sends it **raw** (`make_op/3` ->
+`to_bin/1`), with escaping completed at the *client's* output boundary -- the wire
+carries text as a bare string and HTML as an object, so the client knows which to do.
+A scalar `?get` value is a bare binary; the JS client renders it with a **text node**,
+so a `<` is literal text (never parsed -- can't inject, matches SSR). An HTML fragment
+(a nested-template / plain-list-`?each` zip-map, whose inner values `zip_or_fp` already
+escaped) is a map; the client `innerHTML`s it. The escape opt-out `?raw` is the one
+scalar that must `innerHTML`, so `make_op/3` tags it `#{~"raw" => Html}` (a map, not a
+bare string) -- the only thing distinguishing trusted markup from a `?get` value that
+merely contains `<`. The worker sets `op[3] = true` for the HTML cases. Attribute values
+are escaped by the client's `setAttribute`. (`?raw` is an HTML-target feature; the
+`?native`/`?terminal` backends don't HTML-escape, so `?raw` there is unsupported -- a
+target-aware tag would be the follow-up if it ever needs to behave like a plain value.)
+
 **Usage convention:** outer-scope `?get` reads belong in the props
 expression of `?stateful`/`?stateless` -- the parse transform places them
 in the outer dynamic's closure, where they track correctly. Eager `?get`

@@ -46,13 +46,17 @@ function loadFpEntries(entries) {
 }
 
 /**
- * Resolve a payload that may be a plain HTML string or a fingerprinted
- * template object {f, s?, t?, d}. Returns an HTML string.
- * @param {string|{f: string, s?: Array<string>, t?: number, d: Array<*>}} payload
+ * Resolve a payload that may be a plain text string (`?get` scalar), a `{raw}` tag
+ * (a `?raw` trusted-HTML value), or a fingerprinted template object {f, s?, t?, d}
+ * (a nested template / plain-list each). Returns the HTML/text string.
+ * @param {string|{raw: string}|{f: string, s?: Array<string>, t?: number, d: Array<*>}} payload
  * @returns {string}
  */
 function resolveHtml(payload) {
     if (typeof payload === 'string') return payload;
+    // `?raw` trusted HTML: a tagged scalar. The worker marks it isHtml (an object, not a
+    // string), so the client innerHTMLs the unwrapped markup.
+    if ('raw' in payload) return payload.raw;
     const f = payload.f;
     if (payload.s) {
         /** @type {{s: Array<string>, t?: number}} */

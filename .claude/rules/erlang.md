@@ -243,6 +243,22 @@ shared with the live-render-root transform. (This mirrors `?each`, whose callbac
 already accepts bare elements; the difference is that `?each` keys items for per-item
 diffing while a conditional is a single slot.)
 
+**Branch reads are tracked.** A binding read inside such a branch element (`?get(val)`
+in `{p, [], [?get(val)]}`) compiles into the branch's nested template, whose reads are
+otherwise isolated from the conditional slot's own dependency bracket -- so a change to
+a binding read *only* in a branch would skip the slot and freeze the branch. The parse
+transform closes this by unioning each **element** branch's reads into the conditional
+slot's deps (an injected `arizona_template:track/1` per literal key, mirroring the guard
+auto-tracking below), so the element form behaves like the value form
+(`X = case ?get(flag) of true -> ?get(val); false -> ~"" end`). `track/1` records the
+key without reading it, so a key present only in a non-taken (and possibly absent)
+branch never raises `missing_binding`. A **value** branch (one returning a scalar, not
+an element) is unaffected -- its read already fires when that branch is taken, and a
+non-taken value branch's read is genuinely not a dependency. A change to a binding read
+only in a non-taken element branch re-evaluates the slot but emits no op (the re-rendered
+branch is structurally unchanged). Limitation: a branch read whose **key is computed**
+(`?get(SomeVar)`, not a literal) is not auto-tracked; use the value form for that.
+
 A conditional may also return a `?stateful`/`?stateless` descriptor from a branch -- the
 idiomatic `case ?get(flag) of true -> ?stateful(child, #{id => ~"c"}); false -> ~"" end`.
 A content slot is anchored by its `<!--az:X-->...<!--/az-->` comment markers in SSR, so
@@ -252,6 +268,14 @@ element. (`arizona_diff:make_op/3` always emits `?OP_TEXT`, never `?OP_UPDATE`, 
 nested-template value -- an `?OP_UPDATE` would `innerHTML`-overwrite the enclosing element,
 which is catastrophic when the slot's `az` is that element's own `az`, e.g. a conditional
 child rendered directly under the view root.)
+
+When the **same branch** re-renders (its statics are unchanged -- only an inner binding
+changed), the diff does **not** re-render the whole branch: `make_ops/4` diffs the nested
+template's inner dynamics and patches only the changed inner slot(s), each addressed by its
+own `az` (an inner attribute change is a precise `?OP_SET_ATTR`). It recurses through
+nested-nested templates to the deepest changed slot. The wholesale `?OP_TEXT` re-render is
+the fallback only when the statics differ -- a different branch, an empty<->template
+transition, or any structure change.
 
 The same rule applies to a **plain-list `?each` in a content slot**: it is marker-anchored
 exactly like any other dynamic-text child (no wrapper element carries the slot `az`), so its

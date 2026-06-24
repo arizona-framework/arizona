@@ -412,7 +412,9 @@ stateless_render(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"7<!--/az-->">>)).
 
 stateless_diff(Config) when is_list(Config) ->
-    %% Stateless children produce OP_TEXT with re-zipped HTML when value changes
+    %% A stateless child re-rendered to the same statics diffs its inner dynamics:
+    %% only the changed slot (count 0 -> 5) patches at its own az; the unchanged `id`
+    %% slot emits no op -- not a wholesale re-render of the whole child template.
     Tmpl0 = #{
         s => [<<"<div az=\"0\">">>, <<"</div>">>],
         d => [
@@ -442,29 +444,7 @@ stateless_diff(Config) when is_list(Config) ->
         f => <<"test">>
     },
     {Ops, _, _} = arizona_diff:diff(Tmpl1, Snap0, V0),
-    %% Both old and new are nested templates with fingerprint, so OP_TEXT
-    %% carries a structured payload instead of zipped HTML.
-    ?assertMatch([[?OP_TEXT, <<"0">>, #{<<"f">> := _, <<"s">> := _, <<"d">> := _}]], Ops),
-    [[_, _, Payload]] = Ops,
-    ?assert(is_binary(maps:get(<<"f">>, Payload))),
-    %% Statics contain fingerprint-scoped az values, just check key fragments.
-    %% Static `arizona_js:push_event(~"inc"/~"dec")` attrs fold into the
-    %% counter's statics at compile time, so the s/d split has fewer
-    %% segments than it would if everything were dynamic.
-    Statics = maps:get(<<"s">>, Payload),
-    ?assertEqual(3, length(Statics)),
-    StaticsBin = iolist_to_binary(Statics),
-    ?assertNotEqual(nomatch, binary:match(StaticsBin, <<"az-view">>)),
-    ?assertNotEqual(nomatch, binary:match(StaticsBin, <<"Count: ">>)),
-    %% Dynamics now carry full attribute strings via unwrap_val. The two
-    %% `az-click` attributes folded to statics, so only id and count remain.
-    ?assertEqual(
-        [
-            <<" id=\"sl\"">>,
-            <<"5">>
-        ],
-        maps:get(<<"d">>, Payload)
-    ).
+    ?assertMatch([[?OP_TEXT, _, <<"5">>]], Ops).
 
 stateless_fun_render(Config) when is_list(Config) ->
     %% arizona:stateless/2 with fun/1 works the same as stateless/3
