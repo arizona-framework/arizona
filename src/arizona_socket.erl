@@ -148,7 +148,8 @@ Recognized payloads:
 - `[~"navigate", #{~"path" := Path, ~"qs" := Qs}]` -- SPA navigation
 - `[ViewId, Event, Payload]` -- UI event dispatch
 
-Unrecognized payloads are silently dropped.
+Unrecognized payloads, and frames whose body is not valid JSON, are
+silently dropped (a single bad frame must not crash the socket).
 """.
 -spec handle_in(Frame, Socket) -> result() when
     Frame :: binary(),
@@ -156,7 +157,10 @@ Unrecognized payloads are silently dropped.
 handle_in(?SYS_PING, Socket) ->
     {reply, ?SYS_PONG, Socket};
 handle_in(JSON, #socket{pid = Pid} = Socket) ->
-    case json:decode(JSON) of
+    %% `try ... of` so the catch fires ONLY on a malformed decode -- exceptions
+    %% raised inside the matched clause bodies (the inner navigate/dispatch
+    %% trys) are not caught here, so a genuine handler crash still closes 4500.
+    try json:decode(JSON) of
         [~"cached_fps", FpList] when is_list(FpList) ->
             arizona_live:seed_fps(Pid, FpList),
             {ok, Socket};
@@ -180,6 +184,14 @@ handle_in(JSON, #socket{pid = Pid} = Socket) ->
                     close_crash(Socket)
             end;
         _ ->
+            {ok, Socket}
+    catch
+        %% Malformed JSON (e.g. a scanner/probe, a corrupted or fragmented
+        %% frame, a stale client). `json:decode/1` raises `error:{invalid_byte,
+        %% _}` / `error:unexpected_end` / `error:{unexpected_sequence, _}`. Drop
+        %% the frame like an unrecognized payload rather than crashing the
+        %% socket -- one bad frame must not tear down a live session.
+        error:_ ->
             {ok, Socket}
     end.
 

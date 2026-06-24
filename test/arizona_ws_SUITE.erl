@@ -12,6 +12,7 @@
     event_no_change/1,
     unknown_json/1,
     unknown_frame/1,
+    malformed_json/1,
     reconnect_init/1,
     connect_with_params/1,
     http_query_params/1,
@@ -77,6 +78,7 @@ groups() ->
         event_no_change,
         unknown_json,
         unknown_frame,
+        malformed_json,
         reconnect_init,
         connect_with_params,
         http_query_params,
@@ -378,6 +380,18 @@ unknown_frame(Config) ->
     %% Send a binary frame (opcode 2) -- should be ignored
     ok = ws_send_binary_frame(Sock, <<"binary data">>),
     %% Verify connection alive
+    ok = ws_send(Sock, <<"0">>),
+    {text, <<"1">>} = ws_recv(Sock),
+    ws_close(Sock).
+
+malformed_json(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    %% A text frame whose body is not valid JSON (json:decode raises
+    %% error:{invalid_byte, _}). Must be dropped, not crash the socket.
+    ok = ws_send(Sock, <<"{bad json">>),
+    %% A truncated frame (json:decode raises error:unexpected_end).
+    ok = ws_send(Sock, <<"[\"crashable\",">>),
+    %% Connection survived both -- ping/pong still works.
     ok = ws_send(Sock, <<"0">>),
     {text, <<"1">>} = ws_recv(Sock),
     ws_close(Sock).

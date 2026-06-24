@@ -126,9 +126,16 @@ the value is tampered, malformed, or its baked-in expiry has passed.
 decode(Value) ->
     case arizona_crypto:decrypt(Value) of
         {ok, Payload} ->
-            case json:decode(Payload) of
+            %% `decrypt` owns the tamper check; the remaining failure is a
+            %% decrypted-but-non-JSON payload (possible now that arizona_crypto
+            %% is shared -- another consumer could encrypt non-JSON under the
+            %% same secret), which `decode/1`'s total `#{}`-on-anything contract
+            %% must still swallow rather than crash on.
+            try json:decode(Payload) of
                 Session when is_map(Session) -> Session;
                 _ -> #{}
+            catch
+                _:_ -> #{}
             end;
         error ->
             #{}
