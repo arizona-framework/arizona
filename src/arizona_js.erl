@@ -278,7 +278,7 @@ controller (e.g. via `arizona_controller:reply_redirect/1`) rather than an HTTP
         credentials => same_origin | include | omit,
         on_error => arizona_effect:cmd() | [arizona_effect:cmd()]
     }.
-fetch(Url, Opts) -> {arizona_effect, [?EFFECT_FETCH, Url, Opts]}.
+fetch(Url, Opts) -> {arizona_effect, [?EFFECT_FETCH, Url, unwrap_on_error(Opts)]}.
 
 -doc "Focuses the first element matching the selector.".
 -spec focus(Selector) -> arizona_effect:cmd() when
@@ -321,10 +321,8 @@ list of atoms (matches any), or a regex pattern as a binary.
 -spec on_key(Key, Cmd) -> arizona_effect:cmd() when
     Key :: atom() | [atom()] | binary(),
     Cmd :: arizona_effect:cmd() | [arizona_effect:cmd()].
-on_key(Key, {arizona_effect, Inner}) ->
-    {arizona_effect, [?EFFECT_ON_KEY, encode_key(Key), Inner]};
-on_key(Key, [_ | _] = Cmds) ->
-    {arizona_effect, [?EFFECT_ON_KEY, encode_key(Key), [C || {arizona_effect, C} <:- Cmds]]}.
+on_key(Key, Cmds) ->
+    {arizona_effect, [?EFFECT_ON_KEY, encode_key(Key), unwrap_cmds(Cmds)]}.
 
 -doc """
 Sets a client-owned slot (`?local`) to `Value` in the **closest view** of the
@@ -401,10 +399,8 @@ CSS), letting one stylesheet pick a different animation per call.
 -spec transition(Cmd, Opts) -> arizona_effect:cmd() when
     Cmd :: arizona_effect:cmd() | [arizona_effect:cmd()],
     Opts :: #{types => [binary()]}.
-transition({arizona_effect, Inner}, Opts) ->
-    {arizona_effect, [?EFFECT_TRANSITION, Opts, Inner]};
-transition([_ | _] = Cmds, Opts) ->
-    {arizona_effect, [?EFFECT_TRANSITION, Opts, [C || {arizona_effect, C} <:- Cmds]]}.
+transition(Cmds, Opts) ->
+    {arizona_effect, [?EFFECT_TRANSITION, Opts, unwrap_cmds(Cmds)]}.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -413,6 +409,18 @@ transition([_ | _] = Cmds, Opts) ->
 encode_key(Key) when is_atom(Key) -> [Key];
 encode_key(Keys) when is_list(Keys) -> Keys;
 encode_key(Pattern) when is_binary(Pattern) -> Pattern.
+
+%% Unwrap nested cmd tuple(s) to bare op-array(s) so the result is JSON-encodable.
+%% A single `{arizona_effect, Inner}` yields its bare `Inner`; a list of cmd tuples
+%% yields a list of bare op-arrays. Shared by on_key/2, transition/2, and
+%% unwrap_on_error/1.
+unwrap_cmds({arizona_effect, Inner}) -> Inner;
+unwrap_cmds([_ | _] = Cmds) -> [C || {arizona_effect, C} <:- Cmds].
+
+%% fetch/2's on_error carries cmd tuple(s) inside the Opts map; arizona_effect:encode/1
+%% does not recurse into map values, so unwrap them here before embedding Opts.
+unwrap_on_error(#{on_error := Cmds} = Opts) -> Opts#{on_error => unwrap_cmds(Cmds)};
+unwrap_on_error(Opts) -> Opts.
 
 -ifdef(TEST).
 
