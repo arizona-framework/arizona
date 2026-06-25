@@ -14,7 +14,7 @@ All unit tests use plain `_test()` functions (no generators/fixtures). Parse tra
 ## E2E tests
 
 Playwright, split into projects/directories:
-- `e2e/parallel/` -- `arizona_page.spec.js`, `arizona_datatable.spec.js`, `arizona_mixed_children.spec.js` (run in parallel)
+- `e2e/parallel/` -- `arizona_page.spec.js`, `arizona_datatable.spec.js`, `arizona_mixed_children.spec.js`, `arizona_os.spec.js` (run in parallel). `arizona_os.spec.js` drives the native-shell (OS) capability seam against the real client with a fake `window.__arizona_os__` installed via `page.addInitScript` (the Electron-preload equivalent).
 - `e2e/sequential/` -- `arizona_chat.spec.js` (runs with `workers: 1` to avoid pg channel leaks between tests)
 - `e2e/native/` -- the `?native` (JSON) wire e2e: a real WebSocket client (no browser, `e2e/utils/native_client.js`) drives the `/native/counter` view over the live server
 
@@ -41,6 +41,7 @@ Handlers pick one of the two header forms:
 - `arizona_chat.erl` -- pubsub cross-tab messaging, stream-based, owner-guarded delete
 - `arizona_datatable.erl` -- stream sort/move/reset, 5 initial rows
 - `arizona_mixed_children.erl` -- stateless + dynamic children, az numbering correctness
+- `arizona_os_demo.erl` -- native-shell (OS) capability seam e2e fixture (route `/os`): capability-gated UI via the `?connected` binding pattern, server-emitted + client-triggered `arizona_os` commands, inbound OS events into `handle_event/3`
 - `arizona_scroll_home.erl` / `arizona_scroll_about.erl` -- dedicated E2E scroll fixtures (tall content + hash anchor + replace-nav button). Routed at `/scroll-home` and `/scroll-about`; kept off the demo nav to avoid polluting the other E2E cases.
 - `arizona_todo.erl` -- stream operations (add/remove/update/clear/move/insert_at/reset_with)
 - `arizona_timer.erl` -- `handle_info/2` with set_message/set_message_with_effect

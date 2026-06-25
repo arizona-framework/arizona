@@ -57,6 +57,13 @@ routes() ->
             bindings => #{title => <<"App">>},
             layouts => Layouts
         }},
+        %% Native-shell (OS) capability seam e2e -- a fake window.__arizona_os__
+        %% (the Electron-preload equivalent) drives capability negotiation,
+        %% server/client OS commands, and inbound OS events.
+        {live, <<"/os">>, arizona_os_demo, #{
+            bindings => #{title => <<"OS">>},
+            layouts => Layouts
+        }},
         {live, <<"/pip">>, arizona_pip, #{
             bindings => #{id => ~"pip_demo", title => <<"PiP">>},
             layouts => Layouts
