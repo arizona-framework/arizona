@@ -22,3 +22,4 @@
 -define(EFFECT_TRANSITION, 20).
 -define(EFFECT_TOGGLE_ATTR, 21).
 -define(EFFECT_FETCH, 22).
+-define(EFFECT_OS, 23).

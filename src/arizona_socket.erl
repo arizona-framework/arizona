@@ -125,9 +125,10 @@ recovered from `Req` itself via `arizona_req:adapter/1`.
 init(Handler, Bindings, Req, Opts) ->
     Reconnect = maps:get(reconnect, Opts, false),
     OnMount = maps:get(on_mount, Opts, []),
+    Capabilities = maps:get(capabilities, Opts, #{}),
     Socket = #socket{req = Req},
     safe_init(Handler, Socket, fun() ->
-        {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount),
+        {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount, Capabilities),
         case Reconnect of
             true ->
                 {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),

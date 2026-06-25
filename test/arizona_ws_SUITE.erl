@@ -54,6 +54,8 @@
     ws_upgrade_preserves_duplicate_qs_keys/1,
     ws_upgrade_rejects_cross_origin/1,
     ws_upgrade_allows_same_origin/1,
+    ws_upgrade_accepts_caps/1,
+    ws_upgrade_tolerates_malformed_caps/1,
     controller_runs_handler_with_state/1,
     controller_rejects_cross_origin/1,
     controller_rejects_disallowed_method/1,
@@ -120,6 +122,8 @@ groups() ->
         ws_upgrade_preserves_duplicate_qs_keys,
         ws_upgrade_rejects_cross_origin,
         ws_upgrade_allows_same_origin,
+        ws_upgrade_accepts_caps,
+        ws_upgrade_tolerates_malformed_caps,
         controller_runs_handler_with_state,
         controller_rejects_cross_origin,
         controller_rejects_disallowed_method,
@@ -506,6 +510,21 @@ ws_upgrade_allows_same_origin(Config) ->
     Origin = ["Origin: http://localhost:", integer_to_list(Port), "\r\n"],
     ?assertEqual(101, ws_upgrade_status(Port, Origin)).
 
+ws_upgrade_accepts_caps(Config) ->
+    %% A valid `_az_caps` JSON object on the upgrade URL is parsed and threaded
+    %% into the live process; the upgrade still completes (101).
+    Port = proplists:get_value(port, Config),
+    Caps = uri_string:quote(~"{\"window_focus\":true}"),
+    ?assertEqual(101, ws_upgrade_status_qs(Port, [~"_az_path=/&_az_caps=", Caps])).
+
+ws_upgrade_tolerates_malformed_caps(Config) ->
+    %% A malformed `_az_caps` value (invalid JSON) is an untrusted, trivially
+    %% malformable query param -- it must be treated as "no capabilities" rather
+    %% than crashing the upgrade (a free DoS). The upgrade still completes (101).
+    Port = proplists:get_value(port, Config),
+    Bad = uri_string:quote(~"{not json"),
+    ?assertEqual(101, ws_upgrade_status_qs(Port, [~"_az_path=/&_az_caps=", Bad])).
+
 controller_runs_handler_with_state(Config) ->
     %% A controller (verb-tag) route dispatches through arizona_roadrunner_controller:
     %% with no Origin the pipeline conts, the handler runs, and its route `state` is
@@ -579,6 +598,31 @@ ws_upgrade_status(Port, ExtraHeaders) ->
         integer_to_list(Port),
         "\r\n",
         ExtraHeaders,
+        "Upgrade: websocket\r\n",
+        "Connection: Upgrade\r\n",
+        "Sec-WebSocket-Key: ",
+        Key,
+        "\r\n",
+        "Sec-WebSocket-Version: 13\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    {ok, {http_response, _Version, Status, _Reason}} = gen_tcp:recv(Sock, 0, 5000),
+    gen_tcp:close(Sock),
+    Status.
+
+%% Send a raw WS upgrade for `/ws?<Qs>` (no extra headers); return the response
+%% status code. Lets a test vary the query string (e.g. add `_az_caps`).
+ws_upgrade_status_qs(Port, QueryString) ->
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, http_bin}]),
+    Key = base64:encode(crypto:strong_rand_bytes(16)),
+    Req = [
+        "GET /ws?",
+        QueryString,
+        " HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
         "Upgrade: websocket\r\n",
         "Connection: Upgrade\r\n",
         "Sec-WebSocket-Key: ",
