@@ -23,6 +23,8 @@
 -export([capability_not_connected/1]).
 -export([capabilities_map/1]).
 -export([capabilities_default_empty/1]).
+-export([reconnected_true/1]).
+-export([reconnected_default_false/1]).
 
 all() ->
     [{group, builders}, {group, read_api}].
@@ -48,7 +50,9 @@ groups() ->
             capability_absent_key,
             capability_not_connected,
             capabilities_map,
-            capabilities_default_empty
+            capabilities_default_empty,
+            reconnected_true,
+            reconnected_default_false
         ]}
     ].
 
@@ -143,3 +147,12 @@ capabilities_map(Config) when is_list(Config) ->
 capabilities_default_empty(Config) when is_list(Config) ->
     erlang:erase('$arizona_capabilities'),
     ?assertEqual(#{}, arizona_live:capabilities()).
+
+reconnected_true(Config) when is_list(Config) ->
+    erlang:put('$arizona_reconnected', true),
+    ?assert(arizona_live:reconnected()).
+
+reconnected_default_false(Config) when is_list(Config) ->
+    %% No dict (first connect / SSR) -> false.
+    erlang:erase('$arizona_reconnected'),
+    ?assertNot(arizona_live:reconnected()).

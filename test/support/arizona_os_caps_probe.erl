@@ -2,11 +2,13 @@
 -moduledoc """
 Test fixture for the native-shell capability negotiation chain.
 
-Reads `?capability(~"window_title")` in `mount/1` and renders `CAP_YES`/`CAP_NO`,
-so a CT test can assert the full path end-to-end: the `_az_caps` WS upgrade param
--> `arizona_ws:prepare/3` -> the live process's `$arizona_capabilities` dict ->
-`?capability/1` -> rendered output. (The browser e2e covers this with a fake
-shell; this exercises it at the Erlang layer without a browser.)
+Reads `?capability(~"window_title")` and `?reconnected` in `mount/1` and renders
+`CAP_YES`/`CAP_NO` + `RECONNECT_YES`/`RECONNECT_NO`, so a CT test can assert the
+full path end-to-end: the `_az_caps` / `_az_reconnect` WS upgrade params ->
+`arizona_ws:prepare/3` -> the live process's `$arizona_capabilities` /
+`$arizona_reconnected` dict -> `?capability/1` / `?reconnected` -> rendered output.
+(The browser e2e covers this with a fake shell; this exercises it at the Erlang
+layer without a browser.)
 """.
 -include("arizona_stateful.hrl").
 
@@ -18,7 +20,8 @@ mount(Bindings) ->
     {
         #{
             id => maps:get(id, Bindings, ~"caps_probe"),
-            cap => ?capability(~"window_title")
+            cap => ?capability(~"window_title"),
+            reconnected => ?reconnected
         },
         #{}
     }.
@@ -30,6 +33,10 @@ render(Bindings) ->
             case ?get(cap) of
                 true -> ~"CAP_YES";
                 false -> ~"CAP_NO"
+            end,
+            case ?get(reconnected) of
+                true -> ~"RECONNECT_YES";
+                false -> ~"RECONNECT_NO"
             end
         ]}
     ).

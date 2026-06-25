@@ -532,10 +532,12 @@ ws_upgrade_tolerates_malformed_caps(Config) ->
     ?assertEqual(101, ws_upgrade_status_qs(Port, [~"_az_path=/&_az_caps=", Bad])).
 
 caps_reach_capability_in_render(Config) ->
-    %% Full chain: `_az_caps` on the upgrade URL -> the live process's
-    %% `$arizona_capabilities` dict -> `?capability(~"window_title")` read in the
-    %% handler's mount -> rendered output. `reconnect` forces an immediate
-    %% mount-and-render so the rendered HTML lands on the first frame.
+    %% Full chain: `_az_caps` / `_az_reconnect` on the upgrade URL -> the live
+    %% process's `$arizona_capabilities` / `$arizona_reconnected` dict ->
+    %% `?capability(~"window_title")` / `?reconnected` read in the handler's mount
+    %% -> rendered output. `reconnect` forces an immediate mount-and-render so the
+    %% HTML lands on the first frame -- and means this connection IS a reconnect,
+    %% so the same frame proves the `_az_reconnect=1` -> `?reconnected` chain.
     Caps = uri_string:quote(~"{\"window_title\":true}"),
     {ok, Sock} = ws_connect(Config, <<"/caps_probe">>, [
         {reconnect, true},
@@ -543,6 +545,7 @@ caps_reach_capability_in_render(Config) ->
     ]),
     {text, Resp} = ws_recv(Sock),
     ?assertNotEqual(nomatch, binary:match(Resp, ~"CAP_YES")),
+    ?assertNotEqual(nomatch, binary:match(Resp, ~"RECONNECT_YES")),
     ws_close(Sock).
 
 caps_absent_capability_false(Config) ->

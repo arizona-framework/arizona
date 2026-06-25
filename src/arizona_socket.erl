@@ -128,7 +128,8 @@ init(Handler, Bindings, Req, Opts) ->
     Capabilities = maps:get(capabilities, Opts, #{}),
     Socket = #socket{req = Req},
     safe_init(Handler, Socket, fun() ->
-        {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount, Capabilities),
+        ConnInfo = #{capabilities => Capabilities, reconnect => Reconnect},
+        {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount, ConnInfo),
         case Reconnect of
             true ->
                 {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),

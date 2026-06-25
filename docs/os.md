@@ -119,10 +119,31 @@ Typed sugars are the documented path; `command/2` is the unchecked escape hatch
 | `command/1,2` | (any name) |
 
 **Declarative vs one-shot on reconnect.** On reconnect the live process re-mounts
-fresh while the OS window keeps its real state. Re-assert **declarative/idempotent**
-capabilities from server state on the connect self-cast (`set_title`, `fullscreen`,
-`screen_capture_protection`). Do **not** re-fire **one-shot** capabilities
-(`notify`, `focus`) on reconnect, or you double-fire.
+fresh (so `?connected` is `true` again) while the OS window keeps its real state.
+The view distinguishes the two with `?reconnected`, which mirrors `?connected`: it
+is `false` during SSR **and** on the first connect, and `true` only on a
+reconnection's mount.
+
+- **Declarative/idempotent** capabilities (`set_title`, `fullscreen`,
+  `screen_capture_protection`) re-assert from server state on **every** connect --
+  gate them on `?connected`.
+- **One-shot** capabilities (`notify`, `focus`) fire on the **first** connect only
+  -- gate them on `?connected andalso not ?reconnected`, or they double-fire on
+  every reconnect.
+
+Both gates fit the connect self-cast (where `?connected` is already `true`, so
+`not ?reconnected` is the operative check):
+
+```erlang
+handle_info(arizona_connected, Bindings) ->
+    Declarative = [arizona_os:set_title(?get(title))],   %% every connect
+    Effects =
+        case ?reconnected of
+            true -> Declarative;
+            false -> [arizona_os:focus() | Declarative]   %% first connect only
+        end,
+    {Bindings, #{}, Effects}.
+```
 
 ## Inbound OS events
 
@@ -135,11 +156,25 @@ handle_event(~"window_state", #{~"state" := State}, Bindings) ->
     {Bindings#{last_event => State}, #{}, []}.
 ```
 
+**Name OS events with a recognizable prefix.** A relayed OS event shares the app's
+`handle_event/3` **namespace on the root view** -- a shell event named `"submit"`
+is indistinguishable from the app's own `"submit"`. Give OS event names a prefix
+the app won't reuse (the reference shell uses `window_...`: `window_state`, ...) so
+they never collide with app event names.
+
 The seam is **one-directional**: a command's return value is ignored (commands are
 fire-and-forget, like every other Arizona effect), so `onEvent` is the only return
 channel. And capabilities are a **connect-time snapshot** -- `_az_caps` is read
 once at the WS handshake, so a capability the shell adds *after* connect is seen
 only on the next (re)connect.
+
+> **Deferred: result-bearing / permission-gated capabilities.** The fire-and-forget
+> model fits declarative caps, but a capability that needs a **result** (a native
+> notification that reports a permission grant, then shown/clicked) has no return
+> path today. Such a capability is a deferred extension: it would need a
+> result-relay (correlating `invoke()`'s resolved value back as an event) or a
+> documented "shell emits a follow-up OS event via `onEvent`" pattern. Not blocking
+> -- `notify` is not yet implemented in the reference shell.
 
 ## Shell-neutrality (Tauri, Electron, ...)
 

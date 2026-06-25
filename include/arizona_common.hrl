@@ -1,6 +1,11 @@
 %% Connection context -- true inside a connected live process, false during SSR
 -define(connected, arizona_live:connected()).
 
+%% Reconnect signal -- true when the connected live process is a reconnection (the
+%% client re-opened the WebSocket), false on the first connect and during SSR.
+%% Gate one-shot OS commands with `?connected andalso not ?reconnected`.
+-define(reconnected, arizona_live:reconnected()).
+
 %% Native-shell capability negotiation -- which OS capabilities the embedding
 %% shell (Electron, Tauri, ...) advertised at connect. `?capability(Key)` is
 %% `false` and `?capabilities` is `#{}` in a plain browser or during SSR. A
