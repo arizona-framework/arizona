@@ -6,6 +6,7 @@ src-tauri/gen/
 
 # Node
 node_modules/
+package-lock.json
 
 # Generated app icons (run `npm run tauri icon <path>`)
 src-tauri/icons/

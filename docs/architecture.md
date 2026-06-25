@@ -432,11 +432,12 @@ item child is not usable yet (the exception is a `?stateful` child in a **stream
 it is its own self-diffing view process). Fixing it means keying list items by position
 instead of by their first dynamic's value (server plus the client's `az-key` lookup).
 
-## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_effect`)
+## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_os` / `arizona_effect`)
 
-Client effect commands, built per platform -- `arizona_js` (web), `arizona_android` (native) --
-all returning the neutral tuple `{arizona_effect, [OpCode, ...Args]}` (type `arizona_effect:cmd()`,
-encoded by `arizona_effect`). Used in two contexts:
+Client effect commands, built per platform -- `arizona_js` (web), `arizona_android` (native),
+`arizona_os` (native-shell OS capabilities) -- all returning the neutral tuple
+`{arizona_effect, [OpCode, ...Args]}` (type `arizona_effect:cmd()`, encoded by `arizona_effect`).
+Used in two contexts:
 
 **Template attributes** -- commands embedded in `az-click`, `az-submit`, etc.:
 
@@ -486,6 +487,14 @@ handle_event(~"inc", _P, B) ->
 - `reload/0` -- reload page
 - `encode/1` -- encode single cmd or list of cmds to HTML-safe JSON binary (called automatically by
   `to_bin`)
+
+**Native-shell (OS) commands (`arizona_os`).** When the app runs inside a native shell
+(Tauri/Electron/...), `arizona_os` builds OS-capability commands -- all through one generic op
+`?EFFECT_OS` carrying a capability **name** plus args (the shell owns the vocabulary; new
+capabilities are new names, not new op codes): `set_title/1`, `focus/0`, `minimize/0`,
+`maximize/0`, `fullscreen/1`, `notify/1,2`, `capture_protection/1`, `command/1,2`. Negotiated via
+the `_az_caps` connect param and read server-side with `?capability(Name)`; a safe no-op in a
+plain browser. See [os.md](os.md).
 
 **Selector targeting:** the broadcast commands (`toggle`/`show`/`hide`, the `*_class` and
 `*_attr` ops) act on **all** elements matching the selector; `focus`/`blur`/`scroll_to` act on

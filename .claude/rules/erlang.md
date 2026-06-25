@@ -154,6 +154,8 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?local(Key, Init)` | `arizona_template:local(Key, Init)` -- client-owned slot: server renders `Init` once and never diffs it; the browser owns/updates the value via `Key` (a binary or atom literal; content -- one or many per element, mixed with static text -- or an attribute value, whole or interpolated with one local + static prefix/suffix) |
 | `?raw(Value)` | `arizona_template:raw(Value)` -- escape opt-out: splices a trusted, already-safe HTML fragment verbatim into a content slot or attribute value instead of HTML-escaping it. The parse transform only recognizes the opt-out when the `raw` call is **literal at the template site**, so wrap values here, never inside a helper. Never for user-controlled data |
 | `?connected` | `arizona_live:connected()` -- true inside a connected live process, false during SSR |
+| `?capability(Key)` | `arizona_live:capability(Key)` -- did the native shell advertise capability `Key`? `false` in a plain browser/SSR. A UI/effect hint, **never** authorization (see [docs/os.md](../../docs/os.md)) |
+| `?capabilities` | `arizona_live:capabilities()` -- the negotiated native-shell capability map (`#{}` in a plain browser/SSR) |
 | `?send(Msg)` | `arizona_live:send(?get(id), Msg)` -- send to current view (stateful only) |
 | `?send(ViewId, Msg)` | `arizona_live:send(ViewId, Msg)` -- send to specific view (stateful only) |
 | `?send_after(Time, Msg)` | `arizona_live:send_after(?get(id), Time, Msg)` -- delayed send to current view (stateful only) |
