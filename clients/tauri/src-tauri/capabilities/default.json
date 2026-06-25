@@ -1,7 +1,18 @@
 {
-  "$schema": "../gen/schemas/desktop-schema.json",
+  "$schema": "../gen/schemas/remote-schema.json",
   "identifier": "default",
-  "description": "Core access for the main window that loads the remote Arizona app. The app's own `arizona_invoke` command needs no permission entry (only core/plugin APIs are ACL-gated).",
+  "description": "Grant the remote Arizona app (loaded via WebviewUrl::External) IPC access to the shell's `arizona_invoke` command and core event listening. Tauri restricts IPC to bundled code by default, so a remote-URL page must be allowlisted here. Adjust `remote.urls` to your deployment's origin(s).",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "remote": {
+    "urls": ["http://localhost:4040/*"]
+  },
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-title",
+    "core:window:allow-set-focus",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-set-content-protected"
+  ]
 }

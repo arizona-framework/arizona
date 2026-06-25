@@ -10,8 +10,8 @@ use tauri::webview::WebviewWindowBuilder;
 use tauri::{Emitter, WebviewUrl, WindowEvent};
 
 // Capabilities this shell offers. Advertised to the page (via the init script
-// below -> `_az_caps` -> `?capability`) and enforced by `arizona_invoke`'s
-// allowlist match. Documents the contract and is checked against the script in
+// below -> `_az_caps` -> `?capability`) and dispatched by the init script's
+// `invoke` switch. Documents the contract and is checked against the script in
 // the test below.
 #[allow(dead_code)]
 const CAPABILITIES: &[&str] = &[
@@ -42,7 +42,19 @@ const INIT_SCRIPT: &str = r#"
       screen_capture_protection: true
     },
     invoke: function (name, args) {
-      return window.__TAURI__.core.invoke('arizona_invoke', { name: name, args: args });
+      // Drive the window via Tauri's CORE window commands (permission-gated, so
+      // they work from a remote page). A custom app command is "not allowed"
+      // for remote content ("Plugin not found").
+      var w = window.__TAURI__.window.getCurrentWindow();
+      switch (name) {
+        case 'window_title': return w.setTitle(args[0]);
+        case 'window_focus': return w.setFocus();
+        case 'window_minimize': return w.minimize();
+        case 'window_maximize': return w.toggleMaximize();
+        case 'window_fullscreen': return w.setFullscreen(!!args[0]);
+        case 'screen_capture_protection': return w.setContentProtected(!!args[0]);
+        default: return Promise.resolve();
+      }
     },
     onEvent: function (cb) {
       window.__TAURI__.event.listen('arizona-event', function (e) {
@@ -53,30 +65,6 @@ const INIT_SCRIPT: &str = r#"
 })();
 "#;
 
-// Renderer -> shell: run an allowlisted native command. `args` is the spliced
-// arg list the server sent after the capability name (see `arizona_os`). Unknown
-// names are ignored (defense in depth -- the page can reach nothing else).
-#[tauri::command]
-fn arizona_invoke(
-    window: tauri::WebviewWindow,
-    name: String,
-    args: Vec<serde_json::Value>,
-) -> Result<(), String> {
-    let bool_arg = |i: usize| args.get(i).and_then(serde_json::Value::as_bool).unwrap_or(false);
-    let str_arg = |i: usize| args.get(i).and_then(serde_json::Value::as_str).unwrap_or("");
-    let result = match name.as_str() {
-        "window_title" => window.set_title(str_arg(0)),
-        "window_focus" => window.set_focus(),
-        "window_minimize" => window.minimize(),
-        "window_maximize" => window.maximize(),
-        "window_fullscreen" => window.set_fullscreen(bool_arg(0)),
-        // Windows 10 2004+/macOS only; a harmless no-op on Linux.
-        "screen_capture_protection" => window.set_content_protected(bool_arg(0)),
-        _ => Ok(()),
-    };
-    result.map_err(|e| e.to_string())
-}
-
 fn main() {
     // The Arizona app this shell wraps. Defaults to the in-repo OS demo; override
     // with ARIZONA_URL to point at your deployment.
@@ -84,7 +72,6 @@ fn main() {
         std::env::var("ARIZONA_URL").unwrap_or_else(|_| "http://localhost:4040/os".to_string());
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![arizona_invoke])
         .setup(move |app| {
             let parsed: tauri::Url = url.parse().expect("invalid ARIZONA_URL");
             let handle = app.handle().clone();

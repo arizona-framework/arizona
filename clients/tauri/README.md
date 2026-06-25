@@ -15,15 +15,18 @@ See [`docs/os.md`](../../docs/os.md) for the full contract.
 | --- | --- |
 | expose `__arizona_os__` before page JS | `WebviewWindowBuilder::initialization_script` (runs before the remote page's scripts) |
 | `capabilities` advertised | the object literal in the init script (`-> _az_caps -> ?capability`) |
-| `invoke(name, args)` -> native | `window.__TAURI__.core.invoke('arizona_invoke', ...)` -> the `arizona_invoke` `#[tauri::command]` allowlist |
+| `invoke(name, args)` -> native | `window.__TAURI__.window.getCurrentWindow()` **core window commands** (`setTitle` / `setFocus` / `minimize` / `toggleMaximize` / `setFullscreen` / `setContentProtected`) -- permission-gated, so reachable from a remote page |
 | `onEvent(cb)` <- OS events | `window.__TAURI__.event.listen('arizona-event', ...)`; Rust `app.emit('arizona-event', ...)` on window events |
 | window control / capture protection | `WebviewWindow::set_title` / `set_focus` / `minimize` / `maximize` / `set_fullscreen` / `set_content_protected` |
 
 `app.withGlobalTauri` is enabled so the remote page (which bundles no Tauri code)
-can reach `window.__TAURI__`. Arizona's `?capability` is unrelated to Tauri's own
-capability/ACL permission system; the latter (`src-tauri/capabilities/`) only
-grants `core:default` to the window -- the app's own `arizona_invoke` command
-needs no permission entry.
+can reach `window.__TAURI__`. Because the page is loaded from a **remote origin**,
+the capability (`src-tauri/capabilities/default.json`) must allowlist it under
+`remote.urls` **and** grant the specific `core:window:allow-*` permissions. A
+custom `#[tauri::command]` is **not** reachable from remote content (the IPC
+fails "Plugin not found"), so the shell drives the **core window plugin** instead
+-- those commands are permission-gated and work from the remote page. Arizona's
+`?capability` is unrelated to Tauri's own capability/ACL system.
 
 ## Run it
 
@@ -55,19 +58,25 @@ sudo pacman -S --needed webkit2gtk-4.1 base-devel curl wget file openssl \
 
    Point it elsewhere with `ARIZONA_URL=https://your-app.example.com npm run dev`.
 
-You should see: the window-control button appears once connected (capability
-negotiated), clicking it renames the window (a client-triggered OS command), the
-title is re-asserted on connect (a server-emitted OS command), and focusing /
-blurring the window updates the view (an inbound OS event). The same app in a
-plain browser simply omits the button -- the commands are safe no-ops.
+You should see: the window-control buttons appear once connected (capability
+negotiated); **Maximize** toggles the window (a client-triggered OS command),
+focusing / blurring the window updates the view (an inbound OS event), and the
+title is re-asserted on connect (a server-emitted OS command). The same app in a
+plain browser simply omits the buttons -- the commands are safe no-ops.
+
+> **Linux note:** `set_title` *does apply* (verify with
+> `getCurrentWindow().title()` in devtools), but some Linux window managers don't
+> repaint the visible CSD title bar -- a WM/wry cosmetic quirk, not a command
+> failure. Use `Maximize` (or minimize / fullscreen) to see an unmistakable effect.
 
 ## Security
 
 The renderer loads remote app content, so the native surface is deliberately
-minimal: `arizona_invoke` dispatches only the allowlisted capability names to
-typed window methods -- never an arbitrary native call. The Origin check already
-gates the WebSocket that carries OS commands, and the command source is the app's
-own trusted server.
+minimal: the init script's `invoke` switch maps only the allowlisted capability
+names to specific core window commands -- never an arbitrary native call -- and
+the capability grants only those `core:window:allow-*` permissions. The Origin
+check already gates the WebSocket that carries OS commands, and the command source
+is the app's own trusted server.
 
 ## Tests
 

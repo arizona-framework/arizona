@@ -13,7 +13,7 @@ SSH_DEMO_USER := arizona
 	fmt fmt-erl fmt-js \
 	lint \
 	check check-dirty check-fast check-erl check-fmt check-lint check-hank check-xref check-dialyzer check-js \
-	build-js analyze-js build-android build-ios build-tauri \
+	build-js analyze-js build-android build-ios build-tauri dev-tauri \
 	test test-eunit test-ct test-erl test-js test-e2e test-android test-ios test-tauri \
 	bench term-demo ssh-server ssh-client \
 	cover cover-erl cover-js \
@@ -161,6 +161,11 @@ build-tauri:
 # NOT part of `ci`/`test`.
 test-tauri:
 	cd clients/tauri/src-tauri && cargo test
+
+# Run the reference Tauri shell in dev mode (devtools enabled) against a running
+# Arizona server (`make start` on :4040). Opt-in; needs the toolchain. NOT in `ci`.
+dev-tauri:
+	cd clients/tauri && npm install && npm run dev
 
 test-e2e-parallel:
 	npx playwright test --project parallel

@@ -143,13 +143,24 @@ by each shell's native primitives:
 | Contract piece | Tauri v2 | Electron |
 | --- | --- | --- |
 | install `__arizona_os__` before page JS | `WebviewWindowBuilder::initialization_script` | `preload.js` + `contextBridge.exposeInMainWorld` |
-| `invoke(name, args)` -> native | `window.__TAURI__.core.invoke('arizona_invoke', ...)` -> `#[tauri::command]` | `ipcRenderer.invoke` -> `ipcMain.handle` |
+| `invoke(name, args)` -> native | `getCurrentWindow()` **core window commands** (`setTitle` / `minimize` / `toggleMaximize` / ...) | `ipcRenderer.invoke` -> `ipcMain.handle` |
 | `onEvent(cb)` <- OS events | `window.__TAURI__.event.listen` + Rust `app.emit` | `ipcRenderer.on` + main `webContents.send` |
 | window control / capture protection | `WebviewWindow::set_title` / `set_content_protected` | `BrowserWindow.setTitle` / `setContentProtection` |
 
 `set_content_protected` / `setContentProtection` is Windows 10 2004+/macOS only
 (a no-op on Linux). Arizona's `?capability` is unrelated to Tauri's own
 capability/ACL permission system.
+
+**Tauri thin-shape specifics (learned the hard way).** Because the page loads
+from a **remote origin**, the Tauri capability must allowlist it under
+`remote.urls` **and** grant the specific `core:window:allow-*` permissions; a
+custom `#[tauri::command]` is **not** reachable from remote content, so the shell
+drives the permission-gated **core window plugin** instead. Outbound commands and
+inbound events both work this way on Linux. One cosmetic caveat: `set_title`
+*applies* (verify via `getCurrentWindow().title()`) but some Linux window managers
+don't repaint the visible title bar, so the demo also exposes a `Maximize` button
+for an unmistakable effect. (Electron's `ipcRenderer` has none of these
+restrictions and reaches any command -- the simpler shell for the thin shape.)
 
 The **reference shell** is `clients/tauri/` (Tauri v2): one
 worked implementor of this contract, run opt-in via `make build-tauri` /

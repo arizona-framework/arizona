@@ -57,12 +57,17 @@ render(Bindings) ->
             %% repaints on connect and is simply absent in a plain browser.
             case ?get(can_window) of
                 true ->
-                    {button,
-                        [
-                            {id, ~"set-title"},
-                            {az_click, arizona_os:set_title(~"Clicked title")}
-                        ],
-                        [~"Set title"]};
+                    {'div', [{id, ~"os-actions"}], [
+                        {button,
+                            [
+                                {id, ~"set-title"},
+                                {az_click, arizona_os:set_title(~"Clicked title")}
+                            ],
+                            [~"Set title"]},
+                        {button, [{id, ~"maximize"}, {az_click, arizona_os:maximize()}], [
+                            ~"Maximize"
+                        ]}
+                    ]};
                 false ->
                     <<>>
             end

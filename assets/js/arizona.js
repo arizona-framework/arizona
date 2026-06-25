@@ -1159,7 +1159,7 @@ const CREDENTIALS = { same_origin: 'same-origin', include: 'include', omit: 'omi
  * command/capability is a safe no-op.
  * @returns {{
  *   capabilities?: Record<string, unknown>,
- *   invoke?: (name: string, args: unknown[]) => any,
+ *   invoke?: (name: string, args: unknown[]) => Promise<unknown>,
  *   onEvent?: (cb: (name: string, payload: any) => void) => void,
  * } | undefined}
  */
@@ -1468,9 +1468,11 @@ function execOne(el, event, cmd) {
             // Native-shell (OS) command -- delegate to the embedding shell's
             // invoke if one is present (Electron/Tauri/...). A plain browser has
             // no `__arizona_os__`, so this is a safe no-op. invoke() is async;
-            // swallow rejection (these are request-local imperative UI commands).
+            // log (don't crash) on rejection so a failing OS command is visible.
             const r = osHost()?.invoke?.(cmd[1], cmd.slice(2));
-            r?.catch?.(() => {});
+            r?.catch?.((err) =>
+                console.error('[arizona] OS command failed:', cmd[1], cmd.slice(2), err),
+            );
             break;
         }
     }
