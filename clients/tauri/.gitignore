@@ -1,0 +1,11 @@
+# Rust / Cargo build output
+src-tauri/target/
+
+# Tauri-generated schemas/code (created on first build)
+src-tauri/gen/
+
+# Node
+node_modules/
+
+# Generated app icons (run `npm run tauri icon <path>`)
+src-tauri/icons/

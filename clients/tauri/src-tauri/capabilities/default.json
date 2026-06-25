@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core access for the main window that loads the remote Arizona app. The app's own `arizona_invoke` command needs no permission entry (only core/plugin APIs are ACL-gated).",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

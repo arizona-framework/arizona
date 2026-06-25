@@ -13,8 +13,8 @@ SSH_DEMO_USER := arizona
 	fmt fmt-erl fmt-js \
 	lint \
 	check check-dirty check-fast check-erl check-fmt check-lint check-hank check-xref check-dialyzer check-js \
-	build-js analyze-js build-android build-ios \
-	test test-eunit test-ct test-erl test-js test-e2e test-android test-ios \
+	build-js analyze-js build-android build-ios build-tauri \
+	test test-eunit test-ct test-erl test-js test-e2e test-android test-ios test-tauri \
 	bench term-demo ssh-server ssh-client \
 	cover cover-erl cover-js \
 	doc doc-erl doc-js \
@@ -147,6 +147,20 @@ build-ios:
 test-ios:
 	cd clients/ios && swift test
 	cd clients/ios/Sample && xcodegen generate && xcodebuild test -scheme Sample -destination 'platform=iOS Simulator,name=iPhone 16'
+
+# Build the reference Tauri shell (clients/tauri) -- opt-in; needs the Rust
+# toolchain, Node, and the platform webview deps (e.g. webkit2gtk + libsoup on
+# Linux; see https://v2.tauri.app/start/prerequisites/). `npm run build` needs
+# app icons (run `npm run tauri icon <path>`). NOT part of `ci`.
+build-tauri:
+	cd clients/tauri && npm install && npm run build
+
+# Tauri shell tests (clients/tauri) -- opt-in; compiles the Rust shell and runs
+# its unit tests (no display needed). The full UI flow is run manually with
+# `npm run dev` against the Arizona server on :4040 (see clients/tauri/README.md).
+# NOT part of `ci`/`test`.
+test-tauri:
+	cd clients/tauri/src-tauri && cargo test
 
 test-e2e-parallel:
 	npx playwright test --project parallel
