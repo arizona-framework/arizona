@@ -135,6 +135,12 @@ handle_event(~"window_state", #{~"state" := State}, Bindings) ->
     {Bindings#{last_event => State}, #{}, []}.
 ```
 
+The seam is **one-directional**: a command's return value is ignored (commands are
+fire-and-forget, like every other Arizona effect), so `onEvent` is the only return
+channel. And capabilities are a **connect-time snapshot** -- `_az_caps` is read
+once at the WS handshake, so a capability the shell adds *after* connect is seen
+only on the next (re)connect.
+
 ## Shell-neutrality (Tauri, Electron, ...)
 
 The contract is transport-agnostic; the same `__arizona_os__` shape is satisfied

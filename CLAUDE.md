@@ -37,6 +37,7 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make test-ios` | iOS client tests (opt-in; `swift test` anywhere + Simulator e2e on macOS; **not** in `ci`) |
 | `make build-tauri` | Build the reference Tauri desktop shell (opt-in; needs Rust + webview deps; **not** in `ci`) |
 | `make test-tauri` | Tauri shell Rust tests (opt-in; compiles the shell; full UI run manually; **not** in `ci`) |
+| `make dev-tauri` | Run the reference Tauri shell in dev mode (devtools) against a running `make start`; opt-in, **not** in `ci` |
 | `make cover` | Coverage check (`cover-erl` `cover-js`) |
 | `make cover-erl` | Erlang coverage (min 80%) |
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
@@ -166,7 +167,7 @@ The seam is defined at one boundary: a JS object `globalThis.__arizona_os__` the
 
 **Commands -- `arizona_os`.** The per-shell command builder (beside `arizona_js`/`arizona_android`). Unlike those, **every** command funnels through one generic op `?EFFECT_OS` carrying a capability **name** plus args -- the engine is a pass-through, the shell owns the vocabulary, so new capabilities are new names not new op codes. Typed sugars (`set_title/1`, `focus/0`, `minimize/0`, `maximize/0`, `fullscreen/1`, `notify/1,2`, `capture_protection/1`) are the documented path; `command/2` is the unchecked escape hatch. Issue from an event attribute (client-triggered, no round-trip) or as a handler effect (server-emitted). Re-assert **declarative/idempotent** capabilities (`set_title`, `fullscreen`, capture protection) from server state on reconnect; do **not** re-fire **one-shot** ones (`notify`, `focus`). Inbound OS events arrive via `onEvent`, are relayed as a `push_event`, and land in the view's `handle_event/3` like any event.
 
-**Shell-neutral; Tauri is the reference.** The same contract is satisfied by Tauri (`initialization_script` + `window.__TAURI__.core.invoke`/`event.listen`) and Electron (`preload` + `contextBridge` + `ipcMain`/`webContents.send`). The reference shell is `clients/tauri/` (Tauri v2), opt-in via `make build-tauri`/`make test-tauri` (not in `make ci`). The **thin** shape (renderer loads a remote Arizona URL; same-origin WS) is primary; **fat** (bundled local BEAM) is deferred. CI proves the seam without a shell via a real-browser e2e with a fake `__arizona_os__` (`arizona_os_demo` / `arizona_os.spec.js`). Full contract in [docs/os.md](docs/os.md).
+**Shell-neutral; Tauri is the reference.** The same contract is satisfied by Tauri (`initialization_script` + `window.__TAURI__.window.getCurrentWindow()` core window commands / `event.listen`) and Electron (`preload` + `contextBridge` + `ipcMain`/`webContents.send`). The reference shell is `clients/tauri/` (Tauri v2), opt-in via `make build-tauri`/`make test-tauri` (not in `make ci`). The **thin** shape (renderer loads a remote Arizona URL; same-origin WS) is primary; **fat** (bundled local BEAM) is deferred. CI proves the seam without a shell via a real-browser e2e with a fake `__arizona_os__` (`arizona_os_demo` / `arizona_os.spec.js`). Full contract in [docs/os.md](docs/os.md).
 
 ## What's missing
 

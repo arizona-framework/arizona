@@ -2,8 +2,9 @@
 -define(connected, arizona_live:connected()).
 
 %% Native-shell capability negotiation -- which OS capabilities the embedding
-%% shell (Electron, Tauri, ...) advertised at connect; `false`/`#{}` in a plain
-%% browser or during SSR. A UI/effect hint only, never an authorization input.
+%% shell (Electron, Tauri, ...) advertised at connect. `?capability(Key)` is
+%% `false` and `?capabilities` is `#{}` in a plain browser or during SSR. A
+%% UI/effect hint only, never an authorization input.
 -define(capability(Key), arizona_live:capability(Key)).
 -define(capabilities, arizona_live:capabilities()).
 

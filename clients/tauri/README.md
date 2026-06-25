@@ -48,15 +48,13 @@ sudo pacman -S --needed webkit2gtk-4.1 base-devel curl wget file openssl \
    make start            # serves http://localhost:4040 (incl. /os)
    ```
 
-2. Launch the shell against it:
+2. Launch the shell against it (from the repo root):
 
    ```bash
-   cd clients/tauri
-   npm install
-   npm run dev           # loads http://localhost:4040/os
+   make dev-tauri        # = cd clients/tauri && npm install && npm run dev; loads /os
    ```
 
-   Point it elsewhere with `ARIZONA_URL=https://your-app.example.com npm run dev`.
+   Point it elsewhere with `ARIZONA_URL=https://your-app.example.com make dev-tauri`.
 
 You should see: the window-control buttons appear once connected (capability
 negotiated); **Maximize** toggles the window (a client-triggered OS command),
@@ -68,6 +66,8 @@ plain browser simply omits the buttons -- the commands are safe no-ops.
 > `getCurrentWindow().title()` in devtools), but some Linux window managers don't
 > repaint the visible CSD title bar -- a WM/wry cosmetic quirk, not a command
 > failure. Use `Maximize` (or minimize / fullscreen) to see an unmistakable effect.
+> `screen_capture_protection` is advertised but is a **no-op on Linux** (it works
+> on Windows 10 2004+ / macOS only).
 
 ## Security
 

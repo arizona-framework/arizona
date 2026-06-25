@@ -1469,10 +1469,9 @@ function execOne(el, event, cmd) {
             // invoke if one is present (Electron/Tauri/...). A plain browser has
             // no `__arizona_os__`, so this is a safe no-op. invoke() is async;
             // log (don't crash) on rejection so a failing OS command is visible.
-            const r = osHost()?.invoke?.(cmd[1], cmd.slice(2));
-            r?.catch?.((err) =>
-                console.error('[arizona] OS command failed:', cmd[1], cmd.slice(2), err),
-            );
+            const args = cmd.slice(2);
+            const r = osHost()?.invoke?.(cmd[1], args);
+            r?.catch?.((err) => console.error('[arizona] OS command failed:', cmd[1], args, err));
             break;
         }
     }
@@ -1959,11 +1958,13 @@ function connect(endpoint, params = {}) {
     spawnWorker();
 
     // Let the native shell (if any) inject OS events (window focus/blur, capture
-    // state, ...) into the root view's normal event handling. The shell calls
+    // state, ...) into the ROOT view's normal event handling. The shell calls
     // cb(name, payload); we relay it as an ordinary pushEvent so the view's
-    // handle_event/3 sees it like any other event. Registered once with a bare
-    // callback -- the documented contextBridge/Tauri-listen form (passing an
-    // object of functions across contextBridge is not allowed).
+    // handle_event/3 sees it like any other event. Registered ONCE (not per
+    // spawnWorker / bfcache restore): the shell's listener is persistent, so
+    // re-registering would leak duplicate listeners. A bare callback is the
+    // documented contextBridge/Tauri-listen form (an object of functions can't
+    // cross contextBridge).
     osHost()?.onEvent?.((name, payload) => pushEvent(name, payload));
 
     // window._ws proxy for E2E test compatibility
