@@ -45,7 +45,8 @@ via `arizona_req:raw/1`.
     bindings := map(),
     on_mount := arizona_live:on_mount(),
     req := az:request(),
-    reconnect := boolean()
+    reconnect := boolean(),
+    capabilities := map()
 }.
 
 -nominal result() :: {halt, az:request()} | {cont, state()}.
@@ -74,6 +75,7 @@ transport passes `State` (which carries `handler`, `bindings`,
 prepare(QS, Adapter, AdapterState) ->
     Path = proplists:get_value(~"_az_path", QS, ~"/"),
     Reconnect = proplists:get_value(~"_az_reconnect", QS, ~"0") =:= ~"1",
+    Caps = parse_caps(proplists:get_value(~"_az_caps", QS, undefined)),
     UserQs = user_qs(QS),
     {H, RouteOpts, ArzReq} = arizona_req:call_resolve_route(
         Adapter, Path, UserQs, AdapterState
@@ -90,7 +92,8 @@ prepare(QS, Adapter, AdapterState) ->
                 bindings => Bindings1,
                 on_mount => OnMount,
                 req => ArzReq1,
-                reconnect => Reconnect
+                reconnect => Reconnect,
+                capabilities => Caps
             }}
     end.
 
@@ -107,7 +110,24 @@ user_qs(QS) ->
 
 is_framework_key(~"_az_path") -> true;
 is_framework_key(~"_az_reconnect") -> true;
+is_framework_key(~"_az_caps") -> true;
 is_framework_key(_) -> false.
+
+%% Decode the client-advertised native-shell capabilities (`_az_caps`, a JSON
+%% object) into a map. The value is untrusted and trivially malformable, so a bad
+%% decode (or a non-object) is treated as "no capabilities" rather than crashing
+%% the WS upgrade -- mirrors the malformed-frame handling in
+%% `arizona_socket:handle_in/2`. The resulting map is a UI/effect hint only and
+%% must never gate a server-side authorization decision.
+parse_caps(undefined) ->
+    #{};
+parse_caps(Bin) ->
+    try json:decode(Bin) of
+        Caps when is_map(Caps) -> Caps;
+        _ -> #{}
+    catch
+        error:_ -> #{}
+    end.
 
 encode_pair({K, true}) -> uri_string:quote(K);
 encode_pair({K, V}) -> [uri_string:quote(K), $=, uri_string:quote(V)].

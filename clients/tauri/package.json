@@ -1,0 +1,14 @@
+{
+  "name": "arizona-tauri-shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reference Tauri shell for the Arizona native-shell (OS) capability contract.",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

@@ -1146,11 +1146,26 @@ const JS_PUSH_EVENT = 0,
     JS_EXIT_PIP = 19,
     JS_TRANSITION = 20,
     JS_TOGGLE_ATTR = 21,
-    JS_FETCH = 22;
+    JS_FETCH = 22,
+    JS_OS = 23;
 
 // arizona_js credentials atoms -> fetch() credentials mode
 /** @type {Record<string, RequestCredentials>} */
 const CREDENTIALS = { same_origin: 'same-origin', include: 'include', omit: 'omit' };
+
+/**
+ * The native-shell bridge the embedding shell (Electron/Tauri/...) installs on
+ * the page before connect(); `undefined` in a plain browser, where every OS
+ * command/capability is a safe no-op.
+ * @returns {{
+ *   capabilities?: Record<string, unknown>,
+ *   invoke?: (name: string, args: unknown[]) => Promise<unknown>,
+ *   onEvent?: (cb: (name: string, payload: any) => void) => void,
+ * } | undefined}
+ */
+function osHost() {
+    return /** @type {any} */ (globalThis).__arizona_os__;
+}
 
 /**
  * Reset a form after a successful az-submit, when it opted in with `az-form-reset`.
@@ -1449,6 +1464,16 @@ function execOne(el, event, cmd) {
         case JS_EXIT_PIP:
             exitPip(cmd[1]);
             break;
+        case JS_OS: {
+            // Native-shell (OS) command -- delegate to the embedding shell's
+            // invoke if one is present (Electron/Tauri/...). A plain browser has
+            // no `__arizona_os__`, so this is a safe no-op. invoke() is async;
+            // log (don't crash) on rejection so a failing OS command is visible.
+            const args = cmd.slice(2);
+            const r = osHost()?.invoke?.(cmd[1], args);
+            r?.catch?.((err) => console.error('[arizona] OS command failed:', cmd[1], args, err));
+            break;
+        }
     }
 }
 
@@ -1847,7 +1872,13 @@ function connect(endpoint, params = {}) {
     const extraQs = new URLSearchParams(stringParams).toString();
     const userQs = [pageQs, extraQs].filter(Boolean).join('&');
     const qs = userQs ? `_az_path=${pagePath}&${userQs}` : `_az_path=${pagePath}`;
-    const wsUrl = `${protocol}//${location.host}${endpoint}?${qs}`;
+    // Native-shell capabilities (Electron/Tauri/...) advertised at the WS
+    // handshake so the live process can answer ?capability(...). Absent in a
+    // plain browser (no `__arizona_os__`), so capsQs is empty and nothing
+    // changes. Rides reconnect because the Worker reuses this URL's search.
+    const osCaps = osHost()?.capabilities;
+    const capsQs = osCaps ? `&_az_caps=${encodeURIComponent(JSON.stringify(osCaps))}` : '';
+    const wsUrl = `${protocol}//${location.host}${endpoint}?${qs}${capsQs}`;
 
     // Worker is co-located with this script.
     const baseUrl = new URL(/* @vite-ignore */ '.', import.meta.url).href;
@@ -1925,6 +1956,16 @@ function connect(endpoint, params = {}) {
     };
 
     spawnWorker();
+
+    // Let the native shell (if any) inject OS events (window focus/blur, capture
+    // state, ...) into the ROOT view's normal event handling. The shell calls
+    // cb(name, payload); we relay it as an ordinary pushEvent so the view's
+    // handle_event/3 sees it like any other event. Registered ONCE (not per
+    // spawnWorker / bfcache restore): the shell's listener is persistent, so
+    // re-registering would leak duplicate listeners. A bare callback is the
+    // documented contextBridge/Tauri-listen form (an object of functions can't
+    // cross contextBridge).
+    osHost()?.onEvent?.((name, payload) => pushEvent(name, payload));
 
     // window._ws proxy for E2E test compatibility
     if (typeof window !== 'undefined') {

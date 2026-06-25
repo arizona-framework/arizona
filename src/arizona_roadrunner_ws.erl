@@ -69,7 +69,8 @@ as the first outbound text frame.
     State :: map(),
     Result :: roadrunner_ws_handler:result().
 init(#{handler := H, bindings := IB, on_mount := OM, req := ArzReq, reconnect := R} = State) ->
-    Opts = #{reconnect => R, on_mount => OM},
+    Caps = maps:get(capabilities, State, #{}),
+    Opts = #{reconnect => R, on_mount => OM, capabilities => Caps},
     to_roadrunner(arizona_socket:init(H, IB, ArzReq, Opts), State).
 
 -doc """

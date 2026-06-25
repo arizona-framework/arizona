@@ -1,0 +1,14 @@
+# Rust / Cargo build output
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# Tauri-generated schemas/code (created on first build)
+src-tauri/gen/
+
+# Node
+node_modules/
+package-lock.json
+
+# Generated app icons (run `npm run tauri icon <path>`); keep the committed placeholder
+src-tauri/icons/*
+!src-tauri/icons/icon.png

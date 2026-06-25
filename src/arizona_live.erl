@@ -30,6 +30,11 @@ diff pipeline.
 
 - `$arizona_connected` -- set to `true` while a transport is attached;
   consulted by `connected/0` so render code can branch on SSR vs live.
+- `$arizona_capabilities` -- the native-shell capabilities the client
+  advertised at connect (`_az_caps`); set while a transport is attached and
+  read by `capabilities/0` / `capability/1`. A UI/effect hint only.
+- `$arizona_reconnected` -- `true` when this connection is a reconnection (vs the
+  first connect); set while a transport is attached and read by `reconnected/0`.
 - `$arizona_timers` -- list of refs from `send_after/3`, drained on
   `navigate/3,4` so stale timers don't fire after a page change.
 - `$arizona_deps` -- per-dynamic dependency capture set, used by
@@ -50,7 +55,11 @@ fingerprints already shipped in the initial HTML.
 %% --------------------------------------------------------------------
 
 -export([start_link/4]).
+-export([start_link/5]).
 -export([connected/0]).
+-export([capabilities/0]).
+-export([capability/1]).
+-export([reconnected/0]).
 -export([send/2]).
 -export([send_after/3]).
 -export([mount/1]).
@@ -81,6 +90,9 @@ fingerprints already shipped in the initial HTML.
 
 -ignore_xref([
     connected/0,
+    capabilities/0,
+    capability/1,
+    reconnected/0,
     send/2,
     send_after/3,
     navigate/3,
@@ -161,6 +173,49 @@ connected() ->
     end.
 
 -doc """
+Returns the native-shell capabilities the embedding shell advertised at connect
+(`#{}` in a plain browser or during SSR). See `arizona_os` and `capability/1`.
+""".
+-spec capabilities() -> map().
+capabilities() ->
+    case erlang:get('$arizona_capabilities') of
+        Caps when is_map(Caps) -> Caps;
+        _ -> #{}
+    end.
+
+-doc """
+Returns `true` if the embedding native shell advertised capability `Key` at
+connect, `false` otherwise (including a plain browser and during SSR).
+
+This reflects an unauthenticated, client-advertised claim, so it is a UI/effect
+hint only -- NEVER branch a server-side authorization decision on it.
+""".
+-spec capability(Key) -> boolean() when
+    Key :: binary().
+capability(Key) ->
+    case erlang:get('$arizona_capabilities') of
+        #{Key := true} -> true;
+        _ -> false
+    end.
+
+-doc """
+Returns `true` if this connection is a **reconnection** (the client dropped and
+re-opened the WebSocket), `false` on the first connect and during SSR.
+
+Mirrors `connected/0`. The live process re-mounts on every reconnect, so
+`connected/0` alone cannot tell first-connect from reconnection. Use this to
+suppress one-shot OS commands: `connected() andalso not reconnected()` fires a
+one-shot (`notify`, `focus`) on the first connect only, while a declarative
+re-assert (`set_title`, `fullscreen`) can fire on every connect.
+""".
+-spec reconnected() -> boolean().
+reconnected() ->
+    case erlang:get('$arizona_reconnected') of
+        true -> true;
+        _ -> false
+    end.
+
+-doc """
 Sends a message to a specific view by id. The message is delivered to
 the live process's mailbox and routed to the matching child view.
 """.
@@ -206,6 +261,23 @@ when
     TransportPid :: pid() | undefined,
     OnMount :: on_mount().
 start_link(Handler, InitBindings, TransportPid, OnMount) ->
+    start_link(Handler, InitBindings, TransportPid, OnMount, #{}).
+
+-doc """
+Like `start_link/4` but also threads the connection context the transport knows --
+`#{capabilities => map(), reconnect => boolean()}` -- into the live process, where
+`capability/1` and `reconnected/0` read it. Browser/SSR callers use `start_link/4`
+(empty context).
+""".
+-spec start_link(Handler, InitBindings, TransportPid, OnMount, ConnInfo) ->
+    gen_server:start_ret()
+when
+    Handler :: module(),
+    InitBindings :: map(),
+    TransportPid :: pid() | undefined,
+    OnMount :: on_mount(),
+    ConnInfo :: #{capabilities => map(), reconnect => boolean()}.
+start_link(Handler, InitBindings, TransportPid, OnMount, ConnInfo) ->
     %% Capture caller-side logger metadata (typically set by roadrunner
     %% with the per-conn request_id) so any ?LOG_* from inside the
     %% view's mount/handle_event/handle_info gets correlated to the
@@ -213,7 +285,7 @@ start_link(Handler, InitBindings, TransportPid, OnMount) ->
     ParentMetadata = logger:get_process_metadata(),
     gen_server:start_link(
         ?MODULE,
-        {Handler, InitBindings, TransportPid, OnMount, ParentMetadata},
+        {Handler, InitBindings, TransportPid, OnMount, ParentMetadata, ConnInfo},
         []
     ).
 
@@ -339,18 +411,23 @@ apply_on_mount([Fun | Rest], Bindings) ->
 %% gen_server Callbacks
 %% --------------------------------------------------------------------
 
--spec init({Handler, InitBindings, TransportPid, OnMount, ParentMetadata}) ->
+-spec init({Handler, InitBindings, TransportPid, OnMount, ParentMetadata, ConnInfo}) ->
     {ok, state()}
 when
     Handler :: module(),
     InitBindings :: map(),
     TransportPid :: pid() | undefined,
     OnMount :: on_mount(),
-    ParentMetadata :: logger:metadata() | undefined.
-init({Handler, InitBindings, TransportPid, OnMount, ParentMetadata}) ->
+    ParentMetadata :: logger:metadata() | undefined,
+    ConnInfo :: #{capabilities => map(), reconnect => boolean()}.
+init({Handler, InitBindings, TransportPid, OnMount, ParentMetadata, ConnInfo}) ->
     proc_lib:set_label({arizona_live, Handler}),
     inherit_logger_metadata(ParentMetadata),
+    Capabilities = maps:get(capabilities, ConnInfo, #{}),
+    Reconnect = maps:get(reconnect, ConnInfo, false),
     TransportPid =/= undefined andalso erlang:put('$arizona_connected', true),
+    TransportPid =/= undefined andalso erlang:put('$arizona_capabilities', Capabilities),
+    TransportPid =/= undefined andalso erlang:put('$arizona_reconnected', Reconnect),
     {ok, #state{
         handler = Handler,
         bindings = InitBindings,

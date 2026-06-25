@@ -35,6 +35,9 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make test-e2e` | Playwright E2E tests (incl. the `native` JSON-wire project) |
 | `make test-android` | Android client e2e (opt-in; needs Android SDK + emulator; **not** in `ci`) |
 | `make test-ios` | iOS client tests (opt-in; `swift test` anywhere + Simulator e2e on macOS; **not** in `ci`) |
+| `make build-tauri` | Build the reference Tauri desktop shell (opt-in; needs Rust + webview deps; **not** in `ci`) |
+| `make test-tauri` | Tauri shell Rust tests (opt-in; compiles the shell; full UI run manually; **not** in `ci`) |
+| `make dev-tauri` | Run the reference Tauri shell in dev mode (devtools) against a running `make start`; opt-in, **not** in `ci` |
 | `make cover` | Coverage check (`cover-erl` `cover-js`) |
 | `make cover-erl` | Erlang coverage (min 80%) |
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
@@ -54,6 +57,9 @@ client for the `?native` target is `clients/android/` (Kotlin/Compose, its own G
 **not** part of `make ci`; see `make test-android`); the **iOS** client is `clients/ios/`
 (Swift/SwiftUI -- a SwiftPM package whose logic tests run on any platform via `swift test`, plus an
 XcodeGen sample app for the Simulator e2e -- also **not** part of `make ci`; see `make test-ios`).
+OS-level capabilities for a browser renderer wrapped in a **native shell** (Tauri, Electron, ...)
+go through the host-neutral `arizona_os` seam; the reference shell is `clients/tauri/` (Tauri v2,
+**not** part of `make ci`; see `make test-tauri` and [docs/os.md](docs/os.md)).
 
 ## Event attributes & effects -- `arizona_js` / `arizona_android`
 
@@ -150,6 +156,18 @@ arizona_static:generate(~"_site", [
     {about_page, ~"about/index.html", #{bindings => #{title => ~"About"}}}
 ], #{layouts => [{site_layout, render}]}).
 ```
+
+## Native-shell capabilities -- `arizona_os`
+
+When a browser renderer is wrapped in a **native shell** (Tauri, Electron, a webview wrapper), the server can drive OS capabilities the browser sandbox forbids (window control, native notifications, screen-capture protection). The renderer is the **same** web (`?html`) client over the **same** WebSocket -- the shell adds only a native side-channel, so an existing app runs in a shell unchanged and the whole seam is a **safe no-op in a plain browser**. (This is **not** the `?native` JSON render target; see [docs/os.md](docs/os.md).)
+
+The seam is defined at one boundary: a JS object `globalThis.__arizona_os__` the shell installs **before** the page scripts run, with `capabilities` (a map), `invoke(name, args)` (to the shell's native layer), and `onEvent(cb)` (inbound OS events). Arizona has **zero shell-specific code**; a new shell is a new adapter providing that object.
+
+**Negotiation + detection.** At connect the client serializes `__arizona_os__.capabilities` into the `_az_caps` WS query param; the live process reads it with `?capability(Name)` / `?capabilities` (mirrors `?connected`: `false` at SSR). Gate **rendering** on a binding flipped on connect (the `?connected` self-cast pattern), **not** raw `?capability` in `render/1` (which freezes at SSR's `false`). **`?capability` is an unauthenticated client claim -- a UI/effect hint only, NEVER a server-side authorization input.**
+
+**Commands -- `arizona_os`.** The per-shell command builder (beside `arizona_js`/`arizona_android`). Unlike those, **every** command funnels through one generic op `?EFFECT_OS` carrying a capability **name** plus args -- the engine is a pass-through, the shell owns the vocabulary, so new capabilities are new names not new op codes. Typed sugars (`set_title/1`, `focus/0`, `minimize/0`, `maximize/0`, `fullscreen/1`, `notify/1,2`, `capture_protection/1`) are the documented path; `command/2` is the unchecked escape hatch. Issue from an event attribute (client-triggered, no round-trip) or as a handler effect (server-emitted). Re-assert **declarative/idempotent** capabilities (`set_title`, `fullscreen`, capture protection) from server state on reconnect; do **not** re-fire **one-shot** ones (`notify`, `focus`). Inbound OS events arrive via `onEvent`, are relayed as a `push_event`, and land in the view's `handle_event/3` like any event.
+
+**Shell-neutral; Tauri is the reference.** The same contract is satisfied by Tauri (`initialization_script` + `window.__TAURI__.window.getCurrentWindow()` core window commands / `event.listen`) and Electron (`preload` + `contextBridge` + `ipcMain`/`webContents.send`). The reference shell is `clients/tauri/` (Tauri v2), opt-in via `make build-tauri`/`make test-tauri` (not in `make ci`). The **thin** shape (renderer loads a remote Arizona URL; same-origin WS) is primary; **fat** (bundled local BEAM) is deferred. CI proves the seam without a shell via a real-browser e2e with a fake `__arizona_os__` (`arizona_os_demo` / `arizona_os.spec.js`). Full contract in [docs/os.md](docs/os.md).
 
 ## What's missing
 

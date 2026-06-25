@@ -2981,6 +2981,93 @@ describe('connection params', () => {
 });
 
 // ---------------------------------------------------------------------------
+// native-shell (OS) contract: globalThis.__arizona_os__
+// ---------------------------------------------------------------------------
+
+describe('native-shell contract (__arizona_os__)', () => {
+    afterEach(() => {
+        delete globalThis.__arizona_os__;
+    });
+
+    /** Mock the Worker ctor for a single connect(), returning posted messages. */
+    function connectWith(mod, endpoint = '/ws') {
+        const posted = [];
+        const OrigWorker = globalThis.Worker;
+        let onmessage = null;
+        globalThis.Worker = function () {
+            return {
+                postMessage: (d) => posted.push(d),
+                set onmessage(fn) {
+                    onmessage = fn;
+                },
+                get onmessage() {
+                    return onmessage;
+                },
+                terminate() {},
+            };
+        };
+        const disconnect = mod.connect(endpoint);
+        globalThis.Worker = OrigWorker;
+        return { posted, disconnect };
+    }
+
+    it('advertises capabilities as _az_caps on the WS URL when a shell is present', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        globalThis.__arizona_os__ = {
+            capabilities: { window_title: true, notify: true },
+            invoke: vi.fn(),
+            onEvent: vi.fn(),
+        };
+        const { posted, disconnect } = connectWith(mod);
+        const wsUrl = posted[0][1];
+        const qs = new URL(wsUrl.replace(/^ws/, 'http')).searchParams;
+        expect(JSON.parse(qs.get('_az_caps'))).toEqual({ window_title: true, notify: true });
+        disconnect();
+    });
+
+    it('omits _az_caps when no shell is present (plain browser)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const { posted, disconnect } = connectWith(mod);
+        expect(posted[0][1]).not.toContain('_az_caps');
+        disconnect();
+    });
+
+    it('registers onEvent once and relays an injected OS event as a pushEvent', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<span az="0">hi</span>');
+        let injected = null;
+        globalThis.__arizona_os__ = {
+            capabilities: { window_focus: true },
+            invoke: vi.fn(),
+            onEvent: vi.fn((cb) => {
+                injected = cb;
+            }),
+        };
+        const { posted, disconnect } = connectWith(mod);
+        expect(globalThis.__arizona_os__.onEvent).toHaveBeenCalledTimes(1);
+        // The shell injects an OS event -> relayed as a WS send to the root view.
+        injected('window_blurred', { x: 1 });
+        const sends = posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1]));
+        expect(sends).toContainEqual(['page', 'window_blurred', { x: 1 }]);
+        disconnect();
+    });
+
+    it('a JS_OS effect delegates to the shell invoke with (name, args)', () => {
+        const invoke = vi.fn();
+        globalThis.__arizona_os__ = { invoke };
+        applyEffects([[23, 'window_title', 'New title']]);
+        expect(invoke).toHaveBeenCalledWith('window_title', ['New title']);
+    });
+
+    it('a JS_OS effect is a safe no-op in a plain browser (no shell)', () => {
+        expect(() => applyEffects([[23, 'window_focus']])).not.toThrow();
+    });
+});
+
+// ---------------------------------------------------------------------------
 // pushEvent / pushEventTo
 // ---------------------------------------------------------------------------
 

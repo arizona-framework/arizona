@@ -1,0 +1,13 @@
+[package]
+name = "arizona-tauri"
+version = "0.1.0"
+description = "Reference Tauri shell implementing the Arizona native-shell (OS) capability contract."
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde_json = "1"
