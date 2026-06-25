@@ -6,6 +6,10 @@
 // web path, and the shell only provides the native capabilities the browser
 // sandbox forbids. See clients/tauri/README.md and docs/os.md.
 
+// Hide the console window on a release Windows build (the app is a GUI, not a
+// console program). No-op on other platforms and in debug builds.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{Emitter, WebviewUrl, WindowEvent};
 
