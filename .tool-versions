@@ -3,3 +3,4 @@ rebar 3.27.0
 nodejs 25.9.0
 java temurin-17.0.19+10
 gradle 8.13.0
+rust 1.96.0

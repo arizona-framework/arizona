@@ -27,9 +27,17 @@ needs no permission entry.
 
 ## Run it
 
-Prerequisites: the [Rust toolchain](https://rustup.rs), Node, and the platform
-webview deps (on Linux, `webkit2gtk` + `libsoup`; see the
-[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)).
+Prerequisites: the **Rust toolchain** and **Node** -- both pinned in the repo's
+root `.tool-versions`, so `mise install` provisions them (mise auto-installs
+rustup). mise does **not** manage the platform **webview deps**, so install those
+from your OS package manager (on Arch: `webkit2gtk-4.1` + `libsoup` etc.; see the
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)):
+
+```bash
+mise install                                      # Rust + Node from .tool-versions
+sudo pacman -S --needed webkit2gtk-4.1 base-devel curl wget file openssl \
+  appmenu-gtk-module libappindicator-gtk3 librsvg # system webview deps (Arch)
+```
 
 1. Start the Arizona server with the OS demo route (`/os`) from the repo root:
 
@@ -69,5 +77,7 @@ Android/iOS clients). The full UI flow is exercised manually with `npm run dev`
 above; an automated UI e2e (WebdriverIO + `tauri-driver`, Linux/Windows only) is a
 future addition.
 
-`npm run build` needs app icons -- generate them once with
-`npm run tauri icon path/to/icon.png`.
+A tiny placeholder `src-tauri/icons/icon.png` is committed so the shell compiles
+out of the box. Replace it with your own branding -- `npm run tauri icon
+path/to/icon.png` regenerates the full multi-resolution set used by `tauri build`
+installers.
