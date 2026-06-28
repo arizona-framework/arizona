@@ -788,7 +788,7 @@ function forEachLocal(root, key, viewId, fn) {
         if (parsed.a) {
             for (const [attr, k] of Object.entries(parsed.a)) {
                 if (k === key) {
-                    const aff = parsed.ap && parsed.ap[attr];
+                    const aff = parsed.ap?.[attr];
                     fn(el, aff ? ['attr', attr, aff[0], aff[1]] : ['attr', attr]);
                 }
             }
