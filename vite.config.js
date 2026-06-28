@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
+import { constants as zlibConstants } from 'node:zlib';
 import filesize from 'rollup-plugin-filesize';
 import license from 'rollup-plugin-license';
 import { visualizer } from 'rollup-plugin-visualizer';
@@ -29,16 +30,25 @@ export default defineConfig(({ mode }) => ({
             },
         }),
         filesize({ showBrotliSize: true }),
-        // Emit precompressed `.gz` siblings so `roadrunner_static` can serve
-        // them (nginx `gzip_static` style) over the zero-copy sendfile path.
-        // Level 9 (build-time, immutable assets); originals are kept as the
-        // fallback for clients that don't accept gzip. Node's zlib gzip is
-        // reproducible (no embedded mtime/filename), keeping `check-dirty` stable.
+        // Emit precompressed `.br` and `.gz` siblings so `roadrunner_static` can
+        // serve them (nginx `brotli_static` / `gzip_static` style) over the
+        // zero-copy sendfile path, preferring brotli for clients that accept it.
+        // Both at max quality (build-time, immutable assets); originals are kept
+        // as the fallback for clients that accept neither. Node's zlib brotli and
+        // gzip are reproducible (no embedded mtime/filename), keeping
+        // `check-dirty` stable.
         compression({
             include: /\.min\.js$/,
             threshold: 0,
             deleteOriginalAssets: false,
-            algorithms: [defineAlgorithm('gzip', { level: 9 })],
+            algorithms: [
+                defineAlgorithm('brotliCompress', {
+                    params: {
+                        [zlibConstants.BROTLI_PARAM_QUALITY]: zlibConstants.BROTLI_MAX_QUALITY,
+                    },
+                }),
+                defineAlgorithm('gzip', { level: 9 }),
+            ],
         }),
         ...(process.env.ANALYZE === 'true'
             ? [

@@ -44,6 +44,7 @@
     static_asset_served/1,
     static_asset_body_matches_file/1,
     static_asset_gzip_served/1,
+    static_asset_brotli_served/1,
     static_asset_missing_returns_404/1,
     reload_endpoint_streams_event/1,
     recompile_routes_runs/1,
@@ -114,6 +115,7 @@ groups() ->
         static_asset_served,
         static_asset_body_matches_file,
         static_asset_gzip_served,
+        static_asset_brotli_served,
         static_asset_missing_returns_404,
         reload_endpoint_streams_event,
         recompile_routes_runs,
@@ -929,6 +931,36 @@ static_asset_gzip_served(Config) ->
     ]),
     {ok, Expected} = file:read_file(FilePath),
     ?assertEqual(Expected, zlib:gunzip(Body)).
+
+static_asset_brotli_served(Config) ->
+    %% With `Accept-Encoding: br`, roadrunner_static serves the precompressed
+    %% `<file>.br` sibling verbatim (nginx `brotli_static` style), preferred over
+    %% gzip. The response must carry `content-encoding: br` and its body must be
+    %% byte-for-byte the committed `.br` sibling -- guards the asset pipeline's
+    %% brotli step, the committed siblings, and the route wiring to
+    %% `roadrunner_static`. (Erlang stdlib has no brotli decoder, so the served
+    %% bytes are compared to the sibling on disk rather than decompressed.)
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        "GET /assets/arizona.min.js HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "Accept-Encoding: br\r\n",
+        "Connection: close\r\n",
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    Full = read_until_close(Sock, <<>>),
+    gen_tcp:close(Sock),
+    [Headers, Body] = binary:split(Full, <<"\r\n\r\n">>),
+    ?assertNotEqual(nomatch, binary:match(Headers, <<"content-encoding: br">>)),
+    SiblingPath = filename:join([
+        code:priv_dir(arizona), "static", "assets", "js", "arizona.min.js.br"
+    ]),
+    {ok, Expected} = file:read_file(SiblingPath),
+    ?assertEqual(Expected, Body).
 
 static_asset_missing_returns_404(Config) ->
     Port = proplists:get_value(port, Config),
