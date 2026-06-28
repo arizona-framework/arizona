@@ -6,6 +6,7 @@
 -export([
     compile_routes_asset_dir/1,
     compile_routes_asset_priv_dir/1,
+    compile_routes_asset_cache_control/1,
     compile_routes_controller/1,
     compile_routes_controller_default_origin_check/1,
     compile_routes_controller_opts_out_origin_check/1,
@@ -36,6 +37,7 @@ groups() ->
         compile_routes_ws,
         compile_routes_asset_dir,
         compile_routes_asset_priv_dir,
+        compile_routes_asset_cache_control,
         compile_routes_controller,
         compile_routes_controller_default_origin_check,
         compile_routes_controller_opts_out_origin_check,
@@ -175,6 +177,21 @@ compile_routes_asset_priv_dir(Config) ->
     ExpectedDir = filename:join(code:priv_dir(arizona), "static/assets/js"),
     ?assertEqual(?config(static_handler, Config), Handler),
     ?assertEqual(#{dir => ExpectedDir}, Opts).
+
+compile_routes_asset_cache_control(Config) ->
+    %% The 4-tuple asset form threads `cache_control` into roadrunner_static's
+    %% state verbatim; the 3-tuple form (covered above) carries only `dir`.
+    compile(Config, [
+        {asset, <<"/static">>, {dir, "/tmp/assets"}, #{
+            cache_control => ~"public, max-age=31536000, immutable"
+        }}
+    ]),
+    {Handler, Opts} = route_match(<<"/static/foo.js">>),
+    ?assertEqual(?config(static_handler, Config), Handler),
+    ?assertEqual(
+        #{dir => "/tmp/assets", cache_control => ~"public, max-age=31536000, immutable"},
+        Opts
+    ).
 
 compile_routes_controller(Config) ->
     %% Verb-tag controllers dispatch through arizona_roadrunner_controller; the app

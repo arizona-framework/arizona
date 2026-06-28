@@ -15,8 +15,8 @@ routes after a hot reload without restarting the listener.
 |-----|-------------|--------------------|
 | `{live, Path, Handler, Opts}` | Arizona stateful page | `arizona_roadrunner_http` |
 | `{ws, Path, Opts}` | WebSocket endpoint | `arizona_roadrunner_ws` |
-| `{asset, Path, {dir, Dir}}` | Static files from directory | `roadrunner_static` |
-| `{asset, Path, {priv_dir, App, Sub}}` | Static files from app priv | `roadrunner_static` |
+| `{asset, Path, {dir, Dir}[, Opts]}` | Static files from directory | `roadrunner_static` |
+| `{asset, Path, {priv_dir, App, Sub}[, Opts]}` | Static files from app priv | `roadrunner_static` |
 | `{Verb, Path, Handler, Opts}` | Single-verb controller | `arizona_roadrunner_controller` |
 | `{match, Spec, Path, Handler, Opts}` | Multi/custom methods | `arizona_roadrunner_controller` |
 | `{mcp, Path, Handler, Opts}` | MCP (Model Context Protocol) server | `arizona_mcp_handler` |
@@ -24,6 +24,10 @@ routes after a hot reload without restarting the listener.
 
 `Verb` is `get`/`post`/`put`/`patch`/`delete`/`head`/`options`; `match`'s `Spec` is a
 single verb, a list of verbs, a custom uppercase method binary, or `'*'` (any method).
+
+An `{asset, ...}` route's optional `Opts` is `#{cache_control => binary()}` -- a
+`Cache-Control` header set verbatim on cacheable responses (off by default); use it
+only for content-hashed assets, never arizona's own stable bundle filenames.
 
 `{reload, ...}` also stashes the path in the `arizona_reload_url`
 persistent term so the dev error page can build the SSE connect URL.
@@ -53,6 +57,8 @@ persistent term so the dev error page can build the SSE connect URL.
 
 -export_type([path/0]).
 -export_type([route/0]).
+-export_type([asset_source/0]).
+-export_type([asset_opts/0]).
 -export_type([method/0]).
 -export_type([method_spec/0]).
 -export_type([controller_opts/0]).
@@ -73,12 +79,27 @@ persistent term so the dev error page can build the SSE connect URL.
 -nominal route() ::
     {live, path(), module(), arizona_live:route_opts()}
     | {ws, path(), map()}
-    | {asset, path(), {dir, file:filename_all()}}
-    | {asset, path(), {priv_dir, atom(), file:filename_all()}}
+    | {asset, path(), asset_source()}
+    | {asset, path(), asset_source(), asset_opts()}
     | {method(), path(), module(), controller_opts()}
     | {match, method_spec(), path(), module(), controller_opts()}
     | {mcp, path(), module(), arizona_mcp_route_opts()}
     | {reload, path(), map()}.
+
+%% Where an `{asset, ...}` route's files live: a directory path, or a
+%% sub-path under an application's `priv` directory.
+-nominal asset_source() ::
+    {dir, file:filename_all()}
+    | {priv_dir, atom(), file:filename_all()}.
+
+%% Options for an `{asset, ...}` route. `cache_control` sets a `Cache-Control`
+%% header (verbatim) on every cacheable static response; off by default. Use it
+%% only for content-hashed assets (e.g. `~"public, max-age=31536000, immutable"`)
+%% -- arizona's own bundle filenames are stable, not hashed, so an `immutable`
+%% directive on them would pin a stale build past a deploy.
+-nominal asset_opts() :: #{
+    cache_control => binary()
+}.
 
 %% The verb-tag atoms a controller route may use as its first element
 %% (sugar for a single-method allowlist). Custom or multi-method routes go
@@ -195,10 +216,12 @@ route_to_roadrunner({ws, Path, Opts}, _BuildOpts) ->
             state => #{arizona => Opts}
         }
     ];
-route_to_roadrunner({asset, Path, {dir, Dir}}, BuildOpts) ->
-    asset_route(Path, Dir, BuildOpts);
-route_to_roadrunner({asset, Path, {priv_dir, App, SubDir}}, BuildOpts) ->
-    asset_route(Path, filename:join(code:priv_dir(App), SubDir), BuildOpts);
+route_to_roadrunner({asset, Path, Source}, BuildOpts) ->
+    route_to_roadrunner({asset, Path, Source, #{}}, BuildOpts);
+route_to_roadrunner({asset, Path, {dir, Dir}, Opts}, BuildOpts) ->
+    asset_route(Path, Dir, Opts, BuildOpts);
+route_to_roadrunner({asset, Path, {priv_dir, App, SubDir}, Opts}, BuildOpts) ->
+    asset_route(Path, filename:join(code:priv_dir(App), SubDir), Opts, BuildOpts);
 route_to_roadrunner({match, Spec, Path, Handler, Opts}, _BuildOpts) ->
     %% General controller route: a multi-verb list, a custom method binary,
     %% or `'*'` (any method) -- all normalized to roadrunner's allowlist.
@@ -239,22 +262,31 @@ route_to_roadrunner({reload, Path, Opts}, _BuildOpts) ->
     ].
 
 %% Assets are served by roadrunner's built-in `roadrunner_static`: zero-copy
-%% sendfile plus ETag/`If-None-Match` (304), `Range`, gzip-sibling serving
-%% (nginx `gzip_static` style -- a `<file>.gz` built by the asset pipeline is
-%% sent verbatim when the client accepts gzip), and path-traversal/symlink
-%% guards. Its state is a plain `#{dir => Dir}` (not arizona-namespaced) and it
-%% reads the `*path` wildcard binding, which arizona's route already provides.
-asset_route(Path, Dir, BuildOpts) ->
+%% sendfile plus ETag/`If-None-Match` (304), `Range`, precompressed-sibling
+%% serving (nginx `brotli_static` / `gzip_static` style -- a `<file>.br` or
+%% `<file>.gz` built by the asset pipeline is sent verbatim, brotli preferred,
+%% when the client accepts it), and path-traversal/symlink guards. Its state is
+%% `#{dir => Dir}` (not arizona-namespaced), optionally carrying `cache_control`,
+%% and it reads the `*path` wildcard binding, which arizona's route provides.
+asset_route(Path, Dir, Opts, BuildOpts) ->
     [
         with_compress(
             #{
                 path => <<Path/binary, "/*path">>,
                 handler => roadrunner_static,
-                state => #{dir => Dir}
+                state => asset_state(Dir, Opts)
             },
             BuildOpts
         )
     ].
+
+%% roadrunner_static's state is a plain `#{dir => Dir}`; `cache_control` is
+%% threaded through only when the route declares it, so an asset route without
+%% the opt produces byte-for-byte the same responses as before.
+asset_state(Dir, #{cache_control := Value}) ->
+    #{dir => Dir, cache_control => Value};
+asset_state(Dir, _Opts) ->
+    #{dir => Dir}.
 
 build_live_meta(Handler, Opts) ->
     #{
