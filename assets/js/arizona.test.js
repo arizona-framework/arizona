@@ -545,7 +545,7 @@ describe('applyOps -- stream <-> plain-list type switch', () => {
     it('reverse list -> stream stays correct for a sole-child each (OP_UPDATE)', () => {
         // SSR plain-list each, sole child of <ul az="0"> (resolveEl returns the
         // <ul>, which IS the slot element). list -> stream emits OP_UPDATE.
-        setupView('v', '<ul az="0"><!--az:0-->' + listItem('A') + '<!--/az--></ul>');
+        setupView('v', `<ul az="0"><!--az:0-->${listItem('A')}<!--/az--></ul>`);
         const ul = document.querySelector('ul');
         applyOps([[OP.UPDATE, 'v:0', '<li az="i" az-key="1"><!--az:i-->X<!--/az--></li>']]);
         // Now keyed-by az-key, addressable by stream ops; renders real HTML.
