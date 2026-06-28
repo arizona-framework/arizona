@@ -174,7 +174,7 @@ method_not_allowed(Opts) ->
             true -> ~"POST, GET, DELETE";
             false -> ~"POST"
         end,
-    roadrunner_resp:add_header(roadrunner_resp:status(405), ~"allow", Allow).
+    roadrunner_resp:status(405, [{~"allow", Allow}]).
 
 -doc """
 Roadrunner loop `handle_info/3` callback for the two SSE loops:
