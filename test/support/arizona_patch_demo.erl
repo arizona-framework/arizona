@@ -38,7 +38,7 @@ render(Bindings) ->
     Section = ?get(section),
     ?html(
         {'div', [{id, ?get(id)}], [
-            {'nav', [], [
+            {nav, [], [
                 {a,
                     [
                         {href, ~"/patch-demo/overview"},

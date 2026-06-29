@@ -221,20 +221,22 @@ unhandled_update_tagged(Config) when is_list(Config) ->
 call_handle_update_threads_effects(Config) when is_list(Config) ->
     %% handle_update/3 receives the effect accumulator and returns it extended;
     %% the new effect is folded onto the seed without any caller-side concat.
+    %% Effects must be real arizona_effect:cmd() values ({arizona_effect, list()}).
     Mod = compile_module(
         "-module(stub_update_eff). "
         "-export([handle_update/3]). "
-        "handle_update(P, B, E) -> {maps:merge(B, P), #{}, [own | E]}.\n"
+        "handle_update(P, B, E) -> {maps:merge(B, P), #{}, [{arizona_effect, [own]} | E]}.\n"
     ),
+    Seed = {arizona_effect, [seed]},
     ?assertMatch(
-        {#{id := <<"v">>, x := 1}, #{}, [own, seed]},
-        arizona_stateful:call_handle_update(Mod, #{x => 1}, #{id => <<"v">>}, [seed])
+        {#{id := <<"v">>, x := 1}, #{}, [{arizona_effect, [own]}, {arizona_effect, [seed]}]},
+        arizona_stateful:call_handle_update(Mod, #{x => 1}, #{id => <<"v">>}, [Seed])
     ),
     %% Default (callback not exported): Props merged, accumulator passed through.
     Bare = compile_module("-module(stub_update_bare). -export([]).\n"),
     ?assertMatch(
-        {#{id := <<"v">>, x := 1}, #{}, [seed]},
-        arizona_stateful:call_handle_update(Bare, #{x => 1}, #{id => <<"v">>}, [seed])
+        {#{id := <<"v">>, x := 1}, #{}, [{arizona_effect, [seed]}]},
+        arizona_stateful:call_handle_update(Bare, #{x => 1}, #{id => <<"v">>}, [Seed])
     ).
 
 format_error_renders_all_reasons(Config) when is_list(Config) ->
