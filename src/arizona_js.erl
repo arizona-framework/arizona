@@ -48,6 +48,8 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 -export([dispatch_event/2]).
 -export([navigate/1]).
 -export([navigate/2]).
+-export([patch/1]).
+-export([patch/2]).
 -export([fetch/2]).
 -export([focus/1]).
 -export([blur/1]).
@@ -85,6 +87,8 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     dispatch_event/2,
     navigate/1,
     navigate/2,
+    patch/1,
+    patch/2,
     fetch/2,
     focus/1,
     blur/1,
@@ -219,6 +223,22 @@ navigate(Path) -> {arizona_effect, [?EFFECT_NAVIGATE, Path]}.
     Path :: binary(),
     Opts :: map().
 navigate(Path, Opts) -> {arizona_effect, [?EFFECT_NAVIGATE, Path, Opts]}.
+
+-doc """
+Triggers an in-place SPA navigation (`patch`) to `Path`: keeps the current
+live view mounted and re-renders it via `handle_update/3` instead of
+replacing it. The counterpart of `navigate/1`; use it between routes that
+share a root view so live chrome survives the navigation.
+""".
+-spec patch(Path) -> arizona_effect:cmd() when
+    Path :: binary().
+patch(Path) -> {arizona_effect, [?EFFECT_PATCH, Path]}.
+
+-doc "Triggers an in-place SPA navigation (`patch`) to `Path` with options.".
+-spec patch(Path, Opts) -> arizona_effect:cmd() when
+    Path :: binary(),
+    Opts :: map().
+patch(Path, Opts) -> {arizona_effect, [?EFFECT_PATCH, Path, Opts]}.
 
 -doc """
 Issues an HTTP request to `Url` via the browser `fetch()` API, **without** a page
@@ -510,6 +530,11 @@ builders_test() ->
     ?assertEqual(
         {arizona_effect, [?EFFECT_NAVIGATE, ~"/p", #{replace => true}]},
         navigate(~"/p", #{replace => true})
+    ),
+    ?assertEqual({arizona_effect, [?EFFECT_PATCH, ~"/p"]}, patch(~"/p")),
+    ?assertEqual(
+        {arizona_effect, [?EFFECT_PATCH, ~"/p", #{replace => true}]},
+        patch(~"/p", #{replace => true})
     ),
     ?assertEqual({arizona_effect, [?EFFECT_FOCUS, ~"#m"]}, focus(~"#m")),
     ?assertEqual({arizona_effect, [?EFFECT_BLUR, ~"#m"]}, blur(~"#m")),

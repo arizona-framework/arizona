@@ -3211,6 +3211,82 @@ describe('navigation scroll', () => {
         return { anchor: a, event: evt };
     }
 
+    function clickPatchLink(href, { noscroll = false } = {}) {
+        const a = document.createElement('a');
+        a.setAttribute('az-patch', '');
+        a.setAttribute('href', href);
+        if (noscroll) a.setAttribute('az-noscroll', '');
+        document.body.appendChild(a);
+        const evt = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+        a.dispatchEvent(evt);
+        return { anchor: a, event: evt };
+    }
+
+    it('az-patch click sends a patch frame, not a navigate frame', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        clickPatchLink('/to');
+        const msgs = mock.getSentMessages();
+        expect(msgs).toContainEqual(['patch', { path: '/to', qs: '' }]);
+        expect(msgs.some((m) => m[0] === 'navigate')).toBe(false);
+    });
+
+    it('az-patch tags the history entry with _azNav so popstate re-patches', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        clickPatchLink('/to');
+        expect(history.state?._azNav).toBe('patch');
+    });
+
+    it('patch scrolls to top after a non-empty diff batch (no OP_REPLACE)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<span az="0">x</span>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        clickPatchLink('/next');
+        // A patch reply is a diff (OP_TEXT), never an OP_REPLACE.
+        mod.applyOps([[OP.TEXT, 'page:0', 'y']]);
+
+        expect(scrollSpy).toHaveBeenCalledWith(0, 0);
+    });
+
+    it('JS_PATCH effect ([24, path]) sends a patch frame', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // Cmd shape is [JS_PATCH=24, path, opts?].
+        mod.applyEffects([[24, '/to']]);
+        const msgs = mock.getSentMessages();
+        expect(msgs).toContainEqual(['patch', { path: '/to', qs: '' }]);
+    });
+
+    it('popstate over a patch-tagged entry re-sends a patch frame', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // The destination entry was navigated via patch (tagged _azNav).
+        history.replaceState({ _azNav: 'patch' }, '', '/patched');
+        window.dispatchEvent(new PopStateEvent('popstate', { state: { _azNav: 'patch' } }));
+
+        const msgs = mock.getSentMessages();
+        expect(msgs).toContainEqual(['patch', { path: '/patched', qs: '' }]);
+        expect(msgs.some((m) => m[0] === 'navigate')).toBe(false);
+    });
+
     it('push nav saves outgoing scroll onto the outgoing history entry', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
