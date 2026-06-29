@@ -823,6 +823,16 @@ There are two SPA navigation modes, picked per-link by the client:
   with a swappable `?stateful(?get(page), ...)` child), not a framework feature -- demo fixture
   `arizona_patch_demo` (`/patch-demo/:section`).
 
+**A patch runs no mount step.** `mount/1` and `on_mount` run whenever the view *(re)mounts* --
+initial GET, reconnect, `navigate` -- and **not** on a patch, which by design keeps the view alive.
+This is deliberate: `on_mount` is a mount input (its output feeds `mount/1`), so re-running it on a
+patch -- where there is no `mount/1` -- would dump a mount-time transform straight onto the live
+bindings and clobber the state the patch preserves. Per-arrival request-shaped derivation (session,
+path params) belongs in a **middleware**, which *does* run on a patch (`do_patch`) and whose output
+arrives as `Params`; handler-specific per-navigation logic goes in `handle_update/3`. So: mount-time
+setup -> `mount/1`/`on_mount`; every-arrival setup -> middleware; per-navigation reaction ->
+`handle_update/3`.
+
 Both modes resolve the target route the same way. `arizona_socket` invokes the optional
 `resolve_route/3` callback declared on the `arizona_req` behaviour:
 

@@ -326,7 +326,9 @@ do_navigate(H, RouteOpts, NewReq, #socket{pid = Pid, view_id = OldVId} = Socket)
 
 %% Same root handler: keep the view, deliver the resolved route params to its
 %% handle_update/3, and ship the diff ops + effects on the same `view_id` (no
-%% replace, no remount). Runs the route middlewares first, exactly like navigate.
+%% replace, no remount). Runs the route middlewares first, exactly like navigate
+%% -- but deliberately does NOT read `on_mount` (contrast do_navigate): on_mount
+%% is a mount-phase hook and a patch does not remount (see arizona_live:patch/2).
 do_patch(RouteOpts, NewReq, #socket{pid = Pid, view_id = ViewId} = Socket) ->
     IB = maps:get(bindings, RouteOpts, #{}),
     Middlewares = maps:get(middlewares, RouteOpts, []),

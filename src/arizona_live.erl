@@ -389,6 +389,15 @@ any effects the reaction emitted (`handle_update`'s, folded with children's).
 
 The caller (the socket) only invokes this when the patched route resolves to
 the *same* root handler; a different handler must go through `navigate/4`.
+
+`mount/1` and `on_mount` do **not** re-run on a patch -- they belong to the
+mount phase, and a patch by definition does not remount (it would otherwise
+clobber the live state the patch exists to preserve: `on_mount`'s output is a
+*mount input* fed into `mount/1`, with no `mount/1` here it would land
+unmediated on the live bindings). The route's **middlewares do run** (in the
+socket's `do_patch`), so per-arrival, request-shaped derivation (session,
+path params, ...) flows in as `Params`; handler-specific per-navigation logic
+goes in `handle_update/3`, which sees both the new `Params` and the live state.
 """.
 -spec patch(Pid, Params) -> {ok, [arizona_diff:op()], [arizona_stateful:effect()]} when
     Pid :: pid(),
