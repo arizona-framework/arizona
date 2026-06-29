@@ -31,7 +31,9 @@ render(Bindings) ->
                     ~" | ",
                     {a, [{href, ~"/pip"}, az_navigate], [~"PiP"]},
                     ~" | ",
-                    {a, [{href, ~"/transitions"}, az_navigate], [~"Transitions"]}
+                    {a, [{href, ~"/transitions"}, az_navigate], [~"Transitions"]},
+                    ~" | ",
+                    {a, [{href, ~"/patch-demo/overview"}, az_navigate], [~"Patch"]}
                 ]},
                 ?inner_content,
                 {script, [{type, ~"module"}], [

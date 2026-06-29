@@ -278,8 +278,8 @@ handle_navigate(Path, Qs, #socket{req = Req} = Socket) ->
 
 %% A `patch` keeps the current view IFF the patched path resolves to the same
 %% root handler; otherwise it can't (a different view needs a real mount), so it
-%% degrades to a full navigate/replace -- mirroring Phoenix patch-to-a-different
-%% -LiveView. Resolves once and reuses the result for either branch.
+%% degrades to a full navigate/replace. Resolves once and reuses the result for
+%% either branch.
 handle_patch(Path, Qs, #socket{handler = CurrentHandler, req = Req} = Socket) ->
     {H, RouteOpts, NewReq} = resolve_route(Path, Qs, Req),
     case H of
