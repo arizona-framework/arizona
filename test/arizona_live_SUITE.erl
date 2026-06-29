@@ -23,6 +23,7 @@
     effect_only_no_ops/1,
     effect_push_event/1,
     effect_child_update_reaches_reply/1,
+    effect_child_update_combines_with_event/1,
     handle_update_child_event_then_parent/1,
     live_child_event/1,
     live_child_multiple_events/1,
@@ -141,7 +142,8 @@ groups() ->
             effect_child_only_no_ops,
             effect_child_event_with_effects,
             effect_child_event_no_effects,
-            effect_child_update_reaches_reply
+            effect_child_update_reaches_reply,
+            effect_child_update_combines_with_event
         ]},
         {navigation, [parallel], [
             live_navigate,
@@ -671,6 +673,23 @@ effect_child_update_reaches_reply(Config) when is_list(Config) ->
     {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump">>, #{}),
     %% op 0 = ?EFFECT_PUSH_EVENT (literal, matching this suite's effect assertions).
     ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], Effects).
+
+effect_child_update_combines_with_event(Config) when is_list(Config) ->
+    %% The originating event emits its OWN effect (set_title) AND changes the
+    %% child's prop. process_root_change seeds the accumulator with the event's
+    %% effect; the child's handle_update receives it (non-empty incoming) and
+    %% threads it, prepending its own push_event. BOTH ship, in order -- proving
+    %% the seed -> thread -> combine path, not just a child effect in isolation.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_update_effect_parent, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump_titled">>, #{}),
+    %% op 0 = ?EFFECT_PUSH_EVENT (child, prepended), op 14 = ?EFFECT_SET_TITLE (event, seeded).
+    ?assertEqual(
+        [{arizona_effect, [0, <<"child_updated">>]}, {arizona_effect, [14, <<"titled">>]}],
+        Effects
+    ).
 
 %% =============================================================================
 %% SPA navigation tests
