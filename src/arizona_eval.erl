@@ -59,6 +59,8 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([render_map_items_simple/2]).
 -export([check_restricted_keys/3]).
 -export([restricted_keys/0]).
+-export([set_update_effects/1]).
+-export([drain_update_effects/0]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -297,6 +299,30 @@ since they're route-bound rather than session-level state.
 restricted_keys() ->
     ?RESTRICTED_KEYS.
 
+-doc """
+Seeds the update-effects accumulator before a diff with the originating
+callback's effects (e.g. the root event's). Child `handle_update/3`
+callbacks fold onto this during the diff; `drain_update_effects/0` reads
+the final list. Threading the accumulator this way avoids concatenating
+child effects onto the originating ones at the call site.
+""".
+-spec set_update_effects(Effects) -> ok when Effects :: [arizona_stateful:effect()].
+set_update_effects(Effects) ->
+    erlang:put('$arizona_update_effects', Effects),
+    ok.
+
+-doc """
+Drains the update-effects accumulator after the render/diff just performed
+(the seed plus every child `handle_update/3`'s additions). The live process
+calls this to ship them to the client. Returns `[]` if none accumulated.
+""".
+-spec drain_update_effects() -> [arizona_stateful:effect()].
+drain_update_effects() ->
+    case erlang:erase('$arizona_update_effects') of
+        undefined -> [];
+        Effects -> Effects
+    end.
+
 check_restricted_key(Key, Bindings, Props, Handler) ->
     case Props of
         #{Key := Expected} ->
@@ -441,11 +467,17 @@ with_saved_deps(Fun) ->
 
 eval_stateful(H, Props, {Old, New}) ->
     Id = maps:get(id, Props),
-    %% Bracket the whole lifecycle. mount/1 and handle_update/2 callbacks
+    %% Bracket the whole lifecycle. mount/1 and handle_update/3 callbacks
     %% are user code; their ?get calls would otherwise land in the outer
     %% dynamic's tracked deps.
     with_saved_deps(fun() ->
-        {B1, Resets} = mount_or_update_stateful(H, Props, Id, Old),
+        %% Thread the update-effects accumulator through this child's
+        %% handle_update (if it has one) and store it back for grandchildren
+        %% and the post-diff drain. with_saved_deps/1 restores only
+        %% $arizona_deps, so this key accumulates uninterrupted.
+        Effects0 = current_update_effects(),
+        {B1, Resets, Effects1} = mount_or_update_stateful(H, Props, Id, Old, Effects0),
+        ok = set_update_effects(Effects1),
         Tmpl = arizona_stateful:call_render(H, B1),
         {ChildTriples, {Old, New1}} = eval_dynamics_v(maps:get(d, Tmpl), {Old, New}),
         {ChildD, ChildDeps} = arizona_template:split_triples(ChildTriples),
@@ -455,23 +487,36 @@ eval_stateful(H, Props, {Old, New}) ->
         {Snap, {Old, New1#{Id => ChildEntry}}}
     end).
 
-mount_or_update_stateful(H, Props, Id, Old) ->
+%% Returns {Bindings, Resets, Effects1}: the update path threads Effects0 through
+%% the child's handle_update; the fresh-mount paths (mount/1 has no effects
+%% channel) pass Effects0 through unchanged.
+mount_or_update_stateful(H, Props, Id, Old, Effects0) ->
     case Old of
         #{Id := #{handler := H, bindings := B}} ->
-            arizona_stateful:call_handle_update(H, Props, B);
+            arizona_stateful:call_handle_update(H, Props, B, Effects0);
         #{Id := #{handler := OldH, bindings := OldB}} ->
             %% Same id, different handler: unmount the old instance before
             %% mounting the new one so it can release resources.
             ok = arizona_stateful:call_unmount(OldH, OldB),
-            fresh_mount_stateful(H, Props);
+            {B1, Resets} = fresh_mount_stateful(H, Props),
+            {B1, Resets, Effects0};
         #{} ->
-            fresh_mount_stateful(H, Props)
+            {B1, Resets} = fresh_mount_stateful(H, Props),
+            {B1, Resets, Effects0}
     end.
 
 fresh_mount_stateful(H, Props) ->
     {B1, Resets} = arizona_stateful:call_mount(H, Props),
     ok = check_restricted_keys(B1, Props, H),
     {B1, Resets}.
+
+%% Reads the update-effects accumulator threaded through the current
+%% render/diff (default [] when unset, e.g. an initial mount).
+current_update_effects() ->
+    case erlang:get('$arizona_update_effects') of
+        undefined -> [];
+        Effects -> Effects
+    end.
 
 eval_each_list(Items, Tmpl, Views) ->
     eval_each(fun(Old) -> render_list_items(Items, Tmpl, {Old, #{}}) end, Tmpl, Views, undefined).

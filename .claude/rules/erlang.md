@@ -308,7 +308,7 @@ consequences:
   bodies. `?stateless(fun bar/1, #{x => ?get(x)})` and
   `?stateful(handler, #{x => ?get(x)})` record `x` on the outer dynamic
   correctly. Eager `?get` calls inside a `?stateless` callback body, or
-  inside a stateful handler's `mount/1` / `handle_update/2`, are isolated
+  inside a stateful handler's `mount/1` / `handle_update/3`, are isolated
   by the eval wraps and will not record at the outer level.
 - Prefer named fun references (`?stateless(fun bar/1, Props)`,
   `?stateless(Mod, Fn, Props)`). They cannot close over outer `Bindings`,

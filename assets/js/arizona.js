@@ -172,9 +172,10 @@ function allDocs() {
 //        replaceState-on-scroll.
 
 /**
- * Pending scroll intent set when az-navigate / popstate is handled, applied
- * after OP_REPLACE renders the new page.
- * @type {{kind: 'push'|'pop', hash: string, saved?: {x:number,y:number}|null}|null}
+ * Pending scroll intent set when az-navigate/az-patch/popstate is handled. A
+ * navigate applies it after its OP_REPLACE; a patch (`patch: true`) applies it
+ * after the first non-empty diff batch (it has no OP_REPLACE).
+ * @type {{kind: 'push'|'pop', hash: string, saved?: {x:number,y:number}|null, patch?: boolean}|null}
  */
 let _pendingScroll = null;
 
@@ -199,16 +200,20 @@ function applyScroll(p) {
 }
 
 /**
- * Save the current scroll position onto the current history entry so
- * back/popstate can restore it.
+ * Save the current scroll position onto the current (outgoing) history entry so
+ * back/popstate can restore it. When leaving via a patch, also tag the outgoing
+ * entry `_azNav: 'patch'` so a later back-navigation to it replays as a patch
+ * (keeping the view) rather than the default navigate -- important when the
+ * entry was a full page load, which carries no tag of its own. The server still
+ * corrects the verb (a cross-handler patch falls back to navigate), so the tag
+ * is only a hint.
+ * @param {string} [navKind]
  */
-function saveCurrentScroll() {
+function saveCurrentScroll(navKind) {
     const st = history.state || {};
-    history.replaceState(
-        { ...st, _azScroll: { x: window.scrollX, y: window.scrollY } },
-        '',
-        location.href,
-    );
+    const next = { ...st, _azScroll: { x: window.scrollX, y: window.scrollY } };
+    if (navKind === 'patch') next._azNav = 'patch';
+    history.replaceState(next, '', location.href);
 }
 
 // --------------------------------------------------------------------------
@@ -340,31 +345,40 @@ function stampOutgoingTransition() {
  * @param {string} qs       Query string without leading `?`, sent to the server.
  * @param {string} hash     Fragment without leading `#`; used client-side
  *                          to scroll to the target after OP_REPLACE.
- * @param {{replace?: boolean, noscroll?: boolean, fullUrl?: string}} opts
+ * @param {{replace?: boolean, noscroll?: boolean, fullUrl?: string, kind?: string}} opts
  *   - replace  Use `replaceState` instead of `pushState`. Does not save
  *              outgoing scroll, does not reset scroll.
  *   - noscroll Push only: skip the scroll-to-top/hash after REPLACE.
  *   - fullUrl  Exact URL to write to history (defaults to
  *              `path + '?' + qs + '#' + hash`). Lets the click handler
  *              preserve the original href verbatim.
+ *   - kind     `'navigate'` (default, replaces the root view) or `'patch'`
+ *              (in-place: the server keeps the view and re-renders it). The
+ *              kind is the WS frame verb and is tagged onto the history entry
+ *              (`_azNav`) so popstate replays the same mode on back/forward.
  *
  * Reads `_pendingTransition` (set by the caller from the az-transition attribute
  * or a transition command): when set, it is stamped onto both the outgoing and
  * the new history entry so popstate can replay the transition across this edge.
  */
 function navigateTo(path, qs, hash, opts) {
+    const kind = opts.kind === 'patch' ? 'patch' : 'navigate';
     const pathAndQs = qs ? `${path}?${qs}` : path;
     const fullUrl = opts.fullUrl || (hash ? `${pathAndQs}#${hash}` : pathAndQs);
-    const navState = _pendingTransition ? { _azTransition: _pendingTransition } : null;
+    /** @type {{_azTransition?: typeof _pendingTransition, _azNav?: string}} */
+    const navState = {};
+    if (_pendingTransition) navState._azTransition = _pendingTransition;
+    if (kind === 'patch') navState._azNav = 'patch';
+    const state = Object.keys(navState).length ? navState : null;
     if (opts.replace) {
-        history.replaceState(navState, '', fullUrl);
+        history.replaceState(state, '', fullUrl);
     } else {
-        saveCurrentScroll();
+        saveCurrentScroll(kind);
         if (_pendingTransition) stampOutgoingTransition();
-        history.pushState(navState, '', fullUrl);
-        if (!opts.noscroll) _pendingScroll = { kind: 'push', hash };
+        history.pushState(state, '', fullUrl);
+        if (!opts.noscroll) _pendingScroll = { kind: 'push', hash, patch: kind === 'patch' };
     }
-    workerPost(W_SEND, JSON.stringify(['navigate', { path, qs }]));
+    workerPost(W_SEND, JSON.stringify([kind, { path, qs }]));
     workerPost(W_UPDATE_PATH, path);
     _currentPath = path;
     _currentQs = qs;
@@ -591,7 +605,11 @@ function applyOps(ops) {
                 break;
         }
     }
-    if (didReplace && _pendingScroll) {
+    // Navigate scrolls on its OP_REPLACE (robust: only a navigation emits one).
+    // A patch has no OP_REPLACE, so it scrolls on the first non-empty diff batch
+    // after the patch frame (tagged `patch` on _pendingScroll); same concurrent-
+    // push race as patch transitions, and navigate is left strictly on didReplace.
+    if (_pendingScroll && (didReplace || (_pendingScroll.patch && ops.length > 0))) {
         applyScroll(_pendingScroll);
         _pendingScroll = null;
     }
@@ -1147,7 +1165,8 @@ const JS_PUSH_EVENT = 0,
     JS_TRANSITION = 20,
     JS_TOGGLE_ATTR = 21,
     JS_FETCH = 22,
-    JS_OS = 23;
+    JS_OS = 23,
+    JS_PATCH = 24;
 
 // arizona_js credentials atoms -> fetch() credentials mode
 /** @type {Record<string, RequestCredentials>} */
@@ -1256,7 +1275,7 @@ function execOne(el, event, cmd) {
             );
             const kind = innerCmds.some((c) => c[0] === JS_NAVIGATE)
                 ? 'replace'
-                : innerCmds.some((c) => c[0] === JS_PUSH_EVENT)
+                : innerCmds.some((c) => c[0] === JS_PUSH_EVENT || c[0] === JS_PATCH)
                   ? 'any'
                   : null;
             if (kind) {
@@ -1345,6 +1364,15 @@ function execOne(el, event, cmd) {
             const hash = u.hash ? u.hash.slice(1) : '';
             const qs = u.search ? u.search.slice(1) : '';
             navigateTo(u.pathname, qs, hash, { ...(cmd[2] || {}), fullUrl: full });
+            break;
+        }
+        case JS_PATCH: {
+            // In-place SPA navigation: keep the view, re-render via handle_update.
+            const full = cmd[1];
+            const u = new URL(full, location.origin);
+            const hash = u.hash ? u.hash.slice(1) : '';
+            const qs = u.search ? u.search.slice(1) : '';
+            navigateTo(u.pathname, qs, hash, { ...(cmd[2] || {}), fullUrl: full, kind: 'patch' });
             break;
         }
         case JS_FETCH: {
@@ -1786,24 +1814,26 @@ function connect(endpoint, params = {}) {
         requestAnimationFrame(() => applyScroll({ kind: 'push', hash }));
     }
 
-    // SPA navigation: az-navigate (boolean attr) on <a> triggers client-side
-    // navigation. The path is read from href (hash stripped before sending
-    // to the server). Sends ["navigate", {path}] to the server, which renders
-    // the new page and sends OP_REPLACE on the content slot. Scroll resets to
-    // top (or #hash target) on new nav; opt out with az-noscroll.
+    // SPA navigation: az-navigate (replace the view) or az-patch (keep the view,
+    // re-render in place) -- both boolean attrs on <a>. The path is read from
+    // href (hash stripped before sending). az-navigate sends ["navigate", ...]
+    // and the server replies OP_REPLACE; az-patch sends ["patch", ...] and the
+    // server replies a diff. Scroll resets to top (or #hash) on new nav; opt out
+    // with az-noscroll.
     document.addEventListener(
         'click',
         (e) => {
             const me = /** @type {MouseEvent} */ (e);
             // Let the browser handle modifier-key and non-primary clicks (open in
-            // new tab/window, etc.) so az-navigate doesn't hijack them.
+            // new tab/window, etc.) so the link isn't hijacked.
             if (me.button !== 0 || me.ctrlKey || me.metaKey || me.shiftKey || me.altKey) return;
             const el = /** @type {HTMLAnchorElement} */ (
-                /** @type {Element} */ (e.target).closest('[az-navigate]')
+                /** @type {Element} */ (e.target).closest('[az-navigate], [az-patch]')
             );
             if (!el || !_connected) return;
             const href = el.getAttribute('href');
             if (!href) return;
+            const isPatch = el.hasAttribute('az-patch');
             // Anchors implement the URL interface -- use browser-parsed parts.
             const path = el.pathname;
             const qs = el.search ? el.search.slice(1) : '';
@@ -1819,11 +1849,16 @@ function connect(endpoint, params = {}) {
                 return;
             }
 
-            // az-transition opts this navigation into a view transition; the
-            // intent is consumed when the navigation's OP_REPLACE lands.
+            // az-transition opts this navigation into a view transition. A patch
+            // produces a diff (no OP_REPLACE), so its intent is consumed by the
+            // first response batch ('any'); a navigate waits for the OP_REPLACE.
             const t = parseTransitionAttr(el);
-            _pendingTransition = t ? { types: t.types, kind: 'replace' } : null;
-            navigateTo(path, qs, hash, { noscroll, fullUrl: href });
+            _pendingTransition = t ? { types: t.types, kind: isPatch ? 'any' : 'replace' } : null;
+            navigateTo(path, qs, hash, {
+                noscroll,
+                fullUrl: href,
+                kind: isPatch ? 'patch' : 'navigate',
+            });
         },
         { signal },
     );
@@ -1847,11 +1882,14 @@ function connect(endpoint, params = {}) {
                 applyScroll({ kind: 'pop', hash, saved });
                 return;
             }
-            _pendingScroll = { kind: 'pop', hash, saved };
+            // Replay the same mode the edge was navigated with (tagged `_azNav`),
+            // so back/forward over a patch re-patches rather than replacing.
+            const navKind = e.state?._azNav === 'patch' ? 'patch' : 'navigate';
+            _pendingScroll = { kind: 'pop', hash, saved, patch: navKind === 'patch' };
             // Replay the transition stamped onto this entry when the edge was
             // navigated with a transition, so back/forward animate symmetrically.
             _pendingTransition = e.state?._azTransition || null;
-            workerPost(W_SEND, JSON.stringify(['navigate', { path, qs }]));
+            workerPost(W_SEND, JSON.stringify([navKind, { path, qs }]));
             workerPost(W_UPDATE_PATH, path);
             _currentPath = path;
             _currentQs = qs;

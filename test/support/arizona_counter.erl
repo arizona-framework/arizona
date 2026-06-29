@@ -1,6 +1,6 @@
 -module(arizona_counter).
 -include("arizona_stateful.hrl").
--export([mount/1, render/1, handle_update/2, handle_event/3, handle_info/2]).
+-export([mount/1, render/1, handle_update/3, handle_event/3, handle_info/2]).
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
@@ -13,14 +13,14 @@ mount(Bindings) ->
     }.
 
 %% Only counter2 doubles the parent count; others merge normally.
--spec handle_update(az:bindings(), az:bindings()) -> az:handle_update_ret().
-handle_update(Props, Bindings) ->
+-spec handle_update(az:bindings(), az:bindings(), az:effects()) -> az:handle_update_ret().
+handle_update(Props, Bindings, Effects) ->
     case Props of
         #{id := ~"counter2"} ->
             ParentCount = maps:get(count, Props, 0),
-            {maps:merge(Bindings, Props#{count => ParentCount * 2}), #{}};
+            {maps:merge(Bindings, Props#{count => ParentCount * 2}), #{}, Effects};
         #{} ->
-            {maps:merge(Bindings, Props), #{}}
+            {maps:merge(Bindings, Props), #{}, Effects}
     end.
 
 -spec render(az:bindings()) -> az:template().

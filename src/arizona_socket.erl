@@ -79,6 +79,7 @@ The live process is linked. Exits map to WebSocket close codes:
 -record(socket, {
     pid :: pid() | undefined,
     view_id :: binary() | undefined,
+    handler :: module() | undefined,
     req :: az:request()
 }).
 
@@ -126,7 +127,9 @@ init(Handler, Bindings, Req, Opts) ->
     Reconnect = maps:get(reconnect, Opts, false),
     OnMount = maps:get(on_mount, Opts, []),
     Capabilities = maps:get(capabilities, Opts, #{}),
-    Socket = #socket{req = Req},
+    %% Track the root handler so a `patch` frame can decide same-view (patch in
+    %% place) vs different-view (fall back to a full navigate/replace).
+    Socket = #socket{req = Req, handler = Handler},
     safe_init(Handler, Socket, fun() ->
         ConnInfo = #{capabilities => Capabilities, reconnect => Reconnect},
         {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount, ConnInfo),
@@ -147,7 +150,8 @@ Handles an inbound text frame.
 Recognized payloads:
 - `~"0"` -- ping, replied with `~"1"`
 - `[~"cached_fps", FpList]` -- seeds fingerprints into the live process
-- `[~"navigate", #{~"path" := Path, ~"qs" := Qs}]` -- SPA navigation
+- `[~"navigate", #{~"path" := Path, ~"qs" := Qs}]` -- SPA navigation (replace)
+- `[~"patch", #{~"path" := Path, ~"qs" := Qs}]` -- in-place SPA navigation
 - `[ViewId, Event, Payload]` -- UI event dispatch
 
 Unrecognized payloads, and frames whose body is not valid JSON, are
@@ -171,6 +175,16 @@ handle_in(JSON, #socket{pid = Pid} = Socket) ->
         ->
             try
                 handle_navigate(Path, Qs, Socket)
+            catch
+                Class:Reason:Stacktrace ->
+                    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
+                    close_crash(Socket)
+            end;
+        [~"patch", #{~"path" := Path, ~"qs" := Qs}] when
+            is_binary(Path), is_binary(Qs)
+        ->
+            try
+                handle_patch(Path, Qs, Socket)
             catch
                 Class:Reason:Stacktrace ->
                     logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
@@ -258,15 +272,28 @@ safe_init(Handler, Socket, Fun) ->
 close_crash(Socket) ->
     {close, ?CLOSE_CRASH, ~"server crash", Socket}.
 
-handle_navigate(
-    Path,
-    Qs,
-    #socket{pid = Pid, view_id = OldVId, req = Req} = Socket
-) ->
+handle_navigate(Path, Qs, #socket{req = Req} = Socket) ->
+    {H, RouteOpts, NewReq} = resolve_route(Path, Qs, Req),
+    do_navigate(H, RouteOpts, NewReq, Socket).
+
+%% A `patch` keeps the current view IFF the patched path resolves to the same
+%% root handler; otherwise it can't (a different view needs a real mount), so it
+%% degrades to a full navigate/replace. Resolves once and reuses the result for
+%% either branch.
+handle_patch(Path, Qs, #socket{handler = CurrentHandler, req = Req} = Socket) ->
+    {H, RouteOpts, NewReq} = resolve_route(Path, Qs, Req),
+    case H of
+        CurrentHandler ->
+            do_patch(RouteOpts, NewReq, Socket);
+        _ ->
+            do_navigate(H, RouteOpts, NewReq, Socket)
+    end.
+
+resolve_route(Path, Qs, Req) ->
     Adapter = arizona_req:adapter(Req),
-    {H, RouteOpts, NewReq} = arizona_req:call_resolve_route(
-        Adapter, Path, Qs, arizona_req:raw(Req)
-    ),
+    arizona_req:call_resolve_route(Adapter, Path, Qs, arizona_req:raw(Req)).
+
+do_navigate(H, RouteOpts, NewReq, #socket{pid = Pid, view_id = OldVId} = Socket) ->
     IB = maps:get(bindings, RouteOpts, #{}),
     OnMount = maps:get(on_mount, RouteOpts, []),
     Middlewares = maps:get(middlewares, RouteOpts, []),
@@ -277,7 +304,7 @@ handle_navigate(
             try arizona_live:navigate(Pid, H, Bindings1, OnMount) of
                 {ok, NewVId, PageHTML} ->
                     Ops = replace_ops(OldVId, PageHTML),
-                    encode_reply(Ops, [], Socket#socket{view_id = NewVId})
+                    encode_reply(Ops, [], Socket#socket{view_id = NewVId, handler = H})
             catch
                 %% Live process exited between the navigate frame arriving and
                 %% this gen_server:call landing — typical during a drain where
@@ -290,6 +317,30 @@ handle_navigate(
                 %% path runs (1001 routes through the reconnect-with-form-state
                 %% flow, not the crash reload). A genuine navigate crash exits
                 %% with a different reason and still propagates to a 4500 close.
+                exit:{noproc, _} ->
+                    {close, ?CLOSE_GOING_AWAY, ~"", Socket};
+                exit:{{shutdown, drain}, _} ->
+                    {close, ?CLOSE_GOING_AWAY, ~"", Socket}
+            end
+    end.
+
+%% Same root handler: keep the view, deliver the resolved route params to its
+%% handle_update/3, and ship the diff ops + effects on the same `view_id` (no
+%% replace, no remount). Runs the route middlewares first, exactly like navigate
+%% -- but deliberately does NOT read `on_mount` (contrast do_navigate): on_mount
+%% is a mount-phase hook and a patch does not remount (see arizona_live:patch/2).
+do_patch(RouteOpts, NewReq, #socket{pid = Pid, view_id = ViewId} = Socket) ->
+    IB = maps:get(bindings, RouteOpts, #{}),
+    Middlewares = maps:get(middlewares, RouteOpts, []),
+    case arizona_middleware:apply_middlewares(Middlewares, NewReq, IB) of
+        {halt, HaltReq} ->
+            halt_navigate(HaltReq, Socket);
+        {cont, _NewReq1, Bindings1} ->
+            try arizona_live:patch(Pid, Bindings1) of
+                {ok, Ops, Effects} ->
+                    encode_reply(flatten_ops(ViewId, Ops), Effects, Socket)
+            catch
+                %% Same drain/exit race as do_navigate (see there).
                 exit:{noproc, _} ->
                     {close, ?CLOSE_GOING_AWAY, ~"", Socket};
                 exit:{{shutdown, drain}, _} ->

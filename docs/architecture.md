@@ -22,7 +22,7 @@
 | `src/arizona_diff.erl`                    | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                                           |
 | `src/arizona_roadrunner_router.erl`       | Roadrunner route compilation -- `compile_routes/1,2`, `routes/1,2` (map-shape routes with state under `#{arizona => ...}` namespace)                                                      |
 | `src/arizona_effect.erl`                  | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                                  |
-| `src/arizona_js.erl`                      | Web/browser command + effect builders -- `push_event`, `navigate`, `fetch`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`         |
+| `src/arizona_js.erl`                      | Web/browser command/effect builders -- `push_event`, `navigate`, `patch`, `fetch`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`  |
 | `src/arizona_android.erl`                 | Native (`?native`) command builders -- the portable `push_event/1,2` and `navigate/1,2`                                                                                                   |
 | `src/arizona_stream.erl`                  | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`                                                                |
 | `src/arizona_stateful.erl`                | Behaviour for all live handlers (route-page roots + embedded `?stateful`) -- `mount`/`render`/`handle_*`/`unmount` callbacks, the `call_*` dispatchers, and `format_error/2`              |
@@ -214,7 +214,7 @@ and pollute its deps. Bracketed entry points and what each covers:
 
 - `eval_template` -- the inner template's per-dynamic eval loop
 - `eval_each` -- per-item rendering (list, stream, map sources)
-- `eval_stateful` -- the whole lifecycle: `mount/1` / `handle_update/2`,
+- `eval_stateful` -- the whole lifecycle: `mount/1` / `handle_update/3`,
   `render/1`, and the inner per-dynamic eval loop
 - the stateless inline path -- the entire `eval_val_v` recursion for
   `#{callback := _, props := _}` descriptors, including the callback
@@ -263,7 +263,7 @@ target-aware tag would be the follow-up if it ever needs to behave like a plain 
 expression of `?stateful`/`?stateless` -- the parse transform places them
 in the outer dynamic's closure, where they track correctly. Eager `?get`
 calls inside a `?stateless` callback body, or inside a stateful's
-`mount/1` / `handle_update/2`, are discarded by the wrap; this is
+`mount/1` / `handle_update/3`, are discarded by the wrap; this is
 intentional -- those reads belong to the inner scope. Idiomatic callbacks
 use a named fun reference (`?stateless(fun bar/1, Props)`), which cannot
 close over outer `Bindings` and therefore avoids the footgun entirely.
@@ -465,7 +465,8 @@ handle_event(~"inc", _P, B) ->
 - `set_attr/3`, `remove_attr/2`, `toggle_attr/2,4` -- attribute manipulation (`toggle_attr/2`
   presence toggle: add if absent, remove if present; `toggle_attr/4` flips between two values)
 - `dispatch_event/2` -- dispatch CustomEvent on document
-- `navigate/1,2` -- SPA navigation (opts: `#{replace => true}`)
+- `navigate/1,2` -- SPA navigation, replaces the root view (opts: `#{replace => true}`)
+- `patch/1,2` -- in-place SPA navigation, keeps the root view and re-renders it via `handle_update/3`
 - `fetch/2` -- HTTP request via the browser `fetch()`, **no page reload** (opts: `method`,
   `body`, `headers`, `credentials`, `on_error`). The only mode that can set a real `Set-Cookie`
   (HttpOnly honored) without navigating, so it suits flows that rotate a session cookie while
@@ -758,6 +759,11 @@ Simplified gen_server wrapper:
   from its mount return value are dropped on the next navigate. Stateful children's state
   (in `views`) is wiped: a child that was alive on the old page is gone unless the new
   page re-embeds it
+- `patch/2` -- `patch(Pid, Params)`. In-place navigation: keeps the current root mounted, runs its
+  `handle_update/3` with `Params`, and re-renders through the diff (no unmount, no remount, no timer
+  cancel, no `OP_REPLACE`). `handler`, view id, and child views all survive. Returns `{ok, Ops,
+  Effects}` -- the diff ops plus the reaction's effects (`handle_update`'s, folded with any child's).
+  Mirrors `handle_root_event`, but the reaction is `handle_update` instead of `handle_event`
 - `apply_on_mount/2` -- folds the `on_mount` hook chain: `apply_on_mount(OnMount, Bindings)`.
   Each hook is `fun((Bindings) -> Bindings)` or `{Module, Function}`
 
@@ -782,7 +788,8 @@ lives here independent of the server.
   frame. Opts: `reconnect` (boolean), `on_mount` (list of `t:arizona_live:on_mount_hook/0`).
   The route adapter for SPA navigate is recovered from `Req` via `arizona_req:adapter/1`
 - `handle_in/2` -- decode incoming text frame: ping/pong, `["cached_fps", FpList]`,
-  `["navigate", #{~"path" := Path, ~"qs" := Qs}]`, `[target, event, payload]`
+  `["navigate", #{~"path" := Path, ~"qs" := Qs}]` (replace), `["patch", #{~"path", ~"qs"}]`
+  (in-place, same-handler -> `patch/2`, else falls back to navigate), `[target, event, payload]`
 - `handle_info/2` -- handle `{arizona_push, Ops, Effects}` from `arizona_live` and `EXIT` signals.
   On non-normal exit the socket closes with `?CLOSE_CRASH` (4500); on normal exit with 1000. The
   client reconnects via backoff in `arizona-worker.js` -- crash remount is intentionally not
@@ -799,9 +806,34 @@ Internal functions: `scope_ops/2` (prepend view ID to op targets), `encode_reply
 `dispatch_event/4`, `handle_navigate/3` (drives SPA navigate by invoking the adapter's
 `resolve_route/3`).
 
-## SPA navigate route resolution
+## SPA navigate / patch route resolution
 
-When the client sends a navigate frame, `arizona_socket` invokes the optional
+There are two SPA navigation modes, picked per-link by the client:
+
+- **`navigate`** (`az-navigate` / `arizona_js:navigate`) -- *replaces* the root view: the live
+  process unmounts the old root, mounts the new handler, and ships one `OP_REPLACE` of the whole
+  view element.
+- **`patch`** (`az-patch` / `arizona_js:patch`) -- *keeps* the root view: the live process delivers
+  the new route's params to the current root's `handle_update/3` and re-renders through the diff,
+  shipping only the changed slots. The process, view id, child views, and DOM (chrome, scroll, open
+  menus) all survive. `arizona_socket` decides per frame: it tracks the current root `handler` on
+  the `#socket{}`, and a patch whose path resolves to the **same** handler is applied in place
+  (`arizona_live:patch/2`); a patch to a **different** handler can't keep the view, so it degrades
+  to a full navigate/replace. Persistent live chrome is therefore an ordinary app pattern (a view
+  with a swappable `?stateful(?get(page), ...)` child), not a framework feature -- demo fixture
+  `arizona_patch_demo` (`/patch-demo/:section`).
+
+**A patch runs no mount step.** `mount/1` and `on_mount` run whenever the view *(re)mounts* --
+initial GET, reconnect, `navigate` -- and **not** on a patch, which by design keeps the view alive.
+This is deliberate: `on_mount` is a mount input (its output feeds `mount/1`), so re-running it on a
+patch -- where there is no `mount/1` -- would dump a mount-time transform straight onto the live
+bindings and clobber the state the patch preserves. Per-arrival request-shaped derivation (session,
+path params) belongs in a **middleware**, which *does* run on a patch (`do_patch`) and whose output
+arrives as `Params`; handler-specific per-navigation logic goes in `handle_update/3`. So: mount-time
+setup -> `mount/1`/`on_mount`; every-arrival setup -> middleware; per-navigation reaction ->
+`handle_update/3`.
+
+Both modes resolve the target route the same way. `arizona_socket` invokes the optional
 `resolve_route/3` callback declared on the `arizona_req` behaviour:
 
 ```erlang
@@ -989,9 +1021,17 @@ via pubsub in its `unmount/1`. Then the new handler is mounted and gen_server st
 Returns `{ok, NewViewId, PageHTML}`. WS handler sends `[OP_REPLACE, OldViewId, PageHTML]`.
 Browser back/forward also triggers navigate via `popstate`.
 
+**SPA patch (in-place):** Client clicks an `[az-patch]` link (or runs `arizona_js:patch`) -> JS sends
+`["patch", {path, qs}]`. `arizona_socket` resolves the route + runs middlewares as for navigate, then
+compares the resolved handler against the tracked root `handler`: same handler -> `arizona_live:patch/2`
+(the root's `handle_update/3` runs, then a diff-in-place, returning `{ok, Ops, Effects}` -- no
+unmount/remount/`OP_REPLACE`); different handler -> falls back to the navigate/replace path above. The
+client tags the history entry (`_azNav`) and stamps the outgoing entry so back/forward replays the
+patch, keeping live chrome across the edge. See "SPA navigate / patch route resolution".
+
 **Stateful children:** `arizona_template:stateful(Handler, Props)` returns a descriptor map. During
 `eval_val_v/2`, the engine checks if the child is already in the views map -- if so, calls
-`handle_update/2` (or `maps:merge` if not exported); if not, calls `Handler:mount(Props)`. Child
+`handle_update/3` (or `maps:merge` if not exported); if not, calls `Handler:mount(Props)`. Child
 templates are recursively rendered/diffed with their own snapshots. The views map uses a
 `{OldViews, NewViews}` tuple during eval -- `OldViews` is read-only for child lookup, `NewViews`
 accumulates only children rendered this cycle. Children removed from the template (conditional
@@ -1045,7 +1085,7 @@ mount(Bindings) -> {NewBindings, Resets}.                                      %
 render(Bindings) -> #{s => [...], d => [...]}.                                 %% Required
 handle_event(Event, Payload, Bindings) -> {NewBindings, Resets, Effects}.      %% Optional
 handle_info(Info, Bindings) -> {NewBindings, Resets, Effects}.                 %% Optional
-handle_update(Props, Bindings) -> {NewBindings, Resets}.                       %% Optional (embedded only)
+handle_update(Props, Bindings, Effects) -> {NewBindings, Resets, Effects}.     %% Optional (embedded child OR patched root)
 handle_drain(Deadline, Bindings) -> ok | {stop, Bindings, Effects}.           %% Optional
 unmount(Bindings) -> term().                                                   %% Optional
 ```
@@ -1090,9 +1130,13 @@ callback's body propagate untagged.
 `?send_after`, pubsub, raw `Pid ! Msg`). If not exported, messages are silently dropped (checked via
 `erlang:function_exported/3`).
 
-`handle_update/2` intercepts parent prop updates before they reach the bindings. Called on stateful
-children when the parent re-renders with new `Props`. If not exported, the framework merges `Props`
-into `Bindings` directly (`call_handle_update/3`).
+`handle_update/3` reacts to new props arriving from an enclosing context: a parent re-rendering an
+embedded child with new `Props`, **or** a `patch` navigation delivering the new route's params to a
+route root (navigation as the root's prop source). If not exported, the framework merges `Props` into
+`Bindings` directly (`call_handle_update/4`). `Effects` is the accumulator of effects already queued
+for this update cycle; return it extended with this callback's own effects (the default returns it
+verbatim) -- so a patch reaction can set the document title or redirect, threaded without any
+caller-side concatenation. See "SPA navigate / patch route resolution".
 
 `unmount/1` runs when an instance is removed -- either the parent stopped rendering it (conditional
 or navigate) or the live process is shutting down. Use it to release resources (timers, external

@@ -22,6 +22,8 @@
     effect_multiple_push_events/1,
     effect_only_no_ops/1,
     effect_push_event/1,
+    effect_child_update_reaches_reply/1,
+    effect_child_update_combines_with_event/1,
     handle_update_child_event_then_parent/1,
     live_child_event/1,
     live_child_multiple_events/1,
@@ -49,6 +51,9 @@
     live_navigate_resets_views/1,
     live_navigate_round_trip/1,
     live_navigate/1,
+    live_patch_default_merge/1,
+    live_patch_handle_update_effect/1,
+    live_patch_no_change_no_ops/1,
     live_navigate_between_different_ids/1,
     route_bindings_can_set_id_when_handler_accepts_it/1,
     live_navigate_then_event/1,
@@ -136,7 +141,9 @@ groups() ->
             effect_only_no_ops,
             effect_child_only_no_ops,
             effect_child_event_with_effects,
-            effect_child_event_no_effects
+            effect_child_event_no_effects,
+            effect_child_update_reaches_reply,
+            effect_child_update_combines_with_event
         ]},
         {navigation, [parallel], [
             live_navigate,
@@ -145,7 +152,10 @@ groups() ->
             live_navigate_then_event,
             live_navigate_resets_views,
             live_navigate_round_trip,
-            live_navigate_carries_root_bindings
+            live_navigate_carries_root_bindings,
+            live_patch_default_merge,
+            live_patch_handle_update_effect,
+            live_patch_no_change_no_ops
         ]},
         {handle_info, [parallel], [
             live_handle_info,
@@ -651,6 +661,36 @@ effect_child_event_no_effects(Config) when is_list(Config) ->
     {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertEqual([], Effects).
 
+effect_child_update_reaches_reply(Config) when is_list(Config) ->
+    %% A ROOT event changes a child's prop; the child's handle_update/3 folds a
+    %% push_event effect onto the accumulator, which process_root_change drains
+    %% and ships on the root event's reply. Before handle_update could emit
+    %% effects, this list would be empty.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_update_effect_parent, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump">>, #{}),
+    %% op 0 = ?EFFECT_PUSH_EVENT (literal, matching this suite's effect assertions).
+    ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], Effects).
+
+effect_child_update_combines_with_event(Config) when is_list(Config) ->
+    %% The originating event emits its OWN effect (set_title) AND changes the
+    %% child's prop. process_root_change seeds the accumulator with the event's
+    %% effect; the child's handle_update receives it (non-empty incoming) and
+    %% threads it, prepending its own push_event. BOTH ship, in order -- proving
+    %% the seed -> thread -> combine path, not just a child effect in isolation.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_update_effect_parent, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump_titled">>, #{}),
+    %% op 0 = ?EFFECT_PUSH_EVENT (child, prepended), op 14 = ?EFFECT_SET_TITLE (event, seeded).
+    ?assertEqual(
+        [{arizona_effect, [0, <<"child_updated">>]}, {arizona_effect, [14, <<"titled">>]}],
+        Effects
+    ).
+
 %% =============================================================================
 %% SPA navigation tests
 %% =============================================================================
@@ -668,6 +708,42 @@ live_navigate(Config) when is_list(Config) ->
     ?assertEqual(<<"page">>, NewViewId),
     ?assertMatch(#{<<"f">> := _, <<"s">> := _, <<"d">> := _}, PageContent),
     ?assert(lists:member(<<"About">>, maps:get(<<"d">>, PageContent))).
+
+live_patch_default_merge(Config) when is_list(Config) ->
+    %% A view without handle_update/3: patch merges the params and re-renders
+    %% in place (an OP_TEXT diff, NOT a remount/OP_REPLACE), with no effects.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_root_counter, #{}, undefined, []
+    ),
+    {ok, <<"counter">>} = arizona_live:mount(Pid),
+    {ok, Ops, Effects} = arizona_live:patch(Pid, #{count => 7}),
+    ?assertMatch([[?OP_TEXT, _, <<"7">>]], Ops),
+    ?assertEqual([], Effects).
+
+live_patch_handle_update_effect(Config) when is_list(Config) ->
+    %% A view WITH handle_update/3: patch delivers params to it; it sets the
+    %% section and folds a set_title effect onto the accumulator, which rides
+    %% the patch reply. The root is diffed in place.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_patch_view, #{}, undefined, []
+    ),
+    {ok, <<"patchview">>} = arizona_live:mount(Pid),
+    {ok, Ops, Effects} = arizona_live:patch(Pid, #{section => <<"about">>}),
+    ?assertMatch([[?OP_TEXT, _, <<"about">>]], Ops),
+    %% op 14 = ?EFFECT_SET_TITLE (literal, matching this suite's effect assertions).
+    ?assertEqual([{arizona_effect, [14, <<"about">>]}], Effects).
+
+live_patch_no_change_no_ops(Config) when is_list(Config) ->
+    %% Patching with the value the view already holds yields no ops (the diff
+    %% skips the unchanged slot) -- proving a real in-place diff, not a
+    %% wholesale re-render. The handle_update effect still fires.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_patch_view, #{section => <<"home">>}, undefined, []
+    ),
+    {ok, <<"patchview">>} = arizona_live:mount(Pid),
+    {ok, Ops, Effects} = arizona_live:patch(Pid, #{section => <<"home">>}),
+    ?assertEqual([], Ops),
+    ?assertEqual([{arizona_effect, [14, <<"home">>]}], Effects).
 
 live_navigate_between_different_ids(Config) when is_list(Config) ->
     %% Regression: navigating between two route-level views that own

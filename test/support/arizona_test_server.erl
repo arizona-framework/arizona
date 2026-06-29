@@ -72,6 +72,14 @@ routes() ->
             bindings => #{title => <<"Transitions">>},
             layouts => Layouts
         }},
+        %% In-place SPA navigation (az-patch) demo: az-patch links switch the
+        %% :section while a chrome-owned counter survives (the view isn't
+        %% remounted). Two routes sharing arizona_patch_demo -> same-handler patch.
+        {live, <<"/patch-demo/:section">>, arizona_patch_demo, #{
+            bindings => #{title => <<"Patch demo">>},
+            middlewares => [arizona_middleware:extract([path_bindings])],
+            layouts => Layouts
+        }},
         {live, <<"/transitions/detail">>, arizona_transitions_detail, #{
             bindings => #{title => <<"Transition detail">>},
             layouts => Layouts

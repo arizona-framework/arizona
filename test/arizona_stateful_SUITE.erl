@@ -8,6 +8,7 @@
     unhandled_event_tagged/1,
     unhandled_info_tagged/1,
     unhandled_update_tagged/1,
+    call_handle_update_threads_effects/1,
     unhandled_unmount_tagged/1,
     unhandled_drain_tagged/1,
     function_clause_inside_callback_propagates_untagged/1,
@@ -26,6 +27,7 @@ groups() ->
             unhandled_event_tagged,
             unhandled_info_tagged,
             unhandled_update_tagged,
+            call_handle_update_threads_effects,
             unhandled_unmount_tagged,
             unhandled_drain_tagged,
             function_clause_inside_callback_propagates_untagged,
@@ -198,23 +200,44 @@ missing_callback_handle_event_tagged(Config) when is_list(Config) ->
     end.
 
 unhandled_update_tagged(Config) when is_list(Config) ->
-    %% Module exports handle_update/2 but no clause matches the props --
+    %% Module exports handle_update/3 but no clause matches the props --
     %% call_handle_update must re-tag the function_clause into
     %% `{unhandled_update, _, _, _}`.
     Mod = compile_module(
         "-module(stub_update). "
-        "-export([handle_update/2]). "
-        "handle_update(#{tag := keep} = P, B) -> {maps:merge(B, P), #{}}.\n"
+        "-export([handle_update/3]). "
+        "handle_update(#{tag := keep} = P, B, E) -> {maps:merge(B, P), #{}, E}.\n"
     ),
     try
         arizona_stateful:call_handle_update(
-            Mod, #{other => 1}, #{id => <<"v">>}
+            Mod, #{other => 1}, #{id => <<"v">>}, []
         )
     of
         _ -> ct:fail(expected_unhandled_update)
     catch
         error:{unhandled_update, Mod, #{other := 1}, _} -> ok
     end.
+
+call_handle_update_threads_effects(Config) when is_list(Config) ->
+    %% handle_update/3 receives the effect accumulator and returns it extended;
+    %% the new effect is folded onto the seed without any caller-side concat.
+    %% Effects must be real arizona_effect:cmd() values ({arizona_effect, list()}).
+    Mod = compile_module(
+        "-module(stub_update_eff). "
+        "-export([handle_update/3]). "
+        "handle_update(P, B, E) -> {maps:merge(B, P), #{}, [{arizona_effect, [own]} | E]}.\n"
+    ),
+    Seed = {arizona_effect, [seed]},
+    ?assertMatch(
+        {#{id := <<"v">>, x := 1}, #{}, [{arizona_effect, [own]}, {arizona_effect, [seed]}]},
+        arizona_stateful:call_handle_update(Mod, #{x => 1}, #{id => <<"v">>}, [Seed])
+    ),
+    %% Default (callback not exported): Props merged, accumulator passed through.
+    Bare = compile_module("-module(stub_update_bare). -export([]).\n"),
+    ?assertMatch(
+        {#{id := <<"v">>, x := 1}, #{}, [{arizona_effect, [seed]}]},
+        arizona_stateful:call_handle_update(Bare, #{x => 1}, #{id => <<"v">>}, [Seed])
+    ).
 
 format_error_renders_all_reasons(Config) when is_list(Config) ->
     %% Every tagged reason has a format_error/2 clause that returns an
