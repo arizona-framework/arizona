@@ -200,16 +200,20 @@ function applyScroll(p) {
 }
 
 /**
- * Save the current scroll position onto the current history entry so
- * back/popstate can restore it.
+ * Save the current scroll position onto the current (outgoing) history entry so
+ * back/popstate can restore it. When leaving via a patch, also tag the outgoing
+ * entry `_azNav: 'patch'` so a later back-navigation to it replays as a patch
+ * (keeping the view) rather than the default navigate -- important when the
+ * entry was a full page load, which carries no tag of its own. The server still
+ * corrects the verb (a cross-handler patch falls back to navigate), so the tag
+ * is only a hint.
+ * @param {string} [navKind]
  */
-function saveCurrentScroll() {
+function saveCurrentScroll(navKind) {
     const st = history.state || {};
-    history.replaceState(
-        { ...st, _azScroll: { x: window.scrollX, y: window.scrollY } },
-        '',
-        location.href,
-    );
+    const next = { ...st, _azScroll: { x: window.scrollX, y: window.scrollY } };
+    if (navKind === 'patch') next._azNav = 'patch';
+    history.replaceState(next, '', location.href);
 }
 
 // --------------------------------------------------------------------------
@@ -369,7 +373,7 @@ function navigateTo(path, qs, hash, opts) {
     if (opts.replace) {
         history.replaceState(state, '', fullUrl);
     } else {
-        saveCurrentScroll();
+        saveCurrentScroll(kind);
         if (_pendingTransition) stampOutgoingTransition();
         history.pushState(state, '', fullUrl);
         if (!opts.noscroll) _pendingScroll = { kind: 'push', hash, patch: kind === 'patch' };

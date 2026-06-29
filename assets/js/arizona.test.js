@@ -3271,6 +3271,25 @@ describe('navigation scroll', () => {
         expect(msgs).toContainEqual(['patch', { path: '/to', qs: '' }]);
     });
 
+    it('patch tags the outgoing entry _azNav so back to a full-load entry re-patches', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        history.replaceState(null, '', '/from');
+        const replaceSpy = vi.spyOn(history, 'replaceState');
+        clickPatchLink('/to');
+
+        // The outgoing /from entry (a full load, no tag of its own) was stamped
+        // _azNav=patch via replaceState, so popstate back to it re-patches.
+        const stampCall = replaceSpy.mock.calls.find(
+            (c) => c[0] && typeof c[0] === 'object' && c[0]._azNav === 'patch',
+        );
+        expect(stampCall).toBeTruthy();
+        replaceSpy.mockRestore();
+    });
+
     it('popstate over a patch-tagged entry re-sends a patch frame', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
