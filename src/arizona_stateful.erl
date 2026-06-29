@@ -26,8 +26,8 @@ enables the parse transform that compiles `?html(...)` calls in
 
 - `handle_event/3` -- responds to client events
 - `handle_info/2` -- responds to mailbox messages
-- `handle_update/2` -- intercepts parent prop updates before they
-  reach the bindings map
+- `handle_update/3` -- reacts to new props (from a parent re-render or a
+  `patch` navigation), threading the effect accumulator
 - `handle_drain/2` -- coordinates a graceful shutdown before the live
   process exits (see "Graceful drain" below)
 - `unmount/1` -- cleanup hook on instance removal
@@ -140,7 +140,7 @@ handler's template churns often.
 -export([call_render/2]).
 -export([call_handle_event/4]).
 -export([call_handle_info/3]).
--export([call_handle_update/3]).
+-export([call_handle_update/4]).
 -export([call_handle_drain/3]).
 -export([call_unmount/2]).
 -export([format_error/2]).
@@ -185,7 +185,7 @@ handler's template churns often.
 -type render_ret() :: arizona_template:template().
 -type handle_event_ret() :: {bindings(), resets(), effects()}.
 -type handle_info_ret() :: {bindings(), resets(), effects()}.
--type handle_update_ret() :: {bindings(), resets()}.
+-type handle_update_ret() :: {bindings(), resets(), effects()}.
 -type handle_drain_ret() ::
     ok
     | {stop, bindings(), effects()}
@@ -237,16 +237,30 @@ Handles a mailbox message. Optional.
     handle_info_ret().
 
 -doc """
-Intercepts a parent prop update before it reaches the bindings. Optional.
+Reacts to new props arriving from an enclosing context. Optional.
 
-When a parent re-renders and a child receives new props, this callback
-gets the chance to merge / transform them. If not exported, the
-framework merges `Props` into `Bindings` directly.
+Two sources deliver props here, with identical semantics:
 
-Only fires on embedded instances -- a handler mounted as a route root
-never receives parent prop updates.
+- A parent re-rendering an embedded child with new props (the child gets
+  the chance to merge / transform them).
+- A `patch` navigation delivering the new route's params to a route root
+  (navigation is the root's prop source -- the analogue of a parent).
+
+If not exported, the framework merges `Props` into `Bindings` directly.
+
+`Effects` is the accumulator of effects already queued for this update cycle
+(the originating event's effects, then each child's, folded through the
+render). Return it extended with this callback's own effects -- they are all
+pushed to the client, exactly as for `handle_event/3`. Returning the
+accumulator verbatim (the default) preserves upstream effects; dropping it
+drops them. This threads effects without any caller-side concatenation.
+
+```erlang
+handle_update(#{section := S}, Bindings, Effects) ->
+    {Bindings#{section => S}, #{}, [arizona_js:set_title(S) | Effects]}.
+```
 """.
--callback handle_update(Props :: bindings(), bindings()) ->
+-callback handle_update(Props :: bindings(), bindings(), effects()) ->
     handle_update_ret().
 
 -doc """
@@ -290,7 +304,7 @@ instead.
 """.
 -callback unmount(bindings()) -> unmount_ret().
 
--optional_callbacks([handle_event/3, handle_info/2, handle_update/2, handle_drain/2, unmount/1]).
+-optional_callbacks([handle_event/3, handle_info/2, handle_update/3, handle_drain/2, unmount/1]).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -416,24 +430,27 @@ call_handle_info(H, Info, Bindings) ->
     end.
 
 -doc """
-Invokes the optional `handle_update/2` callback.
+Invokes the optional `handle_update/3` callback.
 
-Falls back to merging `Props` into `Bindings` if the callback is not
-exported. Re-tags a no-matching-clause crash at the callback's
-head as `{unhandled_update, H, Props, Bindings}`; errors raised
-from inside the callback body propagate untagged.
+`Effects` is the effect accumulator threaded through the update cycle; the
+callback returns it extended. Falls back to merging `Props` into `Bindings`
+and passing `Effects` through unchanged if the callback is not exported.
+Re-tags a no-matching-clause crash at the callback's head as
+`{unhandled_update, H, Props, Bindings}`; errors raised from inside the
+callback body propagate untagged.
 """.
--spec call_handle_update(Handler, Props, Bindings) ->
+-spec call_handle_update(Handler, Props, Bindings, Effects) ->
     handle_update_ret()
 when
     Handler :: module(),
     Props :: map(),
-    Bindings :: bindings().
-call_handle_update(H, Props, Bindings) ->
-    case erlang:function_exported(H, handle_update, 2) of
+    Bindings :: bindings(),
+    Effects :: effects().
+call_handle_update(H, Props, Bindings, Effects) ->
+    case erlang:function_exported(H, handle_update, 3) of
         true ->
             try
-                H:handle_update(Props, Bindings)
+                H:handle_update(Props, Bindings, Effects)
             catch
                 error:function_clause:ST ->
                     arizona_error:raise_or_propagate(
@@ -442,12 +459,12 @@ call_handle_update(H, Props, Bindings) ->
                         H,
                         handle_update,
                         {unhandled_update, H, Props, Bindings},
-                        [H, Props, Bindings],
+                        [H, Props, Bindings, Effects],
                         ?MODULE
                     )
             end;
         false ->
-            {maps:merge(Bindings, Props), #{}}
+            {maps:merge(Bindings, Props), #{}, Effects}
     end.
 
 -doc """
@@ -563,7 +580,7 @@ format_error({unhandled_update, Mod, Props, Bindings}, _ST) ->
     #{
         general => io_lib:format(
             "while applying parent props ~0tp on view ~0tp: no clause "
-            "in ~s:handle_update/2 matches.",
+            "in ~s:handle_update/3 matches.",
             [Props, view_id(Bindings), Mod]
         )
     };

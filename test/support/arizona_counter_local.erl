@@ -1,6 +1,6 @@
 -module(arizona_counter_local).
 -include("arizona_stateful.hrl").
--export([mount/1, render/1, handle_update/2, handle_event/3]).
+-export([mount/1, render/1, handle_update/3, handle_event/3]).
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
@@ -14,9 +14,9 @@ mount(Bindings) ->
     }.
 
 %% Apply parent-propagated props (e.g. a changed `label`) so the child re-renders.
--spec handle_update(az:bindings(), az:bindings()) -> az:handle_update_ret().
-handle_update(Props, Bindings) ->
-    {maps:merge(Bindings, Props), #{}}.
+-spec handle_update(az:bindings(), az:bindings(), az:effects()) -> az:handle_update_ret().
+handle_update(Props, Bindings, Effects) ->
+    {maps:merge(Bindings, Props), #{}, Effects}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->

@@ -591,8 +591,10 @@ do_mount(H, B0, V0, OnMount) ->
 
 handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
     {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
-    {Ops1, Snap1, V1, B3, Fps1, NewState} = process_root_change(H, B1, Resets, State),
-    {reply, {ok, Ops1, Effects}, NewState#state{
+    {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
+        H, B1, Resets, Effects, State
+    ),
+    {reply, {ok, Ops1, Effects1}, NewState#state{
         bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
     }}.
 
@@ -607,8 +609,10 @@ handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} 
         ok ->
             {noreply, State};
         {B1, Resets, Effects} ->
-            {Ops1, Snap1, V1, B3, Fps1, NewState} = process_root_change(H, B1, Resets, State),
-            push(TPid, Ops1, Effects),
+            {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
+                H, B1, Resets, Effects, State
+            ),
+            push(TPid, Ops1, Effects1),
             {noreply, NewState#state{
                 bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
             }}
@@ -641,8 +645,10 @@ handle_drain_info(Deadline, #state{handler = H, bindings = B0, transport_pid = T
             push(TPid, [], Effects),
             {stop, {shutdown, drain}, State#state{bindings = B1}};
         {B1, Resets, Effects} ->
-            {Ops1, Snap1, V1, B3, Fps1, NewState} = process_root_change(H, B1, Resets, State),
-            push(TPid, Ops1, Effects),
+            {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
+                H, B1, Resets, Effects, State
+            ),
+            push(TPid, Ops1, Effects1),
             {noreply, NewState#state{
                 bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
             }}
@@ -650,22 +656,31 @@ handle_drain_info(Deadline, #state{handler = H, bindings = B0, transport_pid = T
 
 %% Render the new template, diff against the root snapshot, dedup fingerprints,
 %% unmount removed child views, and merge resets back into bindings.
+%%
+%% `Effects0` seeds the update-effects accumulator with the originating
+%% callback's effects (the event/info/drain/patch that triggered this change).
+%% Any child whose props changed runs its handle_update/3 during the diff and
+%% folds its own effects onto the accumulator; the drained result is the full
+%% list to ship -- no caller-side concatenation.
 process_root_change(
     H,
     B1,
     Resets,
+    Effects0,
     #state{
         bindings = B0, snapshot = Snap0, views = V0, sent_fps = Fps0
     } = State
 ) ->
     Tmpl = arizona_stateful:call_render(H, B1),
     Changed = compute_changed(B0, B1),
+    ok = arizona_eval:set_update_effects(Effects0),
     {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
+    Effects1 = arizona_eval:drain_update_effects(),
     RemovedViews = #{K => V || K := V <- V0, not is_map_key(K, V1)},
     ok = unmount_removed_views(RemovedViews),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
-    {Ops1, Snap1, V1, B3, Fps1, State}.
+    {Ops1, Snap1, V1, B3, Fps1, State, Effects1}.
 
 %% Same idea as process_root_change/4 but for a nested child view.
 process_child_change(H, B1, Resets, ViewId, #{snapshot := Snap0} = View, #state{

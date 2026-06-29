@@ -10,7 +10,7 @@ section/row components in real apps.
 
 -export([mount/1]).
 -export([render/1]).
--export([handle_update/2]).
+-export([handle_update/3]).
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
@@ -30,9 +30,9 @@ mount(Bindings) ->
         #{}
     }.
 
--spec handle_update(az:bindings(), az:bindings()) -> az:handle_update_ret().
-handle_update(Props, Bindings) ->
-    {maps:merge(Bindings, Props), #{}}.
+-spec handle_update(az:bindings(), az:bindings(), az:effects()) -> az:handle_update_ret().
+handle_update(Props, Bindings, Effects) ->
+    {maps:merge(Bindings, Props), #{}, Effects}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->
