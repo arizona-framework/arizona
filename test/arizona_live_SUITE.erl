@@ -50,6 +50,9 @@
     live_navigate_resets_views/1,
     live_navigate_round_trip/1,
     live_navigate/1,
+    live_patch_default_merge/1,
+    live_patch_handle_update_effect/1,
+    live_patch_no_change_no_ops/1,
     live_navigate_between_different_ids/1,
     route_bindings_can_set_id_when_handler_accepts_it/1,
     live_navigate_then_event/1,
@@ -147,7 +150,10 @@ groups() ->
             live_navigate_then_event,
             live_navigate_resets_views,
             live_navigate_round_trip,
-            live_navigate_carries_root_bindings
+            live_navigate_carries_root_bindings,
+            live_patch_default_merge,
+            live_patch_handle_update_effect,
+            live_patch_no_change_no_ops
         ]},
         {handle_info, [parallel], [
             live_handle_info,
@@ -683,6 +689,42 @@ live_navigate(Config) when is_list(Config) ->
     ?assertEqual(<<"page">>, NewViewId),
     ?assertMatch(#{<<"f">> := _, <<"s">> := _, <<"d">> := _}, PageContent),
     ?assert(lists:member(<<"About">>, maps:get(<<"d">>, PageContent))).
+
+live_patch_default_merge(Config) when is_list(Config) ->
+    %% A view without handle_update/3: patch merges the params and re-renders
+    %% in place (an OP_TEXT diff, NOT a remount/OP_REPLACE), with no effects.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_root_counter, #{}, undefined, []
+    ),
+    {ok, <<"counter">>} = arizona_live:mount(Pid),
+    {ok, Ops, Effects} = arizona_live:patch(Pid, #{count => 7}),
+    ?assertMatch([[?OP_TEXT, _, <<"7">>]], Ops),
+    ?assertEqual([], Effects).
+
+live_patch_handle_update_effect(Config) when is_list(Config) ->
+    %% A view WITH handle_update/3: patch delivers params to it; it sets the
+    %% section and folds a set_title effect onto the accumulator, which rides
+    %% the patch reply. The root is diffed in place.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_patch_view, #{}, undefined, []
+    ),
+    {ok, <<"patchview">>} = arizona_live:mount(Pid),
+    {ok, Ops, Effects} = arizona_live:patch(Pid, #{section => <<"about">>}),
+    ?assertMatch([[?OP_TEXT, _, <<"about">>]], Ops),
+    %% op 14 = ?EFFECT_SET_TITLE (literal, matching this suite's effect assertions).
+    ?assertEqual([{arizona_effect, [14, <<"about">>]}], Effects).
+
+live_patch_no_change_no_ops(Config) when is_list(Config) ->
+    %% Patching with the value the view already holds yields no ops (the diff
+    %% skips the unchanged slot) -- proving a real in-place diff, not a
+    %% wholesale re-render. The handle_update effect still fires.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_patch_view, #{section => <<"home">>}, undefined, []
+    ),
+    {ok, <<"patchview">>} = arizona_live:mount(Pid),
+    {ok, Ops, Effects} = arizona_live:patch(Pid, #{section => <<"home">>}),
+    ?assertEqual([], Ops),
+    ?assertEqual([{arizona_effect, [14, <<"home">>]}], Effects).
 
 live_navigate_between_different_ids(Config) when is_list(Config) ->
     %% Regression: navigating between two route-level views that own

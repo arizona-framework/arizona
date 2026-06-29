@@ -68,6 +68,7 @@ fingerprints already shipped in the initial HTML.
 -export([stop/1]).
 -export([navigate/3]).
 -export([navigate/4]).
+-export([patch/2]).
 -export([handle_event/4]).
 -export([seed_fps/2]).
 -export([dedup_fps/2]).
@@ -380,6 +381,22 @@ navigate(Pid, NewHandler, InitBindings, OnMount) ->
     gen_server:call(Pid, {navigate, NewHandler, InitBindings, OnMount}, infinity).
 
 -doc """
+In-place SPA navigation (`patch`): keeps the current root view mounted and
+delivers `Params` to its `handle_update/3`, re-rendering through the diff
+instead of remounting. The root handler, view id, process, and child views
+all survive; only the changed slots produce ops. Returns the diff ops plus
+any effects the reaction emitted (`handle_update`'s, folded with children's).
+
+The caller (the socket) only invokes this when the patched route resolves to
+the *same* root handler; a different handler must go through `navigate/4`.
+""".
+-spec patch(Pid, Params) -> {ok, [arizona_diff:op()], [arizona_stateful:effect()]} when
+    Pid :: pid(),
+    Params :: map().
+patch(Pid, Params) ->
+    gen_server:call(Pid, {patch, Params}, infinity).
+
+-doc """
 Seeds the live process's `sent_fps` set with fingerprints already
 shipped to the client (typically by SSR). Subsequent diffs will strip
 statics for matching fingerprints.
@@ -511,6 +528,20 @@ handle_call(
         on_mount = NewOnMount,
         transport_pid = TPid,
         sent_fps = Fps1
+    }};
+handle_call({patch, Params}, _From, #state{handler = H, bindings = B0} = State) ->
+    %% In-place navigation: the root view stays mounted. Deliver Params to its
+    %% handle_update/3 (navigation as the root's prop source), then re-render
+    %% and diff against the live snapshot -- no unmount, no remount, no timer
+    %% cancel, no OP_REPLACE. The handler, view id, and child views all survive.
+    %% Mirrors handle_root_event, but the reaction is handle_update, and the
+    %% effect accumulator seeds empty (the patch is the originating action).
+    {B1, Resets, Effects} = arizona_stateful:call_handle_update(H, Params, B0, []),
+    {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
+        H, B1, Resets, Effects, State
+    ),
+    {reply, {ok, Ops1, Effects1}, NewState#state{
+        bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
     }}.
 
 handle_cast({seed_fps, FpList}, #state{sent_fps = Fps0} = State) ->

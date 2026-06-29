@@ -19,6 +19,8 @@
     http_path_bindings/1,
     ws_path_bindings/1,
     ws_navigate_to_parametrized_route/1,
+    ws_patch_same_handler_diffs_in_place/1,
+    ws_patch_different_handler_replaces/1,
     http_put_request_reads_request/1,
     middleware_cont_enriches_bindings/1,
     middleware_cont_ws_connects/1,
@@ -90,6 +92,8 @@ groups() ->
         http_path_bindings,
         ws_path_bindings,
         ws_navigate_to_parametrized_route,
+        ws_patch_same_handler_diffs_in_place,
+        ws_patch_different_handler_replaces,
         http_put_request_reads_request,
         middleware_cont_enriches_bindings,
         middleware_cont_ws_connects,
@@ -172,6 +176,12 @@ init_per_group(roadrunner, Config) ->
         {live, <<"/">>, arizona_crashable, #{
             middlewares => [arizona_middleware:extract([path_bindings, params])]
         }},
+        %% Two routes sharing a handler (arizona_patch_view) so a `patch` frame
+        %% between them is same-handler (patch in place); `/pv/other` is a
+        %% different handler so a patch to it falls back to a full navigate.
+        {live, <<"/pv/home">>, arizona_patch_view, #{bindings => #{section => <<"home">>}}},
+        {live, <<"/pv/about">>, arizona_patch_view, #{bindings => #{section => <<"about">>}}},
+        {live, <<"/pv/other">>, arizona_root_counter, #{}},
         {live, <<"/crash_on_mount">>, arizona_crashable, #{
             bindings => #{crash_on_mount => true}
         }},
@@ -464,6 +474,27 @@ ws_navigate_to_parametrized_route(Config) ->
     ]),
     {text, Resp} = ws_recv(Sock),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"navtest">>)),
+    ws_close(Sock).
+
+ws_patch_same_handler_diffs_in_place(Config) ->
+    %% A `patch` frame to a route resolving to the SAME handler keeps the view:
+    %% the reply is an in-place diff (OP_TEXT, op code 0), not an OP_REPLACE.
+    {ok, Sock} = ws_connect(Config, <<"/pv/home">>),
+    ok = ws_send_json(Sock, [~"patch", #{~"path" => ~"/pv/about", ~"qs" => ~""}]),
+    {text, Resp} = ws_recv(Sock),
+    #{~"o" := [[OpCode, _Target, Value] | _]} = json:decode(Resp),
+    ?assertEqual(0, OpCode),
+    ?assertEqual(~"about", Value),
+    ws_close(Sock).
+
+ws_patch_different_handler_replaces(Config) ->
+    %% A `patch` frame to a route resolving to a DIFFERENT handler can't keep the
+    %% view, so it falls back to a full navigate (OP_REPLACE, op code 8).
+    {ok, Sock} = ws_connect(Config, <<"/pv/home">>),
+    ok = ws_send_json(Sock, [~"patch", #{~"path" => ~"/pv/other", ~"qs" => ~""}]),
+    {text, Resp} = ws_recv(Sock),
+    #{~"o" := [[OpCode | _] | _]} = json:decode(Resp),
+    ?assertEqual(8, OpCode),
     ws_close(Sock).
 
 http_put_request_reads_request(Config) ->
