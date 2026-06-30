@@ -50,6 +50,7 @@ than silently dropped.
 -export([text_slot_open/1]).
 -export([text_slot_close/0]).
 -export([is_void/1]).
+-export([raw_text_kind/1]).
 -export([scope_static/2]).
 
 %% Full SGR reset (clears colour and every text style at once); io_ansi has no
@@ -162,6 +163,12 @@ text_slot_close() ->
 -spec is_void(atom()) -> boolean().
 is_void(br) -> true;
 is_void(_) -> false.
+
+-spec raw_text_kind(atom()) -> none | raw | escapable.
+raw_text_kind(_Tag) ->
+    %% Terminal output is plain styled text, not HTML -- no comment markers, so
+    %% the raw-text corruption does not apply.
+    none.
 
 -spec scope_static(binary(), binary()) -> binary().
 scope_static(_Fp, S0) ->

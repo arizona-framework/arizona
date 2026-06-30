@@ -36,6 +36,7 @@ form valid JSON.
 -export([text_slot_open/1]).
 -export([text_slot_close/0]).
 -export([is_void/1]).
+-export([raw_text_kind/1]).
 -export([scope_static/2]).
 
 -spec name(atom()) -> binary().
@@ -113,6 +114,12 @@ text_slot_close() ->
 -spec is_void(atom()) -> boolean().
 is_void(_Tag) ->
     false.
+
+-spec raw_text_kind(atom()) -> none | raw | escapable.
+raw_text_kind(_Tag) ->
+    %% The native wire is JSON, not HTML -- dynamic slots are `#slot` objects,
+    %% not comment markers, so the raw-text corruption does not apply.
+    none.
 
 -spec scope_static(binary(), binary()) -> binary().
 scope_static(Fp, S0) ->

@@ -49,6 +49,12 @@ Templates compiled with `az-nodiff` carry `diff => false` and dynamics
 with `Az = undefined`. The diff functions short-circuit on `diff => false`
 before ever inspecting individual dynamics, so `undefined` Az values
 never reach op-code targets.
+
+A diffable template can also carry an individual `Az = undefined` dynamic:
+a content slot inside a raw-text element (`script`/`style`/`textarea`/`title`),
+where HTML comment markers would become literal content. Such a slot is
+render-once -- `diff_dynamics/3` and `diff_dynamics_v/5` skip any `undefined`
+Az dynamic, so it is never re-evaluated and never produces an op.
 """.
 
 -include("arizona.hrl").
@@ -185,6 +191,10 @@ diff_dynamics(NewEvals, OldEvals) ->
 %% nesting level. `Tail` is the ops that follow these dynamics; order is preserved.
 diff_dynamics([], [], Tail) ->
     Tail;
+diff_dynamics([{undefined, _} | NR], [{undefined, _} | OR], Tail) ->
+    %% Markerless render-once slot (raw-text element content, or az-nodiff): no
+    %% comment marker to target, so never emit an op -- carry it forward as-is.
+    diff_dynamics(NR, OR, Tail);
 diff_dynamics([{Az, _} | NR], [{Az, #{diff := false}} | OR], Tail) ->
     diff_dynamics(NR, OR, Tail);
 diff_dynamics([{Az, Same} | NR], [{Az, Same} | OR], Tail) ->
@@ -194,6 +204,16 @@ diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail) ->
 
 diff_dynamics_v([], [], [], _Changed, Views) ->
     {[], [], [], Views};
+diff_dynamics_v(
+    [_Def | DR],
+    [{undefined, Old} | OR],
+    [ODeps | DepsR],
+    Changed,
+    Views0
+) ->
+    %% Markerless render-once slot (raw-text element content, or az-nodiff): no
+    %% comment marker to target, so skip it -- never re-evaluate, never emit an op.
+    skip_dynamic(undefined, Old, ODeps, DR, OR, DepsR, Changed, Views0);
 diff_dynamics_v(
     [_Def | DR],
     [{Az, #{diff := false} = Old} | OR],

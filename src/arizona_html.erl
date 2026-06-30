@@ -25,6 +25,7 @@ identical to the previous inlined emission.
 -export([text_slot_open/1]).
 -export([text_slot_close/0]).
 -export([is_void/1]).
+-export([raw_text_kind/1]).
 -export([scope_static/2]).
 
 -spec name(atom()) -> binary().
@@ -109,6 +110,17 @@ is_void(source) -> true;
 is_void(track) -> true;
 is_void(wbr) -> true;
 is_void(_) -> false.
+
+-spec raw_text_kind(atom()) -> none | raw | escapable.
+%% Raw-text elements: content is never parsed for comments or character
+%% references, so a dynamic slot must render verbatim and markerless.
+raw_text_kind(script) -> raw;
+raw_text_kind(style) -> raw;
+%% Escapable-raw-text elements: character references are decoded, so a scalar
+%% slot is HTML-escaped, but comments are still literal -- so still markerless.
+raw_text_kind(textarea) -> escapable;
+raw_text_kind(title) -> escapable;
+raw_text_kind(_) -> none.
 
 -spec scope_static(binary(), binary()) -> binary().
 scope_static(Fp, S0) ->
