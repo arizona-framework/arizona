@@ -40,7 +40,7 @@
     each_single_root_flag/1,
     each_multi_root_no_single_root_flag/1,
     each_stream_no_single_root_flag/1,
-    each_native_single_root_flag/1,
+    each_native_no_single_root_flag/1,
     stateless_with_atom_callback/1,
     stateless_with_fun_ref_callback/1,
     stateless_with_remote_fun_ref_callback/1,
@@ -440,7 +440,7 @@ groups() ->
             each_single_root_flag,
             each_multi_root_no_single_root_flag,
             each_stream_no_single_root_flag,
-            each_native_single_root_flag,
+            each_native_no_single_root_flag,
             stateless_with_atom_callback,
             stateless_with_fun_ref_callback,
             stateless_with_remote_fun_ref_callback
@@ -5175,16 +5175,14 @@ each_stream_no_single_root_flag(Config) when is_list(Config) ->
     Tmpl = maps:get(template, Result),
     ?assertEqual(undefined, maps:get(single_root, Tmpl, undefined)).
 
-%% A `?native` single-root list each IS flagged single_root -- the flag is a
-%% backend-agnostic structural fact (one root node per item), stamped the same for
-%% every target. The render target rides alongside it (`target => native`); the
-%% diff engine, not the parse transform, uses the target to gate the web-only
-%% `?OP_LIST_PATCH` (see arizona_diff:is_html_target/1 and the diff suite's
-%% diff_list_native_target_full_update). Contrast each_single_root_flag (html: the
-%% same single_root flag, no target key).
-each_native_single_root_flag(Config) when is_list(Config) ->
+%% A `?native` single-root list each is NOT flagged single_root: the gate is the
+%% backend's `supports_list_patch/0` callback (asked at compile time), and
+%% arizona_native returns false because no native client implements `?OP_LIST_PATCH`
+%% -- so a native list each keeps the wholesale path. Contrast each_single_root_flag
+%% (html: supports_list_patch/0 is true -> single_root).
+each_native_no_single_root_flag(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_each_native_sr). "
+        "-module(pt_each_native_gate). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:native_each(fun(Item) -> "
@@ -5193,8 +5191,7 @@ each_native_single_root_flag(Config) when is_list(Config) ->
     ),
     Result = Mod:render(#{items => [#{name => <<"a">>}]}),
     Tmpl = maps:get(template, Result),
-    ?assertEqual(true, maps:get(single_root, Tmpl, undefined)),
-    ?assertEqual(native, maps:get(target, Tmpl, undefined)).
+    ?assertEqual(undefined, maps:get(single_root, Tmpl, undefined)).
 
 %% Test 112: az:each nested inside az:html.
 az_each_inside_html(Config) when is_list(Config) ->

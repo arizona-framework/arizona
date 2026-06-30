@@ -38,6 +38,7 @@ form valid JSON.
 -export([is_void/1]).
 -export([raw_text_kind/1]).
 -export([scope_static/2]).
+-export([supports_list_patch/0]).
 
 -spec name(atom()) -> binary().
 name(Atom) ->
@@ -124,6 +125,10 @@ raw_text_kind(_Tag) ->
 -spec scope_static(binary(), binary()) -> binary().
 scope_static(Fp, S0) ->
     binary:replace(S0, <<"\"az\":\"">>, <<"\"az\":\"", Fp/binary, "-">>, [global]).
+
+%% The native (`?native`) client does not implement `?OP_LIST_PATCH`; single-root
+%% list eachs keep the wholesale re-render it already handles.
+supports_list_patch() -> false.
 
 %% --------------------------------------------------------------------
 %% Internal functions

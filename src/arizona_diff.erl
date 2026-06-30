@@ -497,17 +497,14 @@ diff_list(Az, #{source := Items, template := Tmpl}, #{items := OldItemsList}, Vi
     %% Positional per-item patching is sound only when (a) the old slot already
     %% held a list (so positions line up with the live DOM), (b) each item is a
     %% single root element (compile-time `single_root` => DOM position N == item N
-    %% between the slot's `<!--az:X-->...<!--/az-->` markers), (c) the render
-    %% target's client implements `?OP_LIST_PATCH` -- only the web (html) client
-    %% does, so native/terminal keep the wholesale re-render their clients handle --
-    %% and (d) this list rendered no per-item child view (a `?stateful`/`?stateless`
-    %% child must be re-mounted by a full re-render -- the existing unsupported
-    %% case, preserved; detected by the child-view accumulator growing across
-    %% render_list_items). Otherwise the wholesale marker re-render is correct.
+    %% between the slot's `<!--az:X-->...<!--/az-->` markers), and (c) this list
+    %% rendered no per-item child view (a `?stateful`/`?stateless` child must be
+    %% re-mounted by a full re-render -- the existing unsupported case, preserved;
+    %% detected by the child-view accumulator growing across render_list_items).
+    %% Otherwise the wholesale marker re-render is the only correct patch.
     Patchable =
         is_list(OldItemsList) andalso
             is_single_root(Tmpl) andalso
-            is_html_target(Tmpl) andalso
             map_size(NewLocal1) =:= map_size(NewLocal0),
     case Patchable of
         true ->
@@ -525,11 +522,6 @@ diff_list(Az, #{source := Items, template := Tmpl}, #{items := OldItemsList}, Vi
 
 is_single_root(#{single_root := true}) -> true;
 is_single_root(#{}) -> false.
-
-%% `?OP_LIST_PATCH` (positional plain-list diffing) is implemented only by the web
-%% (html) client; `?native`/terminal clients fall back to the wholesale `?OP_TEXT`
-%% re-render. The render target rides on the item template (absent => html).
-is_html_target(Tmpl) -> maps:get(target, Tmpl, html) =:= html.
 
 %% Wholesale fallback: a non-single-root (multi-root/fragment) item, a list
 %% bearing per-item child views, or a slot that previously held a non-list.

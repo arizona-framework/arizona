@@ -52,6 +52,7 @@ than silently dropped.
 -export([is_void/1]).
 -export([raw_text_kind/1]).
 -export([scope_static/2]).
+-export([supports_list_patch/0]).
 
 %% Full SGR reset (clears colour and every text style at once); io_ansi has no
 %% whole-reset helper, only per-attribute `*_off` and `default_color`.
@@ -174,6 +175,10 @@ raw_text_kind(_Tag) ->
 scope_static(_Fp, S0) ->
     %% No az references live in terminal statics, so there is nothing to scope.
     S0.
+
+%% The terminal client does not implement `?OP_LIST_PATCH`; single-root list eachs
+%% keep the wholesale re-render.
+supports_list_patch() -> false.
 
 %% --------------------------------------------------------------------
 %% Internal functions
