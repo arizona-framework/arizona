@@ -510,8 +510,22 @@ function applyTextOp(el, az, val, isHtml) {
         forEachElementBetweenMarkers(marker, mountHooks);
     } else {
         destroyChildHooks(el);
-        if (isHtml) el.innerHTML = val;
-        else el.textContent = val;
+        if (isHtml) {
+            el.innerHTML = val;
+        } else {
+            // In-place when the element holds exactly one text node: `textContent =`
+            // would remove + reinsert it (childList churn), and that forces a layout
+            // recompute that reverts an in-progress scroll on WebKitGTK (it has no
+            // CSS scroll anchoring). Writing the text node's data directly does not.
+            // Mirrors updateLoneTextNode for the marker path. This is the per-tick hot
+            // path for a single-value element (e.g. a live stat/price span).
+            const child = el.firstChild;
+            if (child && child.nodeType === 3 && !child.nextSibling) {
+                /** @type {Text} */ (child).data = val;
+            } else {
+                el.textContent = val;
+            }
+        }
     }
     notifyUpdated(el);
 }
@@ -656,6 +670,37 @@ function findMarker(el, az) {
 }
 
 /**
+ * If the slot between `startMarker` and its `<!--/az-->` already holds exactly one
+ * text node, update it in place (`node.data = value`, a characterData write) and
+ * return true. The reason this matters: a childList remove+insert of the text node
+ * forces a layout recompute, and WebKitGTK reverts an IN-PROGRESS / uncommitted
+ * scroll offset to a remembered position when that happens (it implements no CSS
+ * scroll anchoring; Chromium/Firefox do not exhibit this). So a live per-tick text
+ * update -- the common case -- would yank a user who is mid-scroll backward. An
+ * in-place data write carries no such side effect and is also cheaper. Returns
+ * false when the slot is not a lone text node (empty, an HTML fragment, or several
+ * nodes), so callers fall back to the general remove+insert path.
+ * @param {Comment} startMarker
+ * @param {string} value
+ * @returns {boolean}
+ */
+function updateLoneTextNode(startMarker, value) {
+    const first = startMarker.nextSibling;
+    const after = first?.nextSibling;
+    if (
+        first &&
+        first.nodeType === 3 &&
+        after &&
+        after.nodeType === 8 &&
+        /** @type {Comment} */ (after).data === '/az'
+    ) {
+        /** @type {Text} */ (first).data = value;
+        return true;
+    }
+    return false;
+}
+
+/**
  * Replace everything between <!--az:X--> and <!--/az--> with new content.
  * `isHtml` (carried on the op by the worker) selects the renderer: a <template> that
  * parses tags for an HTML fragment (nested template, plain-list `?each`, or a `?raw`
@@ -668,6 +713,9 @@ function findMarker(el, az) {
  */
 function updateMarkerContent(startMarker, value, isHtml) {
     const doc = startMarker.ownerDocument;
+    // Scalar fast path: a lone text node is updated in place (no childList churn,
+    // which would revert an in-progress scroll on WebKitGTK -- see updateLoneTextNode).
+    if (!isHtml && updateLoneTextNode(startMarker, value)) return;
     let node = startMarker.nextSibling;
     while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
         const next = node.nextSibling;
@@ -699,13 +747,17 @@ function updateMarkerContent(startMarker, value, isHtml) {
  * @param {*} value
  */
 function setMarkerText(startMarker, value) {
+    const str = value == null ? '' : String(value);
+    // Same in-place fast path as updateMarkerContent: avoid childList churn that
+    // reverts an in-progress scroll on WebKitGTK (see updateLoneTextNode).
+    if (updateLoneTextNode(startMarker, str)) return;
     let node = startMarker.nextSibling;
     while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
         const next = node.nextSibling;
         node.remove();
         node = next;
     }
-    startMarker.after(startMarker.ownerDocument.createTextNode(value == null ? '' : String(value)));
+    startMarker.after(startMarker.ownerDocument.createTextNode(str));
 }
 
 /**

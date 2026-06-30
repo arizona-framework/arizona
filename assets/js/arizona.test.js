@@ -212,6 +212,20 @@ describe('applyOps -- OP.TEXT', () => {
         expect(resolveEl('v:0').textContent).toBe('new');
     });
 
+    // A single-value element (e.g. a live stat/price span) updates its lone text
+    // node in place rather than via `textContent =` (which removes + reinserts it).
+    // The childList churn would revert an in-progress scroll on WebKitGTK; an
+    // in-place data write does not. Same node identity proves no childList churn.
+    it('updates a simple element in place when it holds one text node', () => {
+        setupView('v', '<span az="0">old</span>');
+        const el = resolveEl('v:0');
+        const textNode = el.firstChild;
+        expect(textNode.nodeType).toBe(3);
+        applyOps([[OP.TEXT, 'v:0', 'new']]);
+        expect(el.firstChild).toBe(textNode); // reused in place
+        expect(el.firstChild.data).toBe('new');
+    });
+
     it('updates content between comment markers', () => {
         setupView('v', '<span az="0"><!--az:0-->old<!--/az--></span>');
         applyOps([[OP.TEXT, 'v:0', 'new']]);
@@ -265,6 +279,37 @@ describe('applyOps -- OP.TEXT', () => {
         // text `<b>x</b>`; a raw text node shows the same literal text. Both agree.
         expect(resolveEl('v:0').textContent).toBe('<b>x</b>');
         expect(resolveEl('v:0').querySelector('b')).toBeNull();
+    });
+
+    // A scalar text update reuses the existing text node IN PLACE (characterData)
+    // rather than removing + inserting it. A childList remove+insert forces a layout
+    // recompute that makes WebKitGTK revert an in-progress scroll to a remembered
+    // offset (no scroll anchoring); an in-place data write does not. Same node
+    // identity across the update proves there was no childList churn.
+    it('updates a lone text node in place (no childList churn) for a scalar value', () => {
+        setupView('v', '<span az="0"><!--az:0-->old<!--/az--></span>');
+        const el = resolveEl('v:0');
+        const textNode = el.childNodes[1]; // [<!--az:0-->, "old", <!--/az-->]
+        expect(textNode.nodeType).toBe(3);
+        applyOps([[OP.TEXT, 'v:0', 'new']]);
+        expect(el.childNodes[1]).toBe(textNode); // same node, reused
+        expect(el.childNodes[1].data).toBe('new');
+    });
+
+    it('falls back to inserting a text node when the slot was empty', () => {
+        setupView('v', '<span az="0"><!--az:0--><!--/az--></span>');
+        applyOps([[OP.TEXT, 'v:0', 'hello']]);
+        expect(resolveEl('v:0').textContent).toBe('hello');
+    });
+
+    // HTML -> scalar transition: the slot held an element, so the in-place fast path
+    // must NOT apply; the element is removed and replaced by a literal text node.
+    it('replaces an HTML fragment with a scalar text node (no in-place reuse)', () => {
+        setupView('v', '<div az="0"><!--az:0--><b>bold</b><!--/az--></div>');
+        applyOps([[OP.TEXT, 'v:0', 'plain']]);
+        const el = resolveEl('v:0');
+        expect(el.querySelector('b')).toBeNull();
+        expect(el.textContent).toBe('plain');
     });
 });
 
