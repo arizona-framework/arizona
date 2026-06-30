@@ -141,6 +141,7 @@ render(Bindings) ->
     s := [binary()],
     d := fun((term()) -> [dynamic()]) | fun((term(), term()) -> [dynamic()]),
     f := binary(),
+    single_root => true,
     target => html | native | terminal
 }.
 

@@ -173,8 +173,9 @@ inject_each_callback_suppressions(Forms, OrigForms, FunDefs, Module) ->
     end.
 
 %% Scan the original forms (pre-mark_targets, so every ?each is still spelled `each`
-%% -- mark_targets only renames nested each to native_each/terminal_each and never
-%% touches the fun argument) for local `fun Name/Arity` (and same-module
+%% -- mark_targets renames nested each to native_each/terminal_each and unwraps an
+%% inline `?html`/`?native`/`?terminal` callback body, but never rewrites a
+%% `fun Name/Arity` reference) for local `fun Name/Arity` (and same-module
 %% `fun ?MODULE:Name/Arity`) callbacks. Returns the deduped pairs defined in this module.
 collect_each_callback_pairs(Forms, FunDefs, Module) ->
     Pairs = each_callback_pairs(Forms, #{}, Module),
@@ -222,17 +223,23 @@ is_module_attr({attribute, _, module, _}) -> true;
 is_module_attr(_) -> false.
 
 %% Top-down pre-pass threading the enclosing render target `Ctx` (`none` outside
-%% any template, else `html` | `native` | `terminal`). Two jobs:
+%% any template, else `html` | `native` | `terminal`). Three jobs:
 %%
 %%   1. A single `?each` serves every target. Inside a `?native(...)` each nested
 %%      `?each` is rewritten to the internal `native_each`, and inside a
 %%      `?terminal(...)` to `terminal_each`, so the bottom-up transform compiles it
-%%      with the matching backend. `?each` under `?html` (or standalone) is left
-%%      untouched.
+%%      with the matching backend. `?each` under `?html` (or standalone) keeps the
+%%      `each` name (default `arizona_html` backend).
 %%   2. Reject inline cross-target nesting: any target macro literally inside a
 %%      different one (e.g. `?html(...)` in `?native(...)`) would mix incompatible
 %%      statics in one tree. Caught here as a compile error instead of corrupting
 %%      the output at runtime.
+%%   3. Unwrap a whole-body backend wrapper in an `?each` INLINE callback
+%%      (`fun(I) -> ?html({li,...}) end` -> `fun(I) -> {li,...} end`) before the
+%%      bottom-up transform pre-compiles the inner wrapper to a map. This routes
+%%      the body through `compile_each_clause`'s `{element, Inner}` path (like a
+%%      bare/named-ref body), so a single-root item keeps its `single_root` flag.
+%%      See `unwrap_each_body/2`.
 %%
 %% Each target call resets `Ctx` for its own argument, so sibling targets (e.g. a
 %% dual-serve render with `?html` and `?native` in different clauses) are fine --
@@ -271,14 +278,26 @@ mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, n
 ->
     {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native_each}}, [
         mark_targets(A, native)
-     || A <- Args
+     || A <- unwrap_each_body(Args, native)
     ]};
 mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, terminal) when
     Mod =:= arizona_template orelse Mod =:= az
 ->
     {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, terminal_each}}, [
         mark_targets(A, terminal)
-     || A <- Args
+     || A <- unwrap_each_body(Args, terminal)
+    ]};
+%% `?each` under `?html` (or standalone -- `none`) keeps the name `each` (the
+%% bottom-up transform compiles it with the default `arizona_html` backend), but
+%% we still unwrap an inline `?html(...)` callback body here. The guard lets any
+%% other (future) `Ctx` fall through to the generic tuple recursion below.
+mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, Ctx) when
+    (Mod =:= arizona_template orelse Mod =:= az) andalso
+        (Ctx =:= html orelse Ctx =:= none)
+->
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, [
+        mark_targets(A, Ctx)
+     || A <- unwrap_each_body(Args, html)
     ]};
 mark_targets(Node, Ctx) when is_tuple(Node) ->
     list_to_tuple([mark_targets(E, Ctx) || E <- tuple_to_list(Node)]);
@@ -286,6 +305,37 @@ mark_targets(Nodes, Ctx) when is_list(Nodes) ->
     [mark_targets(E, Ctx) || E <- Nodes];
 mark_targets(Node, _Ctx) ->
     Node.
+
+%% Unwrap a whole-body backend wrapper (`?html`/`?native`/`?terminal`, spelled
+%% `Wrapper`) in an each's INLINE single-clause callback: rewrite the body's last
+%% expr `Wrapper(Inner)` to the bare `Inner` element. This MUST run in the
+%% top-down pre-pass, before the bottom-up transform compiles that inner wrapper
+%% to a template-map literal. An unwrapped bare element then reaches
+%% `compile_each_clause` via the `{element, Inner}` path -- exactly as a bare-body
+%% or named-fun-ref body does -- so a single-root item is classified and gets
+%% `single_root => true` (positional diffing). Without this, an inline
+%% `fun(U) -> ?html({li,...}) end` is pre-compiled to `{compiled, Map}`, which
+%% skips classification and silently drops the flag (wholesale re-render instead).
+%% Only the first arg, and only an inline fun, is touched; a `fun Name/Arity` ref
+%% (resolved from its untransformed clause) or a non-fun arg is left unchanged, so
+%% the named-ref and bare paths are unaffected. The unwrap mirrors
+%% `each_body_unwrap/2`'s `{element, Inner}` clause for the not-yet-compiled call.
+unwrap_each_body([{'fun', FL, {clauses, [{clause, CL, Vars, Guards, Body}]}} | Rest], Wrapper) ->
+    NewBody = unwrap_last_wrapper(Body, Wrapper),
+    [{'fun', FL, {clauses, [{clause, CL, Vars, Guards, NewBody}]}} | Rest];
+unwrap_each_body(Args, _Wrapper) ->
+    Args.
+
+unwrap_last_wrapper(Body, Wrapper) ->
+    {Prefix, Last} = split_fun_body(Body),
+    case Last of
+        {call, _, {remote, _, {atom, _, Mod}, {atom, _, Wrapper}}, [Inner]} when
+            Mod =:= arizona_template orelse Mod =:= az
+        ->
+            Prefix ++ [Inner];
+        _ ->
+            Body
+    end.
 
 -doc """
 Formats parse transform error reasons into human-readable messages.
@@ -1228,14 +1278,26 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend) 
         {compiled, Map} ->
             build_each_from_compiled(Line, SourceAST, Vars, Guards, Prefix, Map);
         {element, ElemAST} ->
-            ok = validate_each_body(Kind, classify_body(ElemAST), ElemAST),
+            Classification = classify_body(ElemAST),
+            ok = validate_each_body(Kind, Classification, ElemAST),
             {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
                 ElemAST, Module, false, Backend
             ),
-            Opts = maybe_target_opt(Backend, Opts0),
+            Opts1 = maybe_target_opt(Backend, Opts0),
+            Opts = maybe_single_root_opt(Kind, Classification, Opts1),
             {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(Line, SourceAST, Vars, Guards, Prefix, S1, D1, Fingerprint, Opts)
     end.
+
+%% A single-root list item (one top-level element per item, the `element_tuple`
+%% classification) lets the diff address items by DOM-order position between the
+%% slot's `<!--az:X-->...<!--/az-->` markers -- so a content change patches items
+%% in place (?OP_LIST_PATCH) instead of re-rendering the whole list, which churns
+%% childList and reverts an in-progress scroll on WebKit. Multi-root/fragment
+%% items have no unambiguous per-position DOM node, and stream items are keyed by
+%% `az-key`, so neither gets the flag (they keep the wholesale re-render path).
+maybe_single_root_opt(list, element_tuple, Opts) -> Opts#{single_root => true};
+maybe_single_root_opt(_Kind, _Classification, Opts) -> Opts.
 
 %% Classify an ?each callback's last expr. A whole-body backend wrapper call
 %% (`?html`/`?native`/`?terminal` matching this each's `Backend`) unwraps to the element it

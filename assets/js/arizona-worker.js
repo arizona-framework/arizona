@@ -24,6 +24,7 @@ const OP_UPDATE = 3;
 const OP_INSERT = 5;
 const OP_ITEM_PATCH = 7;
 const OP_REPLACE = 8;
+const OP_LIST_PATCH = 10;
 
 const SYS_PING = '0';
 const SYS_PONG = '1';
@@ -163,6 +164,15 @@ function resolveOps(ops) {
                 break;
             case OP_ITEM_PATCH:
                 resolveOps(op[3]);
+                break;
+            case OP_LIST_PATCH:
+                // Positional plain-list patch: resolve each sub-op's payload.
+                // ITEM_PATCH carries inner ops at [2] (vs [3] for the keyed
+                // stream form -- no key); INSERT carries item HTML at [2].
+                for (const sub of op[2]) {
+                    if (sub[0] === OP_ITEM_PATCH) resolveOps(sub[2]);
+                    else if (sub[0] === OP_INSERT) sub[2] = resolveHtml(sub[2]);
+                }
                 break;
         }
     }

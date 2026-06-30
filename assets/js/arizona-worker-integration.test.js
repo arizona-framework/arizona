@@ -312,6 +312,36 @@ describe('arizona-worker', () => {
         expect(resolved[1][0][3][3][3][0][2]).toBe('nested-text');
     });
 
+    it('LIST_PATCH op resolves each sub-op payload (ITEM_PATCH inner ops + INSERT html)', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        const msg = {
+            o: [
+                [
+                    10,
+                    'v:0',
+                    [
+                        [7, 0, [[0, 'v:0', 'patch-text']]],
+                        // INSERT carries item HTML at sub[2] (vs [4] for the keyed
+                        // stream form). A {raw} object proves resolveHtml ran.
+                        [5, 2, { raw: '<li>new</li>' }],
+                        [6, 1],
+                    ],
+                ],
+            ],
+        };
+        ws.latest().simulateMessage(JSON.stringify(msg));
+        const resolved = slf.posted.find((m) => m[0] === 0);
+        const subOps = resolved[1][0][2];
+        // ITEM_PATCH inner OP_TEXT resolved + isHtml-flagged (bare string -> false).
+        expect(subOps[0][2][0]).toEqual([0, 'v:0', 'patch-text', false]);
+        // INSERT object payload resolved to a string in place at sub[2].
+        expect(subOps[1][2]).toBe('<li>new</li>');
+        // REMOVE sub-op has no payload to resolve and is left intact.
+        expect(subOps[2]).toEqual([6, 1]);
+    });
+
     it('OP_REPLACE op is resolved', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();

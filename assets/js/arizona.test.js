@@ -1252,6 +1252,154 @@ describe('resolveEl -- edge cases', () => {
 });
 
 // ---------------------------------------------------------------------------
+// applyOps -- OP.LIST_PATCH (single-root plain-list ?each, positional patch)
+//
+// A content patch must NOT churn the container's childList -- that reverts an
+// in-progress scroll on WebKit. Item <li> node identity across the patch proves
+// no remove+insert happened. Items are addressed by DOM-order position between
+// the slot's <!--az:0-->...<!--/az--> markers (no az-key -- plain lists are
+// unkeyed). Sub-ops: [ITEM_PATCH, idx, innerOps] | [REMOVE, idx] | [INSERT, idx, html].
+// ---------------------------------------------------------------------------
+
+describe('applyOps -- OP.LIST_PATCH (plain-list positional patch)', () => {
+    function setupList() {
+        setupView(
+            'v',
+            '<ul az="0"><!--az:0-->' +
+                '<li az="r"><!--az:r-->item0<!--/az--></li>' +
+                '<li az="r"><!--az:r-->item1<!--/az--></li>' +
+                '<li az="r"><!--az:r-->item2<!--/az--></li>' +
+                '<!--/az--></ul>',
+        );
+        return document.querySelector('ul');
+    }
+
+    it('patches a middle item in place; container childList unchanged', () => {
+        const ul = setupList();
+        const lis = Array.from(ul.querySelectorAll('li'));
+        applyOps([[OP.LIST_PATCH, 'v:0', [[OP.ITEM_PATCH, 1, [[OP.TEXT, 'r', 'UPDATED']]]]]]);
+        const after = Array.from(ul.querySelectorAll('li'));
+        expect(after[0]).toBe(lis[0]); // same node
+        expect(after[1]).toBe(lis[1]); // same node, patched in place
+        expect(after[2]).toBe(lis[2]); // same node
+        expect(lis[1].textContent).toBe('UPDATED');
+        expect(lis[0].textContent).toBe('item0');
+        expect(lis[2].textContent).toBe('item2');
+    });
+
+    it('patches the inner text node in place (characterData, no childList)', () => {
+        const ul = setupList();
+        const li1 = ul.querySelectorAll('li')[1];
+        const textNode = li1.childNodes[1]; // [<!--az:r-->, "item1", <!--/az-->]
+        expect(textNode.nodeType).toBe(3);
+        applyOps([[OP.LIST_PATCH, 'v:0', [[OP.ITEM_PATCH, 1, [[OP.TEXT, 'r', 'new']]]]]]);
+        expect(li1.childNodes[1]).toBe(textNode); // same text node reused
+        expect(textNode.data).toBe('new');
+    });
+
+    it('patches several items in one batch, all in place', () => {
+        const ul = setupList();
+        const lis = Array.from(ul.querySelectorAll('li'));
+        applyOps([
+            [
+                OP.LIST_PATCH,
+                'v:0',
+                [
+                    [OP.ITEM_PATCH, 0, [[OP.TEXT, 'r', 'X']]],
+                    [OP.ITEM_PATCH, 2, [[OP.TEXT, 'r', 'Z']]],
+                ],
+            ],
+        ]);
+        const after = Array.from(ul.querySelectorAll('li'));
+        expect(after[0]).toBe(lis[0]);
+        expect(after[1]).toBe(lis[1]);
+        expect(after[2]).toBe(lis[2]);
+        expect(lis[0].textContent).toBe('X');
+        expect(lis[1].textContent).toBe('item1');
+        expect(lis[2].textContent).toBe('Z');
+    });
+
+    it('appends a new item via INSERT before the end marker', () => {
+        const ul = setupList();
+        const lis = Array.from(ul.querySelectorAll('li'));
+        applyOps([
+            [OP.LIST_PATCH, 'v:0', [[OP.INSERT, 3, '<li az="r"><!--az:r-->item3<!--/az--></li>']]],
+        ]);
+        const after = Array.from(ul.querySelectorAll('li'));
+        expect(after.length).toBe(4);
+        expect(after[0]).toBe(lis[0]); // existing nodes reused
+        expect(after[1]).toBe(lis[1]);
+        expect(after[2]).toBe(lis[2]);
+        expect(after[3].textContent).toBe('item3');
+        expect(after[3].nextSibling.nodeType).toBe(8); // inserted before <!--/az-->
+    });
+
+    it('removes a tail item via REMOVE, keeping the survivors', () => {
+        const ul = setupList();
+        const lis = Array.from(ul.querySelectorAll('li'));
+        applyOps([[OP.LIST_PATCH, 'v:0', [[OP.REMOVE, 2]]]]);
+        const after = Array.from(ul.querySelectorAll('li'));
+        expect(after.length).toBe(2);
+        expect(after[0]).toBe(lis[0]);
+        expect(after[1]).toBe(lis[1]);
+        expect(lis[2].isConnected).toBe(false);
+    });
+
+    it('combines a content patch with a tail insert (middle-insert shape)', () => {
+        // [a,c] -> [a,x,c]: patch index 1 (c->x) + insert index 2 (c).
+        setupView(
+            'v',
+            '<ul az="0"><!--az:0-->' +
+                '<li az="r"><!--az:r-->a<!--/az--></li>' +
+                '<li az="r"><!--az:r-->c<!--/az--></li>' +
+                '<!--/az--></ul>',
+        );
+        const ul = document.querySelector('ul');
+        const lis = Array.from(ul.querySelectorAll('li'));
+        applyOps([
+            [
+                OP.LIST_PATCH,
+                'v:0',
+                [
+                    [OP.ITEM_PATCH, 1, [[OP.TEXT, 'r', 'x']]],
+                    [OP.INSERT, 2, '<li az="r"><!--az:r-->c<!--/az--></li>'],
+                ],
+            ],
+        ]);
+        const after = Array.from(ul.querySelectorAll('li'));
+        expect(after.map((li) => li.textContent)).toEqual(['a', 'x', 'c']);
+        expect(after[0]).toBe(lis[0]); // reused
+        expect(after[1]).toBe(lis[1]); // reused, content rewritten in place
+    });
+
+    it('fires hook updated() on the patched item, not mounted()', () => {
+        setupView(
+            'v',
+            '<ul az="0"><!--az:0-->' +
+                '<li az="r" az-hook="Row"><!--az:r-->x<!--/az--></li>' +
+                '<!--/az--></ul>',
+        );
+        const mounted = vi.fn();
+        const updated = vi.fn();
+        hooks.Row = { mounted, updated };
+        mountHooks(document);
+        mounted.mockClear();
+        applyOps([[OP.LIST_PATCH, 'v:0', [[OP.ITEM_PATCH, 0, [[OP.TEXT, 'r', 'y']]]]]]);
+        expect(mounted).not.toHaveBeenCalled();
+        expect(updated).toHaveBeenCalled();
+    });
+
+    it('warns and is a no-op when the slot marker is missing', () => {
+        const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        setupView('v', '<ul az="0"><li az="r">x</li></ul>'); // no markers
+        applyOps([[OP.LIST_PATCH, 'v:0', [[OP.ITEM_PATCH, 0, [[OP.TEXT, 'r', 'y']]]]]]);
+        expect(resolveEl('v:0').querySelector('li').textContent).toBe('x');
+        expect(spy).toHaveBeenCalled();
+        spy.mockRestore();
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 16. applyOps -- OP.TEXT edge cases
 // ---------------------------------------------------------------------------
 

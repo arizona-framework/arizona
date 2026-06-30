@@ -45,6 +45,7 @@ const OP = {
     ITEM_PATCH: 7,
     REPLACE: 8,
     MOVE: 9,
+    LIST_PATCH: 10,
 };
 
 /** Worker protocol opcodes -- must match arizona-worker.js. */
@@ -568,6 +569,18 @@ function applyUpdateOp(el, html) {
 }
 
 /**
+ * Remove an element from the DOM, running its hook teardown first. The canonical
+ * destroy+remove used by every node removal (diff `OP_REMOVE_NODE`, stream
+ * `OP_REMOVE`, and plain-list `OP_LIST_PATCH` item removal) so teardown can never
+ * be skipped.
+ * @param {Element} el
+ */
+function removeEl(el) {
+    destroyHooks(el);
+    el.remove();
+}
+
+/**
  * Apply a batch of ops to the DOM. Ops arrive pre-resolved from the Worker --
  * all template payloads are already HTML strings. A view transition, when one is
  * pending, wraps this call (plus the message's effects) at the message handler,
@@ -602,8 +615,7 @@ function applyOps(ops) {
                 break;
             }
             case OP.REMOVE_NODE:
-                destroyHooks(el);
-                el.remove();
+                removeEl(el);
                 break;
             case OP.INSERT:
                 insertItem(op[1], op[2], op[3], op[4]);
@@ -616,6 +628,9 @@ function applyOps(ops) {
                 break;
             case OP.MOVE:
                 moveItem(op[1], op[2], op[3]);
+                break;
+            case OP.LIST_PATCH:
+                applyListPatch(el, az, op[2]);
                 break;
         }
     }
@@ -978,8 +993,7 @@ function removeItemEl(el, key) {
         console.warn(`[arizona] stream item az-key="${key}" not found for remove`);
         return;
     }
-    destroyHooks(item);
-    item.remove();
+    removeEl(item);
 }
 
 /**
@@ -1105,10 +1119,7 @@ function applyItemOps(item, innerOps) {
                 break;
             case OP.REMOVE_NODE: {
                 const innerEl = item.querySelector(`[az="${az}"]`);
-                if (innerEl) {
-                    destroyHooks(innerEl);
-                    innerEl.remove();
-                }
+                if (innerEl) removeEl(innerEl);
                 break;
             }
             case OP.INSERT:
@@ -1123,8 +1134,72 @@ function applyItemOps(item, innerOps) {
             case OP.MOVE:
                 moveItemEl(resolveInnerEl(item, az), op[2], op[3]);
                 break;
+            case OP.LIST_PATCH:
+                applyListPatch(resolveInnerEl(item, az), az, op[2]);
+                break;
         }
     }
+}
+
+/**
+ * Apply a LIST_PATCH op: positional in-place patch of a single-root plain-list
+ * `?each` slot. Unlike a stream (keyed by `az-key`), plain-list items are
+ * addressed by DOM-order position between the slot's `<!--az:X-->...<!--/az-->`
+ * markers. We snapshot the item element-roots ONCE up front, so a batch of
+ * sub-ops can reference stable positions regardless of order, and a content
+ * patch never touches the container's `childList` (which would revert an
+ * in-progress scroll on WebKit -- the whole point). Sub-ops:
+ *   [OP.ITEM_PATCH, idx, innerOps] -- patch item `idx` in place (no childList)
+ *   [OP.REMOVE,     idx]           -- remove item `idx`
+ *   [OP.INSERT,     idx, html]     -- insert a new item at position `idx` (before
+ *                                     the item currently there, else the end
+ *                                     marker -- the server only inserts at the tail)
+ * @param {Element} el -- the element holding the slot markers
+ * @param {string} az -- the slot's az (marker id)
+ * @param {Array<Array<*>>} subOps
+ */
+function applyListPatch(el, az, subOps) {
+    const marker = findMarker(el, az);
+    if (!marker) {
+        console.warn(`[arizona] list-patch slot marker az:${az} not found`);
+        return;
+    }
+    // Snapshot the item roots (Element children) and locate the end marker.
+    const roots = [];
+    let node = marker.nextSibling;
+    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
+        if (node.nodeType === 1) roots.push(/** @type {Element} */ (node));
+        node = node.nextSibling;
+    }
+    const endMarker = node;
+    for (const sub of subOps) {
+        switch (sub[0]) {
+            case OP.ITEM_PATCH: {
+                const item = roots[sub[1]];
+                if (item) applyItemOps(item, sub[2]);
+                break;
+            }
+            case OP.REMOVE: {
+                const item = roots[sub[1]];
+                if (item) removeEl(item);
+                break;
+            }
+            case OP.INSERT: {
+                const tpl = el.ownerDocument.createElement('template');
+                tpl.innerHTML = sub[2];
+                const added = Array.from(tpl.content.children);
+                // Insert at position idx -- before the item currently there, or the
+                // end marker for a tail insert (the server only inserts at the tail,
+                // but honoring idx keeps this correct for any sub-op ordering).
+                const ref = roots[sub[1]] ?? endMarker;
+                if (ref) ref.before(tpl.content);
+                else marker.after(tpl.content);
+                for (const e of added) mountHooks(e);
+                break;
+            }
+        }
+    }
+    notifyUpdated(el);
 }
 
 /**

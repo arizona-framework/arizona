@@ -421,20 +421,19 @@ flatten_ops(ViewId, [Op | Rest]) ->
 %% produced by `flatten_ops/2` and emits the JSON array with the scoped
 %% target inline as iodata. ViewId and Az are known safe (alphanumeric
 %% + dash + colon), so we can skip `json:escape_binary/5` on them.
-%% Op codes are bounded 0..9 (see `?OP_*` in `arizona.hrl`) so the
-%% binary form is just `OpCode + $0` -- skips an `integer_to_binary/1`
-%% BIF call per op. Falls back to `json:encode_value/2` for everything
+%% Op codes 0..9 emit as a single digit byte (`OpCode + $0`, skipping an
+%% `integer_to_binary/1` per op); codes 10+ use `integer_to_binary/1` (see
+%% `op_code_iodata/1`). Falls back to `json:encode_value/2` for everything
 %% else (untagged replace ops, effects, payload values).
 op_encoder({ViewId, [OpCode, Target | RestArgs]}, E) when
     is_integer(OpCode),
     OpCode >= 0,
-    OpCode =< 9,
     is_binary(ViewId),
     is_binary(Target)
 ->
     [
         $[,
-        OpCode + $0,
+        op_code_iodata(OpCode),
         <<",\"">>,
         ViewId,
         $:,
@@ -445,6 +444,12 @@ op_encoder({ViewId, [OpCode, Target | RestArgs]}, E) when
     ];
 op_encoder(V, E) ->
     json:encode_value(V, E).
+
+%% Op codes 0..9 emit as a single ASCII digit (`OpCode + $0`, skipping an
+%% `integer_to_binary/1` per op); codes 10+ (e.g. `?OP_LIST_PATCH`) use
+%% `integer_to_binary/1`.
+op_code_iodata(OpCode) when OpCode =< 9 -> OpCode + $0;
+op_code_iodata(OpCode) -> integer_to_binary(OpCode).
 
 encode_rest([], _E) -> [];
 encode_rest([H | T], E) -> [$,, E(H, E) | encode_rest(T, E)].
@@ -492,5 +497,27 @@ encode_stream_ops_test() ->
     MoveOp = [9, ~"0", ~"1", 0],
     MoveBytes = iolist_to_binary(encode(#{?OPS => flatten_ops(~"page", [MoveOp])})),
     ?assertEqual(~"{\"o\":[[9,\"page:0\",\"1\",0]]}", MoveBytes).
+
+%% LIST_PATCH (op code 10 -- the first TWO-digit op code) with positional sub-ops:
+%% ITEM_PATCH (idx + inner ops), INSERT (idx + item payload map), REMOVE (idx).
+%% Regression for op_encoder assuming single-digit codes: the old `=< 9` guard +
+%% `OpCode + $0` dropped op 10 to the `json:encode_value` fallback, which crashed
+%% on the tagged tuple (`unsupported_type`). The container op is scoped
+%% (`page:4`); sub-ops are positional and go through default JSON encoding.
+encode_list_patch_op_test() ->
+    ListPatchOp = [
+        10,
+        ~"4",
+        [
+            [7, 0, [[0, ~"0", ~"X"]]],
+            [5, 1, #{~"f" => ~"fp"}],
+            [6, 2]
+        ]
+    ],
+    Bytes = iolist_to_binary(encode(#{?OPS => flatten_ops(~"page", [ListPatchOp])})),
+    ?assertEqual(
+        ~"{\"o\":[[10,\"page:4\",[[7,0,[[0,\"0\",\"X\"]]],[5,1,{\"f\":\"fp\"}],[6,2]]]]}",
+        Bytes
+    ).
 
 -endif.

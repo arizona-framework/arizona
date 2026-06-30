@@ -9,6 +9,7 @@
 -define(OP_ITEM_PATCH, 7).
 -define(OP_REPLACE, 8).
 -define(OP_MOVE, 9).
+-define(OP_LIST_PATCH, 10).
 
 %% Type constants
 -define(EACH, 0).
