@@ -490,51 +490,104 @@ stream_reset(Az, OldItems, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     {RemOps ++ DiffOps ++ MoveOps ++ RestOps, FinalSnap, Views2}.
 
 diff_list(Az, #{source := Items, template := Tmpl}, #{items := OldItemsList}, Views0) ->
+    {_, NewLocal0} = Views0,
     {NewItemsList, Views1} = arizona_eval:render_list_items(Items, Tmpl, Views0),
+    {_, NewLocal1} = Views1,
     NewSnap = #{t => ?EACH, items => NewItemsList, template => Tmpl},
-    case is_list(OldItemsList) of
-        false ->
-            full_update(Az, Tmpl, NewItemsList, NewSnap, Views1);
+    %% Positional per-item patching is sound only when (a) the old slot already
+    %% held a list (so positions line up with the live DOM), (b) each item is a
+    %% single root element (compile-time `single_root` => DOM position N == item N
+    %% between the slot's `<!--az:X-->...<!--/az-->` markers), and (c) this list
+    %% rendered no per-item child view (a `?stateful`/`?stateless` child must be
+    %% re-mounted by a full re-render -- the existing unsupported case, preserved;
+    %% detected by the child-view accumulator growing across render_list_items).
+    %% Otherwise the wholesale marker re-render is the only correct patch.
+    Patchable =
+        is_list(OldItemsList) andalso
+            is_single_root(Tmpl) andalso
+            map_size(NewLocal1) =:= map_size(NewLocal0),
+    case Patchable of
         true ->
-            {Changed, NewTail, OldTail, Views2} =
-                diff_list_zip(NewItemsList, OldItemsList, Views1),
-            %% Empty tails + nothing changed = an identical list -> no op. Any
-            %% content or length change re-renders the whole list: a plain list
-            %% is unkeyed (no per-item `az-key` to address -- that is what
-            %% `arizona_stream` is for), so the only correct patch is a single
-            %% full render of the container's marker content.
-            case {Changed, NewTail, OldTail} of
-                {false, [], []} ->
+            {SubOps, Views2} =
+                diff_list_positional(Tmpl, NewItemsList, OldItemsList, 0, Views1),
+            case SubOps of
+                [] ->
                     {[], NewSnap, Views2};
                 _ ->
-                    full_update(Az, Tmpl, NewItemsList, NewSnap, Views2)
-            end
+                    {[[?OP_LIST_PATCH, Az, SubOps]], NewSnap, Views2}
+            end;
+        false ->
+            diff_list_full(Az, Tmpl, NewItemsList, OldItemsList, NewSnap, Views1)
     end.
+
+is_single_root(#{single_root := true}) -> true;
+is_single_root(#{}) -> false.
+
+%% Wholesale fallback: a non-single-root (multi-root/fragment) item, a list
+%% bearing per-item child views, or a slot that previously held a non-list.
+%% Re-render the whole list with one marker-aware OP_TEXT -- but only when
+%% something actually changed (an unchanged same-length list emits nothing).
+%% `list_changed/3` threads child views exactly as the positional walk would, so
+%% a no-op diff still settles their snapshots.
+diff_list_full(Az, Tmpl, NewItemsList, OldItemsList, NewSnap, Views0) when
+    is_list(OldItemsList)
+->
+    {Changed, Views1} = list_changed(NewItemsList, OldItemsList, Views0),
+    case Changed of
+        false -> {[], NewSnap, Views1};
+        true -> full_update(Az, Tmpl, NewItemsList, NewSnap, Views1)
+    end;
+diff_list_full(Az, Tmpl, NewItemsList, _OldItemsList, NewSnap, Views0) ->
+    %% Old slot was not a list (first populate / type change): always render.
+    full_update(Az, Tmpl, NewItemsList, NewSnap, Views0).
+
+%% Lockstep change detection for the wholesale fallback -- mirrors the per-item
+%% walk but emits no ops, just whether any item changed (an inner diff =/= [] or
+%% a length difference), threading child views through.
+list_changed([NewD | NR], [OldD | OR], Views0) ->
+    {InnerOps, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
+    {RestChanged, Views2} = list_changed(NR, OR, Views1),
+    {InnerOps =/= [] orelse RestChanged, Views2};
+list_changed([], [], Views) ->
+    {false, Views};
+list_changed(_NewTail, _OldTail, Views) ->
+    {true, Views}.
 
 %% A plain-list `?each` is marker-anchored in a content slot (no wrapper element
 %% carries the slot az), so the full re-render patches the marker content via
 %% `?OP_TEXT` -- never `?OP_UPDATE` (innerHTML), which clobbers the slot's static
 %% siblings when resolveEl falls back to the enclosing element. Mirrors the
 %% `make_op/3` plain-list each clause and the nested-template content-slot fix.
+%% The fallback for a non-single-root (multi-root/fragment) item, a list bearing
+%% per-item child views, or a slot that did not previously hold a list.
 full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
     HTML = arizona_render:zip_list_fp(Tmpl, NewItemsList),
     {[[?OP_TEXT, Az, HTML]], NewSnap, Views}.
 
-%% Walk new/old item dynamics in lockstep to detect whether any item changed and
-%% to thread child views through. Returns `Changed` plus the leftover tails, so
-%% the caller can also see a length change (a non-empty tail). No per-item ops
-%% are produced -- plain-list updates are a full re-render (see `diff_list/4`).
-diff_list_zip([NewD | NR], [OldD | OR], Views0) ->
+%% Lockstep positional diff for a single-root plain list (the `Patchable` path in
+%% `diff_list/4`). Overlap: emit an `?OP_ITEM_PATCH` sub-op only where the item's
+%% inner dynamics changed -- reusing `diff_item_dynamics_v` (the same per-item
+%% diff the stream path uses), so an inner scalar text op rides the client's
+%% in-place text write and never churns childList. Tail delta: `?OP_INSERT` (new
+%% longer -- append) or `?OP_REMOVE` (old longer). `Idx` is a 0-based position.
+%% The client snapshots the item roots once before applying, so sub-op order is
+%% immaterial. A middle insert/delete shows up as a cascade of content patches
+%% plus a single tail insert/remove -- correct (the new list is reproduced
+%% exactly) and minimal in childList churn; identity across reorders is the keyed
+%% `arizona_stream`'s job, not a plain list's.
+diff_list_positional(Tmpl, [NewD | NR], [OldD | OR], Idx, Views0) ->
     {InnerOps, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
-    {RestChanged, NewTail, OldTail, Views2} = diff_list_zip(NR, OR, Views1),
-    Changed =
-        case InnerOps of
-            [] -> RestChanged;
-            _ -> true
-        end,
-    {Changed, NewTail, OldTail, Views2};
-diff_list_zip(NewTail, OldTail, Views) ->
-    {false, NewTail, OldTail, Views}.
+    {RestOps, Views2} = diff_list_positional(Tmpl, NR, OR, Idx + 1, Views1),
+    case InnerOps of
+        [] -> {RestOps, Views2};
+        _ -> {[[?OP_ITEM_PATCH, Idx, InnerOps] | RestOps], Views2}
+    end;
+diff_list_positional(Tmpl, [NewD | NR], [], Idx, Views0) ->
+    HTML = arizona_render:zip_item(Tmpl, NewD),
+    {RestOps, Views1} = diff_list_positional(Tmpl, NR, [], Idx + 1, Views0),
+    {[[?OP_INSERT, Idx, HTML] | RestOps], Views1};
+diff_list_positional(_Tmpl, [], OldTail, Idx, Views) ->
+    {[[?OP_REMOVE, I] || I <- lists:seq(Idx, Idx + length(OldTail) - 1)], Views}.
 
 smart_reset_items(_Az, [], _Kept, _OldItems, _ItemsMap, _Tmpl, Views, Snaps) ->
     {[], Snaps, Views};

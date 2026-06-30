@@ -37,6 +37,9 @@
     each_body_list_with_descriptor_rejected/1,
     each_body_mixed_fragment_ok/1,
     each_body_conditional_child_diffs/1,
+    each_single_root_flag/1,
+    each_multi_root_no_single_root_flag/1,
+    each_stream_no_single_root_flag/1,
     stateless_with_atom_callback/1,
     stateless_with_fun_ref_callback/1,
     stateless_with_remote_fun_ref_callback/1,
@@ -433,6 +436,9 @@ groups() ->
             each_body_list_with_descriptor_rejected,
             each_body_mixed_fragment_ok,
             each_body_conditional_child_diffs,
+            each_single_root_flag,
+            each_multi_root_no_single_root_flag,
+            each_stream_no_single_root_flag,
             stateless_with_atom_callback,
             stateless_with_fun_ref_callback,
             stateless_with_remote_fun_ref_callback
@@ -5119,6 +5125,53 @@ az_each_basic(Config) when is_list(Config) ->
     Az0 = <<Fp/binary, "-0">>,
     [{Az0, {esc, Fun}, {pt_az_each_basic, 1}}] = DFun(#{name => <<"Alice">>}),
     ?assertEqual(<<"Alice">>, Fun()).
+
+%% A single-root list item (one top-level element) is stamped `single_root => true`
+%% on its item template, so the diff can patch items positionally (OP_LIST_PATCH).
+each_single_root_flag(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_single_root). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:each(fun(Item) -> "
+        "        {'li', [], [maps:get(name, Item)]} "
+        "    end, az:get(items, Bindings, [])). "
+    ),
+    Result = Mod:render(#{items => [#{name => <<"Alice">>}]}),
+    Tmpl = maps:get(template, Result),
+    ?assertEqual(true, maps:get(single_root, Tmpl)).
+
+%% A multi-root list item (a fragment / list of elements) has no unambiguous
+%% per-position DOM node, so it is NOT flagged single_root (falls back to the
+%% wholesale re-render).
+each_multi_root_no_single_root_flag(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_multi_root). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:each(fun(Item) -> "
+        "        [{'dt', [], [maps:get(k, Item)]}, {'dd', [], [maps:get(v, Item)]}] "
+        "    end, az:get(items, Bindings, [])). "
+    ),
+    Result = Mod:render(#{items => [#{k => <<"a">>, v => <<"1">>}]}),
+    Tmpl = maps:get(template, Result),
+    ?assertEqual(undefined, maps:get(single_root, Tmpl, undefined)).
+
+%% A stream (2-arg callback) item is keyed by `az-key`, not by position, so it is
+%% NOT flagged single_root (the positional path is plain-list only).
+each_stream_no_single_root_flag(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_stream). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:each(fun(Item, Key) -> "
+        "        {'li', [{'az-key', Key}], [maps:get(name, Item)]} "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    Stream = arizona_stream:new(fun(I) -> maps:get(id, I) end, [#{id => 1, name => <<"A">>}]),
+    Result = Mod:render(#{stream => Stream}),
+    Tmpl = maps:get(template, Result),
+    ?assertEqual(undefined, maps:get(single_root, Tmpl, undefined)).
 
 %% Test 112: az:each nested inside az:html.
 az_each_inside_html(Config) when is_list(Config) ->

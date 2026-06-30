@@ -21,6 +21,13 @@
     diff_list_grew_full_update/1,
     diff_list_shrank_full_update/1,
     diff_list_no_change_no_ops/1,
+    diff_list_content_change_positional/1,
+    diff_list_first_item_change_positional/1,
+    diff_list_grew_positional/1,
+    diff_list_shrank_positional/1,
+    diff_list_middle_insert_positional/1,
+    diff_list_middle_delete_positional/1,
+    diff_list_no_change_positional_no_ops/1,
     diff_each_among_siblings_uses_text_op/1,
     diff_each_among_siblings_to_empty_uses_text_op/1,
     diff_text_op/1,
@@ -70,6 +77,13 @@ groups() ->
             diff_list_grew_full_update,
             diff_list_shrank_full_update,
             diff_list_no_change_no_ops,
+            diff_list_content_change_positional,
+            diff_list_first_item_change_positional,
+            diff_list_grew_positional,
+            diff_list_shrank_positional,
+            diff_list_middle_insert_positional,
+            diff_list_middle_delete_positional,
+            diff_list_no_change_positional_no_ops,
             diff_each_among_siblings_uses_text_op,
             diff_each_among_siblings_to_empty_uses_text_op,
             diff_only_changed_emits_ops,
@@ -323,15 +337,17 @@ diff_empty_to_template_uses_text_op(Config) when is_list(Config) ->
     ?assertMatch([[?OP_TEXT, <<"X-0">>, #{<<"f">> := <<"child_fp">>}]], Ops),
     ?assertNotMatch([[?OP_UPDATE, <<"X-0">>, _]], Ops).
 
-%% Plain-list `?each` diffing: any change re-renders the whole list with a
-%% single OP_TEXT (the marker-aware container patch) -- never a per-item
-%% OP_ITEM_PATCH (plain lists are unkeyed, so there is no `az-key` to patch).
-%% Regression for the "stream item az-key=... not found for patch" bug. OP_TEXT
-%% (not OP_UPDATE) because a plain-list each is anchored by content-slot comment
-%% markers; see diff_each_among_siblings_uses_text_op. These cover every boolean
-%% branch of the diff:
-%%   diff_list_zip:  InnerOps =/= [] (head)  |  RestChanged (tail)  |  neither
-%%   diff_list:      Changed  |  NewTail =/= [] (grew)  |  OldTail =/= [] (shrank)
+%% Plain-list `?each` FALLBACK diffing: a non-single-root item template (the
+%% `each_list_diff/2` fixture below omits `single_root`, modelling a
+%% multi-root/fragment item) re-renders the whole list with a single OP_TEXT (the
+%% marker-aware container patch) -- never a per-item OP_ITEM_PATCH (there is no
+%% per-position DOM node to address). OP_TEXT (not OP_UPDATE) because a plain-list
+%% each is anchored by content-slot comment markers; see
+%% diff_each_among_siblings_uses_text_op. A *single-root* list instead patches
+%% items positionally with OP_LIST_PATCH -- see the `_positional` cases and
+%% `each_list_diff_sr/2`. These cover every fallback branch of the diff:
+%%   diff_list_positional:  InnerOps =/= [] (head)  |  rest (tail)  |  neither
+%%   diff_list:             content change  |  grew (insert)  |  shrank (remove)
 
 %% Diff a plain-list `?each` of `Old` vs `New` (items are #{name => Bin}); the
 %% each dynamic depends on `names`, which is marked changed so it isn't skipped.
@@ -396,6 +412,106 @@ diff_list_shrank_full_update(Config) when is_list(Config) ->
 diff_list_no_change_no_ops(Config) when is_list(Config) ->
     Items = [#{name => <<"a">>}, #{name => <<"b">>}],
     ?assertEqual([], each_list_diff(Items, Items)).
+
+%% Single-root plain-list `?each` positional diffing. The item template carries
+%% `single_root => true` (what the parse transform stamps for a one-element item
+%% body), so a content change patches items in place via OP_LIST_PATCH instead of
+%% the wholesale OP_TEXT -- no container childList churn (the WebKit scroll fix).
+
+%% Diff a single-root plain-list `?each` of `Old` vs `New`. Same shape as
+%% each_list_diff/2 but the item template is `single_root`, so it takes the
+%% positional path.
+each_list_diff_sr(Old, New) ->
+    ItemTmpl = #{
+        t => ?EACH,
+        s => [<<"<li az=\"0\">">>, <<"</li>">>],
+        d => fun(I) -> [{<<"0">>, maps:get(name, I)}] end,
+        f => <<"item">>,
+        single_root => true
+    },
+    {OldItems, _} = arizona_eval:render_list_items(Old, ItemTmpl, {#{}, #{}}),
+    OldSnap = #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [{<<"0">>, #{t => ?EACH, items => OldItems, template => ItemTmpl}}],
+        deps => [#{names => true}],
+        f => <<"parent">>
+    },
+    NewTmpl = #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [{<<"0">>, fun() -> arizona_template:each(New, ItemTmpl) end, {m, 1}}],
+        f => <<"parent">>
+    },
+    {Ops, _Snap, _Views} = arizona_diff:diff(NewTmpl, OldSnap, #{}, #{names => true}),
+    Ops.
+
+%% Assert exactly one OP_LIST_PATCH on the slot and return its sub-ops.
+assert_list_patch(Ops) ->
+    ?assertMatch([[?OP_LIST_PATCH, <<"0">>, _]], Ops),
+    [[?OP_LIST_PATCH, <<"0">>, SubOps]] = Ops,
+    SubOps.
+
+%% Last item content changes: one positional ITEM_PATCH at index 1, addressing
+%% the item's inner slot in place.
+diff_list_content_change_positional(Config) when is_list(Config) ->
+    Ops = each_list_diff_sr([#{name => <<"a">>}, #{name => <<"b">>}], [
+        #{name => <<"a">>}, #{name => <<"B">>}
+    ]),
+    ?assertEqual([[?OP_ITEM_PATCH, 1, [[?OP_TEXT, <<"0">>, <<"B">>]]]], assert_list_patch(Ops)).
+
+%% First item content changes: positional ITEM_PATCH at index 0.
+diff_list_first_item_change_positional(Config) when is_list(Config) ->
+    Ops = each_list_diff_sr([#{name => <<"a">>}, #{name => <<"b">>}], [
+        #{name => <<"A">>}, #{name => <<"b">>}
+    ]),
+    ?assertEqual([[?OP_ITEM_PATCH, 0, [[?OP_TEXT, <<"0">>, <<"A">>]]]], assert_list_patch(Ops)).
+
+%% List grew: a single tail INSERT sub-op (the one childList op), carrying the new
+%% item's fingerprinted payload; existing items untouched.
+diff_list_grew_positional(Config) when is_list(Config) ->
+    Ops = each_list_diff_sr([#{name => <<"a">>}], [#{name => <<"a">>}, #{name => <<"b">>}]),
+    ?assertMatch(
+        [[?OP_INSERT, 1, #{<<"f">> := <<"item">>, <<"d">> := [<<"b">>]}]],
+        assert_list_patch(Ops)
+    ).
+
+%% List shrank: a single tail REMOVE sub-op at the dropped index.
+diff_list_shrank_positional(Config) when is_list(Config) ->
+    Ops = each_list_diff_sr([#{name => <<"a">>}, #{name => <<"b">>}], [#{name => <<"a">>}]),
+    ?assertEqual([[?OP_REMOVE, 1]], assert_list_patch(Ops)).
+
+%% Middle insert reproduces the new list exactly with a content-patch cascade plus
+%% ONE tail INSERT (the sole childList op). [a,c] -> [a,x,c]: patch index 1 (c->x),
+%% insert index 2 (c). Surviving nodes (index 0) are reused -> scroll-safe.
+diff_list_middle_insert_positional(Config) when is_list(Config) ->
+    Ops = each_list_diff_sr([#{name => <<"a">>}, #{name => <<"c">>}], [
+        #{name => <<"a">>}, #{name => <<"x">>}, #{name => <<"c">>}
+    ]),
+    ?assertMatch(
+        [
+            [?OP_ITEM_PATCH, 1, [[?OP_TEXT, <<"0">>, <<"x">>]]],
+            [?OP_INSERT, 2, #{<<"d">> := [<<"c">>]}]
+        ],
+        assert_list_patch(Ops)
+    ).
+
+%% Middle delete: a content-patch cascade plus ONE tail REMOVE. [a,b,c] -> [a,c]:
+%% patch index 1 (b->c), remove index 2.
+diff_list_middle_delete_positional(Config) when is_list(Config) ->
+    Ops = each_list_diff_sr([#{name => <<"a">>}, #{name => <<"b">>}, #{name => <<"c">>}], [
+        #{name => <<"a">>}, #{name => <<"c">>}
+    ]),
+    ?assertEqual(
+        [
+            [?OP_ITEM_PATCH, 1, [[?OP_TEXT, <<"0">>, <<"c">>]]],
+            [?OP_REMOVE, 2]
+        ],
+        assert_list_patch(Ops)
+    ).
+
+%% No item changed and same length -> no ops at all (empty sub-ops -> no LIST_PATCH).
+diff_list_no_change_positional_no_ops(Config) when is_list(Config) ->
+    Items = [#{name => <<"a">>}, #{name => <<"b">>}],
+    ?assertEqual([], each_list_diff_sr(Items, Items)).
 
 %% Regression: a plain-list `?each` sitting *among static sibling content* in the
 %% same content slot. SSR anchors the each by its `<!--az:X-->...<!--/az-->`
