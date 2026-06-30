@@ -1284,7 +1284,7 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend) 
                 ElemAST, Module, false, Backend
             ),
             Opts1 = maybe_target_opt(Backend, Opts0),
-            Opts = maybe_single_root_opt(Kind, Classification, Opts1),
+            Opts = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
             {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(Line, SourceAST, Vars, Guards, Prefix, S1, D1, Fingerprint, Opts)
     end.
@@ -1293,11 +1293,19 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend) 
 %% classification) lets the diff address items by DOM-order position between the
 %% slot's `<!--az:X-->...<!--/az-->` markers -- so a content change patches items
 %% in place (?OP_LIST_PATCH) instead of re-rendering the whole list, which churns
-%% childList and reverts an in-progress scroll on WebKit. Multi-root/fragment
-%% items have no unambiguous per-position DOM node, and stream items are keyed by
-%% `az-key`, so neither gets the flag (they keep the wholesale re-render path).
-maybe_single_root_opt(list, element_tuple, Opts) -> Opts#{single_root => true};
-maybe_single_root_opt(_Kind, _Classification, Opts) -> Opts.
+%% childList and reverts an in-progress scroll on WebKit. Whether that op is usable
+%% is the backend's call, asked at compile time via the `supports_list_patch/0`
+%% renderer callback (the web client implements it; native/terminal don't, and keep
+%% the wholesale re-render). Multi-root/fragment items have no unambiguous
+%% per-position DOM node, and stream items are keyed by `az-key`, so neither is
+%% flagged regardless of backend.
+maybe_single_root_opt(Backend, list, element_tuple, Opts) ->
+    case Backend:supports_list_patch() of
+        true -> Opts#{single_root => true};
+        false -> Opts
+    end;
+maybe_single_root_opt(_Backend, _Kind, _Classification, Opts) ->
+    Opts.
 
 %% Classify an ?each callback's last expr. A whole-body backend wrapper call
 %% (`?html`/`?native`/`?terminal` matching this each's `Backend`) unwraps to the element it

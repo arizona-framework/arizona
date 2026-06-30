@@ -27,6 +27,7 @@ identical to the previous inlined emission.
 -export([is_void/1]).
 -export([raw_text_kind/1]).
 -export([scope_static/2]).
+-export([supports_list_patch/0]).
 
 -spec name(atom()) -> binary().
 name(Atom) ->
@@ -126,3 +127,7 @@ raw_text_kind(_) -> none.
 scope_static(Fp, S0) ->
     S1 = binary:replace(S0, <<" az=\"">>, <<" az=\"", Fp/binary, "-">>, [global]),
     binary:replace(S1, <<"<!--az:">>, <<"<!--az:", Fp/binary, "-">>, [global]).
+
+%% The web client implements `?OP_LIST_PATCH` (positional single-root plain-list
+%% `?each` diffing), so single-root list items are flagged for it.
+supports_list_patch() -> true.

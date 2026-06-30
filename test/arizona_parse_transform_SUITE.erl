@@ -40,6 +40,7 @@
     each_single_root_flag/1,
     each_multi_root_no_single_root_flag/1,
     each_stream_no_single_root_flag/1,
+    each_native_no_single_root_flag/1,
     stateless_with_atom_callback/1,
     stateless_with_fun_ref_callback/1,
     stateless_with_remote_fun_ref_callback/1,
@@ -439,6 +440,7 @@ groups() ->
             each_single_root_flag,
             each_multi_root_no_single_root_flag,
             each_stream_no_single_root_flag,
+            each_native_no_single_root_flag,
             stateless_with_atom_callback,
             stateless_with_fun_ref_callback,
             stateless_with_remote_fun_ref_callback
@@ -5170,6 +5172,24 @@ each_stream_no_single_root_flag(Config) when is_list(Config) ->
     ),
     Stream = arizona_stream:new(fun(I) -> maps:get(id, I) end, [#{id => 1, name => <<"A">>}]),
     Result = Mod:render(#{stream => Stream}),
+    Tmpl = maps:get(template, Result),
+    ?assertEqual(undefined, maps:get(single_root, Tmpl, undefined)).
+
+%% A `?native` single-root list each is NOT flagged single_root: the gate is the
+%% backend's `supports_list_patch/0` callback (asked at compile time), and
+%% arizona_native returns false because no native client implements `?OP_LIST_PATCH`
+%% -- so a native list each keeps the wholesale path. Contrast each_single_root_flag
+%% (html: supports_list_patch/0 is true -> single_root).
+each_native_no_single_root_flag(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_native_gate). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:native_each(fun(Item) -> "
+        "        {'Text', [], [maps:get(name, Item)]} "
+        "    end, arizona_template:get(items, Bindings)). "
+    ),
+    Result = Mod:render(#{items => [#{name => <<"a">>}]}),
     Tmpl = maps:get(template, Result),
     ?assertEqual(undefined, maps:get(single_root, Tmpl, undefined)).
 

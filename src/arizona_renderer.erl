@@ -98,3 +98,12 @@ Prefix a static's embedded `az` references with the fingerprint, so a child
 template inlined into a parent does not collide on `az` targets.
 """.
 -callback scope_static(Fingerprint :: binary(), Static :: binary()) -> binary().
+
+-doc """
+Whether this backend's client supports `?OP_LIST_PATCH` -- positional, per-item
+diffing of a single-root plain-list `?each` (vs. a wholesale re-render). When
+`true`, the parse transform stamps `single_root => true` on such item templates
+so the diff emits per-item patches; when `false`, the each keeps the wholesale
+path the client already handles. A backend capability, declared by each backend.
+""".
+-callback supports_list_patch() -> boolean().
