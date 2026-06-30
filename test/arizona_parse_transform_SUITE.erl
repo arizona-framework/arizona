@@ -276,6 +276,17 @@
     native_backend_not_escaped/1
 ]).
 -export([
+    raw_text_script_markerless/1,
+    raw_text_script_not_escaped/1,
+    raw_text_style_markerless/1,
+    raw_text_json_ld_raw_verbatim/1,
+    raw_text_title_escaped_markerless/1,
+    raw_text_textarea_markerless/1,
+    raw_text_render_once_no_diff/1,
+    raw_text_dynamic_attr_still_diffable/1,
+    normal_element_keeps_markers/1
+]).
+-export([
     cond_case_bare_element_renders/1,
     cond_case_bare_matches_html/1,
     cond_if_bare_element/1,
@@ -297,6 +308,7 @@ all() ->
         {group, each},
         {group, integration},
         {group, escaping},
+        {group, raw_text},
         {group, conditional_elements},
         {group, inline},
         {group, tracked_get},
@@ -462,6 +474,20 @@ groups() ->
             diff_value_stays_raw,
             fingerprint_escapes_value,
             native_backend_not_escaped
+        ]},
+        %% Raw-text elements (script/style/textarea/title): a dynamic content
+        %% slot is markerless/render-once -- HTML comment diff markers would
+        %% become literal content and corrupt the script/CSS/JSON-LD/title.
+        {raw_text, [parallel], [
+            raw_text_script_markerless,
+            raw_text_script_not_escaped,
+            raw_text_style_markerless,
+            raw_text_json_ld_raw_verbatim,
+            raw_text_title_escaped_markerless,
+            raw_text_textarea_markerless,
+            raw_text_render_once_no_diff,
+            raw_text_dynamic_attr_still_diffable,
+            normal_element_keeps_markers
         ]},
         %% Bare element tuples as case/if/begin branch results -- compiled into
         %% nested templates (no ?html wrap), inheriting the enclosing target.
@@ -1592,6 +1618,161 @@ native_backend_not_escaped(Config) when is_list(Config) ->
     [{_Az, Fun, _Loc}] = maps:get(d, T),
     ?assert(is_function(Fun, 0)),
     ?assertEqual(<<"<not-escaped>">>, Fun()).
+
+%% A dynamic content slot inside <script> renders WITHOUT comment markers: the
+%% browser would treat <!--az:...--> as literal script bytes (a module script's
+%% HTML-comment tokens are a SyntaxError), so the slot must be markerless.
+raw_text_script_markerless(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_script). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'script', [{type, <<\"module\">>}], ["
+        "        arizona_template:get(boot, Bindings)"
+        "    ]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{boot => <<"import x from \"/c\"">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--/az-->")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"import x from \"/c\"")),
+    ?assertEqual(<<"<script type=\"module\">import x from \"/c\"</script>">>, HTML).
+
+%% A scalar inside <script> is emitted verbatim (NOT HTML-escaped): the parser
+%% never decodes character references in raw text, so escaping `&`/`<` would
+%% corrupt the JavaScript (`b=1&c=2` must not become `b=1&amp;c=2`).
+raw_text_script_not_escaped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_script_esc). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'script', [], [arizona_template:get(js, Bindings)]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{js => <<"a < b && c > d">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"a < b && c > d")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"&lt;")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"&amp;")).
+
+%% A dynamic content slot inside <style> is markerless (markers would be invalid
+%% CSS) and verbatim.
+raw_text_style_markerless(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_style). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'style', [], [arizona_template:get(css, Bindings)]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{css => <<".a > .b { color: red }">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~".a > .b { color: red }")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"&gt;")).
+
+%% The real JSON-LD use case: a ?raw value as <script type="application/ld+json">
+%% content renders verbatim and markerless, so crawlers get valid JSON.
+raw_text_json_ld_raw_verbatim(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_jsonld). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'script', [{type, <<\"application/ld+json\">>}], ["
+        "            arizona_template:raw(arizona_template:get(jsonld, Bindings))"
+        "        ]}"
+        "    ). "
+    ),
+    JsonLd = <<"[{\"@type\":\"Product\",\"name\":\"x & y\"}]">>,
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{jsonld => JsonLd})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
+    ?assertNotEqual(nomatch, binary:match(HTML, JsonLd)),
+    ?assertEqual(nomatch, binary:match(HTML, ~"&quot;")).
+
+%% <title> is escapable raw text: comment markers would still be literal text, so
+%% the slot is markerless, but a scalar IS HTML-escaped (the parser decodes
+%% character references there, so `&`/`<` must be escaped to render correctly).
+raw_text_title_escaped_markerless(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_title). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'title', [], [arizona_template:get(t, Bindings)]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{t => <<"A & B < C">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"&amp;")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"&lt;")).
+
+%% <textarea> is also escapable raw text: markerless slot.
+raw_text_textarea_markerless(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_textarea). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'textarea', [], [arizona_template:get(v, Bindings)]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{v => <<"hello">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"hello")).
+
+%% Render-once: the raw-text slot is non-diffable (Az = undefined). Even when its
+%% binding changes between renders, the diff emits no op -- there is no comment
+%% marker for the client to patch. Covers both the bare diff/2 (child-view path)
+%% and the production deps-aware diff/4, where the slot's binding is in `Changed`.
+raw_text_render_once_no_diff(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_once). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'script', [], [arizona_template:get(boot, Bindings)]}). "
+    ),
+    T1 = Mod:render(#{boot => <<"a">>}),
+    {_HTML, Snap0} = arizona_render:render(T1),
+    T2 = Mod:render(#{boot => <<"b">>}),
+    {Ops, _Snap2} = arizona_diff:diff(T2, Snap0),
+    ?assertEqual([], Ops),
+    %% Production path: build a deps-carrying snapshot (as the live process does on
+    %% mount), then diff/4 with the slot's binding explicitly marked changed.
+    {_Ops0, DepsSnap, _V0} = arizona_diff:diff(T1, Snap0, #{}),
+    {Ops4, _Snap4, _V1} = arizona_diff:diff(T2, DepsSnap, #{}, #{boot => true}),
+    ?assertEqual([], Ops4).
+
+%% A dynamic *attribute* on a raw-text element stays fully diffable -- attribute
+%% values are not raw-text content, so they keep the element az and emit an op
+%% when changed. Only the element's content slot is markerless.
+raw_text_dynamic_attr_still_diffable(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_attr). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'script', [{src, arizona_template:get(src, Bindings)}], []}"
+        "    ). "
+    ),
+    T1 = Mod:render(#{src => <<"/a.js">>}),
+    {HTML0, Snap} = arizona_render:render(T1),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~" az=\"")),
+    T2 = Mod:render(#{src => <<"/b.js">>}),
+    {Ops, _Snap2} = arizona_diff:diff(T2, Snap),
+    ?assertNotEqual([], Ops).
+
+%% Regression guard: a content slot in an ORDINARY element still gets its
+%% comment-marker diff target.
+normal_element_keeps_markers(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_normal). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'span', [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{x => <<"hi">>})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<!--az:")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<!--/az-->")).
 
 %% A bare element tuple as a `case` branch result is compiled into a nested
 %% template (no ?html wrap needed): the block renders structurally, a value

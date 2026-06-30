@@ -110,6 +110,11 @@ render(Bindings) ->
     dynamics = [] :: [dynamic()],
     az = 0 :: az(),
     nodiff = false :: boolean(),
+    %% Raw-text context of the enclosing element while compiling its children
+    %% (Backend:raw_text_kind/1). `raw`/`escapable` mean a dynamic content slot
+    %% must be emitted markerless and render-once -- HTML comment markers would
+    %% become literal content there (script/style/textarea/title).
+    raw_text_kind = none :: none | raw | escapable,
     module = undefined :: module() | undefined,
     live_render = false :: boolean(),
     root = false :: boolean(),
@@ -1448,8 +1453,13 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
     Backend = State0#state.backend,
     Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
     Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, Line, State0),
+    RawKind = Backend:raw_text_kind(Tag),
     State1 = State0#state{root = false},
-    HasDyn = has_dynamic_attr(Attrs) orelse has_dynamic_child(Children),
+    %% A dynamic content slot inside a raw-text element is markerless/render-once
+    %% (see emit_child_dynamic/4), so it never needs an element-level `az` target.
+    %% Only dynamic *attributes* (still diffable) force one there.
+    HasDyn =
+        has_dynamic_attr(Attrs) orelse (RawKind =:= none andalso has_dynamic_child(Children)),
     {ElemAz, State2} =
         case HasDyn andalso (not State1#state.nodiff) of
             true -> {State1#state.az, State1#state{az = State1#state.az + 1}};
@@ -1475,8 +1485,11 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
             buf_append(State5, Backend:element_void_close());
         false ->
             State6 = buf_append(State5, Backend:element_open_end()),
-            State7 = compile_children(Children, ElemAz, State6),
-            buf_append(State7, Backend:element_close(TagBin))
+            %% Scope the raw-text context to this element's children, then restore
+            %% the parent's so a following sibling is not treated as raw text.
+            State7 = compile_children(Children, ElemAz, State6#state{raw_text_kind = RawKind}),
+            State8 = buf_append(State7, Backend:element_close(TagBin)),
+            State8#state{raw_text_kind = State0#state.raw_text_kind}
     end.
 
 compile_attrs([], _ElemAz, State, _ElemLine) ->
@@ -1838,6 +1851,29 @@ emit_child_dynamic(
 ) ->
     DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
     {flush(State0, DynAST), Slot};
+emit_child_dynamic(
+    Child, _ElemAz, #state{raw_text_kind = raw, module = Module, backend = Backend} = State0, Slot
+) ->
+    %% script/style: raw text, the browser decodes neither character references
+    %% nor HTML comments here, so the value is emitted verbatim, markerless and
+    %% render-once. Comment markers would become literal bytes and corrupt the
+    %% script/CSS (and a module script's HTML-comment tokens are a SyntaxError).
+    %% Diffing is impossible by construction (no marker to patch), so the slot
+    %% renders once -- the diff engine skips its `undefined` az.
+    DynAST = make_raw_text_dynamic_ast(Child, Module, line(Child), Backend),
+    {flush(State0, DynAST), Slot};
+emit_child_dynamic(
+    Child,
+    _ElemAz,
+    #state{raw_text_kind = escapable, module = Module, backend = Backend} = State0,
+    Slot
+) ->
+    %% textarea/title: escapable raw text, the browser DOES decode character
+    %% references, so a scalar is HTML-escaped (make_nodiff_dynamic_ast's
+    %% esc_spec), but comments are still literal -- so the slot is markerless and
+    %% render-once, exactly like the layout/nodiff value path.
+    DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
+    {flush(State0, DynAST), Slot};
 emit_child_dynamic(Child, ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
     ElemAzBin = integer_to_binary(ElemAz),
     MarkerAz = Backend:text_az(ElemAzBin, Slot),
@@ -2105,6 +2141,17 @@ make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
     LocAST = loc_ast(Module, ExprLine),
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
     {tuple, 0, [{atom, 0, undefined}, esc_spec(Backend, ExprAST, FunAST), LocAST]}.
+
+%% Markerless render-once for a `raw` raw-text element (script/style). Unlike
+%% make_nodiff_dynamic_ast/4 the value is left bare (never `{esc, Fun}`): the
+%% browser does not decode character references inside these, so HTML-escaping a
+%% scalar would corrupt it (`&` -> `&amp;`). `undefined` az makes it non-diffable
+%% -- there is no comment marker to patch.
+make_raw_text_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
+    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend),
+    LocAST = loc_ast(Module, ExprLine),
+    FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
+    {tuple, 0, [{atom, 0, undefined}, FunAST, LocAST]}.
 
 make_nodiff_attr_dynamic_ast(AttrNameBin, ExprAST, Module, ExprLine) ->
     LocAST = loc_ast(Module, ExprLine),

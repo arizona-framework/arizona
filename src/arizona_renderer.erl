@@ -78,6 +78,22 @@ shares one flat registry.
 -callback is_void(Tag :: atom()) -> boolean().
 
 -doc """
+Raw-text classification of a tag, governing how a dynamic content slot inside it
+is emitted.
+
+`none` for ordinary elements: a content slot gets the usual comment-marker diff
+target (`<!--az:X-->...<!--/az-->`) and is fully diffable. `raw` for raw-text
+elements (`script`/`style`): the browser never decodes character references or
+HTML comments there, so the slot is emitted verbatim, markerless and render-once
+(comment markers would become literal bytes and corrupt the script/CSS).
+`escapable` for escapable-raw-text elements (`textarea`/`title`): character
+references ARE decoded, so a scalar slot is HTML-escaped, but it is still
+markerless and render-once. Non-HTML backends return `none` -- their wire format
+does not use HTML comment markers.
+""".
+-callback raw_text_kind(Tag :: atom()) -> none | raw | escapable.
+
+-doc """
 Prefix a static's embedded `az` references with the fingerprint, so a child
 template inlined into a parent does not collide on `az` targets.
 """.

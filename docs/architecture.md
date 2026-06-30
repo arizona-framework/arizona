@@ -1192,7 +1192,22 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 A content-slot dynamic -- a value, a nested template, *or a plain-list `?each`* -- is anchored
 by `<!--az:X-->...<!--/az-->` comment markers in SSR (no wrapper element carries the slot `az`),
 so its diff patch is the marker-aware `OP_TEXT`: it replaces only the span between the markers,
-leaving the slot's static siblings and the enclosing element intact. `OP_UPDATE` (innerHTML on
+leaving the slot's static siblings and the enclosing element intact.
+
+**Exception -- raw-text elements (`script`/`style`/`textarea`/`title`).** The browser does not
+parse HTML comments inside these, so a comment marker becomes literal content and corrupts it (an
+inline module script's `<!--` is even a `SyntaxError`). A dynamic content slot inside a raw-text
+element is therefore emitted **markerless and render-once**: the value renders at SSR with `Az =
+undefined`, and the diff engine skips any `undefined`-`Az` dynamic (`arizona_diff:diff_dynamics/3`
+and `diff_dynamics_v/5`), so no `OP_TEXT` is ever produced (there would be no marker to target).
+The backend classifies the tag via `arizona_renderer:raw_text_kind/1`: `raw` (`script`/`style`)
+renders the value **verbatim** (the browser decodes no character references there, so HTML-escaping
+would corrupt it -- this is what makes a `?raw` JSON-LD blob or a computed inline boot-script URL
+correct); `escapable` (`textarea`/`title`) HTML-escapes a scalar (references *are* decoded there)
+but is still markerless. A dynamic *attribute* on a raw-text element stays fully diffable -- only
+the content slot is markerless. Limitation: the slot will not update after the initial render, and
+`?local` is unsupported inside a raw-text element (no marker to address); a live `?get` there
+silently freezes at its first value. `OP_UPDATE` (innerHTML on
 the resolved element) is reserved for the **stream** `?each` container full render, where the
 container is the addressable element and items carry `az-key` for incremental ops. Emitting
 `OP_UPDATE` for a marker-anchored slot is a bug: the client's `resolveEl` finds no element for
