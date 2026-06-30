@@ -40,6 +40,7 @@
     each_single_root_flag/1,
     each_multi_root_no_single_root_flag/1,
     each_stream_no_single_root_flag/1,
+    each_native_single_root_flag/1,
     stateless_with_atom_callback/1,
     stateless_with_fun_ref_callback/1,
     stateless_with_remote_fun_ref_callback/1,
@@ -439,6 +440,7 @@ groups() ->
             each_single_root_flag,
             each_multi_root_no_single_root_flag,
             each_stream_no_single_root_flag,
+            each_native_single_root_flag,
             stateless_with_atom_callback,
             stateless_with_fun_ref_callback,
             stateless_with_remote_fun_ref_callback
@@ -5172,6 +5174,27 @@ each_stream_no_single_root_flag(Config) when is_list(Config) ->
     Result = Mod:render(#{stream => Stream}),
     Tmpl = maps:get(template, Result),
     ?assertEqual(undefined, maps:get(single_root, Tmpl, undefined)).
+
+%% A `?native` single-root list each IS flagged single_root -- the flag is a
+%% backend-agnostic structural fact (one root node per item), stamped the same for
+%% every target. The render target rides alongside it (`target => native`); the
+%% diff engine, not the parse transform, uses the target to gate the web-only
+%% `?OP_LIST_PATCH` (see arizona_diff:is_html_target/1 and the diff suite's
+%% diff_list_native_target_full_update). Contrast each_single_root_flag (html: the
+%% same single_root flag, no target key).
+each_native_single_root_flag(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_native_sr). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:native_each(fun(Item) -> "
+        "        {'Text', [], [maps:get(name, Item)]} "
+        "    end, arizona_template:get(items, Bindings)). "
+    ),
+    Result = Mod:render(#{items => [#{name => <<"a">>}]}),
+    Tmpl = maps:get(template, Result),
+    ?assertEqual(true, maps:get(single_root, Tmpl, undefined)),
+    ?assertEqual(native, maps:get(target, Tmpl, undefined)).
 
 %% Test 112: az:each nested inside az:html.
 az_each_inside_html(Config) when is_list(Config) ->

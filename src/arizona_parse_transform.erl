@@ -1290,12 +1290,13 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend) 
     end.
 
 %% A single-root list item (one top-level element per item, the `element_tuple`
-%% classification) lets the diff address items by DOM-order position between the
-%% slot's `<!--az:X-->...<!--/az-->` markers -- so a content change patches items
-%% in place (?OP_LIST_PATCH) instead of re-rendering the whole list, which churns
-%% childList and reverts an in-progress scroll on WebKit. Multi-root/fragment
-%% items have no unambiguous per-position DOM node, and stream items are keyed by
-%% `az-key`, so neither gets the flag (they keep the wholesale re-render path).
+%% classification) is a purely structural fact: there is exactly one top-level DOM
+%% node per item, so the diff can address items by DOM-order position. It is stamped
+%% backend-agnostically -- whether that structure is *exploited* (positional
+%% `?OP_LIST_PATCH` vs a wholesale re-render) is the diff engine's call, gated there
+%% on the render target (`arizona_diff:is_html_target/1`), since only the web client
+%% implements `?OP_LIST_PATCH`. Multi-root/fragment items have no unambiguous
+%% per-position node, and stream items are keyed by `az-key`, so neither is flagged.
 maybe_single_root_opt(list, element_tuple, Opts) -> Opts#{single_root => true};
 maybe_single_root_opt(_Kind, _Classification, Opts) -> Opts.
 

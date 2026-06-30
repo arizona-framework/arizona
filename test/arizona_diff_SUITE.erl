@@ -28,6 +28,7 @@
     diff_list_middle_insert_positional/1,
     diff_list_middle_delete_positional/1,
     diff_list_no_change_positional_no_ops/1,
+    diff_list_native_target_full_update/1,
     diff_each_among_siblings_uses_text_op/1,
     diff_each_among_siblings_to_empty_uses_text_op/1,
     diff_text_op/1,
@@ -84,6 +85,7 @@ groups() ->
             diff_list_middle_insert_positional,
             diff_list_middle_delete_positional,
             diff_list_no_change_positional_no_ops,
+            diff_list_native_target_full_update,
             diff_each_among_siblings_uses_text_op,
             diff_each_among_siblings_to_empty_uses_text_op,
             diff_only_changed_emits_ops,
@@ -422,13 +424,22 @@ diff_list_no_change_no_ops(Config) when is_list(Config) ->
 %% each_list_diff/2 but the item template is `single_root`, so it takes the
 %% positional path.
 each_list_diff_sr(Old, New) ->
-    ItemTmpl = #{
-        t => ?EACH,
-        s => [<<"<li az=\"0\">">>, <<"</li>">>],
-        d => fun(I) -> [{<<"0">>, maps:get(name, I)}] end,
-        f => <<"item">>,
-        single_root => true
-    },
+    each_list_diff_sr(Old, New, #{}).
+
+%% As each_list_diff_sr/2 but merges `ItemExtra` into the item template -- e.g.
+%% `#{target => native}` to exercise the diff's web-only OP_LIST_PATCH gate
+%% (a native-target single-root list must fall back to the wholesale OP_TEXT).
+each_list_diff_sr(Old, New, ItemExtra) ->
+    ItemTmpl = maps:merge(
+        #{
+            t => ?EACH,
+            s => [<<"<li az=\"0\">">>, <<"</li>">>],
+            d => fun(I) -> [{<<"0">>, maps:get(name, I)}] end,
+            f => <<"item">>,
+            single_root => true
+        },
+        ItemExtra
+    ),
     {OldItems, _} = arizona_eval:render_list_items(Old, ItemTmpl, {#{}, #{}}),
     OldSnap = #{
         s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
@@ -512,6 +523,21 @@ diff_list_middle_delete_positional(Config) when is_list(Config) ->
 diff_list_no_change_positional_no_ops(Config) when is_list(Config) ->
     Items = [#{name => <<"a">>}, #{name => <<"b">>}],
     ?assertEqual([], each_list_diff_sr(Items, Items)).
+
+%% Backend gate: a single-root list whose item template targets `native` keeps the
+%% wholesale OP_TEXT path. OP_LIST_PATCH is web-only, so the diff must not emit it
+%% for a native target even though the item is single-root -- the parse transform
+%% stamps single_root backend-agnostically, and the diff gates on the target here
+%% (arizona_diff:is_html_target/1). Same single-root list as
+%% diff_list_content_change_positional, which emits OP_LIST_PATCH for html.
+diff_list_native_target_full_update(Config) when is_list(Config) ->
+    Ops = each_list_diff_sr(
+        [#{name => <<"a">>}, #{name => <<"b">>}],
+        [#{name => <<"a">>}, #{name => <<"B">>}],
+        #{target => native}
+    ),
+    ?assertMatch([[?OP_TEXT, <<"0">>, #{<<"t">> := ?EACH}]], Ops),
+    ?assertEqual([], [Op || Op <- Ops, hd(Op) =:= ?OP_LIST_PATCH]).
 
 %% Regression: a plain-list `?each` sitting *among static sibling content* in the
 %% same content slot. SSR anchors the each by its `<!--az:X-->...<!--/az-->`
