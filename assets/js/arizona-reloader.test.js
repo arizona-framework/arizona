@@ -57,10 +57,53 @@ describe('arizona-reloader connect', () => {
         expect(mockES.instances[0].url).toBe('/dev/reload');
     });
 
-    it('reload event triggers location.reload', () => {
+    it('reload event triggers location.reload after the debounce', () => {
+        vi.useFakeTimers();
         connect('/dev/reload');
         mockES.instances[0].dispatch('reload');
+        // Debounced: nothing yet.
+        expect(window.location.reload).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(50);
         expect(window.location.reload).toHaveBeenCalledTimes(1);
+        vi.useRealTimers();
+    });
+
+    it('collapses a burst of reload events into a single reload', () => {
+        vi.useFakeTimers();
+        connect('/dev/reload');
+        // A rebuild fires several reload events in quick succession.
+        for (let i = 0; i < 5; i++) {
+            mockES.instances[0].dispatch('reload');
+            vi.advanceTimersByTime(10);
+        }
+        vi.advanceTimersByTime(50);
+        expect(window.location.reload).toHaveBeenCalledTimes(1);
+        vi.useRealTimers();
+    });
+
+    it('honors a custom debounce from opts', () => {
+        vi.useFakeTimers();
+        connect('/dev/reload', { debounce: 200 });
+        mockES.instances[0].dispatch('reload');
+        // Default (50ms) would have fired by now; the custom 200ms has not.
+        vi.advanceTimersByTime(50);
+        expect(window.location.reload).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(150);
+        expect(window.location.reload).toHaveBeenCalledTimes(1);
+        vi.useRealTimers();
+    });
+
+    it('ignores reload events that arrive after the reload has started', () => {
+        vi.useFakeTimers();
+        connect('/dev/reload');
+        mockES.instances[0].dispatch('reload');
+        vi.advanceTimersByTime(50);
+        expect(window.location.reload).toHaveBeenCalledTimes(1);
+        // Late events (e.g. an EventSource reconnect re-delivering) are latched out.
+        mockES.instances[0].dispatch('reload');
+        vi.advanceTimersByTime(50);
+        expect(window.location.reload).toHaveBeenCalledTimes(1);
+        vi.useRealTimers();
     });
 
     it('reload_css event busts cache on every stylesheet link', () => {
