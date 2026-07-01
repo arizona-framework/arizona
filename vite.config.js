@@ -21,6 +21,14 @@ for (const method of ['warn', 'warnOnce']) {
 
 export default defineConfig(({ mode }) => ({
     customLogger: logger,
+    // Relative base so the built `new Worker(new URL('./arizona-worker.min.js',
+    // import.meta.url))` reference stays `./`-relative to `arizona.min.js`
+    // instead of resolving against the origin root. Standalone usage serves the
+    // worker as a sibling of the client (e.g. `/assets/js/`), and a downstream
+    // bundler re-detects the relative `new URL(..., import.meta.url)` to emit +
+    // content-hash the worker. An origin-absolute `/arizona-worker.min.js` would
+    // 404 standalone and be treated as a passthrough (never re-hashed) downstream.
+    base: './',
     plugins: [
         license({
             thirdParty: {
@@ -90,11 +98,27 @@ export default defineConfig(({ mode }) => ({
         lib: {
             entry: {
                 arizona: resolve(import.meta.dirname, 'assets/js/arizona.js'),
-                'arizona-worker': resolve(import.meta.dirname, 'assets/js/arizona-worker.js'),
                 'arizona-reloader': resolve(import.meta.dirname, 'assets/js/arizona-reloader.js'),
             },
             formats: ['es'],
             fileName: (_format, entryName) => `${entryName}.min.js`,
+        },
+    },
+    // The Worker is spawned from `arizona.js` via the bundler-idiomatic
+    // `new Worker(new URL('./arizona-worker.js', import.meta.url), { type: 'module' })`.
+    // Vite compiles it as an ES module worker and emits it as the un-hashed
+    // sibling `arizona-worker.min.js` (the name `arizona_server` serves and
+    // downstream consumers resolve), rewriting the reference in `arizona.min.js`
+    // to that sibling. Keeping the static `new URL(..., import.meta.url)` shape in
+    // the built output lets a consumer's bundler auto-emit + content-hash the
+    // worker instead of leaving a runtime string that 404s.
+    worker: {
+        format: 'es',
+        rollupOptions: {
+            output: {
+                entryFileNames: 'arizona-worker.min.js',
+                chunkFileNames: 'arizona-worker-[hash].min.js',
+            },
         },
     },
     test: {

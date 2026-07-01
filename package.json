@@ -1,6 +1,6 @@
 {
   "name": "@arizona-framework/client",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "JavaScript client library for Arizona Framework",
   "type": "module",
   "main": "./priv/static/assets/js/arizona.min.js",
@@ -9,7 +9,8 @@
     ".": {
       "import": "./priv/static/assets/js/arizona.min.js",
       "require": "./priv/static/assets/js/arizona.min.js"
-    }
+    },
+    "./reloader": "./priv/static/assets/js/arizona-reloader.min.js"
   },
   "files": [
     "README.md",

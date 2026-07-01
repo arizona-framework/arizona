@@ -2045,9 +2045,6 @@ function connect(endpoint, params = {}) {
     const capsQs = osCaps ? `&_az_caps=${encodeURIComponent(JSON.stringify(osCaps))}` : '';
     const wsUrl = `${protocol}//${location.host}${endpoint}?${qs}${capsQs}`;
 
-    // Worker is co-located with this script.
-    const baseUrl = new URL(/* @vite-ignore */ '.', import.meta.url).href;
-
     /** @type {Function|null} */
     let _onmessageHook = null;
 
@@ -2055,7 +2052,14 @@ function connect(endpoint, params = {}) {
     // so a bfcache restore (`pageshow`) can re-establish the connection that
     // `pagehide` tore down.
     const spawnWorker = () => {
-        _worker = new Worker(`${baseUrl}arizona-worker.min.js`, { type: 'module' });
+        // Worker is co-located with this script. This static
+        // `new Worker(new URL(..., import.meta.url), { type: 'module' })` shape is
+        // what bundlers (Vite/Rollup/rolldown) statically detect: Arizona's own
+        // build emits the sibling `arizona-worker.min.js` next to
+        // `arizona.min.js` and rewrites this reference to it, and a consumer that
+        // re-bundles the built client gets the worker auto-emitted,
+        // content-hashed, and its URL rewritten (no runtime-string 404).
+        _worker = new Worker(new URL('./arizona-worker.js', import.meta.url), { type: 'module' });
 
         _worker.onmessage = (e) => {
             const msg = e.data;
