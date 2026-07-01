@@ -108,6 +108,24 @@ So "persistent live chrome across navigation" (a sidebar with a live badge, a me
 
 A view transition wraps **any** DOM change in `document.startViewTransition` (not tied to navigation). Request one per-trigger (no global switch) with `arizona_js:transition(Cmd[, Opts])` -- wraps the command (or list) whose change should animate, like `on_key/2` -- or the `az_transition` attribute on any triggering element (bare = cross-fade, `{az_transition, ~"slide back"}` = space-separated `types`). A sync effect animates in place; `navigate`/`push_event` animate the resulting server diff. Guarded by feature-detect + `prefers-reduced-motion`; back/forward replays via history state. Real `<a href>` navigations transition through user CSS (`@view-transition { navigation: auto }`). All styling is user-owned CSS. See [.claude/rules/js.md](.claude/rules/js.md).
 
+## Configuration -- env-var references (`arizona_config`)
+
+Any `arizona` app-env value (sys.config) may be declared as an environment-variable reference instead of a literal, resolved at startup by `arizona_config`. Two forms: `{env, "VAR"}` -- **required**, returns `$VAR` as a binary and crashes (`env_not_set`) if unset; `{env, "VAR", Default}` -- **optional**, coerces `$VAR` to the type of `Default` and falls back to `Default` when unset. Env vars are strings, so coercion is driven by the default's type: integer (`list_to_integer`), float, boolean (`"true"`/`"false"`, case-insensitive), binary, atom (`list_to_existing_atom`), or list (a comma-split into trimmed binaries, the `csrf_origins` shape). The required form has no default and yields a binary (suits `secret_key`).
+
+```erlang
+{arizona, [
+    {secret_key, {env, "SECRET_KEY"}},
+    {session_secure, {env, "SESSION_SECURE", false}},
+    {server, #{
+        scheme => {env, "SCHEME", http},
+        transport_opts => [{port, {env, "PORT", 8080}}],
+        routes => [ ... ]
+    }}
+]}.
+```
+
+References resolve **anywhere** in the config surface: the scalar keys (`secret_key`, `check_origin`, `csrf_origins`, `session_max_age`, `session_max_bytes`, `session_secure`, `flash_secure`, `session_store_sweep_ms`, ...) go through `arizona_config:get_env/1,2` at their read sites; the nested `server` map (`port`, `scheme`, `tls` cert paths, `proto_opts` tunables) is resolved once in `arizona_roadrunner_server:start/2`. `resolve/1` recurses into maps, lists, and 2-tuples (proplist pairs) only, so route tuples (`{live, Path, Handler, Opts}` -- all >=3-tuples) pass through untouched: an operator-supplied `{env, _, _}` term sitting inside a route's `bindings`/`state` is never rewritten.
+
 ## CSRF / Origin checking
 
 CSRF defense is an **Origin check**, not a token: `arizona_origin:check(Origin, Host)` rejects a request whose `Origin` header is neither same-origin (its authority equals the `Host`) nor in an allowlist. A missing `Origin` (native `?native` clients, CLI tools, top-level GET navigations) is allowed.

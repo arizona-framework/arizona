@@ -150,7 +150,7 @@ env, erroring if it is unset or empty.
 """.
 -spec secret() -> binary().
 secret() ->
-    case application:get_env(arizona, secret_key) of
+    case arizona_config:get_env(secret_key) of
         {ok, Secret} when is_binary(Secret), Secret =/= <<>> ->
             Secret;
         _ ->
@@ -227,7 +227,7 @@ aead_key(Key) ->
 %% new `secret_key`: existing values keep verifying under the old key for the grace
 %% window -- no forced re-issue, no wire-format change.
 candidate_keys() ->
-    [secret() | application:get_env(arizona, secret_key_previous, [])].
+    [secret() | arizona_config:get_env(secret_key_previous, [])].
 
 %% The clock is injected so the expiry boundary is deterministically testable.
 do_verify(Signed, Now) ->

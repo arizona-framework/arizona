@@ -31,6 +31,10 @@ routes take effect without restarting the listener.
   Set to `false` if you have an upstream proxy doing compression
   already.
 
+Any option value (`port`, `scheme`, `tls` cert paths, `proto_opts` tunables)
+may be an env-var reference resolved at startup -- `{env, "PORT", 8080}` or the
+required `{env, "PORT"}`. See `m:arizona_config`.
+
 ## Enabling HTTP/2
 
 Roadrunner ships with HTTP/2 support (RFC 9113, h2spec-compliant).
@@ -84,7 +88,12 @@ routes from `Opts`.
 -spec start(Name, Opts) -> {ok, pid()} | {error, term()} when
     Name :: atom(),
     Opts :: map().
-start(Name, #{routes := Routes} = Opts) ->
+start(Name, #{routes := _} = Opts0) ->
+    %% Resolve `{env, ...}` references (port, tls paths, proto_opts, ...) before
+    %% reading any option. `resolve/1` leaves the route tuples untouched, so
+    %% `Routes` is unchanged; it is idempotent, so a caller that already resolved
+    %% loses nothing.
+    #{routes := Routes} = Opts = arizona_config:resolve(Opts0),
     BuildOpts = #{compress => maps:get(compress, Opts, true)},
     Port = port_from_opts(Opts),
     UserProtoOpts = maps:get(proto_opts, Opts, #{}),

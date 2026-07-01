@@ -722,7 +722,7 @@ read_session_value(Value, Req) ->
 %% The configured server-side session store module, or `undefined` for the default
 %% cookie store (the session map encrypted into the cookie).
 session_store() ->
-    application:get_env(arizona, session_store, undefined).
+    arizona_config:get_env(session_store, undefined).
 
 %% Returns the pending session (session_out), seeded from the incoming session on
 %% first write, plus the (possibly cookie-read) request. Idempotent: once written,

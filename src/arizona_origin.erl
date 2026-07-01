@@ -36,7 +36,7 @@ origin is trusted (same-origin, allowlisted, missing, or checking disabled) and
     Origin :: binary() | undefined,
     Host :: binary() | undefined.
 check(Origin, Host) ->
-    case application:get_env(arizona, check_origin, true) of
+    case arizona_config:get_env(check_origin, true) of
         false ->
             warn_disabled(),
             ok;
@@ -83,4 +83,4 @@ same_origin(Origin, Host) ->
     end.
 
 allowlisted(Origin) ->
-    lists:member(Origin, application:get_env(arizona, csrf_origins, [])).
+    lists:member(Origin, arizona_config:get_env(csrf_origins, [])).

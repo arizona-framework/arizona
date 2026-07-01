@@ -1,5 +1,5 @@
 -module(arizona_test_server).
--export([start/0, stop/0, port/0, routes/0]).
+-export([start/0, stop/0, routes/0]).
 
 start() ->
     %% The session fixtures (arizona_session_view/controller) encrypt the az_session
@@ -7,7 +7,7 @@ start() ->
     %% set plain cookies and don't read it.
     ok = application:set_env(arizona, secret_key, <<"e2e-test-secret-key-0123456789ab">>),
     {ok, _} = arizona_roadrunner_server:start(http, #{
-        transport_opts => [{port, port()}],
+        transport_opts => [{port, {env, "PORT", 4040}}],
         routes => routes()
     }),
     %% Set the server app env *after* the listener is up (arizona_app has already
@@ -161,9 +161,3 @@ routes() ->
 
 stop() ->
     arizona_roadrunner_server:stop(http).
-
-port() ->
-    case os:getenv("PORT") of
-        false -> 4040;
-        Val -> list_to_integer(Val)
-    end.

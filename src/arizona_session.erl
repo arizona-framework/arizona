@@ -183,7 +183,7 @@ this value, so browser and server expiry agree.
 """.
 -spec max_age() -> non_neg_integer().
 max_age() ->
-    application:get_env(arizona, session_max_age, ?DEFAULT_MAX_AGE).
+    arizona_config:get_env(session_max_age, ?DEFAULT_MAX_AGE).
 
 %% --- Store mode: the cookie carries a signed opaque id, the data lives in a store ---
 
@@ -237,7 +237,7 @@ format_error({session_too_large, Size, Limit}, _ST) ->
 
 %% Maximum encoded-cookie size in bytes (default 4096, the ~4KB browser cap).
 max_bytes() ->
-    application:get_env(arizona, session_max_bytes, ?DEFAULT_MAX_BYTES).
+    arizona_config:get_env(session_max_bytes, ?DEFAULT_MAX_BYTES).
 
 cookie_opts(MaxAge) ->
     #{
@@ -245,5 +245,5 @@ cookie_opts(MaxAge) ->
         same_site => lax,
         path => ~"/",
         max_age => MaxAge,
-        secure => application:get_env(arizona, session_secure, false)
+        secure => arizona_config:get_env(session_secure, false)
     }.
