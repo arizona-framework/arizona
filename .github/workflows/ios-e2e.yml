@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       # Run swift test in the official Swift image -- the same way it is verified
       # locally on non-Mac machines. The SwiftUI renderer (AzClientUI) compiles to
@@ -47,10 +47,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Set up Erlang/OTP + rebar3
-        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24
         with:
           version-type: strict
           version-file: .tool-versions
@@ -67,7 +67,7 @@ jobs:
 
       # Cache the compiled deps so the server step only recompiles arizona itself.
       - name: Cache rebar3 _build
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: _build
           key: ios-rebar3-${{ runner.os }}-${{ hashFiles('rebar.lock') }}
