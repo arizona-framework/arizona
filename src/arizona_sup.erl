@@ -66,7 +66,7 @@ start_link() ->
     SupFlags :: supervisor:sup_flags(),
     ChildSpec :: supervisor:child_spec().
 init(#{}) ->
-    Reloader = application:get_env(arizona, reloader, #{}),
+    Reloader = arizona_config:get_env(reloader, #{}),
     Children =
         [pubsub_spec(), mcp_sup_spec()] ++ store_specs() ++ watcher_specs(Reloader),
     {ok, {#{strategy => one_for_one}, Children}}.
@@ -96,7 +96,7 @@ mcp_sup_spec() ->
 %% it if the backend declares a `child_spec/0` (the ETS store owns its table; a backend
 %% that runs its own process can omit the callback).
 store_specs() ->
-    case application:get_env(arizona, session_store, undefined) of
+    case arizona_config:get_env(session_store, undefined) of
         undefined ->
             [];
         Mod ->

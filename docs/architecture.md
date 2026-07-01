@@ -55,6 +55,7 @@
 | `src/arizona_mcp_session_registry.erl`    | ETS registry mapping `Mcp-Session-Id` to a session pid; sweeps dead pids on lookup                                                                                                        |
 | `src/arizona_mcp_sup.erl`                 | `simple_one_for_one` supervisor owning the session processes (so a session outlives its connection) and the registry table                                                                |
 | `src/arizona_error_page.erl`              | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                                  |
+| `src/arizona_config.erl`                  | App-env reader with env-var resolution -- `get_env/1,2` (drop-in for `application:get_env`) + `resolve/1`; expands `{env, "VAR"}` / `{env, "VAR", Default}` refs, coerced by default type |
 | `src/arizona_app.erl`                     | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches the roadrunner listener                                                                          |
 | `src/arizona_watcher.erl`                 | File watcher gen_server -- subscribes to `fs` events, debounces, calls callback, broadcasts via `arizona_pubsub`                                                                          |
 | `src/arizona_reloader.erl`                | Dev-mode hot reloader -- recompiles changed `.erl` files, broadcasts reload messages on the `arizona_reloader` pubsub topic                                                               |
@@ -1264,6 +1265,49 @@ roadrunner's callbacks and Arizona's shared pipeline:
 
 The `arizona_req` behaviour is the boundary between the server and the engine: handlers and the
 shared pipeline only ever see an `arizona_req:request()`, never roadrunner's native request type.
+
+## Configuration -- `arizona_config`
+
+Every `arizona` app-env value may be a literal or an environment-variable reference resolved at
+startup. `arizona_config` centralizes both the read and the resolution:
+
+- `get_env/1` / `get_env/2` -- drop-in replacements for `application:get_env(arizona, Key[,
+  Default])` that pass the stored value through `resolve/1`. The scattered scalar reads
+  (`arizona_origin`, `arizona_session`, `arizona_flash`, `arizona_crypto`, `arizona_sup`,
+  `arizona_req`, `arizona_session_store_ets`) call these.
+- `resolve/1` -- expands references in an arbitrary term. Called once at the top of
+  `arizona_roadrunner_server:start/2` to resolve the whole `server` opts map, so nested `port` /
+  `scheme` / `tls` / `proto_opts` references work and every direct caller (the test server, CT
+  suites) benefits without change.
+
+Reference forms:
+
+- `{env, "VAR"}` -- **required**. Returns `$VAR` as a binary; raises `env_not_set` (with a
+  `format_error/2` message) when unset. For a secret with no sensible default.
+- `{env, "VAR", Default}` -- **optional**. Coerces `$VAR` to the type of `Default`, or returns
+  `Default` when unset.
+
+Coercion is by the default's Erlang type (env vars are always strings): integer, float, boolean
+(`"true"`/`"false"`, case-insensitive), binary, atom (`list_to_existing_atom/1`), or list (a
+comma-split into trimmed binaries -- the `csrf_origins` / `secret_key_previous` shape). The
+required form yields a binary.
+
+`resolve/1` recurses into **maps, lists, and 2-tuples only**:
+
+```erlang
+resolve({env, Var}) -> ...;                 %% required
+resolve({env, Var, Default}) -> ...;        %% optional, coerced
+resolve(Map) when is_map(Map) -> #{K => resolve(V) || K := V <- Map};
+resolve(List) when is_list(List) -> [resolve(E) || E <- List];
+resolve({A, B}) -> {resolve(A), resolve(B)};
+resolve(Other) -> Other.
+```
+
+Limiting tuple recursion to 2-tuples (proplist pairs like `{port, ...}`, `{certfile, ...}`) is
+the safety property: route tuples (`{live, Path, Handler, Opts}` and friends -- all >=3-tuples)
+fall to the `Other` clause and pass through untouched, so an operator-supplied literal `{env, _,
+_}` sitting inside a route's `bindings`/`state` is never rewritten. Resolution is idempotent, so
+resolving in `start/2` is safe even if a caller already resolved.
 
 ## MCP server
 

@@ -147,4 +147,4 @@ schedule_sweep(State) ->
     State.
 
 sweep_ms() ->
-    application:get_env(arizona, session_store_sweep_ms, ?DEFAULT_SWEEP_MS).
+    arizona_config:get_env(session_store_sweep_ms, ?DEFAULT_SWEEP_MS).

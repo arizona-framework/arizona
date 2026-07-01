@@ -146,5 +146,5 @@ cookie_opts(MaxAge) ->
         same_site => lax,
         path => ~"/",
         max_age => MaxAge,
-        secure => application:get_env(arizona, flash_secure, false)
+        secure => arizona_config:get_env(flash_secure, false)
     }.
