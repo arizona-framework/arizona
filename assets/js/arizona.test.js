@@ -3174,6 +3174,44 @@ describe('connection params', () => {
 });
 
 // ---------------------------------------------------------------------------
+// worker spawn shape
+// ---------------------------------------------------------------------------
+
+describe('worker spawn', () => {
+    it('spawns the worker as an ES module from a URL relative to the client module', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        /** @type {{url: URL, opts: object}|null} */
+        let workerArgs = null;
+        const OrigWorker = globalThis.Worker;
+        globalThis.Worker = function (url, opts) {
+            workerArgs = { url, opts };
+            return {
+                postMessage() {},
+                set onmessage(_) {},
+                get onmessage() {
+                    return null;
+                },
+                terminate() {},
+            };
+        };
+        // Disconnect + restore before asserting so a failed expect() can't leak
+        // the persistent pageshow/pagehide listeners into later tests.
+        const disconnect = mod.connect('/ws');
+        disconnect();
+        globalThis.Worker = OrigWorker;
+        // The static `new Worker(new URL('./arizona-worker.js', import.meta.url),
+        // { type: 'module' })` shape is what bundlers statically detect (so a
+        // downstream build emits + hashes the worker), and standalone it resolves
+        // the sibling worker relative to the client module -- a URL instance
+        // (never a runtime string) whose path is the worker sibling.
+        expect(workerArgs.url).toBeInstanceOf(URL);
+        expect(workerArgs.url.pathname.endsWith('/arizona-worker.js')).toBe(true);
+        expect(workerArgs.opts).toEqual({ type: 'module' });
+    });
+});
+
+// ---------------------------------------------------------------------------
 // native-shell (OS) contract: globalThis.__arizona_os__
 // ---------------------------------------------------------------------------
 

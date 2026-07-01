@@ -81,6 +81,12 @@ import { connect } from '@arizona-framework/client';
 connect('/ws');
 ```
 
+`connect` spawns its WebSocket worker via a static `new Worker(new URL('./arizona-worker.min.js',
+import.meta.url), { type: 'module' })`, so a downstream Vite/Rollup/rolldown build detects it and
+emits (and content-hashes) the worker automatically, with no runtime path to configure. Apps that
+never call `connect` tree-shake the worker out entirely. Loading `arizona.min.js` standalone via
+`<script type="module">` still works: the worker resolves as its sibling next to the client.
+
 ## Quick start
 
 A page with an embedded counter.
