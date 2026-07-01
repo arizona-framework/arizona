@@ -118,6 +118,13 @@ export default defineConfig(({ mode }) => ({
             output: {
                 entryFileNames: 'arizona-worker.min.js',
                 chunkFileNames: 'arizona-worker-[hash].min.js',
+                // The worker runs through Vite's separate (rolldown) build, which
+                // does NOT apply the main build's `minify: 'terser'` -- it only
+                // honours rolldown-native minify on the worker's own output. Turn
+                // it on so `arizona-worker.min.js` is actually minified (a single
+                // dense line) and its `.min.js` name is accurate, matching the
+                // terser-minified client.
+                minify: true,
             },
         },
     },
