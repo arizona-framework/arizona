@@ -1199,9 +1199,9 @@ leaving the slot's static siblings and the enclosing element intact.
 parse HTML comments inside these, so a comment marker becomes literal content and corrupts it (an
 inline module script's `<!--` is even a `SyntaxError`). A dynamic content slot inside a raw-text
 element is therefore emitted **markerless and render-once**: the value renders at SSR with `Az =
-undefined`, and the diff engine skips any `undefined`-`Az` dynamic (`arizona_diff:diff_dynamics/3`
+undefined`, and the diff engine skips any `undefined`-`Az` dynamic (`diff_dynamics/3`
 and `diff_dynamics_v/5`), so no `OP_TEXT` is ever produced (there would be no marker to target).
-The backend classifies the tag via `arizona_renderer:raw_text_kind/1`: `raw` (`script`/`style`)
+The backend classifies the tag via the `arizona_renderer` `raw_text_kind/1` callback: `raw` (`script`/`style`)
 renders the value **verbatim** (the browser decodes no character references there, so HTML-escaping
 would corrupt it -- this is what makes a `?raw` JSON-LD blob or a computed inline boot-script URL
 correct); `escapable` (`textarea`/`title`) HTML-escapes a scalar (references *are* decoded there)
