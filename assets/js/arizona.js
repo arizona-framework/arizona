@@ -80,17 +80,22 @@ const WS_CLOSE_CRASH = 4500;
 //                 OP_REMOVE, OP_REPLACE, OP_UPDATE, OP_TEXT). Called
 //                 before the DOM mutation -- this.el is still attached
 //
-// Example -- a chart hook that initializes a library on mount, resizes on
-// update, cleans up on destroy, and notifies the server it's ready:
+// A hook's own methods are reachable as `this.method()` from any lifecycle
+// callback (the instance's prototype is the hook def), and state assigned to
+// `this` is per-instance -- so shared logic factors into a helper. Example -- a
+// chart hook that draws on mount and redraws on update via its own draw(),
+// cleans up on destroy, and notifies the server it's ready:
 //
 //   import { hooks, connect } from './arizona.js';
 //   hooks.Chart = {
 //       mounted() {
-//           this.chart = new ChartLib(this.el);
+//           this.chart = new ChartLib(this.el);   // per-instance state
+//           this.draw();
 //           this.pushEvent('chart_ready', { width: this.el.offsetWidth });
 //       },
-//       updated()   { this.chart.resize(); },
+//       updated()   { this.draw(); },
 //       destroyed() { this.chart.destroy(); },
+//       draw()      { this.chart.render(this.el.dataset); }, // own helper method
 //   };
 //   connect('/ws');
 //
@@ -100,10 +105,12 @@ const WS_CLOSE_CRASH = 4500;
 //       {Bindings#{chart_width => W}, []}.
 // ---------------------------------------------------------------------------
 
-/** @type {Object<string, {mounted?: function, updated?: function, destroyed?: function}>} */
+/** @type {Object<string, {mounted?: function, updated?: function, destroyed?: function} & Object<string, *>>} */
 const hooks = {};
 
-/** @type {Map<Element, {el: Element, __name: string, pushEvent: function}>} */
+// The instance's prototype is the hook def (see mountHook), so beyond the base
+// fields it also exposes the def's helper methods plus arbitrary per-instance state.
+/** @type {Map<Element, {el: Element, __name: string, pushEvent: function} & Object<string, *>>} */
 const _hooks = new Map();
 
 /** @type {Worker|null} */
@@ -400,6 +407,13 @@ function workerPost(opcode, ...args) {
 /**
  * Mount a hook on an element with az-hook. Creates an instance, stores it,
  * and calls mounted() if defined. Skips if already tracked or hook not registered.
+ *
+ * The instance's prototype IS the hook definition, so a hook's own helper
+ * methods are reachable as `this.method()` from any lifecycle callback.
+ * el/__name/pushEvent are assigned as OWN properties -- they shadow the
+ * def and stay framework-owned -- and any per-instance state a hook assigns to
+ * `this` (e.g. `this.chart` in mounted) is an own property too, so it never
+ * writes through to the shared def or leaks across instances.
  * @param {Element} el
  */
 function mountHook(el) {
@@ -407,13 +421,12 @@ function mountHook(el) {
     const name = el.getAttribute('az-hook');
     if (!name || !hooks[name]) return;
     const def = hooks[name];
-    const instance = {
-        el,
-        __name: name,
-        /** @param {string} eventName @param {*} payload */
-        pushEvent(eventName, payload) {
-            workerPost(W_SEND, JSON.stringify([resolveTarget(el), eventName, payload || {}]));
-        },
+    const instance = Object.create(def);
+    instance.el = el;
+    instance.__name = name;
+    /** @param {string} eventName @param {*} payload */
+    instance.pushEvent = (eventName, payload) => {
+        workerPost(W_SEND, JSON.stringify([resolveTarget(el), eventName, payload || {}]));
     };
     _hooks.set(el, instance);
     if (def.mounted) def.mounted.call(instance);

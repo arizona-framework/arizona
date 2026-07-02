@@ -82,7 +82,7 @@ Server-side: handlers use `?connected` macro (delegates to `arizona_live:connect
 
 Register hooks in `hooks` object before `connect()`. Elements with `az-hook="HookName"` get lifecycle callbacks.
 
-**Hook instance:** `{ el, __name, pushEvent(name, payload) }`. Callbacks called with `this = instance`.
+**Hook instance:** `{ el, __name, pushEvent(name, payload) }`. Callbacks called with `this = instance`. The instance's prototype **is the hook definition**, so a hook's own helper methods are callable as `this.method()` from any lifecycle callback, and per-instance state assigned to `this` (e.g. `this.chart` in `mounted`) is an own property -- isolated per element, never shared across instances or written back to the def.
 
 **Lifecycle:**
 - `mounted()` -- on `ws.onopen`, after `OP_INSERT`/`OP_UPDATE`/`OP_REPLACE`/`OP_TEXT` marker path. Guarded -- never double-fires.

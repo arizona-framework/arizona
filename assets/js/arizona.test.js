@@ -2068,6 +2068,92 @@ describe('hooks -- pushEvent', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 29b. Hooks -- instance methods (prototype)
+// ---------------------------------------------------------------------------
+// The instance's prototype is the hook def, so a hook's own helper methods are
+// reachable as this.method() from lifecycle callbacks, and per-instance state
+// assigned to `this` stays isolated per element.
+
+describe('hooks -- instance methods (prototype)', () => {
+    it('reaches a hook own method via this.method() from mounted', () => {
+        const drew = [];
+        hooks.Chart = {
+            mounted() {
+                this.draw(); // helper on the def, reached via prototype
+            },
+            draw() {
+                drew.push(this.el.getAttribute('az'));
+            },
+        };
+        setupView('v', '<div az="0" az-hook="Chart">content</div>');
+        // Must not throw "this.draw is not a function".
+        mountHooks(document);
+        expect(drew).toEqual(['0']);
+    });
+
+    it('reaches a hook own method via this.method() from updated', () => {
+        const drew = [];
+        hooks.Chart = {
+            mounted() {},
+            updated() {
+                this.draw();
+            },
+            draw() {
+                drew.push('drawn');
+            },
+        };
+        setupView('v', '<div az="0" az-hook="Chart">content</div>');
+        mountHooks(document);
+        expect(drew).toEqual([]); // mounted did not draw
+        applyOps([[OP.SET_ATTR, 'v:0', 'class', 'active']]); // fires updated()
+        expect(drew).toEqual(['drawn']);
+    });
+
+    it('keeps per-instance state on this isolated across instances', () => {
+        const instances = [];
+        hooks.Counter = {
+            mounted() {
+                this.value = this.el.getAttribute('az'); // own property per element
+                instances.push(this);
+            },
+            read() {
+                return this.value;
+            },
+        };
+        setupView(
+            'v',
+            '<div az="0" az-hook="Counter">a</div><div az="1" az-hook="Counter">b</div>',
+        );
+        mountHooks(document);
+        expect(instances).toHaveLength(2);
+        const [a, b] = instances;
+        // Each instance carries its own state; neither sees the other's.
+        expect(a.read()).toBe('0');
+        expect(b.read()).toBe('1');
+        expect(a.value).not.toBe(b.value);
+        // Own state did not write through to the shared def prototype.
+        expect(hooks.Counter.value).toBeUndefined();
+    });
+
+    it('keeps the framework pushEvent even when reached alongside def methods', () => {
+        let instance = null;
+        hooks.Sender = {
+            mounted() {
+                instance = this;
+                this.ping(); // own method reachable
+            },
+            ping() {
+                this.pushEvent('ping', {}); // framework-owned own property, no throw
+            },
+        };
+        setupView('v', '<div az="0" az-hook="Sender">content</div>');
+        mountHooks(document);
+        expect(instance).not.toBeNull();
+        expect(typeof instance.pushEvent).toBe('function');
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 30. Hooks -- edge cases
 // ---------------------------------------------------------------------------
 
