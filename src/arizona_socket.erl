@@ -360,21 +360,26 @@ do_patch(RouteOpts, NewReq0, Socket0) ->
 
 %% Middleware halt during WS navigate -- there is no HTTP response channel
 %% mid-session, so we translate an `arizona_req:redirect/2` halt into an
-%% `arizona_js:navigate/1` client effect. A flash the middleware set via
-%% `put_flash/3` before halting has no `Set-Cookie` leg to ride here, so we stash
-%% it on the socket; the client's follow-up navigate frame injects it into the
-%% target request (`take_pending_flash/2`). Halts without a stashed redirect close
-%% the socket so the client reconnects and the next HTTP handshake receives the
-%% full middleware response.
+%% `arizona_js:navigate` client effect. A flash the middleware set via `put_flash/3`
+%% before halting has no `Set-Cookie` leg to ride here, so it rides the navigate
+%% effect through the same `capture_pending_flash/2` path as an in-view handler
+%% flash: stashed on the socket for the follow-up frame (`take_pending_flash/2`) and
+%% mirrored to a signed cookie token for the discontinuity fallback. Halts without a
+%% stashed redirect close the socket so the client reconnects and the next HTTP
+%% handshake receives the full middleware response.
 halt_navigate(HaltReq, Socket) ->
     case arizona_req:halted_redirect(HaltReq) of
         {_Status, Location} ->
-            Socket1 = Socket#socket{pending_flash = arizona_req:pending_flash(HaltReq)},
-            Effects = [arizona_js:navigate(Location)],
-            encode_reply([], Effects, Socket1);
+            Effect = navigate_effect(Location, arizona_req:pending_flash(HaltReq)),
+            encode_reply([], [Effect], Socket);
         undefined ->
             close_crash(Socket)
     end.
+
+navigate_effect(Location, Flash) when map_size(Flash) > 0 ->
+    arizona_js:navigate(Location, #{flash => Flash});
+navigate_effect(Location, _Flash) ->
+    arizona_js:navigate(Location).
 
 %% Inject a one-shot in-process flash into the resolved navigate/patch request and
 %% clear it from the socket (consumed once). Empty is a no-op so a real incoming
@@ -414,21 +419,34 @@ unwrap_effects(Effects) ->
     [Cmd || {arizona_effect, Cmd} <:- Effects].
 
 %% Move any `flash` opt off a navigate/patch effect onto the socket's one-shot
-%% pending flash (merged), returning the effects with `flash` stripped. The browser
-%% never sees the flash; it is delivered server-side to the follow-up navigate.
+%% pending flash (merged) and strip it from the outgoing effect. The flash is
+%% delivered purely in-process to the follow-up navigate/patch frame
+%% (`take_pending_flash/2`), exactly once -- a live navigate has no cookie leg
+%% (matching Phoenix's `live_redirect`); the signed flash cookie is the HTTP
+%% full-page redirect mechanism only. The browser never sees the flash at all.
 capture_pending_flash([], Socket) ->
     {[], Socket};
 capture_pending_flash(Effects, #socket{pending_flash = Pending0} = Socket) ->
     {Effects1, Pending} = lists:mapfoldl(fun capture_flash_effect/2, Pending0, Effects),
     {Effects1, Socket#socket{pending_flash = Pending}}.
 
-capture_flash_effect({arizona_effect, [Op, Path, #{flash := Flash} = Opts]}, Pending) when
-    (Op =:= ?EFFECT_NAVIGATE orelse Op =:= ?EFFECT_PATCH), is_map(Flash)
+capture_flash_effect(
+    {arizona_effect, [?EFFECT_NAVIGATE, Path, #{flash := Flash} = Opts]}, Pending
+) when
+    is_map(Flash)
 ->
-    Cmd = [Op, Path, maps:remove(flash, Opts)],
-    {{arizona_effect, Cmd}, maps:merge(Pending, Flash)};
+    capture_nav_flash(?EFFECT_NAVIGATE, Path, Flash, Opts, Pending);
+capture_flash_effect(
+    {arizona_effect, [?EFFECT_PATCH, Path, #{flash := Flash} = Opts]}, Pending
+) when
+    is_map(Flash)
+->
+    capture_nav_flash(?EFFECT_PATCH, Path, Flash, Opts, Pending);
 capture_flash_effect(Effect, Pending) ->
     {Effect, Pending}.
+
+capture_nav_flash(Op, Path, Flash, Opts, Pending) ->
+    {{arizona_effect, [Op, Path, maps:remove(flash, Opts)]}, maps:merge(Pending, Flash)}.
 
 %% Fast path for the three reply shapes produced by encode_reply/3. Hand
 %% writes the outer `{"o":...}` / `{"e":...}` / both wrapper, skipping

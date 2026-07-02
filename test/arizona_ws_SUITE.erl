@@ -31,6 +31,7 @@
     ws_flash_carried_over_navigate/1,
     ws_flash_carried_over_navigate_is_one_shot/1,
     ws_flash_from_handler_over_navigate/1,
+    ws_flash_navigate_carries_no_cookie/1,
     middleware_cont_on_navigate/1,
     http_halt_redirect_via_req/1,
     http_halt_sets_cookie/1,
@@ -107,6 +108,7 @@ groups() ->
         ws_flash_carried_over_navigate,
         ws_flash_carried_over_navigate_is_one_shot,
         ws_flash_from_handler_over_navigate,
+        ws_flash_navigate_carries_no_cookie,
         middleware_cont_on_navigate,
         http_halt_redirect_via_req,
         http_halt_sets_cookie,
@@ -791,6 +793,22 @@ http_flash_round_trip(Config) ->
     ?assertNotEqual(nomatch, binary:match(Resp2, <<"flashed">>)),
     ?assertNotEqual(nomatch, binary:match(Resp2, <<"az_flash=;">>)),
     ?assertNotEqual(nomatch, binary:match(Resp2, <<"Max-Age=0">>)).
+
+ws_flash_navigate_carries_no_cookie(Config) ->
+    %% Exactly-once lock-in: a flash-bearing navigate effect delivers the flash purely
+    %% in-process (pending_flash on the socket) and carries NO cookie to the client --
+    %% a live navigate arms only the in-process mechanism, never a speculative
+    %% at-least-once cookie (matching Phoenix's live_redirect). The frame must contain
+    %% no cookie material at all.
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [~"crashable", ~"flash_navigate", #{}]),
+    {text, Resp} = ws_recv(Sock),
+    [[OpCode, Target | _]] = maps:get(~"e", json:decode(Resp)),
+    ?assertEqual(?EFFECT_NAVIGATE, OpCode),
+    ?assertEqual(~"/show_flash", Target),
+    ?assertEqual(nomatch, binary:match(Resp, ~"flash_cookie")),
+    ?assertEqual(nomatch, binary:match(Resp, ~"az_flash")),
+    ws_close(Sock).
 
 flash_http_get(Port, Path, CookieHeaders) ->
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),

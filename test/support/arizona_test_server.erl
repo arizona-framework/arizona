@@ -91,11 +91,20 @@ routes() ->
         {live, <<"/scroll-home">>, arizona_scroll_home, #{layouts => Layouts}},
         {live, <<"/scroll-about">>, arizona_scroll_about, #{layouts => Layouts}},
         {live, <<"/navigate-halt">>, arizona_navigate_halt, #{layouts => Layouts}},
-        {live, <<"/login">>, arizona_login, #{layouts => Layouts}},
+        {live, <<"/login">>, arizona_login, #{
+            layouts => Layouts,
+            middlewares => [{arizona_middleware, fetch_flash}]
+        }},
         {live, <<"/protected">>, arizona_navigate_halt, #{
             layouts => Layouts,
             middlewares => [
-                fun(Req, _B) -> {halt, arizona_req:redirect(Req, <<"/login">>)} end
+                fun(Req, _B) ->
+                    %% Set a flash, then halt with a redirect: over a WS navigate this
+                    %% flash rides the socket to /login (no Set-Cookie leg) and is
+                    %% shown there -- the flash-over-navigate round-trip end-to-end.
+                    Req1 = arizona_req:put_flash(Req, error, <<"Please sign in first.">>),
+                    {halt, arizona_req:redirect(Req1, <<"/login">>)}
+                end
             ]
         }},
         {live, <<"/drainable">>, arizona_drainable, #{
