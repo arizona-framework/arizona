@@ -32,6 +32,7 @@
     ws_flash_carried_over_navigate_is_one_shot/1,
     ws_flash_from_handler_over_navigate/1,
     ws_flash_navigate_carries_no_cookie/1,
+    ws_flash_carried_over_patch/1,
     middleware_cont_on_navigate/1,
     http_halt_redirect_via_req/1,
     http_halt_sets_cookie/1,
@@ -109,6 +110,7 @@ groups() ->
         ws_flash_carried_over_navigate_is_one_shot,
         ws_flash_from_handler_over_navigate,
         ws_flash_navigate_carries_no_cookie,
+        ws_flash_carried_over_patch,
         middleware_cont_on_navigate,
         http_halt_redirect_via_req,
         http_halt_sets_cookie,
@@ -798,7 +800,7 @@ ws_flash_navigate_carries_no_cookie(Config) ->
     %% Exactly-once lock-in: a flash-bearing navigate effect delivers the flash purely
     %% in-process (pending_flash on the socket) and carries NO cookie to the client --
     %% a live navigate arms only the in-process mechanism, never a speculative
-    %% at-least-once cookie (matching Phoenix's live_redirect). The frame must contain
+    %% at-least-once cookie. The frame must contain
     %% no cookie material at all.
     {ok, Sock} = ws_connect(Config, <<"/">>),
     ok = ws_send_json(Sock, [~"crashable", ~"flash_navigate", #{}]),
@@ -808,6 +810,30 @@ ws_flash_navigate_carries_no_cookie(Config) ->
     ?assertEqual(~"/show_flash", Target),
     ?assertEqual(nomatch, binary:match(Resp, ~"flash_cookie")),
     ?assertEqual(nomatch, binary:match(Resp, ~"az_flash")),
+    ws_close(Sock).
+
+ws_flash_carried_over_patch(Config) ->
+    %% Flash over an in-place `patch` (arizona_js:patch/2 `flash` opt): the socket
+    %% strips the flash from the client-bound patch effect and carries it in-process
+    %% to the patched route. /show_flash shares arizona_crashable with "/", so the
+    %% follow-up patch frame is same-handler (do_patch, no remount) and delivers the
+    %% flash through fetch_flash into the re-rendered diff -- no cookie, exactly once.
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [~"crashable", ~"flash_patch", #{}]),
+    {text, Resp1} = ws_recv(Sock),
+    [[OpCode, Target | _]] = maps:get(~"e", json:decode(Resp1)),
+    ?assertEqual(?EFFECT_PATCH, OpCode),
+    ?assertEqual(~"/show_flash", Target),
+    %% The flash is stripped from the client effect and no cookie is emitted.
+    ?assertEqual(nomatch, binary:match(Resp1, ~"from_patch")),
+    ?assertEqual(nomatch, binary:match(Resp1, ~"az_flash")),
+    %% The follow-up patch frame delivers it in-place: a diff (not a replace) whose
+    %% re-rendered status slot carries the flashed value.
+    ok = ws_send_json(Sock, [~"patch", #{~"path" => ~"/show_flash", ~"qs" => ~""}]),
+    {text, Resp2} = ws_recv(Sock),
+    ?assertMatch(#{~"o" := _}, json:decode(Resp2)),
+    ?assertNotEqual(nomatch, binary:match(Resp2, ~"from_patch")),
+    ?assertEqual(nomatch, binary:match(Resp2, ~"az_flash")),
     ws_close(Sock).
 
 flash_http_get(Port, Path, CookieHeaders) ->

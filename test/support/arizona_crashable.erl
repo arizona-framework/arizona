@@ -46,6 +46,11 @@ handle_event(~"flash_navigate", _Payload, Bindings) ->
     %% In-view Post/Redirect/Get: set a flash and navigate. The socket carries the
     %% flash in-process to the target route (arizona_js:navigate/2 `flash` opt).
     Effect = arizona_js:navigate(~"/show_flash", #{flash => #{~"error" => ~"from_handler"}}),
+    {Bindings, #{}, [Effect]};
+handle_event(~"flash_patch", _Payload, Bindings) ->
+    %% Same as flash_navigate but via an in-place patch: the flash rides the socket
+    %% to the patched route (arizona_js:patch/2 `flash` opt), stripped from the effect.
+    Effect = arizona_js:patch(~"/show_flash", #{flash => #{~"error" => ~"from_patch"}}),
     {Bindings, #{}, [Effect]}.
 
 -spec handle_info(term(), az:bindings()) -> az:handle_info_ret().

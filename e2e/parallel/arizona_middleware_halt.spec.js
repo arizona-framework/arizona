@@ -27,8 +27,8 @@ test.describe('middleware halt on WS navigate', () => {
         await wsReady(page);
         // The /protected middleware sets a flash then halts with a redirect. Over
         // the WS navigate there is no Set-Cookie leg, so the flash rides the socket
-        // in-process to /login (and mirrors into the fallback cookie); /login reads
-        // it via fetch_flash and renders it -- the flash-over-navigate round-trip.
+        // in-process to /login; /login reads it via fetch_flash and renders it --
+        // the flash-over-navigate round-trip, delivered exactly once with no cookie.
         await expectStaysConnected(page, async () => {
             await page.click('#protected-link');
             await expect(page).toHaveURL('/login');

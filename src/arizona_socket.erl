@@ -363,10 +363,10 @@ do_patch(RouteOpts, NewReq0, Socket0) ->
 %% `arizona_js:navigate` client effect. A flash the middleware set via `put_flash/3`
 %% before halting has no `Set-Cookie` leg to ride here, so it rides the navigate
 %% effect through the same `capture_pending_flash/2` path as an in-view handler
-%% flash: stashed on the socket for the follow-up frame (`take_pending_flash/2`) and
-%% mirrored to a signed cookie token for the discontinuity fallback. Halts without a
-%% stashed redirect close the socket so the client reconnects and the next HTTP
-%% handshake receives the full middleware response.
+%% flash: stashed on the socket for the follow-up frame (`take_pending_flash/2`),
+%% delivered exactly once with no cookie. Halts without a stashed redirect close the
+%% socket so the client reconnects and the next HTTP handshake receives the full
+%% middleware response.
 halt_navigate(HaltReq, Socket) ->
     case arizona_req:halted_redirect(HaltReq) of
         {_Status, Location} ->
@@ -421,9 +421,9 @@ unwrap_effects(Effects) ->
 %% Move any `flash` opt off a navigate/patch effect onto the socket's one-shot
 %% pending flash (merged) and strip it from the outgoing effect. The flash is
 %% delivered purely in-process to the follow-up navigate/patch frame
-%% (`take_pending_flash/2`), exactly once -- a live navigate has no cookie leg
-%% (matching Phoenix's `live_redirect`); the signed flash cookie is the HTTP
-%% full-page redirect mechanism only. The browser never sees the flash at all.
+%% (`take_pending_flash/2`), exactly once -- a live navigate has no cookie leg; the
+%% signed flash cookie is the HTTP full-page redirect mechanism only. The browser
+%% never sees the flash at all.
 capture_pending_flash([], Socket) ->
     {[], Socket};
 capture_pending_flash(Effects, #socket{pending_flash = Pending0} = Socket) ->
@@ -432,19 +432,20 @@ capture_pending_flash(Effects, #socket{pending_flash = Pending0} = Socket) ->
 
 capture_flash_effect(
     {arizona_effect, [?EFFECT_NAVIGATE, Path, #{flash := Flash} = Opts]}, Pending
-) when
-    is_map(Flash)
-->
+) ->
     capture_nav_flash(?EFFECT_NAVIGATE, Path, Flash, Opts, Pending);
 capture_flash_effect(
     {arizona_effect, [?EFFECT_PATCH, Path, #{flash := Flash} = Opts]}, Pending
-) when
-    is_map(Flash)
-->
+) ->
     capture_nav_flash(?EFFECT_PATCH, Path, Flash, Opts, Pending);
 capture_flash_effect(Effect, Pending) ->
     {Effect, Pending}.
 
+%% `flash` is always stripped from the client effect (the browser never sees it),
+%% regardless of its shape -- so no non-map `flash` opt can leak. A non-map value is
+%% a caller error and crashes here at `maps:merge` (fail-closed, like the strict
+%% generator in `unwrap_effects/1`); there is deliberately no defensive `is_map` guard
+%% that would let it fall through to the client instead.
 capture_nav_flash(Op, Path, Flash, Opts, Pending) ->
     {{arizona_effect, [Op, Path, maps:remove(flash, Opts)]}, maps:merge(Pending, Flash)}.
 

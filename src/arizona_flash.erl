@@ -16,9 +16,9 @@ JSON-encode/decode the payload and build the `Set-Cookie` tuples.
 A flash across a **WebSocket SPA navigate** does *not* use this cookie. A live
 navigate (a `{halt, redirect}`, or an `arizona_js:navigate`/`patch` `flash` opt) has
 no `Set-Cookie` leg, so `arizona_socket` carries the flash in-process on the socket
-to the follow-up navigate frame -- delivered exactly once, no cookie -- matching
-Phoenix's `live_redirect`/`push_navigate`. Each navigation kind thus arms exactly one
-mechanism: cookie for the full-page redirect, in-process carry for the live navigate.
+to the follow-up navigate frame -- delivered exactly once, no cookie. Each navigation
+kind thus arms exactly one mechanism: cookie for the full-page redirect, in-process
+carry for the live navigate.
 
 The cookie value is the flash JSON signed by `arizona_crypto:sign/2` with a
 `MAX_AGE`-second expiry baked into the signature (`b64(payload) "." b64(signature)`,
@@ -86,7 +86,7 @@ encode(Flash) ->
 
 -doc """
 Decodes and verifies a cookie value into a flash map, returning `#{}` when the
-signature does not match or the value is malformed.
+signature does not match, has expired, or the value is malformed.
 """.
 -spec decode(Value) -> arizona_req:flash() when
     Value :: binary().
