@@ -37,6 +37,7 @@ The live process is linked. Exits map to WebSocket close codes:
 """.
 
 -include("arizona.hrl").
+-include("arizona_effect.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -80,7 +81,12 @@ The live process is linked. Exits map to WebSocket close codes:
     pid :: pid() | undefined,
     view_id :: binary() | undefined,
     handler :: module() | undefined,
-    req :: az:request()
+    req :: az:request(),
+    %% One-shot flash carried in-process across an SPA navigate/patch. A WebSocket
+    %% frame has no `Set-Cookie` leg, so a flash set by a halting middleware (or an
+    %% `arizona_js:navigate`/`patch` `flash` opt) rides the socket to the follow-up
+    %% frame, where `take_pending_flash/2` injects it into the resolved request.
+    pending_flash = #{} :: arizona_req:flash()
 }).
 
 %% --------------------------------------------------------------------
@@ -293,7 +299,9 @@ resolve_route(Path, Qs, Req) ->
     Adapter = arizona_req:adapter(Req),
     arizona_req:call_resolve_route(Adapter, Path, Qs, arizona_req:raw(Req)).
 
-do_navigate(H, RouteOpts, NewReq, #socket{pid = Pid, view_id = OldVId} = Socket) ->
+do_navigate(H, RouteOpts, NewReq0, Socket0) ->
+    {NewReq, #socket{pid = Pid, view_id = OldVId} = Socket} =
+        take_pending_flash(NewReq0, Socket0),
     IB = maps:get(bindings, RouteOpts, #{}),
     OnMount = maps:get(on_mount, RouteOpts, []),
     Middlewares = maps:get(middlewares, RouteOpts, []),
@@ -329,7 +337,9 @@ do_navigate(H, RouteOpts, NewReq, #socket{pid = Pid, view_id = OldVId} = Socket)
 %% replace, no remount). Runs the route middlewares first, exactly like navigate
 %% -- but deliberately does NOT read `on_mount` (contrast do_navigate): on_mount
 %% is a mount-phase hook and a patch does not remount (see arizona_live:patch/2).
-do_patch(RouteOpts, NewReq, #socket{pid = Pid, view_id = ViewId} = Socket) ->
+do_patch(RouteOpts, NewReq0, Socket0) ->
+    {NewReq, #socket{pid = Pid, view_id = ViewId} = Socket} =
+        take_pending_flash(NewReq0, Socket0),
     IB = maps:get(bindings, RouteOpts, #{}),
     Middlewares = maps:get(middlewares, RouteOpts, []),
     case arizona_middleware:apply_middlewares(Middlewares, NewReq, IB) of
@@ -350,17 +360,34 @@ do_patch(RouteOpts, NewReq, #socket{pid = Pid, view_id = ViewId} = Socket) ->
 
 %% Middleware halt during WS navigate -- there is no HTTP response channel
 %% mid-session, so we translate an `arizona_req:redirect/2` halt into an
-%% `arizona_js:navigate/1` client effect. Halts without a stashed redirect
-%% close the socket so the client reconnects and the next HTTP handshake
-%% receives the full middleware response.
+%% `arizona_js:navigate` client effect. A flash the middleware set via `put_flash/3`
+%% before halting has no `Set-Cookie` leg to ride here, so it rides the navigate
+%% effect through the same `capture_pending_flash/2` path as an in-view handler
+%% flash: stashed on the socket for the follow-up frame (`take_pending_flash/2`),
+%% delivered exactly once with no cookie. Halts without a stashed redirect close the
+%% socket so the client reconnects and the next HTTP handshake receives the full
+%% middleware response.
 halt_navigate(HaltReq, Socket) ->
     case arizona_req:halted_redirect(HaltReq) of
         {_Status, Location} ->
-            Effects = [arizona_js:navigate(Location)],
-            encode_reply([], Effects, Socket);
+            Effect = navigate_effect(Location, arizona_req:pending_flash(HaltReq)),
+            encode_reply([], [Effect], Socket);
         undefined ->
             close_crash(Socket)
     end.
+
+navigate_effect(Location, Flash) when map_size(Flash) > 0 ->
+    arizona_js:navigate(Location, #{flash => Flash});
+navigate_effect(Location, _Flash) ->
+    arizona_js:navigate(Location).
+
+%% Inject a one-shot in-process flash into the resolved navigate/patch request and
+%% clear it from the socket (consumed once). Empty is a no-op so a real incoming
+%% cookie flash on `NewReq` is never masked.
+take_pending_flash(Req, #socket{pending_flash = Flash} = Socket) when map_size(Flash) > 0 ->
+    {arizona_req:put_flash_in(Req, Flash), Socket#socket{pending_flash = #{}}};
+take_pending_flash(Req, Socket) ->
+    {Req, Socket}.
 
 replace_ops(ViewId, PageHTML) ->
     [[?OP_REPLACE, ViewId, PageHTML]].
@@ -369,17 +396,58 @@ dispatch_event(Pid, ViewId, Event, Payload) ->
     {ok, Ops, Effects} = arizona_live:handle_event(Pid, ViewId, Event, Payload),
     {flatten_ops(ViewId, Ops), Effects}.
 
-encode_reply([], [], Socket) ->
+%% Single chokepoint for every reply that carries effects. Before encoding, an
+%% in-view flash a handler set (an `arizona_js:navigate`/`patch` `flash` opt) is
+%% moved onto the socket's one-shot pending flash and stripped from the outgoing
+%% effect, so the flow is identical whether the flash came from a halting middleware
+%% (`halt_navigate/2`) or a live handler -- the follow-up navigate frame injects it
+%% via `take_pending_flash/2`.
+encode_reply(Ops, Effects0, Socket0) ->
+    {Effects, Socket} = capture_pending_flash(Effects0, Socket0),
+    encode_reply_1(Ops, Effects, Socket).
+
+encode_reply_1([], [], Socket) ->
     {ok, Socket};
-encode_reply(Ops, [], Socket) ->
+encode_reply_1(Ops, [], Socket) ->
     {reply, encode(#{?OPS => Ops}), Socket};
-encode_reply([], Effects, Socket) ->
+encode_reply_1([], Effects, Socket) ->
     {reply, encode(#{?EFFECTS => unwrap_effects(Effects)}), Socket};
-encode_reply(Ops, Effects, Socket) ->
+encode_reply_1(Ops, Effects, Socket) ->
     {reply, encode(#{?OPS => Ops, ?EFFECTS => unwrap_effects(Effects)}), Socket}.
 
 unwrap_effects(Effects) ->
     [Cmd || {arizona_effect, Cmd} <:- Effects].
+
+%% Move any `flash` opt off a navigate/patch effect onto the socket's one-shot
+%% pending flash (merged) and strip it from the outgoing effect. The flash is
+%% delivered purely in-process to the follow-up navigate/patch frame
+%% (`take_pending_flash/2`), exactly once -- a live navigate has no cookie leg; the
+%% signed flash cookie is the HTTP full-page redirect mechanism only. The browser
+%% never sees the flash at all.
+capture_pending_flash([], Socket) ->
+    {[], Socket};
+capture_pending_flash(Effects, #socket{pending_flash = Pending0} = Socket) ->
+    {Effects1, Pending} = lists:mapfoldl(fun capture_flash_effect/2, Pending0, Effects),
+    {Effects1, Socket#socket{pending_flash = Pending}}.
+
+capture_flash_effect(
+    {arizona_effect, [?EFFECT_NAVIGATE, Path, #{flash := Flash} = Opts]}, Pending
+) ->
+    capture_nav_flash(?EFFECT_NAVIGATE, Path, Flash, Opts, Pending);
+capture_flash_effect(
+    {arizona_effect, [?EFFECT_PATCH, Path, #{flash := Flash} = Opts]}, Pending
+) ->
+    capture_nav_flash(?EFFECT_PATCH, Path, Flash, Opts, Pending);
+capture_flash_effect(Effect, Pending) ->
+    {Effect, Pending}.
+
+%% `flash` is always stripped from the client effect (the browser never sees it),
+%% regardless of its shape -- so no non-map `flash` opt can leak. A non-map value is
+%% a caller error and crashes here at `maps:merge` (fail-closed, like the strict
+%% generator in `unwrap_effects/1`); there is deliberately no defensive `is_map` guard
+%% that would let it fall through to the client instead.
+capture_nav_flash(Op, Path, Flash, Opts, Pending) ->
+    {{arizona_effect, [Op, Path, maps:remove(flash, Opts)]}, maps:merge(Pending, Flash)}.
 
 %% Fast path for the three reply shapes produced by encode_reply/3. Hand
 %% writes the outer `{"o":...}` / `{"e":...}` / both wrapper, skipping

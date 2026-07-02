@@ -24,6 +24,8 @@
 -export([put_flash_serializes_into_resp_cookies/1]).
 -export([read_flash_round_trips_and_clears/1]).
 -export([read_flash_absent_is_empty/1]).
+-export([pending_flash_reads_outgoing/1]).
+-export([put_flash_in_seeds_and_merges_incoming/1]).
 -export([put_session_serializes_into_resp_cookies/1]).
 -export([put_session_merges_onto_incoming/1]).
 -export([get_session_reads_effective_state/1]).
@@ -59,6 +61,8 @@ groups() ->
             put_flash_serializes_into_resp_cookies,
             read_flash_round_trips_and_clears,
             read_flash_absent_is_empty,
+            pending_flash_reads_outgoing,
+            put_flash_in_seeds_and_merges_incoming,
             put_session_serializes_into_resp_cookies,
             put_session_merges_onto_incoming,
             get_session_reads_effective_state,
@@ -240,6 +244,26 @@ read_flash_absent_is_empty(Config) when is_list(Config) ->
     ?assertEqual(#{}, Flash),
     %% Nothing consumed and nothing set -> no flash cookie on the response.
     ?assertEqual([], arizona_req:resp_cookies(Req1)).
+
+pending_flash_reads_outgoing(Config) when is_list(Config) ->
+    %% pending_flash exposes the flash a middleware stashed via put_flash/3, so a
+    %% transport can carry it in-process; absent it is empty.
+    Req0 = arizona_req_test_adapter:new(#{}),
+    ?assertEqual(#{}, arizona_req:pending_flash(Req0)),
+    Req1 = arizona_req:put_flash(Req0, error, ~"boom"),
+    ?assertEqual(#{~"error" => ~"boom"}, arizona_req:pending_flash(Req1)).
+
+put_flash_in_seeds_and_merges_incoming(Config) when is_list(Config) ->
+    %% put_flash_in seeds the incoming flash with no cookie: flash/1 and read_flash/1
+    %% read it back, and a second seed merges (last write wins per key).
+    Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+    Req1 = arizona_req:put_flash_in(Req0, #{~"error" => ~"seeded"}),
+    ?assertEqual(#{~"error" => ~"seeded"}, arizona_req:flash(Req1)),
+    {Flash, _Req2} = arizona_req:read_flash(Req1),
+    ?assertEqual(#{~"error" => ~"seeded"}, Flash),
+    %% Merge: a new key is added, an existing key is overwritten.
+    Req3 = arizona_req:put_flash_in(Req1, #{~"info" => ~"more", ~"error" => ~"new"}),
+    ?assertEqual(#{~"error" => ~"new", ~"info" => ~"more"}, arizona_req:flash(Req3)).
 
 put_session_serializes_into_resp_cookies(Config) when is_list(Config) ->
     Req0 = arizona_req_test_adapter:new(#{cookies => []}),

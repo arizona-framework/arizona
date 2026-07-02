@@ -3,19 +3,28 @@
 Signed, one-time flash cookie codec.
 
 A flash is a small map of short-lived display messages carried across a single
-redirect (the Post/Redirect/Get pattern). It rides a dedicated cookie whose JSON
-payload is signed by `arizona_crypto` (HMAC-SHA256 with the `arizona` `secret_key`
-application env), so a client cannot forge one, and is consumed on the next
-request that reads it.
-
-This module owns the flash domain: JSON-encode/decode the payload and build the
-`Set-Cookie` tuples. `arizona_req` integrates it into the request/response stash
-(`put_flash/3`, `flash/1`, `read_flash/1`), and the `arizona_middleware:fetch_flash/2`
+redirect (the Post/Redirect/Get pattern). `arizona_req` owns the request/response
+stash (`put_flash/3` sets, `flash/1` reads); the `arizona_middleware:fetch_flash/2`
 step reads it into the `flash` binding.
 
-The cookie value is the flash JSON signed by `arizona_crypto:sign/1`
-(`b64(payload) "." b64(signature)`, URL-safe base64 without padding);
-`decode/1` returns `#{}` when the signature does not verify.
+This cookie is the mechanism for a **full-page HTTP redirect**: the flash rides a
+dedicated `az_flash` cookie whose JSON payload is signed by `arizona_crypto`
+(HMAC-SHA256 with the `arizona` `secret_key`), so a client cannot forge one, and is
+consumed (cleared) on the next request that reads it. This module owns that domain:
+JSON-encode/decode the payload and build the `Set-Cookie` tuples.
+
+A flash across a **WebSocket SPA navigate** does *not* use this cookie. A live
+navigate (a `{halt, redirect}`, or an `arizona_js:navigate`/`patch` `flash` opt) has
+no `Set-Cookie` leg, so `arizona_socket` carries the flash in-process on the socket
+to the follow-up navigate frame -- delivered exactly once, no cookie. Each navigation
+kind thus arms exactly one mechanism: cookie for the full-page redirect, in-process
+carry for the live navigate.
+
+The cookie value is the flash JSON signed by `arizona_crypto:sign/2` with a
+`MAX_AGE`-second expiry baked into the signature (`b64(payload) "." b64(signature)`,
+URL-safe base64 without padding). `decode/1` returns `#{}` when the signature does
+not verify or has expired -- so a replayed cookie kept past its `Max-Age` is
+rejected, not just the browser's soft expiry.
 
 The `flash_secure` app env sets the `Secure` cookie flag (default `false`). **Set it to
 `true` in production** (HTTPS); it defaults `false` because a `Secure` cookie is silently
@@ -64,16 +73,20 @@ cookie_name() ->
     ?COOKIE.
 
 -doc """
-Encodes a flash map into a signed cookie value. Errors if `secret_key` is unset.
+Encodes a flash map into a signed cookie value with a baked-in `MAX_AGE`-second
+expiry (via `arizona_crypto:sign/2`), matching the cookie's own `Max-Age`. The
+signed expiry is defense-in-depth: even a client that ignores `Max-Age` and replays
+a kept cookie past its lifetime gets `#{}` from `decode/1`. Errors if `secret_key`
+is unset.
 """.
 -spec encode(Flash) -> binary() when
     Flash :: arizona_req:flash().
 encode(Flash) ->
-    arizona_crypto:sign(iolist_to_binary(json:encode(Flash))).
+    arizona_crypto:sign(iolist_to_binary(json:encode(Flash)), #{ttl => ?MAX_AGE}).
 
 -doc """
 Decodes and verifies a cookie value into a flash map, returning `#{}` when the
-signature does not match or the value is malformed.
+signature does not match, has expired, or the value is malformed.
 """.
 -spec decode(Value) -> arizona_req:flash() when
     Value :: binary().
