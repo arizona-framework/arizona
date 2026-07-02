@@ -28,6 +28,8 @@
     middleware_halt_rejects_ws/1,
     middleware_pipeline_runs_in_order/1,
     middleware_halt_redirects_on_navigate/1,
+    ws_flash_carried_over_navigate/1,
+    ws_flash_carried_over_navigate_is_one_shot/1,
     middleware_cont_on_navigate/1,
     http_halt_redirect_via_req/1,
     http_halt_sets_cookie/1,
@@ -101,6 +103,8 @@ groups() ->
         middleware_halt_rejects_ws,
         middleware_pipeline_runs_in_order,
         middleware_halt_redirects_on_navigate,
+        ws_flash_carried_over_navigate,
+        ws_flash_carried_over_navigate_is_one_shot,
         middleware_cont_on_navigate,
         http_halt_redirect_via_req,
         http_halt_sets_cookie,
@@ -860,6 +864,43 @@ middleware_halt_redirects_on_navigate(Config) ->
     [[OpCode | Rest] | _] = maps:get(~"e", Decoded),
     ?assertEqual(?EFFECT_NAVIGATE, OpCode),
     ?assertEqual(~"/login", hd(Rest)),
+    ws_close(Sock).
+
+ws_flash_carried_over_navigate(Config) ->
+    %% WS navigate PRG: a middleware that `put_flash` then halts with a redirect
+    %% has no `Set-Cookie` leg mid-session, so the flash rides the socket to the
+    %% client's follow-up navigate frame, where it reaches the target view via
+    %% `fetch_flash` -- exactly as an HTTP 302 flash cookie would (http_flash_round_trip).
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    %% Frame 1: navigate into the flashing gate -> a navigate effect to /show_flash.
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/set_flash", ~"qs" => ~""}]),
+    {text, Resp1} = ws_recv(Sock),
+    Decoded1 = json:decode(Resp1),
+    [[OpCode | Rest] | _] = maps:get(~"e", Decoded1),
+    ?assertEqual(?EFFECT_NAVIGATE, OpCode),
+    ?assertEqual(~"/show_flash", hd(Rest)),
+    %% Frame 2: the client's follow-up navigate -> the flash reaches the rendered
+    %% view (the OP_REPLACE page carries "flashed" in its dynamic parts).
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/show_flash", ~"qs" => ~""}]),
+    {text, Resp2} = ws_recv(Sock),
+    ?assertMatch(#{~"o" := [[?OP_REPLACE, _, _]]}, json:decode(Resp2)),
+    ?assertNotEqual(nomatch, binary:match(Resp2, ~"flashed")),
+    ws_close(Sock).
+
+ws_flash_carried_over_navigate_is_one_shot(Config) ->
+    %% The carried flash is read-once: a second navigate to the same target after
+    %% the flash was consumed shows nothing (the socket's pending flash is cleared).
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/set_flash", ~"qs" => ~""}]),
+    {text, _Resp1} = ws_recv(Sock),
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/show_flash", ~"qs" => ~""}]),
+    {text, Resp2} = ws_recv(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp2, ~"flashed")),
+    %% Second visit: the flash was consumed on the first, so the body shows "none".
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/show_flash", ~"qs" => ~""}]),
+    {text, Resp3} = ws_recv(Sock),
+    ?assertEqual(nomatch, binary:match(Resp3, ~"flashed")),
+    ?assertNotEqual(nomatch, binary:match(Resp3, ~"none")),
     ws_close(Sock).
 
 middleware_cont_on_navigate(Config) ->

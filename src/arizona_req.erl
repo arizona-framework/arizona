@@ -74,6 +74,8 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([put_flash/3]).
 -export([flash/1]).
 -export([read_flash/1]).
+-export([pending_flash/1]).
+-export([put_flash_in/2]).
 -export([put_session/3]).
 -export([delete_session/2]).
 -export([clear_session/1]).
@@ -543,24 +545,25 @@ put_flash(Req, Key, Value) ->
     Req#{flash_out => FlashOut#{arizona_flash:key(Key) => Value}}.
 
 -doc """
-Returns the incoming flash read from the request, or `#{}`. Populated by
-`read_flash/1` (which the HTTP render pipeline runs before the view), so views
-can also read it through the auto-injected `flash` binding.
+Returns the incoming flash for this request (the message a `put_flash/3` set on the
+prior request before a redirect), or `#{}` when there is none.
+
+The app-facing flash reader. The framework materializes the flash before your view
+runs -- decoded from the signed cookie on a fresh request, or carried in-process
+across a WebSocket SPA navigate -- so a view reads it here or through the
+auto-injected `flash` binding. Pair it with `put_flash/3` (the writer).
 """.
 -spec flash(Request) -> flash() when
     Request :: request().
 flash(#{flash_in := Flash}) -> Flash;
 flash(_) -> #{}.
 
--doc """
-Reads, verifies, and decodes the incoming flash cookie into the request, marking
-it consumed so the response clears it (read-once). Returns the flash map (`#{}`
-when absent, unsigned-mismatch, or malformed) and the updated request. Idempotent:
-a second call returns the cached value without re-marking.
-
-Run by the HTTP render pipeline; apps normally use `flash/1` or the `flash`
-binding rather than calling this directly.
-""".
+%% Internal use only -- the consuming cookie reader behind the `fetch_flash`
+%% middleware and the HTTP render pipeline: reads, verifies, and decodes the flash
+%% cookie into the request, marking it consumed so the response clears it
+%% (read-once). Idempotent (a second call returns the cached value without
+%% re-marking). App code reads the flash with `flash/1` or the `flash` binding.
+-doc false.
 -spec read_flash(Request) -> {flash(), Request} when
     Request :: request().
 read_flash(#{flash_in := Flash} = Req) ->
@@ -574,6 +577,28 @@ read_flash(Req0) ->
         false ->
             {#{}, Req#{flash_in => #{}}}
     end.
+
+%% Internal use only -- carry plumbing invoked by `arizona_socket` to move a flash
+%% a halting middleware set (the `flash_out` map) across a WebSocket SPA navigate,
+%% where a `{halt, redirect}` has no `Set-Cookie` leg. App code sets a flash with
+%% `put_flash/3` and reads it with `flash/1`; it never calls this.
+-doc false.
+-spec pending_flash(Request) -> flash() when
+    Request :: request().
+pending_flash(#{flash_out := Flash}) -> Flash;
+pending_flash(_) -> #{}.
+
+%% Internal use only -- carry plumbing invoked by `arizona_socket` to seed the
+%% incoming flash (so `flash/1` reads it with no cookie) when delivering a flash
+%% carried in-process across an SPA navigate. Merges onto any flash already present
+%% (last write wins per key). App code never calls this.
+-doc false.
+-spec put_flash_in(Request, Flash) -> Request when
+    Request :: request(),
+    Flash :: flash().
+put_flash_in(Req, Flash) when is_map(Flash) ->
+    Current = maps:get(flash_in, Req, #{}),
+    Req#{flash_in => maps:merge(Current, Flash)}.
 
 -doc """
 Writes `Key => Value` into the session. On the response the session serializes to a

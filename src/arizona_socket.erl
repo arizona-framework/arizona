@@ -80,7 +80,12 @@ The live process is linked. Exits map to WebSocket close codes:
     pid :: pid() | undefined,
     view_id :: binary() | undefined,
     handler :: module() | undefined,
-    req :: az:request()
+    req :: az:request(),
+    %% One-shot flash carried in-process across an SPA navigate/patch. A WebSocket
+    %% frame has no `Set-Cookie` leg, so a flash set by a halting middleware (or an
+    %% `arizona_js:navigate`/`patch` `flash` opt) rides the socket to the follow-up
+    %% frame, where `take_pending_flash/2` injects it into the resolved request.
+    pending_flash = #{} :: arizona_req:flash()
 }).
 
 %% --------------------------------------------------------------------
@@ -293,7 +298,9 @@ resolve_route(Path, Qs, Req) ->
     Adapter = arizona_req:adapter(Req),
     arizona_req:call_resolve_route(Adapter, Path, Qs, arizona_req:raw(Req)).
 
-do_navigate(H, RouteOpts, NewReq, #socket{pid = Pid, view_id = OldVId} = Socket) ->
+do_navigate(H, RouteOpts, NewReq0, Socket0) ->
+    {NewReq, #socket{pid = Pid, view_id = OldVId} = Socket} =
+        take_pending_flash(NewReq0, Socket0),
     IB = maps:get(bindings, RouteOpts, #{}),
     OnMount = maps:get(on_mount, RouteOpts, []),
     Middlewares = maps:get(middlewares, RouteOpts, []),
@@ -329,7 +336,9 @@ do_navigate(H, RouteOpts, NewReq, #socket{pid = Pid, view_id = OldVId} = Socket)
 %% replace, no remount). Runs the route middlewares first, exactly like navigate
 %% -- but deliberately does NOT read `on_mount` (contrast do_navigate): on_mount
 %% is a mount-phase hook and a patch does not remount (see arizona_live:patch/2).
-do_patch(RouteOpts, NewReq, #socket{pid = Pid, view_id = ViewId} = Socket) ->
+do_patch(RouteOpts, NewReq0, Socket0) ->
+    {NewReq, #socket{pid = Pid, view_id = ViewId} = Socket} =
+        take_pending_flash(NewReq0, Socket0),
     IB = maps:get(bindings, RouteOpts, #{}),
     Middlewares = maps:get(middlewares, RouteOpts, []),
     case arizona_middleware:apply_middlewares(Middlewares, NewReq, IB) of
@@ -350,17 +359,29 @@ do_patch(RouteOpts, NewReq, #socket{pid = Pid, view_id = ViewId} = Socket) ->
 
 %% Middleware halt during WS navigate -- there is no HTTP response channel
 %% mid-session, so we translate an `arizona_req:redirect/2` halt into an
-%% `arizona_js:navigate/1` client effect. Halts without a stashed redirect
-%% close the socket so the client reconnects and the next HTTP handshake
-%% receives the full middleware response.
+%% `arizona_js:navigate/1` client effect. A flash the middleware set via
+%% `put_flash/3` before halting has no `Set-Cookie` leg to ride here, so we stash
+%% it on the socket; the client's follow-up navigate frame injects it into the
+%% target request (`take_pending_flash/2`). Halts without a stashed redirect close
+%% the socket so the client reconnects and the next HTTP handshake receives the
+%% full middleware response.
 halt_navigate(HaltReq, Socket) ->
     case arizona_req:halted_redirect(HaltReq) of
         {_Status, Location} ->
+            Socket1 = Socket#socket{pending_flash = arizona_req:pending_flash(HaltReq)},
             Effects = [arizona_js:navigate(Location)],
-            encode_reply([], Effects, Socket);
+            encode_reply([], Effects, Socket1);
         undefined ->
             close_crash(Socket)
     end.
+
+%% Inject a one-shot in-process flash into the resolved navigate/patch request and
+%% clear it from the socket (consumed once). Empty is a no-op so a real incoming
+%% cookie flash on `NewReq` is never masked.
+take_pending_flash(Req, #socket{pending_flash = Flash} = Socket) when map_size(Flash) > 0 ->
+    {arizona_req:put_flash_in(Req, Flash), Socket#socket{pending_flash = #{}}};
+take_pending_flash(Req, Socket) ->
+    {Req, Socket}.
 
 replace_ops(ViewId, PageHTML) ->
     [[?OP_REPLACE, ViewId, PageHTML]].
