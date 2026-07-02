@@ -30,7 +30,7 @@
 | `src/arizona_middleware.erl`              | Request-to-bindings middleware pipeline -- `apply_middlewares/3` runner + built-in `extract/1`/`put_request/2`/`fetch_flash/2`/`fetch_session/2`/`check_origin/2` steps                   |
 | `src/arizona_origin.erl`                  | CSRF Origin check -- `check/2` (same-origin or `csrf_origins` allowlist; missing Origin allowed); behind the default-on `check_origin/2` middleware                                       |
 | `src/arizona_crypto.erl`                  | Signed/encrypted value primitives -- `sign/1,2`+`verify/1` (HMAC-SHA256) and `encrypt/1,2`+`decrypt/1` (AES-256-GCM), with optional `#{ttl}` expiry; keyed off `secret_key`               |
-| `src/arizona_flash.erl`                   | Signed, one-time flash cookie codec -- `encode/1`/`decode/1` (signed JSON via `arizona_crypto`), `resp_cookie/2`; consumed on the next request                                            |
+| `src/arizona_flash.erl`                   | Signed, one-time flash cookie codec -- `encode/1`/`decode/1` (signed JSON + baked-in TTL via `arizona_crypto`), `resp_cookie/2`; the HTTP full-page redirect mechanism (a live navigate carries flash in-process, no cookie); consumed on the next request |
 | `src/arizona_session.erl`                 | Encrypted, durable session cookie codec -- `encode/1`/`decode/1` (AES-256-GCM via `arizona_crypto`, TTL = max-age), durable `resp_cookie/2`; a read does not consume                      |
 | `src/arizona_session_store.erl`           | Server-side session store behaviour -- `get/put/delete` (+ optional `child_spec/0`); opt-in via `session_store`, opaque signed-id cookie; mirrors `Plug.Session.Store`                    |
 | `src/arizona_session_store_ets.erl`       | Default in-memory `arizona_session_store` -- a supervised public-ETS owner + periodic sweep + lazy expiry; `get/put/delete` run off the request process                                   |
@@ -882,7 +882,9 @@ adapter's behaviour callbacks on first access and cached in the returned request
   reply, or `arizona_js:navigate` effect on WS navigate)
 - `halted_redirect/1` -- returns `{Status, Location}` if `redirect/2,3` was called, else
   `undefined`
-- flash (one-request): `put_flash/3`, `flash/1`, `read_flash/1` -- signed messages cleared on read
+- flash (one-request): `put_flash/3` (set), `flash/1` (read) -- signed messages cleared on read;
+  survive a full-page HTTP redirect (signed `az_flash` cookie) and a WebSocket SPA navigate
+  (`arizona_socket` in-process carry, exactly-once, no cookie -- like Phoenix's `live_redirect`)
 - session (durable): `put_session/3`, `delete_session/2`, `clear_session/1`, `session/1`,
   `get_session/2,3`, `read_session/1` -- encrypted state; a read does not consume, the response
   re-emits the cookie only on a write

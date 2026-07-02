@@ -7,6 +7,7 @@
 
 -export([cookie_name_is_az_flash/1]).
 -export([encode_decode_round_trips/1]).
+-export([encode_bakes_a_signed_expiry/1]).
 -export([decode_rejects_tampered_signature/1]).
 -export([decode_rejects_malformed/1]).
 -export([key_normalizes_atom/1]).
@@ -22,6 +23,7 @@ all() ->
     [
         cookie_name_is_az_flash,
         encode_decode_round_trips,
+        encode_bakes_a_signed_expiry,
         decode_rejects_tampered_signature,
         decode_rejects_malformed,
         key_normalizes_atom,
@@ -46,6 +48,17 @@ cookie_name_is_az_flash(Config) when is_list(Config) ->
 encode_decode_round_trips(Config) when is_list(Config) ->
     Flash = #{~"error" => ~"Invalid email or password.", ~"info" => ~"hi"},
     ?assertEqual(Flash, arizona_flash:decode(arizona_flash:encode(Flash))).
+
+encode_bakes_a_signed_expiry(Config) when is_list(Config) ->
+    %% The flash cookie value is signed WITH a baked-in expiry (arizona_crypto:sign/2
+    %% with a TTL), not a never-expiring raw sign -- defense-in-depth so a client that
+    %% ignores Max-Age and replays a kept cookie past its lifetime is rejected. A fresh
+    %% value still round-trips; it is a distinct, expiry-stamped envelope, not the raw
+    %% signed form. The expiry rejection itself is covered by arizona_crypto_SUITE.
+    Flash = #{~"error" => ~"boom"},
+    ?assertEqual(Flash, arizona_flash:decode(arizona_flash:encode(Flash))),
+    Raw = arizona_crypto:sign(iolist_to_binary(json:encode(Flash))),
+    ?assertNotEqual(Raw, arizona_flash:encode(Flash)).
 
 decode_rejects_tampered_signature(Config) when is_list(Config) ->
     Encoded = arizona_flash:encode(#{~"error" => ~"boom"}),
