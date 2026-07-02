@@ -218,7 +218,16 @@ dispatch_event(Name, Payload) -> {arizona_effect, [?EFFECT_DISPATCH_EVENT, Name,
     Path :: binary().
 navigate(Path) -> {arizona_effect, [?EFFECT_NAVIGATE, Path]}.
 
--doc "Triggers a SPA navigation to `Path` with options (e.g. `replace`).".
+-doc """
+Triggers a SPA navigation to `Path` with options.
+
+- `replace` -- use `replaceState` instead of `pushState`.
+- `flash` -- a flash map (`#{binary() => term()}`) to show on the page navigated
+  to, the live counterpart of `arizona_req:put_flash/3` before a redirect. The
+  server strips it from the effect (the browser never sees it) and carries it
+  in-process to the target's `flash` binding, so an in-view Post/Redirect/Get
+  (`submit -> flash -> navigate`) shows its message just like an HTTP redirect flash.
+""".
 -spec navigate(Path, Opts) -> arizona_effect:cmd() when
     Path :: binary(),
     Opts :: map().
@@ -234,7 +243,11 @@ share a root view so live chrome survives the navigation.
     Path :: binary().
 patch(Path) -> {arizona_effect, [?EFFECT_PATCH, Path]}.
 
--doc "Triggers an in-place SPA navigation (`patch`) to `Path` with options.".
+-doc """
+Triggers an in-place SPA navigation (`patch`) to `Path` with options. Accepts the
+same `flash` opt as `navigate/2` (carried in-process to the patched route's `flash`
+binding, stripped from the client effect).
+""".
 -spec patch(Path, Opts) -> arizona_effect:cmd() when
     Path :: binary(),
     Opts :: map().

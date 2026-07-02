@@ -41,7 +41,12 @@ handle_event(~"crash_async", _Payload, Bindings) ->
 handle_event(~"set_status", #{~"value" := V}, Bindings) ->
     {Bindings#{status => V}, #{}, []};
 handle_event(~"with_effect", _Payload, Bindings) ->
-    {Bindings, #{}, [arizona_js:dispatch_event(~"test_effect", #{~"ok" => true})]}.
+    {Bindings, #{}, [arizona_js:dispatch_event(~"test_effect", #{~"ok" => true})]};
+handle_event(~"flash_navigate", _Payload, Bindings) ->
+    %% In-view Post/Redirect/Get: set a flash and navigate. The socket carries the
+    %% flash in-process to the target route (arizona_js:navigate/2 `flash` opt).
+    Effect = arizona_js:navigate(~"/show_flash", #{flash => #{~"error" => ~"from_handler"}}),
+    {Bindings, #{}, [Effect]}.
 
 -spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
 handle_info(crash, _Bindings) ->

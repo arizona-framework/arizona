@@ -37,6 +37,7 @@ The live process is linked. Exits map to WebSocket close codes:
 """.
 
 -include("arizona.hrl").
+-include("arizona_effect.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -390,17 +391,44 @@ dispatch_event(Pid, ViewId, Event, Payload) ->
     {ok, Ops, Effects} = arizona_live:handle_event(Pid, ViewId, Event, Payload),
     {flatten_ops(ViewId, Ops), Effects}.
 
-encode_reply([], [], Socket) ->
+%% Single chokepoint for every reply that carries effects. Before encoding, an
+%% in-view flash a handler set (an `arizona_js:navigate`/`patch` `flash` opt) is
+%% moved onto the socket's one-shot pending flash and stripped from the outgoing
+%% effect, so the flow is identical whether the flash came from a halting middleware
+%% (`halt_navigate/2`) or a live handler -- the follow-up navigate frame injects it
+%% via `take_pending_flash/2`.
+encode_reply(Ops, Effects0, Socket0) ->
+    {Effects, Socket} = capture_pending_flash(Effects0, Socket0),
+    encode_reply_1(Ops, Effects, Socket).
+
+encode_reply_1([], [], Socket) ->
     {ok, Socket};
-encode_reply(Ops, [], Socket) ->
+encode_reply_1(Ops, [], Socket) ->
     {reply, encode(#{?OPS => Ops}), Socket};
-encode_reply([], Effects, Socket) ->
+encode_reply_1([], Effects, Socket) ->
     {reply, encode(#{?EFFECTS => unwrap_effects(Effects)}), Socket};
-encode_reply(Ops, Effects, Socket) ->
+encode_reply_1(Ops, Effects, Socket) ->
     {reply, encode(#{?OPS => Ops, ?EFFECTS => unwrap_effects(Effects)}), Socket}.
 
 unwrap_effects(Effects) ->
     [Cmd || {arizona_effect, Cmd} <:- Effects].
+
+%% Move any `flash` opt off a navigate/patch effect onto the socket's one-shot
+%% pending flash (merged), returning the effects with `flash` stripped. The browser
+%% never sees the flash; it is delivered server-side to the follow-up navigate.
+capture_pending_flash([], Socket) ->
+    {[], Socket};
+capture_pending_flash(Effects, #socket{pending_flash = Pending0} = Socket) ->
+    {Effects1, Pending} = lists:mapfoldl(fun capture_flash_effect/2, Pending0, Effects),
+    {Effects1, Socket#socket{pending_flash = Pending}}.
+
+capture_flash_effect({arizona_effect, [Op, Path, #{flash := Flash} = Opts]}, Pending) when
+    (Op =:= ?EFFECT_NAVIGATE orelse Op =:= ?EFFECT_PATCH), is_map(Flash)
+->
+    Cmd = [Op, Path, maps:remove(flash, Opts)],
+    {{arizona_effect, Cmd}, maps:merge(Pending, Flash)};
+capture_flash_effect(Effect, Pending) ->
+    {Effect, Pending}.
 
 %% Fast path for the three reply shapes produced by encode_reply/3. Hand
 %% writes the outer `{"o":...}` / `{"e":...}` / both wrapper, skipping

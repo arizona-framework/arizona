@@ -30,6 +30,7 @@
     middleware_halt_redirects_on_navigate/1,
     ws_flash_carried_over_navigate/1,
     ws_flash_carried_over_navigate_is_one_shot/1,
+    ws_flash_from_handler_over_navigate/1,
     middleware_cont_on_navigate/1,
     http_halt_redirect_via_req/1,
     http_halt_sets_cookie/1,
@@ -105,6 +106,7 @@ groups() ->
         middleware_halt_redirects_on_navigate,
         ws_flash_carried_over_navigate,
         ws_flash_carried_over_navigate_is_one_shot,
+        ws_flash_from_handler_over_navigate,
         middleware_cont_on_navigate,
         http_halt_redirect_via_req,
         http_halt_sets_cookie,
@@ -901,6 +903,25 @@ ws_flash_carried_over_navigate_is_one_shot(Config) ->
     {text, Resp3} = ws_recv(Sock),
     ?assertEqual(nomatch, binary:match(Resp3, ~"flashed")),
     ?assertNotEqual(nomatch, binary:match(Resp3, ~"none")),
+    ws_close(Sock).
+
+ws_flash_from_handler_over_navigate(Config) ->
+    %% In-view Post/Redirect/Get: a handle_event returns an
+    %% `arizona_js:navigate(Path, #{flash => ...})` effect. The socket strips the
+    %% flash from the client-bound effect and carries it in-process to the target.
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [~"crashable", ~"flash_navigate", #{}]),
+    {text, Resp1} = ws_recv(Sock),
+    Decoded1 = json:decode(Resp1),
+    [[OpCode, Target | _] | _] = maps:get(~"e", Decoded1),
+    ?assertEqual(?EFFECT_NAVIGATE, OpCode),
+    ?assertEqual(~"/show_flash", Target),
+    %% The flash never reaches the client -- it is stripped from the effect.
+    ?assertEqual(nomatch, binary:match(Resp1, ~"from_handler")),
+    %% The follow-up navigate delivers it to the target view.
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/show_flash", ~"qs" => ~""}]),
+    {text, Resp2} = ws_recv(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp2, ~"from_handler")),
     ws_close(Sock).
 
 middleware_cont_on_navigate(Config) ->
