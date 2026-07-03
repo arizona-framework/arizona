@@ -22,10 +22,10 @@
 -export([put_resp_status_stashes/1]).
 -export([resp_stash_defaults_empty/1]).
 -export([put_flash_serializes_into_resp_cookies/1]).
--export([read_flash_round_trips_and_clears/1]).
--export([read_flash_absent_is_empty/1]).
--export([pending_flash_reads_outgoing/1]).
--export([put_flash_in_seeds_and_merges_incoming/1]).
+-export([consume_flash_round_trips_and_clears/1]).
+-export([consume_flash_absent_is_empty/1]).
+-export([flash_out_reads_outgoing/1]).
+-export([seed_flash_merges_incoming/1]).
 -export([put_session_serializes_into_resp_cookies/1]).
 -export([put_session_merges_onto_incoming/1]).
 -export([get_session_reads_effective_state/1]).
@@ -59,10 +59,10 @@ groups() ->
             put_resp_status_stashes,
             resp_stash_defaults_empty,
             put_flash_serializes_into_resp_cookies,
-            read_flash_round_trips_and_clears,
-            read_flash_absent_is_empty,
-            pending_flash_reads_outgoing,
-            put_flash_in_seeds_and_merges_incoming,
+            consume_flash_round_trips_and_clears,
+            consume_flash_absent_is_empty,
+            flash_out_reads_outgoing,
+            seed_flash_merges_incoming,
             put_session_serializes_into_resp_cookies,
             put_session_merges_onto_incoming,
             get_session_reads_effective_state,
@@ -227,42 +227,42 @@ put_flash_serializes_into_resp_cookies(Config) when is_list(Config) ->
     ?assert(maps:get(max_age, Opts) > 0),
     ?assertEqual(#{~"error" => ~"Invalid email or password."}, arizona_flash:decode(Value)).
 
-read_flash_round_trips_and_clears(Config) when is_list(Config) ->
+consume_flash_round_trips_and_clears(Config) when is_list(Config) ->
     %% A request carrying a valid flash cookie reads it, and the response clears
     %% it (read-once).
     Encoded = arizona_flash:encode(#{~"error" => ~"nope"}),
     Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_flash", Encoded}]}),
-    {Flash, Req1} = arizona_req:read_flash(Req0),
+    {Flash, Req1} = arizona_req:consume_flash(Req0),
     ?assertEqual(#{~"error" => ~"nope"}, Flash),
     ?assertEqual(Flash, arizona_req:flash(Req1)),
     [{~"az_flash", <<>>, Opts}] = arizona_req:resp_cookies(Req1),
     ?assertEqual(0, maps:get(max_age, Opts)).
 
-read_flash_absent_is_empty(Config) when is_list(Config) ->
+consume_flash_absent_is_empty(Config) when is_list(Config) ->
     Req0 = arizona_req_test_adapter:new(#{cookies => []}),
-    {Flash, Req1} = arizona_req:read_flash(Req0),
+    {Flash, Req1} = arizona_req:consume_flash(Req0),
     ?assertEqual(#{}, Flash),
     %% Nothing consumed and nothing set -> no flash cookie on the response.
     ?assertEqual([], arizona_req:resp_cookies(Req1)).
 
-pending_flash_reads_outgoing(Config) when is_list(Config) ->
-    %% pending_flash exposes the flash a middleware stashed via put_flash/3, so a
+flash_out_reads_outgoing(Config) when is_list(Config) ->
+    %% flash_out exposes the flash a middleware stashed via put_flash/3, so a
     %% transport can carry it in-process; absent it is empty.
     Req0 = arizona_req_test_adapter:new(#{}),
-    ?assertEqual(#{}, arizona_req:pending_flash(Req0)),
+    ?assertEqual(#{}, arizona_req:flash_out(Req0)),
     Req1 = arizona_req:put_flash(Req0, error, ~"boom"),
-    ?assertEqual(#{~"error" => ~"boom"}, arizona_req:pending_flash(Req1)).
+    ?assertEqual(#{~"error" => ~"boom"}, arizona_req:flash_out(Req1)).
 
-put_flash_in_seeds_and_merges_incoming(Config) when is_list(Config) ->
-    %% put_flash_in seeds the incoming flash with no cookie: flash/1 and read_flash/1
+seed_flash_merges_incoming(Config) when is_list(Config) ->
+    %% seed_flash seeds the incoming flash with no cookie: flash/1 and consume_flash/1
     %% read it back, and a second seed merges (last write wins per key).
     Req0 = arizona_req_test_adapter:new(#{cookies => []}),
-    Req1 = arizona_req:put_flash_in(Req0, #{~"error" => ~"seeded"}),
+    Req1 = arizona_req:seed_flash(Req0, #{~"error" => ~"seeded"}),
     ?assertEqual(#{~"error" => ~"seeded"}, arizona_req:flash(Req1)),
-    {Flash, _Req2} = arizona_req:read_flash(Req1),
+    {Flash, _Req2} = arizona_req:consume_flash(Req1),
     ?assertEqual(#{~"error" => ~"seeded"}, Flash),
     %% Merge: a new key is added, an existing key is overwritten.
-    Req3 = arizona_req:put_flash_in(Req1, #{~"info" => ~"more", ~"error" => ~"new"}),
+    Req3 = arizona_req:seed_flash(Req1, #{~"info" => ~"more", ~"error" => ~"new"}),
     ?assertEqual(#{~"error" => ~"new", ~"info" => ~"more"}, arizona_req:flash(Req3)).
 
 put_session_serializes_into_resp_cookies(Config) when is_list(Config) ->
@@ -316,8 +316,8 @@ clear_session_clears_cookie(Config) when is_list(Config) ->
     ?assertEqual(0, maps:get(max_age, Opts)).
 
 read_session_round_trips_and_does_not_clear(Config) when is_list(Config) ->
-    %% The durable counterpart to read_flash: a read returns the session but, unlike
-    %% flash, does NOT mark it for clearing -- the response emits no cookie.
+    %% The durable counterpart to consume_flash: a read returns the session but,
+    %% unlike flash, does NOT mark it for clearing -- the response emits no cookie.
     Encoded = arizona_session:encode(#{~"user_id" => ~"42"}),
     Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Encoded}]}),
     {Session, Req1} = arizona_req:read_session(Req0),
