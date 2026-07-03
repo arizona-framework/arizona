@@ -116,6 +116,12 @@ resolve_route(Path, Qs, Req) ->
             <<>> -> Path;
             _ -> <<Path/binary, "?", Qs/binary>>
         end,
-    NavReq = Req#{target => Target, bindings => RawBindings},
+    %% Overlay the resolved route `Path` (not the transport `/ws`) so
+    %% `roadrunner_req:path/1` -- and thus `arizona_req:path/1` -- reports the
+    %% logical route on a WS handshake/navigate, matching a plain HTTP GET to the
+    %% same route. Without it the stale `/ws` upgrade path would leak to any
+    %% middleware reading `path/1` for a routing decision (return-to capture,
+    %% path-based gates).
+    NavReq = Req#{target => Target, path => Path, bindings => RawBindings},
     ArzReq = new(NavReq),
     {maps:get(handler, ArzOpts), maps:without([handler], ArzOpts), ArzReq}.
