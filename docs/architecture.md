@@ -848,7 +848,9 @@ The callback returns a handler module, the route's static options
 (`t:arizona_live:route_opts/0` -- `bindings`, `on_mount`, `layouts`, `middlewares`), and a
 navigate-scoped `arizona_req` carrying the new URL. Cookies/headers on the returned Request are
 inherited from the original upgrade Req; `path`, `bindings` (path bindings from the router), and
-`params` reflect the new path/qs.
+`params` reflect the new path/qs. In particular `path` is the **resolved route path** (the
+`_az_path` value), not the `/ws` transport path the WebSocket rode in on, so a middleware reading
+`arizona_req:path/1` on a navigate/upgrade sees the same logical route as a plain HTTP GET.
 
 **Shipped implementation:** `arizona_roadrunner_req` exports the optional `resolve_route/3` and
 runs `roadrunner_router:match/3` against the compiled dispatch stored by
@@ -863,7 +865,9 @@ adapter's behaviour callbacks on first access and cached in the returned request
 **Accessors** (eager):
 
 - `method/1` -- HTTP method (`~"GET"`, `~"POST"`, ...)
-- `path/1` -- request path, no query string
+- `path/1` -- the logical route path, no query string. On a WebSocket SPA-navigate or upgrade
+  this is the resolved route path (from `_az_path`), **not** the `/ws` transport path -- so it
+  matches a plain HTTP GET to the same route on both transports
 - `raw/1` -- the native transport value the adapter wraps
 
 **Accessors** (lazy, return `{Value, Req1}`):

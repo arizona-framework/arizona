@@ -18,6 +18,10 @@
     http_query_params/1,
     http_path_bindings/1,
     ws_path_bindings/1,
+    http_path_reports_route_path/1,
+    ws_navigate_path_reports_route_path/1,
+    ws_upgrade_path_reports_route_path/1,
+    ws_upgrade_path_defaults_to_root/1,
     ws_navigate_to_parametrized_route/1,
     ws_patch_same_handler_diffs_in_place/1,
     ws_patch_different_handler_replaces/1,
@@ -96,6 +100,10 @@ groups() ->
         http_query_params,
         http_path_bindings,
         ws_path_bindings,
+        http_path_reports_route_path,
+        ws_navigate_path_reports_route_path,
+        ws_upgrade_path_reports_route_path,
+        ws_upgrade_path_defaults_to_root,
         ws_navigate_to_parametrized_route,
         ws_patch_same_handler_diffs_in_place,
         ws_patch_different_handler_replaces,
@@ -225,6 +233,15 @@ init_per_group(roadrunner, Config) ->
         }},
         {live, <<"/items/:item_id">>, arizona_crashable, #{
             middlewares => [arizona_middleware:extract([path_bindings, params])]
+        }},
+        %% Projects `arizona_req:path/1` into `status` so a test can read the
+        %% observed request path off the rendered HTML. Proves `path/1` reports the
+        %% logical route path (`/echo_path`), not the `/ws` transport path, on a WS
+        %% upgrade and a WS navigate -- consistent with a plain HTTP GET.
+        {live, <<"/echo_path">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) -> {cont, Req, B#{status => arizona_req:path(Req)}} end
+            ]
         }},
         {live, <<"/preserves_dupes">>, arizona_crashable, #{middlewares => [DupePreserving]}},
         {live, <<"/halt_redirect_req">>, arizona_crashable, #{
@@ -471,6 +488,47 @@ ws_path_bindings(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/items/my-item">>),
     ok = ws_send(Sock, <<"0">>),
     {text, <<"1">>} = ws_recv(Sock),
+    ws_close(Sock).
+
+http_path_reports_route_path(Config) ->
+    %% Baseline: on a plain HTTP GET, arizona_req:path/1 reports the request path.
+    %% The /echo_path middleware projects it into `status`, rendered in the page.
+    Port = proplists:get_value(port, Config),
+    Body = http_get_body(Port, <<"/echo_path">>),
+    ?assertNotEqual(nomatch, binary:match(Body, ~"/echo_path")).
+
+ws_navigate_path_reports_route_path(Config) ->
+    %% The reported bug: on a WS SPA-navigate, arizona_req:path/1 must report the
+    %% navigated-to route path (`/echo_path`), not the `/ws` transport path. The
+    %% navigate resolves /echo_path, whose middleware projects path/1 into the
+    %% OP_REPLACE render.
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/echo_path", ~"qs" => ~""}]),
+    {text, Resp} = ws_recv(Sock),
+    ?assertMatch(#{~"o" := [[?OP_REPLACE, _, _]]}, json:decode(Resp)),
+    ?assertNotEqual(nomatch, binary:match(Resp, ~"/echo_path")),
+    %% Regression: the transport path must not leak as the observed path.
+    ?assertEqual(nomatch, binary:match(Resp, ~"/ws")),
+    ws_close(Sock).
+
+ws_upgrade_path_reports_route_path(Config) ->
+    %% Same guarantee on the WS *upgrade* handshake (`ws://host/ws?_az_path=/echo_path`):
+    %% `reconnect` forces an immediate mount-and-render so the HTML -- carrying
+    %% path/1 -- lands on the first frame.
+    {ok, Sock} = ws_connect(Config, <<"/echo_path">>, [{reconnect, true}]),
+    {text, Resp} = ws_recv(Sock),
+    ?assertNotEqual(nomatch, binary:match(Resp, ~"/echo_path")),
+    ?assertEqual(nomatch, binary:match(Resp, ~"/ws")),
+    ws_close(Sock).
+
+ws_upgrade_path_defaults_to_root(Config) ->
+    %% The `_az_path` default still holds: an upgrade with no `_az_path` key
+    %% resolves the root `/` route and renders it (reconnect OP_REPLACE), with no
+    %% `/ws` transport path leaking into the render.
+    {ok, Sock} = ws_connect(Config, <<"/">>, [{reconnect, true}, {omit_az_path, true}]),
+    {text, Resp} = ws_recv(Sock),
+    ?assertMatch(#{~"o" := [[?OP_REPLACE, _, _]]}, json:decode(Resp)),
+    ?assertEqual(nomatch, binary:match(Resp, ~"/ws")),
     ws_close(Sock).
 
 ws_navigate_to_parametrized_route(Config) ->
@@ -1611,11 +1669,21 @@ ws_handshake(Sock, Port, Path, Opts) ->
             <<>> -> "";
             _ -> [$&, RawQs]
         end,
-    QS =
-        case Reconnect of
-            true -> ["_az_path=", Path, "&_az_reconnect=1", ParamsQS, RawSuffix];
-            false -> ["_az_path=", Path, ParamsQS, RawSuffix]
+    %% `omit_az_path` drops the `_az_path` key entirely to exercise the upgrade's
+    %% default-to-`/` path. Its reconnect segment carries no leading `&` so the
+    %% resulting query string never starts with one.
+    AzPathSeg =
+        case proplists:get_value(omit_az_path, Opts, false) of
+            true -> "";
+            false -> ["_az_path=", Path]
         end,
+    ReconSeg =
+        case {Reconnect, AzPathSeg} of
+            {true, ""} -> "_az_reconnect=1";
+            {true, _} -> "&_az_reconnect=1";
+            {false, _} -> ""
+        end,
+    QS = [AzPathSeg, ReconSeg, ParamsQS, RawSuffix],
     Req = [
         "GET /ws?",
         QS,
