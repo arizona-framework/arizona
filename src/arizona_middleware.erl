@@ -153,7 +153,7 @@ response clears its cookie, so a refresh shows nothing. Pair it with
 """.
 -spec fetch_flash(arizona_req:request(), az:bindings()) -> middleware_result().
 fetch_flash(Req, Bindings) ->
-    {Flash, Req1} = arizona_req:read_flash(Req),
+    {Flash, Req1} = arizona_req:consume_flash(Req),
     {cont, Req1, Bindings#{flash => Flash}}.
 
 -doc """

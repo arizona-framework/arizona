@@ -370,7 +370,7 @@ do_patch(RouteOpts, NewReq0, Socket0) ->
 halt_navigate(HaltReq, Socket) ->
     case arizona_req:halted_redirect(HaltReq) of
         {_Status, Location} ->
-            Effect = navigate_effect(Location, arizona_req:pending_flash(HaltReq)),
+            Effect = navigate_effect(Location, arizona_req:flash_out(HaltReq)),
             encode_reply([], [Effect], Socket);
         undefined ->
             close_crash(Socket)
@@ -385,7 +385,7 @@ navigate_effect(Location, _Flash) ->
 %% clear it from the socket (consumed once). Empty is a no-op so a real incoming
 %% cookie flash on `NewReq` is never masked.
 take_pending_flash(Req, #socket{pending_flash = Flash} = Socket) when map_size(Flash) > 0 ->
-    {arizona_req:put_flash_in(Req, Flash), Socket#socket{pending_flash = #{}}};
+    {arizona_req:seed_flash(Req, Flash), Socket#socket{pending_flash = #{}}};
 take_pending_flash(Req, Socket) ->
     {Req, Socket}.
 

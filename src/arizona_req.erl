@@ -73,9 +73,9 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([resp_status/1]).
 -export([put_flash/3]).
 -export([flash/1]).
--export([read_flash/1]).
--export([pending_flash/1]).
--export([put_flash_in/2]).
+-export([flash_out/1]).
+-export([consume_flash/1]).
+-export([seed_flash/2]).
 -export([put_session/3]).
 -export([delete_session/2]).
 -export([clear_session/1]).
@@ -558,17 +558,35 @@ auto-injected `flash` binding. Pair it with `put_flash/3` (the writer).
 flash(#{flash_in := Flash}) -> Flash;
 flash(_) -> #{}.
 
+-doc """
+Returns the outgoing flash this request has staged via `put_flash/3` (destined for
+the *next* request), or `#{}` when none was set.
+
+The companion to `flash/1`: where `flash/1` reads the **incoming** flash (what this
+request received), `flash_out/1` reads the **outgoing** one (what it has queued to
+send). The framework carries this map onward -- a signed cookie for a full-page
+redirect, or in-process across a WebSocket SPA navigate -- so it is primarily an
+introspection/testing helper: a test can assert what a middleware or handler
+flashed before a redirect without decoding the cookie.
+""".
+-spec flash_out(Request) -> flash() when
+    Request :: request().
+flash_out(#{flash_out := Flash}) -> Flash;
+flash_out(_) -> #{}.
+
 %% Internal use only -- the consuming cookie reader behind the `fetch_flash`
 %% middleware and the HTTP render pipeline: reads, verifies, and decodes the flash
 %% cookie into the request, marking it consumed so the response clears it
-%% (read-once). Idempotent (a second call returns the cached value without
-%% re-marking). App code reads the flash with `flash/1` or the `flash` binding.
+%% (read-once). Returns `{Flash, Req}` and consumes -- the destructive counterpart
+%% to the non-consuming `read_session/1`. Idempotent (a second call returns the
+%% cached value without re-marking). App code reads the flash with `flash/1` or the
+%% `flash` binding.
 -doc false.
--spec read_flash(Request) -> {flash(), Request} when
+-spec consume_flash(Request) -> {flash(), Request} when
     Request :: request().
-read_flash(#{flash_in := Flash} = Req) ->
+consume_flash(#{flash_in := Flash} = Req) ->
     {Flash, Req};
-read_flash(Req0) ->
+consume_flash(Req0) ->
     {Cookies, Req} = cookies(Req0),
     case lists:keyfind(arizona_flash:cookie_name(), 1, Cookies) of
         {_, Value} ->
@@ -578,25 +596,18 @@ read_flash(Req0) ->
             {#{}, Req#{flash_in => #{}}}
     end.
 
-%% Internal use only -- carry plumbing invoked by `arizona_socket` to move a flash
-%% a halting middleware set (the `flash_out` map) across a WebSocket SPA navigate,
-%% where a `{halt, redirect}` has no `Set-Cookie` leg. App code sets a flash with
-%% `put_flash/3` and reads it with `flash/1`; it never calls this.
--doc false.
--spec pending_flash(Request) -> flash() when
-    Request :: request().
-pending_flash(#{flash_out := Flash}) -> Flash;
-pending_flash(_) -> #{}.
-
 %% Internal use only -- carry plumbing invoked by `arizona_socket` to seed the
-%% incoming flash (so `flash/1` reads it with no cookie) when delivering a flash
-%% carried in-process across an SPA navigate. Merges onto any flash already present
-%% (last write wins per key). App code never calls this.
+%% incoming side of the follow-up request with a flash a halting middleware set
+%% (the `flash_out` map) -- so `flash/1` reads it with no cookie -- when carried
+%% in-process across a WebSocket SPA navigate, where a `{halt, redirect}` has no
+%% `Set-Cookie` leg. Merges onto any flash already present (last write wins per
+%% key). App code sets a flash with `put_flash/3` and reads it with `flash/1`; it
+%% never calls this.
 -doc false.
--spec put_flash_in(Request, Flash) -> Request when
+-spec seed_flash(Request, Flash) -> Request when
     Request :: request(),
     Flash :: flash().
-put_flash_in(Req, Flash) when is_map(Flash) ->
+seed_flash(Req, Flash) when is_map(Flash) ->
     Current = maps:get(flash_in, Req, #{}),
     Req#{flash_in => maps:merge(Current, Flash)}.
 
@@ -702,7 +713,7 @@ get_session(Req, Key, Default) ->
 -doc """
 Reads, authenticates, and decodes the incoming session cookie into the request.
 Returns the session map (`#{}` when absent, tampered, malformed, or expired) and the
-updated request. Idempotent and **non-consuming**: unlike `read_flash/1` it does not
+updated request. Idempotent and **non-consuming**: unlike `consume_flash/1` it does not
 mark the session for clearing -- a durable session survives a read untouched.
 
 Run by the `fetch_session` middleware (opt-in); apps normally use `session/1`,
