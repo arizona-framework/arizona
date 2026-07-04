@@ -50,6 +50,7 @@ decision.
 -export([notify/1]).
 -export([notify/2]).
 -export([capture_protection/1]).
+-export([open_window/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -65,7 +66,8 @@ decision.
     fullscreen/1,
     notify/1,
     notify/2,
-    capture_protection/1
+    capture_protection/1,
+    open_window/2
 ]).
 
 %% --------------------------------------------------------------------
@@ -127,3 +129,14 @@ and live shares. Idempotent: safe to re-assert from server state on reconnect.
 -spec capture_protection(Enabled) -> arizona_effect:cmd() when
     Enabled :: boolean().
 capture_protection(Enabled) -> command(~"screen_capture_protection", [Enabled]).
+
+-doc """
+Opens a secondary shell window at `Url`. `Opts` is a map of window hints:
+`width` / `height` (integers) and `always_on_top` (boolean). Fire-and-forget,
+like every OS command; a plain browser (or a shell without the capability) is a
+safe no-op.
+""".
+-spec open_window(Url, Opts) -> arizona_effect:cmd() when
+    Url :: binary(),
+    Opts :: map().
+open_window(Url, Opts) -> command(~"open_window", [Url, Opts]).

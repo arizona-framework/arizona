@@ -116,7 +116,15 @@ Typed sugars are the documented path; `command/2` is the unchecked escape hatch
 | `fullscreen/1` | `~"window_fullscreen"` |
 | `notify/1,2` | `~"notify"` |
 | `capture_protection/1` | `~"screen_capture_protection"` |
+| `open_window/2` | `~"open_window"` |
 | `command/1,2` | (any name) |
+
+`open_window/2` takes a `Url` binary and an `Opts` map of window hints --
+`width` / `height` (integers) and `always_on_top` (boolean) -- for a shell that
+can open a secondary window the browser sandbox forbids (e.g. an always-on-top
+picture-in-picture). Like the others it is fire-and-forget: the window is opened
+for its side effect, so it belongs with the sugars above, not with the deferred
+result-bearing capabilities below.
 
 **Declarative vs one-shot on reconnect.** On reconnect the live process re-mounts
 fresh (so `?connected` is `true` again) while the OS window keeps its real state.
