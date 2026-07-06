@@ -15,6 +15,7 @@
 -export([notify/1]).
 -export([notify_with_opts/1]).
 -export([capture_protection/1]).
+-export([open_window/1]).
 -export([command_encodes_to_json/1]).
 
 -export([capability_true/1]).
@@ -42,6 +43,7 @@ groups() ->
             notify,
             notify_with_opts,
             capture_protection,
+            open_window,
             command_encodes_to_json
         ]},
         {read_api, [parallel], [
@@ -107,6 +109,21 @@ capture_protection(Config) when is_list(Config) ->
     ?assertEqual(
         {arizona_effect, [?EFFECT_OS, ~"screen_capture_protection", true]},
         arizona_os:capture_protection(true)
+    ).
+
+open_window(Config) when is_list(Config) ->
+    %% Url binary + an Opts map, spliced flat after the name (like notify/2).
+    ?assertEqual(
+        {arizona_effect, [
+            ?EFFECT_OS,
+            ~"open_window",
+            ~"https://example.com/pip",
+            #{width => 420, height => 640, always_on_top => true}
+        ]},
+        arizona_os:open_window(
+            ~"https://example.com/pip",
+            #{width => 420, height => 640, always_on_top => true}
+        )
     ).
 
 command_encodes_to_json(Config) when is_list(Config) ->
