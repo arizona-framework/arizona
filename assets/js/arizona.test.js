@@ -4326,6 +4326,24 @@ describe('executeJS -- fetch', () => {
         expect(globalThis.fetch.mock.calls[0][1].credentials).toBe('include');
     });
 
+    it('forwards opts.keep_alive to the fetch init keepalive when true', async () => {
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.body, null, [22, '/api', { keep_alive: true }]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        expect(globalThis.fetch.mock.calls[0][1].keepalive).toBe(true);
+    });
+
+    it('defaults the fetch init keepalive to false when opts.keep_alive is absent', async () => {
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.body, null, [22, '/api', {}]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        expect(globalThis.fetch.mock.calls[0][1].keepalive).toBe(false);
+    });
+
     it('applies a non-2xx effects body (inline validation) without firing on_error', async () => {
         document.title = 'Old';
         globalThis.fetch = vi.fn(() =>

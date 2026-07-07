@@ -469,7 +469,7 @@ handle_event(~"inc", _P, B) ->
 - `navigate/1,2` -- SPA navigation, replaces the root view (opts: `#{replace => true}`)
 - `patch/1,2` -- in-place SPA navigation, keeps the root view and re-renders it via `handle_update/3`
 - `fetch/2` -- HTTP request via the browser `fetch()`, **no page reload** (opts: `method`,
-  `body`, `headers`, `credentials`, `on_error`). The only mode that can set a real `Set-Cookie`
+  `body`, `headers`, `credentials`, `on_error`, `keep_alive`). The only mode that can set a real `Set-Cookie`
   (HttpOnly honored) without navigating, so it suits flows that rotate a session cookie while
   keeping form fields and showing inline validation. Hits a controller route (e.g. `{post, ...}`)
   that returns the `{"e": [...]}` effects payload via `arizona_controller:reply_effects/1`; those
@@ -480,7 +480,9 @@ handle_event(~"inc", _P, B) ->
   pubsub); broadcast over `arizona_pubsub` only to reach **other** views. `on_error` (plus an
   `arizona:fetch-error` DOM event) runs only when there is no usable effects body -- a non-JSON
   page, an empty non-2xx, or a network failure. A redirect is an `arizona_js:navigate` effect
-  (`arizona_controller:reply_redirect/1`), not an HTTP 3xx.
+  (`arizona_controller:reply_redirect/1`), not an HTTP 3xx. `keep_alive` (default `false`) maps to
+  the browser's `fetch(url, { keepalive: true })` so a request fired just before a navigation
+  completes instead of being cancelled (browser inflight-body cap ~64KB).
 - `transition/1,2` -- wrap a command (or list) so its DOM change animates in a view
   transition (opts: `#{types => [binary()]}`); see "View transitions" below
 - `focus/1`, `blur/1` -- focus management
