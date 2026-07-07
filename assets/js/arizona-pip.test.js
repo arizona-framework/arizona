@@ -60,6 +60,33 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         pip.fire('pagehide'); // restore
     });
 
+    it('routes ops for a nested stateful child into the PiP document', async () => {
+        // A stateful child (its own `az-view`/id boundary) nested inside the
+        // popped region. Only the root's id is registered in `_viewDocs`; the
+        // child rides along into the PiP document and must keep updating.
+        document.body.innerHTML =
+            '<div id="p1" az-view az="0"><div id="region">' +
+            '<div id="c1" az-view az="0"><span az="1" class="a"></span></div>' +
+            '</div></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+
+        await requestPip('p1');
+
+        // The nested child moved into the PiP document with its ancestor.
+        expect(pip.document.getElementById('c1')).not.toBeNull();
+
+        // A diff for the CHILD (its own view id, never registered) resolves to
+        // the PiP document by DOM containment, and the patch lands there.
+        expect(resolveEl('c1:1')?.ownerDocument).toBe(pip.document);
+        applyOps([[1, 'c1:1', 'class', 'b']]); // OP.SET_ATTR
+        expect(pip.document.querySelector('#c1 [az="1"]')?.getAttribute('class')).toBe('b');
+
+        pip.fire('pagehide'); // restore
+        // The child routes back to the main document once the region is restored.
+        expect(resolveEl('c1:1')?.ownerDocument).toBe(document);
+    });
+
     it('routes selector effects to the PiP document', async () => {
         document.body.innerHTML = '<div id="v2" az-view az="0"><b az="1"></b></div>';
         const pip = makePipWindow();

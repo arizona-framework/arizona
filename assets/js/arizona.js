@@ -137,18 +137,11 @@ const _savedForms = new Map();
 // A view's root element normally lives in the main `document`, but `requestPip`
 // can move it into a floating PiP window with its own `document`. Patches are
 // applied by resolving the view root in its OWNING document, so server diffs
-// keep flowing after the move. Maps a viewId -> the Document that owns it.
+// keep flowing after the move. Registers the popped view's id against its PiP
+// Document so `allDocs` knows which windows to search; resolution itself goes
+// by DOM containment (see `findViewRoot`), not this map's keys.
 /** @type {Map<string, Document>} */
 const _viewDocs = new Map();
-
-/**
- * The Document that owns a view's root element (the main document by default).
- * @param {string} viewId
- * @returns {Document}
- */
-function docFor(viewId) {
-    return _viewDocs.get(viewId) || document;
-}
 
 /**
  * Every document currently hosting Arizona views: the main document plus any
@@ -159,6 +152,31 @@ function allDocs() {
     const docs = new Set([document]);
     for (const d of _viewDocs.values()) docs.add(d);
     return docs;
+}
+
+/**
+ * Find a view's root element by id, searching the main document first and then
+ * any popped-out PiP windows, returning whichever one actually owns it.
+ * Resolving by DOM containment -- rather than a flat viewId -> Document map --
+ * is what routes a NESTED stateful child correctly: `requestPip` registers only
+ * the popped root's id, but a stateful child inside the moved subtree emits ops
+ * under its own view id and gets physically moved into the PiP document with the
+ * subtree. Containment finds it there with no per-child bookkeeping (and the
+ * same for children inserted after pop-out). The PiP scan is skipped entirely
+ * when no window is open, so the common (main-document) path stays a single
+ * allocation-free `getElementById` -- this runs per diff op. Returns null when
+ * no hosting document holds the element.
+ * @param {string} viewId
+ * @returns {Element|null}
+ */
+function findViewRoot(viewId) {
+    const el = document.getElementById(viewId);
+    if (el || _viewDocs.size === 0) return el;
+    for (const doc of _viewDocs.values()) {
+        const found = doc.getElementById(viewId);
+        if (found) return found;
+    }
+    return null;
 }
 
 // --------------------------------------------------------------------------
@@ -666,10 +684,10 @@ function applyOps(ops) {
  */
 function resolveEl(target) {
     const i = target.indexOf(':');
-    if (i === -1) return docFor(target).getElementById(target);
+    if (i === -1) return findViewRoot(target);
     const viewId = target.substring(0, i);
     const az = target.substring(i + 1);
-    const view = docFor(viewId).getElementById(viewId);
+    const view = findViewRoot(viewId);
     if (!view) return null;
     if (view.getAttribute('az') === az) return view;
     let el = view.querySelector(`[az="${az}"]`);
@@ -904,7 +922,7 @@ function forEachLocal(root, key, viewId, fn) {
  * @param {*} value
  */
 function set(viewId, key, value) {
-    const root = docFor(viewId).getElementById(viewId);
+    const root = findViewRoot(viewId);
     if (!root) return;
     forEachLocal(root, key, viewId, (el, target) => writeLocalValue(el, target, value));
 }
@@ -938,7 +956,7 @@ function get(a, b) {
             if (result === undefined) result = readLocalValue(el, target);
         });
     if (viewId) {
-        const root = docFor(viewId).getElementById(viewId);
+        const root = findViewRoot(viewId);
         if (root) scan(root);
     } else {
         for (const doc of allDocs()) scan(doc);
