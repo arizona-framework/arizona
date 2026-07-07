@@ -54,6 +54,10 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 -export([focus/1]).
 -export([blur/1]).
 -export([reset_form/1]).
+-export([select/1]).
+-export([copy_to_clipboard/1]).
+-export([show_modal/1]).
+-export([close_modal/1]).
 -export([scroll_to/1]).
 -export([scroll_to/2]).
 -export([set_title/1]).
@@ -94,6 +98,10 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     focus/1,
     blur/1,
     reset_form/1,
+    select/1,
+    copy_to_clipboard/1,
+    show_modal/1,
+    close_modal/1,
     scroll_to/1,
     scroll_to/2,
     set_title/1,
@@ -351,6 +359,61 @@ effect from `handle_event/3`.
     Selector :: binary().
 reset_form(Sel) -> {arizona_effect, [?EFFECT_RESET_FORM, Sel]}.
 
+-doc """
+Selects (highlights) the text of the first element matching the selector, an
+`<input>` or `<textarea>`, via `HTMLInputElement.select` -- so a subsequent copy
+or overtype acts on the whole field.
+
+Like `focus/1`/`blur/1`/`scroll_to/1` (first match only). A match without a
+`select()` method is a safe no-op. Usable both as a web event command
+(e.g. `{az_click, arizona_js:select(~"#token")}`) and as a handler effect from
+`handle_event/3`.
+""".
+-spec select(Selector) -> arizona_effect:cmd() when
+    Selector :: binary().
+select(Sel) -> {arizona_effect, [?EFFECT_SELECT, Sel]}.
+
+-doc """
+Copies to the clipboard the text of the first element matching the selector: the
+matched element's `value` (a form control) or, failing that, its `textContent`,
+written via `navigator.clipboard.writeText`.
+
+Like `focus/1`/`blur/1`/`scroll_to/1` (first match only). The Clipboard API
+requires a **secure context** and a **user gesture**, so this is meaningful as an
+**event command only** (e.g. `{az_click, arizona_js:copy_to_clipboard(~"#token")}`);
+a server-pushed handler effect can't satisfy the gesture requirement. A
+missing/blocked clipboard is a safe no-op.
+""".
+-spec copy_to_clipboard(Selector) -> arizona_effect:cmd() when
+    Selector :: binary().
+copy_to_clipboard(Sel) -> {arizona_effect, [?EFFECT_COPY_TO_CLIPBOARD, Sel]}.
+
+-doc """
+Opens the first `<dialog>` matching the selector as a true modal via
+`HTMLDialogElement.showModal` -- placed in the top layer, with a `::backdrop`
+and ESC-to-close -- unlike merely setting the `open` attribute (a non-modal
+dialog). A non-dialog match is a safe no-op.
+
+Like `focus/1`/`blur/1`/`scroll_to/1` (first match only). Usable both as a web
+event command (e.g. `{az_click, arizona_js:show_modal(~"#confirm")}`) and as a
+handler effect from `handle_event/3`.
+""".
+-spec show_modal(Selector) -> arizona_effect:cmd() when
+    Selector :: binary().
+show_modal(Sel) -> {arizona_effect, [?EFFECT_SHOW_MODAL, Sel]}.
+
+-doc """
+Closes the first `<dialog>` matching the selector via `HTMLDialogElement.close`.
+A non-dialog match is a safe no-op.
+
+Like `focus/1`/`blur/1`/`scroll_to/1` (first match only). Usable both as a web
+event command (e.g. `{az_click, arizona_js:close_modal(~"#confirm")}`) and as a
+handler effect from `handle_event/3`.
+""".
+-spec close_modal(Selector) -> arizona_effect:cmd() when
+    Selector :: binary().
+close_modal(Sel) -> {arizona_effect, [?EFFECT_CLOSE_MODAL, Sel]}.
+
 -doc "Scrolls to the first element matching the selector.".
 -spec scroll_to(Selector) -> arizona_effect:cmd() when
     Selector :: binary().
@@ -564,6 +627,24 @@ reset_form_encode_test() ->
     ?assertNotEqual(nomatch, binary:match(Bin, ~"[25")),
     ?assertNotEqual(nomatch, binary:match(Bin, ~"#signup")).
 
+select_test() ->
+    {arizona_effect, [?EFFECT_SELECT, ~"#token"]} = select(~"#token").
+
+copy_to_clipboard_test() ->
+    {arizona_effect, [?EFFECT_COPY_TO_CLIPBOARD, ~"#token"]} = copy_to_clipboard(~"#token").
+
+copy_to_clipboard_encode_test() ->
+    %% Round-trips through arizona_effect:encode/1 like any other selector effect.
+    Bin = arizona_effect:encode(copy_to_clipboard(~"#token")),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"[27")),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"#token")).
+
+show_modal_test() ->
+    {arizona_effect, [?EFFECT_SHOW_MODAL, ~"#confirm"]} = show_modal(~"#confirm").
+
+close_modal_test() ->
+    {arizona_effect, [?EFFECT_CLOSE_MODAL, ~"#confirm"]} = close_modal(~"#confirm").
+
 builders_test() ->
     ?assertEqual({arizona_effect, [?EFFECT_SHOW, ~"#m"]}, show(~"#m")),
     ?assertEqual({arizona_effect, [?EFFECT_HIDE, ~"#m"]}, hide(~"#m")),
@@ -594,6 +675,10 @@ builders_test() ->
     ?assertEqual({arizona_effect, [?EFFECT_FOCUS, ~"#m"]}, focus(~"#m")),
     ?assertEqual({arizona_effect, [?EFFECT_BLUR, ~"#m"]}, blur(~"#m")),
     ?assertEqual({arizona_effect, [?EFFECT_RESET_FORM, ~"#m"]}, reset_form(~"#m")),
+    ?assertEqual({arizona_effect, [?EFFECT_SELECT, ~"#m"]}, select(~"#m")),
+    ?assertEqual({arizona_effect, [?EFFECT_COPY_TO_CLIPBOARD, ~"#m"]}, copy_to_clipboard(~"#m")),
+    ?assertEqual({arizona_effect, [?EFFECT_SHOW_MODAL, ~"#m"]}, show_modal(~"#m")),
+    ?assertEqual({arizona_effect, [?EFFECT_CLOSE_MODAL, ~"#m"]}, close_modal(~"#m")),
     ?assertEqual({arizona_effect, [?EFFECT_SCROLL_TO, ~"#m"]}, scroll_to(~"#m")),
     ?assertEqual(
         {arizona_effect, [?EFFECT_SCROLL_TO, ~"#m", #{behavior => smooth}]},
