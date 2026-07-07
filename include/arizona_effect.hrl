@@ -24,3 +24,4 @@
 -define(EFFECT_FETCH, 22).
 -define(EFFECT_OS, 23).
 -define(EFFECT_PATCH, 24).
+-define(EFFECT_RESET_FORM, 25).

@@ -1120,6 +1120,15 @@ describe('applyEffects -- class/visibility effects fire updated()', () => {
         applyEffects([[3, '[az-hook="Chart"]']]); // op 3 = hide
         expect(updated).toHaveBeenCalledOnce();
     });
+
+    it('reset_form fires updated() on a hooked form', () => {
+        const updated = vi.fn();
+        hooks.Chart = { mounted() {}, updated };
+        setupView('v', '<form az="0" az-hook="Chart"><input name="a" /></form>');
+        mountHooks(document);
+        applyEffects([[25, '[az-hook="Chart"]']]); // op 25 = reset_form
+        expect(updated).toHaveBeenCalledOnce();
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -1203,6 +1212,24 @@ describe('applyEffects -- broadcast effects target all matching elements', () =>
         applyEffects([[11, '.item']]); // op 11 = focus
         expect(document.activeElement).toBe(first);
         expect(document.activeElement).not.toBe(second);
+    });
+
+    it('reset_form clears typed input + textarea on every matching form', () => {
+        document.body.innerHTML =
+            '<form class="f"><input name="a" value="def" /><textarea>orig</textarea></form>' +
+            '<form class="f"><input name="a" value="def" /><textarea>orig</textarea></form>';
+        for (const i of document.querySelectorAll('input')) i.value = 'typed';
+        for (const t of document.querySelectorAll('textarea')) t.value = 'edited';
+        applyEffects([[25, '.f']]); // op 25 = reset_form
+        expect([...document.querySelectorAll('input')].every((i) => i.value === 'def')).toBe(true);
+        expect([...document.querySelectorAll('textarea')].every((t) => t.value === 'orig')).toBe(
+            true,
+        );
+    });
+
+    it('reset_form is a safe no-op on a non-form match', () => {
+        document.body.innerHTML = '<div class="f"></div>';
+        expect(() => applyEffects([[25, '.f']])).not.toThrow();
     });
 });
 
