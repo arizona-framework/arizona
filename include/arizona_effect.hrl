@@ -25,3 +25,7 @@
 -define(EFFECT_OS, 23).
 -define(EFFECT_PATCH, 24).
 -define(EFFECT_RESET_FORM, 25).
+-define(EFFECT_SELECT, 26).
+-define(EFFECT_COPY_TO_CLIPBOARD, 27).
+-define(EFFECT_SHOW_MODAL, 28).
+-define(EFFECT_CLOSE_MODAL, 29).

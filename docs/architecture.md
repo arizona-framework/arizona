@@ -489,6 +489,14 @@ handle_event(~"inc", _P, B) ->
 - `reset_form/1` -- reset (clear typed fields on) every form matching the selector, imperatively
   (unlike `az-form-reset`, which fires only on a successful submit/fetch); a non-form match is a
   safe no-op
+- `select/1` -- select (highlight) the first matching `<input>`/`<textarea>`'s text
+  (`HTMLInputElement.select`); a non-input match is a safe no-op
+- `copy_to_clipboard/1` -- copy the first match's `value` (form control) or `textContent` to the clipboard
+  (`navigator.clipboard.writeText`); needs a secure context + user gesture, so it is an **event
+  command only** (not a handler effect); a missing/blocked clipboard is a safe no-op
+- `show_modal/1`, `close_modal/1` -- open the first matching `<dialog>` as a true modal
+  (`showModal`, top layer + `::backdrop` + ESC-to-close, unlike the `open` attribute) / close it
+  (`close`); a non-dialog match is a safe no-op
 - `scroll_to/1,2` -- scroll element into view (opts: `#{behavior => <<"smooth">>}`)
 - `set_title/1` -- set document title
 - `reload/0` -- reload page
@@ -504,7 +512,8 @@ the `_az_caps` connect param and read server-side with `?capability(Name)`; a sa
 plain browser. See [os.md](os.md).
 
 **Selector targeting:** the broadcast commands (`toggle`/`show`/`hide`, the `*_class` and
-`*_attr` ops, `reset_form`) act on **all** elements matching the selector; `focus`/`blur`/`scroll_to`
+`*_attr` ops, `reset_form`) act on **all** elements matching the selector;
+`focus`/`blur`/`scroll_to`/`select`/`copy_to_clipboard`/`show_modal`/`close_modal`
 act on the **first** match.
 
 **Payload auto-collection** (`push_event`): When `push_event` fires on an element, the client

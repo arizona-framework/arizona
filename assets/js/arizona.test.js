@@ -1782,6 +1782,108 @@ describe('executeJS', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 24a2. executeJS -- select/copy_to_clipboard/show_modal/close_modal (single-target)
+//
+// jsdom implements neither <dialog>.showModal/close nor navigator.clipboard, so
+// these use spies (el.select/showModal/close = vi.fn(); navigator.clipboard =
+// { writeText }) to assert the effect invokes the right API on the FIRST match.
+// ---------------------------------------------------------------------------
+
+describe('executeJS -- select/copy_to_clipboard/show_modal/close_modal', () => {
+    /** Install a spied clipboard; returns the writeText spy. */
+    function stubClipboard() {
+        const writeText = vi.fn();
+        Object.defineProperty(navigator, 'clipboard', {
+            value: { writeText },
+            configurable: true,
+        });
+        return writeText;
+    }
+
+    afterEach(() => {
+        delete (/** @type {any} */ (navigator).clipboard);
+    });
+
+    it('select calls select() on the first match only', () => {
+        document.body.innerHTML = '<input class="f" /><input class="f" />';
+        const [first, second] = document.querySelectorAll('.f');
+        first.select = vi.fn();
+        second.select = vi.fn();
+        executeJS(document.body, null, [26, '.f']); // op 26 = select
+        expect(first.select).toHaveBeenCalledOnce();
+        expect(second.select).not.toHaveBeenCalled();
+    });
+
+    it('select is a safe no-op on a non-input match / no match', () => {
+        document.body.innerHTML = '<div class="f"></div>';
+        expect(() => executeJS(document.body, null, [26, '.f'])).not.toThrow();
+        expect(() => executeJS(document.body, null, [26, '#none'])).not.toThrow();
+    });
+
+    it('copy_to_clipboard writes the matched form control value to the clipboard', () => {
+        document.body.innerHTML = '<input id="t" /><input class="other" />';
+        /** @type {HTMLInputElement} */ (document.getElementById('t')).value = 'secret-token';
+        const writeText = stubClipboard();
+        executeJS(document.body, null, [27, '#t']); // op 27 = copy_to_clipboard
+        expect(writeText).toHaveBeenCalledWith('secret-token');
+    });
+
+    it('copy_to_clipboard falls back to textContent for a non-form element', () => {
+        document.body.innerHTML = '<code id="t">npm i arizona</code>';
+        const writeText = stubClipboard();
+        executeJS(document.body, null, [27, '#t']);
+        expect(writeText).toHaveBeenCalledWith('npm i arizona');
+    });
+
+    it('copy_to_clipboard is a safe no-op when the clipboard is unavailable', () => {
+        document.body.innerHTML = '<input id="t" value="x" />';
+        // No clipboard stubbed -- navigator.clipboard is undefined in jsdom.
+        expect(() => executeJS(document.body, null, [27, '#t'])).not.toThrow();
+    });
+
+    it('show_modal calls showModal() on the first matching dialog only', () => {
+        document.body.innerHTML = '<dialog class="d"></dialog><dialog class="d"></dialog>';
+        const [first, second] = document.querySelectorAll('.d');
+        first.showModal = vi.fn();
+        second.showModal = vi.fn();
+        executeJS(document.body, null, [28, '.d']); // op 28 = show_modal
+        expect(first.showModal).toHaveBeenCalledOnce();
+        expect(second.showModal).not.toHaveBeenCalled();
+    });
+
+    it('show_modal is a safe no-op on a non-dialog match', () => {
+        document.body.innerHTML = '<div class="d"></div>';
+        expect(() => executeJS(document.body, null, [28, '.d'])).not.toThrow();
+    });
+
+    it('close_modal calls close() on the first matching dialog', () => {
+        document.body.innerHTML = '<dialog id="d"></dialog>';
+        const dlg = document.getElementById('d');
+        dlg.close = vi.fn();
+        executeJS(document.body, null, [29, '#d']); // op 29 = close_modal
+        expect(dlg.close).toHaveBeenCalledOnce();
+    });
+
+    it('close_modal is a safe no-op on a non-dialog match', () => {
+        document.body.innerHTML = '<div class="d"></div>';
+        expect(() => executeJS(document.body, null, [29, '.d'])).not.toThrow();
+    });
+
+    it('show_modal and close_modal fire updated() on a hooked dialog', () => {
+        const updated = vi.fn();
+        hooks.Chart = { mounted() {}, updated };
+        setupView('v', '<dialog az="0" az-hook="Chart"></dialog>');
+        const dlg = document.querySelector('dialog');
+        dlg.showModal = vi.fn();
+        dlg.close = vi.fn();
+        mountHooks(document);
+        applyEffects([[28, '[az-hook="Chart"]']]); // show_modal
+        applyEffects([[29, '[az-hook="Chart"]']]); // close_modal
+        expect(updated).toHaveBeenCalledTimes(2);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 24b. executeJS -- on_key (JS_ON_KEY = 16)
 // ---------------------------------------------------------------------------
 

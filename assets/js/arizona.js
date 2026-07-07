@@ -1325,7 +1325,11 @@ const JS_PUSH_EVENT = 0,
     JS_FETCH = 22,
     JS_OS = 23,
     JS_PATCH = 24,
-    JS_RESET_FORM = 25;
+    JS_RESET_FORM = 25,
+    JS_SELECT = 26,
+    JS_COPY_TO_CLIPBOARD = 27,
+    JS_SHOW_MODAL = 28,
+    JS_CLOSE_MODAL = 29;
 
 // arizona_js credentials atoms -> fetch() credentials mode
 /** @type {Record<string, RequestCredentials>} */
@@ -1622,6 +1626,48 @@ function execOne(el, event, cmd) {
                 const f = /** @type {any} */ (t);
                 if (typeof f.reset === 'function') {
                     f.reset();
+                    notifyUpdated(t);
+                }
+            });
+            break;
+        case JS_SELECT:
+            // First match only, like focus/blur/scroll_to. Selection is not a DOM
+            // mutation, so no notifyUpdated. A non-input/textarea match (no
+            // select()) is a safe no-op.
+            withQuery(cmd[1], (t) => {
+                const f = /** @type {any} */ (t);
+                if (typeof f.select === 'function') f.select();
+            });
+            break;
+        case JS_COPY_TO_CLIPBOARD:
+            // First match only. Copy the matched element's value (form control) or
+            // textContent to the clipboard. Requires a secure context + user gesture
+            // (event command only); a missing/blocked clipboard is a safe no-op. Not
+            // a DOM mutation, so no notifyUpdated.
+            withQuery(cmd[1], (t) => {
+                const text = /** @type {any} */ (t).value ?? t.textContent ?? '';
+                navigator.clipboard?.writeText?.(text);
+            });
+            break;
+        case JS_SHOW_MODAL:
+            // First match only. Open the matched <dialog> as a true modal (top
+            // layer, ::backdrop, ESC-to-close). A non-dialog match (no showModal())
+            // is a safe no-op. Fires updated() so a hook observes it like a diff.
+            withQuery(cmd[1], (t) => {
+                const f = /** @type {any} */ (t);
+                if (typeof f.showModal === 'function') {
+                    f.showModal();
+                    notifyUpdated(t);
+                }
+            });
+            break;
+        case JS_CLOSE_MODAL:
+            // First match only. Close the matched <dialog>. A non-dialog match (no
+            // close()) is a safe no-op. Fires updated() so a hook observes it.
+            withQuery(cmd[1], (t) => {
+                const f = /** @type {any} */ (t);
+                if (typeof f.close === 'function') {
+                    f.close();
                     notifyUpdated(t);
                 }
             });
