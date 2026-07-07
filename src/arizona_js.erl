@@ -53,6 +53,7 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 -export([fetch/2]).
 -export([focus/1]).
 -export([blur/1]).
+-export([reset_form/1]).
 -export([scroll_to/1]).
 -export([scroll_to/2]).
 -export([set_title/1]).
@@ -92,6 +93,7 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     fetch/2,
     focus/1,
     blur/1,
+    reset_form/1,
     scroll_to/1,
     scroll_to/2,
     set_title/1,
@@ -323,6 +325,26 @@ focus(Sel) -> {arizona_effect, [?EFFECT_FOCUS, Sel]}.
     Selector :: binary().
 blur(Sel) -> {arizona_effect, [?EFFECT_BLUR, Sel]}.
 
+-doc """
+Resets **all** forms matching the selector, clearing the fields the user typed
+back to their initial values (`HTMLFormElement.reset`).
+
+Unlike `focus/1`/`blur/1` (first match only), this broadcasts to every match,
+like the DOM-mutating selector effects (`toggle`, the class ops, `set_attr`). A
+match without a `reset()` method (a non-form element) is a safe no-op.
+
+Where `set_attr(value, ~"")` only rewrites the `value` **attribute** (leaving the
+user-typed value **property** untouched, and doing nothing at all for a
+`<textarea>` that has no value attribute), this drives the native form reset, so
+it clears text inputs and textareas alike. Unlike `az-form-reset` (which fires
+only on a successful submit/fetch), it's imperative: usable both as a web event
+command (e.g. `{az_click, arizona_js:reset_form(~"#signup")}`) and as a handler
+effect from `handle_event/3`.
+""".
+-spec reset_form(Selector) -> arizona_effect:cmd() when
+    Selector :: binary().
+reset_form(Sel) -> {arizona_effect, [?EFFECT_RESET_FORM, Sel]}.
+
 -doc "Scrolls to the first element matching the selector.".
 -spec scroll_to(Selector) -> arizona_effect:cmd() when
     Selector :: binary().
@@ -522,6 +544,15 @@ fetch_encode_test() ->
     ?assertNotEqual(nomatch, binary:match(Bin, ~"/account")),
     ?assertNotEqual(nomatch, binary:match(Bin, ~"method")).
 
+reset_form_test() ->
+    {arizona_effect, [?EFFECT_RESET_FORM, ~"#signup"]} = reset_form(~"#signup").
+
+reset_form_encode_test() ->
+    %% Round-trips through arizona_effect:encode/1 like any other selector effect.
+    Bin = arizona_effect:encode(reset_form(~"#signup")),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"[25")),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"#signup")).
+
 builders_test() ->
     ?assertEqual({arizona_effect, [?EFFECT_SHOW, ~"#m"]}, show(~"#m")),
     ?assertEqual({arizona_effect, [?EFFECT_HIDE, ~"#m"]}, hide(~"#m")),
@@ -551,6 +582,7 @@ builders_test() ->
     ),
     ?assertEqual({arizona_effect, [?EFFECT_FOCUS, ~"#m"]}, focus(~"#m")),
     ?assertEqual({arizona_effect, [?EFFECT_BLUR, ~"#m"]}, blur(~"#m")),
+    ?assertEqual({arizona_effect, [?EFFECT_RESET_FORM, ~"#m"]}, reset_form(~"#m")),
     ?assertEqual({arizona_effect, [?EFFECT_SCROLL_TO, ~"#m"]}, scroll_to(~"#m")),
     ?assertEqual(
         {arizona_effect, [?EFFECT_SCROLL_TO, ~"#m", #{behavior => smooth}]},

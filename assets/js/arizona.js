@@ -1324,7 +1324,8 @@ const JS_PUSH_EVENT = 0,
     JS_TOGGLE_ATTR = 21,
     JS_FETCH = 22,
     JS_OS = 23,
-    JS_PATCH = 24;
+    JS_PATCH = 24,
+    JS_RESET_FORM = 25;
 
 // arizona_js credentials atoms -> fetch() credentials mode
 /** @type {Record<string, RequestCredentials>} */
@@ -1611,6 +1612,18 @@ function execOne(el, event, cmd) {
             break;
         case JS_BLUR:
             withQuery(cmd[1], (t) => t.blur());
+            break;
+        case JS_RESET_FORM:
+            // Broadcast (all matches, main + PiP docs), like the class/visibility
+            // effects: reset every matching form. A non-form match (no reset()) is
+            // a safe no-op. Fires updated() so a hook observes it like a diff.
+            withQueryAll(cmd[1], (t) => {
+                const f = /** @type {any} */ (t);
+                if (typeof f.reset === 'function') {
+                    f.reset();
+                    notifyUpdated(t);
+                }
+            });
             break;
         case JS_SCROLL_TO:
             withQuery(cmd[1], (t) => t.scrollIntoView(cmd[2] || { behavior: 'smooth' }));
