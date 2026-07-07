@@ -35,6 +35,11 @@
     render_ssr_nested_3tuple_dyn_az/1,
     render_ssr_nested_failure_preserves_deepest_loc/1,
     render_text/1,
+    repeated_stateless_distinct_az/1,
+    repeated_stateless_diff_targets_each/1,
+    nested_stateless_scoped/1,
+    each_in_stateless_distinct_containers/1,
+    stateful_inside_stateless_ssr_matches_live/1,
     render_to_iolist_nodiff_multi/1,
     render_to_iolist_nodiff_static/1,
     render_to_iolist_nodiff/1,
@@ -81,7 +86,12 @@ groups() ->
             render_text,
             render_attr,
             render_nested_sd,
-            render_with_views_no_children
+            render_with_views_no_children,
+            repeated_stateless_distinct_az,
+            repeated_stateless_diff_targets_each,
+            nested_stateless_scoped,
+            each_in_stateless_distinct_containers,
+            stateful_inside_stateless_ssr_matches_live
         ]},
         {ssr, [parallel], [
             ssr_counter,
@@ -395,6 +405,132 @@ render_with_views_no_children(Config) when is_list(Config) ->
     ?assertEqual(<<"<p az=\"0\">hello</p>">>, iolist_to_binary(HTML)),
     ?assertEqual(#{}, Views),
     ?assert(maps:is_key(deps, Snap)).
+
+%% Regression: a view that renders the SAME stateless render function twice must
+%% give each instance a DISTINCT az id -- otherwise every diff op resolves (via
+%% querySelector first-match) onto the first DOM instance. Each card's inner
+%% `<span class="card">` az must be namespaced by its enclosing slot az.
+repeated_stateless_distinct_az(Config) when is_list(Config) ->
+    HTML = iolist_to_binary(
+        arizona_render:render_view_to_iolist(arizona_repeated_stateless, #{
+            bindings => #{a => <<"AAA">>, b => <<"BBB">>}
+        })
+    ),
+    %% Both cards render their labels.
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"AAA">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"BBB">>)),
+    %% Every card az id appears exactly once (no shared/duplicated diff targets).
+    CardAzIds = card_az_ids(HTML),
+    ?assertEqual(lists:sort(CardAzIds), lists:usort(CardAzIds)),
+    %% There are two card spans, so two distinct card az ids.
+    ?assertEqual(2, length(CardAzIds)),
+    %% The ids carry no bare-colon-then-content that would trip the client's
+    %% first-colon slot-suffix fallback: the slot prefix is colon-free.
+    lists:foreach(
+        fun(Az) -> ?assertEqual(nomatch, binary:match(Az, <<":">>)) end,
+        CardAzIds
+    ).
+
+%% Regression: diffing a change to only one instance must emit an op whose target
+%% is that instance's az -- and the two instances' targets must differ.
+repeated_stateless_diff_targets_each(Config) when is_list(Config) ->
+    B0 = #{id => <<"panel">>, a => <<"AAA">>, b => <<"BBB">>},
+    Tmpl0 = arizona_repeated_stateless:render(B0),
+    {_HTML, Snap, _V} = arizona_render:render(Tmpl0, #{}),
+    %% Change only card A's label.
+    {OpsA, _} = arizona_diff:diff(arizona_repeated_stateless:render(B0#{a => <<"AAA2">>}), Snap),
+    %% Change only card B's label.
+    {OpsB, _} = arizona_diff:diff(arizona_repeated_stateless:render(B0#{b => <<"BBB2">>}), Snap),
+    [[_, TargetA, <<"AAA2">>]] = OpsA,
+    [[_, TargetB, <<"BBB2">>]] = OpsB,
+    %% Each op targets its own instance, and the two targets are distinct.
+    ?assertNotEqual(TargetA, TargetB).
+
+%% Regression: a `?stateful` child nested inside a `?stateless` component keeps
+%% its own view-id boundary -- its inner az ids must stay unscoped so the SSR
+%% HTML (which the client reuses on connect) matches the live snapshot the diff
+%% targets. If the SSR path scoped them, the child's ops would miss the DOM and
+%% its updates would be silently dropped.
+stateful_inside_stateless_ssr_matches_live(Config) when is_list(Config) ->
+    Tmpl = arizona_stateless_stateful_nest:page(#{id => <<"host">>}),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Tmpl)),
+    {HTML, _Snap, _Views} = arizona_render:render(Tmpl, #{}),
+    Live = iolist_to_binary(HTML),
+    ?assertEqual(Live, SSR),
+    %% The stateful child's own element renders (its view-id boundary is intact).
+    ?assertNotEqual(nomatch, binary:match(SSR, <<"az-view id=\"c1\"">>)).
+
+%% Regression: a repeated stateless whose body has an inline conditional, a
+%% client-owned `?local`, and a nested stateless grandchild. With no `?each`,
+%% every scoped az across the whole subtree of both instances is distinct, the
+%% SSR matches the live snapshot, and a change to one instance hits targets
+%% disjoint from the other.
+nested_stateless_scoped(Config) when is_list(Config) ->
+    B0 = #{id => <<"host">>, x => <<"X">>, y => <<"Y">>, flag => true},
+    Tmpl = arizona_nested_stateless:render(B0),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Tmpl)),
+    {HTML, Snap, _Views} = arizona_render:render(Tmpl, #{}),
+    ?assertEqual(iolist_to_binary(HTML), SSR),
+    Ids = all_az_ids(SSR),
+    ?assertEqual(lists:sort(Ids), lists:usort(Ids)),
+    TA = diff_targets(arizona_nested_stateless:render(B0#{x => <<"X2">>}), Snap),
+    TB = diff_targets(arizona_nested_stateless:render(B0#{y => <<"Y2">>}), Snap),
+    ?assertNotEqual([], TA),
+    ?assertNotEqual([], TB),
+    ?assertEqual([], [T || T <- TA, lists:member(T, TB)]).
+
+%% Regression: a repeated stateless whose body holds an `?each`. The each
+%% CONTAINER is scoped per instance (distinct `<ul>` az), while item ids stay
+%% container-relative; a diff routes container ops to the right instance.
+each_in_stateless_distinct_containers(Config) when is_list(Config) ->
+    B0 = #{id => <<"host">>, xs => [<<"x1">>, <<"x2">>], ys => [<<"y1">>]},
+    Tmpl = arizona_each_in_stateless:render(B0),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Tmpl)),
+    {HTML, Snap, _Views} = arizona_render:render(Tmpl, #{}),
+    ?assertEqual(iolist_to_binary(HTML), SSR),
+    Containers = ul_az_ids(SSR),
+    ?assertEqual(2, length(Containers)),
+    ?assertEqual(lists:sort(Containers), lists:usort(Containers)),
+    %% Growing card A's list re-renders both eaches wholesale (plain diff, no
+    %% dep-skip), but to DISTINCT container targets -- pre-fix both collided.
+    Targets = diff_targets(
+        arizona_each_in_stateless:render(B0#{xs => [<<"x1">>, <<"x2">>, <<"x3">>]}), Snap
+    ),
+    ?assertEqual(lists:sort(Containers), lists:usort(Targets)).
+
+%% Pull every `az="..."` id off a `<span class="card">` element in the SSR HTML.
+card_az_ids(HTML) ->
+    Parts = binary:split(HTML, <<"<span az=\"">>, [global]),
+    [
+        Az
+     || Part <- tl(Parts),
+        {P, _} <- [binary:match(Part, <<"\"">>)],
+        <<Az:P/binary, Rest/binary>> <- [Part],
+        binary:match(Rest, <<"class=\"card\"">>) =/= nomatch
+    ].
+
+%% Every `az="..."` id in the HTML, in document order.
+all_az_ids(HTML) ->
+    [
+        Az
+     || Part <- tl(binary:split(HTML, <<"az=\"">>, [global])),
+        {P, _} <- [binary:match(Part, <<"\"">>)],
+        <<Az:P/binary, _/binary>> <- [Part]
+    ].
+
+%% Every `<ul az="...">` container id in the HTML.
+ul_az_ids(HTML) ->
+    [
+        Az
+     || Part <- tl(binary:split(HTML, <<"<ul az=\"">>, [global])),
+        {P, _} <- [binary:match(Part, <<"\"">>)],
+        <<Az:P/binary, _/binary>> <- [Part]
+    ].
+
+%% Diff `Tmpl` against `Snap` and collect the op targets (op = [Code, Target|_]).
+diff_targets(Tmpl, Snap) ->
+    {Ops, _} = arizona_diff:diff(Tmpl, Snap),
+    [Target || [_Code, Target | _] <- Ops].
 
 %% =============================================================================
 %% 6. SSR about page

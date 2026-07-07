@@ -62,7 +62,10 @@ eval_each_def_3tuple(Config) when is_list(Config) ->
     ?assertEqual(<<"0">>, Az),
     ?assertMatch(#{t := 0, source := _, template := _}, Val).
 
-%% eval_val processes stateless descriptors (#{callback, props}).
+%% eval_val processes stateless descriptors (#{callback, props}), and the
+%% enclosing dynamic namespaces the child's inner az ids (and fingerprint) by
+%% the slot az -- here slot <<"0">> prefixes the child's <<"0">> -> <<"0-0">>
+%% and <<"t1">> -> <<"0-t1">>, so repeated same-function renders don't collide.
 eval_val_stateless_descriptor(Config) when is_list(Config) ->
     Callback = fun(Props) ->
         Title = maps:get(title, Props),
@@ -71,7 +74,9 @@ eval_val_stateless_descriptor(Config) when is_list(Config) ->
     Descriptor = #{callback => Callback, props => #{title => <<"hello">>}},
     Dyn = {<<"0">>, fun() -> Descriptor end},
     [{<<"0">>, Result}] = arizona_eval:eval_dynamics([Dyn]),
-    ?assertMatch(#{s := [<<"<b>">>, <<"</b>">>], d := [{<<"0">>, <<"hello">>}]}, Result).
+    ?assertMatch(
+        #{s := [<<"<b>">>, <<"</b>">>], d := [{<<"0-0">>, <<"hello">>}], f := <<"0-t1">>}, Result
+    ).
 
 %% --- dep isolation in nested templates ---
 

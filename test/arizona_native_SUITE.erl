@@ -15,6 +15,7 @@
 -export([native_each_renders_item_array/1]).
 -export([native_each_empty_is_valid_json/1]).
 -export([nested_native_stateless_component/1]).
+-export([repeated_native_stateless_distinct/1]).
 -export([nested_native_stateful_component/1]).
 -export([nested_native_stateful_child_event_routes/1]).
 -export([diff_dynamic_text_op/1]).
@@ -40,6 +41,7 @@ all() ->
         native_each_renders_item_array,
         native_each_empty_is_valid_json,
         nested_native_stateless_component,
+        repeated_native_stateless_distinct,
         nested_native_stateful_component,
         nested_native_stateful_child_event_routes,
         diff_dynamic_text_op,
@@ -279,6 +281,26 @@ nested_native_stateless_component(Config) when is_list(Config) ->
     #{~"type" := ~"Column", ~"children" := Children} =
         flatten(simulate_interleave(arizona_render:fingerprint_payload(Snap))),
     ?assertMatch([#{~"type" := ~"Text", ~"children" := [~"Hi"]}], Children).
+
+repeated_native_stateless_distinct(Config) when is_list(Config) ->
+    %% The same native stateless rendered twice: each instance is namespaced by
+    %% its slot, so the two children carry DISTINCT scoped fingerprints (and az)
+    %% -- pre-fix they were byte-identical and diff ops would collide, same as the
+    %% HTML target. Confirms the scoping is target-aware (arizona_native backend).
+    Mod = compile_module(
+        "-module(nt_repeated_comp). "
+        "-export([render/1, chip/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Column', [], ["
+        "        az:stateless(fun chip/1, #{label => <<\"A\">>}), "
+        "        az:stateless(fun chip/1, #{label => <<\"B\">>})]}). "
+        "chip(Props) -> "
+        "    az:native({'Text', [], [maps:get(label, Props)]}). "
+    ),
+    T = Mod:render(#{}),
+    {_Html, Snap, _Views} = arizona_render:render(T, #{}),
+    #{~"d" := [ChildA, ChildB]} = arizona_render:fingerprint_payload(Snap),
+    ?assertNotEqual(maps:get(~"f", ChildA), maps:get(~"f", ChildB)).
 
 nested_native_stateful_component(Config) when is_list(Config) ->
     %% A native view embeds a native *stateful* child. Through the live frame

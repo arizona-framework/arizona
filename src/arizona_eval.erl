@@ -362,11 +362,11 @@ format_error(restricted_key_modified, [{_M, _F, [Key, Handler], _Info} | _]) ->
 eval_one({Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
     {Az, {attr, Name, eval_val(Fun())}};
 eval_one({Az, Spec, _Loc}) ->
-    {Az, eval_val(Spec)};
+    {Az, arizona_template:scope_stateless(Az, eval_val(Spec))};
 eval_one({Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
     {Az, {attr, Name, eval_val(Fun())}};
 eval_one({Az, Spec}) ->
-    {Az, eval_val(Spec)}.
+    {Az, arizona_template:scope_stateless(Az, eval_val(Spec))}.
 
 %% Like eval_one/1 but builds the 3-tuple `{Az, Val, #{}}` directly,
 %% used by the per-item snapshot paths (render_list_items_simple,
@@ -377,11 +377,11 @@ eval_one({Az, Spec}) ->
 eval_one_triple({Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
     {Az, {attr, Name, eval_val(Fun())}, #{}};
 eval_one_triple({Az, Spec, _Loc}) ->
-    {Az, eval_val(Spec), #{}};
+    {Az, arizona_template:scope_stateless(Az, eval_val(Spec)), #{}};
 eval_one_triple({Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
     {Az, {attr, Name, eval_val(Fun())}, #{}};
 eval_one_triple({Az, Spec}) ->
-    {Az, eval_val(Spec), #{}}.
+    {Az, arizona_template:scope_stateless(Az, eval_val(Spec)), #{}}.
 
 eval_val({esc, Fun}) when is_function(Fun, 0) ->
     arizona_template:mark_esc(eval_val(Fun()));
@@ -406,7 +406,7 @@ eval_val(#{t := ?EACH, source := Source, template := Tmpl}) when is_map(Source) 
     ItemSnaps = render_map_items_simple(Source, Tmpl),
     #{t => ?EACH, items => ItemSnaps, template => Tmpl};
 eval_val(#{callback := Callback, props := Props}) ->
-    eval_val(Callback(Props));
+    arizona_template:pending_stateless(eval_val(Callback(Props)));
 eval_val(#{s := Statics, d := Dynamics} = Tmpl) ->
     Snap0 = #{s => Statics, d => eval_dynamics(Dynamics)},
     arizona_template:maybe_propagate(Tmpl, Snap0);
@@ -422,7 +422,7 @@ eval_one_v({Az, Spec, _Loc}, Views0) ->
     erlang:put('$arizona_deps', #{}),
     {Val, Views1} = eval_val_v(Spec, Views0),
     Deps = erlang:erase('$arizona_deps'),
-    {{Az, Val, Deps}, Views1};
+    {{Az, arizona_template:scope_stateless(Az, Val), Deps}, Views1};
 eval_one_v({Az, {attr, Name, Fun}}, Views) when is_function(Fun, 0) ->
     erlang:put('$arizona_deps', #{}),
     Val = eval_val(Fun()),
@@ -432,7 +432,7 @@ eval_one_v({Az, Spec}, Views0) ->
     erlang:put('$arizona_deps', #{}),
     {Val, Views1} = eval_val_v(Spec, Views0),
     Deps = erlang:erase('$arizona_deps'),
-    {{Az, Val, Deps}, Views1}.
+    {{Az, arizona_template:scope_stateless(Az, Val), Deps}, Views1}.
 
 eval_val_v({esc, Fun}, Views0) when is_function(Fun, 0) ->
     {V, Views1} = eval_val_v(Fun(), Views0),
@@ -450,8 +450,13 @@ eval_val_v(#{t := ?EACH, source := Source, template := Tmpl}, Views) when is_map
 eval_val_v(#{callback := Callback, props := Props}, Views) ->
     %% Bracket the whole stateless recursion so eager ?get calls inside the
     %% callback body (or any unwrapping that follows it) don't leak into the
-    %% outer dynamic's tracked deps.
-    with_saved_deps(fun() -> eval_val_v(Callback(Props), Views) end);
+    %% outer dynamic's tracked deps. Tag the child snapshot so the enclosing
+    %% dynamic (which knows the slot az) can namespace its inner az ids --
+    %% otherwise two renders of the same function share one diff target.
+    with_saved_deps(fun() ->
+        {Val, Views1} = eval_val_v(Callback(Props), Views),
+        {arizona_template:pending_stateless(Val), Views1}
+    end);
 eval_val_v(#{s := _, d := _} = Tmpl, Views) ->
     eval_template(Tmpl, Views);
 eval_val_v(Val, Views) ->
@@ -613,8 +618,12 @@ eval_val_stateless_descriptor_test() ->
     Cb = fun(Props) ->
         #{s => [~"<b>", ~"</b>"], d => [{~"0", maps:get(t, Props)}], f => ~"x"}
     end,
+    %% eval_val reduces the descriptor and tags the child snapshot pending-scope;
+    %% the enclosing eval_one/eval_one_v then namespaces its az ids by the slot.
     Result = eval_val(#{callback => Cb, props => #{t => ~"hi"}}),
-    ?assertMatch(#{s := [~"<b>", ~"</b>"], d := [{~"0", ~"hi"}]}, Result).
+    ?assertMatch(
+        {'$arizona_stateless', #{s := [~"<b>", ~"</b>"], d := [{~"0", ~"hi"}]}}, Result
+    ).
 
 eval_one_v_3tuple_test() ->
     %% eval_one_v with 3-tuple returns {Az, Val, Deps} triple

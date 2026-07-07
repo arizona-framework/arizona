@@ -75,6 +75,8 @@ render(Bindings) ->
 -export([maybe_propagate/2]).
 -export([maybe_put_fingerprint/2]).
 -export([make_child_snap/4]).
+-export([pending_stateless/1]).
+-export([scope_stateless/2]).
 -export([unzip_triples/1]).
 -export([split_triples/1]).
 -export([visible_keys/2]).
@@ -562,6 +564,109 @@ make_child_snap(Tmpl, ChildD, ChildDeps, Id) ->
     #{s := S} = Tmpl,
     Snap = #{s => S, d => ChildD, deps => ChildDeps, view_id => Id},
     maybe_propagate(Tmpl, Snap).
+
+-doc """
+Tags a freshly-evaluated stateless child snapshot so its caller -- which knows
+the enclosing slot's `az` -- can namespace the child's inner `az` ids via
+`scope_stateless/2`.
+
+A stateless component has no `view_id` boundary of its own, and its inner `az`
+ids derive only from its own template fingerprint (`<Fp>-<n>`). So the *same*
+render function rendered more than once in a view produces byte-identical `az`
+targets; on the client every diff op resolves with `querySelector` (first match)
+and lands on the first instance. Tagging here defers the per-instance namespacing
+to the point where the slot `az` is in scope.
+""".
+-spec pending_stateless(Snapshot) -> {'$arizona_stateless', Snapshot} when
+    Snapshot :: snapshot() | binary().
+pending_stateless(Snapshot) ->
+    {'$arizona_stateless', Snapshot}.
+
+-doc """
+Namespaces a pending stateless child (from `pending_stateless/1`) by the
+enclosing slot `Az`, so each instance is an independent diff target. Prefixes
+the child's fingerprint, its statics' baked `az`/marker ids, and every inner
+dynamic `az` (recursing through inline nested templates) with the slot `az`.
+
+The prefix is made colon-free (`:` -> `-`): the client treats `:` as the
+content-slot-index separator (a base element `az` never contains one) and
+recovers a base element by stripping at the *first* colon, so an internal colon
+in the prefix would misroute multi-slot and `?each`-among-siblings ops. A
+stateful child (`view_id` boundary), an `?each` container (items are addressed
+relative to the container, not by global `az`), and a client-owned `?local`
+slot are left untouched. A non-tagged value passes through unchanged.
+""".
+-spec scope_stateless(Az, Value) -> term() when
+    Az :: az(),
+    Value :: term().
+scope_stateless(Az, {'$arizona_stateless', Snapshot}) when is_binary(Az) ->
+    scope_snapshot(colon_free(Az), Snapshot);
+scope_stateless(_Az, {'$arizona_stateless', Snapshot}) ->
+    %% Undefined slot az (an az-nodiff slot): no target to namespace against.
+    Snapshot;
+scope_stateless(_Az, Value) ->
+    Value.
+
+colon_free(Az) ->
+    binary:replace(Az, ~":", ~"-", [global]).
+
+scope_snapshot(Prefix, #{s := S, d := D} = Snap) ->
+    Backend = backend_for(maps:get(target, Snap, html)),
+    Snap1 = Snap#{
+        s => scoped_statics(Backend, Prefix, Snap, S),
+        d => [scope_dyn(Prefix, Dyn) || Dyn <- D]
+    },
+    scope_fp(Prefix, Snap1);
+scope_snapshot(_Prefix, Snap) ->
+    Snap.
+
+%% Prefixing a static list is a `binary:replace` per element -- pure and
+%% deterministic in (Prefix, statics). Memoize it per (Prefix, fingerprint) in
+%% the process dictionary: a re-render or diff of the same slot (and every level
+%% of a deep stateless nest, whose inner statics would otherwise be re-walked
+%% once per ancestor) reuses the cached result instead of re-scoping. The
+%% fingerprint identifies the statics (it is base-36 `phash2` of them), so
+%% {Prefix, F} keys the scoped output uniquely -- the same assumption the client
+%% statics cache already relies on. A snapshot without `f` (none carry one in
+%% practice) scopes directly.
+scoped_statics(Backend, Prefix, #{f := F}, S) ->
+    Key = {'$arizona_scoped_statics', Prefix, F},
+    case erlang:get(Key) of
+        undefined ->
+            Scoped = [Backend:scope_static(Prefix, X) || X <- S],
+            erlang:put(Key, Scoped),
+            Scoped;
+        Scoped ->
+            Scoped
+    end;
+scoped_statics(Backend, Prefix, #{}, S) ->
+    [Backend:scope_static(Prefix, X) || X <- S].
+
+scope_fp(Prefix, #{f := F} = Snap) -> Snap#{f => <<Prefix/binary, "-", F/binary>>};
+scope_fp(_Prefix, Snap) -> Snap.
+
+scope_dyn(Prefix, {Az, Val}) ->
+    {scope_az(Prefix, Az), scope_val(Prefix, Val)}.
+
+scope_az(_Prefix, undefined) -> undefined;
+scope_az(Prefix, Az) -> <<Prefix/binary, "-", Az/binary>>.
+
+%% Recurse only into an inline nested template (a conditional branch): its inner
+%% `az` ids are globally addressed, so they must carry the slot prefix. An
+%% `?each` container, a stateful child view, and a `?local` slot own their inner
+%% addressing (item-relative, a `view_id` boundary, and a client-owned key), so
+%% their bodies are left alone -- only the container/element `az` in the enclosing
+%% statics (already scoped above) and this dynamic's own `az` are prefixed.
+scope_val(Prefix, {arizona_esc, V}) -> {arizona_esc, scope_val(Prefix, V)};
+scope_val(_Prefix, #{view_id := _} = Child) -> Child;
+scope_val(_Prefix, #{t := ?EACH} = Each) -> Each;
+scope_val(_Prefix, #{az_local := _} = Local) -> Local;
+scope_val(Prefix, #{s := _, d := _} = Nested) -> scope_snapshot(Prefix, Nested);
+scope_val(_Prefix, Val) -> Val.
+
+backend_for(html) -> arizona_html;
+backend_for(native) -> arizona_native;
+backend_for(terminal) -> arizona_terminal.
 
 -doc """
 Splits a list of `{Az, Val, Deps}` triples into the snapshot d-list, deps list,
