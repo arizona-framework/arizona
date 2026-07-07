@@ -299,6 +299,11 @@ cookie for the *same* identity (e.g. password change) needs no reload.
 - `credentials` -- cookie/credential mode. Default `same_origin`.
 - `on_error` -- a command (or list) run on a non-2xx with no effects body, or a
   network error.
+- `keep_alive` -- when `true`, the request completes even if a navigation starts
+  right after it (use case: a POST fired just before navigating away); maps to the
+  browser's `fetch(url, { keepalive: true })`. Absent or `false` is the current
+  behaviour (the navigation cancels an in-flight fetch). The browser caps a
+  keepalive request's inflight body at ~64KB.
 
 To send the user elsewhere, return an `arizona_js:navigate/1` effect from the
 controller (e.g. via `arizona_controller:reply_redirect/1`) rather than an HTTP
@@ -311,7 +316,8 @@ controller (e.g. via `arizona_controller:reply_redirect/1`) rather than an HTTP
         body => term(),
         headers => #{binary() => binary()},
         credentials => same_origin | include | omit,
-        on_error => arizona_effect:cmd() | [arizona_effect:cmd()]
+        on_error => arizona_effect:cmd() | [arizona_effect:cmd()],
+        keep_alive => boolean()
     }.
 fetch(Url, Opts) -> {arizona_effect, [?EFFECT_FETCH, Url, unwrap_on_error(Opts)]}.
 
@@ -535,6 +541,11 @@ transition_list_test() ->
 fetch_test() ->
     {arizona_effect, [?EFFECT_FETCH, ~"/x", #{method := post}]} =
         fetch(~"/x", #{method => post}).
+
+fetch_keep_alive_test() ->
+    %% keep_alive is a plain boolean -- it rides through the Opts map untouched.
+    {arizona_effect, [?EFFECT_FETCH, ~"/x", #{keep_alive := true}]} =
+        fetch(~"/x", #{keep_alive => true}).
 
 fetch_encode_test() ->
     %% The Opts map rides through json:encode/1 like navigate/2's opts -- no

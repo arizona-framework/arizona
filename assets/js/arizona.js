@@ -1573,6 +1573,7 @@ function execOne(el, event, cmd) {
                 body,
                 credentials: CREDENTIALS[opts.credentials] || 'same-origin',
                 headers,
+                keepalive: opts.keep_alive === true,
             })
                 .then((resp) =>
                     resp.text().then((text) => {
