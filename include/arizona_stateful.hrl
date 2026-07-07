@@ -10,4 +10,6 @@
 
 %% PubSub
 -define(subscribe(Topic), arizona_pubsub:subscribe(Topic, self())).
+-define(subscribe_all(Topics), arizona_pubsub:subscribe_all(Topics, self())).
 -define(unsubscribe(Topic), arizona_pubsub:unsubscribe(Topic, self())).
+-define(unsubscribe_all(Topics), arizona_pubsub:unsubscribe_all(Topics, self())).

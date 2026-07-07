@@ -17,7 +17,12 @@
     subscriber_cleanup/1,
     message_ordering/1,
     duplicate_join/1,
-    monitor_reports_join_and_leave/1
+    monitor_reports_join_and_leave/1,
+    subscribe_all_subscribes_all_topics/1,
+    subscribe_all_idempotent/1,
+    subscribe_all_empty/1,
+    unsubscribe_all_removes_all_topics/1,
+    unsubscribe_all_never_joined/1
 ]).
 
 all() ->
@@ -35,7 +40,12 @@ groups() ->
             subscriber_cleanup,
             message_ordering,
             duplicate_join,
-            monitor_reports_join_and_leave
+            monitor_reports_join_and_leave,
+            subscribe_all_subscribes_all_topics,
+            subscribe_all_idempotent,
+            subscribe_all_empty,
+            unsubscribe_all_removes_all_topics,
+            unsubscribe_all_never_joined
         ]}
     ].
 
@@ -61,7 +71,7 @@ end_per_testcase(_TC, _Config) ->
                 false -> ok
             end
         end,
-        [test_group, group_a, group_b, order_group]
+        [test_group, group_a, group_b, order_group, batch_a, batch_b, batch_c]
     ),
     _ = flush(),
     ok.
@@ -202,6 +212,42 @@ monitor_reports_join_and_leave(Config) when is_list(Config) ->
         {Ref, leave, Channel, [Helper]} -> ok
     after 1000 -> ct:fail(no_leave)
     end.
+
+subscribe_all_subscribes_all_topics(Config) when is_list(Config) ->
+    Topics = [batch_a, batch_b, batch_c],
+    ?assertEqual(ok, arizona_pubsub:subscribe_all(Topics, self())),
+    [
+        ?assert(lists:member(self(), arizona_pubsub:subscribers(Topic)))
+     || Topic <- Topics
+    ].
+
+subscribe_all_idempotent(Config) when is_list(Config) ->
+    Topics = [batch_a, batch_b, batch_c],
+    ?assertEqual(ok, arizona_pubsub:subscribe_all(Topics, self())),
+    %% Re-running is a benign no-op: still ok, membership unchanged.
+    ?assertEqual(ok, arizona_pubsub:subscribe_all(Topics, self())),
+    [
+        ?assertEqual(
+            1,
+            length([P || P <- arizona_pubsub:subscribers(Topic), P =:= self()])
+        )
+     || Topic <- Topics
+    ].
+
+subscribe_all_empty(Config) when is_list(Config) ->
+    ?assertEqual(ok, arizona_pubsub:subscribe_all([], self())).
+
+unsubscribe_all_removes_all_topics(Config) when is_list(Config) ->
+    Topics = [batch_a, batch_b, batch_c],
+    ok = arizona_pubsub:subscribe_all(Topics, self()),
+    ?assertEqual(ok, arizona_pubsub:unsubscribe_all(Topics, self())),
+    [
+        ?assertNot(lists:member(self(), arizona_pubsub:subscribers(Topic)))
+     || Topic <- Topics
+    ].
+
+unsubscribe_all_never_joined(Config) when is_list(Config) ->
+    ?assertEqual(ok, arizona_pubsub:unsubscribe_all([batch_a, batch_b], self())).
 
 %% Helpers
 

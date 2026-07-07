@@ -29,7 +29,9 @@ ok
 
 -export([start_link/0]).
 -export([subscribe/2]).
+-export([subscribe_all/2]).
 -export([unsubscribe/2]).
+-export([unsubscribe_all/2]).
 -export([broadcast/2]).
 -export([broadcast_from/3]).
 -export([subscribers/1]).
@@ -39,7 +41,15 @@ ok
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([start_link/0, unsubscribe/2, broadcast_from/3, subscribers/1, monitor/1]).
+-ignore_xref([
+    start_link/0,
+    subscribe_all/2,
+    unsubscribe/2,
+    unsubscribe_all/2,
+    broadcast_from/3,
+    subscribers/1,
+    monitor/1
+]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -78,6 +88,29 @@ subscribe(Channel, Pid) ->
     end.
 
 -doc """
+Subscribes `Pid` to every channel in `Topics`, folding the idempotent
+`subscribe/2` over the list. An already-subscribed channel is a benign
+no-op (membership is unchanged) and an empty list returns `ok`.
+
+Unlike the singular `subscribe/2`, which surfaces `{error, already_joined}`,
+the batch form intentionally collapses that benign duplicate to `ok`: it
+returns `ok` regardless of how many topics were already joined.
+""".
+-spec subscribe_all(Topics, Pid) -> ok when
+    Topics :: [channel()],
+    Pid :: pid().
+subscribe_all(Topics, Pid) ->
+    lists:foreach(
+        fun(Topic) ->
+            case subscribe(Topic, Pid) of
+                ok -> ok;
+                {error, already_joined} -> ok
+            end
+        end,
+        Topics
+    ).
+
+-doc """
 Unsubscribes `Pid` from `Channel`. Returns `{error, not_joined}` if
 the pid was not a subscriber.
 """.
@@ -89,6 +122,29 @@ unsubscribe(Channel, Pid) ->
         ok -> ok;
         not_joined -> {error, not_joined}
     end.
+
+-doc """
+Unsubscribes `Pid` from every channel in `Topics`, folding the idempotent
+`unsubscribe/2` over the list. A channel the pid never joined is a benign
+no-op and an empty list returns `ok`.
+
+Unlike the singular `unsubscribe/2`, which surfaces `{error, not_joined}`,
+the batch form intentionally collapses that benign case to `ok`: it returns
+`ok` regardless of how many topics the pid was not subscribed to.
+""".
+-spec unsubscribe_all(Topics, Pid) -> ok when
+    Topics :: [channel()],
+    Pid :: pid().
+unsubscribe_all(Topics, Pid) ->
+    lists:foreach(
+        fun(Topic) ->
+            case unsubscribe(Topic, Pid) of
+                ok -> ok;
+                {error, not_joined} -> ok
+            end
+        end,
+        Topics
+    ).
 
 -doc """
 Sends `Data` as a mailbox message to every subscriber of `Channel`.

@@ -728,7 +728,15 @@ are arbitrary terms. Messages are raw data (no wrapper tuple).
 
 - `subscribe(Channel, Pid)` -- subscribe `Pid` to `Channel`. Duplicate-safe: checks membership
   first, no-op if already subscribed
+- `subscribe_all(Topics, Pid)` -- subscribe `Pid` to every channel in `Topics`, folding the
+  idempotent `subscribe/2` over the list. An already-subscribed channel is a benign no-op and an
+  empty list returns `ok`. Unlike `subscribe/2` (which surfaces `{error, already_joined}`), the
+  batch form intentionally collapses to `ok`
 - `unsubscribe(Channel, Pid)` -- remove `Pid` from `Channel`
+- `unsubscribe_all(Topics, Pid)` -- unsubscribe `Pid` from every channel in `Topics`, folding the
+  idempotent `unsubscribe/2` over the list. A channel the pid never joined is a benign no-op and an
+  empty list returns `ok`. Unlike `unsubscribe/2` (which surfaces `{error, not_joined}`), the batch
+  form intentionally collapses to `ok`
 - `broadcast(Channel, Data)` -- send `Data` to all subscribers via `Pid ! Data`
 - `broadcast_from(From, Channel, Data)` -- same but excludes `From` pid
 - `subscribers(Channel)` -- return list of subscriber pids
