@@ -388,7 +388,7 @@ render_ssr_one({_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
     render_ssr_attr(Name, Fun());
 render_ssr_one({Az, Spec, {Mod, Line}}) ->
     try
-        arizona_template:scope_stateless(Az, render_ssr_val(Spec))
+        arizona_template:scope_slot(Az, render_ssr_val(Spec))
     catch
         %% Already wrapped by a nested render -- preserve the deepest location,
         %% which is closest to the actual failure.
@@ -400,7 +400,7 @@ render_ssr_one({Az, Spec, {Mod, Line}}) ->
 render_ssr_one({_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
     render_ssr_attr(Name, Fun());
 render_ssr_one({Az, Spec}) ->
-    arizona_template:scope_stateless(Az, render_ssr_val(Spec)).
+    arizona_template:scope_slot(Az, render_ssr_val(Spec)).
 
 render_ssr_val({esc, Fun}) when is_function(Fun, 0) ->
     %% A value interpolation: escape the rendered scalar bytes; nested
@@ -434,17 +434,18 @@ render_ssr_val(#{stateful := H, props := Props}) ->
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
     Snap = render_ssr_val(arizona_stateful:call_render(H, B1)),
     %% Mark the child as a view boundary (mirroring the live path's
-    %% make_child_snap `view_id`) so a scope_stateless pass over an enclosing
+    %% make_child_snap `view_id`) so a scope_slot pass over an enclosing
     %% stateless parent skips it -- a stateful child's inner az ids are resolved
     %% via its own view id, not the parent slot, so they must stay unscoped and
     %% match the live snapshot. Its own stateless grandchildren still get scoped
     %% when this subtree is rendered live.
     Snap#{view_id => maps:get(id, Props)};
 render_ssr_val(#{callback := Callback, props := Props}) ->
-    %% Tag so render_ssr_one (which knows the slot az) can namespace the child's
-    %% inner az ids -- repeated same-function stateless renders otherwise share
-    %% one set of ids and collide on the client (see arizona_template).
-    arizona_template:pending_stateless(render_ssr_val(Callback(Props)));
+    %% A stateless child renders to a plain snapshot map; render_ssr_one (which
+    %% knows the slot az) namespaces its inner az ids via scope_slot -- repeated
+    %% same-function stateless renders otherwise share one set of ids and collide
+    %% on the client (see arizona_template).
+    render_ssr_val(Callback(Props));
 render_ssr_val(#{az_local := _, target := {attr, Name}, v := V}) ->
     render_ssr_attr(Name, V);
 render_ssr_val(#{az_local := _, v := V}) ->

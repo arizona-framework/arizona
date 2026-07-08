@@ -213,9 +213,12 @@ diff_no_change_op(Config) when is_list(Config) ->
 %% the changed inner slot (`i`) patches, addressed by its own az -- not a wholesale
 %% re-render of the whole nested template at the outer slot az.
 diff_nested_text_op(Config) when is_list(Config) ->
+    %% The nested template sits in content slot `0`, so its inner az is
+    %% namespaced by the slot to `0-i` (scope_slot, same as a stateless child).
+    %% The old snapshot models what render/2 produced, so it carries the scoped id.
     OldSnap = #{
         s => [<<"<p az=\"0\">">>, <<"</p>">>],
-        d => [{<<"0">>, #{s => [<<"Hello, ">>, <<"!">>], d => [{<<"i">>, <<"World">>}]}}]
+        d => [{<<"0">>, #{s => [<<"Hello, ">>, <<"!">>], d => [{<<"0-i">>, <<"World">>}]}}]
     },
     NewTmpl = #{
         s => [<<"<p az=\"0\">">>, <<"</p>">>],
@@ -229,7 +232,7 @@ diff_nested_text_op(Config) when is_list(Config) ->
         f => <<"test">>
     },
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
-    ?assertEqual([[?OP_TEXT, <<"i">>, <<"Alice">>]], Ops).
+    ?assertEqual([[?OP_TEXT, <<"0-i">>, <<"Alice">>]], Ops).
 
 diff_mixed_op(Config) when is_list(Config) ->
     OldSnap = #{
@@ -286,13 +289,16 @@ diff_replace_with_template_op(Config) when is_list(Config) ->
         f => <<"test">>
     },
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
+    %% The new nested template is namespaced by content slot `0`, so its
+    %% fingerprint carries the slot prefix (`0-test`). The statics have no baked
+    %% az, so they are unchanged; the wire `d` is the rendered value.
     ?assertEqual(
         [
             [
                 ?OP_TEXT,
                 <<"0">>,
                 #{
-                    <<"f">> => <<"test">>,
+                    <<"f">> => <<"0-test">>,
                     <<"s">> => [<<"<b>">>, <<"</b>">>],
                     <<"d">> => [<<"bold">>]
                 }
@@ -334,7 +340,9 @@ diff_empty_to_template_uses_text_op(Config) when is_list(Config) ->
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
     %% Exactly one op, an ?OP_TEXT on the slot -- not an ?OP_UPDATE on X-0
     %% (which the client resolves to the <main> root and would innerHTML-wipe).
-    ?assertMatch([[?OP_TEXT, <<"X-0">>, #{<<"f">> := <<"child_fp">>}]], Ops),
+    %% The nested template is namespaced by the slot az, so its fingerprint
+    %% carries the `X-0-` prefix; the op still targets the unchanged slot az X-0.
+    ?assertMatch([[?OP_TEXT, <<"X-0">>, #{<<"f">> := <<"X-0-child_fp">>}]], Ops),
     ?assertNotMatch([[?OP_UPDATE, <<"X-0">>, _]], Ops).
 
 %% Plain-list `?each` FALLBACK diffing: a non-single-root item template (the
@@ -692,9 +700,10 @@ no_diff_skips_eval(Config) when is_list(Config) ->
     {Ops, Snap1, _} = arizona_diff:diff(T1, Snap0, V0, Changed),
     %% Only title produces an op
     ?assertEqual([[?OP_TEXT, <<"0">>, <<"B">>]], Ops),
-    %% The ignored dynamic retains old value in snapshot
+    %% The ignored dynamic retains old value in snapshot. Its inner az is
+    %% namespaced by content slot `1` (scope_slot), so it reads back as `1-i`.
     [{<<"0">>, _}, {<<"1">>, IgnoredSnap}] = maps:get(d, Snap1),
-    [{<<"i">>, ContentVal}] = maps:get(d, IgnoredSnap),
+    [{<<"1-i">>, ContentVal}] = maps:get(d, IgnoredSnap),
     ?assertEqual(<<"old">>, ContentVal).
 
 no_diff_stateful_child(Config) when is_list(Config) ->

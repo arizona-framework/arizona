@@ -40,6 +40,8 @@
     nested_stateless_scoped/1,
     each_in_stateless_distinct_containers/1,
     stateful_inside_stateless_ssr_matches_live/1,
+    stateless_descriptor_from_conditional_live/1,
+    stateful_descriptor_from_conditional_live/1,
     render_to_iolist_nodiff_multi/1,
     render_to_iolist_nodiff_static/1,
     render_to_iolist_nodiff/1,
@@ -91,7 +93,9 @@ groups() ->
             repeated_stateless_diff_targets_each,
             nested_stateless_scoped,
             each_in_stateless_distinct_containers,
-            stateful_inside_stateless_ssr_matches_live
+            stateful_inside_stateless_ssr_matches_live,
+            stateless_descriptor_from_conditional_live,
+            stateful_descriptor_from_conditional_live
         ]},
         {ssr, [parallel], [
             ssr_counter,
@@ -233,10 +237,14 @@ render_nested_sd(Config) when is_list(Config) ->
     },
     {HTML, Snap} = arizona_render:render(T),
     ?assertEqual(<<"<p az=\"0\">a b</p>">>, iolist_to_binary(HTML)),
+    %% The nested sub-template is namespaced by content slot `0` (scope_slot), so
+    %% its inner az becomes `0-i` and its fingerprint `0-test`.
     ?assertEqual(
         #{
             s => [<<"<p az=\"0\">">>, <<"</p>">>],
-            d => [{<<"0">>, #{s => [<<"a ">>, <<>>], d => [{<<"i">>, <<"b">>}], f => <<"test">>}}],
+            d => [
+                {<<"0">>, #{s => [<<"a ">>, <<>>], d => [{<<"0-i">>, <<"b">>}], f => <<"0-test">>}}
+            ],
             f => <<"test">>
         },
         Snap
@@ -459,6 +467,47 @@ stateful_inside_stateless_ssr_matches_live(Config) when is_list(Config) ->
     ?assertEqual(Live, SSR),
     %% The stateful child's own element renders (its view-id boundary is intact).
     ?assertNotEqual(nomatch, binary:match(SSR, <<"az-view id=\"c1\"">>)).
+
+%% Regression (#602 regression): a `?stateless` descriptor returned from a
+%% conditional-tail content slot must render structurally on the LIVE path,
+%% exactly as on SSR -- not be escaped as a scalar and crash in `to_bin/1` with
+%% `bad_template_value`. The SSR-only path always passed, so this test must
+%% exercise `render/2` (the live render) and the diff, not just SSR.
+stateless_descriptor_from_conditional_live(Config) when is_list(Config) ->
+    B = #{user => <<"ada">>},
+    Tmpl = arizona_conditional_descriptor:stateless_nav(B),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Tmpl)),
+    %% Live render must not crash and must match the SSR bytes.
+    {HTML, Snap, _Views} = arizona_render:render(Tmpl, #{}),
+    ?assertEqual(SSR, iolist_to_binary(HTML)),
+    %% The menu child rendered structurally, namespaced by the enclosing slot az.
+    ?assertNotEqual(nomatch, binary:match(SSR, <<"class=\"menu\"">>)),
+    ?assertNotEqual(nomatch, binary:match(SSR, <<"ada">>)),
+    %% A diff changing the menu's inner value patches its scoped inner az.
+    {Ops, _} = arizona_diff:diff(
+        arizona_conditional_descriptor:stateless_nav(#{user => <<"bob">>}), Snap
+    ),
+    ?assertMatch([[_Code, _Target, <<"bob">>]], Ops),
+    %% Switching to the anonymous branch re-renders the slot in place.
+    {Ops2, _} = arizona_diff:diff(
+        arizona_conditional_descriptor:stateless_nav(#{user => undefined}), Snap
+    ),
+    ?assertMatch([[_Code, _Target, #{<<"s">> := [_ | _]}]], Ops2).
+
+%% Regression: a `?stateful` descriptor returned from a conditional-tail content
+%% slot renders structurally on both paths. It never regressed (a stateful child
+%% snapshot is a plain map, which `mark_esc` passes through), but the idiom is
+%% documented, so pin it -- and confirm the fix for the stateless case did not
+%% disturb it.
+stateful_descriptor_from_conditional_live(Config) when is_list(Config) ->
+    B = #{user => <<"ada">>},
+    Tmpl = arizona_conditional_descriptor:stateful_nav(B),
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Tmpl)),
+    {HTML, _Snap, Views} = arizona_render:render(Tmpl, #{}),
+    ?assertEqual(SSR, iolist_to_binary(HTML)),
+    %% The stateful child keeps its own view-id boundary and spawns a child view.
+    ?assertNotEqual(nomatch, binary:match(SSR, <<"az-view id=\"c1\"">>)),
+    ?assert(maps:is_key(<<"c1">>, Views)).
 
 %% Regression: a repeated stateless whose body has an inline conditional, a
 %% client-owned `?local`, and a nested stateless grandchild. With no `?each`,
@@ -818,8 +867,9 @@ no_diff_ssr_nested(Config) when is_list(Config) ->
     %% Nested sub-template snapshot preserves diff => false
     [{<<"0">>, <<"title">>}, {<<"1">>, NestedSnap}] = maps:get(d, Snap),
     ?assertEqual(false, maps:get(diff, NestedSnap)),
-    %% Nested dynamics are evaluated
-    [{<<"i">>, <<"frozen">>}] = maps:get(d, NestedSnap).
+    %% Nested dynamics are evaluated; the inner az is namespaced by content slot
+    %% `1` (scope_slot), so it reads back as `1-i`.
+    [{<<"1-i">>, <<"frozen">>}] = maps:get(d, NestedSnap).
 
 error_page_format_reason_unwraps_loc(Config) when is_list(Config) ->
     %% Top frame has no line -> title falls back to arizona_loc; body

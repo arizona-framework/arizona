@@ -1274,25 +1274,34 @@ baked at compile time by `scope_az/4`), and it has no `view_id` boundary of its 
 render function rendered more than once in a view (`?stateless(card, #{...})` twice) would emit
 byte-identical `az` targets; on the client every diff op resolves with `querySelector` (first
 match) and lands on the first DOM instance. To keep each instance an independent diff target,
-`arizona_template:scope_stateless/2` namespaces a stateless child's snapshot -- its fingerprint,
-its statics' baked `az`/marker ids, and every inner dynamic `az` (recursing through inline nested
-templates) -- by the enclosing slot `az` at runtime, where the slot is in scope. The stateless
-clause of each value evaluator (`arizona_eval:eval_val`/`eval_val_v`, and
-`arizona_render:render_ssr_val`) tags the child via `pending_stateless/1`; the per-dynamic caller
-(`eval_one`/`eval_one_v`/`render_ssr_one`, which knows the slot `az`) applies `scope_stateless/2`.
-So instance A at slot
+`arizona_template:scope_slot/2` namespaces a slot value's snapshot -- its fingerprint, its statics'
+baked `az`/marker ids, and every inner dynamic `az` (recursing through inline nested templates) --
+by the enclosing slot `az` at runtime, where the slot is in scope. A stateless child evaluates to
+a plain snapshot map (the `#{callback, props}` clause of `arizona_eval:eval_val`/`eval_val_v` and
+`arizona_render:render_ssr_val` returns it directly, with no wrapper tag), and the per-dynamic
+caller (`eval_one`/`eval_one_v`/`render_ssr_one`, which knows the slot `az`) applies
+`scope_slot/2`. So instance A at slot
 `<<"p-0">>` becomes `p-0-<Fp>-<n>` and instance B at slot `<<"p-0:1">>` becomes `p-0-1-<Fp>-<n>`;
 nested stateless children compose the full slot path. The prefix is made colon-free (`:` -> `-`)
 because the client treats `:` as the content-slot-index separator (a base element `az` never
 contains one) and recovers a base element by stripping at the *first* colon -- an internal colon
 in the prefix would misroute multi-slot and `?each`-among-siblings ops, so no client change is
-needed. A **stateful** child (its own `view_id` boundary), an `?each` container (items addressed
-relative to the container, not by global `az`), and a client-owned `?local` slot are left
-untouched -- only the container/element `az` in the enclosing statics is prefixed. A stateful
-child is skipped by its snapshot's `view_id`: the live path sets it via `make_child_snap`, and the
-SSR path (`render_ssr_val`) sets it too, so the SSR HTML (which the client reuses on connect) and
-the live snapshot produce identical ids -- without it, a stateful child nested in a stateless
-parent would be scoped only at SSR and its diff ops would miss the DOM.
+needed.
+
+`scope_slot/2` discriminates purely by structure (it delegates to the same `scope_val/2` used when
+recursing inside a scoped snapshot): a **stateless child** and an **inline nested template** (a
+conditional-tail branch, or an explicit nested `?html`) are byte-identical `#{s, d}` snapshot maps,
+so both are namespaced by the slot `az` -- there is no tag telling them apart, and none is needed.
+Uniform scoping is also strictly *more* correct than scoping only stateless children: two
+structurally identical conditional branches in different slots share a fingerprint, so without the
+slot prefix their inner ids would collide on the client exactly as repeated stateless children do.
+A **stateful** child (its own `view_id` boundary), an `?each` container (items addressed relative
+to the container, not by global `az`), and a client-owned `?local` slot are left untouched -- only
+the container/element `az` in the enclosing statics is prefixed. A stateful child is skipped by its
+snapshot's `view_id`: the live path sets it via `make_child_snap`, and the SSR path
+(`render_ssr_val`) sets it too, so the SSR HTML (which the client reuses on connect) and the live
+snapshot produce identical ids -- without it, a stateful child nested in a stateless parent would
+be scoped only at SSR and its diff ops would miss the DOM.
 
 Prefixing a statics list is a `binary:replace` per element -- pure and deterministic in
 `(prefix, statics)` -- so `scope_snapshot` memoizes it per `(prefix, fingerprint)` in the process
