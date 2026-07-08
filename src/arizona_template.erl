@@ -75,8 +75,7 @@ render(Bindings) ->
 -export([maybe_propagate/2]).
 -export([maybe_put_fingerprint/2]).
 -export([make_child_snap/4]).
--export([pending_stateless/1]).
--export([scope_stateless/2]).
+-export([scope_slot/2]).
 -export([unzip_triples/1]).
 -export([split_triples/1]).
 -export([visible_keys/2]).
@@ -497,8 +496,12 @@ escape_value(V) -> escape_html(to_bin(V)).
 
 -doc """
 Marks an evaluated value for HTML escaping at output. Only scalars are marked --
-nested templates/descriptors (maps), `raw/1`, and effects pass through untouched
-so they render structurally (their own inner dynamics carry their own marks).
+nested templates/descriptors and stateless-child snapshots (all maps), `raw/1`,
+and effects pass through untouched so they render structurally (their own inner
+dynamics carry their own marks). A stateless descriptor returned from a
+conditional content slot reduces to a bare snapshot map here, so the `is_map`
+clause passes it through and `scope_slot/2` later namespaces it -- the same
+treatment a directly-slotted stateless child gets.
 """.
 -spec mark_esc(Value) -> term() when
     Value :: term().
@@ -566,27 +569,19 @@ make_child_snap(Tmpl, ChildD, ChildDeps, Id) ->
     maybe_propagate(Tmpl, Snap).
 
 -doc """
-Tags a freshly-evaluated stateless child snapshot so its caller -- which knows
-the enclosing slot's `az` -- can namespace the child's inner `az` ids via
-`scope_stateless/2`.
+Namespaces a slot's rendered value by the enclosing slot `Az`, so a repeated
+stateless child (or any inline nested template) is an independent diff target.
+Prefixes the value's fingerprint, its statics' baked `az`/marker ids, and every
+inner dynamic `az` (recursing through inline nested templates) with the slot `az`.
 
 A stateless component has no `view_id` boundary of its own, and its inner `az`
 ids derive only from its own template fingerprint (`<Fp>-<n>`). So the *same*
 render function rendered more than once in a view produces byte-identical `az`
 targets; on the client every diff op resolves with `querySelector` (first match)
-and lands on the first instance. Tagging here defers the per-instance namespacing
-to the point where the slot `az` is in scope.
-""".
--spec pending_stateless(Snapshot) -> {'$arizona_stateless', Snapshot} when
-    Snapshot :: snapshot() | binary().
-pending_stateless(Snapshot) ->
-    {'$arizona_stateless', Snapshot}.
-
--doc """
-Namespaces a pending stateless child (from `pending_stateless/1`) by the
-enclosing slot `Az`, so each instance is an independent diff target. Prefixes
-the child's fingerprint, its statics' baked `az`/marker ids, and every inner
-dynamic `az` (recursing through inline nested templates) with the slot `az`.
+and lands on the first instance. Namespacing by the slot `az` -- applied here,
+where the slot is in scope -- keeps each instance distinct. The same prefixing
+makes two structurally identical inline nested templates (e.g. same-shaped
+conditional branches) in different slots distinct too.
 
 The prefix is made colon-free (`:` -> `-`): the client treats `:` as the
 content-slot-index separator (a base element `az` never contains one) and
@@ -594,31 +589,34 @@ recovers a base element by stripping at the *first* colon, so an internal colon
 in the prefix would misroute multi-slot and `?each`-among-siblings ops. A
 stateful child (`view_id` boundary), an `?each` container (items are addressed
 relative to the container, not by global `az`), and a client-owned `?local`
-slot are left untouched. A non-tagged value passes through unchanged.
+slot are left untouched; a scalar (escaped or bare) has no `az` to prefix and
+passes through. This is exactly the structural discrimination `scope_val/2`
+applies inside an already-scoped snapshot, reused here for the top-level slot
+value -- so a stateless child evaluates to a plain snapshot map (no wrapper tag)
+and is scoped by the same `#{s, d}` path as an inline nested template.
 """.
--spec scope_stateless(Az, Value) -> term() when
+-spec scope_slot(Az, Value) -> term() when
     Az :: az(),
     Value :: term().
-scope_stateless(Az, {'$arizona_stateless', Snapshot}) when is_binary(Az) ->
-    scope_snapshot(colon_free(Az), Snapshot);
-scope_stateless(_Az, {'$arizona_stateless', Snapshot}) ->
+scope_slot(Az, Value) when is_binary(Az) ->
+    scope_val(colon_free(Az), Value);
+scope_slot(_Az, Value) ->
     %% Undefined slot az (an az-nodiff slot): no target to namespace against.
-    Snapshot;
-scope_stateless(_Az, Value) ->
     Value.
 
 colon_free(Az) ->
     binary:replace(Az, ~":", ~"-", [global]).
 
+%% Only ever reached via scope_val/2's guarded `#{s, d}` clause, so the argument
+%% is always a snapshot map -- a non-snapshot (a scalar, a stateless child that
+%% rendered to a bare binary) is filtered out there and never arrives here.
 scope_snapshot(Prefix, #{s := S, d := D} = Snap) ->
     Backend = backend_for(maps:get(target, Snap, html)),
     Snap1 = Snap#{
         s => scoped_statics(Backend, Prefix, Snap, S),
         d => [scope_dyn(Prefix, Dyn) || Dyn <- D]
     },
-    scope_fp(Prefix, Snap1);
-scope_snapshot(_Prefix, Snap) ->
-    Snap.
+    scope_fp(Prefix, Snap1).
 
 %% Prefixing a static list is a `binary:replace` per element -- pure and
 %% deterministic in (Prefix, statics). Memoize it per (Prefix, fingerprint) in
