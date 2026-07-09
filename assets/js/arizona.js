@@ -481,12 +481,14 @@ function notifyUpdated(el) {
 }
 
 /**
- * Mount hooks on all [az-hook] elements within root (inclusive).
+ * Mount hooks on all [az-hook] elements within root (inclusive). `nodeType`, not
+ * `instanceof Element`: root may come from a PiP document, whose realm has its own
+ * Element constructor (a Document is nodeType 9, so it still skips the self-check).
  * @param {Element|Document} root
  */
 function mountHooks(root) {
-    if (root instanceof Element && root.hasAttribute && root.hasAttribute('az-hook'))
-        mountHook(root);
+    if (root.nodeType === 1 && /** @type {Element} */ (root).hasAttribute('az-hook'))
+        mountHook(/** @type {Element} */ (root));
     root.querySelectorAll('[az-hook]').forEach(mountHook);
 }
 
@@ -639,9 +641,15 @@ function applyOps(ops) {
                 break;
             case OP.REPLACE: {
                 destroyHooks(el);
-                el.outerHTML = op[2];
-                const newEl = resolveEl(op[1]);
-                if (newEl) mountHooks(newEl);
+                // Hold the replacement's roots BEFORE inserting them: a navigate mounts a
+                // view whose id differs, so re-resolving `op[1]` (which names the OUTGOING
+                // view) after the swap finds nothing and the destination's hooks would
+                // never mount. Same parse-then-mount shape as OP_INSERT.
+                const tpl = el.ownerDocument.createElement('template');
+                tpl.innerHTML = op[2];
+                const added = Array.from(tpl.content.children);
+                el.replaceWith(tpl.content);
+                for (const e of added) mountHooks(e);
                 didReplace = true;
                 break;
             }

@@ -705,7 +705,9 @@ live_navigate(Config) when is_list(Config) ->
     {ok, NewViewId, PageContent} = arizona_live:navigate(
         Pid, arizona_about, NavOpts
     ),
-    ?assertEqual(<<"page">>, NewViewId),
+    %% The destination's own id, not the outgoing view's -- the two differ, so this
+    %% pins that navigate/3 reports the newly mounted view.
+    ?assertEqual(<<"about-page">>, NewViewId),
     ?assertMatch(#{<<"f">> := _, <<"s">> := _, <<"d">> := _}, PageContent),
     ?assert(lists:member(<<"About">>, maps:get(<<"d">>, PageContent))).
 
