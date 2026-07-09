@@ -7,6 +7,7 @@ import {
     hooks,
     mountHooks,
     OP,
+    requestPip,
     resolveEl,
     restoreFormState,
     saveFormState,
@@ -24,6 +25,40 @@ beforeEach(() => {
     // Clear hook definitions
     for (const k of Object.keys(hooks)) delete hooks[k];
 });
+
+/**
+ * Move `viewId` into a stand-in Document PiP window (an iframe document -- a real
+ * second realm, like the browser's PiP window). Returns that document plus a closer
+ * that runs the pagehide teardown, so the module's `_viewDocs` never leaks between tests.
+ */
+async function popOutView(viewId) {
+    const frame = document.createElement('iframe');
+    document.body.appendChild(frame);
+    const pipDoc = frame.contentDocument;
+    // requestPip binds its delegated listeners with an AbortSignal from this realm;
+    // jsdom's IDL conversion rejects that on a document from another one (a real
+    // browser accepts it). Those listeners aren't under test -- drop the options.
+    const addEventListener = pipDoc.addEventListener.bind(pipDoc);
+    pipDoc.addEventListener = (type, cb) => addEventListener(type, cb);
+    let onPageHide = () => {};
+    window.documentPictureInPicture = {
+        requestWindow: async () => ({
+            document: pipDoc,
+            addEventListener: (_evt, cb) => {
+                onPageHide = cb;
+            },
+        }),
+    };
+    await requestPip(viewId);
+    return {
+        pipDoc,
+        closePip: () => {
+            onPageHide();
+            frame.remove();
+            delete window.documentPictureInPicture;
+        },
+    };
+}
 
 /** Minimal DOM with a single view and one dynamic element. */
 function setupView(viewId, innerHTML) {
@@ -2080,6 +2115,33 @@ describe('hooks -- mounted', () => {
             '<div az-hook="Page">sibling-after</div>';
         applyOps([[OP.REPLACE, 'v', '<div id="w" az-view>plain</div>']]);
         expect(mounted).not.toHaveBeenCalled();
+    });
+
+    // `findViewRoot` resolves a popped-out view in its PiP document, so OP_REPLACE can
+    // land on an element outside the main document. Nodes parsed there belong to that
+    // document's realm, where a main-realm `instanceof Element` test is false -- so the
+    // replacement must be walked without one, or the destination's hooks never mount.
+    it('fires after OP_REPLACE when the target lives in a secondary document', async () => {
+        const mounted = vi.fn();
+        hooks.Page = { mounted };
+        document.body.innerHTML = '<div id="pipped" az-view><p>old</p></div>';
+
+        const { pipDoc, closePip } = await popOutView('pipped');
+        try {
+            applyOps([
+                [
+                    OP.REPLACE,
+                    'pipped',
+                    '<div id="new" az-view az-hook="Page"><span az-hook="Page">x</span></div>',
+                ],
+            ]);
+            expect(pipDoc.querySelector('#new')).not.toBeNull();
+            // Both the replacement's root and its descendant -- mountHooks is inclusive
+            // of root, which also must not lean on a main-realm `instanceof Element`.
+            expect(mounted).toHaveBeenCalledTimes(2);
+        } finally {
+            closePip();
+        }
     });
 
     it('fires after OP_TEXT marker path with HTML containing az-hook', () => {

@@ -361,7 +361,7 @@ ssr_layouts_empty_list(Config) when is_list(Config) ->
         )
     ),
     ?assertEqual(nomatch, binary:match(HTML, <<"<!DOCTYPE html>">>)),
-    ?assertNotEqual(nomatch, binary:match(HTML, <<"az-view id=\"page\"">>)).
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"az-view id=\"about-page\"">>)).
 
 ssr_each_map(Config) when is_list(Config) ->
     HTML = iolist_to_binary(arizona_render:render_to_iolist(arizona_each_map, #{})),
@@ -593,7 +593,7 @@ ssr_about_page(Config) when is_list(Config) ->
         )
     ),
     ?assertMatch({_, _}, binary:match(HTML, <<"<title>About</title>">>)),
-    ?assertMatch({_, _}, binary:match(HTML, <<"az-view id=\"page\"">>)),
+    ?assertMatch({_, _}, binary:match(HTML, <<"az-view id=\"about-page\"">>)),
     ?assertMatch({_, _}, binary:match(HTML, <<"About">>)),
     ?assertMatch({_, _}, binary:match(HTML, <<"az-hook=\"Tick\"">>)),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"0<!--/az-->">>)).

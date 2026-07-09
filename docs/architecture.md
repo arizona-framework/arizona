@@ -1207,7 +1207,7 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 | 5    | `OP_INSERT`      | `[target, key, pos, html]` | Stream insert (pos=-1 -> append, otherwise index)      |
 | 6    | `OP_REMOVE`      | `[target, key]`            | Stream remove                                          |
 | 7    | `OP_ITEM_PATCH`  | `[target, key, innerOps]`  | Stream item patch                                      |
-| 8    | `OP_REPLACE`     | `[target, html]`           | outerHTML replacement (navigate)                       |
+| 8    | `OP_REPLACE`     | `[target, html]`           | Element swap (navigate); `target` is the OLD view id   |
 | 9    | `OP_MOVE`        | `[target, key, afterKey]`  | Stream move (afterKey=null -> prepend)                 |
 
 A content-slot dynamic -- a value, a nested template, *or a plain-list `?each`* -- is anchored

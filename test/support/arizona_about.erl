@@ -5,7 +5,11 @@
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Init) ->
     Bindings = #{
-        id => ~"page",
+        %% Deliberately NOT "page" (the id every other fixture view uses): a navigate
+        %% between two views sharing a root id cannot catch an op that re-resolves the
+        %% outgoing view's id after the swap, which is why the `az-hook` navigate e2e
+        %% in arizona_page.spec.js stayed green while hooks never mounted on arrival.
+        id => ~"about-page",
         title => maps:get(title, Init, ~"About"),
         tick => 0,
         tags => [~"erlang", ~"otp", ~"arizona"]

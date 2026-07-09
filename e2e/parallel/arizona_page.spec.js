@@ -1281,7 +1281,7 @@ test.describe('drag-and-drop reorder', () => {
 
 test.describe('handle_info + az-hook (about page timer)', () => {
     /** Locate the tick span on the about page. */
-    const tickSpan = (page) => page.locator('main#page[az-view] span[az-hook="Tick"]');
+    const tickSpan = (page) => page.locator('main#about-page[az-view] span[az-hook="Tick"]');
 
     test('tick count increments via handle_info', async ({ page }) => {
         await page.goto('/about');
@@ -1296,7 +1296,7 @@ test.describe('handle_info + az-hook (about page timer)', () => {
         // Capture an early value, then wait for it to increase -- proves recurring timer
         await page.waitForFunction(
             () => {
-                const el = document.querySelector('main#page span[az-hook="Tick"]');
+                const el = document.querySelector('main#about-page span[az-hook="Tick"]');
                 return el && parseInt(el.textContent, 10) >= 1;
             },
             { timeout: 3000 },
@@ -1304,7 +1304,7 @@ test.describe('handle_info + az-hook (about page timer)', () => {
         const first = parseInt(await tickSpan(page).textContent(), 10);
         await page.waitForFunction(
             (prev) => {
-                const el = document.querySelector('main#page span[az-hook="Tick"]');
+                const el = document.querySelector('main#about-page span[az-hook="Tick"]');
                 return el && parseInt(el.textContent, 10) > prev;
             },
             first,
@@ -1325,7 +1325,7 @@ test.describe('handle_info + az-hook (about page timer)', () => {
         // Wait until tick reaches at least 2 (don't match exact text -- it's a race)
         await page.waitForFunction(
             () => {
-                const el = document.querySelector('main#page span[az-hook="Tick"]');
+                const el = document.querySelector('main#about-page span[az-hook="Tick"]');
                 return el && parseInt(el.textContent, 10) >= 2;
             },
             { timeout: 5000 },
@@ -1421,7 +1421,7 @@ test.describe('List comprehension (about page tags)', () => {
         await page.goto('/about');
         await wsReady(page);
         await expect(tagItems(page)).toHaveCount(3);
-        const tickSpan = page.locator('main#page[az-view] span[az-hook="Tick"]');
+        const tickSpan = page.locator('main#about-page[az-view] span[az-hook="Tick"]');
         await expect(tickSpan).toHaveText('1', { timeout: 3000 });
     });
 
@@ -1491,7 +1491,7 @@ test('hook re-mounts after reconnect on about page', async ({ page }) => {
     await page.goto('/about');
     await wsReady(page);
 
-    const tickSpan = page.locator('main#page[az-view] span[az-hook="Tick"]');
+    const tickSpan = page.locator('main#about-page[az-view] span[az-hook="Tick"]');
     // Tick hook should be mounted
     await expect(tickSpan).toHaveAttribute('data-hook-mounted', 'true');
 
@@ -1560,7 +1560,7 @@ test('about page timer restarts after reconnect', async ({ page }) => {
     await page.goto('/about');
     await wsReady(page);
 
-    const tickSel = 'main#page span[az-hook="Tick"]';
+    const tickSel = 'main#about-page span[az-hook="Tick"]';
 
     // Timer is running before the reconnect (tick climbs to at least 1).
     await page.waitForFunction(

@@ -652,7 +652,7 @@ diff_with_views_no_children(Config) when is_list(Config) ->
 
 about_mount(Config) when is_list(Config) ->
     {B, _} = arizona_about:mount(#{}),
-    ?assertEqual(<<"page">>, maps:get(id, B)),
+    ?assertEqual(<<"about-page">>, maps:get(id, B)),
     ?assertEqual(<<"About">>, maps:get(title, B)),
     ?assertEqual(0, maps:get(tick, B)).
 
@@ -661,7 +661,7 @@ about_render(Config) when is_list(Config) ->
     Tmpl = arizona_about:render(B),
     {HTML, _Snap} = arizona_render:render(Tmpl),
     HTMLBin = iolist_to_binary(HTML),
-    ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"az-view id=\"page\"">>)),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"az-view id=\"about-page\"">>)),
     ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"About<!--/az-->">>)),
     ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"az-hook=\"Tick\"">>)),
     ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"0<!--/az-->">>)),
