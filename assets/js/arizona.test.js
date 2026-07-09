@@ -2037,6 +2037,51 @@ describe('hooks -- mounted', () => {
         expect(mounted).toHaveBeenCalledOnce();
     });
 
+    // A navigate mounts a DIFFERENT root view, so the replacement's id does not match
+    // the op target's (which names the outgoing view). Re-resolving that stale id finds
+    // nothing, so the destination page's hooks used to never mount at all.
+    it('fires after OP_REPLACE when the replacement changes the view id (navigate)', () => {
+        const mounted = vi.fn();
+        hooks.Page = { mounted };
+        document.body.innerHTML = '<div id="old-view" az-view><p>old</p></div>';
+        applyOps([
+            [
+                OP.REPLACE,
+                'old-view',
+                '<div id="new-view" az-view><span az-hook="Page">new</span></div>',
+            ],
+        ]);
+        expect(document.getElementById('old-view')).toBeNull();
+        expect(mounted).toHaveBeenCalledOnce();
+    });
+
+    it('fires for a hook on the replacement root itself', () => {
+        const mounted = vi.fn();
+        hooks.Page = { mounted };
+        document.body.innerHTML = '<div id="old-view" az-view><p>old</p></div>';
+        applyOps([[OP.REPLACE, 'old-view', '<div id="new-view" az-view az-hook="Page">new</div>']]);
+        expect(mounted).toHaveBeenCalledOnce();
+    });
+
+    it('fires for every top-level node a replacement expands to', () => {
+        const mounted = vi.fn();
+        hooks.Page = { mounted };
+        document.body.innerHTML = '<i>before</i><div id="v" az-view></div><i>after</i>';
+        applyOps([[OP.REPLACE, 'v', '<div az-hook="Page">a</div><div az-hook="Page">b</div>']]);
+        expect(mounted).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not mount hooks on siblings the replacement did not insert', () => {
+        const mounted = vi.fn();
+        hooks.Page = { mounted };
+        document.body.innerHTML =
+            '<div az-hook="Page">sibling-before</div>' +
+            '<div id="v" az-view></div>' +
+            '<div az-hook="Page">sibling-after</div>';
+        applyOps([[OP.REPLACE, 'v', '<div id="w" az-view>plain</div>']]);
+        expect(mounted).not.toHaveBeenCalled();
+    });
+
     it('fires after OP_TEXT marker path with HTML containing az-hook', () => {
         const mounted = vi.fn();
         hooks.Inline = { mounted };

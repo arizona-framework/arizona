@@ -639,9 +639,22 @@ function applyOps(ops) {
                 break;
             case OP.REPLACE: {
                 destroyHooks(el);
+                // Anchor on the surrounding nodes BEFORE the swap: a navigate replaces
+                // the root with a view whose id differs, so re-resolving `op[1]` (which
+                // carries the OLD view id) finds nothing and the destination's hooks
+                // would never mount. Walking what actually landed also covers a
+                // replacement that expands to several top-level nodes.
+                const parent = el.parentNode;
+                const before = el.previousSibling;
+                const after = el.nextSibling;
                 el.outerHTML = op[2];
-                const newEl = resolveEl(op[1]);
-                if (newEl) mountHooks(newEl);
+                for (
+                    let node = before ? before.nextSibling : parent?.firstChild;
+                    node && node !== after;
+                    node = node.nextSibling
+                ) {
+                    if (node instanceof Element) mountHooks(node);
+                }
                 didReplace = true;
                 break;
             }
