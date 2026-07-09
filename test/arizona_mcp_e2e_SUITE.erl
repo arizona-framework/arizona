@@ -24,6 +24,7 @@
     session_missing_id/1,
     session_delete_without_id/1,
     session_tool_crash_survives/1,
+    session_tool_unencodable_survives/1,
     session_get_without_id_400/1,
     session_channel_receives_push/1,
     session_resource_subscribe_pushes_update/1,
@@ -66,6 +67,7 @@ all() ->
         session_missing_id,
         session_delete_without_id,
         session_tool_crash_survives,
+        session_tool_unencodable_survives,
         session_get_without_id_400,
         session_channel_receives_push,
         session_resource_subscribe_pushes_update,
@@ -104,6 +106,10 @@ init_per_suite(Config) ->
             auth => Auth
         }},
         {mcp, ~"/mcp-session-crash", arizona_mcp_crashing_server, #{
+            origins => [?ALLOWED_ORIGIN],
+            sessions => true
+        }},
+        {mcp, ~"/mcp-unencodable", arizona_mcp_unencodable_server, #{
             origins => [?ALLOWED_ORIGIN],
             sessions => true
         }},
@@ -374,6 +380,28 @@ session_delete_without_id(Config) ->
     Resp = request(Config, "DELETE", "/mcp-session", [], <<>>),
     ?assertEqual(400, status_code(Resp)).
 
+session_tool_unencodable_survives(Config) ->
+    SessionId = open_session(Config, "/mcp-unencodable"),
+    %% The tool returns a binary `json:encode/1` rejects. Before the encode was
+    %% guarded this closed the socket with no reply at all -- the client saw the
+    %% connection drop, not an error.
+    Call =
+        ~"""
+    {"jsonrpc":"2.0","id":2,"method":"tools/call",
+     "params":{"name":"latin1","arguments":{}}}
+    """,
+    Resp = post(Config, "/mcp-unencodable", session_header(SessionId), Call),
+    ?assertEqual(200, status_code(Resp)),
+    ?assertMatch(#{~"id" := 2, ~"error" := #{~"code" := -32603}}, body_json(Resp)),
+    %% The session survived it and still serves.
+    Ping =
+        ~"""
+    {"jsonrpc":"2.0","id":3,"method":"ping"}
+    """,
+    Pong = post(Config, "/mcp-unencodable", session_header(SessionId), Ping),
+    ?assertEqual(200, status_code(Pong)),
+    ?assertMatch(#{~"result" := #{}}, body_json(Pong)).
+
 session_tool_crash_survives(Config) ->
     SessionId = open_session(Config),
     Crash =
@@ -586,7 +614,10 @@ session_init_crash_internal_error(Config) ->
 %% --------------------------------------------------------------------
 
 open_session(Config) ->
-    Resp = post(Config, "/mcp-session", [], initialize_body()),
+    open_session(Config, "/mcp-session").
+
+open_session(Config, Path) ->
+    Resp = post(Config, Path, [], initialize_body()),
     header_value(Resp, ~"mcp-session-id").
 
 open_channel(Config, SessionId) ->

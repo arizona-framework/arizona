@@ -1411,9 +1411,18 @@ process so the connection loop is free to push its progress as it arrives. In **
 loop spawns the worker; in **session** mode the session spawns it (so the session stays responsive to
 a cancel) and the worker reports its threaded-back state on completion. Either way the tool emits via
 the `Ctx` handed to `handle_tool/4` -- `arizona_mcp:progress/2,3` relays each `notifications/progress`
-to the POST's loop, which frames and pushes it; the final result is the last frame, then the loop
+to the POST's loop, which pushes it; the final result is the last frame, then the loop
 stops. The context is inert (a no-op) for a non-streaming call, so a tool can always call
 `progress/2,3`.
+
+**A JSON-RPC object is encoded by whoever produces it, never by the process that writes it to the
+wire.** `json:encode/1` rejects a binary that is not valid UTF-8, and a callback module can return
+one; encoding at the producer keeps that failure inside the producer's crash guard, which answers
+`-32603` like any other callback crash. So the tool worker frames its own progress notifications and
+its final result (`arizona_mcp_handler:message_frame/1`), and the connection loop only pushes bytes;
+the buffered reply paths encode inside the same guard. The one object that cannot be answered is a
+server-initiated **notification** -- it carries no id -- so an unencodable one is logged and dropped
+rather than taken out on the session process, which would kill every request in flight on it.
 
 ### Dispatch, cancellation, and timeouts
 

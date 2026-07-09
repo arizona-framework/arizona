@@ -28,6 +28,7 @@ protocol contract holds even when a tool raises.
 -export([dispatch/3]).
 -export([handle_method/4]).
 -export([run_streaming_tool/6]).
+-export([message_frame/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -190,14 +191,18 @@ Roadrunner loop `handle_info/3` callback for the two SSE loops:
     Info :: term(),
     Push :: roadrunner_handler:push_fun(),
     State :: #{session := pid()} | #{mcp_post_stream := true, _ => term()}.
+%% Each message carries an already-framed (and so already encoded) event: this
+%% process only pushes bytes. Encoding here would run outside every crash guard,
+%% so a callback returning content `json:encode/1` rejects would kill the
+%% connection instead of being answered. See `message_frame/1`.
 handle_info({mcp_event, Frame}, Push, State) ->
     _ = Push(Frame),
     {ok, State};
-handle_info({mcp_progress, Notification}, Push, State) ->
-    _ = Push(message_frame(Notification)),
+handle_info({mcp_progress, Frame}, Push, State) ->
+    _ = Push(Frame),
     {ok, State};
-handle_info({mcp_result, Object}, Push, State) ->
-    _ = Push(message_frame(Object)),
+handle_info({mcp_result, Frame}, Push, State) ->
+    _ = Push(Frame),
     {stop, State};
 handle_info(mcp_cancelled, _Push, State) ->
     %% The session cancelled this streaming request; close the stream, no result.
@@ -223,9 +228,20 @@ cancel_stream(#{session := SessionPid, id := Id}) ->
 cancel_stream(_State) ->
     ok.
 
-%% A JSON-RPC message (a progress notification or the final result) framed as a
-%% single SSE `message` event. The streaming POST is request-scoped, so -- unlike
-%% the resumable GET channel -- the events carry no id.
+-doc """
+Frame a JSON-RPC message (a progress notification or the final result) as a
+single SSE `message` event. The streaming POST is request-scoped, so -- unlike
+the resumable GET channel -- the events carry no id.
+
+Called by whoever *produces* the object, never by the connection process that
+pushes the frame. `json:encode/1` rejects a binary that is not valid UTF-8, and
+a callback module can return one; encoding at the producer keeps that failure
+inside the producer's crash guard, which answers `-32603`. Encoded in the
+connection process it would instead kill the connection, and the client would
+see the socket drop with no reply.
+""".
+-spec message_frame(Object) -> iodata() when
+    Object :: map().
 message_frame(Object) ->
     roadrunner_sse:event(~"message", iolist_to_binary(json:encode(Object))).
 
@@ -481,7 +497,7 @@ session_request(Method, Params, Id, Request, Req, Timeout) ->
                 SessionId,
                 fun(Pid) ->
                     {_Tag, Object} = arizona_mcp_session:dispatch(Pid, Method, Params, Id, Timeout),
-                    json(Object)
+                    safe_json(Object, Id)
                 end,
                 fun() -> unknown_session(Id) end
             )
@@ -617,21 +633,23 @@ process; exported for the latter's cross-module call.
     Ctx :: arizona_mcp:progress_ctx(),
     ConnPid :: pid().
 run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid) ->
-    %% Guard the whole run (the `tools/1` read included): a crash must answer
-    %% -32603 rather than leave the POST loop hanging. The tool's returned state
-    %% is discarded (snapshot semantics).
-    Object =
+    %% Guard the whole run -- the `tools/1` read and the result's encoding
+    %% included: a crash must answer -32603 rather than leave the POST loop
+    %% hanging, and a tool whose content `json:encode/1` rejects must fail here
+    %% rather than in the connection process pushing the frame. The tool's
+    %% returned state is discarded (snapshot semantics).
+    Frame =
         try
-            {Obj, _NewState} = run_tool(Session, Name, Args, Id, Ctx),
-            Obj
+            {Object, _NewState} = run_tool(Session, Name, Args, Id, Ctx),
+            message_frame(Object)
         catch
             Class:Reason:Stacktrace ->
                 logger:error(
                     "MCP streaming tool crashed: ~ts:~tp~n~tp", [Class, Reason, Stacktrace]
                 ),
-                arizona_jsonrpc:error(Id, -32603, ~"Internal error")
+                message_frame(arizona_jsonrpc:error(Id, -32603, ~"Internal error"))
         end,
-    ConnPid ! {mcp_result, Object},
+    ConnPid ! {mcp_result, Frame},
     ok.
 
 %% Validate the tool name, run it, and shape the outcome into a
@@ -656,8 +674,8 @@ generate_session_id() ->
 
 reply_dispatch(Mod, Request, PageSize) ->
     try dispatch(Mod, Request, #{page_size => PageSize}) of
-        {reply, Object} -> json(Object);
-        {error, Object} -> json(Object);
+        {reply, Object} -> safe_json(Object, reply_id(Request));
+        {error, Object} -> safe_json(Object, reply_id(Request));
         notification -> roadrunner_resp:status(202)
     catch
         Class:Reason:Stacktrace ->
@@ -674,6 +692,21 @@ reply_id(#{id := Id}) -> Id.
 %% fault is carried in the JSON-RPC envelope, not the HTTP status.
 json(Object) ->
     roadrunner_resp:json(200, Object).
+
+%% `roadrunner_resp:json/2` encodes eagerly, and `json:encode/1` rejects a binary
+%% that is not valid UTF-8 -- which a callback module can return. Both buffered
+%% reply sites encode outside any guard (in `reply_dispatch/3`'s `of` body, and
+%% after the session's own guarded dispatch has returned), so a bad object would
+%% crash the connection with no reply. Answer -32603 instead, the same outcome a
+%% crashing callback already gets.
+safe_json(Object, Id) ->
+    try
+        json(Object)
+    catch
+        Class:Reason:Stacktrace ->
+            logger:error("MCP response encode failed: ~ts:~tp~n~tp", [Class, Reason, Stacktrace]),
+            json(arizona_jsonrpc:error(Id, -32603, ~"Internal error"))
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal functions - MCP methods

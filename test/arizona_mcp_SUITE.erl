@@ -14,6 +14,8 @@
     streaming_tool_relays_progress/1,
     streaming_tool_unknown/1,
     streaming_tool_crash/1,
+    streaming_tool_unencodable_result/1,
+    streaming_tool_unencodable_progress/1,
     progress_no_opts/1,
     progress_with_opts/1,
     progress_inert_noop/1,
@@ -61,13 +63,15 @@
     handle_auth_rejects/1,
     handle_auth_reads_header/1,
     handle_auth_mfa/1,
-    handle_tool_crash_internal_error/1
+    handle_tool_crash_internal_error/1,
+    handle_tool_unencodable_result_internal_error/1
 ]).
 
 %% An `{Module, Function}` auth hook target (see handle_auth_mfa/1).
 -export([reject_auth/1]).
 
 -define(SERVER, arizona_mcp_test_server).
+-define(UNENCODABLE, arizona_mcp_unencodable_server).
 
 all() ->
     [
@@ -82,6 +86,8 @@ all() ->
         streaming_tool_relays_progress,
         streaming_tool_unknown,
         streaming_tool_crash,
+        streaming_tool_unencodable_result,
+        streaming_tool_unencodable_progress,
         progress_no_opts,
         progress_with_opts,
         progress_inert_noop,
@@ -129,7 +135,8 @@ all() ->
         handle_auth_rejects,
         handle_auth_reads_header,
         handle_auth_mfa,
-        handle_tool_crash_internal_error
+        handle_tool_crash_internal_error,
+        handle_tool_unencodable_result_internal_error
     ].
 
 %% --------------------------------------------------------------------
@@ -248,6 +255,25 @@ streaming_tool_crash(_Config) ->
     Ctx = #{token => ~"t", to => self()},
     _Session1 = arizona_mcp_handler:run_streaming_tool(session(), ~"crash", #{}, 1, Ctx, self()),
     ?assertMatch(#{~"error" := #{~"code" := -32603}}, recv_result()).
+
+%% A tool whose result is not encodable relays a -32603, rather than handing an
+%% invalid-UTF-8 binary to the connection process (which would die encoding it).
+streaming_tool_unencodable_result(_Config) ->
+    Ctx = #{token => ~"t", to => self()},
+    Session = session_on(?UNENCODABLE),
+    _Session1 = arizona_mcp_handler:run_streaming_tool(Session, ~"latin1", #{}, 1, Ctx, self()),
+    ?assertMatch(#{~"error" := #{~"code" := -32603}}, recv_result()).
+
+%% An unencodable progress message fails the call it belongs to (the framing runs
+%% inside the tool's crash guard); no progress frame reaches the connection.
+streaming_tool_unencodable_progress(_Config) ->
+    Ctx = #{token => ~"t", to => self()},
+    Session = session_on(?UNENCODABLE),
+    _Session1 = arizona_mcp_handler:run_streaming_tool(
+        Session, ~"latin1_progress", #{}, 1, Ctx, self()
+    ),
+    ?assertMatch(#{~"error" := #{~"code" := -32603}}, recv_result()),
+    ?assertEqual([], flush_progress()).
 
 %% progress/2 (no opts): just the token + amount, no total/message.
 progress_no_opts(_Config) ->
@@ -585,6 +611,18 @@ handle_tool_crash_internal_error(_Config) ->
     ?assertEqual(200, status(Resp)),
     ?assertMatch(#{~"error" := #{~"code" := -32603}}, decode_body(Resp)).
 
+%% The buffered reply encodes outside the dispatch guard, so a tool returning a
+%% binary `json:encode/1` rejects must still answer -32603 -- not crash the
+%% connection with no reply at all.
+handle_tool_unencodable_result_internal_error(_Config) ->
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"latin1","arguments":{}}}
+    """,
+    Resp = handle(~"POST", [], Body, #{handler => ?UNENCODABLE}),
+    ?assertEqual(200, status(Resp)),
+    ?assertMatch(#{~"id" := 10, ~"error" := #{~"code" := -32603}}, decode_body(Resp)).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
@@ -624,8 +662,11 @@ stateless_count(Params, Id) ->
 
 %% A session map for the test server, as the transport builds at initialize.
 session() ->
+    session_on(?SERVER).
+
+session_on(Mod) ->
     #{
-        mod => ?SERVER,
+        mod => Mod,
         state => #{},
         caps => #{tools => #{}, resources => #{}, prompts => #{}},
         page_size => 50,
@@ -635,23 +676,39 @@ session() ->
 %% Receive one relayed progress notification, returning its `progress` amount.
 recv_progress() ->
     receive
-        {mcp_progress, #{~"params" := #{~"progress" := Progress}}} -> Progress
+        {mcp_progress, Frame} ->
+            #{~"params" := #{~"progress" := Progress}} = sse_object(Frame),
+            Progress
     after 5000 -> ct:fail(no_progress)
+    end.
+
+%% Any progress frames left in the mailbox after a streaming call.
+flush_progress() ->
+    receive
+        {mcp_progress, Frame} -> [sse_object(Frame) | flush_progress()]
+    after 0 -> []
     end.
 
 %% Receive the relayed final result object.
 recv_result() ->
     receive
-        {mcp_result, Object} -> Object
+        {mcp_result, Frame} -> sse_object(Frame)
     after 5000 -> ct:fail(no_result)
     end.
 
 %% Receive one relayed progress notification (the whole JSON-RPC object).
 recv_progress_notification() ->
     receive
-        {mcp_progress, Notification} -> Notification
+        {mcp_progress, Frame} -> sse_object(Frame)
     after 5000 -> ct:fail(no_progress)
     end.
+
+%% The producer frames its own SSE event (so an unencodable object fails inside
+%% its crash guard, not in the connection process); unwrap it back to the object.
+sse_object(Frame) ->
+    [_Event, Rest] = binary:split(iolist_to_binary(Frame), ~"data: "),
+    [Data, _Trailer] = binary:split(Rest, ~"\n"),
+    json:decode(Data).
 
 dispatch_on(Mod, Method, Params, Id) ->
     Request = #{method => Method, params => Params, id => Id},
