@@ -16,6 +16,7 @@
     idle_ttl_terminates/1,
     ignores_unknown_messages/1,
     notify_pushes_to_channel/1,
+    notify_unencodable_is_dropped/1,
     broadcast_reaches_subscribed_session/1,
     resource_subscribe_receives_update/1,
     resource_unsubscribe_stops_updates/1,
@@ -66,6 +67,7 @@ all() ->
         idle_ttl_terminates,
         ignores_unknown_messages,
         notify_pushes_to_channel,
+        notify_unencodable_is_dropped,
         broadcast_reaches_subscribed_session,
         resource_subscribe_receives_update,
         resource_unsubscribe_stops_updates,
@@ -341,10 +343,25 @@ streaming_worker_crash_errors_conn(_Config) ->
     %% answer the POST loop with -32603, rather than leaving it hanging.
     ok = arizona_mcp_session:start_streaming_tool(Pid, ~"selfkill", #{}, 7, ~"tok", ConnPid),
     receive
-        {mcp_result, Object} ->
-            ?assertMatch(#{~"error" := #{~"code" := -32603}}, Object)
+        {mcp_result, Frame} ->
+            Bin = iolist_to_binary(Frame),
+            ?assertNotEqual(nomatch, binary:match(Bin, ~"\"code\":-32603"))
     after 5000 -> ct:fail(no_error_result)
     end.
+
+notify_unencodable_is_dropped(_Config) ->
+    {_Id, Pid} = start(60000),
+    ok = arizona_mcp_session:attach_channel(Pid, self(), undefined),
+    %% A param binary that is not valid UTF-8 cannot be encoded, and a
+    %% notification carries no id to answer with -32603. It is dropped: the
+    %% session survives (crashing here would kill every request in flight on it)
+    %% and burns no event id, so the next notification is still event 1.
+    ok = arizona_mcp_session:notify(Pid, ~"notifications/message", #{~"text" => <<225>>}),
+    ok = arizona_mcp_session:notify(Pid, ~"notifications/message", #{~"text" => ~"hi"}),
+    Bin = recv_event(),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"hi")),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"id: 1\n")),
+    ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 1)).
 
 dispatch_bounded_timeout(_Config) ->
     {_Id, Pid} = start(60000),

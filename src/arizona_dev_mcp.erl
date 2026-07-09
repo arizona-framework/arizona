@@ -372,9 +372,13 @@ to_atom_bindings(Map) ->
 
 %% Scan/parse/eval the code against the session's persistent bindings. Any
 %% failure (parse or runtime) comes back as an in-band error, never a crash.
+%% `Code` arrives as a UTF-8 binary from JSON, so it is decoded to codepoints
+%% before scanning: `binary_to_list/1` would hand `erl_scan` the raw bytes, and
+%% every non-ASCII character in a string literal would be double-encoded
+%% (`byte_size(~"Diário")` answering 9 rather than 7).
 eval_code(Code, Bindings) ->
     try
-        {ok, Tokens, _} = erl_scan:string(ensure_dot(binary_to_list(Code))),
+        {ok, Tokens, _} = erl_scan:string(ensure_dot(unicode:characters_to_list(Code, utf8))),
         {ok, Exprs} = erl_parse:parse_exprs(Tokens),
         {value, Value, NewBindings} = erl_eval:exprs(Exprs, Bindings),
         {ok, Value, NewBindings}
@@ -391,5 +395,18 @@ ensure_dot(Str) ->
 format_value(Value) ->
     fmt("~tp", [Value]).
 
+%% `io_lib:format/2` returns codepoints; encode them as UTF-8. `iolist_to_binary/1`
+%% would read each codepoint as a byte, so a term printing as `á` (codepoint 225)
+%% became the lone byte `0xE1` -- not valid UTF-8, which `json:encode/1` rejects
+%% on the response path, tearing down the connection instead of answering.
+%%
+%% `unicode:characters_to_binary/1` answers an `{error, _, _}` tuple rather than
+%% raising on chardata it cannot encode -- only reachable through a `~ts` whose
+%% argument is a malformed chardata list, never through `~tp` or a binary. Fail
+%% loudly on it: the MCP transport answers a crash with an in-band `-32603`,
+%% while the tuple itself would flow on as if it were the formatted text.
 fmt(Format, Args) ->
-    iolist_to_binary(io_lib:format(Format, Args)).
+    case unicode:characters_to_binary(io_lib:format(Format, Args)) of
+        Bin when is_binary(Bin) -> Bin;
+        Error -> error({format_not_encodable, Format, Error})
+    end.

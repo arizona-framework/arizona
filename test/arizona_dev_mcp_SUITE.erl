@@ -11,6 +11,7 @@
     describe_component_stateless/1,
     describe_component_other/1,
     describe_component_not_loaded/1,
+    describe_component_non_ascii_docs/1,
     get_module_docs/1,
     get_function_docs/1,
     get_docs_unknown_function/1,
@@ -24,6 +25,10 @@
     eval_appends_dot/1,
     eval_bindings_persist/1,
     eval_error_is_in_band/1,
+    eval_result_is_utf8/1,
+    eval_result_utf8_over_crash_band/1,
+    eval_source_is_decoded_as_utf8/1,
+    eval_source_roundtrips_non_ascii/1,
     render_component_stateful/1,
     render_component_stateless/1,
     render_component_other/1,
@@ -41,6 +46,7 @@ all() ->
         describe_component_stateless,
         describe_component_other,
         describe_component_not_loaded,
+        describe_component_non_ascii_docs,
         get_module_docs,
         get_function_docs,
         get_docs_unknown_function,
@@ -54,6 +60,10 @@ all() ->
         eval_appends_dot,
         eval_bindings_persist,
         eval_error_is_in_band,
+        eval_result_is_utf8,
+        eval_result_utf8_over_crash_band,
+        eval_source_is_decoded_as_utf8,
+        eval_source_roundtrips_non_ascii,
         render_component_stateful,
         render_component_stateless,
         render_component_other,
@@ -141,6 +151,17 @@ describe_component_not_loaded(_Config) ->
     Args = #{~"module" => ~"arizona_no_such_module_xyzzy"},
     ?assertMatch({error, Bin, _} when is_binary(Bin), call(~"describe_component", Args)).
 
+describe_component_non_ascii_docs(_Config) ->
+    %% describe_component renders the moduledoc through `~ts`, so its codepoints
+    %% pass through fmt/2. Emitted as latin1 they become bare high bytes and the
+    %% reply fails to encode -- the widest blast radius of the bug, since it
+    %% needs only a module documented in a language with accents. (`get_docs`
+    %% returns the doc binary verbatim and was never affected.)
+    Args = #{~"module" => ~"arizona_accented_docs"},
+    {reply, Text, _} = call(~"describe_component", Args),
+    ?assertMatch({_, _}, binary:match(Text, ~"Relatório")),
+    ?assertMatch(<<_/binary>>, encode_json(Text)).
+
 %% --------------------------------------------------------------------
 %% get_docs
 %% --------------------------------------------------------------------
@@ -220,6 +241,40 @@ eval_bindings_persist(_Config) ->
 eval_error_is_in_band(_Config) ->
     ?assertMatch({error, Bin, _} when is_binary(Bin), call(~"eval", #{~"code" => ~"1 +."})).
 
+eval_result_is_utf8(_Config) ->
+    %% A correctly-encoded binary comes back as valid UTF-8. Emitted as latin1 it
+    %% would be the lone byte 0xE1, which `json:encode/1` rejects on the response
+    %% path -- closing the connection instead of replying.
+    Code = ~"unicode:characters_to_binary([225]).",
+    ?assertMatch({reply, ~"<<\"á\"/utf8>>", _}, call(~"eval", #{~"code" => Code})).
+
+eval_result_utf8_over_crash_band(_Config) ->
+    %% `~tp` renders a codepoint as a string character when it is =< 255
+    %% (`io:printable_range()` defaults to latin1), so 128..255 is the whole band
+    %% that used to emit a bare high byte. Every one of them must survive the
+    %% encoder that the response path runs the result through.
+    lists:foreach(
+        fun(Codepoint) ->
+            ListCode = <<"[", (integer_to_binary(Codepoint))/binary, "].">>,
+            BinCode = <<"<<", (integer_to_binary(Codepoint))/binary, ">>.">>,
+            {reply, ListText, _} = call(~"eval", #{~"code" => ListCode}),
+            {reply, BinText, _} = call(~"eval", #{~"code" => BinCode}),
+            ?assertMatch(<<_/binary>>, encode_json(ListText)),
+            ?assertMatch(<<_/binary>>, encode_json(BinText))
+        end,
+        lists:seq(128, 255)
+    ).
+
+eval_source_is_decoded_as_utf8(_Config) ->
+    %% The request body is UTF-8. Scanned as bytes, each non-ASCII character of a
+    %% string literal is double-encoded: `byte_size(~"Diário")` answers 9, not 7.
+    Code = ~"byte_size(~\"Diário\").",
+    ?assertMatch({reply, ~"7", _}, call(~"eval", #{~"code" => Code})).
+
+eval_source_roundtrips_non_ascii(_Config) ->
+    %% End to end: a non-ASCII literal in, the same literal out.
+    ?assertMatch({reply, ~"<<\"Diário\"/utf8>>", _}, call(~"eval", #{~"code" => ~"~\"Diário\"."})).
+
 %% --------------------------------------------------------------------
 %% render_component
 %% --------------------------------------------------------------------
@@ -265,3 +320,8 @@ call(Tool, Args) ->
 
 call(Tool, Args, State) ->
     arizona_dev_mcp:handle_tool(Tool, Args, ctx(), State).
+
+%% The exact step the response path takes with a tool's reply, and the one that
+%% used to raise -- taking the connection with it -- on a latin1 binary.
+encode_json(Term) ->
+    iolist_to_binary(json:encode(Term)).

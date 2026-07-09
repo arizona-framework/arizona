@@ -563,7 +563,11 @@ progress(#{token := Token, to := To}, Progress, Opts) ->
     Params0 = #{~"progressToken" => Token, ~"progress" => Progress},
     Params1 = maybe_put_opt(~"total", total, Opts, Params0),
     Params = maybe_put_opt(~"message", message, Opts, Params1),
-    To ! {mcp_progress, arizona_jsonrpc:notification(~"notifications/progress", Params)},
+    %% Framed here, inside the running tool, so an unencodable `message` fails
+    %% the `tools/call` (answered -32603 by the tool's crash guard) instead of
+    %% killing the connection process that pushes the frame.
+    Notification = arizona_jsonrpc:notification(~"notifications/progress", Params),
+    To ! {mcp_progress, arizona_mcp_handler:message_frame(Notification)},
     ok.
 
 %% Copy an optional progress field onto the params under its wire name.

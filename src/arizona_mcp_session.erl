@@ -407,7 +407,8 @@ handle_info({'DOWN', MonRef, process, _WorkerPid, _Reason}, #state{streams = Str
     %% loop with -32603 and drop the tracking.
     case stream_by_mon(MonRef, Streams) of
         {Id, ConnPid} ->
-            ConnPid ! {mcp_result, arizona_jsonrpc:error(Id, -32603, ~"Internal error")},
+            Error = arizona_jsonrpc:error(Id, -32603, ~"Internal error"),
+            ConnPid ! {mcp_result, arizona_mcp_handler:message_frame(Error)},
             {noreply, refresh_ttl(State#state{streams = maps:remove(Id, Streams)})};
         error ->
             {noreply, State}
@@ -566,12 +567,27 @@ ensure_subscribed(Channel) ->
 
 %% Frame a server-initiated notification with a monotonic event id, buffer it
 %% for possible replay, and forward it to the channel if one is attached.
+%%
+%% `json:encode/1` rejects params a callback made unencodable (a binary that is
+%% not valid UTF-8). This runs in the session process, so crashing would take the
+%% session -- and every request in flight on it -- down over one notification.
+%% A notification carries no id and so cannot be answered: log it and drop it,
+%% leaving `next_event_id` untouched (no event reached the channel to replay).
 emit(Method, Params, #state{next_event_id = EventId} = State) ->
     Notification = arizona_jsonrpc:notification(Method, Params),
-    Data = iolist_to_binary(json:encode(Notification)),
-    Frame = roadrunner_sse:event(~"message", Data, integer_to_binary(EventId)),
-    push_frame(Frame, State),
-    buffer_event(EventId, Frame, State#state{next_event_id = EventId + 1}).
+    try iolist_to_binary(json:encode(Notification)) of
+        Data ->
+            Frame = roadrunner_sse:event(~"message", Data, integer_to_binary(EventId)),
+            push_frame(Frame, State),
+            buffer_event(EventId, Frame, State#state{next_event_id = EventId + 1})
+    catch
+        Class:Reason:Stacktrace ->
+            logger:error(
+                "MCP notification dropped, ~ts params are not encodable: ~ts:~tp~n~tp",
+                [Method, Class, Reason, Stacktrace]
+            ),
+            State
+    end.
 
 push_frame(_Frame, #state{channel = undefined}) ->
     ok;
