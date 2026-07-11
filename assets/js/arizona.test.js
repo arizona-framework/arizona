@@ -4195,6 +4195,33 @@ describe('form submit', () => {
         resetSpy.mockRestore();
     });
 
+    it('includes the submitter button name/value (multi-submit form)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-submit='[[0,"submit_plan"]]'>
+                <input name="email" value="ada@example.com" />
+                <button name="plan" value="monthly">Monthly</button>
+                <button name="plan" value="annual">Annual</button>
+            </form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const form = document.getElementById('f');
+        const annual = form.querySelectorAll('button')[1];
+        form.dispatchEvent(
+            new SubmitEvent('submit', { submitter: annual, bubbles: true, cancelable: true }),
+        );
+        // The clicked button's name/value rides along; the other submit button does not.
+        expect(mock.getSentMessages()).toContainEqual([
+            'page',
+            'submit_plan',
+            { email: 'ada@example.com', plan: 'annual' },
+        ]);
+    });
+
     it('submit without az-submit does nothing', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
@@ -4487,6 +4514,22 @@ describe('executeJS -- fetch', () => {
         expect(init.headers.accept).toBe('application/json');
         expect(init.body).toBeInstanceOf(URLSearchParams);
         expect(init.body.get('username')).toBe('ada');
+    });
+
+    it('includes the submitter button name/value in the urlencoded body', async () => {
+        document.body.innerHTML =
+            '<form method="post"><input name="email" value="ada" />' +
+            '<button name="plan" value="annual">Annual</button></form>';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        const form = document.querySelector('form');
+        const btn = form.querySelector('button');
+        executeJS(form, new SubmitEvent('submit', { submitter: btn }), [22, '/account', {}]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        const [, init] = globalThis.fetch.mock.calls[0];
+        expect(init.body.get('email')).toBe('ada');
+        expect(init.body.get('plan')).toBe('annual');
     });
 
     it('applies the effects returned by a 2xx response', async () => {
