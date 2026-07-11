@@ -1283,8 +1283,22 @@ function resolveTarget(el) {
 }
 
 /**
+ * The submit button that initiated a submit event, or null. Passed as the
+ * second arg to `new FormData(form, submitter)` so a form with multiple named
+ * submit buttons reports which one fired (its name/value in the field data),
+ * matching a native form POST. A non-submit event (a click) has no submitter,
+ * so a plain button never drags the form's fields along -- gathering stays a
+ * property of submitting the form, not of the trigger element.
+ * @param {Event|null} event
+ * @returns {HTMLElement|null}
+ */
+function submitter(event) {
+    return /** @type {any} */ (event)?.submitter ?? null;
+}
+
+/**
  * Auto-collect payload from an element based on its type and event context.
- * Drop -> {data_transfer, drop_index}, Forms -> FormData,
+ * Drop -> {data_transfer, drop_index}, Forms -> FormData (incl. the submitter),
  * inputs/selects/textareas -> {value}, otherwise -> {}.
  * @param {Element} el
  * @param {Event|null} event
@@ -1301,7 +1315,9 @@ function autoPayload(el, event) {
     }
     const tag = el.tagName;
     if (tag === 'FORM')
-        return Object.fromEntries(new FormData(/** @type {HTMLFormElement} */ (el)));
+        return Object.fromEntries(
+            new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)),
+        );
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA')
         return { value: /** @type {any} */ (el).value || '' };
     return {};
@@ -1564,7 +1580,7 @@ function execOne(el, event, cmd) {
                 // No request body for GET/HEAD -- carry a form's fields in the query
                 // string instead (fetch is otherwise POST-oriented: it sets cookies).
                 if (form) {
-                    const fd = /** @type {any} */ (new FormData(form));
+                    const fd = /** @type {any} */ (new FormData(form, submitter(event)));
                     const qs = new URLSearchParams(fd).toString();
                     if (qs) target += (url.includes('?') ? '&' : '?') + qs;
                 }
@@ -1574,7 +1590,9 @@ function execOne(el, event, cmd) {
             } else if (form) {
                 // Mirror a normal form POST: application/x-www-form-urlencoded.
                 // (multipart / file uploads are a documented non-goal.)
-                body = new URLSearchParams(/** @type {any} */ (new FormData(form)));
+                body = new URLSearchParams(
+                    /** @type {any} */ (new FormData(form, submitter(event))),
+                );
             }
             const onError = (/** @type {object} */ detail) => {
                 if (opts.on_error) executeJS(el, event, opts.on_error);
