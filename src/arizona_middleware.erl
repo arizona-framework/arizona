@@ -166,6 +166,11 @@ only when the app writes it (`arizona_req:put_session/3`) or clears it
 (`clear_session/1`). It runs on both the GET render and the WS upgrade, so a live
 view is seeded with the session at mount.
 
+A server-side store outage is left on the request (`arizona_req:session_error/1`), not
+the `session` binding (which stays `#{}`, an ordinary signed-out read). A route that wants
+the outage visible in a view can add its own middleware after this one that lifts
+`arizona_req:session_error(Req)` into a binding.
+
 ```erlang
 #{middlewares => [{arizona_middleware, fetch_session}]}
 ```

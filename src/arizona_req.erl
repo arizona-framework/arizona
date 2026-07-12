@@ -84,6 +84,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([get_session/3]).
 -export([read_session/1]).
 -export([session_id/1]).
+-export([session_error/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -117,6 +118,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -ignore_xref([get_session/2]).
 -ignore_xref([get_session/3]).
 -ignore_xref([session_id/1]).
+-ignore_xref([session_error/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -164,7 +166,8 @@ Method = arizona_req:method(Req).          %% eager, no thread
     session_in => session(),
     session_out => session(),
     session_dirty => boolean(),
-    session_id => binary()
+    session_id => binary(),
+    session_error => {error, term()}
 }.
 
 -nominal adapter() :: module().
@@ -685,6 +688,23 @@ session_id(#{session_id := Id}) -> Id;
 session_id(_) -> undefined.
 
 -doc """
+Returns `{error, Reason}` when reading the server-side session failed this request, or
+`undefined` when it did not.
+
+Set in store mode when the store's `get/1` answers `{error, Reason}` (the backing store
+was unreachable) -- **not** for a genuinely absent, expired, or revoked session, nor a
+tampered/forged cookie, all of which read as a signed-out request with no error. Lets an
+app at the request boundary (a controller, or a middleware after `fetch_session`) log the
+outage or serve a degraded response; the auth decision is unaffected, since a failed read
+still yields an empty session. The `{error, _}` wrapper keeps any `Reason` (including
+`undefined`) distinct from the no-error sentinel.
+""".
+-spec session_error(Request) -> {error, term()} | undefined when
+    Request :: request().
+session_error(#{session_error := Error}) -> Error;
+session_error(_) -> undefined.
+
+-doc """
 Looks up `Key` in the effective session, returning `{ok, Value}` or `error`. `Key`
 may be an atom or binary (normalized). Reads the post-write state when the session
 was written earlier this request.
@@ -735,7 +755,10 @@ read_session(Req0) ->
 %% Decode the cookie per mode: cookie mode is the encrypted session map; store mode is a
 %% signed opaque id resolved through the store. A missing/revoked/expired store entry
 %% reads as an empty session with no id, so a later write mints a fresh one rather than
-%% resurrecting a revoked id.
+%% resurrecting a revoked id. A store *failure* ({error, Reason}) also reads empty (a
+%% failed read must never grant access), but records the error so an app can tell an outage
+%% from a signed-out request (session_error/1); like absence it stashes no session_id, so an
+%% outage-time write mints a fresh id rather than trusting one the store could not confirm.
 read_session_value(Value, Req) ->
     case session_store() of
         undefined ->
@@ -747,8 +770,10 @@ read_session_value(Value, Req) ->
                     case Store:get(Id) of
                         {ok, Session} ->
                             {Session, Req#{session_in => Session, session_id => Id}};
-                        error ->
-                            {#{}, Req#{session_in => #{}}}
+                        no_session ->
+                            {#{}, Req#{session_in => #{}}};
+                        {error, _Reason} = Error ->
+                            {#{}, Req#{session_in => #{}, session_error => Error}}
                     end;
                 error ->
                     {#{}, Req#{session_in => #{}}}

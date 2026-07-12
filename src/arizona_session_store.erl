@@ -21,8 +21,26 @@ process (e.g. an external connection pool) can omit it.
 %% Callbacks
 %% --------------------------------------------------------------------
 
--doc "Fetches the session for `Id`, or `error` when absent or expired.".
--callback get(Id :: binary()) -> {ok, arizona_req:session()} | error.
+-doc """
+Fetches the session for `Id`.
+
+- `{ok, Session}` -- found.
+- `no_session` -- there is no valid session: no such id, expired, or revoked (return
+  `no_session` for any of these, **not** `{error, ...}` -- a tagged error is read as a store
+  failure). Reads as a signed-out request; a later write mints a fresh id rather than
+  resurrecting a revoked one.
+- `{error, Reason}` -- the backing store could not be reached (a database outage, a
+  connection-pool timeout). Still reads as an empty session (a failed read must never
+  grant access), but the framework records `Reason` on the request so an app can observe
+  it (`arizona_req:session_error/1`) -- distinct from absence.
+
+`no_session` names the *outcome* (no session), not the cause, so the same answer covers a
+never-stored id, an expired one, and a revoked one. A backend with an infallible read (like
+the in-memory `arizona_session_store_ets`) only ever returns `{ok, _} | no_session`; the
+`{error, Reason}` answer is for backends with a fallible transport.
+""".
+-callback get(Id :: binary()) ->
+    {ok, arizona_req:session()} | no_session | {error, Reason :: term()}.
 
 -doc "Stores `Session` under `Id` with a `TtlSecs` lifetime, overwriting any prior value.".
 -callback put(Id :: binary(), Session :: arizona_req:session(), TtlSecs :: pos_integer()) -> ok.
