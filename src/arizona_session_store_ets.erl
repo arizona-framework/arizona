@@ -83,8 +83,8 @@ child_spec() ->
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, #{}, []).
 
--doc "Fetches the session for `Id`, dropping and reporting `error` for an expired row.".
--spec get(Id) -> {ok, arizona_req:session()} | error when Id :: binary().
+-doc "Fetches the session for `Id`, dropping and reporting `no_session` for an expired row.".
+-spec get(Id) -> {ok, arizona_req:session()} | no_session when Id :: binary().
 get(Id) ->
     Now = erlang:system_time(second),
     case ets:lookup(?TABLE, Id) of
@@ -92,9 +92,9 @@ get(Id) ->
             {ok, Session};
         [{_, _, _}] ->
             ok = delete(Id),
-            error;
+            no_session;
         [] ->
-            error
+            no_session
     end.
 
 -doc "Stores `Session` under `Id` for `TtlSecs` seconds, overwriting any prior value.".
