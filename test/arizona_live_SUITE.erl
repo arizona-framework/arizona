@@ -77,6 +77,7 @@
     unmount_on_navigate/1,
     unmount_timer_cancelled_on_navigate/1,
     unmount_on_terminate/1,
+    live_reaped_on_transport_disconnect/1,
     child_in_stream_survives_dep_skip/1,
     child_in_stream_removed_on_delete/1,
     multiple_children_in_stream_survive_dep_skip/1,
@@ -174,6 +175,7 @@ groups() ->
             unmount_on_navigate,
             unmount_timer_cancelled_on_navigate,
             unmount_on_terminate,
+            live_reaped_on_transport_disconnect,
             child_in_stream_survives_dep_skip,
             child_in_stream_removed_on_delete,
             multiple_children_in_stream_survive_dep_skip,
@@ -1140,6 +1142,42 @@ unmount_on_terminate(Config) when is_list(Config) ->
         {'DOWN', Ref, process, Pid, shutdown} -> ok
     after 1000 ->
         error(timeout)
+    end.
+
+live_reaped_on_transport_disconnect(Config) when is_list(Config) ->
+    %% The live process is start_linked to its transport (the WS session
+    %% process). A clean client disconnect exits the transport `normal`, which a
+    %% link does not propagate to a non-trapping process -- the transport monitor
+    %% set up in init is what must reap the view, or it leaks for the node's
+    %% lifetime. The transport calls start_link (passing itself) so the live
+    %% process links AND monitors it, mirroring arizona_socket:init/4.
+    Self = self(),
+    Transport = spawn(fun() ->
+        {ok, Live} = arizona_live:start_link(
+            arizona_root_counter, #{}, self(), []
+        ),
+        Self ! {live, Live},
+        receive
+            disconnect -> ok
+        after 5000 -> ok
+        end
+    end),
+    Live =
+        receive
+            {live, L} -> L
+        after 1000 ->
+            error(no_live)
+        end,
+    {ok, _} = arizona_live:mount(Live),
+    Ref = monitor(process, Live),
+    ?assert(is_process_alive(Live)),
+    %% Transport returns from its fun -> exits `normal`.
+    Transport ! disconnect,
+    receive
+        {'DOWN', Ref, process, Live, Reason} ->
+            ?assertEqual(normal, Reason)
+    after 1000 ->
+        error({live_process_leaked, Live})
     end.
 
 child_in_stream_survives_dep_skip(Config) when is_list(Config) ->
