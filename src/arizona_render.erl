@@ -234,7 +234,11 @@ render_dyn(#{t := ?EACH, items := Items, order := Order, template := Tmpl}) ->
 render_dyn(#{az_local := _, target := {attr, Name}, v := V}) ->
     arizona_template:render_attr(Name, V);
 render_dyn(#{az_local := _, v := V}) ->
-    render_dyn(V);
+    %% Escape a content `?local`'s init like any content value: the client owns
+    %% the slot via textContent (text, never parsed), so the SSR output must be
+    %% the escaped form to match -- and to keep a binding-seeded init from being
+    %% an XSS vector. `escape_value/1` still honors a `?raw` opt-out.
+    arizona_template:escape_value(V);
 render_dyn(#{s := InnerS, d := InnerD}) ->
     zip_d(InnerS, InnerD);
 render_dyn(V) when is_binary(V) ->
@@ -449,7 +453,9 @@ render_ssr_val(#{callback := Callback, props := Props}) ->
 render_ssr_val(#{az_local := _, target := {attr, Name}, v := V}) ->
     render_ssr_attr(Name, V);
 render_ssr_val(#{az_local := _, v := V}) ->
-    render_ssr_val(V);
+    %% Escape the content `?local` init to match the client's text-node semantics
+    %% (see render_dyn/1); a raw splice here is an XSS vector for a seeded init.
+    arizona_template:escape_value(V);
 render_ssr_val(#{s := Statics, d := Dynamics} = Tmpl) ->
     Snap0 = #{
         s => Statics,
@@ -478,8 +484,11 @@ render_fp_val(_Target, {attr, Name, V}) ->
     arizona_template:render_attr(Name, V);
 render_fp_val(_Target, #{az_local := _, target := {attr, Name}, v := V}) ->
     arizona_template:render_attr(Name, V);
-render_fp_val(Target, #{az_local := _, v := V}) ->
-    render_fp_val(Target, V);
+render_fp_val(_Target, #{az_local := _, v := V}) ->
+    %% Escape the content `?local` init to match the client's text-node semantics
+    %% (see render_dyn/1). `?local` is HTML-only (compile-rejected for native), so
+    %% the target is always HTML here.
+    arizona_template:escape_value(V);
 render_fp_val(_Target, #{f := _} = Nested) ->
     fingerprint_payload(Nested);
 render_fp_val(_Target, #{s := S, d := D}) ->
