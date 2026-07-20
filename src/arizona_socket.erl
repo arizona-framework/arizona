@@ -168,7 +168,7 @@ silently dropped (a single bad frame must not crash the socket).
     Socket :: socket().
 handle_in(?SYS_PING, Socket) ->
     {reply, ?SYS_PONG, Socket};
-handle_in(JSON, #socket{pid = Pid} = Socket) ->
+handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
     %% `try ... of` so the catch fires ONLY on a malformed decode -- exceptions
     %% raised inside the matched clause bodies (the inner navigate/dispatch
     %% trys) are not caught here, so a genuine handler crash still closes 4500.
@@ -197,7 +197,8 @@ handle_in(JSON, #socket{pid = Pid} = Socket) ->
                     close_crash(Socket)
             end;
         [Target, Event, Payload] when is_binary(Event) ->
-            try dispatch_event(Pid, Target, Event, Payload) of
+            ViewId = event_target(Target, RootViewId),
+            try dispatch_event(Pid, ViewId, Event, Payload) of
                 {AllOps, AllEffects} ->
                     encode_reply(AllOps, AllEffects, Socket)
             catch
@@ -391,6 +392,17 @@ take_pending_flash(Req, Socket) ->
 
 replace_ops(ViewId, PageHTML) ->
     [[?OP_REPLACE, ViewId, PageHTML]].
+
+%% Resolve the client-supplied event target to a view id for dispatch and op
+%% tagging. A `push_event` handler effect has no enclosing element, so the client
+%% relays it with a `null` target; a hook or element outside any `[az-view]` can
+%% too. Route those to the root view: `handle_event` already dispatches a
+%% non-child id to the root, but the id must be the root's binary id (not `null`)
+%% because `flatten_ops`/`op_encoder` tag every diff op with it, and a
+%% `null`-tagged op is unencodable -- it would crash the transport uncaught (the
+%% encode runs in the `try ... of` body, outside handle_in's catch).
+event_target(Target, _RootViewId) when is_binary(Target) -> Target;
+event_target(_Target, RootViewId) -> RootViewId.
 
 dispatch_event(Pid, ViewId, Event, Payload) ->
     {ok, Ops, Effects} = arizona_live:handle_event(Pid, ViewId, Event, Payload),
