@@ -277,7 +277,21 @@ diff_each(
     Views1 = {Old0, maps:merge(New0, LocalNew)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-    {ListOps ++ OpsRest, [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2}.
+    {ListOps ++ OpsRest, [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
+diff_each(
+    Az, #{source := Source} = EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0
+) when is_map(Source) ->
+    %% A map-source `?each` renders to the same snapshot shape as a list-source
+    %% one (`items => [ItemD]`), so it diffs through the same list machinery once
+    %% the entries are rendered in map-iteration order (see diff_map/4).
+    {Old0, New0} = Views0,
+    {MapOps, NewSnap0, {_, LocalNew}} =
+        diff_map(Az, EachDesc, Old, {Old0, #{}}),
+    NewSnap = NewSnap0#{child_views => maps:keys(LocalNew)},
+    Views1 = {Old0, maps:merge(New0, LocalNew)},
+    {OpsRest, DRest, DepsRest, Views2} =
+        diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
+    {MapOps ++ OpsRest, [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2}.
 
 %% Incremental stream child_views: old - deleted + rendered.
 merge_stream_child_views(Source, Old, LocalNew, Old0) ->
@@ -489,9 +503,23 @@ stream_reset(Az, OldItems, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
         diff_stream_pending(Az, Rest, Source, Tmpl, NewSnaps, VKeys, Views1),
     {RemOps ++ DiffOps ++ MoveOps ++ RestOps, FinalSnap, Views2}.
 
-diff_list(Az, #{source := Items, template := Tmpl}, #{items := OldItemsList}, Views0) ->
-    {_, NewLocal0} = Views0,
+diff_list(Az, #{source := Items, template := Tmpl}, OldSnap, Views0) ->
     {NewItemsList, Views1} = arizona_eval:render_list_items(Items, Tmpl, Views0),
+    diff_each_items(Az, Tmpl, NewItemsList, OldSnap, Views0, Views1).
+
+%% A map-source `?each` diffs exactly like a list once its entries are rendered:
+%% the snapshot is the same `items => [ItemD]` shape, keyed by position (map keys
+%% carry no cross-render identity here -- use a stream for keyed diffing).
+%% render_map_items yields entries in map-iteration order, matching the SSR path.
+diff_map(Az, #{source := Source, template := Tmpl}, OldSnap, Views0) ->
+    {NewItemsList, Views1} = arizona_eval:render_map_items(Source, Tmpl, Views0),
+    diff_each_items(Az, Tmpl, NewItemsList, OldSnap, Views0, Views1).
+
+%% Shared list/map each diff, given the already-rendered new item list. Views0 is
+%% the pre-render accumulator, Views1 the post-render one (their child-view-count
+%% delta is what flags a per-item child view).
+diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1) ->
+    {_, NewLocal0} = Views0,
     {_, NewLocal1} = Views1,
     NewSnap = #{t => ?EACH, items => NewItemsList, template => Tmpl},
     %% Positional per-item patching is sound only when (a) the old slot already
@@ -500,7 +528,7 @@ diff_list(Az, #{source := Items, template := Tmpl}, #{items := OldItemsList}, Vi
     %% between the slot's `<!--az:X-->...<!--/az-->` markers), and (c) this list
     %% rendered no per-item child view (a `?stateful`/`?stateless` child must be
     %% re-mounted by a full re-render -- the existing unsupported case, preserved;
-    %% detected by the child-view accumulator growing across render_list_items).
+    %% detected by the child-view accumulator growing across the render).
     %% Otherwise the wholesale marker re-render is the only correct patch.
     Patchable =
         is_list(OldItemsList) andalso
@@ -928,7 +956,9 @@ diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
                     #stream{} ->
                         diff_stream(Az, EachDesc, Old, Views0);
                     _ when is_list(Src) ->
-                        diff_list(Az, EachDesc, Old, Views0)
+                        diff_list(Az, EachDesc, Old, Views0);
+                    _ when is_map(Src) ->
+                        diff_map(Az, EachDesc, Old, Views0)
                 end,
             {RestOps, Views2} = diff_item_dynamics_v(NR, OR, Views1),
             {EachOps ++ RestOps, Views2};

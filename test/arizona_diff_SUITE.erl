@@ -28,6 +28,9 @@
     diff_list_middle_insert_positional/1,
     diff_list_middle_delete_positional/1,
     diff_list_no_change_positional_no_ops/1,
+    diff_map_value_change/1,
+    diff_map_grew/1,
+    diff_map_no_change_no_ops/1,
     diff_each_among_siblings_uses_text_op/1,
     diff_each_among_siblings_to_empty_uses_text_op/1,
     diff_text_op/1,
@@ -84,6 +87,9 @@ groups() ->
             diff_list_middle_insert_positional,
             diff_list_middle_delete_positional,
             diff_list_no_change_positional_no_ops,
+            diff_map_value_change,
+            diff_map_grew,
+            diff_map_no_change_no_ops,
             diff_each_among_siblings_uses_text_op,
             diff_each_among_siblings_to_empty_uses_text_op,
             diff_only_changed_emits_ops,
@@ -520,6 +526,62 @@ diff_list_middle_delete_positional(Config) when is_list(Config) ->
 diff_list_no_change_positional_no_ops(Config) when is_list(Config) ->
     Items = [#{name => <<"a">>}, #{name => <<"b">>}],
     ?assertEqual([], each_list_diff_sr(Items, Items)).
+
+%% Map-source `?each` diffing. A map renders to the same snapshot shape as a list
+%% (`items => [ItemD]`, keyed by position in map-iteration order), so it takes the
+%% same single-root positional path -- these guard that a map source diffs at all
+%% (it used to crash with `function_clause`: `diff_each` had no map clause) and
+%% that a changed entry patches the right index.
+
+%% Diff a single-root map `?each` of `Old` vs `New` (entries are Key => Value
+%% binaries). Mirrors each_list_diff_sr/2 but with a map source and a 2-arg item
+%% callback. `#{~"a" => _, ~"b" => _}` iterates a, then b, so index 1 is `b`.
+each_map_diff(Old, New) ->
+    ItemTmpl = #{
+        t => ?EACH,
+        s => [<<"<li az=\"0\">">>, <<"</li>">>],
+        d => fun(K, V) -> [{<<"0">>, <<K/binary, ":", V/binary>>}] end,
+        f => <<"item">>,
+        single_root => true
+    },
+    {OldItems, _} = arizona_eval:render_map_items(Old, ItemTmpl, {#{}, #{}}),
+    OldSnap = #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [{<<"0">>, #{t => ?EACH, items => OldItems, template => ItemTmpl}}],
+        deps => [#{entries => true}],
+        f => <<"parent">>
+    },
+    NewTmpl = #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [{<<"0">>, fun() -> arizona_template:each(New, ItemTmpl) end, {m, 1}}],
+        f => <<"parent">>
+    },
+    {Ops, _Snap, _Views} = arizona_diff:diff(NewTmpl, OldSnap, #{}, #{entries => true}),
+    Ops.
+
+%% A value change on one entry: positional ITEM_PATCH at that entry's index.
+diff_map_value_change(Config) when is_list(Config) ->
+    Ops = each_map_diff(
+        #{<<"a">> => <<"1">>, <<"b">> => <<"2">>},
+        #{<<"a">> => <<"1">>, <<"b">> => <<"9">>}
+    ),
+    ?assertEqual(
+        [[?OP_ITEM_PATCH, 1, [[?OP_TEXT, <<"0">>, <<"b:9">>]]]],
+        assert_list_patch(Ops)
+    ).
+
+%% A new key added: the extra entry appends via a positional INSERT.
+diff_map_grew(Config) when is_list(Config) ->
+    Ops = each_map_diff(
+        #{<<"a">> => <<"1">>},
+        #{<<"a">> => <<"1">>, <<"b">> => <<"2">>}
+    ),
+    ?assertMatch([[?OP_INSERT, 1, _]], assert_list_patch(Ops)).
+
+%% Same map twice: no ops.
+diff_map_no_change_no_ops(Config) when is_list(Config) ->
+    Map = #{<<"a">> => <<"1">>, <<"b">> => <<"2">>},
+    ?assertEqual([], each_map_diff(Map, Map)).
 
 %% Regression: a plain-list `?each` sitting *among static sibling content* in the
 %% same content slot. SSR anchors the each by its `<!--az:X-->...<!--/az-->`
