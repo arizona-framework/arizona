@@ -86,16 +86,18 @@ read_body(RoadrunnerReq) ->
     {Body, RoadrunnerReq1}.
 
 -doc """
-Resolves a path to `{Handler, RouteOpts, Request}` by running the
+Resolves a path to `{ok, Handler, RouteOpts, Request}` by running the
 roadrunner router against the compiled routes stashed in
-`persistent_term`.
+`persistent_term`, or `error` when the path does not resolve to a live
+route (no match, a non-live controller/asset/ws route, or a method
+mismatch).
 
-Returns the handler's static route options (including its `bindings`
-config) untouched, plus a navigate-scoped `arizona_req:request()`
-synthesized from the stored upgrade request with the new path,
-target, and matched bindings applied.
+On success returns the handler's static route options (including its
+`bindings` config) untouched, plus a navigate-scoped
+`arizona_req:request()` synthesized from the stored upgrade request
+with the new path, target, and matched bindings applied.
 """.
--spec resolve_route(Path, Qs, Req) -> {Handler, RouteOpts, ArzReq} when
+-spec resolve_route(Path, Qs, Req) -> {ok, Handler, RouteOpts, ArzReq} | error when
     Path :: arizona_req:path(),
     Qs :: arizona_req:qs(),
     Req :: roadrunner_req:request(),
