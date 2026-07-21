@@ -60,9 +60,24 @@ new(RoadrunnerReq) ->
 -spec parse_bindings(RoadrunnerReq) -> arizona_req:bindings() when
     RoadrunnerReq :: roadrunner_req:request().
 parse_bindings(RoadrunnerReq) ->
-    %% Roadrunner returns binary-keyed bindings already, matching the
-    %% "binary keys for wire-derived data" rule. Pass through unchanged.
-    roadrunner_req:bindings(RoadrunnerReq).
+    %% Roadrunner returns binary-keyed bindings, but the router matches raw path
+    %% bytes so a `:param` capture arrives percent-encoded (e.g. `/users/jos%C3%A9`
+    %% -> `<<"jos%C3%A9">>`). Decode each value so a handler's `?get(~"name")` sees
+    %% `<<"josé"/utf8>>`, matching how query params already arrive decoded. A
+    %% malformed encoding (bad %-escape or non-UTF-8) is left as the raw segment
+    %% rather than crashing the request on an attacker-controllable path.
+    Bindings = roadrunner_req:bindings(RoadrunnerReq),
+    #{Name => decode_binding(Value) || Name := Value <- Bindings}.
+
+decode_binding(Value) ->
+    %% `uri_string:percent_decode/1` returns the decoded binary, but *throws*
+    %% `{error, _, _}` on a malformed %-escape or non-UTF-8 bytes -- keep the raw
+    %% segment there rather than crashing on an attacker-controllable path.
+    try
+        uri_string:percent_decode(Value)
+    catch
+        throw:{error, _, _} -> Value
+    end.
 
 -spec parse_params(RoadrunnerReq) -> arizona_req:params() when
     RoadrunnerReq :: roadrunner_req:request().
