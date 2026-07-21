@@ -946,6 +946,43 @@ describe('applyEffects', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 12b. push_event target fallback -- never send a null target
+// ---------------------------------------------------------------------------
+
+describe('push_event target fallback (null -> root)', () => {
+    let mock;
+    afterEach(() => {
+        if (mock) mock.restore();
+    });
+
+    it('a push_event handler effect resolves to the root view id, never null', async () => {
+        // op 0 in the effects channel is JS_PUSH_EVENT. A handler effect is applied
+        // against document.documentElement (no enclosing [az-view]), so the target
+        // resolves to null -- it must fall back to the root view id. Sending null
+        // makes the server tag its diff ops with null, which it cannot encode.
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        document.body.innerHTML = '<div id="root" az-view></div>';
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mod.applyEffects([[0, 'refresh', { a: 1 }]]);
+        const sends = mock.getSentMessages();
+        expect(sends).toContainEqual(['root', 'refresh', { a: 1 }]);
+        expect(sends.some((s) => s[0] === null)).toBe(false);
+    });
+
+    it('pushEventTo with a null view falls back to the root view id', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        document.body.innerHTML = '<div id="root" az-view></div>';
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mod.pushEventTo(null, 'ev', { x: 1 });
+        expect(mock.getSentMessages()).toContainEqual(['root', 'ev', { x: 1 }]);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 13. Comment markers -- deeper tests via OP.TEXT
 // ---------------------------------------------------------------------------
 

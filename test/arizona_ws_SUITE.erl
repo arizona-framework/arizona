@@ -8,6 +8,7 @@
 -export([
     ping_pong/1,
     event_dispatch/1,
+    event_dispatch_null_target/1,
     event_with_effects/1,
     event_no_change/1,
     unknown_json/1,
@@ -90,6 +91,7 @@ groups() ->
     Basic = [
         ping_pong,
         event_dispatch,
+        event_dispatch_null_target,
         event_with_effects,
         event_no_change,
         unknown_json,
@@ -396,6 +398,23 @@ event_dispatch(Config) ->
     {text, Resp} = ws_recv(Sock),
     Decoded = json:decode(Resp),
     ?assertMatch(#{~"o" := _}, Decoded),
+    ws_close(Sock).
+
+event_dispatch_null_target(Config) ->
+    %% A push_event handler EFFECT is relayed by the client with a null target
+    %% (it has no enclosing element). The event must dispatch to the root and its
+    %% diff ops must encode: a null-tagged op is unencodable and used to crash the
+    %% transport uncaught, dropping the session.
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [null, ~"set_status", #{~"value" => ~"updated"}]),
+    {text, Resp} = ws_recv(Sock),
+    %% An ops reply that routed to the root view (crashable), not a crash and not
+    %% left tagged null. Ops scope their target as "<view_id>:<az>".
+    ?assertMatch(#{~"o" := _}, json:decode(Resp)),
+    ?assertMatch({_, _}, binary:match(Resp, ~"crashable:")),
+    %% Connection is still alive.
+    ok = ws_send(Sock, <<"0">>),
+    ?assertEqual({text, <<"1">>}, ws_recv(Sock)),
     ws_close(Sock).
 
 event_with_effects(Config) ->
