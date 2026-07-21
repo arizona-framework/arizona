@@ -30,7 +30,7 @@ groups() ->
 %% percent-encoded. parse_bindings decodes each value so a handler's
 %% `?get(~"name")` sees the real characters (matching how query params arrive).
 parse_bindings_percent_decodes_captures(Config) when is_list(Config) ->
-    Req = #{bindings => #{~"name" => ~"jos%C3%A9", ~"id" => ~"42"}},
+    Req = req(#{~"name" => ~"jos%C3%A9", ~"id" => ~"42"}),
     ?assertEqual(
         #{~"name" => <<"josé"/utf8>>, ~"id" => ~"42"},
         arizona_roadrunner_req:parse_bindings(Req)
@@ -40,18 +40,33 @@ parse_bindings_percent_decodes_captures(Config) when is_list(Config) ->
 %% router already split on raw `/`, so this is value data, not path structure) --
 %% consistent with query-param decoding.
 parse_bindings_decodes_encoded_slash(Config) when is_list(Config) ->
-    Req = #{bindings => #{~"path" => ~"a%2Fb"}},
+    Req = req(#{~"path" => ~"a%2Fb"}),
     ?assertEqual(#{~"path" => ~"a/b"}, arizona_roadrunner_req:parse_bindings(Req)).
 
 %% A malformed encoding (bad %-escape or non-UTF-8 bytes) is left as the raw
 %% segment rather than crashing the request on an attacker-controllable path.
 parse_bindings_keeps_malformed_raw(Config) when is_list(Config) ->
-    Req = #{bindings => #{~"bad_escape" => ~"a%ZZ", ~"bad_utf8" => ~"b%C3"}},
+    Req = req(#{~"bad_escape" => ~"a%ZZ", ~"bad_utf8" => ~"b%C3"}),
     ?assertEqual(
         #{~"bad_escape" => ~"a%ZZ", ~"bad_utf8" => ~"b%C3"},
         arizona_roadrunner_req:parse_bindings(Req)
     ).
 
 parse_bindings_empty_is_empty(Config) when is_list(Config) ->
-    ?assertEqual(#{}, arizona_roadrunner_req:parse_bindings(#{bindings => #{}})),
-    ?assertEqual(#{}, arizona_roadrunner_req:parse_bindings(#{})).
+    ?assertEqual(#{}, arizona_roadrunner_req:parse_bindings(req(#{}))),
+    %% A request with no `bindings` key at all (single-handler dispatch).
+    ?assertEqual(#{}, arizona_roadrunner_req:parse_bindings(base_req())).
+
+%% --------------------------------------------------------------------
+%% Helpers
+%% --------------------------------------------------------------------
+
+%% A minimal valid roadrunner request map carrying the given path bindings.
+req(Bindings) ->
+    (base_req())#{bindings => Bindings}.
+
+%% The mandatory keys of a `roadrunner_req:request()`; parse_bindings only reads
+%% `bindings`, so the rest are inert placeholders. The type explicitly supports
+%% manually-built request maps.
+base_req() ->
+    #{method => ~"GET", target => ~"/", version => {1, 1}, headers => []}.
