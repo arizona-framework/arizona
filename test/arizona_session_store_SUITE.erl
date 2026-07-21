@@ -16,6 +16,8 @@
 -export([req_read_session_from_store/1]).
 -export([req_put_session_merges_onto_stored/1]).
 -export([req_clear_session_deletes_from_store/1]).
+-export([req_login_rotation_mints_fresh_id/1]).
+-export([req_clear_then_put_without_read_mints_fresh_id/1]).
 -export([req_revocation_empties_session/1]).
 -export([req_revocation_records_no_error/1]).
 -export([req_store_failure_is_observable/1]).
@@ -40,6 +42,8 @@ all() ->
         req_read_session_from_store,
         req_put_session_merges_onto_stored,
         req_clear_session_deletes_from_store,
+        req_login_rotation_mints_fresh_id,
+        req_clear_then_put_without_read_mints_fresh_id,
         req_revocation_empties_session,
         req_revocation_records_no_error,
         req_store_failure_is_observable,
@@ -159,6 +163,40 @@ req_clear_session_deletes_from_store(Config) when is_list(Config) ->
     [{~"az_session", <<>>, Opts}] = arizona_req:resp_cookies(Req2),
     ?assertEqual(0, maps:get(max_age, Opts)),
     ?assertEqual(no_session, arizona_session_store_ets:get(Id)).
+
+%% Session fixation defense: the login rotation pattern (read the incoming id,
+%% clear_session, then put_session the new identity) must land the authenticated
+%% session under a FRESH id -- never the incoming (possibly attacker-planted) one
+%% -- and drop the pre-login entry.
+req_login_rotation_mints_fresh_id(Config) when is_list(Config) ->
+    IncomingId = arizona_session:new_id(),
+    ok = arizona_session_store_ets:put(IncomingId, #{}, 3600),
+    Req0 = arizona_req_test_adapter:new(#{
+        cookies => [{~"az_session", arizona_session:encode_id(IncomingId)}]
+    }),
+    {_, Req1} = arizona_req:read_session(Req0),
+    Req2 = arizona_req:clear_session(Req1),
+    Req3 = arizona_req:put_session(Req2, user_id, ~"42"),
+    [{~"az_session", Value, _}] = arizona_req:resp_cookies(Req3),
+    {ok, OutId} = arizona_session:decode_id(Value),
+    %% Rotated to a fresh id, and the cookie carries it.
+    ?assertNotEqual(IncomingId, OutId),
+    ?assertEqual(OutId, arizona_req:session_id(Req3)),
+    %% The authenticated session lives under the fresh id; the incoming id is gone.
+    ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(OutId)),
+    ?assertEqual(no_session, arizona_session_store_ets:get(IncomingId)).
+
+%% Regression (crash): clear_session then put_session with NO prior read used to
+%% crash at response flush ({badkey, session_id}) because no id was minted. It now
+%% mints a fresh id and persists the session.
+req_clear_then_put_without_read_mints_fresh_id(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+    Req1 = arizona_req:clear_session(Req0),
+    Req2 = arizona_req:put_session(Req1, user_id, ~"42"),
+    [{~"az_session", Value, _}] = arizona_req:resp_cookies(Req2),
+    {ok, OutId} = arizona_session:decode_id(Value),
+    ?assertEqual(OutId, arizona_req:session_id(Req2)),
+    ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(OutId)).
 
 req_revocation_empties_session(Config) when is_list(Config) ->
     %% Revoking the store entry out of band logs the session out on the next read.

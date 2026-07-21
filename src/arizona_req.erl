@@ -166,7 +166,11 @@ Method = arizona_req:method(Req).          %% eager, no thread
     session_in => session(),
     session_out => session(),
     session_dirty => boolean(),
+    %% Set by clear_session/1: the next write rotates to a fresh id (store mode).
+    session_reset => boolean(),
     session_id => binary(),
+    %% The pre-rotation id, dropped from the store on flush (store mode).
+    session_prev_id => binary(),
     session_error => {error, term()}
 }.
 
@@ -502,6 +506,9 @@ store_resp_cookie(_Store, _Req, _SessionOut, false) ->
 store_resp_cookie(Store, Req, SessionOut, true) when map_size(SessionOut) > 0 ->
     Id = maps:get(session_id, Req),
     ok = Store:put(Id, SessionOut, arizona_session:max_age()),
+    %% On a rotation (clear_session then put_session, e.g. login) drop the
+    %% pre-rotation entry so a pre-login / fixated id cannot be reused.
+    ok = maybe_delete_stored(Store, maps:get(session_prev_id, Req, undefined)),
     arizona_session:set_cookie_id(Id);
 store_resp_cookie(Store, Req, _SessionOut, true) ->
     %% Cleared (logout): drop the store entry if we know the id, and clear the cookie.
@@ -666,7 +673,12 @@ regardless of the incoming session. Unlike `put_session/3` it does not require
 -spec clear_session(Request) -> Request when
     Request :: request().
 clear_session(Req) ->
-    Req#{session_out => #{}, session_dirty => true}.
+    %% Mark the session reset. In store mode a subsequent write (the login
+    %% rotation pattern `clear_session` then `put_session`) then mints a FRESH id
+    %% rather than reusing the incoming one, so a pre-login -- possibly
+    %% attacker-planted -- id never becomes the authenticated session (fixation).
+    %% A pure logout (no following write) just clears and drops the old entry.
+    Req#{session_out => #{}, session_dirty => true, session_reset => true}.
 
 -doc """
 Returns the effective session for this request: the pending written state
@@ -792,13 +804,32 @@ session_store() ->
 %% first write, plus the (possibly cookie-read) request. Idempotent: once written,
 %% session_out is authoritative and read_session is not re-run.
 ensure_session_out(#{session_out := Out} = Req) ->
-    {Out, Req};
+    %% session_out is already present -- a prior write this request, or a reset by
+    %% clear_session. Still run ensure_session_id: a reset must rotate the id here
+    %% (the first write after clear), since read_session -- which normally mints
+    %% it -- is skipped once session_out exists.
+    {Out, ensure_session_id(Req)};
 ensure_session_out(Req0) ->
     {In, Req} = read_session(Req0),
     {In, ensure_session_id(Req#{session_out => In})}.
 
-%% In store mode a write needs an id: reuse the one `read_session` resolved, else mint a
-%% fresh one (a new session). No-op in cookie mode or when an id is already present.
+%% In store mode a write needs an id. A reset (clear_session) rotates to a fresh id
+%% at the first following write so the new session never lands under the incoming
+%% id; the old id (if a read resolved one) is kept as session_prev_id to drop from
+%% the store on flush. Otherwise reuse the id `read_session` resolved, else mint a
+%% fresh one. No-op in cookie mode, or when an unreset id is already present.
+ensure_session_id(#{session_reset := true} = Req0) ->
+    Req = maps:remove(session_reset, Req0),
+    case session_store() of
+        undefined ->
+            Req;
+        _ ->
+            Fresh = Req#{session_id => arizona_session:new_id()},
+            case maps:get(session_id, Req0, undefined) of
+                undefined -> Fresh;
+                OldId -> Fresh#{session_prev_id => OldId}
+            end
+    end;
 ensure_session_id(#{session_id := _} = Req) ->
     Req;
 ensure_session_id(Req) ->
