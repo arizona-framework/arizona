@@ -127,6 +127,12 @@ let _connected = false;
 let _currentPath = '';
 /** @type {string} */
 let _currentQs = '';
+// Extra query params passed to `connect(endpoint, params)`. Unlike the page's
+// own query string they are connection-level config, constant across SPA
+// navigations, so they are re-merged into every reconnect URL (the page qs is
+// replaced by the navigated-to qs; these ride along).
+/** @type {string} */
+let _connectQs = '';
 
 /** @type {Map<string, {fields: Object<string, string|string[]>, azChange: string|null}>} */
 const _savedForms = new Map();
@@ -363,6 +369,18 @@ function stampOutgoingTransition() {
     history.replaceState({ ...st, _azTransition: _pendingTransition }, '', location.href);
 }
 
+// The user-facing query string carried to the worker for the next reconnect
+// after an SPA navigation: the navigated-to page qs plus the connection-level
+// `connect()` extras (constant across navigations). The worker replaces the
+// previous page's user params with this, preserving the framework `_az_*` keys.
+/**
+ * @param {string} qs navigated-to page query string (no leading `?`)
+ * @returns {string}
+ */
+function reconnectUserQs(qs) {
+    return [qs, _connectQs].filter(Boolean).join('&');
+}
+
 /**
  * Perform an SPA navigation. Shared code path for `az-navigate` clicks and
  * `arizona_js:navigate/1,2` effects.
@@ -405,7 +423,7 @@ function navigateTo(path, qs, hash, opts) {
         if (!opts.noscroll) _pendingScroll = { kind: 'push', hash, patch: kind === 'patch' };
     }
     workerPost(W_SEND, JSON.stringify([kind, { path, qs }]));
-    workerPost(W_UPDATE_PATH, path);
+    workerPost(W_UPDATE_PATH, { path, qs: reconnectUserQs(qs) });
     _currentPath = path;
     _currentQs = qs;
 }
@@ -2159,7 +2177,7 @@ function connect(endpoint, params = {}) {
             // navigated with a transition, so back/forward animate symmetrically.
             _pendingTransition = e.state?._azTransition || null;
             workerPost(W_SEND, JSON.stringify([navKind, { path, qs }]));
-            workerPost(W_UPDATE_PATH, path);
+            workerPost(W_UPDATE_PATH, { path, qs: reconnectUserQs(qs) });
             _currentPath = path;
             _currentQs = qs;
         },
@@ -2177,6 +2195,7 @@ function connect(endpoint, params = {}) {
     const stringParams = {};
     for (const k of Object.keys(params)) stringParams[k] = String(params[k]);
     const extraQs = new URLSearchParams(stringParams).toString();
+    _connectQs = extraQs;
     const userQs = [pageQs, extraQs].filter(Boolean).join('&');
     const qs = userQs ? `_az_path=${pagePath}&${userQs}` : `_az_path=${pagePath}`;
     // Native-shell capabilities (Electron/Tauri/...) advertised at the WS
@@ -2342,6 +2361,7 @@ function connect(endpoint, params = {}) {
         _connected = false;
         _pendingScroll = null;
         _pendingTransition = null;
+        _connectQs = '';
         _savedForms.clear();
         // Close any floating (PiP) view windows; each window's pagehide handler
         // moves its view back inline and unregisters it.

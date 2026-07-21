@@ -300,13 +300,23 @@ self.onmessage = (e) => {
             if (_ws) _ws.close(msg[1]);
             break;
         case 3: {
-            // [3, newPath] -- update the framework `_az_path` query
-            // parameter so the next reconnect URL reflects the SPA-navigated
-            // path. Use URL/searchParams to target the exact key (a regex
-            // on `path=` would match user params like `upload_path=...`).
+            // [3, {path, qs}] -- an SPA navigation changed both the path and the
+            // query string, so update the reconnect URL to match: set the
+            // framework `_az_path`, drop the previous page's user params, and lay
+            // down the navigated-to qs (which already carries any connect()
+            // extras). Framework `_az_*` params (e.g. `_az_caps`) are preserved.
+            // Without replacing the user params, the original page's query string
+            // would persist and the navigated-to one would be lost on reconnect.
             if (!_wsUrl) break;
+            const { path, qs } = msg[1];
             const u = new URL(_wsUrl);
-            u.searchParams.set('_az_path', msg[1]);
+            u.searchParams.set('_az_path', path);
+            for (const key of [...u.searchParams.keys()]) {
+                if (!key.startsWith('_az_')) u.searchParams.delete(key);
+            }
+            for (const [k, v] of new URLSearchParams(qs)) {
+                u.searchParams.append(k, v);
+            }
             _wsUrl = u.toString();
             break;
         }
