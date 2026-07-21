@@ -454,6 +454,19 @@ init({Handler, InitBindings, TransportPid, OnMount, ParentMetadata, ConnInfo}) -
     TransportPid =/= undefined andalso erlang:put('$arizona_connected', true),
     TransportPid =/= undefined andalso erlang:put('$arizona_capabilities', Capabilities),
     TransportPid =/= undefined andalso erlang:put('$arizona_reconnected', Reconnect),
+    %% Monitor the transport so a *normal* transport exit tears the view down.
+    %% The start_link link only brings the view down on an *abnormal* transport
+    %% exit; a `normal` exit (the common case -- a clean client disconnect) is
+    %% silently ignored by this non-trapping process, which would otherwise leave
+    %% the live process (bindings, snapshot, child views, pending timers, pubsub
+    %% subscriptions) running forever after the socket is gone. The monitor fires
+    %% for every exit reason, so a `{'DOWN', _, process, TransportPid, _}` in
+    %% handle_info/2 reaps the view. A peerless render (SSR/static) passes
+    %% `undefined` and sets up no monitor; the terminal transport passes a real
+    %% pid, so it is also reaped if its session process dies without first
+    %% calling `stop/1` (the normal terminal path stops the view synchronously,
+    %% so the monitor never fires there).
+    TransportPid =/= undefined andalso erlang:monitor(process, TransportPid),
     {ok, #state{
         handler = Handler,
         bindings = InitBindings,
@@ -559,6 +572,16 @@ handle_cast({seed_fps, FpList}, #state{sent_fps = Fps0} = State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+handle_info(
+    {'DOWN', _MonRef, process, TPid, _Reason},
+    #state{transport_pid = TPid} = State
+) ->
+    %% The transport (WebSocket session) went away -- typically a clean client
+    %% disconnect, which exits `normal` and so is not propagated by the link.
+    %% Stop normally so terminate/2 runs the handler's unmount. Matching on the
+    %% state's transport_pid means a DOWN for any other monitor the view set up
+    %% falls through to the handler's handle_info below.
+    {stop, normal, State};
 handle_info(_Info, #state{snapshot = undefined} = State) ->
     {noreply, State};
 handle_info({arizona_view, ViewId, Msg}, #state{bindings = B0, views = V0} = State) ->
