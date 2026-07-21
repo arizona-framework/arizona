@@ -72,7 +72,9 @@ Az dynamic, so it is never re-evaluated and never produces an op.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([diff/3]).
+%% Public bare-diff entry point, exercised by the test suites but no longer
+%% called from production (arizona_live uses diff/3 and diff/4).
+-ignore_xref([diff/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -302,12 +304,20 @@ merge_stream_child_views(Source, Old, LocalNew, Old0) ->
     carry_item_children(Surviving, Old0, LocalNew).
 
 %% When a dynamic is skipped (deps unchanged), carry its child views over
-%% from OldViews to NewViews so they aren't pruned.
+%% from OldViews to NewViews so they aren't pruned. For a stateful child, carry
+%% the child AND its transitive descendants: the child's current (authoritative)
+%% snapshot in Old records them as `child_views`, so a depth-2+ grandchild under
+%% a skipped child is not dropped from the accumulator and then unmounted/reset.
+%% We read `child_views` from Old's live entry (not the possibly-stale cached
+%% snapshot passed in) so a grandchild added by the child's own event survives.
 carry_skipped_view(#{view_id := VId}, {Old, New}) ->
-    case Old of
-        #{VId := View} -> {Old, New#{VId => View}};
-        #{} -> {Old, New}
-    end;
+    ToCarry =
+        case Old of
+            #{VId := #{snapshot := #{child_views := ChildIds}}} -> [VId | ChildIds];
+            #{VId := _} -> [VId];
+            #{} -> []
+        end,
+    {Old, maps:merge(New, maps:with(ToCarry, Old))};
 carry_skipped_view(#{child_views := ChildIds}, {Old, New}) ->
     {Old, maps:merge(New, maps:with(ChildIds, Old))};
 carry_skipped_view(_Old, Views) ->

@@ -745,16 +745,28 @@ process_root_change(
     B3 = clear_streams_and_apply_resets(B1, Resets),
     {Ops1, Snap1, V1, B3, Fps1, State, Effects1}.
 
-%% Same idea as process_root_change/4 but for a nested child view.
+%% Same idea as process_root_change/4 but for a nested child view. Diffs through
+%% the view-tracking path (diff/3) so a grandchild stateful descriptor in the
+%% child's template resolves to a child snapshot instead of crashing the bare
+%% diff (`bad_template_value`). NewViews is this child's freshly rendered
+%% descendant subtree; reconcile it against the old subtree (recorded on Snap0 as
+%% child_views): grandchildren the child no longer renders are unmounted, the rest
+%% merged back, and the child's own snapshot records the new transitive set.
 process_child_change(H, B1, Resets, ViewId, #{snapshot := Snap0} = View, #state{
     views = V0, sent_fps = Fps0
 }) ->
     Tmpl = arizona_stateful:call_render(H, B1),
-    {Ops, Snap1} = arizona_diff:diff(Tmpl, Snap0),
+    {Ops, Snap1, NewViews} = arizona_diff:diff(Tmpl, Snap0, V0),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
-    V1 = V0#{ViewId => View#{bindings => B3, snapshot => Snap1}},
-    {Ops1, V1, Fps1}.
+    NewDescendants = maps:keys(NewViews),
+    OldDescendants = maps:get(child_views, Snap0, []),
+    Removed = [K || K <- OldDescendants, not is_map_key(K, NewViews)],
+    ok = unmount_removed_views(maps:with(Removed, V0)),
+    Snap2 = Snap1#{child_views => NewDescendants},
+    V1 = maps:merge(maps:without(Removed, V0), NewViews),
+    V2 = V1#{ViewId => View#{bindings => B3, snapshot => Snap2}},
+    {Ops1, V2, Fps1}.
 
 clear_streams_and_apply_resets(B1, Resets) ->
     B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),

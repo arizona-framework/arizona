@@ -72,6 +72,9 @@
     seed_fps_skips_statics/1,
     seed_fps_unknown_fp_still_sends/1,
     stateful_child_independent_state/1,
+    nested_stateful_child_event/1,
+    nested_stateful_grandchild_survives_root_skip/1,
+    nested_stateful_grandchild_unmounted_on_removal/1,
     nested_local_diff_skipped/1,
     nested_local_set_effect/1,
     unmount_on_navigate/1,
@@ -107,6 +110,9 @@ groups() ->
     [
         {gen_server, [parallel], [
             stateful_child_independent_state,
+            nested_stateful_child_event,
+            nested_stateful_grandchild_survives_root_skip,
+            nested_stateful_grandchild_unmounted_on_removal,
             nested_local_diff_skipped,
             nested_local_set_effect,
             live_mount,
@@ -240,6 +246,54 @@ stateful_child_independent_state(Config) when is_list(Config) ->
         ],
         AddOps
     ).
+
+%% Regression: a middle stateful child (arizona_nested_mid) whose template embeds
+%% a stateful grandchild (leaf) used to crash the live process with
+%% bad_template_value when it handled its own event -- process_child_change diffed
+%% through the bare view-less path, which has no clause for a stateful descriptor.
+%% Now it re-renders through the view-tracking path; the grandchild survives and
+%% its independent state is preserved across the mid's re-render.
+nested_stateful_child_event(Config) when is_list(Config) ->
+    {ok, Pid} = arizona_live:start_link(arizona_nested_root, #{}, undefined, []),
+    {ok, _} = arizona_live:mount(Pid),
+    %% Grandchild owns its count: 0 -> 1.
+    {ok, IncOps, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
+    ?assertMatch([[?OP_TEXT, _, <<"1">>]], IncOps),
+    %% Middle child handles its own event -- must not crash.
+    {ok, _RelabelOps, _} = arizona_live:handle_event(Pid, <<"mid">>, <<"relabel">>, #{}),
+    ?assert(is_process_alive(Pid)),
+    %% Grandchild state survived the mid re-render: 1 -> 2 (not reset to 0 -> 1).
+    {ok, IncOps2, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
+    ?assertMatch([[?OP_TEXT, _, <<"2">>]], IncOps2).
+
+%% The mid descriptor has static props, so a root re-render skips the mid slot.
+%% carry_skipped_view must carry the mid AND its grandchild (leaf); otherwise the
+%% grandchild is pruned from views and remounted with its state reset.
+nested_stateful_grandchild_survives_root_skip(Config) when is_list(Config) ->
+    {ok, Pid} = arizona_live:start_link(arizona_nested_root, #{}, undefined, []),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
+    %% Root event whose change (title) does not touch the mid slot's deps.
+    {ok, _, _} = arizona_live:handle_event(Pid, <<"root">>, <<"title_change">>, #{}),
+    %% Grandchild preserved: 1 -> 2 (would be 0 -> 1 had it been remounted).
+    {ok, IncOps, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
+    ?assertMatch([[?OP_TEXT, _, <<"2">>]], IncOps).
+
+%% When the mid conditionally stops rendering the leaf, the grandchild is
+%% unmounted and pruned from views -- a later message to it crashes unknown_view.
+nested_stateful_grandchild_unmounted_on_removal(Config) when is_list(Config) ->
+    {ok, Pid} = arizona_live:start_link(arizona_nested_root, #{}, undefined, []),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:handle_event(Pid, <<"mid">>, <<"hide_leaf">>, #{}),
+    unlink(Pid),
+    Ref = monitor(process, Pid),
+    Pid ! {arizona_view, <<"leaf">>, {set_count, 99}},
+    receive
+        {'DOWN', Ref, process, Pid, Reason} ->
+            ?assertMatch({{unknown_view, <<"leaf">>, _}, _}, Reason)
+    after 1000 ->
+        error(timeout)
+    end.
 
 %% A ?local inside a stateful child is diff-skipped both when the child handles
 %% its own event AND when a parent update propagates new props down -- only the
