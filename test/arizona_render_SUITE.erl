@@ -21,6 +21,7 @@
     fingerprint_payload_with_f/1,
     fingerprint_payload_without_f/1,
     fingerprint_payload_local_slots/1,
+    fingerprint_payload_local_content_escaped/1,
     fingerprint_propagated_in_diff/1,
     fingerprint_propagated_in_render2/1,
     fingerprint_propagated_in_render/1,
@@ -60,6 +61,7 @@
     ssr_page_with_child/1,
     ssr_nested_local/1,
     ssr_local_app/1,
+    ssr_local_init_escaped/1,
     zip_nested_element/1,
     zip_nested_sd/1,
     zip_static_only/1,
@@ -104,6 +106,7 @@ groups() ->
             ssr_page_with_child,
             ssr_nested_local,
             ssr_local_app,
+            ssr_local_init_escaped,
             ssr_about_page,
             ssr_each_map,
             nested_each_render,
@@ -116,6 +119,7 @@ groups() ->
             fingerprint_payload_with_f,
             fingerprint_payload_without_f,
             fingerprint_payload_local_slots,
+            fingerprint_payload_local_content_escaped,
             fingerprint_propagated_in_render,
             fingerprint_propagated_in_render2,
             fingerprint_propagated_in_diff,
@@ -297,6 +301,28 @@ ssr_page_with_child(Config) when is_list(Config) ->
 %% A ?local inside nested stateful children renders end to end: each child gets
 %% its own az-view + id (so its ?local is scoped to the child), and both the
 %% children's and the parent's ?local slots render their SSR initial + descriptor.
+%% Regression: a content ?local seeded from a binding must be HTML-escaped at SSR
+%% (matching the client's text-node semantics), like a normal content value and
+%% like the attribute-?local path -- otherwise user data reaching the init is an
+%% XSS vector. Both slots here are seeded from the same hostile payload.
+ssr_local_init_escaped(Config) when is_list(Config) ->
+    Payload = <<"<img src=x onerror=alert(1)>">>,
+    HTML = iolist_to_binary(
+        arizona_render:render_view_to_iolist(
+            arizona_local_xss, #{bindings => #{payload => Payload}}
+        )
+    ),
+    %% No raw markup anywhere -- neither the content nor the attribute local.
+    ?assertEqual(nomatch, binary:match(HTML, <<"<img src=x">>)),
+    %% The content ?local renders its escaped init between its slot markers.
+    ?assertNotEqual(
+        nomatch, binary:match(HTML, <<"&lt;img src=x onerror=alert(1)&gt;<!--/az-->">>)
+    ),
+    %% The attribute ?local stays escaped too.
+    ?assertNotEqual(
+        nomatch, binary:match(HTML, <<"title=\"&lt;img src=x onerror=alert(1)&gt;\"">>)
+    ).
+
 ssr_nested_local(Config) when is_list(Config) ->
     HTML = iolist_to_binary(
         arizona_render:render_view_to_iolist(
@@ -623,6 +649,24 @@ fingerprint_payload_without_f(Config) when is_list(Config) ->
 %% child) is unwrapped by render_fp_val's az_local clauses: an attribute target
 %% becomes the rendered attribute, a boolean false vanishes, content renders its
 %% value. The slot is wire-rendered once and never diffed thereafter.
+%% The fingerprint wire payload (the live-mount surface) must also escape a
+%% content ?local's init -- the client innerHTMLs the mount payload, so a raw
+%% splice here is an XSS vector too.
+fingerprint_payload_local_content_escaped(Config) when is_list(Config) ->
+    Snap = #{
+        s => [<<"<span>">>, <<"</span>">>],
+        d => [{<<"0">>, #{diff => false, az_local => ~"content", v => <<"<img src=x>">>}}],
+        f => <<"fp_local_content">>
+    },
+    ?assertEqual(
+        #{
+            <<"f">> => <<"fp_local_content">>,
+            <<"s">> => [<<"<span>">>, <<"</span>">>],
+            <<"d">> => [<<"&lt;img src=x&gt;">>]
+        },
+        arizona_render:fingerprint_payload(Snap)
+    ).
+
 fingerprint_payload_local_slots(Config) when is_list(Config) ->
     Snap = #{
         s => [<<"<div">>, <<"><dialog">>, <<"><span>">>, <<"</span></dialog></div>">>],
