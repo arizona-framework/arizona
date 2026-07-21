@@ -108,28 +108,51 @@ do_render(H, ArzReq, Bindings, Opts) ->
                 {ok, OkStatus, Page, ArzReq}
             catch
                 Class:Reason:Stacktrace ->
-                    ErrorInfo = #{
-                        class => Class,
-                        reason => Reason,
-                        stacktrace => Stacktrace,
-                        reload_url => reload_url()
-                    },
-                    {error, 500, render_error_body(Bindings, ErrorInfo), ArzReq}
+                    %% arizona catches the render crash here, before roadrunner's
+                    %% own crash logger would ever see it, so without this the
+                    %% exception is swallowed and the operator gets no record of
+                    %% the 500. Log it, then serve the (dev-gated) error body.
+                    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
+                    {error, 500, error_body(Bindings, Class, Reason, Stacktrace), ArzReq}
             end;
         #{errors := Errors} ->
+            {error, 500, error_body(Bindings, error, {compile_error, Errors}, []), ArzReq}
+    end.
+
+%% The rich error page (exception class, reason, and full stack with file:line)
+%% is a development aid -- serving it in production leaks internals to any visitor
+%% who can trigger a crash. Gate it on the dev signal (`reload_url` is set only
+%% when the dev reloader is wired) and default production to a minimal 500 with no
+%% internals. The compile-error branch only fires under a running reloader, so it
+%% always resolves to the rich page.
+error_body(Bindings, Class, Reason, Stacktrace) ->
+    case reload_url() of
+        undefined ->
+            minimal_error_body();
+        ReloadUrl ->
             ErrorInfo = #{
-                class => error,
-                reason => {compile_error, Errors},
-                stacktrace => [],
-                reload_url => reload_url()
+                class => Class,
+                reason => Reason,
+                stacktrace => Stacktrace,
+                reload_url => ReloadUrl
             },
-            {error, 500, render_error_body(Bindings, ErrorInfo), ArzReq}
+            render_error_body(Bindings, ErrorInfo)
     end.
 
 render_error_body(Bindings, ErrorInfo) ->
     {Mod, Fun} = error_page(),
     Tmpl = Mod:Fun(Bindings#{error_info => ErrorInfo}),
     arizona_render:render_to_iolist(Tmpl).
+
+%% Production 500 body: no class/reason/stack and no reload script.
+minimal_error_body() ->
+    ~"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head><meta charset="utf-8"><title>500 -- Server Error</title></head>
+    <body><h1>Internal Server Error</h1></body>
+    </html>
+    """.
 
 error_page() ->
     persistent_term:get(arizona_error_page, {arizona_error_page, render}).
